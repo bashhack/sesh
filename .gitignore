@@ -1,0 +1,73 @@
+# Binary output
+/sesh
+/bin/
+
+# Build artifacts
+/dist/
+
+# Test artifacts
+coverage.out
+coverage.html
+
+# Dependency directories
+/vendor/
+
+# Emacs specific files
+*~
+\#*\#
+.\#*
+*.elc
+auto-save-list
+tramp
+.\#*
+org-roam.db
+.org-id-locations
+*_archive
+*_flymake.*
+flycheck_*.el
+.projectile
+.dir-locals.el
+/eshell/
+/elpa/
+/url/
+/transient/
+
+# macOS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+
+# Go specific
+*.test
+*.prof
+*.exe
+*.out
+*.dll
+*.so
+*.dylib
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Certificate files that might contain secrets
+/certs/
+*.pem
+*.key
+*.crt
+
+# Generated files during development
+/tmp/
