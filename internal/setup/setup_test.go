@@ -45,9 +45,9 @@ type SimpleRunner struct {
 
 // Command returns a mock command based on the command name
 func (r *SimpleRunner) Command(command string, args ...string) *exec.Cmd {
-	r.Lock()
+	r.Mutex.Lock()
 	r.CommandCalls = append(r.CommandCalls, command)
-	r.Unlock()
+	r.Mutex.Unlock()
 
 	// Check if we have a specific mock for this command
 	if r.Commands != nil && r.Commands[command] != nil {
