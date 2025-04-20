@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+  actions: read
+  checks: read
+  # Allow uploading to Codecov
+  statuses: write
+
 jobs:
   build:
     name: Build and Test
