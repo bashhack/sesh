@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/testutil"
@@ -35,6 +36,7 @@ func (m *MockCommand) Run() error {
 
 // SimpleRunner is a mock command runner for testing
 type SimpleRunner struct {
+	sync.Mutex
 	Commands      map[string]*MockCommand
 	CommandCalls  []string
 	DefaultOutput []byte
@@ -43,10 +45,9 @@ type SimpleRunner struct {
 
 // Command returns a mock command based on the command name
 func (r *SimpleRunner) Command(command string, args ...string) *exec.Cmd {
-	// Record that this command was called
+	r.Lock()
 	r.CommandCalls = append(r.CommandCalls, command)
-
-	// We don't need a default mock command variable, just using r.DefaultOutput and r.DefaultError directly
+	r.Unlock()
 
 	// Check if we have a specific mock for this command
 	if r.Commands != nil && r.Commands[command] != nil {
