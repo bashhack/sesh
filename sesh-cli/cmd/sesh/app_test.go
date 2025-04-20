@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 
@@ -22,6 +23,36 @@ type SessionTokenError struct {
 
 func (e *SessionTokenError) Error() string {
 	return e.Message
+}
+
+type MockAWS struct {
+	MFADevice      string
+	MFADeviceErr   error
+	Credentials    aws.Credentials
+	CredentialsErr error
+}
+
+func (m *MockAWS) GetFirstMFADevice(profile string) (string, error) {
+	return m.MFADevice, m.MFADeviceErr
+}
+
+func (m *MockAWS) GetSessionToken(profile, serial, code string) (aws.Credentials, error) {
+	return m.Credentials, m.CredentialsErr
+}
+
+type MockKeychain struct {
+	MFASerial    string
+	MFASerialErr error
+	Secret       string
+	SecretErr    error
+}
+
+func (m *MockKeychain) GetMFASerial(user string) (string, error) {
+	return m.MFASerial, m.MFASerialErr
+}
+
+func (m *MockKeychain) GetSecret(user, keyName string) (string, error) {
+	return m.Secret, m.SecretErr
 }
 
 func TestNewDefaultApp(t *testing.T) {
@@ -156,5 +187,87 @@ func TestFormatExpiryTime(t *testing.T) {
 
 	if !bytes.Contains([]byte(result), []byte("m")) {
 		t.Errorf("Expected result to contain minute marker 'm', got: %s", result)
+	}
+}
+
+func TestGetMFASerial_ProvidedSerial(t *testing.T) {
+	app := &App{
+		Keychain: &MockKeychain{},
+		AWS:      &MockAWS{},
+	}
+
+	providedSerial := "arn:aws:iam::123456789012:mfa/user"
+	serial, err := app.GetMFASerial("default", "user", providedSerial)
+
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	if serial != providedSerial {
+		t.Errorf("Expected serial %s, got %s", providedSerial, serial)
+	}
+}
+
+func TestGetMFASerial_FromKeychain(t *testing.T) {
+	keychainSerial := "arn:aws:iam::123456789012:mfa/keychain"
+	app := &App{
+		Keychain: &MockKeychain{
+			MFASerial: keychainSerial,
+		},
+		AWS: &MockAWS{},
+	}
+
+	serial, err := app.GetMFASerial("default", "user", "")
+
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	if serial != keychainSerial {
+		t.Errorf("Expected serial %s, got %s", keychainSerial, serial)
+	}
+}
+
+func TestGetMFASerial_FromAWS(t *testing.T) {
+	awsSerial := "arn:aws:iam::123456789012:mfa/aws"
+	app := &App{
+		Keychain: &MockKeychain{
+			MFASerialErr: errors.New("not found in keychain"),
+		},
+		AWS: &MockAWS{
+			MFADevice: awsSerial,
+		},
+	}
+
+	serial, err := app.GetMFASerial("default", "user", "")
+
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	if serial != awsSerial {
+		t.Errorf("Expected serial %s, got %s", awsSerial, serial)
+	}
+}
+
+func TestGetMFASerial_Error(t *testing.T) {
+	awsErr := &aws.MFADeviceNotFoundError{Message: "No MFA device found"}
+	app := &App{
+		Keychain: &MockKeychain{
+			MFASerialErr: errors.New("not found in keychain"),
+		},
+		AWS: &MockAWS{
+			MFADeviceErr: awsErr,
+		},
+	}
+
+	_, err := app.GetMFASerial("default", "user", "")
+
+	if err == nil {
+		t.Error("Expected an error, got nil")
+	}
+
+	if err.Error() != "could not detect MFA device: No MFA device found" {
+		t.Errorf("Unexpected error message: %s", err.Error())
 	}
 }

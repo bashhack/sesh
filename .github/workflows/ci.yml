@@ -43,14 +43,20 @@ jobs:
 
       - name: Generate coverage report
         run: |
-          go test -short -coverprofile=coverage.out ./...
-          go tool cover -func=coverage.out
+          go test -short -coverprofile=coverage.txt ./...
+          go tool cover -func=coverage.txt
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: coverage.out
+          path: coverage.txt
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.txt
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
