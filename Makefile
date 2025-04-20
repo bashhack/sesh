@@ -139,16 +139,16 @@ test/full:
 .PHONY: coverage
 coverage:
 	@echo 'Running tests with coverage...'
-	@go test -coverprofile=coverage.out ./...
-	@go tool cover -html=coverage.out -o coverage.html
+	@go test -coverprofile=coverage.txt ./...
+	@go tool cover -html=coverage.txt -o coverage.html
 	@echo "Coverage report generated at coverage.html"
 
 ## coverage/func: Show function-level coverage statistics
 .PHONY: coverage/func
 coverage/func:
 	@echo 'Generating function-level coverage report...'
-	@go test -coverprofile=coverage.out ./...
-	@go tool cover -func=coverage.out
+	@go test -coverprofile=coverage.txt ./...
+	@go tool cover -func=coverage.txt
 
 
 
@@ -260,6 +260,6 @@ version:
 .PHONY: clean
 clean:
 	@echo "Cleaning..."
-	@rm -f sesh coverage.out coverage.html
+	@rm -f coverage.out coverage.txt coverage.html
 	@rm -rf bin/
 	@rm -rf dist/

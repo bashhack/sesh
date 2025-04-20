@@ -26,6 +26,10 @@ func Generate(secret string) (string, error) {
 
 // GenerateConsecutiveCodes generates two consecutive TOTP codes for MFA device setup
 func GenerateConsecutiveCodes(secret string) (current string, next string, err error) {
+	if MockGenerateConsecutiveCodes.Enabled {
+		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
+	}
+
 	now := time.Now()
 
 	// Note to self here, if I end up making this generic and pulling up into
