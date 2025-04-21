@@ -1,0 +1,147 @@
+#+TITLE: Sesh Development Roadmap
+#+AUTHOR: Marc Alvarez
+#+DATE: [2025-04-19]
+
+* Project Vision
+Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-focused MFA management solution that works across terminal and web interfaces while keeping all secrets local.
+
+* Core Principles
+- Privacy: All secrets remain local to the user's machine
+- Security: Strong encryption and access controls via OS keychain
+- Simplicity: Intuitive CLI interface with minimal setup
+- Terminal-first: Designed for developer workflows
+
+* Feature Roadmap
+
+** Phase 1: Core Extension Framework [0/3]
+*** TODO Multi-Service Plugin Architecture
+**** Design plugin interface for multiple service providers
+**** Create registration system for plugins
+**** Implement service provider abstraction layer
+**** Add ~--service~ flag for selecting providers
+
+*** TODO Clipboard Integration
+**** Add ~sesh clip~ command to copy TOTP to clipboard
+**** Implement platform-specific clipboard handling (macOS/Linux/Windows)
+**** Add optional notification for clipboard operations
+**** Create configuration for auto-copying behavior
+
+*** TODO Configuration System
+**** Create ~/.config/sesh directory for config files
+**** Implement YAML/TOML based configuration
+**** Add command-line options to override config
+**** Create ~sesh config~ subcommand
+
+** Phase 2: Service Providers [0/5]
+*** TODO AWS Provider (Existing)
+**** Refactor current code as AWS plugin
+**** Add AWS-specific configuration options
+**** Maintain current functionality
+
+*** TODO GitHub Provider
+**** Implement GitHub authentication flow
+**** Support GitHub CLI integration
+**** Test with common GitHub 2FA scenarios
+
+*** TODO Google Cloud Provider
+**** Implement GCP authentication flow
+**** Generate application-default credentials
+**** Support gcloud CLI integration
+
+*** TODO NPM Provider
+**** Support 2FA for package publishing
+**** Integrate with npm authentication flow
+**** Test with actual package publishing
+
+*** TODO Generic TOTP Provider
+**** Create configurable provider for arbitrary services
+**** Support defining custom service names and configurations
+**** Allow tagging and organizing services
+
+** Phase 3: Web Integration [0/2]
+*** TODO Web Service Configuration
+**** Create configuration syntax for web services
+**** Support URL patterns for site recognition
+**** Allow user-defined service metadata
+**** Define TOTP rotation timelines per service
+
+*** TODO Terminal UI for Web Services
+**** Add interactive TUI for selecting web services
+**** Show countdown timers for TOTP codes
+**** Support search/filtering for many services
+**** Provide keyboard shortcuts for common operations
+
+** Phase 4: Advanced Features [0/4]
+*** TODO Backup and Restore
+**** Create secure export/import functionality
+**** Support encrypted backup files
+**** Document disaster recovery process
+
+*** TODO Multi-Device Synchronization
+**** Design secure sync mechanism
+**** Document security considerations
+**** Implement sync via local network only
+
+*** TODO Audit Logging
+**** Track usage of TOTP codes
+**** Log authentication attempts
+**** Provide reports on service usage
+
+*** TODO Advanced Configuration
+**** Support for custom TOTP parameters
+**** Allow different token validity periods
+**** Support for non-standard authentication flows
+
+* Technical Tasks
+
+** Core Infrastructure [0/3]
+*** TODO Refactor existing code into plugins
+*** TODO Create plugin loading system
+*** TODO Implement configuration manager
+
+** Security Enhancements [0/3]
+*** TODO Audit keychain usage
+*** TODO Implement strict permission checks
+*** TODO Add TOTP seed validation
+
+** Testing [0/4]
+*** TODO Create automated tests for plugins
+*** TODO Implement CI pipeline
+*** TODO Add security testing
+*** TODO Create integration tests with actual services
+
+** Documentation [0/3]
+*** TODO Update README with new capabilities
+*** TODO Create plugin development guide
+*** TODO Improve security documentation
+
+
+-----
+
+* Testing Notes:
+
+-- Need way to delete entries from keychain
+---- Scenario: I deleted my virtual MFA device in AWS, but the keychain entry is still there
+---- When I run sesh next, I get:
+
+```shell
+❯ sesh
+🔐 Activating AWS session with MFA...
+🔐 Generating temporary credentials with MFA...
+❌ failed to get session token: failed to run aws sts get-session-token: exit status 254
+Args: [sts get-session-token --serial-number arn:aws:iam::314904127601:mfa/sesh-updated-4-19 --token-code 915080 --output json]
+Stderr:
+An error occurred (AccessDenied) when calling the GetSessionToken operation: MultiFactorAuthentication failed, unable to validate MFA code.  Please verify your MFA serial number is valid and associated with this user.
+
+
+Troubleshooting tips:
+  1. Verify your AWS credentials are correctly configured:
+     - Run 'aws configure' to set up your access keys
+     - Check that the AWS_PROFILE environment variable is set correctly
+  2. Verify your MFA serial ARN is correct:
+     - Specify it with --serial arn:aws:iam::ACCOUNT_ID:mfa/YOUR_USERNAME
+     - Or set the SESH_MFA_SERIAL environment variable
+  3. Check AWS CLI installation and connectivity:
+     - Ensure you can run 'aws sts get-caller-identity'
+✅ AWS session activated
+```

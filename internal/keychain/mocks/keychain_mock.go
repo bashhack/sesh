@@ -1,9 +1,14 @@
 package mocks
 
+import "github.com/bashhack/sesh/internal/keychain"
+
 // MockProvider is a mock implementation of the keychain.Provider interface
 type MockProvider struct {
 	GetSecretFunc    func(account, service string) (string, error)
+	SetSecretFunc    func(account, service, secret string) error
 	GetMFASerialFunc func(account string) (string, error)
+	ListEntriesFunc  func(service string) ([]keychain.KeychainEntry, error)
+	DeleteEntryFunc  func(account, service string) error
 }
 
 // GetSecret implements the keychain.Provider interface
@@ -11,7 +16,22 @@ func (m *MockProvider) GetSecret(account, service string) (string, error) {
 	return m.GetSecretFunc(account, service)
 }
 
+// SetSecret implements the keychain.Provider interface
+func (m *MockProvider) SetSecret(account, service, secret string) error {
+	return m.SetSecretFunc(account, service, secret)
+}
+
 // GetMFASerial implements the keychain.Provider interface
 func (m *MockProvider) GetMFASerial(account string) (string, error) {
 	return m.GetMFASerialFunc(account)
+}
+
+// ListEntries implements the keychain.Provider interface
+func (m *MockProvider) ListEntries(service string) ([]keychain.KeychainEntry, error) {
+	return m.ListEntriesFunc(service)
+}
+
+// DeleteEntry implements the keychain.Provider interface
+func (m *MockProvider) DeleteEntry(account, service string) error {
+	return m.DeleteEntryFunc(account, service)
 }

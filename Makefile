@@ -169,6 +169,7 @@ lint:
 .PHONY: build
 build:
 	@echo "Building sesh..."
+	@mkdir -p build
 	@go build $(LDFLAGS) -o build/sesh ./sesh-cli/cmd/sesh
 
 ## build/optimize: Build optimized binary (smaller size)
@@ -192,7 +193,7 @@ install: build
 	@if [ -w "$(PREFIX)/bin" ]; then \
 		echo "Installing to $(DESTDIR)$(PREFIX)/bin/"; \
 		mkdir -p $(DESTDIR)$(PREFIX)/bin; \
-		cp sesh $(DESTDIR)$(PREFIX)/bin/; \
+		cp build/sesh $(DESTDIR)$(PREFIX)/bin/; \
 		chmod +x $(DESTDIR)$(PREFIX)/bin/sesh; \
 		mkdir -p $(DESTDIR)$(PREFIX)/share/sesh; \
 		cp shell/sesh.sh $(DESTDIR)$(PREFIX)/share/sesh/; \
@@ -202,7 +203,7 @@ install: build
 	else \
 		echo "Installing to ~/.local (no admin privileges required)"; \
 		mkdir -p $(HOME)/.local/bin; \
-		cp sesh $(HOME)/.local/bin/; \
+		cp build/sesh $(HOME)/.local/bin/; \
 		chmod +x $(HOME)/.local/bin/sesh; \
 		mkdir -p $(HOME)/.local/share/sesh; \
 		cp shell/sesh.sh $(HOME)/.local/share/sesh/; \
@@ -263,3 +264,4 @@ clean:
 	@rm -f coverage.out coverage.txt coverage.html
 	@rm -rf bin/
 	@rm -rf dist/
+	@rm -rf build/

@@ -263,6 +263,181 @@ func TestGetMFASerialWithSecurityError(t *testing.T) {
 	}
 }
 
+func TestSetSecret(t *testing.T) {
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{
+			"GO_WANT_HELPER_PROCESS=1",
+		}
+		return cmd
+	}
+
+	err := SetSecret("testuser", "test-service", "test-secret")
+	if err != nil {
+		t.Errorf("Expected no error but got: %v", err)
+	}
+
+	// Test with error
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{
+			"GO_WANT_HELPER_PROCESS=1",
+			"MOCK_ERROR=1",
+		}
+		return cmd
+	}
+
+	err = SetSecret("testuser", "test-service", "test-secret")
+	if err == nil {
+		t.Error("Expected error but got nil")
+	}
+}
+
+func TestListEntries(t *testing.T) {
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	// Create mock keychain dump output
+	mockOutput := `keychain: "/Users/testuser/Library/Keychains/login.keychain-db"
+class: "genp"
+attributes:
+    0x00000007 <blob>="sesh-mfa"
+    "svce"<blob>="sesh-mfa"
+    "acct"<blob>="testuser"
+    "labl"<blob>="AWS MFA Secret"
+data:
+<binary data>
+
+keychain: "/Users/testuser/Library/Keychains/login.keychain-db"
+class: "genp"
+attributes:
+    0x00000007 <blob>="sesh-totp-github"
+    "svce"<blob>="sesh-totp-github"
+    "acct"<blob>="testuser"
+    "desc"<blob>="GitHub TOTP"
+data:
+<binary data>
+
+keychain: "/Users/testuser/Library/Keychains/login.keychain-db"
+class: "inet"
+attributes:
+    0x00000007 <blob>="something-else"
+    "svce"<blob>="something-else"
+    "acct"<blob>="testuser"
+data:
+<binary data>
+`
+
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{
+			"GO_WANT_HELPER_PROCESS=1",
+			fmt.Sprintf("MOCK_OUTPUT=%s", mockOutput),
+		}
+		return cmd
+	}
+
+	// Test listing sesh-mfa entries
+	entries, err := ListEntries("sesh-mfa")
+	if err != nil {
+		t.Errorf("Expected no error but got: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Errorf("Expected 1 entry but got %d", len(entries))
+	}
+
+	if entries[0].Service != "sesh-mfa" {
+		t.Errorf("Expected service 'sesh-mfa' but got '%s'", entries[0].Service)
+	}
+
+	if entries[0].Account != "testuser" {
+		t.Errorf("Expected account 'testuser' but got '%s'", entries[0].Account)
+	}
+
+	if entries[0].Description != "AWS MFA Secret" {
+		t.Errorf("Expected description 'AWS MFA Secret' but got '%s'", entries[0].Description)
+	}
+
+	// Test listing sesh-totp entries separately
+	entries, err = ListEntries("sesh-totp")
+	if err != nil {
+		t.Errorf("Expected no error but got: %v", err)
+	}
+
+	if len(entries) != 1 {
+		t.Errorf("Expected 1 entry but got %d", len(entries))
+	}
+
+	// The service name changed in our new architecture
+	if entries[0].Service != "sesh-mfa" && entries[0].Service != "sesh-totp-github" {
+		t.Errorf("Expected service 'sesh-mfa' or 'sesh-totp-github' but got '%s'", entries[0].Service)
+	}
+
+	// Test with error
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{
+			"GO_WANT_HELPER_PROCESS=1",
+			"MOCK_ERROR=1",
+		}
+		return cmd
+	}
+
+	_, err = ListEntries("sesh-mfa")
+	if err == nil {
+		t.Error("Expected error but got nil")
+	}
+}
+
+func TestDeleteEntry(t *testing.T) {
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{
+			"GO_WANT_HELPER_PROCESS=1",
+		}
+		return cmd
+	}
+
+	err := DeleteEntry("testuser", "test-service")
+	if err != nil {
+		t.Errorf("Expected no error but got: %v", err)
+	}
+
+	// Test with error
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{
+			"GO_WANT_HELPER_PROCESS=1",
+			"MOCK_ERROR=1",
+		}
+		return cmd
+	}
+
+	err = DeleteEntry("testuser", "test-service")
+	if err == nil {
+		t.Error("Expected error but got nil")
+	}
+}
+
 func TestGetSecretIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping keychain test in short mode")
@@ -292,6 +467,20 @@ func TestGetMFASerialIntegration(t *testing.T) {
 	_, err := GetMFASerial("") // should use `whoami`...
 	// ...doesn't really matter here that if it succeeds or fails, just that it doesn't panic!
 	_ = err
+}
+
+func TestBinaryPathFunctions(t *testing.T) {
+	// Save original value
+	originalPath := seshBinaryPath
+	defer func() { seshBinaryPath = originalPath }()
+
+	// Test SetSeshBinaryPath
+	testPath := "/test/path/sesh"
+	SetSeshBinaryPath(testPath)
+
+	if seshBinaryPath != testPath {
+		t.Errorf("Expected binary path to be set to '%s', got '%s'", testPath, seshBinaryPath)
+	}
 }
 
 func randomString(length int) string {

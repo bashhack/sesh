@@ -8,7 +8,11 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/aws"
+	"github.com/bashhack/sesh/internal/clipboard"
 	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/provider"
+	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
+	totpProvider "github.com/bashhack/sesh/internal/provider/totp"
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/totp"
 )
@@ -21,15 +25,16 @@ type ExitFunc func(code int)
 
 // App represents the main application
 type App struct {
-	AWS          aws.Provider
-	Keychain     keychain.Provider
-	TOTP         totp.Provider
-	SetupWizard  setup.WizardRunner
+	Registry    *provider.Registry
+	AWS         aws.Provider
+	Keychain    keychain.Provider
+	TOTP        totp.Provider
+	SetupWizard setup.WizardRunner
 	ExecLookPath ExecLookPathFunc
-	Exit         ExitFunc
-	Stdout       io.Writer
-	Stderr       io.Writer
-	VersionInfo  VersionInfo
+	Exit        ExitFunc
+	Stdout      io.Writer
+	Stderr      io.Writer
+	VersionInfo VersionInfo
 }
 
 // VersionInfo contains version information
@@ -39,23 +44,57 @@ type VersionInfo struct {
 	Date    string
 }
 
+// initializeBinaryPath is kept for compatibility but is now a no-op
+// since binary path is determined at the time of keychain access
+func initializeBinaryPath() {
+	// Binary path is now determined dynamically at the time of each keychain access
+	// This ensures the correct path is always used regardless of initialization order
+}
+
 // NewDefaultApp creates a new App with default dependencies
 func NewDefaultApp() *App {
-	return &App{
-		AWS:          aws.NewDefaultProvider(),
-		Keychain:     keychain.NewDefaultProvider(),
-		TOTP:         totp.NewDefaultProvider(),
-		SetupWizard:  setup.DefaultWizardRunner{},
+	// Initialize binary path for keychain security
+	initializeBinaryPath()
+	
+	app := &App{
+		Registry:    provider.NewRegistry(),
+		AWS:         aws.NewDefaultProvider(),
+		Keychain:    keychain.NewDefaultProvider(),
+		TOTP:        totp.NewDefaultProvider(),
+		SetupWizard: setup.DefaultWizardRunner{},
 		ExecLookPath: exec.LookPath,
-		Exit:         os.Exit,
-		Stdout:       os.Stdout,
-		Stderr:       os.Stderr,
+		Exit:        os.Exit,
+		Stdout:      os.Stdout,
+		Stderr:      os.Stderr,
 		VersionInfo: VersionInfo{
 			Version: version,
 			Commit:  commit,
 			Date:    date,
 		},
 	}
+	
+	// Register providers
+	app.registerProviders()
+	
+	return app
+}
+
+// registerProviders registers all available service providers
+func (a *App) registerProviders() {
+	// Register AWS provider
+	a.Registry.RegisterProvider(awsProvider.NewProvider(
+		a.AWS,
+		a.Keychain,
+		a.TOTP,
+		a.SetupWizard,
+	))
+	
+	// Register generic TOTP provider
+	a.Registry.RegisterProvider(totpProvider.NewProvider(
+		a.Keychain,
+		a.TOTP,
+		a.SetupWizard,
+	))
 }
 
 // ShowVersion displays version information
@@ -64,122 +103,134 @@ func (a *App) ShowVersion() {
 		a.VersionInfo.Version, a.VersionInfo.Commit, a.VersionInfo.Date)
 }
 
-// CheckAwsCliInstalled checks if AWS CLI is installed
-func (a *App) CheckAwsCliInstalled() bool {
-	_, err := a.ExecLookPath("aws")
-	if err != nil {
-		fmt.Fprintf(a.Stderr, "❌ AWS CLI not found. Please install it first: https://aws.amazon.com/cli/\n")
-		a.Exit(1)
-		return false
+// ListProviders lists all available service providers
+func (a *App) ListProviders() {
+	fmt.Fprintln(a.Stdout, "Available service providers:")
+	
+	for _, p := range a.Registry.ListProviders() {
+		fmt.Fprintf(a.Stdout, "  %-10s %s\n", p.Name(), p.Description())
 	}
-	return true
 }
 
-// GetMFASerial attempts to get an MFA serial from keychain or AWS
-func (a *App) GetMFASerial(profile, user, providedSerial string) (string, error) {
-	if providedSerial != "" {
-		return providedSerial, nil
-	}
-
-	serialFromKeychain, err := a.Keychain.GetMFASerial(user)
-	if err == nil {
-		return serialFromKeychain, nil
-	}
-
-	serial, err := a.AWS.GetFirstMFADevice(profile)
+// ListEntries lists all entries for a service
+func (a *App) ListEntries(serviceName string) error {
+	p, err := a.Registry.GetProvider(serviceName)
 	if err != nil {
-		return "", fmt.Errorf("could not detect MFA device: %w", err)
+		return fmt.Errorf("provider not found: %w", err)
 	}
-
-	return serial, nil
+	
+	entries, err := p.ListEntries()
+	if err != nil {
+		return fmt.Errorf("failed to list entries: %w", err)
+	}
+	
+	fmt.Fprintf(a.Stdout, "Entries for %s:\n", serviceName)
+	if len(entries) == 0 {
+		fmt.Fprintln(a.Stdout, "  No entries found")
+		return nil
+	}
+	
+	for _, entry := range entries {
+		fmt.Fprintf(a.Stdout, "  %-20s %s [ID: %s]\n", 
+			entry.Name, entry.Description, entry.ID)
+	}
+	
+	return nil
 }
 
-// GetTOTPSecret retrieves the TOTP secret from keychain
-func (a *App) GetTOTPSecret(user, keyName string) (string, error) {
-	secret, err := a.Keychain.GetSecret(user, keyName)
+// DeleteEntry deletes an entry from the keychain
+func (a *App) DeleteEntry(serviceName, entryID string) error {
+	p, err := a.Registry.GetProvider(serviceName)
 	if err != nil {
-		return "", err
+		return fmt.Errorf("provider not found: %w", err)
 	}
-	return secret, nil
+	
+	if err := p.DeleteEntry(entryID); err != nil {
+		return fmt.Errorf("failed to delete entry: %w", err)
+	}
+	
+	fmt.Fprintf(a.Stdout, "✅ Entry deleted successfully\n")
+	return nil
 }
 
-// GenerateCredentials generates AWS credentials using the TOTP code
-func (a *App) GenerateCredentials(profile, serial, secret string) (aws.Credentials, time.Duration, error) {
+// RunSetup runs the setup wizard for a provider
+func (a *App) RunSetup(serviceName string) error {
+	p, err := a.Registry.GetProvider(serviceName)
+	if err != nil {
+		return fmt.Errorf("provider not found: %w", err)
+	}
+	
+	return p.Setup()
+}
+
+// GenerateCredentials gets credentials from a provider
+func (a *App) GenerateCredentials(serviceName string) error {
+	p, err := a.Registry.GetProvider(serviceName)
+	if err != nil {
+		return fmt.Errorf("provider not found: %w", err)
+	}
+	
+	fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName)
 	startTime := time.Now()
-
-	code, err := a.TOTP.Generate(secret)
+	
+	creds, err := p.GetCredentials()
 	if err != nil {
-		return aws.Credentials{}, 0, fmt.Errorf("could not generate TOTP code: %w", err)
+		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
-
-	fmt.Fprintf(a.Stderr, "🔐 Generating temporary credentials with MFA...\n")
-	creds, err := a.AWS.GetSessionToken(profile, serial, code)
-	if err != nil {
-		return aws.Credentials{}, 0, fmt.Errorf("failed to get session token: %w", err)
-	}
-
+	
 	elapsedTime := time.Since(startTime)
-	return creds, elapsedTime, nil
+	fmt.Fprintf(a.Stderr, "✅ Credentials acquired in %.2fs\n", elapsedTime.Seconds())
+	
+	a.PrintCredentials(creds)
+	return nil
 }
 
-// FormatExpiryTime formats the expiry time of credentials
-func (a *App) FormatExpiryTime(expirationStr string) string {
-	expiryDisplay := expirationStr
-	expiryTime, err := time.Parse(time.RFC3339, expirationStr)
-	if err == nil {
-		duration := time.Until(expiryTime)
+// CopyToClipboard copies a value to the system clipboard
+func (a *App) CopyToClipboard(serviceName string) error {
+	p, err := a.Registry.GetProvider(serviceName)
+	if err != nil {
+		return fmt.Errorf("provider not found: %w", err)
+	}
+	
+	fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName)
+	startTime := time.Now()
+	
+	creds, err := p.GetCredentials()
+	if err != nil {
+		return fmt.Errorf("failed to generate credentials: %w", err)
+	}
+	
+	elapsedTime := time.Since(startTime)
+	
+	if err := clipboard.Copy(creds.CopyValue); err != nil {
+		return fmt.Errorf("failed to copy to clipboard: %w", err)
+	}
+	
+	fmt.Fprintf(a.Stderr, "✅ Code copied to clipboard in %.2fs\n", elapsedTime.Seconds())
+	fmt.Fprintf(a.Stdout, "# %s\n", creds.DisplayInfo)
+	
+	return nil
+}
+
+// PrintCredentials outputs the credentials
+func (a *App) PrintCredentials(creds provider.Credentials) {
+	for key, value := range creds.Variables {
+		fmt.Fprintf(a.Stdout, "export %s=%s\n", key, value)
+	}
+	
+	// Format expiry time
+	expiryDisplay := "unknown"
+	if !creds.Expiry.IsZero() {
+		duration := time.Until(creds.Expiry)
 		hours := int(duration.Hours())
 		minutes := int(duration.Minutes()) % 60
 		expiryDisplay = fmt.Sprintf("%s (valid for %dh%dm)",
-			expiryTime.Local().Format("2006-01-02 15:04:05"), hours, minutes)
+			creds.Expiry.Local().Format("2006-01-02 15:04:05"), hours, minutes)
 	}
-	return expiryDisplay
-}
-
-// PrintCredentials outputs the credentials in a format that can be eval'd
-func (a *App) PrintCredentials(creds aws.Credentials) {
-	expiryDisplay := a.FormatExpiryTime(creds.Expiration)
-	fmt.Fprintf(a.Stdout, "export AWS_ACCESS_KEY_ID=%s\n", creds.AccessKeyId)
-	fmt.Fprintf(a.Stdout, "export AWS_SECRET_ACCESS_KEY=%s\n", creds.SecretAccessKey)
-	fmt.Fprintf(a.Stdout, "export AWS_SESSION_TOKEN=%s\n", creds.SessionToken)
+	
 	fmt.Fprintf(a.Stdout, "# ⏳ Expires at: %s\n", expiryDisplay)
-}
-
-// PrintMFAError prints suggestions for resolving MFA detection errors
-func (a *App) PrintMFAError(err error) {
-	fmt.Fprintf(a.Stderr, "❌ %v\n", err)
-	fmt.Fprintln(a.Stderr, "\nPossible solutions:")
-	fmt.Fprintln(a.Stderr, "  1. Provide your MFA ARN explicitly:")
-	fmt.Fprintln(a.Stderr, "     - Use --serial arn:aws:iam::ACCOUNT_ID:mfa/YOUR_USERNAME")
-	fmt.Fprintln(a.Stderr, "     - Or set the SESH_MFA_SERIAL environment variable")
-	fmt.Fprintln(a.Stderr, "  2. Check your AWS credentials are configured correctly:")
-	fmt.Fprintln(a.Stderr, "     - Run 'aws configure' to set up your access keys")
-	fmt.Fprintln(a.Stderr, "     - Make sure MFA is enabled for your IAM user")
-	fmt.Fprintln(a.Stderr, "     - Check that you can run 'aws iam list-mfa-devices'")
-}
-
-// PrintKeychainError prints suggestions for resolving keychain errors
-func (a *App) PrintKeychainError(err error, user, keyName string) {
-	fmt.Fprintf(a.Stderr, "❌ Could not retrieve TOTP secret from Keychain: %v\n", err)
-	fmt.Fprintln(a.Stderr, "\nTo fix this:")
-	fmt.Fprintln(a.Stderr, "  1. Run the setup wizard to configure your TOTP secret:")
-	fmt.Fprintln(a.Stderr, "     - Run 'sesh --setup'")
-	fmt.Fprintln(a.Stderr, "  2. If you've already run setup, check your keychain settings:")
-	fmt.Fprintln(a.Stderr, "     - Make sure you're using the correct keychain username with --keychain-user")
-	fmt.Fprintln(a.Stderr, "     - Make sure you're using the correct keychain service name with --keychain-name")
-	fmt.Fprintln(a.Stderr, "     - Default values: username="+user+", service="+keyName)
-}
-
-// PrintSessionTokenError prints suggestions for resolving session token errors
-func (a *App) PrintSessionTokenError(err error) {
-	fmt.Fprintf(a.Stderr, "❌ %v\n", err)
-	fmt.Fprintln(a.Stderr, "\nTroubleshooting tips:")
-	fmt.Fprintln(a.Stderr, "  1. Verify your AWS credentials are correctly configured:")
-	fmt.Fprintln(a.Stderr, "     - Run 'aws configure' to set up your access keys")
-	fmt.Fprintln(a.Stderr, "     - Check that the AWS_PROFILE environment variable is set correctly")
-	fmt.Fprintln(a.Stderr, "  2. Verify your MFA serial ARN is correct:")
-	fmt.Fprintln(a.Stderr, "     - Specify it with --serial arn:aws:iam::ACCOUNT_ID:mfa/YOUR_USERNAME")
-	fmt.Fprintln(a.Stderr, "     - Or set the SESH_MFA_SERIAL environment variable")
-	fmt.Fprintln(a.Stderr, "  3. Check AWS CLI installation and connectivity:")
-	fmt.Fprintln(a.Stderr, "     - Ensure you can run 'aws sts get-caller-identity'")
+	
+	if creds.DisplayInfo != "" {
+		fmt.Fprintf(a.Stdout, "# %s\n", creds.DisplayInfo)
+	}
 }

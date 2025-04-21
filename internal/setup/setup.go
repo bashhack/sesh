@@ -2,229 +2,304 @@ package setup
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
+	"syscall"
 
-	"github.com/bashhack/sesh/internal/totp"
+	"golang.org/x/term"
 )
 
-var (
-	clearWithWriter      = clearWithWriterImpl
-	clear                = clearImpl
-	RunWizardWithOptions = runWizardWithOptions
-)
-
-// WizardOptions contains all configurable options for the setup wizard
-type WizardOptions struct {
-	Reader            io.Reader     // Input reader (defaults to os.Stdin)
-	Writer            io.Writer     // Output writer (defaults to os.Stdout)
-	ErrorWriter       io.Writer     // Error writer (defaults to os.Stderr)
-	ExecCommand       CommandRunner // Command runner (defaults to exec.Command)
-	OsExit            func(int)     // Exit function (defaults to os.Exit)
-	SkipClear         bool          // Skip terminal clearing (useful for testing)
-	AppExecutablePath string        // Path to the application executable for keychain binding
-}
-
-// CommandRunner is an interface that abstracts exec.Command functionality
-type CommandRunner interface {
-	Command(command string, args ...string) *exec.Cmd
-}
-
-// DefaultCommandRunner is the standard implementation using exec.Command
-type DefaultCommandRunner struct{}
-
-// Command wraps exec.Command
-func (r *DefaultCommandRunner) Command(command string, args ...string) *exec.Cmd {
-	return exec.Command(command, args...)
-}
-
-// RunWizard runs the setup wizard with default options
-func RunWizard() {
-	RunWizardWithOptions(WizardOptions{})
-}
-
-// runWizardWithOptions runs the setup wizard with custom options
-func runWizardWithOptions(opts WizardOptions) {
-	if opts.Reader == nil {
-		opts.Reader = os.Stdin
-	}
-	if opts.Writer == nil {
-		opts.Writer = os.Stdout
-	}
-	if opts.ErrorWriter == nil {
-		opts.ErrorWriter = os.Stderr
-	}
-	if opts.ExecCommand == nil {
-		opts.ExecCommand = &DefaultCommandRunner{}
-	}
-	if opts.OsExit == nil {
-		opts.OsExit = os.Exit
-	}
-
-	reader := bufio.NewReader(opts.Reader)
-
-	if !opts.SkipClear {
-		clearWithWriter(opts.Writer, opts.ExecCommand)
-	}
-
-	fmt.Fprintln(opts.Writer, "✨ Welcome to sesh – your terminal-native AWS MFA helper.")
-	fmt.Fprintln(opts.Writer, "Let's get you set up.")
-	fmt.Fprintln(opts.Writer)
-
-	fmt.Fprintln(opts.Writer, "🔐 Step 1: Set up a virtual MFA device in the AWS Console")
-	fmt.Fprintln(opts.Writer, "If you haven't already, go to:")
-	fmt.Fprintln(opts.Writer, "  👉 https://console.aws.amazon.com/iam/home#/security_credentials")
-	fmt.Fprintln(opts.Writer)
-	fmt.Fprintln(opts.Writer, "Enable a virtual MFA device, and when prompted, choose to show the secret key.")
-
-	fmt.Fprint(opts.Writer, "📋 Paste your AWS MFA Base32 secret key here: ")
-	secret, _ := reader.ReadString('\n')
-	secret = strings.TrimSpace(secret)
-
-	fmt.Fprintln(opts.Writer, "\n🔢 Generating two consecutive MFA codes for AWS setup...")
-	currentCode, nextCode, err := totp.GenerateConsecutiveCodes(secret)
-	if err != nil {
-		fmt.Fprintf(opts.ErrorWriter, "❌ Failed to generate MFA codes: %v\n", err)
-		opts.OsExit(1)
-		return
-	}
-
-	fmt.Fprintln(opts.Writer, "\n📱 Enter these two consecutive codes in AWS when prompted:")
-	fmt.Fprintf(opts.Writer, "  First code:  %s\n", currentCode)
-	fmt.Fprintf(opts.Writer, "  Second code: %s\n", nextCode)
-	fmt.Fprintln(opts.Writer, "\nℹ️  You can enter both codes immediately one after another - no need to wait between them.")
-	fmt.Fprintln(opts.Writer, "⏱️  Complete the AWS setup within 30 seconds of seeing these codes.")
-
-	fmt.Fprint(opts.Writer, "\n👤 Keychain account name (press Enter to use your current macOS username): ")
-	account, _ := reader.ReadString('\n')
-	account = strings.TrimSpace(account)
-	if account == "" {
-		whoamiCmd := opts.ExecCommand.Command("whoami")
-		accountBytes, err := whoamiCmd.Output()
-		if err != nil {
-			fmt.Fprintf(opts.ErrorWriter, "Could not determine current user: %v\n", err)
-			opts.OsExit(1)
-			return
-		}
-		account = strings.TrimSpace(string(accountBytes))
-	}
-
-	service := "sesh-mfa"
-
-	fmt.Fprintf(opts.Writer, "💾 Saving your secret to Keychain as account='%s', service='%s'...\n", account, service)
-
-	execPath := opts.AppExecutablePath
-	if execPath == "" {
-		var execPathErr error
-		execPath, execPathErr = os.Executable()
-		if execPathErr != nil {
-			execPath = "/usr/local/bin/sesh" // Fallback path
+// GetCurrentExecutablePath gets the path of the current binary or a valid installed path
+func GetCurrentExecutablePath() string {
+	// First try os.Executable() to get the current binary path
+	selfPath, err := os.Executable()
+	if err == nil && selfPath != "" {
+		// Check if this path exists
+		if _, statErr := os.Stat(selfPath); statErr == nil {
+			return selfPath
 		}
 	}
+	
+	// Otherwise, check for known installation paths
+	knownPaths := []string{
+		os.ExpandEnv("$HOME/.local/bin/sesh"),
+		"/usr/local/bin/sesh",
+		"/opt/homebrew/bin/sesh",
+	}
+	
+	for _, path := range knownPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	
+	// Fall back to the default as a last resort
+	return "/usr/local/bin/sesh"
+}
 
-	// Using application binding for enhanced security via macOS Keychain -T
-	// For more, see: manpage for security(1) for the add-generic-password
-	// command and review the -T flag
-	securityCmd := opts.ExecCommand.Command("security", "add-generic-password",
-		"-a", account,
-		"-s", service,
-		"-w", secret,
-		"-T", execPath,
-		"-U")
+// SetSeshBinaryPath is kept for compatibility but no longer used
+// We now determine the binary path at the time of each keychain operation
+func SetSeshBinaryPath(path string) {
+	// No-op - binary path is determined at access time
+}
 
-	err = securityCmd.Run()
+// Variables to allow testing
+var RunWizard = runWizard
+var RunWizardForService = runWizardForService
+
+// runWizard runs the setup wizard, maintaining backward compatibility
+func runWizard() {
+	RunWizardForService("aws")
+}
+
+// runWizardForService runs the setup wizard for a specific service
+func runWizardForService(serviceName string) {
+	fmt.Println("🔐 Setting up sesh...")
+
+	// Binary path is now determined at the time of keychain operations
+	// No explicit path setting needed here
+
+	switch serviceName {
+	case "aws":
+		setupAWS()
+	case "totp":
+		setupGenericTOTP()
+	default:
+		fmt.Printf("Unknown service: %s\n", serviceName)
+		os.Exit(1)
+	}
+}
+
+// setupAWS configures AWS-specific setup
+func setupAWS() {
+	reader := bufio.NewReader(os.Stdin)
+
+	// Check if AWS CLI is installed
+	_, err := exec.LookPath("aws")
 	if err != nil {
-		fmt.Fprintf(opts.ErrorWriter, "❌ Failed to store secret in Keychain: %v\n", err)
-		opts.OsExit(1)
-		return
+		fmt.Println("❌ AWS CLI not found. Please install it first: https://aws.amazon.com/cli/")
+		os.Exit(1)
 	}
 
-	fmt.Fprintln(opts.Writer, "\n✅ MFA secret successfully stored in Keychain!")
+	fmt.Println("✅ AWS CLI is installed")
 
-	fmt.Fprintln(opts.Writer, "\n🔍 Looking for your MFA device in AWS...")
+	// Ask for AWS profile
+	fmt.Print("Enter AWS CLI profile name (leave empty for default): ")
+	profile, _ := reader.ReadString('\n')
+	profile = strings.TrimSpace(profile)
 
-	awsCmd := opts.ExecCommand.Command("aws", "iam", "list-mfa-devices", "--output", "json")
-	devices, err := awsCmd.Output()
+	// Try to get current user's AWS ARN
+	var userArn string
+	var cmd *exec.Cmd
 
-	if err != nil {
-		fmt.Fprintf(opts.ErrorWriter, "❗ Could not list MFA devices from AWS. You might need to specify your MFA ARN manually.\n")
+	if profile == "" {
+		cmd = exec.Command("aws", "sts", "get-caller-identity", "--query", "Arn", "--output", "text")
 	} else {
-		var response struct {
-			MFADevices []struct {
-				SerialNumber string `json:"SerialNumber"`
-				UserName     string `json:"UserName"`
-			} `json:"MFADevices"`
-		}
+		cmd = exec.Command("aws", "sts", "get-caller-identity", "--profile", profile, "--query", "Arn", "--output", "text")
+	}
 
-		if err := json.Unmarshal(devices, &response); err != nil {
-			fmt.Fprintf(opts.ErrorWriter, "❗ Could not parse MFA device list. You might need to specify your MFA ARN manually.\n")
-		} else if len(response.MFADevices) > 0 {
-			var serialToUse string
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Println("❌ Failed to get AWS identity. Make sure your AWS credentials are configured.")
+		fmt.Println("Run 'aws configure' first, then try again.")
+		os.Exit(1)
+	}
 
-			if len(response.MFADevices) > 1 {
-				fmt.Fprintln(opts.Writer, "\n📱 Multiple MFA devices found. Which one did you just set up?")
-				for i, device := range response.MFADevices {
-					fmt.Fprintf(opts.Writer, "  %d. %s (%s)\n", i+1, device.SerialNumber, device.UserName)
-				}
+	userArn = strings.TrimSpace(string(output))
+	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
 
-				fmt.Fprint(opts.Writer, "\nEnter number [1]: ")
-				choice, _ := reader.ReadString('\n')
-				choice = strings.TrimSpace(choice)
+	// Try to get MFA devices
+	var mfaCmd *exec.Cmd
+	if profile == "" {
+		mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
+	} else {
+		mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
+	}
 
-				// Default to first device
-				index := 0
-				if choice != "" {
-					if idx, err := strconv.Atoi(choice); err == nil && idx >= 1 && idx <= len(response.MFADevices) {
-						index = idx - 1
-					}
-				}
+	mfaOutput, err := mfaCmd.Output()
+	var mfaArn string
 
-				serialToUse = response.MFADevices[index].SerialNumber
-			} else {
-				serialToUse = response.MFADevices[0].SerialNumber
+	if err != nil || len(strings.TrimSpace(string(mfaOutput))) == 0 {
+		fmt.Println("❓ No MFA devices found. You'll need to provide your MFA ARN manually.")
+		fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
+		mfaArn, _ = reader.ReadString('\n')
+		mfaArn = strings.TrimSpace(mfaArn)
+	} else {
+		// If there are multiple MFA devices, list them and ask the user to choose
+		mfaDevices := strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
+		if len(mfaDevices) == 1 {
+			mfaArn = mfaDevices[0]
+			fmt.Printf("✅ Found MFA device: %s\n", mfaArn)
+		} else {
+			fmt.Println("Found multiple MFA devices:")
+			for i, device := range mfaDevices {
+				fmt.Printf("%d: %s\n", i+1, device)
 			}
-
-			fmt.Fprintf(opts.Writer, "\n💾 Saving your MFA device ARN for future use: %s\n", serialToUse)
-
-			securityCmd := opts.ExecCommand.Command("security", "add-generic-password",
-				"-a", account,
-				"-s", "sesh-mfa-serial",
-				"-w", serialToUse,
-				"-T", execPath, // Use the same app binding
-				"-U")
-
-			err := securityCmd.Run()
-			if err != nil {
-				fmt.Fprintf(opts.ErrorWriter, "⚠️ Could not store MFA serial in keychain. You might need to specify it manually.\n")
+			fmt.Print("Choose a device (1-n): ")
+			choice, _ := reader.ReadString('\n')
+			choice = strings.TrimSpace(choice)
+			var index int
+			fmt.Sscanf(choice, "%d", &index)
+			if index < 1 || index > len(mfaDevices) {
+				fmt.Println("❌ Invalid choice")
+				os.Exit(1)
 			}
+			mfaArn = mfaDevices[index-1]
+			fmt.Printf("✅ Selected MFA device: %s\n", mfaArn)
 		}
 	}
 
-	fmt.Fprintln(opts.Writer, "\n📝 Next steps:")
-	fmt.Fprintln(opts.Writer, "  1. Make sure the sesh binary is installed and in your PATH:")
-	fmt.Fprintln(opts.Writer, "     - For development: run 'make install' or add this directory to your PATH")
-	fmt.Fprintln(opts.Writer, "     - For regular use: run 'make install' or install via Homebrew")
-	fmt.Fprintln(opts.Writer, "\n  2. Configure your AWS CLI if you haven't already:")
-	fmt.Fprintln(opts.Writer, "     - Run 'aws configure' to set up your AWS access keys")
-	fmt.Fprintln(opts.Writer, "\n  3. Run sesh to get temporary credentials:")
-	fmt.Fprintln(opts.Writer, "     - With shell integration: 'sesh'")
-	fmt.Fprintln(opts.Writer, "     - Without shell integration: 'eval \"$(sesh)\"'")
-	fmt.Fprintln(opts.Writer)
+	// Get MFA secret
+	fmt.Println("Enter your MFA secret (this will not be echoed):")
+	secret, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		fmt.Println("❌ Failed to read secret")
+		os.Exit(1)
+	}
+	fmt.Println() // Add a newline after the hidden input
+
+	// Store in keychain
+	user := getCurrentUser()
+
+	// If a profile is specified, use it as part of the keychain service name
+	serviceName := "sesh-mfa"
+	if profile != "" {
+		serviceName = fmt.Sprintf("sesh-mfa-%s", profile)
+	}
+
+	// Get the executable path at the time of execution
+	execPath := GetCurrentExecutablePath()
+
+	// Use security command to store secret with -T flag to restrict access
+	addCmd := exec.Command("security", "add-generic-password",
+		"-a", user,
+		"-s", serviceName,
+		"-w", string(secret),
+		"-U", // Update if exists
+		"-T", execPath, // Only allow the sesh binary to access this item
+	)
+	err = addCmd.Run()
+	if err != nil {
+		fmt.Println("❌ Failed to store secret in keychain")
+		os.Exit(1)
+	}
+
+	// Also store the MFA serial ARN
+	serialServiceName := "sesh-mfa-serial"
+	if profile != "" {
+		serialServiceName = fmt.Sprintf("sesh-mfa-serial-%s", profile)
+	}
+	addSerialCmd := exec.Command("security", "add-generic-password",
+		"-a", user,
+		"-s", serialServiceName,
+		"-w", mfaArn,
+		"-U", // Update if exists
+		"-T", execPath, // Only allow the sesh binary to access this item
+	)
+	err = addSerialCmd.Run()
+	if err != nil {
+		fmt.Println("❌ Failed to store MFA serial in keychain")
+		os.Exit(1)
+	}
+
+	fmt.Println("✅ Setup complete! You can now use 'sesh' to generate AWS credentials.")
+	if profile != "" {
+		fmt.Printf("Remember to use 'sesh --profile %s' to use this profile.\n", profile)
+	}
 }
 
-// clearImpl clears the terminal using the default command runner
-func clearImpl() {
-	clearWithWriter(os.Stdout, &DefaultCommandRunner{})
+// setupGenericTOTP configures a generic TOTP service
+func setupGenericTOTP() {
+	reader := bufio.NewReader(os.Stdin)
+
+	// Ask for service name
+	fmt.Print("Enter name for this TOTP service: ")
+	serviceName, _ := reader.ReadString('\n')
+	serviceName = strings.TrimSpace(serviceName)
+
+	if serviceName == "" {
+		fmt.Println("❌ Service name cannot be empty")
+		os.Exit(1)
+	}
+
+	// Ask for profile name (for multiple accounts with the same service)
+	fmt.Print("Enter profile name (optional, for multiple accounts with the same service): ")
+	profile, _ := reader.ReadString('\n')
+	profile = strings.TrimSpace(profile)
+
+	// Ask for a label/description
+	fmt.Print("Enter a label or description (optional): ")
+	label, _ := reader.ReadString('\n')
+	label = strings.TrimSpace(label)
+
+	// Get TOTP secret
+	fmt.Println("Enter your TOTP secret key (this will not be echoed):")
+	secret, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		fmt.Println("❌ Failed to read secret")
+		os.Exit(1)
+	}
+	fmt.Println() // Add a newline after the hidden input
+
+	// Store in keychain
+	user := getCurrentUser()
+
+	// Get the executable path at the time of execution
+	execPath := GetCurrentExecutablePath()
+
+	// Build service key
+	var serviceKey string
+	if profile == "" {
+		serviceKey = fmt.Sprintf("sesh-totp-%s", serviceName)
+	} else {
+		serviceKey = fmt.Sprintf("sesh-totp-%s-%s", serviceName, profile)
+	}
+
+	// Use security command to store secret with -T flag to restrict access
+	addCmd := exec.Command("security", "add-generic-password",
+		"-a", user,
+		"-s", serviceKey,
+		"-w", string(secret),
+		"-U", // Update if exists
+		"-T", execPath, // Only allow the sesh binary to access this item
+	)
+
+	// Add description/label if provided
+	if label != "" {
+		addCmd.Args = append(addCmd.Args, "-j", label)
+	}
+
+	err = addCmd.Run()
+	if err != nil {
+		fmt.Println("❌ Failed to store secret in keychain")
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Setup complete! You can now use 'sesh --service totp --service-name %s", serviceName)
+	if profile != "" {
+		fmt.Printf(" --profile %s", profile)
+	}
+	fmt.Println("' to generate TOTP codes.")
+	fmt.Println("Use 'sesh --service totp --service-name " + serviceName + " --clip' to copy the code to clipboard.")
 }
 
-// clearWithWriterImpl clears the terminal with a specific writer and command runner
-func clearWithWriterImpl(w io.Writer, runner CommandRunner) {
-	cmd := runner.Command("clear")
-	cmd.Stdout = w
-	_ = cmd.Run()
+// getCurrentUser gets the current system user
+func getCurrentUser() string {
+	user := os.Getenv("USER")
+	if user != "" {
+		return user
+	}
+
+	// If USER env var isn't set, try to get it with whoami
+	output, err := exec.Command("whoami").Output()
+	if err == nil {
+		return strings.TrimSpace(string(output))
+	}
+
+	// If all else fails, exit
+	fmt.Println("❌ Could not determine current user")
+	os.Exit(1)
+	return "" // Will never reach here, but needed for compilation
 }
