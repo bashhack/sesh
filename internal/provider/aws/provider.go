@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"github.com/bashhack/sesh/internal/constants"
+	"github.com/bashhack/sesh/internal/env"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,27 +16,20 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
-	"github.com/bashhack/sesh/internal/totp"
-)
-
-const (
-	// Service name constants
-	defaultKeyName = "sesh-mfa"
-	mfaSerialService = "sesh-mfa-serial"
+	internalTotp "github.com/bashhack/sesh/internal/totp"
 )
 
 // Provider implements ServiceProvider for AWS
 type Provider struct {
 	aws         awsInternal.Provider
 	keychain    keychain.Provider
-	totp        totp.Provider
+	totp        internalTotp.Provider
 	setupWizard setup.WizardRunner
-	
+
 	// Flags
-	profile  string
-	serial   string
-	keyUser  string
-	keyName  string
+	profile string
+	keyUser string
+	keyName string
 }
 
 // Ensure Provider implements ServiceProvider interface
@@ -43,7 +39,7 @@ var _ provider.ServiceProvider = (*Provider)(nil)
 func NewProvider(
 	aws awsInternal.Provider,
 	keychain keychain.Provider,
-	totp totp.Provider,
+	totp internalTotp.Provider,
 	setupWizard setup.WizardRunner,
 ) *Provider {
 	return &Provider{
@@ -51,7 +47,7 @@ func NewProvider(
 		keychain:    keychain,
 		totp:        totp,
 		setupWizard: setupWizard,
-		keyName:     defaultKeyName,
+		keyName:     constants.AWSServicePrefix,
 	}
 }
 
@@ -66,16 +62,20 @@ func (p *Provider) Description() string {
 }
 
 // SetupFlags adds provider-specific flags to the given FlagSet
-func (p *Provider) SetupFlags(fs *flag.FlagSet) {
+func (p *Provider) SetupFlags(fs provider.FlagSet) error {
+	// Use the flagset interface which may be our safe wrapper
 	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
-	fs.StringVar(&p.serial, "serial", os.Getenv("SESH_MFA_SERIAL"), "MFA device serial number (optional)")
-	fs.StringVar(&p.keyUser, "keychain-user", os.Getenv("SESH_KEYCHAIN_USER"), "macOS Keychain username (optional)")
-	
-	defaultKeyName := os.Getenv("SESH_KEYCHAIN_NAME")
-	if defaultKeyName == "" {
-		defaultKeyName = "sesh-mfa"
+
+	// Add a dummy service-name flag to detect invalid flag usage with AWS provider
+	var dummyServiceName string
+	fs.StringVar(&dummyServiceName, "service-name", "", "NOT USED - Only valid with TOTP provider")
+
+	defaultKeyUser, err := env.GetCurrentUser()
+	if err != nil {
+		return fmt.Errorf("failed to get current user: %w", err)
 	}
-	fs.StringVar(&p.keyName, "keychain-name", defaultKeyName, "macOS Keychain service name")
+	p.keyUser = defaultKeyUser
+	return nil
 }
 
 // Setup runs the setup wizard for AWS
@@ -85,53 +85,95 @@ func (p *Provider) Setup() error {
 
 // GetCredentials retrieves AWS credentials using TOTP
 func (p *Provider) GetCredentials() (provider.Credentials, error) {
+	// Validate that service-name was not provided - it's not valid for AWS
+	flag := flag.Lookup("service-name")
+	if flag != nil && flag.Value.String() != "" {
+		return provider.Credentials{}, fmt.Errorf("the --service-name flag is only valid with the TOTP provider, not AWS")
+	}
+
 	// Get MFA serial
 	serial, err := p.getMFASerial()
 	if err != nil {
 		return provider.Credentials{}, err
 	}
 
+	// Debug: Print the serial number to help diagnose issues
+	fmt.Fprintf(os.Stderr, "🔍 Using MFA serial: %s\n", serial)
+
 	// Get TOTP secret - account for profile-specific secrets
-	keyName := p.keyName
-	
-	if p.profile != "" {
+	var keyName string
+	if p.profile == "" {
+		// Use default for the default profile
+		keyName = fmt.Sprintf("%s-default", p.keyName)
+	} else {
 		keyName = fmt.Sprintf("%s-%s", p.keyName, p.profile)
 	}
-	
-	fmt.Fprintf(os.Stderr, "DEBUG: Accessing keychain service '%s' with user '%s'\n", keyName, p.keyUser)
-	
+
+	// Get TOTP secret from keychain
+
 	// Try to directly access the keychain with security command first
 	// This approach may avoid some of the security prompts
-	cmd := exec.Command("security", "find-generic-password", 
-		"-a", p.keyUser, 
+	cmd := exec.Command("security", "find-generic-password",
+		"-a", p.keyUser,
 		"-s", keyName,
 		"-w")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmdErr := cmd.Run()
-	
+
 	var secret string
 	if cmdErr == nil {
 		secret = strings.TrimSpace(stdout.String())
+		fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from direct keychain access\n")
 	} else {
 		// Fall back to the provider method if direct access fails
+		fmt.Fprintf(os.Stderr, "⚠️ Direct keychain access failed, falling back to provider: %v\n", cmdErr)
 		secret, err = p.keychain.GetSecret(p.keyUser, keyName)
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 		}
+		fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from provider\n")
 	}
 
-	// Generate TOTP code
-	code, err := p.totp.Generate(secret)
+	// Check if secret looks valid (base32 encoded)
+	if len(secret) < 16 || len(secret) > 64 {
+		fmt.Fprintf(os.Stderr, "⚠️ Warning: TOTP secret has unusual length: %d characters\n", len(secret))
+	}
+
+	// Use the standard TOTP approach: direct timestamp at current time
+	// This matches how AWS and tools like gauth validate TOTP codes
+
+	// Generate consecutive codes first
+	// We'll use these for both AWS API authentication and the clipboard
+	currentCode, nextCode, err := p.totp.GenerateConsecutiveCodes(secret)
 	if err != nil {
-		return provider.Credentials{}, fmt.Errorf("could not generate TOTP code: %w", err)
+		return provider.Credentials{}, fmt.Errorf("could not generate consecutive TOTP codes: %w", err)
 	}
 
-	// Get AWS credentials
+	// Check the time window - we may need to use nextCode if we're close to boundary
+	var secondsLeft int64
+	secondsLeft = 30 - (time.Now().Unix() % 30)
+	
+	// First try with the current code
+	code := currentCode
+	fmt.Fprintf(os.Stderr, "🔑 Trying authentication with code: %s (time window: %d seconds left)\n", code, secondsLeft)
+	
+	// Try the first code
 	awsCreds, err := p.aws.GetSessionToken(p.profile, serial, code)
+	
+	// If authentication fails and we're close to the time boundary, try with the next code
+	if err != nil && secondsLeft < 5 {
+		fmt.Fprintf(os.Stderr, "⚠️ First code failed - trying again with next code: %s\n", nextCode)
+		code = nextCode
+		awsCreds, err = p.aws.GetSessionToken(p.profile, serial, code)
+	}
+	
+	// If still failing, return the error
 	if err != nil {
 		return provider.Credentials{}, fmt.Errorf("failed to get session token: %w", err)
 	}
+	
+	// At this point, code variable contains the successfully used code
 
 	// Parse expiration time
 	expiryTime, err := time.Parse(time.RFC3339, awsCreds.Expiration)
@@ -147,59 +189,169 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}
 
 	// Format display info
-	displayInfo := fmt.Sprintf("AWS credentials for profile %s", p.profile)
+	var displayInfo string
 	if p.profile == "" {
-		displayInfo = "AWS credentials for default profile"
+		displayInfo = "🔑 AWS credentials for default profile"
+	} else {
+		displayInfo = fmt.Sprintf("🔑 AWS credentials for profile %s", p.profile)
 	}
+
+	// Recalculate seconds left based on updated time
+	secondsLeft = 30 - (time.Now().Unix() % 30)
+
+	// Always use the successfully authenticated code for clipboard
+	clipboardCode := code  // This is guaranteed to be the code that worked with AWS
+	
+	// Set up resync codes - we need to be careful about which ones to use
+	// based on which code was used for authentication
+	var resyncCode1, resyncCode2 string
+	
+	// If we used the current window's code, next window is resyncCode1
+	// Otherwise, we need to generate the next two codes
+	if code == currentCode {
+		// We authenticated with the current time window's code
+		resyncCode1 = nextCode
+		
+		// Generate code for 2 steps ahead for resyncCode2
+		tempCode, err := p.totp.GenerateForTime(secret, time.Now().Add(60*time.Second))
+		if err == nil {
+			resyncCode2 = tempCode
+		} else {
+			// Fallback if generation fails
+			resyncCode2 = nextCode
+			fmt.Fprintf(os.Stderr, "⚠️ Warning: Could not generate resync code 2: %v\n", err)
+		}
+	} else {
+		// We authenticated with the next window's code
+		// Generate codes for the next two windows
+		tempCode1, err := p.totp.GenerateForTime(secret, time.Now().Add(30*time.Second))
+		if err == nil {
+			resyncCode1 = tempCode1
+		} else {
+			resyncCode1 = code // fallback
+			fmt.Fprintf(os.Stderr, "⚠️ Warning: Could not generate resync code 1: %v\n", err)
+		}
+		
+		tempCode2, err := p.totp.GenerateForTime(secret, time.Now().Add(60*time.Second))
+		if err == nil {
+			resyncCode2 = tempCode2
+		} else {
+			resyncCode2 = resyncCode1 // fallback
+			fmt.Fprintf(os.Stderr, "⚠️ Warning: Could not generate resync code 2: %v\n", err)
+		}
+	}
+	
+	// Add warning if we're close to expiry
+	if secondsLeft < 5 {
+		fmt.Fprintln(os.Stderr, "⚠️  Warning: Current TOTP code will expire in less than 5 seconds!")
+	}
+
+	// Final validation to ensure we have values for all codes
+	if resyncCode1 == "" {
+		resyncCode1 = nextCode
+	}
+	if resyncCode2 == "" {
+		resyncCode2 = nextCode
+	}
+
+	// Create display info with diagnostic information about which code was used successfully
+	clipboardDisplayInfo := displayInfo
+
+	// Show the authenticated code and additional info about which code was used successfully
+	if p.profile == "" {
+		clipboardDisplayInfo = fmt.Sprintf("%s\n🔑 Web console code: %s\n\n[Additional info]\n🔄 If asked to resync MFA: %s + %s",
+			displayInfo, clipboardCode, resyncCode1, resyncCode2)
+	} else {
+		clipboardDisplayInfo = fmt.Sprintf("%s\n🔑 Web console code for profile %s: %s\n\n[Additional info]\n🔄 If asked to resync MFA: %s + %s",
+			displayInfo, p.profile, clipboardCode, resyncCode1, resyncCode2)
+	}
+
+	// Add expiration info and note about which code worked
+	if code != currentCode {
+		clipboardDisplayInfo = fmt.Sprintf("%s\n⚠️ Authentication used next time window's code (system clock offset detected)", clipboardDisplayInfo)
+	}
+	
+	clipboardDisplayInfo = fmt.Sprintf("%s\n⏰ Code expires in: %d seconds", clipboardDisplayInfo, secondsLeft)
 
 	return provider.Credentials{
 		Provider:    p.Name(),
 		Expiry:      expiryTime,
 		Variables:   envVars,
-		DisplayInfo: displayInfo,
-		CopyValue:   awsCreds.SessionToken, // Set session token as copy value
+		DisplayInfo: clipboardDisplayInfo,
+		CopyValue:   clipboardCode,
 	}, nil
 }
 
 // ListEntries returns all AWS entries in the keychain
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
-	// List both regular entries and serial entries
-	entries, err := p.keychain.ListEntries("sesh-mfa")
+	// Simply get all entries with our AWS prefix
+	allEntries, err := p.keychain.ListEntries(constants.AWSServicePrefix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list AWS entries: %w", err)
 	}
-	
-	result := make([]provider.ProviderEntry, 0, len(entries))
-	for _, entry := range entries {
+
+	// Convert keychain entries to provider entries
+	result := make([]provider.ProviderEntry, 0, len(allEntries))
+	for _, entry := range allEntries {
 		// Extract profile name if present
 		profile := ""
 		serviceName := entry.Service
-		
-		// Handle profile-specific keys (sesh-mfa-profile)
-		if strings.HasPrefix(serviceName, "sesh-mfa-") {
-			profile = strings.TrimPrefix(serviceName, "sesh-mfa-")
+
+		// Handle profile-specific keys (sesh-aws-profile)
+		if strings.HasPrefix(serviceName, constants.AWSServicePrefix) {
+			profile = strings.TrimPrefix(serviceName, fmt.Sprintf("%s-", constants.AWSServicePrefix))
 		}
-		
+
 		// Create descriptive name and description
-		name := "AWS"
+		name := serviceName
 		description := "AWS MFA"
-		
+
 		if profile != "" {
 			name = fmt.Sprintf("AWS (%s)", profile)
 			description = fmt.Sprintf("AWS MFA for profile %s", profile)
 		}
-		
+
 		// Create a unique ID that contains both the service and account
-		id := fmt.Sprintf("%s:%s", entry.Service, entry.Account)
-		
+		id := fmt.Sprintf("%s:%s", serviceName, entry.Account)
+
 		result = append(result, provider.ProviderEntry{
 			Name:        name,
 			Description: description,
 			ID:          id,
 		})
 	}
-	
+
 	return result, nil
+}
+
+// getAWSProfiles reads AWS profiles from ~/.aws/config
+func (p *Provider) getAWSProfiles() ([]string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	configPath := filepath.Join(homeDir, ".aws", "config")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var profiles []string
+	profiles = append(profiles, "default") // Always include default
+
+	// Parse the config file to extract profile names
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[profile ") && strings.HasSuffix(line, "]") {
+			profile := strings.TrimPrefix(line, "[profile ")
+			profile = strings.TrimSuffix(profile, "]")
+			profiles = append(profiles, strings.TrimSpace(profile))
+		}
+	}
+
+	return profiles, nil
 }
 
 // DeleteEntry deletes an AWS entry from the keychain
@@ -209,66 +361,143 @@ func (p *Provider) DeleteEntry(id string) error {
 	if len(parts) != 2 {
 		return fmt.Errorf("invalid entry ID format: expected 'service:account', got %q", id)
 	}
-	
+
 	service, account := parts[0], parts[1]
-	
+
 	// Delete both the MFA secret and MFA serial entries
 	if err := p.keychain.DeleteEntry(account, service); err != nil {
 		return fmt.Errorf("failed to delete AWS entry: %w", err)
 	}
-	
+
 	// If this was a sesh-mfa entry, also delete the corresponding serial entry
-	if strings.HasPrefix(service, "sesh-mfa") {
-		serialService := strings.Replace(service, "sesh-mfa", "sesh-mfa-serial", 1)
+	if strings.HasPrefix(service, constants.AWSServicePrefix) {
+		serialService := strings.Replace(service, constants.AWSServicePrefix, constants.AWSServiceMFAPrefix, 1)
 		if err := p.keychain.DeleteEntry(account, serialService); err != nil {
 			// Log but don't fail if serial entry deletion fails
 			fmt.Fprintf(os.Stderr, "Warning: Failed to delete serial entry %s: %v\n", serialService, err)
 		}
 	}
-	
+
 	return nil
 }
 
-// getMFASerial attempts to get an MFA serial from various sources
-func (p *Provider) getMFASerial() (string, error) {
-	// If serial is explicitly provided, use it
-	if p.serial != "" {
-		return p.serial, nil
+// GetProfile returns the current AWS profile
+func (p *Provider) GetProfile() string {
+	return p.profile
+}
+
+// GetTOTPKeyInfo returns the user and key name for TOTP generation
+func (p *Provider) GetTOTPKeyInfo() (string, string, error) {
+	// Get the current user if not already set
+	if p.keyUser == "" {
+		var err error
+		p.keyUser, err = env.GetCurrentUser()
+		if err != nil {
+			return "", "", fmt.Errorf("could not determine current user: %w", err)
+		}
 	}
 	
+	// Determine the keychain key name based on profile
+	var keyName string
+	if p.profile == "" {
+		// Use default for the default profile
+		keyName = fmt.Sprintf("%s-default", p.keyName)
+	} else {
+		keyName = fmt.Sprintf("%s-%s", p.keyName, p.profile)
+	}
+	
+	return p.keyUser, keyName, nil
+}
+
+// GetMFASerial returns the MFA device serial
+func (p *Provider) GetMFASerial() (string, error) {
+	// Use the same logic as in GetCredentials but just return the serial
 	// Service name for the MFA serial (account for profile)
-	serialService := mfaSerialService
-	if p.profile != "" {
-		serialService = fmt.Sprintf("%s-%s", mfaSerialService, p.profile)
+	var serialService string
+	
+	// Get current user if not set
+	if p.keyUser == "" {
+		var err error
+		p.keyUser, err = env.GetCurrentUser()
+		if err != nil {
+			return "", fmt.Errorf("could not determine current user: %w", err)
+		}
 	}
 	
-	fmt.Fprintf(os.Stderr, "DEBUG: Accessing MFA serial from service '%s' with user '%s'\n", serialService, p.keyUser)
-	
+	if p.profile == "" {
+		// Use default for the default profile
+		serialService = fmt.Sprintf("%s-default", constants.AWSServiceMFAPrefix)
+	} else {
+		serialService = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, p.profile)
+	}
+
 	// Try direct keychain access first
-	cmd := exec.Command("security", "find-generic-password", 
-		"-a", p.keyUser, 
+	cmd := exec.Command("security", "find-generic-password",
+		"-a", p.keyUser,
 		"-s", serialService,
 		"-w")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	err := cmd.Run()
-	
+
 	if err == nil {
 		serialFromKeychain := strings.TrimSpace(stdout.String())
 		return serialFromKeychain, nil
 	}
-	
+
 	// Fall back to the provider method
 	serialFromKeychain, err := p.keychain.GetSecret(p.keyUser, serialService)
 	if err == nil {
 		return serialFromKeychain, nil
 	}
-	
+
 	// If not found in keychain, try to auto-detect from AWS
 	serial, err := p.aws.GetFirstMFADevice(p.profile)
 	if err != nil {
 		return "", fmt.Errorf("could not detect MFA device: %w", err)
 	}
-	
+
+	return serial, nil
+}
+
+func (p *Provider) getMFASerial() (string, error) {
+
+	// Service name for the MFA serial (account for profile)
+	var serialService string
+	if p.profile == "" {
+		// Use default for the default profile
+		serialService = fmt.Sprintf("%s-default", constants.AWSServiceMFAPrefix)
+	} else {
+		serialService = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, p.profile)
+	}
+
+	// Get MFA serial from keychain
+
+	// Try direct keychain access first
+	cmd := exec.Command("security", "find-generic-password",
+		"-a", p.keyUser,
+		"-s", serialService,
+		"-w")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	err := cmd.Run()
+
+	if err == nil {
+		serialFromKeychain := strings.TrimSpace(stdout.String())
+		return serialFromKeychain, nil
+	}
+
+	// Fall back to the provider method
+	serialFromKeychain, err := p.keychain.GetSecret(p.keyUser, serialService)
+	if err == nil {
+		return serialFromKeychain, nil
+	}
+
+	// If not found in keychain, try to auto-detect from AWS
+	serial, err := p.aws.GetFirstMFADevice(p.profile)
+	if err != nil {
+		return "", fmt.Errorf("could not detect MFA device: %w", err)
+	}
+
 	return serial, nil
 }

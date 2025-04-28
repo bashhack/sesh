@@ -217,6 +217,15 @@ func ListEntries(servicePrefix string) ([]KeychainEntry, error) {
 	return entries, nil
 }
 
+// getCurrentUser gets the current system user
+func getCurrentUser() string {
+	out, err := execCommand("whoami").Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // DeleteEntry deletes an entry from the keychain
 func DeleteEntry(account, service string) error {
 	if account == "" {
