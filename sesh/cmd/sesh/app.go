@@ -263,21 +263,48 @@ func (a *App) copyAWSTotp(p provider.ServiceProvider) error {
 		return fmt.Errorf("failed to convert to AWS provider")
 	}
 	
-	// Access the AWS provider's TOTP generator and keychain
+	// Get profile for both methods
 	profile := awsProvider.GetProfile()
-	keyUser, keyName, err := awsProvider.GetTOTPKeyInfo()
+	keyUser, _, err := awsProvider.GetTOTPKeyInfo()
 	if err != nil {
-		return fmt.Errorf("failed to get TOTP key info: %w", err)
+		return fmt.Errorf("failed to get user info: %w", err)
 	}
 	
-	// Get the secret directly using the keychain provider
-	secret, err := a.Keychain.GetSecret(keyUser, keyName)
-	if err != nil {
-		return fmt.Errorf("could not retrieve TOTP secret: %w", err)
+	// First try to get web console specific MFA if available
+	var webServiceName string
+	if profile == "" {
+		webServiceName = fmt.Sprintf("%s-default", constants.AWSWebConsolePrefix)
+	} else {
+		webServiceName = fmt.Sprintf("%s-%s", constants.AWSWebConsolePrefix, profile)
+	}
+	
+	// Try to get web console secret first
+	webSecret, webErr := a.Keychain.GetSecret(keyUser, webServiceName)
+	usingWebConsole := false
+	
+	if webErr == nil {
+		// We found a web console specific MFA device, use it
+		fmt.Fprintf(a.Stderr, "🌐 Using web console specific MFA device\n")
+		usingWebConsole = true
+	} else {
+		// Fall back to regular MFA device
+		fmt.Fprintf(a.Stderr, "ℹ️ No web console specific MFA found, using regular MFA device\n")
+		
+		// Get regular MFA device key name
+		_, keyName, err := awsProvider.GetTOTPKeyInfo()
+		if err != nil {
+			return fmt.Errorf("failed to get TOTP key info: %w", err)
+		}
+		
+		// Get the regular MFA secret
+		webSecret, err = a.Keychain.GetSecret(keyUser, keyName)
+		if err != nil {
+			return fmt.Errorf("could not retrieve TOTP secret: %w", err)
+		}
 	}
 	
 	// Generate codes directly using the TOTP provider
-	currentCode, nextCode, err := a.TOTP.GenerateConsecutiveCodes(secret)
+	currentCode, nextCode, err := a.TOTP.GenerateConsecutiveCodes(webSecret)
 	if err != nil {
 		return fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
@@ -301,12 +328,23 @@ func (a *App) copyAWSTotp(p provider.ServiceProvider) error {
 	}
 	
 	// Print concise but useful information to stdout
-	fmt.Fprintf(a.Stdout, "🔑 AWS Login Code (%s)\n\n", profileDisplay)
+	deviceType := "regular MFA device"
+	if usingWebConsole {
+		deviceType = "web console specific MFA device"
+	}
+	
+	fmt.Fprintf(a.Stdout, "🔑 AWS Login Code (%s) - Using %s\n\n", profileDisplay, deviceType)
 	fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time remaining: %ds\n", currentCode, nextCode, secondsLeft)
 	
 	// Add warning if we're close to expiry
 	if secondsLeft < 5 {
 		fmt.Fprintln(a.Stdout, "⚠️  Warning: Code expires in less than 5 seconds!")
+	}
+	
+	// Add suggestion about dual MFA if not using web console device
+	if !usingWebConsole {
+		fmt.Fprintln(a.Stdout, "\nTIP: You can run 'sesh -service aws -setup' and enable the dual MFA option")
+		fmt.Fprintln(a.Stdout, "     to use separate MFA devices for CLI and web console!")
 	}
 	
 	return nil

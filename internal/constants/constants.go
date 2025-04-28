@@ -3,6 +3,10 @@ package constants
 const (
 	AWSServicePrefix    = "sesh-aws"
 	AWSServiceMFAPrefix = "sesh-aws-serial"
+	
+	// Constants for web console specific MFA device
+	AWSWebConsolePrefix    = "sesh-aws-web"
+	AWSWebConsoleMFAPrefix = "sesh-aws-web-serial"
 
 	TOTPServicePrefix = "sesh-totp"
 	

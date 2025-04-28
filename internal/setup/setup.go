@@ -3,49 +3,27 @@ package setup
 import (
 	"bufio"
 	"fmt"
+	"github.com/bashhack/sesh/internal/constants"
+	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/totp"
 	"os"
 	"os/exec"
 	"strings"
 	"syscall"
 
+	"github.com/bashhack/sesh/internal/env"
 	"golang.org/x/term"
 )
 
-// GetCurrentExecutablePath gets the path of the current binary or a valid installed path
-func GetCurrentExecutablePath() string {
-	// First try os.Executable() to get the current binary path
-	selfPath, err := os.Executable()
-	if err == nil && selfPath != "" {
-		// Check if this path exists
-		if _, statErr := os.Stat(selfPath); statErr == nil {
-			return selfPath
-		}
-	}
-	
-	// Otherwise, check for known installation paths
-	knownPaths := []string{
-		os.ExpandEnv("$HOME/.local/bin/sesh"),
-		"/usr/local/bin/sesh",
-		"/opt/homebrew/bin/sesh",
-	}
-	
-	for _, path := range knownPaths {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	
-	// Fall back to the default as a last resort
-	return "/usr/local/bin/sesh"
-}
-
-// SetSeshBinaryPath is kept for compatibility but no longer used
-// We now determine the binary path at the time of each keychain operation
-func SetSeshBinaryPath(path string) {
-	// No-op - binary path is determined at access time
+// GetSeshBinaryPath returns the fixed sesh binary path used for keychain access
+func GetSeshBinaryPath() string {
+	// Use a fixed path for security consistency
+	// Use the same path that's defined in keychain.go
+	return os.ExpandEnv("$HOME/.local/bin/sesh")
 }
 
 // Variables to allow testing
+
 var RunWizard = runWizard
 var RunWizardForService = runWizardForService
 
@@ -57,9 +35,6 @@ func runWizard() {
 // runWizardForService runs the setup wizard for a specific service
 func runWizardForService(serviceName string) {
 	fmt.Println("🔐 Setting up sesh...")
-
-	// Binary path is now determined at the time of keychain operations
-	// No explicit path setting needed here
 
 	switch serviceName {
 	case "aws":
@@ -110,7 +85,52 @@ func setupAWS() {
 	userArn = strings.TrimSpace(string(output))
 	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
 
-	// Try to get MFA devices
+	// Guide user through creating a virtual MFA device
+	fmt.Println("📱 Let's set up a virtual MFA device for your AWS account")
+	fmt.Println("1. Log in to the AWS Console at https://console.aws.amazon.com")
+	fmt.Println("2. Navigate to IAM → Users → Your Username → Security credentials")
+	fmt.Println("3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'")
+	fmt.Println("4. Choose 'Virtual MFA device' and click 'Continue'")
+	fmt.Println("5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code")
+	fmt.Println("6. Click 'Show secret key' and copy the secret key")
+	fmt.Println()
+	fmt.Println("❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together")
+	fmt.Println()
+
+	// Get MFA secret
+	fmt.Print("Paste the secret key here (this will not be echoed): ")
+	secret, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		fmt.Println("❌ Failed to read secret")
+		os.Exit(1)
+	}
+	fmt.Println() // Add a newline after the hidden input
+	
+	secretStr := string(secret)
+	secretStr = strings.TrimSpace(secretStr)
+	
+	// Validate secret key format (basic check)
+	if len(secretStr) < 16 {
+		fmt.Println("❌ Secret key seems too short. Please double-check and try again.")
+		os.Exit(1)
+	}
+	
+	// Generate two consecutive TOTP codes for AWS verification
+	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
+	if err != nil {
+		fmt.Printf("❌ Failed to generate TOTP codes: %s\n", err)
+		os.Exit(1)
+	}
+	
+	fmt.Println("✅ Generated TOTP codes for AWS setup")
+	fmt.Printf("   First code: %s\n", firstCode)
+	fmt.Printf("   Second code: %s\n", secondCode)
+	fmt.Println()
+	fmt.Println("Enter these codes in the AWS Console and complete the MFA setup")
+	fmt.Println("Press Enter once you've completed the setup...")
+	reader.ReadString('\n')
+	
+	// Get the MFA ARN after setup is complete
 	var mfaCmd *exec.Cmd
 	if profile == "" {
 		mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
@@ -137,7 +157,7 @@ func setupAWS() {
 			for i, device := range mfaDevices {
 				fmt.Printf("%d: %s\n", i+1, device)
 			}
-			fmt.Print("Choose a device (1-n): ")
+			fmt.Print("Choose the MFA device you just created (1-n): ")
 			choice, _ := reader.ReadString('\n')
 			choice = strings.TrimSpace(choice)
 			var index int
@@ -151,33 +171,31 @@ func setupAWS() {
 		}
 	}
 
-	// Get MFA secret
-	fmt.Println("Enter your MFA secret (this will not be echoed):")
-	secret, err := term.ReadPassword(int(syscall.Stdin))
+	// Store in keychain
+	user, err := env.GetCurrentUser()
 	if err != nil {
-		fmt.Println("❌ Failed to read secret")
+		fmt.Fprintf(os.Stderr, "❌ %s\n", err)
 		os.Exit(1)
 	}
-	fmt.Println() // Add a newline after the hidden input
 
-	// Store in keychain
-	user := getCurrentUser()
-
-	// If a profile is specified, use it as part of the keychain service name
-	serviceName := "sesh-mfa"
-	if profile != "" {
-		serviceName = fmt.Sprintf("sesh-mfa-%s", profile)
+	// Use the profile name for the keychain service name
+	var serviceName string
+	if profile == "" {
+		// For default profile, use "default" as the profile name
+		serviceName = fmt.Sprintf("%s-default", constants.AWSServicePrefix)
+	} else {
+		serviceName = fmt.Sprintf("%s-%s", constants.AWSServicePrefix, profile)
 	}
 
-	// Get the executable path at the time of execution
-	execPath := GetCurrentExecutablePath()
+	// Use our fixed binary path for consistent keychain access
+	execPath := GetSeshBinaryPath()
 
 	// Use security command to store secret with -T flag to restrict access
 	addCmd := exec.Command("security", "add-generic-password",
 		"-a", user,
 		"-s", serviceName,
-		"-w", string(secret),
-		"-U", // Update if exists
+		"-w", secretStr,
+		"-U",           // Update if exists
 		"-T", execPath, // Only allow the sesh binary to access this item
 	)
 	err = addCmd.Run()
@@ -187,15 +205,18 @@ func setupAWS() {
 	}
 
 	// Also store the MFA serial ARN
-	serialServiceName := "sesh-mfa-serial"
-	if profile != "" {
-		serialServiceName = fmt.Sprintf("sesh-mfa-serial-%s", profile)
+	var serialServiceName string
+	if profile == "" {
+		// For default profile, use "default" as the profile name
+		serialServiceName = fmt.Sprintf("%s-default", constants.AWSServiceMFAPrefix)
+	} else {
+		serialServiceName = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, profile)
 	}
 	addSerialCmd := exec.Command("security", "add-generic-password",
 		"-a", user,
 		"-s", serialServiceName,
 		"-w", mfaArn,
-		"-U", // Update if exists
+		"-U",           // Update if exists
 		"-T", execPath, // Only allow the sesh binary to access this item
 	)
 	err = addSerialCmd.Run()
@@ -203,10 +224,186 @@ func setupAWS() {
 		fmt.Println("❌ Failed to store MFA serial in keychain")
 		os.Exit(1)
 	}
-
-	fmt.Println("✅ Setup complete! You can now use 'sesh' to generate AWS credentials.")
+	
+	// Store metadata for better organization and retrieval
+	description := "AWS MFA"
 	if profile != "" {
-		fmt.Printf("Remember to use 'sesh --profile %s' to use this profile.\n", profile)
+		description = fmt.Sprintf("AWS MFA for profile %s", profile)
+	}
+	
+	// Store metadata - CRITICAL for entry retrieval
+	err = keychain.StoreEntryMetadata(constants.AWSServicePrefix, serviceName, user, description)
+	if err != nil {
+		fmt.Println("❌ Failed to store metadata for entry retrieval")
+		fmt.Println("⚠️ This entry might not appear when listing available AWS profiles")
+		fmt.Println("⚠️ You might need to create the entry again or check keychain permissions")
+		os.Exit(1)
+	}
+
+	// Ask if user wants to set up a separate MFA device for web console usage
+	fmt.Println("\n📱 ADVANCED OPTION: Separate MFA Device for Web Console")
+	fmt.Println("You can set up a second MFA device specifically for web console access.")
+	fmt.Println("This allows you to use both CLI and web console authentication without waiting")
+	fmt.Println("between operations, avoiding the 'Code already used' error.")
+	fmt.Println()
+	fmt.Print("Would you like to set up a second MFA device for web console? (y/N): ")
+	setupWebMFA, _ := reader.ReadString('\n')
+	setupWebMFA = strings.TrimSpace(strings.ToLower(setupWebMFA))
+	
+	if setupWebMFA == "y" || setupWebMFA == "yes" {
+		fmt.Println("\n📱 Let's set up a second virtual MFA device specifically for web console access")
+		fmt.Println("1. Log in to the AWS Console at https://console.aws.amazon.com")
+		fmt.Println("2. Navigate to IAM → Users → Your Username → Security credentials")
+		fmt.Println("3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'")
+		fmt.Println("4. Choose 'Virtual MFA device' and click 'Continue'")
+		fmt.Println("5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code")
+		fmt.Println("6. Click 'Show secret key' and copy the secret key")
+		fmt.Println()
+		fmt.Println("❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together")
+		fmt.Println()
+		
+		// Get MFA secret for web console
+		fmt.Print("Paste the secret key for web console MFA (this will not be echoed): ")
+		webSecret, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			fmt.Println("❌ Failed to read web console secret")
+			os.Exit(1)
+		}
+		fmt.Println() // Add a newline after the hidden input
+		
+		webSecretStr := string(webSecret)
+		webSecretStr = strings.TrimSpace(webSecretStr)
+		
+		// Validate secret key format (basic check)
+		if len(webSecretStr) < 16 {
+			fmt.Println("❌ Web console secret key seems too short. Please double-check and try again.")
+			os.Exit(1)
+		}
+		
+		// Generate two consecutive TOTP codes for AWS verification
+		webFirstCode, webSecondCode, err := totp.GenerateConsecutiveCodes(webSecretStr)
+		if err != nil {
+			fmt.Printf("❌ Failed to generate web console TOTP codes: %s\n", err)
+			os.Exit(1)
+		}
+		
+		fmt.Println("✅ Generated TOTP codes for web console MFA setup")
+		fmt.Printf("   First code: %s\n", webFirstCode)
+		fmt.Printf("   Second code: %s\n", webSecondCode)
+		fmt.Println()
+		fmt.Println("Enter these codes in the AWS Console and complete the MFA setup")
+		fmt.Println("Press Enter once you've completed the setup...")
+		reader.ReadString('\n')
+		
+		// Get the new MFA ARN after setup is complete
+		mfaOutput, err = mfaCmd.Output()
+		var webMfaArn string
+		
+		if err != nil || len(strings.TrimSpace(string(mfaOutput))) == 0 {
+			fmt.Println("❓ No MFA devices found. You'll need to provide your web console MFA ARN manually.")
+			fmt.Print("Enter your web console MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
+			webMfaArn, _ = reader.ReadString('\n')
+			webMfaArn = strings.TrimSpace(webMfaArn)
+		} else {
+			// If there are multiple MFA devices, list them and ask the user to choose
+			mfaDevices := strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
+			if len(mfaDevices) == 1 {
+				webMfaArn = mfaDevices[0]
+				fmt.Printf("✅ Found MFA device: %s\n", webMfaArn)
+			} else {
+				fmt.Println("Found multiple MFA devices:")
+				for i, device := range mfaDevices {
+					fmt.Printf("%d: %s\n", i+1, device)
+				}
+				fmt.Print("Choose the web console MFA device you just created (1-n): ")
+				choice, _ := reader.ReadString('\n')
+				choice = strings.TrimSpace(choice)
+				var index int
+				fmt.Sscanf(choice, "%d", &index)
+				if index < 1 || index > len(mfaDevices) {
+					fmt.Println("❌ Invalid choice")
+					os.Exit(1)
+				}
+				webMfaArn = mfaDevices[index-1]
+				fmt.Printf("✅ Selected web console MFA device: %s\n", webMfaArn)
+			}
+		}
+		
+		// Store web console MFA info in keychain
+		// Use different service name prefixes to distinguish from CLI MFA
+		var webServiceName string
+		if profile == "" {
+			webServiceName = fmt.Sprintf("%s-default", constants.AWSWebConsolePrefix)
+		} else {
+			webServiceName = fmt.Sprintf("%s-%s", constants.AWSWebConsolePrefix, profile)
+		}
+		
+		// Store web console secret
+		addWebCmd := exec.Command("security", "add-generic-password",
+			"-a", user,
+			"-s", webServiceName,
+			"-w", webSecretStr,
+			"-U",
+			"-T", execPath,
+		)
+		err = addWebCmd.Run()
+		if err != nil {
+			fmt.Println("❌ Failed to store web console secret in keychain")
+			os.Exit(1)
+		}
+		
+		// Store web console MFA serial ARN
+		var webSerialServiceName string
+		if profile == "" {
+			webSerialServiceName = fmt.Sprintf("%s-default", constants.AWSWebConsoleMFAPrefix)
+		} else {
+			webSerialServiceName = fmt.Sprintf("%s-%s", constants.AWSWebConsoleMFAPrefix, profile)
+		}
+		addWebSerialCmd := exec.Command("security", "add-generic-password",
+			"-a", user,
+			"-s", webSerialServiceName,
+			"-w", webMfaArn,
+			"-U",
+			"-T", execPath,
+		)
+		err = addWebSerialCmd.Run()
+		if err != nil {
+			fmt.Println("❌ Failed to store web console MFA serial in keychain")
+			os.Exit(1)
+		}
+		
+		// Store metadata for web console MFA
+		webDescription := "AWS Web Console MFA"
+		if profile != "" {
+			webDescription = fmt.Sprintf("AWS Web Console MFA for profile %s", profile)
+		}
+		
+		err = keychain.StoreEntryMetadata(constants.AWSWebConsolePrefix, webServiceName, user, webDescription)
+		if err != nil {
+			fmt.Println("❌ Failed to store metadata for web console entry")
+			fmt.Println("⚠️ This entry might not appear when listing available AWS profiles")
+			os.Exit(1)
+		}
+		
+		fmt.Println("\n✅ Dual MFA setup complete! You can now use separate devices for CLI and web console.")
+		fmt.Println("When using the -clip flag, sesh will use your web console MFA device automatically.")
+	} else {
+		fmt.Println("\n✅ Skipping web console MFA setup. Using a single MFA device for all operations.")
+	}
+	
+	fmt.Println("\n✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.")
+	fmt.Println()
+	fmt.Println("🚀 Next steps:")
+	fmt.Println("1. Run 'sesh' to generate a temporary session token")
+	fmt.Println("2. The credentials will be automatically exported to your shell")
+	fmt.Println("3. You can now use AWS CLI commands with MFA security")
+	fmt.Println("4. Use 'sesh -clip' to copy web console TOTP codes to clipboard")
+	
+	if profile == "" {
+		fmt.Println("\nTo use this setup, run: sesh")
+		fmt.Println("(The default AWS profile will be used)")
+	} else {
+		fmt.Printf("\nTo use this setup, run: sesh --profile %s\n", profile)
 	}
 }
 
@@ -229,11 +426,6 @@ func setupGenericTOTP() {
 	profile, _ := reader.ReadString('\n')
 	profile = strings.TrimSpace(profile)
 
-	// Ask for a label/description
-	fmt.Print("Enter a label or description (optional): ")
-	label, _ := reader.ReadString('\n')
-	label = strings.TrimSpace(label)
-
 	// Get TOTP secret
 	fmt.Println("Enter your TOTP secret key (this will not be echoed):")
 	secret, err := term.ReadPassword(int(syscall.Stdin))
@@ -243,11 +435,32 @@ func setupGenericTOTP() {
 	}
 	fmt.Println() // Add a newline after the hidden input
 
+	// Generate two consecutive TOTP codes to help with setup
+	secretStr := string(secret)
+	secretStr = strings.TrimSpace(secretStr)
+	
+	// Validate secret key format (basic check)
+	if len(secretStr) < 16 {
+		fmt.Println("❌ Secret key seems too short. Please double-check and try again.")
+		os.Exit(1)
+	}
+	
+	// Generate two consecutive TOTP codes
+	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
+	if err != nil {
+		fmt.Printf("❌ Failed to generate TOTP codes: %s\n", err)
+		os.Exit(1)
+	}
+	
 	// Store in keychain
-	user := getCurrentUser()
+	user, err := env.GetCurrentUser()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %s\n", err)
+		os.Exit(1)
+	}
 
-	// Get the executable path at the time of execution
-	execPath := GetCurrentExecutablePath()
+	// Use our fixed binary path for consistent keychain access
+	execPath := GetSeshBinaryPath()
 
 	// Build service key
 	var serviceKey string
@@ -262,14 +475,9 @@ func setupGenericTOTP() {
 		"-a", user,
 		"-s", serviceKey,
 		"-w", string(secret),
-		"-U", // Update if exists
+		"-U",           // Update if exists
 		"-T", execPath, // Only allow the sesh binary to access this item
 	)
-
-	// Add description/label if provided
-	if label != "" {
-		addCmd.Args = append(addCmd.Args, "-j", label)
-	}
 
 	err = addCmd.Run()
 	if err != nil {
@@ -277,29 +485,32 @@ func setupGenericTOTP() {
 		os.Exit(1)
 	}
 
+	// Store metadata for better organization and retrieval
+	description := fmt.Sprintf("TOTP for %s", serviceName)
+	if profile != "" {
+		description = fmt.Sprintf("TOTP for %s profile %s", serviceName, profile)
+	}
+	
+	// Store metadata - CRITICAL for entry retrieval
+	err = keychain.StoreEntryMetadata(constants.TOTPServicePrefix, serviceKey, user, description)
+	if err != nil {
+		fmt.Println("❌ Failed to store metadata for entry retrieval")
+		fmt.Println("⚠️ This entry might not appear when listing available TOTP services")
+		fmt.Println("⚠️ You might need to create the entry again or check keychain permissions")
+		os.Exit(1)
+	}
+	
+	// Display the generated TOTP codes for setup verification
+	fmt.Println("✅ Generated TOTP codes for verification:")
+	fmt.Printf("   Current code: %s\n", firstCode)
+	fmt.Printf("   Next code: %s\n", secondCode)
+	fmt.Println("   (Use these codes if your service requires verification during setup)")
+	fmt.Println()
+
 	fmt.Printf("✅ Setup complete! You can now use 'sesh --service totp --service-name %s", serviceName)
 	if profile != "" {
 		fmt.Printf(" --profile %s", profile)
 	}
 	fmt.Println("' to generate TOTP codes.")
 	fmt.Println("Use 'sesh --service totp --service-name " + serviceName + " --clip' to copy the code to clipboard.")
-}
-
-// getCurrentUser gets the current system user
-func getCurrentUser() string {
-	user := os.Getenv("USER")
-	if user != "" {
-		return user
-	}
-
-	// If USER env var isn't set, try to get it with whoami
-	output, err := exec.Command("whoami").Output()
-	if err == nil {
-		return strings.TrimSpace(string(output))
-	}
-
-	// If all else fails, exit
-	fmt.Println("❌ Could not determine current user")
-	os.Exit(1)
-	return "" // Will never reach here, but needed for compilation
 }
