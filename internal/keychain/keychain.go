@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 )
 
@@ -113,6 +112,10 @@ func SetSecret(account, service, secret string) error {
 		return fmt.Errorf("failed to set secret in keychain: %w", err)
 	}
 
+	// Store in metadata system with simple description
+	serviceType := getServicePrefix(service)
+	StoreEntryMetadata(serviceType, service, account, service)
+
 	return nil
 }
 
@@ -155,63 +158,20 @@ type keychainItem struct {
 
 // ListEntries lists all entries for a given service prefix
 func ListEntries(servicePrefix string) ([]KeychainEntry, error) {
-	// Run security command to list all keychain items
-	cmd := execCommand("security", "dump-keychain", "-d")
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		errMsg := stderr.String()
-		return nil, fmt.Errorf("failed to list keychain entries: %w (%s)", err, errMsg)
+	// Use the metadata system to get entries - no fallback to insecure dump-keychain
+	metaEntries, err := LoadEntryMetadata(servicePrefix)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load entry metadata: %w", err)
 	}
 
-	output := stdout.String()
-
-	// Parse the output to find matching entries
-	// Each keychain entry is enclosed in blocks of "attributes:", "data:", etc
-	var entries []KeychainEntry
-	
-	// Split output by keychain items
-	itemPattern := regexp.MustCompile(`(?s)keychain: "[^"]+"\s+class: "genp".*?data:.*?$`)
-	items := itemPattern.FindAllString(output, -1)
-
-	for _, item := range items {
-		// Only process items that match our service prefix
-		if strings.Contains(item, fmt.Sprintf(`"svce"<blob>="%-s`, servicePrefix)) {
-			// Parse the service name
-			serviceMatch := regexp.MustCompile(`"svce"<blob>="([^"]+)"`).FindStringSubmatch(item)
-			if len(serviceMatch) < 2 {
-				continue
-			}
-			service := serviceMatch[1]
-			
-			// Parse the account name
-			accountMatch := regexp.MustCompile(`"acct"<blob>="([^"]+)"`).FindStringSubmatch(item)
-			if len(accountMatch) < 2 {
-				continue
-			}
-			account := accountMatch[1]
-
-			// Parse label/description if available
-			var description string
-			labelMatch := regexp.MustCompile(`"labl"<blob>="([^"]+)"`).FindStringSubmatch(item)
-			if len(labelMatch) >= 2 {
-				description = labelMatch[1]
-			} else {
-				descMatch := regexp.MustCompile(`"desc"<blob>="([^"]+)"`).FindStringSubmatch(item)
-				if len(descMatch) >= 2 {
-					description = descMatch[1]
-				}
-			}
-
-			entries = append(entries, KeychainEntry{
-				Service:     service,
-				Account:     account,
-				Description: description,
-			})
-		}
+	// Convert metadata entries to KeychainEntry format
+	entries := make([]KeychainEntry, 0, len(metaEntries))
+	for _, meta := range metaEntries {
+		entries = append(entries, KeychainEntry{
+			Service:     meta.Service,
+			Account:     meta.Account,
+			Description: meta.Description,
+		})
 	}
 
 	return entries, nil
@@ -236,6 +196,7 @@ func DeleteEntry(account, service string) error {
 		account = strings.TrimSpace(string(out))
 	}
 
+	// Delete from the actual keychain
 	cmd := execCommand("security", "delete-generic-password",
 		"-a", account,
 		"-s", service,
@@ -248,6 +209,10 @@ func DeleteEntry(account, service string) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete entry from keychain: %w", err)
 	}
+
+	// Also remove from our metadata system
+	serviceType := getServicePrefix(service)
+	RemoveEntryMetadata(serviceType, service, account)
 
 	return nil
 }

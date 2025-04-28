@@ -35,11 +35,8 @@ func run(app *App, args []string) {
 
 	// Parse flags to handle global commands (version/help/list-services)
 	// Use a custom error handler that doesn't exit on unknown flags
-	firstPassErr := fs.Parse(args[1:])
-	if firstPassErr != nil && firstPassErr != flag.ErrHelp {
-		// Continue anyway, we'll handle the real error in the second pass
-		fmt.Fprintf(app.Stderr, "DEBUG: First pass flag parsing encountered: %v\n", firstPassErr)
-	}
+	fs.Parse(args[1:])
+	// Continue anyway if there are errors, we'll handle them in the second pass
 
 	// Handle global commands first
 	if *showVersion {
@@ -73,9 +70,7 @@ func run(app *App, args []string) {
 	// Do a full parse now that all flags are registered
 	// Reset flag values in case they were set incorrectly in the first pass
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "list" {
-			fmt.Fprintf(app.Stderr, "DEBUG: List flag was set in first pass to %v\n", *listEntries)
-		}
+		// No debug needed
 	})
 	
 	// Parse the flags again, with all provider flags registered

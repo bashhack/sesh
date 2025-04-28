@@ -20,20 +20,15 @@ if [ "$OS" != "darwin" ]; then
   exit 1
 fi
 
-# Determine install directory - prefer /usr/local/bin, fall back to ~/.local/bin
-INSTALL_DIR="/usr/local/bin"
-if [ ! -w "$INSTALL_DIR" ]; then
-  INSTALL_DIR="$HOME/.local/bin"
-  mkdir -p "$INSTALL_DIR"
-  echo "📋 Installing to $INSTALL_DIR (no admin privileges required)"
-  
-  # Check if the directory is in PATH
-  if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-    echo "⚠️ Please add ~/.local/bin to your PATH:"
-    echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
-  fi
-else
-  echo "📋 Installing to $INSTALL_DIR"
+# Install directory is always ~/.local/bin
+INSTALL_DIR="$HOME/.local/bin"
+mkdir -p "$INSTALL_DIR"
+echo "📋 Installing to $INSTALL_DIR (standard user location)"
+
+# Check if the directory is in PATH
+if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+  echo "⚠️ Please add ~/.local/bin to your PATH:"
+  echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi
 
 # Download the binary
@@ -62,10 +57,7 @@ if ! command -v aws &>/dev/null; then
 fi
 
 # Create directories for shell integration
-SHARE_DIR="/usr/local/share/sesh"
-if [ ! -w "/usr/local/share" ]; then
-  SHARE_DIR="$HOME/.local/share/sesh"
-fi
+SHARE_DIR="$HOME/.local/share/sesh"
 mkdir -p "$SHARE_DIR"
 
 # Add to PATH automatically if using zsh and installed to ~/.local/bin
@@ -84,8 +76,47 @@ echo ""
 echo "🚀 Get started with:"
 echo "  sesh --setup    # First-time setup"
 echo ""
-echo "✨ To enable the shell integration (recommended):"
-echo "  1. Add this line to your ~/.bashrc or ~/.zshrc:"
-echo "     source \"$SHARE_DIR/sesh.sh\""
-echo "  2. Restart your terminal or run: source \"$SHARE_DIR/sesh.sh\""
-echo "  3. Then simply use: sesh"
+echo "✨ Shell integration setup:"
+echo "Where would you like to add shell integration?"
+echo "  1) ~/.zshrc"
+echo "  2) ~/.bashrc"
+echo "  3) Custom path"
+echo "  4) Skip (I'll add it manually)"
+
+read -p "Enter selection [1-4]: " SELECTION
+
+if [ "$SELECTION" = "1" ]; then
+  PROFILE="$HOME/.zshrc"
+elif [ "$SELECTION" = "2" ]; then
+  PROFILE="$HOME/.bashrc"
+elif [ "$SELECTION" = "3" ]; then
+  read -p "Enter the full path to your shell profile: " CUSTOM_PROFILE
+  PROFILE="$CUSTOM_PROFILE"
+else
+  PROFILE=""
+fi
+
+if [ "$PROFILE" != "" ]; then
+  if [ -f "$PROFILE" ]; then
+    if ! grep -q "Added by sesh shell/install" "$PROFILE"; then
+      echo "" >> "$PROFILE"
+      echo "# Added by sesh shell/install" >> "$PROFILE"
+      echo "source \"$SHARE_DIR/sesh.sh\"" >> "$PROFILE"
+      echo "✅ Shell integration added to $PROFILE"
+    else
+      echo "ℹ️ Shell integration already exists in $PROFILE"
+    fi
+  else
+    echo "⚠️ Profile file $PROFILE does not exist"
+    echo "🔐 To enable shell integration manually, add this line to your profile:"
+    echo "   source \"$SHARE_DIR/sesh.sh\""
+  fi
+else
+  echo "🔐 To enable shell integration manually, add this line to your profile:"
+  echo "   source \"$SHARE_DIR/sesh.sh\""
+fi
+
+echo ""
+echo "🚀 To get started, run:"
+echo "   sesh --setup    # First-time setup"
+echo "   sesh           # Generate credentials"

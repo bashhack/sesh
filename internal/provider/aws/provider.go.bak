@@ -158,12 +158,13 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		
 		// Format display info
 		var displayInfo string
-		profileStr := "default profile"
-		if p.profile != "" {
-			profileStr = fmt.Sprintf("profile %s", p.profile)
+		if p.profile == "" {
+			displayInfo = fmt.Sprintf("AWS MFA code for default profile: %s (Next: %s, Time left: %ds)", 
+				currentCode, nextCode, secondsLeft)
+		} else {
+			displayInfo = fmt.Sprintf("AWS MFA code for profile %s: %s (Next: %s, Time left: %ds)", 
+				p.profile, currentCode, nextCode, secondsLeft)
 		}
-		displayInfo = fmt.Sprintf("Current: %s  |  Next: %s  |  Time left: %ds\n🔑 AWS MFA code for %s", 
-			currentCode, nextCode, secondsLeft, profileStr)
 		
 		// Calculate when this code expires
 		now := time.Now().Unix()
@@ -194,8 +195,6 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}
 
 	// Debug: Print the serial number to help diagnose issues
-	fmt.Fprintf(os.Stderr, "🔍 Using MFA serial: %s\n", serial)
-	
 	// Get TOTP codes
 	currentCode, nextCode, secondsLeft, err := p.GetTOTPCodes()
 	if err != nil {

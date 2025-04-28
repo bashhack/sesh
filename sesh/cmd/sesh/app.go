@@ -192,9 +192,43 @@ func (a *App) CopyToClipboard(serviceName string) error {
 		return fmt.Errorf("provider not found: %w", err)
 	}
 	
-	// Special handling for AWS service to bypass credential generation when using -clip
 	if serviceName == "aws" {
-		return a.copyAWSTotp(p)
+		// Use the specialized AWS TOTP code generation for clip mode
+		fmt.Fprintf(a.Stderr, "🔐 Generating AWS MFA code (no authentication)...\n")
+		startTime := time.Now()
+		
+		// Cast to AWS provider to access its methods
+		awsProvider, ok := p.(*awsProvider.Provider)
+		if !ok {
+			return fmt.Errorf("failed to convert to AWS provider")
+		}
+		
+		// Get the TOTP codes directly
+		currentCode, nextCode, secondsLeft, err := awsProvider.GetTOTPCodes()
+		if err != nil {
+			return fmt.Errorf("failed to get TOTP codes: %w", err)
+		}
+		
+		// Copy the current code to clipboard
+		copyValue := currentCode
+		if err := clipboard.Copy(copyValue); err != nil {
+			return fmt.Errorf("failed to copy to clipboard: %w", err)
+		}
+		
+		elapsedTime := time.Since(startTime)
+		fmt.Fprintf(a.Stderr, "✅ Code copied to clipboard in %.2fs\n", elapsedTime.Seconds())
+		
+		// Profile-specific message
+		profileDisplay := "default profile"
+		if awsProvider.GetProfile() != "" {
+			profileDisplay = fmt.Sprintf("profile %s", awsProvider.GetProfile())
+		}
+		
+		// Print out formatted display info
+		fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time left: %ds\n", 
+			currentCode, nextCode, secondsLeft)
+		fmt.Fprintf(a.Stdout, "🔑 AWS MFA code for %s copied to clipboard\n", profileDisplay)
+		return nil
 	}
 	
 	// Standard flow for non-AWS services
@@ -254,7 +288,7 @@ func (a *App) CopyToClipboard(serviceName string) error {
 // copyAWSTotp is a special handler for copying AWS TOTP codes to clipboard
 // that bypasses the AWS API authentication to avoid time-sync issues
 func (a *App) copyAWSTotp(p provider.ServiceProvider) error {
-	fmt.Fprintf(a.Stderr, "🔐 Generating AWS TOTP code...\n")
+	fmt.Fprintf(a.Stderr, "🔐 Generating AWS MFA code (no authentication)...\n")
 	startTime := time.Now()
 	
 	// We need to access AWS provider's specific properties to get the profile
@@ -265,86 +299,40 @@ func (a *App) copyAWSTotp(p provider.ServiceProvider) error {
 	
 	// Get profile for both methods
 	profile := awsProvider.GetProfile()
-	keyUser, _, err := awsProvider.GetTOTPKeyInfo()
+	
+	// Get TOTP codes directly, without attempting authentication
+	currentCode, nextCode, secondsLeft, err := awsProvider.GetTOTPCodes()
 	if err != nil {
-		return fmt.Errorf("failed to get user info: %w", err)
-	}
-	
-	// First try to get web console specific MFA if available
-	var webServiceName string
-	if profile == "" {
-		webServiceName = fmt.Sprintf("%s-default", constants.AWSWebConsolePrefix)
-	} else {
-		webServiceName = fmt.Sprintf("%s-%s", constants.AWSWebConsolePrefix, profile)
-	}
-	
-	// Try to get web console secret first
-	webSecret, webErr := a.Keychain.GetSecret(keyUser, webServiceName)
-	usingWebConsole := false
-	
-	if webErr == nil {
-		// We found a web console specific MFA device, use it
-		fmt.Fprintf(a.Stderr, "🌐 Using web console specific MFA device\n")
-		usingWebConsole = true
-	} else {
-		// Fall back to regular MFA device
-		fmt.Fprintf(a.Stderr, "ℹ️ No web console specific MFA found, using regular MFA device\n")
-		
-		// Get regular MFA device key name
-		_, keyName, err := awsProvider.GetTOTPKeyInfo()
-		if err != nil {
-			return fmt.Errorf("failed to get TOTP key info: %w", err)
-		}
-		
-		// Get the regular MFA secret
-		webSecret, err = a.Keychain.GetSecret(keyUser, keyName)
-		if err != nil {
-			return fmt.Errorf("could not retrieve TOTP secret: %w", err)
-		}
-	}
-	
-	// Generate codes directly using the TOTP provider
-	currentCode, nextCode, err := a.TOTP.GenerateConsecutiveCodes(webSecret)
-	if err != nil {
-		return fmt.Errorf("could not generate TOTP codes: %w", err)
+		return fmt.Errorf("failed to get TOTP codes: %w", err)
 	}
 	
 	// Copy the current code to clipboard
-	if err := clipboard.Copy(currentCode); err != nil {
+	fmt.Fprintf(a.Stderr, "📋 Copying code to clipboard: '%s'\n", currentCode)
+	err = clipboard.Copy(currentCode)
+	if err != nil {
 		return fmt.Errorf("failed to copy to clipboard: %w", err)
 	}
 	
-	// Calculate seconds left and elapsed time
-	secondsLeft := 30 - (time.Now().Unix() % 30)
+	// Calculate elapsed time
 	elapsedTime := time.Since(startTime)
-	
-	// Display a simple confirmation message
-	fmt.Fprintf(a.Stderr, "✅ AWS code '%s' copied to clipboard in %.2fs\n", currentCode, elapsedTime.Seconds())
 	
 	// Profile-specific message
 	profileDisplay := "default profile"
 	if profile != "" {
-		profileDisplay = fmt.Sprintf("profile: %s", profile)
+		profileDisplay = fmt.Sprintf("profile %s", profile)
 	}
 	
-	// Print concise but useful information to stdout
-	deviceType := "regular MFA device"
-	if usingWebConsole {
-		deviceType = "web console specific MFA device"
-	}
+	// Display success message
+	fmt.Fprintf(a.Stderr, "✅ AWS MFA code copied to clipboard in %.2fs\n", elapsedTime.Seconds())
 	
-	fmt.Fprintf(a.Stdout, "🔑 AWS Login Code (%s) - Using %s\n\n", profileDisplay, deviceType)
-	fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time remaining: %ds\n", currentCode, nextCode, secondsLeft)
+	// Print concise but useful information to stdout (this is what the user sees)
+	fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time left: %ds\n", 
+		currentCode, nextCode, secondsLeft)
+	fmt.Fprintf(a.Stdout, "🔑 AWS MFA code for %s copied to clipboard\n", profileDisplay)
 	
 	// Add warning if we're close to expiry
 	if secondsLeft < 5 {
 		fmt.Fprintln(a.Stdout, "⚠️  Warning: Code expires in less than 5 seconds!")
-	}
-	
-	// Add suggestion about dual MFA if not using web console device
-	if !usingWebConsole {
-		fmt.Fprintln(a.Stdout, "\nTIP: You can run 'sesh -service aws -setup' and enable the dual MFA option")
-		fmt.Fprintln(a.Stdout, "     to use separate MFA devices for CLI and web console!")
 	}
 	
 	return nil

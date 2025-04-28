@@ -2,7 +2,6 @@ package totp
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -61,7 +60,7 @@ func (p *Provider) Description() string {
 }
 
 // SetupFlags adds provider-specific flags to the given FlagSet
-func (p *Provider) SetupFlags(fs *flag.FlagSet) {
+func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.serviceName, "service-name", "", "Name of the service to authenticate with")
 	fs.StringVar(&p.keyUser, "keychain-user", os.Getenv("SESH_KEYCHAIN_USER"), "macOS Keychain username (optional)")
 	fs.StringVar(&p.label, "label", "", "Label to identify this TOTP entry")
@@ -72,6 +71,7 @@ func (p *Provider) SetupFlags(fs *flag.FlagSet) {
 		defaultKeyName = defaultServicePrefix
 	}
 	fs.StringVar(&p.keyName, "keychain-name", defaultKeyName, "macOS Keychain service name prefix")
+	return nil
 }
 
 // Setup runs the setup wizard for TOTP

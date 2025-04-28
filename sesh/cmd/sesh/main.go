@@ -14,6 +14,9 @@ var (
 )
 
 func main() {
+	// Set up global usage handlers for -h flag
+	flag.Usage = printUsage
+	
 	app := NewDefaultApp()
 	run(app, os.Args)
 }
@@ -25,6 +28,9 @@ func run(app *App, args []string) {
 
 	// Override the usage function to use our custom help
 	fs.Usage = printUsage
+	
+	// Also override the flag.CommandLine Usage for -h handling
+	flag.Usage = printUsage
 
 	// Common flags
 	serviceName := fs.String("service", "", "Service provider to use (aws, totp)") // NOTE: I'm toying with maybe having no default of "aws" here...

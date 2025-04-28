@@ -1,5 +1,7 @@
 package totp
 
+import "time"
+
 // Provider defines the interface for TOTP operations
 type Provider interface {
 	// Generate generates a single TOTP code
@@ -7,6 +9,9 @@ type Provider interface {
 
 	// GenerateConsecutiveCodes generates two consecutive TOTP codes
 	GenerateConsecutiveCodes(secret string) (current string, next string, err error)
+	
+	// GenerateForTime generates a TOTP code for a specific time
+	GenerateForTime(secret string, t time.Time) (string, error)
 }
 
 // DefaultProvider is the default implementation using otp library
@@ -23,6 +28,11 @@ func (p *DefaultProvider) Generate(secret string) (string, error) {
 // GenerateConsecutiveCodes implements the Provider interface
 func (p *DefaultProvider) GenerateConsecutiveCodes(secret string) (current string, next string, err error) {
 	return GenerateConsecutiveCodes(secret)
+}
+
+// GenerateForTime implements the Provider interface
+func (p *DefaultProvider) GenerateForTime(secret string, t time.Time) (string, error) {
+	return GenerateForTime(secret, t)
 }
 
 // NewDefaultProvider creates a new DefaultProvider

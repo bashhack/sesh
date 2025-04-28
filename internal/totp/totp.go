@@ -24,6 +24,19 @@ func Generate(secret string) (string, error) {
 	return code, nil
 }
 
+// GenerateForTime generates a TOTP code for a specific time
+func GenerateForTime(secret string, t time.Time) (string, error) {
+	opts := totp.ValidateOpts{
+		Digits: 6,
+	}
+	
+	code, err := totp.GenerateCodeCustom(secret, t, opts)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate TOTP for time %v: %w", t, err)
+	}
+	return code, nil
+}
+
 // GenerateConsecutiveCodes generates two consecutive TOTP codes for MFA device setup
 func GenerateConsecutiveCodes(secret string) (current string, next string, err error) {
 	if MockGenerateConsecutiveCodes.Enabled {

@@ -35,14 +35,14 @@ confirm:
 run:
 	@echo "🚀 Running sesh in development mode (not installed to PATH)..."
 	@echo "ℹ️  For system-wide use, run 'make install' first."
-	@go run $(LDFLAGS) ./sesh-cli/cmd/sesh/
+	@go run $(LDFLAGS) ./sesh/cmd/sesh/
 
 ## run/setup: Run the sesh setup wizard (development mode)
 .PHONY: run/setup
 run/setup:
 	@echo "🚀 Running sesh setup wizard in development mode..."
 	@echo "ℹ️  For system-wide use, run 'make install' first."
-	@go run $(LDFLAGS) ./sesh-cli/cmd/sesh/ --setup
+	@go run $(LDFLAGS) ./sesh/cmd/sesh/ --setup
 
 ## shell/install: Install shell integration files
 .PHONY: shell/install
@@ -170,51 +170,77 @@ lint:
 build:
 	@echo "Building sesh..."
 	@mkdir -p build
-	@go build $(LDFLAGS) -o build/sesh ./sesh-cli/cmd/sesh
+	@go build $(LDFLAGS) -o build/sesh ./sesh/cmd/sesh
 
 ## build/optimize: Build optimized binary (smaller size)
 .PHONY: build/optimize
 build/optimize:
 	@echo "Building optimized binary..."
-	@go build $(LDFLAGS) -ldflags="-s -w" -o build/sesh ./sesh-cli/cmd/sesh
+	@go build $(LDFLAGS) -ldflags="-s -w" -o build/sesh ./sesh/cmd/sesh
 
 ## build/all: Build for all supported platforms
 .PHONY: build/all
 build/all:
 	@echo "Building for all platforms..."
 	@mkdir -p bin/
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o build/bin/sesh-darwin-amd64 ./sesh-cli/cmd/sesh
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o build/bin/sesh-darwin-arm64 ./sesh-cli/cmd/sesh
+	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o build/bin/sesh-darwin-amd64 ./sesh/cmd/sesh
+	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o build/bin/sesh-darwin-arm64 ./sesh/cmd/sesh
 
 ## install: Install the application and shell integration
 .PHONY: install
 install: build
 	@echo "📦 Installing sesh..."
-	@if [ -w "$(PREFIX)/bin" ]; then \
-		echo "Installing to $(DESTDIR)$(PREFIX)/bin/"; \
-		mkdir -p $(DESTDIR)$(PREFIX)/bin; \
-		cp build/sesh $(DESTDIR)$(PREFIX)/bin/; \
-		chmod +x $(DESTDIR)$(PREFIX)/bin/sesh; \
-		mkdir -p $(DESTDIR)$(PREFIX)/share/sesh; \
-		cp shell/sesh.sh $(DESTDIR)$(PREFIX)/share/sesh/; \
-		echo "✅ Installation complete!"; \
-		echo "🔐 To enable shell integration (recommended), add this line to your ~/.zshrc or ~/.bashrc:"; \
-		echo "   source \"$(DESTDIR)$(PREFIX)/share/sesh/sesh.sh\""; \
-	else \
-		echo "Installing to ~/.local (no admin privileges required)"; \
-		mkdir -p $(HOME)/.local/bin; \
-		cp build/sesh $(HOME)/.local/bin/; \
-		chmod +x $(HOME)/.local/bin/sesh; \
-		mkdir -p $(HOME)/.local/share/sesh; \
-		cp shell/sesh.sh $(HOME)/.local/share/sesh/; \
-		echo "✅ Installation complete!"; \
-		if [[ ":$$PATH:" != *":$(HOME)/.local/bin:"* ]]; then \
-			echo "⚠️  Please add ~/.local/bin to your PATH:"; \
-			echo "   export PATH=\"$$HOME/.local/bin:\$$PATH\""; \
+	@echo "Installing to ~/.local/bin (standard user location)"
+	@mkdir -p $(HOME)/.local/bin
+	@cp build/sesh $(HOME)/.local/bin/
+	@chmod +x $(HOME)/.local/bin/sesh
+	@mkdir -p $(HOME)/.local/share/sesh
+	@cp shell/sesh.sh $(HOME)/.local/share/sesh/
+	@echo "✅ Installation complete!"
+	@if [[ ":$$PATH:" != *":$(HOME)/.local/bin:"* ]]; then \
+		echo "⚠️  Please add ~/.local/bin to your PATH:"; \
+		echo "   export PATH=\"$$HOME/.local/bin:\$$PATH\""; \
+	fi
+	
+	@echo "🔐 Setting up shell integration..."
+	@bash -c 'echo "Where would you like to add shell integration?"; \
+		echo "  1) ~/.zshrc"; \
+		echo "  2) ~/.bashrc"; \
+		echo "  3) Custom path"; \
+		echo "  4) Skip (I'\''ll add it manually)"'
+	@bash -c 'read -p "Enter selection [1-4]: " SELECTION; \
+		if [ "$$SELECTION" = "1" ]; then \
+			echo "$(HOME)/.zshrc" > /tmp/sesh-profile-path; \
+		elif [ "$$SELECTION" = "2" ]; then \
+			echo "$(HOME)/.bashrc" > /tmp/sesh-profile-path; \
+		elif [ "$$SELECTION" = "3" ]; then \
+			read -p "Enter the full path to your shell profile: " CUSTOM_PROFILE; \
+			echo "$$CUSTOM_PROFILE" > /tmp/sesh-profile-path; \
+		else \
+			echo "" > /tmp/sesh-profile-path; \
+		fi'; \
+	PROFILE=$$(cat /tmp/sesh-profile-path); \
+	rm -f /tmp/sesh-profile-path; \
+	if [ "$$PROFILE" != "" ]; then \
+		if [ -f "$$PROFILE" ]; then \
+			if ! grep -q "Added by sesh shell/install" "$$PROFILE"; then \
+				echo "" >> "$$PROFILE"; \
+				echo "# Added by sesh shell/install" >> "$$PROFILE"; \
+				echo "source \"$(HOME)/.local/share/sesh/sesh.sh\"" >> "$$PROFILE"; \
+				echo "✅ Shell integration added to $$PROFILE"; \
+			else \
+				echo "ℹ️  Shell integration already exists in $$PROFILE"; \
+			fi; \
+		else \
+			echo "⚠️  Profile file $$PROFILE does not exist"; \
+			echo "🔐 To enable shell integration manually, add this line to your profile:"; \
+			echo "   source \"$(HOME)/.local/share/sesh/sesh.sh\""; \
 		fi; \
-		echo "🔐 To enable shell integration (recommended), add this line to your ~/.zshrc or ~/.bashrc:"; \
+	else \
+		echo "🔐 To enable shell integration manually, add this line to your profile:"; \
 		echo "   source \"$(HOME)/.local/share/sesh/sesh.sh\""; \
 	fi
+	
 	@echo ""
 	@echo "🚀 To get started:"
 	@echo "   1. Run 'sesh --setup' to configure your MFA secret"
