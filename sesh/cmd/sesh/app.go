@@ -282,40 +282,31 @@ func (a *App) copyAWSTotp(p provider.ServiceProvider) error {
 		return fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
 	
-	// Get MFA serial for display purposes
-	serial, err := awsProvider.GetMFASerial()
-	if err != nil {
-		serial = "unknown MFA device"
-	}
-	
 	// Copy the current code to clipboard
 	if err := clipboard.Copy(currentCode); err != nil {
 		return fmt.Errorf("failed to copy to clipboard: %w", err)
 	}
 	
-	// Calculate seconds left
+	// Calculate seconds left and elapsed time
 	secondsLeft := 30 - (time.Now().Unix() % 30)
 	elapsedTime := time.Since(startTime)
 	
-	// Format display information
-	var title string
-	if profile == "" {
-		title = "🔑 AWS web console login code (default profile)"
-	} else {
-		title = fmt.Sprintf("🔑 AWS web console login code (profile: %s)", profile)
+	// Display a simple confirmation message
+	fmt.Fprintf(a.Stderr, "✅ AWS code '%s' copied to clipboard in %.2fs\n", currentCode, elapsedTime.Seconds())
+	
+	// Profile-specific message
+	profileDisplay := "default profile"
+	if profile != "" {
+		profileDisplay = fmt.Sprintf("profile: %s", profile)
 	}
 	
-	// Print to stdout
-	fmt.Fprintf(a.Stderr, "✅ Web console login code '%s' copied to clipboard in %.2fs\n", currentCode, elapsedTime.Seconds())
-	fmt.Fprintf(a.Stdout, "%s\n\n", title)
-	fmt.Fprintf(a.Stdout, "Current code: %s\n", currentCode)
-	fmt.Fprintf(a.Stdout, "Next code: %s\n", nextCode)
-	fmt.Fprintf(a.Stdout, "MFA device: %s\n", serial)
-	fmt.Fprintf(a.Stdout, "Time remaining: %d seconds\n", secondsLeft)
+	// Print concise but useful information to stdout
+	fmt.Fprintf(a.Stdout, "🔑 AWS Login Code (%s)\n\n", profileDisplay)
+	fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time remaining: %ds\n", currentCode, nextCode, secondsLeft)
 	
 	// Add warning if we're close to expiry
 	if secondsLeft < 5 {
-		fmt.Fprintln(a.Stdout, "⚠️  Warning: Current TOTP code will expire in less than 5 seconds!")
+		fmt.Fprintln(a.Stdout, "⚠️  Warning: Code expires in less than 5 seconds!")
 	}
 	
 	return nil

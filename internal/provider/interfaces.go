@@ -49,5 +49,4 @@ type Credentials struct {
 	Variables   map[string]string // Environment variables to set
 	DisplayInfo string            // Human-readable display information
 	CopyValue   string            // Value to copy to clipboard if requested
-	Metadata    map[string]string // Additional metadata for use by PrintCredentials
 }

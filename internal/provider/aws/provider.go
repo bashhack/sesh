@@ -219,18 +219,12 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		displayInfo = fmt.Sprintf("🔑 AWS credentials for profile %s", p.profile)
 	}
 
-	// Create metadata for use in PrintCredentials
-	metadata := map[string]string{
-		"profile": p.profile,
-	}
-
 	// For regular credential generation, just return the basic info
 	return provider.Credentials{
 		Provider:    p.Name(),
 		Expiry:      expiryTime,
 		Variables:   envVars,
 		DisplayInfo: displayInfo,
-		Metadata:    metadata,
 	}, nil
 }
 
