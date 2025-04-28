@@ -138,10 +138,10 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		fmt.Fprintf(os.Stderr, "⚠️ Warning: TOTP secret has unusual length: %d characters\n", len(secret))
 	}
 
-	// Generate a TOTP code for AWS authentication
-	currentCode, _, err := p.totp.GenerateConsecutiveCodes(secret)
+	// Generate consecutive TOTP codes - we need both in case the current one was recently used
+	currentCode, nextCode, err := p.totp.GenerateConsecutiveCodes(secret)
 	if err != nil {
-		return provider.Credentials{}, fmt.Errorf("could not generate TOTP code: %w", err)
+		return provider.Credentials{}, fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
 
 	// Get the seconds left in current time window
@@ -154,21 +154,47 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	// Try the first code
 	awsCreds, err := p.aws.GetSessionToken(p.profile, serial, code)
 	
-	// If authentication fails and we're close to the time boundary, try with the next code
-	if err != nil && secondsLeft < 5 {
-		// Generate the next code if we're near expiry
-		nextCode, gErr := p.totp.GenerateForTime(secret, time.Now().Add(30*time.Second))
-		if gErr != nil {
-			return provider.Credentials{}, fmt.Errorf("could not generate next TOTP code: %w", gErr)
-		}
+	// Check if this is an "invalid MFA one time pass code" error, which could indicate a recently used code
+	if err != nil {
+		errStr := err.Error()
+		isInvalidMFA := strings.Contains(errStr, "MultiFactorAuthentication failed with invalid MFA one time pass code")
 		
-		fmt.Fprintf(os.Stderr, "⚠️ First code failed - trying again with next code: %s\n", nextCode)
-		code = nextCode
-		awsCreds, err = p.aws.GetSessionToken(p.profile, serial, code)
+		// If it's an invalid MFA code or if we're close to time boundary, try the next code
+		if isInvalidMFA || secondsLeft < 5 {
+			if isInvalidMFA {
+				fmt.Fprintf(os.Stderr, "⚠️ AWS rejected the current time window's code (it may have been used recently)\n")
+			} else {
+				fmt.Fprintf(os.Stderr, "⚠️ Current code failed - time window nearly expired\n")
+			}
+			
+			// Try with the next time window's code 
+			fmt.Fprintf(os.Stderr, "🔑 Trying with next time window's code: %s\n", nextCode)
+			code = nextCode
+			awsCreds, err = p.aws.GetSessionToken(p.profile, serial, code)
+			
+			// If STILL failing and we're not close to boundary, and we have a "recently used" error,
+			// we may need to wait for the next time window
+			if err != nil && isInvalidMFA && secondsLeft > 10 {
+				fmt.Fprintf(os.Stderr, "⚠️ Both current and next codes were rejected - may need to wait for next time window\n")
+				
+				// Generate a code for the window after next, in case AWS is far ahead of our clock
+				futureCode, gErr := p.totp.GenerateForTime(secret, time.Now().Add(60*time.Second))
+				if gErr == nil {
+					fmt.Fprintf(os.Stderr, "🔑 Trying with future time window's code: %s\n", futureCode)
+					code = futureCode
+					awsCreds, err = p.aws.GetSessionToken(p.profile, serial, code)
+				}
+			}
+		}
 	}
 	
 	// If still failing, return the error
 	if err != nil {
+		// Check if this looks like a "code already used" error
+		if strings.Contains(err.Error(), "MultiFactorAuthentication failed with invalid MFA one time pass code") {
+			// Add more context to the error message
+			return provider.Credentials{}, fmt.Errorf("failed to get session token: %w\n\nThis may be because the TOTP code was recently used. Try waiting for the next time window (30-second interval) and try again.", err)
+		}
 		return provider.Credentials{}, fmt.Errorf("failed to get session token: %w", err)
 	}
 
