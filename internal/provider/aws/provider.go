@@ -110,9 +110,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}
 
 	// Get TOTP secret from keychain
-
 	// Try to directly access the keychain with security command first
-	// This approach may avoid some of the security prompts
 	cmd := exec.Command("security", "find-generic-password",
 		"-a", p.keyUser,
 		"-s", keyName,
@@ -140,19 +138,14 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		fmt.Fprintf(os.Stderr, "⚠️ Warning: TOTP secret has unusual length: %d characters\n", len(secret))
 	}
 
-	// Use the standard TOTP approach: direct timestamp at current time
-	// This matches how AWS and tools like gauth validate TOTP codes
-
-	// Generate consecutive codes first
-	// We'll use these for both AWS API authentication and the clipboard
-	currentCode, nextCode, err := p.totp.GenerateConsecutiveCodes(secret)
+	// Generate a TOTP code for AWS authentication
+	currentCode, _, err := p.totp.GenerateConsecutiveCodes(secret)
 	if err != nil {
-		return provider.Credentials{}, fmt.Errorf("could not generate consecutive TOTP codes: %w", err)
+		return provider.Credentials{}, fmt.Errorf("could not generate TOTP code: %w", err)
 	}
 
-	// Check the time window - we may need to use nextCode if we're close to boundary
-	var secondsLeft int64
-	secondsLeft = 30 - (time.Now().Unix() % 30)
+	// Get the seconds left in current time window
+	secondsLeft := 30 - (time.Now().Unix() % 30)
 	
 	// First try with the current code
 	code := currentCode
@@ -163,6 +156,12 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	
 	// If authentication fails and we're close to the time boundary, try with the next code
 	if err != nil && secondsLeft < 5 {
+		// Generate the next code if we're near expiry
+		nextCode, gErr := p.totp.GenerateForTime(secret, time.Now().Add(30*time.Second))
+		if gErr != nil {
+			return provider.Credentials{}, fmt.Errorf("could not generate next TOTP code: %w", gErr)
+		}
+		
 		fmt.Fprintf(os.Stderr, "⚠️ First code failed - trying again with next code: %s\n", nextCode)
 		code = nextCode
 		awsCreds, err = p.aws.GetSessionToken(p.profile, serial, code)
@@ -172,8 +171,6 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	if err != nil {
 		return provider.Credentials{}, fmt.Errorf("failed to get session token: %w", err)
 	}
-	
-	// At this point, code variable contains the successfully used code
 
 	// Parse expiration time
 	expiryTime, err := time.Parse(time.RFC3339, awsCreds.Expiration)
@@ -188,7 +185,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		"AWS_SESSION_TOKEN":     awsCreds.SessionToken,
 	}
 
-	// Format display info
+	// Format basic display info
 	var displayInfo string
 	if p.profile == "" {
 		displayInfo = "🔑 AWS credentials for default profile"
@@ -196,89 +193,18 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		displayInfo = fmt.Sprintf("🔑 AWS credentials for profile %s", p.profile)
 	}
 
-	// Recalculate seconds left based on updated time
-	secondsLeft = 30 - (time.Now().Unix() % 30)
-
-	// Always use the successfully authenticated code for clipboard
-	clipboardCode := code  // This is guaranteed to be the code that worked with AWS
-	
-	// Set up resync codes - we need to be careful about which ones to use
-	// based on which code was used for authentication
-	var resyncCode1, resyncCode2 string
-	
-	// If we used the current window's code, next window is resyncCode1
-	// Otherwise, we need to generate the next two codes
-	if code == currentCode {
-		// We authenticated with the current time window's code
-		resyncCode1 = nextCode
-		
-		// Generate code for 2 steps ahead for resyncCode2
-		tempCode, err := p.totp.GenerateForTime(secret, time.Now().Add(60*time.Second))
-		if err == nil {
-			resyncCode2 = tempCode
-		} else {
-			// Fallback if generation fails
-			resyncCode2 = nextCode
-			fmt.Fprintf(os.Stderr, "⚠️ Warning: Could not generate resync code 2: %v\n", err)
-		}
-	} else {
-		// We authenticated with the next window's code
-		// Generate codes for the next two windows
-		tempCode1, err := p.totp.GenerateForTime(secret, time.Now().Add(30*time.Second))
-		if err == nil {
-			resyncCode1 = tempCode1
-		} else {
-			resyncCode1 = code // fallback
-			fmt.Fprintf(os.Stderr, "⚠️ Warning: Could not generate resync code 1: %v\n", err)
-		}
-		
-		tempCode2, err := p.totp.GenerateForTime(secret, time.Now().Add(60*time.Second))
-		if err == nil {
-			resyncCode2 = tempCode2
-		} else {
-			resyncCode2 = resyncCode1 // fallback
-			fmt.Fprintf(os.Stderr, "⚠️ Warning: Could not generate resync code 2: %v\n", err)
-		}
-	}
-	
-	// Add warning if we're close to expiry
-	if secondsLeft < 5 {
-		fmt.Fprintln(os.Stderr, "⚠️  Warning: Current TOTP code will expire in less than 5 seconds!")
+	// Create metadata for use in PrintCredentials
+	metadata := map[string]string{
+		"profile": p.profile,
 	}
 
-	// Final validation to ensure we have values for all codes
-	if resyncCode1 == "" {
-		resyncCode1 = nextCode
-	}
-	if resyncCode2 == "" {
-		resyncCode2 = nextCode
-	}
-
-	// Create display info with diagnostic information about which code was used successfully
-	clipboardDisplayInfo := displayInfo
-
-	// Show the authenticated code and additional info about which code was used successfully
-	if p.profile == "" {
-		clipboardDisplayInfo = fmt.Sprintf("%s\n🔑 Web console code: %s\n\n[Additional info]\n🔄 If asked to resync MFA: %s + %s",
-			displayInfo, clipboardCode, resyncCode1, resyncCode2)
-	} else {
-		clipboardDisplayInfo = fmt.Sprintf("%s\n🔑 Web console code for profile %s: %s\n\n[Additional info]\n🔄 If asked to resync MFA: %s + %s",
-			displayInfo, p.profile, clipboardCode, resyncCode1, resyncCode2)
-	}
-
-	// Add expiration info and note about which code worked
-	if code != currentCode {
-		clipboardDisplayInfo = fmt.Sprintf("%s\n⚠️ Authentication used next time window's code (system clock offset detected)", clipboardDisplayInfo)
-	}
-	
-	clipboardDisplayInfo = fmt.Sprintf("%s\n⏰ Code expires in: %d seconds", clipboardDisplayInfo, secondsLeft)
-
+	// For regular credential generation, just return the basic info
 	return provider.Credentials{
 		Provider:    p.Name(),
 		Expiry:      expiryTime,
 		Variables:   envVars,
-		DisplayInfo: clipboardDisplayInfo,
-		CopyValue:   clipboardCode,
+		DisplayInfo: displayInfo,
+		Metadata:    metadata,
 	}, nil
 }
 
