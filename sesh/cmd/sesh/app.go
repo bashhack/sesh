@@ -193,50 +193,50 @@ func (a *App) CopyToClipboard(serviceName string) error {
 	}
 
 	// NOTE: This works for clip mode with AWS!
-	if serviceName == "aws" {
-		// Cast to AWS provider to access its methods
-		awsProvider, ok := p.(*awsProvider.Provider)
-		if !ok {
-			return fmt.Errorf("failed to convert to AWS provider")
-		}
-
-		serial, err := awsProvider.GetMFASerial()
-		if err != nil {
-			return fmt.Errorf("failed to get MFA serial: %w", err)
-		}
-
-		fmt.Fprintf(os.Stderr, "🔍 Using MFA serial: %s\n", serial)
-		// Use the specialized AWS TOTP code generation for clip mode
-		fmt.Fprintf(a.Stderr, "🔐 Generating AWS TOTP code...\n")
-		startTime := time.Now()
-
-		// Get the TOTP codes directly
-		currentCode, nextCode, secondsLeft, err := awsProvider.GetTOTPCodes()
-		if err != nil {
-			return fmt.Errorf("failed to get TOTP codes: %w", err)
-		}
-
-		// Copy the current code to clipboard
-		copyValue := currentCode
-		if err := clipboard.Copy(copyValue); err != nil {
-			return fmt.Errorf("failed to copy to clipboard: %w", err)
-		}
-
-		elapsedTime := time.Since(startTime)
-		fmt.Fprintf(a.Stderr, "✅ Code copied to clipboard in %.2fs\n", elapsedTime.Seconds())
-
-		// Profile-specific message
-		profileDisplay := "default profile"
-		if awsProvider.GetProfile() != "" {
-			profileDisplay = fmt.Sprintf("profile %s", awsProvider.GetProfile())
-		}
-
-		// Print out formatted display info
-		fmt.Fprintf(a.Stdout, "🔑 AWS MFA code for %s copied to clipboard\n", profileDisplay)
-		fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time left: %ds\n",
-			currentCode, nextCode, secondsLeft)
-		return nil
-	}
+	//if serviceName == "aws" {
+	//	// Cast to AWS provider to access its methods
+	//	awsProvider, ok := p.(*awsProvider.Provider)
+	//	if !ok {
+	//		return fmt.Errorf("failed to convert to AWS provider")
+	//	}
+	//
+	//	serial, err := awsProvider.GetMFASerial()
+	//	if err != nil {
+	//		return fmt.Errorf("failed to get MFA serial: %w", err)
+	//	}
+	//
+	//	fmt.Fprintf(os.Stderr, "🔍 Using MFA serial: %s\n", serial)
+	//	// Use the specialized AWS TOTP code generation for clip mode
+	//	fmt.Fprintf(a.Stderr, "🔐 Generating AWS TOTP code...\n")
+	//	startTime := time.Now()
+	//
+	//	// Get the TOTP codes directly
+	//	currentCode, nextCode, secondsLeft, err := awsProvider.GetTOTPCodes()
+	//	if err != nil {
+	//		return fmt.Errorf("failed to get TOTP codes: %w", err)
+	//	}
+	//
+	//	// Copy the current code to clipboard
+	//	copyValue := currentCode
+	//	if err := clipboard.Copy(copyValue); err != nil {
+	//		return fmt.Errorf("failed to copy to clipboard: %w", err)
+	//	}
+	//
+	//	elapsedTime := time.Since(startTime)
+	//	fmt.Fprintf(a.Stderr, "✅ Code copied to clipboard in %.2fs\n", elapsedTime.Seconds())
+	//
+	//	// Profile-specific message
+	//	profileDisplay := "default profile"
+	//	if awsProvider.GetProfile() != "" {
+	//		profileDisplay = fmt.Sprintf("profile %s", awsProvider.GetProfile())
+	//	}
+	//
+	//	// Print out formatted display info
+	//	fmt.Fprintf(a.Stdout, "🔑 AWS MFA code for %s copied to clipboard\n", profileDisplay)
+	//	fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time left: %ds\n",
+	//		currentCode, nextCode, secondsLeft)
+	//	return nil
+	//}
 
 	// Standard flow for non-AWS services
 	fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName)

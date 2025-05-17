@@ -142,44 +142,51 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	return currentCode, nextCode, secondsLeft, nil
 }
 
+// GetCredentialsForClipboard generates only TOTP codes without AWS authentication
+// This is a dedicated method for clipboard mode to avoid the double-use of TOTP codes
+func (p *Provider) GetCredentialsForClipboard() (provider.Credentials, error) {
+	currentCode, nextCode, secondsLeft, err := p.GetTOTPCodes()
+	if err != nil {
+		return provider.Credentials{}, err
+	}
+
+	fmt.Fprintf(os.Stderr, "🔑 Generating TOTP codes for clipboard mode\n")
+
+	// Format display info
+	var displayInfo string
+	profileStr := "default profile"
+	if p.profile != "" {
+		profileStr = fmt.Sprintf("profile %s", p.profile)
+	}
+	displayInfo = fmt.Sprintf("Current: %s  |  Next: %s  |  Time left: %ds\n🔑 AWS MFA code for %s",
+		currentCode, nextCode, secondsLeft, profileStr)
+
+	// Calculate when this code expires
+	now := time.Now().Unix()
+	validUntil := time.Unix(((now/30)+1)*30, 0)
+
+	// Return credentials with just the display info and copy value
+	return provider.Credentials{
+		Provider:    p.Name(),
+		Expiry:      validUntil,
+		Variables:   map[string]string{}, // Empty map as we're not generating AWS credentials
+		DisplayInfo: displayInfo,
+		CopyValue:   currentCode, // This is what will be copied to clipboard
+	}, nil
+}
+
 // GetCredentials retrieves AWS credentials using TOTP
 func (p *Provider) GetCredentials() (provider.Credentials, error) {
-	// Check for the clip flag
-	clipFlag := flag.Lookup("clip")
-	isClipMode := clipFlag != nil && clipFlag.Value.String() == "true"
-
-	// If we're in clip mode, we should ONLY generate TOTP codes (no authentication)
-	// This avoids the situation where TOTP codes are effectively used twice
-	if isClipMode {
-		currentCode, nextCode, secondsLeft, err := p.GetTOTPCodes()
-		if err != nil {
-			return provider.Credentials{}, err
+	// Note: The clipFlag check is no longer used here, as we now have a dedicated method
+	// for clipboard mode (GetCredentialsForClipboard)
+	// The block is kept here as a comment for reference:
+	/*
+		clipFlag := flag.Lookup("clip")
+		isClipMode := clipFlag != nil && clipFlag.Value.String() == "true"
+		if isClipMode {
+			// Clipboard mode logic has been moved to GetCredentialsForClipboard()
 		}
-
-		fmt.Fprintf(os.Stderr, "🔑 Generating TOTP codes for clipboard mode\n")
-
-		// Format display info
-		var displayInfo string
-		profileStr := "default profile"
-		if p.profile != "" {
-			profileStr = fmt.Sprintf("profile %s", p.profile)
-		}
-		displayInfo = fmt.Sprintf("Current: %s  |  Next: %s  |  Time left: %ds\n🔑 AWS MFA code for %s",
-			currentCode, nextCode, secondsLeft, profileStr)
-
-		// Calculate when this code expires
-		now := time.Now().Unix()
-		validUntil := time.Unix(((now/30)+1)*30, 0)
-
-		// Return credentials with just the display info and copy value
-		return provider.Credentials{
-			Provider:    p.Name(),
-			Expiry:      validUntil,
-			Variables:   map[string]string{}, // Empty map as we're not generating AWS credentials
-			DisplayInfo: displayInfo,
-			CopyValue:   currentCode, // This is what will be copied to clipboard
-		}, nil
-	}
+	*/
 
 	// Validate that service-name was not provided - it's not valid for AWS
 	flag := flag.Lookup("service-name")
