@@ -25,16 +25,16 @@ type ExitFunc func(code int)
 
 // App represents the main application
 type App struct {
-	Registry    *provider.Registry
-	AWS         aws.Provider
-	Keychain    keychain.Provider
-	TOTP        totp.Provider
-	SetupWizard setup.WizardRunner
+	Registry     *provider.Registry
+	AWS          aws.Provider
+	Keychain     keychain.Provider
+	TOTP         totp.Provider
+	SetupWizard  setup.WizardRunner
 	ExecLookPath ExecLookPathFunc
-	Exit        ExitFunc
-	Stdout      io.Writer
-	Stderr      io.Writer
-	VersionInfo VersionInfo
+	Exit         ExitFunc
+	Stdout       io.Writer
+	Stderr       io.Writer
+	VersionInfo  VersionInfo
 }
 
 // VersionInfo contains version information
@@ -55,27 +55,27 @@ func initializeBinaryPath() {
 func NewDefaultApp() *App {
 	// Initialize binary path for keychain security
 	initializeBinaryPath()
-	
+
 	app := &App{
-		Registry:    provider.NewRegistry(),
-		AWS:         aws.NewDefaultProvider(),
-		Keychain:    keychain.NewDefaultProvider(),
-		TOTP:        totp.NewDefaultProvider(),
-		SetupWizard: setup.DefaultWizardRunner{},
+		Registry:     provider.NewRegistry(),
+		AWS:          aws.NewDefaultProvider(),
+		Keychain:     keychain.NewDefaultProvider(),
+		TOTP:         totp.NewDefaultProvider(),
+		SetupWizard:  setup.DefaultWizardRunner{},
 		ExecLookPath: exec.LookPath,
-		Exit:        os.Exit,
-		Stdout:      os.Stdout,
-		Stderr:      os.Stderr,
+		Exit:         os.Exit,
+		Stdout:       os.Stdout,
+		Stderr:       os.Stderr,
 		VersionInfo: VersionInfo{
 			Version: version,
 			Commit:  commit,
 			Date:    date,
 		},
 	}
-	
+
 	// Register providers
 	app.registerProviders()
-	
+
 	return app
 }
 
@@ -88,7 +88,7 @@ func (a *App) registerProviders() {
 		a.TOTP,
 		a.SetupWizard,
 	))
-	
+
 	// Register generic TOTP provider
 	a.Registry.RegisterProvider(totpProvider.NewProvider(
 		a.Keychain,
@@ -106,7 +106,7 @@ func (a *App) ShowVersion() {
 // ListProviders lists all available service providers
 func (a *App) ListProviders() {
 	fmt.Fprintln(a.Stdout, "Available service providers:")
-	
+
 	for _, p := range a.Registry.ListProviders() {
 		fmt.Fprintf(a.Stdout, "  %-10s %s\n", p.Name(), p.Description())
 	}
@@ -118,23 +118,23 @@ func (a *App) ListEntries(serviceName string) error {
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
 	}
-	
+
 	entries, err := p.ListEntries()
 	if err != nil {
 		return fmt.Errorf("failed to list entries: %w", err)
 	}
-	
+
 	fmt.Fprintf(a.Stdout, "Entries for %s:\n", serviceName)
 	if len(entries) == 0 {
 		fmt.Fprintln(a.Stdout, "  No entries found")
 		return nil
 	}
-	
+
 	for _, entry := range entries {
-		fmt.Fprintf(a.Stdout, "  %-20s %s [ID: %s]\n", 
+		fmt.Fprintf(a.Stdout, "  %-20s %s [ID: %s]\n",
 			entry.Name, entry.Description, entry.ID)
 	}
-	
+
 	return nil
 }
 
@@ -144,11 +144,11 @@ func (a *App) DeleteEntry(serviceName, entryID string) error {
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
 	}
-	
+
 	if err := p.DeleteEntry(entryID); err != nil {
 		return fmt.Errorf("failed to delete entry: %w", err)
 	}
-	
+
 	fmt.Fprintf(a.Stdout, "✅ Entry deleted successfully\n")
 	return nil
 }
@@ -159,7 +159,7 @@ func (a *App) RunSetup(serviceName string) error {
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
 	}
-	
+
 	return p.Setup()
 }
 
@@ -169,18 +169,18 @@ func (a *App) GenerateCredentials(serviceName string) error {
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
 	}
-	
+
 	fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName)
 	startTime := time.Now()
-	
+
 	creds, err := p.GetCredentials()
 	if err != nil {
 		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
-	
+
 	elapsedTime := time.Since(startTime)
 	fmt.Fprintf(a.Stderr, "✅ Credentials acquired in %.2fs\n", elapsedTime.Seconds())
-	
+
 	a.PrintCredentials(creds)
 	return nil
 }
@@ -191,57 +191,64 @@ func (a *App) CopyToClipboard(serviceName string) error {
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
 	}
-	
+
+	// NOTE: This works for clip mode with AWS!
 	if serviceName == "aws" {
-		// Use the specialized AWS TOTP code generation for clip mode
-		fmt.Fprintf(a.Stderr, "🔐 Generating AWS MFA code (no authentication)...\n")
-		startTime := time.Now()
-		
 		// Cast to AWS provider to access its methods
 		awsProvider, ok := p.(*awsProvider.Provider)
 		if !ok {
 			return fmt.Errorf("failed to convert to AWS provider")
 		}
-		
+
+		serial, err := awsProvider.GetMFASerial()
+		if err != nil {
+			return fmt.Errorf("failed to get MFA serial: %w", err)
+		}
+
+		fmt.Fprintf(os.Stderr, "🔍 Using MFA serial: %s\n", serial)
+		// Use the specialized AWS TOTP code generation for clip mode
+		fmt.Fprintf(a.Stderr, "🔐 Generating AWS TOTP code...\n")
+		startTime := time.Now()
+
 		// Get the TOTP codes directly
 		currentCode, nextCode, secondsLeft, err := awsProvider.GetTOTPCodes()
 		if err != nil {
 			return fmt.Errorf("failed to get TOTP codes: %w", err)
 		}
-		
+
 		// Copy the current code to clipboard
 		copyValue := currentCode
 		if err := clipboard.Copy(copyValue); err != nil {
 			return fmt.Errorf("failed to copy to clipboard: %w", err)
 		}
-		
+
 		elapsedTime := time.Since(startTime)
 		fmt.Fprintf(a.Stderr, "✅ Code copied to clipboard in %.2fs\n", elapsedTime.Seconds())
-		
+
 		// Profile-specific message
 		profileDisplay := "default profile"
 		if awsProvider.GetProfile() != "" {
 			profileDisplay = fmt.Sprintf("profile %s", awsProvider.GetProfile())
 		}
-		
+
 		// Print out formatted display info
-		fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time left: %ds\n", 
-			currentCode, nextCode, secondsLeft)
 		fmt.Fprintf(a.Stdout, "🔑 AWS MFA code for %s copied to clipboard\n", profileDisplay)
+		fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time left: %ds\n",
+			currentCode, nextCode, secondsLeft)
 		return nil
 	}
-	
+
 	// Standard flow for non-AWS services
 	fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName)
 	startTime := time.Now()
-	
+
 	creds, err := p.GetCredentials()
 	if err != nil {
 		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
-	
+
 	elapsedTime := time.Since(startTime)
-	
+
 	// Make sure we have a valid copy value
 	var copyValue string
 	if creds.CopyValue != "" {
@@ -259,17 +266,17 @@ func (a *App) CopyToClipboard(serviceName string) error {
 		}
 		copyValue = exports
 	}
-	
+
 	// Validate that we have something to copy
 	if copyValue == "" {
 		return fmt.Errorf("no content available to copy to clipboard")
 	}
-	
+
 	// Copy to clipboard
 	if err := clipboard.Copy(copyValue); err != nil {
 		return fmt.Errorf("failed to copy to clipboard: %w", err)
 	}
-	
+
 	// Show what was copied
 	var clipboardDesc string
 	switch serviceName {
@@ -278,63 +285,63 @@ func (a *App) CopyToClipboard(serviceName string) error {
 	default:
 		clipboardDesc = "value"
 	}
-	
+
 	fmt.Fprintf(a.Stderr, "✅ %s copied to clipboard in %.2fs\n", clipboardDesc, elapsedTime.Seconds())
 	fmt.Fprintf(a.Stdout, "%s\n", creds.DisplayInfo)
-	
+
 	return nil
 }
 
 // copyAWSTotp is a special handler for copying AWS TOTP codes to clipboard
 // that bypasses the AWS API authentication to avoid time-sync issues
 func (a *App) copyAWSTotp(p provider.ServiceProvider) error {
-	fmt.Fprintf(a.Stderr, "🔐 Generating AWS MFA code (no authentication)...\n")
+	fmt.Fprintf(a.Stderr, "🔐 Generating AWS TOTP code...\n")
 	startTime := time.Now()
-	
+
 	// We need to access AWS provider's specific properties to get the profile
 	awsProvider, ok := p.(*awsProvider.Provider)
 	if !ok {
 		return fmt.Errorf("failed to convert to AWS provider")
 	}
-	
+
 	// Get profile for both methods
 	profile := awsProvider.GetProfile()
-	
+
 	// Get TOTP codes directly, without attempting authentication
 	currentCode, nextCode, secondsLeft, err := awsProvider.GetTOTPCodes()
 	if err != nil {
 		return fmt.Errorf("failed to get TOTP codes: %w", err)
 	}
-	
+
 	// Copy the current code to clipboard
 	fmt.Fprintf(a.Stderr, "📋 Copying code to clipboard: '%s'\n", currentCode)
 	err = clipboard.Copy(currentCode)
 	if err != nil {
 		return fmt.Errorf("failed to copy to clipboard: %w", err)
 	}
-	
+
 	// Calculate elapsed time
 	elapsedTime := time.Since(startTime)
-	
+
 	// Profile-specific message
 	profileDisplay := "default profile"
 	if profile != "" {
 		profileDisplay = fmt.Sprintf("profile %s", profile)
 	}
-	
+
 	// Display success message
 	fmt.Fprintf(a.Stderr, "✅ AWS MFA code copied to clipboard in %.2fs\n", elapsedTime.Seconds())
-	
+
 	// Print concise but useful information to stdout (this is what the user sees)
-	fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time left: %ds\n", 
+	fmt.Fprintf(a.Stdout, "Current: %s  |  Next: %s  |  Time left: %ds\n",
 		currentCode, nextCode, secondsLeft)
 	fmt.Fprintf(a.Stdout, "🔑 AWS MFA code for %s copied to clipboard\n", profileDisplay)
-	
+
 	// Add warning if we're close to expiry
 	if secondsLeft < 5 {
 		fmt.Fprintln(a.Stdout, "⚠️  Warning: Code expires in less than 5 seconds!")
 	}
-	
+
 	return nil
 }
 
@@ -349,22 +356,22 @@ func (a *App) PrintCredentials(creds provider.Credentials) {
 		expiryDisplay = fmt.Sprintf("%s (valid for %dh%dm)",
 			creds.Expiry.Local().Format("2006-01-02 15:04:05"), hours, minutes)
 	}
-	
+
 	// First show human-readable information
 	fmt.Fprintf(a.Stdout, "⏳ Expires at: %s\n", expiryDisplay)
-	
+
 	if creds.DisplayInfo != "" {
 		fmt.Fprintf(a.Stdout, "%s\n", creds.DisplayInfo)
 	}
-	
-	// Then add a separator before environment variables 
+
+	// Then add a separator before environment variables
 	fmt.Fprintf(a.Stdout, "\n# --------- ENVIRONMENT VARIABLES ---------\n")
-	
+
 	// Output export commands
 	for key, value := range creds.Variables {
 		fmt.Fprintf(a.Stdout, "export %s=%s\n", key, value)
 	}
-	
+
 	// Add a separator after environment variables
 	fmt.Fprintf(a.Stdout, "# ----------------------------------------\n")
 }

@@ -138,7 +138,7 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 
 	// Get the seconds left in current time window
 	secondsLeft = 30 - (time.Now().Unix() % 30)
-	
+
 	return currentCode, nextCode, secondsLeft, nil
 }
 
@@ -147,7 +147,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	// Check for the clip flag
 	clipFlag := flag.Lookup("clip")
 	isClipMode := clipFlag != nil && clipFlag.Value.String() == "true"
-	
+
 	// If we're in clip mode, we should ONLY generate TOTP codes (no authentication)
 	// This avoids the situation where TOTP codes are effectively used twice
 	if isClipMode {
@@ -155,31 +155,31 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		if err != nil {
 			return provider.Credentials{}, err
 		}
-		
+
 		// Format display info
 		var displayInfo string
 		if p.profile == "" {
-			displayInfo = fmt.Sprintf("AWS MFA code for default profile: %s (Next: %s, Time left: %ds)", 
+			displayInfo = fmt.Sprintf("AWS MFA code for default profile: %s (Next: %s, Time left: %ds)",
 				currentCode, nextCode, secondsLeft)
 		} else {
-			displayInfo = fmt.Sprintf("AWS MFA code for profile %s: %s (Next: %s, Time left: %ds)", 
+			displayInfo = fmt.Sprintf("AWS MFA code for profile %s: %s (Next: %s, Time left: %ds)",
 				p.profile, currentCode, nextCode, secondsLeft)
 		}
-		
+
 		// Calculate when this code expires
 		now := time.Now().Unix()
 		validUntil := time.Unix(((now/30)+1)*30, 0)
-		
+
 		// Return credentials with just the display info and copy value
 		return provider.Credentials{
 			Provider:    p.Name(),
 			Expiry:      validUntil,
 			Variables:   map[string]string{}, // Empty map as we're not generating AWS credentials
 			DisplayInfo: displayInfo,
-			CopyValue:   currentCode,         // This is what will be copied to clipboard
+			CopyValue:   currentCode, // This is what will be copied to clipboard
 		}, nil
 	}
-	
+
 	// Standard flow for non-clipboard mode follows
 
 	// Validate that service-name was not provided - it's not valid for AWS
@@ -189,7 +189,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}
 
 	// Get MFA serial
-	serial, err := p.getMFASerial()
+	serial, err := p.GetMFASerial()
 	if err != nil {
 		return provider.Credentials{}, err
 	}
@@ -200,18 +200,18 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	if err != nil {
 		return provider.Credentials{}, err
 	}
-	
+
 	// First try with the current code
 	code := currentCode
-	
+
 	// Try the first code
 	awsCreds, err := p.aws.GetSessionToken(p.profile, serial, code)
-	
+
 	// Check if this is an "invalid MFA one time pass code" error, which could indicate a recently used code
 	if err != nil {
 		errStr := err.Error()
 		isInvalidMFA := strings.Contains(errStr, "MultiFactorAuthentication failed with invalid MFA one time pass code")
-		
+
 		// If it's an invalid MFA code or if we're close to time boundary, try the next code
 		if isInvalidMFA || secondsLeft < 5 {
 			if isInvalidMFA {
@@ -219,24 +219,24 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 			} else {
 				fmt.Fprintf(os.Stderr, "⚠️ Current code failed - time window nearly expired\n")
 			}
-			
-			// Try with the next time window's code 
+
+			// Try with the next time window's code
 			fmt.Fprintf(os.Stderr, "🔑 Trying with next time window's code: %s\n", nextCode)
 			code = nextCode
 			awsCreds, err = p.aws.GetSessionToken(p.profile, serial, code)
-			
+
 			// If STILL failing and we're not close to boundary, and we have a "recently used" error,
 			// we may need to wait for the next time window
 			if err != nil && isInvalidMFA && secondsLeft > 10 {
 				fmt.Fprintf(os.Stderr, "⚠️ Both current and next codes were rejected - may need to wait for next time window\n")
-				
+
 				// Get the secret again to generate a future code
 				keyName := p.profile
 				if keyName == "" {
 					keyName = "default"
 				}
 				keyName = fmt.Sprintf("%s-%s", p.keyName, keyName)
-				
+
 				var secret string
 				cmd := exec.Command("security", "find-generic-password",
 					"-a", p.keyUser,
@@ -252,7 +252,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 						return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 					}
 				}
-				
+
 				// Generate a code for the window after next, in case AWS is far ahead of our clock
 				futureCode, gErr := p.totp.GenerateForTime(secret, time.Now().Add(60*time.Second))
 				if gErr == nil {
@@ -263,7 +263,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 			}
 		}
 	}
-	
+
 	// If still failing, return the error
 	if err != nil {
 		// Check if this looks like a "code already used" error
@@ -418,7 +418,7 @@ func (p *Provider) GetTOTPKeyInfo() (string, string, error) {
 			return "", "", fmt.Errorf("could not determine current user: %w", err)
 		}
 	}
-	
+
 	// Determine the keychain key name based on profile
 	var keyName string
 	if p.profile == "" {
@@ -427,7 +427,7 @@ func (p *Provider) GetTOTPKeyInfo() (string, string, error) {
 	} else {
 		keyName = fmt.Sprintf("%s-%s", p.keyName, p.profile)
 	}
-	
+
 	return p.keyUser, keyName, nil
 }
 
@@ -436,7 +436,7 @@ func (p *Provider) GetMFASerial() (string, error) {
 	// Use the same logic as in GetCredentials but just return the serial
 	// Service name for the MFA serial (account for profile)
 	var serialService string
-	
+
 	// Get current user if not set
 	if p.keyUser == "" {
 		var err error
@@ -445,7 +445,7 @@ func (p *Provider) GetMFASerial() (string, error) {
 			return "", fmt.Errorf("could not determine current user: %w", err)
 		}
 	}
-	
+
 	if p.profile == "" {
 		// Use default for the default profile
 		serialService = fmt.Sprintf("%s-default", constants.AWSServiceMFAPrefix)
@@ -482,44 +482,44 @@ func (p *Provider) GetMFASerial() (string, error) {
 	return serial, nil
 }
 
-func (p *Provider) getMFASerial() (string, error) {
+// func (p *Provider) getMFASerial() (string, error) {
 
-	// Service name for the MFA serial (account for profile)
-	var serialService string
-	if p.profile == "" {
-		// Use default for the default profile
-		serialService = fmt.Sprintf("%s-default", constants.AWSServiceMFAPrefix)
-	} else {
-		serialService = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, p.profile)
-	}
+// 	// Service name for the MFA serial (account for profile)
+// 	var serialService string
+// 	if p.profile == "" {
+// 		// Use default for the default profile
+// 		serialService = fmt.Sprintf("%s-default", constants.AWSServiceMFAPrefix)
+// 	} else {
+// 		serialService = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, p.profile)
+// 	}
 
-	// Get MFA serial from keychain
+// 	// Get MFA serial from keychain
 
-	// Try direct keychain access first
-	cmd := exec.Command("security", "find-generic-password",
-		"-a", p.keyUser,
-		"-s", serialService,
-		"-w")
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	err := cmd.Run()
+// 	// Try direct keychain access first
+// 	cmd := exec.Command("security", "find-generic-password",
+// 		"-a", p.keyUser,
+// 		"-s", serialService,
+// 		"-w")
+// 	var stdout bytes.Buffer
+// 	cmd.Stdout = &stdout
+// 	err := cmd.Run()
 
-	if err == nil {
-		serialFromKeychain := strings.TrimSpace(stdout.String())
-		return serialFromKeychain, nil
-	}
+// 	if err == nil {
+// 		serialFromKeychain := strings.TrimSpace(stdout.String())
+// 		return serialFromKeychain, nil
+// 	}
 
-	// Fall back to the provider method
-	serialFromKeychain, err := p.keychain.GetSecret(p.keyUser, serialService)
-	if err == nil {
-		return serialFromKeychain, nil
-	}
+// 	// Fall back to the provider method
+// 	serialFromKeychain, err := p.keychain.GetSecret(p.keyUser, serialService)
+// 	if err == nil {
+// 		return serialFromKeychain, nil
+// 	}
 
-	// If not found in keychain, try to auto-detect from AWS
-	serial, err := p.aws.GetFirstMFADevice(p.profile)
-	if err != nil {
-		return "", fmt.Errorf("could not detect MFA device: %w", err)
-	}
+// 	// If not found in keychain, try to auto-detect from AWS
+// 	serial, err := p.aws.GetFirstMFADevice(p.profile)
+// 	if err != nil {
+// 		return "", fmt.Errorf("could not detect MFA device: %w", err)
+// 	}
 
-	return serial, nil
-}
+// 	return serial, nil
+// }
