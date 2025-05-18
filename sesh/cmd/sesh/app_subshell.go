@@ -146,7 +146,13 @@ These credentials will be automatically removed when you exit.
 Commands:
   sesh_status    Show status and verify credentials
   verify_aws     Test if AWS MFA authentication is working
-  exit           Exit the secure subshell and remove credentials
+
+Exit Options:
+  exit           Type 'exit' to leave the secure subshell
+  Ctrl+D         Press Ctrl+D to send EOF and exit
+  
+Note: Ctrl+C (SIGINT) may not work as expected for exiting the subshell.
+      Please use 'exit' or Ctrl+D instead.
 
 Environment Variables:
   AWS_ACCESS_KEY_ID     - Your temporary AWS access key
