@@ -483,12 +483,13 @@ func (p *Provider) GetMFASerial() (string, error) {
 	return serial, nil
 }
 
+// NewSubshellConfig creates a subshell configuration for AWS credentials
 func (p *Provider) NewSubshellConfig(creds provider.Credentials) subshell.Config {
 	return subshell.Config{
 		ServiceName:     p.Name(),
 		Variables:       creds.Variables,
 		Expiry:          creds.Expiry,
-		ShellCustomizer: &awsInternal.AWSShellCustomizer{},
+		ShellCustomizer: awsInternal.NewCustomizer(),
 	}
 }
 

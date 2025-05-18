@@ -195,3 +195,8 @@ func (c *AWSShellCustomizer) GetPromptPrefix() string {
 func (c *AWSShellCustomizer) GetWelcomeMessage() string {
 	return "🔐 Secure shell with AWS credentials activated. Type 'sesh_help' for more information."
 }
+
+// NewCustomizer creates a new AWS shell customizer
+func NewCustomizer() *AWSShellCustomizer {
+	return &AWSShellCustomizer{}
+}
