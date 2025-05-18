@@ -177,17 +177,6 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 
 // GetCredentials retrieves AWS credentials using TOTP
 func (p *Provider) GetCredentials() (provider.Credentials, error) {
-	// Note: The clipFlag check is no longer used here, as we now have a dedicated method
-	// for clipboard mode (GetCredentialsForClipboard)
-	// The block is kept here as a comment for reference:
-	/*
-		clipFlag := flag.Lookup("clip")
-		isClipMode := clipFlag != nil && clipFlag.Value.String() == "true"
-		if isClipMode {
-			// Clipboard mode logic has been moved to GetCredentialsForClipboard()
-		}
-	*/
-
 	// Validate that service-name was not provided - it's not valid for AWS
 	flag := flag.Lookup("service-name")
 	if flag != nil && flag.Value.String() != "" {
