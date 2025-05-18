@@ -116,33 +116,24 @@ func (a *App) LaunchSubshell(serviceName string) error {
 
 	fmt.Fprintf(a.Stdout, "Exited secure shell\n")
 
-	// Handle different exit scenarios gracefully
+	// Most shell exit scenarios are expected (Ctrl+C, Ctrl+D, exit command),
+	// so we don't need to propagate these as errors to the user.
 	if err != nil {
+		// ExitError is the common case (shell exited with non-zero status)
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				// Check if terminated by signal
-				if status.Signaled() {
-					sig := status.Signal()
-					if sig == syscall.SIGINT {
-						// Treat Ctrl+C as a normal exit
-						return nil
-					}
-					// For other signals, provide context but no error indicator
+			// For extra clarity, we can still report signals or unusual exit codes
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+				sig := status.Signal()
+				// Simple log message for signals other than common ones
+				if sig != syscall.SIGINT {
 					fmt.Fprintf(a.Stderr, "Shell session ended: %s\n", explainSignal(sig))
-					return nil
-				} else if status.ExitStatus() == 130 {
-					// Exit 130 is a special case - it's SIGINT, but reported as an exit code
-					// This happens in some terminals and shells
-					return nil
-				} else if status.ExitStatus() != 0 {
-					// Only report truly unexpected exit codes
-					fmt.Fprintf(a.Stderr, "Shell exited with code %d\n", status.ExitStatus())
 				}
 			}
-			// Don't return an error for common shell exit scenarios
+			// Don't return an error for normal shell exits
 			return nil
 		}
-		// Only return truly unexpected errors
+		
+		// Only return truly unexpected errors (not ExitError)
 		return fmt.Errorf("subshell encountered an unexpected error: %w", err)
 	}
 
