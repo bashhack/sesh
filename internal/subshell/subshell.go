@@ -58,18 +58,18 @@ func Launch(config Config, stdout, stderr *os.File) error {
 	}
 
 	var cmd *exec.Cmd
-	var err error
+	var shellSetupErr error
 
 	switch {
 	case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
-		cmd, err = setupZshShell(shell, config, env)
-		if err != nil {
-			return fmt.Errorf("failed to set up zsh shell: %w", err)
-		}
+		cmd, shellSetupErr = setupZshShell(shell, config, env)
 	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
-		cmd = setupBashShell(shell, config, env)
+		cmd, shellSetupErr = setupBashShell(shell, config, env)
 	default:
-		cmd = setupFallbackShell(shell, config, env)
+		cmd, shellSetupErr = setupFallbackShell(shell, config, env)
+	}
+	if shellSetupErr != nil {
+		return fmt.Errorf("failed to set up shell: %w", shellSetupErr)
 	}
 
 	cmd.Stdin = os.Stdin
@@ -116,12 +116,37 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 	return exec.Command(shell), nil
 }
 
-func setupBashShell(shell string, config Config, env []string) *exec.Cmd {
+func setupBashShell(shell string, config Config, env []string) (*exec.Cmd, error) {
+	// Create a temporary rcfile for bash
+	tmpFile, err := os.CreateTemp("", "sesh_bashrc")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp bashrc: %w", err)
+	}
+	defer tmpFile.Close()
 
+	if _, writeErr := tmpFile.WriteString(aws.BashPrompt); writeErr != nil {
+		return nil, fmt.Errorf("failed to write temp bashrc: %w", writeErr)
+	}
+	return exec.Command(shell, "--rcfile", tmpFile.Name()), nil
 }
 
-func setupFallbackShell(shell string, config Config, env []string) *exec.Cmd {
+func setupFallbackShell(shell string, config Config, env []string) (*exec.Cmd, error) {
+	// fallback shell - create a basic script file to define functions
+	tmpFile, err := os.CreateTemp("", "sesh_shellrc")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp shellrc: %w", err)
+	}
+	defer tmpFile.Close()
 
+	if _, writeErr := tmpFile.WriteString(aws.FallbackPrompt); writeErr != nil {
+		return nil, fmt.Errorf("failed to write temp shellrc: %w", writeErr)
+	}
+
+	// Set the environment to show the prompt
+	env = append(env, fmt.Sprintf("PS1=(sesh:%s) $ ", config.ServiceName))
+	env = append(env, fmt.Sprintf("ENV=%s", tmpFile.Name())) // For sh shells
+
+	return exec.Command(shell), nil
 }
 
 func filterEnv(env []string, key string) []string {

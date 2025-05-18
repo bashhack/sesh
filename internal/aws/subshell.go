@@ -172,3 +172,43 @@ verify_aws() {
 echo "🔐 Secure shell with aws credentials activated"
 `
 )
+
+// AWSShellCustomizer implements subshell.ShellCustomizer for AWS
+type AWSShellCustomizer struct{}
+
+func (c *AWSShellCustomizer) GetZshInitScript() string {
+	return `
+  export SESH_ACTIVE=1
+  export SESH_SERVICE=aws
+  PROMPT="(sesh:aws) ${PROMPT}"
+
+  # AWS-specific helper functions
+  sesh_status() {
+      # Implementation...
+  }
+
+  verify_aws() {
+      # Implementation...
+  }
+
+  sesh_help() {
+      # Implementation...
+  }
+  `
+}
+
+func (c *AWSShellCustomizer) GetBashInitScript() string {
+	// Similar for Bash
+}
+
+func (c *AWSShellCustomizer) GetFallbackInitScript() string {
+	// Similar for other shells
+}
+
+func (c *AWSShellCustomizer) GetPromptPrefix() string {
+	return "(sesh:aws) "
+}
+
+func (c *AWSShellCustomizer) GetWelcomeMessage() string {
+	return "🔐 Secure shell with AWS credentials activated. Type 'sesh_help' for more information."
+}
