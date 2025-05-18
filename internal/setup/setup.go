@@ -4,21 +4,15 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/bashhack/sesh/internal/constants"
+	"github.com/bashhack/sesh/internal/env"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/totp"
-	"github.com/makiuchi-d/gozxing"
-	"image/png"
-	"net/url"
+	"golang.org/x/term"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
-
-	"github.com/bashhack/sesh/internal/env"
-	"golang.org/x/term"
 )
 
 // GetSeshBinaryPath returns the fixed sesh binary path used for keychain access
@@ -305,67 +299,67 @@ func setupAWS() {
 
 // setupGenericTOTP configures a generic TOTP service
 // captureAndProcessQRCode takes a screenshot and extracts a TOTP secret from a QR code
-func captureAndProcessQRCode() (string, error) {
-	// Create a temp file for the screenshot
-	tempFile := filepath.Join(os.TempDir(), fmt.Sprintf("sesh-qr-%d.png", time.Now().UnixNano()))
-	defer os.Remove(tempFile) // Clean up when done
-
-	// Use screencapture on macOS
-	cmd := exec.Command("screencapture", "-i", tempFile)
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("failed to capture screenshot: %w", err)
-	}
-
-	// Check if the user canceled (file would be empty or very small)
-	fileInfo, err := os.Stat(tempFile)
-	if err != nil || fileInfo.Size() < 100 {
-		return "", fmt.Errorf("screenshot capture was canceled or failed")
-	}
-
-	// Open and decode the image
-	file, err := os.Open(tempFile)
-	if err != nil {
-		return "", fmt.Errorf("failed to open screenshot: %w", err)
-	}
-	defer file.Close()
-
-	img, err := png.Decode(file)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode image: %w", err)
-	}
-
-	// Convert to the format required by gozxing
-	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
-	if err != nil {
-		return "", fmt.Errorf("failed to process image for QR reading: %w", err)
-	}
-
-	// Set up QR code reader
-	reader := qrcode.NewQRCodeReader()
-	result, err := reader.Decode(bmp, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode QR code: %w", err)
-	}
-
-	// Extract secret from otpauth URI
-	otpauthURL := result.GetText()
-	if !strings.HasPrefix(otpauthURL, "otpauth://") {
-		return "", fmt.Errorf("not a valid otpauth URL: %s", otpauthURL)
-	}
-
-	parsedURL, err := url.Parse(otpauthURL)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse otpauth URL: %w", err)
-	}
-
-	query := parsedURL.Query()
-	secret := query.Get("secret")
-	if secret == "" {
-		return "", fmt.Errorf("no secret found in QR code")
-	}
-
-	return secret, nil
-}
+//func captureAndProcessQRCode() (string, error) {
+//	// Create a temp file for the screenshot
+//	tempFile := filepath.Join(os.TempDir(), fmt.Sprintf("sesh-qr-%d.png", time.Now().UnixNano()))
+//	defer os.Remove(tempFile) // Clean up when done
+//
+//	// Use screencapture on macOS
+//	cmd := exec.Command("screencapture", "-i", tempFile)
+//	if err := cmd.Run(); err != nil {
+//		return "", fmt.Errorf("failed to capture screenshot: %w", err)
+//	}
+//
+//	// Check if the user canceled (file would be empty or very small)
+//	fileInfo, err := os.Stat(tempFile)
+//	if err != nil || fileInfo.Size() < 100 {
+//		return "", fmt.Errorf("screenshot capture was canceled or failed")
+//	}
+//
+//	// Open and decode the image
+//	file, err := os.Open(tempFile)
+//	if err != nil {
+//		return "", fmt.Errorf("failed to open screenshot: %w", err)
+//	}
+//	defer file.Close()
+//
+//	img, err := png.Decode(file)
+//	if err != nil {
+//		return "", fmt.Errorf("failed to decode image: %w", err)
+//	}
+//
+//	// Convert to the format required by gozxing
+//	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
+//	if err != nil {
+//		return "", fmt.Errorf("failed to process image for QR reading: %w", err)
+//	}
+//
+//	// Set up QR code reader
+//	reader := qrcode.ScanQRCode()
+//	result, err := reader.Decode(bmp, nil)
+//	if err != nil {
+//		return "", fmt.Errorf("failed to decode QR code: %w", err)
+//	}
+//
+//	// Extract secret from otpauth URI
+//	otpauthURL := result.GetText()
+//	if !strings.HasPrefix(otpauthURL, "otpauth://") {
+//		return "", fmt.Errorf("not a valid otpauth URL: %s", otpauthURL)
+//	}
+//
+//	parsedURL, err := url.Parse(otpauthURL)
+//	if err != nil {
+//		return "", fmt.Errorf("failed to parse otpauth URL: %w", err)
+//	}
+//
+//	query := parsedURL.Query()
+//	secret := query.Get("secret")
+//	if secret == "" {
+//		return "", fmt.Errorf("no secret found in QR code")
+//	}
+//
+//	return secret, nil
+//}
 
 func setupGenericTOTP() {
 	reader := bufio.NewReader(os.Stdin)
@@ -468,7 +462,7 @@ func setupGenericTOTP() {
 	addCmd := exec.Command("security", "add-generic-password",
 		"-a", user,
 		"-s", serviceKey,
-		"-w", string(secret),
+		"-w", secretStr,
 		"-U",           // Update if exists
 		"-T", execPath, // Only allow the sesh binary to access this item
 	)
