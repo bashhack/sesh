@@ -85,6 +85,10 @@ func setupAWS() {
 	userArn = strings.TrimSpace(string(output))
 	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
 
+	// TODO:
+	// Allow choosing between QR via screencapture invocation + QR reader
+	// and manual entry of the secret key (existing)
+
 	// Guide user through creating a virtual MFA device
 	fmt.Println("📱 Let's set up a virtual MFA device for your AWS account")
 	fmt.Println("1. Log in to the AWS Console at https://console.aws.amazon.com")
@@ -105,23 +109,23 @@ func setupAWS() {
 		os.Exit(1)
 	}
 	fmt.Println() // Add a newline after the hidden input
-	
+
 	secretStr := string(secret)
 	secretStr = strings.TrimSpace(secretStr)
-	
+
 	// Validate secret key format (basic check)
 	if len(secretStr) < 16 {
 		fmt.Println("❌ Secret key seems too short. Please double-check and try again.")
 		os.Exit(1)
 	}
-	
+
 	// Generate two consecutive TOTP codes for AWS verification
 	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
 	if err != nil {
 		fmt.Printf("❌ Failed to generate TOTP codes: %s\n", err)
 		os.Exit(1)
 	}
-	
+
 	fmt.Println("✅ Generated TOTP codes for AWS setup")
 	fmt.Printf("   First code: %s\n", firstCode)
 	fmt.Printf("   Second code: %s\n", secondCode)
@@ -129,7 +133,7 @@ func setupAWS() {
 	fmt.Println("Enter these codes in the AWS Console and complete the MFA setup")
 	fmt.Println("Press Enter once you've completed the setup...")
 	reader.ReadString('\n')
-	
+
 	// Get the MFA ARN after setup is complete
 	var mfaCmd *exec.Cmd
 	if profile == "" {
@@ -224,13 +228,13 @@ func setupAWS() {
 		fmt.Println("❌ Failed to store MFA serial in keychain")
 		os.Exit(1)
 	}
-	
+
 	// Store metadata for better organization and retrieval
 	description := "AWS MFA"
 	if profile != "" {
 		description = fmt.Sprintf("AWS MFA for profile %s", profile)
 	}
-	
+
 	// Store metadata - CRITICAL for entry retrieval
 	err = keychain.StoreEntryMetadata(constants.AWSServicePrefix, serviceName, user, description)
 	if err != nil {
@@ -240,14 +244,13 @@ func setupAWS() {
 		os.Exit(1)
 	}
 
-	
 	fmt.Println("\n✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.")
 	fmt.Println()
 	fmt.Println("🚀 Next steps:")
 	fmt.Println("1. Run 'sesh' to generate a temporary session token")
 	fmt.Println("2. The credentials will be automatically exported to your shell")
 	fmt.Println("3. You can now use AWS CLI commands with MFA security")
-	
+
 	if profile == "" {
 		fmt.Println("\nTo use this setup, run: sesh")
 		fmt.Println("(The default AWS profile will be used)")
@@ -287,20 +290,20 @@ func setupGenericTOTP() {
 	// Generate two consecutive TOTP codes to help with setup
 	secretStr := string(secret)
 	secretStr = strings.TrimSpace(secretStr)
-	
+
 	// Validate secret key format (basic check)
 	if len(secretStr) < 16 {
 		fmt.Println("❌ Secret key seems too short. Please double-check and try again.")
 		os.Exit(1)
 	}
-	
+
 	// Generate two consecutive TOTP codes
 	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
 	if err != nil {
 		fmt.Printf("❌ Failed to generate TOTP codes: %s\n", err)
 		os.Exit(1)
 	}
-	
+
 	// Store in keychain
 	user, err := env.GetCurrentUser()
 	if err != nil {
@@ -339,7 +342,7 @@ func setupGenericTOTP() {
 	if profile != "" {
 		description = fmt.Sprintf("TOTP for %s profile %s", serviceName, profile)
 	}
-	
+
 	// Store metadata - CRITICAL for entry retrieval
 	err = keychain.StoreEntryMetadata(constants.TOTPServicePrefix, serviceKey, user, description)
 	if err != nil {
@@ -348,7 +351,7 @@ func setupGenericTOTP() {
 		fmt.Println("⚠️ You might need to create the entry again or check keychain permissions")
 		os.Exit(1)
 	}
-	
+
 	// Display the generated TOTP codes for setup verification
 	fmt.Println("✅ Generated TOTP codes for verification:")
 	fmt.Printf("   Current code: %s\n", firstCode)
