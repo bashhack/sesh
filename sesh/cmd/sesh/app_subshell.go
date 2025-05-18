@@ -9,6 +9,7 @@ import (
 
 // LaunchSubshell launches a new shell with credentials loaded
 func (a *App) LaunchSubshell(serviceName string) error {
+	// Get provider and credentials
 	p, err := a.Registry.GetProvider(serviceName)
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
@@ -19,20 +20,20 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
 
-	// Create minimal environment for the subshell
+	// Create environment with credentials
 	env := os.Environ()
-	
-	// Add credential variables
+
+	// Add credential variables to environment
 	for key, value := range creds.Variables {
-		env = removeFromEnv(env, key)
+		env = filterEnv(env, key)
 		env = append(env, fmt.Sprintf("%s=%s", key, value))
 	}
-	
-	// Add minimal sesh variables
+
+	// Add basic SESH variables
 	env = append(env, "SESH_ACTIVE=1")
 	env = append(env, fmt.Sprintf("SESH_SERVICE=%s", serviceName))
 	env = append(env, "SESH_DISABLE_INTEGRATION=1")
-	
+
 	// Determine which shell to use
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -42,28 +43,23 @@ func (a *App) LaunchSubshell(serviceName string) error {
 			shell = "/bin/sh"
 		}
 	}
-	
-	// Create and run the shell command
+
+	// Create and execute the shell command
 	cmd := exec.Command(shell)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = env
-	
-	// Simple output
+
 	fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName)
-	
-	// Run the shell
 	err = cmd.Run()
-	
-	// Simple exit message
-	fmt.Fprintf(a.Stdout, "Exited secure shell.\n")
-	
+	fmt.Fprintf(a.Stdout, "Exited secure shell\n")
+
 	return err
 }
 
-// removeFromEnv removes a specific environment variable from the env list
-func removeFromEnv(env []string, key string) []string {
+// Helper function to filter environment variables
+func filterEnv(env []string, key string) []string {
 	var result []string
 	prefix := key + "="
 	for _, item := range env {
