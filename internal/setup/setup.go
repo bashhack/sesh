@@ -7,10 +7,15 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/totp"
+	"github.com/makiuchi-d/gozxing"
+	"image/png"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/bashhack/sesh/internal/env"
 	"golang.org/x/term"
@@ -139,7 +144,7 @@ func setupAWS() {
 		// Take the screenshot
 		fmt.Println("📸 Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
 		var err error
-		secretStr, err = captureAndProcessQRCode()
+		secretStr, err = qrcode.ScanQRCode()
 		if err != nil {
 			fmt.Printf("❌ Failed to process QR code: %v\n", err)
 			fmt.Println("Please try again with manual entry or restart the setup.")
@@ -380,18 +385,53 @@ func setupGenericTOTP() {
 	profile, _ := reader.ReadString('\n')
 	profile = strings.TrimSpace(profile)
 
-	// Get TOTP secret
-	fmt.Println("Enter your TOTP secret key (this will not be echoed):")
-	secret, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		fmt.Println("❌ Failed to read secret")
+	// Ask user how they want to capture the TOTP secret
+	fmt.Println()
+	fmt.Println("How would you like to capture the TOTP secret?")
+	fmt.Println("1: Enter the secret key manually")
+	fmt.Println("2: Capture QR code from screen")
+	fmt.Print("Enter your choice (1-2): ")
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+
+	// Variable to store the secret
+	var secretStr string
+	var err error
+
+	switch choice {
+	case "1":
+		// Manual entry (original flow)
+		fmt.Println("Enter your TOTP secret key (this will not be echoed):")
+		secret, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			fmt.Println("❌ Failed to read secret")
+			os.Exit(1)
+		}
+		fmt.Println() // Add a newline after the hidden input
+
+		// Generate two consecutive TOTP codes to help with setup
+		secretStr = string(secret)
+		secretStr = strings.TrimSpace(secretStr)
+
+	case "2":
+		// QR code capture flow
+		fmt.Println("When ready, press Enter to activate screenshot mode")
+		fmt.Print("Press Enter to continue...")
+		reader.ReadString('\n')
+
+		// Capture and process the QR code
+		secretStr, err = qrcode.ScanQRCode()
+		if err != nil {
+			fmt.Printf("❌ Failed to process QR code: %v\n", err)
+			fmt.Println("Please try again with manual entry or restart the setup.")
+			os.Exit(1)
+		}
+		fmt.Println("✅ QR code successfully captured and decoded!")
+
+	default:
+		fmt.Println("❌ Invalid choice. Please run setup again and select 1 or 2.")
 		os.Exit(1)
 	}
-	fmt.Println() // Add a newline after the hidden input
-
-	// Generate two consecutive TOTP codes to help with setup
-	secretStr := string(secret)
-	secretStr = strings.TrimSpace(secretStr)
 
 	// Validate secret key format (basic check)
 	if len(secretStr) < 16 {
