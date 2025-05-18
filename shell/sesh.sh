@@ -1,77 +1,103 @@
 #!/bin/sh
 
-# This script adds sesh shell integration with argument conversion support
+# Shell integration for sesh with subshell support
+# This script provides convenience functions for working with sesh
 
+# Main sesh function that handles argument parsing
 sesh() {
-  # Convert double-dash arguments to single-dash
+  # Allow double-dash arguments for compatibility
   args=()
   while [ $# -gt 0 ]; do
     arg="$1"
     shift
 
-    # Check if the argument starts with double dash
+    # Check if the argument starts with double dash and convert to single dash if needed
     if echo "$arg" | grep -q "^--"; then
-      # Replace -- with - at the beginning
       arg=$(echo "$arg" | sed 's/^--/-/')
     fi
     args+=("$arg")
   done
 
-  # Execute with converted arguments
+  # If we're already in a sesh subshell, warn the user
+  if [ -n "$SESH_ACTIVE" ]; then
+    echo "⚠️ You are already in a sesh environment for $SESH_SERVICE" >&2
+    echo "⏳ Current credentials expire in $SESH_EXPIRY_HUMAN" >&2
+    echo "💡 Type 'exit' to leave this shell before starting a new one" >&2
+    return 1
+  fi
+
+  # Pass through to the actual sesh command
   if [ ${#args[@]} -eq 0 ]; then
-    # No arguments - activate AWS session
-    echo "🔐 Activating AWS session with MFA..." >&2
-    eval "$(command sesh)"
-
-    if [ $? -eq 0 ]; then
-      echo "✅ AWS session activated" >&2
-      return 0
-    else
-      echo "❌ Failed to activate AWS session" >&2
-      return 1
-    fi
+    # No arguments defaults to AWS with subshell
+    command sesh -service aws
   else
-    # Check first argument for special flags
-    case "${args[0]}" in
-    -help | -h | -setup | -version | -v)
-      command sesh "${args[@]}"
-      ;;
-    -profile | -p | -serial | -s | -keychain-user | -keychain-name)
-      # These are credential flags that need eval
-      echo "🔐 Activating AWS session with MFA..." >&2
-      eval "$(command sesh "${args[@]}")"
-
-      if [ $? -eq 0 ]; then
-        echo "✅ AWS session activated" >&2
-        return 0
-      else
-        echo "❌ Failed to activate AWS session" >&2
-        return 1
-      fi
-      ;;
-    *)
-      # For any other command, just pass through to sesh
-      command sesh "${args[@]}"
-      ;;
-    esac
+    command sesh "${args[@]}"
   fi
 }
 
-# Help function available if needed, but not displayed automatically
+# Display usage information for shell integration
 sesh_info() {
   cat <<EOF
 🛠️ sesh shell integration is active!
 
-Now you can simply type 'sesh' instead of 'eval "\$(sesh)"'
-  - Running 'sesh' will activate AWS credentials
-  - Running 'sesh --profile dev' will activate with a specific profile (both --flag and -flag formats work)
-  - All other sesh commands work normally
+Usage:
+  sesh                    Launch a secure subshell with AWS credentials
+  sesh -profile dev       Launch with specific AWS profile
+  sesh -service totp      Generate TOTP codes (standard output)
+  sesh -clip              Copy AWS MFA code to clipboard
+  sesh -help              Show help information
 
-Available command formats:
-  - Supports both GNU-style long options (--flag) and Go-style options (-flag)
-  - Example: 'sesh --service totp --list' and 'sesh -service totp -list' both work
+Security Features:
+  - AWS credentials are isolated in a subshell environment
+  - Credentials automatically removed when you exit the subshell
+  - Clear visual indication when using AWS credentials
+  - Protection from processes in parent shell
 
-To deactivate this integration for the current session:
-  unset -f sesh
+To deactivate shell integration for current session:
+  unset -f sesh sesh_info
 EOF
 }
+
+# Function to show current sesh status when in a subshell
+sesh_status() {
+  if [ -n "$SESH_ACTIVE" ]; then
+    echo "🔒 Active sesh session for service: $SESH_SERVICE"
+    
+    if [ -n "$SESH_EXPIRY" ]; then
+      # Calculate time remaining
+      now=$(date +%s)
+      expiry=$SESH_EXPIRY
+      remaining=$((expiry - now))
+      
+      if [ $remaining -le 0 ]; then
+        echo "⚠️ Credentials have EXPIRED!"
+      else
+        hours=$((remaining / 3600))
+        minutes=$(( (remaining % 3600) / 60 ))
+        seconds=$((remaining % 60))
+        echo "⏳ Credentials expire in: ${hours}h ${minutes}m ${seconds}s"
+      fi
+    fi
+    
+    if [ -n "$SESH_MFA_AUTHENTICATED" ]; then
+      echo "✅ MFA authentication is active"
+    fi
+    
+    if [ "$SESH_SERVICE" = "aws" ]; then
+      echo ""
+      echo "AWS Environment Variables:"
+      env | grep -E "^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)" | sed 's/=.*$/=***/'
+    fi
+  else
+    echo "❌ Not currently in a sesh environment"
+  fi
+}
+
+# Initialize shell integration
+if [ -n "$BASH_VERSION" ] || [ -n "$ZSH_VERSION" ]; then
+  # In Bash or Zsh
+  echo "🔑 sesh shell integration loaded. Type 'sesh_info' for usage information." >&2
+else
+  # Generic shell - give minimal feedback
+  echo "🔑 sesh shell integration loaded." >&2
+fi

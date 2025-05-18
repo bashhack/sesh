@@ -16,7 +16,7 @@ var (
 func main() {
 	// Set up global usage handlers for -h flag
 	flag.Usage = printUsage
-	
+
 	app := NewDefaultApp()
 	run(app, os.Args)
 }
@@ -28,7 +28,7 @@ func run(app *App, args []string) {
 
 	// Override the usage function to use our custom help
 	fs.Usage = printUsage
-	
+
 	// Also override the flag.CommandLine Usage for -h handling
 	flag.Usage = printUsage
 
@@ -133,13 +133,21 @@ func run(app *App, args []string) {
 		return
 	}
 
-	// Handle the main action: either copy to clipboard or generate credentials
+	// Handle the main action based on flags and service type
 	if *copyClipboard {
+		// For clipboard mode, just copy the value
 		if err := app.CopyToClipboard(*serviceName); err != nil {
 			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
 			app.Exit(1)
 		}
+	} else if *serviceName == "aws" {
+		// For AWS service, use subshell to provide an isolated credential environment
+		if err := app.LaunchSubshell(*serviceName); err != nil {
+			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+			app.Exit(1)
+		}
 	} else {
+		// For all other services, use the regular credential output
 		if err := app.GenerateCredentials(*serviceName); err != nil {
 			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
 			app.Exit(1)
