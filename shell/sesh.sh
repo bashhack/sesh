@@ -5,6 +5,11 @@
 
 # Main sesh function that handles argument parsing
 sesh() {
+  # Skip if we're in a subshell with integration disabled
+  if [ -n "$SESH_DISABLE_INTEGRATION" ]; then
+    echo "⚠️ sesh function disabled in subshell - use 'command sesh' to run directly" >&2
+    return 1
+  fi
   # Allow double-dash arguments for compatibility
   args=()
   while [ $# -gt 0 ]; do
@@ -47,10 +52,16 @@ Usage:
   sesh -clip              Copy AWS MFA code to clipboard
   sesh -help              Show help information
 
+Inside Subshell Commands:
+  sesh_status             Show current session status and verify credentials
+  verify_aws              Test if AWS MFA authentication is working
+  command sesh ...        Access sesh directly (bypassing shell integration)
+  exit                    Exit the secure subshell and remove credentials
+
 Security Features:
   - AWS credentials are isolated in a subshell environment
   - Credentials automatically removed when you exit the subshell
-  - Clear visual indication when using AWS credentials
+  - Clear visual indication when using AWS credentials (🔒 symbol in prompt)
   - Protection from processes in parent shell
 
 To deactivate shell integration for current session:
@@ -87,17 +98,57 @@ sesh_status() {
       echo ""
       echo "AWS Environment Variables:"
       env | grep -E "^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)" | sed 's/=.*$/=***/'
+      
+      # Verify AWS credentials work
+      echo ""
+      echo "Testing AWS credentials..."
+      if aws sts get-caller-identity >/dev/null 2>&1; then
+        echo "✅ AWS credentials are working correctly"
+        echo ""
+        echo "Your identity:"
+        aws sts get-caller-identity --query "Arn" --output text
+      else
+        echo "❌ AWS credentials test failed"
+      fi
     fi
   else
     echo "❌ Not currently in a sesh environment"
   fi
 }
 
-# Initialize shell integration
-if [ -n "$BASH_VERSION" ] || [ -n "$ZSH_VERSION" ]; then
-  # In Bash or Zsh
-  echo "🔑 sesh shell integration loaded. Type 'sesh_info' for usage information." >&2
-else
-  # Generic shell - give minimal feedback
-  echo "🔑 sesh shell integration loaded." >&2
+# Shortcut to verify AWS credentials
+verify_aws() {
+  if [ -z "$SESH_ACTIVE" ] || [ "$SESH_SERVICE" != "aws" ]; then
+    echo "❌ Not in an AWS sesh environment"
+    return 1
+  fi
+  
+  echo "Testing AWS MFA authentication..."
+  
+  # Try to access IAM information (typically requires MFA)
+  if aws iam list-account-aliases >/dev/null 2>&1; then
+    echo "✅ AWS MFA authentication VERIFIED"
+    echo "Successfully accessed IAM data that requires MFA"
+    return 0
+  else
+    echo "❓ AWS MFA status uncertain"
+    echo "Could not access IAM data - this could be due to IAM permissions rather than MFA status"
+    
+    # Show the caller identity anyway
+    echo ""
+    echo "Current identity:"
+    aws sts get-caller-identity --query "Arn" --output text
+    return 1
+  fi
+}
+
+# Initialize shell integration if not already in a sesh subshell
+if [ -z "$SESH_DISABLE_INTEGRATION" ]; then
+  if [ -n "$BASH_VERSION" ] || [ -n "$ZSH_VERSION" ]; then
+    # In Bash or Zsh
+    echo "🔑 sesh shell integration loaded. Type 'sesh_info' for usage information." >&2
+  else
+    # Generic shell - give minimal feedback
+    echo "🔑 sesh shell integration loaded." >&2
+  fi
 fi

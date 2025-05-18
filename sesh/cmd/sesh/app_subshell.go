@@ -41,6 +41,9 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	env = append(env, "SESH_ACTIVE=1")
 	env = append(env, fmt.Sprintf("SESH_SERVICE=%s", serviceName))
 	
+	// Add a variable to disable sesh shell integration in the subshell
+	env = append(env, "SESH_DISABLE_INTEGRATION=1")
+	
 	// Add expiration time for scripts to check
 	if !creds.Expiry.IsZero() {
 		expiryStr := fmt.Sprintf("SESH_EXPIRY=%d", creds.Expiry.Unix())
@@ -71,16 +74,16 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	
 	// Customize prompt based on shell type
 	if isZsh(shell) {
-		// ZSH customization
+		// ZSH customization - more prominent secure shell indicator
 		env = append(env, "SESH_ORIG_PROMPT=$PROMPT")
-		env = append(env, "PROMPT=\"%F{cyan}[sesh:%F{green}"+serviceName+"%F{cyan}]%f $PROMPT\"")
+		env = append(env, "PROMPT=\"%F{cyan}[%F{red}🔒%F{cyan}:%F{green}"+serviceName+"%F{cyan}]%f $PROMPT\"")
 	} else if isBash(shell) {
-		// Bash customization
+		// Bash customization - more prominent secure shell indicator
 		env = append(env, "SESH_ORIG_PS1=$PS1")
-		env = append(env, "PS1=\"\\[\\e[36m\\][sesh:\\[\\e[32m\\]"+serviceName+"\\[\\e[36m\\]]\\[\\e[0m\\] $PS1\"")
+		env = append(env, "PS1=\"\\[\\e[36m\\][\\[\\e[31m\\]🔒\\[\\e[36m\\]:\\[\\e[32m\\]"+serviceName+"\\[\\e[36m\\]]\\[\\e[0m\\] $PS1\"")
 	} else {
 		// Generic prompt for other shells
-		env = append(env, "PS1=\"[sesh:"+serviceName+"] $ \"")
+		env = append(env, "PS1=\"[🔒:"+serviceName+"] $ \"")
 	}
 	
 	// Create the command
@@ -96,7 +99,8 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	if creds.MFAAuthenticated {
 		fmt.Fprintf(a.Stdout, "✅ MFA-authenticated session active\n")
 	}
-	fmt.Fprintf(a.Stdout, "🚪 Exit the shell to end credential access\n\n")
+	fmt.Fprintf(a.Stdout, "🚪 Exit the shell to end credential access\n")
+	fmt.Fprintf(a.Stdout, "\n📝 Helpful commands: sesh_status, verify_aws\n\n")
 	
 	// Run the shell
 	err = cmd.Run()
