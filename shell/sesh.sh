@@ -82,7 +82,7 @@ sesh_status() {
     if [ "$SESH_SERVICE" = "aws" ]; then
       echo ""
       echo "AWS Environment Variables:"
-      env | grep -E "^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)" | sed 's/=.*$/=***/'
+      env | grep "^AWS_ACCESS_KEY_ID\|^AWS_SECRET_ACCESS_KEY\|^AWS_SESSION_TOKEN" | sed 's/=.*$/=***/'
       
       # Verify AWS credentials work
       echo ""
