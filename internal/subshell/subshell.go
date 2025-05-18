@@ -113,8 +113,8 @@ func Launch(config Config, stdout, stderr io.Writer) error {
 	}
 
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	cmd.Env = env
 
 	// Print the starting message including the welcome message from the customizer
