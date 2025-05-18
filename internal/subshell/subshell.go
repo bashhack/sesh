@@ -32,6 +32,8 @@ type ShellCustomizer interface {
 }
 
 func Launch(config Config, stdout, stderr io.Writer) error {
+	// Force debug info output to be cleared
+	os.Remove("/tmp/sesh_debug.txt")
 	debug("=== Launch function called ===")
 	debug("stdout type: %T, stderr type: %T", stdout, stderr)
 	debug("ShellCustomizer type: %T", config.ShellCustomizer)
@@ -39,7 +41,13 @@ func Launch(config Config, stdout, stderr io.Writer) error {
 		return fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
 	}
 
+	// Get a clean environment, without any ZDOTDIR or other variables that might interfere
 	env := os.Environ()
+	
+	// Filter critical environment variables that might interfere with shell behavior
+	env = filterEnv(env, "ZDOTDIR")
+	
+	debug("After filtering ZDOTDIR, environment length: %d", len(env))
 
 	for key, value := range config.Variables {
 		env = filterEnv(env, key)
@@ -122,6 +130,12 @@ func Launch(config Config, stdout, stderr io.Writer) error {
 	debug("Command environment has %d variables", len(cmd.Env))
 	debug("Command IO Setup - Stdin: %T, Stdout: %T, Stderr: %T", cmd.Stdin, cmd.Stdout, cmd.Stderr)
 	
+	// List all environment variables for debugging
+	debug("Full environment variable list (all %d):", len(cmd.Env))
+	for i, envVar := range cmd.Env {
+		debug("  [%d] %s", i, envVar)
+	}
+	
 	// Create a test script to verify function loading
 	testScript := `#!/bin/sh
 echo "Testing if zsh functions are loaded..."
@@ -187,8 +201,17 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 		}
 	}
 
+	// Get the init script with all shell functions
+	initScript := config.ShellCustomizer.GetZshInitScript()
+	
+	// Add an additional debug line at the top to confirm it's using our .zshrc
+	finalScript := "# SESH CUSTOM RC FILE - LOADING FROM: " + zshrc + "\n" + initScript
+	
+	// Write a debug file to /tmp that we can execute directly with zsh -c to test
+	os.WriteFile("/tmp/sesh_test_init.zsh", []byte(finalScript), 0755)
+	
 	// Construct zsh init script with common functions
-	if writeErr := os.WriteFile(zshrc, []byte(config.ShellCustomizer.GetZshInitScript()), 0644); writeErr != nil {
+	if writeErr := os.WriteFile(zshrc, []byte(finalScript), 0644); writeErr != nil {
 		return nil, fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 	}
 	
@@ -217,7 +240,43 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 			debug("  %s", e)
 		}
 	}
-	return exec.Command(shell), nil
+
+	// Add a direct test where we can see what's happening - does zsh actually find our .zshrc?
+	testEnv := []string{fmt.Sprintf("ZDOTDIR=%s", tmpDir)}
+	testCmd := exec.Command("zsh", "-c", "echo \"ZSH_VERSION=$ZSH_VERSION\"; echo \"ZDOTDIR=$ZDOTDIR\"; [ -f \"$ZDOTDIR/.zshrc\" ] && echo 'Found .zshrc' || echo 'No .zshrc found'; [ -f \"$ZDOTDIR/.zshrc\" ] && cat \"$ZDOTDIR/.zshrc\" | head -n1")
+	testCmd.Env = testEnv
+	testOutput, err := testCmd.CombinedOutput()
+	if err != nil {
+		debug("Test command failed: %v", err)
+	} else {
+		debug("Test command output: %s", string(testOutput))
+	}
+	
+	// Try interactive mode test as well
+	interactiveTestCmd := exec.Command("zsh", "-i", "-c", "echo \"ZSH_VERSION=$ZSH_VERSION\"; [ -f \"$ZDOTDIR/.zshrc\" ] && echo 'Found .zshrc in interactive mode' || echo 'No .zshrc found in interactive mode'; type sesh_help > /dev/null 2>&1 && echo 'sesh_help function found' || echo 'sesh_help function NOT found'")
+	interactiveTestCmd.Env = append(os.Environ(), fmt.Sprintf("ZDOTDIR=%s", tmpDir))
+	interactiveOutput, intErr := interactiveTestCmd.CombinedOutput()
+	if intErr != nil {
+		debug("Interactive test command failed: %v", intErr)
+	} else {
+		debug("Interactive test command output: %s", string(interactiveOutput))
+	}
+	
+	// Hack: Add .zprofile that forces zsh to source our .zshrc
+	zprofile := filepath.Join(tmpDir, ".zprofile")
+	zprofileContent := fmt.Sprintf(`
+# Ensure our .zshrc gets loaded
+ZDOTDIR_OVERRIDE="%s"
+if [ -f "$ZDOTDIR_OVERRIDE/.zshrc" ]; then
+  echo "Sourcing $ZDOTDIR_OVERRIDE/.zshrc"
+  source "$ZDOTDIR_OVERRIDE/.zshrc"
+fi
+`, tmpDir)
+	os.WriteFile(zprofile, []byte(zprofileContent), 0644)
+	
+	// Try again but this time use interactive mode, which seems to be required
+	// for zsh to properly load the .zprofile and .zshrc files
+	return exec.Command(shell, "-i"), nil
 }
 
 func setupBashShell(shell string, config Config, env []string) (*exec.Cmd, error) {
