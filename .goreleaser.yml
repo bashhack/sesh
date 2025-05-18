@@ -30,7 +30,6 @@ archives:
       - goos: darwin
         format: zip
     files:
-      - shell/sesh.sh
       - README.md
       - LICENSE
 

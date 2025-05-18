@@ -10,17 +10,6 @@ class Sesh < Formula
   def install
     system "make", "build"
     bin.install "sesh"
-    
-    # Install shell integration
-    share.install "shell" => "sesh"
-    
-    # Suggest shell integration in post-install
-    msg = <<~EOS
-      To enable shell integration (recommended):
-        Add the following line to your ~/.bashrc, ~/.zshrc, or equivalent:
-          source "#{HOMEBREW_PREFIX}/share/sesh/sesh.sh"
-    EOS
-    puts msg
   end
   
   test do

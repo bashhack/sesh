@@ -75,25 +75,6 @@ This guide helps you solve common issues with sesh.
 3. Ensure the MFA code is correct (time synchronization)
 4. Check for expired/revoked AWS access keys
 
-## Shell Integration Issues
-
-### "sesh command not functioning as expected"
-
-**Problem**: Shell integration isn't loaded or is conflicting.
-
-**Solutions**:
-1. Verify the integration script exists: `ls -l $(dirname $(which sesh))/../share/sesh/sesh.sh`
-2. Reload your shell: `source ~/.zshrc` or `source ~/.bashrc`
-3. Check for any function name conflicts: `type sesh`
-
-### "Shell function not evaluating credentials"
-
-**Problem**: The shell integration isn't evaluating the output.
-
-**Solutions**:
-1. Try without shell integration: `eval "$(command sesh)"`
-2. Check for quoting or escaping issues in your shell config
-
 ## System-Specific Issues
 
 ### "security command not found"

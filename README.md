@@ -174,14 +174,6 @@ Sesh requires the AWS CLI to be installed. Install it with:
 brew install awscli
 ```
 
-### Shell integration not working
-
-Make sure you've added the source line to your shell configuration file and restarted your terminal:
-
-```bash
-source "$(dirname $(which sesh))/../share/sesh/sesh.sh"
-```
-
 ## Development
 
 ### Requirements
