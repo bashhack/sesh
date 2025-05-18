@@ -72,6 +72,34 @@ func Launch(config Config, stdout, stderr io.Writer) error {
 		return fmt.Errorf("failed to set up shell: %w", shellSetupErr)
 	}
 
+	// Write debug info
+	debugFile, _ := os.OpenFile("/tmp/sesh_debug.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if debugFile != nil {
+		defer debugFile.Close()
+		fmt.Fprintf(debugFile, "=== SESH DEBUG ===\n")
+		fmt.Fprintf(debugFile, "Shell: %s\n", shell)
+		fmt.Fprintf(debugFile, "Types - stdout: %T, stderr: %T\n", stdout, stderr)
+		fmt.Fprintf(debugFile, "os.Stdout: %T, os.Stderr: %T\n", os.Stdout, os.Stderr)
+		fmt.Fprintf(debugFile, "Environment variables:\n")
+		for _, envVar := range env {
+			if len(envVar) >= 8 && envVar[:8] == "ZDOTDIR=" {
+				zdir := envVar[8:]
+				fmt.Fprintf(debugFile, "ZDOTDIR set to: %s\n", zdir)
+				zshrcPath := filepath.Join(zdir, ".zshrc")
+				fmt.Fprintf(debugFile, "Looking for .zshrc at: %s\n", zshrcPath)
+				fileContent, err := os.ReadFile(zshrcPath)
+				if err != nil {
+					fmt.Fprintf(debugFile, "Error reading .zshrc: %v\n", err)
+				} else {
+					fmt.Fprintf(debugFile, ".zshrc content begins:\n")
+					fmt.Fprintf(debugFile, "%s\n", string(fileContent))
+					fmt.Fprintf(debugFile, ".zshrc content ends\n")
+				}
+			}
+		}
+		fmt.Fprintf(debugFile, "Command args: %v\n", cmd.Args)
+	}
+
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -116,10 +144,38 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 	}
 	zshrc := filepath.Join(tmpDir, ".zshrc")
 
+	// Write debug info
+	debugFile, _ := os.OpenFile("/tmp/sesh_debug.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if debugFile != nil {
+		defer debugFile.Close()
+		fmt.Fprintf(debugFile, "=== SETUP ZSH SHELL DEBUG ===\n")
+		fmt.Fprintf(debugFile, "tmpDir: %s\n", tmpDir)
+		fmt.Fprintf(debugFile, "zshrc: %s\n", zshrc)
+		initScript := config.ShellCustomizer.GetZshInitScript()
+		fmt.Fprintf(debugFile, "Init script length: %d\n", len(initScript))
+		if len(initScript) > 100 {
+			fmt.Fprintf(debugFile, "First 100 chars: %s\n", initScript[:100])
+		} else {
+			fmt.Fprintf(debugFile, "Full init script: %s\n", initScript)
+		}
+	}
+
 	// Construct zsh init script with common functions
 	if writeErr := os.WriteFile(zshrc, []byte(config.ShellCustomizer.GetZshInitScript()), 0644); writeErr != nil {
 		return nil, fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 	}
+	
+	// Verify the .zshrc was written properly
+	if debugFile != nil {
+		fileContent, err := os.ReadFile(zshrc)
+		if err != nil {
+			fmt.Fprintf(debugFile, "Error reading back .zshrc: %v\n", err)
+		} else {
+			fmt.Fprintf(debugFile, "Actual .zshrc content after write (first 100 chars): %s\n", string(fileContent)[:100])
+			fmt.Fprintf(debugFile, "Actual .zshrc file size: %d bytes\n", len(fileContent))
+		}
+	}
+	
 	env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
 	
 	// From the original working code: just run shell without any flags
