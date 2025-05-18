@@ -112,7 +112,8 @@ PS1="(sesh:%s) $PS1"
 	fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName)
 	//err = cmd.Run()
 	//err = RunShellWithTerminalControl(shell, env)
-	err = launchInteractiveShellWithCtrlC(shell, env)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	err = launchInteractiveShellWithCtrlC(cmd)
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
@@ -197,37 +198,31 @@ func RunShellWithTerminalControl(shell string, env []string) error {
 	return err
 }
 
-func launchInteractiveShellWithCtrlC(shell string, env []string) error {
-	cmd := exec.Command(shell)
-	cmd.Env = env
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
-
-	// Start the shell process
+func launchInteractiveShellWithCtrlC(cmd *exec.Cmd) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start shell: %w", err)
 	}
 
-	// Set shell's process group as foreground process group
 	shellPid := cmd.Process.Pid
 	shellPgid, err := syscall.Getpgid(shellPid)
 	if err != nil {
 		return fmt.Errorf("failed to get pgid: %w", err)
 	}
 
-	// Assign shell process group as the terminal foreground
 	if err := unix.IoctlSetPointerInt(int(os.Stdin.Fd()), unix.TIOCSPGRP, shellPgid); err != nil {
 		return fmt.Errorf("failed to set terminal foreground process group: %w", err)
 	}
 
-	// Wait for it to finish
+	fmt.Printf("shell pid: %d\n", cmd.Process.Pid)
+	fmt.Printf("shell pgid: %d\n", shellPgid)
+
+	tpgid := syscall.Termios{}
+	syscall.Syscall(syscall.SYS_IOCTL, os.Stdin.Fd(), uintptr(syscall.TIOCGPGRP), uintptr(unsafe.Pointer(&tpgid)))
+	fmt.Printf("tty foreground pgid: %d\n", *(*int)(unsafe.Pointer(&tpgid)))
+
 	err = cmd.Wait()
 
-	// Restore parent as terminal foreground group (optional, but good hygiene)
+	// Restore terminal control to parent process group
 	parentPgid := syscall.Getpgrp()
 	_ = unix.IoctlSetPointerInt(int(os.Stdin.Fd()), unix.TIOCSPGRP, parentPgid)
 
