@@ -142,9 +142,9 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	return currentCode, nextCode, secondsLeft, nil
 }
 
-// GetCredentialsForClipboard generates only TOTP codes without AWS authentication
-// This is a dedicated method for clipboard mode to avoid the double-use of TOTP codes
-func (p *Provider) GetCredentialsForClipboard() (provider.Credentials, error) {
+// GetClipboardValue implements the ServiceProvider interface for clipboard mode
+// It generates only TOTP codes without AWS authentication to avoid the double-use of TOTP codes
+func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 	currentCode, nextCode, secondsLeft, err := p.GetTOTPCodes()
 	if err != nil {
 		return provider.Credentials{}, err

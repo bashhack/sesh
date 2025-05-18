@@ -28,6 +28,10 @@ type ServiceProvider interface {
 	// GetCredentials retrieves credentials using TOTP
 	GetCredentials() (Credentials, error)
 
+	// GetClipboardValue retrieves a value suitable for copying to clipboard
+	// This allows providers to optimize for clipboard mode (e.g., AWS only generating TOTP codes)
+	GetClipboardValue() (Credentials, error)
+
 	// ListEntries returns the list of entries for this provider
 	ListEntries() ([]ProviderEntry, error)
 
