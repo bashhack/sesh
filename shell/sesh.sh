@@ -14,6 +14,7 @@ sesh() {
   # Check if already in a sesh environment
   if [ -n "$SESH_ACTIVE" ]; then
     echo "⚠️ Already in a sesh environment" >&2
+    echo "Please exit the current sesh shell first with 'exit' or Ctrl+D" >&2
     return 1
   fi
   
@@ -48,6 +49,7 @@ Security Features:
   - Credentials automatically removed when you exit the subshell
   - Clear visual indication when using AWS credentials (🔒 symbol in prompt)
   - Protection from processes in parent shell
+  - Prevention of nested subshells for credential isolation
 
 To deactivate shell integration for current session:
   unset -f sesh sesh_info
