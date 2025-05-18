@@ -170,7 +170,7 @@ echo "🔐 Secure shell with %s credentials activated. Type 'sesh_help' for more
 			return fmt.Errorf("failed to create temp dir for zsh: %w", err)
 		}
 		zshrc := filepath.Join(tmpDir, ".zshrc")
-		
+
 		// Construct zsh init script with common functions
 		zshrcContent := fmt.Sprintf(`
 export SESH_ACTIVE=1
@@ -179,7 +179,7 @@ PROMPT="(sesh:%s) ${PROMPT}"
 
 %s
 `, serviceName, serviceName, commonFunctions)
-		
+
 		if writeErr := os.WriteFile(zshrc, []byte(zshrcContent), 0644); writeErr != nil {
 			return fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 		}
@@ -193,7 +193,7 @@ PROMPT="(sesh:%s) ${PROMPT}"
 			return fmt.Errorf("failed to create temp bashrc: %w", err)
 		}
 		defer tmpFile.Close()
-		
+
 		// Construct bash init script with common functions
 		bashrcContent := fmt.Sprintf(`
 export SESH_ACTIVE=1
@@ -202,7 +202,7 @@ PS1="(sesh:%s) $PS1"
 
 %s
 `, serviceName, serviceName, commonFunctions)
-		
+
 		if _, writeErr := tmpFile.WriteString(bashrcContent); writeErr != nil {
 			return fmt.Errorf("failed to write temp bashrc: %w", writeErr)
 		}
@@ -215,10 +215,13 @@ PS1="(sesh:%s) $PS1"
 			return fmt.Errorf("failed to create temp shellrc: %w", err)
 		}
 		defer tmpFile.Close()
-		
-		// Add basic functions
+
+		// Construct simplified version for other shells
 		shellrcContent := fmt.Sprintf(`
-# Function to show current sesh status
+export SESH_ACTIVE=1
+export SESH_SERVICE=%q
+
+# Simple subset of common functions for basic shells
 sesh_status() {
   echo "🔒 Active sesh session for service: $SESH_SERVICE"
   
@@ -240,36 +243,25 @@ sesh_status() {
   # Check AWS credentials
   if [ "$SESH_SERVICE" = "aws" ]; then
     echo ""
-    echo "AWS Environment Variables:"
-    [ -n "$AWS_ACCESS_KEY_ID" ] && echo "AWS_ACCESS_KEY_ID=***"
-    [ -n "$AWS_SECRET_ACCESS_KEY" ] && echo "AWS_SECRET_ACCESS_KEY=***"
-    [ -n "$AWS_SESSION_TOKEN" ] && echo "AWS_SESSION_TOKEN=***"
+    echo "AWS Environment Variables set"
   fi
 }
 
-# Basic AWS verification
 verify_aws() {
-  if [ "$SESH_SERVICE" != "aws" ]; then
-    echo "❌ Not in an AWS sesh environment"
-    return 1
-  fi
-  
-  echo "Testing AWS MFA authentication..."
   aws sts get-caller-identity --query "Arn" --output text
 }
 
-# Welcome message
 echo "🔐 Secure shell with %s credentials activated"
-`, serviceName)
-		
+`, serviceName, serviceName)
+
 		if _, writeErr := tmpFile.WriteString(shellrcContent); writeErr != nil {
 			return fmt.Errorf("failed to write temp shellrc: %w", writeErr)
 		}
-		
+
 		// Set environment to show the prompt
 		env = append(env, fmt.Sprintf("PS1=(sesh:%s) $ ", serviceName))
 		env = append(env, fmt.Sprintf("ENV=%s", tmpFile.Name())) // For sh shells
-		
+
 		cmd = exec.Command(shell)
 	}
 
@@ -280,28 +272,55 @@ echo "🔐 Secure shell with %s credentials activated"
 
 	fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName)
 	err = cmd.Run()
+	fmt.Fprintf(a.Stdout, "Exited secure shell\n")
+	
+	// Handle different exit scenarios gracefully
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				// Check if terminated by signal
 				if status.Signaled() {
 					sig := status.Signal()
 					if sig == syscall.SIGINT {
-						// Treat Ctrl+C as a clean exit (optional UX choice)
+						// Treat Ctrl+C as a normal exit
 						return nil
 					}
-					// Optionally print a more descriptive message
-					return fmt.Errorf("subshell terminated by signal: %s", sig)
-				} else {
-					// Non-zero exit status
-					return fmt.Errorf("subshell exited with code: %d", status.ExitStatus())
+					// For other signals, provide context but no error indicator
+					fmt.Fprintf(a.Stderr, "Shell session ended: %s\n", explainSignal(sig))
+					return nil
+				} else if status.ExitStatus() == 130 {
+					// Exit 130 is a special case - it's SIGINT, but reported as an exit code
+					// This happens in some terminals and shells
+					return nil
+				} else if status.ExitStatus() != 0 {
+					// Only report truly unexpected exit codes
+					fmt.Fprintf(a.Stderr, "Shell exited with code %d\n", status.ExitStatus())
 				}
 			}
+			// Don't return an error for common shell exit scenarios
+			return nil
 		}
-		// Unwrap unknown exit error
-		return fmt.Errorf("subshell exited with error: %w", err)
+		// Only return truly unexpected errors
+		return fmt.Errorf("subshell encountered an unexpected error: %w", err)
 	}
 
 	return nil
+}
+
+// explainSignal provides a user-friendly description of common signals
+func explainSignal(sig syscall.Signal) string {
+	switch sig {
+	case syscall.SIGINT:
+		return "interrupted (Ctrl+C)"
+	case syscall.SIGTERM:
+		return "terminated by system"
+	case syscall.SIGHUP:
+		return "terminal closed"
+	case syscall.SIGQUIT:
+		return "quit (Ctrl+\\)"
+	default:
+		return fmt.Sprintf("signal %d", sig)
+	}
 }
 
 // Helper function to filter environment variables
