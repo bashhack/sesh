@@ -116,44 +116,19 @@ func (a *App) LaunchSubshell(serviceName string) error {
 
 	fmt.Fprintf(a.Stdout, "Exited secure shell\n")
 
-	// Most shell exit scenarios are expected (Ctrl+C, Ctrl+D, exit command),
-	// so we don't need to propagate these as errors to the user.
+	// Any errors from the shell execution are expected and should not be
+	// propagated as errors to the user
 	if err != nil {
-		// ExitError is the common case (shell exited with non-zero status)
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			// For extra clarity, we can still report signals or unusual exit codes
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-				sig := status.Signal()
-				// Simple log message for signals other than common ones
-				if sig != syscall.SIGINT {
-					fmt.Fprintf(a.Stderr, "Shell session ended: %s\n", explainSignal(sig))
-				}
-			}
-			// Don't return an error for normal shell exits
+		// ExitError is normal for shells (happens on non-zero exit)
+		if _, ok := err.(*exec.ExitError); ok {
 			return nil
 		}
 		
-		// Only return truly unexpected errors (not ExitError)
+		// Only return truly unexpected errors
 		return fmt.Errorf("subshell encountered an unexpected error: %w", err)
 	}
 
 	return nil
-}
-
-// explainSignal provides a user-friendly description of common signals
-func explainSignal(sig syscall.Signal) string {
-	switch sig {
-	case syscall.SIGINT:
-		return "interrupted (Ctrl+C)"
-	case syscall.SIGTERM:
-		return "terminated by system"
-	case syscall.SIGHUP:
-		return "terminal closed"
-	case syscall.SIGQUIT:
-		return "quit (Ctrl+\\)"
-	default:
-		return fmt.Sprintf("signal %d", sig)
-	}
 }
 
 // Helper function to filter environment variables
