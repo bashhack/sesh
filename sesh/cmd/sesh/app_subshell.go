@@ -1,14 +1,9 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"github.com/bashhack/sesh/internal/aws"
+	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/subshell"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"time"
 )
 
 // LaunchSubshell launches a new shell with credentials loaded
@@ -148,16 +143,18 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	}
 
 	// Check if the provider supports subshell customization
-	var config subshell.Config
-
-	// NOTE: I'm only supporting AWS for now, but I think this could be extended
-	// to other providers in the future, so I'm casting and getting the config for now...
-	if awsP, ok := p.(*aws.Provider); ok {
-		config = awsP.Config // TODO: This obviously is not working right now, I was trying to invoke NewSubshellConfig... but I'm lost...
-	} else {
-		// For future extensibility we could add a provider.SubshellProvider interface
-		// For now, returning an error since we don't support other providers yet
+	subshellP, ok := p.(provider.SubshellProvider)
+	if !ok {
 		return fmt.Errorf("provider %s does not support subshell customization", serviceName)
+	}
+
+	// Get the subshell configuration from the provider
+	configInterface := subshellP.NewSubshellConfig(creds)
+
+	// Convert to the concrete type
+	config, ok := configInterface.(subshell.Config)
+	if !ok {
+		return fmt.Errorf("provider %s returned invalid subshell configuration", serviceName)
 	}
 
 	return subshell.Launch(config, a.Stdout, a.Stderr)

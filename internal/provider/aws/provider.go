@@ -484,7 +484,7 @@ func (p *Provider) GetMFASerial() (string, error) {
 }
 
 // NewSubshellConfig creates a subshell configuration for AWS credentials
-func (p *Provider) NewSubshellConfig(creds provider.Credentials) subshell.Config {
+func (p *Provider) NewSubshellConfig(creds provider.Credentials) interface{} {
 	return subshell.Config{
 		ServiceName:     p.Name(),
 		Variables:       creds.Variables,

@@ -72,8 +72,8 @@ func Launch(config Config, stdout, stderr *os.File) error {
 	}
 
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	cmd.Env = env
 
 	fmt.Fprintf(stdout, "Starting secure shell with %s credentials\n", config.ServiceName)
@@ -148,6 +148,8 @@ func setupFallbackShell(shell string, config Config, env []string) (*exec.Cmd, e
 	return exec.Command(shell), nil
 }
 
+// filterEnv removes any existing environment variables with the specified key
+// This ensures we don't have duplicate environment variables
 func filterEnv(env []string, key string) []string {
 	var result []string
 	prefix := key + "="
