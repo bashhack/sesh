@@ -86,6 +86,7 @@ func (p *Provider) Setup() error {
 // GetTOTPCodes retrieves only TOTP codes without performing AWS authentication
 // This is used specifically for the clipboard mode
 func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsLeft int64, err error) {
+	// TODO: This check doesn't work???
 	// Validate that service-name was not provided - it's not valid for AWS
 	flag := flag.Lookup("service-name")
 	if flag != nil && flag.Value.String() != "" {
