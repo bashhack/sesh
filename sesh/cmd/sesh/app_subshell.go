@@ -1,12 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"github.com/bashhack/sesh/internal/aws"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -116,14 +116,14 @@ func (a *App) LaunchSubshell(serviceName string) error {
 
 	fmt.Fprintf(a.Stdout, "Exited secure shell\n")
 
-	// Any errors from the shell execution are expected and should not be
-	// propagated as errors to the user
 	if err != nil {
 		// ExitError is normal for shells (happens on non-zero exit)
-		if _, ok := err.(*exec.ExitError); ok {
+		var exitError *exec.ExitError
+		if errors.As(err, &exitError) {
+			fmt.Fprintf(a.Stdout, "Subshell exited with code %d\n", exitError.ExitCode())
 			return nil
 		}
-		
+
 		// Only return truly unexpected errors
 		return fmt.Errorf("subshell encountered an unexpected error: %w", err)
 	}
