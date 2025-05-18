@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/env"
+	"github.com/bashhack/sesh/internal/subshell"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -480,6 +481,15 @@ func (p *Provider) GetMFASerial() (string, error) {
 	}
 
 	return serial, nil
+}
+
+func (p *Provider) NewSubshellConfig(creds provider.Credentials) subshell.Config {
+	return subshell.Config{
+		ServiceName:     p.Name(),
+		Variables:       creds.Variables,
+		Expiry:          creds.Expiry,
+		ShellCustomizer: &awsInternal.AWSShellCustomizer{},
+	}
 }
 
 // func (p *Provider) GetMFASerial() (string, error) {

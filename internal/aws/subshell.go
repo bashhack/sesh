@@ -177,32 +177,15 @@ echo "🔐 Secure shell with aws credentials activated"
 type AWSShellCustomizer struct{}
 
 func (c *AWSShellCustomizer) GetZshInitScript() string {
-	return `
-  export SESH_ACTIVE=1
-  export SESH_SERVICE=aws
-  PROMPT="(sesh:aws) ${PROMPT}"
-
-  # AWS-specific helper functions
-  sesh_status() {
-      # Implementation...
-  }
-
-  verify_aws() {
-      # Implementation...
-  }
-
-  sesh_help() {
-      # Implementation...
-  }
-  `
+	return ZshPrompt
 }
 
 func (c *AWSShellCustomizer) GetBashInitScript() string {
-	// Similar for Bash
+	return BashPrompt
 }
 
 func (c *AWSShellCustomizer) GetFallbackInitScript() string {
-	// Similar for other shells
+	return FallbackPrompt
 }
 
 func (c *AWSShellCustomizer) GetPromptPrefix() string {

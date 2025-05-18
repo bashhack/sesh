@@ -3,7 +3,6 @@ package subshell
 import (
 	"errors"
 	"fmt"
-	"github.com/bashhack/sesh/internal/aws"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,7 +108,7 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 	zshrc := filepath.Join(tmpDir, ".zshrc")
 
 	// Construct zsh init script with common functions
-	if writeErr := os.WriteFile(zshrc, []byte(aws.ZshPrompt), 0644); writeErr != nil {
+	if writeErr := os.WriteFile(zshrc, []byte(config.ShellCustomizer.GetZshInitScript()), 0644); writeErr != nil {
 		return nil, fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 	}
 	env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
@@ -124,7 +123,7 @@ func setupBashShell(shell string, config Config, env []string) (*exec.Cmd, error
 	}
 	defer tmpFile.Close()
 
-	if _, writeErr := tmpFile.WriteString(aws.BashPrompt); writeErr != nil {
+	if _, writeErr := tmpFile.WriteString(config.ShellCustomizer.GetBashInitScript()); writeErr != nil {
 		return nil, fmt.Errorf("failed to write temp bashrc: %w", writeErr)
 	}
 	return exec.Command(shell, "--rcfile", tmpFile.Name()), nil
@@ -138,12 +137,12 @@ func setupFallbackShell(shell string, config Config, env []string) (*exec.Cmd, e
 	}
 	defer tmpFile.Close()
 
-	if _, writeErr := tmpFile.WriteString(aws.FallbackPrompt); writeErr != nil {
+	if _, writeErr := tmpFile.WriteString(config.ShellCustomizer.GetFallbackInitScript()); writeErr != nil {
 		return nil, fmt.Errorf("failed to write temp shellrc: %w", writeErr)
 	}
 
 	// Set the environment to show the prompt
-	env = append(env, fmt.Sprintf("PS1=(sesh:%s) $ ", config.ServiceName))
+	env = append(env, fmt.Sprintf("PS1=%s$ ", config.ShellCustomizer.GetPromptPrefix()))
 	env = append(env, fmt.Sprintf("ENV=%s", tmpFile.Name())) // For sh shells
 
 	return exec.Command(shell), nil
