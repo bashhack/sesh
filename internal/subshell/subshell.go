@@ -121,7 +121,9 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 		return nil, fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 	}
 	env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
-	return exec.Command(shell, "-i"), nil
+	
+	// From the original working code: just run shell without any flags
+	return exec.Command(shell), nil
 }
 
 func setupBashShell(shell string, config Config, env []string) (*exec.Cmd, error) {
