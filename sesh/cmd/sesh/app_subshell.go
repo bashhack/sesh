@@ -68,15 +68,7 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		zshrc := filepath.Join(tmpDir, ".zshrc")
 
 		// Construct zsh init script with common functions
-		zshrcContent := fmt.Sprintf(`
-export SESH_ACTIVE=1
-export SESH_SERVICE=%q
-PROMPT="(sesh:%s) ${PROMPT}"
-
-%s
-`, serviceName, serviceName, aws.SubshellFunctions)
-
-		if writeErr := os.WriteFile(zshrc, []byte(zshrcContent), 0644); writeErr != nil {
+		if writeErr := os.WriteFile(zshrc, []byte(aws.ZshPrompt), 0644); writeErr != nil {
 			return fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 		}
 		env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
@@ -90,16 +82,7 @@ PROMPT="(sesh:%s) ${PROMPT}"
 		}
 		defer tmpFile.Close()
 
-		// Construct bash init script with common functions
-		bashrcContent := fmt.Sprintf(`
-export SESH_ACTIVE=1
-export SESH_SERVICE=%q
-PS1="(sesh:%s) $PS1"
-
-%s
-`, serviceName, serviceName, aws.SubshellFunctions)
-
-		if _, writeErr := tmpFile.WriteString(bashrcContent); writeErr != nil {
+		if _, writeErr := tmpFile.WriteString(aws.BashPrompt); writeErr != nil {
 			return fmt.Errorf("failed to write temp bashrc: %w", writeErr)
 		}
 		cmd = exec.Command(shell, "--rcfile", tmpFile.Name())
@@ -112,45 +95,7 @@ PS1="(sesh:%s) $PS1"
 		}
 		defer tmpFile.Close()
 
-		// Construct simplified version for other shells
-		shellrcContent := fmt.Sprintf(`
-export SESH_ACTIVE=1
-export SESH_SERVICE=%q
-
-# Simple subset of common functions for basic shells
-sesh_status() {
-  echo "🔒 Active sesh session for service: $SESH_SERVICE"
-  
-  if [ -n "$SESH_EXPIRY" ]; then
-    now=$(date +%%s)
-    expiry=$SESH_EXPIRY
-    remaining=$((expiry - now))
-    
-    if [ $remaining -le 0 ]; then
-      echo "⚠️ Credentials have EXPIRED!"
-    else
-      hours=$((remaining / 3600))
-      minutes=$(( (remaining %% 3600) / 60 ))
-      seconds=$((remaining %% 60))
-      echo "⏳ Credentials expire in: ${hours}h ${minutes}m ${seconds}s"
-    fi
-  fi
-  
-  # Check AWS credentials
-  if [ "$SESH_SERVICE" = "aws" ]; then
-    echo ""
-    echo "AWS Environment Variables set"
-  fi
-}
-
-verify_aws() {
-  aws sts get-caller-identity --query "Arn" --output text
-}
-
-echo "🔐 Secure shell with %s credentials activated"
-`, serviceName, serviceName)
-
-		if _, writeErr := tmpFile.WriteString(shellrcContent); writeErr != nil {
+		if _, writeErr := tmpFile.WriteString(aws.FallbackPrompt); writeErr != nil {
 			return fmt.Errorf("failed to write temp shellrc: %w", writeErr)
 		}
 

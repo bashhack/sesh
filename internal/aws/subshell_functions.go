@@ -1,6 +1,10 @@
 package aws
 
-var SubshellFunctions = `
+import "fmt"
+
+var (
+	// SubshellFunctions contains the helper function for the AWS subshell integration
+	SubshellFunctions = `
 # Function to show current sesh status
 sesh_status() {
   echo "🔒 Active sesh session for service: $SESH_SERVICE"
@@ -111,3 +115,60 @@ EOF
 # Welcome message
 echo "🔐 Secure shell with aws credentials activated. Type 'sesh_help' for more information."
 `
+
+	// ZshPrompt handles injection of the sesh:aws prompt and subshell function helpers for zsh
+	ZshPrompt = fmt.Sprintf(`
+export SESH_ACTIVE=1
+export SESH_SERVICE=aws
+PROMPT="(sesh:aws) ${PROMPT}"
+
+%s
+`, SubshellFunctions)
+
+	// BashPrompt handles injection of the sesh:aws prompt and subshell function helpers for bash
+	BashPrompt = fmt.Sprintf(`
+export SESH_ACTIVE=1
+export SESH_SERVICE=aws
+PS1="(sesh:aws) $PS1"
+
+%s
+`, SubshellFunctions)
+
+	// FallbackPrompt is a simplified version of the sesh custom shell init for shells other than bash or zsh
+	FallbackPrompt = `
+export SESH_ACTIVE=1
+export SESH_SERVICE=aws
+
+# Simple subset of common functions for basic shells
+sesh_status() {
+  echo "🔒 Active sesh session for service: $SESH_SERVICE"
+  
+  if [ -n "$SESH_EXPIRY" ]; then
+    now=$(date +%%s)
+    expiry=$SESH_EXPIRY
+    remaining=$((expiry - now))
+    
+    if [ $remaining -le 0 ]; then
+      echo "⚠️ Credentials have EXPIRED!"
+    else
+      hours=$((remaining / 3600))
+      minutes=$(( (remaining %% 3600) / 60 ))
+      seconds=$((remaining %% 60))
+      echo "⏳ Credentials expire in: ${hours}h ${minutes}m ${seconds}s"
+    fi
+  fi
+  
+  # Check AWS credentials
+  if [ "$SESH_SERVICE" = "aws" ]; then
+    echo ""
+    echo "AWS Environment Variables set"
+  fi
+}
+
+verify_aws() {
+  aws sts get-caller-identity --query "Arn" --output text
+}
+
+echo "🔐 Secure shell with aws credentials activated"
+`
+)
