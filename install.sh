@@ -65,5 +65,4 @@ fi
 
 echo ""
 echo "🚀 To get started, run:"
-echo "   sesh --setup    # First-time setup"
 echo "   sesh --help     # Show available commands and options"

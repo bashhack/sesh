@@ -16,5 +16,4 @@ fi
 
 # All checks passed
 echo "✅ sesh is properly installed!"
-echo "To get started, run: sesh --setup"
-echo "Then use: eval \"\$(sesh)\""
+echo "To get started, run: sesh --help"
