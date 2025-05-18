@@ -139,6 +139,13 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}, nil
 }
 
+// GetClipboardValue implements the ServiceProvider interface for clipboard mode
+// For TOTP, clipboard mode is the same as normal credentials
+func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
+	// TOTP is always optimized for clipboard, so just call GetCredentials
+	return p.GetCredentials()
+}
+
 // ListEntries returns all TOTP entries in the keychain
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 	entries, err := p.keychain.ListEntries(p.keyName)

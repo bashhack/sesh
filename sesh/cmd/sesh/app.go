@@ -238,11 +238,11 @@ func (a *App) CopyToClipboard(serviceName string) error {
 	//	return nil
 	//}
 
-	// Standard flow for non-AWS services
+	// Use the provider's clipboard-specific method
 	fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName)
 	startTime := time.Now()
 
-	creds, err := p.GetCredentials()
+	creds, err := p.GetClipboardValue()
 	if err != nil {
 		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
