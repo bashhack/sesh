@@ -11,7 +11,7 @@ sesh_status() {
 
   if [ -n "$SESH_EXPIRY" ]; then
     # Calculate time remaining
-    now=$(date +%%s)
+    now=$(date +%s)
     expiry=$SESH_EXPIRY
     remaining=$((expiry - now))
 
@@ -19,8 +19,8 @@ sesh_status() {
       echo "⚠️ Credentials have EXPIRED!"
     else
       hours=$((remaining / 3600))
-      minutes=$(( (remaining %% 3600) / 60 ))
-      seconds=$((remaining %% 60))
+      minutes=$(( (remaining % 3600) / 60 ))
+      seconds=$((remaining % 60))
 
       # Show remaining time
       echo "⏳ Credentials expire in: ${hours}h ${minutes}m ${seconds}s"
@@ -36,7 +36,7 @@ sesh_status() {
             progress_bar="${progress_bar}░"
           fi
         done
-        progress_bar="${progress_bar}] ${percent_remaining}%%"
+        progress_bar="${progress_bar}] ${percent_remaining}%"
         echo "   Session progress: $progress_bar"
       fi
     fi
@@ -144,7 +144,7 @@ sesh_status() {
   echo "🔒 Active sesh session for service: $SESH_SERVICE"
   
   if [ -n "$SESH_EXPIRY" ]; then
-    now=$(date +%%s)
+    now=$(date +%s)
     expiry=$SESH_EXPIRY
     remaining=$((expiry - now))
     
@@ -152,8 +152,8 @@ sesh_status() {
       echo "⚠️ Credentials have EXPIRED!"
     else
       hours=$((remaining / 3600))
-      minutes=$(( (remaining %% 3600) / 60 ))
-      seconds=$((remaining %% 60))
+      minutes=$(( (remaining % 3600) / 60 ))
+      seconds=$((remaining % 60))
       echo "⏳ Credentials expire in: ${hours}h ${minutes}m ${seconds}s"
     fi
   fi
