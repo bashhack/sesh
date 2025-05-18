@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/totp"
 	"os"
 	"os/exec"
@@ -85,33 +86,71 @@ func setupAWS() {
 	userArn = strings.TrimSpace(string(output))
 	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
 
-	// TODO:
-	// Allow choosing between QR via screencapture invocation + QR reader
-	// and manual entry of the secret key (existing)
-
 	// Guide user through creating a virtual MFA device
 	fmt.Println("📱 Let's set up a virtual MFA device for your AWS account")
 	fmt.Println("1. Log in to the AWS Console at https://console.aws.amazon.com")
 	fmt.Println("2. Navigate to IAM → Users → Your Username → Security credentials")
 	fmt.Println("3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'")
 	fmt.Println("4. Choose 'Virtual MFA device' and click 'Continue'")
-	fmt.Println("5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code")
-	fmt.Println("6. Click 'Show secret key' and copy the secret key")
-	fmt.Println()
-	fmt.Println("❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together")
-	fmt.Println()
 
-	// Get MFA secret
-	fmt.Print("Paste the secret key here (this will not be echoed): ")
-	secret, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		fmt.Println("❌ Failed to read secret")
+	// Ask user how they want to capture the MFA secret
+	fmt.Println()
+	fmt.Println("How would you like to capture the MFA secret?")
+	fmt.Println("1: Enter the secret key manually (click 'Show secret key' in AWS)")
+	fmt.Println("2: Capture QR code from screen (take a screenshot of the QR code)")
+	fmt.Print("Enter your choice (1-2): ")
+	choice, _ := reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+
+	// Variable to store the secret
+	var secretStr string
+
+	switch choice {
+	case "1":
+		// Manual entry (original flow)
+		fmt.Println("5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code")
+		fmt.Println("6. Click 'Show secret key' and copy the secret key")
+		fmt.Println()
+		fmt.Println("❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together")
+		fmt.Println()
+
+		// Get MFA secret
+		fmt.Print("Paste the secret key here (this will not be echoed): ")
+		secret, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			fmt.Println("❌ Failed to read secret")
+			os.Exit(1)
+		}
+		fmt.Println() // Add a newline after the hidden input
+
+		secretStr = string(secret)
+		secretStr = strings.TrimSpace(secretStr)
+
+	case "2":
+		// QR code capture flow
+		fmt.Println("5. Keep the QR code visible on your screen")
+		fmt.Println("6. When ready, press Enter to activate screenshot mode")
+		fmt.Println()
+		fmt.Println("❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together")
+		fmt.Println()
+		fmt.Print("Press Enter when you're ready to capture the QR code...")
+		reader.ReadString('\n')
+
+		// Take the screenshot
+		fmt.Println("📸 Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
+		var err error
+		secretStr, err = captureAndProcessQRCode()
+		if err != nil {
+			fmt.Printf("❌ Failed to process QR code: %v\n", err)
+			fmt.Println("Please try again with manual entry or restart the setup.")
+			os.Exit(1)
+		}
+		fmt.Println("✅ QR code successfully captured and decoded!")
+
+	default:
+		fmt.Println("❌ Invalid choice. Please run setup again and select 1 or 2.")
 		os.Exit(1)
 	}
-	fmt.Println() // Add a newline after the hidden input
-
-	secretStr := string(secret)
-	secretStr = strings.TrimSpace(secretStr)
 
 	// Validate secret key format (basic check)
 	if len(secretStr) < 16 {
@@ -260,6 +299,69 @@ func setupAWS() {
 }
 
 // setupGenericTOTP configures a generic TOTP service
+// captureAndProcessQRCode takes a screenshot and extracts a TOTP secret from a QR code
+func captureAndProcessQRCode() (string, error) {
+	// Create a temp file for the screenshot
+	tempFile := filepath.Join(os.TempDir(), fmt.Sprintf("sesh-qr-%d.png", time.Now().UnixNano()))
+	defer os.Remove(tempFile) // Clean up when done
+
+	// Use screencapture on macOS
+	cmd := exec.Command("screencapture", "-i", tempFile)
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("failed to capture screenshot: %w", err)
+	}
+
+	// Check if the user canceled (file would be empty or very small)
+	fileInfo, err := os.Stat(tempFile)
+	if err != nil || fileInfo.Size() < 100 {
+		return "", fmt.Errorf("screenshot capture was canceled or failed")
+	}
+
+	// Open and decode the image
+	file, err := os.Open(tempFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to open screenshot: %w", err)
+	}
+	defer file.Close()
+
+	img, err := png.Decode(file)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode image: %w", err)
+	}
+
+	// Convert to the format required by gozxing
+	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
+	if err != nil {
+		return "", fmt.Errorf("failed to process image for QR reading: %w", err)
+	}
+
+	// Set up QR code reader
+	reader := qrcode.NewQRCodeReader()
+	result, err := reader.Decode(bmp, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode QR code: %w", err)
+	}
+
+	// Extract secret from otpauth URI
+	otpauthURL := result.GetText()
+	if !strings.HasPrefix(otpauthURL, "otpauth://") {
+		return "", fmt.Errorf("not a valid otpauth URL: %s", otpauthURL)
+	}
+
+	parsedURL, err := url.Parse(otpauthURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse otpauth URL: %w", err)
+	}
+
+	query := parsedURL.Query()
+	secret := query.Get("secret")
+	if secret == "" {
+		return "", fmt.Errorf("no secret found in QR code")
+	}
+
+	return secret, nil
+}
+
 func setupGenericTOTP() {
 	reader := bufio.NewReader(os.Stdin)
 
