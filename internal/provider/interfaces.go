@@ -39,6 +39,14 @@ type ServiceProvider interface {
 	DeleteEntry(id string) error
 }
 
+// SubshellProvider is an optional interface that providers can implement
+// if they support launching a customized subshell environment
+type SubshellProvider interface {
+	// NewSubshellConfig creates a configuration for the subshell package
+	// based on the provided credentials
+	NewSubshellConfig(creds Credentials) interface{}
+}
+
 // ProviderEntry represents an entry for a specific provider
 type ProviderEntry struct {
 	Name        string // Entry name (e.g. AWS Profile or GCP Project)
