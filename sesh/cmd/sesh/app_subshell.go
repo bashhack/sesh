@@ -120,13 +120,14 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		// ExitError is the standard error type when a shell exits, whether by
 		// normal means (exit command, Ctrl+D) or signals. This is expected behavior
 		// for subshell implementations and shouldn't be reported as an error.
-		// As a parallel here, my testing of tools like `pyenv` or 
+		// In my testing, tools like Python's virtualenv have similar behavior -
+		// swallowing events like Ctrl+C, for example.
 		var exitError *exec.ExitError
 		if errors.As(err, &exitError) {
 			return nil
 		}
 
-		// Only return truly unexpected errors (not ExitError)
+		// Only return truly unexpected errors...
 		return fmt.Errorf("subshell encountered an unexpected error: %w", err)
 	}
 
