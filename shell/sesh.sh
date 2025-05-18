@@ -71,7 +71,25 @@ sesh_status() {
         hours=$((remaining / 3600))
         minutes=$(( (remaining % 3600) / 60 ))
         seconds=$((remaining % 60))
+        
+        # Show remaining time
         echo "⏳ Credentials expire in: ${hours}h ${minutes}m ${seconds}s"
+        
+        # Calculate percentage remaining if we have total duration
+        if [ -n "$SESH_TOTAL_DURATION" ] && [ $SESH_TOTAL_DURATION -gt 0 ]; then
+          percent_remaining=$(( (remaining * 100) / SESH_TOTAL_DURATION ))
+          progress_bar="["
+          filled_chars=$(( percent_remaining / 5 ))  # 20 chars = 100%
+          for i in $(seq 1 20); do
+            if [ $i -le $filled_chars ]; then
+              progress_bar="${progress_bar}█"
+            else
+              progress_bar="${progress_bar}░"
+            fi
+          done
+          progress_bar="${progress_bar}] ${percent_remaining}%"
+          echo "   Session progress: $progress_bar"
+        fi
       fi
     fi
     

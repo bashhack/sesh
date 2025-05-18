@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"time"
 )
 
 // LaunchSubshell launches a new shell with credentials loaded
@@ -33,6 +34,13 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	env = append(env, "SESH_ACTIVE=1")
 	env = append(env, fmt.Sprintf("SESH_SERVICE=%s", serviceName))
 	env = append(env, "SESH_DISABLE_INTEGRATION=1")
+	
+	// Add session timing information
+	env = append(env, fmt.Sprintf("SESH_START_TIME=%d", time.Now().Unix()))
+	if !creds.Expiry.IsZero() {
+		env = append(env, fmt.Sprintf("SESH_EXPIRY=%d", creds.Expiry.Unix()))
+		env = append(env, fmt.Sprintf("SESH_TOTAL_DURATION=%d", creds.Expiry.Unix()-time.Now().Unix()))
+	}
 
 	// Determine which shell to use
 	shell := os.Getenv("SHELL")
