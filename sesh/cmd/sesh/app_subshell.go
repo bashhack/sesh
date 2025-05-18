@@ -270,9 +270,40 @@ echo "🔐 Secure shell with %s credentials activated"
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = env
+	
+	// Configure process attributes for proper signal handling
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true, // Place the child in its own process group
+	}
 
 	fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName)
-	err = cmd.Run()
+	
+	// Start the command instead of running it
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start subshell: %w", err)
+	}
+	
+	// Set up signal forwarding
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	
+	// Handle signals in a separate goroutine
+	go func() {
+		for sig := range sigChan {
+			// Forward signal to the process group
+			if cmd.Process != nil {
+				syscall.Kill(-cmd.Process.Pid, sig.(syscall.Signal))
+			}
+		}
+	}()
+	
+	// Wait for the command to complete
+	err = cmd.Wait()
+	
+	// Stop signal handling
+	signal.Stop(sigChan)
+	close(sigChan)
+	
 	fmt.Fprintf(a.Stdout, "Exited secure shell\n")
 	
 	// Handle different exit scenarios gracefully
