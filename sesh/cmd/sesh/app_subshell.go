@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -54,7 +55,53 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	}
 
 	// Create and execute the shell command
-	cmd := exec.Command(shell)
+	//cmd := exec.Command(shell)
+
+	// Handle shell-specific init customization
+	var cmd *exec.Cmd
+
+	switch {
+	case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
+		// Create a temporary ZDOTDIR for zsh
+		tmpDir, err := os.MkdirTemp("", "sesh_zsh")
+		if err != nil {
+			return fmt.Errorf("failed to create temp dir for zsh: %w", err)
+		}
+		zshrc := filepath.Join(tmpDir, ".zshrc")
+		zshrcContent := fmt.Sprintf(`
+export SESH_ACTIVE=1
+export SESH_SERVICE=%q
+PROMPT="(sesh:%s) ${PROMPT}"
+`, serviceName, serviceName)
+		if writeErr := os.WriteFile(zshrc, []byte(zshrcContent), 0644); writeErr != nil {
+			return fmt.Errorf("failed to write temp zshrc: %w", writeErr)
+		}
+		env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
+		cmd = exec.Command(shell)
+
+	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
+		// Create a temporary rcfile for bash
+		tmpFile, err := os.CreateTemp("", "sesh_bashrc")
+		if err != nil {
+			return fmt.Errorf("failed to create temp bashrc: %w", err)
+		}
+		defer tmpFile.Close()
+		bashrcContent := fmt.Sprintf(`
+export SESH_ACTIVE=1
+export SESH_SERVICE=%q
+PS1="(sesh:%s) $PS1"
+`, serviceName, serviceName)
+		if _, writeErr := tmpFile.WriteString(bashrcContent); writeErr != nil {
+			return fmt.Errorf("failed to write temp bashrc: %w", writeErr)
+		}
+		cmd = exec.Command(shell, "--rcfile", tmpFile.Name())
+
+	default:
+		// fallback shell
+		env = append(env, fmt.Sprintf("PS1=(sesh:%s) $ ", serviceName))
+		cmd = exec.Command(shell)
+	}
+
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
