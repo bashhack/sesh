@@ -1,42 +1,27 @@
-#!/bin/sh
+#!/bin/bash
 
 # Shell integration for sesh with subshell support
 # This script provides convenience functions for working with sesh
 
-# Main sesh function that handles argument parsing
+# Simple, zero-complexity sesh wrapper
 sesh() {
-  # Skip if we're in a subshell with integration disabled
+  # Skip if we're in a subshell
   if [ -n "$SESH_DISABLE_INTEGRATION" ]; then
-    echo "⚠️ sesh function disabled in subshell - use 'command sesh' to run directly" >&2
+    echo "⚠️ sesh disabled in subshell - use 'command sesh'" >&2
     return 1
   fi
-  # Allow double-dash arguments for compatibility
-  args=()
-  while [ $# -gt 0 ]; do
-    arg="$1"
-    shift
-
-    # Check if the argument starts with double dash and convert to single dash if needed
-    if echo "$arg" | grep -q "^--"; then
-      arg=$(echo "$arg" | sed 's/^--/-/')
-    fi
-    args+=("$arg")
-  done
-
-  # If we're already in a sesh subshell, warn the user
+  
+  # Check if already in a sesh environment
   if [ -n "$SESH_ACTIVE" ]; then
-    echo "⚠️ You are already in a sesh environment for $SESH_SERVICE" >&2
-    echo "⏳ Current credentials expire in $SESH_EXPIRY_HUMAN" >&2
-    echo "💡 Type 'exit' to leave this shell before starting a new one" >&2
+    echo "⚠️ Already in a sesh environment" >&2
     return 1
   fi
-
-  # Pass through to the actual sesh command
-  if [ ${#args[@]} -eq 0 ]; then
-    # No arguments defaults to AWS with subshell
-    command sesh -service aws
+  
+  # Just direct pass-through
+  if [ $# -eq 0 ]; then
+    command sesh --service aws
   else
-    command sesh "${args[@]}"
+    command sesh "$@"
   fi
 }
 
