@@ -117,14 +117,16 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	fmt.Fprintf(a.Stdout, "Exited secure shell\n")
 
 	if err != nil {
-		// ExitError is normal for shells (happens on non-zero exit)
+		// ExitError is the standard error type when a shell exits, whether by
+		// normal means (exit command, Ctrl+D) or signals. This is expected behavior
+		// for subshell implementations and shouldn't be reported as an error.
+		// As a parallel here, my testing of tools like `pyenv` or 
 		var exitError *exec.ExitError
 		if errors.As(err, &exitError) {
-			fmt.Fprintf(a.Stdout, "Subshell exited with code %d\n", exitError.ExitCode())
 			return nil
 		}
 
-		// Only return truly unexpected errors
+		// Only return truly unexpected errors (not ExitError)
 		return fmt.Errorf("subshell encountered an unexpected error: %w", err)
 	}
 
