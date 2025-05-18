@@ -131,11 +131,12 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	
 	// Create credentials object
 	return provider.Credentials{
-		Provider:    p.Name(),
-		Expiry:      validUntil,
-		Variables:   map[string]string{"TOTP_CODE": code},
-		DisplayInfo: fmt.Sprintf("TOTP code for %s: %s (Next: %s)", displayName, code, next),
-		CopyValue:   code,
+		Provider:         p.Name(),
+		Expiry:           validUntil,
+		Variables:        map[string]string{"TOTP_CODE": code},
+		DisplayInfo:      fmt.Sprintf("TOTP code for %s: %s (Next: %s)", displayName, code, next),
+		CopyValue:        code,
+		MFAAuthenticated: false, // TOTP codes themselves aren't MFA authenticated with AWS
 	}, nil
 }
 

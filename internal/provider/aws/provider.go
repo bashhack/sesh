@@ -168,11 +168,12 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 
 	// Return credentials with just the display info and copy value
 	return provider.Credentials{
-		Provider:    p.Name(),
-		Expiry:      validUntil,
-		Variables:   map[string]string{}, // Empty map as we're not generating AWS credentials
-		DisplayInfo: displayInfo,
-		CopyValue:   currentCode, // This is what will be copied to clipboard
+		Provider:         p.Name(),
+		Expiry:           validUntil,
+		Variables:        map[string]string{}, // Empty map as we're not generating AWS credentials
+		DisplayInfo:      displayInfo,
+		CopyValue:        currentCode, // This is what will be copied to clipboard
+		MFAAuthenticated: false,       // For clipboard mode, we don't authenticate with AWS
 	}, nil
 }
 
@@ -295,10 +296,11 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 
 	// For regular credential generation, just return the basic info
 	return provider.Credentials{
-		Provider:    p.Name(),
-		Expiry:      expiryTime,
-		Variables:   envVars,
-		DisplayInfo: displayInfo,
+		Provider:         p.Name(),
+		Expiry:           expiryTime,
+		Variables:        envVars,
+		DisplayInfo:      displayInfo,
+		MFAAuthenticated: true, // If we got this far, AWS STS accepted our MFA code
 	}, nil
 }
 

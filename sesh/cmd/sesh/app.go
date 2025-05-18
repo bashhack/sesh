@@ -360,6 +360,11 @@ func (a *App) PrintCredentials(creds provider.Credentials) {
 	// First show human-readable information
 	fmt.Fprintf(a.Stdout, "⏳ Expires at: %s\n", expiryDisplay)
 
+	// Show MFA authentication status for AWS provider
+	if creds.Provider == "aws" && creds.MFAAuthenticated {
+		fmt.Fprintf(a.Stdout, "✅ MFA-authenticated session established\n")
+	}
+
 	if creds.DisplayInfo != "" {
 		fmt.Fprintf(a.Stdout, "%s\n", creds.DisplayInfo)
 	}
