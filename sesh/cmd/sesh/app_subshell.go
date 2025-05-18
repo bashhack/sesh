@@ -150,9 +150,6 @@ Commands:
 Exit Options:
   exit           Type 'exit' to leave the secure subshell
   Ctrl+D         Press Ctrl+D to send EOF and exit
-  
-Note: Ctrl+C (SIGINT) may not work as expected for exiting the subshell.
-      Please use 'exit' or Ctrl+D instead.
 
 Environment Variables:
   AWS_ACCESS_KEY_ID     - Your temporary AWS access key
@@ -278,9 +275,9 @@ echo "🔐 Secure shell with %s credentials activated"
 
 	fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName)
 	err = cmd.Run()
-	
+
 	fmt.Fprintf(a.Stdout, "Exited secure shell\n")
-	
+
 	// Handle different exit scenarios gracefully
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
