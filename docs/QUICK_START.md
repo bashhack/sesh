@@ -21,7 +21,7 @@ curl -sSL https://raw.githubusercontent.com/bashhack/sesh/main/install.sh | bash
 Run the setup wizard:
 
 ```bash
-sesh --setup
+sesh --service aws --setup
 ```
 
 Follow the on-screen instructions to:
@@ -41,31 +41,32 @@ Follow the prompts to:
 2. Optionally provide a profile name (for multiple accounts)
 3. Enter the TOTP secret key
 
-## Step 3: Enable Shell Integration
-
-Add this line to your shell configuration file (`.zshrc`, `.bashrc`, etc.):
-
-```bash
-# Add sesh shell integration
-source "$(dirname $(which sesh))/../share/sesh/sesh.sh"
-```
-
-Then reload your shell:
-
-```bash
-source ~/.zshrc  # or ~/.bashrc
-```
-
-## Step 4: Daily Use
+## Step 3: Daily Use
 
 ### For AWS Authentication
 
 ```bash
-# Default AWS profile
-sesh
+# Launch secure subshell with default AWS profile
+sesh --service aws
 
 # Or with a specific profile
-sesh --profile dev
+sesh --service aws --profile dev
+```
+
+Within the AWS subshell, you'll see a prompt indicator like `(sesh:aws) $` and have access to these special commands:
+
+```bash
+# Show session status and verify credentials
+sesh_status
+
+# Test AWS MFA authentication
+verify_aws
+
+# View available commands
+sesh_help
+
+# Exit the subshell (or use Ctrl+D)
+exit
 ```
 
 ### For Generic TOTP Services

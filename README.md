@@ -76,38 +76,20 @@ The setup wizard will:
 3. Securely store your MFA secret in macOS Keychain
 4. Provide next steps to get started
 
-### Shell Integration
-
-To enable shell integration (recommended), add this line to your shell's configuration file (`.bashrc`, `.zshrc`, etc.):
-
-```bash
-source "$(dirname $(which sesh))/../share/sesh/sesh.sh"
-```
-
-Then restart your terminal or run:
-
-```bash
-source "$(dirname $(which sesh))/../share/sesh/sesh.sh"
-```
-
-With shell integration active, you can simply type:
-
-```bash
-sesh
-```
-
-And your AWS credentials will be automatically exported to your environment.
-
 ### Daily Usage
 
-#### With Shell Integration (recommended)
-
 ```bash
-# Use default AWS profile
-sesh
+# Launch a secure subshell with AWS credentials
+sesh --service aws
 
 # Use a specific AWS profile
-sesh --profile dev
+sesh --service aws --profile dev
+
+# Generate TOTP codes for other services
+sesh --service totp --service-name github
+
+# Copy TOTP code to clipboard
+sesh --service totp --service-name github --clip
 
 # View version information
 sesh --version
@@ -116,16 +98,20 @@ sesh --version
 sesh --help
 ```
 
-#### Without Shell Integration
-
-If you prefer not to use shell integration, use the traditional method:
+When using the AWS subshell, you'll get a visual indicator in your prompt showing you're in a secure environment. Within the subshell, you have access to these commands:
 
 ```bash
-# Use default AWS profile
-eval "$(sesh)"
+# Show current session status
+sesh_status
 
-# Use a specific AWS profile
-eval "$(sesh --profile dev)"
+# Verify AWS MFA authentication
+verify_aws
+
+# Show help for subshell commands
+sesh_help
+
+# Exit the subshell (also works with Ctrl+D)
+exit
 ```
 
 ### Command-line Options
