@@ -204,8 +204,15 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 	// Get the init script with all shell functions
 	initScript := config.ShellCustomizer.GetZshInitScript()
 	
+	// Force functions to be defined in the global scope
+	// by adding the 'function' keyword and dropping the parentheses
+	// This helps ensure they're available in subshells
+	modifiedScript := strings.ReplaceAll(initScript, "sesh_status() {", "function sesh_status {")
+	modifiedScript = strings.ReplaceAll(modifiedScript, "verify_aws() {", "function verify_aws {")
+	modifiedScript = strings.ReplaceAll(modifiedScript, "sesh_help() {", "function sesh_help {")
+	
 	// Add an additional debug line at the top to confirm it's using our .zshrc
-	finalScript := "# SESH CUSTOM RC FILE - LOADING FROM: " + zshrc + "\n" + initScript
+	finalScript := "# SESH CUSTOM RC FILE - LOADING FROM: " + zshrc + "\n" + modifiedScript
 	
 	// Write a debug file to /tmp that we can execute directly with zsh -c to test
 	os.WriteFile("/tmp/sesh_test_init.zsh", []byte(finalScript), 0755)
@@ -262,17 +269,35 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 		debug("Interactive test command output: %s", string(interactiveOutput))
 	}
 	
-	// Hack: Add .zprofile that forces zsh to source our .zshrc
+	// Create a .zshenv file that will be loaded before .zshrc in all shell types
+	zshenv := filepath.Join(tmpDir, ".zshenv")
+	zshenvContent := fmt.Sprintf(`
+# Ensure our custom setup is loaded in all shells
+export SESH_INIT_DIR="%s"
+# Force ZDOTDIR to our directory to prevent it from being overridden
+export ZDOTDIR="%s"
+`, tmpDir, tmpDir)
+	os.WriteFile(zshenv, []byte(zshenvContent), 0644)
+	
+	// Add .zprofile that forces our .zshrc to be loaded
 	zprofile := filepath.Join(tmpDir, ".zprofile")
 	zprofileContent := fmt.Sprintf(`
 # Ensure our .zshrc gets loaded
-ZDOTDIR_OVERRIDE="%s"
-if [ -f "$ZDOTDIR_OVERRIDE/.zshrc" ]; then
-  echo "Sourcing $ZDOTDIR_OVERRIDE/.zshrc"
-  source "$ZDOTDIR_OVERRIDE/.zshrc"
+if [ -f "$ZDOTDIR/.zshrc" ]; then
+  source "$ZDOTDIR/.zshrc"
 fi
-`, tmpDir)
+`)
 	os.WriteFile(zprofile, []byte(zprofileContent), 0644)
+	
+	// Add a .zlogin file to provide functions after login
+	zlogin := filepath.Join(tmpDir, ".zlogin")
+	zloginContent := fmt.Sprintf(`
+# Define functions globally if they're not already defined
+if ! type sesh_help > /dev/null 2>&1; then
+  source "$ZDOTDIR/.zshrc"
+fi
+`)
+	os.WriteFile(zlogin, []byte(zloginContent), 0644)
 	
 	// Try again but this time use interactive mode, which seems to be required
 	// for zsh to properly load the .zprofile and .zshrc files
