@@ -9,6 +9,7 @@ import (
 )
 
 var execCommand = exec.Command
+
 // Default installation path as a fallback
 var seshBinaryPath = "/usr/local/bin/sesh"
 
@@ -22,20 +23,20 @@ func getCurrentExecutablePath() string {
 			return selfPath
 		}
 	}
-	
+
 	// Otherwise, check for known installation paths
 	knownPaths := []string{
 		os.ExpandEnv("$HOME/.local/bin/sesh"),
 		"/usr/local/bin/sesh",
 		"/opt/homebrew/bin/sesh",
 	}
-	
+
 	for _, path := range knownPaths {
 		if _, err := os.Stat(path); err == nil {
 			return path
 		}
 	}
-	
+
 	// Fall back to the default as a last resort
 	return seshBinaryPath
 }
@@ -58,10 +59,6 @@ func GetSecret(account, service string) (string, error) {
 		account = strings.TrimSpace(string(out))
 	}
 
-	// Debug the current binary path at time of access
-	execPath := getCurrentExecutablePath()
-	fmt.Fprintf(os.Stderr, "DEBUG: Current binary path used for keychain access: %s\n", execPath)
-	
 	cmd := execCommand("security", "find-generic-password",
 		"-a", account,
 		"-s", service,
@@ -94,13 +91,13 @@ func SetSecret(account, service, secret string) error {
 
 	// Get the current executable path at the time of access
 	execPath := getCurrentExecutablePath()
-	
+
 	// Allow only the sesh binary to access this keychain item
 	cmd := execCommand("security", "add-generic-password",
 		"-a", account,
 		"-s", service,
 		"-w", secret,
-		"-U", // Update if exists
+		"-U",           // Update if exists
 		"-T", execPath, // Only allow the sesh binary to access this item
 	)
 

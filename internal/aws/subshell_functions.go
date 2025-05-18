@@ -1,9 +1,6 @@
 package aws
 
-import "fmt"
-
-func SubshellFunctions(serviceName string) string {
-	return fmt.Sprintf(`
+var SubshellFunctions = `
 # Function to show current sesh status
 sesh_status() {
   echo "🔒 Active sesh session for service: $SESH_SERVICE"
@@ -112,6 +109,5 @@ EOF
 }
 
 # Welcome message
-echo "🔐 Secure shell with %s credentials activated. Type 'sesh_help' for more information."
-`, serviceName)
-}
+echo "🔐 Secure shell with aws credentials activated. Type 'sesh_help' for more information."
+`
