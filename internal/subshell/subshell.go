@@ -3,6 +3,7 @@ package subshell
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,7 +30,7 @@ type ShellCustomizer interface {
 	GetWelcomeMessage() string
 }
 
-func Launch(config Config, stdout, stderr *os.File) error {
+func Launch(config Config, stdout, stderr io.Writer) error {
 	if os.Getenv("SESH_ACTIVE") == "1" {
 		return fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
 	}
