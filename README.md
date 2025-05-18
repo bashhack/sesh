@@ -16,22 +16,23 @@ brew install bashhack/tap/sesh
 curl -sSL https://raw.githubusercontent.com/bashhack/sesh/main/install.sh | bash
 
 # First-time setup (only once)
-sesh --setup
+sesh --service aws --setup
 
-# Enable shell integration (in ~/.zshrc or ~/.bashrc)
-source "$(dirname $(which sesh))/../share/sesh/sesh.sh"
+# Use sesh to launch a secure subshell with AWS credentials
+sesh --service aws
 
-# Use sesh (after shell integration)
-sesh
+# Or generate TOTP codes for other services
+sesh --service totp --service-name github
 ```
 
 ## Features
 
 - 🔐 **Secure** — MFA secrets stored in macOS Keychain
 - 🚀 **Fast** — Written in Go with minimal dependencies
-- 💡 **Simple** — Just type `sesh` (with shell integration)
+- 💡 **Simple** — Easy to use subshell environment for AWS credentials
 - 🧙 **User-friendly** — Includes setup wizard with `--setup`
 - 🖥️ **macOS native** — Designed for macOS with Keychain integration
+- 🔄 **Multi-service** — Support for AWS and TOTP services
 
 ## Installation
 
