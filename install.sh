@@ -56,10 +56,6 @@ if ! command -v aws &>/dev/null; then
   echo "Please install it: https://aws.amazon.com/cli/"
 fi
 
-# Create directories for shell integration
-SHARE_DIR="$HOME/.local/share/sesh"
-mkdir -p "$SHARE_DIR"
-
 # Add to PATH automatically if using zsh and installed to ~/.local/bin
 if [[ "$SHELL" == */zsh && "$INSTALL_DIR" == "$HOME/.local/bin" && ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
   echo "# Adding ~/.local/bin to PATH for sesh" >> ~/.zshrc
@@ -67,56 +63,7 @@ if [[ "$SHELL" == */zsh && "$INSTALL_DIR" == "$HOME/.local/bin" && ":$PATH:" != 
   echo "✅ Added ~/.local/bin to PATH in ~/.zshrc"
 fi
 
-# Download shell integration
-echo "⬇️ Installing shell integration..."
-curl -sSL "https://raw.githubusercontent.com/bashhack/sesh/main/shell/sesh.sh" -o "$SHARE_DIR/sesh.sh"
-chmod +x "$SHARE_DIR/sesh.sh"
-
-echo ""
-echo "🚀 Get started with:"
-echo "  sesh --setup    # First-time setup"
-echo ""
-echo "✨ Shell integration setup:"
-echo "Where would you like to add shell integration?"
-echo "  1) ~/.zshrc"
-echo "  2) ~/.bashrc"
-echo "  3) Custom path"
-echo "  4) Skip (I'll add it manually)"
-
-read -p "Enter selection [1-4]: " SELECTION
-
-if [ "$SELECTION" = "1" ]; then
-  PROFILE="$HOME/.zshrc"
-elif [ "$SELECTION" = "2" ]; then
-  PROFILE="$HOME/.bashrc"
-elif [ "$SELECTION" = "3" ]; then
-  read -p "Enter the full path to your shell profile: " CUSTOM_PROFILE
-  PROFILE="$CUSTOM_PROFILE"
-else
-  PROFILE=""
-fi
-
-if [ "$PROFILE" != "" ]; then
-  if [ -f "$PROFILE" ]; then
-    if ! grep -q "Added by sesh shell/install" "$PROFILE"; then
-      echo "" >> "$PROFILE"
-      echo "# Added by sesh shell/install" >> "$PROFILE"
-      echo "source \"$SHARE_DIR/sesh.sh\"" >> "$PROFILE"
-      echo "✅ Shell integration added to $PROFILE"
-    else
-      echo "ℹ️ Shell integration already exists in $PROFILE"
-    fi
-  else
-    echo "⚠️ Profile file $PROFILE does not exist"
-    echo "🔐 To enable shell integration manually, add this line to your profile:"
-    echo "   source \"$SHARE_DIR/sesh.sh\""
-  fi
-else
-  echo "🔐 To enable shell integration manually, add this line to your profile:"
-  echo "   source \"$SHARE_DIR/sesh.sh\""
-fi
-
 echo ""
 echo "🚀 To get started, run:"
 echo "   sesh --setup    # First-time setup"
-echo "   sesh           # Generate credentials"
+echo "   sesh --help     # Show available commands and options"
