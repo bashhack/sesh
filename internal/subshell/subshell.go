@@ -77,7 +77,15 @@ func Launch(config Config, stdout, stderr io.Writer) error {
 	cmd.Stderr = stderr
 	cmd.Env = env
 
+	// Print the starting message including the welcome message from the customizer
 	fmt.Fprintf(stdout, "Starting secure shell with %s credentials\n", config.ServiceName)
+	if config.ShellCustomizer != nil {
+		welcomeMsg := config.ShellCustomizer.GetWelcomeMessage()
+		if welcomeMsg != "" {
+			fmt.Fprintf(stdout, "%s\n", welcomeMsg)
+		}
+	}
+	
 	err := cmd.Run()
 
 	fmt.Fprintf(stdout, "Exited secure shell\n")
