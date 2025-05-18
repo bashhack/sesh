@@ -2,12 +2,14 @@ package main
 
 import (
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 // LaunchSubshell launches a new shell with credentials loaded
@@ -106,10 +108,11 @@ PS1="(sesh:%s) $PS1"
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName)
-	err = cmd.Run()
+	//err = cmd.Run()
+	//err = RunShellWithTerminalControl(shell, env)
+	err = launchInteractiveShellWithCtrlC(shell, env)
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
@@ -144,4 +147,89 @@ func filterEnv(env []string, key string) []string {
 		}
 	}
 	return result
+}
+
+// RunShellWithTerminalControl launches an interactive subshell with terminal foreground group control
+func RunShellWithTerminalControl(shell string, env []string) error {
+	cmd := exec.Command(shell)
+	cmd.Env = env
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true, // put in new process group
+	}
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	// Set terminal foreground process group to the new shell
+	shellPid := cmd.Process.Pid
+	shellPgid, err := syscall.Getpgid(shellPid)
+	if err != nil {
+		return err
+	}
+
+	// tcsetpgrp syscall: assign terminal's foreground process group
+	_, _, errno := syscall.Syscall(
+		syscall.SYS_IOCTL,
+		os.Stdin.Fd(),
+		uintptr(syscall.TIOCSPGRP),
+		uintptr(unsafe.Pointer(&shellPgid)),
+	)
+	if errno != 0 {
+		return errno
+	}
+
+	// Wait for subshell to exit
+	err = cmd.Wait()
+
+	// Reset foreground process group to parent (optional safety)
+	parentPgid := syscall.Getpgrp()
+	syscall.Syscall(
+		syscall.SYS_IOCTL,
+		os.Stdin.Fd(),
+		uintptr(syscall.TIOCSPGRP),
+		uintptr(unsafe.Pointer(&parentPgid)),
+	)
+
+	return err
+}
+
+func launchInteractiveShellWithCtrlC(shell string, env []string) error {
+	cmd := exec.Command(shell)
+	cmd.Env = env
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+
+	// Start the shell process
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start shell: %w", err)
+	}
+
+	// Set shell's process group as foreground process group
+	shellPid := cmd.Process.Pid
+	shellPgid, err := syscall.Getpgid(shellPid)
+	if err != nil {
+		return fmt.Errorf("failed to get pgid: %w", err)
+	}
+
+	// Assign shell process group as the terminal foreground
+	if err := unix.IoctlSetPointerInt(int(os.Stdin.Fd()), unix.TIOCSPGRP, shellPgid); err != nil {
+		return fmt.Errorf("failed to set terminal foreground process group: %w", err)
+	}
+
+	// Wait for it to finish
+	err = cmd.Wait()
+
+	// Restore parent as terminal foreground group (optional, but good hygiene)
+	parentPgid := syscall.Getpgrp()
+	_ = unix.IoctlSetPointerInt(int(os.Stdin.Fd()), unix.TIOCSPGRP, parentPgid)
+
+	return err
 }
