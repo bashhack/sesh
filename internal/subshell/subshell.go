@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -31,6 +32,9 @@ type ShellCustomizer interface {
 }
 
 func Launch(config Config, stdout, stderr io.Writer) error {
+	debug("=== Launch function called ===")
+	debug("stdout type: %T, stderr type: %T", stdout, stderr)
+	debug("ShellCustomizer type: %T", config.ShellCustomizer)
 	if os.Getenv("SESH_ACTIVE") == "1" {
 		return fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
 	}
@@ -114,8 +118,29 @@ func Launch(config Config, stdout, stderr io.Writer) error {
 		}
 	}
 	
+	debug("About to run command: %v", cmd.Args)
+	debug("Command environment has %d variables", len(cmd.Env))
+	debug("Command IO Setup - Stdin: %T, Stdout: %T, Stderr: %T", cmd.Stdin, cmd.Stdout, cmd.Stderr)
+	
+	// Create a test script to verify function loading
+	testScript := `#!/bin/sh
+echo "Testing if zsh functions are loaded..."
+zsh -c "type sesh_help >/tmp/sesh_function_test.txt 2>&1 || echo 'Function not found' >/tmp/sesh_function_test.txt"
+`
+	os.WriteFile("/tmp/test_sesh_functions.sh", []byte(testScript), 0755)
+	exec.Command("/bin/sh", "/tmp/test_sesh_functions.sh").Run()
+	
 	err := cmd.Run()
-
+	
+	debug("Command has completed execution")
+	
+	// Check the test result
+	if functionTestResult, readErr := os.ReadFile("/tmp/sesh_function_test.txt"); readErr == nil {
+		debug("Function test result: %s", string(functionTestResult))
+	} else {
+		debug("Could not read function test result: %v", readErr)
+	}
+	
 	fmt.Fprintf(stdout, "Exited secure shell\n")
 
 	if err != nil {
@@ -137,6 +162,8 @@ func Launch(config Config, stdout, stderr io.Writer) error {
 }
 
 func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error) {
+	debug("=== setupZshShell called ===")
+	debug("Shell: %s", shell)
 	// Create a temporary ZDOTDIR for zsh
 	tmpDir, err := os.MkdirTemp("", "sesh_zsh")
 	if err != nil {
@@ -176,9 +203,20 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 		}
 	}
 	
+	// Filter out any existing ZDOTDIR environment variables
+	env = filterEnv(env, "ZDOTDIR")
 	env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
 	
 	// From the original working code: just run shell without any flags
+	debug("Creating command with: %s (no flags)", shell)
+	debug("ZDOTDIR environment variable set to: %s", tmpDir)
+	debug("Will try to read .zshrc from: %s", filepath.Join(tmpDir, ".zshrc"))
+	debug("Environment variables related to ZSH:")
+	for _, e := range env {
+		if strings.Contains(e, "ZSH") || strings.Contains(e, "zsh") {
+			debug("  %s", e)
+		}
+	}
 	return exec.Command(shell), nil
 }
 
@@ -226,4 +264,13 @@ func filterEnv(env []string, key string) []string {
 		}
 	}
 	return result
+}
+
+// debug writes diagnostic information to the debug file
+func debug(message string, args ...interface{}) {
+	debugFile, _ := os.OpenFile("/tmp/sesh_debug.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if debugFile != nil {
+		defer debugFile.Close()
+		fmt.Fprintf(debugFile, message+"\n", args...)
+	}
 }
