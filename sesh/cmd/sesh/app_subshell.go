@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"syscall"
 	"time"
 )
 
@@ -34,7 +35,7 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	env = append(env, "SESH_ACTIVE=1")
 	env = append(env, fmt.Sprintf("SESH_SERVICE=%s", serviceName))
 	env = append(env, "SESH_DISABLE_INTEGRATION=1")
-	
+
 	// Add session timing information
 	env = append(env, fmt.Sprintf("SESH_START_TIME=%d", time.Now().Unix()))
 	if !creds.Expiry.IsZero() {
@@ -61,9 +62,28 @@ func (a *App) LaunchSubshell(serviceName string) error {
 
 	fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName)
 	err = cmd.Run()
-	fmt.Fprintf(a.Stdout, "Exited secure shell\n")
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				if status.Signaled() {
+					sig := status.Signal()
+					if sig == syscall.SIGINT {
+						// Treat Ctrl+C as a clean exit (optional UX choice)
+						return nil
+					}
+					// Optionally print a more descriptive message
+					return fmt.Errorf("subshell terminated by signal: %s", sig)
+				} else {
+					// Non-zero exit status
+					return fmt.Errorf("subshell exited with code: %d", status.ExitStatus())
+				}
+			}
+		}
+		// Unwrap unknown exit error
+		return fmt.Errorf("subshell exited with error: %w", err)
+	}
 
-	return err
+	return nil
 }
 
 // Helper function to filter environment variables
