@@ -265,7 +265,6 @@ Please complete these steps in the AWS Console:
 		return fmt.Errorf("failed to get current user: %w", err)
 	}
 
-	// Use the profile name for the keychain service name
 	var serviceName string
 	if profile == "" {
 		// For the default profile, use "default" as the profile name
