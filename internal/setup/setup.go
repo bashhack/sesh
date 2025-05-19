@@ -67,16 +67,18 @@ func (h *AWSSetupHandler) Setup() error {
 	userArn = strings.TrimSpace(string(output))
 	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
 
-	fmt.Println(`📱 Let's set up a virtual MFA device for your AWS account
-	1. Log in to the AWS Console at https://console.aws.amazon.com
-	2. Navigate to IAM → Users → Your Username → Security credentials
-	3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'
-	4. Choose 'Virtual MFA device' and click 'Continue'
+	fmt.Println(`
+📱 Let's set up a virtual MFA device for your AWS account
 
-	How would you like to capture the MFA secret?
-	1: Enter the secret key manually (click 'Show secret key' in AWS)
-	2: Capture QR code from screen (take a screenshot of the QR code)
-	Enter your choice (1-2): `)
+1. Log in to the AWS Console at https://console.aws.amazon.com
+2. Navigate to IAM → Users → Your Username → Security credentials
+3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'
+4. Choose 'Virtual MFA device' and click 'Continue'
+
+How would you like to capture the MFA secret?
+1: Enter the secret key manually (click 'Show secret key' in AWS)
+2: Capture QR code from screen (take a screenshot of the QR code)
+Enter your choice (1-2): `)
 	choice, _ := reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
@@ -84,12 +86,13 @@ func (h *AWSSetupHandler) Setup() error {
 
 	switch choice {
 	case "1": // Manual entry
-		fmt.Println(`5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code
-		6. Click 'Show secret key' and copy the secret key
+		fmt.Println(`
+5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code
+6. Click 'Show secret key' and copy the secret key
 		
-		❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
+❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
 
-		Paste the secret key here (this will not be echoed): `)
+Paste the secret key here (this will not be echoed): `)
 		secret, err := term.ReadPassword(int(syscall.Stdin))
 		if err != nil {
 			return fmt.Errorf("failed to read secret")
@@ -100,12 +103,13 @@ func (h *AWSSetupHandler) Setup() error {
 		secretStr = strings.TrimSpace(secretStr)
 
 	case "2": // QR code capture flow
-		fmt.Println(`5. Keep the QR code visible on your screen
-		6. When ready, press Enter to activate screenshot mode
+		fmt.Println(`
+5. Keep the QR code visible on your screen
+6. When ready, press Enter to activate screenshot mode
 
-		❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
+❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
 
-		Press Enter when you're ready to capture the QR code...`)
+Press Enter when you're ready to capture the QR code...`)
 		reader.ReadString('\n')
 
 		fmt.Println("📸 Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
