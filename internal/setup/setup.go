@@ -67,14 +67,12 @@ func (h *AWSSetupHandler) Setup() error {
 	userArn = strings.TrimSpace(string(output))
 	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
 
-	// Guide user through creating a virtual MFA device
-	fmt.Println("📱 Let's set up a virtual MFA device for your AWS account")
-	fmt.Println("1. Log in to the AWS Console at https://console.aws.amazon.com")
-	fmt.Println("2. Navigate to IAM → Users → Your Username → Security credentials")
-	fmt.Println("3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'")
-	fmt.Println("4. Choose 'Virtual MFA device' and click 'Continue'")
+	fmt.Println(`📱 Let's set up a virtual MFA device for your AWS account
+	1. Log in to the AWS Console at https://console.aws.amazon.com
+	2. Navigate to IAM → Users → Your Username → Security credentials
+	3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'
+	4. Choose 'Virtual MFA device' and click 'Continue'`)
 
-	// Ask user how they want to capture the MFA secret
 	fmt.Println()
 	fmt.Println("How would you like to capture the MFA secret?")
 	fmt.Println("1: Enter the secret key manually (click 'Show secret key' in AWS)")
@@ -83,12 +81,10 @@ func (h *AWSSetupHandler) Setup() error {
 	choice, _ := reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
-	// Variable to store the secret
 	var secretStr string
 
 	switch choice {
 	case "1":
-		// Manual entry (original flow)
 		fmt.Println("5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code")
 		fmt.Println("6. Click 'Show secret key' and copy the secret key")
 		fmt.Println()
@@ -395,48 +391,48 @@ func (h *TOTPSetupHandler) Setup() error {
 
 // setupAWS configures AWS-specific setup
 func setupAWS() {
-	reader := bufio.NewReader(os.Stdin)
+	//reader := bufio.NewReader(os.Stdin)
 
 	// Check if AWS CLI is installed
-	_, err := exec.LookPath("aws")
-	if err != nil {
-		fmt.Println("❌ AWS CLI not found. Please install it first: https://aws.amazon.com/cli/")
-		os.Exit(1)
-	}
+	//_, err := exec.LookPath("aws")
+	//if err != nil {
+	//	fmt.Println("❌ AWS CLI not found. Please install it first: https://aws.amazon.com/cli/")
+	//	os.Exit(1)
+	//}
 
-	fmt.Println("✅ AWS CLI is installed")
+	//fmt.Println("✅ AWS CLI is installed")
 
 	// Ask for AWS profile
-	fmt.Print("Enter AWS CLI profile name (leave empty for default): ")
-	profile, _ := reader.ReadString('\n')
-	profile = strings.TrimSpace(profile)
+	//fmt.Print("Enter AWS CLI profile name (leave empty for default): ")
+	//profile, _ := reader.ReadString('\n')
+	//profile = strings.TrimSpace(profile)
 
 	// Try to get current user's AWS ARN
-	var userArn string
-	var cmd *exec.Cmd
+	//var userArn string
+	//var cmd *exec.Cmd
 
-	if profile == "" {
-		cmd = exec.Command("aws", "sts", "get-caller-identity", "--query", "Arn", "--output", "text")
-	} else {
-		cmd = exec.Command("aws", "sts", "get-caller-identity", "--profile", profile, "--query", "Arn", "--output", "text")
-	}
+	//if profile == "" {
+	//	cmd = exec.Command("aws", "sts", "get-caller-identity", "--query", "Arn", "--output", "text")
+	//} else {
+	//	cmd = exec.Command("aws", "sts", "get-caller-identity", "--profile", profile, "--query", "Arn", "--output", "text")
+	//}
 
-	output, err := cmd.Output()
-	if err != nil {
-		fmt.Println("❌ Failed to get AWS identity. Make sure your AWS credentials are configured.")
-		fmt.Println("Run 'aws configure' first, then try again.")
-		os.Exit(1)
-	}
+	//output, err := cmd.Output()
+	//if err != nil {
+	//	fmt.Println("❌ Failed to get AWS identity. Make sure your AWS credentials are configured.")
+	//	fmt.Println("Run 'aws configure' first, then try again.")
+	//	os.Exit(1)
+	//}
 
-	userArn = strings.TrimSpace(string(output))
-	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
+	//userArn = strings.TrimSpace(string(output))
+	//fmt.Printf("✅ Found AWS identity: %s\n", userArn)
 
 	// Guide user through creating a virtual MFA device
-	fmt.Println("📱 Let's set up a virtual MFA device for your AWS account")
-	fmt.Println("1. Log in to the AWS Console at https://console.aws.amazon.com")
-	fmt.Println("2. Navigate to IAM → Users → Your Username → Security credentials")
-	fmt.Println("3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'")
-	fmt.Println("4. Choose 'Virtual MFA device' and click 'Continue'")
+	//fmt.Println("📱 Let's set up a virtual MFA device for your AWS account")
+	//fmt.Println("1. Log in to the AWS Console at https://console.aws.amazon.com")
+	//fmt.Println("2. Navigate to IAM → Users → Your Username → Security credentials")
+	//fmt.Println("3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'")
+	//fmt.Println("4. Choose 'Virtual MFA device' and click 'Continue'")
 
 	// Ask user how they want to capture the MFA secret
 	fmt.Println()
