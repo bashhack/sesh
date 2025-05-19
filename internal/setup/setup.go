@@ -238,7 +238,7 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 			fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
 			mfaArn, _ = reader.ReadString('\n')
 			mfaArn = strings.TrimSpace(mfaArn)
-			deviceFound = true // Set deviceFound to true for manual entry
+			// Manual entry completed after multiple retries
 			break mfaDeviceLoop
 		}
 
@@ -294,7 +294,7 @@ Please complete these steps in the AWS Console:
 			fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
 			mfaArn, _ = reader.ReadString('\n')
 			mfaArn = strings.TrimSpace(mfaArn)
-			deviceFound = true // Set deviceFound to true
+			// Manual ARN entry provided by user
 			break mfaDeviceLoop // Exit the loop completely
 			
 		default: // Invalid input
