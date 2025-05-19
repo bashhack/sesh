@@ -161,15 +161,17 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 	// Try to fetch MFA devices, with retries if none are found
 	maxRetries := 2
 	retryCount := 0
-
-	for {
+	var deviceFound bool = false
+	
+	mfaDeviceLoop: for {
 		if err == nil && len(strings.TrimSpace(string(mfaOutput))) > 0 {
 			// MFA devices were found, process them
 			mfaDevices := strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
 			if len(mfaDevices) == 1 {
 				mfaArn = mfaDevices[0]
 				fmt.Printf("✅ Found MFA device: %s\n", mfaArn)
-				break // Found a single device, we're done
+				deviceFound = true
+				break mfaDeviceLoop // Found a single device, we're done
 			} else {
 				fmt.Println("Found multiple MFA devices:")
 				for i, device := range mfaDevices {
@@ -203,6 +205,7 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 					if len(mfaDevices) == 1 {
 						mfaArn = mfaDevices[0]
 						fmt.Printf("✅ Found MFA device: %s\n", mfaArn)
+						break // Exit the entire for loop when we have a valid device
 					} else {
 						fmt.Println("Found multiple MFA devices:")
 						for i, device := range mfaDevices {
@@ -216,6 +219,7 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 					fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
 					mfaArn, _ = reader.ReadString('\n')
 					mfaArn = strings.TrimSpace(mfaArn)
+					break // Exit the entire for loop when we've manually entered ARN
 					
 				default:
 					// Try to parse as number
@@ -228,6 +232,7 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 					
 					mfaArn = mfaDevices[index-1]
 					fmt.Printf("✅ Selected MFA device: %s\n", mfaArn)
+					break // Exit the for loop with our selected device
 				}
 			}
 		}
