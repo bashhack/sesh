@@ -168,7 +168,7 @@ func saveEntryMetadata(entries []KeychainEntryMeta) error {
 
 	// Compress the data
 	comp := zstdEncoder.EncodeAll(jsonData, nil)
-	
+
 	// Base64 encode the compressed data to avoid binary data issues
 	b64Data := base64.StdEncoding.EncodeToString(comp)
 

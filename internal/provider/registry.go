@@ -29,12 +29,12 @@ func (r *Registry) RegisterProvider(provider ServiceProvider) {
 func (r *Registry) GetProvider(name string) (ServiceProvider, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	p, ok := r.providers[name]
 	if !ok {
 		return nil, fmt.Errorf("provider %q not found", name)
 	}
-	
+
 	return p, nil
 }
 
@@ -42,11 +42,11 @@ func (r *Registry) GetProvider(name string) (ServiceProvider, error) {
 func (r *Registry) ListProviders() []ServiceProvider {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	result := make([]ServiceProvider, 0, len(r.providers))
 	for _, p := range r.providers {
 		result = append(result, p)
 	}
-	
+
 	return result
 }

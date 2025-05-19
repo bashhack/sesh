@@ -56,10 +56,10 @@ type ProviderEntry struct {
 
 // Credentials represents generic credentials returned by a provider
 type Credentials struct {
-	Provider            string            // Provider name
-	Expiry              time.Time         // When these credentials expire
-	Variables           map[string]string // Environment variables to set
-	DisplayInfo         string            // Human-readable display information
-	CopyValue           string            // Value to copy to clipboard if requested
-	MFAAuthenticated    bool              // Whether these credentials were authenticated with MFA
+	Provider         string            // Provider name
+	Expiry           time.Time         // When these credentials expire
+	Variables        map[string]string // Environment variables to set
+	DisplayInfo      string            // Human-readable display information
+	CopyValue        string            // Value to copy to clipboard if requested
+	MFAAuthenticated bool              // Whether these credentials were authenticated with MFA
 }

@@ -9,7 +9,7 @@ type Provider interface {
 
 	// GenerateConsecutiveCodes generates two consecutive TOTP codes
 	GenerateConsecutiveCodes(secret string) (current string, next string, err error)
-	
+
 	// GenerateForTime generates a TOTP code for a specific time
 	GenerateForTime(secret string, t time.Time) (string, error)
 }

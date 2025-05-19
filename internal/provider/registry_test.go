@@ -57,14 +57,14 @@ func (p *mockProvider) DeleteEntry(id string) error {
 
 func TestRegistry_RegisterProvider(t *testing.T) {
 	registry := NewRegistry()
-	
+
 	provider1 := &mockProvider{name: "test1", description: "Test Provider 1"}
 	provider2 := &mockProvider{name: "test2", description: "Test Provider 2"}
-	
+
 	// Register providers
 	registry.RegisterProvider(provider1)
 	registry.RegisterProvider(provider2)
-	
+
 	// Test GetProvider
 	p1, err := registry.GetProvider("test1")
 	if err != nil {
@@ -73,7 +73,7 @@ func TestRegistry_RegisterProvider(t *testing.T) {
 	if p1.Name() != "test1" {
 		t.Errorf("Expected provider name 'test1', got '%s'", p1.Name())
 	}
-	
+
 	p2, err := registry.GetProvider("test2")
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -81,7 +81,7 @@ func TestRegistry_RegisterProvider(t *testing.T) {
 	if p2.Name() != "test2" {
 		t.Errorf("Expected provider name 'test2', got '%s'", p2.Name())
 	}
-	
+
 	// Test GetProvider for unknown provider
 	_, err = registry.GetProvider("unknown")
 	if err == nil {
@@ -91,30 +91,30 @@ func TestRegistry_RegisterProvider(t *testing.T) {
 
 func TestRegistry_ListProviders(t *testing.T) {
 	registry := NewRegistry()
-	
+
 	// Empty registry
 	providers := registry.ListProviders()
 	if len(providers) != 0 {
 		t.Errorf("Expected empty list, got %d providers", len(providers))
 	}
-	
+
 	// Add providers
 	provider1 := &mockProvider{name: "test1", description: "Test Provider 1"}
 	provider2 := &mockProvider{name: "test2", description: "Test Provider 2"}
-	
+
 	registry.RegisterProvider(provider1)
 	registry.RegisterProvider(provider2)
-	
+
 	// List providers
 	providers = registry.ListProviders()
 	if len(providers) != 2 {
 		t.Errorf("Expected 2 providers, got %d", len(providers))
 	}
-	
+
 	// Check if providers are in the list
 	foundProvider1 := false
 	foundProvider2 := false
-	
+
 	for _, p := range providers {
 		if p.Name() == "test1" {
 			foundProvider1 = true
@@ -123,7 +123,7 @@ func TestRegistry_ListProviders(t *testing.T) {
 			foundProvider2 = true
 		}
 	}
-	
+
 	if !foundProvider1 {
 		t.Error("Provider 'test1' not found in list")
 	}

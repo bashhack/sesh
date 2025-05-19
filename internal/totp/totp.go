@@ -29,7 +29,7 @@ func GenerateForTime(secret string, t time.Time) (string, error) {
 	opts := totp.ValidateOpts{
 		Digits: 6,
 	}
-	
+
 	code, err := totp.GenerateCodeCustom(secret, t, opts)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate TOTP for time %v: %w", t, err)

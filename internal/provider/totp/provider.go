@@ -23,7 +23,7 @@ type Provider struct {
 	keychain    keychain.Provider
 	totp        internalTotp.Provider
 	setupWizard setup.WizardRunner
-	
+
 	// Flags
 	serviceName string
 	keyUser     string
@@ -65,7 +65,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.keyUser, "keychain-user", os.Getenv("SESH_KEYCHAIN_USER"), "macOS Keychain username (optional)")
 	fs.StringVar(&p.label, "label", "", "Label to identify this TOTP entry")
 	fs.StringVar(&p.profile, "profile", "", "Profile name for the service (for multiple accounts)")
-	
+
 	defaultKeyName := os.Getenv("SESH_TOTP_KEYCHAIN_NAME")
 	if defaultKeyName == "" {
 		defaultKeyName = defaultServicePrefix
@@ -84,22 +84,22 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	if p.serviceName == "" {
 		return provider.Credentials{}, fmt.Errorf("service name is required, use --service-name flag")
 	}
-	
+
 	// Get TOTP secret from keychain
 	serviceKey := buildServiceKey(p.keyName, p.serviceName, p.profile)
-	
+
 	fmt.Fprintf(os.Stderr, "DEBUG: Accessing TOTP service '%s' with user '%s'\n", serviceKey, p.keyUser)
-	
+
 	// Try direct keychain access first
-	cmd := exec.Command("security", "find-generic-password", 
-		"-a", p.keyUser, 
+	cmd := exec.Command("security", "find-generic-password",
+		"-a", p.keyUser,
 		"-s", serviceKey,
 		"-w")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	var secret string
 	var err error
-	
+
 	if cmd.Run() == nil {
 		secret = strings.TrimSpace(stdout.String())
 	} else {
@@ -109,16 +109,16 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 			return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret for %s: %w", p.serviceName, err)
 		}
 	}
-	
+
 	// Generate TOTP code
 	code, err := p.totp.Generate(secret)
 	if err != nil {
 		return provider.Credentials{}, fmt.Errorf("could not generate TOTP code: %w", err)
 	}
-	
+
 	// Generate next code for display
 	_, next, err := p.totp.GenerateConsecutiveCodes(secret)
-	
+
 	// Calculate when this code expires (30 seconds from now, rounded to nearest 30s boundary)
 	now := time.Now().Unix()
 	validUntil := time.Unix(((now/30)+1)*30, 0)
@@ -128,7 +128,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	if p.profile != "" {
 		displayName = fmt.Sprintf("%s (%s)", p.serviceName, p.profile)
 	}
-	
+
 	// Create credentials object
 	return provider.Credentials{
 		Provider:         p.Name(),
@@ -153,33 +153,33 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list TOTP entries: %w", err)
 	}
-	
+
 	result := make([]provider.ProviderEntry, 0, len(entries))
 	for _, entry := range entries {
 		// Extract service name from the service key
 		serviceName, profile := parseServiceKey(entry.Service)
-		
+
 		// Skip entries that don't match our prefix pattern
 		if !strings.HasPrefix(entry.Service, p.keyName) {
 			continue
 		}
-		
+
 		// Format name based on whether a profile exists
 		displayName := serviceName
 		description := fmt.Sprintf("TOTP for %s", serviceName)
-		
+
 		if profile != "" {
 			displayName = fmt.Sprintf("%s (%s)", serviceName, profile)
 			description = fmt.Sprintf("TOTP for %s profile %s", serviceName, profile)
 		}
-		
+
 		result = append(result, provider.ProviderEntry{
 			Name:        displayName,
 			Description: description,
 			ID:          fmt.Sprintf("%s:%s", entry.Service, entry.Account),
 		})
 	}
-	
+
 	return result, nil
 }
 
@@ -190,9 +190,9 @@ func (p *Provider) DeleteEntry(id string) error {
 	if len(parts) != 2 {
 		return fmt.Errorf("invalid entry ID format: expected 'service:account', got %q", id)
 	}
-	
+
 	service, account := parts[0], parts[1]
-	
+
 	if account == "" {
 		var err error
 		account, err = getCurrentUser()
@@ -200,11 +200,11 @@ func (p *Provider) DeleteEntry(id string) error {
 			return fmt.Errorf("could not determine current user: %w", err)
 		}
 	}
-	
+
 	if err := p.keychain.DeleteEntry(account, service); err != nil {
 		return fmt.Errorf("failed to delete TOTP entry: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -214,7 +214,7 @@ func getCurrentUser() (string, error) {
 	if cmd != "" {
 		return cmd, nil
 	}
-	
+
 	return "", fmt.Errorf("could not determine current user")
 }
 
@@ -234,24 +234,24 @@ func parseServiceKey(serviceKey string) (serviceName, profile string) {
 	if !strings.HasPrefix(serviceKey, defaultServicePrefix+"-") {
 		return serviceKey, ""
 	}
-	
+
 	parts := strings.SplitN(serviceKey, defaultServicePrefix+"-", 2)
 	if len(parts) != 2 {
 		return serviceKey, ""
 	}
-	
+
 	remainder := parts[1]
-	
+
 	// Check if there's a profile (additional hyphen)
 	profileParts := strings.Split(remainder, "-")
 	if len(profileParts) == 1 {
 		// No profile
 		return remainder, ""
 	}
-	
+
 	// Last part is the profile, the rest is the service name
 	serviceName = strings.Join(profileParts[:len(profileParts)-1], "-")
 	profile = profileParts[len(profileParts)-1]
-	
+
 	return serviceName, profile
 }

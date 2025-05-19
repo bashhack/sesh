@@ -11,12 +11,10 @@ import (
 
 // LaunchSubshell launches a new shell with credentials loaded
 func (a *App) LaunchSubshell(serviceName string) error {
-	// Check if we're already in a sesh environment to prevent nested sessions
 	if os.Getenv("SESH_ACTIVE") == "1" {
 		return fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
 	}
 
-	// Get provider and credentials
 	p, err := a.Registry.GetProvider(serviceName)
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
@@ -27,16 +25,12 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
 
-	// Check if the provider supports subshell customization
 	subshellP, ok := p.(provider.SubshellProvider)
 	if !ok {
 		return fmt.Errorf("provider %s does not support subshell customization", serviceName)
 	}
 
-	// Get the subshell configuration from the provider
 	configInterface := subshellP.NewSubshellConfig(creds)
-
-	// Convert to the concrete type
 	config, ok := configInterface.(subshell.Config)
 	if !ok {
 		return fmt.Errorf("provider %s returned invalid subshell configuration", serviceName)

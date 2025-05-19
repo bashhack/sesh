@@ -9,22 +9,17 @@ import (
 )
 
 type Config struct {
-	ServiceName string
-	Variables   map[string]string
-	Expiry      time.Time
-
+	ServiceName     string
+	Variables       map[string]string
+	Expiry          time.Time
 	ShellCustomizer ShellCustomizer
 }
 
 type ShellCustomizer interface {
 	GetZshInitScript() string
-
 	GetBashInitScript() string
-
 	GetFallbackInitScript() string
-
 	GetPromptPrefix() string
-
 	GetWelcomeMessage() string
 }
 
@@ -37,34 +32,28 @@ type ShellConfig struct {
 }
 
 func GetShellConfig(config Config, stdout, stderr io.Writer) (*ShellConfig, error) {
-	// Create environment with credentials
 	env := os.Environ()
 
-	// Add credential variables to environment
 	for key, value := range config.Variables {
 		env = FilterEnv(env, key)
 		env = append(env, fmt.Sprintf("%s=%s", key, value))
 	}
 
-	// Add basic SESH variables
 	env = append(env, "SESH_ACTIVE=1")
 	env = append(env, fmt.Sprintf("SESH_SERVICE=%s", config.ServiceName))
 	env = append(env, "SESH_DISABLE_INTEGRATION=1")
 
-	// Add session timing information
 	env = append(env, fmt.Sprintf("SESH_START_TIME=%d", time.Now().Unix()))
 	if !config.Expiry.IsZero() {
 		env = append(env, fmt.Sprintf("SESH_EXPIRY=%d", config.Expiry.Unix()))
 		env = append(env, fmt.Sprintf("SESH_TOTAL_DURATION=%d", config.Expiry.Unix()-time.Now().Unix()))
 	}
 
-	// Determine which shell to use
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/sh"
 	}
 
-	// Handle shell-specific init customization
 	var shellArgs []string
 
 	switch {
@@ -74,7 +63,6 @@ func GetShellConfig(config Config, stdout, stderr io.Writer) (*ShellConfig, erro
 		if err != nil {
 			return nil, fmt.Errorf("failed to set up zsh shell: %w", err)
 		}
-		// No additional arguments for zsh
 	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
 		tmpFile, err := SetupBashShell(config)
 		if err != nil {
@@ -87,10 +75,8 @@ func GetShellConfig(config Config, stdout, stderr io.Writer) (*ShellConfig, erro
 		if err != nil {
 			return nil, fmt.Errorf("failed to set up fallback shell: %w", err)
 		}
-		// No additional arguments for default shell
 	}
 
-	// Return the shell configuration, letting the caller execute it
 	return &ShellConfig{
 		Shell:       shell,
 		Args:        shellArgs,

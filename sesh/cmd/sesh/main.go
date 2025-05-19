@@ -135,7 +135,6 @@ func run(app *App, args []string) {
 
 	// Handle the main action based on flags and service type
 	if *copyClipboard {
-		// For clipboard mode, just copy the value
 		if err := app.CopyToClipboard(*serviceName); err != nil {
 			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
 			app.Exit(1)

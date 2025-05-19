@@ -66,18 +66,18 @@ func TestWizardErrorHandling(t *testing.T) {
 func TestRunWizard(t *testing.T) {
 	// Save original function to restore it after test
 	originalFunc := RunWizardForService
-	
+
 	// Use a temp var to track if our mock was called
 	called := false
 	expectedService := "aws"
 	actualService := ""
-	
+
 	// Override the function for testing
 	RunWizardForService = func(serviceName string) {
 		called = true
 		actualService = serviceName
 	}
-	
+
 	// Restore original when done
 	defer func() {
 		RunWizardForService = originalFunc
@@ -90,7 +90,7 @@ func TestRunWizard(t *testing.T) {
 	if !called {
 		t.Error("RunWizard did not call RunWizardForService")
 	}
-	
+
 	if actualService != expectedService {
 		t.Errorf("Expected service name '%s', got '%s'", expectedService, actualService)
 	}
@@ -99,15 +99,15 @@ func TestRunWizard(t *testing.T) {
 func TestDefaultWizardRunnerRun(t *testing.T) {
 	// Save original function
 	originalFunc := RunWizard
-	
+
 	// Setup test vars
 	called := false
-	
+
 	// Replace with test version
 	RunWizard = func() {
 		called = true
 	}
-	
+
 	// Restore when done
 	defer func() {
 		RunWizard = originalFunc
@@ -129,15 +129,15 @@ func TestDefaultWizardRunnerRun(t *testing.T) {
 func TestDefaultWizardRunnerRunForService(t *testing.T) {
 	// Save original function
 	originalFunc := RunWizardForService
-	
+
 	// Setup test vars
 	serviceCalled := ""
-	
+
 	// Replace with test version
 	RunWizardForService = func(serviceName string) {
 		serviceCalled = serviceName
 	}
-	
+
 	// Restore when done
 	defer func() {
 		RunWizardForService = originalFunc
