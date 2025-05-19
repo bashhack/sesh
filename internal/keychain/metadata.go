@@ -173,12 +173,7 @@ func saveEntryMetadata(entries []KeychainEntryMeta) error {
 	b64Data := base64.StdEncoding.EncodeToString(comp)
 
 	// Get the path to the sesh binary for access control
-	execPath, err := os.Executable()
-	if err != nil {
-		// Fall back to standard path if executable path can't be determined
-		home, _ := os.UserHomeDir()
-		execPath = filepath.Join(home, ".local", "bin", "sesh")
-	}
+	execPath := constants.GetSeshBinaryPath()
 
 	// Use direct security command to avoid unnecessary prompts
 	// This ensures the same security settings as secrets

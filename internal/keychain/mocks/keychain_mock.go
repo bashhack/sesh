@@ -4,11 +4,14 @@ import "github.com/bashhack/sesh/internal/keychain"
 
 // MockProvider is a mock implementation of the keychain.Provider interface
 type MockProvider struct {
-	GetSecretFunc    func(account, service string) (string, error)
-	SetSecretFunc    func(account, service, secret string) error
-	GetMFASerialFunc func(account string) (string, error)
-	ListEntriesFunc  func(service string) ([]keychain.KeychainEntry, error)
-	DeleteEntryFunc  func(account, service string) error
+	GetSecretFunc           func(account, service string) (string, error)
+	SetSecretFunc           func(account, service, secret string) error
+	GetMFASerialFunc        func(account string) (string, error)
+	ListEntriesFunc         func(service string) ([]keychain.KeychainEntry, error)
+	DeleteEntryFunc         func(account, service string) error
+	StoreEntryMetadataFunc  func(servicePrefix, service, account, description string) error
+	LoadEntryMetadataFunc   func(servicePrefix string) ([]keychain.KeychainEntryMeta, error)
+	RemoveEntryMetadataFunc func(servicePrefix, service, account string) error
 }
 
 // GetSecret implements the keychain.Provider interface
@@ -34,4 +37,19 @@ func (m *MockProvider) ListEntries(service string) ([]keychain.KeychainEntry, er
 // DeleteEntry implements the keychain.Provider interface
 func (m *MockProvider) DeleteEntry(account, service string) error {
 	return m.DeleteEntryFunc(account, service)
+}
+
+// StoreEntryMetadata implements the keychain.Provider interface
+func (m *MockProvider) StoreEntryMetadata(servicePrefix, service, account, description string) error {
+	return m.StoreEntryMetadataFunc(servicePrefix, service, account, description)
+}
+
+// LoadEntryMetadata implements the keychain.Provider interface
+func (m *MockProvider) LoadEntryMetadata(servicePrefix string) ([]keychain.KeychainEntryMeta, error) {
+	return m.LoadEntryMetadataFunc(servicePrefix)
+}
+
+// RemoveEntryMetadata implements the keychain.Provider interface
+func (m *MockProvider) RemoveEntryMetadata(servicePrefix, service, account string) error {
+	return m.RemoveEntryMetadataFunc(servicePrefix, service, account)
 }

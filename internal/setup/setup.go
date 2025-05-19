@@ -223,7 +223,7 @@ func setupAWS() {
 	}
 
 	// Use our fixed binary path for consistent keychain access
-	execPath := GetSeshBinaryPath()
+	execPath := constants.GetSeshBinaryPath()
 
 	// Use security command to store secret with -T flag to restrict access
 	addCmd := exec.Command("security", "add-generic-password",
@@ -377,7 +377,7 @@ func setupGenericTOTP() {
 	}
 
 	// Use our fixed binary path for consistent keychain access
-	execPath := GetSeshBinaryPath()
+	execPath := constants.GetSeshBinaryPath()
 
 	// Build service key
 	var serviceKey string

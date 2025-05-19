@@ -16,6 +16,15 @@ type Provider interface {
 
 	// DeleteEntry deletes an entry from the keychain
 	DeleteEntry(account, service string) error
+	
+	// StoreEntryMetadata adds or updates metadata for a keychain entry
+	StoreEntryMetadata(servicePrefix, service, account, description string) error
+	
+	// LoadEntryMetadata loads metadata entries for a given service prefix
+	LoadEntryMetadata(servicePrefix string) ([]KeychainEntryMeta, error)
+	
+	// RemoveEntryMetadata removes an entry from the metadata
+	RemoveEntryMetadata(servicePrefix, service, account string) error
 }
 
 // KeychainEntry represents an entry in the keychain
@@ -54,6 +63,21 @@ func (p *DefaultProvider) ListEntries(service string) ([]KeychainEntry, error) {
 // DeleteEntry implements the Provider interface
 func (p *DefaultProvider) DeleteEntry(account, service string) error {
 	return DeleteEntry(account, service)
+}
+
+// StoreEntryMetadata implements the Provider interface
+func (p *DefaultProvider) StoreEntryMetadata(servicePrefix, service, account, description string) error {
+	return StoreEntryMetadata(servicePrefix, service, account, description)
+}
+
+// LoadEntryMetadata implements the Provider interface
+func (p *DefaultProvider) LoadEntryMetadata(servicePrefix string) ([]KeychainEntryMeta, error) {
+	return LoadEntryMetadata(servicePrefix)
+}
+
+// RemoveEntryMetadata implements the Provider interface
+func (p *DefaultProvider) RemoveEntryMetadata(servicePrefix, service, account string) error {
+	return RemoveEntryMetadata(servicePrefix, service, account)
 }
 
 // NewDefaultProvider creates a new DefaultProvider
