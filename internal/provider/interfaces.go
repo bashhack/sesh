@@ -22,8 +22,8 @@ type ServiceProvider interface {
 	// The provided flagset will be an interface that won't have nil checks
 	SetupFlags(fs FlagSet) error
 
-	// Setup runs the setup wizard for this provider
-	Setup() error
+	// GetSetupHandler returns a setup handler for this provider
+	GetSetupHandler() interface{}
 
 	// GetCredentials retrieves credentials using TOTP
 	GetCredentials() (Credentials, error)

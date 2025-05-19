@@ -25,7 +25,6 @@ type Provider struct {
 	aws         awsInternal.Provider
 	keychain    keychain.Provider
 	totp        internalTotp.Provider
-	setupWizard setup.WizardRunner
 
 	// Flags
 	profile string
@@ -41,14 +40,12 @@ func NewProvider(
 	aws awsInternal.Provider,
 	keychain keychain.Provider,
 	totp internalTotp.Provider,
-	setupWizard setup.WizardRunner,
 ) *Provider {
 	return &Provider{
-		aws:         aws,
-		keychain:    keychain,
-		totp:        totp,
-		setupWizard: setupWizard,
-		keyName:     constants.AWSServicePrefix,
+		aws:      aws,
+		keychain: keychain,
+		totp:     totp,
+		keyName:  constants.AWSServicePrefix,
 	}
 }
 
@@ -78,9 +75,9 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	return nil
 }
 
-// Setup runs the setup wizard for AWS
-func (p *Provider) Setup() error {
-	return p.setupWizard.RunForService(p.Name())
+// GetSetupHandler returns a setup handler for AWS
+func (p *Provider) GetSetupHandler() interface{} {
+	return setup.NewAWSSetupHandler(p.keychain)
 }
 
 // GetTOTPCodes retrieves only TOTP codes without performing AWS authentication

@@ -29,7 +29,7 @@ type App struct {
 	AWS          aws.Provider
 	Keychain     keychain.Provider
 	TOTP         totp.Provider
-	SetupWizard  setup.WizardRunner
+	SetupService setup.SetupService
 	ExecLookPath ExecLookPathFunc
 	Exit         ExitFunc
 	Stdout       io.Writer
@@ -61,17 +61,13 @@ func NewDefaultApp() *App {
 	
 	// Create the setup service
 	setupService := setup.NewSetupService(keychainProvider)
-	
-	// Register setup handlers
-	setupService.RegisterHandler(setup.NewAWSSetupHandler(keychainProvider))
-	setupService.RegisterHandler(setup.NewTOTPSetupHandler(keychainProvider))
 
 	app := &App{
 		Registry:     provider.NewRegistry(),
 		AWS:          aws.NewDefaultProvider(),
 		Keychain:     keychainProvider,
 		TOTP:         totp.NewDefaultProvider(),
-		SetupWizard:  setup.CreateWizardRunnerFromService(setupService),
+		SetupService: setupService,
 		ExecLookPath: exec.LookPath,
 		Exit:         os.Exit,
 		Stdout:       os.Stdout,
@@ -89,22 +85,32 @@ func NewDefaultApp() *App {
 	return app
 }
 
-// registerProviders registers all available service providers
+// registerProviders registers all available service providers and their setup handlers
 func (a *App) registerProviders() {
-	// Register AWS provider
-	a.Registry.RegisterProvider(awsProvider.NewProvider(
+	// Create AWS provider
+	awsP := awsProvider.NewProvider(
 		a.AWS,
 		a.Keychain,
 		a.TOTP,
-		a.SetupWizard,
-	))
+	)
+	
+	// Register AWS provider
+	a.Registry.RegisterProvider(awsP)
+	
+	// Register AWS setup handler
+	a.SetupService.RegisterHandler(setup.NewAWSSetupHandler(a.Keychain))
 
-	// Register generic TOTP provider
-	a.Registry.RegisterProvider(totpProvider.NewProvider(
+	// Create TOTP provider
+	totpP := totpProvider.NewProvider(
 		a.Keychain,
 		a.TOTP,
-		a.SetupWizard,
-	))
+	)
+	
+	// Register TOTP provider
+	a.Registry.RegisterProvider(totpP)
+	
+	// Register TOTP setup handler
+	a.SetupService.RegisterHandler(setup.NewTOTPSetupHandler(a.Keychain))
 }
 
 // ShowVersion displays version information
@@ -165,12 +171,7 @@ func (a *App) DeleteEntry(serviceName, entryID string) error {
 
 // RunSetup runs the setup wizard for a provider
 func (a *App) RunSetup(serviceName string) error {
-	p, err := a.Registry.GetProvider(serviceName)
-	if err != nil {
-		return fmt.Errorf("provider not found: %w", err)
-	}
-
-	return p.Setup()
+	return a.SetupService.SetupService(serviceName)
 }
 
 // GenerateCredentials gets credentials from a provider
