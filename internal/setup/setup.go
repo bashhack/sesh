@@ -175,17 +175,60 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 				for i, device := range mfaDevices {
 					fmt.Printf("%d: %s\n", i+1, device)
 				}
-				fmt.Print("Choose the MFA device you just created (1-n): ")
+				selectionPrompt:
+				fmt.Print("Choose the MFA device you just created (1-n) or 'r' to refresh/retry, 'm' to enter manually: ")
 				choice, _ := reader.ReadString('\n')
 				choice = strings.TrimSpace(choice)
-				var index int
-				fmt.Sscanf(choice, "%d", &index)
-				if index < 1 || index > len(mfaDevices) {
-					return fmt.Errorf("invalid choice")
+				
+				// Handle special options
+				switch choice {
+				case "r", "R":
+					// Refresh MFA devices list
+					fmt.Println("\n🔄 Refreshing MFA device list...")
+					if profile == "" {
+						mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
+					} else {
+						mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
+					}
+					
+					mfaOutput, err = mfaCmd.Output()
+					if err != nil || len(strings.TrimSpace(string(mfaOutput))) == 0 {
+						fmt.Println("❗ No MFA devices found after refresh.")
+						// This will take the user to the retry options after this block
+						break
+					}
+					
+					// Show updated list of devices
+					mfaDevices = strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
+					if len(mfaDevices) == 1 {
+						mfaArn = mfaDevices[0]
+						fmt.Printf("✅ Found MFA device: %s\n", mfaArn)
+					} else {
+						fmt.Println("Found multiple MFA devices:")
+						for i, device := range mfaDevices {
+							fmt.Printf("%d: %s\n", i+1, device)
+						}
+						goto selectionPrompt
+					}
+					
+				case "m", "M":
+					// Manual entry
+					fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
+					mfaArn, _ = reader.ReadString('\n')
+					mfaArn = strings.TrimSpace(mfaArn)
+					
+				default:
+					// Try to parse as number
+					var index int
+					_, err := fmt.Sscanf(choice, "%d", &index)
+					if err != nil || index < 1 || index > len(mfaDevices) {
+						fmt.Println("\n❌ Invalid choice. Please select a number from the list, 'r' to refresh, or 'm' for manual entry.")
+						goto selectionPrompt
+					}
+					
+					mfaArn = mfaDevices[index-1]
+					fmt.Printf("✅ Selected MFA device: %s\n", mfaArn)
 				}
-				mfaArn = mfaDevices[index-1]
-				fmt.Printf("✅ Selected MFA device: %s\n", mfaArn)
-				break // Selected a device from multiple options, we're done
 			}
 		}
 
