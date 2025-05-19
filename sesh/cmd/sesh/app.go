@@ -44,22 +44,10 @@ type VersionInfo struct {
 	Date    string
 }
 
-// initializeBinaryPath is kept for compatibility but is now a no-op
-// since binary path is determined at the time of keychain access
-func initializeBinaryPath() {
-	// Binary path is now determined dynamically at the time of each keychain access
-	// This ensures the correct path is always used regardless of initialization order
-}
-
 // NewDefaultApp creates a new App with default dependencies
 func NewDefaultApp() *App {
-	// Initialize binary path for keychain security
-	initializeBinaryPath()
-	
-	// Create dependencies
 	keychainProvider := keychain.NewDefaultProvider()
-	
-	// Create the setup service
+
 	setupService := setup.NewSetupService(keychainProvider)
 
 	app := &App{
@@ -79,7 +67,6 @@ func NewDefaultApp() *App {
 		},
 	}
 
-	// Register providers
 	app.registerProviders()
 
 	return app
@@ -93,10 +80,10 @@ func (a *App) registerProviders() {
 		a.Keychain,
 		a.TOTP,
 	)
-	
+
 	// Register AWS provider
 	a.Registry.RegisterProvider(awsP)
-	
+
 	// Register AWS setup handler
 	a.SetupService.RegisterHandler(setup.NewAWSSetupHandler(a.Keychain))
 
@@ -105,10 +92,10 @@ func (a *App) registerProviders() {
 		a.Keychain,
 		a.TOTP,
 	)
-	
+
 	// Register TOTP provider
 	a.Registry.RegisterProvider(totpP)
-	
+
 	// Register TOTP setup handler
 	a.SetupService.RegisterHandler(setup.NewTOTPSetupHandler(a.Keychain))
 }

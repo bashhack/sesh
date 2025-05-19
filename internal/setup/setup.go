@@ -396,32 +396,6 @@ func (h *TOTPSetupHandler) Setup() error {
 	return nil
 }
 
-// Legacy functions for backward compatibility
-// These will be removed once the new interface is fully implemented
-
-var RunWizard = runWizard
-var RunWizardForService = runWizardForService
-
-func runWizard() {
-	RunWizardForService("aws")
-}
-
-func runWizardForService(serviceName string) {
-	fmt.Println("🔐 Setting up sesh...")
-
-	provider := keychain.NewDefaultProvider()
-	service := NewSetupService(provider)
-	
-	// Register handlers
-	service.RegisterHandler(NewAWSSetupHandler(provider))
-	service.RegisterHandler(NewTOTPSetupHandler(provider))
-	
-	err := service.SetupService(serviceName)
-	if err != nil {
-		fmt.Printf("❌ %s\n", err)
-		os.Exit(1)
-	}
-}
 
 // setupAWS configures AWS-specific setup
 func setupAWS() {

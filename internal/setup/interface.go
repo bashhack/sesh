@@ -5,28 +5,6 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 )
 
-// WizardRunner defines an interface for running the setup wizard
-type WizardRunner interface {
-	RunForService(serviceName string) error
-}
-
-// serviceBasedWizardRunner is an adapter that implements WizardRunner
-// using the SetupService
-type serviceBasedWizardRunner struct {
-	service SetupService
-}
-
-// CreateWizardRunnerFromService creates a WizardRunner that uses the setup service
-func CreateWizardRunnerFromService(service SetupService) WizardRunner {
-	return &serviceBasedWizardRunner{
-		service: service,
-	}
-}
-
-// RunForService runs the setup wizard for a specific service
-func (w *serviceBasedWizardRunner) RunForService(serviceName string) error {
-	return w.service.SetupService(serviceName)
-}
 
 // SetupHandler defines a handler for a specific service setup
 type SetupHandler interface {

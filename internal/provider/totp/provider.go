@@ -22,7 +22,6 @@ const (
 type Provider struct {
 	keychain    keychain.Provider
 	totp        internalTotp.Provider
-	setupWizard setup.WizardRunner
 
 	// Flags
 	serviceName string
@@ -39,13 +38,11 @@ var _ provider.ServiceProvider = (*Provider)(nil)
 func NewProvider(
 	keychain keychain.Provider,
 	totp internalTotp.Provider,
-	setupWizard setup.WizardRunner,
 ) *Provider {
 	return &Provider{
-		keychain:    keychain,
-		totp:        totp,
-		setupWizard: setupWizard,
-		keyName:     defaultServicePrefix,
+		keychain: keychain,
+		totp:     totp,
+		keyName:  defaultServicePrefix,
 	}
 }
 
@@ -74,9 +71,9 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	return nil
 }
 
-// Setup runs the setup wizard for TOTP
-func (p *Provider) Setup() error {
-	return p.setupWizard.RunForService(p.Name())
+// GetSetupHandler returns a setup handler for TOTP
+func (p *Provider) GetSetupHandler() interface{} {
+	return setup.NewTOTPSetupHandler(p.keychain)
 }
 
 // GetCredentials generates a TOTP code
