@@ -179,7 +179,6 @@ func SetupZshShell(config Config, env []string) ([]string, error) {
 	}
 	zshrc := filepath.Join(tmpDir, ".zshrc")
 
-	// Construct zsh init script with common functions
 	if writeErr := os.WriteFile(zshrc, []byte(config.ShellCustomizer.GetZshInitScript()), 0644); writeErr != nil {
 		return []string{}, fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 	}
@@ -220,9 +219,9 @@ func SetupFallbackShell(config Config, env []string) ([]string, error) {
 	return env, nil
 }
 
-// filterEnv removes any existing environment variables with the specified key
+// FilterEnv removes any existing environment variables with the specified key
 // This ensures we don't have duplicate environment variables
-func filterEnv(env []string, key string) []string {
+func FilterEnv(env []string, key string) []string {
 	var result []string
 	prefix := key + "="
 	for _, item := range env {

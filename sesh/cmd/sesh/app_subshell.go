@@ -59,7 +59,7 @@ func (a *App) LaunchSubshell(serviceName string) error {
 
 	// Add credential variables to environment
 	for key, value := range creds.Variables {
-		env = filterEnv(env, key)
+		env = subshell.FilterEnv(env, key)
 		env = append(env, fmt.Sprintf("%s=%s", key, value))
 	}
 
@@ -207,15 +207,3 @@ func (a *App) LaunchSubshell(serviceName string) error {
 //
 //	return subshell.Launch(config, a.Stdout, a.Stderr)
 //}
-
-// // Helper function to filter environment variables
-func filterEnv(env []string, key string) []string {
-	var result []string
-	prefix := key + "="
-	for _, item := range env {
-		if len(item) < len(prefix) || item[:len(prefix)] != prefix {
-			result = append(result, item)
-		}
-	}
-	return result
-}
