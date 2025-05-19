@@ -208,11 +208,20 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 				goto selectionPrompt
 				
 			case "m", "M":
-				// Manual entry
-				fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
-				mfaArn, _ = reader.ReadString('\n')
-				mfaArn = strings.TrimSpace(mfaArn)
-				// Manual ARN entry successful
+				// Manual entry with validation
+				for {
+					fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
+					mfaArn, _ = reader.ReadString('\n')
+					mfaArn = strings.TrimSpace(mfaArn)
+					
+					if mfaArn == "" {
+						fmt.Println("\u274c MFA ARN cannot be empty. Please enter a valid ARN.")
+						continue
+					}
+					
+					// Manual ARN entry successful
+					break
+				}
 				break mfaDeviceLoop // Exit the entire loop when we've manually entered ARN
 				
 			default:
@@ -233,12 +242,22 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 
 		// No MFA devices found or error occurred
 		if retryCount >= maxRetries {
-			// We've exhausted our retries, fall back to manual entry
+			// We've exhausted our retries, fall back to manual entry with validation
 			fmt.Println("\n❗ No MFA devices found after multiple attempts. You'll need to provide your MFA ARN manually.")
-			fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
-			mfaArn, _ = reader.ReadString('\n')
-			mfaArn = strings.TrimSpace(mfaArn)
-			// Manual entry completed after multiple retries
+			
+			for {
+				fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
+				mfaArn, _ = reader.ReadString('\n')
+				mfaArn = strings.TrimSpace(mfaArn)
+				
+				if mfaArn == "" {
+					fmt.Println("\u274c MFA ARN cannot be empty. Please enter a valid ARN.")
+					continue
+				}
+				
+				// Manual entry completed after multiple retries
+				break
+			}
 			break mfaDeviceLoop
 		}
 
