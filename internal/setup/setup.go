@@ -167,22 +167,18 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 		if err == nil && len(strings.TrimSpace(string(mfaOutput))) > 0 {
 			// MFA devices were found, process them
 			mfaDevices := strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
-			if len(mfaDevices) == 1 {
-				mfaArn = mfaDevices[0]
-				fmt.Printf("✅ Found MFA device: %s\n", mfaArn)
-				deviceFound = true
-				break mfaDeviceLoop // Found a single device, we're done
-			} else {
-				fmt.Println("Found multiple MFA devices:")
-				for i, device := range mfaDevices {
-					fmt.Printf("%d: %s\n", i+1, device)
-				}
-				selectionPrompt:
-				fmt.Print("Choose the MFA device you just created (1-n) or 'r' to refresh/retry, 'm' to enter manually: ")
-				choice, _ := reader.ReadString('\n')
-				choice = strings.TrimSpace(choice)
-				
-				// Handle special options
+			// Even if there's only one device, we should ask the user to confirm it's correct
+			// This handles cases where they already had an MFA device and are setting up a new one
+			fmt.Println("Found MFA device(s):")
+			for i, device := range mfaDevices {
+				fmt.Printf("%d: %s\n", i+1, device)
+			}
+			selectionPrompt:
+			fmt.Print("Choose the MFA device you just created (1-n) or 'r' to refresh/retry, 'm' to enter manually: ")
+			choice, _ := reader.ReadString('\n')
+			choice = strings.TrimSpace(choice)
+			
+			// Handle special options
 				switch choice {
 				case "r", "R":
 					// Refresh MFA devices list
