@@ -15,13 +15,6 @@ import (
 	"syscall"
 )
 
-// GetSeshBinaryPath returns the fixed sesh binary path used for keychain access
-func GetSeshBinaryPath() string {
-	// Use a fixed path for security consistency
-	// Use the same path that's defined in keychain.go
-	return os.ExpandEnv("$HOME/.local/bin/sesh")
-}
-
 // Variables to allow testing
 
 var RunWizard = runWizard

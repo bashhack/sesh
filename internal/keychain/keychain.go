@@ -3,43 +3,13 @@ package keychain
 import (
 	"bytes"
 	"fmt"
+	"github.com/bashhack/sesh/internal/constants"
 	"os"
 	"os/exec"
 	"strings"
 )
 
 var execCommand = exec.Command
-
-// Default installation path as a fallback
-var seshBinaryPath = "/usr/local/bin/sesh"
-
-// getCurrentExecutablePath gets the path of the current binary or a valid installed path
-func getCurrentExecutablePath() string {
-	// First try os.Executable() to get the current binary path
-	selfPath, err := os.Executable()
-	if err == nil && selfPath != "" {
-		// Check if this path exists
-		if _, statErr := os.Stat(selfPath); statErr == nil {
-			return selfPath
-		}
-	}
-
-	// Otherwise, check for known installation paths
-	knownPaths := []string{
-		os.ExpandEnv("$HOME/.local/bin/sesh"),
-		"/usr/local/bin/sesh",
-		"/opt/homebrew/bin/sesh",
-	}
-
-	for _, path := range knownPaths {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-
-	// Fall back to the default as a last resort
-	return seshBinaryPath
-}
 
 // GetSecret retrieves a secret from the keychain
 func GetSecret(account, service string) (string, error) {
@@ -82,7 +52,7 @@ func SetSecret(account, service, secret string) error {
 	}
 
 	// Get the current executable path at the time of access
-	execPath := getCurrentExecutablePath()
+	execPath := constants.GetSeshBinaryPath()
 
 	// Allow only the sesh binary to access this keychain item
 	cmd := execCommand("security", "add-generic-password",
