@@ -55,13 +55,23 @@ func initializeBinaryPath() {
 func NewDefaultApp() *App {
 	// Initialize binary path for keychain security
 	initializeBinaryPath()
+	
+	// Create dependencies
+	keychainProvider := keychain.NewDefaultProvider()
+	
+	// Create the setup service
+	setupService := setup.NewSetupService(keychainProvider)
+	
+	// Register setup handlers
+	setupService.RegisterHandler(setup.NewAWSSetupHandler(keychainProvider))
+	setupService.RegisterHandler(setup.NewTOTPSetupHandler(keychainProvider))
 
 	app := &App{
 		Registry:     provider.NewRegistry(),
 		AWS:          aws.NewDefaultProvider(),
-		Keychain:     keychain.NewDefaultProvider(),
+		Keychain:     keychainProvider,
 		TOTP:         totp.NewDefaultProvider(),
-		SetupWizard:  setup.DefaultWizardRunner{},
+		SetupWizard:  setup.CreateWizardRunnerFromService(setupService),
 		ExecLookPath: exec.LookPath,
 		Exit:         os.Exit,
 		Stdout:       os.Stdout,
