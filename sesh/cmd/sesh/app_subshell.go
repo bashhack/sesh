@@ -7,16 +7,14 @@ import (
 	"github.com/bashhack/sesh/internal/subshell"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"time"
 )
 
 // LaunchSubshell launches a new shell with credentials loaded
 func (a *App) LaunchSubshell(serviceName string) error {
 	// Check if we're already in a sesh environment to prevent nested sessions
-	if os.Getenv("SESH_ACTIVE") == "1" {
-		return fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
-	}
+	//if os.Getenv("SESH_ACTIVE") == "1" {
+	//	return fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
+	//}
 
 	// Get provider and credentials
 	p, err := a.Registry.GetProvider(serviceName)
@@ -44,62 +42,73 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		return fmt.Errorf("provider %s returned invalid subshell configuration", serviceName)
 	}
 
-	// Create environment with credentials
-	env := os.Environ()
+	//// Create environment with credentials
+	//env := os.Environ()
+	//
+	//// Add credential variables to environment
+	//for key, value := range creds.Variables {
+	//	env = subshell.FilterEnv(env, key)
+	//	env = append(env, fmt.Sprintf("%s=%s", key, value))
+	//}
+	//
+	//// Add basic SESH variables
+	//env = append(env, "SESH_ACTIVE=1")
+	//env = append(env, fmt.Sprintf("SESH_SERVICE=%s", serviceName))
+	//env = append(env, "SESH_DISABLE_INTEGRATION=1")
+	//
+	//// Add session timing information
+	//env = append(env, fmt.Sprintf("SESH_START_TIME=%d", time.Now().Unix()))
+	//if !creds.Expiry.IsZero() {
+	//	env = append(env, fmt.Sprintf("SESH_EXPIRY=%d", creds.Expiry.Unix()))
+	//	env = append(env, fmt.Sprintf("SESH_TOTAL_DURATION=%d", creds.Expiry.Unix()-time.Now().Unix()))
+	//}
+	//
+	//// Determine which shell to use
+	//shell := os.Getenv("SHELL")
+	//if shell == "" {
+	//	shell = "/bin/sh"
+	//}
 
-	// Add credential variables to environment
-	for key, value := range creds.Variables {
-		env = subshell.FilterEnv(env, key)
-		env = append(env, fmt.Sprintf("%s=%s", key, value))
-	}
-
-	// Add basic SESH variables
-	env = append(env, "SESH_ACTIVE=1")
-	env = append(env, fmt.Sprintf("SESH_SERVICE=%s", serviceName))
-	env = append(env, "SESH_DISABLE_INTEGRATION=1")
-
-	// Add session timing information
-	env = append(env, fmt.Sprintf("SESH_START_TIME=%d", time.Now().Unix()))
-	if !creds.Expiry.IsZero() {
-		env = append(env, fmt.Sprintf("SESH_EXPIRY=%d", creds.Expiry.Unix()))
-		env = append(env, fmt.Sprintf("SESH_TOTAL_DURATION=%d", creds.Expiry.Unix()-time.Now().Unix()))
-	}
-
-	// Determine which shell to use
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
+	shellConfig, err := subshell.Launch(config, a.Stdout, a.Stderr)
+	if err != nil {
+		return err
 	}
 
 	// Handle shell-specific init customization
 	var cmd *exec.Cmd
 
-	switch {
-	case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
-		env, err = subshell.SetupZshShell(config, env)
-		if err != nil {
-			return fmt.Errorf("failed to set up zsh shell: %w", err)
-		}
+	//switch {
+	//case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
+	//	env, err = subshell.SetupZshShell(config, env)
+	//	if err != nil {
+	//		return fmt.Errorf("failed to set up zsh shell: %w", err)
+	//	}
+	//
+	//	cmd = exec.Command(shell)
+	//case shell == "/bin/bash" || filepath.Base(shell) == "bash":
+	//	tmpFile, err := subshell.SetupBashShell(config)
+	//	if err != nil {
+	//		return fmt.Errorf("failed to set up bash shell: %w", err)
+	//	}
+	//	cmd = exec.Command(shell, "--rcfile", tmpFile.Name())
+	//default:
+	//	env, err = subshell.SetupFallbackShell(config, env)
+	//	if err != nil {
+	//		return fmt.Errorf("failed to set up fallback shell: %w", err)
+	//	}
+	//	cmd = exec.Command(shell)
+	//}
 
-		cmd = exec.Command(shell)
-	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
-		tmpFile, err := subshell.SetupBashShell(config)
-		if err != nil {
-			return fmt.Errorf("failed to set up bash shell: %w", err)
-		}
-		cmd = exec.Command(shell, "--rcfile", tmpFile.Name())
-	default:
-		env, err = subshell.SetupFallbackShell(config, env)
-		if err != nil {
-			return fmt.Errorf("failed to set up fallback shell: %w", err)
-		}
-		cmd = exec.Command(shell)
+	if len(shellConfig.Args) > 0 {
+		cmd = exec.Command(shellConfig.Shell, shellConfig.Args...)
+	} else {
+		cmd = exec.Command(shellConfig.Shell)
 	}
 
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = env
+	cmd.Env = shellConfig.Env
 
 	fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName)
 	err = cmd.Run()

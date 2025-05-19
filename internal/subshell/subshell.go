@@ -28,8 +28,80 @@ type ShellCustomizer interface {
 	GetWelcomeMessage() string
 }
 
-func Launch(config Config, stdout, stderr io.Writer) error {
-	// TODO: Implement the logic to launch the shell with the provided config
+// ShellConfig holds the information needed to launch a shell
+type ShellConfig struct {
+	Shell        string
+	Args         []string
+	Env          []string
+	ServiceName  string
+}
+
+func Launch(config Config, stdout, stderr io.Writer) (*ShellConfig, error) {
+	// Check if we're already in a sesh environment to prevent nested sessions
+	if os.Getenv("SESH_ACTIVE") == "1" {
+		return nil, fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
+	}
+
+	// Create environment with credentials
+	env := os.Environ()
+
+	// Add credential variables to environment
+	for key, value := range config.Variables {
+		env = FilterEnv(env, key)
+		env = append(env, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	// Add basic SESH variables
+	env = append(env, "SESH_ACTIVE=1")
+	env = append(env, fmt.Sprintf("SESH_SERVICE=%s", config.ServiceName))
+	env = append(env, "SESH_DISABLE_INTEGRATION=1")
+
+	// Add session timing information
+	env = append(env, fmt.Sprintf("SESH_START_TIME=%d", time.Now().Unix()))
+	if !config.Expiry.IsZero() {
+		env = append(env, fmt.Sprintf("SESH_EXPIRY=%d", config.Expiry.Unix()))
+		env = append(env, fmt.Sprintf("SESH_TOTAL_DURATION=%d", config.Expiry.Unix()-time.Now().Unix()))
+	}
+
+	// Determine which shell to use
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+
+	// Handle shell-specific init customization
+	var shellArgs []string
+
+	switch {
+	case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
+		var err error
+		env, err = SetupZshShell(config, env)
+		if err != nil {
+			return nil, fmt.Errorf("failed to set up zsh shell: %w", err)
+		}
+		// No additional arguments for zsh
+	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
+		tmpFile, err := SetupBashShell(config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to set up bash shell: %w", err)
+		}
+		shellArgs = []string{"--rcfile", tmpFile.Name()}
+	default:
+		var err error
+		env, err = SetupFallbackShell(config, env)
+		if err != nil {
+			return nil, fmt.Errorf("failed to set up fallback shell: %w", err)
+		}
+		// No additional arguments for default shell
+	}
+
+	// Return the shell configuration, letting the caller execute it
+	return &ShellConfig{
+		Shell:       shell,
+		Args:        shellArgs,
+		Env:         env,
+		ServiceName: config.ServiceName,
+	}, nil
 }
 
 func SetupZshShell(config Config, env []string) ([]string, error) {
