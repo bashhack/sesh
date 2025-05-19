@@ -14,8 +14,8 @@ var (
 )
 
 func main() {
-	// Set up global usage handlers for -h flag
-	flag.Usage = printUsage
+	//// Set up global usage handlers for -h flag
+	//flag.Usage = printUsage // NOTE: Shouldn't need this given edit to run()
 
 	app := NewDefaultApp()
 	run(app, os.Args)

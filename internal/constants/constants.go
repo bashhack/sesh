@@ -35,12 +35,6 @@ func GetSeshBinaryPath() string {
 		"/opt/homebrew/bin/sesh",
 	}
 
-	// Otherwise, check for known installation paths for Homebrew
-	homebrewPaths := []string{
-		"/usr/local/bin/sesh",
-		"/opt/homebrew/bin/sesh",
-	}
-
 	for _, path := range knownPaths {
 		if _, err := os.Stat(path); err == nil {
 			return path
