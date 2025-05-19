@@ -51,8 +51,7 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		slog.String("provider", creds.Provider),
 		slog.String("expiry", creds.Expiry.String()),
 		slog.String("variables", fmt.Sprintf("%v", creds.Variables)),
-		slog.String("config", fmt.Sprintf
-			("%+v", config))),
+		slog.String("config", fmt.Sprintf("%+v", config)))
 
 	// Create environment with credentials
 	env := os.Environ()
@@ -83,6 +82,8 @@ func (a *App) LaunchSubshell(serviceName string) error {
 
 	// Handle shell-specific init customization
 	var cmd *exec.Cmd
+
+	subshell.Launch(config, a.Stdout, a.Stderr)
 
 	switch {
 	case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
