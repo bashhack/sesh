@@ -3,12 +3,10 @@ package subshell
 import (
 	"errors"
 	"fmt"
-	"github.com/bashhack/sesh/internal/aws"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -75,7 +73,7 @@ func Launch(config Config, stdout, stderr io.Writer) error {
 
 	switch {
 	case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
-		cmd, shellSetupErr = setupZshShell(shell, config, env)
+		cmd, shellSetupErr = SetupZshShell(shell, config, env)
 	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
 		cmd, shellSetupErr = setupBashShell(shell, config, env)
 	default:
@@ -176,7 +174,7 @@ zsh -c "type sesh_help >/tmp/sesh_function_test.txt 2>&1 || echo 'Function not f
 	return nil
 }
 
-func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error) {
+func SetupZshShell(shell string, config Config, env []string) (*exec.Cmd, error) {
 	// Create a temporary ZDOTDIR for zsh
 	tmpDir, err := os.MkdirTemp("", "sesh_zsh")
 	if err != nil {
@@ -185,7 +183,8 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 	zshrc := filepath.Join(tmpDir, ".zshrc")
 
 	// Construct zsh init script with common functions
-	if writeErr := os.WriteFile(zshrc, []byte(aws.ZshPrompt), 0644); writeErr != nil {
+	initScript := config.ShellCustomizer.GetZshInitScript()
+	if writeErr := os.WriteFile(zshrc, []byte(initScript), 0644); writeErr != nil {
 		return nil, fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 	}
 	env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))

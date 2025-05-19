@@ -87,19 +87,25 @@ func (a *App) LaunchSubshell(serviceName string) error {
 
 	switch {
 	case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
-		// Create a temporary ZDOTDIR for zsh
-		tmpDir, err := os.MkdirTemp("", "sesh_zsh")
-		if err != nil {
-			return fmt.Errorf("failed to create temp dir for zsh: %w", err)
-		}
-		zshrc := filepath.Join(tmpDir, ".zshrc")
+		// NOTE: This works!
+		//// Create a temporary ZDOTDIR for zsh
+		//tmpDir, err := os.MkdirTemp("", "sesh_zsh")
+		//if err != nil {
+		//	return fmt.Errorf("failed to create temp dir for zsh: %w", err)
+		//}
+		//zshrc := filepath.Join(tmpDir, ".zshrc")
+		//
+		//// Construct zsh init script with common functions
+		//if writeErr := os.WriteFile(zshrc, []byte(aws.ZshPrompt), 0644); writeErr != nil {
+		//	return fmt.Errorf("failed to write temp zshrc: %w", writeErr)
+		//}
+		//env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
+		//cmd = exec.Command(shell)
 
-		// Construct zsh init script with common functions
-		if writeErr := os.WriteFile(zshrc, []byte(aws.ZshPrompt), 0644); writeErr != nil {
-			return fmt.Errorf("failed to write temp zshrc: %w", writeErr)
+		cmd, err = subshell.SetupZshShell(shell, config, env)
+		if err != nil {
+			return fmt.Errorf("failed to set up zsh shell: %w", err)
 		}
-		env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
-		cmd = exec.Command(shell)
 
 	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
 		// Create a temporary rcfile for bash
