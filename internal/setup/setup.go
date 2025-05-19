@@ -39,7 +39,6 @@ func (h *AWSSetupHandler) Setup() error {
 	fmt.Println("🔐 Setting up AWS credentials...")
 	reader := bufio.NewReader(os.Stdin)
 
-	// Check if AWS CLI is installed
 	_, err := exec.LookPath("aws")
 	if err != nil {
 		return fmt.Errorf("AWS CLI not found. Please install it first: https://aws.amazon.com/cli/")
@@ -47,12 +46,10 @@ func (h *AWSSetupHandler) Setup() error {
 
 	fmt.Println("✅ AWS CLI is installed")
 
-	// Ask for AWS profile
 	fmt.Print("Enter AWS CLI profile name (leave empty for default): ")
 	profile, _ := reader.ReadString('\n')
 	profile = strings.TrimSpace(profile)
 
-	// Try to get current user's AWS ARN
 	var userArn string
 	var cmd *exec.Cmd
 
