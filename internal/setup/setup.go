@@ -161,75 +161,73 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 	// Try to fetch MFA devices, with retries if none are found
 	maxRetries := 2
 	retryCount := 0
-	var deviceFound bool = false
 	
 	mfaDeviceLoop: for {
 		if err == nil && len(strings.TrimSpace(string(mfaOutput))) > 0 {
 			// MFA devices were found, process them
 			mfaDevices := strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
-			// Even if there's only one device, we should ask the user to confirm it's correct
-			// This handles cases where they already had an MFA device and are setting up a new one
-			fmt.Println("Found MFA device(s):")
+			
+			// Always show the list of devices and let the user choose, even if there's only one
+			// This handles cases where they already had an MFA device and the new one isn't
+			// showing up yet, or they had a single existing device that isn't the one they just created
+			fmt.Println("\nFound MFA device(s):")
 			for i, device := range mfaDevices {
 				fmt.Printf("%d: %s\n", i+1, device)
 			}
+			
 			selectionPrompt:
-			fmt.Print("Choose the MFA device you just created (1-n) or 'r' to refresh/retry, 'm' to enter manually: ")
+			fmt.Print("\nChoose the MFA device you just created (1-" + fmt.Sprintf("%d", len(mfaDevices)) + 
+				"), 'r' to refresh the list, or 'm' to enter manually: ")
 			choice, _ := reader.ReadString('\n')
 			choice = strings.TrimSpace(choice)
 			
 			// Handle special options
-				switch choice {
-				case "r", "R":
-					// Refresh MFA devices list
-					fmt.Println("\n🔄 Refreshing MFA device list...")
-					if profile == "" {
-						mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-					} else {
-						mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
-					}
-					
-					mfaOutput, err = mfaCmd.Output()
-					if err != nil || len(strings.TrimSpace(string(mfaOutput))) == 0 {
-						fmt.Println("❗ No MFA devices found after refresh.")
-						// This will take the user to the retry options after this block
-						break
-					}
-					
-					// Show updated list of devices
-					mfaDevices = strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
-					if len(mfaDevices) == 1 {
-						mfaArn = mfaDevices[0]
-						fmt.Printf("✅ Found MFA device: %s\n", mfaArn)
-						break // Exit the entire for loop when we have a valid device
-					} else {
-						fmt.Println("Found multiple MFA devices:")
-						for i, device := range mfaDevices {
-							fmt.Printf("%d: %s\n", i+1, device)
-						}
-						goto selectionPrompt
-					}
-					
-				case "m", "M":
-					// Manual entry
-					fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
-					mfaArn, _ = reader.ReadString('\n')
-					mfaArn = strings.TrimSpace(mfaArn)
-					break // Exit the entire for loop when we've manually entered ARN
-					
-				default:
-					// Try to parse as number
-					var index int
-					_, err := fmt.Sscanf(choice, "%d", &index)
-					if err != nil || index < 1 || index > len(mfaDevices) {
-						fmt.Println("\n❌ Invalid choice. Please select a number from the list, 'r' to refresh, or 'm' for manual entry.")
-						goto selectionPrompt
-					}
-					
-					mfaArn = mfaDevices[index-1]
-					fmt.Printf("✅ Selected MFA device: %s\n", mfaArn)
-					break // Exit the for loop with our selected device
+			switch choice {
+			case "r", "R":
+				// Refresh MFA devices list
+				fmt.Println("\n🔄 Refreshing MFA device list...")
+				if profile == "" {
+					mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
+				} else {
+					mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
 				}
+				
+				mfaOutput, err = mfaCmd.Output()
+				if err != nil || len(strings.TrimSpace(string(mfaOutput))) == 0 {
+					fmt.Println("❗ No MFA devices found after refresh.")
+					// Continue to the retry options below
+					break
+				}
+				
+				// Show updated list of devices and go back to selection prompt
+				mfaDevices = strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
+				fmt.Println("\nFound MFA device(s) after refresh:")
+				for i, device := range mfaDevices {
+					fmt.Printf("%d: %s\n", i+1, device)
+				}
+				goto selectionPrompt
+				
+			case "m", "M":
+				// Manual entry
+				fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
+				mfaArn, _ = reader.ReadString('\n')
+				mfaArn = strings.TrimSpace(mfaArn)
+				deviceFound = true
+				break mfaDeviceLoop // Exit the entire loop when we've manually entered ARN
+				
+			default:
+				// Try to parse as number
+				var index int
+				_, err := fmt.Sscanf(choice, "%d", &index)
+				if err != nil || index < 1 || index > len(mfaDevices) {
+					fmt.Println("\n❌ Invalid choice. Please select a number from the list, 'r' to refresh, or 'm' for manual entry.")
+					goto selectionPrompt
+				}
+				
+				mfaArn = mfaDevices[index-1]
+				fmt.Printf("✅ Selected MFA device: %s\n", mfaArn)
+				deviceFound = true
+				break mfaDeviceLoop // Exit the entire for loop with our selected device
 			}
 		}
 
@@ -240,7 +238,8 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 			fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
 			mfaArn, _ = reader.ReadString('\n')
 			mfaArn = strings.TrimSpace(mfaArn)
-			break
+			deviceFound = true // Set deviceFound to true for manual entry
+			break mfaDeviceLoop
 		}
 
 		// Offer retry options
@@ -291,16 +290,16 @@ Please complete these steps in the AWS Console:
 			mfaOutput, err = mfaCmd.Output()
 			retryCount++
 
-		default: // Manual entry (case "3" or invalid input)
+		case "3": // Manual entry 
 			fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
 			mfaArn, _ = reader.ReadString('\n')
 			mfaArn = strings.TrimSpace(mfaArn)
-			break
-		}
-
-		// If we're in manual entry mode, break out of the loop
-		if retryChoice != "1" && retryChoice != "2" {
-			break
+			deviceFound = true // Set deviceFound to true
+			break mfaDeviceLoop // Exit the loop completely
+			
+		default: // Invalid input
+			fmt.Println("\n❌ Invalid choice. Please select 1, 2, or 3.")
+			// Stay in the loop and show the options again
 		}
 	}
 
