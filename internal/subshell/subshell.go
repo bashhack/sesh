@@ -30,18 +30,13 @@ type ShellCustomizer interface {
 
 // ShellConfig holds the information needed to launch a shell
 type ShellConfig struct {
-	Shell        string
-	Args         []string
-	Env          []string
-	ServiceName  string
+	Shell       string
+	Args        []string
+	Env         []string
+	ServiceName string
 }
 
-func Launch(config Config, stdout, stderr io.Writer) (*ShellConfig, error) {
-	// Check if we're already in a sesh environment to prevent nested sessions
-	if os.Getenv("SESH_ACTIVE") == "1" {
-		return nil, fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
-	}
-
+func GetShellConfig(config Config, stdout, stderr io.Writer) (*ShellConfig, error) {
 	// Create environment with credentials
 	env := os.Environ()
 
