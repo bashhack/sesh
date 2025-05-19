@@ -84,7 +84,7 @@ func (h *AWSSetupHandler) Setup() error {
 
 	switch choice {
 	case "1": // Manual entry
-		fmt.Println(`"5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code
+		fmt.Println(`5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code
 		6. Click 'Show secret key' and copy the secret key
 		
 		❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
@@ -100,7 +100,7 @@ func (h *AWSSetupHandler) Setup() error {
 		secretStr = strings.TrimSpace(secretStr)
 
 	case "2": // QR code capture flow
-		fmt.Println(`"5. Keep the QR code visible on your screen
+		fmt.Println(`5. Keep the QR code visible on your screen
 		6. When ready, press Enter to activate screenshot mode
 
 		❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
@@ -131,7 +131,7 @@ func (h *AWSSetupHandler) Setup() error {
 		return fmt.Errorf("failed to generate TOTP codes: %s", err)
 	}
 
-	fmt.Printf(`"✅ Generated TOTP codes for AWS setup
+	fmt.Printf(`✅ Generated TOTP codes for AWS setup
 	   First code: %s
 	   Second code: %s
 
@@ -178,7 +178,8 @@ func (h *AWSSetupHandler) Setup() error {
 		}
 	}
 
-	// Store in keychain using the provider
+	// TODO: Have a retry here or search again option?
+
 	user, err := env.GetCurrentUser()
 	if err != nil {
 		return fmt.Errorf("failed to get current user: %w", err)
@@ -187,22 +188,20 @@ func (h *AWSSetupHandler) Setup() error {
 	// Use the profile name for the keychain service name
 	var serviceName string
 	if profile == "" {
-		// For default profile, use "default" as the profile name
+		// For the default profile, use "default" as the profile name
 		serviceName = fmt.Sprintf("%s-default", constants.AWSServicePrefix)
 	} else {
 		serviceName = fmt.Sprintf("%s-%s", constants.AWSServicePrefix, profile)
 	}
 
-	// Store the secret using the keychain provider
 	err = h.keychainProvider.SetSecret(user, serviceName, secretStr)
 	if err != nil {
 		return fmt.Errorf("failed to store secret in keychain: %w", err)
 	}
 
-	// Also store the MFA serial ARN
 	var serialServiceName string
 	if profile == "" {
-		// For default profile, use "default" as the profile name
+		// For the default profile, use "default" as the profile name
 		serialServiceName = fmt.Sprintf("%s-default", constants.AWSServiceMFAPrefix)
 	} else {
 		serialServiceName = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, profile)
@@ -213,27 +212,25 @@ func (h *AWSSetupHandler) Setup() error {
 		return fmt.Errorf("failed to store MFA serial in keychain: %w", err)
 	}
 
-	// Store metadata for better organization and retrieval
 	description := "AWS MFA"
 	if profile != "" {
 		description = fmt.Sprintf("AWS MFA for profile %s", profile)
 	}
 
-	// Store metadata using the keychain provider
 	err = h.keychainProvider.StoreEntryMetadata(constants.AWSServicePrefix, serviceName, user, description)
 	if err != nil {
 		fmt.Println("⚠️ Warning: Failed to store metadata. This entry might not appear when listing available AWS profiles.")
 	}
 
-	fmt.Println("\n✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.")
-	fmt.Println()
-	fmt.Println("🚀 Next steps:")
-	fmt.Println("1. Run 'sesh' to generate a temporary session token")
-	fmt.Println("2. The credentials will be automatically exported to your shell")
-	fmt.Println("3. You can now use AWS CLI commands with MFA security")
+	fmt.Println(`✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.
+
+	🚀 Next steps:
+	1. Run 'sesh -service aws' to generate a temporary session token
+	2. The credentials will be automatically exported to your shell
+	3. You can now use AWS CLI commands with MFA security`)
 
 	if profile == "" {
-		fmt.Println("\nTo use this setup, run: sesh")
+		fmt.Println("\nTo use this setup, run without the --profile flag:")
 		fmt.Println("(The default AWS profile will be used)")
 	} else {
 		fmt.Printf("\nTo use this setup, run: sesh --profile %s\n", profile)
