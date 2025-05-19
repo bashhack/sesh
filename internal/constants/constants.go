@@ -29,8 +29,9 @@ func GetSeshBinaryPath() string {
 	}
 
 	// Otherwise, check for known installation paths
+	defaultPath := os.ExpandEnv(DefaultBinaryPath),
 	knownPaths := []string{
-		os.ExpandEnv(DefaultBinaryPath),
+		defaultPath,
 		"/usr/local/bin/sesh",
 		"/opt/homebrew/bin/sesh",
 	}
