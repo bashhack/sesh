@@ -102,10 +102,12 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		//env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
 		//cmd = exec.Command(shell)
 
-		cmd, err = subshell.SetupZshShell(shell, config, env)
+		env, err = subshell.SetupZshShell(config, env)
 		if err != nil {
 			return fmt.Errorf("failed to set up zsh shell: %w", err)
 		}
+
+		cmd = exec.Command(shell)
 
 	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
 		// Create a temporary rcfile for bash
