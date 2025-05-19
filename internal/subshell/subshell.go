@@ -3,6 +3,7 @@ package subshell
 import (
 	"errors"
 	"fmt"
+	"github.com/bashhack/sesh/internal/aws"
 	"io"
 	"os"
 	"os/exec"
@@ -43,10 +44,10 @@ func Launch(config Config, stdout, stderr io.Writer) error {
 
 	// Get a clean environment, without any ZDOTDIR or other variables that might interfere
 	env := os.Environ()
-	
+
 	// Filter critical environment variables that might interfere with shell behavior
 	env = filterEnv(env, "ZDOTDIR")
-	
+
 	debug("After filtering ZDOTDIR, environment length: %d", len(env))
 
 	for key, value := range config.Variables {
@@ -125,17 +126,17 @@ func Launch(config Config, stdout, stderr io.Writer) error {
 			fmt.Fprintf(stdout, "%s\n", welcomeMsg)
 		}
 	}
-	
+
 	debug("About to run command: %v", cmd.Args)
 	debug("Command environment has %d variables", len(cmd.Env))
 	debug("Command IO Setup - Stdin: %T, Stdout: %T, Stderr: %T", cmd.Stdin, cmd.Stdout, cmd.Stderr)
-	
+
 	// List all environment variables for debugging
 	debug("Full environment variable list (all %d):", len(cmd.Env))
 	for i, envVar := range cmd.Env {
 		debug("  [%d] %s", i, envVar)
 	}
-	
+
 	// Create a test script to verify function loading
 	testScript := `#!/bin/sh
 echo "Testing if zsh functions are loaded..."
@@ -143,18 +144,18 @@ zsh -c "type sesh_help >/tmp/sesh_function_test.txt 2>&1 || echo 'Function not f
 `
 	os.WriteFile("/tmp/test_sesh_functions.sh", []byte(testScript), 0755)
 	exec.Command("/bin/sh", "/tmp/test_sesh_functions.sh").Run()
-	
+
 	err := cmd.Run()
-	
+
 	debug("Command has completed execution")
-	
+
 	// Check the test result
 	if functionTestResult, readErr := os.ReadFile("/tmp/sesh_function_test.txt"); readErr == nil {
 		debug("Function test result: %s", string(functionTestResult))
 	} else {
 		debug("Could not read function test result: %v", readErr)
 	}
-	
+
 	fmt.Fprintf(stdout, "Exited secure shell\n")
 
 	if err != nil {
@@ -176,8 +177,6 @@ zsh -c "type sesh_help >/tmp/sesh_function_test.txt 2>&1 || echo 'Function not f
 }
 
 func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error) {
-	debug("=== setupZshShell called ===")
-	debug("Shell: %s", shell)
 	// Create a temporary ZDOTDIR for zsh
 	tmpDir, err := os.MkdirTemp("", "sesh_zsh")
 	if err != nil {
@@ -185,123 +184,14 @@ func setupZshShell(shell string, config Config, env []string) (*exec.Cmd, error)
 	}
 	zshrc := filepath.Join(tmpDir, ".zshrc")
 
-	// Write debug info
-	debugFile, _ := os.OpenFile("/tmp/sesh_debug.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if debugFile != nil {
-		defer debugFile.Close()
-		fmt.Fprintf(debugFile, "=== SETUP ZSH SHELL DEBUG ===\n")
-		fmt.Fprintf(debugFile, "tmpDir: %s\n", tmpDir)
-		fmt.Fprintf(debugFile, "zshrc: %s\n", zshrc)
-		initScript := config.ShellCustomizer.GetZshInitScript()
-		fmt.Fprintf(debugFile, "Init script length: %d\n", len(initScript))
-		if len(initScript) > 100 {
-			fmt.Fprintf(debugFile, "First 100 chars: %s\n", initScript[:100])
-		} else {
-			fmt.Fprintf(debugFile, "Full init script: %s\n", initScript)
-		}
-	}
-
-	// Get the init script with all shell functions
-	initScript := config.ShellCustomizer.GetZshInitScript()
-	
-	// Force functions to be defined in the global scope
-	// by adding the 'function' keyword and dropping the parentheses
-	// This helps ensure they're available in subshells
-	modifiedScript := strings.ReplaceAll(initScript, "sesh_status() {", "function sesh_status {")
-	modifiedScript = strings.ReplaceAll(modifiedScript, "verify_aws() {", "function verify_aws {")
-	modifiedScript = strings.ReplaceAll(modifiedScript, "sesh_help() {", "function sesh_help {")
-	
-	// Add an additional debug line at the top to confirm it's using our .zshrc
-	finalScript := "# SESH CUSTOM RC FILE - LOADING FROM: " + zshrc + "\n" + modifiedScript
-	
-	// Write a debug file to /tmp that we can execute directly with zsh -c to test
-	os.WriteFile("/tmp/sesh_test_init.zsh", []byte(finalScript), 0755)
-	
 	// Construct zsh init script with common functions
-	if writeErr := os.WriteFile(zshrc, []byte(finalScript), 0644); writeErr != nil {
+	if writeErr := os.WriteFile(zshrc, []byte(aws.ZshPrompt), 0644); writeErr != nil {
 		return nil, fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 	}
-	
-	// Verify the .zshrc was written properly
-	if debugFile != nil {
-		fileContent, err := os.ReadFile(zshrc)
-		if err != nil {
-			fmt.Fprintf(debugFile, "Error reading back .zshrc: %v\n", err)
-		} else {
-			fmt.Fprintf(debugFile, "Actual .zshrc content after write (first 100 chars): %s\n", string(fileContent)[:100])
-			fmt.Fprintf(debugFile, "Actual .zshrc file size: %d bytes\n", len(fileContent))
-		}
-	}
-	
-	// Filter out any existing ZDOTDIR environment variables
-	env = filterEnv(env, "ZDOTDIR")
 	env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
-	
-	// From the original working code: just run shell without any flags
-	debug("Creating command with: %s (no flags)", shell)
-	debug("ZDOTDIR environment variable set to: %s", tmpDir)
-	debug("Will try to read .zshrc from: %s", filepath.Join(tmpDir, ".zshrc"))
-	debug("Environment variables related to ZSH:")
-	for _, e := range env {
-		if strings.Contains(e, "ZSH") || strings.Contains(e, "zsh") {
-			debug("  %s", e)
-		}
-	}
+	cmd := exec.Command(shell)
 
-	// Add a direct test where we can see what's happening - does zsh actually find our .zshrc?
-	testEnv := []string{fmt.Sprintf("ZDOTDIR=%s", tmpDir)}
-	testCmd := exec.Command("zsh", "-c", "echo \"ZSH_VERSION=$ZSH_VERSION\"; echo \"ZDOTDIR=$ZDOTDIR\"; [ -f \"$ZDOTDIR/.zshrc\" ] && echo 'Found .zshrc' || echo 'No .zshrc found'; [ -f \"$ZDOTDIR/.zshrc\" ] && cat \"$ZDOTDIR/.zshrc\" | head -n1")
-	testCmd.Env = testEnv
-	testOutput, err := testCmd.CombinedOutput()
-	if err != nil {
-		debug("Test command failed: %v", err)
-	} else {
-		debug("Test command output: %s", string(testOutput))
-	}
-	
-	// Try interactive mode test as well
-	interactiveTestCmd := exec.Command("zsh", "-i", "-c", "echo \"ZSH_VERSION=$ZSH_VERSION\"; [ -f \"$ZDOTDIR/.zshrc\" ] && echo 'Found .zshrc in interactive mode' || echo 'No .zshrc found in interactive mode'; type sesh_help > /dev/null 2>&1 && echo 'sesh_help function found' || echo 'sesh_help function NOT found'")
-	interactiveTestCmd.Env = append(os.Environ(), fmt.Sprintf("ZDOTDIR=%s", tmpDir))
-	interactiveOutput, intErr := interactiveTestCmd.CombinedOutput()
-	if intErr != nil {
-		debug("Interactive test command failed: %v", intErr)
-	} else {
-		debug("Interactive test command output: %s", string(interactiveOutput))
-	}
-	
-	// Create a .zshenv file that will be loaded before .zshrc in all shell types
-	zshenv := filepath.Join(tmpDir, ".zshenv")
-	zshenvContent := fmt.Sprintf(`
-# Ensure our custom setup is loaded in all shells
-export SESH_INIT_DIR="%s"
-# Force ZDOTDIR to our directory to prevent it from being overridden
-export ZDOTDIR="%s"
-`, tmpDir, tmpDir)
-	os.WriteFile(zshenv, []byte(zshenvContent), 0644)
-	
-	// Add .zprofile that forces our .zshrc to be loaded
-	zprofile := filepath.Join(tmpDir, ".zprofile")
-	zprofileContent := fmt.Sprintf(`
-# Ensure our .zshrc gets loaded
-if [ -f "$ZDOTDIR/.zshrc" ]; then
-  source "$ZDOTDIR/.zshrc"
-fi
-`)
-	os.WriteFile(zprofile, []byte(zprofileContent), 0644)
-	
-	// Add a .zlogin file to provide functions after login
-	zlogin := filepath.Join(tmpDir, ".zlogin")
-	zloginContent := fmt.Sprintf(`
-# Define functions globally if they're not already defined
-if ! type sesh_help > /dev/null 2>&1; then
-  source "$ZDOTDIR/.zshrc"
-fi
-`)
-	os.WriteFile(zlogin, []byte(zloginContent), 0644)
-	
-	// Try again but this time use interactive mode, which seems to be required
-	// for zsh to properly load the .zprofile and .zshrc files
-	return exec.Command(shell, "-i"), nil
+	return cmd, nil
 }
 
 func setupBashShell(shell string, config Config, env []string) (*exec.Cmd, error) {
