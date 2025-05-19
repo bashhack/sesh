@@ -3,7 +3,6 @@ package subshell
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 )
@@ -204,23 +203,21 @@ func SetupBashShell(config Config) (*os.File, error) {
 	return tmpFile, nil
 }
 
-func SetupFallbackShell(shell string, config Config, env []string) (*exec.Cmd, error) {
-	// fallback shell - create a basic script file to define functions
+func SetupFallbackShell(config Config, env []string) ([]string, error) {
 	tmpFile, err := os.CreateTemp("", "sesh_shellrc")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create temp shellrc: %w", err)
+		return []string{}, fmt.Errorf("failed to create temp shellrc: %w", err)
 	}
 	defer tmpFile.Close()
 
 	if _, writeErr := tmpFile.WriteString(config.ShellCustomizer.GetFallbackInitScript()); writeErr != nil {
-		return nil, fmt.Errorf("failed to write temp shellrc: %w", writeErr)
+		return []string{}, fmt.Errorf("failed to write temp shellrc: %w", writeErr)
 	}
 
-	// Set the environment to show the prompt
-	env = append(env, fmt.Sprintf("PS1=%s$ ", config.ShellCustomizer.GetPromptPrefix()))
+	env = append(env, fmt.Sprintf("PS1=(sesh:%s) $ ", config.ServiceName))
 	env = append(env, fmt.Sprintf("ENV=%s", tmpFile.Name())) // For sh shells
 
-	return exec.Command(shell), nil
+	return env, nil
 }
 
 // filterEnv removes any existing environment variables with the specified key

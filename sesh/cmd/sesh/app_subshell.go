@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/subshell"
 	"log/slog"
@@ -129,19 +128,24 @@ func (a *App) LaunchSubshell(serviceName string) error {
 
 	default:
 		// fallback shell - create a basic script file to define functions
-		tmpFile, err := os.CreateTemp("", "sesh_shellrc")
+		//tmpFile, err := os.CreateTemp("", "sesh_shellrc")
+		//if err != nil {
+		//	return fmt.Errorf("failed to create temp shellrc: %w", err)
+		//}
+		//defer tmpFile.Close()
+		//
+		//if _, writeErr := tmpFile.WriteString(aws.FallbackPrompt); writeErr != nil {
+		//	return fmt.Errorf("failed to write temp shellrc: %w", writeErr)
+		//}
+		//
+		//// Set environment to show the prompt
+		//env = append(env, fmt.Sprintf("PS1=(sesh:%s) $ ", serviceName))
+		//env = append(env, fmt.Sprintf("ENV=%s", tmpFile.Name())) // For sh shells
+
+		env, err = subshell.SetupFallbackShell(config, env)
 		if err != nil {
-			return fmt.Errorf("failed to create temp shellrc: %w", err)
+			return fmt.Errorf("failed to set up fallback shell: %w", err)
 		}
-		defer tmpFile.Close()
-
-		if _, writeErr := tmpFile.WriteString(aws.FallbackPrompt); writeErr != nil {
-			return fmt.Errorf("failed to write temp shellrc: %w", writeErr)
-		}
-
-		// Set environment to show the prompt
-		env = append(env, fmt.Sprintf("PS1=(sesh:%s) $ ", serviceName))
-		env = append(env, fmt.Sprintf("ENV=%s", tmpFile.Name())) // For sh shells
 
 		cmd = exec.Command(shell)
 	}
