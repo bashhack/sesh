@@ -309,11 +309,20 @@ Please complete these steps in the AWS Console:
 			mfaOutput, err = mfaCmd.Output()
 			retryCount++
 
-		case "3": // Manual entry 
-			fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
-			mfaArn, _ = reader.ReadString('\n')
-			mfaArn = strings.TrimSpace(mfaArn)
-			// Manual ARN entry provided by user
+		case "3": // Manual entry with validation
+			for {
+				fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
+				mfaArn, _ = reader.ReadString('\n')
+				mfaArn = strings.TrimSpace(mfaArn)
+				
+				if mfaArn == "" {
+					fmt.Println("\u274c MFA ARN cannot be empty. Please enter a valid ARN.")
+					continue
+				}
+				
+				// Manual ARN entry provided by user
+				break
+			}
 			break mfaDeviceLoop // Exit the loop completely
 			
 		default: // Invalid input
