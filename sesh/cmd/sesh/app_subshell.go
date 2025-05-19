@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/subshell"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,7 +29,6 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
 
-	// !-------
 	// Check if the provider supports subshell customization
 	subshellP, ok := p.(provider.SubshellProvider)
 	if !ok {
@@ -45,14 +43,6 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	if !ok {
 		return fmt.Errorf("provider %s returned invalid subshell configuration", serviceName)
 	}
-
-	slog.Info("config loaded",
-		slog.String("serviceName", serviceName),
-		slog.String("provider", creds.Provider),
-		slog.String("expiry", creds.Expiry.String()),
-		slog.String("variables", fmt.Sprintf("%v", creds.Variables)),
-		slog.String("config", fmt.Sprintf("%+v", config)))
-	// !-------
 
 	// Create environment with credentials
 	env := os.Environ()
@@ -86,67 +76,23 @@ func (a *App) LaunchSubshell(serviceName string) error {
 
 	switch {
 	case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
-		// NOTE: This works!
-		//// Create a temporary ZDOTDIR for zsh
-		//tmpDir, err := os.MkdirTemp("", "sesh_zsh")
-		//if err != nil {
-		//	return fmt.Errorf("failed to create temp dir for zsh: %w", err)
-		//}
-		//zshrc := filepath.Join(tmpDir, ".zshrc")
-		//
-		//// Construct zsh init script with common functions
-		//if writeErr := os.WriteFile(zshrc, []byte(aws.ZshPrompt), 0644); writeErr != nil {
-		//	return fmt.Errorf("failed to write temp zshrc: %w", writeErr)
-		//}
-		//env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
-		//cmd = exec.Command(shell)
-
 		env, err = subshell.SetupZshShell(config, env)
 		if err != nil {
 			return fmt.Errorf("failed to set up zsh shell: %w", err)
 		}
 
 		cmd = exec.Command(shell)
-
 	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
-		//// Create a temporary rcfile for bash
-		//tmpFile, err := os.CreateTemp("", "sesh_bashrc")
-		//if err != nil {
-		//	return fmt.Errorf("failed to create temp bashrc: %w", err)
-		//}
-		//defer tmpFile.Close()
-		//
-		//if _, writeErr := tmpFile.WriteString(aws.BashPrompt); writeErr != nil {
-		//	return fmt.Errorf("failed to write temp bashrc: %w", writeErr)
-		//}
-
 		tmpFile, err := subshell.SetupBashShell(config)
 		if err != nil {
 			return fmt.Errorf("failed to set up bash shell: %w", err)
 		}
 		cmd = exec.Command(shell, "--rcfile", tmpFile.Name())
-
 	default:
-		// fallback shell - create a basic script file to define functions
-		//tmpFile, err := os.CreateTemp("", "sesh_shellrc")
-		//if err != nil {
-		//	return fmt.Errorf("failed to create temp shellrc: %w", err)
-		//}
-		//defer tmpFile.Close()
-		//
-		//if _, writeErr := tmpFile.WriteString(aws.FallbackPrompt); writeErr != nil {
-		//	return fmt.Errorf("failed to write temp shellrc: %w", writeErr)
-		//}
-		//
-		//// Set environment to show the prompt
-		//env = append(env, fmt.Sprintf("PS1=(sesh:%s) $ ", serviceName))
-		//env = append(env, fmt.Sprintf("ENV=%s", tmpFile.Name())) // For sh shells
-
 		env, err = subshell.SetupFallbackShell(config, env)
 		if err != nil {
 			return fmt.Errorf("failed to set up fallback shell: %w", err)
 		}
-
 		cmd = exec.Command(shell)
 	}
 

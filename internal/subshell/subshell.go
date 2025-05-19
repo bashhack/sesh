@@ -2,6 +2,7 @@ package subshell
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -27,149 +28,9 @@ type ShellCustomizer interface {
 	GetWelcomeMessage() string
 }
 
-//func Launch(config Config, stdout, stderr io.Writer) error {
-//	// Force debug info output to be cleared
-//	os.Remove("/tmp/sesh_debug.txt")
-//	debug("=== Launch function called ===")
-//	debug("stdout type: %T, stderr type: %T", stdout, stderr)
-//	debug("ShellCustomizer type: %T", config.ShellCustomizer)
-//	if os.Getenv("SESH_ACTIVE") == "1" {
-//		return fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
-//	}
-//
-//	// Get a clean environment, without any ZDOTDIR or other variables that might interfere
-//	env := os.Environ()
-//
-//	// Filter critical environment variables that might interfere with shell behavior
-//	env = filterEnv(env, "ZDOTDIR")
-//
-//	debug("After filtering ZDOTDIR, environment length: %d", len(env))
-//
-//	for key, value := range config.Variables {
-//		env = filterEnv(env, key)
-//		env = append(env, fmt.Sprintf("%s=%s", key, value))
-//	}
-//
-//	env = append(env, fmt.Sprintf("SESH_ACTIVE=1"))
-//	env = append(env, fmt.Sprintf("SESH_SERVICE=%s", config.ServiceName))
-//	env = append(env, "SESH_DISABLE_INTEGRATION=1")
-//
-//	env = append(env, fmt.Sprintf("SESH_START_TIME=%d", time.Now().Unix()))
-//	if !config.Expiry.IsZero() {
-//		env = append(env, fmt.Sprintf("SESH_EXPIRY=%d", config.Expiry.Unix()))
-//		env = append(env, fmt.Sprintf("SESH_TOTAL_DURATION=%d", config.Expiry.Unix()-time.Now().Unix()))
-//	}
-//
-//	shell := os.Getenv("SHELL")
-//	if shell == "" {
-//		shell = "/bin/sh"
-//	}
-//
-//	var cmd *exec.Cmd
-//	var shellSetupErr error
-//
-//	switch {
-//	case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
-//		cmd, shellSetupErr = SetupZshShell(shell, config, env)
-//	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
-//		cmd, shellSetupErr = setupBashShell(shell, config, env)
-//	default:
-//		cmd, shellSetupErr = setupFallbackShell(shell, config, env)
-//	}
-//	if shellSetupErr != nil {
-//		return fmt.Errorf("failed to set up shell: %w", shellSetupErr)
-//	}
-//
-//	// Write debug info
-//	debugFile, _ := os.OpenFile("/tmp/sesh_debug.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-//	if debugFile != nil {
-//		defer debugFile.Close()
-//		fmt.Fprintf(debugFile, "=== SESH DEBUG ===\n")
-//		fmt.Fprintf(debugFile, "Shell: %s\n", shell)
-//		fmt.Fprintf(debugFile, "Types - stdout: %T, stderr: %T\n", stdout, stderr)
-//		fmt.Fprintf(debugFile, "os.Stdout: %T, os.Stderr: %T\n", os.Stdout, os.Stderr)
-//		fmt.Fprintf(debugFile, "Environment variables:\n")
-//		for _, envVar := range env {
-//			if len(envVar) >= 8 && envVar[:8] == "ZDOTDIR=" {
-//				zdir := envVar[8:]
-//				fmt.Fprintf(debugFile, "ZDOTDIR set to: %s\n", zdir)
-//				zshrcPath := filepath.Join(zdir, ".zshrc")
-//				fmt.Fprintf(debugFile, "Looking for .zshrc at: %s\n", zshrcPath)
-//				fileContent, err := os.ReadFile(zshrcPath)
-//				if err != nil {
-//					fmt.Fprintf(debugFile, "Error reading .zshrc: %v\n", err)
-//				} else {
-//					fmt.Fprintf(debugFile, ".zshrc content begins:\n")
-//					fmt.Fprintf(debugFile, "%s\n", string(fileContent))
-//					fmt.Fprintf(debugFile, ".zshrc content ends\n")
-//				}
-//			}
-//		}
-//		fmt.Fprintf(debugFile, "Command args: %v\n", cmd.Args)
-//	}
-//
-//	cmd.Stdin = os.Stdin
-//	cmd.Stdout = stdout
-//	cmd.Stderr = stderr
-//	cmd.Env = env
-//
-//	// Print the starting message including the welcome message from the customizer
-//	fmt.Fprintf(stdout, "Starting secure shell with %s credentials\n", config.ServiceName)
-//	if config.ShellCustomizer != nil {
-//		welcomeMsg := config.ShellCustomizer.GetWelcomeMessage()
-//		if welcomeMsg != "" {
-//			fmt.Fprintf(stdout, "%s\n", welcomeMsg)
-//		}
-//	}
-//
-//	debug("About to run command: %v", cmd.Args)
-//	debug("Command environment has %d variables", len(cmd.Env))
-//	debug("Command IO Setup - Stdin: %T, Stdout: %T, Stderr: %T", cmd.Stdin, cmd.Stdout, cmd.Stderr)
-//
-//	// List all environment variables for debugging
-//	debug("Full environment variable list (all %d):", len(cmd.Env))
-//	for i, envVar := range cmd.Env {
-//		debug("  [%d] %s", i, envVar)
-//	}
-//
-//	// Create a test script to verify function loading
-//	testScript := `#!/bin/sh
-//echo "Testing if zsh functions are loaded..."
-//zsh -c "type sesh_help >/tmp/sesh_function_test.txt 2>&1 || echo 'Function not found' >/tmp/sesh_function_test.txt"
-//`
-//	os.WriteFile("/tmp/test_sesh_functions.sh", []byte(testScript), 0755)
-//	exec.Command("/bin/sh", "/tmp/test_sesh_functions.sh").Run()
-//
-//	err := cmd.Run()
-//
-//	debug("Command has completed execution")
-//
-//	// Check the test result
-//	if functionTestResult, readErr := os.ReadFile("/tmp/sesh_function_test.txt"); readErr == nil {
-//		debug("Function test result: %s", string(functionTestResult))
-//	} else {
-//		debug("Could not read function test result: %v", readErr)
-//	}
-//
-//	fmt.Fprintf(stdout, "Exited secure shell\n")
-//
-//	if err != nil {
-//		// ExitError is the standard error type when a shell exits, whether by
-//		// normal means (exit command, Ctrl+D) or signals. This is expected behavior
-//		// for subshell implementations and shouldn't be reported as an error.
-//		// In my testing, tools like Python's virtualenv have similar behavior -
-//		// swallowing events like Ctrl+C, for example.
-//		var exitError *exec.ExitError
-//		if errors.As(err, &exitError) {
-//			return nil
-//		}
-//
-//		// Only return truly unexpected errors...
-//		return fmt.Errorf("subshell encountered an unexpected error: %w", err)
-//	}
-//
-//	return nil
-//}
+func Launch(config Config, stdout, stderr io.Writer) error {
+	// TODO: Implement the logic to launch the shell with the provided config
+}
 
 func SetupZshShell(config Config, env []string) ([]string, error) {
 	// Create a temporary ZDOTDIR for zsh
