@@ -125,21 +125,20 @@ func (h *AWSSetupHandler) Setup() error {
 		return fmt.Errorf("secret key seems too short, please double-check and try again")
 	}
 
-	// Generate two consecutive TOTP codes for AWS verification
+	// At the time of writing, AWS requires two codes during setup
 	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
 	if err != nil {
 		return fmt.Errorf("failed to generate TOTP codes: %s", err)
 	}
 
-	fmt.Println("✅ Generated TOTP codes for AWS setup")
-	fmt.Printf("   First code: %s\n", firstCode)
-	fmt.Printf("   Second code: %s\n", secondCode)
-	fmt.Println()
-	fmt.Println("Enter these codes in the AWS Console and complete the MFA setup")
-	fmt.Println("Press Enter once you've completed the setup...")
+	fmt.Printf(`"✅ Generated TOTP codes for AWS setup
+	   First code: %s
+	   Second code: %s
+
+	Enter these codes in the AWS Console and complete the MFA setup
+	Press Enter once you've completed the setup...`, firstCode, secondCode)
 	reader.ReadString('\n')
 
-	// Get the MFA ARN after setup is complete
 	var mfaCmd *exec.Cmd
 	if profile == "" {
 		mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
