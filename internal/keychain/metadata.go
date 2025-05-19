@@ -6,9 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/klauspost/compress/zstd"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/bashhack/sesh/internal/constants"
@@ -174,6 +172,9 @@ func saveEntryMetadata(entries []KeychainEntryMeta) error {
 
 	// Get the path to the sesh binary for access control
 	execPath := constants.GetSeshBinaryPath()
+	if execPath == "" {
+		return fmt.Errorf("could not determine the path to the sesh binary, cannot access keychain")
+	}
 
 	// Use direct security command to avoid unnecessary prompts
 	// This ensures the same security settings as secrets

@@ -220,7 +220,7 @@ func (h *AWSSetupHandler) Setup() error {
 	} else {
 		serialServiceName = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, profile)
 	}
-	
+
 	err = h.keychainProvider.SetSecret(user, serialServiceName, mfaArn)
 	if err != nil {
 		return fmt.Errorf("failed to store MFA serial in keychain: %w", err)
@@ -251,7 +251,7 @@ func (h *AWSSetupHandler) Setup() error {
 	} else {
 		fmt.Printf("\nTo use this setup, run: sesh --profile %s\n", profile)
 	}
-	
+
 	return nil
 }
 
@@ -392,10 +392,9 @@ func (h *TOTPSetupHandler) Setup() error {
 	}
 	fmt.Println("' to generate TOTP codes.")
 	fmt.Println("Use 'sesh --service totp --service-name " + serviceName + " --clip' to copy the code to clipboard.")
-	
+
 	return nil
 }
-
 
 // setupAWS configures AWS-specific setup
 func setupAWS() {
@@ -581,6 +580,10 @@ func setupAWS() {
 
 	// Use our fixed binary path for consistent keychain access
 	execPath := constants.GetSeshBinaryPath()
+	if execPath == "" {
+		fmt.Println("❌ Could not determine the path to the sesh binary, cannot access keychain")
+		os.Exit(1)
+	}
 
 	// Use security command to store secret with -T flag to restrict access
 	addCmd := exec.Command("security", "add-generic-password",
@@ -735,6 +738,10 @@ func setupGenericTOTP() {
 
 	// Use our fixed binary path for consistent keychain access
 	execPath := constants.GetSeshBinaryPath()
+	if execPath == "" {
+		fmt.Println("❌ Could not determine the path to the sesh binary, cannot access keychain")
+		os.Exit(1)
+	}
 
 	// Build service key
 	var serviceKey string

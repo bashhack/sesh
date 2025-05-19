@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/bashhack/sesh/internal/constants"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -53,6 +52,9 @@ func SetSecret(account, service, secret string) error {
 
 	// Get the current executable path at the time of access
 	execPath := constants.GetSeshBinaryPath()
+	if execPath == "" {
+		return fmt.Errorf("could not determine the path to the sesh binary, cannot access keychain")
+	}
 
 	// Allow only the sesh binary to access this keychain item
 	cmd := execCommand("security", "add-generic-password",

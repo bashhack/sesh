@@ -43,6 +43,8 @@ func GetSeshBinaryPath() string {
 		}
 	}
 
-	// Fall back to the default as a last resort
-	return os.ExpandEnv(DefaultBinaryPath)
+	// If no binary was found, return an empty string
+	// This will cause keychain operations to fail early
+	// rather than creating inaccessible keychain items
+	return ""
 }
