@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bashhack/sesh/internal/aws"
+	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/subshell"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +30,29 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
+
+	// Check if the provider supports subshell customization
+	subshellP, ok := p.(provider.SubshellProvider)
+	if !ok {
+		return fmt.Errorf("provider %s does not support subshell customization", serviceName)
+	}
+
+	// Get the subshell configuration from the provider
+	configInterface := subshellP.NewSubshellConfig(creds)
+
+	// Convert to the concrete type
+	config, ok := configInterface.(subshell.Config)
+	if !ok {
+		return fmt.Errorf("provider %s returned invalid subshell configuration", serviceName)
+	}
+
+	slog.Info("config loaded",
+		slog.String("serviceName", serviceName),
+		slog.String("provider", creds.Provider),
+		slog.String("expiry", creds.Expiry.String()),
+		slog.String("variables", fmt.Sprintf("%v", creds.Variables)),
+		slog.String("config", fmt.Sprintf
+			("%+v", config))),
 
 	// Create environment with credentials
 	env := os.Environ()
