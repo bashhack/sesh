@@ -41,14 +41,6 @@ func getCurrentExecutablePath() string {
 	return seshBinaryPath
 }
 
-// SetSeshBinaryPath allows setting the path to the sesh binary for keychain access control
-// This is maintained for backward compatibility but isn't used by the new implementation
-func SetSeshBinaryPath(path string) {
-	if path != "" {
-		seshBinaryPath = path
-	}
-}
-
 // GetSecret retrieves a secret from the keychain
 func GetSecret(account, service string) (string, error) {
 	if account == "" {

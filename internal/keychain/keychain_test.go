@@ -469,20 +469,6 @@ func TestGetMFASerialIntegration(t *testing.T) {
 	_ = err
 }
 
-func TestBinaryPathFunctions(t *testing.T) {
-	// Save original value
-	originalPath := seshBinaryPath
-	defer func() { seshBinaryPath = originalPath }()
-
-	// Test SetSeshBinaryPath
-	testPath := "/test/path/sesh"
-	SetSeshBinaryPath(testPath)
-
-	if seshBinaryPath != testPath {
-		t.Errorf("Expected binary path to be set to '%s', got '%s'", testPath, seshBinaryPath)
-	}
-}
-
 func randomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	result := make([]byte, length)

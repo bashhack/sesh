@@ -23,16 +23,12 @@ func main() {
 
 // run is the testable entrypoint for the application
 func run(app *App, args []string) {
-	// We'll implement a simple approach that just creates provider flags up-front for all providers
 	fs := flag.NewFlagSet(args[0], flag.ExitOnError)
 
-	// Override the usage function to use our custom help
 	fs.Usage = printUsage
-
 	// Also override the flag.CommandLine Usage for -h handling
 	flag.Usage = printUsage
 
-	// Common flags
 	serviceName := fs.String("service", "", "Service provider to use (aws, totp)") // NOTE: I'm toying with maybe having no default of "aws" here...
 	showVersion := fs.Bool("version", false, "Show version information")
 	showHelp := fs.Bool("help", false, "Show usage")
@@ -99,7 +95,6 @@ func run(app *App, args []string) {
 		return
 	}
 
-	// Validate the service name
 	_, err := app.Registry.GetProvider(*serviceName)
 	if err != nil {
 		fmt.Fprintf(app.Stderr, "❌ %v\n", err)
@@ -108,7 +103,6 @@ func run(app *App, args []string) {
 		return
 	}
 
-	// Handle provider-specific commands
 	if *listEntries {
 		if err := app.ListEntries(*serviceName); err != nil {
 			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
@@ -133,7 +127,6 @@ func run(app *App, args []string) {
 		return
 	}
 
-	// Handle the main action based on flags and service type
 	if *copyClipboard {
 		if err := app.CopyToClipboard(*serviceName); err != nil {
 			fmt.Fprintf(app.Stderr, "❌ %v\n", err)

@@ -64,7 +64,6 @@ func (p *Provider) Description() string {
 
 // SetupFlags adds provider-specific flags to the given FlagSet
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
-	// Use the flagset interface which may be our safe wrapper
 	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
 
 	// Add a dummy service-name flag to detect invalid flag usage with AWS provider
@@ -492,45 +491,3 @@ func (p *Provider) NewSubshellConfig(creds provider.Credentials) interface{} {
 		ShellCustomizer: awsInternal.NewCustomizer(),
 	}
 }
-
-// func (p *Provider) GetMFASerial() (string, error) {
-
-// 	// Service name for the MFA serial (account for profile)
-// 	var serialService string
-// 	if p.profile == "" {
-// 		// Use default for the default profile
-// 		serialService = fmt.Sprintf("%s-default", constants.AWSServiceMFAPrefix)
-// 	} else {
-// 		serialService = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, p.profile)
-// 	}
-
-// 	// Get MFA serial from keychain
-
-// 	// Try direct keychain access first
-// 	cmd := exec.Command("security", "find-generic-password",
-// 		"-a", p.keyUser,
-// 		"-s", serialService,
-// 		"-w")
-// 	var stdout bytes.Buffer
-// 	cmd.Stdout = &stdout
-// 	err := cmd.Run()
-
-// 	if err == nil {
-// 		serialFromKeychain := strings.TrimSpace(stdout.String())
-// 		return serialFromKeychain, nil
-// 	}
-
-// 	// Fall back to the provider method
-// 	serialFromKeychain, err := p.keychain.GetSecret(p.keyUser, serialService)
-// 	if err == nil {
-// 		return serialFromKeychain, nil
-// 	}
-
-// 	// If not found in keychain, try to auto-detect from AWS
-// 	serial, err := p.aws.GetFirstMFADevice(p.profile)
-// 	if err != nil {
-// 		return "", fmt.Errorf("could not detect MFA device: %w", err)
-// 	}
-
-// 	return serial, nil
-// }
