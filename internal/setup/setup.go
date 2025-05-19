@@ -136,11 +136,11 @@ Press Enter when you're ready to capture the QR code...`)
 	}
 
 	fmt.Printf(`✅ Generated TOTP codes for AWS setup
-	   First code: %s
-	   Second code: %s
+First code: %s
+Second code: %s
 
-	Enter these codes in the AWS Console and complete the MFA setup
-	Press Enter once you've completed the setup...`, firstCode, secondCode)
+Enter these codes in the AWS Console and complete the MFA setup.
+Press Enter once you've completed the setup...`, firstCode, secondCode)
 	reader.ReadString('\n')
 
 	var mfaCmd *exec.Cmd
@@ -226,17 +226,18 @@ Press Enter when you're ready to capture the QR code...`)
 		fmt.Println("⚠️ Warning: Failed to store metadata. This entry might not appear when listing available AWS profiles.")
 	}
 
-	fmt.Println(`✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.
+	fmt.Println(`
+✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.
 
-	🚀 Next steps:
-	1. Run 'sesh -service aws' to generate a temporary session token
-	2. The credentials will be automatically exported to your shell
-	3. You can now use AWS CLI commands with MFA security`)
+🚀 Next steps:
+1. Run 'sesh -service aws' to generate a temporary session token
+2. The credentials will be automatically exported to your shell
+3. You can now use AWS CLI commands with MFA security`)
 
 	if profile == "" {
 		fmt.Println(`
-	To use this setup, run without the --profile flag:
-	(The default AWS profile will be used)`)
+To use this setup, run without the --profile flag:
+(The default AWS profile will be used)`)
 	} else {
 		fmt.Printf("\nTo use this setup, run: sesh --profile %s\n", profile)
 	}
