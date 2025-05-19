@@ -110,15 +110,20 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		cmd = exec.Command(shell)
 
 	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
-		// Create a temporary rcfile for bash
-		tmpFile, err := os.CreateTemp("", "sesh_bashrc")
-		if err != nil {
-			return fmt.Errorf("failed to create temp bashrc: %w", err)
-		}
-		defer tmpFile.Close()
+		//// Create a temporary rcfile for bash
+		//tmpFile, err := os.CreateTemp("", "sesh_bashrc")
+		//if err != nil {
+		//	return fmt.Errorf("failed to create temp bashrc: %w", err)
+		//}
+		//defer tmpFile.Close()
+		//
+		//if _, writeErr := tmpFile.WriteString(aws.BashPrompt); writeErr != nil {
+		//	return fmt.Errorf("failed to write temp bashrc: %w", writeErr)
+		//}
 
-		if _, writeErr := tmpFile.WriteString(aws.BashPrompt); writeErr != nil {
-			return fmt.Errorf("failed to write temp bashrc: %w", writeErr)
+		tmpFile, err := subshell.SetupBashShell(config)
+		if err != nil {
+			return fmt.Errorf("failed to set up bash shell: %w", err)
 		}
 		cmd = exec.Command(shell, "--rcfile", tmpFile.Name())
 

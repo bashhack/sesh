@@ -189,7 +189,7 @@ func SetupZshShell(config Config, env []string) ([]string, error) {
 	return env, nil
 }
 
-func setupBashShell(shell string, config Config, env []string) (*exec.Cmd, error) {
+func SetupBashShell(config Config) (*os.File, error) {
 	// Create a temporary rcfile for bash
 	tmpFile, err := os.CreateTemp("", "sesh_bashrc")
 	if err != nil {
@@ -200,10 +200,11 @@ func setupBashShell(shell string, config Config, env []string) (*exec.Cmd, error
 	if _, writeErr := tmpFile.WriteString(config.ShellCustomizer.GetBashInitScript()); writeErr != nil {
 		return nil, fmt.Errorf("failed to write temp bashrc: %w", writeErr)
 	}
-	return exec.Command(shell, "--rcfile", tmpFile.Name()), nil
+
+	return tmpFile, nil
 }
 
-func setupFallbackShell(shell string, config Config, env []string) (*exec.Cmd, error) {
+func SetupFallbackShell(shell string, config Config, env []string) (*exec.Cmd, error) {
 	// fallback shell - create a basic script file to define functions
 	tmpFile, err := os.CreateTemp("", "sesh_shellrc")
 	if err != nil {
@@ -233,13 +234,4 @@ func filterEnv(env []string, key string) []string {
 		}
 	}
 	return result
-}
-
-// debug writes diagnostic information to the debug file
-func debug(message string, args ...interface{}) {
-	debugFile, _ := os.OpenFile("/tmp/sesh_debug.txt", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if debugFile != nil {
-		defer debugFile.Close()
-		fmt.Fprintf(debugFile, message+"\n", args...)
-	}
 }
