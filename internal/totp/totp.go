@@ -92,28 +92,23 @@ func GenerateForTimeSecure(secret string, t time.Time) (string, error) {
 // Byte-slice based implementations for improved security
 
 // GenerateBytes generates a TOTP code from a byte slice secret
+// The secret is expected to be a byte slice containing a base32-encoded string
 func GenerateBytes(secret []byte) (string, error) {
 	// Make a defensive copy to avoid modifying the caller's data
 	secretCopy := make([]byte, len(secret))
 	copy(secretCopy, secret)
 	defer secure.SecureZeroBytes(secretCopy)
 	
-	// Convert to string for the underlying library
+	// Convert to string - the secret is already base32-encoded in string form
+	// We're just converting the byte representation back to a string
 	secretStr := string(secretCopy)
 	
-	opts := totp.ValidateOpts{
-		Digits: 6,
-	}
-
-	code, err := totp.GenerateCodeCustom(secretStr, time.Now(), opts)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate TOTP: %w", err)
-	}
-	
-	return code, nil
+	// Now use the string-based implementation
+	return Generate(secretStr)
 }
 
 // GenerateConsecutiveCodesBytes generates two consecutive TOTP codes from a byte slice secret
+// The secret is expected to be a byte slice containing a base32-encoded string
 func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error) {
 	if MockGenerateConsecutiveCodes.Enabled {
 		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
@@ -124,27 +119,12 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 	copy(secretCopy, secret)
 	defer secure.SecureZeroBytes(secretCopy)
 	
-	// Convert to string for the underlying library
+	// Convert to string - the secret is already base32-encoded in string form
+	// We're just converting the byte representation back to a string
 	secretStr := string(secretCopy)
-
-	now := time.Now()
-	nextTimeWindow := now.Add(30 * time.Second)
-
-	opts := totp.ValidateOpts{
-		Digits: 6,
-	}
-
-	current, err = totp.GenerateCodeCustom(secretStr, now, opts)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to generate current TOTP: %w", err)
-	}
-
-	next, err = totp.GenerateCodeCustom(secretStr, nextTimeWindow, opts)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to generate next TOTP: %w", err)
-	}
-
-	return current, next, nil
+	
+	// Use the string-based implementation
+	return GenerateConsecutiveCodes(secretStr)
 }
 
 // GenerateForTimeBytes generates a TOTP code for a specific time from a byte slice secret
