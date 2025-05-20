@@ -21,14 +21,14 @@ import (
 // AWSSetupHandler implements SetupHandler for AWS
 type AWSSetupHandler struct {
 	keychainProvider keychain.Provider
-	reader             *bufio.Reader
+	reader           *bufio.Reader
 }
 
 // NewAWSSetupHandler creates a new AWS setup handler
 func NewAWSSetupHandler(provider keychain.Provider) *AWSSetupHandler {
 	return &AWSSetupHandler{
 		keychainProvider: provider,
-		reader:             bufio.NewReader(os.Stdin),
+		reader:           bufio.NewReader(os.Stdin),
 	}
 }
 
@@ -147,8 +147,7 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 // If no devices are found, it provides retry and manual entry options
 // Returns the MFA device ARN and any error that occurred
 func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
-	
-	// Create the command using our helper function
+
 	mfaCmd := h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
 
 	mfaOutput, err := mfaCmd.Output()
@@ -157,40 +156,40 @@ func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
 	// Try to fetch MFA devices, with retries if none are found
 	maxRetries := 2
 	retryCount := 0
-	
-	mfaDeviceLoop: for {
+
+mfaDeviceLoop:
+	for {
 		if err == nil && len(strings.TrimSpace(string(mfaOutput))) > 0 {
 			// MFA devices were found, process them
 			mfaDevices := strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
-			
-			// Always show the list of devices and let the user choose, even if there's only one
+
+			// Always show the list of devices and let the user choose, even if there's only one.
 			// This handles cases where they already had an MFA device and the new one isn't
-			// showing up yet, or they had a single existing device that isn't the one they just created
+			// showing up yet, or they had a single existing device that isn't the one they just created.
 			fmt.Println("\nFound MFA device(s):")
 			for i, device := range mfaDevices {
 				fmt.Printf("%d: %s\n", i+1, device)
 			}
-			
-			selectionPrompt:
-			fmt.Print("\nChoose the MFA device you just created (1-" + fmt.Sprintf("%d", len(mfaDevices)) + 
+
+		selectionPrompt:
+			fmt.Print("\nChoose the MFA device you just created (1-" + fmt.Sprintf("%d", len(mfaDevices)) +
 				"), 'r' to refresh the list, or 'm' to enter manually: ")
 			choice, _ := h.reader.ReadString('\n')
 			choice = strings.TrimSpace(choice)
-			
-			// Handle special options
+
 			switch choice {
 			case "r", "R":
 				// Refresh MFA devices list
 				fmt.Println("\n🔄 Refreshing MFA device list...")
 				mfaCmd = h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-				
+
 				mfaOutput, err = mfaCmd.Output()
 				if err != nil || len(strings.TrimSpace(string(mfaOutput))) == 0 {
 					fmt.Println("❗ No MFA devices found after refresh.")
 					// Continue to the retry options below
 					break
 				}
-				
+
 				// Show updated list of devices and go back to selection prompt
 				mfaDevices = strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
 				fmt.Println("\nFound MFA device(s) after refresh:")
@@ -198,7 +197,7 @@ func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
 					fmt.Printf("%d: %s\n", i+1, device)
 				}
 				goto selectionPrompt
-				
+
 			case "m", "M":
 				// Manual entry with validation
 				var err error
@@ -207,7 +206,7 @@ func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
 					return "", err
 				}
 				break mfaDeviceLoop // Exit the entire loop when we've manually entered ARN
-				
+
 			default:
 				// Try to parse as number
 				var index int
@@ -216,7 +215,7 @@ func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
 					fmt.Println("\n❌ Invalid choice. Please select a number from the list, 'r' to refresh, or 'm' for manual entry.")
 					goto selectionPrompt
 				}
-				
+
 				mfaArn = mfaDevices[index-1]
 				fmt.Printf("✅ Selected MFA device: %s\n", mfaArn)
 				// MFA device successfully selected
@@ -228,7 +227,7 @@ func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
 		if retryCount >= maxRetries {
 			// We've exhausted our retries, fall back to manual entry with validation
 			fmt.Println("\n❗ No MFA devices found after multiple attempts. You'll need to provide your MFA ARN manually.")
-			
+
 			var err error
 			mfaArn, err = h.promptForMFAARN()
 			if err != nil {
@@ -282,7 +281,7 @@ Please complete these steps in the AWS Console:
 				return "", err
 			}
 			break mfaDeviceLoop // Exit the loop completely
-			
+
 		default: // Invalid input
 			fmt.Println("\n❌ Invalid choice. Please select 1, 2, or 3.")
 			// Stay in the loop and show the options again
@@ -296,23 +295,23 @@ Please complete these steps in the AWS Console:
 // It validates the ARN format and ensures it's not empty
 // Returns the validated MFA ARN string and any error that occurred
 func (h *AWSSetupHandler) promptForMFAARN() (string, error) {
-	
+
 	for {
 		fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
 		mfaArn, _ := h.reader.ReadString('\n')
 		mfaArn = strings.TrimSpace(mfaArn)
-		
+
 		if mfaArn == "" {
 			fmt.Println("\u274c MFA ARN cannot be empty. Please enter a valid ARN.")
 			continue
 		}
-		
+
 		// Basic validation could be added here
 		if !strings.HasPrefix(mfaArn, "arn:aws:iam::") || !strings.Contains(mfaArn, ":mfa/") {
 			fmt.Println("\u274c Invalid ARN format. Please enter a valid MFA ARN.")
 			continue
 		}
-		
+
 		return mfaArn, nil
 	}
 }
@@ -438,14 +437,14 @@ To use this setup, run without the --profile flag:
 // TOTPSetupHandler implements SetupHandler for TOTP
 type TOTPSetupHandler struct {
 	keychainProvider keychain.Provider
-	reader             *bufio.Reader
+	reader           *bufio.Reader
 }
 
 // NewTOTPSetupHandler creates a new TOTP setup handler
 func NewTOTPSetupHandler(provider keychain.Provider) *TOTPSetupHandler {
 	return &TOTPSetupHandler{
 		keychainProvider: provider,
-		reader:             bufio.NewReader(os.Stdin),
+		reader:           bufio.NewReader(os.Stdin),
 	}
 }
 
