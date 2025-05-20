@@ -81,37 +81,31 @@ func ZeroBytes(byteSlices ...[]byte) {
 // as a byte slice. If an error occurs, any captured output is securely zeroed.
 // This function is particularly useful for capturing sensitive data from commands.
 func ExecAndCaptureSecure(cmd *exec.Cmd) ([]byte, error) {
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
+	// Use direct command execution with a secure buffer instead of pipes
+	// This addresses an issue where using stdout pipes would return incorrect data
+	// for binary content from certain commands (e.g., macOS 'security')
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	buf, err := io.ReadAll(stdout)
-	if err != nil {
-		// Ensure we clean up even if read fails
-		cmd.Wait() // Ignore error as we're already in error path
-		return nil, err
-	}
-	
-	if err := cmd.Wait(); err != nil {
+	if err := cmd.Run(); err != nil {
 		// Zero the buffer before returning error
-		SecureZeroBytes(buf)
+		SecureZeroBytes(stdout.Bytes())
 		return nil, err
 	}
 
-	// Return trimmed result
-	result := bytes.TrimSpace(buf)
+	// Get the result with proper trimming
+	result := bytes.TrimSpace(stdout.Bytes())
 	
-	// Zero the original buffer if it's different from the result
-	if len(result) != len(buf) {
-		SecureZeroBytes(buf)
-	}
+	// Create a copy we can safely return
+	secureResult := make([]byte, len(result))
+	copy(secureResult, result)
 	
-	return result, nil
+	// Zero the original buffer to minimize exposure window
+	SecureZeroBytes(stdout.Bytes())
+	
+	return secureResult, nil
 }
 
 // ExecWithSecretInput executes a command with a sensitive byte slice provided via stdin

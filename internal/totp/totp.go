@@ -178,14 +178,30 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 	// Debug - check if it matches base32 pattern and clean it up if needed
 	allValid := true
 	validChars := 0
-	for _, c := range secretStr {
+	fmt.Fprintf(os.Stderr, "DEBUG TOTP: Secret string length: %d\n", len(secretStr))
+	
+	// Print only the first 5 characters to help debug without exposing the full secret
+	if len(secretStr) > 5 {
+		fmt.Fprintf(os.Stderr, "DEBUG TOTP: First 5 chars (hex): %x\n", []byte(secretStr[:5]))
+	}
+	
+	for i, c := range secretStr {
 		// Only uppercase letters A-Z and digits 2-7 and padding = are valid in base32
 		if (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=' {
 			validChars++
+			if i < 5 {
+				fmt.Fprintf(os.Stderr, "DEBUG TOTP: Char %d (%c) is valid base32\n", i, c)
+			}
 		} else if c == '\n' || c == '\r' || c == ' ' || c == '\t' {
 			// Ignore whitespace characters
+			if i < 5 {
+				fmt.Fprintf(os.Stderr, "DEBUG TOTP: Char %d (0x%x) is whitespace\n", i, c)
+			}
 		} else {
 			allValid = false
+			if i < 5 {
+				fmt.Fprintf(os.Stderr, "DEBUG TOTP: Char %d (0x%x) is NOT valid base32\n", i, c)
+			}
 		}
 	}
 	
