@@ -216,20 +216,10 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				}
 				keyName = fmt.Sprintf("%s-%s", p.keyName, keyName)
 
-				var secret string
-				cmd := exec.Command("security", "find-generic-password",
-					"-a", p.keyUser,
-					"-s", keyName,
-					"-w")
-				var stdout bytes.Buffer
-				cmd.Stdout = &stdout
-				if cmd.Run() == nil {
-					secret = strings.TrimSpace(stdout.String())
-				} else {
-					secret, err = p.keychain.GetSecret(p.keyUser, keyName)
-					if err != nil {
-						return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret: %w", err)
-					}
+				// Get the TOTP secret using the provider interface
+				secret, err := p.keychain.GetSecret(p.keyUser, keyName)
+				if err != nil {
+					return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 				}
 
 				// Generate a code for the window after next, in case AWS is far ahead of our clock
