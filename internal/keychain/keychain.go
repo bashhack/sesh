@@ -12,12 +12,13 @@ import (
 
 var execCommand = exec.Command
 
-// GetSecret retrieves a secret from the keychain
-func GetSecret(account, service string) (string, error) {
+// GetSecretBytes retrieves a secret from the keychain as a byte slice
+// This is the more secure variant of GetSecret
+func GetSecretBytes(account, service string) ([]byte, error) {
 	if account == "" {
 		out, err := execCommand("whoami").Output()
 		if err != nil {
-			return "", fmt.Errorf("could not determine current user: %w", err)
+			return nil, fmt.Errorf("could not determine current user: %w", err)
 		}
 		account = strings.TrimSpace(string(out))
 	}
@@ -28,31 +29,47 @@ func GetSecret(account, service string) (string, error) {
 		"-w",
 	)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	// Use secure capturing to ensure memory is zeroed if there are errors
+	secret, err := secure.ExecAndCaptureSecure(cmd)
 	if err != nil {
 		// Intentionally using a message here that doesn't leak more information than necessary
-		return "", fmt.Errorf("no secret found in Keychain for account %q and service %q. Run setup to configure",
+		return nil, fmt.Errorf("no secret found in Keychain for account %q and service %q. Run setup to configure",
 			account, service)
 	}
-
-	// Get the secret and trim whitespace
-	secret := strings.TrimSpace(stdout.String())
 	
-	// Zero out the stdout buffer for security
-	secure.SecureZeroBytes(stdout.Bytes())
+	// Make a defensive copy to return
+	result := make([]byte, len(secret))
+	copy(result, secret)
+	
+	// Zero the original
+	secure.SecureZeroBytes(secret)
+	
+	return result, nil
+}
+
+// GetSecretString retrieves a secret from the keychain as a string
+// This is provided for backward compatibility but is less secure
+// than GetSecretBytes
+func GetSecretString(account, service string) (string, error) {
+	secretBytes, err := GetSecretBytes(account, service)
+	if err != nil {
+		return "", err
+	}
+	
+	// Convert to string and zero the bytes
+	secret := string(secretBytes)
+	secure.SecureZeroBytes(secretBytes)
 	
 	return secret, nil
 }
 
-// SetSecret sets a secret in the keychain
-func SetSecret(account, service, secret string) error {
-	// Create a copy of the secret to zero later
-	secretBytes := []byte(secret)
-	defer secure.SecureZeroBytes(secretBytes)
+// SetSecretBytes sets a byte slice secret in the keychain
+// This is the more secure variant of SetSecret
+func SetSecretBytes(account, service string, secret []byte) error {
+	// Create a defensive copy to avoid mutating the caller's data
+	secretCopy := make([]byte, len(secret))
+	copy(secretCopy, secret)
+	defer secure.SecureZeroBytes(secretCopy)
 	
 	if account == "" {
 		out, err := execCommand("whoami").Output()
@@ -68,11 +85,15 @@ func SetSecret(account, service, secret string) error {
 		return fmt.Errorf("could not determine the path to the sesh binary, cannot access keychain")
 	}
 
+	// Convert to string for the security command
+	// This is necessary because we need to pass it as a command-line argument
+	secretStr := string(secretCopy)
+	
 	// Allow only the sesh binary to access this keychain item
 	cmd := execCommand("security", "add-generic-password",
 		"-a", account,
 		"-s", service,
-		"-w", secret,
+		"-w", secretStr,
 		"-U",           // Update if exists
 		"-T", execPath, // Only allow the sesh binary to access this item
 	)
@@ -92,6 +113,16 @@ func SetSecret(account, service, secret string) error {
 	return nil
 }
 
+// SetSecretString sets a string secret in the keychain
+// This is provided for backward compatibility but is less secure
+// than SetSecretBytes
+func SetSecretString(account, service, secret string) error {
+	secretBytes := []byte(secret)
+	defer secure.SecureZeroBytes(secretBytes)
+	
+	return SetSecretBytes(account, service, secretBytes)
+}
+
 // GetMFASerial retrieves the MFA device serial number from keychain
 func GetMFASerial(account string) (string, error) {
 	if account == "" {
@@ -108,20 +139,17 @@ func GetMFASerial(account string) (string, error) {
 		"-w",
 	)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	// Use secure capturing to ensure memory is zeroed if there are errors
+	serialBytes, err := secure.ExecAndCaptureSecure(cmd)
 	if err != nil {
 		return "", fmt.Errorf("no MFA serial stored in Keychain for account %q", account)
 	}
 
-	// Get the serial and trim whitespace
-	serial := strings.TrimSpace(stdout.String())
+	// Convert to string
+	serial := string(serialBytes)
 	
-	// Zero out the stdout buffer for security
-	secure.SecureZeroBytes(stdout.Bytes())
+	// Zero the byte slice
+	secure.SecureZeroBytes(serialBytes)
 	
 	return serial, nil
 }

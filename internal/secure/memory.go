@@ -17,7 +17,12 @@
 // - Zeroing sensitive data immediately after use
 package secure
 
-import "runtime"
+import (
+	"bytes"
+	"io"
+	"os/exec"
+	"runtime"
+)
 
 // SecureZeroBytes zeros out a byte slice in a way that won't be
 // optimized away by the compiler. This helps ensure sensitive data
@@ -70,4 +75,41 @@ func ZeroBytes(byteSlices ...[]byte) {
 	for _, b := range byteSlices {
 		SecureZeroBytes(b)
 	}
+}
+
+// ExecAndCaptureSecure executes a command and securely captures its stdout
+// as a byte slice. If an error occurs, any captured output is securely zeroed.
+// This function is particularly useful for capturing sensitive data from commands.
+func ExecAndCaptureSecure(cmd *exec.Cmd) ([]byte, error) {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	buf, err := io.ReadAll(stdout)
+	if err != nil {
+		// Ensure we clean up even if read fails
+		cmd.Wait() // Ignore error as we're already in error path
+		return nil, err
+	}
+	
+	if err := cmd.Wait(); err != nil {
+		// Zero the buffer before returning error
+		SecureZeroBytes(buf)
+		return nil, err
+	}
+
+	// Return trimmed result
+	result := bytes.TrimSpace(buf)
+	
+	// Zero the original buffer if it's different from the result
+	if len(result) != len(buf) {
+		SecureZeroBytes(buf)
+	}
+	
+	return result, nil
 }
