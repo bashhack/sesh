@@ -19,7 +19,6 @@ package secure
 
 import (
 	"bytes"
-	"io"
 	"os/exec"
 	"runtime"
 )
@@ -56,7 +55,7 @@ func SecureZeroString(s string) {
 	if s == "" {
 		return
 	}
-	
+
 	// Convert to bytes for zeroing
 	// Note: This creates a new copy in memory, which is not ideal for security
 	b := []byte(s)
@@ -88,7 +87,7 @@ func ExecAndCaptureSecure(cmd *exec.Cmd) ([]byte, error) {
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	
+
 	if err := cmd.Run(); err != nil {
 		// Zero the buffer before returning error
 		SecureZeroBytes(stdout.Bytes())
@@ -97,14 +96,14 @@ func ExecAndCaptureSecure(cmd *exec.Cmd) ([]byte, error) {
 
 	// Get the result with proper trimming
 	result := bytes.TrimSpace(stdout.Bytes())
-	
+
 	// Create a copy we can safely return
 	secureResult := make([]byte, len(result))
 	copy(secureResult, result)
-	
+
 	// Zero the original buffer to minimize exposure window
 	SecureZeroBytes(stdout.Bytes())
-	
+
 	return secureResult, nil
 }
 
@@ -117,22 +116,22 @@ func ExecWithSecretInput(cmd *exec.Cmd, secret []byte) error {
 	if err != nil {
 		return err
 	}
-	
+
 	// Start the command
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	
+
 	// Write secret to stdin
 	if _, err := stdin.Write(secret); err != nil {
 		cmd.Process.Kill() // Kill process on write error
 		cmd.Wait()         // Clean up resources
 		return err
 	}
-	
+
 	// Close stdin to signal EOF
 	stdin.Close()
-	
+
 	// Wait for command to complete
 	return cmd.Wait()
 }

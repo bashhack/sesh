@@ -30,36 +30,12 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 		"-w",
 	)
 
-	// TEMPORARY DIAGNOSTIC: Use direct command execution to compare with secure version
-	var stdout, stderr bytes.Buffer
-	directCmd := execCommand("security", "find-generic-password",
-		"-a", account,
-		"-s", service,
-		"-w",
-	)
-	directCmd.Stdout = &stdout
-	directCmd.Stderr = &stderr
-	directErr := directCmd.Run()
-	
 	// Use secure capturing to ensure memory is zeroed if there are errors
 	secret, err := secure.ExecAndCaptureSecure(cmd)
 	if err != nil {
 		// Intentionally using a message here that doesn't leak more information than necessary
 		return nil, fmt.Errorf("no secret found in Keychain for account %q and service %q. Run setup to configure",
 			account, service)
-	}
-
-	// TEMPORARY DIAGNOSTIC: Compare the two results
-	directOutput := stdout.Bytes()
-	fmt.Fprintf(os.Stderr, "DEBUG keychain DIRECT: Retrieved secret for service '%s', length: %d bytes\n", 
-		service, len(directOutput))
-	fmt.Fprintf(os.Stderr, "DEBUG keychain SECURE: Retrieved secret for service '%s', length: %d bytes\n", 
-		service, len(secret))
-	
-	// If direct output works but secure doesn't, use direct output
-	if directErr == nil && len(directOutput) > 0 && (len(secret) == 0 || bytes.Equal(secret, make([]byte, len(secret)))) {
-		fmt.Fprintf(os.Stderr, "DEBUG keychain: Using direct output instead of secure output due to potential issues\n")
-		secret = bytes.TrimSpace(directOutput)
 	}
 
 	// For debugging
@@ -71,30 +47,14 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 		// Check if we have roughly valid base32 content without revealing it
 		allValid := true
 		base32Chars := 0
-		fmt.Fprintf(os.Stderr, "DEBUG keychain: Secret string length: %d\n", len(secretStr))
-		
-		// Print only the first 5 characters to help debug without exposing the full secret
-		if len(secretStr) > 5 {
-			fmt.Fprintf(os.Stderr, "DEBUG keychain: First 5 chars (hex): %x\n", []byte(secretStr[:5]))
-		}
-		
-		for i, c := range secretStr {
+		for _, c := range secretStr {
 			// Only uppercase letters A-Z and digits 2-7 are valid in base32
 			if (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=' {
 				base32Chars++
-				if i < 5 {
-					fmt.Fprintf(os.Stderr, "DEBUG keychain: Char %d (%c) is valid base32\n", i, c)
-				}
 			} else if c == '\n' || c == '\r' || c == ' ' || c == '\t' {
 				// Ignore whitespace
-				if i < 5 {
-					fmt.Fprintf(os.Stderr, "DEBUG keychain: Char %d (0x%x) is whitespace\n", i, c)
-				}
 			} else {
 				allValid = false
-				if i < 5 {
-					fmt.Fprintf(os.Stderr, "DEBUG keychain: Char %d (0x%x) is NOT valid base32\n", i, c)
-				}
 			}
 		}
 		if !allValid {
