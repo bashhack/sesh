@@ -2,11 +2,21 @@ package keychain
 
 // Provider defines the interface for keychain operations
 type Provider interface {
-	// GetSecret retrieves a secret from the keychain
-	GetSecret(account, service string) (string, error)
+	// GetSecret retrieves a secret from the keychain as a byte slice
+	// for improved security. The returned byte slice should be zeroed
+	// after use with secure.SecureZeroBytes
+	GetSecret(account, service string) ([]byte, error)
 
-	// SetSecret sets a secret in the keychain
-	SetSecret(account, service, secret string) error
+	// SetSecret sets a secret in the keychain from a byte slice
+	SetSecret(account, service string, secret []byte) error
+	
+	// GetSecretString retrieves a secret from the keychain as a string
+	// Note: This is less secure than GetSecret and should be used only when necessary
+	GetSecretString(account, service string) (string, error)
+
+	// SetSecretString sets a string secret in the keychain
+	// Note: This is less secure than SetSecret and should be used only when necessary
+	SetSecretString(account, service, secret string) error
 
 	// GetMFASerial retrieves the MFA serial from the keychain
 	GetMFASerial(account string) (string, error)
@@ -41,13 +51,23 @@ type DefaultProvider struct{}
 var _ Provider = (*DefaultProvider)(nil)
 
 // GetSecret implements the Provider interface
-func (p *DefaultProvider) GetSecret(account, service string) (string, error) {
-	return GetSecret(account, service)
+func (p *DefaultProvider) GetSecret(account, service string) ([]byte, error) {
+	return GetSecretBytes(account, service)
 }
 
 // SetSecret implements the Provider interface
-func (p *DefaultProvider) SetSecret(account, service, secret string) error {
-	return SetSecret(account, service, secret)
+func (p *DefaultProvider) SetSecret(account, service string, secret []byte) error {
+	return SetSecretBytes(account, service, secret)
+}
+
+// GetSecretString implements the Provider interface
+func (p *DefaultProvider) GetSecretString(account, service string) (string, error) {
+	return GetSecretString(account, service)
+}
+
+// SetSecretString implements the Provider interface
+func (p *DefaultProvider) SetSecretString(account, service, secret string) error {
+	return SetSecretString(account, service, secret)
 }
 
 // GetMFASerial implements the Provider interface
