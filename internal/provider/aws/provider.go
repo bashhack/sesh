@@ -188,7 +188,10 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	code := currentCode
 
 	// Try the first code
-	awsCreds, err := p.aws.GetSessionToken(p.profile, serial, code)
+	codeBytes := []byte(code)
+	awsCreds, err := p.aws.GetSessionToken(p.profile, serial, codeBytes)
+	// Zero out the bytes after use
+	secure.SecureZeroBytes(codeBytes)
 
 	// Check if this is an "invalid MFA one time pass code" error, which could indicate a recently used code
 	if err != nil {
@@ -234,7 +237,9 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				if gErr == nil {
 					fmt.Fprintf(os.Stderr, "🔑 Trying with future time window's code: %s\n", futureCode)
 					code = futureCode
-					awsCreds, err = p.aws.GetSessionToken(p.profile, serial, code)
+					codeBytes = []byte(code)
+				awsCreds, err = p.aws.GetSessionToken(p.profile, serial, codeBytes)
+				secure.SecureZeroBytes(codeBytes)
 				}
 			}
 		}

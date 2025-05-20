@@ -44,14 +44,14 @@ type ListDevicesResponse struct {
 	MFADevices []MFADevice `json:"MFADevices"`
 }
 
-func GetSessionToken(profile, serial, code string) (Credentials, error) {
-	// Create a copy of the code to zero after use
-	codeBytes := []byte(code)
-	defer secure.SecureZeroBytes(codeBytes)
+func GetSessionToken(profile, serial string, code []byte) (Credentials, error) {
+	// Convert code to string for command execution but ensure it's zeroed
+	codeStr := string(code)
+	defer secure.SecureZeroString(codeStr)
 
 	args := []string{"sts", "get-session-token",
 		"--serial-number", serial,
-		"--token-code", code,
+		"--token-code", codeStr,
 		"--output", "json",
 	}
 	if profile != "" {
