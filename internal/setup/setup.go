@@ -316,6 +316,8 @@ func (h *AWSSetupHandler) promptForMFAARN() (string, error) {
 	}
 }
 
+func (h *AWSSetupHandler) show
+
 // Setup performs the AWS setup
 func (h *AWSSetupHandler) Setup() error {
 	fmt.Println("🔐 Setting up AWS credentials...")
