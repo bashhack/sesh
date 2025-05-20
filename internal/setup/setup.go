@@ -21,12 +21,14 @@ import (
 // AWSSetupHandler implements SetupHandler for AWS
 type AWSSetupHandler struct {
 	keychainProvider keychain.Provider
+	reader             *bufio.Reader
 }
 
 // NewAWSSetupHandler creates a new AWS setup handler
 func NewAWSSetupHandler(provider keychain.Provider) *AWSSetupHandler {
 	return &AWSSetupHandler{
 		keychainProvider: provider,
+		reader:             bufio.NewReader(os.Stdin),
 	}
 }
 
@@ -36,8 +38,10 @@ func (h *AWSSetupHandler) ServiceName() string {
 }
 
 // selectMFADevice handles listing and selecting an MFA device for the user
+// It queries the AWS API for MFA devices and guides the user through selecting one
+// If no devices are found, it provides retry and manual entry options
+// Returns the MFA device ARN and any error that occurred
 func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
-	reader := bufio.NewReader(os.Stdin)
 	
 	// Create the appropriate command based on profile
 	var mfaCmd *exec.Cmd
@@ -203,8 +207,9 @@ Please complete these steps in the AWS Console:
 }
 
 // promptForMFAARN prompts the user to enter an MFA ARN manually
+// It validates the ARN format and ensures it's not empty
+// Returns the validated MFA ARN string and any error that occurred
 func (h *AWSSetupHandler) promptForMFAARN() (string, error) {
-	reader := bufio.NewReader(os.Stdin)
 	
 	for {
 		fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
