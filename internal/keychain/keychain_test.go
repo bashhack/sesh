@@ -348,18 +348,46 @@ data:
 		return cmd
 	}
 
-	// Mock the LoadEntryMetadata function to return test data
-	originalLoadEntryMetadata := LoadEntryMetadata
-	defer func() { LoadEntryMetadata = originalLoadEntryMetadata }()
+	// Mock the LoadEntryMetadata implementation to return test data
+	originalFunc := loadEntryMetadataImpl
+	defer func() { loadEntryMetadataImpl = originalFunc }()
 	
 	// Override the function for this test
-	LoadEntryMetadata = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+		// Return different results based on the servicePrefix
+		if servicePrefix == "sesh-mfa" {
+			return []KeychainEntryMeta{
+				{
+					Service:     "sesh-mfa",
+					Account:     "testuser",
+					Description: "AWS MFA Secret",
+					ServiceType: "aws",
+				},
+			}, nil
+		} else if servicePrefix == "sesh-totp" {
+			return []KeychainEntryMeta{
+				{
+					Service:     "sesh-totp-github",
+					Account:     "testuser",
+					Description: "GitHub TOTP",
+					ServiceType: "totp",
+				},
+			}, nil
+		}
+		
+		// Return all entries when no prefix is specified
 		return []KeychainEntryMeta{
 			{
 				Service:     "sesh-mfa",
 				Account:     "testuser",
 				Description: "AWS MFA Secret",
 				ServiceType: "aws",
+			},
+			{
+				Service:     "sesh-totp-github",
+				Account:     "testuser",
+				Description: "GitHub TOTP",
+				ServiceType: "totp",
 			},
 		}, nil
 	}
@@ -401,22 +429,21 @@ data:
 		t.Errorf("Expected service 'sesh-mfa' or 'sesh-totp-github' but got '%s'", entries[0].Service)
 	}
 
-	// Test with error
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-			"MOCK_ERROR=1",
+	// Test with error by creating a new subtest
+	t.Run("Error Case", func(t *testing.T) {
+		// Reset the mock
+		loadEntryMetadataImpl = originalFunc
+		
+		// Now set it to return an error
+		loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+			return nil, fmt.Errorf("test error")
 		}
-		return cmd
-	}
-
-	_, err = ListEntries("sesh-mfa")
-	if err == nil {
-		t.Error("Expected error but got nil")
-	}
+		
+		_, err = ListEntries("sesh-mfa")
+		if err == nil {
+			t.Error("Expected error but got nil")
+		}
+	})
 }
 
 func TestDeleteEntry(t *testing.T) {

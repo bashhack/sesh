@@ -229,9 +229,10 @@ func getServicePrefix(service string) string {
 		return constants.AWSServicePrefix
 	}
 
-	// Handle unknown prefix - split on first dash
-	parts := strings.SplitN(service, "-", 2)
-	if len(parts) > 1 {
+	// Handle unknown prefix - expected format is 'sesh-type-name'
+	parts := strings.SplitN(service, "-", 3)
+	// If we have at least 2 parts, return the first 2 joined by dash as the prefix
+	if len(parts) > 2 {
 		return fmt.Sprintf("%s-%s", parts[0], parts[1])
 	}
 	return service
