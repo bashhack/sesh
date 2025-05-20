@@ -74,7 +74,7 @@ func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
 			selectionPrompt:
 			fmt.Print("\nChoose the MFA device you just created (1-" + fmt.Sprintf("%d", len(mfaDevices)) + 
 				"), 'r' to refresh the list, or 'm' to enter manually: ")
-			choice, _ := reader.ReadString('\n')
+			choice, _ := h.reader.ReadString('\n')
 			choice = strings.TrimSpace(choice)
 			
 			// Handle special options
@@ -276,7 +276,7 @@ How would you like to capture the MFA secret?
 1: Enter the secret key manually (click 'Show secret key' in AWS)
 2: Capture QR code from screen (take a screenshot of the QR code)
 Enter your choice (1-2): `)
-	choice, _ := reader.ReadString('\n')
+	choice, _ := h.reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
 	var secretStr string
@@ -454,7 +454,7 @@ func (h *TOTPSetupHandler) Setup() error {
 	fmt.Println("1: Enter the secret key manually")
 	fmt.Println("2: Capture QR code from screen")
 	fmt.Print("Enter your choice (1-2): ")
-	choice, _ := reader.ReadString('\n')
+	choice, _ := h.reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
 	// Variable to store the secret
@@ -602,7 +602,7 @@ func (h *TOTPSetupHandler) Setup() error {
 //	//fmt.Println("1: Enter the secret key manually (click 'Show secret key' in AWS)")
 //	//fmt.Println("2: Capture QR code from screen (take a screenshot of the QR code)")
 //	//fmt.Print("Enter your choice (1-2): ")
-//	//choice, _ := reader.ReadString('\n')
+//	//choice, _ := h.reader.ReadString('\n')
 //	//choice = strings.TrimSpace(choice)
 //
 //	// Variable to store the secret
@@ -704,7 +704,7 @@ func (h *TOTPSetupHandler) Setup() error {
 //	//			fmt.Printf("%d: %s\n", i+1, device)
 //	//		}
 //	//		fmt.Print("Choose the MFA device you just created (1-n): ")
-//	//		choice, _ := reader.ReadString('\n')
+//	//		choice, _ := h.reader.ReadString('\n')
 //	//		choice = strings.TrimSpace(choice)
 //	//		var index int
 //	//		fmt.Sscanf(choice, "%d", &index)
@@ -829,7 +829,7 @@ func setupGenericTOTP() {
 	fmt.Println("1: Enter the secret key manually")
 	fmt.Println("2: Capture QR code from screen")
 	fmt.Print("Enter your choice (1-2): ")
-	choice, _ := reader.ReadString('\n')
+	choice, _ := h.reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
 	// Variable to store the secret
