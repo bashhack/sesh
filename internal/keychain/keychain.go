@@ -3,6 +3,7 @@ package keychain
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -36,10 +37,10 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 		return nil, fmt.Errorf("no secret found in Keychain for account %q and service %q. Run setup to configure",
 			account, service)
 	}
-	
+
 	// For debugging
 	fmt.Fprintf(os.Stderr, "DEBUG keychain: Retrieved secret for service '%s', length: %d bytes\n", service, len(secret))
-	
+
 	// Check if content is a valid base32 string (for TOTP secrets)
 	if strings.HasPrefix(service, "sesh-aws") || strings.HasPrefix(service, "sesh-totp") {
 		secretStr := string(secret)
@@ -57,27 +58,27 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 			}
 		}
 		if !allValid {
-			fmt.Fprintf(os.Stderr, "DEBUG keychain WARNING: Secret contains non-base32 characters (only %d/%d valid)\n", 
+			fmt.Fprintf(os.Stderr, "DEBUG keychain WARNING: Secret contains non-base32 characters (only %d/%d valid)\n",
 				base32Chars, len(secretStr))
 		} else {
 			fmt.Fprintf(os.Stderr, "DEBUG keychain: Secret appears to be valid base32 (%d chars)\n", base32Chars)
 		}
-		
+
 		// Trim whitespace - CRITICAL: removes any newlines, which can cause base32 decode failures
 		secretTrimmed := bytes.TrimSpace(secret)
 		if len(secretTrimmed) != len(secret) {
-			fmt.Fprintf(os.Stderr, "DEBUG keychain: Trimmed %d whitespace bytes\n", len(secret) - len(secretTrimmed))
+			fmt.Fprintf(os.Stderr, "DEBUG keychain: Trimmed %d whitespace bytes\n", len(secret)-len(secretTrimmed))
 			secret = secretTrimmed
 		}
 	}
-	
+
 	// Make a defensive copy to return
 	result := make([]byte, len(secret))
 	copy(result, secret)
-	
+
 	// Zero the original
 	secure.SecureZeroBytes(secret)
-	
+
 	return result, nil
 }
 
@@ -89,11 +90,11 @@ func GetSecretString(account, service string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Convert to string and zero the bytes
 	secret := string(secretBytes)
 	secure.SecureZeroBytes(secretBytes)
-	
+
 	return secret, nil
 }
 
@@ -104,7 +105,7 @@ func SetSecretBytes(account, service string, secret []byte) error {
 	secretCopy := make([]byte, len(secret))
 	copy(secretCopy, secret)
 	defer secure.SecureZeroBytes(secretCopy)
-	
+
 	if account == "" {
 		out, err := execCommand("whoami").Output()
 		if err != nil {
@@ -118,14 +119,14 @@ func SetSecretBytes(account, service string, secret []byte) error {
 	if execPath == "" {
 		return fmt.Errorf("could not determine the path to the sesh binary, cannot access keychain")
 	}
-	
+
 	// Allow only the sesh binary to access this keychain item
 	// Use stdin instead of command-line argument for security
 	cmd := execCommand("security", "add-generic-password",
 		"-a", account,
 		"-s", service,
-		"-w", // Read password from stdin
-		"-U", // Update if exists
+		"-w",           // Read password from stdin
+		"-U",           // Update if exists
 		"-T", execPath, // Only allow the sesh binary to access this item
 	)
 
@@ -148,7 +149,7 @@ func SetSecretBytes(account, service string, secret []byte) error {
 func SetSecretString(account, service, secret string) error {
 	secretBytes := []byte(secret)
 	defer secure.SecureZeroBytes(secretBytes)
-	
+
 	return SetSecretBytes(account, service, secretBytes)
 }
 
@@ -174,14 +175,14 @@ func GetMFASerialBytes(account string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("no MFA serial stored in Keychain for account %q", account)
 	}
-	
+
 	// Make a defensive copy
 	result := make([]byte, len(serialBytes))
 	copy(result, serialBytes)
-	
+
 	// Zero the original
 	secure.SecureZeroBytes(serialBytes)
-	
+
 	return result, nil
 }
 
@@ -192,11 +193,11 @@ func GetMFASerial(account string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Convert to string and zero the bytes
 	serial := string(serialBytes)
 	secure.SecureZeroBytes(serialBytes)
-	
+
 	return serial, nil
 }
 
