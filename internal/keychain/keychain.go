@@ -118,12 +118,13 @@ func SetSecretString(account, service, secret string) error {
 	return SetSecretBytes(account, service, secretBytes)
 }
 
-// GetMFASerial retrieves the MFA device serial number from keychain
-func GetMFASerial(account string) (string, error) {
+// GetMFASerialBytes retrieves the MFA device serial number from keychain as bytes
+// This is more secure than GetMFASerial
+func GetMFASerialBytes(account string) ([]byte, error) {
 	if account == "" {
 		out, err := execCommand("whoami").Output()
 		if err != nil {
-			return "", fmt.Errorf("could not determine current user: %w", err)
+			return nil, fmt.Errorf("could not determine current user: %w", err)
 		}
 		account = strings.TrimSpace(string(out))
 	}
@@ -137,13 +138,29 @@ func GetMFASerial(account string) (string, error) {
 	// Use secure capturing to ensure memory is zeroed if there are errors
 	serialBytes, err := secure.ExecAndCaptureSecure(cmd)
 	if err != nil {
-		return "", fmt.Errorf("no MFA serial stored in Keychain for account %q", account)
+		return nil, fmt.Errorf("no MFA serial stored in Keychain for account %q", account)
 	}
-
-	// Convert to string
-	serial := string(serialBytes)
 	
-	// Zero the byte slice
+	// Make a defensive copy
+	result := make([]byte, len(serialBytes))
+	copy(result, serialBytes)
+	
+	// Zero the original
+	secure.SecureZeroBytes(serialBytes)
+	
+	return result, nil
+}
+
+// GetMFASerial retrieves the MFA device serial number from keychain as a string
+// This is less secure than GetMFASerialBytes and is provided for backward compatibility
+func GetMFASerial(account string) (string, error) {
+	serialBytes, err := GetMFASerialBytes(account)
+	if err != nil {
+		return "", err
+	}
+	
+	// Convert to string and zero the bytes
+	serial := string(serialBytes)
 	secure.SecureZeroBytes(serialBytes)
 	
 	return serial, nil

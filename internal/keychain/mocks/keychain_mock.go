@@ -4,8 +4,11 @@ import "github.com/bashhack/sesh/internal/keychain"
 
 // MockProvider is a mock implementation of the keychain.Provider interface
 type MockProvider struct {
-	GetSecretFunc           func(account, service string) (string, error)
-	SetSecretFunc           func(account, service, secret string) error
+	GetSecretFunc           func(account, service string) ([]byte, error)
+	SetSecretFunc           func(account, service string, secret []byte) error
+	GetSecretStringFunc     func(account, service string) (string, error)
+	SetSecretStringFunc     func(account, service, secret string) error
+	GetMFASerialBytesFunc   func(account string) ([]byte, error)
 	GetMFASerialFunc        func(account string) (string, error)
 	ListEntriesFunc         func(service string) ([]keychain.KeychainEntry, error)
 	DeleteEntryFunc         func(account, service string) error
@@ -15,13 +18,28 @@ type MockProvider struct {
 }
 
 // GetSecret implements the keychain.Provider interface
-func (m *MockProvider) GetSecret(account, service string) (string, error) {
+func (m *MockProvider) GetSecret(account, service string) ([]byte, error) {
 	return m.GetSecretFunc(account, service)
 }
 
 // SetSecret implements the keychain.Provider interface
-func (m *MockProvider) SetSecret(account, service, secret string) error {
+func (m *MockProvider) SetSecret(account, service string, secret []byte) error {
 	return m.SetSecretFunc(account, service, secret)
+}
+
+// GetSecretString implements the keychain.Provider interface
+func (m *MockProvider) GetSecretString(account, service string) (string, error) {
+	return m.GetSecretStringFunc(account, service)
+}
+
+// SetSecretString implements the keychain.Provider interface
+func (m *MockProvider) SetSecretString(account, service, secret string) error {
+	return m.SetSecretStringFunc(account, service, secret)
+}
+
+// GetMFASerialBytes implements the keychain.Provider interface
+func (m *MockProvider) GetMFASerialBytes(account string) ([]byte, error) {
+	return m.GetMFASerialBytesFunc(account)
 }
 
 // GetMFASerial implements the keychain.Provider interface

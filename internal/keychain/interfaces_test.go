@@ -34,12 +34,13 @@ func TestDefaultProviderGetSecret(t *testing.T) {
 	}
 
 	provider := NewDefaultProvider()
-	secret, err := provider.GetSecret("testuser", "test-service")
+	secretBytes, err := provider.GetSecret("testuser", "test-service")
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
-
+	
+	secret := string(secretBytes)
 	if secret != "test-secret" {
 		t.Errorf("Expected secret 'test-secret', got '%s'", secret)
 	}

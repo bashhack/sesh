@@ -18,7 +18,12 @@ type Provider interface {
 	// Note: This is less secure than SetSecret and should be used only when necessary
 	SetSecretString(account, service, secret string) error
 
-	// GetMFASerial retrieves the MFA serial from the keychain
+	// GetMFASerialBytes retrieves the MFA serial from the keychain as bytes
+	// This is more secure than GetMFASerial
+	GetMFASerialBytes(account string) ([]byte, error)
+	
+	// GetMFASerial retrieves the MFA serial from the keychain as a string
+	// Note: This is less secure than GetMFASerialBytes and should be used only when necessary
 	GetMFASerial(account string) (string, error)
 
 	// ListEntries lists all entries for a given service
@@ -68,6 +73,11 @@ func (p *DefaultProvider) GetSecretString(account, service string) (string, erro
 // SetSecretString implements the Provider interface
 func (p *DefaultProvider) SetSecretString(account, service, secret string) error {
 	return SetSecretString(account, service, secret)
+}
+
+// GetMFASerialBytes implements the Provider interface
+func (p *DefaultProvider) GetMFASerialBytes(account string) ([]byte, error) {
+	return GetMFASerialBytes(account)
 }
 
 // GetMFASerial implements the Provider interface

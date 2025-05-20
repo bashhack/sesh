@@ -464,7 +464,8 @@ func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 		serialService = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, p.profile)
 	}
 
-	// Get MFA serial using the provider interface
+	// Get MFA serial using the provider interface - use the bytes version for better security
+	// We need to explicitly pass the service name
 	serialBytes, err := p.keychain.GetSecret(p.keyUser, serialService)
 	if err == nil {
 		// Make defensive copy
