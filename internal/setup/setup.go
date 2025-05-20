@@ -35,6 +35,197 @@ func (h *AWSSetupHandler) ServiceName() string {
 	return "aws"
 }
 
+// selectMFADevice handles listing and selecting an MFA device for the user
+func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
+	reader := bufio.NewReader(os.Stdin)
+	
+	// Create the appropriate command based on profile
+	var mfaCmd *exec.Cmd
+	if profile == "" {
+		mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
+	} else {
+		mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
+	}
+
+	mfaOutput, err := mfaCmd.Output()
+	var mfaArn string
+
+	// Try to fetch MFA devices, with retries if none are found
+	maxRetries := 2
+	retryCount := 0
+	
+	mfaDeviceLoop: for {
+		if err == nil && len(strings.TrimSpace(string(mfaOutput))) > 0 {
+			// MFA devices were found, process them
+			mfaDevices := strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
+			
+			// Always show the list of devices and let the user choose, even if there's only one
+			// This handles cases where they already had an MFA device and the new one isn't
+			// showing up yet, or they had a single existing device that isn't the one they just created
+			fmt.Println("\nFound MFA device(s):")
+			for i, device := range mfaDevices {
+				fmt.Printf("%d: %s\n", i+1, device)
+			}
+			
+			selectionPrompt:
+			fmt.Print("\nChoose the MFA device you just created (1-" + fmt.Sprintf("%d", len(mfaDevices)) + 
+				"), 'r' to refresh the list, or 'm' to enter manually: ")
+			choice, _ := reader.ReadString('\n')
+			choice = strings.TrimSpace(choice)
+			
+			// Handle special options
+			switch choice {
+			case "r", "R":
+				// Refresh MFA devices list
+				fmt.Println("\n🔄 Refreshing MFA device list...")
+				if profile == "" {
+					mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
+				} else {
+					mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
+				}
+				
+				mfaOutput, err = mfaCmd.Output()
+				if err != nil || len(strings.TrimSpace(string(mfaOutput))) == 0 {
+					fmt.Println("❗ No MFA devices found after refresh.")
+					// Continue to the retry options below
+					break
+				}
+				
+				// Show updated list of devices and go back to selection prompt
+				mfaDevices = strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
+				fmt.Println("\nFound MFA device(s) after refresh:")
+				for i, device := range mfaDevices {
+					fmt.Printf("%d: %s\n", i+1, device)
+				}
+				goto selectionPrompt
+				
+			case "m", "M":
+				// Manual entry with validation
+				var err error
+				mfaArn, err = h.promptForMFAARN()
+				if err != nil {
+					return "", err
+				}
+				break mfaDeviceLoop // Exit the entire loop when we've manually entered ARN
+				
+			default:
+				// Try to parse as number
+				var index int
+				_, err := fmt.Sscanf(choice, "%d", &index)
+				if err != nil || index < 1 || index > len(mfaDevices) {
+					fmt.Println("\n❌ Invalid choice. Please select a number from the list, 'r' to refresh, or 'm' for manual entry.")
+					goto selectionPrompt
+				}
+				
+				mfaArn = mfaDevices[index-1]
+				fmt.Printf("✅ Selected MFA device: %s\n", mfaArn)
+				// MFA device successfully selected
+				break mfaDeviceLoop // Exit the entire for loop with our selected device
+			}
+		}
+
+		// No MFA devices found or error occurred
+		if retryCount >= maxRetries {
+			// We've exhausted our retries, fall back to manual entry with validation
+			fmt.Println("\n❗ No MFA devices found after multiple attempts. You'll need to provide your MFA ARN manually.")
+			
+			var err error
+			mfaArn, err = h.promptForMFAARN()
+			if err != nil {
+				return "", err
+			}
+			break mfaDeviceLoop
+		}
+
+		// Offer retry options
+		fmt.Println(`
+❓ No MFA devices were found. This is likely because:
+   • AWS hasn't finished registering your MFA device yet (can take a few seconds)
+   • You may have skipped clicking "Add MFA" in the AWS console
+
+What would you like to do?
+1: Wait 5 seconds and try again (recommended)
+2: Return to AWS Console to complete setup, then try again
+3: Enter your MFA ARN manually
+Enter your choice (1-3): `)
+
+		retryChoice, _ := reader.ReadString('\n')
+		retryChoice = strings.TrimSpace(retryChoice)
+
+		switch retryChoice {
+		case "1": // Wait and retry
+			fmt.Println("\n⏳ Waiting 5 seconds for AWS to register your MFA device...")
+			time.Sleep(5 * time.Second)
+
+			// Try fetching the MFA device again
+			if profile == "" {
+				mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
+			} else {
+				mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
+			}
+
+			mfaOutput, err = mfaCmd.Output()
+			retryCount++
+
+		case "2": // Return to console
+			fmt.Println(`
+Please complete these steps in the AWS Console:
+1. Make sure you've clicked "Add MFA" after entering the TOTP codes
+2. Confirm you see "MFA device was successfully assigned" message
+3. Press Enter when complete...`)
+			reader.ReadString('\n')
+
+			// Try fetching again
+			if profile == "" {
+				mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
+			} else {
+				mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
+			}
+
+			mfaOutput, err = mfaCmd.Output()
+			retryCount++
+
+		case "3": // Manual entry with validation
+			var err error
+			mfaArn, err = h.promptForMFAARN()
+			if err != nil {
+				return "", err
+			}
+			break mfaDeviceLoop // Exit the loop completely
+			
+		default: // Invalid input
+			fmt.Println("\n❌ Invalid choice. Please select 1, 2, or 3.")
+			// Stay in the loop and show the options again
+		}
+	}
+
+	return mfaArn, nil
+}
+
+// promptForMFAARN prompts the user to enter an MFA ARN manually
+func (h *AWSSetupHandler) promptForMFAARN() (string, error) {
+	reader := bufio.NewReader(os.Stdin)
+	
+	for {
+		fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
+		mfaArn, _ := reader.ReadString('\n')
+		mfaArn = strings.TrimSpace(mfaArn)
+		
+		if mfaArn == "" {
+			fmt.Println("\u274c MFA ARN cannot be empty. Please enter a valid ARN.")
+			continue
+		}
+		
+		// Basic validation could be added here
+		if !strings.HasPrefix(mfaArn, "arn:aws:iam::") || !strings.Contains(mfaArn, ":mfa/") {
+			fmt.Println("\u274c Invalid ARN format. Please enter a valid MFA ARN.")
+			continue
+		}
+		
+		return mfaArn, nil
+	}
+}
+
 // Setup performs the AWS setup
 func (h *AWSSetupHandler) Setup() error {
 	fmt.Println("🔐 Setting up AWS credentials...")
@@ -148,187 +339,10 @@ IMPORTANT - FOLLOW THESE STEPS:
 Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS console...`, firstCode, secondCode)
 	reader.ReadString('\n')
 
-	var mfaCmd *exec.Cmd
-	if profile == "" {
-		mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-	} else {
-		mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
-	}
-
-	mfaOutput, err := mfaCmd.Output()
-	var mfaArn string
-
-	// Try to fetch MFA devices, with retries if none are found
-	maxRetries := 2
-	retryCount := 0
-	
-	mfaDeviceLoop: for {
-		if err == nil && len(strings.TrimSpace(string(mfaOutput))) > 0 {
-			// MFA devices were found, process them
-			mfaDevices := strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
-			
-			// Always show the list of devices and let the user choose, even if there's only one
-			// This handles cases where they already had an MFA device and the new one isn't
-			// showing up yet, or they had a single existing device that isn't the one they just created
-			fmt.Println("\nFound MFA device(s):")
-			for i, device := range mfaDevices {
-				fmt.Printf("%d: %s\n", i+1, device)
-			}
-			
-			selectionPrompt:
-			fmt.Print("\nChoose the MFA device you just created (1-" + fmt.Sprintf("%d", len(mfaDevices)) + 
-				"), 'r' to refresh the list, or 'm' to enter manually: ")
-			choice, _ := reader.ReadString('\n')
-			choice = strings.TrimSpace(choice)
-			
-			// Handle special options
-			switch choice {
-			case "r", "R":
-				// Refresh MFA devices list
-				fmt.Println("\n🔄 Refreshing MFA device list...")
-				if profile == "" {
-					mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-				} else {
-					mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
-				}
-				
-				mfaOutput, err = mfaCmd.Output()
-				if err != nil || len(strings.TrimSpace(string(mfaOutput))) == 0 {
-					fmt.Println("❗ No MFA devices found after refresh.")
-					// Continue to the retry options below
-					break
-				}
-				
-				// Show updated list of devices and go back to selection prompt
-				mfaDevices = strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
-				fmt.Println("\nFound MFA device(s) after refresh:")
-				for i, device := range mfaDevices {
-					fmt.Printf("%d: %s\n", i+1, device)
-				}
-				goto selectionPrompt
-				
-			case "m", "M":
-				// Manual entry with validation
-				for {
-					fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
-					mfaArn, _ = reader.ReadString('\n')
-					mfaArn = strings.TrimSpace(mfaArn)
-					
-					if mfaArn == "" {
-						fmt.Println("\u274c MFA ARN cannot be empty. Please enter a valid ARN.")
-						continue
-					}
-					
-					// Manual ARN entry successful
-					break
-				}
-				break mfaDeviceLoop // Exit the entire loop when we've manually entered ARN
-				
-			default:
-				// Try to parse as number
-				var index int
-				_, err := fmt.Sscanf(choice, "%d", &index)
-				if err != nil || index < 1 || index > len(mfaDevices) {
-					fmt.Println("\n❌ Invalid choice. Please select a number from the list, 'r' to refresh, or 'm' for manual entry.")
-					goto selectionPrompt
-				}
-				
-				mfaArn = mfaDevices[index-1]
-				fmt.Printf("✅ Selected MFA device: %s\n", mfaArn)
-				// MFA device successfully selected
-				break mfaDeviceLoop // Exit the entire for loop with our selected device
-			}
-		}
-
-		// No MFA devices found or error occurred
-		if retryCount >= maxRetries {
-			// We've exhausted our retries, fall back to manual entry with validation
-			fmt.Println("\n❗ No MFA devices found after multiple attempts. You'll need to provide your MFA ARN manually.")
-			
-			for {
-				fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
-				mfaArn, _ = reader.ReadString('\n')
-				mfaArn = strings.TrimSpace(mfaArn)
-				
-				if mfaArn == "" {
-					fmt.Println("\u274c MFA ARN cannot be empty. Please enter a valid ARN.")
-					continue
-				}
-				
-				// Manual entry completed after multiple retries
-				break
-			}
-			break mfaDeviceLoop
-		}
-
-		// Offer retry options
-		fmt.Println(`
-❓ No MFA devices were found. This is likely because:
-   • AWS hasn't finished registering your MFA device yet (can take a few seconds)
-   • You may have skipped clicking "Add MFA" in the AWS console
-
-What would you like to do?
-1: Wait 5 seconds and try again (recommended)
-2: Return to AWS Console to complete setup, then try again
-3: Enter your MFA ARN manually
-Enter your choice (1-3): `)
-
-		retryChoice, _ := reader.ReadString('\n')
-		retryChoice = strings.TrimSpace(retryChoice)
-
-		switch retryChoice {
-		case "1": // Wait and retry
-			fmt.Println("\n⏳ Waiting 5 seconds for AWS to register your MFA device...")
-			time.Sleep(5 * time.Second)
-
-			// Try fetching the MFA device again
-			if profile == "" {
-				mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-			} else {
-				mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
-			}
-
-			mfaOutput, err = mfaCmd.Output()
-			retryCount++
-
-		case "2": // Return to console
-			fmt.Println(`
-Please complete these steps in the AWS Console:
-1. Make sure you've clicked "Add MFA" after entering the TOTP codes
-2. Confirm you see "MFA device was successfully assigned" message
-3. Press Enter when complete...`)
-			reader.ReadString('\n')
-
-			// Try fetching again
-			if profile == "" {
-				mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-			} else {
-				mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
-			}
-
-			mfaOutput, err = mfaCmd.Output()
-			retryCount++
-
-		case "3": // Manual entry with validation
-			for {
-				fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
-				mfaArn, _ = reader.ReadString('\n')
-				mfaArn = strings.TrimSpace(mfaArn)
-				
-				if mfaArn == "" {
-					fmt.Println("\u274c MFA ARN cannot be empty. Please enter a valid ARN.")
-					continue
-				}
-				
-				// Manual ARN entry provided by user
-				break
-			}
-			break mfaDeviceLoop // Exit the loop completely
-			
-		default: // Invalid input
-			fmt.Println("\n❌ Invalid choice. Please select 1, 2, or 3.")
-			// Stay in the loop and show the options again
-		}
+	// Use the extracted function to select an MFA device
+	mfaArn, err := h.selectMFADevice(profile)
+	if err != nil {
+		return fmt.Errorf("failed to select MFA device: %w", err)
 	}
 
 	user, err := env.GetCurrentUser()
