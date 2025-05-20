@@ -10,6 +10,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/setup"
 	internalTotp "github.com/bashhack/sesh/internal/totp"
 )
@@ -101,10 +102,13 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		secret = strings.TrimSpace(stdout.String())
 	} else {
 		// Fall back to provider method
-		secret, err = p.keychain.GetSecret(p.keyUser, serviceKey)
+		secretBytes, err := p.keychain.GetSecret(p.keyUser, serviceKey)
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret for %s: %w", p.serviceName, err)
 		}
+		// Convert to string and zero the bytes after use
+		secret = string(secretBytes)
+		defer secure.SecureZeroBytes(secretBytes)
 	}
 
 	// Generate TOTP code
