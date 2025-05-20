@@ -316,7 +316,24 @@ func (h *AWSSetupHandler) promptForMFAARN() (string, error) {
 	}
 }
 
-func (h *AWSSetupHandler) show
+// showSetupCompletionMessage displays the final success message with usage instructions
+func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
+	fmt.Println(`
+✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.
+
+🚀 Next steps:
+  1. Run 'sesh -service aws' to generate a temporary session token
+  2. The credentials will be automatically exported to your shell
+  3. You can now use AWS CLI commands with MFA security`)
+
+	if profile == "" {
+		fmt.Println(`
+To use this setup, run without the --profile flag
+(The default AWS profile will be used)`)
+	} else {
+		fmt.Printf("\nTo use this setup, run: sesh --profile %s\n", profile)
+	}
+}
 
 // Setup performs the AWS setup
 func (h *AWSSetupHandler) Setup() error {
@@ -415,21 +432,7 @@ Enter your choice (1-2): `)
 		fmt.Println("⚠️ Warning: Failed to store metadata. This entry might not appear when listing available AWS profiles.")
 	}
 
-	fmt.Println(`
-✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.
-
-🚀 Next steps:
-1. Run 'sesh -service aws' to generate a temporary session token
-2. The credentials will be automatically exported to your shell
-3. You can now use AWS CLI commands with MFA security`)
-
-	if profile == "" {
-		fmt.Println(`
-To use this setup, run without the --profile flag:
-(The default AWS profile will be used)`)
-	} else {
-		fmt.Printf("\nTo use this setup, run: sesh --profile %s\n", profile)
-	}
+	h.showSetupCompletionMessage(profile)
 
 	return nil
 }
