@@ -88,3 +88,83 @@ func GenerateForTimeSecure(secret string, t time.Time) (string, error) {
 	
 	return GenerateForTime(secret, t)
 }
+
+// Byte-slice based implementations for improved security
+
+// GenerateBytes generates a TOTP code from a byte slice secret
+func GenerateBytes(secret []byte) (string, error) {
+	// Make a defensive copy to avoid modifying the caller's data
+	secretCopy := make([]byte, len(secret))
+	copy(secretCopy, secret)
+	defer secure.SecureZeroBytes(secretCopy)
+	
+	// Convert to string for the underlying library
+	secretStr := string(secretCopy)
+	
+	opts := totp.ValidateOpts{
+		Digits: 6,
+	}
+
+	code, err := totp.GenerateCodeCustom(secretStr, time.Now(), opts)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate TOTP: %w", err)
+	}
+	
+	return code, nil
+}
+
+// GenerateConsecutiveCodesBytes generates two consecutive TOTP codes from a byte slice secret
+func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error) {
+	if MockGenerateConsecutiveCodes.Enabled {
+		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
+	}
+
+	// Make a defensive copy to avoid modifying the caller's data
+	secretCopy := make([]byte, len(secret))
+	copy(secretCopy, secret)
+	defer secure.SecureZeroBytes(secretCopy)
+	
+	// Convert to string for the underlying library
+	secretStr := string(secretCopy)
+
+	now := time.Now()
+	nextTimeWindow := now.Add(30 * time.Second)
+
+	opts := totp.ValidateOpts{
+		Digits: 6,
+	}
+
+	current, err = totp.GenerateCodeCustom(secretStr, now, opts)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate current TOTP: %w", err)
+	}
+
+	next, err = totp.GenerateCodeCustom(secretStr, nextTimeWindow, opts)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate next TOTP: %w", err)
+	}
+
+	return current, next, nil
+}
+
+// GenerateForTimeBytes generates a TOTP code for a specific time from a byte slice secret
+func GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
+	// Make a defensive copy to avoid modifying the caller's data
+	secretCopy := make([]byte, len(secret))
+	copy(secretCopy, secret)
+	defer secure.SecureZeroBytes(secretCopy)
+	
+	// Convert to string for the underlying library
+	secretStr := string(secretCopy)
+	
+	opts := totp.ValidateOpts{
+		Digits: 6,
+	}
+
+	code, err := totp.GenerateCodeCustom(secretStr, t, opts)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate TOTP for time %v: %w", t, err)
+	}
+	
+	return code, nil
+}

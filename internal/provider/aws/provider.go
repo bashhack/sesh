@@ -124,7 +124,8 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	}
 
 	// Generate consecutive TOTP codes
-	currentCode, nextCode, err = p.totp.GenerateConsecutiveCodes(secret)
+	// Use the byte-slice version for better security
+	currentCode, nextCode, err = p.totp.GenerateConsecutiveCodesBytes(secretCopy)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
@@ -256,7 +257,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				secret := string(secretCopy)
 
 				// Generate a code for the window after next, in case AWS is far ahead of our clock
-				futureCode, gErr := p.totp.GenerateForTime(secret, time.Now().Add(60*time.Second))
+				futureCode, gErr := p.totp.GenerateForTimeBytes(secretCopy, time.Now().Add(60*time.Second))
 				if gErr == nil {
 					fmt.Fprintf(os.Stderr, "🔑 Trying with future time window's code: %s\n", futureCode)
 					code = futureCode

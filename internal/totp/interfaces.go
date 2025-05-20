@@ -18,6 +18,18 @@ type Provider interface {
 	
 	// GenerateForTimeSecure is like GenerateForTime but securely zeroes the secret after use
 	GenerateForTimeSecure(secret string, t time.Time) (string, error)
+	
+	// More secure variants using byte slices
+	
+	// GenerateBytes generates a single TOTP code from a byte slice secret
+	// This allows for proper memory zeroing
+	GenerateBytes(secret []byte) (string, error)
+	
+	// GenerateConsecutiveCodesBytes generates two consecutive TOTP codes from a byte slice secret
+	GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error)
+	
+	// GenerateForTimeBytes generates a TOTP code for a specific time from a byte slice secret
+	GenerateForTimeBytes(secret []byte, t time.Time) (string, error)
 }
 
 // DefaultProvider is the default implementation using otp library
@@ -49,6 +61,21 @@ func (p *DefaultProvider) GenerateSecure(secret string) (string, error) {
 // GenerateForTimeSecure implements the Provider interface
 func (p *DefaultProvider) GenerateForTimeSecure(secret string, t time.Time) (string, error) {
 	return GenerateForTimeSecure(secret, t)
+}
+
+// GenerateBytes implements the Provider interface
+func (p *DefaultProvider) GenerateBytes(secret []byte) (string, error) {
+	return GenerateBytes(secret)
+}
+
+// GenerateConsecutiveCodesBytes implements the Provider interface
+func (p *DefaultProvider) GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error) {
+	return GenerateConsecutiveCodesBytes(secret)
+}
+
+// GenerateForTimeBytes implements the Provider interface
+func (p *DefaultProvider) GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
+	return GenerateForTimeBytes(secret, t)
 }
 
 // NewDefaultProvider creates a new DefaultProvider
