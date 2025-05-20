@@ -3,7 +3,6 @@ package keychain
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -37,9 +36,6 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 		return nil, fmt.Errorf("no secret found in Keychain for account %q and service %q. Run setup to configure",
 			account, service)
 	}
-
-	// For debugging
-	fmt.Fprintf(os.Stderr, "DEBUG keychain: Retrieved secret for service '%s', length: %d bytes\n", service, len(secret))
 
 	// For TOTP secrets, ensure whitespace is trimmed to avoid base32 decode failures
 	if strings.HasPrefix(service, "sesh-aws") || strings.HasPrefix(service, "sesh-totp") {
