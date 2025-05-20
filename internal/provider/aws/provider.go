@@ -1,14 +1,13 @@
 package aws
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/env"
+	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/subshell"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -22,9 +21,9 @@ import (
 
 // Provider implements ServiceProvider for AWS
 type Provider struct {
-	aws         awsInternal.Provider
-	keychain    keychain.Provider
-	totp        internalTotp.Provider
+	aws      awsInternal.Provider
+	keychain keychain.Provider
+	totp     internalTotp.Provider
 
 	// Flags
 	profile string
@@ -104,10 +103,11 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	if err != nil {
 		return "", "", 0, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 	}
+
 	// Convert to string and zero the bytes after use
 	secret := string(secretBytes)
-	secure.SecureZeroBytes(secretBytes)
-	}
+	defer secure.SecureZeroBytes(secretBytes)
+
 	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from keychain\n")
 
 	// Check if secret looks valid (base32 encoded)
@@ -221,10 +221,13 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				keyName = fmt.Sprintf("%s-%s", p.keyName, keyName)
 
 				// Get the TOTP secret using the provider interface
-				secret, err := p.keychain.GetSecret(p.keyUser, keyName)
+				secretBytes, err := p.keychain.GetSecret(p.keyUser, keyName)
 				if err != nil {
 					return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 				}
+				// Convert to string and zero the bytes after use
+				secret := string(secretBytes)
+				defer secure.SecureZeroBytes(secretBytes)
 
 				// Generate a code for the window after next, in case AWS is far ahead of our clock
 				futureCode, gErr := p.totp.GenerateForTime(secret, time.Now().Add(60*time.Second))
@@ -434,9 +437,12 @@ func (p *Provider) GetMFASerial() (string, error) {
 	}
 
 	// Get MFA serial using the provider interface
-	serialFromKeychain, err := p.keychain.GetSecret(p.keyUser, serialService)
+	serialBytes, err := p.keychain.GetSecret(p.keyUser, serialService)
 	if err == nil {
-		return serialFromKeychain, nil
+		// Convert to string and zero the bytes
+		serial := string(serialBytes)
+		secure.SecureZeroBytes(serialBytes)
+		return serial, nil
 	}
 
 	// If not found in keychain, try to auto-detect from AWS
