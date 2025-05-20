@@ -39,7 +39,7 @@ func TestDefaultProviderGetSessionToken(t *testing.T) {
 	}
 
 	provider := NewDefaultProvider()
-	creds, err := provider.GetSessionToken("test-profile", "test-serial", "123456")
+	creds, err := provider.GetSessionToken("test-profile", "test-serial", []byte("123456"))
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)

@@ -40,7 +40,7 @@ func TestGetSessionToken_Success(t *testing.T) {
 
 	execCommand = MockExecCommand(string(mockRespJSON), nil)
 
-	creds, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", "123456")
+	creds, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", []byte("123456"))
 
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
@@ -69,7 +69,7 @@ func TestGetSessionToken_CommandError(t *testing.T) {
 
 	execCommand = MockExecCommand("", errors.New("command failed"))
 
-	_, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", "123456")
+	_, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", []byte("123456"))
 
 	if err == nil {
 		t.Error("Expected error, got nil")
@@ -82,7 +82,7 @@ func TestGetSessionToken_InvalidJSON(t *testing.T) {
 
 	execCommand = MockExecCommand("not json", nil)
 
-	_, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", "123456")
+	_, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", []byte("123456"))
 
 	if err == nil || err.Error() == "" {
 		t.Error("Expected JSON parsing error, got nil or empty")
@@ -112,7 +112,7 @@ func TestGetSessionToken_EmptyProfile(t *testing.T) {
 		return cmd
 	}
 
-	_, err := GetSessionToken("", "arn:aws:iam::123456789012:mfa/test", "123456")
+	_, err := GetSessionToken("", "arn:aws:iam::123456789012:mfa/test", []byte("123456"))
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestGetSessionToken_Integration(t *testing.T) {
 	// I'm just aiming for coverage here and ensuring the function
 	// handles basic error cases correctly
 
-	_, err := GetSessionToken("nonexistent-profile", "invalid-serial", "123456")
+	_, err := GetSessionToken("nonexistent-profile", "invalid-serial", []byte("123456"))
 	if err == nil {
 		t.Error("Expected error for invalid AWS credentials, got nil")
 	}

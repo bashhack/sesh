@@ -34,7 +34,7 @@ func (m *MockAWS) GetFirstMFADevice(profile string) (string, error) {
 	return m.MFADevice, m.MFADeviceErr
 }
 
-func (m *MockAWS) GetSessionToken(profile, serial, code string) (aws.Credentials, error) {
+func (m *MockAWS) GetSessionToken(profile, serial string, code []byte) (aws.Credentials, error) {
 	return m.Credentials, m.CredentialsErr
 }
 

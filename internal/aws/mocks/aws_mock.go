@@ -4,7 +4,7 @@ import "github.com/bashhack/sesh/internal/aws"
 
 // MockProvider is a mock implementation of the aws.Provider interface
 type MockProvider struct {
-	GetSessionTokenFunc   func(profile, serial, code string) (aws.Credentials, error)
+	GetSessionTokenFunc   func(profile, serial string, code []byte) (aws.Credentials, error)
 	GetFirstMFADeviceFunc func(profile string) (string, error)
 }
 
@@ -12,7 +12,7 @@ type MockProvider struct {
 var _ aws.Provider = (*MockProvider)(nil)
 
 // GetSessionToken implements the aws.Provider interface
-func (m *MockProvider) GetSessionToken(profile, serial, code string) (aws.Credentials, error) {
+func (m *MockProvider) GetSessionToken(profile, serial string, code []byte) (aws.Credentials, error) {
 	return m.GetSessionTokenFunc(profile, serial, code)
 }
 

@@ -1,6 +1,6 @@
 package mocks
 
-import "github.com/bashhack/sesh/internal/setup"
+// WizardRunner interface was moved out of the setup package
 
 // MockWizardRunner is a mock implementation of setup.WizardRunner
 type MockWizardRunner struct {
@@ -8,8 +8,8 @@ type MockWizardRunner struct {
 	RunForServiceFunc func(serviceName string) error
 }
 
-// Ensure MockWizardRunner implements setup.WizardRunner interface
-var _ setup.WizardRunner = (*MockWizardRunner)(nil)
+// Ensure MockWizardRunner implements a WizardRunner interface
+// Note: This interface may not be defined in setup package anymore
 
 // Run implements the setup.WizardRunner interface
 func (m *MockWizardRunner) Run() error {

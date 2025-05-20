@@ -209,7 +209,9 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 			// Try with the next time window's code
 			fmt.Fprintf(os.Stderr, "🔑 Trying with next time window's code: %s\n", nextCode)
 			code = nextCode
-			awsCreds, err = p.aws.GetSessionToken(p.profile, serial, code)
+			codeBytes = []byte(code)
+			awsCreds, err = p.aws.GetSessionToken(p.profile, serial, codeBytes)
+			secure.SecureZeroBytes(codeBytes)
 
 			// If STILL failing and we're not close to boundary, and we have a "recently used" error,
 			// we may need to wait for the next time window
@@ -238,8 +240,8 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 					fmt.Fprintf(os.Stderr, "🔑 Trying with future time window's code: %s\n", futureCode)
 					code = futureCode
 					codeBytes = []byte(code)
-				awsCreds, err = p.aws.GetSessionToken(p.profile, serial, codeBytes)
-				secure.SecureZeroBytes(codeBytes)
+					awsCreds, err = p.aws.GetSessionToken(p.profile, serial, codeBytes)
+					secure.SecureZeroBytes(codeBytes)
 				}
 			}
 		}
