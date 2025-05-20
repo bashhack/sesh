@@ -84,24 +84,19 @@ func SetSecretBytes(account, service string, secret []byte) error {
 	if execPath == "" {
 		return fmt.Errorf("could not determine the path to the sesh binary, cannot access keychain")
 	}
-
-	// Convert to string for the security command
-	// This is necessary because we need to pass it as a command-line argument
-	secretStr := string(secretCopy)
 	
 	// Allow only the sesh binary to access this keychain item
+	// Use stdin instead of command-line argument for security
 	cmd := execCommand("security", "add-generic-password",
 		"-a", account,
 		"-s", service,
-		"-w", secretStr,
-		"-U",           // Update if exists
+		"-w", // Read password from stdin
+		"-U", // Update if exists
 		"-T", execPath, // Only allow the sesh binary to access this item
 	)
 
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	// Use secure input handling to provide the secret via stdin
+	err := secure.ExecWithSecretInput(cmd, secretCopy)
 	if err != nil {
 		return fmt.Errorf("failed to set secret in keychain: %w", err)
 	}

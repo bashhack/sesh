@@ -437,13 +437,13 @@ func (h *AWSSetupHandler) Setup() error {
 	}
 
 	serviceName := h.createServiceName(constants.AWSServicePrefix, profile)
-	err = h.keychainProvider.SetSecret(user, serviceName, secretStr)
+	err = h.keychainProvider.SetSecretString(user, serviceName, secretStr)
 	if err != nil {
 		return fmt.Errorf("failed to store secret in keychain: %w", err)
 	}
 
 	serialServiceName := h.createServiceName(constants.AWSServiceMFAPrefix, profile)
-	err = h.keychainProvider.SetSecret(user, serialServiceName, mfaArn)
+	err = h.keychainProvider.SetSecretString(user, serialServiceName, mfaArn)
 	if err != nil {
 		return fmt.Errorf("failed to store MFA serial in keychain: %w", err)
 	}
@@ -571,7 +571,7 @@ func (h *TOTPSetupHandler) Setup() error {
 	}
 
 	// Store the secret using the keychain provider
-	err = h.keychainProvider.SetSecret(user, serviceKey, secretStr)
+	err = h.keychainProvider.SetSecretString(user, serviceKey, secretStr)
 	if err != nil {
 		return fmt.Errorf("failed to store secret in keychain: %w", err)
 	}

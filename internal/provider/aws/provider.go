@@ -100,9 +100,13 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	}
 
 	// Get TOTP secret from keychain using the provider interface
-	secret, err := p.keychain.GetSecret(p.keyUser, keyName)
+	secretBytes, err := p.keychain.GetSecret(p.keyUser, keyName)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("could not retrieve TOTP secret: %w", err)
+	}
+	// Convert to string and zero the bytes after use
+	secret := string(secretBytes)
+	secure.SecureZeroBytes(secretBytes)
 	}
 	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from keychain\n")
 

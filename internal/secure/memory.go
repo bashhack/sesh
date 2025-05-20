@@ -113,3 +113,32 @@ func ExecAndCaptureSecure(cmd *exec.Cmd) ([]byte, error) {
 	
 	return result, nil
 }
+
+// ExecWithSecretInput executes a command with a sensitive byte slice provided via stdin
+// This is more secure than passing secrets as command-line arguments, which might
+// be visible in process listings (ps) or command history
+func ExecWithSecretInput(cmd *exec.Cmd, secret []byte) error {
+	// Set up stdin pipe
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	
+	// Write secret to stdin
+	if _, err := stdin.Write(secret); err != nil {
+		cmd.Process.Kill() // Kill process on write error
+		cmd.Wait()         // Clean up resources
+		return err
+	}
+	
+	// Close stdin to signal EOF
+	stdin.Close()
+	
+	// Wait for command to complete
+	return cmd.Wait()
+}
