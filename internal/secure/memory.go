@@ -1,3 +1,20 @@
+// Package secure provides security-related utilities for sesh.
+//
+// IMPORTANT SECURITY NOTE:
+// Go's memory model and garbage collection make secure memory management
+// challenging. The functions in this package do their best to reduce the
+// exposure window of sensitive data, but they cannot guarantee complete
+// removal from memory due to factors like:
+//
+// 1. Go's garbage collector can move and copy data
+// 2. Go strings are immutable and their contents can be duplicated
+// 3. Compiler optimizations might affect security guarantees
+// 4. Memory might be paged to disk outside of Go's control
+//
+// For maximum security, prefer:
+// - Keeping sensitive data in []byte form rather than strings
+// - Minimizing the scope and lifetime of sensitive data
+// - Zeroing sensitive data immediately after use
 package secure
 
 import "runtime"
@@ -21,16 +38,22 @@ func SecureZeroBytes(data []byte) {
 	runtime.KeepAlive(data)
 }
 
-// SecureZeroString zeros out the contents of a string by creating
-// a byte slice copy and zeroing that. Note that this doesn't guarantee
-// the original string is removed from memory due to Go's immutable strings,
-// but it helps reduce the exposure window.
+// SecureZeroString attempts to reduce the exposure window of a string
+// by creating a byte slice copy and zeroing it. Due to Go's immutable
+// strings and garbage-collected memory model, the original string data
+// may remain in memory and cannot be securely erased.
+//
+// WARNING: Only use this if you cannot avoid working with string.
+// Prefer keeping secrets in []byte form from the beginning for actual zeroing.
+// This function can introduce additional exposure by creating a second copy
+// of the sensitive data in memory.
 func SecureZeroString(s string) {
 	if s == "" {
 		return
 	}
 	
 	// Convert to bytes for zeroing
+	// Note: This creates a new copy in memory, which is not ideal for security
 	b := []byte(s)
 	SecureZeroBytes(b)
 }
