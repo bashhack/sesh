@@ -2,6 +2,7 @@ package totp
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/bashhack/sesh/internal/secure"
@@ -114,6 +115,66 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
 	}
 
+	// Debug - check if we have valid input
+	if len(secret) == 0 {
+		fmt.Fprintf(os.Stderr, "DEBUG: GenerateConsecutiveCodesBytes received empty secret\n")
+		return "", "", fmt.Errorf("empty secret provided to GenerateConsecutiveCodesBytes")
+	}
+
+	// For debugging, print length info (but nothing about the actual secret)
+	fmt.Fprintf(os.Stderr, "DEBUG: GenerateConsecutiveCodesBytes received %d bytes\n", len(secret))
+
+	// Make a defensive copy to avoid modifying the caller's data
+	secretCopy := make([]byte, len(secret))
+	copy(secretCopy, secret)
+	defer secure.SecureZeroBytes(secretCopy)
+	
+	// Convert to string - the secret is already base32-encoded in string form
+	// We're just converting the byte representation back to a string
+	secretStr := string(secretCopy)
+
+	// Debug - check secret format without revealing it
+	if len(secretStr) < 16 {
+		fmt.Fprintf(os.Stderr, "DEBUG: Secret string is too short: %d chars\n", len(secretStr))
+	}
+	
+	// Debug - check if it matches base32 pattern
+	allValid := true
+	for _, c := range secretStr {
+		// Only uppercase letters A-Z and digits 2-7 are valid in base32
+		if !((c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=') {
+			allValid = false
+			break
+		}
+	}
+	if !allValid {
+		fmt.Fprintf(os.Stderr, "DEBUG: Secret string contains non-base32 characters\n")
+	}
+	
+	// Use the string-based implementation directly to avoid error chain
+	now := time.Now()
+	nextTimeWindow := now.Add(30 * time.Second)
+
+	opts := totp.ValidateOpts{
+		Digits: 6,
+	}
+
+	current, err = totp.GenerateCodeCustom(secretStr, now, opts)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate current TOTP: %w", err)
+	}
+
+	next, err = totp.GenerateCodeCustom(secretStr, nextTimeWindow, opts)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate next TOTP: %w", err)
+	}
+
+	return current, next, nil
+}
+
+// GenerateForTimeBytes generates a TOTP code for a specific time from a byte slice secret
+// The secret is expected to be a byte slice containing a base32-encoded string
+func GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
 	// Make a defensive copy to avoid modifying the caller's data
 	secretCopy := make([]byte, len(secret))
 	copy(secretCopy, secret)
@@ -124,27 +185,5 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 	secretStr := string(secretCopy)
 	
 	// Use the string-based implementation
-	return GenerateConsecutiveCodes(secretStr)
-}
-
-// GenerateForTimeBytes generates a TOTP code for a specific time from a byte slice secret
-func GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
-	// Make a defensive copy to avoid modifying the caller's data
-	secretCopy := make([]byte, len(secret))
-	copy(secretCopy, secret)
-	defer secure.SecureZeroBytes(secretCopy)
-	
-	// Convert to string for the underlying library
-	secretStr := string(secretCopy)
-	
-	opts := totp.ValidateOpts{
-		Digits: 6,
-	}
-
-	code, err := totp.GenerateCodeCustom(secretStr, t, opts)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate TOTP for time %v: %w", t, err)
-	}
-	
-	return code, nil
+	return GenerateForTime(secretStr, t)
 }

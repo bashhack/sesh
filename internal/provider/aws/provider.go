@@ -99,10 +99,13 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	}
 
 	// Get TOTP secret from keychain using the provider interface
+	fmt.Fprintf(os.Stderr, "DEBUG: Retrieving TOTP secret for key: %s\n", keyName)
 	secretBytes, err := p.keychain.GetSecret(p.keyUser, keyName)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 	}
+	
+	fmt.Fprintf(os.Stderr, "DEBUG: TOTP secret retrieved, length: %d bytes\n", len(secretBytes))
 	
 	// Make defensive copy
 	secretCopy := make([]byte, len(secretBytes))
@@ -191,10 +194,12 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	fmt.Fprintf(os.Stderr, "🔍 Using MFA serial: %s\n", serial)
 
 	// Get TOTP codes
+	fmt.Fprintf(os.Stderr, "DEBUG: Getting TOTP codes for AWS credentials\n")
 	currentCode, nextCode, secondsLeft, err := p.GetTOTPCodes()
 	if err != nil {
 		return provider.Credentials{}, err
 	}
+	fmt.Fprintf(os.Stderr, "DEBUG: Successfully generated TOTP codes\n")
 
 	// First try with the current code
 	code := currentCode
