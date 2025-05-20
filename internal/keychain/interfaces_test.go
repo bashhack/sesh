@@ -40,9 +40,11 @@ func TestDefaultProviderGetSecret(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 	
-	secret := string(secretBytes)
-	if secret != "test-secret" {
-		t.Errorf("Expected secret 'test-secret', got '%s'", secret)
+	// Convert bytes to string for assertion
+	secretStr := string(secretBytes)
+	expectedStr := "test-secret"
+	if secretStr != expectedStr {
+		t.Errorf("Expected secret '%s', got '%s'", expectedStr, secretStr)
 	}
 }
 

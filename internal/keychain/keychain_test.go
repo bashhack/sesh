@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestGetSecretSuccess(t *testing.T) {
+func TestGetSecretBytesSuccess(t *testing.T) {
 	origExecCommand := execCommand
 	defer func() { execCommand = origExecCommand }()
 
@@ -30,12 +30,13 @@ func TestGetSecretSuccess(t *testing.T) {
 		return cmd
 	}
 
-	secret, err := GetSecret("testuser", "test-service")
+	secretBytes, err := GetSecretBytes("testuser", "test-service")
 
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
 	}
 
+	secret := string(secretBytes)
 	if secret != mockOutput {
 		t.Errorf("Expected secret '%s', got '%s'", mockOutput, secret)
 	}
@@ -65,12 +66,13 @@ func TestGetSecretWithEmptyUsername(t *testing.T) {
 		return cmd
 	}
 
-	secret, err := GetSecret("", "test-service")
+	secretBytes, err := GetSecretBytes("", "test-service")
 
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
 	}
-
+	
+	secret := string(secretBytes)
 	if secret != securityOutput {
 		t.Errorf("Expected secret '%s', got '%s'", securityOutput, secret)
 	}
@@ -95,7 +97,7 @@ func TestGetSecretWithWhoamiError(t *testing.T) {
 		return cmd
 	}
 
-	_, err := GetSecret("", "test-service")
+	_, err := GetSecretBytes("", "test-service")
 
 	if err == nil {
 		t.Error("Expected error but got nil")
@@ -125,7 +127,7 @@ func TestGetSecretWithSecurityError(t *testing.T) {
 		return cmd
 	}
 
-	_, err := GetSecret("testuser", "test-service")
+	_, err := GetSecretBytes("testuser", "test-service")
 
 	if err == nil {
 		t.Error("Expected error but got nil")
@@ -263,7 +265,7 @@ func TestGetMFASerialWithSecurityError(t *testing.T) {
 	}
 }
 
-func TestSetSecret(t *testing.T) {
+func TestSetSecretBytes(t *testing.T) {
 	origExecCommand := execCommand
 	defer func() { execCommand = origExecCommand }()
 
@@ -277,7 +279,7 @@ func TestSetSecret(t *testing.T) {
 		return cmd
 	}
 
-	err := SetSecret("testuser", "test-service", "test-secret")
+	err := SetSecretBytes("testuser", "test-service", []byte("test-secret"))
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
 	}
@@ -294,7 +296,7 @@ func TestSetSecret(t *testing.T) {
 		return cmd
 	}
 
-	err = SetSecret("testuser", "test-service", "test-secret")
+	err = SetSecretBytes("testuser", "test-service", "test-secret")
 	if err == nil {
 		t.Error("Expected error but got nil")
 	}
@@ -449,7 +451,7 @@ func TestGetSecretIntegration(t *testing.T) {
 
 	nonExistentService := "test-sesh-nonexistent-" + randomString(8)
 
-	_, err := GetSecret("", nonExistentService)
+	_, err := GetSecretBytes("", nonExistentService)
 	if err == nil {
 		t.Error("Expected error for non-existent keychain item, got nil")
 	}
