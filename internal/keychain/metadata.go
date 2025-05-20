@@ -80,6 +80,12 @@ func RemoveEntryMetadata(servicePrefix, service, account string) error {
 
 // LoadEntryMetadata loads metadata entries for a given service prefix
 func LoadEntryMetadata(servicePrefix string) ([]KeychainEntryMeta, error) {
+	return loadEntryMetadataImpl(servicePrefix)
+}
+
+// Implementation of LoadEntryMetadata - variable so it can be changed in tests
+// Define a variable so it can be overridden in tests
+var loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
 	// Load all entries
 	allEntries, err := LoadAllEntryMetadata()
 	if err != nil {

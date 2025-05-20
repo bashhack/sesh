@@ -25,12 +25,14 @@ func TestDefaultProviderGetSecret(t *testing.T) {
 
 	execCommand = func(command string, args ...string) *exec.Cmd {
 		if command == "whoami" {
-			return exec.Command("echo", "testuser")
+			// Use printf to avoid newline and ensure clean output
+			return exec.Command("printf", "testuser")
 		}
 		if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
-			return exec.Command("echo", "test-secret")
+			// Use printf to avoid newline and ensure clean output
+			return exec.Command("printf", "test-secret")
 		}
-		return exec.Command("echo", "")
+		return exec.Command("printf", "")
 	}
 
 	provider := NewDefaultProvider()
@@ -54,12 +56,14 @@ func TestDefaultProviderGetMFASerial(t *testing.T) {
 
 	execCommand = func(command string, args ...string) *exec.Cmd {
 		if command == "whoami" {
-			return exec.Command("echo", "testuser")
+			// Use printf to avoid newline and ensure clean output
+			return exec.Command("printf", "testuser")
 		}
 		if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
-			return exec.Command("echo", "test-serial")
+			// Use printf to avoid newline and ensure clean output
+			return exec.Command("printf", "test-serial")
 		}
-		return exec.Command("echo", "")
+		return exec.Command("printf", "")
 	}
 
 	provider := NewDefaultProvider()

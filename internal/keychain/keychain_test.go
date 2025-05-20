@@ -296,7 +296,7 @@ func TestSetSecretBytes(t *testing.T) {
 		return cmd
 	}
 
-	err = SetSecretBytes("testuser", "test-service", "test-secret")
+	err = SetSecretBytes("testuser", "test-service", []byte("test-secret"))
 	if err == nil {
 		t.Error("Expected error but got nil")
 	}
@@ -346,6 +346,22 @@ data:
 			fmt.Sprintf("MOCK_OUTPUT=%s", mockOutput),
 		}
 		return cmd
+	}
+
+	// Mock the LoadEntryMetadata function to return test data
+	originalLoadEntryMetadata := LoadEntryMetadata
+	defer func() { LoadEntryMetadata = originalLoadEntryMetadata }()
+	
+	// Override the function for this test
+	LoadEntryMetadata = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+		return []KeychainEntryMeta{
+			{
+				Service:     "sesh-mfa",
+				Account:     "testuser",
+				Description: "AWS MFA Secret",
+				ServiceType: "aws",
+			},
+		}, nil
 	}
 
 	// Test listing sesh-mfa entries
