@@ -103,10 +103,18 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	if err != nil {
 		return "", "", 0, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 	}
-
-	// Convert to string and zero the bytes after use
-	secret := string(secretBytes)
-	defer secure.SecureZeroBytes(secretBytes)
+	
+	// Make defensive copy
+	secretCopy := make([]byte, len(secretBytes))
+	copy(secretCopy, secretBytes)
+	defer secure.SecureZeroBytes(secretCopy)
+	
+	// Zero original immediately after copying
+	secure.SecureZeroBytes(secretBytes)
+	
+	// Convert to string - this is necessary because the TOTP package expects a string
+	// In the future, consider updating the TOTP package to work with byte slices directly
+	secret := string(secretCopy)
 
 	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from keychain\n")
 
@@ -169,11 +177,15 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		return provider.Credentials{}, fmt.Errorf("the --service-name flag is only valid with the TOTP provider, not AWS")
 	}
 
-	// Get MFA serial
-	serial, err := p.GetMFASerial()
+	// Get MFA serial as bytes
+	serialBytes, err := p.GetMFASerialBytes()
 	if err != nil {
 		return provider.Credentials{}, err
 	}
+	
+	// Convert to string for debug and API call, then zero out
+	serial := string(serialBytes)
+	defer secure.SecureZeroBytes(serialBytes)
 
 	// Debug: Print the serial number to help diagnose issues
 	fmt.Fprintf(os.Stderr, "🔍 Using MFA serial: %s\n", serial)
@@ -230,9 +242,18 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				if err != nil {
 					return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 				}
-				// Convert to string and zero the bytes after use
-				secret := string(secretBytes)
-				defer secure.SecureZeroBytes(secretBytes)
+				
+				// Make defensive copy
+				secretCopy := make([]byte, len(secretBytes))
+				copy(secretCopy, secretBytes)
+				defer secure.SecureZeroBytes(secretCopy)
+				
+				// Zero original immediately after copying 
+				secure.SecureZeroBytes(secretBytes)
+				
+				// Convert to string - this is necessary because the TOTP package expects a string
+				// In the future, consider updating the TOTP package to work with byte slices directly
+				secret := string(secretCopy)
 
 				// Generate a code for the window after next, in case AWS is far ahead of our clock
 				futureCode, gErr := p.totp.GenerateForTime(secret, time.Now().Add(60*time.Second))
@@ -421,8 +442,8 @@ func (p *Provider) GetTOTPKeyInfo() (string, string, error) {
 	return p.keyUser, keyName, nil
 }
 
-// GetMFASerial returns the MFA device serial
-func (p *Provider) GetMFASerial() (string, error) {
+// GetMFASerialBytes returns the MFA device serial as bytes
+func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 	// Use the same logic as in GetCredentials but just return the serial
 	// Service name for the MFA serial (account for profile)
 	var serialService string
@@ -432,7 +453,7 @@ func (p *Provider) GetMFASerial() (string, error) {
 		var err error
 		p.keyUser, err = env.GetCurrentUser()
 		if err != nil {
-			return "", fmt.Errorf("could not determine current user: %w", err)
+			return nil, fmt.Errorf("could not determine current user: %w", err)
 		}
 	}
 
@@ -446,18 +467,35 @@ func (p *Provider) GetMFASerial() (string, error) {
 	// Get MFA serial using the provider interface
 	serialBytes, err := p.keychain.GetSecret(p.keyUser, serialService)
 	if err == nil {
-		// Convert to string and zero the bytes
-		serial := string(serialBytes)
+		// Make defensive copy
+		result := make([]byte, len(serialBytes))
+		copy(result, serialBytes)
 		secure.SecureZeroBytes(serialBytes)
-		return serial, nil
+		return result, nil
 	}
 
 	// If not found in keychain, try to auto-detect from AWS
 	serial, err := p.aws.GetFirstMFADevice(p.profile)
 	if err != nil {
-		return "", fmt.Errorf("could not detect MFA device: %w", err)
+		return nil, fmt.Errorf("could not detect MFA device: %w", err)
 	}
 
+	// Convert string to bytes - in this case, we're returning a new allocation
+	// so no need to worry about cleanup of the original
+	return []byte(serial), nil
+}
+
+// GetMFASerial returns the MFA device serial as a string
+// This is a compatibility method that uses GetMFASerialBytes internally
+func (p *Provider) GetMFASerial() (string, error) {
+	serialBytes, err := p.GetMFASerialBytes()
+	if err != nil {
+		return "", err
+	}
+	
+	// Convert to string and zero the bytes
+	serial := string(serialBytes)
+	secure.SecureZeroBytes(serialBytes)
 	return serial, nil
 }
 
