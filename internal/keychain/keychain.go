@@ -41,46 +41,12 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 	// For debugging
 	fmt.Fprintf(os.Stderr, "DEBUG keychain: Retrieved secret for service '%s', length: %d bytes\n", service, len(secret))
 
-	// Check if content is a valid base32 string (for TOTP secrets)
+	// For TOTP secrets, ensure whitespace is trimmed to avoid base32 decode failures
 	if strings.HasPrefix(service, "sesh-aws") || strings.HasPrefix(service, "sesh-totp") {
-		secretStr := string(secret)
-		// Check if we have roughly valid base32 content without revealing it
-		allValid := true
-		base32Chars := 0
-		for _, c := range secretStr {
-			// Only uppercase letters A-Z and digits 2-7 are valid in base32
-			if (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=' {
-				base32Chars++
-			} else if c == '\n' || c == '\r' || c == ' ' || c == '\t' {
-				// Ignore whitespace
-			} else {
-				allValid = false
-			}
-		}
-		if !allValid {
-			fmt.Fprintf(os.Stderr, "DEBUG keychain WARNING: Secret contains non-base32 characters (only %d/%d valid)\n",
-				base32Chars, len(secretStr))
-		} else {
-			fmt.Fprintf(os.Stderr, "DEBUG keychain: Secret appears to be valid base32 (%d chars)\n", base32Chars)
-		}
-
 		// Trim whitespace - CRITICAL: removes any newlines, which can cause base32 decode failures
 		secretTrimmed := bytes.TrimSpace(secret)
 		if len(secretTrimmed) != len(secret) {
-			fmt.Fprintf(os.Stderr, "DEBUG keychain: Trimmed %d whitespace bytes\n", len(secret)-len(secretTrimmed))
 			secret = secretTrimmed
-		}
-		
-		// For TOTP secrets, we'll perform basic cleanup for robustness
-		// We won't modify the content here as that's the responsibility of the TOTP module
-		// But we can log the information to help diagnose issues
-		if !allValid && base32Chars >= 16 {
-			fmt.Fprintf(os.Stderr, "DEBUG keychain: Secret contains both base32 and non-base32 chars, but has enough valid chars (%d)\n", 
-				base32Chars)
-			fmt.Fprintf(os.Stderr, "DEBUG keychain: Secret will be cleaned by the TOTP module during code generation\n")
-		} else if !allValid && base32Chars < 16 {
-			fmt.Fprintf(os.Stderr, "DEBUG keychain WARNING: Secret contains too few valid base32 chars (%d), TOTP generation may fail\n", 
-				base32Chars)
 		}
 	}
 
