@@ -312,6 +312,12 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 	// Convert keychain entries to provider entries
 	result := make([]provider.ProviderEntry, 0, len(allEntries))
 	for _, entry := range allEntries {
+		// Skip MFA serial entries - we don't want to show these to users
+		// as they're implementation details and paired with the main entries
+		if strings.HasPrefix(entry.Service, constants.AWSServiceMFAPrefix) {
+			continue
+		}
+
 		// Extract profile name if present
 		profile := ""
 		serviceName := entry.Service
