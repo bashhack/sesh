@@ -316,15 +316,42 @@ func (h *AWSSetupHandler) promptForMFAARN() (string, error) {
 	}
 }
 
+// promptForMFASetupMethod displays instructions for AWS MFA setup and prompts
+// the user to choose a method for capturing the secret
+// Returns the user's choice as a string
+func (h *AWSSetupHandler) promptForMFASetupMethod() (string, error) {
+	fmt.Println(`
+📱 Let's set up a virtual MFA device for your AWS account
+
+1. Log in to the AWS Console at https://console.aws.amazon.com
+2. Navigate to IAM → Users → Your Username → Security credentials
+3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'
+4. Choose 'Virtual MFA device' and click 'Continue'
+
+How would you like to capture the MFA secret?
+1: Enter the secret key manually (click 'Show secret key' in AWS)
+2: Capture QR code from screen (take a screenshot of the QR code)
+Enter your choice (1-2): `)
+
+	choice, _ := h.reader.ReadString('\n')
+	choice = strings.TrimSpace(choice)
+
+	if choice != "1" && choice != "2" {
+		return "", fmt.Errorf("invalid choice, please select 1 or 2")
+	}
+
+	return choice, nil
+}
+
 // showSetupCompletionMessage displays the final success message with usage instructions
 func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
 	fmt.Println(`
 ✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.
 
 🚀 Next steps:
-  1. Run 'sesh -service aws' to generate a temporary session token
-  2. The credentials will be automatically exported to your shell
-  3. You can now use AWS CLI commands with MFA security`)
+1. Run 'sesh -service aws' to generate a temporary session token
+2. The credentials will be automatically exported to your shell
+3. You can now use AWS CLI commands with MFA security`)
 
 	if profile == "" {
 		fmt.Println(`
@@ -335,7 +362,25 @@ To use this setup, run without the --profile flag
 	}
 }
 
-// Setup performs the AWS setup
+// Setup performs the AWS MFA setup process through an interactive CLI flow.
+// The method guides users through the following steps:
+//  1. Verifies AWS CLI is installed
+//  2. Collects the AWS profile name (or uses default)
+//  3. Verifies AWS credentials by checking caller identity
+//  4. Guides the user through setting up a virtual MFA device in AWS Console
+//  5. Captures the MFA secret (either manually or via QR code)
+//  6. Generates TOTP codes and helps with AWS Console MFA setup
+//  7. Helps identify and select the newly created MFA device, with retry and refresh options
+//  8. Stores the MFA secret and serial number securely in system keychain
+//  9. Provides instructions for using the setup with the sesh command
+//
+// The flow includes multiple validation steps, error handling, and user guidance
+// for common issues that might occur during setup, such as delayed MFA device
+// registration in the AWS API.
+//
+// Returns an error if any step in the setup process fails. If successful,
+// the user will be able to generate temporary AWS credentials with MFA protection
+// using the 'sesh' command.
 func (h *AWSSetupHandler) Setup() error {
 	fmt.Println("🔐 Setting up AWS credentials...")
 
@@ -358,20 +403,10 @@ func (h *AWSSetupHandler) Setup() error {
 
 	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
 
-	fmt.Println(`
-📱 Let's set up a virtual MFA device for your AWS account
-
-1. Log in to the AWS Console at https://console.aws.amazon.com
-2. Navigate to IAM → Users → Your Username → Security credentials
-3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'
-4. Choose 'Virtual MFA device' and click 'Continue'
-
-How would you like to capture the MFA secret?
-1: Enter the secret key manually (click 'Show secret key' in AWS)
-2: Capture QR code from screen (take a screenshot of the QR code)
-Enter your choice (1-2): `)
-	choice, _ := h.reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
+	choice, err := h.promptForMFASetupMethod()
+	if err != nil {
+		return err
+	}
 
 	// Capture MFA secret based on user's choice
 	secretStr, err := h.captureMFASecret(choice)
