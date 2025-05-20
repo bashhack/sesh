@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bashhack/sesh/internal/secure"
 	"github.com/pquerna/otp/totp"
 )
 
@@ -21,6 +22,7 @@ func Generate(secret string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to generate TOTP: %w", err)
 	}
+	
 	return code, nil
 }
 
@@ -34,6 +36,7 @@ func GenerateForTime(secret string, t time.Time) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to generate TOTP for time %v: %w", t, err)
 	}
+	
 	return code, nil
 }
 
@@ -42,6 +45,10 @@ func GenerateConsecutiveCodes(secret string) (current string, next string, err e
 	if MockGenerateConsecutiveCodes.Enabled {
 		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
 	}
+
+	// Create a copy of the secret we can zero later
+	secretBytes := []byte(secret)
+	defer secure.SecureZeroBytes(secretBytes)
 
 	now := time.Now()
 
@@ -64,4 +71,20 @@ func GenerateConsecutiveCodes(secret string) (current string, next string, err e
 	}
 
 	return current, next, nil
+}
+
+// GenerateSecure is like Generate but securely zeroes the secret after use
+func GenerateSecure(secret string) (string, error) {
+	secretBytes := []byte(secret)
+	defer secure.SecureZeroBytes(secretBytes)
+	
+	return Generate(secret)
+}
+
+// GenerateForTimeSecure is like GenerateForTime but securely zeroes the secret after use
+func GenerateForTimeSecure(secret string, t time.Time) (string, error) {
+	secretBytes := []byte(secret)
+	defer secure.SecureZeroBytes(secretBytes)
+	
+	return GenerateForTime(secret, t)
 }

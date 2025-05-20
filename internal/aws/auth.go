@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 // execCommand wraps exec.Command to allow for mocking
@@ -17,6 +19,17 @@ type Credentials struct {
 	SecretAccessKey string `json:"SecretAccessKey"`
 	SessionToken    string `json:"SessionToken"`
 	Expiration      string `json:"Expiration"`
+}
+
+// ZeroSecrets zeroes out the sensitive fields in the credentials
+func (c *Credentials) ZeroSecrets() {
+	if c == nil {
+		return
+	}
+	secure.ZeroStrings(c.AccessKeyId, c.SecretAccessKey, c.SessionToken)
+	c.AccessKeyId = ""
+	c.SecretAccessKey = ""
+	c.SessionToken = ""
 }
 
 type SessionTokenResponse struct {
@@ -32,6 +45,10 @@ type ListDevicesResponse struct {
 }
 
 func GetSessionToken(profile, serial, code string) (Credentials, error) {
+	// Create a copy of the code to zero after use
+	codeBytes := []byte(code)
+	defer secure.SecureZeroBytes(codeBytes)
+
 	args := []string{"sts", "get-session-token",
 		"--serial-number", serial,
 		"--token-code", code,
@@ -71,6 +88,7 @@ func GetSessionToken(profile, serial, code string) (Credentials, error) {
 	}
 
 	out := stdout.Bytes()
+	defer secure.SecureZeroBytes(out)
 
 	var parsed SessionTokenResponse
 	if err := json.Unmarshal(out, &parsed); err != nil {

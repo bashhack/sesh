@@ -3,9 +3,11 @@ package keychain
 import (
 	"bytes"
 	"fmt"
-	"github.com/bashhack/sesh/internal/constants"
 	"os/exec"
 	"strings"
+
+	"github.com/bashhack/sesh/internal/constants"
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 var execCommand = exec.Command
@@ -37,11 +39,21 @@ func GetSecret(account, service string) (string, error) {
 			account, service)
 	}
 
-	return strings.TrimSpace(stdout.String()), nil
+	// Get the secret and trim whitespace
+	secret := strings.TrimSpace(stdout.String())
+	
+	// Zero out the stdout buffer for security
+	secure.SecureZeroBytes(stdout.Bytes())
+	
+	return secret, nil
 }
 
 // SetSecret sets a secret in the keychain
 func SetSecret(account, service, secret string) error {
+	// Create a copy of the secret to zero later
+	secretBytes := []byte(secret)
+	defer secure.SecureZeroBytes(secretBytes)
+	
 	if account == "" {
 		out, err := execCommand("whoami").Output()
 		if err != nil {
@@ -105,7 +117,13 @@ func GetMFASerial(account string) (string, error) {
 		return "", fmt.Errorf("no MFA serial stored in Keychain for account %q", account)
 	}
 
-	return strings.TrimSpace(stdout.String()), nil
+	// Get the serial and trim whitespace
+	serial := strings.TrimSpace(stdout.String())
+	
+	// Zero out the stdout buffer for security
+	secure.SecureZeroBytes(stdout.Bytes())
+	
+	return serial, nil
 }
 
 // keychainItem represents a parsed keychain entry
