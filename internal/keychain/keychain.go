@@ -51,8 +51,8 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 			// Only uppercase letters A-Z and digits 2-7 are valid in base32
 			if (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=' {
 				base32Chars++
-			} else if c == '\n' || c == '\r' {
-				// Ignore newlines
+			} else if c == '\n' || c == '\r' || c == ' ' || c == '\t' {
+				// Ignore whitespace
 			} else {
 				allValid = false
 			}
@@ -69,6 +69,18 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 		if len(secretTrimmed) != len(secret) {
 			fmt.Fprintf(os.Stderr, "DEBUG keychain: Trimmed %d whitespace bytes\n", len(secret)-len(secretTrimmed))
 			secret = secretTrimmed
+		}
+		
+		// For TOTP secrets, we'll perform basic cleanup for robustness
+		// We won't modify the content here as that's the responsibility of the TOTP module
+		// But we can log the information to help diagnose issues
+		if !allValid && base32Chars >= 16 {
+			fmt.Fprintf(os.Stderr, "DEBUG keychain: Secret contains both base32 and non-base32 chars, but has enough valid chars (%d)\n", 
+				base32Chars)
+			fmt.Fprintf(os.Stderr, "DEBUG keychain: Secret will be cleaned by the TOTP module during code generation\n")
+		} else if !allValid && base32Chars < 16 {
+			fmt.Fprintf(os.Stderr, "DEBUG keychain WARNING: Secret contains too few valid base32 chars (%d), TOTP generation may fail\n", 
+				base32Chars)
 		}
 	}
 

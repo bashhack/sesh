@@ -101,8 +101,45 @@ func GenerateBytes(secret []byte) (string, error) {
 	defer secure.SecureZeroBytes(secretCopy)
 	
 	// Convert to string - the secret is already base32-encoded in string form
-	// We're just converting the byte representation back to a string
 	secretStr := string(secretCopy)
+	
+	// Check if it matches base32 pattern and clean it up if needed
+	allValid := true
+	validChars := 0
+	for _, c := range secretStr {
+		// Only uppercase letters A-Z and digits 2-7 and padding = are valid in base32
+		if (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=' {
+			validChars++
+		} else if c == '\n' || c == '\r' || c == ' ' || c == '\t' {
+			// Ignore whitespace characters
+		} else {
+			allValid = false
+		}
+	}
+	
+	if !allValid {
+		fmt.Fprintf(os.Stderr, "DEBUG: Secret string contains non-base32 characters (only %d/%d valid)\n", 
+			validChars, len(secretStr))
+		
+		// Attempt to clean up the secret - this is a recovery mechanism
+		// Strip any non-base32 characters and try to proceed with what's left
+		cleanSecret := make([]byte, 0, len(secretStr))
+		for _, c := range secretStr {
+			if (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=' {
+				cleanSecret = append(cleanSecret, byte(c))
+			}
+			// Silently drop invalid characters
+		}
+		
+		// If we have enough valid characters after cleanup, proceed with the cleaned version
+		if len(cleanSecret) >= 16 {
+			fmt.Fprintf(os.Stderr, "DEBUG: Cleaned secret, now has %d valid base32 characters\n", len(cleanSecret))
+			secretStr = string(cleanSecret)
+		} else {
+			fmt.Fprintf(os.Stderr, "DEBUG: Not enough valid base32 characters in secret after cleanup (%d)\n", len(cleanSecret))
+			return "", fmt.Errorf("secret does not contain enough valid base32 characters after cleanup")
+		}
+	}
 	
 	// Now use the string-based implementation
 	return Generate(secretStr)
@@ -138,17 +175,42 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 		fmt.Fprintf(os.Stderr, "DEBUG: Secret string is too short: %d chars\n", len(secretStr))
 	}
 	
-	// Debug - check if it matches base32 pattern
+	// Debug - check if it matches base32 pattern and clean it up if needed
 	allValid := true
+	validChars := 0
 	for _, c := range secretStr {
-		// Only uppercase letters A-Z and digits 2-7 are valid in base32
-		if !((c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=') {
+		// Only uppercase letters A-Z and digits 2-7 and padding = are valid in base32
+		if (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=' {
+			validChars++
+		} else if c == '\n' || c == '\r' || c == ' ' || c == '\t' {
+			// Ignore whitespace characters
+		} else {
 			allValid = false
-			break
 		}
 	}
+	
 	if !allValid {
-		fmt.Fprintf(os.Stderr, "DEBUG: Secret string contains non-base32 characters\n")
+		fmt.Fprintf(os.Stderr, "DEBUG: Secret string contains non-base32 characters (only %d/%d valid)\n", 
+			validChars, len(secretStr))
+		
+		// Attempt to clean up the secret - this is a recovery mechanism
+		// Strip any non-base32 characters and try to proceed with what's left
+		cleanSecret := make([]byte, 0, len(secretStr))
+		for _, c := range secretStr {
+			if (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=' {
+				cleanSecret = append(cleanSecret, byte(c))
+			}
+			// Silently drop invalid characters
+		}
+		
+		// If we have enough valid characters after cleanup, proceed with the cleaned version
+		if len(cleanSecret) >= 16 {
+			fmt.Fprintf(os.Stderr, "DEBUG: Cleaned secret, now has %d valid base32 characters\n", len(cleanSecret))
+			secretStr = string(cleanSecret)
+		} else {
+			fmt.Fprintf(os.Stderr, "DEBUG: Not enough valid base32 characters in secret after cleanup (%d)\n", len(cleanSecret))
+			return "", "", fmt.Errorf("secret does not contain enough valid base32 characters after cleanup")
+		}
 	}
 	
 	// Use the string-based implementation directly to avoid error chain
@@ -181,8 +243,45 @@ func GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
 	defer secure.SecureZeroBytes(secretCopy)
 	
 	// Convert to string - the secret is already base32-encoded in string form
-	// We're just converting the byte representation back to a string
 	secretStr := string(secretCopy)
+	
+	// Check if it matches base32 pattern and clean it up if needed
+	allValid := true
+	validChars := 0
+	for _, c := range secretStr {
+		// Only uppercase letters A-Z and digits 2-7 and padding = are valid in base32
+		if (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=' {
+			validChars++
+		} else if c == '\n' || c == '\r' || c == ' ' || c == '\t' {
+			// Ignore whitespace characters
+		} else {
+			allValid = false
+		}
+	}
+	
+	if !allValid {
+		fmt.Fprintf(os.Stderr, "DEBUG: Secret string contains non-base32 characters (only %d/%d valid)\n", 
+			validChars, len(secretStr))
+		
+		// Attempt to clean up the secret - this is a recovery mechanism
+		// Strip any non-base32 characters and try to proceed with what's left
+		cleanSecret := make([]byte, 0, len(secretStr))
+		for _, c := range secretStr {
+			if (c >= 'A' && c <= 'Z') || (c >= '2' && c <= '7') || c == '=' {
+				cleanSecret = append(cleanSecret, byte(c))
+			}
+			// Silently drop invalid characters
+		}
+		
+		// If we have enough valid characters after cleanup, proceed with the cleaned version
+		if len(cleanSecret) >= 16 {
+			fmt.Fprintf(os.Stderr, "DEBUG: Cleaned secret, now has %d valid base32 characters\n", len(cleanSecret))
+			secretStr = string(cleanSecret)
+		} else {
+			fmt.Fprintf(os.Stderr, "DEBUG: Not enough valid base32 characters in secret after cleanup (%d)\n", len(cleanSecret))
+			return "", fmt.Errorf("secret does not contain enough valid base32 characters after cleanup")
+		}
+	}
 	
 	// Use the string-based implementation
 	return GenerateForTime(secretStr, t)
