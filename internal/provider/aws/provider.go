@@ -99,29 +99,12 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 		keyName = fmt.Sprintf("%s-%s", p.keyName, p.profile)
 	}
 
-	// Get TOTP secret from keychain
-	// Try to directly access the keychain with security command first
-	cmd := exec.Command("security", "find-generic-password",
-		"-a", p.keyUser,
-		"-s", keyName,
-		"-w")
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmdErr := cmd.Run()
-
-	var secret string
-	if cmdErr == nil {
-		secret = strings.TrimSpace(stdout.String())
-		fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from direct keychain access\n")
-	} else {
-		// Fall back to the provider method if direct access fails
-		fmt.Fprintf(os.Stderr, "⚠️ Direct keychain access failed, falling back to provider: %v\n", cmdErr)
-		secret, err = p.keychain.GetSecret(p.keyUser, keyName)
-		if err != nil {
-			return "", "", 0, fmt.Errorf("could not retrieve TOTP secret: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from provider\n")
+	// Get TOTP secret from keychain using the provider interface
+	secret, err := p.keychain.GetSecret(p.keyUser, keyName)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 	}
+	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from keychain\n")
 
 	// Check if secret looks valid (base32 encoded)
 	if len(secret) < 16 || len(secret) > 64 {
@@ -456,21 +439,7 @@ func (p *Provider) GetMFASerial() (string, error) {
 		serialService = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, p.profile)
 	}
 
-	// Try direct keychain access first
-	cmd := exec.Command("security", "find-generic-password",
-		"-a", p.keyUser,
-		"-s", serialService,
-		"-w")
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	err := cmd.Run()
-
-	if err == nil {
-		serialFromKeychain := strings.TrimSpace(stdout.String())
-		return serialFromKeychain, nil
-	}
-
-	// Fall back to the provider method
+	// Get MFA serial using the provider interface
 	serialFromKeychain, err := p.keychain.GetSecret(p.keyUser, serialService)
 	if err == nil {
 		return serialFromKeychain, nil
