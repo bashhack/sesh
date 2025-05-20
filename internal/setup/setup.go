@@ -37,6 +37,14 @@ func (h *AWSSetupHandler) ServiceName() string {
 	return "aws"
 }
 
+// Helper to create service names with proper profile handling
+func (h *AWSSetupHandler) createServiceName(prefix string, profile string) string {
+	if profile == "" {
+		return fmt.Sprintf("%s-default", prefix)
+	}
+	return fmt.Sprintf("%s-%s", prefix, profile)
+}
+
 // createAWSCommand creates an AWS CLI command with the given profile and args
 // It automatically adds the profile flag if a profile is provided
 // Returns an exec.Cmd object ready to be executed
@@ -61,6 +69,9 @@ func (h *AWSSetupHandler) verifyAWSCredentials(profile string) (string, error) {
 	}
 
 	userArn := strings.TrimSpace(string(output))
+
+	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
+
 	return userArn, nil
 }
 
@@ -395,32 +406,26 @@ func (h *AWSSetupHandler) Setup() error {
 	profile, _ := h.reader.ReadString('\n')
 	profile = strings.TrimSpace(profile)
 
-	// Verify AWS credentials and get user ARN
-	userArn, err := h.verifyAWSCredentials(profile)
+	_, err = h.verifyAWSCredentials(profile)
 	if err != nil {
 		return err
 	}
-
-	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
 
 	choice, err := h.promptForMFASetupMethod()
 	if err != nil {
 		return err
 	}
 
-	// Capture MFA secret based on user's choice
 	secretStr, err := h.captureMFASecret(choice)
 	if err != nil {
 		return err
 	}
 
-	// Guide user through AWS console setup with the TOTP codes
 	err = h.setupMFAConsole(secretStr)
 	if err != nil {
 		return err
 	}
 
-	// Select the MFA device after setup is complete
 	mfaArn, err := h.selectMFADevice(profile)
 	if err != nil {
 		return fmt.Errorf("failed to select MFA device: %w", err)
@@ -431,27 +436,13 @@ func (h *AWSSetupHandler) Setup() error {
 		return fmt.Errorf("failed to get current user: %w", err)
 	}
 
-	var serviceName string
-	if profile == "" {
-		// For the default profile, use "default" as the profile name
-		serviceName = fmt.Sprintf("%s-default", constants.AWSServicePrefix)
-	} else {
-		serviceName = fmt.Sprintf("%s-%s", constants.AWSServicePrefix, profile)
-	}
-
+	serviceName := h.createServiceName(constants.AWSServicePrefix, profile)
 	err = h.keychainProvider.SetSecret(user, serviceName, secretStr)
 	if err != nil {
 		return fmt.Errorf("failed to store secret in keychain: %w", err)
 	}
 
-	var serialServiceName string
-	if profile == "" {
-		// For the default profile, use "default" as the profile name
-		serialServiceName = fmt.Sprintf("%s-default", constants.AWSServiceMFAPrefix)
-	} else {
-		serialServiceName = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, profile)
-	}
-
+	serialServiceName := h.createServiceName(constants.AWSServiceMFAPrefix, profile)
 	err = h.keychainProvider.SetSecret(user, serialServiceName, mfaArn)
 	if err != nil {
 		return fmt.Errorf("failed to store MFA serial in keychain: %w", err)
