@@ -153,7 +153,7 @@ What would you like to do?
 3: Enter your MFA ARN manually
 Enter your choice (1-3): `)
 
-		retryChoice, _ := reader.ReadString('\n')
+		retryChoice, _ := h.reader.ReadString('\n')
 		retryChoice = strings.TrimSpace(retryChoice)
 
 		switch retryChoice {
@@ -213,7 +213,7 @@ func (h *AWSSetupHandler) promptForMFAARN() (string, error) {
 	
 	for {
 		fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
-		mfaArn, _ := reader.ReadString('\n')
+		mfaArn, _ := h.reader.ReadString('\n')
 		mfaArn = strings.TrimSpace(mfaArn)
 		
 		if mfaArn == "" {
