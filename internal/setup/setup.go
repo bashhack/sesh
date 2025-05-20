@@ -43,13 +43,8 @@ func (h *AWSSetupHandler) ServiceName() string {
 // Returns the MFA device ARN and any error that occurred
 func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
 	
-	// Create the appropriate command based on profile
-	var mfaCmd *exec.Cmd
-	if profile == "" {
-		mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-	} else {
-		mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
-	}
+	// Create the command using our helper function
+	mfaCmd := h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
 
 	mfaOutput, err := mfaCmd.Output()
 	var mfaArn string
@@ -82,11 +77,7 @@ func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
 			case "r", "R":
 				// Refresh MFA devices list
 				fmt.Println("\n🔄 Refreshing MFA device list...")
-				if profile == "" {
-					mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-				} else {
-					mfaCmd = exec.Command("aws", "iam", "list-mfa-devices", "--profile", profile, "--query", "MFADevices[].SerialNumber", "--output", "text")
-				}
+				mfaCmd = h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
 				
 				mfaOutput, err = mfaCmd.Output()
 				if err != nil || len(strings.TrimSpace(string(mfaOutput))) == 0 {
@@ -231,10 +222,114 @@ func (h *AWSSetupHandler) promptForMFAARN() (string, error) {
 	}
 }
 
+// createAWSCommand creates an AWS CLI command with the given profile and args
+// It automatically adds the profile flag if a profile is provided
+// Returns an exec.Cmd object ready to be executed
+func (h *AWSSetupHandler) createAWSCommand(profile string, args ...string) *exec.Cmd {
+	if profile != "" {
+		// Insert profile flag after the first argument (command)
+		profArgs := append([]string{args[0], "--profile", profile}, args[1:]...)
+		return exec.Command("aws", profArgs...)
+	}
+	return exec.Command("aws", args...)
+}
+
+// verifyAWSCredentials checks if AWS credentials are properly configured
+// It tries to get the caller identity and returns the user ARN if successful
+// Returns the user ARN and any error that occurred
+func (h *AWSSetupHandler) verifyAWSCredentials(profile string) (string, error) {
+	cmd := h.createAWSCommand(profile, "sts", "get-caller-identity", "--query", "Arn", "--output", "text")
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get AWS identity: %w. Make sure your AWS credentials are configured with 'aws configure'.", err)
+	}
+
+	userArn := strings.TrimSpace(string(output))
+	return userArn, nil
+}
+
+// captureMFASecret guides the user through capturing the MFA secret
+// Options include manual entry or QR code scanning
+// Returns the captured secret string and any error that occurred
+func (h *AWSSetupHandler) captureMFASecret(choice string) (string, error) {
+	var secretStr string
+
+	switch choice {
+	case "1": // Manual entry
+		fmt.Println(`
+5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code
+6. Click 'Show secret key' and copy the secret key
+		
+❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
+
+Paste the secret key here (this will not be echoed): `)
+		secret, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			return "", fmt.Errorf("failed to read secret: %w", err)
+		}
+		fmt.Println() // Add a newline after hidden input
+
+		secretStr = strings.TrimSpace(string(secret))
+
+	case "2": // QR code capture flow
+		fmt.Println(`
+5. Keep the QR code visible on your screen
+6. When ready, press Enter to activate screenshot mode
+
+❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
+
+Press Enter when you're ready to capture the QR code...`)
+		h.reader.ReadString('\n')
+
+		fmt.Println("📸 Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
+		var err error
+		secretStr, err = qrcode.ScanQRCode()
+		if err != nil {
+			return "", fmt.Errorf("failed to process QR code: %w", err)
+		}
+		fmt.Println("✅ QR code successfully captured and decoded!")
+
+	default:
+		return "", fmt.Errorf("invalid choice, please select 1 or 2")
+	}
+
+	// Validate secret key format (basic check)
+	if len(secretStr) < 16 {
+		return "", fmt.Errorf("secret key seems too short (got %d chars). Please double-check and try again", len(secretStr))
+	}
+
+	return secretStr, nil
+}
+
+// setupMFAConsole generates TOTP codes and guides the user through AWS console setup
+// It displays the codes and instructions for completing setup in the AWS console
+// Returns any error that occurred during code generation
+func (h *AWSSetupHandler) setupMFAConsole(secretStr string) error {
+	// At the time of writing, AWS requires two codes during setup
+	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
+	if err != nil {
+		return fmt.Errorf("failed to generate TOTP codes: %w", err)
+	}
+
+	fmt.Printf(`✅ Generated TOTP codes for AWS setup
+First code: %s
+Second code: %s
+
+IMPORTANT - FOLLOW THESE STEPS:
+1. Enter these codes in the AWS Console
+2. Click the "Add MFA" button to complete setup
+3. Wait for confirmation in the AWS console that setup is complete
+
+Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS console...`, firstCode, secondCode)
+	h.reader.ReadString('\n')
+
+	return nil
+}
+
 // Setup performs the AWS setup
 func (h *AWSSetupHandler) Setup() error {
 	fmt.Println("🔐 Setting up AWS credentials...")
-	reader := bufio.NewReader(os.Stdin)
 
 	_, err := exec.LookPath("aws")
 	if err != nil {
@@ -244,24 +339,15 @@ func (h *AWSSetupHandler) Setup() error {
 	fmt.Println("✅ AWS CLI is installed")
 
 	fmt.Print("Enter AWS CLI profile name (leave empty for default): ")
-	profile, _ := reader.ReadString('\n')
+	profile, _ := h.reader.ReadString('\n')
 	profile = strings.TrimSpace(profile)
 
-	var userArn string
-	var cmd *exec.Cmd
-
-	if profile == "" {
-		cmd = exec.Command("aws", "sts", "get-caller-identity", "--query", "Arn", "--output", "text")
-	} else {
-		cmd = exec.Command("aws", "sts", "get-caller-identity", "--profile", profile, "--query", "Arn", "--output", "text")
-	}
-
-	output, err := cmd.Output()
+	// Verify AWS credentials and get user ARN
+	userArn, err := h.verifyAWSCredentials(profile)
 	if err != nil {
-		return fmt.Errorf("failed to get AWS identity. Make sure your AWS credentials are configured")
+		return err
 	}
 
-	userArn = strings.TrimSpace(string(output))
 	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
 
 	fmt.Println(`
@@ -279,72 +365,19 @@ Enter your choice (1-2): `)
 	choice, _ := h.reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
-	var secretStr string
-
-	switch choice {
-	case "1": // Manual entry
-		fmt.Println(`
-5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code
-6. Click 'Show secret key' and copy the secret key
-		
-❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
-
-Paste the secret key here (this will not be echoed): `)
-		secret, err := term.ReadPassword(int(syscall.Stdin))
-		if err != nil {
-			return fmt.Errorf("failed to read secret")
-		}
-		fmt.Println() // Add a newline after the hidden input
-
-		secretStr = string(secret)
-		secretStr = strings.TrimSpace(secretStr)
-
-	case "2": // QR code capture flow
-		fmt.Println(`
-5. Keep the QR code visible on your screen
-6. When ready, press Enter to activate screenshot mode
-
-❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
-
-Press Enter when you're ready to capture the QR code...`)
-		reader.ReadString('\n')
-
-		fmt.Println("📸 Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
-		var err error
-		secretStr, err = qrcode.ScanQRCode()
-		if err != nil {
-			return fmt.Errorf("failed to process QR code: %v", err)
-		}
-		fmt.Println("✅ QR code successfully captured and decoded!")
-
-	default:
-		return fmt.Errorf("invalid choice, please select 1 or 2")
-	}
-
-	if len(secretStr) < 16 {
-		// Validate secret key format (basic check)
-		return fmt.Errorf("secret key seems too short, please double-check and try again")
-	}
-
-	// At the time of writing, AWS requires two codes during setup
-	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
+	// Capture MFA secret based on user's choice
+	secretStr, err := h.captureMFASecret(choice)
 	if err != nil {
-		return fmt.Errorf("failed to generate TOTP codes: %s", err)
+		return err
 	}
 
-	fmt.Printf(`✅ Generated TOTP codes for AWS setup
-First code: %s
-Second code: %s
+	// Guide user through AWS console setup with the TOTP codes
+	err = h.setupMFAConsole(secretStr)
+	if err != nil {
+		return err
+	}
 
-IMPORTANT - FOLLOW THESE STEPS:
-1. Enter these codes in the AWS Console
-2. Click the "Add MFA" button to complete setup
-3. Wait for confirmation in the AWS console that setup is complete
-
-Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS console...`, firstCode, secondCode)
-	reader.ReadString('\n')
-
-	// Use the extracted function to select an MFA device
+	// Select the MFA device after setup is complete
 	mfaArn, err := h.selectMFADevice(profile)
 	if err != nil {
 		return fmt.Errorf("failed to select MFA device: %w", err)
