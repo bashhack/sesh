@@ -112,15 +112,14 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	// Zero original immediately after copying
 	secure.SecureZeroBytes(secretBytes)
 	
-	// Convert to string - this is necessary because the TOTP package expects a string
-	// In the future, consider updating the TOTP package to work with byte slices directly
-	secret := string(secretCopy)
+	// We no longer need to convert to string since we're using byte-slice methods directly
 
 	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from keychain\n")
 
 	// Check if secret looks valid (base32 encoded)
-	if len(secret) < 16 || len(secret) > 64 {
-		fmt.Fprintf(os.Stderr, "⚠️ Warning: TOTP secret has unusual length: %d characters\n", len(secret))
+	secretLen := len(secretCopy)
+	if secretLen < 16 || secretLen > 64 {
+		fmt.Fprintf(os.Stderr, "⚠️ Warning: TOTP secret has unusual length: %d characters\n", secretLen)
 	}
 
 	// Generate consecutive TOTP codes
@@ -252,9 +251,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				// Zero original immediately after copying 
 				secure.SecureZeroBytes(secretBytes)
 				
-				// Convert to string - this is necessary because the TOTP package expects a string
-				// In the future, consider updating the TOTP package to work with byte slices directly
-				secret := string(secretCopy)
+				// We no longer need to convert to string since we're using byte-slice methods directly
 
 				// Generate a code for the window after next, in case AWS is far ahead of our clock
 				futureCode, gErr := p.totp.GenerateForTimeBytes(secretCopy, time.Now().Add(60*time.Second))
