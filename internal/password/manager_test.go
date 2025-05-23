@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/joshmedeski/sesh/internal/keychain"
-	"github.com/joshmedeski/sesh/internal/keychain/mocks"
-	"github.com/joshmedeski/sesh/internal/totp"
-	totp_mocks "github.com/joshmedeski/sesh/internal/totp/mocks"
+	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/totp"
+	totp_mocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
 
 func TestNewManager(t *testing.T) {
