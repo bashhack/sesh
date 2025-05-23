@@ -107,22 +107,27 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		return provider.Credentials{}, fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
 
-	// Calculate when this code expires (30 seconds from now, rounded to nearest 30s boundary)
+	// Calculate when this code expires and time left
 	now := time.Now().Unix()
 	validUntil := time.Unix(((now/30)+1)*30, 0)
+	secondsLeft := 30 - (now % 30)
 
-	// Format display name based on whether a profile is specified
-	displayName := p.serviceName
+	// Format service name with profile (matching AWS pattern)
+	serviceStr := p.serviceName
 	if p.profile != "" {
-		displayName = fmt.Sprintf("%s (%s)", p.serviceName, p.profile)
+		serviceStr = fmt.Sprintf("%s (%s)", p.serviceName, p.profile)
 	}
+
+	// Format display info with detailed timing (matching AWS clipboard pattern)
+	displayInfo := fmt.Sprintf("Current: %s  |  Next: %s  |  Time left: %ds\n🔑 TOTP code for %s",
+		currentCode, nextCode, secondsLeft, serviceStr)
 
 	// Create credentials object
 	return provider.Credentials{
 		Provider:         p.Name(),
 		Expiry:           validUntil,
 		Variables:        map[string]string{"TOTP_CODE": currentCode},
-		DisplayInfo:      fmt.Sprintf("TOTP code for %s: %s (Next: %s)", displayName, currentCode, nextCode),
+		DisplayInfo:      displayInfo,
 		CopyValue:        currentCode,
 		MFAAuthenticated: false, // TOTP codes themselves aren't MFA authenticated with AWS
 	}, nil
