@@ -3,11 +3,60 @@ package totp
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/pquerna/otp/totp"
 )
+
+// ValidateAndNormalizeSecret validates and normalizes a base32-encoded TOTP secret.
+// It handles common formatting issues like spaces, lowercase letters, and missing padding.
+func ValidateAndNormalizeSecret(secret string) (string, error) {
+	if secret == "" {
+		return "", fmt.Errorf("secret cannot be empty")
+	}
+
+	// Remove all whitespace (spaces, tabs, newlines)
+	cleaned := strings.ReplaceAll(secret, " ", "")
+	cleaned = strings.ReplaceAll(cleaned, "\t", "")
+	cleaned = strings.ReplaceAll(cleaned, "\n", "")
+	cleaned = strings.ReplaceAll(cleaned, "\r", "")
+
+	// Convert to uppercase (base32 standard)
+	cleaned = strings.ToUpper(cleaned)
+
+	// Validate characters - only A-Z, 2-7, and = are valid in base32
+	for i, char := range cleaned {
+		if !((char >= 'A' && char <= 'Z') || (char >= '2' && char <= '7') || char == '=') {
+			return "", fmt.Errorf("invalid character '%c' at position %d - base32 secrets can only contain A-Z, 2-7, and =", char, i)
+		}
+	}
+
+	// Check minimum length (typical TOTP secrets are 16+ characters)
+	if len(cleaned) < 16 {
+		return "", fmt.Errorf("secret too short (%d characters) - TOTP secrets should be at least 16 characters", len(cleaned))
+	}
+
+	// Add proper base32 padding if missing
+	// Base32 requires padding to make length a multiple of 8
+	remainder := len(cleaned) % 8
+	if remainder != 0 {
+		padLength := 8 - remainder
+		cleaned = cleaned + strings.Repeat("=", padLength)
+	}
+
+	// Validate by attempting to decode (this catches structural issues)
+	testBytes := []byte(cleaned)
+	defer secure.SecureZeroBytes(testBytes)
+	
+	_, err := Generate(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("secret failed validation test: %w", err)
+	}
+
+	return cleaned, nil
+}
 
 func Generate(secret string) (string, error) {
 	// Explicitly use default options for consistent 6-digit codes,

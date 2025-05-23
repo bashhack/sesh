@@ -421,6 +421,13 @@ func (h *AWSSetupHandler) Setup() error {
 		return err
 	}
 
+	// Validate and normalize the TOTP secret
+	normalizedSecret, err := totp.ValidateAndNormalizeSecret(secretStr)
+	if err != nil {
+		return fmt.Errorf("invalid TOTP secret: %w", err)
+	}
+	secretStr = normalizedSecret
+
 	err = h.setupMFAConsole(secretStr)
 	if err != nil {
 		return err
