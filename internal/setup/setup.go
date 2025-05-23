@@ -7,6 +7,7 @@ import (
 	"github.com/bashhack/sesh/internal/env"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/qrcode"
+	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
 	"golang.org/x/term"
 	"os"
@@ -608,36 +609,6 @@ func (h *TOTPSetupHandler) Setup() error {
 		return err
 	}
 
-	switch choice {
-	case "1":
-		// Manual entry
-		fmt.Println("Enter your TOTP secret key (this will not be echoed):")
-		secret, err := term.ReadPassword(int(syscall.Stdin))
-		if err != nil {
-			return fmt.Errorf("failed to read secret")
-		}
-		fmt.Println() // Add a newline after the hidden input
-
-		secretStr = string(secret)
-		secretStr = strings.TrimSpace(secretStr)
-
-	case "2":
-		// QR code capture flow
-		fmt.Println("When ready, press Enter to activate screenshot mode")
-		fmt.Print("Press Enter to continue...")
-		h.reader.ReadString('\n')
-
-		// Capture and process the QR code
-		secretStr, err = qrcode.ScanQRCode()
-		if err != nil {
-			return fmt.Errorf("failed to process QR code: %v", err)
-		}
-		fmt.Println("✅ QR code successfully captured and decoded!")
-
-	default:
-		return fmt.Errorf("invalid choice, please select 1 or 2")
-	}
-
 	// Validate and normalize the TOTP secret
 	normalizedSecret, err := totp.ValidateAndNormalizeSecret(secretStr)
 	if err != nil {
@@ -685,12 +656,7 @@ func (h *TOTPSetupHandler) Setup() error {
 	fmt.Println("   (Use these codes if your service requires verification during setup)")
 	fmt.Println()
 
-	fmt.Printf("✅ Setup complete! You can now use 'sesh --service totp --service-name %s", serviceName)
-	if profile != "" {
-		fmt.Printf(" --profile %s", profile)
-	}
-	fmt.Println("' to generate TOTP codes.")
-	fmt.Println("Use 'sesh --service totp --service-name " + serviceName + " --clip' to copy the code to clipboard.")
+	h.showTOTPSetupCompletionMessage(serviceName, profile)
 
 	return nil
 }
