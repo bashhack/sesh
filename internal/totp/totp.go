@@ -23,6 +23,11 @@ func ValidateAndNormalizeSecret(secret string) (string, error) {
 	cleaned = strings.ReplaceAll(cleaned, "\n", "")
 	cleaned = strings.ReplaceAll(cleaned, "\r", "")
 
+	// After cleaning whitespace, check if we have anything left
+	if cleaned == "" {
+		return "", fmt.Errorf("secret cannot be empty")
+	}
+
 	// Convert to uppercase (base32 standard)
 	cleaned = strings.ToUpper(cleaned)
 
@@ -33,9 +38,10 @@ func ValidateAndNormalizeSecret(secret string) (string, error) {
 		}
 	}
 
-	// Check minimum length (typical TOTP secrets are 16+ characters)
-	if len(cleaned) < 16 {
-		return "", fmt.Errorf("secret too short (%d characters) - TOTP secrets should be at least 16 characters", len(cleaned))
+	// Check minimum length - RFC 4226 recommends 128 bits (26 base32 chars), 
+	// but many providers use shorter secrets. Accept anything >= 64 bits (13 chars)
+	if len(cleaned) < 8 {
+		return "", fmt.Errorf("secret too short (%d characters) - TOTP secrets should be at least 8 characters", len(cleaned))
 	}
 
 	// Add proper base32 padding if missing

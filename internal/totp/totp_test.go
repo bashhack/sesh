@@ -207,7 +207,7 @@ func TestValidateAndNormalizeSecret(t *testing.T) {
 		},
 		{
 			name:        "Too short",
-			input:       "JBSWY3DP", // 8 chars
+			input:       "JBSWY3", // 6 chars
 			shouldError: true,
 			errorMsg:    "secret too short",
 		},
