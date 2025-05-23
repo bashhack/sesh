@@ -552,10 +552,12 @@ func (h *TOTPSetupHandler) Setup() error {
 		return fmt.Errorf("invalid choice, please select 1 or 2")
 	}
 
-	// Validate secret key format (basic check)
-	if len(secretStr) < 16 {
-		return fmt.Errorf("secret key seems too short, please double-check and try again")
+	// Validate and normalize the TOTP secret
+	normalizedSecret, err := totp.ValidateAndNormalizeSecret(secretStr)
+	if err != nil {
+		return fmt.Errorf("invalid TOTP secret: %w", err)
 	}
+	secretStr = normalizedSecret
 
 	// Generate two consecutive TOTP codes
 	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)

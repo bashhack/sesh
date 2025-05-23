@@ -37,7 +37,7 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 			account, service)
 	}
 
-	// For TOTP secrets, ensure whitespace is trimmed to avoid base32 decode failures
+	// For TOTP secrets, ensure they are properly normalized
 	if strings.HasPrefix(service, "sesh-aws") || strings.HasPrefix(service, "sesh-totp") {
 		// Trim whitespace - CRITICAL: removes any newlines, which can cause base32 decode failures
 		secretTrimmed := bytes.TrimSpace(secret)
