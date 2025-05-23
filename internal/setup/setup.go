@@ -491,6 +491,14 @@ func (h *TOTPSetupHandler) ServiceName() string {
 	return "totp"
 }
 
+// createTOTPServiceName creates a TOTP service name with proper profile handling
+func (h *TOTPSetupHandler) createTOTPServiceName(serviceName, profile string) string {
+	if profile == "" {
+		return fmt.Sprintf("sesh-totp-%s", serviceName)
+	}
+	return fmt.Sprintf("sesh-totp-%s-%s", serviceName, profile)
+}
+
 // Setup performs the TOTP setup
 func (h *TOTPSetupHandler) Setup() error {
 	fmt.Println("🔐 Setting up TOTP credentials...")
@@ -571,13 +579,8 @@ func (h *TOTPSetupHandler) Setup() error {
 		return fmt.Errorf("failed to get current user: %w", err)
 	}
 
-	// Build service key
-	var serviceKey string
-	if profile == "" {
-		serviceKey = fmt.Sprintf("sesh-totp-%s", serviceName)
-	} else {
-		serviceKey = fmt.Sprintf("sesh-totp-%s-%s", serviceName, profile)
-	}
+	// Build service key using consistent helper pattern
+	serviceKey := h.createTOTPServiceName(serviceName, profile)
 
 	// Store the secret using the keychain provider
 	err = h.keychainProvider.SetSecretString(user, serviceKey, secretStr)
