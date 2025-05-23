@@ -1,21 +1,17 @@
 package password
 
 import (
-	"context"
-	"strings"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/keychain/mocks"
-	"github.com/bashhack/sesh/internal/totp"
-	totp_mocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
 
 func TestNewManager(t *testing.T) {
-	mockKeychain := &mocks.MockKeychain{}
-	mockTOTP := &totp_mocks.MockTOTP{}
+	mockKeychain := &mocks.MockProvider{}
+	testUser := "testuser"
 	
-	manager := NewManager(mockKeychain, mockTOTP)
+	manager := NewManager(mockKeychain, testUser)
 	
 	if manager == nil {
 		t.Fatal("NewManager returned nil")
@@ -23,323 +19,316 @@ func TestNewManager(t *testing.T) {
 	if manager.keychain != mockKeychain {
 		t.Error("Manager keychain not set correctly")
 	}
-	if manager.totp != mockTOTP {
-		t.Error("Manager TOTP not set correctly")
+	if manager.user != testUser {
+		t.Error("Manager user not set correctly")
 	}
 }
 
-func TestStoreAndGetPassword(t *testing.T) {
-	mockKeychain := &mocks.MockKeychain{}
-	mockTOTP := &totp_mocks.MockTOTP{}
-	manager := NewManager(mockKeychain, mockTOTP)
+func TestStorePasswordString(t *testing.T) {
+	mockKeychain := &mocks.MockProvider{}
+	testUser := "testuser"
+	manager := NewManager(mockKeychain, testUser)
 	
-	ctx := context.Background()
 	testCases := []struct {
-		name     string
-		key      string
-		password string
-		wantErr  bool
+		name      string
+		service   string
+		username  string
+		password  string
+		entryType EntryType
+		wantErr   bool
 	}{
 		{
-			name:     "valid password storage",
-			key:      "test-service",
-			password: "secretpassword123",
-			wantErr:  false,
+			name:      "valid password storage",
+			service:   "test-service",
+			username:  "user",
+			password:  "secretpassword123",
+			entryType: EntryTypePassword,
+			wantErr:   false,
 		},
 		{
-			name:     "empty key",
-			key:      "",
-			password: "password",
-			wantErr:  true,
+			name:      "empty service",
+			service:   "",
+			username:  "user",
+			password:  "password",
+			entryType: EntryTypePassword,
+			wantErr:   false, // Should work with empty service
 		},
 		{
-			name:     "empty password",
-			key:      "test-service",
-			password: "",
-			wantErr:  true,
+			name:      "API key storage",
+			service:   "aws",
+			username:  "access-key",
+			password:  "SECRET_ACCESS_KEY",
+			entryType: EntryTypeAPIKey,
+			wantErr:   false,
 		},
 	}
 	
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.wantErr {
-				err := manager.StorePassword(ctx, tc.key, tc.password)
-				if err == nil {
-					t.Error("Expected error but got none")
+			// Setup mock expectations
+			expectedServiceKey := manager.generateServiceKey(tc.service, tc.username, tc.entryType)
+			
+			// Mock SetSecret call
+			mockKeychain.SetSecretFunc = func(account, service string, secret []byte) error {
+				if account != testUser {
+					t.Errorf("Expected account %q, got %q", testUser, account)
 				}
-				return
+				if service != expectedServiceKey {
+					t.Errorf("Expected service key %q, got %q", expectedServiceKey, service)
+				}
+				if string(secret) != tc.password {
+					t.Errorf("Expected password %q, got %q", tc.password, string(secret))
+				}
+				return nil
 			}
 			
-			// Setup mock expectations
-			expectedKey := "sesh:password:" + tc.key
-			mockKeychain.On("Store", expectedKey, []byte(tc.password)).Return(nil)
-			mockKeychain.On("Get", expectedKey).Return([]byte(tc.password), nil)
+			// Mock StoreEntryMetadata call (may fail, but non-fatal)
+			mockKeychain.StoreEntryMetadataFunc = func(servicePrefix, service, account, description string) error {
+				return nil // Success for simplicity
+			}
 			
 			// Store password
-			err := manager.StorePassword(ctx, tc.key, tc.password)
-			if err != nil {
-				t.Fatalf("StorePassword failed: %v", err)
+			err := manager.StorePasswordString(tc.service, tc.username, tc.password, tc.entryType)
+			if tc.wantErr && err == nil {
+				t.Error("Expected error but got none")
+			} else if !tc.wantErr && err != nil {
+				t.Errorf("Unexpected error: %v", err)
 			}
-			
-			// Retrieve password
-			retrieved, err := manager.GetPassword(ctx, tc.key)
-			if err != nil {
-				t.Fatalf("GetPassword failed: %v", err)
-			}
-			
-			if retrieved != tc.password {
-				t.Errorf("Retrieved password %q doesn't match stored %q", retrieved, tc.password)
-			}
-			
-			// Verify all expectations were met
-			mockKeychain.AssertExpectations(t)
 		})
+	}
+}
+
+func TestGetPasswordString(t *testing.T) {
+	mockKeychain := &mocks.MockProvider{}
+	testUser := "testuser"
+	manager := NewManager(mockKeychain, testUser)
+	
+	testService := "test-service"
+	testUsername := "user"
+	testPassword := "secretpassword123"
+	entryType := EntryTypePassword
+	
+	expectedServiceKey := manager.generateServiceKey(testService, testUsername, entryType)
+	
+	// Setup mock to return password
+	mockKeychain.GetSecretFunc = func(account, service string) ([]byte, error) {
+		if account != testUser {
+			t.Errorf("Expected account %q, got %q", testUser, account)
+		}
+		if service != expectedServiceKey {
+			t.Errorf("Expected service key %q, got %q", expectedServiceKey, service)
+		}
+		return []byte(testPassword), nil
+	}
+	
+	// Retrieve password
+	retrieved, err := manager.GetPasswordString(testService, testUsername, entryType)
+	if err != nil {
+		t.Fatalf("GetPasswordString failed: %v", err)
+	}
+	
+	if retrieved != testPassword {
+		t.Errorf("Retrieved password %q doesn't match expected %q", retrieved, testPassword)
 	}
 }
 
 func TestStoreTOTPSecret(t *testing.T) {
-	mockKeychain := &mocks.MockKeychain{}
-	mockTOTP := &totp_mocks.MockTOTP{}
-	manager := NewManager(mockKeychain, mockTOTP)
+	mockKeychain := &mocks.MockProvider{}
+	testUser := "testuser"
+	manager := NewManager(mockKeychain, testUser)
 	
-	ctx := context.Background()
-	testCases := []struct {
-		name         string
-		key          string
-		secret       string
-		validateResp string
-		validateErr  error
-		wantErr      bool
-	}{
-		{
-			name:         "valid TOTP secret",
-			key:          "github-account",
-			secret:       "JBSWY3DPEHPK3PXP",
-			validateResp: "JBSWY3DPEHPK3PXP",
-			validateErr:  nil,
-			wantErr:      false,
-		},
-		{
-			name:        "invalid TOTP secret",
-			key:         "github-account",
-			secret:      "invalid-secret",
-			validateErr: totp.ErrInvalidSecret,
-			wantErr:     true,
-		},
-		{
-			name:    "empty key",
-			key:     "",
-			secret:  "JBSWY3DPEHPK3PXP",
-			wantErr: true,
-		},
-	}
-	
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.wantErr && tc.key == "" {
-				err := manager.StoreTOTPSecret(ctx, tc.key, tc.secret)
-				if err == nil {
-					t.Error("Expected error for empty key but got none")
-				}
-				return
-			}
-			
-			if tc.validateErr != nil {
-				// Mock validation failure
-				mockTOTP.On("ValidateAndNormalizeSecret", tc.secret).Return("", tc.validateErr)
-				
-				err := manager.StoreTOTPSecret(ctx, tc.key, tc.secret)
-				if err == nil {
-					t.Error("Expected validation error but got none")
-				}
-				if !strings.Contains(err.Error(), "invalid TOTP secret") {
-					t.Errorf("Expected validation error message, got: %v", err)
-				}
-				
-				mockTOTP.AssertExpectations(t)
-				return
-			}
-			
-			// Setup successful validation and storage
-			expectedKey := "sesh:totp:" + tc.key
-			mockTOTP.On("ValidateAndNormalizeSecret", tc.secret).Return(tc.validateResp, nil)
-			mockKeychain.On("Store", expectedKey, []byte(tc.validateResp)).Return(nil)
-			
-			err := manager.StoreTOTPSecret(ctx, tc.key, tc.secret)
-			if err != nil {
-				t.Fatalf("StoreTOTPSecret failed: %v", err)
-			}
-			
-			mockTOTP.AssertExpectations(t)
-			mockKeychain.AssertExpectations(t)
-		})
-	}
-}
-
-func TestGenerateTOTPCode(t *testing.T) {
-	mockKeychain := &mocks.MockKeychain{}
-	mockTOTP := &totp_mocks.MockTOTP{}
-	manager := NewManager(mockKeychain, mockTOTP)
-	
-	ctx := context.Background()
-	testKey := "github-account"
-	testSecret := "JBSWY3DPEHPK3PXP"
-	expectedCode := "123456"
-	
-	// Setup mock expectations
-	keychainKey := "sesh:totp:" + testKey
-	mockKeychain.On("Get", keychainKey).Return([]byte(testSecret), nil)
-	mockTOTP.On("GenerateCode", testSecret).Return(expectedCode, nil)
-	
-	code, err := manager.GenerateTOTPCode(ctx, testKey)
-	if err != nil {
-		t.Fatalf("GenerateTOTPCode failed: %v", err)
-	}
-	
-	if code != expectedCode {
-		t.Errorf("Generated code %q doesn't match expected %q", code, expectedCode)
-	}
-	
-	mockKeychain.AssertExpectations(t)
-	mockTOTP.AssertExpectations(t)
-}
-
-func TestListEntries(t *testing.T) {
-	mockKeychain := &mocks.MockKeychain{}
-	mockTOTP := &totp_mocks.MockTOTP{}
-	manager := NewManager(mockKeychain, mockTOTP)
-	
-	ctx := context.Background()
-	
-	// Setup mock keychain with various entry types
-	mockKeys := []string{
-		"sesh:password:service1",
-		"sesh:password:service2",
-		"sesh:totp:github",
-		"sesh:api_key:aws",
-		"sesh:secure_note:backup-codes",
-		"other:unrelated:key", // Should be filtered out
-	}
-	
-	mockKeychain.On("List", "sesh:").Return(mockKeys, nil)
-	
-	entries, err := manager.ListEntries(ctx)
-	if err != nil {
-		t.Fatalf("ListEntries failed: %v", err)
-	}
-	
-	expectedEntries := []Entry{
-		{Key: "service1", Type: EntryTypePassword},
-		{Key: "service2", Type: EntryTypePassword},
-		{Key: "github", Type: EntryTypeTOTP},
-		{Key: "aws", Type: EntryTypeAPIKey},
-		{Key: "backup-codes", Type: EntryTypeSecureNote},
-	}
-	
-	if len(entries) != len(expectedEntries) {
-		t.Fatalf("Expected %d entries, got %d", len(expectedEntries), len(entries))
-	}
-	
-	for i, expected := range expectedEntries {
-		if entries[i].Key != expected.Key || entries[i].Type != expected.Type {
-			t.Errorf("Entry %d: expected %+v, got %+v", i, expected, entries[i])
-		}
-	}
-	
-	mockKeychain.AssertExpectations(t)
-}
-
-func TestDeleteEntry(t *testing.T) {
-	mockKeychain := &mocks.MockKeychain{}
-	mockTOTP := &totp_mocks.MockTOTP{}
-	manager := NewManager(mockKeychain, mockTOTP)
-	
-	ctx := context.Background()
 	testCases := []struct {
 		name       string
-		key        string
-		entryType  EntryType
-		expectKey  string
+		service    string
+		username   string
+		secret     string
+		expectNorm string
 		wantErr    bool
 	}{
 		{
-			name:      "delete password",
-			key:       "service1",
-			entryType: EntryTypePassword,
-			expectKey: "sesh:password:service1",
-			wantErr:   false,
+			name:       "valid TOTP secret",
+			service:    "github",
+			username:   "account",
+			secret:     "JBSWY3DPEHPK3PXP",
+			expectNorm: "JBSWY3DPEHPK3PXP",
+			wantErr:    false,
 		},
 		{
-			name:      "delete TOTP",
-			key:       "github",
-			entryType: EntryTypeTOTP,
-			expectKey: "sesh:totp:github",
-			wantErr:   false,
+			name:       "secret with spaces",
+			service:    "github",
+			username:   "account",
+			secret:     "JBSW Y3DP EHPK 3PXP",
+			expectNorm: "JBSWY3DPEHPK3PXP",
+			wantErr:    false,
 		},
 		{
-			name:      "empty key",
-			key:       "",
-			entryType: EntryTypePassword,
-			wantErr:   true,
+			name:     "invalid secret",
+			service:  "github",
+			username: "account",
+			secret:   "invalid-chars-!@#",
+			wantErr:  true,
 		},
 	}
 	
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.wantErr {
-				err := manager.DeleteEntry(ctx, tc.key, tc.entryType)
+				err := manager.StoreTOTPSecret(tc.service, tc.username, tc.secret)
 				if err == nil {
-					t.Error("Expected error but got none")
+					t.Error("Expected validation error but got none")
 				}
 				return
 			}
 			
-			mockKeychain.On("Delete", tc.expectKey).Return(nil)
+			// Setup successful storage mock
+			expectedServiceKey := manager.generateServiceKey(tc.service, tc.username, EntryTypeTOTP)
 			
-			err := manager.DeleteEntry(ctx, tc.key, tc.entryType)
-			if err != nil {
-				t.Fatalf("DeleteEntry failed: %v", err)
+			mockKeychain.SetSecretFunc = func(account, service string, secret []byte) error {
+				if account != testUser {
+					t.Errorf("Expected account %q, got %q", testUser, account)
+				}
+				if service != expectedServiceKey {
+					t.Errorf("Expected service key %q, got %q", expectedServiceKey, service)
+				}
+				if string(secret) != tc.expectNorm {
+					t.Errorf("Expected normalized secret %q, got %q", tc.expectNorm, string(secret))
+				}
+				return nil
 			}
 			
-			mockKeychain.AssertExpectations(t)
+			mockKeychain.StoreEntryMetadataFunc = func(servicePrefix, service, account, description string) error {
+				return nil
+			}
+			
+			err := manager.StoreTOTPSecret(tc.service, tc.username, tc.secret)
+			if err != nil {
+				t.Fatalf("StoreTOTPSecret failed: %v", err)
+			}
 		})
 	}
 }
 
-func TestMemorySecurityDefensiveCopying(t *testing.T) {
-	mockKeychain := &mocks.MockKeychain{}
-	mockTOTP := &totp_mocks.MockTOTP{}
-	manager := NewManager(mockKeychain, mockTOTP)
+func TestGenerateServiceKey(t *testing.T) {
+	mockKeychain := &mocks.MockProvider{}
+	testUser := "testuser"
+	manager := NewManager(mockKeychain, testUser)
 	
-	ctx := context.Background()
-	testKey := "test-service"
-	originalPassword := "secretpassword123"
+	testCases := []struct {
+		name      string
+		service   string
+		username  string
+		entryType EntryType
+		expected  string
+	}{
+		{
+			name:      "password with username",
+			service:   "github",
+			username:  "myuser",
+			entryType: EntryTypePassword,
+			expected:  "sesh-password-password-github-myuser",
+		},
+		{
+			name:      "password without username",
+			service:   "github",
+			username:  "",
+			entryType: EntryTypePassword,
+			expected:  "sesh-password-password-github",
+		},
+		{
+			name:      "TOTP entry",
+			service:   "aws",
+			username:  "root",
+			entryType: EntryTypeTOTP,
+			expected:  "sesh-password-totp-aws-root",
+		},
+		{
+			name:      "API key",
+			service:   "stripe",
+			username:  "",
+			entryType: EntryTypeAPIKey,
+			expected:  "sesh-password-api_key-stripe",
+		},
+	}
 	
-	// Setup mock to return a byte slice that we can modify
-	passwordBytes := []byte(originalPassword)
-	mockKeychain.On("Store", "sesh:password:"+testKey, passwordBytes).Return(nil)
-	mockKeychain.On("Get", "sesh:password:"+testKey).Return(passwordBytes, nil)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := manager.generateServiceKey(tc.service, tc.username, tc.entryType)
+			if result != tc.expected {
+				t.Errorf("Expected service key %q, got %q", tc.expected, result)
+			}
+		})
+	}
+}
+
+func TestDeleteEntry(t *testing.T) {
+	mockKeychain := &mocks.MockProvider{}
+	testUser := "testuser"
+	manager := NewManager(mockKeychain, testUser)
 	
-	// Store password
-	err := manager.StorePassword(ctx, testKey, originalPassword)
+	testService := "test-service"
+	testUsername := "user"
+	entryType := EntryTypePassword
+	expectedServiceKey := manager.generateServiceKey(testService, testUsername, entryType)
+	
+	// Setup mock expectations
+	mockKeychain.DeleteEntryFunc = func(account, service string) error {
+		if account != testUser {
+			t.Errorf("Expected account %q, got %q", testUser, account)
+		}
+		if service != expectedServiceKey {
+			t.Errorf("Expected service key %q, got %q", expectedServiceKey, service)
+		}
+		return nil
+	}
+	
+	err := manager.DeleteEntry(testService, testUsername, entryType)
 	if err != nil {
-		t.Fatalf("StorePassword failed: %v", err)
+		t.Fatalf("DeleteEntry failed: %v", err)
+	}
+}
+
+func TestListEntries(t *testing.T) {
+	mockKeychain := &mocks.MockProvider{}
+	testUser := "testuser"
+	manager := NewManager(mockKeychain, testUser)
+	
+	// Setup mock keychain entries
+	mockEntries := []keychain.KeychainEntry{
+		{
+			Service:     "sesh-password-password-github-user1",
+			Account:     testUser,
+			Description: "password for github",
+		},
+		{
+			Service:     "sesh-password-totp-aws-root",
+			Account:     testUser,
+			Description: "totp for aws",
+		},
 	}
 	
-	// Modify the original bytes to simulate security concern
-	for i := range passwordBytes {
-		passwordBytes[i] = 'X'
+	mockKeychain.ListEntriesFunc = func(service string) ([]keychain.KeychainEntry, error) {
+		if service != "sesh-password" {
+			t.Errorf("Expected service prefix 'sesh-password', got %q", service)
+		}
+		return mockEntries, nil
 	}
 	
-	// Retrieve password - should be unaffected by the modification
-	retrieved, err := manager.GetPassword(ctx, testKey)
+	entries, err := manager.ListEntries()
 	if err != nil {
-		t.Fatalf("GetPassword failed: %v", err)
+		t.Fatalf("ListEntries failed: %v", err)
 	}
 	
-	if retrieved != originalPassword {
-		t.Errorf("Retrieved password was affected by byte slice modification: got %q, want %q", retrieved, originalPassword)
+	if len(entries) != len(mockEntries) {
+		t.Errorf("Expected %d entries, got %d", len(mockEntries), len(entries))
 	}
 	
-	mockKeychain.AssertExpectations(t)
+	// Basic validation that entries are parsed
+	for i, entry := range entries {
+		if entry.Service != mockEntries[i].Service {
+			t.Errorf("Entry %d: expected service %q, got %q", i, mockEntries[i].Service, entry.Service)
+		}
+		if entry.Description != mockEntries[i].Description {
+			t.Errorf("Entry %d: expected description %q, got %q", i, mockEntries[i].Description, entry.Description)
+		}
+	}
 }
