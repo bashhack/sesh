@@ -1,13 +1,12 @@
 package totp
 
 import (
-	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/bashhack/sesh/internal/env"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
@@ -83,42 +82,30 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		return provider.Credentials{}, fmt.Errorf("service name is required, use --service-name flag")
 	}
 
-	// Get TOTP secret from keychain
+	// Get TOTP secret from keychain using secure methods
 	serviceKey := buildServiceKey(p.keyName, p.serviceName, p.profile)
 
-	fmt.Fprintf(os.Stderr, "DEBUG: Accessing TOTP service '%s' with user '%s'\n", serviceKey, p.keyUser)
+	fmt.Fprintf(os.Stderr, "🔑 Retrieving TOTP secret for %s\n", p.serviceName)
 
-	// Try direct keychain access first
-	cmd := exec.Command("security", "find-generic-password",
-		"-a", p.keyUser,
-		"-s", serviceKey,
-		"-w")
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	var secret string
-	var err error
-
-	if cmd.Run() == nil {
-		secret = strings.TrimSpace(stdout.String())
-	} else {
-		// Fall back to provider method
-		secretBytes, err := p.keychain.GetSecret(p.keyUser, serviceKey)
-		if err != nil {
-			return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret for %s: %w", p.serviceName, err)
-		}
-		// Convert to string and zero the bytes after use
-		secret = string(secretBytes)
-		defer secure.SecureZeroBytes(secretBytes)
-	}
-
-	// Generate TOTP code
-	code, err := p.totp.Generate(secret)
+	// Get secret bytes from keychain provider (no direct security command)
+	secretBytes, err := p.keychain.GetSecret(p.keyUser, serviceKey)
 	if err != nil {
-		return provider.Credentials{}, fmt.Errorf("could not generate TOTP code: %w", err)
+		return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret for %s: %w", p.serviceName, err)
 	}
 
-	// Generate next code for display
-	_, next, err := p.totp.GenerateConsecutiveCodes(secret)
+	// Make defensive copy for secure handling
+	secretCopy := make([]byte, len(secretBytes))
+	copy(secretCopy, secretBytes)
+	defer secure.SecureZeroBytes(secretCopy)
+
+	// Zero original immediately after copying
+	secure.SecureZeroBytes(secretBytes)
+
+	// Generate TOTP codes using secure byte methods
+	currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secretCopy)
+	if err != nil {
+		return provider.Credentials{}, fmt.Errorf("could not generate TOTP codes: %w", err)
+	}
 
 	// Calculate when this code expires (30 seconds from now, rounded to nearest 30s boundary)
 	now := time.Now().Unix()
@@ -134,9 +121,9 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	return provider.Credentials{
 		Provider:         p.Name(),
 		Expiry:           validUntil,
-		Variables:        map[string]string{"TOTP_CODE": code},
-		DisplayInfo:      fmt.Sprintf("TOTP code for %s: %s (Next: %s)", displayName, code, next),
-		CopyValue:        code,
+		Variables:        map[string]string{"TOTP_CODE": currentCode},
+		DisplayInfo:      fmt.Sprintf("TOTP code for %s: %s (Next: %s)", displayName, currentCode, nextCode),
+		CopyValue:        currentCode,
 		MFAAuthenticated: false, // TOTP codes themselves aren't MFA authenticated with AWS
 	}, nil
 }
@@ -209,14 +196,9 @@ func (p *Provider) DeleteEntry(id string) error {
 	return nil
 }
 
-// getCurrentUser gets the current system user
+// getCurrentUser gets the current system user using our env package
 func getCurrentUser() (string, error) {
-	cmd := os.Getenv("USER")
-	if cmd != "" {
-		return cmd, nil
-	}
-
-	return "", fmt.Errorf("could not determine current user")
+	return env.GetCurrentUser()
 }
 
 // buildServiceKey creates a service key for the keychain
