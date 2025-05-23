@@ -499,25 +499,29 @@ func (h *TOTPSetupHandler) createTOTPServiceName(serviceName, profile string) st
 	return fmt.Sprintf("sesh-totp-%s-%s", serviceName, profile)
 }
 
-// Setup performs the TOTP setup
-func (h *TOTPSetupHandler) Setup() error {
-	fmt.Println("🔐 Setting up TOTP credentials...")
-
-	// Ask for service name
+// promptForServiceName prompts the user to enter a service name and validates it
+func (h *TOTPSetupHandler) promptForServiceName() (string, error) {
 	fmt.Print("Enter name for this TOTP service: ")
 	serviceName, _ := h.reader.ReadString('\n')
 	serviceName = strings.TrimSpace(serviceName)
 
 	if serviceName == "" {
-		return fmt.Errorf("service name cannot be empty")
+		return "", fmt.Errorf("service name cannot be empty")
 	}
 
-	// Ask for profile name (for multiple accounts with the same service)
+	return serviceName, nil
+}
+
+// promptForProfile prompts the user to enter an optional profile name
+func (h *TOTPSetupHandler) promptForProfile() (string, error) {
 	fmt.Print("Enter profile name (optional, for multiple accounts with the same service): ")
 	profile, _ := h.reader.ReadString('\n')
 	profile = strings.TrimSpace(profile)
+	return profile, nil
+}
 
-	// Ask user how they want to capture the TOTP secret
+// promptForCaptureMethod prompts the user to choose how to capture the TOTP secret
+func (h *TOTPSetupHandler) promptForCaptureMethod() (string, error) {
 	fmt.Println()
 	fmt.Println("How would you like to capture the TOTP secret?")
 	fmt.Println("1: Enter the secret key manually")
@@ -526,9 +530,83 @@ func (h *TOTPSetupHandler) Setup() error {
 	choice, _ := h.reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
-	// Variable to store the secret
+	if choice != "1" && choice != "2" {
+		return "", fmt.Errorf("invalid choice, please select 1 or 2")
+	}
+
+	return choice, nil
+}
+
+// captureTOTPSecret captures the TOTP secret using the specified method
+func (h *TOTPSetupHandler) captureTOTPSecret(choice string) (string, error) {
 	var secretStr string
-	var err error
+
+	switch choice {
+	case "1": // Manual entry
+		fmt.Println("Enter your TOTP secret key (this will not be echoed):")
+		secret, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			return "", fmt.Errorf("failed to read secret: %w", err)
+		}
+		fmt.Println() // Add a newline after the hidden input
+
+		// Handle secret securely
+		secretBytes := secret
+		defer secure.SecureZeroBytes(secretBytes)
+		secretStr = strings.TrimSpace(string(secretBytes))
+
+	case "2": // QR code capture
+		fmt.Println("When ready, press Enter to activate screenshot mode")
+		fmt.Print("Press Enter to continue...")
+		h.reader.ReadString('\n')
+
+		var err error
+		secretStr, err = qrcode.ScanQRCode()
+		if err != nil {
+			return "", fmt.Errorf("failed to process QR code: %w", err)
+		}
+		fmt.Println("✅ QR code successfully captured and decoded!")
+
+	default:
+		return "", fmt.Errorf("invalid choice, please select 1 or 2")
+	}
+
+	return secretStr, nil
+}
+
+// showTOTPSetupCompletionMessage displays the final success message with usage instructions
+func (h *TOTPSetupHandler) showTOTPSetupCompletionMessage(serviceName, profile string) {
+	fmt.Printf("✅ Setup complete! You can now use 'sesh --service totp --service-name %s", serviceName)
+	if profile != "" {
+		fmt.Printf(" --profile %s", profile)
+	}
+	fmt.Println("' to generate TOTP codes.")
+	fmt.Printf("Use 'sesh --service totp --service-name %s --clip' to copy the code to clipboard.\n", serviceName)
+}
+
+// Setup performs the TOTP setup
+func (h *TOTPSetupHandler) Setup() error {
+	fmt.Println("🔐 Setting up TOTP credentials...")
+
+	serviceName, err := h.promptForServiceName()
+	if err != nil {
+		return err
+	}
+
+	profile, err := h.promptForProfile()
+	if err != nil {
+		return err
+	}
+
+	choice, err := h.promptForCaptureMethod()
+	if err != nil {
+		return err
+	}
+
+	secretStr, err := h.captureTOTPSecret(choice)
+	if err != nil {
+		return err
+	}
 
 	switch choice {
 	case "1":
