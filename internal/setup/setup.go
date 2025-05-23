@@ -540,39 +540,70 @@ func (h *TOTPSetupHandler) promptForCaptureMethod() (string, error) {
 
 // captureTOTPSecret captures the TOTP secret using the specified method
 func (h *TOTPSetupHandler) captureTOTPSecret(choice string) (string, error) {
-	var secretStr string
-
 	switch choice {
 	case "1": // Manual entry
-		fmt.Println("Enter your TOTP secret key (this will not be echoed):")
-		secret, err := term.ReadPassword(int(syscall.Stdin))
-		if err != nil {
-			return "", fmt.Errorf("failed to read secret: %w", err)
-		}
-		fmt.Println() // Add a newline after the hidden input
-
-		// Handle secret securely
-		secretBytes := secret
-		defer secure.SecureZeroBytes(secretBytes)
-		secretStr = strings.TrimSpace(string(secretBytes))
-
-	case "2": // QR code capture
-		fmt.Println("When ready, press Enter to activate screenshot mode")
-		fmt.Print("Press Enter to continue...")
-		h.reader.ReadString('\n')
-
-		var err error
-		secretStr, err = qrcode.ScanQRCode()
-		if err != nil {
-			return "", fmt.Errorf("failed to process QR code: %w", err)
-		}
-		fmt.Println("✅ QR code successfully captured and decoded!")
-
+		return h.captureManualEntry()
+	case "2": // QR code capture with retry + fallback
+		return h.captureQRCodeWithFallback()
 	default:
 		return "", fmt.Errorf("invalid choice, please select 1 or 2")
 	}
+}
 
-	return secretStr, nil
+// captureQRCodeWithFallback attempts QR capture with retry and manual fallback
+func (h *TOTPSetupHandler) captureQRCodeWithFallback() (string, error) {
+	maxRetries := 2
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		fmt.Printf("📸 QR capture attempt %d/%d - Position cursor and drag to select QR code\n", attempt, maxRetries)
+		fmt.Println("When ready, press Enter to activate screenshot mode")
+		fmt.Print("Press Enter to continue...")
+		h.reader.ReadString('\n')
+		
+		secretStr, err := qrcode.ScanQRCode()
+		if err == nil {
+			fmt.Println("✅ QR code successfully captured and decoded!")
+			return secretStr, nil
+		}
+		
+		fmt.Printf("❌ QR capture failed: %v\n", err)
+		
+		if attempt < maxRetries {
+			fmt.Println("💡 Tips: Check screen brightness, QR code size, and cursor positioning")
+			fmt.Print("Press Enter to try again, or 'm' to switch to manual entry: ")
+			choice, _ := h.reader.ReadString('\n')
+			if strings.ToLower(strings.TrimSpace(choice)) == "m" {
+				fmt.Println("Switching to manual entry...")
+				return h.captureManualEntry()
+			}
+		}
+	}
+	
+	// Final fallback after all retries
+	fmt.Println("\n❓ QR capture failed after multiple attempts.")
+	fmt.Print("Would you like to enter the secret manually instead? (y/n): ")
+	fallback, _ := h.reader.ReadString('\n')
+	
+	if strings.ToLower(strings.TrimSpace(fallback)) == "y" {
+		return h.captureManualEntry()
+	}
+	
+	return "", fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
+}
+
+// captureManualEntry handles manual secret entry with secure memory handling
+func (h *TOTPSetupHandler) captureManualEntry() (string, error) {
+	fmt.Println("Enter your TOTP secret key (this will not be echoed):")
+	secret, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		return "", fmt.Errorf("failed to read secret: %w", err)
+	}
+	fmt.Println() // Add a newline after the hidden input
+
+	// Handle secret securely
+	secretBytes := secret
+	defer secure.SecureZeroBytes(secretBytes)
+	return strings.TrimSpace(string(secretBytes)), nil
 }
 
 // showTOTPSetupCompletionMessage displays the final success message with usage instructions
