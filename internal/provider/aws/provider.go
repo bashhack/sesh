@@ -25,9 +25,10 @@ type Provider struct {
 	totp     internalTotp.Provider
 
 	// Flags
-	profile string
-	keyUser string
-	keyName string
+	profile    string
+	keyUser    string
+	keyName    string
+	noSubshell bool
 }
 
 // Ensure Provider implements ServiceProvider interface
@@ -60,6 +61,7 @@ func (p *Provider) Description() string {
 // SetupFlags adds provider-specific flags to the given FlagSet
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
+	fs.BoolVar(&p.noSubshell, "no-subshell", false, "Print environment variables instead of launching subshell")
 
 
 	defaultKeyUser, err := env.GetCurrentUser()
@@ -464,7 +466,18 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Description: "AWS CLI profile to use",
 			Required:    false,
 		},
+		{
+			Name:        "no-subshell",
+			Type:        "bool",
+			Description: "Print environment variables instead of launching subshell",
+			Required:    false,
+		},
 	}
+}
+
+// ShouldUseSubshell returns whether to use subshell mode
+func (p *Provider) ShouldUseSubshell() bool {
+	return !p.noSubshell
 }
 
 // buildServiceKey creates a service key for the keychain
