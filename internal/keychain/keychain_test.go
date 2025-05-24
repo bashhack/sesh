@@ -159,12 +159,13 @@ func TestGetMFASerialSuccess(t *testing.T) {
 		return cmd
 	}
 
-	serial, err := GetMFASerial("testuser")
+	serialBytes, err := GetMFASerialBytes("testuser")
 
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
 	}
 
+	serial := string(serialBytes)
 	if serial != mockOutput {
 		t.Errorf("Expected serial '%s', got '%s'", mockOutput, serial)
 	}
@@ -194,12 +195,13 @@ func TestGetMFASerialWithEmptyUsername(t *testing.T) {
 		return cmd
 	}
 
-	serial, err := GetMFASerial("")
+	serialBytes, err := GetMFASerialBytes("")
 
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
 	}
 
+	serial := string(serialBytes)
 	if serial != serialOutput {
 		t.Errorf("Expected serial '%s', got '%s'", serialOutput, serial)
 	}
@@ -224,7 +226,7 @@ func TestGetMFASerialWithWhoamiError(t *testing.T) {
 		return cmd
 	}
 
-	_, err := GetMFASerial("")
+	_, err := GetMFASerialBytes("")
 
 	if err == nil {
 		t.Error("Expected error but got nil")
@@ -254,7 +256,7 @@ func TestGetMFASerialWithSecurityError(t *testing.T) {
 		return cmd
 	}
 
-	_, err := GetMFASerial("testuser")
+	_, err := GetMFASerialBytes("testuser")
 
 	if err == nil {
 		t.Error("Expected error but got nil")
@@ -509,7 +511,7 @@ func TestGetMFASerialIntegration(t *testing.T) {
 		t.Skip("Skipping keychain test in CI environment")
 	}
 
-	_, err := GetMFASerial("") // should use `whoami`...
+	_, err := GetMFASerialBytes("") // should use `whoami`...
 	// ...doesn't really matter here that if it succeeds or fails, just that it doesn't panic!
 	_ = err
 }

@@ -9,7 +9,6 @@ type MockProvider struct {
 	GetSecretStringFunc     func(account, service string) (string, error)
 	SetSecretStringFunc     func(account, service, secret string) error
 	GetMFASerialBytesFunc   func(account string) ([]byte, error)
-	GetMFASerialFunc        func(account string) (string, error)
 	ListEntriesFunc         func(service string) ([]keychain.KeychainEntry, error)
 	DeleteEntryFunc         func(account, service string) error
 	StoreEntryMetadataFunc  func(servicePrefix, service, account, description string) error
@@ -40,11 +39,6 @@ func (m *MockProvider) SetSecretString(account, service, secret string) error {
 // GetMFASerialBytes implements the keychain.Provider interface
 func (m *MockProvider) GetMFASerialBytes(account string) ([]byte, error) {
 	return m.GetMFASerialBytesFunc(account)
-}
-
-// GetMFASerial implements the keychain.Provider interface
-func (m *MockProvider) GetMFASerial(account string) (string, error) {
-	return m.GetMFASerialFunc(account)
 }
 
 // ListEntries implements the keychain.Provider interface
