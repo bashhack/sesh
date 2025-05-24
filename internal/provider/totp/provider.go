@@ -250,3 +250,27 @@ func (p *Provider) ValidateRequest() error {
 
 	return nil
 }
+
+// GetFlagInfo returns information about TOTP provider-specific flags
+func (p *Provider) GetFlagInfo() []provider.FlagInfo {
+	return []provider.FlagInfo{
+		{
+			Name:        "service-name",
+			Type:        "string",
+			Description: "Name of the service to authenticate with",
+			Required:    true,
+		},
+		{
+			Name:        "profile",
+			Type:        "string",
+			Description: "Profile name for the service (for multiple accounts)",
+			Required:    false,
+		},
+		{
+			Name:        "label",
+			Type:        "string",
+			Description: "Label to identify this TOTP entry",
+			Required:    false,
+		},
+	}
+}
