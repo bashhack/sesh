@@ -293,23 +293,13 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 			continue
 		}
 
-		// Extract profile name if present
-		profile := ""
+		// Extract profile name from service key
 		serviceName := entry.Service
-
-		// Handle profile-specific keys (sesh-aws-profile)
-		if strings.HasPrefix(serviceName, constants.AWSServicePrefix) {
-			profile = strings.TrimPrefix(serviceName, fmt.Sprintf("%s-", constants.AWSServicePrefix))
-		}
+		profile := parseServiceKey(serviceName)
 
 		// Create descriptive name and description
-		name := serviceName
-		description := "AWS MFA"
-
-		if profile != "" {
-			name = fmt.Sprintf("AWS (%s)", profile)
-			description = fmt.Sprintf("AWS MFA for profile %s", profile)
-		}
+		name := fmt.Sprintf("AWS (%s)", profile)
+		description := fmt.Sprintf("AWS MFA for %s", formatProfile(profile))
 
 		// Create a unique ID that contains both the service and account
 		id := fmt.Sprintf("%s:%s", serviceName, entry.Account)

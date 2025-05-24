@@ -41,10 +41,17 @@
     - Changed "could not" to "failed to" for consistency across providers
     - Both providers already consistent on "could not generate TOTP codes"
 
-### 5. Profile Handling Complexity
+### 5. Profile Handling Complexity ✓ RESOLVED
 - **AWS Provider**: Complex profile logic scattered throughout multiple methods
 - **TOTP Provider**: Clean profile parameter in `buildServiceKey()`
 - **Fix**: Consolidate AWS profile logic into helper functions
+- **Resolution**: Created comprehensive helper functions to consolidate all profile logic:
+  - Added `formatProfile()` for consistent user-facing display ("profile (default)")
+  - Added `parseServiceKey()` to complement `buildServiceKey()` for parsing service keys
+  - Refactored all scattered profile formatting to use the single `formatProfile()` helper
+  - Fixed manual key building to always use `buildServiceKey()`
+  - Refactored `ListEntries()` to use the new helpers
+  - Eliminated all magic strings and duplicate profile logic
 
 ### 6. Secret Validation
 - **AWS Provider**: Basic length check only (lines 120-123)
