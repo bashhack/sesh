@@ -2,7 +2,6 @@ package provider
 
 import (
 	"errors"
-	"flag"
 	"testing"
 )
 
@@ -20,8 +19,9 @@ func (p *mockProvider) Description() string {
 	return p.description
 }
 
-func (p *mockProvider) SetupFlags(fs *flag.FlagSet) {
+func (p *mockProvider) SetupFlags(fs FlagSet) error {
 	// Do nothing for testing
+	return nil
 }
 
 func (p *mockProvider) Setup() error {
@@ -55,11 +55,15 @@ func (p *mockProvider) DeleteEntry(id string) error {
 	return nil
 }
 
-func (p *mockProvider) GetClipboardValue() (string, error) {
+func (p *mockProvider) GetClipboardValue() (Credentials, error) {
 	if p.name == "error" {
-		return "", errors.New("mock error")
+		return Credentials{}, errors.New("mock error")
 	}
-	return "mock-clipboard-value", nil
+	return Credentials{Provider: p.name, CopyValue: "mock-clipboard-value"}, nil
+}
+
+func (p *mockProvider) GetSetupHandler() interface{} {
+	return nil
 }
 
 func TestRegistry_RegisterProvider(t *testing.T) {
