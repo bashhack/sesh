@@ -90,13 +90,7 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	}
 
 	// Get TOTP secret - account for profile-specific secrets
-	var keyName string
-	if p.profile == "" {
-		// Use default for the default profile
-		keyName = fmt.Sprintf("%s-default", p.keyName)
-	} else {
-		keyName = fmt.Sprintf("%s-%s", p.keyName, p.profile)
-	}
+	keyName := buildServiceKey(p.keyName, p.profile)
 
 	// Get TOTP secret from keychain using the provider interface
 	secretBytes, err := p.keychain.GetSecret(p.keyUser, keyName)
@@ -414,13 +408,7 @@ func (p *Provider) GetTOTPKeyInfo() (string, string, error) {
 	}
 
 	// Determine the keychain key name based on profile
-	var keyName string
-	if p.profile == "" {
-		// Use default for the default profile
-		keyName = fmt.Sprintf("%s-default", p.keyName)
-	} else {
-		keyName = fmt.Sprintf("%s-%s", p.keyName, p.profile)
-	}
+	keyName := buildServiceKey(p.keyName, p.profile)
 
 	return p.keyUser, keyName, nil
 }
@@ -440,12 +428,7 @@ func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 		}
 	}
 
-	if p.profile == "" {
-		// Use default for the default profile
-		serialService = fmt.Sprintf("%s-default", constants.AWSServiceMFAPrefix)
-	} else {
-		serialService = fmt.Sprintf("%s-%s", constants.AWSServiceMFAPrefix, p.profile)
-	}
+	serialService := buildServiceKey(constants.AWSServiceMFAPrefix, p.profile)
 
 	// Get MFA serial using the provider interface - use the bytes version for better security
 	// We need to explicitly pass the service name
@@ -491,4 +474,13 @@ func (p *Provider) NewSubshellConfig(creds provider.Credentials) interface{} {
 		Expiry:          creds.Expiry,
 		ShellCustomizer: awsInternal.NewCustomizer(),
 	}
+}
+
+// buildServiceKey creates a service key for the keychain
+// Format: {prefix}-{profile} or {prefix}-default
+func buildServiceKey(prefix, profile string) string {
+	if profile == "" {
+		return fmt.Sprintf("%s-default", prefix)
+	}
+	return fmt.Sprintf("%s-%s", prefix, profile)
 }

@@ -2,10 +2,14 @@
 
 ## Issues Found Between AWS and TOTP Providers
 
-### 1. Flag Validation Inconsistency
+### 1. Flag Validation Inconsistency ✓ RESOLVED
 - **AWS Provider**: Uses direct `flag.Lookup()` to validate flags (lines 87-90, 162-165 in aws/provider.go)
 - **TOTP Provider**: No equivalent validation for AWS-specific flags
-- **Fix**: TOTP should validate that AWS-specific flags (like `--profile`) aren't used with TOTP
+- **Resolution**: No action needed. Investigation revealed:
+  - TOTP does accept `--profile` flag (line 64 in totp/provider.go) for multiple accounts
+  - There are no AWS-specific flags that TOTP needs to validate against
+  - The `--profile` flag is used by both providers (different purposes)
+  - AWS's validation of `--service-name` is appropriate since it's TOTP-specific
 
 ### 2. Service Key Building Pattern
 - **AWS Provider**: Hardcoded service key logic scattered in multiple places (lines 94-99, 417-423, 442-448)
