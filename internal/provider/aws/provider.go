@@ -62,9 +62,6 @@ func (p *Provider) Description() string {
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
 
-	// Add a dummy service-name flag to detect invalid flag usage with AWS provider
-	var dummyServiceName string
-	fs.StringVar(&dummyServiceName, "service-name", "", "NOT USED - Only valid with TOTP provider")
 
 	defaultKeyUser, err := env.GetCurrentUser()
 	if err != nil {
@@ -433,11 +430,6 @@ func (p *Provider) NewSubshellConfig(creds provider.Credentials) interface{} {
 
 // ValidateRequest performs early validation before any AWS operations
 func (p *Provider) ValidateRequest() error {
-	// Validate that service-name was not provided - it's not valid for AWS
-	flag := flag.Lookup("service-name")
-	if flag != nil && flag.Value.String() != "" {
-		return fmt.Errorf("the --service-name flag is only valid with the TOTP provider, not AWS")
-	}
 
 	// Check if we have required keychain entries for this profile
 	// This prevents slow AWS API calls when no entry exists
