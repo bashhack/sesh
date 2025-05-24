@@ -891,3 +891,44 @@ func setupGenericTOTP() {
 	fmt.Println("' to generate TOTP codes.")
 	fmt.Println("Use 'sesh --service totp --service-name " + serviceName + " --clip' to copy the code to clipboard.")
 }
+
+// captureQRWithRetry is a shared helper for QR code capture with retry logic
+func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, error)) (string, error) {
+	maxRetries := 2
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		fmt.Printf("📸 QR capture attempt %d/%d\n", attempt, maxRetries)
+		fmt.Println("Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
+		fmt.Print("Press Enter to activate screenshot mode...")
+		reader.ReadString('\n')
+		
+		secretStr, err := qrcode.ScanQRCode()
+		if err == nil {
+			fmt.Println("✅ QR code successfully captured and decoded!")
+			return secretStr, nil
+		}
+		
+		fmt.Printf("❌ QR capture failed: %v\n", err)
+		
+		if attempt < maxRetries {
+			fmt.Println("💡 Tips: Check screen brightness, QR code size, and cursor positioning")
+			fmt.Print("Press Enter to try again, or 'm' to switch to manual entry: ")
+			choice, _ := reader.ReadString('\n')
+			if strings.ToLower(strings.TrimSpace(choice)) == "m" {
+				fmt.Println("Switching to manual entry...")
+				return manualEntryFunc()
+			}
+		}
+	}
+	
+	// Final fallback after all retries
+	fmt.Println("\n❓ QR capture failed after multiple attempts.")
+	fmt.Print("Would you like to enter the secret manually instead? (y/n): ")
+	fallback, _ := reader.ReadString('\n')
+	
+	if strings.ToLower(strings.TrimSpace(fallback)) == "y" {
+		return manualEntryFunc()
+	}
+	
+	return "", fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
+}
