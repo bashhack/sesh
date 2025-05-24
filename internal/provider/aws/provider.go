@@ -475,20 +475,12 @@ func buildServiceKey(prefix, profile string) string {
 	return fmt.Sprintf("%s-%s", prefix, profile)
 }
 
-// getProfileDisplay returns a display-friendly profile name
-// Returns "default" if profile is empty, otherwise returns the profile name
-func getProfileDisplay(profile string) string {
-	if profile == "" {
-		return "default"
+// formatProfile returns a formatted profile description
+// Returns "profile (default)" or "profile (name)"
+func formatProfile(profile string) string {
+	name := profile
+	if name == "" {
+		name = "default"
 	}
-	return profile
-}
-
-// getProfileDescription returns a formatted profile description for user messages
-// Returns "default profile" or "profile {name}"
-func getProfileDescription(profile string) string {
-	if profile == "" {
-		return "default profile"
-	}
-	return fmt.Sprintf("profile %s", profile)
+	return fmt.Sprintf("profile (%s)", name)
 }
