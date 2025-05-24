@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/env"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
@@ -14,9 +15,6 @@ import (
 	internalTotp "github.com/bashhack/sesh/internal/totp"
 )
 
-const (
-	defaultServicePrefix = "sesh-totp"
-)
 
 // Provider implements ServiceProvider for generic TOTP
 type Provider struct {
@@ -26,7 +24,6 @@ type Provider struct {
 	// Flags
 	serviceName string
 	keyUser     string
-	keyName     string
 	label       string
 	profile     string // Used for multiple profiles for the same service
 }
@@ -42,7 +39,6 @@ func NewProvider(
 	return &Provider{
 		keychain: keychain,
 		totp:     totp,
-		keyName:  defaultServicePrefix,
 	}
 }
 
@@ -61,12 +57,6 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.serviceName, "service-name", "", "Name of the service to authenticate with")
 	fs.StringVar(&p.label, "label", "", "Label to identify this TOTP entry")
 	fs.StringVar(&p.profile, "profile", "", "Profile name for the service (for multiple accounts)")
-
-	defaultKeyName := os.Getenv("SESH_TOTP_KEYCHAIN_NAME")
-	if defaultKeyName == "" {
-		defaultKeyName = defaultServicePrefix
-	}
-	fs.StringVar(&p.keyName, "keychain-name", defaultKeyName, "macOS Keychain service name prefix")
 	
 	// Get current user like AWS provider does
 	defaultKeyUser, err := env.GetCurrentUser()
@@ -89,7 +79,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}
 
 	// Get TOTP secret from keychain using secure methods
-	serviceKey := buildServiceKey(p.keyName, p.serviceName, p.profile)
+	serviceKey := buildServiceKey(defaultServicePrefix, p.serviceName, p.profile)
 
 	fmt.Fprintf(os.Stderr, "🔑 Retrieving TOTP secret for %s\n", p.serviceName)
 
@@ -145,7 +135,7 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 
 // ListEntries returns all TOTP entries in the keychain
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
-	entries, err := p.keychain.ListEntries(p.keyName)
+	entries, err := p.keychain.ListEntries(defaultServicePrefix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list TOTP entries: %w", err)
 	}
@@ -156,7 +146,7 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 		serviceName, profile := parseServiceKey(entry.Service)
 
 		// Skip entries that don't match our prefix pattern
-		if !strings.HasPrefix(entry.Service, p.keyName) {
+		if !strings.HasPrefix(entry.Service, defaultServicePrefix) {
 			continue
 		}
 
