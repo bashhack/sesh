@@ -1,7 +1,6 @@
 package aws
 
 import (
-	"flag"
 	"fmt"
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/env"

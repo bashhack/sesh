@@ -40,7 +40,6 @@ func NewProvider(
 		keychain: keychain,
 		totp:     totp,
 	}
-	fmt.Fprintf(os.Stderr, "DEBUG: NewProvider created TOTP provider at %p\n", p)
 	return p
 }
 
@@ -56,7 +55,6 @@ func (p *Provider) Description() string {
 
 // SetupFlags adds provider-specific flags to the given FlagSet
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
-	fmt.Fprintf(os.Stderr, "DEBUG: SetupFlags called, current serviceName='%s', pointer=%p\n", p.serviceName, &p.serviceName)
 	fs.StringVar(&p.serviceName, "service-name", "", "Name of the service to authenticate with")
 	fs.StringVar(&p.label, "label", "", "Label to identify this TOTP entry")
 	fs.StringVar(&p.profile, "profile", "", "Profile name for the service (for multiple accounts)")
@@ -234,12 +232,8 @@ func parseServiceKey(serviceKey string) (serviceName, profile string) {
 
 // ValidateRequest performs early validation before any TOTP operations
 func (p *Provider) ValidateRequest() error {
-	fmt.Fprintf(os.Stderr, "DEBUG: ValidateRequest called, serviceName='%s', pointer=%p\n", p.serviceName, &p.serviceName)
-	
 	// TOTP provider requires service-name flag
 	if p.serviceName == "" {
-		// Debug: log the state when it fails
-		fmt.Fprintf(os.Stderr, "DEBUG: Provider state: serviceName='%s', profile='%s', label='%s'\n", p.serviceName, p.profile, p.label)
 		return fmt.Errorf("--service-name is required for TOTP provider")
 	}
 

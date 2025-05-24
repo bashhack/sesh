@@ -67,13 +67,11 @@ func run(app *App, args []string) {
 	}
 
 	// Now we can do a single parse with all flags registered
-	fmt.Fprintf(app.Stderr, "DEBUG: About to parse flags\n")
 	if err := fs.Parse(args[1:]); err != nil {
 		fmt.Fprintf(app.Stderr, "❌ error parsing arguments: %v\n", err)
 		app.Exit(1)
 		return
 	}
-	fmt.Fprintf(app.Stderr, "DEBUG: Flags parsed successfully\n")
 
 	// Handle global commands first that don't need provider-specific flags
 	if *showVersion {
