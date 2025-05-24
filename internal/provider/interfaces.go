@@ -64,3 +64,32 @@ type Credentials struct {
 	CopyValue        string            // Value to copy to clipboard if requested
 	MFAAuthenticated bool              // Whether these credentials were authenticated with MFA
 }
+
+// FormatClipboardDisplayInfo creates the standard clipboard-mode display format
+// Example: "Current: 123456  |  Next: 789012  |  Time left: 15s\n🔑 AWS MFA code for profile work"
+func FormatClipboardDisplayInfo(currentCode, nextCode string, secondsLeft int64, actionType, serviceDesc string) string {
+	return fmt.Sprintf("Current: %s  |  Next: %s  |  Time left: %ds\n🔑 %s for %s",
+		currentCode, nextCode, secondsLeft, actionType, serviceDesc)
+}
+
+// FormatRegularDisplayInfo creates the standard regular-mode display format  
+// Example: "🔑 AWS credentials for profile work"
+func FormatRegularDisplayInfo(actionType, serviceDesc string) string {
+	return fmt.Sprintf("🔑 %s for %s", actionType, serviceDesc)
+}
+
+// CreateClipboardCredentials creates standardized clipboard-mode credentials
+func CreateClipboardCredentials(providerName, currentCode, nextCode string, secondsLeft int64, actionType, serviceDesc string) Credentials {
+	// Calculate when this code expires (30 seconds from now, rounded to nearest 30s boundary)
+	now := time.Now().Unix()
+	validUntil := time.Unix(((now/30)+1)*30, 0)
+
+	return Credentials{
+		Provider:         providerName,
+		Expiry:           validUntil,
+		Variables:        map[string]string{}, // Empty map for clipboard mode
+		DisplayInfo:      FormatClipboardDisplayInfo(currentCode, nextCode, secondsLeft, actionType, serviceDesc),
+		CopyValue:        currentCode,
+		MFAAuthenticated: false, // Clipboard mode doesn't authenticate with backend services
+	}
+}

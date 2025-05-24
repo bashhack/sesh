@@ -293,6 +293,7 @@ func (a *App) CopyToClipboard(serviceName string) error {
 
 // copyAWSTotp is a special handler for copying AWS TOTP codes to clipboard
 // that bypasses the AWS API authentication to avoid time-sync issues
+// TODO: Do I use this still???
 func (a *App) copyAWSTotp(p provider.ServiceProvider) error {
 	fmt.Fprintf(a.Stderr, "🔐 Generating AWS TOTP code...\n")
 	startTime := time.Now()
@@ -345,6 +346,7 @@ func (a *App) copyAWSTotp(p provider.ServiceProvider) error {
 }
 
 // PrintCredentials outputs the credentials
+// TODO: How much of this is used anymore
 func (a *App) PrintCredentials(creds provider.Credentials) {
 	// Format expiry time
 	expiryDisplay := "unknown"
