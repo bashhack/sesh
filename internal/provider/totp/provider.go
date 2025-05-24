@@ -237,10 +237,9 @@ func (p *Provider) ValidateRequest() error {
 	}
 
 	// Check if we have a keychain entry for this service-name + profile combo
-	keyName := buildServiceKey(p.serviceName, p.profile)
-	fullKeyName := buildServiceKey(constants.TOTPServicePrefix, keyName)
+	keyName := buildServiceKey(constants.TOTPServicePrefix, p.serviceName, p.profile)
 
-	_, err := p.keychain.GetSecret(p.keyUser, fullKeyName)
+	_, err := p.keychain.GetSecret(p.keyUser, keyName)
 	if err != nil {
 		if p.profile != "" {
 			return fmt.Errorf("no TOTP entry found for service '%s' with profile '%s'. Run 'sesh --service totp --setup' first", p.serviceName, p.profile)
