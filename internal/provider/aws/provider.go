@@ -432,19 +432,6 @@ func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 	return []byte(serial), nil
 }
 
-// GetMFASerial returns the MFA device serial as a string
-// This is a compatibility method that uses GetMFASerialBytes internally
-func (p *Provider) GetMFASerial() (string, error) {
-	serialBytes, err := p.GetMFASerialBytes()
-	if err != nil {
-		return "", err
-	}
-
-	// Convert to string and zero the bytes
-	serial := string(serialBytes)
-	secure.SecureZeroBytes(serialBytes)
-	return serial, nil
-}
 
 // NewSubshellConfig creates a subshell configuration for AWS credentials
 func (p *Provider) NewSubshellConfig(creds provider.Credentials) interface{} {

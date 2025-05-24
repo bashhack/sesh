@@ -160,21 +160,6 @@ func GetMFASerialBytes(account string) ([]byte, error) {
 	return result, nil
 }
 
-// GetMFASerial retrieves the MFA device serial number from keychain as a string
-// This is less secure than GetMFASerialBytes and is provided for backward compatibility
-func GetMFASerial(account string) (string, error) {
-	serialBytes, err := GetMFASerialBytes(account)
-	if err != nil {
-		return "", err
-	}
-
-	// Convert to string and zero the bytes
-	serial := string(serialBytes)
-	secure.SecureZeroBytes(serialBytes)
-
-	return serial, nil
-}
-
 // keychainItem represents a parsed keychain entry
 type keychainItem struct {
 	Service     string
