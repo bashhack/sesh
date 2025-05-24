@@ -79,7 +79,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}
 
 	// Get TOTP secret from keychain using secure methods
-	serviceKey := buildServiceKey(defaultServicePrefix, p.serviceName, p.profile)
+	serviceKey := buildServiceKey(constants.TOTPServicePrefix, p.serviceName, p.profile)
 
 	fmt.Fprintf(os.Stderr, "🔑 Retrieving TOTP secret for %s\n", p.serviceName)
 
@@ -135,7 +135,7 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 
 // ListEntries returns all TOTP entries in the keychain
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
-	entries, err := p.keychain.ListEntries(defaultServicePrefix)
+	entries, err := p.keychain.ListEntries(constants.TOTPServicePrefix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list TOTP entries: %w", err)
 	}
@@ -146,7 +146,7 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 		serviceName, profile := parseServiceKey(entry.Service)
 
 		// Skip entries that don't match our prefix pattern
-		if !strings.HasPrefix(entry.Service, defaultServicePrefix) {
+		if !strings.HasPrefix(entry.Service, constants.TOTPServicePrefix) {
 			continue
 		}
 
@@ -204,11 +204,11 @@ func buildServiceKey(prefix, service, profile string) string {
 // Format: sesh-totp-{service}-{profile}
 func parseServiceKey(serviceKey string) (serviceName, profile string) {
 	// Remove prefix
-	if !strings.HasPrefix(serviceKey, defaultServicePrefix+"-") {
+	if !strings.HasPrefix(serviceKey, constants.TOTPServicePrefix+"-") {
 		return serviceKey, ""
 	}
 
-	parts := strings.SplitN(serviceKey, defaultServicePrefix+"-", 2)
+	parts := strings.SplitN(serviceKey, constants.TOTPServicePrefix+"-", 2)
 	if len(parts) != 2 {
 		return serviceKey, ""
 	}

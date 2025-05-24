@@ -17,10 +17,17 @@
 - **Fix**: AWS should use a consistent helper function like TOTP does
 - **Resolution**: Added `buildServiceKey()` helper function to AWS provider (line 481) and refactored all 3 occurrences to use it
 
-### 3. User Retrieval Pattern
+### 3. User Retrieval Pattern ✓ RESOLVED
 - **AWS Provider**: Sets `p.keyUser` in `SetupFlags()` (lines 69-74)
 - **TOTP Provider**: Uses `getCurrentUser()` helper and handles it in `DeleteEntry()` (lines 186-192)
 - **Fix**: Standardize on one pattern across both providers
+- **Resolution**: Refactored TOTP to follow AWS's pattern:
+  - Removed legacy `--keychain-user` flag
+  - Removed `SESH_TOTP_KEYCHAIN_NAME` env var and `--keychain-name` flag
+  - Set `p.keyUser` in `SetupFlags()` using `env.GetCurrentUser()`
+  - Removed `getCurrentUser()` helper function
+  - Updated `DeleteEntry()` to use `p.keyUser` directly
+  - Removed `keyName` field and used `constants.TOTPServicePrefix` throughout
 
 ### 4. Error Context Richness
 - **AWS Provider**: Rich error context with retry logic and detailed messaging (lines 196-263)
