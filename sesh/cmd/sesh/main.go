@@ -37,6 +37,7 @@ func run(app *App, args []string) {
 	deleteEntry := fs.String("delete", "", "Delete entry for selected service (specify entry ID)")
 	runSetup := fs.Bool("setup", false, "Run setup wizard for selected service")
 	copyClipboard := fs.Bool("clip", false, "Copy code to clipboard instead of printing credentials")
+	noSubshell := fs.Bool("no-subshell", false, "Print environment variables instead of launching subshell (AWS only)")
 
 	// We need to avoid duplicate flags between providers
 	// Create a map to track which flags have been registered
@@ -51,6 +52,7 @@ func run(app *App, args []string) {
 	registeredFlags["delete"] = true
 	registeredFlags["setup"] = true
 	registeredFlags["clip"] = true
+	registeredFlags["no-subshell"] = true
 
 	// Create a safe flag set wrapper to avoid duplicates
 	safeFlagSet := &safeFlagSet{fs: fs, registered: registeredFlags}
@@ -132,14 +134,14 @@ func run(app *App, args []string) {
 			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
 			app.Exit(1)
 		}
-	} else if *serviceName == "aws" {
+	} else if *serviceName == "aws" && !*noSubshell {
 		// For AWS service, use subshell to provide an isolated credential environment
 		if err := app.LaunchSubshell(*serviceName); err != nil {
 			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
 			app.Exit(1)
 		}
 	} else {
-		// For all other services, use the regular credential output
+		// For all other services, or AWS with --no-subshell, use regular credential output
 		if err := app.GenerateCredentials(*serviceName); err != nil {
 			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
 			app.Exit(1)
