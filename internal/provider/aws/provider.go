@@ -140,10 +140,7 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 	fmt.Fprintf(os.Stderr, "🔑 Generating TOTP codes for clipboard mode\n")
 
 	// Format service description using AWS profile pattern
-	profileStr := "default profile"
-	if p.profile != "" {
-		profileStr = fmt.Sprintf("profile %s", p.profile)
-	}
+	profileStr := getProfileDescription(p.profile)
 
 	// Use shared clipboard credentials function
 	return provider.CreateClipboardCredentials(p.Name(), currentCode, nextCode, secondsLeft,
@@ -212,20 +209,12 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				fmt.Fprintf(os.Stderr, "⚠️ Both current and next codes were rejected - may need to wait for next time window\n")
 
 				// Get the secret again to generate a future code
-				keyName := p.profile
-				if keyName == "" {
-					keyName = "default"
-				}
-				keyName = fmt.Sprintf("%s-%s", p.keyName, keyName)
+				keyName := buildServiceKey(p.keyName, p.profile)
 
 				// Get the TOTP secret using the provider interface
 				secretBytes, err := p.keychain.GetSecret(p.keyUser, keyName)
 				if err != nil {
-					profileDesc := "default"
-					if p.profile != "" {
-						profileDesc = p.profile
-					}
-					return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for AWS profile %s: %w", profileDesc, err)
+					return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for AWS profile %s: %w", getProfileDisplay(p.profile), err)
 				}
 
 				// Make defensive copy
@@ -275,10 +264,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}
 
 	// Format service description using AWS profile pattern
-	profileStr := "default profile"
-	if p.profile != "" {
-		profileStr = fmt.Sprintf("profile %s", p.profile)
-	}
+	profileStr := getProfileDescription(p.profile)
 
 	// For regular credential generation, use shared display formatting
 	return provider.Credentials{
