@@ -198,13 +198,6 @@ func (a *App) CopyToClipboard(serviceName string) error {
 	//	if !ok {
 	//		return fmt.Errorf("failed to convert to AWS provider")
 	//	}
-	//
-	//	serial, err := awsProvider.GetMFASerial()
-	//	if err != nil {
-	//		return fmt.Errorf("failed to get MFA serial: %w", err)
-	//	}
-	//
-	//	fmt.Fprintf(os.Stderr, "🔍 Using MFA serial: %s\n", serial)
 	//	// Use the specialized AWS TOTP code generation for clip mode
 	//	fmt.Fprintf(a.Stderr, "🔐 Generating AWS TOTP code...\n")
 	//	startTime := time.Now()

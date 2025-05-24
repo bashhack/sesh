@@ -64,10 +64,16 @@
   - AWS's runtime length check is just a warning, not validation
   - Both providers handle validation errors the same way during setup
 
-### 7. Method Organization
+### 7. Method Organization ✓ RESOLVED
 - **AWS Provider**: Has both `GetMFASerial()` and `GetMFASerialBytes()` methods
 - **TOTP Provider**: Single clean methods for each purpose
 - **Consider**: Whether AWS needs both or can consolidate
+- **Resolution**: Removed `GetMFASerial()` entirely from the codebase:
+  - Removed from keychain interface and implementations
+  - Removed from AWS provider (was just a compatibility wrapper)
+  - Updated all tests to use the secure `GetMFASerialBytes()` method
+  - Removed from all mock implementations
+  - Now only the secure bytes version exists, improving security and consistency
 
 ### 8. Flag Setup Error Handling ✓ RESOLVED
 - **AWS Provider**: Returns actual errors from `SetupFlags()` (line 74)

@@ -39,17 +39,12 @@ func (m *MockAWS) GetSessionToken(profile, serial string, code []byte) (aws.Cred
 }
 
 type MockKeychain struct {
-	MFASerial    string
-	MFASerialErr error
 	Secret       string
 	SecretErr    error
 	Entries      []keychain.KeychainEntry
 	EntriesErr   error
 }
 
-func (m *MockKeychain) GetMFASerial(user string) (string, error) {
-	return m.MFASerial, m.MFASerialErr
-}
 
 func (m *MockKeychain) GetSecret(user, keyName string) (string, error) {
 	return m.Secret, m.SecretErr
