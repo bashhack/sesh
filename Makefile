@@ -180,7 +180,7 @@ build/all:
 
 ## install: Install the application
 .PHONY: install
-install: build
+install: clean build
 	@echo "📦 Installing sesh..."
 	@echo "Installing to ~/.local/bin (standard user location)"
 	@mkdir -p $(HOME)/.local/bin
