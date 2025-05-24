@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/provider"
+	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
 )
 
 // Version information (set by ldflags during build)
@@ -194,7 +195,6 @@ func printUsage() {
 	fmt.Println("  --delete, -delete string      Delete entry for selected service")
 	fmt.Println("  --setup, -setup               Run setup wizard for selected service")
 	fmt.Println("  --clip, -clip                 Copy code to clipboard")
-	fmt.Println("  --no-subshell, -no-subshell   Print environment variables instead of launching subshell (AWS only)")
 	fmt.Println("  --list-services, -list-services  List available service providers")
 	fmt.Println("  --version, -version           Show version information")
 	fmt.Println("  --help, -help                 Show usage")
@@ -216,9 +216,6 @@ func printProviderUsage(serviceName string, p provider.ServiceProvider) {
 	fmt.Println("  --delete string               Delete entry for selected service")
 	fmt.Println("  --setup                       Run setup wizard for selected service")
 	fmt.Println("  --clip                        Copy code to clipboard")
-	if serviceName == "aws" {
-		fmt.Println("  --no-subshell                 Print environment variables instead of launching subshell")
-	}
 	fmt.Println("  --help                        Show this help")
 	fmt.Println("  --version                     Show version information")
 	
