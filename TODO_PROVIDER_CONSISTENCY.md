@@ -53,10 +53,16 @@
   - Refactored `ListEntries()` to use the new helpers
   - Eliminated all magic strings and duplicate profile logic
 
-### 6. Secret Validation
+### 6. Secret Validation ✓ ALREADY CONSISTENT
 - **AWS Provider**: Basic length check only (lines 120-123)
 - **TOTP Provider**: None - should use `totp.ValidateAndNormalizeSecret()`
 - **Fix**: TOTP should validate secrets using the validation function we created
+- **Resolution**: Both providers already validate consistently:
+  - Both AWS and TOTP setup use `ValidateAndNormalizeSecret()` (lines 443 & 625 in setup.go)
+  - Validation happens at setup time when secrets are first stored
+  - Runtime validation is unnecessary since secrets are pre-validated
+  - AWS's runtime length check is just a warning, not validation
+  - Both providers handle validation errors the same way during setup
 
 ### 7. Method Organization
 - **AWS Provider**: Has both `GetMFASerial()` and `GetMFASerialBytes()` methods
