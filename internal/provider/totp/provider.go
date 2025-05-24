@@ -59,7 +59,6 @@ func (p *Provider) Description() string {
 // SetupFlags adds provider-specific flags to the given FlagSet
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.serviceName, "service-name", "", "Name of the service to authenticate with")
-	fs.StringVar(&p.keyUser, "keychain-user", os.Getenv("SESH_KEYCHAIN_USER"), "macOS Keychain username (optional)")
 	fs.StringVar(&p.label, "label", "", "Label to identify this TOTP entry")
 	fs.StringVar(&p.profile, "profile", "", "Profile name for the service (for multiple accounts)")
 
@@ -68,6 +67,13 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 		defaultKeyName = defaultServicePrefix
 	}
 	fs.StringVar(&p.keyName, "keychain-name", defaultKeyName, "macOS Keychain service name prefix")
+	
+	// Get current user like AWS provider does
+	defaultKeyUser, err := env.GetCurrentUser()
+	if err != nil {
+		return fmt.Errorf("failed to get current user: %w", err)
+	}
+	p.keyUser = defaultKeyUser
 	return nil
 }
 
@@ -184,11 +190,7 @@ func (p *Provider) DeleteEntry(id string) error {
 	service, account := parts[0], parts[1]
 
 	if account == "" {
-		var err error
-		account, err = getCurrentUser()
-		if err != nil {
-			return fmt.Errorf("could not determine current user: %w", err)
-		}
+		account = p.keyUser
 	}
 
 	if err := p.keychain.DeleteEntry(account, service); err != nil {
@@ -198,10 +200,6 @@ func (p *Provider) DeleteEntry(id string) error {
 	return nil
 }
 
-// getCurrentUser gets the current system user using our env package
-func getCurrentUser() (string, error) {
-	return env.GetCurrentUser()
-}
 
 // buildServiceKey creates a service key for the keychain
 // Format: sesh-totp-{service}-{profile}
