@@ -97,15 +97,15 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	if err != nil {
 		return "", "", 0, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 	}
-	
+
 	// Make defensive copy
 	secretCopy := make([]byte, len(secretBytes))
 	copy(secretCopy, secretBytes)
 	defer secure.SecureZeroBytes(secretCopy)
-	
+
 	// Zero original immediately after copying
 	secure.SecureZeroBytes(secretBytes)
-	
+
 	// We no longer need to convert to string since we're using byte-slice methods directly
 
 	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from keychain\n")
@@ -163,7 +163,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	if err != nil {
 		return provider.Credentials{}, err
 	}
-	
+
 	// Convert to string for debug and API call, then zero out
 	serial := string(serialBytes)
 	defer secure.SecureZeroBytes(serialBytes)
@@ -223,15 +223,15 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				if err != nil {
 					return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret: %w", err)
 				}
-				
+
 				// Make defensive copy
 				secretCopy := make([]byte, len(secretBytes))
 				copy(secretCopy, secretBytes)
 				defer secure.SecureZeroBytes(secretCopy)
-				
-				// Zero original immediately after copying 
+
+				// Zero original immediately after copying
 				secure.SecureZeroBytes(secretBytes)
-				
+
 				// We no longer need to convert to string since we're using byte-slice methods directly
 
 				// Generate a code for the window after next, in case AWS is far ahead of our clock
@@ -428,7 +428,7 @@ func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 		}
 	}
 
-	serialService := buildServiceKey(constants.AWSServiceMFAPrefix, p.profile)
+	serialService = buildServiceKey(constants.AWSServiceMFAPrefix, p.profile)
 
 	// Get MFA serial using the provider interface - use the bytes version for better security
 	// We need to explicitly pass the service name
@@ -459,7 +459,7 @@ func (p *Provider) GetMFASerial() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Convert to string and zero the bytes
 	serial := string(serialBytes)
 	secure.SecureZeroBytes(serialBytes)

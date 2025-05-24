@@ -11,10 +11,11 @@
   - The `--profile` flag is used by both providers (different purposes)
   - AWS's validation of `--service-name` is appropriate since it's TOTP-specific
 
-### 2. Service Key Building Pattern
+### 2. Service Key Building Pattern ✓ RESOLVED
 - **AWS Provider**: Hardcoded service key logic scattered in multiple places (lines 94-99, 417-423, 442-448)
 - **TOTP Provider**: Clean helper function `buildServiceKey()` (line 208)
 - **Fix**: AWS should use a consistent helper function like TOTP does
+- **Resolution**: Added `buildServiceKey()` helper function to AWS provider (line 481) and refactored all 3 occurrences to use it
 
 ### 3. User Retrieval Pattern
 - **AWS Provider**: Sets `p.keyUser` in `SetupFlags()` (lines 69-74)
