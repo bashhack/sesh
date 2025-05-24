@@ -36,10 +36,12 @@ func NewProvider(
 	keychain keychain.Provider,
 	totp internalTotp.Provider,
 ) *Provider {
-	return &Provider{
+	p := &Provider{
 		keychain: keychain,
 		totp:     totp,
 	}
+	fmt.Fprintf(os.Stderr, "DEBUG: NewProvider created TOTP provider at %p\n", p)
+	return p
 }
 
 // Name returns the provider name
@@ -232,10 +234,11 @@ func parseServiceKey(serviceKey string) (serviceName, profile string) {
 
 // ValidateRequest performs early validation before any TOTP operations
 func (p *Provider) ValidateRequest() error {
+	fmt.Fprintf(os.Stderr, "DEBUG: ValidateRequest called, serviceName='%s', pointer=%p\n", p.serviceName, &p.serviceName)
+	
 	// TOTP provider requires service-name flag
 	if p.serviceName == "" {
 		// Debug: log the state when it fails
-		fmt.Fprintf(os.Stderr, "DEBUG: ValidateRequest called with empty serviceName, pointer=%p\n", &p.serviceName)
 		fmt.Fprintf(os.Stderr, "DEBUG: Provider state: serviceName='%s', profile='%s', label='%s'\n", p.serviceName, p.profile, p.label)
 		return fmt.Errorf("--service-name is required for TOTP provider")
 	}
