@@ -484,3 +484,15 @@ func formatProfile(profile string) string {
 	}
 	return fmt.Sprintf("profile (%s)", name)
 }
+
+// parseServiceKey extracts the profile from a service key
+// For "sesh-aws-default" returns "default"
+// For "sesh-aws-production" returns "production"
+func parseServiceKey(serviceKey string) string {
+	if !strings.HasPrefix(serviceKey, constants.AWSServicePrefix) {
+		return ""
+	}
+	// Remove prefix and the separator
+	remainder := strings.TrimPrefix(serviceKey, constants.AWSServicePrefix)
+	return strings.TrimPrefix(remainder, "-")
+}
