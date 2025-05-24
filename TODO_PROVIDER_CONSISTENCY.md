@@ -1,0 +1,50 @@
+# Provider Consistency TODOs
+
+## Issues Found Between AWS and TOTP Providers
+
+### 1. Flag Validation Inconsistency
+- **AWS Provider**: Uses direct `flag.Lookup()` to validate flags (lines 87-90, 162-165 in aws/provider.go)
+- **TOTP Provider**: No equivalent validation for AWS-specific flags
+- **Fix**: TOTP should validate that AWS-specific flags (like `--profile`) aren't used with TOTP
+
+### 2. Service Key Building Pattern
+- **AWS Provider**: Hardcoded service key logic scattered in multiple places (lines 94-99, 417-423, 442-448)
+- **TOTP Provider**: Clean helper function `buildServiceKey()` (line 208)
+- **Fix**: AWS should use a consistent helper function like TOTP does
+
+### 3. User Retrieval Pattern
+- **AWS Provider**: Sets `p.keyUser` in `SetupFlags()` (lines 69-74)
+- **TOTP Provider**: Uses `getCurrentUser()` helper and handles it in `DeleteEntry()` (lines 186-192)
+- **Fix**: Standardize on one pattern across both providers
+
+### 4. Error Context Richness
+- **AWS Provider**: Rich error context with retry logic and detailed messaging (lines 196-263)
+- **TOTP Provider**: Basic error messages
+- **Consider**: Whether TOTP needs similar retry/context logic
+
+### 5. Profile Handling Complexity
+- **AWS Provider**: Complex profile logic scattered throughout multiple methods
+- **TOTP Provider**: Clean profile parameter in `buildServiceKey()`
+- **Fix**: Consolidate AWS profile logic into helper functions
+
+### 6. Secret Validation
+- **AWS Provider**: Basic length check only (lines 120-123)
+- **TOTP Provider**: None - should use `totp.ValidateAndNormalizeSecret()`
+- **Fix**: TOTP should validate secrets using the validation function we created
+
+### 7. Method Organization
+- **AWS Provider**: Has both `GetMFASerial()` and `GetMFASerialBytes()` methods
+- **TOTP Provider**: Single clean methods for each purpose
+- **Consider**: Whether AWS needs both or can consolidate
+
+### 8. Flag Setup Error Handling
+- **AWS Provider**: Returns actual errors from `SetupFlags()` (line 74)
+- **TOTP Provider**: Always returns `nil` (line 71)
+- **Fix**: TOTP should handle potential errors in flag setup
+
+## Priority
+These are code quality/consistency improvements rather than functional bugs. The providers work correctly as-is, but standardizing patterns would improve maintainability.
+
+## Files Affected
+- `/internal/provider/aws/provider.go`
+- `/internal/provider/totp/provider.go`
