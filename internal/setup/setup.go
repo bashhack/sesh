@@ -99,23 +99,17 @@ Paste the secret key here (this will not be echoed): `)
 
 		secretStr = strings.TrimSpace(string(secret))
 
-	case "2": // QR code capture flow
+	case "2": // QR code capture flow with retry
 		fmt.Println(`
 5. Keep the QR code visible on your screen
-6. When ready, press Enter to activate screenshot mode
 
-❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
-
-Press Enter when you're ready to capture the QR code...`)
-		h.reader.ReadString('\n')
-
-		fmt.Println("📸 Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
+❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together`)
+		
 		var err error
-		secretStr, err = qrcode.ScanQRCode()
+		secretStr, err = h.captureAWSQRCodeWithFallback()
 		if err != nil {
-			return "", fmt.Errorf("failed to process QR code: %w", err)
+			return "", err
 		}
-		fmt.Println("✅ QR code successfully captured and decoded!")
 
 	default:
 		return "", fmt.Errorf("invalid choice, please select 1 or 2")
@@ -127,6 +121,65 @@ Press Enter when you're ready to capture the QR code...`)
 	}
 
 	return secretStr, nil
+}
+
+// captureAWSQRCodeWithFallback attempts AWS QR capture with retry and manual fallback
+func (h *AWSSetupHandler) captureAWSQRCodeWithFallback() (string, error) {
+	maxRetries := 2
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		fmt.Printf("📸 AWS QR capture attempt %d/%d\n", attempt, maxRetries)
+		fmt.Println("Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
+		fmt.Print("Press Enter to activate screenshot mode...")
+		h.reader.ReadString('\n')
+		
+		secretStr, err := qrcode.ScanQRCode()
+		if err == nil {
+			fmt.Println("✅ QR code successfully captured and decoded!")
+			return secretStr, nil
+		}
+		
+		fmt.Printf("❌ QR capture failed: %v\n", err)
+		
+		if attempt < maxRetries {
+			fmt.Println("💡 Tips: Check screen brightness, QR code size, and cursor positioning")
+			fmt.Print("Press Enter to try again, or 'm' to switch to manual entry: ")
+			choice, _ := h.reader.ReadString('\n')
+			if strings.ToLower(strings.TrimSpace(choice)) == "m" {
+				fmt.Println("Switching to manual entry...")
+				return h.captureAWSManualEntry()
+			}
+		}
+	}
+	
+	// Final fallback after all retries
+	fmt.Println("\n❓ QR capture failed after multiple attempts.")
+	fmt.Print("Would you like to enter the secret manually instead? (y/n): ")
+	fallback, _ := h.reader.ReadString('\n')
+	
+	if strings.ToLower(strings.TrimSpace(fallback)) == "y" {
+		return h.captureAWSManualEntry()
+	}
+	
+	return "", fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
+}
+
+// captureAWSManualEntry handles manual AWS MFA secret entry
+func (h *AWSSetupHandler) captureAWSManualEntry() (string, error) {
+	fmt.Println(`
+5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code
+6. Click 'Show secret key' and copy the secret key
+		
+❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
+
+Paste the secret key here (this will not be echoed): `)
+	secret, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		return "", fmt.Errorf("failed to read secret: %w", err)
+	}
+	fmt.Println() // Add a newline after hidden input
+
+	return strings.TrimSpace(string(secret)), nil
 }
 
 // setupMFAConsole generates TOTP codes and guides the user through AWS console setup
