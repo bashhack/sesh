@@ -125,43 +125,7 @@ Paste the secret key here (this will not be echoed): `)
 
 // captureAWSQRCodeWithFallback attempts AWS QR capture with retry and manual fallback
 func (h *AWSSetupHandler) captureAWSQRCodeWithFallback() (string, error) {
-	maxRetries := 2
-	
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		fmt.Printf("📸 AWS QR capture attempt %d/%d\n", attempt, maxRetries)
-		fmt.Println("Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
-		fmt.Print("Press Enter to activate screenshot mode...")
-		h.reader.ReadString('\n')
-		
-		secretStr, err := qrcode.ScanQRCode()
-		if err == nil {
-			fmt.Println("✅ QR code successfully captured and decoded!")
-			return secretStr, nil
-		}
-		
-		fmt.Printf("❌ QR capture failed: %v\n", err)
-		
-		if attempt < maxRetries {
-			fmt.Println("💡 Tips: Check screen brightness, QR code size, and cursor positioning")
-			fmt.Print("Press Enter to try again, or 'm' to switch to manual entry: ")
-			choice, _ := h.reader.ReadString('\n')
-			if strings.ToLower(strings.TrimSpace(choice)) == "m" {
-				fmt.Println("Switching to manual entry...")
-				return h.captureAWSManualEntry()
-			}
-		}
-	}
-	
-	// Final fallback after all retries
-	fmt.Println("\n❓ QR capture failed after multiple attempts.")
-	fmt.Print("Would you like to enter the secret manually instead? (y/n): ")
-	fallback, _ := h.reader.ReadString('\n')
-	
-	if strings.ToLower(strings.TrimSpace(fallback)) == "y" {
-		return h.captureAWSManualEntry()
-	}
-	
-	return "", fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
+	return captureQRWithRetry(h.reader, h.captureAWSManualEntry)
 }
 
 // captureAWSManualEntry handles manual AWS MFA secret entry
@@ -605,43 +569,7 @@ func (h *TOTPSetupHandler) captureTOTPSecret(choice string) (string, error) {
 
 // captureQRCodeWithFallback attempts QR capture with retry and manual fallback
 func (h *TOTPSetupHandler) captureQRCodeWithFallback() (string, error) {
-	maxRetries := 2
-	
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		fmt.Printf("📸 QR capture attempt %d/%d - Position cursor and drag to select QR code\n", attempt, maxRetries)
-		fmt.Println("When ready, press Enter to activate screenshot mode")
-		fmt.Print("Press Enter to continue...")
-		h.reader.ReadString('\n')
-		
-		secretStr, err := qrcode.ScanQRCode()
-		if err == nil {
-			fmt.Println("✅ QR code successfully captured and decoded!")
-			return secretStr, nil
-		}
-		
-		fmt.Printf("❌ QR capture failed: %v\n", err)
-		
-		if attempt < maxRetries {
-			fmt.Println("💡 Tips: Check screen brightness, QR code size, and cursor positioning")
-			fmt.Print("Press Enter to try again, or 'm' to switch to manual entry: ")
-			choice, _ := h.reader.ReadString('\n')
-			if strings.ToLower(strings.TrimSpace(choice)) == "m" {
-				fmt.Println("Switching to manual entry...")
-				return h.captureManualEntry()
-			}
-		}
-	}
-	
-	// Final fallback after all retries
-	fmt.Println("\n❓ QR capture failed after multiple attempts.")
-	fmt.Print("Would you like to enter the secret manually instead? (y/n): ")
-	fallback, _ := h.reader.ReadString('\n')
-	
-	if strings.ToLower(strings.TrimSpace(fallback)) == "y" {
-		return h.captureManualEntry()
-	}
-	
-	return "", fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
+	return captureQRWithRetry(h.reader, h.captureManualEntry)
 }
 
 // captureManualEntry handles manual secret entry with secure memory handling
