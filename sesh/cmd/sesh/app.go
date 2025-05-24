@@ -184,6 +184,7 @@ func (a *App) GenerateCredentials(serviceName string) error {
 }
 
 // CopyToClipboard copies a value to the system clipboard
+// TODO: Do I hit this still?
 func (a *App) CopyToClipboard(serviceName string) error {
 	p, err := a.Registry.GetProvider(serviceName)
 	if err != nil {
