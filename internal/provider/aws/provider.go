@@ -95,11 +95,7 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	// Get TOTP secret from keychain using the provider interface
 	secretBytes, err := p.keychain.GetSecret(p.keyUser, keyName)
 	if err != nil {
-		profileDesc := "default"
-		if p.profile != "" {
-			profileDesc = p.profile
-		}
-		return "", "", 0, fmt.Errorf("failed to retrieve TOTP secret for AWS profile %s: %w", profileDesc, err)
+		return "", "", 0, fmt.Errorf("failed to retrieve TOTP secret for AWS profile %s: %w", getProfileDisplay(p.profile), err)
 	}
 
 	// Make defensive copy
@@ -491,4 +487,22 @@ func buildServiceKey(prefix, profile string) string {
 		return fmt.Sprintf("%s-default", prefix)
 	}
 	return fmt.Sprintf("%s-%s", prefix, profile)
+}
+
+// getProfileDisplay returns a display-friendly profile name
+// Returns "default" if profile is empty, otherwise returns the profile name
+func getProfileDisplay(profile string) string {
+	if profile == "" {
+		return "default"
+	}
+	return profile
+}
+
+// getProfileDescription returns a formatted profile description for user messages
+// Returns "default profile" or "profile {name}"
+func getProfileDescription(profile string) string {
+	if profile == "" {
+		return "default profile"
+	}
+	return fmt.Sprintf("profile %s", profile)
 }
