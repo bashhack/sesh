@@ -38,6 +38,14 @@ type ServiceProvider interface {
 
 	// DeleteEntry deletes an entry from the keychain
 	DeleteEntry(id string) error
+
+	// ValidateRequest performs early validation of the request
+	// This should check:
+	// - Invalid flag combinations for this provider
+	// - Whether required keychain entries exist
+	// - Any other provider-specific validation
+	// This allows fail-fast behavior before expensive operations
+	ValidateRequest() error
 }
 
 // SubshellProvider is an optional interface that providers can implement

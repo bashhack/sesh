@@ -228,3 +228,25 @@ func parseServiceKey(serviceKey string) (serviceName, profile string) {
 
 	return serviceName, profile
 }
+
+// ValidateRequest performs early validation before any TOTP operations
+func (p *Provider) ValidateRequest() error {
+	// TOTP provider requires service-name flag
+	if p.serviceName == "" {
+		return fmt.Errorf("--service-name is required for TOTP provider")
+	}
+
+	// Check if we have a keychain entry for this service-name + profile combo
+	keyName := buildServiceKey(p.serviceName, p.profile)
+	fullKeyName := buildServiceKey(constants.TOTPServicePrefix, keyName)
+
+	_, err := p.keychain.GetSecret(p.keyUser, fullKeyName)
+	if err != nil {
+		if p.profile != "" {
+			return fmt.Errorf("no TOTP entry found for service '%s' with profile '%s'. Run 'sesh --service totp --setup' first", p.serviceName, p.profile)
+		}
+		return fmt.Errorf("no TOTP entry found for service '%s'. Run 'sesh --service totp --setup' first", p.serviceName)
+	}
+
+	return nil
+}

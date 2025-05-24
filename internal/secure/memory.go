@@ -27,8 +27,8 @@ import (
 // optimized away by the compiler. This helps ensure sensitive data
 // is cleared from memory when no longer needed.
 func SecureZeroBytes(data []byte) {
-	// Return early if data is nil or empty
-	if data == nil || len(data) == 0 {
+	// Return early if data is empty
+	if len(data) == 0 {
 		return
 	}
 

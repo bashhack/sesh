@@ -82,12 +82,6 @@ func (p *Provider) GetSetupHandler() interface{} {
 // GetTOTPCodes retrieves only TOTP codes without performing AWS authentication
 // This is used specifically for the clipboard mode
 func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsLeft int64, err error) {
-	// TODO: This check doesn't work???
-	// Validate that service-name was not provided - it's not valid for AWS
-	flag := flag.Lookup("service-name")
-	if flag != nil && flag.Value.String() != "" {
-		return "", "", 0, fmt.Errorf("the --service-name flag is only valid with the TOTP provider, not AWS")
-	}
 
 	// Get TOTP secret - account for profile-specific secrets
 	keyName := buildServiceKey(p.keyName, p.profile)
@@ -149,12 +143,6 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 
 // GetCredentials retrieves AWS credentials using TOTP
 func (p *Provider) GetCredentials() (provider.Credentials, error) {
-	// Validate that service-name was not provided - it's not valid for AWS
-	flag := flag.Lookup("service-name")
-	if flag != nil && flag.Value.String() != "" {
-		return provider.Credentials{}, fmt.Errorf("the --service-name flag is only valid with the TOTP provider, not AWS")
-	}
-
 	// Get MFA serial as bytes
 	serialBytes, err := p.GetMFASerialBytes()
 	if err != nil {
@@ -441,6 +429,39 @@ func (p *Provider) NewSubshellConfig(creds provider.Credentials) interface{} {
 		Expiry:          creds.Expiry,
 		ShellCustomizer: awsInternal.NewCustomizer(),
 	}
+}
+
+// ValidateRequest performs early validation before any AWS operations
+func (p *Provider) ValidateRequest() error {
+	// Validate that service-name was not provided - it's not valid for AWS
+	flag := flag.Lookup("service-name")
+	if flag != nil && flag.Value.String() != "" {
+		return fmt.Errorf("the --service-name flag is only valid with the TOTP provider, not AWS")
+	}
+
+	// Check if we have required keychain entries for this profile
+	// This prevents slow AWS API calls when no entry exists
+	totpKey := buildServiceKey(p.keyName, p.profile)
+	mfaKey := buildServiceKey(constants.AWSServiceMFAPrefix, p.profile)
+
+	// Check if TOTP secret exists
+	_, err := p.keychain.GetSecret(p.keyUser, totpKey)
+	if err != nil {
+		profileDesc := p.profile
+		if profileDesc == "" {
+			profileDesc = "default"
+		}
+		return fmt.Errorf("no AWS entry found for profile '%s'. Run 'sesh --service aws --setup' first", profileDesc)
+	}
+
+	// Check if MFA serial exists (not critical but helps with better error messages)
+	_, err = p.keychain.GetSecret(p.keyUser, mfaKey)
+	if err != nil {
+		// This is not fatal - we can try to auto-detect, but warn the user
+		fmt.Fprintf(os.Stderr, "⚠️  MFA serial not found in keychain for profile '%s', will attempt auto-detection\n", p.profile)
+	}
+
+	return nil
 }
 
 // buildServiceKey creates a service key for the keychain

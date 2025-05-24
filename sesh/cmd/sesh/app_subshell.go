@@ -20,6 +20,11 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		return fmt.Errorf("provider not found: %w", err)
 	}
 
+	// Validate request early to fail fast
+	if err := p.ValidateRequest(); err != nil {
+		return err
+	}
+
 	creds, err := p.GetCredentials()
 	if err != nil {
 		return fmt.Errorf("failed to generate credentials: %w", err)

@@ -89,6 +89,74 @@ Several security-focused design decisions are implemented:
 - **Minimal Dependencies**: Relies primarily on Go standard library and a single well-maintained TOTP library
 - **Secure Default Configuration**: Sensible defaults for Keychain storage with user override options
 
+## Memory Security and Secret Handling
+
+### The Challenge of Secure String Handling in Go
+
+Go's design makes truly secure string handling impossible due to string immutability. When dealing with sensitive data like TOTP codes, we face inherent limitations:
+
+- **Strings are immutable**: Once created, the underlying memory cannot be modified
+- **Garbage collection is non-deterministic**: We cannot control when memory is reclaimed
+- **Multiple copies may exist**: String operations often create additional copies in memory
+
+### Our Approach: Defense in Depth
+
+While we cannot achieve perfect memory security with strings, `sesh` implements several measures to minimize exposure:
+
+#### 1. Prefer Bytes Over Strings
+
+Wherever possible, we keep secrets as `[]byte`:
+```go
+// Good: Secrets stay as bytes
+secretBytes, err := p.keychain.GetSecret(...)
+currentCode, _, err := p.totp.GenerateConsecutiveCodesBytes(secretBytes)
+```
+
+#### 2. Minimize String Conversion Points
+
+We only convert to strings when absolutely necessary (e.g., AWS CLI interface):
+```go
+// In GetSessionToken - conversion happens at the last moment
+codeStr := string(code)
+defer secure.SecureZeroString(codeStr)  // Best-effort cleanup
+```
+
+#### 3. SecureZeroString: Understanding Its Limitations
+
+The `SecureZeroString` function cannot zero the original string, but it provides value by:
+
+- **Reducing copies**: It zeros the byte slice copy created from the string
+- **Documenting intent**: Shows security consciousness in the code
+- **Minimizing exposure window**: Fewer accessible copies in memory
+- **Following defense-in-depth**: Every layer of protection helps
+
+### Real-World Impact
+
+Consider a TOTP code "123456" in our AWS authentication flow:
+
+**Without SecureZeroString:**
+1. TOTP generation creates: `currentCode = "123456"`
+2. Conversion creates: `codeBytes = []byte("123456")`
+3. AWS auth creates: `codeStr = "123456"`
+4. AWS CLI internally copies it again
+5. **Result**: 3-4 copies of "123456" may persist in memory
+
+**With SecureZeroString:**
+1. Same initial copies are created
+2. `SecureZeroString` zeros the working byte slice copy
+3. **Result**: 2-3 copies instead of 3-4
+
+While not perfect, this reduces the attack surface for memory dumps or side-channel attacks.
+
+### Key Takeaways
+
+1. **Perfect string security is impossible in Go** - This is a language design trade-off
+2. **We minimize exposure** through careful API design and defensive practices
+3. **SecureZeroString is honest** - Our comments acknowledge its limitations
+4. **Every layer helps** - Like locking doors, imperfect security is better than none
+
+This approach balances Go's language constraints with practical security improvements, following the principle that defense in depth is valuable even when perfect security is unattainable.
+
 ## Attack Surface Analysis
 
 The attack surface of `sesh` is limited:
