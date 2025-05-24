@@ -55,6 +55,13 @@ func (p *mockProvider) DeleteEntry(id string) error {
 	return nil
 }
 
+func (p *mockProvider) GetClipboardValue() (string, error) {
+	if p.name == "error" {
+		return "", errors.New("mock error")
+	}
+	return "mock-clipboard-value", nil
+}
+
 func TestRegistry_RegisterProvider(t *testing.T) {
 	registry := NewRegistry()
 
