@@ -104,7 +104,7 @@ Paste the secret key here (this will not be echoed): `)
 5. Keep the QR code visible on your screen
 
 ❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together`)
-		
+
 		var err error
 		secretStr, err = h.captureAWSQRCodeWithFallback()
 		if err != nil {
@@ -674,170 +674,170 @@ func (h *TOTPSetupHandler) Setup() error {
 }
 
 // This function is deprecated and will be removed in a future version
-func setupGenericTOTP() {
-	reader := bufio.NewReader(os.Stdin)
+// func setupGenericTOTP() {
+// 	reader := bufio.NewReader(os.Stdin)
 
-	// Ask for service name
-	fmt.Print("Enter name for this TOTP service: ")
-	serviceName, _ := reader.ReadString('\n')
-	serviceName = strings.TrimSpace(serviceName)
+// 	// Ask for service name
+// 	fmt.Print("Enter name for this TOTP service: ")
+// 	serviceName, _ := reader.ReadString('\n')
+// 	serviceName = strings.TrimSpace(serviceName)
 
-	if serviceName == "" {
-		fmt.Println("❌ Service name cannot be empty")
-		os.Exit(1)
-	}
+// 	if serviceName == "" {
+// 		fmt.Println("❌ Service name cannot be empty")
+// 		os.Exit(1)
+// 	}
 
-	// Ask for profile name (for multiple accounts with the same service)
-	fmt.Print("Enter profile name (optional, for multiple accounts with the same service): ")
-	profile, _ := reader.ReadString('\n')
-	profile = strings.TrimSpace(profile)
+// 	// Ask for profile name (for multiple accounts with the same service)
+// 	fmt.Print("Enter profile name (optional, for multiple accounts with the same service): ")
+// 	profile, _ := reader.ReadString('\n')
+// 	profile = strings.TrimSpace(profile)
 
-	// Ask user how they want to capture the TOTP secret
-	fmt.Println()
-	fmt.Println("How would you like to capture the TOTP secret?")
-	fmt.Println("1: Enter the secret key manually")
-	fmt.Println("2: Capture QR code from screen")
-	fmt.Print("Enter your choice (1-2): ")
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
+// 	// Ask user how they want to capture the TOTP secret
+// 	fmt.Println()
+// 	fmt.Println("How would you like to capture the TOTP secret?")
+// 	fmt.Println("1: Enter the secret key manually")
+// 	fmt.Println("2: Capture QR code from screen")
+// 	fmt.Print("Enter your choice (1-2): ")
+// 	choice, _ := reader.ReadString('\n')
+// 	choice = strings.TrimSpace(choice)
 
-	// Variable to store the secret
-	var secretStr string
-	var err error
+// 	// Variable to store the secret
+// 	var secretStr string
+// 	var err error
 
-	switch choice {
-	case "1":
-		// Manual entry (original flow)
-		fmt.Println("Enter your TOTP secret key (this will not be echoed):")
-		secret, err := term.ReadPassword(int(syscall.Stdin))
-		if err != nil {
-			fmt.Println("❌ Failed to read secret")
-			os.Exit(1)
-		}
-		fmt.Println() // Add a newline after the hidden input
+// 	switch choice {
+// 	case "1":
+// 		// Manual entry (original flow)
+// 		fmt.Println("Enter your TOTP secret key (this will not be echoed):")
+// 		secret, err := term.ReadPassword(int(syscall.Stdin))
+// 		if err != nil {
+// 			fmt.Println("❌ Failed to read secret")
+// 			os.Exit(1)
+// 		}
+// 		fmt.Println() // Add a newline after the hidden input
 
-		// Generate two consecutive TOTP codes to help with setup
-		secretStr = string(secret)
-		secretStr = strings.TrimSpace(secretStr)
+// 		// Generate two consecutive TOTP codes to help with setup
+// 		secretStr = string(secret)
+// 		secretStr = strings.TrimSpace(secretStr)
 
-	case "2":
-		// QR code capture flow
-		fmt.Println("When ready, press Enter to activate screenshot mode")
-		fmt.Print("Press Enter to continue...")
-		reader.ReadString('\n')
+// 	case "2":
+// 		// QR code capture flow
+// 		fmt.Println("When ready, press Enter to activate screenshot mode")
+// 		fmt.Print("Press Enter to continue...")
+// 		reader.ReadString('\n')
 
-		// Capture and process the QR code
-		secretStr, err = qrcode.ScanQRCode()
-		if err != nil {
-			fmt.Printf("❌ Failed to process QR code: %v\n", err)
-			fmt.Println("Please try again with manual entry or restart the setup.")
-			os.Exit(1)
-		}
-		fmt.Println("✅ QR code successfully captured and decoded!")
+// 		// Capture and process the QR code
+// 		secretStr, err = qrcode.ScanQRCode()
+// 		if err != nil {
+// 			fmt.Printf("❌ Failed to process QR code: %v\n", err)
+// 			fmt.Println("Please try again with manual entry or restart the setup.")
+// 			os.Exit(1)
+// 		}
+// 		fmt.Println("✅ QR code successfully captured and decoded!")
 
-	default:
-		fmt.Println("❌ Invalid choice. Please run setup again and select 1 or 2.")
-		os.Exit(1)
-	}
+// 	default:
+// 		fmt.Println("❌ Invalid choice. Please run setup again and select 1 or 2.")
+// 		os.Exit(1)
+// 	}
 
-	// Validate secret key format (basic check)
-	if len(secretStr) < 16 {
-		fmt.Println("❌ Secret key seems too short. Please double-check and try again.")
-		os.Exit(1)
-	}
+// 	// Validate secret key format (basic check)
+// 	if len(secretStr) < 16 {
+// 		fmt.Println("❌ Secret key seems too short. Please double-check and try again.")
+// 		os.Exit(1)
+// 	}
 
-	// Generate two consecutive TOTP codes
-	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
-	if err != nil {
-		fmt.Printf("❌ Failed to generate TOTP codes: %s\n", err)
-		os.Exit(1)
-	}
+// 	// Generate two consecutive TOTP codes
+// 	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
+// 	if err != nil {
+// 		fmt.Printf("❌ Failed to generate TOTP codes: %s\n", err)
+// 		os.Exit(1)
+// 	}
 
-	// Store in keychain
-	user, err := env.GetCurrentUser()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %s\n", err)
-		os.Exit(1)
-	}
+// 	// Store in keychain
+// 	user, err := env.GetCurrentUser()
+// 	if err != nil {
+// 		fmt.Fprintf(os.Stderr, "❌ %s\n", err)
+// 		os.Exit(1)
+// 	}
 
-	// Use our fixed binary path for consistent keychain access
-	execPath := constants.GetSeshBinaryPath()
-	if execPath == "" {
-		fmt.Println("❌ Could not determine the path to the sesh binary, cannot access keychain")
-		os.Exit(1)
-	}
+// 	// Use our fixed binary path for consistent keychain access
+// 	execPath := constants.GetSeshBinaryPath()
+// 	if execPath == "" {
+// 		fmt.Println("❌ Could not determine the path to the sesh binary, cannot access keychain")
+// 		os.Exit(1)
+// 	}
 
-	// Build service key
-	var serviceKey string
-	if profile == "" {
-		serviceKey = fmt.Sprintf("sesh-totp-%s", serviceName)
-	} else {
-		serviceKey = fmt.Sprintf("sesh-totp-%s-%s", serviceName, profile)
-	}
+// 	// Build service key
+// 	var serviceKey string
+// 	if profile == "" {
+// 		serviceKey = fmt.Sprintf("sesh-totp-%s", serviceName)
+// 	} else {
+// 		serviceKey = fmt.Sprintf("sesh-totp-%s-%s", serviceName, profile)
+// 	}
 
-	// Use security command to store secret with -T flag to restrict access
-	addCmd := exec.Command("security", "add-generic-password",
-		"-a", user,
-		"-s", serviceKey,
-		"-w", secretStr,
-		"-U",           // Update if exists
-		"-T", execPath, // Only allow the sesh binary to access this item
-	)
+// 	// Use security command to store secret with -T flag to restrict access
+// 	addCmd := exec.Command("security", "add-generic-password",
+// 		"-a", user,
+// 		"-s", serviceKey,
+// 		"-w", secretStr,
+// 		"-U",           // Update if exists
+// 		"-T", execPath, // Only allow the sesh binary to access this item
+// 	)
 
-	err = addCmd.Run()
-	if err != nil {
-		fmt.Println("❌ Failed to store secret in keychain")
-		os.Exit(1)
-	}
+// 	err = addCmd.Run()
+// 	if err != nil {
+// 		fmt.Println("❌ Failed to store secret in keychain")
+// 		os.Exit(1)
+// 	}
 
-	// Store metadata for better organization and retrieval
-	description := fmt.Sprintf("TOTP for %s", serviceName)
-	if profile != "" {
-		description = fmt.Sprintf("TOTP for %s profile %s", serviceName, profile)
-	}
+// 	// Store metadata for better organization and retrieval
+// 	description := fmt.Sprintf("TOTP for %s", serviceName)
+// 	if profile != "" {
+// 		description = fmt.Sprintf("TOTP for %s profile %s", serviceName, profile)
+// 	}
 
-	// Store metadata - CRITICAL for entry retrieval
-	err = keychain.StoreEntryMetadata(constants.TOTPServicePrefix, serviceKey, user, description)
-	if err != nil {
-		fmt.Println("❌ Failed to store metadata for entry retrieval")
-		fmt.Println("⚠️ This entry might not appear when listing available TOTP services")
-		fmt.Println("⚠️ You might need to create the entry again or check keychain permissions")
-		os.Exit(1)
-	}
+// 	// Store metadata - CRITICAL for entry retrieval
+// 	err = keychain.StoreEntryMetadata(constants.TOTPServicePrefix, serviceKey, user, description)
+// 	if err != nil {
+// 		fmt.Println("❌ Failed to store metadata for entry retrieval")
+// 		fmt.Println("⚠️ This entry might not appear when listing available TOTP services")
+// 		fmt.Println("⚠️ You might need to create the entry again or check keychain permissions")
+// 		os.Exit(1)
+// 	}
 
-	// Display the generated TOTP codes for setup verification
-	fmt.Println("✅ Generated TOTP codes for verification:")
-	fmt.Printf("   Current code: %s\n", firstCode)
-	fmt.Printf("   Next code: %s\n", secondCode)
-	fmt.Println("   (Use these codes if your service requires verification during setup)")
-	fmt.Println()
+// 	// Display the generated TOTP codes for setup verification
+// 	fmt.Println("✅ Generated TOTP codes for verification:")
+// 	fmt.Printf("   Current code: %s\n", firstCode)
+// 	fmt.Printf("   Next code: %s\n", secondCode)
+// 	fmt.Println("   (Use these codes if your service requires verification during setup)")
+// 	fmt.Println()
 
-	fmt.Printf("✅ Setup complete! You can now use 'sesh --service totp --service-name %s", serviceName)
-	if profile != "" {
-		fmt.Printf(" --profile %s", profile)
-	}
-	fmt.Println("' to generate TOTP codes.")
-	fmt.Println("Use 'sesh --service totp --service-name " + serviceName + " --clip' to copy the code to clipboard.")
-}
+// 	fmt.Printf("✅ Setup complete! You can now use 'sesh --service totp --service-name %s", serviceName)
+// 	if profile != "" {
+// 		fmt.Printf(" --profile %s", profile)
+// 	}
+// 	fmt.Println("' to generate TOTP codes.")
+// 	fmt.Println("Use 'sesh --service totp --service-name " + serviceName + " --clip' to copy the code to clipboard.")
+// }
 
 // captureQRWithRetry is a shared helper for QR code capture with retry logic
 func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, error)) (string, error) {
 	maxRetries := 2
-	
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		fmt.Printf("📸 QR capture attempt %d/%d\n", attempt, maxRetries)
 		fmt.Println("Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
 		fmt.Print("Press Enter to activate screenshot mode...")
 		reader.ReadString('\n')
-		
+
 		secretStr, err := qrcode.ScanQRCode()
 		if err == nil {
 			fmt.Println("✅ QR code successfully captured and decoded!")
 			return secretStr, nil
 		}
-		
+
 		fmt.Printf("❌ QR capture failed: %v\n", err)
-		
+
 		if attempt < maxRetries {
 			fmt.Println("💡 Tips: Check screen brightness, QR code size, and cursor positioning")
 			fmt.Print("Press Enter to try again, or 'm' to switch to manual entry: ")
@@ -848,15 +848,15 @@ func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, er
 			}
 		}
 	}
-	
+
 	// Final fallback after all retries
 	fmt.Println("\n❓ QR capture failed after multiple attempts.")
 	fmt.Print("Would you like to enter the secret manually instead? (y/n): ")
 	fallback, _ := reader.ReadString('\n')
-	
+
 	if strings.ToLower(strings.TrimSpace(fallback)) == "y" {
 		return manualEntryFunc()
 	}
-	
+
 	return "", fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
 }
