@@ -95,7 +95,11 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 	// Get TOTP secret from keychain using the provider interface
 	secretBytes, err := p.keychain.GetSecret(p.keyUser, keyName)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("could not retrieve TOTP secret: %w", err)
+		profileDesc := "default"
+		if p.profile != "" {
+			profileDesc = p.profile
+		}
+		return "", "", 0, fmt.Errorf("failed to retrieve TOTP secret for AWS profile %s: %w", profileDesc, err)
 	}
 
 	// Make defensive copy
@@ -221,7 +225,11 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				// Get the TOTP secret using the provider interface
 				secretBytes, err := p.keychain.GetSecret(p.keyUser, keyName)
 				if err != nil {
-					return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret: %w", err)
+					profileDesc := "default"
+					if p.profile != "" {
+						profileDesc = p.profile
+					}
+					return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for AWS profile %s: %w", profileDesc, err)
 				}
 
 				// Make defensive copy
@@ -403,7 +411,7 @@ func (p *Provider) GetTOTPKeyInfo() (string, string, error) {
 		var err error
 		p.keyUser, err = env.GetCurrentUser()
 		if err != nil {
-			return "", "", fmt.Errorf("could not determine current user: %w", err)
+			return "", "", fmt.Errorf("failed to get current user: %w", err)
 		}
 	}
 
@@ -424,7 +432,7 @@ func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 		var err error
 		p.keyUser, err = env.GetCurrentUser()
 		if err != nil {
-			return nil, fmt.Errorf("could not determine current user: %w", err)
+			return nil, fmt.Errorf("failed to get current user: %w", err)
 		}
 	}
 
@@ -444,7 +452,7 @@ func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 	// If not found in keychain, try to auto-detect from AWS
 	serial, err := p.aws.GetFirstMFADevice(p.profile)
 	if err != nil {
-		return nil, fmt.Errorf("could not detect MFA device: %w", err)
+		return nil, fmt.Errorf("failed to detect MFA device: %w", err)
 	}
 
 	// Convert string to bytes - in this case, we're returning a new allocation

@@ -86,7 +86,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	// Get secret bytes from keychain provider (no direct security command)
 	secretBytes, err := p.keychain.GetSecret(p.keyUser, serviceKey)
 	if err != nil {
-		return provider.Credentials{}, fmt.Errorf("could not retrieve TOTP secret for %s: %w", p.serviceName, err)
+		return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for %s: %w", p.serviceName, err)
 	}
 
 	// Make defensive copy for secure handling

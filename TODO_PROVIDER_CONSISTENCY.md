@@ -29,10 +29,17 @@
   - Updated `DeleteEntry()` to use `p.keyUser` directly
   - Removed `keyName` field and used `constants.TOTPServicePrefix` throughout
 
-### 4. Error Context Richness
+### 4. Error Context Richness ✓ RESOLVED
 - **AWS Provider**: Rich error context with retry logic and detailed messaging (lines 196-263)
 - **TOTP Provider**: Basic error messages
 - **Consider**: Whether TOTP needs similar retry/context logic
+- **Resolution**: 
+  - TOTP's simpler error handling is appropriate (no retry needed since it only generates codes)
+  - Standardized error message consistency between providers:
+    - All user retrieval errors now use "failed to get current user"
+    - All secret retrieval errors now use "failed to retrieve TOTP secret" with context
+    - Changed "could not" to "failed to" for consistency across providers
+    - Both providers already consistent on "could not generate TOTP codes"
 
 ### 5. Profile Handling Complexity
 - **AWS Provider**: Complex profile logic scattered throughout multiple methods
