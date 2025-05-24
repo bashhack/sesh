@@ -27,12 +27,9 @@ func main() {
 
 // run is the testable entrypoint for the application
 func run(app *App, args []string) {
-	// Early exit for help/version without needing service
+	// Early exit for version/list-services that don't need service
 	for _, arg := range args[1:] {
 		switch arg {
-		case "--help", "-help", "-h":
-			printUsage()
-			return
 		case "--version", "-version":
 			app.ShowVersion()
 			return
@@ -41,10 +38,24 @@ func run(app *App, args []string) {
 			return
 		}
 	}
+	
+	// Check if help is requested without a service
+	hasHelp := false
+	for _, arg := range args[1:] {
+		if arg == "--help" || arg == "-help" || arg == "-h" {
+			hasHelp = true
+			break
+		}
+	}
 
 	// Extract service name from args
 	serviceName := extractServiceName(args)
 	if serviceName == "" {
+		// If no service but help was requested, show general help
+		if hasHelp {
+			printUsage()
+			return
+		}
 		fmt.Fprintln(app.Stderr, "❌ No service provider specified. Use --service to select a provider.")
 		app.ListProviders()
 		app.Exit(1)
