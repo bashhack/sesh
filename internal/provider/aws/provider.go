@@ -145,28 +145,15 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 
 	fmt.Fprintf(os.Stderr, "🔑 Generating TOTP codes for clipboard mode\n")
 
-	// Format display info
-	var displayInfo string
+	// Format service description using AWS profile pattern
 	profileStr := "default profile"
 	if p.profile != "" {
 		profileStr = fmt.Sprintf("profile %s", p.profile)
 	}
-	displayInfo = fmt.Sprintf("Current: %s  |  Next: %s  |  Time left: %ds\n🔑 AWS MFA code for %s",
-		currentCode, nextCode, secondsLeft, profileStr)
 
-	// Calculate when this code expires
-	now := time.Now().Unix()
-	validUntil := time.Unix(((now/30)+1)*30, 0)
-
-	// Return credentials with just the display info and copy value
-	return provider.Credentials{
-		Provider:         p.Name(),
-		Expiry:           validUntil,
-		Variables:        map[string]string{}, // Empty map as we're not generating AWS credentials
-		DisplayInfo:      displayInfo,
-		CopyValue:        currentCode, // This is what will be copied to clipboard
-		MFAAuthenticated: false,       // For clipboard mode, we don't authenticate with AWS
-	}, nil
+	// Use shared clipboard credentials function
+	return provider.CreateClipboardCredentials(p.Name(), currentCode, nextCode, secondsLeft,
+		"AWS MFA code", profileStr), nil
 }
 
 // GetCredentials retrieves AWS credentials using TOTP
@@ -289,20 +276,18 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		"AWS_SESSION_TOKEN":     awsCreds.SessionToken,
 	}
 
-	// Format basic display info
-	var displayInfo string
-	if p.profile == "" {
-		displayInfo = "🔑 AWS credentials for default profile"
-	} else {
-		displayInfo = fmt.Sprintf("🔑 AWS credentials for profile %s", p.profile)
+	// Format service description using AWS profile pattern
+	profileStr := "default profile"
+	if p.profile != "" {
+		profileStr = fmt.Sprintf("profile %s", p.profile)
 	}
 
-	// For regular credential generation, just return the basic info
+	// For regular credential generation, use shared display formatting
 	return provider.Credentials{
 		Provider:         p.Name(),
 		Expiry:           expiryTime,
 		Variables:        envVars,
-		DisplayInfo:      displayInfo,
+		DisplayInfo:      provider.FormatRegularDisplayInfo("AWS credentials", profileStr),
 		MFAAuthenticated: true, // If we got this far, AWS STS accepted our MFA code
 	}, nil
 }

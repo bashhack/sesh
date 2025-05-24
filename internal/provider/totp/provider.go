@@ -107,30 +107,27 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		return provider.Credentials{}, fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
 
-	// Calculate when this code expires and time left
+	// Calculate time left in current window
 	now := time.Now().Unix()
-	validUntil := time.Unix(((now/30)+1)*30, 0)
 	secondsLeft := 30 - (now % 30)
 
-	// Format service name with profile (matching AWS pattern)
-	serviceStr := p.serviceName
+	// Format service description using TOTP pattern
+	serviceDesc := p.serviceName
 	if p.profile != "" {
-		serviceStr = fmt.Sprintf("%s (%s)", p.serviceName, p.profile)
+		serviceDesc = fmt.Sprintf("%s (%s)", p.serviceName, p.profile)
 	}
 
-	// Format display info with detailed timing (matching AWS clipboard pattern)
-	displayInfo := fmt.Sprintf("Current: %s  |  Next: %s  |  Time left: %ds\n🔑 TOTP code for %s",
-		currentCode, nextCode, secondsLeft, serviceStr)
+	// Show warning for non-clip usage and suggest clip mode
+	fmt.Fprintf(os.Stderr, "⚠️  TOTP codes are typically used with clipboard mode for easy copying.\n")
+	fmt.Fprintf(os.Stderr, "💡 Recommended: sesh --service totp --service-name %s", p.serviceName)
+	if p.profile != "" {
+		fmt.Fprintf(os.Stderr, " --profile %s", p.profile)
+	}
+	fmt.Fprintf(os.Stderr, " --clip\n\n")
 
-	// Create credentials object
-	return provider.Credentials{
-		Provider:         p.Name(),
-		Expiry:           validUntil,
-		Variables:        map[string]string{"TOTP_CODE": currentCode},
-		DisplayInfo:      displayInfo,
-		CopyValue:        currentCode,
-		MFAAuthenticated: false, // TOTP codes themselves aren't MFA authenticated with AWS
-	}, nil
+	// Use shared clipboard function since TOTP should always show timing info
+	return provider.CreateClipboardCredentials(p.Name(), currentCode, nextCode, secondsLeft,
+		"TOTP code", serviceDesc), nil
 }
 
 // GetClipboardValue implements the ServiceProvider interface for clipboard mode
