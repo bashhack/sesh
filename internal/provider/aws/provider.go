@@ -455,6 +455,18 @@ func (p *Provider) ValidateRequest() error {
 	return nil
 }
 
+// GetFlagInfo returns information about AWS provider-specific flags
+func (p *Provider) GetFlagInfo() []provider.FlagInfo {
+	return []provider.FlagInfo{
+		{
+			Name:        "profile",
+			Type:        "string",
+			Description: "AWS CLI profile to use",
+			Required:    false,
+		},
+	}
+}
+
 // buildServiceKey creates a service key for the keychain
 // Format: {prefix}-{profile} or {prefix}-default
 func buildServiceKey(prefix, profile string) string {

@@ -46,6 +46,17 @@ type ServiceProvider interface {
 	// - Any other provider-specific validation
 	// This allows fail-fast behavior before expensive operations
 	ValidateRequest() error
+
+	// GetFlagInfo returns information about provider-specific flags for help text
+	GetFlagInfo() []FlagInfo
+}
+
+// FlagInfo describes a provider-specific flag
+type FlagInfo struct {
+	Name        string
+	Type        string // "string", "bool", etc.
+	Description string
+	Required    bool
 }
 
 // SubshellProvider is an optional interface that providers can implement
