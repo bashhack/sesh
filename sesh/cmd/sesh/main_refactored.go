@@ -5,32 +5,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
-	"github.com/bashhack/sesh/internal/provider"
 )
 
-// Version information (set by ldflags during build)
-var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
-)
-
-func main() {
-	//// Set up global usage handlers for -h flag
-	//flag.Usage = printUsage // NOTE: Shouldn't need this given edit to run()
-
-	app := NewDefaultApp()
-	run(app, os.Args)
-}
-
-// run is the testable entrypoint for the application
-func run(app *App, args []string) {
+func runRefactored(app *App, args []string) {
 	// Early exit for help/version without needing service
 	for _, arg := range args[1:] {
 		switch arg {
 		case "--help", "-help", "-h":
-			printUsage()
+			printGeneralUsage()
 			return
 		case "--version", "-version":
 			app.ShowVersion()
@@ -159,52 +141,91 @@ func run(app *App, args []string) {
 	}
 }
 
-// safeFlagSet wraps a flag.FlagSet to prevent duplicate flags
-type safeFlagSet struct {
-	fs         *flag.FlagSet
-	registered map[string]bool
-}
-
-// StringVar safely registers a string flag if it doesn't already exist
-func (s *safeFlagSet) StringVar(p *string, name string, value string, usage string) {
-	if _, exists := s.registered[name]; !exists {
-		s.registered[name] = true
-		s.fs.StringVar(p, name, value, usage)
+// extractServiceName manually parses args to find --service value
+func extractServiceName(args []string) string {
+	for i := 1; i < len(args); i++ {
+		// Handle --service <value>
+		if args[i] == "--service" || args[i] == "-service" {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				return args[i+1]
+			}
+		}
+		// Handle --service=<value>
+		if strings.HasPrefix(args[i], "--service=") {
+			return strings.TrimPrefix(args[i], "--service=")
+		}
+		if strings.HasPrefix(args[i], "-service=") {
+			return strings.TrimPrefix(args[i], "-service=")
+		}
 	}
+	return ""
 }
 
-// BoolVar safely registers a bool flag if it doesn't already exist
-func (s *safeFlagSet) BoolVar(p *bool, name string, value bool, usage string) {
-	if _, exists := s.registered[name]; !exists {
-		s.registered[name] = true
-		s.fs.BoolVar(p, name, value, usage)
-	}
-}
-
-func printUsage() {
+// printGeneralUsage prints usage when no service is selected
+func printGeneralUsage() {
 	fmt.Println("Usage: sesh [options]")
 	fmt.Println("\nCommon options:")
-	fmt.Println("  --service, -service           Service provider to use (aws, totp)")
+	fmt.Println("  --service, -service           Service provider to use (aws, totp) [REQUIRED]")
 	fmt.Println("  --list, -list                 List entries for selected service")
-	fmt.Println("  --delete, -delete string      Delete entry for selected service (specify entry ID)")
+	fmt.Println("  --delete, -delete string      Delete entry for selected service")
 	fmt.Println("  --setup, -setup               Run setup wizard for selected service")
-	fmt.Println("  --clip, -clip                 Copy code to clipboard instead of printing credentials")
+	fmt.Println("  --clip, -clip                 Copy code to clipboard")
 	fmt.Println("  --no-subshell, -no-subshell   Print environment variables instead of launching subshell (AWS only)")
 	fmt.Println("  --list-services, -list-services  List available service providers")
 	fmt.Println("  --version, -version           Show version information")
 	fmt.Println("  --help, -help                 Show usage")
-	fmt.Println("\nProvider-specific options:")
-	fmt.Println("\nAWS provider options:")
-	fmt.Println("  --profile, -profile string     AWS CLI profile to use")
-	fmt.Println("\nTOTP provider options:")
-	fmt.Println("  --service-name, -service-name string  Name of the service to authenticate with (required)")
-	fmt.Println("  --profile, -profile string         Profile name for multiple accounts with the same service")
 	fmt.Println("\nExamples:")
-	fmt.Println("  sesh --service aws                     Generate AWS credentials (subshell mode)")
-	fmt.Println("  sesh --service aws --no-subshell       Generate AWS credentials (print to stdout)")
+	fmt.Println("  sesh --service aws                     Generate AWS credentials")
 	fmt.Println("  sesh --service totp --service-name github   Generate TOTP code for GitHub")
-	fmt.Println("  sesh --service totp --service-name bank --clip   Copy TOTP code for bank to clipboard")
-	fmt.Println("  sesh --list-services                   List available service providers")
-	fmt.Println("  sesh --service totp --list             List all TOTP services")
-	fmt.Println("  sesh --service totp --setup            Run setup wizard for TOTP")
+	fmt.Println("  sesh --list-services                   List available providers")
+	fmt.Println("\nFor provider-specific help:")
+	fmt.Println("  sesh --service <provider> --help")
 }
+
+// printProviderUsage prints usage for a specific provider
+func printProviderUsage(serviceName string, provider interface{ GetFlagInfo() []FlagInfo }) {
+	fmt.Printf("Usage: sesh --service %s [options]\n\n", serviceName)
+	
+	fmt.Println("Common options:")
+	fmt.Println("  --service string              Service provider to use")
+	fmt.Println("  --list                        List entries for selected service")
+	fmt.Println("  --delete string               Delete entry for selected service")
+	fmt.Println("  --setup                       Run setup wizard for selected service")
+	fmt.Println("  --clip                        Copy code to clipboard")
+	if serviceName == "aws" {
+		fmt.Println("  --no-subshell                 Print environment variables instead of launching subshell")
+	}
+	fmt.Println("  --help                        Show this help")
+	fmt.Println("  --version                     Show version information")
+	
+	// Provider-specific flags
+	flagInfo := provider.GetFlagInfo()
+	if len(flagInfo) > 0 {
+		fmt.Printf("\n%s provider options:\n", strings.Title(serviceName))
+		for _, flag := range flagInfo {
+			required := ""
+			if flag.Required {
+				required = " [REQUIRED]"
+			}
+			fmt.Printf("  --%s %s%s\n    %s\n", flag.Name, flag.Type, required, flag.Description)
+		}
+	}
+	
+	// Examples
+	fmt.Println("\nExamples:")
+	switch serviceName {
+	case "aws":
+		fmt.Println("  sesh --service aws                     Generate AWS credentials (subshell)")
+		fmt.Println("  sesh --service aws --no-subshell       Print AWS credentials")
+		fmt.Println("  sesh --service aws --profile dev       Use 'dev' AWS profile")
+		fmt.Println("  sesh --service aws --setup             Set up AWS credentials")
+	case "totp":
+		fmt.Println("  sesh --service totp --service-name github     Generate TOTP for GitHub")
+		fmt.Println("  sesh --service totp --service-name github --clip   Copy TOTP to clipboard")
+		fmt.Println("  sesh --service totp --setup            Set up new TOTP service")
+		fmt.Println("  sesh --service totp --list             List all TOTP services")
+	}
+}
+
+// Need to add this import at the top
+type FlagInfo = provider.FlagInfo
