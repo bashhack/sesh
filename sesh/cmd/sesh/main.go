@@ -72,7 +72,8 @@ func run(app *App, args []string) {
 	}
 
 	// Now create flagset with provider-specific flags
-	fs := flag.NewFlagSet(args[0], flag.ExitOnError)
+	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fs.SetOutput(app.Stderr) // Redirect flag errors to app.Stderr
 	
 	// Set custom usage that includes provider info
 	fs.Usage = func() {
