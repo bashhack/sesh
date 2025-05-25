@@ -23,7 +23,7 @@ func TestProvider_Name(t *testing.T) {
 
 func TestProvider_Description(t *testing.T) {
 	p := &Provider{}
-	want := "Time-based One-Time Password (RFC 6238)"
+	want := "Generic TOTP provider for any service"
 	if got := p.Description(); got != want {
 		t.Errorf("Description() = %v, want %v", got, want)
 	}
@@ -58,8 +58,41 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 	p := &Provider{}
 	flags := p.GetFlagInfo()
 
-	if len(flags) != 0 {
-		t.Errorf("GetFlagInfo() returned %d flags, want 0", len(flags))
+	if len(flags) != 3 {
+		t.Errorf("GetFlagInfo() returned %d flags, want 3", len(flags))
+	}
+
+	// Check service-name flag
+	if flags[0].Name != "service-name" {
+		t.Errorf("flag[0].Name = %v, want 'service-name'", flags[0].Name)
+	}
+	if flags[0].Type != "string" {
+		t.Errorf("flag[0].Type = %v, want 'string'", flags[0].Type)
+	}
+	if !flags[0].Required {
+		t.Error("service-name flag should be required")
+	}
+
+	// Check profile flag
+	if flags[1].Name != "profile" {
+		t.Errorf("flag[1].Name = %v, want 'profile'", flags[1].Name)
+	}
+	if flags[1].Type != "string" {
+		t.Errorf("flag[1].Type = %v, want 'string'", flags[1].Type)
+	}
+	if flags[1].Required {
+		t.Error("profile flag should not be required")
+	}
+
+	// Check label flag
+	if flags[2].Name != "label" {
+		t.Errorf("flag[2].Name = %v, want 'label'", flags[2].Name)
+	}
+	if flags[2].Type != "string" {
+		t.Errorf("flag[2].Type = %v, want 'string'", flags[2].Type)
+	}
+	if flags[2].Required {
+		t.Error("label flag should not be required")
 	}
 }
 
