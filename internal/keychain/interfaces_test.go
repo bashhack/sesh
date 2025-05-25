@@ -253,6 +253,23 @@ func TestDefaultProviderDeleteEntry(t *testing.T) {
 }
 
 func TestDefaultProviderStoreEntryMetadata(t *testing.T) {
+	// Mock execCommand to prevent keychain access
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+	
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+		
+		// Return error for security commands to simulate no existing metadata
+		if command == "security" {
+			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
+		}
+		return cmd
+	}
+	
 	// Mock the saveEntryMetadata function
 	originalSaveFunc := saveEntryMetadataImpl
 	defer func() { saveEntryMetadataImpl = originalSaveFunc }()
