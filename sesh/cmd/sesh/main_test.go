@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
+	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
@@ -279,17 +281,34 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 		"aws with valid profile flag": {
 			args: []string{"sesh", "--service", "aws", "--profile", "dev", "--list"},
 			setupMocks: func(app *App) {
-				awsMock := app.AWS.(*awsMocks.MockProvider)
-				// The provider should be able to list entries
-				// This would be called after SetupFlags parses the profile
-				_ = awsMock // Just to use the variable
+				// Mock the keychain to return some entries
+				keychainMock := app.Keychain.(*mocks.MockProvider)
+				keychainMock.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
+					return []keychain.KeychainEntry{
+						{Service: "sesh-aws-default", Account: "testuser"},
+						{Service: "sesh-aws-dev", Account: "testuser"},
+					}, nil
+				}
 			},
 			wantExitCode: 0,
 		},
 		"totp with service-name flag": {
 			args: []string{"sesh", "--service", "totp", "--service-name", "github", "--clip"},
 			setupMocks: func(app *App) {
-				// TOTP provider should be configured with service-name
+				// Mock keychain to have the TOTP secret
+				keychainMock := app.Keychain.(*mocks.MockProvider)
+				keychainMock.GetSecretFunc = func(account, service string) ([]byte, error) {
+					if service == "sesh-totp-github" {
+						return []byte("JBSWY3DPEHPK3PXP"), nil // Example TOTP secret
+					}
+					return nil, fmt.Errorf("not found")
+				}
+				
+				// Mock TOTP generation
+				totpMock := app.TOTP.(*totpMocks.MockProvider)
+				totpMock.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					return "123456", "654321", nil
+				}
 			},
 			wantExitCode: 0,
 		},
