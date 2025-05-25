@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/klauspost/compress/zstd"
-	"os/exec"
 	"strings"
 
 	"github.com/bashhack/sesh/internal/constants"
@@ -108,8 +107,8 @@ func LoadAllEntryMetadata() ([]KeychainEntryMeta, error) {
 	metaService := constants.MetadataServiceName
 	metaAccount := "metadata"
 
-	// Use direct security command to avoid unnecessary prompts
-	cmd := exec.Command("security", "find-generic-password",
+	// Use execCommand variable so it can be mocked in tests
+	cmd := execCommand("security", "find-generic-password",
 		"-a", metaAccount,
 		"-s", metaService,
 		"-w")
@@ -184,7 +183,7 @@ var saveEntryMetadataImpl = func(entries []KeychainEntryMeta) error {
 
 	// Use direct security command to avoid unnecessary prompts
 	// This ensures the same security settings as secrets
-	cmd := exec.Command("security", "add-generic-password",
+	cmd := execCommand("security", "add-generic-password",
 		"-a", metaAccount,
 		"-s", metaService,
 		"-w", b64Data,
@@ -196,13 +195,13 @@ var saveEntryMetadataImpl = func(entries []KeychainEntryMeta) error {
 	if err != nil {
 		// If entry exists, we need to delete and recreate
 		if strings.Contains(err.Error(), "The specified item already exists") {
-			deleteCmd := exec.Command("security", "delete-generic-password",
+			deleteCmd := execCommand("security", "delete-generic-password",
 				"-a", metaAccount,
 				"-s", metaService)
 			deleteCmd.Run() // Ignore errors from delete
 
 			// Try to add again
-			cmd = exec.Command("security", "add-generic-password",
+			cmd = execCommand("security", "add-generic-password",
 				"-a", metaAccount,
 				"-s", metaService,
 				"-w", b64Data,
