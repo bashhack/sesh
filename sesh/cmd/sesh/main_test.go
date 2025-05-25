@@ -203,3 +203,143 @@ func TestServiceNameExtraction_EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+
+func TestRun_ProviderSpecificFlags(t *testing.T) {
+	tests := map[string]struct {
+		args          []string
+		setupMocks    func(*App)
+		wantExitCode  int
+		checkOutput   func(*testing.T, string, string) // stdout, stderr
+	}{
+		"aws with valid profile flag": {
+			args: []string{"sesh", "--service", "aws", "--profile", "dev", "--list"},
+			setupMocks: func(app *App) {
+				awsMock := app.AWS.(*awsMocks.MockProvider)
+				// The provider should be able to list entries
+				// This would be called after SetupFlags parses the profile
+				_ = awsMock // Just to use the variable
+			},
+			wantExitCode: 0,
+		},
+		"totp with service-name flag": {
+			args: []string{"sesh", "--service", "totp", "--service-name", "github", "--clip"},
+			setupMocks: func(app *App) {
+				// TOTP provider should be configured with service-name
+			},
+			wantExitCode: 0,
+		},
+		"aws with totp-specific flag should fail": {
+			args: []string{"sesh", "--service", "aws", "--service-name", "github"},
+			setupMocks: func(app *App) {
+				// Should fail during flag parsing
+			},
+			wantExitCode: 1,
+			checkOutput: func(t *testing.T, stdout, stderr string) {
+				if !strings.Contains(stderr, "unknown flag") && !strings.Contains(stderr, "service-name") {
+					t.Error("Expected error about unknown flag --service-name")
+				}
+			},
+		},
+		"totp with aws-specific flag should fail": {
+			args: []string{"sesh", "--service", "totp", "--no-subshell"},
+			setupMocks: func(app *App) {
+				// Should fail during flag parsing
+			},
+			wantExitCode: 1,
+			checkOutput: func(t *testing.T, stdout, stderr string) {
+				if !strings.Contains(stderr, "unknown flag") && !strings.Contains(stderr, "no-subshell") {
+					t.Error("Expected error about unknown flag --no-subshell")
+				}
+			},
+		},
+	}
+
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			app, stdoutBuf, stderrBuf := mockApp()
+			
+			exitCode := -1
+			app.Exit = func(code int) { exitCode = code }
+			
+			if test.setupMocks != nil {
+				test.setupMocks(app)
+			}
+			
+			run(app, test.args)
+			
+			if exitCode != test.wantExitCode {
+				t.Errorf("Exit code = %d, want %d", exitCode, test.wantExitCode)
+			}
+			
+			if test.checkOutput != nil {
+				test.checkOutput(t, stdoutBuf.String(), stderrBuf.String())
+			}
+		})
+	}
+}
+
+func TestRun_FlagValidation(t *testing.T) {
+	tests := map[string]struct {
+		args         []string
+		setupMocks   func(*App)
+		wantExitCode int
+		checkStderr  func(*testing.T, string)
+	}{
+		"missing required service flag": {
+			args:         []string{"sesh", "--profile", "dev"},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "service") {
+					t.Error("Expected error about missing service flag")
+				}
+			},
+		},
+		"invalid service name": {
+			args:         []string{"sesh", "--service", "invalid"},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "unknown service") || !strings.Contains(stderr, "invalid") {
+					t.Error("Expected error about unknown service")
+				}
+			},
+		},
+		"totp without required service-name": {
+			args: []string{"sesh", "--service", "totp"},
+			setupMocks: func(app *App) {
+				// TOTP provider's ValidateRequest should fail
+			},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "service-name") {
+					t.Error("Expected error about missing service-name")
+				}
+			},
+		},
+	}
+
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			app, _, stderrBuf := mockApp()
+			
+			exitCode := -1
+			app.Exit = func(code int) { exitCode = code }
+			
+			if test.setupMocks != nil {
+				test.setupMocks(app)
+			}
+			
+			run(app, test.args)
+			
+			if exitCode != test.wantExitCode {
+				t.Errorf("Exit code = %d, want %d", exitCode, test.wantExitCode)
+			}
+			
+			if test.checkStderr != nil {
+				test.checkStderr(t, stderrBuf.String())
+			}
+		})
+	}
+}
