@@ -319,8 +319,8 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 			},
 			wantExitCode: 1,
 			checkOutput: func(t *testing.T, stdout, stderr string) {
-				if !strings.Contains(stderr, "unknown flag") && !strings.Contains(stderr, "service-name") {
-					t.Error("Expected error about unknown flag --service-name")
+				if !strings.Contains(stderr, "flag provided but not defined") || !strings.Contains(stderr, "service-name") {
+					t.Error("Expected error about undefined flag --service-name")
 				}
 			},
 		},
@@ -331,8 +331,8 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 			},
 			wantExitCode: 1,
 			checkOutput: func(t *testing.T, stdout, stderr string) {
-				if !strings.Contains(stderr, "unknown flag") && !strings.Contains(stderr, "no-subshell") {
-					t.Error("Expected error about unknown flag --no-subshell")
+				if !strings.Contains(stderr, "flag provided but not defined") || !strings.Contains(stderr, "no-subshell") {
+					t.Error("Expected error about undefined flag --no-subshell")
 				}
 			},
 		},
