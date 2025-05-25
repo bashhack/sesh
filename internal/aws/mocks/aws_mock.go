@@ -13,10 +13,16 @@ var _ aws.Provider = (*MockProvider)(nil)
 
 // GetSessionToken implements the aws.Provider interface
 func (m *MockProvider) GetSessionToken(profile, serial string, code []byte) (aws.Credentials, error) {
+	if m.GetSessionTokenFunc == nil {
+		return aws.Credentials{}, nil
+	}
 	return m.GetSessionTokenFunc(profile, serial, code)
 }
 
 // GetFirstMFADevice implements the aws.Provider interface
 func (m *MockProvider) GetFirstMFADevice(profile string) (string, error) {
+	if m.GetFirstMFADeviceFunc == nil {
+		return "", nil
+	}
 	return m.GetFirstMFADeviceFunc(profile)
 }
