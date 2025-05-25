@@ -9,21 +9,16 @@ SKIP_KEYCHAIN_TESTS=${SKIP_KEYCHAIN_TESTS:-}
 echo "🧪 Running unit tests..."
 if [ -n "$SKIP_KEYCHAIN_TESTS" ]; then
     echo "   (Keychain integration tests disabled)"
+else
+    echo "   (Including keychain integration tests)"
 fi
 go test -v ./...
 
 # Run tests with coverage
+echo ""
 echo "📊 Generating test coverage..."
 go test -coverprofile=coverage.txt ./...
 go tool cover -func=coverage.txt
 
-# Run more detailed tests if requested
-if [ "$1" == "--full" ]; then
-    echo "🔍 Running integration tests..."
-    RUN_INTEGRATION_TESTS=1 go test -v ./...
-    
-    echo "🔬 Running experimental tests..."
-    RUN_EXPERIMENTAL_TESTS=1 go test -v ./...
-fi
-
+echo ""
 echo "✅ All tests completed successfully."

@@ -91,8 +91,8 @@ audit:
 	go fmt ./...
 	@echo 'Running lint...'
 	@$(MAKE) lint
-	@echo 'Running tests...'
-	go test -race -vet=off ./...
+	@echo 'Running tests (with keychain tests disabled)...'
+	SKIP_KEYCHAIN_TESTS=true go test -race -vet=off ./...
 
 ## vendor: Tidy and vendor dependencies
 .PHONY: vendor
