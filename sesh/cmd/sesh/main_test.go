@@ -109,39 +109,39 @@ func TestExtractServiceName(t *testing.T) {
 		wantErr     bool
 	}{
 		"service flag with equals": {
-			args:        []string{"--service=aws"},
+			args:        []string{"sesh", "--service=aws"},
 			wantService: "aws",
 		},
 		"service flag with space": {
-			args:        []string{"--service", "totp"},
+			args:        []string{"sesh", "--service", "totp"},
 			wantService: "totp",
 		},
 		"service flag with other flags": {
-			args:        []string{"--profile", "dev", "--service", "aws", "--no-subshell"},
+			args:        []string{"sesh", "--profile", "dev", "--service", "aws", "--no-subshell"},
 			wantService: "aws",
 		},
 		"single dash service flag": {
-			args:        []string{"-service", "aws"},
+			args:        []string{"sesh", "-service", "aws"},
 			wantService: "aws",
 		},
 		"no service flag": {
-			args:        []string{"--profile", "dev"},
+			args:        []string{"sesh", "--profile", "dev"},
 			wantService: "",
 		},
 		"service flag at end": {
-			args:        []string{"--no-subshell", "--profile=prod", "--service=aws"},
+			args:        []string{"sesh", "--no-subshell", "--profile=prod", "--service=aws"},
 			wantService: "aws",
 		},
 		"empty service value with equals": {
-			args:        []string{"--service="},
+			args:        []string{"sesh", "--service="},
 			wantService: "",
 		},
 		"empty service value with space": {
-			args:        []string{"--service", ""},
+			args:        []string{"sesh", "--service", ""},
 			wantService: "",
 		},
 		"service flag without value": {
-			args:        []string{"--service"},
+			args:        []string{"sesh", "--service"},
 			wantService: "",
 		},
 	}
@@ -236,23 +236,23 @@ func TestServiceNameExtraction_EdgeCases(t *testing.T) {
 		wantService string
 	}{
 		"service with special chars": {
-			args:        []string{"--service=aws-test"},
+			args:        []string{"sesh", "--service=aws-test"},
 			wantService: "aws-test",
 		},
 		"multiple service flags (first wins)": {
-			args:        []string{"--service", "aws", "--service", "totp"},
+			args:        []string{"sesh", "--service", "aws", "--service", "totp"},
 			wantService: "aws",
 		},
 		"service in quotes": {
-			args:        []string{"--service=\"aws\""},
+			args:        []string{"sesh", "--service=\"aws\""},
 			wantService: "\"aws\"", // Quotes are preserved in simple extraction
 		},
 		"service with equals in value": {
-			args:        []string{"--service=name=value"},
+			args:        []string{"sesh", "--service=name=value"},
 			wantService: "name=value",
 		},
 		"single dash with equals": {
-			args:        []string{"-service=aws"},
+			args:        []string{"sesh", "-service=aws"},
 			wantService: "aws",
 		},
 	}
