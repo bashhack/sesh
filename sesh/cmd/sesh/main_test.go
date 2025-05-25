@@ -27,7 +27,7 @@ func mockApp() (*App, *bytes.Buffer, *bytes.Buffer) {
 	app.AWS = &awsMocks.MockProvider{}
 	app.Keychain = &mocks.MockProvider{}
 	app.TOTP = &totpMocks.MockProvider{}
-	app.SetupWizard = &setupMocks.MockWizardRunner{}
+	app.SetupService = &setupMocks.MockWizardRunner{}
 	app.ExecLookPath = func(string) (string, error) { return "/usr/local/bin/aws", nil }
 	app.Exit = func(int) {}
 	app.Stdout = stdoutBuf
@@ -129,18 +129,38 @@ func TestExtractServiceName(t *testing.T) {
 
 func TestPrintProviderUsage(t *testing.T) {
 	// Test that printProviderUsage generates output for each provider
-	providers := []string{"aws", "totp"}
+	// We need to create actual provider instances
+	app := NewDefaultApp()
 	
-	for _, provider := range providers {
-		t.Run(provider, func(t *testing.T) {
+	tests := map[string]struct {
+		serviceName string
+		provider    provider.ServiceProvider
+	}{
+		"aws":  {"aws", app.Registry.GetProvider("aws")},
+		"totp": {"totp", app.Registry.GetProvider("totp")},
+	}
+	
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+			
+			printProviderUsage(test.serviceName, test.provider)
+			
+			w.Close()
+			os.Stdout = oldStdout
+			
 			var buf bytes.Buffer
-			printProviderUsage(&buf, provider)
+			io.Copy(&buf, r)
 			
 			output := buf.String()
 			
 			// Check that output contains provider name
-			if !strings.Contains(output, provider) {
-				t.Errorf("printProviderUsage() output should contain provider name %q", provider)
+			if !strings.Contains(output, test.serviceName) {
+				t.Errorf("printProviderUsage() output should contain provider name %q", test.serviceName)
 			}
 			
 			// Check for common flags
@@ -149,7 +169,7 @@ func TestPrintProviderUsage(t *testing.T) {
 			}
 			
 			// Check for provider-specific content
-			switch provider {
+			switch test.serviceName {
 			case "aws":
 				if !strings.Contains(output, "--profile") {
 					t.Error("AWS usage should contain --profile flag")
