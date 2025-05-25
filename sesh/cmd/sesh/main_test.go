@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
 	"github.com/bashhack/sesh/internal/keychain/mocks"
-	setupMocks "github.com/bashhack/sesh/internal/setup/mocks"
+	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/testutil"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
@@ -15,6 +18,33 @@ import (
 // TestHelperProcess is needed for the testutil.MockExecCommand function
 func TestHelperProcess(t *testing.T) {
 	testutil.TestHelperProcess()
+}
+
+// mockSetupService implements setup.SetupService
+type mockSetupService struct {
+	RegisterHandlerFunc      func(handler setup.SetupHandler)
+	SetupServiceFunc         func(serviceName string) error
+	GetAvailableServicesFunc func() []string
+}
+
+func (m *mockSetupService) RegisterHandler(handler setup.SetupHandler) {
+	if m.RegisterHandlerFunc != nil {
+		m.RegisterHandlerFunc(handler)
+	}
+}
+
+func (m *mockSetupService) SetupService(serviceName string) error {
+	if m.SetupServiceFunc != nil {
+		return m.SetupServiceFunc(serviceName)
+	}
+	return nil
+}
+
+func (m *mockSetupService) GetAvailableServices() []string {
+	if m.GetAvailableServicesFunc != nil {
+		return m.GetAvailableServicesFunc()
+	}
+	return []string{}
 }
 
 func mockApp() (*App, *bytes.Buffer, *bytes.Buffer) {
@@ -27,7 +57,7 @@ func mockApp() (*App, *bytes.Buffer, *bytes.Buffer) {
 	app.AWS = &awsMocks.MockProvider{}
 	app.Keychain = &mocks.MockProvider{}
 	app.TOTP = &totpMocks.MockProvider{}
-	app.SetupService = &setupMocks.MockWizardRunner{}
+	app.SetupService = &mockSetupService{}
 	app.ExecLookPath = func(string) (string, error) { return "/usr/local/bin/aws", nil }
 	app.Exit = func(int) {}
 	app.Stdout = stdoutBuf
