@@ -163,7 +163,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 					switch service {
 					case "sesh-aws-default":
 						return []byte("secret"), nil
-					case "sesh-aws-mfa-default":
+					case "sesh-aws-serial-default":
 						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
 					default:
 						return nil, fmt.Errorf("unexpected service: %s", service)
@@ -179,7 +179,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 					switch service {
 					case "sesh-aws-dev":
 						return []byte("secret"), nil
-					case "sesh-aws-mfa-dev":
+					case "sesh-aws-serial-dev":
 						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
 					default:
 						return nil, fmt.Errorf("unexpected service: %s", service)
@@ -381,7 +381,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 			setupKeychain: func(m *keychainMocks.MockProvider) {
 				m.GetSecretFunc = func(account, service string) ([]byte, error) {
 					switch service {
-					case "sesh-aws-mfa-default":
+					case "sesh-aws-serial-default":
 						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
 					case "sesh-aws-default":
 						return []byte("MYSECRET"), nil
@@ -435,7 +435,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 			setupKeychain: func(m *keychainMocks.MockProvider) {
 				m.GetSecretFunc = func(account, service string) ([]byte, error) {
 					switch service {
-					case "sesh-aws-mfa-default":
+					case "sesh-aws-serial-default":
 						return nil, errors.New("not found")
 					case "sesh-aws-default":
 						return []byte("MYSECRET"), nil
@@ -472,7 +472,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 			setupKeychain: func(m *keychainMocks.MockProvider) {
 				m.GetSecretFunc = func(account, service string) ([]byte, error) {
 					switch service {
-					case "sesh-aws-mfa-default":
+					case "sesh-aws-serial-default":
 						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
 					case "sesh-aws-default":
 						return []byte("MYSECRET"), nil
@@ -511,7 +511,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 			setupKeychain: func(m *keychainMocks.MockProvider) {
 				m.GetSecretFunc = func(account, service string) ([]byte, error) {
 					switch service {
-					case "sesh-aws-mfa-default":
+					case "sesh-aws-serial-default":
 						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
 					case "sesh-aws-default":
 						return []byte("MYSECRET"), nil
@@ -673,9 +673,9 @@ func TestBuildServiceKey(t *testing.T) {
 			want:    "sesh-aws-dev",
 		},
 		"MFA prefix with profile": {
-			prefix:  "sesh-aws-mfa",
+			prefix:  "sesh-aws-serial",
 			profile: "prod",
-			want:    "sesh-aws-mfa-prod",
+			want:    "sesh-aws-serial-prod",
 		},
 	}
 

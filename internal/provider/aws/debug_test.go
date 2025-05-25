@@ -15,7 +15,7 @@ import (
 func TestDebugGetCredentials(t *testing.T) {
 	// Redirect stderr to capture debug output
 	oldStderr := os.Stderr
-	r, w, _ := os.Pipe()
+	_, w, _ := os.Pipe()
 	os.Stderr = w
 	
 	// Create mocks with debug output
@@ -23,7 +23,7 @@ func TestDebugGetCredentials(t *testing.T) {
 		GetSecretFunc: func(account, service string) ([]byte, error) {
 			t.Logf("Keychain GetSecret called: account=%q, service=%q", account, service)
 			switch service {
-			case "sesh-aws-mfa-default":
+			case "sesh-aws-serial-default":
 				return []byte("arn:aws:iam::123456789012:mfa/user"), nil
 			case "sesh-aws-default":
 				return []byte("MYSECRET"), nil
