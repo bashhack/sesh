@@ -121,38 +121,43 @@ test/verbose:
 	@echo 'Running tests with verbose output (keychain integration tests disabled)...'
 	@SKIP_KEYCHAIN_TESTS=true go test -v ./...
 
-## test/integration: Run full test suite including real keychain access
+## test/integration: Run test suite including real keychain access
 .PHONY: test/integration
 test/integration:
-	@echo '⚠️  Running full test suite WITH real keychain access...'
+	@echo '⚠️  Running tests WITH real keychain access...'
 	@echo '   This will prompt for keychain access during tests'
 	@./scripts/test.sh
 
-## test/full: Run full test suite including integration tests (WITH real keychain)
-.PHONY: test/full
-test/full:
-	@echo '⚠️  Running full test suite WITH real keychain access...'
-	@./scripts/test.sh --full
-
-## coverage: Run test suite with coverage
+## coverage: Run test suite with coverage (keychain integration tests disabled)
 .PHONY: coverage
 coverage:
-	@echo 'Running tests with coverage...'
-	@go test -coverprofile=coverage.txt ./... | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@echo 'Running tests with coverage (keychain integration tests disabled)...'
+	@SKIP_KEYCHAIN_TESTS=true go test -coverprofile=coverage.txt ./... | grep -v "no test files" | grep -v "coverage: 0.0%" || true
 	@echo 'Filtering out testutil, mock files, and interface-only files...'
 	@grep -v "testutil\|mock\|provider/interfaces.go" coverage.txt > coverage.filtered.txt || true
 	@go tool cover -html=coverage.filtered.txt -o coverage.html
 	@echo "Coverage report generated at coverage.html"
 	@rm -f coverage.filtered.txt
 
-## coverage/func: Show function-level coverage statistics
+## coverage/func: Show function-level coverage statistics (keychain integration tests disabled)
 .PHONY: coverage/func
 coverage/func:
-	@echo 'Generating function-level coverage report...'
-	@go test -coverprofile=coverage.txt ./... 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@echo 'Generating function-level coverage report (keychain integration tests disabled)...'
+	@SKIP_KEYCHAIN_TESTS=true go test -coverprofile=coverage.txt ./... 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
 	@echo 'Filtering out testutil, mock files, and interface-only files...'
 	@grep -v "testutil\|mock\|provider/interfaces.go" coverage.txt > coverage.filtered.txt || true
 	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go" || true
+	@rm -f coverage.filtered.txt
+
+## coverage/integration: Run test suite with coverage INCLUDING real keychain access
+.PHONY: coverage/integration
+coverage/integration:
+	@echo '⚠️  Running tests with coverage INCLUDING real keychain access...'
+	@go test -coverprofile=coverage.txt ./... | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@echo 'Filtering out testutil, mock files, and interface-only files...'
+	@grep -v "testutil\|mock\|provider/interfaces.go" coverage.txt > coverage.filtered.txt || true
+	@go tool cover -html=coverage.filtered.txt -o coverage.html
+	@echo "Coverage report generated at coverage.html"
 	@rm -f coverage.filtered.txt
 
 
