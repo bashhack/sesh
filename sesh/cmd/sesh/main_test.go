@@ -53,11 +53,12 @@ func mockApp() (*App, *bytes.Buffer, *bytes.Buffer) {
 	stdoutBuf := new(bytes.Buffer)
 	stderrBuf := new(bytes.Buffer)
 
-	app := NewDefaultApp() // Create a real app with registry
+	// Create app with mock keychain from the start
+	mockKeychain := &mocks.MockProvider{}
+	app := NewApp(mockKeychain)
 
-	// Override with mocks
+	// Override other components with mocks
 	app.AWS = &awsMocks.MockProvider{}
-	app.Keychain = &mocks.MockProvider{}
 	app.TOTP = &totpMocks.MockProvider{}
 	app.SetupService = &mockSetupService{}
 	app.ExecLookPath = func(string) (string, error) { return "/usr/local/bin/aws", nil }
@@ -161,8 +162,8 @@ func TestExtractServiceName(t *testing.T) {
 
 func TestPrintProviderUsage(t *testing.T) {
 	// Test that printProviderUsage generates output for each provider
-	// We need to create actual provider instances
-	app := NewDefaultApp()
+	// Create app with mocked keychain
+	app, _, _ := mockApp()
 	
 	tests := map[string]struct {
 		serviceName string
