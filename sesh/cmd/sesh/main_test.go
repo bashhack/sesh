@@ -354,6 +354,8 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 			
 			if exitCode != test.wantExitCode {
 				t.Errorf("Exit code = %d, want %d", exitCode, test.wantExitCode)
+				t.Logf("stdout: %q", stdoutBuf.String())
+				t.Logf("stderr: %q", stderrBuf.String())
 			}
 			
 			if test.checkOutput != nil {
@@ -405,7 +407,7 @@ func TestRun_FlagValidation(t *testing.T) {
 	for name, test := range tests {
 		test := test
 		t.Run(name, func(t *testing.T) {
-			app, _, stderrBuf := mockApp()
+			app, stdoutBuf, stderrBuf := mockApp()
 			
 			exitCode := -1
 			app.Exit = func(code int) { exitCode = code }
@@ -418,6 +420,8 @@ func TestRun_FlagValidation(t *testing.T) {
 			
 			if exitCode != test.wantExitCode {
 				t.Errorf("Exit code = %d, want %d", exitCode, test.wantExitCode)
+				t.Logf("stdout: %q", stdoutBuf.String())
+				t.Logf("stderr: %q", stderrBuf.String())
 			}
 			
 			if test.checkStderr != nil {
