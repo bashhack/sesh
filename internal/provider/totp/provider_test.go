@@ -58,8 +58,8 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 	p := &Provider{}
 	flags := p.GetFlagInfo()
 
-	if len(flags) != 3 {
-		t.Errorf("GetFlagInfo() returned %d flags, want 3", len(flags))
+	if len(flags) != 2 {
+		t.Errorf("GetFlagInfo() returned %d flags, want 2", len(flags))
 	}
 
 	// Check service-name flag
@@ -84,16 +84,6 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 		t.Error("profile flag should not be required")
 	}
 
-	// Check label flag
-	if flags[2].Name != "label" {
-		t.Errorf("flag[2].Name = %v, want 'label'", flags[2].Name)
-	}
-	if flags[2].Type != "string" {
-		t.Errorf("flag[2].Type = %v, want 'string'", flags[2].Type)
-	}
-	if flags[2].Required {
-		t.Error("label flag should not be required")
-	}
 }
 
 // TOTP provider doesn't implement ShouldUseSubshell - it's not a SubshellProvider

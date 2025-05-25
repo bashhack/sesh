@@ -264,11 +264,5 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Description: "Profile name for the service (for multiple accounts)",
 			Required:    false,
 		},
-		{
-			Name:        "label",
-			Type:        "string",
-			Description: "Label to identify this TOTP entry",
-			Required:    false,
-		},
 	}
 }
