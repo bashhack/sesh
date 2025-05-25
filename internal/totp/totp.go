@@ -150,6 +150,11 @@ func GenerateForTimeSecure(secret string, t time.Time) (string, error) {
 // GenerateBytes generates a TOTP code from a byte slice secret
 // The secret is expected to be a byte slice containing a base32-encoded string
 func GenerateBytes(secret []byte) (string, error) {
+	// Check for empty secret
+	if len(secret) == 0 {
+		return "", fmt.Errorf("empty secret provided")
+	}
+
 	// Make a defensive copy to avoid modifying the caller's data
 	secretCopy := make([]byte, len(secret))
 	copy(secretCopy, secret)
@@ -160,6 +165,11 @@ func GenerateBytes(secret []byte) (string, error) {
 
 	// Basic cleanup - trim whitespace which can cause decode failures
 	secretStr = string(bytes.TrimSpace([]byte(secretStr)))
+
+	// Check if trimming resulted in empty string
+	if secretStr == "" {
+		return "", fmt.Errorf("secret cannot be empty after trimming whitespace")
+	}
 
 	// Now use the string-based implementation
 	return Generate(secretStr)
@@ -213,6 +223,11 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 // GenerateForTimeBytes generates a TOTP code for a specific time from a byte slice secret
 // The secret is expected to be a byte slice containing a base32-encoded string
 func GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
+	// Check for empty secret
+	if len(secret) == 0 {
+		return "", fmt.Errorf("empty secret provided")
+	}
+
 	// Make a defensive copy to avoid modifying the caller's data
 	secretCopy := make([]byte, len(secret))
 	copy(secretCopy, secret)
@@ -223,6 +238,11 @@ func GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
 
 	// Basic cleanup - trim whitespace which can cause decode failures
 	secretStr = string(bytes.TrimSpace([]byte(secretStr)))
+
+	// Check if trimming resulted in empty string
+	if secretStr == "" {
+		return "", fmt.Errorf("secret cannot be empty after trimming whitespace")
+	}
 
 	// Use the string-based implementation
 	return GenerateForTime(secretStr, t)

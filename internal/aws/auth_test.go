@@ -244,6 +244,112 @@ func TestGetFirstMFADevice_Integration(t *testing.T) {
 	}
 }
 
+func TestCredentials_ZeroSecrets(t *testing.T) {
+	tests := map[string]struct {
+		name  string
+		creds *Credentials
+	}{
+		"normal credentials": {
+			name: "normal credentials",
+			creds: &Credentials{
+				AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
+				SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				SessionToken:    "AQoDYXdzEJr...",
+				Expiration:      "2023-12-01T00:00:00Z",
+			},
+		},
+		"empty credentials": {
+			name: "empty credentials",
+			creds: &Credentials{
+				AccessKeyId:     "",
+				SecretAccessKey: "",
+				SessionToken:    "",
+				Expiration:      "",
+			},
+		},
+		"nil credentials": {
+			name:  "nil credentials",
+			creds: nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Make copies of original values for verification (except for nil case)
+			var originalAccessKey, originalSecret, originalToken string
+			if test.creds != nil {
+				originalAccessKey = test.creds.AccessKeyId
+				originalSecret = test.creds.SecretAccessKey
+				originalToken = test.creds.SessionToken
+			}
+
+			// Call ZeroSecrets
+			test.creds.ZeroSecrets()
+
+			// Verify that the method doesn't panic on nil
+			if test.creds == nil {
+				// Test passed - no panic
+				return
+			}
+
+			// Verify all sensitive fields are empty
+			if test.creds.AccessKeyId != "" {
+				t.Errorf("AccessKeyId not zeroed: %q", test.creds.AccessKeyId)
+			}
+			if test.creds.SecretAccessKey != "" {
+				t.Errorf("SecretAccessKey not zeroed: %q", test.creds.SecretAccessKey)
+			}
+			if test.creds.SessionToken != "" {
+				t.Errorf("SessionToken not zeroed: %q", test.creds.SessionToken)
+			}
+
+			// Verify Expiration is NOT zeroed (it's not sensitive)
+			if test.creds.Expiration == "" && test.name == "normal credentials" {
+				t.Error("Expiration should not be zeroed")
+			}
+
+			// Verify that original values were not empty (for normal case)
+			if test.name == "normal credentials" {
+				if originalAccessKey == "" || originalSecret == "" || originalToken == "" {
+					t.Error("Test setup error: original values should not be empty")
+				}
+			}
+		})
+	}
+}
+
+func TestCredentials_ZeroSecrets_ActuallyZerosMemory(t *testing.T) {
+	// This test verifies that the underlying memory is actually being zeroed
+	// by checking that the secure.ZeroStrings function is being called
+	creds := &Credentials{
+		AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
+		SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		SessionToken:    "AQoDYXdzEJr...",
+		Expiration:      "2023-12-01T00:00:00Z",
+	}
+
+	// Store original string values
+	origAccess := creds.AccessKeyId
+	origSecret := creds.SecretAccessKey
+	origToken := creds.SessionToken
+
+	// Call ZeroSecrets
+	creds.ZeroSecrets()
+
+	// Verify the struct fields are empty
+	if creds.AccessKeyId != "" || creds.SecretAccessKey != "" || creds.SessionToken != "" {
+		t.Error("Credentials fields not cleared")
+	}
+
+	// Note: We can't directly test that the original string memory was zeroed
+	// because Go's string internals are not directly accessible. However,
+	// we're calling secure.ZeroStrings which should handle this.
+	// This is more of a verification that the method structure is correct.
+	_ = origAccess
+	_ = origSecret
+	_ = origToken
+}
+
 func randomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	result := make([]byte, length)

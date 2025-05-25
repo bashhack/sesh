@@ -17,13 +17,19 @@ const (
 	DefaultBinaryPath = "$HOME/.local/bin/sesh"
 )
 
+// For testing - allows us to mock these functions
+var (
+	osExecutable = os.Executable
+	osStat       = os.Stat
+)
+
 // GetSeshBinaryPath returns the path to the current sesh binary or a known installation path
 func GetSeshBinaryPath() string {
 	// First try os.Executable() to get the current binary path
-	selfPath, err := os.Executable()
+	selfPath, err := osExecutable()
 	if err == nil && selfPath != "" {
 		// Check if this path exists
-		if _, statErr := os.Stat(selfPath); statErr == nil {
+		if _, statErr := osStat(selfPath); statErr == nil {
 			return selfPath
 		}
 	}
@@ -38,7 +44,7 @@ func GetSeshBinaryPath() string {
 	}
 
 	for _, path := range knownPaths {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := osStat(path); err == nil {
 			return path
 		}
 	}

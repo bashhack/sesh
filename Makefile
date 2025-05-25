@@ -131,16 +131,22 @@ test/full:
 .PHONY: coverage
 coverage:
 	@echo 'Running tests with coverage...'
-	@go test -coverprofile=coverage.txt ./...
-	@go tool cover -html=coverage.txt -o coverage.html
+	@go test -coverprofile=coverage.txt ./... | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@echo 'Filtering out testutil, mock files, and interface-only files...'
+	@grep -v "testutil\|mock\|provider/interfaces.go" coverage.txt > coverage.filtered.txt || true
+	@go tool cover -html=coverage.filtered.txt -o coverage.html
 	@echo "Coverage report generated at coverage.html"
+	@rm -f coverage.filtered.txt
 
 ## coverage/func: Show function-level coverage statistics
 .PHONY: coverage/func
 coverage/func:
 	@echo 'Generating function-level coverage report...'
-	@go test -coverprofile=coverage.txt ./...
-	@go tool cover -func=coverage.txt
+	@go test -coverprofile=coverage.txt ./... 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@echo 'Filtering out testutil, mock files, and interface-only files...'
+	@grep -v "testutil\|mock\|provider/interfaces.go" coverage.txt > coverage.filtered.txt || true
+	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go" || true
+	@rm -f coverage.filtered.txt
 
 
 

@@ -525,6 +525,312 @@ func randomString(length int) string {
 	return string(result)
 }
 
+func TestGetSecretString(t *testing.T) {
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	tests := map[string]struct {
+		account      string
+		service      string
+		mockOutput   string
+		mockError    bool
+		wantSecret   string
+		wantErr      bool
+		wantErrMsg   string
+	}{
+		"success": {
+			account:    "testuser",
+			service:    "test-service",
+			mockOutput: "test-secret-string",
+			wantSecret: "test-secret-string",
+		},
+		"success with empty account": {
+			account:    "",
+			service:    "test-service",
+			mockOutput: "test-secret-string",
+			wantSecret: "test-secret-string",
+		},
+		"security command error": {
+			account:    "testuser",
+			service:    "test-service",
+			mockError:  true,
+			wantErr:    true,
+			wantErrMsg: "no secret found in Keychain",
+		},
+	}
+
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			whoamiOutput := "testuser"
+			
+			execCommand = func(command string, args ...string) *exec.Cmd {
+				cs := []string{"-test.run=TestHelperProcess", "--", command}
+				cs = append(cs, args...)
+				cmd := exec.Command(os.Args[0], cs...)
+				cmd.Env = []string{
+					"GO_WANT_HELPER_PROCESS=1",
+				}
+
+				if command == "whoami" {
+					cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
+				} else if command == "security" {
+					if test.mockError {
+						cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
+					} else {
+						cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", test.mockOutput))
+					}
+				}
+
+				return cmd
+			}
+
+			secret, err := GetSecretString(test.account, test.service)
+
+			if test.wantErr && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+			if test.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), test.wantErrMsg) {
+					t.Errorf("Expected error containing %q, got: %s", test.wantErrMsg, err.Error())
+				}
+			}
+			if !test.wantErr && secret != test.wantSecret {
+				t.Errorf("Expected secret %q, got %q", test.wantSecret, secret)
+			}
+		})
+	}
+}
+
+func TestSetSecretString(t *testing.T) {
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	tests := map[string]struct {
+		account      string
+		service      string
+		secret       string
+		mockError    bool
+		wantErr      bool
+		wantErrMsg   string
+	}{
+		"success": {
+			account: "testuser",
+			service: "test-service",
+			secret:  "test-secret-string",
+		},
+		"success with empty account": {
+			account: "",
+			service: "test-service",
+			secret:  "test-secret-string",
+		},
+		"security command error": {
+			account:    "testuser",
+			service:    "test-service",
+			secret:     "test-secret-string",
+			mockError:  true,
+			wantErr:    true,
+			wantErrMsg: "failed to set secret in keychain",
+		},
+		"empty secret": {
+			account: "testuser",
+			service: "test-service",
+			secret:  "",
+		},
+	}
+
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			whoamiOutput := "testuser"
+			
+			execCommand = func(command string, args ...string) *exec.Cmd {
+				cs := []string{"-test.run=TestHelperProcess", "--", command}
+				cs = append(cs, args...)
+				cmd := exec.Command(os.Args[0], cs...)
+				cmd.Env = []string{
+					"GO_WANT_HELPER_PROCESS=1",
+				}
+
+				if command == "whoami" {
+					cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
+				} else if command == "security" {
+					if test.mockError {
+						cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
+					}
+				}
+
+				return cmd
+			}
+
+			err := SetSecretString(test.account, test.service, test.secret)
+
+			if test.wantErr && err == nil {
+				t.Error("Expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+			if test.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), test.wantErrMsg) {
+					t.Errorf("Expected error containing %q, got: %s", test.wantErrMsg, err.Error())
+				}
+			}
+		})
+	}
+}
+
+func TestSecretTrimmingForTOTPServices(t *testing.T) {
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	tests := map[string]struct {
+		service      string
+		mockOutput   string
+		wantSecret   string
+	}{
+		"AWS service with trailing newline": {
+			service:    "sesh-aws-default",
+			mockOutput: "AWSSECRET123\n",
+			wantSecret: "AWSSECRET123",
+		},
+		"TOTP service with trailing spaces": {
+			service:    "sesh-totp-github",
+			mockOutput: "TOTPSECRET456   ",
+			wantSecret: "TOTPSECRET456",
+		},
+		"Non-TOTP service also trims whitespace": {
+			service:    "other-service",
+			mockOutput: "SECRET789\n",
+			wantSecret: "SECRET789",
+		},
+	}
+
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			execCommand = func(command string, args ...string) *exec.Cmd {
+				cs := []string{"-test.run=TestHelperProcess", "--", command}
+				cs = append(cs, args...)
+				cmd := exec.Command(os.Args[0], cs...)
+				cmd.Env = []string{
+					"GO_WANT_HELPER_PROCESS=1",
+					fmt.Sprintf("MOCK_OUTPUT=%s", test.mockOutput),
+				}
+				return cmd
+			}
+
+			secretBytes, err := GetSecretBytes("testuser", test.service)
+			if err != nil {
+				t.Errorf("Expected no error but got: %v", err)
+			}
+
+			secret := string(secretBytes)
+			if secret != test.wantSecret {
+				t.Errorf("Expected secret %q, got %q", test.wantSecret, secret)
+			}
+		})
+	}
+}
+
+func TestSetSecretBytesWithEmptyAccount(t *testing.T) {
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	whoamiCalled := false
+	securityCalled := false
+
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{
+			"GO_WANT_HELPER_PROCESS=1",
+		}
+
+		if command == "whoami" {
+			whoamiCalled = true
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
+		} else if command == "security" {
+			securityCalled = true
+			// Verify that the account was set from whoami
+			for i, arg := range args {
+				if arg == "-a" && i+1 < len(args) {
+					if args[i+1] != "testuser" {
+						t.Errorf("Expected account 'testuser', got %q", args[i+1])
+					}
+				}
+			}
+		}
+
+		return cmd
+	}
+
+	err := SetSecretBytes("", "test-service", []byte("test-secret"))
+	if err != nil {
+		t.Errorf("Expected no error but got: %v", err)
+	}
+
+	if !whoamiCalled {
+		t.Error("Expected whoami to be called")
+	}
+	if !securityCalled {
+		t.Error("Expected security command to be called")
+	}
+}
+
+func TestDeleteEntryWithEmptyAccount(t *testing.T) {
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	whoamiCalled := false
+	deleteCalled := false
+
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{
+			"GO_WANT_HELPER_PROCESS=1",
+		}
+
+		if command == "whoami" {
+			whoamiCalled = true
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
+		} else if command == "security" {
+			deleteCalled = true
+			// Verify delete command args
+			if len(args) > 0 && args[0] == "delete-generic-password" {
+				// Check account was set from whoami
+				for i, arg := range args {
+					if arg == "-a" && i+1 < len(args) {
+						if args[i+1] != "testuser" {
+							t.Errorf("Expected account 'testuser', got %q", args[i+1])
+						}
+					}
+				}
+			}
+		}
+
+		return cmd
+	}
+
+	err := DeleteEntry("", "test-service")
+	if err != nil {
+		t.Errorf("Expected no error but got: %v", err)
+	}
+
+	if !whoamiCalled {
+		t.Error("Expected whoami to be called")
+	}
+	if !deleteCalled {
+		t.Error("Expected security delete command to be called")
+	}
+}
+
 func TestHelperProcess(*testing.T) {
 	testutil.TestHelperProcess()
 }

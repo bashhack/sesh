@@ -3,6 +3,7 @@ package totp
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGenerate(t *testing.T) {
@@ -319,3 +320,272 @@ func TestRealWorldTOTPSecrets(t *testing.T) {
 		})
 	}
 }
+
+func TestGenerateForTime(t *testing.T) {
+	testSecret := "JBSWY3DPEHPK3PXP"
+	
+	tests := map[string]struct {
+		name    string
+		secret  string
+		time    time.Time
+		wantErr bool
+	}{
+		"valid secret and time": {
+			secret:  testSecret,
+			time:    time.Now(),
+			wantErr: false,
+		},
+		"specific time": {
+			secret:  testSecret,
+			time:    time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
+			wantErr: false,
+		},
+		"invalid secret": {
+			secret:  "INVALID!@#",
+			time:    time.Now(),
+			wantErr: true,
+		},
+		"empty secret": {
+			secret:  "",
+			time:    time.Now(),
+			wantErr: false, // TOTP library allows empty secrets
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			code, err := GenerateForTime(tt.secret, tt.time)
+			
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GenerateForTime() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			
+			if !tt.wantErr && len(code) != 6 {
+				t.Errorf("Expected 6-digit code, got %d digits: %s", len(code), code)
+			}
+		})
+	}
+}
+
+func TestGenerateSecure(t *testing.T) {
+	tests := map[string]struct {
+		name    string
+		secret  string
+		wantErr bool
+	}{
+		"valid secret": {
+			secret:  "JBSWY3DPEHPK3PXP",
+			wantErr: false,
+		},
+		"invalid secret": {
+			secret:  "INVALID!@#",
+			wantErr: true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			code, err := GenerateSecure(tt.secret)
+			
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GenerateSecure() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			
+			if !tt.wantErr && len(code) != 6 {
+				t.Errorf("Expected 6-digit code, got %d digits: %s", len(code), code)
+			}
+		})
+	}
+}
+
+func TestGenerateForTimeSecure(t *testing.T) {
+	tests := map[string]struct {
+		name    string
+		secret  string
+		time    time.Time
+		wantErr bool
+	}{
+		"valid secret and time": {
+			secret:  "JBSWY3DPEHPK3PXP",
+			time:    time.Now(),
+			wantErr: false,
+		},
+		"invalid secret": {
+			secret:  "INVALID!@#",
+			time:    time.Now(),
+			wantErr: true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			code, err := GenerateForTimeSecure(tt.secret, tt.time)
+			
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GenerateForTimeSecure() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			
+			if !tt.wantErr && len(code) != 6 {
+				t.Errorf("Expected 6-digit code, got %d digits: %s", len(code), code)
+			}
+		})
+	}
+}
+
+func TestGenerateBytes(t *testing.T) {
+	tests := map[string]struct {
+		name    string
+		secret  []byte
+		wantErr bool
+	}{
+		"valid secret": {
+			secret:  []byte("JBSWY3DPEHPK3PXP"),
+			wantErr: false,
+		},
+		"secret with whitespace": {
+			secret:  []byte("  JBSWY3DPEHPK3PXP  "),
+			wantErr: false,
+		},
+		"invalid secret": {
+			secret:  []byte("INVALID!@#"),
+			wantErr: true,
+		},
+		"empty secret": {
+			secret:  []byte{},
+			wantErr: true, // We now reject empty secrets
+		},
+		"nil secret": {
+			secret:  nil,
+			wantErr: true, // We now reject nil/empty secrets
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			code, err := GenerateBytes(tt.secret)
+			
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GenerateBytes() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			
+			if !tt.wantErr && len(code) != 6 {
+				t.Errorf("Expected 6-digit code, got %d digits: %s", len(code), code)
+			}
+		})
+	}
+}
+
+func TestGenerateForTimeBytes(t *testing.T) {
+	tests := map[string]struct {
+		name    string
+		secret  []byte
+		time    time.Time
+		wantErr bool
+	}{
+		"valid secret and time": {
+			secret:  []byte("JBSWY3DPEHPK3PXP"),
+			time:    time.Now(),
+			wantErr: false,
+		},
+		"secret with whitespace": {
+			secret:  []byte("  JBSWY3DPEHPK3PXP  "),
+			time:    time.Now(),
+			wantErr: false,
+		},
+		"specific time": {
+			secret:  []byte("JBSWY3DPEHPK3PXP"),
+			time:    time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
+			wantErr: false,
+		},
+		"invalid secret": {
+			secret:  []byte("INVALID!@#"),
+			time:    time.Now(),
+			wantErr: true,
+		},
+		"empty secret": {
+			secret:  []byte{},
+			time:    time.Now(),
+			wantErr: true, // We now reject empty secrets
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			code, err := GenerateForTimeBytes(tt.secret, tt.time)
+			
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GenerateForTimeBytes() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			
+			if !tt.wantErr && len(code) != 6 {
+				t.Errorf("Expected 6-digit code, got %d digits: %s", len(code), code)
+			}
+		})
+	}
+}
+
+func TestGenerateConsecutiveCodesBytes(t *testing.T) {
+	tests := map[string]struct {
+		name    string
+		secret  []byte
+		wantErr bool
+		errMsg  string
+	}{
+		"valid secret": {
+			secret:  []byte("JBSWY3DPEHPK3PXP"),
+			wantErr: false,
+		},
+		"secret with whitespace": {
+			secret:  []byte("  JBSWY3DPEHPK3PXP  "),
+			wantErr: false,
+		},
+		"invalid secret": {
+			secret:  []byte("INVALID!@#"),
+			wantErr: true,
+			errMsg:  "failed to generate",
+		},
+		"empty secret": {
+			secret:  []byte{},
+			wantErr: true,
+			errMsg:  "empty secret provided",
+		},
+		"nil secret": {
+			secret:  nil,
+			wantErr: true,
+			errMsg:  "empty secret provided",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			current, next, err := GenerateConsecutiveCodesBytes(tt.secret)
+			
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GenerateConsecutiveCodesBytes() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			
+			if tt.wantErr && tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+				t.Errorf("Expected error containing %q, got %q", tt.errMsg, err.Error())
+			}
+			
+			if !tt.wantErr {
+				if len(current) != 6 {
+					t.Errorf("Expected 6-digit current code, got %d digits: %s", len(current), current)
+				}
+				if len(next) != 6 {
+					t.Errorf("Expected 6-digit next code, got %d digits: %s", len(next), next)
+				}
+				if current == next {
+					t.Error("Current and next codes should be different")
+				}
+			}
+		})
+	}
+}
+

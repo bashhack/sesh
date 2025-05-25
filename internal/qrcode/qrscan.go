@@ -2,6 +2,7 @@ package qrcode
 
 import (
 	"fmt"
+	"image"
 	"image/png"
 	"net/url"
 	"os"
@@ -14,6 +15,12 @@ import (
 	"github.com/makiuchi-d/gozxing/qrcode"
 )
 
+// For testing - allows us to mock these functions
+var (
+	execCommand = exec.Command
+	osStat      = os.Stat
+)
+
 // ScanQRCode captures a QR code using screenshots and extracts the TOTP secret
 func ScanQRCode() (string, error) {
 	// Create a temp file for the screenshot
@@ -22,23 +29,29 @@ func ScanQRCode() (string, error) {
 
 	// Use screencapture on macOS
 	fmt.Println("📸 Please select the area containing the QR code...")
-	cmd := exec.Command("screencapture", "-i", tempFile)
+	cmd := execCommand("screencapture", "-i", tempFile)
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("failed to capture screenshot: %w", err)
 	}
 
 	// Check if the user canceled (file would be empty or very small)
-	fileInfo, err := os.Stat(tempFile)
+	fileInfo, err := osStat(tempFile)
 	if err != nil || fileInfo.Size() < 100 {
 		return "", fmt.Errorf("screenshot capture was canceled or failed")
 	}
 
 	fmt.Println("✅ Screenshot captured, processing QR code...")
 
+	// Decode the QR code from the file
+	return DecodeQRCodeFromFile(tempFile)
+}
+
+// DecodeQRCodeFromFile reads a QR code from an image file and extracts the TOTP secret
+func DecodeQRCodeFromFile(filename string) (string, error) {
 	// Open and decode the image
-	file, err := os.Open(tempFile)
+	file, err := os.Open(filename)
 	if err != nil {
-		return "", fmt.Errorf("failed to open screenshot: %w", err)
+		return "", fmt.Errorf("failed to open image file: %w", err)
 	}
 	defer file.Close()
 
@@ -47,6 +60,11 @@ func ScanQRCode() (string, error) {
 		return "", fmt.Errorf("failed to decode image: %w", err)
 	}
 
+	return DecodeQRCodeFromImage(img)
+}
+
+// DecodeQRCodeFromImage extracts TOTP secret from an image containing a QR code
+func DecodeQRCodeFromImage(img image.Image) (string, error) {
 	// Convert to the format required by gozxing
 	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
 	if err != nil {
@@ -62,6 +80,11 @@ func ScanQRCode() (string, error) {
 
 	// Extract secret from otpauth URI
 	otpauthURL := result.GetText()
+	return ExtractSecretFromOTPAuthURL(otpauthURL)
+}
+
+// ExtractSecretFromOTPAuthURL extracts just the secret from an otpauth URL
+func ExtractSecretFromOTPAuthURL(otpauthURL string) (string, error) {
 	if !strings.HasPrefix(otpauthURL, "otpauth://") {
 		return "", fmt.Errorf("not a valid otpauth URL: %s", otpauthURL)
 	}

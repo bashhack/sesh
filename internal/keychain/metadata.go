@@ -159,8 +159,8 @@ func LoadAllEntryMetadata() ([]KeychainEntryMeta, error) {
 	return entries, nil
 }
 
-// saveEntryMetadata saves all metadata entries with zstd compression
-func saveEntryMetadata(entries []KeychainEntryMeta) error {
+// saveEntryMetadataImpl is the implementation of saveEntryMetadata - variable so it can be changed in tests
+var saveEntryMetadataImpl = func(entries []KeychainEntryMeta) error {
 	metaService := constants.MetadataServiceName
 	metaAccount := "metadata"
 
@@ -218,6 +218,11 @@ func saveEntryMetadata(entries []KeychainEntryMeta) error {
 	}
 
 	return nil
+}
+
+// saveEntryMetadata saves all metadata entries with zstd compression
+func saveEntryMetadata(entries []KeychainEntryMeta) error {
+	return saveEntryMetadataImpl(entries)
 }
 
 // getServicePrefix extracts the service prefix from a full service name

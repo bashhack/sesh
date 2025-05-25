@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// For testing - allows us to mock exec.Command
+var execCommand = exec.Command
+
 // GetCurrentUser gets the current system user
 func GetCurrentUser() (string, error) {
 	user := os.Getenv("USER")
@@ -14,7 +17,7 @@ func GetCurrentUser() (string, error) {
 		return user, nil
 	}
 
-	out, err := exec.Command("whoami").Output()
+	out, err := execCommand("whoami").Output()
 	if err != nil {
 		return "", fmt.Errorf("could not determine current user: %w", err)
 	}
