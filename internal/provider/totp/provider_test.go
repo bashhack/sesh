@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/bashhack/sesh/internal/keychain"
 	keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
@@ -63,12 +63,7 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 	}
 }
 
-func TestProvider_ShouldUseSubshell(t *testing.T) {
-	p := &Provider{}
-	if p.ShouldUseSubshell() {
-		t.Error("ShouldUseSubshell() should always return false for TOTP provider")
-	}
-}
+// TOTP provider doesn't implement ShouldUseSubshell - it's not a SubshellProvider
 
 func TestProvider_ValidateRequest(t *testing.T) {
 	tests := map[string]struct {
@@ -234,8 +229,8 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 				keyUser:     "testuser",
 			}
 
-			// Test GetTOTPCodes
-			current, next, secondsLeft, err := p.GetTOTPCodes()
+			// Test GetCredentials which internally generates TOTP codes
+			creds, err := p.GetCredentials()
 			if test.wantErr && err == nil {
 				t.Error("GetTOTPCodes() expected error but got nil")
 			}
@@ -243,31 +238,22 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 				t.Errorf("GetTOTPCodes() unexpected error: %v", err)
 			}
 			if !test.wantErr {
-				if current != test.wantCurrent {
-					t.Errorf("current code = %v, want %v", current, test.wantCurrent)
+				if creds.CopyValue != test.wantCurrent {
+					t.Errorf("copy value = %v, want %v", creds.CopyValue, test.wantCurrent)
 				}
-				if next != test.wantNext {
-					t.Errorf("next code = %v, want %v", next, test.wantNext)
+				// Check that display info contains the codes
+				if !strings.Contains(creds.DisplayInfo, test.wantCurrent) {
+					t.Error("DisplayInfo should contain current code")
 				}
-				if secondsLeft <= 0 || secondsLeft > 30 {
-					t.Errorf("secondsLeft = %v, want between 1 and 30", secondsLeft)
+				if !strings.Contains(creds.DisplayInfo, test.wantNext) {
+					t.Error("DisplayInfo should contain next code")
 				}
 			}
 		})
 	}
 }
 
-func TestProvider_GetCredentials(t *testing.T) {
-	// TOTP provider doesn't support GetCredentials
-	p := &Provider{}
-	_, err := p.GetCredentials()
-	if err == nil {
-		t.Error("GetCredentials() should return an error")
-	}
-	if !strings.Contains(err.Error(), "not supported") {
-		t.Errorf("GetCredentials() error = %v, want error containing 'not supported'", err)
-	}
-}
+// GetCredentials is tested above in TestProvider_GetTOTPCodes
 
 func TestProvider_GetClipboardValue(t *testing.T) {
 	tests := map[string]struct {
@@ -372,14 +358,7 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 	}
 }
 
-func TestProvider_NewSubshellConfig(t *testing.T) {
-	// TOTP provider doesn't support subshells
-	p := &Provider{}
-	config := p.NewSubshellConfig(provider.Credentials{})
-	if config != nil {
-		t.Error("NewSubshellConfig() should return nil for TOTP provider")
-	}
-}
+// TOTP provider doesn't implement NewSubshellConfig - it's not a SubshellProvider
 
 func TestProvider_ListEntries(t *testing.T) {
 	tests := map[string]struct {
@@ -390,9 +369,9 @@ func TestProvider_ListEntries(t *testing.T) {
 	}{
 		"successful list": {
 			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.ListEntriesFunc = func(prefix string) ([]provider.KeychainEntry, error) {
+				m.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
 					if prefix == "sesh-totp" {
-						return []provider.KeychainEntry{
+						return []keychain.KeychainEntry{
 							{Service: "sesh-totp-github", Account: "testuser"},
 							{Service: "sesh-totp-gitlab", Account: "testuser"},
 							{Service: "sesh-totp-bitbucket", Account: "testuser"},
@@ -419,7 +398,7 @@ func TestProvider_ListEntries(t *testing.T) {
 		},
 		"keychain error": {
 			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.ListEntriesFunc = func(prefix string) ([]provider.KeychainEntry, error) {
+				m.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
 					return nil, errors.New("keychain error")
 				}
 			},
@@ -530,41 +509,4 @@ func TestProvider_DeleteEntry(t *testing.T) {
 	}
 }
 
-func TestProvider_FormatDisplayInfo(t *testing.T) {
-	tests := map[string]struct {
-		current      string
-		next         string
-		secondsLeft  int
-		serviceName  string
-		wantContains []string
-	}{
-		"normal display": {
-			current:      "123456",
-			next:         "654321",
-			secondsLeft:  15,
-			serviceName:  "github",
-			wantContains: []string{"123456", "654321", "15s", "github"},
-		},
-		"about to expire": {
-			current:      "111111",
-			next:         "222222",
-			secondsLeft:  3,
-			serviceName:  "gitlab",
-			wantContains: []string{"111111", "222222", "3s", "gitlab"},
-		},
-	}
-
-	for name, test := range tests {
-		test := test
-		t.Run(name, func(t *testing.T) {
-			p := &Provider{serviceName: test.serviceName}
-			result := p.formatDisplayInfo(test.current, test.next, test.secondsLeft)
-			
-			for _, want := range test.wantContains {
-				if !strings.Contains(result, want) {
-					t.Errorf("formatDisplayInfo() result should contain %q, got: %s", want, result)
-				}
-			}
-		})
-	}
-}
+// formatDisplayInfo is not a method on the TOTP provider - it uses the shared helper functions
