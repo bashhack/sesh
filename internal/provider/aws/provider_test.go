@@ -10,23 +10,24 @@ import (
 
 	"github.com/bashhack/sesh/internal/aws"
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
-	"github.com/bashhack/sesh/internal/keychain"
 	keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
-	"github.com/bashhack/sesh/internal/totp"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
 
 func TestProvider_Name(t *testing.T) {
 	p := &Provider{}
-	assert.Equal(t, "aws", p.Name())
+	if got := p.Name(); got != "aws" {
+		t.Errorf("Name() = %v, want %v", got, "aws")
+	}
 }
 
 func TestProvider_Description(t *testing.T) {
 	p := &Provider{}
-	assert.Equal(t, "Amazon Web Services CLI authentication", p.Description())
+	want := "Amazon Web Services CLI authentication"
+	if got := p.Description(); got != want {
+		t.Errorf("Description() = %v, want %v", got, want)
+	}
 }
 
 func TestProvider_SetupFlags(t *testing.T) {
@@ -62,20 +63,30 @@ func TestProvider_SetupFlags(t *testing.T) {
 
 			// Setup flags
 			err := p.SetupFlags(fs)
-			if test.wantErr {
-				assert.Error(t, err)
+			if test.wantErr && err == nil {
+				t.Error("SetupFlags() expected error but got nil")
 				return
 			}
-			assert.NoError(t, err)
+			if !test.wantErr && err != nil {
+				t.Errorf("SetupFlags() unexpected error: %v", err)
+				return
+			}
 
 			// Parse empty args to get defaults
-			err = fs.Parse([]string{})
-			assert.NoError(t, err)
+			if err := fs.Parse([]string{}); err != nil {
+				t.Errorf("Parse() error: %v", err)
+			}
 
 			// Check values
-			assert.Equal(t, test.wantProfile, p.profile)
-			assert.False(t, p.noSubshell)
-			assert.NotEmpty(t, p.keyUser) // Should be set to current user
+			if p.profile != test.wantProfile {
+				t.Errorf("profile = %v, want %v", p.profile, test.wantProfile)
+			}
+			if p.noSubshell {
+				t.Error("noSubshell should be false by default")
+			}
+			if p.keyUser == "" {
+				t.Error("keyUser should be set to current user")
+			}
 		})
 	}
 }
@@ -84,17 +95,31 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 	p := &Provider{}
 	flags := p.GetFlagInfo()
 
-	assert.Len(t, flags, 2)
+	if len(flags) != 2 {
+		t.Errorf("GetFlagInfo() returned %d flags, want 2", len(flags))
+	}
 
 	// Check profile flag
-	assert.Equal(t, "profile", flags[0].Name)
-	assert.Equal(t, "string", flags[0].Type)
-	assert.False(t, flags[0].Required)
+	if flags[0].Name != "profile" {
+		t.Errorf("flag[0].Name = %v, want 'profile'", flags[0].Name)
+	}
+	if flags[0].Type != "string" {
+		t.Errorf("flag[0].Type = %v, want 'string'", flags[0].Type)
+	}
+	if flags[0].Required {
+		t.Error("profile flag should not be required")
+	}
 
 	// Check no-subshell flag
-	assert.Equal(t, "no-subshell", flags[1].Name)
-	assert.Equal(t, "bool", flags[1].Type)
-	assert.False(t, flags[1].Required)
+	if flags[1].Name != "no-subshell" {
+		t.Errorf("flag[1].Name = %v, want 'no-subshell'", flags[1].Name)
+	}
+	if flags[1].Type != "bool" {
+		t.Errorf("flag[1].Type = %v, want 'bool'", flags[1].Type)
+	}
+	if flags[1].Required {
+		t.Error("no-subshell flag should not be required")
+	}
 }
 
 func TestProvider_ShouldUseSubshell(t *testing.T) {
@@ -116,7 +141,9 @@ func TestProvider_ShouldUseSubshell(t *testing.T) {
 		test := test
 		t.Run(name, func(t *testing.T) {
 			p := &Provider{noSubshell: test.noSubshell}
-			assert.Equal(t, test.want, p.ShouldUseSubshell())
+			if got := p.ShouldUseSubshell(); got != test.want {
+				t.Errorf("ShouldUseSubshell() = %v, want %v", got, test.want)
+			}
 		})
 	}
 }
@@ -124,53 +151,62 @@ func TestProvider_ShouldUseSubshell(t *testing.T) {
 func TestProvider_ValidateRequest(t *testing.T) {
 	tests := map[string]struct {
 		profile       string
-		setupKeychain func(*keychainMocks.SecureKeychain)
+		setupKeychain func(*keychainMocks.MockProvider)
 		wantErr       bool
 		wantErrMsg    string
 	}{
 		"valid request with default profile": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				// TOTP secret exists
-				m.On("GetSecret", mock.Anything, "sesh-aws-default").
-					Return([]byte("secret"), nil)
-				// MFA serial exists
-				m.On("GetSecret", mock.Anything, "sesh-aws-mfa-default").
-					Return([]byte("arn:aws:iam::123456789012:mfa/user"), nil)
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					switch service {
+					case "sesh-aws-default":
+						return []byte("secret"), nil
+					case "sesh-aws-mfa-default":
+						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
+					default:
+						return nil, fmt.Errorf("unexpected service: %s", service)
+					}
+				}
 			},
 			wantErr: false,
 		},
 		"valid request with custom profile": {
 			profile: "dev",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				// TOTP secret exists
-				m.On("GetSecret", mock.Anything, "sesh-aws-dev").
-					Return([]byte("secret"), nil)
-				// MFA serial exists
-				m.On("GetSecret", mock.Anything, "sesh-aws-mfa-dev").
-					Return([]byte("arn:aws:iam::123456789012:mfa/user"), nil)
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					switch service {
+					case "sesh-aws-dev":
+						return []byte("secret"), nil
+					case "sesh-aws-mfa-dev":
+						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
+					default:
+						return nil, fmt.Errorf("unexpected service: %s", service)
+					}
+				}
 			},
 			wantErr: false,
 		},
 		"no TOTP secret for profile": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				// TOTP secret does not exist
-				m.On("GetSecret", mock.Anything, "sesh-aws-default").
-					Return(nil, errors.New("not found"))
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					return nil, errors.New("not found")
+				}
 			},
 			wantErr:    true,
 			wantErrMsg: "no AWS entry found for profile 'default'. Run 'sesh --service aws --setup' first",
 		},
 		"no MFA serial (warning only)": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				// TOTP secret exists
-				m.On("GetSecret", mock.Anything, "sesh-aws-default").
-					Return([]byte("secret"), nil)
-				// MFA serial does not exist
-				m.On("GetSecret", mock.Anything, "sesh-aws-mfa-default").
-					Return(nil, errors.New("not found"))
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					if service == "sesh-aws-default" {
+						return []byte("secret"), nil
+					}
+					// MFA serial not found
+					return nil, errors.New("not found")
+				}
 			},
 			wantErr: false, // Should just warn, not error
 		},
@@ -179,8 +215,17 @@ func TestProvider_ValidateRequest(t *testing.T) {
 	for name, test := range tests {
 		test := test
 		t.Run(name, func(t *testing.T) {
-			// Create mocks
-			mockKeychain := new(keychainMocks.SecureKeychain)
+			// Capture stderr to suppress warning output
+			oldStderr := os.Stderr
+			_, w, _ := os.Pipe()
+			os.Stderr = w
+			defer func() {
+				w.Close()
+				os.Stderr = oldStderr
+			}()
+
+			// Create mock
+			mockKeychain := &keychainMocks.MockProvider{}
 			test.setupKeychain(mockKeychain)
 
 			// Create provider
@@ -193,16 +238,17 @@ func TestProvider_ValidateRequest(t *testing.T) {
 
 			// Test ValidateRequest
 			err := p.ValidateRequest()
-			if test.wantErr {
-				assert.Error(t, err)
-				if test.wantErrMsg != "" {
-					assert.Contains(t, err.Error(), test.wantErrMsg)
-				}
-			} else {
-				assert.NoError(t, err)
+			if test.wantErr && err == nil {
+				t.Error("ValidateRequest() expected error but got nil")
 			}
-
-			mockKeychain.AssertExpectations(t)
+			if !test.wantErr && err != nil {
+				t.Errorf("ValidateRequest() unexpected error: %v", err)
+			}
+			if test.wantErrMsg != "" && err != nil {
+				if err.Error() != test.wantErrMsg {
+					t.Errorf("error message = %v, want %v", err.Error(), test.wantErrMsg)
+				}
+			}
 		})
 	}
 }
@@ -210,43 +256,60 @@ func TestProvider_ValidateRequest(t *testing.T) {
 func TestProvider_GetTOTPCodes(t *testing.T) {
 	tests := map[string]struct {
 		profile       string
-		setupKeychain func(*keychainMocks.SecureKeychain)
-		setupTOTP     func(*totpMocks.Service)
+		setupKeychain func(*keychainMocks.MockProvider)
+		setupTOTP     func(*totpMocks.MockProvider)
 		wantErr       bool
 		wantCurrent   string
 		wantNext      string
 	}{
 		"successful TOTP generation": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				m.On("GetSecret", "testuser", "sesh-aws-default").
-					Return([]byte("MYSECRET"), nil)
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					if account == "testuser" && service == "sesh-aws-default" {
+						return []byte("MYSECRET"), nil
+					}
+					return nil, fmt.Errorf("unexpected call: %s, %s", account, service)
+				}
 			},
-			setupTOTP: func(m *totpMocks.Service) {
-				m.On("GenerateConsecutiveCodesBytes", []byte("MYSECRET")).
-					Return("123456", "654321", nil)
+			setupTOTP: func(m *totpMocks.MockProvider) {
+				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					if string(secret) == "MYSECRET" {
+						return "123456", "654321", nil
+					}
+					return "", "", fmt.Errorf("unexpected secret")
+				}
 			},
 			wantCurrent: "123456",
 			wantNext:    "654321",
 		},
 		"keychain error": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				m.On("GetSecret", "testuser", "sesh-aws-default").
-					Return(nil, errors.New("keychain locked"))
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					return nil, errors.New("keychain locked")
+				}
 			},
-			setupTOTP: func(m *totpMocks.Service) {},
-			wantErr:   true,
+			setupTOTP: func(m *totpMocks.MockProvider) {
+				// Should not be called
+				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					t.Error("GenerateConsecutiveCodesBytes should not be called")
+					return "", "", nil
+				}
+			},
+			wantErr: true,
 		},
 		"TOTP generation error": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				m.On("GetSecret", "testuser", "sesh-aws-default").
-					Return([]byte("INVALIDSECRET"), nil)
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					return []byte("INVALIDSECRET"), nil
+				}
 			},
-			setupTOTP: func(m *totpMocks.Service) {
-				m.On("GenerateConsecutiveCodesBytes", []byte("INVALIDSECRET")).
-					Return("", "", errors.New("invalid secret"))
+			setupTOTP: func(m *totpMocks.MockProvider) {
+				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					return "", "", errors.New("invalid secret")
+				}
 			},
 			wantErr: true,
 		},
@@ -255,9 +318,18 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 	for name, test := range tests {
 		test := test
 		t.Run(name, func(t *testing.T) {
+			// Capture stderr to suppress debug output
+			oldStderr := os.Stderr
+			_, w, _ := os.Pipe()
+			os.Stderr = w
+			defer func() {
+				w.Close()
+				os.Stderr = oldStderr
+			}()
+
 			// Create mocks
-			mockKeychain := new(keychainMocks.SecureKeychain)
-			mockTOTP := new(totpMocks.Service)
+			mockKeychain := &keychainMocks.MockProvider{}
+			mockTOTP := &totpMocks.MockProvider{}
 			test.setupKeychain(mockKeychain)
 			test.setupTOTP(mockTOTP)
 
@@ -272,18 +344,23 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 
 			// Test GetTOTPCodes
 			current, next, secondsLeft, err := p.GetTOTPCodes()
-			if test.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, test.wantCurrent, current)
-				assert.Equal(t, test.wantNext, next)
-				assert.Greater(t, secondsLeft, int64(0))
-				assert.LessOrEqual(t, secondsLeft, int64(30))
+			if test.wantErr && err == nil {
+				t.Error("GetTOTPCodes() expected error but got nil")
 			}
-
-			mockKeychain.AssertExpectations(t)
-			mockTOTP.AssertExpectations(t)
+			if !test.wantErr && err != nil {
+				t.Errorf("GetTOTPCodes() unexpected error: %v", err)
+			}
+			if !test.wantErr {
+				if current != test.wantCurrent {
+					t.Errorf("current code = %v, want %v", current, test.wantCurrent)
+				}
+				if next != test.wantNext {
+					t.Errorf("next code = %v, want %v", next, test.wantNext)
+				}
+				if secondsLeft <= 0 || secondsLeft > 30 {
+					t.Errorf("secondsLeft = %v, want between 1 and 30", secondsLeft)
+				}
+			}
 		})
 	}
 }
@@ -292,126 +369,165 @@ func TestProvider_GetCredentials(t *testing.T) {
 	// This is a complex integration test - we'll test the key scenarios
 	tests := map[string]struct {
 		profile       string
-		setupKeychain func(*keychainMocks.SecureKeychain)
-		setupTOTP     func(*totpMocks.Service)
-		setupAWS      func(*awsMocks.Provider)
+		setupKeychain func(*keychainMocks.MockProvider)
+		setupTOTP     func(*totpMocks.MockProvider)
+		setupAWS      func(*awsMocks.MockProvider)
 		wantErr       bool
 		checkResult   func(*testing.T, provider.Credentials)
 	}{
 		"successful credential generation": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				// GetMFASerialBytes flow
-				m.On("GetSecret", "testuser", "sesh-aws-mfa-default").
-					Return([]byte("arn:aws:iam::123456789012:mfa/user"), nil)
-				// GetTOTPCodes flow
-				m.On("GetSecret", "testuser", "sesh-aws-default").
-					Return([]byte("MYSECRET"), nil)
-			},
-			setupTOTP: func(m *totpMocks.Service) {
-				m.On("GenerateConsecutiveCodesBytes", []byte("MYSECRET")).
-					Return("123456", "654321", nil)
-			},
-			setupAWS: func(m *awsMocks.Provider) {
-				creds := aws.Credentials{
-					AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
-					SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-					SessionToken:    "AQoDYXdzEJr...",
-					Expiry:          time.Now().Add(time.Hour),
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					switch service {
+					case "sesh-aws-mfa-default":
+						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
+					case "sesh-aws-default":
+						return []byte("MYSECRET"), nil
+					default:
+						return nil, fmt.Errorf("unexpected service: %s", service)
+					}
 				}
-				m.On("GetSessionToken", "", "arn:aws:iam::123456789012:mfa/user", []byte("123456")).
-					Return(creds, nil)
+			},
+			setupTOTP: func(m *totpMocks.MockProvider) {
+				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					return "123456", "654321", nil
+				}
+			},
+			setupAWS: func(m *awsMocks.MockProvider) {
+				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
+					if serial == "arn:aws:iam::123456789012:mfa/user" && string(code) == "123456" {
+						return aws.Credentials{
+							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+							SessionToken:    "AQoDYXdzEJr...",
+							Expiry:          time.Now().Add(time.Hour),
+						}, nil
+					}
+					return aws.Credentials{}, fmt.Errorf("unexpected call")
+				}
 			},
 			wantErr: false,
 			checkResult: func(t *testing.T, creds provider.Credentials) {
-				assert.Equal(t, "aws", creds.Provider)
-				assert.True(t, creds.MFAAuthenticated)
-				assert.Len(t, creds.Variables, 3) // Should have 3 AWS env vars
-				assert.Contains(t, creds.Variables, "AWS_ACCESS_KEY_ID")
-				assert.Contains(t, creds.Variables, "AWS_SECRET_ACCESS_KEY")
-				assert.Contains(t, creds.Variables, "AWS_SESSION_TOKEN")
+				if creds.Provider != "aws" {
+					t.Errorf("Provider = %v, want 'aws'", creds.Provider)
+				}
+				if !creds.MFAAuthenticated {
+					t.Error("MFAAuthenticated should be true")
+				}
+				if len(creds.Variables) != 3 {
+					t.Errorf("Variables count = %d, want 3", len(creds.Variables))
+				}
+				if _, ok := creds.Variables["AWS_ACCESS_KEY_ID"]; !ok {
+					t.Error("Missing AWS_ACCESS_KEY_ID")
+				}
+				if _, ok := creds.Variables["AWS_SECRET_ACCESS_KEY"]; !ok {
+					t.Error("Missing AWS_SECRET_ACCESS_KEY")
+				}
+				if _, ok := creds.Variables["AWS_SESSION_TOKEN"]; !ok {
+					t.Error("Missing AWS_SESSION_TOKEN")
+				}
 			},
 		},
 		"MFA serial not in keychain - auto-detect": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				// GetMFASerialBytes - not found in keychain
-				m.On("GetSecret", "testuser", "sesh-aws-mfa-default").
-					Return(nil, errors.New("not found"))
-				// GetTOTPCodes flow
-				m.On("GetSecret", "testuser", "sesh-aws-default").
-					Return([]byte("MYSECRET"), nil)
-			},
-			setupTOTP: func(m *totpMocks.Service) {
-				m.On("GenerateConsecutiveCodesBytes", []byte("MYSECRET")).
-					Return("123456", "654321", nil)
-			},
-			setupAWS: func(m *awsMocks.Provider) {
-				// Auto-detect MFA device
-				m.On("GetFirstMFADevice", "").
-					Return("arn:aws:iam::123456789012:mfa/autodetected", nil)
-				// Then get session token
-				creds := aws.Credentials{
-					AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
-					SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-					SessionToken:    "AQoDYXdzEJr...",
-					Expiry:          time.Now().Add(time.Hour),
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					switch service {
+					case "sesh-aws-mfa-default":
+						return nil, errors.New("not found")
+					case "sesh-aws-default":
+						return []byte("MYSECRET"), nil
+					default:
+						return nil, fmt.Errorf("unexpected service: %s", service)
+					}
 				}
-				m.On("GetSessionToken", "", "arn:aws:iam::123456789012:mfa/autodetected", []byte("123456")).
-					Return(creds, nil)
+			},
+			setupTOTP: func(m *totpMocks.MockProvider) {
+				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					return "123456", "654321", nil
+				}
+			},
+			setupAWS: func(m *awsMocks.MockProvider) {
+				m.GetFirstMFADeviceFunc = func(profile string) (string, error) {
+					return "arn:aws:iam::123456789012:mfa/autodetected", nil
+				}
+				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
+					if serial == "arn:aws:iam::123456789012:mfa/autodetected" && string(code) == "123456" {
+						return aws.Credentials{
+							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+							SessionToken:    "AQoDYXdzEJr...",
+							Expiry:          time.Now().Add(time.Hour),
+						}, nil
+					}
+					return aws.Credentials{}, fmt.Errorf("unexpected call")
+				}
 			},
 			wantErr: false,
 		},
 		"retry with next code on invalid MFA": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				// GetMFASerialBytes flow
-				m.On("GetSecret", "testuser", "sesh-aws-mfa-default").
-					Return([]byte("arn:aws:iam::123456789012:mfa/user"), nil)
-				// GetTOTPCodes flow
-				m.On("GetSecret", "testuser", "sesh-aws-default").
-					Return([]byte("MYSECRET"), nil)
-			},
-			setupTOTP: func(m *totpMocks.Service) {
-				m.On("GenerateConsecutiveCodesBytes", []byte("MYSECRET")).
-					Return("123456", "654321", nil)
-			},
-			setupAWS: func(m *awsMocks.Provider) {
-				// First attempt fails with invalid MFA
-				m.On("GetSessionToken", "", "arn:aws:iam::123456789012:mfa/user", []byte("123456")).
-					Return(aws.Credentials{}, fmt.Errorf("MultiFactorAuthentication failed with invalid MFA one time pass code"))
-				// Second attempt succeeds
-				creds := aws.Credentials{
-					AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
-					SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-					SessionToken:    "AQoDYXdzEJr...",
-					Expiry:          time.Now().Add(time.Hour),
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					switch service {
+					case "sesh-aws-mfa-default":
+						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
+					case "sesh-aws-default":
+						return []byte("MYSECRET"), nil
+					default:
+						return nil, fmt.Errorf("unexpected service: %s", service)
+					}
 				}
-				m.On("GetSessionToken", "", "arn:aws:iam::123456789012:mfa/user", []byte("654321")).
-					Return(creds, nil)
+			},
+			setupTOTP: func(m *totpMocks.MockProvider) {
+				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					return "123456", "654321", nil
+				}
+			},
+			setupAWS: func(m *awsMocks.MockProvider) {
+				callCount := 0
+				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
+					callCount++
+					if callCount == 1 && string(code) == "123456" {
+						return aws.Credentials{}, fmt.Errorf("MultiFactorAuthentication failed with invalid MFA one time pass code")
+					}
+					if callCount == 2 && string(code) == "654321" {
+						return aws.Credentials{
+							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+							SessionToken:    "AQoDYXdzEJr...",
+							Expiry:          time.Now().Add(time.Hour),
+						}, nil
+					}
+					return aws.Credentials{}, fmt.Errorf("unexpected call")
+				}
 			},
 			wantErr: false,
 		},
 		"both codes fail": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.SecureKeychain) {
-				// GetMFASerialBytes flow
-				m.On("GetSecret", "testuser", "sesh-aws-mfa-default").
-					Return([]byte("arn:aws:iam::123456789012:mfa/user"), nil)
-				// GetTOTPCodes flow
-				m.On("GetSecret", "testuser", "sesh-aws-default").
-					Return([]byte("MYSECRET"), nil)
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					switch service {
+					case "sesh-aws-mfa-default":
+						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
+					case "sesh-aws-default":
+						return []byte("MYSECRET"), nil
+					default:
+						return nil, fmt.Errorf("unexpected service: %s", service)
+					}
+				}
 			},
-			setupTOTP: func(m *totpMocks.Service) {
-				m.On("GenerateConsecutiveCodesBytes", []byte("MYSECRET")).
-					Return("123456", "654321", nil)
+			setupTOTP: func(m *totpMocks.MockProvider) {
+				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					return "123456", "654321", nil
+				}
 			},
-			setupAWS: func(m *awsMocks.Provider) {
-				// Both attempts fail
-				m.On("GetSessionToken", "", "arn:aws:iam::123456789012:mfa/user", []byte("123456")).
-					Return(aws.Credentials{}, errors.New("access denied"))
-				m.On("GetSessionToken", "", "arn:aws:iam::123456789012:mfa/user", []byte("654321")).
-					Return(aws.Credentials{}, errors.New("access denied"))
+			setupAWS: func(m *awsMocks.MockProvider) {
+				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
+					return aws.Credentials{}, errors.New("access denied")
+				}
 			},
 			wantErr: true,
 		},
@@ -430,9 +546,9 @@ func TestProvider_GetCredentials(t *testing.T) {
 			}()
 
 			// Create mocks
-			mockKeychain := new(keychainMocks.SecureKeychain)
-			mockTOTP := new(totpMocks.Service)
-			mockAWS := new(awsMocks.Provider)
+			mockKeychain := &keychainMocks.MockProvider{}
+			mockTOTP := &totpMocks.MockProvider{}
+			mockAWS := &awsMocks.MockProvider{}
 			test.setupKeychain(mockKeychain)
 			test.setupTOTP(mockTOTP)
 			test.setupAWS(mockAWS)
@@ -449,32 +565,46 @@ func TestProvider_GetCredentials(t *testing.T) {
 
 			// Test GetCredentials
 			creds, err := p.GetCredentials()
-			if test.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				if test.checkResult != nil {
-					test.checkResult(t, creds)
-				}
+			if test.wantErr && err == nil {
+				t.Error("GetCredentials() expected error but got nil")
 			}
-
-			mockKeychain.AssertExpectations(t)
-			mockTOTP.AssertExpectations(t)
-			mockAWS.AssertExpectations(t)
+			if !test.wantErr && err != nil {
+				t.Errorf("GetCredentials() unexpected error: %v", err)
+			}
+			if !test.wantErr && test.checkResult != nil {
+				test.checkResult(t, creds)
+			}
 		})
 	}
 }
 
 func TestProvider_GetClipboardValue(t *testing.T) {
 	// Create mocks
-	mockKeychain := new(keychainMocks.SecureKeychain)
-	mockTOTP := new(totpMocks.Service)
+	mockKeychain := &keychainMocks.MockProvider{
+		GetSecretFunc: func(account, service string) ([]byte, error) {
+			if account == "testuser" && service == "sesh-aws-default" {
+				return []byte("MYSECRET"), nil
+			}
+			return nil, fmt.Errorf("unexpected call")
+		},
+	}
+	mockTOTP := &totpMocks.MockProvider{
+		GenerateConsecutiveCodesBytesFunc: func(secret []byte) (string, string, error) {
+			if string(secret) == "MYSECRET" {
+				return "123456", "654321", nil
+			}
+			return "", "", fmt.Errorf("unexpected secret")
+		},
+	}
 
-	// Setup expectations
-	mockKeychain.On("GetSecret", "testuser", "sesh-aws-default").
-		Return([]byte("MYSECRET"), nil)
-	mockTOTP.On("GenerateConsecutiveCodesBytes", []byte("MYSECRET")).
-		Return("123456", "654321", nil)
+	// Capture stderr to suppress debug output
+	oldStderr := os.Stderr
+	_, w, _ := os.Pipe()
+	os.Stderr = w
+	defer func() {
+		w.Close()
+		os.Stderr = oldStderr
+	}()
 
 	// Create provider
 	p := &Provider{
@@ -487,14 +617,21 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 
 	// Test GetClipboardValue
 	creds, err := p.GetClipboardValue()
-	assert.NoError(t, err)
-	assert.Equal(t, "aws", creds.Provider)
-	assert.True(t, creds.DisplayInfo.IsClipboard)
-	assert.Equal(t, "123456", creds.DisplayInfo.ClipboardValue)
-	assert.Equal(t, "AWS MFA code", creds.DisplayInfo.ClipboardTitle)
-
-	mockKeychain.AssertExpectations(t)
-	mockTOTP.AssertExpectations(t)
+	if err != nil {
+		t.Errorf("GetClipboardValue() unexpected error: %v", err)
+	}
+	if creds.Provider != "aws" {
+		t.Errorf("Provider = %v, want 'aws'", creds.Provider)
+	}
+	if !creds.DisplayInfo.IsClipboard {
+		t.Error("IsClipboard should be true")
+	}
+	if creds.DisplayInfo.ClipboardValue != "123456" {
+		t.Errorf("ClipboardValue = %v, want '123456'", creds.DisplayInfo.ClipboardValue)
+	}
+	if creds.DisplayInfo.ClipboardTitle != "AWS MFA code" {
+		t.Errorf("ClipboardTitle = %v, want 'AWS MFA code'", creds.DisplayInfo.ClipboardTitle)
+	}
 }
 
 func TestProvider_NewSubshellConfig(t *testing.T) {
@@ -510,7 +647,9 @@ func TestProvider_NewSubshellConfig(t *testing.T) {
 	}
 
 	config := p.NewSubshellConfig(creds)
-	assert.NotNil(t, config)
+	if config == nil {
+		t.Error("NewSubshellConfig() returned nil")
+	}
 	// We can't easily test the internals of the config without exposing them
 	// but we can verify it returns something
 }
@@ -542,7 +681,9 @@ func TestBuildServiceKey(t *testing.T) {
 		test := test
 		t.Run(name, func(t *testing.T) {
 			got := buildServiceKey(test.prefix, test.profile)
-			assert.Equal(t, test.want, got)
+			if got != test.want {
+				t.Errorf("buildServiceKey() = %v, want %v", got, test.want)
+			}
 		})
 	}
 }
@@ -566,7 +707,9 @@ func TestFormatProfile(t *testing.T) {
 		test := test
 		t.Run(name, func(t *testing.T) {
 			got := formatProfile(test.profile)
-			assert.Equal(t, test.want, got)
+			if got != test.want {
+				t.Errorf("formatProfile() = %v, want %v", got, test.want)
+			}
 		})
 	}
 }
