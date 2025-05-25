@@ -104,7 +104,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 				}
 			},
 			wantErr:    true,
-			wantErrMsg: "service name is required",
+			wantErrMsg: "--service-name is required for TOTP provider",
 		},
 	}
 
@@ -141,7 +141,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 	}
 }
 
-func TestProvider_GetTOTPCodes(t *testing.T) {
+func TestProvider_GetCredentials(t *testing.T) {
 	tests := map[string]struct {
 		serviceName   string
 		setupKeychain func(*keychainMocks.MockProvider)
