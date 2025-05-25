@@ -50,7 +50,7 @@ func TestDefaultProviderGetSecret(t *testing.T) {
 	}
 }
 
-func TestDefaultProviderGetMFASerial(t *testing.T) {
+func TestDefaultProviderGetMFASerialBytes(t *testing.T) {
 	origExecCommand := execCommand
 	defer func() { execCommand = origExecCommand }()
 
@@ -67,12 +67,13 @@ func TestDefaultProviderGetMFASerial(t *testing.T) {
 	}
 
 	provider := NewDefaultProvider()
-	serial, err := provider.GetMFASerial("testuser")
+	serialBytes, err := provider.GetMFASerialBytes("testuser")
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
+	serial := string(serialBytes)
 	if serial != "test-serial" {
 		t.Errorf("Expected serial 'test-serial', got '%s'", serial)
 	}

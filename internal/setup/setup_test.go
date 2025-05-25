@@ -63,96 +63,73 @@ func TestWizardErrorHandling(t *testing.T) {
 	t.Skip("Test no longer applicable with refactored setup wizard")
 }
 
-func TestRunWizard(t *testing.T) {
-	// Save original function to restore it after test
-	originalFunc := RunWizardForService
-
-	// Use a temp var to track if our mock was called
-	called := false
-	expectedService := "aws"
-	actualService := ""
-
-	// Override the function for testing
-	RunWizardForService = func(serviceName string) {
-		called = true
-		actualService = serviceName
+func TestSetupService(t *testing.T) {
+	// Mock setup handler
+	type mockSetupHandler struct {
+		name        string
+		setupCalled bool
+		setupError  error
 	}
 
-	// Restore original when done
-	defer func() {
-		RunWizardForService = originalFunc
-	}()
-
-	// Call the function under test
-	RunWizard()
-
-	// Assert our expectations
-	if !called {
-		t.Error("RunWizard did not call RunWizardForService")
+	handler := &mockSetupHandler{
+		name: "test-service",
 	}
 
-	if actualService != expectedService {
-		t.Errorf("Expected service name '%s', got '%s'", expectedService, actualService)
+	// Implement SetupHandler interface
+	handler.ServiceName = func() string {
+		return handler.name
+	}
+	handler.Setup = func() error {
+		handler.setupCalled = true
+		return handler.setupError
+	}
+
+	// Create setup service
+	service := NewSetupService(nil)
+
+	// Test registering handler
+	service.RegisterHandler(handler)
+
+	// Test getting available services
+	services := service.GetAvailableServices()
+	if len(services) != 1 {
+		t.Errorf("Expected 1 service, got %d", len(services))
+	}
+	if services[0] != "test-service" {
+		t.Errorf("Expected service 'test-service', got %s", services[0])
+	}
+
+	// Test setup for registered service
+	err := service.SetupService("test-service")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if !handler.setupCalled {
+		t.Error("Setup was not called on handler")
+	}
+
+	// Test setup for unregistered service
+	err = service.SetupService("unknown-service")
+	if err == nil {
+		t.Error("Expected error for unknown service, got nil")
 	}
 }
 
-func TestDefaultWizardRunnerRun(t *testing.T) {
-	// Save original function
-	originalFunc := RunWizard
+func TestAWSSetupHandler(t *testing.T) {
+	// This is a basic test to ensure the handler implements the interface
+	handler := NewAWSSetupHandler(nil)
 
-	// Setup test vars
-	called := false
-
-	// Replace with test version
-	RunWizard = func() {
-		called = true
-	}
-
-	// Restore when done
-	defer func() {
-		RunWizard = originalFunc
-	}()
-
-	runner := DefaultWizardRunner{}
-	err := runner.Run()
-
-	if err != nil {
-		t.Errorf("DefaultWizardRunner.Run() returned an error: %v", err)
-	}
-
-	// Verify RunWizard was called
-	if !called {
-		t.Error("DefaultWizardRunner.Run() did not result in RunWizard being called")
+	if handler.ServiceName() != "aws" {
+		t.Errorf("Expected service name 'aws', got %s", handler.ServiceName())
 	}
 }
 
-func TestDefaultWizardRunnerRunForService(t *testing.T) {
-	// Save original function
-	originalFunc := RunWizardForService
+func TestTOTPSetupHandler(t *testing.T) {
+	// This is a basic test to ensure the handler implements the interface
+	handler := NewTOTPSetupHandler(nil)
 
-	// Setup test vars
-	serviceCalled := ""
-
-	// Replace with test version
-	RunWizardForService = func(serviceName string) {
-		serviceCalled = serviceName
-	}
-
-	// Restore when done
-	defer func() {
-		RunWizardForService = originalFunc
-	}()
-
-	runner := DefaultWizardRunner{}
-	err := runner.RunForService("totp")
-
-	if err != nil {
-		t.Errorf("DefaultWizardRunner.RunForService() returned an error: %v", err)
-	}
-
-	// Verify RunWizardForService was called with the correct service name
-	if serviceCalled != "totp" {
-		t.Errorf("Expected service name 'totp', got '%s'", serviceCalled)
+	if handler.ServiceName() != "totp" {
+		t.Errorf("Expected service name 'totp', got %s", handler.ServiceName())
 	}
 }
 

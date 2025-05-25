@@ -66,6 +66,24 @@ func (p *mockProvider) GetSetupHandler() interface{} {
 	return nil
 }
 
+func (p *mockProvider) ValidateRequest() error {
+	if p.name == "error" {
+		return errors.New("mock validation error")
+	}
+	return nil
+}
+
+func (p *mockProvider) GetFlagInfo() []FlagInfo {
+	return []FlagInfo{
+		{
+			Name:        "test-flag",
+			Type:        "string",
+			Description: "Test flag",
+			Required:    false,
+		},
+	}
+}
+
 func TestRegistry_RegisterProvider(t *testing.T) {
 	registry := NewRegistry()
 
