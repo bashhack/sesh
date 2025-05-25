@@ -1,6 +1,7 @@
 package keychain
 
 import (
+	"os"
 	"os/exec"
 	"testing"
 )
@@ -24,15 +25,17 @@ func TestDefaultProviderGetSecret(t *testing.T) {
 	defer func() { execCommand = origExecCommand }()
 
 	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+		
 		if command == "whoami" {
-			// Use printf to avoid newline and ensure clean output
-			return exec.Command("printf", "testuser")
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
+		} else if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=test-secret")
 		}
-		if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
-			// Use printf to avoid newline and ensure clean output
-			return exec.Command("printf", "test-secret")
-		}
-		return exec.Command("printf", "")
+		return cmd
 	}
 
 	provider := NewDefaultProvider()
