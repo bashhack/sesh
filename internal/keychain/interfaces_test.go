@@ -4,11 +4,22 @@ import (
 	"os"
 	"os/exec"
 	"testing"
-	
-	"github.com/bashhack/sesh/internal/testutil"
 )
 
 func TestNewDefaultProvider(t *testing.T) {
+	// Mock execCommand even for provider creation to prevent any keychain access
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+	
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		// Return a no-op command for any exec calls during initialization
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+		return cmd
+	}
+	
 	provider := NewDefaultProvider()
 
 	_, ok := provider.(*DefaultProvider)
