@@ -24,7 +24,6 @@ type Provider struct {
 	// Flags
 	serviceName string
 	keyUser     string
-	label       string
 	profile     string // Used for multiple profiles for the same service
 }
 
@@ -56,7 +55,6 @@ func (p *Provider) Description() string {
 // SetupFlags adds provider-specific flags to the given FlagSet
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.serviceName, "service-name", "", "Name of the service to authenticate with")
-	fs.StringVar(&p.label, "label", "", "Label to identify this TOTP entry")
 	fs.StringVar(&p.profile, "profile", "", "Profile name for the service (for multiple accounts)")
 	
 	// Get current user like AWS provider does
