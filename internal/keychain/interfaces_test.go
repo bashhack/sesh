@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	
+	"github.com/bashhack/sesh/internal/testutil"
 )
 
 func TestNewDefaultProvider(t *testing.T) {
@@ -58,15 +60,17 @@ func TestDefaultProviderGetMFASerialBytes(t *testing.T) {
 	defer func() { execCommand = origExecCommand }()
 
 	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+		
 		if command == "whoami" {
-			// Use printf to avoid newline and ensure clean output
-			return exec.Command("printf", "testuser")
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
+		} else if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=test-serial")
 		}
-		if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
-			// Use printf to avoid newline and ensure clean output
-			return exec.Command("printf", "test-serial")
-		}
-		return exec.Command("printf", "")
+		return cmd
 	}
 
 	provider := NewDefaultProvider()
@@ -87,14 +91,19 @@ func TestDefaultProviderSetSecret(t *testing.T) {
 	defer func() { execCommand = origExecCommand }()
 
 	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+		
 		if command == "whoami" {
-			return exec.Command("printf", "testuser")
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
+		} else if command == "security" && len(args) > 0 && args[0] == "add-generic-password" {
+			// Don't set MOCK_ERROR for successful addition
+		} else {
+			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 		}
-		if command == "security" && len(args) > 0 && args[0] == "add-generic-password" {
-			// Simulate successful addition
-			return exec.Command("true")
-		}
-		return exec.Command("false")
+		return cmd
 	}
 
 	provider := NewDefaultProvider()
@@ -110,13 +119,17 @@ func TestDefaultProviderGetSecretString(t *testing.T) {
 	defer func() { execCommand = origExecCommand }()
 
 	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+		
 		if command == "whoami" {
-			return exec.Command("printf", "testuser")
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
+		} else if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=test-secret-string")
 		}
-		if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
-			return exec.Command("printf", "test-secret-string")
-		}
-		return exec.Command("printf", "")
+		return cmd
 	}
 
 	provider := NewDefaultProvider()
@@ -136,14 +149,19 @@ func TestDefaultProviderSetSecretString(t *testing.T) {
 	defer func() { execCommand = origExecCommand }()
 
 	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+		
 		if command == "whoami" {
-			return exec.Command("printf", "testuser")
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
+		} else if command == "security" && len(args) > 0 && args[0] == "add-generic-password" {
+			// Don't set MOCK_ERROR for successful addition
+		} else {
+			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 		}
-		if command == "security" && len(args) > 0 && args[0] == "add-generic-password" {
-			// Simulate successful addition
-			return exec.Command("true")
-		}
-		return exec.Command("false")
+		return cmd
 	}
 
 	provider := NewDefaultProvider()
@@ -200,14 +218,19 @@ func TestDefaultProviderDeleteEntry(t *testing.T) {
 	defer func() { execCommand = origExecCommand }()
 
 	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+		
 		if command == "whoami" {
-			return exec.Command("printf", "testuser")
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
+		} else if command == "security" && len(args) > 0 && args[0] == "delete-generic-password" {
+			// Don't set MOCK_ERROR for successful deletion
+		} else {
+			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 		}
-		if command == "security" && len(args) > 0 && args[0] == "delete-generic-password" {
-			// Simulate successful deletion
-			return exec.Command("true")
-		}
-		return exec.Command("false")
+		return cmd
 	}
 
 	provider := NewDefaultProvider()
