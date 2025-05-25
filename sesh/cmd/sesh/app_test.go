@@ -45,25 +45,63 @@ type MockKeychain struct {
 	EntriesErr   error
 }
 
-
-func (m *MockKeychain) GetSecret(user, keyName string) (string, error) {
-	return m.Secret, m.SecretErr
+// GetSecret implements keychain.Provider
+func (m *MockKeychain) GetSecret(user, service string) ([]byte, error) {
+	if m.SecretErr != nil {
+		return nil, m.SecretErr
+	}
+	return []byte(m.Secret), nil
 }
 
-func (m *MockKeychain) SetSecret(user, keyName, secret string) error {
+// SetSecret implements keychain.Provider
+func (m *MockKeychain) SetSecret(user, service string, secret []byte) error {
 	return nil
 }
 
+// GetSecretString implements keychain.Provider
+func (m *MockKeychain) GetSecretString(user, keyName string) (string, error) {
+	return m.Secret, m.SecretErr
+}
+
+// SetSecretString implements keychain.Provider
+func (m *MockKeychain) SetSecretString(user, keyName, secret string) error {
+	return nil
+}
+
+// GetMFASerialBytes implements keychain.Provider
+func (m *MockKeychain) GetMFASerialBytes(account string) ([]byte, error) {
+	return []byte("arn:aws:iam::123456789012:mfa/testuser"), nil
+}
+
+// ListEntries implements keychain.Provider
 func (m *MockKeychain) ListEntries(service string) ([]keychain.KeychainEntry, error) {
 	return m.Entries, m.EntriesErr
 }
 
+// DeleteEntry implements keychain.Provider
 func (m *MockKeychain) DeleteEntry(account, service string) error {
 	return nil
 }
 
+// StoreEntryMetadata implements keychain.Provider
+func (m *MockKeychain) StoreEntryMetadata(servicePrefix, service, account, description string) error {
+	return nil
+}
+
+// LoadEntryMetadata implements keychain.Provider
+func (m *MockKeychain) LoadEntryMetadata(servicePrefix string) ([]keychain.KeychainEntryMeta, error) {
+	return []keychain.KeychainEntryMeta{}, nil
+}
+
+// RemoveEntryMetadata implements keychain.Provider
+func (m *MockKeychain) RemoveEntryMetadata(servicePrefix, service, account string) error {
+	return nil
+}
+
 func TestNewDefaultApp(t *testing.T) {
-	app := NewDefaultApp()
+	// Create app with mocked keychain from the start
+	mockKeychain := &MockKeychain{}
+	app := NewApp(mockKeychain)
 
 	if app.Registry == nil {
 		t.Error("Registry is nil")

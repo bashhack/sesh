@@ -47,7 +47,11 @@ type VersionInfo struct {
 // NewDefaultApp creates a new App with default dependencies
 func NewDefaultApp() *App {
 	keychainProvider := keychain.NewDefaultProvider()
+	return NewApp(keychainProvider)
+}
 
+// NewApp creates a new App with a custom keychain provider
+func NewApp(keychainProvider keychain.Provider) *App {
 	setupService := setup.NewSetupService(keychainProvider)
 
 	app := &App{
