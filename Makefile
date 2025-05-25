@@ -103,11 +103,11 @@ vendor:
 	@echo 'Vendoring dependencies...'
 	go mod vendor
 
-## test: Run test suite
+## test: Run test suite (skips keychain integration tests by default)
 .PHONY: test
 test:
-	@echo 'Running tests...'
-	@./scripts/test.sh
+	@echo 'Running tests (keychain integration tests disabled)...'
+	@SKIP_KEYCHAIN_TESTS=true ./scripts/test.sh
 
 ## test/short: Run only fast tests, skipping slow or external tests
 .PHONY: test/short
@@ -115,16 +115,23 @@ test/short:
 	@echo 'Running short tests only...'
 	@go test -short ./...
 
-## test/verbose: Run tests with verbose output
+## test/verbose: Run tests with verbose output (keychain integration tests disabled)
 .PHONY: test/verbose
 test/verbose:
-	@echo 'Running tests with verbose output...'
-	@go test -v ./...
+	@echo 'Running tests with verbose output (keychain integration tests disabled)...'
+	@SKIP_KEYCHAIN_TESTS=true go test -v ./...
 
-## test/full: Run full test suite including integration tests
+## test/integration: Run full test suite including real keychain access
+.PHONY: test/integration
+test/integration:
+	@echo '⚠️  Running full test suite WITH real keychain access...'
+	@echo '   This will prompt for keychain access during tests'
+	@./scripts/test.sh
+
+## test/full: Run full test suite including integration tests (WITH real keychain)
 .PHONY: test/full
 test/full:
-	@echo 'Running full test suite...'
+	@echo '⚠️  Running full test suite WITH real keychain access...'
 	@./scripts/test.sh --full
 
 ## coverage: Run test suite with coverage
