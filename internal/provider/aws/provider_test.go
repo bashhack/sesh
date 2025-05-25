@@ -397,7 +397,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 			},
 			setupAWS: func(m *awsMocks.MockProvider) {
 				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
-					if serial == "arn:aws:iam::123456789012:mfa/user" && string(code) == "123456" {
+					if profile == "" && serial == "arn:aws:iam::123456789012:mfa/user" && string(code) == "123456" {
 						return aws.Credentials{
 							AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
 							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
@@ -454,7 +454,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 					return "arn:aws:iam::123456789012:mfa/autodetected", nil
 				}
 				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
-					if serial == "arn:aws:iam::123456789012:mfa/autodetected" && string(code) == "123456" {
+					if profile == "" && serial == "arn:aws:iam::123456789012:mfa/autodetected" && string(code) == "123456" {
 						return aws.Credentials{
 							AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
 							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
