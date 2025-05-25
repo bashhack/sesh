@@ -166,8 +166,22 @@ func TestPrintProviderUsage(t *testing.T) {
 		serviceName string
 		provider    provider.ServiceProvider
 	}{
-		"aws":  {"aws", app.Registry.GetProvider("aws")},
-		"totp": {"totp", app.Registry.GetProvider("totp")},
+		"aws":  {"aws", nil},
+		"totp": {"totp", nil},
+	}
+	
+	// Get providers and handle errors
+	if awsProvider, err := app.Registry.GetProvider("aws"); err == nil {
+		tests["aws"] = struct {
+			serviceName string
+			provider    provider.ServiceProvider
+		}{"aws", awsProvider}
+	}
+	if totpProvider, err := app.Registry.GetProvider("totp"); err == nil {
+		tests["totp"] = struct {
+			serviceName string
+			provider    provider.ServiceProvider
+		}{"totp", totpProvider}
 	}
 	
 	for name, test := range tests {

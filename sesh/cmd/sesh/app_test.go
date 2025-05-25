@@ -77,8 +77,8 @@ func TestNewDefaultApp(t *testing.T) {
 	if app.TOTP == nil {
 		t.Error("TOTP provider is nil")
 	}
-	if app.SetupWizard == nil {
-		t.Error("SetupWizard is nil")
+	if app.SetupService == nil {
+		t.Error("SetupService is nil")
 	}
 	if app.ExecLookPath == nil {
 		t.Error("ExecLookPath is nil")
