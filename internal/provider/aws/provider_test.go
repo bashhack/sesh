@@ -398,10 +398,10 @@ func TestProvider_GetCredentials(t *testing.T) {
 				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
 					if serial == "arn:aws:iam::123456789012:mfa/user" && string(code) == "123456" {
 						return aws.Credentials{
-							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+							AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
 							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 							SessionToken:    "AQoDYXdzEJr...",
-							Expiry:          time.Now().Add(time.Hour),
+							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
 						}, nil
 					}
 					return aws.Credentials{}, fmt.Errorf("unexpected call")
@@ -455,10 +455,10 @@ func TestProvider_GetCredentials(t *testing.T) {
 				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
 					if serial == "arn:aws:iam::123456789012:mfa/autodetected" && string(code) == "123456" {
 						return aws.Credentials{
-							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+							AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
 							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 							SessionToken:    "AQoDYXdzEJr...",
-							Expiry:          time.Now().Add(time.Hour),
+							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
 						}, nil
 					}
 					return aws.Credentials{}, fmt.Errorf("unexpected call")
@@ -494,10 +494,10 @@ func TestProvider_GetCredentials(t *testing.T) {
 					}
 					if callCount == 2 && string(code) == "654321" {
 						return aws.Credentials{
-							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+							AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
 							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 							SessionToken:    "AQoDYXdzEJr...",
-							Expiry:          time.Now().Add(time.Hour),
+							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
 						}, nil
 					}
 					return aws.Credentials{}, fmt.Errorf("unexpected call")
@@ -623,14 +623,15 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 	if creds.Provider != "aws" {
 		t.Errorf("Provider = %v, want 'aws'", creds.Provider)
 	}
-	if !creds.DisplayInfo.IsClipboard {
-		t.Error("IsClipboard should be true")
+	if creds.CopyValue != "123456" {
+		t.Errorf("CopyValue = %v, want '123456'", creds.CopyValue)
 	}
-	if creds.DisplayInfo.ClipboardValue != "123456" {
-		t.Errorf("ClipboardValue = %v, want '123456'", creds.DisplayInfo.ClipboardValue)
+	// Check that DisplayInfo contains expected text
+	if !strings.Contains(creds.DisplayInfo, "123456") {
+		t.Errorf("DisplayInfo should contain current code")
 	}
-	if creds.DisplayInfo.ClipboardTitle != "AWS MFA code" {
-		t.Errorf("ClipboardTitle = %v, want 'AWS MFA code'", creds.DisplayInfo.ClipboardTitle)
+	if !strings.Contains(creds.DisplayInfo, "AWS MFA code") {
+		t.Errorf("DisplayInfo should contain 'AWS MFA code'")
 	}
 }
 
