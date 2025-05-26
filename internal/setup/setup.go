@@ -38,6 +38,9 @@ var generateConsecutiveCodes = totp.GenerateConsecutiveCodes
 // getCurrentUser is a variable so we can swap it out in tests
 var getCurrentUser = env.GetCurrentUser
 
+// execLookPath is a variable so we can swap it out in tests
+var execLookPath = exec.LookPath
+
 // AWS Setup Handler
 
 // AWSSetupHandler implements SetupHandler for AWS
@@ -434,7 +437,7 @@ To use this setup, run without the --profile flag
 func (h *AWSSetupHandler) Setup() error {
 	fmt.Println("🔐 Setting up AWS credentials...")
 
-	_, err := exec.LookPath("aws")
+	_, err := execLookPath("aws")
 	if err != nil {
 		return fmt.Errorf("AWS CLI not found. Please install it first: https://aws.amazon.com/cli/")
 	}
