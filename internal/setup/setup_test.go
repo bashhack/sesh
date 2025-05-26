@@ -786,63 +786,8 @@ func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
 
 // TestAWSSetupHandler_captureAWSManualEntry tests manual AWS credential entry
 func TestAWSSetupHandler_captureAWSManualEntry(t *testing.T) {
-	// Note: This function uses term.ReadPassword which reads from syscall.Stdin
-	// for the secret key, making it difficult to test the password input directly.
-	
-	tests := map[string]struct {
-		inputs     []string // access key, region
-		wantAccess string
-		wantRegion string
-		wantErr    bool
-	}{
-		"valid inputs": {
-			inputs:     []string{"AKIAIOSFODNN7EXAMPLE\n", "us-east-1\n"},
-			wantAccess: "AKIAIOSFODNN7EXAMPLE",
-			wantRegion: "us-east-1",
-			wantErr:    false,
-		},
-		"empty access key": {
-			inputs:     []string{"\n", "us-east-1\n"},
-			wantAccess: "",
-			wantRegion: "",
-			wantErr:    true,
-		},
-		"access key with spaces": {
-			inputs:     []string{"  AKIAIOSFODNN7EXAMPLE  \n", "us-west-2\n"},
-			wantAccess: "AKIAIOSFODNN7EXAMPLE",
-			wantRegion: "us-west-2",
-			wantErr:    false,
-		},
-	}
-
-	for name, test := range tests {
-		test := test
-		t.Run(name, func(t *testing.T) {
-			// Create handler with mock reader for non-password inputs
-			handler := &AWSSetupHandler{
-				reader: bufio.NewReader(strings.NewReader(strings.Join(test.inputs, ""))),
-			}
-
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			// Note: The actual secret key input using term.ReadPassword
-			// cannot be easily mocked, so we focus on testing the 
-			// access key and region input handling
-			t.Skip("captureAWSManualEntry uses term.ReadPassword for secret key - requires integration testing")
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-		})
-	}
+	t.Skip("captureAWSManualEntry uses term.ReadPassword for secret key - requires integration testing")
 }
-
 // TestAWSSetupHandler_captureMFASecret tests MFA secret capture
 func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
 	// Note: This function uses term.ReadPassword which reads from syscall.Stdin
