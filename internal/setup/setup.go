@@ -643,20 +643,20 @@ func (h *TOTPSetupHandler) Setup() error {
 	}
 
 	// Validate and normalize the TOTP secret
-	normalizedSecret, err := totp.ValidateAndNormalizeSecret(secretStr)
+	normalizedSecret, err := validateAndNormalizeSecret(secretStr)
 	if err != nil {
 		return fmt.Errorf("invalid TOTP secret: %w", err)
 	}
 	secretStr = normalizedSecret
 
 	// Generate two consecutive TOTP codes
-	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
+	firstCode, secondCode, err := generateConsecutiveCodes(secretStr)
 	if err != nil {
 		return fmt.Errorf("failed to generate TOTP codes: %s", err)
 	}
 
 	// Store in keychain using the provider
-	user, err := env.GetCurrentUser()
+	user, err := getCurrentUser()
 	if err != nil {
 		return fmt.Errorf("failed to get current user: %w", err)
 	}

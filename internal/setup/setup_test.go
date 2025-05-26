@@ -12,10 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bashhack/sesh/internal/env"
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/testutil"
-	"github.com/bashhack/sesh/internal/totp"
 )
 
 // MockCommand creates a mock exec.Cmd object
@@ -1793,14 +1791,14 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 	origScanQRCode := scanQRCode
 	defer func() { scanQRCode = origScanQRCode }()
 	
-	origValidateAndNormalizeSecret := totp.ValidateAndNormalizeSecret
-	defer func() { totp.ValidateAndNormalizeSecret = origValidateAndNormalizeSecret }()
+	origValidateAndNormalizeSecret := validateAndNormalizeSecret
+	defer func() { validateAndNormalizeSecret = origValidateAndNormalizeSecret }()
 	
-	origGenerateConsecutiveCodes := totp.GenerateConsecutiveCodes
-	defer func() { totp.GenerateConsecutiveCodes = origGenerateConsecutiveCodes }()
+	origGenerateConsecutiveCodes := generateConsecutiveCodes
+	defer func() { generateConsecutiveCodes = origGenerateConsecutiveCodes }()
 	
-	origGetCurrentUser := env.GetCurrentUser
-	defer func() { env.GetCurrentUser = origGetCurrentUser }()
+	origGetCurrentUser := getCurrentUser
+	defer func() { getCurrentUser = origGetCurrentUser }()
 	
 	tests := map[string]struct {
 		userInput              string
@@ -1819,7 +1817,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 		wantErrMsg             string
 	}{
 		"successful setup with QR code": {
-			userInput:              "MyService\ndefault\n1\n", // service name, profile, QR choice
+			userInput:              "MyService\ndefault\n1\n", // service name, profile, QR choice (2 for QR)
 			scanQRError:            nil,
 			scanQRResult:           "JBSWY3DPEHPK3PXP",
 			validateError:          nil,
@@ -1834,7 +1832,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			wantErr:                false,
 		},
 		"successful setup with manual entry": {
-			userInput:              "MyService\ndefault\n2\nJBSWY3DPEHPK3PXP\n", // service name, profile, manual choice, secret
+			userInput:              "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n", // service name, profile, manual choice (1), secret
 			scanQRError:            nil,
 			scanQRResult:           "",
 			validateError:          nil,
@@ -1849,7 +1847,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			wantErr:                false,
 		},
 		"invalid secret": {
-			userInput:              "MyService\ndefault\n2\ninvalid-secret\n",
+			userInput:              "MyService\ndefault\n1\ninvalid-secret\n",
 			scanQRError:            nil,
 			scanQRResult:           "",
 			validateError:          errors.New("invalid base32"),
@@ -1865,7 +1863,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			wantErrMsg:             "invalid TOTP secret",
 		},
 		"generate codes error": {
-			userInput:              "MyService\ndefault\n2\nJBSWY3DPEHPK3PXP\n",
+			userInput:              "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
 			scanQRError:            nil,
 			scanQRResult:           "",
 			validateError:          nil,
@@ -1881,7 +1879,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			wantErrMsg:             "failed to generate TOTP codes",
 		},
 		"get current user error": {
-			userInput:              "MyService\ndefault\n2\nJBSWY3DPEHPK3PXP\n",
+			userInput:              "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
 			scanQRError:            nil,
 			scanQRResult:           "",
 			validateError:          nil,
@@ -1897,7 +1895,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			wantErrMsg:             "failed to get current user",
 		},
 		"keychain store error": {
-			userInput:              "MyService\ndefault\n2\nJBSWY3DPEHPK3PXP\n",
+			userInput:              "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
 			scanQRError:            nil,
 			scanQRResult:           "",
 			validateError:          nil,
@@ -1913,7 +1911,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			wantErrMsg:             "failed to store secret in keychain",
 		},
 		"metadata store error (warning only)": {
-			userInput:              "MyService\ndefault\n2\nJBSWY3DPEHPK3PXP\n",
+			userInput:              "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
 			scanQRError:            nil,
 			scanQRResult:           "",
 			validateError:          nil,
@@ -1956,14 +1954,14 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			}
 			
 			// Mock totp functions
-			totp.ValidateAndNormalizeSecret = func(secret string) (string, error) {
+			validateAndNormalizeSecret = func(secret string) (string, error) {
 				if test.validateError != nil {
 					return "", test.validateError
 				}
 				return test.normalizedSecret, nil
 			}
 			
-			totp.GenerateConsecutiveCodes = func(secret string) (string, string, error) {
+			generateConsecutiveCodes = func(secret string) (string, string, error) {
 				if test.generateError != nil {
 					return "", "", test.generateError
 				}
@@ -1971,7 +1969,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			}
 			
 			// Mock env.GetCurrentUser
-			env.GetCurrentUser = func() (string, error) {
+			getCurrentUser = func() (string, error) {
 				if test.getCurrentUserError != nil {
 					return "", test.getCurrentUserError
 				}
@@ -1979,7 +1977,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			}
 			
 			// Create mock keychain provider
-			mockKeychain := &mocks.MockKeychain{
+			mockKeychain := &mocks.MockProvider{
 				SetSecretStringFunc: func(user, service, secret string) error {
 					return test.setSecretError
 				},
