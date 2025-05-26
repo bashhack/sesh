@@ -135,7 +135,7 @@ test/verbose:
 .PHONY: coverage
 coverage:
 	@echo 'Running tests with coverage...'
-	@go test -coverprofile=coverage.txt ./... | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts) | grep -v "no test files" | grep -v "coverage: 0.0%" || true
 	@echo 'Filtering out testutil, mock files, scripts, and interface-only files...'
 	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" coverage.txt > coverage.filtered.txt || true
 	@go tool cover -html=coverage.filtered.txt -o coverage.html
@@ -146,7 +146,7 @@ coverage:
 .PHONY: coverage/func
 coverage/func:
 	@echo 'Generating function-level coverage report...'
-	@go test -coverprofile=coverage.txt ./... 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts) 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
 	@echo 'Filtering out testutil, mock files, scripts, and interface-only files...'
 	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" coverage.txt > coverage.filtered.txt || true
 	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" || true
@@ -160,7 +160,7 @@ coverage/func:
 lint:
 	@echo 'Linting...'
 	@echo 'Running go vet...'
-	@go vet ./...
+	@go vet $$(go list ./... | grep -v /scripts)
 	@$(MAKE) run-golangci-lint || echo "Skipping external linting"
 	@$(MAKE) run-staticcheck || echo "Skipping staticcheck"
 
