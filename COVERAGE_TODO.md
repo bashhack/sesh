@@ -57,6 +57,6 @@ These are primarily display/output functions:
 3. **Provider constructors** should be straightforward to test
 4. **Output functions** can be tested by capturing stdout
 
-## Current Overall Coverage: 68.4%
+## Current Overall Coverage: 70.4%
 
 Target: Increase coverage by focusing on high-priority items first.
