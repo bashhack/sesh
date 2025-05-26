@@ -17,6 +17,9 @@ import (
 	"time"
 )
 
+// execCommand is a variable so we can swap it out in tests
+var execCommand = exec.Command
+
 // AWS Setup Handler
 
 // AWSSetupHandler implements SetupHandler for AWS
