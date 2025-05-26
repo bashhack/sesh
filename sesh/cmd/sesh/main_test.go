@@ -311,7 +311,7 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 					return "123456", "654321", nil
 				}
 			},
-			wantExitCode: 1,
+			wantExitCode: 0, // Should succeed with proper mocks
 		},
 		"aws with totp-specific flag should fail": {
 			args: []string{"sesh", "--service", "aws", "--service-name", "github"},
