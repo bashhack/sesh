@@ -10,10 +10,10 @@ echo ""
 echo "📊 Generating test coverage..."
 go test -coverprofile=coverage.txt ./...
 
-# Filter out mocks, testutil, and interface-only files
+# Filter out mocks, testutil, scripts, and interface-only files
 echo "Filtering coverage report..."
-grep -v "testutil\|mock\|provider/interfaces.go" coverage.txt > coverage.filtered.txt || true
-go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go" || true
+grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" coverage.txt > coverage.filtered.txt || true
+go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" || true
 rm -f coverage.filtered.txt
 
 echo ""
