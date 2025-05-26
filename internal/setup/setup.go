@@ -20,6 +20,9 @@ import (
 // execCommand is a variable so we can swap it out in tests
 var execCommand = exec.Command
 
+// readPassword is a variable so we can swap it out in tests
+var readPassword = term.ReadPassword
+
 // AWS Setup Handler
 
 // AWSSetupHandler implements SetupHandler for AWS
@@ -578,7 +581,7 @@ func (h *TOTPSetupHandler) captureQRCodeWithFallback() (string, error) {
 // captureManualEntry handles manual secret entry with secure memory handling
 func (h *TOTPSetupHandler) captureManualEntry() (string, error) {
 	fmt.Println("Enter your TOTP secret key (this will not be echoed):")
-	secret, err := term.ReadPassword(int(syscall.Stdin))
+	secret, err := readPassword(int(syscall.Stdin))
 	if err != nil {
 		return "", fmt.Errorf("failed to read secret: %w", err)
 	}

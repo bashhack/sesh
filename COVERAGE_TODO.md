@@ -23,7 +23,7 @@ These are the most important functions that need test coverage:
 These support the setup flow and should be tested:
 
 #### AWS Setup Helpers
-- `internal/setup/setup.go:64` - `verifyAWSCredentials`
+✅ ~~`internal/setup/setup.go:64` - `verifyAWSCredentials`~~ (DONE)
 - `internal/setup/setup.go:82` - `captureMFASecret`
 - `internal/setup/setup.go:127` - `captureAWSQRCodeWithFallback`
 - `internal/setup/setup.go:132` - `captureAWSManualEntry`
