@@ -23,6 +23,9 @@ var execCommand = exec.Command
 // readPassword is a variable so we can swap it out in tests
 var readPassword = term.ReadPassword
 
+// scanQRCode is a variable so we can swap it out in tests
+var scanQRCode = qrcode.ScanQRCode
+
 // AWS Setup Handler
 
 // AWSSetupHandler implements SetupHandler for AWS
@@ -689,7 +692,7 @@ func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, er
 		fmt.Print("Press Enter to activate screenshot mode...")
 		reader.ReadString('\n')
 
-		secretStr, err := qrcode.ScanQRCode()
+		secretStr, err := scanQRCode()
 		if err == nil {
 			fmt.Println("✅ QR code successfully captured and decoded!")
 			return secretStr, nil
