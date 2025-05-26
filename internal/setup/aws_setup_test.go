@@ -25,6 +25,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 	origGetCurrentUser := getCurrentUser
 	origScanQRCode := scanQRCode
 	origReadPassword := readPassword
+	origTimeSleep := timeSleep
 	defer func() {
 		execLookPath = origExecLookPath
 		execCommand = origExecCommand
@@ -32,38 +33,126 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		getCurrentUser = origGetCurrentUser
 		scanQRCode = origScanQRCode
 		readPassword = origReadPassword
+		timeSleep = origTimeSleep
 	}()
 
+	// Mock timeSleep to speed up tests
+	timeSleep = func(d interface{}) {}
+
 	tests := map[string]struct {
+		// Test control flags
 		awsNotFound            bool
-		profileInput           string
-		verifyCredsError       error
-		mfaMethodChoice        string
-		secretCaptureMethod    string  // "qr" or "manual"
-		qrCodeResult           string
-		qrCodeError            error
-		manualSecret           string
-		invalidSecret          bool
+		awsCommandFails        bool
+		awsCommandOutputs      map[string]string // command -> output mapping
 		getCurrentUserError    error
+		validateSecretError    error
 		keychainSaveError      error
+		scanQRError            error
+		
+		// Expected results
 		expectError            bool
 		expectedErrorMsg       string
+		
+		// Input data - this is what the user would type
+		userInput              string
 	}{
 		"aws cli not found": {
 			awsNotFound:      true,
 			expectError:      true,
 			expectedErrorMsg: "AWS CLI not found",
+			userInput:        "",
 		},
-		"empty profile name input": {
-			awsNotFound:  false,
-			profileInput: "\n", // Just newline, empty profile
-			expectError:  true,
-			expectedErrorMsg: "failed to verify AWS credentials",
+		"verify credentials fails": {
+			awsCommandFails: true,
+			expectError:     true,
+			expectedErrorMsg: "AWS credentials are not configured",
+			userInput:       "test-profile\n",
+		},
+		"invalid mfa setup choice": {
+			awsCommandOutputs: map[string]string{
+				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
+			},
+			expectError:      true,
+			expectedErrorMsg: "invalid choice",
+			userInput:       "\n3\n", // empty profile, invalid choice
+		},
+		"empty mfa setup choice": {
+			awsCommandOutputs: map[string]string{
+				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
+			},
+			expectError:      true,
+			expectedErrorMsg: "no choice made",
+			userInput:       "\n\n", // empty profile, empty choice
+		},
+		"qr scan fails": {
+			awsCommandOutputs: map[string]string{
+				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
+			},
+			scanQRError:      fmt.Errorf("camera error"),
+			expectError:      true,
+			expectedErrorMsg: "failed to capture MFA secret",
+			userInput:       "\n1\n", // empty profile, QR choice
+		},
+		"invalid totp secret": {
+			awsCommandOutputs: map[string]string{
+				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
+			},
+			validateSecretError: fmt.Errorf("invalid base32"),
+			expectError:        true,
+			expectedErrorMsg:   "invalid TOTP secret",
+			userInput:          "\n2\nINVALID_SECRET\n", // empty profile, manual entry, bad secret
+		},
+		"get current user fails": {
+			awsCommandOutputs: map[string]string{
+				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
+				"list-mfa-devices": `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+			},
+			getCurrentUserError: fmt.Errorf("user error"),
+			expectError:        true,
+			expectedErrorMsg:   "failed to get current user",
+			userInput:          "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
+		},
+		"keychain save fails": {
+			awsCommandOutputs: map[string]string{
+				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
+				"list-mfa-devices": `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+			},
+			keychainSaveError: fmt.Errorf("keychain error"),
+			expectError:       true,
+			expectedErrorMsg:  "failed to store secret in keychain",
+			userInput:         "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
+			// Mock execCommand for AWS CLI calls
+			execCommand = func(command string, args ...string) *exec.Cmd {
+				cs := []string{"-test.run=TestHelperProcess", "--", command}
+				cs = append(cs, args...)
+				cmd := exec.Command(os.Args[0], cs...)
+				
+				env := []string{"GO_WANT_HELPER_PROCESS=1"}
+				
+				if tc.awsCommandFails {
+					env = append(env, "MOCK_ERROR=1")
+				} else if len(args) > 0 {
+					// Check what AWS command is being run
+					if args[0] == "sts" && len(args) > 1 && args[1] == "get-caller-identity" {
+						if output, ok := tc.awsCommandOutputs["get-caller-identity"]; ok {
+							env = append(env, "MOCK_OUTPUT="+output)
+						}
+					} else if args[0] == "iam" && len(args) > 1 && args[1] == "list-mfa-devices" {
+						if output, ok := tc.awsCommandOutputs["list-mfa-devices"]; ok {
+							env = append(env, "MOCK_OUTPUT="+output)
+						}
+					}
+				}
+				
+				cmd.Env = env
+				return cmd
+			}
+
 			// Mock execLookPath
 			if tc.awsNotFound {
 				execLookPath = func(file string) (string, error) {
@@ -76,9 +165,9 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			}
 
 			// Mock validateAndNormalizeSecret
-			if tc.invalidSecret {
+			if tc.validateSecretError != nil {
 				validateAndNormalizeSecret = func(secret string) (string, error) {
-					return "", fmt.Errorf("invalid secret")
+					return "", tc.validateSecretError
 				}
 			} else {
 				validateAndNormalizeSecret = func(secret string) (string, error) {
@@ -99,15 +188,20 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 
 			// Mock scanQRCode
 			scanQRCode = func() (string, error) {
-				if tc.qrCodeError != nil {
-					return "", tc.qrCodeError
+				if tc.scanQRError != nil {
+					return "", tc.scanQRError
 				}
-				return tc.qrCodeResult, nil
+				return "otpauth://totp/AWS:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=AWS", nil
 			}
 
-			// Mock readPassword
+			// Mock readPassword for manual entry
 			readPassword = func(fd int) ([]byte, error) {
-				return []byte(tc.manualSecret), nil
+				// Extract the secret from userInput if manual entry
+				lines := strings.Split(tc.userInput, "\n")
+				if len(lines) >= 3 && strings.Contains(lines[1], "2") {
+					return []byte(lines[2]), nil
+				}
+				return []byte("JBSWY3DPEHPK3PXP"), nil
 			}
 
 			// Create mock keychain
@@ -123,11 +217,20 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			// Create handler with mocked reader
 			handler := &AWSSetupHandler{
 				keychainProvider: mockKeychain,
-				reader:           bufio.NewReader(strings.NewReader(tc.profileInput + "\n")),
+				reader:           bufio.NewReader(strings.NewReader(tc.userInput)),
 			}
+
+			// Capture stdout to suppress output during tests
+			oldStdout := os.Stdout
+			_, w, _ := os.Pipe()
+			os.Stdout = w
 
 			// Run setup
 			err := handler.Setup()
+
+			// Restore stdout
+			w.Close()
+			os.Stdout = oldStdout
 
 			// Check error
 			if tc.expectError {
