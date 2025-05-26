@@ -93,10 +93,46 @@ func TestVersionFlag(t *testing.T) {
 	}
 }
 
-// Skip this test since it relies on stdout capture which doesn't work
-// with the current printUsage implementation
-func TestHelpFlag(t *testing.T) {
-	t.Skip("Skipping test as it requires capturing stdout directly")
+// TestPrintUsage tests the printUsage function
+func TestPrintUsage(t *testing.T) {
+	// Capture stdout
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	printUsage()
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+
+	output := buf.String()
+
+	// Check for expected content
+	expectedStrings := []string{
+		"Usage: sesh [options]",
+		"Common options:",
+		"--service",
+		"--list",
+		"--delete",
+		"--setup",
+		"--clip",
+		"--list-services",
+		"--version",
+		"--help",
+		"Examples:",
+		"sesh --service aws",
+		"sesh --service totp --service-name github",
+		"For provider-specific help:",
+	}
+
+	for _, expected := range expectedStrings {
+		if !strings.Contains(output, expected) {
+			t.Errorf("printUsage() output missing expected string: %q", expected)
+		}
+	}
 }
 
 // TestNoAwsCli is no longer applicable - this is now handled in the AWS provider

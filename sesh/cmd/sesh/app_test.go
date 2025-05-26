@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/keychain"
@@ -489,5 +490,87 @@ func TestNewApp(t *testing.T) {
 	services := app.SetupService.GetAvailableServices()
 	if len(services) < 2 {
 		t.Errorf("Expected at least 2 setup services, got %d", len(services))
+	}
+}
+
+// TestApp_PrintCredentials tests the PrintCredentials method
+func TestApp_PrintCredentials(t *testing.T) {
+	tests := map[string]struct {
+		creds      provider.Credentials
+		wantOutput []string
+	}{
+		"aws credentials with MFA": {
+			creds: provider.Credentials{
+				Provider:         "aws",
+				MFAAuthenticated: true,
+				Expiry:           time.Now().Add(12 * time.Hour),
+				DisplayInfo:      "Using profile: default",
+				Variables: map[string]string{
+					"AWS_ACCESS_KEY_ID":     "AKIAIOSFODNN7EXAMPLE",
+					"AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+					"AWS_SESSION_TOKEN":     "FwoGZXIvYXdzEBYaDEXAMPLE",
+				},
+			},
+			wantOutput: []string{
+				"⏳ Expires at:",
+				"(valid for 11h",
+				"✅ MFA-authenticated session established",
+				"Using profile: default",
+				"# --------- ENVIRONMENT VARIABLES ---------",
+				"export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+				"export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				"export AWS_SESSION_TOKEN=FwoGZXIvYXdzEBYaDEXAMPLE",
+				"# ----------------------------------------",
+			},
+		},
+		"totp credentials": {
+			creds: provider.Credentials{
+				Provider:    "totp",
+				DisplayInfo: "TOTP code for github: 123456",
+				Variables:   map[string]string{},
+			},
+			wantOutput: []string{
+				"⏳ Expires at: unknown",
+				"TOTP code for github: 123456",
+				"# --------- ENVIRONMENT VARIABLES ---------",
+				"# ----------------------------------------",
+			},
+		},
+		"credentials without expiry": {
+			creds: provider.Credentials{
+				Provider:    "test",
+				DisplayInfo: "Test credentials",
+				Variables: map[string]string{
+					"TEST_VAR": "test_value",
+				},
+			},
+			wantOutput: []string{
+				"⏳ Expires at: unknown",
+				"Test credentials",
+				"# --------- ENVIRONMENT VARIABLES ---------",
+				"export TEST_VAR=test_value",
+				"# ----------------------------------------",
+			},
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create app with buffer stdout
+			app := &App{
+				Stdout: &bytes.Buffer{},
+			}
+
+			// Print credentials
+			app.PrintCredentials(test.creds)
+
+			// Check output
+			output := app.Stdout.(*bytes.Buffer).String()
+			for _, expected := range test.wantOutput {
+				if !strings.Contains(output, expected) {
+					t.Errorf("PrintCredentials() output missing expected string: %q", expected)
+				}
+			}
+		})
 	}
 }
