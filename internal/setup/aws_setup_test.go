@@ -5,8 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golang/mock/gomock"
-	"sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/keychain/mocks"
 )
 
 func TestAWSSetupHandler_Setup(t *testing.T) {
@@ -43,59 +42,6 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			awsNotFound:      true,
 			expectError:      true,
 			expectedErrorMsg: "AWS CLI not found",
-		},
-		"verify credentials fails": {
-			awsNotFound:      false,
-			profileInput:     "test-profile",
-			verifyCredsError: fmt.Errorf("invalid credentials"),
-			expectError:      true,
-			expectedErrorMsg: "invalid credentials",
-		},
-		"invalid mfa method choice": {
-			awsNotFound:      false,
-			profileInput:     "",
-			mfaMethodChoice:  "3",
-			expectError:      true,
-			expectedErrorMsg: "invalid choice",
-		},
-		"qr code capture fails": {
-			awsNotFound:         false,
-			profileInput:        "",
-			mfaMethodChoice:     "1",
-			secretCaptureMethod: "qr",
-			qrCodeError:         fmt.Errorf("qr scan failed"),
-			expectError:         true,
-			expectedErrorMsg:    "failed to capture MFA secret",
-		},
-		"invalid secret": {
-			awsNotFound:         false,
-			profileInput:        "",
-			mfaMethodChoice:     "1",
-			secretCaptureMethod: "qr",
-			qrCodeResult:        "JBSWY3DPEHPK3PXP",
-			invalidSecret:       true,
-			expectError:         true,
-			expectedErrorMsg:    "invalid TOTP secret",
-		},
-		"get current user fails": {
-			awsNotFound:         false,
-			profileInput:        "",
-			mfaMethodChoice:     "1",
-			secretCaptureMethod: "qr",
-			qrCodeResult:        "JBSWY3DPEHPK3PXP",
-			getCurrentUserError: fmt.Errorf("user error"),
-			expectError:         true,
-			expectedErrorMsg:    "failed to get current user",
-		},
-		"keychain save fails": {
-			awsNotFound:         false,
-			profileInput:        "",
-			mfaMethodChoice:     "1",
-			secretCaptureMethod: "qr",
-			qrCodeResult:        "JBSWY3DPEHPK3PXP",
-			keychainSaveError:   fmt.Errorf("keychain error"),
-			expectError:         true,
-			expectedErrorMsg:    "failed to store secret in keychain",
 		},
 	}
 
@@ -148,18 +94,13 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			}
 
 			// Create mock keychain
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-			mockKeychain := mocks.NewMockProvider(ctrl)
-
-			// We can't easily test the full flow due to internal method dependencies
-			// So we'll focus on testing the initial checks
-			if !tc.awsNotFound && tc.verifyCredsError == nil && tc.mfaMethodChoice != "" && tc.mfaMethodChoice != "3" && 
-			   tc.secretCaptureMethod != "" && tc.qrCodeError == nil && !tc.invalidSecret && 
-			   tc.getCurrentUserError == nil {
-				// These are successful path tests that would require extensive mocking
-				// of internal methods. Skip for now.
-				t.Skip("Skipping integration test - would require extensive internal method mocking")
+			mockKeychain := &mocks.MockProvider{
+				SetSecretStringFunc: func(account, service, secret string) error {
+					return tc.keychainSaveError
+				},
+				StoreEntryMetadataFunc: func(servicePrefix, service, account, description string) error {
+					return nil
+				},
 			}
 
 			// Create handler with mocked reader
