@@ -299,6 +299,9 @@ func TestApp_DeleteEntry(t *testing.T) {
 			entryID:     "sesh-totp-github:testuser",
 			setupApp: func(app *App) {
 				mockProvider := &MockProvider{
+					NameFunc: func() string {
+						return "totp"
+					},
 					DeleteEntryFunc: func(id string) error {
 						if id == "sesh-totp-github:testuser" {
 							return nil
@@ -323,6 +326,9 @@ func TestApp_DeleteEntry(t *testing.T) {
 			entryID:     "sesh-totp-github:testuser",
 			setupApp: func(app *App) {
 				mockProvider := &MockProvider{
+					NameFunc: func() string {
+						return "totp"
+					},
 					DeleteEntryFunc: func(id string) error {
 						return errors.New("keychain error")
 					},

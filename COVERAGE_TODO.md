@@ -15,9 +15,9 @@ These are the most important functions that need test coverage:
 
 #### Main Entry Points
 - `sesh/cmd/sesh/main.go:20` - `main` - Application entry point
-- `sesh/cmd/sesh/app.go:48` - `NewDefaultApp` - Default app constructor
-- `sesh/cmd/sesh/app.go:164` - `RunSetup` - Setup command handler
-- `sesh/cmd/sesh/app.go:149` - `DeleteEntry` - Delete command handler
+✅ ~~`sesh/cmd/sesh/app.go:48` - `NewDefaultApp` - Default app constructor~~ (DONE)
+✅ ~~`sesh/cmd/sesh/app.go:164` - `RunSetup` - Setup command handler~~ (DONE)
+✅ ~~`sesh/cmd/sesh/app.go:149` - `DeleteEntry` - Delete command handler~~ (DONE)
 
 ### Medium Priority - Setup Helpers
 These support the setup flow and should be tested:
@@ -57,6 +57,6 @@ These are primarily display/output functions:
 3. **Provider constructors** should be straightforward to test
 4. **Output functions** can be tested by capturing stdout
 
-## Current Overall Coverage: 62.9%
+## Current Overall Coverage: 63.6%
 
 Target: Increase coverage by focusing on high-priority items first.
