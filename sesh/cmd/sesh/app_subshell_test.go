@@ -3,9 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -231,7 +229,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 		"subshell exits with error": {
 			serviceName: "aws",
 			setupEnv: map[string]string{
-				"SHELL": "/bin/false", // Shell that always exits with error
+				"SHELL": "/usr/bin/false", // Shell that always exits with error
 			},
 			setupApp: func(app *App) {
 				mockProvider := &MockSubshellProvider{
@@ -271,6 +269,9 @@ func TestApp_LaunchSubshell(t *testing.T) {
 		},
 		"subshell command not found": {
 			serviceName: "aws",
+			setupEnv: map[string]string{
+				"SHELL": "/nonexistent/shell", // Non-existent shell
+			},
 			setupApp: func(app *App) {
 				mockProvider := &MockSubshellProvider{
 					MockProvider: MockProvider{
@@ -349,8 +350,26 @@ func TestApp_LaunchSubshell(t *testing.T) {
 	}
 }
 
+// mockExitErrorShellCustomizer implements a shell customizer that causes the shell to exit with error
+type mockExitErrorShellCustomizer struct {
+	mockShellCustomizer
+}
+
+func (m *mockExitErrorShellCustomizer) GetBashInitScript() string {
+	return `exit 1`
+}
+
+func (m *mockExitErrorShellCustomizer) GetFallbackInitScript() string {
+	return `exit 1`
+}
+
 // TestApp_LaunchSubshell_RealExitError tests handling of real exit errors
 func TestApp_LaunchSubshell_RealExitError(t *testing.T) {
+	// Save and restore SHELL env var
+	oldShell := os.Getenv("SHELL")
+	os.Setenv("SHELL", "/bin/bash") // Use bash for predictable behavior
+	defer os.Setenv("SHELL", oldShell)
+
 	// This test simulates a shell that exits with a non-zero status
 	app := &App{
 		Registry: provider.NewRegistry(),
@@ -377,7 +396,7 @@ func TestApp_LaunchSubshell_RealExitError(t *testing.T) {
 				ServiceName: "aws",
 				Variables:   creds.Variables,
 				Expiry:      creds.Expiry,
-				ShellCustomizer: &mockShellCustomizer{},
+				ShellCustomizer: &mockExitErrorShellCustomizer{},
 			}
 		},
 	}

@@ -46,9 +46,9 @@ These support the setup flow and should be tested:
 ### Lower Priority - Output Functions
 These are primarily display/output functions:
 
-- `sesh/cmd/sesh/main.go:202` - `printUsage` - Help text display
-- `sesh/cmd/sesh/app.go:264` - `PrintCredentials` - Credential output formatting
-- `sesh/cmd/sesh/app_subshell.go:13` - `LaunchSubshell` - Subshell launching
+✅ ~~`sesh/cmd/sesh/main.go:202` - `printUsage` - Help text display~~ (DONE)
+✅ ~~`sesh/cmd/sesh/app.go:264` - `PrintCredentials` - Credential output formatting~~ (DONE)
+✅ ~~`sesh/cmd/sesh/app_subshell.go:13` - `LaunchSubshell` - Subshell launching~~ (DONE)
 
 ## Testing Strategy Notes
 
@@ -57,6 +57,6 @@ These are primarily display/output functions:
 3. **Provider constructors** should be straightforward to test
 4. **Output functions** can be tested by capturing stdout
 
-## Current Overall Coverage: 63.6%
+## Current Overall Coverage: 68.4%
 
 Target: Increase coverage by focusing on high-priority items first.
