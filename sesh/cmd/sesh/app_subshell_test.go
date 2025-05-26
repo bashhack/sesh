@@ -14,6 +14,38 @@ import (
 	"github.com/bashhack/sesh/internal/subshell"
 )
 
+// mockShellCustomizer implements subshell.ShellCustomizer
+type mockShellCustomizer struct{}
+
+func (m *mockShellCustomizer) GetZshInitScript() string {
+	return `
+# Mock Zsh prompt customization
+PROMPT="(sesh:test) %~ %# "
+`
+}
+
+func (m *mockShellCustomizer) GetBashInitScript() string {
+	return `
+# Mock Bash prompt customization
+PS1="(sesh:test) \w \$ "
+`
+}
+
+func (m *mockShellCustomizer) GetFallbackInitScript() string {
+	return `
+# Mock fallback shell
+echo "Entering sesh environment"
+`
+}
+
+func (m *mockShellCustomizer) GetPromptPrefix() string {
+	return "(sesh:test) "
+}
+
+func (m *mockShellCustomizer) GetWelcomeMessage() string {
+	return "🔐 Secure shell with test credentials activated."
+}
+
 // MockSubshellProvider is a mock that implements both ServiceProvider and SubshellProvider
 type MockSubshellProvider struct {
 	MockProvider
@@ -151,6 +183,9 @@ func TestApp_LaunchSubshell(t *testing.T) {
 		},
 		"successful subshell launch": {
 			serviceName: "aws",
+			setupEnv: map[string]string{
+				"SHELL": "/bin/echo", // Use echo as shell for testing
+			},
 			setupApp: func(app *App) {
 				mockProvider := &MockSubshellProvider{
 					MockProvider: MockProvider{
@@ -195,6 +230,9 @@ func TestApp_LaunchSubshell(t *testing.T) {
 		},
 		"subshell exits with error": {
 			serviceName: "aws",
+			setupEnv: map[string]string{
+				"SHELL": "/bin/false", // Shell that always exits with error
+			},
 			setupApp: func(app *App) {
 				mockProvider := &MockSubshellProvider{
 					MockProvider: MockProvider{
@@ -212,8 +250,10 @@ func TestApp_LaunchSubshell(t *testing.T) {
 					},
 					NewSubshellConfigFunc: func(creds provider.Credentials) interface{} {
 						return subshell.Config{
-							Shell: "/bin/false", // Command that always exits with error
-							Env:   append(os.Environ(), "SESH_ACTIVE=1"),
+							ServiceName: "aws",
+							Variables:   creds.Variables,
+							Expiry:      creds.Expiry,
+							ShellCustomizer: &mockShellCustomizer{},
 						}
 					},
 				}
@@ -248,8 +288,10 @@ func TestApp_LaunchSubshell(t *testing.T) {
 					},
 					NewSubshellConfigFunc: func(creds provider.Credentials) interface{} {
 						return subshell.Config{
-							Shell: "/nonexistent/shell",
-							Env:   append(os.Environ(), "SESH_ACTIVE=1"),
+							ServiceName: "aws",
+							Variables:   creds.Variables,
+							Expiry:      creds.Expiry,
+							ShellCustomizer: &mockShellCustomizer{},
 						}
 					},
 				}
@@ -331,11 +373,11 @@ func TestApp_LaunchSubshell_RealExitError(t *testing.T) {
 			},
 		},
 		NewSubshellConfigFunc: func(creds provider.Credentials) interface{} {
-			// Use sh -c to simulate a shell that exits with status 1
 			return subshell.Config{
-				Shell: "/bin/sh",
-				Args:  []string{"-c", "exit 1"},
-				Env:   append(os.Environ(), "SESH_ACTIVE=1"),
+				ServiceName: "aws",
+				Variables:   creds.Variables,
+				Expiry:      creds.Expiry,
+				ShellCustomizer: &mockShellCustomizer{},
 			}
 		},
 	}
