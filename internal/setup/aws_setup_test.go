@@ -3,21 +3,31 @@ package setup
 import (
 	"bufio"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/testutil"
 )
+
+// TestHelperProcess is used by testutil.TestHelperProcess
+func TestHelperProcess(*testing.T) {
+	testutil.TestHelperProcess()
+}
 
 func TestAWSSetupHandler_Setup(t *testing.T) {
 	// Save original functions
 	origExecLookPath := execLookPath
+	origExecCommand := execCommand
 	origValidateAndNormalizeSecret := validateAndNormalizeSecret
 	origGetCurrentUser := getCurrentUser
 	origScanQRCode := scanQRCode
 	origReadPassword := readPassword
 	defer func() {
 		execLookPath = origExecLookPath
+		execCommand = origExecCommand
 		validateAndNormalizeSecret = origValidateAndNormalizeSecret
 		getCurrentUser = origGetCurrentUser
 		scanQRCode = origScanQRCode
@@ -43,6 +53,12 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			awsNotFound:      true,
 			expectError:      true,
 			expectedErrorMsg: "AWS CLI not found",
+		},
+		"empty profile name input": {
+			awsNotFound:  false,
+			profileInput: "\n", // Just newline, empty profile
+			expectError:  true,
+			expectedErrorMsg: "failed to verify AWS credentials",
 		},
 	}
 
