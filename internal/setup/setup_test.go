@@ -1024,6 +1024,91 @@ func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
 	}
 }
 
+// TestAWSSetupHandler_promptForMFASetupMethod tests MFA setup method selection
+func TestAWSSetupHandler_promptForMFASetupMethod(t *testing.T) {
+	tests := map[string]struct {
+		input      string
+		wantChoice string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		"choice 1 manual": {
+			input:      "1\n",
+			wantChoice: "1",
+			wantErr:    false,
+		},
+		"choice 2 qr code": {
+			input:      "2\n",
+			wantChoice: "2",
+			wantErr:    false,
+		},
+		"invalid choice 3": {
+			input:      "3\n",
+			wantChoice: "",
+			wantErr:    true,
+			wantErrMsg: "invalid choice, please select 1 or 2",
+		},
+		"invalid choice empty": {
+			input:      "\n",
+			wantChoice: "",
+			wantErr:    true,
+			wantErrMsg: "invalid choice, please select 1 or 2",
+		},
+		"choice with spaces": {
+			input:      " 1 \n",
+			wantChoice: "1",
+			wantErr:    false,
+		},
+	}
+	
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(test.input)),
+			}
+			
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+			
+			choice, err := handler.promptForMFASetupMethod()
+			
+			w.Close()
+			os.Stdout = oldStdout
+			
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+			
+			// Check that instructions were displayed
+			if !strings.Contains(output, "Let's set up a virtual MFA device") {
+				t.Error("Expected setup instructions not displayed")
+			}
+			
+			// Check choice
+			if choice != test.wantChoice {
+				t.Errorf("promptForMFASetupMethod() choice = %v, want %v", choice, test.wantChoice)
+			}
+			
+			// Check error
+			if test.wantErr && err == nil {
+				t.Error("promptForMFASetupMethod() expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("promptForMFASetupMethod() unexpected error: %v", err)
+			}
+			if test.wantErrMsg != "" && err != nil {
+				if err.Error() != test.wantErrMsg {
+					t.Errorf("error message = %v, want %v", err.Error(), test.wantErrMsg)
+				}
+			}
+		})
+	}
+}
+
 // TestAWSSetupHandler_selectMFADevice tests MFA device selection
 func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 	// Save original execCommand and restore after test
