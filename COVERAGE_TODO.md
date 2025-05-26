@@ -27,11 +27,11 @@ These support the setup flow and should be tested:
 ✅ ~~`internal/setup/setup.go:82` - `captureMFASecret`~~ (DONE)
 - `internal/setup/setup.go:127` - `captureAWSQRCodeWithFallback`
 ✅ ~~`internal/setup/setup.go:132` - `captureAWSManualEntry`~~ (DONE)
-- `internal/setup/setup.go:152` - `setupMFAConsole`
+✅ ~~`internal/setup/setup.go:152` - `setupMFAConsole`~~ (DONE)
 - `internal/setup/setup.go:178` - `selectMFADevice`
 - `internal/setup/setup.go:326` - `promptForMFAARN`
-- `internal/setup/setup.go:351` - `promptForMFASetupMethod`
-- `internal/setup/setup.go:376` - `showSetupCompletionMessage`
+✅ ~~`internal/setup/setup.go:351` - `promptForMFASetupMethod`~~ (DONE)
+✅ ~~`internal/setup/setup.go:376` - `showSetupCompletionMessage`~~ (DONE)
 
 #### TOTP Setup Helpers
 ✅ ~~`internal/setup/setup.go:521` - `promptForServiceName`~~ (DONE)
