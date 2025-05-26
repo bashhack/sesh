@@ -174,9 +174,10 @@ func TestApp_LaunchSubshell(t *testing.T) {
 					},
 					NewSubshellConfigFunc: func(creds provider.Credentials) interface{} {
 						return subshell.Config{
-							Shell: "/bin/echo",
-							Args:  []string{"test shell"},
-							Env:   append(os.Environ(), "SESH_ACTIVE=1"),
+							ServiceName: "aws",
+							Variables:   creds.Variables,
+							Expiry:      creds.Expiry,
+							ShellCustomizer: &mockShellCustomizer{},
 						}
 					},
 				}
