@@ -691,13 +691,92 @@ func TestAWSSetupHandler_promptForMFAARN(t *testing.T) {
 
 // TestTOTPSetupHandler_captureManualEntry tests the manual entry capture
 func TestTOTPSetupHandler_captureManualEntry(t *testing.T) {
-	// Note: This function uses term.ReadPassword which reads from syscall.Stdin
-	// Making it difficult to test directly. We'll test the error paths and
-	// document that the happy path requires manual integration testing.
+	// Save original readPassword and restore after test
+	origReadPassword := readPassword
+	defer func() { readPassword = origReadPassword }()
 	
-	t.Run("integration test required", func(t *testing.T) {
-		t.Skip("captureManualEntry uses term.ReadPassword which reads from syscall.Stdin - requires integration testing")
-	})
+	tests := map[string]struct {
+		secretInput string
+		readError   error
+		wantSecret  string
+		wantErr     bool
+		wantErrMsg  string
+	}{
+		"valid secret": {
+			secretInput: "JBSWY3DPEHPK3PXP",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"secret with spaces": {
+			secretInput: "  JBSWY3DPEHPK3PXP  ",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"read error": {
+			secretInput: "",
+			readError:   io.ErrUnexpectedEOF,
+			wantSecret:  "",
+			wantErr:     true,
+			wantErrMsg:  "failed to read secret",
+		},
+	}
+	
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			// Mock readPassword
+			readPassword = func(fd int) ([]byte, error) {
+				if test.readError != nil {
+					return nil, test.readError
+				}
+				return []byte(test.secretInput), nil
+			}
+			
+			handler := &TOTPSetupHandler{
+				reader: bufio.NewReader(strings.NewReader("")),
+			}
+			
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+			
+			secret, err := handler.captureManualEntry()
+			
+			w.Close()
+			os.Stdout = oldStdout
+			
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+			
+			// Check prompt was displayed
+			if !strings.Contains(output, "Enter your TOTP secret key") {
+				t.Error("Expected prompt not displayed")
+			}
+			
+			// Check secret
+			if secret != test.wantSecret {
+				t.Errorf("captureManualEntry() secret = %v, want %v", secret, test.wantSecret)
+			}
+			
+			// Check error
+			if test.wantErr && err == nil {
+				t.Error("captureManualEntry() expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("captureManualEntry() unexpected error: %v", err)
+			}
+			if test.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), test.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), test.wantErrMsg)
+				}
+			}
+		})
+	}
 }
 
 // TestAWSSetupHandler_verifyAWSCredentials tests AWS credential verification
@@ -789,12 +868,92 @@ func TestAWSSetupHandler_captureAWSManualEntry(t *testing.T) {
 }
 // TestAWSSetupHandler_captureMFASecret tests MFA secret capture
 func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
-	// Note: This function uses term.ReadPassword which reads from syscall.Stdin
-	// Making it difficult to test directly.
+	// Save original readPassword and restore after test
+	origReadPassword := readPassword
+	defer func() { readPassword = origReadPassword }()
 	
-	t.Run("integration test required", func(t *testing.T) {
-		t.Skip("captureMFASecret uses term.ReadPassword which reads from syscall.Stdin - requires integration testing")
-	})
+	tests := map[string]struct {
+		secretInput string
+		readError   error
+		wantSecret  string
+		wantErr     bool
+		wantErrMsg  string
+	}{
+		"valid MFA secret": {
+			secretInput: "JBSWY3DPEHPK3PXP",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"secret with spaces": {
+			secretInput: "  JBSWY3DPEHPK3PXP  ",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"read error": {
+			secretInput: "",
+			readError:   io.ErrUnexpectedEOF,
+			wantSecret:  "",
+			wantErr:     true,
+			wantErrMsg:  "failed to read secret",
+		},
+	}
+	
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			// Mock readPassword
+			readPassword = func(fd int) ([]byte, error) {
+				if test.readError != nil {
+					return nil, test.readError
+				}
+				return []byte(test.secretInput), nil
+			}
+			
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader("")),
+			}
+			
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+			
+			secret, err := handler.captureMFASecret("1") // Choice 1 for manual entry
+			
+			w.Close()
+			os.Stdout = oldStdout
+			
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+			
+			// Check that instructions were displayed
+			if !strings.Contains(output, "Please follow these steps") {
+				t.Error("Expected setup instructions not displayed")
+			}
+			
+			// Check secret
+			if secret != test.wantSecret {
+				t.Errorf("captureMFASecret() secret = %v, want %v", secret, test.wantSecret)
+			}
+			
+			// Check error
+			if test.wantErr && err == nil {
+				t.Error("captureMFASecret() expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("captureMFASecret() unexpected error: %v", err)
+			}
+			if test.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), test.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), test.wantErrMsg)
+				}
+			}
+		})
+	}
 }
 
 // TestAWSSetupHandler_selectMFADevice tests MFA device selection

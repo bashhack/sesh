@@ -97,7 +97,7 @@ func (h *AWSSetupHandler) captureMFASecret(choice string) (string, error) {
 ❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
 
 Paste the secret key here (this will not be echoed): `)
-		secret, err := term.ReadPassword(int(syscall.Stdin))
+		secret, err := readPassword(int(syscall.Stdin))
 		if err != nil {
 			return "", fmt.Errorf("failed to read secret: %w", err)
 		}
@@ -143,7 +143,7 @@ func (h *AWSSetupHandler) captureAWSManualEntry() (string, error) {
 ❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
 
 Paste the secret key here (this will not be echoed): `)
-	secret, err := term.ReadPassword(int(syscall.Stdin))
+	secret, err := readPassword(int(syscall.Stdin))
 	if err != nil {
 		return "", fmt.Errorf("failed to read secret: %w", err)
 	}
