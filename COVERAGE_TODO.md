@@ -25,7 +25,7 @@ These support the setup flow and should be tested:
 #### AWS Setup Helpers
 ✅ ~~`internal/setup/setup.go:64` - `verifyAWSCredentials`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:82` - `captureMFASecret`~~ (DONE)
-- `internal/setup/setup.go:127` - `captureAWSQRCodeWithFallback`
+✅ ~~`internal/setup/setup.go:127` - `captureAWSQRCodeWithFallback`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:132` - `captureAWSManualEntry`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:152` - `setupMFAConsole`~~ (DONE)
 - `internal/setup/setup.go:178` - `selectMFADevice`

@@ -1277,7 +1277,7 @@ func TestCaptureQRWithRetry(t *testing.T) {
 			wantScanCalls: 1,
 		},
 		"fail all attempts then manual": {
-			readerInput:   "\n\ny\n",
+			readerInput:   "\n\n\ny\n",  // Enter for attempt 1, Enter for attempt 2, Enter to skip retry prompt, y for manual
 			scanResults:   []error{errors.New("scan failed"), errors.New("scan failed")},
 			scanSecret:    "",
 			wantSecret:    "MANUAL_SECRET",
@@ -1285,7 +1285,7 @@ func TestCaptureQRWithRetry(t *testing.T) {
 			wantScanCalls: 2,
 		},
 		"fail all attempts and decline manual": {
-			readerInput:   "\n\nn\n",
+			readerInput:   "\n\n\nn\n",  // Enter for attempt 1, Enter for attempt 2, Enter to skip retry prompt, n to decline manual
 			scanResults:   []error{errors.New("scan failed"), errors.New("scan failed")},
 			scanSecret:    "",
 			wantSecret:    "",
