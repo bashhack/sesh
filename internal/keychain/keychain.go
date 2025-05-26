@@ -94,26 +94,20 @@ func SetSecretBytes(account, service string, secret []byte) error {
 		return fmt.Errorf("could not determine the path to the sesh binary, cannot access keychain")
 	}
 
-	// Allow only the sesh binary to access this keychain item
-	// Convert to string for the security command
-	// Note: This briefly exposes the secret in process args, but macOS security
-	// command requires it this way - it doesn't support reading passwords from stdin
+	// Use interactive mode to keep password out of process listings
+	// This approach is inspired by the Python keyring library
 	secretStr := string(secretCopy)
+	defer secure.SecureZeroString(secretStr)
 	
-	cmd := execCommand("security", "add-generic-password",
-		"-a", account,
-		"-s", service,
-		"-U",           // Update if exists
-		"-T", execPath, // Only allow the sesh binary to access this item
-		"-w", secretStr, // Password must be provided as argument
-	)
-
-	// Execute the command directly
-	err := cmd.Run()
+	// Build the command to send to security -i
+	addCmd := fmt.Sprintf("add-generic-password -a %s -s %s -w %s -U -T %s",
+		account, service, secretStr, execPath)
 	
-	// Zero the string immediately after use
-	secure.SecureZeroString(secretStr)
+	// Use security in interactive mode
+	cmd := execCommand("security", "-i")
 	
+	// Provide the command via stdin
+	err := secure.ExecWithSecretInput(cmd, []byte(addCmd+"\n"))
 	if err != nil {
 		return fmt.Errorf("failed to set secret in keychain: %w", err)
 	}
