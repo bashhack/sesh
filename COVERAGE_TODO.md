@@ -34,13 +34,13 @@ These support the setup flow and should be tested:
 - `internal/setup/setup.go:376` - `showSetupCompletionMessage`
 
 #### TOTP Setup Helpers
-- `internal/setup/setup.go:521` - `promptForServiceName`
-- `internal/setup/setup.go:534` - `promptForProfile`
-- `internal/setup/setup.go:542` - `promptForCaptureMethod`
-- `internal/setup/setup.go:559` - `captureTOTPSecret`
+✅ ~~`internal/setup/setup.go:521` - `promptForServiceName`~~ (DONE)
+✅ ~~`internal/setup/setup.go:534` - `promptForProfile`~~ (DONE)
+✅ ~~`internal/setup/setup.go:542` - `promptForCaptureMethod`~~ (DONE)
+✅ ~~`internal/setup/setup.go:559` - `captureTOTPSecret`~~ (DONE - partial, only error cases)
 - `internal/setup/setup.go:571` - `captureQRCodeWithFallback`
 - `internal/setup/setup.go:576` - `captureManualEntry`
-- `internal/setup/setup.go:591` - `showTOTPSetupCompletionMessage`
+✅ ~~`internal/setup/setup.go:591` - `showTOTPSetupCompletionMessage`~~ (DONE)
 - `internal/setup/setup.go:677` - `captureQRWithRetry`
 
 ### Lower Priority - Output Functions
