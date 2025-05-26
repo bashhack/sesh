@@ -1109,6 +1109,61 @@ func TestAWSSetupHandler_promptForMFASetupMethod(t *testing.T) {
 	}
 }
 
+// TestAWSSetupHandler_showSetupCompletionMessage tests completion message display
+func TestAWSSetupHandler_showSetupCompletionMessage(t *testing.T) {
+	tests := map[string]struct {
+		profile        string
+		wantContains   []string
+	}{
+		"default profile": {
+			profile: "",
+			wantContains: []string{
+				"Setup complete!",
+				"Run 'sesh -service aws' to generate a temporary session token",
+				"To use this setup, run without the --profile flag",
+				"The default AWS profile will be used",
+			},
+		},
+		"custom profile": {
+			profile: "dev",
+			wantContains: []string{
+				"Setup complete!",
+				"Run 'sesh -service aws' to generate a temporary session token",
+				"To use this setup, run: sesh --profile dev",
+			},
+		},
+	}
+	
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			handler := &AWSSetupHandler{}
+			
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+			
+			handler.showSetupCompletionMessage(test.profile)
+			
+			w.Close()
+			os.Stdout = oldStdout
+			
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+			
+			// Check expected content
+			for _, expected := range test.wantContains {
+				if !strings.Contains(output, expected) {
+					t.Errorf("Expected output to contain: %q", expected)
+				}
+			}
+		})
+	}
+}
+
 // TestAWSSetupHandler_selectMFADevice tests MFA device selection
 func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 	// Save original execCommand and restore after test
