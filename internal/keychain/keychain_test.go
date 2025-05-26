@@ -494,6 +494,11 @@ func TestGetSecretIntegration(t *testing.T) {
 		t.Skip("Skipping keychain test in CI environment")
 	}
 
+	// Force use of real exec.Command for this integration test
+	origExecCommand := execCommand
+	execCommand = exec.Command
+	defer func() { execCommand = origExecCommand }()
+
 	nonExistentService := "test-sesh-nonexistent-" + randomString(8)
 
 	_, err := GetSecretBytes("", nonExistentService)
@@ -510,6 +515,11 @@ func TestGetMFASerialIntegration(t *testing.T) {
 	if os.Getenv("CI") == "true" || os.Getenv("SKIP_KEYCHAIN_TESTS") == "true" {
 		t.Skip("Skipping keychain test in CI environment")
 	}
+
+	// Force use of real exec.Command for this integration test
+	origExecCommand := execCommand
+	execCommand = exec.Command
+	defer func() { execCommand = origExecCommand }()
 
 	_, err := GetMFASerialBytes("") // should use `whoami`...
 	// ...doesn't really matter here that if it succeeds or fails, just that it doesn't panic!
