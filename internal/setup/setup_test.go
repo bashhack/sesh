@@ -948,4 +948,3 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 		})
 	}
 }
-EOF < /dev/null
