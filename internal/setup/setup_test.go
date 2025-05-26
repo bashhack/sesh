@@ -3,6 +3,7 @@ package setup
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -1227,6 +1228,286 @@ func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
 				if !strings.Contains(output, expected) {
 					t.Errorf("Expected output to contain: %q", expected)
 				}
+			}
+		})
+	}
+}
+
+// TestCaptureQRWithRetry tests QR code capture with retry logic
+func TestCaptureQRWithRetry(t *testing.T) {
+	// Save original scanQRCode and restore after test
+	origScanQRCode := scanQRCode
+	defer func() { scanQRCode = origScanQRCode }()
+	
+	// Mock manual entry function
+	mockManualEntry := func() (string, error) {
+		return "MANUAL_SECRET", nil
+	}
+	
+	tests := map[string]struct {
+		readerInput    string
+		scanResults    []error  // Results for each scan attempt
+		scanSecret     string
+		wantSecret     string
+		wantErr        bool
+		wantScanCalls  int
+	}{
+		"success on first try": {
+			readerInput:   "\n",
+			scanResults:   []error{nil},
+			scanSecret:    "QR_SECRET",
+			wantSecret:    "QR_SECRET",
+			wantErr:       false,
+			wantScanCalls: 1,
+		},
+		"success on second try": {
+			readerInput:   "\n\n",
+			scanResults:   []error{errors.New("scan failed"), nil},
+			scanSecret:    "QR_SECRET",
+			wantSecret:    "QR_SECRET", 
+			wantErr:       false,
+			wantScanCalls: 2,
+		},
+		"switch to manual after first failure": {
+			readerInput:   "\nm\n",
+			scanResults:   []error{errors.New("scan failed")},
+			scanSecret:    "",
+			wantSecret:    "MANUAL_SECRET",
+			wantErr:       false,
+			wantScanCalls: 1,
+		},
+		"fail all attempts then manual": {
+			readerInput:   "\n\ny\n",
+			scanResults:   []error{errors.New("scan failed"), errors.New("scan failed")},
+			scanSecret:    "",
+			wantSecret:    "MANUAL_SECRET",
+			wantErr:       false,
+			wantScanCalls: 2,
+		},
+		"fail all attempts and decline manual": {
+			readerInput:   "\n\nn\n",
+			scanResults:   []error{errors.New("scan failed"), errors.New("scan failed")},
+			scanSecret:    "",
+			wantSecret:    "",
+			wantErr:       true,
+			wantScanCalls: 2,
+		},
+	}
+	
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			scanCallCount := 0
+			
+			// Mock scanQRCode
+			scanQRCode = func() (string, error) {
+				if scanCallCount < len(test.scanResults) {
+					err := test.scanResults[scanCallCount]
+					scanCallCount++
+					if err != nil {
+						return "", err
+					}
+					return test.scanSecret, nil
+				}
+				return "", errors.New("unexpected scan call")
+			}
+			
+			reader := bufio.NewReader(strings.NewReader(test.readerInput))
+			
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+			
+			secret, err := captureQRWithRetry(reader, mockManualEntry)
+			
+			w.Close()
+			os.Stdout = oldStdout
+			
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+			
+			// Check scan was called expected number of times
+			if scanCallCount != test.wantScanCalls {
+				t.Errorf("scanQRCode called %d times, want %d", scanCallCount, test.wantScanCalls)
+			}
+			
+			// Check secret
+			if secret != test.wantSecret {
+				t.Errorf("captureQRWithRetry() secret = %v, want %v", secret, test.wantSecret)
+			}
+			
+			// Check error
+			if test.wantErr && err == nil {
+				t.Error("captureQRWithRetry() expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("captureQRWithRetry() unexpected error: %v", err)
+			}
+			
+			// Check output contains expected prompts
+			if strings.Contains(output, "QR capture attempt") {
+				// Good, attempt message shown
+			} else {
+				t.Error("Expected QR capture attempt message")
+			}
+		})
+	}
+}
+
+// TestTOTPSetupHandler_captureQRCodeWithFallback tests TOTP QR capture wrapper
+func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
+	// Save original scanQRCode and readPassword and restore after test
+	origScanQRCode := scanQRCode
+	origReadPassword := readPassword
+	defer func() { 
+		scanQRCode = origScanQRCode
+		readPassword = origReadPassword
+	}()
+	
+	tests := map[string]struct {
+		readerInput   string
+		scanSuccess   bool
+		passwordInput string
+		wantSecret    string
+		wantErr       bool
+	}{
+		"QR scan success": {
+			readerInput: "\n",
+			scanSuccess: true,
+			wantSecret:  "QR_SECRET",
+			wantErr:     false,
+		},
+		"QR scan fails, manual entry": {
+			readerInput:   "\nm\n",
+			scanSuccess:   false,
+			passwordInput: "MANUAL_SECRET",
+			wantSecret:    "MANUAL_SECRET",
+			wantErr:       false,
+		},
+	}
+	
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			// Mock scanQRCode
+			scanQRCode = func() (string, error) {
+				if test.scanSuccess {
+					return "QR_SECRET", nil
+				}
+				return "", errors.New("scan failed")
+			}
+			
+			// Mock readPassword
+			readPassword = func(fd int) ([]byte, error) {
+				return []byte(test.passwordInput), nil
+			}
+			
+			handler := &TOTPSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(test.readerInput)),
+			}
+			
+			// Capture stdout
+			oldStdout := os.Stdout
+			_, w, _ := os.Pipe()
+			os.Stdout = w
+			
+			secret, err := handler.captureQRCodeWithFallback()
+			
+			w.Close()
+			os.Stdout = oldStdout
+			
+			// Check secret
+			if secret != test.wantSecret {
+				t.Errorf("captureQRCodeWithFallback() secret = %v, want %v", secret, test.wantSecret)
+			}
+			
+			// Check error
+			if test.wantErr && err == nil {
+				t.Error("captureQRCodeWithFallback() expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("captureQRCodeWithFallback() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestAWSSetupHandler_captureAWSQRCodeWithFallback tests AWS QR capture wrapper  
+func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
+	// Save original scanQRCode and readPassword and restore after test
+	origScanQRCode := scanQRCode
+	origReadPassword := readPassword
+	defer func() { 
+		scanQRCode = origScanQRCode
+		readPassword = origReadPassword
+	}()
+	
+	tests := map[string]struct {
+		readerInput   string
+		scanSuccess   bool
+		passwordInput string
+		wantSecret    string
+		wantErr       bool
+	}{
+		"QR scan success": {
+			readerInput: "\n",
+			scanSuccess: true,
+			wantSecret:  "AWS_QR_SECRET",
+			wantErr:     false,
+		},
+		"QR scan fails, manual entry": {
+			readerInput:   "\nm\n",
+			scanSuccess:   false,
+			passwordInput: "AWS_MANUAL_SECRET",
+			wantSecret:    "AWS_MANUAL_SECRET",
+			wantErr:       false,
+		},
+	}
+	
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			// Mock scanQRCode
+			scanQRCode = func() (string, error) {
+				if test.scanSuccess {
+					return "AWS_QR_SECRET", nil
+				}
+				return "", errors.New("scan failed")
+			}
+			
+			// Mock readPassword
+			readPassword = func(fd int) ([]byte, error) {
+				return []byte(test.passwordInput), nil
+			}
+			
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(test.readerInput)),
+			}
+			
+			// Capture stdout
+			oldStdout := os.Stdout
+			_, w, _ := os.Pipe()
+			os.Stdout = w
+			
+			secret, err := handler.captureAWSQRCodeWithFallback()
+			
+			w.Close()
+			os.Stdout = oldStdout
+			
+			// Check secret
+			if secret != test.wantSecret {
+				t.Errorf("captureAWSQRCodeWithFallback() secret = %v, want %v", secret, test.wantSecret)
+			}
+			
+			// Check error
+			if test.wantErr && err == nil {
+				t.Error("captureAWSQRCodeWithFallback() expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("captureAWSQRCodeWithFallback() unexpected error: %v", err)
 			}
 		})
 	}
