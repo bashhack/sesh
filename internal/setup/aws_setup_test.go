@@ -12,43 +12,6 @@ import (
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 )
 
-// TestHelperProcess is required for exec mocking
-func TestHelperProcess(t *testing.T) {
-	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
-		return
-	}
-	
-	// Handle the mock output
-	if os.Getenv("MOCK_ERROR") == "1" {
-		fmt.Fprintf(os.Stderr, "mock error")
-		os.Exit(1)
-	}
-	
-	// Use a simpler approach for output to avoid environment variable size limits
-	args := os.Args
-	for i, arg := range args {
-		if arg == "--" && len(args) > i+2 {
-			cmd := args[i+1]
-			if cmd == "aws" && len(args) > i+3 {
-				subcmd := args[i+2]
-				action := args[i+3]
-				
-				if subcmd == "sts" && action == "get-caller-identity" {
-					fmt.Print(`{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`)
-				} else if subcmd == "iam" && action == "list-mfa-devices" {
-					if os.Getenv("NO_MFA_DEVICES") == "1" {
-						fmt.Print(`{"MFADevices": []}`)
-					} else {
-						fmt.Print(`{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`)
-					}
-				}
-			}
-			break
-		}
-	}
-	os.Exit(0)
-}
-
 func TestAWSSetupHandler_Setup(t *testing.T) {
 	// Save original functions
 	origExecLookPath := execLookPath
@@ -193,23 +156,26 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Mock execCommand for AWS CLI calls
 			execCommand = func(command string, args ...string) *exec.Cmd {
-				cs := []string{"-test.run=TestAWSSetupHandler_Setup/TestHelperProcess", "--", command}
-				cs = append(cs, args...)
-				cmd := exec.Command(os.Args[0], cs...)
-
-				env := []string{"GO_WANT_HELPER_PROCESS=1"}
-
+				// Don't use exec.Command to spawn a subprocess at all
+				// Instead, create a command that will produce the output we want
+				mockCmd := exec.Command("echo", "")
+				
 				if tc.awsCommandFails {
-					env = append(env, "MOCK_ERROR=1")
+					mockCmd = exec.Command("sh", "-c", "echo 'mock error' >&2; exit 1")
+				} else if len(args) > 0 {
+					// Check what AWS command is being run
+					if args[0] == "sts" && len(args) > 1 && args[1] == "get-caller-identity" {
+						if output, ok := tc.awsCommandOutputs["get-caller-identity"]; ok {
+							mockCmd = exec.Command("echo", output)
+						}
+					} else if args[0] == "iam" && len(args) > 1 && args[1] == "list-mfa-devices" {
+						if output, ok := tc.awsCommandOutputs["list-mfa-devices"]; ok {
+							mockCmd = exec.Command("echo", output)
+						}
+					}
 				}
 				
-				// Special handling for "no MFA devices" test case
-				if name == "no MFA devices found" {
-					env = append(env, "NO_MFA_DEVICES=1")
-				}
-
-				cmd.Env = env
-				return cmd
+				return mockCmd
 			}
 
 			// Mock execLookPath
