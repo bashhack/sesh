@@ -1,6 +1,14 @@
+// decode_metadata.go - Utility to decode sesh keychain metadata entries
+// The metadata is stored as base64-encoded, zstd-compressed JSON
+//
+// Usage:
+//   go run decode_metadata.go <base64-data>
+//   security find-generic-password -a metadata -s sesh-metadata -w | go run decode_metadata.go
+
 package main
 
 import (
+    "bufio"
     "encoding/base64"
     "encoding/json"
     "fmt"
@@ -9,7 +17,22 @@ import (
 )
 
 func main() {
-    b64Data := "KLUv/QQA7QIAQgUTGoCpDUBRipRCoZUYCBGwAD49MKPdj76KIigBgMUZogNldVCOZKSjL1XN1CKn4OaJ3GuFwz3D0XsdFPFukOZMh7X2IXDy0RNV2+QrkgQAZxwSIwMBBAlZdzoBwpJpuQ=="
+    // Get base64 data from command line or stdin
+    var b64Data string
+    
+    if len(os.Args) > 1 {
+        b64Data = os.Args[1]
+    } else {
+        // Read from stdin if no argument provided
+        scanner := bufio.NewScanner(os.Stdin)
+        if scanner.Scan() {
+            b64Data = scanner.Text()
+        } else {
+            fmt.Println("Usage: go run decode_metadata.go <base64-data>")
+            fmt.Println("   or: echo <base64-data> | go run decode_metadata.go")
+            os.Exit(1)
+        }
+    }
     
     data, err := base64.StdEncoding.DecodeString(b64Data)
     if err != nil {
