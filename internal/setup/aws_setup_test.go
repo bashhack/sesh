@@ -158,7 +158,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				// Don't use exec.Command to spawn a subprocess at all
 				// Instead, create a command that will produce the output we want
 				mockCmd := exec.Command("echo", "")
-				
+
 				if tc.awsCommandFails {
 					mockCmd = exec.Command("sh", "-c", "echo 'mock error' >&2; exit 1")
 				} else if len(args) > 0 {
@@ -173,7 +173,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 						}
 					}
 				}
-				
+
 				return mockCmd
 			}
 
