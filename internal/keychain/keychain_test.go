@@ -2,7 +2,7 @@ package keychain
 
 import (
 	"fmt"
-	"github.com/bashhack/sesh/internal/testutil"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -855,6 +855,61 @@ func TestDeleteEntryWithEmptyAccount(t *testing.T) {
 	}
 }
 
-func TestHelperProcess(*testing.T) {
-	testutil.TestHelperProcess()
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	
+	// Get the command and args
+	args := os.Args
+	for i, arg := range args {
+		if arg == "--" {
+			args = args[i+1:]
+			break
+		}
+	}
+	
+	if len(args) < 1 {
+		os.Exit(1)
+	}
+	
+	command := args[0]
+	cmdArgs := args[1:]
+	
+	// Handle different commands
+	switch command {
+	case "security":
+		// Check if this is interactive mode
+		if len(cmdArgs) > 0 && cmdArgs[0] == "-i" {
+			// Read stdin to get the actual command
+			stdin, _ := io.ReadAll(os.Stdin)
+			stdinStr := string(stdin)
+			
+			// Parse the add-generic-password command from stdin
+			if strings.Contains(stdinStr, "add-generic-password") {
+				// In test mode, just succeed if not MOCK_ERROR
+				if os.Getenv("MOCK_ERROR") == "1" {
+					os.Exit(1)
+				}
+				os.Exit(0)
+			}
+		} else {
+			// Handle non-interactive security commands as before
+			if os.Getenv("MOCK_ERROR") == "1" {
+				os.Exit(1)
+			}
+			fmt.Print(os.Getenv("MOCK_OUTPUT"))
+			os.Exit(0)
+		}
+	case "whoami":
+		fmt.Print(os.Getenv("MOCK_OUTPUT"))
+		os.Exit(0)
+	default:
+		// For other commands, use the default behavior
+		if os.Getenv("MOCK_ERROR") == "1" {
+			os.Exit(1)
+		}
+		fmt.Print(os.Getenv("MOCK_OUTPUT"))
+		os.Exit(0)
+	}
 }
