@@ -56,9 +56,9 @@ func (h *AWSSetupHandler) createAWSCommand(profile string, args ...string) *exec
 	if profile != "" {
 		// Insert profile flag after the first argument (command)
 		profArgs := append([]string{args[0], "--profile", profile}, args[1:]...)
-		return exec.Command("aws", profArgs...)
+		return execCommand("aws", profArgs...)
 	}
-	return exec.Command("aws", args...)
+	return execCommand("aws", args...)
 }
 
 // verifyAWSCredentials checks if AWS credentials are properly configured
