@@ -1800,6 +1800,9 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 	origGetCurrentUser := getCurrentUser
 	defer func() { getCurrentUser = origGetCurrentUser }()
 	
+	origReadPassword := readPassword
+	defer func() { readPassword = origReadPassword }()
+	
 	tests := map[string]struct {
 		userInput              string
 		scanQRError            error
@@ -1974,6 +1977,16 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 					return "", test.getCurrentUserError
 				}
 				return test.currentUser, nil
+			}
+			
+			// Mock readPassword for manual entry
+			readPassword = func(fd int) ([]byte, error) {
+				// Extract the secret from userInput (it's the 4th line for manual entry)
+				lines := strings.Split(test.userInput, "\n")
+				if len(lines) >= 4 && lines[2] == "1" { // Manual entry
+					return []byte(lines[3]), nil
+				}
+				return []byte(""), nil
 			}
 			
 			// Create mock keychain provider
