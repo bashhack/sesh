@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"bufio"
 	"fmt"
 	"strings"
 	"testing"
@@ -106,7 +107,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			// Create handler with mocked reader
 			handler := &AWSSetupHandler{
 				keychainProvider: mockKeychain,
-				reader:           strings.NewReader(tc.profileInput + "\n"),
+				reader:           bufio.NewReader(strings.NewReader(tc.profileInput + "\n")),
 			}
 
 			// Run setup
