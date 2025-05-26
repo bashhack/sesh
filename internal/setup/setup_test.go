@@ -63,10 +63,6 @@ func (r *SimpleRunner) Command(command string, args ...string) *exec.Cmd {
 	)(command, args...)
 }
 
-func TestWizardErrorHandling(t *testing.T) {
-	// Skip this test since we've refactored the implementation
-	t.Skip("Test no longer applicable with refactored setup wizard")
-}
 
 // mockSetupHandler implements SetupHandler for testing
 type mockSetupHandler struct {
@@ -492,19 +488,6 @@ func TestTOTPSetupHandler(t *testing.T) {
 	}
 }
 
-// These tests are no longer applicable with the refactored setup wizard
-
-// Remove this test as it's testing the specific implementation with WizardOptions that's been refactored
-
-// Remove this test as it's testing the specific implementation with runWizardWithOptions that's been refactored
-
-// Remove this test as it's testing the specific implementation with runWizardWithOptions that's been refactored
-
-// Remove this test as it's testing the specific implementation with runWizardWithOptions that's been refactored
-
-// Remove this test as it's testing the specific implementation with runWizardWithOptions that's been refactored
-
-// Remove this test as it's testing the specific implementation with runWizardWithOptions that's been refactored
 
 func TestHelperProcess(*testing.T) {
 	testutil.TestHelperProcess()
