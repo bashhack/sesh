@@ -1,6 +1,17 @@
 #!/bin/bash
-
-# Mock TOTP Service - Simulates an external service for testing sesh
+#
+# mock-totp-service.sh - Simulates an external TOTP service for testing sesh
+#
+# Usage:
+#   ./mock-totp-service.sh [SERVICE_NAME] [ACCOUNT_NAME]
+#
+# Examples:
+#   ./mock-totp-service.sh                    # Creates TestService with testuser@example.com
+#   ./mock-totp-service.sh GitHub             # Creates GitHub with testuser@example.com
+#   ./mock-totp-service.sh Datadog ops@company.com  # Creates Datadog with ops@company.com
+#
+# This script generates a random TOTP secret and displays setup instructions
+# for testing sesh's TOTP functionality without needing real service accounts.
 
 set -euo pipefail
 
@@ -38,8 +49,10 @@ fi
 
 echo
 echo -e "${GREEN}To set up in sesh:${NC}"
-echo -e "1. Run: ${YELLOW}sesh setup totp --name $SERVICE_NAME${NC}"
-echo -e "2. When prompted for secret, enter: ${YELLOW}$SECRET${NC}"
+echo -e "1. Run: ${YELLOW}sesh --service totp --setup${NC}"
+echo -e "2. When prompted for service name, enter: ${YELLOW}$SERVICE_NAME${NC}"
+echo -e "3. When prompted for secret, enter: ${YELLOW}$SECRET${NC}"
 echo
 echo -e "${GREEN}To test:${NC}"
-echo -e "Run: ${YELLOW}sesh $SERVICE_NAME${NC}"
+echo -e "Run: ${YELLOW}sesh --service totp --service-name $SERVICE_NAME${NC}"
+echo -e "  or: ${YELLOW}sesh --service totp --service-name $SERVICE_NAME --clip${NC} (copy to clipboard)"

@@ -106,8 +106,17 @@ vendor:
 ## test: Run test suite
 .PHONY: test
 test:
-	@echo 'Running tests...'
-	@./scripts/test.sh
+	@echo '🧪 Running unit tests...'
+	@go test -v ./...
+	@echo ''
+	@echo '📊 Generating test coverage...'
+	@go test -coverprofile=coverage.txt ./...
+	@echo 'Filtering coverage report...'
+	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" coverage.txt > coverage.filtered.txt || true
+	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" || true
+	@rm -f coverage.filtered.txt
+	@echo ''
+	@echo '✅ All tests completed successfully.'
 
 ## test/short: Run only fast tests, skipping slow or external tests
 .PHONY: test/short
