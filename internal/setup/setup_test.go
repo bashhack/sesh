@@ -848,7 +848,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 			profile:    "default",
 			awsOutput:  "",
 			awsError:   false,
-			userInput:  "m\narn:aws:iam::123456789012:mfa/manual\n",
+			userInput:  "3\narn:aws:iam::123456789012:mfa/manual\n", // Choice 3 for manual entry when no devices found
 			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
 			wantErr:    false,
 		},
