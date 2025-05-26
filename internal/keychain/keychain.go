@@ -95,17 +95,25 @@ func SetSecretBytes(account, service string, secret []byte) error {
 	}
 
 	// Allow only the sesh binary to access this keychain item
-	// Use stdin instead of command-line argument for security
+	// Convert to string for the security command
+	// Note: This briefly exposes the secret in process args, but macOS security
+	// command requires it this way - it doesn't support reading passwords from stdin
+	secretStr := string(secretCopy)
+	
 	cmd := execCommand("security", "add-generic-password",
 		"-a", account,
 		"-s", service,
 		"-U",           // Update if exists
 		"-T", execPath, // Only allow the sesh binary to access this item
-		"-w",           // Read password from stdin (must be last)
+		"-w", secretStr, // Password must be provided as argument
 	)
 
-	// Use secure input handling to provide the secret via stdin
-	err := secure.ExecWithSecretInput(cmd, secretCopy)
+	// Execute the command directly
+	err := cmd.Run()
+	
+	// Zero the string immediately after use
+	secure.SecureZeroString(secretStr)
+	
 	if err != nil {
 		return fmt.Errorf("failed to set secret in keychain: %w", err)
 	}
