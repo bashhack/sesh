@@ -99,9 +99,9 @@ func SetSecretBytes(account, service string, secret []byte) error {
 	cmd := execCommand("security", "add-generic-password",
 		"-a", account,
 		"-s", service,
-		"-w",           // Read password from stdin
 		"-U",           // Update if exists
 		"-T", execPath, // Only allow the sesh binary to access this item
+		"-w",           // Read password from stdin (must be last)
 	)
 
 	// Use secure input handling to provide the secret via stdin
