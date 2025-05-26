@@ -91,8 +91,8 @@ audit:
 	go fmt ./...
 	@echo 'Running lint...'
 	@$(MAKE) lint
-	@echo 'Running tests (with keychain tests disabled)...'
-	SKIP_KEYCHAIN_TESTS=true go test -race -vet=off ./...
+	@echo 'Running tests...'
+	go test -race -vet=off ./...
 
 ## vendor: Tidy and vendor dependencies
 .PHONY: vendor
@@ -103,11 +103,11 @@ vendor:
 	@echo 'Vendoring dependencies...'
 	go mod vendor
 
-## test: Run test suite (skips keychain integration tests by default)
+## test: Run test suite
 .PHONY: test
 test:
-	@echo 'Running tests (keychain integration tests disabled)...'
-	@SKIP_KEYCHAIN_TESTS=true ./scripts/test.sh
+	@echo 'Running tests...'
+	@./scripts/test.sh
 
 ## test/short: Run only fast tests, skipping slow or external tests
 .PHONY: test/short
@@ -115,18 +115,15 @@ test/short:
 	@echo 'Running short tests only...'
 	@go test -short ./...
 
-## test/verbose: Run tests with verbose output (keychain integration tests disabled)
+## test/verbose: Run tests with verbose output
 .PHONY: test/verbose
 test/verbose:
-	@echo 'Running tests with verbose output (keychain integration tests disabled)...'
-	@SKIP_KEYCHAIN_TESTS=true go test -v ./...
+	@echo 'Running tests with verbose output...'
+	@go test -v ./...
 
-## test/integration: Run test suite including real keychain access
+## test/integration: Alias for test (all tests now CI-friendly)
 .PHONY: test/integration
-test/integration:
-	@echo '⚠️  Running tests WITH real keychain access...'
-	@echo '   This will prompt for keychain access during tests'
-	@./scripts/test.sh
+test/integration: test
 
 ## coverage: Run test suite with coverage (keychain integration tests disabled)
 .PHONY: coverage
