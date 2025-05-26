@@ -11,7 +11,6 @@ import (
 	"sync"
 	"testing"
 
-	. "github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/testutil"
 )
 
