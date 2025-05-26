@@ -12,6 +12,42 @@ import (
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 )
 
+// TestHelperProcess is required for exec mocking
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	
+	// Handle the mock output
+	if os.Getenv("MOCK_ERROR") == "1" {
+		fmt.Fprintf(os.Stderr, "mock error")
+		os.Exit(1)
+	}
+	
+	// Use a simpler approach for output to avoid environment variable size limits
+	args := os.Args
+	for i, arg := range args {
+		if arg == "--" && len(args) > i+2 {
+			cmd := args[i+1]
+			if cmd == "aws" && len(args) > i+3 {
+				subcmd := args[i+2]
+				action := args[i+3]
+				
+				if subcmd == "sts" && action == "get-caller-identity" {
+					fmt.Print(`{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`)
+				} else if subcmd == "iam" && action == "list-mfa-devices" {
+					if os.Getenv("NO_MFA_DEVICES") == "1" {
+						fmt.Print(`{"MFADevices": []}`)
+					} else {
+						fmt.Print(`{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`)
+					}
+				}
+			}
+			break
+		}
+	}
+	os.Exit(0)
+}
 
 func TestAWSSetupHandler_Setup(t *testing.T) {
 	// Save original functions
@@ -37,20 +73,20 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 
 	tests := map[string]struct {
 		// Test control flags
-		awsNotFound            bool
-		awsCommandFails        bool
-		awsCommandOutputs      map[string]string // command -> output mapping
-		getCurrentUserError    error
-		validateSecretError    error
-		keychainSaveError      error
-		scanQRError            error
-		
+		awsNotFound         bool
+		awsCommandFails     bool
+		awsCommandOutputs   map[string]string // command -> output mapping
+		getCurrentUserError error
+		validateSecretError error
+		keychainSaveError   error
+		scanQRError         error
+
 		// Expected results
-		expectError            bool
-		expectedErrorMsg       string
-		
+		expectError      bool
+		expectedErrorMsg string
+
 		// Input data - this is what the user would type
-		userInput              string
+		userInput string
 	}{
 		"aws cli not found": {
 			awsNotFound:      true,
@@ -59,10 +95,10 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			userInput:        "",
 		},
 		"verify credentials fails": {
-			awsCommandFails: true,
-			expectError:     true,
+			awsCommandFails:  true,
+			expectError:      true,
 			expectedErrorMsg: "failed to get AWS identity",
-			userInput:       "test-profile\n",
+			userInput:        "test-profile\n",
 		},
 		"invalid mfa setup choice": {
 			awsCommandOutputs: map[string]string{
@@ -70,7 +106,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			},
 			expectError:      true,
 			expectedErrorMsg: "invalid choice",
-			userInput:       "\n3\n", // empty profile, invalid choice
+			userInput:        "\n3\n", // empty profile, invalid choice
 		},
 		"empty mfa setup choice": {
 			awsCommandOutputs: map[string]string{
@@ -78,7 +114,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			},
 			expectError:      true,
 			expectedErrorMsg: "no choice made",
-			userInput:       "\n\n", // empty profile, empty choice
+			userInput:        "\n\n", // empty profile, empty choice
 		},
 		"qr scan fails": {
 			awsCommandOutputs: map[string]string{
@@ -87,31 +123,31 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			scanQRError:      fmt.Errorf("camera error"),
 			expectError:      true,
 			expectedErrorMsg: "failed to capture MFA secret",
-			userInput:       "\n1\n", // empty profile, QR choice
+			userInput:        "\n1\n", // empty profile, QR choice
 		},
 		"invalid totp secret": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
 			},
 			validateSecretError: fmt.Errorf("invalid base32"),
-			expectError:        true,
-			expectedErrorMsg:   "invalid TOTP secret",
-			userInput:          "\n2\nINVALID_SECRET\n", // empty profile, manual entry, bad secret
+			expectError:         true,
+			expectedErrorMsg:    "invalid TOTP secret",
+			userInput:           "\n2\nINVALID_SECRET\n", // empty profile, manual entry, bad secret
 		},
 		"get current user fails": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices": `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
 			},
 			getCurrentUserError: fmt.Errorf("user error"),
-			expectError:        true,
-			expectedErrorMsg:   "failed to get current user",
-			userInput:          "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
+			expectError:         true,
+			expectedErrorMsg:    "failed to get current user",
+			userInput:           "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
 		},
 		"keychain save fails": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices": `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
 			},
 			keychainSaveError: fmt.Errorf("keychain error"),
 			expectError:       true,
@@ -121,7 +157,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"successful setup with manual entry": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices": `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
 			},
 			expectError: false,
 			userInput:   "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
@@ -129,7 +165,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"successful setup with QR code": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices": `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
 			},
 			expectError: false,
 			userInput:   "\n1\n", // empty profile, QR choice
@@ -137,7 +173,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"successful setup with named profile": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices": `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
 			},
 			expectError: false,
 			userInput:   "test-profile\n2\nJBSWY3DPEHPK3PXP\n", // named profile, manual entry, valid secret
@@ -145,7 +181,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"no MFA devices found": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices": `{"MFADevices": []}`,
+				"list-mfa-devices":    `{"MFADevices": []}`,
 			},
 			expectError:      true,
 			expectedErrorMsg: "no MFA devices found",
@@ -160,9 +196,9 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				cs := []string{"-test.run=TestHelperProcess", "--", command}
 				cs = append(cs, args...)
 				cmd := exec.Command(os.Args[0], cs...)
-				
+
 				env := []string{"GO_WANT_HELPER_PROCESS=1"}
-				
+
 				if tc.awsCommandFails {
 					env = append(env, "MOCK_ERROR=1")
 				} else if len(args) > 0 {
@@ -177,7 +213,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 						}
 					}
 				}
-				
+
 				cmd.Env = env
 				return cmd
 			}
