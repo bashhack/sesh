@@ -10,8 +10,8 @@ These are the most important functions that need test coverage:
 ✅ ~~`internal/provider/totp/provider.go:70` - `GetSetupHandler` - Setup handler creation~~ (DONE)
 
 #### Setup Functions (Critical Path)
-- `internal/setup/setup.go:413` - `Setup` (AWS) - Main AWS setup flow
-- `internal/setup/setup.go:601` - `Setup` (TOTP) - Main TOTP setup flow
+- `internal/setup/setup.go:413` - `Setup` (AWS) - Main AWS setup flow (still 0%)
+✅ ~~`internal/setup/setup.go:601` - `Setup` (TOTP) - Main TOTP setup flow~~ (DONE - 90% coverage)
 
 #### Main Entry Points
 - `sesh/cmd/sesh/main.go:20` - `main` - Application entry point
@@ -57,12 +57,14 @@ These are primarily display/output functions:
 3. **Provider constructors** should be straightforward to test
 4. **Output functions** can be tested by capturing stdout
 
-## Current Overall Coverage: 74.6% → 78.5% (3.9% increase)
+## Current Overall Coverage: 74.6% → 81.1% (6.5% increase)
 
 ### Recent Progress:
 - Added comprehensive tests for `selectMFADevice` (52.2% → 95.5%)
 - Added comprehensive tests for `promptForMFAARN` (63.6% → 100%)
 - Added tests for QR code capture functions (0% → 100%)
-- Overall setup package coverage: 55.9% → 67.0%
+- Added comprehensive tests for TOTP `Setup` function (0% → 90%)
+- Overall setup package coverage: 55.9% → 79.8% (23.9% increase!)
+- Made external dependencies mockable (totp, env, time.Sleep functions)
 
 Target: Increase coverage by focusing on high-priority items first.
