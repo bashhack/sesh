@@ -107,10 +107,10 @@ vendor:
 .PHONY: test
 test:
 	@echo '🧪 Running unit tests...'
-	@go test -v ./...
+	@go test -v $$(go list ./... | grep -v /scripts)
 	@echo ''
 	@echo '📊 Generating test coverage...'
-	@go test -coverprofile=coverage.txt ./...
+	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts)
 	@echo 'Filtering coverage report...'
 	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" coverage.txt > coverage.filtered.txt || true
 	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" || true
@@ -122,13 +122,13 @@ test:
 .PHONY: test/short
 test/short:
 	@echo 'Running short tests only...'
-	@go test -short ./...
+	@go test -short $$(go list ./... | grep -v /scripts)
 
 ## test/verbose: Run tests with verbose output
 .PHONY: test/verbose
 test/verbose:
 	@echo 'Running tests with verbose output...'
-	@go test -v ./...
+	@go test -v $$(go list ./... | grep -v /scripts)
 
 
 ## coverage: Run test suite with coverage
