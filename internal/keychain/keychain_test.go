@@ -490,10 +490,6 @@ func TestGetSecretIntegration(t *testing.T) {
 		t.Skip("Skipping keychain test in short mode")
 	}
 
-	if os.Getenv("CI") == "true" || os.Getenv("SKIP_KEYCHAIN_TESTS") == "true" {
-		t.Skip("Skipping keychain test in CI environment")
-	}
-
 	// Force use of real exec.Command for this integration test
 	origExecCommand := execCommand
 	execCommand = exec.Command
