@@ -96,6 +96,7 @@ func SetSecretBytes(account, service string, secret []byte) error {
 
 	// Use interactive mode to keep password out of process listings
 	// This approach is inspired by the Python keyring library
+	// Ref: https://github.com/jaraco/keyring
 	secretStr := string(secretCopy)
 	defer secure.SecureZeroString(secretStr)
 	

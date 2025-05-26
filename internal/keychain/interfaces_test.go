@@ -336,6 +336,25 @@ func TestDefaultProviderLoadEntryMetadata(t *testing.T) {
 }
 
 func TestDefaultProviderRemoveEntryMetadata(t *testing.T) {
+	// Mock execCommand to prevent real keychain access
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+	
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+		
+		// Mock the security find-generic-password call for metadata
+		if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
+			// Return empty to simulate no existing metadata
+			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=")
+		}
+		
+		return cmd
+	}
+	
 	// Mock the saveEntryMetadata function
 	originalSaveFunc := saveEntryMetadataImpl
 	defer func() { saveEntryMetadataImpl = originalSaveFunc }()
