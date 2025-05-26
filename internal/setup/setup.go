@@ -29,6 +29,15 @@ var scanQRCode = qrcode.ScanQRCode
 // timeSleep is a variable so we can swap it out in tests
 var timeSleep = time.Sleep
 
+// validateAndNormalizeSecret is a variable so we can swap it out in tests
+var validateAndNormalizeSecret = totp.ValidateAndNormalizeSecret
+
+// generateConsecutiveCodes is a variable so we can swap it out in tests
+var generateConsecutiveCodes = totp.GenerateConsecutiveCodes
+
+// getCurrentUser is a variable so we can swap it out in tests
+var getCurrentUser = env.GetCurrentUser
+
 // AWS Setup Handler
 
 // AWSSetupHandler implements SetupHandler for AWS

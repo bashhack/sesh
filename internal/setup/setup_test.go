@@ -1785,3 +1785,255 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 		})
 	}
 }
+
+
+// TestTOTPSetupHandler_Setup tests the main TOTP setup flow
+func TestTOTPSetupHandler_Setup(t *testing.T) {
+	// Save original functions and restore after test
+	origScanQRCode := scanQRCode
+	defer func() { scanQRCode = origScanQRCode }()
+	
+	origValidateAndNormalizeSecret := totp.ValidateAndNormalizeSecret
+	defer func() { totp.ValidateAndNormalizeSecret = origValidateAndNormalizeSecret }()
+	
+	origGenerateConsecutiveCodes := totp.GenerateConsecutiveCodes
+	defer func() { totp.GenerateConsecutiveCodes = origGenerateConsecutiveCodes }()
+	
+	origGetCurrentUser := env.GetCurrentUser
+	defer func() { env.GetCurrentUser = origGetCurrentUser }()
+	
+	tests := map[string]struct {
+		userInput              string
+		scanQRError            error
+		scanQRResult           string
+		validateError          error
+		normalizedSecret       string
+		generateError          error
+		firstCode              string
+		secondCode             string
+		getCurrentUserError    error
+		currentUser            string
+		setSecretError         error
+		storeMetadataError     error
+		wantErr                bool
+		wantErrMsg             string
+	}{
+		"successful setup with QR code": {
+			userInput:              "MyService\ndefault\n1\n", // service name, profile, QR choice
+			scanQRError:            nil,
+			scanQRResult:           "JBSWY3DPEHPK3PXP",
+			validateError:          nil,
+			normalizedSecret:       "JBSWY3DPEHPK3PXP",
+			generateError:          nil,
+			firstCode:              "123456",
+			secondCode:             "789012",
+			getCurrentUserError:    nil,
+			currentUser:            "testuser",
+			setSecretError:         nil,
+			storeMetadataError:     nil,
+			wantErr:                false,
+		},
+		"successful setup with manual entry": {
+			userInput:              "MyService\ndefault\n2\nJBSWY3DPEHPK3PXP\n", // service name, profile, manual choice, secret
+			scanQRError:            nil,
+			scanQRResult:           "",
+			validateError:          nil,
+			normalizedSecret:       "JBSWY3DPEHPK3PXP",
+			generateError:          nil,
+			firstCode:              "123456",
+			secondCode:             "789012",
+			getCurrentUserError:    nil,
+			currentUser:            "testuser",
+			setSecretError:         nil,
+			storeMetadataError:     nil,
+			wantErr:                false,
+		},
+		"invalid secret": {
+			userInput:              "MyService\ndefault\n2\ninvalid-secret\n",
+			scanQRError:            nil,
+			scanQRResult:           "",
+			validateError:          errors.New("invalid base32"),
+			normalizedSecret:       "",
+			generateError:          nil,
+			firstCode:              "",
+			secondCode:             "",
+			getCurrentUserError:    nil,
+			currentUser:            "testuser",
+			setSecretError:         nil,
+			storeMetadataError:     nil,
+			wantErr:                true,
+			wantErrMsg:             "invalid TOTP secret",
+		},
+		"generate codes error": {
+			userInput:              "MyService\ndefault\n2\nJBSWY3DPEHPK3PXP\n",
+			scanQRError:            nil,
+			scanQRResult:           "",
+			validateError:          nil,
+			normalizedSecret:       "JBSWY3DPEHPK3PXP",
+			generateError:          errors.New("generate failed"),
+			firstCode:              "",
+			secondCode:             "",
+			getCurrentUserError:    nil,
+			currentUser:            "testuser",
+			setSecretError:         nil,
+			storeMetadataError:     nil,
+			wantErr:                true,
+			wantErrMsg:             "failed to generate TOTP codes",
+		},
+		"get current user error": {
+			userInput:              "MyService\ndefault\n2\nJBSWY3DPEHPK3PXP\n",
+			scanQRError:            nil,
+			scanQRResult:           "",
+			validateError:          nil,
+			normalizedSecret:       "JBSWY3DPEHPK3PXP",
+			generateError:          nil,
+			firstCode:              "123456",
+			secondCode:             "789012",
+			getCurrentUserError:    errors.New("user not found"),
+			currentUser:            "",
+			setSecretError:         nil,
+			storeMetadataError:     nil,
+			wantErr:                true,
+			wantErrMsg:             "failed to get current user",
+		},
+		"keychain store error": {
+			userInput:              "MyService\ndefault\n2\nJBSWY3DPEHPK3PXP\n",
+			scanQRError:            nil,
+			scanQRResult:           "",
+			validateError:          nil,
+			normalizedSecret:       "JBSWY3DPEHPK3PXP",
+			generateError:          nil,
+			firstCode:              "123456",
+			secondCode:             "789012",
+			getCurrentUserError:    nil,
+			currentUser:            "testuser",
+			setSecretError:         errors.New("keychain error"),
+			storeMetadataError:     nil,
+			wantErr:                true,
+			wantErrMsg:             "failed to store secret in keychain",
+		},
+		"metadata store error (warning only)": {
+			userInput:              "MyService\ndefault\n2\nJBSWY3DPEHPK3PXP\n",
+			scanQRError:            nil,
+			scanQRResult:           "",
+			validateError:          nil,
+			normalizedSecret:       "JBSWY3DPEHPK3PXP",
+			generateError:          nil,
+			firstCode:              "123456",
+			secondCode:             "789012",
+			getCurrentUserError:    nil,
+			currentUser:            "testuser",
+			setSecretError:         nil,
+			storeMetadataError:     errors.New("metadata error"),
+			wantErr:                false, // Should not fail the setup
+		},
+		"successful setup without profile": {
+			userInput:              "MyService\n\n2\nJBSWY3DPEHPK3PXP\n", // service name, empty profile, manual choice, secret
+			scanQRError:            nil,
+			scanQRResult:           "",
+			validateError:          nil,
+			normalizedSecret:       "JBSWY3DPEHPK3PXP",
+			generateError:          nil,
+			firstCode:              "123456",
+			secondCode:             "789012",
+			getCurrentUserError:    nil,
+			currentUser:            "testuser",
+			setSecretError:         nil,
+			storeMetadataError:     nil,
+			wantErr:                false,
+		},
+	}
+
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			// Mock scanQRCode
+			scanQRCode = func() (string, error) {
+				if test.scanQRError != nil {
+					return "", test.scanQRError
+				}
+				return test.scanQRResult, nil
+			}
+			
+			// Mock totp functions
+			totp.ValidateAndNormalizeSecret = func(secret string) (string, error) {
+				if test.validateError != nil {
+					return "", test.validateError
+				}
+				return test.normalizedSecret, nil
+			}
+			
+			totp.GenerateConsecutiveCodes = func(secret string) (string, string, error) {
+				if test.generateError != nil {
+					return "", "", test.generateError
+				}
+				return test.firstCode, test.secondCode, nil
+			}
+			
+			// Mock env.GetCurrentUser
+			env.GetCurrentUser = func() (string, error) {
+				if test.getCurrentUserError != nil {
+					return "", test.getCurrentUserError
+				}
+				return test.currentUser, nil
+			}
+			
+			// Create mock keychain provider
+			mockKeychain := &mocks.MockKeychain{
+				SetSecretStringFunc: func(user, service, secret string) error {
+					return test.setSecretError
+				},
+				StoreEntryMetadataFunc: func(prefix, service, user, description string) error {
+					return test.storeMetadataError
+				},
+			}
+			
+			// Create handler with mock reader and keychain
+			handler := &TOTPSetupHandler{
+				reader:           bufio.NewReader(strings.NewReader(test.userInput)),
+				keychainProvider: mockKeychain,
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			err := handler.Setup()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check error
+			if test.wantErr && err == nil {
+				t.Error("Setup() expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("Setup() unexpected error: %v", err)
+			}
+			if test.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), test.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), test.wantErrMsg)
+				}
+			}
+
+			// Verify output contains expected messages
+			if err == nil {
+				if !strings.Contains(output, "Setting up TOTP credentials") {
+					t.Error("Expected setup message")
+				}
+				if !strings.Contains(output, "Generated TOTP codes for verification") {
+					t.Error("Expected verification codes message")
+				}
+				if test.storeMetadataError != nil && !strings.Contains(output, "Warning: Failed to store metadata") {
+					t.Error("Expected metadata warning")
+				}
+			}
+		})
+	}
+}
