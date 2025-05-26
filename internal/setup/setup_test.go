@@ -800,75 +800,90 @@ func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
 
 // TestAWSSetupHandler_selectMFADevice tests MFA device selection
 func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
+	// Save original execCommand and restore after test
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+	
 	tests := map[string]struct {
-		devices     []string
-		userInput   string
-		wantDevice  string
-		wantErr     bool
-		wantErrMsg  string
+		profile       string
+		awsOutput     string  // What AWS returns when listing MFA devices
+		awsError      bool
+		userInput     string
+		wantDevice    string
+		wantErr       bool
+		wantErrMsg    string
 	}{
-		"single device": {
-			devices:    []string{"arn:aws:iam::123456789012:mfa/user"},
-			userInput:  "", // No input needed for single device
+		"single device select 1": {
+			profile:    "default",
+			awsOutput:  "arn:aws:iam::123456789012:mfa/user",
+			awsError:   false,
+			userInput:  "1\n",
 			wantDevice: "arn:aws:iam::123456789012:mfa/user",
 			wantErr:    false,
 		},
 		"multiple devices select first": {
-			devices:    []string{"arn:aws:iam::123456789012:mfa/user1", "arn:aws:iam::123456789012:mfa/user2"},
+			profile:    "default", 
+			awsOutput:  "arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2",
+			awsError:   false,
 			userInput:  "1\n",
 			wantDevice: "arn:aws:iam::123456789012:mfa/user1",
 			wantErr:    false,
 		},
 		"multiple devices select second": {
-			devices:    []string{"arn:aws:iam::123456789012:mfa/user1", "arn:aws:iam::123456789012:mfa/user2"},
+			profile:    "default",
+			awsOutput:  "arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2", 
+			awsError:   false,
 			userInput:  "2\n",
 			wantDevice: "arn:aws:iam::123456789012:mfa/user2",
 			wantErr:    false,
 		},
-		"invalid selection too high": {
-			devices:    []string{"arn:aws:iam::123456789012:mfa/user1", "arn:aws:iam::123456789012:mfa/user2"},
-			userInput:  "3\n",
-			wantDevice: "",
-			wantErr:    true,
-			wantErrMsg: "invalid selection",
+		"manual entry": {
+			profile:    "default",
+			awsOutput:  "arn:aws:iam::123456789012:mfa/user1",
+			awsError:   false,
+			userInput:  "m\narn:aws:iam::123456789012:mfa/manual\n",
+			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
+			wantErr:    false,
 		},
-		"invalid selection zero": {
-			devices:    []string{"arn:aws:iam::123456789012:mfa/user1", "arn:aws:iam::123456789012:mfa/user2"},
-			userInput:  "0\n",
-			wantDevice: "",
-			wantErr:    true,
-			wantErrMsg: "invalid selection",
-		},
-		"invalid selection text": {
-			devices:    []string{"arn:aws:iam::123456789012:mfa/user1", "arn:aws:iam::123456789012:mfa/user2"},
-			userInput:  "first\n",
-			wantDevice: "",
-			wantErr:    true,
-			wantErrMsg: "invalid input",
-		},
-		"no devices": {
-			devices:    []string{},
-			userInput:  "",
-			wantDevice: "",
-			wantErr:    true,
-			wantErrMsg: "no MFA devices found",
+		"no devices with manual entry": {
+			profile:    "default",
+			awsOutput:  "",
+			awsError:   false,
+			userInput:  "m\narn:aws:iam::123456789012:mfa/manual\n",
+			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
+			wantErr:    false,
 		},
 	}
 
 	for name, test := range tests {
 		test := test
 		t.Run(name, func(t *testing.T) {
+			// Mock execCommand to return our test data
+			execCommand = func(command string, args ...string) *exec.Cmd {
+				cs := []string{"-test.run=TestHelperProcess", "--", command}
+				cs = append(cs, args...)
+				cmd := exec.Command(os.Args[0], cs...)
+				cmd.Env = []string{
+					"GO_WANT_HELPER_PROCESS=1",
+					"MOCK_OUTPUT=" + test.awsOutput,
+				}
+				if test.awsError {
+					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
+				}
+				return cmd
+			}
+			
 			// Create handler with mock reader
 			handler := &AWSSetupHandler{
 				reader: bufio.NewReader(strings.NewReader(test.userInput)),
 			}
 
-			// Capture stdout
+			// Capture stdout  
 			oldStdout := os.Stdout
 			r, w, _ := os.Pipe()
 			os.Stdout = w
 
-			device, err := handler.selectMFADevice(test.devices)
+			device, err := handler.selectMFADevice(test.profile)
 
 			w.Close()
 			os.Stdout = oldStdout
@@ -896,16 +911,10 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 				}
 			}
 
-			// Check prompts for multiple devices
-			if len(test.devices) > 1 {
-				if !strings.Contains(output, "Multiple MFA devices found:") {
-					t.Error("Expected multiple devices prompt not displayed")
-				}
-				for i, device := range test.devices {
-					expectedPrompt := fmt.Sprintf("%d: %s", i+1, device)
-					if !strings.Contains(output, expectedPrompt) {
-						t.Errorf("Expected device option not displayed: %q", expectedPrompt)
-					}
+			// Verify the prompts were shown
+			if test.awsOutput != "" {
+				if !strings.Contains(output, "Found MFA device(s):") {
+					t.Error("Expected 'Found MFA device(s):' prompt")
 				}
 			}
 		})
