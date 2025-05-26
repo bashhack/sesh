@@ -1521,7 +1521,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 	
 	tests := map[string]struct {
 		profile       string
-		awsOutput     string  // What AWS returns when listing MFA devices
+		awsOutputs    []string  // Multiple outputs for refresh scenarios
 		awsError      bool
 		userInput     string
 		wantDevice    string
@@ -1530,7 +1530,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 	}{
 		"single device select 1": {
 			profile:    "default",
-			awsOutput:  "arn:aws:iam::123456789012:mfa/user",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user"},
 			awsError:   false,
 			userInput:  "1\n",
 			wantDevice: "arn:aws:iam::123456789012:mfa/user",
@@ -1538,7 +1538,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 		},
 		"multiple devices select first": {
 			profile:    "default", 
-			awsOutput:  "arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2"},
 			awsError:   false,
 			userInput:  "1\n",
 			wantDevice: "arn:aws:iam::123456789012:mfa/user1",
@@ -1546,7 +1546,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 		},
 		"multiple devices select second": {
 			profile:    "default",
-			awsOutput:  "arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2", 
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2"}, 
 			awsError:   false,
 			userInput:  "2\n",
 			wantDevice: "arn:aws:iam::123456789012:mfa/user2",
@@ -1554,7 +1554,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 		},
 		"manual entry": {
 			profile:    "default",
-			awsOutput:  "arn:aws:iam::123456789012:mfa/user1",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1"},
 			awsError:   false,
 			userInput:  "m\narn:aws:iam::123456789012:mfa/manual\n",
 			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
@@ -1562,9 +1562,73 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 		},
 		"no devices with manual entry": {
 			profile:    "default",
-			awsOutput:  "",
+			awsOutputs: []string{""},
 			awsError:   false,
 			userInput:  "3\narn:aws:iam::123456789012:mfa/manual\n", // Choice 3 for manual entry when no devices found
+			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
+			wantErr:    false,
+		},
+		"refresh devices": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1", "arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2"},
+			awsError:   false,
+			userInput:  "r\n2\n", // Refresh then select second device
+			wantDevice: "arn:aws:iam::123456789012:mfa/user2",
+			wantErr:    false,
+		},
+		"invalid choice then valid": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2"},
+			awsError:   false,
+			userInput:  "invalid\n1\n", // Invalid then valid choice
+			wantDevice: "arn:aws:iam::123456789012:mfa/user1",
+			wantErr:    false,
+		},
+		"out of range then valid": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1"},
+			awsError:   false,
+			userInput:  "5\n1\n", // Out of range then valid
+			wantDevice: "arn:aws:iam::123456789012:mfa/user1",
+			wantErr:    false,
+		},
+		"wait and retry": {
+			profile:    "default",
+			awsOutputs: []string{"", "arn:aws:iam::123456789012:mfa/user"}, // Initially no devices, then finds one
+			awsError:   false,
+			userInput:  "1\n1\n", // Wait option, then select first device
+			wantDevice: "arn:aws:iam::123456789012:mfa/user",
+			wantErr:    false,
+		},
+		"return to console and retry": {
+			profile:    "default",
+			awsOutputs: []string{"", "arn:aws:iam::123456789012:mfa/user"}, // Initially no devices, then finds one
+			awsError:   false,
+			userInput:  "2\n\n1\n", // Return to console, press enter, then select device
+			wantDevice: "arn:aws:iam::123456789012:mfa/user",
+			wantErr:    false,
+		},
+		"invalid retry choice": {
+			profile:    "default",
+			awsOutputs: []string{""},
+			awsError:   false,
+			userInput:  "invalid\n3\narn:aws:iam::123456789012:mfa/manual\n", // Invalid choice, then manual
+			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
+			wantErr:    false,
+		},
+		"refresh with no devices after": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1", ""}, // Has devices, refresh finds nothing
+			awsError:   false,
+			userInput:  "r\nm\narn:aws:iam::123456789012:mfa/manual\n", // Refresh finds nothing, then manual
+			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
+			wantErr:    false,
+		},
+		"exhaust retries then manual": {
+			profile:    "default",
+			awsOutputs: []string{"", "", "", ""}, // No devices found in any attempt
+			awsError:   false,
+			userInput:  "1\n1\n1\narn:aws:iam::123456789012:mfa/manual\n", // Try wait twice, exhaust retries, then manual
 			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
 			wantErr:    false,
 		},
