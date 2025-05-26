@@ -716,7 +716,7 @@ func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
 	}{
 		"valid credentials": {
 			profile:       "default",
-			commandOutput: `{"UserId":"AIDAI23HXD3MBVRDTCKBR","Account":"123456789012","Arn":"arn:aws:iam::123456789012:user/testuser"}`,
+			commandOutput: "arn:aws:iam::123456789012:user/testuser",
 			commandError:  false,
 			wantUserArn:   "arn:aws:iam::123456789012:user/testuser",
 			wantErr:       false,
@@ -727,11 +727,11 @@ func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
 			commandError:  true,
 			wantUserArn:   "",
 			wantErr:       true,
-			wantErrMsg:    "failed to verify AWS credentials",
+			wantErrMsg:    "failed to get AWS identity",
 		},
 		"empty profile valid": {
 			profile:       "",
-			commandOutput: `{"UserId":"AIDAI23HXD3MBVRDTCKBR","Account":"123456789012","Arn":"arn:aws:iam::123456789012:user/testuser"}`,
+			commandOutput: "arn:aws:iam::123456789012:user/testuser",
 			commandError:  false,
 			wantUserArn:   "arn:aws:iam::123456789012:user/testuser",
 			wantErr:       false,
