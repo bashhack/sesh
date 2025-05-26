@@ -7,9 +7,9 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/keychain/mocks"
-	"github.com/bashhack/sesh/internal/testutil"
 )
 
 
