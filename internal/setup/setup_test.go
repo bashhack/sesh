@@ -1630,7 +1630,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 			profile:    "default",
 			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1", ""}, // Has devices, refresh finds nothing
 			awsError:   false,
-			userInput:  "r\nm\narn:aws:iam::123456789012:mfa/manual\n", // Refresh finds nothing, then manual
+			userInput:  "r\n3\narn:aws:iam::123456789012:mfa/manual\n", // Refresh finds nothing, then shows retry prompt, choose manual
 			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
 			wantErr:    false,
 		},
