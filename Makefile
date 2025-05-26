@@ -121,41 +121,28 @@ test/verbose:
 	@echo 'Running tests with verbose output...'
 	@go test -v ./...
 
-## test/integration: Alias for test (all tests now CI-friendly)
-.PHONY: test/integration
-test/integration: test
 
-## coverage: Run test suite with coverage (keychain integration tests disabled)
+## coverage: Run test suite with coverage
 .PHONY: coverage
 coverage:
-	@echo 'Running tests with coverage (keychain integration tests disabled)...'
-	@SKIP_KEYCHAIN_TESTS=true go test -coverprofile=coverage.txt ./... | grep -v "no test files" | grep -v "coverage: 0.0%" || true
-	@echo 'Filtering out testutil, mock files, and interface-only files...'
-	@grep -v "testutil\|mock\|provider/interfaces.go" coverage.txt > coverage.filtered.txt || true
-	@go tool cover -html=coverage.filtered.txt -o coverage.html
-	@echo "Coverage report generated at coverage.html"
-	@rm -f coverage.filtered.txt
-
-## coverage/func: Show function-level coverage statistics (keychain integration tests disabled)
-.PHONY: coverage/func
-coverage/func:
-	@echo 'Generating function-level coverage report (keychain integration tests disabled)...'
-	@SKIP_KEYCHAIN_TESTS=true go test -coverprofile=coverage.txt ./... 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
-	@echo 'Filtering out testutil, mock files, and interface-only files...'
-	@grep -v "testutil\|mock\|provider/interfaces.go" coverage.txt > coverage.filtered.txt || true
-	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go" || true
-	@rm -f coverage.filtered.txt
-
-## coverage/integration: Run test suite with coverage INCLUDING real keychain access
-.PHONY: coverage/integration
-coverage/integration:
-	@echo '⚠️  Running tests with coverage INCLUDING real keychain access...'
+	@echo 'Running tests with coverage...'
 	@go test -coverprofile=coverage.txt ./... | grep -v "no test files" | grep -v "coverage: 0.0%" || true
 	@echo 'Filtering out testutil, mock files, and interface-only files...'
 	@grep -v "testutil\|mock\|provider/interfaces.go" coverage.txt > coverage.filtered.txt || true
 	@go tool cover -html=coverage.filtered.txt -o coverage.html
 	@echo "Coverage report generated at coverage.html"
 	@rm -f coverage.filtered.txt
+
+## coverage/func: Show function-level coverage statistics
+.PHONY: coverage/func
+coverage/func:
+	@echo 'Generating function-level coverage report...'
+	@go test -coverprofile=coverage.txt ./... 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@echo 'Filtering out testutil, mock files, and interface-only files...'
+	@grep -v "testutil\|mock\|provider/interfaces.go" coverage.txt > coverage.filtered.txt || true
+	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go" || true
+	@rm -f coverage.filtered.txt
+
 
 
 
