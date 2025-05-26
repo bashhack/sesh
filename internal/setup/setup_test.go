@@ -1644,7 +1644,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 				cmd := exec.Command(os.Args[0], cs...)
 				cmd.Env = []string{
 					"GO_WANT_HELPER_PROCESS=1",
-					"MOCK_OUTPUT=" + test.awsOutput,
+					"MOCK_OUTPUT=" + test.awsOutputs[0],
 				}
 				if test.awsError {
 					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
@@ -1691,7 +1691,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 			}
 
 			// Verify the prompts were shown
-			if test.awsOutput != "" {
+			if len(test.awsOutputs) > 0 && test.awsOutputs[0] != "" {
 				if !strings.Contains(output, "Found MFA device(s):") {
 					t.Error("Expected 'Found MFA device(s):' prompt")
 				}
