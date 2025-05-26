@@ -1,6 +1,10 @@
 package setup
 
 import (
+	"bufio"
+	"bytes"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
