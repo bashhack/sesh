@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	. "github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/testutil"
 )
 
@@ -703,30 +704,38 @@ func TestTOTPSetupHandler_captureManualEntry(t *testing.T) {
 
 // TestAWSSetupHandler_verifyAWSCredentials tests AWS credential verification
 func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
+	// Save original execCommand and restore after test
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+	
 	tests := map[string]struct {
 		profile       string
 		commandOutput string
-		commandError  error
+		commandError  bool
+		wantUserArn   string
 		wantErr       bool
 		wantErrMsg    string
 	}{
 		"valid credentials": {
 			profile:       "default",
 			commandOutput: `{"UserId":"AIDAI23HXD3MBVRDTCKBR","Account":"123456789012","Arn":"arn:aws:iam::123456789012:user/testuser"}`,
-			commandError:  nil,
+			commandError:  false,
+			wantUserArn:   "arn:aws:iam::123456789012:user/testuser",
 			wantErr:       false,
 		},
 		"invalid credentials": {
 			profile:       "nonexistent",
 			commandOutput: "",
-			commandError:  exec.ErrNotFound,
+			commandError:  true,
+			wantUserArn:   "",
 			wantErr:       true,
 			wantErrMsg:    "failed to verify AWS credentials",
 		},
 		"empty profile valid": {
 			profile:       "",
 			commandOutput: `{"UserId":"AIDAI23HXD3MBVRDTCKBR","Account":"123456789012","Arn":"arn:aws:iam::123456789012:user/testuser"}`,
-			commandError:  nil,
+			commandError:  false,
+			wantUserArn:   "arn:aws:iam::123456789012:user/testuser",
 			wantErr:       false,
 		},
 	}
@@ -734,21 +743,31 @@ func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
 	for name, test := range tests {
 		test := test
 		t.Run(name, func(t *testing.T) {
-			// Create a mock command runner
-			runner := &SimpleRunner{
-				Commands: map[string]*MockCommand{
-					"aws": {
-						OutputData: []byte(test.commandOutput),
-						ErrorValue: test.commandError,
-					},
-				},
+			// Mock execCommand
+			execCommand = func(command string, args ...string) *exec.Cmd {
+				cs := []string{"-test.run=TestHelperProcess", "--", command}
+				cs = append(cs, args...)
+				cmd := exec.Command(os.Args[0], cs...)
+				cmd.Env = []string{
+					"GO_WANT_HELPER_PROCESS=1",
+					"MOCK_OUTPUT=" + test.commandOutput,
+				}
+				if test.commandError {
+					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
+				}
+				return cmd
 			}
 
 			handler := &AWSSetupHandler{
-				runner: runner,
+				reader: bufio.NewReader(strings.NewReader("")),
 			}
 
-			err := handler.verifyAWSCredentials(test.profile)
+			userArn, err := handler.verifyAWSCredentials(test.profile)
+
+			// Check user ARN
+			if userArn != test.wantUserArn {
+				t.Errorf("verifyAWSCredentials() userArn = %v, want %v", userArn, test.wantUserArn)
+			}
 
 			// Check error
 			if test.wantErr && err == nil {
