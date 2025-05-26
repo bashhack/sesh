@@ -864,7 +864,92 @@ func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
 
 // TestAWSSetupHandler_captureAWSManualEntry tests manual AWS credential entry
 func TestAWSSetupHandler_captureAWSManualEntry(t *testing.T) {
-	t.Skip("captureAWSManualEntry uses term.ReadPassword for secret key - requires integration testing")
+	// Save original readPassword and restore after test
+	origReadPassword := readPassword
+	defer func() { readPassword = origReadPassword }()
+	
+	tests := map[string]struct {
+		secretInput string
+		readError   error
+		wantSecret  string
+		wantErr     bool
+		wantErrMsg  string
+	}{
+		"valid AWS secret": {
+			secretInput: "JBSWY3DPEHPK3PXP",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"secret with spaces": {
+			secretInput: "  JBSWY3DPEHPK3PXP  ",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"read error": {
+			secretInput: "",
+			readError:   io.ErrUnexpectedEOF,
+			wantSecret:  "",
+			wantErr:     true,
+			wantErrMsg:  "failed to read secret",
+		},
+	}
+	
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			// Mock readPassword
+			readPassword = func(fd int) ([]byte, error) {
+				if test.readError != nil {
+					return nil, test.readError
+				}
+				return []byte(test.secretInput), nil
+			}
+			
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader("")),
+			}
+			
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+			
+			secret, err := handler.captureAWSManualEntry()
+			
+			w.Close()
+			os.Stdout = oldStdout
+			
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+			
+			// Check that instructions were displayed
+			if !strings.Contains(output, "DO NOT COMPLETE THE AWS SETUP YET") {
+				t.Error("Expected setup instructions not displayed")
+			}
+			
+			// Check secret
+			if secret != test.wantSecret {
+				t.Errorf("captureAWSManualEntry() secret = %v, want %v", secret, test.wantSecret)
+			}
+			
+			// Check error
+			if test.wantErr && err == nil {
+				t.Error("captureAWSManualEntry() expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("captureAWSManualEntry() unexpected error: %v", err)
+			}
+			if test.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), test.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), test.wantErrMsg)
+				}
+			}
+		})
+	}
 }
 // TestAWSSetupHandler_captureMFASecret tests MFA secret capture
 func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
@@ -931,7 +1016,7 @@ func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
 			output := buf.String()
 			
 			// Check that instructions were displayed
-			if !strings.Contains(output, "Please follow these steps") {
+			if !strings.Contains(output, "DO NOT COMPLETE THE AWS SETUP YET") {
 				t.Error("Expected setup instructions not displayed")
 			}
 			

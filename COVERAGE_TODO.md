@@ -24,9 +24,9 @@ These support the setup flow and should be tested:
 
 #### AWS Setup Helpers
 ✅ ~~`internal/setup/setup.go:64` - `verifyAWSCredentials`~~ (DONE)
-- `internal/setup/setup.go:82` - `captureMFASecret`
+✅ ~~`internal/setup/setup.go:82` - `captureMFASecret`~~ (DONE)
 - `internal/setup/setup.go:127` - `captureAWSQRCodeWithFallback`
-- `internal/setup/setup.go:132` - `captureAWSManualEntry`
+✅ ~~`internal/setup/setup.go:132` - `captureAWSManualEntry`~~ (DONE)
 - `internal/setup/setup.go:152` - `setupMFAConsole`
 - `internal/setup/setup.go:178` - `selectMFADevice`
 - `internal/setup/setup.go:326` - `promptForMFAARN`
@@ -39,7 +39,7 @@ These support the setup flow and should be tested:
 ✅ ~~`internal/setup/setup.go:542` - `promptForCaptureMethod`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:559` - `captureTOTPSecret`~~ (DONE - partial, only error cases)
 - `internal/setup/setup.go:571` - `captureQRCodeWithFallback`
-- `internal/setup/setup.go:576` - `captureManualEntry`
+✅ ~~`internal/setup/setup.go:576` - `captureManualEntry`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:591` - `showTOTPSetupCompletionMessage`~~ (DONE)
 - `internal/setup/setup.go:677` - `captureQRWithRetry`
 
