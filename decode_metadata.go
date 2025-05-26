@@ -1,57 +1,52 @@
 package main
 
 import (
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"log"
-
-	"github.com/klauspost/compress/zstd"
+    "encoding/base64"
+    "encoding/json"
+    "fmt"
+    "os"
+    "github.com/klauspost/compress/zstd"
 )
 
-type KeychainEntryMeta struct {
-	Service     string `json:"Service"`
-	Account     string `json:"Account"`
-	Description string `json:"Description"`
-	ServiceType string `json:"ServiceType"`
-}
-
 func main() {
-	// The base64 encoded string
-	encoded := "KLUv/QQANQMAUkUTGoCpDUBRipRCoZUYCBGwAD49MKPdj76KIigBALM4Q3SgrA7KkYx09KWqmVrkFNw8kXutcLhnOHqvgyLeDdKc6bDWPgROPnqiapt8RRIHAH3cED8k8Ac+zjgkRgYCCBKy7nQC8m1Knw=="
-
-	// Step 1: Base64 decode
-	compressed, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		log.Fatalf("Failed to decode base64: %v", err)
-	}
-
-	// Step 2: Zstd decompress
-	decoder, err := zstd.NewReader(nil)
-	if err != nil {
-		log.Fatalf("Failed to create zstd decoder: %v", err)
-	}
-	defer decoder.Close()
-
-	decompressed, err := decoder.DecodeAll(compressed, nil)
-	if err != nil {
-		log.Fatalf("Failed to decompress zstd: %v", err)
-	}
-
-	// Step 3: JSON parse
-	var entries []KeychainEntryMeta
-	if err := json.Unmarshal(decompressed, &entries); err != nil {
-		log.Fatalf("Failed to parse JSON: %v", err)
-	}
-
-	// Display the results
-	fmt.Printf("Found %d keychain entries:\n\n", len(entries))
-	for i, entry := range entries {
-		fmt.Printf("Entry %d:\n", i+1)
-		fmt.Printf("  Service:     %s\n", entry.Service)
-		fmt.Printf("  Account:     %s\n", entry.Account)
-		fmt.Printf("  Description: %s\n", entry.Description)
-		fmt.Printf("  ServiceType: %s\n", entry.ServiceType)
-		fmt.Println()
-	}
+    b64Data := "KLUv/QQA7QIAQgUTGoCpDUBRipRCoZUYCBGwAD49MKPdj76KIigBgMUZogNldVCOZKSjL1XN1CKn4OaJ3GuFwz3D0XsdFPFukOZMh7X2IXDy0RNV2+QrkgQAZxwSIwMBBAlZdzoBwpJpuQ=="
+    
+    data, err := base64.StdEncoding.DecodeString(b64Data)
+    if err != nil {
+        fmt.Println("Base64 decode error:", err)
+        os.Exit(1)
+    }
+    
+    decoder, err := zstd.NewReader(nil)
+    if err != nil {
+        fmt.Println("Zstd decoder error:", err)
+        os.Exit(1)
+    }
+    defer decoder.Close()
+    
+    decompressed, err := decoder.DecodeAll(data, nil)
+    if err != nil {
+        fmt.Println("Zstd decompress error:", err)
+        os.Exit(1)
+    }
+    
+    // First print raw JSON
+    fmt.Println("Raw JSON:")
+    fmt.Println(string(decompressed))
+    fmt.Println()
+    
+    var entries []map[string]interface{}
+    if err := json.Unmarshal(decompressed, &entries); err != nil {
+        fmt.Println("JSON parse error:", err)
+        os.Exit(1)
+    }
+    
+    fmt.Printf("Found %d entries:\n\n", len(entries))
+    for i, entry := range entries {
+        fmt.Printf("Entry %d:\n", i+1)
+        for k, v := range entry {
+            fmt.Printf("  %s: %v\n", k, v)
+        }
+        fmt.Println()
+    }
 }
