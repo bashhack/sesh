@@ -12,10 +12,6 @@ import (
 	"github.com/bashhack/sesh/internal/testutil"
 )
 
-// TestHelperProcess is used by testutil.TestHelperProcess
-func TestHelperProcess(*testing.T) {
-	testutil.TestHelperProcess()
-}
 
 func TestAWSSetupHandler_Setup(t *testing.T) {
 	// Save original functions
@@ -37,7 +33,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 	}()
 
 	// Mock timeSleep to speed up tests
-	timeSleep = func(d interface{}) {}
+	timeSleep = func(d time.Duration) {}
 
 	tests := map[string]struct {
 		// Test control flags
