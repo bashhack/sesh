@@ -643,33 +643,93 @@ func TestAWSSetupHandler_createAWSCommand(t *testing.T) {
 }
 
 func TestAWSSetupHandler_promptForMFAARN(t *testing.T) {
-	// This is a more complex test that requires mocking user input
-	// We'll create a simple validation test for the format checking
-	validARNs := []string{
-		"arn:aws:iam::123456789012:mfa/user",
-		"arn:aws:iam::000000000000:mfa/testuser",
-		"arn:aws:iam::999999999999:mfa/my.user-name",
+	tests := map[string]struct {
+		userInput  string
+		wantARN    string
+		wantErr    bool
+	}{
+		"valid ARN on first try": {
+			userInput: "arn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
+		"empty input then valid": {
+			userInput: "\narn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user", 
+			wantErr:   false,
+		},
+		"invalid format then valid": {
+			userInput: "not-an-arn\narn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
+		"wrong service then valid": {
+			userInput: "arn:aws:s3::123456789012:bucket/mybucket\narn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
+		"wrong resource type then valid": {
+			userInput: "arn:aws:iam::123456789012:user/myuser\narn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
+		"multiple invalid then valid": {
+			userInput: "\nnot-an-arn\narn:aws:s3::123456789012:bucket/mybucket\narn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
 	}
-	
-	invalidARNs := []string{
-		"",
-		"not-an-arn",
-		"arn:aws:s3::123456789012:bucket/mybucket", // Wrong service
-		"arn:aws:iam::123456789012:user/myuser",    // Wrong resource type
-		"arn:aws:iam:us-east-1:123456789012:mfa/user", // Region shouldn't be present
-	}
-	
-	// Test ARN validation logic that would be used in promptForMFAARN
-	for _, arn := range validARNs {
-		if !strings.HasPrefix(arn, "arn:aws:iam::") || !strings.Contains(arn, ":mfa/") {
-			t.Errorf("Valid ARN failed validation: %s", arn)
-		}
-	}
-	
-	for _, arn := range invalidARNs {
-		if arn != "" && strings.HasPrefix(arn, "arn:aws:iam::") && strings.Contains(arn, ":mfa/") {
-			t.Errorf("Invalid ARN passed validation: %s", arn)
-		}
+
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			// Create handler with mock reader
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(test.userInput)),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			arn, err := handler.promptForMFAARN()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check ARN
+			if arn != test.wantARN {
+				t.Errorf("promptForMFAARN() arn = %v, want %v", arn, test.wantARN)
+			}
+
+			// Check error
+			if test.wantErr && err == nil {
+				t.Error("promptForMFAARN() expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("promptForMFAARN() unexpected error: %v", err)
+			}
+
+			// Verify that appropriate error messages were shown
+			if strings.Contains(test.userInput, "\n\n") {
+				// Empty input was provided
+				if !strings.Contains(output, "MFA ARN cannot be empty") {
+					t.Error("Expected empty ARN error message")
+				}
+			}
+			if strings.Contains(test.userInput, "not-an-arn") || strings.Contains(test.userInput, ":s3:") || strings.Contains(test.userInput, ":user/") {
+				// Invalid format was provided
+				if !strings.Contains(output, "Invalid ARN format") {
+					t.Error("Expected invalid ARN format error message")
+				}
+			}
+		})
 	}
 }
 

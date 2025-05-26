@@ -24,12 +24,12 @@ These support the setup flow and should be tested:
 
 #### AWS Setup Helpers
 ✅ ~~`internal/setup/setup.go:64` - `verifyAWSCredentials`~~ (DONE)
-✅ ~~`internal/setup/setup.go:82` - `captureMFASecret`~~ (DONE)
+✅ ~~`internal/setup/setup.go:82` - `captureMFASecret`~~ (DONE - 58.8% coverage, error paths remain)
 ✅ ~~`internal/setup/setup.go:127` - `captureAWSQRCodeWithFallback`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:132` - `captureAWSManualEntry`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:152` - `setupMFAConsole`~~ (DONE)
-- `internal/setup/setup.go:178` - `selectMFADevice`
-- `internal/setup/setup.go:326` - `promptForMFAARN`
+✅ ~~`internal/setup/setup.go:178` - `selectMFADevice`~~ (DONE - 95.5% coverage)
+✅ ~~`internal/setup/setup.go:326` - `promptForMFAARN`~~ (DONE - 100% coverage)
 ✅ ~~`internal/setup/setup.go:351` - `promptForMFASetupMethod`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:376` - `showSetupCompletionMessage`~~ (DONE)
 
@@ -37,11 +37,11 @@ These support the setup flow and should be tested:
 ✅ ~~`internal/setup/setup.go:521` - `promptForServiceName`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:534` - `promptForProfile`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:542` - `promptForCaptureMethod`~~ (DONE)
-✅ ~~`internal/setup/setup.go:559` - `captureTOTPSecret`~~ (DONE - partial, only error cases)
-- `internal/setup/setup.go:571` - `captureQRCodeWithFallback`
+✅ ~~`internal/setup/setup.go:559` - `captureTOTPSecret`~~ (DONE - 50% coverage, QR path remains)
+✅ ~~`internal/setup/setup.go:571` - `captureQRCodeWithFallback`~~ (DONE - 100% coverage)
 ✅ ~~`internal/setup/setup.go:576` - `captureManualEntry`~~ (DONE)
 ✅ ~~`internal/setup/setup.go:591` - `showTOTPSetupCompletionMessage`~~ (DONE)
-- `internal/setup/setup.go:677` - `captureQRWithRetry`
+✅ ~~`internal/setup/setup.go:677` - `captureQRWithRetry`~~ (DONE - 100% coverage)
 
 ### Lower Priority - Output Functions
 These are primarily display/output functions:
@@ -57,6 +57,12 @@ These are primarily display/output functions:
 3. **Provider constructors** should be straightforward to test
 4. **Output functions** can be tested by capturing stdout
 
-## Current Overall Coverage: 70.4%
+## Current Overall Coverage: 74.6% → 78.5% (3.9% increase)
+
+### Recent Progress:
+- Added comprehensive tests for `selectMFADevice` (52.2% → 95.5%)
+- Added comprehensive tests for `promptForMFAARN` (63.6% → 100%)
+- Added tests for QR code capture functions (0% → 100%)
+- Overall setup package coverage: 55.9% → 67.0%
 
 Target: Increase coverage by focusing on high-priority items first.
