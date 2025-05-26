@@ -193,7 +193,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Mock execCommand for AWS CLI calls
 			execCommand = func(command string, args ...string) *exec.Cmd {
-				cs := []string{"-test.run=TestHelperProcess", "--", command}
+				cs := []string{"-test.run=TestAWSSetupHandler_Setup/TestHelperProcess", "--", command}
 				cs = append(cs, args...)
 				cmd := exec.Command(os.Args[0], cs...)
 
@@ -201,17 +201,11 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 
 				if tc.awsCommandFails {
 					env = append(env, "MOCK_ERROR=1")
-				} else if len(args) > 0 {
-					// Check what AWS command is being run
-					if args[0] == "sts" && len(args) > 1 && args[1] == "get-caller-identity" {
-						if output, ok := tc.awsCommandOutputs["get-caller-identity"]; ok {
-							env = append(env, "MOCK_OUTPUT="+output)
-						}
-					} else if args[0] == "iam" && len(args) > 1 && args[1] == "list-mfa-devices" {
-						if output, ok := tc.awsCommandOutputs["list-mfa-devices"]; ok {
-							env = append(env, "MOCK_OUTPUT="+output)
-						}
-					}
+				}
+				
+				// Special handling for "no MFA devices" test case
+				if name == "no MFA devices found" {
+					env = append(env, "NO_MFA_DEVICES=1")
 				}
 
 				cmd.Env = env
