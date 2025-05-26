@@ -6,8 +6,8 @@
 These are the most important functions that need test coverage:
 
 #### TOTP Provider
-- `internal/provider/totp/provider.go:34` - `NewProvider` - Constructor needs testing
-- `internal/provider/totp/provider.go:70` - `GetSetupHandler` - Setup handler creation
+✅ ~~`internal/provider/totp/provider.go:34` - `NewProvider` - Constructor needs testing~~ (DONE)
+✅ ~~`internal/provider/totp/provider.go:70` - `GetSetupHandler` - Setup handler creation~~ (DONE)
 
 #### Setup Functions (Critical Path)
 - `internal/setup/setup.go:413` - `Setup` (AWS) - Main AWS setup flow
@@ -57,6 +57,6 @@ These are primarily display/output functions:
 3. **Provider constructors** should be straightforward to test
 4. **Output functions** can be tested by capturing stdout
 
-## Current Overall Coverage: 62.6%
+## Current Overall Coverage: 62.9%
 
 Target: Increase coverage by focusing on high-priority items first.

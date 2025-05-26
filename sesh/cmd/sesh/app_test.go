@@ -1,10 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/setup"
 )
 
 type KeychainError struct {
