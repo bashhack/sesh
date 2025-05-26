@@ -1519,6 +1519,15 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 	origExecCommand := execCommand
 	defer func() { execCommand = origExecCommand }()
 	
+	// Save original timeSleep and restore after test
+	origTimeSleep := timeSleep
+	defer func() { timeSleep = origTimeSleep }()
+	
+	// Mock timeSleep to not actually sleep in tests
+	timeSleep = func(d time.Duration) {
+		// Don't actually sleep in tests
+	}
+	
 	tests := map[string]struct {
 		profile       string
 		awsOutputs    []string  // Multiple outputs for refresh scenarios
