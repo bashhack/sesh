@@ -11,6 +11,7 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 	keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/setup"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
 
@@ -533,3 +534,60 @@ func TestProvider_DeleteEntry(t *testing.T) {
 }
 
 // formatDisplayInfo is not a method on the TOTP provider - it uses the shared helper functions
+
+// TestNewProvider tests the NewProvider function
+func TestNewProvider(t *testing.T) {
+	// Create mocks
+	mockKeychain := &keychainMocks.MockProvider{}
+	mockTOTP := &totpMocks.MockProvider{}
+
+	// Create provider
+	p := NewProvider(mockKeychain, mockTOTP)
+
+	// Verify the provider is initialized correctly
+	if p == nil {
+		t.Fatal("NewProvider returned nil")
+	}
+
+	// Verify internal fields are set
+	if p.keychain != mockKeychain {
+		t.Error("keychain field not set correctly")
+	}
+
+	if p.totp != mockTOTP {
+		t.Error("totp field not set correctly")
+	}
+
+	// Verify the provider implements the ServiceProvider interface
+	var _ provider.ServiceProvider = p
+}
+
+// TestProvider_GetSetupHandler tests the GetSetupHandler method
+func TestProvider_GetSetupHandler(t *testing.T) {
+	// Create mocks
+	mockKeychain := &keychainMocks.MockProvider{}
+
+	// Create provider
+	p := &Provider{
+		keychain: mockKeychain,
+	}
+
+	// Get setup handler
+	handler := p.GetSetupHandler()
+
+	// Verify handler is not nil
+	if handler == nil {
+		t.Fatal("GetSetupHandler returned nil")
+	}
+
+	// Verify it returns a TOTPSetupHandler
+	totpHandler, ok := handler.(*setup.TOTPSetupHandler)
+	if !ok {
+		t.Fatalf("GetSetupHandler returned unexpected type: %T", handler)
+	}
+
+	// Verify the handler has the expected service name
+	if totpHandler.ServiceName() != "totp" {
+		t.Errorf("handler.ServiceName() = %v, want 'totp'", totpHandler.ServiceName())
+	}
+}
