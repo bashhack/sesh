@@ -1637,14 +1637,27 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 	for name, test := range tests {
 		test := test
 		t.Run(name, func(t *testing.T) {
+			// Track which AWS output to return
+			outputIndex := 0
+			
 			// Mock execCommand to return our test data
 			execCommand = func(command string, args ...string) *exec.Cmd {
 				cs := []string{"-test.run=TestHelperProcess", "--", command}
 				cs = append(cs, args...)
 				cmd := exec.Command(os.Args[0], cs...)
+				
+				// Get the current output or use the last one if we've exhausted the list
+				output := ""
+				if outputIndex < len(test.awsOutputs) {
+					output = test.awsOutputs[outputIndex]
+					outputIndex++
+				} else if len(test.awsOutputs) > 0 {
+					output = test.awsOutputs[len(test.awsOutputs)-1]
+				}
+				
 				cmd.Env = []string{
 					"GO_WANT_HELPER_PROCESS=1",
-					"MOCK_OUTPUT=" + test.awsOutputs[0],
+					"MOCK_OUTPUT=" + output,
 				}
 				if test.awsError {
 					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")

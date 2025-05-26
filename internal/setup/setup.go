@@ -26,6 +26,9 @@ var readPassword = term.ReadPassword
 // scanQRCode is a variable so we can swap it out in tests
 var scanQRCode = qrcode.ScanQRCode
 
+// timeSleep is a variable so we can swap it out in tests
+var timeSleep = time.Sleep
+
 // AWS Setup Handler
 
 // AWSSetupHandler implements SetupHandler for AWS
@@ -292,7 +295,7 @@ Enter your choice (1-3): `)
 		switch retryChoice {
 		case "1": // Wait and retry
 			fmt.Println("\n⏳ Waiting 5 seconds for AWS to register your MFA device...")
-			time.Sleep(5 * time.Second)
+			timeSleep(5 * time.Second)
 
 			// Try fetching the MFA device again
 			mfaCmd = h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
