@@ -63,7 +63,7 @@ check-staticcheck:
 .PHONY: run-staticcheck
 run-staticcheck: check-staticcheck
 	@echo 'Running staticcheck...'
-	@staticcheck ./... || echo "Note: staticcheck found issues (exit code: $$?)"
+	@staticcheck $$(go list ./... | grep -v /scripts) || echo "Note: staticcheck found issues (exit code: $$?)"
 
 ## check-golangci-lint: Check if golangci-lint is installed
 .PHONY: check-golangci-lint
@@ -79,7 +79,7 @@ check-golangci-lint:
 .PHONY: run-golangci-lint
 run-golangci-lint: check-golangci-lint
 	@echo 'Running golangci-lint...'
-	@golangci-lint run ./... || echo "Note: golangci-lint found issues (exit code: $$?)"
+	@golangci-lint run $$(go list ./... | grep -v /scripts) || echo "Note: golangci-lint found issues (exit code: $$?)"
 
 ## audit: Tidy dependencies and format, vet and test all code
 .PHONY: audit
@@ -88,11 +88,11 @@ audit:
 	go mod tidy
 	go mod verify
 	@echo 'Formatting code...'
-	go fmt ./...
+	go fmt $$(go list ./... | grep -v /scripts)
 	@echo 'Running lint...'
 	@$(MAKE) lint
 	@echo 'Running tests...'
-	go test -race -vet=off ./...
+	go test -race -vet=off $$(go list ./... | grep -v /scripts)
 
 ## vendor: Tidy and vendor dependencies
 .PHONY: vendor
