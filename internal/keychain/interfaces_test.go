@@ -109,8 +109,8 @@ func TestDefaultProviderSetSecret(t *testing.T) {
 		
 		if command == "whoami" {
 			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" && len(args) > 0 && args[0] == "add-generic-password" {
-			// Don't set MOCK_ERROR for successful addition
+		} else if command == "security" && len(args) > 0 && (args[0] == "add-generic-password" || args[0] == "-i") {
+			// Don't set MOCK_ERROR for successful addition or interactive mode
 		} else {
 			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 		}
@@ -167,8 +167,8 @@ func TestDefaultProviderSetSecretString(t *testing.T) {
 		
 		if command == "whoami" {
 			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" && len(args) > 0 && args[0] == "add-generic-password" {
-			// Don't set MOCK_ERROR for successful addition
+		} else if command == "security" && len(args) > 0 && (args[0] == "add-generic-password" || args[0] == "-i") {
+			// Don't set MOCK_ERROR for successful addition or interactive mode
 		} else {
 			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 		}

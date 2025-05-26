@@ -893,6 +893,8 @@ func TestHelperProcess(t *testing.T) {
 				}
 				os.Exit(0)
 			}
+			// If no recognized command in stdin, exit with error
+			os.Exit(1)
 		} else {
 			// Handle non-interactive security commands as before
 			if os.Getenv("MOCK_ERROR") == "1" {
@@ -902,6 +904,9 @@ func TestHelperProcess(t *testing.T) {
 			os.Exit(0)
 		}
 	case "whoami":
+		if os.Getenv("MOCK_ERROR") == "1" {
+			os.Exit(1)
+		}
 		fmt.Print(os.Getenv("MOCK_OUTPUT"))
 		os.Exit(0)
 	default:
