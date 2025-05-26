@@ -1164,6 +1164,74 @@ func TestAWSSetupHandler_showSetupCompletionMessage(t *testing.T) {
 	}
 }
 
+// TestAWSSetupHandler_setupMFAConsole tests MFA console setup guidance
+func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
+	tests := map[string]struct {
+		secret       string
+		readerInput  string
+		wantErr      bool
+		wantContains []string
+	}{
+		"valid secret": {
+			secret:      "JBSWY3DPEHPK3PXP",
+			readerInput: "\n",
+			wantErr:     false,
+			wantContains: []string{
+				"Generated TOTP codes for AWS setup",
+				"First code:",
+				"Second code:",
+				"IMPORTANT - FOLLOW THESE STEPS",
+				"Press Enter ONLY AFTER you see",
+			},
+		},
+		"invalid secret": {
+			secret:      "invalid-secret",
+			readerInput: "\n",
+			wantErr:     true,
+			wantContains: []string{},
+		},
+	}
+	
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(test.readerInput)),
+			}
+			
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+			
+			err := handler.setupMFAConsole(test.secret)
+			
+			w.Close()
+			os.Stdout = oldStdout
+			
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+			
+			// Check error
+			if test.wantErr && err == nil {
+				t.Error("setupMFAConsole() expected error but got nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Errorf("setupMFAConsole() unexpected error: %v", err)
+			}
+			
+			// Check expected content
+			for _, expected := range test.wantContains {
+				if !strings.Contains(output, expected) {
+					t.Errorf("Expected output to contain: %q", expected)
+				}
+			}
+		})
+	}
+}
+
 // TestAWSSetupHandler_selectMFADevice tests MFA device selection
 func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 	// Save original execCommand and restore after test
