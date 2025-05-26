@@ -756,11 +756,25 @@ func TestSetSecretBytesWithEmptyAccount(t *testing.T) {
 			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
 		} else if command == "security" {
 			securityCalled = true
-			// Verify that the account was set from whoami
-			for i, arg := range args {
-				if arg == "-a" && i+1 < len(args) {
-					if args[i+1] != "testuser" {
-						t.Errorf("Expected account 'testuser', got %q", args[i+1])
+			// Only check the account for the main add-generic-password call, not metadata calls
+			if len(args) > 0 && args[0] == "add-generic-password" {
+				// Check if this is the main secret storage (not metadata)
+				isMainSecret := false
+				for i, arg := range args {
+					if arg == "-s" && i+1 < len(args) && args[i+1] == "test-service" {
+						isMainSecret = true
+						break
+					}
+				}
+				
+				if isMainSecret {
+					// Verify that the account was set from whoami
+					for i, arg := range args {
+						if arg == "-a" && i+1 < len(args) {
+							if args[i+1] != "testuser" {
+								t.Errorf("Expected account 'testuser', got %q", args[i+1])
+							}
+						}
 					}
 				}
 			}
