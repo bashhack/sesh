@@ -156,26 +156,26 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Mock execCommand for AWS CLI calls
 			execCommand = func(command string, args ...string) *exec.Cmd {
-				// Don't use exec.Command to spawn a subprocess at all
-				// Instead, create a command that will produce the output we want
-				mockCmd := exec.Command("echo", "")
+				cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+				cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
 
 				if tc.awsCommandFails {
-					mockCmd = exec.Command("sh", "-c", "echo 'mock error' >&2; exit 1")
+					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
+					cmd.Env = append(cmd.Env, "MOCK_OUTPUT=mock error")
 				} else if len(args) > 0 {
 					// Check what AWS command is being run
 					if args[0] == "sts" && len(args) > 1 && args[1] == "get-caller-identity" {
 						if output, ok := tc.awsCommandOutputs["get-caller-identity"]; ok {
-							mockCmd = exec.Command("echo", output)
+							cmd.Env = append(cmd.Env, "MOCK_OUTPUT="+output)
 						}
 					} else if args[0] == "iam" && len(args) > 1 && args[1] == "list-mfa-devices" {
 						if output, ok := tc.awsCommandOutputs["list-mfa-devices"]; ok {
-							mockCmd = exec.Command("echo", output)
+							cmd.Env = append(cmd.Env, "MOCK_OUTPUT="+output)
 						}
 					}
 				}
 
-				return mockCmd
+				return cmd
 			}
 
 			// Mock execLookPath
