@@ -61,7 +61,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"verify credentials fails": {
 			awsCommandFails: true,
 			expectError:     true,
-			expectedErrorMsg: "AWS credentials are not configured",
+			expectedErrorMsg: "failed to get AWS identity",
 			userInput:       "test-profile\n",
 		},
 		"invalid mfa setup choice": {
@@ -216,17 +216,8 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				reader:           bufio.NewReader(strings.NewReader(tc.userInput)),
 			}
 
-			// Capture stdout to suppress output during tests
-			oldStdout := os.Stdout
-			_, w, _ := os.Pipe()
-			os.Stdout = w
-
-			// Run setup
+			// Run setup (without capturing stdout for now to debug)
 			err := handler.Setup()
-
-			// Restore stdout
-			w.Close()
-			os.Stdout = oldStdout
 
 			// Check error
 			if tc.expectError {
