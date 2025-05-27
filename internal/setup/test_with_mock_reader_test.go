@@ -10,6 +10,21 @@ import (
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 )
 
+// TestHelperProcess is a helper process for exec commands
+func TestHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	
+	// Print the STDOUT environment variable value
+	fmt.Print(os.Getenv("STDOUT"))
+	
+	if os.Getenv("MOCK_ERROR") == "1" {
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
 func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 	// Test "get current user fails" with proper input
 	t.Run("get_current_user_fails_fixed", func(t *testing.T) {
