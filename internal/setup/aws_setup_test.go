@@ -3,7 +3,6 @@ package setup
 import (
 	"bufio"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -77,7 +76,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
 			},
 			expectError:      true,
-			expectedErrorMsg: "no choice made",
+			expectedErrorMsg: "invalid choice, please select 1 or 2",
 			userInput:        "\n\n", // empty profile, empty choice
 		},
 		"qr scan fails": {
@@ -216,10 +215,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				if tc.scanQRError != nil {
 					return "", tc.scanQRError
 				}
-				// Extract secret from URL just like the real implementation
-				otpURL := "otpauth://totp/AWS:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=AWS"
-				u, _ := url.Parse(otpURL)
-				return u.Query().Get("secret"), nil
+				return "otpauth://totp/AWS:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=AWS", nil
 			}
 
 			// Mock readPassword for manual entry
