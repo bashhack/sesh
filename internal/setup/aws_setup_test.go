@@ -123,7 +123,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
 			},
 			expectError: false,
-			userInput:   "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
+			userInput:   "\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // empty profile, manual entry (1), valid secret, Enter after TOTP codes, '1' to select first device
 		},
 		"successful setup with QR code": {
 			awsCommandOutputs: map[string]string{
@@ -222,7 +222,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			readPassword = func(fd int) ([]byte, error) {
 				// Extract the secret from userInput if manual entry
 				lines := strings.Split(tc.userInput, "\n")
-				if len(lines) >= 3 && strings.Contains(lines[1], "2") {
+				if len(lines) >= 3 && strings.Contains(lines[1], "1") {
 					return []byte(lines[2]), nil
 				}
 				return []byte("JBSWY3DPEHPK3PXP"), nil
