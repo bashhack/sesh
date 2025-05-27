@@ -32,7 +32,7 @@ ignore:
   - "internal/*/mocks/**/*"       # All mock packages
   - "internal/testutil/**/*"      # Test utilities
 
-  - "sesh-cli/cmd/sesh/main.go"   # Main entry point
+  - "sesh/cmd/sesh/main.go"      # Main entry point
 
   - "scripts/**/*"                # Build/helper scripts
   - "homebrew/**/*"               # Homebrew-related files
