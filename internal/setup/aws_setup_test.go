@@ -125,14 +125,14 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			expectError: false,
 			userInput:   "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
 		},
-		// "successful setup with QR code": {
-		// 	awsCommandOutputs: map[string]string{
-		// 		"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-		// 		"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
-		// 	},
-		// 	expectError: false,
-		// 	userInput:   "\n1\n", // empty profile, QR choice
-		// },
+		"successful setup with QR code": {
+			awsCommandOutputs: map[string]string{
+				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
+				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+			},
+			expectError: false,
+			userInput:   "\n2\n\n", // empty profile, QR choice
+		},
 		"successful setup with named profile": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
