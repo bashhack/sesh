@@ -147,9 +147,9 @@ coverage:
 coverage/func:
 	@echo 'Generating function-level coverage report...'
 	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts) 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
-	@echo 'Filtering out testutil, mock files, scripts, and interface-only files...'
-	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" coverage.txt > coverage.filtered.txt || true
-	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" || true
+	@echo 'Filtering out testutil, mock files, scripts, interface-only files, and main.go...'
+	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
+	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" || true
 	@rm -f coverage.filtered.txt
 
 
