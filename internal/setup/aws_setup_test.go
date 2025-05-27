@@ -76,7 +76,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
 			},
 			expectError:      true,
-			expectedErrorMsg: "no choice made",
+			expectedErrorMsg: "invalid choice, please select 1 or 2",
 			userInput:        "\n\n", // empty profile, empty choice
 		},
 		"qr scan fails": {
@@ -147,7 +147,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				"list-mfa-devices":    ``,
 			},
 			expectError: false,
-			userInput:   "\n1\nJBSWY3DPEHPK3PXP\n\n1\n1\narn:aws:iam::123456789012:mfa/testuser\n", // empty profile, manual entry (1), secret, Enter after TOTP, '1' to wait/retry, '1' to wait again, then manual ARN
+			userInput:   "\n1\nJBSWY3DPEHPK3PXP\n\n1\n1\n3\narn:aws:iam::123456789012:mfa/testuser\n", // empty profile, choice 1 (ready to continue), secret, Enter after TOTP, '1' to wait/retry, '1' to wait again, '3' for manual entry, then manual ARN
 		},
 	}
 
