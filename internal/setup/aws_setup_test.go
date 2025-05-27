@@ -144,11 +144,10 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"no MFA devices found": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices":    `{"MFADevices": []}`,
+				"list-mfa-devices":    ``,
 			},
-			expectError:      true,
-			expectedErrorMsg: "failed to select MFA device",
-			userInput:        "\n1\nJBSWY3DPEHPK3PXP\n\n3\narn:aws:iam::123456789012:mfa/testuser\n", // empty profile, manual entry (1), secret, Enter after TOTP, '3' for manual ARN entry, ARN
+			expectError:      false,
+			userInput:        "\n1\nJBSWY3DPEHPK3PXP\n\n1\n1\narn:aws:iam::123456789012:mfa/testuser\n", // empty profile, manual entry (1), secret, Enter after TOTP, '1' to wait/retry, '1' to wait again, then manual ARN
 		},
 	}
 
