@@ -10,8 +10,8 @@ import (
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 )
 
-// TestHelperProcess is a helper process for exec commands
-func TestHelperProcess(t *testing.T) {
+// TestMockReaderHelperProcess is a helper process for exec commands in this test file
+func TestMockReaderHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
 	}
@@ -66,7 +66,7 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 
 		// Mock execCommand for AWS CLI calls
 		execCommand = func(command string, args ...string) *exec.Cmd {
-			cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+			cmd := exec.Command(os.Args[0], "-test.run=TestMockReaderHelperProcess")
 			cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
 
 			if len(args) > 0 && args[0] == "sts" {
@@ -455,7 +455,7 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 
 		// Mock execCommand for AWS CLI calls
 		execCommand = func(command string, args ...string) *exec.Cmd {
-			cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+			cmd := exec.Command(os.Args[0], "-test.run=TestMockReaderHelperProcess")
 			cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
 
 			if len(args) > 0 && args[0] == "sts" {
