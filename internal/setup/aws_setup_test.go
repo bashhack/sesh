@@ -3,6 +3,7 @@ package setup
 import (
 	"bufio"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -105,7 +106,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			getCurrentUserError: fmt.Errorf("user error"),
 			expectError:         true,
 			expectedErrorMsg:    "failed to get current user",
-			userInput:           "\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // empty profile, manual entry (1), valid secret, Enter after TOTP codes, '1' to select first device
+			userInput:           "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
 		},
 		"keychain save fails": {
 			awsCommandOutputs: map[string]string{
@@ -115,7 +116,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			keychainSaveError: fmt.Errorf("keychain error"),
 			expectError:       true,
 			expectedErrorMsg:  "failed to store secret in keychain",
-			userInput:         "\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // empty profile, manual entry (1), valid secret, Enter after TOTP codes, '1' to select first device
+			userInput:         "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
 		},
 		"successful setup with manual entry": {
 			awsCommandOutputs: map[string]string{
@@ -123,7 +124,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
 			},
 			expectError: false,
-			userInput:   "\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // empty profile, manual entry (1), valid secret, Enter after TOTP codes, '1' to select first device
+			userInput:   "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
 		},
 		"successful setup with QR code": {
 			awsCommandOutputs: map[string]string{
@@ -139,15 +140,15 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
 			},
 			expectError: false,
-			userInput:   "test-profile\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // named profile, manual entry (1), valid secret, Enter after TOTP codes, '1' to select first device
+			userInput:   "test-profile\n2\nJBSWY3DPEHPK3PXP\n", // named profile, manual entry, valid secret
 		},
 		"no MFA devices found": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
 				"list-mfa-devices":    ``,
 			},
-			expectError:      false,
-			userInput:        "\n1\nJBSWY3DPEHPK3PXP\n\n1\n1\narn:aws:iam::123456789012:mfa/testuser\n", // empty profile, manual entry (1), secret, Enter after TOTP, '1' to wait/retry, '1' to wait again, then manual ARN
+			expectError: false,
+			userInput:   "\n1\nJBSWY3DPEHPK3PXP\n\n1\n1\narn:aws:iam::123456789012:mfa/testuser\n", // empty profile, manual entry (1), secret, Enter after TOTP, '1' to wait/retry, '1' to wait again, then manual ARN
 		},
 	}
 
@@ -215,14 +216,17 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				if tc.scanQRError != nil {
 					return "", tc.scanQRError
 				}
-				return "otpauth://totp/AWS:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=AWS", nil
+				// Extract secret from URL just like the real implementation
+				otpURL := "otpauth://totp/AWS:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=AWS"
+				u, _ := url.Parse(otpURL)
+				return u.Query().Get("secret"), nil
 			}
 
 			// Mock readPassword for manual entry
 			readPassword = func(fd int) ([]byte, error) {
 				// Extract the secret from userInput if manual entry
 				lines := strings.Split(tc.userInput, "\n")
-				if len(lines) >= 3 && strings.Contains(lines[1], "1") {
+				if len(lines) >= 3 && strings.Contains(lines[1], "2") {
 					return []byte(lines[2]), nil
 				}
 				return []byte("JBSWY3DPEHPK3PXP"), nil
