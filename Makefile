@@ -112,8 +112,8 @@ test:
 	@echo '📊 Generating test coverage...'
 	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts)
 	@echo 'Filtering coverage report...'
-	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" coverage.txt > coverage.filtered.txt || true
-	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" || true
+	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
+	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" || true
 	@rm -f coverage.filtered.txt
 	@echo ''
 	@echo '✅ All tests completed successfully.'
@@ -136,8 +136,8 @@ test/verbose:
 coverage:
 	@echo 'Running tests with coverage...'
 	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts) | grep -v "no test files" | grep -v "coverage: 0.0%" || true
-	@echo 'Filtering out testutil, mock files, scripts, and interface-only files...'
-	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/" coverage.txt > coverage.filtered.txt || true
+	@echo 'Filtering out testutil, mock files, scripts, interface-only files, and main.go...'
+	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
 	@go tool cover -html=coverage.filtered.txt -o coverage.html
 	@echo "Coverage report generated at coverage.html"
 	@rm -f coverage.filtered.txt
