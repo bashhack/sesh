@@ -72,8 +72,8 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 			if len(args) > 0 && args[0] == "sts" {
 				cmd.Env = append(cmd.Env, "STDOUT="+`{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`)
 			} else if len(args) > 0 && args[0] == "iam" && len(args) > 1 && args[1] == "list-mfa-devices" {
-				// Return empty list to trigger the retry flow
-				cmd.Env = append(cmd.Env, "STDOUT=")
+				// Return empty JSON list to trigger the retry flow
+				cmd.Env = append(cmd.Env, "STDOUT="+`{"MFADevices": []}`)
 			}
 			return cmd
 		}
@@ -461,8 +461,8 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 			if len(args) > 0 && args[0] == "sts" {
 				cmd.Env = append(cmd.Env, "STDOUT="+`{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`)
 			} else if len(args) > 0 && args[0] == "iam" && len(args) > 1 && args[1] == "list-mfa-devices" {
-				// Return MFA device
-				cmd.Env = append(cmd.Env, "STDOUT=arn:aws:iam::123456789012:mfa/testuser")
+				// Return MFA device in proper JSON format
+				cmd.Env = append(cmd.Env, "STDOUT="+`{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`)
 			}
 			return cmd
 		}
