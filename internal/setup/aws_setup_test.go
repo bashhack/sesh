@@ -105,7 +105,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			getCurrentUserError: fmt.Errorf("user error"),
 			expectError:         true,
 			expectedErrorMsg:    "failed to get current user",
-			userInput:           "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
+			userInput:           "\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // empty profile, manual entry (1), valid secret, Enter after TOTP codes, '1' to select first device
 		},
 		"keychain save fails": {
 			awsCommandOutputs: map[string]string{
@@ -115,7 +115,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			keychainSaveError: fmt.Errorf("keychain error"),
 			expectError:       true,
 			expectedErrorMsg:  "failed to store secret in keychain",
-			userInput:         "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
+			userInput:         "\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // empty profile, manual entry (1), valid secret, Enter after TOTP codes, '1' to select first device
 		},
 		"successful setup with manual entry": {
 			awsCommandOutputs: map[string]string{
@@ -139,7 +139,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
 			},
 			expectError: false,
-			userInput:   "test-profile\n2\nJBSWY3DPEHPK3PXP\n", // named profile, manual entry, valid secret
+			userInput:   "test-profile\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // named profile, manual entry (1), valid secret, Enter after TOTP codes, '1' to select first device
 		},
 		"no MFA devices found": {
 			awsCommandOutputs: map[string]string{
