@@ -216,7 +216,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				if tc.scanQRError != nil {
 					return "", tc.scanQRError
 				}
-				return "otpauth://totp/AWS:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=AWS", nil
+				return "JBSWY3DPEHPK3PXP", nil
 			}
 
 			// Mock readPassword for manual entry
