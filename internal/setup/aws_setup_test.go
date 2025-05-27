@@ -100,7 +100,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"get current user fails": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+				"list-mfa-devices":    `arn:aws:iam::123456789012:mfa/testuser`,
 			},
 			getCurrentUserError: fmt.Errorf("user error"),
 			expectError:         true,
@@ -110,7 +110,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"keychain save fails": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+				"list-mfa-devices":    `arn:aws:iam::123456789012:mfa/testuser`,
 			},
 			keychainSaveError: fmt.Errorf("keychain error"),
 			expectError:       true,
@@ -120,7 +120,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"successful setup with manual entry": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+				"list-mfa-devices":    `arn:aws:iam::123456789012:mfa/testuser`,
 			},
 			expectError: false,
 			userInput:   "\n2\nJBSWY3DPEHPK3PXP\n", // empty profile, manual entry, valid secret
@@ -128,7 +128,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"successful setup with QR code": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+				"list-mfa-devices":    `arn:aws:iam::123456789012:mfa/testuser`,
 			},
 			expectError: false,
 			userInput:   "\n2\n\n\n1\n", // empty profile, QR choice (2), Enter to capture, Enter after TOTP codes, '1' to select first device
@@ -136,7 +136,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		"successful setup with named profile": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-				"list-mfa-devices":    `{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/testuser"}]}`,
+				"list-mfa-devices":    `arn:aws:iam::123456789012:mfa/testuser`,
 			},
 			expectError: false,
 			userInput:   "test-profile\n2\nJBSWY3DPEHPK3PXP\n", // named profile, manual entry, valid secret
@@ -215,7 +215,8 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				if tc.scanQRError != nil {
 					return "", tc.scanQRError
 				}
-				return "otpauth://totp/AWS:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=AWS", nil
+				// Return just the secret, not the full otpauth URI
+				return "JBSWY3DPEHPK3PXP", nil
 			}
 
 			// Mock readPassword for manual entry
