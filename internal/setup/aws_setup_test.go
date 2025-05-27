@@ -79,15 +79,15 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			expectedErrorMsg: "no choice made",
 			userInput:        "\n\n", // empty profile, empty choice
 		},
-		// "// qr scan fails": { // THIS ONE!
-		// 	awsCommandOutputs: map[string]string{
-		// 		"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-		// 	},
-		// 	scanQRError:      fmt.Errorf("camera error"),
-		// 	expectError:      true,
-		// 	expectedErrorMsg: "failed to capture MFA secret",
-		// 	userInput:        "\n1\n", // empty profile, QR choice
-		// },
+		"qr scan fails": { // THIS ONE!
+			awsCommandOutputs: map[string]string{
+				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
+			},
+			scanQRError:      fmt.Errorf("camera error"),
+			expectError:      true,
+			expectedErrorMsg: "failed to capture MFA secret",
+			userInput:        "\n2\n\nm\n", // empty profile, QR choice (2), Enter to activate screenshot, 'm' to switch to manual after failure
+		},
 		"invalid totp secret": {
 			awsCommandOutputs: map[string]string{
 				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
