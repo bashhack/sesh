@@ -480,7 +480,7 @@ func (h *AWSSetupHandler) Setup() error {
 		return fmt.Errorf("failed to select MFA device: %w", err)
 	}
 
-	user, err := env.GetCurrentUser()
+	user, err := getCurrentUser()
 	if err != nil {
 		return fmt.Errorf("failed to get current user: %w", err)
 	}
