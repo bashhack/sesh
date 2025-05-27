@@ -85,7 +85,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			},
 			scanQRError:      fmt.Errorf("camera error"),
 			expectError:      true,
-			expectedErrorMsg: "failed to capture MFA secret",
+			expectedErrorMsg: "secret key seems too short",
 			userInput:        "\n2\n\nm\n", // empty profile, QR choice (2), Enter to activate screenshot, 'm' to switch to manual after failure
 		},
 		"invalid totp secret": {
