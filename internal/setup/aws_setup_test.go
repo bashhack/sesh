@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/totp"
 )
 
 // mockReader wraps a strings.Reader and returns an error when out of input
@@ -578,12 +579,16 @@ func TestAWSSetupHandler_Setup_Overwrite(t *testing.T) {
 	origValidateAndNormalizeSecret := validateAndNormalizeSecret
 	origGetCurrentUser := getCurrentUser
 	origReadPassword := readPassword
+	origTotp := totp.ValidateAndNormalizeSecret
+	origGenerateCodes := totp.GenerateConsecutiveCodes
 	defer func() {
 		execLookPath = origExecLookPath
 		execCommand = origExecCommand
 		validateAndNormalizeSecret = origValidateAndNormalizeSecret
 		getCurrentUser = origGetCurrentUser
 		readPassword = origReadPassword
+		totp.ValidateAndNormalizeSecret = origTotp
+		totp.GenerateConsecutiveCodes = origGenerateCodes
 	}()
 
 	// Mock functions
@@ -597,6 +602,14 @@ func TestAWSSetupHandler_Setup_Overwrite(t *testing.T) {
 	
 	validateAndNormalizeSecret = func(secret string) (string, error) {
 		return secret, nil
+	}
+	
+	totp.ValidateAndNormalizeSecret = func(secret string) (string, error) {
+		return secret, nil
+	}
+	
+	totp.GenerateConsecutiveCodes = func(secret string) (string, string, error) {
+		return "123456", "789012", nil
 	}
 	
 	// Mock AWS commands
