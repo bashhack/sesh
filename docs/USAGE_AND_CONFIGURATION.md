@@ -4,7 +4,7 @@ This document provides detailed instructions for using and configuring sesh for 
 
 ## Workflow Overview
 
-The diagram below shows the complete workflow for using gitbak, from starting the tool through to integrating your changes after a session:
+The diagram below shows the complete workflow for using sesh, from initial setup through daily usage:
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
@@ -13,49 +13,62 @@ flowchart TD
     classDef process fill:#dfd,stroke:#333,stroke-width:2px
     classDef decision fill:#ffd,stroke:#333,stroke-width:2px
     classDef endNode fill:#fdc,stroke:#333,stroke-width:2px
-    classDef gitbak fill:#bbf,stroke:#333,stroke-width:2px
-    classDef manual fill:#f9f,stroke:#333,stroke-width:2px
+    classDef sesh fill:#bbf,stroke:#333,stroke-width:2px
+    classDef setup fill:#f9f,stroke:#333,stroke-width:2px
 
-    Start([Start development session]):::start --> Decision1{"Choose workflow"}:::decision
-
-    Decision1 -->|"Safety-focused"| GB1["Run gitbak with new branch<br>gitbak -branch feature-backup"]:::gitbak
-    Decision1 -->|"Hybrid workflow"| GB2["Run gitbak on current branch<br>gitbak -no-branch"]:::gitbak
-    Decision1 -->|"Continue previous"| GB3["Run gitbak in continue mode<br>gitbak -continue"]:::gitbak
-
-    GB1 & GB2 & GB3 --> Dev["Develop code while<br>gitbak runs in background"]:::process
-
-    Dev --> |"Optional"| ManualCommit["Create manual milestone commits<br>git add -p<br>git commit -m \"Implement feature\""]:::manual
-    ManualCommit --> Dev
-
-    Dev --> End1([End session with Ctrl+C]):::endNode
-
-    End1 --> |"Session Summary"| Decision2{"Choose integration<br>approach"}:::decision
-
-    Decision2 -->|"Clean history"| Option1["Squash to single commit<br>git checkout main<br>git merge --squash feature-backup<br>git commit -m \"Complete feature\""]:::manual
-
-    Decision2 -->|"Preserve milestones<br>(hybrid workflow)"| Option2["Interactive rebase<br>git rebase -i main<br>(keep only manual commits)"]:::manual
-
-    Decision2 -->|"Full detail"| Option3["Regular merge<br>git checkout main<br>git merge feature-backup"]:::manual
-
-    Decision2 -->|"Continue later"| Option4["Resume later<br>gitbak -continue"]:::gitbak
-
-    Option1 & Option2 & Option3 --> Done([Integration complete]):::endNode
-    Option4 --> Dev
+    Start([First Time User]):::start --> Setup["Run setup wizard<br>sesh --service aws --setup<br>or<br>sesh --service totp --setup"]:::setup
+    
+    Setup --> SetupChoice{"Setup Method"}:::decision
+    SetupChoice -->|"QR Code"| QR["Screenshot QR code<br>Auto-extract secret"]:::process
+    SetupChoice -->|"Manual"| Manual["Enter secret manually<br>Validate & store"]:::process
+    
+    QR --> Keychain["Store in macOS Keychain<br>Binary-level access control"]:::process
+    Manual --> Keychain
+    
+    Keychain --> Daily([Daily Usage]):::start
+    
+    Daily --> Service{"Choose Service"}:::decision
+    
+    Service -->|"AWS"| AWSChoice{"AWS Mode"}:::decision
+    AWSChoice -->|"Default"| Subshell["Launch secure subshell<br>sesh --service aws"]:::sesh
+    AWSChoice -->|"Export"| Export["Print credentials<br>sesh --service aws --no-subshell"]:::sesh
+    AWSChoice -->|"Clipboard"| AWSClip["Copy TOTP for console<br>sesh --service aws --clip"]:::sesh
+    
+    Service -->|"TOTP"| TOTP["Generate TOTP code<br>sesh --service totp --service-name github"]:::sesh
+    
+    Subshell --> Work["Work in secure environment<br>- sesh_status<br>- verify_aws<br>- Auto-expiry tracking"]:::process
+    Work --> Exit["Exit subshell<br>Credentials cleared"]:::endNode
+    
+    Export --> Use["Use credentials/code"]:::process
+    AWSClip --> Use
+    TOTP --> Use
+    
+    Use --> Expire["Wait for expiry<br>or immediate use"]:::process
+    Expire --> Daily
+    
+    Exit --> Daily
 ```
 
 ## Basic Usage
 
-The simplest way to use gitbak is to navigate to your Git repository and run:
+The simplest way to use sesh is to set up a provider and start authenticating:
 
 ```bash
-gitbak
+# First time setup
+sesh --service aws --setup
+
+# Daily usage - launch secure AWS subshell
+sesh --service aws
+
+# Generate TOTP code for any service
+sesh --service totp --service-name github
 ```
 
 This will:
 
-1. Create a new branch named `gitbak-<timestamp>`
-2. Start committing changes automatically every 5 minutes
-3. Display a summary when you terminate the process (Ctrl+C)
+1. **For AWS**: Launch a secure subshell with temporary credentials (12-hour duration)
+2. **For TOTP**: Generate and display a 6-digit code with time remaining
+3. **Optional**: Copy codes to clipboard with `--clip` flag
 
 ## Configuration Methods
 
