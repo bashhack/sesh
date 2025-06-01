@@ -580,7 +580,7 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 		// Should fail with "failed to get current user"
 		if err == nil {
 			t.Errorf("Expected error but got nil")
-		} else if !contains(err.Error(), "failed to get current user") {
+		} else if !strings.Contains(err.Error(), "failed to get current user") {
 			t.Errorf("Expected error containing 'failed to get current user', got: %v", err)
 		}
 	})
