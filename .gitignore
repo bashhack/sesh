@@ -12,6 +12,7 @@ debug_sesh
 coverage.txt
 coverage.out
 coverage.html
+security-report.json
 
 # Dependency directories
 /vendor/

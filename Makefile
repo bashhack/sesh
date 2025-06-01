@@ -91,6 +91,8 @@ audit:
 	go fmt $$(go list ./... | grep -v /scripts)
 	@echo 'Running lint...'
 	@$(MAKE) lint
+	@echo 'Running security scan...'
+	@$(MAKE) security-scan
 	@echo 'Running tests...'
 	go test -race -vet=off $$(go list ./... | grep -v /scripts)
 
@@ -163,6 +165,27 @@ lint:
 	@go vet $$(go list ./... | grep -v /scripts)
 	@$(MAKE) run-golangci-lint || echo "Skipping external linting"
 	@$(MAKE) run-staticcheck || echo "Skipping staticcheck"
+
+## security-scan: Run security vulnerability scanner
+.PHONY: security-scan
+security-scan:
+	@echo "🔒 Running security scan..."
+	@if ! command -v gosec > /dev/null; then \
+		echo "Installing gosec..."; \
+		go install github.com/securego/gosec/v2/cmd/gosec@latest; \
+	fi
+	@echo "Scanning for security vulnerabilities..."
+	@gosec -fmt=json -out=security-report.json ./... 2>/dev/null || true
+	@if [ -f security-report.json ]; then \
+		issues=$$(cat security-report.json | grep -o '"Issues":[^,]*' | cut -d':' -f2); \
+		if [ "$$issues" = "null" ] || [ "$$issues" = "[]" ]; then \
+			echo "✅ No security issues found!"; \
+		else \
+			echo "⚠️  Security issues found. Check security-report.json for details."; \
+			gosec -fmt=text ./... 2>/dev/null | grep -A 5 "Severity:" || true; \
+		fi; \
+	fi
+	@echo "Security scan complete."
 
 # ============================================================================= #
 # BUILD
