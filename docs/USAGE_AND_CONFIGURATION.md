@@ -230,85 +230,98 @@ flowchart TD
 - **Secure**: Keychain storage is more secure than many mobile apps
 - **Private**: Your auth codes stay on your machine
 
-### Continuation Mode
+### Entry Management
 
-Continuation mode allows you to resume a previous gitbak session:
+Sesh provides comprehensive entry management capabilities:
 
 ```bash
-# Start a session
-gitbak -branch feature-development
+# List all entries for a service
+sesh --service aws --list
+sesh --service totp --list
 
-# Later, continue the same session
-gitbak -continue
+# Delete entries by ID
+sesh --service aws --delete aws-123
+sesh --service totp --delete totp-github-work
+
+# Entries are named systematically:
+# AWS: sesh-aws-{profile}
+# TOTP: sesh-totp-{service}-{profile}
 ```
 
-When using `-continue`:
+### Setup Wizard Features
 
-- gitbak will not create a new branch
-- It will find the highest commit number used in previous commits
-- Numbering will continue from the last commit number
-- This maintains a clean, sequential history
-
-### Using the Current Branch
-
-If you prefer not to create a separate branch:
+The interactive setup wizard guides you through configuration:
 
 ```bash
-gitbak -no-branch
+# AWS Setup
+sesh --service aws --setup
+# - Prompts for MFA device setup in AWS Console
+# - Handles QR code scanning or manual entry
+# - Validates and stores secret securely
+# - Provides test codes for AWS activation
+
+# TOTP Setup
+sesh --service totp --setup
+# - Prompts for service name
+# - Optional profile name for multiple accounts
+# - QR code scanning via screenshot
+# - Manual secret entry fallback
 ```
 
-This is useful when you're already on a development branch and want to keep all commits there.
+### Troubleshooting Mode
 
-### Debug Mode
-
-For troubleshooting, enable debug mode:
+When encountering issues, use verbose output:
 
 ```bash
-gitbak -debug
+# Get detailed help for a provider
+sesh --service aws --help
+sesh --service totp --help
+
+# Common issues:
+# 1. "No MFA device found" - Check AWS profile or specify --profile
+# 2. "Code already used" - Use --clip mode for AWS Console
+# 3. "Invalid secret" - Ensure base32 encoding during setup
 ```
 
-This will:
-
-1. Create a detailed log file
-2. Show additional information during operation
-3. Provide more context when errors occur
-
-The log file location is displayed when starting in debug mode.
-
-## Environment Variable Examples
+## Environment Variables
 
 ```bash
-# Run with 2-minute interval and custom branch name
-INTERVAL_MINUTES=2 BRANCH_NAME="my-feature-backup" gitbak
+# Set default AWS profile
+export AWS_PROFILE=production
+sesh --service aws  # Uses production profile
 
-# Run with debug logging enabled
-DEBUG=true gitbak
-
-# Use current branch instead of creating a new one
-CREATE_BRANCH=false gitbak
+# AWS credential environment (set by subshell)
+# AWS_ACCESS_KEY_ID
+# AWS_SECRET_ACCESS_KEY
+# AWS_SESSION_TOKEN
+# SESH_ACTIVE=1
+# SESH_SERVICE=aws
+# SESH_EXPIRY=<unix-timestamp>
 ```
 
 ## Default Behavior
 
-When run without any configuration, gitbak will:
+When run without additional flags, sesh will:
 
-1. Create a new branch named `gitbak-<timestamp>`
-2. Commit changes every 5 minutes if changes are detected
-3. Prefix commit messages with `[gitbak]`
-4. Only show essential messages (not showing "no changes" messages)
-5. Automatically retry on errors up to 3 times before exiting
+1. **For AWS (`--service aws`)**: Launch a secure subshell with 12-hour session credentials
+2. **For TOTP (`--service totp`)**: Display the current code with time remaining
+3. **Setup Required**: First-time users must run `--setup` for each service
+4. **Profile Selection**: Uses default AWS profile or requires `--service-name` for TOTP
+5. **Security**: All secrets stored in macOS Keychain with binary-level access control
 
-## Signal Handling
+## Subshell Behavior
 
-gitbak handles the following signals gracefully:
+The AWS subshell provides:
 
-- `SIGINT` (Ctrl+C) - Stops the process and displays a summary
-- `SIGTERM` - Stops the process and displays a summary
-- `SIGHUP` - Handles terminal disconnection properly
-
-This ensures that even if your terminal session is closed unexpectedly, gitbak will clean up properly.
+- **Visual Indicators**: Custom prompt showing active sesh session
+- **Auto-cleanup**: Credentials cleared on exit
+- **Built-in Commands**: `sesh_status`, `verify_aws`, `sesh_help`
+- **Expiry Tracking**: Automatic notification when credentials near expiration
+- **Shell Support**: Full support for bash/zsh, basic support for other shells
 
 ## Related Documentation
 
-- [After Session Guide](AFTER_SESSION.md) - What to do with your gitbak commits
-- [IDE Integration](IDE_INTEGRATION.md) - How to integrate gitbak with various IDEs
+- [Advanced Usage](ADVANCED_USAGE.md) - Deep dive into sesh features
+- [Security Model](SECURITY_MODEL.md) - Understanding sesh's security architecture
+- [Plugin Development](PLUGIN_DEVELOPMENT.md) - Adding new authentication providers
+- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
