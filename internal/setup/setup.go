@@ -448,6 +448,35 @@ func (h *AWSSetupHandler) Setup() error {
 	profile, _ := h.reader.ReadString('\n')
 	profile = strings.TrimSpace(profile)
 
+	// Check if entry already exists
+	user, err := getCurrentUser()
+	if err != nil {
+		return fmt.Errorf("failed to get current user: %w", err)
+	}
+
+	serviceName := h.createServiceName(constants.AWSServicePrefix, profile)
+	existingSecret, _ := h.keychainProvider.GetSecretString(user, serviceName)
+	
+	if existingSecret != "" {
+		// Entry exists, prompt for overwrite
+		profileDisplay := profile
+		if profileDisplay == "" {
+			profileDisplay = "default"
+		}
+		
+		fmt.Printf("\n⚠️  An entry already exists for AWS profile '%s'\n", profileDisplay)
+		fmt.Print("\nOverwrite existing configuration? (y/N): ")
+		
+		response, _ := h.reader.ReadString('\n')
+		response = strings.TrimSpace(strings.ToLower(response))
+		
+		if response != "y" && response != "yes" {
+			fmt.Println("\n❌ Setup cancelled")
+			return fmt.Errorf("setup cancelled by user")
+		}
+		fmt.Println() // Add spacing before continuing
+	}
+
 	_, err = h.verifyAWSCredentials(profile)
 	if err != nil {
 		return err
@@ -633,6 +662,34 @@ func (h *TOTPSetupHandler) Setup() error {
 	profile, err := h.promptForProfile()
 	if err != nil {
 		return err
+	}
+
+	// Check if entry already exists
+	user, err := getCurrentUser()
+	if err != nil {
+		return fmt.Errorf("failed to get current user: %w", err)
+	}
+
+	serviceKey := h.createTOTPServiceName(serviceName, profile)
+	existingSecret, _ := h.keychainProvider.GetSecretString(user, serviceKey)
+	
+	if existingSecret != "" {
+		// Entry exists, prompt for overwrite
+		fmt.Printf("\n⚠️  An entry already exists for service '%s'", serviceName)
+		if profile != "" {
+			fmt.Printf(" with profile '%s'", profile)
+		}
+		fmt.Println()
+		fmt.Print("\nOverwrite existing configuration? (y/N): ")
+		
+		response, _ := h.reader.ReadString('\n')
+		response = strings.TrimSpace(strings.ToLower(response))
+		
+		if response != "y" && response != "yes" {
+			fmt.Println("\n❌ Setup cancelled")
+			return fmt.Errorf("setup cancelled by user")
+		}
+		fmt.Println() // Add spacing before continuing
 	}
 
 	choice, err := h.promptForCaptureMethod()
