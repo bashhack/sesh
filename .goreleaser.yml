@@ -33,6 +33,7 @@ archives:
       - README.md
       - LICENSE
       - docs/*.md
+      - docs/assets/*.mermaid
 
 brews:
   - repository:
