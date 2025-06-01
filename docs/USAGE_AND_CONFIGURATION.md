@@ -54,21 +54,23 @@ flowchart TD
 The simplest way to use sesh is to set up a provider and start authenticating:
 
 ```bash
-# First time setup
+# First time setup for AWS
 sesh --service aws --setup
+
+# ... or for general TOTP provider usage (e.g., any TOTP)
+sesh --service totp --setup
 
 # Daily usage - launch secure AWS subshell
 sesh --service aws
 
-# Generate TOTP code for any service
-sesh --service totp --service-name github
+# Generate and copy TOTP code for any service provider
+sesh --service totp --service-name github --clip
 ```
 
 This will:
 
-1. **For AWS**: Launch a secure subshell with temporary credentials (12-hour duration)
-2. **For TOTP**: Generate and display a 6-digit code with time remaining
-3. **Optional**: Copy codes to clipboard with `--clip` flag
+1. **For AWS**: Launch a secure subshell with temporary credentials activated and MFA authenticated
+2. **For TOTP**: Generate, display and copy a 6-digit code with time remaining - can be pasted into web forms, etc. immediately
 
 ## Configuration Methods
 
