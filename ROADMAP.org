@@ -104,11 +104,11 @@ Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-foc
 *** DONE Implement strict permission checks
 *** DONE Add TOTP seed validation
 
-** Testing [2/4]
+** Testing [3/4]
 *** DONE Create automated tests for plugins
 *** DONE Implement CI pipeline
 *** TODO Add security testing
-*** TODO Create integration tests with actual services
+*** DONE Create integration tests with actual services [AWS implemented]
 
 ** Documentation [2/3]
 *** DONE Update README with new capabilities
