@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/keychain/mocks"
-	"github.com/bashhack/sesh/internal/totp"
 )
 
 // mockReader wraps a strings.Reader and returns an error when out of input
@@ -114,6 +113,14 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			expectedErrorMsg:    "invalid TOTP secret",
 			userInput:           "\n2\nINVALID_SECRET\n", // empty profile, manual entry, bad secret
 		},
+		"existing entry cancelled by user": {
+			awsCommandOutputs: map[string]string{
+				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
+			},
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			userInput:        "\nn\n", // empty profile, no to overwrite
+		},
 	}
 
 	for name, tc := range tests {
@@ -195,6 +202,13 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 
 			// Create mock keychain
 			mockKeychain := &mocks.MockProvider{
+				GetSecretStringFunc: func(account, service string) (string, error) {
+					// Return existing secret for overwrite test case
+					if tc.expectedErrorMsg == "setup cancelled by user" {
+						return "EXISTING_SECRET", nil
+					}
+					return "", nil
+				},
 				SetSecretStringFunc: func(account, service, secret string) error {
 					return tc.keychainSaveError
 				},
