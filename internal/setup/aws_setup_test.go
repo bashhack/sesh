@@ -579,16 +579,14 @@ func TestAWSSetupHandler_Setup_Overwrite(t *testing.T) {
 	origValidateAndNormalizeSecret := validateAndNormalizeSecret
 	origGetCurrentUser := getCurrentUser
 	origReadPassword := readPassword
-	origTotp := totp.ValidateAndNormalizeSecret
-	origGenerateCodes := totp.GenerateConsecutiveCodes
+	origGenerateConsecutiveCodes := generateConsecutiveCodes
 	defer func() {
 		execLookPath = origExecLookPath
 		execCommand = origExecCommand
 		validateAndNormalizeSecret = origValidateAndNormalizeSecret
 		getCurrentUser = origGetCurrentUser
 		readPassword = origReadPassword
-		totp.ValidateAndNormalizeSecret = origTotp
-		totp.GenerateConsecutiveCodes = origGenerateCodes
+		generateConsecutiveCodes = origGenerateConsecutiveCodes
 	}()
 
 	// Mock functions
@@ -604,11 +602,7 @@ func TestAWSSetupHandler_Setup_Overwrite(t *testing.T) {
 		return secret, nil
 	}
 	
-	totp.ValidateAndNormalizeSecret = func(secret string) (string, error) {
-		return secret, nil
-	}
-	
-	totp.GenerateConsecutiveCodes = func(secret string) (string, string, error) {
+	generateConsecutiveCodes = func(secret string) (string, string, error) {
 		return "123456", "789012", nil
 	}
 	
