@@ -9,6 +9,16 @@ A powerful CLI tool that manages secure authentication workflows for AWS, TOTP s
 
 ## 🎯 Purpose
 
+I was tired of relying on browser extensions or native desktop apps from corporate vendors—tools that often feel like security theater while quietly harvesting data. I needed something lightweight and truly secure.
+
+In particular, I wanted fast, secure MFA support directly in the terminal—both for AWS console access and for web-based TOTP forms. I was frustrated by how tightly MFA workflows are coupled to mobile devices, and I wanted to break free from that dependency.
+
+**sesh fills that gap.** It's simple, scriptable, and works seamlessly for both:
+- AWS CLI + console MFA workflows
+- Web-based MFA flows where a TOTP secret is available
+
+While sesh overlaps a bit with tools like aws-vault, it goes further by offering a general-purpose CLI-based TOTP experience—no mobile device, no browser, no bloat. Your security, your control, your terminal.
+
 ## 🌟 Features
 
 - **Extensible Plugin Architecture** — Easy to add new authentication providers
