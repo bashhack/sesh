@@ -114,19 +114,18 @@ sesh uses a provider-based configuration system:
 
 ```bash
 # View all available options
-gitbak -help
+sesh --help
 
-# Custom interval (2 minutes)
-gitbak -interval 2
+# View provider-specific help
+sesh --service aws --help
+sesh --service totp --help
 
-# 30-second intervals (using decimal)
-gitbak -interval 0.5
+# List available providers
+sesh --list-services
 
-# Custom branch name
-gitbak -branch "feature-work-backup"
-
-# Custom commit prefix
-gitbak -prefix "[auto-save]"
+# Setup wizards
+sesh --service aws --setup
+sesh --service totp --setup
 ```
 
 ### 💡 Best Practice: Mixing Manual Commits with Automatic Checkpoints
