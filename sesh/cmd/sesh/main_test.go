@@ -55,7 +55,12 @@ func mockApp() (*App, *bytes.Buffer, *bytes.Buffer) {
 
 	// Create app with mock keychain from the start
 	mockKeychain := &mocks.MockProvider{}
-	app := NewApp(mockKeychain)
+	versionInfo := VersionInfo{
+		Version: "test-version",
+		Commit:  "test-commit",
+		Date:    "test-date",
+	}
+	app := NewApp(mockKeychain, versionInfo)
 
 	// Override other components with mocks
 	app.AWS = &awsMocks.MockProvider{}
@@ -65,11 +70,6 @@ func mockApp() (*App, *bytes.Buffer, *bytes.Buffer) {
 	app.Exit = func(int) {}
 	app.Stdout = stdoutBuf
 	app.Stderr = stderrBuf
-	app.VersionInfo = VersionInfo{
-		Version: "test-version",
-		Commit:  "test-commit",
-		Date:    "test-date",
-	}
 
 	return app, stdoutBuf, stderrBuf
 }
