@@ -72,6 +72,20 @@ This will:
 1. **For AWS**: Launch a secure subshell with temporary credentials activated and MFA authenticated
 2. **For TOTP**: Generate, display and copy a 6-digit code with time remaining - can be pasted into web forms, etc. immediately
 
+sesh is designed to be a drop-in replacement for mobile or desktop apps like 1Password, Authy, Google Authenticator and more. It is a universal and flexible system that embraces the open TOTP standard to interface with compliant service providers.
+
+When assessing what will work with sesh, look for these signs:
+- "Works with Google Authenticator" ✅
+- Shows a QR code during setup ✅
+- Offers "manual entry" option ✅
+- Mentions "TOTP" or "RFC 6238" ✅
+- Says "enter 6-digit code" ✅
+
+Potential red flags for compatability are the same one would face with Authy or Google Authenticator:
+- "SMS only" ❌
+- "Use our app only" ❌
+- "Push notification required" ❌
+
 ## Configuration Methods
 
 sesh uses a provider-based configuration system:
