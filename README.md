@@ -92,7 +92,7 @@ sesh -service aws -help
 # Launch secure subshell (default)
 sesh --service aws
 
-# Launch secure subshell (default)
+# Copy TOTP code(s) for AWS Web Console
 sesh --service aws --clip
 
 # Use specific AWS profile
@@ -115,20 +115,17 @@ Generic TOTP provider for any service (GitHub, Google, Slack, etc.).
 # Access provider-specific help
 sesh -service totp -help
 
-# Generate TOTP code
-sesh --service totp --service-name github
-
 # Copy code to clipboard
 sesh --service totp --service-name github --clip
 
 # Use specific profile (for multiple accounts)
 sesh --service totp --service-name github --profile work
 
-# Setup new TOTP service
-sesh --service totp --setup
-
 # List all TOTP entries
 sesh --service totp --list
+
+# Delete a TOTP entry
+sesh -service totp -delete <entry-id>
 ```
 
 ### 🐚 Subshell Features (AWS)
