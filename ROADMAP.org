@@ -13,14 +13,14 @@ Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-foc
 
 * Feature Roadmap
 
-** Phase 1: Core Extension Framework [0/3]
-*** TODO Multi-Service Plugin Architecture
+** Phase 1: Core Extension Framework [2/3]
+*** DONE Multi-Service Plugin Architecture
 **** Design plugin interface for multiple service providers
 **** Create registration system for plugins
 **** Implement service provider abstraction layer
 **** Add ~--service~ flag for selecting providers
 
-*** TODO Clipboard Integration
+*** DONE Clipboard Integration [macOS only]
 **** Add ~sesh clip~ command to copy TOTP to clipboard
 **** Implement platform-specific clipboard handling (macOS/Linux/Windows)
 **** Add optional notification for clipboard operations
@@ -32,8 +32,8 @@ Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-foc
 **** Add command-line options to override config
 **** Create ~sesh config~ subcommand
 
-** Phase 2: Service Providers [0/5]
-*** TODO AWS Provider (Existing)
+** Phase 2: Service Providers [2/5]
+*** DONE AWS Provider (Existing)
 **** Refactor current code as AWS plugin
 **** Add AWS-specific configuration options
 **** Maintain current functionality
@@ -53,7 +53,7 @@ Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-foc
 **** Integrate with npm authentication flow
 **** Test with actual package publishing
 
-*** TODO Generic TOTP Provider
+*** DONE Generic TOTP Provider
 **** Create configurable provider for arbitrary services
 **** Support defining custom service names and configurations
 **** Allow tagging and organizing services
@@ -94,33 +94,33 @@ Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-foc
 
 * Technical Tasks
 
-** Core Infrastructure [0/3]
-*** TODO Refactor existing code into plugins
-*** TODO Create plugin loading system
+** Core Infrastructure [2/3]
+*** DONE Refactor existing code into plugins
+*** DONE Create plugin loading system
 *** TODO Implement configuration manager
 
-** Security Enhancements [0/3]
-*** TODO Audit keychain usage
-*** TODO Implement strict permission checks
-*** TODO Add TOTP seed validation
+** Security Enhancements [3/3]
+*** DONE Audit keychain usage
+*** DONE Implement strict permission checks
+*** DONE Add TOTP seed validation
 
-** Testing [0/4]
-*** TODO Create automated tests for plugins
-*** TODO Implement CI pipeline
+** Testing [2/4]
+*** DONE Create automated tests for plugins
+*** DONE Implement CI pipeline
 *** TODO Add security testing
 *** TODO Create integration tests with actual services
 
-** Documentation [0/3]
-*** TODO Update README with new capabilities
+** Documentation [2/3]
+*** DONE Update README with new capabilities
 *** TODO Create plugin development guide
-*** TODO Improve security documentation
+*** DONE Improve security documentation
 
 
 -----
 
 * Testing Notes:
 
--- Need way to delete entries from keychain
+-- RESOLVED: Delete functionality now implemented with --delete flag
 ---- Scenario: I deleted my virtual MFA device in AWS, but the keychain entry is still there
 ---- When I run sesh next, I get:
 
