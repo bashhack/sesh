@@ -193,7 +193,6 @@ func (a *App) GenerateCredentials(serviceName string) error {
 }
 
 // CopyToClipboard copies a value to the system clipboard
-// TODO: Do I hit this still?
 func (a *App) CopyToClipboard(serviceName string) error {
 	p, err := a.Registry.GetProvider(serviceName)
 	if err != nil {
@@ -260,7 +259,6 @@ func (a *App) CopyToClipboard(serviceName string) error {
 }
 
 // PrintCredentials outputs the credentials
-// TODO: How much of this is used anymore
 func (a *App) PrintCredentials(creds provider.Credentials) {
 	// Format expiry time
 	expiryDisplay := "unknown"
