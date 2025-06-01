@@ -1,77 +1,41 @@
 # Sesh Feature Ideas
 
-This document outlines potential features to enhance sesh and make it a go-to CLI tool for macOS users, particularly as an alternative to AWS Vault and similar tools.
+This document outlines potential features to enhance sesh while maintaining its core philosophy of simplicity and explicit behavior.
 
-## Core Configuration Features
+## Priority Features
 
-- **Configuration Wizard**
-  - Guide users through setting a default provider
-  - Optional password protection for sesh
-  - Per-provider default settings
-
-- **Backup/Restore Functionality**
-  - Encrypted export of all secrets and configuration
-  - Simple restore process for new installs or disaster recovery
-  - Team onboarding templates
-
-## Differentiating Features
-
-### Improved Shell Integration
+### Shell Completions
 - Automatic completion for bash/zsh/fish
-- Better environment variable exporting
-- Visual indicators of active sessions in prompt
-- Auto-detection of shell environment
+- Complete service names, commands, and flags
+- Context-aware suggestions
 
-### Session Management
-- View and manage active credential sessions
-- Auto-renewal before expiration
-- Named sessions for different contexts (dev, prod, etc.)
-- Session timeouts and manual termination
+### Terminal UI Mode
+- Interactive interface for discovering and managing entries
+- Visual selection for passwords/TOTP entries
+- Search-as-you-type functionality
+- Batch operations (select multiple entries)
+- Better UX for master password entry
+- Complement (not replace) existing CLI
 
-### Streamlined Role Assumption
-- Visual representation of role chains
-- Simpler interface for complex role patterns
-- Recently used/favorite roles
-- Context-aware role suggestions
+### Database-Backed Password Manager
+- See `PURE_GO_SQLITE_IMPLEMENTATION_PLAN.md` for detailed implementation
+- Provides foundation for many other features:
+  - Configuration storage
+  - Backup/restore functionality
+  - Audit logging capabilities
+  - Cross-platform portability
 
-### Multi-provider Expansion
+## Potential Provider Expansions
+
+### Multi-provider Support (Low Priority)
 - Support for other cloud providers (GCP, Azure)
-- Generic secret management beyond TOTP
-- Unified interface across providers
-- Cross-provider workflows
-
-### Developer Experience
-- Terminal UI mode for interactive use
-- IDE integrations (VSCode, JetBrains)
-- Integration with container workflows
-- Local development environment helpers
-
-### Security Enhancements
-- Credential rotation reminders
-- Least-privilege helpers
-- Usage audit logs
-- Integration with corporate SSO
-
-### Performance Optimizations
-- Smart caching for faster operations
-- Parallel operations where possible
-- Lightweight mode for resource-constrained environments
-- Optimized credential refresh timing
-
-## Implementation Priority
-
-1. Configuration wizard and default provider selection
-2. Improved shell integration
-3. Session management improvements
-4. Role assumption enhancements
-5. Multi-provider expansion
-6. Security and performance enhancements
-7. Backup/restore functionality
+- Only if there's clear user demand
+- Would leverage existing provider abstraction
 
 ## User Experience Goals
 
-- Make common tasks faster than alternatives
-- Reduce cognitive load for complex authentication workflows
+- Make common tasks faster while maintaining explicit behavior
+- Reduce cognitive load without adding hidden complexity
 - Maintain strong security defaults
 - Provide clear, helpful error messages
-- Support smooth integration with existing workflows
+- Keep the tool simple and focused on terminal workflows
