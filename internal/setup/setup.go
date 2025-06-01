@@ -112,14 +112,14 @@ func (h *AWSSetupHandler) captureMFASecret(choice string) (string, error) {
 5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code
 6. Click 'Show secret key' and copy the secret key
 		
-❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together
+❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together`)
 
-Paste the secret key here (this will not be echoed): `)
+		fmt.Print("\n📋 Paste the secret key below and press Enter:\n→ ")
 		secret, err := readPassword(int(syscall.Stdin))
 		if err != nil {
 			return "", fmt.Errorf("failed to read secret: %w", err)
 		}
-		fmt.Println() // Add a newline after hidden input
+		fmt.Println("✓") // Visual confirmation that input was received
 
 		secretStr = strings.TrimSpace(string(secret))
 
