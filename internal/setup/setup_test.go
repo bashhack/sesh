@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -1990,7 +1991,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			}
 			
 			// Create mock keychain provider
-			mockKeychain := &mocks.MockProvider{
+			mockKeychain := &mocks.MockKeychainProvider{
 				SetSecretStringFunc: func(user, service, secret string) error {
 					return test.setSecretError
 				},
@@ -2184,35 +2185,34 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 			if tc.expectError {
 				if err == nil {
 					t.Errorf("Expected error but got none")
-				} else if \!strings.Contains(err.Error(), tc.expectedErrorMsg) {
+				} else if !strings.Contains(err.Error(), tc.expectedErrorMsg) {
 					t.Errorf("Expected error containing %q, got %q", tc.expectedErrorMsg, err.Error())
 				}
 				
 				// Verify cancellation message appears
-				if tc.expectedErrorMsg == "setup cancelled by user" && \!strings.Contains(output, "Setup cancelled") {
+				if tc.expectedErrorMsg == "setup cancelled by user" && !strings.Contains(output, "Setup cancelled") {
 					t.Error("Expected 'Setup cancelled' message in output")
 				}
 			} else {
-				if err \!= nil {
+				if err != nil {
 					t.Errorf("Unexpected error: %v", err)
 				}
 				
 				// Verify success messages
-				if \!strings.Contains(output, "Setup complete\!") {
+				if !strings.Contains(output, "Setup complete!") {
 					t.Error("Expected setup completion message")
 				}
 			}
 
 			// Verify overwrite prompt appears when expected
-			if tc.existingSecret \!= "" {
-				if \!strings.Contains(output, "An entry already exists") {
+			if tc.existingSecret != "" {
+				if !strings.Contains(output, "An entry already exists") {
 					t.Error("Expected overwrite warning message")
 				}
-				if \!strings.Contains(output, "Overwrite existing configuration?") {
+				if !strings.Contains(output, "Overwrite existing configuration?") {
 					t.Error("Expected overwrite prompt")
 				}
 			}
 		})
 	}
 }
-EOF < /dev/null
