@@ -642,19 +642,19 @@ func TestAWSSetupHandler_Setup_Overwrite(t *testing.T) {
 		},
 		"existing entry - user overwrites with y": {
 			existingSecret:   "EXISTING_SECRET",
-			userInput:        "\ny\n1\nNEW_SECRET\n\n1\n", // profile: default, overwrite: yes, manual entry, new secret, enter after TOTP, device 1
+			userInput:        "\ny\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // profile: default, overwrite: yes, manual entry, new secret, enter after TOTP, device 1
 			expectError:      false,
 			expectOverwrite:  true,
 		},
 		"existing entry - user overwrites with yes": {
 			existingSecret:   "EXISTING_SECRET",
-			userInput:        "\nyes\n1\nNEW_SECRET\n\n1\n", // profile: default, overwrite: yes, manual entry, new secret, enter after TOTP, device 1
+			userInput:        "\nyes\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // profile: default, overwrite: yes, manual entry, new secret, enter after TOTP, device 1
 			expectError:      false,
 			expectOverwrite:  true,
 		},
 		"no existing entry - proceeds normally": {
 			existingSecret:   "", // No existing entry
-			userInput:        "\n1\nNEW_SECRET\n\n1\n", // profile: default, manual entry, new secret, enter after TOTP, device 1
+			userInput:        "\n1\nJBSWY3DPEHPK3PXP\n\n1\n", // profile: default, manual entry, new secret, enter after TOTP, device 1
 			expectError:      false,
 			expectOverwrite:  false,
 		},
