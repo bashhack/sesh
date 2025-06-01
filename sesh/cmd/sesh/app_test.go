@@ -231,7 +231,12 @@ func (m *MockProvider) GetFlagInfo() []provider.FlagInfo {
 
 func TestNewDefaultApp(t *testing.T) {
 	// Test NewDefaultApp which uses the default keychain provider
-	app := NewDefaultApp()
+	versionInfo := VersionInfo{
+		Version: "test",
+		Commit:  "unknown",
+		Date:    "unknown",
+	}
+	app := NewDefaultApp(versionInfo)
 
 	if app.Registry == nil {
 		t.Error("Registry is nil")
@@ -465,7 +470,12 @@ func TestApp_RunSetup(t *testing.T) {
 func TestNewApp(t *testing.T) {
 	// Create app with mocked keychain
 	mockKeychain := &MockKeychain{}
-	app := NewApp(mockKeychain)
+	versionInfo := VersionInfo{
+		Version: "test",
+		Commit:  "unknown",
+		Date:    "unknown",
+	}
+	app := NewApp(mockKeychain, versionInfo)
 
 	// Verify keychain is properly injected
 	if app.Keychain != mockKeychain {

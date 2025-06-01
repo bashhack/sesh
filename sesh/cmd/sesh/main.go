@@ -13,7 +13,7 @@ import (
 // Version information (set by ldflags during build)
 var (
 	version = "dev"
-	commit  = "none"
+	commit  = "unknown"
 	date    = "unknown"
 )
 
@@ -21,7 +21,12 @@ func main() {
 	//// Set up global usage handlers for -h flag
 	//flag.Usage = printUsage // NOTE: Shouldn't need this given edit to run()
 
-	app := NewDefaultApp()
+	versionInfo := VersionInfo{
+		Version: version,
+		Commit:  commit,
+		Date:    date,
+	}
+	app := NewDefaultApp(versionInfo)
 	run(app, os.Args)
 }
 
