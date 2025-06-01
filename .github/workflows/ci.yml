@@ -1,63 +1,64 @@
-name: CI
+name: CI Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main ]  # Only run on pushes to main
+    tags: [ 'v*' ]
   pull_request:
-    branches: [ main ]
-
-permissions:
-  contents: read
-  actions: read
-  checks: read
-  # Allow uploading to Codecov
-  statuses: write
+    branches: [ main ]  # Run on PRs to main
 
 jobs:
-  build:
-    name: Build and Test
-    runs-on: ubuntu-latest
+  test-go:
+    name: Test Go Implementation
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false  # Continue with other jobs if one fails
+      matrix:
+        os: [macos-latest]  # macOS only for sesh
+        go-version: ['1.24']
+    # Repository root is the default working directory
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: ${{ matrix.go-version }}
           cache: true
 
-      - name: Verify dependencies
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Install golangci-lint
         run: |
-          go mod tidy
-          go mod verify
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.1.6
+          golangci-lint --version
 
-      - name: Lint
+      - name: Run linters
+        run: make lint
+
+      - name: Run unit tests and generate coverage
         run: |
-          # Install linting tools
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.54.2
-          go install honnef.co/go/tools/cmd/staticcheck@latest
-          make lint
+          GOMAXPROCS=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4) make test
+          make coverage
 
-      - name: Build
-        run: make build
-
-      - name: Test (excluding integration tests)
-        run: go test -short -v ./...
-        env:
-          CI: "true"
-
-      - name: Generate coverage report
+      - name: Run tests with race detection
         run: |
-          go test -short -coverprofile=coverage.txt ./...
-          go tool cover -func=coverage.txt
+          CORES=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
+          RACE_CORES=$([ $CORES -gt 4 ] && echo 4 || echo $CORES)
+          GOMAXPROCS=$RACE_CORES go test -race -tags=test ./...
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
-          path: coverage.txt
+          name: go-coverage-report-${{ matrix.os }}
+          path: ./coverage.html
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
@@ -65,8 +66,52 @@ jobs:
           files: ./coverage.txt
           token: ${{ secrets.CODECOV_TOKEN }}
 
+      - name: Run integration tests
+        run: |
+          export SESH_INTEGRATION_TESTS=1
+          make test/integration
+        continue-on-error: true  # Don't fail if integration tests not set up yet
+
+      - name: Build optimized binary
+        run: make build
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: sesh
+          name: sesh-binary-${{ matrix.os }}
           path: ./build/sesh
+          if-no-files-found: error
+
+  release:
+    name: Release
+    runs-on: macos-latest  # macOS for sesh
+    needs: [test-go]
+    if: github.ref_type == 'tag'
+
+    # Note: This job requires a 'RELEASE_TOKEN' secret (a personal access token with 'repo' permissions)
+    # The token allows GitHub release creation to trigger subsequent workflow runs
+    
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+          workdir: .
+        env:
+          # Using RELEASE_TOKEN to enable workflow triggers
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
