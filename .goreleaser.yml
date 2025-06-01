@@ -41,7 +41,7 @@ brews:
       name: homebrew-sesh
     directory: Formula
     homepage: https://github.com/bashhack/sesh
-    description: CLI tool for generating AWS session credentials with MFA via TOTP
+    description: TODO - Replace me
     license: MIT
     test: |
       system "#{bin}/sesh --version"

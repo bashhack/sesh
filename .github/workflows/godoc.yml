@@ -1,0 +1,58 @@
+name: Update pkg.go.dev Documentation
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  release:
+    types: [created]
+
+jobs:
+  update-pkg-go-dev:
+    name: Update pkg.go.dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Get latest version or commit
+        id: get_version
+        run: |
+          # Try to get the latest tag
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -z "$LATEST_TAG" ]; then
+            # If no tag exists, use the latest commit hash
+            LATEST_COMMIT=$(git rev-parse HEAD)
+            echo "No tags found, using latest commit: $LATEST_COMMIT"
+            echo "version=latest" >> $GITHUB_OUTPUT
+            echo "commit=$LATEST_COMMIT" >> $GITHUB_OUTPUT
+          else
+            echo "Using latest tag: $LATEST_TAG"
+            echo "version=$LATEST_TAG" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger pkg.go.dev update
+        run: |
+          echo "Triggering pkg.go.dev to update documentation"
+
+          # For tagged versions
+          if [[ "${{ steps.get_version.outputs.version }}" != "latest" ]]; then
+            echo "Requesting update for version ${{ steps.get_version.outputs.version }}"
+            curl -sSL "https://proxy.golang.org/github.com/bashhack/sesh/@v/${{ steps.get_version.outputs.version }}.info"
+          fi
+
+          # Also request latest
+          echo "Requesting update for latest version"
+          curl -sSL "https://proxy.golang.org/github.com/bashhack/sesh/@latest"
+
+          echo "Documentation update triggered for pkg.go.dev"
+          echo "Updates may take a few minutes to appear at: https://pkg.go.dev/github.com/bashhack/sesh"
