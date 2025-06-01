@@ -86,8 +86,14 @@ Features:
 Manages AWS CLI authentication with MFA support. By default, launches a secure subshell with temporary credentials.
 
 ```bash
+# Access provider-specific help
+sesh -service aws -help
+
 # Launch secure subshell (default)
 sesh --service aws
+
+# Launch secure subshell (default)
+sesh --service aws --clip
 
 # Use specific AWS profile
 sesh --service aws --profile production
@@ -106,6 +112,9 @@ sesh --service aws --delete <entry-id>
 Generic TOTP provider for any service (GitHub, Google, Slack, etc.).
 
 ```bash
+# Access provider-specific help
+sesh -service totp -help
+
 # Generate TOTP code
 sesh --service totp --service-name github
 
@@ -165,7 +174,7 @@ sesh --service totp --delete <entry-id>
 --service, -service <provider>    # Service provider (aws, totp) [REQUIRED]
 --list-services                   # Show available providers
 --version                         # Display version info
---help                           # Show help
+--help                            # Show help
 ```
 
 #### Common Operations
@@ -187,6 +196,15 @@ sesh --service totp --delete <entry-id>
 --service-name <name>            # Service name (github, google, etc.) [REQUIRED]
 --profile <name>                 # Account profile (work, personal, etc.)
 ```
+
+## 📚 Documentation
+
+- [Quick Start Guide](docs/QUICK_START.md)
+- [Advanced Usage](docs/ADVANCED_USAGE.md)
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [Plugin Development](docs/PLUGIN_DEVELOPMENT.md)
+- [Security Model](docs/SECURITY_MODEL.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
 
 ## 🧑‍💻 Development
 
@@ -213,42 +231,6 @@ make coverage
 # Run all checks
 make audit
 ```
-
-### Architecture
-
-sesh uses a plugin-based architecture:
-
-```
-sesh/
-├── internal/
-│   ├── provider/          # Plugin infrastructure
-│   │   ├── registry.go    # Provider registration
-│   │   ├── aws/          # AWS provider
-│   │   └── totp/         # TOTP provider
-│   ├── keychain/         # macOS Keychain integration
-│   ├── totp/             # TOTP generation
-│   ├── subshell/         # Subshell management
-│   └── setup/            # Setup wizards
-└── sesh/cmd/sesh/        # CLI application
-```
-
-### Extending sesh
-
-To add a new provider:
-1. Implement the `ServiceProvider` interface
-2. Register with the provider registry
-3. Add setup handler if needed
-
-See [Plugin Development Guide](docs/PLUGIN_DEVELOPMENT.md) for details.
-
-## 📚 Documentation
-
-- [Quick Start Guide](docs/QUICK_START.md)
-- [Advanced Usage](docs/ADVANCED_USAGE.md)
-- [Architecture Overview](docs/ARCHITECTURE.md)
-- [Plugin Development](docs/PLUGIN_DEVELOPMENT.md)
-- [Security Model](docs/SECURITY_MODEL.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
 
 ## 📄 License
 
