@@ -571,6 +571,174 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 	})
 }
 
+func TestAWSSetupHandler_Setup_Overwrite(t *testing.T) {
+	// Save original functions
+	origExecLookPath := execLookPath
+	origExecCommand := execCommand
+	origValidateAndNormalizeSecret := validateAndNormalizeSecret
+	origGetCurrentUser := getCurrentUser
+	origReadPassword := readPassword
+	defer func() {
+		execLookPath = origExecLookPath
+		execCommand = origExecCommand
+		validateAndNormalizeSecret = origValidateAndNormalizeSecret
+		getCurrentUser = origGetCurrentUser
+		readPassword = origReadPassword
+	}()
+
+	// Mock functions
+	execLookPath = func(file string) (string, error) {
+		return "/usr/local/bin/aws", nil
+	}
+	
+	getCurrentUser = func() (string, error) {
+		return "testuser", nil
+	}
+	
+	validateAndNormalizeSecret = func(secret string) (string, error) {
+		return secret, nil
+	}
+	
+	// Mock AWS commands
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+		cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+		
+		if len(args) > 0 && args[0] == "sts" && args[1] == "get-caller-identity" {
+			output := `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`
+			cmd.Env = append(cmd.Env, "STDOUT="+output)
+		}
+		
+		return cmd
+	}
+
+	tests := map[string]struct {
+		existingSecret   string
+		userInput        string
+		expectError      bool
+		expectedErrorMsg string
+		expectOverwrite  bool
+	}{
+		"existing entry - user cancels": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "\nn\n", // profile: default, overwrite: no
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"existing entry - user confirms with n": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "\nN\n", // profile: default, overwrite: NO
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"existing entry - user confirms with empty": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "\n\n", // profile: default, overwrite: empty (defaults to no)
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"existing entry - user overwrites with y": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "\ny\n1\nNEW_SECRET\n\n1\n", // profile: default, overwrite: yes, manual entry, new secret, enter after TOTP, device 1
+			expectError:      false,
+			expectOverwrite:  true,
+		},
+		"existing entry - user overwrites with yes": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "\nyes\n1\nNEW_SECRET\n\n1\n", // profile: default, overwrite: yes, manual entry, new secret, enter after TOTP, device 1
+			expectError:      false,
+			expectOverwrite:  true,
+		},
+		"no existing entry - proceeds normally": {
+			existingSecret:   "", // No existing entry
+			userInput:        "\n1\nNEW_SECRET\n\n1\n", // profile: default, manual entry, new secret, enter after TOTP, device 1
+			expectError:      false,
+			expectOverwrite:  false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create mock keychain with controlled behavior
+			mockKeychain := &mocks.MockKeychainProvider{
+				GetSecretFunc: func(account, service string) ([]byte, error) {
+					if tc.existingSecret != "" {
+						return []byte(tc.existingSecret), nil
+					}
+					return nil, fmt.Errorf("not found")
+				},
+				GetSecretStringFunc: func(account, service string) (string, error) {
+					return tc.existingSecret, nil
+				},
+				SetSecretFunc: func(account, service string, secret []byte) error {
+					return nil
+				},
+				SetSecretStringFunc: func(account, service string, secret string) error {
+					return nil
+				},
+				StoreEntryMetadataFunc: func(serviceType, service, account, description string) error {
+					return nil
+				},
+			}
+
+			// Create handler with mock reader
+			reader := newMockReader(tc.userInput)
+			handler := &AWSSetupHandler{
+				reader:           reader,
+				keychainProvider: mockKeychain,
+			}
+
+			// Mock MFA device listing for successful cases
+			if tc.expectOverwrite || tc.existingSecret == "" {
+				execCommand = func(command string, args ...string) *exec.Cmd {
+					cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
+					cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+					
+					if len(args) > 0 {
+						if args[0] == "sts" && args[1] == "get-caller-identity" {
+							output := `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`
+							cmd.Env = append(cmd.Env, "STDOUT="+output)
+						} else if args[0] == "iam" && args[1] == "list-mfa-devices" {
+							cmd.Env = append(cmd.Env, "STDOUT=arn:aws:iam::123456789012:mfa/testuser")
+						}
+					}
+					
+					return cmd
+				}
+				
+				// Mock password reading for secret entry
+				readPassword = func(fd int) ([]byte, error) {
+					// Read the next line from our mock reader
+					line, err := reader.ReadString('\n')
+					if err != nil {
+						return nil, err
+					}
+					return []byte(strings.TrimSpace(line)), nil
+				}
+			}
+
+			// Run setup
+			err := handler.Setup()
+
+			// Check results
+			if tc.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				} else if !strings.Contains(err.Error(), tc.expectedErrorMsg) {
+					t.Errorf("Expected error containing %q, got %q", tc.expectedErrorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) &&
 		(s == substr ||
