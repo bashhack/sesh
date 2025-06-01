@@ -128,113 +128,107 @@ sesh --service aws --setup
 sesh --service totp --setup
 ```
 
-### 💡 Best Practice: Mixing Manual Commits with Automatic Checkpoints
+### 💡 Best Practice: AWS Development Workflow
 
-One of gitbak's most powerful workflows is combining automatic safety checkpoints with manual milestone commits. This hybrid approach gives you both safety and meaningful history - something no IDE auto-save feature can match.
+The most efficient AWS development workflow uses sesh's subshell mode, which provides an isolated environment with automatic credential management:
 
 ```bash
-# Start gitbak on the current branch
-gitbak -no-branch
+# Launch secure subshell for development
+sesh --service aws
 
-# While gitbak runs in the background:
-# 1. Make changes to your code
-# 2. When you reach a meaningful milestone, make a manual commit:
-git add <specific-files>
-git commit -m "Implement login feature"
+# Inside the subshell:
+# 1. Your prompt shows you're in a sesh environment
+# 2. AWS credentials are automatically configured
+# 3. Use built-in commands:
+sesh_status    # Check session status and expiry
+verify_aws     # Test AWS connectivity
+sesh_help      # Show available commands
 
-# 3. Continue working - gitbak will keep making checkpoints between your manual commits
+# Work normally with AWS CLI
+aws s3 ls
+aws ec2 describe-instances
+
+# Exit when done - credentials are automatically cleared
+exit
 ```
 
-### Hybrid Workflow Visualization
+### AWS Console Access Workflow
 
-The diagram below illustrates how gitbak's automatic checkpoint commits work alongside your manual milestone commits:
+For AWS Console (web) access, use the clipboard mode to avoid the "code already used" error:
+
+```bash
+# Copy TOTP code for AWS Console login
+sesh --service aws --clip
+
+# This generates TWO consecutive codes:
+# - Current time window code
+# - Next time window code
+# Paste whichever one works in the AWS Console
+```
+
+### TOTP Service Workflow
+
+For general TOTP services, sesh provides a simple, secure workflow:
+
+```bash
+# Generate TOTP code for any service
+sesh --service totp --service-name github
+
+# Copy to clipboard for easy pasting
+sesh --service totp --service-name github --clip
+
+# Use profiles for multiple accounts
+sesh --service totp --service-name github --profile work
+sesh --service totp --service-name github --profile personal
+
+# List all TOTP entries
+sesh --service totp --list
+```
+
+### Multi-Profile Management
 
 ```mermaid
-%%{init: {'theme': 'neutral', 'flowchart': {'curve': 'basis'}}}%%
-flowchart LR
-    classDef autoCommit fill:#bbf,stroke:#333,stroke-width:2px
-    classDef manualCommit fill:#f9f,stroke:#333,stroke-width:2px
-    classDef process fill:#dfd,stroke:#333,stroke-width:2px
-    classDef decision fill:#ffd,stroke:#333,stroke-width:2px
-    classDef start fill:#dce,stroke:#333,stroke-width:2px
-    classDef endNode fill:#fdc,stroke:#333,stroke-width:2px
+%%{init: {'theme': 'neutral'}}%%
+flowchart TD
+    classDef profile fill:#bbf,stroke:#333,stroke-width:2px
+    classDef service fill:#f9f,stroke:#333,stroke-width:2px
+    classDef keychain fill:#dfd,stroke:#333,stroke-width:2px
 
-    Start([Start gitbak -no-branch]):::start --> Monitor[Monitor Repository]:::process
-
-    subgraph "Hybrid Workflow"
-        %% Left side: Automatic flow
-        Monitor --> Auto[Automatic Safety Commits]:::process
-        Auto --> Changes{Changes<br>Detected?}:::decision
-        Changes -->|Yes| AutoCommit1["[gitbak] #1"]:::autoCommit
-        Changes -->|No| Wait[Wait for interval]:::process
-        Wait --> Changes
-
-        AutoCommit1 --> Wait
-
-        %% Development continues
-        Work1["Work in progress"]:::process --> Work2["More work"]:::process --> Work3["Even more work"]:::process
-
-        %% A milestone is reached
-        Work3 --> ManualCommit1["Manual commit:<br>Feature A implemented"]:::manualCommit
-
-        %% Automatic commit continues
-        Wait --> Changes2{Changes<br>Detected?}:::decision
-        Changes2 -->|Yes| AutoCommit2["[gitbak] #2"]:::autoCommit
-        Changes2 -->|No| Wait2[Wait for interval]:::process
-        Wait2 --> Changes2
-
-        AutoCommit2 --> Wait2
-
-        %% More development
-        ManualCommit1 --> Work4["More work"]:::process --> Work5["Further development"]:::process
-
-        %% Another milestone
-        Work5 --> ManualCommit2["Manual commit:<br>Feature B implemented"]:::manualCommit
-
-        %% Last automatic commit
-        Wait2 --> Changes3{Changes<br>Detected?}:::decision
-        Changes3 -->|Yes| AutoCommit3["[gitbak] #3"]:::autoCommit
-
-        ManualCommit2 --> End([Session end<br>Ctrl+C]):::endNode
-        AutoCommit3 --> End
-    end
-
-    End --> Results["Resulting history:<br>#3 - auto<br>B - manual<br>#2 - auto<br>A - manual<br>#1 - auto"]:::endNode
-
-    Note["gitbak intelligently maintains<br>sequential numbering<br>despite manual commits"]:::process
+    Start([Multiple Accounts])
+    
+    Start --> AWS["AWS Profiles"]:::service
+    Start --> TOTP["TOTP Services"]:::service
+    
+    AWS --> AWSProd["Production<br>--profile prod"]:::profile
+    AWS --> AWSDev["Development<br>--profile dev"]:::profile
+    AWS --> AWSStaging["Staging<br>--profile staging"]:::profile
+    
+    TOTP --> GitHub["GitHub"]:::service
+    GitHub --> GHWork["Work Account<br>--service-name github --profile work"]:::profile
+    GitHub --> GHPersonal["Personal Account<br>--service-name github --profile personal"]:::profile
+    
+    TOTP --> Google["Google"]:::service
+    Google --> GoogleMain["Main Account<br>--service-name google"]:::profile
+    
+    AWSProd & AWSDev & AWSStaging & GHWork & GHPersonal & GoogleMain --> KC["macOS Keychain<br>Secure Storage"]:::keychain
 ```
 
-#### Benefits of this workflow:
+#### Benefits of sesh's Multi-Profile Approach:
 
-- **Safety Net**: Automatic checkpoints happen even when you forget to commit
-- **Clear History**: Important milestones are clearly marked with meaningful commit messages
-- **Intelligent Numbering**: gitbak's commit counter ignores your manual commits and maintains sequential numbering
-- **Clean Identification**: Easy to distinguish between automatic checkpoints and manual milestones
-- **Flexible History Management**: After your session, you can:
-  - Keep both automatic and manual commits
-  - Use `git rebase -i` to keep only your manual milestone commits
-  - Squash everything into a single commit
+- **Unified Interface**: One tool for all your MFA needs (AWS, GitHub, Google, etc.)
+- **Secure Storage**: All secrets in macOS Keychain with binary-level access control
+- **Profile Isolation**: Keep work and personal accounts completely separate
+- **No Mobile Dependency**: Generate codes directly in your terminal
+- **Scriptable**: Integrate into your automation workflows
+- **Privacy-First**: No cloud sync, no tracking, no corporate oversight
 
-#### Example Commit History:
+### Why sesh Over Mobile Authenticators:
 
-```
-- [gitbak] Automatic checkpoint #3
-- Manual: Feature B implemented
-- [gitbak] Automatic checkpoint #2
-- Manual: Feature A implemented
-- [gitbak] Automatic checkpoint #1
-- Initial commit
-```
-
-Note that gitbak's commit numbering system is intelligent enough to ignore manual commits and maintain sequential numbering for its automatic commits (#1, #2, #3).
-
-#### Why This Is Superior to IDE Auto-Save:
-
-Unlike IDE auto-save features, this workflow:
-- Creates proper Git commits with timestamps and messages
-- Allows you to push your history to remote repositories
-- Provides permanent, navigable history that persists beyond IDE sessions
-- Gives you fine-grained control over which changes become part of your commit history
+- **Terminal-Native**: No context switching to your phone
+- **Faster**: Type a command vs. unlock phone → find app → find code
+- **Scriptable**: Can be integrated into automated workflows
+- **Secure**: Keychain storage is more secure than many mobile apps
+- **Private**: Your auth codes stay on your machine
 
 ### Continuation Mode
 
