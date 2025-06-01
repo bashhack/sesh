@@ -38,43 +38,45 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **QR Code Scanning** — Set up TOTP services directly from screenshots
 - **Multiple Profile Support** — Manage dev/prod environments and multiple accounts per service
 
-## 🚀 Quick Start
-
-```bash
-# Install via Homebrew
-brew install bashhack/sesh/sesh
-
-# First-time setup for AWS
-sesh --service aws --setup
-
-# Launch secure AWS subshell
-sesh --service aws
-
-# Generate TOTP codes for any service
-sesh --service totp --service-name github
-```
-
 ## 📦 Installation
 
-### Homebrew (Recommended)
-
 ```bash
-brew install bashhack/tap/sesh
+# Option 1: Install with Homebrew (macOS)
+brew install bashhack/sesh/sesh
+# Note: Homebrew automatically adds sesh to your PATH, so it's ready to use immediately
+
+# Option 2: Install using Go (requires Go 1.24+)
+go install github.com/bashhack/sesh/cmd/sesh@latest
+# Note: Ensure your Go bin directory (typically $HOME/go/bin) is in your PATH
+# You can add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):
+# export PATH=$PATH:$HOME/go/bin
+
+# Option 3: Download pre-built binary
+# Visit: https://github.com/bashhack/sesh/releases
 ```
 
-### Quick Install Script
+## 🚀 Quick Start
+
+You can start benefiting from `sesh` by first setting up your first provider entry.
+
+### 🧙 Setup Wizards
+
+Each available `--setup` guides you through configuration for a given provider:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/bashhack/sesh/main/install.sh | bash
+# Setup AWS MFA
+sesh --service aws --setup
+
+# Setup TOTP service
+sesh --service totp --setup
 ```
 
-### Build from Source
+Features:
+- QR code scanning via screenshot
+- Manual secret entry fallback
+- Automatic secret validation
+- Step-by-step instructions
 
-```bash
-git clone https://github.com/bashhack/sesh.git
-cd sesh
-make install
-```
 
 ## 🎯 Usage Guide
 
@@ -141,23 +143,6 @@ When you run `sesh --service aws`, you enter a secure subshell with:
 - `SESH_EXPIRY` — Unix timestamp of credential expiration
 - Standard AWS credential variables (`AWS_ACCESS_KEY_ID`, etc.)
 
-### 🧙 Setup Wizards
-
-Interactive setup guides you through configuration:
-
-```bash
-# Setup AWS MFA
-sesh --service aws --setup
-
-# Setup new TOTP service
-sesh --service totp --setup
-```
-
-Features:
-- QR code scanning via screenshot
-- Manual secret entry fallback
-- Automatic secret validation
-- Step-by-step instructions
 
 ### 📋 Entry Management
 
@@ -203,25 +188,7 @@ sesh --service totp --delete <entry-id>
 --profile <name>                 # Account profile (work, personal, etc.)
 ```
 
-## 🔒 Security Model
-
-### Keychain Integration
-- All secrets stored in macOS Keychain
-- Access restricted to sesh binary only
-- Automatic permission management
-- No plaintext storage
-
-### Memory Security
-- Secure memory zeroing after use
-- Minimal secret exposure time
-- Defensive copying throughout
-
-### Credential Isolation
-- Subshells provide isolated environments
-- Credentials cleared on exit
-- No persistent environment pollution
-
-## 🛠️ Development
+## 🧑‍💻 Development
 
 ### Prerequisites
 - Go 1.24+
