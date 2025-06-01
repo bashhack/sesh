@@ -1992,6 +1992,10 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			
 			// Create mock keychain provider
 			mockKeychain := &mocks.MockProvider{
+				GetSecretStringFunc: func(user, service string) (string, error) {
+					// Return empty string to indicate no existing entry
+					return "", nil
+				},
 				SetSecretStringFunc: func(user, service, secret string) error {
 					return test.setSecretError
 				},
