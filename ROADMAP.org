@@ -5,6 +5,9 @@
 * Project Vision
 Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-focused MFA management solution that works across terminal and web interfaces while keeping all secrets local.
 
+** Open Source Philosophy
+Sesh is open source with a plugin architecture designed for community contributions. Core functionality focuses on the maintainer's use cases (AWS, generic TOTP). Additional providers (GitHub, GCP, NPM, etc.) are welcome as community contributions. See docs/PLUGIN_DEVELOPMENT.md for guidance on adding new providers.
+
 * Core Principles
 - Privacy: All secrets remain local to the user's machine
 - Security: Strong encryption and access controls via OS keychain
@@ -32,26 +35,11 @@ Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-foc
 **** ~~Add command-line options to override config~~
 **** ~~Create ~sesh config~ subcommand~~
 
-** Phase 2: Service Providers [2/5]
+** Phase 2: Service Providers [2/2]
 *** DONE AWS Provider (Existing)
 **** Refactor current code as AWS plugin
 **** Add AWS-specific configuration options
 **** Maintain current functionality
-
-*** COMMUNITY GitHub Provider [Open for community contribution]
-**** Plugin architecture ready for implementation
-**** See docs/PLUGIN_DEVELOPMENT.md for guide
-**** PRs welcome from those who need this
-
-*** COMMUNITY Google Cloud Provider [Open for community contribution]
-**** Plugin architecture ready for implementation
-**** See docs/PLUGIN_DEVELOPMENT.md for guide
-**** PRs welcome from those who need this
-
-*** COMMUNITY NPM Provider [Open for community contribution]
-**** Plugin architecture ready for implementation
-**** See docs/PLUGIN_DEVELOPMENT.md for guide
-**** PRs welcome from those who need this
 
 *** DONE Generic TOTP Provider
 **** Create configurable provider for arbitrary services
