@@ -83,34 +83,3 @@ Sesh is open source with a plugin architecture designed for community contributi
 *** DONE Update README with new capabilities
 *** DONE Create plugin development guide
 *** DONE Improve security documentation
-
-
------
-
-* Testing Notes:
-
--- RESOLVED: Delete functionality now implemented with --delete flag
----- Scenario: I deleted my virtual MFA device in AWS, but the keychain entry is still there
----- When I run sesh next, I get:
-
-```shell
-❯ sesh
-🔐 Activating AWS session with MFA...
-🔐 Generating temporary credentials with MFA...
-❌ failed to get session token: failed to run aws sts get-session-token: exit status 254
-Args: [sts get-session-token --serial-number arn:aws:iam::314904127601:mfa/sesh-updated-4-19 --token-code 915080 --output json]
-Stderr:
-An error occurred (AccessDenied) when calling the GetSessionToken operation: MultiFactorAuthentication failed, unable to validate MFA code.  Please verify your MFA serial number is valid and associated with this user.
-
-
-Troubleshooting tips:
-  1. Verify your AWS credentials are correctly configured:
-     - Run 'aws configure' to set up your access keys
-     - Check that the AWS_PROFILE environment variable is set correctly
-  2. Verify your MFA serial ARN is correct:
-     - Specify it with --serial arn:aws:iam::ACCOUNT_ID:mfa/YOUR_USERNAME
-     - Or set the SESH_MFA_SERIAL environment variable
-  3. Check AWS CLI installation and connectivity:
-     - Ensure you can run 'aws sts get-caller-identity'
-✅ AWS session activated
-```
