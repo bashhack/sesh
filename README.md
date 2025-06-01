@@ -1,218 +1,275 @@
-# 🛠️ sesh — AWS Credential Helper with MFA
+# 🔐 sesh — An extensible terminal-first authentication toolkit for secure credential workflows
 
 |              Build              |          Tests           |          Coverage           |                                                                                                                         Review                                                                                                                         |
 |:-------------------------------:|:------------------------:|:---------------------------:|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|
 | [![Build Status](https://github.com/bashhack/sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/bashhack/sesh/actions/workflows/ci.yml) | [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](https://github.com/bashhack/sesh/actions/workflows/ci.yml) | [![codecov](https://codecov.io/gh/bashhack/sesh/graph/badge.svg?token=Y3K7R3MHXH)](https://codecov.io/gh/bashhack/sesh) | ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/bashhack/sesh?utm_source=oss&utm_medium=github&utm_campaign=bashhack%2Fsesh&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews) |
 
 
-A lightweight CLI tool that generates AWS session credentials using MFA via TOTP codes, stored securely in macOS Keychain.
+A powerful CLI tool that manages secure authentication workflows for AWS, TOTP services, and beyond. Built with an extensible plugin architecture, sesh provides seamless credential management with macOS Keychain integration.
 
-## Quick Start
+## ✨ Key Features
+
+- 🔌 **Extensible Plugin Architecture** — Easy to add new authentication providers
+- 🛡️ **Secure by Design** — All secrets stored in macOS Keychain with binary-level access control
+- 🚀 **Terminal-First Workflow** — Optimized for developers who live in the terminal
+- 🎯 **Smart TOTP Handling** — Generates current and next codes, handles edge cases automatically
+- 🐚 **Intelligent Subshell** — Isolated credential environments with built-in helper commands
+- 📸 **QR Code Scanning** — Set up TOTP services directly from screenshots
+- 🎨 **Multiple Profile Support** — Manage dev/prod environments and multiple accounts per service
+
+## 🚀 Quick Start
 
 ```bash
-# Install
+# Install via Homebrew
 brew install bashhack/tap/sesh
-# or
-curl -sSL https://raw.githubusercontent.com/bashhack/sesh/main/install.sh | bash
 
-# First-time setup (only once)
+# First-time setup for AWS
 sesh --service aws --setup
 
-# Use sesh to launch a secure subshell with AWS credentials
+# Launch secure AWS subshell
 sesh --service aws
 
-# Or generate TOTP codes for other services
+# Generate TOTP codes for any service
 sesh --service totp --service-name github
 ```
 
-## Features
+## 📦 Installation
 
-- 🔐 **Secure** — MFA secrets stored in macOS Keychain
-- 🚀 **Fast** — Written in Go with minimal dependencies
-- 💡 **Simple** — Easy to use subshell environment for AWS credentials
-- 🧙 **User-friendly** — Includes setup wizard with `--setup`
-- 🖥️ **macOS native** — Designed for macOS with Keychain integration
-- 🔄 **Multi-service** — Support for AWS and TOTP services
-
-## Installation
-
-### Option 1: Homebrew (recommended)
+### Homebrew (Recommended)
 
 ```bash
 brew install bashhack/tap/sesh
 ```
 
-### Option 2: Curl installer
+### Quick Install Script
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/bashhack/sesh/main/install.sh | bash
 ```
 
-### Option 3: Manual Installation
+### Build from Source
 
 ```bash
-# Clone the repository
 git clone https://github.com/bashhack/sesh.git
 cd sesh
-
-# Build and install
 make install
 ```
 
-## User Guide
+## 🎯 Usage Guide
 
-### First-time Setup
+### Available Service Providers
 
-Run the setup wizard to guide you through creating a virtual MFA device:
-
-```bash
-sesh --setup
-```
-
-The setup wizard will:
-
-1. Guide you through creating a virtual MFA device in the AWS Console
-2. Generate two consecutive MFA codes needed for AWS setup (no additional authenticator app needed!)
-3. Securely store your MFA secret in macOS Keychain
-4. Provide next steps to get started
-
-### Daily Usage
+#### AWS Provider (`--service aws`)
+Manages AWS CLI authentication with MFA support. By default, launches a secure subshell with temporary credentials.
 
 ```bash
-# Launch a secure subshell with AWS credentials
+# Launch secure subshell (default)
 sesh --service aws
 
-# Use a specific AWS profile
-sesh --service aws --profile dev
+# Use specific AWS profile
+sesh --service aws --profile production
 
-# Generate TOTP codes for other services
+# Print credentials instead of subshell
+sesh --service aws --no-subshell
+
+# List all AWS entries
+sesh --service aws --list
+
+# Delete an AWS entry
+sesh --service aws --delete <entry-id>
+```
+
+#### TOTP Provider (`--service totp`)
+Generic TOTP provider for any service (GitHub, Google, Slack, etc.).
+
+```bash
+# Generate TOTP code
 sesh --service totp --service-name github
 
-# Copy TOTP code to clipboard
+# Copy code to clipboard
 sesh --service totp --service-name github --clip
 
-# View version information
-sesh --version
+# Use specific profile (for multiple accounts)
+sesh --service totp --service-name github --profile work
 
-# Show help
-sesh --help
+# Setup new TOTP service
+sesh --service totp --setup
+
+# List all TOTP entries
+sesh --service totp --list
 ```
 
-When using the AWS subshell, you'll get a visual indicator in your prompt showing you're in a secure environment. Within the subshell, you have access to these commands:
+### 🐚 Subshell Features (AWS)
+
+When you run `sesh --service aws`, you enter a secure subshell with:
+
+#### Visual Indicators
+- Custom prompt showing active sesh session
+- Credential expiry countdown
+- Visual confirmation of secure environment
+
+#### Built-in Commands
+- `sesh_status` — Show session details and test AWS connection
+- `verify_aws` — Quick AWS authentication check
+- `sesh_help` — Display available subshell commands
+- `exit` or `Ctrl+D` — Leave the secure environment
+
+#### Environment Variables
+- `SESH_ACTIVE=1` — Indicates active sesh session
+- `SESH_SERVICE=aws` — Current service provider
+- `SESH_EXPIRY` — Unix timestamp of credential expiration
+- Standard AWS credential variables (`AWS_ACCESS_KEY_ID`, etc.)
+
+### 🧙 Setup Wizards
+
+Interactive setup guides you through configuration:
 
 ```bash
-# Show current session status
-sesh_status
+# Setup AWS MFA
+sesh --service aws --setup
 
-# Verify AWS MFA authentication
-verify_aws
-
-# Show help for subshell commands
-sesh_help
-
-# Exit the subshell (also works with Ctrl+D)
-exit
+# Setup new TOTP service
+sesh --service totp --setup
 ```
 
-### Command-line Options
+Features:
+- QR code scanning via screenshot
+- Manual secret entry fallback
+- Automatic secret validation
+- Step-by-step instructions
 
-- `--profile NAME` — Use a specific AWS profile (default: `AWS_PROFILE` env var)
-- `--serial ARN` — Specify MFA device ARN (default: auto-detected)
-- `--keychain-user NAME` — Specify keychain username (default: current user)
-- `--keychain-name NAME` — Specify keychain service name (default: `sesh-mfa`)
-- `--setup` — Run the first-time setup wizard
-- `--version` — Display version information
-- `--help` — Show command-line options
+### 📋 Entry Management
 
-### Environment Variables
-
-- `AWS_PROFILE` — Default AWS profile to use
-- `SESH_MFA_SERIAL` — MFA device serial number/ARN
-- `SESH_KEYCHAIN_USER` — macOS Keychain username
-- `SESH_KEYCHAIN_NAME` — macOS Keychain service name
-
-## How It Works
-
-1. **Retrieve MFA Secret**:
-   - Gets your TOTP secret from macOS Keychain using the `security` command
-   - Auto-detects your username if not specified
-
-2. **Generate TOTP Code**:
-   - Generates a time-based one-time password (TOTP) from your secret
-
-3. **Get AWS Session Token**:
-   - Calls `aws sts get-session-token` with your TOTP code
-   - Acquires temporary AWS credentials
-
-4. **Export Credentials**:
-   - Outputs credentials as environment variables
-   - Shows expiration time and remaining validity
-
-## Troubleshooting
-
-### "No MFA devices found"
-
-Ensure you have an MFA device associated with your AWS account. If you do, try specifying the device ARN directly:
+List and manage stored credentials:
 
 ```bash
-sesh --serial arn:aws:iam::123456789012:mfa/username
+# List all entries for a service
+sesh --service aws --list
+sesh --service totp --list
+
+# Delete specific entry
+sesh --service aws --delete <entry-id>
+sesh --service totp --delete <entry-id>
 ```
 
-### "Could not retrieve TOTP secret from Keychain"
+### 🎯 Command Reference
 
-Your MFA secret might not be properly stored in Keychain. Run the setup again:
-
+#### Global Options
 ```bash
-sesh --setup
+--service, -service <provider>    # Service provider (aws, totp) [REQUIRED]
+--list-services                   # Show available providers
+--version                         # Display version info
+--help                           # Show help
 ```
 
-### "AWS CLI not found"
-
-Sesh requires the AWS CLI to be installed. Install it with:
-
+#### Common Operations
 ```bash
-brew install awscli
+--list                           # List entries for service
+--delete <id>                    # Delete entry by ID
+--setup                          # Run setup wizard
+--clip                           # Copy to clipboard
 ```
 
-## Development
-
-### Requirements
-
-- Go 1.20 or later
-- macOS for testing Keychain integration
-
-### Building from source
-
+#### AWS-Specific Options
 ```bash
-# Clone the repository
+--profile <name>                 # AWS profile (default: $AWS_PROFILE)
+--no-subshell                    # Print exports instead of subshell
+```
+
+#### TOTP-Specific Options
+```bash
+--service-name <name>            # Service name (github, google, etc.) [REQUIRED]
+--profile <name>                 # Account profile (work, personal, etc.)
+```
+
+## 🔒 Security Model
+
+### Keychain Integration
+- All secrets stored in macOS Keychain
+- Access restricted to sesh binary only
+- Automatic permission management
+- No plaintext storage
+
+### Memory Security
+- Secure memory zeroing after use
+- Minimal secret exposure time
+- Defensive copying throughout
+
+### Credential Isolation
+- Subshells provide isolated environments
+- Credentials cleared on exit
+- No persistent environment pollution
+
+## 🛠️ Development
+
+### Prerequisites
+- Go 1.20+
+- macOS (for Keychain integration)
+- Make
+
+### Building
+```bash
+# Clone repository
 git clone https://github.com/bashhack/sesh.git
 cd sesh
 
-# Build the binary
+# Build binary
 make build
 
 # Run tests
 make test
 
-# Run tests with coverage report
+# Generate coverage
 make coverage
 
-# Verify code quality
+# Run all checks
 make audit
-
-# Install locally
-make install
 ```
 
-### Project Structure
+### Architecture
 
-- `/cmd/sesh/main.go` — CLI entrypoint, flag parsing
-- `/internal/aws/` — AWS CLI interactions
-- `/internal/keychain/` — macOS Keychain integration
-- `/internal/totp/` — TOTP code generation
-- `/internal/setup/` — Interactive setup wizard
-- `/shell/` — Shell integration scripts
+sesh uses a plugin-based architecture:
 
-## License
+```
+sesh/
+├── internal/
+│   ├── provider/          # Plugin infrastructure
+│   │   ├── registry.go    # Provider registration
+│   │   ├── aws/          # AWS provider
+│   │   └── totp/         # TOTP provider
+│   ├── keychain/         # macOS Keychain integration
+│   ├── totp/             # TOTP generation
+│   ├── subshell/         # Subshell management
+│   └── setup/            # Setup wizards
+└── sesh/cmd/sesh/        # CLI application
+```
 
-MIT
+### Extending sesh
+
+To add a new provider:
+1. Implement the `ServiceProvider` interface
+2. Register with the provider registry
+3. Add setup handler if needed
+
+See [Plugin Development Guide](docs/PLUGIN_DEVELOPMENT.md) for details.
+
+## 📚 Documentation
+
+- [Quick Start Guide](docs/QUICK_START.md)
+- [Advanced Usage](docs/ADVANCED_USAGE.md)
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [Plugin Development](docs/PLUGIN_DEVELOPMENT.md)
+- [Security Model](docs/SECURITY_MODEL.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+
+## 🤝 Contributing
+
+Contributions are welcome! Please read our contributing guidelines and submit pull requests to our repository.
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+## 🙏 Acknowledgments
+
+Built with love by the open source community. Special thanks to all contributors who help make sesh better!
