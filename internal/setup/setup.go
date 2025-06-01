@@ -509,12 +509,7 @@ func (h *AWSSetupHandler) Setup() error {
 		return fmt.Errorf("failed to select MFA device: %w", err)
 	}
 
-	user, err := getCurrentUser()
-	if err != nil {
-		return fmt.Errorf("failed to get current user: %w", err)
-	}
-
-	serviceName := h.createServiceName(constants.AWSServicePrefix, profile)
+	serviceName = h.createServiceName(constants.AWSServicePrefix, profile)
 	err = h.keychainProvider.SetSecretString(user, serviceName, secretStr)
 	if err != nil {
 		return fmt.Errorf("failed to store secret in keychain: %w", err)
@@ -715,14 +710,8 @@ func (h *TOTPSetupHandler) Setup() error {
 		return fmt.Errorf("failed to generate TOTP codes: %s", err)
 	}
 
-	// Store in keychain using the provider
-	user, err := getCurrentUser()
-	if err != nil {
-		return fmt.Errorf("failed to get current user: %w", err)
-	}
-
 	// Build service key using consistent helper pattern
-	serviceKey := h.createTOTPServiceName(serviceName, profile)
+	serviceKey = h.createTOTPServiceName(serviceName, profile)
 
 	// Store the secret using the keychain provider
 	err = h.keychainProvider.SetSecretString(user, serviceKey, secretStr)

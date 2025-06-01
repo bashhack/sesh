@@ -1991,7 +1991,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			}
 			
 			// Create mock keychain provider
-			mockKeychain := &mocks.MockKeychainProvider{
+			mockKeychain := &mocks.MockProvider{
 				SetSecretStringFunc: func(user, service, secret string) error {
 					return test.setSecretError
 				},
@@ -2138,7 +2138,7 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create mock keychain with controlled behavior
-			mockKeychain := &mocks.MockKeychainProvider{
+			mockKeychain := &mocks.MockProvider{
 				GetSecretFunc: func(account, service string) ([]byte, error) {
 					if tc.existingSecret != "" {
 						return []byte(tc.existingSecret), nil

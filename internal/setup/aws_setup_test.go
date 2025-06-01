@@ -663,7 +663,7 @@ func TestAWSSetupHandler_Setup_Overwrite(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create mock keychain with controlled behavior
-			mockKeychain := &mocks.MockKeychainProvider{
+			mockKeychain := &mocks.MockProvider{
 				GetSecretFunc: func(account, service string) ([]byte, error) {
 					if tc.existingSecret != "" {
 						return []byte(tc.existingSecret), nil
@@ -685,7 +685,7 @@ func TestAWSSetupHandler_Setup_Overwrite(t *testing.T) {
 			}
 
 			// Create handler with mock reader
-			reader := newMockReader(tc.userInput)
+			reader := bufio.NewReader(strings.NewReader(tc.userInput))
 			handler := &AWSSetupHandler{
 				reader:           reader,
 				keychainProvider: mockKeychain,
