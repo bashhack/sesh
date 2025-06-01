@@ -7,15 +7,17 @@
 
 A powerful CLI tool that manages secure authentication workflows for AWS, TOTP services, and beyond. Built with an extensible plugin architecture, sesh provides seamless credential management with macOS Keychain integration.
 
-## ✨ Key Features
+## 🎯 Purpose
 
-- 🔌 **Extensible Plugin Architecture** — Easy to add new authentication providers
-- 🛡️ **Secure by Design** — All secrets stored in macOS Keychain with binary-level access control
-- 🚀 **Terminal-First Workflow** — Optimized for developers who live in the terminal
-- 🎯 **Smart TOTP Handling** — Generates current and next codes, handles edge cases automatically
-- 🐚 **Intelligent Subshell** — Isolated credential environments with built-in helper commands
-- 📸 **QR Code Scanning** — Set up TOTP services directly from screenshots
-- 🎨 **Multiple Profile Support** — Manage dev/prod environments and multiple accounts per service
+## 🌟 Features
+
+- **Extensible Plugin Architecture** — Easy to add new authentication providers
+-️ **Secure by Design** — All secrets stored in macOS Keychain with binary-level access control
+- **Terminal-First Workflow** — Optimized for developers who live in the terminal
+- **Smart TOTP Handling** — Generates current and next codes, handles edge cases automatically
+- **Intelligent Subshell** — Isolated credential environments with built-in helper commands
+- **QR Code Scanning** — Set up TOTP services directly from screenshots
+- **Multiple Profile Support** — Manage dev/prod environments and multiple accounts per service
 
 ## 🚀 Quick Start
 
