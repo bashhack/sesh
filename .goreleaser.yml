@@ -41,7 +41,7 @@ brews:
       name: homebrew-sesh
     directory: Formula
     homepage: https://github.com/bashhack/sesh
-    description: TODO - Replace me
+    description: An extensible terminal-first authentication toolkit for secure credential workflows
     license: MIT
     test: |
       system "#{bin}/sesh --version"
@@ -72,3 +72,4 @@ release:
   prerelease: auto
   draft: false
   name_template: "v{{.Version}}"
+
