@@ -26,11 +26,11 @@ Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-foc
 **** Add optional notification for clipboard operations
 **** Create configuration for auto-copying behavior
 
-*** TODO Configuration System
-**** Create ~/.config/sesh directory for config files
-**** Implement YAML/TOML based configuration
-**** Add command-line options to override config
-**** Create ~sesh config~ subcommand
+*** WONT Configuration System [Conflicts with explicit behavior philosophy]
+**** ~~Create ~/.config/sesh directory for config files~~
+**** ~~Implement YAML/TOML based configuration~~
+**** ~~Add command-line options to override config~~
+**** ~~Create ~sesh config~ subcommand~~
 
 ** Phase 2: Service Providers [2/5]
 *** DONE AWS Provider (Existing)
@@ -38,38 +38,33 @@ Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-foc
 **** Add AWS-specific configuration options
 **** Maintain current functionality
 
-*** TODO GitHub Provider
-**** Implement GitHub authentication flow
-**** Support GitHub CLI integration
-**** Test with common GitHub 2FA scenarios
+*** COMMUNITY GitHub Provider [Open for community contribution]
+**** Plugin architecture ready for implementation
+**** See docs/PLUGIN_DEVELOPMENT.md for guide
+**** PRs welcome from those who need this
 
-*** TODO Google Cloud Provider
-**** Implement GCP authentication flow
-**** Generate application-default credentials
-**** Support gcloud CLI integration
+*** COMMUNITY Google Cloud Provider [Open for community contribution]
+**** Plugin architecture ready for implementation
+**** See docs/PLUGIN_DEVELOPMENT.md for guide
+**** PRs welcome from those who need this
 
-*** TODO NPM Provider
-**** Support 2FA for package publishing
-**** Integrate with npm authentication flow
-**** Test with actual package publishing
+*** COMMUNITY NPM Provider [Open for community contribution]
+**** Plugin architecture ready for implementation
+**** See docs/PLUGIN_DEVELOPMENT.md for guide
+**** PRs welcome from those who need this
 
 *** DONE Generic TOTP Provider
 **** Create configurable provider for arbitrary services
 **** Support defining custom service names and configurations
 **** Allow tagging and organizing services
 
-** Phase 3: Web Integration [0/2]
-*** TODO Web Service Configuration
-**** Create configuration syntax for web services
-**** Support URL patterns for site recognition
-**** Allow user-defined service metadata
-**** Define TOTP rotation timelines per service
-
-*** TODO Terminal UI for Web Services
-**** Add interactive TUI for selecting web services
-**** Show countdown timers for TOTP codes
-**** Support search/filtering for many services
-**** Provide keyboard shortcuts for common operations
+** Phase 3: Terminal UI Enhancement [0/1]
+*** TODO Interactive Terminal UI Mode
+**** Create TUI for discovering and managing entries
+**** Visual selection for passwords/TOTP entries  
+**** Search-as-you-type functionality
+**** Better UX for master password entry
+**** Complement (not replace) existing CLI
 
 ** Phase 4: Advanced Features [0/4]
 *** TODO Backup and Restore
@@ -77,27 +72,27 @@ Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-foc
 **** Support encrypted backup files
 **** Document disaster recovery process
 
-*** TODO Multi-Device Synchronization
-**** Design secure sync mechanism
-**** Document security considerations
-**** Implement sync via local network only
+*** WONT Multi-Device Synchronization [Security complexity vs benefit]
+**** ~~Design secure sync mechanism~~
+**** ~~Document security considerations~~
+**** ~~Implement sync via local network only~~
 
 *** TODO Audit Logging
 **** Track usage of TOTP codes
 **** Log authentication attempts
 **** Provide reports on service usage
 
-*** TODO Advanced Configuration
-**** Support for custom TOTP parameters
-**** Allow different token validity periods
-**** Support for non-standard authentication flows
+*** WONT Advanced Configuration [Conflicts with simplicity principle]
+**** ~~Support for custom TOTP parameters~~
+**** ~~Allow different token validity periods~~
+**** ~~Support for non-standard authentication flows~~
 
 * Technical Tasks
 
 ** Core Infrastructure [2/3]
 *** DONE Refactor existing code into plugins
 *** DONE Create plugin loading system
-*** TODO Implement configuration manager
+*** WONT Implement configuration manager [Using explicit flags instead]
 
 ** Security Enhancements [3/3]
 *** DONE Audit keychain usage
