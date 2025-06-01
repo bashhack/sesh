@@ -800,7 +800,7 @@ func TestTOTPSetupHandler_captureManualEntry(t *testing.T) {
 			output := buf.String()
 			
 			// Check prompt was displayed
-			if !strings.Contains(output, "Enter your TOTP secret key") {
+			if !strings.Contains(output, "Enter or paste your TOTP secret key") {
 				t.Error("Expected prompt not displayed")
 			}
 			
