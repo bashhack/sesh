@@ -87,10 +87,10 @@ Sesh is open source with a plugin architecture designed for community contributi
 *** DONE Implement strict permission checks
 *** DONE Add TOTP seed validation
 
-** Testing [3/4]
+** Testing [4/4]
 *** DONE Create automated tests for plugins
 *** DONE Implement CI pipeline
-*** TODO Add security testing
+*** DONE Add security testing [gosec via make security-scan]
 *** DONE Create integration tests with actual services [AWS implemented]
 
 ** Documentation [3/3]
