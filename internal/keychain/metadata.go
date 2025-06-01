@@ -198,7 +198,7 @@ var saveEntryMetadataImpl = func(entries []KeychainEntryMeta) error {
 			deleteCmd := execCommand("security", "delete-generic-password",
 				"-a", metaAccount,
 				"-s", metaService)
-			deleteCmd.Run() // Ignore errors from delete
+			_ = deleteCmd.Run() // Ignore errors from delete - we'll try to add anyway
 
 			// Try to add again
 			cmd = execCommand("security", "add-generic-password",

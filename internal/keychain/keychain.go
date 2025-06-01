@@ -115,7 +115,7 @@ func SetSecretBytes(account, service string, secret []byte) error {
 
 	// Store in metadata system with simple description
 	serviceType := getServicePrefix(service)
-	StoreEntryMetadata(serviceType, service, account, service)
+	_ = StoreEntryMetadata(serviceType, service, account, service) // Best effort - metadata is optional
 
 	return nil
 }
@@ -219,7 +219,7 @@ func DeleteEntry(account, service string) error {
 
 	// Also remove from our metadata system
 	serviceType := getServicePrefix(service)
-	RemoveEntryMetadata(serviceType, service, account)
+	_ = RemoveEntryMetadata(serviceType, service, account) // Best effort - metadata cleanup is optional
 
 	return nil
 }

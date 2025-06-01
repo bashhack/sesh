@@ -124,13 +124,13 @@ func ExecWithSecretInput(cmd *exec.Cmd, secret []byte) error {
 
 	// Write secret to stdin
 	if _, err := stdin.Write(secret); err != nil {
-		cmd.Process.Kill() // Kill process on write error
-		cmd.Wait()         // Clean up resources
+		_ = cmd.Process.Kill() // Kill process on write error
+		_ = cmd.Wait()         // Clean up resources
 		return err
 	}
 
 	// Close stdin to signal EOF
-	stdin.Close()
+	_ = stdin.Close()
 
 	// Wait for command to complete
 	return cmd.Wait()
