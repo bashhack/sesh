@@ -1,10 +1,16 @@
 <p align="center">
-  <img src="./assets/gitbak_retro_logo.png" alt="gitbak logo" width="300">
+  <img src="./assets/logo.png" alt="sesh logo" width="300">
 </p>
 
 <div align="center">
-[![Tests](https://github.com/bashhack/gitbak/actions/workflows/ci.yml/badge.svg)](https://github.com/bashhack/gitbak/actions/workflows/ci.yml)
 
+[![Tests](https://github.com/bashhack/sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/bashhack/sesh/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/bashhack/sesh/graph/badge.svg?token=Y3K7R3MHXH)](https://codecov.io/gh/bashhack/sesh)
+[![Go Reference](https://pkg.go.dev/badge/github.com/bashhack/sesh)](https://pkg.go.dev/github.com/bashhack/sesh)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bashhack/sesh)](https://goreportcard.com/report/github.com/bashhack/sesh)
+![CodeRabbit Reviews](https://img.shields.io/coderabbit/prs/github/bashhack/sesh?utm_source=oss&utm_medium=github&utm_campaign=bashhack%2Fsesh&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
+
+</div>
 
 # sesh — An extensible terminal-first authentication toolkit for secure credential workflows
 
@@ -36,7 +42,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 
 ```bash
 # Install via Homebrew
-brew install bashhack/tap/sesh
+brew install bashhack/sesh/sesh
 
 # First-time setup for AWS
 sesh --service aws --setup
@@ -218,7 +224,7 @@ sesh --service totp --delete <entry-id>
 ## 🛠️ Development
 
 ### Prerequisites
-- Go 1.20+
+- Go 1.24+
 - macOS (for Keychain integration)
 - Make
 
@@ -277,14 +283,6 @@ See [Plugin Development Guide](docs/PLUGIN_DEVELOPMENT.md) for details.
 - [Security Model](docs/SECURITY_MODEL.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-## 🤝 Contributing
-
-Contributions are welcome! Please read our contributing guidelines and submit pull requests to our repository.
-
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) for details.
-
-## 🙏 Acknowledgments
-
-Built with love by the open source community. Special thanks to all contributors who help make sesh better!
