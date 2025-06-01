@@ -36,7 +36,7 @@ const (
 	mockRegion      = "us-east-1"
 	mockMFASerial   = "arn:aws:iam::123456789012:mfa/mockuser"
 	mockAccessKey   = "AKIAMOCKEXAMPLE"
-	mockSecretKey   = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYMOCKEXAMPLE"
+	mockSecretKey   = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYMOCKEXAMPLE" // #nosec G101 - This is a mock key for testing
 	mockSessionName = "mock-session"
 )
 

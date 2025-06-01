@@ -93,7 +93,7 @@ func SetupZshShell(config Config, env []string) ([]string, error) {
 	}
 	zshrc := filepath.Join(tmpDir, ".zshrc")
 
-	if writeErr := os.WriteFile(zshrc, []byte(config.ShellCustomizer.GetZshInitScript()), 0644); writeErr != nil {
+	if writeErr := os.WriteFile(zshrc, []byte(config.ShellCustomizer.GetZshInitScript()), 0600); writeErr != nil {
 		return []string{}, fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 	}
 	env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
