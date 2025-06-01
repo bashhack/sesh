@@ -2048,3 +2048,171 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 		})
 	}
 }
+
+func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
+	// Save original functions
+	origGetCurrentUser := getCurrentUser
+	origValidateAndNormalizeSecret := validateAndNormalizeSecret
+	origGenerateConsecutiveCodes := generateConsecutiveCodes
+	origReadPassword := readPassword
+	defer func() {
+		getCurrentUser = origGetCurrentUser
+		validateAndNormalizeSecret = origValidateAndNormalizeSecret
+		generateConsecutiveCodes = origGenerateConsecutiveCodes
+		readPassword = origReadPassword
+	}()
+
+	// Mock functions
+	getCurrentUser = func() (string, error) {
+		return "testuser", nil
+	}
+	
+	validateAndNormalizeSecret = func(secret string) (string, error) {
+		return secret, nil
+	}
+	
+	generateConsecutiveCodes = func(secret string) (string, string, error) {
+		return "123456", "789012", nil
+	}
+	
+	readPassword = func(fd int) ([]byte, error) {
+		return []byte("TESTSECRET"), nil
+	}
+
+	tests := map[string]struct {
+		existingSecret   string
+		userInput        string
+		expectError      bool
+		expectedErrorMsg string
+		expectOverwrite  bool
+	}{
+		"existing entry - user cancels with n": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "TestService\n\nn\n", // service: TestService, profile: empty, overwrite: no
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"existing entry - user cancels with N": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "TestService\n\nN\n", // service: TestService, profile: empty, overwrite: NO
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"existing entry - user cancels with empty": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "TestService\n\n\n", // service: TestService, profile: empty, overwrite: empty (defaults to no)
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"existing entry - user overwrites with y": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "TestService\n\ny\n1\n", // service: TestService, profile: empty, overwrite: yes, manual entry
+			expectError:      false,
+			expectOverwrite:  true,
+		},
+		"existing entry - user overwrites with yes": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "TestService\n\nyes\n1\n", // service: TestService, profile: empty, overwrite: yes, manual entry
+			expectError:      false,
+			expectOverwrite:  true,
+		},
+		"existing entry with profile - user cancels": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "TestService\nwork\nn\n", // service: TestService, profile: work, overwrite: no
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"no existing entry - proceeds normally": {
+			existingSecret:   "", // No existing entry
+			userInput:        "TestService\n\n1\n", // service: TestService, profile: empty, manual entry
+			expectError:      false,
+			expectOverwrite:  false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create mock keychain with controlled behavior
+			mockKeychain := &mocks.MockKeychainProvider{
+				GetSecretFunc: func(account, service string) ([]byte, error) {
+					if tc.existingSecret != "" {
+						return []byte(tc.existingSecret), nil
+					}
+					return nil, fmt.Errorf("not found")
+				},
+				GetSecretStringFunc: func(account, service string) (string, error) {
+					return tc.existingSecret, nil
+				},
+				SetSecretFunc: func(account, service string, secret []byte) error {
+					return nil
+				},
+				SetSecretStringFunc: func(account, service string, secret string) error {
+					return nil
+				},
+				StoreEntryMetadataFunc: func(serviceType, service, account, description string) error {
+					return nil
+				},
+			}
+
+			// Create handler with mock reader
+			reader := bufio.NewReader(strings.NewReader(tc.userInput))
+			handler := &TOTPSetupHandler{
+				reader:           reader,
+				keychainProvider: mockKeychain,
+			}
+
+			// Capture output
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			// Run setup
+			err := handler.Setup()
+
+			// Restore stdout and get output
+			w.Close()
+			os.Stdout = oldStdout
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check results
+			if tc.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				} else if \!strings.Contains(err.Error(), tc.expectedErrorMsg) {
+					t.Errorf("Expected error containing %q, got %q", tc.expectedErrorMsg, err.Error())
+				}
+				
+				// Verify cancellation message appears
+				if tc.expectedErrorMsg == "setup cancelled by user" && \!strings.Contains(output, "Setup cancelled") {
+					t.Error("Expected 'Setup cancelled' message in output")
+				}
+			} else {
+				if err \!= nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				
+				// Verify success messages
+				if \!strings.Contains(output, "Setup complete\!") {
+					t.Error("Expected setup completion message")
+				}
+			}
+
+			// Verify overwrite prompt appears when expected
+			if tc.existingSecret \!= "" {
+				if \!strings.Contains(output, "An entry already exists") {
+					t.Error("Expected overwrite warning message")
+				}
+				if \!strings.Contains(output, "Overwrite existing configuration?") {
+					t.Error("Expected overwrite prompt")
+				}
+			}
+		})
+	}
+}
+EOF < /dev/null
