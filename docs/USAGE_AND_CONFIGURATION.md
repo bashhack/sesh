@@ -1,6 +1,6 @@
-# gitbak Usage and Configuration Guide
+# sesh Usage and Configuration Guide
 
-This document provides detailed instructions for configuring and using gitbak effectively in your workflow.
+This document provides detailed instructions for using and configuring sesh for secure authentication workflows across multiple providers.
 
 ## Workflow Overview
 

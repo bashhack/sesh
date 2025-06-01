@@ -196,7 +196,7 @@ sesh --service totp --delete <entry-id>
 
 ## 📚 Documentation
 
-- [Quick Start Guide](docs/QUICK_START.md)
+- [Usage & Configuration](docs/USAGE_AND_CONFIGURATION.md) - Detailed usage instructions with workflow diagrams
 - [Advanced Usage](docs/ADVANCED_USAGE.md)
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [Plugin Development](docs/PLUGIN_DEVELOPMENT.md)
