@@ -182,12 +182,20 @@ func listMFADevices() {
 	// Simulate a brief network delay
 	time.Sleep(100 * time.Millisecond)
 
-	// Check for --user-name flag
+	// Check for flags
 	var username string
+	var query string
+	var outputFormat string = "json" // default
+	
 	for i, arg := range os.Args {
 		if arg == "--user-name" && i+1 < len(os.Args) {
 			username = os.Args[i+1]
-			break
+		}
+		if arg == "--query" && i+1 < len(os.Args) {
+			query = os.Args[i+1]
+		}
+		if arg == "--output" && i+1 < len(os.Args) {
+			outputFormat = os.Args[i+1]
 		}
 	}
 
@@ -210,6 +218,22 @@ func listMFADevices() {
 		devices.MFADevices = []MFADevice{}
 	}
 
+	// Handle query parameter
+	if query == "MFADevices[].SerialNumber" && outputFormat == "text" {
+		// Output just the serial numbers in text format
+		for i, device := range devices.MFADevices {
+			if i > 0 {
+				fmt.Print("\t")
+			}
+			fmt.Print(device.SerialNumber)
+		}
+		if len(devices.MFADevices) > 0 {
+			fmt.Println()
+		}
+		return
+	}
+
+	// Default JSON output
 	output, _ := json.MarshalIndent(devices, "", "    ")
 	fmt.Println(string(output))
 }
