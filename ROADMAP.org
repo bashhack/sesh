@@ -16,7 +16,7 @@ Sesh is open source with a plugin architecture designed for community contributi
 
 * Feature Roadmap
 
-** Phase 1: Core Extension Framework [2/3]
+** Phase 1: Core Extension Framework [2/2]
 *** DONE Multi-Service Plugin Architecture
 **** Design plugin interface for multiple service providers
 **** Create registration system for plugins
@@ -29,11 +29,6 @@ Sesh is open source with a plugin architecture designed for community contributi
 **** Add optional notification for clipboard operations
 **** Create configuration for auto-copying behavior
 
-*** WONT Configuration System [Conflicts with explicit behavior philosophy]
-**** ~~Create ~/.config/sesh directory for config files~~
-**** ~~Implement YAML/TOML based configuration~~
-**** ~~Add command-line options to override config~~
-**** ~~Create ~sesh config~ subcommand~~
 
 ** Phase 2: Service Providers [2/2]
 *** DONE AWS Provider (Existing)
@@ -54,33 +49,24 @@ Sesh is open source with a plugin architecture designed for community contributi
 **** Better UX for master password entry
 **** Complement (not replace) existing CLI
 
-** Phase 4: Advanced Features [0/4]
+** Phase 4: Advanced Features [0/2]
 *** TODO Backup and Restore
 **** Create secure export/import functionality
 **** Support encrypted backup files
 **** Document disaster recovery process
 
-*** WONT Multi-Device Synchronization [Security complexity vs benefit]
-**** ~~Design secure sync mechanism~~
-**** ~~Document security considerations~~
-**** ~~Implement sync via local network only~~
 
 *** TODO Audit Logging
 **** Track usage of TOTP codes
 **** Log authentication attempts
 **** Provide reports on service usage
 
-*** WONT Advanced Configuration [Conflicts with simplicity principle]
-**** ~~Support for custom TOTP parameters~~
-**** ~~Allow different token validity periods~~
-**** ~~Support for non-standard authentication flows~~
 
 * Technical Tasks
 
-** Core Infrastructure [2/3]
+** Core Infrastructure [2/2]
 *** DONE Refactor existing code into plugins
 *** DONE Create plugin loading system
-*** WONT Implement configuration manager [Using explicit flags instead]
 
 ** Security Enhancements [3/3]
 *** DONE Audit keychain usage
