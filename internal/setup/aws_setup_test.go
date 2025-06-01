@@ -710,13 +710,19 @@ func TestAWSSetupHandler_Setup_Overwrite(t *testing.T) {
 				}
 				
 				// Mock password reading for secret entry
-				readPassword = func(fd int) ([]byte, error) {
-					// Read the next line from our mock reader
-					line, err := reader.ReadString('\n')
-					if err != nil {
-						return nil, err
+				// Extract the secret from the input string
+				lines := strings.Split(tc.userInput, "\n")
+				var secretLine string
+				// Find the line after "1" (manual entry choice)
+				for i := 0; i < len(lines)-1; i++ {
+					if lines[i] == "1" {
+						secretLine = lines[i+1]
+						break
 					}
-					return []byte(strings.TrimSpace(line)), nil
+				}
+				
+				readPassword = func(fd int) ([]byte, error) {
+					return []byte(secretLine), nil
 				}
 			}
 
