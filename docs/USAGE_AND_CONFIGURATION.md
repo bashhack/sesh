@@ -101,14 +101,15 @@ sesh uses a provider-based configuration system:
 
 | Command Flag       | Description                                        | Available For    |
 |--------------------|----------------------------------------------------|------------------|
-| `--service`        | Service provider to use (aws, totp) [REQUIRED]    | All commands     |
 | `--list-services`  | List all available service providers               | Global           |
+| `--version`        | Display version information                        | Global           |
+| `--help`           | Show help (use with --service for provider help)  | Global           |
+| `--service`        | Service provider to use (aws, totp) [REQUIRED]    | All commands     |
 | `--list`           | List entries for selected service                  | All providers    |
 | `--delete <id>`    | Delete entry for selected service                  | All providers    |
 | `--setup`          | Run interactive setup wizard                       | All providers    |
 | `--clip`           | Copy generated code to clipboard                   | All providers    |
-| `--version`        | Display version information                        | Global           |
-| `--help`           | Show help (use with --service for provider help)  | Global           |
+
 
 ### AWS Provider Options
 
@@ -170,7 +171,7 @@ exit
 
 ### AWS Console Access Workflow
 
-For AWS Console (web) access, use the clipboard mode to avoid the "code already used" error:
+For AWS Console (web) access, use the clipboard mode for a near-instant, seamless paste-to-form workflow:
 
 ```bash
 # Copy TOTP code for AWS Console login
@@ -184,7 +185,7 @@ sesh --service aws --clip
 
 ### TOTP Service Workflow
 
-For general TOTP services, sesh provides a simple, secure workflow:
+For general TOTP services, sesh provides a simple, secure workflow regardless of the service name:
 
 ```bash
 # Generate TOTP code for any service
@@ -229,23 +230,6 @@ flowchart TD
     AWSProd & AWSDev & AWSStaging & GHWork & GHPersonal & GoogleMain --> KC["macOS Keychain<br>Secure Storage"]:::keychain
 ```
 
-#### Benefits of sesh's Multi-Profile Approach:
-
-- **Unified Interface**: One tool for all your MFA needs (AWS, GitHub, Google, etc.)
-- **Secure Storage**: All secrets in macOS Keychain with binary-level access control
-- **Profile Isolation**: Keep work and personal accounts completely separate
-- **No Mobile Dependency**: Generate codes directly in your terminal
-- **Scriptable**: Integrate into your automation workflows
-- **Privacy-First**: No cloud sync, no tracking, no corporate oversight
-
-### Why sesh Over Mobile Authenticators:
-
-- **Terminal-Native**: No context switching to your phone
-- **Faster**: Type a command vs. unlock phone → find app → find code
-- **Scriptable**: Can be integrated into automated workflows
-- **Secure**: Keychain storage is more secure than many mobile apps
-- **Private**: Your auth codes stay on your machine
-
 ### Entry Management
 
 Sesh provides comprehensive entry management capabilities:
@@ -272,7 +256,7 @@ The interactive setup wizard guides you through configuration:
 # AWS Setup
 sesh --service aws --setup
 # - Prompts for MFA device setup in AWS Console
-# - Handles QR code scanning or manual entry
+# - Handles QR code scanning or manual secret entry
 # - Validates and stores secret securely
 # - Provides test codes for AWS activation
 
@@ -341,3 +325,22 @@ The AWS subshell provides:
 - [Security Model](SECURITY_MODEL.md) - Understanding sesh's security architecture
 - [Plugin Development](PLUGIN_DEVELOPMENT.md) - Adding new authentication providers
 - [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
+
+---
+
+#### Benefits of sesh's Multi-Profile Approach:
+
+- **Unified Interface**: One tool for all your MFA needs (AWS, GitHub, Google, etc.)
+- **Secure Storage**: All secrets in macOS Keychain with binary-level access control
+- **Profile Isolation**: Keep work and personal accounts completely separate
+- **No Mobile Dependency**: Generate codes directly in your terminal
+- **Scriptable**: Integrate into your automation workflows
+- **Privacy-First**: No cloud sync, no tracking, no corporate oversight
+
+### Why sesh Over Mobile Authenticators:
+
+- **Terminal-Native**: No context switching to your phone
+- **Faster**: Type a command vs. unlock phone → find app → find code
+- **Scriptable**: Can be integrated into automated workflows
+- **Secure**: Keychain storage is more secure than many mobile apps
+- **Private**: Your auth codes stay on your machine
