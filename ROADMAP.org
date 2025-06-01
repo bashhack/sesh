@@ -110,9 +110,9 @@ Transform ~sesh~ from an AWS-specific MFA tool into a comprehensive, privacy-foc
 *** TODO Add security testing
 *** DONE Create integration tests with actual services [AWS implemented]
 
-** Documentation [2/3]
+** Documentation [3/3]
 *** DONE Update README with new capabilities
-*** TODO Create plugin development guide
+*** DONE Create plugin development guide
 *** DONE Improve security documentation
 
 
