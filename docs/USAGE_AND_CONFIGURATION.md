@@ -34,7 +34,7 @@ flowchart TD
     AWSChoice -->|"Export"| Export["Print credentials<br>sesh --service aws --no-subshell"]:::sesh
     AWSChoice -->|"Clipboard"| AWSClip["Copy TOTP for console<br>sesh --service aws --clip"]:::sesh
     
-    Service -->|"TOTP"| TOTP["Generate TOTP code<br>sesh --service totp --service-name github"]:::sesh
+    Service -->|"TOTP"| TOTP["Generate TOTP code<br>sesh --service totp --service-name github --clip"]:::sesh
     
     Subshell --> Work["Work in secure environment<br>- sesh_status<br>- verify_aws<br>- Auto-expiry tracking"]:::process
     Work --> Exit["Exit subshell<br>Credentials cleared"]:::endNode
@@ -72,30 +72,41 @@ This will:
 
 ## Configuration Methods
 
-gitbak can be configured using:
+sesh uses a provider-based configuration system:
 
-1. Command-line flags (highest priority)
-2. Environment variables
-3. Default values (lowest priority)
+1. **Global flags** - Apply to all providers (e.g., `--service`, `--help`)
+2. **Provider-specific flags** - Apply only to the selected provider (e.g., `--profile` for AWS)
+3. **Environment variables** - For default AWS profile selection
+4. **Keychain storage** - Secure storage for all secrets and metadata
 
 ## Configuration Options
 
-| Command Flag       | Environment Variable | Description                                 | Default Value          |
-|--------------------|----------------------|---------------------------------------------|------------------------|
-| `-interval`        | `INTERVAL_MINUTES`   | Minutes between commit checks (decimal OK)  | 5.0                    |
-| `-branch`          | `BRANCH_NAME`        | Branch name to use                          | gitbak-<timestamp>     |
-| `-prefix`          | `COMMIT_PREFIX`      | Commit message prefix                       | [gitbak]               |
-| `-no-branch`       | `CREATE_BRANCH=false`| Stay on current branch                      | false (creates branch) |
-| `-continue`        | `CONTINUE_SESSION`   | Continue existing session                   | false                  |
-| `-show-no-changes` | `SHOW_NO_CHANGES`    | Show messages when no changes detected      | false                  |
-| `-quiet`           | `VERBOSE=false`      | Hide informational messages                 | false (verbose)        |
-| `-repo`            | `REPO_PATH`          | Path to repository                          | current directory      |
-| `-max-retries`     | `MAX_RETRIES`        | Max consecutive identical errors before exit| 3                      |
-| `-debug`           | `DEBUG`              | Enable debug logging                        | false                  |
-| `-log-file`        | `LOG_FILE`           | Path to log file                            | ~/.local/share/gitbak/logs/gitbak-<hash>.log |
-| `-version`         | n/a                  | Print version information and exit          | n/a                    |
-| `-logo`            | n/a                  | Display ASCII logo and exit                 | n/a                    |
-| `-help`/`-h`       | n/a                  | Display help message and exit               | n/a                    |
+### Global Options
+
+| Command Flag       | Description                                        | Available For    |
+|--------------------|----------------------------------------------------|------------------|
+| `--service`        | Service provider to use (aws, totp) [REQUIRED]    | All commands     |
+| `--list-services`  | List all available service providers               | Global           |
+| `--list`           | List entries for selected service                  | All providers    |
+| `--delete <id>`    | Delete entry for selected service                  | All providers    |
+| `--setup`          | Run interactive setup wizard                       | All providers    |
+| `--clip`           | Copy generated code to clipboard                   | All providers    |
+| `--version`        | Display version information                        | Global           |
+| `--help`           | Show help (use with --service for provider help)  | Global           |
+
+### AWS Provider Options
+
+| Command Flag       | Environment Variable | Description                             | Default Value    |
+|--------------------|----------------------|-----------------------------------------|------------------|
+| `--profile`        | `AWS_PROFILE`        | AWS profile to use                      | default profile  |
+| `--no-subshell`    | n/a                  | Print credentials instead of subshell   | false (subshell) |
+
+### TOTP Provider Options
+
+| Command Flag       | Description                                        | Required         |
+|--------------------|----------------------------------------------------|------------------|
+| `--service-name`   | Name of service (github, google, slack, etc.)      | Yes              |
+| `--profile`        | Profile name for multiple accounts (work, personal)| No               |
 
 ## Usage Patterns
 
