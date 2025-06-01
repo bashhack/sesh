@@ -1,11 +1,14 @@
-# 🔐 sesh — An extensible terminal-first authentication toolkit for secure credential workflows
+<p align="center">
+  <img src="./assets/gitbak_retro_logo.png" alt="gitbak logo" width="300">
+</p>
 
-|              Build              |          Tests           |          Coverage           |                                                                                                                         Review                                                                                                                         |
-|:-------------------------------:|:------------------------:|:---------------------------:|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|
-| [![Build Status](https://github.com/bashhack/sesh/actions/workflows/ci.yml/badge.svg)](https://github.com/bashhack/sesh/actions/workflows/ci.yml) | [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](https://github.com/bashhack/sesh/actions/workflows/ci.yml) | [![codecov](https://codecov.io/gh/bashhack/sesh/graph/badge.svg?token=Y3K7R3MHXH)](https://codecov.io/gh/bashhack/sesh) | ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/bashhack/sesh?utm_source=oss&utm_medium=github&utm_campaign=bashhack%2Fsesh&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews) |
+<div align="center">
+[![Tests](https://github.com/bashhack/gitbak/actions/workflows/ci.yml/badge.svg)](https://github.com/bashhack/gitbak/actions/workflows/ci.yml)
 
 
-A powerful CLI tool that manages secure authentication workflows for AWS, TOTP services, and beyond. Built with an extensible plugin architecture, sesh provides seamless credential management with macOS Keychain integration.
+# sesh — An extensible terminal-first authentication toolkit for secure credential workflows
+
+> A powerful CLI tool that manages secure authentication workflows for AWS, TOTP services, and beyond. Built with an extensible plugin architecture, sesh provides seamless credential management with macOS Keychain integration.
 
 ## 🎯 Purpose
 
