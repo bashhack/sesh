@@ -517,14 +517,6 @@ func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
 
 The test helper pattern reuses the test binary itself as the mock, eliminating these issues.
 
-### Mock Generation Strategy
-
-Using `mockgen` for consistency:
-- Mocks stay in sync with interfaces
-- Generated code is predictable
-- Reduces boilerplate
-- Enables powerful assertions
-
 ## Performance: Fast Enough to Not Notice
 
 ### Startup Performance
