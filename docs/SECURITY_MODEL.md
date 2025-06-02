@@ -31,21 +31,26 @@ sesh is NOT designed to protect against:
 
 ### Storage Security
 
-All secrets are stored in macOS Keychain with these protections:
+All secrets are stored in macOS Keychain using the system `security` command with binary access restrictions:
 
 ```go
-// Binary path binding ensures only sesh can access its secrets
-item.SetAccess(&keychain.Access{
-    Label:       fmt.Sprintf("sesh (%s)", binaryPath),
-    TrustedApplications: []string{binaryPath},
-})
+// Get the path to the sesh binary (handles Homebrew, go install, etc.)
+execPath := constants.GetSeshBinaryPath()
+
+// Use -T flag to restrict access to only the sesh binary
+addCmd := fmt.Sprintf("add-generic-password -a %s -s %s -w %s -U -T %s",
+    account, service, secretStr, execPath)
+
+// Execute via security -i (interactive mode) to avoid process listing exposure
+cmd := exec.Command("security", "-i")
+err := secure.ExecWithSecretInput(cmd, []byte(addCmd+"\n"))
 ```
 
 **Key Features:**
-- **Hardware-Backed Encryption**: Secrets encrypted with keys tied to Secure Enclave
-- **Binary Path Binding**: Only the sesh binary at its installed path can access secrets
+- **macOS Keychain Encryption**: Secrets encrypted by the OS keychain subsystem
+- **Binary Path Binding**: The `-T` flag ensures only the sesh binary can access secrets without prompting
 - **User Prompts**: macOS prompts when other apps try to access sesh entries
-- **Automatic Permissions**: Works seamlessly with Homebrew, go install, or manual installation
+- **Automatic Path Detection**: Works seamlessly with Homebrew, go install, or manual installation
 
 ### Why This Matters
 
