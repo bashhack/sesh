@@ -2,16 +2,57 @@
 
 This document describes the architecture of sesh, an extensible terminal-first authentication toolkit for secure credential workflows.
 
-## Design Philosophy
+## Architectural Principles
 
-sesh is built on four core architectural principles:
+sesh's architecture is driven by four core principles that shape every design decision:
 
-1. **Plugin-Based Extensibility** - New authentication providers can be added without modifying core code
-2. **Security by Design** - Leverage OS security primitives, minimize attack surface, handle memory carefully
-3. **Terminal-First UX** - Optimized for CLI workflows with features like subshells and clipboard integration  
-4. **Testable Architecture** - Interface-based design enables comprehensive testing without external dependencies
+### 1. Plugin-Based Extensibility
+**Principle**: Authentication providers should be pluggable components, not hardcoded implementations.
 
-## System Overview
+**Why**: Organizations use diverse authentication systems. By making providers pluggable:
+- New providers can be added without touching core code
+- Each provider can evolve independently
+- Users only interact with providers they need
+- Testing becomes focused and isolated
+
+**How**: The `ServiceProvider` interface defines a contract that all providers must fulfill. The Registry pattern allows dynamic provider discovery and instantiation.
+
+### 2. Security Through Isolation
+**Principle**: Each component should have minimal access to what it needs, nothing more.
+
+**Why**: Security breaches often exploit overly-broad permissions. By isolating components:
+- Secrets never touch the filesystem or command arguments
+- Each provider manages its own secret storage namespace
+- Memory exposure windows are minimized
+- Attack surface is reduced to essential operations
+
+**How**: Keychain entries are scoped per-provider, secrets flow through stdin pipes, and memory is zeroed after use.
+
+### 3. Terminal-Native Experience
+**Principle**: Terminal users shouldn't need to context-switch to graphical tools.
+
+**Why**: Developers live in terminals. Breaking flow to use a GUI or phone:
+- Disrupts concentration and productivity
+- Introduces friction in automated workflows
+- Creates dependency on additional devices
+- Complicates scripting and automation
+
+**How**: Subshells provide isolated environments, clipboard integration enables quick pastes, and all operations are scriptable.
+
+### 4. Interface-Driven Design
+**Principle**: Every external dependency must be abstracted behind an interface.
+
+**Why**: Direct dependencies create brittle, untestable code. With interfaces:
+- Unit tests can mock any external system
+- Implementations can be swapped (e.g., different keychain backends)
+- Code remains loosely coupled
+- Behavior is documented through contracts
+
+**How**: AWS CLI, Keychain, TOTP generation, and even command execution are all behind interfaces with mock implementations.
+
+## Architectural Layers
+
+The architecture follows a strict layering model where dependencies flow downward:
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
@@ -38,121 +79,189 @@ sesh is built on four core architectural principles:
                     └─────────────────────────┘
 ```
 
-## Component Architecture
+### Why This Layering?
 
-### CLI Layer (`/sesh/cmd/sesh`)
+**CLI Layer**: Thin and focused on user interaction. This separation means:
+- Alternative CLIs could be built (e.g., a TUI version)
+- Business logic isn't mixed with presentation
+- Testing can focus on user workflows
 
-The entry point that handles user interaction:
+**Core Layer**: Orchestrates without implementing. This abstraction:
+- Keeps provider-specific logic out of the application flow
+- Enables consistent behavior across all providers
+- Allows for cross-cutting concerns (logging, metrics)
 
-- **main.go** - Entry point with version injection via ldflags and the `run()` function for command parsing
-- **app.go** - Application struct with dependency injection and provider registration via `registerProviders()`
-- **app_subshell.go** - Subshell launching logic with provider validation
+**Provider Layer**: Self-contained authentication modules. This isolation:
+- Prevents provider dependencies from leaking
+- Allows providers to use different strategies
+- Enables parallel development of providers
 
-Key responsibilities:
-- Parse command-line flags with provider-specific handling (in `run()` function)
-- Route commands to appropriate providers via the Registry
-- Manage subshell lifecycle through `LaunchSubshell()`
-- Handle output formatting and error display
+**Infrastructure Layer**: Shared utilities without business logic. This foundation:
+- Prevents code duplication across providers
+- Centralizes security-critical operations
+- Provides consistent behavior for common tasks
 
-### Provider System (`/internal/provider`)
+## Component Deep Dive
 
-The plugin architecture that makes sesh extensible:
+### CLI Layer: Where Simplicity Meets Power
+
+The CLI layer embodies the Unix philosophy: do one thing well.
+
+**Design Decisions:**
+
+1. **Separation of Concerns**:
+   - `main.go` handles argument parsing and routing
+   - `app.go` manages application lifecycle and dependencies
+   - `app_subshell.go` isolates subshell complexity
+
+2. **Dependency Injection**:
+   ```go
+   func NewApp(keychainProvider keychain.Provider, versionInfo VersionInfo) *App
+   ```
+   Why? Testing. Every external dependency can be mocked, making the CLI fully testable.
+
+3. **Provider Registration**:
+   ```go
+   func (a *App) registerProviders() {
+       awsP := awsProvider.NewProvider(a.AWS, a.Keychain, a.TOTP)
+       a.Registry.RegisterProvider(awsP)
+   }
+   ```
+   Why? Centralized registration makes provider discovery explicit and debuggable.
+
+### The Power of the Provider Interface
+
+The `ServiceProvider` interface is the heart of sesh's extensibility:
 
 ```go
 type ServiceProvider interface {
-    // Identity
+    // Identity - Who are you?
     Name() string
     Description() string
     
-    // Configuration
+    // Configuration - What do you need?
     SetupFlags(fs FlagSet) error
     GetSetupHandler() interface{}
     
-    // Operations
+    // Operations - What can you do?
     GetCredentials() (Credentials, error)
     GetClipboardValue() (Credentials, error)
     ListEntries() ([]ProviderEntry, error)
     DeleteEntry(id string) error
     
-    // Validation
+    // Validation - Are we ready?
     ValidateRequest() error
     
-    // Help
+    // Help - How do you work?
     GetFlagInfo() []FlagInfo
 }
 ```
 
-Current providers:
-- **AWS Provider** (`/internal/provider/aws`) - AWS CLI + MFA authentication
-- **TOTP Provider** (`/internal/provider/totp`) - Generic TOTP for any service
+**Why This Interface Design?**
 
-Additional interfaces:
-- **SubshellProvider** - Required for providers that support subshell mode:
-  ```go
-  type SubshellProvider interface {
-      NewSubshellConfig(creds Credentials) interface{}
-  }
-  ```
+1. **Minimal Surface Area**: Every method has a clear, single purpose. No kitchen sink interfaces.
 
-Note: Clipboard and subshell support are determined by:
-- Subshell: Provider must implement `SubshellProvider` interface
-- Clipboard: All providers must implement `GetClipboardValue()` method
+2. **Lifecycle Awareness**: Methods follow the natural flow:
+   - Setup flags → Validate request → Get credentials
+   - This prevents invalid states and guides implementation
 
-### Infrastructure Components
+3. **Mode Flexibility**: `GetCredentials()` vs `GetClipboardValue()` allows providers to optimize for different workflows without conditional logic.
 
-#### Keychain Integration (`/internal/keychain`)
+4. **Self-Documenting**: `GetFlagInfo()` makes providers introspectable, enabling dynamic help generation.
 
-Secure storage using macOS Keychain:
-- Binary path restrictions via `-T` flag to limit access to sesh binary only
-- Metadata compression with zstd for efficient storage of provider metadata
-- Account/service separation for multi-tenancy (e.g., multiple AWS profiles)
-- Interactive password entry via stdin to avoid exposure in process listings
-- Automatic cleanup of references after secret retrieval
+**The Genius of Optional Interfaces**
 
-#### TOTP Engine (`/internal/totp`)
+Not all providers need subshells. Instead of a bloated base interface:
 
-Time-based one-time password generation:
-- Standard RFC 6238 implementation
-- Consecutive code generation for edge cases
-- Time window calculations
-- Base32 secret validation
+```go
+type SubshellProvider interface {
+    NewSubshellConfig(creds Credentials) interface{}
+}
+```
 
-#### Secure Memory (`/internal/secure`)
+This pattern (inspired by Go's `io.WriterTo`) means:
+- Providers declare capabilities through interface implementation
+- Core code uses type assertions to discover features
+- New capabilities can be added without breaking existing providers
 
-Defense-in-depth memory handling:
-- `SecureZeroBytes()` with compiler optimization protection
-- Secure command execution with stdin for secrets
-- Documented limitations of Go's memory model
-- Best-effort string zeroing
+### Infrastructure: Security-First Building Blocks
 
-#### Subshell (`/internal/subshell`)
+Each infrastructure component embodies specific security principles:
 
-Isolated credential environments:
-- Shell detection (bash/zsh/sh)
-- Custom RC file generation
-- Environment variable injection
-- Session status tracking
-- Nested session prevention
+#### Keychain Integration: Trust Through OS Primitives
 
-#### Additional Infrastructure
+**Why macOS Keychain?**
+- Hardware-backed encryption when available
+- Process-level access control via `-T` flag
+- User-transparent authorization dialogs
+- Automatic locking on sleep/screensaver
 
-- **Clipboard** (`/internal/clipboard`) - Cross-platform clipboard access via pbcopy/xclip/wl-copy
-- **QR Code** (`/internal/qrcode`) - Screenshot-based QR scanning using pngpaste and zbarimg
-- **Constants** (`/internal/constants`) - Binary path detection via `GetSeshBinaryPath()`, service prefixes
-- **AWS** (`/internal/aws`) - AWS CLI wrapper for STS operations and MFA device queries
-- **Environment** (`/internal/env`) - Environment variable helpers and manipulation
-- **Password Manager** (`/internal/password`) - Placeholder for future password storage features
+**Key Design Choice**: Binary path restrictions
+```bash
+security add-generic-password ... -T /path/to/sesh
+```
+This means even if another process knows the service name, it cannot access the secret.
 
-### Setup System (`/internal/setup`)
+#### TOTP Engine: Time as a Security Factor
 
-Interactive configuration wizards:
+**Why Generate Two Codes?**
+```go
+// Current + Next code generation
+codes := []string{currentCode, nextCode}
+```
+Edge case: User copies code at 29 seconds. By the time they paste, it's expired. Providing the next code eliminates this frustration without compromising security.
+
+#### Secure Memory: Paranoid by Design
+
+**The Challenge**: Go's garbage collector moves memory, making true secure erasure impossible.
+
+**Our Approach**: Defense in depth
+1. Prefer `[]byte` over `string` (mutable vs immutable)
+2. Zero immediately after use
+3. Use `runtime.KeepAlive()` to prevent optimization
+4. Pass secrets via stdin, never command arguments
+
+**Why This Matters**: Even partial mitigation reduces the window for memory dumps, cold boot attacks, and swap file analysis.
+
+#### Subshell: Isolation Through Process Boundaries
+
+**Design Philosophy**: Credentials should exist in an isolated environment that:
+1. Visually indicates its special status (custom prompt)
+2. Prevents accidental nesting (`SESH_ACTIVE` check)
+3. Cleans up automatically on exit
+4. Provides built-in helper functions
+
+**Why Not Just Export Variables?**
+- Subshells make the credential lifecycle explicit
+- Users can't accidentally pollute their main shell
+- Clear entry/exit points for audit logging (future)
+- Visual feedback reduces security mistakes
+
+### Setup System: First Impressions Matter
+
+The setup system recognizes that security tools often fail at onboarding.
+
+**Design Principles:**
+
+1. **Progressive Disclosure**: Start with QR scanning (easy path), fall back to manual entry
+2. **Immediate Validation**: Verify secrets before storing to prevent frustration
+3. **Test Before Trust**: Generate test codes so users can verify setup worked
 
 ```go
 type SetupHandler interface {
     ServiceName() string
     Setup() error
 }
+```
 
+**Why So Simple?** Setup is complex enough. The interface shouldn't add cognitive load. Each handler encapsulates:
+- Service-specific secret formats
+- Validation rules
+- Test code generation
+- User guidance
+
+**The Service Registry Pattern**:
+```go
 type SetupService interface {
     RegisterHandler(handler SetupHandler)
     SetupService(serviceName string) error
@@ -160,12 +269,10 @@ type SetupService interface {
 }
 ```
 
-Features:
-- Provider-specific setup flows via registered handlers
-- QR code scanning with manual fallback
-- Secret validation and normalization
-- Overwrite protection with user confirmation
-- Progress indicators and test code generation
+This separation allows:
+- Dynamic handler discovery
+- Consistent setup experience across providers
+- Easy addition of new setup flows
 
 ## Data Flow
 
@@ -207,22 +314,55 @@ User ──► CLI ──► TOTP Provider ──► Keychain (get secret)
                             (with time remaining)
 ```
 
-## Security Architecture
+## Security Architecture: Trust Nothing, Verify Everything
 
 ### Defense in Depth
 
-1. **Storage Security** - macOS Keychain with binary path restrictions (`-T` flag)
-2. **Memory Security** - Best-effort zeroing with `runtime.KeepAlive()`, byte slice preference over strings
-3. **Process Security** - Secrets via stdin using `ExecWithSecretInput()`, never in command args
-4. **Session Security** - Isolated subshells with `SESH_ACTIVE` check, automatic credential cleanup
-5. **Access Security** - No direct network calls, all operations through local AWS CLI
+Each layer assumes the others might fail:
+
+1. **Storage Security**
+   - **Threat**: Other processes reading secrets
+   - **Defense**: Binary path restrictions (`-T` flag)
+   - **Why It Works**: OS kernel enforces access control
+
+2. **Memory Security**
+   - **Threat**: Memory dumps, swap files, cold boot attacks
+   - **Defense**: Immediate zeroing, byte slice preference
+   - **Reality Check**: Go's GC limits our control, but we minimize exposure
+
+3. **Process Security**
+   - **Threat**: Secrets visible in `ps`, shell history, or logs
+   - **Defense**: Stdin pipes for all secret transmission
+   - **Key Insight**: Process arguments are public, stdin is private
+
+4. **Session Security**
+   - **Threat**: Credential leakage between sessions
+   - **Defense**: Isolated subshells with automatic cleanup
+   - **User Benefit**: Clear security boundaries
+
+5. **Access Security**
+   - **Threat**: Network interception, MITM attacks
+   - **Defense**: No network code - delegate to AWS CLI
+   - **Philosophy**: Reuse battle-tested security implementations
 
 ### Trust Boundaries
 
-- **User ↔ sesh** - Terminal interface, no GUI attack surface
-- **sesh ↔ Keychain** - OS-mediated access control
-- **sesh ↔ AWS CLI** - Process boundary, stdin for secrets
-- **Subshell ↔ Parent** - Environment isolation
+Understanding where trust transitions occur:
+
+```
+User Input → [TRUST BOUNDARY] → sesh
+    ↓
+   sesh → [TRUST BOUNDARY] → macOS Keychain
+    ↓
+   sesh → [TRUST BOUNDARY] → AWS CLI
+    ↓
+AWS CLI → [TRUST BOUNDARY] → AWS APIs
+```
+
+Each boundary represents:
+- A potential attack surface
+- A place where validation must occur
+- An opportunity for defense in depth
 
 ## Extensibility Points
 
@@ -271,21 +411,51 @@ if err != nil {
 }
 ```
 
-## Testing Architecture
+## Testing Architecture: Fast, Reliable, Comprehensive
 
-### Interface-Based Mocking
+### Why Interfaces Everywhere?
 
-Every external dependency has an interface:
-- `aws.Provider` - Mock AWS CLI calls
-- `keychain.Provider` - Mock Keychain access
-- `totp.Provider` - Mock TOTP generation
+Consider testing AWS authentication without interfaces:
+- Need real AWS credentials
+- Tests hit actual AWS APIs
+- Slow, flaky, expensive
+- Can't test error conditions
 
-### Test Utilities
+With interfaces:
+```go
+type Provider interface {
+    GetSessionToken(profile, serial string, code []byte) (Credentials, error)
+}
+```
 
-- `testutil.MockExecCommand` - Mock external commands using test helper process pattern
-- Mock providers in `/internal/*/mocks/` generated with mockgen
-- Helper functions for common test scenarios (e.g., temporary keychains, test credentials)
-- Interface-based design enables unit testing without real AWS/Keychain access
+Now tests can:
+- Run in milliseconds
+- Test error paths easily
+- Run in parallel
+- Work offline
+
+### The Test Helper Pattern
+
+`MockExecCommand` uses Go's test binary as a mock process:
+
+```go
+func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
+```
+
+**Why This Matters**: Testing CLI tools traditionally requires:
+- Shipping mock binaries
+- Complex PATH manipulation  
+- Platform-specific code
+
+The test helper pattern reuses the test binary itself as the mock, eliminating these issues.
+
+### Mock Generation Strategy
+
+Using `mockgen` for consistency:
+- Mocks stay in sync with interfaces
+- Generated code is predictable
+- Reduces boilerplate
+- Enables powerful assertions
 
 ## Performance Considerations
 
