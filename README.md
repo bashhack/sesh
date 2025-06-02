@@ -197,11 +197,9 @@ sesh --service totp --delete <entry-id>
 ## 📚 Documentation
 
 - [Usage & Configuration](docs/USAGE_AND_CONFIGURATION.md) - Detailed usage instructions with workflow diagrams
-- [Advanced Usage](docs/ADVANCED_USAGE.md)
-- [Architecture Overview](docs/ARCHITECTURE.md)
-- [Plugin Development](docs/PLUGIN_DEVELOPMENT.md)
-- [Security Model](docs/SECURITY_MODEL.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Architecture Overview](docs/ARCHITECTURE.md) - Technical architecture and design
+- [Plugin Development](docs/PLUGIN_DEVELOPMENT.md) - Guide for creating new providers
+- [Security Model](docs/SECURITY_MODEL.md) - Security architecture and principles
 
 ## 🧑‍💻 Development
 
