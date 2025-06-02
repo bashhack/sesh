@@ -261,13 +261,12 @@ return fmt.Errorf("keychain access failed: %w", err)
 // Provider level - add service context  
 return fmt.Errorf("failed to get AWS credentials for profile %s: %w", profile, err)
 
-// App level - check provider not found specially
+// App level - user-friendly display
 if err != nil {
-    if provider.IsProviderNotFoundError(err) {
-        fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+    fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+    // Additional help for common errors
+    if strings.Contains(err.Error(), "provider") && strings.Contains(err.Error(), "not found") {
         fmt.Fprintf(app.Stderr, "\nRun 'sesh --list-services' to see available providers\n")
-    } else {
-        fmt.Fprintf(app.Stderr, "❌ %v\n", err)
     }
 }
 ```
@@ -306,6 +305,32 @@ The architecture is designed to support:
 - Audit logging with structured logs
 - Plugin loading from external binaries
 - WebAuthn/FIDO2 support for hardware keys
+
+## Directory Structure
+
+```
+sesh/
+├── sesh/cmd/sesh/         # CLI entry point
+│   ├── main.go            # Main function and command parsing
+│   ├── app.go             # Application struct and provider registration
+│   └── app_subshell.go    # Subshell launching logic
+├── internal/              # Internal packages
+│   ├── provider/          # Provider system
+│   │   ├── interfaces.go  # Core interfaces
+│   │   ├── registry.go    # Provider registry
+│   │   ├── aws/           # AWS provider implementation
+│   │   └── totp/          # TOTP provider implementation
+│   ├── aws/               # AWS CLI integration
+│   ├── keychain/          # macOS Keychain wrapper
+│   ├── totp/              # TOTP engine (RFC 6238)
+│   ├── secure/            # Security utilities
+│   ├── subshell/          # Subshell management
+│   ├── clipboard/         # Clipboard operations
+│   ├── qrcode/            # QR code scanning
+│   ├── setup/             # Setup wizards
+│   └── testutil/          # Testing utilities
+└── docs/                  # Documentation
+```
 
 ## Conclusion
 
