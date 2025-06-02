@@ -274,9 +274,9 @@ This separation allows:
 - Consistent setup experience across providers
 - Easy addition of new setup flows
 
-## Data Flow
+## Data Flow: Following the Principle of Least Privilege
 
-### AWS Authentication Flow
+### AWS Authentication: A Study in Delegation
 
 ```
 User ──► CLI ──► AWS Provider ──► Keychain (get secret)
@@ -297,7 +297,19 @@ User ──► CLI ──► AWS Provider ──► Keychain (get secret)
               (LaunchSubshell)              (GetClipboardValue)
 ```
 
-### TOTP Generation Flow
+**Key Design Insights:**
+
+1. **No Direct AWS API Calls**: sesh never touches AWS APIs directly. Why?
+   - AWS CLI handles credential caching, region selection, retries
+   - Security updates come from AWS CLI updates
+   - No need to manage AWS SDK dependencies
+
+2. **Mode Branching at the End**: Credentials are generated the same way, then routed. This:
+   - Ensures consistent security regardless of output mode
+   - Simplifies testing (one credential path)
+   - Allows future output modes without core changes
+
+### TOTP: Pure Computation, No External Dependencies
 
 ```
 User ──► CLI ──► TOTP Provider ──► Keychain (get secret)
@@ -313,6 +325,13 @@ User ──► CLI ──► TOTP Provider ──► Keychain (get secret)
                       └────► Clipboard/Display
                             (with time remaining)
 ```
+
+**Why This Simplicity Works:**
+
+1. **Stateless Computation**: TOTP is pure math - time + secret = code
+2. **No Network Required**: Everything happens locally
+3. **Predictable Timing**: 30-second windows are universal
+4. **Dual Code Generation**: Solves the boundary problem elegantly
 
 ## Security Architecture: Trust Nothing, Verify Everything
 
@@ -364,52 +383,102 @@ Each boundary represents:
 - A place where validation must occur
 - An opportunity for defense in depth
 
-## Extensibility Points
+## Extensibility: Growing Without Breaking
 
-### Adding a New Provider
+### The Provider Contract
 
-1. Implement `ServiceProvider` interface in `/internal/provider/yourprovider/`
-2. Add provider-specific flags in the `SetupFlags()` method
-3. Create setup handler implementing `SetupHandler` in `/internal/setup/`
-4. Register both provider and setup handler in `app.registerProviders()` method:
-   ```go
-   func (a *App) registerProviders() {
-       // Create and register provider
-       yourProvider := yourprovider.NewProvider(dependencies...)
-       a.Registry.RegisterProvider(yourProvider)
-       
-       // Register setup handler
-       a.SetupService.RegisterHandler(setup.NewYourSetupHandler(a.Keychain))
-   }
-   ```
+Adding a new provider is deliberately straightforward:
 
-### Provider Capabilities
-
-Providers can support:
-- **Subshell mode**: Implement `SubshellProvider` interface and return a `subshell.Config`
-- **Clipboard mode**: Already required via `GetClipboardValue()` method
-- **Multiple profiles**: Handle via provider-specific flags (e.g., `--profile`)
-- **Metadata storage**: Use keychain metadata service with compression
-
-## Error Handling Strategy
-
-Errors flow up with context using Go's error wrapping:
 ```go
-// Infrastructure level - specific error
+// 1. Define your provider
+type YourProvider struct {
+    keychain keychain.Provider
+    // your fields
+}
+
+// 2. Implement ServiceProvider
+func (p *YourProvider) GetCredentials() (Credentials, error) {
+    // Your auth logic
+}
+
+// 3. Register it
+func (a *App) registerProviders() {
+    a.Registry.RegisterProvider(yourprovider.New(a.Keychain))
+}
+```
+
+**Why This Works:**
+- Clear contract (ServiceProvider interface)
+- Dependency injection provides needed services
+- Registration is explicit and centralized
+- No global state or init() magic
+
+### Capability Evolution
+
+As providers need new features, we can add optional interfaces:
+
+```go
+// Today: Basic provider
+type ServiceProvider interface { ... }
+
+// Tomorrow: Add audit logging
+type AuditableProvider interface {
+    GetAuditEvents() []AuditEvent
+}
+
+// Future: Hardware key support
+type HardwareKeyProvider interface {
+    RequiresHardwareKey() bool
+    WaitForKeyTouch() error
+}
+```
+
+This pattern (from Go's io package) means:
+- Existing providers keep working
+- New features are opt-in
+- Type assertions discover capabilities
+- No versioning nightmare
+
+## Error Philosophy: Fail Fast, Fail Clearly
+
+### Error Design Principles
+
+1. **Context Over Codes**: Users need to know *what went wrong* and *how to fix it*
+2. **Wrap Don't Replace**: Preserve error chains for debugging
+3. **User-Friendly Top Layer**: Technical details in logs, actionable messages to users
+
+### Error Flow Architecture
+
+```go
+// Layer 1: Infrastructure (Technical)
 return fmt.Errorf("keychain access failed: %w", err)
+// Full technical context for debugging
 
-// Provider level - add service context  
+// Layer 2: Provider (Contextual)  
 return fmt.Errorf("failed to get AWS credentials for profile %s: %w", profile, err)
+// Adds business context
 
-// App level - user-friendly display
+// Layer 3: CLI (Actionable)
 if err != nil {
     fmt.Fprintf(app.Stderr, "❌ %v\n", err)
-    // Additional help for common errors
-    if strings.Contains(err.Error(), "provider") && strings.Contains(err.Error(), "not found") {
-        fmt.Fprintf(app.Stderr, "\nRun 'sesh --list-services' to see available providers\n")
+    
+    // Provide specific guidance
+    switch {
+    case strings.Contains(err.Error(), "not found"):
+        fmt.Fprintf(app.Stderr, "Try: sesh --service aws --setup\n")
+    case strings.Contains(err.Error(), "expired"):
+        fmt.Fprintf(app.Stderr, "Your session expired. Run sesh again.\n")
     }
 }
 ```
+
+### Why This Matters
+
+Bad error: `error: -25300`  
+Good error: `keychain access denied: no stored credentials for AWS profile 'prod'`  
+Best error: `No AWS credentials found for profile 'prod'. Run: sesh --service aws --setup`
+
+The architecture ensures errors get progressively more helpful as they flow up.
 
 ## Testing Architecture: Fast, Reliable, Comprehensive
 
@@ -457,51 +526,143 @@ Using `mockgen` for consistency:
 - Reduces boilerplate
 - Enables powerful assertions
 
-## Performance Considerations
+## Performance: Fast Enough to Not Notice
 
-- Lazy provider initialization - providers created only when accessed
-- Minimal dependencies for fast startup - no heavy frameworks
-- Efficient metadata storage with zstd compression for keychain entries
-- No network calls in critical path - all network ops delegated to AWS CLI
-- Concurrent code generation for TOTP (current + next) to handle time boundaries
+### Startup Performance
 
-## Future Architecture Considerations
+**Goal**: Sub-100ms from invocation to action.
 
-The architecture is designed to support:
-- Additional authentication providers (GCP, Azure, Okta, etc.)
-- Cross-platform keychain abstractions (Linux secret-service, Windows Credential Store)
-- Encrypted backup/restore of credentials
-- Terminal UI mode using libraries like tview or bubbletea
-- Audit logging with structured logs
-- Plugin loading from external binaries
-- WebAuthn/FIDO2 support for hardware keys
+**How We Achieve It:**
 
-## Directory Structure
+1. **Lazy Loading**: Providers initialize only when selected
+   ```go
+   // Bad: Initialize everything
+   app := NewApp(initAWS(), initTOTP(), initGCP(), ...)
+   
+   // Good: Initialize on demand
+   provider := registry.GetProvider(selectedService)
+   ```
+
+2. **Minimal Dependencies**: No framework bloat
+   - No ORM for simple keychain operations
+   - No heavy CLI framework for flag parsing
+   - No logging framework in hot path
+
+3. **Smart Defaults**: Most users have one profile
+   - Don't scan all credentials on startup
+   - Don't validate until necessary
+   - Don't load metadata until requested
+
+### Runtime Performance
+
+**Credential Generation**: Near-instant
+- TOTP is pure computation (microseconds)
+- AWS CLI calls are the bottleneck (1-2 seconds)
+- Keychain access is OS-optimized (milliseconds)
+
+**Why zstd for Metadata?**
+- Metadata can grow (multiple profiles, services)
+- zstd offers best compression/speed ratio
+- Transparent to providers
+- Future-proof for richer metadata
+
+## Future-Proofing: Architecture That Evolves
+
+### Planned Evolution Paths
+
+**Cross-Platform Secrets**
+```go
+type SecretStore interface {
+    Store(service, account string, secret []byte) error
+    Retrieve(service, account string) ([]byte, error)
+}
+
+// Implementations:
+// - DarwinKeychain (current)
+// - LinuxSecretService  
+// - WindowsCredentialManager
+```
+The interface exists; only implementations change.
+
+**Plugin Architecture**
+```go
+// Future: Load providers from binaries
+type PluginLoader interface {
+    LoadProvider(path string) (ServiceProvider, error)
+}
+```
+Why? Let organizations build private providers without forking.
+
+**Hardware Key Support**
+```go
+// WebAuthn/FIDO2 integration
+type HardwareAuthProvider interface {
+    ServiceProvider
+    WaitForTouch(timeout time.Duration) error
+}
+```
+The architecture already supports this through optional interfaces.
+
+### What Won't Change
+
+1. **Interface-First Design**: New features, same contracts
+2. **Security Principles**: Defense in depth remains paramount
+3. **Terminal Focus**: GUI is not the goal
+4. **Provider Isolation**: No provider depends on another
+
+This architectural stability means:
+- Users' workflows won't break
+- Providers can evolve independently  
+- Security improves without disruption
+- Testing remains comprehensive
+
+## Living Architecture: Principles in Practice
+
+### Directory Structure as Architecture
 
 ```
 sesh/
-├── sesh/cmd/sesh/         # CLI entry point
-│   ├── main.go            # Main function and command parsing
-│   ├── app.go             # Application struct and provider registration
-│   └── app_subshell.go    # Subshell launching logic
-├── internal/              # Internal packages
-│   ├── provider/          # Provider system
-│   │   ├── interfaces.go  # Core interfaces
-│   │   ├── registry.go    # Provider registry
-│   │   ├── aws/           # AWS provider implementation
-│   │   └── totp/          # TOTP provider implementation
-│   ├── aws/               # AWS CLI integration
-│   ├── keychain/          # macOS Keychain wrapper
-│   ├── totp/              # TOTP engine (RFC 6238)
-│   ├── secure/            # Security utilities
-│   ├── subshell/          # Subshell management
-│   ├── clipboard/         # Clipboard operations
-│   ├── qrcode/            # QR code scanning
-│   ├── setup/             # Setup wizards
-│   └── testutil/          # Testing utilities
-└── docs/                  # Documentation
+├── sesh/cmd/sesh/         # Thin CLI layer - presentation only
+├── internal/              # The heart of sesh
+│   ├── provider/          # Plugin system - extensibility realized
+│   │   ├── interfaces.go  # The contract that enables everything
+│   │   ├── registry.go    # Dynamic provider discovery
+│   │   └── */             # Self-contained provider implementations
+│   ├── keychain/          # Security through OS primitives
+│   ├── secure/            # Paranoid practices codified
+│   └── */                 # Each package focused on one thing
+└── docs/                  # Architecture as documentation
 ```
 
-## Conclusion
+### Why This Architecture Matters
 
-sesh's architecture prioritizes security, extensibility, and developer experience. The plugin-based design allows growth without complexity, while the security-first approach ensures user trust. By leveraging OS primitives and maintaining clear boundaries, sesh provides a solid foundation for terminal-based authentication workflows.
+**For Security Engineers:**
+- Clear trust boundaries
+- Auditable secret flows
+- Defense in depth at every layer
+- No security through obscurity
+
+**For Developers:**
+- Add providers without understanding all of sesh
+- Test in isolation
+- Clear patterns to follow
+- Interfaces make the rules explicit
+
+**For Users:**
+- Consistent experience across providers
+- Fast and predictable
+- Secure by default
+- Extensible for their needs
+
+## The Architecture Is the Product
+
+sesh isn't just a tool that happens to have good architecture. The architecture IS the product:
+
+- **Extensibility** isn't a feature, it's the foundation
+- **Security** isn't added on, it's built in
+- **Simplicity** isn't accidental, it's architected
+- **Performance** isn't optimized, it's designed
+
+This architecture ensures sesh can grow from two providers to twenty without becoming a mess, can handle new authentication methods without breaking existing ones, and can maintain security properties even as complexity grows.
+
+That's the power of thoughtful architecture: it makes the right thing the easy thing.
