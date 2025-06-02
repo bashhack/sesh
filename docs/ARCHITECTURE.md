@@ -557,56 +557,6 @@ The test helper pattern reuses the test binary itself as the mock, eliminating t
 - Transparent to providers
 - Future-proof for richer metadata
 
-## Future-Proofing: Architecture That Evolves
-
-### Planned Evolution Paths
-
-**Cross-Platform Secrets**
-```go
-type SecretStore interface {
-    Store(service, account string, secret []byte) error
-    Retrieve(service, account string) ([]byte, error)
-}
-
-// Implementations:
-// - DarwinKeychain (current)
-// - LinuxSecretService  
-// - WindowsCredentialManager
-```
-The interface exists; only implementations change.
-
-**Plugin Architecture**
-```go
-// Future: Load providers from binaries
-type PluginLoader interface {
-    LoadProvider(path string) (ServiceProvider, error)
-}
-```
-Why? Let organizations build private providers without forking.
-
-**Hardware Key Support**
-```go
-// WebAuthn/FIDO2 integration
-type HardwareAuthProvider interface {
-    ServiceProvider
-    WaitForTouch(timeout time.Duration) error
-}
-```
-The architecture already supports this through optional interfaces.
-
-### What Won't Change
-
-1. **Interface-First Design**: New features, same contracts
-2. **Security Principles**: Defense in depth remains paramount
-3. **Terminal Focus**: GUI is not the goal
-4. **Provider Isolation**: No provider depends on another
-
-This architectural stability means:
-- Users' workflows won't break
-- Providers can evolve independently  
-- Security improves without disruption
-- Testing remains comprehensive
-
 ## Living Architecture: Principles in Practice
 
 ### Directory Structure as Architecture
@@ -645,15 +595,15 @@ sesh/
 - Secure by default
 - Extensible for their needs
 
-## The Architecture Is the Product
+<!-- ## The Architecture Is the Product -->
 
-sesh isn't just a tool that happens to have good architecture. The architecture IS the product:
+<!-- sesh isn't just a tool that happens to have good architecture. The architecture IS the product: -->
 
-- **Extensibility** isn't a feature, it's the foundation
-- **Security** isn't added on, it's built in
-- **Simplicity** isn't accidental, it's architected
-- **Performance** isn't optimized, it's designed
+<!-- - **Extensibility** isn't a feature, it's the foundation -->
+<!-- - **Security** isn't added on, it's built in -->
+<!-- - **Simplicity** isn't accidental, it's architected -->
+<!-- - **Performance** isn't optimized, it's designed -->
 
-This architecture ensures sesh can grow from two providers to twenty without becoming a mess, can handle new authentication methods without breaking existing ones, and can maintain security properties even as complexity grows.
+<!-- This architecture ensures sesh can grow from two providers to twenty without becoming a mess, can handle new authentication methods without breaking existing ones, and can maintain security properties even as complexity grows. -->
 
-That's the power of thoughtful architecture: it makes the right thing the easy thing.
+<!-- That's the power of thoughtful architecture: it makes the right thing the easy thing. -->
