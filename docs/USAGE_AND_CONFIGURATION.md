@@ -354,7 +354,6 @@ Never share TOTP secrets or AWS credentials in bug reports.
 
 ## Related Documentation
 
-- [Advanced Usage](ADVANCED_USAGE.md) - Deep dive into sesh features
 - [Security Model](SECURITY_MODEL.md) - Understanding sesh's security architecture
 - [Plugin Development](PLUGIN_DEVELOPMENT.md) - Adding new authentication providers
 
