@@ -33,12 +33,19 @@ Create a new package under `internal/provider/yourservice/`:
 package yourservice
 
 import (
-    "github.com/bashhack/sesh/internal/provider"
+    "errors"
+    "fmt"
+    "strings"
+    "time"
+    
+    "github.com/bashhack/sesh/internal/constants"
     "github.com/bashhack/sesh/internal/keychain"
+    "github.com/bashhack/sesh/internal/provider"
+    "github.com/bashhack/sesh/internal/secure"
 )
 
 type Provider struct {
-    keychain keychain.Service
+    keychain keychain.Provider
     
     // Provider-specific fields
     serviceName string
@@ -180,7 +187,26 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 }
 
 func (p *Provider) DeleteEntry(id string) error {
-    return p.keychain.Delete(id)
+    // Extract account from ID (remove prefix)
+    account := strings.TrimPrefix(id, constants.YourServicePrefix)
+    
+    // Delete from keychain
+    if err := p.keychain.DeleteEntry(account, constants.YourServicePrefix); err != nil {
+        return fmt.Errorf("failed to delete entry: %w", err)
+    }
+    
+    // Remove metadata
+    // Parse service name from account
+    serviceName := account
+    if idx := strings.Index(account, "-"); idx > 0 {
+        serviceName = account[:idx]
+    }
+    
+    if err := p.keychain.RemoveEntryMetadata(constants.YourServicePrefix, serviceName, account); err != nil {
+        return fmt.Errorf("failed to remove metadata: %w", err)
+    }
+    
+    return nil
 }
 ```
 
@@ -190,10 +216,10 @@ Create `internal/setup/yourservice_setup.go`:
 
 ```go
 type YourServiceSetupHandler struct {
-    keychain keychain.Service
+    keychain keychain.Provider
 }
 
-func NewYourServiceSetupHandler(kc keychain.Service) *YourServiceSetupHandler {
+func NewYourServiceSetupHandler(kc keychain.Provider) *YourServiceSetupHandler {
     return &YourServiceSetupHandler{keychain: kc}
 }
 
@@ -216,9 +242,15 @@ func (h *YourServiceSetupHandler) Setup() error {
     fmt.Println()
     
     // Store in keychain
-    serviceKey := fmt.Sprintf("%s%s", constants.YourServicePrefix, serviceName)
-    if err := h.keychain.Store(serviceKey, secretBytes); err != nil {
+    account := serviceName // or add profile logic if needed
+    if err := h.keychain.SetSecret(account, constants.YourServicePrefix, secretBytes); err != nil {
         return fmt.Errorf("failed to store credentials: %w", err)
+    }
+    
+    // Store metadata
+    description := fmt.Sprintf("Your Service credentials for %s", serviceName)
+    if err := h.keychain.StoreEntryMetadata(constants.YourServicePrefix, serviceName, account, description); err != nil {
+        return fmt.Errorf("failed to store metadata: %w", err)
     }
     
     fmt.Printf("✅ Credentials stored for %s\n", serviceName)
@@ -246,6 +278,22 @@ func (a *App) registerProviders() {
 ```
 
 ## Advanced Features
+
+### Additional Capabilities
+
+Providers can support additional features by implementing optional methods:
+
+```go
+// Check if this provider supports subshell mode
+func (p *Provider) SupportsSubshell() bool {
+    return true // or false if not supported
+}
+
+// Check if this provider supports clipboard mode  
+func (p *Provider) SupportsClipboard() bool {
+    return true // or false if not supported
+}
+```
 
 ### Subshell Support
 
@@ -295,20 +343,21 @@ If your provider needs TOTP codes:
 
 ```go
 type Provider struct {
-    keychain keychain.Service
-    totp     totp.Service  // Add TOTP service
+    keychain keychain.Provider
+    totp     totp.Provider  // Add TOTP service
 }
 
 func (p *Provider) GetCredentials() (provider.Credentials, error) {
     // Get TOTP secret
-    secret, err := p.keychain.Get(serviceKey)
+    account := p.serviceName
+    secret, err := p.keychain.GetSecret(account, constants.YourServicePrefix)
     if err != nil {
         return provider.Credentials{}, err
     }
     defer secure.SecureZeroBytes(secret)
     
     // Generate TOTP code
-    code, err := p.totp.GenerateTOTPCode(string(secret))
+    code, _, err := p.totp.GenerateCodeBytes(secret, time.Now())
     if err != nil {
         return provider.Credentials{}, err
     }
@@ -394,6 +443,9 @@ package simple
 
 import (
     "fmt"
+    "strings"
+    "time"
+    
     "github.com/bashhack/sesh/internal/provider"
     "github.com/bashhack/sesh/internal/keychain"
     "github.com/bashhack/sesh/internal/totp"
@@ -401,12 +453,12 @@ import (
 )
 
 type Provider struct {
-    keychain    keychain.Service
-    totp        totp.Service
+    keychain    keychain.Provider
+    totp        totp.Provider
     serviceName string
 }
 
-func NewProvider(kc keychain.Service, totp totp.Service) *Provider {
+func NewProvider(kc keychain.Provider, totp totp.Provider) *Provider {
     return &Provider{
         keychain: kc,
         totp:     totp,
@@ -439,22 +491,31 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 }
 
 func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
-    serviceKey := fmt.Sprintf("sesh-simple-%s", p.serviceName)
-    secret, err := p.keychain.Get(serviceKey)
+    account := p.serviceName
+    secret, err := p.keychain.GetSecret(account, "sesh-simple-")
     if err != nil {
         return provider.Credentials{}, err
     }
     defer secure.SecureZeroBytes(secret)
     
-    code, err := p.totp.GenerateTOTPCode(string(secret))
+    // Generate current and next TOTP codes
+    currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secret)
     if err != nil {
         return provider.Credentials{}, err
     }
     
-    return provider.Credentials{
-        Provider:  p.Name(),
-        CopyValue: code,
-    }, nil
+    // Calculate time remaining
+    now := time.Now()
+    secondsLeft := 30 - (now.Unix() % 30)
+    
+    return provider.CreateClipboardCredentials(
+        p.Name(),
+        string(currentCode),
+        string(nextCode),
+        secondsLeft,
+        "TOTP code",
+        p.serviceName,
+    )
 }
 
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
@@ -462,7 +523,26 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 }
 
 func (p *Provider) DeleteEntry(id string) error {
-    return p.keychain.Delete(id)
+    // Extract account from ID (remove prefix)
+    account := strings.TrimPrefix(id, constants.YourServicePrefix)
+    
+    // Delete from keychain
+    if err := p.keychain.DeleteEntry(account, constants.YourServicePrefix); err != nil {
+        return fmt.Errorf("failed to delete entry: %w", err)
+    }
+    
+    // Remove metadata
+    // Parse service name from account
+    serviceName := account
+    if idx := strings.Index(account, "-"); idx > 0 {
+        serviceName = account[:idx]
+    }
+    
+    if err := p.keychain.RemoveEntryMetadata(constants.YourServicePrefix, serviceName, account); err != nil {
+        return fmt.Errorf("failed to remove metadata: %w", err)
+    }
+    
+    return nil
 }
 
 func (p *Provider) GetSetupHandler() interface{} {
