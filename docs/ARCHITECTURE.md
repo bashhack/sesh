@@ -1,214 +1,260 @@
 # sesh Architecture
 
-This document describes the architecture of sesh, focusing on how it's structured for testability and extensibility.
+This document describes the architecture of sesh, an extensible terminal-first authentication toolkit for secure credential workflows.
 
-## Overview
+## Design Philosophy
 
-Sesh is designed with the following architectural principles:
+sesh is built on four core architectural principles:
 
-- **Plugin-based architecture** for extensibility
-- **Interface-based dependency injection** for testability
-- **Clear separation of concerns** between components
-- **Minimal dependencies** for security and simplicity
-- **Consistent error handling** across all operations
+1. **Plugin-Based Extensibility** - New authentication providers can be added without modifying core code
+2. **Security by Design** - Leverage OS security primitives, minimize attack surface, handle memory carefully
+3. **Terminal-First UX** - Optimized for CLI workflows with features like subshells and clipboard integration  
+4. **Testable Architecture** - Interface-based design enables comprehensive testing without external dependencies
+
+## System Overview
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   CLI Layer     │────▶│   Core Layer     │────▶│ Provider Layer  │
+│                 │     │                  │     │                 │
+│ • Flag parsing  │     │ • Registry       │     │ • AWS Provider  │
+│ • User I/O      │     │ • App logic      │     │ • TOTP Provider │
+│ • Subshell      │     │ • Coordination   │     │ • Future...     │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+         │                       │                         │
+         └───────────────────────┴─────────────────────────┘
+                                 │
+                    ┌────────────▼────────────┐
+                    │   Infrastructure Layer  │
+                    │                         │
+                    │ • Keychain (secrets)    │
+                    │ • TOTP generation       │
+                    │ • Secure memory         │
+                    │ • Clipboard             │
+                    │ • QR code scanning      │
+                    └─────────────────────────┘
+```
 
 ## Component Architecture
 
-The system is divided into these main components:
+### CLI Layer (`/sesh/cmd/sesh`)
 
-### Plugin Infrastructure (internal/provider)
+The entry point that handles user interaction:
 
-Responsible for:
-- Defining the common interface for all service providers
-- Managing registration of available providers
-- Dispatching operations to the appropriate provider
+- **main.go** - Entry point, version injection via ldflags
+- **app.go** - Application struct with dependency injection
+- **run()** - Command parsing and routing logic
 
-Key interfaces:
-- `ServiceProvider` defines the contract for all service providers
-- `Registry` manages provider registration and selection
+Key responsibilities:
+- Parse command-line flags with provider-specific handling
+- Route commands to appropriate providers
+- Manage subshell lifecycle
+- Handle output formatting
 
-### AWS Provider (internal/provider/aws)
+### Provider System (`/internal/provider`)
 
-Responsible for:
-- Getting temporary session tokens from AWS STS
-- Finding MFA devices for the current user
-- Managing AWS credential environment
-
-Key interfaces:
-- `Provider` implements the `ServiceProvider` interface for AWS
-
-### Generic TOTP Provider (internal/provider/totp)
-
-Responsible for:
-- Generating TOTP codes for any service
-- Supporting multiple profiles per service
-- Handling clipboard integration
-
-### macOS Keychain Integration (internal/keychain)
-
-Responsible for:
-- Securely storing and retrieving TOTP secrets
-- Saving MFA serial numbers for easy retrieval
-- Listing and managing keychain entries
-- Ensuring access control for stored secrets
-
-Key interfaces:
-- `Provider` defines the contract for keychain operations
-- `DefaultProvider` is the concrete implementation
-
-### TOTP Generation (internal/totp)
-
-Responsible for:
-- Generating time-based one-time passwords
-- Handling TOTP secret validation
-- Creating consecutive codes for service setup
-
-Key interfaces:
-- `Provider` defines the contract for TOTP operations
-- `DefaultProvider` is the concrete implementation
-
-### Setup Wizard (internal/setup)
-
-Responsible for:
-- Guiding users through first-time configuration
-- Saving TOTP secrets securely in keychain
-- Supporting setup for different service types
-
-Key interfaces:
-- `WizardRunner` defines the contract for setup operations
-- `DefaultWizardRunner` is the concrete implementation
-
-### CLI Application (sesh-cli/cmd/sesh)
-
-Responsible for:
-- Processing command-line arguments
-- Orchestrating the core workflows
-- Managing user interaction and output
-- Entry management and clipboard integration
-
-Key structures:
-- `App` struct holds all dependencies and state
-- Methods like `ListEntries`, `DeleteEntry`, and `CopyToClipboard` implement workflow steps
-
-### Clipboard Integration (internal/clipboard)
-
-Responsible for:
-- Cross-platform clipboard handling
-- Copying generated codes to system clipboard
-
-## Workflow Sequence
-
-The standard AWS workflow follows this sequence:
-
-1. Parse command-line flags and environment variables
-2. Select the appropriate service provider
-3. Get the MFA serial from various sources
-4. Get TOTP secret from keychain
-5. Generate TOTP code
-6. Get AWS session token using the TOTP code
-7. Output credentials in a format that can be evaluated
-
-The generic TOTP workflow follows this sequence:
-
-1. Parse command-line flags and environment variables
-2. Select the TOTP provider
-3. Get the service name and optional profile
-4. Get TOTP secret from keychain
-5. Generate TOTP code
-6. Display or copy the code to clipboard
-
-## Dependency Injection
-
-The system uses dependency injection throughout:
+The plugin architecture that makes sesh extensible:
 
 ```go
-// App struct shows dependency injection pattern
-type App struct {
-    Registry    *provider.Registry
-    AWS         aws.Provider
-    Keychain    keychain.Provider
-    TOTP        totp.Provider
-    SetupWizard setup.WizardRunner
-    ExecLookPath ExecLookPathFunc
-    Exit        ExitFunc
-    Stdout      io.Writer
-    Stderr      io.Writer
-    VersionInfo VersionInfo
-}
-
-// NewDefaultApp creates a fully wired instance with registered providers
-func NewDefaultApp() *App {
-    app := &App{
-        Registry:    provider.NewRegistry(),
-        AWS:         aws.NewDefaultProvider(),
-        Keychain:    keychain.NewDefaultProvider(),
-        TOTP:        totp.NewDefaultProvider(),
-        SetupWizard: setup.DefaultWizardRunner{},
-        // ...
-    }
+type ServiceProvider interface {
+    // Identity
+    Name() string
+    Description() string
     
-    // Register providers
-    app.registerProviders()
+    // Configuration
+    SetupFlags(fs FlagSet) error
+    ValidateRequest() error
+    GetFlagInfo() []FlagInfo
     
-    return app
+    // Operations
+    GetCredentials() (Credentials, error)
+    GetClipboardValue() (Credentials, error)
+    ListEntries() ([]ProviderEntry, error)
+    DeleteEntry(id string) error
+    
+    // Setup
+    GetSetupHandler() interface{}
 }
 ```
 
-## Testing Strategy
+Current providers:
+- **AWS Provider** (`/internal/provider/aws`) - AWS CLI + MFA authentication
+- **TOTP Provider** (`/internal/provider/totp`) - Generic TOTP for any service
 
-The architecture supports comprehensive testing through:
+Optional interfaces:
+- **SubshellProvider** - For providers that launch custom shell environments
+- **SupportsClipboard()** - Indicates clipboard mode support
+- **SupportsSubshell()** - Indicates subshell mode support
 
-- Interface mocks that can be injected for testing
-- Abstracted command execution for testing without external dependencies
-- Output capturing via io.Writer interfaces
-- Service providers with clear interfaces that can be mocked
+### Infrastructure Components
 
-## Error Handling
+#### Keychain Integration (`/internal/keychain`)
 
-Error handling follows a consistent pattern:
+Secure storage using macOS Keychain:
+- Binary path restrictions via `-T` flag
+- Metadata compression with zstd
+- Account/service separation for multi-tenancy
+- Interactive password entry to avoid process listing
 
-1. Low-level functions return errors with context
-2. Each component has its own error types when appropriate
-3. Application code translates errors into user-friendly messages
-4. Helpful troubleshooting steps are provided for common errors
+#### TOTP Engine (`/internal/totp`)
 
-## Project Structure
+Time-based one-time password generation:
+- Standard RFC 6238 implementation
+- Consecutive code generation for edge cases
+- Time window calculations
+- Base32 secret validation
+
+#### Secure Memory (`/internal/secure`)
+
+Defense-in-depth memory handling:
+- `SecureZeroBytes()` with compiler optimization protection
+- Secure command execution with stdin for secrets
+- Documented limitations of Go's memory model
+- Best-effort string zeroing
+
+#### Subshell (`/internal/subshell`)
+
+Isolated credential environments:
+- Shell detection (bash/zsh/sh)
+- Custom RC file generation
+- Environment variable injection
+- Session status tracking
+- Nested session prevention
+
+#### Additional Infrastructure
+
+- **Clipboard** (`/internal/clipboard`) - Cross-platform clipboard access
+- **QR Code** (`/internal/qrcode`) - Screenshot-based QR scanning
+- **Constants** (`/internal/constants`) - Binary path detection, prefixes
+- **Password Manager** (`/internal/password`) - Future password storage
+- **Environment** (`/internal/env`) - Environment variable helpers
+
+### Setup System (`/internal/setup`)
+
+Interactive configuration wizards:
+
+```go
+type SetupHandler interface {
+    ServiceName() string
+    Setup() error
+}
+```
+
+Features:
+- Provider-specific setup flows
+- QR code scanning with fallback
+- Secret validation and normalization
+- Overwrite protection
+- Progress indicators
+
+## Data Flow
+
+### AWS Authentication Flow
 
 ```
-/sesh
-├── docs/                       # Documentation
-├── go.mod                      # Go module definition
-├── internal/                   # Internal packages
-│   ├── aws/                    # AWS SDK integration
-│   │   ├── interfaces.go       # AWS provider interface
-│   │   └── mocks/              # Mocks for testing
-│   ├── clipboard/              # Clipboard integration
-│   ├── keychain/               # Keychain integration
-│   │   ├── interfaces.go       # Keychain provider interface
-│   │   └── mocks/              # Mocks for testing
-│   ├── provider/               # Plugin architecture
-│   │   ├── interfaces.go       # ServiceProvider interface
-│   │   ├── registry.go         # Provider registry
-│   │   ├── aws/                # AWS provider implementation
-│   │   └── totp/               # TOTP provider implementation
-│   ├── totp/                   # TOTP generation
-│   │   ├── interfaces.go       # TOTP provider interface
-│   │   └── mocks/              # Mocks for testing
-│   ├── setup/                  # Setup wizard
-│   │   ├── interface.go        # WizardRunner interface
-│   │   └── mocks/              # Mocks for testing
-│   └── testutil/               # Testing utilities
-├── sesh-cli/                   # CLI application
-│   └── cmd/
-│       └── sesh/              # Main CLI code
-└── shell/                     # Shell integration scripts
+User ──► CLI ──► AWS Provider ──► Keychain (get secret)
+                      │               │
+                      │               ▼
+                      │          TOTP Engine
+                      │               │
+                      │               ▼
+                      └────► AWS CLI (STS call)
+                                     │
+                                     ▼
+                            Subshell with credentials
 ```
 
-## Extension Points
+### TOTP Generation Flow
 
-The architecture supports extension through:
+```
+User ──► CLI ──► TOTP Provider ──► Keychain (get secret)
+                      │                  │
+                      │                  ▼
+                      │             TOTP Engine
+                      │                  │
+                      │                  ▼
+                      └────► Clipboard/Display
+```
 
-1. **New Service Providers** - Implement the `ServiceProvider` interface and register with the Registry
-2. **Enhanced Security** - Keychain entries are restricted to the sesh binary path
-3. **Additional Clipboard Formats** - Extend clipboard package for other formats
-4. **More Entry Management Features** - Extend app methods to support more operations
+## Security Architecture
+
+### Defense in Depth
+
+1. **Storage Security** - macOS Keychain with binary restrictions
+2. **Memory Security** - Best-effort zeroing, byte slice preference
+3. **Process Security** - Avoid command-line exposure, use stdin
+4. **Session Security** - Isolated subshells, automatic cleanup
+5. **Access Security** - No network calls, local-only operation
+
+### Trust Boundaries
+
+- **User ↔ sesh** - Terminal interface, no GUI attack surface
+- **sesh ↔ Keychain** - OS-mediated access control
+- **sesh ↔ AWS CLI** - Process boundary, stdin for secrets
+- **Subshell ↔ Parent** - Environment isolation
+
+## Extensibility Points
+
+### Adding a New Provider
+
+1. Implement `ServiceProvider` interface
+2. Add provider-specific flags
+3. Create setup handler
+4. Register in `app.registerProviders()`
+
+### Provider Capabilities
+
+Providers can optionally support:
+- Custom subshells (implement `SubshellProvider`)
+- Clipboard mode (implement `SupportsClipboard()`)
+- Multiple profiles
+- Metadata storage
+
+## Error Handling Strategy
+
+Errors flow up with context:
+```go
+// Low level - specific error
+return fmt.Errorf("keychain access failed: %w", err)
+
+// Provider level - add context  
+return fmt.Errorf("failed to get AWS credentials: %w", err)
+
+// App level - user-friendly message
+fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+```
+
+## Testing Architecture
+
+### Interface-Based Mocking
+
+Every external dependency has an interface:
+- `aws.Provider` - Mock AWS CLI calls
+- `keychain.Provider` - Mock Keychain access
+- `totp.Provider` - Mock TOTP generation
+
+### Test Utilities
+
+- `testutil.MockExecCommand` - Mock external commands
+- Mock providers in `/internal/*/mocks/`
+- Helper functions for common test scenarios
+
+## Performance Considerations
+
+- Lazy provider initialization
+- Minimal dependencies for fast startup
+- Efficient metadata storage with compression
+- No network calls in critical path
+
+## Future Architecture Considerations
+
+The architecture is designed to support:
+- Additional authentication providers (GCP, Azure, etc.)
+- Cross-platform keychain abstractions
+- Encrypted backup/restore
+- Terminal UI mode
+- Audit logging
+
+## Conclusion
+
+sesh's architecture prioritizes security, extensibility, and developer experience. The plugin-based design allows growth without complexity, while the security-first approach ensures user trust. By leveraging OS primitives and maintaining clear boundaries, sesh provides a solid foundation for terminal-based authentication workflows.
