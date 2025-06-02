@@ -189,7 +189,7 @@ type ServiceProvider interface {
 | Feature | Mobile Apps | sesh |
 |---------|-------------|------|
 | Storage Location | Phone (unknown security) | macOS Keychain |
-| Backup/Sync | Often cloud-based | Local only |
+| Backup/Sync | Often cloud-based | Local only (encrypted backup coming in v2) |
 | Privacy | Varies (often poor) | Complete |
 | Scriptability | None | Full CLI |
 | Audit Trail | App-controlled | OS-level |
@@ -237,7 +237,7 @@ Found a security issue? Please email security@[domain] with:
 - Potential impact
 - Suggested fixes (if any)
 
-We aim to respond within 48 hours and fix critical issues within 7 days.
+I'll aim to respond within 72 hours and aim to fix critical issues within 7 days.
 
 ## Conclusion
 
