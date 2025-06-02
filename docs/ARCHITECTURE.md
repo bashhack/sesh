@@ -169,7 +169,7 @@ type ServiceProvider interface {
 
 4. **Self-Documenting**: `GetFlagInfo()` makes providers introspectable, enabling dynamic help generation.
 
-**The Genius of Optional Interfaces**
+**The Rationale of Optional Interfaces**
 
 Not all providers need subshells. Instead of a bloated base interface:
 
@@ -194,7 +194,6 @@ Each infrastructure component embodies specific security principles:
 - Hardware-backed encryption when available
 - Process-level access control via `-T` flag
 - User-transparent authorization dialogs
-- Automatic locking on sleep/screensaver
 
 **Key Design Choice**: Binary path restrictions
 ```bash
@@ -331,7 +330,7 @@ User ──► CLI ──► TOTP Provider ──► Keychain (get secret)
 1. **Stateless Computation**: TOTP is pure math - time + secret = code
 2. **No Network Required**: Everything happens locally
 3. **Predictable Timing**: 30-second windows are universal
-4. **Dual Code Generation**: Solves the boundary problem elegantly
+4. **Dual Code Generation**: Solves for the boundary problem
 
 ## Security Architecture: Trust Nothing, Verify Everything
 
