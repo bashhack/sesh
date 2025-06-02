@@ -58,7 +58,7 @@ Compare sesh's approach to alternatives:
 
 | Storage Method | Encryption | Access Control | User Experience |
 |----------------|------------|----------------|-----------------|
-| sesh (Keychain) | Hardware-backed | OS-enforced binary binding | Seamless |
+| sesh (Keychain) | OS-level | OS-enforced binary binding | Seamless |
 | Config Files | None/Custom | File permissions only | Manual setup |
 | Environment Vars | None | Process inheritance | Leaks to children |
 | Corporate MFA Apps | Unknown | App-controlled | Privacy concerns |
