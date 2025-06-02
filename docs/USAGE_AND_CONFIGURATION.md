@@ -319,12 +319,44 @@ The AWS subshell provides:
 - **Expiry Tracking**: Automatic notification when credentials near expiration
 - **Shell Support**: Full support for bash/zsh, basic support for other shells
 
+## Getting Help
+
+If you encounter issues or have questions:
+
+### Quick Debugging
+
+```bash
+# Check version
+sesh --version
+
+# List all stored entries
+sesh --service aws --list
+sesh --service totp --list
+
+# Get provider-specific help
+sesh --service aws --help
+sesh --service totp --help
+```
+
+### Getting Support
+
+1. **Check existing issues**: https://github.com/bashhack/sesh/issues
+2. **Open a new issue** with:
+   - Your macOS version
+   - Installation method (Homebrew, go install, etc.)
+   - Command that failed
+   - Error message
+   - Output of `sesh --version`
+
+### Security Note
+
+Never share TOTP secrets or AWS credentials in bug reports.
+
 ## Related Documentation
 
 - [Advanced Usage](ADVANCED_USAGE.md) - Deep dive into sesh features
 - [Security Model](SECURITY_MODEL.md) - Understanding sesh's security architecture
 - [Plugin Development](PLUGIN_DEVELOPMENT.md) - Adding new authentication providers
-- [Troubleshooting](TROUBLESHOOTING.md) - Common issues and solutions
 
 ---
 
