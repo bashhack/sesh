@@ -13,7 +13,7 @@ This guide explains how to create new service providers for sesh. Whether you're
 
 ## Architecture Overview
 
-Sesh uses a plugin-based architecture where each service (AWS, TOTP, etc.) is implemented as a provider. All providers implement the `ServiceProvider` interface and are registered with the central registry.
+Sesh uses a plugin-based architecture where each service (AWS, TOTP, etc.) is implemented as a provider. All providers must implement the `ServiceProvider` interface and register with the central registry at app init.
 
 ### Key Components
 
@@ -519,30 +519,47 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 }
 
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
-    // Implementation...
+    // Load metadata for all entries
+    metadata, err := p.keychain.LoadEntryMetadata("sesh-simple-")
+    if err != nil {
+        return nil, err
+    }
+    
+    var result []provider.ProviderEntry
+    for _, meta := range metadata {
+        result = append(result, provider.ProviderEntry{
+            ID:          fmt.Sprintf("sesh-simple-%s", meta.Account),
+            Name:        meta.Service,
+            Description: meta.Description,
+        })
+    }
+    
+    return result, nil
 }
 
 func (p *Provider) DeleteEntry(id string) error {
-    // Extract account from ID (remove prefix)
-    account := strings.TrimPrefix(id, constants.YourServicePrefix)
+    account := strings.TrimPrefix(id, "sesh-simple-")
     
     // Delete from keychain
-    if err := p.keychain.DeleteEntry(account, constants.YourServicePrefix); err != nil {
+    if err := p.keychain.DeleteEntry(account, "sesh-simple-"); err != nil {
         return fmt.Errorf("failed to delete entry: %w", err)
     }
     
     // Remove metadata
-    // Parse service name from account
-    serviceName := account
-    if idx := strings.Index(account, "-"); idx > 0 {
-        serviceName = account[:idx]
-    }
-    
-    if err := p.keychain.RemoveEntryMetadata(constants.YourServicePrefix, serviceName, account); err != nil {
+    serviceName := p.serviceName
+    if err := p.keychain.RemoveEntryMetadata("sesh-simple-", serviceName, account); err != nil {
         return fmt.Errorf("failed to remove metadata: %w", err)
     }
     
     return nil
+}
+
+func (p *Provider) SupportsSubshell() bool {
+    return false // Simple TOTP provider doesn't need subshell
+}
+
+func (p *Provider) SupportsClipboard() bool {
+    return true // TOTP codes are perfect for clipboard
 }
 
 func (p *Provider) GetSetupHandler() interface{} {
