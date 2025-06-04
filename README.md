@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/logo.png" alt="sesh logo" width="300">
+  <img src="./docs/assets/sesh_logo.png" alt="sesh logo" width="300">
 </p>
 
 <div align="center">
