@@ -73,25 +73,25 @@ The architecture follows a strict layering model where dependencies flow downwar
 
 ### Layer Responsibilities
 
-**CLI Layer**: Thin and focused on user interaction. This separation means:
-- Alternative CLIs could be built (e.g., a TUI version)
-- Business logic isn't mixed with presentation
-- Testing can focus on user workflows
+**CLI Layer**: User interaction handling
+- Supports alternative interfaces (e.g., TUI)
+- Separates business logic from presentation
+- Enables workflow-focused testing
 
-**Core Layer**: Orchestrates without implementing. This abstraction:
-- Keeps provider-specific logic out of the application flow
-- Enables consistent behavior across all providers
-- Allows for cross-cutting concerns (logging, metrics)
+**Core Layer**: Provider orchestration
+- Isolates provider-specific logic
+- Ensures consistent provider behavior
+- Supports cross-cutting concerns
 
-**Provider Layer**: Self-contained authentication modules. This isolation:
-- Prevents provider dependencies from leaking
-- Allows providers to use different strategies
-- Enables parallel development of providers
+**Provider Layer**: Authentication modules
+- Contains provider dependencies
+- Implements provider-specific strategies
+- Enables independent development
 
-**Infrastructure Layer**: Shared utilities without business logic. This foundation:
-- Prevents code duplication across providers
-- Centralizes security-critical operations
-- Provides consistent behavior for common tasks
+**Infrastructure Layer**: Shared utilities
+- Eliminates code duplication
+- Centralizes security operations
+- Provides consistent behavior
 
 ## Component Deep Dive
 
@@ -122,7 +122,7 @@ The architecture follows a strict layering model where dependencies flow downwar
 
 ### Provider Interface Design
 
-The `ServiceProvider` interface is the heart of sesh's extensibility:
+The `ServiceProvider` interface enables extensibility:
 
 ```go
 type ServiceProvider interface {
@@ -150,7 +150,7 @@ type ServiceProvider interface {
 
 **Interface Design Rationale**
 
-1. **Minimal Surface Area**: Every method has a clear, single purpose. No kitchen sink interfaces.
+1. **Minimal Surface Area**: Each method has a single, defined purpose.
 
 2. **Lifecycle Awareness**: Methods follow the natural flow:
    - Setup flags → Validate request → Get credentials
@@ -177,7 +177,7 @@ Pattern benefits (similar to Go's `io.WriterTo`):
 
 ### Infrastructure Components
 
-Each infrastructure component embodies specific security principles:
+Infrastructure components implement these security measures:
 
 #### Keychain Integration
 
@@ -186,7 +186,7 @@ Each infrastructure component embodies specific security principles:
 - Process-level access control via `-T` flag
 - User-transparent authorization dialogs
 
-**Key Design Choice**: Binary path restrictions
+**Implementation**: Binary path restrictions
 ```bash
 security add-generic-password ... -T /path/to/sesh
 ```
@@ -323,9 +323,9 @@ User ──► CLI ──► TOTP Provider ──► Keychain (get secret)
 
 ## Security Architecture
 
-### Defense in Depth
+### Security Layers
 
-Each layer assumes the others might fail:
+Each layer provides independent security measures:
 
 1. **Storage Security**
    - **Threat**: Other processes reading secrets
@@ -335,7 +335,7 @@ Each layer assumes the others might fail:
 2. **Memory Security**
    - **Threat**: Memory dumps, swap files, cold boot attacks
    - **Defense**: Immediate zeroing, byte slice preference
-   - **Reality Check**: Go's GC limits our control, but we minimize exposure
+   - **Limitation**: Go's GC constraints require mitigation strategies
 
 3. **Process Security**
    - **Threat**: Secrets visible in `ps`, shell history, or logs
@@ -350,7 +350,7 @@ Each layer assumes the others might fail:
 5. **Access Security**
    - **Threat**: Network interception, MITM attacks
    - **Defense**: No network code - delegate to AWS CLI
-   - **Philosophy**: Reuse battle-tested security implementations
+   - **Approach**: Delegate to established security implementations
 
 ### Trust Boundaries
 
@@ -541,16 +541,16 @@ func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
 
 ```
 sesh/
-├── sesh/cmd/sesh/         # Thin CLI layer - presentation only
-├── internal/              # The heart of sesh
-│   ├── provider/          # Plugin system - extensibility realized
-│   │   ├── interfaces.go  # The contract that enables everything
-│   │   ├── registry.go    # Dynamic provider discovery
-│   │   └── */             # Self-contained provider implementations
-│   ├── keychain/          # Security through OS primitives
-│   ├── secure/            # Paranoid practices codified
-│   └── */                 # Each package focused on one thing
-└── docs/                  # Architecture as documentation
+├── sesh/cmd/sesh/         # CLI layer
+├── internal/              # Core implementation
+│   ├── provider/          # Plugin system
+│   │   ├── interfaces.go  # Provider contract
+│   │   ├── registry.go    # Provider discovery
+│   │   └── */             # Provider implementations
+│   ├── keychain/          # OS-level security
+│   ├── secure/            # Memory security
+│   └── */                 # Focused packages
+└── docs/                  # Documentation
 ```
 
 ### Architecture Benefits
@@ -558,7 +558,7 @@ sesh/
 **For Security Engineers:**
 - Clear trust boundaries
 - Auditable secret flows
-- Defense in depth at every layer
+- Layered security approach at every layer
 - No security through obscurity
 
 **For Developers:**
@@ -575,13 +575,13 @@ sesh/
 
 ## Summary
 
-sesh isn't just a tool that happens to have good architecture. The architecture IS the product:
+The architecture provides:
 
-- **Extensibility** isn't a feature, it's the foundation
-- **Security** isn't added on, it's built in
-- **Simplicity** isn't accidental, it's architected
-- **Performance** isn't optimized, it's designed
+- **Extensibility** through the provider interface system
+- **Security** via layered defense mechanisms
+- **Simplicity** through clear separation of concerns
+- **Performance** via efficient design patterns
 
-This architecture ensures sesh can grow from two providers to twenty without becoming a mess, can handle new authentication methods without breaking existing ones, and can maintain security properties even as complexity grows.
+This design supports scaling from two to twenty providers, accommodates new authentication methods without breaking existing functionality, and maintains security properties as complexity increases.
 
-That's the power of thoughtful architecture: it makes the right thing the easy thing.
+This architecture facilitates correct implementation patterns through its design.
