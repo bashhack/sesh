@@ -509,7 +509,12 @@ func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
 
 ### Startup Performance
 
-**Target**: Sub-100ms startup time achieved through:
+**Measured Performance**:
+- Core startup: 3-4ms (help, version commands)
+- With keychain access: 36-38ms (provider operations)
+- Cold start penalty: +2ms
+
+**Optimization Strategies**:
 
 1. **Lazy Loading**: Providers initialize only when selected
    ```go
@@ -532,11 +537,11 @@ func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
 
 ### Runtime Performance
 
-**Credential Generation Performance**:
-- TOTP computation: <1μs
-- Keychain access: ~10ms (OS-dependent)
+**Operation Latencies** (measured on macOS):
+- TOTP computation: <1μs (pure computation)
+- Keychain access: ~35ms (includes OS security checks)
 - AWS STS calls: 1-2s (network-bound)
-- Subshell spawn: ~50ms
+- Subshell spawn: ~50ms (process creation)
 
 **Metadata Compression (zstd)**
 - Handles growth (multiple profiles, services)
