@@ -1,19 +1,19 @@
 # sesh Architecture
 
-This document describes the architecture of sesh, a terminal-based authentication toolkit.
+This document describes the system architecture for sesh, a command-line credential management and authentication system.
 
 ## Architectural Principles
 
-sesh follows four architectural principles:
+The sesh architecture is based on four core design principles:
 
 ### 1. Plugin-Based Extensibility
 **Principle**: Authentication providers should be pluggable components, not hardcoded implementations.
 
 **Implementation**: The `ServiceProvider` interface defines a contract that all providers must fulfill. The Registry pattern allows dynamic provider discovery and instantiation. This enables:
-- New providers can be added without touching core code
+- New providers integrate without core system modifications
 - Each provider can evolve independently
 - Users only interact with providers they need
-- Testing becomes focused and isolated
+- Testing remains focused and isolated per provider
 
 ### 2. Component Isolation
 **Principle**: Each component should have minimal access to what it needs, nothing more.
@@ -21,8 +21,8 @@ sesh follows four architectural principles:
 **Implementation**: Keychain entries are scoped per-provider, secrets flow through stdin pipes, and memory is zeroed after use. This provides:
 - Secrets never touch the filesystem or command arguments
 - Each provider manages its own secret storage namespace
-- Memory exposure windows are minimized
-- Attack surface is reduced to essential operations
+- Memory exposure duration is minimized
+- Attack surface is minimized to essential operations only
 
 ### 3. Terminal-Based Workflow
 **Principle**: Terminal users shouldn't need to context-switch to graphical tools.
@@ -122,7 +122,7 @@ The architecture follows a strict layering model where dependencies flow downwar
 
 ### Provider Interface Design
 
-The `ServiceProvider` interface enables extensibility:
+The `ServiceProvider` interface provides the extensibility mechanism:
 
 ```go
 type ServiceProvider interface {
@@ -152,17 +152,17 @@ type ServiceProvider interface {
 
 1. **Minimal Surface Area**: Each method has a single, defined purpose.
 
-2. **Lifecycle Awareness**: Methods follow the natural flow:
+2. **Lifecycle Management**: Methods follow a defined execution flow:
    - Setup flags → Validate request → Get credentials
    - This prevents invalid states and guides implementation
 
-3. **Mode Flexibility**: `GetCredentials()` vs `GetClipboardValue()` allows providers to optimize for different workflows without conditional logic.
+3. **Output Mode Abstraction**: Separate methods for `GetCredentials()` and `GetClipboardValue()` eliminate conditional logic within providers.
 
 4. **Self-Documenting**: `GetFlagInfo()` makes providers introspectable, enabling dynamic help generation.
 
-**The Rationale of Optional Interfaces**
+**Optional Interface Pattern**
 
-Not all providers need subshells. Instead of a bloated base interface:
+Not all providers require subshell functionality. Rather than expanding the base interface:
 
 ```go
 type SubshellProvider interface {
@@ -177,7 +177,7 @@ Pattern benefits (similar to Go's `io.WriterTo`):
 
 ### Infrastructure Components
 
-Infrastructure components implement these security measures:
+Infrastructure components implement the following security controls:
 
 #### Keychain Integration
 
@@ -199,7 +199,7 @@ This means even if another process knows the service name, it cannot access the 
 // Current + Next code generation
 codes := []string{currentCode, nextCode}
 ```
-Generates current and next codes to handle boundary conditions at 30-second intervals.
+Generates both current and next codes to handle time boundary conditions within 30-second TOTP windows.
 
 #### Memory Management
 
@@ -221,11 +221,11 @@ Generates current and next codes to handle boundary conditions at 30-second inte
 3. Automatic cleanup on exit
 4. Built-in helper functions
 
-**Subshell Benefits**
-- Makes credential lifecycle explicit
+**Subshell Advantages**
+- Provides explicit credential lifecycle management
 - Prevents pollution of main shell environment
 - Provides clear entry/exit points for audit logging
-- Visual feedback reduces security mistakes
+- Visual indicators reduce operational security errors
 
 ### Setup System
 
@@ -257,10 +257,10 @@ type SetupService interface {
 }
 ```
 
-Benefits:
-- Dynamic handler discovery
-- Consistent setup experience
-- Easy addition of new setup flows
+This design enables:
+- Dynamic handler discovery at runtime
+- Consistent setup experience across providers
+- Simplified addition of new setup workflows
 
 ## Data Flow Architecture
 
@@ -287,7 +287,7 @@ User ──► CLI ──► AWS Provider ──► Keychain (get secret)
 
 **Key Design Insights:**
 
-1. **No Direct AWS API Calls**: sesh delegates to AWS CLI for:
+1. **AWS CLI Delegation**: The system delegates to AWS CLI for:
    - Credential caching, region selection, retries
    - Security updates through AWS CLI updates
    - Elimination of AWS SDK dependencies
@@ -513,14 +513,14 @@ func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
    ```
 
 2. **Minimal Dependencies**: No framework bloat
-   - No ORM for simple keychain operations
+   - Direct keychain API usage without ORM abstraction
    - No heavy CLI framework for flag parsing
    - No logging framework in hot path
 
 3. **Smart Defaults**: Most users have one profile
-   - Don't scan all credentials on startup
-   - Don't validate until necessary
-   - Don't load metadata until requested
+   - Defers credential enumeration until required
+   - Postpones validation until execution time
+   - Implements lazy metadata loading
 
 ### Runtime Performance
 
@@ -582,4 +582,4 @@ The architecture provides:
 - **Simplicity** through clear separation of concerns
 - **Performance** via efficient design patterns
 
-This design supports scaling from two to twenty providers, accommodates new authentication methods without breaking existing functionality, and maintains security properties as complexity increases.
+The architecture scales linearly with provider count, supports addition of new authentication methods without breaking changes, and maintains security invariants as system complexity grows.
