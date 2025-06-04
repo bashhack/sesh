@@ -31,7 +31,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 ## 🌟 Features
 
 - **Extensible Plugin Architecture** — Easy to add new authentication providers
--️ **Secure by Design** — All secrets stored in macOS Keychain with binary-level access control
+- **Secure by Design** — All secrets stored in macOS Keychain with binary-level access control
 - **Terminal-First Workflow** — Optimized for developers who live in the terminal
 - **Smart TOTP Handling** — Generates current and next codes, handles edge cases automatically
 - **Intelligent Subshell** — Isolated credential environments with built-in helper commands
@@ -65,10 +65,10 @@ Each available `--setup` guides you through configuration for a given provider:
 
 ```bash
 # Setup AWS MFA
-sesh --service aws --setup
+sesh -service aws -setup
 
 # Setup TOTP service
-sesh --service totp --setup
+sesh -service totp -setup
 ```
 
 Features:
@@ -90,22 +90,22 @@ Manages AWS CLI authentication with MFA support. By default, launches a secure s
 sesh -service aws -help
 
 # Launch secure subshell (default)
-sesh --service aws
+sesh -service aws
 
 # Copy TOTP code(s) for AWS Web Console
-sesh --service aws --clip
+sesh -service aws -clip
 
 # Use specific AWS profile
-sesh --service aws --profile production
+sesh -service aws -profile production
 
 # Print credentials instead of subshell
-sesh --service aws --no-subshell
+sesh -service aws -no-subshell
 
 # List all AWS entries
-sesh --service aws --list
+sesh -service aws -list
 
 # Delete an AWS entry
-sesh --service aws --delete <entry-id>
+sesh -service aws -delete <entry-id>
 ```
 
 #### TOTP Provider (`--service totp`)
@@ -116,13 +116,13 @@ Generic TOTP provider for any service (GitHub, Google, Slack, etc.).
 sesh -service totp -help
 
 # Copy code to clipboard
-sesh --service totp --service-name github --clip
+sesh -service totp -service-name github -clip
 
 # Use specific profile (for multiple accounts)
-sesh --service totp --service-name github --profile work
+sesh -service totp -service-name github -profile work
 
 # List all TOTP entries
-sesh --service totp --list
+sesh -service totp -list
 
 # Delete a TOTP entry
 sesh -service totp -delete <entry-id>
@@ -130,7 +130,7 @@ sesh -service totp -delete <entry-id>
 
 ### 🐚 Subshell Features (AWS)
 
-When you run `sesh --service aws`, you enter a secure subshell with:
+When you run `sesh -service aws`, you enter a secure subshell with:
 
 #### Visual Indicators
 - Custom prompt showing active sesh session
@@ -156,42 +156,42 @@ List and manage stored credentials:
 
 ```bash
 # List all entries for a service
-sesh --service aws --list
-sesh --service totp --list
+sesh -service aws -list
+sesh -service totp -list
 
 # Delete specific entry
-sesh --service aws --delete <entry-id>
-sesh --service totp --delete <entry-id>
+sesh -service aws -delete <entry-id>
+sesh -service totp -delete <entry-id>
 ```
 
 ### 🎯 Command Reference
 
 #### Global Options
 ```bash
---service, -service <provider>    # Service provider (aws, totp) [REQUIRED]
---list-services                   # Show available providers
---version                         # Display version info
---help                            # Show help
+-service <provider>              # Service provider (aws, totp) [REQUIRED]
+-list-services                   # Show available providers
+-version                         # Display version info
+-help                            # Show help
 ```
 
 #### Common Operations
 ```bash
---list                           # List entries for service
---delete <id>                    # Delete entry by ID
---setup                          # Run setup wizard
---clip                           # Copy to clipboard
+-list                           # List entries for service
+-delete <id>                    # Delete entry by ID
+-setup                          # Run setup wizard
+-clip                           # Copy to clipboard
 ```
 
 #### AWS-Specific Options
 ```bash
---profile <name>                 # AWS profile (default: $AWS_PROFILE)
---no-subshell                    # Print exports instead of subshell
+-profile <name>                 # AWS profile (default: $AWS_PROFILE)
+-no-subshell                    # Print exports instead of subshell
 ```
 
 #### TOTP-Specific Options
 ```bash
---service-name <name>            # Service name (github, google, etc.) [REQUIRED]
---profile <name>                 # Account profile (work, personal, etc.)
+-service-name <name>            # Service name (github, google, etc.) [REQUIRED]
+-profile <name>                 # Account profile (work, personal, etc.)
 ```
 
 ## 📚 Documentation
