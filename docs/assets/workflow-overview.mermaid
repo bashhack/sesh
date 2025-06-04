@@ -1,0 +1,40 @@
+%%{init: {'theme': 'neutral'}}%%
+flowchart TD
+    classDef start fill:#dce,stroke:#333,stroke-width:2px
+    classDef process fill:#dfd,stroke:#333,stroke-width:2px
+    classDef decision fill:#ffd,stroke:#333,stroke-width:2px
+    classDef endNode fill:#fdc,stroke:#333,stroke-width:2px
+    classDef sesh fill:#bbf,stroke:#333,stroke-width:2px
+    classDef setup fill:#f9f,stroke:#333,stroke-width:2px
+
+    Start([First Time User]):::start --> Setup["Run setup wizard<br>sesh --service aws --setup<br>or<br>sesh --service totp --setup"]:::setup
+    
+    Setup --> SetupChoice{"Setup Method"}:::decision
+    SetupChoice -->|"QR Code"| QR["Screenshot QR code<br>Auto-extract secret"]:::process
+    SetupChoice -->|"Manual"| Manual["Enter secret manually<br>Validate & store"]:::process
+    
+    QR --> Keychain["Store in macOS Keychain<br>Binary-level access control"]:::process
+    Manual --> Keychain
+    
+    Keychain --> Daily([Daily Usage]):::start
+    
+    Daily --> Service{"Choose Service"}:::decision
+    
+    Service -->|"AWS"| AWSChoice{"AWS Mode"}:::decision
+    AWSChoice -->|"Default"| Subshell["Launch secure subshell<br>sesh --service aws"]:::sesh
+    AWSChoice -->|"Export"| Export["Print credentials<br>sesh --service aws --no-subshell"]:::sesh
+    AWSChoice -->|"Clipboard"| AWSClip["Copy TOTP for console<br>sesh --service aws --clip"]:::sesh
+    
+    Service -->|"TOTP"| TOTP["Generate TOTP code<br>sesh --service totp --service-name github --clip"]:::sesh
+    
+    Subshell --> Work["Work in secure environment<br>- sesh_status<br>- verify_aws<br>- Auto-expiry tracking"]:::process
+    Work --> Exit["Exit subshell<br>Credentials cleared"]:::endNode
+    
+    Export --> Use["Use credentials/code"]:::process
+    AWSClip --> Use
+    TOTP --> Use
+    
+    Use --> Expire["Wait for expiry<br>or immediate use"]:::process
+    Expire --> Daily
+    
+    Exit --> Daily
