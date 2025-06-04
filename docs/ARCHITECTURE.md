@@ -17,7 +17,7 @@ sesh's architecture is driven by four core principles that shape every design de
 
 **How**: The `ServiceProvider` interface defines a contract that all providers must fulfill. The Registry pattern allows dynamic provider discovery and instantiation.
 
-### 2. Security Through Isolation
+### 2. Component Isolation
 **Principle**: Each component should have minimal access to what it needs, nothing more.
 
 **Why**: Security breaches often exploit overly-broad permissions. By isolating components:
@@ -28,7 +28,7 @@ sesh's architecture is driven by four core principles that shape every design de
 
 **How**: Keychain entries are scoped per-provider, secrets flow through stdin pipes, and memory is zeroed after use.
 
-### 3. Terminal-Native Experience
+### 3. Terminal-Based Workflow
 **Principle**: Terminal users shouldn't need to context-switch to graphical tools.
 
 **Why**: Developers live in terminals. Breaking flow to use a GUI or phone:
@@ -103,7 +103,7 @@ The architecture follows a strict layering model where dependencies flow downwar
 
 ## Component Deep Dive
 
-### CLI Layer: Where Simplicity Meets Power
+### CLI Layer
 
 The CLI layer embodies the Unix philosophy: do one thing well.
 
@@ -129,7 +129,7 @@ The CLI layer embodies the Unix philosophy: do one thing well.
    ```
    Why? Centralized registration makes provider discovery explicit and debuggable.
 
-### The Power of the Provider Interface
+### Provider Interface Design
 
 The `ServiceProvider` interface is the heart of sesh's extensibility:
 
@@ -184,11 +184,11 @@ This pattern (inspired by Go's `io.WriterTo`) means:
 - Core code uses type assertions to discover features
 - New capabilities can be added without breaking existing providers
 
-### Infrastructure: Security-First Building Blocks
+### Infrastructure Components
 
 Each infrastructure component embodies specific security principles:
 
-#### Keychain Integration: Trust Through OS Primitives
+#### Keychain Integration
 
 **Why macOS Keychain?**
 - Hardware-backed encryption when available
@@ -201,7 +201,7 @@ security add-generic-password ... -T /path/to/sesh
 ```
 This means even if another process knows the service name, it cannot access the secret.
 
-#### TOTP Engine: Time as a Security Factor
+#### TOTP Generation
 
 **Why Generate Two Codes?**
 ```go
@@ -210,7 +210,7 @@ codes := []string{currentCode, nextCode}
 ```
 Edge case: User copies code at 29 seconds. By the time they paste, it's expired. Providing the next code eliminates this frustration without compromising security.
 
-#### Secure Memory: Paranoid by Design
+#### Memory Management
 
 **The Challenge**: Go's garbage collector moves memory, making true secure erasure impossible.
 
@@ -222,7 +222,7 @@ Edge case: User copies code at 29 seconds. By the time they paste, it's expired.
 
 **Why This Matters**: Even partial mitigation reduces the window for memory dumps, cold boot attacks, and swap file analysis.
 
-#### Subshell: Isolation Through Process Boundaries
+#### Subshell Implementation
 
 **Design Philosophy**: Credentials should exist in an isolated environment that:
 1. Visually indicates its special status (custom prompt)
@@ -236,7 +236,7 @@ Edge case: User copies code at 29 seconds. By the time they paste, it's expired.
 - Clear entry/exit points for audit logging (future)
 - Visual feedback reduces security mistakes
 
-### Setup System: First Impressions Matter
+### Setup System
 
 The setup system recognizes that security tools often fail at onboarding.
 
@@ -273,9 +273,9 @@ This separation allows:
 - Consistent setup experience across providers
 - Easy addition of new setup flows
 
-## Data Flow: Following the Principle of Least Privilege
+## Data Flow Architecture
 
-### AWS Authentication: A Study in Delegation
+### AWS Authentication Flow
 
 ```
 User ──► CLI ──► AWS Provider ──► Keychain (get secret)
@@ -308,7 +308,7 @@ User ──► CLI ──► AWS Provider ──► Keychain (get secret)
    - Simplifies testing (one credential path)
    - Allows future output modes without core changes
 
-### TOTP: Pure Computation, No External Dependencies
+### TOTP Data Flow
 
 ```
 User ──► CLI ──► TOTP Provider ──► Keychain (get secret)
@@ -332,7 +332,7 @@ User ──► CLI ──► TOTP Provider ──► Keychain (get secret)
 3. **Predictable Timing**: 30-second windows are universal
 4. **Dual Code Generation**: Solves for the boundary problem
 
-## Security Architecture: Trust Nothing, Verify Everything
+## Security Architecture
 
 ### Defense in Depth
 
@@ -382,7 +382,7 @@ Each boundary represents:
 - A place where validation must occur
 - An opportunity for defense in depth
 
-## Extensibility: Growing Without Breaking
+## Extensibility Model
 
 ### The Provider Contract
 
@@ -438,7 +438,7 @@ This pattern (from Go's io package) means:
 - Type assertions discover capabilities
 - No versioning nightmare
 
-## Error Philosophy: Fail Fast, Fail Clearly
+## Error Handling
 
 ### Error Design Principles
 
@@ -479,7 +479,7 @@ Best error: `No AWS credentials found for profile 'prod'. Run: sesh --service aw
 
 The architecture ensures errors get progressively more helpful as they flow up.
 
-## Testing Architecture: Fast, Reliable, Comprehensive
+## Testing Strategy
 
 ### Why Interfaces Everywhere?
 
@@ -517,7 +517,7 @@ func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
 
 The test helper pattern reuses the test binary itself as the mock, eliminating these issues.
 
-## Performance: Fast Enough to Not Notice
+## Performance Characteristics
 
 ### Startup Performance
 
@@ -557,7 +557,7 @@ The test helper pattern reuses the test binary itself as the mock, eliminating t
 - Transparent to providers
 - Future-proof for richer metadata
 
-## Living Architecture: Principles in Practice
+## Implementation Details
 
 ### Directory Structure as Architecture
 
@@ -595,7 +595,7 @@ sesh/
 - Secure by default
 - Extensible for their needs
 
-## The Architecture Is the Product
+## Summary
 
 sesh isn't just a tool that happens to have good architecture. The architecture IS the product:
 
