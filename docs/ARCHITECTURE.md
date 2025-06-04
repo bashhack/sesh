@@ -190,7 +190,7 @@ Infrastructure components implement the following security controls:
 #### Keychain Integration
 
 **macOS Keychain Integration**
-- Hardware-backed encryption when available
+- Hardware-backed encryption
 - Process-level access control via `-T` flag
 - User-transparent authorization dialogs
 
