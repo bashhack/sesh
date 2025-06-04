@@ -115,7 +115,7 @@ func (p *Provider) ValidateRequest() error {
         return fmt.Errorf("failed to check keychain: %w", err)
     }
     if !exists {
-        return fmt.Errorf("no stored credentials found. Run: sesh --setup yourservice")
+        return fmt.Errorf("no stored credentials found. Run: sesh -setup yourservice")
     }
     
     return nil

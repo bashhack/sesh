@@ -131,7 +131,7 @@ $ env | grep AWS
 (nothing)
 
 # sesh subshell - credentials isolated here
-$ sesh --service aws
+$ sesh -service aws
 🔐 (sesh:aws) $ env | grep AWS
 AWS_ACCESS_KEY_ID=ASIA...
 AWS_SECRET_ACCESS_KEY=...

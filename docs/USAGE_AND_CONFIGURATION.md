@@ -16,7 +16,7 @@ flowchart TD
     classDef sesh fill:#bbf,stroke:#333,stroke-width:2px
     classDef setup fill:#f9f,stroke:#333,stroke-width:2px
 
-    Start([First Time User]):::start --> Setup["Run setup wizard<br>sesh --service aws --setup<br>or<br>sesh --service totp --setup"]:::setup
+    Start([First Time User]):::start --> Setup["Run setup wizard<br>sesh -service aws -setup<br>or<br>sesh -service totp -setup"]:::setup
     
     Setup --> SetupChoice{"Setup Method"}:::decision
     SetupChoice -->|"QR Code"| QR["Screenshot QR code<br>Auto-extract secret"]:::process
@@ -30,11 +30,11 @@ flowchart TD
     Daily --> Service{"Choose Service"}:::decision
     
     Service -->|"AWS"| AWSChoice{"AWS Mode"}:::decision
-    AWSChoice -->|"Default"| Subshell["Launch secure subshell<br>sesh --service aws"]:::sesh
-    AWSChoice -->|"Export"| Export["Print credentials<br>sesh --service aws --no-subshell"]:::sesh
-    AWSChoice -->|"Clipboard"| AWSClip["Copy TOTP for console<br>sesh --service aws --clip"]:::sesh
+    AWSChoice -->|"Default"| Subshell["Launch secure subshell<br>sesh -service aws"]:::sesh
+    AWSChoice -->|"Export"| Export["Print credentials<br>sesh -service aws -no-subshell"]:::sesh
+    AWSChoice -->|"Clipboard"| AWSClip["Copy TOTP for console<br>sesh -service aws -clip"]:::sesh
     
-    Service -->|"TOTP"| TOTP["Generate TOTP code<br>sesh --service totp --service-name github --clip"]:::sesh
+    Service -->|"TOTP"| TOTP["Generate TOTP code<br>sesh -service totp -service-name github -clip"]:::sesh
     
     Subshell --> Work["Work in secure environment<br>- sesh_status<br>- verify_aws<br>- Auto-expiry tracking"]:::process
     Work --> Exit["Exit subshell<br>Credentials cleared"]:::endNode
@@ -55,16 +55,16 @@ The simplest way to use sesh is to set up a provider and start authenticating:
 
 ```bash
 # First time setup for AWS
-sesh --service aws --setup
+sesh -service aws -setup
 
 # ... or for general TOTP provider usage (e.g., any TOTP)
-sesh --service totp --setup
+sesh -service totp -setup
 
 # Daily usage - launch secure AWS subshell
-sesh --service aws
+sesh -service aws
 
 # Generate and copy TOTP code for any service provider
-sesh --service totp --service-name github --clip
+sesh -service totp -service-name github -clip
 ```
 
 This will:
@@ -131,18 +131,18 @@ sesh uses a provider-based configuration system:
 
 ```bash
 # View all available options
-sesh --help
+sesh -help
 
 # View provider-specific help
-sesh --service aws --help
-sesh --service totp --help
+sesh -service aws -help
+sesh -service totp -help
 
 # List available providers
-sesh --list-services
+sesh -list-services
 
 # Setup wizards
-sesh --service aws --setup
-sesh --service totp --setup
+sesh -service aws -setup
+sesh -service totp -setup
 ```
 
 ### 💡 Best Practice: AWS Development Workflow
@@ -151,7 +151,7 @@ The most efficient AWS development workflow uses sesh's subshell mode, which pro
 
 ```bash
 # Launch secure subshell for development
-sesh --service aws
+sesh -service aws
 
 # Inside the subshell:
 # 1. Your prompt shows you're in a sesh environment
@@ -175,7 +175,7 @@ For AWS Console (web) access, use the clipboard mode for a near-instant, seamles
 
 ```bash
 # Copy TOTP code for AWS Console login
-sesh --service aws --clip
+sesh -service aws -clip
 
 # This generates TWO consecutive codes:
 # - Current time window code
@@ -189,13 +189,13 @@ For general TOTP services, sesh provides a simple, secure workflow regardless of
 
 ```bash
 # Generate TOTP code for any service
-sesh --service totp --service-name github
+sesh -service totp -service-name github
 
 # Copy to clipboard for easy pasting
-sesh --service totp --service-name github --clip
+sesh -service totp -service-name github -clip
 
 # Use profiles for multiple accounts
-sesh --service totp --service-name github --profile work
+sesh -service totp -service-name github -profile work
 sesh --service totp --service-name github --profile personal
 
 # List all TOTP entries
@@ -254,14 +254,14 @@ The interactive setup wizard guides you through configuration:
 
 ```bash
 # AWS Setup
-sesh --service aws --setup
+sesh -service aws -setup
 # - Prompts for MFA device setup in AWS Console
 # - Handles QR code scanning or manual secret entry
 # - Validates and stores secret securely
 # - Provides test codes for AWS activation
 
 # TOTP Setup
-sesh --service totp --setup
+sesh -service totp -setup
 # - Prompts for service name
 # - Optional profile name for multiple accounts
 # - QR code scanning via screenshot
@@ -274,8 +274,8 @@ When encountering issues, use verbose output:
 
 ```bash
 # Get detailed help for a provider
-sesh --service aws --help
-sesh --service totp --help
+sesh -service aws -help
+sesh -service totp -help
 
 # Common issues:
 # 1. "No MFA device found" - Check AWS profile or specify --profile
@@ -334,8 +334,8 @@ sesh --service aws --list
 sesh --service totp --list
 
 # Get provider-specific help
-sesh --service aws --help
-sesh --service totp --help
+sesh -service aws -help
+sesh -service totp -help
 ```
 
 ### Getting Support
