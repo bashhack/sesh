@@ -14,7 +14,7 @@
 
 # sesh — An extensible terminal-first authentication toolkit for secure credential workflows
 
-> A powerful CLI tool that manages secure authentication workflows for AWS, TOTP services, and beyond. Built with an extensible plugin architecture, sesh provides seamless credential management with macOS Keychain integration.
+> A developer-friendly CLI that brings AWS MFA and TOTP authentication to your terminal, backed by macOS Keychain security.
 
 ## 🎯 Purpose
 
