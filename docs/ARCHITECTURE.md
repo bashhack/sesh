@@ -1,54 +1,46 @@
 # sesh Architecture
 
-This document describes the architecture of sesh, an extensible terminal-first authentication toolkit for secure credential workflows.
+This document describes the architecture of sesh, a terminal-based authentication toolkit.
 
 ## Architectural Principles
 
-sesh's architecture is driven by four core principles that shape every design decision:
+sesh follows four architectural principles:
 
 ### 1. Plugin-Based Extensibility
 **Principle**: Authentication providers should be pluggable components, not hardcoded implementations.
 
-**Why**: Organizations use diverse authentication systems. By making providers pluggable:
+**Implementation**: The `ServiceProvider` interface defines a contract that all providers must fulfill. The Registry pattern allows dynamic provider discovery and instantiation. This enables:
 - New providers can be added without touching core code
 - Each provider can evolve independently
 - Users only interact with providers they need
 - Testing becomes focused and isolated
 
-**How**: The `ServiceProvider` interface defines a contract that all providers must fulfill. The Registry pattern allows dynamic provider discovery and instantiation.
-
 ### 2. Component Isolation
 **Principle**: Each component should have minimal access to what it needs, nothing more.
 
-**Why**: Security breaches often exploit overly-broad permissions. By isolating components:
+**Implementation**: Keychain entries are scoped per-provider, secrets flow through stdin pipes, and memory is zeroed after use. This provides:
 - Secrets never touch the filesystem or command arguments
 - Each provider manages its own secret storage namespace
 - Memory exposure windows are minimized
 - Attack surface is reduced to essential operations
 
-**How**: Keychain entries are scoped per-provider, secrets flow through stdin pipes, and memory is zeroed after use.
-
 ### 3. Terminal-Based Workflow
 **Principle**: Terminal users shouldn't need to context-switch to graphical tools.
 
-**Why**: Developers live in terminals. Breaking flow to use a GUI or phone:
-- Disrupts concentration and productivity
-- Introduces friction in automated workflows
-- Creates dependency on additional devices
-- Complicates scripting and automation
-
-**How**: Subshells provide isolated environments, clipboard integration enables quick pastes, and all operations are scriptable.
+**Implementation**: Subshells provide isolated environments, clipboard integration enables quick pastes, and all operations are scriptable. This approach:
+- Maintains workflow continuity
+- Reduces friction in automated workflows
+- Eliminates dependency on additional devices
+- Simplifies scripting and automation
 
 ### 4. Interface-Driven Design
 **Principle**: Every external dependency must be abstracted behind an interface.
 
-**Why**: Direct dependencies create brittle, untestable code. With interfaces:
+**Implementation**: AWS CLI, Keychain, TOTP generation, and command execution are all behind interfaces with mock implementations. This provides:
 - Unit tests can mock any external system
 - Implementations can be swapped (e.g., different keychain backends)
 - Code remains loosely coupled
 - Behavior is documented through contracts
-
-**How**: AWS CLI, Keychain, TOTP generation, and even command execution are all behind interfaces with mock implementations.
 
 ## Architectural Layers
 
@@ -79,7 +71,7 @@ The architecture follows a strict layering model where dependencies flow downwar
                     └─────────────────────────┘
 ```
 
-### Why This Layering?
+### Layer Responsibilities
 
 **CLI Layer**: Thin and focused on user interaction. This separation means:
 - Alternative CLIs could be built (e.g., a TUI version)
@@ -105,7 +97,6 @@ The architecture follows a strict layering model where dependencies flow downwar
 
 ### CLI Layer
 
-The CLI layer embodies the Unix philosophy: do one thing well.
 
 **Design Decisions:**
 
@@ -118,7 +109,7 @@ The CLI layer embodies the Unix philosophy: do one thing well.
    ```go
    func NewApp(keychainProvider keychain.Provider, versionInfo VersionInfo) *App
    ```
-   Why? Testing. Every external dependency can be mocked, making the CLI fully testable.
+   This enables mocking of all external dependencies for comprehensive testing.
 
 3. **Provider Registration**:
    ```go
@@ -127,7 +118,7 @@ The CLI layer embodies the Unix philosophy: do one thing well.
        a.Registry.RegisterProvider(awsP)
    }
    ```
-   Why? Centralized registration makes provider discovery explicit and debuggable.
+   Centralized registration makes provider discovery explicit and debuggable.
 
 ### Provider Interface Design
 
@@ -157,7 +148,7 @@ type ServiceProvider interface {
 }
 ```
 
-**Why This Interface Design?**
+**Interface Design Rationale**
 
 1. **Minimal Surface Area**: Every method has a clear, single purpose. No kitchen sink interfaces.
 
@@ -179,10 +170,10 @@ type SubshellProvider interface {
 }
 ```
 
-This pattern (inspired by Go's `io.WriterTo`) means:
-- Providers declare capabilities through interface implementation
-- Core code uses type assertions to discover features
-- New capabilities can be added without breaking existing providers
+Pattern benefits (similar to Go's `io.WriterTo`):
+- Capability declaration via interfaces
+- Runtime feature discovery
+- Non-breaking capability additions
 
 ### Infrastructure Components
 
@@ -190,7 +181,7 @@ Each infrastructure component embodies specific security principles:
 
 #### Keychain Integration
 
-**Why macOS Keychain?**
+**macOS Keychain Integration**
 - Hardware-backed encryption when available
 - Process-level access control via `-T` flag
 - User-transparent authorization dialogs
@@ -203,48 +194,46 @@ This means even if another process knows the service name, it cannot access the 
 
 #### TOTP Generation
 
-**Why Generate Two Codes?**
+**Dual Code Generation**
 ```go
 // Current + Next code generation
 codes := []string{currentCode, nextCode}
 ```
-Edge case: User copies code at 29 seconds. By the time they paste, it's expired. Providing the next code eliminates this frustration without compromising security.
+Generates current and next codes to handle boundary conditions at 30-second intervals.
 
 #### Memory Management
 
-**The Challenge**: Go's garbage collector moves memory, making true secure erasure impossible.
+**Challenge**: Go's garbage collector prevents true secure erasure.
 
-**Our Approach**: Defense in depth
-1. Prefer `[]byte` over `string` (mutable vs immutable)
+**Approach**:
+1. Use `[]byte` over `string` for mutability
 2. Zero immediately after use
 3. Use `runtime.KeepAlive()` to prevent optimization
-4. Pass secrets via stdin, never command arguments
+4. Pass secrets via stdin
 
-**Why This Matters**: Even partial mitigation reduces the window for memory dumps, cold boot attacks, and swap file analysis.
+**Benefit**: Reduces the window for memory dumps, cold boot attacks, and swap file analysis.
 
 #### Subshell Implementation
 
-**Design Philosophy**: Credentials should exist in an isolated environment that:
-1. Visually indicates its special status (custom prompt)
-2. Prevents accidental nesting (`SESH_ACTIVE` check)
-3. Cleans up automatically on exit
-4. Provides built-in helper functions
+**Design**:
+1. Custom prompt for visual indication
+2. `SESH_ACTIVE` check prevents nesting
+3. Automatic cleanup on exit
+4. Built-in helper functions
 
-**Why Not Just Export Variables?**
-- Subshells make the credential lifecycle explicit
-- Users can't accidentally pollute their main shell
-- Clear entry/exit points for audit logging (future)
+**Subshell Benefits**
+- Makes credential lifecycle explicit
+- Prevents pollution of main shell environment
+- Provides clear entry/exit points for audit logging
 - Visual feedback reduces security mistakes
 
 ### Setup System
 
-The setup system recognizes that security tools often fail at onboarding.
-
 **Design Principles:**
 
-1. **Progressive Disclosure**: Start with QR scanning (easy path), fall back to manual entry
-2. **Immediate Validation**: Verify secrets before storing to prevent frustration
-3. **Test Before Trust**: Generate test codes so users can verify setup worked
+1. **Progressive Disclosure**: QR scanning with manual entry fallback
+2. **Immediate Validation**: Verify secrets before storing
+3. **Test Before Trust**: Generate test codes for verification
 
 ```go
 type SetupHandler interface {
@@ -253,7 +242,7 @@ type SetupHandler interface {
 }
 ```
 
-**Why So Simple?** Setup is complex enough. The interface shouldn't add cognitive load. Each handler encapsulates:
+**Design**: Each handler encapsulates:
 - Service-specific secret formats
 - Validation rules
 - Test code generation
@@ -268,9 +257,9 @@ type SetupService interface {
 }
 ```
 
-This separation allows:
+Benefits:
 - Dynamic handler discovery
-- Consistent setup experience across providers
+- Consistent setup experience
 - Easy addition of new setup flows
 
 ## Data Flow Architecture
@@ -298,15 +287,15 @@ User ──► CLI ──► AWS Provider ──► Keychain (get secret)
 
 **Key Design Insights:**
 
-1. **No Direct AWS API Calls**: sesh never touches AWS APIs directly. Why?
-   - AWS CLI handles credential caching, region selection, retries
-   - Security updates come from AWS CLI updates
-   - No need to manage AWS SDK dependencies
+1. **No Direct AWS API Calls**: sesh delegates to AWS CLI for:
+   - Credential caching, region selection, retries
+   - Security updates through AWS CLI updates
+   - Elimination of AWS SDK dependencies
 
-2. **Mode Branching at the End**: Credentials are generated the same way, then routed. This:
-   - Ensures consistent security regardless of output mode
-   - Simplifies testing (one credential path)
-   - Allows future output modes without core changes
+2. **Mode Branching at the End**: Uniform credential generation with output-specific routing:
+   - Consistent security across modes
+   - Simplified testing
+   - Extensible output modes
 
 ### TOTP Data Flow
 
@@ -325,7 +314,7 @@ User ──► CLI ──► TOTP Provider ──► Keychain (get secret)
                             (with time remaining)
 ```
 
-**Why This Simplicity Works:**
+**TOTP Implementation Details:**
 
 1. **Stateless Computation**: TOTP is pure math - time + secret = code
 2. **No Network Required**: Everything happens locally
@@ -341,7 +330,7 @@ Each layer assumes the others might fail:
 1. **Storage Security**
    - **Threat**: Other processes reading secrets
    - **Defense**: Binary path restrictions (`-T` flag)
-   - **Why It Works**: OS kernel enforces access control
+   - **Enforcement**: OS kernel access control
 
 2. **Memory Security**
    - **Threat**: Memory dumps, swap files, cold boot attacks
@@ -406,7 +395,7 @@ func (a *App) registerProviders() {
 }
 ```
 
-**Why This Works:**
+**Implementation Benefits:**
 - Clear contract (ServiceProvider interface)
 - Dependency injection provides needed services
 - Registration is explicit and centralized
@@ -471,36 +460,29 @@ if err != nil {
 }
 ```
 
-### Why This Matters
+### Error Message Examples
 
-Bad error: `error: -25300`  
-Good error: `keychain access denied: no stored credentials for AWS profile 'prod'`  
-Best error: `No AWS credentials found for profile 'prod'. Run: sesh --service aws --setup`
+- Poor: `error: -25300`  
+- Better: `keychain access denied: no stored credentials for AWS profile 'prod'`  
+- Best: `No AWS credentials found for profile 'prod'. Run: sesh --service aws --setup`
 
-The architecture ensures errors get progressively more helpful as they flow up.
+Errors become progressively more actionable as they flow up through layers.
 
 ## Testing Strategy
 
-### Why Interfaces Everywhere?
+### Interface-Based Testing
 
-Consider testing AWS authentication without interfaces:
-- Need real AWS credentials
-- Tests hit actual AWS APIs
-- Slow, flaky, expensive
-- Can't test error conditions
-
-With interfaces:
+Interface-based testing enables:
 ```go
 type Provider interface {
     GetSessionToken(profile, serial string, code []byte) (Credentials, error)
 }
 ```
 
-Now tests can:
-- Run in milliseconds
-- Test error paths easily
-- Run in parallel
-- Work offline
+- Millisecond execution
+- Error path testing
+- Parallel execution
+- Offline operation
 
 ### The Test Helper Pattern
 
@@ -510,20 +492,16 @@ Now tests can:
 func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
 ```
 
-**Why This Matters**: Testing CLI tools traditionally requires:
+**Test Helper Benefits**: The pattern reuses the test binary itself as the mock, eliminating:
 - Shipping mock binaries
 - Complex PATH manipulation  
 - Platform-specific code
-
-The test helper pattern reuses the test binary itself as the mock, eliminating these issues.
 
 ## Performance Characteristics
 
 ### Startup Performance
 
-**Goal**: Sub-100ms from invocation to action.
-
-**How We Achieve It:**
+**Target**: Sub-100ms startup time achieved through:
 
 1. **Lazy Loading**: Providers initialize only when selected
    ```go
@@ -551,11 +529,11 @@ The test helper pattern reuses the test binary itself as the mock, eliminating t
 - AWS CLI calls are the bottleneck (1-2 seconds)
 - Keychain access is OS-optimized (milliseconds)
 
-**Why zstd for Metadata?**
-- Metadata can grow (multiple profiles, services)
-- zstd offers best compression/speed ratio
+**Metadata Compression (zstd)**
+- Handles growth (multiple profiles, services)
+- Optimal compression/speed ratio
 - Transparent to providers
-- Future-proof for richer metadata
+- Supports future metadata expansion
 
 ## Implementation Details
 
@@ -575,7 +553,7 @@ sesh/
 └── docs/                  # Architecture as documentation
 ```
 
-### Why This Architecture Matters
+### Architecture Benefits
 
 **For Security Engineers:**
 - Clear trust boundaries
