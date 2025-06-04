@@ -9,7 +9,9 @@ The sesh architecture is based on four core design principles:
 ### 1. Plugin-Based Extensibility
 **Principle**: Authentication providers should be pluggable components, not hardcoded implementations.
 
-**Implementation**: The `ServiceProvider` interface defines a contract that all providers must fulfill. The Registry pattern allows dynamic provider discovery and instantiation. This enables:
+**Implementation**: The `ServiceProvider` interface defines a contract that all providers must fulfill. The Registry pattern allows dynamic provider discovery and instantiation.
+
+**Key Benefits**:
 - New providers integrate without core system modifications
 - Each provider can evolve independently
 - Users only interact with providers they need
@@ -18,7 +20,9 @@ The sesh architecture is based on four core design principles:
 ### 2. Component Isolation
 **Principle**: Each component should have minimal access to what it needs, nothing more.
 
-**Implementation**: Keychain entries are scoped per-provider, secrets flow through stdin pipes, and memory is zeroed after use. This provides:
+**Implementation**: Keychain entries are scoped per-provider, secrets flow through stdin pipes, and memory is zeroed after use.
+
+**Security Properties**:
 - Secrets never touch the filesystem or command arguments
 - Each provider manages its own secret storage namespace
 - Memory exposure duration is minimized
@@ -27,7 +31,9 @@ The sesh architecture is based on four core design principles:
 ### 3. Terminal-Based Workflow
 **Principle**: Terminal users shouldn't need to context-switch to graphical tools.
 
-**Implementation**: Subshells provide isolated environments, clipboard integration enables quick pastes, and all operations are scriptable. This approach:
+**Implementation**: Subshells provide isolated environments, clipboard integration enables quick pastes, and all operations are scriptable.
+
+**Achieved Outcomes**:
 - Maintains workflow continuity
 - Reduces friction in automated workflows
 - Eliminates dependency on additional devices
@@ -36,7 +42,9 @@ The sesh architecture is based on four core design principles:
 ### 4. Interface-Driven Design
 **Principle**: Every external dependency must be abstracted behind an interface.
 
-**Implementation**: AWS CLI, Keychain, TOTP generation, and command execution are all behind interfaces with mock implementations. This provides:
+**Implementation**: AWS CLI, Keychain, TOTP generation, and command execution are all behind interfaces with mock implementations.
+
+**Testing Advantages**:
 - Unit tests can mock any external system
 - Implementations can be swapped (e.g., different keychain backends)
 - Code remains loosely coupled
@@ -170,7 +178,7 @@ type SubshellProvider interface {
 }
 ```
 
-Pattern benefits (similar to Go's `io.WriterTo`):
+This pattern (following Go's composition model) provides:
 - Capability declaration via interfaces
 - Runtime feature discovery
 - Non-breaking capability additions
@@ -257,7 +265,7 @@ type SetupService interface {
 }
 ```
 
-This design enables:
+Key capabilities:
 - Dynamic handler discovery at runtime
 - Consistent setup experience across providers
 - Simplified addition of new setup workflows
@@ -340,7 +348,7 @@ Each layer provides independent security measures:
 3. **Process Security**
    - **Threat**: Secrets visible in `ps`, shell history, or logs
    - **Defense**: Stdin pipes for all secret transmission
-   - **Key Insight**: Process arguments are public, stdin is private
+   - **Security Principle**: Process arguments are public, stdin is private
 
 4. **Session Security**
    - **Threat**: Credential leakage between sessions
@@ -386,7 +394,7 @@ type YourProvider struct {
 
 // 2. Implement ServiceProvider
 func (p *YourProvider) GetCredentials() (Credentials, error) {
-    // Your auth logic
+    // Provider-specific authentication logic
 }
 
 // 3. Register it
@@ -440,11 +448,11 @@ This pattern (from Go's io package) means:
 ```go
 // Layer 1: Infrastructure (Technical)
 return fmt.Errorf("keychain access failed: %w", err)
-// Full technical context for debugging
+// Preserves full error context for debugging
 
 // Layer 2: Provider (Contextual)  
 return fmt.Errorf("failed to get AWS credentials for profile %s: %w", profile, err)
-// Adds business context
+// Adds domain-specific context
 
 // Layer 3: CLI (Actionable)
 if err != nil {
@@ -462,9 +470,9 @@ if err != nil {
 
 ### Error Message Examples
 
-- Poor: `error: -25300`  
-- Better: `keychain access denied: no stored credentials for AWS profile 'prod'`  
-- Best: `No AWS credentials found for profile 'prod'. Run: sesh --service aws --setup`
+- Cryptic: `error: -25300`  
+- Improved: `keychain access denied: no stored credentials for AWS profile 'prod'`  
+- Optimal: `No AWS credentials found for profile 'prod'. Run: sesh --service aws --setup`
 
 Errors become progressively more actionable as they flow up through layers.
 
@@ -492,7 +500,7 @@ type Provider interface {
 func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
 ```
 
-**Test Helper Benefits**: The pattern reuses the test binary itself as the mock, eliminating:
+**Test Infrastructure**: The pattern leverages the test binary as a mock process, eliminating:
 - Shipping mock binaries
 - Complex PATH manipulation  
 - Platform-specific code
@@ -517,17 +525,18 @@ func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
    - No heavy CLI framework for flag parsing
    - No logging framework in hot path
 
-3. **Smart Defaults**: Most users have one profile
+3. **Performance Defaults**: Optimized for single-profile usage
    - Defers credential enumeration until required
    - Postpones validation until execution time
    - Implements lazy metadata loading
 
 ### Runtime Performance
 
-**Credential Generation**: Near-instant
-- TOTP is pure computation (microseconds)
-- AWS CLI calls are the bottleneck (1-2 seconds)
-- Keychain access is OS-optimized (milliseconds)
+**Credential Generation Performance**:
+- TOTP computation: <1μs
+- Keychain access: ~10ms (OS-dependent)
+- AWS STS calls: 1-2s (network-bound)
+- Subshell spawn: ~50ms
 
 **Metadata Compression (zstd)**
 - Handles growth (multiple profiles, services)
@@ -553,7 +562,7 @@ sesh/
 └── docs/                  # Documentation
 ```
 
-### Architecture Benefits
+### Stakeholder Benefits
 
 **Security Engineers:**
 - Defined trust boundaries
