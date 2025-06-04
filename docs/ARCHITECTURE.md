@@ -595,15 +595,15 @@ sesh/
 - Secure by default
 - Extensible for their needs
 
-<!-- ## The Architecture Is the Product -->
+## The Architecture Is the Product
 
-<!-- sesh isn't just a tool that happens to have good architecture. The architecture IS the product: -->
+sesh isn't just a tool that happens to have good architecture. The architecture IS the product:
 
-<!-- - **Extensibility** isn't a feature, it's the foundation -->
-<!-- - **Security** isn't added on, it's built in -->
-<!-- - **Simplicity** isn't accidental, it's architected -->
-<!-- - **Performance** isn't optimized, it's designed -->
+- **Extensibility** isn't a feature, it's the foundation
+- **Security** isn't added on, it's built in
+- **Simplicity** isn't accidental, it's architected
+- **Performance** isn't optimized, it's designed
 
-<!-- This architecture ensures sesh can grow from two providers to twenty without becoming a mess, can handle new authentication methods without breaking existing ones, and can maintain security properties even as complexity grows. -->
+This architecture ensures sesh can grow from two providers to twenty without becoming a mess, can handle new authentication methods without breaking existing ones, and can maintain security properties even as complexity grows.
 
-<!-- That's the power of thoughtful architecture: it makes the right thing the easy thing. -->
+That's the power of thoughtful architecture: it makes the right thing the easy thing.
