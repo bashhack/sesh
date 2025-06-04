@@ -9,15 +9,15 @@ flowchart TD
     Start --> AWS["AWS Profiles"]:::service
     Start --> TOTP["TOTP Services"]:::service
     
-    AWS --> AWSProd["Production<br>--profile prod"]:::profile
-    AWS --> AWSDev["Development<br>--profile dev"]:::profile
-    AWS --> AWSStaging["Staging<br>--profile staging"]:::profile
+    AWS --> AWSProd["Production<br>-profile prod"]:::profile
+    AWS --> AWSDev["Development<br>-profile dev"]:::profile
+    AWS --> AWSStaging["Staging<br>-profile staging"]:::profile
     
     TOTP --> GitHub["GitHub"]:::service
-    GitHub --> GHWork["Work Account<br>--service-name github --profile work"]:::profile
-    GitHub --> GHPersonal["Personal Account<br>--service-name github --profile personal"]:::profile
+    GitHub --> GHWork["Work Account<br>-service-name github -profile work"]:::profile
+    GitHub --> GHPersonal["Personal Account<br>-service-name github -profile personal"]:::profile
     
     TOTP --> Google["Google"]:::service
-    Google --> GoogleMain["Main Account<br>--service-name google"]:::profile
+    Google --> GoogleMain["Main Account<br>-service-name google"]:::profile
     
     AWSProd & AWSDev & AWSStaging & GHWork & GHPersonal & GoogleMain --> KC["macOS Keychain<br>Secure Storage"]:::keychain

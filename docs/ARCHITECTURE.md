@@ -461,7 +461,7 @@ if err != nil {
     // Provide specific guidance
     switch {
     case strings.Contains(err.Error(), "not found"):
-        fmt.Fprintf(app.Stderr, "Try: sesh --service aws --setup\n")
+        fmt.Fprintf(app.Stderr, "Try: sesh -service aws -setup\n")
     case strings.Contains(err.Error(), "expired"):
         fmt.Fprintf(app.Stderr, "Your session expired. Run sesh again.\n")
     }
@@ -472,7 +472,7 @@ if err != nil {
 
 - Cryptic: `error: -25300`  
 - Improved: `keychain access denied: no stored credentials for AWS profile 'prod'`  
-- Optimal: `No AWS credentials found for profile 'prod'. Run: sesh --service aws --setup`
+- Optimal: `No AWS credentials found for profile 'prod'. Run: sesh -service aws -setup`
 
 Errors become progressively more actionable as they flow up through layers.
 

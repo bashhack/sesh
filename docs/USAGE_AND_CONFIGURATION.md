@@ -90,8 +90,8 @@ Potential red flags for compatability are the same one would face with Authy or 
 
 sesh uses a provider-based configuration system:
 
-1. **Global flags** - Apply to all providers (e.g., `--service`, `--help`)
-2. **Provider-specific flags** - Apply only to the selected provider (e.g., `--profile` for AWS)
+1. **Global flags** - Apply to all providers (e.g., `-service`, `-help`)
+2. **Provider-specific flags** - Apply only to the selected provider (e.g., `-profile` for AWS)
 3. **Environment variables** - For default AWS profile selection
 4. **Keychain storage** - Secure storage for all secrets and metadata
 
@@ -101,29 +101,29 @@ sesh uses a provider-based configuration system:
 
 | Command Flag       | Description                                        | Available For    |
 |--------------------|----------------------------------------------------|------------------|
-| `--list-services`  | List all available service providers               | Global           |
+| `-list-services`  | List all available service providers               | Global           |
 | `--version`        | Display version information                        | Global           |
-| `--help`           | Show help (use with --service for provider help)  | Global           |
-| `--service`        | Service provider to use (aws, totp) [REQUIRED]    | All commands     |
-| `--list`           | List entries for selected service                  | All providers    |
-| `--delete <id>`    | Delete entry for selected service                  | All providers    |
-| `--setup`          | Run interactive setup wizard                       | All providers    |
-| `--clip`           | Copy generated code to clipboard                   | All providers    |
+| `-help`           | Show help (use with -service for provider help)  | Global           |
+| `-service`        | Service provider to use (aws, totp) [REQUIRED]    | All commands     |
+| `-list`           | List entries for selected service                  | All providers    |
+| `-delete <id>`    | Delete entry for selected service                  | All providers    |
+| `-setup`          | Run interactive setup wizard                       | All providers    |
+| `-clip`           | Copy generated code to clipboard                   | All providers    |
 
 
 ### AWS Provider Options
 
 | Command Flag       | Environment Variable | Description                             | Default Value    |
 |--------------------|----------------------|-----------------------------------------|------------------|
-| `--profile`        | `AWS_PROFILE`        | AWS profile to use                      | default profile  |
-| `--no-subshell`    | n/a                  | Print credentials instead of subshell   | false (subshell) |
+| `-profile`        | `AWS_PROFILE`        | AWS profile to use                      | default profile  |
+| `-no-subshell`    | n/a                  | Print credentials instead of subshell   | false (subshell) |
 
 ### TOTP Provider Options
 
 | Command Flag       | Description                                        | Required         |
 |--------------------|----------------------------------------------------|------------------|
-| `--service-name`   | Name of service (github, google, slack, etc.)      | Yes              |
-| `--profile`        | Profile name for multiple accounts (work, personal)| No               |
+| `-service-name`   | Name of service (github, google, slack, etc.)      | Yes              |
+| `-profile`        | Profile name for multiple accounts (work, personal)| No               |
 
 ## Usage Patterns
 
@@ -196,10 +196,10 @@ sesh -service totp -service-name github -clip
 
 # Use profiles for multiple accounts
 sesh -service totp -service-name github -profile work
-sesh --service totp --service-name github --profile personal
+sesh -service totp -service-name github -profile personal
 
 # List all TOTP entries
-sesh --service totp --list
+sesh -service totp -list
 ```
 
 ### Multi-Profile Management
@@ -216,13 +216,13 @@ flowchart TD
     Start --> AWS["AWS Profiles"]:::service
     Start --> TOTP["TOTP Services"]:::service
     
-    AWS --> AWSProd["Production<br>--profile prod"]:::profile
-    AWS --> AWSDev["Development<br>--profile dev"]:::profile
-    AWS --> AWSStaging["Staging<br>--profile staging"]:::profile
+    AWS --> AWSProd["Production<br>-profile prod"]:::profile
+    AWS --> AWSDev["Development<br>-profile dev"]:::profile
+    AWS --> AWSStaging["Staging<br>-profile staging"]:::profile
     
     TOTP --> GitHub["GitHub"]:::service
-    GitHub --> GHWork["Work Account<br>--service-name github --profile work"]:::profile
-    GitHub --> GHPersonal["Personal Account<br>--service-name github --profile personal"]:::profile
+    GitHub --> GHWork["Work Account<br>-service-name github -profile work"]:::profile
+    GitHub --> GHPersonal["Personal Account<br>-service-name github -profile personal"]:::profile
     
     TOTP --> Google["Google"]:::service
     Google --> GoogleMain["Main Account<br>--service-name google"]:::profile
@@ -237,7 +237,7 @@ Sesh provides comprehensive entry management capabilities:
 ```bash
 # List all entries for a service
 sesh --service aws --list
-sesh --service totp --list
+sesh -service totp -list
 
 # Delete entries by ID
 sesh --service aws --delete aws-123
@@ -331,7 +331,7 @@ sesh --version
 
 # List all stored entries
 sesh --service aws --list
-sesh --service totp --list
+sesh -service totp -list
 
 # Get provider-specific help
 sesh -service aws -help
