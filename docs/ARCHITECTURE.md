@@ -170,7 +170,7 @@ type ServiceProvider interface {
 
 **Optional Interface Pattern**
 
-Not all providers require subshell functionality. Rather than expanding the base interface:
+Since subshell functionality is optional, we use interface composition:
 
 ```go
 type SubshellProvider interface {
@@ -250,7 +250,7 @@ type SetupHandler interface {
 }
 ```
 
-**Design**: Each handler encapsulates:
+**Handler Responsibilities**:
 - Service-specific secret formats
 - Validation rules
 - Test code generation
@@ -324,10 +324,10 @@ User ──► CLI ──► TOTP Provider ──► Keychain (get secret)
 
 **TOTP Implementation Details:**
 
-1. **Stateless Computation**: TOTP is pure math - time + secret = code
+1. **Stateless Computation**: TOTP algorithm requires only timestamp and secret
 2. **No Network Required**: Everything happens locally
 3. **Predictable Timing**: 30-second windows are universal
-4. **Dual Code Generation**: Solves for the boundary problem
+4. **Dual Code Generation**: Handles time window boundaries
 
 ## Security Architecture
 
@@ -522,7 +522,7 @@ func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
 
 2. **Minimal Dependencies**: No framework bloat
    - Direct keychain API usage without ORM abstraction
-   - No heavy CLI framework for flag parsing
+   - Native flag parsing without framework overhead
    - No logging framework in hot path
 
 3. **Performance Defaults**: Optimized for single-profile usage
