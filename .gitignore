@@ -1,6 +1,8 @@
 # Binary output
-/sesh
 /bin/
+/scripts/mock-bin
+debug_sesh
+*_debug
 
 # Build artifacts
 /dist/
@@ -10,6 +12,7 @@
 coverage.txt
 coverage.out
 coverage.html
+security-report.json
 
 # Dependency directories
 /vendor/

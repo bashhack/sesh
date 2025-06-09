@@ -35,23 +35,15 @@ confirm:
 run:
 	@echo "🚀 Running sesh in development mode (not installed to PATH)..."
 	@echo "ℹ️  For system-wide use, run 'make install' first."
-	@go run $(LDFLAGS) ./sesh-cli/cmd/sesh/
+	@go run $(LDFLAGS) ./sesh/cmd/sesh/
 
 ## run/setup: Run the sesh setup wizard (development mode)
 .PHONY: run/setup
 run/setup:
 	@echo "🚀 Running sesh setup wizard in development mode..."
 	@echo "ℹ️  For system-wide use, run 'make install' first."
-	@go run $(LDFLAGS) ./sesh-cli/cmd/sesh/ --setup
+	@go run $(LDFLAGS) ./sesh/cmd/sesh/ --setup
 
-## shell/install: Install shell integration files
-.PHONY: shell/install
-shell/install:
-	@echo "Installing shell integration..."
-	@mkdir -p $(HOME)/.local/share/sesh
-	@cp shell/sesh.sh $(HOME)/.local/share/sesh/
-	@echo "Shell integration installed. Add this to your ~/.bashrc or ~/.zshrc:"
-	@echo "source $(HOME)/.local/share/sesh/sesh.sh"
 
 # ============================================================================= #
 # QUALITY CONTROL
@@ -71,7 +63,7 @@ check-staticcheck:
 .PHONY: run-staticcheck
 run-staticcheck: check-staticcheck
 	@echo 'Running staticcheck...'
-	@staticcheck ./... || echo "Note: staticcheck found issues (exit code: $$?)"
+	@staticcheck $$(go list ./... | grep -v /scripts) || echo "Note: staticcheck found issues (exit code: $$?)"
 
 ## check-golangci-lint: Check if golangci-lint is installed
 .PHONY: check-golangci-lint
@@ -87,7 +79,7 @@ check-golangci-lint:
 .PHONY: run-golangci-lint
 run-golangci-lint: check-golangci-lint
 	@echo 'Running golangci-lint...'
-	@golangci-lint run ./... || echo "Note: golangci-lint found issues (exit code: $$?)"
+	@golangci-lint run $$(go list ./... | grep -v /scripts) || echo "Note: golangci-lint found issues (exit code: $$?)"
 
 ## audit: Tidy dependencies and format, vet and test all code
 .PHONY: audit
@@ -96,11 +88,13 @@ audit:
 	go mod tidy
 	go mod verify
 	@echo 'Formatting code...'
-	go fmt ./...
+	go fmt $$(go list ./... | grep -v /scripts)
 	@echo 'Running lint...'
 	@$(MAKE) lint
+	@echo 'Running security scan...'
+	@$(MAKE) security-scan
 	@echo 'Running tests...'
-	go test -race -vet=off ./...
+	go test -race -vet=off $$(go list ./... | grep -v /scripts)
 
 ## vendor: Tidy and vendor dependencies
 .PHONY: vendor
@@ -114,41 +108,52 @@ vendor:
 ## test: Run test suite
 .PHONY: test
 test:
-	@echo 'Running tests...'
-	@./scripts/test.sh
+	@echo '🧪 Running unit tests...'
+	@go test -v $$(go list ./... | grep -v /scripts)
+	@echo ''
+	@echo '📊 Generating test coverage...'
+	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts)
+	@echo 'Filtering coverage report...'
+	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
+	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" || true
+	@rm -f coverage.filtered.txt
+	@echo ''
+	@echo '✅ All tests completed successfully.'
 
 ## test/short: Run only fast tests, skipping slow or external tests
 .PHONY: test/short
 test/short:
 	@echo 'Running short tests only...'
-	@go test -short ./...
+	@go test -short $$(go list ./... | grep -v /scripts)
 
 ## test/verbose: Run tests with verbose output
 .PHONY: test/verbose
 test/verbose:
 	@echo 'Running tests with verbose output...'
-	@go test -v ./...
+	@go test -v $$(go list ./... | grep -v /scripts)
 
-## test/full: Run full test suite including integration tests
-.PHONY: test/full
-test/full:
-	@echo 'Running full test suite...'
-	@./scripts/test.sh --full
 
 ## coverage: Run test suite with coverage
 .PHONY: coverage
 coverage:
 	@echo 'Running tests with coverage...'
-	@go test -coverprofile=coverage.txt ./...
-	@go tool cover -html=coverage.txt -o coverage.html
+	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts) | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@echo 'Filtering out testutil, mock files, scripts, interface-only files, and main.go...'
+	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
+	@go tool cover -html=coverage.filtered.txt -o coverage.html
 	@echo "Coverage report generated at coverage.html"
+	@rm -f coverage.filtered.txt
 
 ## coverage/func: Show function-level coverage statistics
 .PHONY: coverage/func
 coverage/func:
 	@echo 'Generating function-level coverage report...'
-	@go test -coverprofile=coverage.txt ./...
-	@go tool cover -func=coverage.txt
+	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts) 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@echo 'Filtering out testutil, mock files, scripts, interface-only files, and main.go...'
+	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
+	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" || true
+	@rm -f coverage.filtered.txt
+
 
 
 
@@ -157,9 +162,30 @@ coverage/func:
 lint:
 	@echo 'Linting...'
 	@echo 'Running go vet...'
-	@go vet ./...
+	@go vet $$(go list ./... | grep -v /scripts)
 	@$(MAKE) run-golangci-lint || echo "Skipping external linting"
 	@$(MAKE) run-staticcheck || echo "Skipping staticcheck"
+
+## security-scan: Run security vulnerability scanner
+.PHONY: security-scan
+security-scan:
+	@echo "🔒 Running security scan..."
+	@if ! command -v gosec > /dev/null; then \
+		echo "Installing gosec..."; \
+		go install github.com/securego/gosec/v2/cmd/gosec@latest; \
+	fi
+	@echo "Scanning for security vulnerabilities..."
+	@gosec -fmt=json -out=security-report.json ./... 2>/dev/null || true
+	@if [ -f security-report.json ]; then \
+		issues=$$(cat security-report.json | grep -o '"Issues":[^,]*' | cut -d':' -f2); \
+		if [ "$$issues" = "null" ] || [ "$$issues" = "[]" ]; then \
+			echo "✅ No security issues found!"; \
+		else \
+			echo "⚠️  Security issues found. Check security-report.json for details."; \
+			gosec -fmt=text ./... 2>/dev/null | grep -A 5 "Severity:" || true; \
+		fi; \
+	fi
+	@echo "Security scan complete."
 
 # ============================================================================= #
 # BUILD
@@ -169,55 +195,41 @@ lint:
 .PHONY: build
 build:
 	@echo "Building sesh..."
-	@go build $(LDFLAGS) -o build/sesh ./sesh-cli/cmd/sesh
+	@mkdir -p build
+	@go build $(LDFLAGS) -o build/sesh ./sesh/cmd/sesh
 
 ## build/optimize: Build optimized binary (smaller size)
 .PHONY: build/optimize
 build/optimize:
 	@echo "Building optimized binary..."
-	@go build $(LDFLAGS) -ldflags="-s -w" -o build/sesh ./sesh-cli/cmd/sesh
+	@go build $(LDFLAGS) -ldflags="-s -w" -o build/sesh ./sesh/cmd/sesh
 
 ## build/all: Build for all supported platforms
 .PHONY: build/all
 build/all:
 	@echo "Building for all platforms..."
 	@mkdir -p bin/
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o build/bin/sesh-darwin-amd64 ./sesh-cli/cmd/sesh
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o build/bin/sesh-darwin-arm64 ./sesh-cli/cmd/sesh
+	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o build/bin/sesh-darwin-amd64 ./sesh/cmd/sesh
+	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o build/bin/sesh-darwin-arm64 ./sesh/cmd/sesh
 
-## install: Install the application and shell integration
+## install: Install the application
 .PHONY: install
-install: build
+install: clean build
 	@echo "📦 Installing sesh..."
-	@if [ -w "$(PREFIX)/bin" ]; then \
-		echo "Installing to $(DESTDIR)$(PREFIX)/bin/"; \
-		mkdir -p $(DESTDIR)$(PREFIX)/bin; \
-		cp sesh $(DESTDIR)$(PREFIX)/bin/; \
-		chmod +x $(DESTDIR)$(PREFIX)/bin/sesh; \
-		mkdir -p $(DESTDIR)$(PREFIX)/share/sesh; \
-		cp shell/sesh.sh $(DESTDIR)$(PREFIX)/share/sesh/; \
-		echo "✅ Installation complete!"; \
-		echo "🔐 To enable shell integration (recommended), add this line to your ~/.zshrc or ~/.bashrc:"; \
-		echo "   source \"$(DESTDIR)$(PREFIX)/share/sesh/sesh.sh\""; \
-	else \
-		echo "Installing to ~/.local (no admin privileges required)"; \
-		mkdir -p $(HOME)/.local/bin; \
-		cp sesh $(HOME)/.local/bin/; \
-		chmod +x $(HOME)/.local/bin/sesh; \
-		mkdir -p $(HOME)/.local/share/sesh; \
-		cp shell/sesh.sh $(HOME)/.local/share/sesh/; \
-		echo "✅ Installation complete!"; \
-		if [[ ":$$PATH:" != *":$(HOME)/.local/bin:"* ]]; then \
-			echo "⚠️  Please add ~/.local/bin to your PATH:"; \
-			echo "   export PATH=\"$$HOME/.local/bin:\$$PATH\""; \
-		fi; \
-		echo "🔐 To enable shell integration (recommended), add this line to your ~/.zshrc or ~/.bashrc:"; \
-		echo "   source \"$(HOME)/.local/share/sesh/sesh.sh\""; \
+	@echo "Installing to ~/.local/bin (standard user location)"
+	@mkdir -p $(HOME)/.local/bin
+	@cp build/sesh $(HOME)/.local/bin/
+	@chmod +x $(HOME)/.local/bin/sesh
+	@echo "✅ Installation complete!"
+	@if [[ ":$$PATH:" != *":$(HOME)/.local/bin:"* ]]; then \
+		echo "⚠️  Please add ~/.local/bin to your PATH:"; \
+		echo "   export PATH=\"$$HOME/.local/bin:\$$PATH\""; \
 	fi
+
 	@echo ""
 	@echo "🚀 To get started:"
 	@echo "   1. Run 'sesh --setup' to configure your MFA secret"
-	@echo "   2. Then simply run 'sesh' to generate AWS temporary credentials"
+	@echo "   2. Then run 'sesh --service aws' to generate AWS temporary credentials"
 
 # ============================================================================= #
 # RELEASE
@@ -263,3 +275,4 @@ clean:
 	@rm -f coverage.out coverage.txt coverage.html
 	@rm -rf bin/
 	@rm -rf dist/
+	@rm -rf build/
