@@ -1,5 +1,8 @@
 name: Update pkg.go.dev Documentation
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
