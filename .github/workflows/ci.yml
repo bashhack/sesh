@@ -11,6 +11,9 @@ jobs:
   test-go:
     name: Test Go Implementation
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false  # Continue with other jobs if one fails
       matrix:
