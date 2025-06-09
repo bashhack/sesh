@@ -29,18 +29,18 @@ comment:
   require_changes: no
 
 ignore:
-  - "internal/*/mocks/**/*"       # All mock packages
-  - "internal/testutil/**/*"      # Test utilities
+  # Match Makefile exclusions exactly
+  - "**/testutil/**/*"            # Test utilities
+  - "**/*mock*"                   # Mock files
+  - "**/provider/interfaces.go"   # Interface-only file
+  - "scripts/**/*"                # Scripts directory
+  - "sesh/cmd/sesh/main.go"      # Main entry point
 
-  - "sesh-cli/cmd/sesh/main.go"   # Main entry point
-
-  - "scripts/**/*"                # Build/helper scripts
+  # Additional exclusions from original config
   - "homebrew/**/*"               # Homebrew-related files
   - "shell/**/*"                  # Shell integration files
-
   - "docs/**/*"                   # Documentation
   - "**/*.md"                     # Markdown files
   - "**/*.org"                    # Org mode files
-
   - "**/*_test.go"                # Test files (coverage shown in code being tested)
   - ".github/**/*"                # GitHub workflow files
