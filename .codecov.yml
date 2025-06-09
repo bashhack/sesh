@@ -42,5 +42,5 @@ ignore:
   - "docs/**/*"                   # Documentation
   - "**/*.md"                     # Markdown files
   - "**/*.org"                    # Org mode files
-  - "**/*_test.go"                # Test files (coverage shown in code being tested)
+  - "**/*_test.go"                # Test files
   - ".github/**/*"                # GitHub workflow files
