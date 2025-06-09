@@ -1,0 +1,72 @@
+version: 2
+project_name: sesh
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    main: ./sesh/cmd/sesh
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    ignore:
+      - goos: windows
+
+archives:
+  - name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: darwin
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - docs/*.md
+      - docs/assets/*.mermaid
+brews:
+  - repository:
+      owner: bashhack
+      name: homebrew-sesh
+    directory: Formula
+    homepage: https://github.com/bashhack/sesh
+    description: An extensible terminal-first authentication toolkit for secure credential workflows
+    license: MIT
+    test: |
+      system "#{bin}/sesh --version"
+    install: |
+      bin.install "sesh"
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: bashhack
+    name: sesh
+  prerelease: auto
+  draft: false
+  name_template: "v{{.Version}}"
