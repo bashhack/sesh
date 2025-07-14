@@ -30,14 +30,18 @@ func copyOSX(text string) error {
 	}
 
 	if err := cmd.Start(); err != nil {
+		pipe.Close()
 		return err
 	}
 
 	if _, err := pipe.Write([]byte(text)); err != nil {
+		pipe.Close()
+		cmd.Wait()
 		return err
 	}
 
 	if err := pipe.Close(); err != nil {
+		cmd.Wait()
 		return err
 	}
 
