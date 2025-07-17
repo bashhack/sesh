@@ -3,6 +3,7 @@ package aws
 import (
 	"encoding/json"
 	"errors"
+	"github.com/bashhack/sesh/internal/testutil"
 	"os"
 	"os/exec"
 	"testing"
@@ -238,17 +239,9 @@ func TestGetFirstMFADevice_Integration(t *testing.T) {
 		t.Skip("Skipping AWS integration test in CI/automated environment")
 	}
 
-	_, err := GetFirstMFADevice("nonexistent-profile-" + randomString(8))
+	randStr, _ := testutil.RandomString(8)
+	_, err := GetFirstMFADevice("nonexistent-profile-" + randStr)
 	if err == nil {
 		t.Error("Expected error for nonexistent profile, got nil")
 	}
-}
-
-func randomString(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-	result := make([]byte, length)
-	for i := range result {
-		result[i] = charset[i%len(charset)]
-	}
-	return string(result)
 }

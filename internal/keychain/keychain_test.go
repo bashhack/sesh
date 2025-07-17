@@ -1,8 +1,6 @@
 package keychain
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"io"
 
@@ -10,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/bashhack/sesh/internal/testutil"
 )
 
 func TestGetSecretBytesSuccess(t *testing.T) {
@@ -449,9 +449,13 @@ func TestGetSecretIntegration(t *testing.T) {
 	execCommand = exec.Command
 	defer func() { execCommand = origExecCommand }()
 
-	nonExistentService := "test-sesh-nonexistent-" + randomString(8)
+	randStr, err := testutil.RandomString(8)
+	if err != nil {
+		t.Fatalf("Failed to generate random string: %v", err)
+	}
+	nonExistentService := "test-sesh-nonexistent-" + randStr
 
-	_, err := GetSecretBytes("", nonExistentService)
+	_, err = GetSecretBytes("", nonExistentService)
 	if err == nil {
 		t.Error("Expected error for non-existent keychain item, got nil")
 	}
@@ -850,13 +854,4 @@ func TestHelperProcess(t *testing.T) {
 		fmt.Print(os.Getenv("MOCK_OUTPUT"))
 		os.Exit(0)
 	}
-}
-
-func randomString(length int) (string, error) {
-	bytes := make([]byte, length)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		return "", err
-	}
-	return base64.URLEncoding.EncodeToString(bytes)[:length], nil
 }

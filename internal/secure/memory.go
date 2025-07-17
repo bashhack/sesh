@@ -89,8 +89,9 @@ func ExecAndCaptureSecure(cmd *exec.Cmd) ([]byte, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		// Zero the buffer before returning error
+		// Zero both buffers before returning error
 		SecureZeroBytes(stdout.Bytes())
+		SecureZeroBytes(stderr.Bytes())
 		return nil, err
 	}
 
@@ -100,8 +101,9 @@ func ExecAndCaptureSecure(cmd *exec.Cmd) ([]byte, error) {
 	secureResult := make([]byte, len(result))
 	copy(secureResult, result)
 
-	// Zero the original buffer to minimize exposure window
+	// Zero both buffers to minimize exposure window
 	SecureZeroBytes(stdout.Bytes())
+	SecureZeroBytes(stderr.Bytes())
 
 	return secureResult, nil
 }

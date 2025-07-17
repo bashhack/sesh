@@ -12,9 +12,21 @@ import (
 )
 
 var (
-	zstdEncoder, _ = zstd.NewWriter(nil)
-	zstdDecoder, _ = zstd.NewReader(nil)
+	zstdEncoder *zstd.Encoder
+	zstdDecoder *zstd.Decoder
 )
+
+func init() {
+	var err error
+	zstdEncoder, err = zstd.NewWriter(nil)
+	if err != nil {
+		panic(fmt.Sprintf("failed to initialize zstd encoder: %v", err))
+	}
+	zstdDecoder, err = zstd.NewReader(nil)
+	if err != nil {
+		panic(fmt.Sprintf("failed to initialize zstd decoder: %v", err))
+	}
+}
 
 // KeychainEntryMeta stores metadata about a keychain entry
 type KeychainEntryMeta struct {
@@ -193,27 +205,7 @@ var saveEntryMetadataImpl = func(entries []KeychainEntryMeta) error {
 
 	err = cmd.Run()
 	if err != nil {
-		// If entry exists, we need to delete and recreate
-		if strings.Contains(err.Error(), "The specified item already exists") {
-			deleteCmd := execCommand("security", "delete-generic-password",
-				"-a", metaAccount,
-				"-s", metaService)
-			_ = deleteCmd.Run() // Ignore errors from delete - we'll try to add anyway
-
-			// Try to add again
-			cmd = execCommand("security", "add-generic-password",
-				"-a", metaAccount,
-				"-s", metaService,
-				"-w", b64Data,
-				"-U",
-				"-T", execPath,
-			)
-			if err = cmd.Run(); err != nil {
-				return fmt.Errorf("failed to update metadata in keychain: %w", err)
-			}
-		} else {
-			return fmt.Errorf("failed to store metadata in keychain: %w", err)
-		}
+		return fmt.Errorf("failed to store metadata in keychain: %w", err)
 	}
 
 	return nil

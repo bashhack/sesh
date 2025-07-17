@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 // execCommand wraps exec.Command to allow for mocking
@@ -66,6 +68,8 @@ func GetSessionToken(profile, serial, code string) (Credentials, error) {
 
 	err := cmd.Run()
 	if err != nil {
+		secure.SecureZeroBytes(stdout.Bytes())
+		secure.SecureZeroBytes(stderr.Bytes())
 		return Credentials{}, fmt.Errorf("failed to run aws sts get-session-token: %w\nArgs: %v\nStderr: %s",
 			err, args, stderr.String())
 	}
@@ -74,8 +78,13 @@ func GetSessionToken(profile, serial, code string) (Credentials, error) {
 
 	var parsed SessionTokenResponse
 	if err := json.Unmarshal(out, &parsed); err != nil {
+		secure.SecureZeroBytes(stdout.Bytes())
+		secure.SecureZeroBytes(stderr.Bytes())
 		return Credentials{}, fmt.Errorf("failed to parse session token response: %w", err)
 	}
+
+	secure.SecureZeroBytes(stdout.Bytes())
+	secure.SecureZeroBytes(stderr.Bytes())
 
 	return parsed.Credentials, nil
 }
