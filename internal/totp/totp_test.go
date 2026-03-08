@@ -190,7 +190,7 @@ func TestValidateAndNormalizeSecret(t *testing.T) {
 			errorMsg:    "secret cannot be empty",
 		},
 		"Too short": {
-			input:       "JBSWY3", // 6 chars
+			input:       "JBSWY3DPEHPK", // 12 chars, just under 13-char minimum
 			shouldError: true,
 			errorMsg:    "secret too short",
 		},

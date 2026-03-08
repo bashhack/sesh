@@ -1,7 +1,6 @@
 package totp
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
 	"time"
@@ -17,21 +16,17 @@ func ValidateAndNormalizeSecret(secret string) (string, error) {
 		return "", fmt.Errorf("secret cannot be empty")
 	}
 
-	// Remove all whitespace (spaces, tabs, newlines)
 	cleaned := strings.ReplaceAll(secret, " ", "")
 	cleaned = strings.ReplaceAll(cleaned, "\t", "")
 	cleaned = strings.ReplaceAll(cleaned, "\n", "")
 	cleaned = strings.ReplaceAll(cleaned, "\r", "")
 
-	// After cleaning whitespace, check if we have anything left
 	if cleaned == "" {
 		return "", fmt.Errorf("secret cannot be empty")
 	}
 
-	// Convert to uppercase (base32 standard)
 	cleaned = strings.ToUpper(cleaned)
 
-	// Validate characters - only A-Z, 2-7, and = are valid in base32
 	for i, char := range cleaned {
 		if !((char >= 'A' && char <= 'Z') || (char >= '2' && char <= '7') || char == '=') {
 			return "", fmt.Errorf("invalid character '%c' at position %d - base32 secrets can only contain A-Z, 2-7, and =", char, i)
@@ -40,11 +35,10 @@ func ValidateAndNormalizeSecret(secret string) (string, error) {
 
 	// Check minimum length - RFC 4226 recommends 128 bits (26 base32 chars),
 	// but many providers use shorter secrets. Accept anything >= 64 bits (13 chars)
-	if len(cleaned) < 8 {
-		return "", fmt.Errorf("secret too short (%d characters) - TOTP secrets should be at least 8 characters", len(cleaned))
+	if len(cleaned) < 13 {
+		return "", fmt.Errorf("secret too short (%d characters) - TOTP secrets should be at least 13 characters (64 bits)", len(cleaned))
 	}
 
-	// Add proper base32 padding if missing
 	// Base32 requires padding to make length a multiple of 8
 	remainder := len(cleaned) % 8
 	if remainder != 0 {
@@ -52,7 +46,6 @@ func ValidateAndNormalizeSecret(secret string) (string, error) {
 		cleaned = cleaned + strings.Repeat("=", padLength)
 	}
 
-	// Validate by attempting to generate a code (this catches structural issues)
 	_, err := Generate(cleaned)
 	if err != nil {
 		return "", fmt.Errorf("secret failed validation test: %w", err)
@@ -99,7 +92,6 @@ func GenerateConsecutiveCodes(secret string) (current string, next string, err e
 		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
 	}
 
-	// Create a copy of the secret we can zero later
 	secretBytes := []byte(secret)
 	defer secure.SecureZeroBytes(secretBytes)
 
@@ -140,35 +132,38 @@ func GenerateForTimeSecure(secret string, t time.Time) (string, error) {
 	return GenerateForTime(secret, t)
 }
 
-// Byte-slice based implementations for improved security
+// stripWhitespaceInPlace removes all whitespace from b in-place and returns
+// the trimmed slice. This avoids extra allocations that can't be zeroed,
+// matching the normalization behavior of ValidateAndNormalizeSecret.
+func stripWhitespaceInPlace(b []byte) []byte {
+	n := 0
+	for _, c := range b {
+		if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			b[n] = c
+			n++
+		}
+	}
+	return b[:n]
+}
 
-// GenerateBytes generates a TOTP code from a byte slice secret
+// GenerateBytes generates a TOTP code from a byte slice secret.
 // The secret is expected to be a byte slice containing a base32-encoded string
 func GenerateBytes(secret []byte) (string, error) {
-	// Check for empty secret
 	if len(secret) == 0 {
 		return "", fmt.Errorf("empty secret provided")
 	}
 
-	// Make a defensive copy to avoid modifying the caller's data
 	secretCopy := make([]byte, len(secret))
 	copy(secretCopy, secret)
 	defer secure.SecureZeroBytes(secretCopy)
 
-	// Remove all whitespace (spaces, tabs, newlines) to match ValidateAndNormalizeSecret behavior
-	secretStr := string(bytes.Map(func(r rune) rune {
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			return -1
-		}
-		return r
-	}, secretCopy))
+	// Strip whitespace in-place to avoid an extra allocation that can't be zeroed
+	secretStr := string(stripWhitespaceInPlace(secretCopy))
 
-	// Check if trimming resulted in empty string
 	if secretStr == "" {
 		return "", fmt.Errorf("secret cannot be empty after trimming whitespace")
 	}
 
-	// Now use the string-based implementation
 	return Generate(secretStr)
 }
 
@@ -179,30 +174,21 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
 	}
 
-	// Check if we have valid input
 	if len(secret) == 0 {
 		return "", "", fmt.Errorf("empty secret provided to GenerateConsecutiveCodesBytes")
 	}
 
-	// Make a defensive copy to avoid modifying the caller's data
 	secretCopy := make([]byte, len(secret))
 	copy(secretCopy, secret)
 	defer secure.SecureZeroBytes(secretCopy)
 
-	// Remove all whitespace (spaces, tabs, newlines) to match ValidateAndNormalizeSecret behavior
-	secretStr := string(bytes.Map(func(r rune) rune {
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			return -1
-		}
-		return r
-	}, secretCopy))
+	// Strip whitespace in-place to avoid an extra allocation that can't be zeroed
+	secretStr := string(stripWhitespaceInPlace(secretCopy))
 
-	// Check if trimming resulted in empty string
 	if secretStr == "" {
 		return "", "", fmt.Errorf("secret cannot be empty after trimming whitespace")
 	}
 
-	// Use the string-based implementation directly to avoid error chain
 	now := time.Now()
 	nextTimeWindow := now.Add(30 * time.Second)
 	opts := totp.ValidateOpts{
@@ -224,29 +210,20 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 // GenerateForTimeBytes generates a TOTP code for a specific time from a byte slice secret
 // The secret is expected to be a byte slice containing a base32-encoded string
 func GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
-	// Check for empty secret
 	if len(secret) == 0 {
 		return "", fmt.Errorf("empty secret provided")
 	}
 
-	// Make a defensive copy to avoid modifying the caller's data
 	secretCopy := make([]byte, len(secret))
 	copy(secretCopy, secret)
 	defer secure.SecureZeroBytes(secretCopy)
 
-	// Remove all whitespace (spaces, tabs, newlines) to match ValidateAndNormalizeSecret behavior
-	secretStr := string(bytes.Map(func(r rune) rune {
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			return -1
-		}
-		return r
-	}, secretCopy))
+	// Strip whitespace in-place to avoid an extra allocation that can't be zeroed
+	secretStr := string(stripWhitespaceInPlace(secretCopy))
 
-	// Check if trimming resulted in empty string
 	if secretStr == "" {
 		return "", fmt.Errorf("secret cannot be empty after trimming whitespace")
 	}
 
-	// Use the string-based implementation
 	return GenerateForTime(secretStr, t)
 }

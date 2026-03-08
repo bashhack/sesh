@@ -2,7 +2,7 @@ package mocks
 
 import "time"
 
-// MockProvider is a mock implementation of the totp.Provider interface
+// MockProvider is a test double for totp.Provider.
 type MockProvider struct {
 	GenerateFunc                      func(secret string) (string, error)
 	GenerateConsecutiveCodesFunc      func(secret string) (current string, next string, err error)
@@ -14,7 +14,7 @@ type MockProvider struct {
 	GenerateForTimeBytesFunc          func(secret []byte, t time.Time) (string, error)
 }
 
-// Generate implements the totp.Provider interface
+// Generate returns a TOTP code, or a zero value if GenerateFunc is not set.
 func (m *MockProvider) Generate(secret string) (string, error) {
 	if m.GenerateFunc == nil {
 		return "", nil
@@ -22,7 +22,7 @@ func (m *MockProvider) Generate(secret string) (string, error) {
 	return m.GenerateFunc(secret)
 }
 
-// GenerateConsecutiveCodes implements the totp.Provider interface
+// GenerateConsecutiveCodes returns consecutive TOTP codes, or zero values if the func is not set.
 func (m *MockProvider) GenerateConsecutiveCodes(secret string) (current string, next string, err error) {
 	if m.GenerateConsecutiveCodesFunc == nil {
 		return "", "", nil
@@ -30,7 +30,7 @@ func (m *MockProvider) GenerateConsecutiveCodes(secret string) (current string, 
 	return m.GenerateConsecutiveCodesFunc(secret)
 }
 
-// GenerateForTime implements the totp.Provider interface
+// GenerateForTime returns a TOTP code for a specific time, or a zero value if the func is not set.
 func (m *MockProvider) GenerateForTime(secret string, t time.Time) (string, error) {
 	if m.GenerateForTimeFunc == nil {
 		return "", nil
@@ -38,7 +38,7 @@ func (m *MockProvider) GenerateForTime(secret string, t time.Time) (string, erro
 	return m.GenerateForTimeFunc(secret, t)
 }
 
-// GenerateSecure implements the totp.Provider interface
+// GenerateSecure returns a TOTP code with best-effort zeroing, or a zero value if the func is not set.
 func (m *MockProvider) GenerateSecure(secret string) (string, error) {
 	if m.GenerateSecureFunc == nil {
 		return "", nil
@@ -46,7 +46,7 @@ func (m *MockProvider) GenerateSecure(secret string) (string, error) {
 	return m.GenerateSecureFunc(secret)
 }
 
-// GenerateForTimeSecure implements the totp.Provider interface
+// GenerateForTimeSecure returns a time-specific TOTP code with best-effort zeroing, or a zero value if the func is not set.
 func (m *MockProvider) GenerateForTimeSecure(secret string, t time.Time) (string, error) {
 	if m.GenerateForTimeSecureFunc == nil {
 		return "", nil
@@ -54,7 +54,7 @@ func (m *MockProvider) GenerateForTimeSecure(secret string, t time.Time) (string
 	return m.GenerateForTimeSecureFunc(secret, t)
 }
 
-// GenerateBytes implements the totp.Provider interface
+// GenerateBytes returns a TOTP code from a byte slice, or a zero value if the func is not set.
 func (m *MockProvider) GenerateBytes(secret []byte) (string, error) {
 	if m.GenerateBytesFunc == nil {
 		return "", nil
@@ -62,7 +62,7 @@ func (m *MockProvider) GenerateBytes(secret []byte) (string, error) {
 	return m.GenerateBytesFunc(secret)
 }
 
-// GenerateConsecutiveCodesBytes implements the totp.Provider interface
+// GenerateConsecutiveCodesBytes returns consecutive TOTP codes from a byte slice, or zero values if the func is not set.
 func (m *MockProvider) GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error) {
 	if m.GenerateConsecutiveCodesBytesFunc == nil {
 		return "", "", nil
@@ -70,7 +70,7 @@ func (m *MockProvider) GenerateConsecutiveCodesBytes(secret []byte) (current str
 	return m.GenerateConsecutiveCodesBytesFunc(secret)
 }
 
-// GenerateForTimeBytes implements the totp.Provider interface
+// GenerateForTimeBytes returns a time-specific TOTP code from a byte slice, or a zero value if the func is not set.
 func (m *MockProvider) GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
 	if m.GenerateForTimeBytesFunc == nil {
 		return "", nil

@@ -2,83 +2,79 @@ package totp
 
 import "time"
 
-// Provider defines the interface for TOTP operations
+// Provider defines the interface for TOTP operations.
 type Provider interface {
-	// Generate generates a single TOTP code
+	// Generate returns a 6-digit TOTP code for the current time.
 	Generate(secret string) (string, error)
 
-	// GenerateConsecutiveCodes generates two consecutive TOTP codes
+	// GenerateConsecutiveCodes returns the current and next 30-second window TOTP codes.
 	GenerateConsecutiveCodes(secret string) (current string, next string, err error)
 
-	// GenerateForTime generates a TOTP code for a specific time
+	// GenerateForTime returns a TOTP code for a specific point in time.
 	GenerateForTime(secret string, t time.Time) (string, error)
 
-	// GenerateSecure is like Generate but securely zeroes the secret after use
+	// GenerateSecure generates a TOTP code and zeroes the secret's byte representation on return.
 	GenerateSecure(secret string) (string, error)
 
-	// GenerateForTimeSecure is like GenerateForTime but securely zeroes the secret after use
+	// GenerateForTimeSecure generates a time-specific TOTP code and zeroes the secret's byte representation on return.
 	GenerateForTimeSecure(secret string, t time.Time) (string, error)
 
-	// More secure variants using byte slices
-
-	// GenerateBytes generates a single TOTP code from a byte slice secret
-	// This allows for proper memory zeroing
+	// GenerateBytes generates a TOTP code from a byte slice, zeroing the copy after use.
 	GenerateBytes(secret []byte) (string, error)
 
-	// GenerateConsecutiveCodesBytes generates two consecutive TOTP codes from a byte slice secret
+	// GenerateConsecutiveCodesBytes generates consecutive TOTP codes from a byte slice, zeroing the copy after use.
 	GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error)
 
-	// GenerateForTimeBytes generates a TOTP code for a specific time from a byte slice secret
+	// GenerateForTimeBytes generates a time-specific TOTP code from a byte slice, zeroing the copy after use.
 	GenerateForTimeBytes(secret []byte, t time.Time) (string, error)
 }
 
-// DefaultProvider is the default implementation using otp library
+// DefaultProvider delegates to the package-level functions using the pquerna/otp library.
 type DefaultProvider struct{}
 
-// Ensure DefaultProvider implements Provider interface
 var _ Provider = (*DefaultProvider)(nil)
 
-// Generate implements the Provider interface
+// Generate returns a 6-digit TOTP code for the current time.
 func (p *DefaultProvider) Generate(secret string) (string, error) {
 	return Generate(secret)
 }
 
-// GenerateConsecutiveCodes implements the Provider interface
+// GenerateConsecutiveCodes returns the current and next 30-second window TOTP codes.
 func (p *DefaultProvider) GenerateConsecutiveCodes(secret string) (current string, next string, err error) {
 	return GenerateConsecutiveCodes(secret)
 }
 
-// GenerateForTime implements the Provider interface
+// GenerateForTime returns a TOTP code for a specific point in time.
 func (p *DefaultProvider) GenerateForTime(secret string, t time.Time) (string, error) {
 	return GenerateForTime(secret, t)
 }
 
-// GenerateSecure implements the Provider interface
+// GenerateSecure generates a TOTP code and zeroes the secret's byte representation on return.
 func (p *DefaultProvider) GenerateSecure(secret string) (string, error) {
 	return GenerateSecure(secret)
 }
 
-// GenerateForTimeSecure implements the Provider interface
+// GenerateForTimeSecure generates a time-specific TOTP code and zeroes the secret's byte representation on return.
 func (p *DefaultProvider) GenerateForTimeSecure(secret string, t time.Time) (string, error) {
 	return GenerateForTimeSecure(secret, t)
 }
 
-// GenerateBytes implements the Provider interface
+// GenerateBytes generates a TOTP code from a byte slice, zeroing the copy after use.
 func (p *DefaultProvider) GenerateBytes(secret []byte) (string, error) {
 	return GenerateBytes(secret)
 }
 
-// GenerateConsecutiveCodesBytes implements the Provider interface
+// GenerateConsecutiveCodesBytes generates consecutive TOTP codes from a byte slice, zeroing the copy after use.
 func (p *DefaultProvider) GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error) {
 	return GenerateConsecutiveCodesBytes(secret)
 }
 
-// GenerateForTimeBytes implements the Provider interface
+// GenerateForTimeBytes generates a time-specific TOTP code from a byte slice, zeroing the copy after use.
 func (p *DefaultProvider) GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
 	return GenerateForTimeBytes(secret, t)
 }
 
-// NewDefaultProvider creates a new DefaultProvider
+// NewDefaultProvider creates a Provider backed by the pquerna/otp library.
 func NewDefaultProvider() Provider {
 	return &DefaultProvider{}
 }
