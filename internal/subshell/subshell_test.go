@@ -83,9 +83,13 @@ func TestFilterEnv(t *testing.T) {
 
 func TestGetShellConfig(t *testing.T) {
 	// Save original env
-	originalShell := os.Getenv("SHELL")
+	originalShell, shellWasSet := os.LookupEnv("SHELL")
 	defer func() {
-		os.Setenv("SHELL", originalShell)
+		if shellWasSet {
+			os.Setenv("SHELL", originalShell)
+		} else {
+			os.Unsetenv("SHELL")
+		}
 	}()
 
 	mockCustomizer := &mockShellCustomizer{
@@ -427,6 +431,14 @@ func TestSetupFallbackShellCustomPrefix(t *testing.T) {
 	newEnv, err := SetupFallbackShell(config, env)
 	if err != nil {
 		t.Fatalf("SetupFallbackShell() error = %v", err)
+	}
+
+	// Clean up temp file
+	for _, e := range newEnv {
+		if strings.HasPrefix(e, "ENV=") {
+			defer os.Remove(strings.TrimPrefix(e, "ENV="))
+			break
+		}
 	}
 
 	for _, e := range newEnv {
