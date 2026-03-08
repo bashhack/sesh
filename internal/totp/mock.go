@@ -11,11 +11,3 @@ var MockGenerateConsecutiveCodes struct {
 	// Enabled indicates whether the mock should be used
 	Enabled bool
 }
-
-// ResetMock resets the mock to its default state
-func ResetMock() {
-	MockGenerateConsecutiveCodes.CurrentCode = ""
-	MockGenerateConsecutiveCodes.NextCode = ""
-	MockGenerateConsecutiveCodes.Error = nil
-	MockGenerateConsecutiveCodes.Enabled = false
-}

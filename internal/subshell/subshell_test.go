@@ -26,7 +26,6 @@ func (m *mockShellCustomizer) GetWelcomeMessage() string     { return m.welcomeM
 
 func TestFilterEnv(t *testing.T) {
 	tests := map[string]struct {
-		name string
 		env  []string
 		key  string
 		want []string
@@ -63,18 +62,18 @@ func TestFilterEnv(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := FilterEnv(tt.env, tt.key)
+			got := FilterEnv(tc.env, tc.key)
 
-			if len(got) != len(tt.want) {
-				t.Errorf("FilterEnv() returned %d items, want %d", len(got), len(tt.want))
+			if len(got) != len(tc.want) {
+				t.Errorf("FilterEnv() returned %d items, want %d", len(got), len(tc.want))
 				return
 			}
 
 			for i, item := range got {
-				if item != tt.want[i] {
-					t.Errorf("FilterEnv()[%d] = %v, want %v", i, item, tt.want[i])
+				if item != tc.want[i] {
+					t.Errorf("FilterEnv()[%d] = %v, want %v", i, item, tc.want[i])
 				}
 			}
 		})
@@ -101,7 +100,6 @@ func TestGetShellConfig(t *testing.T) {
 	}
 
 	tests := map[string]struct {
-		name        string
 		config      Config
 		shell       string
 		wantErr     bool
@@ -233,19 +231,19 @@ func TestGetShellConfig(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			os.Setenv("SHELL", tt.shell)
+			os.Setenv("SHELL", tc.shell)
 
 			var stdout, stderr bytes.Buffer
-			cfg, err := GetShellConfig(tt.config, &stdout, &stderr)
+			cfg, err := GetShellConfig(tc.config, &stdout, &stderr)
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("GetShellConfig() error = %v, wantErr %v", err, tt.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("GetShellConfig() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
 
-			if !tt.wantErr {
+			if !tc.wantErr {
 				// Check common env vars
 				hasSeshActive := false
 				hasSeshService := false
@@ -269,12 +267,12 @@ func TestGetShellConfig(t *testing.T) {
 				if !hasSeshService {
 					t.Error("Expected SESH_SERVICE in environment")
 				}
-				if len(tt.config.Variables) > 0 && !hasVariable {
+				if len(tc.config.Variables) > 0 && !hasVariable {
 					t.Error("Expected custom variables in environment")
 				}
 
-				if tt.checkResult != nil {
-					tt.checkResult(t, cfg)
+				if tc.checkResult != nil {
+					tc.checkResult(t, cfg)
 				}
 			}
 		})

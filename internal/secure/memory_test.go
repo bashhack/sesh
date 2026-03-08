@@ -6,17 +6,16 @@ import (
 )
 
 func TestSecureZeroBytes(t *testing.T) {
-	testCases := []struct {
-		name string
+	tests := map[string]struct {
 		data []byte
 	}{
-		{"nil slice", nil},
-		{"empty slice", []byte{}},
-		{"sample data", []byte("sensitive data")},
+		"nil slice":   {nil},
+		"empty slice": {[]byte{}},
+		"sample data": {[]byte("sensitive data")},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
 			var dataCopy []byte
 			if tc.data != nil {
 				dataCopy = make([]byte, len(tc.data))
@@ -45,16 +44,15 @@ func TestSecureZeroBytes(t *testing.T) {
 func TestSecureZeroString(t *testing.T) {
 	// Note: We can't directly test if the string was zeroed in memory,
 	// but we can at least verify the function runs without errors
-	testCases := []struct {
-		name string
+	tests := map[string]struct {
 		data string
 	}{
-		{"empty string", ""},
-		{"sample string", "sensitive string data"},
+		"empty string":  {""},
+		"sample string": {"sensitive string data"},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
 			// Simply verify no panic occurs
 			SecureZeroString(tc.data)
 		})
@@ -116,22 +114,22 @@ func TestExecAndCaptureSecure(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			cmd := tt.setupCmd()
+			cmd := tc.setupCmd()
 			output, err := ExecAndCaptureSecure(cmd)
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ExecAndCaptureSecure() error = %v, wantErr %v", err, tt.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("ExecAndCaptureSecure() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
 
-			if !tt.wantErr && string(output) != tt.wantOutput {
-				t.Errorf("ExecAndCaptureSecure() output = %v, want %v", string(output), tt.wantOutput)
+			if !tc.wantErr && string(output) != tc.wantOutput {
+				t.Errorf("ExecAndCaptureSecure() output = %v, want %v", string(output), tc.wantOutput)
 			}
 
 			// Verify we got a copy, not the original buffer
-			if !tt.wantErr && len(output) > 0 {
+			if !tc.wantErr && len(output) > 0 {
 				// Modify our copy to ensure it's independent
 				output[0] = 'X'
 				// If this was the original buffer, cmd.Stdout would be modified too
@@ -178,13 +176,13 @@ func TestExecWithSecretInput(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			cmd := tt.setupCmd()
-			err := ExecWithSecretInput(cmd, tt.secret)
+			cmd := tc.setupCmd()
+			err := ExecWithSecretInput(cmd, tc.secret)
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ExecWithSecretInput() error = %v, wantErr %v", err, tt.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("ExecWithSecretInput() error = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
 	}

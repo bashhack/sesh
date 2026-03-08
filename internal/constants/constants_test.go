@@ -88,25 +88,25 @@ func TestGetSeshBinaryPath(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			osExecutable = func() (string, error) {
-				if tt.executableError {
+				if tc.executableError {
 					return "", errors.New("mock error")
 				}
-				return tt.executablePath, nil
+				return tc.executablePath, nil
 			}
 
 			osStat = func(path string) (os.FileInfo, error) {
-				if exists, ok := tt.statResults[path]; ok && exists {
+				if exists, ok := tc.statResults[path]; ok && exists {
 					return nil, nil // We don't need actual FileInfo for this test
 				}
 				return nil, os.ErrNotExist
 			}
 
 			got := GetSeshBinaryPath()
-			if got != tt.want {
-				t.Errorf("GetSeshBinaryPath() = %v, want %v", got, tt.want)
+			if got != tc.want {
+				t.Errorf("GetSeshBinaryPath() = %v, want %v", got, tc.want)
 			}
 		})
 	}
