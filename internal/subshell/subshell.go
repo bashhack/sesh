@@ -32,6 +32,10 @@ type ShellConfig struct {
 }
 
 func GetShellConfig(config Config, stdout, stderr io.Writer) (*ShellConfig, error) {
+	if config.ShellCustomizer == nil {
+		return nil, fmt.Errorf("shell customizer is required")
+	}
+
 	env := os.Environ()
 
 	for key, value := range config.Variables {
@@ -127,7 +131,11 @@ func SetupFallbackShell(config Config, env []string) ([]string, error) {
 		return []string{}, fmt.Errorf("failed to write temp shellrc: %w", writeErr)
 	}
 
-	env = append(env, fmt.Sprintf("PS1=(sesh:%s) $ ", config.ServiceName))
+	prefix := config.ShellCustomizer.GetPromptPrefix()
+	if prefix == "" {
+		prefix = "sesh"
+	}
+	env = append(env, fmt.Sprintf("PS1=(%s:%s) $ ", prefix, config.ServiceName))
 	env = append(env, fmt.Sprintf("ENV=%s", tmpFile.Name())) // For sh shells
 
 	return env, nil

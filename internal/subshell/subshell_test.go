@@ -220,6 +220,13 @@ func TestGetShellConfig(t *testing.T) {
 				}
 			},
 		},
+		"nil shell customizer": {
+			config: Config{
+				ServiceName: "test-service",
+			},
+			shell:   "/bin/zsh",
+			wantErr: true,
+		},
 	}
 
 	for name, tt := range tests {
@@ -402,4 +409,30 @@ func TestSetupFallbackShell(t *testing.T) {
 		// Clean up
 		os.Remove(envFile)
 	}
+}
+
+func TestSetupFallbackShellCustomPrefix(t *testing.T) {
+	mockCustomizer := &mockShellCustomizer{
+		fallbackScript: "# custom prefix test",
+		promptPrefix:   "myapp",
+	}
+
+	config := Config{
+		ServiceName:     "test-service",
+		ShellCustomizer: mockCustomizer,
+	}
+
+	env := []string{"PATH=/usr/bin"}
+
+	newEnv, err := SetupFallbackShell(config, env)
+	if err != nil {
+		t.Fatalf("SetupFallbackShell() error = %v", err)
+	}
+
+	for _, e := range newEnv {
+		if e == "PS1=(myapp:test-service) $ " {
+			return
+		}
+	}
+	t.Error("Expected PS1 with custom prompt prefix 'myapp'")
 }
