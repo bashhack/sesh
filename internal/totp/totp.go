@@ -52,10 +52,7 @@ func ValidateAndNormalizeSecret(secret string) (string, error) {
 		cleaned = cleaned + strings.Repeat("=", padLength)
 	}
 
-	// Validate by attempting to decode (this catches structural issues)
-	testBytes := []byte(cleaned)
-	defer secure.SecureZeroBytes(testBytes)
-
+	// Validate by attempting to generate a code (this catches structural issues)
 	_, err := Generate(cleaned)
 	if err != nil {
 		return "", fmt.Errorf("secret failed validation test: %w", err)
@@ -196,6 +193,11 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 
 	// Basic cleanup - trim whitespace which can cause decode failures
 	secretStr = string(bytes.TrimSpace([]byte(secretStr)))
+
+	// Check if trimming resulted in empty string
+	if secretStr == "" {
+		return "", "", fmt.Errorf("secret cannot be empty after trimming whitespace")
+	}
 
 	// Use the string-based implementation directly to avoid error chain
 	now := time.Now()
