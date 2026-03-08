@@ -76,3 +76,6 @@ Icon?
 
 # Generated files during development
 /tmp/
+
+# Local todo notes
+/todo/
