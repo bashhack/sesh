@@ -155,11 +155,13 @@ func GenerateBytes(secret []byte) (string, error) {
 	copy(secretCopy, secret)
 	defer secure.SecureZeroBytes(secretCopy)
 
-	// Convert to string - the secret is already base32-encoded in string form
-	secretStr := string(secretCopy)
-
-	// Basic cleanup - trim whitespace which can cause decode failures
-	secretStr = string(bytes.TrimSpace([]byte(secretStr)))
+	// Remove all whitespace (spaces, tabs, newlines) to match ValidateAndNormalizeSecret behavior
+	secretStr := string(bytes.Map(func(r rune) rune {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, secretCopy))
 
 	// Check if trimming resulted in empty string
 	if secretStr == "" {
@@ -187,12 +189,13 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 	copy(secretCopy, secret)
 	defer secure.SecureZeroBytes(secretCopy)
 
-	// Convert to string - the secret is already base32-encoded in string form
-	// We're just converting the byte representation back to a string
-	secretStr := string(secretCopy)
-
-	// Basic cleanup - trim whitespace which can cause decode failures
-	secretStr = string(bytes.TrimSpace([]byte(secretStr)))
+	// Remove all whitespace (spaces, tabs, newlines) to match ValidateAndNormalizeSecret behavior
+	secretStr := string(bytes.Map(func(r rune) rune {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, secretCopy))
 
 	// Check if trimming resulted in empty string
 	if secretStr == "" {
@@ -231,11 +234,13 @@ func GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {
 	copy(secretCopy, secret)
 	defer secure.SecureZeroBytes(secretCopy)
 
-	// Convert to string - the secret is already base32-encoded in string form
-	secretStr := string(secretCopy)
-
-	// Basic cleanup - trim whitespace which can cause decode failures
-	secretStr = string(bytes.TrimSpace([]byte(secretStr)))
+	// Remove all whitespace (spaces, tabs, newlines) to match ValidateAndNormalizeSecret behavior
+	secretStr := string(bytes.Map(func(r rune) rune {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, secretCopy))
 
 	// Check if trimming resulted in empty string
 	if secretStr == "" {
