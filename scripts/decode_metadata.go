@@ -30,6 +30,10 @@ func main() {
         if scanner.Scan() {
             b64Data = scanner.Text()
         } else {
+            if err := scanner.Err(); err != nil {
+                fmt.Fprintf(os.Stderr, "Error reading stdin: %v\n", err)
+                os.Exit(1)
+            }
             fmt.Println("Usage: go run decode_metadata.go <base64-data>")
             fmt.Println("   or: echo <base64-data> | go run decode_metadata.go")
             os.Exit(1)
