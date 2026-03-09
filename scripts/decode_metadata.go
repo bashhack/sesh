@@ -1,3 +1,5 @@
+//go:build ignore
+
 // decode_metadata.go - Utility to decode sesh keychain metadata entries
 // The metadata is stored as base64-encoded, zstd-compressed JSON
 //
@@ -25,6 +27,7 @@ func main() {
     } else {
         // Read from stdin if no argument provided
         scanner := bufio.NewScanner(os.Stdin)
+        scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB limit
         if scanner.Scan() {
             b64Data = scanner.Text()
         } else {

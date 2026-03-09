@@ -1,3 +1,5 @@
+//go:build ignore
+
 // mock-totp-service.go - Simulates an external TOTP service for testing sesh
 //
 // Usage:
@@ -16,6 +18,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	
 	"github.com/skip2/go-qrcode"
 )
@@ -101,9 +104,12 @@ func main() {
 	uri := generateTOTPURI(serviceName, accountName, secret)
 	
 	// Print header
-	fmt.Printf("%s╔══════════════════════════════════════════════════════════════╗%s\n", colorGreen, colorReset)
-	fmt.Printf("%s║           Mock TOTP Service: %-30s ║%s\n", colorGreen, serviceName, colorReset)
-	fmt.Printf("%s╚══════════════════════════════════════════════════════════════╝%s\n", colorGreen, colorReset)
+	title := "Mock TOTP Service: " + serviceName
+	padding := len(title) + 4 // 2 spaces on each side
+	border := strings.Repeat("═", padding)
+	fmt.Printf("%s╔%s╗%s\n", colorGreen, border, colorReset)
+	fmt.Printf("%s║  %s  ║%s\n", colorGreen, title, colorReset)
+	fmt.Printf("%s╚%s╝%s\n", colorGreen, border, colorReset)
 	fmt.Println()
 	
 	// Print QR code and secret side by side (Amazon-style)

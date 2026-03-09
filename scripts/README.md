@@ -74,13 +74,17 @@ sesh --service aws --setup
 
 **Usage**:
 ```bash
-go run decode_metadata.go
+# Pass base64 data directly
+go run decode_metadata.go <base64-data>
+
+# Or pipe from keychain
+security find-generic-password -a metadata -s sesh-metadata -w | go run decode_metadata.go
 ```
 
 **What it does**:
-- Reads base64-encoded metadata from keychain
+- Reads base64-encoded, zstd-compressed metadata from keychain
 - Decodes and pretty-prints the JSON structure
-- Helps debug issues with stored TOTP/AWS entries
+- Helps debug issues with stored TOTP/AWS/password entries
 
 ## Testing Workflows
 
@@ -137,15 +141,14 @@ unset MOCK_AWS_FAIL MOCK_AWS_NO_MFA
 - **No credentials needed**: Test without exposing real secrets
 
 ### Building Mock Scripts
-Both Go scripts have dual `main` functions, so they must be run with `go run` or built separately:
+All Go scripts use `//go:build ignore` tags so they are excluded from `go build ./...` and `go vet ./...`. Run or build them individually:
 ```bash
-# DON'T do this - will fail
-go build ./scripts/...
-
-# DO this instead
+# Run directly
 go run scripts/mock-totp-service.go
-# OR
-cd scripts && go build -o mock-totp mock-totp-service.go
+go run scripts/decode_metadata.go
+
+# Or build individually
+cd scripts && go build -o mock-bin/aws mock-aws-cli.go
 ```
 
 ### Cleanup

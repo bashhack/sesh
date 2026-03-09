@@ -1,3 +1,5 @@
+//go:build ignore
+
 // mock-aws-cli.go - Simulates AWS CLI for testing sesh without real AWS setup
 //
 // Usage:
