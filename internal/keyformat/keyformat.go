@@ -56,5 +56,11 @@ func Parse(key, namespace string) ([]string, error) {
 	if remainder == "" {
 		return nil, fmt.Errorf("keyformat: key %q has no segments after namespace", key)
 	}
-	return strings.Split(remainder, "/"), nil
+	segments := strings.Split(remainder, "/")
+	for _, seg := range segments {
+		if seg == "" {
+			return nil, fmt.Errorf("keyformat: key %q contains empty segment", key)
+		}
+	}
+	return segments, nil
 }

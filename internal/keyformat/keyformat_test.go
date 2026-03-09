@@ -137,6 +137,11 @@ func TestParse(t *testing.T) {
 			namespace: "sesh-aws",
 			wantErr:   true,
 		},
+		"consecutive slashes rejected": {
+			key:       "sesh-aws//production",
+			namespace: "sesh-aws",
+			wantErr:   true,
+		},
 	}
 
 	for name, tc := range tests {
