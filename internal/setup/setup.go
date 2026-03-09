@@ -21,13 +21,14 @@ var (
 
 // WizardOptions contains all configurable options for the setup wizard
 type WizardOptions struct {
-	Reader            io.Reader     // Input reader (defaults to os.Stdin)
-	Writer            io.Writer     // Output writer (defaults to os.Stdout)
-	ErrorWriter       io.Writer     // Error writer (defaults to os.Stderr)
-	ExecCommand       CommandRunner // Command runner (defaults to exec.Command)
-	OsExit            func(int)     // Exit function (defaults to os.Exit)
-	SkipClear         bool          // Skip terminal clearing (useful for testing)
-	AppExecutablePath string        // Path to the application executable for keychain binding
+	Reader            io.Reader      // Input reader (defaults to os.Stdin)
+	Writer            io.Writer      // Output writer (defaults to os.Stdout)
+	ErrorWriter       io.Writer      // Error writer (defaults to os.Stderr)
+	ExecCommand       CommandRunner  // Command runner (defaults to exec.Command)
+	OsExit            func(int)      // Exit function (defaults to os.Exit)
+	TOTPProvider      totp.Provider  // TOTP provider (defaults to totp.NewDefaultProvider())
+	SkipClear         bool           // Skip terminal clearing (useful for testing)
+	AppExecutablePath string         // Path to the application executable for keychain binding
 }
 
 // CommandRunner is an interface that abstracts exec.Command functionality
@@ -65,6 +66,9 @@ func runWizardWithOptions(opts WizardOptions) {
 	if opts.OsExit == nil {
 		opts.OsExit = os.Exit
 	}
+	if opts.TOTPProvider == nil {
+		opts.TOTPProvider = totp.NewDefaultProvider()
+	}
 
 	reader := bufio.NewReader(opts.Reader)
 
@@ -87,7 +91,7 @@ func runWizardWithOptions(opts WizardOptions) {
 	secret = strings.TrimSpace(secret)
 
 	fmt.Fprintln(opts.Writer, "\n🔢 Generating two consecutive MFA codes for AWS setup...")
-	currentCode, nextCode, err := totp.GenerateConsecutiveCodes(secret)
+	currentCode, nextCode, err := opts.TOTPProvider.GenerateConsecutiveCodes(secret)
 	if err != nil {
 		fmt.Fprintf(opts.ErrorWriter, "❌ Failed to generate MFA codes: %v\n", err)
 		opts.OsExit(1)

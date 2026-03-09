@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/bashhack/sesh/internal/testutil"
-	"github.com/bashhack/sesh/internal/totp"
+	totpmocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
 
 // MockCommand creates a mock exec.Cmd object
@@ -268,11 +268,11 @@ func TestRunWizardWithOptions_TOTPError(t *testing.T) {
 		SkipClear:   true,
 	}
 
-	totp.MockGenerateConsecutiveCodes.CurrentCode = ""
-	totp.MockGenerateConsecutiveCodes.NextCode = ""
-	totp.MockGenerateConsecutiveCodes.Error = errors.New("invalid TOTP secret")
-	totp.MockGenerateConsecutiveCodes.Enabled = true
-	defer totp.ResetMock()
+	opts.TOTPProvider = &totpmocks.MockProvider{
+		GenerateConsecutiveCodesFunc: func(secret string) (string, string, error) {
+			return "", "", errors.New("invalid TOTP secret")
+		},
+	}
 
 	runWizardWithOptions(opts)
 
@@ -299,11 +299,11 @@ func TestWizardWithDefaultUsername(t *testing.T) {
 		exitCalled = true
 	}
 
-	totp.MockGenerateConsecutiveCodes.CurrentCode = "123456"
-	totp.MockGenerateConsecutiveCodes.NextCode = "654321"
-	totp.MockGenerateConsecutiveCodes.Error = nil
-	totp.MockGenerateConsecutiveCodes.Enabled = true
-	defer totp.ResetMock()
+	mockTOTP := &totpmocks.MockProvider{
+		GenerateConsecutiveCodesFunc: func(secret string) (string, string, error) {
+			return "123456", "654321", nil
+		},
+	}
 
 	whoamiMock := &MockCommand{
 		OutputData: []byte("testuser\n"),
@@ -334,6 +334,7 @@ func TestWizardWithDefaultUsername(t *testing.T) {
 		ErrorWriter:       &errOutput,
 		ExecCommand:       mockRunner,
 		OsExit:            mockExit,
+		TOTPProvider:      mockTOTP,
 		SkipClear:         true,
 		AppExecutablePath: "/usr/local/bin/sesh", // Provide a path so we don't call os.Executable
 	}
@@ -401,11 +402,11 @@ func TestWizardWithWhoamiError(t *testing.T) {
 		exitCode = code
 	}
 
-	totp.MockGenerateConsecutiveCodes.CurrentCode = "123456"
-	totp.MockGenerateConsecutiveCodes.NextCode = "654321"
-	totp.MockGenerateConsecutiveCodes.Error = nil
-	totp.MockGenerateConsecutiveCodes.Enabled = true
-	defer totp.ResetMock()
+	mockTOTP := &totpmocks.MockProvider{
+		GenerateConsecutiveCodesFunc: func(secret string) (string, string, error) {
+			return "123456", "654321", nil
+		},
+	}
 
 	whoamiMock := &MockCommand{
 		OutputData: []byte(""),
@@ -421,12 +422,13 @@ func TestWizardWithWhoamiError(t *testing.T) {
 	}
 
 	opts := WizardOptions{
-		Reader:      input,
-		Writer:      &output,
-		ErrorWriter: &errOutput,
-		ExecCommand: mockRunner,
-		OsExit:      mockExit,
-		SkipClear:   true,
+		Reader:       input,
+		Writer:       &output,
+		ErrorWriter:  &errOutput,
+		ExecCommand:  mockRunner,
+		OsExit:       mockExit,
+		TOTPProvider: mockTOTP,
+		SkipClear:    true,
 	}
 
 	runWizardWithOptions(opts)
@@ -456,11 +458,11 @@ func TestWizardSecurityCommandError(t *testing.T) {
 		exitCode = code
 	}
 
-	totp.MockGenerateConsecutiveCodes.CurrentCode = "123456"
-	totp.MockGenerateConsecutiveCodes.NextCode = "654321"
-	totp.MockGenerateConsecutiveCodes.Error = nil
-	totp.MockGenerateConsecutiveCodes.Enabled = true
-	defer totp.ResetMock()
+	mockTOTP := &totpmocks.MockProvider{
+		GenerateConsecutiveCodesFunc: func(secret string) (string, string, error) {
+			return "123456", "654321", nil
+		},
+	}
 
 	securityMock := &MockCommand{
 		OutputData: []byte(""),
@@ -481,6 +483,7 @@ func TestWizardSecurityCommandError(t *testing.T) {
 		ErrorWriter:       &errOutput,
 		ExecCommand:       mockRunner,
 		OsExit:            mockExit,
+		TOTPProvider:      mockTOTP,
 		SkipClear:         true,
 		AppExecutablePath: "/usr/local/bin/sesh", // Provide a path so we don't call os.Executable
 	}
@@ -510,11 +513,11 @@ func TestWizardMFADevicesError(t *testing.T) {
 		exitCalled = true
 	}
 
-	totp.MockGenerateConsecutiveCodes.CurrentCode = "123456"
-	totp.MockGenerateConsecutiveCodes.NextCode = "654321"
-	totp.MockGenerateConsecutiveCodes.Error = nil
-	totp.MockGenerateConsecutiveCodes.Enabled = true
-	defer totp.ResetMock()
+	mockTOTP := &totpmocks.MockProvider{
+		GenerateConsecutiveCodesFunc: func(secret string) (string, string, error) {
+			return "123456", "654321", nil
+		},
+	}
 
 	securityMock := &MockCommand{
 		OutputData: []byte(""),
@@ -540,6 +543,7 @@ func TestWizardMFADevicesError(t *testing.T) {
 		ErrorWriter:       &errOutput,
 		ExecCommand:       mockRunner,
 		OsExit:            mockExit,
+		TOTPProvider:      mockTOTP,
 		SkipClear:         true,
 		AppExecutablePath: "/usr/local/bin/sesh",
 	}

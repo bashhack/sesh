@@ -90,10 +90,6 @@ func GenerateConsecutiveCodes(secret string) (current string, next string, err e
 
 // GenerateConsecutiveCodesForTime generates two consecutive TOTP codes for a given base time.
 func GenerateConsecutiveCodesForTime(secret string, baseTime time.Time) (current string, next string, err error) {
-	if MockGenerateConsecutiveCodes.Enabled {
-		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
-	}
-
 	secretBytes := []byte(secret)
 	defer secure.SecureZeroBytes(secretBytes)
 
@@ -174,10 +170,6 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 
 // GenerateConsecutiveCodesForTimeBytes generates two consecutive TOTP codes from a byte slice secret for a given base time.
 func GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current string, next string, err error) {
-	if MockGenerateConsecutiveCodes.Enabled {
-		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
-	}
-
 	if len(secret) == 0 {
 		return "", "", fmt.Errorf("empty secret provided to GenerateConsecutiveCodesBytes")
 	}
