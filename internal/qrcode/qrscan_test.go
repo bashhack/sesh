@@ -112,31 +112,31 @@ func TestExtractTOTPInfo(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			secret, issuer, label, err := ExtractTOTPInfo(tt.uri)
+			secret, issuer, label, err := ExtractTOTPInfo(tc.uri)
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ExtractTOTPInfo() error = %v, wantErr %v", err, tt.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("ExtractTOTPInfo() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
 
-			if tt.wantErr && tt.errMsg != "" {
-				if !strings.Contains(err.Error(), tt.errMsg) {
-					t.Errorf("Expected error containing %q, got %q", tt.errMsg, err.Error())
+			if tc.wantErr && tc.errMsg != "" {
+				if !strings.Contains(err.Error(), tc.errMsg) {
+					t.Errorf("Expected error containing %q, got %q", tc.errMsg, err.Error())
 				}
 				return
 			}
 
-			if !tt.wantErr {
-				if secret != tt.wantSecret {
-					t.Errorf("Secret = %v, want %v", secret, tt.wantSecret)
+			if !tc.wantErr {
+				if secret != tc.wantSecret {
+					t.Errorf("Secret = %v, want %v", secret, tc.wantSecret)
 				}
-				if issuer != tt.wantIssuer {
-					t.Errorf("Issuer = %v, want %v", issuer, tt.wantIssuer)
+				if issuer != tc.wantIssuer {
+					t.Errorf("Issuer = %v, want %v", issuer, tc.wantIssuer)
 				}
-				if label != tt.wantLabel {
-					t.Errorf("Label = %v, want %v", label, tt.wantLabel)
+				if label != tc.wantLabel {
+					t.Errorf("Label = %v, want %v", label, tc.wantLabel)
 				}
 			}
 		})
@@ -177,24 +177,24 @@ func TestExtractSecretFromOTPAuthURL(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			secret, err := ExtractSecretFromOTPAuthURL(tt.url)
+			secret, err := ExtractSecretFromOTPAuthURL(tc.url)
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ExtractSecretFromOTPAuthURL() error = %v, wantErr %v", err, tt.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("ExtractSecretFromOTPAuthURL() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
 
-			if tt.wantErr && tt.errMsg != "" {
-				if !strings.Contains(err.Error(), tt.errMsg) {
-					t.Errorf("Expected error containing %q, got %q", tt.errMsg, err.Error())
+			if tc.wantErr && tc.errMsg != "" {
+				if !strings.Contains(err.Error(), tc.errMsg) {
+					t.Errorf("Expected error containing %q, got %q", tc.errMsg, err.Error())
 				}
 				return
 			}
 
-			if !tt.wantErr && secret != tt.wantSecret {
-				t.Errorf("Secret = %v, want %v", secret, tt.wantSecret)
+			if !tc.wantErr && secret != tc.wantSecret {
+				t.Errorf("Secret = %v, want %v", secret, tc.wantSecret)
 			}
 		})
 	}
@@ -252,22 +252,22 @@ func TestScanQRCode(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			execCommand = tt.mockExecCmd
-			if tt.mockStat != nil {
-				osStat = tt.mockStat
+			execCommand = tc.mockExecCmd
+			if tc.mockStat != nil {
+				osStat = tc.mockStat
 			}
 
 			_, err := ScanQRCode()
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ScanQRCode() error = %v, wantErr %v", err, tt.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("ScanQRCode() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
 
-			if tt.wantErr && tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
-				t.Errorf("Expected error containing %q, got %q", tt.errMsg, err.Error())
+			if tc.wantErr && tc.errMsg != "" && !strings.Contains(err.Error(), tc.errMsg) {
+				t.Errorf("Expected error containing %q, got %q", tc.errMsg, err.Error())
 			}
 		})
 	}
@@ -314,20 +314,20 @@ func TestDecodeQRCodeFromFile(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			filename := tt.setup()
-			defer tt.cleanup(filename)
+			filename := tc.setup()
+			defer tc.cleanup(filename)
 
 			_, err := DecodeQRCodeFromFile(filename)
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("DecodeQRCodeFromFile() error = %v, wantErr %v", err, tt.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("DecodeQRCodeFromFile() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
 
-			if tt.wantErr && tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
-				t.Errorf("Expected error containing %q, got %q", tt.errMsg, err.Error())
+			if tc.wantErr && tc.errMsg != "" && !strings.Contains(err.Error(), tc.errMsg) {
+				t.Errorf("Expected error containing %q, got %q", tc.errMsg, err.Error())
 			}
 		})
 	}
@@ -335,22 +335,19 @@ func TestDecodeQRCodeFromFile(t *testing.T) {
 
 func TestDecodeQRCodeFromImage_Errors(t *testing.T) {
 	tests := map[string]struct {
-		name  string
 		image image.Image
 	}{
-		"empty image": {
-			name:  "empty dimensions",
+		"empty dimensions": {
 			image: image.NewGray(image.Rect(0, 0, 0, 0)),
 		},
-		"invalid qr pattern": {
-			name:  "checkerboard pattern",
+		"checkerboard pattern": {
 			image: createCheckerboardImage(100, 100),
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := DecodeQRCodeFromImage(tt.image)
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := DecodeQRCodeFromImage(tc.image)
 			if err == nil {
 				t.Error("Expected error for invalid image")
 			}
@@ -390,12 +387,12 @@ func TestGenerateValidQRCode(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			key, err := totp.Generate(totp.GenerateOpts{
-				Issuer:      tt.issuer,
-				AccountName: tt.accountName,
-				Secret:      []byte(tt.secret),
+				Issuer:      tc.issuer,
+				AccountName: tc.accountName,
+				Secret:      []byte(tc.secret),
 			})
 			if err != nil {
 				t.Fatalf("Failed to generate TOTP key: %v", err)
@@ -451,10 +448,10 @@ func TestDecodeNonTOTPQRCode(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			qrWriter := qrcode.NewQRCodeWriter()
-			bitMatrix, err := qrWriter.Encode(tt.data, gozxing.BarcodeFormat_QR_CODE, 200, 200, nil)
+			bitMatrix, err := qrWriter.Encode(tc.data, gozxing.BarcodeFormat_QR_CODE, 200, 200, nil)
 			if err != nil {
 				t.Fatalf("Failed to encode QR code: %v", err)
 			}
@@ -475,8 +472,8 @@ func TestDecodeNonTOTPQRCode(t *testing.T) {
 				t.Error("Expected error for non-TOTP QR code")
 			}
 
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("Expected error containing %q, got %q", tt.wantErr, err.Error())
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("Expected error containing %q, got %q", tc.wantErr, err.Error())
 			}
 		})
 	}

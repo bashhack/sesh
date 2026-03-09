@@ -508,8 +508,7 @@ func TestGetSecretString(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			whoamiOutput := "testuser"
 
@@ -524,31 +523,31 @@ func TestGetSecretString(t *testing.T) {
 				if command == "whoami" {
 					cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
 				} else if command == "security" {
-					if test.mockError {
+					if tc.mockError {
 						cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 					} else {
-						cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", test.mockOutput))
+						cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", tc.mockOutput))
 					}
 				}
 
 				return cmd
 			}
 
-			secret, err := GetSecretString(test.account, test.service)
+			secret, err := GetSecretString(tc.account, tc.service)
 
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("Expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("Expected no error but got: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), test.wantErrMsg) {
-					t.Errorf("Expected error containing %q, got: %s", test.wantErrMsg, err.Error())
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("Expected error containing %q, got: %s", tc.wantErrMsg, err.Error())
 				}
 			}
-			if !test.wantErr && secret != test.wantSecret {
-				t.Errorf("Expected secret %q, got %q", test.wantSecret, secret)
+			if !tc.wantErr && secret != tc.wantSecret {
+				t.Errorf("Expected secret %q, got %q", tc.wantSecret, secret)
 			}
 		})
 	}
@@ -591,8 +590,7 @@ func TestSetSecretString(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			whoamiOutput := "testuser"
 
@@ -607,7 +605,7 @@ func TestSetSecretString(t *testing.T) {
 				if command == "whoami" {
 					cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
 				} else if command == "security" {
-					if test.mockError {
+					if tc.mockError {
 						cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 					}
 				}
@@ -615,17 +613,17 @@ func TestSetSecretString(t *testing.T) {
 				return cmd
 			}
 
-			err := SetSecretString(test.account, test.service, test.secret)
+			err := SetSecretString(tc.account, tc.service, tc.secret)
 
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("Expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("Expected no error but got: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), test.wantErrMsg) {
-					t.Errorf("Expected error containing %q, got: %s", test.wantErrMsg, err.Error())
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("Expected error containing %q, got: %s", tc.wantErrMsg, err.Error())
 				}
 			}
 		})
@@ -658,8 +656,7 @@ func TestSecretTrimmingForTOTPServices(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			execCommand = func(command string, args ...string) *exec.Cmd {
 				cs := []string{"-test.run=TestHelperProcess", "--", command}
@@ -667,19 +664,19 @@ func TestSecretTrimmingForTOTPServices(t *testing.T) {
 				cmd := exec.Command(os.Args[0], cs...)
 				cmd.Env = []string{
 					"GO_WANT_HELPER_PROCESS=1",
-					fmt.Sprintf("MOCK_OUTPUT=%s", test.mockOutput),
+					fmt.Sprintf("MOCK_OUTPUT=%s", tc.mockOutput),
 				}
 				return cmd
 			}
 
-			secretBytes, err := GetSecretBytes("testuser", test.service)
+			secretBytes, err := GetSecretBytes("testuser", tc.service)
 			if err != nil {
 				t.Errorf("Expected no error but got: %v", err)
 			}
 
 			secret := string(secretBytes)
-			if secret != test.wantSecret {
-				t.Errorf("Expected secret %q, got %q", test.wantSecret, secret)
+			if secret != tc.wantSecret {
+				t.Errorf("Expected secret %q, got %q", tc.wantSecret, secret)
 			}
 		})
 	}

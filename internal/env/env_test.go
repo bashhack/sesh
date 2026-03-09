@@ -57,32 +57,32 @@ func TestGetCurrentUser(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			if tt.setup != nil {
-				tt.setup()
+			if tc.setup != nil {
+				tc.setup()
 			}
-			if tt.teardown != nil {
-				defer tt.teardown()
+			if tc.teardown != nil {
+				defer tc.teardown()
 			}
 
 			execCommand = func(name string, args ...string) *exec.Cmd {
 				if name == "whoami" {
-					if tt.cmdError {
+					if tc.cmdError {
 						return exec.Command("false")
 					}
-					return exec.Command("echo", "-n", tt.cmdOutput)
+					return exec.Command("echo", "-n", tc.cmdOutput)
 				}
 				return originalExecCommand(name, args...)
 			}
 
 			got, err := GetCurrentUser()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("GetCurrentUser() error = %v, wantErr %v", err, tt.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("GetCurrentUser() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
-			if got != tt.want {
-				t.Errorf("GetCurrentUser() = %v, want %v", got, tt.want)
+			if got != tc.want {
+				t.Errorf("GetCurrentUser() = %v, want %v", got, tc.want)
 			}
 		})
 	}

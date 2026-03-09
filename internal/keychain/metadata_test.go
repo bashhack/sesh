@@ -5,20 +5,34 @@ import (
 )
 
 func TestMetadataFunctions(t *testing.T) {
-	services := []struct {
+	tests := map[string]struct {
 		input    string
 		expected string
 	}{
-		{"sesh-totp-gmail", "sesh-totp"},
-		{"sesh-aws-default", "sesh-aws"},
-		{"sesh-unknown-service", "sesh-unknown"},
-		{"invalid", "invalid"},
+		"totp service": {
+			input:    "sesh-totp-gmail",
+			expected: "sesh-totp",
+		},
+		"aws service": {
+			input:    "sesh-aws-default",
+			expected: "sesh-aws",
+		},
+		"unknown service": {
+			input:    "sesh-unknown-service",
+			expected: "sesh-unknown",
+		},
+		"invalid service": {
+			input:    "invalid",
+			expected: "invalid",
+		},
 	}
 
-	for _, s := range services {
-		result := getServicePrefix(s.input)
-		if result != s.expected {
-			t.Errorf("getServicePrefix(%s) = %s, want %s", s.input, result, s.expected)
-		}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			result := getServicePrefix(tc.input)
+			if result != tc.expected {
+				t.Errorf("getServicePrefix(%s) = %s, want %s", tc.input, result, tc.expected)
+			}
+		})
 	}
 }

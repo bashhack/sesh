@@ -64,22 +64,22 @@ func TestCopy(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			runtimeGOOS = tt.goos
-			if tt.mockCmd != nil {
-				execCommand = tt.mockCmd
+			runtimeGOOS = tc.goos
+			if tc.mockCmd != nil {
+				execCommand = tc.mockCmd
 			}
 
-			err := Copy(tt.text)
+			err := Copy(tc.text)
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Copy() error = %v, wantErr %v", err, tt.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Copy() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
 
-			if tt.errMsg != "" && err != nil && err.Error() != tt.errMsg {
-				t.Errorf("Copy() error = %v, want %v", err.Error(), tt.errMsg)
+			if tc.errMsg != "" && err != nil && err.Error() != tc.errMsg {
+				t.Errorf("Copy() error = %v, want %v", err.Error(), tc.errMsg)
 			}
 		})
 	}
@@ -145,14 +145,14 @@ func TestCopyOSX(t *testing.T) {
 		},
 	}
 
-	for name, tt := range tests {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			execCommand = tt.mockCmd
+			execCommand = tc.mockCmd
 
-			err := copyOSX(tt.text)
+			err := copyOSX(tc.text)
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("copyOSX() error = %v, wantErr %v", err, tt.wantErr)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("copyOSX() error = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
 	}
