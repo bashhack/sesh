@@ -141,14 +141,18 @@ unset MOCK_AWS_FAIL MOCK_AWS_NO_MFA
 - **No credentials needed**: Test without exposing real secrets
 
 ### Building Mock Scripts
-All Go scripts use `//go:build ignore` tags so they are excluded from `go build ./...` and `go vet ./...`. Run or build them individually:
-```bash
-# Run directly
-go run scripts/mock-totp-service.go
-go run scripts/decode_metadata.go
+The `scripts/` directory has its own `go.mod` so it is a separate module from the root. This keeps dev-only dependencies (like `go-qrcode`) out of the production binary and ensures `go build ./...` from the root never enters this directory.
 
-# Or build individually
-cd scripts && go build -o mock-bin/aws mock-aws-cli.go
+All scripts must be run from inside the `scripts/` directory:
+```bash
+cd scripts
+
+# Run directly
+go run mock-totp-service.go
+go run decode_metadata.go <base64-data>
+
+# Build the mock AWS CLI
+go build -o mock-bin/aws mock-aws-cli.go
 ```
 
 ### Cleanup

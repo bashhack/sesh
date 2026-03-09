@@ -1,4 +1,3 @@
-//go:build ignore
 
 // decode_metadata.go - Utility to decode sesh keychain metadata entries
 // The metadata is stored as base64-encoded, zstd-compressed JSON

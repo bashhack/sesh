@@ -1,4 +1,3 @@
-//go:build ignore
 
 // mock-totp-service.go - Simulates an external TOTP service for testing sesh
 //
