@@ -25,6 +25,18 @@ func TestMetadataFunctions(t *testing.T) {
 			input:    "invalid",
 			expected: "invalid",
 		},
+		"slash-based password key": {
+			input:    "sesh-password/password/github/alice",
+			expected: "sesh-password",
+		},
+		"slash-based totp key": {
+			input:    "sesh-totp/github/personal",
+			expected: "sesh-totp",
+		},
+		"slash-based aws key": {
+			input:    "sesh-aws/production",
+			expected: "sesh-aws",
+		},
 	}
 
 	for name, tc := range tests {

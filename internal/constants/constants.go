@@ -10,6 +10,8 @@ const (
 
 	TOTPServicePrefix = "sesh-totp"
 
+	PasswordServicePrefix = "sesh-password"
+
 	// MetadataServiceName is the single keychain entry name used to store all metadata
 	MetadataServiceName = "sesh-metadata"
 

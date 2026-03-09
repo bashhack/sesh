@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/klauspost/compress/zstd"
 	"strings"
 
@@ -30,10 +32,12 @@ func init() {
 
 // KeychainEntryMeta stores metadata about a keychain entry
 type KeychainEntryMeta struct {
-	Service     string `json:"service"`      // Full service name
-	Account     string `json:"account"`      // Account name
-	Description string `json:"description"`  // Human-readable description
-	ServiceType string `json:"service_type"` // Service type (aws, totp, etc.)
+	Service     string    `json:"service"`                // Full service name
+	Account     string    `json:"account"`                // Account name
+	Description string    `json:"description"`            // Human-readable description
+	ServiceType string    `json:"service_type"`           // Service type (aws, totp, etc.)
+	CreatedAt   time.Time `json:"created_at"`   // When the entry was first stored
+	UpdatedAt   time.Time `json:"updated_at"`  // When the entry was last modified
 }
 
 // StoreEntryMetadata adds or updates metadata for a keychain entry
@@ -45,12 +49,14 @@ func StoreEntryMetadata(servicePrefix, service, account, description string) err
 	}
 
 	// Check if entry already exists
+	now := time.Now().UTC()
 	found := false
 	for i, entry := range entries {
 		if entry.Service == service && entry.Account == account {
 			// Update existing entry
 			entries[i].Description = description
 			entries[i].ServiceType = servicePrefix
+			entries[i].UpdatedAt = now
 			found = true
 			break
 		}
@@ -63,6 +69,8 @@ func StoreEntryMetadata(servicePrefix, service, account, description string) err
 			Account:     account,
 			Description: description,
 			ServiceType: servicePrefix,
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		})
 	}
 
@@ -216,18 +224,26 @@ func saveEntryMetadata(entries []KeychainEntryMeta) error {
 	return saveEntryMetadataImpl(entries)
 }
 
-// getServicePrefix extracts the service prefix from a full service name
+// getServicePrefix extracts the service prefix (namespace) from a full service key.
+// Keys use "/" to separate the namespace from variable segments
+// (e.g. "sesh-totp/github/personal" → "sesh-totp").
+// Legacy dash-only keys (e.g. "sesh-mfa") are returned as-is.
 func getServicePrefix(service string) string {
-	// Handle known prefixes
+	if idx := strings.Index(service, "/"); idx >= 0 {
+		return service[:idx]
+	}
+
+	// Legacy format fallback — keys with no slash are either fixed names
+	// (e.g. "sesh-mfa") or old dash-delimited compound keys.
+	// Handle known prefixes first.
 	if strings.HasPrefix(service, constants.TOTPServicePrefix) {
 		return constants.TOTPServicePrefix
 	} else if strings.HasPrefix(service, constants.AWSServicePrefix) {
 		return constants.AWSServicePrefix
 	}
 
-	// Handle unknown prefix - expected format is 'sesh-type-name'
+	// For unknown keys, extract first two dash-separated parts as the prefix.
 	parts := strings.SplitN(service, "-", 3)
-	// If we have at least 2 parts, return the first 2 joined by dash as the prefix
 	if len(parts) > 2 {
 		return fmt.Sprintf("%s-%s", parts[0], parts[1])
 	}

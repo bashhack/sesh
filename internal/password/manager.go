@@ -4,9 +4,12 @@ package password
 
 import (
 	"fmt"
+	"log"
 	"time"
 
+	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/keyformat"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
 )
@@ -20,6 +23,13 @@ const (
 	EntryTypeTOTP     EntryType = "totp"
 	EntryTypeNote     EntryType = "secure_note"
 )
+
+var validEntryTypes = map[EntryType]bool{
+	EntryTypePassword: true,
+	EntryTypeAPIKey:   true,
+	EntryTypeTOTP:     true,
+	EntryTypeNote:     true,
+}
 
 // Entry represents a password manager entry
 type Entry struct {
@@ -55,10 +65,13 @@ func (m *Manager) StorePassword(service, username string, password []byte, entry
 	defer secure.SecureZeroBytes(passwordCopy)
 
 	// Generate service key for keychain storage
-	serviceKey := m.generateServiceKey(service, username, entryType)
+	serviceKey, err := m.generateServiceKey(service, username, entryType)
+	if err != nil {
+		return fmt.Errorf("failed to build service key: %w", err)
+	}
 
 	// Store the password securely
-	err := m.keychain.SetSecret(m.user, serviceKey, passwordCopy)
+	err = m.keychain.SetSecret(m.user, serviceKey, passwordCopy)
 	if err != nil {
 		return fmt.Errorf("failed to store password: %w", err)
 	}
@@ -69,10 +82,10 @@ func (m *Manager) StorePassword(service, username string, password []byte, entry
 		description = fmt.Sprintf("%s (%s) for %s", entryType, username, service)
 	}
 
-	err = m.keychain.StoreEntryMetadata("sesh-password", serviceKey, m.user, description)
+	err = m.keychain.StoreEntryMetadata(constants.PasswordServicePrefix, serviceKey, m.user, description)
 	if err != nil {
 		// Non-fatal - password is stored, just metadata failed
-		fmt.Printf("Warning: Failed to store metadata for %s\n", serviceKey)
+		log.Printf("warning: failed to store metadata for %s: %v", serviceKey, err)
 	}
 
 	return nil
@@ -80,7 +93,10 @@ func (m *Manager) StorePassword(service, username string, password []byte, entry
 
 // GetPassword retrieves a password securely
 func (m *Manager) GetPassword(service, username string, entryType EntryType) ([]byte, error) {
-	serviceKey := m.generateServiceKey(service, username, entryType)
+	serviceKey, err := m.generateServiceKey(service, username, entryType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build service key: %w", err)
+	}
 
 	passwordBytes, err := m.keychain.GetSecret(m.user, serviceKey)
 	if err != nil {
@@ -140,14 +156,24 @@ func (m *Manager) GenerateTOTPCode(service, username string) (string, error) {
 
 // ListEntries returns all password entries
 func (m *Manager) ListEntries() ([]Entry, error) {
-	keychainEntries, err := m.keychain.ListEntries("sesh-password")
+	keychainEntries, err := m.keychain.ListEntries(constants.PasswordServicePrefix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list entries: %w", err)
 	}
 
+	// Load metadata once for timestamp lookup
+	metaEntries, err := m.keychain.LoadEntryMetadata(constants.PasswordServicePrefix)
+	if err != nil {
+		metaEntries = nil
+	}
+	metaByKey := make(map[string]keychain.KeychainEntryMeta, len(metaEntries))
+	for _, meta := range metaEntries {
+		metaByKey[meta.Service+":"+meta.Account] = meta
+	}
+
 	entries := make([]Entry, 0, len(keychainEntries))
 	for _, kEntry := range keychainEntries {
-		entry, err := m.parseEntry(kEntry)
+		entry, err := m.parseEntry(kEntry, metaByKey)
 		if err != nil {
 			// Skip invalid entries but don't fail completely
 			continue
@@ -158,37 +184,75 @@ func (m *Manager) ListEntries() ([]Entry, error) {
 	return entries, nil
 }
 
-// DeleteEntry removes a password entry
+// DeleteEntry removes a password entry and its metadata
 func (m *Manager) DeleteEntry(service, username string, entryType EntryType) error {
-	serviceKey := m.generateServiceKey(service, username, entryType)
+	serviceKey, err := m.generateServiceKey(service, username, entryType)
+	if err != nil {
+		return fmt.Errorf("failed to build service key: %w", err)
+	}
 
-	err := m.keychain.DeleteEntry(m.user, serviceKey)
+	err = m.keychain.DeleteEntry(m.user, serviceKey)
 	if err != nil {
 		return fmt.Errorf("failed to delete entry: %w", err)
+	}
+
+	err = m.keychain.RemoveEntryMetadata(constants.PasswordServicePrefix, serviceKey, m.user)
+	if err != nil {
+		// Non-fatal - entry is deleted, just metadata cleanup failed
+		log.Printf("warning: failed to remove metadata for %s: %v", serviceKey, err)
 	}
 
 	return nil
 }
 
-// generateServiceKey creates a unique service key for keychain storage
-func (m *Manager) generateServiceKey(service, username string, entryType EntryType) string {
-	if username == "" {
-		return fmt.Sprintf("sesh-password-%s-%s", entryType, service)
+// generateServiceKey creates a unique service key for keychain storage.
+// Format: sesh-password/{type}/{service}[/{username}]
+func (m *Manager) generateServiceKey(service, username string, entryType EntryType) (string, error) {
+	segments := []string{string(entryType), service}
+	if username != "" {
+		segments = append(segments, username)
 	}
-	return fmt.Sprintf("sesh-password-%s-%s-%s", entryType, service, username)
+	return keyformat.Build(constants.PasswordServicePrefix, segments...)
 }
 
-// parseEntry converts a keychain entry to a password manager entry
-func (m *Manager) parseEntry(kEntry keychain.KeychainEntry) (Entry, error) {
-	// This is a simplified parser - in a real implementation you'd store
-	// structured metadata and parse it properly
+// parseEntry converts a keychain entry to a password manager entry.
+func (m *Manager) parseEntry(kEntry keychain.KeychainEntry, metaByKey map[string]keychain.KeychainEntryMeta) (Entry, error) {
+	if kEntry.Account != m.user {
+		return Entry{}, fmt.Errorf("entry belongs to another account: %s", kEntry.Account)
+	}
+
+	segments, err := keyformat.Parse(kEntry.Service, constants.PasswordServicePrefix)
+	if err != nil {
+		return Entry{}, err
+	}
+
+	if len(segments) < 2 {
+		return Entry{}, fmt.Errorf("invalid service key: expected at least 2 segments, got %d", len(segments))
+	}
+
+	entryType := EntryType(segments[0])
+	if !validEntryTypes[entryType] {
+		return Entry{}, fmt.Errorf("unknown entry type: %s", segments[0])
+	}
+
+	service := segments[1]
+	var username string
+	if len(segments) >= 3 {
+		username = segments[2]
+	}
+
+	key := kEntry.Service + ":" + kEntry.Account
 	entry := Entry{
-		ID:          kEntry.Service + ":" + kEntry.Account,
-		Service:     kEntry.Service,
+		ID:          key,
+		Service:     service,
+		Username:    username,
+		Type:        entryType,
 		Description: kEntry.Description,
-		CreatedAt:   time.Now(),        // Would be stored in metadata
-		UpdatedAt:   time.Now(),        // Would be stored in metadata
-		Type:        EntryTypePassword, // Would be parsed from service key
+	}
+
+	if meta, ok := metaByKey[key]; ok {
+		entry.CreatedAt = meta.CreatedAt
+		entry.UpdatedAt = meta.UpdatedAt
 	}
 
 	return entry, nil
