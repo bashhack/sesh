@@ -9,21 +9,13 @@ func TestMetadataFunctions(t *testing.T) {
 		input    string
 		expected string
 	}{
-		"totp service": {
-			input:    "sesh-totp-gmail",
-			expected: "sesh-totp",
+		"fixed key without segments": {
+			input:    "sesh-mfa",
+			expected: "sesh-mfa",
 		},
-		"aws service": {
-			input:    "sesh-aws-default",
-			expected: "sesh-aws",
-		},
-		"unknown service": {
-			input:    "sesh-unknown-service",
-			expected: "sesh-unknown",
-		},
-		"invalid service": {
-			input:    "invalid",
-			expected: "invalid",
+		"fixed key returned as-is": {
+			input:    "sesh-metadata",
+			expected: "sesh-metadata",
 		},
 		"slash-based password key": {
 			input:    "sesh-password/password/github/alice",

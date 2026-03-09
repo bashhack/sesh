@@ -227,25 +227,10 @@ func saveEntryMetadata(entries []KeychainEntryMeta) error {
 // getServicePrefix extracts the service prefix (namespace) from a full service key.
 // Keys use "/" to separate the namespace from variable segments
 // (e.g. "sesh-totp/github/personal" → "sesh-totp").
-// Legacy dash-only keys (e.g. "sesh-mfa") are returned as-is.
+// Fixed keys without variable segments (e.g. "sesh-mfa") are returned as-is.
 func getServicePrefix(service string) string {
 	if idx := strings.Index(service, "/"); idx >= 0 {
 		return service[:idx]
-	}
-
-	// Legacy format fallback — keys with no slash are either fixed names
-	// (e.g. "sesh-mfa") or old dash-delimited compound keys.
-	// Handle known prefixes first.
-	if strings.HasPrefix(service, constants.TOTPServicePrefix) {
-		return constants.TOTPServicePrefix
-	} else if strings.HasPrefix(service, constants.AWSServicePrefix) {
-		return constants.AWSServicePrefix
-	}
-
-	// For unknown keys, extract first two dash-separated parts as the prefix.
-	parts := strings.SplitN(service, "-", 3)
-	if len(parts) > 2 {
-		return fmt.Sprintf("%s-%s", parts[0], parts[1])
 	}
 	return service
 }
