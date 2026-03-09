@@ -74,7 +74,7 @@ func TestGenerateConsecutiveCodes(t *testing.T) {
 		wantErrMsg string
 	}{
 		"Valid Base32 secret": {
-			secret:     "JBSWY3DPEHPK3PXP", // Standard test secret
+			secret:     "JBSWY3DPEHPK3PXP",
 			wantErrMsg: "",
 		},
 		"Invalid Base32 secret": {
@@ -83,20 +83,18 @@ func TestGenerateConsecutiveCodes(t *testing.T) {
 		},
 		"Empty secret": {
 			secret:     "",
-			wantErrMsg: "", // Note: The TOTP library treats empty strings as valid secrets
+			wantErrMsg: "",
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Skip invalid tests in short mode to prevent errors in quick test runs
 			if tc.wantErrMsg != "" && testing.Short() {
 				t.Skip("Skipping error case in short mode")
 			}
 
 			current, next, err := GenerateConsecutiveCodes(tc.secret)
 
-			// Check error cases
 			if tc.wantErrMsg != "" {
 				if err == nil {
 					t.Errorf("GenerateConsecutiveCodes() error = nil, want error containing %q", tc.wantErrMsg)
@@ -108,33 +106,64 @@ func TestGenerateConsecutiveCodes(t *testing.T) {
 				return
 			}
 
-			// Success case checks
 			if err != nil {
 				t.Errorf("GenerateConsecutiveCodes() unexpected error = %v", err)
 				return
 			}
 
-			// Check that we get two different 6-digit codes
 			if len(current) != 6 || len(next) != 6 {
 				t.Errorf("GenerateConsecutiveCodes() code lengths = %d and %d, want both 6", len(current), len(next))
 			}
+		})
+	}
+}
 
-			// Check that the codes are different (this could theoretically fail in rare cases, but very unlikely)
-			if current == next {
-				t.Errorf("GenerateConsecutiveCodes() current and next codes are identical: %s", current)
-			}
+func TestGenerateConsecutiveCodesForTime(t *testing.T) {
+	tests := map[string]struct {
+		secret   string
+		baseTime time.Time
+		wantErr  bool
+	}{
+		"2026-01-01 midnight UTC": {
+			secret:   "JBSWY3DPEHPK3PXP",
+			baseTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		"2026-06-15 noon UTC": {
+			secret:   "JBSWY3DPEHPK3PXP",
+			baseTime: time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC),
+		},
+		"invalid secret": {
+			secret:   "NOT-VALID-BASE32!@#",
+			baseTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			wantErr:  true,
+		},
+	}
 
-			// Check that both codes contain only digits
-			checkOnlyDigits := func(code, name string) {
-				for _, c := range code {
-					if c < '0' || c > '9' {
-						t.Errorf("GenerateConsecutiveCodes() %s code contains non-digit character: %c", name, c)
-						break
-					}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			current, next, err := GenerateConsecutiveCodesForTime(tc.secret, tc.baseTime)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Error("GenerateConsecutiveCodesForTime() expected error, got nil")
 				}
+				return
 			}
-			checkOnlyDigits(current, "current")
-			checkOnlyDigits(next, "next")
+
+			if err != nil {
+				t.Errorf("GenerateConsecutiveCodesForTime() unexpected error = %v", err)
+				return
+			}
+
+			wantCurrent, _ := GenerateForTime(tc.secret, tc.baseTime)
+			wantNext, _ := GenerateForTime(tc.secret, tc.baseTime.Add(30*time.Second))
+
+			if current != wantCurrent {
+				t.Errorf("GenerateConsecutiveCodesForTime() current = %q, want %q", current, wantCurrent)
+			}
+			if next != wantNext {
+				t.Errorf("GenerateConsecutiveCodesForTime() next = %q, want %q", next, wantNext)
+			}
 		})
 	}
 }
@@ -549,8 +578,62 @@ func TestGenerateConsecutiveCodesBytes(t *testing.T) {
 				if len(next) != 6 {
 					t.Errorf("Expected 6-digit next code, got %d digits: %s", len(next), next)
 				}
-				if current == next {
-					t.Error("Current and next codes should be different")
+			}
+		})
+	}
+}
+
+func TestGenerateConsecutiveCodesForTimeBytes(t *testing.T) {
+	tests := map[string]struct {
+		secret   []byte
+		baseTime time.Time
+		wantErr  bool
+		errMsg   string
+	}{
+		"valid secret": {
+			secret:   []byte("JBSWY3DPEHPK3PXP"),
+			baseTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		"secret with whitespace": {
+			secret:   []byte("  JBSWY3DPEHPK3PXP  "),
+			baseTime: time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC),
+		},
+		"empty secret": {
+			secret:   []byte{},
+			baseTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			wantErr:  true,
+			errMsg:   "empty secret provided",
+		},
+		"nil secret": {
+			secret:   nil,
+			baseTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			wantErr:  true,
+			errMsg:   "empty secret provided",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			current, next, err := GenerateConsecutiveCodesForTimeBytes(tc.secret, tc.baseTime)
+
+			if (err != nil) != tc.wantErr {
+				t.Errorf("GenerateConsecutiveCodesForTimeBytes() error = %v, wantErr %v", err, tc.wantErr)
+				return
+			}
+
+			if tc.wantErr && tc.errMsg != "" && !strings.Contains(err.Error(), tc.errMsg) {
+				t.Errorf("Expected error containing %q, got %q", tc.errMsg, err.Error())
+			}
+
+			if !tc.wantErr {
+				wantCurrent, _ := GenerateForTimeBytes(tc.secret, tc.baseTime)
+				wantNext, _ := GenerateForTimeBytes(tc.secret, tc.baseTime.Add(30*time.Second))
+
+				if current != wantCurrent {
+					t.Errorf("current = %q, want %q", current, wantCurrent)
+				}
+				if next != wantNext {
+					t.Errorf("next = %q, want %q", next, wantNext)
 				}
 			}
 		})

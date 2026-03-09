@@ -16,10 +16,7 @@ func ValidateAndNormalizeSecret(secret string) (string, error) {
 		return "", fmt.Errorf("secret cannot be empty")
 	}
 
-	cleaned := strings.ReplaceAll(secret, " ", "")
-	cleaned = strings.ReplaceAll(cleaned, "\t", "")
-	cleaned = strings.ReplaceAll(cleaned, "\n", "")
-	cleaned = strings.ReplaceAll(cleaned, "\r", "")
+	cleaned := strings.NewReplacer(" ", "", "\t", "", "\n", "", "\r", "").Replace(secret)
 
 	if cleaned == "" {
 		return "", fmt.Errorf("secret cannot be empty")
@@ -86,8 +83,13 @@ func GenerateForTime(secret string, t time.Time) (string, error) {
 	return code, nil
 }
 
-// GenerateConsecutiveCodes generates two consecutive TOTP codes for MFA device setup
+// GenerateConsecutiveCodes generates two consecutive TOTP codes for MFA device setup.
 func GenerateConsecutiveCodes(secret string) (current string, next string, err error) {
+	return GenerateConsecutiveCodesForTime(secret, time.Now())
+}
+
+// GenerateConsecutiveCodesForTime generates two consecutive TOTP codes for a given base time.
+func GenerateConsecutiveCodesForTime(secret string, baseTime time.Time) (current string, next string, err error) {
 	if MockGenerateConsecutiveCodes.Enabled {
 		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
 	}
@@ -95,22 +97,20 @@ func GenerateConsecutiveCodes(secret string) (current string, next string, err e
 	secretBytes := []byte(secret)
 	defer secure.SecureZeroBytes(secretBytes)
 
-	now := time.Now()
-
 	// Note to self here, if I end up making this generic and pulling up into
 	// app init, I'll need to hit all instances of ValidateOpts
 	opts := totp.ValidateOpts{
 		Digits: 6,
 	}
 
-	current, err = totp.GenerateCodeCustom(secret, now, opts)
+	current, err = totp.GenerateCodeCustom(secret, baseTime, opts)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate current TOTP: %w", err)
 	}
 
 	// Typically 30 seconds, so keeping it consistent - but again, could make configurable if need arises
 	// just haven't seen it yet for myself
-	next, err = totp.GenerateCodeCustom(secret, now.Add(30*time.Second), opts)
+	next, err = totp.GenerateCodeCustom(secret, baseTime.Add(30*time.Second), opts)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate next TOTP: %w", err)
 	}
@@ -167,9 +167,13 @@ func GenerateBytes(secret []byte) (string, error) {
 	return Generate(secretStr)
 }
 
-// GenerateConsecutiveCodesBytes generates two consecutive TOTP codes from a byte slice secret
-// The secret is expected to be a byte slice containing a base32-encoded string
+// GenerateConsecutiveCodesBytes generates two consecutive TOTP codes from a byte slice secret.
 func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error) {
+	return GenerateConsecutiveCodesForTimeBytes(secret, time.Now())
+}
+
+// GenerateConsecutiveCodesForTimeBytes generates two consecutive TOTP codes from a byte slice secret for a given base time.
+func GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current string, next string, err error) {
 	if MockGenerateConsecutiveCodes.Enabled {
 		return MockGenerateConsecutiveCodes.CurrentCode, MockGenerateConsecutiveCodes.NextCode, MockGenerateConsecutiveCodes.Error
 	}
@@ -189,18 +193,16 @@ func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, 
 		return "", "", fmt.Errorf("secret cannot be empty after trimming whitespace")
 	}
 
-	now := time.Now()
-	nextTimeWindow := now.Add(30 * time.Second)
 	opts := totp.ValidateOpts{
 		Digits: 6,
 	}
-	current, err = totp.GenerateCodeCustom(secretStr, now, opts)
 
+	current, err = totp.GenerateCodeCustom(secretStr, baseTime, opts)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate current TOTP: %w", err)
 	}
 
-	next, err = totp.GenerateCodeCustom(secretStr, nextTimeWindow, opts)
+	next, err = totp.GenerateCodeCustom(secretStr, baseTime.Add(30*time.Second), opts)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to generate next TOTP: %w", err)
 	}

@@ -43,16 +43,34 @@ func TestDefaultProviderGenerateConsecutiveCodes(t *testing.T) {
 		t.Errorf("GenerateConsecutiveCodes failed with error: %v", err)
 	}
 
-	if code1 == "" {
-		t.Error("First code is empty")
+	if len(code1) != 6 {
+		t.Errorf("First code length = %d, want 6", len(code1))
 	}
-	if code2 == "" {
-		t.Error("Second code is empty")
+	if len(code2) != 6 {
+		t.Errorf("Second code length = %d, want 6", len(code2))
+	}
+}
+
+func TestDefaultProviderGenerateConsecutiveCodesForTime(t *testing.T) {
+	testSecret := "JBSWY3DPEHPK3PXP"
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	provider := NewDefaultProvider()
+	current, next, err := provider.GenerateConsecutiveCodesForTime(testSecret, baseTime)
+
+	if err != nil {
+		t.Errorf("GenerateConsecutiveCodesForTime failed with error: %v", err)
+		return
 	}
 
-	// Check that they're different (should be, as they're for different time periods)
-	if code1 == code2 {
-		t.Errorf("Expected different codes, got %s and %s", code1, code2)
+	wantCurrent, _ := provider.GenerateForTime(testSecret, baseTime)
+	wantNext, _ := provider.GenerateForTime(testSecret, baseTime.Add(30*time.Second))
+
+	if current != wantCurrent {
+		t.Errorf("current = %q, want %q", current, wantCurrent)
+	}
+	if next != wantNext {
+		t.Errorf("next = %q, want %q", next, wantNext)
 	}
 }
 
@@ -148,16 +166,34 @@ func TestDefaultProviderGenerateConsecutiveCodesBytes(t *testing.T) {
 		t.Errorf("GenerateConsecutiveCodesBytes failed with error: %v", err)
 	}
 
-	if code1 == "" {
-		t.Error("First code is empty")
+	if len(code1) != 6 {
+		t.Errorf("First code length = %d, want 6", len(code1))
 	}
-	if code2 == "" {
-		t.Error("Second code is empty")
+	if len(code2) != 6 {
+		t.Errorf("Second code length = %d, want 6", len(code2))
+	}
+}
+
+func TestDefaultProviderGenerateConsecutiveCodesForTimeBytes(t *testing.T) {
+	testSecret := []byte("JBSWY3DPEHPK3PXP")
+	baseTime := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	provider := NewDefaultProvider()
+	current, next, err := provider.GenerateConsecutiveCodesForTimeBytes(testSecret, baseTime)
+
+	if err != nil {
+		t.Errorf("GenerateConsecutiveCodesForTimeBytes failed with error: %v", err)
+		return
 	}
 
-	// Check that they're different (should be, as they're for different time periods)
-	if code1 == code2 {
-		t.Errorf("Expected different codes, got %s and %s", code1, code2)
+	wantCurrent, _ := provider.GenerateForTimeBytes(testSecret, baseTime)
+	wantNext, _ := provider.GenerateForTimeBytes(testSecret, baseTime.Add(30*time.Second))
+
+	if current != wantCurrent {
+		t.Errorf("current = %q, want %q", current, wantCurrent)
+	}
+	if next != wantNext {
+		t.Errorf("next = %q, want %q", next, wantNext)
 	}
 }
 
