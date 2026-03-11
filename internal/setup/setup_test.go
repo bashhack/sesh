@@ -161,12 +161,11 @@ func TestTOTPSetupHandler_promptForServiceName(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create handler with mock reader
 			handler := &TOTPSetupHandler{
-				reader: bufio.NewReader(strings.NewReader(test.input)),
+				reader: bufio.NewReader(strings.NewReader(tc.input)),
 			}
 
 			// Capture stdout
@@ -190,20 +189,20 @@ func TestTOTPSetupHandler_promptForServiceName(t *testing.T) {
 			}
 
 			// Check result
-			if result != test.wantResult {
-				t.Errorf("promptForServiceName() result = %v, want %v", result, test.wantResult)
+			if result != tc.wantResult {
+				t.Errorf("promptForServiceName() result = %v, want %v", result, tc.wantResult)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("promptForServiceName() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("promptForServiceName() unexpected error: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if err.Error() != test.wantErrMsg {
-					t.Errorf("error message = %v, want %v", err.Error(), test.wantErrMsg)
+			if tc.wantErrMsg != "" && err != nil {
+				if err.Error() != tc.wantErrMsg {
+					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
 				}
 			}
 		})
@@ -233,12 +232,11 @@ func TestTOTPSetupHandler_promptForProfile(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create handler with mock reader
 			handler := &TOTPSetupHandler{
-				reader: bufio.NewReader(strings.NewReader(test.input)),
+				reader: bufio.NewReader(strings.NewReader(tc.input)),
 			}
 
 			// Capture stdout
@@ -262,8 +260,8 @@ func TestTOTPSetupHandler_promptForProfile(t *testing.T) {
 			}
 
 			// Check result
-			if result != test.wantResult {
-				t.Errorf("promptForProfile() result = %v, want %v", result, test.wantResult)
+			if result != tc.wantResult {
+				t.Errorf("promptForProfile() result = %v, want %v", result, tc.wantResult)
 			}
 
 			// Should never error
@@ -316,12 +314,11 @@ func TestTOTPSetupHandler_promptForCaptureMethod(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create handler with mock reader
 			handler := &TOTPSetupHandler{
-				reader: bufio.NewReader(strings.NewReader(test.input)),
+				reader: bufio.NewReader(strings.NewReader(tc.input)),
 			}
 
 			// Capture stdout
@@ -353,20 +350,20 @@ func TestTOTPSetupHandler_promptForCaptureMethod(t *testing.T) {
 			}
 
 			// Check result
-			if result != test.wantResult {
-				t.Errorf("promptForCaptureMethod() result = %v, want %v", result, test.wantResult)
+			if result != tc.wantResult {
+				t.Errorf("promptForCaptureMethod() result = %v, want %v", result, tc.wantResult)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("promptForCaptureMethod() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("promptForCaptureMethod() unexpected error: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if err.Error() != test.wantErrMsg {
-					t.Errorf("error message = %v, want %v", err.Error(), test.wantErrMsg)
+			if tc.wantErrMsg != "" && err != nil {
+				if err.Error() != tc.wantErrMsg {
+					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
 				}
 			}
 		})
@@ -396,23 +393,22 @@ func TestTOTPSetupHandler_captureTOTPSecret(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			handler := &TOTPSetupHandler{}
 
-			_, err := handler.captureTOTPSecret(test.choice)
+			_, err := handler.captureTOTPSecret(tc.choice)
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("captureTOTPSecret() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("captureTOTPSecret() unexpected error: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if err.Error() != test.wantErrMsg {
-					t.Errorf("error message = %v, want %v", err.Error(), test.wantErrMsg)
+			if tc.wantErrMsg != "" && err != nil {
+				if err.Error() != tc.wantErrMsg {
+					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
 				}
 			}
 		})
@@ -429,22 +425,25 @@ func TestTOTPSetupHandler_showTOTPSetupCompletionMessage(t *testing.T) {
 			serviceName: "github",
 			profile:     "",
 			wantOutput: []string{
-				"✅ Setup complete! You can now use 'sesh --service totp --service-name github' to generate TOTP codes.",
-				"Use 'sesh --service totp --service-name github --clip' to copy the code to clipboard.",
+				"✅ Setup complete! Generate TOTP codes with:",
+				"sesh --service totp --service-name 'github'",
+				"Copy to clipboard with:",
+				"sesh --service totp --service-name 'github' --clip",
 			},
 		},
 		"service with profile": {
 			serviceName: "github",
 			profile:     "work",
 			wantOutput: []string{
-				"✅ Setup complete! You can now use 'sesh --service totp --service-name github --profile work' to generate TOTP codes.",
-				"Use 'sesh --service totp --service-name github --clip' to copy the code to clipboard.",
+				"✅ Setup complete! Generate TOTP codes with:",
+				"sesh --service totp --service-name 'github' --profile 'work'",
+				"Copy to clipboard with:",
+				"sesh --service totp --service-name 'github' --profile 'work' --clip",
 			},
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			handler := &TOTPSetupHandler{}
 
@@ -453,7 +452,7 @@ func TestTOTPSetupHandler_showTOTPSetupCompletionMessage(t *testing.T) {
 			r, w, _ := os.Pipe()
 			os.Stdout = w
 
-			handler.showTOTPSetupCompletionMessage(test.serviceName, test.profile)
+			handler.showTOTPSetupCompletionMessage(tc.serviceName, tc.profile)
 
 			w.Close()
 			os.Stdout = oldStdout
@@ -464,7 +463,7 @@ func TestTOTPSetupHandler_showTOTPSetupCompletionMessage(t *testing.T) {
 			output := buf.String()
 
 			// Check expected output
-			for _, expected := range test.wantOutput {
+			for _, expected := range tc.wantOutput {
 				if !strings.Contains(output, expected) {
 					t.Errorf("Expected output not found: %q", expected)
 				}
@@ -525,12 +524,11 @@ func TestAWSSetupHandler_createServiceName(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := handler.createServiceName(test.prefix, test.profile)
-			if got != test.want {
-				t.Errorf("createServiceName(%q, %q) = %v, want %v", test.prefix, test.profile, got, test.want)
+			got := handler.createServiceName(tc.prefix, tc.profile)
+			if got != tc.want {
+				t.Errorf("createServiceName(%q, %q) = %v, want %v", tc.prefix, tc.profile, got, tc.want)
 			}
 		})
 	}
@@ -566,12 +564,11 @@ func TestTOTPSetupHandler_createTOTPServiceName(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := handler.createTOTPServiceName(test.serviceName, test.profile)
-			if got != test.want {
-				t.Errorf("createTOTPServiceName(%q, %q) = %v, want %v", test.serviceName, test.profile, got, test.want)
+			got := handler.createTOTPServiceName(tc.serviceName, tc.profile)
+			if got != tc.want {
+				t.Errorf("createTOTPServiceName(%q, %q) = %v, want %v", tc.serviceName, tc.profile, got, tc.want)
 			}
 		})
 	}
@@ -606,13 +603,12 @@ func TestAWSSetupHandler_createAWSCommand(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			cmd := handler.createAWSCommand(test.profile, test.args...)
+			cmd := handler.createAWSCommand(tc.profile, tc.args...)
 
 			// Check command name
-			if cmd.Path != test.wantCmd {
+			if cmd.Path != tc.wantCmd {
 				// The command might be resolved to full path, so check just the base name
 				base := cmd.Path
 				if idx := len(cmd.Path) - 1; idx >= 0 {
@@ -623,17 +619,17 @@ func TestAWSSetupHandler_createAWSCommand(t *testing.T) {
 						}
 					}
 				}
-				if base != test.wantCmd {
-					t.Errorf("command = %v, want %v", base, test.wantCmd)
+				if base != tc.wantCmd {
+					t.Errorf("command = %v, want %v", base, tc.wantCmd)
 				}
 			}
 
 			// Check arguments - skip the first argument which is the command itself
 			gotArgs := cmd.Args[1:]
-			if len(gotArgs) != len(test.wantArgs) {
-				t.Errorf("args length = %d, want %d", len(gotArgs), len(test.wantArgs))
+			if len(gotArgs) != len(tc.wantArgs) {
+				t.Errorf("args length = %d, want %d", len(gotArgs), len(tc.wantArgs))
 			}
-			for i, want := range test.wantArgs {
+			for i, want := range tc.wantArgs {
 				if i < len(gotArgs) && gotArgs[i] != want {
 					t.Errorf("args[%d] = %v, want %v", i, gotArgs[i], want)
 				}
@@ -680,12 +676,11 @@ func TestAWSSetupHandler_promptForMFAARN(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Create handler with mock reader
 			handler := &AWSSetupHandler{
-				reader: bufio.NewReader(strings.NewReader(test.userInput)),
+				reader: bufio.NewReader(strings.NewReader(tc.userInput)),
 			}
 
 			// Capture stdout
@@ -704,26 +699,26 @@ func TestAWSSetupHandler_promptForMFAARN(t *testing.T) {
 			output := buf.String()
 
 			// Check ARN
-			if arn != test.wantARN {
-				t.Errorf("promptForMFAARN() arn = %v, want %v", arn, test.wantARN)
+			if arn != tc.wantARN {
+				t.Errorf("promptForMFAARN() arn = %v, want %v", arn, tc.wantARN)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("promptForMFAARN() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("promptForMFAARN() unexpected error: %v", err)
 			}
 
 			// Verify that appropriate error messages were shown
-			if strings.Contains(test.userInput, "\n\n") {
-				// Empty input was provided
+			if strings.HasPrefix(tc.userInput, "\n") {
+				// Empty input was provided as first line
 				if !strings.Contains(output, "MFA ARN cannot be empty") {
 					t.Error("Expected empty ARN error message")
 				}
 			}
-			if strings.Contains(test.userInput, "not-an-arn") || strings.Contains(test.userInput, ":s3:") || strings.Contains(test.userInput, ":user/") {
+			if strings.Contains(tc.userInput, "not-an-arn") || strings.Contains(tc.userInput, ":s3:") || strings.Contains(tc.userInput, ":user/") {
 				// Invalid format was provided
 				if !strings.Contains(output, "Invalid ARN format") {
 					t.Error("Expected invalid ARN format error message")
@@ -767,15 +762,14 @@ func TestTOTPSetupHandler_captureManualEntry(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Mock readPassword
 			readPassword = func(fd int) ([]byte, error) {
-				if test.readError != nil {
-					return nil, test.readError
+				if tc.readError != nil {
+					return nil, tc.readError
 				}
-				return []byte(test.secretInput), nil
+				return []byte(tc.secretInput), nil
 			}
 
 			handler := &TOTPSetupHandler{
@@ -803,20 +797,20 @@ func TestTOTPSetupHandler_captureManualEntry(t *testing.T) {
 			}
 
 			// Check secret
-			if secret != test.wantSecret {
-				t.Errorf("captureManualEntry() secret = %v, want %v", secret, test.wantSecret)
+			if secret != tc.wantSecret {
+				t.Errorf("captureManualEntry() secret = %v, want %v", secret, tc.wantSecret)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("captureManualEntry() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("captureManualEntry() unexpected error: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), test.wantErrMsg) {
-					t.Errorf("error message = %v, want to contain %v", err.Error(), test.wantErrMsg)
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
 				}
 			}
 		})
@@ -861,8 +855,7 @@ func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Mock execCommand
 			execCommand = func(command string, args ...string) *exec.Cmd {
@@ -871,9 +864,9 @@ func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
 				cmd := exec.Command(os.Args[0], cs...)
 				cmd.Env = []string{
 					"GO_WANT_HELPER_PROCESS=1",
-					"MOCK_OUTPUT=" + test.commandOutput,
+					"MOCK_OUTPUT=" + tc.commandOutput,
 				}
-				if test.commandError {
+				if tc.commandError {
 					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 				}
 				return cmd
@@ -883,23 +876,23 @@ func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader("")),
 			}
 
-			userArn, err := handler.verifyAWSCredentials(test.profile)
+			userArn, err := handler.verifyAWSCredentials(tc.profile)
 
 			// Check user ARN
-			if userArn != test.wantUserArn {
-				t.Errorf("verifyAWSCredentials() userArn = %v, want %v", userArn, test.wantUserArn)
+			if userArn != tc.wantUserArn {
+				t.Errorf("verifyAWSCredentials() userArn = %v, want %v", userArn, tc.wantUserArn)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("verifyAWSCredentials() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("verifyAWSCredentials() unexpected error: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), test.wantErrMsg) {
-					t.Errorf("error message = %v, want to contain %v", err.Error(), test.wantErrMsg)
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
 				}
 			}
 		})
@@ -940,15 +933,14 @@ func TestAWSSetupHandler_captureAWSManualEntry(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Mock readPassword
 			readPassword = func(fd int) ([]byte, error) {
-				if test.readError != nil {
-					return nil, test.readError
+				if tc.readError != nil {
+					return nil, tc.readError
 				}
-				return []byte(test.secretInput), nil
+				return []byte(tc.secretInput), nil
 			}
 
 			handler := &AWSSetupHandler{
@@ -976,20 +968,20 @@ func TestAWSSetupHandler_captureAWSManualEntry(t *testing.T) {
 			}
 
 			// Check secret
-			if secret != test.wantSecret {
-				t.Errorf("captureAWSManualEntry() secret = %v, want %v", secret, test.wantSecret)
+			if secret != tc.wantSecret {
+				t.Errorf("captureAWSManualEntry() secret = %v, want %v", secret, tc.wantSecret)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("captureAWSManualEntry() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("captureAWSManualEntry() unexpected error: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), test.wantErrMsg) {
-					t.Errorf("error message = %v, want to contain %v", err.Error(), test.wantErrMsg)
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
 				}
 			}
 		})
@@ -1030,15 +1022,14 @@ func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Mock readPassword
 			readPassword = func(fd int) ([]byte, error) {
-				if test.readError != nil {
-					return nil, test.readError
+				if tc.readError != nil {
+					return nil, tc.readError
 				}
-				return []byte(test.secretInput), nil
+				return []byte(tc.secretInput), nil
 			}
 
 			handler := &AWSSetupHandler{
@@ -1066,20 +1057,20 @@ func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
 			}
 
 			// Check secret
-			if secret != test.wantSecret {
-				t.Errorf("captureMFASecret() secret = %v, want %v", secret, test.wantSecret)
+			if secret != tc.wantSecret {
+				t.Errorf("captureMFASecret() secret = %v, want %v", secret, tc.wantSecret)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("captureMFASecret() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("captureMFASecret() unexpected error: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), test.wantErrMsg) {
-					t.Errorf("error message = %v, want to contain %v", err.Error(), test.wantErrMsg)
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
 				}
 			}
 		})
@@ -1123,11 +1114,10 @@ func TestAWSSetupHandler_promptForMFASetupMethod(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			handler := &AWSSetupHandler{
-				reader: bufio.NewReader(strings.NewReader(test.input)),
+				reader: bufio.NewReader(strings.NewReader(tc.input)),
 			}
 
 			// Capture stdout
@@ -1151,20 +1141,20 @@ func TestAWSSetupHandler_promptForMFASetupMethod(t *testing.T) {
 			}
 
 			// Check choice
-			if choice != test.wantChoice {
-				t.Errorf("promptForMFASetupMethod() choice = %v, want %v", choice, test.wantChoice)
+			if choice != tc.wantChoice {
+				t.Errorf("promptForMFASetupMethod() choice = %v, want %v", choice, tc.wantChoice)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("promptForMFASetupMethod() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("promptForMFASetupMethod() unexpected error: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if err.Error() != test.wantErrMsg {
-					t.Errorf("error message = %v, want %v", err.Error(), test.wantErrMsg)
+			if tc.wantErrMsg != "" && err != nil {
+				if err.Error() != tc.wantErrMsg {
+					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
 				}
 			}
 		})
@@ -1196,8 +1186,7 @@ func TestAWSSetupHandler_showSetupCompletionMessage(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			handler := &AWSSetupHandler{}
 
@@ -1206,7 +1195,7 @@ func TestAWSSetupHandler_showSetupCompletionMessage(t *testing.T) {
 			r, w, _ := os.Pipe()
 			os.Stdout = w
 
-			handler.showSetupCompletionMessage(test.profile)
+			handler.showSetupCompletionMessage(tc.profile)
 
 			w.Close()
 			os.Stdout = oldStdout
@@ -1217,7 +1206,7 @@ func TestAWSSetupHandler_showSetupCompletionMessage(t *testing.T) {
 			output := buf.String()
 
 			// Check expected content
-			for _, expected := range test.wantContains {
+			for _, expected := range tc.wantContains {
 				if !strings.Contains(output, expected) {
 					t.Errorf("Expected output to contain: %q", expected)
 				}
@@ -1254,11 +1243,10 @@ func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			handler := &AWSSetupHandler{
-				reader: bufio.NewReader(strings.NewReader(test.readerInput)),
+				reader: bufio.NewReader(strings.NewReader(tc.readerInput)),
 			}
 
 			// Capture stdout
@@ -1266,7 +1254,7 @@ func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
 			r, w, _ := os.Pipe()
 			os.Stdout = w
 
-			err := handler.setupMFAConsole(test.secret)
+			err := handler.setupMFAConsole(tc.secret)
 
 			w.Close()
 			os.Stdout = oldStdout
@@ -1277,15 +1265,15 @@ func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
 			output := buf.String()
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("setupMFAConsole() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("setupMFAConsole() unexpected error: %v", err)
 			}
 
 			// Check expected content
-			for _, expected := range test.wantContains {
+			for _, expected := range tc.wantContains {
 				if !strings.Contains(output, expected) {
 					t.Errorf("Expected output to contain: %q", expected)
 				}
@@ -1355,25 +1343,24 @@ func TestCaptureQRWithRetry(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			scanCallCount := 0
 
 			// Mock scanQRCode
 			scanQRCode = func() (string, error) {
-				if scanCallCount < len(test.scanResults) {
-					err := test.scanResults[scanCallCount]
+				if scanCallCount < len(tc.scanResults) {
+					err := tc.scanResults[scanCallCount]
 					scanCallCount++
 					if err != nil {
 						return "", err
 					}
-					return test.scanSecret, nil
+					return tc.scanSecret, nil
 				}
 				return "", errors.New("unexpected scan call")
 			}
 
-			reader := bufio.NewReader(strings.NewReader(test.readerInput))
+			reader := bufio.NewReader(strings.NewReader(tc.readerInput))
 
 			// Capture stdout
 			oldStdout := os.Stdout
@@ -1391,20 +1378,20 @@ func TestCaptureQRWithRetry(t *testing.T) {
 			output := buf.String()
 
 			// Check scan was called expected number of times
-			if scanCallCount != test.wantScanCalls {
-				t.Errorf("scanQRCode called %d times, want %d", scanCallCount, test.wantScanCalls)
+			if scanCallCount != tc.wantScanCalls {
+				t.Errorf("scanQRCode called %d times, want %d", scanCallCount, tc.wantScanCalls)
 			}
 
 			// Check secret
-			if secret != test.wantSecret {
-				t.Errorf("captureQRWithRetry() secret = %v, want %v", secret, test.wantSecret)
+			if secret != tc.wantSecret {
+				t.Errorf("captureQRWithRetry() secret = %v, want %v", secret, tc.wantSecret)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("captureQRWithRetry() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("captureQRWithRetry() unexpected error: %v", err)
 			}
 
@@ -1450,12 +1437,11 @@ func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Mock scanQRCode
 			scanQRCode = func() (string, error) {
-				if test.scanSuccess {
+				if tc.scanSuccess {
 					return "QR_SECRET", nil
 				}
 				return "", errors.New("scan failed")
@@ -1463,11 +1449,11 @@ func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
 
 			// Mock readPassword
 			readPassword = func(fd int) ([]byte, error) {
-				return []byte(test.passwordInput), nil
+				return []byte(tc.passwordInput), nil
 			}
 
 			handler := &TOTPSetupHandler{
-				reader: bufio.NewReader(strings.NewReader(test.readerInput)),
+				reader: bufio.NewReader(strings.NewReader(tc.readerInput)),
 			}
 
 			// Capture stdout
@@ -1481,15 +1467,15 @@ func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
 			os.Stdout = oldStdout
 
 			// Check secret
-			if secret != test.wantSecret {
-				t.Errorf("captureQRCodeWithFallback() secret = %v, want %v", secret, test.wantSecret)
+			if secret != tc.wantSecret {
+				t.Errorf("captureQRCodeWithFallback() secret = %v, want %v", secret, tc.wantSecret)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("captureQRCodeWithFallback() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("captureQRCodeWithFallback() unexpected error: %v", err)
 			}
 		})
@@ -1528,12 +1514,11 @@ func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Mock scanQRCode
 			scanQRCode = func() (string, error) {
-				if test.scanSuccess {
+				if tc.scanSuccess {
 					return "AWS_QR_SECRET", nil
 				}
 				return "", errors.New("scan failed")
@@ -1541,11 +1526,11 @@ func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
 
 			// Mock readPassword
 			readPassword = func(fd int) ([]byte, error) {
-				return []byte(test.passwordInput), nil
+				return []byte(tc.passwordInput), nil
 			}
 
 			handler := &AWSSetupHandler{
-				reader: bufio.NewReader(strings.NewReader(test.readerInput)),
+				reader: bufio.NewReader(strings.NewReader(tc.readerInput)),
 			}
 
 			// Capture stdout
@@ -1559,15 +1544,15 @@ func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
 			os.Stdout = oldStdout
 
 			// Check secret
-			if secret != test.wantSecret {
-				t.Errorf("captureAWSQRCodeWithFallback() secret = %v, want %v", secret, test.wantSecret)
+			if secret != tc.wantSecret {
+				t.Errorf("captureAWSQRCodeWithFallback() secret = %v, want %v", secret, tc.wantSecret)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("captureAWSQRCodeWithFallback() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("captureAWSQRCodeWithFallback() unexpected error: %v", err)
 			}
 		})
@@ -1704,8 +1689,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Track which AWS output to return
 			outputIndex := 0
@@ -1718,18 +1702,18 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 
 				// Get the current output or use the last one if we've exhausted the list
 				output := ""
-				if outputIndex < len(test.awsOutputs) {
-					output = test.awsOutputs[outputIndex]
+				if outputIndex < len(tc.awsOutputs) {
+					output = tc.awsOutputs[outputIndex]
 					outputIndex++
-				} else if len(test.awsOutputs) > 0 {
-					output = test.awsOutputs[len(test.awsOutputs)-1]
+				} else if len(tc.awsOutputs) > 0 {
+					output = tc.awsOutputs[len(tc.awsOutputs)-1]
 				}
 
 				cmd.Env = []string{
 					"GO_WANT_HELPER_PROCESS=1",
 					"MOCK_OUTPUT=" + output,
 				}
-				if test.awsError {
+				if tc.awsError {
 					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 				}
 				return cmd
@@ -1737,7 +1721,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 
 			// Create handler with mock reader
 			handler := &AWSSetupHandler{
-				reader: bufio.NewReader(strings.NewReader(test.userInput)),
+				reader: bufio.NewReader(strings.NewReader(tc.userInput)),
 			}
 
 			// Capture stdout
@@ -1745,7 +1729,7 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 			r, w, _ := os.Pipe()
 			os.Stdout = w
 
-			device, err := handler.selectMFADevice(test.profile)
+			device, err := handler.selectMFADevice(tc.profile)
 
 			w.Close()
 			os.Stdout = oldStdout
@@ -1756,25 +1740,25 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 			output := buf.String()
 
 			// Check device
-			if device != test.wantDevice {
-				t.Errorf("selectMFADevice() device = %v, want %v", device, test.wantDevice)
+			if device != tc.wantDevice {
+				t.Errorf("selectMFADevice() device = %v, want %v", device, tc.wantDevice)
 			}
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("selectMFADevice() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("selectMFADevice() unexpected error: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), test.wantErrMsg) {
-					t.Errorf("error message = %v, want to contain %v", err.Error(), test.wantErrMsg)
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
 				}
 			}
 
 			// Verify the prompts were shown
-			if len(test.awsOutputs) > 0 && test.awsOutputs[0] != "" {
+			if len(tc.awsOutputs) > 0 && tc.awsOutputs[0] != "" {
 				if !strings.Contains(output, "Found MFA device(s):") {
 					t.Error("Expected 'Found MFA device(s):' prompt")
 				}
@@ -1943,44 +1927,43 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 		},
 	}
 
-	for name, test := range tests {
-		test := test
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Mock scanQRCode
 			scanQRCode = func() (string, error) {
-				if test.scanQRError != nil {
-					return "", test.scanQRError
+				if tc.scanQRError != nil {
+					return "", tc.scanQRError
 				}
-				return test.scanQRResult, nil
+				return tc.scanQRResult, nil
 			}
 
 			// Mock totp functions
 			validateAndNormalizeSecret = func(secret string) (string, error) {
-				if test.validateError != nil {
-					return "", test.validateError
+				if tc.validateError != nil {
+					return "", tc.validateError
 				}
-				return test.normalizedSecret, nil
+				return tc.normalizedSecret, nil
 			}
 
 			generateConsecutiveCodes = func(secret string) (string, string, error) {
-				if test.generateError != nil {
-					return "", "", test.generateError
+				if tc.generateError != nil {
+					return "", "", tc.generateError
 				}
-				return test.firstCode, test.secondCode, nil
+				return tc.firstCode, tc.secondCode, nil
 			}
 
 			// Mock env.GetCurrentUser
 			getCurrentUser = func() (string, error) {
-				if test.getCurrentUserError != nil {
-					return "", test.getCurrentUserError
+				if tc.getCurrentUserError != nil {
+					return "", tc.getCurrentUserError
 				}
-				return test.currentUser, nil
+				return tc.currentUser, nil
 			}
 
 			// Mock readPassword for manual entry
 			readPassword = func(fd int) ([]byte, error) {
 				// Extract the secret from userInput (it's the 4th line for manual entry)
-				lines := strings.Split(test.userInput, "\n")
+				lines := strings.Split(tc.userInput, "\n")
 				if len(lines) >= 4 && lines[2] == "1" { // Manual entry
 					return []byte(lines[3]), nil
 				}
@@ -1994,16 +1977,16 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 					return "", nil
 				},
 				SetSecretStringFunc: func(user, service, secret string) error {
-					return test.setSecretError
+					return tc.setSecretError
 				},
 				StoreEntryMetadataFunc: func(prefix, service, user, description string) error {
-					return test.storeMetadataError
+					return tc.storeMetadataError
 				},
 			}
 
 			// Create handler with mock reader and keychain
 			handler := &TOTPSetupHandler{
-				reader:           bufio.NewReader(strings.NewReader(test.userInput)),
+				reader:           bufio.NewReader(strings.NewReader(tc.userInput)),
 				keychainProvider: mockKeychain,
 			}
 
@@ -2023,15 +2006,15 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			output := buf.String()
 
 			// Check error
-			if test.wantErr && err == nil {
+			if tc.wantErr && err == nil {
 				t.Error("Setup() expected error but got nil")
 			}
-			if !test.wantErr && err != nil {
+			if !tc.wantErr && err != nil {
 				t.Errorf("Setup() unexpected error: %v", err)
 			}
-			if test.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), test.wantErrMsg) {
-					t.Errorf("error message = %v, want to contain %v", err.Error(), test.wantErrMsg)
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
 				}
 			}
 
@@ -2043,7 +2026,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 				if !strings.Contains(output, "Generated TOTP codes for verification") {
 					t.Error("Expected verification codes message")
 				}
-				if test.storeMetadataError != nil && !strings.Contains(output, "Warning: Failed to store metadata") {
+				if tc.storeMetadataError != nil && !strings.Contains(output, "Warning: Failed to store metadata") {
 					t.Error("Expected metadata warning")
 				}
 			}

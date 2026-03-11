@@ -2,6 +2,7 @@ package keychain
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -9,6 +10,12 @@ import (
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/secure"
 )
+
+// ErrNotFound is returned when a keychain item does not exist.
+var ErrNotFound = errors.New("secret not found in keychain")
+
+// exitCodeItemNotFound is the macOS `security` command exit code for errSecItemNotFound.
+const exitCodeItemNotFound = 44
 
 var execCommand = exec.Command
 
@@ -31,9 +38,12 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 	// Use secure capturing to ensure memory is zeroed if there are errors
 	secret, err := secure.ExecAndCaptureSecure(cmd)
 	if err != nil {
-		// Intentionally using a message here that doesn't leak more information than necessary
-		return nil, fmt.Errorf("no secret found in Keychain for account %q and service %q. Run setup to configure",
-			account, service)
+		// macOS `security` exits with code 44 for errSecItemNotFound
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == exitCodeItemNotFound {
+			return nil, fmt.Errorf("%w for account %q and service %q", ErrNotFound, account, service)
+		}
+		return nil, fmt.Errorf("keychain read failed for account %q and service %q: %w", account, service, err)
 	}
 
 	// For TOTP secrets, ensure they are properly normalized

@@ -2,7 +2,14 @@ package setup
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"time"
+
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/env"
 	"github.com/bashhack/sesh/internal/keychain"
@@ -10,11 +17,6 @@ import (
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
 	"golang.org/x/term"
-	"os"
-	"os/exec"
-	"strings"
-	"syscall"
-	"time"
 )
 
 // execCommand is a variable so we can swap it out in tests
@@ -460,7 +462,10 @@ func (h *AWSSetupHandler) Setup() error {
 	}
 
 	serviceName := h.createServiceName(constants.AWSServicePrefix, profile)
-	existingSecret, _ := h.keychainProvider.GetSecretString(user, serviceName)
+	existingSecret, err := h.keychainProvider.GetSecretString(user, serviceName)
+	if err != nil && !errors.Is(err, keychain.ErrNotFound) {
+		return fmt.Errorf("failed to check existing entry: %w", err)
+	}
 
 	if existingSecret != "" {
 		// Entry exists, prompt for overwrite
@@ -673,7 +678,10 @@ func (h *TOTPSetupHandler) Setup() error {
 	}
 
 	serviceKey := h.createTOTPServiceName(serviceName, profile)
-	existingSecret, _ := h.keychainProvider.GetSecretString(user, serviceKey)
+	existingSecret, err := h.keychainProvider.GetSecretString(user, serviceKey)
+	if err != nil && !errors.Is(err, keychain.ErrNotFound) {
+		return fmt.Errorf("failed to check existing entry: %w", err)
+	}
 
 	if existingSecret != "" {
 		// Entry exists, prompt for overwrite
