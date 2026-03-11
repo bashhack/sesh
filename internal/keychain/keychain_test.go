@@ -1,9 +1,9 @@
 package keychain
 
 import (
+	"errors"
 	"fmt"
 	"io"
-
 	"os"
 	"os/exec"
 	"strings"
@@ -120,10 +120,37 @@ func TestGetSecretWithSecurityError(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error but got nil")
 	}
-	if !strings.Contains(err.Error(), "no secret found in Keychain") {
-		t.Errorf("Expected error with 'no secret found in Keychain', got: %s", err.Error())
+	if !strings.Contains(err.Error(), "keychain read failed") {
+		t.Errorf("Expected error with 'keychain read failed', got: %s", err.Error())
 	}
 }
+
+func TestGetSecretBytesNotFound(t *testing.T) {
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{
+			"GO_WANT_HELPER_PROCESS=1",
+		}
+		if command == "security" {
+			cmd.Env = append(cmd.Env, "MOCK_ERROR=1", "MOCK_EXIT_CODE=44")
+		}
+		return cmd
+	}
+
+	_, err := GetSecretBytes("testuser", "test-service")
+
+	if err == nil {
+		t.Fatal("Expected error but got nil")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("Expected ErrNotFound, got: %v", err)
+	}
+}
+
 func TestGetMFASerialSuccess(t *testing.T) {
 	origExecCommand := execCommand
 	defer func() { execCommand = origExecCommand }()
@@ -143,7 +170,7 @@ func TestGetMFASerialSuccess(t *testing.T) {
 		return cmd
 	}
 
-	serialBytes, err := GetMFASerialBytes("testuser")
+	serialBytes, err := GetMFASerialBytes("testuser", "")
 
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
@@ -174,7 +201,7 @@ func TestGetMFASerialWithEmptyUsername(t *testing.T) {
 		return cmd
 	}
 
-	serialBytes, err := GetMFASerialBytes("")
+	serialBytes, err := GetMFASerialBytes("", "")
 
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
@@ -201,7 +228,7 @@ func TestGetMFASerialWithWhoamiError(t *testing.T) {
 		return cmd
 	}
 
-	_, err := GetMFASerialBytes("")
+	_, err := GetMFASerialBytes("", "")
 
 	if err == nil {
 		t.Error("Expected error but got nil")
@@ -226,13 +253,13 @@ func TestGetMFASerialWithSecurityError(t *testing.T) {
 		return cmd
 	}
 
-	_, err := GetMFASerialBytes("testuser")
+	_, err := GetMFASerialBytes("testuser", "")
 
 	if err == nil {
 		t.Error("Expected error but got nil")
 	}
-	if !strings.Contains(err.Error(), "no MFA serial stored in Keychain") {
-		t.Errorf("Expected error with 'no MFA serial stored in Keychain', got: %s", err.Error())
+	if !strings.Contains(err.Error(), "keychain read failed") {
+		t.Errorf("Expected error with 'keychain read failed', got: %s", err.Error())
 	}
 }
 
@@ -469,7 +496,7 @@ func TestGetMFASerialIntegration(t *testing.T) {
 	execCommand = exec.Command
 	defer func() { execCommand = origExecCommand }()
 
-	_, err := GetMFASerialBytes("") // should use `whoami`...
+	_, err := GetMFASerialBytes("", "") // should use `whoami`...
 	// ...doesn't really matter here that if it succeeds or fails, just that it doesn't panic!
 	_ = err
 }
@@ -504,7 +531,7 @@ func TestGetSecretString(t *testing.T) {
 			service:    "test-service",
 			mockError:  true,
 			wantErr:    true,
-			wantErrMsg: "no secret found in Keychain",
+			wantErrMsg: "keychain read failed",
 		},
 	}
 
@@ -832,7 +859,11 @@ func TestHelperProcess(t *testing.T) {
 		} else {
 			// Handle non-interactive security commands as before
 			if os.Getenv("MOCK_ERROR") == "1" {
-				os.Exit(1)
+				exitCode := 1
+				if ec := os.Getenv("MOCK_EXIT_CODE"); ec != "" {
+					fmt.Sscanf(ec, "%d", &exitCode)
+				}
+				os.Exit(exitCode)
 			}
 			fmt.Print(os.Getenv("MOCK_OUTPUT"))
 			os.Exit(0)

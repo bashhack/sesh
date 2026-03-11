@@ -19,7 +19,7 @@ type Provider interface {
 	SetSecretString(account, service, secret string) error
 
 	// GetMFASerialBytes retrieves the MFA serial from the keychain as bytes
-	GetMFASerialBytes(account string) ([]byte, error)
+	GetMFASerialBytes(account, profile string) ([]byte, error)
 
 	// ListEntries lists all entries for a given service
 	ListEntries(service string) ([]KeychainEntry, error)
@@ -70,8 +70,8 @@ func (p *DefaultProvider) SetSecretString(account, service, secret string) error
 }
 
 // GetMFASerialBytes implements the Provider interface
-func (p *DefaultProvider) GetMFASerialBytes(account string) ([]byte, error) {
-	return GetMFASerialBytes(account)
+func (p *DefaultProvider) GetMFASerialBytes(account, profile string) ([]byte, error) {
+	return GetMFASerialBytes(account, profile)
 }
 
 // ListEntries implements the Provider interface

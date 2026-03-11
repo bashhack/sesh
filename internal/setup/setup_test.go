@@ -1,17 +1,20 @@
 package setup
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/testutil"
-	totpmocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
 
 // MockCommand creates a mock exec.Cmd object
@@ -64,507 +67,2156 @@ func (r *SimpleRunner) Command(command string, args ...string) *exec.Cmd {
 	)(command, args...)
 }
 
-func TestWizardErrorHandling(t *testing.T) {
-	input := strings.NewReader("Invalid-TOTP-Secret\n")
-	var output, errOutput bytes.Buffer
-
-	exitCalled := false
-	exitCode := 0
-	mockExit := func(code int) {
-		exitCalled = true
-		exitCode = code
-	}
-
-	opts := WizardOptions{
-		Reader:      input,
-		Writer:      &output,
-		ErrorWriter: &errOutput,
-		OsExit:      mockExit,
-		SkipClear:   true,
-	}
-
-	RunWizardWithOptions(opts)
-
-	if !exitCalled {
-		t.Error("Expected exit function to be called for invalid TOTP")
-	}
-	if exitCode != 1 {
-		t.Errorf("Expected exit code 1, got %d", exitCode)
-	}
-
-	errorMsg := errOutput.String()
-	if !strings.Contains(errorMsg, "Failed to generate MFA codes") {
-		t.Errorf("Expected error message about MFA codes, got: %s", errorMsg)
-	}
+// mockSetupHandler implements SetupHandler for testing
+type mockSetupHandler struct {
+	name        string
+	setupCalled bool
+	setupError  error
 }
 
-func TestRunWizard(t *testing.T) {
-	originalRunWizardWithOptions := RunWizardWithOptions
-	defer func() {
-		RunWizardWithOptions = originalRunWizardWithOptions
-	}()
-
-	called := false
-	RunWizardWithOptions = func(WizardOptions) {
-		called = true
-	}
-
-	RunWizard()
-
-	if !called {
-		t.Error("RunWizard did not call RunWizardWithOptions")
-	}
+func (h *mockSetupHandler) ServiceName() string {
+	return h.name
 }
 
-func TestDefaultWizardRunnerRun(t *testing.T) {
-	originalRunWizardWithOptions := RunWizardWithOptions
-	defer func() {
-		RunWizardWithOptions = originalRunWizardWithOptions
-	}()
-
-	runWizardWithOptionsCalled := false
-	RunWizardWithOptions = func(opts WizardOptions) {
-		runWizardWithOptionsCalled = true
-	}
-
-	runner := DefaultWizardRunner{}
-	err := runner.Run()
-
-	if err != nil {
-		t.Errorf("DefaultWizardRunner.Run() returned an error: %v", err)
-	}
-
-	// Verify RunWizardWithOptions was called (which implies RunWizard was called)
-	if !runWizardWithOptionsCalled {
-		t.Error("DefaultWizardRunner.Run() did not result in RunWizardWithOptions being called")
-	}
+func (h *mockSetupHandler) Setup() error {
+	h.setupCalled = true
+	return h.setupError
 }
 
-func TestDefaultCommandRunner(t *testing.T) {
-	runner := &DefaultCommandRunner{}
-	cmd := runner.Command("echo", "test")
-
-	if cmd == nil {
-		t.Error("DefaultCommandRunner.Command returned nil")
-	}
-}
-
-func TestClearWithWriter(t *testing.T) {
-	// NOTE: I'm just verifying it doesn't panic!
-	var buf bytes.Buffer
-	mockRunner := &SimpleRunner{
-		DefaultError: nil,
-	}
-	clearWithWriter(&buf, mockRunner)
-}
-
-func TestClear(t *testing.T) {
-	// NOTE: Just calling clearWithWriter with os.Stdout,
-	// I don't have a great way to test the visual effect.
-	// Just checking it compiles and does not panic!
-	originalClearFunc := clear
-	clearCalled := false
-
-	clear = func() {
-		clearCalled = true
-	}
-	defer func() {
-		clear = originalClearFunc
-	}()
-
-	clear()
-
-	if !clearCalled {
-		t.Error("clear() was not called")
-	}
-}
-
-func TestClearImpl(t *testing.T) {
-	originalClearWithWriter := clearWithWriter
-	defer func() {
-		clearWithWriter = originalClearWithWriter
-	}()
-
-	clearWithWriterCalled := false
-	clearWithWriter = func(w io.Writer, runner CommandRunner) {
-		clearWithWriterCalled = true
-		if w != os.Stdout {
-			t.Error("clearImpl() did not use os.Stdout")
-		}
-		if _, ok := runner.(*DefaultCommandRunner); !ok {
-			t.Error("clearImpl() did not use DefaultCommandRunner")
-		}
+func TestSetupService(t *testing.T) {
+	handler := &mockSetupHandler{
+		name: "test-service",
 	}
 
-	clearImpl()
+	// Create setup service
+	service := NewSetupService(nil)
 
-	if !clearWithWriterCalled {
-		t.Error("clearImpl() did not call clearWithWriter()")
-	}
-}
+	// Test registering handler
+	service.RegisterHandler(handler)
 
-func TestRunWizardWithOptions_CustomOptions(t *testing.T) {
-	originalRunWizardWithOptions := RunWizardWithOptions
-	defer func() {
-		RunWizardWithOptions = originalRunWizardWithOptions
-	}()
-
-	var output, errOutput bytes.Buffer
-	customExit := func(code int) {
-		// No-op for testing
+	// Test getting available services
+	services := service.GetAvailableServices()
+	if len(services) != 1 {
+		t.Errorf("Expected 1 service, got %d", len(services))
 	}
 
-	customRunner := &SimpleRunner{DefaultError: nil}
-
-	optionsVerified := false
-	RunWizardWithOptions = func(opts WizardOptions) {
-		optionsVerified = true
-		if opts.Writer != &output {
-			t.Error("Custom Writer not used")
-		}
-		if opts.ErrorWriter != &errOutput {
-			t.Error("Custom ErrorWriter not used")
-		}
-		if opts.OsExit == nil {
-			t.Error("Custom OsExit not used")
-		}
-		if opts.ExecCommand != customRunner {
-			t.Error("Custom ExecCommand not used")
-		}
-		if !opts.SkipClear {
-			t.Error("SkipClear should be true")
-		}
-	}
-
-	RunWizardWithOptions(WizardOptions{
-		Writer:      &output,
-		ErrorWriter: &errOutput,
-		OsExit:      customExit,
-		ExecCommand: customRunner,
-		SkipClear:   true,
-	})
-
-	if !optionsVerified {
-		t.Error("Options were not verified")
-	}
-}
-
-func TestRunWizardWithOptions_TOTPError(t *testing.T) {
-	input := strings.NewReader("invalid-secret\n")
-	var output, errOutput bytes.Buffer
-
-	exitCalled := false
-	exitCode := 0
-	mockExit := func(code int) {
-		exitCalled = true
-		exitCode = code
-	}
-
-	opts := WizardOptions{
-		Reader:      input,
-		Writer:      &output,
-		ErrorWriter: &errOutput,
-		OsExit:      mockExit,
-		SkipClear:   true,
-	}
-
-	opts.TOTPProvider = &totpmocks.MockProvider{
-		GenerateConsecutiveCodesFunc: func(secret string) (string, string, error) {
-			return "", "", errors.New("invalid TOTP secret")
-		},
-	}
-
-	runWizardWithOptions(opts)
-
-	if !exitCalled {
-		t.Error("Expected exit to be called")
-	}
-	if exitCode != 1 {
-		t.Errorf("Expected exit code 1, got %d", exitCode)
-	}
-
-	errorStr := errOutput.String()
-	if !strings.Contains(errorStr, "Failed to generate MFA codes") {
-		t.Errorf("Expected error output to contain 'Failed to generate MFA codes', got: %s", errorStr)
-	}
-}
-
-func TestWizardWithDefaultUsername(t *testing.T) {
-	secretInput := "TESTSECRET123456\n\n" // Secret followed by empty username (to use default)
-	input := strings.NewReader(secretInput)
-	var output, errOutput bytes.Buffer
-
-	exitCalled := false
-	mockExit := func(code int) {
-		exitCalled = true
-	}
-
-	mockTOTP := &totpmocks.MockProvider{
-		GenerateConsecutiveCodesFunc: func(secret string) (string, string, error) {
-			return "123456", "654321", nil
-		},
-	}
-
-	whoamiMock := &MockCommand{
-		OutputData: []byte("testuser\n"),
-		ErrorValue: nil,
-	}
-	securityMock := &MockCommand{
-		OutputData: []byte(""),
-		ErrorValue: nil,
-	}
-	awsMock := &MockCommand{
-		OutputData: []byte(`{"MFADevices":[{"SerialNumber":"arn:aws:iam::123456789012:mfa/testuser","UserName":"testuser"}]}`),
-		ErrorValue: nil,
-	}
-
-	mockRunner := &SimpleRunner{
-		DefaultOutput: []byte(""),
-		DefaultError:  nil,
-		Commands: map[string]*MockCommand{
-			"whoami":   whoamiMock,
-			"security": securityMock,
-			"aws":      awsMock,
-		},
-	}
-
-	opts := WizardOptions{
-		Reader:            input,
-		Writer:            &output,
-		ErrorWriter:       &errOutput,
-		ExecCommand:       mockRunner,
-		OsExit:            mockExit,
-		TOTPProvider:      mockTOTP,
-		SkipClear:         true,
-		AppExecutablePath: "/usr/local/bin/sesh", // Provide a path so we don't call os.Executable
-	}
-
-	runWizardWithOptions(opts)
-
-	if exitCalled {
-		t.Error("Exit function was called but should not have been")
-	}
-
-	outputStr := output.String()
-
-	if !strings.Contains(outputStr, "📱 Enter these two consecutive codes in AWS when prompted:") {
-		t.Error("Missing expected TOTP code header in output")
-	}
-	if !strings.Contains(outputStr, "First code:  123456") {
-		t.Error("Missing first TOTP code in output")
-	}
-	if !strings.Contains(outputStr, "Second code: 654321") {
-		t.Error("Missing second TOTP code in output")
-	}
-	if !strings.Contains(outputStr, "ℹ️  You can enter both codes immediately one after another") {
-		t.Error("Missing codes instructions in output")
-	}
-	if !strings.Contains(outputStr, "⏱️  Complete the AWS setup within 30 seconds") {
-		t.Error("Missing timing information in output")
-	}
-
-	if !strings.Contains(outputStr, "👤 Keychain account name") {
-		t.Error("Missing keychain account name prompt in output")
-	}
-	if !strings.Contains(outputStr, "💾 Saving your secret to Keychain") {
-		t.Error("Missing saving to keychain message in output")
-	}
-
-	foundWhoami := false
-	for _, cmd := range mockRunner.CommandCalls {
-		if cmd == "whoami" {
-			foundWhoami = true
+	// Find our service in the list (order not guaranteed)
+	found := false
+	for _, s := range services {
+		if s == "test-service" {
+			found = true
 			break
 		}
 	}
-	if !foundWhoami {
-		t.Error("whoami command was not called to get default username")
+	if !found {
+		t.Errorf("Expected to find 'test-service' in services list")
 	}
 
-	if !strings.Contains(outputStr, "✅ MFA secret successfully stored in Keychain!") {
-		t.Error("Missing success message for keychain storage")
+	// Test setup for registered service
+	err := service.SetupService("test-service")
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if !handler.setupCalled {
+		t.Error("Setup was not called on handler")
 	}
 
-	if !strings.Contains(outputStr, "📝 Next steps:") {
-		t.Error("Missing next steps section in output")
-	}
-}
-
-func TestWizardWithWhoamiError(t *testing.T) {
-	secretInput := "TESTSECRET123456\n\n" // Secret followed by empty username (to trigger whoami)
-	input := strings.NewReader(secretInput)
-	var output, errOutput bytes.Buffer
-
-	exitCalled := false
-	exitCode := 0
-	mockExit := func(code int) {
-		exitCalled = true
-		exitCode = code
-	}
-
-	mockTOTP := &totpmocks.MockProvider{
-		GenerateConsecutiveCodesFunc: func(secret string) (string, string, error) {
-			return "123456", "654321", nil
-		},
-	}
-
-	whoamiMock := &MockCommand{
-		OutputData: []byte(""),
-		ErrorValue: errors.New("whoami command failed"),
-	}
-
-	mockRunner := &SimpleRunner{
-		DefaultOutput: []byte(""),
-		DefaultError:  nil,
-		Commands: map[string]*MockCommand{
-			"whoami": whoamiMock,
-		},
-	}
-
-	opts := WizardOptions{
-		Reader:       input,
-		Writer:       &output,
-		ErrorWriter:  &errOutput,
-		ExecCommand:  mockRunner,
-		OsExit:       mockExit,
-		TOTPProvider: mockTOTP,
-		SkipClear:    true,
-	}
-
-	runWizardWithOptions(opts)
-
-	if !exitCalled {
-		t.Error("Exit function should have been called")
-	}
-	if exitCode != 1 {
-		t.Errorf("Expected exit code 1, got %d", exitCode)
-	}
-
-	errorStr := errOutput.String()
-	if !strings.Contains(errorStr, "Could not determine current user") {
-		t.Errorf("Expected error about determining current user, got: %s", errorStr)
+	// Test setup for unregistered service
+	err = service.SetupService("unknown-service")
+	if err == nil {
+		t.Error("Expected error for unknown service, got nil")
 	}
 }
 
-func TestWizardSecurityCommandError(t *testing.T) {
-	secretInput := "TESTSECRET123456\ntestuser\n" // Secret and explicit username
-	input := strings.NewReader(secretInput)
-	var output, errOutput bytes.Buffer
+// Tests for TOTP Setup Handler prompt methods
 
-	exitCalled := false
-	exitCode := 0
-	mockExit := func(code int) {
-		exitCalled = true
-		exitCode = code
-	}
-
-	mockTOTP := &totpmocks.MockProvider{
-		GenerateConsecutiveCodesFunc: func(secret string) (string, string, error) {
-			return "123456", "654321", nil
+func TestTOTPSetupHandler_promptForServiceName(t *testing.T) {
+	tests := map[string]struct {
+		input      string
+		wantResult string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		"valid service name": {
+			input:      "github\n",
+			wantResult: "github",
+			wantErr:    false,
+		},
+		"service name with spaces": {
+			input:      "My Service\n",
+			wantResult: "My Service",
+			wantErr:    false,
+		},
+		"empty service name": {
+			input:      "\n",
+			wantResult: "",
+			wantErr:    true,
+			wantErrMsg: "service name cannot be empty",
+		},
+		"service name with only spaces": {
+			input:      "   \n",
+			wantResult: "",
+			wantErr:    true,
+			wantErrMsg: "service name cannot be empty",
 		},
 	}
 
-	securityMock := &MockCommand{
-		OutputData: []byte(""),
-		ErrorValue: errors.New("security command failed"),
-	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create handler with mock reader
+			handler := &TOTPSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(tc.input)),
+			}
 
-	mockRunner := &SimpleRunner{
-		DefaultOutput: []byte(""),
-		DefaultError:  nil,
-		Commands: map[string]*MockCommand{
-			"security": securityMock,
-		},
-	}
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
 
-	opts := WizardOptions{
-		Reader:            input,
-		Writer:            &output,
-		ErrorWriter:       &errOutput,
-		ExecCommand:       mockRunner,
-		OsExit:            mockExit,
-		TOTPProvider:      mockTOTP,
-		SkipClear:         true,
-		AppExecutablePath: "/usr/local/bin/sesh", // Provide a path so we don't call os.Executable
-	}
+			result, err := handler.promptForServiceName()
 
-	runWizardWithOptions(opts)
+			w.Close()
+			os.Stdout = oldStdout
 
-	if !exitCalled {
-		t.Error("Exit function should have been called")
-	}
-	if exitCode != 1 {
-		t.Errorf("Expected exit code 1, got %d", exitCode)
-	}
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
 
-	errorStr := errOutput.String()
-	if !strings.Contains(errorStr, "Failed to store secret in Keychain") {
-		t.Errorf("Expected error about storing secret in Keychain, got: %s", errorStr)
+			// Check prompt was displayed
+			if !strings.Contains(output, "Enter name for this TOTP service:") {
+				t.Error("Expected prompt not displayed")
+			}
+
+			// Check result
+			if result != tc.wantResult {
+				t.Errorf("promptForServiceName() result = %v, want %v", result, tc.wantResult)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("promptForServiceName() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("promptForServiceName() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if err.Error() != tc.wantErrMsg {
+					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+		})
 	}
 }
 
-func TestWizardMFADevicesError(t *testing.T) {
-	secretInput := "TESTSECRET123456\ntestuser\n"
-	input := strings.NewReader(secretInput)
-	var output, errOutput bytes.Buffer
-
-	exitCalled := false
-	mockExit := func(code int) {
-		exitCalled = true
-	}
-
-	mockTOTP := &totpmocks.MockProvider{
-		GenerateConsecutiveCodesFunc: func(secret string) (string, string, error) {
-			return "123456", "654321", nil
+func TestTOTPSetupHandler_promptForProfile(t *testing.T) {
+	tests := map[string]struct {
+		input      string
+		wantResult string
+	}{
+		"profile provided": {
+			input:      "work\n",
+			wantResult: "work",
+		},
+		"empty profile": {
+			input:      "\n",
+			wantResult: "",
+		},
+		"profile with spaces": {
+			input:      "my profile\n",
+			wantResult: "my profile",
+		},
+		"only spaces": {
+			input:      "   \n",
+			wantResult: "",
 		},
 	}
 
-	securityMock := &MockCommand{
-		OutputData: []byte(""),
-		ErrorValue: nil,
-	}
-	awsMock := &MockCommand{
-		OutputData: []byte(""),
-		ErrorValue: errors.New("aws command failed"),
-	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create handler with mock reader
+			handler := &TOTPSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(tc.input)),
+			}
 
-	mockRunner := &SimpleRunner{
-		DefaultOutput: []byte(""),
-		DefaultError:  nil,
-		Commands: map[string]*MockCommand{
-			"security": securityMock,
-			"aws":      awsMock,
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			result, err := handler.promptForProfile()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check prompt was displayed
+			if !strings.Contains(output, "Enter profile name (optional, for multiple accounts with the same service):") {
+				t.Error("Expected prompt not displayed")
+			}
+
+			// Check result
+			if result != tc.wantResult {
+				t.Errorf("promptForProfile() result = %v, want %v", result, tc.wantResult)
+			}
+
+			// Should never error
+			if err != nil {
+				t.Errorf("promptForProfile() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestTOTPSetupHandler_promptForCaptureMethod(t *testing.T) {
+	tests := map[string]struct {
+		input      string
+		wantResult string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		"choice 1": {
+			input:      "1\n",
+			wantResult: "1",
+			wantErr:    false,
+		},
+		"choice 2": {
+			input:      "2\n",
+			wantResult: "2",
+			wantErr:    false,
+		},
+		"invalid choice 3": {
+			input:      "3\n",
+			wantResult: "",
+			wantErr:    true,
+			wantErrMsg: "invalid choice, please select 1 or 2",
+		},
+		"invalid choice text": {
+			input:      "manual\n",
+			wantResult: "",
+			wantErr:    true,
+			wantErrMsg: "invalid choice, please select 1 or 2",
+		},
+		"empty choice": {
+			input:      "\n",
+			wantResult: "",
+			wantErr:    true,
+			wantErrMsg: "invalid choice, please select 1 or 2",
+		},
+		"choice with spaces": {
+			input:      " 1 \n",
+			wantResult: "1",
+			wantErr:    false,
 		},
 	}
 
-	opts := WizardOptions{
-		Reader:            input,
-		Writer:            &output,
-		ErrorWriter:       &errOutput,
-		ExecCommand:       mockRunner,
-		OsExit:            mockExit,
-		TOTPProvider:      mockTOTP,
-		SkipClear:         true,
-		AppExecutablePath: "/usr/local/bin/sesh",
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create handler with mock reader
+			handler := &TOTPSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(tc.input)),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			result, err := handler.promptForCaptureMethod()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check prompts were displayed
+			expectedPrompts := []string{
+				"How would you like to capture the TOTP secret?",
+				"1: Enter the secret key manually",
+				"2: Capture QR code from screen",
+				"Enter your choice (1-2):",
+			}
+			for _, expected := range expectedPrompts {
+				if !strings.Contains(output, expected) {
+					t.Errorf("Expected prompt not displayed: %q", expected)
+				}
+			}
+
+			// Check result
+			if result != tc.wantResult {
+				t.Errorf("promptForCaptureMethod() result = %v, want %v", result, tc.wantResult)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("promptForCaptureMethod() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("promptForCaptureMethod() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if err.Error() != tc.wantErrMsg {
+					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+		})
+	}
+}
+
+func TestTOTPSetupHandler_captureTOTPSecret(t *testing.T) {
+	tests := map[string]struct {
+		choice     string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		"invalid choice 3": {
+			choice:     "3",
+			wantErr:    true,
+			wantErrMsg: "invalid choice, please select 1 or 2",
+		},
+		"invalid choice empty": {
+			choice:     "",
+			wantErr:    true,
+			wantErrMsg: "invalid choice, please select 1 or 2",
+		},
+		"invalid choice text": {
+			choice:     "manual",
+			wantErr:    true,
+			wantErrMsg: "invalid choice, please select 1 or 2",
+		},
 	}
 
-	runWizardWithOptions(opts)
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			handler := &TOTPSetupHandler{}
 
-	if exitCalled {
-		t.Error("Exit was called, but should not have been")
+			_, err := handler.captureTOTPSecret(tc.choice)
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("captureTOTPSecret() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("captureTOTPSecret() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if err.Error() != tc.wantErrMsg {
+					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+		})
+	}
+}
+
+func TestTOTPSetupHandler_showTOTPSetupCompletionMessage(t *testing.T) {
+	tests := map[string]struct {
+		serviceName string
+		profile     string
+		wantOutput  []string
+	}{
+		"service without profile": {
+			serviceName: "github",
+			profile:     "",
+			wantOutput: []string{
+				"✅ Setup complete! Generate TOTP codes with:",
+				"sesh --service totp --service-name 'github'",
+				"Copy to clipboard with:",
+				"sesh --service totp --service-name 'github' --clip",
+			},
+		},
+		"service with profile": {
+			serviceName: "github",
+			profile:     "work",
+			wantOutput: []string{
+				"✅ Setup complete! Generate TOTP codes with:",
+				"sesh --service totp --service-name 'github' --profile 'work'",
+				"Copy to clipboard with:",
+				"sesh --service totp --service-name 'github' --profile 'work' --clip",
+			},
+		},
 	}
 
-	errorStr := errOutput.String()
-	if !strings.Contains(errorStr, "Could not list MFA devices from AWS") {
-		t.Errorf("Expected error about MFA devices, got: %s", errorStr)
-	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			handler := &TOTPSetupHandler{}
 
-	outputStr := output.String()
-	if !strings.Contains(outputStr, "📝 Next steps:") {
-		t.Error("Missing next steps section in output")
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			handler.showTOTPSetupCompletionMessage(tc.serviceName, tc.profile)
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check expected output
+			for _, expected := range tc.wantOutput {
+				if !strings.Contains(output, expected) {
+					t.Errorf("Expected output not found: %q", expected)
+				}
+			}
+		})
+	}
+}
+
+func TestAWSSetupHandler(t *testing.T) {
+	// This is a basic test to ensure the handler implements the interface
+	handler := NewAWSSetupHandler(nil)
+
+	if handler.ServiceName() != "aws" {
+		t.Errorf("Expected service name 'aws', got %s", handler.ServiceName())
+	}
+}
+
+func TestTOTPSetupHandler(t *testing.T) {
+	// This is a basic test to ensure the handler implements the interface
+	handler := NewTOTPSetupHandler(nil)
+
+	if handler.ServiceName() != "totp" {
+		t.Errorf("Expected service name 'totp', got %s", handler.ServiceName())
 	}
 }
 
 func TestHelperProcess(*testing.T) {
 	testutil.TestHelperProcess()
+}
+
+func TestAWSSetupHandler_createServiceName(t *testing.T) {
+	handler := &AWSSetupHandler{}
+
+	tests := map[string]struct {
+		prefix  string
+		profile string
+		want    string
+		wantErr bool
+	}{
+		"default profile": {
+			prefix: "sesh-aws",
+			want:   "sesh-aws/default",
+		},
+		"custom profile": {
+			prefix:  "sesh-aws",
+			profile: "dev",
+			want:    "sesh-aws/dev",
+		},
+		"serial prefix with profile": {
+			prefix:  "sesh-aws-serial",
+			profile: "prod",
+			want:    "sesh-aws-serial/prod",
+		},
+		"profile with slash is rejected": {
+			prefix:  "sesh-aws",
+			profile: "a/b",
+			wantErr: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := handler.createServiceName(tc.prefix, tc.profile)
+			if tc.wantErr {
+				if err == nil {
+					t.Error("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("createServiceName(%q, %q) = %v, want %v", tc.prefix, tc.profile, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTOTPSetupHandler_createTOTPServiceName(t *testing.T) {
+	handler := &TOTPSetupHandler{}
+
+	tests := map[string]struct {
+		serviceName string
+		profile     string
+		want        string
+		wantErr     bool
+	}{
+		"service without profile": {
+			serviceName: "github",
+			want:        "sesh-totp/github",
+		},
+		"service with profile": {
+			serviceName: "github",
+			profile:     "work",
+			want:        "sesh-totp/github/work",
+		},
+		"service with spaces": {
+			serviceName: "my service",
+			want:        "sesh-totp/my service",
+		},
+		"empty service is rejected": {
+			serviceName: "",
+			wantErr:     true,
+		},
+		"service with slash is rejected": {
+			serviceName: "a/b",
+			wantErr:     true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got, err := handler.createTOTPServiceName(tc.serviceName, tc.profile)
+			if tc.wantErr {
+				if err == nil {
+					t.Error("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("createTOTPServiceName(%q, %q) = %v, want %v", tc.serviceName, tc.profile, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAWSSetupHandler_createAWSCommand(t *testing.T) {
+	handler := &AWSSetupHandler{}
+
+	tests := map[string]struct {
+		profile  string
+		args     []string
+		wantCmd  string
+		wantArgs []string
+	}{
+		"command without profile": {
+			profile:  "",
+			args:     []string{"sts", "get-caller-identity"},
+			wantCmd:  "aws",
+			wantArgs: []string{"sts", "get-caller-identity"},
+		},
+		"command with profile": {
+			profile:  "dev",
+			args:     []string{"sts", "get-caller-identity"},
+			wantCmd:  "aws",
+			wantArgs: []string{"sts", "--profile", "dev", "get-caller-identity"},
+		},
+		"complex command with profile": {
+			profile:  "prod",
+			args:     []string{"iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text"},
+			wantCmd:  "aws",
+			wantArgs: []string{"iam", "--profile", "prod", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text"},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cmd := handler.createAWSCommand(tc.profile, tc.args...)
+
+			// Check command name
+			if cmd.Path != tc.wantCmd {
+				// The command might be resolved to full path, so check just the base name
+				base := cmd.Path
+				if idx := len(cmd.Path) - 1; idx >= 0 {
+					for i := idx; i >= 0; i-- {
+						if cmd.Path[i] == '/' {
+							base = cmd.Path[i+1:]
+							break
+						}
+					}
+				}
+				if base != tc.wantCmd {
+					t.Errorf("command = %v, want %v", base, tc.wantCmd)
+				}
+			}
+
+			// Check arguments - skip the first argument which is the command itself
+			gotArgs := cmd.Args[1:]
+			if len(gotArgs) != len(tc.wantArgs) {
+				t.Errorf("args length = %d, want %d", len(gotArgs), len(tc.wantArgs))
+			}
+			for i, want := range tc.wantArgs {
+				if i < len(gotArgs) && gotArgs[i] != want {
+					t.Errorf("args[%d] = %v, want %v", i, gotArgs[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestAWSSetupHandler_promptForMFAARN(t *testing.T) {
+	tests := map[string]struct {
+		userInput string
+		wantARN   string
+		wantErr   bool
+	}{
+		"valid ARN on first try": {
+			userInput: "arn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
+		"empty input then valid": {
+			userInput: "\narn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
+		"invalid format then valid": {
+			userInput: "not-an-arn\narn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
+		"wrong service then valid": {
+			userInput: "arn:aws:s3::123456789012:bucket/mybucket\narn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
+		"wrong resource type then valid": {
+			userInput: "arn:aws:iam::123456789012:user/myuser\narn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
+		"multiple invalid then valid": {
+			userInput: "\nnot-an-arn\narn:aws:s3::123456789012:bucket/mybucket\narn:aws:iam::123456789012:mfa/user\n",
+			wantARN:   "arn:aws:iam::123456789012:mfa/user",
+			wantErr:   false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create handler with mock reader
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(tc.userInput)),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			arn, err := handler.promptForMFAARN()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check ARN
+			if arn != tc.wantARN {
+				t.Errorf("promptForMFAARN() arn = %v, want %v", arn, tc.wantARN)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("promptForMFAARN() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("promptForMFAARN() unexpected error: %v", err)
+			}
+
+			// Verify that appropriate error messages were shown
+			if strings.HasPrefix(tc.userInput, "\n") {
+				// Empty input was provided as first line
+				if !strings.Contains(output, "MFA ARN cannot be empty") {
+					t.Error("Expected empty ARN error message")
+				}
+			}
+			if strings.Contains(tc.userInput, "not-an-arn") || strings.Contains(tc.userInput, ":s3:") || strings.Contains(tc.userInput, ":user/") {
+				// Invalid format was provided
+				if !strings.Contains(output, "Invalid ARN format") {
+					t.Error("Expected invalid ARN format error message")
+				}
+			}
+		})
+	}
+}
+
+// TestTOTPSetupHandler_captureManualEntry tests the manual entry capture
+func TestTOTPSetupHandler_captureManualEntry(t *testing.T) {
+	// Save original readPassword and restore after test
+	origReadPassword := readPassword
+	defer func() { readPassword = origReadPassword }()
+
+	tests := map[string]struct {
+		secretInput string
+		readError   error
+		wantSecret  string
+		wantErr     bool
+		wantErrMsg  string
+	}{
+		"valid secret": {
+			secretInput: "JBSWY3DPEHPK3PXP",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"secret with spaces": {
+			secretInput: "  JBSWY3DPEHPK3PXP  ",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"read error": {
+			secretInput: "",
+			readError:   io.ErrUnexpectedEOF,
+			wantSecret:  "",
+			wantErr:     true,
+			wantErrMsg:  "failed to read secret",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Mock readPassword
+			readPassword = func(fd int) ([]byte, error) {
+				if tc.readError != nil {
+					return nil, tc.readError
+				}
+				return []byte(tc.secretInput), nil
+			}
+
+			handler := &TOTPSetupHandler{
+				reader: bufio.NewReader(strings.NewReader("")),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			secret, err := handler.captureManualEntry()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check prompt was displayed
+			if !strings.Contains(output, "Enter or paste your TOTP secret key") {
+				t.Error("Expected prompt not displayed")
+			}
+
+			// Check secret
+			if secret != tc.wantSecret {
+				t.Errorf("captureManualEntry() secret = %v, want %v", secret, tc.wantSecret)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("captureManualEntry() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("captureManualEntry() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+		})
+	}
+}
+
+// TestAWSSetupHandler_verifyAWSCredentials tests AWS credential verification
+func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
+	// Save original execCommand and restore after test
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	tests := map[string]struct {
+		profile       string
+		commandOutput string
+		commandError  bool
+		wantUserArn   string
+		wantErr       bool
+		wantErrMsg    string
+	}{
+		"valid credentials": {
+			profile:       "default",
+			commandOutput: "arn:aws:iam::123456789012:user/testuser",
+			commandError:  false,
+			wantUserArn:   "arn:aws:iam::123456789012:user/testuser",
+			wantErr:       false,
+		},
+		"invalid credentials": {
+			profile:       "nonexistent",
+			commandOutput: "",
+			commandError:  true,
+			wantUserArn:   "",
+			wantErr:       true,
+			wantErrMsg:    "failed to get AWS identity",
+		},
+		"empty profile valid": {
+			profile:       "",
+			commandOutput: "arn:aws:iam::123456789012:user/testuser",
+			commandError:  false,
+			wantUserArn:   "arn:aws:iam::123456789012:user/testuser",
+			wantErr:       false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Mock execCommand
+			execCommand = func(command string, args ...string) *exec.Cmd {
+				cs := []string{"-test.run=TestHelperProcess", "--", command}
+				cs = append(cs, args...)
+				cmd := exec.Command(os.Args[0], cs...)
+				cmd.Env = []string{
+					"GO_WANT_HELPER_PROCESS=1",
+					"MOCK_OUTPUT=" + tc.commandOutput,
+				}
+				if tc.commandError {
+					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
+				}
+				return cmd
+			}
+
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader("")),
+			}
+
+			userArn, err := handler.verifyAWSCredentials(tc.profile)
+
+			// Check user ARN
+			if userArn != tc.wantUserArn {
+				t.Errorf("verifyAWSCredentials() userArn = %v, want %v", userArn, tc.wantUserArn)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("verifyAWSCredentials() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("verifyAWSCredentials() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+		})
+	}
+}
+
+// TestAWSSetupHandler_captureAWSManualEntry tests manual AWS credential entry
+func TestAWSSetupHandler_captureAWSManualEntry(t *testing.T) {
+	// Save original readPassword and restore after test
+	origReadPassword := readPassword
+	defer func() { readPassword = origReadPassword }()
+
+	tests := map[string]struct {
+		secretInput string
+		readError   error
+		wantSecret  string
+		wantErr     bool
+		wantErrMsg  string
+	}{
+		"valid AWS secret": {
+			secretInput: "JBSWY3DPEHPK3PXP",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"secret with spaces": {
+			secretInput: "  JBSWY3DPEHPK3PXP  ",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"read error": {
+			secretInput: "",
+			readError:   io.ErrUnexpectedEOF,
+			wantSecret:  "",
+			wantErr:     true,
+			wantErrMsg:  "failed to read secret",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Mock readPassword
+			readPassword = func(fd int) ([]byte, error) {
+				if tc.readError != nil {
+					return nil, tc.readError
+				}
+				return []byte(tc.secretInput), nil
+			}
+
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader("")),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			secret, err := handler.captureAWSManualEntry()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check that instructions were displayed
+			if !strings.Contains(output, "DO NOT COMPLETE THE AWS SETUP YET") {
+				t.Error("Expected setup instructions not displayed")
+			}
+
+			// Check secret
+			if secret != tc.wantSecret {
+				t.Errorf("captureAWSManualEntry() secret = %v, want %v", secret, tc.wantSecret)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("captureAWSManualEntry() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("captureAWSManualEntry() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+		})
+	}
+}
+
+// TestAWSSetupHandler_captureMFASecret tests MFA secret capture
+func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
+	// Save original readPassword and restore after test
+	origReadPassword := readPassword
+	defer func() { readPassword = origReadPassword }()
+
+	tests := map[string]struct {
+		secretInput string
+		readError   error
+		wantSecret  string
+		wantErr     bool
+		wantErrMsg  string
+	}{
+		"valid MFA secret": {
+			secretInput: "JBSWY3DPEHPK3PXP",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"secret with spaces": {
+			secretInput: "  JBSWY3DPEHPK3PXP  ",
+			readError:   nil,
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantErr:     false,
+		},
+		"read error": {
+			secretInput: "",
+			readError:   io.ErrUnexpectedEOF,
+			wantSecret:  "",
+			wantErr:     true,
+			wantErrMsg:  "failed to read secret",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Mock readPassword
+			readPassword = func(fd int) ([]byte, error) {
+				if tc.readError != nil {
+					return nil, tc.readError
+				}
+				return []byte(tc.secretInput), nil
+			}
+
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader("")),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			secret, err := handler.captureMFASecret("1") // Choice 1 for manual entry
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check that instructions were displayed
+			if !strings.Contains(output, "DO NOT COMPLETE THE AWS SETUP YET") {
+				t.Error("Expected setup instructions not displayed")
+			}
+
+			// Check secret
+			if secret != tc.wantSecret {
+				t.Errorf("captureMFASecret() secret = %v, want %v", secret, tc.wantSecret)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("captureMFASecret() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("captureMFASecret() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+		})
+	}
+}
+
+// TestAWSSetupHandler_promptForMFASetupMethod tests MFA setup method selection
+func TestAWSSetupHandler_promptForMFASetupMethod(t *testing.T) {
+	tests := map[string]struct {
+		input      string
+		wantChoice string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		"choice 1 manual": {
+			input:      "1\n",
+			wantChoice: "1",
+			wantErr:    false,
+		},
+		"choice 2 qr code": {
+			input:      "2\n",
+			wantChoice: "2",
+			wantErr:    false,
+		},
+		"invalid choice 3": {
+			input:      "3\n",
+			wantChoice: "",
+			wantErr:    true,
+			wantErrMsg: "invalid choice, please select 1 or 2",
+		},
+		"invalid choice empty": {
+			input:      "\n",
+			wantChoice: "",
+			wantErr:    true,
+			wantErrMsg: "invalid choice, please select 1 or 2",
+		},
+		"choice with spaces": {
+			input:      " 1 \n",
+			wantChoice: "1",
+			wantErr:    false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(tc.input)),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			choice, err := handler.promptForMFASetupMethod()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check that instructions were displayed
+			if !strings.Contains(output, "Let's set up a virtual MFA device") {
+				t.Error("Expected setup instructions not displayed")
+			}
+
+			// Check choice
+			if choice != tc.wantChoice {
+				t.Errorf("promptForMFASetupMethod() choice = %v, want %v", choice, tc.wantChoice)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("promptForMFASetupMethod() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("promptForMFASetupMethod() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if err.Error() != tc.wantErrMsg {
+					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+		})
+	}
+}
+
+// TestAWSSetupHandler_showSetupCompletionMessage tests completion message display
+func TestAWSSetupHandler_showSetupCompletionMessage(t *testing.T) {
+	tests := map[string]struct {
+		profile      string
+		wantContains []string
+	}{
+		"default profile": {
+			profile: "",
+			wantContains: []string{
+				"Setup complete!",
+				"Run 'sesh -service aws' to generate a temporary session token",
+				"To use this setup, run without the --profile flag",
+				"The default AWS profile will be used",
+			},
+		},
+		"custom profile": {
+			profile: "dev",
+			wantContains: []string{
+				"Setup complete!",
+				"Run 'sesh -service aws' to generate a temporary session token",
+				"To use this setup, run: sesh --profile dev",
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			handler := &AWSSetupHandler{}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			handler.showSetupCompletionMessage(tc.profile)
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check expected content
+			for _, expected := range tc.wantContains {
+				if !strings.Contains(output, expected) {
+					t.Errorf("Expected output to contain: %q", expected)
+				}
+			}
+		})
+	}
+}
+
+// TestAWSSetupHandler_setupMFAConsole tests MFA console setup guidance
+func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
+	tests := map[string]struct {
+		secret       string
+		readerInput  string
+		wantErr      bool
+		wantContains []string
+	}{
+		"valid secret": {
+			secret:      "JBSWY3DPEHPK3PXP",
+			readerInput: "\n",
+			wantErr:     false,
+			wantContains: []string{
+				"Generated TOTP codes for AWS setup",
+				"First code:",
+				"Second code:",
+				"IMPORTANT - FOLLOW THESE STEPS",
+				"Press Enter ONLY AFTER you see",
+			},
+		},
+		"invalid secret": {
+			secret:       "invalid-secret",
+			readerInput:  "\n",
+			wantErr:      true,
+			wantContains: []string{},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(tc.readerInput)),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			err := handler.setupMFAConsole(tc.secret)
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("setupMFAConsole() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("setupMFAConsole() unexpected error: %v", err)
+			}
+
+			// Check expected content
+			for _, expected := range tc.wantContains {
+				if !strings.Contains(output, expected) {
+					t.Errorf("Expected output to contain: %q", expected)
+				}
+			}
+		})
+	}
+}
+
+// TestCaptureQRWithRetry tests QR code capture with retry logic
+func TestCaptureQRWithRetry(t *testing.T) {
+	// Save original scanQRCode and restore after test
+	origScanQRCode := scanQRCode
+	defer func() { scanQRCode = origScanQRCode }()
+
+	// Mock manual entry function
+	mockManualEntry := func() (string, error) {
+		return "MANUAL_SECRET", nil
+	}
+
+	tests := map[string]struct {
+		readerInput   string
+		scanResults   []error // Results for each scan attempt
+		scanSecret    string
+		wantSecret    string
+		wantErr       bool
+		wantScanCalls int
+	}{
+		"success on first try": {
+			readerInput:   "\n",
+			scanResults:   []error{nil},
+			scanSecret:    "QR_SECRET",
+			wantSecret:    "QR_SECRET",
+			wantErr:       false,
+			wantScanCalls: 1,
+		},
+		"success on second try": {
+			readerInput:   "\n\n",
+			scanResults:   []error{errors.New("scan failed"), nil},
+			scanSecret:    "QR_SECRET",
+			wantSecret:    "QR_SECRET",
+			wantErr:       false,
+			wantScanCalls: 2,
+		},
+		"switch to manual after first failure": {
+			readerInput:   "\nm\n",
+			scanResults:   []error{errors.New("scan failed")},
+			scanSecret:    "",
+			wantSecret:    "MANUAL_SECRET",
+			wantErr:       false,
+			wantScanCalls: 1,
+		},
+		"fail all attempts then manual": {
+			readerInput:   "\n\n\ny\n", // Enter for attempt 1, Enter for attempt 2, Enter to skip retry prompt, y for manual
+			scanResults:   []error{errors.New("scan failed"), errors.New("scan failed")},
+			scanSecret:    "",
+			wantSecret:    "MANUAL_SECRET",
+			wantErr:       false,
+			wantScanCalls: 2,
+		},
+		"fail all attempts and decline manual": {
+			readerInput:   "\n\n\nn\n", // Enter for attempt 1, Enter for attempt 2, Enter to skip retry prompt, n to decline manual
+			scanResults:   []error{errors.New("scan failed"), errors.New("scan failed")},
+			scanSecret:    "",
+			wantSecret:    "",
+			wantErr:       true,
+			wantScanCalls: 2,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			scanCallCount := 0
+
+			// Mock scanQRCode
+			scanQRCode = func() (string, error) {
+				if scanCallCount < len(tc.scanResults) {
+					err := tc.scanResults[scanCallCount]
+					scanCallCount++
+					if err != nil {
+						return "", err
+					}
+					return tc.scanSecret, nil
+				}
+				return "", errors.New("unexpected scan call")
+			}
+
+			reader := bufio.NewReader(strings.NewReader(tc.readerInput))
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			secret, err := captureQRWithRetry(reader, mockManualEntry)
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check scan was called expected number of times
+			if scanCallCount != tc.wantScanCalls {
+				t.Errorf("scanQRCode called %d times, want %d", scanCallCount, tc.wantScanCalls)
+			}
+
+			// Check secret
+			if secret != tc.wantSecret {
+				t.Errorf("captureQRWithRetry() secret = %v, want %v", secret, tc.wantSecret)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("captureQRWithRetry() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("captureQRWithRetry() unexpected error: %v", err)
+			}
+
+			// Check output contains expected prompts
+			if strings.Contains(output, "QR capture attempt") {
+				// Good, attempt message shown
+			} else {
+				t.Error("Expected QR capture attempt message")
+			}
+		})
+	}
+}
+
+// TestTOTPSetupHandler_captureQRCodeWithFallback tests TOTP QR capture wrapper
+func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
+	// Save original scanQRCode and readPassword and restore after test
+	origScanQRCode := scanQRCode
+	origReadPassword := readPassword
+	defer func() {
+		scanQRCode = origScanQRCode
+		readPassword = origReadPassword
+	}()
+
+	tests := map[string]struct {
+		readerInput   string
+		scanSuccess   bool
+		passwordInput string
+		wantSecret    string
+		wantErr       bool
+	}{
+		"QR scan success": {
+			readerInput: "\n",
+			scanSuccess: true,
+			wantSecret:  "QR_SECRET",
+			wantErr:     false,
+		},
+		"QR scan fails, manual entry": {
+			readerInput:   "\nm\n",
+			scanSuccess:   false,
+			passwordInput: "MANUAL_SECRET",
+			wantSecret:    "MANUAL_SECRET",
+			wantErr:       false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Mock scanQRCode
+			scanQRCode = func() (string, error) {
+				if tc.scanSuccess {
+					return "QR_SECRET", nil
+				}
+				return "", errors.New("scan failed")
+			}
+
+			// Mock readPassword
+			readPassword = func(fd int) ([]byte, error) {
+				return []byte(tc.passwordInput), nil
+			}
+
+			handler := &TOTPSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(tc.readerInput)),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			_, w, _ := os.Pipe()
+			os.Stdout = w
+
+			secret, err := handler.captureQRCodeWithFallback()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Check secret
+			if secret != tc.wantSecret {
+				t.Errorf("captureQRCodeWithFallback() secret = %v, want %v", secret, tc.wantSecret)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("captureQRCodeWithFallback() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("captureQRCodeWithFallback() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestAWSSetupHandler_captureAWSQRCodeWithFallback tests AWS QR capture wrapper
+func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
+	// Save original scanQRCode and readPassword and restore after test
+	origScanQRCode := scanQRCode
+	origReadPassword := readPassword
+	defer func() {
+		scanQRCode = origScanQRCode
+		readPassword = origReadPassword
+	}()
+
+	tests := map[string]struct {
+		readerInput   string
+		scanSuccess   bool
+		passwordInput string
+		wantSecret    string
+		wantErr       bool
+	}{
+		"QR scan success": {
+			readerInput: "\n",
+			scanSuccess: true,
+			wantSecret:  "AWS_QR_SECRET",
+			wantErr:     false,
+		},
+		"QR scan fails, manual entry": {
+			readerInput:   "\nm\n",
+			scanSuccess:   false,
+			passwordInput: "AWS_MANUAL_SECRET",
+			wantSecret:    "AWS_MANUAL_SECRET",
+			wantErr:       false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Mock scanQRCode
+			scanQRCode = func() (string, error) {
+				if tc.scanSuccess {
+					return "AWS_QR_SECRET", nil
+				}
+				return "", errors.New("scan failed")
+			}
+
+			// Mock readPassword
+			readPassword = func(fd int) ([]byte, error) {
+				return []byte(tc.passwordInput), nil
+			}
+
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(tc.readerInput)),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			_, w, _ := os.Pipe()
+			os.Stdout = w
+
+			secret, err := handler.captureAWSQRCodeWithFallback()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Check secret
+			if secret != tc.wantSecret {
+				t.Errorf("captureAWSQRCodeWithFallback() secret = %v, want %v", secret, tc.wantSecret)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("captureAWSQRCodeWithFallback() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("captureAWSQRCodeWithFallback() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestAWSSetupHandler_selectMFADevice tests MFA device selection
+func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
+	// Save original execCommand and restore after test
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	// Save original timeSleep and restore after test
+	origTimeSleep := timeSleep
+	defer func() { timeSleep = origTimeSleep }()
+
+	// Mock timeSleep to not actually sleep in tests
+	timeSleep = func(d time.Duration) {
+		// Don't actually sleep in tests
+	}
+
+	tests := map[string]struct {
+		profile    string
+		awsOutputs []string // Multiple outputs for refresh scenarios
+		awsError   bool
+		userInput  string
+		wantDevice string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		"single device select 1": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user"},
+			awsError:   false,
+			userInput:  "1\n",
+			wantDevice: "arn:aws:iam::123456789012:mfa/user",
+			wantErr:    false,
+		},
+		"multiple devices select first": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2"},
+			awsError:   false,
+			userInput:  "1\n",
+			wantDevice: "arn:aws:iam::123456789012:mfa/user1",
+			wantErr:    false,
+		},
+		"multiple devices select second": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2"},
+			awsError:   false,
+			userInput:  "2\n",
+			wantDevice: "arn:aws:iam::123456789012:mfa/user2",
+			wantErr:    false,
+		},
+		"manual entry": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1"},
+			awsError:   false,
+			userInput:  "m\narn:aws:iam::123456789012:mfa/manual\n",
+			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
+			wantErr:    false,
+		},
+		"no devices with manual entry": {
+			profile:    "default",
+			awsOutputs: []string{""},
+			awsError:   false,
+			userInput:  "3\narn:aws:iam::123456789012:mfa/manual\n", // Choice 3 for manual entry when no devices found
+			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
+			wantErr:    false,
+		},
+		"refresh devices": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1", "arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2"},
+			awsError:   false,
+			userInput:  "r\n2\n", // Refresh then select second device
+			wantDevice: "arn:aws:iam::123456789012:mfa/user2",
+			wantErr:    false,
+		},
+		"invalid choice then valid": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1\tarn:aws:iam::123456789012:mfa/user2"},
+			awsError:   false,
+			userInput:  "invalid\n1\n", // Invalid then valid choice
+			wantDevice: "arn:aws:iam::123456789012:mfa/user1",
+			wantErr:    false,
+		},
+		"out of range then valid": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1"},
+			awsError:   false,
+			userInput:  "5\n1\n", // Out of range then valid
+			wantDevice: "arn:aws:iam::123456789012:mfa/user1",
+			wantErr:    false,
+		},
+		"wait and retry": {
+			profile:    "default",
+			awsOutputs: []string{"", "arn:aws:iam::123456789012:mfa/user"}, // Initially no devices, then finds one
+			awsError:   false,
+			userInput:  "1\n1\n", // Wait option, then select first device
+			wantDevice: "arn:aws:iam::123456789012:mfa/user",
+			wantErr:    false,
+		},
+		"return to console and retry": {
+			profile:    "default",
+			awsOutputs: []string{"", "arn:aws:iam::123456789012:mfa/user"}, // Initially no devices, then finds one
+			awsError:   false,
+			userInput:  "2\n\n1\n", // Return to console, press enter, then select device
+			wantDevice: "arn:aws:iam::123456789012:mfa/user",
+			wantErr:    false,
+		},
+		"invalid retry choice": {
+			profile:    "default",
+			awsOutputs: []string{""},
+			awsError:   false,
+			userInput:  "invalid\n3\narn:aws:iam::123456789012:mfa/manual\n", // Invalid choice, then manual
+			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
+			wantErr:    false,
+		},
+		"refresh with no devices after": {
+			profile:    "default",
+			awsOutputs: []string{"arn:aws:iam::123456789012:mfa/user1", ""}, // Has devices, refresh finds nothing
+			awsError:   false,
+			userInput:  "r\n3\narn:aws:iam::123456789012:mfa/manual\n", // Refresh finds nothing, then shows retry prompt, choose manual
+			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
+			wantErr:    false,
+		},
+		"exhaust retries then manual": {
+			profile:    "default",
+			awsOutputs: []string{"", "", "", ""}, // No devices found in any attempt
+			awsError:   false,
+			userInput:  "1\n1\n1\narn:aws:iam::123456789012:mfa/manual\n", // Try wait twice, exhaust retries, then manual
+			wantDevice: "arn:aws:iam::123456789012:mfa/manual",
+			wantErr:    false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Track which AWS output to return
+			outputIndex := 0
+
+			// Mock execCommand to return our test data
+			execCommand = func(command string, args ...string) *exec.Cmd {
+				cs := []string{"-test.run=TestHelperProcess", "--", command}
+				cs = append(cs, args...)
+				cmd := exec.Command(os.Args[0], cs...)
+
+				// Get the current output or use the last one if we've exhausted the list
+				output := ""
+				if outputIndex < len(tc.awsOutputs) {
+					output = tc.awsOutputs[outputIndex]
+					outputIndex++
+				} else if len(tc.awsOutputs) > 0 {
+					output = tc.awsOutputs[len(tc.awsOutputs)-1]
+				}
+
+				cmd.Env = []string{
+					"GO_WANT_HELPER_PROCESS=1",
+					"MOCK_OUTPUT=" + output,
+				}
+				if tc.awsError {
+					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
+				}
+				return cmd
+			}
+
+			// Create handler with mock reader
+			handler := &AWSSetupHandler{
+				reader: bufio.NewReader(strings.NewReader(tc.userInput)),
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			device, err := handler.selectMFADevice(tc.profile)
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check device
+			if device != tc.wantDevice {
+				t.Errorf("selectMFADevice() device = %v, want %v", device, tc.wantDevice)
+			}
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("selectMFADevice() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("selectMFADevice() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+
+			// Verify the prompts were shown
+			if len(tc.awsOutputs) > 0 && tc.awsOutputs[0] != "" {
+				if !strings.Contains(output, "Found MFA device(s):") {
+					t.Error("Expected 'Found MFA device(s):' prompt")
+				}
+			}
+		})
+	}
+}
+
+// TestTOTPSetupHandler_Setup tests the main TOTP setup flow
+func TestTOTPSetupHandler_Setup(t *testing.T) {
+	// Save original functions and restore after test
+	origScanQRCode := scanQRCode
+	defer func() { scanQRCode = origScanQRCode }()
+
+	origValidateAndNormalizeSecret := validateAndNormalizeSecret
+	defer func() { validateAndNormalizeSecret = origValidateAndNormalizeSecret }()
+
+	origGenerateConsecutiveCodes := generateConsecutiveCodes
+	defer func() { generateConsecutiveCodes = origGenerateConsecutiveCodes }()
+
+	origGetCurrentUser := getCurrentUser
+	defer func() { getCurrentUser = origGetCurrentUser }()
+
+	origReadPassword := readPassword
+	defer func() { readPassword = origReadPassword }()
+
+	tests := map[string]struct {
+		userInput           string
+		scanQRError         error
+		scanQRResult        string
+		validateError       error
+		normalizedSecret    string
+		generateError       error
+		firstCode           string
+		secondCode          string
+		getCurrentUserError error
+		currentUser         string
+		setSecretError      error
+		storeMetadataError  error
+		wantErr             bool
+		wantErrMsg          string
+	}{
+		"successful setup with QR code": {
+			userInput:           "MyService\ndefault\n2\n", // service name, profile, QR choice
+			scanQRError:         nil,
+			scanQRResult:        "JBSWY3DPEHPK3PXP",
+			validateError:       nil,
+			normalizedSecret:    "JBSWY3DPEHPK3PXP",
+			generateError:       nil,
+			firstCode:           "123456",
+			secondCode:          "789012",
+			getCurrentUserError: nil,
+			currentUser:         "testuser",
+			setSecretError:      nil,
+			storeMetadataError:  nil,
+			wantErr:             false,
+		},
+		"successful setup with manual entry": {
+			userInput:           "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n", // service name, profile, manual choice (1), secret
+			scanQRError:         nil,
+			scanQRResult:        "",
+			validateError:       nil,
+			normalizedSecret:    "JBSWY3DPEHPK3PXP",
+			generateError:       nil,
+			firstCode:           "123456",
+			secondCode:          "789012",
+			getCurrentUserError: nil,
+			currentUser:         "testuser",
+			setSecretError:      nil,
+			storeMetadataError:  nil,
+			wantErr:             false,
+		},
+		"invalid secret": {
+			userInput:           "MyService\ndefault\n1\ninvalid-secret\n",
+			scanQRError:         nil,
+			scanQRResult:        "",
+			validateError:       errors.New("invalid base32"),
+			normalizedSecret:    "",
+			generateError:       nil,
+			firstCode:           "",
+			secondCode:          "",
+			getCurrentUserError: nil,
+			currentUser:         "testuser",
+			setSecretError:      nil,
+			storeMetadataError:  nil,
+			wantErr:             true,
+			wantErrMsg:          "invalid TOTP secret",
+		},
+		"generate codes error": {
+			userInput:           "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
+			scanQRError:         nil,
+			scanQRResult:        "",
+			validateError:       nil,
+			normalizedSecret:    "JBSWY3DPEHPK3PXP",
+			generateError:       errors.New("generate failed"),
+			firstCode:           "",
+			secondCode:          "",
+			getCurrentUserError: nil,
+			currentUser:         "testuser",
+			setSecretError:      nil,
+			storeMetadataError:  nil,
+			wantErr:             true,
+			wantErrMsg:          "failed to generate TOTP codes",
+		},
+		"get current user error": {
+			userInput:           "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
+			scanQRError:         nil,
+			scanQRResult:        "",
+			validateError:       nil,
+			normalizedSecret:    "JBSWY3DPEHPK3PXP",
+			generateError:       nil,
+			firstCode:           "123456",
+			secondCode:          "789012",
+			getCurrentUserError: errors.New("user not found"),
+			currentUser:         "",
+			setSecretError:      nil,
+			storeMetadataError:  nil,
+			wantErr:             true,
+			wantErrMsg:          "failed to get current user",
+		},
+		"keychain store error": {
+			userInput:           "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
+			scanQRError:         nil,
+			scanQRResult:        "",
+			validateError:       nil,
+			normalizedSecret:    "JBSWY3DPEHPK3PXP",
+			generateError:       nil,
+			firstCode:           "123456",
+			secondCode:          "789012",
+			getCurrentUserError: nil,
+			currentUser:         "testuser",
+			setSecretError:      errors.New("keychain error"),
+			storeMetadataError:  nil,
+			wantErr:             true,
+			wantErrMsg:          "failed to store secret in keychain",
+		},
+		"metadata store error (warning only)": {
+			userInput:           "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
+			scanQRError:         nil,
+			scanQRResult:        "",
+			validateError:       nil,
+			normalizedSecret:    "JBSWY3DPEHPK3PXP",
+			generateError:       nil,
+			firstCode:           "123456",
+			secondCode:          "789012",
+			getCurrentUserError: nil,
+			currentUser:         "testuser",
+			setSecretError:      nil,
+			storeMetadataError:  errors.New("metadata error"),
+			wantErr:             false, // Should not fail the setup
+		},
+		"successful setup without profile": {
+			userInput:           "MyService\n\n1\nJBSWY3DPEHPK3PXP\n", // service name, empty profile, manual choice, secret
+			scanQRError:         nil,
+			scanQRResult:        "",
+			validateError:       nil,
+			normalizedSecret:    "JBSWY3DPEHPK3PXP",
+			generateError:       nil,
+			firstCode:           "123456",
+			secondCode:          "789012",
+			getCurrentUserError: nil,
+			currentUser:         "testuser",
+			setSecretError:      nil,
+			storeMetadataError:  nil,
+			wantErr:             false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Mock scanQRCode
+			scanQRCode = func() (string, error) {
+				if tc.scanQRError != nil {
+					return "", tc.scanQRError
+				}
+				return tc.scanQRResult, nil
+			}
+
+			// Mock totp functions
+			validateAndNormalizeSecret = func(secret string) (string, error) {
+				if tc.validateError != nil {
+					return "", tc.validateError
+				}
+				return tc.normalizedSecret, nil
+			}
+
+			generateConsecutiveCodes = func(secret string) (string, string, error) {
+				if tc.generateError != nil {
+					return "", "", tc.generateError
+				}
+				return tc.firstCode, tc.secondCode, nil
+			}
+
+			// Mock env.GetCurrentUser
+			getCurrentUser = func() (string, error) {
+				if tc.getCurrentUserError != nil {
+					return "", tc.getCurrentUserError
+				}
+				return tc.currentUser, nil
+			}
+
+			// Mock readPassword for manual entry
+			readPassword = func(fd int) ([]byte, error) {
+				// Extract the secret from userInput (it's the 4th line for manual entry)
+				lines := strings.Split(tc.userInput, "\n")
+				if len(lines) >= 4 && lines[2] == "1" { // Manual entry
+					return []byte(lines[3]), nil
+				}
+				return []byte(""), nil
+			}
+
+			// Create mock keychain provider
+			mockKeychain := &mocks.MockProvider{
+				GetSecretStringFunc: func(user, service string) (string, error) {
+					// Return empty string to indicate no existing entry
+					return "", nil
+				},
+				SetSecretStringFunc: func(user, service, secret string) error {
+					return tc.setSecretError
+				},
+				StoreEntryMetadataFunc: func(prefix, service, user, description string) error {
+					return tc.storeMetadataError
+				},
+			}
+
+			// Create handler with mock reader and keychain
+			handler := &TOTPSetupHandler{
+				reader:           bufio.NewReader(strings.NewReader(tc.userInput)),
+				keychainProvider: mockKeychain,
+			}
+
+			// Capture stdout
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			err := handler.Setup()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			// Read captured output
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check error
+			if tc.wantErr && err == nil {
+				t.Error("Setup() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("Setup() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+
+			// Verify output contains expected messages
+			if err == nil {
+				if !strings.Contains(output, "Setting up TOTP credentials") {
+					t.Error("Expected setup message")
+				}
+				if !strings.Contains(output, "Generated TOTP codes for verification") {
+					t.Error("Expected verification codes message")
+				}
+				if tc.storeMetadataError != nil && !strings.Contains(output, "Warning: Failed to store metadata") {
+					t.Error("Expected metadata warning")
+				}
+			}
+		})
+	}
+}
+
+func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
+	// Save original functions
+	origGetCurrentUser := getCurrentUser
+	origValidateAndNormalizeSecret := validateAndNormalizeSecret
+	origGenerateConsecutiveCodes := generateConsecutiveCodes
+	origReadPassword := readPassword
+	defer func() {
+		getCurrentUser = origGetCurrentUser
+		validateAndNormalizeSecret = origValidateAndNormalizeSecret
+		generateConsecutiveCodes = origGenerateConsecutiveCodes
+		readPassword = origReadPassword
+	}()
+
+	// Mock functions
+	getCurrentUser = func() (string, error) {
+		return "testuser", nil
+	}
+
+	validateAndNormalizeSecret = func(secret string) (string, error) {
+		return secret, nil
+	}
+
+	generateConsecutiveCodes = func(secret string) (string, string, error) {
+		return "123456", "789012", nil
+	}
+
+	readPassword = func(fd int) ([]byte, error) {
+		return []byte("TESTSECRET"), nil
+	}
+
+	tests := map[string]struct {
+		existingSecret   string
+		userInput        string
+		expectError      bool
+		expectedErrorMsg string
+		expectOverwrite  bool
+	}{
+		"existing entry - user cancels with n": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "TestService\n\nn\n", // service: TestService, profile: empty, overwrite: no
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"existing entry - user cancels with N": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "TestService\n\nN\n", // service: TestService, profile: empty, overwrite: NO
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"existing entry - user cancels with empty": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "TestService\n\n\n", // service: TestService, profile: empty, overwrite: empty (defaults to no)
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"existing entry - user overwrites with y": {
+			existingSecret:  "EXISTING_SECRET",
+			userInput:       "TestService\n\ny\n1\n", // service: TestService, profile: empty, overwrite: yes, manual entry
+			expectError:     false,
+			expectOverwrite: true,
+		},
+		"existing entry - user overwrites with yes": {
+			existingSecret:  "EXISTING_SECRET",
+			userInput:       "TestService\n\nyes\n1\n", // service: TestService, profile: empty, overwrite: yes, manual entry
+			expectError:     false,
+			expectOverwrite: true,
+		},
+		"existing entry with profile - user cancels": {
+			existingSecret:   "EXISTING_SECRET",
+			userInput:        "TestService\nwork\nn\n", // service: TestService, profile: work, overwrite: no
+			expectError:      true,
+			expectedErrorMsg: "setup cancelled by user",
+			expectOverwrite:  false,
+		},
+		"no existing entry - proceeds normally": {
+			existingSecret:  "",                   // No existing entry
+			userInput:       "TestService\n\n1\n", // service: TestService, profile: empty, manual entry
+			expectError:     false,
+			expectOverwrite: false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// Create mock keychain with controlled behavior
+			mockKeychain := &mocks.MockProvider{
+				GetSecretFunc: func(account, service string) ([]byte, error) {
+					if tc.existingSecret != "" {
+						return []byte(tc.existingSecret), nil
+					}
+					return nil, fmt.Errorf("not found")
+				},
+				GetSecretStringFunc: func(account, service string) (string, error) {
+					return tc.existingSecret, nil
+				},
+				SetSecretFunc: func(account, service string, secret []byte) error {
+					return nil
+				},
+				SetSecretStringFunc: func(account, service string, secret string) error {
+					return nil
+				},
+				StoreEntryMetadataFunc: func(serviceType, service, account, description string) error {
+					return nil
+				},
+			}
+
+			// Create handler with mock reader
+			reader := bufio.NewReader(strings.NewReader(tc.userInput))
+			handler := &TOTPSetupHandler{
+				reader:           reader,
+				keychainProvider: mockKeychain,
+			}
+
+			// Capture output
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			// Run setup
+			err := handler.Setup()
+
+			// Restore stdout and get output
+			w.Close()
+			os.Stdout = oldStdout
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			output := buf.String()
+
+			// Check results
+			if tc.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				} else if !strings.Contains(err.Error(), tc.expectedErrorMsg) {
+					t.Errorf("Expected error containing %q, got %q", tc.expectedErrorMsg, err.Error())
+				}
+
+				// Verify cancellation message appears
+				if tc.expectedErrorMsg == "setup cancelled by user" && !strings.Contains(output, "Setup cancelled") {
+					t.Error("Expected 'Setup cancelled' message in output")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+
+				// Verify success messages
+				if !strings.Contains(output, "Setup complete!") {
+					t.Error("Expected setup completion message")
+				}
+			}
+
+			// Verify overwrite prompt appears when expected
+			if tc.existingSecret != "" {
+				if !strings.Contains(output, "An entry already exists") {
+					t.Error("Expected overwrite warning message")
+				}
+				if !strings.Contains(output, "Overwrite existing configuration?") {
+					t.Error("Expected overwrite prompt")
+				}
+			}
+		})
+	}
 }
