@@ -13,6 +13,7 @@ import (
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/env"
 	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/keyformat"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
@@ -65,11 +66,11 @@ func (h *AWSSetupHandler) ServiceName() string {
 }
 
 // Helper to create service names with proper profile handling
-func (h *AWSSetupHandler) createServiceName(prefix string, profile string) string {
+func (h *AWSSetupHandler) createServiceName(prefix string, profile string) (string, error) {
 	if profile == "" {
-		return fmt.Sprintf("%s-default", prefix)
+		profile = "default"
 	}
-	return fmt.Sprintf("%s-%s", prefix, profile)
+	return keyformat.Build(prefix, profile)
 }
 
 // createAWSCommand creates an AWS CLI command with the given profile and args
@@ -461,7 +462,10 @@ func (h *AWSSetupHandler) Setup() error {
 		return fmt.Errorf("failed to get current user: %w", err)
 	}
 
-	serviceName := h.createServiceName(constants.AWSServicePrefix, profile)
+	serviceName, err := h.createServiceName(constants.AWSServicePrefix, profile)
+	if err != nil {
+		return fmt.Errorf("failed to build service key: %w", err)
+	}
 	existingSecret, err := h.keychainProvider.GetSecretString(user, serviceName)
 	if err != nil && !errors.Is(err, keychain.ErrNotFound) {
 		return fmt.Errorf("failed to check existing entry: %w", err)
@@ -519,16 +523,24 @@ func (h *AWSSetupHandler) Setup() error {
 		return fmt.Errorf("failed to select MFA device: %w", err)
 	}
 
-	serviceName = h.createServiceName(constants.AWSServicePrefix, profile)
-	err = h.keychainProvider.SetSecretString(user, serviceName, secretStr)
+	// Write MFA ARN first — if the main secret write fails afterward,
+	// we avoid leaving an "existing" setup that blocks future runs.
+	serialServiceName, err := h.createServiceName(constants.AWSServiceMFAPrefix, profile)
 	if err != nil {
-		return fmt.Errorf("failed to store secret in keychain: %w", err)
+		return fmt.Errorf("failed to build MFA serial key: %w", err)
 	}
-
-	serialServiceName := h.createServiceName(constants.AWSServiceMFAPrefix, profile)
 	err = h.keychainProvider.SetSecretString(user, serialServiceName, mfaArn)
 	if err != nil {
 		return fmt.Errorf("failed to store MFA serial in keychain: %w", err)
+	}
+
+	serviceName, err = h.createServiceName(constants.AWSServicePrefix, profile)
+	if err != nil {
+		return fmt.Errorf("failed to build service key: %w", err)
+	}
+	err = h.keychainProvider.SetSecretString(user, serviceName, secretStr)
+	if err != nil {
+		return fmt.Errorf("failed to store secret in keychain: %w", err)
 	}
 
 	description := "AWS MFA"
@@ -568,11 +580,11 @@ func (h *TOTPSetupHandler) ServiceName() string {
 }
 
 // createTOTPServiceName creates a TOTP service name with proper profile handling
-func (h *TOTPSetupHandler) createTOTPServiceName(serviceName, profile string) string {
+func (h *TOTPSetupHandler) createTOTPServiceName(serviceName, profile string) (string, error) {
 	if profile == "" {
-		return fmt.Sprintf("sesh-totp-%s", serviceName)
+		return keyformat.Build(constants.TOTPServicePrefix, serviceName)
 	}
-	return fmt.Sprintf("sesh-totp-%s-%s", serviceName, profile)
+	return keyformat.Build(constants.TOTPServicePrefix, serviceName, profile)
 }
 
 // promptForServiceName prompts the user to enter a service name and validates it
@@ -677,7 +689,10 @@ func (h *TOTPSetupHandler) Setup() error {
 		return fmt.Errorf("failed to get current user: %w", err)
 	}
 
-	serviceKey := h.createTOTPServiceName(serviceName, profile)
+	serviceKey, err := h.createTOTPServiceName(serviceName, profile)
+	if err != nil {
+		return fmt.Errorf("failed to build service key: %w", err)
+	}
 	existingSecret, err := h.keychainProvider.GetSecretString(user, serviceKey)
 	if err != nil && !errors.Is(err, keychain.ErrNotFound) {
 		return fmt.Errorf("failed to check existing entry: %w", err)
@@ -726,7 +741,10 @@ func (h *TOTPSetupHandler) Setup() error {
 	}
 
 	// Build service key using consistent helper pattern
-	serviceKey = h.createTOTPServiceName(serviceName, profile)
+	serviceKey, err = h.createTOTPServiceName(serviceName, profile)
+	if err != nil {
+		return fmt.Errorf("failed to build service key: %w", err)
+	}
 
 	// Store the secret using the keychain provider
 	err = h.keychainProvider.SetSecretString(user, serviceKey, secretStr)

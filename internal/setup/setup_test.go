@@ -501,32 +501,41 @@ func TestAWSSetupHandler_createServiceName(t *testing.T) {
 		prefix  string
 		profile string
 		want    string
+		wantErr bool
 	}{
 		"default profile": {
-			prefix:  "sesh-aws",
-			profile: "",
-			want:    "sesh-aws-default",
+			prefix: "sesh-aws",
+			want:   "sesh-aws/default",
 		},
 		"custom profile": {
 			prefix:  "sesh-aws",
 			profile: "dev",
-			want:    "sesh-aws-dev",
+			want:    "sesh-aws/dev",
 		},
 		"serial prefix with profile": {
 			prefix:  "sesh-aws-serial",
 			profile: "prod",
-			want:    "sesh-aws-serial-prod",
+			want:    "sesh-aws-serial/prod",
 		},
-		"empty prefix default profile": {
-			prefix:  "",
-			profile: "",
-			want:    "-default",
+		"profile with slash is rejected": {
+			prefix:  "sesh-aws",
+			profile: "a/b",
+			wantErr: true,
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := handler.createServiceName(tc.prefix, tc.profile)
+			got, err := handler.createServiceName(tc.prefix, tc.profile)
+			if tc.wantErr {
+				if err == nil {
+					t.Error("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if got != tc.want {
 				t.Errorf("createServiceName(%q, %q) = %v, want %v", tc.prefix, tc.profile, got, tc.want)
 			}
@@ -541,32 +550,43 @@ func TestTOTPSetupHandler_createTOTPServiceName(t *testing.T) {
 		serviceName string
 		profile     string
 		want        string
+		wantErr     bool
 	}{
 		"service without profile": {
 			serviceName: "github",
-			profile:     "",
-			want:        "sesh-totp-github",
+			want:        "sesh-totp/github",
 		},
 		"service with profile": {
 			serviceName: "github",
 			profile:     "work",
-			want:        "sesh-totp-github-work",
+			want:        "sesh-totp/github/work",
 		},
 		"service with spaces": {
 			serviceName: "my service",
-			profile:     "",
-			want:        "sesh-totp-my service",
+			want:        "sesh-totp/my service",
 		},
-		"empty service": {
+		"empty service is rejected": {
 			serviceName: "",
-			profile:     "",
-			want:        "sesh-totp-",
+			wantErr:     true,
+		},
+		"service with slash is rejected": {
+			serviceName: "a/b",
+			wantErr:     true,
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			got := handler.createTOTPServiceName(tc.serviceName, tc.profile)
+			got, err := handler.createTOTPServiceName(tc.serviceName, tc.profile)
+			if tc.wantErr {
+				if err == nil {
+					t.Error("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if got != tc.want {
 				t.Errorf("createTOTPServiceName(%q, %q) = %v, want %v", tc.serviceName, tc.profile, got, tc.want)
 			}

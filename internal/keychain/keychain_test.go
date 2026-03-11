@@ -170,7 +170,7 @@ func TestGetMFASerialSuccess(t *testing.T) {
 		return cmd
 	}
 
-	serialBytes, err := GetMFASerialBytes("testuser")
+	serialBytes, err := GetMFASerialBytes("testuser", "")
 
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
@@ -201,7 +201,7 @@ func TestGetMFASerialWithEmptyUsername(t *testing.T) {
 		return cmd
 	}
 
-	serialBytes, err := GetMFASerialBytes("")
+	serialBytes, err := GetMFASerialBytes("", "")
 
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
@@ -228,7 +228,7 @@ func TestGetMFASerialWithWhoamiError(t *testing.T) {
 		return cmd
 	}
 
-	_, err := GetMFASerialBytes("")
+	_, err := GetMFASerialBytes("", "")
 
 	if err == nil {
 		t.Error("Expected error but got nil")
@@ -253,13 +253,13 @@ func TestGetMFASerialWithSecurityError(t *testing.T) {
 		return cmd
 	}
 
-	_, err := GetMFASerialBytes("testuser")
+	_, err := GetMFASerialBytes("testuser", "")
 
 	if err == nil {
 		t.Error("Expected error but got nil")
 	}
-	if !strings.Contains(err.Error(), "no MFA serial stored in Keychain") {
-		t.Errorf("Expected error with 'no MFA serial stored in Keychain', got: %s", err.Error())
+	if !strings.Contains(err.Error(), "keychain read failed") {
+		t.Errorf("Expected error with 'keychain read failed', got: %s", err.Error())
 	}
 }
 
@@ -496,7 +496,7 @@ func TestGetMFASerialIntegration(t *testing.T) {
 	execCommand = exec.Command
 	defer func() { execCommand = origExecCommand }()
 
-	_, err := GetMFASerialBytes("") // should use `whoami`...
+	_, err := GetMFASerialBytes("", "") // should use `whoami`...
 	// ...doesn't really matter here that if it succeeds or fails, just that it doesn't panic!
 	_ = err
 }

@@ -82,7 +82,7 @@ func TestDefaultProviderGetMFASerialBytes(t *testing.T) {
 	}
 
 	provider := NewDefaultProvider()
-	serialBytes, err := provider.GetMFASerialBytes("testuser")
+	serialBytes, err := provider.GetMFASerialBytes("testuser", "")
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
