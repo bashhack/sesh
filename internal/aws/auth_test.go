@@ -41,7 +41,7 @@ func TestGetSessionToken_Success(t *testing.T) {
 
 	execCommand = MockExecCommand(string(mockRespJSON), nil)
 
-	creds, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", "123456")
+	creds, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", []byte("123456"))
 
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
@@ -70,7 +70,7 @@ func TestGetSessionToken_CommandError(t *testing.T) {
 
 	execCommand = MockExecCommand("", errors.New("command failed"))
 
-	_, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", "123456")
+	_, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", []byte("123456"))
 
 	if err == nil {
 		t.Error("Expected error, got nil")
@@ -83,7 +83,7 @@ func TestGetSessionToken_InvalidJSON(t *testing.T) {
 
 	execCommand = MockExecCommand("not json", nil)
 
-	_, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", "123456")
+	_, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", []byte("123456"))
 
 	if err == nil || err.Error() == "" {
 		t.Error("Expected JSON parsing error, got nil or empty")
@@ -113,7 +113,7 @@ func TestGetSessionToken_EmptyProfile(t *testing.T) {
 		return cmd
 	}
 
-	_, err := GetSessionToken("", "arn:aws:iam::123456789012:mfa/test", "123456")
+	_, err := GetSessionToken("", "arn:aws:iam::123456789012:mfa/test", []byte("123456"))
 	if err != nil {
 		t.Errorf("Expected no error, got: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestGetSessionToken_Integration(t *testing.T) {
 	// I'm just aiming for coverage here and ensuring the function
 	// handles basic error cases correctly
 
-	_, err := GetSessionToken("nonexistent-profile", "invalid-serial", "123456")
+	_, err := GetSessionToken("nonexistent-profile", "invalid-serial", []byte("123456"))
 	if err == nil {
 		t.Error("Expected error for invalid AWS credentials, got nil")
 	}
@@ -243,5 +243,52 @@ func TestGetFirstMFADevice_Integration(t *testing.T) {
 	_, err := GetFirstMFADevice("nonexistent-profile-" + randStr)
 	if err == nil {
 		t.Error("Expected error for nonexistent profile, got nil")
+	}
+}
+
+func TestCredentials_ZeroSecrets(t *testing.T) {
+	tests := map[string]struct {
+		creds          *Credentials
+		expectNonEmpty bool // Expiration should remain non-empty
+	}{
+		"normal credentials": {
+			creds: &Credentials{
+				AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
+				SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				SessionToken:    "AQoDYXdzEJr...",
+				Expiration:      "2023-12-01T00:00:00Z",
+			},
+			expectNonEmpty: true,
+		},
+		"empty credentials": {
+			creds: &Credentials{},
+		},
+		"nil credentials": {
+			creds: nil,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			tc.creds.ZeroSecrets()
+
+			if tc.creds == nil {
+				return
+			}
+
+			if tc.creds.AccessKeyId != "" {
+				t.Errorf("AccessKeyId not zeroed: %q", tc.creds.AccessKeyId)
+			}
+			if tc.creds.SecretAccessKey != "" {
+				t.Errorf("SecretAccessKey not zeroed: %q", tc.creds.SecretAccessKey)
+			}
+			if tc.creds.SessionToken != "" {
+				t.Errorf("SessionToken not zeroed: %q", tc.creds.SessionToken)
+			}
+
+			if tc.expectNonEmpty && tc.creds.Expiration == "" {
+				t.Error("Expiration should not be zeroed")
+			}
+		})
 	}
 }

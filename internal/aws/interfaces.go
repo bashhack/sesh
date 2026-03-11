@@ -3,7 +3,8 @@ package aws
 // Provider defines the interface for AWS operations
 type Provider interface {
 	// GetSessionToken gets temporary AWS credentials using MFA
-	GetSessionToken(profile, serial, code string) (Credentials, error)
+	// The code is provided as a byte slice so it can be securely zeroed after use
+	GetSessionToken(profile, serial string, code []byte) (Credentials, error)
 
 	// GetFirstMFADevice retrieves the first MFA device for the current user
 	GetFirstMFADevice(profile string) (string, error)
@@ -12,11 +13,10 @@ type Provider interface {
 // DefaultProvider is the default implementation using aws-cli
 type DefaultProvider struct{}
 
-// Ensure DefaultProvider implements the Provider interface
 var _ Provider = (*DefaultProvider)(nil)
 
 // GetSessionToken implements the Provider interface
-func (p *DefaultProvider) GetSessionToken(profile, serial, code string) (Credentials, error) {
+func (p *DefaultProvider) GetSessionToken(profile, serial string, code []byte) (Credentials, error) {
 	return GetSessionToken(profile, serial, code)
 }
 
