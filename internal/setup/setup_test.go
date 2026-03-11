@@ -1818,7 +1818,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 		wantErrMsg          string
 	}{
 		"successful setup with QR code": {
-			userInput:           "MyService\ndefault\n1\n", // service name, profile, QR choice (2 for QR)
+			userInput:           "MyService\ndefault\n2\n", // service name, profile, QR choice
 			scanQRError:         nil,
 			scanQRResult:        "JBSWY3DPEHPK3PXP",
 			validateError:       nil,
@@ -1927,7 +1927,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			wantErr:             false, // Should not fail the setup
 		},
 		"successful setup without profile": {
-			userInput:           "MyService\n\n2\nJBSWY3DPEHPK3PXP\n", // service name, empty profile, manual choice, secret
+			userInput:           "MyService\n\n1\nJBSWY3DPEHPK3PXP\n", // service name, empty profile, manual choice, secret
 			scanQRError:         nil,
 			scanQRResult:        "",
 			validateError:       nil,

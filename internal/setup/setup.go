@@ -121,6 +121,7 @@ func (h *AWSSetupHandler) captureMFASecret(choice string) (string, error) {
 		}
 		fmt.Println("✓") // Visual confirmation that input was received
 
+		defer secure.SecureZeroBytes(secret)
 		secretStr = strings.TrimSpace(string(secret))
 
 	case "2": // QR code capture flow with retry
@@ -167,6 +168,7 @@ func (h *AWSSetupHandler) captureAWSManualEntry() (string, error) {
 	}
 	fmt.Println("✓") // Visual confirmation that input was received
 
+	defer secure.SecureZeroBytes(secret)
 	return strings.TrimSpace(string(secret)), nil
 }
 
@@ -351,7 +353,10 @@ func (h *AWSSetupHandler) promptForMFAARN() (string, error) {
 
 	for {
 		fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
-		mfaArn, _ := h.reader.ReadString('\n')
+		mfaArn, err := h.reader.ReadString('\n')
+		if err != nil {
+			return "", fmt.Errorf("failed to read MFA ARN: %w", err)
+		}
 		mfaArn = strings.TrimSpace(mfaArn)
 
 		if mfaArn == "" {
@@ -637,12 +642,14 @@ func (h *TOTPSetupHandler) captureManualEntry() (string, error) {
 
 // showTOTPSetupCompletionMessage displays the final success message with usage instructions
 func (h *TOTPSetupHandler) showTOTPSetupCompletionMessage(serviceName, profile string) {
-	fmt.Printf("✅ Setup complete! You can now use 'sesh --service totp --service-name %s", serviceName)
+	profileFlag := ""
 	if profile != "" {
-		fmt.Printf(" --profile %s", profile)
+		profileFlag = fmt.Sprintf(" --profile '%s'", profile)
 	}
-	fmt.Println("' to generate TOTP codes.")
-	fmt.Printf("Use 'sesh --service totp --service-name %s --clip' to copy the code to clipboard.\n", serviceName)
+	fmt.Println("✅ Setup complete! Generate TOTP codes with:")
+	fmt.Printf("  sesh --service totp --service-name '%s'%s\n", serviceName, profileFlag)
+	fmt.Println("Copy to clipboard with:")
+	fmt.Printf("  sesh --service totp --service-name '%s'%s --clip\n", serviceName, profileFlag)
 }
 
 // Setup performs the TOTP setup
