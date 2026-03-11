@@ -21,6 +21,17 @@ type Credentials struct {
 	Expiration      string `json:"Expiration"`
 }
 
+// ZeroSecrets zeroes out the sensitive fields in the credentials
+func (c *Credentials) ZeroSecrets() {
+	if c == nil {
+		return
+	}
+	secure.ZeroStrings(c.AccessKeyId, c.SecretAccessKey, c.SessionToken)
+	c.AccessKeyId = ""
+	c.SecretAccessKey = ""
+	c.SessionToken = ""
+}
+
 type SessionTokenResponse struct {
 	Credentials Credentials `json:"Credentials"`
 }
@@ -33,10 +44,14 @@ type ListDevicesResponse struct {
 	MFADevices []MFADevice `json:"MFADevices"`
 }
 
-func GetSessionToken(profile, serial, code string) (Credentials, error) {
+func GetSessionToken(profile, serial string, code []byte) (Credentials, error) {
+	// Convert code to string for command execution but ensure it's zeroed
+	codeStr := string(code)
+	defer secure.SecureZeroString(codeStr)
+
 	args := []string{"sts", "get-session-token",
 		"--serial-number", serial,
-		"--token-code", code,
+		"--token-code", codeStr,
 		"--output", "json",
 	}
 	if profile != "" {
@@ -74,6 +89,8 @@ func GetSessionToken(profile, serial, code string) (Credentials, error) {
 			err, args, stderr.String())
 	}
 
+	// Note: out shares the same backing array as stdout.Bytes(), so the
+	// explicit SecureZeroBytes(stdout.Bytes()) calls below also zero out.
 	out := stdout.Bytes()
 
 	var parsed SessionTokenResponse
