@@ -13,7 +13,6 @@ type Provider interface {
 // DefaultProvider is the default implementation using aws-cli
 type DefaultProvider struct{}
 
-// Ensure DefaultProvider implements the Provider interface
 var _ Provider = (*DefaultProvider)(nil)
 
 // GetSessionToken implements the Provider interface

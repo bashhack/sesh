@@ -47,7 +47,6 @@ type KeychainEntry struct {
 // DefaultProvider is the default implementation using the system keychain
 type DefaultProvider struct{}
 
-// Ensure DefaultProvider implements Provider interface
 var _ Provider = (*DefaultProvider)(nil)
 
 // GetSecret implements the Provider interface

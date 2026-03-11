@@ -1,6 +1,12 @@
 package aws
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/bashhack/sesh/internal/subshell"
+)
+
+var _ subshell.ShellCustomizer = (*AWSShellCustomizer)(nil)
 
 var (
 	// SubshellFunctions contains the helper function for the AWS subshell integration

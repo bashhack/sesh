@@ -8,7 +8,6 @@ type MockProvider struct {
 	GetFirstMFADeviceFunc func(profile string) (string, error)
 }
 
-// Ensure MockProvider implements the aws.Provider interface.
 var _ aws.Provider = (*MockProvider)(nil)
 
 // GetSessionToken returns temporary AWS credentials using MFA, or a zero value if the func is not set.
