@@ -13,6 +13,7 @@ import (
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
 	keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/subshell"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
 
@@ -49,19 +50,15 @@ func TestProvider_SetupFlags(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Set up environment
 			if tc.envProfile != "" {
 				os.Setenv("AWS_PROFILE", tc.envProfile)
 				defer os.Unsetenv("AWS_PROFILE")
 			}
 
-			// Create provider
 			p := &Provider{}
 
-			// Create flag set
 			fs := flag.NewFlagSet("test", flag.ContinueOnError)
 
-			// Setup flags
 			err := p.SetupFlags(fs)
 			if tc.wantErr && err == nil {
 				t.Error("SetupFlags() expected error but got nil")
@@ -72,12 +69,10 @@ func TestProvider_SetupFlags(t *testing.T) {
 				return
 			}
 
-			// Parse empty args to get defaults
 			if err := fs.Parse([]string{}); err != nil {
 				t.Errorf("Parse() error: %v", err)
 			}
 
-			// Check values
 			if p.profile != tc.wantProfile {
 				t.Errorf("profile = %v, want %v", p.profile, tc.wantProfile)
 			}
@@ -99,7 +94,6 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 		t.Errorf("GetFlagInfo() returned %d flags, want 2", len(flags))
 	}
 
-	// Check profile flag
 	if flags[0].Name != "profile" {
 		t.Errorf("flag[0].Name = %v, want 'profile'", flags[0].Name)
 	}
@@ -110,7 +104,6 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 		t.Error("profile flag should not be required")
 	}
 
-	// Check no-subshell flag
 	if flags[1].Name != "no-subshell" {
 		t.Errorf("flag[1].Name = %v, want 'no-subshell'", flags[1].Name)
 	}
@@ -222,11 +215,9 @@ func TestProvider_ValidateRequest(t *testing.T) {
 				os.Stderr = oldStderr
 			}()
 
-			// Create mock
 			mockKeychain := &keychainMocks.MockProvider{}
 			tc.setupKeychain(mockKeychain)
 
-			// Create provider
 			p := &Provider{
 				keychain: mockKeychain,
 				profile:  tc.profile,
@@ -234,7 +225,6 @@ func TestProvider_ValidateRequest(t *testing.T) {
 				keyName:  "sesh-aws",
 			}
 
-			// Test ValidateRequest
 			err := p.ValidateRequest()
 			if tc.wantErr && err == nil {
 				t.Error("ValidateRequest() expected error but got nil")
@@ -324,13 +314,11 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 				os.Stderr = oldStderr
 			}()
 
-			// Create mocks
 			mockKeychain := &keychainMocks.MockProvider{}
 			mockTOTP := &totpMocks.MockProvider{}
 			tc.setupKeychain(mockKeychain)
 			tc.setupTOTP(mockTOTP)
 
-			// Create provider
 			p := &Provider{
 				keychain: mockKeychain,
 				totp:     mockTOTP,
@@ -339,7 +327,6 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 				keyName:  "sesh-aws",
 			}
 
-			// Test GetTOTPCodes
 			current, next, secondsLeft, err := p.GetTOTPCodes()
 			if tc.wantErr && err == nil {
 				t.Error("GetTOTPCodes() expected error but got nil")
@@ -363,7 +350,6 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 }
 
 func TestProvider_GetCredentials(t *testing.T) {
-	// This is a complex integration test - we'll test the key scenarios
 	tests := map[string]struct {
 		profile       string
 		setupKeychain func(*keychainMocks.MockProvider)
@@ -541,7 +527,6 @@ func TestProvider_GetCredentials(t *testing.T) {
 				os.Stderr = oldStderr
 			}()
 
-			// Create mocks
 			mockKeychain := &keychainMocks.MockProvider{}
 			mockTOTP := &totpMocks.MockProvider{}
 			mockAWS := &awsMocks.MockProvider{}
@@ -549,7 +534,6 @@ func TestProvider_GetCredentials(t *testing.T) {
 			tc.setupTOTP(mockTOTP)
 			tc.setupAWS(mockAWS)
 
-			// Create provider
 			p := &Provider{
 				aws:      mockAWS,
 				keychain: mockKeychain,
@@ -559,7 +543,6 @@ func TestProvider_GetCredentials(t *testing.T) {
 				keyName:  "sesh-aws",
 			}
 
-			// Test GetCredentials
 			creds, err := p.GetCredentials()
 			if tc.wantErr && err == nil {
 				t.Error("GetCredentials() expected error but got nil")
@@ -575,7 +558,6 @@ func TestProvider_GetCredentials(t *testing.T) {
 }
 
 func TestProvider_GetClipboardValue(t *testing.T) {
-	// Create mocks
 	mockKeychain := &keychainMocks.MockProvider{
 		GetSecretFunc: func(account, service string) ([]byte, error) {
 			if account == "testuser" && service == "sesh-aws/default" {
@@ -602,7 +584,6 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 		os.Stderr = oldStderr
 	}()
 
-	// Create provider
 	p := &Provider{
 		keychain: mockKeychain,
 		totp:     mockTOTP,
@@ -611,7 +592,6 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 		keyName:  "sesh-aws",
 	}
 
-	// Test GetClipboardValue
 	creds, err := p.GetClipboardValue()
 	if err != nil {
 		t.Errorf("GetClipboardValue() unexpected error: %v", err)
@@ -622,7 +602,6 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 	if creds.CopyValue != "123456" {
 		t.Errorf("CopyValue = %v, want '123456'", creds.CopyValue)
 	}
-	// Check that DisplayInfo contains expected text
 	if !strings.Contains(creds.DisplayInfo, "123456") {
 		t.Errorf("DisplayInfo should contain current code")
 	}
@@ -644,11 +623,19 @@ func TestProvider_NewSubshellConfig(t *testing.T) {
 	}
 
 	config := p.NewSubshellConfig(creds)
-	if config == nil {
-		t.Error("NewSubshellConfig() returned nil")
+	sc, ok := config.(subshell.Config)
+	if !ok {
+		t.Fatal("NewSubshellConfig() did not return subshell.Config")
 	}
-	// We can't easily test the internals of the config without exposing them
-	// but we can verify it returns something
+	if sc.ServiceName != "aws" {
+		t.Errorf("ServiceName = %v, want 'aws'", sc.ServiceName)
+	}
+	if len(sc.Variables) != 3 {
+		t.Errorf("Variables count = %d, want 3", len(sc.Variables))
+	}
+	if sc.ShellCustomizer == nil {
+		t.Error("ShellCustomizer should not be nil")
+	}
 }
 
 func TestBuildServiceKey(t *testing.T) {

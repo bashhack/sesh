@@ -11,19 +11,17 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 	keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/setup"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
 
 func TestNewProvider(t *testing.T) {
-	// Create mocks
 	mockAWS := &awsMocks.MockProvider{}
 	mockKeychain := &keychainMocks.MockProvider{}
 	mockTOTP := &totpMocks.MockProvider{}
 
-	// Create provider
 	p := NewProvider(mockAWS, mockKeychain, mockTOTP)
 
-	// Verify provider is correctly initialized
 	if p == nil {
 		t.Fatal("NewProvider() returned nil")
 	}
@@ -108,11 +106,9 @@ func TestProvider_GetSetupHandler(t *testing.T) {
 	p := &Provider{keychain: mockKeychain}
 
 	handler := p.GetSetupHandler()
-	if handler == nil {
-		t.Error("GetSetupHandler() returned nil")
+	if _, ok := handler.(*setup.AWSSetupHandler); !ok {
+		t.Errorf("GetSetupHandler() returned %T, want *setup.AWSSetupHandler", handler)
 	}
-	// We can't easily test the internals of the handler without exposing its type
-	// but we can verify it returns something
 }
 
 func TestProvider_GetTOTPKeyInfo(t *testing.T) {
@@ -239,21 +235,18 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Create mocks
-			mockKeychain := &keychainMocks.MockProvider{}
+					mockKeychain := &keychainMocks.MockProvider{}
 			mockAWS := &awsMocks.MockProvider{}
 			tc.setupKeychain(mockKeychain)
 			tc.setupAWS(mockAWS)
 
-			// Create provider
-			p := &Provider{
+					p := &Provider{
 				aws:      mockAWS,
 				keychain: mockKeychain,
 				profile:  tc.profile,
 				keyUser:  tc.keyUser,
 			}
 
-			// Test GetMFASerialBytes
 			serialBytes, err := p.GetMFASerialBytes()
 			if tc.wantErr && err == nil {
 				t.Error("GetMFASerialBytes() expected error but got nil")
@@ -354,14 +347,11 @@ func TestProvider_ListEntries(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Create mock
 			mockKeychain := &keychainMocks.MockProvider{}
 			tc.setupKeychain(mockKeychain)
 
-			// Create provider
-			p := &Provider{keychain: mockKeychain}
+					p := &Provider{keychain: mockKeychain}
 
-			// Test ListEntries
 			entries, err := p.ListEntries()
 			if tc.wantErr && err == nil {
 				t.Error("ListEntries() expected error but got nil")
@@ -482,14 +472,11 @@ func TestProvider_DeleteEntry(t *testing.T) {
 				os.Stderr = oldStderr
 			}()
 
-			// Create mock
 			mockKeychain := &keychainMocks.MockProvider{}
 			tc.setupKeychain(mockKeychain)
 
-			// Create provider
-			p := &Provider{keychain: mockKeychain}
+					p := &Provider{keychain: mockKeychain}
 
-			// Test DeleteEntry
 			err := p.DeleteEntry(tc.id)
 			if tc.wantErr && err == nil {
 				t.Error("DeleteEntry() expected error but got nil")
@@ -507,8 +494,6 @@ func TestProvider_DeleteEntry(t *testing.T) {
 }
 
 func TestProvider_getAWSProfiles(t *testing.T) {
-	// This test needs to mock file system operations
-	// We'll create a temporary config file for testing
 	tests := map[string]struct {
 		configContent string
 		wantProfiles  []string
@@ -549,34 +534,28 @@ region = ap-southeast-1
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Create temporary directory structure
 			tmpDir, err := os.MkdirTemp("", "sesh-test-*")
 			if err != nil {
 				t.Fatalf("Failed to create temp dir: %v", err)
 			}
 			defer os.RemoveAll(tmpDir)
 
-			// Create .aws directory
 			awsDir := filepath.Join(tmpDir, ".aws")
 			if err := os.MkdirAll(awsDir, 0700); err != nil {
 				t.Fatalf("Failed to create .aws dir: %v", err)
 			}
 
-			// Write config file
 			configPath := filepath.Join(awsDir, "config")
 			if err := os.WriteFile(configPath, []byte(tc.configContent), 0600); err != nil {
 				t.Fatalf("Failed to write config file: %v", err)
 			}
 
-			// Override HOME for this test
 			oldHome := os.Getenv("HOME")
 			os.Setenv("HOME", tmpDir)
 			defer os.Setenv("HOME", oldHome)
 
-			// Create provider
-			p := &Provider{}
+					p := &Provider{}
 
-			// Test getAWSProfiles
 			profiles, err := p.getAWSProfiles()
 			if tc.wantErr && err == nil {
 				t.Error("getAWSProfiles() expected error but got nil")
@@ -600,24 +579,19 @@ region = ap-southeast-1
 		})
 	}
 
-	// Test when config file doesn't exist
 	t.Run("no config file", func(t *testing.T) {
-		// Create temporary directory without .aws
 		tmpDir, err := os.MkdirTemp("", "sesh-test-*")
 		if err != nil {
 			t.Fatalf("Failed to create temp dir: %v", err)
 		}
 		defer os.RemoveAll(tmpDir)
 
-		// Override HOME for this test
 		oldHome := os.Getenv("HOME")
 		os.Setenv("HOME", tmpDir)
 		defer os.Setenv("HOME", oldHome)
 
-		// Create provider
-		p := &Provider{}
+			p := &Provider{}
 
-		// Test getAWSProfiles - should return error
 		_, err = p.getAWSProfiles()
 		if err == nil {
 			t.Error("getAWSProfiles() expected error when config doesn't exist")
