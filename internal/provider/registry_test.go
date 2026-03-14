@@ -171,18 +171,18 @@ func TestRegistry_RegisterProvider_PanicsOnDuplicate(t *testing.T) {
 func TestRegistry_ListProviders(t *testing.T) {
 	tests := map[string]struct {
 		register  []string
-		wantCount int
+		wantNames []string
 	}{
 		"empty registry": {
-			wantCount: 0,
+			wantNames: nil,
 		},
 		"single provider": {
 			register:  []string{"aws"},
-			wantCount: 1,
+			wantNames: []string{"aws"},
 		},
-		"multiple providers": {
-			register:  []string{"aws", "totp"},
-			wantCount: 2,
+		"multiple providers sorted by name": {
+			register:  []string{"totp", "aws", "gcp"},
+			wantNames: []string{"aws", "gcp", "totp"},
 		},
 	}
 
@@ -194,17 +194,13 @@ func TestRegistry_ListProviders(t *testing.T) {
 			}
 
 			providers := registry.ListProviders()
-			if len(providers) != tc.wantCount {
-				t.Errorf("len(ListProviders()) = %d, want %d", len(providers), tc.wantCount)
+			if len(providers) != len(tc.wantNames) {
+				t.Fatalf("len(ListProviders()) = %d, want %d", len(providers), len(tc.wantNames))
 			}
 
-			names := make(map[string]bool)
-			for _, p := range providers {
-				names[p.Name()] = true
-			}
-			for _, n := range tc.register {
-				if !names[n] {
-					t.Errorf("provider %q not found in list", n)
+			for i, p := range providers {
+				if p.Name() != tc.wantNames[i] {
+					t.Errorf("providers[%d].Name() = %q, want %q", i, p.Name(), tc.wantNames[i])
 				}
 			}
 		})

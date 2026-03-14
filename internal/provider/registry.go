@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -46,7 +47,7 @@ func (r *Registry) GetProvider(name string) (ServiceProvider, error) {
 	return p, nil
 }
 
-// ListProviders returns all registered providers
+// ListProviders returns all registered providers sorted by name.
 func (r *Registry) ListProviders() []ServiceProvider {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -55,6 +56,10 @@ func (r *Registry) ListProviders() []ServiceProvider {
 	for _, p := range r.providers {
 		result = append(result, p)
 	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name() < result[j].Name()
+	})
 
 	return result
 }
