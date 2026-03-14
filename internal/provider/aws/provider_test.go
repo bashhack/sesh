@@ -963,6 +963,9 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 	if !strings.Contains(creds.DisplayInfo, "AWS MFA code") {
 		t.Errorf("DisplayInfo should contain 'AWS MFA code'")
 	}
+	if creds.ClipboardDescription != "AWS MFA code" {
+		t.Errorf("ClipboardDescription = %v, want 'AWS MFA code'", creds.ClipboardDescription)
+	}
 }
 
 func TestProvider_NewSubshellConfig(t *testing.T) {
