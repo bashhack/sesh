@@ -133,6 +133,23 @@ func TestRegistry_GetProvider(t *testing.T) {
 	}
 }
 
+func TestRegistry_RegisterProvider_PanicsOnNil(t *testing.T) {
+	registry := NewRegistry()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on nil provider, got none")
+		}
+		msg, ok := r.(string)
+		if !ok || !strings.Contains(msg, "nil provider") {
+			t.Errorf("unexpected panic value: %v", r)
+		}
+	}()
+
+	registry.RegisterProvider(nil)
+}
+
 func TestRegistry_RegisterProvider_PanicsOnDuplicate(t *testing.T) {
 	registry := NewRegistry()
 	registry.RegisterProvider(&mockProvider{name: "aws", description: "original"})

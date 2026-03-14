@@ -21,6 +21,9 @@ func NewRegistry() *Registry {
 // RegisterProvider adds a provider to the registry.
 // Panics if a provider with the same name is already registered.
 func (r *Registry) RegisterProvider(provider ServiceProvider) {
+	if provider == nil {
+		panic("cannot register nil provider")
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	name := provider.Name()
