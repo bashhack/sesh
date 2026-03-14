@@ -30,6 +30,7 @@ type Provider struct {
 	keyUser    string
 	keyName    string
 	noSubshell bool
+	now        func() time.Time // defaults to time.Now; override in tests
 }
 
 var _ provider.ServiceProvider = (*Provider)(nil)
@@ -46,6 +47,13 @@ func NewProvider(
 		totp:     totp,
 		keyName:  constants.AWSServicePrefix,
 	}
+}
+
+func (p *Provider) timeNow() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
 }
 
 // Name returns the provider name.
@@ -78,6 +86,12 @@ func (p *Provider) GetSetupHandler() interface{} {
 
 // GetTOTPCodes retrieves TOTP codes without performing AWS authentication
 func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsLeft int64, err error) {
+	if p.keyUser == "" {
+		p.keyUser, err = env.GetCurrentUser()
+		if err != nil {
+			return "", "", 0, fmt.Errorf("failed to get current user: %w", err)
+		}
+	}
 
 	keyName, err := buildServiceKey(p.keyName, p.profile)
 	if err != nil {
@@ -108,7 +122,7 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 		return "", "", 0, fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
 
-	secondsLeft = 30 - (time.Now().Unix() % 30)
+	secondsLeft = 30 - (p.timeNow().Unix() % 30)
 
 	return currentCode, nextCode, secondsLeft, nil
 }
@@ -178,7 +192,8 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 
 			// If STILL failing with invalid MFA and we're not close to boundary,
 			// we may need to wait for the next time window
-			if secondInvalidMFA && secondsLeft > 10 {
+			freshSecondsLeft := 30 - (p.timeNow().Unix() % 30)
+			if secondInvalidMFA && freshSecondsLeft > 10 {
 				fmt.Fprintf(os.Stderr, "⚠️ Both current and next codes were rejected - may need to wait for next time window\n")
 
 				keyName, kErr := buildServiceKey(p.keyName, p.profile)
@@ -186,9 +201,9 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 					return provider.Credentials{}, fmt.Errorf("failed to build service key: %w", kErr)
 				}
 
-				secretBytes, err := p.keychain.GetSecret(p.keyUser, keyName)
-				if err != nil {
-					return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), err)
+				secretBytes, fetchErr := p.keychain.GetSecret(p.keyUser, keyName)
+				if fetchErr != nil {
+					return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), fetchErr)
 				}
 
 				secretCopy := make([]byte, len(secretBytes))
@@ -198,7 +213,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				secure.SecureZeroBytes(secretBytes)
 
 				// Generate a code for the window after next, in case AWS is far ahead of our clock
-				futureCode, gErr := p.totp.GenerateForTimeBytes(secretCopy, time.Now().Add(60*time.Second))
+				futureCode, gErr := p.totp.GenerateForTimeBytes(secretCopy, p.timeNow().Add(60*time.Second))
 				if gErr == nil {
 					fmt.Fprintf(os.Stderr, "🔑 Trying with future time window's code\n")
 					code = futureCode
@@ -221,7 +236,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 
 	expiryTime, err := time.Parse(time.RFC3339, awsCreds.Expiration)
 	if err != nil {
-		expiryTime = time.Now().Add(12 * time.Hour) // Default to 12h if we can't parse
+		expiryTime = p.timeNow().Add(12 * time.Hour) // Default to 12h if we can't parse
 	}
 
 	envVars := map[string]string{

@@ -291,7 +291,10 @@ func TestProvider_ValidateRequest(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Capture stderr to suppress warning output
 			oldStderr := os.Stderr
-			r, w, _ := os.Pipe()
+			r, w, pipeErr := os.Pipe()
+			if pipeErr != nil {
+				t.Fatalf("os.Pipe() failed: %v", pipeErr)
+			}
 			os.Stderr = w
 			defer func() {
 				r.Close()
@@ -391,7 +394,10 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Capture stderr to suppress debug output
 			oldStderr := os.Stderr
-			r, w, _ := os.Pipe()
+			r, w, pipeErr := os.Pipe()
+			if pipeErr != nil {
+				t.Fatalf("os.Pipe() failed: %v", pipeErr)
+			}
 			os.Stderr = w
 			defer func() {
 				r.Close()
@@ -605,6 +611,7 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 func TestProvider_GetCredentials(t *testing.T) {
 	tests := map[string]struct {
 		profile       string
+		now           func() time.Time
 		setupKeychain func(*keychainMocks.MockProvider)
 		setupTOTP     func(*totpMocks.MockProvider)
 		setupAWS      func(*awsMocks.MockProvider)
@@ -776,6 +783,57 @@ func TestProvider_GetCredentials(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		"both MFA codes rejected triggers future-window retry": {
+			profile: "",
+			now: func() time.Time {
+				// Second 5 of a 30s window → freshSecondsLeft = 25
+				return time.Unix(5, 0)
+			},
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					switch service {
+					case "sesh-aws-serial/default":
+						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
+					case "sesh-aws/default":
+						return []byte("MYSECRET"), nil
+					default:
+						return nil, fmt.Errorf("unexpected service: %s", service)
+					}
+				}
+			},
+			setupTOTP: func(m *totpMocks.MockProvider) {
+				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					return "123456", "654321", nil
+				}
+				m.GenerateForTimeBytesFunc = func(secret []byte, _ time.Time) (string, error) {
+					return "999999", nil
+				}
+			},
+			setupAWS: func(m *awsMocks.MockProvider) {
+				callCount := 0
+				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
+					callCount++
+					if callCount <= 2 {
+						return aws.Credentials{}, fmt.Errorf("MultiFactorAuthentication failed with invalid MFA one time pass code")
+					}
+					if string(code) == "999999" {
+						return aws.Credentials{
+							AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
+							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+							SessionToken:    "AQoDYXdzEJr...",
+							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
+						}, nil
+					}
+					return aws.Credentials{}, fmt.Errorf("unexpected call")
+				}
+			},
+			wantErr: false,
+			checkResult: func(t *testing.T, creds provider.Credentials) {
+				if !creds.MFAAuthenticated {
+					t.Error("MFAAuthenticated should be true after future-window retry")
+				}
+			},
+		},
 		"both codes fail": {
 			profile: "",
 			setupKeychain: func(m *keychainMocks.MockProvider) {
@@ -808,7 +866,10 @@ func TestProvider_GetCredentials(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Redirect stderr to capture debug output
 			oldStderr := os.Stderr
-			r, w, _ := os.Pipe()
+			r, w, pipeErr := os.Pipe()
+			if pipeErr != nil {
+				t.Fatalf("os.Pipe() failed: %v", pipeErr)
+			}
 			os.Stderr = w
 			defer func() {
 				r.Close()
@@ -830,6 +891,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 				profile:  tc.profile,
 				keyUser:  "testuser",
 				keyName:  "sesh-aws",
+				now:      tc.now,
 			}
 
 			creds, err := p.GetCredentials()
@@ -866,7 +928,10 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 
 	// Capture stderr to suppress debug output
 	oldStderr := os.Stderr
-	r, w, _ := os.Pipe()
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatalf("os.Pipe() failed: %v", pipeErr)
+	}
 	os.Stderr = w
 	defer func() {
 		r.Close()
@@ -1128,7 +1193,10 @@ func TestProvider_DeleteEntry(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Capture stderr to suppress warning output
 			oldStderr := os.Stderr
-			r, w, _ := os.Pipe()
+			r, w, pipeErr := os.Pipe()
+			if pipeErr != nil {
+				t.Fatalf("os.Pipe() failed: %v", pipeErr)
+			}
 			os.Stderr = w
 			defer func() {
 				r.Close()
