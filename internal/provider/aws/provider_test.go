@@ -77,10 +77,9 @@ func TestProvider_SetupFlags(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			if tc.envProfile != "" {
-				os.Setenv("AWS_PROFILE", tc.envProfile)
-				defer os.Unsetenv("AWS_PROFILE")
-			}
+			oldProfile := os.Getenv("AWS_PROFILE")
+			os.Setenv("AWS_PROFILE", tc.envProfile)
+			defer os.Setenv("AWS_PROFILE", oldProfile)
 
 			p := &Provider{}
 

@@ -188,13 +188,13 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 					return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), err)
 				}
 
-							secretCopy := make([]byte, len(secretBytes))
+					secretCopy := make([]byte, len(secretBytes))
 				copy(secretCopy, secretBytes)
 				defer secure.SecureZeroBytes(secretCopy)
 
-							secure.SecureZeroBytes(secretBytes)
+				secure.SecureZeroBytes(secretBytes)
 
-							// Generate a code for the window after next, in case AWS is far ahead of our clock
+				// Generate a code for the window after next, in case AWS is far ahead of our clock
 				futureCode, gErr := p.totp.GenerateForTimeBytes(secretCopy, time.Now().Add(60*time.Second))
 				if gErr == nil {
 					fmt.Fprintf(os.Stderr, "🔑 Trying with future time window's code\n")
