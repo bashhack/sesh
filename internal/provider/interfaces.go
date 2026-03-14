@@ -76,12 +76,13 @@ type ProviderEntry struct {
 
 // Credentials represents generic credentials returned by a provider
 type Credentials struct {
-	Provider         string            // Provider name
-	Expiry           time.Time         // When these credentials expire
-	Variables        map[string]string // Environment variables to set
-	DisplayInfo      string            // Human-readable display information
-	CopyValue        string            // Value to copy to clipboard if requested
-	MFAAuthenticated bool              // Whether these credentials were authenticated with MFA
+	Provider             string            // Provider name
+	Expiry               time.Time         // When these credentials expire
+	Variables            map[string]string // Environment variables to set
+	DisplayInfo          string            // Human-readable display information
+	CopyValue            string            // Value to copy to clipboard if requested
+	ClipboardDescription string            // Short description of what CopyValue contains (e.g. "TOTP code", "AWS MFA code")
+	MFAAuthenticated     bool              // Whether these credentials were authenticated with MFA
 }
 
 // FormatClipboardDisplayInfo creates the standard clipboard-mode display format
@@ -104,11 +105,12 @@ func CreateClipboardCredentials(providerName, currentCode, nextCode string, seco
 	validUntil := time.Unix(((now/30)+1)*30, 0)
 
 	return Credentials{
-		Provider:         providerName,
-		Expiry:           validUntil,
-		Variables:        map[string]string{}, // Empty map for clipboard mode
-		DisplayInfo:      FormatClipboardDisplayInfo(currentCode, nextCode, secondsLeft, actionType, serviceDesc),
-		CopyValue:        currentCode,
-		MFAAuthenticated: false, // Clipboard mode doesn't authenticate with backend services
+		Provider:             providerName,
+		Expiry:               validUntil,
+		Variables:            map[string]string{}, // Empty map for clipboard mode
+		DisplayInfo:          FormatClipboardDisplayInfo(currentCode, nextCode, secondsLeft, actionType, serviceDesc),
+		CopyValue:            currentCode,
+		ClipboardDescription: actionType,
+		MFAAuthenticated:     false, // Clipboard mode doesn't authenticate with backend services
 	}
 }
