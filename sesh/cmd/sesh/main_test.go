@@ -1,0 +1,459 @@
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"testing"
+
+	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
+	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/setup"
+	"github.com/bashhack/sesh/internal/testutil"
+	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
+)
+
+// TestHelperProcess is needed for the testutil.MockExecCommand function
+func TestHelperProcess(t *testing.T) {
+	testutil.TestHelperProcess()
+}
+
+// mockSetupService implements setup.SetupService
+type mockSetupService struct {
+	RegisterHandlerFunc      func(handler setup.SetupHandler)
+	SetupServiceFunc         func(serviceName string) error
+	GetAvailableServicesFunc func() []string
+}
+
+func (m *mockSetupService) RegisterHandler(handler setup.SetupHandler) {
+	if m.RegisterHandlerFunc != nil {
+		m.RegisterHandlerFunc(handler)
+	}
+}
+
+func (m *mockSetupService) SetupService(serviceName string) error {
+	if m.SetupServiceFunc != nil {
+		return m.SetupServiceFunc(serviceName)
+	}
+	return nil
+}
+
+func (m *mockSetupService) GetAvailableServices() []string {
+	if m.GetAvailableServicesFunc != nil {
+		return m.GetAvailableServicesFunc()
+	}
+	return []string{}
+}
+
+func mockApp() (*App, *bytes.Buffer, *bytes.Buffer) {
+	stdoutBuf := new(bytes.Buffer)
+	stderrBuf := new(bytes.Buffer)
+
+	mockKeychain := &mocks.MockProvider{}
+	versionInfo := VersionInfo{
+		Version: "test-version",
+		Commit:  "test-commit",
+		Date:    "test-date",
+	}
+	app := NewApp(mockKeychain, versionInfo)
+
+	app.AWS = &awsMocks.MockProvider{}
+	app.TOTP = &totpMocks.MockProvider{}
+	app.SetupService = &mockSetupService{}
+	app.ExecLookPath = func(string) (string, error) { return "/usr/local/bin/aws", nil }
+	app.Exit = func(int) {}
+	app.Stdout = stdoutBuf
+	app.Stderr = stderrBuf
+
+	return app, stdoutBuf, stderrBuf
+}
+
+func TestVersionFlag(t *testing.T) {
+	app, stdoutBuf, _ := mockApp()
+
+	exitCalled := false
+	app.Exit = func(int) { exitCalled = true }
+
+	run(app, []string{"sesh", "--version"})
+
+	output := stdoutBuf.String()
+
+	if !strings.Contains(output, "test-version") || !strings.Contains(output, "test-commit") {
+		t.Errorf("Expected version output to contain version and commit info, got: %s", output)
+	}
+
+	if exitCalled {
+		t.Error("Exit was called but shouldn't have been")
+	}
+}
+
+func TestPrintUsage(t *testing.T) {
+	oldStdout := os.Stdout
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatalf("os.Pipe() failed: %v", pipeErr)
+	}
+	os.Stdout = w
+
+	printUsage()
+
+	w.Close()
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	r.Close()
+
+	output := buf.String()
+
+	expectedStrings := []string{
+		"Usage: sesh [options]",
+		"Common options:",
+		"--service",
+		"--list",
+		"--delete",
+		"--setup",
+		"--clip",
+		"--list-services",
+		"--version",
+		"--help",
+		"Examples:",
+		"sesh --service aws",
+		"sesh --service totp --service-name github",
+		"For provider-specific help:",
+	}
+
+	for _, expected := range expectedStrings {
+		if !strings.Contains(output, expected) {
+			t.Errorf("printUsage() output missing expected string: %q", expected)
+		}
+	}
+}
+
+func TestExtractServiceName(t *testing.T) {
+	tests := map[string]struct {
+		args        []string
+		wantService string
+	}{
+		"service flag with equals": {
+			args:        []string{"sesh", "--service=aws"},
+			wantService: "aws",
+		},
+		"service flag with space": {
+			args:        []string{"sesh", "--service", "totp"},
+			wantService: "totp",
+		},
+		"service flag with other flags": {
+			args:        []string{"sesh", "--profile", "dev", "--service", "aws", "--no-subshell"},
+			wantService: "aws",
+		},
+		"single dash service flag": {
+			args:        []string{"sesh", "-service", "aws"},
+			wantService: "aws",
+		},
+		"no service flag": {
+			args:        []string{"sesh", "--profile", "dev"},
+			wantService: "",
+		},
+		"service flag at end": {
+			args:        []string{"sesh", "--no-subshell", "--profile=prod", "--service=aws"},
+			wantService: "aws",
+		},
+		"empty service value with equals": {
+			args:        []string{"sesh", "--service="},
+			wantService: "",
+		},
+		"empty service value with space": {
+			args:        []string{"sesh", "--service", ""},
+			wantService: "",
+		},
+		"service flag without value": {
+			args:        []string{"sesh", "--service"},
+			wantService: "",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := extractServiceName(tc.args)
+			if got != tc.wantService {
+				t.Errorf("extractServiceName() = %v, want %v", got, tc.wantService)
+			}
+		})
+	}
+}
+
+func TestPrintProviderUsage(t *testing.T) {
+	app, _, _ := mockApp()
+
+	tests := map[string]struct {
+		serviceName string
+		provider    provider.ServiceProvider
+	}{
+		"aws":  {"aws", nil},
+		"totp": {"totp", nil},
+	}
+
+	if awsProvider, err := app.Registry.GetProvider("aws"); err == nil {
+		tests["aws"] = struct {
+			serviceName string
+			provider    provider.ServiceProvider
+		}{"aws", awsProvider}
+	}
+	if totpProvider, err := app.Registry.GetProvider("totp"); err == nil {
+		tests["totp"] = struct {
+			serviceName string
+			provider    provider.ServiceProvider
+		}{"totp", totpProvider}
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			oldStdout := os.Stdout
+			r, w, pipeErr := os.Pipe()
+			if pipeErr != nil {
+				t.Fatalf("os.Pipe() failed: %v", pipeErr)
+			}
+			os.Stdout = w
+
+			printProviderUsage(tc.serviceName, tc.provider)
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			var buf bytes.Buffer
+			io.Copy(&buf, r)
+			r.Close()
+
+			output := buf.String()
+
+			if !strings.Contains(output, tc.serviceName) {
+				t.Errorf("printProviderUsage() output should contain provider name %q", tc.serviceName)
+			}
+			if !strings.Contains(output, "--service") {
+				t.Error("printProviderUsage() output should contain --service flag")
+			}
+
+			switch tc.serviceName {
+			case "aws":
+				if !strings.Contains(output, "--profile") {
+					t.Error("AWS usage should contain --profile flag")
+				}
+				if !strings.Contains(output, "--no-subshell") {
+					t.Error("AWS usage should contain --no-subshell flag")
+				}
+			case "totp":
+				if !strings.Contains(output, "--service-name") {
+					t.Error("TOTP usage should contain --service-name flag")
+				}
+			}
+		})
+	}
+}
+
+func TestServiceNameExtraction_EdgeCases(t *testing.T) {
+	tests := map[string]struct {
+		args        []string
+		wantService string
+	}{
+		"service with special chars": {
+			args:        []string{"sesh", "--service=aws-test"},
+			wantService: "aws-test",
+		},
+		"multiple service flags (first wins)": {
+			args:        []string{"sesh", "--service", "aws", "--service", "totp"},
+			wantService: "aws",
+		},
+		"service in quotes": {
+			args:        []string{"sesh", "--service=\"aws\""},
+			wantService: "\"aws\"", // Quotes are preserved in simple extraction
+		},
+		"service with equals in value": {
+			args:        []string{"sesh", "--service=name=value"},
+			wantService: "name=value",
+		},
+		"single dash with equals": {
+			args:        []string{"sesh", "-service=aws"},
+			wantService: "aws",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := extractServiceName(tc.args)
+			if got != tc.wantService {
+				t.Errorf("extractServiceName() = %v, want %v", got, tc.wantService)
+			}
+		})
+	}
+}
+
+func TestRun_ProviderSpecificFlags(t *testing.T) {
+	tests := map[string]struct {
+		args         []string
+		setupMocks   func(*App)
+		wantExitCode int
+		checkOutput  func(*testing.T, string, string) // stdout, stderr
+	}{
+		"aws with valid profile flag": {
+			args: []string{"sesh", "--service", "aws", "--profile", "dev", "--list"},
+			setupMocks: func(app *App) {
+				// Mock the keychain to return some entries
+				keychainMock := app.Keychain.(*mocks.MockProvider)
+				keychainMock.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
+					return []keychain.KeychainEntry{
+						{Service: "sesh-aws-default", Account: "testuser"},
+						{Service: "sesh-aws-dev", Account: "testuser"},
+					}, nil
+				}
+			},
+			wantExitCode: 0,
+		},
+		"totp with service-name flag": {
+			args: []string{"sesh", "--service", "totp", "--service-name", "github", "--clip"},
+			setupMocks: func(app *App) {
+				// Mock keychain to have the TOTP secret
+				keychainMock := app.Keychain.(*mocks.MockProvider)
+				keychainMock.GetSecretFunc = func(account, service string) ([]byte, error) {
+					if service == "sesh-totp/github" {
+						return []byte("JBSWY3DPEHPK3PXP"), nil // Example TOTP secret
+					}
+					return nil, fmt.Errorf("not found")
+				}
+
+				// Mock TOTP generation
+				totpMock := app.TOTP.(*totpMocks.MockProvider)
+				totpMock.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					return "123456", "654321", nil
+				}
+			},
+			wantExitCode: 0, // Should succeed with proper mocks
+		},
+		"aws with totp-specific flag should fail": {
+			args: []string{"sesh", "--service", "aws", "--service-name", "github"},
+			setupMocks: func(app *App) {
+				// Should fail during flag parsing
+			},
+			wantExitCode: 1,
+			checkOutput: func(t *testing.T, stdout, stderr string) {
+				if !strings.Contains(stderr, "flag provided but not defined") || !strings.Contains(stderr, "service-name") {
+					t.Error("Expected error about undefined flag --service-name")
+				}
+			},
+		},
+		"totp with aws-specific flag should fail": {
+			args: []string{"sesh", "--service", "totp", "--no-subshell"},
+			setupMocks: func(app *App) {
+				// Should fail during flag parsing
+			},
+			wantExitCode: 1,
+			checkOutput: func(t *testing.T, stdout, stderr string) {
+				if !strings.Contains(stderr, "flag provided but not defined") || !strings.Contains(stderr, "no-subshell") {
+					t.Error("Expected error about undefined flag --no-subshell")
+				}
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			app, stdoutBuf, stderrBuf := mockApp()
+
+			exitCode := -1
+			app.Exit = func(code int) { exitCode = code }
+
+			if tc.setupMocks != nil {
+				tc.setupMocks(app)
+			}
+
+			run(app, tc.args)
+
+			if exitCode == -1 {
+				exitCode = 0
+			}
+
+			if exitCode != tc.wantExitCode {
+				t.Errorf("Exit code = %d, want %d", exitCode, tc.wantExitCode)
+				t.Logf("stdout: %q", stdoutBuf.String())
+				t.Logf("stderr: %q", stderrBuf.String())
+			}
+
+			if tc.checkOutput != nil {
+				tc.checkOutput(t, stdoutBuf.String(), stderrBuf.String())
+			}
+		})
+	}
+}
+
+func TestRun_FlagValidation(t *testing.T) {
+	tests := map[string]struct {
+		args         []string
+		setupMocks   func(*App)
+		wantExitCode int
+		checkStderr  func(*testing.T, string)
+	}{
+		"missing required service flag": {
+			args:         []string{"sesh", "--profile", "dev"},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "service") {
+					t.Error("Expected error about missing service flag")
+				}
+			},
+		},
+		"invalid service name": {
+			args:         []string{"sesh", "--service", "invalid"},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "unknown service") && !strings.Contains(stderr, "invalid") {
+					t.Errorf("Expected error about unknown service, got: %q", stderr)
+				}
+			},
+		},
+		"totp without required service-name": {
+			args: []string{"sesh", "--service", "totp"},
+			setupMocks: func(app *App) {
+				// TOTP provider's ValidateRequest should fail
+			},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "service-name") {
+					t.Error("Expected error about missing service-name")
+				}
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			app, stdoutBuf, stderrBuf := mockApp()
+
+			exitCode := -1
+			app.Exit = func(code int) { exitCode = code }
+
+			if tc.setupMocks != nil {
+				tc.setupMocks(app)
+			}
+
+			run(app, tc.args)
+
+			if exitCode == -1 {
+				exitCode = 0
+			}
+
+			if exitCode != tc.wantExitCode {
+				t.Errorf("Exit code = %d, want %d", exitCode, tc.wantExitCode)
+				t.Logf("stdout: %q", stdoutBuf.String())
+				t.Logf("stderr: %q", stderrBuf.String())
+			}
+
+			if tc.checkStderr != nil {
+				tc.checkStderr(t, stderrBuf.String())
+			}
+		})
+	}
+}

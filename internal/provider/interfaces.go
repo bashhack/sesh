@@ -29,8 +29,17 @@ type ServiceProvider interface {
 	// GetCredentials retrieves credentials using TOTP
 	GetCredentials() (Credentials, error)
 
-	// GetClipboardValue retrieves a value suitable for copying to clipboard
-	// This allows providers to optimize for clipboard mode (e.g., AWS only generating TOTP codes)
+	// GetClipboardValue retrieves a value suitable for copying to clipboard.
+	// This allows providers to optimize for clipboard mode (e.g., AWS skips STS
+	// authentication and only generates the TOTP code).
+	//
+	// On success, the returned Credentials must have CopyValue set to a non-empty
+	// string and ClipboardDescription set to a short label (e.g., "TOTP code").
+	//
+	// TOTP-based providers should use CreateClipboardCredentials, which handles
+	// CopyValue, ClipboardDescription, DisplayInfo, and Expiry automatically.
+	// Non-TOTP providers (e.g., password managers) should populate CopyValue and
+	// ClipboardDescription directly.
 	GetClipboardValue() (Credentials, error)
 
 	// ListEntries returns the list of entries for this provider
@@ -80,8 +89,8 @@ type Credentials struct {
 	Expiry               time.Time         // When these credentials expire
 	Variables            map[string]string // Environment variables to set
 	DisplayInfo          string            // Human-readable display information
-	CopyValue            string            // Value to copy to clipboard if requested
-	ClipboardDescription string            // Short description of what CopyValue contains (e.g. "TOTP code", "AWS MFA code")
+	CopyValue            string            // Value to copy to clipboard; must be non-empty when returned by GetClipboardValue
+	ClipboardDescription string            // Short label for CopyValue (e.g. "TOTP code", "password"); used in CLI output
 	MFAAuthenticated     bool              // Whether these credentials were authenticated with MFA
 }
 
@@ -98,7 +107,10 @@ func FormatRegularDisplayInfo(actionType, serviceDesc string) string {
 	return fmt.Sprintf("🔑 %s for %s", actionType, serviceDesc)
 }
 
-// CreateClipboardCredentials creates standardized clipboard-mode credentials
+// CreateClipboardCredentials creates standardized clipboard-mode credentials for
+// TOTP-based providers. It sets CopyValue to the current code, computes Expiry
+// from the 30-second TOTP window, and formats DisplayInfo with both codes and
+// time remaining. Non-TOTP providers should build Credentials directly.
 func CreateClipboardCredentials(providerName, currentCode, nextCode string, secondsLeft int64, actionType, serviceDesc string) Credentials {
 	// Calculate when this code expires (30 seconds from now, rounded to nearest 30s boundary)
 	now := time.Now().Unix()
