@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -166,7 +167,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 			}
 
 			// Try with the next time window's code
-			fmt.Fprintf(os.Stderr, "🔑 Trying with next time window's code: %s\n", nextCode)
+			fmt.Fprintf(os.Stderr, "🔑 Trying with next time window's code\n")
 			code = nextCode
 			codeBytes = []byte(code)
 			awsCreds, err = p.aws.GetSessionToken(p.profile, serial, codeBytes)
@@ -196,7 +197,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 							// Generate a code for the window after next, in case AWS is far ahead of our clock
 				futureCode, gErr := p.totp.GenerateForTimeBytes(secretCopy, time.Now().Add(60*time.Second))
 				if gErr == nil {
-					fmt.Fprintf(os.Stderr, "🔑 Trying with future time window's code: %s\n", futureCode)
+					fmt.Fprintf(os.Stderr, "🔑 Trying with future time window's code\n")
 					code = futureCode
 					codeBytes = []byte(code)
 					awsCreds, err = p.aws.GetSessionToken(p.profile, serial, codeBytes)
@@ -369,16 +370,20 @@ func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 
 	serialBytes, err := p.keychain.GetSecret(p.keyUser, serialService)
 	if err == nil {
-			result := make([]byte, len(serialBytes))
+		result := make([]byte, len(serialBytes))
 		copy(result, serialBytes)
 		secure.SecureZeroBytes(serialBytes)
 		return result, nil
 	}
 
-	// If not found in keychain, try to auto-detect from AWS
-	serial, err := p.aws.GetFirstMFADevice(p.profile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to detect MFA device: %w", err)
+	// Only fall back to auto-detection on "not found" — surface real errors
+	if !errors.Is(err, keychain.ErrNotFound) {
+		return nil, fmt.Errorf("failed to read MFA serial from keychain: %w", err)
+	}
+
+	serial, autoErr := p.aws.GetFirstMFADevice(p.profile)
+	if autoErr != nil {
+		return nil, fmt.Errorf("failed to detect MFA device: %w", autoErr)
 	}
 
 	return []byte(serial), nil
@@ -394,8 +399,15 @@ func (p *Provider) NewSubshellConfig(creds provider.Credentials) interface{} {
 	}
 }
 
-// ValidateRequest performs early validation before any AWS operations
+// ValidateRequest performs early validation before any AWS operations.
 func (p *Provider) ValidateRequest() error {
+	if p.keyUser == "" {
+		var err error
+		p.keyUser, err = env.GetCurrentUser()
+		if err != nil {
+			return fmt.Errorf("failed to get current user: %w", err)
+		}
+	}
 
 	// Check if we have required keychain entries for this profile
 	// This prevents slow AWS API calls when no entry exists
@@ -408,7 +420,7 @@ func (p *Provider) ValidateRequest() error {
 		return fmt.Errorf("failed to build MFA service key: %w", err)
 	}
 
-	_, err = p.keychain.GetSecret(p.keyUser, totpKey)
+	totpSecret, err := p.keychain.GetSecret(p.keyUser, totpKey)
 	if err != nil {
 		profileDesc := p.profile
 		if profileDesc == "" {
@@ -416,12 +428,15 @@ func (p *Provider) ValidateRequest() error {
 		}
 		return fmt.Errorf("no AWS entry found for profile '%s'. Run 'sesh --service aws --setup' first", profileDesc)
 	}
+	secure.SecureZeroBytes(totpSecret)
 
 	// Check if MFA serial exists (not critical but helps with better error messages)
-	_, err = p.keychain.GetSecret(p.keyUser, mfaKey)
+	mfaSecret, err := p.keychain.GetSecret(p.keyUser, mfaKey)
 	if err != nil {
 		// This is not fatal - we can try to auto-detect, but warn the user
 		fmt.Fprintf(os.Stderr, "⚠️  MFA serial not found in keychain for profile '%s', will attempt auto-detection\n", p.profile)
+	} else {
+		secure.SecureZeroBytes(mfaSecret)
 	}
 
 	return nil
