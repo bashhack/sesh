@@ -244,11 +244,21 @@ func TestProvider_ValidateRequest(t *testing.T) {
 			profile: "",
 			setupKeychain: func(m *keychainMocks.MockProvider) {
 				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, errors.New("not found")
+					return nil, keychain.ErrNotFound
 				}
 			},
 			wantErr:    true,
 			wantErrMsg: "no AWS entry found for profile 'default'. Run 'sesh --service aws --setup' first",
+		},
+		"TOTP keychain error surfaces without fallback message": {
+			profile: "",
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					return nil, errors.New("keychain locked")
+				}
+			},
+			wantErr:    true,
+			wantErrMsg: "failed to read TOTP secret from keychain: keychain locked",
 		},
 		"no MFA serial (warning only)": {
 			profile: "",
@@ -257,11 +267,23 @@ func TestProvider_ValidateRequest(t *testing.T) {
 					if service == "sesh-aws/default" {
 						return []byte("secret"), nil
 					}
-					// MFA serial not found
-					return nil, errors.New("not found")
+					return nil, keychain.ErrNotFound
 				}
 			},
-			wantErr: false, // Should just warn, not error
+			wantErr: false,
+		},
+		"MFA keychain error surfaces as error": {
+			profile: "",
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					if service == "sesh-aws/default" {
+						return []byte("secret"), nil
+					}
+					return nil, errors.New("keychain locked")
+				}
+			},
+			wantErr:    true,
+			wantErrMsg: "failed to read MFA serial from keychain: keychain locked",
 		},
 	}
 
@@ -718,6 +740,41 @@ func TestProvider_GetCredentials(t *testing.T) {
 				}
 			},
 			wantErr: false,
+		},
+		"second attempt non-MFA error skips future-window retry": {
+			profile: "",
+			setupKeychain: func(m *keychainMocks.MockProvider) {
+				m.GetSecretFunc = func(account, service string) ([]byte, error) {
+					switch service {
+					case "sesh-aws-serial/default":
+						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
+					case "sesh-aws/default":
+						return []byte("MYSECRET"), nil
+					default:
+						return nil, fmt.Errorf("unexpected service: %s", service)
+					}
+				}
+			},
+			setupTOTP: func(m *totpMocks.MockProvider) {
+				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					return "123456", "654321", nil
+				}
+				m.GenerateForTimeBytesFunc = func(secret []byte, _ time.Time) (string, error) {
+					return "", fmt.Errorf("GenerateForTimeBytes should not be called when second error is not invalid MFA")
+				}
+			},
+			setupAWS: func(m *awsMocks.MockProvider) {
+				callCount := 0
+				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
+					callCount++
+					if callCount == 1 {
+						return aws.Credentials{}, fmt.Errorf("MultiFactorAuthentication failed with invalid MFA one time pass code")
+					}
+					// Second attempt fails with a different error
+					return aws.Credentials{}, fmt.Errorf("network timeout")
+				}
+			},
+			wantErr: true,
 		},
 		"both codes fail": {
 			profile: "",

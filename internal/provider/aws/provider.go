@@ -172,9 +172,13 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 			awsCreds, err = p.aws.GetSessionToken(p.profile, serial, codeBytes)
 			secure.SecureZeroBytes(codeBytes)
 
-			// If STILL failing and we're not close to boundary, and we have a "recently used" error,
+			// Re-evaluate whether the second attempt also failed with an invalid MFA error
+			secondInvalidMFA := err != nil &&
+				strings.Contains(err.Error(), "MultiFactorAuthentication failed with invalid MFA one time pass code")
+
+			// If STILL failing with invalid MFA and we're not close to boundary,
 			// we may need to wait for the next time window
-			if err != nil && isInvalidMFA && secondsLeft > 10 {
+			if secondInvalidMFA && secondsLeft > 10 {
 				fmt.Fprintf(os.Stderr, "⚠️ Both current and next codes were rejected - may need to wait for next time window\n")
 
 				keyName, kErr := buildServiceKey(p.keyName, p.profile)
@@ -421,6 +425,9 @@ func (p *Provider) ValidateRequest() error {
 
 	totpSecret, err := p.keychain.GetSecret(p.keyUser, totpKey)
 	if err != nil {
+		if !errors.Is(err, keychain.ErrNotFound) {
+			return fmt.Errorf("failed to read TOTP secret from keychain: %w", err)
+		}
 		profileDesc := p.profile
 		if profileDesc == "" {
 			profileDesc = "default"
@@ -432,7 +439,10 @@ func (p *Provider) ValidateRequest() error {
 	// Check if MFA serial exists (not critical but helps with better error messages)
 	mfaSecret, err := p.keychain.GetSecret(p.keyUser, mfaKey)
 	if err != nil {
-		// This is not fatal - we can try to auto-detect, but warn the user
+		if !errors.Is(err, keychain.ErrNotFound) {
+			return fmt.Errorf("failed to read MFA serial from keychain: %w", err)
+		}
+		// Not found is not fatal — we can try to auto-detect, but warn the user
 		fmt.Fprintf(os.Stderr, "⚠️  MFA serial not found in keychain for profile '%s', will attempt auto-detection\n", p.profile)
 	} else {
 		secure.SecureZeroBytes(mfaSecret)
