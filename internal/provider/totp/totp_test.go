@@ -1,12 +1,14 @@
 package totp
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/keychain"
 	keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
@@ -204,6 +206,72 @@ func TestProvider_ValidateRequest(t *testing.T) {
 				if err.Error() != tc.wantErrMsg {
 					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
 				}
+			}
+		})
+	}
+}
+
+func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
+	tests := map[string]struct {
+		serviceName string
+		profile     string
+		wantSubstr  string
+	}{
+		"simple service name": {
+			serviceName: "github",
+			wantSubstr:  `--service-name "github"`,
+		},
+		"service name with spaces": {
+			serviceName: "my service",
+			wantSubstr:  `--service-name "my service"`,
+		},
+		"profile with spaces": {
+			serviceName: "github",
+			profile:     "work account",
+			wantSubstr:  `--profile "work account"`,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			oldStderr := os.Stderr
+			r, w, pipeErr := os.Pipe()
+			if pipeErr != nil {
+				t.Fatalf("os.Pipe() failed: %v", pipeErr)
+			}
+			os.Stderr = w
+
+			mockKeychain := &keychainMocks.MockProvider{
+				GetSecretFunc: func(account, service string) ([]byte, error) {
+					return []byte("MYSECRET"), nil
+				},
+			}
+			mockTOTP := &totpMocks.MockProvider{
+				GenerateConsecutiveCodesBytesFunc: func(secret []byte) (string, string, error) {
+					return "123456", "654321", nil
+				},
+			}
+
+			p := &Provider{
+				keychain:    mockKeychain,
+				totp:        mockTOTP,
+				serviceName: tc.serviceName,
+				profile:     tc.profile,
+				keyUser:     "testuser",
+				now:         func() time.Time { return time.Unix(5, 0) },
+			}
+
+			_, _ = p.GetCredentials()
+
+			w.Close()
+			var buf bytes.Buffer
+			buf.ReadFrom(r)
+			r.Close()
+			os.Stderr = oldStderr
+
+			stderr := buf.String()
+			if !strings.Contains(stderr, tc.wantSubstr) {
+				t.Errorf("stderr = %q, want substring %q", stderr, tc.wantSubstr)
 			}
 		})
 	}

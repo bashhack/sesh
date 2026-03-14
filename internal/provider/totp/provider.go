@@ -84,9 +84,9 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}
 
 	// Suggest clipboard mode when called directly
-	cmd := fmt.Sprintf("sesh --service totp --service-name %s", p.serviceName)
+	cmd := fmt.Sprintf("sesh --service totp --service-name %q", p.serviceName)
 	if p.profile != "" {
-		cmd += fmt.Sprintf(" --profile %s", p.profile)
+		cmd += fmt.Sprintf(" --profile %q", p.profile)
 	}
 	fmt.Fprintf(os.Stderr, "⚠️  TOTP codes are typically used with clipboard mode for easy copying.\n💡 Recommended: %s --clip\n\n", cmd)
 
