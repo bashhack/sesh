@@ -76,8 +76,7 @@ func (p *Provider) GetSetupHandler() interface{} {
 	return setup.NewAWSSetupHandler(p.keychain)
 }
 
-// GetTOTPCodes retrieves only TOTP codes without performing AWS authentication
-// This is used specifically for the clipboard mode
+// GetTOTPCodes retrieves TOTP codes without performing AWS authentication
 func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsLeft int64, err error) {
 
 	keyName, err := buildServiceKey(p.keyName, p.profile)
@@ -188,7 +187,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 					return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), err)
 				}
 
-					secretCopy := make([]byte, len(secretBytes))
+				secretCopy := make([]byte, len(secretBytes))
 				copy(secretCopy, secretBytes)
 				defer secure.SecureZeroBytes(secretCopy)
 
