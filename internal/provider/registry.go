@@ -50,12 +50,11 @@ func (r *Registry) GetProvider(name string) (ServiceProvider, error) {
 // ListProviders returns all registered providers sorted by name.
 func (r *Registry) ListProviders() []ServiceProvider {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	result := make([]ServiceProvider, 0, len(r.providers))
 	for _, p := range r.providers {
 		result = append(result, p)
 	}
+	r.mu.RUnlock()
 
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Name() < result[j].Name()

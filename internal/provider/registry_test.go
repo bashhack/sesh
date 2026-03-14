@@ -24,10 +24,6 @@ func (p *mockProvider) SetupFlags(fs FlagSet) error {
 	return nil
 }
 
-func (p *mockProvider) Setup() error {
-	return nil
-}
-
 func (p *mockProvider) GetCredentials() (Credentials, error) {
 	if p.name == "error" {
 		return Credentials{}, errors.New("mock error")
