@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -348,8 +349,9 @@ func TestProvider_GetCredentials(t *testing.T) {
 			}
 			os.Stderr = w
 			defer func() {
-				r.Close()
 				w.Close()
+				io.Copy(io.Discard, r)
+				r.Close()
 				os.Stderr = oldStderr
 			}()
 
@@ -458,8 +460,9 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 			}
 			os.Stderr = w
 			defer func() {
-				r.Close()
 				w.Close()
+				io.Copy(io.Discard, r)
+				r.Close()
 				os.Stderr = oldStderr
 			}()
 

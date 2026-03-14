@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,8 +298,9 @@ func TestProvider_ValidateRequest(t *testing.T) {
 			}
 			os.Stderr = w
 			defer func() {
-				r.Close()
 				w.Close()
+				io.Copy(io.Discard, r)
+				r.Close()
 				os.Stderr = oldStderr
 			}()
 
@@ -400,8 +402,9 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 			}
 			os.Stderr = w
 			defer func() {
-				r.Close()
 				w.Close()
+				io.Copy(io.Discard, r)
+				r.Close()
 				os.Stderr = oldStderr
 			}()
 
@@ -872,8 +875,9 @@ func TestProvider_GetCredentials(t *testing.T) {
 			}
 			os.Stderr = w
 			defer func() {
-				r.Close()
 				w.Close()
+				io.Copy(io.Discard, r)
+				r.Close()
 				os.Stderr = oldStderr
 			}()
 
@@ -934,8 +938,9 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 	}
 	os.Stderr = w
 	defer func() {
-		r.Close()
 		w.Close()
+		io.Copy(io.Discard, r)
+		r.Close()
 		os.Stderr = oldStderr
 	}()
 
@@ -1202,8 +1207,9 @@ func TestProvider_DeleteEntry(t *testing.T) {
 			}
 			os.Stderr = w
 			defer func() {
-				r.Close()
 				w.Close()
+				io.Copy(io.Discard, r)
+				r.Close()
 				os.Stderr = oldStderr
 			}()
 
