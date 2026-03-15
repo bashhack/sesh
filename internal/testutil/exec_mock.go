@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 )
 
 // MockExecCommand builds a mock exec.Command function that returns
@@ -102,46 +103,51 @@ func TestHelperProcess() {
 	os.Exit(0)
 }
 
-// CaptureStdout captures stdout during a function execution
+// stdoutMu serializes access to os.Stdout across concurrent tests.
+var stdoutMu sync.Mutex
+
+// CaptureStdout captures stdout during a function execution.
+//
+// Safe for use with t.Parallel() — concurrent callers are serialized via a mutex.
 func CaptureStdout(fn func()) string {
+	stdoutMu.Lock()
+	defer stdoutMu.Unlock()
+
 	r, w, _ := os.Pipe()
-
 	originalStdout := os.Stdout
-
 	os.Stdout = w
 
 	fn()
 
-	// Close the write end of the pipe to get all output
-	// and ignoring error as I can't do anything with it in this context
-	_ = w.Close()
-
+	w.Close()
 	os.Stdout = originalStdout
 
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)
+	r.Close()
 
 	return buf.String()
 }
 
-// CaptureStderr captures stderr during a function execution
+// CaptureStderr captures stderr during a function execution.
+//
+// Safe for use with t.Parallel() — concurrent callers are serialized via a mutex.
 func CaptureStderr(fn func()) string {
+	stderrMu.Lock()
+	defer stderrMu.Unlock()
+
 	r, w, _ := os.Pipe()
-
 	originalStderr := os.Stderr
-
 	os.Stderr = w
 
 	fn()
 
-	// Close the write end of the pipe to get all output
-	// and ignoring any error as I can't do anything with it in this context
-	_ = w.Close()
-
+	w.Close()
 	os.Stderr = originalStderr
 
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)
+	r.Close()
 
 	return buf.String()
 }

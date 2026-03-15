@@ -2,7 +2,6 @@ package setup
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -168,20 +167,11 @@ func TestTOTPSetupHandler_promptForServiceName(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader(tc.input)),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			result, err := handler.promptForServiceName()
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var result string
+			var err error
+			output := testutil.CaptureStdout(func() {
+				result, err = handler.promptForServiceName()
+			})
 
 			// Check prompt was displayed
 			if !strings.Contains(output, "Enter name for this TOTP service:") {
@@ -239,20 +229,11 @@ func TestTOTPSetupHandler_promptForProfile(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader(tc.input)),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			result, err := handler.promptForProfile()
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var result string
+			var err error
+			output := testutil.CaptureStdout(func() {
+				result, err = handler.promptForProfile()
+			})
 
 			// Check prompt was displayed
 			if !strings.Contains(output, "Enter profile name (optional, for multiple accounts with the same service):") {
@@ -321,20 +302,11 @@ func TestTOTPSetupHandler_promptForCaptureMethod(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader(tc.input)),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			result, err := handler.promptForCaptureMethod()
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var result string
+			var err error
+			output := testutil.CaptureStdout(func() {
+				result, err = handler.promptForCaptureMethod()
+			})
 
 			// Check prompts were displayed
 			expectedPrompts := []string{
@@ -447,20 +419,9 @@ func TestTOTPSetupHandler_showTOTPSetupCompletionMessage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			handler := &TOTPSetupHandler{}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			handler.showTOTPSetupCompletionMessage(tc.serviceName, tc.profile)
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			output := testutil.CaptureStdout(func() {
+				handler.showTOTPSetupCompletionMessage(tc.serviceName, tc.profile)
+			})
 
 			// Check expected output
 			for _, expected := range tc.wantOutput {
@@ -703,20 +664,11 @@ func TestAWSSetupHandler_promptForMFAARN(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader(tc.userInput)),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			arn, err := handler.promptForMFAARN()
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var arn string
+			var err error
+			output := testutil.CaptureStdout(func() {
+				arn, err = handler.promptForMFAARN()
+			})
 
 			// Check ARN
 			if arn != tc.wantARN {
@@ -796,20 +748,11 @@ func TestTOTPSetupHandler_captureManualEntry(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader("")),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			secret, err := handler.captureManualEntry()
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var secret string
+			var err error
+			output := testutil.CaptureStdout(func() {
+				secret, err = handler.captureManualEntry()
+			})
 
 			// Check prompt was displayed
 			if !strings.Contains(output, "Enter or paste your TOTP secret key") {
@@ -967,20 +910,11 @@ func TestAWSSetupHandler_captureAWSManualEntry(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader("")),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			secret, err := handler.captureAWSManualEntry()
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var secret string
+			var err error
+			output := testutil.CaptureStdout(func() {
+				secret, err = handler.captureAWSManualEntry()
+			})
 
 			// Check that instructions were displayed
 			if !strings.Contains(output, "DO NOT COMPLETE THE AWS SETUP YET") {
@@ -1056,20 +990,11 @@ func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader("")),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			secret, err := handler.captureMFASecret("1") // Choice 1 for manual entry
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var secret string
+			var err error
+			output := testutil.CaptureStdout(func() {
+				secret, err = handler.captureMFASecret("1") // Choice 1 for manual entry
+			})
 
 			// Check that instructions were displayed
 			if !strings.Contains(output, "DO NOT COMPLETE THE AWS SETUP YET") {
@@ -1140,20 +1065,11 @@ func TestAWSSetupHandler_promptForMFASetupMethod(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader(tc.input)),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			choice, err := handler.promptForMFASetupMethod()
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var choice string
+			var err error
+			output := testutil.CaptureStdout(func() {
+				choice, err = handler.promptForMFASetupMethod()
+			})
 
 			// Check that instructions were displayed
 			if !strings.Contains(output, "Let's set up a virtual MFA device") {
@@ -1210,20 +1126,9 @@ func TestAWSSetupHandler_showSetupCompletionMessage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			handler := &AWSSetupHandler{}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			handler.showSetupCompletionMessage(tc.profile)
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			output := testutil.CaptureStdout(func() {
+				handler.showSetupCompletionMessage(tc.profile)
+			})
 
 			// Check expected content
 			for _, expected := range tc.wantContains {
@@ -1269,20 +1174,10 @@ func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader(tc.readerInput)),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			err := handler.setupMFAConsole(tc.secret)
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var err error
+			output := testutil.CaptureStdout(func() {
+				err = handler.setupMFAConsole(tc.secret)
+			})
 
 			// Check error
 			if tc.wantErr && err == nil {
@@ -1382,20 +1277,11 @@ func TestCaptureQRWithRetry(t *testing.T) {
 
 			reader := bufio.NewReader(strings.NewReader(tc.readerInput))
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			secret, err := captureQRWithRetry(reader, mockManualEntry)
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var secret string
+			var err error
+			output := testutil.CaptureStdout(func() {
+				secret, err = captureQRWithRetry(reader, mockManualEntry)
+			})
 
 			// Check scan was called expected number of times
 			if scanCallCount != tc.wantScanCalls {
@@ -1476,15 +1362,11 @@ func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader(tc.readerInput)),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			_, w, _ := os.Pipe()
-			os.Stdout = w
-
-			secret, err := handler.captureQRCodeWithFallback()
-
-			w.Close()
-			os.Stdout = oldStdout
+			var secret string
+			var err error
+			testutil.CaptureStdout(func() {
+				secret, err = handler.captureQRCodeWithFallback()
+			})
 
 			// Check secret
 			if secret != tc.wantSecret {
@@ -1553,15 +1435,11 @@ func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader(tc.readerInput)),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			_, w, _ := os.Pipe()
-			os.Stdout = w
-
-			secret, err := handler.captureAWSQRCodeWithFallback()
-
-			w.Close()
-			os.Stdout = oldStdout
+			var secret string
+			var err error
+			testutil.CaptureStdout(func() {
+				secret, err = handler.captureAWSQRCodeWithFallback()
+			})
 
 			// Check secret
 			if secret != tc.wantSecret {
@@ -1744,20 +1622,11 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 				reader: bufio.NewReader(strings.NewReader(tc.userInput)),
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			device, err := handler.selectMFADevice(tc.profile)
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var device string
+			var err error
+			output := testutil.CaptureStdout(func() {
+				device, err = handler.selectMFADevice(tc.profile)
+			})
 
 			// Check device
 			if device != tc.wantDevice {
@@ -2010,20 +1879,10 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 				keychainProvider: mockKeychain,
 			}
 
-			// Capture stdout
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			err := handler.Setup()
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			// Read captured output
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var err error
+			output := testutil.CaptureStdout(func() {
+				err = handler.Setup()
+			})
 
 			// Check error
 			if tc.wantErr && err == nil {
@@ -2170,20 +2029,10 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 				keychainProvider: mockKeychain,
 			}
 
-			// Capture output
-			oldStdout := os.Stdout
-			r, w, _ := os.Pipe()
-			os.Stdout = w
-
-			// Run setup
-			err := handler.Setup()
-
-			// Restore stdout and get output
-			w.Close()
-			os.Stdout = oldStdout
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			output := buf.String()
+			var err error
+			output := testutil.CaptureStdout(func() {
+				err = handler.Setup()
+			})
 
 			// Check results
 			if tc.expectError {

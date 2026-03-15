@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/bashhack/sesh/internal/aws"
@@ -26,9 +27,6 @@ type ExitFunc func(code int)
 // App represents the main application
 type App struct {
 	Registry     *provider.Registry
-	AWS          aws.Provider
-	Keychain     keychain.Provider
-	TOTP         totp.Provider
 	SetupService setup.SetupService
 	ExecLookPath ExecLookPathFunc
 	Exit         ExitFunc
@@ -46,41 +44,27 @@ type VersionInfo struct {
 
 // NewDefaultApp creates a new App with default dependencies
 func NewDefaultApp(versionInfo VersionInfo) *App {
-	keychainProvider := keychain.NewDefaultProvider()
-	return NewApp(keychainProvider, versionInfo)
-}
+	kc := keychain.NewDefaultProvider()
+	totpSvc := totp.NewDefaultProvider()
+	awsSvc := aws.NewDefaultProvider()
 
-// NewApp creates a new App with a custom keychain provider
-func NewApp(keychainProvider keychain.Provider, versionInfo VersionInfo) *App {
-	setupService := setup.NewSetupService(keychainProvider)
+	registry := provider.NewRegistry()
+	registry.RegisterProvider(awsProvider.NewProvider(awsSvc, kc, totpSvc))
+	registry.RegisterProvider(totpProvider.NewProvider(kc, totpSvc))
 
-	app := &App{
-		Registry:     provider.NewRegistry(),
-		AWS:          aws.NewDefaultProvider(),
-		Keychain:     keychainProvider,
-		TOTP:         totp.NewDefaultProvider(),
-		SetupService: setupService,
+	setupSvc := setup.NewSetupService(kc)
+	setupSvc.RegisterHandler(setup.NewAWSSetupHandler(kc))
+	setupSvc.RegisterHandler(setup.NewTOTPSetupHandler(kc))
+
+	return &App{
+		Registry:     registry,
+		SetupService: setupSvc,
 		ExecLookPath: exec.LookPath,
 		Exit:         os.Exit,
 		Stdout:       os.Stdout,
 		Stderr:       os.Stderr,
 		VersionInfo:  versionInfo,
 	}
-
-	app.registerProviders()
-
-	return app
-}
-
-// registerProviders registers all available service providers and their setup handlers.
-func (a *App) registerProviders() {
-	awsP := awsProvider.NewProvider(a.AWS, a.Keychain, a.TOTP)
-	a.Registry.RegisterProvider(awsP)
-	a.SetupService.RegisterHandler(setup.NewAWSSetupHandler(a.Keychain))
-
-	totpP := totpProvider.NewProvider(a.Keychain, a.TOTP)
-	a.Registry.RegisterProvider(totpP)
-	a.SetupService.RegisterHandler(setup.NewTOTPSetupHandler(a.Keychain))
 }
 
 // ShowVersion displays version information
@@ -235,7 +219,7 @@ func (a *App) PrintCredentials(creds provider.Credentials) {
 
 	fmt.Fprintf(a.Stdout, "⏳ Expires at: %s\n", expiryDisplay)
 
-	if creds.Provider == "aws" && creds.MFAAuthenticated {
+	if creds.MFAAuthenticated {
 		fmt.Fprintf(a.Stdout, "✅ MFA-authenticated session established\n")
 	}
 
@@ -246,7 +230,7 @@ func (a *App) PrintCredentials(creds provider.Credentials) {
 	if len(creds.Variables) > 0 {
 		fmt.Fprintf(a.Stdout, "\n# --------- ENVIRONMENT VARIABLES ---------\n")
 		for key, value := range creds.Variables {
-			fmt.Fprintf(a.Stdout, "export %s=%s\n", key, value)
+			fmt.Fprintf(a.Stdout, "export %s='%s'\n", key, strings.ReplaceAll(value, "'", "'\\''"))
 		}
 		fmt.Fprintf(a.Stdout, "# ----------------------------------------\n")
 	}

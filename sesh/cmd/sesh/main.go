@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -55,7 +56,7 @@ func run(app *App, args []string) {
 	if serviceName == "" {
 		// If no service but help was requested, show general help
 		if hasHelp {
-			printUsage()
+			app.PrintUsage()
 			return
 		}
 		fmt.Fprintln(app.Stderr, "❌ No service provider specified. Use --service to select a provider.")
@@ -79,7 +80,7 @@ func run(app *App, args []string) {
 
 	// Set custom usage that includes provider info
 	fs.Usage = func() {
-		printProviderUsage(serviceName, provider)
+		app.PrintProviderUsage(serviceName, provider)
 	}
 
 	// Register common flags
@@ -101,6 +102,9 @@ func run(app *App, args []string) {
 
 	// Parse all flags
 	if err := fs.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
 		fmt.Fprintf(app.Stderr, "❌ Error parsing arguments: %v\n", err)
 		app.Exit(1)
 		return
@@ -120,7 +124,7 @@ func run(app *App, args []string) {
 	}
 
 	if *showHelp {
-		printProviderUsage(serviceName, provider)
+		app.PrintProviderUsage(serviceName, provider)
 		return
 	}
 
@@ -201,63 +205,66 @@ func extractServiceName(args []string) string {
 	return ""
 }
 
-func printUsage() {
-	fmt.Println("Usage: sesh [options]")
-	fmt.Println("\nCommon options:")
-	fmt.Println("  --service, -service           Service provider to use (aws, totp) [REQUIRED]")
-	fmt.Println("  --list, -list                 List entries for selected service")
-	fmt.Println("  --delete, -delete string      Delete entry for selected service")
-	fmt.Println("  --setup, -setup               Run setup wizard for selected service")
-	fmt.Println("  --clip, -clip                 Copy code to clipboard")
-	fmt.Println("  --list-services, -list-services  List available service providers")
-	fmt.Println("  --version, -version           Show version information")
-	fmt.Println("  --help, -help                 Show usage")
-	fmt.Println("\nExamples:")
-	fmt.Println("  sesh --service aws                     Generate AWS credentials")
-	fmt.Println("  sesh --service totp --service-name github   Generate TOTP code for GitHub")
-	fmt.Println("  sesh --list-services                   List available providers")
-	fmt.Println("\nFor provider-specific help:")
-	fmt.Println("  sesh --service <provider> --help")
+// PrintUsage displays general usage information
+func (a *App) PrintUsage() {
+	w := a.Stdout
+	fmt.Fprintln(w, "Usage: sesh [options]")
+	fmt.Fprintln(w, "\nCommon options:")
+	fmt.Fprintln(w, "  --service, -service           Service provider to use (aws, totp) [REQUIRED]")
+	fmt.Fprintln(w, "  --list, -list                 List entries for selected service")
+	fmt.Fprintln(w, "  --delete, -delete string      Delete entry for selected service")
+	fmt.Fprintln(w, "  --setup, -setup               Run setup wizard for selected service")
+	fmt.Fprintln(w, "  --clip, -clip                 Copy code to clipboard")
+	fmt.Fprintln(w, "  --list-services, -list-services  List available service providers")
+	fmt.Fprintln(w, "  --version, -version           Show version information")
+	fmt.Fprintln(w, "  --help, -help                 Show usage")
+	fmt.Fprintln(w, "\nExamples:")
+	fmt.Fprintln(w, "  sesh --service aws                     Generate AWS credentials")
+	fmt.Fprintln(w, "  sesh --service totp --service-name github   Generate TOTP code for GitHub")
+	fmt.Fprintln(w, "  sesh --list-services                   List available providers")
+	fmt.Fprintln(w, "\nFor provider-specific help:")
+	fmt.Fprintln(w, "  sesh --service <provider> --help")
 }
 
-// printProviderUsage prints usage for a specific provider
-func printProviderUsage(serviceName string, p provider.ServiceProvider) {
-	fmt.Printf("Usage: sesh --service %s [options]\n\n", serviceName)
+// PrintProviderUsage prints usage for a specific provider
+func (a *App) PrintProviderUsage(serviceName string, p provider.ServiceProvider) {
+	w := a.Stdout
+	fmt.Fprintf(w, "Usage: sesh --service %s [options]\n\n", serviceName)
 
-	fmt.Println("Common options:")
-	fmt.Println("  --service string              Service provider to use")
-	fmt.Println("  --list                        List entries for selected service")
-	fmt.Println("  --delete string               Delete entry for selected service")
-	fmt.Println("  --setup                       Run setup wizard for selected service")
-	fmt.Println("  --clip                        Copy code to clipboard")
-	fmt.Println("  --help                        Show this help")
-	fmt.Println("  --version                     Show version information")
+	fmt.Fprintln(w, "Common options:")
+	fmt.Fprintln(w, "  --service string              Service provider to use")
+	fmt.Fprintln(w, "  --list                        List entries for selected service")
+	fmt.Fprintln(w, "  --delete string               Delete entry for selected service")
+	fmt.Fprintln(w, "  --setup                       Run setup wizard for selected service")
+	fmt.Fprintln(w, "  --clip                        Copy code to clipboard")
+	fmt.Fprintln(w, "  --help                        Show this help")
+	fmt.Fprintln(w, "  --version                     Show version information")
 
 	// Provider-specific flags
 	flagInfo := p.GetFlagInfo()
 	if len(flagInfo) > 0 {
-		fmt.Printf("\n%s provider options:\n", strings.ToUpper(serviceName[:1])+serviceName[1:])
+		fmt.Fprintf(w, "\n%s provider options:\n", strings.ToUpper(serviceName[:1])+serviceName[1:])
 		for _, flag := range flagInfo {
 			required := ""
 			if flag.Required {
 				required = " [REQUIRED]"
 			}
-			fmt.Printf("  --%s %s%s\n    %s\n", flag.Name, flag.Type, required, flag.Description)
+			fmt.Fprintf(w, "  --%s %s%s\n    %s\n", flag.Name, flag.Type, required, flag.Description)
 		}
 	}
 
 	// Examples
-	fmt.Println("\nExamples:")
+	fmt.Fprintln(w, "\nExamples:")
 	switch serviceName {
 	case "aws":
-		fmt.Println("  sesh --service aws                     Generate AWS credentials (subshell)")
-		fmt.Println("  sesh --service aws --no-subshell       Print AWS credentials")
-		fmt.Println("  sesh --service aws --profile dev       Use 'dev' AWS profile")
-		fmt.Println("  sesh --service aws --setup             Set up AWS credentials")
+		fmt.Fprintln(w, "  sesh --service aws                     Generate AWS credentials (subshell)")
+		fmt.Fprintln(w, "  sesh --service aws --no-subshell       Print AWS credentials")
+		fmt.Fprintln(w, "  sesh --service aws --profile dev       Use 'dev' AWS profile")
+		fmt.Fprintln(w, "  sesh --service aws --setup             Set up AWS credentials")
 	case "totp":
-		fmt.Println("  sesh --service totp --service-name github     Generate TOTP for GitHub")
-		fmt.Println("  sesh --service totp --service-name github --clip   Copy TOTP to clipboard")
-		fmt.Println("  sesh --service totp --setup            Set up new TOTP service")
-		fmt.Println("  sesh --service totp --list             List all TOTP services")
+		fmt.Fprintln(w, "  sesh --service totp --service-name github     Generate TOTP for GitHub")
+		fmt.Fprintln(w, "  sesh --service totp --service-name github --clip   Copy TOTP to clipboard")
+		fmt.Fprintln(w, "  sesh --service totp --setup            Set up new TOTP service")
+		fmt.Fprintln(w, "  sesh --service totp --list             List all TOTP services")
 	}
 }

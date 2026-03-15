@@ -8,102 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bashhack/sesh/internal/aws"
-	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
 )
-
-type KeychainError struct {
-	Message string
-}
-
-func (e *KeychainError) Error() string {
-	return e.Message
-}
-
-type SessionTokenError struct {
-	Message string
-}
-
-func (e *SessionTokenError) Error() string {
-	return e.Message
-}
-
-type MockAWS struct {
-	MFADevice      string
-	MFADeviceErr   error
-	Credentials    aws.Credentials
-	CredentialsErr error
-}
-
-func (m *MockAWS) GetFirstMFADevice(profile string) (string, error) {
-	return m.MFADevice, m.MFADeviceErr
-}
-
-func (m *MockAWS) GetSessionToken(profile, serial string, code []byte) (aws.Credentials, error) {
-	return m.Credentials, m.CredentialsErr
-}
-
-type MockKeychain struct {
-	Secret     string
-	SecretErr  error
-	Entries    []keychain.KeychainEntry
-	EntriesErr error
-}
-
-// GetSecret implements keychain.Provider.
-func (m *MockKeychain) GetSecret(user, service string) ([]byte, error) {
-	if m.SecretErr != nil {
-		return nil, m.SecretErr
-	}
-	return []byte(m.Secret), nil
-}
-
-// SetSecret implements keychain.Provider
-func (m *MockKeychain) SetSecret(user, service string, secret []byte) error {
-	return nil
-}
-
-// GetSecretString implements keychain.Provider
-func (m *MockKeychain) GetSecretString(user, keyName string) (string, error) {
-	return m.Secret, m.SecretErr
-}
-
-// SetSecretString implements keychain.Provider
-func (m *MockKeychain) SetSecretString(user, keyName, secret string) error {
-	return nil
-}
-
-// GetMFASerialBytes implements keychain.Provider.
-func (m *MockKeychain) GetMFASerialBytes(account, profile string) ([]byte, error) {
-	return []byte("arn:aws:iam::123456789012:mfa/testuser"), nil
-}
-
-// ListEntries implements keychain.Provider
-func (m *MockKeychain) ListEntries(service string) ([]keychain.KeychainEntry, error) {
-	return m.Entries, m.EntriesErr
-}
-
-// DeleteEntry implements keychain.Provider
-func (m *MockKeychain) DeleteEntry(account, service string) error {
-	return nil
-}
-
-// StoreEntryMetadata implements keychain.Provider
-func (m *MockKeychain) StoreEntryMetadata(servicePrefix, service, account, description string) error {
-	return nil
-}
-
-// LoadEntryMetadata implements keychain.Provider
-func (m *MockKeychain) LoadEntryMetadata(servicePrefix string) ([]keychain.KeychainEntryMeta, error) {
-	return []keychain.KeychainEntryMeta{}, nil
-}
-
-// RemoveEntryMetadata implements keychain.Provider
-func (m *MockKeychain) RemoveEntryMetadata(servicePrefix, service, account string) error {
-	return nil
-}
 
 // MockSetupService is a mock implementation of setup.SetupService
 type MockSetupService struct {
@@ -240,15 +147,6 @@ func TestNewDefaultApp(t *testing.T) {
 	if app.Registry == nil {
 		t.Error("Registry is nil")
 	}
-	if app.AWS == nil {
-		t.Error("AWS provider is nil")
-	}
-	if app.Keychain == nil {
-		t.Error("Keychain provider is nil")
-	}
-	if app.TOTP == nil {
-		t.Error("TOTP provider is nil")
-	}
 	if app.SetupService == nil {
 		t.Error("SetupService is nil")
 	}
@@ -270,20 +168,25 @@ func TestNewDefaultApp(t *testing.T) {
 		t.Error("No providers registered")
 	}
 
-	awsProvider, err := app.Registry.GetProvider("aws")
+	awsP, err := app.Registry.GetProvider("aws")
 	if err != nil {
 		t.Error("AWS provider not registered")
 	}
-	if awsProvider == nil {
+	if awsP == nil {
 		t.Error("AWS provider is nil")
 	}
 
-	totpProvider, err := app.Registry.GetProvider("totp")
+	totpP, err := app.Registry.GetProvider("totp")
 	if err != nil {
 		t.Error("TOTP provider not registered")
 	}
-	if totpProvider == nil {
+	if totpP == nil {
 		t.Error("TOTP provider is nil")
+	}
+
+	services := app.SetupService.GetAvailableServices()
+	if len(services) < 2 {
+		t.Errorf("Expected at least 2 setup services, got %d", len(services))
 	}
 }
 
@@ -450,38 +353,6 @@ func TestApp_RunSetup(t *testing.T) {
 	}
 }
 
-func TestNewApp(t *testing.T) {
-	mockKeychain := &MockKeychain{}
-	versionInfo := VersionInfo{
-		Version: "test",
-		Commit:  "unknown",
-		Date:    "unknown",
-	}
-	app := NewApp(mockKeychain, versionInfo)
-
-	if app.Keychain != mockKeychain {
-		t.Error("Keychain not properly injected")
-	}
-
-	if app.Registry == nil {
-		t.Error("Registry is nil")
-	}
-	if app.AWS == nil {
-		t.Error("AWS provider is nil")
-	}
-	if app.TOTP == nil {
-		t.Error("TOTP provider is nil")
-	}
-	if app.SetupService == nil {
-		t.Error("SetupService is nil")
-	}
-
-	services := app.SetupService.GetAvailableServices()
-	if len(services) < 2 {
-		t.Errorf("Expected at least 2 setup services, got %d", len(services))
-	}
-}
-
 func TestApp_PrintCredentials(t *testing.T) {
 	tests := map[string]struct {
 		creds      provider.Credentials
@@ -505,9 +376,9 @@ func TestApp_PrintCredentials(t *testing.T) {
 				"✅ MFA-authenticated session established",
 				"Using profile: default",
 				"# --------- ENVIRONMENT VARIABLES ---------",
-				"export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
-				"export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-				"export AWS_SESSION_TOKEN=FwoGZXIvYXdzEBYaDEXAMPLE",
+				"export AWS_ACCESS_KEY_ID='AKIAIOSFODNN7EXAMPLE'",
+				"export AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'",
+				"export AWS_SESSION_TOKEN='FwoGZXIvYXdzEBYaDEXAMPLE'",
 				"# ----------------------------------------",
 			},
 		},
@@ -534,7 +405,7 @@ func TestApp_PrintCredentials(t *testing.T) {
 				"⏳ Expires at: unknown",
 				"Test credentials",
 				"# --------- ENVIRONMENT VARIABLES ---------",
-				"export TEST_VAR=test_value",
+				"export TEST_VAR='test_value'",
 				"# ----------------------------------------",
 			},
 		},

@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 	"testing"
 
@@ -12,7 +10,8 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
-	"github.com/bashhack/sesh/internal/setup"
+	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
+	totpProvider "github.com/bashhack/sesh/internal/provider/totp"
 	"github.com/bashhack/sesh/internal/testutil"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
@@ -22,65 +21,55 @@ func TestHelperProcess(t *testing.T) {
 	testutil.TestHelperProcess()
 }
 
-// mockSetupService implements setup.SetupService
-type mockSetupService struct {
-	RegisterHandlerFunc      func(handler setup.SetupHandler)
-	SetupServiceFunc         func(serviceName string) error
-	GetAvailableServicesFunc func() []string
+// testHarness bundles a test App with its mock dependencies and output buffers.
+type testHarness struct {
+	app      *App
+	stdout   *bytes.Buffer
+	stderr   *bytes.Buffer
+	keychain *mocks.MockProvider
+	aws      *awsMocks.MockProvider
+	totp     *totpMocks.MockProvider
 }
 
-func (m *mockSetupService) RegisterHandler(handler setup.SetupHandler) {
-	if m.RegisterHandlerFunc != nil {
-		m.RegisterHandlerFunc(handler)
-	}
-}
+func newTestHarness() *testHarness {
+	mockKC := &mocks.MockProvider{}
+	mockAWS := &awsMocks.MockProvider{}
+	mockTOTP := &totpMocks.MockProvider{}
 
-func (m *mockSetupService) SetupService(serviceName string) error {
-	if m.SetupServiceFunc != nil {
-		return m.SetupServiceFunc(serviceName)
-	}
-	return nil
-}
+	registry := provider.NewRegistry()
+	registry.RegisterProvider(awsProvider.NewProvider(mockAWS, mockKC, mockTOTP))
+	registry.RegisterProvider(totpProvider.NewProvider(mockKC, mockTOTP))
 
-func (m *mockSetupService) GetAvailableServices() []string {
-	if m.GetAvailableServicesFunc != nil {
-		return m.GetAvailableServicesFunc()
-	}
-	return []string{}
-}
-
-func mockApp() (*App, *bytes.Buffer, *bytes.Buffer) {
 	stdoutBuf := new(bytes.Buffer)
 	stderrBuf := new(bytes.Buffer)
 
-	mockKeychain := &mocks.MockProvider{}
-	versionInfo := VersionInfo{
-		Version: "test-version",
-		Commit:  "test-commit",
-		Date:    "test-date",
+	return &testHarness{
+		app: &App{
+			Registry:     registry,
+			SetupService: &MockSetupService{},
+			ExecLookPath: func(string) (string, error) { return "/usr/local/bin/aws", nil },
+			Exit:         func(int) {},
+			Stdout:       stdoutBuf,
+			Stderr:       stderrBuf,
+			VersionInfo:  VersionInfo{Version: "test-version", Commit: "test-commit", Date: "test-date"},
+		},
+		stdout:   stdoutBuf,
+		stderr:   stderrBuf,
+		keychain: mockKC,
+		aws:      mockAWS,
+		totp:     mockTOTP,
 	}
-	app := NewApp(mockKeychain, versionInfo)
-
-	app.AWS = &awsMocks.MockProvider{}
-	app.TOTP = &totpMocks.MockProvider{}
-	app.SetupService = &mockSetupService{}
-	app.ExecLookPath = func(string) (string, error) { return "/usr/local/bin/aws", nil }
-	app.Exit = func(int) {}
-	app.Stdout = stdoutBuf
-	app.Stderr = stderrBuf
-
-	return app, stdoutBuf, stderrBuf
 }
 
 func TestVersionFlag(t *testing.T) {
-	app, stdoutBuf, _ := mockApp()
+	h := newTestHarness()
 
 	exitCalled := false
-	app.Exit = func(int) { exitCalled = true }
+	h.app.Exit = func(int) { exitCalled = true }
 
-	run(app, []string{"sesh", "--version"})
+	run(h.app, []string{"sesh", "--version"})
 
-	output := stdoutBuf.String()
+	output := h.stdout.String()
 
 	if !strings.Contains(output, "test-version") || !strings.Contains(output, "test-commit") {
 		t.Errorf("Expected version output to contain version and commit info, got: %s", output)
@@ -92,24 +81,10 @@ func TestVersionFlag(t *testing.T) {
 }
 
 func TestPrintUsage(t *testing.T) {
-	oldStdout := os.Stdout
-	r, w, pipeErr := os.Pipe()
-	if pipeErr != nil {
-		t.Fatalf("os.Pipe() failed: %v", pipeErr)
-	}
-	os.Stdout = w
+	h := newTestHarness()
+	h.app.PrintUsage()
 
-	printUsage()
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	r.Close()
-
-	output := buf.String()
-
+	output := h.stdout.String()
 	expectedStrings := []string{
 		"Usage: sesh [options]",
 		"Common options:",
@@ -129,7 +104,7 @@ func TestPrintUsage(t *testing.T) {
 
 	for _, expected := range expectedStrings {
 		if !strings.Contains(output, expected) {
-			t.Errorf("printUsage() output missing expected string: %q", expected)
+			t.Errorf("PrintUsage() output missing expected string: %q", expected)
 		}
 	}
 }
@@ -188,51 +163,34 @@ func TestExtractServiceName(t *testing.T) {
 }
 
 func TestPrintProviderUsage(t *testing.T) {
-	app, _, _ := mockApp()
+	h := newTestHarness()
 
 	tests := map[string]struct {
 		serviceName string
 		provider    provider.ServiceProvider
-	}{
-		"aws":  {"aws", nil},
-		"totp": {"totp", nil},
-	}
+	}{}
 
-	if awsProvider, err := app.Registry.GetProvider("aws"); err == nil {
+	if awsP, err := h.app.Registry.GetProvider("aws"); err == nil {
 		tests["aws"] = struct {
 			serviceName string
 			provider    provider.ServiceProvider
-		}{"aws", awsProvider}
+		}{"aws", awsP}
 	}
-	if totpProvider, err := app.Registry.GetProvider("totp"); err == nil {
+	if totpP, err := h.app.Registry.GetProvider("totp"); err == nil {
 		tests["totp"] = struct {
 			serviceName string
 			provider    provider.ServiceProvider
-		}{"totp", totpProvider}
+		}{"totp", totpP}
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			oldStdout := os.Stdout
-			r, w, pipeErr := os.Pipe()
-			if pipeErr != nil {
-				t.Fatalf("os.Pipe() failed: %v", pipeErr)
-			}
-			os.Stdout = w
+			h := newTestHarness()
+			h.app.PrintProviderUsage(tc.serviceName, tc.provider)
 
-			printProviderUsage(tc.serviceName, tc.provider)
-
-			w.Close()
-			os.Stdout = oldStdout
-
-			var buf bytes.Buffer
-			io.Copy(&buf, r)
-			r.Close()
-
-			output := buf.String()
-
+			output := h.stdout.String()
 			if !strings.Contains(output, tc.serviceName) {
-				t.Errorf("printProviderUsage() output should contain provider name %q", tc.serviceName)
+				t.Errorf("PrintProviderUsage() output should contain provider name %q", tc.serviceName)
 			}
 			if !strings.Contains(output, "--service") {
 				t.Error("printProviderUsage() output should contain --service flag")
@@ -295,16 +253,14 @@ func TestServiceNameExtraction_EdgeCases(t *testing.T) {
 func TestRun_ProviderSpecificFlags(t *testing.T) {
 	tests := map[string]struct {
 		args         []string
-		setupMocks   func(*App)
+		setupMocks   func(*testHarness)
 		wantExitCode int
 		checkOutput  func(*testing.T, string, string) // stdout, stderr
 	}{
 		"aws with valid profile flag": {
 			args: []string{"sesh", "--service", "aws", "--profile", "dev", "--list"},
-			setupMocks: func(app *App) {
-				// Mock the keychain to return some entries
-				keychainMock := app.Keychain.(*mocks.MockProvider)
-				keychainMock.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
+			setupMocks: func(h *testHarness) {
+				h.keychain.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
 					return []keychain.KeychainEntry{
 						{Service: "sesh-aws-default", Account: "testuser"},
 						{Service: "sesh-aws-dev", Account: "testuser"},
@@ -315,19 +271,15 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 		},
 		"totp with service-name flag": {
 			args: []string{"sesh", "--service", "totp", "--service-name", "github", "--clip"},
-			setupMocks: func(app *App) {
-				// Mock keychain to have the TOTP secret
-				keychainMock := app.Keychain.(*mocks.MockProvider)
-				keychainMock.GetSecretFunc = func(account, service string) ([]byte, error) {
+			setupMocks: func(h *testHarness) {
+				h.keychain.GetSecretFunc = func(account, service string) ([]byte, error) {
 					if service == "sesh-totp/github" {
 						return []byte("JBSWY3DPEHPK3PXP"), nil // Example TOTP secret
 					}
 					return nil, fmt.Errorf("not found")
 				}
 
-				// Mock TOTP generation
-				totpMock := app.TOTP.(*totpMocks.MockProvider)
-				totpMock.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+				h.totp.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "123456", "654321", nil
 				}
 			},
@@ -335,7 +287,7 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 		},
 		"aws with totp-specific flag should fail": {
 			args: []string{"sesh", "--service", "aws", "--service-name", "github"},
-			setupMocks: func(app *App) {
+			setupMocks: func(h *testHarness) {
 				// Should fail during flag parsing
 			},
 			wantExitCode: 1,
@@ -347,7 +299,7 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 		},
 		"totp with aws-specific flag should fail": {
 			args: []string{"sesh", "--service", "totp", "--no-subshell"},
-			setupMocks: func(app *App) {
+			setupMocks: func(h *testHarness) {
 				// Should fail during flag parsing
 			},
 			wantExitCode: 1,
@@ -361,16 +313,16 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			app, stdoutBuf, stderrBuf := mockApp()
+			h := newTestHarness()
 
 			exitCode := -1
-			app.Exit = func(code int) { exitCode = code }
+			h.app.Exit = func(code int) { exitCode = code }
 
 			if tc.setupMocks != nil {
-				tc.setupMocks(app)
+				tc.setupMocks(h)
 			}
 
-			run(app, tc.args)
+			run(h.app, tc.args)
 
 			if exitCode == -1 {
 				exitCode = 0
@@ -378,12 +330,12 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 
 			if exitCode != tc.wantExitCode {
 				t.Errorf("Exit code = %d, want %d", exitCode, tc.wantExitCode)
-				t.Logf("stdout: %q", stdoutBuf.String())
-				t.Logf("stderr: %q", stderrBuf.String())
+				t.Logf("stdout: %q", h.stdout.String())
+				t.Logf("stderr: %q", h.stderr.String())
 			}
 
 			if tc.checkOutput != nil {
-				tc.checkOutput(t, stdoutBuf.String(), stderrBuf.String())
+				tc.checkOutput(t, h.stdout.String(), h.stderr.String())
 			}
 		})
 	}
@@ -392,7 +344,7 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 func TestRun_FlagValidation(t *testing.T) {
 	tests := map[string]struct {
 		args         []string
-		setupMocks   func(*App)
+		setupMocks   func(*testHarness)
 		wantExitCode int
 		checkStderr  func(*testing.T, string)
 	}{
@@ -416,7 +368,7 @@ func TestRun_FlagValidation(t *testing.T) {
 		},
 		"totp without required service-name": {
 			args: []string{"sesh", "--service", "totp"},
-			setupMocks: func(app *App) {
+			setupMocks: func(h *testHarness) {
 				// TOTP provider's ValidateRequest should fail
 			},
 			wantExitCode: 1,
@@ -430,16 +382,16 @@ func TestRun_FlagValidation(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			app, stdoutBuf, stderrBuf := mockApp()
+			h := newTestHarness()
 
 			exitCode := -1
-			app.Exit = func(code int) { exitCode = code }
+			h.app.Exit = func(code int) { exitCode = code }
 
 			if tc.setupMocks != nil {
-				tc.setupMocks(app)
+				tc.setupMocks(h)
 			}
 
-			run(app, tc.args)
+			run(h.app, tc.args)
 
 			if exitCode == -1 {
 				exitCode = 0
@@ -447,12 +399,12 @@ func TestRun_FlagValidation(t *testing.T) {
 
 			if exitCode != tc.wantExitCode {
 				t.Errorf("Exit code = %d, want %d", exitCode, tc.wantExitCode)
-				t.Logf("stdout: %q", stdoutBuf.String())
-				t.Logf("stderr: %q", stderrBuf.String())
+				t.Logf("stdout: %q", h.stdout.String())
+				t.Logf("stderr: %q", h.stderr.String())
 			}
 
 			if tc.checkStderr != nil {
-				tc.checkStderr(t, stderrBuf.String())
+				tc.checkStderr(t, h.stderr.String())
 			}
 		})
 	}
