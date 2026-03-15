@@ -71,6 +71,12 @@ type FlagInfo struct {
 	Required    bool
 }
 
+// SubshellDecider is an optional interface that providers can implement
+// to indicate whether they prefer subshell mode over printing credentials.
+type SubshellDecider interface {
+	ShouldUseSubshell() bool
+}
+
 // SubshellProvider is an optional interface that providers can implement
 // if they support launching a customized subshell environment
 type SubshellProvider interface {

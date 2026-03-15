@@ -356,7 +356,8 @@ func TestApp_RunSetup(t *testing.T) {
 func TestApp_PrintCredentials(t *testing.T) {
 	tests := map[string]struct {
 		creds      provider.Credentials
-		wantOutput []string
+		wantStdout []string
+		wantStderr []string
 	}{
 		"aws credentials with MFA": {
 			creds: provider.Credentials{
@@ -370,16 +371,18 @@ func TestApp_PrintCredentials(t *testing.T) {
 					"AWS_SESSION_TOKEN":     "FwoGZXIvYXdzEBYaDEXAMPLE",
 				},
 			},
-			wantOutput: []string{
-				"⏳ Expires at:",
-				"(valid for 11h",
-				"✅ MFA-authenticated session established",
-				"Using profile: default",
+			wantStdout: []string{
 				"# --------- ENVIRONMENT VARIABLES ---------",
 				"export AWS_ACCESS_KEY_ID='AKIAIOSFODNN7EXAMPLE'",
 				"export AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'",
 				"export AWS_SESSION_TOKEN='FwoGZXIvYXdzEBYaDEXAMPLE'",
 				"# ----------------------------------------",
+			},
+			wantStderr: []string{
+				"⏳ Expires at:",
+				"(valid for 11h",
+				"✅ MFA-authenticated session established",
+				"Using profile: default",
 			},
 		},
 		"totp credentials": {
@@ -388,9 +391,21 @@ func TestApp_PrintCredentials(t *testing.T) {
 				DisplayInfo: "TOTP code for github: 123456",
 				Variables:   map[string]string{},
 			},
-			wantOutput: []string{
+			wantStderr: []string{
 				"⏳ Expires at: unknown",
 				"TOTP code for github: 123456",
+			},
+		},
+		"expired credentials": {
+			creds: provider.Credentials{
+				Provider:    "aws",
+				Expiry:      time.Now().Add(-1 * time.Hour),
+				DisplayInfo: "Using profile: default",
+				Variables:   map[string]string{},
+			},
+			wantStderr: []string{
+				"⏳ Expires at:",
+				"(expired)",
 			},
 		},
 		"credentials without expiry": {
@@ -401,28 +416,61 @@ func TestApp_PrintCredentials(t *testing.T) {
 					"TEST_VAR": "test_value",
 				},
 			},
-			wantOutput: []string{
-				"⏳ Expires at: unknown",
-				"Test credentials",
+			wantStdout: []string{
 				"# --------- ENVIRONMENT VARIABLES ---------",
 				"export TEST_VAR='test_value'",
 				"# ----------------------------------------",
+			},
+			wantStderr: []string{
+				"⏳ Expires at: unknown",
+				"Test credentials",
+			},
+		},
+		"invalid variable name is skipped": {
+			creds: provider.Credentials{
+				Provider: "test",
+				Variables: map[string]string{
+					"VALID_KEY":    "good",
+					"bad;key":      "injected",
+					"$(whoami)":    "injected",
+					"1STARTS_NUM":  "bad",
+					"_UNDERSCORE":  "ok",
+				},
+			},
+			wantStdout: []string{
+				"export VALID_KEY='good'",
+				"export _UNDERSCORE='ok'",
+			},
+			wantStderr: []string{
+				"Skipping invalid variable name: \"bad;key\"",
+				"Skipping invalid variable name: \"$(whoami)\"",
+				"Skipping invalid variable name: \"1STARTS_NUM\"",
 			},
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
+			stdoutBuf := &bytes.Buffer{}
+			stderrBuf := &bytes.Buffer{}
 			app := &App{
-				Stdout: &bytes.Buffer{},
+				Stdout: stdoutBuf,
+				Stderr: stderrBuf,
 			}
 
 			app.PrintCredentials(tc.creds)
 
-			output := app.Stdout.(*bytes.Buffer).String()
-			for _, expected := range tc.wantOutput {
-				if !strings.Contains(output, expected) {
-					t.Errorf("PrintCredentials() output missing expected string: %q", expected)
+			stdout := stdoutBuf.String()
+			for _, expected := range tc.wantStdout {
+				if !strings.Contains(stdout, expected) {
+					t.Errorf("PrintCredentials() stdout missing expected string: %q", expected)
+				}
+			}
+
+			stderr := stderrBuf.String()
+			for _, expected := range tc.wantStderr {
+				if !strings.Contains(stderr, expected) {
+					t.Errorf("PrintCredentials() stderr missing expected string: %q", expected)
 				}
 			}
 		})

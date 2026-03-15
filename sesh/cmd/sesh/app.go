@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +18,9 @@ import (
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/totp"
 )
+
+// validEnvVarName matches POSIX-compliant environment variable names.
+var validEnvVarName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // ExecLookPathFunc is a function type for looking up executables in PATH
 type ExecLookPathFunc func(file string) (string, error)
@@ -189,7 +193,7 @@ func (a *App) CopyToClipboard(serviceName string) error {
 	}
 
 	fmt.Fprintf(a.Stderr, "✅ %s copied to clipboard in %.2fs\n", clipboardDesc, elapsedTime.Seconds())
-	fmt.Fprintf(a.Stdout, "%s\n", creds.DisplayInfo)
+	fmt.Fprintf(a.Stderr, "%s\n", creds.DisplayInfo)
 
 	return nil
 }
@@ -200,36 +204,46 @@ func (a *App) PrintCredentials(creds provider.Credentials) {
 	expiryDisplay := "unknown"
 	if !creds.Expiry.IsZero() {
 		duration := time.Until(creds.Expiry)
-		total := int(duration.Seconds())
-		hours := total / 3600
-		minutes := (total % 3600) / 60
-		seconds := total % 60
-
-		var validFor string
-		if hours > 0 {
-			validFor = fmt.Sprintf("%dh%dm", hours, minutes)
-		} else if minutes > 0 {
-			validFor = fmt.Sprintf("%dm%ds", minutes, seconds)
+		formatted := creds.Expiry.Local().Format("2006-01-02 15:04:05")
+		if duration <= 0 {
+			expiryDisplay = fmt.Sprintf("%s (expired)", formatted)
 		} else {
-			validFor = fmt.Sprintf("%ds", seconds)
+			total := int(duration.Seconds())
+			hours := total / 3600
+			minutes := (total % 3600) / 60
+			seconds := total % 60
+
+			var validFor string
+			if hours > 0 {
+				validFor = fmt.Sprintf("%dh%dm", hours, minutes)
+			} else if minutes > 0 {
+				validFor = fmt.Sprintf("%dm%ds", minutes, seconds)
+			} else {
+				validFor = fmt.Sprintf("%ds", seconds)
+			}
+			expiryDisplay = fmt.Sprintf("%s (valid for %s)", formatted, validFor)
 		}
-		expiryDisplay = fmt.Sprintf("%s (valid for %s)",
-			creds.Expiry.Local().Format("2006-01-02 15:04:05"), validFor)
 	}
 
-	fmt.Fprintf(a.Stdout, "⏳ Expires at: %s\n", expiryDisplay)
+	// Human-readable info goes to stderr so stdout remains eval-safe
+	fmt.Fprintf(a.Stderr, "⏳ Expires at: %s\n", expiryDisplay)
 
 	if creds.MFAAuthenticated {
-		fmt.Fprintf(a.Stdout, "✅ MFA-authenticated session established\n")
+		fmt.Fprintf(a.Stderr, "✅ MFA-authenticated session established\n")
 	}
 
 	if creds.DisplayInfo != "" {
-		fmt.Fprintf(a.Stdout, "%s\n", creds.DisplayInfo)
+		fmt.Fprintf(a.Stderr, "%s\n", creds.DisplayInfo)
 	}
 
+	// Shell-safe export commands go to stdout for eval/source
 	if len(creds.Variables) > 0 {
-		fmt.Fprintf(a.Stdout, "\n# --------- ENVIRONMENT VARIABLES ---------\n")
+		fmt.Fprintf(a.Stdout, "# --------- ENVIRONMENT VARIABLES ---------\n")
 		for key, value := range creds.Variables {
+			if !validEnvVarName.MatchString(key) {
+				fmt.Fprintf(a.Stderr, "⚠️  Skipping invalid variable name: %q\n", key)
+				continue
+			}
 			fmt.Fprintf(a.Stdout, "export %s='%s'\n", key, strings.ReplaceAll(value, "'", "'\\''"))
 		}
 		fmt.Fprintf(a.Stdout, "# ----------------------------------------\n")

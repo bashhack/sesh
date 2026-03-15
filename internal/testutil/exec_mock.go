@@ -109,18 +109,25 @@ var stdoutMu sync.Mutex
 // CaptureStdout captures stdout during a function execution.
 //
 // Safe for use with t.Parallel() — concurrent callers are serialized via a mutex.
+// If fn panics, os.Stdout is restored before the panic propagates.
 func CaptureStdout(fn func()) string {
 	stdoutMu.Lock()
 	defer stdoutMu.Unlock()
 
-	r, w, _ := os.Pipe()
+	r, w, err := os.Pipe()
+	if err != nil {
+		panic("CaptureStdout: os.Pipe failed: " + err.Error())
+	}
+
 	originalStdout := os.Stdout
 	os.Stdout = w
+	defer func() {
+		os.Stdout = originalStdout
+	}()
 
 	fn()
 
 	w.Close()
-	os.Stdout = originalStdout
 
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)
@@ -132,18 +139,25 @@ func CaptureStdout(fn func()) string {
 // CaptureStderr captures stderr during a function execution.
 //
 // Safe for use with t.Parallel() — concurrent callers are serialized via a mutex.
+// If fn panics, os.Stderr is restored before the panic propagates.
 func CaptureStderr(fn func()) string {
 	stderrMu.Lock()
 	defer stderrMu.Unlock()
 
-	r, w, _ := os.Pipe()
+	r, w, err := os.Pipe()
+	if err != nil {
+		panic("CaptureStderr: os.Pipe failed: " + err.Error())
+	}
+
 	originalStderr := os.Stderr
 	os.Stderr = w
+	defer func() {
+		os.Stderr = originalStderr
+	}()
 
 	fn()
 
 	w.Close()
-	os.Stderr = originalStderr
 
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)

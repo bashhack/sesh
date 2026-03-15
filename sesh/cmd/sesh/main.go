@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/provider"
-	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
 )
 
 // Version information (set by ldflags during build)
@@ -66,7 +65,7 @@ func run(app *App, args []string) {
 	}
 
 	// Validate service exists
-	provider, err := app.Registry.GetProvider(serviceName)
+	svcProvider, err := app.Registry.GetProvider(serviceName)
 	if err != nil {
 		fmt.Fprintf(app.Stderr, "❌ %v\n", err)
 		app.ListProviders()
@@ -80,7 +79,7 @@ func run(app *App, args []string) {
 
 	// Set custom usage that includes provider info
 	fs.Usage = func() {
-		app.PrintProviderUsage(serviceName, provider)
+		app.PrintProviderUsage(serviceName, svcProvider)
 	}
 
 	// Register common flags
@@ -94,7 +93,7 @@ func run(app *App, args []string) {
 	copyClipboard := fs.Bool("clip", false, "Copy code to clipboard")
 
 	// Register provider-specific flags
-	if err := provider.SetupFlags(fs); err != nil {
+	if err := svcProvider.SetupFlags(fs); err != nil {
 		fmt.Fprintf(app.Stderr, "❌ Error setting up provider flags: %v\n", err)
 		app.Exit(1)
 		return
@@ -124,7 +123,7 @@ func run(app *App, args []string) {
 	}
 
 	if *showHelp {
-		app.PrintProviderUsage(serviceName, provider)
+		app.PrintProviderUsage(serviceName, svcProvider)
 		return
 	}
 
@@ -164,18 +163,10 @@ func run(app *App, args []string) {
 			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
 			app.Exit(1)
 		}
-	} else if serviceName == "aws" {
-		// Check if AWS provider wants subshell
-		if awsP, ok := provider.(*awsProvider.Provider); ok && awsP.ShouldUseSubshell() {
-			if err := app.LaunchSubshell(serviceName); err != nil {
-				fmt.Fprintf(app.Stderr, "❌ %v\n", err)
-				app.Exit(1)
-			}
-		} else {
-			if err := app.GenerateCredentials(serviceName); err != nil {
-				fmt.Fprintf(app.Stderr, "❌ %v\n", err)
-				app.Exit(1)
-			}
+	} else if sd, ok := svcProvider.(provider.SubshellDecider); ok && sd.ShouldUseSubshell() {
+		if err := app.LaunchSubshell(serviceName); err != nil {
+			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+			app.Exit(1)
 		}
 	} else {
 		if err := app.GenerateCredentials(serviceName); err != nil {
