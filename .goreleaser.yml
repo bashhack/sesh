@@ -46,6 +46,8 @@ brews:
       system "#{bin}/sesh --version"
     install: |
       bin.install "sesh"
+    post_install: |
+      opoo "AWS CLI not found. sesh requires it for credential workflows. Install with: brew install awscli" unless which("aws")
 checksum:
   name_template: 'checksums.txt'
 
