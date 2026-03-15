@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 )
 
 // MockExecCommand builds a mock exec.Command function that returns
@@ -102,46 +103,65 @@ func TestHelperProcess() {
 	os.Exit(0)
 }
 
-// CaptureStdout captures stdout during a function execution
+// stdoutMu serializes access to os.Stdout across concurrent tests.
+var stdoutMu sync.Mutex
+
+// CaptureStdout captures stdout during a function execution.
+//
+// Safe for use with t.Parallel() — concurrent callers are serialized via a mutex.
+// If fn panics, os.Stdout is restored before the panic propagates.
 func CaptureStdout(fn func()) string {
-	r, w, _ := os.Pipe()
+	stdoutMu.Lock()
+	defer stdoutMu.Unlock()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		panic("CaptureStdout: os.Pipe failed: " + err.Error())
+	}
 
 	originalStdout := os.Stdout
-
 	os.Stdout = w
+	defer func() {
+		os.Stdout = originalStdout
+	}()
 
 	fn()
 
-	// Close the write end of the pipe to get all output
-	// and ignoring error as I can't do anything with it in this context
-	_ = w.Close()
-
-	os.Stdout = originalStdout
+	w.Close()
 
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)
+	r.Close()
 
 	return buf.String()
 }
 
-// CaptureStderr captures stderr during a function execution
+// CaptureStderr captures stderr during a function execution.
+//
+// Safe for use with t.Parallel() — concurrent callers are serialized via a mutex.
+// If fn panics, os.Stderr is restored before the panic propagates.
 func CaptureStderr(fn func()) string {
-	r, w, _ := os.Pipe()
+	stderrMu.Lock()
+	defer stderrMu.Unlock()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		panic("CaptureStderr: os.Pipe failed: " + err.Error())
+	}
 
 	originalStderr := os.Stderr
-
 	os.Stderr = w
+	defer func() {
+		os.Stderr = originalStderr
+	}()
 
 	fn()
 
-	// Close the write end of the pipe to get all output
-	// and ignoring any error as I can't do anything with it in this context
-	_ = w.Close()
-
-	os.Stderr = originalStderr
+	w.Close()
 
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)
+	r.Close()
 
 	return buf.String()
 }

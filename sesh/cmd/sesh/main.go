@@ -1,0 +1,261 @@
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/bashhack/sesh/internal/provider"
+)
+
+// Version information (set by ldflags during build)
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
+func main() {
+	versionInfo := VersionInfo{
+		Version: version,
+		Commit:  commit,
+		Date:    date,
+	}
+	app := NewDefaultApp(versionInfo)
+	run(app, os.Args)
+}
+
+// run is the testable entrypoint for the application
+func run(app *App, args []string) {
+	// Early exit for version/list-services that don't need service
+	for _, arg := range args[1:] {
+		switch arg {
+		case "--version", "-version":
+			app.ShowVersion()
+			return
+		case "--list-services", "-list-services":
+			app.ListProviders()
+			return
+		}
+	}
+
+	// Check if help is requested without a service
+	hasHelp := false
+	for _, arg := range args[1:] {
+		if arg == "--help" || arg == "-help" || arg == "-h" {
+			hasHelp = true
+			break
+		}
+	}
+
+	// Extract service name from args
+	serviceName := extractServiceName(args)
+	if serviceName == "" {
+		// If no service but help was requested, show general help
+		if hasHelp {
+			app.PrintUsage()
+			return
+		}
+		fmt.Fprintln(app.Stderr, "❌ No service provider specified. Use --service to select a provider.")
+		app.ListProviders()
+		app.Exit(1)
+		return
+	}
+
+	// Validate service exists
+	svcProvider, err := app.Registry.GetProvider(serviceName)
+	if err != nil {
+		fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+		app.ListProviders()
+		app.Exit(1)
+		return
+	}
+
+	// Now create flagset with provider-specific flags
+	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
+	fs.SetOutput(app.Stderr) // Redirect flag errors to app.Stderr
+
+	// Set custom usage that includes provider info
+	fs.Usage = func() {
+		app.PrintProviderUsage(serviceName, svcProvider)
+	}
+
+	// Register common flags
+	serviceFlag := fs.String("service", serviceName, "Service provider to use")
+	showVersion := fs.Bool("version", false, "Show version information")
+	showHelp := fs.Bool("help", false, "Show usage")
+	listServices := fs.Bool("list-services", false, "List available service providers")
+	listEntries := fs.Bool("list", false, "List entries for selected service")
+	deleteEntry := fs.String("delete", "", "Delete entry for selected service")
+	runSetup := fs.Bool("setup", false, "Run setup wizard for selected service")
+	copyClipboard := fs.Bool("clip", false, "Copy code to clipboard")
+
+	// Register provider-specific flags
+	if err := svcProvider.SetupFlags(fs); err != nil {
+		fmt.Fprintf(app.Stderr, "❌ Error setting up provider flags: %v\n", err)
+		app.Exit(1)
+		return
+	}
+
+	// Parse all flags
+	if err := fs.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		fmt.Fprintf(app.Stderr, "❌ Error parsing arguments: %v\n", err)
+		app.Exit(1)
+		return
+	}
+
+	// Verify service wasn't changed
+	if *serviceFlag != serviceName {
+		fmt.Fprintf(app.Stderr, "❌ Service provider cannot be changed after initial selection\n")
+		app.Exit(1)
+		return
+	}
+
+	// Handle commands that were re-parsed
+	if *showVersion {
+		app.ShowVersion()
+		return
+	}
+
+	if *showHelp {
+		app.PrintProviderUsage(serviceName, svcProvider)
+		return
+	}
+
+	if *listServices {
+		app.ListProviders()
+		return
+	}
+
+	// Provider-specific operations
+	if *listEntries {
+		if err := app.ListEntries(serviceName); err != nil {
+			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+			app.Exit(1)
+		}
+		return
+	}
+
+	if *deleteEntry != "" {
+		if err := app.DeleteEntry(serviceName, *deleteEntry); err != nil {
+			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+			app.Exit(1)
+		}
+		return
+	}
+
+	if *runSetup {
+		if err := app.RunSetup(serviceName); err != nil {
+			fmt.Fprintf(app.Stderr, "❌ Setup failed: %v\n", err)
+			app.Exit(1)
+		}
+		return
+	}
+
+	// Main operation - generate credentials
+	if *copyClipboard {
+		if err := app.CopyToClipboard(serviceName); err != nil {
+			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+			app.Exit(1)
+		}
+	} else if sd, ok := svcProvider.(provider.SubshellDecider); ok && sd.ShouldUseSubshell() {
+		if err := app.LaunchSubshell(serviceName); err != nil {
+			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+			app.Exit(1)
+		}
+	} else {
+		if err := app.GenerateCredentials(serviceName); err != nil {
+			fmt.Fprintf(app.Stderr, "❌ %v\n", err)
+			app.Exit(1)
+		}
+	}
+}
+
+// extractServiceName manually parses args to find --service value
+func extractServiceName(args []string) string {
+	for i := 1; i < len(args); i++ {
+		// Handle --service <value>
+		if args[i] == "--service" || args[i] == "-service" {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				return args[i+1]
+			}
+		}
+		// Handle --service=<value>
+		if strings.HasPrefix(args[i], "--service=") {
+			return strings.TrimPrefix(args[i], "--service=")
+		}
+		if strings.HasPrefix(args[i], "-service=") {
+			return strings.TrimPrefix(args[i], "-service=")
+		}
+	}
+	return ""
+}
+
+// PrintUsage displays general usage information
+func (a *App) PrintUsage() {
+	w := a.Stdout
+	fmt.Fprintln(w, "Usage: sesh [options]")
+	fmt.Fprintln(w, "\nCommon options:")
+	fmt.Fprintln(w, "  --service, -service           Service provider to use (aws, totp) [REQUIRED]")
+	fmt.Fprintln(w, "  --list, -list                 List entries for selected service")
+	fmt.Fprintln(w, "  --delete, -delete string      Delete entry for selected service")
+	fmt.Fprintln(w, "  --setup, -setup               Run setup wizard for selected service")
+	fmt.Fprintln(w, "  --clip, -clip                 Copy code to clipboard")
+	fmt.Fprintln(w, "  --list-services, -list-services  List available service providers")
+	fmt.Fprintln(w, "  --version, -version           Show version information")
+	fmt.Fprintln(w, "  --help, -help                 Show usage")
+	fmt.Fprintln(w, "\nExamples:")
+	fmt.Fprintln(w, "  sesh --service aws                     Generate AWS credentials")
+	fmt.Fprintln(w, "  sesh --service totp --service-name github   Generate TOTP code for GitHub")
+	fmt.Fprintln(w, "  sesh --list-services                   List available providers")
+	fmt.Fprintln(w, "\nFor provider-specific help:")
+	fmt.Fprintln(w, "  sesh --service <provider> --help")
+}
+
+// PrintProviderUsage prints usage for a specific provider
+func (a *App) PrintProviderUsage(serviceName string, p provider.ServiceProvider) {
+	w := a.Stdout
+	fmt.Fprintf(w, "Usage: sesh --service %s [options]\n\n", serviceName)
+
+	fmt.Fprintln(w, "Common options:")
+	fmt.Fprintln(w, "  --service string              Service provider to use")
+	fmt.Fprintln(w, "  --list                        List entries for selected service")
+	fmt.Fprintln(w, "  --delete string               Delete entry for selected service")
+	fmt.Fprintln(w, "  --setup                       Run setup wizard for selected service")
+	fmt.Fprintln(w, "  --clip                        Copy code to clipboard")
+	fmt.Fprintln(w, "  --help                        Show this help")
+	fmt.Fprintln(w, "  --version                     Show version information")
+
+	// Provider-specific flags
+	flagInfo := p.GetFlagInfo()
+	if len(flagInfo) > 0 {
+		fmt.Fprintf(w, "\n%s provider options:\n", strings.ToUpper(serviceName[:1])+serviceName[1:])
+		for _, flag := range flagInfo {
+			required := ""
+			if flag.Required {
+				required = " [REQUIRED]"
+			}
+			fmt.Fprintf(w, "  --%s %s%s\n    %s\n", flag.Name, flag.Type, required, flag.Description)
+		}
+	}
+
+	// Examples
+	fmt.Fprintln(w, "\nExamples:")
+	switch serviceName {
+	case "aws":
+		fmt.Fprintln(w, "  sesh --service aws                     Generate AWS credentials (subshell)")
+		fmt.Fprintln(w, "  sesh --service aws --no-subshell       Print AWS credentials")
+		fmt.Fprintln(w, "  sesh --service aws --profile dev       Use 'dev' AWS profile")
+		fmt.Fprintln(w, "  sesh --service aws --setup             Set up AWS credentials")
+	case "totp":
+		fmt.Fprintln(w, "  sesh --service totp --service-name github     Generate TOTP for GitHub")
+		fmt.Fprintln(w, "  sesh --service totp --service-name github --clip   Copy TOTP to clipboard")
+		fmt.Fprintln(w, "  sesh --service totp --setup            Set up new TOTP service")
+		fmt.Fprintln(w, "  sesh --service totp --list             List all TOTP services")
+	}
+}

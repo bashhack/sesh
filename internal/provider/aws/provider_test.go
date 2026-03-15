@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/subshell"
+	"github.com/bashhack/sesh/internal/testutil"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
 
@@ -106,8 +106,8 @@ func TestProvider_SetupFlags(t *testing.T) {
 			if p.noSubshell {
 				t.Error("noSubshell should be false by default")
 			}
-			if p.keyUser == "" {
-				t.Error("keyUser should be set to current user")
+			if p.User == "" {
+				t.Error("User should be set to current user")
 			}
 		})
 	}
@@ -290,19 +290,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Capture stderr to suppress warning output
-			oldStderr := os.Stderr
-			r, w, pipeErr := os.Pipe()
-			if pipeErr != nil {
-				t.Fatalf("os.Pipe() failed: %v", pipeErr)
-			}
-			os.Stderr = w
-			defer func() {
-				w.Close()
-				io.Copy(io.Discard, r)
-				r.Close()
-				os.Stderr = oldStderr
-			}()
+			defer testutil.DiscardStderr(t)()
 
 			mockKeychain := &keychainMocks.MockProvider{}
 			tc.setupKeychain(mockKeychain)
@@ -310,7 +298,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 			p := &Provider{
 				keychain: mockKeychain,
 				profile:  tc.profile,
-				keyUser:  "testuser",
+				KeyUser:  provider.KeyUser{User: "testuser"},
 				keyName:  "sesh-aws",
 			}
 
@@ -394,19 +382,7 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Capture stderr to suppress debug output
-			oldStderr := os.Stderr
-			r, w, pipeErr := os.Pipe()
-			if pipeErr != nil {
-				t.Fatalf("os.Pipe() failed: %v", pipeErr)
-			}
-			os.Stderr = w
-			defer func() {
-				w.Close()
-				io.Copy(io.Discard, r)
-				r.Close()
-				os.Stderr = oldStderr
-			}()
+			defer testutil.DiscardStderr(t)()
 
 			mockKeychain := &keychainMocks.MockProvider{}
 			mockTOTP := &totpMocks.MockProvider{}
@@ -417,7 +393,7 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 				keychain: mockKeychain,
 				totp:     mockTOTP,
 				profile:  tc.profile,
-				keyUser:  "testuser",
+				KeyUser:  provider.KeyUser{User: "testuser"},
 				keyName:  "sesh-aws",
 			}
 
@@ -446,26 +422,26 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 func TestProvider_GetTOTPKeyInfo(t *testing.T) {
 	tests := map[string]struct {
 		profile  string
-		keyUser  string
+		user     string
 		wantUser string
 		wantKey  string
 		wantErr  bool
 	}{
 		"default profile with preset user": {
 			profile:  "",
-			keyUser:  "testuser",
+			user:     "testuser",
 			wantUser: "testuser",
 			wantKey:  "sesh-aws/default",
 		},
 		"custom profile with preset user": {
 			profile:  "dev",
-			keyUser:  "testuser",
+			user:     "testuser",
 			wantUser: "testuser",
 			wantKey:  "sesh-aws/dev",
 		},
 		"unset user - should get current": {
 			profile:  "",
-			keyUser:  "",
+			user:     "",
 			wantUser: "", // Will be set by env.GetCurrentUser
 			wantKey:  "sesh-aws/default",
 		},
@@ -475,7 +451,7 @@ func TestProvider_GetTOTPKeyInfo(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := &Provider{
 				profile: tc.profile,
-				keyUser: tc.keyUser,
+				KeyUser: provider.KeyUser{User: tc.user},
 				keyName: "sesh-aws",
 			}
 
@@ -504,7 +480,7 @@ func TestProvider_GetTOTPKeyInfo(t *testing.T) {
 func TestProvider_GetMFASerialBytes(t *testing.T) {
 	tests := map[string]struct {
 		profile       string
-		keyUser       string
+		user          string
 		setupKeychain func(*keychainMocks.MockProvider)
 		setupAWS      func(*awsMocks.MockProvider)
 		wantSerial    string
@@ -512,7 +488,7 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 	}{
 		"serial in keychain": {
 			profile: "",
-			keyUser: "testuser",
+			user:    "testuser",
 			setupKeychain: func(m *keychainMocks.MockProvider) {
 				m.GetSecretFunc = func(account, service string) ([]byte, error) {
 					if account == "testuser" && service == "sesh-aws-serial/default" {
@@ -532,7 +508,7 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 		},
 		"serial not in keychain - auto-detect": {
 			profile: "dev",
-			keyUser: "testuser",
+			user:    "testuser",
 			setupKeychain: func(m *keychainMocks.MockProvider) {
 				m.GetSecretFunc = func(account, service string) ([]byte, error) {
 					return nil, keychain.ErrNotFound
@@ -550,7 +526,7 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 		},
 		"auto-detect fails": {
 			profile: "",
-			keyUser: "testuser",
+			user:    "testuser",
 			setupKeychain: func(m *keychainMocks.MockProvider) {
 				m.GetSecretFunc = func(account, service string) ([]byte, error) {
 					return nil, keychain.ErrNotFound
@@ -565,7 +541,7 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 		},
 		"keychain error surfaces without fallback": {
 			profile: "",
-			keyUser: "testuser",
+			user:    "testuser",
 			setupKeychain: func(m *keychainMocks.MockProvider) {
 				m.GetSecretFunc = func(account, service string) ([]byte, error) {
 					return nil, errors.New("keychain locked")
@@ -592,7 +568,7 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 				aws:      mockAWS,
 				keychain: mockKeychain,
 				profile:  tc.profile,
-				keyUser:  tc.keyUser,
+				KeyUser:  provider.KeyUser{User: tc.user},
 			}
 
 			serialBytes, err := p.GetMFASerialBytes()
@@ -614,7 +590,7 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 func TestProvider_GetCredentials(t *testing.T) {
 	tests := map[string]struct {
 		profile       string
-		now           func() time.Time
+		now func() time.Time
 		setupKeychain func(*keychainMocks.MockProvider)
 		setupTOTP     func(*totpMocks.MockProvider)
 		setupAWS      func(*awsMocks.MockProvider)
@@ -867,19 +843,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Redirect stderr to capture debug output
-			oldStderr := os.Stderr
-			r, w, pipeErr := os.Pipe()
-			if pipeErr != nil {
-				t.Fatalf("os.Pipe() failed: %v", pipeErr)
-			}
-			os.Stderr = w
-			defer func() {
-				w.Close()
-				io.Copy(io.Discard, r)
-				r.Close()
-				os.Stderr = oldStderr
-			}()
+			defer testutil.DiscardStderr(t)()
 
 			mockKeychain := &keychainMocks.MockProvider{}
 			mockTOTP := &totpMocks.MockProvider{}
@@ -893,9 +857,9 @@ func TestProvider_GetCredentials(t *testing.T) {
 				keychain: mockKeychain,
 				totp:     mockTOTP,
 				profile:  tc.profile,
-				keyUser:  "testuser",
+				KeyUser:  provider.KeyUser{User: "testuser"},
 				keyName:  "sesh-aws",
-				now:      tc.now,
+				Clock:    provider.Clock{Now: tc.now},
 			}
 
 			creds, err := p.GetCredentials()
@@ -930,25 +894,13 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 		},
 	}
 
-	// Capture stderr to suppress debug output
-	oldStderr := os.Stderr
-	r, w, pipeErr := os.Pipe()
-	if pipeErr != nil {
-		t.Fatalf("os.Pipe() failed: %v", pipeErr)
-	}
-	os.Stderr = w
-	defer func() {
-		w.Close()
-		io.Copy(io.Discard, r)
-		r.Close()
-		os.Stderr = oldStderr
-	}()
+	defer testutil.DiscardStderr(t)()
 
 	p := &Provider{
 		keychain: mockKeychain,
 		totp:     mockTOTP,
 		profile:  "",
-		keyUser:  "testuser",
+		KeyUser:  provider.KeyUser{User: "testuser"},
 		keyName:  "sesh-aws",
 	}
 
@@ -1199,19 +1151,7 @@ func TestProvider_DeleteEntry(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Capture stderr to suppress warning output
-			oldStderr := os.Stderr
-			r, w, pipeErr := os.Pipe()
-			if pipeErr != nil {
-				t.Fatalf("os.Pipe() failed: %v", pipeErr)
-			}
-			os.Stderr = w
-			defer func() {
-				w.Close()
-				io.Copy(io.Discard, r)
-				r.Close()
-				os.Stderr = oldStderr
-			}()
+			defer testutil.DiscardStderr(t)()
 
 			mockKeychain := &keychainMocks.MockProvider{}
 			tc.setupKeychain(mockKeychain)

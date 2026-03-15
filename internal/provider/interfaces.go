@@ -2,7 +2,10 @@ package provider
 
 import (
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/bashhack/sesh/internal/env"
 )
 
 // FlagSet defines the interface for registering flags
@@ -29,8 +32,17 @@ type ServiceProvider interface {
 	// GetCredentials retrieves credentials using TOTP
 	GetCredentials() (Credentials, error)
 
-	// GetClipboardValue retrieves a value suitable for copying to clipboard
-	// This allows providers to optimize for clipboard mode (e.g., AWS only generating TOTP codes)
+	// GetClipboardValue retrieves a value suitable for copying to clipboard.
+	// This allows providers to optimize for clipboard mode (e.g., AWS skips STS
+	// authentication and only generates the TOTP code).
+	//
+	// On success, the returned Credentials must have CopyValue set to a non-empty
+	// string and ClipboardDescription set to a short label (e.g., "TOTP code").
+	//
+	// TOTP-based providers should use CreateClipboardCredentials, which handles
+	// CopyValue, ClipboardDescription, DisplayInfo, and Expiry automatically.
+	// Non-TOTP providers (e.g., password managers) should populate CopyValue and
+	// ClipboardDescription directly.
 	GetClipboardValue() (Credentials, error)
 
 	// ListEntries returns the list of entries for this provider
@@ -59,6 +71,12 @@ type FlagInfo struct {
 	Required    bool
 }
 
+// SubshellDecider is an optional interface that providers can implement
+// to indicate whether they prefer subshell mode over printing credentials.
+type SubshellDecider interface {
+	ShouldUseSubshell() bool
+}
+
 // SubshellProvider is an optional interface that providers can implement
 // if they support launching a customized subshell environment
 type SubshellProvider interface {
@@ -74,14 +92,60 @@ type ProviderEntry struct {
 	ID          string // Internal identifier
 }
 
+// Clock provides testable time. Embed in provider structs and override Now in tests.
+type Clock struct {
+	Now func() time.Time
+}
+
+// TimeNow returns the current time, using Now if set, otherwise time.Now.
+func (c *Clock) TimeNow() time.Time {
+	if c.Now != nil {
+		return c.Now()
+	}
+	return time.Now()
+}
+
+// SecondsLeftInWindow returns seconds remaining in the current 30-second TOTP window.
+func (c *Clock) SecondsLeftInWindow() int64 {
+	return 30 - (c.TimeNow().Unix() % 30)
+}
+
+// KeyUser provides lazy-initialized OS user lookup. Embed in provider structs
+// alongside a keyUser string field set during SetupFlags.
+type KeyUser struct {
+	User string
+}
+
+// EnsureUser sets User to the current OS user if it is empty.
+func (k *KeyUser) EnsureUser() error {
+	if k.User != "" {
+		return nil
+	}
+	var err error
+	k.User, err = env.GetCurrentUser()
+	if err != nil {
+		return fmt.Errorf("failed to get current user: %w", err)
+	}
+	return nil
+}
+
+// ParseEntryID splits an entry ID of the form "service:account" into its parts.
+func ParseEntryID(id string) (service, account string, err error) {
+	parts := strings.SplitN(id, ":", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid entry ID format: expected 'service:account', got %q", id)
+	}
+	return parts[0], parts[1], nil
+}
+
 // Credentials represents generic credentials returned by a provider
 type Credentials struct {
 	Provider             string            // Provider name
 	Expiry               time.Time         // When these credentials expire
 	Variables            map[string]string // Environment variables to set
 	DisplayInfo          string            // Human-readable display information
-	CopyValue            string            // Value to copy to clipboard if requested
-	ClipboardDescription string            // Short description of what CopyValue contains (e.g. "TOTP code", "AWS MFA code")
+	CopyValue            string            // Value to copy to clipboard; must be non-empty when returned by GetClipboardValue
+	ClipboardDescription string            // Short label for CopyValue (e.g. "TOTP code", "password"); used in CLI output
 	MFAAuthenticated     bool              // Whether these credentials were authenticated with MFA
 }
 
@@ -98,7 +162,10 @@ func FormatRegularDisplayInfo(actionType, serviceDesc string) string {
 	return fmt.Sprintf("🔑 %s for %s", actionType, serviceDesc)
 }
 
-// CreateClipboardCredentials creates standardized clipboard-mode credentials
+// CreateClipboardCredentials creates standardized clipboard-mode credentials for
+// TOTP-based providers. It sets CopyValue to the current code, computes Expiry
+// from the 30-second TOTP window, and formats DisplayInfo with both codes and
+// time remaining. Non-TOTP providers should build Credentials directly.
 func CreateClipboardCredentials(providerName, currentCode, nextCode string, secondsLeft int64, actionType, serviceDesc string) Credentials {
 	// Calculate when this code expires (30 seconds from now, rounded to nearest 30s boundary)
 	now := time.Now().Unix()

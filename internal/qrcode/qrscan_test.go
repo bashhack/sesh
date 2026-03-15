@@ -571,6 +571,9 @@ func TestConcurrentQRDecoding(t *testing.T) {
 }
 
 func TestDecodeQRCodeFromFile_Integration(t *testing.T) {
+	if os.Getenv("CI") != "" {
+		t.Skip("skipping integration test in CI (no display)")
+	}
 	key, err := totp.Generate(totp.GenerateOpts{
 		Issuer:      "Integration Test",
 		AccountName: "integration@test.com",

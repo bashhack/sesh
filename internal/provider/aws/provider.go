@@ -26,11 +26,12 @@ type Provider struct {
 	keychain keychain.Provider
 	totp     internalTotp.Provider
 
+	provider.Clock
+	provider.KeyUser
+
 	profile    string
-	keyUser    string
 	keyName    string
 	noSubshell bool
-	now        func() time.Time // defaults to time.Now; override in tests
 }
 
 var _ provider.ServiceProvider = (*Provider)(nil)
@@ -47,13 +48,6 @@ func NewProvider(
 		totp:     totp,
 		keyName:  constants.AWSServicePrefix,
 	}
-}
-
-func (p *Provider) timeNow() time.Time {
-	if p.now != nil {
-		return p.now()
-	}
-	return time.Now()
 }
 
 // Name returns the provider name.
@@ -75,7 +69,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	if err != nil {
 		return fmt.Errorf("failed to get current user: %w", err)
 	}
-	p.keyUser = defaultKeyUser
+	p.User = defaultKeyUser
 	return nil
 }
 
@@ -86,11 +80,8 @@ func (p *Provider) GetSetupHandler() interface{} {
 
 // GetTOTPCodes retrieves TOTP codes without performing AWS authentication
 func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsLeft int64, err error) {
-	if p.keyUser == "" {
-		p.keyUser, err = env.GetCurrentUser()
-		if err != nil {
-			return "", "", 0, fmt.Errorf("failed to get current user: %w", err)
-		}
+	if err := p.EnsureUser(); err != nil {
+		return "", "", 0, err
 	}
 
 	keyName, err := buildServiceKey(p.keyName, p.profile)
@@ -98,7 +89,7 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 		return "", "", 0, fmt.Errorf("failed to build service key: %w", err)
 	}
 
-	secretBytes, err := p.keychain.GetSecret(p.keyUser, keyName)
+	secretBytes, err := p.keychain.GetSecret(p.User, keyName)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), err)
 	}
@@ -122,7 +113,7 @@ func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsL
 		return "", "", 0, fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
 
-	secondsLeft = 30 - (p.timeNow().Unix() % 30)
+	secondsLeft = p.SecondsLeftInWindow()
 
 	return currentCode, nextCode, secondsLeft, nil
 }
@@ -192,7 +183,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 
 			// If STILL failing with invalid MFA and we're not close to boundary,
 			// we may need to wait for the next time window
-			freshSecondsLeft := 30 - (p.timeNow().Unix() % 30)
+			freshSecondsLeft := p.SecondsLeftInWindow()
 			if secondInvalidMFA && freshSecondsLeft > 10 {
 				fmt.Fprintf(os.Stderr, "⚠️ Both current and next codes were rejected - may need to wait for next time window\n")
 
@@ -201,7 +192,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 					return provider.Credentials{}, fmt.Errorf("failed to build service key: %w", kErr)
 				}
 
-				secretBytes, fetchErr := p.keychain.GetSecret(p.keyUser, keyName)
+				secretBytes, fetchErr := p.keychain.GetSecret(p.User, keyName)
 				if fetchErr != nil {
 					return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), fetchErr)
 				}
@@ -213,7 +204,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 				secure.SecureZeroBytes(secretBytes)
 
 				// Generate a code for the window after next, in case AWS is far ahead of our clock
-				futureCode, gErr := p.totp.GenerateForTimeBytes(secretCopy, p.timeNow().Add(60*time.Second))
+				futureCode, gErr := p.totp.GenerateForTimeBytes(secretCopy, p.TimeNow().Add(60*time.Second))
 				if gErr == nil {
 					fmt.Fprintf(os.Stderr, "🔑 Trying with future time window's code\n")
 					code = futureCode
@@ -234,9 +225,11 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		return provider.Credentials{}, fmt.Errorf("failed to get session token: %w", err)
 	}
 
+	defer awsCreds.ZeroSecrets()
+
 	expiryTime, err := time.Parse(time.RFC3339, awsCreds.Expiration)
 	if err != nil {
-		expiryTime = p.timeNow().Add(12 * time.Hour) // Default to 12h if we can't parse
+		expiryTime = p.TimeNow().Add(12 * time.Hour) // Default to 12h if we can't parse
 	}
 
 	envVars := map[string]string{
@@ -320,12 +313,10 @@ func (p *Provider) getAWSProfiles() ([]string, error) {
 
 // DeleteEntry deletes an AWS entry from the keychain
 func (p *Provider) DeleteEntry(id string) error {
-	parts := strings.SplitN(id, ":", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid entry ID format: expected 'service:account', got %q", id)
+	service, account, err := provider.ParseEntryID(id)
+	if err != nil {
+		return err
 	}
-
-	service, account := parts[0], parts[1]
 
 	if err := p.keychain.DeleteEntry(account, service); err != nil {
 		return fmt.Errorf("failed to delete AWS entry: %w", err)
@@ -351,14 +342,10 @@ func (p *Provider) GetProfile() string {
 	return p.profile
 }
 
-// GetTOTPKeyInfo returns the user and key name for TOTP generation
+// GetTOTPKeyInfo returns the user and key name for TOTP generation.
 func (p *Provider) GetTOTPKeyInfo() (string, string, error) {
-	if p.keyUser == "" {
-		var err error
-		p.keyUser, err = env.GetCurrentUser()
-		if err != nil {
-			return "", "", fmt.Errorf("failed to get current user: %w", err)
-		}
+	if err := p.EnsureUser(); err != nil {
+		return "", "", err
 	}
 
 	keyName, err := buildServiceKey(p.keyName, p.profile)
@@ -366,27 +353,23 @@ func (p *Provider) GetTOTPKeyInfo() (string, string, error) {
 		return "", "", fmt.Errorf("failed to build service key: %w", err)
 	}
 
-	return p.keyUser, keyName, nil
+	return p.User, keyName, nil
 }
 
 // GetMFASerialBytes returns the MFA device serial as bytes
 func (p *Provider) GetMFASerialBytes() ([]byte, error) {
-	var serialService string
-	if p.keyUser == "" {
-		var err error
-		p.keyUser, err = env.GetCurrentUser()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get current user: %w", err)
-		}
+	if err := p.EnsureUser(); err != nil {
+		return nil, err
 	}
 
+	var serialService string
 	var err error
 	serialService, err = buildServiceKey(constants.AWSServiceMFAPrefix, p.profile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build MFA service key: %w", err)
 	}
 
-	serialBytes, err := p.keychain.GetSecret(p.keyUser, serialService)
+	serialBytes, err := p.keychain.GetSecret(p.User, serialService)
 	if err == nil {
 		result := make([]byte, len(serialBytes))
 		copy(result, serialBytes)
@@ -419,12 +402,8 @@ func (p *Provider) NewSubshellConfig(creds provider.Credentials) interface{} {
 
 // ValidateRequest performs early validation before any AWS operations.
 func (p *Provider) ValidateRequest() error {
-	if p.keyUser == "" {
-		var err error
-		p.keyUser, err = env.GetCurrentUser()
-		if err != nil {
-			return fmt.Errorf("failed to get current user: %w", err)
-		}
+	if err := p.EnsureUser(); err != nil {
+		return err
 	}
 
 	// Check if we have required keychain entries for this profile
@@ -438,7 +417,7 @@ func (p *Provider) ValidateRequest() error {
 		return fmt.Errorf("failed to build MFA service key: %w", err)
 	}
 
-	totpSecret, err := p.keychain.GetSecret(p.keyUser, totpKey)
+	totpSecret, err := p.keychain.GetSecret(p.User, totpKey)
 	if err != nil {
 		if !errors.Is(err, keychain.ErrNotFound) {
 			return fmt.Errorf("failed to read TOTP secret from keychain: %w", err)
@@ -452,7 +431,7 @@ func (p *Provider) ValidateRequest() error {
 	secure.SecureZeroBytes(totpSecret)
 
 	// Check if MFA serial exists (not critical but helps with better error messages)
-	mfaSecret, err := p.keychain.GetSecret(p.keyUser, mfaKey)
+	mfaSecret, err := p.keychain.GetSecret(p.User, mfaKey)
 	if err != nil {
 		if !errors.Is(err, keychain.ErrNotFound) {
 			return fmt.Errorf("failed to read MFA serial from keychain: %w", err)

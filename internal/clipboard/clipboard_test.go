@@ -25,7 +25,7 @@ func TestCopy(t *testing.T) {
 			goos: "darwin",
 			mockCmd: func(name string, args ...string) *exec.Cmd {
 				if name == "pbcopy" {
-					return exec.Command("true")
+					return exec.Command("cat")
 				}
 				return nil
 			},
@@ -36,7 +36,7 @@ func TestCopy(t *testing.T) {
 			goos: "darwin",
 			mockCmd: func(name string, args ...string) *exec.Cmd {
 				if name == "pbcopy" {
-					return exec.Command("true")
+					return exec.Command("cat")
 				}
 				return nil
 			},

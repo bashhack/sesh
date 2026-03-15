@@ -73,11 +73,13 @@ func TestAWSShellCustomizer_GetFallbackInitScript(t *testing.T) {
 		t.Errorf("GetFallbackInitScript() = %q, want %q", script, FallbackPrompt)
 	}
 
-	// Verify the script contains expected content
+	// Verify the fallback now includes the same functions as bash/zsh
 	expectedContent := []string{
 		"SESH_SERVICE=aws",
 		"sesh_status()",
+		"sesh_help()",
 		"verify_aws()",
+		"aws sts get-caller-identity",
 		"🔐 Secure shell with aws credentials activated",
 	}
 
@@ -92,27 +94,9 @@ func TestAWSShellCustomizer_GetPromptPrefix(t *testing.T) {
 	customizer := &AWSShellCustomizer{}
 	prefix := customizer.GetPromptPrefix()
 
-	want := "(sesh:aws) "
+	want := "sesh"
 	if prefix != want {
 		t.Errorf("GetPromptPrefix() = %q, want %q", prefix, want)
-	}
-}
-
-func TestAWSShellCustomizer_GetWelcomeMessage(t *testing.T) {
-	customizer := &AWSShellCustomizer{}
-	msg := customizer.GetWelcomeMessage()
-
-	want := "🔐 Secure shell with AWS credentials activated. Type 'sesh_help' for more information."
-	if msg != want {
-		t.Errorf("GetWelcomeMessage() = %q, want %q", msg, want)
-	}
-
-	// Verify message contains key information
-	if !strings.Contains(msg, "AWS credentials") {
-		t.Error("GetWelcomeMessage() should mention AWS credentials")
-	}
-	if !strings.Contains(msg, "sesh_help") {
-		t.Error("GetWelcomeMessage() should mention sesh_help command")
 	}
 }
 
@@ -133,7 +117,6 @@ func TestAWSShellCustomizerInterface(t *testing.T) {
 		_ = customizer.GetBashInitScript()
 		_ = customizer.GetFallbackInitScript()
 		_ = customizer.GetPromptPrefix()
-		_ = customizer.GetWelcomeMessage()
 	})
 
 	// Test that methods return non-empty values
@@ -149,9 +132,6 @@ func TestAWSShellCustomizerInterface(t *testing.T) {
 		}
 		if prefix := customizer.GetPromptPrefix(); prefix == "" {
 			t.Error("GetPromptPrefix() returned empty string")
-		}
-		if msg := customizer.GetWelcomeMessage(); msg == "" {
-			t.Error("GetWelcomeMessage() returned empty string")
 		}
 	})
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/env"
@@ -22,10 +21,11 @@ type Provider struct {
 	keychain keychain.Provider
 	totp     internalTotp.Provider
 
+	provider.Clock
+	provider.KeyUser
+
 	serviceName string
-	keyUser     string
 	profile     string
-	now         func() time.Time // defaults to time.Now; override in tests
 }
 
 var _ provider.ServiceProvider = (*Provider)(nil)
@@ -39,13 +39,6 @@ func NewProvider(
 		keychain: keychain,
 		totp:     totp,
 	}
-}
-
-func (p *Provider) timeNow() time.Time {
-	if p.now != nil {
-		return p.now()
-	}
-	return time.Now()
 }
 
 // Name returns the provider name.
@@ -67,7 +60,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	if err != nil {
 		return fmt.Errorf("failed to get current user: %w", err)
 	}
-	p.keyUser = defaultKeyUser
+	p.User = defaultKeyUser
 	return nil
 }
 
@@ -104,12 +97,8 @@ func (p *Provider) generateTOTP() (provider.Credentials, error) {
 		return provider.Credentials{}, fmt.Errorf("service name is required, use --service-name flag")
 	}
 
-	if p.keyUser == "" {
-		var err error
-		p.keyUser, err = env.GetCurrentUser()
-		if err != nil {
-			return provider.Credentials{}, fmt.Errorf("failed to get current user: %w", err)
-		}
+	if err := p.EnsureUser(); err != nil {
+		return provider.Credentials{}, err
 	}
 
 	serviceKey, err := buildServiceKey(p.serviceName, p.profile)
@@ -119,7 +108,7 @@ func (p *Provider) generateTOTP() (provider.Credentials, error) {
 
 	fmt.Fprintf(os.Stderr, "🔑 Retrieving TOTP secret for %s\n", p.serviceName)
 
-	secretBytes, err := p.keychain.GetSecret(p.keyUser, serviceKey)
+	secretBytes, err := p.keychain.GetSecret(p.User, serviceKey)
 	if err != nil {
 		return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for %s: %w", p.serviceName, err)
 	}
@@ -135,7 +124,7 @@ func (p *Provider) generateTOTP() (provider.Credentials, error) {
 		return provider.Credentials{}, fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
 
-	secondsLeft := 30 - (p.timeNow().Unix() % 30)
+	secondsLeft := p.SecondsLeftInWindow()
 
 	serviceDesc := p.serviceName
 	if p.profile != "" {
@@ -181,12 +170,10 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 
 // DeleteEntry deletes a TOTP entry from the keychain.
 func (p *Provider) DeleteEntry(id string) error {
-	parts := strings.SplitN(id, ":", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("invalid entry ID format: expected 'service:account', got %q", id)
+	service, account, err := provider.ParseEntryID(id)
+	if err != nil {
+		return err
 	}
-
-	service, account := parts[0], parts[1]
 
 	if err := p.keychain.DeleteEntry(account, service); err != nil {
 		return fmt.Errorf("failed to delete TOTP entry: %w", err)
@@ -201,12 +188,8 @@ func (p *Provider) ValidateRequest() error {
 		return fmt.Errorf("--service-name is required for TOTP provider")
 	}
 
-	if p.keyUser == "" {
-		var err error
-		p.keyUser, err = env.GetCurrentUser()
-		if err != nil {
-			return fmt.Errorf("failed to get current user: %w", err)
-		}
+	if err := p.EnsureUser(); err != nil {
+		return err
 	}
 
 	keyName, err := buildServiceKey(p.serviceName, p.profile)
@@ -214,7 +197,7 @@ func (p *Provider) ValidateRequest() error {
 		return fmt.Errorf("failed to build service key: %w", err)
 	}
 
-	secret, err := p.keychain.GetSecret(p.keyUser, keyName)
+	secret, err := p.keychain.GetSecret(p.User, keyName)
 	if err != nil {
 		if !errors.Is(err, keychain.ErrNotFound) {
 			return fmt.Errorf("failed to read TOTP secret from keychain: %w", err)

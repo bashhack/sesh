@@ -15,14 +15,12 @@ type mockShellCustomizer struct {
 	bashScript     string
 	fallbackScript string
 	promptPrefix   string
-	welcomeMessage string
 }
 
 func (m *mockShellCustomizer) GetZshInitScript() string      { return m.zshScript }
 func (m *mockShellCustomizer) GetBashInitScript() string     { return m.bashScript }
 func (m *mockShellCustomizer) GetFallbackInitScript() string { return m.fallbackScript }
 func (m *mockShellCustomizer) GetPromptPrefix() string       { return m.promptPrefix }
-func (m *mockShellCustomizer) GetWelcomeMessage() string     { return m.welcomeMessage }
 
 func TestFilterEnv(t *testing.T) {
 	tests := map[string]struct {
@@ -96,7 +94,6 @@ func TestGetShellConfig(t *testing.T) {
 		bashScript:     "# Bash init script",
 		fallbackScript: "# Fallback init script",
 		promptPrefix:   "sesh",
-		welcomeMessage: "Welcome to sesh",
 	}
 
 	tests := map[string]struct {
@@ -291,10 +288,11 @@ func TestSetupZshShell(t *testing.T) {
 
 	env := []string{"PATH=/usr/bin", "HOME=/home/user"}
 
-	newEnv, err := SetupZshShell(config, env)
+	newEnv, tmpDir, err := SetupZshShell(config, env)
 	if err != nil {
 		t.Fatalf("SetupZshShell() error = %v", err)
 	}
+	defer os.RemoveAll(tmpDir)
 
 	// Check that ZDOTDIR was added
 	zdotdirFound := false
@@ -308,7 +306,12 @@ func TestSetupZshShell(t *testing.T) {
 	}
 
 	if !zdotdirFound {
-		t.Error("Expected ZDOTDIR in environment")
+		t.Fatal("Expected ZDOTDIR in environment")
+	}
+
+	// Assert the returned path matches the one placed in ZDOTDIR
+	if tmpDir != zdotdir {
+		t.Errorf("returned tmpDir = %q, but ZDOTDIR = %q", tmpDir, zdotdir)
 	}
 
 	// Check that the zshrc file was created
@@ -370,10 +373,11 @@ func TestSetupFallbackShell(t *testing.T) {
 
 	env := []string{"PATH=/usr/bin", "HOME=/home/user"}
 
-	newEnv, err := SetupFallbackShell(config, env)
+	newEnv, tmpName, err := SetupFallbackShell(config, env)
 	if err != nil {
 		t.Fatalf("SetupFallbackShell() error = %v", err)
 	}
+	defer os.Remove(tmpName)
 
 	// Check that PS1 and ENV were added
 	ps1Found := false
@@ -394,22 +398,22 @@ func TestSetupFallbackShell(t *testing.T) {
 		t.Error("Expected PS1 in environment")
 	}
 	if !envFound {
-		t.Error("Expected ENV in environment")
+		t.Fatal("Expected ENV in environment")
 	}
 
-	// Check that the file was created
-	if envFile != "" {
-		content, err := os.ReadFile(envFile)
-		if err != nil {
-			t.Errorf("Failed to read created shellrc: %v", err)
-		}
+	// Assert the returned path matches the one placed in ENV
+	if tmpName != envFile {
+		t.Errorf("returned tmpName = %q, but ENV = %q", tmpName, envFile)
+	}
 
-		if string(content) != mockCustomizer.fallbackScript {
-			t.Errorf("shellrc content = %q, want %q", string(content), mockCustomizer.fallbackScript)
-		}
+	// Check that the file was created with correct content
+	content, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("Failed to read created shellrc: %v", err)
+	}
 
-		// Clean up
-		os.Remove(envFile)
+	if string(content) != mockCustomizer.fallbackScript {
+		t.Errorf("shellrc content = %q, want %q", string(content), mockCustomizer.fallbackScript)
 	}
 }
 
@@ -426,23 +430,31 @@ func TestSetupFallbackShellCustomPrefix(t *testing.T) {
 
 	env := []string{"PATH=/usr/bin"}
 
-	newEnv, err := SetupFallbackShell(config, env)
+	newEnv, tmpName, err := SetupFallbackShell(config, env)
 	if err != nil {
 		t.Fatalf("SetupFallbackShell() error = %v", err)
 	}
+	defer os.Remove(tmpName)
 
-	// Clean up temp file
+	// Assert ENV is set and matches the returned path
+	var envFile string
+	var ps1Found bool
 	for _, e := range newEnv {
 		if strings.HasPrefix(e, "ENV=") {
-			defer os.Remove(strings.TrimPrefix(e, "ENV="))
-			break
+			envFile = strings.TrimPrefix(e, "ENV=")
+		}
+		if e == "PS1=(myapp:test-service) $ " {
+			ps1Found = true
 		}
 	}
 
-	for _, e := range newEnv {
-		if e == "PS1=(myapp:test-service) $ " {
-			return
-		}
+	if envFile == "" {
+		t.Fatal("Expected ENV in environment")
 	}
-	t.Error("Expected PS1 with custom prompt prefix 'myapp'")
+	if tmpName != envFile {
+		t.Errorf("returned tmpName = %q, but ENV = %q", tmpName, envFile)
+	}
+	if !ps1Found {
+		t.Error("Expected PS1 with custom prompt prefix 'myapp'")
+	}
 }
