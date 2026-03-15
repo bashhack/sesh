@@ -4,14 +4,14 @@ go 1.24.0
 
 require (
 	github.com/klauspost/compress v1.18.0
-	github.com/makiuchi-d/gozxing v0.1.1
+	github.com/makiuchi-d/gozxing v0.1.2-0.20250720151325-95e256b768ac
 	github.com/pquerna/otp v1.4.0
+	golang.org/x/term v0.40.0
 )
 
 require (
 	github.com/boombuler/barcode v1.0.1 // indirect
 	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/term v0.40.0 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 )
