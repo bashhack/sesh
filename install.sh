@@ -35,7 +35,8 @@ if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
       echo "ℹ️ ~/.local/bin is already in $(basename "$SHELL_RC") — open a new terminal to pick it up"
     else
       printf "⚠️ ~/.local/bin is not in your PATH. Add it to %s? [Y/n] " "$(basename "$SHELL_RC")"
-      read -r REPLY
+      REPLY=""
+      read -r REPLY 2>/dev/null || true
       if [[ "$REPLY" =~ ^[Nn]$ ]]; then
         echo "   To add it manually:"
         echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
@@ -74,14 +75,16 @@ fi
 # Verify checksum if checksums.txt is available
 if curl -sfL -o "$TMP_DIR/checksums.txt" "$CHECKSUMS_URL"; then
   EXPECTED=$(grep "sesh_Darwin_${ARCH}.zip" "$TMP_DIR/checksums.txt" | awk '{print $1}')
-  if [ -n "$EXPECTED" ]; then
-    ACTUAL=$(shasum -a 256 "$TMP_DIR/sesh.zip" | awk '{print $1}')
-    if [ "$EXPECTED" != "$ACTUAL" ]; then
-      echo "❌ Checksum verification failed (expected $EXPECTED, got $ACTUAL)"
-      exit 1
-    fi
-    echo "✅ Checksum verified"
+  if [ -z "$EXPECTED" ]; then
+    echo "❌ Checksum entry for sesh_Darwin_${ARCH}.zip not found in checksums.txt"
+    exit 1
   fi
+  ACTUAL=$(shasum -a 256 "$TMP_DIR/sesh.zip" | awk '{print $1}')
+  if [ "$EXPECTED" != "$ACTUAL" ]; then
+    echo "❌ Checksum verification failed (expected $EXPECTED, got $ACTUAL)"
+    exit 1
+  fi
+  echo "✅ Checksum verified"
 fi
 
 if ! unzip -q "$TMP_DIR/sesh.zip" -d "$TMP_DIR"; then
