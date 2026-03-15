@@ -28,15 +28,23 @@ type ExecLookPathFunc func(file string) (string, error)
 // ExitFunc is a function type for exiting the program
 type ExitFunc func(code int)
 
+// ClipboardCopyFunc is a function type for copying text to clipboard
+type ClipboardCopyFunc func(text string) error
+
+// TimeNowFunc is a function type for getting the current time
+type TimeNowFunc func() time.Time
+
 // App represents the main application
 type App struct {
-	Registry     *provider.Registry
-	SetupService setup.SetupService
-	ExecLookPath ExecLookPathFunc
-	Exit         ExitFunc
-	Stdout       io.Writer
-	Stderr       io.Writer
-	VersionInfo  VersionInfo
+	Registry      *provider.Registry
+	SetupService  setup.SetupService
+	ExecLookPath  ExecLookPathFunc
+	Exit          ExitFunc
+	ClipboardCopy ClipboardCopyFunc
+	TimeNow       TimeNowFunc
+	Stdout        io.Writer
+	Stderr        io.Writer
+	VersionInfo   VersionInfo
 }
 
 // VersionInfo contains version information
@@ -61,13 +69,15 @@ func NewDefaultApp(versionInfo VersionInfo) *App {
 	setupSvc.RegisterHandler(setup.NewTOTPSetupHandler(kc))
 
 	return &App{
-		Registry:     registry,
-		SetupService: setupSvc,
-		ExecLookPath: exec.LookPath,
-		Exit:         os.Exit,
-		Stdout:       os.Stdout,
-		Stderr:       os.Stderr,
-		VersionInfo:  versionInfo,
+		Registry:      registry,
+		SetupService:  setupSvc,
+		ExecLookPath:  exec.LookPath,
+		Exit:          os.Exit,
+		ClipboardCopy: clipboard.Copy,
+		TimeNow:       time.Now,
+		Stdout:        os.Stdout,
+		Stderr:        os.Stderr,
+		VersionInfo:   versionInfo,
 	}
 }
 
@@ -183,7 +193,7 @@ func (a *App) CopyToClipboard(serviceName string) error {
 		return fmt.Errorf("no content available to copy to clipboard")
 	}
 
-	if err := clipboard.Copy(creds.CopyValue); err != nil {
+	if err := a.ClipboardCopy(creds.CopyValue); err != nil {
 		return fmt.Errorf("failed to copy to clipboard: %w", err)
 	}
 
@@ -203,7 +213,7 @@ func (a *App) PrintCredentials(creds provider.Credentials) {
 	// Format expiry time
 	expiryDisplay := "unknown"
 	if !creds.Expiry.IsZero() {
-		duration := time.Until(creds.Expiry)
+		duration := creds.Expiry.Sub(a.TimeNow())
 		formatted := creds.Expiry.Local().Format("2006-01-02 15:04:05")
 		if duration <= 0 {
 			expiryDisplay = fmt.Sprintf("%s (expired)", formatted)

@@ -156,6 +156,12 @@ func TestNewDefaultApp(t *testing.T) {
 	if app.Exit == nil {
 		t.Error("Exit is nil")
 	}
+	if app.ClipboardCopy == nil {
+		t.Error("ClipboardCopy is nil")
+	}
+	if app.TimeNow == nil {
+		t.Error("TimeNow is nil")
+	}
 	if app.Stdout == nil {
 		t.Error("Stdout is nil")
 	}
@@ -187,6 +193,359 @@ func TestNewDefaultApp(t *testing.T) {
 	services := app.SetupService.GetAvailableServices()
 	if len(services) < 2 {
 		t.Errorf("Expected at least 2 setup services, got %d", len(services))
+	}
+}
+
+func TestApp_ListEntries(t *testing.T) {
+	tests := map[string]struct {
+		serviceName string
+		setupApp    func(*App)
+		wantErr     bool
+		wantErrMsg  string
+		wantStdout  []string
+	}{
+		"successful list with entries": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc: func() string { return "totp" },
+					ListEntriesFunc: func() ([]provider.ProviderEntry, error) {
+						return []provider.ProviderEntry{
+							{Name: "github", Description: "GitHub TOTP", ID: "sesh-totp/github:user"},
+							{Name: "aws", Description: "AWS MFA", ID: "sesh-totp/aws:user"},
+						}, nil
+					},
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantStdout: []string{
+				"Entries for totp:",
+				"github",
+				"GitHub TOTP",
+				"aws",
+				"AWS MFA",
+			},
+		},
+		"empty list": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:        func() string { return "totp" },
+					ListEntriesFunc: func() ([]provider.ProviderEntry, error) { return []provider.ProviderEntry{}, nil },
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantStdout: []string{
+				"Entries for totp:",
+				"No entries found",
+			},
+		},
+		"provider not found": {
+			serviceName: "unknown",
+			setupApp:    func(app *App) {},
+			wantErr:     true,
+			wantErrMsg:  "provider not found",
+		},
+		"list entries error": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:        func() string { return "totp" },
+					ListEntriesFunc: func() ([]provider.ProviderEntry, error) { return nil, errors.New("keychain error") },
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantErr:    true,
+			wantErrMsg: "failed to list entries",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			stdoutBuf := &bytes.Buffer{}
+			app := &App{
+				Registry: provider.NewRegistry(),
+				Stdout:   stdoutBuf,
+				Stderr:   &bytes.Buffer{},
+			}
+			tc.setupApp(app)
+
+			err := app.ListEntries(tc.serviceName)
+
+			if tc.wantErr && err == nil {
+				t.Error("ListEntries() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("ListEntries() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+			for _, expected := range tc.wantStdout {
+				if !strings.Contains(stdoutBuf.String(), expected) {
+					t.Errorf("stdout missing expected string: %q", expected)
+				}
+			}
+		})
+	}
+}
+
+func TestApp_GenerateCredentials(t *testing.T) {
+	tests := map[string]struct {
+		serviceName string
+		setupApp    func(*App)
+		wantErr     bool
+		wantErrMsg  string
+		wantStdout  []string
+		wantStderr  []string
+	}{
+		"successful generation": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:            func() string { return "totp" },
+					ValidateRequestFunc: func() error { return nil },
+					GetCredentialsFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{
+							Provider:    "totp",
+							DisplayInfo: "TOTP code: 123456",
+							Variables:   map[string]string{},
+						}, nil
+					},
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantStderr: []string{
+				"Generating credentials for totp",
+				"Credentials acquired",
+				"TOTP code: 123456",
+			},
+		},
+		"provider not found": {
+			serviceName: "unknown",
+			setupApp:    func(app *App) {},
+			wantErr:     true,
+			wantErrMsg:  "provider not found",
+		},
+		"validate request error": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:            func() string { return "totp" },
+					ValidateRequestFunc: func() error { return errors.New("missing --service-name") },
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantErr:    true,
+			wantErrMsg: "missing --service-name",
+		},
+		"get credentials error": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:            func() string { return "totp" },
+					ValidateRequestFunc: func() error { return nil },
+					GetCredentialsFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{}, errors.New("secret not found")
+					},
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantErr:    true,
+			wantErrMsg: "failed to generate credentials",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			stdoutBuf := &bytes.Buffer{}
+			stderrBuf := &bytes.Buffer{}
+			app := &App{
+				Registry: provider.NewRegistry(),
+				TimeNow:  time.Now,
+				Stdout:   stdoutBuf,
+				Stderr:   stderrBuf,
+			}
+			tc.setupApp(app)
+
+			err := app.GenerateCredentials(tc.serviceName)
+
+			if tc.wantErr && err == nil {
+				t.Error("GenerateCredentials() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("GenerateCredentials() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+			for _, expected := range tc.wantStdout {
+				if !strings.Contains(stdoutBuf.String(), expected) {
+					t.Errorf("stdout missing expected string: %q", expected)
+				}
+			}
+			for _, expected := range tc.wantStderr {
+				if !strings.Contains(stderrBuf.String(), expected) {
+					t.Errorf("stderr missing expected string: %q", expected)
+				}
+			}
+		})
+	}
+}
+
+func TestApp_CopyToClipboard(t *testing.T) {
+	tests := map[string]struct {
+		serviceName   string
+		setupApp      func(*App)
+		clipboardErr  error
+		wantErr       bool
+		wantErrMsg    string
+		wantStderr    []string
+	}{
+		"successful copy": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:            func() string { return "totp" },
+					ValidateRequestFunc: func() error { return nil },
+					GetClipboardValueFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{
+							Provider:             "totp",
+							CopyValue:            "123456",
+							ClipboardDescription: "TOTP code",
+							DisplayInfo:          "TOTP code for github",
+						}, nil
+					},
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantStderr: []string{
+				"Generating credentials for totp",
+				"TOTP code copied to clipboard",
+				"TOTP code for github",
+			},
+		},
+		"provider not found": {
+			serviceName: "unknown",
+			setupApp:    func(app *App) {},
+			wantErr:     true,
+			wantErrMsg:  "provider not found",
+		},
+		"validate request error": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:            func() string { return "totp" },
+					ValidateRequestFunc: func() error { return errors.New("missing --service-name") },
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantErr:    true,
+			wantErrMsg: "missing --service-name",
+		},
+		"get clipboard value error": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:            func() string { return "totp" },
+					ValidateRequestFunc: func() error { return nil },
+					GetClipboardValueFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{}, errors.New("secret not found")
+					},
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantErr:    true,
+			wantErrMsg: "failed to generate credentials",
+		},
+		"empty copy value": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:            func() string { return "totp" },
+					ValidateRequestFunc: func() error { return nil },
+					GetClipboardValueFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{CopyValue: ""}, nil
+					},
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantErr:    true,
+			wantErrMsg: "no content available to copy to clipboard",
+		},
+		"clipboard copy error": {
+			serviceName:  "totp",
+			clipboardErr: errors.New("pbcopy failed"),
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:            func() string { return "totp" },
+					ValidateRequestFunc: func() error { return nil },
+					GetClipboardValueFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{CopyValue: "123456", ClipboardDescription: "TOTP code"}, nil
+					},
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantErr:    true,
+			wantErrMsg: "failed to copy to clipboard",
+		},
+		"default clipboard description": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				mockProvider := &MockProvider{
+					NameFunc:            func() string { return "totp" },
+					ValidateRequestFunc: func() error { return nil },
+					GetClipboardValueFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{
+							CopyValue:   "123456",
+							DisplayInfo: "some info",
+						}, nil
+					},
+				}
+				app.Registry.RegisterProvider(mockProvider)
+			},
+			wantStderr: []string{
+				"value copied to clipboard",
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			stderrBuf := &bytes.Buffer{}
+			app := &App{
+				Registry: provider.NewRegistry(),
+				Stdout:   &bytes.Buffer{},
+				Stderr:   stderrBuf,
+				ClipboardCopy: func(text string) error {
+					return tc.clipboardErr
+				},
+			}
+			tc.setupApp(app)
+
+			err := app.CopyToClipboard(tc.serviceName)
+
+			if tc.wantErr && err == nil {
+				t.Error("CopyToClipboard() expected error but got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("CopyToClipboard() unexpected error: %v", err)
+			}
+			if tc.wantErrMsg != "" && err != nil {
+				if !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
+				}
+			}
+			for _, expected := range tc.wantStderr {
+				if !strings.Contains(stderrBuf.String(), expected) {
+					t.Errorf("stderr missing expected string: %q", expected)
+				}
+			}
+		})
 	}
 }
 
@@ -354,6 +713,8 @@ func TestApp_RunSetup(t *testing.T) {
 }
 
 func TestApp_PrintCredentials(t *testing.T) {
+	fixedNow := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
 	tests := map[string]struct {
 		creds      provider.Credentials
 		wantStdout []string
@@ -363,7 +724,7 @@ func TestApp_PrintCredentials(t *testing.T) {
 			creds: provider.Credentials{
 				Provider:         "aws",
 				MFAAuthenticated: true,
-				Expiry:           time.Now().Add(12 * time.Hour),
+				Expiry:           fixedNow.Add(12 * time.Hour),
 				DisplayInfo:      "Using profile: default",
 				Variables: map[string]string{
 					"AWS_ACCESS_KEY_ID":     "AKIAIOSFODNN7EXAMPLE",
@@ -380,7 +741,7 @@ func TestApp_PrintCredentials(t *testing.T) {
 			},
 			wantStderr: []string{
 				"⏳ Expires at:",
-				"(valid for 11h",
+				"(valid for 12h0m)",
 				"✅ MFA-authenticated session established",
 				"Using profile: default",
 			},
@@ -399,7 +760,7 @@ func TestApp_PrintCredentials(t *testing.T) {
 		"expired credentials": {
 			creds: provider.Credentials{
 				Provider:    "aws",
-				Expiry:      time.Now().Add(-1 * time.Hour),
+				Expiry:      fixedNow.Add(-1 * time.Hour),
 				DisplayInfo: "Using profile: default",
 				Variables:   map[string]string{},
 			},
@@ -424,6 +785,28 @@ func TestApp_PrintCredentials(t *testing.T) {
 			wantStderr: []string{
 				"⏳ Expires at: unknown",
 				"Test credentials",
+			},
+		},
+		"minutes-only expiry": {
+			creds: provider.Credentials{
+				Provider:  "test",
+				Expiry:    fixedNow.Add(5*time.Minute + 30*time.Second),
+				Variables: map[string]string{},
+			},
+			wantStderr: []string{
+				"⏳ Expires at:",
+				"(valid for 5m30s)",
+			},
+		},
+		"seconds-only expiry": {
+			creds: provider.Credentials{
+				Provider:  "test",
+				Expiry:    fixedNow.Add(15 * time.Second),
+				Variables: map[string]string{},
+			},
+			wantStderr: []string{
+				"⏳ Expires at:",
+				"(valid for 15s)",
 			},
 		},
 		"invalid variable name is skipped": {
@@ -454,8 +837,9 @@ func TestApp_PrintCredentials(t *testing.T) {
 			stdoutBuf := &bytes.Buffer{}
 			stderrBuf := &bytes.Buffer{}
 			app := &App{
-				Stdout: stdoutBuf,
-				Stderr: stderrBuf,
+				TimeNow: func() time.Time { return fixedNow },
+				Stdout:  stdoutBuf,
+				Stderr:  stderrBuf,
 			}
 
 			app.PrintCredentials(tc.creds)

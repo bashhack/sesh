@@ -30,7 +30,7 @@ comment:
 
 ignore:
   # Match Makefile exclusions exactly
-  - "**/testutil/**/*"            # Test utilities
+  - "**/testutil/**"              # Test utilities
   - "**/*mock*"                   # Mock files
   - "**/provider/interfaces.go"   # Interface-only file
   - "scripts/**/*"                # Scripts directory

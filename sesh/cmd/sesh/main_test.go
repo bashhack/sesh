@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
 	"github.com/bashhack/sesh/internal/keychain"
@@ -45,13 +46,15 @@ func newTestHarness() *testHarness {
 
 	return &testHarness{
 		app: &App{
-			Registry:     registry,
-			SetupService: &MockSetupService{},
-			ExecLookPath: func(string) (string, error) { return "/usr/local/bin/aws", nil },
-			Exit:         func(int) {},
-			Stdout:       stdoutBuf,
-			Stderr:       stderrBuf,
-			VersionInfo:  VersionInfo{Version: "test-version", Commit: "test-commit", Date: "test-date"},
+			Registry:      registry,
+			SetupService:  &MockSetupService{},
+			ExecLookPath:  func(string) (string, error) { return "/usr/local/bin/aws", nil },
+			Exit:          func(int) {},
+			ClipboardCopy: func(string) error { return nil },
+			TimeNow:       time.Now,
+			Stdout:        stdoutBuf,
+			Stderr:        stderrBuf,
+			VersionInfo:   VersionInfo{Version: "test-version", Commit: "test-commit", Date: "test-date"},
 		},
 		stdout:   stdoutBuf,
 		stderr:   stderrBuf,
@@ -336,6 +339,185 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 
 			if tc.checkOutput != nil {
 				tc.checkOutput(t, h.stdout.String(), h.stderr.String())
+			}
+		})
+	}
+}
+
+func TestRun_Commands(t *testing.T) {
+	tests := map[string]struct {
+		args         []string
+		setupMocks   func(*testHarness)
+		wantExitCode int
+		checkStdout  func(*testing.T, string)
+		checkStderr  func(*testing.T, string)
+	}{
+		"list-services early exit": {
+			args:         []string{"sesh", "--list-services"},
+			wantExitCode: 0,
+			checkStdout: func(t *testing.T, stdout string) {
+				if !strings.Contains(stdout, "Available service providers") {
+					t.Error("Expected provider list output")
+				}
+			},
+		},
+		"help without service": {
+			args:         []string{"sesh", "--help"},
+			wantExitCode: 0,
+			checkStdout: func(t *testing.T, stdout string) {
+				if !strings.Contains(stdout, "Usage: sesh") {
+					t.Error("Expected general usage output")
+				}
+			},
+		},
+		"help with service": {
+			args:         []string{"sesh", "--service", "aws", "--help"},
+			wantExitCode: 0,
+			checkStdout: func(t *testing.T, stdout string) {
+				if !strings.Contains(stdout, "Usage: sesh --service aws") {
+					t.Error("Expected provider-specific usage output")
+				}
+			},
+		},
+		"version after service parsing": {
+			args:         []string{"sesh", "--service", "aws", "--version"},
+			wantExitCode: 0,
+			checkStdout: func(t *testing.T, stdout string) {
+				if !strings.Contains(stdout, "test-version") {
+					t.Error("Expected version output")
+				}
+			},
+		},
+		"list-services after service parsing": {
+			args:         []string{"sesh", "--service", "aws", "--list-services"},
+			wantExitCode: 0,
+			checkStdout: func(t *testing.T, stdout string) {
+				if !strings.Contains(stdout, "Available service providers") {
+					t.Error("Expected provider list output")
+				}
+			},
+		},
+		"list entries": {
+			args: []string{"sesh", "--service", "aws", "--list"},
+			setupMocks: func(h *testHarness) {
+				h.keychain.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
+					return []keychain.KeychainEntry{}, nil
+				}
+			},
+			wantExitCode: 0,
+			checkStdout: func(t *testing.T, stdout string) {
+				if !strings.Contains(stdout, "Entries for aws") {
+					t.Error("Expected entries list output")
+				}
+			},
+		},
+		"list entries error": {
+			args: []string{"sesh", "--service", "aws", "--list"},
+			setupMocks: func(h *testHarness) {
+				h.keychain.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
+					return nil, fmt.Errorf("keychain error")
+				}
+			},
+			wantExitCode: 1,
+		},
+		"delete entry": {
+			args: []string{"sesh", "--service", "totp", "--delete", "sesh-totp/github:user"},
+			setupMocks: func(h *testHarness) {
+				h.keychain.DeleteEntryFunc = func(account, service string) error {
+					return nil
+				}
+			},
+			wantExitCode: 0,
+		},
+		"delete entry invalid id": {
+			args:         []string{"sesh", "--service", "totp", "--delete", "bad-id"},
+			wantExitCode: 1,
+		},
+		"delete entry keychain error": {
+			args: []string{"sesh", "--service", "totp", "--delete", "sesh-totp/github:user"},
+			setupMocks: func(h *testHarness) {
+				h.keychain.DeleteEntryFunc = func(account, service string) error {
+					return fmt.Errorf("keychain delete failed")
+				}
+			},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "delete") {
+					t.Error("Expected error about delete failure")
+				}
+			},
+		},
+		"setup": {
+			args:         []string{"sesh", "--service", "aws", "--setup"},
+			wantExitCode: 0,
+		},
+		"clip error": {
+			args: []string{"sesh", "--service", "totp", "--service-name", "github", "--clip"},
+			setupMocks: func(h *testHarness) {
+				h.keychain.GetSecretFunc = func(account, service string) ([]byte, error) {
+					return nil, fmt.Errorf("secret not found")
+				}
+				h.app.ClipboardCopy = func(text string) error {
+					return fmt.Errorf("clipboard unavailable")
+				}
+			},
+			wantExitCode: 1,
+		},
+		"generate credentials error": {
+			args: []string{"sesh", "--service", "totp", "--service-name", "github"},
+			setupMocks: func(h *testHarness) {
+				h.keychain.GetSecretFunc = func(account, service string) ([]byte, error) {
+					return nil, fmt.Errorf("secret not found")
+				}
+			},
+			wantExitCode: 1,
+		},
+		"setup error": {
+			args: []string{"sesh", "--service", "aws", "--setup"},
+			setupMocks: func(h *testHarness) {
+				h.app.SetupService = &MockSetupService{
+					SetupServiceFunc: func(serviceName string) error {
+						return fmt.Errorf("setup wizard failed")
+					},
+				}
+			},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "Setup failed") {
+					t.Error("Expected setup failure message")
+				}
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			h := newTestHarness()
+
+			exitCode := -1
+			h.app.Exit = func(code int) { exitCode = code }
+
+			if tc.setupMocks != nil {
+				tc.setupMocks(h)
+			}
+
+			run(h.app, tc.args)
+
+			if exitCode == -1 {
+				exitCode = 0
+			}
+
+			if exitCode != tc.wantExitCode {
+				t.Errorf("Exit code = %d, want %d", exitCode, tc.wantExitCode)
+				t.Logf("stdout: %q", h.stdout.String())
+				t.Logf("stderr: %q", h.stderr.String())
+			}
+
+			if tc.checkStdout != nil {
+				tc.checkStdout(t, h.stdout.String())
+			}
+			if tc.checkStderr != nil {
+				tc.checkStderr(t, h.stderr.String())
 			}
 		})
 	}
