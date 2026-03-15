@@ -53,23 +53,43 @@ fi
 
 # Download the binary
 if [ "$VERSION" = "latest" ]; then
-  DOWNLOAD_URL="https://github.com/bashhack/sesh/releases/latest/download/sesh_Darwin_${ARCH}.zip"
+  BASE_URL="https://github.com/bashhack/sesh/releases/latest/download"
 else
-  DOWNLOAD_URL="https://github.com/bashhack/sesh/releases/download/${VERSION}/sesh_Darwin_${ARCH}.zip"
+  BASE_URL="https://github.com/bashhack/sesh/releases/download/${VERSION}"
 fi
+DOWNLOAD_URL="${BASE_URL}/sesh_Darwin_${ARCH}.zip"
+CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
 echo "⬇️ Downloading sesh from $DOWNLOAD_URL..."
 TMP_DIR=$(mktemp -d)
+cleanup() { rm -rf "$TMP_DIR"; }
+trap cleanup EXIT
+
 if ! curl -sfL -o "$TMP_DIR/sesh.zip" "$DOWNLOAD_URL"; then
   echo "❌ Download failed. Check that the version exists at:"
   echo "   https://github.com/bashhack/sesh/releases"
-  rm -rf "$TMP_DIR"
   exit 1
 fi
-unzip -q "$TMP_DIR/sesh.zip" -d "$TMP_DIR"
+
+# Verify checksum if checksums.txt is available
+if curl -sfL -o "$TMP_DIR/checksums.txt" "$CHECKSUMS_URL"; then
+  EXPECTED=$(grep "sesh_Darwin_${ARCH}.zip" "$TMP_DIR/checksums.txt" | awk '{print $1}')
+  if [ -n "$EXPECTED" ]; then
+    ACTUAL=$(shasum -a 256 "$TMP_DIR/sesh.zip" | awk '{print $1}')
+    if [ "$EXPECTED" != "$ACTUAL" ]; then
+      echo "❌ Checksum verification failed (expected $EXPECTED, got $ACTUAL)"
+      exit 1
+    fi
+    echo "✅ Checksum verified"
+  fi
+fi
+
+if ! unzip -q "$TMP_DIR/sesh.zip" -d "$TMP_DIR"; then
+  echo "❌ Failed to extract archive. The download may be corrupted — please try again."
+  exit 1
+fi
 chmod +x "$TMP_DIR/sesh"
 mv "$TMP_DIR/sesh" "$INSTALL_DIR/sesh"
-rm -rf "$TMP_DIR"
 
 # Verify installation
 echo "✅ Installation completed!"
