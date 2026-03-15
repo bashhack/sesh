@@ -15,14 +15,12 @@ type mockShellCustomizer struct {
 	bashScript     string
 	fallbackScript string
 	promptPrefix   string
-	welcomeMessage string
 }
 
 func (m *mockShellCustomizer) GetZshInitScript() string      { return m.zshScript }
 func (m *mockShellCustomizer) GetBashInitScript() string     { return m.bashScript }
 func (m *mockShellCustomizer) GetFallbackInitScript() string { return m.fallbackScript }
 func (m *mockShellCustomizer) GetPromptPrefix() string       { return m.promptPrefix }
-func (m *mockShellCustomizer) GetWelcomeMessage() string     { return m.welcomeMessage }
 
 func TestFilterEnv(t *testing.T) {
 	tests := map[string]struct {
@@ -96,7 +94,6 @@ func TestGetShellConfig(t *testing.T) {
 		bashScript:     "# Bash init script",
 		fallbackScript: "# Fallback init script",
 		promptPrefix:   "sesh",
-		welcomeMessage: "Welcome to sesh",
 	}
 
 	tests := map[string]struct {
@@ -291,10 +288,11 @@ func TestSetupZshShell(t *testing.T) {
 
 	env := []string{"PATH=/usr/bin", "HOME=/home/user"}
 
-	newEnv, err := SetupZshShell(config, env)
+	newEnv, tmpDir, err := SetupZshShell(config, env)
 	if err != nil {
 		t.Fatalf("SetupZshShell() error = %v", err)
 	}
+	defer os.RemoveAll(tmpDir)
 
 	// Check that ZDOTDIR was added
 	zdotdirFound := false
@@ -370,10 +368,11 @@ func TestSetupFallbackShell(t *testing.T) {
 
 	env := []string{"PATH=/usr/bin", "HOME=/home/user"}
 
-	newEnv, err := SetupFallbackShell(config, env)
+	newEnv, tmpName, err := SetupFallbackShell(config, env)
 	if err != nil {
 		t.Fatalf("SetupFallbackShell() error = %v", err)
 	}
+	defer os.Remove(tmpName)
 
 	// Check that PS1 and ENV were added
 	ps1Found := false
@@ -426,15 +425,15 @@ func TestSetupFallbackShellCustomPrefix(t *testing.T) {
 
 	env := []string{"PATH=/usr/bin"}
 
-	newEnv, err := SetupFallbackShell(config, env)
+	newEnv, tmpName, err := SetupFallbackShell(config, env)
 	if err != nil {
 		t.Fatalf("SetupFallbackShell() error = %v", err)
 	}
+	defer os.Remove(tmpName)
 
-	// Clean up temp file
+	// Verify temp file exists
 	for _, e := range newEnv {
 		if strings.HasPrefix(e, "ENV=") {
-			defer os.Remove(strings.TrimPrefix(e, "ENV="))
 			break
 		}
 	}

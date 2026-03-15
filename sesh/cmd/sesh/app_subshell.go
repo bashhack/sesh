@@ -45,6 +45,9 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	if err != nil {
 		return err
 	}
+	if shellConfig.Cleanup != nil {
+		defer shellConfig.Cleanup()
+	}
 
 	var cmd *exec.Cmd
 

@@ -1,12 +1,9 @@
 package totp
 
 import (
-	"bytes"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +12,7 @@ import (
 	keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
+	"github.com/bashhack/sesh/internal/testutil"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
 )
 
@@ -63,8 +61,8 @@ func TestProvider_SetupFlags(t *testing.T) {
 		t.Errorf("Parse() error: %v", err)
 	}
 
-	if p.keyUser == "" {
-		t.Error("keyUser should be set to current user")
+	if p.User == "" {
+		t.Error("User should be set to current user")
 	}
 }
 
@@ -193,7 +191,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 				keychain:    mockKeychain,
 				serviceName: tc.serviceName,
 				profile:     tc.profile,
-				keyUser:     "testuser",
+				KeyUser:     provider.KeyUser{User: "testuser"},
 			}
 
 			err := p.ValidateRequest()
@@ -235,12 +233,7 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			oldStderr := os.Stderr
-			r, w, pipeErr := os.Pipe()
-			if pipeErr != nil {
-				t.Fatalf("os.Pipe() failed: %v", pipeErr)
-			}
-			os.Stderr = w
+			restore := testutil.RedirectStderr(t)
 
 			mockKeychain := &keychainMocks.MockProvider{
 				GetSecretFunc: func(account, service string) ([]byte, error) {
@@ -258,19 +251,13 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 				totp:        mockTOTP,
 				serviceName: tc.serviceName,
 				profile:     tc.profile,
-				keyUser:     "testuser",
-				now:         func() time.Time { return time.Unix(5, 0) },
+				KeyUser:     provider.KeyUser{User: "testuser"},
+				Clock:       provider.Clock{Now: func() time.Time { return time.Unix(5, 0) }},
 			}
 
 			_, _ = p.GetCredentials()
 
-			w.Close()
-			var buf bytes.Buffer
-			buf.ReadFrom(r)
-			r.Close()
-			os.Stderr = oldStderr
-
-			stderr := buf.String()
+			stderr := restore()
 			if !strings.Contains(stderr, tc.wantSubstr) {
 				t.Errorf("stderr = %q, want substring %q", stderr, tc.wantSubstr)
 			}
@@ -342,18 +329,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			oldStderr := os.Stderr
-			r, w, pipeErr := os.Pipe()
-			if pipeErr != nil {
-				t.Fatalf("os.Pipe() failed: %v", pipeErr)
-			}
-			os.Stderr = w
-			defer func() {
-				w.Close()
-				io.Copy(io.Discard, r)
-				r.Close()
-				os.Stderr = oldStderr
-			}()
+			defer testutil.DiscardStderr(t)()
 
 			mockKeychain := &keychainMocks.MockProvider{}
 			mockTOTP := &totpMocks.MockProvider{}
@@ -364,7 +340,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 				keychain:    mockKeychain,
 				totp:        mockTOTP,
 				serviceName: tc.serviceName,
-				keyUser:     "testuser",
+				KeyUser:     provider.KeyUser{User: "testuser"},
 			}
 
 			creds, err := p.GetCredentials()
@@ -453,18 +429,7 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			oldStderr := os.Stderr
-			r, w, pipeErr := os.Pipe()
-			if pipeErr != nil {
-				t.Fatalf("os.Pipe() failed: %v", pipeErr)
-			}
-			os.Stderr = w
-			defer func() {
-				w.Close()
-				io.Copy(io.Discard, r)
-				r.Close()
-				os.Stderr = oldStderr
-			}()
+			defer testutil.DiscardStderr(t)()
 
 			mockKeychain := &keychainMocks.MockProvider{}
 			mockTOTP := &totpMocks.MockProvider{}
@@ -475,7 +440,7 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 				keychain:    mockKeychain,
 				totp:        mockTOTP,
 				serviceName: tc.serviceName,
-				keyUser:     "testuser",
+				KeyUser:     provider.KeyUser{User: "testuser"},
 			}
 
 			creds, err := p.GetClipboardValue()

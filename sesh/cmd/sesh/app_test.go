@@ -520,8 +520,6 @@ func TestApp_PrintCredentials(t *testing.T) {
 			wantOutput: []string{
 				"⏳ Expires at: unknown",
 				"TOTP code for github: 123456",
-				"# --------- ENVIRONMENT VARIABLES ---------",
-				"# ----------------------------------------",
 			},
 		},
 		"credentials without expiry": {

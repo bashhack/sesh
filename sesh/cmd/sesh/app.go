@@ -216,10 +216,21 @@ func (a *App) PrintCredentials(creds provider.Credentials) {
 	expiryDisplay := "unknown"
 	if !creds.Expiry.IsZero() {
 		duration := time.Until(creds.Expiry)
-		hours := int(duration.Hours())
-		minutes := int(duration.Minutes()) % 60
-		expiryDisplay = fmt.Sprintf("%s (valid for %dh%dm)",
-			creds.Expiry.Local().Format("2006-01-02 15:04:05"), hours, minutes)
+		total := int(duration.Seconds())
+		hours := total / 3600
+		minutes := (total % 3600) / 60
+		seconds := total % 60
+
+		var validFor string
+		if hours > 0 {
+			validFor = fmt.Sprintf("%dh%dm", hours, minutes)
+		} else if minutes > 0 {
+			validFor = fmt.Sprintf("%dm%ds", minutes, seconds)
+		} else {
+			validFor = fmt.Sprintf("%ds", seconds)
+		}
+		expiryDisplay = fmt.Sprintf("%s (valid for %s)",
+			creds.Expiry.Local().Format("2006-01-02 15:04:05"), validFor)
 	}
 
 	fmt.Fprintf(a.Stdout, "⏳ Expires at: %s\n", expiryDisplay)
@@ -232,9 +243,11 @@ func (a *App) PrintCredentials(creds provider.Credentials) {
 		fmt.Fprintf(a.Stdout, "%s\n", creds.DisplayInfo)
 	}
 
-	fmt.Fprintf(a.Stdout, "\n# --------- ENVIRONMENT VARIABLES ---------\n")
-	for key, value := range creds.Variables {
-		fmt.Fprintf(a.Stdout, "export %s=%s\n", key, value)
+	if len(creds.Variables) > 0 {
+		fmt.Fprintf(a.Stdout, "\n# --------- ENVIRONMENT VARIABLES ---------\n")
+		for key, value := range creds.Variables {
+			fmt.Fprintf(a.Stdout, "export %s=%s\n", key, value)
+		}
+		fmt.Fprintf(a.Stdout, "# ----------------------------------------\n")
 	}
-	fmt.Fprintf(a.Stdout, "# ----------------------------------------\n")
 }

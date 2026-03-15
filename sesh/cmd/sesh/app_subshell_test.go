@@ -37,11 +37,7 @@ echo "Entering sesh environment"
 }
 
 func (m *mockShellCustomizer) GetPromptPrefix() string {
-	return "(sesh:test) "
-}
-
-func (m *mockShellCustomizer) GetWelcomeMessage() string {
-	return "🔐 Secure shell with test credentials activated."
+	return "sesh"
 }
 
 // MockSubshellProvider is a mock that implements both ServiceProvider and SubshellProvider

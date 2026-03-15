@@ -20,7 +20,6 @@ type ShellCustomizer interface {
 	GetBashInitScript() string
 	GetFallbackInitScript() string
 	GetPromptPrefix() string
-	GetWelcomeMessage() string
 }
 
 // ShellConfig holds the information needed to launch a shell
@@ -29,6 +28,7 @@ type ShellConfig struct {
 	Args        []string
 	Env         []string
 	ServiceName string
+	Cleanup     func() // Removes temp files created during shell setup; safe to call even if nil
 }
 
 func GetShellConfig(config Config, stdout, stderr io.Writer) (*ShellConfig, error) {
@@ -59,26 +59,33 @@ func GetShellConfig(config Config, stdout, stderr io.Writer) (*ShellConfig, erro
 	}
 
 	var shellArgs []string
+	var cleanup func()
 
 	switch {
 	case shell == "/bin/zsh" || filepath.Base(shell) == "zsh":
+		var tmpDir string
 		var err error
-		env, err = SetupZshShell(config, env)
+		env, tmpDir, err = SetupZshShell(config, env)
 		if err != nil {
 			return nil, fmt.Errorf("failed to set up zsh shell: %w", err)
 		}
+		cleanup = func() { os.RemoveAll(tmpDir) }
 	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
 		tmpFile, err := SetupBashShell(config)
 		if err != nil {
 			return nil, fmt.Errorf("failed to set up bash shell: %w", err)
 		}
 		shellArgs = []string{"--rcfile", tmpFile.Name()}
+		name := tmpFile.Name()
+		cleanup = func() { os.Remove(name) }
 	default:
+		var tmpName string
 		var err error
-		env, err = SetupFallbackShell(config, env)
+		env, tmpName, err = SetupFallbackShell(config, env)
 		if err != nil {
 			return nil, fmt.Errorf("failed to set up fallback shell: %w", err)
 		}
+		cleanup = func() { os.Remove(tmpName) }
 	}
 
 	return &ShellConfig{
@@ -86,23 +93,24 @@ func GetShellConfig(config Config, stdout, stderr io.Writer) (*ShellConfig, erro
 		Args:        shellArgs,
 		Env:         env,
 		ServiceName: config.ServiceName,
+		Cleanup:     cleanup,
 	}, nil
 }
 
-func SetupZshShell(config Config, env []string) ([]string, error) {
+func SetupZshShell(config Config, env []string) ([]string, string, error) {
 	// Create a temporary ZDOTDIR for zsh
 	tmpDir, err := os.MkdirTemp("", "sesh_zsh")
 	if err != nil {
-		return []string{}, fmt.Errorf("failed to create temp dir for zsh: %w", err)
+		return []string{}, "", fmt.Errorf("failed to create temp dir for zsh: %w", err)
 	}
 	zshrc := filepath.Join(tmpDir, ".zshrc")
 
 	if writeErr := os.WriteFile(zshrc, []byte(config.ShellCustomizer.GetZshInitScript()), 0600); writeErr != nil {
-		return []string{}, fmt.Errorf("failed to write temp zshrc: %w", writeErr)
+		return []string{}, "", fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 	}
 	env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
 
-	return env, nil
+	return env, tmpDir, nil
 }
 
 func SetupBashShell(config Config) (*os.File, error) {
@@ -120,25 +128,26 @@ func SetupBashShell(config Config) (*os.File, error) {
 	return tmpFile, nil
 }
 
-func SetupFallbackShell(config Config, env []string) ([]string, error) {
+func SetupFallbackShell(config Config, env []string) ([]string, string, error) {
 	tmpFile, err := os.CreateTemp("", "sesh_shellrc")
 	if err != nil {
-		return []string{}, fmt.Errorf("failed to create temp shellrc: %w", err)
+		return []string{}, "", fmt.Errorf("failed to create temp shellrc: %w", err)
 	}
 	defer tmpFile.Close()
 
 	if _, writeErr := tmpFile.WriteString(config.ShellCustomizer.GetFallbackInitScript()); writeErr != nil {
-		return []string{}, fmt.Errorf("failed to write temp shellrc: %w", writeErr)
+		return []string{}, "", fmt.Errorf("failed to write temp shellrc: %w", writeErr)
 	}
 
 	prefix := config.ShellCustomizer.GetPromptPrefix()
 	if prefix == "" {
 		prefix = "sesh"
 	}
+	name := tmpFile.Name()
 	env = append(env, fmt.Sprintf("PS1=(%s:%s) $ ", prefix, config.ServiceName))
-	env = append(env, fmt.Sprintf("ENV=%s", tmpFile.Name())) // For sh shells
+	env = append(env, fmt.Sprintf("ENV=%s", name)) // For sh shells
 
-	return env, nil
+	return env, name, nil
 }
 
 // FilterEnv removes any existing environment variables with the specified key

@@ -140,43 +140,14 @@ PS1="(sesh:aws) $PS1"
 %s
 `, SubshellFunctions)
 
-	// FallbackPrompt is a simplified version of the sesh custom shell init for shells other than bash or zsh
-	FallbackPrompt = `
+	// FallbackPrompt reuses SubshellFunctions so all shells get the same
+	// sesh_status, sesh_help, and verify_aws implementations.
+	FallbackPrompt = fmt.Sprintf(`
 export SESH_ACTIVE=1
 export SESH_SERVICE=aws
 
-# Simple subset of common functions for basic shells
-sesh_status() {
-  echo "🔒 Active sesh session for service: $SESH_SERVICE"
-  
-  if [ -n "$SESH_EXPIRY" ]; then
-    now=$(date +%s)
-    expiry=$SESH_EXPIRY
-    remaining=$((expiry - now))
-    
-    if [ $remaining -le 0 ]; then
-      echo "⚠️ Credentials have EXPIRED!"
-    else
-      hours=$((remaining / 3600))
-      minutes=$(( (remaining % 3600) / 60 ))
-      seconds=$((remaining % 60))
-      echo "⏳ Credentials expire in: ${hours}h ${minutes}m ${seconds}s"
-    fi
-  fi
-  
-  # Check AWS credentials
-  if [ "$SESH_SERVICE" = "aws" ]; then
-    echo ""
-    echo "AWS Environment Variables set"
-  fi
-}
-
-verify_aws() {
-  aws sts get-caller-identity --query "Arn" --output text
-}
-
-echo "🔐 Secure shell with aws credentials activated"
-`
+%s
+`, SubshellFunctions)
 )
 
 // AWSShellCustomizer implements subshell.ShellCustomizer for AWS
@@ -195,11 +166,7 @@ func (c *AWSShellCustomizer) GetFallbackInitScript() string {
 }
 
 func (c *AWSShellCustomizer) GetPromptPrefix() string {
-	return "(sesh:aws) "
-}
-
-func (c *AWSShellCustomizer) GetWelcomeMessage() string {
-	return "🔐 Secure shell with AWS credentials activated. Type 'sesh_help' for more information."
+	return "sesh"
 }
 
 // NewCustomizer creates a new AWS shell customizer
