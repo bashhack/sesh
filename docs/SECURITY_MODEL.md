@@ -248,7 +248,7 @@ Please include:
 - Potential impact
 - Suggested fixes (if any)
 
-I'll aim to respond within 72 hours and aim to fix critical issues within 7 days.
+I aim to respond within 72 hours and fix critical issues within 7 days.
 
 ## Conclusion
 

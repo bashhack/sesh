@@ -25,7 +25,7 @@ Sesh uses a plugin-based architecture where each service (AWS, TOTP, etc.) is im
 
 > **First time here?** Skip to [Creating a Basic Provider](#creating-a-basic-provider) and refer back to these sections when you encounter unfamiliar concepts.
 
-### Provider Lifecycle
+### Provider Lifecycle ([SVG](assets/provider-lifecycle.svg))
 
 When a user runs sesh, the app calls your provider methods in this order:
 
@@ -400,12 +400,18 @@ func (h *YourServiceSetupHandler) Setup() error {
     // Get service name
     reader := bufio.NewReader(os.Stdin)
     fmt.Print("Enter service name: ")
-    serviceName, _ := reader.ReadString('\n')
+    serviceName, err := reader.ReadString('\n')
+    if err != nil {
+        return fmt.Errorf("failed to read service name: %w", err)
+    }
     serviceName = strings.TrimSpace(serviceName)
-    
+
     // Get credentials (term.ReadPassword hides input)
     fmt.Print("Enter secret/token: ")
-    secretBytes, _ := term.ReadPassword(int(syscall.Stdin))
+    secretBytes, err := term.ReadPassword(int(syscall.Stdin))
+    if err != nil {
+        return fmt.Errorf("failed to read secret: %w", err)
+    }
     fmt.Println()
     defer secure.SecureZeroBytes(secretBytes)
 

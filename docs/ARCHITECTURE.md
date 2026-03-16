@@ -199,7 +199,7 @@ security add-generic-password ... -T /path/to/sesh
 ```
 This means even if another process knows the service name, it cannot access the secret.
 
-**Keychain Data Model**
+**Keychain Data Model** ([SVG](assets/keychain-data-model.svg))
 
 All keychain entries follow the `keyformat` convention. Metadata for all entries is stored in a single zstd-compressed blob:
 

@@ -6,7 +6,7 @@ This document provides detailed instructions for using and configuring sesh for 
 
 ## Workflow Overview
 
-The diagram below shows the complete workflow for using sesh, from initial setup through daily usage:
+The diagram below shows the complete workflow for using sesh, from initial setup through daily usage ([SVG](assets/workflow-overview.svg)):
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
@@ -232,7 +232,7 @@ sesh -service totp -list
 
 The `[ID: ...]` value is what you pass to `-delete`.
 
-### Multi-Profile Management
+### Multi-Profile Management ([SVG](assets/multi-profile-management.svg))
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%

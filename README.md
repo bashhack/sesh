@@ -159,8 +159,8 @@ When you run `sesh -service aws`, you enter a secure subshell with:
 
 #### Global Options
 ```bash
--service <provider>              # Service provider (aws, totp) [REQUIRED]
--list-services                   # Show available providers
+-service <provider>              # Required for provider operations (aws, totp)
+-list-services                   # Show available providers (no -service needed)
 -version                         # Display version info
 -help                            # Show help
 ```
