@@ -320,7 +320,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 			wantErr: true,
 		},
 		"empty service name": {
-			serviceName: "",
+			serviceName:   "",
 			setupKeychain: func(m *keychainMocks.MockProvider) {},
 			setupTOTP:     func(m *totpMocks.MockProvider) {},
 			wantErr:       true,

@@ -5,8 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bashhack/sesh/internal/secure"
 	"github.com/pquerna/otp/totp"
+
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 // ValidateAndNormalizeSecret validates and normalizes a base32-encoded TOTP secret.

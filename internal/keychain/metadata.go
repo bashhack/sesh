@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/klauspost/compress/zstd"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/bashhack/sesh/internal/constants"
 )

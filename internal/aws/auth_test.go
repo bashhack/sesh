@@ -3,10 +3,11 @@ package aws
 import (
 	"encoding/json"
 	"errors"
-	"github.com/bashhack/sesh/internal/testutil"
 	"os"
 	"os/exec"
 	"testing"
+
+	"github.com/bashhack/sesh/internal/testutil"
 )
 
 // MockExecCommand returns a function that creates a mock exec.Command

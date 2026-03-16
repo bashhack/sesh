@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/env"
 	"github.com/bashhack/sesh/internal/keychain"
@@ -17,7 +19,6 @@ import (
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
-	"golang.org/x/term"
 )
 
 // execCommand is a variable so we can swap it out in tests

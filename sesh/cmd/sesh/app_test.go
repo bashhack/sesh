@@ -399,12 +399,12 @@ func TestApp_GenerateCredentials(t *testing.T) {
 
 func TestApp_CopyToClipboard(t *testing.T) {
 	tests := map[string]struct {
-		serviceName   string
-		setupApp      func(*App)
-		clipboardErr  error
-		wantErr       bool
-		wantErrMsg    string
-		wantStderr    []string
+		serviceName  string
+		setupApp     func(*App)
+		clipboardErr error
+		wantErr      bool
+		wantErrMsg   string
+		wantStderr   []string
 	}{
 		"successful copy": {
 			serviceName: "totp",
@@ -813,11 +813,11 @@ func TestApp_PrintCredentials(t *testing.T) {
 			creds: provider.Credentials{
 				Provider: "test",
 				Variables: map[string]string{
-					"VALID_KEY":    "good",
-					"bad;key":      "injected",
-					"$(whoami)":    "injected",
-					"1STARTS_NUM":  "bad",
-					"_UNDERSCORE":  "ok",
+					"VALID_KEY":   "good",
+					"bad;key":     "injected",
+					"$(whoami)":   "injected",
+					"1STARTS_NUM": "bad",
+					"_UNDERSCORE": "ok",
 				},
 			},
 			wantStdout: []string{

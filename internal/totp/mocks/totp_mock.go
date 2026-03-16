@@ -4,16 +4,16 @@ import "time"
 
 // MockProvider is a test double for totp.Provider.
 type MockProvider struct {
-	GenerateFunc                      func(secret string) (string, error)
-	GenerateConsecutiveCodesFunc          func(secret string) (current string, next string, err error)
-	GenerateConsecutiveCodesForTimeFunc   func(secret string, baseTime time.Time) (current string, next string, err error)
-	GenerateForTimeFunc                   func(secret string, t time.Time) (string, error)
-	GenerateSecureFunc                func(secret string) (string, error)
-	GenerateForTimeSecureFunc         func(secret string, t time.Time) (string, error)
-	GenerateBytesFunc                 func(secret []byte) (string, error)
-	GenerateConsecutiveCodesBytesFunc         func(secret []byte) (current string, next string, err error)
-	GenerateConsecutiveCodesForTimeBytesFunc  func(secret []byte, baseTime time.Time) (current string, next string, err error)
-	GenerateForTimeBytesFunc                  func(secret []byte, t time.Time) (string, error)
+	GenerateFunc                             func(secret string) (string, error)
+	GenerateConsecutiveCodesFunc             func(secret string) (current string, next string, err error)
+	GenerateConsecutiveCodesForTimeFunc      func(secret string, baseTime time.Time) (current string, next string, err error)
+	GenerateForTimeFunc                      func(secret string, t time.Time) (string, error)
+	GenerateSecureFunc                       func(secret string) (string, error)
+	GenerateForTimeSecureFunc                func(secret string, t time.Time) (string, error)
+	GenerateBytesFunc                        func(secret []byte) (string, error)
+	GenerateConsecutiveCodesBytesFunc        func(secret []byte) (current string, next string, err error)
+	GenerateConsecutiveCodesForTimeBytesFunc func(secret []byte, baseTime time.Time) (current string, next string, err error)
+	GenerateForTimeBytesFunc                 func(secret []byte, t time.Time) (string, error)
 }
 
 // Generate returns a TOTP code, or a zero value if GenerateFunc is not set.
