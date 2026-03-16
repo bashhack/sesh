@@ -186,11 +186,11 @@ func extractServiceName(args []string) string {
 			}
 		}
 		// Handle --service=<value>
-		if strings.HasPrefix(args[i], "--service=") {
-			return strings.TrimPrefix(args[i], "--service=")
+		if v, ok := strings.CutPrefix(args[i], "--service="); ok {
+			return v
 		}
-		if strings.HasPrefix(args[i], "-service=") {
-			return strings.TrimPrefix(args[i], "-service=")
+		if v, ok := strings.CutPrefix(args[i], "-service="); ok {
+			return v
 		}
 	}
 	return ""

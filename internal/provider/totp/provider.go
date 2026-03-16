@@ -65,7 +65,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 }
 
 // GetSetupHandler returns a setup handler for TOTP.
-func (p *Provider) GetSetupHandler() interface{} {
+func (p *Provider) GetSetupHandler() any {
 	return setup.NewTOTPSetupHandler(p.keychain)
 }
 

@@ -27,7 +27,7 @@ type ServiceProvider interface {
 	SetupFlags(fs FlagSet) error
 
 	// GetSetupHandler returns a setup handler for this provider
-	GetSetupHandler() interface{}
+	GetSetupHandler() any
 
 	// GetCredentials retrieves credentials using TOTP
 	GetCredentials() (Credentials, error)
@@ -82,7 +82,7 @@ type SubshellDecider interface {
 type SubshellProvider interface {
 	// NewSubshellConfig creates a configuration for the subshell package
 	// based on the provided credentials
-	NewSubshellConfig(creds Credentials) interface{}
+	NewSubshellConfig(creds Credentials) any
 }
 
 // ProviderEntry represents an entry for a specific provider

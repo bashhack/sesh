@@ -43,12 +43,12 @@ func (m *mockShellCustomizer) GetPromptPrefix() string {
 // MockSubshellProvider is a mock that implements both ServiceProvider and SubshellProvider
 type MockSubshellProvider struct {
 	MockProvider
-	NewSubshellConfigFunc func(creds provider.Credentials) interface{}
+	NewSubshellConfigFunc func(creds provider.Credentials) any
 	ShouldUseSubshellFunc func() bool
 }
 
 // NewSubshellConfig implements provider.SubshellProvider
-func (m *MockSubshellProvider) NewSubshellConfig(creds provider.Credentials) interface{} {
+func (m *MockSubshellProvider) NewSubshellConfig(creds provider.Credentials) any {
 	if m.NewSubshellConfigFunc != nil {
 		return m.NewSubshellConfigFunc(creds)
 	}
@@ -165,7 +165,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 							}, nil
 						},
 					},
-					NewSubshellConfigFunc: func(creds provider.Credentials) interface{} {
+					NewSubshellConfigFunc: func(creds provider.Credentials) any {
 						// Return something that's not a subshell.Config
 						return "invalid config"
 					},
@@ -201,7 +201,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 							}, nil
 						},
 					},
-					NewSubshellConfigFunc: func(creds provider.Credentials) interface{} {
+					NewSubshellConfigFunc: func(creds provider.Credentials) any {
 						return subshell.Config{
 							ServiceName:     "aws",
 							Variables:       creds.Variables,
@@ -242,7 +242,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 							}, nil
 						},
 					},
-					NewSubshellConfigFunc: func(creds provider.Credentials) interface{} {
+					NewSubshellConfigFunc: func(creds provider.Credentials) any {
 						return subshell.Config{
 							ServiceName:     "aws",
 							Variables:       creds.Variables,
@@ -283,7 +283,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 							}, nil
 						},
 					},
-					NewSubshellConfigFunc: func(creds provider.Credentials) interface{} {
+					NewSubshellConfigFunc: func(creds provider.Credentials) any {
 						return subshell.Config{
 							ServiceName:     "aws",
 							Variables:       creds.Variables,
@@ -378,7 +378,7 @@ func TestApp_LaunchSubshell_RealExitError(t *testing.T) {
 				}, nil
 			},
 		},
-		NewSubshellConfigFunc: func(creds provider.Credentials) interface{} {
+		NewSubshellConfigFunc: func(creds provider.Credentials) any {
 			return subshell.Config{
 				ServiceName:     "aws",
 				Variables:       creds.Variables,

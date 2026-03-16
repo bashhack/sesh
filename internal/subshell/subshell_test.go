@@ -438,8 +438,8 @@ func TestSetupFallbackShellCustomPrefix(t *testing.T) {
 	var envFile string
 	var ps1Found bool
 	for _, e := range newEnv {
-		if strings.HasPrefix(e, "ENV=") {
-			envFile = strings.TrimPrefix(e, "ENV=")
+		if v, ok := strings.CutPrefix(e, "ENV="); ok {
+			envFile = v
 		}
 		if e == "PS1=(myapp:test-service) $ " {
 			ps1Found = true

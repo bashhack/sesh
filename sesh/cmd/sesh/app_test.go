@@ -47,7 +47,7 @@ type MockProvider struct {
 	NameFunc              func() string
 	DescriptionFunc       func() string
 	SetupFlagsFunc        func(fs provider.FlagSet) error
-	GetSetupHandlerFunc   func() interface{}
+	GetSetupHandlerFunc   func() any
 	GetCredentialsFunc    func() (provider.Credentials, error)
 	GetClipboardValueFunc func() (provider.Credentials, error)
 	ListEntriesFunc       func() ([]provider.ProviderEntry, error)
@@ -81,7 +81,7 @@ func (m *MockProvider) SetupFlags(fs provider.FlagSet) error {
 }
 
 // GetSetupHandler implements provider.ServiceProvider
-func (m *MockProvider) GetSetupHandler() interface{} {
+func (m *MockProvider) GetSetupHandler() any {
 	if m.GetSetupHandlerFunc != nil {
 		return m.GetSetupHandlerFunc()
 	}

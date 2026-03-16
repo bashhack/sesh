@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -100,14 +101,7 @@ func TestSetupService(t *testing.T) {
 	}
 
 	// Find our service in the list (order not guaranteed)
-	found := false
-	for _, s := range services {
-		if s == "test-service" {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !slices.Contains(services, "test-service") {
 		t.Errorf("Expected to find 'test-service' in services list")
 	}
 
