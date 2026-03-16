@@ -1,0 +1,25 @@
+%%{init: {'theme': 'neutral'}}%%
+flowchart TD
+    classDef always fill:#dfd,stroke:#333,stroke-width:2px
+    classDef mode fill:#bbf,stroke:#333,stroke-width:2px
+    classDef optional fill:#ffd,stroke:#333,stroke-width:2px
+    classDef skip fill:#eee,stroke:#999,stroke-width:1px
+
+    SF["SetupFlags(fs)<br>Register flags, set p.User"]:::always
+    FP["Flag parsing<br>User-provided values populate fields"]:::always
+
+    SF --> FP
+    FP --> Route{"Route by mode"}:::always
+
+    Route -->|"-clip"| VR1["ValidateRequest()"]:::always
+    VR1 --> GCV["GetClipboardValue()"]:::mode
+
+    Route -->|"default"| VR2["ValidateRequest()"]:::always
+    VR2 --> GC["GetCredentials()"]:::mode
+    GC --> Sub{"ShouldUseSubshell()?"}:::optional
+    Sub -->|"true"| NSC["NewSubshellConfig(creds)<br>Launch isolated subshell"]:::optional
+    Sub -->|"false"| Print["Print credentials"]:::mode
+
+    Route -->|"-list"| LE["ListEntries()<br>no ValidateRequest"]:::skip
+    Route -->|"-delete"| DE["DeleteEntry(id)<br>no ValidateRequest"]:::skip
+    Route -->|"-setup"| Setup["SetupService.SetupService()<br>calls handler's Setup()"]:::skip

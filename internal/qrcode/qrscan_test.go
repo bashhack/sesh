@@ -543,9 +543,21 @@ func TestConcurrentQRDecoding(t *testing.T) {
 		t.Fatalf("Failed to generate TOTP key: %v", err)
 	}
 
-	img, err := key.Image(200, 200)
+	rawImg, err := key.Image(200, 200)
 	if err != nil {
 		t.Fatalf("Failed to generate QR image: %v", err)
+	}
+
+	// Encode/decode through PNG so each goroutine works with a concrete
+	// *image.NRGBA that is safe for concurrent reads. The raw
+	// *barcode.scaledBarcode may not be goroutine-safe.
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, rawImg); err != nil {
+		t.Fatalf("Failed to encode PNG: %v", err)
+	}
+	img, err := png.Decode(&buf)
+	if err != nil {
+		t.Fatalf("Failed to decode PNG: %v", err)
 	}
 
 	var wg sync.WaitGroup

@@ -1,0 +1,50 @@
+%%{init: {'theme': 'neutral'}}%%
+flowchart LR
+    classDef prefix fill:#f9f,stroke:#333,stroke-width:2px
+    classDef key fill:#bbf,stroke:#333,stroke-width:2px
+    classDef meta fill:#dfd,stroke:#333,stroke-width:2px
+
+    subgraph AWS["AWS Provider"]
+        direction TB
+        AWSPrefix["sesh-aws"]:::prefix
+        AWSDefault["sesh-aws/default"]:::key
+        AWSProd["sesh-aws/prod"]:::key
+        AWSSerialPrefix["sesh-aws-serial"]:::prefix
+        AWSSerialDefault["sesh-aws-serial/default"]:::key
+        AWSSerialProd["sesh-aws-serial/prod"]:::key
+
+        AWSPrefix --- AWSDefault
+        AWSPrefix --- AWSProd
+        AWSSerialPrefix --- AWSSerialDefault
+        AWSSerialPrefix --- AWSSerialProd
+    end
+
+    subgraph TOTP["TOTP Provider"]
+        direction TB
+        TOTPPrefix["sesh-totp"]:::prefix
+        TOTPGithub["sesh-totp/github"]:::key
+        TOTPGithubWork["sesh-totp/github/work"]:::key
+        TOTPGoogle["sesh-totp/google"]:::key
+
+        TOTPPrefix --- TOTPGithub
+        TOTPPrefix --- TOTPGithubWork
+        TOTPPrefix --- TOTPGoogle
+    end
+
+    subgraph Metadata["Metadata Store"]
+        direction TB
+        MetaKey["sesh-metadata"]:::meta
+        MetaDesc["Single keychain entry<br>zstd-compressed JSON blob<br>Tracks all entries across providers"]
+        MetaKey --- MetaDesc
+    end
+
+    subgraph Format["Key Format"]
+        direction TB
+        F1["{namespace}/{segment1}"]
+        F2["{namespace}/{segment1}/{segment2}"]
+        F3["Built by keyformat.Build()"]
+        F4["Parsed by keyformat.Parse()"]
+        F1 --- F3
+        F2 --- F3
+        F3 --- F4
+    end
