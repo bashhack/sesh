@@ -123,9 +123,8 @@ echo "🔐 Secure shell with aws credentials activated. Type 'sesh_help' for mor
 `
 
 	// ZshPrompt handles injection of the sesh:aws prompt and subshell function helpers for zsh
+	// SESH_ACTIVE and SESH_SERVICE are already set by subshell.GetShellConfig in the process env.
 	ZshPrompt = fmt.Sprintf(`
-export SESH_ACTIVE=1
-export SESH_SERVICE=aws
 PROMPT="(sesh:aws) ${PROMPT}"
 
 %s
@@ -133,8 +132,6 @@ PROMPT="(sesh:aws) ${PROMPT}"
 
 	// BashPrompt handles injection of the sesh:aws prompt and subshell function helpers for bash
 	BashPrompt = fmt.Sprintf(`
-export SESH_ACTIVE=1
-export SESH_SERVICE=aws
 PS1="(sesh:aws) $PS1"
 
 %s
@@ -143,9 +140,6 @@ PS1="(sesh:aws) $PS1"
 	// FallbackPrompt reuses SubshellFunctions so all shells get the same
 	// sesh_status, sesh_help, and verify_aws implementations.
 	FallbackPrompt = fmt.Sprintf(`
-export SESH_ACTIVE=1
-export SESH_SERVICE=aws
-
 %s
 `, SubshellFunctions)
 )

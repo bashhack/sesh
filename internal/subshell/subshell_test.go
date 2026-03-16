@@ -1,7 +1,6 @@
 package subshell
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -232,8 +231,7 @@ func TestGetShellConfig(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			os.Setenv("SHELL", tc.shell)
 
-			var stdout, stderr bytes.Buffer
-			cfg, err := GetShellConfig(tc.config, &stdout, &stderr)
+			cfg, err := GetShellConfig(tc.config)
 
 			if (err != nil) != tc.wantErr {
 				t.Errorf("GetShellConfig() error = %v, wantErr %v", err, tc.wantErr)
