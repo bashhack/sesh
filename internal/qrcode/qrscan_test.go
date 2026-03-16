@@ -282,7 +282,7 @@ func (m mockFileInfo) Size() int64        { return m.size }
 func (m mockFileInfo) Mode() os.FileMode  { return 0644 }
 func (m mockFileInfo) ModTime() time.Time { return time.Now() }
 func (m mockFileInfo) IsDir() bool        { return false }
-func (m mockFileInfo) Sys() interface{}   { return nil }
+func (m mockFileInfo) Sys() any           { return nil }
 
 func TestDecodeQRCodeFromFile(t *testing.T) {
 	tests := map[string]struct {

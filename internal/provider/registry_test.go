@@ -58,7 +58,7 @@ func (p *mockProvider) GetClipboardValue() (Credentials, error) {
 	return Credentials{Provider: p.name, CopyValue: "mock-clipboard-value"}, nil
 }
 
-func (p *mockProvider) GetSetupHandler() interface{} {
+func (p *mockProvider) GetSetupHandler() any {
 	return nil
 }
 

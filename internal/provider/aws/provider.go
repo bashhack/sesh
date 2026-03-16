@@ -74,7 +74,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 }
 
 // GetSetupHandler returns a setup handler for AWS
-func (p *Provider) GetSetupHandler() interface{} {
+func (p *Provider) GetSetupHandler() any {
 	return setup.NewAWSSetupHandler(p.keychain)
 }
 
@@ -298,8 +298,7 @@ func (p *Provider) getAWSProfiles() ([]string, error) {
 	var profiles []string
 	profiles = append(profiles, "default") // Always include default
 
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "[profile ") && strings.HasSuffix(line, "]") {
 			profile := strings.TrimPrefix(line, "[profile ")
@@ -391,7 +390,7 @@ func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 }
 
 // NewSubshellConfig creates a subshell configuration for AWS credentials
-func (p *Provider) NewSubshellConfig(creds provider.Credentials) interface{} {
+func (p *Provider) NewSubshellConfig(creds provider.Credentials) any {
 	return subshell.Config{
 		ServiceName:     p.Name(),
 		Variables:       creds.Variables,

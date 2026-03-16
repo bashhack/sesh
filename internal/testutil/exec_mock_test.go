@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"os"
+	"slices"
 	"testing"
 )
 
@@ -38,15 +39,7 @@ func TestMockExecCommand(t *testing.T) {
 	mockCmd = MockExecCommand("", os.ErrNotExist)
 	cmd = mockCmd("ls", "nonexistentdir")
 
-	foundError := false
-	for _, env := range cmd.Env {
-		if env == "MOCK_ERROR=1" {
-			foundError = true
-			break
-		}
-	}
-
-	if !foundError {
+	if !slices.Contains(cmd.Env, "MOCK_ERROR=1") {
 		t.Error("MOCK_ERROR env var not found")
 	}
 }

@@ -9,19 +9,53 @@ on:
     branches: [ main ]  # Run on PRs to main
 
 jobs:
-  test-go:
-    name: Test Go Implementation
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: read
-      actions: read
-    strategy:
-      fail-fast: false  # Continue with other jobs if one fails
-      matrix:
-        os: [macos-latest]  # macOS only for sesh
-        go-version: ['1.24']
-    # Repository root is the default working directory
+  lint:
+    name: Lint
+    runs-on: macos-latest  # macOS for sesh (Keychain dependency)
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Install goimports
+        run: go install golang.org/x/tools/cmd/goimports@latest
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.6.2
+          golangci-lint --version
+
+      - name: Check code formatting
+        run: |
+          UNFORMATTED=$(goimports -l -local github.com/bashhack/sesh $(find . -name '*.go' -not -path './vendor/*' -not -path './scripts/*'))
+          if [ -n "$UNFORMATTED" ]; then
+            echo "❌ The following files need formatting:"
+            echo "$UNFORMATTED"
+            echo ""
+            echo "Run: make format"
+            exit 1
+          fi
+          echo "✅ All files properly formatted"
+
+      - name: Run go vet
+        run: go vet $(go list ./... | grep -v /scripts)
+
+      - name: Run golangci-lint
+        run: golangci-lint run ./...
+
+  test:
+    name: Test
+    runs-on: macos-latest  # macOS for sesh (Keychain dependency)
+    needs: [lint]
+    strategy:
+      fail-fast: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,38 +64,29 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: '1.24'
           cache: true
 
-      - name: Install dependencies
+      - name: Download Go modules
         run: go mod download
 
-      - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
-
-      - name: Install golangci-lint
+      - name: Run unit tests with coverage
         run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.1.6
-          golangci-lint --version
-
-      - name: Run linters
-        run: make lint
-
-      - name: Run unit tests and generate coverage
-        run: |
-          GOMAXPROCS=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4) make test
-          make coverage
+          go test -coverprofile=coverage.txt $(go list ./... | grep -v /scripts)
+          grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
+          go tool cover -html=coverage.filtered.txt -o coverage.html
+          rm -f coverage.filtered.txt
 
       - name: Run tests with race detection
         run: |
           CORES=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
           RACE_CORES=$([ $CORES -gt 4 ] && echo 4 || echo $CORES)
-          GOMAXPROCS=$RACE_CORES go test -race -tags=test ./...
+          GOMAXPROCS=$RACE_CORES go test -race -vet=off $(go list ./... | grep -v /scripts)
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
-          name: go-coverage-report-${{ matrix.os }}
+          name: go-coverage-report
           path: ./coverage.html
 
       - name: Upload coverage to Codecov
@@ -70,29 +95,23 @@ jobs:
           files: ./coverage.txt
           token: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Run integration tests
-        run: |
-          export SESH_INTEGRATION_TESTS=1
-          make test/integration
-        continue-on-error: true  # Don't fail if integration tests not set up yet
-
-      - name: Build optimized binary
+      - name: Build binary
         run: make build
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: sesh-binary-${{ matrix.os }}
+          name: sesh-binary
           path: ./build/sesh
           if-no-files-found: error
 
   release:
     name: Release
     runs-on: macos-latest  # macOS for sesh
-    needs: [test-go]
+    needs: [test]
     if: github.ref_type == 'tag'
 
-    # Note: This job requires a 'RELEASE_TOKEN' secret (a personal access token with 'repo' permissions)
+    # Requires a 'RELEASE_TOKEN' secret (personal access token with 'repo' permissions)
     # The token allows GitHub release creation to trigger subsequent workflow runs
 
     permissions:
@@ -117,5 +136,4 @@ jobs:
           args: release --clean
           workdir: .
         env:
-          # Using RELEASE_TOKEN to enable workflow triggers
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}

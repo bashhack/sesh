@@ -11,6 +11,7 @@ package keyformat
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -57,10 +58,8 @@ func Parse(key, namespace string) ([]string, error) {
 		return nil, fmt.Errorf("keyformat: key %q has no segments after namespace", key)
 	}
 	segments := strings.Split(remainder, "/")
-	for _, seg := range segments {
-		if seg == "" {
-			return nil, fmt.Errorf("keyformat: key %q contains empty segment", key)
-		}
+	if slices.Contains(segments, "") {
+		return nil, fmt.Errorf("keyformat: key %q contains empty segment", key)
 	}
 	return segments, nil
 }
