@@ -560,10 +560,11 @@ func TestConcurrentQRDecoding(t *testing.T) {
 		t.Fatalf("Failed to decode PNG: %v", err)
 	}
 
+	const goroutines = 100
 	var wg sync.WaitGroup
-	errors := make(chan error, 10)
+	errors := make(chan error, goroutines)
 
-	for range 10 {
+	for range goroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

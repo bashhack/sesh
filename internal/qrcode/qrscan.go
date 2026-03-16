@@ -3,7 +3,6 @@ package qrcode
 import (
 	"fmt"
 	"image"
-	"image/draw"
 	"image/png"
 	"net/url"
 	"os"
@@ -59,22 +58,9 @@ func DecodeQRCodeFromFile(filename string) (string, error) {
 	return DecodeQRCodeFromImage(img)
 }
 
-// toGray converts any image to *image.Gray for reliable QR decoding.
-// Some image types (e.g. barcode.scaledBarcode) produce luminance values
-// that gozxing's binarizer cannot threshold correctly at small sizes.
-func toGray(img image.Image) *image.Gray {
-	if g, ok := img.(*image.Gray); ok {
-		return g
-	}
-	bounds := img.Bounds()
-	gray := image.NewGray(bounds)
-	draw.Draw(gray, bounds, img, bounds.Min, draw.Src)
-	return gray
-}
-
 // DecodeQRCodeFromImage extracts TOTP secret from an image containing a QR code
 func DecodeQRCodeFromImage(img image.Image) (string, error) {
-	bmp, err := gozxing.NewBinaryBitmapFromImage(toGray(img))
+	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
 	if err != nil {
 		return "", fmt.Errorf("failed to process image for QR reading: %w", err)
 	}
