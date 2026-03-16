@@ -162,6 +162,7 @@ The extensible design maintains security through:
 ### Interface Boundaries
 ```go
 type ServiceProvider interface {
+    // ... (security-relevant methods shown)
     ValidateRequest() error                        // Early validation
     GetCredentials() (Credentials, error)          // Type-safe credential generation
     GetClipboardValue() (Credentials, error)       // Clipboard-optimized output
