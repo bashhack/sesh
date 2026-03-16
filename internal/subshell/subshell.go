@@ -2,7 +2,6 @@ package subshell
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,7 +30,7 @@ type ShellConfig struct {
 	Cleanup     func() // Removes temp files created during shell setup; safe to call even if nil
 }
 
-func GetShellConfig(config Config, stdout, stderr io.Writer) (*ShellConfig, error) {
+func GetShellConfig(config Config) (*ShellConfig, error) {
 	if config.ShellCustomizer == nil {
 		return nil, fmt.Errorf("shell customizer is required")
 	}

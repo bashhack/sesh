@@ -26,8 +26,8 @@ func TestAWSShellCustomizer_GetZshInitScript(t *testing.T) {
 	}
 
 	// Verify the script contains expected AWS-specific content
+	// Note: SESH_ACTIVE and SESH_SERVICE are set by subshell.GetShellConfig, not the init scripts
 	expectedContent := []string{
-		"SESH_SERVICE=aws",
 		"(sesh:aws)",
 		"sesh_help()",
 		"aws sts get-caller-identity",
@@ -44,14 +44,11 @@ func TestAWSShellCustomizer_GetBashInitScript(t *testing.T) {
 	customizer := &AWSShellCustomizer{}
 	script := customizer.GetBashInitScript()
 
-	// Verify it returns the BashPrompt constant
 	if script != BashPrompt {
 		t.Errorf("GetBashInitScript() = %q, want %q", script, BashPrompt)
 	}
 
-	// Verify the script contains expected AWS-specific content
 	expectedContent := []string{
-		"SESH_SERVICE=aws",
 		"(sesh:aws)",
 		"sesh_help()",
 		"aws sts get-caller-identity",
@@ -68,14 +65,11 @@ func TestAWSShellCustomizer_GetFallbackInitScript(t *testing.T) {
 	customizer := &AWSShellCustomizer{}
 	script := customizer.GetFallbackInitScript()
 
-	// Verify it returns the FallbackPrompt constant
 	if script != FallbackPrompt {
 		t.Errorf("GetFallbackInitScript() = %q, want %q", script, FallbackPrompt)
 	}
 
-	// Verify the fallback now includes the same functions as bash/zsh
 	expectedContent := []string{
-		"SESH_SERVICE=aws",
 		"sesh_status()",
 		"sesh_help()",
 		"verify_aws()",
