@@ -1,4 +1,3 @@
-
 // mock-aws-cli.go - Simulates AWS CLI for testing sesh without real AWS setup
 //
 // Usage:
@@ -187,7 +186,7 @@ func listMFADevices() {
 	var username string
 	var query string
 	var outputFormat string = "json" // default
-	
+
 	for i, arg := range os.Args {
 		if arg == "--user-name" && i+1 < len(os.Args) {
 			username = os.Args[i+1]
@@ -268,7 +267,7 @@ func getSessionToken() {
 
 	// Generate mock session credentials
 	expiration := time.Now().Add(12 * time.Hour).UTC().Format(time.RFC3339)
-	
+
 	creds := SessionCredentials{
 		Credentials: Credentials{
 			AccessKeyId:     "ASIAMOCKTEMPORARY" + strings.ToUpper(tokenCode[:3]),

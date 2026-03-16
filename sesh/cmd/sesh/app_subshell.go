@@ -3,10 +3,11 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/bashhack/sesh/internal/provider"
-	"github.com/bashhack/sesh/internal/subshell"
 	"os"
 	"os/exec"
+
+	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/subshell"
 )
 
 // LaunchSubshell launches a new shell with credentials loaded

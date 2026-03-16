@@ -590,7 +590,7 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 func TestProvider_GetCredentials(t *testing.T) {
 	tests := map[string]struct {
 		profile       string
-		now func() time.Time
+		now           func() time.Time
 		setupKeychain func(*keychainMocks.MockProvider)
 		setupTOTP     func(*totpMocks.MockProvider)
 		setupAWS      func(*awsMocks.MockProvider)

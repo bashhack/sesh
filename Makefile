@@ -12,6 +12,9 @@ LDFLAGS := -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main
 
 PREFIX ?= /usr/local
 
+# Package list excluding scripts/ (standalone utilities, not part of the module)
+PACKAGES = $(shell go list ./... | grep -v /scripts)
+
 # ============================================================================= #
 # HELPERS
 # ============================================================================= #
@@ -49,37 +52,121 @@ run/setup:
 # QUALITY CONTROL
 # ============================================================================= #
 
+## pre-commit: Run pre-commit checks on all files
+.PHONY: pre-commit
+pre-commit: format/check
+	@echo 'Checking compilation...'
+	@go build $(PACKAGES)
+	@echo 'Running go vet...'
+	@go vet $(PACKAGES)
+	@$(MAKE) lint/golangci
+	@echo '✅ All pre-commit checks passed!'
+
+## dev/setup/hooks: Install git hooks for pre-commit checks
+.PHONY: dev/setup/hooks
+dev/setup/hooks:
+	@echo 'Installing git hooks...'
+	@if [ ! -f .githooks/pre-commit ]; then \
+		echo '❌ Error: .githooks/pre-commit not found'; \
+		exit 1; \
+	fi
+	@mkdir -p .git/hooks
+	@cp .githooks/pre-commit .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo '✅ Git hooks installed'
+	@echo 'Pre-commit hook will now check formatting and run go vet before each commit'
+
+## format: Format all Go code with goimports
+.PHONY: format
+format:
+	@echo 'Formatting Go code...'
+	@if ! command -v goimports >/dev/null 2>&1; then \
+		echo "Installing goimports..."; \
+		go install golang.org/x/tools/cmd/goimports@latest; \
+	fi
+	@goimports -w -local github.com/bashhack/sesh $$(find . -name '*.go' -not -path "./vendor/*")
+	@echo '✅ Code formatted'
+
+## format/check: Check if code is properly formatted (non-destructive)
+.PHONY: format/check
+format/check:
+	@echo 'Checking Go code formatting...'
+	@if ! command -v goimports >/dev/null 2>&1; then \
+		echo "Installing goimports..."; \
+		go install golang.org/x/tools/cmd/goimports@latest; \
+	fi
+	@if [ -n "$$(goimports -l -local github.com/bashhack/sesh $$(find . -name '*.go' -not -path './vendor/*'))" ]; then \
+		echo "❌ The following files need formatting:"; \
+		goimports -l -local github.com/bashhack/sesh $$(find . -name '*.go' -not -path './vendor/*'); \
+		echo "Run 'make format' to fix"; \
+		exit 1; \
+	fi
+	@echo '✅ All files properly formatted'
+
+## lint: Run linters
+.PHONY: lint
+lint:
+	@echo 'Formatting code...'
+	@if ! command -v goimports >/dev/null 2>&1; then \
+		echo "Installing goimports..."; \
+		go install golang.org/x/tools/cmd/goimports@latest; \
+	fi
+	@goimports -w -local github.com/bashhack/sesh $$(find . -name '*.go' -not -path "./vendor/*")
+	@echo 'Vetting code...'
+	go vet $(PACKAGES)
+	$(MAKE) check-staticcheck
+	staticcheck $(PACKAGES)
+	@echo '✅ Linting complete'
+
+## lint/golangci: Run golangci-lint (comprehensive linting tool)
+.PHONY: lint/golangci
+lint/golangci:
+	@echo 'Running golangci-lint...'
+	@REQUIRED_VERSION="2.6.2"; \
+	INSTALL_NEEDED=false; \
+	if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "golangci-lint not found"; \
+		INSTALL_NEEDED=true; \
+	else \
+		CURRENT_VERSION=$$(golangci-lint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1); \
+		if [ "$$CURRENT_VERSION" != "$$REQUIRED_VERSION" ]; then \
+			echo "golangci-lint version $$CURRENT_VERSION found, but v$$REQUIRED_VERSION required"; \
+			INSTALL_NEEDED=true; \
+		fi; \
+	fi; \
+	if [ "$$INSTALL_NEEDED" = "true" ]; then \
+		echo "Installing golangci-lint v$$REQUIRED_VERSION..."; \
+		curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $$(go env GOPATH)/bin v$$REQUIRED_VERSION; \
+	fi
+	@golangci-lint run ./...
+	@echo '✅ golangci-lint complete'
+
+## lint/fieldalignment: Show fieldalignment suggestions safely (runs in /tmp, non-destructive)
+.PHONY: lint/fieldalignment
+lint/fieldalignment:
+	@echo 'Checking fieldalignment (safe mode - no files modified)...'
+	@if ! command -v fieldalignment >/dev/null 2>&1; then \
+		echo "Installing fieldalignment..."; \
+		go install golang.org/x/tools/go/analysis/passes/fieldalignment/cmd/fieldalignment@latest; \
+	fi
+	@./scripts/fieldalignment_check.sh
+
 ## check-staticcheck: Check if staticcheck is installed
 .PHONY: check-staticcheck
 check-staticcheck:
-	@if command -v staticcheck > /dev/null; then \
-		echo "✅ staticcheck is installed"; \
-	else \
-		echo "⚠️ staticcheck not found, static analysis will be skipped"; \
-		exit 1; \
+	@if ! command -v staticcheck >/dev/null 2>&1; then \
+		echo "Error: 'staticcheck' is not installed. Installing..."; \
+		go install honnef.co/go/tools/cmd/staticcheck@latest; \
 	fi
 
-## run-staticcheck: Run staticcheck if it exists
-.PHONY: run-staticcheck
-run-staticcheck: check-staticcheck
-	@echo 'Running staticcheck...'
-	@staticcheck $$(go list ./... | grep -v /scripts) || echo "Note: staticcheck found issues (exit code: $$?)"
-
-## check-golangci-lint: Check if golangci-lint is installed
-.PHONY: check-golangci-lint
-check-golangci-lint:
-	@if command -v golangci-lint > /dev/null; then \
-		echo "✅ golangci-lint is installed"; \
-	else \
-		echo "⚠️ golangci-lint not found, external linting will be skipped"; \
-		exit 1; \
+## security-scan: Run security vulnerability scanner
+.PHONY: security-scan
+security-scan:
+	@if ! command -v gosec >/dev/null 2>&1; then \
+		echo "Error: 'gosec' is not installed. Installing..."; \
+		go install github.com/securego/gosec/v2/cmd/gosec@latest; \
 	fi
-
-## run-golangci-lint: Run golangci-lint if it exists
-.PHONY: run-golangci-lint
-run-golangci-lint: check-golangci-lint
-	@echo 'Running golangci-lint...'
-	@golangci-lint run $$(go list ./... | grep -v /scripts) || echo "Note: golangci-lint found issues (exit code: $$?)"
+	gosec ./...
 
 ## audit: Tidy dependencies and format, vet and test all code
 .PHONY: audit
@@ -88,13 +175,19 @@ audit:
 	go mod tidy
 	go mod verify
 	@echo 'Formatting code...'
-	go fmt $$(go list ./... | grep -v /scripts)
-	@echo 'Running lint...'
-	@$(MAKE) lint
-	@echo 'Running security scan...'
-	@$(MAKE) security-scan
+	@if ! command -v goimports >/dev/null 2>&1; then \
+		echo "Installing goimports..."; \
+		go install golang.org/x/tools/cmd/goimports@latest; \
+	fi
+	@goimports -w -local github.com/bashhack/sesh $$(find . -name '*.go' -not -path "./vendor/*")
+	@echo 'Vetting code...'
+	go vet $(PACKAGES)
+	$(MAKE) check-staticcheck
+	staticcheck $(PACKAGES)
+	$(MAKE) lint/golangci
 	@echo 'Running tests...'
-	go test -race -vet=off $$(go list ./... | grep -v /scripts)
+	go test -race -vet=off $(PACKAGES)
+	@echo '✅ Audit complete'
 
 ## vendor: Tidy and vendor dependencies
 .PHONY: vendor
@@ -108,36 +201,26 @@ vendor:
 ## test: Run test suite
 .PHONY: test
 test:
-	@echo '🧪 Running unit tests...'
-	@go test -v $$(go list ./... | grep -v /scripts)
-	@echo ''
-	@echo '📊 Generating test coverage...'
-	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts)
-	@echo 'Filtering coverage report...'
-	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
-	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" || true
-	@rm -f coverage.filtered.txt
-	@echo ''
-	@echo '✅ All tests completed successfully.'
+	@echo 'Running tests...'
+	@go test -v $(PACKAGES)
 
 ## test/short: Run only fast tests, skipping slow or external tests
 .PHONY: test/short
 test/short:
 	@echo 'Running short tests only...'
-	@go test -short $$(go list ./... | grep -v /scripts)
+	@go test -short $(PACKAGES)
 
 ## test/verbose: Run tests with verbose output
 .PHONY: test/verbose
 test/verbose:
 	@echo 'Running tests with verbose output...'
-	@go test -v $$(go list ./... | grep -v /scripts)
-
+	@go test -v $(PACKAGES)
 
 ## coverage: Run test suite with coverage
 .PHONY: coverage
 coverage:
 	@echo 'Running tests with coverage...'
-	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts) | grep -v "no test files" | grep -v "coverage: 0.0%" || true
+	@go test -coverprofile=coverage.txt $(PACKAGES) | grep -v "no test files" | grep -v "coverage: 0.0%" || true
 	@echo 'Filtering out testutil, mock files, scripts, interface-only files, and main.go...'
 	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
 	@go tool cover -html=coverage.filtered.txt -o coverage.html
@@ -148,44 +231,10 @@ coverage:
 .PHONY: coverage/func
 coverage/func:
 	@echo 'Generating function-level coverage report...'
-	@go test -coverprofile=coverage.txt $$(go list ./... | grep -v /scripts) 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
-	@echo 'Filtering out testutil, mock files, scripts, interface-only files, and main.go...'
+	@go test -coverprofile=coverage.txt $(PACKAGES) 2>&1 | grep -v "no test files" | grep -v "coverage: 0.0%" || true
 	@grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
 	@go tool cover -func=coverage.filtered.txt | grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" || true
 	@rm -f coverage.filtered.txt
-
-
-
-
-## lint: Run linters
-.PHONY: lint
-lint:
-	@echo 'Linting...'
-	@echo 'Running go vet...'
-	@go vet $$(go list ./... | grep -v /scripts)
-	@$(MAKE) run-golangci-lint || echo "Skipping external linting"
-	@$(MAKE) run-staticcheck || echo "Skipping staticcheck"
-
-## security-scan: Run security vulnerability scanner
-.PHONY: security-scan
-security-scan:
-	@echo "🔒 Running security scan..."
-	@if ! command -v gosec > /dev/null; then \
-		echo "Installing gosec..."; \
-		go install github.com/securego/gosec/v2/cmd/gosec@latest; \
-	fi
-	@echo "Scanning for security vulnerabilities..."
-	@gosec -fmt=json -out=security-report.json ./... 2>/dev/null || true
-	@if [ -f security-report.json ]; then \
-		issues=$$(cat security-report.json | grep -o '"Issues":[^,]*' | cut -d':' -f2); \
-		if [ "$$issues" = "null" ] || [ "$$issues" = "[]" ]; then \
-			echo "✅ No security issues found!"; \
-		else \
-			echo "⚠️  Security issues found. Check security-report.json for details."; \
-			gosec -fmt=text ./... 2>/dev/null | grep -A 5 "Severity:" || true; \
-		fi; \
-	fi
-	@echo "Security scan complete."
 
 # ============================================================================= #
 # BUILD
