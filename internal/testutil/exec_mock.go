@@ -127,11 +127,17 @@ func CaptureStdout(fn func()) string {
 
 	fn()
 
-	w.Close()
+	if err := w.Close(); err != nil {
+		panic("CaptureStdout: w.Close failed: " + err.Error())
+	}
 
 	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, r)
-	r.Close()
+	if _, err := io.Copy(&buf, r); err != nil {
+		panic("CaptureStdout: io.Copy failed: " + err.Error())
+	}
+	if err := r.Close(); err != nil {
+		panic("CaptureStdout: r.Close failed: " + err.Error())
+	}
 
 	return buf.String()
 }
@@ -157,11 +163,17 @@ func CaptureStderr(fn func()) string {
 
 	fn()
 
-	w.Close()
+	if err := w.Close(); err != nil {
+		panic("CaptureStderr: w.Close failed: " + err.Error())
+	}
 
 	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, r)
-	r.Close()
+	if _, err := io.Copy(&buf, r); err != nil {
+		panic("CaptureStderr: io.Copy failed: " + err.Error())
+	}
+	if err := r.Close(); err != nil {
+		panic("CaptureStderr: r.Close failed: " + err.Error())
+	}
 
 	return buf.String()
 }

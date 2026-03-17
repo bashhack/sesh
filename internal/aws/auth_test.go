@@ -38,7 +38,10 @@ func TestGetSessionToken_Success(t *testing.T) {
 		},
 	}
 
-	mockRespJSON, _ := json.Marshal(mockResp)
+	mockRespJSON, err := json.Marshal(mockResp)
+	if err != nil {
+		t.Fatalf("Failed to marshal mock response: %v", err)
+	}
 
 	execCommand = MockExecCommand(string(mockRespJSON), nil)
 
@@ -109,7 +112,10 @@ func TestGetSessionToken_EmptyProfile(t *testing.T) {
 			},
 		}
 
-		mockRespJSON, _ := json.Marshal(mockResp)
+		mockRespJSON, err := json.Marshal(mockResp)
+		if err != nil {
+			t.Fatalf("test setup: failed to marshal mock response: %v", err)
+		}
 		cmd := exec.Command("echo", string(mockRespJSON))
 		return cmd
 	}
@@ -159,7 +165,10 @@ func TestGetFirstMFADevice_Success(t *testing.T) {
 		},
 	}
 
-	mockRespJSON, _ := json.Marshal(mockResp)
+	mockRespJSON, err := json.Marshal(mockResp)
+	if err != nil {
+		t.Fatalf("Failed to marshal mock response: %v", err)
+	}
 
 	execCommand = func(_ string, _ ...string) *exec.Cmd {
 		cmd := exec.Command("echo", string(mockRespJSON))
@@ -185,14 +194,17 @@ func TestGetFirstMFADevice_NoDevices(t *testing.T) {
 		MFADevices: []MFADevice{},
 	}
 
-	mockRespJSON, _ := json.Marshal(mockResp)
+	mockRespJSON, err := json.Marshal(mockResp)
+	if err != nil {
+		t.Fatalf("Failed to marshal mock response: %v", err)
+	}
 
 	execCommand = func(_ string, _ ...string) *exec.Cmd {
 		cmd := exec.Command("echo", string(mockRespJSON))
 		return cmd
 	}
 
-	_, err := GetFirstMFADevice("test-profile")
+	_, err = GetFirstMFADevice("test-profile")
 
 	if err == nil {
 		t.Error("Expected 'no MFA devices found' error, got nil")
@@ -240,8 +252,11 @@ func TestGetFirstMFADevice_Integration(t *testing.T) {
 		t.Skip("Skipping AWS integration test in CI/automated environment")
 	}
 
-	randStr, _ := testutil.RandomString(8)
-	_, err := GetFirstMFADevice("nonexistent-profile-" + randStr)
+	randStr, err := testutil.RandomString(8)
+	if err != nil {
+		t.Fatalf("Failed to generate random string: %v", err)
+	}
+	_, err = GetFirstMFADevice("nonexistent-profile-" + randStr)
 	if err == nil {
 		t.Error("Expected error for nonexistent profile, got nil")
 	}

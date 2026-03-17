@@ -82,9 +82,13 @@ func TestGetShellConfig(t *testing.T) {
 	originalShell, shellWasSet := os.LookupEnv("SHELL")
 	defer func() {
 		if shellWasSet {
-			os.Setenv("SHELL", originalShell)
+			if err := os.Setenv("SHELL", originalShell); err != nil {
+				t.Errorf("failed to restore SHELL env: %v", err)
+			}
 		} else {
-			os.Unsetenv("SHELL")
+			if err := os.Unsetenv("SHELL"); err != nil {
+				t.Errorf("failed to unset SHELL env: %v", err)
+			}
 		}
 	}()
 
@@ -229,7 +233,7 @@ func TestGetShellConfig(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			os.Setenv("SHELL", tc.shell)
+			t.Setenv("SHELL", tc.shell)
 
 			cfg, err := GetShellConfig(tc.config)
 
@@ -290,7 +294,11 @@ func TestSetupZshShell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupZshShell() error = %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			t.Errorf("failed to clean up tmpDir: %v", err)
+		}
+	}()
 
 	// Check that ZDOTDIR was added
 	zdotdirFound := false
@@ -324,7 +332,9 @@ func TestSetupZshShell(t *testing.T) {
 	}
 
 	// Clean up
-	os.RemoveAll(zdotdir)
+	if err := os.RemoveAll(zdotdir); err != nil {
+		t.Errorf("failed to clean up zdotdir: %v", err)
+	}
 }
 
 func TestSetupBashShell(t *testing.T) {
@@ -341,7 +351,11 @@ func TestSetupBashShell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupBashShell() error = %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() {
+		if err := os.Remove(tmpFile.Name()); err != nil {
+			t.Errorf("failed to clean up temp file: %v", err)
+		}
+	}()
 
 	// Check that the file exists
 	if _, err := os.Stat(tmpFile.Name()); os.IsNotExist(err) {
@@ -375,7 +389,11 @@ func TestSetupFallbackShell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupFallbackShell() error = %v", err)
 	}
-	defer os.Remove(tmpName)
+	defer func() {
+		if err := os.Remove(tmpName); err != nil {
+			t.Errorf("failed to clean up temp file: %v", err)
+		}
+	}()
 
 	// Check that PS1 and ENV were added
 	ps1Found := false
@@ -432,7 +450,11 @@ func TestSetupFallbackShellCustomPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetupFallbackShell() error = %v", err)
 	}
-	defer os.Remove(tmpName)
+	defer func() {
+		if err := os.Remove(tmpName); err != nil {
+			t.Errorf("failed to clean up temp file: %v", err)
+		}
+	}()
 
 	// Assert ENV is set and matches the returned path
 	var envFile string

@@ -233,7 +233,13 @@ func TestDefaultProviderDeleteEntry(t *testing.T) {
 		if command == "whoami" {
 			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
 		} else if command == "security" && len(args) > 0 && args[0] == "delete-generic-password" {
-			// Don't set MOCK_ERROR for successful deletion
+			// Allow deletion to succeed
+		} else if command == "security" && len(args) > 0 && args[0] == "add-generic-password" {
+			// Allow metadata writes to succeed
+		} else if command == "security" && len(args) > 0 && args[0] == "find-generic-password" {
+			// Metadata reads — return not found (no existing metadata)
+			cmd.Env = append(cmd.Env, "MOCK_EXIT_CODE=44")
+			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 		} else {
 			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 		}

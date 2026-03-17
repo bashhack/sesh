@@ -63,10 +63,14 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	cmd.Stderr = os.Stderr
 	cmd.Env = shellConfig.Env
 
-	fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName)
+	if _, err := fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName); err != nil {
+		return fmt.Errorf("failed to write to stdout: %w", err)
+	}
 	err = cmd.Run()
 
-	fmt.Fprintf(a.Stdout, "Exited secure shell\n")
+	if _, printErr := fmt.Fprintf(a.Stdout, "Exited secure shell\n"); printErr != nil {
+		return fmt.Errorf("failed to write to stdout: %w", printErr)
+	}
 
 	if err != nil {
 		// ExitError is the standard error type when a shell exits, whether by

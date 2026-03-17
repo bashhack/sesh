@@ -843,7 +843,11 @@ func TestHelperProcess(t *testing.T) {
 		// Check if this is interactive mode
 		if len(cmdArgs) > 0 && cmdArgs[0] == "-i" {
 			// Read stdin to get the actual command
-			stdin, _ := io.ReadAll(os.Stdin)
+			stdin, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to read stdin: %v\n", err)
+				os.Exit(1)
+			}
 			stdinStr := string(stdin)
 
 			// Parse the add-generic-password command from stdin
@@ -861,7 +865,9 @@ func TestHelperProcess(t *testing.T) {
 			if os.Getenv("MOCK_ERROR") == "1" {
 				exitCode := 1
 				if ec := os.Getenv("MOCK_EXIT_CODE"); ec != "" {
-					fmt.Sscanf(ec, "%d", &exitCode)
+					if _, err := fmt.Sscanf(ec, "%d", &exitCode); err != nil {
+						fmt.Fprintf(os.Stderr, "failed to parse MOCK_EXIT_CODE: %v\n", err)
+					}
 				}
 				os.Exit(exitCode)
 			}

@@ -155,8 +155,14 @@ func TestGenerateConsecutiveCodesForTime(t *testing.T) {
 				return
 			}
 
-			wantCurrent, _ := GenerateForTime(tc.secret, tc.baseTime)
-			wantNext, _ := GenerateForTime(tc.secret, tc.baseTime.Add(30*time.Second))
+			wantCurrent, err := GenerateForTime(tc.secret, tc.baseTime)
+			if err != nil {
+				t.Fatalf("GenerateForTime (current) failed: %v", err)
+			}
+			wantNext, err := GenerateForTime(tc.secret, tc.baseTime.Add(30*time.Second))
+			if err != nil {
+				t.Fatalf("GenerateForTime (next) failed: %v", err)
+			}
 
 			if current != wantCurrent {
 				t.Errorf("GenerateConsecutiveCodesForTime() current = %q, want %q", current, wantCurrent)
@@ -626,8 +632,14 @@ func TestGenerateConsecutiveCodesForTimeBytes(t *testing.T) {
 			}
 
 			if !tc.wantErr {
-				wantCurrent, _ := GenerateForTimeBytes(tc.secret, tc.baseTime)
-				wantNext, _ := GenerateForTimeBytes(tc.secret, tc.baseTime.Add(30*time.Second))
+				wantCurrent, err := GenerateForTimeBytes(tc.secret, tc.baseTime)
+				if err != nil {
+					t.Fatalf("GenerateForTimeBytes (current) failed: %v", err)
+				}
+				wantNext, err := GenerateForTimeBytes(tc.secret, tc.baseTime.Add(30*time.Second))
+				if err != nil {
+					t.Fatalf("GenerateForTimeBytes (next) failed: %v", err)
+				}
 
 				if current != wantCurrent {
 					t.Errorf("current = %q, want %q", current, wantCurrent)

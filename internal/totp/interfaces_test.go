@@ -63,8 +63,14 @@ func TestDefaultProviderGenerateConsecutiveCodesForTime(t *testing.T) {
 		return
 	}
 
-	wantCurrent, _ := provider.GenerateForTime(testSecret, baseTime)
-	wantNext, _ := provider.GenerateForTime(testSecret, baseTime.Add(30*time.Second))
+	wantCurrent, err := provider.GenerateForTime(testSecret, baseTime)
+	if err != nil {
+		t.Fatalf("GenerateForTime (current) failed: %v", err)
+	}
+	wantNext, err := provider.GenerateForTime(testSecret, baseTime.Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("GenerateForTime (next) failed: %v", err)
+	}
 
 	if current != wantCurrent {
 		t.Errorf("current = %q, want %q", current, wantCurrent)
@@ -186,8 +192,14 @@ func TestDefaultProviderGenerateConsecutiveCodesForTimeBytes(t *testing.T) {
 		return
 	}
 
-	wantCurrent, _ := provider.GenerateForTimeBytes(testSecret, baseTime)
-	wantNext, _ := provider.GenerateForTimeBytes(testSecret, baseTime.Add(30*time.Second))
+	wantCurrent, err := provider.GenerateForTimeBytes(testSecret, baseTime)
+	if err != nil {
+		t.Fatalf("GenerateForTimeBytes (current) failed: %v", err)
+	}
+	wantNext, err := provider.GenerateForTimeBytes(testSecret, baseTime.Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("GenerateForTimeBytes (next) failed: %v", err)
+	}
 
 	if current != wantCurrent {
 		t.Errorf("current = %q, want %q", current, wantCurrent)

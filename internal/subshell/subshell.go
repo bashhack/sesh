@@ -68,7 +68,11 @@ func GetShellConfig(config Config) (*ShellConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to set up zsh shell: %w", err)
 		}
-		cleanup = func() { os.RemoveAll(tmpDir) }
+		cleanup = func() {
+			if err := os.RemoveAll(tmpDir); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to clean up temp dir %s: %v\n", tmpDir, err)
+			}
+		}
 	case shell == "/bin/bash" || filepath.Base(shell) == "bash":
 		tmpFile, err := SetupBashShell(config)
 		if err != nil {
@@ -76,7 +80,11 @@ func GetShellConfig(config Config) (*ShellConfig, error) {
 		}
 		shellArgs = []string{"--rcfile", tmpFile.Name()}
 		name := tmpFile.Name()
-		cleanup = func() { os.Remove(name) }
+		cleanup = func() {
+			if err := os.Remove(name); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to clean up temp file %s: %v\n", name, err)
+			}
+		}
 	default:
 		var tmpName string
 		var err error
@@ -84,7 +92,11 @@ func GetShellConfig(config Config) (*ShellConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to set up fallback shell: %w", err)
 		}
-		cleanup = func() { os.Remove(tmpName) }
+		cleanup = func() {
+			if err := os.Remove(tmpName); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to clean up temp file %s: %v\n", tmpName, err)
+			}
+		}
 	}
 
 	return &ShellConfig{
@@ -112,13 +124,17 @@ func SetupZshShell(config Config, env []string) ([]string, string, error) {
 	return env, tmpDir, nil
 }
 
-func SetupBashShell(config Config) (*os.File, error) {
+func SetupBashShell(config Config) (f *os.File, retErr error) {
 	// Create a temporary rcfile for bash
 	tmpFile, err := os.CreateTemp("", "sesh_bashrc")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp bashrc: %w", err)
 	}
-	defer tmpFile.Close()
+	defer func() {
+		if err := tmpFile.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("failed to close temp bashrc: %w", err)
+		}
+	}()
 
 	if _, writeErr := tmpFile.WriteString(config.ShellCustomizer.GetBashInitScript()); writeErr != nil {
 		return nil, fmt.Errorf("failed to write temp bashrc: %w", writeErr)
@@ -127,12 +143,16 @@ func SetupBashShell(config Config) (*os.File, error) {
 	return tmpFile, nil
 }
 
-func SetupFallbackShell(config Config, env []string) ([]string, string, error) {
+func SetupFallbackShell(config Config, env []string) (_ []string, _ string, retErr error) {
 	tmpFile, err := os.CreateTemp("", "sesh_shellrc")
 	if err != nil {
 		return []string{}, "", fmt.Errorf("failed to create temp shellrc: %w", err)
 	}
-	defer tmpFile.Close()
+	defer func() {
+		if err := tmpFile.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("failed to close temp shellrc: %w", err)
+		}
+	}()
 
 	if _, writeErr := tmpFile.WriteString(config.ShellCustomizer.GetFallbackInitScript()); writeErr != nil {
 		return []string{}, "", fmt.Errorf("failed to write temp shellrc: %w", writeErr)

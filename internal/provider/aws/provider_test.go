@@ -78,9 +78,7 @@ func TestProvider_SetupFlags(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			oldProfile := os.Getenv("AWS_PROFILE")
-			os.Setenv("AWS_PROFILE", tc.envProfile)
-			defer os.Setenv("AWS_PROFILE", oldProfile)
+			t.Setenv("AWS_PROFILE", tc.envProfile)
 
 			p := &Provider{}
 
@@ -1219,7 +1217,11 @@ region = ap-southeast-1
 			if err != nil {
 				t.Fatalf("Failed to create temp dir: %v", err)
 			}
-			defer os.RemoveAll(tmpDir)
+			defer func() {
+				if err := os.RemoveAll(tmpDir); err != nil {
+					t.Errorf("failed to clean up tmpDir: %v", err)
+				}
+			}()
 
 			awsDir := filepath.Join(tmpDir, ".aws")
 			if err := os.MkdirAll(awsDir, 0700); err != nil {
@@ -1231,9 +1233,7 @@ region = ap-southeast-1
 				t.Fatalf("Failed to write config file: %v", err)
 			}
 
-			oldHome := os.Getenv("HOME")
-			os.Setenv("HOME", tmpDir)
-			defer os.Setenv("HOME", oldHome)
+			t.Setenv("HOME", tmpDir)
 
 			p := &Provider{}
 
@@ -1265,11 +1265,13 @@ region = ap-southeast-1
 		if err != nil {
 			t.Fatalf("Failed to create temp dir: %v", err)
 		}
-		defer os.RemoveAll(tmpDir)
+		defer func() {
+			if err := os.RemoveAll(tmpDir); err != nil {
+				t.Errorf("failed to clean up tmpDir: %v", err)
+			}
+		}()
 
-		oldHome := os.Getenv("HOME")
-		os.Setenv("HOME", tmpDir)
-		defer os.Setenv("HOME", oldHome)
+		t.Setenv("HOME", tmpDir)
 
 		p := &Provider{}
 

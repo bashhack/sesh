@@ -30,18 +30,26 @@ func copyOSX(text string) error {
 	}
 
 	if err := cmd.Start(); err != nil {
-		pipe.Close()
+		if closeErr := pipe.Close(); closeErr != nil {
+			return fmt.Errorf("start failed: %w (and pipe close failed: %v)", err, closeErr)
+		}
 		return err
 	}
 
 	if _, err := pipe.Write([]byte(text)); err != nil {
-		pipe.Close()
-		cmd.Wait()
+		if closeErr := pipe.Close(); closeErr != nil {
+			return fmt.Errorf("write failed: %w (and pipe close failed: %v)", err, closeErr)
+		}
+		if waitErr := cmd.Wait(); waitErr != nil {
+			return fmt.Errorf("write failed: %w (and wait failed: %v)", err, waitErr)
+		}
 		return err
 	}
 
 	if err := pipe.Close(); err != nil {
-		cmd.Wait()
+		if waitErr := cmd.Wait(); waitErr != nil {
+			return fmt.Errorf("pipe close failed: %w (and wait failed: %v)", err, waitErr)
+		}
 		return err
 	}
 

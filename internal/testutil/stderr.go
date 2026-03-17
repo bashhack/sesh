@@ -30,12 +30,16 @@ func RedirectStderr(t *testing.T) func() string {
 	os.Stderr = w
 
 	return func() string {
-		w.Close()
+		if err := w.Close(); err != nil {
+			t.Errorf("RedirectStderr: w.Close failed: %v", err)
+		}
 		var buf bytes.Buffer
 		if _, err := io.Copy(&buf, r); err != nil {
 			t.Errorf("RedirectStderr: io.Copy failed: %v", err)
 		}
-		r.Close()
+		if err := r.Close(); err != nil {
+			t.Errorf("RedirectStderr: r.Close failed: %v", err)
+		}
 		os.Stderr = oldStderr
 		stderrMu.Unlock()
 		return buf.String()

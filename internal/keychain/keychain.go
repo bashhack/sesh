@@ -123,9 +123,11 @@ func SetSecretBytes(account, service string, secret []byte) error {
 		return fmt.Errorf("failed to set secret in keychain: %w", err)
 	}
 
-	// Store in metadata system with simple description
+	// Store in metadata system — required for ListEntries and DeleteEntry to find this entry
 	serviceType := getServicePrefix(service)
-	_ = StoreEntryMetadata(serviceType, service, account, service) // Best effort - metadata is optional
+	if err := StoreEntryMetadata(serviceType, service, account, service); err != nil {
+		return fmt.Errorf("secret stored but metadata write failed (entry won't appear in -list): %w", err)
+	}
 
 	return nil
 }
@@ -223,7 +225,13 @@ func DeleteEntry(account, service string) error {
 		account = strings.TrimSpace(string(out))
 	}
 
-	// Delete from the actual keychain
+	// Remove metadata first — if this fails, nothing has been deleted yet
+	serviceType := getServicePrefix(service)
+	if err := RemoveEntryMetadata(serviceType, service, account); err != nil {
+		return fmt.Errorf("failed to remove entry metadata: %w", err)
+	}
+
+	// Now delete from the actual keychain
 	cmd := execCommand("security", "delete-generic-password",
 		"-a", account,
 		"-s", service,
@@ -232,14 +240,9 @@ func DeleteEntry(account, service string) error {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
-	if err != nil {
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to delete entry from keychain: %w", err)
 	}
-
-	// Also remove from our metadata system
-	serviceType := getServicePrefix(service)
-	_ = RemoveEntryMetadata(serviceType, service, account) // Best effort - metadata cleanup is optional
 
 	return nil
 }

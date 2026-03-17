@@ -1219,7 +1219,7 @@ func TestCaptureQRWithRetry(t *testing.T) {
 			wantScanCalls: 1,
 		},
 		"success on second try": {
-			readerInput:   "\n\n",
+			readerInput:   "\n\n\n",
 			scanResults:   []error{errors.New("scan failed"), nil},
 			scanSecret:    "QR_SECRET",
 			wantSecret:    "QR_SECRET",
@@ -1685,7 +1685,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 		wantErrMsg          string
 	}{
 		"successful setup with QR code": {
-			userInput:           "MyService\ndefault\n2\n", // service name, profile, QR choice
+			userInput:           "MyService\ndefault\n2\n\n", // service name, profile, QR choice, press Enter for capture
 			scanQRError:         nil,
 			scanQRResult:        "JBSWY3DPEHPK3PXP",
 			validateError:       nil,

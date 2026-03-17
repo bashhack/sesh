@@ -1,7 +1,6 @@
 package env
 
 import (
-	"os"
 	"os/exec"
 	"testing"
 )
@@ -18,41 +17,38 @@ func TestGetCurrentUser(t *testing.T) {
 		cmdError  bool
 		want      string
 		wantErr   bool
-		setup     func()
-		teardown  func()
+		setup     func(t *testing.T)
+		teardown  func(t *testing.T)
 	}{
 		"user from env variable": {
 			envUser: "testuser",
 			want:    "testuser",
-			setup: func() {
-				os.Setenv("USER", "testuser")
-			},
-			teardown: func() {
-				os.Unsetenv("USER")
+			setup: func(t *testing.T) {
+				t.Setenv("USER", "testuser")
 			},
 		},
 		"user from whoami command": {
 			envUser:   "",
 			cmdOutput: "cmduser",
 			want:      "cmduser",
-			setup: func() {
-				os.Unsetenv("USER")
+			setup: func(t *testing.T) {
+				t.Setenv("USER", "")
 			},
 		},
 		"user from whoami with trailing newline": {
 			envUser:   "",
 			cmdOutput: "cmduser\n",
 			want:      "cmduser",
-			setup: func() {
-				os.Unsetenv("USER")
+			setup: func(t *testing.T) {
+				t.Setenv("USER", "")
 			},
 		},
 		"error when whoami fails": {
 			envUser:  "",
 			cmdError: true,
 			wantErr:  true,
-			setup: func() {
-				os.Unsetenv("USER")
+			setup: func(t *testing.T) {
+				t.Setenv("USER", "")
 			},
 		},
 	}
@@ -60,10 +56,10 @@ func TestGetCurrentUser(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			if tc.setup != nil {
-				tc.setup()
+				tc.setup(t)
 			}
 			if tc.teardown != nil {
-				defer tc.teardown()
+				defer tc.teardown(t)
 			}
 
 			execCommand = func(name string, args ...string) *exec.Cmd {

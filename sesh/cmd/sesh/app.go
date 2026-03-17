@@ -82,18 +82,24 @@ func NewDefaultApp(versionInfo VersionInfo) *App {
 }
 
 // ShowVersion displays version information
-func (a *App) ShowVersion() {
-	fmt.Fprintf(a.Stdout, "sesh version %s (%s) built on %s\n",
+func (a *App) ShowVersion() error {
+	_, err := fmt.Fprintf(a.Stdout, "sesh version %s (%s) built on %s\n",
 		a.VersionInfo.Version, a.VersionInfo.Commit, a.VersionInfo.Date)
+	return err
 }
 
 // ListProviders lists all available service providers
-func (a *App) ListProviders() {
-	fmt.Fprintln(a.Stdout, "Available service providers:")
+func (a *App) ListProviders() error {
+	if _, err := fmt.Fprintln(a.Stdout, "Available service providers:"); err != nil {
+		return err
+	}
 
 	for _, p := range a.Registry.ListProviders() {
-		fmt.Fprintf(a.Stdout, "  %-10s %s\n", p.Name(), p.Description())
+		if _, err := fmt.Fprintf(a.Stdout, "  %-10s %s\n", p.Name(), p.Description()); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // ListEntries lists all entries for a service
@@ -108,15 +114,21 @@ func (a *App) ListEntries(serviceName string) error {
 		return fmt.Errorf("failed to list entries: %w", err)
 	}
 
-	fmt.Fprintf(a.Stdout, "Entries for %s:\n", serviceName)
+	if _, err := fmt.Fprintf(a.Stdout, "Entries for %s:\n", serviceName); err != nil {
+		return fmt.Errorf("failed to write output: %w", err)
+	}
 	if len(entries) == 0 {
-		fmt.Fprintln(a.Stdout, "  No entries found")
+		if _, err := fmt.Fprintln(a.Stdout, "  No entries found"); err != nil {
+			return fmt.Errorf("failed to write output: %w", err)
+		}
 		return nil
 	}
 
 	for _, entry := range entries {
-		fmt.Fprintf(a.Stdout, "  %-20s %s [ID: %s]\n",
-			entry.Name, entry.Description, entry.ID)
+		if _, err := fmt.Fprintf(a.Stdout, "  %-20s %s [ID: %s]\n",
+			entry.Name, entry.Description, entry.ID); err != nil {
+			return fmt.Errorf("failed to write output: %w", err)
+		}
 	}
 
 	return nil
@@ -133,7 +145,9 @@ func (a *App) DeleteEntry(serviceName, entryID string) error {
 		return fmt.Errorf("failed to delete entry: %w", err)
 	}
 
-	fmt.Fprintf(a.Stdout, "✅ Entry deleted successfully\n")
+	if _, err := fmt.Fprintf(a.Stdout, "✅ Entry deleted successfully\n"); err != nil {
+		return fmt.Errorf("failed to write output: %w", err)
+	}
 	return nil
 }
 
@@ -153,7 +167,9 @@ func (a *App) GenerateCredentials(serviceName string) error {
 		return err
 	}
 
-	fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName)
+	if _, err := fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName); err != nil {
+		return fmt.Errorf("failed to write to stderr: %w", err)
+	}
 	startTime := time.Now()
 
 	creds, err := p.GetCredentials()
@@ -162,10 +178,11 @@ func (a *App) GenerateCredentials(serviceName string) error {
 	}
 
 	elapsedTime := time.Since(startTime)
-	fmt.Fprintf(a.Stderr, "✅ Credentials acquired in %.2fs\n", elapsedTime.Seconds())
+	if _, err := fmt.Fprintf(a.Stderr, "✅ Credentials acquired in %.2fs\n", elapsedTime.Seconds()); err != nil {
+		return fmt.Errorf("failed to write to stderr: %w", err)
+	}
 
-	a.PrintCredentials(creds)
-	return nil
+	return a.PrintCredentials(creds)
 }
 
 // CopyToClipboard copies a value to the system clipboard
@@ -179,7 +196,9 @@ func (a *App) CopyToClipboard(serviceName string) error {
 		return err
 	}
 
-	fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName)
+	if _, err := fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName); err != nil {
+		return fmt.Errorf("failed to write to stderr: %w", err)
+	}
 	startTime := time.Now()
 
 	creds, err := p.GetClipboardValue()
@@ -202,14 +221,18 @@ func (a *App) CopyToClipboard(serviceName string) error {
 		clipboardDesc = "value"
 	}
 
-	fmt.Fprintf(a.Stderr, "✅ %s copied to clipboard in %.2fs\n", clipboardDesc, elapsedTime.Seconds())
-	fmt.Fprintf(a.Stderr, "%s\n", creds.DisplayInfo)
+	if _, err := fmt.Fprintf(a.Stderr, "✅ %s copied to clipboard in %.2fs\n", clipboardDesc, elapsedTime.Seconds()); err != nil {
+		return fmt.Errorf("failed to write to stderr: %w", err)
+	}
+	if _, err := fmt.Fprintf(a.Stderr, "%s\n", creds.DisplayInfo); err != nil {
+		return fmt.Errorf("failed to write to stderr: %w", err)
+	}
 
 	return nil
 }
 
 // PrintCredentials outputs the credentials
-func (a *App) PrintCredentials(creds provider.Credentials) {
+func (a *App) PrintCredentials(creds provider.Credentials) error {
 	// Format expiry time
 	expiryDisplay := "unknown"
 	if !creds.Expiry.IsZero() {
@@ -236,26 +259,41 @@ func (a *App) PrintCredentials(creds provider.Credentials) {
 	}
 
 	// Human-readable info goes to stderr so stdout remains eval-safe
-	fmt.Fprintf(a.Stderr, "⏳ Expires at: %s\n", expiryDisplay)
+	if _, err := fmt.Fprintf(a.Stderr, "⏳ Expires at: %s\n", expiryDisplay); err != nil {
+		return fmt.Errorf("failed to write to stderr: %w", err)
+	}
 
 	if creds.MFAAuthenticated {
-		fmt.Fprintf(a.Stderr, "✅ MFA-authenticated session established\n")
+		if _, err := fmt.Fprintf(a.Stderr, "✅ MFA-authenticated session established\n"); err != nil {
+			return fmt.Errorf("failed to write to stderr: %w", err)
+		}
 	}
 
 	if creds.DisplayInfo != "" {
-		fmt.Fprintf(a.Stderr, "%s\n", creds.DisplayInfo)
+		if _, err := fmt.Fprintf(a.Stderr, "%s\n", creds.DisplayInfo); err != nil {
+			return fmt.Errorf("failed to write to stderr: %w", err)
+		}
 	}
 
 	// Shell-safe export commands go to stdout for eval/source
 	if len(creds.Variables) > 0 {
-		fmt.Fprintf(a.Stdout, "# --------- ENVIRONMENT VARIABLES ---------\n")
+		if _, err := fmt.Fprintf(a.Stdout, "# --------- ENVIRONMENT VARIABLES ---------\n"); err != nil {
+			return fmt.Errorf("failed to write to stdout: %w", err)
+		}
 		for key, value := range creds.Variables {
 			if !validEnvVarName.MatchString(key) {
-				fmt.Fprintf(a.Stderr, "⚠️  Skipping invalid variable name: %q\n", key)
+				if _, err := fmt.Fprintf(a.Stderr, "⚠️  Skipping invalid variable name: %q\n", key); err != nil {
+					return fmt.Errorf("failed to write to stderr: %w", err)
+				}
 				continue
 			}
-			fmt.Fprintf(a.Stdout, "export %s='%s'\n", key, strings.ReplaceAll(value, "'", "'\\''"))
+			if _, err := fmt.Fprintf(a.Stdout, "export %s='%s'\n", key, strings.ReplaceAll(value, "'", "'\\''")); err != nil {
+				return fmt.Errorf("failed to write to stdout: %w", err)
+			}
 		}
-		fmt.Fprintf(a.Stdout, "# ----------------------------------------\n")
+		if _, err := fmt.Fprintf(a.Stdout, "# ----------------------------------------\n"); err != nil {
+			return fmt.Errorf("failed to write to stdout: %w", err)
+		}
 	}
+	return nil
 }
