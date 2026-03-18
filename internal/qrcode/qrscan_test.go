@@ -314,9 +314,8 @@ func TestDecodeQRCodeFromFile(t *testing.T) {
 				return f.Name()
 			},
 			cleanup: func(name string) {
-				if err := os.Remove(name); err != nil {
-					// Best effort in cleanup — file may already be gone
-					return
+				if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+					t.Errorf("cleanup failed for %s: %v", name, err)
 				}
 			},
 			wantErr: true,

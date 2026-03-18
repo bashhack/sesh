@@ -276,10 +276,10 @@ func (a *App) PrintCredentials(creds provider.Credentials) error {
 	}
 
 	// Shell-safe export commands go to stdout for eval/source
+	// Built as a single string and written atomically so that callers using
+	// eval "$(sesh ...)" never execute a partial env block.
 	if len(creds.Variables) > 0 {
-		if _, err := fmt.Fprintf(a.Stdout, "# --------- ENVIRONMENT VARIABLES ---------\n"); err != nil {
-			return fmt.Errorf("failed to write to stdout: %w", err)
-		}
+		lines := []string{"# --------- ENVIRONMENT VARIABLES ---------"}
 		for key, value := range creds.Variables {
 			if !validEnvVarName.MatchString(key) {
 				if _, err := fmt.Fprintf(a.Stderr, "⚠️  Skipping invalid variable name: %q\n", key); err != nil {
@@ -287,11 +287,10 @@ func (a *App) PrintCredentials(creds provider.Credentials) error {
 				}
 				continue
 			}
-			if _, err := fmt.Fprintf(a.Stdout, "export %s='%s'\n", key, strings.ReplaceAll(value, "'", "'\\''")); err != nil {
-				return fmt.Errorf("failed to write to stdout: %w", err)
-			}
+			lines = append(lines, fmt.Sprintf("export %s='%s'", key, strings.ReplaceAll(value, "'", "'\\''")))
 		}
-		if _, err := fmt.Fprintf(a.Stdout, "# ----------------------------------------\n"); err != nil {
+		lines = append(lines, "# ----------------------------------------")
+		if _, err := io.WriteString(a.Stdout, strings.Join(lines, "\n")+"\n"); err != nil {
 			return fmt.Errorf("failed to write to stdout: %w", err)
 		}
 	}

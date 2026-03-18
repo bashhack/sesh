@@ -134,6 +134,10 @@ func ExecWithSecretInput(cmd *exec.Cmd, secret []byte) error {
 	}
 
 	if err := stdin.Close(); err != nil {
+		waitErr := cmd.Wait()
+		if waitErr != nil {
+			return fmt.Errorf("failed to close stdin: %w (wait error: %v)", err, waitErr)
+		}
 		return fmt.Errorf("failed to close stdin: %w", err)
 	}
 

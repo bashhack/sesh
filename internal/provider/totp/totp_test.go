@@ -256,7 +256,7 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 			}
 
 			if _, err := p.GetCredentials(); err != nil {
-				t.Logf("GetCredentials returned error (expected in some cases): %v", err)
+				t.Fatalf("GetCredentials() unexpected error: %v", err)
 			}
 
 			stderr := restore()

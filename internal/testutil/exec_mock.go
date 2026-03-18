@@ -118,6 +118,20 @@ func CaptureStdout(fn func()) string {
 	if err != nil {
 		panic("CaptureStdout: os.Pipe failed: " + err.Error())
 	}
+	wClosed := false
+	rClosed := false
+	defer func() {
+		if !wClosed {
+			if err := w.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "CaptureStdout: deferred w.Close failed: %v\n", err)
+			}
+		}
+		if !rClosed {
+			if err := r.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "CaptureStdout: deferred r.Close failed: %v\n", err)
+			}
+		}
+	}()
 
 	originalStdout := os.Stdout
 	os.Stdout = w
@@ -130,6 +144,7 @@ func CaptureStdout(fn func()) string {
 	if err := w.Close(); err != nil {
 		panic("CaptureStdout: w.Close failed: " + err.Error())
 	}
+	wClosed = true
 
 	var buf bytes.Buffer
 	if _, err := io.Copy(&buf, r); err != nil {
@@ -138,6 +153,7 @@ func CaptureStdout(fn func()) string {
 	if err := r.Close(); err != nil {
 		panic("CaptureStdout: r.Close failed: " + err.Error())
 	}
+	rClosed = true
 
 	return buf.String()
 }
@@ -154,6 +170,20 @@ func CaptureStderr(fn func()) string {
 	if err != nil {
 		panic("CaptureStderr: os.Pipe failed: " + err.Error())
 	}
+	wClosed := false
+	rClosed := false
+	defer func() {
+		if !wClosed {
+			if closeErr := w.Close(); closeErr != nil {
+				fmt.Fprintf(os.Stderr, "CaptureStderr: deferred w.Close failed: %v\n", closeErr)
+			}
+		}
+		if !rClosed {
+			if closeErr := r.Close(); closeErr != nil {
+				fmt.Fprintf(os.Stderr, "CaptureStderr: deferred r.Close failed: %v\n", closeErr)
+			}
+		}
+	}()
 
 	originalStderr := os.Stderr
 	os.Stderr = w
@@ -166,6 +196,7 @@ func CaptureStderr(fn func()) string {
 	if err := w.Close(); err != nil {
 		panic("CaptureStderr: w.Close failed: " + err.Error())
 	}
+	wClosed = true
 
 	var buf bytes.Buffer
 	if _, err := io.Copy(&buf, r); err != nil {
@@ -174,6 +205,7 @@ func CaptureStderr(fn func()) string {
 	if err := r.Close(); err != nil {
 		panic("CaptureStderr: r.Close failed: " + err.Error())
 	}
+	rClosed = true
 
 	return buf.String()
 }
