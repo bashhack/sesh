@@ -611,9 +611,12 @@ func TestDecodeQRCodeFromFile_Integration(t *testing.T) {
 	if os.Getenv("CI") != "" {
 		t.Skip("skipping integration test in CI (no display)")
 	}
+	// Use a fixed secret so the QR image is deterministic — avoids flaky
+	// decode failures caused by certain random patterns at small image sizes.
 	key, err := totp.Generate(totp.GenerateOpts{
 		Issuer:      "Integration Test",
 		AccountName: "integration@test.com",
+		Secret:      []byte("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"),
 	})
 	if err != nil {
 		t.Fatalf("Failed to generate TOTP key: %v", err)
