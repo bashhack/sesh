@@ -104,11 +104,12 @@ func TestDefaultProviderSetSecret(t *testing.T) {
 		cmd := exec.Command(os.Args[0], cs...)
 		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
 
-		if command == "whoami" {
+		switch {
+		case command == "whoami":
 			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" && len(args) > 0 && (args[0] == "add-generic-password" || args[0] == "-i") {
+		case command == "security" && len(args) > 0 && (args[0] == "add-generic-password" || args[0] == "-i"):
 			// Don't set MOCK_ERROR for successful addition or interactive mode
-		} else {
+		default:
 			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 		}
 		return cmd
@@ -162,11 +163,12 @@ func TestDefaultProviderSetSecretString(t *testing.T) {
 		cmd := exec.Command(os.Args[0], cs...)
 		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
 
-		if command == "whoami" {
+		switch {
+		case command == "whoami":
 			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" && len(args) > 0 && (args[0] == "add-generic-password" || args[0] == "-i") {
+		case command == "security" && len(args) > 0 && (args[0] == "add-generic-password" || args[0] == "-i"):
 			// Don't set MOCK_ERROR for successful addition or interactive mode
-		} else {
+		default:
 			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 		}
 		return cmd
@@ -230,17 +232,17 @@ func TestDefaultProviderDeleteEntry(t *testing.T) {
 		cmd := exec.Command(os.Args[0], cs...)
 		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
 
-		if command == "whoami" {
+		switch {
+		case command == "whoami":
 			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" && len(args) > 0 && args[0] == "delete-generic-password" {
+		case command == "security" && len(args) > 0 && args[0] == "delete-generic-password":
 			// Allow deletion to succeed
-		} else if command == "security" && len(args) > 0 && args[0] == "add-generic-password" {
+		case command == "security" && len(args) > 0 && args[0] == "add-generic-password":
 			// Allow metadata writes to succeed
-		} else if command == "security" && len(args) > 0 && args[0] == "find-generic-password" {
+		case command == "security" && len(args) > 0 && args[0] == "find-generic-password":
 			// Metadata reads — return not found (no existing metadata)
-			cmd.Env = append(cmd.Env, "MOCK_EXIT_CODE=44")
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		} else {
+			cmd.Env = append(cmd.Env, "MOCK_EXIT_CODE=44", "MOCK_ERROR=1")
+		default:
 			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 		}
 		return cmd

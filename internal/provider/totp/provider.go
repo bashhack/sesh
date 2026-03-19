@@ -32,11 +32,11 @@ var _ provider.ServiceProvider = (*Provider)(nil)
 
 // NewProvider creates a new Generic TOTP provider.
 func NewProvider(
-	keychain keychain.Provider,
+	kc keychain.Provider,
 	totp internalTotp.Provider,
 ) *Provider {
 	return &Provider{
-		keychain: keychain,
+		keychain: kc,
 		totp:     totp,
 	}
 }

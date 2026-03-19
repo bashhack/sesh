@@ -41,7 +41,7 @@ func ValidateAndNormalizeSecret(secret string) (string, error) {
 	remainder := len(cleaned) % 8
 	if remainder != 0 {
 		padLength := 8 - remainder
-		cleaned = cleaned + strings.Repeat("=", padLength)
+		cleaned += strings.Repeat("=", padLength)
 	}
 
 	_, err := Generate(cleaned)
@@ -85,12 +85,12 @@ func GenerateForTime(secret string, t time.Time) (string, error) {
 }
 
 // GenerateConsecutiveCodes generates two consecutive TOTP codes for MFA device setup.
-func GenerateConsecutiveCodes(secret string) (current string, next string, err error) {
+func GenerateConsecutiveCodes(secret string) (current, next string, err error) {
 	return GenerateConsecutiveCodesForTime(secret, time.Now())
 }
 
 // GenerateConsecutiveCodesForTime generates two consecutive TOTP codes for a given base time.
-func GenerateConsecutiveCodesForTime(secret string, baseTime time.Time) (current string, next string, err error) {
+func GenerateConsecutiveCodesForTime(secret string, baseTime time.Time) (current, next string, err error) {
 	secretBytes := []byte(secret)
 	defer secure.SecureZeroBytes(secretBytes)
 
@@ -165,12 +165,12 @@ func GenerateBytes(secret []byte) (string, error) {
 }
 
 // GenerateConsecutiveCodesBytes generates two consecutive TOTP codes from a byte slice secret.
-func GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error) {
+func GenerateConsecutiveCodesBytes(secret []byte) (current, next string, err error) {
 	return GenerateConsecutiveCodesForTimeBytes(secret, time.Now())
 }
 
 // GenerateConsecutiveCodesForTimeBytes generates two consecutive TOTP codes from a byte slice secret for a given base time.
-func GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current string, next string, err error) {
+func GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current, next string, err error) {
 	if len(secret) == 0 {
 		return "", "", fmt.Errorf("empty secret provided to GenerateConsecutiveCodesBytes")
 	}

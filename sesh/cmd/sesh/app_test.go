@@ -842,7 +842,7 @@ func TestApp_PrintCredentials(t *testing.T) {
 				Stderr:  stderrBuf,
 			}
 
-			if err := app.PrintCredentials(tc.creds); err != nil {
+			if err := app.PrintCredentials(&tc.creds); err != nil {
 				t.Fatalf("PrintCredentials failed: %v", err)
 			}
 

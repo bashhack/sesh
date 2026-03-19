@@ -39,12 +39,12 @@ var _ provider.ServiceProvider = (*Provider)(nil)
 // NewProvider creates a new AWS provider.
 func NewProvider(
 	aws awsInternal.Provider,
-	keychain keychain.Provider,
+	kc keychain.Provider,
 	totp internalTotp.Provider,
 ) *Provider {
 	return &Provider{
 		aws:      aws,
-		keychain: keychain,
+		keychain: kc,
 		totp:     totp,
 		keyName:  constants.AWSServicePrefix,
 	}
@@ -79,7 +79,7 @@ func (p *Provider) GetSetupHandler() any {
 }
 
 // GetTOTPCodes retrieves TOTP codes without performing AWS authentication
-func (p *Provider) GetTOTPCodes() (currentCode string, nextCode string, secondsLeft int64, err error) {
+func (p *Provider) GetTOTPCodes() (currentCode, nextCode string, secondsLeft int64, err error) {
 	if err := p.EnsureUser(); err != nil {
 		return "", "", 0, err
 	}
@@ -390,7 +390,7 @@ func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 }
 
 // NewSubshellConfig creates a subshell configuration for AWS credentials
-func (p *Provider) NewSubshellConfig(creds provider.Credentials) any {
+func (p *Provider) NewSubshellConfig(creds *provider.Credentials) any {
 	return subshell.Config{
 		ServiceName:     p.Name(),
 		Variables:       creds.Variables,

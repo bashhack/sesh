@@ -42,14 +42,14 @@ func GetShellConfig(config Config) (*ShellConfig, error) {
 		env = append(env, fmt.Sprintf("%s=%s", key, value))
 	}
 
-	env = append(env, "SESH_ACTIVE=1")
-	env = append(env, fmt.Sprintf("SESH_SERVICE=%s", config.ServiceName))
-	env = append(env, "SESH_DISABLE_INTEGRATION=1")
-
-	env = append(env, fmt.Sprintf("SESH_START_TIME=%d", time.Now().Unix()))
+	env = append(env, "SESH_ACTIVE=1",
+		fmt.Sprintf("SESH_SERVICE=%s", config.ServiceName),
+		"SESH_DISABLE_INTEGRATION=1",
+		fmt.Sprintf("SESH_START_TIME=%d", time.Now().Unix()),
+	)
 	if !config.Expiry.IsZero() {
-		env = append(env, fmt.Sprintf("SESH_EXPIRY=%d", config.Expiry.Unix()))
-		env = append(env, fmt.Sprintf("SESH_TOTAL_DURATION=%d", config.Expiry.Unix()-time.Now().Unix()))
+		env = append(env, fmt.Sprintf("SESH_EXPIRY=%d", config.Expiry.Unix()),
+			fmt.Sprintf("SESH_TOTAL_DURATION=%d", config.Expiry.Unix()-time.Now().Unix()))
 	}
 
 	shell := os.Getenv("SHELL")
@@ -116,7 +116,7 @@ func SetupZshShell(config Config, env []string) ([]string, string, error) {
 	}
 	zshrc := filepath.Join(tmpDir, ".zshrc")
 
-	if writeErr := os.WriteFile(zshrc, []byte(config.ShellCustomizer.GetZshInitScript()), 0600); writeErr != nil {
+	if writeErr := os.WriteFile(zshrc, []byte(config.ShellCustomizer.GetZshInitScript()), 0o600); writeErr != nil {
 		return []string{}, "", fmt.Errorf("failed to write temp zshrc: %w", writeErr)
 	}
 	env = append(env, fmt.Sprintf("ZDOTDIR=%s", tmpDir))
@@ -163,8 +163,8 @@ func SetupFallbackShell(config Config, env []string) (_ []string, _ string, retE
 		prefix = "sesh"
 	}
 	name := tmpFile.Name()
-	env = append(env, fmt.Sprintf("PS1=(%s:%s) $ ", prefix, config.ServiceName))
-	env = append(env, fmt.Sprintf("ENV=%s", name)) // For sh shells
+	env = append(env, fmt.Sprintf("PS1=(%s:%s) $ ", prefix, config.ServiceName),
+		fmt.Sprintf("ENV=%s", name)) // For sh shells
 
 	return env, name, nil
 }

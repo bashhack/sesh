@@ -131,8 +131,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
 
 				if tc.awsCommandFails {
-					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-					cmd.Env = append(cmd.Env, "STDOUT=mock error")
+					cmd.Env = append(cmd.Env, "MOCK_ERROR=1", "STDOUT=mock error")
 				} else if len(args) > 0 {
 					// Check what AWS command is being run
 					if args[0] == "sts" && len(args) > 1 && args[1] == "get-caller-identity" {

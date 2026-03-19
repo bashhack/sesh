@@ -82,7 +82,7 @@ type SubshellDecider interface {
 type SubshellProvider interface {
 	// NewSubshellConfig creates a configuration for the subshell package
 	// based on the provided credentials
-	NewSubshellConfig(creds Credentials) any
+	NewSubshellConfig(creds *Credentials) any
 }
 
 // ProviderEntry represents an entry for a specific provider

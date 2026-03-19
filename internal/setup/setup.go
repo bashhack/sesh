@@ -85,7 +85,7 @@ func (h *AWSSetupHandler) ServiceName() string {
 }
 
 // Helper to create service names with proper profile handling
-func (h *AWSSetupHandler) createServiceName(prefix string, profile string) (string, error) {
+func (h *AWSSetupHandler) createServiceName(prefix, profile string) (string, error) {
 	if profile == "" {
 		profile = "default"
 	}
@@ -238,7 +238,7 @@ func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
 
 mfaDeviceLoop:
 	for {
-		if err == nil && len(strings.TrimSpace(string(mfaOutput))) > 0 {
+		if err == nil && strings.TrimSpace(string(mfaOutput)) != "" {
 			// MFA devices were found, process them
 			mfaDevices := strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
 
@@ -265,7 +265,7 @@ mfaDeviceLoop:
 				mfaCmd = h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
 
 				mfaOutput, err = mfaCmd.Output()
-				if err != nil || len(strings.TrimSpace(string(mfaOutput))) == 0 {
+				if err != nil || strings.TrimSpace(string(mfaOutput)) == "" {
 					fmt.Println("❗ No MFA devices found after refresh.")
 					// Continue to the retry options below
 					break
@@ -846,7 +846,7 @@ func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, er
 			if readErr != nil {
 				return "", readErr
 			}
-			if strings.ToLower(choice) == "m" {
+			if strings.EqualFold(choice, "m") {
 				fmt.Println("Switching to manual entry...")
 				return manualEntryFunc()
 			}
@@ -861,7 +861,7 @@ func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, er
 		return "", err
 	}
 
-	if strings.ToLower(fallback) == "y" {
+	if strings.EqualFold(fallback, "y") {
 		return manualEntryFunc()
 	}
 

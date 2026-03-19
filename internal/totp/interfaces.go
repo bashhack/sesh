@@ -8,10 +8,10 @@ type Provider interface {
 	Generate(secret string) (string, error)
 
 	// GenerateConsecutiveCodes returns the current and next 30-second window TOTP codes.
-	GenerateConsecutiveCodes(secret string) (current string, next string, err error)
+	GenerateConsecutiveCodes(secret string) (current, next string, err error)
 
 	// GenerateConsecutiveCodesForTime returns TOTP codes for a given base time and the next 30-second window.
-	GenerateConsecutiveCodesForTime(secret string, baseTime time.Time) (current string, next string, err error)
+	GenerateConsecutiveCodesForTime(secret string, baseTime time.Time) (current, next string, err error)
 
 	// GenerateForTime returns a TOTP code for a specific point in time.
 	GenerateForTime(secret string, t time.Time) (string, error)
@@ -26,10 +26,10 @@ type Provider interface {
 	GenerateBytes(secret []byte) (string, error)
 
 	// GenerateConsecutiveCodesBytes generates consecutive TOTP codes from a byte slice, zeroing the copy after use.
-	GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error)
+	GenerateConsecutiveCodesBytes(secret []byte) (current, next string, err error)
 
 	// GenerateConsecutiveCodesForTimeBytes generates consecutive TOTP codes from a byte slice for a given base time, zeroing the copy after use.
-	GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current string, next string, err error)
+	GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current, next string, err error)
 
 	// GenerateForTimeBytes generates a time-specific TOTP code from a byte slice, zeroing the copy after use.
 	GenerateForTimeBytes(secret []byte, t time.Time) (string, error)
@@ -46,12 +46,12 @@ func (p *DefaultProvider) Generate(secret string) (string, error) {
 }
 
 // GenerateConsecutiveCodes returns the current and next 30-second window TOTP codes.
-func (p *DefaultProvider) GenerateConsecutiveCodes(secret string) (current string, next string, err error) {
+func (p *DefaultProvider) GenerateConsecutiveCodes(secret string) (current, next string, err error) {
 	return GenerateConsecutiveCodes(secret)
 }
 
 // GenerateConsecutiveCodesForTime returns TOTP codes for a given base time and the next 30-second window.
-func (p *DefaultProvider) GenerateConsecutiveCodesForTime(secret string, baseTime time.Time) (current string, next string, err error) {
+func (p *DefaultProvider) GenerateConsecutiveCodesForTime(secret string, baseTime time.Time) (current, next string, err error) {
 	return GenerateConsecutiveCodesForTime(secret, baseTime)
 }
 
@@ -76,12 +76,12 @@ func (p *DefaultProvider) GenerateBytes(secret []byte) (string, error) {
 }
 
 // GenerateConsecutiveCodesBytes generates consecutive TOTP codes from a byte slice, zeroing the copy after use.
-func (p *DefaultProvider) GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error) {
+func (p *DefaultProvider) GenerateConsecutiveCodesBytes(secret []byte) (current, next string, err error) {
 	return GenerateConsecutiveCodesBytes(secret)
 }
 
 // GenerateConsecutiveCodesForTimeBytes generates consecutive TOTP codes from a byte slice for a given base time, zeroing the copy after use.
-func (p *DefaultProvider) GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current string, next string, err error) {
+func (p *DefaultProvider) GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current, next string, err error) {
 	return GenerateConsecutiveCodesForTimeBytes(secret, baseTime)
 }
 
