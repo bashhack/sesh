@@ -51,8 +51,8 @@ type CommandRunner interface {
 
 // mockCmd is a mock implementation of the CommandRunner interface
 type mockCmd struct {
-	output string
 	err    error
+	output string
 }
 
 // Output returns the predetermined output

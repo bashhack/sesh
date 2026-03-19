@@ -116,8 +116,8 @@ func TestPrintUsage(t *testing.T) {
 
 func TestExtractServiceName(t *testing.T) {
 	tests := map[string]struct {
-		args        []string
 		wantService string
+		args        []string
 	}{
 		"service flag with equals": {
 			args:        []string{"sesh", "--service=aws"},
@@ -171,21 +171,21 @@ func TestPrintProviderUsage(t *testing.T) {
 	h := newTestHarness()
 
 	tests := map[string]struct {
-		serviceName string
 		provider    provider.ServiceProvider
+		serviceName string
 	}{}
 
 	if awsP, err := h.app.Registry.GetProvider("aws"); err == nil {
 		tests["aws"] = struct {
-			serviceName string
 			provider    provider.ServiceProvider
-		}{"aws", awsP}
+			serviceName string
+		}{awsP, "aws"}
 	}
 	if totpP, err := h.app.Registry.GetProvider("totp"); err == nil {
 		tests["totp"] = struct {
-			serviceName string
 			provider    provider.ServiceProvider
-		}{"totp", totpP}
+			serviceName string
+		}{totpP, "totp"}
 	}
 
 	for name, tc := range tests {
@@ -222,8 +222,8 @@ func TestPrintProviderUsage(t *testing.T) {
 
 func TestServiceNameExtraction_EdgeCases(t *testing.T) {
 	tests := map[string]struct {
-		args        []string
 		wantService string
+		args        []string
 	}{
 		"service with special chars": {
 			args:        []string{"sesh", "--service=aws-test"},
@@ -259,10 +259,10 @@ func TestServiceNameExtraction_EdgeCases(t *testing.T) {
 
 func TestRun_ProviderSpecificFlags(t *testing.T) {
 	tests := map[string]struct {
-		args         []string
 		setupMocks   func(*testHarness)
+		checkOutput  func(*testing.T, string, string)
+		args         []string
 		wantExitCode int
-		checkOutput  func(*testing.T, string, string) // stdout, stderr
 	}{
 		"aws with valid profile flag": {
 			args: []string{"sesh", "--service", "aws", "--profile", "dev", "--list"},
@@ -350,11 +350,11 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 
 func TestRun_Commands(t *testing.T) {
 	tests := map[string]struct {
-		args         []string
 		setupMocks   func(*testHarness)
-		wantExitCode int
 		checkStdout  func(*testing.T, string)
 		checkStderr  func(*testing.T, string)
+		args         []string
+		wantExitCode int
 	}{
 		"list-services early exit": {
 			args:         []string{"sesh", "--list-services"},
@@ -529,10 +529,10 @@ func TestRun_Commands(t *testing.T) {
 
 func TestRun_FlagValidation(t *testing.T) {
 	tests := map[string]struct {
-		args         []string
 		setupMocks   func(*testHarness)
-		wantExitCode int
 		checkStderr  func(*testing.T, string)
+		args         []string
+		wantExitCode int
 	}{
 		"missing required service flag": {
 			args:         []string{"sesh", "--profile", "dev"},

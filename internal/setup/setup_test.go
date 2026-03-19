@@ -19,11 +19,11 @@ import (
 
 // MockCommand creates a mock exec.Cmd object
 type MockCommand struct {
-	OutputData  []byte
 	ErrorValue  error
-	RunCalled   bool
 	CommandName string
+	OutputData  []byte
 	CommandArgs []string
+	RunCalled   bool
 }
 
 // Output mocks the exec.Cmd Output method
@@ -39,11 +39,11 @@ func (m *MockCommand) Run() error {
 
 // SimpleRunner is a mock command runner for testing
 type SimpleRunner struct {
-	mu            sync.Mutex
+	DefaultError  error
 	Commands      map[string]*MockCommand
 	CommandCalls  []string
 	DefaultOutput []byte
-	DefaultError  error
+	mu            sync.Mutex
 }
 
 // Command returns a mock command based on the command name
@@ -69,9 +69,9 @@ func (r *SimpleRunner) Command(command string, args ...string) *exec.Cmd {
 
 // mockSetupHandler implements SetupHandler for testing
 type mockSetupHandler struct {
+	setupError  error
 	name        string
 	setupCalled bool
-	setupError  error
 }
 
 func (h *mockSetupHandler) ServiceName() string {
@@ -127,8 +127,8 @@ func TestTOTPSetupHandler_promptForServiceName(t *testing.T) {
 	tests := map[string]struct {
 		input      string
 		wantResult string
-		wantErr    bool
 		wantErrMsg string
+		wantErr    bool
 	}{
 		"valid service name": {
 			input:      "github\n",
@@ -251,8 +251,8 @@ func TestTOTPSetupHandler_promptForCaptureMethod(t *testing.T) {
 	tests := map[string]struct {
 		input      string
 		wantResult string
-		wantErr    bool
 		wantErrMsg string
+		wantErr    bool
 	}{
 		"choice 1": {
 			input:      "1\n",
@@ -339,8 +339,8 @@ func TestTOTPSetupHandler_promptForCaptureMethod(t *testing.T) {
 func TestTOTPSetupHandler_captureTOTPSecret(t *testing.T) {
 	tests := map[string]struct {
 		choice     string
-		wantErr    bool
 		wantErrMsg string
+		wantErr    bool
 	}{
 		"invalid choice 3": {
 			choice:     "3",
@@ -701,11 +701,11 @@ func TestTOTPSetupHandler_captureManualEntry(t *testing.T) {
 	defer func() { readPassword = origReadPassword }()
 
 	tests := map[string]struct {
-		secretInput string
 		readError   error
+		secretInput string
 		wantSecret  string
-		wantErr     bool
 		wantErrMsg  string
+		wantErr     bool
 	}{
 		"valid secret": {
 			secretInput: "JBSWY3DPEHPK3PXP",
@@ -783,10 +783,10 @@ func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
 	tests := map[string]struct {
 		profile       string
 		commandOutput string
-		commandError  bool
 		wantUserArn   string
-		wantErr       bool
 		wantErrMsg    string
+		commandError  bool
+		wantErr       bool
 	}{
 		"valid credentials": {
 			profile:       "default",
@@ -863,11 +863,11 @@ func TestAWSSetupHandler_captureAWSManualEntry(t *testing.T) {
 	defer func() { readPassword = origReadPassword }()
 
 	tests := map[string]struct {
-		secretInput string
 		readError   error
+		secretInput string
 		wantSecret  string
-		wantErr     bool
 		wantErrMsg  string
+		wantErr     bool
 	}{
 		"valid AWS secret": {
 			secretInput: "JBSWY3DPEHPK3PXP",
@@ -943,11 +943,11 @@ func TestAWSSetupHandler_captureMFASecret(t *testing.T) {
 	defer func() { readPassword = origReadPassword }()
 
 	tests := map[string]struct {
-		secretInput string
 		readError   error
+		secretInput string
 		wantSecret  string
-		wantErr     bool
 		wantErrMsg  string
+		wantErr     bool
 	}{
 		"valid MFA secret": {
 			secretInput: "JBSWY3DPEHPK3PXP",
@@ -1021,8 +1021,8 @@ func TestAWSSetupHandler_promptForMFASetupMethod(t *testing.T) {
 	tests := map[string]struct {
 		input      string
 		wantChoice string
-		wantErr    bool
 		wantErrMsg string
+		wantErr    bool
 	}{
 		"choice 1 manual": {
 			input:      "1\n",
@@ -1139,8 +1139,8 @@ func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
 	tests := map[string]struct {
 		secret       string
 		readerInput  string
-		wantErr      bool
 		wantContains []string
+		wantErr      bool
 	}{
 		"valid secret": {
 			secret:      "JBSWY3DPEHPK3PXP",
@@ -1204,11 +1204,11 @@ func TestCaptureQRWithRetry(t *testing.T) {
 
 	tests := map[string]struct {
 		readerInput   string
-		scanResults   []error // Results for each scan attempt
 		scanSecret    string
 		wantSecret    string
-		wantErr       bool
+		scanResults   []error // Results for each scan attempt
 		wantScanCalls int
+		wantErr       bool
 	}{
 		"success on first try": {
 			readerInput:   "\n",
@@ -1317,9 +1317,9 @@ func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
 
 	tests := map[string]struct {
 		readerInput   string
-		scanSuccess   bool
 		passwordInput string
 		wantSecret    string
+		scanSuccess   bool
 		wantErr       bool
 	}{
 		"QR scan success": {
@@ -1390,9 +1390,9 @@ func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
 
 	tests := map[string]struct {
 		readerInput   string
-		scanSuccess   bool
 		passwordInput string
 		wantSecret    string
+		scanSuccess   bool
 		wantErr       bool
 	}{
 		"QR scan success": {
@@ -1468,12 +1468,12 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 
 	tests := map[string]struct {
 		profile    string
-		awsOutputs []string // Multiple outputs for refresh scenarios
-		awsError   bool
 		userInput  string
 		wantDevice string
-		wantErr    bool
 		wantErrMsg string
+		awsOutputs []string // Multiple outputs for refresh scenarios
+		awsError   bool
+		wantErr    bool
 	}{
 		"single device select 1": {
 			profile:    "default",
@@ -1669,20 +1669,20 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 	defer func() { readPassword = origReadPassword }()
 
 	tests := map[string]struct {
-		userInput           string
+		getCurrentUserError error
 		scanQRError         error
-		scanQRResult        string
+		storeMetadataError  error
 		validateError       error
-		normalizedSecret    string
+		setSecretError      error
 		generateError       error
 		firstCode           string
 		secondCode          string
-		getCurrentUserError error
+		userInput           string
 		currentUser         string
-		setSecretError      error
-		storeMetadataError  error
-		wantErr             bool
+		normalizedSecret    string
+		scanQRResult        string
 		wantErrMsg          string
+		wantErr             bool
 	}{
 		"successful setup with QR code": {
 			userInput:           "MyService\ndefault\n2\n\n", // service name, profile, QR choice, press Enter for capture
@@ -1940,8 +1940,8 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 	tests := map[string]struct {
 		existingSecret   string
 		userInput        string
-		expectError      bool
 		expectedErrorMsg string
+		expectError      bool
 		expectOverwrite  bool
 	}{
 		"existing entry - user cancels with n": {

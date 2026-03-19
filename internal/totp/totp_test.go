@@ -120,8 +120,8 @@ func TestGenerateConsecutiveCodes(t *testing.T) {
 
 func TestGenerateConsecutiveCodesForTime(t *testing.T) {
 	tests := map[string]struct {
-		secret   string
 		baseTime time.Time
+		secret   string
 		wantErr  bool
 	}{
 		"2026-01-01 midnight UTC": {
@@ -178,8 +178,8 @@ func TestValidateAndNormalizeSecret(t *testing.T) {
 	tests := map[string]struct {
 		input       string
 		expected    string
-		shouldError bool
 		errorMsg    string
+		shouldError bool
 	}{
 		// Valid secrets (should normalize)
 		"Google Authenticator format (uppercase, no spaces)": {
@@ -334,8 +334,8 @@ func TestGenerateForTime(t *testing.T) {
 	testSecret := "JBSWY3DPEHPK3PXP"
 
 	tests := map[string]struct {
-		secret  string
 		time    time.Time
+		secret  string
 		wantErr bool
 	}{
 		"valid secret and time": {
@@ -409,8 +409,8 @@ func TestGenerateSecure(t *testing.T) {
 
 func TestGenerateForTimeSecure(t *testing.T) {
 	tests := map[string]struct {
-		secret  string
 		time    time.Time
+		secret  string
 		wantErr bool
 	}{
 		"valid secret and time": {
@@ -486,8 +486,8 @@ func TestGenerateBytes(t *testing.T) {
 
 func TestGenerateForTimeBytes(t *testing.T) {
 	tests := map[string]struct {
-		secret  []byte
 		time    time.Time
+		secret  []byte
 		wantErr bool
 	}{
 		"valid secret and time": {
@@ -535,9 +535,9 @@ func TestGenerateForTimeBytes(t *testing.T) {
 
 func TestGenerateConsecutiveCodesBytes(t *testing.T) {
 	tests := map[string]struct {
+		errMsg  string
 		secret  []byte
 		wantErr bool
-		errMsg  string
 	}{
 		"valid secret": {
 			secret:  []byte("JBSWY3DPEHPK3PXP"),
@@ -591,10 +591,10 @@ func TestGenerateConsecutiveCodesBytes(t *testing.T) {
 
 func TestGenerateConsecutiveCodesForTimeBytes(t *testing.T) {
 	tests := map[string]struct {
-		secret   []byte
 		baseTime time.Time
-		wantErr  bool
 		errMsg   string
+		secret   []byte
+		wantErr  bool
 	}{
 		"valid secret": {
 			secret:   []byte("JBSWY3DPEHPK3PXP"),

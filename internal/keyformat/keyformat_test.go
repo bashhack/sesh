@@ -7,8 +7,8 @@ import (
 func TestBuild(t *testing.T) {
 	tests := map[string]struct {
 		namespace string
-		segments  []string
 		expected  string
+		segments  []string
 		wantErr   bool
 	}{
 		"no segments": {

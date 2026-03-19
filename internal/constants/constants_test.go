@@ -15,10 +15,10 @@ func TestGetSeshBinaryPath(t *testing.T) {
 	}()
 
 	tests := map[string]struct {
-		executablePath  string
-		executableError bool
 		statResults     map[string]bool // path -> exists
+		executablePath  string
 		want            string
+		executableError bool
 	}{
 		"returns current executable path": {
 			executablePath: "/usr/local/bin/current-sesh",

@@ -33,12 +33,12 @@ func init() {
 
 // KeychainEntryMeta stores metadata about a keychain entry
 type KeychainEntryMeta struct {
+	CreatedAt   time.Time `json:"created_at"`   // When the entry was first stored
+	UpdatedAt   time.Time `json:"updated_at"`   // When the entry was last modified
 	Service     string    `json:"service"`      // Full service name
 	Account     string    `json:"account"`      // Account name
 	Description string    `json:"description"`  // Human-readable description
 	ServiceType string    `json:"service_type"` // Service type (aws, totp, etc.)
-	CreatedAt   time.Time `json:"created_at"`   // When the entry was first stored
-	UpdatedAt   time.Time `json:"updated_at"`   // When the entry was last modified
 }
 
 // StoreEntryMetadata adds or updates metadata for a keychain entry

@@ -33,15 +33,15 @@ func TestStorePasswordString(t *testing.T) {
 	manager := NewManager(mockKeychain, testUser)
 
 	testCases := map[string]struct {
+		setSecretErr error
+		metadataErr  error
 		service      string
 		username     string
 		password     string
 		entryType    EntryType
 		expectedKey  string
-		setSecretErr error
-		metadataErr  error
-		wantErr      bool
 		errMsg       string
+		wantErr      bool
 	}{
 		"valid password storage": {
 			service:     "test-service",
@@ -136,15 +136,15 @@ func TestGetPasswordString(t *testing.T) {
 	manager := NewManager(mockKeychain, testUser)
 
 	testCases := map[string]struct {
+		getSecretErr error
 		service      string
 		username     string
 		entryType    EntryType
 		expectedKey  string
-		returnSecret []byte
-		getSecretErr error
 		expected     string
-		wantErr      bool
 		errMsg       string
+		returnSecret []byte
+		wantErr      bool
 	}{
 		"successful retrieval": {
 			service:      "test-service",
@@ -363,13 +363,13 @@ func TestDeleteEntry(t *testing.T) {
 	manager := NewManager(mockKeychain, testUser)
 
 	testCases := map[string]struct {
+		deleteErr   error
 		service     string
 		username    string
 		entryType   EntryType
 		expectedKey string
-		deleteErr   error
-		wantErr     bool
 		errMsg      string
+		wantErr     bool
 	}{
 		"successful delete": {
 			service:     "test-service",
@@ -447,23 +447,23 @@ func TestListEntries(t *testing.T) {
 	manager := NewManager(mockKeychain, testUser)
 
 	type expectedEntry struct {
+		createdAt time.Time
+		updatedAt time.Time
 		service   string
 		username  string
 		typ       EntryType
-		createdAt time.Time
-		updatedAt time.Time
 	}
 
 	createdTime := time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC)
 	updatedTime := time.Date(2026, 3, 1, 14, 30, 0, 0, time.UTC)
 
 	testCases := map[string]struct {
+		listErr     error
+		errMsg      string
 		mockEntries []keychain.KeychainEntry
 		mockMeta    []keychain.KeychainEntryMeta
-		listErr     error
 		expected    []expectedEntry
 		wantErr     bool
-		errMsg      string
 	}{
 		"successful list with timestamps": {
 			mockEntries: []keychain.KeychainEntry{
@@ -628,13 +628,13 @@ func TestGenerateTOTPCode(t *testing.T) {
 	manager := NewManager(mockKeychain, testUser)
 
 	testCases := map[string]struct {
+		getSecretErr error
 		service      string
 		username     string
 		expectedKey  string
-		storedSecret []byte
-		getSecretErr error
-		wantErr      bool
 		errMsg       string
+		storedSecret []byte
+		wantErr      bool
 	}{
 		"valid TOTP generation": {
 			service:      "github",

@@ -82,8 +82,8 @@ func (p *mockProvider) GetFlagInfo() []FlagInfo {
 
 func TestRegistry_GetProvider(t *testing.T) {
 	tests := map[string]struct {
-		register []string
 		lookup   string
+		register []string
 		wantErr  bool
 	}{
 		"registered provider found": {
