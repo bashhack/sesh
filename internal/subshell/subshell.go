@@ -42,14 +42,17 @@ func GetShellConfig(config Config) (*ShellConfig, error) {
 		env = append(env, fmt.Sprintf("%s=%s", key, value))
 	}
 
+	now := time.Now().Unix()
 	env = append(env, "SESH_ACTIVE=1",
 		fmt.Sprintf("SESH_SERVICE=%s", config.ServiceName),
 		"SESH_DISABLE_INTEGRATION=1",
-		fmt.Sprintf("SESH_START_TIME=%d", time.Now().Unix()),
+		fmt.Sprintf("SESH_START_TIME=%d", now),
 	)
 	if !config.Expiry.IsZero() {
-		env = append(env, fmt.Sprintf("SESH_EXPIRY=%d", config.Expiry.Unix()),
-			fmt.Sprintf("SESH_TOTAL_DURATION=%d", config.Expiry.Unix()-time.Now().Unix()))
+		env = append(env,
+			fmt.Sprintf("SESH_EXPIRY=%d", config.Expiry.Unix()),
+			fmt.Sprintf("SESH_TOTAL_DURATION=%d", config.Expiry.Unix()-now),
+		)
 	}
 
 	shell := os.Getenv("SHELL")
