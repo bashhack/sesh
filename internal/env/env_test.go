@@ -12,13 +12,13 @@ func TestGetCurrentUser(t *testing.T) {
 	}()
 
 	tests := map[string]struct {
-		envUser   string
-		cmdOutput string
-		cmdError  bool
-		want      string
-		wantErr   bool
 		setup     func(t *testing.T)
 		teardown  func(t *testing.T)
+		envUser   string
+		cmdOutput string
+		want      string
+		cmdError  bool
+		wantErr   bool
 	}{
 		"user from env variable": {
 			envUser: "testuser",

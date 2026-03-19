@@ -101,9 +101,9 @@ func TestGetShellConfig(t *testing.T) {
 
 	tests := map[string]struct {
 		config      Config
+		checkResult func(t *testing.T, cfg *ShellConfig)
 		shell       string
 		wantErr     bool
-		checkResult func(t *testing.T, cfg *ShellConfig)
 	}{
 		"zsh shell": {
 			config: Config{

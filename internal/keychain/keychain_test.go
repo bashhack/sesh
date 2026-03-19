@@ -509,10 +509,10 @@ func TestGetSecretString(t *testing.T) {
 		account    string
 		service    string
 		mockOutput string
-		mockError  bool
 		wantSecret string
-		wantErr    bool
 		wantErrMsg string
+		mockError  bool
+		wantErr    bool
 	}{
 		"success": {
 			account:    "testuser",
@@ -588,9 +588,9 @@ func TestSetSecretString(t *testing.T) {
 		account    string
 		service    string
 		secret     string
+		wantErrMsg string
 		mockError  bool
 		wantErr    bool
-		wantErrMsg string
 	}{
 		"success": {
 			account: "testuser",

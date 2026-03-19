@@ -33,14 +33,14 @@ var validEntryTypes = map[EntryType]bool{
 
 // Entry represents a password manager entry
 type Entry struct {
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 	ID          string            `json:"id"`
 	Service     string            `json:"service"`
 	Username    string            `json:"username,omitempty"`
 	Type        EntryType         `json:"type"`
 	Description string            `json:"description,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
 // Manager provides secure password management operations

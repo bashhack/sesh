@@ -198,11 +198,11 @@ func TestNewDefaultApp(t *testing.T) {
 
 func TestApp_ListEntries(t *testing.T) {
 	tests := map[string]struct {
-		serviceName string
 		setupApp    func(*App)
-		wantErr     bool
+		serviceName string
 		wantErrMsg  string
 		wantStdout  []string
+		wantErr     bool
 	}{
 		"successful list with entries": {
 			serviceName: "totp",
@@ -294,12 +294,12 @@ func TestApp_ListEntries(t *testing.T) {
 
 func TestApp_GenerateCredentials(t *testing.T) {
 	tests := map[string]struct {
-		serviceName string
 		setupApp    func(*App)
-		wantErr     bool
+		serviceName string
 		wantErrMsg  string
 		wantStdout  []string
 		wantStderr  []string
+		wantErr     bool
 	}{
 		"successful generation": {
 			serviceName: "totp",
@@ -399,12 +399,12 @@ func TestApp_GenerateCredentials(t *testing.T) {
 
 func TestApp_CopyToClipboard(t *testing.T) {
 	tests := map[string]struct {
-		serviceName  string
-		setupApp     func(*App)
 		clipboardErr error
-		wantErr      bool
+		setupApp     func(*App)
+		serviceName  string
 		wantErrMsg   string
 		wantStderr   []string
+		wantErr      bool
 	}{
 		"successful copy": {
 			serviceName: "totp",
@@ -551,12 +551,12 @@ func TestApp_CopyToClipboard(t *testing.T) {
 
 func TestApp_DeleteEntry(t *testing.T) {
 	tests := map[string]struct {
+		setupApp    func(*App)
 		serviceName string
 		entryID     string
-		setupApp    func(*App)
-		wantErr     bool
 		wantErrMsg  string
 		wantOutput  string
+		wantErr     bool
 	}{
 		"successful delete": {
 			serviceName: "totp",
@@ -638,10 +638,10 @@ func TestApp_DeleteEntry(t *testing.T) {
 
 func TestApp_RunSetup(t *testing.T) {
 	tests := map[string]struct {
-		serviceName string
 		setupApp    func(*App)
-		wantErr     bool
+		serviceName string
 		wantErrMsg  string
+		wantErr     bool
 	}{
 		"successful setup": {
 			serviceName: "totp",

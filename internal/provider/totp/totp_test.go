@@ -109,11 +109,11 @@ func TestProvider_GetSetupHandler(t *testing.T) {
 
 func TestProvider_ValidateRequest(t *testing.T) {
 	tests := map[string]struct {
+		setupKeychain func(*keychainMocks.MockProvider)
 		serviceName   string
 		profile       string
-		setupKeychain func(*keychainMocks.MockProvider)
-		wantErr       bool
 		wantErrMsg    string
+		wantErr       bool
 	}{
 		"valid request": {
 			serviceName: "github",
@@ -269,12 +269,12 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 
 func TestProvider_GetCredentials(t *testing.T) {
 	tests := map[string]struct {
-		serviceName   string
 		setupKeychain func(*keychainMocks.MockProvider)
 		setupTOTP     func(*totpMocks.MockProvider)
-		wantErr       bool
+		serviceName   string
 		wantCurrent   string
 		wantNext      string
+		wantErr       bool
 	}{
 		"successful TOTP generation": {
 			serviceName: "github",
@@ -372,11 +372,11 @@ func TestProvider_GetCredentials(t *testing.T) {
 
 func TestProvider_GetClipboardValue(t *testing.T) {
 	tests := map[string]struct {
-		serviceName   string
 		setupKeychain func(*keychainMocks.MockProvider)
 		setupTOTP     func(*totpMocks.MockProvider)
-		wantErr       bool
 		checkResult   func(*testing.T, provider.Credentials)
+		serviceName   string
+		wantErr       bool
 	}{
 		"successful clipboard value": {
 			serviceName: "github",
@@ -462,9 +462,9 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 func TestProvider_ListEntries(t *testing.T) {
 	tests := map[string]struct {
 		setupKeychain func(*keychainMocks.MockProvider)
-		wantErr       bool
-		wantCount     int
 		checkEntries  func(*testing.T, []provider.ProviderEntry)
+		wantCount     int
+		wantErr       bool
 	}{
 		"successful list": {
 			setupKeychain: func(m *keychainMocks.MockProvider) {
@@ -557,10 +557,10 @@ func TestProvider_ListEntries(t *testing.T) {
 
 func TestProvider_DeleteEntry(t *testing.T) {
 	tests := map[string]struct {
-		entryID       string
 		setupKeychain func(*keychainMocks.MockProvider)
-		wantErr       bool
+		entryID       string
 		wantErrMsg    string
+		wantErr       bool
 	}{
 		"successful delete": {
 			entryID: "sesh-totp/github:testuser",

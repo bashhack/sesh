@@ -61,20 +61,20 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 
 	tests := map[string]struct {
 		// Test control flags
-		awsNotFound         bool
-		awsCommandFails     bool
-		awsCommandOutputs   map[string]string // command -> output mapping
 		getCurrentUserError error
 		validateSecretError error
 		keychainSaveError   error
 		scanQRError         error
+		awsCommandOutputs   map[string]string // command -> output mapping
 
 		// Expected results
-		expectError      bool
 		expectedErrorMsg string
 
 		// Input data - this is what the user would type
-		userInput string
+		userInput       string
+		awsNotFound     bool
+		awsCommandFails bool
+		expectError     bool
 	}{
 		"aws cli not found": {
 			awsNotFound:      true,

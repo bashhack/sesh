@@ -64,12 +64,12 @@ func (m *MockSubshellProvider) ShouldUseSubshell() bool {
 
 func TestApp_LaunchSubshell(t *testing.T) {
 	tests := map[string]struct {
-		serviceName string
 		setupEnv    map[string]string
 		setupApp    func(*App)
-		wantErr     bool
+		checkOutput func(*testing.T, string, string)
+		serviceName string
 		wantErrMsg  string
-		checkOutput func(*testing.T, string, string) // stdout, stderr
+		wantErr     bool
 	}{
 		"already in sesh environment": {
 			serviceName: "aws",

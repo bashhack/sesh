@@ -8,10 +8,10 @@ import (
 )
 
 type Config struct {
-	ServiceName     string
-	Variables       map[string]string
 	Expiry          time.Time
 	ShellCustomizer ShellCustomizer
+	Variables       map[string]string
+	ServiceName     string
 }
 
 type ShellCustomizer interface {
@@ -23,11 +23,11 @@ type ShellCustomizer interface {
 
 // ShellConfig holds the information needed to launch a shell
 type ShellConfig struct {
+	Cleanup     func() // Removes temp files created during shell setup; safe to call even if nil
 	Shell       string
+	ServiceName string
 	Args        []string
 	Env         []string
-	ServiceName string
-	Cleanup     func() // Removes temp files created during shell setup; safe to call even if nil
 }
 
 func GetShellConfig(config Config) (*ShellConfig, error) {

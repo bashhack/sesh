@@ -14,11 +14,11 @@ func TestCopy(t *testing.T) {
 	}()
 
 	tests := map[string]struct {
+		mockCmd func(name string, args ...string) *exec.Cmd
 		text    string
 		goos    string
-		mockCmd func(name string, args ...string) *exec.Cmd
-		wantErr bool
 		errMsg  string
+		wantErr bool
 	}{
 		"darwin success": {
 			text: "test text",
@@ -92,8 +92,8 @@ func TestCopyOSX(t *testing.T) {
 	}()
 
 	tests := map[string]struct {
-		text    string
 		mockCmd func(name string, args ...string) *exec.Cmd
+		text    string
 		wantErr bool
 	}{
 		"success": {

@@ -24,8 +24,8 @@ func TestExtractTOTPInfo(t *testing.T) {
 		wantSecret string
 		wantIssuer string
 		wantLabel  string
-		wantErr    bool
 		errMsg     string
+		wantErr    bool
 	}{
 		"valid google authenticator uri": {
 			uri:        "otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example",
@@ -147,8 +147,8 @@ func TestExtractSecretFromOTPAuthURL(t *testing.T) {
 	tests := map[string]struct {
 		url        string
 		wantSecret string
-		wantErr    bool
 		errMsg     string
+		wantErr    bool
 	}{
 		"valid url with secret": {
 			url:        "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&issuer=Example",
@@ -211,8 +211,8 @@ func TestScanQRCode(t *testing.T) {
 	tests := map[string]struct {
 		mockExecCmd func(name string, args ...string) *exec.Cmd
 		mockStat    func(name string) (os.FileInfo, error)
-		wantErr     bool
 		errMsg      string
+		wantErr     bool
 	}{
 		"screenshot command fails": {
 			mockExecCmd: func(name string, args ...string) *exec.Cmd {
@@ -288,8 +288,8 @@ func TestDecodeQRCodeFromFile(t *testing.T) {
 	tests := map[string]struct {
 		setup   func(*testing.T) string
 		cleanup func(string)
-		wantErr bool
 		errMsg  string
+		wantErr bool
 	}{
 		"file not found": {
 			setup: func(*testing.T) string {

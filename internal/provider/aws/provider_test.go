@@ -202,10 +202,10 @@ func TestProvider_GetSetupHandler(t *testing.T) {
 
 func TestProvider_ValidateRequest(t *testing.T) {
 	tests := map[string]struct {
-		profile       string
 		setupKeychain func(*keychainMocks.MockProvider)
-		wantErr       bool
+		profile       string
 		wantErrMsg    string
+		wantErr       bool
 	}{
 		"valid request with default profile": {
 			profile: "",
@@ -318,12 +318,12 @@ func TestProvider_ValidateRequest(t *testing.T) {
 
 func TestProvider_GetTOTPCodes(t *testing.T) {
 	tests := map[string]struct {
-		profile       string
 		setupKeychain func(*keychainMocks.MockProvider)
 		setupTOTP     func(*totpMocks.MockProvider)
-		wantErr       bool
+		profile       string
 		wantCurrent   string
 		wantNext      string
+		wantErr       bool
 	}{
 		"successful TOTP generation": {
 			profile: "",
@@ -587,13 +587,13 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 
 func TestProvider_GetCredentials(t *testing.T) {
 	tests := map[string]struct {
-		profile       string
 		now           func() time.Time
 		setupKeychain func(*keychainMocks.MockProvider)
 		setupTOTP     func(*totpMocks.MockProvider)
 		setupAWS      func(*awsMocks.MockProvider)
-		wantErr       bool
 		checkResult   func(*testing.T, provider.Credentials)
+		profile       string
+		wantErr       bool
 	}{
 		"successful credential generation": {
 			profile: "",
@@ -954,9 +954,9 @@ func TestProvider_NewSubshellConfig(t *testing.T) {
 func TestProvider_ListEntries(t *testing.T) {
 	tests := map[string]struct {
 		setupKeychain func(*keychainMocks.MockProvider)
-		wantErr       bool
-		wantCount     int
 		checkResult   func(*testing.T, []provider.ProviderEntry)
+		wantCount     int
+		wantErr       bool
 	}{
 		"successful list with multiple profiles": {
 			setupKeychain: func(m *keychainMocks.MockProvider) {
@@ -1059,10 +1059,10 @@ func TestProvider_ListEntries(t *testing.T) {
 
 func TestProvider_DeleteEntry(t *testing.T) {
 	tests := map[string]struct {
-		id            string
 		setupKeychain func(*keychainMocks.MockProvider)
-		wantErr       bool
+		id            string
 		wantErrMsg    string
+		wantErr       bool
 	}{
 		"successful delete": {
 			id: "sesh-aws/default:testuser",
