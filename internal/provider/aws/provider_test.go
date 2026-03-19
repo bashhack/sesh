@@ -935,7 +935,7 @@ func TestProvider_NewSubshellConfig(t *testing.T) {
 		},
 	}
 
-	config := p.NewSubshellConfig(creds)
+	config := p.NewSubshellConfig(&creds)
 	sc, ok := config.(subshell.Config)
 	if !ok {
 		t.Fatal("NewSubshellConfig() did not return subshell.Config")
@@ -1224,12 +1224,12 @@ region = ap-southeast-1
 			}()
 
 			awsDir := filepath.Join(tmpDir, ".aws")
-			if err := os.MkdirAll(awsDir, 0700); err != nil {
+			if err := os.MkdirAll(awsDir, 0o700); err != nil {
 				t.Fatalf("Failed to create .aws dir: %v", err)
 			}
 
 			configPath := filepath.Join(awsDir, "config")
-			if err := os.WriteFile(configPath, []byte(tc.configContent), 0600); err != nil {
+			if err := os.WriteFile(configPath, []byte(tc.configContent), 0o600); err != nil {
 				t.Fatalf("Failed to write config file: %v", err)
 			}
 

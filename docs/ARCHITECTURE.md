@@ -173,7 +173,7 @@ Since subshell functionality is optional, we use interface composition:
 
 ```go
 type SubshellProvider interface {
-    NewSubshellConfig(creds Credentials) interface{}
+    NewSubshellConfig(creds *Credentials) interface{}
 }
 ```
 
@@ -471,7 +471,7 @@ type SubshellDecider interface {
     ShouldUseSubshell() bool
 }
 type SubshellProvider interface {
-    NewSubshellConfig(creds Credentials) interface{}
+    NewSubshellConfig(creds *Credentials) interface{}
 }
 ```
 

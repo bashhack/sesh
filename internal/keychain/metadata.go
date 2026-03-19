@@ -53,14 +53,15 @@ func StoreEntryMetadata(servicePrefix, service, account, description string) err
 	now := time.Now().UTC()
 	found := false
 	for i, entry := range entries {
-		if entry.Service == service && entry.Account == account {
-			// Update existing entry
-			entries[i].Description = description
-			entries[i].ServiceType = servicePrefix
-			entries[i].UpdatedAt = now
-			found = true
-			break
+		if entry.Service != service || entry.Account != account {
+			continue
 		}
+		// Update existing entry
+		entries[i].Description = description
+		entries[i].ServiceType = servicePrefix
+		entries[i].UpdatedAt = now
+		found = true
+		break
 	}
 
 	// Add new entry if not found

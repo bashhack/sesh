@@ -182,7 +182,7 @@ func (a *App) GenerateCredentials(serviceName string) error {
 		return fmt.Errorf("failed to write to stderr: %w", err)
 	}
 
-	return a.PrintCredentials(creds)
+	return a.PrintCredentials(&creds)
 }
 
 // CopyToClipboard copies a value to the system clipboard
@@ -232,7 +232,7 @@ func (a *App) CopyToClipboard(serviceName string) error {
 }
 
 // PrintCredentials outputs the credentials
-func (a *App) PrintCredentials(creds provider.Credentials) error {
+func (a *App) PrintCredentials(creds *provider.Credentials) error {
 	// Format expiry time
 	expiryDisplay := "unknown"
 	if !creds.Expiry.IsZero() {
@@ -247,11 +247,12 @@ func (a *App) PrintCredentials(creds provider.Credentials) error {
 			seconds := total % 60
 
 			var validFor string
-			if hours > 0 {
+			switch {
+			case hours > 0:
 				validFor = fmt.Sprintf("%dh%dm", hours, minutes)
-			} else if minutes > 0 {
+			case minutes > 0:
 				validFor = fmt.Sprintf("%dm%ds", minutes, seconds)
-			} else {
+			default:
 				validFor = fmt.Sprintf("%ds", seconds)
 			}
 			expiryDisplay = fmt.Sprintf("%s (valid for %s)", formatted, validFor)

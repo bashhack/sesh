@@ -36,7 +36,7 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		return fmt.Errorf("provider %s does not support subshell customization", serviceName)
 	}
 
-	configInterface := subshellP.NewSubshellConfig(creds)
+	configInterface := subshellP.NewSubshellConfig(&creds)
 	config, ok := configInterface.(subshell.Config)
 	if !ok {
 		return fmt.Errorf("provider %s returned invalid subshell configuration", serviceName)

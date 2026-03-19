@@ -490,7 +490,7 @@ func (p *Provider) ShouldUseSubshell() bool {
 To add subshell support, implement the `SubshellProvider` interface. Note that the real AWS customizer (`internal/aws/subshell.go`) is ~120 lines with expiry countdown, progress bars, and helper commands — the example below is intentionally simplified to show the required structure:
 
 ```go
-func (p *Provider) NewSubshellConfig(creds provider.Credentials) interface{} {
+func (p *Provider) NewSubshellConfig(creds *provider.Credentials) interface{} {
     return subshell.Config{
         ServiceName:     p.Name(),
         Variables:       creds.Variables,

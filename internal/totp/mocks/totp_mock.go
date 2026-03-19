@@ -5,14 +5,14 @@ import "time"
 // MockProvider is a test double for totp.Provider.
 type MockProvider struct {
 	GenerateFunc                             func(secret string) (string, error)
-	GenerateConsecutiveCodesFunc             func(secret string) (current string, next string, err error)
-	GenerateConsecutiveCodesForTimeFunc      func(secret string, baseTime time.Time) (current string, next string, err error)
+	GenerateConsecutiveCodesFunc             func(secret string) (current, next string, err error)
+	GenerateConsecutiveCodesForTimeFunc      func(secret string, baseTime time.Time) (current, next string, err error)
 	GenerateForTimeFunc                      func(secret string, t time.Time) (string, error)
 	GenerateSecureFunc                       func(secret string) (string, error)
 	GenerateForTimeSecureFunc                func(secret string, t time.Time) (string, error)
 	GenerateBytesFunc                        func(secret []byte) (string, error)
-	GenerateConsecutiveCodesBytesFunc        func(secret []byte) (current string, next string, err error)
-	GenerateConsecutiveCodesForTimeBytesFunc func(secret []byte, baseTime time.Time) (current string, next string, err error)
+	GenerateConsecutiveCodesBytesFunc        func(secret []byte) (current, next string, err error)
+	GenerateConsecutiveCodesForTimeBytesFunc func(secret []byte, baseTime time.Time) (current, next string, err error)
 	GenerateForTimeBytesFunc                 func(secret []byte, t time.Time) (string, error)
 }
 
@@ -25,7 +25,7 @@ func (m *MockProvider) Generate(secret string) (string, error) {
 }
 
 // GenerateConsecutiveCodes returns consecutive TOTP codes, or zero values if the func is not set.
-func (m *MockProvider) GenerateConsecutiveCodes(secret string) (current string, next string, err error) {
+func (m *MockProvider) GenerateConsecutiveCodes(secret string) (current, next string, err error) {
 	if m.GenerateConsecutiveCodesFunc == nil {
 		return "", "", nil
 	}
@@ -65,7 +65,7 @@ func (m *MockProvider) GenerateBytes(secret []byte) (string, error) {
 }
 
 // GenerateConsecutiveCodesBytes returns consecutive TOTP codes from a byte slice, or zero values if the func is not set.
-func (m *MockProvider) GenerateConsecutiveCodesBytes(secret []byte) (current string, next string, err error) {
+func (m *MockProvider) GenerateConsecutiveCodesBytes(secret []byte) (current, next string, err error) {
 	if m.GenerateConsecutiveCodesBytesFunc == nil {
 		return "", "", nil
 	}
@@ -73,7 +73,7 @@ func (m *MockProvider) GenerateConsecutiveCodesBytes(secret []byte) (current str
 }
 
 // GenerateConsecutiveCodesForTime returns consecutive TOTP codes for a given base time, or zero values if the func is not set.
-func (m *MockProvider) GenerateConsecutiveCodesForTime(secret string, baseTime time.Time) (current string, next string, err error) {
+func (m *MockProvider) GenerateConsecutiveCodesForTime(secret string, baseTime time.Time) (current, next string, err error) {
 	if m.GenerateConsecutiveCodesForTimeFunc == nil {
 		return "", "", nil
 	}
@@ -81,7 +81,7 @@ func (m *MockProvider) GenerateConsecutiveCodesForTime(secret string, baseTime t
 }
 
 // GenerateConsecutiveCodesForTimeBytes returns consecutive TOTP codes from a byte slice for a given base time, or zero values if the func is not set.
-func (m *MockProvider) GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current string, next string, err error) {
+func (m *MockProvider) GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current, next string, err error) {
 	if m.GenerateConsecutiveCodesForTimeBytesFunc == nil {
 		return "", "", nil
 	}
