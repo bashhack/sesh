@@ -45,6 +45,24 @@ var getCurrentUser = env.GetCurrentUser
 // execLookPath is a variable so we can swap it out in tests
 var execLookPath = exec.LookPath
 
+// readLine reads a line of input, returning the trimmed string or an error.
+func readLine(r *bufio.Reader) (string, error) {
+	line, err := r.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("failed to read input: %w", err)
+	}
+	return strings.TrimSpace(line), nil
+}
+
+// waitForEnter blocks until the user presses Enter.
+func waitForEnter(r *bufio.Reader) error {
+	_, err := r.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read input: %w", err)
+	}
+	return nil
+}
+
 // AWS Setup Handler
 
 // AWSSetupHandler implements SetupHandler for AWS
@@ -196,7 +214,9 @@ IMPORTANT - FOLLOW THESE STEPS:
 3. Wait for confirmation in the AWS console that setup is complete
 
 Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS console...`, firstCode, secondCode)
-	h.reader.ReadString('\n')
+	if err := waitForEnter(h.reader); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -233,8 +253,10 @@ mfaDeviceLoop:
 		selectionPrompt:
 			fmt.Print("\nChoose the MFA device you just created (1-" + fmt.Sprintf("%d", len(mfaDevices)) +
 				"), 'r' to refresh the list, or 'm' to enter manually: ")
-			choice, _ := h.reader.ReadString('\n')
-			choice = strings.TrimSpace(choice)
+			choice, err := readLine(h.reader)
+			if err != nil {
+				return "", err
+			}
 
 			switch choice {
 			case "r", "R":
@@ -307,8 +329,10 @@ What would you like to do?
 3: Enter your MFA ARN manually
 Enter your choice (1-3): `)
 
-		retryChoice, _ := h.reader.ReadString('\n')
-		retryChoice = strings.TrimSpace(retryChoice)
+		retryChoice, err := readLine(h.reader)
+		if err != nil {
+			return "", err
+		}
 
 		switch retryChoice {
 		case "1": // Wait and retry
@@ -326,7 +350,9 @@ Please complete these steps in the AWS Console:
 1. Make sure you've clicked "Add MFA" after entering the TOTP codes
 2. Confirm you see "MFA device was successfully assigned" message
 3. Press Enter when complete...`)
-			h.reader.ReadString('\n')
+			if err := waitForEnter(h.reader); err != nil {
+				return "", err
+			}
 
 			// Try fetching again
 			mfaCmd = h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
@@ -395,8 +421,10 @@ How would you like to capture the MFA secret?
 2: Capture QR code from screen (take a screenshot of the QR code)
 Enter your choice (1-2): `)
 
-	choice, _ := h.reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
+	choice, err := readLine(h.reader)
+	if err != nil {
+		return "", err
+	}
 
 	if choice != "1" && choice != "2" {
 		return "", fmt.Errorf("invalid choice, please select 1 or 2")
@@ -454,8 +482,10 @@ func (h *AWSSetupHandler) Setup() error {
 	fmt.Println("✅ AWS CLI is installed")
 
 	fmt.Print("Enter AWS CLI profile name (leave empty for default): ")
-	profile, _ := h.reader.ReadString('\n')
-	profile = strings.TrimSpace(profile)
+	profile, err := readLine(h.reader)
+	if err != nil {
+		return err
+	}
 
 	// Check if entry already exists
 	user, err := getCurrentUser()
@@ -482,8 +512,11 @@ func (h *AWSSetupHandler) Setup() error {
 		fmt.Printf("\n⚠️  An entry already exists for AWS profile '%s'\n", profileDisplay)
 		fmt.Print("\nOverwrite existing configuration? (y/N): ")
 
-		response, _ := h.reader.ReadString('\n')
-		response = strings.TrimSpace(strings.ToLower(response))
+		response, readErr := readLine(h.reader)
+		if readErr != nil {
+			return readErr
+		}
+		response = strings.ToLower(response)
 
 		if response != "y" && response != "yes" {
 			fmt.Println("\n❌ Setup cancelled")
@@ -591,8 +624,10 @@ func (h *TOTPSetupHandler) createTOTPServiceName(serviceName, profile string) (s
 // promptForServiceName prompts the user to enter a service name and validates it
 func (h *TOTPSetupHandler) promptForServiceName() (string, error) {
 	fmt.Print("Enter name for this TOTP service: ")
-	serviceName, _ := h.reader.ReadString('\n')
-	serviceName = strings.TrimSpace(serviceName)
+	serviceName, err := readLine(h.reader)
+	if err != nil {
+		return "", err
+	}
 
 	if serviceName == "" {
 		return "", fmt.Errorf("service name cannot be empty")
@@ -604,8 +639,10 @@ func (h *TOTPSetupHandler) promptForServiceName() (string, error) {
 // promptForProfile prompts the user to enter an optional profile name
 func (h *TOTPSetupHandler) promptForProfile() (string, error) {
 	fmt.Print("Enter profile name (optional, for multiple accounts with the same service): ")
-	profile, _ := h.reader.ReadString('\n')
-	profile = strings.TrimSpace(profile)
+	profile, err := readLine(h.reader)
+	if err != nil {
+		return "", err
+	}
 	return profile, nil
 }
 
@@ -616,8 +653,10 @@ func (h *TOTPSetupHandler) promptForCaptureMethod() (string, error) {
 	fmt.Println("1: Enter the secret key manually")
 	fmt.Println("2: Capture QR code from screen")
 	fmt.Print("Enter your choice (1-2): ")
-	choice, _ := h.reader.ReadString('\n')
-	choice = strings.TrimSpace(choice)
+	choice, err := readLine(h.reader)
+	if err != nil {
+		return "", err
+	}
 
 	if choice != "1" && choice != "2" {
 		return "", fmt.Errorf("invalid choice, please select 1 or 2")
@@ -708,8 +747,11 @@ func (h *TOTPSetupHandler) Setup() error {
 		fmt.Println()
 		fmt.Print("\nOverwrite existing configuration? (y/N): ")
 
-		response, _ := h.reader.ReadString('\n')
-		response = strings.TrimSpace(strings.ToLower(response))
+		response, readErr := readLine(h.reader)
+		if readErr != nil {
+			return readErr
+		}
+		response = strings.ToLower(response)
 
 		if response != "y" && response != "yes" {
 			fmt.Println("\n❌ Setup cancelled")
@@ -785,7 +827,9 @@ func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, er
 		fmt.Printf("📸 QR capture attempt %d/%d\n", attempt, maxRetries)
 		fmt.Println("Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
 		fmt.Print("Press Enter to activate screenshot mode...")
-		reader.ReadString('\n')
+		if err := waitForEnter(reader); err != nil {
+			return "", err
+		}
 
 		secretStr, err := scanQRCode()
 		if err == nil {
@@ -798,8 +842,11 @@ func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, er
 		if attempt < maxRetries {
 			fmt.Println("💡 Tips: Check screen brightness, QR code size, and cursor positioning")
 			fmt.Print("Press Enter to try again, or 'm' to switch to manual entry: ")
-			choice, _ := reader.ReadString('\n')
-			if strings.ToLower(strings.TrimSpace(choice)) == "m" {
+			choice, readErr := readLine(reader)
+			if readErr != nil {
+				return "", readErr
+			}
+			if strings.ToLower(choice) == "m" {
 				fmt.Println("Switching to manual entry...")
 				return manualEntryFunc()
 			}
@@ -809,9 +856,12 @@ func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, er
 	// Final fallback after all retries
 	fmt.Println("\n❓ QR capture failed after multiple attempts.")
 	fmt.Print("Would you like to enter the secret manually instead? (y/n): ")
-	fallback, _ := reader.ReadString('\n')
+	fallback, err := readLine(reader)
+	if err != nil {
+		return "", err
+	}
 
-	if strings.ToLower(strings.TrimSpace(fallback)) == "y" {
+	if strings.ToLower(fallback) == "y" {
 		return manualEntryFunc()
 	}
 

@@ -104,7 +104,9 @@ func TestMockCommandContext(t *testing.T) {
 func TestCaptureOutput(t *testing.T) {
 	// Test stdout capture
 	stdout := CaptureStdout(func() {
-		os.Stdout.WriteString("test stdout")
+		if _, err := os.Stdout.WriteString("test stdout"); err != nil {
+			panic("failed to write to stdout: " + err.Error())
+		}
 	})
 	if stdout != "test stdout" {
 		t.Errorf("Expected 'test stdout', got '%s'", stdout)
@@ -112,7 +114,9 @@ func TestCaptureOutput(t *testing.T) {
 
 	// Test stderr capture
 	stderr := CaptureStderr(func() {
-		os.Stderr.WriteString("test stderr")
+		if _, err := os.Stderr.WriteString("test stderr"); err != nil {
+			panic("failed to write to stderr: " + err.Error())
+		}
 	})
 	if stderr != "test stderr" {
 		t.Errorf("Expected 'test stderr', got '%s'", stderr)

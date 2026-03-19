@@ -286,13 +286,13 @@ func (m mockFileInfo) Sys() any           { return nil }
 
 func TestDecodeQRCodeFromFile(t *testing.T) {
 	tests := map[string]struct {
-		setup   func() string
+		setup   func(*testing.T) string
 		cleanup func(string)
 		wantErr bool
 		errMsg  string
 	}{
 		"file not found": {
-			setup: func() string {
+			setup: func(*testing.T) string {
 				return "/nonexistent/file.png"
 			},
 			cleanup: func(string) {},
@@ -300,14 +300,36 @@ func TestDecodeQRCodeFromFile(t *testing.T) {
 			errMsg:  "failed to open image file",
 		},
 		"invalid png file": {
-			setup: func() string {
-				f, _ := os.CreateTemp("", "invalid*.png")
-				f.WriteString("not a png file")
-				f.Close()
+			setup: func(t *testing.T) string {
+				t.Helper()
+				f, err := os.CreateTemp("", "invalid*.png")
+				if err != nil {
+					t.Fatalf("test setup: failed to create temp file: %v", err)
+					return ""
+				}
+				if _, err := f.WriteString("not a png file"); err != nil {
+					if closeErr := f.Close(); closeErr != nil {
+						t.Logf("test setup: failed to close temp file during cleanup: %v", closeErr)
+					}
+					if removeErr := os.Remove(f.Name()); removeErr != nil {
+						t.Logf("test setup: failed to remove temp file during cleanup: %v", removeErr)
+					}
+					t.Fatalf("test setup: failed to write temp file: %v", err)
+					return ""
+				}
+				if err := f.Close(); err != nil {
+					if removeErr := os.Remove(f.Name()); removeErr != nil {
+						t.Logf("test setup: failed to remove temp file during cleanup: %v", removeErr)
+					}
+					t.Fatalf("test setup: failed to close temp file: %v", err)
+					return ""
+				}
 				return f.Name()
 			},
 			cleanup: func(name string) {
-				os.Remove(name)
+				if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+					t.Errorf("cleanup failed for %s: %v", name, err)
+				}
 			},
 			wantErr: true,
 			errMsg:  "failed to decode image",
@@ -316,7 +338,7 @@ func TestDecodeQRCodeFromFile(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			filename := tc.setup()
+			filename := tc.setup(t)
 			defer tc.cleanup(filename)
 
 			_, err := DecodeQRCodeFromFile(filename)
@@ -529,7 +551,9 @@ func TestScanQRCodeCleanup(t *testing.T) {
 	for _, file := range tempFiles {
 		if _, err := os.Stat(file); err == nil {
 			t.Errorf("Temp file %s was not cleaned up", file)
-			os.Remove(file)
+			if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+				t.Errorf("failed to remove leftover temp file: %v", err)
+			}
 		}
 	}
 }
@@ -604,12 +628,18 @@ func TestDecodeQRCodeFromFile_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() {
+		if err := os.Remove(tmpFile.Name()); err != nil && !os.IsNotExist(err) {
+			t.Errorf("failed to remove temp file: %v", err)
+		}
+	}()
 
 	if err := png.Encode(tmpFile, img); err != nil {
 		t.Fatalf("Failed to encode PNG: %v", err)
 	}
-	tmpFile.Close()
+	if err := tmpFile.Close(); err != nil {
+		t.Fatalf("Failed to close temp file: %v", err)
+	}
 
 	secret, err := DecodeQRCodeFromFile(tmpFile.Name())
 	if err != nil {

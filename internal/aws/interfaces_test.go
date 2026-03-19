@@ -34,7 +34,10 @@ func TestDefaultProviderGetSessionToken(t *testing.T) {
 			},
 		}
 
-		mockRespJSON, _ := json.Marshal(mockResp)
+		mockRespJSON, err := json.Marshal(mockResp)
+		if err != nil {
+			t.Fatalf("test setup: failed to marshal mock response: %v", err)
+		}
 		return exec.Command("echo", string(mockRespJSON))
 	}
 
@@ -63,7 +66,10 @@ func TestDefaultProviderGetFirstMFADevice(t *testing.T) {
 			},
 		}
 
-		mockRespJSON, _ := json.Marshal(mockResp)
+		mockRespJSON, err := json.Marshal(mockResp)
+		if err != nil {
+			t.Fatalf("test setup: failed to marshal mock response: %v", err)
+		}
 		return exec.Command("echo", string(mockRespJSON))
 	}
 

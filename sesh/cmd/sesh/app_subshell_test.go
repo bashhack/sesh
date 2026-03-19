@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -302,9 +301,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			for key, value := range tc.setupEnv {
-				oldValue := os.Getenv(key)
-				os.Setenv(key, value)
-				defer os.Setenv(key, oldValue)
+				t.Setenv(key, value)
 			}
 
 			app := &App{
@@ -354,9 +351,7 @@ func (m *mockExitErrorShellCustomizer) GetFallbackInitScript() string {
 }
 
 func TestApp_LaunchSubshell_RealExitError(t *testing.T) {
-	oldShell := os.Getenv("SHELL")
-	os.Setenv("SHELL", "/bin/bash")
-	defer os.Setenv("SHELL", oldShell)
+	t.Setenv("SHELL", "/bin/bash")
 
 	app := &App{
 		Registry: provider.NewRegistry(),

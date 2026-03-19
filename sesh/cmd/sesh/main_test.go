@@ -85,7 +85,9 @@ func TestVersionFlag(t *testing.T) {
 
 func TestPrintUsage(t *testing.T) {
 	h := newTestHarness()
-	h.app.PrintUsage()
+	if err := h.app.PrintUsage(); err != nil {
+		t.Fatalf("PrintUsage failed: %v", err)
+	}
 
 	output := h.stdout.String()
 	expectedStrings := []string{
@@ -189,7 +191,9 @@ func TestPrintProviderUsage(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			h := newTestHarness()
-			h.app.PrintProviderUsage(tc.serviceName, tc.provider)
+			if err := h.app.PrintProviderUsage(tc.serviceName, tc.provider); err != nil {
+				t.Fatalf("PrintProviderUsage failed: %v", err)
+			}
 
 			output := h.stdout.String()
 			if !strings.Contains(output, tc.serviceName) {
@@ -483,7 +487,7 @@ func TestRun_Commands(t *testing.T) {
 			},
 			wantExitCode: 1,
 			checkStderr: func(t *testing.T, stderr string) {
-				if !strings.Contains(stderr, "Setup failed") {
+				if !strings.Contains(stderr, "setup failed") {
 					t.Error("Expected setup failure message")
 				}
 			},

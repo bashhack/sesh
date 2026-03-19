@@ -255,7 +255,9 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 				Clock:       provider.Clock{Now: func() time.Time { return time.Unix(5, 0) }},
 			}
 
-			_, _ = p.GetCredentials()
+			if _, err := p.GetCredentials(); err != nil {
+				t.Fatalf("GetCredentials() unexpected error: %v", err)
+			}
 
 			stderr := restore()
 			if !strings.Contains(stderr, tc.wantSubstr) {

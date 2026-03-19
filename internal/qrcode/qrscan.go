@@ -23,7 +23,11 @@ var (
 // ScanQRCode captures a QR code using screenshots and extracts the TOTP secret
 func ScanQRCode() (string, error) {
 	tempFile := filepath.Join(os.TempDir(), fmt.Sprintf("sesh-qr-%d.png", time.Now().UnixNano()))
-	defer os.Remove(tempFile)
+	defer func() {
+		if err := os.Remove(tempFile); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "warning: failed to remove temp file %s: %v\n", tempFile, err)
+		}
+	}()
 
 	fmt.Println("📸 Please select the area containing the QR code...")
 	cmd := execCommand("screencapture", "-i", tempFile)
@@ -48,7 +52,11 @@ func DecodeQRCodeFromFile(filename string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to open image file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to close image file: %v\n", err)
+		}
+	}()
 
 	img, err := png.Decode(file)
 	if err != nil {

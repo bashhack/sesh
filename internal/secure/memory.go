@@ -19,6 +19,7 @@ package secure
 
 import (
 	"bytes"
+	"fmt"
 	"os/exec"
 	"runtime"
 )
@@ -122,13 +123,23 @@ func ExecWithSecretInput(cmd *exec.Cmd, secret []byte) error {
 	}
 
 	if _, err := stdin.Write(secret); err != nil {
-		_ = cmd.Process.Kill() // Kill process on write error
-		_ = cmd.Wait()         // Clean up resources
+		if killErr := cmd.Process.Kill(); killErr != nil {
+			return fmt.Errorf("write failed: %w (and kill failed: %v)", err, killErr)
+		}
+		if waitErr := cmd.Wait(); waitErr != nil {
+			// Expected after kill — process was terminated
+			return err
+		}
 		return err
 	}
 
-	// Close stdin to signal EOF
-	_ = stdin.Close()
+	if err := stdin.Close(); err != nil {
+		waitErr := cmd.Wait()
+		if waitErr != nil {
+			return fmt.Errorf("failed to close stdin: %w (wait error: %v)", err, waitErr)
+		}
+		return fmt.Errorf("failed to close stdin: %w", err)
+	}
 
 	return cmd.Wait()
 }
