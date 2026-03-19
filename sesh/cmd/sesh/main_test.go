@@ -18,7 +18,7 @@ import (
 )
 
 // TestHelperProcess is needed for the testutil.MockExecCommand function
-func TestHelperProcess(t *testing.T) {
+func TestHelperProcess(_ *testing.T) {
 	testutil.TestHelperProcess()
 }
 

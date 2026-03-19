@@ -13,15 +13,11 @@ import (
 // MockExecCommand returns a function that creates a mock exec.Command
 func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd {
 	return func(_ string, _ ...string) *exec.Cmd {
-		cmd := &exec.Cmd{}
-
 		if err != nil {
-			cmd = exec.Command("false")
-			return cmd
+			return exec.Command("false")
 		}
 
-		cmd = exec.Command("echo", output)
-		return cmd
+		return exec.Command("echo", output)
 	}
 }
 

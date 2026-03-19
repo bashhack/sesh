@@ -137,7 +137,7 @@ func (h *AWSSetupHandler) captureMFASecret(choice string) (string, error) {
 ❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together`)
 
 		fmt.Print("\n📋 Paste the secret key below and press Enter:\n→ ")
-		secret, err := readPassword(int(syscall.Stdin))
+		secret, err := readPassword(syscall.Stdin)
 		if err != nil {
 			return "", fmt.Errorf("failed to read secret: %w", err)
 		}
@@ -184,7 +184,7 @@ func (h *AWSSetupHandler) captureAWSManualEntry() (string, error) {
 ❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together`)
 
 	fmt.Print("\n📋 Paste the secret key below and press Enter:\n→ ")
-	secret, err := readPassword(int(syscall.Stdin))
+	secret, err := readPassword(syscall.Stdin)
 	if err != nil {
 		return "", fmt.Errorf("failed to read secret: %w", err)
 	}
@@ -329,7 +329,8 @@ What would you like to do?
 3: Enter your MFA ARN manually
 Enter your choice (1-3): `)
 
-		retryChoice, err := readLine(h.reader)
+		var retryChoice string
+		retryChoice, err = readLine(h.reader)
 		if err != nil {
 			return "", err
 		}
@@ -350,8 +351,8 @@ Please complete these steps in the AWS Console:
 1. Make sure you've clicked "Add MFA" after entering the TOTP codes
 2. Confirm you see "MFA device was successfully assigned" message
 3. Press Enter when complete...`)
-			if err := waitForEnter(h.reader); err != nil {
-				return "", err
+			if waitErr := waitForEnter(h.reader); waitErr != nil {
+				return "", waitErr
 			}
 
 			// Try fetching again
@@ -360,7 +361,6 @@ Please complete these steps in the AWS Console:
 			retryCount++
 
 		case "3": // Manual entry with validation
-			var err error
 			mfaArn, err = h.promptForMFAARN()
 			if err != nil {
 				return "", err
@@ -685,7 +685,7 @@ func (h *TOTPSetupHandler) captureQRCodeWithFallback() (string, error) {
 // captureManualEntry handles manual secret entry with secure memory handling
 func (h *TOTPSetupHandler) captureManualEntry() (string, error) {
 	fmt.Print("\n📋 Enter or paste your TOTP secret key and press Enter:\n→ ")
-	secret, err := readPassword(int(syscall.Stdin))
+	secret, err := readPassword(syscall.Stdin)
 	if err != nil {
 		return "", fmt.Errorf("failed to read secret: %w", err)
 	}

@@ -185,15 +185,6 @@ func GetMFASerialBytes(account, profile string) ([]byte, error) {
 	return result, nil
 }
 
-// keychainItem represents a parsed keychain entry
-type keychainItem struct {
-	Service     string
-	Account     string
-	Description string
-	Label       string
-	Data        string
-}
-
 // ListEntries lists all entries for a given service prefix
 func ListEntries(servicePrefix string) ([]KeychainEntry, error) {
 	// Use the metadata system to get entries - no fallback to insecure dump-keychain
