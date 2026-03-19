@@ -48,7 +48,7 @@ func ScanQRCode() (string, error) {
 
 // DecodeQRCodeFromFile reads a QR code from an image file and extracts the TOTP secret
 func DecodeQRCodeFromFile(filename string) (string, error) {
-	file, err := os.Open(filename)
+	file, err := os.Open(filename) //nolint:gosec // filename comes from our own screencapture subprocess
 	if err != nil {
 		return "", fmt.Errorf("failed to open image file: %w", err)
 	}

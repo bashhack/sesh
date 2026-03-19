@@ -290,7 +290,7 @@ func (p *Provider) getAWSProfiles() ([]string, error) {
 	}
 
 	configPath := filepath.Join(homeDir, ".aws", "config")
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(configPath) //nolint:gosec // path is constructed from os.UserHomeDir() + hardcoded suffix
 	if err != nil {
 		return nil, err
 	}
