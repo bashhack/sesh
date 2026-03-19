@@ -53,9 +53,9 @@ func (a *App) LaunchSubshell(serviceName string) error {
 	var cmd *exec.Cmd
 
 	if len(shellConfig.Args) > 0 {
-		cmd = exec.Command(shellConfig.Shell, shellConfig.Args...)
+		cmd = exec.Command(shellConfig.Shell, shellConfig.Args...) //nolint:gosec // shell path comes from $SHELL env var — launching the user's shell is intentional
 	} else {
-		cmd = exec.Command(shellConfig.Shell)
+		cmd = exec.Command(shellConfig.Shell) //nolint:gosec // shell path comes from $SHELL env var — launching the user's shell is intentional
 	}
 
 	cmd.Stdin = os.Stdin

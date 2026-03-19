@@ -7,20 +7,6 @@ run:
   # Timeout for analysis
   timeout: 5m
 
-  # Directories to skip
-  skip-dirs:
-    - vendor
-    - bin
-    - build
-    - docs
-    - todo
-    - scripts
-
-  # Which files to skip
-  skip-files:
-    - ".*\\.pb\\.go$"
-    - ".*_generated\\.go$"
-
 linters:
   # Default linters (errcheck, govet, ineffassign, staticcheck, unused) are enabled automatically
   # Only add additional linters here
@@ -62,27 +48,35 @@ linters:
       disabled-checks:
         - unnamedResult # Allow unnamed results
 
+  exclusions:
+    # Directories and files to skip
+    paths:
+      - vendor
+      - bin
+      - build
+      - docs
+      - todo
+      - scripts
+      - ".*\\.pb\\.go$"
+      - ".*_generated\\.go$"
+
+    rules:
+      # Exclude security and style linters from test files and test utilities —
+      # test helper processes (exec.Command with os.Args[0]) are a standard
+      # Go pattern, not a security concern.
+      - path: (_test\.go|internal/testutil/)
+        linters:
+          - gosec
+          - gocritic
+
+      # Exclude shadow checking on the variable named err
+      - text: 'shadow: declaration of "err"'
+        linters:
+          - govet
+
 issues:
   # Maximum issues count per one linter
   max-issues-per-linter: 0
 
   # Maximum count of issues with the same text
   max-same-issues: 0
-
-  # Exclude known linters from partially hard-vendored code
-  exclude-rules:
-    # Exclude some linters from running on tests files
-    - path: _test\.go
-      linters:
-        - gosec
-        - gocritic
-
-    # Exclude shadow checking on the variable named err
-    - text: "shadow: declaration of \"err\""
-      linters:
-        - govet
-
-    # Exclude QF1008 - explicit embedded field names preferred for clarity
-    - linters:
-        - staticcheck
-      text: "QF1008:"
