@@ -61,7 +61,7 @@ type MFADeviceList struct {
 
 // Credentials mirrors the temporary credentials in the STS session token response.
 type Credentials struct {
-	AccessKeyID     string `json:"AccessKeyID"`
+	AccessKeyID     string `json:"AccessKeyId"`
 	SecretAccessKey string `json:"SecretAccessKey"`
 	SessionToken    string `json:"SessionToken"`
 	Expiration      string `json:"Expiration"`

@@ -17,7 +17,7 @@ var execCommand = exec.Command
 
 // Credentials holds the temporary AWS session credentials returned by STS.
 type Credentials struct {
-	AccessKeyID     string `json:"AccessKeyID"`
+	AccessKeyID     string `json:"AccessKeyId"`
 	SecretAccessKey string `json:"SecretAccessKey"`
 	SessionToken    string `json:"SessionToken"`
 	Expiration      string `json:"Expiration"`
