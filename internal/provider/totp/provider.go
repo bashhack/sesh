@@ -1,3 +1,4 @@
+// Package totp implements the TOTP provider for sesh, handling generic TOTP credential management.
 package totp
 
 import (

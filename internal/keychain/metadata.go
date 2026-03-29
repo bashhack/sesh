@@ -19,6 +19,7 @@ var (
 	zstdDecoder *zstd.Decoder
 )
 
+// init initializes the shared zstd encoder and decoder used for metadata compression.
 func init() {
 	var err error
 	zstdEncoder, err = zstd.NewWriter(nil)
@@ -90,7 +91,7 @@ func RemoveEntryMetadata(servicePrefix, service, account string) error {
 	// Filter out the entry to remove
 	updatedEntries := []KeychainEntryMeta{}
 	for _, entry := range entries {
-		if !(entry.Service == service && entry.Account == account) {
+		if entry.Service != service || entry.Account != account {
 			updatedEntries = append(updatedEntries, entry)
 		}
 	}

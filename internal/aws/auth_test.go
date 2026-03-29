@@ -27,7 +27,7 @@ func TestGetSessionToken_Success(t *testing.T) {
 
 	mockResp := SessionTokenResponse{
 		Credentials: Credentials{
-			AccessKeyId:     "MOCK-ACCESS-KEY",
+			AccessKeyID:     "MOCK-ACCESS-KEY",
 			SecretAccessKey: "mock-secret-key",
 			SessionToken:    "mock-session-token",
 			Expiration:      "2025-01-01T00:00:00Z",
@@ -47,8 +47,8 @@ func TestGetSessionToken_Success(t *testing.T) {
 		t.Errorf("Expected no error, got: %v", err)
 	}
 
-	if creds.AccessKeyId != "MOCK-ACCESS-KEY" {
-		t.Errorf("Expected AccessKeyId 'MOCK-ACCESS-KEY', got '%s'", creds.AccessKeyId)
+	if creds.AccessKeyID != "MOCK-ACCESS-KEY" {
+		t.Errorf("Expected AccessKeyID 'MOCK-ACCESS-KEY', got '%s'", creds.AccessKeyID)
 	}
 
 	if creds.SecretAccessKey != "mock-secret-key" {
@@ -101,7 +101,7 @@ func TestGetSessionToken_EmptyProfile(t *testing.T) {
 
 		mockResp := SessionTokenResponse{
 			Credentials: Credentials{
-				AccessKeyId:     "MOCK-ACCESS-KEY",
+				AccessKeyID:     "MOCK-ACCESS-KEY",
 				SecretAccessKey: "mock-secret-key",
 				SessionToken:    "mock-session-token",
 				Expiration:      "2025-01-01T00:00:00Z",
@@ -265,7 +265,7 @@ func TestCredentials_ZeroSecrets(t *testing.T) {
 	}{
 		"normal credentials": {
 			creds: &Credentials{
-				AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
+				AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 				SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 				SessionToken:    "AQoDYXdzEJr...",
 				Expiration:      "2023-12-01T00:00:00Z",
@@ -288,8 +288,8 @@ func TestCredentials_ZeroSecrets(t *testing.T) {
 				return
 			}
 
-			if tc.creds.AccessKeyId != "" {
-				t.Errorf("AccessKeyId not zeroed: %q", tc.creds.AccessKeyId)
+			if tc.creds.AccessKeyID != "" {
+				t.Errorf("AccessKeyID not zeroed: %q", tc.creds.AccessKeyID)
 			}
 			if tc.creds.SecretAccessKey != "" {
 				t.Errorf("SecretAccessKey not zeroed: %q", tc.creds.SecretAccessKey)

@@ -29,6 +29,7 @@ const (
 	colorYellow = "\033[1;33m"
 )
 
+// generateSecret creates a random 128-bit base32-encoded TOTP secret.
 func generateSecret() (string, error) {
 	// Generate 16 random bytes (128 bits)
 	bytes := make([]byte, 16)
@@ -46,6 +47,7 @@ func generateSecret() (string, error) {
 	return secret, nil
 }
 
+// generateTOTPURI builds an otpauth:// URI for the given service, account, and secret.
 func generateTOTPURI(serviceName, accountName, secret string) string {
 	// Build the TOTP URI according to the spec
 	// otpauth://totp/LABEL?secret=SECRET&issuer=ISSUER
@@ -66,6 +68,7 @@ func generateTOTPURI(serviceName, accountName, secret string) string {
 	return u.String()
 }
 
+// printQRCode renders a QR code for the given URI to the terminal.
 func printQRCode(uri string) error {
 	// Generate QR code in terminal using ASCII
 	qr, err := qrcode.New(uri, qrcode.Low)
@@ -79,6 +82,7 @@ func printQRCode(uri string) error {
 	return nil
 }
 
+// main runs the mock TOTP service, generating a secret and displaying its QR code.
 func main() {
 	// Parse command line arguments
 	serviceName := "TestService"

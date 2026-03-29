@@ -1,3 +1,4 @@
+// Package subshell manages spawning and configuring authenticated subshells with AWS credentials.
 package subshell
 
 import (
@@ -7,6 +8,7 @@ import (
 	"time"
 )
 
+// Config holds the parameters needed to launch an authenticated subshell.
 type Config struct {
 	Expiry          time.Time
 	ShellCustomizer ShellCustomizer
@@ -14,6 +16,7 @@ type Config struct {
 	ServiceName     string
 }
 
+// ShellCustomizer provides shell-specific init scripts and prompt configuration.
 type ShellCustomizer interface {
 	GetZshInitScript() string
 	GetBashInitScript() string
@@ -30,6 +33,8 @@ type ShellConfig struct {
 	Env         []string
 }
 
+// GetShellConfig detects the user's shell and builds the arguments, environment,
+// and temp files needed to launch an authenticated subshell.
 func GetShellConfig(config Config) (*ShellConfig, error) {
 	if config.ShellCustomizer == nil {
 		return nil, fmt.Errorf("shell customizer is required")
@@ -111,6 +116,7 @@ func GetShellConfig(config Config) (*ShellConfig, error) {
 	}, nil
 }
 
+// SetupZshShell creates a temporary ZDOTDIR with a custom .zshrc for the subshell.
 func SetupZshShell(config Config, env []string) ([]string, string, error) {
 	// Create a temporary ZDOTDIR for zsh
 	tmpDir, err := os.MkdirTemp("", "sesh_zsh")
@@ -127,6 +133,7 @@ func SetupZshShell(config Config, env []string) ([]string, string, error) {
 	return env, tmpDir, nil
 }
 
+// SetupBashShell creates a temporary rcfile with the bash init script for the subshell.
 func SetupBashShell(config Config) (f *os.File, retErr error) {
 	// Create a temporary rcfile for bash
 	tmpFile, err := os.CreateTemp("", "sesh_bashrc")
@@ -146,6 +153,7 @@ func SetupBashShell(config Config) (f *os.File, retErr error) {
 	return tmpFile, nil
 }
 
+// SetupFallbackShell creates a temporary rcfile for shells other than zsh or bash.
 func SetupFallbackShell(config Config, env []string) (_ []string, _ string, retErr error) {
 	tmpFile, err := os.CreateTemp("", "sesh_shellrc")
 	if err != nil {

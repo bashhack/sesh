@@ -40,33 +40,39 @@ const (
 	mockSessionName = "mock-session"
 )
 
+// CallerIdentity mirrors the aws sts get-caller-identity JSON response.
 type CallerIdentity struct {
 	UserId  string `json:"UserId"`
 	Account string `json:"Account"`
 	Arn     string `json:"Arn"`
 }
 
+// MFADevice mirrors a single entry in the aws iam list-mfa-devices response.
 type MFADevice struct {
 	UserName     string `json:"UserName"`
 	SerialNumber string `json:"SerialNumber"`
 	EnableDate   string `json:"EnableDate"`
 }
 
+// MFADeviceList mirrors the aws iam list-mfa-devices JSON response.
 type MFADeviceList struct {
 	MFADevices []MFADevice `json:"MFADevices"`
 }
 
+// Credentials mirrors the temporary credentials in the STS session token response.
 type Credentials struct {
-	AccessKeyId     string `json:"AccessKeyId"`
+	AccessKeyID     string `json:"AccessKeyId"`
 	SecretAccessKey string `json:"SecretAccessKey"`
 	SessionToken    string `json:"SessionToken"`
 	Expiration      string `json:"Expiration"`
 }
 
+// SessionCredentials mirrors the aws sts get-session-token JSON response.
 type SessionCredentials struct {
 	Credentials Credentials `json:"Credentials"`
 }
 
+// main dispatches mock AWS CLI commands based on the first argument.
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "%sError: aws requires at least one argument%s\n", colorRed, colorReset)
@@ -95,6 +101,7 @@ func main() {
 	}
 }
 
+// handleSTS routes STS subcommands (get-caller-identity, get-session-token).
 func handleSTS() {
 	if len(os.Args) < 3 {
 		fmt.Fprintf(os.Stderr, "%sError: sts requires a subcommand%s\n", colorRed, colorReset)
@@ -114,6 +121,7 @@ func handleSTS() {
 	}
 }
 
+// handleIAM routes IAM subcommands (list-mfa-devices).
 func handleIAM() {
 	if len(os.Args) < 3 {
 		fmt.Fprintf(os.Stderr, "%sError: iam requires a subcommand%s\n", colorRed, colorReset)
@@ -131,6 +139,7 @@ func handleIAM() {
 	}
 }
 
+// handleConfigure routes configure subcommands (get).
 func handleConfigure() {
 	if len(os.Args) < 3 {
 		fmt.Fprintf(os.Stderr, "%sError: configure requires a subcommand%s\n", colorRed, colorReset)
@@ -158,6 +167,7 @@ func handleConfigure() {
 	}
 }
 
+// getCallerIdentity returns a mock STS caller identity response.
 func getCallerIdentity() {
 	// Simulate a brief network delay
 	time.Sleep(100 * time.Millisecond)
@@ -178,6 +188,7 @@ func getCallerIdentity() {
 	fmt.Println(string(output))
 }
 
+// listMFADevices returns a mock IAM list-mfa-devices response.
 func listMFADevices() {
 	// Simulate a brief network delay
 	time.Sleep(100 * time.Millisecond)
@@ -238,6 +249,7 @@ func listMFADevices() {
 	fmt.Println(string(output))
 }
 
+// getSessionToken returns mock temporary session credentials after validating the TOTP code.
 func getSessionToken() {
 	// Simulate a brief network delay
 	time.Sleep(200 * time.Millisecond)
@@ -270,7 +282,7 @@ func getSessionToken() {
 
 	creds := SessionCredentials{
 		Credentials: Credentials{
-			AccessKeyId:     "ASIAMOCKTEMPORARY" + strings.ToUpper(tokenCode[:3]),
+			AccessKeyID:     "ASIAMOCKTEMPORARY" + strings.ToUpper(tokenCode[:3]),
 			SecretAccessKey: "mockTemporarySecretKey" + tokenCode,
 			SessionToken:    "FwoGZXIvYXdzEMOCKEXAMPLETOKEN==" + tokenCode,
 			Expiration:      expiration,
@@ -281,6 +293,7 @@ func getSessionToken() {
 	fmt.Println(string(output))
 }
 
+// isValidTokenCode checks that a TOTP code is exactly 6 digits.
 func isValidTokenCode(code string) bool {
 	// Simple validation: 6 digits
 	if len(code) != 6 {

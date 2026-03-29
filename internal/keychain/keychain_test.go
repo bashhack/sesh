@@ -1,6 +1,7 @@
 package keychain
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -12,86 +13,90 @@ import (
 	"github.com/bashhack/sesh/internal/testutil"
 )
 
-func TestGetSecretBytesSuccess(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+// --- Helper to save/restore all mockable functions ---
 
-	mockOutput := "test-secret"
-	mockError := error(nil)
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-			fmt.Sprintf("MOCK_OUTPUT=%s", mockOutput),
-		}
-		if mockError != nil {
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		}
-		return cmd
+type mockState struct {
+	getCurrentUser  func() (string, error)
+	captureSecure   func(*exec.Cmd) ([]byte, error)
+	execSecretInput func(*exec.Cmd, []byte) error
+	execCommand     func(string, ...string) *exec.Cmd
+}
+
+func saveMocks() mockState {
+	return mockState{
+		getCurrentUser:  getCurrentUser,
+		captureSecure:   captureSecure,
+		execSecretInput: execSecretInput,
+		execCommand:     execCommand,
+	}
+}
+
+func (m mockState) restore() {
+	getCurrentUser = m.getCurrentUser
+	captureSecure = m.captureSecure
+	execSecretInput = m.execSecretInput
+	execCommand = m.execCommand
+}
+
+// --- Tests using in-process mocks (pattern 1) ---
+
+func TestGetCurrentUserDefault(t *testing.T) {
+	// Exercise the real getCurrentUser (calls whoami)
+	user, err := getCurrentUser()
+	if err != nil {
+		t.Fatalf("getCurrentUser: %v", err)
+	}
+	if user == "" {
+		t.Fatal("getCurrentUser returned empty string")
+	}
+}
+
+func TestGetSecretBytesSuccess(t *testing.T) {
+	orig := saveMocks()
+	defer orig.restore()
+
+	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+		return []byte("test-secret"), nil
 	}
 
 	secretBytes, err := GetSecretBytes("testuser", "test-service")
-
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
 	}
-
-	secret := string(secretBytes)
-	if secret != mockOutput {
-		t.Errorf("Expected secret '%s', got '%s'", mockOutput, secret)
+	if string(secretBytes) != "test-secret" {
+		t.Errorf("Expected secret 'test-secret', got '%s'", string(secretBytes))
 	}
 }
+
 func TestGetSecretWithEmptyUsername(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-	whoamiOutput := "testuser"
-	securityOutput := "test-secret"
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-		}
-		if command == "whoami" {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
-		} else if command == "security" {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", securityOutput))
-		}
-		return cmd
+	orig := saveMocks()
+	defer orig.restore()
+
+	getCurrentUser = func() (string, error) {
+		return "testuser", nil
+	}
+	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+		return []byte("test-secret"), nil
 	}
 
 	secretBytes, err := GetSecretBytes("", "test-service")
-
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
 	}
-
-	secret := string(secretBytes)
-	if secret != securityOutput {
-		t.Errorf("Expected secret '%s', got '%s'", securityOutput, secret)
+	if string(secretBytes) != "test-secret" {
+		t.Errorf("Expected secret 'test-secret', got '%s'", string(secretBytes))
 	}
 }
+
 func TestGetSecretWithWhoamiError(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-		}
-		if command == "whoami" {
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		}
-		return cmd
+	orig := saveMocks()
+	defer orig.restore()
+
+	getCurrentUser = func() (string, error) {
+		return "", fmt.Errorf("whoami failed")
 	}
 
 	_, err := GetSecretBytes("", "test-service")
-
 	if err == nil {
 		t.Error("Expected error but got nil")
 	}
@@ -99,24 +104,16 @@ func TestGetSecretWithWhoamiError(t *testing.T) {
 		t.Errorf("Expected error with 'could not determine current user', got: %s", err.Error())
 	}
 }
+
 func TestGetSecretWithSecurityError(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-		}
-		if command == "security" {
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		}
-		return cmd
+	orig := saveMocks()
+	defer orig.restore()
+
+	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+		return nil, fmt.Errorf("security command failed")
 	}
 
 	_, err := GetSecretBytes("testuser", "test-service")
-
 	if err == nil {
 		t.Error("Expected error but got nil")
 	}
@@ -125,9 +122,13 @@ func TestGetSecretWithSecurityError(t *testing.T) {
 	}
 }
 
+// TestGetSecretBytesNotFound uses the subprocess mock pattern (pattern 2)
+// because it tests exit code 44 handling, which requires a real process exit.
+// See internal/testutil/exec_mock.go for documentation on both patterns.
 func TestGetSecretBytesNotFound(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
+
 	execCommand = func(command string, args ...string) *exec.Cmd {
 		cs := []string{"-test.run=TestHelperProcess", "--", command}
 		cs = append(cs, args...)
@@ -140,9 +141,10 @@ func TestGetSecretBytesNotFound(t *testing.T) {
 		}
 		return cmd
 	}
+	// Use the real captureSecure so it actually runs the subprocess
+	captureSecure = orig.captureSecure
 
 	_, err := GetSecretBytes("testuser", "test-service")
-
 	if err == nil {
 		t.Fatal("Expected error but got nil")
 	}
@@ -152,84 +154,51 @@ func TestGetSecretBytesNotFound(t *testing.T) {
 }
 
 func TestGetMFASerialSuccess(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-	mockOutput := "arn:aws:iam::123456789012:mfa/user"
-	mockError := error(nil)
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-			fmt.Sprintf("MOCK_OUTPUT=%s", mockOutput),
-		}
-		if mockError != nil {
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		}
-		return cmd
+	orig := saveMocks()
+	defer orig.restore()
+
+	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+		return []byte("arn:aws:iam::123456789012:mfa/user"), nil
 	}
 
 	serialBytes, err := GetMFASerialBytes("testuser", "")
-
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
 	}
-
-	serial := string(serialBytes)
-	if serial != mockOutput {
-		t.Errorf("Expected serial '%s', got '%s'", mockOutput, serial)
+	if string(serialBytes) != "arn:aws:iam::123456789012:mfa/user" {
+		t.Errorf("Expected serial 'arn:aws:iam::123456789012:mfa/user', got '%s'", string(serialBytes))
 	}
 }
+
 func TestGetMFASerialWithEmptyUsername(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-	whoamiOutput := "testuser"
-	serialOutput := "arn:aws:iam::123456789012:mfa/user"
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-		}
-		if command == "whoami" {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
-		} else if command == "security" {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", serialOutput))
-		}
-		return cmd
+	orig := saveMocks()
+	defer orig.restore()
+
+	getCurrentUser = func() (string, error) {
+		return "testuser", nil
+	}
+	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+		return []byte("arn:aws:iam::123456789012:mfa/user"), nil
 	}
 
 	serialBytes, err := GetMFASerialBytes("", "")
-
 	if err != nil {
 		t.Errorf("Expected no error but got: %v", err)
 	}
-
-	serial := string(serialBytes)
-	if serial != serialOutput {
-		t.Errorf("Expected serial '%s', got '%s'", serialOutput, serial)
+	if string(serialBytes) != "arn:aws:iam::123456789012:mfa/user" {
+		t.Errorf("Expected serial 'arn:aws:iam::123456789012:mfa/user', got '%s'", string(serialBytes))
 	}
 }
+
 func TestGetMFASerialWithWhoamiError(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-		}
-		if command == "whoami" {
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		}
-		return cmd
+	orig := saveMocks()
+	defer orig.restore()
+
+	getCurrentUser = func() (string, error) {
+		return "", fmt.Errorf("whoami failed")
 	}
 
 	_, err := GetMFASerialBytes("", "")
-
 	if err == nil {
 		t.Error("Expected error but got nil")
 	}
@@ -237,24 +206,16 @@ func TestGetMFASerialWithWhoamiError(t *testing.T) {
 		t.Errorf("Expected error with 'could not determine current user', got: %s", err.Error())
 	}
 }
+
 func TestGetMFASerialWithSecurityError(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-		}
-		if command == "security" {
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		}
-		return cmd
+	orig := saveMocks()
+	defer orig.restore()
+
+	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+		return nil, fmt.Errorf("security command failed")
 	}
 
 	_, err := GetMFASerialBytes("testuser", "")
-
 	if err == nil {
 		t.Error("Expected error but got nil")
 	}
@@ -264,17 +225,24 @@ func TestGetMFASerialWithSecurityError(t *testing.T) {
 }
 
 func TestSetSecretBytes(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
 
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-		}
-		return cmd
+	origLoad := loadEntryMetadataImpl
+	origSave := saveEntryMetadataImpl
+	defer func() {
+		loadEntryMetadataImpl = origLoad
+		saveEntryMetadataImpl = origSave
+	}()
+	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+		return []KeychainEntryMeta{}, nil
+	}
+	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
+		return nil
+	}
+
+	execSecretInput = func(cmd *exec.Cmd, input []byte) error {
+		return nil
 	}
 
 	err := SetSecretBytes("testuser", "test-service", []byte("test-secret"))
@@ -283,15 +251,8 @@ func TestSetSecretBytes(t *testing.T) {
 	}
 
 	// Test with error
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-			"MOCK_ERROR=1",
-		}
-		return cmd
+	execSecretInput = func(cmd *exec.Cmd, input []byte) error {
+		return fmt.Errorf("security -i failed")
 	}
 
 	err = SetSecretBytes("testuser", "test-service", []byte("test-secret"))
@@ -301,53 +262,12 @@ func TestSetSecretBytes(t *testing.T) {
 }
 
 func TestListEntries(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-
-	mockOutput := `keychain: "/Users/testuser/Library/Keychains/login.keychain-db"
- class: "genp"
- attributes:
-     0x00000007 <blob>="sesh-mfa"
-     "svce"<blob>="sesh-mfa"
-     "acct"<blob>="testuser"
-     "labl"<blob>="AWS MFA Secret"
- data:
- <binary data>
- keychain: "/Users/testuser/Library/Keychains/login.keychain-db"
- class: "genp"
- attributes:
-     0x00000007 <blob>="sesh-totp-github"
-     "svce"<blob>="sesh-totp-github"
-     "acct"<blob>="testuser"
-     "desc"<blob>="GitHub TOTP"
- data:
- <binary data>
- keychain: "/Users/testuser/Library/Keychains/login.keychain-db"
- class: "inet"
- attributes:
-     0x00000007 <blob>="something-else"
-     "svce"<blob>="something-else"
-     "acct"<blob>="testuser"
- data:
- <binary data>
- `
-
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-			fmt.Sprintf("MOCK_OUTPUT=%s", mockOutput),
-		}
-		return cmd
-	}
-
 	originalFunc := loadEntryMetadataImpl
 	defer func() { loadEntryMetadataImpl = originalFunc }()
 
 	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		if servicePrefix == "sesh-mfa" {
+		switch servicePrefix {
+		case "sesh-mfa":
 			return []KeychainEntryMeta{
 				{
 					Service:     "sesh-mfa",
@@ -356,7 +276,7 @@ func TestListEntries(t *testing.T) {
 					ServiceType: "aws",
 				},
 			}, nil
-		} else if servicePrefix == "sesh-totp" {
+		case "sesh-totp":
 			return []KeychainEntryMeta{
 				{
 					Service:     "sesh-totp-github",
@@ -418,8 +338,6 @@ func TestListEntries(t *testing.T) {
 	}
 
 	t.Run("Error Case", func(t *testing.T) {
-		loadEntryMetadataImpl = originalFunc
-
 		loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
 			return nil, fmt.Errorf("test error")
 		}
@@ -432,9 +350,23 @@ func TestListEntries(t *testing.T) {
 }
 
 func TestDeleteEntry(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
 
+	origLoad := loadEntryMetadataImpl
+	origSave := saveEntryMetadataImpl
+	defer func() {
+		loadEntryMetadataImpl = origLoad
+		saveEntryMetadataImpl = origSave
+	}()
+	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+		return []KeychainEntryMeta{}, nil
+	}
+	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
+		return nil
+	}
+
+	// DeleteEntry uses execCommand + cmd.Run() directly — keep subprocess pattern
 	execCommand = func(command string, args ...string) *exec.Cmd {
 		cs := []string{"-test.run=TestHelperProcess", "--", command}
 		cs = append(cs, args...)
@@ -472,9 +404,13 @@ func TestGetSecretIntegration(t *testing.T) {
 		t.Skip("Skipping keychain test in short mode")
 	}
 
-	origExecCommand := execCommand
-	execCommand = exec.Command
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
+
+	// Use real implementations for integration test
+	getCurrentUser = orig.getCurrentUser
+	captureSecure = orig.captureSecure
+	execCommand = orig.execCommand
 
 	randStr, err := testutil.RandomString(8)
 	if err != nil {
@@ -487,14 +423,19 @@ func TestGetSecretIntegration(t *testing.T) {
 		t.Error("Expected error for non-existent keychain item, got nil")
 	}
 }
+
 func TestGetMFASerialIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping keychain test in short mode")
 	}
 
-	origExecCommand := execCommand
-	execCommand = exec.Command
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
+
+	// Use real implementations for integration test
+	getCurrentUser = orig.getCurrentUser
+	captureSecure = orig.captureSecure
+	execCommand = orig.execCommand
 
 	_, err := GetMFASerialBytes("", "") // should use `whoami`...
 	// ...doesn't really matter here that if it succeeds or fails, just that it doesn't panic!
@@ -502,8 +443,8 @@ func TestGetMFASerialIntegration(t *testing.T) {
 }
 
 func TestGetSecretString(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
 
 	tests := map[string]struct {
 		account    string
@@ -537,27 +478,17 @@ func TestGetSecretString(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			whoamiOutput := "testuser"
-
-			execCommand = func(command string, args ...string) *exec.Cmd {
-				cs := []string{"-test.run=TestHelperProcess", "--", command}
-				cs = append(cs, args...)
-				cmd := exec.Command(os.Args[0], cs...)
-				cmd.Env = []string{
-					"GO_WANT_HELPER_PROCESS=1",
+			getCurrentUser = func() (string, error) {
+				return "testuser", nil
+			}
+			if tc.mockError {
+				captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+					return nil, fmt.Errorf("security command failed")
 				}
-
-				if command == "whoami" {
-					cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
-				} else if command == "security" {
-					if tc.mockError {
-						cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-					} else {
-						cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", tc.mockOutput))
-					}
+			} else {
+				captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+					return []byte(tc.mockOutput), nil
 				}
-
-				return cmd
 			}
 
 			secret, err := GetSecretString(tc.account, tc.service)
@@ -581,8 +512,21 @@ func TestGetSecretString(t *testing.T) {
 }
 
 func TestSetSecretString(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
+
+	origLoad := loadEntryMetadataImpl
+	origSave := saveEntryMetadataImpl
+	defer func() {
+		loadEntryMetadataImpl = origLoad
+		saveEntryMetadataImpl = origSave
+	}()
+	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+		return []KeychainEntryMeta{}, nil
+	}
+	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
+		return nil
+	}
 
 	tests := map[string]struct {
 		account    string
@@ -619,25 +563,17 @@ func TestSetSecretString(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			whoamiOutput := "testuser"
-
-			execCommand = func(command string, args ...string) *exec.Cmd {
-				cs := []string{"-test.run=TestHelperProcess", "--", command}
-				cs = append(cs, args...)
-				cmd := exec.Command(os.Args[0], cs...)
-				cmd.Env = []string{
-					"GO_WANT_HELPER_PROCESS=1",
+			getCurrentUser = func() (string, error) {
+				return "testuser", nil
+			}
+			if tc.mockError {
+				execSecretInput = func(cmd *exec.Cmd, input []byte) error {
+					return fmt.Errorf("security -i failed")
 				}
-
-				if command == "whoami" {
-					cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
-				} else if command == "security" {
-					if tc.mockError {
-						cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-					}
+			} else {
+				execSecretInput = func(cmd *exec.Cmd, input []byte) error {
+					return nil
 				}
-
-				return cmd
 			}
 
 			err := SetSecretString(tc.account, tc.service, tc.secret)
@@ -658,8 +594,8 @@ func TestSetSecretString(t *testing.T) {
 }
 
 func TestSecretTrimmingForTOTPServices(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
 
 	tests := map[string]struct {
 		service    string
@@ -685,15 +621,9 @@ func TestSecretTrimmingForTOTPServices(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			execCommand = func(command string, args ...string) *exec.Cmd {
-				cs := []string{"-test.run=TestHelperProcess", "--", command}
-				cs = append(cs, args...)
-				cmd := exec.Command(os.Args[0], cs...)
-				cmd.Env = []string{
-					"GO_WANT_HELPER_PROCESS=1",
-					fmt.Sprintf("MOCK_OUTPUT=%s", tc.mockOutput),
-				}
-				return cmd
+			captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+				// Real ExecAndCaptureSecure does bytes.TrimSpace on output
+				return bytes.TrimSpace([]byte(tc.mockOutput)), nil
 			}
 
 			secretBytes, err := GetSecretBytes("testuser", tc.service)
@@ -710,50 +640,32 @@ func TestSecretTrimmingForTOTPServices(t *testing.T) {
 }
 
 func TestSetSecretBytesWithEmptyAccount(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
+
+	origLoad := loadEntryMetadataImpl
+	origSave := saveEntryMetadataImpl
+	defer func() {
+		loadEntryMetadataImpl = origLoad
+		saveEntryMetadataImpl = origSave
+	}()
+	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+		return []KeychainEntryMeta{}, nil
+	}
+	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
+		return nil
+	}
 
 	whoamiCalled := false
 	securityCalled := false
 
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{
-			"GO_WANT_HELPER_PROCESS=1",
-		}
-
-		if command == "whoami" {
-			whoamiCalled = true
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" {
-			securityCalled = true
-			// Only check the account for the main add-generic-password call, not metadata calls
-			if len(args) > 0 && args[0] == "add-generic-password" {
-				// Check if this is the main secret storage (not metadata)
-				isMainSecret := false
-				for i, arg := range args {
-					if arg == "-s" && i+1 < len(args) && args[i+1] == "test-service" {
-						isMainSecret = true
-						break
-					}
-				}
-
-				if isMainSecret {
-					// Verify that the account was set from whoami
-					for i, arg := range args {
-						if arg == "-a" && i+1 < len(args) {
-							if args[i+1] != "testuser" {
-								t.Errorf("Expected account 'testuser', got %q", args[i+1])
-							}
-						}
-					}
-				}
-			}
-		}
-
-		return cmd
+	getCurrentUser = func() (string, error) {
+		whoamiCalled = true
+		return "testuser", nil
+	}
+	execSecretInput = func(cmd *exec.Cmd, input []byte) error {
+		securityCalled = true
+		return nil
 	}
 
 	err := SetSecretBytes("", "test-service", []byte("test-secret"))
@@ -762,19 +674,40 @@ func TestSetSecretBytesWithEmptyAccount(t *testing.T) {
 	}
 
 	if !whoamiCalled {
-		t.Error("Expected whoami to be called")
+		t.Error("Expected getCurrentUser to be called")
 	}
 	if !securityCalled {
 		t.Error("Expected security command to be called")
 	}
 }
 
+// TestDeleteEntryWithEmptyAccount uses the subprocess mock pattern (pattern 2)
+// because DeleteEntry uses execCommand + cmd.Run() with stderr capture.
+// See internal/testutil/exec_mock.go for documentation on both patterns.
 func TestDeleteEntryWithEmptyAccount(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
+
+	origLoad := loadEntryMetadataImpl
+	origSave := saveEntryMetadataImpl
+	defer func() {
+		loadEntryMetadataImpl = origLoad
+		saveEntryMetadataImpl = origSave
+	}()
+	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+		return []KeychainEntryMeta{}, nil
+	}
+	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
+		return nil
+	}
 
 	whoamiCalled := false
 	deleteCalled := false
+
+	getCurrentUser = func() (string, error) {
+		whoamiCalled = true
+		return "testuser", nil
+	}
 
 	execCommand = func(command string, args ...string) *exec.Cmd {
 		cs := []string{"-test.run=TestHelperProcess", "--", command}
@@ -784,14 +717,9 @@ func TestDeleteEntryWithEmptyAccount(t *testing.T) {
 			"GO_WANT_HELPER_PROCESS=1",
 		}
 
-		if command == "whoami" {
-			whoamiCalled = true
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" {
+		if command == "security" {
 			deleteCalled = true
-			// Verify delete command args
 			if len(args) > 0 && args[0] == "delete-generic-password" {
-				// Check account was set from whoami
 				for i, arg := range args {
 					if arg == "-a" && i+1 < len(args) {
 						if args[i+1] != "testuser" {
@@ -811,13 +739,16 @@ func TestDeleteEntryWithEmptyAccount(t *testing.T) {
 	}
 
 	if !whoamiCalled {
-		t.Error("Expected whoami to be called")
+		t.Error("Expected getCurrentUser to be called")
 	}
 	if !deleteCalled {
 		t.Error("Expected security delete command to be called")
 	}
 }
 
+// TestHelperProcess is the subprocess entry point for pattern 2 tests.
+// It is NOT a real test — it runs only when GO_WANT_HELPER_PROCESS=1.
+// See internal/testutil/exec_mock.go for documentation.
 func TestHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
@@ -840,28 +771,21 @@ func TestHelperProcess(t *testing.T) {
 
 	switch command {
 	case "security":
-		// Check if this is interactive mode
 		if len(cmdArgs) > 0 && cmdArgs[0] == "-i" {
-			// Read stdin to get the actual command
 			stdin, err := io.ReadAll(os.Stdin)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "failed to read stdin: %v\n", err)
 				os.Exit(1)
 			}
 			stdinStr := string(stdin)
-
-			// Parse the add-generic-password command from stdin
 			if strings.Contains(stdinStr, "add-generic-password") {
-				// In test mode, just succeed if not MOCK_ERROR
 				if os.Getenv("MOCK_ERROR") == "1" {
 					os.Exit(1)
 				}
 				os.Exit(0)
 			}
-			// If no recognized command in stdin, exit with error
 			os.Exit(1)
 		} else {
-			// Handle non-interactive security commands as before
 			if os.Getenv("MOCK_ERROR") == "1" {
 				exitCode := 1
 				if ec := os.Getenv("MOCK_EXIT_CODE"); ec != "" {
@@ -881,7 +805,6 @@ func TestHelperProcess(t *testing.T) {
 		fmt.Print(os.Getenv("MOCK_OUTPUT"))
 		os.Exit(0)
 	default:
-		// For other commands, use the default behavior
 		if os.Getenv("MOCK_ERROR") == "1" {
 			os.Exit(1)
 		}

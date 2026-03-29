@@ -18,10 +18,14 @@ import (
 type EntryType string
 
 const (
+	// EntryTypePassword represents a stored password entry.
 	EntryTypePassword EntryType = "password"
-	EntryTypeAPIKey   EntryType = "api_key"
-	EntryTypeTOTP     EntryType = "totp"
-	EntryTypeNote     EntryType = "secure_note"
+	// EntryTypeAPIKey represents an API key entry.
+	EntryTypeAPIKey EntryType = "api_key"
+	// EntryTypeTOTP represents a TOTP secret entry.
+	EntryTypeTOTP EntryType = "totp"
+	// EntryTypeNote represents a secure note entry.
+	EntryTypeNote EntryType = "secure_note"
 )
 
 var validEntryTypes = map[EntryType]bool{

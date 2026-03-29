@@ -1,3 +1,4 @@
+// Package mocks provides test doubles for the AWS package interfaces.
 package mocks
 
 import "github.com/bashhack/sesh/internal/aws"

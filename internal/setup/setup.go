@@ -1,3 +1,4 @@
+// Package setup provides interactive setup flows for configuring TOTP and AWS MFA credentials.
 package setup
 
 import (
@@ -21,8 +22,11 @@ import (
 	"github.com/bashhack/sesh/internal/totp"
 )
 
-// execCommand is a variable so we can swap it out in tests
-var execCommand = exec.Command
+// runCommand executes a command and returns its output.
+// It is a variable so we can swap it out in tests.
+var runCommand = func(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
 
 // readPassword is a variable so we can swap it out in tests
 var readPassword = term.ReadPassword
@@ -92,27 +96,26 @@ func (h *AWSSetupHandler) createServiceName(prefix, profile string) (string, err
 	return keyformat.Build(prefix, profile)
 }
 
-// createAWSCommand creates an AWS CLI command with the given profile and args
-// It automatically adds the profile flag if a profile is provided
-// Returns an exec.Cmd object ready to be executed
-func (h *AWSSetupHandler) createAWSCommand(profile string, args ...string) *exec.Cmd {
-	if profile != "" {
-		// Insert profile flag after the first argument (command)
-		profArgs := append([]string{args[0], "--profile", profile}, args[1:]...)
-		return execCommand("aws", profArgs...)
+// runAWSCommand executes an AWS CLI command with the given profile and args,
+// returning its output. It automatically adds the profile flag if provided.
+func (h *AWSSetupHandler) runAWSCommand(profile string, args ...string) ([]byte, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("runAWSCommand requires at least one argument")
 	}
-	return execCommand("aws", args...)
+	if profile != "" {
+		profArgs := append([]string{args[0], "--profile", profile}, args[1:]...)
+		return runCommand("aws", profArgs...)
+	}
+	return runCommand("aws", args...)
 }
 
 // verifyAWSCredentials checks if AWS credentials are properly configured
 // It tries to get the caller identity and returns the user ARN if successful
 // Returns the user ARN and any error that occurred
 func (h *AWSSetupHandler) verifyAWSCredentials(profile string) (string, error) {
-	cmd := h.createAWSCommand(profile, "sts", "get-caller-identity", "--query", "Arn", "--output", "text")
-
-	output, err := cmd.Output()
+	output, err := h.runAWSCommand(profile, "sts", "get-caller-identity", "--query", "Arn", "--output", "text")
 	if err != nil {
-		return "", fmt.Errorf("failed to get AWS identity: %w. Make sure your AWS credentials are configured with 'aws configure'.", err)
+		return "", fmt.Errorf("failed to get AWS identity (make sure your AWS credentials are configured with 'aws configure'): %w", err)
 	}
 
 	userArn := strings.TrimSpace(string(output))
@@ -227,9 +230,7 @@ Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS con
 // Returns the MFA device ARN and any error that occurred
 func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
 
-	mfaCmd := h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-
-	mfaOutput, err := mfaCmd.Output()
+	mfaOutput, err := h.runAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
 	var mfaArn string
 
 	// Try to fetch MFA devices, with retries if none are found
@@ -262,9 +263,7 @@ mfaDeviceLoop:
 			case "r", "R":
 				// Refresh MFA devices list
 				fmt.Println("\n🔄 Refreshing MFA device list...")
-				mfaCmd = h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-
-				mfaOutput, err = mfaCmd.Output()
+				mfaOutput, err = h.runAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
 				if err != nil || strings.TrimSpace(string(mfaOutput)) == "" {
 					fmt.Println("❗ No MFA devices found after refresh.")
 					// Continue to the retry options below
@@ -341,8 +340,7 @@ Enter your choice (1-3): `)
 			timeSleep(5 * time.Second)
 
 			// Try fetching the MFA device again
-			mfaCmd = h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-			mfaOutput, err = mfaCmd.Output()
+			mfaOutput, err = h.runAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
 			retryCount++
 
 		case "2": // Return to console
@@ -356,8 +354,7 @@ Please complete these steps in the AWS Console:
 			}
 
 			// Try fetching again
-			mfaCmd = h.createAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-			mfaOutput, err = mfaCmd.Output()
+			mfaOutput, err = h.runAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
 			retryCount++
 
 		case "3": // Manual entry with validation

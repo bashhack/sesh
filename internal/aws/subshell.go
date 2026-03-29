@@ -147,18 +147,22 @@ PS1="(sesh:aws) $PS1"
 // AWSShellCustomizer implements subshell.ShellCustomizer for AWS
 type AWSShellCustomizer struct{}
 
+// GetZshInitScript returns the zsh init script for the AWS subshell prompt.
 func (c *AWSShellCustomizer) GetZshInitScript() string {
 	return ZshPrompt
 }
 
+// GetBashInitScript returns the bash init script for the AWS subshell prompt.
 func (c *AWSShellCustomizer) GetBashInitScript() string {
 	return BashPrompt
 }
 
+// GetFallbackInitScript returns the init script for non-zsh/bash shells.
 func (c *AWSShellCustomizer) GetFallbackInitScript() string {
 	return FallbackPrompt
 }
 
+// GetPromptPrefix returns the prompt prefix displayed in the AWS subshell.
 func (c *AWSShellCustomizer) GetPromptPrefix() string {
 	return "sesh"
 }

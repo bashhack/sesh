@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -16,6 +15,17 @@ import (
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/testutil"
 )
+
+func TestRunCommandDefault(t *testing.T) {
+	// Exercise the real runCommand (calls an actual command)
+	out, err := runCommand("echo", "hello")
+	if err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+	if !strings.Contains(string(out), "hello") {
+		t.Fatalf("expected 'hello' in output, got %q", string(out))
+	}
+}
 
 // MockCommand creates a mock exec.Cmd object
 type MockCommand struct {
@@ -549,60 +559,57 @@ func TestTOTPSetupHandler_createTOTPServiceName(t *testing.T) {
 	}
 }
 
-func TestAWSSetupHandler_createAWSCommand(t *testing.T) {
+func TestAWSSetupHandler_runAWSCommand(t *testing.T) {
 	handler := &AWSSetupHandler{}
 
 	tests := map[string]struct {
 		profile  string
 		args     []string
-		wantCmd  string
+		wantName string
 		wantArgs []string
 	}{
 		"command without profile": {
 			profile:  "",
 			args:     []string{"sts", "get-caller-identity"},
-			wantCmd:  "aws",
+			wantName: "aws",
 			wantArgs: []string{"sts", "get-caller-identity"},
 		},
 		"command with profile": {
 			profile:  "dev",
 			args:     []string{"sts", "get-caller-identity"},
-			wantCmd:  "aws",
+			wantName: "aws",
 			wantArgs: []string{"sts", "--profile", "dev", "get-caller-identity"},
 		},
 		"complex command with profile": {
 			profile:  "prod",
 			args:     []string{"iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text"},
-			wantCmd:  "aws",
+			wantName: "aws",
 			wantArgs: []string{"iam", "--profile", "prod", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text"},
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			cmd := handler.createAWSCommand(tc.profile, tc.args...)
+			var gotName string
+			var gotArgs []string
 
-			// Check command name
-			if cmd.Path != tc.wantCmd {
-				// The command might be resolved to full path, so check just the base name
-				base := cmd.Path
-				if idx := len(cmd.Path) - 1; idx >= 0 {
-					for i := idx; i >= 0; i-- {
-						if cmd.Path[i] == '/' {
-							base = cmd.Path[i+1:]
-							break
-						}
-					}
-				}
-				if base != tc.wantCmd {
-					t.Errorf("command = %v, want %v", base, tc.wantCmd)
-				}
+			origRunCommand := runCommand
+			defer func() { runCommand = origRunCommand }()
+			runCommand = func(name string, args ...string) ([]byte, error) {
+				gotName = name
+				gotArgs = args
+				return []byte("mock-output"), nil
 			}
 
-			// Check arguments - skip the first argument which is the command itself
-			gotArgs := cmd.Args[1:]
+			if _, err := handler.runAWSCommand(tc.profile, tc.args...); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if gotName != tc.wantName {
+				t.Errorf("command = %v, want %v", gotName, tc.wantName)
+			}
 			if len(gotArgs) != len(tc.wantArgs) {
-				t.Errorf("args length = %d, want %d", len(gotArgs), len(tc.wantArgs))
+				t.Errorf("args length = %d, want %d\ngot:  %v\nwant: %v", len(gotArgs), len(tc.wantArgs), gotArgs, tc.wantArgs)
 			}
 			for i, want := range tc.wantArgs {
 				if i < len(gotArgs) && gotArgs[i] != want {
@@ -776,9 +783,9 @@ func TestTOTPSetupHandler_captureManualEntry(t *testing.T) {
 
 // TestAWSSetupHandler_verifyAWSCredentials tests AWS credential verification
 func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
-	// Save original execCommand and restore after test
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	// Save original runCommand and restore after test
+	origRunCommand := runCommand
+	defer func() { runCommand = origRunCommand }()
 
 	tests := map[string]struct {
 		profile       string
@@ -814,19 +821,12 @@ func TestAWSSetupHandler_verifyAWSCredentials(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Mock execCommand
-			execCommand = func(command string, args ...string) *exec.Cmd {
-				cs := []string{"-test.run=TestHelperProcess", "--", command}
-				cs = append(cs, args...)
-				cmd := exec.Command(os.Args[0], cs...)
-				cmd.Env = []string{
-					"GO_WANT_HELPER_PROCESS=1",
-					"MOCK_OUTPUT=" + tc.commandOutput,
-				}
+			// Mock runCommand
+			runCommand = func(name string, args ...string) ([]byte, error) {
 				if tc.commandError {
-					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
+					return nil, fmt.Errorf("mock aws error")
 				}
-				return cmd
+				return []byte(tc.commandOutput), nil
 			}
 
 			handler := &AWSSetupHandler{
@@ -1453,9 +1453,9 @@ func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
 
 // TestAWSSetupHandler_selectMFADevice tests MFA device selection
 func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
-	// Save original execCommand and restore after test
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	// Save original runCommand and restore after test
+	origRunCommand := runCommand
+	defer func() { runCommand = origRunCommand }()
 
 	// Save original timeSleep and restore after test
 	origTimeSleep := timeSleep
@@ -1586,13 +1586,8 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 			// Track which AWS output to return
 			outputIndex := 0
 
-			// Mock execCommand to return our test data
-			execCommand = func(command string, args ...string) *exec.Cmd {
-				cs := []string{"-test.run=TestHelperProcess", "--", command}
-				cs = append(cs, args...)
-				cmd := exec.Command(os.Args[0], cs...)
-
-				// Get the current output or use the last one if we've exhausted the list
+			// Mock runCommand to return our test data
+			runCommand = func(name string, args ...string) ([]byte, error) {
 				output := ""
 				if outputIndex < len(tc.awsOutputs) {
 					output = tc.awsOutputs[outputIndex]
@@ -1600,15 +1595,10 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 				} else if len(tc.awsOutputs) > 0 {
 					output = tc.awsOutputs[len(tc.awsOutputs)-1]
 				}
-
-				cmd.Env = []string{
-					"GO_WANT_HELPER_PROCESS=1",
-					"MOCK_OUTPUT=" + output,
-				}
 				if tc.awsError {
-					cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
+					return nil, fmt.Errorf("mock aws error")
 				}
-				return cmd
+				return []byte(output), nil
 			}
 
 			// Create handler with mock reader

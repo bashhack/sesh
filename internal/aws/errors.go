@@ -5,6 +5,7 @@ type MFADeviceNotFoundError struct {
 	Message string
 }
 
+// Error implements the error interface for MFADeviceNotFoundError.
 func (e *MFADeviceNotFoundError) Error() string {
 	return e.Message
 }

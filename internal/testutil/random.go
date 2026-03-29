@@ -6,6 +6,7 @@ import (
 	"math"
 )
 
+// RandomString returns a URL-safe base64 string of the given length, using crypto/rand.
 func RandomString(length int) (string, error) {
 	if length <= 0 {
 		return "", nil

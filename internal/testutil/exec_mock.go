@@ -1,3 +1,4 @@
+// Package testutil provides test helpers including command mocking, stdout/stderr capture, and random string generation.
 package testutil
 
 import (
@@ -9,8 +10,19 @@ import (
 	"sync"
 )
 
+// NOTE TO SELF: I have two patterns for mocking external commands.
+//
+// Pattern 1 (in-process mock) — I should use this most of the time.
+// It's way faster, especially under -race (subprocess pattern costs ~1s per call).
+// I define a var like `var runCommand = func(name string, args ...string) ([]byte, error)`
+// in prod code, then swap it in tests. See internal/setup/setup.go for how I did this.
+//
+// Pattern 2 (subprocess mock, below) — I only need this when I care about real
+// process behavior: exit codes, signals, stderr, etc. It spawns the test binary
+// as a child process via TestHelperProcess. See internal/keychain/keychain_test.go.
+
 // MockExecCommand builds a mock exec.Command function that returns
-// predetermined output and optionally errors
+// predetermined output and optionally errors (pattern 2: subprocess mock)
 func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd {
 	return func(command string, args ...string) *exec.Cmd {
 		// Create a test helper process that will be executed instead of the real command
