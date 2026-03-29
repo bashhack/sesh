@@ -16,6 +16,17 @@ import (
 	"github.com/bashhack/sesh/internal/testutil"
 )
 
+func TestRunCommandDefault(t *testing.T) {
+	// Exercise the real runCommand (calls an actual command)
+	out, err := runCommand("echo", "hello")
+	if err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+	if !strings.Contains(string(out), "hello") {
+		t.Fatalf("expected 'hello' in output, got %q", string(out))
+	}
+}
+
 // MockCommand creates a mock exec.Cmd object
 type MockCommand struct {
 	ErrorValue  error

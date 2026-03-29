@@ -40,6 +40,17 @@ func (m mockState) restore() {
 
 // --- Tests using in-process mocks (pattern 1) ---
 
+func TestGetCurrentUserDefault(t *testing.T) {
+	// Exercise the real getCurrentUser (calls whoami)
+	user, err := getCurrentUser()
+	if err != nil {
+		t.Fatalf("getCurrentUser: %v", err)
+	}
+	if user == "" {
+		t.Fatal("getCurrentUser returned empty string")
+	}
+}
+
 func TestGetSecretBytesSuccess(t *testing.T) {
 	orig := saveMocks()
 	defer orig.restore()
