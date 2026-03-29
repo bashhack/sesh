@@ -17,6 +17,7 @@ var (
 	date    = "unknown"
 )
 
+// main is the entry point for the sesh CLI.
 func main() {
 	versionInfo := VersionInfo{
 		Version: version,

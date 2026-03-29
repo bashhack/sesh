@@ -1,3 +1,4 @@
+// Package keychain provides access to the macOS Keychain for storing and retrieving secrets.
 package keychain
 
 import (
@@ -18,17 +19,34 @@ var ErrNotFound = errors.New("secret not found in keychain")
 // exitCodeItemNotFound is the macOS `security` command exit code for errSecItemNotFound.
 const exitCodeItemNotFound = 44
 
+// execCommand is kept for the one case (delete) that needs *exec.Cmd for stderr + Run().
+// For new code, prefer the higher-level mockable functions below.
 var execCommand = exec.Command
+
+// getCurrentUser returns the current OS username. Mockable for tests.
+var getCurrentUser = func() (string, error) {
+	out, err := exec.Command("whoami").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// captureSecure wraps secure.ExecAndCaptureSecure. Mockable for tests.
+var captureSecure = secure.ExecAndCaptureSecure
+
+// execSecretInput wraps secure.ExecWithSecretInput. Mockable for tests.
+var execSecretInput = secure.ExecWithSecretInput
 
 // GetSecretBytes retrieves a secret from the keychain as a byte slice
 // This is the more secure variant of GetSecret
 func GetSecretBytes(account, service string) ([]byte, error) {
 	if account == "" {
-		out, err := execCommand("whoami").Output()
+		user, err := getCurrentUser()
 		if err != nil {
 			return nil, fmt.Errorf("could not determine current user: %w", err)
 		}
-		account = strings.TrimSpace(string(out))
+		account = user
 	}
 	cmd := execCommand("security", "find-generic-password",
 		"-a", account,
@@ -37,7 +55,7 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 	)
 
 	// Use secure capturing to ensure memory is zeroed if there are errors
-	secret, err := secure.ExecAndCaptureSecure(cmd)
+	secret, err := captureSecure(cmd)
 	if err != nil {
 		// macOS `security` exits with code 44 for errSecItemNotFound
 		var exitErr *exec.ExitError
@@ -91,11 +109,11 @@ func SetSecretBytes(account, service string, secret []byte) error {
 	defer secure.SecureZeroBytes(secretCopy)
 
 	if account == "" {
-		out, err := execCommand("whoami").Output()
+		user, err := getCurrentUser()
 		if err != nil {
 			return fmt.Errorf("could not determine current user: %w", err)
 		}
-		account = strings.TrimSpace(string(out))
+		account = user
 	}
 
 	// Get the current executable path at the time of access
@@ -118,7 +136,7 @@ func SetSecretBytes(account, service string, secret []byte) error {
 	cmd := execCommand("security", "-i")
 
 	// Provide the command via stdin
-	err := secure.ExecWithSecretInput(cmd, []byte(addCmd+"\n"))
+	err := execSecretInput(cmd, []byte(addCmd+"\n"))
 	if err != nil {
 		return fmt.Errorf("failed to set secret in keychain: %w", err)
 	}
@@ -146,11 +164,11 @@ func SetSecretString(account, service, secret string) error {
 // This is more secure than GetMFASerial
 func GetMFASerialBytes(account, profile string) ([]byte, error) {
 	if account == "" {
-		out, err := execCommand("whoami").Output()
+		user, err := getCurrentUser()
 		if err != nil {
 			return nil, fmt.Errorf("could not determine current user: %w", err)
 		}
-		account = strings.TrimSpace(string(out))
+		account = user
 	}
 	if profile == "" {
 		profile = "default"
@@ -166,7 +184,7 @@ func GetMFASerialBytes(account, profile string) ([]byte, error) {
 	)
 
 	// Use secure capturing to ensure memory is zeroed if there are errors
-	serialBytes, err := secure.ExecAndCaptureSecure(cmd)
+	serialBytes, err := captureSecure(cmd)
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == exitCodeItemNotFound {
@@ -209,11 +227,11 @@ func ListEntries(servicePrefix string) ([]KeychainEntry, error) {
 // DeleteEntry deletes an entry from the keychain
 func DeleteEntry(account, service string) error {
 	if account == "" {
-		out, err := execCommand("whoami").Output()
+		user, err := getCurrentUser()
 		if err != nil {
 			return fmt.Errorf("could not determine current user: %w", err)
 		}
-		account = strings.TrimSpace(string(out))
+		account = user
 	}
 
 	// Remove metadata first — if this fails, nothing has been deleted yet

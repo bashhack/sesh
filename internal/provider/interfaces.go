@@ -1,3 +1,4 @@
+// Package provider defines the interface and registry for credential providers.
 package provider
 
 import (

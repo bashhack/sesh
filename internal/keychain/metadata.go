@@ -19,6 +19,7 @@ var (
 	zstdDecoder *zstd.Decoder
 )
 
+// init initializes the shared zstd encoder and decoder used for metadata compression.
 func init() {
 	var err error
 	zstdEncoder, err = zstd.NewWriter(nil)

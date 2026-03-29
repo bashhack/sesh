@@ -17,6 +17,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
+// main decodes base64+zstd-compressed keychain metadata from stdin or a CLI argument.
 func main() {
 	// Get base64 data from command line or stdin
 	var b64Data string

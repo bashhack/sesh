@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -40,7 +38,7 @@ func (m *mockReader) ReadString(delim byte) (string, error) {
 func TestAWSSetupHandler_Setup(t *testing.T) {
 	// Save original functions
 	origExecLookPath := execLookPath
-	origExecCommand := execCommand
+	origRunCommand := runCommand
 	origValidateAndNormalizeSecret := validateAndNormalizeSecret
 	origGetCurrentUser := getCurrentUser
 	origScanQRCode := scanQRCode
@@ -48,7 +46,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 	origTimeSleep := timeSleep
 	defer func() {
 		execLookPath = origExecLookPath
-		execCommand = origExecCommand
+		runCommand = origRunCommand
 		validateAndNormalizeSecret = origValidateAndNormalizeSecret
 		getCurrentUser = origGetCurrentUser
 		scanQRCode = origScanQRCode
@@ -125,27 +123,23 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Mock execCommand for AWS CLI calls
-			execCommand = func(command string, args ...string) *exec.Cmd {
-				cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
-				cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
-
+			// Mock runCommand for AWS CLI calls
+			runCommand = func(name string, args ...string) ([]byte, error) {
 				if tc.awsCommandFails {
-					cmd.Env = append(cmd.Env, "MOCK_ERROR=1", "STDOUT=mock error")
-				} else if len(args) > 0 {
-					// Check what AWS command is being run
+					return nil, fmt.Errorf("mock aws error")
+				}
+				if len(args) > 0 {
 					if args[0] == "sts" && len(args) > 1 && args[1] == "get-caller-identity" {
 						if output, ok := tc.awsCommandOutputs["get-caller-identity"]; ok {
-							cmd.Env = append(cmd.Env, "STDOUT="+output)
+							return []byte(output), nil
 						}
 					} else if args[0] == "iam" && len(args) > 1 && args[1] == "list-mfa-devices" {
 						if output, ok := tc.awsCommandOutputs["list-mfa-devices"]; ok {
-							cmd.Env = append(cmd.Env, "STDOUT="+output)
+							return []byte(output), nil
 						}
 					}
 				}
-
-				return cmd
+				return []byte(""), nil
 			}
 
 			// Mock execLookPath
@@ -497,7 +491,7 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 	t.Run("get_current_user_fails_fixed", func(t *testing.T) {
 		// Save original functions
 		origExecLookPath := execLookPath
-		origExecCommand := execCommand
+		origRunCommand := runCommand
 		origGetCurrentUser := getCurrentUser
 		origScanQRCode := scanQRCode
 		origTimeSleep := timeSleep
@@ -505,7 +499,7 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 		// Restore after test
 		defer func() {
 			execLookPath = origExecLookPath
-			execCommand = origExecCommand
+			runCommand = origRunCommand
 			getCurrentUser = origGetCurrentUser
 			scanQRCode = origScanQRCode
 			timeSleep = origTimeSleep
@@ -531,18 +525,14 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 			return "JBSWY3DPEHPK3PXP", nil
 		}
 
-		// Mock execCommand for AWS CLI calls
-		execCommand = func(command string, args ...string) *exec.Cmd {
-			cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess")
-			cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
-
+		// Mock runCommand for AWS CLI calls
+		runCommand = func(name string, args ...string) ([]byte, error) {
 			if len(args) > 0 && args[0] == "sts" {
-				cmd.Env = append(cmd.Env, "STDOUT="+`{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`)
+				return []byte(`{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`), nil
 			} else if len(args) > 0 && args[0] == "iam" && len(args) > 1 && args[1] == "list-mfa-devices" {
-				// Return empty list to trigger the retry flow
-				cmd.Env = append(cmd.Env, "STDOUT=")
+				return []byte(""), nil
 			}
-			return cmd
+			return []byte(""), nil
 		}
 
 		// Create mock keychain

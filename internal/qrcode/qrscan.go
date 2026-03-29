@@ -1,3 +1,4 @@
+// Package qrcode provides QR code scanning and decoding from screen captures.
 package qrcode
 
 import (

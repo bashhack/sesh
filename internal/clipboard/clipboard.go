@@ -1,3 +1,4 @@
+// Package clipboard provides system clipboard access for copying TOTP codes.
 package clipboard
 
 import (

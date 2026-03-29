@@ -1,3 +1,4 @@
+// Package aws implements the AWS provider for sesh, handling MFA-based session credentials.
 package aws
 
 import (

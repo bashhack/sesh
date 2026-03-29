@@ -1,3 +1,4 @@
+// Package env provides environment variable access and session configuration.
 package env
 
 import (

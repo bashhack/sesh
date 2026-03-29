@@ -1,3 +1,4 @@
+// Package totp generates time-based one-time passwords and validates TOTP secrets.
 package totp
 
 import (
@@ -52,6 +53,7 @@ func ValidateAndNormalizeSecret(secret string) (string, error) {
 	return cleaned, nil
 }
 
+// Generate produces a 6-digit TOTP code from the given base32-encoded secret.
 func Generate(secret string) (string, error) {
 	// Explicitly use default options for consistent 6-digit codes,
 	// best practice dictates a minimum of 6-digits for TOTP - however,

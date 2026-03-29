@@ -1,3 +1,4 @@
+// Package mocks provides test doubles for the keychain package interfaces.
 package mocks
 
 import "github.com/bashhack/sesh/internal/keychain"

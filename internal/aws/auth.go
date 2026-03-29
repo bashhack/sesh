@@ -1,3 +1,4 @@
+// Package aws handles AWS STS authentication and temporary credential management.
 package aws
 
 import (
@@ -14,6 +15,7 @@ import (
 // execCommand wraps exec.Command to allow for mocking
 var execCommand = exec.Command
 
+// Credentials holds the temporary AWS session credentials returned by STS.
 type Credentials struct {
 	AccessKeyID     string `json:"AccessKeyID"`
 	SecretAccessKey string `json:"SecretAccessKey"`
@@ -32,18 +34,23 @@ func (c *Credentials) ZeroSecrets() {
 	c.SessionToken = ""
 }
 
+// SessionTokenResponse wraps the JSON response from aws sts get-session-token.
 type SessionTokenResponse struct {
 	Credentials Credentials `json:"Credentials"`
 }
 
+// MFADevice represents a single MFA device from the IAM list-mfa-devices response.
 type MFADevice struct {
 	SerialNumber string `json:"SerialNumber"`
 }
 
+// ListDevicesResponse wraps the JSON response from aws iam list-mfa-devices.
 type ListDevicesResponse struct {
 	MFADevices []MFADevice `json:"MFADevices"`
 }
 
+// GetSessionToken calls aws sts get-session-token with the given MFA serial and TOTP code,
+// returning temporary credentials. The code byte slice is zeroed after use.
 func GetSessionToken(profile, serial string, code []byte) (Credentials, error) {
 	// Convert code to string for command execution but ensure it's zeroed
 	codeStr := string(code)
@@ -106,6 +113,8 @@ func GetSessionToken(profile, serial string, code []byte) (Credentials, error) {
 	return parsed.Credentials, nil
 }
 
+// GetFirstMFADevice returns the serial number of the first MFA device associated
+// with the IAM user for the given AWS CLI profile.
 func GetFirstMFADevice(profile string) (string, error) {
 	args := []string{"iam", "list-mfa-devices", "--output", "json"}
 	if profile != "" {

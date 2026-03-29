@@ -1,3 +1,4 @@
+// Package mocks provides test doubles for the TOTP package interfaces.
 package mocks
 
 import "time"

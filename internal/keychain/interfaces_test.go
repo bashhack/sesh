@@ -7,18 +7,6 @@ import (
 )
 
 func TestNewDefaultProvider(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		// Return a no-op command for any exec calls during initialization
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
-		return cmd
-	}
-
 	provider := NewDefaultProvider()
 
 	_, ok := provider.(*DefaultProvider)
@@ -26,27 +14,17 @@ func TestNewDefaultProvider(t *testing.T) {
 		t.Errorf("Expected *DefaultProvider, got %T", provider)
 	}
 }
+
 func TestDefaultProviderImplementsProvider(t *testing.T) {
-	// Compile-time check that DefaultProvider implements Provider
 	var _ Provider = (*DefaultProvider)(nil)
 }
 
 func TestDefaultProviderGetSecret(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
 
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
-
-		if command == "whoami" {
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=test-secret")
-		}
-		return cmd
+	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+		return []byte("test-secret"), nil
 	}
 
 	provider := NewDefaultProvider()
@@ -56,29 +34,17 @@ func TestDefaultProviderGetSecret(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
-	secretStr := string(secretBytes)
-	expectedStr := "test-secret"
-	if secretStr != expectedStr {
-		t.Errorf("Expected secret '%s', got '%s'", expectedStr, secretStr)
+	if string(secretBytes) != "test-secret" {
+		t.Errorf("Expected secret 'test-secret', got '%s'", string(secretBytes))
 	}
 }
 
 func TestDefaultProviderGetMFASerialBytes(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
 
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
-
-		if command == "whoami" {
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=test-serial")
-		}
-		return cmd
+	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+		return []byte("test-serial"), nil
 	}
 
 	provider := NewDefaultProvider()
@@ -88,31 +54,30 @@ func TestDefaultProviderGetMFASerialBytes(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
-	serial := string(serialBytes)
-	if serial != "test-serial" {
-		t.Errorf("Expected serial 'test-serial', got '%s'", serial)
+	if string(serialBytes) != "test-serial" {
+		t.Errorf("Expected serial 'test-serial', got '%s'", string(serialBytes))
 	}
 }
 
 func TestDefaultProviderSetSecret(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
 
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+	origLoad := loadEntryMetadataImpl
+	origSave := saveEntryMetadataImpl
+	defer func() {
+		loadEntryMetadataImpl = origLoad
+		saveEntryMetadataImpl = origSave
+	}()
+	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+		return []KeychainEntryMeta{}, nil
+	}
+	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
+		return nil
+	}
 
-		switch {
-		case command == "whoami":
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		case command == "security" && len(args) > 0 && (args[0] == "add-generic-password" || args[0] == "-i"):
-			// Don't set MOCK_ERROR for successful addition or interactive mode
-		default:
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		}
-		return cmd
+	execSecretInput = func(cmd *exec.Cmd, input []byte) error {
+		return nil
 	}
 
 	provider := NewDefaultProvider()
@@ -124,21 +89,11 @@ func TestDefaultProviderSetSecret(t *testing.T) {
 }
 
 func TestDefaultProviderGetSecretString(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
 
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
-
-		if command == "whoami" {
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=test-secret-string")
-		}
-		return cmd
+	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
+		return []byte("test-secret-string"), nil
 	}
 
 	provider := NewDefaultProvider()
@@ -154,24 +109,24 @@ func TestDefaultProviderGetSecretString(t *testing.T) {
 }
 
 func TestDefaultProviderSetSecretString(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
 
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+	origLoad := loadEntryMetadataImpl
+	origSave := saveEntryMetadataImpl
+	defer func() {
+		loadEntryMetadataImpl = origLoad
+		saveEntryMetadataImpl = origSave
+	}()
+	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+		return []KeychainEntryMeta{}, nil
+	}
+	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
+		return nil
+	}
 
-		switch {
-		case command == "whoami":
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		case command == "security" && len(args) > 0 && (args[0] == "add-generic-password" || args[0] == "-i"):
-			// Don't set MOCK_ERROR for successful addition or interactive mode
-		default:
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		}
-		return cmd
+	execSecretInput = func(cmd *exec.Cmd, input []byte) error {
+		return nil
 	}
 
 	provider := NewDefaultProvider()
@@ -222,29 +177,30 @@ func TestDefaultProviderListEntries(t *testing.T) {
 	}
 }
 
+// TestDefaultProviderDeleteEntry uses subprocess pattern because
+// DeleteEntry calls execCommand + cmd.Run() directly.
 func TestDefaultProviderDeleteEntry(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
+	orig := saveMocks()
+	defer orig.restore()
+
+	origLoad := loadEntryMetadataImpl
+	origSave := saveEntryMetadataImpl
+	defer func() {
+		loadEntryMetadataImpl = origLoad
+		saveEntryMetadataImpl = origSave
+	}()
+	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
+		return []KeychainEntryMeta{}, nil
+	}
+	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
+		return nil
+	}
 
 	execCommand = func(command string, args ...string) *exec.Cmd {
 		cs := []string{"-test.run=TestHelperProcess", "--", command}
 		cs = append(cs, args...)
 		cmd := exec.Command(os.Args[0], cs...)
 		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
-
-		switch {
-		case command == "whoami":
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		case command == "security" && len(args) > 0 && args[0] == "delete-generic-password":
-			// Allow deletion to succeed
-		case command == "security" && len(args) > 0 && args[0] == "add-generic-password":
-			// Allow metadata writes to succeed
-		case command == "security" && len(args) > 0 && args[0] == "find-generic-password":
-			// Metadata reads — return not found (no existing metadata)
-			cmd.Env = append(cmd.Env, "MOCK_EXIT_CODE=44", "MOCK_ERROR=1")
-		default:
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		}
 		return cmd
 	}
 
@@ -257,22 +213,6 @@ func TestDefaultProviderDeleteEntry(t *testing.T) {
 }
 
 func TestDefaultProviderStoreEntryMetadata(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
-
-		// Return error for security commands to simulate no existing metadata
-		if command == "security" {
-			cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
-		}
-		return cmd
-	}
-
 	originalSaveFunc := saveEntryMetadataImpl
 	defer func() { saveEntryMetadataImpl = originalSaveFunc }()
 
@@ -336,24 +276,6 @@ func TestDefaultProviderLoadEntryMetadata(t *testing.T) {
 }
 
 func TestDefaultProviderRemoveEntryMetadata(t *testing.T) {
-	origExecCommand := execCommand
-	defer func() { execCommand = origExecCommand }()
-
-	execCommand = func(command string, args ...string) *exec.Cmd {
-		cs := []string{"-test.run=TestHelperProcess", "--", command}
-		cs = append(cs, args...)
-		cmd := exec.Command(os.Args[0], cs...)
-		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
-
-		// Mock the security find-generic-password call for metadata
-		if command == "security" && len(args) >= 4 && args[0] == "find-generic-password" {
-			// Return empty to simulate no existing metadata
-			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=")
-		}
-
-		return cmd
-	}
-
 	originalSaveFunc := saveEntryMetadataImpl
 	defer func() { saveEntryMetadataImpl = originalSaveFunc }()
 
