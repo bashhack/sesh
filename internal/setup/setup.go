@@ -99,6 +99,9 @@ func (h *AWSSetupHandler) createServiceName(prefix, profile string) (string, err
 // runAWSCommand executes an AWS CLI command with the given profile and args,
 // returning its output. It automatically adds the profile flag if provided.
 func (h *AWSSetupHandler) runAWSCommand(profile string, args ...string) ([]byte, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("runAWSCommand requires at least one argument")
+	}
 	if profile != "" {
 		profArgs := append([]string{args[0], "--profile", profile}, args[1:]...)
 		return runCommand("aws", profArgs...)
