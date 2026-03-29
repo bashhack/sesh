@@ -618,7 +618,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
 					if profile == "" && serial == "arn:aws:iam::123456789012:mfa/user" && string(code) == "123456" {
 						return aws.Credentials{
-							AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
+							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 							SessionToken:    "AQoDYXdzEJr...",
 							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
@@ -675,7 +675,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
 					if profile == "" && serial == "arn:aws:iam::123456789012:mfa/autodetected" && string(code) == "123456" {
 						return aws.Credentials{
-							AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
+							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 							SessionToken:    "AQoDYXdzEJr...",
 							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
@@ -714,7 +714,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 					}
 					if callCount == 2 && string(code) == "654321" {
 						return aws.Credentials{
-							AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
+							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 							SessionToken:    "AQoDYXdzEJr...",
 							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
@@ -795,7 +795,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 					}
 					if string(code) == "999999" {
 						return aws.Credentials{
-							AccessKeyId:     "AKIAIOSFODNN7EXAMPLE",
+							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 							SessionToken:    "AQoDYXdzEJr...",
 							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),

@@ -55,9 +55,10 @@ func TestGetSecretWithEmptyUsername(t *testing.T) {
 		cmd.Env = []string{
 			"GO_WANT_HELPER_PROCESS=1",
 		}
-		if command == "whoami" {
+		switch command {
+		case "whoami":
 			cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
-		} else if command == "security" {
+		case "security":
 			cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", securityOutput))
 		}
 		return cmd
@@ -193,9 +194,10 @@ func TestGetMFASerialWithEmptyUsername(t *testing.T) {
 		cmd.Env = []string{
 			"GO_WANT_HELPER_PROCESS=1",
 		}
-		if command == "whoami" {
+		switch command {
+		case "whoami":
 			cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
-		} else if command == "security" {
+		case "security":
 			cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", serialOutput))
 		}
 		return cmd
@@ -347,7 +349,8 @@ func TestListEntries(t *testing.T) {
 	defer func() { loadEntryMetadataImpl = originalFunc }()
 
 	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		if servicePrefix == "sesh-mfa" {
+		switch servicePrefix {
+		case "sesh-mfa":
 			return []KeychainEntryMeta{
 				{
 					Service:     "sesh-mfa",
@@ -356,7 +359,7 @@ func TestListEntries(t *testing.T) {
 					ServiceType: "aws",
 				},
 			}, nil
-		} else if servicePrefix == "sesh-totp" {
+		case "sesh-totp":
 			return []KeychainEntryMeta{
 				{
 					Service:     "sesh-totp-github",
@@ -547,9 +550,10 @@ func TestGetSecretString(t *testing.T) {
 					"GO_WANT_HELPER_PROCESS=1",
 				}
 
-				if command == "whoami" {
+				switch command {
+				case "whoami":
 					cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
-				} else if command == "security" {
+				case "security":
 					if tc.mockError {
 						cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 					} else {
@@ -629,9 +633,10 @@ func TestSetSecretString(t *testing.T) {
 					"GO_WANT_HELPER_PROCESS=1",
 				}
 
-				if command == "whoami" {
+				switch command {
+				case "whoami":
 					cmd.Env = append(cmd.Env, fmt.Sprintf("MOCK_OUTPUT=%s", whoamiOutput))
-				} else if command == "security" {
+				case "security":
 					if tc.mockError {
 						cmd.Env = append(cmd.Env, "MOCK_ERROR=1")
 					}
@@ -784,10 +789,11 @@ func TestDeleteEntryWithEmptyAccount(t *testing.T) {
 			"GO_WANT_HELPER_PROCESS=1",
 		}
 
-		if command == "whoami" {
+		switch command {
+		case "whoami":
 			whoamiCalled = true
 			cmd.Env = append(cmd.Env, "MOCK_OUTPUT=testuser")
-		} else if command == "security" {
+		case "security":
 			deleteCalled = true
 			// Verify delete command args
 			if len(args) > 0 && args[0] == "delete-generic-password" {

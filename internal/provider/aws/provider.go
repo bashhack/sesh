@@ -220,7 +220,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		// Check if this looks like a "code already used" error
 		if strings.Contains(err.Error(), "MultiFactorAuthentication failed with invalid MFA one time pass code") {
 			// Add more context to the error message
-			return provider.Credentials{}, fmt.Errorf("failed to get session token: %w\n\nThis may be because the TOTP code was recently used. Try waiting for the next time window (30-second interval) and try again.", err)
+			return provider.Credentials{}, fmt.Errorf("failed to get session token (this may be because the TOTP code was recently used; try waiting for the next time window): %w", err)
 		}
 		return provider.Credentials{}, fmt.Errorf("failed to get session token: %w", err)
 	}
@@ -233,7 +233,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}
 
 	envVars := map[string]string{
-		"AWS_ACCESS_KEY_ID":     awsCreds.AccessKeyId,
+		"AWS_ACCESS_KEY_ID":     awsCreds.AccessKeyID,
 		"AWS_SECRET_ACCESS_KEY": awsCreds.SecretAccessKey,
 		"AWS_SESSION_TOKEN":     awsCreds.SessionToken,
 	}

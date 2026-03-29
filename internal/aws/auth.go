@@ -15,7 +15,7 @@ import (
 var execCommand = exec.Command
 
 type Credentials struct {
-	AccessKeyId     string `json:"AccessKeyId"`
+	AccessKeyID     string `json:"AccessKeyID"`
 	SecretAccessKey string `json:"SecretAccessKey"`
 	SessionToken    string `json:"SessionToken"`
 	Expiration      string `json:"Expiration"`
@@ -26,8 +26,8 @@ func (c *Credentials) ZeroSecrets() {
 	if c == nil {
 		return
 	}
-	secure.ZeroStrings(c.AccessKeyId, c.SecretAccessKey, c.SessionToken)
-	c.AccessKeyId = ""
+	secure.ZeroStrings(c.AccessKeyID, c.SecretAccessKey, c.SessionToken)
+	c.AccessKeyID = ""
 	c.SecretAccessKey = ""
 	c.SessionToken = ""
 }

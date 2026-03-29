@@ -112,7 +112,7 @@ func (h *AWSSetupHandler) verifyAWSCredentials(profile string) (string, error) {
 
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to get AWS identity: %w. Make sure your AWS credentials are configured with 'aws configure'.", err)
+		return "", fmt.Errorf("failed to get AWS identity (make sure your AWS credentials are configured with 'aws configure'): %w", err)
 	}
 
 	userArn := strings.TrimSpace(string(output))

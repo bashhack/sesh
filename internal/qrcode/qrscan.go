@@ -120,10 +120,7 @@ func ExtractTOTPInfo(otpauthURL string) (string, string, string, error) {
 	issuer := query.Get("issuer")
 
 	// Extract label (which might contain issuer and account)
-	label := parsedURL.Path
-	if strings.HasPrefix(label, "/") {
-		label = label[1:]
-	}
+	label := strings.TrimPrefix(parsedURL.Path, "/")
 
 	// If the label contains a colon, it might be in format "issuer:account"
 	accountName := label

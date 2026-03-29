@@ -26,7 +26,7 @@ func ValidateAndNormalizeSecret(secret string) (string, error) {
 	cleaned = strings.ToUpper(cleaned)
 
 	for i, char := range cleaned {
-		if !((char >= 'A' && char <= 'Z') || (char >= '2' && char <= '7') || char == '=') {
+		if (char < 'A' || char > 'Z') && (char < '2' || char > '7') && char != '=' {
 			return "", fmt.Errorf("invalid character '%c' at position %d - base32 secrets can only contain A-Z, 2-7, and =", char, i)
 		}
 	}

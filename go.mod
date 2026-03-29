@@ -16,4 +16,4 @@ require (
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 )
 
-replace github.com/makiuchi-d/gozxing => github.com/bashhack/gozxing v0.0.0-20260315075158-e2a5d3bb5401
+replace github.com/makiuchi-d/gozxing => github.com/bashhack/gozxing v0.0.0-20260329180151-3b9d0c50fae9

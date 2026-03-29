@@ -1,5 +1,5 @@
-github.com/bashhack/gozxing v0.0.0-20260315075158-e2a5d3bb5401 h1:acmnca76p7n3YYx/eUCILDG0CmSA9Hcndnw55E9e8eg=
-github.com/bashhack/gozxing v0.0.0-20260315075158-e2a5d3bb5401/go.mod h1:eRIHbOjX7QWxLIDJoQuMLhuXg9LAuw6znsUtRkNw9DU=
+github.com/bashhack/gozxing v0.0.0-20260329180151-3b9d0c50fae9 h1:/WuHXthk/rbfJMk+cWxYNkmApQ2m2PmfVVaVkKhIXI4=
+github.com/bashhack/gozxing v0.0.0-20260329180151-3b9d0c50fae9/go.mod h1:eRIHbOjX7QWxLIDJoQuMLhuXg9LAuw6znsUtRkNw9DU=
 github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=
 github.com/boombuler/barcode v1.0.1 h1:NDBbPmhS+EqABEs5Kg3n/5ZNjy73Pz7SIV+KCeqyXcs=
 github.com/boombuler/barcode v1.0.1/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=

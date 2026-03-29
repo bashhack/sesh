@@ -57,7 +57,7 @@ type MFADeviceList struct {
 }
 
 type Credentials struct {
-	AccessKeyId     string `json:"AccessKeyId"`
+	AccessKeyID     string `json:"AccessKeyID"`
 	SecretAccessKey string `json:"SecretAccessKey"`
 	SessionToken    string `json:"SessionToken"`
 	Expiration      string `json:"Expiration"`
@@ -270,7 +270,7 @@ func getSessionToken() {
 
 	creds := SessionCredentials{
 		Credentials: Credentials{
-			AccessKeyId:     "ASIAMOCKTEMPORARY" + strings.ToUpper(tokenCode[:3]),
+			AccessKeyID:     "ASIAMOCKTEMPORARY" + strings.ToUpper(tokenCode[:3]),
 			SecretAccessKey: "mockTemporarySecretKey" + tokenCode,
 			SessionToken:    "FwoGZXIvYXdzEMOCKEXAMPLETOKEN==" + tokenCode,
 			Expiration:      expiration,

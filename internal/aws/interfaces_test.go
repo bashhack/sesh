@@ -27,7 +27,7 @@ func TestDefaultProviderGetSessionToken(t *testing.T) {
 	execCommand = func(command string, args ...string) *exec.Cmd {
 		mockResp := SessionTokenResponse{
 			Credentials: Credentials{
-				AccessKeyId:     "test-key",
+				AccessKeyID:     "test-key",
 				SecretAccessKey: "test-secret",
 				SessionToken:    "test-token",
 				Expiration:      "2023-01-01T00:00:00Z",
@@ -48,8 +48,8 @@ func TestDefaultProviderGetSessionToken(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
-	if creds.AccessKeyId != "test-key" {
-		t.Errorf("Expected AccessKeyId 'test-key', got '%s'", creds.AccessKeyId)
+	if creds.AccessKeyID != "test-key" {
+		t.Errorf("Expected AccessKeyID 'test-key', got '%s'", creds.AccessKeyID)
 	}
 }
 

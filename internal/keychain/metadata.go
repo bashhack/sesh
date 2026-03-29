@@ -90,7 +90,7 @@ func RemoveEntryMetadata(servicePrefix, service, account string) error {
 	// Filter out the entry to remove
 	updatedEntries := []KeychainEntryMeta{}
 	for _, entry := range entries {
-		if !(entry.Service == service && entry.Account == account) {
+		if entry.Service != service || entry.Account != account {
 			updatedEntries = append(updatedEntries, entry)
 		}
 	}
