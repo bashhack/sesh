@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/testutil"
 )
 
@@ -1193,9 +1194,13 @@ func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
 
 // TestCaptureQRWithRetry tests QR code capture with retry logic
 func TestCaptureQRWithRetry(t *testing.T) {
-	// Save original scanQRCode and restore after test
+	// Save originals and restore after test
 	origScanQRCode := scanQRCode
-	defer func() { scanQRCode = origScanQRCode }()
+	origScanQRCodeFull := scanQRCodeFull
+	defer func() {
+		scanQRCode = origScanQRCode
+		scanQRCodeFull = origScanQRCodeFull
+	}()
 
 	// Mock manual entry function
 	mockManualEntry := func() (string, error) {
@@ -1256,17 +1261,17 @@ func TestCaptureQRWithRetry(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			scanCallCount := 0
 
-			// Mock scanQRCode
-			scanQRCode = func() (string, error) {
+			// Mock scanQRCodeFull (used by captureQRWithRetryFull)
+			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
 				if scanCallCount < len(tc.scanResults) {
 					err := tc.scanResults[scanCallCount]
 					scanCallCount++
 					if err != nil {
-						return "", err
+						return qrcode.TOTPInfo{}, err
 					}
-					return tc.scanSecret, nil
+					return qrcode.TOTPInfo{Secret: tc.scanSecret}, nil
 				}
-				return "", errors.New("unexpected scan call")
+				return qrcode.TOTPInfo{}, errors.New("unexpected scan call")
 			}
 
 			reader := bufio.NewReader(strings.NewReader(tc.readerInput))
@@ -1307,11 +1312,11 @@ func TestCaptureQRWithRetry(t *testing.T) {
 
 // TestTOTPSetupHandler_captureQRCodeWithFallback tests TOTP QR capture wrapper
 func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
-	// Save original scanQRCode and readPassword and restore after test
-	origScanQRCode := scanQRCode
+	// Save originals and restore after test
+	origScanQRCodeFull := scanQRCodeFull
 	origReadPassword := readPassword
 	defer func() {
-		scanQRCode = origScanQRCode
+		scanQRCodeFull = origScanQRCodeFull
 		readPassword = origReadPassword
 	}()
 
@@ -1339,12 +1344,12 @@ func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Mock scanQRCode
-			scanQRCode = func() (string, error) {
+			// Mock scanQRCodeFull
+			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
 				if tc.scanSuccess {
-					return "QR_SECRET", nil
+					return qrcode.TOTPInfo{Secret: "QR_SECRET"}, nil
 				}
-				return "", errors.New("scan failed")
+				return qrcode.TOTPInfo{}, errors.New("scan failed")
 			}
 
 			// Mock readPassword
@@ -1380,11 +1385,11 @@ func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
 
 // TestAWSSetupHandler_captureAWSQRCodeWithFallback tests AWS QR capture wrapper
 func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
-	// Save original scanQRCode and readPassword and restore after test
-	origScanQRCode := scanQRCode
+	// Save originals and restore after test
+	origScanQRCodeFull := scanQRCodeFull
 	origReadPassword := readPassword
 	defer func() {
-		scanQRCode = origScanQRCode
+		scanQRCodeFull = origScanQRCodeFull
 		readPassword = origReadPassword
 	}()
 
@@ -1412,12 +1417,12 @@ func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Mock scanQRCode
-			scanQRCode = func() (string, error) {
+			// Mock scanQRCodeFull
+			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
 				if tc.scanSuccess {
-					return "AWS_QR_SECRET", nil
+					return qrcode.TOTPInfo{Secret: "AWS_QR_SECRET"}, nil
 				}
-				return "", errors.New("scan failed")
+				return qrcode.TOTPInfo{}, errors.New("scan failed")
 			}
 
 			// Mock readPassword
@@ -1643,8 +1648,8 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 // TestTOTPSetupHandler_Setup tests the main TOTP setup flow
 func TestTOTPSetupHandler_Setup(t *testing.T) {
 	// Save original functions and restore after test
-	origScanQRCode := scanQRCode
-	defer func() { scanQRCode = origScanQRCode }()
+	origScanQRCodeFull := scanQRCodeFull
+	defer func() { scanQRCodeFull = origScanQRCodeFull }()
 
 	origValidateAndNormalizeSecret := validateAndNormalizeSecret
 	defer func() { validateAndNormalizeSecret = origValidateAndNormalizeSecret }()
@@ -1802,12 +1807,12 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Mock scanQRCode
-			scanQRCode = func() (string, error) {
+			// Mock scanQRCodeFull
+			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
 				if tc.scanQRError != nil {
-					return "", tc.scanQRError
+					return qrcode.TOTPInfo{}, tc.scanQRError
 				}
-				return tc.scanQRResult, nil
+				return qrcode.TOTPInfo{Secret: tc.scanQRResult}, nil
 			}
 
 			// Mock totp functions
@@ -1852,7 +1857,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 				SetSecretStringFunc: func(user, service, secret string) error {
 					return tc.setSecretError
 				},
-				StoreEntryMetadataFunc: func(prefix, service, user, description string) error {
+				SetDescriptionFunc: func(service, account, description string) error {
 					return tc.storeMetadataError
 				},
 			}
@@ -1889,8 +1894,8 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 				if !strings.Contains(output, "Generated TOTP codes for verification") {
 					t.Error("Expected verification codes message")
 				}
-				if tc.storeMetadataError != nil && !strings.Contains(output, "Warning: Failed to store metadata") {
-					t.Error("Expected metadata warning")
+				if tc.storeMetadataError != nil && !strings.Contains(output, "Warning: Failed to store description") {
+					t.Error("Expected description warning")
 				}
 			}
 		})
@@ -2001,7 +2006,7 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 				SetSecretStringFunc: func(account, service string, secret string) error {
 					return nil
 				},
-				StoreEntryMetadataFunc: func(serviceType, service, account, description string) error {
+				SetDescriptionFunc: func(service, account, description string) error {
 					return nil
 				},
 			}

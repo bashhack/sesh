@@ -120,12 +120,19 @@ func (p *Provider) generateTOTP() (provider.Credentials, error) {
 
 	secure.SecureZeroBytes(secretBytes)
 
-	currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secretCopy)
+	// Check for stored TOTP params (algorithm, digits, period) via the entry description
+	params := p.loadTOTPParams(serviceKey)
+
+	currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secretCopy, params)
 	if err != nil {
 		return provider.Credentials{}, fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
 
-	secondsLeft := p.SecondsLeftInWindow()
+	period := int64(30)
+	if params.Period > 0 {
+		period = int64(params.Period)
+	}
+	secondsLeft := period - (p.TimeNow().Unix() % period)
 
 	serviceDesc := p.serviceName
 	if p.profile != "" {
@@ -134,6 +141,15 @@ func (p *Provider) generateTOTP() (provider.Credentials, error) {
 
 	return provider.CreateClipboardCredentials(p.Name(), currentCode, nextCode, secondsLeft,
 		"TOTP code", serviceDesc), nil
+}
+
+// loadTOTPParams reads stored TOTP params (algorithm, digits, period) from the entry description.
+func (p *Provider) loadTOTPParams(serviceKey string) internalTotp.Params {
+	entries, err := p.keychain.ListEntries(serviceKey)
+	if err != nil || len(entries) == 0 {
+		return internalTotp.Params{}
+	}
+	return internalTotp.ParseParams(entries[0].Description)
 }
 
 // ListEntries returns all TOTP entries in the keychain.
