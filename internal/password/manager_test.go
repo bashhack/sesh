@@ -105,8 +105,8 @@ func TestStorePasswordString(t *testing.T) {
 				return nil
 			}
 
-			// Mock StoreEntryMetadata call (may fail, but non-fatal)
-			mockKeychain.StoreEntryMetadataFunc = func(servicePrefix, service, account, description string) error {
+			// Mock SetDescription call (may fail, but non-fatal)
+			mockKeychain.SetDescriptionFunc = func(service, account, description string) error {
 				if tc.metadataErr != nil {
 					return tc.metadataErr
 				}
@@ -283,7 +283,7 @@ func TestStoreTOTPSecret(t *testing.T) {
 				return nil
 			}
 
-			mockKeychain.StoreEntryMetadataFunc = func(servicePrefix, service, account, description string) error {
+			mockKeychain.SetDescriptionFunc = func(service, account, description string) error {
 				return nil
 			}
 
@@ -421,10 +421,6 @@ func TestDeleteEntry(t *testing.T) {
 				return nil
 			}
 
-			mockKeychain.RemoveEntryMetadataFunc = func(servicePrefix, service, account string) error {
-				return nil
-			}
-
 			err := manager.DeleteEntry(tc.service, tc.username, tc.entryType)
 
 			if (err != nil) != tc.wantErr {
@@ -461,7 +457,6 @@ func TestListEntries(t *testing.T) {
 		listErr     error
 		errMsg      string
 		mockEntries []keychain.KeychainEntry
-		mockMeta    []keychain.KeychainEntryMeta
 		expected    []expectedEntry
 		wantErr     bool
 	}{
@@ -471,25 +466,13 @@ func TestListEntries(t *testing.T) {
 					Service:     "sesh-password/password/github/user1",
 					Account:     testUser,
 					Description: "password for github",
-				},
-				{
-					Service:     "sesh-password/totp/aws/root",
-					Account:     testUser,
-					Description: "totp for aws",
-				},
-			},
-			mockMeta: []keychain.KeychainEntryMeta{
-				{
-					Service:     "sesh-password/password/github/user1",
-					Account:     testUser,
-					ServiceType: "sesh-password",
 					CreatedAt:   createdTime,
 					UpdatedAt:   updatedTime,
 				},
 				{
 					Service:     "sesh-password/totp/aws/root",
 					Account:     testUser,
-					ServiceType: "sesh-password",
+					Description: "totp for aws",
 					CreatedAt:   createdTime,
 					UpdatedAt:   createdTime,
 				},
@@ -574,13 +557,6 @@ func TestListEntries(t *testing.T) {
 				return tc.mockEntries, nil
 			}
 
-			mockKeychain.LoadEntryMetadataFunc = func(servicePrefix string) ([]keychain.KeychainEntryMeta, error) {
-				if tc.mockMeta != nil {
-					return tc.mockMeta, nil
-				}
-				return []keychain.KeychainEntryMeta{}, nil
-			}
-
 			entries, err := manager.ListEntries()
 
 			if (err != nil) != tc.wantErr {
@@ -619,6 +595,220 @@ func TestListEntries(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestListEntriesFiltered(t *testing.T) {
+	mockKeychain := &mocks.MockProvider{}
+	testUser := "testuser"
+	manager := NewManager(mockKeychain, testUser)
+
+	allEntries := []keychain.KeychainEntry{
+		{Service: "sesh-password/password/github/user1", Account: testUser, Description: "password for github"},
+		{Service: "sesh-password/api_key/stripe", Account: testUser, Description: "api_key for stripe"},
+		{Service: "sesh-password/password/gitlab/user2", Account: testUser, Description: "password for gitlab"},
+	}
+
+	mockKeychain.ListEntriesFunc = func(service string) ([]keychain.KeychainEntry, error) {
+		return allEntries, nil
+	}
+
+	testCases := map[string]struct {
+		filter   ListFilter
+		expected int
+	}{
+		"no filter": {
+			filter:   ListFilter{},
+			expected: 3,
+		},
+		"filter by type password": {
+			filter:   ListFilter{EntryType: EntryTypePassword},
+			expected: 2,
+		},
+		"filter by type api_key": {
+			filter:   ListFilter{EntryType: EntryTypeAPIKey},
+			expected: 1,
+		},
+		"filter by service": {
+			filter:   ListFilter{Service: "github"},
+			expected: 1,
+		},
+		"limit": {
+			filter:   ListFilter{Limit: 2},
+			expected: 2,
+		},
+		"offset beyond entries": {
+			filter:   ListFilter{Offset: 10},
+			expected: 0,
+		},
+		"offset and limit": {
+			filter:   ListFilter{Offset: 1, Limit: 1},
+			expected: 1,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			entries, err := manager.ListEntriesFiltered(tc.filter)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(entries) != tc.expected {
+				t.Errorf("expected %d entries, got %d", tc.expected, len(entries))
+			}
+		})
+	}
+}
+
+func TestSearchEntries(t *testing.T) {
+	mockKeychain := &mocks.MockProvider{}
+	testUser := "testuser"
+	manager := NewManager(mockKeychain, testUser)
+
+	allEntries := []keychain.KeychainEntry{
+		{Service: "sesh-password/password/github/user1", Account: testUser, Description: "password for github"},
+		{Service: "sesh-password/api_key/stripe", Account: testUser, Description: "api_key for stripe"},
+		{Service: "sesh-password/password/gitlab/user2", Account: testUser, Description: "password for gitlab"},
+	}
+
+	mockKeychain.ListEntriesFunc = func(service string) ([]keychain.KeychainEntry, error) {
+		return allEntries, nil
+	}
+
+	testCases := map[string]struct {
+		query    string
+		expected int
+	}{
+		"match service": {
+			query:    "github",
+			expected: 1,
+		},
+		"match multiple by prefix": {
+			query:    "git",
+			expected: 2,
+		},
+		"match username": {
+			query:    "user1",
+			expected: 1,
+		},
+		"match description": {
+			query:    "stripe",
+			expected: 1,
+		},
+		"case insensitive": {
+			query:    "GITHUB",
+			expected: 1,
+		},
+		"no match": {
+			query:    "nonexistent",
+			expected: 0,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			entries, err := manager.SearchEntries(tc.query)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(entries) != tc.expected {
+				t.Errorf("expected %d entries, got %d", tc.expected, len(entries))
+			}
+		})
+	}
+}
+
+// mockSearchableProvider embeds MockProvider and adds SearchEntries for FTS dispatch testing.
+type mockSearchableProvider struct {
+	mocks.MockProvider
+	SearchEntriesFunc func(query string) ([]keychain.KeychainEntry, error)
+}
+
+func (m *mockSearchableProvider) SearchEntries(query string) ([]keychain.KeychainEntry, error) {
+	return m.SearchEntriesFunc(query)
+}
+
+func TestSearchEntriesWithSearcher(t *testing.T) {
+	testUser := "testuser"
+
+	testCases := map[string]struct {
+		ftsErr     error
+		ftsResults []keychain.KeychainEntry
+		expected   int
+		wantErr    bool
+	}{
+		"uses FTS results": {
+			ftsResults: []keychain.KeychainEntry{
+				{Service: "sesh-password/password/github/user1", Account: testUser},
+			},
+			expected: 1,
+		},
+		"FTS error propagates": {
+			ftsErr:  errors.New("fts broken"),
+			wantErr: true,
+		},
+		"empty FTS results": {
+			ftsResults: nil,
+			expected:   0,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			mock := &mockSearchableProvider{
+				SearchEntriesFunc: func(query string) ([]keychain.KeychainEntry, error) {
+					return tc.ftsResults, tc.ftsErr
+				},
+			}
+			// ListEntriesFunc must be set even though it shouldn't be called
+			mock.ListEntriesFunc = func(service string) ([]keychain.KeychainEntry, error) {
+				t.Fatal("ListEntries should not be called when Searcher is available")
+				return nil, nil
+			}
+
+			manager := NewManager(mock, testUser)
+			entries, err := manager.SearchEntries("github")
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(entries) != tc.expected {
+				t.Errorf("expected %d entries, got %d", tc.expected, len(entries))
+			}
+		})
+	}
+}
+
+func TestGetPasswordsByService(t *testing.T) {
+	mockKeychain := &mocks.MockProvider{}
+	testUser := "testuser"
+	manager := NewManager(mockKeychain, testUser)
+
+	mockKeychain.ListEntriesFunc = func(service string) ([]keychain.KeychainEntry, error) {
+		return []keychain.KeychainEntry{
+			{Service: "sesh-password/password/github/user1", Account: testUser},
+			{Service: "sesh-password/password/stripe/admin", Account: testUser},
+			{Service: "sesh-password/password/github/user2", Account: testUser},
+		}, nil
+	}
+
+	entries, err := manager.GetPasswordsByService("github")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 github entries, got %d", len(entries))
+	}
+	for _, e := range entries {
+		if e.Service != "github" {
+			t.Errorf("expected service github, got %q", e.Service)
+		}
 	}
 }
 
@@ -671,6 +861,11 @@ func TestGenerateTOTPCode(t *testing.T) {
 
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
+			// GetTOTPParams calls ListEntries — return empty so defaults are used
+			mockKeychain.ListEntriesFunc = func(service string) ([]keychain.KeychainEntry, error) {
+				return nil, nil
+			}
+
 			// Setup mock for GetSecret
 			mockKeychain.GetSecretFunc = func(account, service string) ([]byte, error) {
 				if account != testUser {

@@ -5,6 +5,9 @@ package password
 import (
 	"fmt"
 	"log"
+	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/bashhack/sesh/internal/constants"
@@ -86,10 +89,10 @@ func (m *Manager) StorePassword(service, username string, password []byte, entry
 		description = fmt.Sprintf("%s (%s) for %s", entryType, username, service)
 	}
 
-	err = m.keychain.StoreEntryMetadata(constants.PasswordServicePrefix, serviceKey, m.user, description)
+	err = m.keychain.SetDescription(serviceKey, m.user, description)
 	if err != nil {
-		// Non-fatal - password is stored, just metadata failed
-		log.Printf("warning: failed to store metadata for %s: %v", serviceKey, err)
+		// Non-fatal - password is stored, just description failed
+		log.Printf("warning: failed to store description for %s: %v", serviceKey, err)
 	}
 
 	return nil
@@ -130,18 +133,55 @@ func (m *Manager) GetPasswordString(service, username string, entryType EntryTyp
 	return string(passwordBytes), nil
 }
 
-// StoreTOTPSecret stores a TOTP secret with validation
+// StoreTOTPSecret stores a TOTP secret with validation.
 func (m *Manager) StoreTOTPSecret(service, username, secret string) error {
-	// Validate and normalize the TOTP secret
+	return m.StoreTOTPSecretWithParams(service, username, secret, totp.Params{})
+}
+
+// StoreTOTPSecretWithParams stores a TOTP secret with validation and optional
+// non-standard parameters (algorithm, digits, period, issuer).
+func (m *Manager) StoreTOTPSecretWithParams(service, username, secret string, params totp.Params) error {
 	normalizedSecret, err := totp.ValidateAndNormalizeSecret(secret)
 	if err != nil {
 		return fmt.Errorf("invalid TOTP secret: %w", err)
 	}
 
-	return m.StorePasswordString(service, username, normalizedSecret, EntryTypeTOTP)
+	if err := m.StorePasswordString(service, username, normalizedSecret, EntryTypeTOTP); err != nil {
+		return err
+	}
+
+	// Store params as description if non-default
+	desc := params.MarshalDescription()
+	if desc != "" {
+		serviceKey, err := m.generateServiceKey(service, username, EntryTypeTOTP)
+		if err != nil {
+			return nil // Secret stored, metadata is best-effort
+		}
+		if descErr := m.keychain.SetDescription(serviceKey, m.user, desc); descErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to set description: %v\n", descErr)
+		}
+	}
+
+	return nil
 }
 
-// GenerateTOTPCode generates a TOTP code for a stored secret
+// GetTOTPParams retrieves stored TOTP parameters for an entry.
+func (m *Manager) GetTOTPParams(service, username string) totp.Params {
+	serviceKey, err := m.generateServiceKey(service, username, EntryTypeTOTP)
+	if err != nil {
+		return totp.Params{}
+	}
+
+	entries, err := m.keychain.ListEntries(serviceKey)
+	if err != nil || len(entries) == 0 {
+		return totp.Params{}
+	}
+
+	return totp.ParseParams(entries[0].Description)
+}
+
+// GenerateTOTPCode generates a TOTP code for a stored secret,
+// using any stored non-standard parameters (algorithm, digits, period).
 func (m *Manager) GenerateTOTPCode(service, username string) (string, error) {
 	secretBytes, err := m.GetPassword(service, username, EntryTypeTOTP)
 	if err != nil {
@@ -149,13 +189,14 @@ func (m *Manager) GenerateTOTPCode(service, username string) (string, error) {
 	}
 	defer secure.SecureZeroBytes(secretBytes)
 
-	// Use the secure TOTP generation
-	code, err := totp.GenerateBytes(secretBytes)
+	params := m.GetTOTPParams(service, username)
+
+	current, _, err := totp.GenerateConsecutiveCodesBytesWithParams(secretBytes, params)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate TOTP code: %w", err)
 	}
 
-	return code, nil
+	return current, nil
 }
 
 // ListEntries returns all password entries
@@ -165,19 +206,9 @@ func (m *Manager) ListEntries() ([]Entry, error) {
 		return nil, fmt.Errorf("failed to list entries: %w", err)
 	}
 
-	// Load metadata once for timestamp lookup
-	metaEntries, err := m.keychain.LoadEntryMetadata(constants.PasswordServicePrefix)
-	if err != nil {
-		metaEntries = nil
-	}
-	metaByKey := make(map[string]keychain.KeychainEntryMeta, len(metaEntries))
-	for _, meta := range metaEntries {
-		metaByKey[meta.Service+":"+meta.Account] = meta
-	}
-
 	entries := make([]Entry, 0, len(keychainEntries))
 	for _, kEntry := range keychainEntries {
-		entry, err := m.parseEntry(kEntry, metaByKey)
+		entry, err := m.parseEntry(&kEntry)
 		if err != nil {
 			// Skip invalid entries but don't fail completely
 			continue
@@ -186,6 +217,118 @@ func (m *Manager) ListEntries() ([]Entry, error) {
 	}
 
 	return entries, nil
+}
+
+// GetPasswordsByService returns all entries for a given service name.
+func (m *Manager) GetPasswordsByService(service string) ([]Entry, error) {
+	return m.ListEntriesFiltered(ListFilter{Service: service})
+}
+
+// SortField controls the sort order of listed entries.
+type SortField string
+
+const (
+	SortByService   SortField = "service"
+	SortByCreatedAt SortField = "created_at"
+	SortByUpdatedAt SortField = "updated_at"
+)
+
+// ListFilter controls which entries are returned and in what order.
+type ListFilter struct {
+	EntryType EntryType // empty means all types
+	Service   string    // empty means all services
+	SortBy    SortField // empty defaults to SortByService
+	Limit     int       // 0 means no limit
+	Offset    int
+}
+
+// ListEntriesFiltered returns entries matching the given filter.
+func (m *Manager) ListEntriesFiltered(filter ListFilter) ([]Entry, error) {
+	entries, err := m.ListEntries()
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter
+	filtered := make([]Entry, 0, len(entries))
+	for i := range entries {
+		e := &entries[i]
+		if filter.EntryType != "" && e.Type != filter.EntryType {
+			continue
+		}
+		if filter.Service != "" && !strings.EqualFold(e.Service, filter.Service) {
+			continue
+		}
+		filtered = append(filtered, *e)
+	}
+
+	// Sort
+	switch filter.SortBy {
+	case SortByCreatedAt:
+		sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreatedAt.Before(filtered[j].CreatedAt) })
+	case SortByUpdatedAt:
+		sort.Slice(filtered, func(i, j int) bool { return filtered[i].UpdatedAt.Before(filtered[j].UpdatedAt) })
+	default:
+		sort.Slice(filtered, func(i, j int) bool { return filtered[i].Service < filtered[j].Service })
+	}
+
+	// Paginate
+	if filter.Offset > 0 {
+		if filter.Offset >= len(filtered) {
+			return []Entry{}, nil
+		}
+		filtered = filtered[filter.Offset:]
+	}
+	if filter.Limit > 0 && filter.Limit < len(filtered) {
+		filtered = filtered[:filter.Limit]
+	}
+
+	return filtered, nil
+}
+
+// Searcher is an optional interface that credential stores can implement
+// to provide full-text search. The SQLite store implements this via FTS5.
+type Searcher interface {
+	SearchEntries(query string) ([]keychain.KeychainEntry, error)
+}
+
+// SearchEntries returns entries where the query matches service, username, or description.
+// If the underlying store supports FTS (implements Searcher), it is used for ranked results.
+// Otherwise, falls back to in-memory case-insensitive substring matching.
+func (m *Manager) SearchEntries(query string) ([]Entry, error) {
+	if searcher, ok := m.keychain.(Searcher); ok {
+		kEntries, err := searcher.SearchEntries(query)
+		if err != nil {
+			return nil, fmt.Errorf("search failed: %w", err)
+		}
+		entries := make([]Entry, 0, len(kEntries))
+		for _, kEntry := range kEntries {
+			entry, err := m.parseEntry(&kEntry)
+			if err != nil {
+				continue
+			}
+			entries = append(entries, entry)
+		}
+		return entries, nil
+	}
+
+	// Fallback: in-memory substring matching
+	entries, err := m.ListEntries()
+	if err != nil {
+		return nil, err
+	}
+
+	q := strings.ToLower(query)
+	var results []Entry
+	for i := range entries {
+		e := &entries[i]
+		if strings.Contains(strings.ToLower(e.Service), q) ||
+			strings.Contains(strings.ToLower(e.Username), q) ||
+			strings.Contains(strings.ToLower(e.Description), q) {
+			results = append(results, *e)
+		}
+	}
+	return results, nil
 }
 
 // DeleteEntry removes a password entry and its metadata
@@ -198,12 +341,6 @@ func (m *Manager) DeleteEntry(service, username string, entryType EntryType) err
 	err = m.keychain.DeleteEntry(m.user, serviceKey)
 	if err != nil {
 		return fmt.Errorf("failed to delete entry: %w", err)
-	}
-
-	err = m.keychain.RemoveEntryMetadata(constants.PasswordServicePrefix, serviceKey, m.user)
-	if err != nil {
-		// Non-fatal - entry is deleted, just metadata cleanup failed
-		log.Printf("warning: failed to remove metadata for %s: %v", serviceKey, err)
 	}
 
 	return nil
@@ -220,7 +357,7 @@ func (m *Manager) generateServiceKey(service, username string, entryType EntryTy
 }
 
 // parseEntry converts a keychain entry to a password manager entry.
-func (m *Manager) parseEntry(kEntry keychain.KeychainEntry, metaByKey map[string]keychain.KeychainEntryMeta) (Entry, error) {
+func (m *Manager) parseEntry(kEntry *keychain.KeychainEntry) (Entry, error) {
 	if kEntry.Account != m.user {
 		return Entry{}, fmt.Errorf("entry belongs to another account: %s", kEntry.Account)
 	}
@@ -245,19 +382,13 @@ func (m *Manager) parseEntry(kEntry keychain.KeychainEntry, metaByKey map[string
 		username = segments[2]
 	}
 
-	key := kEntry.Service + ":" + kEntry.Account
-	entry := Entry{
-		ID:          key,
+	return Entry{
+		ID:          kEntry.Service + ":" + kEntry.Account,
 		Service:     service,
 		Username:    username,
 		Type:        entryType,
 		Description: kEntry.Description,
-	}
-
-	if meta, ok := metaByKey[key]; ok {
-		entry.CreatedAt = meta.CreatedAt
-		entry.UpdatedAt = meta.UpdatedAt
-	}
-
-	return entry, nil
+		CreatedAt:   kEntry.CreatedAt,
+		UpdatedAt:   kEntry.UpdatedAt,
+	}, nil
 }
