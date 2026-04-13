@@ -5,16 +5,14 @@ import "github.com/bashhack/sesh/internal/keychain"
 
 // MockProvider is a mock implementation of the keychain.Provider interface
 type MockProvider struct {
-	GetSecretFunc           func(account, service string) ([]byte, error)
-	SetSecretFunc           func(account, service string, secret []byte) error
-	GetSecretStringFunc     func(account, service string) (string, error)
-	SetSecretStringFunc     func(account, service, secret string) error
-	GetMFASerialBytesFunc   func(account, profile string) ([]byte, error)
-	ListEntriesFunc         func(service string) ([]keychain.KeychainEntry, error)
-	DeleteEntryFunc         func(account, service string) error
-	StoreEntryMetadataFunc  func(servicePrefix, service, account, description string) error
-	LoadEntryMetadataFunc   func(servicePrefix string) ([]keychain.KeychainEntryMeta, error)
-	RemoveEntryMetadataFunc func(servicePrefix, service, account string) error
+	GetSecretFunc         func(account, service string) ([]byte, error)
+	SetSecretFunc         func(account, service string, secret []byte) error
+	GetSecretStringFunc   func(account, service string) (string, error)
+	SetSecretStringFunc   func(account, service, secret string) error
+	GetMFASerialBytesFunc func(account, profile string) ([]byte, error)
+	ListEntriesFunc       func(service string) ([]keychain.KeychainEntry, error)
+	DeleteEntryFunc       func(account, service string) error
+	SetDescriptionFunc    func(service, account, description string) error
 }
 
 // GetSecret implements the keychain.Provider interface
@@ -44,6 +42,9 @@ func (m *MockProvider) GetMFASerialBytes(account, profile string) ([]byte, error
 
 // ListEntries implements the keychain.Provider interface
 func (m *MockProvider) ListEntries(service string) ([]keychain.KeychainEntry, error) {
+	if m.ListEntriesFunc == nil {
+		return nil, nil
+	}
 	return m.ListEntriesFunc(service)
 }
 
@@ -52,17 +53,7 @@ func (m *MockProvider) DeleteEntry(account, service string) error {
 	return m.DeleteEntryFunc(account, service)
 }
 
-// StoreEntryMetadata implements the keychain.Provider interface
-func (m *MockProvider) StoreEntryMetadata(servicePrefix, service, account, description string) error {
-	return m.StoreEntryMetadataFunc(servicePrefix, service, account, description)
-}
-
-// LoadEntryMetadata implements the keychain.Provider interface
-func (m *MockProvider) LoadEntryMetadata(servicePrefix string) ([]keychain.KeychainEntryMeta, error) {
-	return m.LoadEntryMetadataFunc(servicePrefix)
-}
-
-// RemoveEntryMetadata implements the keychain.Provider interface
-func (m *MockProvider) RemoveEntryMetadata(servicePrefix, service, account string) error {
-	return m.RemoveEntryMetadataFunc(servicePrefix, service, account)
+// SetDescription implements the keychain.Provider interface
+func (m *MockProvider) SetDescription(service, account, description string) error {
+	return m.SetDescriptionFunc(service, account, description)
 }

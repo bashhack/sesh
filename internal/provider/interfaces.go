@@ -13,6 +13,7 @@ import (
 type FlagSet interface {
 	StringVar(p *string, name string, value string, usage string)
 	BoolVar(p *bool, name string, value bool, usage string)
+	IntVar(p *int, name string, value int, usage string)
 }
 
 // ServiceProvider defines the interface that all service providers must implement

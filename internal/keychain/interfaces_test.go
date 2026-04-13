@@ -212,25 +212,25 @@ func TestDefaultProviderDeleteEntry(t *testing.T) {
 	}
 }
 
-func TestDefaultProviderStoreEntryMetadata(t *testing.T) {
-	originalSaveFunc := saveEntryMetadataImpl
-	defer func() { saveEntryMetadataImpl = originalSaveFunc }()
+func TestDefaultProviderSetDescription(t *testing.T) {
+	orig := saveMocks()
+	defer orig.restore()
+
+	// Mock execCommand so LoadAllEntryMetadata doesn't hit the real keychain
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("echo", "")
+	}
 
 	var savedMeta []KeychainEntryMeta
+	originalSaveFunc := saveEntryMetadataImpl
+	defer func() { saveEntryMetadataImpl = originalSaveFunc }()
 	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
 		savedMeta = meta
 		return nil
 	}
 
-	originalLoadFunc := loadEntryMetadataImpl
-	defer func() { loadEntryMetadataImpl = originalLoadFunc }()
-
-	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		return []KeychainEntryMeta{}, nil
-	}
-
 	provider := NewDefaultProvider()
-	err := provider.StoreEntryMetadata("test-prefix", "test-service", "testuser", "Test Description")
+	err := provider.SetDescription("test-service", "testuser", "Test Description")
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
@@ -238,75 +238,5 @@ func TestDefaultProviderStoreEntryMetadata(t *testing.T) {
 
 	if len(savedMeta) != 1 {
 		t.Errorf("Expected 1 saved metadata entry, got %d", len(savedMeta))
-	}
-}
-
-func TestDefaultProviderLoadEntryMetadata(t *testing.T) {
-	originalFunc := loadEntryMetadataImpl
-	defer func() { loadEntryMetadataImpl = originalFunc }()
-
-	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		if servicePrefix == "test-prefix" {
-			return []KeychainEntryMeta{
-				{
-					Service:     "test-service",
-					Account:     "testuser",
-					Description: "Test Description",
-					ServiceType: "test-prefix",
-				},
-			}, nil
-		}
-		return []KeychainEntryMeta{}, nil
-	}
-
-	provider := NewDefaultProvider()
-	entries, err := provider.LoadEntryMetadata("test-prefix")
-
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-
-	if len(entries) != 1 {
-		t.Errorf("Expected 1 entry, got %d", len(entries))
-	}
-
-	if entries[0].Service != "test-service" {
-		t.Errorf("Expected service 'test-service', got '%s'", entries[0].Service)
-	}
-}
-
-func TestDefaultProviderRemoveEntryMetadata(t *testing.T) {
-	originalSaveFunc := saveEntryMetadataImpl
-	defer func() { saveEntryMetadataImpl = originalSaveFunc }()
-
-	var savedMeta []KeychainEntryMeta
-	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
-		savedMeta = meta
-		return nil
-	}
-
-	originalLoadFunc := loadEntryMetadataImpl
-	defer func() { loadEntryMetadataImpl = originalLoadFunc }()
-
-	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		return []KeychainEntryMeta{
-			{
-				Service:     "test-service",
-				Account:     "testuser",
-				Description: "Test Description",
-				ServiceType: "test-prefix",
-			},
-		}, nil
-	}
-
-	provider := NewDefaultProvider()
-	err := provider.RemoveEntryMetadata("test-prefix", "test-service", "testuser")
-
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-
-	if len(savedMeta) != 0 {
-		t.Errorf("Expected 0 saved metadata entries after removal, got %d", len(savedMeta))
 	}
 }

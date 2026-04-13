@@ -218,6 +218,8 @@ func ListEntries(servicePrefix string) ([]KeychainEntry, error) {
 			Service:     meta.Service,
 			Account:     meta.Account,
 			Description: meta.Description,
+			CreatedAt:   meta.CreatedAt,
+			UpdatedAt:   meta.UpdatedAt,
 		})
 	}
 
