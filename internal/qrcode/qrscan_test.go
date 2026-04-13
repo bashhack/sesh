@@ -589,14 +589,12 @@ func TestConcurrentQRDecoding(t *testing.T) {
 	errors := make(chan error, goroutines)
 
 	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := DecodeQRCodeFromImage(img)
 			if err != nil {
 				errors <- err
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
