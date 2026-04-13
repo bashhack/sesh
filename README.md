@@ -14,7 +14,7 @@
 
 # sesh — An extensible terminal-first authentication toolkit for secure credential workflows
 
-> A developer-friendly CLI that brings AWS MFA and TOTP authentication to your terminal, backed by macOS Keychain security.
+> A developer-friendly CLI that brings AWS MFA, TOTP authentication, and secure password management to your terminal, backed by macOS Keychain or an encrypted SQLite store.
 
 ## Purpose
 
@@ -22,32 +22,36 @@ I was tired of relying on browser extensions or native desktop apps from corpora
 
 In particular, I wanted fast, secure MFA support directly in the terminal—both for AWS console access and for web-based TOTP forms. I was frustrated by how tightly MFA workflows are coupled to mobile devices, and I wanted to break free from that dependency.
 
-**sesh fills that gap.** It's simple, scriptable, and works well for both:
+**sesh fills that gap.** It's simple, scriptable, and works well for:
 - AWS CLI + console MFA workflows
 - Web-based MFA flows where a TOTP secret is available
+- Secure storage for passwords, API keys, and notes
 
-While sesh overlaps a bit with tools like aws-vault, it goes further by offering a general-purpose CLI-based TOTP experience—no mobile device, no browser, no bloat. Your security, your control, your terminal.
+While sesh overlaps a bit with tools like aws-vault, it goes further by offering a general-purpose CLI-based authentication and credential management experience—no mobile device, no browser, no bloat. Your security, your control, your terminal.
 
 ## Features
 
 - **Extensible Plugin Architecture** — Add new authentication providers with a single interface
-- **Secure by Design** — Store all secrets in macOS Keychain with binary path restrictions
+- **Dual Storage Backends** — macOS Keychain (default) or encrypted SQLite with AES-256-GCM and Argon2id key derivation (`SESH_BACKEND=sqlite`)
+- **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes with full-text search
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
-- **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically
+- **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically. Supports non-standard configs (SHA-256/SHA-512, 8 digits, custom periods) extracted from QR codes
+- **Clipboard Auto-Clear** — Clipboard is automatically cleared 30 seconds after copying secrets
 - **Intelligent Subshell** — Isolate credentials in secure environments with built-in helper commands
 - **QR Code Scanning** — Set up TOTP by selecting the QR code region on screen
 - **Multiple Profile Support** — Manage dev/prod environments and multiple accounts per service
+- **Audit Logging** — Every access, modification, and deletion is logged for security review
 
 ## Installation
 
-> **Platform:** sesh requires macOS. It uses the macOS Keychain for secret storage and the system `security` command for access control. Linux and Windows support is planned for a future release.
+> **Platform:** The default backend (macOS Keychain) requires macOS. The SQLite backend (`SESH_BACKEND=sqlite`) uses pure-Go encryption and works on macOS, Linux, and Windows — though the encryption key is still stored in the macOS Keychain for now. Full cross-platform key management is planned.
 
 ```bash
 # Option 1: Install with Homebrew (macOS)
 brew install bashhack/sesh/sesh
 # Note: Homebrew automatically adds sesh to your PATH, so it's ready to use immediately
 
-# Option 2: Install using Go (requires Go 1.24+)
+# Option 2: Install using Go (requires Go 1.25+)
 go install github.com/bashhack/sesh/sesh/cmd/sesh@latest
 # Note: Ensure your Go bin directory (typically $HOME/go/bin) is in your PATH
 # You can add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):
@@ -65,6 +69,7 @@ Start by setting up your first provider entry.
 
 - **For AWS provider:** [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured with at least one profile.
 - **For TOTP provider:** No additional dependencies — works with any service that supports standard TOTP (RFC 6238).
+- **For Password provider:** No additional dependencies. Uses the SQLite backend automatically when `SESH_BACKEND=sqlite` is set, or the system keychain otherwise.
 
 ### Setup Wizards
 
@@ -135,6 +140,48 @@ sesh -service totp -list
 sesh -service totp -delete <entry-id>
 ```
 
+#### Password Provider (`-service password`)
+Secure password manager for passwords, API keys, TOTP secrets, and secure notes.
+
+```bash
+# Access provider-specific help
+sesh -service password -help
+
+# Generate a password, store it, and copy to clipboard
+sesh -service password -action generate -service-name github -username alice -clip
+
+# Generate without symbols, custom length
+sesh -service password -action generate -service-name github -username alice -no-symbols -length 32
+
+# Store a password manually (interactive prompt)
+sesh -service password -action store -service-name github -username alice
+
+# Retrieve a password
+sesh -service password -action get -service-name github -username alice -show
+
+# Copy password to clipboard
+sesh -service password -action get -service-name github -username alice -clip
+
+# Store and generate TOTP codes
+sesh -service password -action totp-store -service-name github -username alice
+sesh -service password -action totp-generate -service-name github -username alice
+
+# Search across all entries
+sesh -service password -action search -query github
+
+# List all entries (with optional filters)
+sesh -service password -list
+sesh -service password -list -entry-type api_key
+sesh -service password -list -sort updated_at -limit 10
+
+# Delete an entry
+sesh -service password -delete <entry-id>
+
+# JSON output
+sesh -service password -action get -service-name github -username alice -format json
+sesh -service password -action search -query github -format json
+```
+
 ### Subshell Features (AWS)
 
 When you run `sesh -service aws`, you enter a secure subshell with:
@@ -159,7 +206,7 @@ When you run `sesh -service aws`, you enter a secure subshell with:
 
 #### Global Options
 ```bash
--service <provider>              # Required for provider operations (aws, totp)
+-service <provider>              # Required for provider operations (aws, totp, password)
 -list-services                   # Show available providers (no -service needed)
 -version                         # Display version info
 -help                            # Show help
@@ -185,6 +232,32 @@ When you run `sesh -service aws`, you enter a secure subshell with:
 -profile <name>                 # Account profile (work, personal, etc.)
 ```
 
+#### Password-Specific Options
+```bash
+-action <action>                # store, get, generate, search, totp-store, totp-generate
+-service-name <name>            # Service name
+-username <name>                # Username for the service
+-entry-type <type>              # password, api_key, totp, secure_note (filter for -list)
+-query <text>                   # Search query (for -action search)
+-format <format>                # Output format: table (default), json
+-show                           # Display password instead of clipboard hint
+-force                          # Skip confirmation prompts
+-length <n>                     # Generated password length (default 24)
+-no-symbols                     # Exclude symbols from generated passwords
+-sort <field>                   # Sort by: service, created_at, updated_at
+-limit <n>                      # Limit results
+-offset <n>                     # Skip first N results
+```
+
+#### Storage Backend
+```bash
+# Default: macOS Keychain
+sesh -service aws
+
+# SQLite backend (AES-256-GCM encrypted, Argon2id key derivation)
+SESH_BACKEND=sqlite sesh -service password -list
+```
+
 ## Documentation
 
 - [Usage & Configuration](docs/USAGE_AND_CONFIGURATION.md) — Start here for setup prerequisites, example output, and daily workflows
@@ -195,8 +268,8 @@ When you run `sesh -service aws`, you enter a secure subshell with:
 ## Development
 
 ### Prerequisites
-- Go 1.24+
-- macOS (for Keychain integration)
+- Go 1.25+
+- macOS (for Keychain integration; SQLite backend works cross-platform)
 - Make (optional — provides convenience targets, but `go build ./sesh/cmd/sesh` works directly)
 
 ### Building

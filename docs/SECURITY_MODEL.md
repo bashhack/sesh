@@ -6,8 +6,8 @@ This document describes the security architecture and privacy principles that gu
 
 sesh is built on three fundamental principles:
 
-1. **Privacy First**: sesh stores your TOTP secrets locally and never transmits them — only the derived one-time codes leave your machine (via AWS CLI)
-2. **OS-Native Security**: Use macOS Keychain rather than rolling our own crypto
+1. **Privacy First**: sesh stores your secrets locally and never transmits them — only derived values (TOTP codes, session tokens) leave your machine
+2. **Layered Encryption**: macOS Keychain for the default backend, or AES-256-GCM with Argon2id key derivation for the SQLite backend
 3. **Transparent Security**: Be honest about what we can and cannot protect against
 
 ## Threat Model
@@ -26,7 +26,7 @@ sesh is NOT designed to protect against:
 - **Root/Admin Access**: System-level compromise bypasses all application-level protections
 - **Physical Access**: Direct hardware access can bypass software protections
 - **Memory Dump Attacks**: Go's immutable strings mean TOTP codes and some intermediate values persist in memory until GC. Byte slices are zeroed, but string copies from the TOTP library cannot be.
-- **Clipboard Managers**: In `-clip` mode, the copied value remains on the clipboard until overwritten. Clipboard managers (Raycast, Alfred, Paste, etc.) may log clipboard history permanently. TOTP codes are short-lived (30-second window), but consider using subshell mode for sensitive environments.
+- **Clipboard Managers**: In `-clip` mode, the copied value is auto-cleared after 30 seconds (if unchanged). However, clipboard managers (Raycast, Alfred, Paste, etc.) may capture the value before it's cleared. Consider disabling clipboard history for sensitive workflows.
 - **Terminal Recording**: Session recording tools (asciinema, iTerm2 logging, tmux capture) and shell history files can capture commands and output. Consider `export HISTFILE=/dev/null` in sensitive contexts.
 - **Child Process Visibility**: Once credentials are output (clipboard, stdout, or subshell environment variables), any child process spawned from the shell can access them. This is inherent to how Unix environments work.
 
@@ -34,7 +34,11 @@ sesh is NOT designed to protect against:
 
 ### Storage Security
 
-All secrets are stored in macOS Keychain using the system `security` command with binary access restrictions:
+sesh supports two storage backends. The default uses macOS Keychain; the SQLite backend (`SESH_BACKEND=sqlite`) adds application-level encryption.
+
+#### macOS Keychain (default)
+
+Secrets are stored using the system `security` command with binary access restrictions:
 
 ```go
 // Get the path to the sesh binary (handles Homebrew, go install, etc.)
@@ -55,13 +59,27 @@ err := secure.ExecWithSecretInput(cmd, []byte(addCmd+"\n"))
 - **User Prompts**: macOS prompts when other apps try to access sesh entries
 - **Automatic Path Detection**: Works with Homebrew, go install, or manual installation
 
+#### SQLite Store (`SESH_BACKEND=sqlite`)
+
+The SQLite backend provides application-level encryption on top of file-system storage:
+
+- **AES-256-GCM**: Authenticated encryption for every stored entry
+- **Per-entry salts**: Each entry derives a unique encryption key from the master key + a random 16-byte salt
+- **Argon2id key derivation**: Memory-hard KDF for per-entry key derivation (16 MiB, 1 iteration, 1 thread)
+- **Master key in Keychain**: The 256-bit master encryption key is stored in the macOS Keychain, combining OS-level access control with application-level encryption
+- **Key versioning**: Schema supports key rotation via `key_version` column and `key_metadata` table (rotation logic planned)
+- **FTS5 search**: Full-text search indexes service names, accounts, and descriptions — search queries never touch encrypted data
+- **Audit logging**: Append-only `audit_log` table records access, modification, and deletion events with timestamps
+- **WAL mode**: Write-ahead logging for safe concurrent reads
+
 ### Why This Matters
 
 Compare sesh's approach to alternatives:
 
 | Storage Method | Encryption | Access Control | User Experience |
 |----------------|------------|----------------|-----------------|
-| sesh (Keychain) | OS-level | OS-enforced binary binding | Transparent |
+| sesh (Keychain) | OS-level (AES-256) | OS-enforced binary binding | Transparent |
+| sesh (SQLite) | AES-256-GCM + Argon2id | File permissions + encryption key in Keychain | Transparent |
 | Config Files | None/Custom | File permissions only | Manual setup |
 | Environment Vars | None | Process inheritance | Leaks to children |
 | Corporate MFA Apps | Unknown | App-controlled | Privacy concerns |
@@ -186,7 +204,8 @@ type ServiceProvider interface {
 
 ### What sesh DOES Do
 
-- **Local-Only Storage**: All data in macOS Keychain
+- **Local-Only Storage**: All data in macOS Keychain or local encrypted SQLite
+- **Audit Trail**: Every secret access, modification, and deletion is logged (SQLite backend)
 - **Explicit User Control**: Every operation requires user action
 - **Open Source**: Complete transparency in implementation
 - **Minimal Dependencies**: Reduced supply chain risk

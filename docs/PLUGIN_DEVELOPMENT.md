@@ -88,7 +88,7 @@ type ProviderEntry struct {
 // FlagInfo is returned by GetFlagInfo() for help text generation
 type FlagInfo struct {
     Name        string // Flag name (e.g., "service-name")
-    Type        string // "string" or "bool"
+    Type        string // "string", "bool", or "int"
     Description string // Help text
     Required    bool
 }
@@ -126,6 +126,7 @@ When implementing a new provider, these are the files to study:
 |------|----------|--------------|
 | `internal/provider/interfaces.go` | Essential | All interfaces and type definitions |
 | `internal/provider/totp/provider.go` | Essential | Clean provider example (no subshell, clipboard-focused) |
+| `internal/provider/password/provider.go` | Essential | Full provider with actions, prompts, JSON output, FTS search |
 | `internal/provider/aws/provider.go` | Reference | Full provider with subshell, TOTP, retry logic |
 | `internal/setup/setup.go` | When writing setup | Setup handler patterns |
 | `internal/keychain/mocks/keychain_mock.go` | When writing tests | Pre-built mock for testing |
@@ -433,10 +434,10 @@ func (h *YourServiceSetupHandler) Setup() error {
         return fmt.Errorf("failed to store credentials: %w", err)
     }
 
-    // Store metadata (second param is the full service key, not just the name)
+    // Set a human-readable description on the entry
     description := fmt.Sprintf("Your Service credentials for %s", serviceName)
-    if err := h.keychain.StoreEntryMetadata(constants.YourServicePrefix, serviceKey, user, description); err != nil {
-        return fmt.Errorf("failed to store metadata: %w", err)
+    if err := h.keychain.SetDescription(serviceKey, user, description); err != nil {
+        return fmt.Errorf("failed to store description: %w", err)
     }
     
     fmt.Printf("✅ Credentials stored for %s\n", serviceName)
@@ -449,8 +450,8 @@ func (h *YourServiceSetupHandler) Setup() error {
 In `sesh/cmd/sesh/app.go`, add registration in `NewDefaultApp()`:
 
 ```go
-func NewDefaultApp(versionInfo VersionInfo) *App {
-    kc := keychain.NewDefaultProvider()
+func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider) *App {
+    // kc is the credential store — passed in by main.go (keychain or SQLite)
     // ... existing setup ...
 
     registry := provider.NewRegistry()
@@ -562,7 +563,10 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
     }
     defer secure.SecureZeroBytes(secret)
 
-    currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secret)
+    // Read stored TOTP params (algorithm, digits, period) — falls back to defaults if none stored
+    params := p.loadTOTPParams(serviceKey)
+
+    currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
     if err != nil {
         return provider.Credentials{}, err
     }
@@ -572,7 +576,18 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
         "TOTP code", p.serviceName,
     ), nil
 }
+
+// loadTOTPParams reads stored params from the entry description (JSON).
+func (p *Provider) loadTOTPParams(serviceKey string) totp.Params {
+    entries, err := p.keychain.ListEntries(serviceKey)
+    if err != nil || len(entries) == 0 {
+        return totp.Params{}
+    }
+    return totp.ParseParams(entries[0].Description)
+}
 ```
+
+**TOTP Params**: When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored as JSON in the entry description. Most services use defaults (SHA1, 6 digits, 30 seconds), but some (e.g., Steam, certain enterprise SSO) use non-standard configurations. Providers that use `GenerateConsecutiveCodesBytesWithParams` will generate correct codes regardless.
 
 ## Testing Your Provider
 
@@ -700,7 +715,7 @@ make build && ./build/sesh -help
 1. **Always zero sensitive data**: Use `secure.SecureZeroBytes()`
 2. **Work with byte slices**: Don't convert secrets to strings unnecessarily — use `GetSecret` (returns `[]byte`) over `GetSecretString` (returns `string`) for secrets
 3. **Validate early**: Check credentials exist before expensive operations
-4. **Clipboard awareness**: Clipboard contents persist after copy — sesh does not currently auto-clear the clipboard. For TOTP codes this is low-risk (codes expire within 30 seconds), but a future password provider should consider timed clipboard clearing.
+4. **Clipboard awareness**: Clipboard contents persist after copy — sesh does not currently auto-clear the clipboard. For TOTP codes this is low-risk (codes expire within 30 seconds). The password provider copies secrets to clipboard when using `-clip`; consider the exposure window.
 
 ### User Experience
 
