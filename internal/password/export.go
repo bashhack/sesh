@@ -148,7 +148,19 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 	result := ImportResult{}
 
 	for _, e := range entries {
-		// Check for existing entry
+		if e.Service == "" {
+			result.Errors = append(result.Errors, "entry with empty service name, skipping")
+			continue
+		}
+		if e.Secret == "" {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: empty secret", e.Service, e.Username))
+			continue
+		}
+		if !validEntryTypes[e.Type] {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: invalid entry type %q", e.Service, e.Username, e.Type))
+			continue
+		}
+
 		_, err := m.GetPassword(e.Service, e.Username, e.Type)
 		exists := err == nil
 

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"image/png"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	otplib "github.com/pquerna/otp/totp"
@@ -1027,4 +1029,401 @@ func TestIntegration_QRCodeFullInfo(t *testing.T) {
 			stdInfo.Algorithm, stdInfo.Digits, stdInfo.Period)
 	}
 	t.Log("  Standard URI: defaults as expected")
+}
+
+func TestIntegration_ExportImportJSON(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	if err := mgr.StorePasswordString("github", "alice", "gh-secret", password.EntryTypePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.StorePasswordString("stripe", "admin", "sk_live_123", password.EntryTypeAPIKey); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	count, err := mgr.Export(&buf, password.ExportOptions{Format: password.FormatJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Exported %d entries (%d bytes)", count, buf.Len())
+	if count != 2 {
+		t.Fatalf("expected 2, got %d", count)
+	}
+
+	var exported []password.ExportEntry
+	if err := json.Unmarshal(buf.Bytes(), &exported); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(exported) != 2 {
+		t.Fatalf("expected 2 entries in JSON, got %d", len(exported))
+	}
+
+	_, mgr2 := newIntegrationStore(t)
+	result, err := mgr2.Import(&buf, password.ImportOptions{Format: password.FormatJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Imported %d, skipped %d, errors %d", result.Imported, result.Skipped, len(result.Errors))
+	if result.Imported != 2 {
+		t.Fatalf("expected 2 imported, got %d", result.Imported)
+	}
+
+	pw, err := mgr2.GetPasswordString("github", "alice", password.EntryTypePassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw != "gh-secret" {
+		t.Fatalf("expected 'gh-secret', got %q", pw)
+	}
+}
+
+func TestIntegration_ExportImportCSV(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	if err := mgr.StorePasswordString("github", "alice", "gh-secret", password.EntryTypePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.StorePasswordString("stripe", "", "sk_live_123", password.EntryTypeAPIKey); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	count, err := mgr.Export(&buf, password.ExportOptions{Format: password.FormatCSV})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Exported %d entries as CSV", count)
+
+	_, mgr2 := newIntegrationStore(t)
+	result, err := mgr2.Import(bytes.NewReader(buf.Bytes()), password.ImportOptions{Format: password.FormatCSV})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 2 {
+		t.Fatalf("expected 2 imported, got %d", result.Imported)
+	}
+
+	pw, err := mgr2.GetPasswordString("github", "alice", password.EntryTypePassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw != "gh-secret" {
+		t.Fatalf("expected 'gh-secret', got %q", pw)
+	}
+}
+
+func TestIntegration_ImportConflictSkip(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	if err := mgr.StorePasswordString("github", "alice", "original", password.EntryTypePassword); err != nil {
+		t.Fatal(err)
+	}
+
+	data := `[{"service":"github","username":"alice","type":"password","secret":"new-value"}]`
+	result, err := mgr.Import(strings.NewReader(data), password.ImportOptions{
+		Format:     password.FormatJSON,
+		OnConflict: password.ConflictSkip,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Skipped != 1 {
+		t.Fatalf("expected 1 skipped, got %d", result.Skipped)
+	}
+
+	pw, err := mgr.GetPasswordString("github", "alice", password.EntryTypePassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw != "original" {
+		t.Fatalf("expected 'original' preserved, got %q", pw)
+	}
+}
+
+func TestIntegration_ImportConflictOverwrite(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	if err := mgr.StorePasswordString("github", "alice", "original", password.EntryTypePassword); err != nil {
+		t.Fatal(err)
+	}
+
+	data := `[{"service":"github","username":"alice","type":"password","secret":"updated"}]`
+	result, err := mgr.Import(strings.NewReader(data), password.ImportOptions{
+		Format:     password.FormatJSON,
+		OnConflict: password.ConflictOverwrite,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 1 {
+		t.Fatalf("expected 1 imported, got %d", result.Imported)
+	}
+
+	pw, err := mgr.GetPasswordString("github", "alice", password.EntryTypePassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw != "updated" {
+		t.Fatalf("expected 'updated', got %q", pw)
+	}
+}
+
+func TestIntegration_ExportWithFilter(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	if err := mgr.StorePasswordString("github", "alice", "pw1", password.EntryTypePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.StorePasswordString("stripe", "admin", "key1", password.EntryTypeAPIKey); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	count, err := mgr.Export(&buf, password.ExportOptions{
+		Format:    password.FormatJSON,
+		EntryType: password.EntryTypeAPIKey,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 api_key exported, got %d", count)
+	}
+
+	var exported []password.ExportEntry
+	if err := json.Unmarshal(buf.Bytes(), &exported); err != nil {
+		t.Fatal(err)
+	}
+	if exported[0].Service != "stripe" {
+		t.Fatalf("expected stripe, got %q", exported[0].Service)
+	}
+}
+
+func openTestdata(t *testing.T, name string) *os.File {
+	t.Helper()
+	f, err := os.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close %s: %v", name, err)
+		}
+	})
+	return f
+}
+
+func TestIntegration_ImportFromJSONFile(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	f := openTestdata(t, "testdata/import_valid.json")
+	result, err := mgr.Import(f, password.ImportOptions{Format: password.FormatJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 4 {
+		t.Fatalf("expected 4 imported, got %d", result.Imported)
+	}
+
+	pw, err := mgr.GetPasswordString("github", "alice", password.EntryTypePassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw != "gh-pat-abc123def456" {
+		t.Fatalf("expected github password, got %q", pw)
+	}
+
+	note, err := mgr.GetPasswordString("personal", "recovery-codes", password.EntryTypeNote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(note, "abc-123-def") {
+		t.Fatalf("expected recovery codes in note, got %q", note)
+	}
+	t.Logf("Imported 4 entries from JSON fixture: password, api_key, totp, secure_note")
+}
+
+func TestIntegration_ImportFromCSVFile(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	f := openTestdata(t, "testdata/import_valid.csv")
+	result, err := mgr.Import(f, password.ImportOptions{Format: password.FormatCSV})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 3 {
+		t.Fatalf("expected 3 imported, got %d", result.Imported)
+	}
+
+	pw, err := mgr.GetPasswordString("stripe", "admin", password.EntryTypeAPIKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw != "fake-stripe-key-abc123def456" {
+		t.Fatalf("expected stripe key, got %q", pw)
+	}
+}
+
+func TestIntegration_ImportCSVReorderedColumns(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	f := openTestdata(t, "testdata/import_reordered_columns.csv")
+	result, err := mgr.Import(f, password.ImportOptions{Format: password.FormatCSV})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 2 {
+		t.Fatalf("expected 2 imported, got %d", result.Imported)
+	}
+
+	pw, err := mgr.GetPasswordString("gitlab", "bob", password.EntryTypePassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw != "my-secret" {
+		t.Fatalf("expected 'my-secret', got %q", pw)
+	}
+}
+
+func TestIntegration_ImportBadJSON(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	f := openTestdata(t, "testdata/import_bad.json")
+	_, err := mgr.Import(f, password.ImportOptions{Format: password.FormatJSON})
+	if err == nil {
+		t.Fatal("expected error for bad JSON")
+	}
+}
+
+func TestIntegration_ImportCSVMissingColumn(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	f := openTestdata(t, "testdata/import_missing_column.csv")
+	_, err := mgr.Import(f, password.ImportOptions{Format: password.FormatCSV})
+	if err == nil {
+		t.Fatal("expected error for missing 'secret' column")
+	}
+}
+
+func TestIntegration_ImportDuplicatesDefaultError(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	f := openTestdata(t, "testdata/import_duplicates.json")
+	result, err := mgr.Import(f, password.ImportOptions{Format: password.FormatJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Imported != 1 {
+		t.Fatalf("expected 1 imported (first entry), got %d", result.Imported)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("expected 1 error (duplicate), got %d", len(result.Errors))
+	}
+
+	pw, err := mgr.GetPasswordString("github", "alice", password.EntryTypePassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pw != "first-password" {
+		t.Fatalf("expected first-password preserved, got %q", pw)
+	}
+}
+
+func TestIntegration_ImportInvalidEntryType(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	data := `[{"service":"github","username":"alice","type":"bogus","secret":"pw1"}]`
+	result, err := mgr.Import(strings.NewReader(data), password.ImportOptions{Format: password.FormatJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 0 {
+		t.Fatalf("expected 0 imported, got %d", result.Imported)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("expected 1 error, got %d", len(result.Errors))
+	}
+	if !strings.Contains(result.Errors[0], "invalid entry type") {
+		t.Fatalf("expected 'invalid entry type' error, got %q", result.Errors[0])
+	}
+}
+
+func TestIntegration_ImportEmptyFields(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	data := `[
+		{"service":"","username":"alice","type":"password","secret":"pw1"},
+		{"service":"github","username":"alice","type":"password","secret":""}
+	]`
+	result, err := mgr.Import(strings.NewReader(data), password.ImportOptions{Format: password.FormatJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 0 {
+		t.Fatalf("expected 0 imported, got %d", result.Imported)
+	}
+	if len(result.Errors) != 2 {
+		t.Fatalf("expected 2 errors, got %d: %v", len(result.Errors), result.Errors)
+	}
+}
+
+func TestIntegration_ImportEmptyArray(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+
+	result, err := mgr.Import(strings.NewReader("[]"), password.ImportOptions{Format: password.FormatJSON})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Imported != 0 {
+		t.Fatalf("expected 0 imported, got %d", result.Imported)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("expected 0 errors, got %d", len(result.Errors))
+	}
+}
+
+func TestIntegration_ExportThenImportRoundTrip(t *testing.T) {
+	_, mgr1 := newIntegrationStore(t)
+
+	if err := mgr1.StorePasswordString("github", "alice", "pw1", password.EntryTypePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr1.StorePasswordString("stripe", "admin", "key1", password.EntryTypeAPIKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr1.StorePasswordString("notes", "backup", "my secure note\nwith newlines", password.EntryTypeNote); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, format := range []password.ExportFormat{password.FormatJSON, password.FormatCSV} {
+		t.Run(string(format), func(t *testing.T) {
+			var buf bytes.Buffer
+			count, err := mgr1.Export(&buf, password.ExportOptions{Format: format})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if count != 3 {
+				t.Fatalf("expected 3 exported, got %d", count)
+			}
+
+			_, mgr2 := newIntegrationStore(t)
+			result, err := mgr2.Import(bytes.NewReader(buf.Bytes()), password.ImportOptions{Format: format})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Imported != 3 {
+				t.Fatalf("expected 3 imported, got %d (errors: %v)", result.Imported, result.Errors)
+			}
+
+			entries, err := mgr2.ListEntries()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 3 {
+				t.Fatalf("expected 3 entries after import, got %d", len(entries))
+			}
+		})
+	}
 }

@@ -1,0 +1,3 @@
+type,secret,service,username
+password,my-secret,gitlab,bob
+api_key,sk_test_xyz,heroku,

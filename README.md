@@ -177,6 +177,16 @@ sesh -service password -list -sort updated_at -limit 10
 # Delete an entry
 sesh -service password -delete <entry-id>
 
+# Export all entries to JSON file
+sesh -service password -action export -file backup.json
+
+# Export API keys only as CSV
+sesh -service password -action export -format csv -entry-type api_key -file keys.csv
+
+# Import from file
+sesh -service password -action import -file backup.json
+sesh -service password -action import -file data.csv -format csv -on-conflict skip
+
 # JSON output
 sesh -service password -action get -service-name github -username alice -format json
 sesh -service password -action search -query github -format json
@@ -234,13 +244,15 @@ When you run `sesh -service aws`, you enter a secure subshell with:
 
 #### Password-Specific Options
 ```bash
--action <action>                # store, get, generate, search, totp-store, totp-generate
+-action <action>                # store, get, generate, search, export, import, totp-store, totp-generate
 -service-name <name>            # Service name
 -username <name>                # Username for the service
 -entry-type <type>              # password, api_key, totp, secure_note (filter for -list)
 -query <text>                   # Search query (for -action search)
 -format <format>                # Output format: table (default), json
 -show                           # Display password instead of clipboard hint
+-file <path>                    # File path for export/import (default: stdout/stdin)
+-on-conflict <strategy>         # Import conflict: skip, overwrite (default: error)
 -force                          # Skip confirmation prompts
 -length <n>                     # Generated password length (default 24)
 -no-symbols                     # Exclude symbols from generated passwords

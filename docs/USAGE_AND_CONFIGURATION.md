@@ -143,13 +143,15 @@ sesh uses a provider-based configuration system:
 
 | Command Flag       | Description                                        | Required         |
 |--------------------|----------------------------------------------------|------------------|
-| `-action`         | Action: store, get, generate, search, totp-store, totp-generate | Depends on use |
+| `-action`         | Action: store, get, generate, search, export, import, totp-store, totp-generate | Depends on use |
 | `-service-name`   | Service name                                       | For store/get    |
 | `-username`       | Username for the service                           | No               |
 | `-entry-type`     | Filter: password, api_key, totp, secure_note       | No               |
 | `-query`          | Search query                                       | For search       |
 | `-format`         | Output format: table (default), json               | No               |
 | `-show`           | Display password instead of clipboard hint         | No               |
+| `-file`           | File path for export/import (default: stdout/stdin)| No               |
+| `-on-conflict`    | Import conflict: skip, overwrite (default: error)  | No               |
 | `-force`          | Skip confirmation prompts                          | No               |
 | `-length`         | Generated password length (default 24)             | No               |
 | `-no-symbols`     | Exclude symbols from generated passwords           | No               |
@@ -293,6 +295,14 @@ sesh -service password -action search -query github
 
 # List with filters
 sesh -service password -list -entry-type api_key -sort updated_at
+
+# Export all entries
+sesh -service password -action export -file backup.json
+sesh -service password -action export -format csv -file backup.csv
+
+# Import entries
+sesh -service password -action import -file backup.json
+sesh -service password -action import -file data.csv -format csv -on-conflict skip
 
 # JSON output for scripting
 sesh -service password -action search -query stripe -format json

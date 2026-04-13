@@ -380,6 +380,8 @@ func (a *App) PrintProviderUsage(serviceName string, p provider.ServiceProvider)
 			"  sesh --service password --action get --service-name github --username user1 --show",
 			"  sesh --service password --action get --service-name github --clip",
 			"  sesh --service password --action search --query github",
+			"  sesh --service password --action export --file backup.json",
+			"  sesh --service password --action import --file backup.json --on-conflict skip",
 			"  sesh --service password --list",
 			"  sesh --service password --delete <entry-id>",
 		}

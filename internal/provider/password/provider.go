@@ -24,13 +24,15 @@ import (
 type Provider struct {
 	keychain keychain.Provider
 
-	query     string // search query
-	sortBy    string
-	username  string
-	entryType string
-	action    string // "store", "get", "search", "generate", "totp-store", "totp-generate"
+	query      string // search query
+	sortBy     string
+	username   string
+	entryType  string
+	action     string // "store", "get", "search", "generate", "export", "import", "totp-store", "totp-generate"
+	file       string // file path for export/import
+	onConflict string // import conflict strategy: "skip", "overwrite"
 	provider.KeyUser
-	format    string // output format: "table", "json"
+	format    string // output format: "table", "json", "csv"
 	service   string
 	pwLength  int // password generation length
 	limit     int
@@ -52,13 +54,15 @@ func (p *Provider) Description() string  { return "Secure password manager" }
 func (p *Provider) GetSetupHandler() any { return nil }
 
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
-	fs.StringVar(&p.action, "action", "", "Action to perform (store, get, generate, search, totp-store, totp-generate)")
+	fs.StringVar(&p.action, "action", "", "Action to perform (store, get, generate, search, export, import, totp-store, totp-generate)")
 	fs.StringVar(&p.service, "service-name", "", "Service name")
 	fs.StringVar(&p.username, "username", "", "Username for the service")
 	fs.StringVar(&p.entryType, "entry-type", "", "Entry type filter (password, api_key, totp, secure_note); empty shows all")
 	fs.StringVar(&p.query, "query", "", "Search query")
+	fs.StringVar(&p.file, "file", "", "File path for export/import (default: stdout/stdin)")
+	fs.StringVar(&p.onConflict, "on-conflict", "", "Import conflict strategy: skip, overwrite (default: error)")
 	fs.StringVar(&p.sortBy, "sort", "service", "Sort by (service, created_at, updated_at)")
-	fs.StringVar(&p.format, "format", "table", "Output format (table, json)")
+	fs.StringVar(&p.format, "format", "table", "Output format (table, json, csv)")
 	fs.BoolVar(&p.show, "show", false, "Show password instead of copying to clipboard")
 	fs.BoolVar(&p.force, "force", false, "Skip confirmation prompts")
 	fs.BoolVar(&p.noSymbols, "no-symbols", false, "Exclude symbols from generated passwords")
@@ -76,13 +80,15 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 
 func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 	return []provider.FlagInfo{
-		{Name: "action", Type: "string", Description: "Action: store, get, generate, search, totp-store, totp-generate"},
+		{Name: "action", Type: "string", Description: "Action: store, get, generate, search, export, import, totp-store, totp-generate"},
 		{Name: "service-name", Type: "string", Description: "Service name"},
 		{Name: "username", Type: "string", Description: "Username for the service"},
 		{Name: "entry-type", Type: "string", Description: "Entry type (password, api_key, totp, secure_note)"},
 		{Name: "query", Type: "string", Description: "Search query"},
 		{Name: "sort", Type: "string", Description: "Sort by (service, created_at, updated_at)"},
-		{Name: "format", Type: "string", Description: "Output format (table, json)"},
+		{Name: "format", Type: "string", Description: "Output format (table, json, csv)"},
+		{Name: "file", Type: "string", Description: "File path for export/import (default: stdout/stdin)"},
+		{Name: "on-conflict", Type: "string", Description: "Import conflict strategy: skip, overwrite"},
 		{Name: "show", Type: "bool", Description: "Show password instead of copying to clipboard"},
 		{Name: "force", Type: "bool", Description: "Skip confirmation prompts"},
 		{Name: "no-symbols", Type: "bool", Description: "Exclude symbols from generated passwords"},
@@ -118,10 +124,20 @@ func (p *Provider) ValidateRequest() error {
 		if p.service == "" {
 			return fmt.Errorf("--service-name is required for generate action")
 		}
+	case "export", "import":
+		if p.format == "table" {
+			p.format = "json"
+		}
+		if p.format != "json" && p.format != "csv" {
+			return fmt.Errorf("--format for %s must be json or csv, got %q", p.action, p.format)
+		}
+		if p.action == "import" && p.onConflict != "" && p.onConflict != "skip" && p.onConflict != "overwrite" {
+			return fmt.Errorf("--on-conflict must be skip or overwrite, got %q", p.onConflict)
+		}
 	case "":
 		// Default action handled by GetCredentials
 	default:
-		return fmt.Errorf("unknown action: %q (use store, get, search, generate, totp-store, totp-generate)", p.action)
+		return fmt.Errorf("unknown action: %q (use store, get, search, generate, export, import, totp-store, totp-generate)", p.action)
 	}
 	return nil
 }
@@ -139,12 +155,16 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		return p.searchPasswords(mgr)
 	case "generate":
 		return p.generatePassword(mgr)
+	case "export":
+		return p.exportEntries(mgr)
+	case "import":
+		return p.importEntries(mgr)
 	case "totp-store":
 		return p.storeTOTP(mgr)
 	case "totp-generate":
 		return p.generateTOTP(mgr)
 	default:
-		return provider.Credentials{}, fmt.Errorf("specify --action (store, get, search, generate, totp-store, totp-generate) or use --list, --delete")
+		return provider.Credentials{}, fmt.Errorf("specify --action (store, get, search, generate, export, import, totp-store, totp-generate) or use --list, --delete")
 	}
 }
 
@@ -524,6 +544,104 @@ func (p *Provider) generateTOTP(mgr *password.Manager) (provider.Credentials, er
 		CopyValue:            code,
 		ClipboardDescription: fmt.Sprintf("TOTP code for %s", desc),
 		DisplayInfo:          fmt.Sprintf("TOTP code: %s", code),
+	}, nil
+}
+
+func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, error) {
+	format := password.FormatJSON
+	if p.format == "csv" {
+		format = password.FormatCSV
+	}
+
+	opts := password.ExportOptions{
+		Format:    format,
+		EntryType: password.EntryType(p.entryType),
+	}
+
+	var w io.Writer
+	if p.file != "" {
+		f, err := os.OpenFile(p.file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return provider.Credentials{}, fmt.Errorf("create export file: %w", err)
+		}
+		defer func() {
+			if cerr := f.Close(); cerr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to close export file: %v\n", cerr)
+			}
+		}()
+		w = f
+	} else {
+		var buf strings.Builder
+		w = &buf
+		defer func() {
+			// Print to stderr since stdout is for eval-safe output
+			fmt.Fprint(os.Stderr, buf.String())
+		}()
+	}
+
+	count, err := mgr.Export(w, opts)
+	if err != nil {
+		return provider.Credentials{}, err
+	}
+
+	dest := "stdout"
+	if p.file != "" {
+		dest = p.file
+	}
+
+	return provider.Credentials{
+		Provider:    p.Name(),
+		DisplayInfo: fmt.Sprintf("Exported %d entries to %s", count, dest),
+	}, nil
+}
+
+func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, error) {
+	format := password.FormatJSON
+	if p.format == "csv" {
+		format = password.FormatCSV
+	}
+
+	opts := password.ImportOptions{
+		Format:     format,
+		OnConflict: password.ConflictStrategy(p.onConflict),
+	}
+
+	var r io.Reader
+	if p.file != "" {
+		f, err := os.Open(p.file)
+		if err != nil {
+			return provider.Credentials{}, fmt.Errorf("open import file: %w", err)
+		}
+		defer func() {
+			if cerr := f.Close(); cerr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to close import file: %v\n", cerr)
+			}
+		}()
+		r = f
+	} else {
+		r = os.Stdin
+	}
+
+	result, err := mgr.Import(r, opts)
+	if err != nil {
+		return provider.Credentials{}, err
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Imported %d entries", result.Imported)
+	if result.Skipped > 0 {
+		fmt.Fprintf(&sb, ", skipped %d", result.Skipped)
+	}
+	if len(result.Errors) > 0 {
+		fmt.Fprintf(&sb, ", %d errors:", len(result.Errors))
+		for _, e := range result.Errors {
+			fmt.Fprintf(&sb, "\n  %s", e)
+		}
+	}
+
+	return provider.Credentials{
+		Provider:    p.Name(),
+		DisplayInfo: sb.String(),
 	}, nil
 }
 
