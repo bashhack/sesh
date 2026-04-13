@@ -3,6 +3,7 @@ package clipboard
 import (
 	"os/exec"
 	"testing"
+	"time"
 )
 
 func TestCopy(t *testing.T) {
@@ -153,6 +154,51 @@ func TestCopyOSX(t *testing.T) {
 
 			if (err != nil) != tc.wantErr {
 				t.Errorf("copyOSX() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestCopyWithAutoClear(t *testing.T) {
+	originalExecCommand := execCommand
+	originalRuntimeGOOS := runtimeGOOS
+	defer func() {
+		execCommand = originalExecCommand
+		runtimeGOOS = originalRuntimeGOOS
+	}()
+
+	tests := map[string]struct {
+		mockCmd func(name string, args ...string) *exec.Cmd
+		goos    string
+		wantErr bool
+	}{
+		"darwin success": {
+			goos: "darwin",
+			mockCmd: func(name string, args ...string) *exec.Cmd {
+				// Both pbcopy and sh calls go through execCommand
+				if name == "pbcopy" {
+					return exec.Command("cat")
+				}
+				return exec.Command("true")
+			},
+		},
+		"unsupported platform fails on copy": {
+			goos: "linux",
+			mockCmd: func(name string, args ...string) *exec.Cmd {
+				return exec.Command("true")
+			},
+			wantErr: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			runtimeGOOS = tc.goos
+			execCommand = tc.mockCmd
+
+			err := CopyWithAutoClear("test-secret", 1*time.Second)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("CopyWithAutoClear() error = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
 	}
