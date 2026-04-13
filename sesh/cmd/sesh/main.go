@@ -11,6 +11,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/migration"
 	"github.com/bashhack/sesh/internal/provider"
 )
 
@@ -101,6 +102,125 @@ func buildProvider() (keychain.Provider, io.Closer, error) {
 	return store, store, nil
 }
 
+// runMigrate copies all sesh entries from the macOS Keychain to the SQLite store.
+// Requires SESH_BACKEND=sqlite.
+func runMigrate(app *App) error {
+	if os.Getenv("SESH_BACKEND") != "sqlite" {
+		return fmt.Errorf("migration requires SESH_BACKEND=sqlite")
+	}
+
+	source := keychain.NewDefaultProvider()
+
+	u, err := user.Current()
+	if err != nil {
+		return fmt.Errorf("determine current user: %w", err)
+	}
+
+	dbPath, err := database.DefaultDBPath()
+	if err != nil {
+		return fmt.Errorf("resolve database path: %w", err)
+	}
+
+	ks := database.NewKeychainSource(source, u.Username)
+	if _, err := ks.GetEncryptionKey(); err != nil {
+		if !errors.Is(err, keychain.ErrNotFound) {
+			return fmt.Errorf("retrieve encryption key: %w", err)
+		}
+		key, genErr := database.GenerateEncryptionKey()
+		if genErr != nil {
+			return fmt.Errorf("generate encryption key: %w", genErr)
+		}
+		if storeErr := ks.StoreEncryptionKey(key); storeErr != nil {
+			return fmt.Errorf("store encryption key: %w", storeErr)
+		}
+	}
+
+	dest, err := database.Open(dbPath, ks)
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer func() {
+		if cerr := dest.Close(); cerr != nil {
+			if _, printErr := fmt.Fprintf(app.Stderr, "warning: failed to close database: %v\n", cerr); printErr != nil {
+				return
+			}
+		}
+	}()
+
+	if err := dest.InitKeyMetadata(); err != nil {
+		return fmt.Errorf("init key metadata: %w", err)
+	}
+
+	plan, err := migration.Plan(source)
+	if err != nil {
+		return fmt.Errorf("scan keychain: %w", err)
+	}
+
+	if len(plan) == 0 {
+		if _, err := fmt.Fprintln(app.Stderr, "No sesh entries found in keychain. Nothing to migrate."); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if _, err := fmt.Fprintf(app.Stderr, "Found %d entries to migrate:\n", len(plan)); err != nil {
+		return err
+	}
+	for _, e := range plan {
+		desc := e.Description
+		if desc == "" {
+			desc = "(no description)"
+		}
+		if _, err := fmt.Fprintf(app.Stderr, "  %s — %s\n", e.Service, desc); err != nil {
+			return err
+		}
+	}
+
+	if _, err := fmt.Fprintf(app.Stderr, "\nMigrate these entries to SQLite? [y/N]: "); err != nil {
+		return err
+	}
+	var answer string
+	if _, err := fmt.Scanln(&answer); err != nil {
+		return fmt.Errorf("failed to read input: %w", err)
+	}
+	if answer != "y" && answer != "Y" {
+		if _, err := fmt.Fprintln(app.Stderr, "Migration cancelled."); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	result, err := migration.Migrate(source, dest)
+	if err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintf(app.Stderr, "\nMigrated %d entries", result.Migrated); err != nil {
+		return err
+	}
+	if result.Skipped > 0 {
+		if _, err := fmt.Fprintf(app.Stderr, ", skipped %d (already exist)", result.Skipped); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(app.Stderr); err != nil {
+		return err
+	}
+
+	if len(result.Errors) > 0 {
+		if _, err := fmt.Fprintf(app.Stderr, "%d errors:\n", len(result.Errors)); err != nil {
+			return err
+		}
+		for _, e := range result.Errors {
+			if _, err := fmt.Fprintf(app.Stderr, "  %s\n", e); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 // fatal prints an error to stderr and exits
 func fatal(app *App, err error) {
 	if _, printErr := fmt.Fprintf(app.Stderr, "❌ %v\n", err); printErr != nil {
@@ -122,6 +242,11 @@ func run(app *App, args []string) {
 			return
 		case "--list-services", "-list-services":
 			if err := app.ListProviders(); err != nil {
+				fatal(app, err)
+			}
+			return
+		case "--migrate", "-migrate":
+			if err := runMigrate(app); err != nil {
 				fatal(app, err)
 			}
 			return
