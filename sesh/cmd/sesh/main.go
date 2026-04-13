@@ -4,9 +4,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/user"
 	"strings"
 
+	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
 )
 
@@ -24,8 +28,77 @@ func main() {
 		Commit:  commit,
 		Date:    date,
 	}
-	app := NewDefaultApp(versionInfo)
+
+	kc, closer, err := buildProvider()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+	if closer != nil {
+		defer func() {
+			if err := closer.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to close provider: %v\n", err)
+			}
+		}()
+	}
+
+	app := NewDefaultApp(versionInfo, kc)
 	run(app, os.Args)
+}
+
+// buildProvider constructs the credential store.
+// When SESH_BACKEND=sqlite it returns a SQLite-backed store (caller must
+// close it). Otherwise it returns the system keychain with no closer.
+func buildProvider() (keychain.Provider, io.Closer, error) {
+	if os.Getenv("SESH_BACKEND") != "sqlite" {
+		return keychain.NewDefaultProvider(), nil, nil
+	}
+
+	u, err := user.Current()
+	if err != nil {
+		return nil, nil, fmt.Errorf("determine current user: %w", err)
+	}
+
+	dbPath, err := database.DefaultDBPath()
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve database path: %w", err)
+	}
+
+	kcRaw := keychain.NewDefaultProvider()
+	ks := database.NewKeychainSource(kcRaw, u.Username)
+
+	// On first run the encryption key won't exist — generate and store it.
+	// Any other keychain error (locked, permission denied) must be surfaced
+	// immediately to avoid generating a new key that orphans existing data.
+	// NOTE: If two sesh processes race on first run, each may generate a
+	// different key. The last writer wins and the other's data is lost.
+	// Acceptable for a single-user CLI; add a file lock if this changes.
+	if _, err := ks.GetEncryptionKey(); err != nil {
+		if !errors.Is(err, keychain.ErrNotFound) {
+			return nil, nil, fmt.Errorf("retrieve encryption key: %w", err)
+		}
+		key, genErr := database.GenerateEncryptionKey()
+		if genErr != nil {
+			return nil, nil, fmt.Errorf("generate encryption key: %w", genErr)
+		}
+		if storeErr := ks.StoreEncryptionKey(key); storeErr != nil {
+			return nil, nil, fmt.Errorf("store encryption key: %w", storeErr)
+		}
+	}
+
+	store, err := database.Open(dbPath, ks)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open database: %w", err)
+	}
+
+	if err := store.InitKeyMetadata(); err != nil {
+		if closeErr := store.Close(); closeErr != nil {
+			return nil, nil, fmt.Errorf("init key metadata: %w (close also failed: %v)", err, closeErr)
+		}
+		return nil, nil, fmt.Errorf("init key metadata: %w", err)
+	}
+
+	return store, store, nil
 }
 
 // fatal prints an error to stderr and exits
@@ -298,6 +371,17 @@ func (a *App) PrintProviderUsage(serviceName string, p provider.ServiceProvider)
 			"  sesh --service totp --service-name github --clip   Copy TOTP to clipboard",
 			"  sesh --service totp --setup            Set up new TOTP service",
 			"  sesh --service totp --list             List all TOTP services",
+		}
+	case "password":
+		examples = []string{
+			"  sesh --service password --action generate --service-name github --username user1 --clip",
+			"  sesh --service password --action generate --service-name stripe --no-symbols --length 32",
+			"  sesh --service password --action store --service-name github --username user1",
+			"  sesh --service password --action get --service-name github --username user1 --show",
+			"  sesh --service password --action get --service-name github --clip",
+			"  sesh --service password --action search --query github",
+			"  sesh --service password --list",
+			"  sesh --service password --delete <entry-id>",
 		}
 	}
 	for _, line := range examples {

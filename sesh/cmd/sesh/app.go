@@ -14,6 +14,7 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
 	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
+	passwordProvider "github.com/bashhack/sesh/internal/provider/password"
 	totpProvider "github.com/bashhack/sesh/internal/provider/totp"
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/totp"
@@ -54,30 +55,34 @@ type VersionInfo struct {
 	Date    string
 }
 
-// NewDefaultApp creates a new App with default dependencies
-func NewDefaultApp(versionInfo VersionInfo) *App {
-	kc := keychain.NewDefaultProvider()
+// NewDefaultApp creates a new App with the given credential store.
+// The caller chooses the concrete keychain.Provider (system keychain,
+// SQLite store, etc.) and is responsible for its lifecycle.
+func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider) *App {
 	totpSvc := totp.NewDefaultProvider()
 	awsSvc := aws.NewDefaultProvider()
 
 	registry := provider.NewRegistry()
 	registry.RegisterProvider(awsProvider.NewProvider(awsSvc, kc, totpSvc))
 	registry.RegisterProvider(totpProvider.NewProvider(kc, totpSvc))
+	registry.RegisterProvider(passwordProvider.NewProvider(kc))
 
 	setupSvc := setup.NewSetupService(kc)
 	setupSvc.RegisterHandler(setup.NewAWSSetupHandler(kc))
 	setupSvc.RegisterHandler(setup.NewTOTPSetupHandler(kc))
 
 	return &App{
-		Registry:      registry,
-		SetupService:  setupSvc,
-		ExecLookPath:  exec.LookPath,
-		Exit:          os.Exit,
-		ClipboardCopy: clipboard.Copy,
-		TimeNow:       time.Now,
-		Stdout:        os.Stdout,
-		Stderr:        os.Stderr,
-		VersionInfo:   versionInfo,
+		Registry:     registry,
+		SetupService: setupSvc,
+		ExecLookPath: exec.LookPath,
+		Exit:         os.Exit,
+		ClipboardCopy: func(text string) error {
+			return clipboard.CopyWithAutoClear(text, 30*time.Second)
+		},
+		TimeNow:     time.Now,
+		Stdout:      os.Stdout,
+		Stderr:      os.Stderr,
+		VersionInfo: versionInfo,
 	}
 }
 
