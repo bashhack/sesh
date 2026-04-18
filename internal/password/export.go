@@ -3,11 +3,13 @@ package password
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"time"
 
+	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/secure"
 )
 
@@ -83,7 +85,6 @@ func writeJSON(w io.Writer, entries []ExportEntry) error {
 
 func writeCSV(w io.Writer, entries []ExportEntry) error {
 	cw := csv.NewWriter(w)
-	defer cw.Flush()
 
 	if err := cw.Write([]string{"service", "username", "type", "secret", "created_at", "updated_at"}); err != nil {
 		return err
@@ -102,6 +103,7 @@ func writeCSV(w io.Writer, entries []ExportEntry) error {
 		}
 	}
 
+	cw.Flush()
 	return cw.Error()
 }
 
@@ -161,8 +163,20 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			continue
 		}
 
+		// Existence probe: only ErrNotFound means "safe to create".
+		// Any other error is ambiguous — fail this entry rather than
+		// risk an upsert that silently overwrites real data.
 		_, err := m.GetPassword(e.Service, e.Username, e.Type)
-		exists := err == nil
+		var exists bool
+		switch {
+		case err == nil:
+			exists = true
+		case errors.Is(err, keychain.ErrNotFound):
+			exists = false
+		default:
+			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: failed to check existence: %v", e.Service, e.Username, err))
+			continue
+		}
 
 		if exists {
 			switch opts.OnConflict {

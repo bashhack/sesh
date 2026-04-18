@@ -148,7 +148,7 @@ sesh uses a provider-based configuration system:
 | `-username`       | Username for the service                           | No               |
 | `-entry-type`     | Filter: password, api_key, totp, secure_note       | No               |
 | `-query`          | Search query                                       | For search       |
-| `-format`         | Output format: table (default), json               | No               |
+| `-format`         | Output format: table (default), json, csv          | No               |
 | `-show`           | Display password instead of clipboard hint         | No               |
 | `-file`           | File path for export/import (default: stdout/stdin)| No               |
 | `-on-conflict`    | Import conflict: skip, overwrite (default: error)  | No               |
@@ -428,8 +428,8 @@ When run without additional flags, sesh will:
 2. **For TOTP (`-service totp`)**: Display the current code with time remaining
 3. **Setup Required**: First-time users must run `-setup` for each service
 4. **Profile Selection**: Uses default AWS profile or requires `-service-name` for TOTP
-5. **Security**: All secrets stored in macOS Keychain or encrypted SQLite with binary-level access control
-6. **Clipboard**: Values copied via `-clip` are automatically cleared after 30 seconds
+5. **Security**: Secrets are stored in the macOS Keychain (with binary-level ACLs) or in SQLite encrypted at rest with AES-256-GCM
+6. **Clipboard**: On macOS, values copied via `-clip` are automatically cleared after 30 seconds (only if the clipboard still holds the copied value). On other platforms no auto-clear is performed
 
 ## Subshell Behavior
 

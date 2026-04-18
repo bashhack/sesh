@@ -1,6 +1,7 @@
 package migration
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -135,6 +136,43 @@ func TestMigrateSkipsExisting(t *testing.T) {
 	}
 	if string(dest.data["sesh-totp/github"]) != "existing-secret" {
 		t.Fatal("existing entry should not be overwritten")
+	}
+}
+
+func TestMigrateReportsAmbiguousDestError(t *testing.T) {
+	// An ambiguous error from dest.GetSecret (not ErrNotFound) must not be
+	// mistaken for "entry doesn't exist" — otherwise the migrator would
+	// happily overwrite real data on transient I/O or decrypt failures.
+	source := newEntryStore()
+	source.add("sesh-totp/github", []byte("source-secret"), "")
+
+	sentinel := errors.New("transient decrypt failure")
+	setCalled := false
+	dest := &mocks.MockProvider{
+		GetSecretFunc: func(account, service string) ([]byte, error) {
+			return nil, sentinel
+		},
+		SetSecretFunc: func(account, service string, secret []byte) error {
+			setCalled = true
+			return nil
+		},
+	}
+
+	result, err := Migrate(source.provider(), dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setCalled {
+		t.Fatal("SetSecret must not be called when GetSecret returned an ambiguous error")
+	}
+	if result.Migrated != 0 {
+		t.Fatalf("expected 0 migrated, got %d", result.Migrated)
+	}
+	if len(result.Errors) != 1 {
+		t.Fatalf("expected 1 error, got %v", result.Errors)
+	}
+	if !strings.Contains(result.Errors[0], "transient decrypt failure") {
+		t.Fatalf("error should mention the underlying cause, got %q", result.Errors[0])
 	}
 }
 

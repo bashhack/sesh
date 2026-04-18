@@ -149,6 +149,11 @@ func (p *Provider) loadTOTPParams(serviceKey string) internalTotp.Params {
 	if err != nil || len(entries) == 0 {
 		return internalTotp.Params{}
 	}
+	// ListEntries is a prefix query in the SQLite backend — verify the
+	// first entry is the exact service, not a sibling that shares a prefix.
+	if entries[0].Service != serviceKey {
+		return internalTotp.Params{}
+	}
 	return internalTotp.ParseParams(entries[0].Description)
 }
 

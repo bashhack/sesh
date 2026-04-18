@@ -65,9 +65,14 @@ func algorithmFromName(name string) otp.Algorithm {
 }
 
 func validateOptsFromParams(p Params) totp.ValidateOpts {
-	digits := otp.DigitsSix
-	if p.Digits == 8 {
-		digits = otp.DigitsEight
+	// RFC 4226 allows 6–8 digit codes. Pass the stored value through
+	// instead of silently downgrading non-6/8 values to six.
+	var digits otp.Digits
+	switch p.Digits {
+	case 6, 7, 8:
+		digits = otp.Digits(p.Digits)
+	default:
+		digits = otp.DigitsSix
 	}
 	period := uint(30)
 	if p.Period > 0 {

@@ -177,7 +177,12 @@ func (s *Store) SetDescription(service, account, description string) error {
 
 // SearchEntries performs a full-text search across service, account, and metadata
 // using the FTS5 index. Returns matching KeychainEntry rows.
+// An empty or whitespace-only query returns no results (FTS5 would reject it).
 func (s *Store) SearchEntries(query string) (_ []keychain.KeychainEntry, err error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
 	// FTS5 prefix query: quote the user input and append * for prefix matching.
 	// This allows "git" to match "github", "gitlab", etc.
 	escaped := strings.ReplaceAll(query, `"`, `""`)

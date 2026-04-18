@@ -715,7 +715,7 @@ make build && ./build/sesh -help
 1. **Always zero sensitive data**: Use `secure.SecureZeroBytes()`
 2. **Work with byte slices**: Don't convert secrets to strings unnecessarily — use `GetSecret` (returns `[]byte`) over `GetSecretString` (returns `string`) for secrets
 3. **Validate early**: Check credentials exist before expensive operations
-4. **Clipboard awareness**: Clipboard contents persist after copy — sesh does not currently auto-clear the clipboard. For TOTP codes this is low-risk (codes expire within 30 seconds). The password provider copies secrets to clipboard when using `-clip`; consider the exposure window.
+4. **Clipboard awareness**: On macOS, sesh auto-clears the clipboard 30 seconds after copy (only if the clipboard still holds the copied value). On other platforms `-clip` copies without auto-clearing — consider the exposure window and surface it in your provider's UX.
 
 ### User Experience
 

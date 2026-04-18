@@ -2,6 +2,7 @@
 package migration
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/bashhack/sesh/internal/constants"
@@ -68,11 +69,20 @@ func Migrate(source, dest keychain.Provider) (Result, error) {
 				continue
 			}
 
-			// Check if entry already exists in dest
+			// Check if entry already exists in dest. Only a confirmed
+			// ErrNotFound permits writing; other errors (I/O, decrypt,
+			// locked DB) must not be treated as absence.
 			existing, getErr := dest.GetSecret(entry.Account, entry.Service)
-			if getErr == nil {
+			switch {
+			case getErr == nil:
 				secure.SecureZeroBytes(existing)
 				result.Skipped++
+				secure.SecureZeroBytes(secret)
+				continue
+			case errors.Is(getErr, keychain.ErrNotFound):
+				// Not present — proceed to write.
+			default:
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to check destination: %v", entry.Service, getErr))
 				secure.SecureZeroBytes(secret)
 				continue
 			}

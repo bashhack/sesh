@@ -70,9 +70,8 @@ func TestGeneratePassword(t *testing.T) {
 
 func TestGeneratePasswordCharacterSets(t *testing.T) {
 	tests := map[string]struct {
-		mustHave string
-		mustNot  string
-		opts     GenerateOptions
+		mustNot string
+		opts    GenerateOptions
 	}{
 		"no symbols excluded": {
 			opts:    GenerateOptions{Length: 100, Uppercase: true, Lowercase: true, Digits: true, Symbols: false},

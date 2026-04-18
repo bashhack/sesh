@@ -3,6 +3,7 @@ package clipboard
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"runtime"
@@ -48,7 +49,9 @@ func CopyWithAutoClear(text string, timeout time.Duration) error {
 // spawnClearDarwin launches a detached sh process that sleeps, checks if the
 // clipboard still holds the original value, and clears it if so.
 func spawnClearDarwin(original string, timeout time.Duration) error {
-	seconds := strconv.Itoa(int(timeout.Seconds()))
+	// Round up so sub-second timeouts don't truncate to "sleep 0" (which
+	// would clear the clipboard immediately). Clamp to a 1-second floor.
+	seconds := strconv.Itoa(max(int(math.Ceil(timeout.Seconds())), 1))
 
 	// Shell script:
 	//  1. Sleep for the timeout

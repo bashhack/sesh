@@ -176,6 +176,11 @@ func (m *Manager) GetTOTPParams(service, username string) totp.Params {
 	if err != nil || len(entries) == 0 {
 		return totp.Params{}
 	}
+	// ListEntries is a prefix query in the SQLite backend — verify the
+	// first entry is the exact service, not a sibling that shares a prefix.
+	if entries[0].Service != serviceKey {
+		return totp.Params{}
+	}
 
 	return totp.ParseParams(entries[0].Description)
 }
@@ -262,12 +267,27 @@ func (m *Manager) ListEntriesFiltered(filter ListFilter) ([]Entry, error) {
 		filtered = append(filtered, *e)
 	}
 
-	// Sort
+	// Sort. Both backends should guarantee non-zero timestamps (macOS
+	// metadata sets them on store; the SQLite schema has DEFAULT
+	// CURRENT_TIMESTAMP), so a zero value here implies the underlying
+	// store was tampered with or an older metadata record deserialized
+	// without the fields. Fall back to service order in that case so a
+	// single corrupt entry doesn't anchor the whole list to epoch.
 	switch filter.SortBy {
 	case SortByCreatedAt:
-		sort.Slice(filtered, func(i, j int) bool { return filtered[i].CreatedAt.Before(filtered[j].CreatedAt) })
+		sort.Slice(filtered, func(i, j int) bool {
+			if filtered[i].CreatedAt.IsZero() || filtered[j].CreatedAt.IsZero() {
+				return filtered[i].Service < filtered[j].Service
+			}
+			return filtered[i].CreatedAt.Before(filtered[j].CreatedAt)
+		})
 	case SortByUpdatedAt:
-		sort.Slice(filtered, func(i, j int) bool { return filtered[i].UpdatedAt.Before(filtered[j].UpdatedAt) })
+		sort.Slice(filtered, func(i, j int) bool {
+			if filtered[i].UpdatedAt.IsZero() || filtered[j].UpdatedAt.IsZero() {
+				return filtered[i].Service < filtered[j].Service
+			}
+			return filtered[i].UpdatedAt.Before(filtered[j].UpdatedAt)
+		})
 	default:
 		sort.Slice(filtered, func(i, j int) bool { return filtered[i].Service < filtered[j].Service })
 	}

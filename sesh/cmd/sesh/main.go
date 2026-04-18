@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/migration"
 	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 // Version information (set by ldflags during build)
@@ -74,7 +76,8 @@ func buildProvider() (keychain.Provider, io.Closer, error) {
 	// NOTE: If two sesh processes race on first run, each may generate a
 	// different key. The last writer wins and the other's data is lost.
 	// Acceptable for a single-user CLI; add a file lock if this changes.
-	if _, err := ks.GetEncryptionKey(); err != nil {
+	existing, err := ks.GetEncryptionKey()
+	if err != nil {
 		if !errors.Is(err, keychain.ErrNotFound) {
 			return nil, nil, fmt.Errorf("retrieve encryption key: %w", err)
 		}
@@ -83,8 +86,12 @@ func buildProvider() (keychain.Provider, io.Closer, error) {
 			return nil, nil, fmt.Errorf("generate encryption key: %w", genErr)
 		}
 		if storeErr := ks.StoreEncryptionKey(key); storeErr != nil {
+			secure.SecureZeroBytes(key)
 			return nil, nil, fmt.Errorf("store encryption key: %w", storeErr)
 		}
+		secure.SecureZeroBytes(key)
+	} else {
+		secure.SecureZeroBytes(existing)
 	}
 
 	store, err := database.Open(dbPath, ks)
@@ -122,7 +129,8 @@ func runMigrate(app *App) error {
 	}
 
 	ks := database.NewKeychainSource(source, u.Username)
-	if _, err := ks.GetEncryptionKey(); err != nil {
+	existing, err := ks.GetEncryptionKey()
+	if err != nil {
 		if !errors.Is(err, keychain.ErrNotFound) {
 			return fmt.Errorf("retrieve encryption key: %w", err)
 		}
@@ -131,8 +139,12 @@ func runMigrate(app *App) error {
 			return fmt.Errorf("generate encryption key: %w", genErr)
 		}
 		if storeErr := ks.StoreEncryptionKey(key); storeErr != nil {
+			secure.SecureZeroBytes(key)
 			return fmt.Errorf("store encryption key: %w", storeErr)
 		}
+		secure.SecureZeroBytes(key)
+	} else {
+		secure.SecureZeroBytes(existing)
 	}
 
 	dest, err := database.Open(dbPath, ks)
@@ -179,10 +191,14 @@ func runMigrate(app *App) error {
 	if _, err := fmt.Fprintf(app.Stderr, "\nMigrate these entries to SQLite? [y/N]: "); err != nil {
 		return err
 	}
-	var answer string
-	if _, err := fmt.Scanln(&answer); err != nil {
+	// Use bufio so a bare Enter (the canonical "No" for [y/N]) is read
+	// as an empty line rather than surfacing "unexpected newline" from
+	// fmt.Scanln and aborting.
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("failed to read input: %w", err)
 	}
+	answer := strings.TrimSpace(line)
 	if answer != "y" && answer != "Y" {
 		if _, err := fmt.Fprintln(app.Stderr, "Migration cancelled."); err != nil {
 			return err
