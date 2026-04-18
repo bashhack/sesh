@@ -144,14 +144,15 @@ func (p *Provider) generateTOTP() (provider.Credentials, error) {
 }
 
 // loadTOTPParams reads stored TOTP params (algorithm, digits, period) from the entry description.
+// Returns zero-value params on miss; the caller falls back to defaults. Pairs
+// the metadata lookup to the same (service, account) as the secret was read
+// under, so a prefix sibling or cross-user entry can't spoof the params.
 func (p *Provider) loadTOTPParams(serviceKey string) internalTotp.Params {
 	entries, err := p.keychain.ListEntries(serviceKey)
 	if err != nil || len(entries) == 0 {
 		return internalTotp.Params{}
 	}
-	// ListEntries is a prefix query in the SQLite backend — verify the
-	// first entry is the exact service, not a sibling that shares a prefix.
-	if entries[0].Service != serviceKey {
+	if entries[0].Service != serviceKey || entries[0].Account != p.User {
 		return internalTotp.Params{}
 	}
 	return internalTotp.ParseParams(entries[0].Description)

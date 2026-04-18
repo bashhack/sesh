@@ -3,11 +3,13 @@ package database
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	otplib "github.com/pquerna/otp/totp"
 
@@ -1423,6 +1425,94 @@ func TestIntegration_ExportThenImportRoundTrip(t *testing.T) {
 			}
 			if len(entries) != 3 {
 				t.Fatalf("expected 3 entries after import, got %d", len(entries))
+			}
+		})
+	}
+}
+
+// failingWriter errors once more than budget bytes have been written.
+type failingWriter struct {
+	budget int
+	failed bool
+}
+
+func (f *failingWriter) Write(p []byte) (int, error) {
+	if f.failed {
+		return 0, fmt.Errorf("writer closed")
+	}
+	if len(p) <= f.budget {
+		f.budget -= len(p)
+		return len(p), nil
+	}
+	n := f.budget
+	f.budget = 0
+	f.failed = true
+	return n, fmt.Errorf("write budget exhausted")
+}
+
+func TestIntegration_ExportJSONStreamsEntries(t *testing.T) {
+	_, mgr := newIntegrationStore(t)
+	const total = 5
+	for _, svc := range []string{"a", "b", "c", "d", "e"} {
+		if err := mgr.StorePasswordString(svc, "alice", "secret-"+svc, password.EntryTypePassword); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A buffered-then-write implementation returns count=total regardless
+	// of writer success; streaming must return a strictly smaller count
+	// when the writer fails mid-way.
+	fw := &failingWriter{budget: 200}
+	count, err := mgr.Export(fw, password.ExportOptions{Format: password.FormatJSON})
+	if err == nil {
+		t.Fatal("expected error from truncated writer, got nil")
+	}
+	if count >= total {
+		t.Fatalf("non-streaming behavior: got count=%d (want < %d) after write failure", count, total)
+	}
+}
+
+func TestIntegration_ExportImportPreservesTimestamps(t *testing.T) {
+	// Audit history must survive a round-trip — otherwise sort-by-created
+	// and the audit log silently lose meaning every time a user restores
+	// from backup.
+	store1, mgr1 := newIntegrationStore(t)
+
+	historicCreated := time.Date(2025, 3, 10, 12, 0, 0, 0, time.UTC)
+	historicUpdated := time.Date(2025, 9, 15, 18, 30, 0, 0, time.UTC)
+
+	if err := store1.SetSecretAt("testuser", "sesh-password/password/github/alice", []byte("pw1"), historicCreated, historicUpdated); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, format := range []password.ExportFormat{password.FormatJSON, password.FormatCSV} {
+		t.Run(string(format), func(t *testing.T) {
+			var buf bytes.Buffer
+			if _, err := mgr1.Export(&buf, password.ExportOptions{Format: format}); err != nil {
+				t.Fatal(err)
+			}
+
+			store2, mgr2 := newIntegrationStore(t)
+			result, err := mgr2.Import(bytes.NewReader(buf.Bytes()), password.ImportOptions{Format: format})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Imported != 1 {
+				t.Fatalf("expected 1 imported, got %d (errors: %v)", result.Imported, result.Errors)
+			}
+
+			entries, err := store2.ListEntries("sesh-password")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("expected 1 entry, got %d", len(entries))
+			}
+			if !entries[0].CreatedAt.Equal(historicCreated) {
+				t.Errorf("CreatedAt after round-trip = %v, want %v", entries[0].CreatedAt, historicCreated)
+			}
+			if !entries[0].UpdatedAt.Equal(historicUpdated) {
+				t.Errorf("UpdatedAt after round-trip = %v, want %v", entries[0].UpdatedAt, historicUpdated)
 			}
 		})
 	}

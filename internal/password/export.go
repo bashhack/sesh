@@ -14,9 +14,11 @@ import (
 )
 
 // ExportEntry is an entry with its decrypted secret, used for export/import.
+// Timestamps are preserved through round-trip when the underlying store
+// implements keychain.TimestampedStore (the SQLite backend does).
 type ExportEntry struct {
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at,omitzero"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
 	Service   string    `json:"service"`
 	Username  string    `json:"username,omitempty"`
 	Type      EntryType `json:"type"`
@@ -37,7 +39,10 @@ type ExportOptions struct {
 	EntryType EntryType // empty means all types
 }
 
-// Export decrypts all matching entries and writes them to the given writer.
+// Export decrypts entries and streams them to w, one at a time, so only
+// one plaintext record is live in memory at a time. Returns the number of
+// entries successfully written; a partial count + error is possible if a
+// decrypt or write fails mid-stream (prior entries remain in the writer).
 func (m *Manager) Export(w io.Writer, opts ExportOptions) (int, error) {
 	filter := ListFilter{}
 	if opts.EntryType != "" {
@@ -49,62 +54,109 @@ func (m *Manager) Export(w io.Writer, opts ExportOptions) (int, error) {
 		return 0, fmt.Errorf("failed to list entries: %w", err)
 	}
 
-	var exported []ExportEntry
+	switch opts.Format {
+	case "", FormatJSON:
+		return m.exportJSON(w, entries)
+	case FormatCSV:
+		return m.exportCSV(w, entries)
+	default:
+		return 0, fmt.Errorf("unsupported export format %q (want json or csv)", opts.Format)
+	}
+}
+
+// exportJSON writes entries as a JSON array, decrypting and marshaling one
+// record at a time. The output matches what json.Encoder.Encode on a full
+// slice would produce, but without holding every plaintext secret in
+// memory simultaneously.
+func (m *Manager) exportJSON(w io.Writer, entries []Entry) (int, error) {
+	if _, err := io.WriteString(w, "["); err != nil {
+		return 0, err
+	}
+	count := 0
 	for i := range entries {
 		e := &entries[i]
 		secretBytes, err := m.GetPassword(e.Service, e.Username, e.Type)
 		if err != nil {
-			return 0, fmt.Errorf("failed to decrypt %s/%s: %w", e.Service, e.Username, err)
+			return count, fmt.Errorf("failed to decrypt %s/%s: %w", e.Service, e.Username, err)
 		}
 
-		exported = append(exported, ExportEntry{
+		sep := "\n  "
+		if count > 0 {
+			sep = ",\n  "
+		}
+		if _, err := io.WriteString(w, sep); err != nil {
+			secure.SecureZeroBytes(secretBytes)
+			return count, err
+		}
+
+		ee := ExportEntry{
 			Service:   e.Service,
 			Username:  e.Username,
 			Type:      e.Type,
 			Secret:    string(secretBytes),
 			CreatedAt: e.CreatedAt,
 			UpdatedAt: e.UpdatedAt,
-		})
-
+		}
+		// Source buffer can go immediately; the Secret string copy is
+		// ephemeral per iteration and out of scope after this block.
 		secure.SecureZeroBytes(secretBytes)
-	}
 
-	switch opts.Format {
-	case FormatCSV:
-		return len(exported), writeCSV(w, exported)
-	default:
-		return len(exported), writeJSON(w, exported)
+		b, err := json.MarshalIndent(ee, "  ", "  ")
+		if err != nil {
+			return count, err
+		}
+		_, writeErr := w.Write(b)
+		secure.SecureZeroBytes(b)
+		if writeErr != nil {
+			return count, writeErr
+		}
+		count++
 	}
+	if count > 0 {
+		if _, err := io.WriteString(w, "\n"); err != nil {
+			return count, err
+		}
+	}
+	if _, err := io.WriteString(w, "]\n"); err != nil {
+		return count, err
+	}
+	return count, nil
 }
 
-func writeJSON(w io.Writer, entries []ExportEntry) error {
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	return enc.Encode(entries)
-}
-
-func writeCSV(w io.Writer, entries []ExportEntry) error {
+// exportCSV writes entries as CSV, one row at a time.
+func (m *Manager) exportCSV(w io.Writer, entries []Entry) (int, error) {
 	cw := csv.NewWriter(w)
-
 	if err := cw.Write([]string{"service", "username", "type", "secret", "created_at", "updated_at"}); err != nil {
-		return err
+		return 0, err
 	}
 
-	for _, e := range entries {
-		if err := cw.Write([]string{
+	count := 0
+	for i := range entries {
+		e := &entries[i]
+		secretBytes, err := m.GetPassword(e.Service, e.Username, e.Type)
+		if err != nil {
+			cw.Flush()
+			return count, fmt.Errorf("failed to decrypt %s/%s: %w", e.Service, e.Username, err)
+		}
+
+		writeErr := cw.Write([]string{
 			e.Service,
 			e.Username,
 			string(e.Type),
-			e.Secret,
+			string(secretBytes),
 			e.CreatedAt.Format(time.RFC3339),
 			e.UpdatedAt.Format(time.RFC3339),
-		}); err != nil {
-			return err
+		})
+		secure.SecureZeroBytes(secretBytes)
+		if writeErr != nil {
+			cw.Flush()
+			return count, writeErr
 		}
+		count++
 	}
 
 	cw.Flush()
-	return cw.Error()
+	return count, cw.Error()
 }
 
 // ConflictStrategy controls how import handles duplicate entries.
@@ -133,6 +185,12 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 	var entries []ExportEntry
 
 	switch opts.Format {
+	case "", FormatJSON:
+		var err error
+		entries, err = readJSON(r)
+		if err != nil {
+			return ImportResult{}, fmt.Errorf("failed to read JSON: %w", err)
+		}
 	case FormatCSV:
 		var err error
 		entries, err = readCSV(r)
@@ -140,11 +198,7 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			return ImportResult{}, fmt.Errorf("failed to read CSV: %w", err)
 		}
 	default:
-		var err error
-		entries, err = readJSON(r)
-		if err != nil {
-			return ImportResult{}, fmt.Errorf("failed to read JSON: %w", err)
-		}
+		return ImportResult{}, fmt.Errorf("unsupported import format %q (want json or csv)", opts.Format)
 	}
 
 	result := ImportResult{}
@@ -191,7 +245,10 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			}
 		}
 
-		if err := m.StorePasswordString(e.Service, e.Username, e.Secret, e.Type); err != nil {
+		// Pass timestamps through so backends that support them (SQLite)
+		// preserve original audit history on round-trip. Zero values are
+		// treated as "use now" by the option.
+		if err := m.StorePasswordString(e.Service, e.Username, e.Secret, e.Type, WithTimestamps(e.CreatedAt, e.UpdatedAt)); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: %v", e.Service, e.Username, err))
 			continue
 		}

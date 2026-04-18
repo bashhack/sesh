@@ -33,6 +33,28 @@ type Provider interface {
 	SetDescription(service, account, description string) error
 }
 
+// TimestampedStore is an optional interface for credential backends that
+// can persist explicit create/update timestamps on write, instead of always
+// using the current wall clock. The SQLite store implements it; the macOS
+// keychain backend does not (its metadata format stamps entries with
+// time.Now at write time).
+//
+// Callers should use a type assertion to detect support:
+//
+//	if ts, ok := provider.(keychain.TimestampedStore); ok {
+//	    ts.SetSecretAt(...)
+//	}
+//
+// Zero-valued timestamps passed to these methods mean "use now" — matching
+// the non-timestamped path exactly.
+type TimestampedStore interface {
+	// SetSecretAt stores a secret with explicit create/update timestamps.
+	SetSecretAt(account, service string, secret []byte, createdAt, updatedAt time.Time) error
+	// SetDescriptionAt sets a description and stamps the entry's updated_at
+	// with the given timestamp instead of the current time.
+	SetDescriptionAt(service, account, description string, updatedAt time.Time) error
+}
+
 // KeychainEntry represents an entry in the credential store.
 type KeychainEntry struct {
 	CreatedAt   time.Time

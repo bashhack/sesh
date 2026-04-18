@@ -34,22 +34,80 @@ func main() {
 		Date:    date,
 	}
 
-	kc, closer, err := buildProvider()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		os.Exit(1)
-	}
-	if closer != nil {
-		defer func() {
-			if err := closer.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to close provider: %v\n", err)
-			}
-		}()
+	// Only open the credential store if the command will actually use it.
+	// --version, --help, --list-services, and --migrate either just print
+	// information or open their own store internally. Skipping buildProvider
+	// here means SESH_BACKEND=sqlite doesn't pointlessly open the DB (or
+	// acquire the key-init flock on first run) for those commands.
+	var (
+		kc     keychain.Provider
+		closer io.Closer
+	)
+	if needsCredentialStore(os.Args) {
+		var err error
+		kc, closer, err = buildProvider()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+			os.Exit(1)
+		}
+		if closer != nil {
+			defer func() {
+				if err := closer.Close(); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to close provider: %v\n", err)
+				}
+			}()
+		}
+	} else {
+		kc = noopCredentialStore{}
 	}
 
 	app := NewDefaultApp(versionInfo, kc)
 	run(app, os.Args)
 }
+
+// needsCredentialStore reports whether the given command-line invocation
+// will touch the credential store. Commands that just print information
+// (--help/--version/--list-services) or open their own store internally
+// (--migrate) return false.
+func needsCredentialStore(args []string) bool {
+	if len(args) <= 1 {
+		return false
+	}
+	for _, a := range args[1:] {
+		switch a {
+		case "--help", "-help", "-h",
+			"--version", "-version",
+			"--list-services", "-list-services",
+			"--migrate", "-migrate":
+			return false
+		}
+	}
+	return true
+}
+
+// noopCredentialStore is a keychain.Provider stand-in used for commands
+// that don't touch the credential store. Every method returns an error so
+// that a routing bug (e.g. a command that should have needed the store
+// being classified as lightweight) surfaces loudly instead of silently
+// succeeding.
+type noopCredentialStore struct{}
+
+var errNoStore = fmt.Errorf("no credential store opened for this command")
+
+func (noopCredentialStore) GetSecret(_, _ string) ([]byte, error) { return nil, errNoStore }
+func (noopCredentialStore) SetSecret(_, _ string, _ []byte) error { return errNoStore }
+func (noopCredentialStore) GetSecretString(_, _ string) (string, error) {
+	return "", errNoStore
+}
+func (noopCredentialStore) SetSecretString(_, _, _ string) error { return errNoStore }
+func (noopCredentialStore) GetMFASerialBytes(_, _ string) ([]byte, error) {
+	return nil, errNoStore
+}
+func (noopCredentialStore) ListEntries(_ string) ([]keychain.KeychainEntry, error) {
+	return nil, errNoStore
+}
+func (noopCredentialStore) DeleteEntry(_, _ string) error       { return errNoStore }
+func (noopCredentialStore) SetDescription(_, _, _ string) error { return errNoStore }
 
 // buildProvider constructs the credential store.
 // When SESH_BACKEND=sqlite it returns a SQLite-backed store (caller must
@@ -445,7 +503,7 @@ func (a *App) PrintUsage() error {
 	lines := []string{
 		"Usage: sesh [options]",
 		"\nCommon options:",
-		"  --service, -service           Service provider to use (aws, totp) [REQUIRED]",
+		"  --service, -service           Service provider to use (aws, totp, password) [REQUIRED]",
 		"  --list, -list                 List entries for selected service",
 		"  --delete, -delete string      Delete entry for selected service",
 		"  --setup, -setup               Run setup wizard for selected service",

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/keychain"
 )
@@ -434,6 +435,92 @@ func TestExtractPrefix(t *testing.T) {
 				t.Errorf("extractPrefix(%q) = %q, want %q", tc.service, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSetSecretAt_PreservesTimestamps(t *testing.T) {
+	s := newTestStore(t)
+
+	// Historic timestamps — "this entry was first stored ~1 year ago and
+	// last updated ~6 months ago". Truncate to seconds so we don't fight
+	// SQLite's datetime column round-trip precision.
+	created := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
+	updated := time.Date(2025, 7, 15, 10, 0, 0, 0, time.UTC)
+
+	if err := s.SetSecretAt("alice", "sesh-password/password/github/alice", []byte("hunter2"), created, updated); err != nil {
+		t.Fatalf("SetSecretAt: %v", err)
+	}
+
+	entries, err := s.ListEntries("sesh-password")
+	if err != nil {
+		t.Fatalf("ListEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if !entries[0].CreatedAt.Equal(created) {
+		t.Errorf("CreatedAt = %v, want %v", entries[0].CreatedAt, created)
+	}
+	if !entries[0].UpdatedAt.Equal(updated) {
+		t.Errorf("UpdatedAt = %v, want %v", entries[0].UpdatedAt, updated)
+	}
+}
+
+func TestSetSecretAt_ZeroTimestampsFallBackToNow(t *testing.T) {
+	s := newTestStore(t)
+
+	before := time.Now().UTC().Add(-time.Second)
+	if err := s.SetSecretAt("alice", "sesh-password/password/a/alice", []byte("x"), time.Time{}, time.Time{}); err != nil {
+		t.Fatalf("SetSecretAt: %v", err)
+	}
+	after := time.Now().UTC().Add(time.Second)
+
+	entries, err := s.ListEntries("sesh-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	got := entries[0].CreatedAt
+	if got.Before(before) || got.After(after) {
+		t.Errorf("zero-timestamp fallback: CreatedAt = %v, want in [%v, %v]", got, before, after)
+	}
+}
+
+func TestSetDescriptionAt_PreservesTimestamp(t *testing.T) {
+	s := newTestStore(t)
+
+	created := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
+	updated := time.Date(2025, 7, 15, 10, 0, 0, 0, time.UTC)
+	if err := s.SetSecretAt("alice", "sesh-password/password/github/alice", []byte("hunter2"), created, updated); err != nil {
+		t.Fatal(err)
+	}
+
+	// SetDescriptionAt with the same updated_at must not bump the stamp
+	// forward to "now" — that would defeat timestamp preservation on
+	// import (which calls SetSecret + SetDescription in sequence).
+	if err := s.SetDescriptionAt("sesh-password/password/github/alice", "alice", "GitHub password", updated); err != nil {
+		t.Fatalf("SetDescriptionAt: %v", err)
+	}
+
+	entries, err := s.ListEntries("sesh-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !entries[0].UpdatedAt.Equal(updated) {
+		t.Errorf("UpdatedAt after SetDescriptionAt = %v, want %v", entries[0].UpdatedAt, updated)
+	}
+	if entries[0].Description != "GitHub password" {
+		t.Errorf("Description = %q, want %q", entries[0].Description, "GitHub password")
+	}
+}
+
+func TestSetDescriptionAt_MissingEntryReturnsErrNotFound(t *testing.T) {
+	s := newTestStore(t)
+	err := s.SetDescriptionAt("sesh-password/password/ghost/alice", "alice", "", time.Now())
+	if !errors.Is(err, keychain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 

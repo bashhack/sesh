@@ -718,6 +718,31 @@ func TestEnsureMasterKey_NonNotFoundErrorIsSurfaced(t *testing.T) {
 	}
 }
 
+func TestNeedsCredentialStore(t *testing.T) {
+	tests := map[string]struct {
+		args []string
+		want bool
+	}{
+		"no args":               {args: []string{"sesh"}, want: false},
+		"just --help":           {args: []string{"sesh", "--help"}, want: false},
+		"short -h":              {args: []string{"sesh", "-h"}, want: false},
+		"--version":             {args: []string{"sesh", "--version"}, want: false},
+		"--list-services":       {args: []string{"sesh", "--list-services"}, want: false},
+		"--migrate":             {args: []string{"sesh", "--migrate"}, want: false},
+		"--service aws":         {args: []string{"sesh", "--service", "aws"}, want: true},
+		"--service aws --help":  {args: []string{"sesh", "--service", "aws", "--help"}, want: false},
+		"--service aws --list":  {args: []string{"sesh", "--service", "aws", "--list"}, want: true},
+		"--service aws --setup": {args: []string{"sesh", "--service", "aws", "--setup"}, want: true},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := needsCredentialStore(tc.args); got != tc.want {
+				t.Errorf("needsCredentialStore(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEnsureMasterKey_Concurrent(t *testing.T) {
 	// Stress-test the flock: N goroutines race through ensureMasterKey
 	// against a shared keychain. Exactly one must generate and store.

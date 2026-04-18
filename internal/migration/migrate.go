@@ -14,6 +14,7 @@ var migratePrefixes = []string{
 	constants.AWSServicePrefix,
 	constants.AWSServiceMFAPrefix,
 	constants.TOTPServicePrefix,
+	constants.PasswordServicePrefix,
 }
 
 // Result reports what happened during migration.

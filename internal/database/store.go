@@ -21,8 +21,11 @@ type Store struct {
 	keySource KeySource
 }
 
-// compile-time check
-var _ keychain.Provider = (*Store)(nil)
+// compile-time checks
+var (
+	_ keychain.Provider         = (*Store)(nil)
+	_ keychain.TimestampedStore = (*Store)(nil)
+)
 
 // Open creates or opens the SQLite database at dbPath, runs any pending
 // migrations, and returns a ready-to-use Store.
@@ -82,7 +85,7 @@ func (s *Store) GetSecret(account, service string) ([]byte, error) {
 }
 
 func (s *Store) SetSecret(account, service string, secret []byte) error {
-	return s.upsertSecret(account, service, secret, inferEntryType(service))
+	return s.upsertSecret(account, service, secret, inferEntryType(service), time.Time{}, time.Time{})
 }
 
 func (s *Store) GetSecretString(account, service string) (string, error) {
@@ -229,10 +232,48 @@ func (s *Store) SearchEntries(query string) (_ []keychain.KeychainEntry, err err
 	return entries, rows.Err()
 }
 
+// SetSecretAt stores a secret with explicit create/update timestamps.
+// A zero timestamp falls back to the current time, matching SetSecret's
+// behavior. Implements keychain.TimestampedStore.
+func (s *Store) SetSecretAt(account, service string, secret []byte, createdAt, updatedAt time.Time) error {
+	entryType := inferEntryType(service)
+	if err := s.upsertSecret(account, service, secret, entryType, createdAt, updatedAt); err != nil {
+		return err
+	}
+	return nil
+}
+
+// SetDescriptionAt sets the description and stamps updated_at with the
+// given timestamp. Zero falls back to the current time. Implements
+// keychain.TimestampedStore.
+func (s *Store) SetDescriptionAt(service, account, description string, updatedAt time.Time) (err error) {
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	res, err := s.db.Exec(
+		`UPDATE passwords SET metadata = ?, updated_at = ? WHERE id = ?`,
+		description, updatedAt, entryID(service, account),
+	)
+	if err != nil {
+		return fmt.Errorf("set description: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w for account %q and service %q", keychain.ErrNotFound, account, service)
+	}
+	return nil
+}
+
 // --- internal helpers ---
 
-// upsertSecret encrypts and stores (or updates) a secret.
-func (s *Store) upsertSecret(account, service string, secret []byte, entryType EntryType) error {
+// upsertSecret encrypts and stores (or updates) a secret. Zero-valued
+// timestamps default to the current time so existing callers behave
+// unchanged; explicit non-zero values are used as-is (used by Import and
+// future migration flows to preserve original audit history).
+func (s *Store) upsertSecret(account, service string, secret []byte, entryType EntryType, createdAt, updatedAt time.Time) error {
 	masterKey, err := s.keySource.GetEncryptionKey()
 	if err != nil {
 		return err
@@ -245,6 +286,12 @@ func (s *Store) upsertSecret(account, service string, secret []byte, entryType E
 	}
 
 	now := time.Now().UTC()
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	if updatedAt.IsZero() {
+		updatedAt = now
+	}
 	id := entryID(service, account)
 
 	_, err = s.db.Exec(`
@@ -255,7 +302,7 @@ func (s *Store) upsertSecret(account, service string, secret []byte, entryType E
 			salt           = excluded.salt,
 			entry_type     = excluded.entry_type,
 			updated_at     = excluded.updated_at`,
-		id, service, account, string(entryType), encData, salt, now, now,
+		id, service, account, string(entryType), encData, salt, createdAt, updatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert secret: %w", err)

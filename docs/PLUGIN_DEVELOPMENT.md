@@ -817,8 +817,12 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
     }
     defer secure.SecureZeroBytes(secret)
 
-    // Generate current and next TOTP codes
-    currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secret)
+    // Generate current and next TOTP codes using any stored QR parameters
+    // (algorithm, digits, period). Services using SHA-256/SHA-512, 8-digit
+    // codes, or a non-30-second period need this — the default generator
+    // would produce codes that don't match.
+    params := p.loadTOTPParams(serviceKey)
+    currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
     if err != nil {
         return provider.Credentials{}, err
     }
@@ -829,6 +833,22 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
         p.Name(), currentCode, nextCode, secondsLeft,
         "TOTP code", p.serviceName,
     ), nil
+}
+
+// loadTOTPParams reads stored TOTP params from the entry's description.
+// Returns zero-value Params on miss, which falls back to defaults (SHA1,
+// 6 digits, 30s period).
+func (p *Provider) loadTOTPParams(serviceKey string) totp.Params {
+    entries, err := p.keychain.ListEntries(serviceKey)
+    if err != nil || len(entries) == 0 {
+        return totp.Params{}
+    }
+    // ListEntries is a prefix query — verify the first entry is the exact
+    // service and account we just read the secret from.
+    if entries[0].Service != serviceKey || entries[0].Account != p.User {
+        return totp.Params{}
+    }
+    return totp.ParseParams(entries[0].Description)
 }
 
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {

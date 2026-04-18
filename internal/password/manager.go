@@ -64,8 +64,38 @@ func NewManager(keychainProvider keychain.Provider, user string) *Manager {
 	}
 }
 
-// StorePassword securely stores a password entry
-func (m *Manager) StorePassword(service, username string, password []byte, entryType EntryType) error {
+// StoreOption configures optional behavior of StorePassword / StorePasswordString.
+type StoreOption func(*storeOptions)
+
+type storeOptions struct {
+	createdAt time.Time
+	updatedAt time.Time
+}
+
+// WithTimestamps preserves the given create/update timestamps on backends
+// that implement keychain.TimestampedStore (the SQLite store does; the
+// macOS keychain backend does not — there it degrades silently to "now").
+// A zero-valued time.Time for either argument is treated as "unset" and
+// falls back to the current time for that field.
+//
+// Callers: Import uses this to round-trip audit timestamps through
+// export/import; future backend-consolidation migrations (Phase 7) will
+// use it to preserve "when was this first stored" history when moving
+// entries into the unified store.
+func WithTimestamps(createdAt, updatedAt time.Time) StoreOption {
+	return func(o *storeOptions) {
+		o.createdAt = createdAt
+		o.updatedAt = updatedAt
+	}
+}
+
+// StorePassword securely stores a password entry.
+func (m *Manager) StorePassword(service, username string, password []byte, entryType EntryType, opts ...StoreOption) error {
+	var so storeOptions
+	for _, opt := range opts {
+		opt(&so)
+	}
+
 	// Create defensive copy
 	passwordCopy := make([]byte, len(password))
 	copy(passwordCopy, password)
@@ -77,19 +107,32 @@ func (m *Manager) StorePassword(service, username string, password []byte, entry
 		return fmt.Errorf("failed to build service key: %w", err)
 	}
 
-	// Store the password securely
-	err = m.keychain.SetSecret(m.user, serviceKey, passwordCopy)
+	preserveTimestamps := !so.createdAt.IsZero() || !so.updatedAt.IsZero()
+	ts, timestampAware := m.keychain.(keychain.TimestampedStore)
+
+	// Store the password securely.
+	if timestampAware && preserveTimestamps {
+		err = ts.SetSecretAt(m.user, serviceKey, passwordCopy, so.createdAt, so.updatedAt)
+	} else {
+		err = m.keychain.SetSecret(m.user, serviceKey, passwordCopy)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to store password: %w", err)
 	}
 
-	// Store metadata for organization
+	// Store metadata for organization. Use the timestamp-aware path when
+	// available so the description write doesn't clobber the preserved
+	// updated_at.
 	description := fmt.Sprintf("%s for %s", entryType, service)
 	if username != "" {
 		description = fmt.Sprintf("%s (%s) for %s", entryType, username, service)
 	}
 
-	err = m.keychain.SetDescription(serviceKey, m.user, description)
+	if timestampAware && preserveTimestamps {
+		err = ts.SetDescriptionAt(serviceKey, m.user, description, so.updatedAt)
+	} else {
+		err = m.keychain.SetDescription(serviceKey, m.user, description)
+	}
 	if err != nil {
 		// Non-fatal - password is stored, just description failed
 		log.Printf("warning: failed to store description for %s: %v", serviceKey, err)
@@ -115,11 +158,11 @@ func (m *Manager) GetPassword(service, username string, entryType EntryType) ([]
 }
 
 // StorePasswordString is a convenience method for string passwords
-func (m *Manager) StorePasswordString(service, username, password string, entryType EntryType) error {
+func (m *Manager) StorePasswordString(service, username, password string, entryType EntryType, opts ...StoreOption) error {
 	passwordBytes := []byte(password)
 	defer secure.SecureZeroBytes(passwordBytes)
 
-	return m.StorePassword(service, username, passwordBytes, entryType)
+	return m.StorePassword(service, username, passwordBytes, entryType, opts...)
 }
 
 // GetPasswordString retrieves a password as a string (less secure)
@@ -177,8 +220,10 @@ func (m *Manager) GetTOTPParams(service, username string) totp.Params {
 		return totp.Params{}
 	}
 	// ListEntries is a prefix query in the SQLite backend — verify the
-	// first entry is the exact service, not a sibling that shares a prefix.
-	if entries[0].Service != serviceKey {
+	// first entry matches the exact (service, account) we read the secret
+	// under, so neither a prefix sibling nor a cross-user entry can spoof
+	// the params.
+	if entries[0].Service != serviceKey || entries[0].Account != m.user {
 		return totp.Params{}
 	}
 

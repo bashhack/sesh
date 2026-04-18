@@ -76,14 +76,15 @@ func TestPlan(t *testing.T) {
 	source.add("sesh-totp/github", []byte("totp-secret"), "TOTP for GitHub")
 	source.add("sesh-aws/prod", []byte("aws-secret"), "")
 	source.add("sesh-aws-serial/prod", []byte("arn:aws:iam::123:mfa/user"), "")
-	source.add("sesh-password/pw/thing", []byte("should-not-appear"), "")
+	source.add("sesh-password/api_key/stripe/admin", []byte("sk_test_fake"), "Stripe API key")
+	source.add("sesh-other/leave-me", []byte("ignored"), "")
 
 	plan, err := Plan(source.provider())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan) != 3 {
-		t.Fatalf("expected 3 entries in plan, got %d", len(plan))
+	if len(plan) != 4 {
+		t.Fatalf("expected 4 entries in plan, got %d: %+v", len(plan), plan)
 	}
 }
 
@@ -93,6 +94,7 @@ func TestMigrate(t *testing.T) {
 	source.add("sesh-totp/gitlab", []byte("totp-secret-2"), "")
 	source.add("sesh-aws/prod", []byte("aws-secret"), "")
 	source.add("sesh-aws-serial/prod", []byte("arn:aws:iam::123:mfa/user"), "")
+	source.add("sesh-password/password/github/alice", []byte("hunter2"), "GitHub password")
 
 	dest := newEntryStore()
 
@@ -100,8 +102,8 @@ func TestMigrate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Migrated != 4 {
-		t.Fatalf("expected 4 migrated, got %d", result.Migrated)
+	if result.Migrated != 5 {
+		t.Fatalf("expected 5 migrated, got %d", result.Migrated)
 	}
 	if result.Skipped != 0 {
 		t.Fatalf("expected 0 skipped, got %d", result.Skipped)
@@ -114,6 +116,11 @@ func TestMigrate(t *testing.T) {
 	}
 	if dest.descriptions["sesh-totp/github"] != "TOTP for GitHub" {
 		t.Fatalf("expected description preserved, got %q", dest.descriptions["sesh-totp/github"])
+	}
+	// Password-provider entries must be migrated too so users switching
+	// backends don't silently leave credentials behind on the keychain.
+	if string(dest.data["sesh-password/password/github/alice"]) != "hunter2" {
+		t.Fatalf("password entry not migrated: %q", dest.data["sesh-password/password/github/alice"])
 	}
 }
 
