@@ -1,7 +1,7 @@
 package password
 
 import (
-	"strings"
+	"bytes"
 	"testing"
 )
 
@@ -95,11 +95,8 @@ func TestGeneratePasswordCharacterSets(t *testing.T) {
 			}
 
 			if tc.mustNot != "" {
-				for _, c := range pw {
-					if strings.ContainsRune(tc.mustNot, c) {
-						t.Errorf("password contains excluded character %q", string(c))
-						break
-					}
+				if i := bytes.IndexAny(pw, tc.mustNot); i >= 0 {
+					t.Errorf("password contains excluded character %q", pw[i])
 				}
 			}
 		})
@@ -115,10 +112,10 @@ func TestGeneratePasswordUniqueness(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if seen[pw] {
+		if seen[string(pw)] {
 			t.Fatalf("duplicate password generated on iteration %d", i)
 		}
-		seen[pw] = true
+		seen[string(pw)] = true
 	}
 }
 
@@ -132,10 +129,10 @@ func TestGeneratePasswordGuaranteedCharSets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		hasLower := strings.ContainsAny(pw, lowerChars)
-		hasUpper := strings.ContainsAny(pw, upperChars)
-		hasDigit := strings.ContainsAny(pw, digitChars)
-		hasSymbol := strings.ContainsAny(pw, symbolChars)
+		hasLower := bytes.ContainsAny(pw, lowerChars)
+		hasUpper := bytes.ContainsAny(pw, upperChars)
+		hasDigit := bytes.ContainsAny(pw, digitChars)
+		hasSymbol := bytes.ContainsAny(pw, symbolChars)
 
 		if !hasLower || !hasUpper || !hasDigit || !hasSymbol {
 			t.Fatalf("iteration %d: password %q missing required character set (lower=%v upper=%v digit=%v symbol=%v)",

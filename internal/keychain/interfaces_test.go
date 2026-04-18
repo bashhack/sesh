@@ -237,6 +237,10 @@ func TestDefaultProviderSetDescription(t *testing.T) {
 	}
 
 	if len(savedMeta) != 1 {
-		t.Errorf("Expected 1 saved metadata entry, got %d", len(savedMeta))
+		t.Fatalf("Expected 1 saved metadata entry, got %d", len(savedMeta))
+	}
+	got := savedMeta[0]
+	if got.Service != "test-service" || got.Account != "testuser" || got.Description != "Test Description" {
+		t.Errorf("unexpected saved entry: %+v", got)
 	}
 }

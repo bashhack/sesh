@@ -288,12 +288,14 @@ func TestSetDescription(t *testing.T) {
 	}
 }
 
-func TestSetDescriptionNoOpWithoutEntry(t *testing.T) {
+func TestSetDescriptionNotFoundWithoutEntry(t *testing.T) {
 	s := newTestStore(t)
 
-	// Calling SetDescription without a prior SetSecret is a no-op.
-	if err := s.SetDescription("sesh-totp/github", "alice", "desc"); err != nil {
-		t.Fatal(err)
+	// Calling SetDescription without a prior SetSecret surfaces ErrNotFound —
+	// matching DeleteEntry's contract so caller typos/races don't go silent.
+	err := s.SetDescription("sesh-totp/github", "alice", "desc")
+	if !errors.Is(err, keychain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
 	}
 
 	entries, err := s.ListEntries("sesh-totp")
@@ -432,5 +434,25 @@ func TestExtractPrefix(t *testing.T) {
 				t.Errorf("extractPrefix(%q) = %q, want %q", tc.service, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSearchEntries_EmptyAndWhitespaceQueryShortCircuit(t *testing.T) {
+	// Seed a row so we'd know if the guard was missing — an empty query
+	// would produce an invalid FTS5 expression (`""*`) and surface as an
+	// error rather than silently returning no rows.
+	s := newTestStore(t)
+	if err := s.SetSecret("alice", "sesh-password/github", []byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, q := range []string{"", " ", "\t\n  "} {
+		got, err := s.SearchEntries(q)
+		if err != nil {
+			t.Errorf("SearchEntries(%q): unexpected error %v", q, err)
+		}
+		if got != nil {
+			t.Errorf("SearchEntries(%q) = %v, want nil", q, got)
+		}
 	}
 }

@@ -34,10 +34,13 @@ func DefaultArgon2idParams() Argon2idParams {
 }
 
 // MarshalParams serialises Argon2id parameters to JSON for storage in key_metadata.
+// The struct is composed of fixed-width integers, so json.Marshal cannot fail for
+// any valid Argon2idParams value — a non-nil error here indicates a programming
+// bug (e.g. someone added an unmarshalable field).
 func (p Argon2idParams) MarshalParams() string {
 	b, err := json.Marshal(p)
 	if err != nil {
-		return "{}"
+		panic(fmt.Sprintf("marshal Argon2idParams: %v (unreachable — fields are all numeric)", err))
 	}
 	return string(b)
 }

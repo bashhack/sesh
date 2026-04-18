@@ -65,7 +65,7 @@ The SQLite backend provides application-level encryption on top of file-system s
 
 - **AES-256-GCM**: Authenticated encryption for every stored entry
 - **Per-entry salts**: Each entry derives a unique encryption key from the master key + a random 16-byte salt
-- **Argon2id key derivation**: Memory-hard KDF for per-entry key derivation (16 MiB, 1 iteration, 1 thread)
+- **Argon2id key derivation**: Memory-hard KDF for per-entry key derivation (16 MiB, 1 iteration, 1 thread). The KDF input is the 256-bit high-entropy master key (see below), *not* a user password — so these parameters are chosen for domain separation between entries rather than password stretching, and fall below OWASP's password-KDF minimums by design
 - **Master key in Keychain**: The 256-bit master encryption key is stored in the macOS Keychain, combining OS-level access control with application-level encryption
 - **Key versioning**: Schema supports key rotation via `key_version` column and `key_metadata` table (rotation logic planned)
 - **FTS5 search**: Full-text search indexes service names, accounts, and descriptions — search queries never touch encrypted data

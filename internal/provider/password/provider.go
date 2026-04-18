@@ -326,10 +326,14 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 	if err != nil {
 		return provider.Credentials{}, fmt.Errorf("failed to generate password: %w", err)
 	}
+	// Zero the generator's raw buffer once we're done. Downstream string
+	// copies (JSON, CopyValue) can't be zeroed — that's a broader API issue —
+	// but we can at least avoid leaving the pre-copy buffer on the heap.
+	defer secure.SecureZeroBytes(generated)
 
 	// Store the generated password
 	et := p.effectiveEntryType()
-	if err := mgr.StorePassword(p.service, p.username, []byte(generated), et); err != nil {
+	if err := mgr.StorePassword(p.service, p.username, generated, et); err != nil {
 		return provider.Credentials{}, err
 	}
 
@@ -348,7 +352,7 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 			Service:  p.service,
 			Username: p.username,
 			Type:     string(et),
-			Password: generated,
+			Password: string(generated),
 		}
 		b, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
@@ -362,7 +366,7 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 
 	return provider.Credentials{
 		Provider:             p.Name(),
-		CopyValue:            generated,
+		CopyValue:            string(generated),
 		ClipboardDescription: fmt.Sprintf("generated password for %s", desc),
 		DisplayInfo:          fmt.Sprintf("✅ Generated and stored %s for %s\n💡 Use --clip to copy the password", et, desc),
 	}, nil

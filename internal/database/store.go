@@ -165,12 +165,19 @@ func (s *Store) DeleteEntry(account, service string) error {
 }
 
 func (s *Store) SetDescription(service, account, description string) error {
-	_, err := s.db.Exec(
+	res, err := s.db.Exec(
 		`UPDATE passwords SET metadata = ?, updated_at = ? WHERE id = ?`,
 		description, time.Now().UTC(), entryID(service, account),
 	)
 	if err != nil {
 		return fmt.Errorf("set description: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w for account %q and service %q", keychain.ErrNotFound, account, service)
 	}
 	return nil
 }

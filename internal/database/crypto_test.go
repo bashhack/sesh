@@ -2,6 +2,7 @@ package database
 
 import (
 	"bytes"
+	"reflect"
 	"testing"
 )
 
@@ -48,33 +49,24 @@ func TestEncryptDecrypt(t *testing.T) {
 }
 
 func TestDecryptErrors(t *testing.T) {
+	zeroKey := bytes.Repeat([]byte{0x00}, 32)
+	validCiphertext, err := Encrypt(zeroKey, []byte("secret"))
+	if err != nil {
+		t.Fatalf("setup Encrypt: %v", err)
+	}
+
 	tests := map[string]struct {
 		key        []byte
 		ciphertext []byte
 	}{
 		"wrong key": {
-			key: func() []byte {
-				key := bytes.Repeat([]byte{0x00}, 32)
-				ct, err := Encrypt(key, []byte("secret"))
-				if err != nil {
-					panic(err)
-				}
-				wrongKey := bytes.Repeat([]byte{0xFF}, 32)
-				// Store ciphertext in the test case via closure
-				_ = ct
-				return wrongKey
-			}(),
-			ciphertext: func() []byte {
-				key := bytes.Repeat([]byte{0x00}, 32)
-				ct, err := Encrypt(key, []byte("secret"))
-				if err != nil {
-					panic(err)
-				}
-				return ct
-			}(),
+			// Same ciphertext as above, but decrypted with a different
+			// key — GCM auth tag must reject.
+			key:        bytes.Repeat([]byte{0xFF}, 32),
+			ciphertext: validCiphertext,
 		},
 		"too short": {
-			key:        bytes.Repeat([]byte{0x00}, 32),
+			key:        zeroKey,
 			ciphertext: []byte{1, 2, 3},
 		},
 	}
@@ -232,7 +224,9 @@ func TestArgon2idParamsMarshalRoundTrip(t *testing.T) {
 		t.Fatalf("UnmarshalArgon2idParams: %v", err)
 	}
 
-	if got != params {
+	// DeepEqual keeps this resilient if Argon2idParams ever grows a
+	// non-comparable field (e.g. a slice).
+	if !reflect.DeepEqual(got, params) {
 		t.Fatalf("round-trip failed: got %+v, want %+v", got, params)
 	}
 }

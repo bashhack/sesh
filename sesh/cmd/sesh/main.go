@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
@@ -56,57 +58,102 @@ func buildProvider() (keychain.Provider, io.Closer, error) {
 	if os.Getenv("SESH_BACKEND") != "sqlite" {
 		return keychain.NewDefaultProvider(), nil, nil
 	}
+	store, err := openSQLiteStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, store, nil
+}
 
+// openSQLiteStore bootstraps the master encryption key (generating one on
+// first run) and returns an opened, schema-initialized SQLite store. The
+// caller must Close it.
+func openSQLiteStore() (*database.Store, error) {
 	u, err := user.Current()
 	if err != nil {
-		return nil, nil, fmt.Errorf("determine current user: %w", err)
+		return nil, fmt.Errorf("determine current user: %w", err)
 	}
 
 	dbPath, err := database.DefaultDBPath()
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve database path: %w", err)
+		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
-	kcRaw := keychain.NewDefaultProvider()
-	ks := database.NewKeychainSource(kcRaw, u.Username)
-
-	// On first run the encryption key won't exist — generate and store it.
-	// Any other keychain error (locked, permission denied) must be surfaced
-	// immediately to avoid generating a new key that orphans existing data.
-	// NOTE: If two sesh processes race on first run, each may generate a
-	// different key. The last writer wins and the other's data is lost.
-	// Acceptable for a single-user CLI; add a file lock if this changes.
-	existing, err := ks.GetEncryptionKey()
-	if err != nil {
-		if !errors.Is(err, keychain.ErrNotFound) {
-			return nil, nil, fmt.Errorf("retrieve encryption key: %w", err)
-		}
-		key, genErr := database.GenerateEncryptionKey()
-		if genErr != nil {
-			return nil, nil, fmt.Errorf("generate encryption key: %w", genErr)
-		}
-		if storeErr := ks.StoreEncryptionKey(key); storeErr != nil {
-			secure.SecureZeroBytes(key)
-			return nil, nil, fmt.Errorf("store encryption key: %w", storeErr)
-		}
-		secure.SecureZeroBytes(key)
-	} else {
-		secure.SecureZeroBytes(existing)
+	ks := database.NewKeychainSource(keychain.NewDefaultProvider(), u.Username)
+	if err := ensureMasterKey(ks, filepath.Dir(dbPath)); err != nil {
+		return nil, err
 	}
 
 	store, err := database.Open(dbPath, ks)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open database: %w", err)
+		return nil, fmt.Errorf("open database: %w", err)
 	}
 
 	if err := store.InitKeyMetadata(); err != nil {
 		if closeErr := store.Close(); closeErr != nil {
-			return nil, nil, fmt.Errorf("init key metadata: %w (close also failed: %v)", err, closeErr)
+			return nil, fmt.Errorf("init key metadata: %w (close also failed: %v)", err, closeErr)
 		}
-		return nil, nil, fmt.Errorf("init key metadata: %w", err)
+		return nil, fmt.Errorf("init key metadata: %w", err)
 	}
 
-	return store, store, nil
+	return store, nil
+}
+
+// ensureMasterKey verifies a master encryption key exists in the keychain,
+// generating and storing one on first run. Zeros any retrieved/generated
+// key bytes before returning.
+//
+// Concurrent first-run invocations are serialized via an advisory flock on
+// <dataDir>/.key-init.lock so two sesh processes can't each generate a
+// different key and orphan each other's data. The flock is auto-released
+// when the holding process exits, so crashes don't leave stale locks.
+func ensureMasterKey(ks *database.KeychainSource, dataDir string) error {
+	// Fast path: key already present.
+	if existing, err := ks.GetEncryptionKey(); err == nil {
+		secure.SecureZeroBytes(existing)
+		return nil
+	} else if !errors.Is(err, keychain.ErrNotFound) {
+		// Any non-ErrNotFound failure (locked, permission denied) must be
+		// surfaced immediately — otherwise we'd generate a new key and
+		// orphan the existing one.
+		return fmt.Errorf("retrieve encryption key: %w", err)
+	}
+
+	// Slow path: acquire the init lock before generating so we don't race
+	// a concurrent first-run invocation.
+	sentinel := filepath.Join(dataDir, ".key-init.lock")
+	lockFile, err := os.OpenFile(sentinel, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // path is <dataDir>/.key-init.lock; dataDir comes from our own DefaultDBPath
+	if err != nil {
+		return fmt.Errorf("open key-init sentinel: %w", err)
+	}
+	defer func() {
+		// Closing the fd releases the advisory flock.
+		if cerr := lockFile.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: release key-init lock: %v\n", cerr)
+		}
+	}()
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("acquire key-init lock: %w", err)
+	}
+
+	// Double-check under the lock — a concurrent process may have generated
+	// and stored the key while we were blocking on flock.
+	if existing, err := ks.GetEncryptionKey(); err == nil {
+		secure.SecureZeroBytes(existing)
+		return nil
+	} else if !errors.Is(err, keychain.ErrNotFound) {
+		return fmt.Errorf("retrieve encryption key (post-lock): %w", err)
+	}
+
+	key, err := database.GenerateEncryptionKey()
+	if err != nil {
+		return fmt.Errorf("generate encryption key: %w", err)
+	}
+	defer secure.SecureZeroBytes(key)
+	if err := ks.StoreEncryptionKey(key); err != nil {
+		return fmt.Errorf("store encryption key: %w", err)
+	}
+	return nil
 }
 
 // runMigrate copies all sesh entries from the macOS Keychain to the SQLite store.
@@ -118,50 +165,18 @@ func runMigrate(app *App) error {
 
 	source := keychain.NewDefaultProvider()
 
-	u, err := user.Current()
+	dest, err := openSQLiteStore()
 	if err != nil {
-		return fmt.Errorf("determine current user: %w", err)
-	}
-
-	dbPath, err := database.DefaultDBPath()
-	if err != nil {
-		return fmt.Errorf("resolve database path: %w", err)
-	}
-
-	ks := database.NewKeychainSource(source, u.Username)
-	existing, err := ks.GetEncryptionKey()
-	if err != nil {
-		if !errors.Is(err, keychain.ErrNotFound) {
-			return fmt.Errorf("retrieve encryption key: %w", err)
-		}
-		key, genErr := database.GenerateEncryptionKey()
-		if genErr != nil {
-			return fmt.Errorf("generate encryption key: %w", genErr)
-		}
-		if storeErr := ks.StoreEncryptionKey(key); storeErr != nil {
-			secure.SecureZeroBytes(key)
-			return fmt.Errorf("store encryption key: %w", storeErr)
-		}
-		secure.SecureZeroBytes(key)
-	} else {
-		secure.SecureZeroBytes(existing)
-	}
-
-	dest, err := database.Open(dbPath, ks)
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+		return err
 	}
 	defer func() {
 		if cerr := dest.Close(); cerr != nil {
-			if _, printErr := fmt.Fprintf(app.Stderr, "warning: failed to close database: %v\n", cerr); printErr != nil {
-				return
-			}
+			// Best-effort warning — app.Stderr is io.Writer so errcheck
+			// wants the return checked, but there's nothing useful to
+			// do from inside a deferred void func if the write fails.
+			_, _ = fmt.Fprintf(app.Stderr, "warning: failed to close database: %v\n", cerr) //nolint:errcheck // see comment above
 		}
 	}()
-
-	if err := dest.InitKeyMetadata(); err != nil {
-		return fmt.Errorf("init key metadata: %w", err)
-	}
 
 	plan, err := migration.Plan(source)
 	if err != nil {

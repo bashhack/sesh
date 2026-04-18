@@ -77,16 +77,18 @@ fi`
 
 	if err := cmd.Start(); err != nil {
 		// Non-fatal: the copy succeeded, auto-clear just won't happen.
+		// Surface it so the user knows why the clipboard won't clear.
+		fmt.Fprintf(os.Stderr, "clipboard auto-clear: failed to start: %v\n", err)
 		return nil
 	}
 
-	// Reap the child process so it doesn't become a zombie.
-	// Exit status is irrelevant — the copy already succeeded.
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			fmt.Fprintf(os.Stderr, "clipboard auto-clear: %v\n", err)
-		}
-	}()
+	// Release the Go-side process handle. sesh typically exits before the
+	// child's `sleep N` returns, so Wait() here would rarely run anyway —
+	// the child is forked into its own process group (Setpgid above) and is
+	// reparented to PID 1 on sesh's exit, which reaps it.
+	if err := cmd.Process.Release(); err != nil {
+		fmt.Fprintf(os.Stderr, "clipboard auto-clear: failed to release process handle: %v\n", err)
+	}
 
 	return nil
 }

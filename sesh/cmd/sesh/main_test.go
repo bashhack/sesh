@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
@@ -593,5 +597,157 @@ func TestRun_FlagValidation(t *testing.T) {
 				tc.checkStderr(t, h.stderr.String())
 			}
 		})
+	}
+}
+
+// flockMockKC satisfies the two-method interface that database.KeychainSource
+// consumes. It is goroutine-safe and tracks call counts so tests can assert on
+// how many times ensureMasterKey crossed into the generate-and-store branch.
+//
+// Fields are ordered pointer-heavy first so govet's fieldalignment is happy.
+type flockMockKC struct {
+	getErr error
+	setErr error
+
+	// beforeGet fires before GetSecret reads the stored state. The callback
+	// receives the current call count (1-indexed) so tests can simulate a
+	// concurrent state change between specific calls — e.g. inject a stored
+	// key right before ensureMasterKey's post-lock double-check.
+	beforeGet func(callNum int32)
+
+	stored []byte
+	mu     sync.Mutex
+
+	getCount atomic.Int32
+	setCount atomic.Int32
+}
+
+func (m *flockMockKC) GetSecret(_, _ string) ([]byte, error) {
+	n := m.getCount.Add(1)
+	if fn := m.beforeGet; fn != nil {
+		fn(n)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	if m.stored == nil {
+		return nil, keychain.ErrNotFound
+	}
+	return append([]byte{}, m.stored...), nil
+}
+
+func (m *flockMockKC) SetSecret(_, _ string, secret []byte) error {
+	m.setCount.Add(1)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.setErr != nil {
+		return m.setErr
+	}
+	m.stored = append([]byte{}, secret...)
+	return nil
+}
+
+func TestEnsureMasterKey_FastPath(t *testing.T) {
+	kc := &flockMockKC{stored: bytes.Repeat([]byte{0xAB}, 32)}
+	ks := database.NewKeychainSource(kc, "testuser")
+
+	if err := ensureMasterKey(ks, t.TempDir()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := kc.setCount.Load(); got != 0 {
+		t.Errorf("SetSecret call count = %d, want 0 on fast path", got)
+	}
+	if got := kc.getCount.Load(); got != 1 {
+		t.Errorf("GetSecret call count = %d, want 1 (fast path only)", got)
+	}
+}
+
+func TestEnsureMasterKey_SlowPath_Generates(t *testing.T) {
+	kc := &flockMockKC{}
+	ks := database.NewKeychainSource(kc, "testuser")
+
+	if err := ensureMasterKey(ks, t.TempDir()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := kc.setCount.Load(); got != 1 {
+		t.Errorf("SetSecret call count = %d, want 1 on slow path", got)
+	}
+	if len(kc.stored) != 32 {
+		t.Errorf("stored key length = %d, want 32", len(kc.stored))
+	}
+}
+
+func TestEnsureMasterKey_SlowPath_DoubleCheck(t *testing.T) {
+	// The fast-path GetSecret returns ErrNotFound, but by the time we
+	// acquire the flock another process has stored a key. The post-lock
+	// re-read must see it and skip generation — otherwise we'd orphan
+	// whatever the other process already encrypted.
+	kc := &flockMockKC{}
+	kc.beforeGet = func(n int32) {
+		if n == 2 {
+			kc.mu.Lock()
+			kc.stored = bytes.Repeat([]byte{0xCD}, 32)
+			kc.mu.Unlock()
+		}
+	}
+	ks := database.NewKeychainSource(kc, "testuser")
+
+	if err := ensureMasterKey(ks, t.TempDir()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := kc.setCount.Load(); got != 0 {
+		t.Errorf("SetSecret call count = %d, want 0 when double-check finds a key", got)
+	}
+}
+
+func TestEnsureMasterKey_NonNotFoundErrorIsSurfaced(t *testing.T) {
+	sentinel := errors.New("keychain locked")
+	kc := &flockMockKC{getErr: sentinel}
+	ks := database.NewKeychainSource(kc, "testuser")
+
+	err := ensureMasterKey(ks, t.TempDir())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// Must not generate a new key when the read failure is ambiguous —
+	// doing so would orphan the existing (undecryptable) data.
+	if got := kc.setCount.Load(); got != 0 {
+		t.Errorf("SetSecret call count = %d, want 0 on ambiguous get error", got)
+	}
+}
+
+func TestEnsureMasterKey_Concurrent(t *testing.T) {
+	// Stress-test the flock: N goroutines race through ensureMasterKey
+	// against a shared keychain. Exactly one must generate and store.
+	kc := &flockMockKC{}
+	ks := database.NewKeychainSource(kc, "testuser")
+	dataDir := t.TempDir()
+
+	const n = 20
+	errs := make(chan error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range n {
+		wg.Go(func() {
+			<-start
+			errs <- ensureMasterKey(ks, dataDir)
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if got := kc.setCount.Load(); got != 1 {
+		t.Errorf("SetSecret call count = %d across %d concurrent invocations, want exactly 1", got, n)
+	}
+	if len(kc.stored) != 32 {
+		t.Errorf("stored key length = %d, want 32", len(kc.stored))
 	}
 }

@@ -246,6 +246,54 @@ flowchart LR
 
 Each entry is a keychain item keyed by `{namespace}/{segments}` (built by `keyformat.Build`, parsed by `keyformat.Parse`). The account field is the OS username. AWS stores both a TOTP secret (`sesh-aws/{profile}`) and an MFA serial (`sesh-aws-serial/{profile}`) per profile.
 
+**SQLite Data Model**
+
+The SQLite backend (`SESH_BACKEND=sqlite`) stores credentials in `<dataDir>/sesh/passwords.db` using the schema in `internal/database/schema.go`. `passwords_fts` is a virtual FTS5 index shadowing the `passwords` table; `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
+
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+erDiagram
+    passwords ||--|| passwords_fts : "FTS5 shadow (content='passwords')"
+    passwords }o..|| key_metadata : "key_version (logical)"
+    passwords ||..o{ audit_log : "entry_id (logical, nullable)"
+
+    passwords {
+        TEXT id PK
+        TEXT service
+        TEXT account
+        TEXT entry_type
+        BLOB encrypted_data "AES-256-GCM ciphertext"
+        BLOB salt "per-entry, 16 bytes"
+        INTEGER key_version "→ key_metadata.version"
+        TEXT metadata "description / TOTP params"
+        DATETIME created_at
+        DATETIME updated_at
+    }
+
+    key_metadata {
+        INTEGER version PK
+        TEXT algorithm "argon2id"
+        TEXT params "JSON: time/memory/threads/key_len"
+        BLOB salt "master-key salt"
+        DATETIME created_at
+        BOOLEAN active
+    }
+
+    audit_log {
+        INTEGER id PK
+        TEXT event_type "store/retrieve/delete/..."
+        TEXT entry_id "→ passwords.id, nullable for auth events"
+        TEXT detail
+        DATETIME created_at
+    }
+
+    passwords_fts {
+        TEXT service "indexed"
+        TEXT account "indexed"
+        TEXT metadata "indexed"
+    }
+```
+
 #### TOTP Generation
 
 **Dual Code Generation with Params**
