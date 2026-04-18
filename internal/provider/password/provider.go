@@ -53,6 +53,13 @@ func (p *Provider) Name() string         { return "password" }
 func (p *Provider) Description() string  { return "Secure password manager" }
 func (p *Provider) GetSetupHandler() any { return nil }
 
+// SuppressActionFraming opts out of the app's generic
+// "Generating credentials… / Credentials acquired in Xs" wrapper. The
+// password provider dispatches many sub-actions (store/search/export/
+// import/etc.) that don't fit the acquire-a-time-limited-credential
+// framing and produce their own status via DisplayInfo.
+func (p *Provider) SuppressActionFraming() bool { return true }
+
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.action, "action", "", "Action to perform (store, get, generate, search, export, import, totp-store, totp-generate)")
 	fs.StringVar(&p.service, "service-name", "", "Service name")
@@ -266,6 +273,17 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 			return provider.Credentials{}, fmt.Errorf("check existing entry: %w", err)
 		}
 		if exists {
+			// Interactive prompts require a TTY. With piped stdin the
+			// "answer" would silently consume piped content (e.g. the
+			// note body) — fail loudly and direct the caller to --force.
+			if !term.IsTerminal(int(os.Stdin.Fd())) {
+				who := ""
+				if p.username != "" {
+					who = fmt.Sprintf(" (%s)", p.username)
+				}
+				return provider.Credentials{}, fmt.Errorf("entry already exists for %s%s; re-run with --force to overwrite",
+					p.service, who)
+			}
 			fmt.Fprintf(os.Stderr, "Entry already exists for %s", p.service)
 			if p.username != "" {
 				fmt.Fprintf(os.Stderr, " (%s)", p.username)
@@ -284,9 +302,14 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 	// Read input — method depends on entry type
 	var pw []byte
 	if et == password.EntryTypeNote {
-		// Secure notes: read multi-line from stdin until EOF.
-		// Works with pipes (echo "..." | sesh ...) and heredocs.
-		fmt.Fprintf(os.Stderr, "Enter note for %s (end with Ctrl+D):\n", p.service)
+		// Secure notes: read multi-line from stdin until EOF. Works with
+		// pipes (echo "..." | sesh ...) and heredocs. Only show the
+		// prompt when stdin is an interactive terminal — for piped input
+		// the content is already queued and a "please type" prompt would
+		// be misleading.
+		if term.IsTerminal(int(os.Stdin.Fd())) {
+			fmt.Fprintf(os.Stderr, "Enter note for %s (end with Ctrl+D):\n", p.service)
+		}
 		var err error
 		pw, err = io.ReadAll(os.Stdin)
 		if err != nil {
@@ -367,11 +390,22 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 		}, nil
 	}
 
+	if p.show {
+		// Print the generated password so the user can actually use it.
+		// Without --show the value only reaches the user via --clip or
+		// a follow-up `get --show`, which is a strange default for an
+		// explicitly-interactive `generate` invocation.
+		return provider.Credentials{
+			Provider:    p.Name(),
+			DisplayInfo: fmt.Sprintf("✅ Generated and stored %s for %s\n%s", et, desc, string(generated)),
+		}, nil
+	}
+
 	return provider.Credentials{
 		Provider:             p.Name(),
 		CopyValue:            string(generated),
 		ClipboardDescription: fmt.Sprintf("generated password for %s", desc),
-		DisplayInfo:          fmt.Sprintf("✅ Generated and stored %s for %s\n💡 Use --clip to copy the password", et, desc),
+		DisplayInfo:          fmt.Sprintf("✅ Generated and stored %s for %s\n💡 Use --show to display it or --clip to copy", et, desc),
 	}, nil
 }
 

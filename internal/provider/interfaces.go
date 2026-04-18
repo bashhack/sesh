@@ -79,6 +79,16 @@ type SubshellDecider interface {
 	ShouldUseSubshell() bool
 }
 
+// QuietProvider is an optional interface for providers that should not
+// print the app's generic "Generating credentials… / Credentials acquired
+// in Xs" framing. Useful for providers whose actions aren't a single
+// time-limited credential acquisition (e.g. password managers with store
+// / search / export / import sub-actions) and who produce their own
+// action-specific status via Credentials.DisplayInfo.
+type QuietProvider interface {
+	SuppressActionFraming() bool
+}
+
 // SubshellProvider is an optional interface that providers can implement
 // if they support launching a customized subshell environment
 type SubshellProvider interface {

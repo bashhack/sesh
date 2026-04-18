@@ -1,6 +1,7 @@
 package password
 
 import (
+	"flag"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/keychain"
@@ -192,6 +193,35 @@ func TestGetSetupHandler(t *testing.T) {
 	// returns nil so the setup dispatcher doesn't try to invoke one.
 	if h := NewProvider(&mocks.MockProvider{}).GetSetupHandler(); h != nil {
 		t.Errorf("GetSetupHandler() = %v, want nil", h)
+	}
+}
+
+func TestSuppressActionFraming(t *testing.T) {
+	if !NewProvider(&mocks.MockProvider{}).SuppressActionFraming() {
+		t.Error("SuppressActionFraming() = false, want true")
+	}
+}
+
+func TestSetupFlags(t *testing.T) {
+	p := NewProvider(&mocks.MockProvider{})
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	if err := p.SetupFlags(fs); err != nil {
+		t.Fatalf("SetupFlags() unexpected error: %v", err)
+	}
+	if err := fs.Parse([]string{"--action", "store", "--show", "--length", "32"}); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if p.action != "store" {
+		t.Errorf("action = %q, want store", p.action)
+	}
+	if !p.show {
+		t.Error("show flag should have been set")
+	}
+	if p.pwLength != 32 {
+		t.Errorf("pwLength = %d, want 32", p.pwLength)
+	}
+	if p.User == "" {
+		t.Error("User should default to current OS user")
 	}
 }
 

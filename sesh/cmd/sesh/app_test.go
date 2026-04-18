@@ -738,9 +738,10 @@ func TestApp_PrintCredentials(t *testing.T) {
 	fixedNow := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	tests := map[string]struct {
-		creds      provider.Credentials
-		wantStdout []string
-		wantStderr []string
+		creds         provider.Credentials
+		wantStdout    []string
+		wantStderr    []string
+		notWantStderr []string // substrings that must NOT appear
 	}{
 		"aws credentials with MFA": {
 			creds: provider.Credentials{
@@ -775,9 +776,11 @@ func TestApp_PrintCredentials(t *testing.T) {
 				Variables:   map[string]string{},
 			},
 			wantStderr: []string{
-				"⏳ Expires at: unknown",
 				"TOTP code for github: 123456",
 			},
+			// TOTP codes don't expire in a session sense; omit the line
+			// entirely rather than printing "unknown".
+			notWantStderr: []string{"⏳ Expires at:"},
 		},
 		"expired credentials": {
 			creds: provider.Credentials{
@@ -805,9 +808,9 @@ func TestApp_PrintCredentials(t *testing.T) {
 				"# ----------------------------------------",
 			},
 			wantStderr: []string{
-				"⏳ Expires at: unknown",
 				"Test credentials",
 			},
+			notWantStderr: []string{"⏳ Expires at:"},
 		},
 		"minutes-only expiry": {
 			creds: provider.Credentials{
@@ -879,6 +882,11 @@ func TestApp_PrintCredentials(t *testing.T) {
 			for _, expected := range tc.wantStderr {
 				if !strings.Contains(stderr, expected) {
 					t.Errorf("PrintCredentials() stderr missing expected string: %q", expected)
+				}
+			}
+			for _, unwanted := range tc.notWantStderr {
+				if strings.Contains(stderr, unwanted) {
+					t.Errorf("PrintCredentials() stderr contains unwanted string: %q\nfull stderr:\n%s", unwanted, stderr)
 				}
 			}
 		})
