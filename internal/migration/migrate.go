@@ -17,6 +17,15 @@ var migratePrefixes = []string{
 	constants.PasswordServicePrefix,
 }
 
+// entryKey identifies a credential by its (service, account) pair. Used
+// to dedupe when overlapping prefixes — e.g. "sesh-aws" is a byte-prefix
+// of "sesh-aws-serial", so a SQLite-backed source's prefix-range ListEntries
+// would return the same serial entry under both prefixes.
+type entryKey struct {
+	service string
+	account string
+}
+
 // Result reports what happened during migration.
 type Result struct {
 	Errors   []string
@@ -34,6 +43,7 @@ type PlanEntry struct {
 // Plan scans the source for all sesh entries and returns what would be migrated.
 func Plan(source keychain.Provider) ([]PlanEntry, error) {
 	var plan []PlanEntry
+	seen := make(map[entryKey]bool)
 
 	for _, prefix := range migratePrefixes {
 		entries, err := source.ListEntries(prefix)
@@ -41,6 +51,11 @@ func Plan(source keychain.Provider) ([]PlanEntry, error) {
 			return nil, fmt.Errorf("list %s entries: %w", prefix, err)
 		}
 		for _, e := range entries {
+			k := entryKey{service: e.Service, account: e.Account}
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
 			plan = append(plan, PlanEntry{
 				Service:     e.Service,
 				Account:     e.Account,
@@ -56,6 +71,7 @@ func Plan(source keychain.Provider) ([]PlanEntry, error) {
 // Existing entries in dest are skipped (not overwritten).
 func Migrate(source, dest keychain.Provider) (Result, error) {
 	var result Result
+	seen := make(map[entryKey]bool)
 
 	for _, prefix := range migratePrefixes {
 		entries, err := source.ListEntries(prefix)
@@ -64,6 +80,11 @@ func Migrate(source, dest keychain.Provider) (Result, error) {
 		}
 
 		for _, entry := range entries {
+			k := entryKey{service: entry.Service, account: entry.Account}
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
 			// Check destination before reading the source secret so skipped
 			// entries never materialize plaintext in memory. Only a confirmed
 			// ErrNotFound permits writing; other errors (I/O, decrypt,

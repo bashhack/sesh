@@ -86,12 +86,19 @@ func (m *MockProvider) GenerateConsecutiveCodesForTime(secret string, baseTime t
 	return m.GenerateConsecutiveCodesForTimeFunc(secret, baseTime)
 }
 
-// GenerateConsecutiveCodesBytesWithParams returns consecutive TOTP codes using custom params, or delegates to GenerateConsecutiveCodesBytes if the func is not set.
+// GenerateConsecutiveCodesBytesWithParams returns consecutive TOTP codes
+// using custom params. When the *Func hook is unset it falls back to
+// GenerateConsecutiveCodesBytes only for default params; non-default
+// params with no hook return zero values so tests of params-aware code
+// can't accidentally pass through the non-params mock.
 func (m *MockProvider) GenerateConsecutiveCodesBytesWithParams(secret []byte, params totp.Params) (current, next string, err error) {
-	if m.GenerateConsecutiveCodesBytesWithParamsFunc == nil {
+	if m.GenerateConsecutiveCodesBytesWithParamsFunc != nil {
+		return m.GenerateConsecutiveCodesBytesWithParamsFunc(secret, params)
+	}
+	if params.IsDefault() {
 		return m.GenerateConsecutiveCodesBytes(secret)
 	}
-	return m.GenerateConsecutiveCodesBytesWithParamsFunc(secret, params)
+	return "", "", nil
 }
 
 // GenerateConsecutiveCodesForTimeBytes returns consecutive TOTP codes from a byte slice for a given base time, or zero values if the func is not set.

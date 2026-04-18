@@ -802,8 +802,10 @@ func (h *TOTPSetupHandler) Setup() error {
 		return fmt.Errorf("failed to store secret in keychain: %w", err)
 	}
 
-	// Store TOTP params as JSON description if non-default (algorithm, digits, period from QR).
-	// Otherwise store a human-readable description.
+	// Build the description. For non-default QR params (algorithm, digits,
+	// period) this is load-bearing metadata — GenerateTOTPCode reads it
+	// back to reproduce the correct codes. For default params we fall
+	// back to a cosmetic human-readable label.
 	params := totp.Params{
 		Issuer:    info.Issuer,
 		Algorithm: info.Algorithm,
@@ -811,15 +813,22 @@ func (h *TOTPSetupHandler) Setup() error {
 		Period:    info.Period,
 	}
 	description := params.MarshalDescription()
-	if description == "" {
+	paramsAreLoadBearing := description != ""
+	if !paramsAreLoadBearing {
 		description = fmt.Sprintf("TOTP for %s", serviceName)
 		if profile != "" {
 			description = fmt.Sprintf("TOTP for %s profile %s", serviceName, profile)
 		}
 	}
 
-	err = h.keychainProvider.SetDescription(serviceKey, user, description)
-	if err != nil {
+	if err := h.keychainProvider.SetDescription(serviceKey, user, description); err != nil {
+		if paramsAreLoadBearing {
+			// Fail closed: the entry would otherwise persist with the
+			// secret but no params, and every future code generation
+			// would silently fall back to defaults and produce wrong
+			// codes for the issuer's expected configuration.
+			return fmt.Errorf("stored TOTP secret but failed to persist non-default params (subsequent codes would fall back to defaults): %w", err)
+		}
 		fmt.Println("⚠️ Warning: Failed to store description. This entry might not appear when listing available TOTP services.")
 	}
 

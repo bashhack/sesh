@@ -2,7 +2,9 @@ package database
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -43,6 +45,46 @@ func TestEncryptDecrypt(t *testing.T) {
 
 			if !bytes.Equal(got, tc.plaintext) {
 				t.Fatalf("round-trip failed: got %q, want %q", got, tc.plaintext)
+			}
+		})
+	}
+}
+
+func TestEncrypt_RejectsWrongKeyLength(t *testing.T) {
+	// AES-256 means 32-byte key. aes.NewCipher would otherwise silently
+	// accept 16 or 24 bytes (AES-128/192); reject at our boundary so the
+	// contract in the doc comment actually holds.
+	for _, n := range []int{0, 16, 24, 31, 33, 64} {
+		t.Run(fmt.Sprintf("key=%d", n), func(t *testing.T) {
+			key := bytes.Repeat([]byte{0xAB}, n)
+			_, err := Encrypt(key, []byte("plaintext"))
+			if err == nil {
+				t.Fatalf("Encrypt(%d-byte key) returned nil error", n)
+			}
+			if !strings.Contains(err.Error(), "AES-256") {
+				t.Errorf("error should mention AES-256 requirement, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestDecrypt_RejectsWrongKeyLength(t *testing.T) {
+	// Produce a valid ciphertext first so we isolate the key-length
+	// rejection from any "ciphertext too short" path.
+	validKey := bytes.Repeat([]byte{0x00}, 32)
+	ct, err := Encrypt(validKey, []byte("plaintext"))
+	if err != nil {
+		t.Fatalf("setup Encrypt: %v", err)
+	}
+	for _, n := range []int{0, 16, 24, 31, 33, 64} {
+		t.Run(fmt.Sprintf("key=%d", n), func(t *testing.T) {
+			key := bytes.Repeat([]byte{0xAB}, n)
+			_, err := Decrypt(key, ct)
+			if err == nil {
+				t.Fatalf("Decrypt(%d-byte key) returned nil error", n)
+			}
+			if !strings.Contains(err.Error(), "AES-256") {
+				t.Errorf("error should mention AES-256 requirement, got: %v", err)
 			}
 		})
 	}

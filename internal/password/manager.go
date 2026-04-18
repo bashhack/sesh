@@ -5,7 +5,6 @@ package password
 import (
 	"fmt"
 	"log"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -74,14 +73,10 @@ type storeOptions struct {
 
 // WithTimestamps preserves the given create/update timestamps on backends
 // that implement keychain.TimestampedStore (the SQLite store does; the
-// macOS keychain backend does not — there it degrades silently to "now").
-// A zero-valued time.Time for either argument is treated as "unset" and
-// falls back to the current time for that field.
-//
-// Callers: Import uses this to round-trip audit timestamps through
-// export/import; future backend-consolidation migrations (Phase 7) will
-// use it to preserve "when was this first stored" history when moving
-// entries into the unified store.
+// macOS keychain backend does not — there the option is silently ignored
+// and the current time is used). A zero-valued time.Time on either
+// argument is treated as "unset" and falls back to the current time for
+// that field.
 func WithTimestamps(createdAt, updatedAt time.Time) StoreOption {
 	return func(o *storeOptions) {
 		o.createdAt = createdAt
@@ -110,9 +105,23 @@ func (m *Manager) StorePassword(service, username string, password []byte, entry
 	preserveTimestamps := !so.createdAt.IsZero() || !so.updatedAt.IsZero()
 	ts, timestampAware := m.keychain.(keychain.TimestampedStore)
 
+	// Resolve zero fields at this boundary so the WithTimestamps contract
+	// ("zero = use now") is honored by Manager itself, independent of any
+	// normalization a specific TimestampedStore implementation does.
+	createdAt, updatedAt := so.createdAt, so.updatedAt
+	if preserveTimestamps {
+		now := time.Now().UTC()
+		if createdAt.IsZero() {
+			createdAt = now
+		}
+		if updatedAt.IsZero() {
+			updatedAt = now
+		}
+	}
+
 	// Store the password securely.
 	if timestampAware && preserveTimestamps {
-		err = ts.SetSecretAt(m.user, serviceKey, passwordCopy, so.createdAt, so.updatedAt)
+		err = ts.SetSecretAt(m.user, serviceKey, passwordCopy, createdAt, updatedAt)
 	} else {
 		err = m.keychain.SetSecret(m.user, serviceKey, passwordCopy)
 	}
@@ -129,7 +138,7 @@ func (m *Manager) StorePassword(service, username string, password []byte, entry
 	}
 
 	if timestampAware && preserveTimestamps {
-		err = ts.SetDescriptionAt(serviceKey, m.user, description, so.updatedAt)
+		err = ts.SetDescriptionAt(serviceKey, m.user, description, updatedAt)
 	} else {
 		err = m.keychain.SetDescription(serviceKey, m.user, description)
 	}
@@ -193,15 +202,18 @@ func (m *Manager) StoreTOTPSecretWithParams(service, username, secret string, pa
 		return err
 	}
 
-	// Store params as description if non-default
+	// For non-default params, the description carries algorithm/digits/
+	// period needed to regenerate correct codes later — it is load-bearing
+	// metadata, not a cosmetic label. Failures must surface; otherwise the
+	// entry persists with defaults and silently produces wrong codes.
 	desc := params.MarshalDescription()
 	if desc != "" {
 		serviceKey, err := m.generateServiceKey(service, username, EntryTypeTOTP)
 		if err != nil {
-			return nil // Secret stored, metadata is best-effort
+			return fmt.Errorf("stored TOTP secret but failed to build service key for params: %w", err)
 		}
 		if descErr := m.keychain.SetDescription(serviceKey, m.user, desc); descErr != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to set description: %v\n", descErr)
+			return fmt.Errorf("stored TOTP secret but failed to persist params (subsequent codes would fall back to defaults): %w", descErr)
 		}
 	}
 
@@ -269,9 +281,36 @@ func (m *Manager) ListEntries() ([]Entry, error) {
 	return entries, nil
 }
 
-// GetPasswordsByService returns all entries for a given service name.
+// GetPasswordsByService returns password entries (EntryTypePassword only)
+// for a given service name. Use ListEntriesFiltered directly if the caller
+// needs other types.
 func (m *Manager) GetPasswordsByService(service string) ([]Entry, error) {
-	return m.ListEntriesFiltered(ListFilter{Service: service})
+	return m.ListEntriesFiltered(ListFilter{Service: service, EntryType: EntryTypePassword})
+}
+
+// EntryExists reports whether an entry is stored at (service, username,
+// entryType) without reading or decrypting the secret. Use this for
+// existence probes (e.g. overwrite prompts, migration conflict checks)
+// instead of GetPassword + zero — cheaper, never touches plaintext, and
+// returns a clean tri-state (exists / absent / backend error).
+func (m *Manager) EntryExists(service, username string, entryType EntryType) (bool, error) {
+	serviceKey, err := m.generateServiceKey(service, username, entryType)
+	if err != nil {
+		return false, fmt.Errorf("failed to build service key: %w", err)
+	}
+	entries, err := m.keychain.ListEntries(serviceKey)
+	if err != nil {
+		return false, fmt.Errorf("failed to list entries: %w", err)
+	}
+	// ListEntries is a prefix query in the SQLite backend — require exact
+	// (service, account) match so a sibling like "github/alice" vs
+	// "github/alicia" or a cross-user entry can't register as a hit.
+	for _, e := range entries {
+		if e.Service == serviceKey && e.Account == m.user {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // SortField controls the sort order of listed entries.

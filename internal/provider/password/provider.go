@@ -259,18 +259,21 @@ func (p *Provider) effectiveEntryType() password.EntryType {
 func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, error) {
 	et := p.effectiveEntryType()
 
-	// Check for existing entry and confirm overwrite unless --force
+	// Check for existing entry and confirm overwrite unless --force.
 	if !p.force {
-		_, err := mgr.GetPassword(p.service, p.username, et)
-		if err == nil {
+		exists, err := mgr.EntryExists(p.service, p.username, et)
+		if err != nil {
+			return provider.Credentials{}, fmt.Errorf("check existing entry: %w", err)
+		}
+		if exists {
 			fmt.Fprintf(os.Stderr, "Entry already exists for %s", p.service)
 			if p.username != "" {
 				fmt.Fprintf(os.Stderr, " (%s)", p.username)
 			}
 			fmt.Fprintf(os.Stderr, ". Overwrite? [y/N]: ")
-			answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
-			if err != nil {
-				return provider.Credentials{}, fmt.Errorf("read confirmation: %w", err)
+			answer, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
+			if readErr != nil {
+				return provider.Credentials{}, fmt.Errorf("read confirmation: %w", readErr)
 			}
 			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
 				return provider.Credentials{}, fmt.Errorf("store cancelled")
@@ -496,9 +499,19 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 			Digits:    info.Digits,
 			Period:    info.Period,
 		}
+		// The Key URI Format labels an entry as "issuer:account"; if the
+		// user didn't pass --username explicitly, inherit the account
+		// from the QR so it's stored/indexed under the right identity
+		// rather than an empty username. An explicit flag always wins.
+		if p.username == "" && info.Account != "" {
+			p.username = info.Account
+		}
 		fmt.Fprintf(os.Stderr, "✅ QR code scanned successfully\n")
 		if info.Issuer != "" {
 			fmt.Fprintf(os.Stderr, "   Issuer: %s\n", info.Issuer)
+		}
+		if info.Account != "" {
+			fmt.Fprintf(os.Stderr, "   Account: %s\n", info.Account)
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "Enter TOTP secret for %s", p.service)
@@ -562,7 +575,12 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 		EntryType: password.EntryType(p.entryType),
 	}
 
-	var w io.Writer
+	// Default export target is os.Stdout so callers can redirect with
+	// `sesh ... --action export > backup.json`. Status text is returned
+	// via DisplayInfo, which the caller routes to stderr; keeping status
+	// off stdout preserves the data stream for shell redirection.
+	var w io.Writer = os.Stdout
+	dest := "stdout"
 	if p.file != "" {
 		f, err := os.OpenFile(p.file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
@@ -574,23 +592,12 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 			}
 		}()
 		w = f
-	} else {
-		var buf strings.Builder
-		w = &buf
-		defer func() {
-			// Print to stderr since stdout is for eval-safe output
-			fmt.Fprint(os.Stderr, buf.String())
-		}()
+		dest = p.file
 	}
 
 	count, err := mgr.Export(w, opts)
 	if err != nil {
 		return provider.Credentials{}, err
-	}
-
-	dest := "stdout"
-	if p.file != "" {
-		dest = p.file
 	}
 
 	return provider.Credentials{

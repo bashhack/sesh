@@ -229,3 +229,28 @@ func TestDefaultProviderGenerateForTimeBytes(t *testing.T) {
 		t.Errorf("Expected 6 digit code, got %s (length %d)", code, len(code))
 	}
 }
+
+func TestDefaultProviderGenerateConsecutiveCodesBytesWithParams(t *testing.T) {
+	secret := []byte("JBSWY3DPEHPK3PXP")
+	provider := NewDefaultProvider()
+
+	t.Run("default params produces 6-digit codes", func(t *testing.T) {
+		cur, next, err := provider.GenerateConsecutiveCodesBytesWithParams(secret, Params{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cur) != 6 || len(next) != 6 {
+			t.Errorf("default params: got cur=%q next=%q, want 6-digit", cur, next)
+		}
+	})
+
+	t.Run("8-digit params produces 8-digit codes", func(t *testing.T) {
+		cur, next, err := provider.GenerateConsecutiveCodesBytesWithParams(secret, Params{Digits: 8})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cur) != 8 || len(next) != 8 {
+			t.Errorf("8-digit params: got cur=%q next=%q, want 8-digit", cur, next)
+		}
+	})
+}

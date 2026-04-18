@@ -278,6 +278,12 @@ func GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (cu
 	return current, next, nil
 }
 
+// MaxTOTPPeriodSeconds caps TOTP period values passed through Params. One
+// day is already far beyond anything real issuers use (30s standard, rarely
+// up to a few minutes) and keeps params.Period * time.Second well within
+// int64 nanosecond range, preventing overflow into negative durations.
+const MaxTOTPPeriodSeconds = 86400
+
 // GenerateConsecutiveCodesBytesWithParams generates consecutive codes using non-standard
 // TOTP parameters. Falls back to defaults (6 digits, 30s, SHA1) for zero-value params.
 func GenerateConsecutiveCodesBytesWithParams(secret []byte, params Params) (current, next string, err error) {
@@ -287,6 +293,10 @@ func GenerateConsecutiveCodesBytesWithParams(secret []byte, params Params) (curr
 
 	if len(secret) == 0 {
 		return "", "", fmt.Errorf("empty secret provided")
+	}
+
+	if params.Period > MaxTOTPPeriodSeconds {
+		return "", "", fmt.Errorf("TOTP period %d seconds exceeds maximum of %d", params.Period, MaxTOTPPeriodSeconds)
 	}
 
 	secretCopy := make([]byte, len(secret))

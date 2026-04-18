@@ -8,6 +8,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/totp"
 )
 
 func TestNewManager(t *testing.T) {
@@ -290,6 +291,151 @@ func TestStoreTOTPSecret(t *testing.T) {
 			err := manager.StoreTOTPSecret(tc.service, tc.username, tc.secret)
 			if err != nil {
 				t.Fatalf("StoreTOTPSecret failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestStoreTOTPSecretWithParams(t *testing.T) {
+	// Covers the non-default-params branch: description is serialized and
+	// SetDescription is invoked with the Params JSON.
+	mockKeychain := &mocks.MockProvider{}
+	manager := NewManager(mockKeychain, "alice")
+
+	var gotDesc string
+	mockKeychain.SetDescriptionFunc = func(_, _, description string) error {
+		gotDesc = description
+		return nil
+	}
+
+	params := totp.Params{Algorithm: "SHA256", Digits: 8, Period: 60}
+	if err := manager.StoreTOTPSecretWithParams("github", "alice", "JBSWY3DPEHPK3PXP", params); err != nil {
+		t.Fatalf("StoreTOTPSecretWithParams: %v", err)
+	}
+
+	if !strings.Contains(gotDesc, `"algorithm":"SHA256"`) {
+		t.Errorf("description should carry params JSON, got %q", gotDesc)
+	}
+	if !strings.Contains(gotDesc, `"digits":8`) {
+		t.Errorf("description missing digits, got %q", gotDesc)
+	}
+}
+
+func TestStoreTOTPSecretWithParams_InvalidSecret(t *testing.T) {
+	manager := NewManager(&mocks.MockProvider{}, "alice")
+	err := manager.StoreTOTPSecretWithParams("github", "alice", "not-base32!@#", totp.Params{Digits: 8})
+	if err == nil || !strings.Contains(err.Error(), "invalid TOTP secret") {
+		t.Errorf("want invalid-secret error, got %v", err)
+	}
+}
+
+func TestStoreTOTPSecretWithParams_DescriptionFailureSurfaces(t *testing.T) {
+	// Non-default params live in the description. If SetDescription fails,
+	// the entry would persist with defaults and silently produce wrong
+	// codes forever — the caller must see the failure.
+	var descCallCount int
+	mockKeychain := &mocks.MockProvider{
+		SetDescriptionFunc: func(_, _, description string) error {
+			descCallCount++
+			// First call (from StorePassword, cosmetic label) succeeds;
+			// second call (the params JSON, load-bearing) fails.
+			if descCallCount == 2 {
+				return errors.New("simulated keychain write failure")
+			}
+			return nil
+		},
+	}
+	manager := NewManager(mockKeychain, "alice")
+
+	err := manager.StoreTOTPSecretWithParams("github", "alice", "JBSWY3DPEHPK3PXP", totp.Params{Algorithm: "SHA256", Digits: 8, Period: 60})
+	if err == nil {
+		t.Fatal("expected error when params description write fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to persist params") {
+		t.Errorf("error should mention params persistence failure, got: %v", err)
+	}
+}
+
+func TestStoreTOTPSecretWithParams_DefaultParamsSkipsDescription(t *testing.T) {
+	// Zero-valued params + no issuer ⇒ nothing to persist, so a failing
+	// SetDescription on the params path must not reach this function.
+	// StorePassword's cosmetic description write still runs but is
+	// non-fatal upstream; we only check that the params write is skipped.
+	var paramDescWriteAttempted bool
+	mockKeychain := &mocks.MockProvider{
+		SetDescriptionFunc: func(_, _, description string) error {
+			// Params JSON starts with {; the generic label starts with totp
+			if strings.HasPrefix(description, "{") {
+				paramDescWriteAttempted = true
+			}
+			return nil
+		},
+	}
+	manager := NewManager(mockKeychain, "alice")
+
+	if err := manager.StoreTOTPSecretWithParams("github", "alice", "JBSWY3DPEHPK3PXP", totp.Params{}); err != nil {
+		t.Fatalf("StoreTOTPSecretWithParams(default): %v", err)
+	}
+	if paramDescWriteAttempted {
+		t.Error("default params should not trigger a params-description write")
+	}
+}
+
+func TestGetTOTPParams(t *testing.T) {
+	const user = "alice"
+	const svcKey = "sesh-password/totp/github/alice"
+
+	tests := map[string]struct {
+		entries []keychain.KeychainEntry
+		listErr error
+		want    totp.Params
+	}{
+		"no entries returns zero params": {
+			entries: nil,
+			want:    totp.Params{},
+		},
+		"list error returns zero params": {
+			listErr: errors.New("boom"),
+			want:    totp.Params{},
+		},
+		"service mismatch returns zero params (prefix sibling)": {
+			// ListEntries is a prefix query — a longer service must not
+			// be accepted as the params source.
+			entries: []keychain.KeychainEntry{{
+				Service:     svcKey + "ish",
+				Account:     user,
+				Description: `{"digits":8}`,
+			}},
+			want: totp.Params{},
+		},
+		"account mismatch returns zero params": {
+			entries: []keychain.KeychainEntry{{
+				Service:     svcKey,
+				Account:     "not-alice",
+				Description: `{"digits":8}`,
+			}},
+			want: totp.Params{},
+		},
+		"exact match returns parsed params": {
+			entries: []keychain.KeychainEntry{{
+				Service:     svcKey,
+				Account:     user,
+				Description: `{"algorithm":"SHA512","digits":8,"period":60}`,
+			}},
+			want: totp.Params{Algorithm: "SHA512", Digits: 8, Period: 60},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			mockKeychain := &mocks.MockProvider{
+				ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
+					return tc.entries, tc.listErr
+				},
+			}
+			mgr := NewManager(mockKeychain, user)
+			if got := mgr.GetTOTPParams("github", user); got != tc.want {
+				t.Errorf("GetTOTPParams = %+v, want %+v", got, tc.want)
 			}
 		})
 	}
@@ -786,6 +932,9 @@ func TestSearchEntriesWithSearcher(t *testing.T) {
 }
 
 func TestGetPasswordsByService(t *testing.T) {
+	// GetPasswordsByService is password-only: non-password entries for
+	// the matching service (totp, api_key, secure_note) must be excluded,
+	// and entries for other services must be excluded.
 	mockKeychain := &mocks.MockProvider{}
 	testUser := "testuser"
 	manager := NewManager(mockKeychain, testUser)
@@ -793,7 +942,10 @@ func TestGetPasswordsByService(t *testing.T) {
 	mockKeychain.ListEntriesFunc = func(service string) ([]keychain.KeychainEntry, error) {
 		return []keychain.KeychainEntry{
 			{Service: "sesh-password/password/github/user1", Account: testUser},
-			{Service: "sesh-password/password/stripe/admin", Account: testUser},
+			{Service: "sesh-password/api_key/github/ci", Account: testUser},         // wrong type, same service
+			{Service: "sesh-password/totp/github/alice", Account: testUser},         // wrong type, same service
+			{Service: "sesh-password/secure_note/github/backup", Account: testUser}, // wrong type, same service
+			{Service: "sesh-password/password/stripe/admin", Account: testUser},     // right type, wrong service
 			{Service: "sesh-password/password/github/user2", Account: testUser},
 		}, nil
 	}
@@ -803,12 +955,75 @@ func TestGetPasswordsByService(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(entries) != 2 {
-		t.Fatalf("expected 2 github entries, got %d", len(entries))
+		t.Fatalf("expected 2 github password entries, got %d", len(entries))
 	}
 	for _, e := range entries {
 		if e.Service != "github" {
-			t.Errorf("expected service github, got %q", e.Service)
+			t.Errorf("service = %q, want github", e.Service)
 		}
+		if e.Type != EntryTypePassword {
+			t.Errorf("type = %q, want %q (GetPasswordsByService must filter out non-password types)", e.Type, EntryTypePassword)
+		}
+	}
+}
+
+func TestEntryExists(t *testing.T) {
+	const user = "alice"
+	const svcKey = "sesh-password/password/github/alice"
+
+	tests := map[string]struct {
+		listErr error
+		entries []keychain.KeychainEntry
+		want    bool
+		wantErr bool
+	}{
+		"exact match returns true": {
+			entries: []keychain.KeychainEntry{{Service: svcKey, Account: user}},
+			want:    true,
+		},
+		"no entries returns false": {
+			entries: nil,
+			want:    false,
+		},
+		"list error surfaces": {
+			listErr: errors.New("backend unreachable"),
+			wantErr: true,
+		},
+		"prefix sibling does not register": {
+			// "sesh-password/password/github/alicia" starts with the
+			// service prefix but is a different entry.
+			entries: []keychain.KeychainEntry{{Service: svcKey + "ish", Account: user}},
+			want:    false,
+		},
+		"cross-user entry does not register": {
+			entries: []keychain.KeychainEntry{{Service: svcKey, Account: "not-alice"}},
+			want:    false,
+		},
+		"exact match among siblings still returns true": {
+			entries: []keychain.KeychainEntry{
+				{Service: svcKey + "ish", Account: user},
+				{Service: svcKey, Account: user},
+			},
+			want: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			mockKeychain := &mocks.MockProvider{
+				ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
+					return tc.entries, tc.listErr
+				},
+			}
+			mgr := NewManager(mockKeychain, user)
+			got, err := mgr.EntryExists("github", user, EntryTypePassword)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("EntryExists = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

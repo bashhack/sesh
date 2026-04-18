@@ -154,6 +154,13 @@ func applyMigrations(db *sql.DB) error {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 
+	// Refuse to open a database whose schema was written by a newer sesh
+	// build. Silently proceeding would let reads/writes hit an unsupported
+	// schema and potentially corrupt or skip rows.
+	if applied > currentSchemaVersion {
+		return fmt.Errorf("database schema version %d is newer than this binary supports (max %d) — upgrade sesh or point at a matching database", applied, currentSchemaVersion)
+	}
+
 	for v := applied + 1; v <= currentSchemaVersion; v++ {
 		fn, ok := migrations[v]
 		if !ok {

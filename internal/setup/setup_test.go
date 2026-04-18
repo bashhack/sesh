@@ -1900,6 +1900,61 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 	}
 }
 
+func TestTOTPSetupHandler_Setup_NonDefaultParamsFailClosed(t *testing.T) {
+	// When the QR scan produced non-default params (algorithm/digits/
+	// period), the description is load-bearing — GenerateTOTPCode needs
+	// it to reproduce the right codes. A SetDescription failure here
+	// must NOT be downgraded to a warning; the entry would otherwise
+	// persist with the secret but fall back to defaults on every read.
+	origScanQRCodeFull := scanQRCodeFull
+	defer func() { scanQRCodeFull = origScanQRCodeFull }()
+	origValidate := validateAndNormalizeSecret
+	defer func() { validateAndNormalizeSecret = origValidate }()
+	origGenerate := generateConsecutiveCodes
+	defer func() { generateConsecutiveCodes = origGenerate }()
+	origGetUser := getCurrentUser
+	defer func() { getCurrentUser = origGetUser }()
+
+	scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
+		return qrcode.TOTPInfo{
+			Secret:    "JBSWY3DPEHPK3PXP",
+			Algorithm: "SHA256",
+			Digits:    8,
+			Period:    60,
+		}, nil
+	}
+	validateAndNormalizeSecret = func(s string) (string, error) { return s, nil }
+	generateConsecutiveCodes = func(s string) (string, string, error) {
+		return "11111111", "22222222", nil
+	}
+	getCurrentUser = func() (string, error) { return "testuser", nil }
+
+	mockKeychain := &mocks.MockProvider{
+		GetSecretStringFunc: func(_, _ string) (string, error) { return "", nil },
+		SetSecretStringFunc: func(_, _, _ string) error { return nil },
+		SetDescriptionFunc: func(_, _, _ string) error {
+			return errors.New("simulated keychain write failure")
+		},
+	}
+
+	handler := &TOTPSetupHandler{
+		reader:           bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n")),
+		keychainProvider: mockKeychain,
+	}
+
+	var err error
+	_ = testutil.CaptureStdout(func() {
+		err = handler.Setup()
+	})
+
+	if err == nil {
+		t.Fatal("expected error when non-default params cannot be persisted, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to persist non-default params") {
+		t.Errorf("error should mention params persistence failure, got: %v", err)
+	}
+}
+
 func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 	// Save original functions
 	origGetCurrentUser := getCurrentUser

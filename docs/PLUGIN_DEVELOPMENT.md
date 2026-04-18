@@ -578,9 +578,15 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 }
 
 // loadTOTPParams reads stored params from the entry description (JSON).
+// ListEntries is a prefix query in the SQLite backend — verify the first
+// result matches the exact (service, account) we read the secret under so
+// a prefix sibling or a cross-user entry can't spoof the params.
 func (p *Provider) loadTOTPParams(serviceKey string) totp.Params {
     entries, err := p.keychain.ListEntries(serviceKey)
     if err != nil || len(entries) == 0 {
+        return totp.Params{}
+    }
+    if entries[0].Service != serviceKey || entries[0].Account != p.User {
         return totp.Params{}
     }
     return totp.ParseParams(entries[0].Description)

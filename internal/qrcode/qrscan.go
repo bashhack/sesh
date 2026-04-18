@@ -114,7 +114,8 @@ func ScanQRCodeFull() (TOTPInfo, error) {
 	return DecodeQRCodeFromImageFull(img)
 }
 
-// ExtractSecretFromOTPAuthURL extracts just the secret from an otpauth URL
+// ExtractSecretFromOTPAuthURL extracts just the secret from an otpauth
+// URL. Only otpauth://totp/ URIs are accepted.
 func ExtractSecretFromOTPAuthURL(otpauthURL string) (string, error) {
 	if !strings.HasPrefix(otpauthURL, "otpauth://") {
 		return "", fmt.Errorf("not a valid otpauth URL: %s", otpauthURL)
@@ -123,6 +124,9 @@ func ExtractSecretFromOTPAuthURL(otpauthURL string) (string, error) {
 	parsedURL, err := url.Parse(otpauthURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse otpauth URL: %w", err)
+	}
+	if parsedURL.Host != "totp" {
+		return "", fmt.Errorf("unsupported OTP type %q (only TOTP is supported)", parsedURL.Host)
 	}
 
 	query := parsedURL.Query()
@@ -146,6 +150,8 @@ type TOTPInfo struct {
 
 // ExtractTOTPFullInfo extracts all TOTP parameters from an otpauth:// URI,
 // including algorithm, digits, and period for non-standard configurations.
+// Only otpauth://totp/ URIs are accepted; HOTP and other types are
+// rejected because sesh does not support counter-based OTP.
 func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
 	if !strings.HasPrefix(otpauthURL, "otpauth://") {
 		return TOTPInfo{}, fmt.Errorf("not a valid otpauth URL: %s", otpauthURL)
@@ -154,6 +160,9 @@ func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
 	parsedURL, err := url.Parse(otpauthURL)
 	if err != nil {
 		return TOTPInfo{}, fmt.Errorf("failed to parse otpauth URL: %w", err)
+	}
+	if parsedURL.Host != "totp" {
+		return TOTPInfo{}, fmt.Errorf("unsupported OTP type %q (only TOTP is supported)", parsedURL.Host)
 	}
 
 	query := parsedURL.Query()
@@ -172,23 +181,37 @@ func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
 	}
 	if p := query.Get("period"); p != "" {
 		n, err := strconv.Atoi(p)
-		if err != nil || n <= 0 {
-			return TOTPInfo{}, fmt.Errorf("invalid period value %q: must be a positive integer", p)
+		// Upper bound mirrors totp.MaxTOTPPeriodSeconds (1 day) — keeps
+		// params.Period * time.Second safely inside int64 nanoseconds.
+		// Hardcoded here to avoid a circular import from the qrcode package.
+		if err != nil || n <= 0 || n > 86400 {
+			return TOTPInfo{}, fmt.Errorf("invalid period value %q: must be a positive integer ≤ 86400", p)
 		}
 		info.Period = n
 	}
 
 	// Extract label. Per the Key URI Format, the label is "issuer:account"
-	// and the delimiter is the *first* unencoded colon — so use Cut, not
-	// LastIndex, to tolerate hand-rolled QRs with colons in the account.
-	label := strings.TrimPrefix(parsedURL.Path, "/")
-	info.Account = label
+	// and the delimiter is the *first literal* colon — an encoded %3A in
+	// the account must not split the label. parsedURL.Path would already
+	// have decoded %3A to `:`, so use EscapedPath() to split on the raw
+	// form, then URL-decode each half separately.
+	label := strings.TrimPrefix(parsedURL.EscapedPath(), "/")
+	rawAccount := label
 	if before, after, ok := strings.Cut(label, ":"); ok {
 		if info.Issuer == "" {
-			info.Issuer = before
+			issuer, unescErr := url.PathUnescape(before)
+			if unescErr != nil {
+				return TOTPInfo{}, fmt.Errorf("decode issuer in label: %w", unescErr)
+			}
+			info.Issuer = issuer
 		}
-		info.Account = after
+		rawAccount = after
 	}
+	account, err := url.PathUnescape(rawAccount)
+	if err != nil {
+		return TOTPInfo{}, fmt.Errorf("decode account in label: %w", err)
+	}
+	info.Account = account
 
 	if info.Secret == "" {
 		return TOTPInfo{}, fmt.Errorf("no secret found in QR code")

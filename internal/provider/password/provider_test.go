@@ -5,6 +5,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/password"
 )
 
 func TestName(t *testing.T) {
@@ -176,6 +177,47 @@ func TestDeleteEntryWithForce(t *testing.T) {
 	}
 	if !deleted {
 		t.Error("expected entry to be deleted")
+	}
+}
+
+func TestDescription(t *testing.T) {
+	p := NewProvider(&mocks.MockProvider{})
+	if p.Description() == "" {
+		t.Error("Description should not be empty")
+	}
+}
+
+func TestGetSetupHandler(t *testing.T) {
+	// Password provider has no interactive setup wizard — ensure it
+	// returns nil so the setup dispatcher doesn't try to invoke one.
+	if h := NewProvider(&mocks.MockProvider{}).GetSetupHandler(); h != nil {
+		t.Errorf("GetSetupHandler() = %v, want nil", h)
+	}
+}
+
+func TestEffectiveEntryType(t *testing.T) {
+	tests := map[string]password.EntryType{
+		"":            password.EntryTypePassword,
+		"password":    password.EntryTypePassword,
+		"api_key":     password.EntryTypeAPIKey,
+		"totp":        password.EntryTypeTOTP,
+		"secure_note": password.EntryTypeNote,
+	}
+	for entryType, want := range tests {
+		t.Run("type="+entryType, func(t *testing.T) {
+			p := &Provider{keychain: &mocks.MockProvider{}, entryType: entryType}
+			if got := p.effectiveEntryType(); got != want {
+				t.Errorf("effectiveEntryType(%q) = %v, want %v", entryType, got, want)
+			}
+		})
+	}
+}
+
+func TestDeleteEntry_InvalidID(t *testing.T) {
+	p := &Provider{keychain: &mocks.MockProvider{}, force: true}
+	err := p.DeleteEntry("not-a-valid-id")
+	if err == nil {
+		t.Fatal("expected error for malformed entry ID")
 	}
 }
 

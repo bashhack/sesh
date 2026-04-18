@@ -183,6 +183,92 @@ func TestMigrateReportsAmbiguousDestError(t *testing.T) {
 	}
 }
 
+// prefixMatchStore simulates a SQLite-backed source whose ListEntries is
+// a byte-prefix range query — so ListEntries("sesh-aws") also returns
+// any entries under "sesh-aws-serial" (since one is a prefix of the
+// other). Used to verify Plan/Migrate dedupe by (service, account).
+type prefixMatchStore struct {
+	data map[string][]byte
+}
+
+func (s *prefixMatchStore) GetSecret(_, service string) ([]byte, error) {
+	v, ok := s.data[service]
+	if !ok {
+		return nil, keychain.ErrNotFound
+	}
+	cp := make([]byte, len(v))
+	copy(cp, v)
+	return cp, nil
+}
+func (s *prefixMatchStore) SetSecret(_, _ string, _ []byte) error       { return nil }
+func (s *prefixMatchStore) GetSecretString(_, _ string) (string, error) { return "", nil }
+func (s *prefixMatchStore) SetSecretString(_, _, _ string) error        { return nil }
+func (s *prefixMatchStore) GetMFASerialBytes(_, _ string) ([]byte, error) {
+	return nil, keychain.ErrNotFound
+}
+func (s *prefixMatchStore) ListEntries(prefix string) ([]keychain.KeychainEntry, error) {
+	var out []keychain.KeychainEntry
+	for svc := range s.data {
+		if strings.HasPrefix(svc, prefix) {
+			out = append(out, keychain.KeychainEntry{Service: svc, Account: "testuser"})
+		}
+	}
+	return out, nil
+}
+func (s *prefixMatchStore) DeleteEntry(_, _ string) error       { return nil }
+func (s *prefixMatchStore) SetDescription(_, _, _ string) error { return nil }
+
+func TestPlanDedupesOverlappingPrefixes(t *testing.T) {
+	// "sesh-aws" is a byte-prefix of "sesh-aws-serial"; with a
+	// prefix-range-matching source, a naive Plan would return the serial
+	// entry under both the AWS prefix and the AWS-serial prefix.
+	src := &prefixMatchStore{
+		data: map[string][]byte{
+			"sesh-aws/prod":                  []byte("x"),
+			"sesh-aws-serial/prod":           []byte("y"),
+			"sesh-totp/github":               []byte("z"),
+			"sesh-password/password/a/alice": []byte("p"),
+		},
+	}
+
+	plan, err := Plan(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) != 4 {
+		t.Fatalf("expected 4 unique entries in plan, got %d: %+v", len(plan), plan)
+	}
+}
+
+func TestMigrateDedupesOverlappingPrefixes(t *testing.T) {
+	src := &prefixMatchStore{
+		data: map[string][]byte{
+			"sesh-aws/prod":        []byte("x"),
+			"sesh-aws-serial/prod": []byte("y"),
+		},
+	}
+
+	var setCount int
+	dest := &mocks.MockProvider{
+		GetSecretFunc: func(_, _ string) ([]byte, error) { return nil, keychain.ErrNotFound },
+		SetSecretFunc: func(_, _ string, _ []byte) error { setCount++; return nil },
+	}
+
+	result, err := Migrate(src, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Migrated != 2 {
+		t.Errorf("Migrated = %d, want 2 (one per unique entry)", result.Migrated)
+	}
+	if result.Skipped != 0 {
+		t.Errorf("Skipped = %d, want 0 — a dedupe miss would visit aws-serial twice and skip the second pass", result.Skipped)
+	}
+	if setCount != 2 {
+		t.Errorf("SetSecret call count = %d, want 2", setCount)
+	}
+}
+
 func TestMigrateEmpty(t *testing.T) {
 	source := newEntryStore()
 	dest := newEntryStore()

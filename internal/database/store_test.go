@@ -67,6 +67,37 @@ func TestOpenAndMigrate(t *testing.T) {
 	}
 }
 
+func TestOpen_RejectsNewerSchemaVersion(t *testing.T) {
+	// Simulate the downgrade scenario: a database written by a future
+	// sesh build leaves a schema_migrations row past what this binary
+	// knows how to handle. Silently accepting it would let queries hit
+	// an unsupported schema shape.
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	ks := &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)}
+
+	s, err := Open(dbPath, ks)
+	if err != nil {
+		t.Fatalf("initial Open: %v", err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
+		currentSchemaVersion+1, time.Now().UTC(),
+	); err != nil {
+		t.Fatalf("seed future version: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	_, err = Open(dbPath, ks)
+	if err == nil {
+		t.Fatal("expected error when opening DB with schema version newer than binary supports")
+	}
+	if !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Errorf("error should mention version mismatch, got: %v", err)
+	}
+}
+
 func TestMigrationsIdempotent(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	ks := &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)}

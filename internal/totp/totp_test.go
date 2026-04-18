@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pquerna/otp"
 )
 
 func TestGenerate(t *testing.T) {
@@ -647,6 +649,255 @@ func TestGenerateConsecutiveCodesForTimeBytes(t *testing.T) {
 				if next != wantNext {
 					t.Errorf("next = %q, want %q", next, wantNext)
 				}
+			}
+		})
+	}
+}
+
+func TestAlgorithmFromName(t *testing.T) {
+	tests := map[string]otp.Algorithm{
+		"SHA1":       otp.AlgorithmSHA1,
+		"sha1":       otp.AlgorithmSHA1, // case-insensitive
+		"SHA256":     otp.AlgorithmSHA256,
+		"sha256":     otp.AlgorithmSHA256,
+		"SHA512":     otp.AlgorithmSHA512,
+		"":           otp.AlgorithmSHA1, // default
+		"bogus-algo": otp.AlgorithmSHA1, // unknown → default
+	}
+	for name, want := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := algorithmFromName(name); got != want {
+				t.Errorf("algorithmFromName(%q) = %v, want %v", name, got, want)
+			}
+		})
+	}
+}
+
+func TestParams_IsDefault(t *testing.T) {
+	tests := map[string]struct {
+		p    Params
+		want bool
+	}{
+		"zero":                {p: Params{}, want: true},
+		"issuer-only":         {p: Params{Issuer: "Example"}, want: true}, // IsDefault ignores issuer
+		"digits set":          {p: Params{Digits: 6}, want: false},
+		"period set":          {p: Params{Period: 30}, want: false},
+		"algorithm set":       {p: Params{Algorithm: "SHA256"}, want: false},
+		"all non-default set": {p: Params{Algorithm: "SHA1", Digits: 6, Period: 30}, want: false},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := tc.p.IsDefault(); got != tc.want {
+				t.Errorf("IsDefault() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParams_MarshalDescription(t *testing.T) {
+	tests := map[string]struct {
+		wantSub string // expect substring in JSON output (or empty)
+		p       Params
+	}{
+		"all-default produces empty": {
+			p:       Params{},
+			wantSub: "",
+		},
+		"issuer alone is serialized": {
+			// IsDefault returns true for issuer-only, but MarshalDescription
+			// still emits JSON when issuer is set, so the issuer is preserved.
+			p:       Params{Issuer: "Example"},
+			wantSub: `"issuer":"Example"`,
+		},
+		"non-default params are serialized": {
+			p:       Params{Algorithm: "SHA256", Digits: 8, Period: 60},
+			wantSub: `"algorithm":"SHA256"`,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := tc.p.MarshalDescription()
+			if tc.wantSub == "" {
+				if got != "" {
+					t.Errorf("MarshalDescription() = %q, want empty", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.wantSub) {
+				t.Errorf("MarshalDescription() = %q, want contains %q", got, tc.wantSub)
+			}
+		})
+	}
+}
+
+func TestParseParams(t *testing.T) {
+	tests := map[string]struct {
+		desc string
+		want Params
+	}{
+		"empty string": {
+			desc: "",
+			want: Params{},
+		},
+		"invalid JSON": {
+			desc: "not{json",
+			want: Params{},
+		},
+		"valid params": {
+			desc: `{"issuer":"Example","algorithm":"SHA256","digits":8,"period":60}`,
+			want: Params{Issuer: "Example", Algorithm: "SHA256", Digits: 8, Period: 60},
+		},
+		"partial params": {
+			desc: `{"digits":8}`,
+			want: Params{Digits: 8},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := ParseParams(tc.desc)
+			if got != tc.want {
+				t.Errorf("ParseParams(%q) = %+v, want %+v", tc.desc, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGenerateConsecutiveCodesBytesWithParams(t *testing.T) {
+	secret := []byte("JBSWY3DPEHPK3PXP")
+
+	t.Run("default params falls through to standard path", func(t *testing.T) {
+		cur, next, err := GenerateConsecutiveCodesBytesWithParams(secret, Params{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cur) != 6 || len(next) != 6 {
+			t.Errorf("default params should produce 6-digit codes, got cur=%q next=%q", cur, next)
+		}
+	})
+
+	t.Run("8-digit params produces 8-digit codes", func(t *testing.T) {
+		cur, next, err := GenerateConsecutiveCodesBytesWithParams(secret, Params{Digits: 8, Period: 30})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cur) != 8 || len(next) != 8 {
+			t.Errorf("expected 8-digit codes, got cur=%q next=%q", cur, next)
+		}
+	})
+
+	t.Run("empty secret with non-default params returns error", func(t *testing.T) {
+		_, _, err := GenerateConsecutiveCodesBytesWithParams(nil, Params{Digits: 8})
+		if err == nil {
+			t.Fatal("expected error for empty secret")
+		}
+	})
+
+	t.Run("whitespace-only secret returns error", func(t *testing.T) {
+		_, _, err := GenerateConsecutiveCodesBytesWithParams([]byte("   \t\n"), Params{Digits: 8})
+		if err == nil {
+			t.Fatal("expected error for whitespace-only secret")
+		}
+	})
+
+	t.Run("period above cap is rejected", func(t *testing.T) {
+		// Without the bound, Period * time.Second overflows int64 and
+		// now.Add(period) lands in the past — producing a "next" code
+		// that doesn't correspond to any future window.
+		_, _, err := GenerateConsecutiveCodesBytesWithParams(secret, Params{Digits: 8, Period: MaxTOTPPeriodSeconds + 1})
+		if err == nil {
+			t.Fatal("expected error for period above cap")
+		}
+	})
+
+	t.Run("period at cap is accepted", func(t *testing.T) {
+		_, _, err := GenerateConsecutiveCodesBytesWithParams(secret, Params{Digits: 8, Period: MaxTOTPPeriodSeconds})
+		if err != nil {
+			t.Fatalf("period at cap should be accepted: %v", err)
+		}
+	})
+}
+
+func TestValidateOptsFromParams(t *testing.T) {
+	tests := map[string]struct {
+		params     Params
+		wantDigits otp.Digits
+		wantPeriod uint
+		wantAlgo   otp.Algorithm
+	}{
+		"zero params defaults to SHA1/6/30": {
+			params:     Params{},
+			wantDigits: otp.DigitsSix,
+			wantPeriod: 30,
+			wantAlgo:   otp.AlgorithmSHA1,
+		},
+		"digits=6 passes through": {
+			params:     Params{Digits: 6},
+			wantDigits: otp.DigitsSix,
+			wantPeriod: 30,
+			wantAlgo:   otp.AlgorithmSHA1,
+		},
+		"digits=7 passes through (RFC 4226 allowed)": {
+			params:     Params{Digits: 7},
+			wantDigits: otp.Digits(7),
+			wantPeriod: 30,
+			wantAlgo:   otp.AlgorithmSHA1,
+		},
+		"digits=8 passes through": {
+			params:     Params{Digits: 8},
+			wantDigits: otp.DigitsEight,
+			wantPeriod: 30,
+			wantAlgo:   otp.AlgorithmSHA1,
+		},
+		"digits=5 (invalid) falls back to 6": {
+			// Guards the behavior we locked in after the review: invalid
+			// or out-of-range values should NOT silently upgrade.
+			params:     Params{Digits: 5},
+			wantDigits: otp.DigitsSix,
+			wantPeriod: 30,
+			wantAlgo:   otp.AlgorithmSHA1,
+		},
+		"digits=9 (invalid) falls back to 6": {
+			params:     Params{Digits: 9},
+			wantDigits: otp.DigitsSix,
+			wantPeriod: 30,
+			wantAlgo:   otp.AlgorithmSHA1,
+		},
+		"custom period": {
+			params:     Params{Period: 60},
+			wantDigits: otp.DigitsSix,
+			wantPeriod: 60,
+			wantAlgo:   otp.AlgorithmSHA1,
+		},
+		"zero period falls back to 30": {
+			params:     Params{Period: 0},
+			wantDigits: otp.DigitsSix,
+			wantPeriod: 30,
+			wantAlgo:   otp.AlgorithmSHA1,
+		},
+		"SHA256 algorithm": {
+			params:     Params{Algorithm: "SHA256"},
+			wantDigits: otp.DigitsSix,
+			wantPeriod: 30,
+			wantAlgo:   otp.AlgorithmSHA256,
+		},
+		"full params": {
+			params:     Params{Algorithm: "SHA512", Digits: 8, Period: 60},
+			wantDigits: otp.DigitsEight,
+			wantPeriod: 60,
+			wantAlgo:   otp.AlgorithmSHA512,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			opts := validateOptsFromParams(tc.params)
+			if opts.Digits != tc.wantDigits {
+				t.Errorf("Digits = %v, want %v", opts.Digits, tc.wantDigits)
+			}
+			if opts.Period != tc.wantPeriod {
+				t.Errorf("Period = %v, want %v", opts.Period, tc.wantPeriod)
+			}
+			if opts.Algorithm != tc.wantAlgo {
+				t.Errorf("Algorithm = %v, want %v", opts.Algorithm, tc.wantAlgo)
 			}
 		})
 	}

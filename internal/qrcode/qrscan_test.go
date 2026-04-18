@@ -52,11 +52,13 @@ func TestExtractTOTPFullInfo(t *testing.T) {
 			wantErr: true,
 			errMsg:  "not a valid otpauth URL",
 		},
-		"wrong auth type": {
-			uri:         "otpauth://hotp/Example:alice?secret=JBSWY3DPEHPK3PXP",
-			wantSecret:  "JBSWY3DPEHPK3PXP",
-			wantIssuer:  "Example",
-			wantAccount: "alice",
+		"hotp rejected (only TOTP supported)": {
+			// HOTP is counter-based; sesh's code path never reads the
+			// counter. Silently accepting an HOTP URI would produce an
+			// unusable entry.
+			uri:     "otpauth://hotp/Example:alice?secret=JBSWY3DPEHPK3PXP",
+			wantErr: true,
+			errMsg:  "unsupported OTP type",
 		},
 		"missing secret": {
 			uri:     "otpauth://totp/Example:alice?issuer=Example",
@@ -111,10 +113,33 @@ func TestExtractTOTPFullInfo(t *testing.T) {
 			wantErr: true,
 			errMsg:  "invalid period value",
 		},
+		"period above upper bound": {
+			// Guards against overflow when the parsed value flows into
+			// time.Duration arithmetic (params.Period * time.Second).
+			uri:     "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&period=999999999999",
+			wantErr: true,
+			errMsg:  "invalid period value",
+		},
 		"account with unencoded colon": {
 			// First colon is the issuer/account delimiter — subsequent colons
 			// are part of the account name.
 			uri:         "otpauth://totp/GitHub:alice:work?secret=JBSWY3DPEHPK3PXP",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantIssuer:  "GitHub",
+			wantAccount: "alice:work",
+		},
+		"account with encoded colon and no issuer": {
+			// A label with only an account that contains a URL-encoded
+			// colon must not split on the decoded form — otherwise the
+			// account "alice:work" parses as issuer=alice, account=work.
+			uri:         "otpauth://totp/alice%3Awork?secret=JBSWY3DPEHPK3PXP",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantAccount: "alice:work",
+		},
+		"issuer with encoded colon in account": {
+			// Literal first colon is the delimiter; %3A in the account
+			// portion decodes after the split.
+			uri:         "otpauth://totp/GitHub:alice%3Awork?secret=JBSWY3DPEHPK3PXP",
 			wantSecret:  "JBSWY3DPEHPK3PXP",
 			wantIssuer:  "GitHub",
 			wantAccount: "alice:work",
@@ -181,6 +206,11 @@ func TestExtractSecretFromOTPAuthURL(t *testing.T) {
 			url:     "not-a-url",
 			wantErr: true,
 			errMsg:  "not a valid otpauth URL",
+		},
+		"hotp rejected": {
+			url:     "otpauth://hotp/Example:alice?secret=JBSWY3DPEHPK3PXP",
+			wantErr: true,
+			errMsg:  "unsupported OTP type",
 		},
 	}
 

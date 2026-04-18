@@ -54,13 +54,13 @@ func spawnClearDarwin(original string, timeout time.Duration) error {
 	seconds := strconv.Itoa(max(int(math.Ceil(timeout.Seconds())), 1))
 
 	// Shell script:
-	//  1. Sleep for the timeout
-	//  2. Read current clipboard via pbpaste
-	//  3. Compare to the original value passed via stdin
-	//  4. If they match, overwrite clipboard with empty string
-	//
-	// The original value is passed via a heredoc to avoid shell escaping issues.
-	script := `read -r expected
+	//  1. Slurp the expected value from stdin (must be multiline-safe —
+	//     secure notes and any secret containing a newline need the full
+	//     value compared, not just the first line).
+	//  2. Sleep for the timeout.
+	//  3. Compare the clipboard to the expected value.
+	//  4. If they match, overwrite the clipboard with an empty string.
+	script := `expected=$(cat)
 sleep ` + seconds + `
 current=$(pbpaste)
 if [ "$current" = "$expected" ]; then

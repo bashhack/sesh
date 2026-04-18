@@ -216,9 +216,11 @@ func TestDefaultProviderSetDescription(t *testing.T) {
 	orig := saveMocks()
 	defer orig.restore()
 
-	// Mock execCommand so LoadAllEntryMetadata doesn't hit the real keychain
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "")
+	// Stub the metadata loader so the test doesn't fork `security`.
+	originalLoadAll := loadAllEntryMetadataImpl
+	defer func() { loadAllEntryMetadataImpl = originalLoadAll }()
+	loadAllEntryMetadataImpl = func() ([]KeychainEntryMeta, error) {
+		return []KeychainEntryMeta{}, nil
 	}
 
 	var savedMeta []KeychainEntryMeta

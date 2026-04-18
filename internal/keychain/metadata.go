@@ -125,8 +125,13 @@ var loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, err
 	return filteredEntries, nil
 }
 
-// LoadAllEntryMetadata loads all metadata entries regardless of service type
+// LoadAllEntryMetadata loads all metadata entries regardless of service type.
+// The body lives behind a package-level var so tests can stub it.
 func LoadAllEntryMetadata() ([]KeychainEntryMeta, error) {
+	return loadAllEntryMetadataImpl()
+}
+
+var loadAllEntryMetadataImpl = func() ([]KeychainEntryMeta, error) {
 	metaService := constants.MetadataServiceName
 	metaAccount := "metadata"
 

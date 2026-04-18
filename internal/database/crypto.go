@@ -69,8 +69,13 @@ func GenerateSalt(length int) ([]byte, error) {
 }
 
 // Encrypt encrypts plaintext using AES-256-GCM with the provided key.
-// The returned ciphertext is nonce || encrypted_data || tag.
+// The returned ciphertext is nonce || encrypted_data || tag. The key must
+// be exactly 32 bytes; shorter keys are rejected rather than accepted as
+// AES-128 or AES-192.
 func Encrypt(key, plaintext []byte) ([]byte, error) {
+	if len(key) != encryptionKeyLength {
+		return nil, fmt.Errorf("encrypt: key must be %d bytes (AES-256), got %d", encryptionKeyLength, len(key))
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("create cipher: %w", err)
@@ -92,7 +97,11 @@ func Encrypt(key, plaintext []byte) ([]byte, error) {
 }
 
 // Decrypt decrypts ciphertext produced by Encrypt using AES-256-GCM.
+// The key must be exactly 32 bytes.
 func Decrypt(key, ciphertext []byte) ([]byte, error) {
+	if len(key) != encryptionKeyLength {
+		return nil, fmt.Errorf("decrypt: key must be %d bytes (AES-256), got %d", encryptionKeyLength, len(key))
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("create cipher: %w", err)

@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 const (
@@ -57,6 +59,7 @@ func GeneratePassword(opts GenerateOptions) ([]byte, error) {
 	for i, req := range required {
 		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(req))))
 		if err != nil {
+			secure.SecureZeroBytes(pw)
 			return nil, fmt.Errorf("generate random char: %w", err)
 		}
 		pw[i] = req[idx.Int64()]
@@ -66,6 +69,7 @@ func GeneratePassword(opts GenerateOptions) ([]byte, error) {
 	for i := len(required); i < opts.Length; i++ {
 		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
+			secure.SecureZeroBytes(pw)
 			return nil, fmt.Errorf("generate random byte: %w", err)
 		}
 		pw[i] = charset[idx.Int64()]
@@ -75,6 +79,7 @@ func GeneratePassword(opts GenerateOptions) ([]byte, error) {
 	for i := len(pw) - 1; i > 0; i-- {
 		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
 		if err != nil {
+			secure.SecureZeroBytes(pw)
 			return nil, fmt.Errorf("shuffle: %w", err)
 		}
 		pw[i], pw[j.Int64()] = pw[j.Int64()], pw[i]
