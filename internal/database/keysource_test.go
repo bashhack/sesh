@@ -39,32 +39,35 @@ func (m *kcKeyMock) SetSecret(_, _ string, secret []byte) error {
 	return nil
 }
 
-func TestKeychainSource_GetEncryptionKey_RejectsShortKey(t *testing.T) {
+func TestKeychainSource_GetEncryptionKey_RejectsShortStoredValue(t *testing.T) {
+	// Stored value too short to be a hex-encoded 32-byte key.
 	kc := &kcKeyMock{stored: bytes.Repeat([]byte{0xAB}, 16)}
 	ks := NewKeychainSource(kc, "testuser")
 
 	got, err := ks.GetEncryptionKey()
 	if err == nil {
-		t.Fatal("expected error for wrong-length key, got nil")
+		t.Fatal("expected error for wrong-length stored value, got nil")
 	}
-	if !strings.Contains(err.Error(), "invalid encryption key length") {
-		t.Errorf("error = %v, want contains 'invalid encryption key length'", err)
+	if !strings.Contains(err.Error(), "invalid encryption key encoding") {
+		t.Errorf("error = %v, want contains 'invalid encryption key encoding'", err)
 	}
 	if got != nil {
 		t.Errorf("returned key = %v, want nil when length check fails", got)
 	}
 }
 
-func TestKeychainSource_GetEncryptionKey_RejectsLongKey(t *testing.T) {
+func TestKeychainSource_GetEncryptionKey_RejectsNonHexStoredValue(t *testing.T) {
+	// Right length for hex (64 chars) but non-hex bytes — e.g., raw
+	// binary left over from an older sesh build that didn't encode.
 	kc := &kcKeyMock{stored: bytes.Repeat([]byte{0xAB}, 64)}
 	ks := NewKeychainSource(kc, "testuser")
 
 	_, err := ks.GetEncryptionKey()
 	if err == nil {
-		t.Fatal("expected error for wrong-length key, got nil")
+		t.Fatal("expected error for non-hex stored value, got nil")
 	}
-	if !strings.Contains(err.Error(), "invalid encryption key length") {
-		t.Errorf("error = %v, want contains 'invalid encryption key length'", err)
+	if !strings.Contains(err.Error(), "decode encryption key") {
+		t.Errorf("error = %v, want contains 'decode encryption key'", err)
 	}
 }
 
@@ -114,5 +117,29 @@ func TestKeychainSource_RoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("key mismatch: got %x, want %x", got, want)
+	}
+}
+
+func TestKeychainSource_StoresAsHexEncoded(t *testing.T) {
+	// The at-rest representation must be hex so random binary keys can't
+	// trip the keychain backend's `security -i` text parser.
+	kc := &kcKeyMock{}
+	ks := NewKeychainSource(kc, "testuser")
+
+	// Deliberately contains bytes that would break shell parsing raw:
+	// 0x0A (newline), 0x20 (space), 0x09 (tab), 0x00 (null).
+	raw := make([]byte, encryptionKeyLength)
+	copy(raw, []byte{0x0A, 0x20, 0x09, 0x00, 0x22, 0x27, 0x5C})
+	if err := ks.StoreEncryptionKey(raw); err != nil {
+		t.Fatalf("StoreEncryptionKey on byte-hostile input: %v", err)
+	}
+	// Stored value must be hex (ASCII [0-9a-f]) regardless of input bytes.
+	for _, b := range kc.stored {
+		if (b < '0' || b > '9') && (b < 'a' || b > 'f') {
+			t.Fatalf("stored value contains non-hex byte 0x%02x — not shell-safe", b)
+		}
+	}
+	if len(kc.stored) != 2*encryptionKeyLength {
+		t.Errorf("stored length = %d, want %d (2×key length for hex)", len(kc.stored), 2*encryptionKeyLength)
 	}
 }

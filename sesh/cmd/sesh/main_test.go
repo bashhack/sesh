@@ -650,7 +650,9 @@ func (m *flockMockKC) SetSecret(_, _ string, secret []byte) error {
 }
 
 func TestEnsureMasterKey_FastPath(t *testing.T) {
-	kc := &flockMockKC{stored: bytes.Repeat([]byte{0xAB}, 32)}
+	// Stored value is the hex-encoded form of 32 raw bytes; KeychainSource
+	// decodes on read.
+	kc := &flockMockKC{stored: []byte(strings.Repeat("ab", 32))}
 	ks := database.NewKeychainSource(kc, "testuser")
 
 	if err := ensureMasterKey(ks, t.TempDir()); err != nil {
@@ -674,8 +676,9 @@ func TestEnsureMasterKey_SlowPath_Generates(t *testing.T) {
 	if got := kc.setCount.Load(); got != 1 {
 		t.Errorf("SetSecret call count = %d, want 1 on slow path", got)
 	}
-	if len(kc.stored) != 32 {
-		t.Errorf("stored key length = %d, want 32", len(kc.stored))
+	// Stored form is hex-encoded (2 ASCII chars per raw byte).
+	if len(kc.stored) != 64 {
+		t.Errorf("stored hex length = %d, want 64 (hex of 32 raw bytes)", len(kc.stored))
 	}
 }
 
@@ -688,7 +691,8 @@ func TestEnsureMasterKey_SlowPath_DoubleCheck(t *testing.T) {
 	kc.beforeGet = func(n int32) {
 		if n == 2 {
 			kc.mu.Lock()
-			kc.stored = bytes.Repeat([]byte{0xCD}, 32)
+			// Hex-encoded form of a 32-byte key (all 0xCD).
+			kc.stored = []byte(strings.Repeat("cd", 32))
 			kc.mu.Unlock()
 		}
 	}
@@ -772,7 +776,8 @@ func TestEnsureMasterKey_Concurrent(t *testing.T) {
 	if got := kc.setCount.Load(); got != 1 {
 		t.Errorf("SetSecret call count = %d across %d concurrent invocations, want exactly 1", got, n)
 	}
-	if len(kc.stored) != 32 {
-		t.Errorf("stored key length = %d, want 32", len(kc.stored))
+	// Stored form is hex-encoded (2 ASCII chars per raw byte).
+	if len(kc.stored) != 64 {
+		t.Errorf("stored hex length = %d, want 64 (hex of 32 raw bytes)", len(kc.stored))
 	}
 }

@@ -2,6 +2,7 @@ package database
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 
@@ -54,23 +55,49 @@ func NewKeychainSource(kc keychainKeyProvider, account string) *KeychainSource {
 	return &KeychainSource{keychain: kc, account: account}
 }
 
+// GetEncryptionKey reads the master key from the keychain. The stored
+// value is a hex-encoded string of the raw 32-byte key. The keychain
+// backend passes values through `security -i`, whose tokenizer splits on
+// whitespace and control bytes — random binary keys regularly contain
+// those bytes and fail to store, so we keep the at-rest form in
+// ASCII-safe hex.
 func (s *KeychainSource) GetEncryptionKey() ([]byte, error) {
-	key, err := s.keychain.GetSecret(s.account, keychainEncKeyService)
+	stored, err := s.keychain.GetSecret(s.account, keychainEncKeyService)
 	if err != nil {
 		return nil, fmt.Errorf("get encryption key from keychain: %w", err)
 	}
-	if len(key) != encryptionKeyLength {
+	defer secure.SecureZeroBytes(stored)
+
+	// Hex-encoded key is 2*N chars (UTF-8 ASCII, 1 byte each). Raw keys
+	// stored by earlier builds used base64 or raw bytes and would have a
+	// different length.
+	expectedEncodedLen := hex.EncodedLen(encryptionKeyLength)
+	if len(stored) != expectedEncodedLen {
+		return nil, fmt.Errorf("invalid encryption key encoding: got %d bytes, want %d hex chars (did an older sesh store a different format? re-init with `security delete-generic-password -s %s`)",
+			len(stored), expectedEncodedLen, keychainEncKeyService)
+	}
+
+	key := make([]byte, encryptionKeyLength)
+	if _, err := hex.Decode(key, stored); err != nil {
 		secure.SecureZeroBytes(key)
-		return nil, fmt.Errorf("invalid encryption key length: got %d bytes, want %d", len(key), encryptionKeyLength)
+		return nil, fmt.Errorf("decode encryption key: %w", err)
 	}
 	return key, nil
 }
 
+// StoreEncryptionKey persists the master key in the keychain. The raw
+// 32-byte key is hex-encoded before storage so the resulting string is
+// guaranteed to contain only [0-9a-f] — safe for the keychain backend's
+// `security -i` text protocol. See GetEncryptionKey for context.
 func (s *KeychainSource) StoreEncryptionKey(key []byte) error {
 	if len(key) != encryptionKeyLength {
 		return fmt.Errorf("invalid encryption key length: got %d bytes, want %d", len(key), encryptionKeyLength)
 	}
-	if err := s.keychain.SetSecret(s.account, keychainEncKeyService, key); err != nil {
+	encoded := make([]byte, hex.EncodedLen(len(key)))
+	hex.Encode(encoded, key)
+	defer secure.SecureZeroBytes(encoded)
+
+	if err := s.keychain.SetSecret(s.account, keychainEncKeyService, encoded); err != nil {
 		return fmt.Errorf("store encryption key in keychain: %w", err)
 	}
 	return nil
