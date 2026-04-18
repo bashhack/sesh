@@ -88,8 +88,14 @@ func TestResolveBaseDir(t *testing.T) {
 }
 
 func TestDefaultDBPath_EndsInPasswordsDB(t *testing.T) {
-	// Smoke test — exercises the live platform/env branches and the
-	// MkdirAll side effect on whatever OS the test is running on.
+	// Redirect every platform branch's base dir to a temp dir so the test
+	// creates a sesh/ subdir under t.TempDir() instead of the user's real
+	// data directory.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("APPDATA", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+
 	got, err := DefaultDBPath()
 	if err != nil {
 		t.Fatalf("DefaultDBPath: %v", err)

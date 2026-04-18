@@ -68,6 +68,10 @@ if [ "$current" = "$expected" ]; then
 fi`
 
 	cmd := execCommand("sh", "-c", script)
+	// Append a trailing newline so $(cat) in the script terminates
+	// cleanly. $(…) strips trailing newlines from its output, so this
+	// extra byte is consumed and the comparison value still equals the
+	// original clipboard content.
 	cmd.Stdin = strings.NewReader(original + "\n")
 
 	// Detach the child process so it survives after sesh exits.

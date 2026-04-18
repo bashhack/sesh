@@ -2,6 +2,7 @@ package setup
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/testutil"
+	"github.com/bashhack/sesh/internal/totp"
 )
 
 func TestRunCommandDefault(t *testing.T) {
@@ -1952,6 +1954,78 @@ func TestTOTPSetupHandler_Setup_NonDefaultParamsFailClosed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to persist non-default params") {
 		t.Errorf("error should mention params persistence failure, got: %v", err)
+	}
+}
+
+func TestTOTPSetupHandler_Setup_QRMetadataPersisted(t *testing.T) {
+	// When a QR scan returns a non-default issuer/algorithm/digits/period,
+	// the description written to the keychain must be the JSON-encoded
+	// Params — GenerateTOTPCode later unmarshals it to reproduce the exact
+	// same codes. Regression guard: if this stops being persisted, codes
+	// for non-default issuers silently drift to defaults.
+	origScanQRCodeFull := scanQRCodeFull
+	defer func() { scanQRCodeFull = origScanQRCodeFull }()
+	origValidate := validateAndNormalizeSecret
+	defer func() { validateAndNormalizeSecret = origValidate }()
+	origGenerate := generateConsecutiveCodes
+	defer func() { generateConsecutiveCodes = origGenerate }()
+	origGetUser := getCurrentUser
+	defer func() { getCurrentUser = origGetUser }()
+
+	scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
+		return qrcode.TOTPInfo{
+			Secret:    "JBSWY3DPEHPK3PXP",
+			Issuer:    "ExampleCorp",
+			Account:   "alice@example.com",
+			Algorithm: "SHA256",
+			Digits:    8,
+			Period:    60,
+		}, nil
+	}
+	validateAndNormalizeSecret = func(s string) (string, error) { return s, nil }
+	generateConsecutiveCodes = func(s string) (string, string, error) {
+		return "11111111", "22222222", nil
+	}
+	getCurrentUser = func() (string, error) { return "testuser", nil }
+
+	var gotDescription string
+	mockKeychain := &mocks.MockProvider{
+		GetSecretStringFunc: func(_, _ string) (string, error) { return "", nil },
+		SetSecretStringFunc: func(_, _, _ string) error { return nil },
+		SetDescriptionFunc: func(_, _, description string) error {
+			gotDescription = description
+			return nil
+		},
+	}
+
+	handler := &TOTPSetupHandler{
+		reader:           bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n")),
+		keychainProvider: mockKeychain,
+	}
+
+	var setupErr error
+	_ = testutil.CaptureStdout(func() {
+		setupErr = handler.Setup()
+	})
+	if setupErr != nil {
+		t.Fatalf("Setup: %v", setupErr)
+	}
+
+	var got totp.Params
+	if err := json.Unmarshal([]byte(gotDescription), &got); err != nil {
+		t.Fatalf("SetDescription payload is not JSON: %v (raw %q)", err, gotDescription)
+	}
+	if got.Issuer != "ExampleCorp" {
+		t.Errorf("Issuer = %q, want ExampleCorp", got.Issuer)
+	}
+	if got.Algorithm != "SHA256" {
+		t.Errorf("Algorithm = %q, want SHA256", got.Algorithm)
+	}
+	if got.Digits != 8 {
+		t.Errorf("Digits = %d, want 8", got.Digits)
+	}
+	if got.Period != 60 {
+		t.Errorf("Period = %d, want 60", got.Period)
 	}
 }
 

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -33,7 +34,7 @@ func defaultDataDir() (string, error) {
 	}
 	dir := filepath.Join(base, "sesh")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
+		return "", fmt.Errorf("create sesh data dir %q: %w", dir, err)
 	}
 	return dir, nil
 }
