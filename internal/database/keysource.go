@@ -59,10 +59,17 @@ func (s *KeychainSource) GetEncryptionKey() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get encryption key from keychain: %w", err)
 	}
+	if len(key) != encryptionKeyLength {
+		secure.SecureZeroBytes(key)
+		return nil, fmt.Errorf("invalid encryption key length: got %d bytes, want %d", len(key), encryptionKeyLength)
+	}
 	return key, nil
 }
 
 func (s *KeychainSource) StoreEncryptionKey(key []byte) error {
+	if len(key) != encryptionKeyLength {
+		return fmt.Errorf("invalid encryption key length: got %d bytes, want %d", len(key), encryptionKeyLength)
+	}
 	if err := s.keychain.SetSecret(s.account, keychainEncKeyService, key); err != nil {
 		return fmt.Errorf("store encryption key in keychain: %w", err)
 	}

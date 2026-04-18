@@ -63,13 +63,8 @@ func Migrate(source, dest keychain.Provider) (Result, error) {
 		}
 
 		for _, entry := range entries {
-			secret, err := source.GetSecret(entry.Account, entry.Service)
-			if err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to read: %v", entry.Service, err))
-				continue
-			}
-
-			// Check if entry already exists in dest. Only a confirmed
+			// Check destination before reading the source secret so skipped
+			// entries never materialize plaintext in memory. Only a confirmed
 			// ErrNotFound permits writing; other errors (I/O, decrypt,
 			// locked DB) must not be treated as absence.
 			existing, getErr := dest.GetSecret(entry.Account, entry.Service)
@@ -77,13 +72,17 @@ func Migrate(source, dest keychain.Provider) (Result, error) {
 			case getErr == nil:
 				secure.SecureZeroBytes(existing)
 				result.Skipped++
-				secure.SecureZeroBytes(secret)
 				continue
 			case errors.Is(getErr, keychain.ErrNotFound):
-				// Not present — proceed to write.
+				// Not present — proceed to read source and write.
 			default:
 				result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to check destination: %v", entry.Service, getErr))
-				secure.SecureZeroBytes(secret)
+				continue
+			}
+
+			secret, err := source.GetSecret(entry.Account, entry.Service)
+			if err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to read: %v", entry.Service, err))
 				continue
 			}
 

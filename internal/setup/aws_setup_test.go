@@ -270,10 +270,8 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 			return "", fmt.Errorf("user error")
 		}
 
-		// Mock scanQRCode to return just the secret
-		scanQRCode = func() (string, error) {
-			return "JBSWY3DPEHPK3PXP", nil
-		}
+		// QR scanning is unreachable in this subtest — getCurrentUser fails
+		// first. No QR stub needed.
 
 		// Mock runCommand for AWS CLI calls
 		runCommand = func(name string, args ...string) ([]byte, error) {

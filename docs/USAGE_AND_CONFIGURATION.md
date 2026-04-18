@@ -164,7 +164,7 @@ sesh uses a provider-based configuration system:
 | Variable           | Description                                        | Default          |
 |--------------------|----------------------------------------------------|------------------|
 | `AWS_PROFILE`     | Default AWS profile                                | `default`        |
-| `SESH_BACKEND`    | Storage backend: `keychain` or `sqlite`            | `keychain`       |
+| `SESH_BACKEND`    | Storage backend — only `sqlite` selects SQLite; any other value (or unset) uses the keychain | `keychain`       |
 
 ## Usage Patterns
 

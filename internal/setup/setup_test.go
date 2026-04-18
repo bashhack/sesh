@@ -1195,10 +1195,8 @@ func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
 // TestCaptureQRWithRetry tests QR code capture with retry logic
 func TestCaptureQRWithRetry(t *testing.T) {
 	// Save originals and restore after test
-	origScanQRCode := scanQRCode
 	origScanQRCodeFull := scanQRCodeFull
 	defer func() {
-		scanQRCode = origScanQRCode
 		scanQRCodeFull = origScanQRCodeFull
 	}()
 
@@ -1284,7 +1282,7 @@ func TestCaptureQRWithRetry(t *testing.T) {
 
 			// Check scan was called expected number of times
 			if scanCallCount != tc.wantScanCalls {
-				t.Errorf("scanQRCode called %d times, want %d", scanCallCount, tc.wantScanCalls)
+				t.Errorf("scanQRCodeFull called %d times, want %d", scanCallCount, tc.wantScanCalls)
 			}
 
 			// Check secret

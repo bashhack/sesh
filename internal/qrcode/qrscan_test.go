@@ -6,54 +6,46 @@ import (
 	"image/color"
 	"image/png"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
 	"github.com/pquerna/otp/totp"
 )
 
-func TestExtractTOTPInfo(t *testing.T) {
+func TestExtractTOTPFullInfo(t *testing.T) {
 	tests := map[string]struct {
-		uri        string
-		wantSecret string
-		wantIssuer string
-		wantLabel  string
-		errMsg     string
-		wantErr    bool
+		uri         string
+		wantSecret  string
+		wantIssuer  string
+		wantAccount string
+		errMsg      string
+		wantErr     bool
 	}{
 		"valid google authenticator uri": {
-			uri:        "otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example",
-			wantSecret: "JBSWY3DPEHPK3PXP",
-			wantIssuer: "Example",
-			wantLabel:  "alice@example.com",
-			wantErr:    false,
+			uri:         "otpauth://totp/Example:alice@example.com?secret=JBSWY3DPEHPK3PXP&issuer=Example",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantIssuer:  "Example",
+			wantAccount: "alice@example.com",
 		},
 		"uri without issuer": {
-			uri:        "otpauth://totp/alice@example.com?secret=JBSWY3DPEHPK3PXP",
-			wantSecret: "JBSWY3DPEHPK3PXP",
-			wantIssuer: "",
-			wantLabel:  "alice@example.com",
-			wantErr:    false,
+			uri:         "otpauth://totp/alice@example.com?secret=JBSWY3DPEHPK3PXP",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantAccount: "alice@example.com",
 		},
 		"uri with issuer in label only": {
-			uri:        "otpauth://totp/GitHub:username?secret=JBSWY3DPEHPK3PXP",
-			wantSecret: "JBSWY3DPEHPK3PXP",
-			wantIssuer: "GitHub",
-			wantLabel:  "username",
-			wantErr:    false,
+			uri:         "otpauth://totp/GitHub:username?secret=JBSWY3DPEHPK3PXP",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantIssuer:  "GitHub",
+			wantAccount: "username",
 		},
 		"uri with url-encoded characters": {
-			uri:        "otpauth://totp/My%20Service:user%40email.com?secret=JBSWY3DPEHPK3PXP&issuer=My%20Service",
-			wantSecret: "JBSWY3DPEHPK3PXP",
-			wantIssuer: "My Service",
-			wantLabel:  "user@email.com",
-			wantErr:    false,
+			uri:         "otpauth://totp/My%20Service:user%40email.com?secret=JBSWY3DPEHPK3PXP&issuer=My%20Service",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantIssuer:  "My Service",
+			wantAccount: "user@email.com",
 		},
 		"invalid scheme": {
 			uri:     "http://totp/Example:alice?secret=JBSWY3DPEHPK3PXP",
@@ -61,11 +53,10 @@ func TestExtractTOTPInfo(t *testing.T) {
 			errMsg:  "not a valid otpauth URL",
 		},
 		"wrong auth type": {
-			uri:        "otpauth://hotp/Example:alice?secret=JBSWY3DPEHPK3PXP",
-			wantErr:    false,
-			wantSecret: "JBSWY3DPEHPK3PXP",
-			wantIssuer: "Example",
-			wantLabel:  "alice",
+			uri:         "otpauth://hotp/Example:alice?secret=JBSWY3DPEHPK3PXP",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantIssuer:  "Example",
+			wantAccount: "alice",
 		},
 		"missing secret": {
 			uri:     "otpauth://totp/Example:alice?issuer=Example",
@@ -83,61 +74,77 @@ func TestExtractTOTPInfo(t *testing.T) {
 			errMsg:  "not a valid otpauth URL",
 		},
 		"uri with additional parameters": {
-			uri:        "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&issuer=Example&digits=6&period=30",
-			wantSecret: "JBSWY3DPEHPK3PXP",
-			wantIssuer: "Example",
-			wantLabel:  "alice",
-			wantErr:    false,
+			uri:         "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&issuer=Example&digits=6&period=30",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantIssuer:  "Example",
+			wantAccount: "alice",
 		},
 		"path with multiple segments": {
-			uri:        "otpauth://totp/service.com/department/user?secret=JBSWY3DPEHPK3PXP",
-			wantSecret: "JBSWY3DPEHPK3PXP",
-			wantIssuer: "",
-			wantLabel:  "service.com/department/user",
-			wantErr:    false,
+			uri:         "otpauth://totp/service.com/department/user?secret=JBSWY3DPEHPK3PXP",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantAccount: "service.com/department/user",
 		},
 		"extremely long secret": {
-			uri:        "otpauth://totp/Example:alice?secret=" + strings.Repeat("A", 1000) + "&issuer=Example",
-			wantSecret: strings.Repeat("A", 1000),
-			wantIssuer: "Example",
-			wantLabel:  "alice",
-			wantErr:    false,
+			uri:         "otpauth://totp/Example:alice?secret=" + strings.Repeat("A", 1000) + "&issuer=Example",
+			wantSecret:  strings.Repeat("A", 1000),
+			wantIssuer:  "Example",
+			wantAccount: "alice",
 		},
 		"special characters in label": {
-			uri:        "otpauth://totp/Test%20%26%20Co.:user%40test.com?secret=JBSWY3DPEHPK3PXP",
-			wantSecret: "JBSWY3DPEHPK3PXP",
-			wantIssuer: "Test & Co.",
-			wantLabel:  "user@test.com",
-			wantErr:    false,
+			uri:         "otpauth://totp/Test%20%26%20Co.:user%40test.com?secret=JBSWY3DPEHPK3PXP",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantIssuer:  "Test & Co.",
+			wantAccount: "user@test.com",
+		},
+		"invalid digits (garbage suffix)": {
+			uri:     "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&digits=6abc",
+			wantErr: true,
+			errMsg:  "invalid digits value",
+		},
+		"digits out of range": {
+			uri:     "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&digits=9",
+			wantErr: true,
+			errMsg:  "invalid digits value",
+		},
+		"invalid period (non-positive)": {
+			uri:     "otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXP&period=0",
+			wantErr: true,
+			errMsg:  "invalid period value",
+		},
+		"account with unencoded colon": {
+			// First colon is the issuer/account delimiter — subsequent colons
+			// are part of the account name.
+			uri:         "otpauth://totp/GitHub:alice:work?secret=JBSWY3DPEHPK3PXP",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantIssuer:  "GitHub",
+			wantAccount: "alice:work",
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			secret, issuer, label, err := ExtractTOTPInfo(tc.uri)
+			info, err := ExtractTOTPFullInfo(tc.uri)
 
 			if (err != nil) != tc.wantErr {
-				t.Errorf("ExtractTOTPInfo() error = %v, wantErr %v", err, tc.wantErr)
+				t.Errorf("ExtractTOTPFullInfo() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
 
-			if tc.wantErr && tc.errMsg != "" {
-				if !strings.Contains(err.Error(), tc.errMsg) {
+			if tc.wantErr {
+				if tc.errMsg != "" && !strings.Contains(err.Error(), tc.errMsg) {
 					t.Errorf("Expected error containing %q, got %q", tc.errMsg, err.Error())
 				}
 				return
 			}
 
-			if !tc.wantErr {
-				if secret != tc.wantSecret {
-					t.Errorf("Secret = %v, want %v", secret, tc.wantSecret)
-				}
-				if issuer != tc.wantIssuer {
-					t.Errorf("Issuer = %v, want %v", issuer, tc.wantIssuer)
-				}
-				if label != tc.wantLabel {
-					t.Errorf("Label = %v, want %v", label, tc.wantLabel)
-				}
+			if info.Secret != tc.wantSecret {
+				t.Errorf("Secret = %v, want %v", info.Secret, tc.wantSecret)
+			}
+			if info.Issuer != tc.wantIssuer {
+				t.Errorf("Issuer = %v, want %v", info.Issuer, tc.wantIssuer)
+			}
+			if info.Account != tc.wantAccount {
+				t.Errorf("Account = %v, want %v", info.Account, tc.wantAccount)
 			}
 		})
 	}
@@ -199,90 +206,6 @@ func TestExtractSecretFromOTPAuthURL(t *testing.T) {
 		})
 	}
 }
-
-func TestScanQRCode(t *testing.T) {
-	originalExecCommand := execCommand
-	originalOSStat := osStat
-	defer func() {
-		execCommand = originalExecCommand
-		osStat = originalOSStat
-	}()
-
-	tests := map[string]struct {
-		mockExecCmd func(name string, args ...string) *exec.Cmd
-		mockStat    func(name string) (os.FileInfo, error)
-		errMsg      string
-		wantErr     bool
-	}{
-		"screenshot command fails": {
-			mockExecCmd: func(name string, args ...string) *exec.Cmd {
-				if name == "screencapture" {
-					return exec.Command("false")
-				}
-				return exec.Command("echo")
-			},
-			wantErr: true,
-			errMsg:  "failed to capture screenshot",
-		},
-		"screenshot canceled (file not found)": {
-			mockExecCmd: func(name string, args ...string) *exec.Cmd {
-				if name == "screencapture" {
-					return exec.Command("true")
-				}
-				return exec.Command("echo")
-			},
-			mockStat: func(name string) (os.FileInfo, error) {
-				return nil, os.ErrNotExist
-			},
-			wantErr: true,
-			errMsg:  "screenshot capture was canceled or failed",
-		},
-		"file too small": {
-			mockExecCmd: func(name string, args ...string) *exec.Cmd {
-				if name == "screencapture" {
-					return exec.Command("true")
-				}
-				return exec.Command("echo")
-			},
-			mockStat: func(name string) (os.FileInfo, error) {
-				return mockFileInfo{size: 50}, nil
-			},
-			wantErr: true,
-			errMsg:  "screenshot capture was canceled or failed",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			execCommand = tc.mockExecCmd
-			if tc.mockStat != nil {
-				osStat = tc.mockStat
-			}
-
-			_, err := ScanQRCode()
-
-			if (err != nil) != tc.wantErr {
-				t.Errorf("ScanQRCode() error = %v, wantErr %v", err, tc.wantErr)
-				return
-			}
-
-			if tc.wantErr && tc.errMsg != "" && !strings.Contains(err.Error(), tc.errMsg) {
-				t.Errorf("Expected error containing %q, got %q", tc.errMsg, err.Error())
-			}
-		})
-	}
-}
-
-type mockFileInfo struct {
-	size int64
-}
-
-func (m mockFileInfo) Name() string       { return "test.png" }
-func (m mockFileInfo) Size() int64        { return m.size }
-func (m mockFileInfo) Mode() os.FileMode  { return 0o644 }
-func (m mockFileInfo) ModTime() time.Time { return time.Now() }
-func (m mockFileInfo) IsDir() bool        { return false }
-func (m mockFileInfo) Sys() any           { return nil }
 
 func TestDecodeQRCodeFromFile(t *testing.T) {
 	tests := map[string]struct {
@@ -498,63 +421,6 @@ func TestDecodeNonTOTPQRCode(t *testing.T) {
 				t.Errorf("Expected error containing %q, got %q", tc.wantErr, err.Error())
 			}
 		})
-	}
-}
-
-func TestScanQRCodePlatform(t *testing.T) {
-	originalExecCommand := execCommand
-	originalOSStat := osStat
-	defer func() {
-		execCommand = originalExecCommand
-		osStat = originalOSStat
-	}()
-
-	if runtime.GOOS != "darwin" {
-		execCommand = func(name string, args ...string) *exec.Cmd {
-			if name == "screencapture" {
-				return exec.Command("false")
-			}
-			return exec.Command("echo")
-		}
-
-		_, err := ScanQRCode()
-		if err == nil {
-			t.Error("Expected error on non-macOS platform")
-		}
-	}
-}
-
-func TestScanQRCodeCleanup(t *testing.T) {
-	originalExecCommand := execCommand
-	originalOSStat := osStat
-	defer func() {
-		execCommand = originalExecCommand
-		osStat = originalOSStat
-	}()
-
-	tempFiles := make([]string, 0)
-
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		if name == "screencapture" && len(args) >= 2 {
-			tempFiles = append(tempFiles, args[1])
-			return exec.Command("false")
-		}
-		return exec.Command("echo")
-	}
-
-	_, err := ScanQRCode()
-	if err == nil {
-		t.Error("Expected error from failed screencapture")
-	}
-
-	time.Sleep(100 * time.Millisecond)
-	for _, file := range tempFiles {
-		if _, err := os.Stat(file); err == nil {
-			t.Errorf("Temp file %s was not cleaned up", file)
-			if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
-				t.Errorf("failed to remove leftover temp file: %v", err)
-			}
-		}
 	}
 }
 

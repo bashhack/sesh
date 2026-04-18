@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/makiuchi-d/gozxing"
@@ -19,39 +20,6 @@ var (
 	execCommand = exec.Command
 	osStat      = os.Stat
 )
-
-// ScanQRCode captures a QR code using screenshots and extracts the TOTP secret
-func ScanQRCode() (string, error) {
-	tmp, err := os.CreateTemp("", "sesh-qr-*.png")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
-	}
-	tempFile := tmp.Name()
-	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("close temp file: %w", err)
-	}
-	defer func() {
-		if err := os.Remove(tempFile); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: failed to remove temp file %s: %v\n", tempFile, err)
-		}
-	}()
-
-	fmt.Println("📸 Please select the area containing the QR code...")
-	cmd := execCommand("screencapture", "-i", tempFile)
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("failed to capture screenshot: %w", err)
-	}
-
-	// Check if the user canceled (file would be empty or very small)
-	fileInfo, err := osStat(tempFile)
-	if err != nil || fileInfo.Size() < 100 {
-		return "", fmt.Errorf("screenshot capture was canceled or failed")
-	}
-
-	fmt.Println("✅ Screenshot captured, processing QR code...")
-
-	return DecodeQRCodeFromFile(tempFile)
-}
 
 // DecodeQRCodeFromFile reads a QR code from an image file and extracts the TOTP secret
 func DecodeQRCodeFromFile(filename string) (string, error) {
@@ -176,16 +144,6 @@ type TOTPInfo struct {
 	Period    int    // 0 means default (30)
 }
 
-// ExtractTOTPInfo extracts additional information from a TOTP QR code
-// Returns secret, issuer, account name
-func ExtractTOTPInfo(otpauthURL string) (string, string, string, error) {
-	info, err := ExtractTOTPFullInfo(otpauthURL)
-	if err != nil {
-		return "", "", "", err
-	}
-	return info.Secret, info.Issuer, info.Account, nil
-}
-
 // ExtractTOTPFullInfo extracts all TOTP parameters from an otpauth:// URI,
 // including algorithm, digits, and period for non-standard configurations.
 func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
@@ -206,24 +164,30 @@ func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
 	}
 
 	if d := query.Get("digits"); d != "" {
-		if _, err := fmt.Sscanf(d, "%d", &info.Digits); err != nil {
-			return TOTPInfo{}, fmt.Errorf("invalid digits value %q: %w", d, err)
+		n, err := strconv.Atoi(d)
+		if err != nil || n < 6 || n > 8 {
+			return TOTPInfo{}, fmt.Errorf("invalid digits value %q: must be 6, 7, or 8", d)
 		}
+		info.Digits = n
 	}
 	if p := query.Get("period"); p != "" {
-		if _, err := fmt.Sscanf(p, "%d", &info.Period); err != nil {
-			return TOTPInfo{}, fmt.Errorf("invalid period value %q: %w", p, err)
+		n, err := strconv.Atoi(p)
+		if err != nil || n <= 0 {
+			return TOTPInfo{}, fmt.Errorf("invalid period value %q: must be a positive integer", p)
 		}
+		info.Period = n
 	}
 
-	// Extract label (which might contain issuer and account)
+	// Extract label. Per the Key URI Format, the label is "issuer:account"
+	// and the delimiter is the *first* unencoded colon — so use Cut, not
+	// LastIndex, to tolerate hand-rolled QRs with colons in the account.
 	label := strings.TrimPrefix(parsedURL.Path, "/")
 	info.Account = label
-	if i := strings.LastIndex(label, ":"); i >= 0 {
+	if before, after, ok := strings.Cut(label, ":"); ok {
 		if info.Issuer == "" {
-			info.Issuer = label[:i]
+			info.Issuer = before
 		}
-		info.Account = label[i+1:]
+		info.Account = after
 	}
 
 	if info.Secret == "" {

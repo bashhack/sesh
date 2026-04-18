@@ -31,9 +31,6 @@ var runCommand = func(name string, args ...string) ([]byte, error) {
 // readPassword is a variable so we can swap it out in tests
 var readPassword = term.ReadPassword
 
-// scanQRCode is a variable so we can swap it out in tests
-var scanQRCode = qrcode.ScanQRCode
-
 // scanQRCodeFull returns full TOTP info (including algorithm, digits, period)
 var scanQRCodeFull = qrcode.ScanQRCodeFull
 
