@@ -155,6 +155,16 @@ func TestHighlightMatch(t *testing.T) {
 			text: "GitHub", query: "github",
 			expected: "\033[1mGitHub\033[0m",
 		},
+		"non-ASCII text skips highlighting": {
+			// Turkish "İ" lowercases to "i\u0307" (two bytes becomes three),
+			// so byte-level slicing could land mid-rune; bail out cleanly.
+			text: "İstanbul", query: "stan",
+			expected: "İstanbul",
+		},
+		"non-ASCII query skips highlighting": {
+			text: "strasse", query: "ß",
+			expected: "strasse",
+		},
 	}
 
 	for name, tc := range tests {

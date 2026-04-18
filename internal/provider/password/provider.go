@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 
+	"unicode/utf8"
+
 	"golang.org/x/term"
 
 	"github.com/bashhack/sesh/internal/env"
@@ -709,8 +711,14 @@ func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, e
 }
 
 // highlightMatch wraps the first case-insensitive occurrence of query in text
-// with ANSI bold escape codes.
+// with ANSI bold escape codes. Skips highlighting for non-ASCII input:
+// strings.ToLower can change byte lengths for some Unicode (e.g. Turkish
+// "İ" → "i\u0307"), so byte-index slicing into the original text would
+// land mid-rune and produce mojibake.
 func highlightMatch(text, query string) string {
+	if utf8.RuneCountInString(text) != len(text) || utf8.RuneCountInString(query) != len(query) {
+		return text
+	}
 	lower := strings.ToLower(text)
 	idx := strings.Index(lower, query)
 	if idx < 0 {

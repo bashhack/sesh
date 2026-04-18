@@ -50,7 +50,10 @@ func resolveBaseDir(goos, appdata, xdgDataHome, homeDir string) (string, error) 
 		}
 		return filepath.Join(homeDir, "Library", "Application Support"), nil
 	case "windows":
-		if appdata != "" {
+		// Mirror the XDG rule: only accept an absolute %APPDATA%; a
+		// relative value would let the DB land in the launching
+		// process's CWD.
+		if appdata != "" && filepath.IsAbs(appdata) {
 			return appdata, nil
 		}
 		if homeDir == "" {

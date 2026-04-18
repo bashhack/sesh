@@ -23,9 +23,13 @@ func TestResolveBaseDir(t *testing.T) {
 		},
 
 		"windows APPDATA set": {
+			// Use a Unix-absolute path so filepath.IsAbs returns true on
+			// the darwin host these tests run on; realism doesn't matter
+			// because the caller is fed fixed env values, not a real
+			// Windows environment.
 			goos:    "windows",
-			appdata: "C:/Users/alice/AppData/Roaming",
-			want:    "C:/Users/alice/AppData/Roaming",
+			appdata: "/AppData/Roaming",
+			want:    "/AppData/Roaming",
 		},
 		"windows APPDATA empty falls back to home": {
 			goos:    "windows",
