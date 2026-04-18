@@ -1,12 +1,17 @@
 package password
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"flag"
+	"strings"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/password"
+	"github.com/bashhack/sesh/internal/qrcode"
 )
 
 func TestName(t *testing.T) {
@@ -248,6 +253,555 @@ func TestDeleteEntry_InvalidID(t *testing.T) {
 	err := p.DeleteEntry("not-a-valid-id")
 	if err == nil {
 		t.Fatal("expected error for malformed entry ID")
+	}
+}
+
+// stubReadPassword overrides the package-level readPassword seam and
+// returns a restore func callers should defer.
+func stubReadPassword(t *testing.T, value string, err error) {
+	t.Helper()
+	orig := readPassword
+	readPassword = func() ([]byte, error) {
+		if err != nil {
+			return nil, err
+		}
+		return []byte(value), nil
+	}
+	t.Cleanup(func() { readPassword = orig })
+}
+
+func stubStdinIsTerminal(t *testing.T, isTTY bool) {
+	t.Helper()
+	orig := stdinIsTerminal
+	stdinIsTerminal = func() bool { return isTTY }
+	t.Cleanup(func() { stdinIsTerminal = orig })
+}
+
+func stubScanQRCodeFull(t *testing.T, info qrcode.TOTPInfo, err error) {
+	t.Helper()
+	orig := scanQRCodeFull
+	scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
+		if err != nil {
+			return qrcode.TOTPInfo{}, err
+		}
+		return info, nil
+	}
+	t.Cleanup(func() { scanQRCodeFull = orig })
+}
+
+// newTestProvider builds a Provider with a buffered stdout and an empty
+// stdin. Prompts still go to the real os.Stderr — tests don't assert on
+// prompt text, so there's no need to capture it.
+func newTestProvider(kc keychain.Provider) (*Provider, *bytes.Buffer) {
+	p := NewProvider(kc)
+	p.User = "testuser"
+	var stdout bytes.Buffer
+	p.stdout = &stdout
+	p.stdin = strings.NewReader("")
+	return p, &stdout
+}
+
+func TestStorePassword_HappyPath(t *testing.T) {
+	stubReadPassword(t, "s3cret", nil)
+
+	var storedKey, storedAccount string
+	var storedSecret []byte
+	mock := &mocks.MockProvider{
+		SetSecretFunc: func(account, service string, secret []byte) error {
+			storedAccount = account
+			storedKey = service
+			storedSecret = append([]byte(nil), secret...)
+			return nil
+		},
+		SetDescriptionFunc: func(_, _, _ string) error { return nil },
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "store"
+	p.service = "github"
+	p.username = "alice"
+	p.force = true
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if string(storedSecret) != "s3cret" {
+		t.Errorf("stored secret = %q, want s3cret", storedSecret)
+	}
+	if storedAccount != "testuser" {
+		t.Errorf("stored account = %q, want testuser", storedAccount)
+	}
+	if !strings.Contains(storedKey, "github") {
+		t.Errorf("stored service key = %q, want contains github", storedKey)
+	}
+	if !strings.Contains(creds.DisplayInfo, "Stored password for github") {
+		t.Errorf("DisplayInfo = %q, want contains 'Stored password for github'", creds.DisplayInfo)
+	}
+}
+
+func TestStorePassword_OverwriteRefusedOnPipedStdin(t *testing.T) {
+	stubStdinIsTerminal(t, false)
+
+	mock := &mocks.MockProvider{
+		ListEntriesFunc: func(service string) ([]keychain.KeychainEntry, error) {
+			return []keychain.KeychainEntry{
+				{Service: service, Account: "testuser"},
+			}, nil
+		},
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "store"
+	p.service = "github"
+	p.username = "alice"
+
+	_, err := p.GetCredentials()
+	if err == nil {
+		t.Fatal("expected error when entry exists on piped stdin, got nil")
+	}
+	if !strings.Contains(err.Error(), "--force to overwrite") {
+		t.Errorf("error = %v, want to mention --force", err)
+	}
+}
+
+func TestStorePassword_NoteFromPipedStdin(t *testing.T) {
+	stubStdinIsTerminal(t, false)
+
+	var storedSecret []byte
+	mock := &mocks.MockProvider{
+		SetSecretFunc: func(_, _ string, secret []byte) error {
+			storedSecret = append([]byte(nil), secret...)
+			return nil
+		},
+		SetDescriptionFunc: func(_, _, _ string) error { return nil },
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "store"
+	p.service = "diary"
+	p.entryType = "secure_note"
+	p.force = true
+	p.stdin = strings.NewReader("line one\nline two\n")
+
+	if _, err := p.GetCredentials(); err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if string(storedSecret) != "line one\nline two\n" {
+		t.Errorf("stored note = %q, want multiline body", storedSecret)
+	}
+}
+
+func TestGeneratePassword_HappyPathClipboardMode(t *testing.T) {
+	mock := &mocks.MockProvider{
+		SetSecretFunc:      func(_, _ string, _ []byte) error { return nil },
+		SetDescriptionFunc: func(_, _, _ string) error { return nil },
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "generate"
+	p.service = "github"
+	p.pwLength = 24
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if len(creds.CopyValue) != 24 {
+		t.Errorf("CopyValue length = %d, want 24", len(creds.CopyValue))
+	}
+	if !strings.Contains(creds.DisplayInfo, "--show") {
+		t.Errorf("DisplayInfo should hint at --show/--clip, got %q", creds.DisplayInfo)
+	}
+}
+
+func TestGeneratePassword_ShowEchoesPassword(t *testing.T) {
+	mock := &mocks.MockProvider{
+		SetSecretFunc:      func(_, _ string, _ []byte) error { return nil },
+		SetDescriptionFunc: func(_, _, _ string) error { return nil },
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "generate"
+	p.service = "github"
+	p.pwLength = 24
+	p.show = true
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if creds.CopyValue != "" {
+		t.Errorf("CopyValue = %q, want empty when --show is set", creds.CopyValue)
+	}
+	if !strings.Contains(creds.DisplayInfo, "Generated and stored password for github") {
+		t.Errorf("DisplayInfo = %q, missing status line", creds.DisplayInfo)
+	}
+}
+
+func TestGeneratePassword_JSONFormat(t *testing.T) {
+	mock := &mocks.MockProvider{
+		SetSecretFunc:      func(_, _ string, _ []byte) error { return nil },
+		SetDescriptionFunc: func(_, _, _ string) error { return nil },
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "generate"
+	p.service = "github"
+	p.username = "alice"
+	p.pwLength = 16
+	p.format = "json"
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	var payload struct {
+		Service  string `json:"service"`
+		Username string `json:"username"`
+		Type     string `json:"type"`
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal([]byte(creds.DisplayInfo), &payload); err != nil {
+		t.Fatalf("DisplayInfo not JSON: %v (raw %q)", err, creds.DisplayInfo)
+	}
+	if payload.Service != "github" || payload.Username != "alice" || payload.Type != "password" {
+		t.Errorf("JSON header mismatch: %+v", payload)
+	}
+	if len(payload.Password) != 16 {
+		t.Errorf("password length = %d, want 16", len(payload.Password))
+	}
+}
+
+func TestGetPassword_ShowReturnsPlainSecret(t *testing.T) {
+	mock := &mocks.MockProvider{
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return []byte("s3cret"), nil
+		},
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "get"
+	p.service = "github"
+	p.show = true
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if creds.DisplayInfo != "s3cret" {
+		t.Errorf("DisplayInfo = %q, want s3cret", creds.DisplayInfo)
+	}
+	if creds.CopyValue != "" {
+		t.Errorf("CopyValue should be empty in --show mode, got %q", creds.CopyValue)
+	}
+}
+
+func TestGetPassword_DefaultUsesClipboardPayload(t *testing.T) {
+	mock := &mocks.MockProvider{
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return []byte("s3cret"), nil
+		},
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "get"
+	p.service = "github"
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if creds.CopyValue != "s3cret" {
+		t.Errorf("CopyValue = %q, want s3cret", creds.CopyValue)
+	}
+	if !strings.Contains(creds.DisplayInfo, "--show") {
+		t.Errorf("DisplayInfo should hint --show, got %q", creds.DisplayInfo)
+	}
+}
+
+func TestGetPassword_JSONFormat(t *testing.T) {
+	mock := &mocks.MockProvider{
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return []byte("s3cret"), nil
+		},
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "get"
+	p.service = "github"
+	p.format = "json"
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	var payload struct {
+		Password string `json:"password"`
+	}
+	if err := json.Unmarshal([]byte(creds.DisplayInfo), &payload); err != nil {
+		t.Fatalf("DisplayInfo not JSON: %v (raw %q)", err, creds.DisplayInfo)
+	}
+	if payload.Password != "s3cret" {
+		t.Errorf("json.password = %q, want s3cret", payload.Password)
+	}
+}
+
+func TestSearchPasswords_NoMatches(t *testing.T) {
+	mock := &mocks.MockProvider{
+		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
+			return nil, nil
+		},
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "search"
+	p.query = "nonexistent"
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if !strings.Contains(creds.DisplayInfo, "No entries matching") {
+		t.Errorf("DisplayInfo = %q, want 'No entries matching'", creds.DisplayInfo)
+	}
+}
+
+func TestSearchPasswords_MatchingEntries(t *testing.T) {
+	mock := &mocks.MockProvider{
+		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
+			return []keychain.KeychainEntry{
+				{Service: "sesh-password/password/github/alice", Account: "testuser"},
+				{Service: "sesh-password/password/stripe", Account: "testuser"},
+			}, nil
+		},
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "search"
+	p.query = "git"
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if !strings.Contains(creds.DisplayInfo, "Found 1 entries") {
+		t.Errorf("DisplayInfo = %q, want to include 'Found 1 entries'", creds.DisplayInfo)
+	}
+	// "github" prints with the matched "git" wrapped in ANSI bold, so the
+	// literal substring isn't contiguous — check for the unhighlighted tail.
+	if !strings.Contains(creds.DisplayInfo, "hub") {
+		t.Errorf("DisplayInfo = %q, want to include the matched entry", creds.DisplayInfo)
+	}
+}
+
+func TestDeleteEntry_CancelsOnNo(t *testing.T) {
+	deleted := false
+	mock := &mocks.MockProvider{
+		DeleteEntryFunc: func(_, _ string) error {
+			deleted = true
+			return nil
+		},
+	}
+
+	p, _ := newTestProvider(mock)
+	p.stdin = strings.NewReader("n\n")
+
+	err := p.DeleteEntry("sesh-password/password/github/user1:alice")
+	if err == nil || !strings.Contains(err.Error(), "delete cancelled") {
+		t.Errorf("expected delete-cancelled error, got %v", err)
+	}
+	if deleted {
+		t.Error("DeleteEntry should not have been called when user answered n")
+	}
+}
+
+func TestDeleteEntry_ConfirmsOnYes(t *testing.T) {
+	deleted := false
+	mock := &mocks.MockProvider{
+		DeleteEntryFunc: func(_, _ string) error {
+			deleted = true
+			return nil
+		},
+	}
+
+	p, _ := newTestProvider(mock)
+	p.stdin = strings.NewReader("y\n")
+
+	if err := p.DeleteEntry("sesh-password/password/github/user1:alice"); err != nil {
+		t.Fatalf("DeleteEntry: %v", err)
+	}
+	if !deleted {
+		t.Error("DeleteEntry should have been called when user answered y")
+	}
+}
+
+func TestStoreTOTP_QRPath(t *testing.T) {
+	stubScanQRCodeFull(t, qrcode.TOTPInfo{
+		Secret:    "JBSWY3DPEHPK3PXP",
+		Issuer:    "GitHub",
+		Account:   "alice@example.com",
+		Algorithm: "SHA256",
+		Digits:    8,
+		Period:    60,
+	}, nil)
+
+	var gotDesc string
+	mock := &mocks.MockProvider{
+		SetSecretFunc:       func(_, _ string, _ []byte) error { return nil },
+		SetSecretStringFunc: func(_, _, _ string) error { return nil },
+		SetDescriptionFunc: func(_, _, description string) error {
+			gotDesc = description
+			return nil
+		},
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "totp-store"
+	p.service = "github"
+	p.stdin = strings.NewReader("2\n")
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if p.username != "alice@example.com" {
+		t.Errorf("username = %q, want QR account to seed it", p.username)
+	}
+	if !strings.Contains(gotDesc, "GitHub") {
+		t.Errorf("SetDescription payload = %q, want to carry issuer", gotDesc)
+	}
+	if !strings.Contains(creds.DisplayInfo, "Stored TOTP secret") {
+		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
+	}
+}
+
+func TestStoreTOTP_ManualPath(t *testing.T) {
+	stubReadPassword(t, "JBSWY3DPEHPK3PXP", nil)
+
+	mock := &mocks.MockProvider{
+		SetSecretFunc:       func(_, _ string, _ []byte) error { return nil },
+		SetSecretStringFunc: func(_, _, _ string) error { return nil },
+		SetDescriptionFunc:  func(_, _, _ string) error { return nil },
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "totp-store"
+	p.service = "github"
+	p.stdin = strings.NewReader("1\n")
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if !strings.Contains(creds.DisplayInfo, "Stored TOTP secret for github") {
+		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
+	}
+}
+
+func TestStoreTOTP_QRScanFailure(t *testing.T) {
+	stubScanQRCodeFull(t, qrcode.TOTPInfo{}, errors.New("boom"))
+
+	p, _ := newTestProvider(&mocks.MockProvider{})
+	p.action = "totp-store"
+	p.service = "github"
+	p.stdin = strings.NewReader("2\n")
+
+	_, err := p.GetCredentials()
+	if err == nil || !strings.Contains(err.Error(), "QR code scan failed") {
+		t.Errorf("expected QR scan failure, got %v", err)
+	}
+}
+
+func TestGenerateTOTP_HappyPath(t *testing.T) {
+	mock := &mocks.MockProvider{
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return []byte("JBSWY3DPEHPK3PXP"), nil
+		},
+		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
+			return nil, nil
+		},
+	}
+
+	p, _ := newTestProvider(mock)
+	p.action = "totp-generate"
+	p.service = "github"
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if len(creds.CopyValue) != 6 {
+		t.Errorf("TOTP code length = %d, want 6", len(creds.CopyValue))
+	}
+	if !strings.Contains(creds.DisplayInfo, "TOTP code:") {
+		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
+	}
+}
+
+func TestExport_WritesJSONToProviderStdout(t *testing.T) {
+	mock := &mocks.MockProvider{
+		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
+			return []keychain.KeychainEntry{
+				{Service: "sesh-password/password/github", Account: "testuser"},
+			}, nil
+		},
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return []byte("s3cret"), nil
+		},
+	}
+
+	p, stdout := newTestProvider(mock)
+	p.action = "export"
+	p.format = "json"
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if stdout.Len() == 0 {
+		t.Fatal("export wrote nothing to p.stdout")
+	}
+	if !json.Valid(stdout.Bytes()) {
+		t.Errorf("export output is not valid JSON: %q", stdout.String())
+	}
+	if !strings.Contains(creds.DisplayInfo, "Exported") {
+		t.Errorf("DisplayInfo = %q, want to mention Exported", creds.DisplayInfo)
+	}
+}
+
+func TestImport_ReadsFromProviderStdin(t *testing.T) {
+	var stored int
+	mock := &mocks.MockProvider{
+		SetSecretFunc: func(_, _ string, _ []byte) error {
+			stored++
+			return nil
+		},
+		SetSecretStringFunc: func(_, _, _ string) error { return nil },
+		SetDescriptionFunc:  func(_, _, _ string) error { return nil },
+		// Existence probe during import treats nil/nil as "exists". Return
+		// ErrNotFound so the entry is treated as new and StorePassword runs.
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return nil, keychain.ErrNotFound
+		},
+		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) { return nil, nil },
+	}
+
+	body := `[{"service":"github","username":"alice","type":"password","secret":"s3cret"}]`
+	p, _ := newTestProvider(mock)
+	p.action = "import"
+	p.format = "json"
+	p.stdin = strings.NewReader(body)
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if stored != 1 {
+		t.Errorf("SetSecret calls = %d, want 1", stored)
+	}
+	if !strings.Contains(creds.DisplayInfo, "Imported 1 entries") {
+		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
 	}
 }
 

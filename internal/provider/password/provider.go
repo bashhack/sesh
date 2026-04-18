@@ -23,6 +23,8 @@ import (
 // Provider implements ServiceProvider for the password manager.
 type Provider struct {
 	keychain keychain.Provider
+	stdin    io.Reader
+	stdout   io.Writer
 
 	query      string // search query
 	sortBy     string
@@ -44,9 +46,25 @@ type Provider struct {
 
 var _ provider.ServiceProvider = (*Provider)(nil)
 
+// Package-level seams for TTY/QR interactions that can't be driven through
+// the p.stdin/stdout/stderr fields. Tests save + restore these via defer.
+var (
+	readPassword = func() ([]byte, error) {
+		return term.ReadPassword(int(os.Stdin.Fd()))
+	}
+	stdinIsTerminal = func() bool {
+		return term.IsTerminal(int(os.Stdin.Fd()))
+	}
+	scanQRCodeFull = qrcode.ScanQRCodeFull
+)
+
 // NewProvider creates a new password manager provider.
 func NewProvider(kc keychain.Provider) *Provider {
-	return &Provider{keychain: kc}
+	return &Provider{
+		keychain: kc,
+		stdin:    os.Stdin,
+		stdout:   os.Stdout,
+	}
 }
 
 func (p *Provider) Name() string         { return "password" }
@@ -238,7 +256,7 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 func (p *Provider) DeleteEntry(id string) error {
 	if !p.force {
 		fmt.Fprintf(os.Stderr, "Delete entry %q? [y/N]: ", id)
-		answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		answer, err := bufio.NewReader(p.stdin).ReadString('\n')
 		if err != nil {
 			return fmt.Errorf("read confirmation: %w", err)
 		}
@@ -276,7 +294,7 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 			// Interactive prompts require a TTY. With piped stdin the
 			// "answer" would silently consume piped content (e.g. the
 			// note body) — fail loudly and direct the caller to --force.
-			if !term.IsTerminal(int(os.Stdin.Fd())) {
+			if !stdinIsTerminal() {
 				who := ""
 				if p.username != "" {
 					who = fmt.Sprintf(" (%s)", p.username)
@@ -289,7 +307,7 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 				fmt.Fprintf(os.Stderr, " (%s)", p.username)
 			}
 			fmt.Fprintf(os.Stderr, ". Overwrite? [y/N]: ")
-			answer, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
+			answer, readErr := bufio.NewReader(p.stdin).ReadString('\n')
 			if readErr != nil {
 				return provider.Credentials{}, fmt.Errorf("read confirmation: %w", readErr)
 			}
@@ -307,11 +325,11 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 		// prompt when stdin is an interactive terminal — for piped input
 		// the content is already queued and a "please type" prompt would
 		// be misleading.
-		if term.IsTerminal(int(os.Stdin.Fd())) {
+		if stdinIsTerminal() {
 			fmt.Fprintf(os.Stderr, "Enter note for %s (end with Ctrl+D):\n", p.service)
 		}
 		var err error
-		pw, err = io.ReadAll(os.Stdin)
+		pw, err = io.ReadAll(p.stdin)
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("failed to read note: %w", err)
 		}
@@ -323,7 +341,7 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 		}
 		fmt.Fprintf(os.Stderr, ": ")
 		var err error
-		pw, err = term.ReadPassword(int(os.Stdin.Fd()))
+		pw, err = readPassword()
 		fmt.Fprintln(os.Stderr)
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("failed to read %s: %w", et, err)
@@ -511,7 +529,7 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 	fmt.Fprintln(os.Stderr, "  2) Scan QR code from screen")
 	fmt.Fprintf(os.Stderr, "Choose [1/2]: ")
 
-	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	answer, err := bufio.NewReader(p.stdin).ReadString('\n')
 	if err != nil {
 		return provider.Credentials{}, fmt.Errorf("read input: %w", err)
 	}
@@ -522,7 +540,7 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 
 	switch answer {
 	case "2":
-		info, err := qrcode.ScanQRCodeFull()
+		info, err := scanQRCodeFull()
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("QR code scan failed: %w", err)
 		}
@@ -554,7 +572,7 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 		}
 		fmt.Fprintf(os.Stderr, ": ")
 
-		secretBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+		secretBytes, err := readPassword()
 		fmt.Fprintln(os.Stderr)
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("failed to read TOTP secret: %w", err)
@@ -609,11 +627,11 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 		EntryType: password.EntryType(p.entryType),
 	}
 
-	// Default export target is os.Stdout so callers can redirect with
+	// Default export target is p.stdout so callers can redirect with
 	// `sesh ... --action export > backup.json`. Status text is returned
 	// via DisplayInfo, which the caller routes to stderr; keeping status
 	// off stdout preserves the data stream for shell redirection.
-	var w io.Writer = os.Stdout
+	w := p.stdout
 	dest := "stdout"
 	if p.file != "" {
 		f, err := os.OpenFile(p.file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
@@ -664,7 +682,7 @@ func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, e
 		}()
 		r = f
 	} else {
-		r = os.Stdin
+		r = p.stdin
 	}
 
 	result, err := mgr.Import(r, opts)
