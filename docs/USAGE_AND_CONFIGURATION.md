@@ -308,6 +308,35 @@ sesh -service password -action import -file data.csv -format csv -on-conflict sk
 sesh -service password -action search -query stripe -format json
 ```
 
+#### Secure notes and piped input
+
+Secure notes accept multi-line bodies from stdin, so pipes and heredocs work:
+
+```bash
+# Pipe a note body
+echo "recovery codes: ..." | sesh -service password -action store \
+    -service-name backup-codes -entry-type secure_note
+
+# Heredoc
+sesh -service password -action store -service-name release-notes -entry-type secure_note <<'EOF'
+line one
+line two
+EOF
+```
+
+The "Enter note" prompt only appears when stdin is a real terminal. With piped input, no prompt is shown — the content is consumed directly.
+
+#### Overwriting existing entries
+
+By default, `store` will prompt `[y/N]` if an entry already exists at the given service/username. Because a piped stdin can't answer that prompt safely (the first line of the piped content would be consumed as the answer), sesh fails loudly in that case:
+
+```bash
+$ echo "new secret" | sesh -service password -action store -service-name github -username alice
+error: entry already exists for github (alice); re-run with --force to overwrite
+```
+
+Pass `-force` to overwrite non-interactively.
+
 ### Multi-Profile Management ([SVG](assets/multi-profile-management.svg))
 
 ```mermaid
