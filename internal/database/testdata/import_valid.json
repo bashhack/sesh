@@ -1,0 +1,26 @@
+[
+  {
+    "service": "github",
+    "username": "alice",
+    "type": "password",
+    "secret": "gh-pat-abc123def456"
+  },
+  {
+    "service": "stripe",
+    "username": "admin",
+    "type": "api_key",
+    "secret": "fake-stripe-key-abc123def456"
+  },
+  {
+    "service": "aws",
+    "username": "root",
+    "type": "totp",
+    "secret": "JBSWY3DPEHPK3PXP"
+  },
+  {
+    "service": "personal",
+    "username": "recovery-codes",
+    "type": "secure_note",
+    "secret": "1. abc-123-def\n2. ghi-456-jkl\n3. mno-789-pqr"
+  }
+]

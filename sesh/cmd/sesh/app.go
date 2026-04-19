@@ -14,6 +14,7 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
 	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
+	passwordProvider "github.com/bashhack/sesh/internal/provider/password"
 	totpProvider "github.com/bashhack/sesh/internal/provider/totp"
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/totp"
@@ -54,30 +55,34 @@ type VersionInfo struct {
 	Date    string
 }
 
-// NewDefaultApp creates a new App with default dependencies
-func NewDefaultApp(versionInfo VersionInfo) *App {
-	kc := keychain.NewDefaultProvider()
+// NewDefaultApp creates a new App with the given credential store.
+// The caller chooses the concrete keychain.Provider (system keychain,
+// SQLite store, etc.) and is responsible for its lifecycle.
+func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider) *App {
 	totpSvc := totp.NewDefaultProvider()
 	awsSvc := aws.NewDefaultProvider()
 
 	registry := provider.NewRegistry()
 	registry.RegisterProvider(awsProvider.NewProvider(awsSvc, kc, totpSvc))
 	registry.RegisterProvider(totpProvider.NewProvider(kc, totpSvc))
+	registry.RegisterProvider(passwordProvider.NewProvider(kc))
 
 	setupSvc := setup.NewSetupService(kc)
 	setupSvc.RegisterHandler(setup.NewAWSSetupHandler(kc))
 	setupSvc.RegisterHandler(setup.NewTOTPSetupHandler(kc))
 
 	return &App{
-		Registry:      registry,
-		SetupService:  setupSvc,
-		ExecLookPath:  exec.LookPath,
-		Exit:          os.Exit,
-		ClipboardCopy: clipboard.Copy,
-		TimeNow:       time.Now,
-		Stdout:        os.Stdout,
-		Stderr:        os.Stderr,
-		VersionInfo:   versionInfo,
+		Registry:     registry,
+		SetupService: setupSvc,
+		ExecLookPath: exec.LookPath,
+		Exit:         os.Exit,
+		ClipboardCopy: func(text string) error {
+			return clipboard.CopyWithAutoClear(text, 30*time.Second)
+		},
+		TimeNow:     time.Now,
+		Stdout:      os.Stdout,
+		Stderr:      os.Stderr,
+		VersionInfo: versionInfo,
 	}
 }
 
@@ -167,8 +172,12 @@ func (a *App) GenerateCredentials(serviceName string) error {
 		return err
 	}
 
-	if _, err := fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName); err != nil {
-		return fmt.Errorf("failed to write to stderr: %w", err)
+	quiet := isQuietProvider(p)
+
+	if !quiet {
+		if _, err := fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName); err != nil {
+			return fmt.Errorf("failed to write to stderr: %w", err)
+		}
 	}
 	startTime := time.Now()
 
@@ -177,12 +186,21 @@ func (a *App) GenerateCredentials(serviceName string) error {
 		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
 
-	elapsedTime := time.Since(startTime)
-	if _, err := fmt.Fprintf(a.Stderr, "✅ Credentials acquired in %.2fs\n", elapsedTime.Seconds()); err != nil {
-		return fmt.Errorf("failed to write to stderr: %w", err)
+	if !quiet {
+		elapsedTime := time.Since(startTime)
+		if _, err := fmt.Fprintf(a.Stderr, "✅ Credentials acquired in %.2fs\n", elapsedTime.Seconds()); err != nil {
+			return fmt.Errorf("failed to write to stderr: %w", err)
+		}
 	}
 
 	return a.PrintCredentials(&creds)
+}
+
+// isQuietProvider reports whether p opts out of the generic action
+// framing. Non-opting-in providers default to false.
+func isQuietProvider(p provider.ServiceProvider) bool {
+	qp, ok := p.(provider.QuietProvider)
+	return ok && qp.SuppressActionFraming()
 }
 
 // CopyToClipboard copies a value to the system clipboard
@@ -196,8 +214,12 @@ func (a *App) CopyToClipboard(serviceName string) error {
 		return err
 	}
 
-	if _, err := fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName); err != nil {
-		return fmt.Errorf("failed to write to stderr: %w", err)
+	quiet := isQuietProvider(p)
+
+	if !quiet {
+		if _, err := fmt.Fprintf(a.Stderr, "🔐 Generating credentials for %s...\n", serviceName); err != nil {
+			return fmt.Errorf("failed to write to stderr: %w", err)
+		}
 	}
 	startTime := time.Now()
 
@@ -233,11 +255,14 @@ func (a *App) CopyToClipboard(serviceName string) error {
 
 // PrintCredentials outputs the credentials
 func (a *App) PrintCredentials(creds *provider.Credentials) error {
-	// Format expiry time
-	expiryDisplay := "unknown"
+	// Expiry is meaningful only for time-limited credentials (AWS session
+	// tokens). Non-expiring results (passwords, stored secrets, imports)
+	// leave Expiry as the zero value; skip the line entirely in that case
+	// rather than printing "unknown".
 	if !creds.Expiry.IsZero() {
 		duration := creds.Expiry.Sub(a.TimeNow())
 		formatted := creds.Expiry.Local().Format("2006-01-02 15:04:05")
+		var expiryDisplay string
 		if duration <= 0 {
 			expiryDisplay = fmt.Sprintf("%s (expired)", formatted)
 		} else {
@@ -257,11 +282,9 @@ func (a *App) PrintCredentials(creds *provider.Credentials) error {
 			}
 			expiryDisplay = fmt.Sprintf("%s (valid for %s)", formatted, validFor)
 		}
-	}
-
-	// Human-readable info goes to stderr so stdout remains eval-safe
-	if _, err := fmt.Fprintf(a.Stderr, "⏳ Expires at: %s\n", expiryDisplay); err != nil {
-		return fmt.Errorf("failed to write to stderr: %w", err)
+		if _, err := fmt.Fprintf(a.Stderr, "⏳ Expires at: %s\n", expiryDisplay); err != nil {
+			return fmt.Errorf("failed to write to stderr: %w", err)
+		}
 	}
 
 	if creds.MFAAuthenticated {

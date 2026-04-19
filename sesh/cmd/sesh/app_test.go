@@ -8,9 +8,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
 )
+
+// MockKeychainProvider is a no-op keychain.Provider for tests that don't
+// exercise keychain operations.
+type MockKeychainProvider struct{}
+
+func (m *MockKeychainProvider) GetSecret(account, service string) ([]byte, error) {
+	return nil, keychain.ErrNotFound
+}
+func (m *MockKeychainProvider) SetSecret(account, service string, secret []byte) error { return nil }
+func (m *MockKeychainProvider) GetSecretString(account, service string) (string, error) {
+	return "", keychain.ErrNotFound
+}
+func (m *MockKeychainProvider) SetSecretString(account, service, secret string) error { return nil }
+func (m *MockKeychainProvider) GetMFASerialBytes(account, profile string) ([]byte, error) {
+	return nil, keychain.ErrNotFound
+}
+func (m *MockKeychainProvider) ListEntries(service string) ([]keychain.KeychainEntry, error) {
+	return nil, nil
+}
+func (m *MockKeychainProvider) DeleteEntry(account, service string) error          { return nil }
+func (m *MockKeychainProvider) SetDescription(service, account, desc string) error { return nil }
 
 // MockSetupService is a mock implementation of setup.SetupService
 type MockSetupService struct {
@@ -142,7 +164,7 @@ func TestNewDefaultApp(t *testing.T) {
 		Commit:  "unknown",
 		Date:    "unknown",
 	}
-	app := NewDefaultApp(versionInfo)
+	app := NewDefaultApp(versionInfo, &MockKeychainProvider{})
 
 	if app.Registry == nil {
 		t.Error("Registry is nil")
@@ -716,9 +738,10 @@ func TestApp_PrintCredentials(t *testing.T) {
 	fixedNow := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 
 	tests := map[string]struct {
-		creds      provider.Credentials
-		wantStdout []string
-		wantStderr []string
+		creds         provider.Credentials
+		wantStdout    []string
+		wantStderr    []string
+		notWantStderr []string // substrings that must NOT appear
 	}{
 		"aws credentials with MFA": {
 			creds: provider.Credentials{
@@ -753,9 +776,11 @@ func TestApp_PrintCredentials(t *testing.T) {
 				Variables:   map[string]string{},
 			},
 			wantStderr: []string{
-				"⏳ Expires at: unknown",
 				"TOTP code for github: 123456",
 			},
+			// TOTP codes don't expire in a session sense; omit the line
+			// entirely rather than printing "unknown".
+			notWantStderr: []string{"⏳ Expires at:"},
 		},
 		"expired credentials": {
 			creds: provider.Credentials{
@@ -783,9 +808,9 @@ func TestApp_PrintCredentials(t *testing.T) {
 				"# ----------------------------------------",
 			},
 			wantStderr: []string{
-				"⏳ Expires at: unknown",
 				"Test credentials",
 			},
+			notWantStderr: []string{"⏳ Expires at:"},
 		},
 		"minutes-only expiry": {
 			creds: provider.Credentials{
@@ -857,6 +882,11 @@ func TestApp_PrintCredentials(t *testing.T) {
 			for _, expected := range tc.wantStderr {
 				if !strings.Contains(stderr, expected) {
 					t.Errorf("PrintCredentials() stderr missing expected string: %q", expected)
+				}
+			}
+			for _, unwanted := range tc.notWantStderr {
+				if strings.Contains(stderr, unwanted) {
+					t.Errorf("PrintCredentials() stderr contains unwanted string: %q\nfull stderr:\n%s", unwanted, stderr)
 				}
 			}
 		})

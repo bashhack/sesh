@@ -31,8 +31,8 @@ var runCommand = func(name string, args ...string) ([]byte, error) {
 // readPassword is a variable so we can swap it out in tests
 var readPassword = term.ReadPassword
 
-// scanQRCode is a variable so we can swap it out in tests
-var scanQRCode = qrcode.ScanQRCode
+// scanQRCodeFull returns full TOTP info (including algorithm, digits, period)
+var scanQRCodeFull = qrcode.ScanQRCodeFull
 
 // timeSleep is a variable so we can swap it out in tests
 var timeSleep = time.Sleep
@@ -538,7 +538,7 @@ func (h *AWSSetupHandler) Setup() error {
 	}
 
 	// Validate and normalize the TOTP secret
-	normalizedSecret, err := totp.ValidateAndNormalizeSecret(secretStr)
+	normalizedSecret, err := validateAndNormalizeSecret(secretStr)
 	if err != nil {
 		return fmt.Errorf("invalid TOTP secret: %w", err)
 	}
@@ -579,9 +579,9 @@ func (h *AWSSetupHandler) Setup() error {
 		description = fmt.Sprintf("AWS MFA for profile %s", profile)
 	}
 
-	err = h.keychainProvider.StoreEntryMetadata(constants.AWSServicePrefix, serviceName, user, description)
+	err = h.keychainProvider.SetDescription(serviceName, user, description)
 	if err != nil {
-		fmt.Println("⚠️ Warning: Failed to store metadata. This entry might not appear when listing available AWS profiles.")
+		fmt.Println("⚠️ Warning: Failed to store description. This entry might not appear when listing available AWS profiles.")
 	}
 
 	h.showSetupCompletionMessage(profile)
@@ -664,13 +664,23 @@ func (h *TOTPSetupHandler) promptForCaptureMethod() (string, error) {
 
 // captureTOTPSecret captures the TOTP secret using the specified method
 func (h *TOTPSetupHandler) captureTOTPSecret(choice string) (string, error) {
+	info, err := h.captureTOTPSecretFull(choice)
+	if err != nil {
+		return "", err
+	}
+	return info.Secret, nil
+}
+
+// captureTOTPSecretFull captures the TOTP secret and full params using the specified method
+func (h *TOTPSetupHandler) captureTOTPSecretFull(choice string) (qrcode.TOTPInfo, error) {
 	switch choice {
 	case "1": // Manual entry
-		return h.captureManualEntry()
-	case "2": // QR code capture with retry + fallback
-		return h.captureQRCodeWithFallback()
+		secret, err := h.captureManualEntry()
+		return qrcode.TOTPInfo{Secret: secret}, err
+	case "2": // QR code capture with retry + fallback — returns full params
+		return captureQRWithRetryFull(h.reader, h.captureManualEntry)
 	default:
-		return "", fmt.Errorf("invalid choice, please select 1 or 2")
+		return qrcode.TOTPInfo{}, fmt.Errorf("invalid choice, please select 1 or 2")
 	}
 }
 
@@ -762,17 +772,17 @@ func (h *TOTPSetupHandler) Setup() error {
 		return err
 	}
 
-	secretStr, err := h.captureTOTPSecret(choice)
+	info, err := h.captureTOTPSecretFull(choice)
 	if err != nil {
 		return err
 	}
 
 	// Validate and normalize the TOTP secret
-	normalizedSecret, err := validateAndNormalizeSecret(secretStr)
+	normalizedSecret, err := validateAndNormalizeSecret(info.Secret)
 	if err != nil {
 		return fmt.Errorf("invalid TOTP secret: %w", err)
 	}
-	secretStr = normalizedSecret
+	secretStr := normalizedSecret
 
 	// Generate two consecutive TOTP codes
 	firstCode, secondCode, err := generateConsecutiveCodes(secretStr)
@@ -792,16 +802,34 @@ func (h *TOTPSetupHandler) Setup() error {
 		return fmt.Errorf("failed to store secret in keychain: %w", err)
 	}
 
-	// Store metadata for better organization and retrieval
-	description := fmt.Sprintf("TOTP for %s", serviceName)
-	if profile != "" {
-		description = fmt.Sprintf("TOTP for %s profile %s", serviceName, profile)
+	// Build the description. For non-default QR params (algorithm, digits,
+	// period) this is load-bearing metadata — GenerateTOTPCode reads it
+	// back to reproduce the correct codes. For default params we fall
+	// back to a cosmetic human-readable label.
+	params := totp.Params{
+		Issuer:    info.Issuer,
+		Algorithm: info.Algorithm,
+		Digits:    info.Digits,
+		Period:    info.Period,
+	}
+	description := params.MarshalDescription()
+	paramsAreLoadBearing := description != ""
+	if !paramsAreLoadBearing {
+		description = fmt.Sprintf("TOTP for %s", serviceName)
+		if profile != "" {
+			description = fmt.Sprintf("TOTP for %s profile %s", serviceName, profile)
+		}
 	}
 
-	// Store metadata using the keychain provider
-	err = h.keychainProvider.StoreEntryMetadata(constants.TOTPServicePrefix, serviceKey, user, description)
-	if err != nil {
-		fmt.Println("⚠️ Warning: Failed to store metadata. This entry might not appear when listing available TOTP services.")
+	if err := h.keychainProvider.SetDescription(serviceKey, user, description); err != nil {
+		if paramsAreLoadBearing {
+			// Fail closed: the entry would otherwise persist with the
+			// secret but no params, and every future code generation
+			// would silently fall back to defaults and produce wrong
+			// codes for the issuer's expected configuration.
+			return fmt.Errorf("stored TOTP secret but failed to persist non-default params (subsequent codes would fall back to defaults): %w", err)
+		}
+		fmt.Println("⚠️ Warning: Failed to store description. This entry might not appear when listing available TOTP services.")
 	}
 
 	// Display the generated TOTP codes for setup verification
@@ -816,8 +844,19 @@ func (h *TOTPSetupHandler) Setup() error {
 	return nil
 }
 
-// captureQRWithRetry is a shared helper for QR code capture with retry logic
+// captureQRWithRetry is a shared helper for QR code capture with retry logic.
+// Returns just the secret string (for backward compatibility).
 func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, error)) (string, error) {
+	info, err := captureQRWithRetryFull(reader, manualEntryFunc)
+	if err != nil {
+		return "", err
+	}
+	return info.Secret, nil
+}
+
+// captureQRWithRetryFull captures a QR code with retry logic and returns full TOTP info
+// (including algorithm, digits, period). Falls back to manual entry with default params.
+func captureQRWithRetryFull(reader *bufio.Reader, manualEntryFunc func() (string, error)) (qrcode.TOTPInfo, error) {
 	maxRetries := 2
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -825,13 +864,16 @@ func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, er
 		fmt.Println("Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
 		fmt.Print("Press Enter to activate screenshot mode...")
 		if err := waitForEnter(reader); err != nil {
-			return "", err
+			return qrcode.TOTPInfo{}, err
 		}
 
-		secretStr, err := scanQRCode()
+		info, err := scanQRCodeFull()
 		if err == nil {
 			fmt.Println("✅ QR code successfully captured and decoded!")
-			return secretStr, nil
+			if info.Issuer != "" {
+				fmt.Printf("   Issuer: %s\n", info.Issuer)
+			}
+			return info, nil
 		}
 
 		fmt.Printf("❌ QR capture failed: %v\n", err)
@@ -841,11 +883,12 @@ func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, er
 			fmt.Print("Press Enter to try again, or 'm' to switch to manual entry: ")
 			choice, readErr := readLine(reader)
 			if readErr != nil {
-				return "", readErr
+				return qrcode.TOTPInfo{}, readErr
 			}
 			if strings.EqualFold(choice, "m") {
 				fmt.Println("Switching to manual entry...")
-				return manualEntryFunc()
+				secret, err := manualEntryFunc()
+				return qrcode.TOTPInfo{Secret: secret}, err
 			}
 		}
 	}
@@ -855,12 +898,13 @@ func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, er
 	fmt.Print("Would you like to enter the secret manually instead? (y/n): ")
 	fallback, err := readLine(reader)
 	if err != nil {
-		return "", err
+		return qrcode.TOTPInfo{}, err
 	}
 
 	if strings.EqualFold(fallback, "y") {
-		return manualEntryFunc()
+		secret, err := manualEntryFunc()
+		return qrcode.TOTPInfo{Secret: secret}, err
 	}
 
-	return "", fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
+	return qrcode.TOTPInfo{}, fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
 }

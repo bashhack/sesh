@@ -2,6 +2,7 @@ package setup
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +14,9 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/testutil"
+	"github.com/bashhack/sesh/internal/totp"
 )
 
 func TestRunCommandDefault(t *testing.T) {
@@ -1193,9 +1196,11 @@ func TestAWSSetupHandler_setupMFAConsole(t *testing.T) {
 
 // TestCaptureQRWithRetry tests QR code capture with retry logic
 func TestCaptureQRWithRetry(t *testing.T) {
-	// Save original scanQRCode and restore after test
-	origScanQRCode := scanQRCode
-	defer func() { scanQRCode = origScanQRCode }()
+	// Save originals and restore after test
+	origScanQRCodeFull := scanQRCodeFull
+	defer func() {
+		scanQRCodeFull = origScanQRCodeFull
+	}()
 
 	// Mock manual entry function
 	mockManualEntry := func() (string, error) {
@@ -1256,17 +1261,17 @@ func TestCaptureQRWithRetry(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			scanCallCount := 0
 
-			// Mock scanQRCode
-			scanQRCode = func() (string, error) {
+			// Mock scanQRCodeFull (used by captureQRWithRetryFull)
+			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
 				if scanCallCount < len(tc.scanResults) {
 					err := tc.scanResults[scanCallCount]
 					scanCallCount++
 					if err != nil {
-						return "", err
+						return qrcode.TOTPInfo{}, err
 					}
-					return tc.scanSecret, nil
+					return qrcode.TOTPInfo{Secret: tc.scanSecret}, nil
 				}
-				return "", errors.New("unexpected scan call")
+				return qrcode.TOTPInfo{}, errors.New("unexpected scan call")
 			}
 
 			reader := bufio.NewReader(strings.NewReader(tc.readerInput))
@@ -1279,7 +1284,7 @@ func TestCaptureQRWithRetry(t *testing.T) {
 
 			// Check scan was called expected number of times
 			if scanCallCount != tc.wantScanCalls {
-				t.Errorf("scanQRCode called %d times, want %d", scanCallCount, tc.wantScanCalls)
+				t.Errorf("scanQRCodeFull called %d times, want %d", scanCallCount, tc.wantScanCalls)
 			}
 
 			// Check secret
@@ -1307,11 +1312,11 @@ func TestCaptureQRWithRetry(t *testing.T) {
 
 // TestTOTPSetupHandler_captureQRCodeWithFallback tests TOTP QR capture wrapper
 func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
-	// Save original scanQRCode and readPassword and restore after test
-	origScanQRCode := scanQRCode
+	// Save originals and restore after test
+	origScanQRCodeFull := scanQRCodeFull
 	origReadPassword := readPassword
 	defer func() {
-		scanQRCode = origScanQRCode
+		scanQRCodeFull = origScanQRCodeFull
 		readPassword = origReadPassword
 	}()
 
@@ -1339,12 +1344,12 @@ func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Mock scanQRCode
-			scanQRCode = func() (string, error) {
+			// Mock scanQRCodeFull
+			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
 				if tc.scanSuccess {
-					return "QR_SECRET", nil
+					return qrcode.TOTPInfo{Secret: "QR_SECRET"}, nil
 				}
-				return "", errors.New("scan failed")
+				return qrcode.TOTPInfo{}, errors.New("scan failed")
 			}
 
 			// Mock readPassword
@@ -1380,11 +1385,11 @@ func TestTOTPSetupHandler_captureQRCodeWithFallback(t *testing.T) {
 
 // TestAWSSetupHandler_captureAWSQRCodeWithFallback tests AWS QR capture wrapper
 func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
-	// Save original scanQRCode and readPassword and restore after test
-	origScanQRCode := scanQRCode
+	// Save originals and restore after test
+	origScanQRCodeFull := scanQRCodeFull
 	origReadPassword := readPassword
 	defer func() {
-		scanQRCode = origScanQRCode
+		scanQRCodeFull = origScanQRCodeFull
 		readPassword = origReadPassword
 	}()
 
@@ -1412,12 +1417,12 @@ func TestAWSSetupHandler_captureAWSQRCodeWithFallback(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Mock scanQRCode
-			scanQRCode = func() (string, error) {
+			// Mock scanQRCodeFull
+			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
 				if tc.scanSuccess {
-					return "AWS_QR_SECRET", nil
+					return qrcode.TOTPInfo{Secret: "AWS_QR_SECRET"}, nil
 				}
-				return "", errors.New("scan failed")
+				return qrcode.TOTPInfo{}, errors.New("scan failed")
 			}
 
 			// Mock readPassword
@@ -1643,8 +1648,8 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 // TestTOTPSetupHandler_Setup tests the main TOTP setup flow
 func TestTOTPSetupHandler_Setup(t *testing.T) {
 	// Save original functions and restore after test
-	origScanQRCode := scanQRCode
-	defer func() { scanQRCode = origScanQRCode }()
+	origScanQRCodeFull := scanQRCodeFull
+	defer func() { scanQRCodeFull = origScanQRCodeFull }()
 
 	origValidateAndNormalizeSecret := validateAndNormalizeSecret
 	defer func() { validateAndNormalizeSecret = origValidateAndNormalizeSecret }()
@@ -1802,12 +1807,12 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Mock scanQRCode
-			scanQRCode = func() (string, error) {
+			// Mock scanQRCodeFull
+			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
 				if tc.scanQRError != nil {
-					return "", tc.scanQRError
+					return qrcode.TOTPInfo{}, tc.scanQRError
 				}
-				return tc.scanQRResult, nil
+				return qrcode.TOTPInfo{Secret: tc.scanQRResult}, nil
 			}
 
 			// Mock totp functions
@@ -1852,7 +1857,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 				SetSecretStringFunc: func(user, service, secret string) error {
 					return tc.setSecretError
 				},
-				StoreEntryMetadataFunc: func(prefix, service, user, description string) error {
+				SetDescriptionFunc: func(service, account, description string) error {
 					return tc.storeMetadataError
 				},
 			}
@@ -1889,11 +1894,138 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 				if !strings.Contains(output, "Generated TOTP codes for verification") {
 					t.Error("Expected verification codes message")
 				}
-				if tc.storeMetadataError != nil && !strings.Contains(output, "Warning: Failed to store metadata") {
-					t.Error("Expected metadata warning")
+				if tc.storeMetadataError != nil && !strings.Contains(output, "Warning: Failed to store description") {
+					t.Error("Expected description warning")
 				}
 			}
 		})
+	}
+}
+
+func TestTOTPSetupHandler_Setup_NonDefaultParamsFailClosed(t *testing.T) {
+	// When the QR scan produced non-default params (algorithm/digits/
+	// period), the description is load-bearing — GenerateTOTPCode needs
+	// it to reproduce the right codes. A SetDescription failure here
+	// must NOT be downgraded to a warning; the entry would otherwise
+	// persist with the secret but fall back to defaults on every read.
+	origScanQRCodeFull := scanQRCodeFull
+	defer func() { scanQRCodeFull = origScanQRCodeFull }()
+	origValidate := validateAndNormalizeSecret
+	defer func() { validateAndNormalizeSecret = origValidate }()
+	origGenerate := generateConsecutiveCodes
+	defer func() { generateConsecutiveCodes = origGenerate }()
+	origGetUser := getCurrentUser
+	defer func() { getCurrentUser = origGetUser }()
+
+	scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
+		return qrcode.TOTPInfo{
+			Secret:    "JBSWY3DPEHPK3PXP",
+			Algorithm: "SHA256",
+			Digits:    8,
+			Period:    60,
+		}, nil
+	}
+	validateAndNormalizeSecret = func(s string) (string, error) { return s, nil }
+	generateConsecutiveCodes = func(s string) (string, string, error) {
+		return "11111111", "22222222", nil
+	}
+	getCurrentUser = func() (string, error) { return "testuser", nil }
+
+	mockKeychain := &mocks.MockProvider{
+		GetSecretStringFunc: func(_, _ string) (string, error) { return "", nil },
+		SetSecretStringFunc: func(_, _, _ string) error { return nil },
+		SetDescriptionFunc: func(_, _, _ string) error {
+			return errors.New("simulated keychain write failure")
+		},
+	}
+
+	handler := &TOTPSetupHandler{
+		reader:           bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n")),
+		keychainProvider: mockKeychain,
+	}
+
+	var err error
+	_ = testutil.CaptureStdout(func() {
+		err = handler.Setup()
+	})
+
+	if err == nil {
+		t.Fatal("expected error when non-default params cannot be persisted, got nil")
+	}
+	if !strings.Contains(err.Error(), "failed to persist non-default params") {
+		t.Errorf("error should mention params persistence failure, got: %v", err)
+	}
+}
+
+func TestTOTPSetupHandler_Setup_QRMetadataPersisted(t *testing.T) {
+	// When a QR scan returns a non-default issuer/algorithm/digits/period,
+	// the description written to the keychain must be the JSON-encoded
+	// Params — GenerateTOTPCode later unmarshals it to reproduce the exact
+	// same codes. Regression guard: if this stops being persisted, codes
+	// for non-default issuers silently drift to defaults.
+	origScanQRCodeFull := scanQRCodeFull
+	defer func() { scanQRCodeFull = origScanQRCodeFull }()
+	origValidate := validateAndNormalizeSecret
+	defer func() { validateAndNormalizeSecret = origValidate }()
+	origGenerate := generateConsecutiveCodes
+	defer func() { generateConsecutiveCodes = origGenerate }()
+	origGetUser := getCurrentUser
+	defer func() { getCurrentUser = origGetUser }()
+
+	scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
+		return qrcode.TOTPInfo{
+			Secret:    "JBSWY3DPEHPK3PXP",
+			Issuer:    "ExampleCorp",
+			Account:   "alice@example.com",
+			Algorithm: "SHA256",
+			Digits:    8,
+			Period:    60,
+		}, nil
+	}
+	validateAndNormalizeSecret = func(s string) (string, error) { return s, nil }
+	generateConsecutiveCodes = func(s string) (string, string, error) {
+		return "11111111", "22222222", nil
+	}
+	getCurrentUser = func() (string, error) { return "testuser", nil }
+
+	var gotDescription string
+	mockKeychain := &mocks.MockProvider{
+		GetSecretStringFunc: func(_, _ string) (string, error) { return "", nil },
+		SetSecretStringFunc: func(_, _, _ string) error { return nil },
+		SetDescriptionFunc: func(_, _, description string) error {
+			gotDescription = description
+			return nil
+		},
+	}
+
+	handler := &TOTPSetupHandler{
+		reader:           bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n")),
+		keychainProvider: mockKeychain,
+	}
+
+	var setupErr error
+	_ = testutil.CaptureStdout(func() {
+		setupErr = handler.Setup()
+	})
+	if setupErr != nil {
+		t.Fatalf("Setup: %v", setupErr)
+	}
+
+	var got totp.Params
+	if err := json.Unmarshal([]byte(gotDescription), &got); err != nil {
+		t.Fatalf("SetDescription payload is not JSON: %v (raw %q)", err, gotDescription)
+	}
+	if got.Issuer != "ExampleCorp" {
+		t.Errorf("Issuer = %q, want ExampleCorp", got.Issuer)
+	}
+	if got.Algorithm != "SHA256" {
+		t.Errorf("Algorithm = %q, want SHA256", got.Algorithm)
+	}
+	if got.Digits != 8 {
+		t.Errorf("Digits = %d, want 8", got.Digits)
+	}
+	if got.Period != 60 {
+		t.Errorf("Period = %d, want 60", got.Period)
 	}
 }
 
@@ -2001,7 +2133,7 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 				SetSecretStringFunc: func(account, service string, secret string) error {
 					return nil
 				},
-				StoreEntryMetadataFunc: func(serviceType, service, account, description string) error {
+				SetDescriptionFunc: func(service, account, description string) error {
 					return nil
 				},
 			}

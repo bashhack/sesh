@@ -73,6 +73,7 @@ The architecture follows a strict layering model where dependencies flow downwar
                     │      internal/          │
                     │                         │
                     │ • Keychain (secrets)    │
+                    │ • SQLite + encryption   │
                     │ • TOTP generation       │
                     │ • Secure memory         │
                     │ • Clipboard             │
@@ -115,15 +116,16 @@ The architecture follows a strict layering model where dependencies flow downwar
 
 2. **Dependency Injection**:
    ```go
-   func NewDefaultApp(versionInfo VersionInfo) *App
+   func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider) *App
    ```
-   The constructor creates all dependencies (keychain, TOTP, AWS services) internally and wires them together. Tests can substitute any dependency.
+   The constructor accepts a `keychain.Provider` (the credential store) and wires all other dependencies internally. `main.go` selects the concrete store (macOS Keychain or SQLite) via `buildProvider()`. Tests can substitute any dependency.
 
 3. **Provider Registration**:
    ```go
    registry := provider.NewRegistry()
    registry.RegisterProvider(awsProvider.NewProvider(awsSvc, kc, totpSvc))
    registry.RegisterProvider(totpProvider.NewProvider(kc, totpSvc))
+   registry.RegisterProvider(passwordProvider.NewProvider(kc))
    ```
    Centralized registration in `NewDefaultApp` makes provider discovery explicit and debuggable.
 
@@ -186,12 +188,23 @@ This pattern (following Go's composition model) provides:
 
 Infrastructure components implement the following security controls:
 
-#### Keychain Integration
+#### Credential Storage
 
-**macOS Keychain Integration**
+sesh supports two storage backends, selectable via `SESH_BACKEND`:
+
+**macOS Keychain (default)**
 - OS-managed encryption (AES-256)
 - Process-level access control via `-T` flag
 - User-transparent authorization dialogs
+
+**SQLite Store (`SESH_BACKEND=sqlite`)**
+- Pure-Go SQLite via `modernc.org/sqlite` — zero C dependencies
+- AES-256-GCM encryption with per-entry salts
+- Argon2id key derivation for per-entry keys
+- FTS5 full-text search across service, account, and description
+- Audit log table tracking all access, modifications, and deletions
+- Master encryption key stored in the macOS Keychain via `KeychainSource`
+- WAL mode for concurrent read safety
 
 Binary path restrictions in practice
 ```bash
@@ -233,14 +246,65 @@ flowchart LR
 
 Each entry is a keychain item keyed by `{namespace}/{segments}` (built by `keyformat.Build`, parsed by `keyformat.Parse`). The account field is the OS username. AWS stores both a TOTP secret (`sesh-aws/{profile}`) and an MFA serial (`sesh-aws-serial/{profile}`) per profile.
 
+**SQLite Data Model**
+
+The SQLite backend (`SESH_BACKEND=sqlite`) stores credentials in `<dataDir>/sesh/passwords.db` using the schema in `internal/database/schema.go`. `passwords_fts` is a virtual FTS5 index shadowing the `passwords` table; `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
+
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+erDiagram
+    passwords ||--|| passwords_fts : "FTS5 shadow (content='passwords')"
+    passwords }o..|| key_metadata : "key_version (logical)"
+    passwords ||..o{ audit_log : "entry_id (logical, nullable)"
+
+    passwords {
+        TEXT id PK
+        TEXT service
+        TEXT account
+        TEXT entry_type
+        BLOB encrypted_data "AES-256-GCM ciphertext"
+        BLOB salt "per-entry, 16 bytes"
+        INTEGER key_version "→ key_metadata.version"
+        TEXT metadata "description / TOTP params"
+        DATETIME created_at
+        DATETIME updated_at
+    }
+
+    key_metadata {
+        INTEGER version PK
+        TEXT algorithm "argon2id"
+        TEXT params "JSON: time/memory/threads/key_len"
+        BLOB salt "master-key salt"
+        DATETIME created_at
+        BOOLEAN active
+    }
+
+    audit_log {
+        INTEGER id PK
+        TEXT event_type "store/retrieve/delete/..."
+        TEXT entry_id "→ passwords.id, nullable for auth events"
+        TEXT detail
+        DATETIME created_at
+    }
+
+    passwords_fts {
+        TEXT service "indexed"
+        TEXT account "indexed"
+        TEXT metadata "indexed"
+    }
+```
+
 #### TOTP Generation
 
-**Dual Code Generation**
+**Dual Code Generation with Params**
 ```go
-// Current + Next code generation in a single call
+// Standard generation (6 digits, 30s, SHA1)
 currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secret)
+
+// Non-standard generation (respects stored algorithm, digits, period)
+currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
 ```
-Generates both current and next codes to handle the transition between 30-second TOTP windows.
+Generates both current and next codes to handle the transition between TOTP windows. When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored as JSON in the entry's description. Providers read these params before generating codes, falling back to defaults (SHA1, 6 digits, 30 seconds) when no params are stored.
 
 #### Memory Management
 
@@ -368,7 +432,8 @@ User ──► CLI ──► ValidateRequest
                 ▼
          Return credentials
                 │
-         -clip: copy current code to clipboard via pbcopy
+         -clip: copy current code to clipboard via CopyWithAutoClear
+                (auto-clears after 30 seconds if clipboard unchanged)
          default: print codes, suggest using -clip
 ```
 
@@ -424,7 +489,7 @@ AWS CLI → [TRUST BOUNDARY] → AWS APIs
 
 Additional trust boundaries:
    sesh → [TRUST BOUNDARY] → Filesystem (temp shell init files, QR screenshot captures)
-   sesh → [TRUST BOUNDARY] → Clipboard (pbcopy — visible to clipboard managers)
+   sesh → [TRUST BOUNDARY] → Clipboard (pbcopy — visible to clipboard managers; auto-cleared after 30s)
 ```
 
 Each boundary represents:
@@ -452,14 +517,14 @@ func (p *YourProvider) GetCredentials() (Credentials, error) {
 
 // 3. Register in NewDefaultApp (pass whatever dependencies your provider needs)
 registry := provider.NewRegistry()
-registry.RegisterProvider(yourprovider.NewProvider(kc, totpSvc))
+registry.RegisterProvider(yourprovider.NewProvider(kc))
 ```
 
 Why this works:
 - Clear contract (ServiceProvider interface)
 - Dependencies are injected, not discovered
 - Registration is explicit and centralized
-- No global state for provider management (note: `keychain/metadata.go` uses `init()` to create zstd encoder/decoder singletons)
+- No global state for provider management (note: `keychain/metadata.go` uses `init()` to create zstd encoder/decoder singletons for the keychain backend's internal metadata compression)
 
 ### Capability Evolution
 
@@ -475,7 +540,16 @@ type SubshellProvider interface {
 }
 ```
 
-This same pattern (from Go's io package) enables future capabilities I'm exploring without breaking existing providers:
+This same pattern (from Go's io package) is also used by the password manager's `Searcher` interface — the SQLite store implements FTS5 search via `SearchEntries()`, while the keychain backend falls back to in-memory substring matching. The manager uses a type assertion to dispatch:
+
+```go
+// Exists today: FTS search dispatch
+type Searcher interface {
+    SearchEntries(query string) ([]keychain.KeychainEntry, error)
+}
+```
+
+The pattern enables future capabilities without breaking existing providers:
 
 ```go
 // Under consideration: audit logging for security-sensitive environments
@@ -583,8 +657,12 @@ sesh/
 │   ├── provider/          # Plugin system
 │   │   ├── interfaces.go  # Provider contract
 │   │   ├── registry.go    # Provider discovery
-│   │   └── */             # Provider implementations
-│   ├── keychain/          # OS-level security
+│   │   ├── aws/           # AWS provider
+│   │   ├── totp/          # TOTP provider
+│   │   └── password/      # Password manager provider
+│   ├── database/          # SQLite store, encryption, FTS, migrations
+│   ├── password/          # Password manager core (CRUD, search, filter)
+│   ├── keychain/          # macOS Keychain integration
 │   ├── secure/            # Memory security
 │   └── */                 # Focused packages
 └── docs/                  # Documentation

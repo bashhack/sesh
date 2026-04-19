@@ -13,6 +13,7 @@ import (
 type FlagSet interface {
 	StringVar(p *string, name string, value string, usage string)
 	BoolVar(p *bool, name string, value bool, usage string)
+	IntVar(p *int, name string, value int, usage string)
 }
 
 // ServiceProvider defines the interface that all service providers must implement
@@ -76,6 +77,16 @@ type FlagInfo struct {
 // to indicate whether they prefer subshell mode over printing credentials.
 type SubshellDecider interface {
 	ShouldUseSubshell() bool
+}
+
+// QuietProvider is an optional interface for providers that should not
+// print the app's generic "Generating credentials… / Credentials acquired
+// in Xs" framing. Useful for providers whose actions aren't a single
+// time-limited credential acquisition (e.g. password managers with store
+// / search / export / import sub-actions) and who produce their own
+// action-specific status via Credentials.DisplayInfo.
+type QuietProvider interface {
+	SuppressActionFraming() bool
 }
 
 // SubshellProvider is an optional interface that providers can implement

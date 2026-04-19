@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/qrcode"
 )
 
 // mockReader wraps a strings.Reader and returns an error when out of input
@@ -41,7 +42,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 	origRunCommand := runCommand
 	origValidateAndNormalizeSecret := validateAndNormalizeSecret
 	origGetCurrentUser := getCurrentUser
-	origScanQRCode := scanQRCode
+	origScanQRCodeFull := scanQRCodeFull
 	origReadPassword := readPassword
 	origTimeSleep := timeSleep
 	defer func() {
@@ -49,7 +50,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 		runCommand = origRunCommand
 		validateAndNormalizeSecret = origValidateAndNormalizeSecret
 		getCurrentUser = origGetCurrentUser
-		scanQRCode = origScanQRCode
+		scanQRCodeFull = origScanQRCodeFull
 		readPassword = origReadPassword
 		timeSleep = origTimeSleep
 	}()
@@ -109,7 +110,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			validateSecretError: fmt.Errorf("invalid base32"),
 			expectError:         true,
 			expectedErrorMsg:    "invalid TOTP secret",
-			userInput:           "\n2\nINVALID_SECRET\n", // empty profile, manual entry, bad secret
+			userInput:           "\n1\n\n", // empty profile, manual entry (choice 1), extra newline for prompts
 		},
 		"existing entry cancelled by user": {
 			awsCommandOutputs: map[string]string{
@@ -175,12 +176,12 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				}
 			}
 
-			// Mock scanQRCode
-			scanQRCode = func() (string, error) {
+			// Mock scanQRCodeFull
+			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
 				if tc.scanQRError != nil {
-					return "", tc.scanQRError
+					return qrcode.TOTPInfo{}, tc.scanQRError
 				}
-				return "otpauth://totp/AWS:user@example.com?secret=JBSWY3DPEHPK3PXP&issuer=AWS", nil
+				return qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP", Issuer: "AWS"}, nil
 			}
 
 			// Mock readPassword for manual entry
@@ -205,7 +206,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 				SetSecretStringFunc: func(account, service, secret string) error {
 					return tc.keychainSaveError
 				},
-				StoreEntryMetadataFunc: func(servicePrefix, service, account, description string) error {
+				SetDescriptionFunc: func(service, account, description string) error {
 					return nil
 				},
 			}
@@ -242,7 +243,7 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 		origExecLookPath := execLookPath
 		origRunCommand := runCommand
 		origGetCurrentUser := getCurrentUser
-		origScanQRCode := scanQRCode
+		origScanQRCodeFull := scanQRCodeFull
 		origTimeSleep := timeSleep
 
 		// Restore after test
@@ -250,7 +251,7 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 			execLookPath = origExecLookPath
 			runCommand = origRunCommand
 			getCurrentUser = origGetCurrentUser
-			scanQRCode = origScanQRCode
+			scanQRCodeFull = origScanQRCodeFull
 			timeSleep = origTimeSleep
 		}()
 
@@ -269,10 +270,8 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 			return "", fmt.Errorf("user error")
 		}
 
-		// Mock scanQRCode to return just the secret
-		scanQRCode = func() (string, error) {
-			return "JBSWY3DPEHPK3PXP", nil
-		}
+		// QR scanning is unreachable in this subtest — getCurrentUser fails
+		// first. No QR stub needed.
 
 		// Mock runCommand for AWS CLI calls
 		runCommand = func(name string, args ...string) ([]byte, error) {
@@ -289,7 +288,7 @@ func TestAWSSetupHandler_WithMockReader(t *testing.T) {
 			SetSecretStringFunc: func(account, service, secret string) error {
 				return nil
 			},
-			StoreEntryMetadataFunc: func(servicePrefix, service, account, description string) error {
+			SetDescriptionFunc: func(service, account, description string) error {
 				return nil
 			},
 		}

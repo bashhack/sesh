@@ -1,0 +1,4 @@
+service,username,type,secret,created_at,updated_at
+github,alice,password,gh-pat-abc123def456,2026-01-15T10:00:00Z,2026-03-01T14:30:00Z
+stripe,admin,api_key,fake-stripe-key-abc123def456,2026-02-01T09:00:00Z,2026-02-01T09:00:00Z
+aws,root,totp,JBSWY3DPEHPK3PXP,2026-01-01T00:00:00Z,2026-01-01T00:00:00Z

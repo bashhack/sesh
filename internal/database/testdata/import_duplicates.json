@@ -1,0 +1,14 @@
+[
+  {
+    "service": "github",
+    "username": "alice",
+    "type": "password",
+    "secret": "first-password"
+  },
+  {
+    "service": "github",
+    "username": "alice",
+    "type": "password",
+    "secret": "second-password"
+  }
+]

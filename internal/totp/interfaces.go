@@ -28,6 +28,9 @@ type Provider interface {
 	// GenerateConsecutiveCodesBytes generates consecutive TOTP codes from a byte slice, zeroing the copy after use.
 	GenerateConsecutiveCodesBytes(secret []byte) (current, next string, err error)
 
+	// GenerateConsecutiveCodesBytesWithParams generates consecutive codes using non-standard TOTP parameters.
+	GenerateConsecutiveCodesBytesWithParams(secret []byte, params Params) (current, next string, err error)
+
 	// GenerateConsecutiveCodesForTimeBytes generates consecutive TOTP codes from a byte slice for a given base time, zeroing the copy after use.
 	GenerateConsecutiveCodesForTimeBytes(secret []byte, baseTime time.Time) (current, next string, err error)
 
@@ -78,6 +81,11 @@ func (p *DefaultProvider) GenerateBytes(secret []byte) (string, error) {
 // GenerateConsecutiveCodesBytes generates consecutive TOTP codes from a byte slice, zeroing the copy after use.
 func (p *DefaultProvider) GenerateConsecutiveCodesBytes(secret []byte) (current, next string, err error) {
 	return GenerateConsecutiveCodesBytes(secret)
+}
+
+// GenerateConsecutiveCodesBytesWithParams generates consecutive codes using non-standard TOTP parameters.
+func (p *DefaultProvider) GenerateConsecutiveCodesBytesWithParams(secret []byte, params Params) (current, next string, err error) {
+	return GenerateConsecutiveCodesBytesWithParams(secret, params)
 }
 
 // GenerateConsecutiveCodesForTimeBytes generates consecutive TOTP codes from a byte slice for a given base time, zeroing the copy after use.

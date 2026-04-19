@@ -2,7 +2,7 @@
 
 This document provides detailed instructions for using and configuring sesh for secure authentication workflows across multiple providers.
 
-> **Requirements:** macOS (uses Keychain for secret storage). For the AWS provider, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
+> **Requirements:** macOS for the default Keychain backend. The SQLite backend (`SESH_BACKEND=sqlite`) works cross-platform. For the AWS provider, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
 
 ## Workflow Overview
 
@@ -104,8 +104,8 @@ sesh uses a provider-based configuration system:
 
 1. **Global flags** - Apply to all providers (e.g., `-service`, `-help`)
 2. **Provider-specific flags** - Apply only to the selected provider (e.g., `-profile` for AWS)
-3. **Environment variables** - For default AWS profile selection
-4. **Keychain storage** - Secure storage for all secrets and metadata
+3. **Environment variables** - For default AWS profile and backend selection (`SESH_BACKEND`)
+4. **Credential storage** - macOS Keychain (default) or encrypted SQLite (`SESH_BACKEND=sqlite`)
 
 ## Configuration Options
 
@@ -116,7 +116,7 @@ sesh uses a provider-based configuration system:
 | `-list-services`  | List all available service providers               | Global           |
 | `-version`         | Display version information                        | Global           |
 | `-help`           | Show help (use with -service for provider help)  | Global           |
-| `-service`        | Service provider to use (aws, totp) [REQUIRED]    | All commands     |
+| `-service`        | Service provider to use (aws, totp, password) [REQUIRED] | All commands     |
 | `-list`           | List entries for selected service                  | All providers    |
 | `-delete <id>`    | Delete entry for selected service                  | All providers    |
 | `-setup`          | Run interactive setup wizard                       | All providers    |
@@ -138,6 +138,33 @@ sesh uses a provider-based configuration system:
 |--------------------|----------------------------------------------------|------------------|
 | `-service-name`   | Name of service (github, google, slack, etc.)      | Yes              |
 | `-profile`        | Profile name for multiple accounts (work, personal)| No               |
+
+### Password Provider Options
+
+| Command Flag       | Description                                        | Required         |
+|--------------------|----------------------------------------------------|------------------|
+| `-action`         | Action: store, get, generate, search, export, import, totp-store, totp-generate | Depends on use |
+| `-service-name`   | Service name                                       | For store/get    |
+| `-username`       | Username for the service                           | No               |
+| `-entry-type`     | Filter: password, api_key, totp, secure_note       | No               |
+| `-query`          | Search query                                       | For search       |
+| `-format`         | Output format: table (default), json, csv          | No               |
+| `-show`           | Display password instead of clipboard hint         | No               |
+| `-file`           | File path for export/import (default: stdout/stdin)| No               |
+| `-on-conflict`    | Import conflict: skip, overwrite (default: error)  | No               |
+| `-force`          | Skip confirmation prompts                          | No               |
+| `-length`         | Generated password length (default 24)             | No               |
+| `-no-symbols`     | Exclude symbols from generated passwords           | No               |
+| `-sort`           | Sort by: service, created_at, updated_at           | No               |
+| `-limit`          | Limit number of results                            | No               |
+| `-offset`         | Skip first N results                               | No               |
+
+### Environment Variables
+
+| Variable           | Description                                        | Default          |
+|--------------------|----------------------------------------------------|------------------|
+| `AWS_PROFILE`     | Default AWS profile                                | `default`        |
+| `SESH_BACKEND`    | Storage backend — only `sqlite` selects SQLite; any other value (or unset) uses the keychain | `keychain`       |
 
 ## Usage Patterns
 
@@ -232,6 +259,84 @@ sesh -service totp -list
 
 The `[ID: ...]` value is what you pass to `-delete`.
 
+### Password Manager Workflow
+
+The password provider stores and retrieves passwords, API keys, TOTP secrets, and secure notes:
+
+```bash
+# Generate a password, store it, copy to clipboard
+sesh -service password -action generate -service-name github -username alice -clip
+
+# Generate without symbols, custom length
+sesh -service password -action generate -service-name github -username alice -no-symbols -length 32
+
+# Store a password manually (prompts for input securely)
+sesh -service password -action store -service-name github -username alice
+
+# Retrieve and show
+sesh -service password -action get -service-name github -username alice -show
+
+# Copy to clipboard
+sesh -service password -action get -service-name github -username alice -clip
+
+# Store an API key
+sesh -service password -action store -service-name stripe -username admin -entry-type api_key
+
+# Store and generate TOTP codes
+sesh -service password -action totp-store -service-name github -username alice
+sesh -service password -action totp-generate -service-name github -username alice
+
+# Search across all entries
+sesh -service password -action search -query github
+# Output:
+#   Found 2 entries matching "github":
+#     github (alice)                 [password] password (alice) for github
+#     github (alice)                 [totp] totp (alice) for github
+
+# List with filters
+sesh -service password -list -entry-type api_key -sort updated_at
+
+# Export all entries
+sesh -service password -action export -file backup.json
+sesh -service password -action export -format csv -file backup.csv
+
+# Import entries
+sesh -service password -action import -file backup.json
+sesh -service password -action import -file data.csv -format csv -on-conflict skip
+
+# JSON output for scripting
+sesh -service password -action search -query stripe -format json
+```
+
+#### Secure notes and piped input
+
+Secure notes accept multi-line bodies from stdin, so pipes and heredocs work:
+
+```bash
+# Pipe a note body
+echo "recovery codes: ..." | sesh -service password -action store \
+    -service-name backup-codes -entry-type secure_note
+
+# Heredoc
+sesh -service password -action store -service-name release-notes -entry-type secure_note <<'EOF'
+line one
+line two
+EOF
+```
+
+The "Enter note" prompt only appears when stdin is a real terminal. With piped input, no prompt is shown — the content is consumed directly.
+
+#### Overwriting existing entries
+
+By default, `store` will prompt `[y/N]` if an entry already exists at the given service/username. Because a piped stdin can't answer that prompt safely (the first line of the piped content would be consumed as the answer), sesh fails loudly in that case:
+
+```bash
+$ echo "new secret" | sesh -service password -action store -service-name github -username alice
+error: entry already exists for github (alice); re-run with --force to overwrite
+```
+
+Pass `-force` to overwrite non-interactively.
+
 ### Multi-Profile Management ([SVG](assets/multi-profile-management.svg))
 
 ```mermaid
@@ -308,7 +413,7 @@ During setup, sesh offers QR code scanning as the primary method for capturing T
 
 If QR scanning fails (e.g., QR code too blurry, wrong format, or you press Escape to cancel), sesh falls back to manual entry where you paste the base32 secret directly.
 
-> **Supported QR codes:** Only standard `otpauth://totp/...` URLs (RFC 6238). This is the format used by Google Authenticator, Authy, 1Password, and most TOTP-compatible services.
+> **Supported QR codes:** Only `otpauth://totp/...` URLs (RFC 6238). This is the format used by Google Authenticator, Authy, 1Password, and most TOTP-compatible services. Non-standard parameters (SHA-256/SHA-512 algorithm, 8 digits, custom period) are automatically extracted from the QR code and stored alongside the secret, so sesh generates correct codes for services with non-default configurations.
 
 ### Troubleshooting
 
@@ -352,7 +457,8 @@ When run without additional flags, sesh will:
 2. **For TOTP (`-service totp`)**: Display the current code with time remaining
 3. **Setup Required**: First-time users must run `-setup` for each service
 4. **Profile Selection**: Uses default AWS profile or requires `-service-name` for TOTP
-5. **Security**: All secrets stored in macOS Keychain with binary-level access control
+5. **Security**: Secrets are stored in the macOS Keychain (with binary-level ACLs) or in SQLite encrypted at rest with AES-256-GCM
+6. **Clipboard**: On macOS, values copied via `-clip` are automatically cleared after 30 seconds (only if the clipboard still holds the copied value). On other platforms no auto-clear is performed
 
 ## Subshell Behavior
 
