@@ -66,11 +66,42 @@ The SQLite backend provides application-level encryption on top of file-system s
 - **AES-256-GCM**: Authenticated encryption for every stored entry
 - **Per-entry salts**: Each entry derives a unique encryption key from the master key + a random 16-byte salt
 - **Argon2id key derivation**: Memory-hard KDF for per-entry key derivation (16 MiB, 1 iteration, 1 thread). The KDF input is the 256-bit high-entropy master key (see below), *not* a user password — so these parameters are chosen for domain separation between entries rather than password stretching, and fall below OWASP's password-KDF minimums by design
-- **Master key in Keychain**: The 256-bit master encryption key is stored in the macOS Keychain, combining OS-level access control with application-level encryption. The key is hex-encoded (64 ASCII characters) before storage because the `security` command's tokenizer can't reliably round-trip raw random bytes; the key is decoded on read and zeroed after use
+- **Two key sources** (`SESH_KEY_SOURCE`): the master key can come from the macOS Keychain (default) or be derived from a user-supplied master password (see below)
 - **Key versioning**: Schema supports key rotation via `key_version` column and `key_metadata` table (rotation logic planned)
 - **FTS5 search**: Full-text search indexes service names, accounts, and descriptions — search queries never touch encrypted data
 - **Audit logging**: Append-only `audit_log` table records access, modification, and deletion events with timestamps
 - **WAL mode**: Write-ahead logging for safe concurrent reads
+
+##### Keychain key source (default)
+
+The 256-bit master encryption key is stored in the macOS Keychain, combining OS-level access control with application-level encryption. The key is hex-encoded (64 ASCII characters) before storage because the `security` command's tokenizer can't reliably round-trip raw random bytes; the key is decoded on read and zeroed after use.
+
+##### Master password key source (`SESH_KEY_SOURCE=password`)
+
+Derives the master key from a user-supplied passphrase via Argon2id. **No keychain involvement**, so the SQLite backend is fully cross-platform in this mode.
+
+- **KDF**: Argon2id with `t=3, m=64 MiB, p=4, keyLen=32`. These parameters exceed OWASP 2023 minimums (`t=1, m=47 MiB, p=1`) and make offline brute-force expensive (~200 ms per attempt)
+- **Sidecar file** `passwords.key` (next to the DB, 0600 permissions): stores the KDF salt (32 random bytes), algorithm params, and a verification blob. **No secrets.** Same public-info model as bcrypt/scrypt — salt and params are safe to expose
+- **Verification blob**: AES-256-GCM encryption of the constant string `"sesh-verify"` using the derived key. On unlock, sesh re-derives the key from the supplied password and tries to decrypt this blob. GCM's authentication tag rejects wrong passwords immediately, without touching any real entries
+- **First run**: prompts for the master password twice (confirmation), generates the salt, derives the key, writes the sidecar
+- **Subsequent runs**: reads sidecar, prompts for password, verifies via the blob, returns the key
+- **Minimum password length**: 8 characters (baseline — users should choose longer)
+- **Non-interactive mode**: `SESH_MASTER_PASSWORD` env var bypasses the prompt (intended for CI/scripts only; exposes the password to the process environment)
+
+**Threat model.** An attacker with the DB file and sidecar can attempt offline brute-force using the public salt and params. At ~5 attempts/second, a strong passphrase (four random words from a large wordlist, 40+ bits of entropy) is resistant; a weak password is not. This is the same threat model as any password manager — the strength of the master password bounds the security of everything under it.
+
+**Metadata exposure.** Even without the master password, an attacker with the DB file can read service names, account names, timestamps, and audit log entries — only the encrypted secret values are protected. Full-database encryption (SQLCipher-style) would require a CGo dependency and is not implemented.
+
+### Encrypted Export
+
+Exports produced with `--format encrypted` are wrapped in a portable envelope that anyone with the password can decrypt on any machine:
+
+- **Argon2id** key derivation with the same parameters as the master-password key source (`t=3, m=64 MiB, p=4`)
+- **AES-256-GCM** encryption of the JSON payload using the derived key
+- **Random 32-byte salt** per export — the same password produces different ciphertext each time
+- **Envelope format** (JSON): `{version, algorithm, salt, params, ciphertext}` — salt and params are public, matching the sidecar model
+
+Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext and are intended for local scripting. Encrypted exports are the right choice for backups, transferring between machines, or storing in any medium the user doesn't fully trust. Use a strong password — the same brute-force threat model applies as with the master-password key source.
 
 ### Why This Matters
 
@@ -79,7 +110,8 @@ Compare sesh's approach to alternatives:
 | Storage Method | Encryption | Access Control | User Experience |
 |----------------|------------|----------------|-----------------|
 | sesh (Keychain) | OS-level (AES-256) | OS-enforced binary binding | Transparent |
-| sesh (SQLite) | AES-256-GCM + Argon2id | File permissions + encryption key in Keychain | Transparent |
+| sesh (SQLite + Keychain key) | AES-256-GCM + Argon2id | File permissions + encryption key in Keychain | Transparent |
+| sesh (SQLite + master password) | AES-256-GCM + Argon2id | File permissions + passphrase required per invocation | Prompt on every run |
 | Config Files | None/Custom | File permissions only | Manual setup |
 | Environment Vars | None | Process inheritance | Leaks to children |
 | Corporate MFA Apps | Unknown | App-controlled | Privacy concerns |

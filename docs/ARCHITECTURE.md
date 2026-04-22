@@ -203,8 +203,28 @@ sesh supports two storage backends, selectable via `SESH_BACKEND`:
 - Argon2id key derivation for per-entry keys
 - FTS5 full-text search across service, account, and description
 - Audit log table tracking all access, modifications, and deletions
-- Master encryption key stored in the macOS Keychain via `KeychainSource`
+- Pluggable master key source (see below)
 - WAL mode for concurrent read safety
+
+**Key sources.** The `database.KeySource` interface abstracts where the 256-bit master encryption key comes from:
+
+```go
+type KeySource interface {
+    GetEncryptionKey() ([]byte, error)
+    StoreEncryptionKey(key []byte) error
+    RequiresUserInput() bool
+    Name() string
+}
+```
+
+Two implementations:
+
+- **`KeychainSource`** (default) — reads the key from the macOS Keychain; first-run generates a random 256-bit key and stores it. macOS-only.
+- **`MasterPasswordSource`** (`SESH_KEY_SOURCE=password`) — derives the key from a user-supplied passphrase via Argon2id. The KDF salt, Argon2id parameters, and a verification blob live in a 0600 sidecar file (`passwords.key`) next to the database. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. No keychain dependency — works on macOS, Linux, and Windows.
+
+`main.go`'s `buildKeySource(dataDir)` selects between them based on `SESH_KEY_SOURCE`. The store doesn't know or care which source provided the key.
+
+**Encrypted export.** The password manager's `ExportEncrypted`/`ImportEncrypted` use the same primitives (Argon2id + AES-256-GCM) but with an independent per-export salt. The envelope is self-contained — the salt and parameters are embedded alongside the ciphertext — so encrypted exports are portable across machines and key sources.
 
 Binary path restrictions in practice
 ```bash

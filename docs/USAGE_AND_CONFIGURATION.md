@@ -148,7 +148,7 @@ sesh uses a provider-based configuration system:
 | `-username`       | Username for the service                           | No               |
 | `-entry-type`     | Filter: password, api_key, totp, secure_note       | No               |
 | `-query`          | Search query                                       | For search       |
-| `-format`         | Output format: table (default), json, csv          | No               |
+| `-format`         | Output format for list/get/search: table (default), json. For export/import: json (default), csv, encrypted | No               |
 | `-show`           | Display password instead of clipboard hint         | No               |
 | `-file`           | File path for export/import (default: stdout/stdin)| No               |
 | `-on-conflict`    | Import conflict: skip, overwrite (default: error)  | No               |
@@ -161,10 +161,67 @@ sesh uses a provider-based configuration system:
 
 ### Environment Variables
 
-| Variable           | Description                                        | Default          |
-|--------------------|----------------------------------------------------|------------------|
-| `AWS_PROFILE`     | Default AWS profile                                | `default`        |
-| `SESH_BACKEND`    | Storage backend — only `sqlite` selects SQLite; any other value (or unset) uses the keychain | `keychain`       |
+| Variable                | Description                                        | Default          |
+|-------------------------|----------------------------------------------------|------------------|
+| `AWS_PROFILE`          | Default AWS profile                                | `default`        |
+| `SESH_BACKEND`         | Storage backend — only `sqlite` selects SQLite; any other value (or unset) uses the keychain | `keychain`       |
+| `SESH_KEY_SOURCE`      | Master key source for SQLite backend: `keychain` (default) or `password`. Ignored when `SESH_BACKEND` is not `sqlite` | `keychain`       |
+| `SESH_MASTER_PASSWORD` | Non-interactive master password (skips prompt). Intended for CI/scripting only — exposes the password via process environment | unset            |
+
+## Storage Backend and Key Source
+
+sesh has two independent axes:
+
+| Axis | Values | Selected by |
+|------|--------|-------------|
+| Backend | `keychain` (default) or `sqlite` | `SESH_BACKEND` |
+| Key source (SQLite only) | `keychain` (default) or `password` | `SESH_KEY_SOURCE` |
+
+The matrix:
+
+| `SESH_BACKEND` | `SESH_KEY_SOURCE` | Where data lives | Where key lives | Platforms |
+|---|---|---|---|---|
+| unset / `keychain` | (ignored) | macOS Keychain | macOS Keychain | macOS only |
+| `sqlite` | unset / `keychain` | SQLite file (encrypted) | macOS Keychain (256-bit random) | macOS only |
+| `sqlite` | `password` | SQLite file (encrypted) | Derived from master password via Argon2id; salt in `passwords.key` sidecar (0600) | macOS, Linux, Windows |
+
+### Using the master password mode
+
+```bash
+# First run — asked to create the password (twice for confirmation)
+SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --action store \
+    --service-name github --username alice
+# Create master password: ****
+# Confirm master password: ****
+# Enter password for github (alice): ****
+
+# Subsequent runs — single prompt to unlock
+SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
+# Master password: ****
+
+# Non-interactive (CI/scripts — prefer this only in trusted environments)
+export SESH_MASTER_PASSWORD='...'
+SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
+```
+
+The sidecar file `passwords.key` lives next to the SQLite database. It contains the KDF salt, Argon2id parameters, and a verification blob (not a password hash) — nothing secret. Keep it with the database when moving between machines; without it, the database cannot be unlocked even with the correct password.
+
+### Encrypted exports
+
+Use `--format encrypted` to produce a portable, password-protected backup:
+
+```bash
+sesh --service password --action export --format encrypted --file backup.enc
+# Encryption password: ****
+# Confirm encryption password: ****
+# Exported 12 entries to backup.enc
+
+sesh --service password --action import --format encrypted --file backup.enc
+# Decryption password: ****
+# Imported 12 entries
+```
+
+Encrypted exports use the same Argon2id + AES-256-GCM primitives as the master password mode. The export is self-contained (envelope includes the salt and KDF params) and works across machines, key sources, and backends.
 
 ## Usage Patterns
 
@@ -296,13 +353,21 @@ sesh -service password -action search -query github
 # List with filters
 sesh -service password -list -entry-type api_key -sort updated_at
 
-# Export all entries
+# Export all entries (plaintext — local use only)
 sesh -service password -action export -file backup.json
 sesh -service password -action export -format csv -file backup.csv
+
+# Encrypted export (portable, password-protected with Argon2id + AES-256-GCM)
+sesh -service password -action export -format encrypted -file backup.enc
+# → prompts for password twice (confirmation)
 
 # Import entries
 sesh -service password -action import -file backup.json
 sesh -service password -action import -file data.csv -format csv -on-conflict skip
+
+# Import encrypted backup
+sesh -service password -action import -format encrypted -file backup.enc
+# → prompts for password
 
 # JSON output for scripting
 sesh -service password -action search -query stripe -format json
