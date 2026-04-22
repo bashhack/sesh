@@ -1,0 +1,207 @@
+package database
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/bashhack/sesh/internal/secure"
+)
+
+const (
+	sidecarFileName = "passwords.key"
+	sidecarVersion  = 1
+	verifyPlaintext = "sesh-verify"
+)
+
+// sidecarData is the on-disk format for the master password's KDF salt,
+// params, and verification blob. Nothing secret — the salt and params are
+// public (same model as bcrypt), and the verify blob is a known constant
+// encrypted with the derived key so we can check the password before
+// touching any real data.
+type sidecarData struct {
+	Salt      string         `json:"salt"`      // base64
+	Algorithm string         `json:"algorithm"` // "argon2id"
+	Verify    string         `json:"verify"`    // base64, AES-256-GCM(derived_key, "sesh-verify")
+	Params    Argon2idParams `json:"params"`
+	Version   int            `json:"version"`
+}
+
+// PasswordPromptFunc is called to obtain the master password from the user.
+// Implementations should not echo the input.
+type PasswordPromptFunc func(prompt string) ([]byte, error)
+
+// MasterPasswordSource derives the encryption key from a user-supplied
+// passphrase via Argon2id. The KDF salt and a verification blob are stored
+// in a sidecar file alongside the DB — no keychain involvement.
+type MasterPasswordSource struct {
+	promptFunc PasswordPromptFunc
+	dataDir    string
+}
+
+// NewMasterPasswordSource creates a MasterPasswordSource that stores its
+// sidecar in dataDir (typically the same directory as the SQLite DB).
+func NewMasterPasswordSource(dataDir string, prompt PasswordPromptFunc) *MasterPasswordSource {
+	return &MasterPasswordSource{
+		dataDir:    dataDir,
+		promptFunc: prompt,
+	}
+}
+
+func (s *MasterPasswordSource) sidecarPath() string {
+	return filepath.Join(s.dataDir, sidecarFileName)
+}
+
+// GetEncryptionKey prompts for the master password and derives the
+// encryption key. On first run (no sidecar), it prompts twice for
+// confirmation and creates the sidecar. On subsequent runs, it verifies the
+// password against the stored verification blob.
+func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
+	path := s.sidecarPath()
+	_, err := os.Stat(path)
+
+	if os.IsNotExist(err) {
+		return s.initialize()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("check sidecar file: %w", err)
+	}
+
+	return s.unlock()
+}
+
+// StoreEncryptionKey is a no-op for the master password source — the key is
+// derived from the password, not stored directly.
+func (s *MasterPasswordSource) StoreEncryptionKey(_ []byte) error {
+	return nil
+}
+
+func (s *MasterPasswordSource) RequiresUserInput() bool { return true }
+func (s *MasterPasswordSource) Name() string            { return "master-password" }
+
+// initialize handles the first-run case: prompt for password twice, generate
+// salt, derive key, write sidecar.
+func (s *MasterPasswordSource) initialize() ([]byte, error) {
+	pw, err := s.promptFunc("Create master password: ")
+	if err != nil {
+		return nil, fmt.Errorf("read password: %w", err)
+	}
+	defer secure.SecureZeroBytes(pw)
+
+	confirm, err := s.promptFunc("Confirm master password: ")
+	if err != nil {
+		return nil, fmt.Errorf("read confirmation: %w", err)
+	}
+	defer secure.SecureZeroBytes(confirm)
+
+	if !bytes.Equal(pw, confirm) {
+		return nil, fmt.Errorf("passwords do not match")
+	}
+
+	if len(pw) < 8 {
+		return nil, fmt.Errorf("master password must be at least 8 characters")
+	}
+
+	salt, err := GenerateSalt(32)
+	if err != nil {
+		return nil, err
+	}
+
+	params := DefaultArgon2idParams()
+	key := DeriveKey(pw, salt, params)
+
+	verifyBlob, err := Encrypt(key, []byte(verifyPlaintext))
+	if err != nil {
+		secure.SecureZeroBytes(key)
+		return nil, fmt.Errorf("create verify blob: %w", err)
+	}
+
+	data := sidecarData{
+		Version:   sidecarVersion,
+		Salt:      base64.StdEncoding.EncodeToString(salt),
+		Algorithm: "argon2id",
+		Params:    params,
+		Verify:    base64.StdEncoding.EncodeToString(verifyBlob),
+	}
+
+	if err := s.writeSidecar(data); err != nil {
+		secure.SecureZeroBytes(key)
+		return nil, err
+	}
+
+	return key, nil
+}
+
+// unlock handles the normal case: read sidecar, prompt for password, verify, return key.
+func (s *MasterPasswordSource) unlock() ([]byte, error) {
+	data, err := s.readSidecar()
+	if err != nil {
+		return nil, err
+	}
+
+	salt, err := base64.StdEncoding.DecodeString(data.Salt)
+	if err != nil {
+		return nil, fmt.Errorf("decode salt: %w", err)
+	}
+
+	verifyBlob, err := base64.StdEncoding.DecodeString(data.Verify)
+	if err != nil {
+		return nil, fmt.Errorf("decode verify blob: %w", err)
+	}
+
+	pw, err := s.promptFunc("Master password: ")
+	if err != nil {
+		return nil, fmt.Errorf("read password: %w", err)
+	}
+	defer secure.SecureZeroBytes(pw)
+
+	key := DeriveKey(pw, salt, data.Params)
+
+	plaintext, err := Decrypt(key, verifyBlob)
+	if err != nil {
+		secure.SecureZeroBytes(key)
+		return nil, fmt.Errorf("wrong master password")
+	}
+
+	if string(plaintext) != verifyPlaintext {
+		secure.SecureZeroBytes(key)
+		return nil, fmt.Errorf("wrong master password (verify mismatch)")
+	}
+
+	return key, nil
+}
+
+func (s *MasterPasswordSource) writeSidecar(data sidecarData) error {
+	b, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal sidecar: %w", err)
+	}
+
+	path := s.sidecarPath()
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return fmt.Errorf("write sidecar: %w", err)
+	}
+	return nil
+}
+
+func (s *MasterPasswordSource) readSidecar() (sidecarData, error) {
+	path := s.sidecarPath()
+	b, err := os.ReadFile(path) //nolint:gosec // path is <dataDir>/passwords.key; dataDir is caller-controlled via NewMasterPasswordSource
+	if err != nil {
+		return sidecarData{}, fmt.Errorf("read sidecar: %w", err)
+	}
+
+	var data sidecarData
+	if err := json.Unmarshal(b, &data); err != nil {
+		return sidecarData{}, fmt.Errorf("parse sidecar: %w", err)
+	}
+
+	if data.Version != sidecarVersion {
+		return sidecarData{}, fmt.Errorf("unsupported sidecar version %d (expected %d)", data.Version, sidecarVersion)
+	}
+
+	return data, nil
+}
