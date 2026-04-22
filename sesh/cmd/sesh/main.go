@@ -188,9 +188,9 @@ func promptMasterPassword(prompt string) ([]byte, error) {
 		return nil, err
 	}
 	pw, err := term.ReadPassword(int(os.Stdin.Fd()))
-	if _, perr := fmt.Fprintln(os.Stderr); perr != nil {
-		return nil, perr
-	}
+	// Best-effort newline after the hidden input. Don't let a stderr write
+	// error mask a real read error.
+	fmt.Fprintln(os.Stderr) //nolint:errcheck // see comment above
 	if err != nil {
 		return nil, fmt.Errorf("read password: %w", err)
 	}

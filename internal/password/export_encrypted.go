@@ -35,6 +35,31 @@ func defaultEncryptedExportParams() encryptedExportParams {
 	}
 }
 
+// validateEncryptedExportParams bounds-checks Argon2id parameters from an
+// untrusted envelope. Without these checks a malicious file could OOM the
+// user via a huge Memory value, stall the CPU via a huge Time, or trigger
+// a panic via Threads=0.
+func validateEncryptedExportParams(p encryptedExportParams) error {
+	const (
+		maxMemoryKiB = 1 << 20 // 1 GiB
+		maxTime      = 10
+		maxThreads   = 16
+	)
+	if p.Memory == 0 || p.Memory > maxMemoryKiB {
+		return fmt.Errorf("envelope memory param out of range: %d KiB (max %d)", p.Memory, maxMemoryKiB)
+	}
+	if p.Time == 0 || p.Time > maxTime {
+		return fmt.Errorf("envelope time param out of range: %d (max %d)", p.Time, maxTime)
+	}
+	if p.Threads == 0 || p.Threads > maxThreads {
+		return fmt.Errorf("envelope threads param out of range: %d (max %d)", p.Threads, maxThreads)
+	}
+	if p.KeyLen != 32 {
+		return fmt.Errorf("envelope key_len must be 32, got %d", p.KeyLen)
+	}
+	return nil
+}
+
 // EncryptedEnvelope is the on-disk format for a password-encrypted export.
 // salt + params are public (needed to re-derive the key); ciphertext is the
 // AES-256-GCM output of the JSON-serialized entries.
@@ -63,7 +88,6 @@ func (m *Manager) ExportEncrypted(w io.Writer, opts ExportOptions, password []by
 	if err != nil {
 		return 0, err
 	}
-	defer secure.SecureZeroBytes(buf.Bytes())
 
 	salt := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
@@ -74,7 +98,9 @@ func (m *Manager) ExportEncrypted(w io.Writer, opts ExportOptions, password []by
 	key := argon2.IDKey(password, salt, params.Time, params.Memory, params.Threads, params.KeyLen)
 	defer secure.SecureZeroBytes(key)
 
-	ciphertext, err := gcmSeal(key, buf.Bytes())
+	plaintext := buf.Bytes()
+	ciphertext, err := gcmSeal(key, plaintext)
+	secure.SecureZeroBytes(plaintext)
 	if err != nil {
 		return 0, fmt.Errorf("encrypt payload: %w", err)
 	}
@@ -108,6 +134,12 @@ func (m *Manager) ImportEncrypted(r io.Reader, opts ImportOptions, password []by
 
 	if envelope.Version != encryptedExportVersion {
 		return ImportResult{}, fmt.Errorf("unsupported envelope version %d (expected %d)", envelope.Version, encryptedExportVersion)
+	}
+	if envelope.Algorithm != "argon2id" {
+		return ImportResult{}, fmt.Errorf("unsupported algorithm %q", envelope.Algorithm)
+	}
+	if err := validateEncryptedExportParams(envelope.Params); err != nil {
+		return ImportResult{}, err
 	}
 
 	salt, err := base64.StdEncoding.DecodeString(envelope.Salt)

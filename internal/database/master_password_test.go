@@ -124,6 +124,58 @@ func TestMasterPasswordSource_Name(t *testing.T) {
 	}
 }
 
+func TestMasterPasswordSource_UnsupportedVersion(t *testing.T) {
+	dir := t.TempDir()
+	bad := []byte(`{"version": 99, "algorithm": "argon2id", "salt": "", "params": {"time":3,"memory":65536,"threads":4,"key_len":32}, "verify": ""}`)
+	if err := os.WriteFile(filepath.Join(dir, sidecarFileName), bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	src := NewMasterPasswordSource(dir, staticPrompt("any-password"))
+	_, err := src.GetEncryptionKey()
+	if err == nil {
+		t.Fatal("expected error for unsupported version")
+	}
+}
+
+func TestMasterPasswordSource_UnsupportedAlgorithm(t *testing.T) {
+	dir := t.TempDir()
+	bad := []byte(`{"version": 1, "algorithm": "scrypt", "salt": "", "params": {"time":3,"memory":65536,"threads":4,"key_len":32}, "verify": ""}`)
+	if err := os.WriteFile(filepath.Join(dir, sidecarFileName), bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	src := NewMasterPasswordSource(dir, staticPrompt("any-password"))
+	_, err := src.GetEncryptionKey()
+	if err == nil {
+		t.Fatal("expected error for unsupported algorithm")
+	}
+}
+
+func TestMasterPasswordSource_RejectsOutOfRangeParams(t *testing.T) {
+	tests := map[string]string{
+		"zero memory":   `{"version":1,"algorithm":"argon2id","salt":"","verify":"","params":{"time":3,"memory":0,"threads":4,"key_len":32}}`,
+		"huge memory":   `{"version":1,"algorithm":"argon2id","salt":"","verify":"","params":{"time":3,"memory":2147483647,"threads":4,"key_len":32}}`,
+		"zero threads":  `{"version":1,"algorithm":"argon2id","salt":"","verify":"","params":{"time":3,"memory":65536,"threads":0,"key_len":32}}`,
+		"huge time":     `{"version":1,"algorithm":"argon2id","salt":"","verify":"","params":{"time":999,"memory":65536,"threads":4,"key_len":32}}`,
+		"wrong key_len": `{"version":1,"algorithm":"argon2id","salt":"","verify":"","params":{"time":3,"memory":65536,"threads":4,"key_len":16}}`,
+	}
+
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, sidecarFileName), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			src := NewMasterPasswordSource(dir, staticPrompt("any-password"))
+			_, err := src.GetEncryptionKey()
+			if err == nil {
+				t.Fatal("expected error for out-of-range params")
+			}
+		})
+	}
+}
+
 func TestMasterPasswordSource_SidecarHasNoSecrets(t *testing.T) {
 	dir := t.TempDir()
 	password := "super-secret-password-12345"

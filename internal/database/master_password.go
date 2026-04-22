@@ -91,6 +91,10 @@ func (s *MasterPasswordSource) initialize() ([]byte, error) {
 	}
 	defer secure.SecureZeroBytes(pw)
 
+	if len(pw) < 8 {
+		return nil, fmt.Errorf("master password must be at least 8 characters")
+	}
+
 	confirm, err := s.promptFunc("Confirm master password: ")
 	if err != nil {
 		return nil, fmt.Errorf("read confirmation: %w", err)
@@ -99,10 +103,6 @@ func (s *MasterPasswordSource) initialize() ([]byte, error) {
 
 	if !bytes.Equal(pw, confirm) {
 		return nil, fmt.Errorf("passwords do not match")
-	}
-
-	if len(pw) < 8 {
-		return nil, fmt.Errorf("master password must be at least 8 characters")
 	}
 
 	salt, err := GenerateSalt(32)
@@ -180,9 +180,19 @@ func (s *MasterPasswordSource) writeSidecar(data sidecarData) error {
 		return fmt.Errorf("marshal sidecar: %w", err)
 	}
 
+	// Write to a temp file then rename so a crash mid-write leaves the
+	// old sidecar intact (or no sidecar at all on first run). Rename is
+	// atomic on POSIX and close-to-atomic on Windows.
 	path := s.sidecarPath()
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return fmt.Errorf("write sidecar: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		if rmErr := os.Remove(tmp); rmErr != nil && !os.IsNotExist(rmErr) {
+			return fmt.Errorf("replace sidecar: %w (cleanup of %s also failed: %v)", err, tmp, rmErr)
+		}
+		return fmt.Errorf("replace sidecar: %w", err)
 	}
 	return nil
 }
@@ -202,6 +212,35 @@ func (s *MasterPasswordSource) readSidecar() (sidecarData, error) {
 	if data.Version != sidecarVersion {
 		return sidecarData{}, fmt.Errorf("unsupported sidecar version %d (expected %d)", data.Version, sidecarVersion)
 	}
+	if data.Algorithm != "argon2id" {
+		return sidecarData{}, fmt.Errorf("unsupported sidecar algorithm %q", data.Algorithm)
+	}
+	if err := validateArgon2idBounds(data.Params); err != nil {
+		return sidecarData{}, err
+	}
 
 	return data, nil
+}
+
+// validateArgon2idBounds bounds-checks Argon2id parameters read from disk.
+// A corrupted or malicious sidecar could otherwise trigger a memory DoS.
+func validateArgon2idBounds(p Argon2idParams) error {
+	const (
+		maxMemoryKiB = 1 << 20 // 1 GiB
+		maxTime      = 10
+		maxThreads   = 16
+	)
+	if p.Memory == 0 || p.Memory > maxMemoryKiB {
+		return fmt.Errorf("sidecar memory param out of range: %d KiB (max %d)", p.Memory, maxMemoryKiB)
+	}
+	if p.Time == 0 || p.Time > maxTime {
+		return fmt.Errorf("sidecar time param out of range: %d (max %d)", p.Time, maxTime)
+	}
+	if p.Threads == 0 || p.Threads > maxThreads {
+		return fmt.Errorf("sidecar threads param out of range: %d (max %d)", p.Threads, maxThreads)
+	}
+	if p.KeyLen != 32 {
+		return fmt.Errorf("sidecar key_len must be 32, got %d", p.KeyLen)
+	}
+	return nil
 }
