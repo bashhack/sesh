@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 
+	"golang.org/x/term"
+
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/migration"
@@ -127,18 +129,13 @@ func buildProvider() (keychain.Provider, io.Closer, error) {
 // first run) and returns an opened, schema-initialized SQLite store. The
 // caller must Close it.
 func openSQLiteStore() (*database.Store, error) {
-	u, err := user.Current()
-	if err != nil {
-		return nil, fmt.Errorf("determine current user: %w", err)
-	}
-
 	dbPath, err := database.DefaultDBPath()
 	if err != nil {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
-	ks := database.NewKeychainSource(keychain.NewDefaultProvider(), u.Username)
-	if err := ensureMasterKey(ks, filepath.Dir(dbPath)); err != nil {
+	ks, err := buildKeySource(filepath.Dir(dbPath))
+	if err != nil {
 		return nil, err
 	}
 
@@ -155,6 +152,49 @@ func openSQLiteStore() (*database.Store, error) {
 	}
 
 	return store, nil
+}
+
+// buildKeySource selects the KeySource based on SESH_KEY_SOURCE.
+// Defaults to the macOS Keychain. "password" selects MasterPasswordSource,
+// which stores its KDF salt in a sidecar file alongside the DB.
+func buildKeySource(dataDir string) (database.KeySource, error) {
+	switch os.Getenv("SESH_KEY_SOURCE") {
+	case "password":
+		mps := database.NewMasterPasswordSource(dataDir, promptMasterPassword)
+		return mps, nil
+	case "", "keychain":
+		u, err := user.Current()
+		if err != nil {
+			return nil, fmt.Errorf("determine current user: %w", err)
+		}
+		ks := database.NewKeychainSource(keychain.NewDefaultProvider(), u.Username)
+		if err := ensureMasterKey(ks, dataDir); err != nil {
+			return nil, err
+		}
+		return ks, nil
+	default:
+		return nil, fmt.Errorf("unknown SESH_KEY_SOURCE %q (valid: keychain, password)", os.Getenv("SESH_KEY_SOURCE"))
+	}
+}
+
+// promptMasterPassword reads a password from the terminal without echo.
+// Checks SESH_MASTER_PASSWORD env var first to support non-interactive use.
+func promptMasterPassword(prompt string) ([]byte, error) {
+	if envPw := os.Getenv("SESH_MASTER_PASSWORD"); envPw != "" {
+		return []byte(envPw), nil
+	}
+
+	if _, err := fmt.Fprint(os.Stderr, prompt); err != nil {
+		return nil, err
+	}
+	pw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	if _, perr := fmt.Fprintln(os.Stderr); perr != nil {
+		return nil, perr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read password: %w", err)
+	}
+	return pw, nil
 }
 
 // ensureMasterKey verifies a master encryption key exists in the keychain,
