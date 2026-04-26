@@ -2,9 +2,13 @@ package database
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -218,6 +222,116 @@ func TestMasterPasswordSource_CachesKeyAcrossCalls(t *testing.T) {
 	}
 	if !bytes.Equal(key1, key3) {
 		t.Fatal("same password should still yield same key")
+	}
+}
+
+func TestMasterPasswordSource_ConcurrentFirstRunSerialized(t *testing.T) {
+	dir := t.TempDir()
+	password := "concurrent-test-password"
+
+	var prompt PasswordPromptFunc = func(_ string) ([]byte, error) {
+		return []byte(password), nil
+	}
+
+	const N = 4
+	keys := make([][]byte, N)
+	errs := make([]error, N)
+
+	var start sync.WaitGroup
+	var done sync.WaitGroup
+	start.Add(1)
+	done.Add(N)
+
+	for i := range N {
+		go func(idx int) {
+			defer done.Done()
+			src := NewMasterPasswordSource(dir, prompt)
+			start.Wait()
+			keys[idx], errs[idx] = src.GetEncryptionKey()
+		}(i)
+	}
+	start.Done()
+	done.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: %v", i, err)
+		}
+	}
+
+	for i := 1; i < N; i++ {
+		if !bytes.Equal(keys[0], keys[i]) {
+			t.Fatalf("goroutine %d derived a different key — flock did not serialize first run", i)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, sidecarFileName)); err != nil {
+		t.Fatalf("sidecar missing after concurrent init: %v", err)
+	}
+}
+
+func TestMasterPasswordSourceHelperProcess(t *testing.T) {
+	if os.Getenv("SESH_TEST_MP_HELPER") != "1" {
+		return
+	}
+	dir := os.Getenv("SESH_TEST_MP_DIR")
+	password := os.Getenv("SESH_TEST_MP_PASSWORD")
+
+	src := NewMasterPasswordSource(dir, func(_ string) ([]byte, error) {
+		return []byte(password), nil
+	})
+
+	key, err := src.GetEncryptionKey()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Print(hex.EncodeToString(key))
+	os.Exit(0)
+}
+
+func TestMasterPasswordSource_ConcurrentFirstRunMultiProcess(t *testing.T) {
+	dir := t.TempDir()
+	password := "multi-process-test-password"
+
+	const N = 4
+	cmds := make([]*exec.Cmd, N)
+	outs := make([]*bytes.Buffer, N)
+	errs := make([]*bytes.Buffer, N)
+
+	for i := range N {
+		cmd := exec.Command(os.Args[0], "-test.run=TestMasterPasswordSourceHelperProcess") //nolint:gosec // os.Args[0] is the test binary itself
+		cmd.Env = append(os.Environ(),
+			"SESH_TEST_MP_HELPER=1",
+			"SESH_TEST_MP_DIR="+dir,
+			"SESH_TEST_MP_PASSWORD="+password,
+		)
+		outs[i] = &bytes.Buffer{}
+		errs[i] = &bytes.Buffer{}
+		cmd.Stdout = outs[i]
+		cmd.Stderr = errs[i]
+		cmds[i] = cmd
+	}
+
+	for i, c := range cmds {
+		if err := c.Start(); err != nil {
+			t.Fatalf("start process %d: %v", i, err)
+		}
+	}
+	for i, c := range cmds {
+		if err := c.Wait(); err != nil {
+			t.Fatalf("process %d failed: %v\nstderr: %s", i, err, errs[i].String())
+		}
+	}
+
+	first := outs[0].String()
+	if first == "" {
+		t.Fatal("process 0 produced no key output")
+	}
+	for i := 1; i < N; i++ {
+		if outs[i].String() != first {
+			t.Fatalf("process %d derived a different key — flock did not serialize across processes\n  process 0: %s\n  process %d: %s", i, first, i, outs[i].String())
+		}
 	}
 }
 

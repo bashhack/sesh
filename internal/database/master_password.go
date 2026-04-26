@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/bashhack/sesh/internal/secure"
 )
@@ -84,24 +85,56 @@ func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
 		return cloneKey(s.cachedKey), nil
 	}
 
-	path := s.sidecarPath()
-	_, err := os.Stat(path)
-
-	var key []byte
-	switch {
-	case os.IsNotExist(err):
-		key, err = s.initialize()
-	case err != nil:
-		return nil, fmt.Errorf("check sidecar file: %w", err)
-	default:
-		key, err = s.unlock()
-	}
+	key, err := s.acquireKey()
 	if err != nil {
 		return nil, err
 	}
 
 	s.cachedKey = cloneKey(key)
 	return key, nil
+}
+
+// acquireKey decides whether to initialize a new sidecar or unlock an
+// existing one. First-run is serialized via flock so two concurrent sesh
+// invocations can't each generate a different salt and orphan one
+// process's derived key. Once the sidecar exists, unlock is salt-stable
+// and lock-free.
+func (s *MasterPasswordSource) acquireKey() ([]byte, error) {
+	path := s.sidecarPath()
+	_, err := os.Stat(path)
+	switch {
+	case err == nil:
+		return s.unlock()
+	case !os.IsNotExist(err):
+		return nil, fmt.Errorf("check sidecar file: %w", err)
+	}
+	return s.initializeLocked()
+}
+
+// initializeLocked serializes concurrent first-run invocations with an
+// advisory flock on <dataDir>/passwords.key.lock. The flock is auto-
+// released when the holding process exits, so crashes don't leave stale
+// locks. After acquiring the lock, the sidecar is re-checked — another
+// process may have created it while this one was blocked.
+func (s *MasterPasswordSource) initializeLocked() ([]byte, error) {
+	sentinel := s.sidecarPath() + ".lock"
+	lockFile, err := os.OpenFile(sentinel, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // path derived from caller-controlled dataDir
+	if err != nil {
+		return nil, fmt.Errorf("open sidecar lock: %w", err)
+	}
+	defer func() {
+		if cerr := lockFile.Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: release sidecar lock: %v\n", cerr)
+		}
+	}()
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, fmt.Errorf("acquire sidecar lock: %w", err)
+	}
+
+	if _, err := os.Stat(s.sidecarPath()); err == nil {
+		return s.unlock()
+	}
+	return s.initialize()
 }
 
 func cloneKey(k []byte) []byte {
