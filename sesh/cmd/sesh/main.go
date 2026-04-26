@@ -80,7 +80,8 @@ func needsCredentialStore(args []string) bool {
 		case "--help", "-help", "-h",
 			"--version", "-version",
 			"--list-services", "-list-services",
-			"--migrate", "-migrate":
+			"--migrate", "-migrate",
+			"--rekey", "-rekey":
 			return false
 		}
 	}
@@ -360,6 +361,18 @@ func runMigrate(app *App) error {
 	return nil
 }
 
+// remainingArgs returns args following (but not including) the first
+// occurrence of name. Used to forward sub-flags to handlers like runRekey
+// without depending on a specific flag-package layout.
+func remainingArgs(args []string, name string) []string {
+	for i, a := range args {
+		if a == name {
+			return args[i+1:]
+		}
+	}
+	return nil
+}
+
 // fatal prints an error to stderr and exits
 func fatal(app *App, err error) {
 	if _, printErr := fmt.Fprintf(app.Stderr, "❌ %v\n", err); printErr != nil {
@@ -386,6 +399,12 @@ func run(app *App, args []string) {
 			return
 		case "--migrate", "-migrate":
 			if err := runMigrate(app); err != nil {
+				fatal(app, err)
+			}
+			return
+		case "--rekey", "-rekey":
+			rest := remainingArgs(args, arg)
+			if err := runRekey(app, rest, keychain.NewDefaultProvider()); err != nil {
 				fatal(app, err)
 			}
 			return
