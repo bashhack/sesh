@@ -103,6 +103,16 @@ Exports produced with `--format encrypted` are wrapped in a portable envelope th
 
 Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext and are intended for local scripting. Encrypted exports are the right choice for backups, transferring between machines, or storing in any medium the user doesn't fully trust. Use a strong password — the same brute-force threat model applies as with the master-password key source.
 
+### Switching key sources (`sesh rekey`)
+
+`sesh rekey --to <source>` re-encrypts every entry under a different key source and swaps the result into place atomically. The cryptographic posture during and after a rekey:
+
+- **No plaintext-on-disk window.** Unlike the export-then-import workaround, rekey never writes a plaintext-equivalent file (an encrypted export still sits on disk encrypted only with the export password). All re-encryption happens in-process; only encrypted-at-rest databases ever touch the filesystem.
+- **Per-row salt regeneration.** Every entry gets a fresh per-row salt under the new key. Encrypted ciphertext changes for every row even when the plaintext is identical.
+- **Recoverable backup.** On success the original database is preserved at `<dbPath>.pre-rekey`. The user is responsible for deleting it once they've verified the new state works (`shred -u` recommended on traditional filesystems).
+- **Old key state is preserved deliberately.** When switching keychain → password, the old keychain entry is left in place (now unused); same for the sidecar when switching password → keychain. This gives an additional rollback path and avoids the situation where a partial failure has destroyed the user's only access to a recoverable backup. The summary message points at the manual cleanup paths.
+- **Refusal-over-overwrite for target state.** If the target's persistent state already exists (a stale sidecar, or a keychain entry left over from a prior switch), rekey refuses and asks the user to clean up manually. The reasoning: silent overwrite of a salt or stored key could destroy access to whatever the user originally had.
+
 ### Why This Matters
 
 Compare sesh's approach to alternatives:

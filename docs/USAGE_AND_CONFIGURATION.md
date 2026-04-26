@@ -223,6 +223,39 @@ sesh --service password --action import --format encrypted --file backup.enc
 
 Encrypted exports use the same Argon2id + AES-256-GCM primitives as the master password mode. The export is self-contained (envelope includes the salt and KDF params) and works across machines, key sources, and backends.
 
+### Switching key sources (`sesh rekey`)
+
+Switching `SESH_KEY_SOURCE` after entries exist would otherwise leave the database unreadable — the new source derives a different key. `sesh rekey --to <source>` re-encrypts every entry under the target key source and atomically swaps the result into place.
+
+```bash
+# Currently using keychain; switch to master password.
+SESH_BACKEND=sqlite sesh --rekey --to password
+# Create master password: ****
+# Confirm master password: ****
+# About to re-encrypt 12 entries: keychain → password
+#   source DB:           /Users/alice/Library/Application Support/sesh/passwords.db
+#   rollback file after: /Users/alice/Library/Application Support/sesh/passwords.db.pre-rekey
+#
+# Proceed? [y/N]: y
+# Rekeyed 12 entries: keychain → password
+# Original DB preserved at /Users/alice/Library/Application Support/sesh/passwords.db.pre-rekey
+# Note: old keychain entry 'sesh-sqlite-encryption-key' is now unused. Remove it via Keychain Access if you want to clean up.
+
+# Then run with the new source.
+export SESH_KEY_SOURCE=password
+SESH_BACKEND=sqlite sesh --service password --list
+```
+
+Behaviour:
+
+- **Atomic.** Either every entry is re-encrypted under the new source and the swap completes, or nothing changes. A copy failure cleans up the new key state and leaves the original database and original key state untouched.
+- **Recoverable.** On success, the original database is preserved at `<dbPath>.pre-rekey`. Verify the new state works, then remove the backup manually.
+- **Old key state is left in place.** Switching from keychain → password leaves the keychain entry; switching from password → keychain leaves the sidecar. Both become unused but are not auto-deleted (so you have an additional rollback path). The summary message points at how to clean them up.
+- **Refuses if the target is already initialised.** If a sidecar already exists for `--to password`, or a keychain entry already exists for `--to keychain`, rekey aborts and asks you to clean up manually before retrying.
+- **`--to <same as current>` is rejected.** Rotating within the same source (changing master password without switching) is not yet supported — use the encrypted-export route in the meantime.
+
+Timestamps (`created_at`, `updated_at`) are preserved across the rekey.
+
 ## Usage Patterns
 
 ### Basic Examples
