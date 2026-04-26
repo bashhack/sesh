@@ -49,8 +49,12 @@ func Open(dbPath string, ks KeySource) (*Store, error) {
 	return &Store{db: db, keySource: ks}, nil
 }
 
-// Close releases the database connection.
+// Close releases the database connection and clears any cached key
+// material held by the key source.
 func (s *Store) Close() error {
+	if closer, ok := s.keySource.(interface{ Close() }); ok {
+		closer.Close()
+	}
 	return s.db.Close()
 }
 

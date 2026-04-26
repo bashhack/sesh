@@ -161,6 +161,16 @@ func buildKeySource(dataDir string) (database.KeySource, error) {
 	switch os.Getenv("SESH_KEY_SOURCE") {
 	case "password":
 		mps := database.NewMasterPasswordSource(dataDir, promptMasterPassword)
+		// Eagerly unlock so every operation — including metadata-only reads
+		// like --list and --delete — requires the master password. Without
+		// this, the store would only prompt on decryption, letting an
+		// attacker with filesystem access list and delete entries without
+		// the password.
+		key, err := mps.GetEncryptionKey()
+		if err != nil {
+			return nil, err
+		}
+		secure.SecureZeroBytes(key)
 		return mps, nil
 	case "", "keychain":
 		u, err := user.Current()

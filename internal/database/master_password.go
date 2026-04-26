@@ -40,6 +40,12 @@ type PasswordPromptFunc func(prompt string) ([]byte, error)
 type MasterPasswordSource struct {
 	promptFunc PasswordPromptFunc
 	dataDir    string
+
+	// cachedKey holds the derived key after the first successful unlock.
+	// Scoped to the process lifetime only — cleared when Close() is called
+	// (or when the process exits). This avoids prompting the user on every
+	// Get/Set operation within a single invocation.
+	cachedKey []byte
 }
 
 // NewMasterPasswordSource creates a MasterPasswordSource that stores its
@@ -51,6 +57,14 @@ func NewMasterPasswordSource(dataDir string, prompt PasswordPromptFunc) *MasterP
 	}
 }
 
+// Close zeroes and releases the cached key. Safe to call multiple times.
+func (s *MasterPasswordSource) Close() {
+	if s.cachedKey != nil {
+		secure.SecureZeroBytes(s.cachedKey)
+		s.cachedKey = nil
+	}
+}
+
 func (s *MasterPasswordSource) sidecarPath() string {
 	return filepath.Join(s.dataDir, sidecarFileName)
 }
@@ -58,19 +72,42 @@ func (s *MasterPasswordSource) sidecarPath() string {
 // GetEncryptionKey prompts for the master password and derives the
 // encryption key. On first run (no sidecar), it prompts twice for
 // confirmation and creates the sidecar. On subsequent runs, it verifies the
-// password against the stored verification blob.
+// password against the stored verification blob. The derived key is cached
+// for the lifetime of this source so repeated Get/Set operations within one
+// invocation do not re-prompt.
+//
+// The caller should NOT zero the returned slice — this source returns a
+// defensive copy so the cache remains intact. Call Close() to clear the
+// cached key when done.
 func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
+	if s.cachedKey != nil {
+		return cloneKey(s.cachedKey), nil
+	}
+
 	path := s.sidecarPath()
 	_, err := os.Stat(path)
 
-	if os.IsNotExist(err) {
-		return s.initialize()
+	var key []byte
+	switch {
+	case os.IsNotExist(err):
+		key, err = s.initialize()
+	case err != nil:
+		return nil, fmt.Errorf("check sidecar file: %w", err)
+	default:
+		key, err = s.unlock()
 	}
 	if err != nil {
-		return nil, fmt.Errorf("check sidecar file: %w", err)
+		return nil, err
 	}
 
-	return s.unlock()
+	s.cachedKey = cloneKey(key)
+	return key, nil
+}
+
+func cloneKey(k []byte) []byte {
+	cp := make([]byte, len(k))
+	copy(cp, k)
+	return cp
 }
 
 // StoreEncryptionKey is a no-op for the master password source — the key is

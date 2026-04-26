@@ -176,6 +176,51 @@ func TestMasterPasswordSource_RejectsOutOfRangeParams(t *testing.T) {
 	}
 }
 
+func TestMasterPasswordSource_CachesKeyAcrossCalls(t *testing.T) {
+	dir := t.TempDir()
+	password := "repeat-test-password"
+
+	callCount := 0
+	prompt := func(_ string) ([]byte, error) {
+		callCount++
+		return []byte(password), nil
+	}
+
+	src := NewMasterPasswordSource(dir, prompt)
+
+	// First call: prompts twice (create + confirm), derives key
+	key1, err := src.GetEncryptionKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRunCalls := callCount
+
+	// Second call: cache hit, no prompt
+	key2, err := src.GetEncryptionKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if callCount != firstRunCalls {
+		t.Fatalf("expected no additional prompts after cache hit, got %d (was %d)", callCount, firstRunCalls)
+	}
+	if !bytes.Equal(key1, key2) {
+		t.Fatal("cached key should match first-call key")
+	}
+
+	// Close clears the cache — next call prompts again
+	src.Close()
+	key3, err := src.GetEncryptionKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if callCount == firstRunCalls {
+		t.Fatal("expected prompt after Close() clears cache")
+	}
+	if !bytes.Equal(key1, key3) {
+		t.Fatal("same password should still yield same key")
+	}
+}
+
 func TestMasterPasswordSource_SidecarHasNoSecrets(t *testing.T) {
 	dir := t.TempDir()
 	password := "super-secret-password-12345"
