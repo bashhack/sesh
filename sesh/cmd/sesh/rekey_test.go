@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -489,5 +490,134 @@ func TestRekey_RoundtripKeychainPasswordKeychain(t *testing.T) {
 		if got[svc] != want {
 			t.Errorf("entry %s after roundtrip = %q, want %q", svc, got[svc], want)
 		}
+	}
+}
+
+func TestAppendErr_NilPrimary(t *testing.T) {
+	got := appendErr(nil, "label", errors.New("secondary"))
+	if got == nil || got.Error() != "label: secondary" {
+		t.Errorf("got %v, want 'label: secondary'", got)
+	}
+}
+
+func TestAppendErr_WithPrimary(t *testing.T) {
+	primary := errors.New("primary failure")
+	got := appendErr(primary, "rollback step", errors.New("cleanup failed"))
+	if !strings.Contains(got.Error(), "primary failure") {
+		t.Errorf("primary not preserved in %q", got.Error())
+	}
+	if !strings.Contains(got.Error(), "rollback step also failed: cleanup failed") {
+		t.Errorf("secondary not labelled correctly in %q", got.Error())
+	}
+	if !errors.Is(got, primary) {
+		t.Errorf("appended error should still wrap primary for errors.Is")
+	}
+}
+
+func TestCleanupNewKeyState_PasswordRemovesSidecar(t *testing.T) {
+	dir := t.TempDir()
+	sidecar := filepath.Join(dir, "passwords.key")
+	if err := os.WriteFile(sidecar, []byte("anything"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupNewKeyState("password", dir, nil); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+		t.Errorf("sidecar should be removed, stat err = %v", err)
+	}
+}
+
+func TestCleanupNewKeyState_PasswordNoSidecarIsOK(t *testing.T) {
+	if err := cleanupNewKeyState("password", t.TempDir(), nil); err != nil {
+		t.Errorf("cleanup of missing sidecar should succeed, got %v", err)
+	}
+}
+
+func TestCleanupNewKeyState_KeychainDeletesEntry(t *testing.T) {
+	kc := newKCMock(hexKey())
+	if err := cleanupNewKeyState("keychain", "", kc); err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if _, err := kc.GetSecret("anyone", encKeyService); !errors.Is(err, keychain.ErrNotFound) {
+		t.Errorf("keychain entry should be deleted, got %v", err)
+	}
+}
+
+func TestCleanupNewKeyState_UnknownTarget(t *testing.T) {
+	if err := cleanupNewKeyState("banana", "", nil); err == nil {
+		t.Error("expected error for unknown target")
+	}
+}
+
+func TestCheckTargetKeyStateClean_UnknownTarget(t *testing.T) {
+	if err := checkTargetKeyStateClean("banana", "", nil); err == nil {
+		t.Error("expected error for unknown target")
+	}
+}
+
+func TestNewKeySourceByName_UnknownReturnsError(t *testing.T) {
+	if _, err := newKeySourceByName("banana", "/tmp", nil); err == nil {
+		t.Error("expected error for unknown source")
+	}
+}
+
+func TestInitializeTargetKeySource_UnknownReturnsError(t *testing.T) {
+	if err := initializeTargetKeySource(nil, "banana"); err == nil {
+		t.Error("expected error for unknown target")
+	}
+}
+
+func TestUnusedKeyStateNote(t *testing.T) {
+	dir := t.TempDir()
+	if got := unusedKeyStateNote("banana", dir); got != "" {
+		t.Errorf("unknown source should yield empty note, got %q", got)
+	}
+	if got := unusedKeyStateNote("keychain", dir); !strings.Contains(got, encKeyService) {
+		t.Errorf("keychain note should mention service name, got %q", got)
+	}
+	if got := unusedKeyStateNote("password", dir); got != "" {
+		t.Errorf("password note with no sidecar should be empty, got %q", got)
+	}
+	sidecar := filepath.Join(dir, "passwords.key")
+	if err := os.WriteFile(sidecar, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := unusedKeyStateNote("password", dir); !strings.Contains(got, sidecar) {
+		t.Errorf("password note with sidecar should mention path, got %q", got)
+	}
+}
+
+func TestPromptYesNo(t *testing.T) {
+	cases := map[string]bool{
+		"y\n":     true,
+		"Y\n":     true,
+		"yes\n":   false,
+		"n\n":     false,
+		"\n":      false,
+		"":        false,
+		"  y  \n": true,
+	}
+	for input, want := range cases {
+		t.Run(strings.TrimSpace(input), func(t *testing.T) {
+			got, err := promptYesNo(strings.NewReader(input), new(bytes.Buffer), "")
+			if err != nil {
+				t.Fatalf("promptYesNo(%q): %v", input, err)
+			}
+			if got != want {
+				t.Errorf("promptYesNo(%q) = %v, want %v", input, got, want)
+			}
+		})
+	}
+}
+
+func TestCurrentKeySourceName(t *testing.T) {
+	t.Setenv("SESH_KEY_SOURCE", "")
+	if got := currentKeySourceName(); got != "keychain" {
+		t.Errorf("empty env should default to keychain, got %q", got)
+	}
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	if got := currentKeySourceName(); got != "password" {
+		t.Errorf("explicit password not preserved, got %q", got)
 	}
 }

@@ -138,3 +138,58 @@ func TestImportEncrypted_UnsupportedVersion(t *testing.T) {
 		t.Fatal("expected error for unsupported version")
 	}
 }
+
+func TestImportEncrypted_UnsupportedAlgorithm(t *testing.T) {
+	mgr := newEncryptedTestManager(t)
+	data := []byte(`{"version": 1, "algorithm": "scrypt", "salt": "", "params": {"time":3,"memory":65536,"threads":4,"key_len":32}, "ciphertext": ""}`)
+	_, err := mgr.ImportEncrypted(bytes.NewReader(data), ImportOptions{}, []byte("any"))
+	if err == nil {
+		t.Fatal("expected error for unsupported algorithm")
+	}
+}
+
+func TestImportEncrypted_RejectsOutOfRangeParams(t *testing.T) {
+	cases := map[string]string{
+		"zero memory":   `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":0,"threads":4,"key_len":32}}`,
+		"huge memory":   `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":2147483647,"threads":4,"key_len":32}}`,
+		"zero time":     `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":0,"memory":65536,"threads":4,"key_len":32}}`,
+		"huge time":     `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":999,"memory":65536,"threads":4,"key_len":32}}`,
+		"zero threads":  `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":65536,"threads":0,"key_len":32}}`,
+		"huge threads":  `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":65536,"threads":99,"key_len":32}}`,
+		"wrong key_len": `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":65536,"threads":4,"key_len":16}}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			mgr := newEncryptedTestManager(t)
+			_, err := mgr.ImportEncrypted(bytes.NewReader([]byte(body)), ImportOptions{}, []byte("any"))
+			if err == nil {
+				t.Fatal("expected error for out-of-range params")
+			}
+		})
+	}
+}
+
+func TestImportEncrypted_MalformedSaltOrCiphertext(t *testing.T) {
+	cases := map[string]string{
+		"bad salt base64":       `{"version":1,"algorithm":"argon2id","salt":"!!!","ciphertext":"","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
+		"bad ciphertext base64": `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"!!!","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
+		"short ciphertext":      `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"AAA=","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			mgr := newEncryptedTestManager(t)
+			_, err := mgr.ImportEncrypted(bytes.NewReader([]byte(body)), ImportOptions{}, []byte("password"))
+			if err == nil {
+				t.Fatal("expected error for malformed envelope")
+			}
+		})
+	}
+}
+
+func TestImportEncrypted_BadJSON(t *testing.T) {
+	mgr := newEncryptedTestManager(t)
+	_, err := mgr.ImportEncrypted(bytes.NewReader([]byte("not json")), ImportOptions{}, []byte("any"))
+	if err == nil {
+		t.Fatal("expected error for malformed JSON envelope")
+	}
+}

@@ -335,6 +335,64 @@ func TestMasterPasswordSource_ConcurrentFirstRunMultiProcess(t *testing.T) {
 	}
 }
 
+func TestMasterPasswordSource_StoreEncryptionKey_NoOp(t *testing.T) {
+	src := NewMasterPasswordSource(t.TempDir(), staticPrompt())
+	if err := src.StoreEncryptionKey([]byte("ignored")); err != nil {
+		t.Errorf("StoreEncryptionKey should be a no-op, got %v", err)
+	}
+}
+
+func TestMasterPasswordSource_RejectsShortSalt(t *testing.T) {
+	dir := t.TempDir()
+	bad := []byte(`{"version":1,"algorithm":"argon2id","salt":"AQID","verify":"","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`)
+	if err := os.WriteFile(filepath.Join(dir, sidecarFileName), bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	prompt := func(_ string) ([]byte, error) {
+		called = true
+		return []byte("password"), nil
+	}
+	src := NewMasterPasswordSource(dir, prompt)
+	_, err := src.GetEncryptionKey()
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("salt too short")) {
+		t.Fatalf("expected salt-too-short error, got %v", err)
+	}
+	if called {
+		t.Errorf("prompt should not be called when sidecar fails sanity checks")
+	}
+}
+
+func TestMasterPasswordSource_RejectsShortVerify(t *testing.T) {
+	dir := t.TempDir()
+	saltB64 := "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="
+	bad := []byte(`{"version":1,"algorithm":"argon2id","salt":"` + saltB64 + `","verify":"AQID","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`)
+	if err := os.WriteFile(filepath.Join(dir, sidecarFileName), bad, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	prompt := func(_ string) ([]byte, error) {
+		called = true
+		return []byte("password"), nil
+	}
+	src := NewMasterPasswordSource(dir, prompt)
+	_, err := src.GetEncryptionKey()
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("verify blob too short")) {
+		t.Fatalf("expected verify-too-short error, got %v", err)
+	}
+	if called {
+		t.Errorf("prompt should not be called when sidecar fails sanity checks")
+	}
+}
+
+func TestMasterPasswordSource_RejectsNonAbsoluteDataDir(t *testing.T) {
+	src := NewMasterPasswordSource("relative/path", staticPrompt("password-12345", "password-12345"))
+	_, err := src.GetEncryptionKey()
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("must be an absolute path")) {
+		t.Fatalf("expected absolute-path error, got %v", err)
+	}
+}
+
 func TestMasterPasswordSource_SidecarHasNoSecrets(t *testing.T) {
 	dir := t.TempDir()
 	password := "super-secret-password-12345"

@@ -323,6 +323,70 @@ func TestMigratePreservesTimestampsWhenDestSupportsThem(t *testing.T) {
 	}
 }
 
+// bareDest implements keychain.Provider but explicitly NOT
+// keychain.TimestampedStore — used to exercise Migrate's fallback path.
+type bareDest struct {
+	lastDescription  string
+	setSecretCalls   int
+	descriptionCalls int
+}
+
+func (d *bareDest) GetSecret(_, _ string) ([]byte, error) {
+	return nil, keychain.ErrNotFound
+}
+
+func (d *bareDest) SetSecret(_, _ string, _ []byte) error {
+	d.setSecretCalls++
+	return nil
+}
+
+func (d *bareDest) GetSecretString(_, _ string) (string, error)            { return "", nil }
+func (d *bareDest) SetSecretString(_, _, _ string) error                   { return nil }
+func (d *bareDest) GetMFASerialBytes(_, _ string) ([]byte, error)          { return nil, keychain.ErrNotFound }
+func (d *bareDest) ListEntries(_ string) ([]keychain.KeychainEntry, error) { return nil, nil }
+func (d *bareDest) DeleteEntry(_, _ string) error                          { return nil }
+func (d *bareDest) SetDescription(_, _, description string) error {
+	d.descriptionCalls++
+	d.lastDescription = description
+	return nil
+}
+
+func TestMigrateFallsBackToBareSetSecretWhenDestNotTimestamped(t *testing.T) {
+	source := &mocks.MockProvider{
+		ListEntriesFunc: func(prefix string) ([]keychain.KeychainEntry, error) {
+			if prefix != "sesh-totp" {
+				return nil, nil
+			}
+			return []keychain.KeychainEntry{{
+				Service:     "sesh-totp/github",
+				Account:     "alice",
+				Description: "TOTP",
+				CreatedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+				UpdatedAt:   time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
+			}}, nil
+		},
+		GetSecretFunc: func(_, _ string) ([]byte, error) { return []byte("s"), nil },
+	}
+
+	dest := &bareDest{}
+	result, err := Migrate(source, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Migrated != 1 {
+		t.Fatalf("Migrated = %d, want 1", result.Migrated)
+	}
+	if dest.setSecretCalls != 1 {
+		t.Errorf("SetSecret calls = %d, want 1 (fallback path)", dest.setSecretCalls)
+	}
+	if dest.descriptionCalls != 1 {
+		t.Errorf("SetDescription calls = %d, want 1", dest.descriptionCalls)
+	}
+	if dest.lastDescription != "TOTP" {
+		t.Errorf("description = %q, want TOTP", dest.lastDescription)
+	}
+}
+
 func TestMigrateEmpty(t *testing.T) {
 	source := newEntryStore()
 	dest := newEntryStore()
