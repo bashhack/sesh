@@ -170,10 +170,12 @@ func TestImportEncrypted_RejectsOutOfRangeParams(t *testing.T) {
 }
 
 func TestImportEncrypted_MalformedSaltOrCiphertext(t *testing.T) {
+	const validSalt = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" // 32 zero bytes
 	cases := map[string]string{
 		"bad salt base64":       `{"version":1,"algorithm":"argon2id","salt":"!!!","ciphertext":"","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
-		"bad ciphertext base64": `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"!!!","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
-		"short ciphertext":      `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"AAA=","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
+		"short salt":            `{"version":1,"algorithm":"argon2id","salt":"AAA=","ciphertext":"","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
+		"bad ciphertext base64": `{"version":1,"algorithm":"argon2id","salt":"` + validSalt + `","ciphertext":"!!!","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
+		"short ciphertext":      `{"version":1,"algorithm":"argon2id","salt":"` + validSalt + `","ciphertext":"AAA=","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

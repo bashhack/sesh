@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 
 	"github.com/bashhack/sesh/internal/secure"
@@ -46,7 +47,11 @@ type MasterPasswordSource struct {
 	// Scoped to the process lifetime only — cleared when Close() is called
 	// (or when the process exits). This avoids prompting the user on every
 	// Get/Set operation within a single invocation.
+	//
+	// mu guards cachedKey so a concurrent Close() can't zero the underlying
+	// memory while GetEncryptionKey is mid-clone.
 	cachedKey []byte
+	mu        sync.Mutex
 }
 
 // NewMasterPasswordSource creates a MasterPasswordSource that stores its
@@ -58,8 +63,11 @@ func NewMasterPasswordSource(dataDir string, prompt PasswordPromptFunc) *MasterP
 	}
 }
 
-// Close zeroes and releases the cached key. Safe to call multiple times.
+// Close zeroes and releases the cached key. Safe to call multiple times and
+// safe to call concurrently with GetEncryptionKey.
 func (s *MasterPasswordSource) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.cachedKey != nil {
 		secure.SecureZeroBytes(s.cachedKey)
 		s.cachedKey = nil
@@ -81,16 +89,22 @@ func (s *MasterPasswordSource) sidecarPath() string {
 // — the cache holds a private copy. Call Close() to clear the cached key
 // when done.
 func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
+	s.mu.Lock()
 	if s.cachedKey != nil {
-		return cloneKey(s.cachedKey), nil
+		clone := cloneKey(s.cachedKey)
+		s.mu.Unlock()
+		return clone, nil
 	}
+	s.mu.Unlock()
 
 	key, err := s.acquireKey()
 	if err != nil {
 		return nil, err
 	}
 
+	s.mu.Lock()
 	s.cachedKey = cloneKey(key)
+	s.mu.Unlock()
 	return key, nil
 }
 
@@ -134,10 +148,17 @@ func (s *MasterPasswordSource) initializeLocked() ([]byte, error) {
 		return nil, fmt.Errorf("acquire sidecar lock: %w", err)
 	}
 
-	if _, err := os.Stat(s.sidecarPath()); err == nil {
+	switch _, err := os.Stat(s.sidecarPath()); {
+	case err == nil:
 		return s.unlock()
+	case os.IsNotExist(err):
+		return s.initialize()
+	default:
+		// A non-IsNotExist error here (permission denied, I/O) shouldn't
+		// trigger a fresh init that could overwrite an existing-but-
+		// unreadable sidecar.
+		return nil, fmt.Errorf("re-check sidecar file: %w", err)
 	}
-	return s.initialize()
 }
 
 func cloneKey(k []byte) []byte {

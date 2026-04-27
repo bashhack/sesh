@@ -67,6 +67,12 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		}
 		return fmt.Errorf("stat database: %w", err)
 	}
+	preBackupPath := dbPath + rekeyBackupSuffix
+	if _, err := os.Stat(preBackupPath); err == nil {
+		return fmt.Errorf("backup path %s already exists; remove it (or rename to preserve a prior backup) and retry", preBackupPath)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat backup path: %w", err)
+	}
 	if err := checkTargetKeyStateClean(*target, dataDir, kc); err != nil {
 		return err
 	}
@@ -196,7 +202,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	}
 	srcStoreOpen = false
 
-	backupPath = dbPath + rekeyBackupSuffix
+	backupPath = preBackupPath
 	// Brief window between these two renames where dbPath does not exist;
 	// a concurrent open during this interval will fail with ENOENT. POSIX
 	// has no portable atomic-two-file-swap, so we accept the window for

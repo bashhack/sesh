@@ -146,6 +146,9 @@ func (m *Manager) ImportEncrypted(r io.Reader, opts ImportOptions, password []by
 	if err != nil {
 		return ImportResult{}, fmt.Errorf("decode salt: %w", err)
 	}
+	if len(salt) < 16 {
+		return ImportResult{}, fmt.Errorf("envelope salt too short: %d bytes (min 16)", len(salt))
+	}
 
 	ciphertext, err := base64.StdEncoding.DecodeString(envelope.Ciphertext)
 	if err != nil {

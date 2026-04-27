@@ -244,6 +244,28 @@ func TestRekey_RefusesIfNoDatabase(t *testing.T) {
 	}
 }
 
+func TestRekey_RefusesIfBackupPathExists(t *testing.T) {
+	env := setupRekeyEnv(t)
+	kc := newKCMock(hexKey())
+	populateKeychainStore(t, env, kc, map[string]string{
+		"sesh-password/password/github/alice": "hunter2",
+	})
+
+	if err := os.WriteFile(env.dbPath+rekeyBackupSuffix, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("pre-create backup: %v", err)
+	}
+
+	app, _ := rekeyTestApp("")
+	err := runRekey(app, []string{"--to=password"}, kc)
+	if err == nil || !strings.Contains(err.Error(), "backup path") {
+		t.Fatalf("expected backup-path-exists error, got %v", err)
+	}
+
+	if _, err := os.Stat(env.sidecarPath); err == nil {
+		t.Errorf("sidecar should not exist after refusal")
+	}
+}
+
 func TestRekey_RefusesIfTargetSidecarExists(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc := newKCMock(hexKey())

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 func staticPrompt(passwords ...string) PasswordPromptFunc {
@@ -333,6 +335,33 @@ func TestMasterPasswordSource_ConcurrentFirstRunMultiProcess(t *testing.T) {
 			t.Fatalf("process %d derived a different key — flock did not serialize across processes\n  process 0: %s\n  process %d: %s", i, first, i, outs[i].String())
 		}
 	}
+}
+
+func TestMasterPasswordSource_ConcurrentGetAndCloseAreSafe(t *testing.T) {
+	dir := t.TempDir()
+	var prompt PasswordPromptFunc = func(_ string) ([]byte, error) {
+		return []byte("test-password-12345"), nil
+	}
+	src := NewMasterPasswordSource(dir, prompt)
+	if _, err := src.GetEncryptionKey(); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if k, err := src.GetEncryptionKey(); err == nil {
+				secure.SecureZeroBytes(k)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			src.Close()
+		}()
+	}
+	wg.Wait()
 }
 
 func TestMasterPasswordSource_StoreEncryptionKey_NoOp(t *testing.T) {
