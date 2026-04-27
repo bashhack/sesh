@@ -119,6 +119,9 @@ func TestImportEncrypted_WrongPassword(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for wrong password")
 	}
+	if !strings.Contains(err.Error(), "wrong password or corrupted") {
+		t.Errorf("error %q does not mention wrong password — may have failed an unrelated check", err.Error())
+	}
 }
 
 func TestExportEncrypted_EmptyPassword(t *testing.T) {
@@ -192,18 +195,25 @@ func TestImportEncrypted_RejectsOutOfRangeParams(t *testing.T) {
 
 func TestImportEncrypted_MalformedSaltOrCiphertext(t *testing.T) {
 	const validSalt = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" // 32 zero bytes
-	cases := map[string]string{
-		"bad salt base64":       `{"version":1,"algorithm":"argon2id","salt":"!!!","ciphertext":"","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
-		"short salt":            `{"version":1,"algorithm":"argon2id","salt":"AAA=","ciphertext":"","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
-		"bad ciphertext base64": `{"version":1,"algorithm":"argon2id","salt":"` + validSalt + `","ciphertext":"!!!","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
-		"short ciphertext":      `{"version":1,"algorithm":"argon2id","salt":"` + validSalt + `","ciphertext":"AAA=","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`,
+	cases := []struct {
+		name    string
+		body    string
+		wantSub string
+	}{
+		{"bad salt base64", `{"version":1,"algorithm":"argon2id","salt":"!!!","ciphertext":"","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`, "decode salt"},
+		{"short salt", `{"version":1,"algorithm":"argon2id","salt":"AAA=","ciphertext":"","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`, "salt too short"},
+		{"bad ciphertext base64", `{"version":1,"algorithm":"argon2id","salt":"` + validSalt + `","ciphertext":"!!!","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`, "decode ciphertext"},
+		{"short ciphertext", `{"version":1,"algorithm":"argon2id","salt":"` + validSalt + `","ciphertext":"AAA=","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`, "wrong password or corrupted"},
 	}
-	for name, body := range cases {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			mgr := newEncryptedTestManager(t)
-			_, err := mgr.ImportEncrypted(bytes.NewReader([]byte(body)), ImportOptions{}, []byte("password"))
+			_, err := mgr.ImportEncrypted(bytes.NewReader([]byte(tc.body)), ImportOptions{}, []byte("password"))
 			if err == nil {
 				t.Fatal("expected error for malformed envelope")
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error %q does not mention %q — may have failed an unrelated check", err.Error(), tc.wantSub)
 			}
 		})
 	}
