@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/bashhack/sesh/internal/secure"
 )
 
@@ -40,9 +42,12 @@ type PasswordPromptFunc func(prompt string) ([]byte, error)
 // passphrase via Argon2id. The KDF salt and a verification blob are stored
 // in a sidecar file alongside the DB — no keychain involvement.
 type MasterPasswordSource struct {
+	// sf collapses concurrent slow-path Gets into a single Argon2id
+	// derivation. Without it, N goroutines arriving with an empty cache
+	// would each fire ~64 MiB of Argon2id work in parallel.
+	sf         singleflight.Group
 	promptFunc PasswordPromptFunc
 	dataDir    string
-
 	// cachedKey holds the derived key after the first successful unlock.
 	// Scoped to the process lifetime only — cleared when Close() is called
 	// (or when the process exits). This avoids prompting the user on every
@@ -89,6 +94,7 @@ func (s *MasterPasswordSource) sidecarPath() string {
 // — the cache holds a private copy. Call Close() to clear the cached key
 // when done.
 func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
+	// Fast path: cache hit. Lock only to read the slot and clone.
 	s.mu.Lock()
 	if s.cachedKey != nil {
 		clone := cloneKey(s.cachedKey)
@@ -97,15 +103,36 @@ func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
 	}
 	s.mu.Unlock()
 
-	key, err := s.acquireKey()
+	// Slow path: collapse concurrent callers into a single acquireKey via
+	// singleflight. Without this, N goroutines hitting an empty cache would
+	// each run a full Argon2id derivation in parallel, multiplying CPU and
+	// memory pressure (and exploding race-detector runtime).
+	v, err, _ := s.sf.Do("acquire", func() (any, error) {
+		// A waiter from this same in-flight group may already have
+		// re-populated the cache; re-check before re-deriving.
+		s.mu.Lock()
+		if s.cachedKey != nil {
+			clone := cloneKey(s.cachedKey)
+			s.mu.Unlock()
+			return clone, nil
+		}
+		s.mu.Unlock()
+
+		key, err := s.acquireKey()
+		if err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		s.cachedKey = cloneKey(key)
+		s.mu.Unlock()
+		return key, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	s.mu.Lock()
-	s.cachedKey = cloneKey(key)
-	s.mu.Unlock()
-	return key, nil
+	// The shared value is read by every waiter; clone so each caller can
+	// safely zero its own copy without affecting siblings or the cache.
+	return cloneKey(v.([]byte)), nil
 }
 
 // acquireKey decides whether to initialize a new sidecar or unlock an

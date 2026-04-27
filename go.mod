@@ -7,6 +7,7 @@ require (
 	github.com/makiuchi-d/gozxing v0.1.2-0.20250720151325-95e256b768ac
 	github.com/pquerna/otp v1.4.0
 	golang.org/x/crypto v0.49.0
+	golang.org/x/sync v0.20.0
 	golang.org/x/term v0.41.0
 	modernc.org/sqlite v1.48.1
 )
