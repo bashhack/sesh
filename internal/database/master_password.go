@@ -53,10 +53,15 @@ type MasterPasswordSource struct {
 	// (or when the process exits). This avoids prompting the user on every
 	// Get/Set operation within a single invocation.
 	//
-	// mu guards cachedKey so a concurrent Close() can't zero the underlying
-	// memory while GetEncryptionKey is mid-clone.
-	cachedKey []byte
-	mu        sync.Mutex
+	// mu guards cachedKey + cacheEpoch so a concurrent Close() can't zero
+	// the underlying memory while GetEncryptionKey is mid-clone. cacheEpoch
+	// fences a slow Argon2id derivation that started before Close from
+	// writing into the (now-cleared) cache after Close returns — the
+	// derivation still returns its key to its caller, but the cache stays
+	// clean past shutdown.
+	cachedKey  []byte
+	mu         sync.Mutex
+	cacheEpoch uint64
 }
 
 // NewMasterPasswordSource creates a MasterPasswordSource that stores its
@@ -69,10 +74,12 @@ func NewMasterPasswordSource(dataDir string, prompt PasswordPromptFunc) *MasterP
 }
 
 // Close zeroes and releases the cached key. Safe to call multiple times and
-// safe to call concurrently with GetEncryptionKey.
+// safe to call concurrently with GetEncryptionKey. Bumping cacheEpoch fences
+// any in-flight derivation from re-populating the cache after Close returns.
 func (s *MasterPasswordSource) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.cacheEpoch++
 	if s.cachedKey != nil {
 		secure.SecureZeroBytes(s.cachedKey)
 		s.cachedKey = nil
@@ -94,8 +101,11 @@ func (s *MasterPasswordSource) sidecarPath() string {
 // — the cache holds a private copy. Call Close() to clear the cached key
 // when done.
 func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
-	// Fast path: cache hit. Lock only to read the slot and clone.
+	// Fast path: cache hit. Lock only to read the slot and clone. Capture
+	// the epoch so a Close that fires while we're in the slow path can
+	// invalidate our cache write.
 	s.mu.Lock()
+	epoch := s.cacheEpoch
 	if s.cachedKey != nil {
 		clone := cloneKey(s.cachedKey)
 		s.mu.Unlock()
@@ -123,7 +133,12 @@ func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
 			return nil, err
 		}
 		s.mu.Lock()
-		s.cachedKey = cloneKey(key)
+		// Only populate the cache if no Close ran while we were deriving.
+		// If the epoch advanced, return the key to the caller but keep the
+		// cache clean — preserves the "cache cleared after Close" guarantee.
+		if s.cacheEpoch == epoch && s.cachedKey == nil {
+			s.cachedKey = cloneKey(key)
+		}
 		s.mu.Unlock()
 		return key, nil
 	})

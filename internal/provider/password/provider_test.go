@@ -799,11 +799,14 @@ func TestExport_EncryptedWritesEnvelope(t *testing.T) {
 		t.Fatalf("GetCredentials: %v", err)
 	}
 	out := stdout.Bytes()
-	if !json.Valid(out) {
-		t.Fatalf("envelope is not valid JSON: %q", string(out))
+	var envelope struct {
+		Algorithm string `json:"algorithm"`
 	}
-	if !strings.Contains(string(out), `"algorithm": "argon2id"`) {
-		t.Errorf("envelope missing algorithm field: %s", string(out))
+	if err := json.Unmarshal(out, &envelope); err != nil {
+		t.Fatalf("envelope is not valid JSON: %v\n%s", err, string(out))
+	}
+	if envelope.Algorithm != "argon2id" {
+		t.Errorf("envelope algorithm = %q, want argon2id\nfull envelope: %s", envelope.Algorithm, string(out))
 	}
 	if bytes.Contains(out, []byte("plaintext-secret")) {
 		t.Fatal("envelope leaked plaintext secret")

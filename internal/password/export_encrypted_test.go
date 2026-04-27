@@ -157,21 +157,28 @@ func TestImportEncrypted_UnsupportedAlgorithm(t *testing.T) {
 }
 
 func TestImportEncrypted_RejectsOutOfRangeParams(t *testing.T) {
-	cases := map[string]string{
-		"zero memory":   `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":0,"threads":4,"key_len":32}}`,
-		"huge memory":   `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":2147483647,"threads":4,"key_len":32}}`,
-		"zero time":     `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":0,"memory":65536,"threads":4,"key_len":32}}`,
-		"huge time":     `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":999,"memory":65536,"threads":4,"key_len":32}}`,
-		"zero threads":  `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":65536,"threads":0,"key_len":32}}`,
-		"huge threads":  `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":65536,"threads":99,"key_len":32}}`,
-		"wrong key_len": `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":65536,"threads":4,"key_len":16}}`,
+	cases := []struct {
+		name    string
+		body    string
+		wantSub string // substring the param-validation error must contain
+	}{
+		{"zero memory", `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":0,"threads":4,"key_len":32}}`, "memory"},
+		{"huge memory", `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":2147483647,"threads":4,"key_len":32}}`, "memory"},
+		{"zero time", `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":0,"memory":65536,"threads":4,"key_len":32}}`, "time"},
+		{"huge time", `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":999,"memory":65536,"threads":4,"key_len":32}}`, "time"},
+		{"zero threads", `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":65536,"threads":0,"key_len":32}}`, "threads"},
+		{"huge threads", `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":65536,"threads":99,"key_len":32}}`, "threads"},
+		{"wrong key_len", `{"version":1,"algorithm":"argon2id","salt":"","ciphertext":"","params":{"time":3,"memory":65536,"threads":4,"key_len":16}}`, "key_len"},
 	}
-	for name, body := range cases {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			mgr := newEncryptedTestManager(t)
-			_, err := mgr.ImportEncrypted(bytes.NewReader([]byte(body)), ImportOptions{}, []byte("any"))
+			_, err := mgr.ImportEncrypted(bytes.NewReader([]byte(tc.body)), ImportOptions{}, []byte("any"))
 			if err == nil {
 				t.Fatal("expected error for out-of-range params")
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error %q does not mention %q — may have failed an unrelated check", err.Error(), tc.wantSub)
 			}
 		})
 	}
