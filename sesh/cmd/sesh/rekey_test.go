@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -64,30 +65,46 @@ func rekeyTestApp(stdin string) (*App, *bytes.Buffer) {
 }
 
 type kcMock struct {
-	stored []byte
-	mu     sync.Mutex
+	store map[string][]byte
+	mu    sync.Mutex
 }
 
+// kcMockKey routes mock entries by both account and service so the mock
+// can't accidentally satisfy a lookup against the wrong (account, service)
+// pair.
+func kcMockKey(account, service string) string {
+	return account + "|" + service
+}
+
+// newKCMock builds a keychain mock. If stored is non-nil, it pre-populates
+// the encryption key under the canonical (current_user, encKeyService)
+// pair so KeychainSource lookups find it.
 func newKCMock(stored []byte) *kcMock {
-	if stored == nil {
-		return &kcMock{}
+	m := &kcMock{store: make(map[string][]byte)}
+	if stored != nil {
+		u, err := user.Current()
+		if err != nil {
+			panic(fmt.Errorf("user.Current: %w", err))
+		}
+		m.store[kcMockKey(u.Username, encKeyService)] = append([]byte{}, stored...)
 	}
-	return &kcMock{stored: append([]byte{}, stored...)}
+	return m
 }
 
-func (m *kcMock) GetSecret(_, _ string) ([]byte, error) {
+func (m *kcMock) GetSecret(account, service string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.stored == nil {
+	v, ok := m.store[kcMockKey(account, service)]
+	if !ok {
 		return nil, keychain.ErrNotFound
 	}
-	return append([]byte{}, m.stored...), nil
+	return append([]byte{}, v...), nil
 }
 
-func (m *kcMock) SetSecret(_, _ string, secret []byte) error {
+func (m *kcMock) SetSecret(account, service string, secret []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.stored = append([]byte{}, secret...)
+	m.store[kcMockKey(account, service)] = append([]byte{}, secret...)
 	return nil
 }
 
@@ -96,10 +113,10 @@ func (m *kcMock) SetSecretString(_, _, _ string) error                   { retur
 func (m *kcMock) GetMFASerialBytes(_, _ string) ([]byte, error)          { return nil, keychain.ErrNotFound }
 func (m *kcMock) ListEntries(_ string) ([]keychain.KeychainEntry, error) { return nil, nil }
 func (m *kcMock) SetDescription(_, _, _ string) error                    { return nil }
-func (m *kcMock) DeleteEntry(_, _ string) error {
+func (m *kcMock) DeleteEntry(account, service string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.stored = nil
+	delete(m.store, kcMockKey(account, service))
 	return nil
 }
 
@@ -291,6 +308,30 @@ func TestRekey_RefusesIfTargetSidecarExists(t *testing.T) {
 	}
 }
 
+func TestRekey_RefusesIfTargetKeychainEntryExists(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "test-password-1234")
+	populatePasswordStore(t, env, map[string]string{
+		"sesh-password/password/github/alice": "hunter2",
+	})
+
+	kc := newKCMock(hexKey())
+
+	app, _ := rekeyTestApp("")
+	err := runRekey(app, []string{"--to=keychain"}, kc)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected target-keychain-exists error, got %v", err)
+	}
+
+	if _, err := os.Stat(env.dbPath); err != nil {
+		t.Fatalf("source DB should still exist: %v", err)
+	}
+	if _, err := os.Stat(env.dbPath + rekeyBackupSuffix); err == nil {
+		t.Fatalf("backup file should not exist on refusal")
+	}
+}
+
 func TestRekey_KeychainToPassword(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc := newKCMock(hexKey())
@@ -346,7 +387,7 @@ func TestRekey_PasswordToKeychain(t *testing.T) {
 	}
 	populatePasswordStore(t, env, entries)
 
-	kc := &kcMock{}
+	kc := newKCMock(nil)
 
 	app, stderr := rekeyTestApp("y\n")
 	if err := runRekey(app, []string{"--to=keychain"}, kc); err != nil {
@@ -359,10 +400,11 @@ func TestRekey_PasswordToKeychain(t *testing.T) {
 	if _, err := os.Stat(env.sidecarPath); err != nil {
 		t.Errorf("old sidecar should still exist: %v", err)
 	}
-	if kc.stored == nil {
-		t.Errorf("new keychain entry not stored")
-	} else if len(kc.stored) != 64 {
-		t.Errorf("new keychain entry hex length = %d, want 64", len(kc.stored))
+	storedKey, err := kc.GetSecret(env.account, encKeyService)
+	if err != nil {
+		t.Errorf("new keychain entry not stored: %v", err)
+	} else if len(storedKey) != 64 {
+		t.Errorf("new keychain entry hex length = %d, want 64", len(storedKey))
 	}
 	if _, err := os.Stat(env.dbPath + rekeyBackupSuffix); err != nil {
 		t.Errorf("backup DB missing: %v", err)
@@ -478,6 +520,11 @@ func TestRekey_CancelledLeavesNoChanges(t *testing.T) {
 	if _, err := os.Stat(env.dbPath + rekeyDestSuffix); err == nil {
 		t.Errorf(".new DB should not exist after cancellation")
 	}
+
+	got := readEntriesViaKeychain(t, env, kc, []string{"sesh-password/password/github/alice"})
+	if got["sesh-password/password/github/alice"] != "hunter2" {
+		t.Errorf("original entry corrupted after cancellation, got %q want %q", got["sesh-password/password/github/alice"], "hunter2")
+	}
 }
 
 func TestRekey_RoundtripKeychainPasswordKeychain(t *testing.T) {
@@ -500,7 +547,7 @@ func TestRekey_RoundtripKeychainPasswordKeychain(t *testing.T) {
 		t.Fatalf("clean step-1 backup: %v", err)
 	}
 
-	kc2 := &kcMock{}
+	kc2 := newKCMock(nil)
 	app2, _ := rekeyTestApp("y\n")
 	if err := runRekey(app2, []string{"--to=keychain"}, kc2); err != nil {
 		t.Fatalf("second rekey: %v", err)
@@ -558,10 +605,14 @@ func TestCleanupNewKeyState_PasswordNoSidecarIsOK(t *testing.T) {
 
 func TestCleanupNewKeyState_KeychainDeletesEntry(t *testing.T) {
 	kc := newKCMock(hexKey())
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := cleanupNewKeyState("keychain", "", kc); err != nil {
 		t.Fatalf("cleanup: %v", err)
 	}
-	if _, err := kc.GetSecret("anyone", encKeyService); !errors.Is(err, keychain.ErrNotFound) {
+	if _, err := kc.GetSecret(u.Username, encKeyService); !errors.Is(err, keychain.ErrNotFound) {
 		t.Errorf("keychain entry should be deleted, got %v", err)
 	}
 }

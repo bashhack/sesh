@@ -93,6 +93,14 @@ func TestExportImportEncrypted_RoundTrip(t *testing.T) {
 	if got != "gh-secret" {
 		t.Fatalf("expected 'gh-secret', got %q", got)
 	}
+
+	gotAPI, err := mgr2.GetPasswordString("stripe", "admin", EntryTypeAPIKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAPI != "sk_live_abc" {
+		t.Fatalf("expected 'sk_live_abc', got %q", gotAPI)
+	}
 }
 
 func TestImportEncrypted_WrongPassword(t *testing.T) {

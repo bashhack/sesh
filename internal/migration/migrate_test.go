@@ -323,6 +323,54 @@ func TestMigratePreservesTimestampsWhenDestSupportsThem(t *testing.T) {
 	}
 }
 
+func TestMigrateForwardsZeroTimestampsWhenDestSupportsThem(t *testing.T) {
+	source := &mocks.MockProvider{
+		ListEntriesFunc: func(prefix string) ([]keychain.KeychainEntry, error) {
+			if prefix != "sesh-totp" {
+				return nil, nil
+			}
+			return []keychain.KeychainEntry{{
+				Service:     "sesh-totp/github",
+				Account:     "alice",
+				Description: "TOTP for GitHub",
+			}}, nil
+		},
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return []byte("totp-secret"), nil
+		},
+	}
+
+	var gotCreated, gotUpdated, gotDescUpdated time.Time
+	dest := &mocks.MockProvider{
+		GetSecretFunc: func(_, _ string) ([]byte, error) { return nil, keychain.ErrNotFound },
+		SetSecretAtFunc: func(_, _ string, _ []byte, c, u time.Time) error {
+			gotCreated, gotUpdated = c, u
+			return nil
+		},
+		SetDescriptionAtFunc: func(_, _, _ string, u time.Time) error {
+			gotDescUpdated = u
+			return nil
+		},
+	}
+
+	result, err := Migrate(source, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Migrated != 1 {
+		t.Fatalf("Migrated = %d, want 1", result.Migrated)
+	}
+	if !gotCreated.IsZero() {
+		t.Errorf("CreatedAt forwarded = %v, want zero (so dest.SetSecretAt can fall back to time.Now)", gotCreated)
+	}
+	if !gotUpdated.IsZero() {
+		t.Errorf("UpdatedAt forwarded = %v, want zero", gotUpdated)
+	}
+	if !gotDescUpdated.IsZero() {
+		t.Errorf("UpdatedAt forwarded to SetDescriptionAt = %v, want zero", gotDescUpdated)
+	}
+}
+
 // bareDest implements keychain.Provider but explicitly NOT
 // keychain.TimestampedStore — used to exercise Migrate's fallback path.
 type bareDest struct {
