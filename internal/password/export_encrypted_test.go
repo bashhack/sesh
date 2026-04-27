@@ -145,6 +145,9 @@ func TestImportEncrypted_UnsupportedVersion(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unsupported version")
 	}
+	if !strings.Contains(err.Error(), "version") {
+		t.Errorf("error %q does not mention version — may have failed an unrelated check", err.Error())
+	}
 }
 
 func TestImportEncrypted_UnsupportedAlgorithm(t *testing.T) {
@@ -153,6 +156,9 @@ func TestImportEncrypted_UnsupportedAlgorithm(t *testing.T) {
 	_, err := mgr.ImportEncrypted(bytes.NewReader(data), ImportOptions{}, []byte("any"))
 	if err == nil {
 		t.Fatal("expected error for unsupported algorithm")
+	}
+	if !strings.Contains(err.Error(), "algorithm") {
+		t.Errorf("error %q does not mention algorithm — may have failed an unrelated check", err.Error())
 	}
 }
 
