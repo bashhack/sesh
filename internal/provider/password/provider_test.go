@@ -266,15 +266,11 @@ func TestDeleteEntry_InvalidID(t *testing.T) {
 	}
 }
 
-// stubReadPassword overrides the package-level readPassword seam and
-// returns a restore func callers should defer.
-func stubReadPassword(t *testing.T, value string, err error) {
+// stubReadPassword overrides the package-level readPassword seam.
+func stubReadPassword(t *testing.T, value string) {
 	t.Helper()
 	orig := readPassword
 	readPassword = func() ([]byte, error) {
-		if err != nil {
-			return nil, err
-		}
 		return []byte(value), nil
 	}
 	t.Cleanup(func() { readPassword = orig })
@@ -312,7 +308,7 @@ func newTestProvider(kc keychain.Provider) (*Provider, *bytes.Buffer) {
 }
 
 func TestStorePassword_HappyPath(t *testing.T) {
-	stubReadPassword(t, "s3cret", nil)
+	stubReadPassword(t, "s3cret")
 
 	var storedKey, storedAccount string
 	var storedSecret []byte
@@ -687,7 +683,7 @@ func TestStoreTOTP_QRPath(t *testing.T) {
 }
 
 func TestStoreTOTP_ManualPath(t *testing.T) {
-	stubReadPassword(t, "JBSWY3DPEHPK3PXP", nil)
+	stubReadPassword(t, "JBSWY3DPEHPK3PXP")
 
 	mock := &mocks.MockProvider{
 		SetSecretFunc:       func(_, _ string, _ []byte) error { return nil },
@@ -777,6 +773,185 @@ func TestExport_WritesJSONToProviderStdout(t *testing.T) {
 	}
 	if !strings.Contains(creds.DisplayInfo, "Exported") {
 		t.Errorf("DisplayInfo = %q, want to mention Exported", creds.DisplayInfo)
+	}
+}
+
+func TestExport_EncryptedWritesEnvelope(t *testing.T) {
+	stubReadPassword(t, "export-password-1234")
+
+	mock := &mocks.MockProvider{
+		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
+			return []keychain.KeychainEntry{
+				{Service: "sesh-password/password/github", Account: "testuser"},
+			}, nil
+		},
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return []byte("plaintext-secret"), nil
+		},
+	}
+
+	p, stdout := newTestProvider(mock)
+	p.action = "export"
+	p.format = "encrypted"
+
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	out := stdout.Bytes()
+	var envelope struct {
+		Algorithm string `json:"algorithm"`
+	}
+	if err := json.Unmarshal(out, &envelope); err != nil {
+		t.Fatalf("envelope is not valid JSON: %v\n%s", err, string(out))
+	}
+	if envelope.Algorithm != "argon2id" {
+		t.Errorf("envelope algorithm = %q, want argon2id\nfull envelope: %s", envelope.Algorithm, string(out))
+	}
+	if bytes.Contains(out, []byte("plaintext-secret")) {
+		t.Fatal("envelope leaked plaintext secret")
+	}
+	if !strings.Contains(creds.DisplayInfo, "Exported 1") {
+		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
+	}
+}
+
+func TestExport_EncryptedPasswordMismatch(t *testing.T) {
+	calls := 0
+	orig := readPassword
+	readPassword = func() ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return []byte("first-password"), nil
+		}
+		return []byte("second-password"), nil
+	}
+	t.Cleanup(func() { readPassword = orig })
+
+	mock := &mocks.MockProvider{
+		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) { return nil, nil },
+	}
+	p, _ := newTestProvider(mock)
+	p.action = "export"
+	p.format = "encrypted"
+
+	_, err := p.GetCredentials()
+	if err == nil || !strings.Contains(err.Error(), "do not match") {
+		t.Fatalf("expected mismatch error, got %v", err)
+	}
+}
+
+func TestExport_EncryptedEmptyPassword(t *testing.T) {
+	stubReadPassword(t, "")
+
+	mock := &mocks.MockProvider{
+		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) { return nil, nil },
+	}
+	p, _ := newTestProvider(mock)
+	p.action = "export"
+	p.format = "encrypted"
+
+	_, err := p.GetCredentials()
+	if err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("expected empty-password error, got %v", err)
+	}
+}
+
+func TestImport_EncryptedRoundTripThroughProvider(t *testing.T) {
+	stubReadPassword(t, "round-trip-password")
+
+	srcMock := &mocks.MockProvider{
+		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
+			return []keychain.KeychainEntry{
+				// Account must match the manager's user (set by newTestProvider
+				// to "testuser") or parseEntry silently drops the row. The
+				// username "alice" lives in the service-key path segment.
+				{Service: "sesh-password/password/github/alice", Account: "testuser"},
+			}, nil
+		},
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return []byte("hunter2"), nil
+		},
+	}
+
+	pSrc, srcOut := newTestProvider(srcMock)
+	pSrc.action = "export"
+	pSrc.format = "encrypted"
+	if _, err := pSrc.GetCredentials(); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	envelope := srcOut.Bytes()
+
+	stored := map[string][]byte{}
+	destMock := &mocks.MockProvider{
+		GetSecretFunc: func(_, service string) ([]byte, error) {
+			if v, ok := stored[service]; ok {
+				return v, nil
+			}
+			return nil, keychain.ErrNotFound
+		},
+		SetSecretFunc: func(_, service string, secret []byte) error {
+			stored[service] = append([]byte(nil), secret...)
+			return nil
+		},
+		SetDescriptionFunc: func(_, _, _ string) error { return nil },
+		ListEntriesFunc:    func(_ string) ([]keychain.KeychainEntry, error) { return nil, nil },
+	}
+	pDest, _ := newTestProvider(destMock)
+	pDest.action = "import"
+	pDest.format = "encrypted"
+	pDest.stdin = bytes.NewReader(envelope)
+
+	creds, err := pDest.GetCredentials()
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if !strings.Contains(creds.DisplayInfo, "Imported 1") {
+		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
+	}
+	if got := stored["sesh-password/password/github/alice"]; string(got) != "hunter2" {
+		t.Errorf("stored secret = %q, want hunter2 (full map: %v)", got, stored)
+	}
+}
+
+func TestImport_EncryptedWrongPassword(t *testing.T) {
+	calls := 0
+	orig := readPassword
+	readPassword = func() ([]byte, error) {
+		calls++
+		switch calls {
+		case 1, 2:
+			return []byte("password-a"), nil
+		default:
+			return []byte("password-b"), nil
+		}
+	}
+	t.Cleanup(func() { readPassword = orig })
+
+	srcMock := &mocks.MockProvider{
+		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
+			return []keychain.KeychainEntry{
+				{Service: "sesh-password/password/github", Account: "alice"},
+			}, nil
+		},
+		GetSecretFunc: func(_, _ string) ([]byte, error) { return []byte("s"), nil },
+	}
+	pSrc, srcOut := newTestProvider(srcMock)
+	pSrc.action = "export"
+	pSrc.format = "encrypted"
+	if _, err := pSrc.GetCredentials(); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	destMock := &mocks.MockProvider{}
+	pDest, _ := newTestProvider(destMock)
+	pDest.action = "import"
+	pDest.format = "encrypted"
+	pDest.stdin = bytes.NewReader(srcOut.Bytes())
+
+	_, err := pDest.GetCredentials()
+	if err == nil {
+		t.Fatal("expected error for wrong password")
 	}
 }
 

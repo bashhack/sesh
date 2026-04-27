@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/keychain/mocks"
@@ -266,6 +267,171 @@ func TestMigrateDedupesOverlappingPrefixes(t *testing.T) {
 	}
 	if setCount != 2 {
 		t.Errorf("SetSecret call count = %d, want 2", setCount)
+	}
+}
+
+func TestMigratePreservesTimestampsWhenDestSupportsThem(t *testing.T) {
+	createdAt := time.Date(2024, 3, 15, 10, 30, 0, 0, time.UTC)
+	updatedAt := time.Date(2025, 1, 20, 14, 0, 0, 0, time.UTC)
+
+	source := &mocks.MockProvider{
+		ListEntriesFunc: func(prefix string) ([]keychain.KeychainEntry, error) {
+			if prefix != "sesh-totp" {
+				return nil, nil
+			}
+			return []keychain.KeychainEntry{{
+				Service:     "sesh-totp/github",
+				Account:     "alice",
+				Description: "TOTP for GitHub",
+				CreatedAt:   createdAt,
+				UpdatedAt:   updatedAt,
+			}}, nil
+		},
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return []byte("totp-secret"), nil
+		},
+	}
+
+	var gotCreated, gotUpdated, gotDescUpdated time.Time
+	dest := &mocks.MockProvider{
+		GetSecretFunc: func(_, _ string) ([]byte, error) { return nil, keychain.ErrNotFound },
+		SetSecretAtFunc: func(_, _ string, _ []byte, c, u time.Time) error {
+			gotCreated, gotUpdated = c, u
+			return nil
+		},
+		SetDescriptionAtFunc: func(_, _, _ string, u time.Time) error {
+			gotDescUpdated = u
+			return nil
+		},
+	}
+
+	result, err := Migrate(source, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Migrated != 1 {
+		t.Fatalf("Migrated = %d, want 1", result.Migrated)
+	}
+	if !gotCreated.Equal(createdAt) {
+		t.Errorf("CreatedAt = %v, want %v", gotCreated, createdAt)
+	}
+	if !gotUpdated.Equal(updatedAt) {
+		t.Errorf("UpdatedAt on SetSecretAt = %v, want %v", gotUpdated, updatedAt)
+	}
+	if !gotDescUpdated.Equal(updatedAt) {
+		t.Errorf("UpdatedAt on SetDescriptionAt = %v, want %v", gotDescUpdated, updatedAt)
+	}
+}
+
+func TestMigrateForwardsZeroTimestampsWhenDestSupportsThem(t *testing.T) {
+	source := &mocks.MockProvider{
+		ListEntriesFunc: func(prefix string) ([]keychain.KeychainEntry, error) {
+			if prefix != "sesh-totp" {
+				return nil, nil
+			}
+			return []keychain.KeychainEntry{{
+				Service:     "sesh-totp/github",
+				Account:     "alice",
+				Description: "TOTP for GitHub",
+			}}, nil
+		},
+		GetSecretFunc: func(_, _ string) ([]byte, error) {
+			return []byte("totp-secret"), nil
+		},
+	}
+
+	var gotCreated, gotUpdated, gotDescUpdated time.Time
+	dest := &mocks.MockProvider{
+		GetSecretFunc: func(_, _ string) ([]byte, error) { return nil, keychain.ErrNotFound },
+		SetSecretAtFunc: func(_, _ string, _ []byte, c, u time.Time) error {
+			gotCreated, gotUpdated = c, u
+			return nil
+		},
+		SetDescriptionAtFunc: func(_, _, _ string, u time.Time) error {
+			gotDescUpdated = u
+			return nil
+		},
+	}
+
+	result, err := Migrate(source, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Migrated != 1 {
+		t.Fatalf("Migrated = %d, want 1", result.Migrated)
+	}
+	if !gotCreated.IsZero() {
+		t.Errorf("CreatedAt forwarded = %v, want zero (so dest.SetSecretAt can fall back to time.Now)", gotCreated)
+	}
+	if !gotUpdated.IsZero() {
+		t.Errorf("UpdatedAt forwarded = %v, want zero", gotUpdated)
+	}
+	if !gotDescUpdated.IsZero() {
+		t.Errorf("UpdatedAt forwarded to SetDescriptionAt = %v, want zero", gotDescUpdated)
+	}
+}
+
+// bareDest implements keychain.Provider but explicitly NOT
+// keychain.TimestampedStore — used to exercise Migrate's fallback path.
+type bareDest struct {
+	lastDescription  string
+	setSecretCalls   int
+	descriptionCalls int
+}
+
+func (d *bareDest) GetSecret(_, _ string) ([]byte, error) {
+	return nil, keychain.ErrNotFound
+}
+
+func (d *bareDest) SetSecret(_, _ string, _ []byte) error {
+	d.setSecretCalls++
+	return nil
+}
+
+func (d *bareDest) GetSecretString(_, _ string) (string, error)            { return "", nil }
+func (d *bareDest) SetSecretString(_, _, _ string) error                   { return nil }
+func (d *bareDest) GetMFASerialBytes(_, _ string) ([]byte, error)          { return nil, keychain.ErrNotFound }
+func (d *bareDest) ListEntries(_ string) ([]keychain.KeychainEntry, error) { return nil, nil }
+func (d *bareDest) DeleteEntry(_, _ string) error                          { return nil }
+func (d *bareDest) SetDescription(_, _, description string) error {
+	d.descriptionCalls++
+	d.lastDescription = description
+	return nil
+}
+
+func TestMigrateFallsBackToBareSetSecretWhenDestNotTimestamped(t *testing.T) {
+	source := &mocks.MockProvider{
+		ListEntriesFunc: func(prefix string) ([]keychain.KeychainEntry, error) {
+			if prefix != "sesh-totp" {
+				return nil, nil
+			}
+			return []keychain.KeychainEntry{{
+				Service:     "sesh-totp/github",
+				Account:     "alice",
+				Description: "TOTP",
+				CreatedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+				UpdatedAt:   time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
+			}}, nil
+		},
+		GetSecretFunc: func(_, _ string) ([]byte, error) { return []byte("s"), nil },
+	}
+
+	dest := &bareDest{}
+	result, err := Migrate(source, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Migrated != 1 {
+		t.Fatalf("Migrated = %d, want 1", result.Migrated)
+	}
+	if dest.setSecretCalls != 1 {
+		t.Errorf("SetSecret calls = %d, want 1 (fallback path)", dest.setSecretCalls)
+	}
+	if dest.descriptionCalls != 1 {
+		t.Errorf("SetDescription calls = %d, want 1", dest.descriptionCalls)
+	}
+	if dest.lastDescription != "TOTP" {
+		t.Errorf("description = %q, want TOTP", dest.lastDescription)
 	}
 }
 

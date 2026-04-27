@@ -56,6 +56,7 @@ func newTestHarness() *testHarness {
 			Exit:          func(int) {},
 			ClipboardCopy: func(string) error { return nil },
 			TimeNow:       time.Now,
+			Stdin:         bytes.NewReader(nil),
 			Stdout:        stdoutBuf,
 			Stderr:        stderrBuf,
 			VersionInfo:   VersionInfo{Version: "test-version", Commit: "test-commit", Date: "test-date"},

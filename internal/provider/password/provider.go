@@ -3,6 +3,7 @@ package password
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -155,8 +156,8 @@ func (p *Provider) ValidateRequest() error {
 		if p.format == "table" {
 			p.format = "json"
 		}
-		if p.format != "json" && p.format != "csv" {
-			return fmt.Errorf("--format for %s must be json or csv, got %q", p.action, p.format)
+		if p.format != "json" && p.format != "csv" && p.format != "encrypted" {
+			return fmt.Errorf("--format for %s must be json, csv, or encrypted, got %q", p.action, p.format)
 		}
 		if p.action == "import" && p.onConflict != "" && p.onConflict != "skip" && p.onConflict != "overwrite" {
 			return fmt.Errorf("--on-conflict must be skip or overwrite, got %q", p.onConflict)
@@ -618,14 +619,41 @@ func (p *Provider) generateTOTP(mgr *password.Manager) (provider.Credentials, er
 	}, nil
 }
 
-func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, error) {
-	format := password.FormatJSON
-	if p.format == "csv" {
-		format = password.FormatCSV
+// readExportPassword prompts for a password used to encrypt/decrypt an
+// export envelope. When confirm is true, requires the password be entered
+// twice and match.
+func (p *Provider) readExportPassword(label string, confirm bool) ([]byte, error) {
+	fmt.Fprintf(os.Stderr, "%s: ", label)
+	pw, err := readPassword()
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return nil, fmt.Errorf("read password: %w", err)
+	}
+	if len(pw) == 0 {
+		return nil, fmt.Errorf("password cannot be empty")
 	}
 
+	if confirm {
+		fmt.Fprintf(os.Stderr, "Confirm %s: ", label)
+		pw2, err := readPassword()
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			secure.SecureZeroBytes(pw)
+			return nil, fmt.Errorf("read confirmation: %w", err)
+		}
+		if !bytes.Equal(pw, pw2) {
+			secure.SecureZeroBytes(pw)
+			secure.SecureZeroBytes(pw2)
+			return nil, fmt.Errorf("passwords do not match")
+		}
+		secure.SecureZeroBytes(pw2)
+	}
+
+	return pw, nil
+}
+
+func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, error) {
 	opts := password.ExportOptions{
-		Format:    format,
 		EntryType: password.EntryType(p.entryType),
 	}
 
@@ -649,7 +677,23 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 		dest = p.file
 	}
 
-	count, err := mgr.Export(w, opts)
+	var count int
+	var err error
+
+	if p.format == "encrypted" {
+		pw, perr := p.readExportPassword("Encryption password", true)
+		if perr != nil {
+			return provider.Credentials{}, perr
+		}
+		defer secure.SecureZeroBytes(pw)
+		count, err = mgr.ExportEncrypted(w, opts, pw)
+	} else {
+		opts.Format = password.FormatJSON
+		if p.format == "csv" {
+			opts.Format = password.FormatCSV
+		}
+		count, err = mgr.Export(w, opts)
+	}
 	if err != nil {
 		return provider.Credentials{}, err
 	}
@@ -661,13 +705,7 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 }
 
 func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, error) {
-	format := password.FormatJSON
-	if p.format == "csv" {
-		format = password.FormatCSV
-	}
-
 	opts := password.ImportOptions{
-		Format:     format,
 		OnConflict: password.ConflictStrategy(p.onConflict),
 	}
 
@@ -687,7 +725,23 @@ func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, e
 		r = p.stdin
 	}
 
-	result, err := mgr.Import(r, opts)
+	var result password.ImportResult
+	var err error
+
+	if p.format == "encrypted" {
+		pw, perr := p.readExportPassword("Decryption password", false)
+		if perr != nil {
+			return provider.Credentials{}, perr
+		}
+		defer secure.SecureZeroBytes(pw)
+		result, err = mgr.ImportEncrypted(r, opts, pw)
+	} else {
+		opts.Format = password.FormatJSON
+		if p.format == "csv" {
+			opts.Format = password.FormatCSV
+		}
+		result, err = mgr.Import(r, opts)
+	}
 	if err != nil {
 		return provider.Credentials{}, err
 	}

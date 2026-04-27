@@ -33,6 +33,8 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 
 - **Extensible Plugin Architecture** — Add new authentication providers with a single interface
 - **Dual Storage Backends** — macOS Keychain (default) or encrypted SQLite with AES-256-GCM and Argon2id key derivation (`SESH_BACKEND=sqlite`)
+- **Two Key Sources for SQLite** — macOS Keychain (default) or user-supplied master password (`SESH_KEY_SOURCE=password`) for fully cross-platform, keychain-free operation
+- **Encrypted Export** — Portable backups protected by a password, safe to transfer between machines (`--format encrypted`)
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes with full-text search
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
 - **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically. Supports non-standard configs (SHA-256/SHA-512, 8 digits, custom periods) extracted from QR codes
@@ -44,7 +46,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 
 ## Installation
 
-> **Platform:** The default backend (macOS Keychain) requires macOS. The SQLite backend (`SESH_BACKEND=sqlite`) uses pure-Go encryption and works on macOS, Linux, and Windows — though the encryption key is still stored in the macOS Keychain for now. Full cross-platform key management is planned.
+> **Platform:** The default backend (macOS Keychain) requires macOS. The SQLite backend (`SESH_BACKEND=sqlite`) uses pure-Go encryption and works on macOS, Linux, and Windows. By default it still stores the encryption key in the macOS Keychain, but setting `SESH_KEY_SOURCE=password` enables a master-password mode that is fully keychain-free and works on any platform.
 
 ```bash
 # Option 1: Install with Homebrew (macOS)
@@ -268,6 +270,30 @@ sesh -service aws
 
 # SQLite backend (AES-256-GCM encrypted, Argon2id key derivation)
 SESH_BACKEND=sqlite sesh -service password -list
+```
+
+#### Key Source (SQLite backend only)
+```bash
+# Default: master key stored in macOS Keychain (keychain-assisted)
+SESH_BACKEND=sqlite sesh -service password -list
+
+# Master password: key derived from passphrase, no keychain needed (cross-platform)
+SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh -service password -list
+# → prompts for master password; first run asks twice for confirmation
+
+# Non-interactive (CI/scripting — exposes password to process env)
+SESH_BACKEND=sqlite SESH_KEY_SOURCE=password SESH_MASTER_PASSWORD=... sesh -service password -list
+```
+
+#### Encrypted Export / Import
+```bash
+# Export to a portable password-encrypted file (uses Argon2id + AES-256-GCM)
+sesh -service password -action export -format encrypted -file backup.enc
+# → prompts for password (twice for confirmation)
+
+# Import an encrypted backup
+sesh -service password -action import -format encrypted -file backup.enc
+# → prompts for password
 ```
 
 ## Documentation

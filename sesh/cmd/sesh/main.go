@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 
+	"golang.org/x/term"
+
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/migration"
@@ -78,7 +80,8 @@ func needsCredentialStore(args []string) bool {
 		case "--help", "-help", "-h",
 			"--version", "-version",
 			"--list-services", "-list-services",
-			"--migrate", "-migrate":
+			"--migrate", "-migrate",
+			"--rekey", "-rekey":
 			return false
 		}
 	}
@@ -127,18 +130,13 @@ func buildProvider() (keychain.Provider, io.Closer, error) {
 // first run) and returns an opened, schema-initialized SQLite store. The
 // caller must Close it.
 func openSQLiteStore() (*database.Store, error) {
-	u, err := user.Current()
-	if err != nil {
-		return nil, fmt.Errorf("determine current user: %w", err)
-	}
-
 	dbPath, err := database.DefaultDBPath()
 	if err != nil {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
-	ks := database.NewKeychainSource(keychain.NewDefaultProvider(), u.Username)
-	if err := ensureMasterKey(ks, filepath.Dir(dbPath)); err != nil {
+	ks, err := buildKeySource(filepath.Dir(dbPath))
+	if err != nil {
 		return nil, err
 	}
 
@@ -155,6 +153,59 @@ func openSQLiteStore() (*database.Store, error) {
 	}
 
 	return store, nil
+}
+
+// buildKeySource selects the KeySource based on SESH_KEY_SOURCE.
+// Defaults to the macOS Keychain. "password" selects MasterPasswordSource,
+// which stores its KDF salt in a sidecar file alongside the DB.
+func buildKeySource(dataDir string) (database.KeySource, error) {
+	switch os.Getenv("SESH_KEY_SOURCE") {
+	case "password":
+		mps := database.NewMasterPasswordSource(dataDir, promptMasterPassword)
+		// Eagerly unlock so every operation — including metadata-only reads
+		// like --list and --delete — requires the master password. Without
+		// this, the store would only prompt on decryption, letting an
+		// attacker with filesystem access list and delete entries without
+		// the password.
+		key, err := mps.GetEncryptionKey()
+		if err != nil {
+			return nil, err
+		}
+		secure.SecureZeroBytes(key)
+		return mps, nil
+	case "", "keychain":
+		u, err := user.Current()
+		if err != nil {
+			return nil, fmt.Errorf("determine current user: %w", err)
+		}
+		ks := database.NewKeychainSource(keychain.NewDefaultProvider(), u.Username)
+		if err := ensureMasterKey(ks, dataDir); err != nil {
+			return nil, err
+		}
+		return ks, nil
+	default:
+		return nil, fmt.Errorf("unknown SESH_KEY_SOURCE %q (valid: keychain, password)", os.Getenv("SESH_KEY_SOURCE"))
+	}
+}
+
+// promptMasterPassword reads a password from the terminal without echo.
+// Checks SESH_MASTER_PASSWORD env var first to support non-interactive use.
+func promptMasterPassword(prompt string) ([]byte, error) {
+	if envPw := os.Getenv("SESH_MASTER_PASSWORD"); envPw != "" {
+		return []byte(envPw), nil
+	}
+
+	if _, err := fmt.Fprint(os.Stderr, prompt); err != nil {
+		return nil, err
+	}
+	pw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	// Best-effort newline after the hidden input. Don't let a stderr write
+	// error mask a real read error.
+	fmt.Fprintln(os.Stderr) //nolint:errcheck // see comment above
+	if err != nil {
+		return nil, fmt.Errorf("read password: %w", err)
+	}
+	return pw, nil
 }
 
 // ensureMasterKey verifies a master encryption key exists in the keychain,
@@ -267,7 +318,7 @@ func runMigrate(app *App) error {
 	// Use bufio so a bare Enter (the canonical "No" for [y/N]) is read
 	// as an empty line rather than surfacing "unexpected newline" from
 	// fmt.Scanln and aborting.
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, err := bufio.NewReader(app.Stdin).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("failed to read input: %w", err)
 	}
@@ -310,6 +361,18 @@ func runMigrate(app *App) error {
 	return nil
 }
 
+// remainingArgs returns args following (but not including) the first
+// occurrence of name. Used to forward sub-flags to handlers like runRekey
+// without depending on a specific flag-package layout.
+func remainingArgs(args []string, name string) []string {
+	for i, a := range args {
+		if a == name {
+			return args[i+1:]
+		}
+	}
+	return nil
+}
+
 // fatal prints an error to stderr and exits
 func fatal(app *App, err error) {
 	if _, printErr := fmt.Fprintf(app.Stderr, "❌ %v\n", err); printErr != nil {
@@ -336,6 +399,12 @@ func run(app *App, args []string) {
 			return
 		case "--migrate", "-migrate":
 			if err := runMigrate(app); err != nil {
+				fatal(app, err)
+			}
+			return
+		case "--rekey", "-rekey":
+			rest := remainingArgs(args, arg)
+			if err := runRekey(app, rest, keychain.NewDefaultProvider()); err != nil {
 				fatal(app, err)
 			}
 			return

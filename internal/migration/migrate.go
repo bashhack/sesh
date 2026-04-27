@@ -4,6 +4,7 @@ package migration
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/keychain"
@@ -33,8 +34,12 @@ type Result struct {
 	Skipped  int
 }
 
-// PlanEntry describes a single entry that would be migrated.
+// PlanEntry describes a single entry that would be migrated. CreatedAt and
+// UpdatedAt come from the source's ListEntries; they may be zero for sources
+// that don't track timestamps (e.g. macOS Keychain).
 type PlanEntry struct {
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 	Service     string
 	Account     string
 	Description string
@@ -60,6 +65,8 @@ func Plan(source keychain.Provider) ([]PlanEntry, error) {
 				Service:     e.Service,
 				Account:     e.Account,
 				Description: e.Description,
+				CreatedAt:   e.CreatedAt,
+				UpdatedAt:   e.UpdatedAt,
 			})
 		}
 	}
@@ -69,9 +76,16 @@ func Plan(source keychain.Provider) ([]PlanEntry, error) {
 
 // Migrate copies all sesh entries from source to dest.
 // Existing entries in dest are skipped (not overwritten).
+//
+// If dest implements keychain.TimestampedStore, the source's CreatedAt /
+// UpdatedAt are forwarded to SetSecretAt / SetDescriptionAt so audit history
+// survives the copy. Sources that don't track timestamps return zero values,
+// and the timestamped methods fall back to time.Now in that case — so this
+// path is a strict superset of the bare SetSecret behaviour.
 func Migrate(source, dest keychain.Provider) (Result, error) {
 	var result Result
 	seen := make(map[entryKey]bool)
+	ts, _ := dest.(keychain.TimestampedStore)
 
 	for _, prefix := range migratePrefixes {
 		entries, err := source.ListEntries(prefix)
@@ -108,15 +122,15 @@ func Migrate(source, dest keychain.Provider) (Result, error) {
 				continue
 			}
 
-			if err := dest.SetSecret(entry.Account, entry.Service, secret); err != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to write: %v", entry.Service, err))
+			if writeErr := writeEntry(dest, ts, &entry, secret); writeErr != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to write: %v", entry.Service, writeErr))
 				secure.SecureZeroBytes(secret)
 				continue
 			}
 			secure.SecureZeroBytes(secret)
 
 			if entry.Description != "" {
-				if descErr := dest.SetDescription(entry.Service, entry.Account, entry.Description); descErr != nil {
+				if descErr := writeDescription(dest, ts, &entry); descErr != nil {
 					result.Errors = append(result.Errors, fmt.Sprintf("%s: migrated but description failed: %v", entry.Service, descErr))
 				}
 			}
@@ -126,4 +140,18 @@ func Migrate(source, dest keychain.Provider) (Result, error) {
 	}
 
 	return result, nil
+}
+
+func writeEntry(dest keychain.Provider, ts keychain.TimestampedStore, entry *keychain.KeychainEntry, secret []byte) error {
+	if ts != nil {
+		return ts.SetSecretAt(entry.Account, entry.Service, secret, entry.CreatedAt, entry.UpdatedAt)
+	}
+	return dest.SetSecret(entry.Account, entry.Service, secret)
+}
+
+func writeDescription(dest keychain.Provider, ts keychain.TimestampedStore, entry *keychain.KeychainEntry) error {
+	if ts != nil {
+		return ts.SetDescriptionAt(entry.Service, entry.Account, entry.Description, entry.UpdatedAt)
+	}
+	return dest.SetDescription(entry.Service, entry.Account, entry.Description)
 }
