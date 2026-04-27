@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -438,5 +439,192 @@ func TestMasterPasswordSource_SidecarHasNoSecrets(t *testing.T) {
 
 	if bytes.Contains(b, []byte(password)) {
 		t.Fatal("sidecar contains the master password in plaintext")
+	}
+}
+
+// seedSidecar creates a sidecar at dir whose master password is "right-one"
+// so retry-loop tests can drive unlock() directly without re-prompting twice
+// for the create+confirm flow.
+func seedSidecar(t *testing.T, dir string) {
+	t.Helper()
+	src := NewMasterPasswordSource(dir, staticPrompt("right-one", "right-one"))
+	defer src.Close()
+	key, err := src.GetEncryptionKey()
+	if err != nil {
+		t.Fatalf("seed sidecar: %v", err)
+	}
+	secure.SecureZeroBytes(key)
+}
+
+func TestMasterPasswordSource_RetriesWrongPasswordUntilCorrect(t *testing.T) {
+	dir := t.TempDir()
+	seedSidecar(t, dir)
+
+	var seenPrompts []string
+	prompt := func(p string) ([]byte, error) {
+		seenPrompts = append(seenPrompts, p)
+		switch len(seenPrompts) {
+		case 1:
+			return []byte("wrong-1"), nil
+		case 2:
+			return []byte("wrong-2"), nil
+		default:
+			return []byte("right-one"), nil
+		}
+	}
+
+	src := NewMasterPasswordSource(dir, prompt, WithMaxAttempts(3))
+	defer src.Close()
+
+	key, err := src.GetEncryptionKey()
+	if err != nil {
+		t.Fatalf("expected success on 3rd attempt: %v", err)
+	}
+	secure.SecureZeroBytes(key)
+	if len(seenPrompts) != 3 {
+		t.Fatalf("expected 3 prompts, got %d", len(seenPrompts))
+	}
+	// The retry-message contract is the user-visible signal that a
+	// previous attempt was wrong — assert it actually shows up in the
+	// prompt string (not just that we re-prompted).
+	if !strings.Contains(seenPrompts[1], "Wrong password") || !strings.Contains(seenPrompts[1], "(2/3)") {
+		t.Errorf("2nd prompt %q should announce the retry with (2/3)", seenPrompts[1])
+	}
+	if !strings.Contains(seenPrompts[2], "(3/3)") {
+		t.Errorf("3rd prompt %q should be marked (3/3)", seenPrompts[2])
+	}
+
+	// Cache-after-retry: a second GetEncryptionKey must hit the cache
+	// and not re-prompt, even though the successful unlock came on a
+	// non-first attempt.
+	key2, err := src.GetEncryptionKey()
+	if err != nil {
+		t.Fatalf("second GetEncryptionKey: %v", err)
+	}
+	secure.SecureZeroBytes(key2)
+	if len(seenPrompts) != 3 {
+		t.Errorf("cache should suppress re-prompt; got %d total prompts", len(seenPrompts))
+	}
+}
+
+func TestMasterPasswordSource_FailsAfterMaxAttempts(t *testing.T) {
+	dir := t.TempDir()
+	seedSidecar(t, dir)
+
+	prompts := 0
+	prompt := func(_ string) ([]byte, error) {
+		prompts++
+		return []byte("always-wrong"), nil
+	}
+
+	src := NewMasterPasswordSource(dir, prompt, WithMaxAttempts(3))
+	_, err := src.GetEncryptionKey()
+	if err == nil {
+		t.Fatal("expected error after exhausting attempts")
+	}
+	if !strings.Contains(err.Error(), "wrong master password") {
+		t.Errorf("error %q does not mention wrong password", err.Error())
+	}
+	// Multi-attempt failures surface the budget so logs/users can tell
+	// "they typed it wrong N times" from "single-shot non-interactive fail".
+	if !strings.Contains(err.Error(), "after 3 attempts") {
+		t.Errorf("error %q should report the attempt count", err.Error())
+	}
+	if prompts != 3 {
+		t.Errorf("expected 3 prompts, got %d", prompts)
+	}
+}
+
+func TestMasterPasswordSource_DefaultsToSingleAttempt(t *testing.T) {
+	dir := t.TempDir()
+	seedSidecar(t, dir)
+
+	prompts := 0
+	prompt := func(_ string) ([]byte, error) {
+		prompts++
+		return []byte("wrong"), nil
+	}
+
+	src := NewMasterPasswordSource(dir, prompt)
+	_, err := src.GetEncryptionKey()
+	if err == nil {
+		t.Fatal("expected error for wrong password")
+	}
+	if prompts != 1 {
+		t.Errorf("expected 1 prompt without WithMaxAttempts, got %d", prompts)
+	}
+}
+
+func TestMasterPasswordSource_PromptErrorBreaksLoop(t *testing.T) {
+	dir := t.TempDir()
+	seedSidecar(t, dir)
+
+	prompts := 0
+	prompt := func(_ string) ([]byte, error) {
+		prompts++
+		if prompts == 1 {
+			return []byte("wrong"), nil
+		}
+		return nil, errors.New("stdin closed")
+	}
+
+	src := NewMasterPasswordSource(dir, prompt, WithMaxAttempts(5))
+	_, err := src.GetEncryptionKey()
+	if err == nil {
+		t.Fatal("expected error from prompt failure")
+	}
+	if !strings.Contains(err.Error(), "read password") {
+		t.Errorf("error %q should surface the prompt failure", err.Error())
+	}
+	if prompts != 2 {
+		t.Errorf("expected loop to stop on prompt error after 2 calls, got %d", prompts)
+	}
+}
+
+func TestMasterPasswordSource_NoRetryOnSidecarError(t *testing.T) {
+	dir := t.TempDir()
+	// Write a sidecar with an unsupported version so readSidecar fails
+	// before any prompt can fire. Confirms the retry loop doesn't run
+	// for non-password failures (acceptance criterion #3 in the roadmap).
+	bad := `{"version": 99, "algorithm": "argon2id", "salt": "", "verify": "", "params": {"time":3,"memory":65536,"threads":4,"key_len":32}}`
+	if err := os.WriteFile(filepath.Join(dir, sidecarFileName), []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	prompts := 0
+	prompt := func(_ string) ([]byte, error) {
+		prompts++
+		return []byte("anything"), nil
+	}
+
+	src := NewMasterPasswordSource(dir, prompt, WithMaxAttempts(3))
+	_, err := src.GetEncryptionKey()
+	if err == nil {
+		t.Fatal("expected error from corrupt sidecar")
+	}
+	if prompts != 0 {
+		t.Errorf("expected 0 prompts when sidecar is corrupt, got %d", prompts)
+	}
+}
+
+func TestWithMaxAttempts_ClampsBelowOne(t *testing.T) {
+	dir := t.TempDir()
+	seedSidecar(t, dir)
+
+	for _, n := range []int{0, -1, -100} {
+		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
+			prompts := 0
+			prompt := func(_ string) ([]byte, error) {
+				prompts++
+				return []byte("wrong"), nil
+			}
+			src := NewMasterPasswordSource(dir, prompt, WithMaxAttempts(n))
+			if _, err := src.GetEncryptionKey(); err == nil {
+				t.Fatal("expected error")
+			}
+			if prompts != 1 {
+				t.Errorf("WithMaxAttempts(%d) should clamp to 1, got %d prompts", n, prompts)
+			}
+		})
 	}
 }

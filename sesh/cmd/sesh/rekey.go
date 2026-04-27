@@ -259,7 +259,7 @@ func currentKeySourceName() string {
 func newKeySourceByName(name, dataDir string, kc keychain.Provider) (database.KeySource, error) {
 	switch name {
 	case "password":
-		return database.NewMasterPasswordSource(dataDir, promptMasterPassword), nil
+		return resolvePasswordPrompt().newSource(dataDir), nil
 	case "keychain":
 		u, err := user.Current()
 		if err != nil {

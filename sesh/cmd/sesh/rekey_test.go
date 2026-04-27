@@ -144,7 +144,7 @@ func populateKeychainStore(t *testing.T, env *rekeyTestEnv, kc keychain.Provider
 
 func populatePasswordStore(t *testing.T, env *rekeyTestEnv, entries map[string]string) {
 	t.Helper()
-	ks := database.NewMasterPasswordSource(env.dataDir, promptMasterPassword)
+	ks := resolvePasswordPrompt().newSource(env.dataDir)
 	store, err := database.Open(env.dbPath, ks)
 	if err != nil {
 		t.Fatalf("open store for seeding: %v", err)
@@ -166,7 +166,7 @@ func populatePasswordStore(t *testing.T, env *rekeyTestEnv, entries map[string]s
 
 func readEntriesViaPassword(t *testing.T, env *rekeyTestEnv, services []string) map[string]string {
 	t.Helper()
-	ks := database.NewMasterPasswordSource(env.dataDir, promptMasterPassword)
+	ks := resolvePasswordPrompt().newSource(env.dataDir)
 	store, err := database.Open(env.dbPath, ks)
 	if err != nil {
 		t.Fatalf("open store for verify: %v", err)
@@ -451,7 +451,7 @@ func TestRekey_PreservesTimestamps(t *testing.T) {
 		t.Fatalf("runRekey: %v", err)
 	}
 
-	mps := database.NewMasterPasswordSource(env.dataDir, promptMasterPassword)
+	mps := resolvePasswordPrompt().newSource(env.dataDir)
 	store, err := database.Open(env.dbPath, mps)
 	if err != nil {
 		t.Fatal(err)
