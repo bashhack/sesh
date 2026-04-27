@@ -43,6 +43,7 @@ type App struct {
 	Exit          ExitFunc
 	ClipboardCopy ClipboardCopyFunc
 	TimeNow       TimeNowFunc
+	Stdin         io.Reader
 	Stdout        io.Writer
 	Stderr        io.Writer
 	VersionInfo   VersionInfo
@@ -80,6 +81,7 @@ func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider) *App {
 			return clipboard.CopyWithAutoClear(text, 30*time.Second)
 		},
 		TimeNow:     time.Now,
+		Stdin:       os.Stdin,
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
 		VersionInfo: versionInfo,

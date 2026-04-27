@@ -77,9 +77,9 @@ func (s *MasterPasswordSource) sidecarPath() string {
 // for the lifetime of this source so repeated Get/Set operations within one
 // invocation do not re-prompt.
 //
-// The caller should NOT zero the returned slice — this source returns a
-// defensive copy so the cache remains intact. Call Close() to clear the
-// cached key when done.
+// Per the KeySource contract the caller is free to zero the returned slice
+// — the cache holds a private copy. Call Close() to clear the cached key
+// when done.
 func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
 	if s.cachedKey != nil {
 		return cloneKey(s.cachedKey), nil
@@ -117,8 +117,11 @@ func (s *MasterPasswordSource) acquireKey() ([]byte, error) {
 // locks. After acquiring the lock, the sidecar is re-checked — another
 // process may have created it while this one was blocked.
 func (s *MasterPasswordSource) initializeLocked() ([]byte, error) {
+	if !filepath.IsAbs(s.dataDir) {
+		return nil, fmt.Errorf("data dir must be an absolute path, got %q", s.dataDir)
+	}
 	sentinel := s.sidecarPath() + ".lock"
-	lockFile, err := os.OpenFile(sentinel, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // path derived from caller-controlled dataDir
+	lockFile, err := os.OpenFile(sentinel, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // sentinel is <abs-dataDir>/passwords.key.lock; abs check above
 	if err != nil {
 		return nil, fmt.Errorf("open sidecar lock: %w", err)
 	}
@@ -216,10 +219,19 @@ func (s *MasterPasswordSource) unlock() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode salt: %w", err)
 	}
+	if len(salt) < 16 {
+		return nil, fmt.Errorf("sidecar salt too short: %d bytes (min 16)", len(salt))
+	}
 
 	verifyBlob, err := base64.StdEncoding.DecodeString(data.Verify)
 	if err != nil {
 		return nil, fmt.Errorf("decode verify blob: %w", err)
+	}
+	// AES-GCM minimum: 12-byte nonce + 16-byte tag = 28 bytes (plaintext is
+	// extra). Short-circuit before prompting and burning ~200ms on Argon2id
+	// for a sidecar that can't possibly verify.
+	if len(verifyBlob) < 28 {
+		return nil, fmt.Errorf("sidecar verify blob too short: %d bytes", len(verifyBlob))
 	}
 
 	pw, err := s.promptFunc("Master password: ")
@@ -230,15 +242,12 @@ func (s *MasterPasswordSource) unlock() ([]byte, error) {
 
 	key := DeriveKey(pw, salt, data.Params)
 
-	plaintext, err := Decrypt(key, verifyBlob)
-	if err != nil {
+	// AES-GCM authentication is what guarantees "this plaintext was
+	// produced by encryption under this key" — a successful Decrypt is
+	// already proof of the right master password.
+	if _, err := Decrypt(key, verifyBlob); err != nil {
 		secure.SecureZeroBytes(key)
 		return nil, fmt.Errorf("wrong master password")
-	}
-
-	if string(plaintext) != verifyPlaintext {
-		secure.SecureZeroBytes(key)
-		return nil, fmt.Errorf("wrong master password (verify mismatch)")
 	}
 
 	return key, nil

@@ -144,7 +144,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if _, perr := fmt.Fprintf(app.Stderr, "  rollback file after: %s%s\n", dbPath, rekeyBackupSuffix); perr != nil {
 		return perr
 	}
-	confirmed, err := promptYesNo(app.Stderr, "\nProceed? [y/N]: ")
+	confirmed, err := promptYesNo(app.Stdin, app.Stderr, "\nProceed? [y/N]: ")
 	if err != nil {
 		return err
 	}
@@ -197,6 +197,10 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	srcStoreOpen = false
 
 	backupPath = dbPath + rekeyBackupSuffix
+	// Brief window between these two renames where dbPath does not exist;
+	// a concurrent open during this interval will fail with ENOENT. POSIX
+	// has no portable atomic-two-file-swap, so we accept the window for
+	// this single-user CLI.
 	if err := os.Rename(dbPath, backupPath); err != nil {
 		return fmt.Errorf("rename source DB to backup: %w", err)
 	}
@@ -363,11 +367,11 @@ func unusedKeyStateNote(oldSource, dataDir string) string {
 
 // promptYesNo reads a y/N answer from stdin. Empty input (bare Enter) is "No"
 // to match runMigrate's behaviour. Returns true only on explicit "y" or "Y".
-func promptYesNo(stderr io.Writer, prompt string) (bool, error) {
+func promptYesNo(stdin io.Reader, stderr io.Writer, prompt string) (bool, error) {
 	if _, err := fmt.Fprint(stderr, prompt); err != nil {
 		return false, err
 	}
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, err := bufio.NewReader(stdin).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, fmt.Errorf("read confirmation: %w", err)
 	}

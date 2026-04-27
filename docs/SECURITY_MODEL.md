@@ -85,7 +85,7 @@ Derives the master key from a user-supplied passphrase via Argon2id. **No keycha
 - **Verification blob**: AES-256-GCM encryption of the constant string `"sesh-verify"` using the derived key. On unlock, sesh re-derives the key from the supplied password and tries to decrypt this blob. GCM's authentication tag rejects wrong passwords immediately, without touching any real entries
 - **First run**: prompts for the master password twice (confirmation), generates the salt, derives the key, writes the sidecar
 - **Subsequent runs**: reads sidecar, prompts for password, verifies via the blob, returns the key
-- **Minimum password length**: 8 characters (baseline — users should choose longer)
+- **Minimum password length**: 8 characters. This is a **floor**, not a recommendation — it exists to reject obvious mistakes (empty input, fat-fingered short strings). With Argon2id at `m=64 MiB, t=3` and an attacker who has the sidecar, an 8-character lowercase-ASCII password is brute-forceable within days on commodity hardware. **Choose a passphrase**: four or more random words from a large wordlist (40+ bits of entropy) gives meaningful resistance; longer is better
 - **Non-interactive mode**: `SESH_MASTER_PASSWORD` env var bypasses the prompt (intended for CI/scripts only; exposes the password to the process environment)
 
 **Threat model.** An attacker with the DB file and sidecar can attempt offline brute-force using the public salt and params. At ~5 attempts/second, a strong passphrase (four random words from a large wordlist, 40+ bits of entropy) is resistant; a weak password is not. This is the same threat model as any password manager — the strength of the master password bounds the security of everything under it.

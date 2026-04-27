@@ -318,7 +318,7 @@ func runMigrate(app *App) error {
 	// Use bufio so a bare Enter (the canonical "No" for [y/N]) is read
 	// as an empty line rather than surfacing "unexpected newline" from
 	// fmt.Scanln and aborting.
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	line, err := bufio.NewReader(app.Stdin).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("failed to read input: %w", err)
 	}

@@ -160,6 +160,10 @@ func (m *Manager) ImportEncrypted(r io.Reader, opts ImportOptions, password []by
 	if err != nil {
 		return ImportResult{}, fmt.Errorf("wrong password or corrupted export: %w", err)
 	}
+	// Zeroes the JSON envelope buffer once Import returns, but the parsed
+	// entry secrets land in immutable Go strings inside the unmarshalled
+	// structs and outlive this defer — same caveat as elsewhere in the
+	// codebase. See internal/secure/memory.go for the broader context.
 	defer secure.SecureZeroBytes(payload)
 
 	forwardOpts := opts

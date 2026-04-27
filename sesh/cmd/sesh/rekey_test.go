@@ -52,37 +52,14 @@ func hexKey() []byte {
 	return []byte(strings.Repeat("ab", 32))
 }
 
-func rekeyTestApp() (*App, *bytes.Buffer) {
+func rekeyTestApp(stdin string) (*App, *bytes.Buffer) {
 	stderr := new(bytes.Buffer)
 	return &App{
+		Stdin:  strings.NewReader(stdin),
 		Stdout: new(bytes.Buffer),
 		Stderr: stderr,
 		Exit:   func(int) {},
 	}, stderr
-}
-
-// withStdin replaces os.Stdin with a pipe pre-loaded with input. Restoring
-// is the caller's responsibility via the returned func.
-func withStdin(t *testing.T, input string) func() {
-	t.Helper()
-	oldStdin := os.Stdin
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("create stdin pipe: %v", err)
-	}
-	os.Stdin = r
-	if _, err := w.Write([]byte(input)); err != nil {
-		t.Fatalf("write stdin: %v", err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("close stdin writer: %v", err)
-	}
-	return func() {
-		os.Stdin = oldStdin
-		if cerr := r.Close(); cerr != nil {
-			t.Errorf("close stdin pipe: %v", cerr)
-		}
-	}
 }
 
 type kcMock struct {
@@ -217,7 +194,7 @@ func readEntriesViaKeychain(t *testing.T, env *rekeyTestEnv, kc keychain.Provide
 
 func TestRekey_RefusesIfBackendNotSqlite(t *testing.T) {
 	t.Setenv("SESH_BACKEND", "")
-	app, _ := rekeyTestApp()
+	app, _ := rekeyTestApp("")
 	err := runRekey(app, []string{"--to=password"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "SESH_BACKEND=sqlite") {
 		t.Fatalf("expected SESH_BACKEND error, got %v", err)
@@ -226,7 +203,7 @@ func TestRekey_RefusesIfBackendNotSqlite(t *testing.T) {
 
 func TestRekey_RefusesIfTargetMissing(t *testing.T) {
 	t.Setenv("SESH_BACKEND", "sqlite")
-	app, _ := rekeyTestApp()
+	app, _ := rekeyTestApp("")
 	err := runRekey(app, []string{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "--to") {
 		t.Fatalf("expected --to error, got %v", err)
@@ -235,7 +212,7 @@ func TestRekey_RefusesIfTargetMissing(t *testing.T) {
 
 func TestRekey_RefusesIfTargetInvalid(t *testing.T) {
 	t.Setenv("SESH_BACKEND", "sqlite")
-	app, _ := rekeyTestApp()
+	app, _ := rekeyTestApp("")
 	err := runRekey(app, []string{"--to=banana"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "--to") {
 		t.Fatalf("expected --to validation error, got %v", err)
@@ -250,7 +227,7 @@ func TestRekey_RefusesIfSameSource(t *testing.T) {
 		"sesh-password/password/github/alice": "hunter2",
 	})
 
-	app, _ := rekeyTestApp()
+	app, _ := rekeyTestApp("")
 	err := runRekey(app, []string{"--to=password"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "already using") {
 		t.Fatalf("expected already-using error, got %v", err)
@@ -259,7 +236,7 @@ func TestRekey_RefusesIfSameSource(t *testing.T) {
 
 func TestRekey_RefusesIfNoDatabase(t *testing.T) {
 	setupRekeyEnv(t)
-	app, _ := rekeyTestApp()
+	app, _ := rekeyTestApp("")
 	err := runRekey(app, []string{"--to=password"}, newKCMock(hexKey()))
 	if err == nil || !strings.Contains(err.Error(), "no database") {
 		t.Fatalf("expected no-database error, got %v", err)
@@ -277,7 +254,7 @@ func TestRekey_RefusesIfTargetSidecarExists(t *testing.T) {
 		t.Fatalf("pre-create sidecar: %v", err)
 	}
 
-	app, _ := rekeyTestApp()
+	app, _ := rekeyTestApp("")
 	err := runRekey(app, []string{"--to=password"}, kc)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("expected sidecar-exists error, got %v", err)
@@ -302,9 +279,8 @@ func TestRekey_KeychainToPassword(t *testing.T) {
 	populateKeychainStore(t, env, kc, entries)
 
 	t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
-	defer withStdin(t, "y\n")()
 
-	app, stderr := rekeyTestApp()
+	app, stderr := rekeyTestApp("y\n")
 	if err := runRekey(app, []string{"--to=password"}, kc); err != nil {
 		t.Fatalf("runRekey: %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -348,9 +324,8 @@ func TestRekey_PasswordToKeychain(t *testing.T) {
 	populatePasswordStore(t, env, entries)
 
 	kc := &kcMock{}
-	defer withStdin(t, "y\n")()
 
-	app, stderr := rekeyTestApp()
+	app, stderr := rekeyTestApp("y\n")
 	if err := runRekey(app, []string{"--to=keychain"}, kc); err != nil {
 		t.Fatalf("runRekey: %v\nstderr:\n%s", err, stderr.String())
 	}
@@ -405,9 +380,8 @@ func TestRekey_PreservesTimestamps(t *testing.T) {
 	}
 
 	t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
-	defer withStdin(t, "y\n")()
 
-	app, _ := rekeyTestApp()
+	app, _ := rekeyTestApp("y\n")
 	if err := runRekey(app, []string{"--to=password"}, kc); err != nil {
 		t.Fatalf("runRekey: %v", err)
 	}
@@ -443,9 +417,8 @@ func TestRekey_EmptyDB(t *testing.T) {
 	populateKeychainStore(t, env, kc, nil)
 
 	t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
-	defer withStdin(t, "y\n")()
 
-	app, stderr := rekeyTestApp()
+	app, stderr := rekeyTestApp("y\n")
 	if err := runRekey(app, []string{"--to=password"}, kc); err != nil {
 		t.Fatalf("runRekey: %v", err)
 	}
@@ -465,9 +438,8 @@ func TestRekey_CancelledLeavesNoChanges(t *testing.T) {
 	})
 
 	t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
-	defer withStdin(t, "\n")()
 
-	app, stderr := rekeyTestApp()
+	app, stderr := rekeyTestApp("\n")
 	if err := runRekey(app, []string{"--to=password"}, kc); err != nil {
 		t.Fatalf("runRekey: %v", err)
 	}
@@ -495,13 +467,10 @@ func TestRekey_RoundtripKeychainPasswordKeychain(t *testing.T) {
 	populateKeychainStore(t, env, kc1, entries)
 
 	t.Setenv("SESH_MASTER_PASSWORD", "intermediate-password-1234")
-	restore := withStdin(t, "y\n")
-	app1, _ := rekeyTestApp()
+	app1, _ := rekeyTestApp("y\n")
 	if err := runRekey(app1, []string{"--to=password"}, kc1); err != nil {
-		restore()
 		t.Fatalf("first rekey: %v", err)
 	}
-	restore()
 
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	if err := os.Remove(env.dbPath + rekeyBackupSuffix); err != nil {
@@ -509,13 +478,10 @@ func TestRekey_RoundtripKeychainPasswordKeychain(t *testing.T) {
 	}
 
 	kc2 := &kcMock{}
-	restore = withStdin(t, "y\n")
-	app2, _ := rekeyTestApp()
+	app2, _ := rekeyTestApp("y\n")
 	if err := runRekey(app2, []string{"--to=keychain"}, kc2); err != nil {
-		restore()
 		t.Fatalf("second rekey: %v", err)
 	}
-	restore()
 
 	services := []string{"sesh-password/password/github/alice", "sesh-totp/github"}
 	got := readEntriesViaKeychain(t, env, kc2, services)
