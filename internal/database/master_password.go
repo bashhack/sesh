@@ -62,15 +62,48 @@ type MasterPasswordSource struct {
 	cachedKey  []byte
 	mu         sync.Mutex
 	cacheEpoch uint64
+	// maxAttempts is the number of password prompts allowed in the unlock
+	// loop. Defaults to 1 (no retry); callers that know they're talking to
+	// an interactive TTY set this higher via WithMaxAttempts.
+	maxAttempts int
+}
+
+// Option configures a MasterPasswordSource. Use with NewMasterPasswordSource.
+type Option func(*MasterPasswordSource)
+
+// WithMaxAttempts sets the maximum number of password prompts the unlock
+// loop will issue before giving up. Values < 1 are clamped to 1. Only
+// wrong-password failures are retried; sidecar/IO errors fail immediately.
+//
+// The prompt callback must produce fresh user input on each invocation —
+// a callback that returns a constant value (e.g., one backed by an env
+// var) will derive the same wrong key N times and waste ~N × Argon2id
+// cycles before failing. The CLI gates this via resolvePasswordPrompt in
+// main.go, which only marks a prompt interactive when it actually reads
+// fresh bytes; direct callers must apply the same discipline.
+//
+// Only affects unlock(); first-run create+confirm always runs once.
+func WithMaxAttempts(n int) Option {
+	return func(s *MasterPasswordSource) {
+		if n < 1 {
+			n = 1
+		}
+		s.maxAttempts = n
+	}
 }
 
 // NewMasterPasswordSource creates a MasterPasswordSource that stores its
 // sidecar in dataDir (typically the same directory as the SQLite DB).
-func NewMasterPasswordSource(dataDir string, prompt PasswordPromptFunc) *MasterPasswordSource {
-	return &MasterPasswordSource{
-		dataDir:    dataDir,
-		promptFunc: prompt,
+func NewMasterPasswordSource(dataDir string, prompt PasswordPromptFunc, opts ...Option) *MasterPasswordSource {
+	s := &MasterPasswordSource{
+		dataDir:     dataDir,
+		promptFunc:  prompt,
+		maxAttempts: 1,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Close zeroes and releases the cached key. Safe to call multiple times and
@@ -181,17 +214,29 @@ func (s *MasterPasswordSource) initializeLocked() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sidecar lock: %w", err)
 	}
-	defer func() {
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
 		if cerr := lockFile.Close(); cerr != nil {
 			fmt.Fprintf(os.Stderr, "warning: release sidecar lock: %v\n", cerr)
 		}
-	}()
+	}
+	defer release()
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
 		return nil, fmt.Errorf("acquire sidecar lock: %w", err)
 	}
 
 	switch _, err := os.Stat(s.sidecarPath()); {
 	case err == nil:
+		// The flock's job was to serialize sidecar creation; with the
+		// sidecar already in place, drop it before falling into unlock()
+		// — the retry loop there can block for minutes on an interactive
+		// prompt and would otherwise stall any third concurrent invocation
+		// arriving at the lock.
+		release()
 		return s.unlock()
 	case os.IsNotExist(err):
 		return s.initialize()
@@ -297,23 +342,38 @@ func (s *MasterPasswordSource) unlock() ([]byte, error) {
 		return nil, fmt.Errorf("sidecar verify blob too short: %d bytes", len(verifyBlob))
 	}
 
-	pw, err := s.promptFunc("Master password: ")
-	if err != nil {
-		return nil, fmt.Errorf("read password: %w", err)
-	}
-	defer secure.SecureZeroBytes(pw)
+	attempts := max(s.maxAttempts, 1)
 
-	key := DeriveKey(pw, salt, data.Params)
+	for i := range attempts {
+		// First attempt uses the bare prompt; later attempts prepend a
+		// retry message so the prompt itself carries the "try again"
+		// signal without coupling this package to a stderr writer.
+		prompt := "Master password: "
+		if i > 0 {
+			prompt = fmt.Sprintf("Wrong password, try again (%d/%d). Master password: ", i+1, attempts)
+		}
 
-	// AES-GCM authentication is what guarantees "this plaintext was
-	// produced by encryption under this key" — a successful Decrypt is
-	// already proof of the right master password.
-	if _, err := Decrypt(key, verifyBlob); err != nil {
+		pw, err := s.promptFunc(prompt)
+		if err != nil {
+			return nil, fmt.Errorf("read password: %w", err)
+		}
+
+		key := DeriveKey(pw, salt, data.Params)
+		secure.SecureZeroBytes(pw)
+
+		// AES-GCM authentication is what guarantees "this plaintext was
+		// produced by encryption under this key" — a successful Decrypt is
+		// already proof of the right master password.
+		if _, err := Decrypt(key, verifyBlob); err == nil {
+			return key, nil
+		}
 		secure.SecureZeroBytes(key)
+	}
+
+	if attempts == 1 {
 		return nil, fmt.Errorf("wrong master password")
 	}
-
-	return key, nil
+	return nil, fmt.Errorf("wrong master password (after %d attempts)", attempts)
 }
 
 func (s *MasterPasswordSource) writeSidecar(data sidecarData) error {

@@ -161,7 +161,7 @@ func openSQLiteStore() (*database.Store, error) {
 func buildKeySource(dataDir string) (database.KeySource, error) {
 	switch os.Getenv("SESH_KEY_SOURCE") {
 	case "password":
-		mps := database.NewMasterPasswordSource(dataDir, promptMasterPassword)
+		mps := resolvePasswordPrompt().newSource(dataDir)
 		// Eagerly unlock so every operation — including metadata-only reads
 		// like --list and --delete — requires the master password. Without
 		// this, the store would only prompt on decryption, letting an
@@ -188,13 +188,59 @@ func buildKeySource(dataDir string) (database.KeySource, error) {
 	}
 }
 
-// promptMasterPassword reads a password from the terminal without echo.
-// Checks SESH_MASTER_PASSWORD env var first to support non-interactive use.
-func promptMasterPassword(prompt string) ([]byte, error) {
-	if envPw := os.Getenv("SESH_MASTER_PASSWORD"); envPw != "" {
-		return []byte(envPw), nil
-	}
+// interactivePasswordAttempts is the retry budget for an interactive TTY
+// password prompt. Three is the conventional ssh/sudo limit — enough to
+// recover from a typo without spending real CPU on Argon2id derivations
+// against a clearly-wrong password.
+const interactivePasswordAttempts = 3
 
+// passwordPromptConfig pairs a prompt callback with a flag indicating
+// whether the prompt represents a live human at a terminal. The two are
+// resolved together so the retry-loop budget can never be applied to a
+// constant-output prompt (e.g. one backed by SESH_MASTER_PASSWORD), which
+// would just burn N × Argon2id deriving the same wrong key.
+type passwordPromptConfig struct {
+	prompt      database.PasswordPromptFunc
+	interactive bool
+}
+
+// resolvePasswordPrompt picks the prompt callback based on the runtime
+// environment, in priority order:
+//   - SESH_MASTER_PASSWORD set → constant-bytes prompt, never interactive
+//   - stdin is a TTY → terminal read, interactive
+//   - otherwise (piped stdin, scripts) → terminal read, but not interactive
+//     so retry stays disabled
+//
+// Reading the env var here is the single source of truth for "is the
+// password input live human input?" — the answer feeds both the prompt
+// itself and the retry budget.
+func resolvePasswordPrompt() passwordPromptConfig {
+	if envPw := os.Getenv("SESH_MASTER_PASSWORD"); envPw != "" {
+		return passwordPromptConfig{
+			prompt:      func(_ string) ([]byte, error) { return []byte(envPw), nil },
+			interactive: false,
+		}
+	}
+	return passwordPromptConfig{
+		prompt:      terminalPrompt,
+		interactive: term.IsTerminal(int(os.Stdin.Fd())),
+	}
+}
+
+// newSource constructs a MasterPasswordSource using this config's prompt
+// and only enables the retry budget when the prompt is interactive.
+func (c passwordPromptConfig) newSource(dataDir string) *database.MasterPasswordSource {
+	var opts []database.Option
+	if c.interactive {
+		opts = append(opts, database.WithMaxAttempts(interactivePasswordAttempts))
+	}
+	return database.NewMasterPasswordSource(dataDir, c.prompt, opts...)
+}
+
+// terminalPrompt reads a password from the controlling terminal without
+// echo. Does not consult SESH_MASTER_PASSWORD — that decision belongs to
+// resolvePasswordPrompt so the env-var policy lives in exactly one place.
+func terminalPrompt(prompt string) ([]byte, error) {
 	if _, err := fmt.Fprint(os.Stderr, prompt); err != nil {
 		return nil, err
 	}
@@ -203,7 +249,10 @@ func promptMasterPassword(prompt string) ([]byte, error) {
 	// error mask a real read error.
 	fmt.Fprintln(os.Stderr) //nolint:errcheck // see comment above
 	if err != nil {
-		return nil, fmt.Errorf("read password: %w", err)
+		// Don't re-wrap as "read password" — the caller (unlock) already
+		// adds that prefix, and double-wrapping produced
+		// "read password: read password: ..." in error output.
+		return nil, err
 	}
 	return pw, nil
 }

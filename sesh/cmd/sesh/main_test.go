@@ -782,3 +782,36 @@ func TestEnsureMasterKey_Concurrent(t *testing.T) {
 		t.Errorf("stored hex length = %d, want 64 (hex of 32 raw bytes)", len(kc.stored))
 	}
 }
+
+func TestResolvePasswordPrompt_EnvVarYieldsConstantNonInteractive(t *testing.T) {
+	// SESH_MASTER_PASSWORD short-circuits the terminal read with a
+	// constant-bytes prompt. Such a prompt cannot meaningfully retry —
+	// it would derive the same wrong key N times — so interactive must
+	// be false to keep the retry budget off.
+	t.Setenv("SESH_MASTER_PASSWORD", "secret-from-env")
+	cfg := resolvePasswordPrompt()
+	if cfg.interactive {
+		t.Error("env-var prompt must not be marked interactive")
+	}
+	pw, err := cfg.prompt("ignored")
+	if err != nil {
+		t.Fatalf("env-var prompt should not error: %v", err)
+	}
+	if string(pw) != "secret-from-env" {
+		t.Errorf("env-var prompt returned %q, want %q", pw, "secret-from-env")
+	}
+}
+
+func TestResolvePasswordPrompt_NonTTYIsTerminalPromptButNotInteractive(t *testing.T) {
+	// `go test` runs with stdin not attached to a terminal. We still pick
+	// the terminal-read prompt (so a TTY-bound caller would work), but
+	// interactive stays false — no retry budget for piped/scripted callers.
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	cfg := resolvePasswordPrompt()
+	if cfg.interactive {
+		t.Error("non-TTY stdin must not be marked interactive")
+	}
+	if cfg.prompt == nil {
+		t.Fatal("prompt callback should be set even when not interactive")
+	}
+}
