@@ -230,11 +230,21 @@ func resolvePasswordPrompt() passwordPromptConfig {
 // newSource constructs a MasterPasswordSource using this config's prompt
 // and only enables the retry budget when the prompt is interactive.
 func (c passwordPromptConfig) newSource(dataDir string) *database.MasterPasswordSource {
-	var opts []database.Option
+	return database.NewMasterPasswordSource(dataDir, c.prompt, c.options()...)
+}
+
+// newSourceAtPath is the rotation-friendly variant: caller specifies the
+// sidecar path explicitly so a "target" source can stage at e.g.
+// passwords.key.new while the canonical source still reads passwords.key.
+func (c passwordPromptConfig) newSourceAtPath(sidecarPath string) *database.MasterPasswordSource {
+	return database.NewMasterPasswordSourceAtPath(sidecarPath, c.prompt, c.options()...)
+}
+
+func (c passwordPromptConfig) options() []database.Option {
 	if c.interactive {
-		opts = append(opts, database.WithMaxAttempts(interactivePasswordAttempts))
+		return []database.Option{database.WithMaxAttempts(interactivePasswordAttempts)}
 	}
-	return database.NewMasterPasswordSource(dataDir, c.prompt, opts...)
+	return nil
 }
 
 // terminalPrompt reads a password from the controlling terminal without

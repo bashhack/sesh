@@ -415,10 +415,10 @@ func TestMasterPasswordSource_RejectsShortVerify(t *testing.T) {
 	}
 }
 
-func TestMasterPasswordSource_RejectsNonAbsoluteDataDir(t *testing.T) {
+func TestMasterPasswordSource_RejectsNonAbsoluteSidecarPath(t *testing.T) {
 	src := NewMasterPasswordSource("relative/path", staticPrompt("password-12345", "password-12345"))
 	_, err := src.GetEncryptionKey()
-	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("must be an absolute path")) {
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("must be absolute")) {
 		t.Fatalf("expected absolute-path error, got %v", err)
 	}
 }
@@ -439,6 +439,75 @@ func TestMasterPasswordSource_SidecarHasNoSecrets(t *testing.T) {
 
 	if bytes.Contains(b, []byte(password)) {
 		t.Fatal("sidecar contains the master password in plaintext")
+	}
+}
+
+func TestInitializeLocked_RemovesLockFileAfterFirstInit(t *testing.T) {
+	// The .lock sentinel created by initializeLocked exists only to host
+	// an advisory flock during concurrent first-run. Once first-init has
+	// committed the sidecar, no future invocation will ever flock against
+	// this file again (acquireKey only enters initializeLocked when the
+	// sidecar doesn't exist, and the sidecar exists from now on). Leaving
+	// the .lock file on disk is harmless but noisy — clean it up.
+	dir := t.TempDir()
+	src := NewMasterPasswordSource(dir, staticPrompt("first-init-pw", "first-init-pw"))
+	defer src.Close()
+
+	key, err := src.GetEncryptionKey()
+	if err != nil {
+		t.Fatalf("first-init GetEncryptionKey: %v", err)
+	}
+	secure.SecureZeroBytes(key)
+
+	lockPath := filepath.Join(dir, sidecarFileName+".lock")
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Errorf("lock file %s should be removed after successful first-init, got stat err %v", lockPath, err)
+	}
+}
+
+func TestInitializeLocked_PreservesLockFileWhenInitFails(t *testing.T) {
+	// Safety property: when initialize() errors before writing the
+	// sidecar, the lock file MUST remain on disk so concurrent
+	// initializers stay serialized. Removing the lock file in error
+	// paths would let a new arrival open a fresh inode and run
+	// initialize() in parallel with an in-flight retry — racing on
+	// who writes the sidecar.
+	dir := t.TempDir()
+	src := NewMasterPasswordSource(dir, staticPrompt("create-pw-1234", "different-pw-5678"))
+	defer src.Close()
+
+	_, err := src.GetEncryptionKey()
+	if err == nil || !strings.Contains(err.Error(), "passwords do not match") {
+		t.Fatalf("expected passwords-do-not-match error, got %v", err)
+	}
+	lockPath := filepath.Join(dir, sidecarFileName+".lock")
+	if _, statErr := os.Stat(lockPath); statErr != nil {
+		t.Errorf("lock file %s should be preserved after init error (sidecar not yet written): %v", lockPath, statErr)
+	}
+	// And confirm the sidecar truly wasn't written, so the test setup
+	// matches its premise.
+	if _, statErr := os.Stat(filepath.Join(dir, sidecarFileName)); !os.IsNotExist(statErr) {
+		t.Errorf("sidecar should not exist after init error: %v", statErr)
+	}
+}
+
+func TestNewMasterPasswordSourceAtPath_HonorsCustomPath(t *testing.T) {
+	dir := t.TempDir()
+	customPath := filepath.Join(dir, "custom-name.key")
+	src := NewMasterPasswordSourceAtPath(customPath, staticPrompt("rotation-target", "rotation-target"))
+	defer src.Close()
+
+	key, err := src.GetEncryptionKey()
+	if err != nil {
+		t.Fatalf("GetEncryptionKey: %v", err)
+	}
+	secure.SecureZeroBytes(key)
+
+	if _, err := os.Stat(customPath); err != nil {
+		t.Errorf("sidecar should be at custom path %q: %v", customPath, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sidecarFileName)); !os.IsNotExist(err) {
+		t.Errorf("canonical sidecar path should not be touched when custom path is given")
 	}
 }
 
