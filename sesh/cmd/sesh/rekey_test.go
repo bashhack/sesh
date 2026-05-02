@@ -892,6 +892,104 @@ func TestRotate_RemovesStagingLockOnCancel(t *testing.T) {
 	}
 }
 
+func TestRotate_RefusesIfBackendNotSqlite(t *testing.T) {
+	t.Setenv("SESH_BACKEND", "")
+	app, _ := rekeyTestApp("")
+	err := runRotateMasterPassword(app, rotateTestCfg("any-pw-1234"))
+	if err == nil || !strings.Contains(err.Error(), "SESH_BACKEND=sqlite") {
+		t.Fatalf("expected SESH_BACKEND error, got %v", err)
+	}
+}
+
+func TestRotate_RefusesIfDatabaseMissing(t *testing.T) {
+	setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	app, _ := rekeyTestApp("")
+	err := runRotateMasterPassword(app, rotateTestCfg("any-pw-1234"))
+	if err == nil || !strings.Contains(err.Error(), "no database to rotate") {
+		t.Fatalf("expected no-database error, got %v", err)
+	}
+}
+
+func TestRotate_RefusesIfSidecarMissing(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	// Create a DB file directly (bypassing sesh) so the DB-stat check passes
+	// but the sidecar doesn't exist — the "is SESH_KEY_SOURCE=password
+	// actually in use?" failure mode.
+	if err := os.MkdirAll(env.dataDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(env.dbPath, []byte("not a real db"), 0o600); err != nil {
+		t.Fatalf("write fake db: %v", err)
+	}
+	app, _ := rekeyTestApp("")
+	err := runRotateMasterPassword(app, rotateTestCfg("any-pw-1234"))
+	if err == nil || !strings.Contains(err.Error(), "no sidecar to rotate") {
+		t.Fatalf("expected no-sidecar error, got %v", err)
+	}
+}
+
+func TestRotate_PasswordRefusesIfNewDBExists(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+
+	if err := os.WriteFile(env.dbPath+rekeyDestSuffix, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("pre-create staging DB: %v", err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
+	err := runRotateMasterPassword(app, cfg)
+	if err == nil || !strings.Contains(err.Error(), "exists from a prior rotation") {
+		t.Fatalf("expected refusal because staging DB exists, got %v", err)
+	}
+}
+
+func TestRotate_PasswordRefusesIfBackupDBExists(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+
+	if err := os.WriteFile(env.dbPath+rotateBackupSuffix, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("pre-create backup DB: %v", err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
+	err := runRotateMasterPassword(app, cfg)
+	if err == nil || !strings.Contains(err.Error(), "exists from a prior rotation") {
+		t.Fatalf("expected refusal because backup DB exists, got %v", err)
+	}
+}
+
+func TestRotate_WrongSourcePassword(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "right-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	// Wrong source password — fails at unlock before any prompt for a new
+	// password. cfg only provides the wrong one; if we accidentally drained
+	// further from the sequence, the "test prompt exhausted" error would
+	// surface and tell us the test no longer pins the right behavior.
+	cfg := rotateTestCfg("wrong-pw-1234")
+	err := runRotateMasterPassword(app, cfg)
+	if err == nil || !strings.Contains(err.Error(), "unlock current sidecar") {
+		t.Fatalf("expected unlock error for wrong source password, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "wrong master password") {
+		t.Errorf("error %q should bubble up the underlying wrong-password message", err.Error())
+	}
+}
+
 func TestRotate_PasswordCancelledLeavesNoChanges(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
