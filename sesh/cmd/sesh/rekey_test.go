@@ -973,6 +973,10 @@ func TestRotate_WrongSourcePassword(t *testing.T) {
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "right-pw-1234")
 	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	beforeSidecar, err := os.ReadFile(env.sidecarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	app, _ := rekeyTestApp("y\n")
@@ -981,12 +985,22 @@ func TestRotate_WrongSourcePassword(t *testing.T) {
 	// further from the sequence, the "test prompt exhausted" error would
 	// surface and tell us the test no longer pins the right behavior.
 	cfg := rotateTestCfg("wrong-pw-1234")
-	err := runRotateMasterPassword(app, cfg)
+	err = runRotateMasterPassword(app, cfg)
 	if err == nil || !strings.Contains(err.Error(), "unlock current sidecar") {
 		t.Fatalf("expected unlock error for wrong source password, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "wrong master password") {
 		t.Errorf("error %q should bubble up the underlying wrong-password message", err.Error())
+	}
+	// Canonical sidecar must be untouched. No write path is reachable
+	// before the failed unlock, so this is a regression guard against
+	// future refactors that move sidecar writes earlier in the flow.
+	afterSidecar, err := os.ReadFile(env.sidecarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeSidecar, afterSidecar) {
+		t.Error("canonical sidecar modified after wrong-password failure")
 	}
 }
 
@@ -996,6 +1010,10 @@ func TestRotate_PasswordCancelledLeavesNoChanges(t *testing.T) {
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
 	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
 	beforeBlob, err := os.ReadFile(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeSidecar, err := os.ReadFile(env.sidecarPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1016,6 +1034,13 @@ func TestRotate_PasswordCancelledLeavesNoChanges(t *testing.T) {
 	}
 	if !bytes.Equal(beforeBlob, afterBlob) {
 		t.Error("DB modified after cancelled rotation")
+	}
+	afterSidecar, err := os.ReadFile(env.sidecarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeSidecar, afterSidecar) {
+		t.Error("canonical sidecar modified after cancelled rotation")
 	}
 	for _, p := range []string{
 		env.dbPath + rekeyDestSuffix,
