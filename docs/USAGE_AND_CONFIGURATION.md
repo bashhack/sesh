@@ -252,9 +252,39 @@ Behaviour:
 - **Recoverable.** On success, the original database is preserved at `<dbPath>.pre-rekey`. Verify the new state works, then remove the backup manually.
 - **Old key state is left in place.** Switching from keychain → password leaves the keychain entry; switching from password → keychain leaves the sidecar. Both become unused but are not auto-deleted (so you have an additional rollback path). The summary message points at how to clean them up.
 - **Refuses if the target is already initialised.** If a sidecar already exists for `--to password`, or a keychain entry already exists for `--to keychain`, rekey aborts and asks you to clean up manually before retrying.
-- **`--to <same as current>` is rejected.** Rotating within the same source (changing master password without switching) is not yet supported — use the encrypted-export route in the meantime.
+- **`--to password` while already in password mode is the rotation case.** See "Rotating your master password" below. The `keychain → keychain` analogue (rotating the random keychain key in place) is not yet supported.
 
 Timestamps (`created_at`, `updated_at`) are preserved across the rekey.
+
+### Rotating your master password
+
+When `SESH_KEY_SOURCE=password` is the active source, `sesh --rekey --to password` rotates the master password in place: every entry is re-encrypted under a freshly-derived key from a new password you choose, and the old sidecar is preserved as a backup.
+
+```bash
+SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --rekey --to password
+# Master password: ****                          # current password
+# About to rotate master password and re-encrypt 12 entries.
+#   source DB:           /Users/alice/Library/Application Support/sesh/passwords.db
+#   rollback DB after:   /Users/alice/Library/Application Support/sesh/passwords.db.pre-rotate
+#   rollback sidecar:    /Users/alice/Library/Application Support/sesh/passwords.key.pre-rotate
+#
+# Proceed? [y/N]: y
+# Create master password: ****                   # new password
+# Confirm master password: ****
+# Rotated 12 entries under a new master password.
+# Old DB preserved at /Users/alice/Library/Application Support/sesh/passwords.db.pre-rotate
+# Old sidecar preserved at /Users/alice/Library/Application Support/sesh/passwords.key.pre-rotate
+# Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available).
+```
+
+Behaviour:
+
+- **Atomic.** Either every entry is re-encrypted and both the DB + sidecar are swapped, or nothing changes. A copy failure cleans up the staging files and leaves the originals untouched.
+- **Recoverable on user error.** Both `passwords.db.pre-rotate` and `passwords.key.pre-rotate` are kept after success — if you discover later that you typo'd the new password during the confirm step, the old DB and sidecar are still there. Verify the new password works on real entries, then delete both `.pre-rotate` files (`shred -u` if your system has it).
+- **Refuses if any staging or backup file exists.** If a previous rotation crashed mid-flight or wasn't cleaned up, you'll be asked to remove the leftover `.new` / `.pre-rotate` files first. Clobbering them silently could destroy a recovery path.
+- **Same Argon2id parameters as the original sidecar.** Rotation generates a new salt and re-derives, but does not bump KDF cost parameters. If you want to upgrade those, that's a separate operation (currently via encrypted export → import with a fresh sidecar).
+
+
 
 ## Usage Patterns
 

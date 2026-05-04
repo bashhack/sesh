@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	rekeyDestSuffix   = ".new"
-	rekeyBackupSuffix = ".pre-rekey"
-	encKeyService     = "sesh-sqlite-encryption-key"
-	sidecarFile       = "passwords.key"
+	rekeyDestSuffix    = ".new"
+	rekeyBackupSuffix  = ".pre-rekey"
+	rotateBackupSuffix = ".pre-rotate"
+	encKeyService      = "sesh-sqlite-encryption-key"
+	sidecarFile        = "passwords.key"
 )
 
 // runRekey re-encrypts the SQLite store under a different KeySource and
@@ -52,6 +53,13 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 
 	current := currentKeySourceName()
 	if current == *target {
+		// password → password is the in-place rotation case ("change my
+		// master password"). Other same-source pairs (e.g. keychain →
+		// keychain) aren't supported in this branch yet; see Flavor B
+		// in docs/KEY_ROTATION_ROADMAP.md.
+		if current == "password" {
+			return runRotateMasterPassword(app, resolvePasswordPrompt())
+		}
 		return fmt.Errorf("already using %s; nothing to do", *target)
 	}
 
@@ -369,6 +377,248 @@ func unusedKeyStateNote(oldSource, dataDir string) string {
 	default:
 		return ""
 	}
+}
+
+// runRotateMasterPassword re-encrypts every entry under a freshly-derived
+// key from a new master password. The old sidecar is preserved at
+// passwords.key.pre-rotate and the old DB at <dbPath>.pre-rotate so the
+// user has a recovery path if they later realize they typed the new
+// password wrong (e.g. caps lock during the confirm step).
+//
+// Distinct from runRekey's source-switching path: source and target both
+// use MasterPasswordSource; the only thing that changes is the salt and
+// the derived key. The target source is constructed against a staging
+// sidecar path (.new) so the canonical path keeps unlocking with the old
+// password until the very end.
+//
+// cfg is the prompt configuration shared by source and target sources.
+// Production passes resolvePasswordPrompt(); tests inject a sequenced
+// prompt that returns the old password first, then the new one twice.
+func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
+	if os.Getenv("SESH_BACKEND") != "sqlite" {
+		return fmt.Errorf("rotate requires SESH_BACKEND=sqlite")
+	}
+
+	dbPath, err := database.DefaultDBPath()
+	if err != nil {
+		return fmt.Errorf("resolve database path: %w", err)
+	}
+	dataDir := filepath.Dir(dbPath)
+	sidecarPath := filepath.Join(dataDir, sidecarFile)
+
+	dbNewPath := dbPath + rekeyDestSuffix
+	dbBackupPath := dbPath + rotateBackupSuffix
+	sidecarNewPath := sidecarPath + rekeyDestSuffix
+	sidecarBackupPath := sidecarPath + rotateBackupSuffix
+
+	if _, err := os.Stat(dbPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("no database to rotate at %s", dbPath)
+		}
+		return fmt.Errorf("stat database: %w", err)
+	}
+	if _, err := os.Stat(sidecarPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("no sidecar to rotate at %s — is SESH_KEY_SOURCE=password actually in use?", sidecarPath)
+		}
+		return fmt.Errorf("stat sidecar: %w", err)
+	}
+	// Refuse if any staging or backup file from a prior attempt is still
+	// around. Clobbering a prior backup would silently destroy a recovery
+	// path; clobbering a prior staging file might silently mix old and
+	// new state.
+	for _, p := range []string{dbNewPath, dbBackupPath, sidecarNewPath, sidecarBackupPath} {
+		if _, err := os.Stat(p); err == nil {
+			return fmt.Errorf("path %s exists from a prior rotation; remove it (or rename to preserve a prior backup) and retry", p)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat %s: %w", p, err)
+		}
+	}
+
+	srcKS := cfg.newSource(dataDir)
+	srcStore, err := database.Open(dbPath, srcKS)
+	if err != nil {
+		return fmt.Errorf("open source database: %w", err)
+	}
+
+	// Rollback state — same shape as runRekey. Anything *true / non-empty
+	// when err != nil gets unwound; commit zeros them so cleanup no-ops.
+	var (
+		destStore      *database.Store
+		destStoreOpen  bool
+		destDBCreated  bool
+		newSidecarMade bool
+		srcStoreOpen   = true
+		dbRenamed      bool
+		sidecarRenamed bool
+	)
+
+	defer func() {
+		if srcStoreOpen {
+			if cerr := srcStore.Close(); cerr != nil {
+				err = appendErr(err, "close source store", cerr)
+			}
+		}
+		if err == nil {
+			return
+		}
+		if destStoreOpen && destStore != nil {
+			if cerr := destStore.Close(); cerr != nil {
+				err = appendErr(err, "rollback close destination store", cerr)
+			}
+		}
+		if destDBCreated {
+			if rerr := os.Remove(dbNewPath); rerr != nil && !os.IsNotExist(rerr) {
+				err = appendErr(err, "rollback remove staged DB", rerr)
+			}
+		}
+		if newSidecarMade {
+			if rerr := os.Remove(sidecarNewPath); rerr != nil && !os.IsNotExist(rerr) {
+				err = appendErr(err, "rollback remove staged sidecar", rerr)
+			}
+		}
+		// The lock-file sentinel (sidecarNewPath + ".lock") gets created
+		// by initializeLocked the moment we open it with O_CREATE — that
+		// happens before any password prompt, so it can be on disk even
+		// when newSidecarMade is false (e.g. mismatched-confirm errors
+		// thrown from initialize). Remove it unconditionally; IsNotExist
+		// handles the never-created case.
+		if rerr := os.Remove(sidecarNewPath + ".lock"); rerr != nil && !os.IsNotExist(rerr) {
+			err = appendErr(err, "rollback remove staged sidecar lock", rerr)
+		}
+		// If only the DB rename succeeded, restore it. The sidecar is
+		// still canonical at this point (rename happens after DB).
+		if dbRenamed && !sidecarRenamed {
+			if rerr := os.Rename(dbBackupPath, dbPath); rerr != nil {
+				err = appendErr(err, fmt.Sprintf("restore original DB to %s", dbPath), rerr)
+			}
+		}
+	}()
+
+	// Surface "wrong current password" before we ask for the new one. The
+	// retry loop in unlock() gives the user up to 3 tries on an interactive
+	// TTY — driven by cfg.interactive.
+	srcKey, err := srcKS.GetEncryptionKey()
+	if err != nil {
+		return fmt.Errorf("unlock current sidecar: %w", err)
+	}
+	secure.SecureZeroBytes(srcKey)
+
+	plan, err := migration.Plan(srcStore)
+	if err != nil {
+		return fmt.Errorf("scan source: %w", err)
+	}
+
+	if _, perr := fmt.Fprintf(app.Stderr, "About to rotate master password and re-encrypt %d entries.\n", len(plan)); perr != nil {
+		return perr
+	}
+	if _, perr := fmt.Fprintf(app.Stderr, "  source DB:           %s\n", dbPath); perr != nil {
+		return perr
+	}
+	if _, perr := fmt.Fprintf(app.Stderr, "  rollback DB after:   %s\n", dbBackupPath); perr != nil {
+		return perr
+	}
+	if _, perr := fmt.Fprintf(app.Stderr, "  rollback sidecar:    %s\n", sidecarBackupPath); perr != nil {
+		return perr
+	}
+	confirmed, err := promptYesNo(app.Stdin, app.Stderr, "\nProceed? [y/N]: ")
+	if err != nil {
+		return err
+	}
+	if !confirmed {
+		if _, perr := fmt.Fprintln(app.Stderr, "Rotation cancelled."); perr != nil {
+			return perr
+		}
+		return nil
+	}
+
+	// Build the target source against the staged sidecar path. The first
+	// GetEncryptionKey on this source triggers initialize() — i.e. the
+	// "Create master password" + "Confirm master password" prompts that
+	// generate the new salt and write the .new sidecar.
+	destKS := cfg.newSourceAtPath(sidecarNewPath)
+	destKey, err := destKS.GetEncryptionKey()
+	if err != nil {
+		return fmt.Errorf("create new sidecar: %w", err)
+	}
+	secure.SecureZeroBytes(destKey)
+	newSidecarMade = true
+
+	destStore, err = database.Open(dbNewPath, destKS)
+	if err != nil {
+		return fmt.Errorf("open destination database: %w", err)
+	}
+	destStoreOpen = true
+	destDBCreated = true
+	if err := destStore.InitKeyMetadata(); err != nil {
+		return fmt.Errorf("init target key metadata: %w", err)
+	}
+
+	result, err := migration.Migrate(srcStore, destStore)
+	if err != nil {
+		return fmt.Errorf("copy entries: %w", err)
+	}
+	if len(result.Errors) > 0 {
+		return fmt.Errorf("copy reported %d errors:\n  %s", len(result.Errors), strings.Join(result.Errors, "\n  "))
+	}
+
+	// Close stores before rename so SQLite checkpoints WAL and removes
+	// the -wal/-shm sidecars; otherwise the rename leaves orphans.
+	if err := destStore.Close(); err != nil {
+		return fmt.Errorf("close destination store: %w", err)
+	}
+	destStore = nil
+	destStoreOpen = false
+	if err := srcStore.Close(); err != nil {
+		return fmt.Errorf("close source store: %w", err)
+	}
+	srcStoreOpen = false
+
+	// Atomic swap. Order matters: rename DB first; if sidecar rename then
+	// fails, the new DB sees the OLD sidecar — which can't decrypt it.
+	// The rollback restores the DB rename. If the sidecar rename also
+	// fails after we've already swapped DB+sidecar, we're committed —
+	// surface both paths so the user can finish manually.
+	if err := os.Rename(dbPath, dbBackupPath); err != nil {
+		return fmt.Errorf("rename source DB to backup: %w", err)
+	}
+	dbRenamed = true
+	if err := os.Rename(dbNewPath, dbPath); err != nil {
+		return fmt.Errorf("rename destination DB into place: %w", err)
+	}
+	destDBCreated = false // canonical now; rollback no longer applies
+
+	if err := os.Rename(sidecarPath, sidecarBackupPath); err != nil {
+		return fmt.Errorf("rename source sidecar to backup: %w (DB is now at %s; restore manually if needed)", err, dbPath)
+	}
+	if err := os.Rename(sidecarNewPath, sidecarPath); err != nil {
+		return fmt.Errorf("rename destination sidecar into place: %w (DB is at %s, old sidecar at %s, new sidecar at %s — finish the rename manually)", err, dbPath, sidecarBackupPath, sidecarNewPath)
+	}
+	sidecarRenamed = true
+	newSidecarMade = false
+
+	// The .new.lock sentinel was created when destKS first ran
+	// initializeLocked. The .new sidecar it guarded has now been renamed
+	// to the canonical path, so the lock file is genuinely orphaned —
+	// nothing will ever flock against it again. Best-effort cleanup;
+	// don't fail the rotation if remove fails.
+	if rerr := os.Remove(sidecarNewPath + ".lock"); rerr != nil && !os.IsNotExist(rerr) {
+		fmt.Fprintf(app.Stderr, "warning: remove staged sidecar lock %s: %v\n", sidecarNewPath+".lock", rerr) //nolint:errcheck // best-effort cleanup warning; failing to print it shouldn't fail the rotation
+	}
+
+	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %d entries under a new master password.\n", result.Migrated); perr != nil {
+		return perr
+	}
+	if _, perr := fmt.Fprintf(app.Stderr, "Old DB preserved at %s\n", dbBackupPath); perr != nil {
+		return perr
+	}
+	if _, perr := fmt.Fprintf(app.Stderr, "Old sidecar preserved at %s\n", sidecarBackupPath); perr != nil {
+		return perr
+	}
+	if _, perr := fmt.Fprintln(app.Stderr, "Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available)."); perr != nil {
+		return perr
+	}
+	return nil
 }
 
 // promptYesNo reads a y/N answer from stdin. Empty input (bare Enter) is "No"

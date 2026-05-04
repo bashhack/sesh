@@ -47,7 +47,12 @@ type MasterPasswordSource struct {
 	// would each fire ~64 MiB of Argon2id work in parallel.
 	sf         singleflight.Group
 	promptFunc PasswordPromptFunc
-	dataDir    string
+	// sidecarPath is the full path to the on-disk KDF state file. Stored
+	// directly (rather than being derived from a dataDir field) so that
+	// callers staging a rotation can point a target source at e.g.
+	// passwords.key.new while the source instance keeps reading from
+	// passwords.key. See NewMasterPasswordSourceAtPath.
+	sidecarPath string
 	// cachedKey holds the derived key after the first successful unlock.
 	// Scoped to the process lifetime only — cleared when Close() is called
 	// (or when the process exits). This avoids prompting the user on every
@@ -92,11 +97,22 @@ func WithMaxAttempts(n int) Option {
 	}
 }
 
-// NewMasterPasswordSource creates a MasterPasswordSource that stores its
-// sidecar in dataDir (typically the same directory as the SQLite DB).
+// NewMasterPasswordSource creates a MasterPasswordSource whose sidecar
+// lives at <dataDir>/passwords.key — the canonical layout used by the CLI.
+// Callers that need a non-canonical sidecar path (e.g., rotation staging)
+// should use NewMasterPasswordSourceAtPath directly.
 func NewMasterPasswordSource(dataDir string, prompt PasswordPromptFunc, opts ...Option) *MasterPasswordSource {
+	return NewMasterPasswordSourceAtPath(filepath.Join(dataDir, sidecarFileName), prompt, opts...)
+}
+
+// NewMasterPasswordSourceAtPath creates a MasterPasswordSource that reads
+// and writes its sidecar at the given absolute path. Useful when staging
+// a rotation: the source instance can point at passwords.key while a
+// target instance points at passwords.key.new, both running concurrently
+// without colliding.
+func NewMasterPasswordSourceAtPath(sidecarPath string, prompt PasswordPromptFunc, opts ...Option) *MasterPasswordSource {
 	s := &MasterPasswordSource{
-		dataDir:     dataDir,
+		sidecarPath: sidecarPath,
 		promptFunc:  prompt,
 		maxAttempts: 1,
 	}
@@ -117,10 +133,6 @@ func (s *MasterPasswordSource) Close() {
 		secure.SecureZeroBytes(s.cachedKey)
 		s.cachedKey = nil
 	}
-}
-
-func (s *MasterPasswordSource) sidecarPath() string {
-	return filepath.Join(s.dataDir, sidecarFileName)
 }
 
 // GetEncryptionKey prompts for the master password and derives the
@@ -189,7 +201,7 @@ func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
 // process's derived key. Once the sidecar exists, unlock is salt-stable
 // and lock-free.
 func (s *MasterPasswordSource) acquireKey() ([]byte, error) {
-	path := s.sidecarPath()
+	path := s.sidecarPath
 	_, err := os.Stat(path)
 	switch {
 	case err == nil:
@@ -201,16 +213,16 @@ func (s *MasterPasswordSource) acquireKey() ([]byte, error) {
 }
 
 // initializeLocked serializes concurrent first-run invocations with an
-// advisory flock on <dataDir>/passwords.key.lock. The flock is auto-
-// released when the holding process exits, so crashes don't leave stale
-// locks. After acquiring the lock, the sidecar is re-checked — another
-// process may have created it while this one was blocked.
+// advisory flock on <sidecar>.lock. The flock is auto-released when the
+// holding process exits, so crashes don't leave stale locks. After
+// acquiring the lock, the sidecar is re-checked — another process may
+// have created it while this one was blocked.
 func (s *MasterPasswordSource) initializeLocked() ([]byte, error) {
-	if !filepath.IsAbs(s.dataDir) {
-		return nil, fmt.Errorf("data dir must be an absolute path, got %q", s.dataDir)
+	if !filepath.IsAbs(s.sidecarPath) {
+		return nil, fmt.Errorf("sidecar path must be absolute, got %q", s.sidecarPath)
 	}
-	sentinel := s.sidecarPath() + ".lock"
-	lockFile, err := os.OpenFile(sentinel, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // sentinel is <abs-dataDir>/passwords.key.lock; abs check above
+	sentinel := s.sidecarPath + ".lock"
+	lockFile, err := os.OpenFile(sentinel, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // sentinel is <abs-sidecar>.lock; abs check above
 	if err != nil {
 		return nil, fmt.Errorf("open sidecar lock: %w", err)
 	}
@@ -224,12 +236,31 @@ func (s *MasterPasswordSource) initializeLocked() ([]byte, error) {
 			fmt.Fprintf(os.Stderr, "warning: release sidecar lock: %v\n", cerr)
 		}
 	}
-	defer release()
+	defer func() {
+		release()
+		// Cleanup the sentinel only if the sidecar exists — meaning
+		// either we just wrote it via initialize(), or it existed when
+		// we re-stat'd. In both cases, no future invocation will enter
+		// initializeLocked again (acquireKey's stat at line 204 short-
+		// circuits to unlock when the sidecar is present), so the lock
+		// file is genuinely orphaned.
+		//
+		// Critically, we do NOT remove on error paths where the sidecar
+		// is still missing: a concurrent waiter blocked on our flock
+		// will acquire next and depend on the same lock file inode for
+		// serialization. Removing it would let a third arrival open a
+		// fresh inode and run initialize() in parallel.
+		if _, statErr := os.Stat(s.sidecarPath); statErr == nil {
+			if rerr := os.Remove(sentinel); rerr != nil && !os.IsNotExist(rerr) {
+				fmt.Fprintf(os.Stderr, "warning: remove sidecar lock: %v\n", rerr)
+			}
+		}
+	}()
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
 		return nil, fmt.Errorf("acquire sidecar lock: %w", err)
 	}
 
-	switch _, err := os.Stat(s.sidecarPath()); {
+	switch _, err := os.Stat(s.sidecarPath); {
 	case err == nil:
 		// The flock's job was to serialize sidecar creation; with the
 		// sidecar already in place, drop it before falling into unlock()
@@ -385,7 +416,7 @@ func (s *MasterPasswordSource) writeSidecar(data sidecarData) error {
 	// Write to a temp file then rename so a crash mid-write leaves the
 	// old sidecar intact (or no sidecar at all on first run). Rename is
 	// atomic on POSIX and close-to-atomic on Windows.
-	path := s.sidecarPath()
+	path := s.sidecarPath
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return fmt.Errorf("write sidecar: %w", err)
@@ -400,7 +431,7 @@ func (s *MasterPasswordSource) writeSidecar(data sidecarData) error {
 }
 
 func (s *MasterPasswordSource) readSidecar() (sidecarData, error) {
-	path := s.sidecarPath()
+	path := s.sidecarPath
 	b, err := os.ReadFile(path) //nolint:gosec // path is <dataDir>/passwords.key; dataDir is caller-controlled via NewMasterPasswordSource
 	if err != nil {
 		return sidecarData{}, fmt.Errorf("read sidecar: %w", err)

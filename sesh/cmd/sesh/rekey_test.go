@@ -237,18 +237,22 @@ func TestRekey_RefusesIfTargetInvalid(t *testing.T) {
 	}
 }
 
-func TestRekey_RefusesIfSameSource(t *testing.T) {
+func TestRekey_RefusesKeychainToKeychain(t *testing.T) {
+	// password → password is the in-place rotation case and is handled
+	// by runRotateMasterPassword; see TestRotate_*. The keychain → keychain
+	// case isn't supported yet (Flavor B in docs/KEY_ROTATION_ROADMAP.md)
+	// and should still hit the "already using" guard.
 	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
-	t.Setenv("SESH_MASTER_PASSWORD", "test-password-1234")
-	populatePasswordStore(t, env, map[string]string{
+	t.Setenv("SESH_KEY_SOURCE", "keychain")
+	kc := newKCMock(hexKey())
+	populateKeychainStore(t, env, kc, map[string]string{
 		"sesh-password/password/github/alice": "hunter2",
 	})
 
 	app, _ := rekeyTestApp("")
-	err := runRekey(app, []string{"--to=password"}, nil)
+	err := runRekey(app, []string{"--to=keychain"}, kc)
 	if err == nil || !strings.Contains(err.Error(), "already using") {
-		t.Fatalf("expected already-using error, got %v", err)
+		t.Fatalf("expected already-using error for keychain→keychain, got %v", err)
 	}
 }
 
@@ -681,6 +685,372 @@ func TestPromptYesNo(t *testing.T) {
 				t.Errorf("promptYesNo(%q) = %v, want %v", input, got, want)
 			}
 		})
+	}
+}
+
+// sequencedPrompt returns each password in order, erroring once the list
+// is exhausted. Used by rotation tests where source unlock and target
+// create+confirm need different inputs from the same prompt callback.
+func sequencedPrompt(passwords ...string) database.PasswordPromptFunc {
+	i := 0
+	return func(_ string) ([]byte, error) {
+		if i >= len(passwords) {
+			return nil, fmt.Errorf("test prompt exhausted at call %d", i+1)
+		}
+		pw := []byte(passwords[i])
+		i++
+		return pw, nil
+	}
+}
+
+// rotateTestCfg builds a non-interactive prompt config from a sequenced
+// list of passwords. Non-interactive disables the retry loop, which is
+// what we want in tests — a wrong password should fail fast, not consume
+// extra entries from the sequence.
+func rotateTestCfg(passwords ...string) passwordPromptConfig {
+	return passwordPromptConfig{prompt: sequencedPrompt(passwords...), interactive: false}
+}
+
+func TestRotate_PasswordChangesPassword(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	entries := map[string]string{
+		"sesh-password/password/github/alice": "hunter2",
+		"sesh-password/api_key/stripe/admin":  "sk_test_xyz",
+	}
+	populatePasswordStore(t, env, entries)
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+
+	app, stderr := rekeyTestApp("y\n")
+	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
+	if err := runRotateMasterPassword(app, cfg); err != nil {
+		t.Fatalf("runRotateMasterPassword: %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	if !strings.Contains(stderr.String(), "Rotated 2 entries") {
+		t.Errorf("stderr missing rotation summary:\n%s", stderr.String())
+	}
+	if _, err := os.Stat(env.dbPath + rotateBackupSuffix); err != nil {
+		t.Errorf("DB backup missing at .pre-rotate: %v", err)
+	}
+	if _, err := os.Stat(env.sidecarPath + rotateBackupSuffix); err != nil {
+		t.Errorf("sidecar backup missing at .pre-rotate: %v", err)
+	}
+
+	// New password unlocks the rotated DB.
+	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
+	services := []string{"sesh-password/password/github/alice", "sesh-password/api_key/stripe/admin"}
+	got := readEntriesViaPassword(t, env, services)
+	for svc, want := range entries {
+		if got[svc] != want {
+			t.Errorf("entry %s under new password = %q, want %q", svc, got[svc], want)
+		}
+	}
+}
+
+func TestRotate_PreservesPerEntryFreshness(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{
+		"sesh-password/password/github/alice": "same-secret",
+		"sesh-password/password/github/bob":   "same-secret",
+	})
+
+	beforeBlob, err := os.ReadFile(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
+	if err := runRotateMasterPassword(app, cfg); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	afterBlob, err := os.ReadFile(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(beforeBlob, afterBlob) {
+		t.Fatal("rotated DB byte-for-byte identical to original — re-encryption did not run")
+	}
+
+	// Sidecar salt must also have changed (proves new KDF derivation, not
+	// just a re-encryption with the same derived key).
+	beforeSidecar, err := os.ReadFile(env.sidecarPath + rotateBackupSuffix)
+	if err != nil {
+		t.Fatalf("read backup sidecar: %v", err)
+	}
+	afterSidecar, err := os.ReadFile(env.sidecarPath)
+	if err != nil {
+		t.Fatalf("read rotated sidecar: %v", err)
+	}
+	if bytes.Equal(beforeSidecar, afterSidecar) {
+		t.Fatal("rotated sidecar identical to backup — salt was not regenerated")
+	}
+}
+
+func TestRotate_PasswordRefusesIfNewSidecarExists(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+
+	if err := os.WriteFile(env.sidecarPath+rekeyDestSuffix, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("pre-create staging sidecar: %v", err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
+	err := runRotateMasterPassword(app, cfg)
+	if err == nil || !strings.Contains(err.Error(), "exists from a prior rotation") {
+		t.Fatalf("expected refusal because staging sidecar exists, got %v", err)
+	}
+}
+
+func TestRotate_PasswordRefusesIfBackupSidecarExists(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+
+	if err := os.WriteFile(env.sidecarPath+rotateBackupSuffix, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("pre-create backup sidecar: %v", err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
+	err := runRotateMasterPassword(app, cfg)
+	if err == nil || !strings.Contains(err.Error(), "exists from a prior rotation") {
+		t.Fatalf("expected refusal because backup sidecar exists, got %v", err)
+	}
+}
+
+func TestRotate_RemovesStagingLockOnSuccess(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
+	if err := runRotateMasterPassword(app, cfg); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	stagingLock := env.sidecarPath + rekeyDestSuffix + ".lock"
+	if _, err := os.Stat(stagingLock); !os.IsNotExist(err) {
+		t.Errorf("staging sidecar lock %s should be removed after successful rotation, got stat err %v", stagingLock, err)
+	}
+}
+
+func TestRotate_RemovesStagingLockOnConfirmMismatch(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	// Mismatched confirm fires inside initialize(), AFTER the staging
+	// lock file has been created via O_CREATE in initializeLocked. The
+	// lock file should be cleaned up by the rollback path.
+	cfg := rotateTestCfg("old-pw-1234", "new-pw-aaaaaa", "new-pw-bbbbbb")
+	err := runRotateMasterPassword(app, cfg)
+	if err == nil || !strings.Contains(err.Error(), "passwords do not match") {
+		t.Fatalf("expected passwords-do-not-match error, got %v", err)
+	}
+	stagingLock := env.sidecarPath + rekeyDestSuffix + ".lock"
+	if _, err := os.Stat(stagingLock); !os.IsNotExist(err) {
+		t.Errorf("staging sidecar lock %s should be removed after rollback, got stat err %v", stagingLock, err)
+	}
+}
+
+func TestRotate_RemovesStagingLockOnCancel(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	// Cancel before the destination source is constructed at all — the
+	// staging lock should never be created. Regression guard against a
+	// future change that moves destKS construction earlier.
+	app, _ := rekeyTestApp("n\n")
+	cfg := rotateTestCfg("old-pw-1234")
+	if err := runRotateMasterPassword(app, cfg); err != nil {
+		t.Fatalf("cancelled rotation should not error: %v", err)
+	}
+	stagingLock := env.sidecarPath + rekeyDestSuffix + ".lock"
+	if _, err := os.Stat(stagingLock); !os.IsNotExist(err) {
+		t.Errorf("staging sidecar lock %s should not exist after cancel, got stat err %v", stagingLock, err)
+	}
+}
+
+func TestRotate_RefusesIfBackendNotSqlite(t *testing.T) {
+	t.Setenv("SESH_BACKEND", "")
+	app, _ := rekeyTestApp("")
+	err := runRotateMasterPassword(app, rotateTestCfg("any-pw-1234"))
+	if err == nil || !strings.Contains(err.Error(), "SESH_BACKEND=sqlite") {
+		t.Fatalf("expected SESH_BACKEND error, got %v", err)
+	}
+}
+
+func TestRotate_RefusesIfDatabaseMissing(t *testing.T) {
+	setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	app, _ := rekeyTestApp("")
+	err := runRotateMasterPassword(app, rotateTestCfg("any-pw-1234"))
+	if err == nil || !strings.Contains(err.Error(), "no database to rotate") {
+		t.Fatalf("expected no-database error, got %v", err)
+	}
+}
+
+func TestRotate_RefusesIfSidecarMissing(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	// Create a DB file directly (bypassing sesh) so the DB-stat check passes
+	// but the sidecar doesn't exist — the "is SESH_KEY_SOURCE=password
+	// actually in use?" failure mode.
+	if err := os.MkdirAll(env.dataDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(env.dbPath, []byte("not a real db"), 0o600); err != nil {
+		t.Fatalf("write fake db: %v", err)
+	}
+	app, _ := rekeyTestApp("")
+	err := runRotateMasterPassword(app, rotateTestCfg("any-pw-1234"))
+	if err == nil || !strings.Contains(err.Error(), "no sidecar to rotate") {
+		t.Fatalf("expected no-sidecar error, got %v", err)
+	}
+}
+
+func TestRotate_PasswordRefusesIfNewDBExists(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+
+	if err := os.WriteFile(env.dbPath+rekeyDestSuffix, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("pre-create staging DB: %v", err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
+	err := runRotateMasterPassword(app, cfg)
+	if err == nil || !strings.Contains(err.Error(), "exists from a prior rotation") {
+		t.Fatalf("expected refusal because staging DB exists, got %v", err)
+	}
+}
+
+func TestRotate_PasswordRefusesIfBackupDBExists(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+
+	if err := os.WriteFile(env.dbPath+rotateBackupSuffix, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("pre-create backup DB: %v", err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
+	err := runRotateMasterPassword(app, cfg)
+	if err == nil || !strings.Contains(err.Error(), "exists from a prior rotation") {
+		t.Fatalf("expected refusal because backup DB exists, got %v", err)
+	}
+}
+
+func TestRotate_WrongSourcePassword(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "right-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	beforeSidecar, err := os.ReadFile(env.sidecarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	// Wrong source password — fails at unlock before any prompt for a new
+	// password. cfg only provides the wrong one; if we accidentally drained
+	// further from the sequence, the "test prompt exhausted" error would
+	// surface and tell us the test no longer pins the right behavior.
+	cfg := rotateTestCfg("wrong-pw-1234")
+	err = runRotateMasterPassword(app, cfg)
+	if err == nil || !strings.Contains(err.Error(), "unlock current sidecar") {
+		t.Fatalf("expected unlock error for wrong source password, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "wrong master password") {
+		t.Errorf("error %q should bubble up the underlying wrong-password message", err.Error())
+	}
+	// Canonical sidecar must be untouched. No write path is reachable
+	// before the failed unlock, so this is a regression guard against
+	// future refactors that move sidecar writes earlier in the flow.
+	afterSidecar, err := os.ReadFile(env.sidecarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeSidecar, afterSidecar) {
+		t.Error("canonical sidecar modified after wrong-password failure")
+	}
+}
+
+func TestRotate_PasswordCancelledLeavesNoChanges(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	beforeBlob, err := os.ReadFile(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeSidecar, err := os.ReadFile(env.sidecarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	// Pass "n" to the y/N prompt to abort. Source unlock still happens (one
+	// password drained from the sequence); target Create+Confirm is never
+	// reached, so only the source password is consumed.
+	app, _ := rekeyTestApp("n\n")
+	cfg := rotateTestCfg("old-pw-1234")
+	if err := runRotateMasterPassword(app, cfg); err != nil {
+		t.Fatalf("cancelled rotation should not error: %v", err)
+	}
+
+	afterBlob, err := os.ReadFile(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeBlob, afterBlob) {
+		t.Error("DB modified after cancelled rotation")
+	}
+	afterSidecar, err := os.ReadFile(env.sidecarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeSidecar, afterSidecar) {
+		t.Error("canonical sidecar modified after cancelled rotation")
+	}
+	for _, p := range []string{
+		env.dbPath + rekeyDestSuffix,
+		env.dbPath + rotateBackupSuffix,
+		env.sidecarPath + rekeyDestSuffix,
+		env.sidecarPath + rotateBackupSuffix,
+	} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("staging/backup file %s should not exist after cancel: %v", p, err)
+		}
 	}
 }
 
