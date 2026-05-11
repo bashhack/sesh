@@ -49,6 +49,20 @@ func TestReadEnvelope_ReturnsEOFOnCleanDisconnect(t *testing.T) {
 	}
 }
 
+func TestReadEnvelope_TruncatedFrame_ReturnsError(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader(`{"type":"hello","version":1`))
+	_, _, err := readEnvelope(r)
+	if err == nil {
+		t.Fatal("readEnvelope accepted a truncated frame")
+	}
+	if errors.Is(err, io.EOF) {
+		t.Fatalf("truncated frame should not be reported as clean EOF, got %v", err)
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("truncated frame should wrap io.ErrUnexpectedEOF, got %v", err)
+	}
+}
+
 func TestReadEnvelope_RejectsMalformedJSON(t *testing.T) {
 	r := bufio.NewReader(strings.NewReader("not json\n"))
 	_, _, err := readEnvelope(r)

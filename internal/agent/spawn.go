@@ -226,9 +226,9 @@ func (l *spawnLock) release() {
 	if l.file == nil {
 		return
 	}
-	if err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: release spawn lock: %v\n", err) //nolint:errcheck // best-effort warning
-	}
+	// flock(2) is associated with the open file description; closing the
+	// last fd referring to it releases the advisory lock. We hold the
+	// only reference, so close alone is sufficient.
 	closeOrLog(l.file, "spawn lock file")
 }
 

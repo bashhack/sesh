@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -288,7 +289,14 @@ func TestServer_ShutdownRemovesSocket(t *testing.T) {
 	}
 }
 
+// testSigtermMutex serializes tests that send process-level signals so
+// they don't fire each other's handlers when run with t.Parallel().
+var testSigtermMutex sync.Mutex
+
 func TestServer_SIGTERMRemovesSocket(t *testing.T) {
+	testSigtermMutex.Lock()
+	defer testSigtermMutex.Unlock()
+
 	sockPath := tempSocketPath(t)
 	srv, err := Listen(sockPath)
 	if err != nil {

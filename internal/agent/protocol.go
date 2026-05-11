@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -97,11 +98,19 @@ func writeJSON(w io.Writer, v any) error {
 // decodes only its envelope (type + version). Callers then unmarshal
 // the raw line into the concrete request struct via decodeMessage.
 //
-// io.EOF (i.e. peer closed cleanly) is returned unwrapped so callers
-// can distinguish "normal disconnect" from "malformed input."
+// io.EOF (peer closed cleanly with no partial frame) is returned
+// unwrapped so callers can distinguish "normal disconnect" from
+// "truncated frame" / "malformed input."
 func readEnvelope(r *bufio.Reader) (env envelope, raw []byte, err error) {
 	line, err := r.ReadBytes('\n')
 	if err != nil {
+		// bufio returns (partial-data, io.EOF) when the peer closed
+		// mid-frame. Partial data with no terminator is a protocol
+		// violation, not a clean disconnect — surface as a wrapped
+		// ErrUnexpectedEOF so isCleanDisconnect routes it correctly.
+		if errors.Is(err, io.EOF) && len(line) > 0 {
+			return envelope{}, line, fmt.Errorf("truncated frame (%d bytes, no terminator): %w", len(line), io.ErrUnexpectedEOF)
+		}
 		return envelope{}, nil, err
 	}
 	// ReadBytes includes the terminator; json.Unmarshal handles it fine

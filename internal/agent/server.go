@@ -204,7 +204,9 @@ func sendErrorAndIgnore(conn *net.UnixConn, code, message string) {
 
 // isCleanDisconnect reports whether err is a "peer closed the connection
 // without sending any data" — i.e. a normal end-of-conversation, not a
-// protocol error worth reporting.
+// protocol error worth reporting. io.ErrUnexpectedEOF is deliberately
+// excluded: it means the peer closed mid-frame, which is a protocol
+// violation we want to log via the regular error path.
 func isCleanDisconnect(err error) bool {
-	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	return errors.Is(err, io.EOF)
 }
