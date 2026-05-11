@@ -81,6 +81,18 @@ func runServer(t *testing.T, sockPath string) func() {
 	}
 }
 
+func TestServer_SocketPathGetter(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	srv, err := Listen(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, srv)
+	if got := srv.SocketPath(); got != sockPath {
+		t.Errorf("SocketPath() = %q, want %q", got, sockPath)
+	}
+}
+
 func TestServer_HelloHandshake(t *testing.T) {
 	sockPath := tempSocketPath(t)
 	stop := runServer(t, sockPath)
