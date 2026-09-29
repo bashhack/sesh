@@ -134,7 +134,9 @@ func TestDialAndHandshake_AgentClosesBeforeAck(t *testing.T) {
 }
 
 func TestDialAndHandshake_FailsOnMissingSocket(t *testing.T) {
-	_, err := dialAndHandshake("/tmp/definitely-does-not-exist.sock")
+	// A fresh short /tmp path. macOS rejects Unix socket names past 104
+	// bytes, and this file is never created.
+	_, err := dialAndHandshake(tempSocketPath(t))
 	if err == nil {
 		t.Fatal("dialAndHandshake should fail on missing socket")
 	}
