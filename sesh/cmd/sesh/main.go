@@ -81,7 +81,8 @@ func needsCredentialStore(args []string) bool {
 			"--version", "-version",
 			"--list-services", "-list-services",
 			"--migrate", "-migrate",
-			"--rekey", "-rekey":
+			"--rekey", "-rekey",
+			"agent":
 			return false
 		}
 	}
@@ -464,6 +465,12 @@ func run(app *App, args []string) {
 		case "--rekey", "-rekey":
 			rest := remainingArgs(args, arg)
 			if err := runRekey(app, rest, keychain.NewDefaultProvider()); err != nil {
+				fatal(app, err)
+			}
+			return
+		case "agent":
+			rest := remainingArgs(args, arg)
+			if err := runAgent(app, rest); err != nil {
 				fatal(app, err)
 			}
 			return
