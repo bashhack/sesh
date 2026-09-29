@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -245,6 +246,43 @@ func TestServer_UnknownMessageTypeAfterHello(t *testing.T) {
 	}
 }
 
+func TestServer_TruncatedFrameAfterHello(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	stop := runServer(t, sockPath)
+	defer stop()
+
+	conn := dialAndShake(t, sockPath)
+	defer mustClose(t, conn)
+
+	if _, err := conn.Write([]byte(`{"type":"ping"`)); err != nil {
+		t.Fatal(err)
+	}
+	// Half-close so the server sees EOF mid-frame and can still write
+	// the error response back.
+	if err := conn.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	r := bufio.NewReader(conn)
+	_, line, err := readEnvelope(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ErrorResponse
+	if err := decodeMessage(line, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Code != ErrCodeInternal {
+		t.Errorf("Code = %q, want %q", got.Code, ErrCodeInternal)
+	}
+	if !strings.Contains(got.Message, "truncated frame") {
+		t.Errorf("Message = %q, want mention of truncated frame", got.Message)
+	}
+}
+
 func TestServer_ClientDisconnectMidStreamLeavesServerHealthy(t *testing.T) {
 	sockPath := tempSocketPath(t)
 	stop := runServer(t, sockPath)
@@ -299,6 +337,59 @@ func TestServer_ShutdownRemovesSocket(t *testing.T) {
 	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("socket file should be removed after shutdown, stat err = %v", err)
 	}
+}
+
+func TestServer_DirectCloseStopsRun(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	srv, err := Listen(sockPath)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.Run(context.Background())
+	}()
+
+	raw, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Errorf("close dial: %v", err)
+	}
+
+	if err := srv.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run returned err = %v, want nil after Close", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not exit within 2s of Close")
+	}
+
+	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("socket file should be removed after Close, stat err = %v", err)
+	}
+
+	// Run.func1 is the shutdown watcher. Close unblocks Accept without a
+	// signal, and the watcher still has to exit once Run returns.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !goroutineStackContains("(*Server).Run.func1") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("shutdown watcher still running after Run returned")
+}
+
+func goroutineStackContains(substr string) bool {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	return strings.Contains(string(buf[:n]), substr)
 }
 
 // testSigtermMutex serializes tests that send process-level signals so

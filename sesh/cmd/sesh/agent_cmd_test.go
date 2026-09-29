@@ -112,12 +112,31 @@ func TestRunAgent_DefaultSocketPath(t *testing.T) {
 	}()
 	waitForSocketBound(t, sockPath)
 
+	// A successful dial means Accept is running, which is after Run
+	// installs its SIGTERM handler. The socket file appears earlier,
+	// between Listen and Run, so signaling on Stat alone can kill the
+	// test process.
+	conn, err := net.DialTimeout("unix", sockPath, 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Errorf("close: %v", err)
+	}
+
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatalf("send SIGTERM: %v", err)
 	}
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Errorf("runAgent returned err = %v", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("runAgent didn't exit on SIGTERM")
+	}
+
+	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("socket should be removed after shutdown, stat err = %v", err)
 	}
 }

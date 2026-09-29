@@ -75,9 +75,15 @@ func (s *Server) Run(ctx context.Context) error {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigCh)
 
+	// Cancelled on every return so the watcher cannot outlive Run. Close
+	// still runs on that wake: a parent cancel has to shut the listener
+	// down, and an accept failure has to remove the socket.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	go func() {
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 		case <-sigCh:
 		}
 		if err := s.Close(); err != nil {
@@ -92,6 +98,9 @@ func (s *Server) Run(ctx context.Context) error {
 			// or equivalent; treat that as a clean exit, not an error.
 			if errors.Is(err, net.ErrClosed) {
 				return nil
+			}
+			if cerr := s.Close(); cerr != nil {
+				return fmt.Errorf("accept: %w (shutdown: %v)", err, cerr)
 			}
 			return fmt.Errorf("accept: %w", err)
 		}
@@ -160,10 +169,15 @@ func (s *Server) handleConn(conn *net.UnixConn) {
 		return
 	}
 
-	// Subsequent messages.
+	// Subsequent messages. A clean EOF is a normal disconnect; anything
+	// else (truncated frame, malformed JSON) is reported, same as the
+	// handshake read above.
 	for {
 		env, _, err := readEnvelope(r)
 		if err != nil {
+			if !isCleanDisconnect(err) {
+				sendErrorAndIgnore(conn, ErrCodeInternal, err.Error())
+			}
 			return
 		}
 		switch env.Type {
