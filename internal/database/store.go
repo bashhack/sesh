@@ -17,8 +17,8 @@ import (
 
 // Store is a SQLite-backed credential store that satisfies keychain.Provider.
 type Store struct {
-	db        *sql.DB
-	keySource KeySource
+	db     *sql.DB
+	oracle CryptoOracle
 }
 
 // compile-time checks
@@ -27,9 +27,17 @@ var (
 	_ keychain.TimestampedStore = (*Store)(nil)
 )
 
+// MaxSecretSize is the largest secret the store accepts. It applies to
+// every key source so a secret that saves under one also saves under the
+// others, including the agent, whose wire frames must carry it.
+const MaxSecretSize = 1 << 20 // 1 MiB
+
+// ErrSecretTooLarge is returned when a secret exceeds MaxSecretSize.
+var ErrSecretTooLarge = errors.New("secret too large")
+
 // Open creates or opens the SQLite database at dbPath, runs any pending
 // migrations, and returns a ready-to-use Store.
-func Open(dbPath string, ks KeySource) (*Store, error) {
+func Open(dbPath string, oracle CryptoOracle) (*Store, error) {
 	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -46,13 +54,13 @@ func Open(dbPath string, ks KeySource) (*Store, error) {
 		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
 
-	return &Store{db: db, keySource: ks}, nil
+	return &Store{db: db, oracle: oracle}, nil
 }
 
 // Close releases the database connection and clears any cached key
 // material held by the key source.
 func (s *Store) Close() error {
-	if closer, ok := s.keySource.(interface{ Close() }); ok {
+	if closer, ok := s.oracle.(interface{ Close() }); ok {
 		closer.Close()
 	}
 	return s.db.Close()
@@ -61,14 +69,8 @@ func (s *Store) Close() error {
 // --- keychain.Provider implementation ---
 
 func (s *Store) GetSecret(account, service string) ([]byte, error) {
-	masterKey, err := s.keySource.GetEncryptionKey()
-	if err != nil {
-		return nil, err
-	}
-	defer secure.SecureZeroBytes(masterKey)
-
 	var encData, salt []byte
-	err = s.db.QueryRow(
+	err := s.db.QueryRow(
 		`SELECT encrypted_data, salt FROM passwords WHERE service = ? AND account = ? LIMIT 1`,
 		service, account,
 	).Scan(&encData, &salt)
@@ -79,7 +81,7 @@ func (s *Store) GetSecret(account, service string) ([]byte, error) {
 		return nil, fmt.Errorf("query secret: %w", err)
 	}
 
-	plaintext, err := DecryptEntry(masterKey, encData, salt)
+	plaintext, err := s.oracle.DecryptEntry(encData, salt)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt secret for service %q: %w", service, err)
 	}
@@ -278,13 +280,10 @@ func (s *Store) SetDescriptionAt(service, account, description string, updatedAt
 // unchanged; explicit non-zero values are used as-is (used by Import and
 // future migration flows to preserve original audit history).
 func (s *Store) upsertSecret(account, service string, secret []byte, entryType EntryType, createdAt, updatedAt time.Time) error {
-	masterKey, err := s.keySource.GetEncryptionKey()
-	if err != nil {
-		return err
+	if len(secret) > MaxSecretSize {
+		return fmt.Errorf("%w: %d bytes (max %d)", ErrSecretTooLarge, len(secret), MaxSecretSize)
 	}
-	defer secure.SecureZeroBytes(masterKey)
-
-	encData, salt, err := EncryptEntry(masterKey, secret)
+	encData, salt, err := s.oracle.EncryptEntry(secret)
 	if err != nil {
 		return fmt.Errorf("encrypt secret: %w", err)
 	}

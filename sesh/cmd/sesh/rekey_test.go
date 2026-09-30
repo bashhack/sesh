@@ -123,7 +123,7 @@ func (m *kcMock) DeleteEntry(account, service string) error {
 func populateKeychainStore(t *testing.T, env *rekeyTestEnv, kc keychain.Provider, entries map[string]string) {
 	t.Helper()
 	ks := database.NewKeychainSource(kc, env.account)
-	store, err := database.Open(env.dbPath, ks)
+	store, err := database.Open(env.dbPath, database.NewKeySourceOracle(ks))
 	if err != nil {
 		t.Fatalf("open store for seeding: %v", err)
 	}
@@ -145,7 +145,7 @@ func populateKeychainStore(t *testing.T, env *rekeyTestEnv, kc keychain.Provider
 func populatePasswordStore(t *testing.T, env *rekeyTestEnv, entries map[string]string) {
 	t.Helper()
 	ks := resolvePasswordPrompt().newSource(env.dataDir)
-	store, err := database.Open(env.dbPath, ks)
+	store, err := database.Open(env.dbPath, database.NewKeySourceOracle(ks))
 	if err != nil {
 		t.Fatalf("open store for seeding: %v", err)
 	}
@@ -167,7 +167,7 @@ func populatePasswordStore(t *testing.T, env *rekeyTestEnv, entries map[string]s
 func readEntriesViaPassword(t *testing.T, env *rekeyTestEnv, services []string) map[string]string {
 	t.Helper()
 	ks := resolvePasswordPrompt().newSource(env.dataDir)
-	store, err := database.Open(env.dbPath, ks)
+	store, err := database.Open(env.dbPath, database.NewKeySourceOracle(ks))
 	if err != nil {
 		t.Fatalf("open store for verify: %v", err)
 	}
@@ -190,7 +190,7 @@ func readEntriesViaPassword(t *testing.T, env *rekeyTestEnv, services []string) 
 func readEntriesViaKeychain(t *testing.T, env *rekeyTestEnv, kc keychain.Provider, services []string) map[string]string {
 	t.Helper()
 	ks := database.NewKeychainSource(kc, env.account)
-	store, err := database.Open(env.dbPath, ks)
+	store, err := database.Open(env.dbPath, database.NewKeySourceOracle(ks))
 	if err != nil {
 		t.Fatalf("open store for verify: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestRekey_PreservesTimestamps(t *testing.T) {
 	})
 
 	srcKS := database.NewKeychainSource(kc, env.account)
-	srcStore, err := database.Open(env.dbPath, srcKS)
+	srcStore, err := database.Open(env.dbPath, database.NewKeySourceOracle(srcKS))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func TestRekey_PreservesTimestamps(t *testing.T) {
 	}
 
 	mps := resolvePasswordPrompt().newSource(env.dataDir)
-	store, err := database.Open(env.dbPath, mps)
+	store, err := database.Open(env.dbPath, database.NewKeySourceOracle(mps))
 	if err != nil {
 		t.Fatal(err)
 	}

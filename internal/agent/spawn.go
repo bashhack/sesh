@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -16,6 +17,22 @@ import (
 // local Unix socket is fast (single-digit milliseconds even loaded);
 // 500ms is generous without being a hang.
 const dialTimeout = 500 * time.Millisecond
+
+// helloTimeout bounds the hello exchange after the dial succeeds.
+// dialTimeout covers only the connect; a peer that accepts and never
+// replies has to fail here instead of hanging the caller.
+var helloTimeout = 2 * time.Second
+
+// requestTimeout bounds one agent round trip other than unlock.
+var requestTimeout = 5 * time.Second
+
+// unlockTimeout bounds an unlock round trip. Argon2id may allocate up
+// to 1 GiB, so this is longer than requestTimeout.
+var unlockTimeout = 2 * time.Minute
+
+// errProtocolMismatch means the agent answered hello with a different
+// protocol version. That process still owns the socket.
+var errProtocolMismatch = errors.New("agent protocol mismatch")
 
 // spawnPollInterval is how often EnsureAgent re-tries connecting after
 // it has launched a daemon, waiting for the socket to appear.
@@ -49,15 +66,22 @@ var agentLogFile = openAgentLog
 // connection that has already completed the hello handshake.
 //
 // The caller owns the returned connection and must Close it.
-func EnsureAgent() (*net.UnixConn, error) {
+func EnsureAgent() (*Conn, error) {
 	sockPath, err := SocketPath()
 	if err != nil {
 		return nil, err
 	}
 
-	// Fast path: agent already running and answering.
-	if conn, err := dialAndHandshake(sockPath); err == nil {
+	// Fast path: agent already running and answering. A live agent that
+	// fails the handshake (version mismatch, timeout, permission) is
+	// returned as-is — replacing it would orphan the process that still
+	// holds the key.
+	conn, err := dialAndHandshake(sockPath)
+	if err == nil {
 		return conn, nil
+	}
+	if !shouldSpawn(err) {
+		return nil, err
 	}
 
 	// Slow path: serialize spawn attempts via a flock on a sibling lock
@@ -73,38 +97,77 @@ func EnsureAgent() (*net.UnixConn, error) {
 
 	// Re-check under the lock — another EnsureAgent caller may have
 	// already spawned an agent while we waited.
-	if conn, err := dialAndHandshake(sockPath); err == nil {
+	conn, err = dialAndHandshake(sockPath)
+	if err == nil {
 		return conn, nil
 	}
-
-	// Remove any stale socket file before spawning so the agent's own
-	// Listen() doesn't refuse with "agent already running."
-	if _, err := os.Stat(sockPath); err == nil {
+	if !shouldSpawn(err) {
+		return nil, err
+	}
+	// ECONNREFUSED means the inode is left over from a dead listener.
+	// ENOENT means there is nothing to remove. Anything else was
+	// rejected above.
+	if errors.Is(err, syscall.ECONNREFUSED) {
 		if rerr := os.Remove(sockPath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
 			return nil, fmt.Errorf("remove stale socket: %w", rerr)
 		}
 	}
 
-	if err := spawnAgent(sockPath); err != nil {
+	cmd, err := spawnAgent(sockPath)
+	if err != nil {
 		return nil, fmt.Errorf("spawn agent: %w", err)
 	}
+	exited := make(chan error, 1)
+	go func() {
+		// Reap the child. A live agent blocks here until it exits; an
+		// immediate exit unblocks the poll below.
+		exited <- cmd.Wait()
+	}()
 
 	// Poll for the socket. The agent typically binds within ~50ms on a
-	// warm machine; SpawnTimeout caps the patience.
-	deadline := time.Now().Add(SpawnTimeout)
-	for time.Now().Before(deadline) {
-		if conn, err := dialAndHandshake(sockPath); err == nil {
+	// warm machine; SpawnTimeout caps the patience, and a child that
+	// exits ends the wait immediately.
+	deadline := time.NewTimer(SpawnTimeout)
+	defer deadline.Stop()
+	tick := time.NewTicker(spawnPollInterval)
+	defer tick.Stop()
+	for {
+		conn, derr := dialAndHandshake(sockPath)
+		if derr == nil {
 			return conn, nil
 		}
-		time.Sleep(spawnPollInterval)
+		if !shouldSpawn(derr) {
+			return nil, derr
+		}
+		select {
+		case werr := <-exited:
+			return nil, errAgentExited(sockPath, werr)
+		case <-deadline.C:
+			return nil, fmt.Errorf("agent did not bind socket within %s", SpawnTimeout)
+		case <-tick.C:
+		}
 	}
-	return nil, fmt.Errorf("agent did not bind socket within %s", SpawnTimeout)
+}
+
+func errAgentExited(sockPath string, werr error) error {
+	if werr != nil {
+		return fmt.Errorf("spawned agent exited before binding %s: %w", sockPath, werr)
+	}
+	return fmt.Errorf("spawned agent exited before binding %s", sockPath)
+}
+
+// shouldSpawn reports whether err means no live agent owns the socket,
+// so EnsureAgent may start one. A refused connect is a stale inode; a
+// missing path means nothing is there. Every other error belongs to a
+// live or unreachable agent and must be returned to the caller.
+func shouldSpawn(err error) bool {
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // DialExisting connects to a running agent without auto-spawning. Used
 // by control paths where "no agent" should mean "nothing to do," not
 // "start one."
-func DialExisting() (*net.UnixConn, error) {
+func DialExisting() (*Conn, error) {
 	sockPath, err := SocketPath()
 	if err != nil {
 		return nil, err
@@ -116,7 +179,7 @@ func DialExisting() (*net.UnixConn, error) {
 // handshake. Returns the connection only if the handshake succeeded with
 // a matching protocol version; otherwise closes the connection and
 // returns an error.
-func dialAndHandshake(sockPath string) (*net.UnixConn, error) {
+func dialAndHandshake(sockPath string) (*Conn, error) {
 	raw, err := net.DialTimeout("unix", sockPath, dialTimeout)
 	if err != nil {
 		return nil, err
@@ -125,6 +188,10 @@ func dialAndHandshake(sockPath string) (*net.UnixConn, error) {
 	if !ok {
 		closeOrLog(raw, "non-Unix dial result")
 		return nil, fmt.Errorf("dialed connection is not *net.UnixConn (%T)", raw)
+	}
+	if err := conn.SetDeadline(time.Now().Add(helloTimeout)); err != nil {
+		closeOrLog(conn, "agent conn after hello deadline")
+		return nil, err
 	}
 
 	if err := writeJSON(conn, HelloRequest{Type: TypeHello, Version: ProtocolVersion}); err != nil {
@@ -140,16 +207,21 @@ func dialAndHandshake(sockPath string) (*net.UnixConn, error) {
 	}
 	switch env.Type {
 	case TypeHelloAck:
-		if env.Version != ProtocolVersion {
-			closeOrLog(conn, "agent conn after version mismatch")
-			return nil, fmt.Errorf("agent protocol version %d != client %d", env.Version, ProtocolVersion)
-		}
 		var ack HelloResponse
 		if err := decodeMessage(raw2, &ack); err != nil {
 			closeOrLog(conn, "agent conn after hello_ack decode fail")
 			return nil, err
 		}
-		return conn, nil
+		if ack.Version != ProtocolVersion {
+			closeOrLog(conn, "agent conn after version mismatch")
+			return nil, fmt.Errorf("%w: agent protocol version %d != client %d (pid %d)",
+				errProtocolMismatch, ack.Version, ProtocolVersion, ack.AgentPID)
+		}
+		if err := conn.SetDeadline(time.Time{}); err != nil {
+			closeOrLog(conn, "agent conn after clearing hello deadline")
+			return nil, err
+		}
+		return &Conn{uc: conn, r: r}, nil
 	case TypeError:
 		var e ErrorResponse
 		if derr := decodeMessage(raw2, &e); derr != nil {
@@ -164,24 +236,48 @@ func dialAndHandshake(sockPath string) (*net.UnixConn, error) {
 	}
 }
 
-// spawnAgent forks the agent daemon as a detached child process. Stderr
-// is redirected to a log file so the parent's terminal doesn't get
-// noise; the child runs in a new session (Setsid) so it survives the
-// parent's exit.
-func spawnAgent(sockPath string) error {
+// spawnAgent forks the agent daemon as a detached child process. The
+// child never gets SESH_MASTER_PASSWORD, and runs from / unless the
+// command sets a directory. Stderr goes to the agent log. Setsid keeps the child alive after
+// the parent exits. The caller must Wait on the returned command.
+func spawnAgent(sockPath string) (*exec.Cmd, error) {
 	cmd, err := AgentSpawnCommand(sockPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	logFile, err := agentLogFile()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Don't close logFile here — the spawned process inherits the fd
 	// and will use it for the lifetime of the daemon. Closing in the
 	// parent would invalidate the inherited fd on macOS.
 
+	if cmd.Path == "" && len(cmd.Args) > 0 {
+		path, lerr := exec.LookPath(cmd.Args[0])
+		if lerr != nil {
+			closeOrLog(logFile, "agent log file after spawn failure")
+			return nil, fmt.Errorf("resolve agent binary: %w", lerr)
+		}
+		cmd.Path = path
+	}
+	if cmd.Path != "" && !filepath.IsAbs(cmd.Path) {
+		abs, aerr := filepath.Abs(cmd.Path)
+		if aerr != nil {
+			closeOrLog(logFile, "agent log file after spawn failure")
+			return nil, fmt.Errorf("resolve agent binary: %w", aerr)
+		}
+		cmd.Path = abs
+	}
+	// The daemon runs from "/" unless the command chose a directory, so it
+	// does not pin the CLI's working directory. The password is stripped
+	// from whatever environment the child gets so `ps eww` on the
+	// long-lived daemon cannot show it.
+	if cmd.Dir == "" {
+		cmd.Dir = "/"
+	}
+	cmd.Env = withoutMasterPassword(cmd.Env)
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -192,13 +288,33 @@ func spawnAgent(sockPath string) error {
 
 	if err := cmd.Start(); err != nil {
 		closeOrLog(logFile, "agent log file after spawn failure")
-		return fmt.Errorf("start agent: %w", err)
+		return nil, fmt.Errorf("start agent: %w", err)
 	}
 	// Release the parent's reference; the child still has the inherited
 	// fd (dup'd during fork). Without this, the file descriptor leaks
 	// until the parent exits.
 	closeOrLog(logFile, "agent log file (parent-side fd)")
-	return nil
+	return cmd, nil
+}
+
+// withoutMasterPassword returns env minus SESH_MASTER_PASSWORD. A nil env
+// means the parent environment, matching exec.Cmd. The daemon is
+// long-lived; that value would otherwise stay readable in its process
+// environment.
+func withoutMasterPassword(env []string) []string {
+	const prefix = "SESH_MASTER_PASSWORD="
+	src := env
+	if src == nil {
+		src = os.Environ()
+	}
+	dst := make([]string, 0, len(src))
+	for _, entry := range src {
+		if strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		dst = append(dst, entry)
+	}
+	return dst
 }
 
 // openAgentLog opens the agent log file for appending. Caller is

@@ -63,6 +63,23 @@ func TestReadEnvelope_TruncatedFrame_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestReadEnvelope_RejectsOversizedFrame(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), maxFrameSize+1)
+	_, _, err := readEnvelope(bufio.NewReader(bytes.NewReader(payload)))
+	if err == nil || !strings.Contains(err.Error(), "frame exceeds") {
+		t.Fatalf("err = %v, want frame-size error", err)
+	}
+}
+
+func TestReadEnvelope_AcceptsFrameAtSizeLimit(t *testing.T) {
+	payload := append(bytes.Repeat([]byte("x"), maxFrameSize), '\n')
+	_, _, err := readEnvelope(bufio.NewReader(bytes.NewReader(payload)))
+	// Not JSON, so it fails to parse, but it must get past the size check.
+	if err == nil || errors.Is(err, errFrameTooLarge) {
+		t.Fatalf("err = %v, want a parse error, not the size limit", err)
+	}
+}
+
 func TestReadEnvelope_RejectsMalformedJSON(t *testing.T) {
 	r := bufio.NewReader(strings.NewReader("not json\n"))
 	_, _, err := readEnvelope(r)

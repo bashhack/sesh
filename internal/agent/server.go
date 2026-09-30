@@ -11,6 +11,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 // Server owns the listening socket and dispatches incoming connections
@@ -19,22 +21,25 @@ type Server struct {
 	shutdownErr error
 	listener    *net.UnixListener
 	sockPath    string
+	keys        keystore
 	// shutdownOnce guards Close so concurrent SIGTERM + accept-loop-exit
 	// don't try to remove the socket twice.
 	shutdownOnce sync.Once
 }
 
 // Listen creates the socket at sockPath, sets perm 0600, and returns a
-// Server ready to Run. If a stale socket file exists from a prior
-// crashed agent, Listen removes it before binding — but only after
-// confirming no live agent is actually answering on it.
+// Server ready to Run. A leftover socket inode is removed only when
+// connect fails with ECONNREFUSED, which means nothing is listening.
+// Any other dial error leaves the path in place.
 func Listen(sockPath string) (*Server, error) {
 	if _, err := os.Stat(sockPath); err == nil {
-		// File exists. Distinguish "stale file from prior crash" from
-		// "another agent is running" by trying to connect.
-		if conn, derr := net.DialTimeout("unix", sockPath, dialTimeout); derr == nil {
+		conn, derr := net.DialTimeout("unix", sockPath, dialTimeout)
+		if derr == nil {
 			closeOrLog(conn, "probe connection")
 			return nil, fmt.Errorf("agent already running at %s", sockPath)
+		}
+		if !errors.Is(derr, syscall.ECONNREFUSED) {
+			return nil, fmt.Errorf("socket %s is not a stale listener: %w", sockPath, derr)
 		}
 		if rerr := os.Remove(sockPath); rerr != nil {
 			return nil, fmt.Errorf("remove stale socket %s: %w", sockPath, rerr)
@@ -108,8 +113,10 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-// Close shuts down the server: stops accepting, removes the socket file.
-// Safe to call multiple times; subsequent calls are no-ops.
+// Close shuts down the server: stops accepting, removes the socket file,
+// then zeroes the cached master key. An unlock still in progress on an
+// open connection discards its key instead of installing it. Safe to
+// call multiple times; subsequent calls are no-ops.
 func (s *Server) Close() error {
 	s.shutdownOnce.Do(func() {
 		if cerr := s.listener.Close(); cerr != nil && !errors.Is(cerr, net.ErrClosed) {
@@ -120,14 +127,15 @@ func (s *Server) Close() error {
 				s.shutdownErr = fmt.Errorf("remove socket: %w", rerr)
 			}
 		}
+		s.keys.shutdown()
 	})
 	return s.shutdownErr
 }
 
 // handleConn services one client connection: peer-cred check, hello
-// handshake, then ping until the peer disconnects or sends an unknown
-// message. Each connection runs on its own goroutine; handleConn closes
-// the connection on exit.
+// handshake, then unlock, encrypt, decrypt, status, and ping until the
+// peer disconnects. Each connection runs on its own goroutine; handleConn
+// closes the connection on exit.
 func (s *Server) handleConn(conn *net.UnixConn) {
 	defer closeOrLog(conn, "client connection")
 
@@ -142,7 +150,7 @@ func (s *Server) handleConn(conn *net.UnixConn) {
 	env, raw, err := readEnvelope(r)
 	if err != nil {
 		if !isCleanDisconnect(err) {
-			sendErrorAndIgnore(conn, ErrCodeInternal, err.Error())
+			sendErrorAndIgnore(conn, readErrCode(err), err.Error())
 		}
 		return
 	}
@@ -173,31 +181,145 @@ func (s *Server) handleConn(conn *net.UnixConn) {
 	// else (truncated frame, malformed JSON) is reported, same as the
 	// handshake read above.
 	for {
-		env, _, err := readEnvelope(r)
+		env, raw, err := readEnvelope(r)
 		if err != nil {
 			if !isCleanDisconnect(err) {
-				sendErrorAndIgnore(conn, ErrCodeInternal, err.Error())
+				sendErrorAndIgnore(conn, readErrCode(err), err.Error())
 			}
 			return
 		}
-		switch env.Type {
-		case TypePing:
-			if err := writeJSON(conn, PingResponse{
-				Type:    TypePong,
-				Version: ProtocolVersion,
-			}); err != nil {
-				return
-			}
-		default:
-			if err := writeJSON(conn, ErrorResponse{
-				Type:    TypeError,
-				Version: ProtocolVersion,
-				Code:    ErrCodeUnknownMessageType,
-				Message: fmt.Sprintf("type %q not recognized", env.Type),
-			}); err != nil {
-				return
-			}
+		if !s.dispatch(conn, env, raw) {
+			return
 		}
+	}
+}
+
+// dispatch serves one post-handshake message. false means the connection
+// should close (write failure or a fatal version mismatch).
+func (s *Server) dispatch(conn *net.UnixConn, env envelope, raw []byte) bool {
+	if env.Version != ProtocolVersion {
+		sendErrorAndIgnore(conn, ErrCodeProtocolVersionMismatch,
+			fmt.Sprintf("client version %d, server %d", env.Version, ProtocolVersion))
+		return false
+	}
+	switch env.Type {
+	case TypePing:
+		return writeJSON(conn, PingResponse{
+			Type:    TypePong,
+			Version: ProtocolVersion,
+		}) == nil
+	case TypeUnlock:
+		return s.dispatchUnlock(conn, raw)
+	case TypeDecrypt:
+		return s.dispatchDecrypt(conn, raw)
+	case TypeEncrypt:
+		return s.dispatchEncrypt(conn, raw)
+	case TypeStatus:
+		return s.dispatchStatus(conn)
+	default:
+		return writeJSON(conn, ErrorResponse{
+			Type:    TypeError,
+			Version: ProtocolVersion,
+			Code:    ErrCodeUnknownMessageType,
+			Message: fmt.Sprintf("type %q not recognized", env.Type),
+		}) == nil
+	}
+}
+
+func (s *Server) dispatchUnlock(conn *net.UnixConn, raw []byte) bool {
+	defer secure.SecureZeroBytes(raw)
+	var req UnlockRequest
+	if err := decodeMessage(raw, &req); err != nil {
+		secure.SecureZeroBytes(req.Password)
+		sendErrorAndIgnore(conn, ErrCodeBadRequest, err.Error())
+		return true
+	}
+	err := s.keys.Unlock(req.Password, req.Salt, req.Verify, req.Params)
+	if err == nil {
+		return writeJSON(conn, UnlockResponse{
+			Type:    TypeUnlockAck,
+			Version: ProtocolVersion,
+		}) == nil
+	}
+	code := ErrCodeInternal
+	switch {
+	case errors.Is(err, errWrongPassword):
+		code = ErrCodeWrongPassword
+	case errors.Is(err, errBadRequest):
+		code = ErrCodeBadRequest
+	}
+	sendErrorAndIgnore(conn, code, err.Error())
+	return true
+}
+
+func (s *Server) dispatchDecrypt(conn *net.UnixConn, raw []byte) bool {
+	var req DecryptRequest
+	if err := decodeMessage(raw, &req); err != nil {
+		sendErrorAndIgnore(conn, ErrCodeBadRequest, err.Error())
+		return true
+	}
+	plain, err := s.keys.Decrypt(req.Ciphertext, req.Salt, req.UnlockID)
+	if err != nil {
+		sendErrorAndIgnore(conn, keystoreErrCode(err), err.Error())
+		return true
+	}
+	defer secure.SecureZeroBytes(plain)
+	return writeJSON(conn, DecryptResponse{
+		Type:      TypeDecryptAck,
+		Version:   ProtocolVersion,
+		Plaintext: plain,
+	}) == nil
+}
+
+func (s *Server) dispatchEncrypt(conn *net.UnixConn, raw []byte) bool {
+	defer secure.SecureZeroBytes(raw)
+	var req EncryptRequest
+	if err := decodeMessage(raw, &req); err != nil {
+		secure.SecureZeroBytes(req.Plaintext)
+		sendErrorAndIgnore(conn, ErrCodeBadRequest, err.Error())
+		return true
+	}
+	defer secure.SecureZeroBytes(req.Plaintext)
+	ciphertext, salt, err := s.keys.Encrypt(req.Plaintext, req.UnlockID)
+	if err != nil {
+		sendErrorAndIgnore(conn, keystoreErrCode(err), err.Error())
+		return true
+	}
+	return writeJSON(conn, EncryptResponse{
+		Type:       TypeEncryptAck,
+		Version:    ProtocolVersion,
+		Ciphertext: ciphertext,
+		Salt:       salt,
+	}) == nil
+}
+
+func (s *Server) dispatchStatus(conn *net.UnixConn) bool {
+	unlocked, id, last := s.keys.Status()
+	resp := StatusResponse{
+		Type:     TypeStatusAck,
+		Version:  ProtocolVersion,
+		Unlocked: unlocked,
+		UnlockID: id,
+		AgentPID: os.Getpid(),
+	}
+	if unlocked {
+		resp.LastActivityUnix = last.Unix()
+	}
+	return writeJSON(conn, resp) == nil
+}
+
+func keystoreErrCode(err error) string {
+	switch {
+	case errors.Is(err, errNotUnlocked):
+		return ErrCodeNotUnlocked
+	case errors.Is(err, errDecryptFailed):
+		return ErrCodeDecryptFailed
+	case errors.Is(err, errUnlockMismatch):
+		return ErrCodeUnlockMismatch
+	case errors.Is(err, errBadRequest):
+		return ErrCodeBadRequest
+	default:
+		return ErrCodeInternal
 	}
 }
 
@@ -223,4 +345,14 @@ func sendErrorAndIgnore(conn *net.UnixConn, code, message string) {
 // violation we want to log via the regular error path.
 func isCleanDisconnect(err error) bool {
 	return errors.Is(err, io.EOF)
+}
+
+// readErrCode maps a frame read failure to the code sent back to the
+// peer. An oversized frame is the client's fault; anything else is not
+// attributable and stays internal.
+func readErrCode(err error) string {
+	if errors.Is(err, errFrameTooLarge) {
+		return ErrCodeBadRequest
+	}
+	return ErrCodeInternal
 }

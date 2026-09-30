@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -41,15 +43,16 @@ func TestAgentHelperProcess(_ *testing.T) {
 // real cache directory. Restores both on test cleanup.
 func useTestSpawn(t *testing.T) {
 	t.Helper()
+	sockPath := os.Getenv("SESH_AUTH_SOCK")
+	if sockPath == "" {
+		t.Fatal("useTestSpawn requires SESH_AUTH_SOCK")
+	}
 	origSpawn := AgentSpawnCommand
 	origLog := agentLogFile
 	logPath := filepath.Join(t.TempDir(), "agent.log")
-	AgentSpawnCommand = func(sockPath string) (*exec.Cmd, error) {
+	AgentSpawnCommand = func(string) (*exec.Cmd, error) {
 		cmd := exec.Command(os.Args[0], "-test.run=TestAgentHelperProcess", "-test.v=false") //nolint:gosec // re-execs test binary
-		cmd.Env = append(os.Environ(),
-			"SESH_TEST_AGENT_HELPER=1",
-			"SESH_TEST_AGENT_SOCKET="+sockPath,
-		)
+		cmd.Env = append(os.Environ(), "SESH_TEST_AGENT_HELPER=1", "SESH_TEST_AGENT_SOCKET="+sockPath)
 		return cmd, nil
 	}
 	agentLogFile = func() (*os.File, error) {
@@ -156,12 +159,7 @@ func TestEnsureAgent_StaleSocketRemoved(t *testing.T) {
 	useTestSpawn(t)
 	defer cleanupAgent(t, sockPath)
 
-	if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(sockPath, []byte("stale"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	leftoverSocket(t, sockPath)
 
 	conn, err := EnsureAgent()
 	if err != nil {
@@ -223,5 +221,160 @@ func TestDialExisting_FailsWhenNoAgent(t *testing.T) {
 	if err == nil {
 		mustClose(t, conn)
 		t.Fatal("DialExisting should fail when no agent is running")
+	}
+}
+
+func discardAgentLog(t *testing.T) {
+	t.Helper()
+	orig := agentLogFile
+	logPath := filepath.Join(t.TempDir(), "agent.log")
+	agentLogFile = func() (*os.File, error) {
+		return os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600) //nolint:gosec // path under t.TempDir
+	}
+	t.Cleanup(func() { agentLogFile = orig })
+}
+
+func TestSpawnAgent_StripsMasterPassword(t *testing.T) {
+	const secret = "super-secret-value"
+	t.Setenv("SESH_MASTER_PASSWORD", secret)
+	t.Setenv("SESH_KEEP_ME", "yes")
+	discardAgentLog(t)
+
+	out := filepath.Join(t.TempDir(), "env.txt")
+	orig := AgentSpawnCommand
+	AgentSpawnCommand = func(sockPath string) (*exec.Cmd, error) {
+		cmd, err := orig(sockPath)
+		if err != nil {
+			return nil, err
+		}
+		// Keep Env nil so spawnAgent's environment is what the child sees.
+		cmd.Path = "/bin/sh"
+		cmd.Args = []string{"sh", "-c", `pwd > "$1"; echo --- >> "$1"; env >> "$1"`, "sh", out}
+		return cmd, nil
+	}
+	t.Cleanup(func() { AgentSpawnCommand = orig })
+
+	cmd, err := spawnAgent(tempSocketPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(body, []byte("/\n")) {
+		t.Fatalf("child cwd = %q, want /", firstLine(body))
+	}
+	if bytes.Contains(body, []byte("SESH_MASTER_PASSWORD=")) || bytes.Contains(body, []byte(secret)) {
+		t.Fatal("spawned environment still contains SESH_MASTER_PASSWORD")
+	}
+	if !bytes.Contains(body, []byte("SESH_KEEP_ME=yes")) {
+		t.Fatal("spawned environment dropped an unrelated variable")
+	}
+}
+
+func firstLine(b []byte) string {
+	if i := bytes.IndexByte(b, '\n'); i >= 0 {
+		return string(b[:i])
+	}
+	return string(b)
+}
+
+func TestEnsureAgent_VersionMismatchDoesNotSpawn(t *testing.T) {
+	const pid = 424242
+	sockPath := startFakeAgent(t, func(t *testing.T, rw *bufio.ReadWriter) {
+		consumeClientHello(t, rw)
+		reply(t, rw, HelloResponse{Type: TypeHelloAck, Version: 99, AgentPID: pid})
+	})
+	t.Setenv("SESH_AUTH_SOCK", sockPath)
+
+	spawned := false
+	orig := AgentSpawnCommand
+	AgentSpawnCommand = func(string) (*exec.Cmd, error) {
+		spawned = true
+		return nil, errors.New("should not spawn")
+	}
+	t.Cleanup(func() { AgentSpawnCommand = orig })
+
+	_, err := EnsureAgent()
+	if err == nil {
+		t.Fatal("EnsureAgent succeeded against a mismatched agent")
+	}
+	if !errors.Is(err, errProtocolMismatch) {
+		t.Fatalf("err = %v, want protocol mismatch", err)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(pid)) {
+		t.Fatalf("err = %v, want the old agent pid", err)
+	}
+	if spawned {
+		t.Fatal("EnsureAgent spawned a replacement")
+	}
+	if _, statErr := os.Stat(sockPath); statErr != nil {
+		t.Fatalf("socket removed: %v", statErr)
+	}
+}
+
+func TestEnsureAgent_ChildExitStopsPoll(t *testing.T) {
+	useTempSocketEnv(t)
+	discardAgentLog(t)
+	orig := AgentSpawnCommand
+	AgentSpawnCommand = func(string) (*exec.Cmd, error) {
+		return exec.Command("/bin/sh", "-c", "exit 1"), nil
+	}
+	t.Cleanup(func() { AgentSpawnCommand = orig })
+
+	start := time.Now()
+	_, err := EnsureAgent()
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("EnsureAgent succeeded after the child exited")
+	}
+	if !strings.Contains(err.Error(), "exited") {
+		t.Fatalf("err = %v, want child-exit", err)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("EnsureAgent waited %s after the child exited", elapsed)
+	}
+}
+
+func TestSpawnAgent_FiltersHookEnvironment(t *testing.T) {
+	discardAgentLog(t)
+	out := filepath.Join(t.TempDir(), "env.txt")
+	dir := t.TempDir()
+	orig := AgentSpawnCommand
+	AgentSpawnCommand = func(string) (*exec.Cmd, error) {
+		cmd := exec.Command("sh", "-c", `pwd > "$1"; echo --- >> "$1"; env >> "$1"`, "sh", out)
+		cmd.Env = []string{"PATH=/usr/bin:/bin", "SESH_HOOK_VAR=kept", "SESH_MASTER_PASSWORD=from-hook"}
+		cmd.Dir = dir
+		return cmd, nil
+	}
+	t.Cleanup(func() { AgentSpawnCommand = orig })
+
+	cmd, err := spawnAgent(tempSocketPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := firstLine(body); got != wantDir {
+		t.Fatalf("child cwd = %q, want the hook's %q", got, wantDir)
+	}
+	if !bytes.Contains(body, []byte("SESH_HOOK_VAR=kept")) {
+		t.Fatal("spawnAgent dropped the hook's environment")
+	}
+	if bytes.Contains(body, []byte("SESH_MASTER_PASSWORD=")) {
+		t.Fatal("spawnAgent kept SESH_MASTER_PASSWORD from the hook's environment")
 	}
 }

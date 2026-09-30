@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/migration"
@@ -140,9 +142,18 @@ func openSQLiteStore() (*database.Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openStoreWith(dbPath, ks)
+}
 
-	store, err := database.Open(dbPath, ks)
+// openStoreWith opens the store at dbPath over oracle. The store owns
+// oracle once opened; if opening fails, oracle is closed here so an agent
+// connection or a cached master key doesn't outlive the failure.
+func openStoreWith(dbPath string, oracle database.CryptoOracle) (*database.Store, error) {
+	store, err := database.Open(dbPath, oracle)
 	if err != nil {
+		if c, ok := oracle.(interface{ Close() }); ok {
+			c.Close()
+		}
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
@@ -156,13 +167,33 @@ func openSQLiteStore() (*database.Store, error) {
 	return store, nil
 }
 
-// buildKeySource selects the KeySource based on SESH_KEY_SOURCE.
-// Defaults to the macOS Keychain. "password" selects MasterPasswordSource,
-// which stores its KDF salt in a sidecar file alongside the DB.
-func buildKeySource(dataDir string) (database.KeySource, error) {
+// buildKeySource returns the CryptoOracle the store encrypts through,
+// chosen by SESH_KEY_SOURCE. Defaults to the macOS Keychain. "password"
+// uses the agent when it can serve this data directory, so later
+// commands do not prompt again. A missing sidecar, or an agent that
+// cannot be reached or fails to unlock, falls back to
+// MasterPasswordSource, reusing a password already typed. A wrong
+// password is retried against the agent and is returned to the caller
+// when the attempt budget is spent. With SESH_MASTER_PASSWORD set, the
+// agent is not used at all.
+func buildKeySource(dataDir string) (database.CryptoOracle, error) {
 	switch os.Getenv("SESH_KEY_SOURCE") {
 	case "password":
-		mps := resolvePasswordPrompt().newSource(dataDir)
+		cfg := resolvePasswordPrompt()
+		if !cfg.fromEnv {
+			oracle, typed, err := keySourceFromAgent(dataDir, cfg)
+			if err != nil {
+				return nil, err
+			}
+			if oracle != nil {
+				return oracle, nil
+			}
+			if typed != nil {
+				defer secure.SecureZeroBytes(typed)
+				cfg = cfg.withTypedPassword(typed)
+			}
+		}
+		mps := cfg.newSource(dataDir)
 		// Eagerly unlock so every operation — including metadata-only reads
 		// like --list and --delete — requires the master password. Without
 		// this, the store would only prompt on decryption, letting an
@@ -173,7 +204,7 @@ func buildKeySource(dataDir string) (database.KeySource, error) {
 			return nil, err
 		}
 		secure.SecureZeroBytes(key)
-		return mps, nil
+		return database.NewKeySourceOracle(mps), nil
 	case "", "keychain":
 		u, err := user.Current()
 		if err != nil {
@@ -183,9 +214,88 @@ func buildKeySource(dataDir string) (database.KeySource, error) {
 		if err := ensureMasterKey(ks, dataDir); err != nil {
 			return nil, err
 		}
-		return ks, nil
+		return database.NewKeySourceOracle(ks), nil
 	default:
 		return nil, fmt.Errorf("unknown SESH_KEY_SOURCE %q (valid: keychain, password)", os.Getenv("SESH_KEY_SOURCE"))
+	}
+}
+
+// keySourceFromAgent connects to the agent and returns an oracle when the
+// agent can serve crypto for this data directory.
+//
+// A nil oracle and nil error mean the caller should fall back to a direct
+// master-password source: this data directory has no usable sidecar yet,
+// or the agent could not be reached or failed during unlock. In the last
+// case typed holds the password the user already entered, so the fallback
+// can use it instead of prompting again; the caller must zero it. A
+// non-nil error means the command should stop: the password attempt
+// budget was spent, or the prompt itself failed. Wrong-password replies
+// stay on the agent for every attempt.
+func keySourceFromAgent(dataDir string, cfg passwordPromptConfig) (oracle database.CryptoOracle, typed []byte, err error) {
+	// The sidecar is a local read. Without one (first run) or with a
+	// corrupt one, the direct source takes over, so don't start an agent.
+	mat, err := database.ReadUnlockMaterial(dataDir)
+	if err != nil {
+		return nil, nil, nil
+	}
+	conn, err := agent.EnsureAgent()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sesh agent unavailable: %v\n", err) //nolint:errcheck // best-effort warning
+		return nil, nil, nil
+	}
+	st, err := agent.Status(conn)
+	if err != nil {
+		closeAgentConn(conn)
+		fmt.Fprintf(os.Stderr, "warning: sesh agent unavailable: %v\n", err) //nolint:errcheck // best-effort warning
+		return nil, nil, nil
+	}
+	id := agent.UnlockID(mat.Verify)
+	if st.Unlocked && st.UnlockID == id {
+		return agent.NewAgentKeySource(conn, id), nil, nil
+	}
+
+	attempts := 1
+	if cfg.interactive {
+		attempts = interactivePasswordAttempts
+	}
+	for i := range attempts {
+		prompt := "Master password: "
+		if i > 0 {
+			prompt = fmt.Sprintf("Wrong password, try again (%d/%d). Master password: ", i+1, attempts)
+		}
+		pw, perr := cfg.prompt(prompt)
+		if perr != nil {
+			closeAgentConn(conn)
+			return nil, nil, perr
+		}
+		// agent.Unlock zeroes pw; keep a copy in case the fallback needs it.
+		kept := bytes.Clone(pw)
+		uerr := agent.Unlock(conn, pw, mat.Salt, mat.Verify, mat.Params)
+		if uerr == nil {
+			secure.SecureZeroBytes(kept)
+			return agent.NewAgentKeySource(conn, id), nil, nil
+		}
+		var pe *agent.ProtocolError
+		if errors.As(uerr, &pe) && pe.Code == agent.ErrCodeWrongPassword {
+			secure.SecureZeroBytes(kept)
+			continue
+		}
+		closeAgentConn(conn)
+		fmt.Fprintf(os.Stderr, "warning: sesh agent unlock failed: %v\n", uerr) //nolint:errcheck // best-effort warning
+		return nil, kept, nil
+	}
+	closeAgentConn(conn)
+	// Same wording as MasterPasswordSource, so the user sees one message
+	// whichever path checked the password.
+	if attempts == 1 {
+		return nil, nil, errors.New("wrong master password")
+	}
+	return nil, nil, fmt.Errorf("wrong master password (after %d attempts)", attempts)
+}
+
+func closeAgentConn(conn *agent.Conn) {
+	if err := conn.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: close agent connection: %v\n", err) //nolint:errcheck // best-effort warning
 	}
 }
 
@@ -203,6 +313,10 @@ const interactivePasswordAttempts = 3
 type passwordPromptConfig struct {
 	prompt      database.PasswordPromptFunc
 	interactive bool
+	// fromEnv means the password came from SESH_MASTER_PASSWORD. Such
+	// runs skip the agent: the value is checked every time, and a script
+	// or CI job doesn't leave an unlocked agent running after it exits.
+	fromEnv bool
 }
 
 // resolvePasswordPrompt picks the prompt callback based on the runtime
@@ -220,6 +334,7 @@ func resolvePasswordPrompt() passwordPromptConfig {
 		return passwordPromptConfig{
 			prompt:      func(_ string) ([]byte, error) { return []byte(envPw), nil },
 			interactive: false,
+			fromEnv:     true,
 		}
 	}
 	return passwordPromptConfig{
@@ -246,6 +361,22 @@ func (c passwordPromptConfig) options() []database.Option {
 		return []database.Option{database.WithMaxAttempts(interactivePasswordAttempts)}
 	}
 	return nil
+}
+
+// withTypedPassword returns a config whose first prompt is answered with
+// pw instead of asking the user again. Later prompts (retries) go to the
+// original prompt.
+func (c passwordPromptConfig) withTypedPassword(pw []byte) passwordPromptConfig {
+	next := c.prompt
+	used := false
+	c.prompt = func(p string) ([]byte, error) {
+		if !used {
+			used = true
+			return pw, nil
+		}
+		return next(p)
+	}
+	return c
 }
 
 // terminalPrompt reads a password from the controlling terminal without

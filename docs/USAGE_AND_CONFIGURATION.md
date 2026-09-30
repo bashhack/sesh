@@ -167,6 +167,7 @@ sesh uses a provider-based configuration system:
 | `SESH_BACKEND`         | Storage backend — only `sqlite` selects SQLite; any other value (or unset) uses the keychain | `keychain`       |
 | `SESH_KEY_SOURCE`      | Master key source for SQLite backend: `keychain` (default) or `password`. Ignored when `SESH_BACKEND` is not `sqlite` | `keychain`       |
 | `SESH_MASTER_PASSWORD` | Non-interactive master password (skips prompt). Intended for CI/scripting only — exposes the password via process environment | unset            |
+| `SESH_AUTH_SOCK`       | Socket path for the sesh agent used by `SESH_KEY_SOURCE=password` | `<user-cache-dir>/sesh/agent.sock` |
 
 ## Storage Backend and Key Source
 
@@ -195,14 +196,21 @@ SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --action st
 # Confirm master password: ****
 # Enter password for github (alice): ****
 
-# Subsequent runs — single prompt to unlock
+# Next run — prompts once; the sesh agent keeps the key unlocked
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 # Master password: ****
+
+# Later runs — no prompt while the agent is running
+SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 
 # Non-interactive (CI/scripts — prefer this only in trusted environments)
 export SESH_MASTER_PASSWORD='...'
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 ```
+
+The first command that needs the key starts a per-user `sesh agent` in the background. The agent holds the derived key so later commands don't prompt; it stays unlocked until it exits. While it is unlocked, commands don't check the password. With `SESH_MASTER_PASSWORD` set, sesh skips the agent entirely: the password is checked on every run and no background process is left behind, which is what scripts and CI want. To lock, stop it (`pkill -f 'sesh agent'`) — the next command starts a fresh agent and prompts again. If the agent can't be started, sesh prints a warning and prompts on every run instead. See [Sesh agent](SECURITY_MODEL.md#sesh-agent) for what the agent does and doesn't protect.
+
+Secrets are limited to 1 MiB each.
 
 The sidecar file `passwords.key` lives next to the SQLite database. It contains the KDF salt, Argon2id parameters, and a verification blob (not a password hash) — nothing secret. Keep it with the database when moving between machines; without it, the database cannot be unlocked even with the correct password.
 
