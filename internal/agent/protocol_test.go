@@ -156,3 +156,16 @@ func TestProtocolVersion_IsStable(t *testing.T) {
 		t.Fatalf("ProtocolVersion changed to %d; if intentional, update this test and SESH_AGENT_PHASE_*_PLAN.md / SECURITY_MODEL.md as needed", ProtocolVersion)
 	}
 }
+
+func TestUnlockRequest_KDFParamsWireShape(t *testing.T) {
+	var buf bytes.Buffer
+	req := UnlockRequest{Type: TypeUnlock, Params: KDFParams{Time: 3, Memory: 65536, Threads: 4, KeyLen: 32}}
+	if err := writeJSON(&buf, req); err != nil {
+		t.Fatal(err)
+	}
+	// Pins the field names on the wire; changing them breaks older agents.
+	const want = `"params":{"time":3,"memory":65536,"threads":4,"key_len":32}`
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("unlock request = %s, want it to contain %s", buf.String(), want)
+	}
+}

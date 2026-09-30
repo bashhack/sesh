@@ -57,7 +57,7 @@ func Unlock(conn *Conn, password, salt, verify []byte, params database.Argon2idP
 		Version:  ProtocolVersion,
 		Password: password,
 		Salt:     salt,
-		Params:   params,
+		Params:   KDFParams(params),
 		Verify:   verify,
 	}, TypeUnlockAck)
 	return err
@@ -84,16 +84,14 @@ func Decrypt(conn *Conn, ciphertext, salt []byte, unlockID string) ([]byte, erro
 }
 
 // Encrypt asks the agent to seal plaintext. The agent chooses the salt.
-// The caller's plaintext is left intact. unlockID is the verify-blob id
-// the caller was built for.
+// plaintext is only read, so the caller still owns it. unlockID is the
+// verify-blob id the caller was built for.
 func Encrypt(conn *Conn, plaintext []byte, unlockID string) (ciphertext, salt []byte, err error) {
-	buf := append([]byte(nil), plaintext...)
-	defer secure.SecureZeroBytes(buf)
 	raw, err := roundTrip(conn, EncryptRequest{
 		Type:      TypeEncrypt,
 		Version:   ProtocolVersion,
 		UnlockID:  unlockID,
-		Plaintext: buf,
+		Plaintext: plaintext,
 	}, TypeEncryptAck)
 	if err != nil {
 		return nil, nil, err

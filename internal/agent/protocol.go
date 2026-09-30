@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"github.com/bashhack/sesh/internal/database"
 )
 
 // ProtocolVersion is the on-wire schema version. A version mismatch
@@ -91,12 +89,23 @@ type PingResponse struct {
 // unlock while already unlocked re-derives, so a password change does
 // not need a separate lock round-trip.
 type UnlockRequest struct {
-	Type     string                  `json:"type"`
-	Password []byte                  `json:"password"`
-	Salt     []byte                  `json:"salt"`
-	Verify   []byte                  `json:"verify"`
-	Params   database.Argon2idParams `json:"params"`
-	Version  int                     `json:"version"`
+	Type     string    `json:"type"`
+	Password []byte    `json:"password"`
+	Salt     []byte    `json:"salt"`
+	Verify   []byte    `json:"verify"`
+	Params   KDFParams `json:"params"`
+	Version  int       `json:"version"`
+}
+
+// KDFParams is the Argon2id parameter set on the wire. It is a separate
+// type so the protocol does not change when database.Argon2idParams does;
+// the two convert directly, and a field added to either breaks that
+// conversion at compile time instead of dropping silently.
+type KDFParams struct {
+	Time    uint32 `json:"time"`
+	Memory  uint32 `json:"memory"`
+	Threads uint8  `json:"threads"`
+	KeyLen  uint32 `json:"key_len"`
 }
 
 // UnlockResponse acknowledges a successful unlock. The derived key stays

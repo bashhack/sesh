@@ -91,7 +91,7 @@ func TestServer_UnlockWrongPassword(t *testing.T) {
 	}
 }
 
-func TestAgentKeySource_StoreRoundTrip(t *testing.T) {
+func TestOracle_StoreRoundTrip(t *testing.T) {
 	sockPath := tempSocketPath(t)
 	stop := runServer(t, sockPath)
 	defer stop()
@@ -102,7 +102,7 @@ func TestAgentKeySource_StoreRoundTrip(t *testing.T) {
 	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); err != nil {
 		t.Fatal(err)
 	}
-	ks := NewAgentKeySource(conn, UnlockID(verify))
+	ks := NewOracle(conn, UnlockID(verify))
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	store, err := database.Open(dbPath, ks)
@@ -125,7 +125,7 @@ func TestAgentKeySource_StoreRoundTrip(t *testing.T) {
 		t.Fatalf("secret = %q", got)
 	}
 	if _, ok := any(ks).(database.KeySource); ok {
-		t.Fatal("AgentKeySource satisfies database.KeySource, so it could hand out the key")
+		t.Fatal("Oracle satisfies database.KeySource, so it could hand out the key")
 	}
 }
 
@@ -234,7 +234,7 @@ func TestServer_OversizedFrameIsBadRequest(t *testing.T) {
 	}
 }
 
-func TestAgentKeySource_ConcurrentEncryptDecrypt(t *testing.T) {
+func TestOracle_ConcurrentEncryptDecrypt(t *testing.T) {
 	sockPath := tempSocketPath(t)
 	stop := runServer(t, sockPath)
 	defer stop()
@@ -245,7 +245,7 @@ func TestAgentKeySource_ConcurrentEncryptDecrypt(t *testing.T) {
 	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); err != nil {
 		t.Fatal(err)
 	}
-	ks := NewAgentKeySource(conn, UnlockID(verify))
+	ks := NewOracle(conn, UnlockID(verify))
 	t.Cleanup(ks.Close)
 
 	const n = 8
@@ -277,7 +277,7 @@ func TestAgentKeySource_ConcurrentEncryptDecrypt(t *testing.T) {
 	}
 }
 
-func TestAgentKeySource_TimeoutRetiresConnection(t *testing.T) {
+func TestOracle_TimeoutRetiresConnection(t *testing.T) {
 	old := requestTimeout
 	requestTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { requestTimeout = old })
@@ -291,7 +291,7 @@ func TestAgentKeySource_TimeoutRetiresConnection(t *testing.T) {
 		return DecryptResponse{Type: TypeDecryptAck, Version: ProtocolVersion, Plaintext: req.Ciphertext}
 	})
 	conn := dialClient(t, sockPath)
-	ks := NewAgentKeySource(conn, "id")
+	ks := NewOracle(conn, "id")
 	defer ks.Close()
 
 	if _, err := ks.DecryptEntry([]byte("secret-of-A"), []byte("salt")); err == nil {

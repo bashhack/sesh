@@ -38,10 +38,9 @@ var errProtocolMismatch = errors.New("agent protocol mismatch")
 // it has launched a daemon, waiting for the socket to appear.
 const spawnPollInterval = 20 * time.Millisecond
 
-// SpawnTimeout is the default upper bound on EnsureAgent — the full
-// budget for "try existing, take lock, spawn, wait for socket." Exposed
-// (capitalized) so tests can override with a shorter value.
-const SpawnTimeout = 3 * time.Second
+// spawnTimeout bounds how long EnsureAgent waits for a freshly spawned
+// agent to bind its socket and answer hello.
+const spawnTimeout = 3 * time.Second
 
 // AgentSpawnCommand returns the exec.Cmd to spawn when EnsureAgent needs
 // to launch a daemon. By default invokes `<self> agent --socket <path>`.
@@ -125,9 +124,9 @@ func EnsureAgent() (*Conn, error) {
 	}()
 
 	// Poll for the socket. The agent typically binds within ~50ms on a
-	// warm machine; SpawnTimeout caps the patience, and a child that
+	// warm machine; spawnTimeout caps the patience, and a child that
 	// exits ends the wait immediately.
-	deadline := time.NewTimer(SpawnTimeout)
+	deadline := time.NewTimer(spawnTimeout)
 	defer deadline.Stop()
 	tick := time.NewTicker(spawnPollInterval)
 	defer tick.Stop()
@@ -143,7 +142,7 @@ func EnsureAgent() (*Conn, error) {
 		case werr := <-exited:
 			return nil, errAgentExited(sockPath, werr)
 		case <-deadline.C:
-			return nil, fmt.Errorf("agent did not bind socket within %s", SpawnTimeout)
+			return nil, fmt.Errorf("agent did not bind socket within %s", spawnTimeout)
 		case <-tick.C:
 		}
 	}

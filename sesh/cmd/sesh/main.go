@@ -251,7 +251,7 @@ func keySourceFromAgent(dataDir string, cfg passwordPromptConfig) (oracle databa
 	}
 	id := agent.UnlockID(mat.Verify)
 	if st.Unlocked && st.UnlockID == id {
-		return agent.NewAgentKeySource(conn, id), nil, nil
+		return agent.NewOracle(conn, id), nil, nil
 	}
 
 	attempts := 1
@@ -273,7 +273,7 @@ func keySourceFromAgent(dataDir string, cfg passwordPromptConfig) (oracle databa
 		uerr := agent.Unlock(conn, pw, mat.Salt, mat.Verify, mat.Params)
 		if uerr == nil {
 			secure.SecureZeroBytes(kept)
-			return agent.NewAgentKeySource(conn, id), nil, nil
+			return agent.NewOracle(conn, id), nil, nil
 		}
 		var pe *agent.ProtocolError
 		if errors.As(uerr, &pe) && pe.Code == agent.ErrCodeWrongPassword {

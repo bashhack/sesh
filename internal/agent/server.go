@@ -12,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/secure"
 )
 
@@ -234,7 +235,7 @@ func (s *Server) dispatchUnlock(conn *net.UnixConn, raw []byte) bool {
 		sendErrorAndIgnore(conn, ErrCodeBadRequest, err.Error())
 		return true
 	}
-	err := s.keys.Unlock(req.Password, req.Salt, req.Verify, req.Params)
+	err := s.keys.Unlock(req.Password, req.Salt, req.Verify, database.Argon2idParams(req.Params))
 	if err == nil {
 		return writeJSON(conn, UnlockResponse{
 			Type:    TypeUnlockAck,

@@ -215,7 +215,7 @@ func TestBuildKeySource_EnvPasswordBypassesAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeKeySource(t, ks)
-	if _, isAgent := ks.(*agent.AgentKeySource); isAgent {
+	if _, isAgent := ks.(*agent.Oracle); isAgent {
 		t.Fatal("SESH_MASTER_PASSWORD run returned the agent source")
 	}
 }
