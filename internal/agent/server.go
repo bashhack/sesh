@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/secure"
@@ -19,6 +20,7 @@ import (
 // Server owns the listening socket and dispatches incoming connections
 // to per-connection handler goroutines.
 type Server struct {
+	startedAt   time.Time
 	shutdownErr error
 	listener    *net.UnixListener
 	sockPath    string
@@ -31,8 +33,9 @@ type Server struct {
 // Listen creates the socket at sockPath, sets perm 0600, and returns a
 // Server ready to Run. A leftover socket inode is removed only when
 // connect fails with ECONNREFUSED, which means nothing is listening.
-// Any other dial error leaves the path in place.
-func Listen(sockPath string) (*Server, error) {
+// Any other dial error leaves the path in place. The auto-lock timeouts
+// default to DefaultIdleTimeout and DefaultMaxLifetime; opts override them.
+func Listen(sockPath string, opts ...Option) (*Server, error) {
 	if _, err := os.Stat(sockPath); err == nil {
 		conn, derr := net.DialTimeout("unix", sockPath, dialTimeout)
 		if derr == nil {
@@ -64,7 +67,14 @@ func Listen(sockPath string) (*Server, error) {
 		}
 		return nil, fmt.Errorf("chmod socket: %w", err)
 	}
-	return &Server{sockPath: sockPath, listener: lis}, nil
+	srv := &Server{sockPath: sockPath, listener: lis}
+	srv.keys.idleTimeout = DefaultIdleTimeout
+	srv.keys.maxLifetime = DefaultMaxLifetime
+	for _, opt := range opts {
+		opt(srv)
+	}
+	srv.startedAt = srv.keys.clock().Now()
+	return srv, nil
 }
 
 // SocketPath returns the path the server is bound to. Useful for tests
@@ -74,11 +84,12 @@ func (s *Server) SocketPath() string {
 }
 
 // Run blocks until ctx is cancelled or SIGTERM/SIGINT arrives, accepting
-// connections and dispatching them on per-connection goroutines. On exit
-// it closes the listener and removes the socket file.
+// connections and dispatching them on per-connection goroutines. SIGUSR1
+// locks the agent without stopping it. On exit it closes the listener and
+// removes the socket file.
 func (s *Server) Run(ctx context.Context) error {
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1)
 	defer signal.Stop(sigCh)
 
 	// Cancelled on every return so the watcher cannot outlive Run. Close
@@ -88,12 +99,20 @@ func (s *Server) Run(ctx context.Context) error {
 	defer cancel()
 
 	go func() {
-		select {
-		case <-runCtx.Done():
-		case <-sigCh:
-		}
-		if err := s.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: agent shutdown: %v\n", err) //nolint:errcheck // best-effort warning
+		for {
+			select {
+			case <-runCtx.Done():
+			case sig := <-sigCh:
+				if sig == syscall.SIGUSR1 {
+					s.keys.lock()
+					fmt.Fprintln(os.Stderr, "sesh agent: locked (SIGUSR1)") //nolint:errcheck // best-effort log line
+					continue
+				}
+			}
+			if err := s.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: agent shutdown: %v\n", err) //nolint:errcheck // best-effort warning
+			}
+			return
 		}
 	}()
 
@@ -217,6 +236,12 @@ func (s *Server) dispatch(conn *net.UnixConn, env envelope, raw []byte) bool {
 		return s.dispatchEncrypt(conn, raw)
 	case TypeStatus:
 		return s.dispatchStatus(conn)
+	case TypeLock:
+		s.keys.lock()
+		return writeJSON(conn, LockResponse{Type: TypeLockAck, Version: ProtocolVersion}) == nil
+	case TypeStop:
+		s.dispatchStop(conn)
+		return false
 	default:
 		return writeJSON(conn, ErrorResponse{
 			Type:    TypeError,
@@ -295,18 +320,39 @@ func (s *Server) dispatchEncrypt(conn *net.UnixConn, raw []byte) bool {
 }
 
 func (s *Server) dispatchStatus(conn *net.UnixConn) bool {
-	unlocked, id, last := s.keys.Status()
-	resp := StatusResponse{
-		Type:     TypeStatusAck,
-		Version:  ProtocolVersion,
-		Unlocked: unlocked,
-		UnlockID: id,
-		AgentPID: os.Getpid(),
+	st := s.keys.snapshot()
+	return writeJSON(conn, StatusResponse{
+		Type:             TypeStatusAck,
+		Version:          ProtocolVersion,
+		Unlocked:         st.unlocked,
+		UnlockID:         st.unlockID,
+		AgentPID:         os.Getpid(),
+		AgentStartedUnix: s.startedAt.Unix(),
+		UnlockedAtUnix:   unixOrZero(st.unlockedAt),
+		LastActivityUnix: unixOrZero(st.lastActivity),
+		LastUnlockUnix:   unixOrZero(st.lastUnlock),
+		LocksAtUnix:      unixOrZero(st.locksAt),
+		IdleTimeoutSec:   int64(st.idleTimeout / time.Second),
+		MaxLifetimeSec:   int64(st.maxLifetime / time.Second),
+	}) == nil
+}
+
+// dispatchStop acknowledges a stop and then shuts the server down. The
+// reply goes first so the client sees success before the socket closes.
+func (s *Server) dispatchStop(conn *net.UnixConn) {
+	if err := writeJSON(conn, StopResponse{Type: TypeStopAck, Version: ProtocolVersion}); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: write stop_ack: %v\n", err) //nolint:errcheck // best-effort warning
 	}
-	if unlocked {
-		resp.LastActivityUnix = last.Unix()
+	if err := s.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: agent shutdown: %v\n", err) //nolint:errcheck // best-effort warning
 	}
-	return writeJSON(conn, resp) == nil
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 func keystoreErrCode(err error) string {

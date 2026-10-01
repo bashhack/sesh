@@ -172,3 +172,17 @@ func (c *Conn) exchange(req any, wantType string) (raw []byte, err error) {
 		return nil, fmt.Errorf("unexpected response type %q", env.Type)
 	}
 }
+
+// Lock asks the agent to drop its key now. Locking an agent that is
+// already locked succeeds.
+func Lock(conn *Conn) error {
+	_, err := roundTrip(conn, LockRequest{Type: TypeLock, Version: ProtocolVersion}, TypeLockAck)
+	return err
+}
+
+// Stop asks the agent to shut down. The agent replies before it closes
+// its listener, so a nil error means the stop was accepted.
+func Stop(conn *Conn) error {
+	_, err := roundTrip(conn, StopRequest{Type: TypeStop, Version: ProtocolVersion}, TypeStopAck)
+	return err
+}

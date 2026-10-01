@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -254,5 +255,221 @@ func TestKeystore_ShutdownDuringUnlockDiscardsKey(t *testing.T) {
 	}
 	if unlocked, _, _ := ks.Status(); unlocked {
 		t.Fatal("an unlock that finished after shutdown installed its key")
+	}
+}
+
+// fakeClock fires timers only when the test calls advance. With
+// stopIgnored set, Stop reports success but the timer still fires, which
+// is how a timer already running its callback behaves.
+type fakeClock struct {
+	now         time.Time
+	timers      []*fakeTimer
+	mu          sync.Mutex
+	stopIgnored bool
+}
+
+type fakeTimer struct {
+	at      time.Time
+	f       func()
+	clk     *fakeClock
+	stopped bool
+	fired   bool
+}
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{now: time.Date(2026, 5, 3, 9, 0, 0, 0, time.UTC)}
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) AfterFunc(d time.Duration, f func()) stopper {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t := &fakeTimer{at: c.now.Add(d), f: f, clk: c}
+	c.timers = append(c.timers, t)
+	return t
+}
+
+func (t *fakeTimer) Stop() bool {
+	t.clk.mu.Lock()
+	defer t.clk.mu.Unlock()
+	if !t.clk.stopIgnored {
+		t.stopped = true
+	}
+	return true
+}
+
+// advance moves the clock forward and runs every timer that came due,
+// in deadline order, outside the clock's lock.
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	var due []*fakeTimer
+	for _, t := range c.timers {
+		if !t.stopped && !t.fired && !t.at.After(c.now) {
+			t.fired = true
+			due = append(due, t)
+		}
+	}
+	c.mu.Unlock()
+	slices.SortFunc(due, func(a, b *fakeTimer) int { return a.at.Compare(b.at) })
+	for _, t := range due {
+		t.f()
+	}
+}
+
+func timedKeystore(t *testing.T, idle, maxLife time.Duration) (*keystore, *fakeClock, []byte) {
+	t.Helper()
+	clk := newFakeClock()
+	ks := &keystore{clk: clk, idleTimeout: idle, maxLifetime: maxLife}
+	params := lightParams()
+	salt, verify := sealVerify(t, "correct-horse", params)
+	if err := ks.Unlock([]byte("correct-horse"), salt, verify, params); err != nil {
+		t.Fatal(err)
+	}
+	return ks, clk, verify
+}
+
+func isUnlocked(ks *keystore) bool {
+	unlocked, _, _ := ks.Status()
+	return unlocked
+}
+
+func TestKeystore_IdleTimeoutLocksAfterInactivity(t *testing.T) {
+	ks, clk, _ := timedKeystore(t, 10*time.Minute, 0)
+	clk.advance(10*time.Minute - time.Second)
+	if !isUnlocked(ks) {
+		t.Fatal("locked before the idle timeout")
+	}
+	clk.advance(time.Second)
+	if isUnlocked(ks) {
+		t.Fatal("still unlocked after the idle timeout")
+	}
+}
+
+func TestKeystore_ActivityRestartsIdleTimer(t *testing.T) {
+	ks, clk, verify := timedKeystore(t, 10*time.Minute, 0)
+	clk.advance(6 * time.Minute)
+	if _, _, err := ks.Encrypt([]byte("x"), UnlockID(verify)); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(6 * time.Minute) // past the original deadline
+	if !isUnlocked(ks) {
+		t.Fatal("encrypt did not restart the idle timer")
+	}
+	clk.advance(4 * time.Minute)
+	if isUnlocked(ks) {
+		t.Fatal("still unlocked 10m after the last activity")
+	}
+}
+
+func TestKeystore_StatusIsNotActivity(t *testing.T) {
+	ks, clk, _ := timedKeystore(t, 10*time.Minute, 0)
+	clk.advance(9 * time.Minute)
+	ks.snapshot()
+	ks.Status()
+	clk.advance(time.Minute)
+	if isUnlocked(ks) {
+		t.Fatal("a status check kept the keystore unlocked")
+	}
+}
+
+func TestKeystore_MaxLifetimeLocksDespiteActivity(t *testing.T) {
+	ks, clk, verify := timedKeystore(t, 10*time.Minute, time.Hour)
+	for range 11 {
+		clk.advance(5 * time.Minute)
+		if _, _, err := ks.Encrypt([]byte("x"), UnlockID(verify)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clk.advance(5 * time.Minute) // 60m since unlock
+	if isUnlocked(ks) {
+		t.Fatal("still unlocked past the max lifetime")
+	}
+}
+
+func TestKeystore_ZeroTimeoutsNeverLock(t *testing.T) {
+	ks, clk, _ := timedKeystore(t, 0, 0)
+	clk.advance(1000 * time.Hour)
+	if !isUnlocked(ks) {
+		t.Fatal("locked with both timeouts disabled")
+	}
+	if st := ks.snapshot(); !st.locksAt.IsZero() {
+		t.Fatalf("locksAt = %v, want zero with both timeouts disabled", st.locksAt)
+	}
+}
+
+func TestKeystore_LockCancelsTimersAndAllowsUnlock(t *testing.T) {
+	ks, clk, verify := timedKeystore(t, 10*time.Minute, time.Hour)
+	ks.lock()
+	if isUnlocked(ks) {
+		t.Fatal("lock left the keystore unlocked")
+	}
+	salt, _ := sealVerify(t, "correct-horse", lightParams())
+	if err := ks.Unlock([]byte("correct-horse"), salt, verify, lightParams()); err != nil {
+		t.Fatalf("Unlock after lock: %v", err)
+	}
+	if st := ks.snapshot(); st.lastUnlock.IsZero() {
+		t.Fatal("lastUnlock not recorded")
+	}
+	clk.advance(9 * time.Minute)
+	if !isUnlocked(ks) {
+		t.Fatal("a timer from before the lock fired after the re-unlock")
+	}
+}
+
+func TestKeystore_StaleTimerDoesNotLockNewUnlock(t *testing.T) {
+	ks, clk, verify := timedKeystore(t, 10*time.Minute, 0)
+	clk.mu.Lock()
+	clk.stopIgnored = true // the first unlock's timer fires regardless
+	clk.mu.Unlock()
+	clk.advance(5 * time.Minute)
+	salt, _ := sealVerify(t, "correct-horse", lightParams())
+	if err := ks.Unlock([]byte("correct-horse"), salt, verify, lightParams()); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(5 * time.Minute) // first unlock's idle deadline
+	if !isUnlocked(ks) {
+		t.Fatal("the first unlock's timer locked the second unlock's key")
+	}
+}
+
+func TestKeystore_LocksAtIsEarlierDeadline(t *testing.T) {
+	ks, clk, _ := timedKeystore(t, 10*time.Minute, 15*time.Minute)
+	start := clk.Now()
+	if got := ks.snapshot().locksAt; !got.Equal(start.Add(10 * time.Minute)) {
+		t.Fatalf("locksAt = %v, want the idle deadline", got)
+	}
+	clk.advance(8 * time.Minute)
+	if _, _, err := ks.Encrypt([]byte("x"), ks.snapshot().unlockID); err != nil {
+		t.Fatal(err)
+	}
+	if got := ks.snapshot().locksAt; !got.Equal(start.Add(15 * time.Minute)) {
+		t.Fatalf("locksAt = %v, want the max-lifetime deadline", got)
+	}
+}
+
+func TestKeystore_ReusesKeyBuffer(t *testing.T) {
+	allocs := 0
+	ks := &keystore{alloc: func(n int) []byte { allocs++; return make([]byte, n) }}
+	params := lightParams()
+	salt, verify := sealVerify(t, "correct-horse", params)
+	for range 3 {
+		if err := ks.Unlock([]byte("correct-horse"), salt, verify, params); err != nil {
+			t.Fatal(err)
+		}
+		ks.lock()
+	}
+	if allocs != 1 {
+		t.Fatalf("alloc called %d times across three unlocks, want 1", allocs)
+	}
+	for _, b := range ks.keyBuf {
+		if b != 0 {
+			t.Fatal("key buffer not zeroed after lock")
+		}
 	}
 }

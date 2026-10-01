@@ -168,6 +168,8 @@ sesh uses a provider-based configuration system:
 | `SESH_KEY_SOURCE`      | Master key source for SQLite backend: `keychain` (default) or `password`. Ignored when `SESH_BACKEND` is not `sqlite` | `keychain`       |
 | `SESH_MASTER_PASSWORD` | Non-interactive master password (skips prompt). Intended for CI/scripting only — exposes the password via process environment | unset            |
 | `SESH_AUTH_SOCK`       | Socket path for the sesh agent used by `SESH_KEY_SOURCE=password` | `<user-cache-dir>/sesh/agent.sock` |
+| `SESH_AGENT_IDLE_TIMEOUT` | Agent locks after this long without use; `0` disables. Same as `sesh agent --idle-timeout` | `10m` |
+| `SESH_AGENT_MAX_LIFETIME` | Agent locks this long after each unlock; `0` disables. Same as `sesh agent --max-lifetime` | `8h` |
 
 ## Storage Backend and Key Source
 
@@ -208,7 +210,30 @@ export SESH_MASTER_PASSWORD='...'
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 ```
 
-The first command that needs the key after the vault exists prompts once and starts a per-user `sesh agent` in the background; the run that creates the vault does not start one. The agent holds the derived key so later commands don't prompt; it stays unlocked until it exits. While it is unlocked, commands don't check the password. With `SESH_MASTER_PASSWORD` set, sesh skips the agent entirely: the password is checked on every run and no background process is left behind, which is what scripts and CI want. To lock, stop it (`pkill -f 'sesh agent'`) — the next command starts a fresh agent and prompts again. If the agent can't be started, sesh prints a warning and prompts on every run instead. See [Sesh agent](SECURITY_MODEL.md#sesh-agent) for what the agent does and doesn't protect.
+The first command that needs the key after the vault exists prompts once and starts a per-user `sesh agent` in the background; the run that creates the vault does not start one. The agent holds the derived key so later commands don't prompt. While it is unlocked, commands don't check the password. With `SESH_MASTER_PASSWORD` set, sesh skips the agent entirely: the password is checked on every run and no background process is left behind, which is what scripts and CI want.
+
+The agent locks itself after 10 minutes without use and 8 hours after each unlock; the next command then prompts again. To control it directly:
+
+```bash
+sesh agent status   # running? locked? when does it auto-lock?
+sesh agent lock     # drop the key now
+sesh agent stop     # shut the agent down
+```
+
+`sesh agent status` prints, for example:
+
+```
+agent: running (pid 12345)
+state: unlocked
+unlocked since: 2026-05-03 09:14:00 (38m ago)
+last activity:  2026-05-03 09:51:48 (12s ago)
+auto-lock in:   9m 48s (idle timeout)
+max lifetime:   7h 22m remaining
+```
+
+Change the timeouts with `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` (Go durations such as `30m` or `2h`; `0` disables). They are read when the agent starts, so run `sesh agent stop` after changing them.
+
+If the agent can't be started, sesh prints a warning and prompts on every run instead. See [Sesh agent](SECURITY_MODEL.md#sesh-agent) for what the agent does and doesn't protect.
 
 Secrets are limited to 1 MiB each.
 

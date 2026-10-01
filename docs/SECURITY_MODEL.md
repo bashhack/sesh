@@ -101,7 +101,15 @@ In password mode, once the vault exists, the first command that needs the key st
 - **Vault binding**: every encrypt/decrypt request names the sidecar it was unlocked for. If the agent has since been unlocked for a different vault, it refuses rather than use the wrong key
 - **Environment**: runs with `SESH_MASTER_PASSWORD` set never start or use the agent, and an agent started by another run does not inherit that variable
 
-What this changes: while the agent is unlocked, **any process running as your user can ask it to decrypt entries**, and `--list` / `--delete` no longer require the password. This is the same trade-off `ssh-agent` makes. The agent currently stays unlocked until it exits; idle timeout, an explicit `lock` command, and a fuller threat-model write-up are planned. To drop the key now, stop the agent (`pkill -f 'sesh agent'`).
+What this changes: while the agent is unlocked, **any process running as your user can ask it to decrypt entries**, and `--list` / `--delete` no longer require the password. This is the same trade-off `ssh-agent` makes. The window is bounded:
+
+- **Idle timeout** (default 10 minutes): the agent locks after this long without an unlock, encrypt, or decrypt. Status checks don't count.
+- **Max lifetime** (default 8 hours): the agent locks this long after each unlock, however busy it is.
+- **On demand**: `sesh agent lock` drops the key, `sesh agent stop` shuts the agent down, and `SIGUSR1` locks it (for example from a screen-lock hook).
+
+A locked agent zeroes the key and keeps running; the next command prompts again.
+
+**Process hardening.** The agent disables core dumps and blocks other processes running as you from attaching a debugger or reading its memory (`PR_SET_DUMPABLE=0` on Linux, `PT_DENY_ATTACH` on macOS). The cached key lives in a page locked into RAM so it is never written to swap. Short-lived copies made while encrypting or decrypting stay on the ordinary Go heap, protected by the same no-dump/no-attach settings.
 
 Not protected against: root or a debugger attached to the agent (the key is in its memory), core dumps, or memory the Go runtime copies and never zeroes (JSON buffers carrying passwords and plaintext).
 

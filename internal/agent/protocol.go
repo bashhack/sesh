@@ -33,6 +33,10 @@ const (
 	TypeEncryptAck = "encrypt_ack"
 	TypeStatus     = "status"
 	TypeStatusAck  = "status_ack"
+	TypeLock       = "lock"
+	TypeLockAck    = "lock_ack"
+	TypeStop       = "stop"
+	TypeStopAck    = "stop_ack"
 )
 
 // Error codes returned in ErrorResponse.Code. Strings (not ints) so they
@@ -157,17 +161,52 @@ type StatusRequest struct {
 	Version int    `json:"version"`
 }
 
-// StatusResponse reports lock state. UnlockID is the hex SHA-256 of the
-// verify blob the cached key was checked against, empty when locked.
-// Callers compare it to the sidecar so a rotated password is not served
-// with the previous key.
+// StatusResponse reports lock state and the auto-lock schedule. UnlockID
+// is the hex SHA-256 of the verify blob the cached key was checked
+// against, empty when locked. Callers compare it to the sidecar so a
+// rotated password is not served with the previous key. Times are Unix
+// seconds; 0 means "not applicable". LocksAtUnix is the earlier of the
+// idle and max-lifetime deadlines. A timeout of 0 means disabled.
 type StatusResponse struct {
 	Type             string `json:"type"`
 	UnlockID         string `json:"unlock_id,omitempty"`
 	Version          int    `json:"version"`
 	AgentPID         int    `json:"agent_pid"`
+	AgentStartedUnix int64  `json:"agent_started_unix"`
+	UnlockedAtUnix   int64  `json:"unlocked_at_unix,omitempty"`
 	LastActivityUnix int64  `json:"last_activity_unix,omitempty"`
+	LastUnlockUnix   int64  `json:"last_unlock_unix,omitempty"`
+	LocksAtUnix      int64  `json:"locks_at_unix,omitempty"`
+	IdleTimeoutSec   int64  `json:"idle_timeout_sec"`
+	MaxLifetimeSec   int64  `json:"max_lifetime_sec"`
 	Unlocked         bool   `json:"unlocked"`
+}
+
+// LockRequest drops the cached key without stopping the agent. Later
+// encrypt and decrypt requests get not_unlocked until the next unlock.
+// Locking an already-locked agent succeeds.
+type LockRequest struct {
+	Type    string `json:"type"`
+	Version int    `json:"version"`
+}
+
+// LockResponse acknowledges a lock.
+type LockResponse struct {
+	Type    string `json:"type"`
+	Version int    `json:"version"`
+}
+
+// StopRequest shuts the agent down, like SIGTERM, through the socket so
+// callers don't need the agent's pid. The agent replies, then stops.
+type StopRequest struct {
+	Type    string `json:"type"`
+	Version int    `json:"version"`
+}
+
+// StopResponse acknowledges a stop; the agent shuts down after sending it.
+type StopResponse struct {
+	Type    string `json:"type"`
+	Version int    `json:"version"`
 }
 
 // ErrorResponse is returned in place of any expected response when the

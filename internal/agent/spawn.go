@@ -79,7 +79,7 @@ func EnsureAgent() (*Conn, error) {
 	if err == nil {
 		return conn, nil
 	}
-	if !shouldSpawn(err) {
+	if !IsNotRunning(err) {
 		return nil, err
 	}
 
@@ -100,7 +100,7 @@ func EnsureAgent() (*Conn, error) {
 	if err == nil {
 		return conn, nil
 	}
-	if !shouldSpawn(err) {
+	if !IsNotRunning(err) {
 		return nil, err
 	}
 	// ECONNREFUSED means the inode is left over from a dead listener.
@@ -135,7 +135,7 @@ func EnsureAgent() (*Conn, error) {
 		if derr == nil {
 			return conn, nil
 		}
-		if !shouldSpawn(derr) {
+		if !IsNotRunning(derr) {
 			return nil, derr
 		}
 		select {
@@ -155,11 +155,11 @@ func errAgentExited(sockPath string, werr error) error {
 	return fmt.Errorf("spawned agent exited before binding %s", sockPath)
 }
 
-// shouldSpawn reports whether err means no live agent owns the socket,
-// so EnsureAgent may start one. A refused connect is a stale inode; a
-// missing path means nothing is there. Every other error belongs to a
-// live or unreachable agent and must be returned to the caller.
-func shouldSpawn(err error) bool {
+// IsNotRunning reports whether a dial error means no agent owns the
+// socket: a refused connect is a stale inode, and a missing path means
+// nothing is there. Every other error belongs to a live or unreachable
+// agent. EnsureAgent spawns only in the not-running case.
+func IsNotRunning(err error) bool {
 	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
