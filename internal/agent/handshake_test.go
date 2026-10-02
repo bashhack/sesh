@@ -276,3 +276,42 @@ func TestRoundTrip_UnexpectedReplyRetiresConnection(t *testing.T) {
 		t.Fatalf("second Status err = %v, want errConnBroken", err)
 	}
 }
+
+// otherUser makes this process's UID look different from every peer's,
+// as if each socket belonged to another user.
+func otherUser(t *testing.T) {
+	t.Helper()
+	orig := currentUID
+	currentUID = func() int { return orig() + 1 }
+	t.Cleanup(func() { currentUID = orig })
+}
+
+func TestDialAndHandshake_RefusesAnotherUsersAgent(t *testing.T) {
+	received := make(chan int, 1)
+	sockPath := startFakeAgent(t, func(_ *testing.T, rw *bufio.ReadWriter) {
+		b, _ := rw.ReadByte() //nolint:errcheck // EOF is the expected outcome
+		if b != 0 {
+			received <- 1
+			return
+		}
+		received <- 0
+	})
+	otherUser(t)
+
+	conn, err := dialAndHandshake(sockPath)
+	if err == nil {
+		mustClose(t, conn)
+		t.Fatal("dialAndHandshake accepted an agent owned by another user")
+	}
+	if !strings.Contains(err.Error(), "is not this process's UID") {
+		t.Fatalf("err = %v, want the peer UID refusal", err)
+	}
+	select {
+	case n := <-received:
+		if n != 0 {
+			t.Fatal("client sent data to another user's agent before refusing")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake agent never saw the connection close")
+	}
+}

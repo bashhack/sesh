@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -404,5 +405,42 @@ func TestEnsureAgent_ExitReportsAgentLog(t *testing.T) {
 	_, err = EnsureAgent()
 	if err == nil || strings.Contains(err.Error(), "agent log:") {
 		t.Fatalf("err = %v, want no log line from earlier runs", err)
+	}
+}
+
+func TestEnsureAgent_LeavesAnotherUsersAgentAlone(t *testing.T) {
+	sockPath := useTempSocketEnv(t)
+	addr, err := net.ResolveUnixAddr("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lis, err := net.ListenUnix("unix", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { mustClose(t, lis) })
+	go func() {
+		for {
+			c, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			mustClose(t, c)
+		}
+	}()
+	otherUser(t)
+	orig := AgentSpawnCommand
+	AgentSpawnCommand = func(string) (*exec.Cmd, error) {
+		t.Error("EnsureAgent tried to replace another user's agent")
+		return nil, errors.New("spawn disabled")
+	}
+	t.Cleanup(func() { AgentSpawnCommand = orig })
+
+	_, err = EnsureAgent()
+	if err == nil || !strings.Contains(err.Error(), "is not this process's UID") {
+		t.Fatalf("err = %v, want the peer UID refusal", err)
+	}
+	if _, err := os.Stat(sockPath); err != nil {
+		t.Fatalf("another user's socket was removed: %v", err)
 	}
 }
