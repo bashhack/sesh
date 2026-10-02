@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -234,5 +235,20 @@ func TestAgentDaemon_RejectsBadTimeouts(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, tt.wantSub)
 			}
 		})
+	}
+}
+
+func TestAgentDaemon_RefusesWhenHardeningFails(t *testing.T) {
+	sockPath := tempAgentSocket(t)
+	orig := hardenProcess
+	hardenProcess = func() error { return errors.New("deny debugger attach: not permitted") }
+	t.Cleanup(func() { hardenProcess = orig })
+
+	err := runAgent(agentTestApp(), []string{"--socket", sockPath})
+	if err == nil || !strings.Contains(err.Error(), "harden agent: deny debugger attach") {
+		t.Fatalf("err = %v, want the hardening failure", err)
+	}
+	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("socket exists after a refused start: %v", err)
 	}
 }

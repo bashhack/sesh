@@ -454,18 +454,21 @@ func TestKeystore_LocksAtIsEarlierDeadline(t *testing.T) {
 }
 
 func TestKeystore_ReusesKeyBuffer(t *testing.T) {
-	allocs := 0
-	ks := &keystore{alloc: func(n int) []byte { allocs++; return make([]byte, n) }}
+	ks := &keystore{keyBuf: make([]byte, 64)}
+	page := &ks.keyBuf[0]
 	params := lightParams()
 	salt, verify := sealVerify(t, "correct-horse", params)
 	for range 3 {
 		if err := ks.Unlock([]byte("correct-horse"), salt, verify, params); err != nil {
 			t.Fatal(err)
 		}
+		if &ks.derivedKey[0] != page {
+			t.Fatal("key was not stored in the preallocated buffer")
+		}
 		ks.lock()
 	}
-	if allocs != 1 {
-		t.Fatalf("alloc called %d times across three unlocks, want 1", allocs)
+	if &ks.keyBuf[0] != page {
+		t.Fatal("preallocated buffer was replaced")
 	}
 	for _, b := range ks.keyBuf {
 		if b != 0 {

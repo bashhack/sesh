@@ -42,15 +42,23 @@ func TestHarden_AppliesInChildProcess(t *testing.T) {
 	}
 }
 
-func TestLockedAlloc_ReturnsZeroedBuffer(t *testing.T) {
-	b := lockedAlloc(32)
-	if len(b) != 32 {
-		t.Fatalf("len = %d, want 32", len(b))
+func TestMapLockedPage_ReturnsZeroedPage(t *testing.T) {
+	b, err := mapLockedPage()
+	if err != nil {
+		t.Fatalf("mapLockedPage: %v", err)
 	}
-	for _, c := range b[:cap(b)] {
+	if len(b) != os.Getpagesize() {
+		t.Fatalf("len = %d, want one page (%d)", len(b), os.Getpagesize())
+	}
+	for _, c := range b {
 		if c != 0 {
 			t.Fatal("fresh key page is not zeroed")
 		}
 	}
-	copy(b, "0123456789abcdef0123456789abcdef")
+	if err := unix.Munlock(b); err != nil {
+		t.Fatalf("munlock: %v (page was not locked)", err)
+	}
+	if err := unix.Munmap(b); err != nil {
+		t.Fatal(err)
+	}
 }

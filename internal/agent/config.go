@@ -27,3 +27,15 @@ func WithMaxLifetime(d time.Duration) Option {
 func withClock(c clock) Option {
 	return func(s *Server) { s.keys.clk = c }
 }
+
+// WithLockedKeyMemory makes Listen reserve the key's storage up front: one
+// page outside the Go heap, locked into RAM so the key is never written
+// to swap, reused for the agent's lifetime. Listen fails if the page
+// can't be mapped and locked.
+func WithLockedKeyMemory() Option {
+	return func(s *Server) { s.lockKeyMemory = true }
+}
+
+// lockedPage returns the page WithLockedKeyMemory reserves. Tests replace
+// it to simulate failure.
+var lockedPage = mapLockedPage

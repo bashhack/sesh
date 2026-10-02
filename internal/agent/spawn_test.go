@@ -254,11 +254,11 @@ func TestSpawnAgent_StripsMasterPassword(t *testing.T) {
 	}
 	t.Cleanup(func() { AgentSpawnCommand = orig })
 
-	cmd, err := spawnAgent(tempSocketPath(t))
+	child, err := spawnAgent(tempSocketPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cmd.Wait(); err != nil {
+	if err := child.cmd.Wait(); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(out)
@@ -353,11 +353,11 @@ func TestSpawnAgent_FiltersHookEnvironment(t *testing.T) {
 	}
 	t.Cleanup(func() { AgentSpawnCommand = orig })
 
-	cmd, err := spawnAgent(tempSocketPath(t))
+	child, err := spawnAgent(tempSocketPath(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cmd.Wait(); err != nil {
+	if err := child.cmd.Wait(); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(out)
@@ -376,5 +376,33 @@ func TestSpawnAgent_FiltersHookEnvironment(t *testing.T) {
 	}
 	if bytes.Contains(body, []byte("SESH_MASTER_PASSWORD=")) {
 		t.Fatal("spawnAgent kept SESH_MASTER_PASSWORD from the hook's environment")
+	}
+}
+
+func TestEnsureAgent_ExitReportsAgentLog(t *testing.T) {
+	useTempSocketEnv(t)
+	logPath := filepath.Join(t.TempDir(), "agent.log")
+	if err := os.WriteFile(logPath, []byte("stale line from an earlier run\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origSpawn, origLog := AgentSpawnCommand, agentLogFile
+	t.Cleanup(func() { AgentSpawnCommand, agentLogFile = origSpawn, origLog })
+	agentLogFile = func() (*os.File, error) {
+		return os.OpenFile(logPath, os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // path under t.TempDir
+	}
+
+	AgentSpawnCommand = func(string) (*exec.Cmd, error) {
+		return exec.Command("sh", "-c", `echo "harden agent: memlock limit is 0" >&2; exit 1`), nil
+	}
+	_, err := EnsureAgent()
+	if err == nil || !strings.Contains(err.Error(), "agent log: harden agent: memlock limit is 0") {
+		t.Fatalf("err = %v, want the agent's own reason", err)
+	}
+
+	// A child that writes nothing must not be blamed for earlier lines.
+	AgentSpawnCommand = func(string) (*exec.Cmd, error) { return exec.Command("sh", "-c", "exit 1"), nil }
+	_, err = EnsureAgent()
+	if err == nil || strings.Contains(err.Error(), "agent log:") {
+		t.Fatalf("err = %v, want no log line from earlier runs", err)
 	}
 }

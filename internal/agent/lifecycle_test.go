@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -153,5 +154,45 @@ func TestServer_StatusReportsSchedule(t *testing.T) {
 	}
 	if st.Unlocked || st.LocksAtUnix != 0 || st.UnlockedAtUnix != 0 || st.LastUnlockUnix != start.Unix() {
 		t.Fatalf("status after lock = %+v, want locked with last unlock kept", st)
+	}
+}
+
+func TestListen_RefusesWithoutLockedKeyMemory(t *testing.T) {
+	orig := lockedPage
+	t.Cleanup(func() { lockedPage = orig })
+	lockedPage = func() ([]byte, error) { return nil, errors.New("memlock limit is 0") }
+
+	sockPath := tempSocketPath(t)
+	srv, err := Listen(sockPath, WithLockedKeyMemory())
+	if err == nil {
+		mustClose(t, srv)
+		t.Fatal("Listen succeeded without locked key memory")
+	}
+	if !strings.Contains(err.Error(), "memlock limit is 0") {
+		t.Fatalf("err = %v, want the lock failure", err)
+	}
+	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("socket exists after a refused start: %v", err)
+	}
+}
+
+func TestListen_KeyLivesInLockedPage(t *testing.T) {
+	page := make([]byte, 4096)
+	orig := lockedPage
+	t.Cleanup(func() { lockedPage = orig })
+	lockedPage = func() ([]byte, error) { return page, nil }
+
+	srv, err := Listen(tempSocketPath(t), WithLockedKeyMemory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, srv)
+	params := lightParams()
+	salt, verify := sealVerify(t, "correct-horse", params)
+	if err := srv.keys.Unlock([]byte("correct-horse"), salt, verify, params); err != nil {
+		t.Fatal(err)
+	}
+	if &srv.keys.derivedKey[0] != &page[0] {
+		t.Fatal("the unlocked key is not in the reserved page")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -112,7 +113,7 @@ func EnsureAgent() (*Conn, error) {
 		}
 	}
 
-	cmd, err := spawnAgent(sockPath)
+	child, err := spawnAgent(sockPath)
 	if err != nil {
 		return nil, fmt.Errorf("spawn agent: %w", err)
 	}
@@ -120,7 +121,7 @@ func EnsureAgent() (*Conn, error) {
 	go func() {
 		// Reap the child. A live agent blocks here until it exits; an
 		// immediate exit unblocks the poll below.
-		exited <- cmd.Wait()
+		exited <- child.cmd.Wait()
 	}()
 
 	// Poll for the socket. The agent typically binds within ~50ms on a
@@ -140,7 +141,7 @@ func EnsureAgent() (*Conn, error) {
 		}
 		select {
 		case werr := <-exited:
-			return nil, errAgentExited(sockPath, werr)
+			return nil, errAgentExited(sockPath, werr, child)
 		case <-deadline.C:
 			return nil, fmt.Errorf("agent did not bind socket within %s", spawnTimeout)
 		case <-tick.C:
@@ -148,11 +149,46 @@ func EnsureAgent() (*Conn, error) {
 	}
 }
 
-func errAgentExited(sockPath string, werr error) error {
+// errAgentExited reports a spawned agent that exited before binding,
+// with the last line it wrote to the agent log (an agent that refuses to
+// start says why there).
+func errAgentExited(sockPath string, werr error, child *spawnedAgent) error {
+	err := fmt.Errorf("spawned agent exited before binding %s", sockPath)
 	if werr != nil {
-		return fmt.Errorf("spawned agent exited before binding %s: %w", sockPath, werr)
+		err = fmt.Errorf("spawned agent exited before binding %s: %w", sockPath, werr)
 	}
-	return fmt.Errorf("spawned agent exited before binding %s", sockPath)
+	if line := lastLogLine(child.logPath, child.logStart); line != "" {
+		return fmt.Errorf("%w; agent log: %s", err, line)
+	}
+	return err
+}
+
+// lastLogLine returns the last non-empty line written to path at or after
+// offset from, reading at most the final 4 KiB. Earlier runs' lines are
+// never returned. Any read error yields "".
+func lastLogLine(path string, from int64) string {
+	if path == "" {
+		return ""
+	}
+	f, err := os.Open(path) //nolint:gosec // path is the agent log this process opened
+	if err != nil {
+		return ""
+	}
+	defer closeOrLog(f, "agent log after read")
+	info, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	start := max(from, info.Size()-4096)
+	if start >= info.Size() {
+		return ""
+	}
+	buf := make([]byte, info.Size()-start)
+	if _, err := f.ReadAt(buf, start); err != nil && !errors.Is(err, io.EOF) {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(buf)), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // IsNotRunning reports whether a dial error means no agent owns the
@@ -235,11 +271,21 @@ func dialAndHandshake(sockPath string) (*Conn, error) {
 	}
 }
 
+// spawnedAgent is a started agent process and where its output goes.
+// The log is appended to across runs, so logStart marks where this
+// child's output begins.
+type spawnedAgent struct {
+	cmd      *exec.Cmd
+	logPath  string
+	logStart int64
+}
+
 // spawnAgent forks the agent daemon as a detached child process. The
 // child never gets SESH_MASTER_PASSWORD, and runs from / unless the
-// command sets a directory. Stderr goes to the agent log. Setsid keeps the child alive after
-// the parent exits. The caller must Wait on the returned command.
-func spawnAgent(sockPath string) (*exec.Cmd, error) {
+// command sets a directory. Stderr goes to the agent log. Setsid keeps
+// the child alive after the parent exits. The caller must Wait on the
+// returned command.
+func spawnAgent(sockPath string) (*spawnedAgent, error) {
 	cmd, err := AgentSpawnCommand(sockPath)
 	if err != nil {
 		return nil, err
@@ -285,6 +331,10 @@ func spawnAgent(sockPath string) (*exec.Cmd, error) {
 	}
 	cmd.SysProcAttr.Setsid = true
 
+	child := &spawnedAgent{cmd: cmd, logPath: logFile.Name()}
+	if info, serr := logFile.Stat(); serr == nil {
+		child.logStart = info.Size()
+	}
 	if err := cmd.Start(); err != nil {
 		closeOrLog(logFile, "agent log file after spawn failure")
 		return nil, fmt.Errorf("start agent: %w", err)
@@ -293,7 +343,7 @@ func spawnAgent(sockPath string) (*exec.Cmd, error) {
 	// fd (dup'd during fork). Without this, the file descriptor leaks
 	// until the parent exits.
 	closeOrLog(logFile, "agent log file (parent-side fd)")
-	return cmd, nil
+	return child, nil
 }
 
 // withoutMasterPassword returns env minus SESH_MASTER_PASSWORD. A nil env

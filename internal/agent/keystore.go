@@ -57,12 +57,10 @@ type keystore struct {
 	clk        clock
 	idleTimer  stopper
 	maxTimer   stopper
-	// alloc returns the buffer the key is copied into; nil means a plain
-	// heap slice. The agent daemon supplies memory that can't be swapped.
-	alloc func(n int) []byte
-	// keyBuf is the storage alloc returned. It is kept for the life of the
-	// keystore and reused across unlocks; derivedKey is a view into it
-	// while unlocked and nil while locked.
+	// keyBuf is the key's storage, kept for the life of the keystore and
+	// reused across unlocks; derivedKey is a view into it while unlocked
+	// and nil while locked. The agent daemon preallocates it in locked
+	// memory; otherwise it is a heap slice made on first unlock.
 	keyBuf      []byte
 	unlockID    string
 	derivedKey  []byte
@@ -224,19 +222,15 @@ func (k *keystore) copyKey(wantID string) ([]byte, error) {
 	return cp, nil
 }
 
-// installLocked copies derived into keyBuf, allocating it on first use
-// and reusing it afterwards. Any previous key is zeroed first. Caller
-// holds mu.
+// installLocked copies derived into keyBuf, making a heap buffer if
+// none was preallocated (or it is too small). Any previous key is zeroed
+// first. Caller holds mu.
 func (k *keystore) installLocked(derived []byte) {
 	if cap(k.keyBuf) < len(derived) {
 		if k.keyBuf != nil {
 			secure.SecureZeroBytes(k.keyBuf[:cap(k.keyBuf)])
 		}
-		if k.alloc != nil {
-			k.keyBuf = k.alloc(len(derived))
-		} else {
-			k.keyBuf = make([]byte, len(derived))
-		}
+		k.keyBuf = make([]byte, len(derived))
 	}
 	secure.SecureZeroBytes(k.keyBuf[:cap(k.keyBuf)])
 	k.derivedKey = k.keyBuf[:len(derived)]

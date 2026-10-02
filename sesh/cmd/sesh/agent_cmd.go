@@ -65,9 +65,11 @@ func runAgentDaemon(app *App, args []string) error {
 	}
 
 	// Applied here, in the daemon only: these settings are process-wide,
-	// and tests run the server inside the test binary.
+	// and tests run the server inside the test binary. An agent that
+	// can't protect its memory doesn't start; the CLI then falls back to
+	// prompting on every run.
 	if err := hardenProcess(); err != nil {
-		_, _ = fmt.Fprintf(app.Stderr, "warning: agent hardening incomplete: %v\n", err) //nolint:errcheck // best-effort warning
+		return fmt.Errorf("harden agent: %w", err)
 	}
 
 	srv, err := agent.Listen(sockPath,

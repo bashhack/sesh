@@ -25,6 +25,8 @@ type Server struct {
 	listener    *net.UnixListener
 	sockPath    string
 	keys        keystore
+	// lockKeyMemory is set by WithLockedKeyMemory.
+	lockKeyMemory bool
 	// shutdownOnce guards Close so concurrent SIGTERM + accept-loop-exit
 	// don't try to remove the socket twice.
 	shutdownOnce sync.Once
@@ -36,6 +38,22 @@ type Server struct {
 // Any other dial error leaves the path in place. The auto-lock timeouts
 // default to DefaultIdleTimeout and DefaultMaxLifetime; opts override them.
 func Listen(sockPath string, opts ...Option) (*Server, error) {
+	srv := &Server{sockPath: sockPath}
+	srv.keys.idleTimeout = DefaultIdleTimeout
+	srv.keys.maxLifetime = DefaultMaxLifetime
+	for _, opt := range opts {
+		opt(srv)
+	}
+	// Reserved before the socket exists, so an agent that can't protect
+	// its key never accepts a connection.
+	if srv.lockKeyMemory {
+		page, err := lockedPage()
+		if err != nil {
+			return nil, fmt.Errorf("reserve key memory: %w", err)
+		}
+		srv.keys.keyBuf = page
+	}
+
 	if _, err := os.Stat(sockPath); err == nil {
 		conn, derr := net.DialTimeout("unix", sockPath, dialTimeout)
 		if derr == nil {
@@ -67,12 +85,7 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 		}
 		return nil, fmt.Errorf("chmod socket: %w", err)
 	}
-	srv := &Server{sockPath: sockPath, listener: lis}
-	srv.keys.idleTimeout = DefaultIdleTimeout
-	srv.keys.maxLifetime = DefaultMaxLifetime
-	for _, opt := range opts {
-		opt(srv)
-	}
+	srv.listener = lis
 	srv.startedAt = srv.keys.clock().Now()
 	return srv, nil
 }
