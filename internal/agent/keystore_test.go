@@ -405,7 +405,7 @@ func TestKeystore_ZeroTimeoutsNeverLock(t *testing.T) {
 
 func TestKeystore_LockCancelsTimersAndAllowsUnlock(t *testing.T) {
 	ks, clk, verify := timedKeystore(t, 10*time.Minute, time.Hour)
-	ks.lock()
+	ks.lock("test")
 	if isUnlocked(ks) {
 		t.Fatal("lock left the keystore unlocked")
 	}
@@ -465,7 +465,7 @@ func TestKeystore_ReusesKeyBuffer(t *testing.T) {
 		if &ks.derivedKey[0] != page {
 			t.Fatal("key was not stored in the preallocated buffer")
 		}
-		ks.lock()
+		ks.lock("test")
 	}
 	if &ks.keyBuf[0] != page {
 		t.Fatal("preallocated buffer was replaced")

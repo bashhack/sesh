@@ -4,9 +4,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
+
+// oneLine escapes line breaks, so a value with a newline in it (a socket
+// path, an error) can't start a log line that has no timestamp.
+var oneLine = strings.NewReplacer("\r", `\r`, "\n", `\n`)
 
 // agentLog writes the daemon's log lines. Each line starts with an RFC 3339
 // timestamp, because the log file is appended to across runs. Lines name
@@ -21,12 +26,12 @@ type agentLog struct {
 // keystore built without a Server still reports its events.
 func (l *agentLog) printf(format string, args ...any) {
 	if l == nil {
-		fmt.Fprintf(os.Stderr, "%s %s\n", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...)) //nolint:errcheck // best-effort log line
+		fmt.Fprintf(os.Stderr, "%s %s\n", time.Now().Format(time.RFC3339), oneLine.Replace(fmt.Sprintf(format, args...))) //nolint:errcheck // best-effort log line
 		return
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fmt.Fprintf(l.w, "%s %s\n", l.now().Format(time.RFC3339), fmt.Sprintf(format, args...)) //nolint:errcheck // best-effort log line
+	fmt.Fprintf(l.w, "%s %s\n", l.now().Format(time.RFC3339), oneLine.Replace(fmt.Sprintf(format, args...))) //nolint:errcheck // best-effort log line
 }
 
 // closeOrLog closes c and logs a failure as a warning.

@@ -129,6 +129,9 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 	k.unlockedAt, k.lastActivity, k.lastUnlock = now, now, now
 	k.generation++
 	k.scheduleLocked()
+	// Logged under mu, like every lock, so the log's order is the order
+	// the transitions happened in.
+	k.log.printf("unlocked")
 	return nil
 }
 
@@ -155,12 +158,14 @@ func (k *keystore) Encrypt(plaintext []byte, unlockID string) (ciphertext, salt 
 	return database.EncryptEntry(keyCopy, plaintext)
 }
 
-// lock zeroes the cached key and cancels both timers. A later unlock is
-// allowed. Locking an already-locked keystore is a no-op.
-func (k *keystore) lock() {
+// lock zeroes the cached key and cancels both timers, logging reason. A
+// later unlock is allowed. Locking an already-locked keystore changes
+// nothing.
+func (k *keystore) lock(reason string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.clearLocked()
+	k.log.printf("locked (%s)", reason)
 }
 
 // shutdown zeroes the cached master key and refuses every later unlock.

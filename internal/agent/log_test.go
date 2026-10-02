@@ -53,6 +53,37 @@ func TestAgentLog_TimestampsEveryLine(t *testing.T) {
 	}
 }
 
+func TestAgentLog_EscapesLineBreaks(t *testing.T) {
+	var out bytes.Buffer
+	l := &agentLog{w: &out, now: func() time.Time { return time.Date(2026, 10, 2, 13, 4, 5, 0, time.UTC) }}
+	l.printf("listening at %s", "/tmp/a\r\n2026-10-02T00:00:00Z forged line")
+	want := "2026-10-02T13:04:05Z listening at /tmp/a\\r\\n2026-10-02T00:00:00Z forged line\n"
+	if got := out.String(); got != want {
+		t.Errorf("line = %q, want %q", got, want)
+	}
+}
+
+func TestServer_LogsMalformedUnlock(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	var log logBuffer
+	serve(t, sockPath, withLogOutput(&log))
+	conn := dialClient(t, sockPath)
+	defer mustClose(t, conn)
+
+	// "c2VjcmV0" is base64 for "secret"; salt has the wrong type.
+	raw := []byte(`{"type":"unlock","version":1,"password":"c2VjcmV0","salt":5}` + "\n")
+	if _, err := conn.uc.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readEnvelope(conn.r); err != nil {
+		t.Fatal(err)
+	}
+	waitForLog(t, &log, "unlock refused: malformed request")
+	if got := log.String(); strings.Contains(got, "c2VjcmV0") || strings.Contains(got, "secret") {
+		t.Errorf("log quotes the request:\n%s", got)
+	}
+}
+
 func TestServer_LogsLifecycleEvents(t *testing.T) {
 	sockPath := tempSocketPath(t)
 	var log logBuffer

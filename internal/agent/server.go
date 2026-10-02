@@ -134,8 +134,7 @@ func (s *Server) Run(ctx context.Context) error {
 				}
 			case sig := <-sigCh:
 				if sig == syscall.SIGUSR1 {
-					s.keys.lock()
-					s.log.printf("locked (SIGUSR1)")
+					s.keys.lock("SIGUSR1")
 					continue
 				}
 				s.log.printf("stopping (%v)", sig)
@@ -295,8 +294,7 @@ func (s *Server) dispatch(conn *net.UnixConn, env envelope, raw []byte) bool {
 	case TypeStatus:
 		return s.dispatchStatus(conn)
 	case TypeLock:
-		s.keys.lock()
-		s.log.printf("locked (lock request)")
+		s.keys.lock("lock request")
 		return writeJSON(conn, LockResponse{Type: TypeLockAck, Version: ProtocolVersion}) == nil
 	case TypeStop:
 		s.dispatchStop(conn)
@@ -316,12 +314,13 @@ func (s *Server) dispatchUnlock(conn *net.UnixConn, raw []byte) bool {
 	var req UnlockRequest
 	if err := decodeMessage(raw, &req); err != nil {
 		secure.SecureZeroBytes(req.Password)
+		// The decode error is not logged: it could quote the request.
+		s.log.printf("unlock refused: malformed request")
 		s.sendError(conn, ErrCodeBadRequest, err.Error())
 		return true
 	}
 	err := s.keys.Unlock(req.Password, req.Salt, req.Verify, database.Argon2idParams(req.Params))
 	if err == nil {
-		s.log.printf("unlocked")
 		return writeJSON(conn, UnlockResponse{
 			Type:    TypeUnlockAck,
 			Version: ProtocolVersion,
