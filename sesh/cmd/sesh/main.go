@@ -704,6 +704,11 @@ func ensureMasterKey(ks *database.KeychainSource, dataDir string) error {
 // runMigrate copies all sesh entries from the macOS Keychain to the SQLite store.
 // Requires the sqlite backend.
 func runMigrate(app *App) error {
+	// Checked before opening the destination, so no vault is created only
+	// for the Keychain scan to fail.
+	if goos != "darwin" {
+		return fmt.Errorf("sesh --migrate copies entries from the macOS Keychain, which isn't available on %s", goos)
+	}
 	cfg, err := settings()
 	if err != nil {
 		return err

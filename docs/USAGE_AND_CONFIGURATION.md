@@ -275,15 +275,20 @@ Your options:
   sesh --service password --action import --format encrypted --file backup.enc
   ```
 
-- **Start over with an empty vault.** First stop the agent with `sesh agent stop`. Then move **both** the vault and its key file aside: `sesh config` shows the vault's path, and `passwords.key` sits next to it. Keep the old files in case the password comes back to you:
+- **Start over with an empty vault.** First stop the agent with `sesh agent stop`, and finish any other sesh command. Then move the vault aside **with every file that belongs to it**:
+  - the database;
+  - its SQLite `-wal` and `-shm` files, if present (after a crash they can hold changes not yet in the database);
+  - `passwords.key`.
+
+  `sesh config` shows the vault's path. Keep the old files together, in case the password comes back to you:
 
   ```bash
   cd ~/Library/Application\ Support/sesh     # Linux: ~/.local/share/sesh
-  mv passwords.db passwords.db.forgotten
-  mv passwords.key passwords.key.forgotten
+  mkdir forgotten
+  mv passwords.db* passwords.key forgotten/
   ```
 
-  The next command creates a new vault. sesh never deletes a vault for you, and it refuses to create a new key next to an existing vault, so moving only one of the two files won't work.
+  The next command creates a new vault. sesh never deletes a vault for you. It refuses to create a new key next to an existing vault, so moving only some of the files won't work.
 
 To avoid ending up here, keep the master password somewhere safe and make an encrypted export from time to time (see [Encrypted exports](#encrypted-exports)).
 
