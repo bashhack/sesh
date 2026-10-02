@@ -279,7 +279,9 @@ SESH_BACKEND=sqlite sesh -service password -list
 
 # Master password: key derived from passphrase, no keychain needed (cross-platform)
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh -service password -list
-# → prompts for master password; first run asks twice for confirmation
+# → first run creates the vault (asks twice for confirmation); the next run
+#   prompts once and starts a background sesh agent that holds the key, so
+#   later commands don't prompt
 
 # Non-interactive (CI/scripting — exposes password to process env)
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password SESH_MASTER_PASSWORD=... sesh -service password -list

@@ -18,7 +18,9 @@ import (
 const (
 	sidecarFileName = "passwords.key"
 	sidecarVersion  = 1
-	verifyPlaintext = "sesh-verify"
+	// VerifyPlaintext is the known string sealed into the sidecar verify
+	// blob. A successful open under the derived key proves the password.
+	VerifyPlaintext = "sesh-verify"
 )
 
 // sidecarData is the on-disk format for the master password's KDF salt,
@@ -325,7 +327,7 @@ func (s *MasterPasswordSource) initialize() ([]byte, error) {
 	params := DefaultArgon2idParams()
 	key := DeriveKey(pw, salt, params)
 
-	verifyBlob, err := Encrypt(key, []byte(verifyPlaintext))
+	verifyBlob, err := Encrypt(key, []byte(VerifyPlaintext))
 	if err != nil {
 		secure.SecureZeroBytes(key)
 		return nil, fmt.Errorf("create verify blob: %w", err)
@@ -354,24 +356,13 @@ func (s *MasterPasswordSource) unlock() ([]byte, error) {
 		return nil, err
 	}
 
-	salt, err := base64.StdEncoding.DecodeString(data.Salt)
+	// Validated before prompting so a sidecar that can't possibly verify
+	// doesn't cost a prompt and an Argon2id run.
+	mat, err := decodeUnlockMaterial(data)
 	if err != nil {
-		return nil, fmt.Errorf("decode salt: %w", err)
+		return nil, err
 	}
-	if len(salt) < 16 {
-		return nil, fmt.Errorf("sidecar salt too short: %d bytes (min 16)", len(salt))
-	}
-
-	verifyBlob, err := base64.StdEncoding.DecodeString(data.Verify)
-	if err != nil {
-		return nil, fmt.Errorf("decode verify blob: %w", err)
-	}
-	// AES-GCM minimum: 12-byte nonce + 16-byte tag = 28 bytes (plaintext is
-	// extra). Short-circuit before prompting and burning ~200ms on Argon2id
-	// for a sidecar that can't possibly verify.
-	if len(verifyBlob) < 28 {
-		return nil, fmt.Errorf("sidecar verify blob too short: %d bytes", len(verifyBlob))
-	}
+	salt, verifyBlob := mat.Salt, mat.Verify
 
 	attempts := max(s.maxAttempts, 1)
 
@@ -431,7 +422,66 @@ func (s *MasterPasswordSource) writeSidecar(data sidecarData) error {
 }
 
 func (s *MasterPasswordSource) readSidecar() (sidecarData, error) {
-	path := s.sidecarPath
+	return readSidecarFile(s.sidecarPath)
+}
+
+// UnlockMaterial is the public sidecar fields an agent unlock needs.
+// Nothing here is the master key.
+type UnlockMaterial struct {
+	Salt   []byte
+	Verify []byte
+	Params Argon2idParams
+}
+
+// ReadUnlockMaterial loads the sidecar next to a data directory and
+// returns the salt, KDF params, and verify blob.
+func ReadUnlockMaterial(dataDir string) (UnlockMaterial, error) {
+	data, err := readSidecarFile(filepath.Join(dataDir, sidecarFileName))
+	if err != nil {
+		return UnlockMaterial{}, err
+	}
+	return decodeUnlockMaterial(data)
+}
+
+const (
+	// minSaltLen is the shortest KDF salt an unlock accepts.
+	minSaltLen = 16
+	// minVerifyLen is the AES-GCM minimum for the verify blob: 12-byte
+	// nonce plus 16-byte tag (the plaintext is extra).
+	minVerifyLen = 28
+)
+
+// ValidateUnlockMaterial checks the fields an unlock derives from. The
+// master-password source and the agent both call it, so they accept
+// exactly the same material.
+func ValidateUnlockMaterial(salt, verify []byte, params Argon2idParams) error {
+	if len(salt) < minSaltLen {
+		return fmt.Errorf("sidecar salt too short: %d bytes (min %d)", len(salt), minSaltLen)
+	}
+	if len(verify) < minVerifyLen {
+		return fmt.Errorf("sidecar verify blob too short: %d bytes (min %d)", len(verify), minVerifyLen)
+	}
+	return validateArgon2idBounds(params)
+}
+
+// decodeUnlockMaterial decodes a sidecar's salt and verify blob and
+// validates them with its params.
+func decodeUnlockMaterial(data sidecarData) (UnlockMaterial, error) {
+	salt, err := base64.StdEncoding.DecodeString(data.Salt)
+	if err != nil {
+		return UnlockMaterial{}, fmt.Errorf("decode salt: %w", err)
+	}
+	verify, err := base64.StdEncoding.DecodeString(data.Verify)
+	if err != nil {
+		return UnlockMaterial{}, fmt.Errorf("decode verify blob: %w", err)
+	}
+	if err := ValidateUnlockMaterial(salt, verify, data.Params); err != nil {
+		return UnlockMaterial{}, err
+	}
+	return UnlockMaterial{Salt: salt, Verify: verify, Params: data.Params}, nil
+}
+
+func readSidecarFile(path string) (sidecarData, error) {
 	b, err := os.ReadFile(path) //nolint:gosec // path is <dataDir>/passwords.key; dataDir is caller-controlled via NewMasterPasswordSource
 	if err != nil {
 		return sidecarData{}, fmt.Errorf("read sidecar: %w", err)
@@ -455,8 +505,9 @@ func (s *MasterPasswordSource) readSidecar() (sidecarData, error) {
 	return data, nil
 }
 
-// validateArgon2idBounds bounds-checks Argon2id parameters read from disk.
-// A corrupted or malicious sidecar could otherwise trigger a memory DoS.
+// validateArgon2idBounds bounds-checks Argon2id parameters read from a
+// sidecar or an unlock request. A corrupted or hostile value could
+// otherwise trigger a memory DoS.
 func validateArgon2idBounds(p Argon2idParams) error {
 	const (
 		maxMemoryKiB = 1 << 20 // 1 GiB

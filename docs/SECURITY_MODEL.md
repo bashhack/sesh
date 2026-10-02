@@ -84,13 +84,34 @@ Derives the master key from a user-supplied passphrase via Argon2id. **No keycha
 - **Sidecar file** `passwords.key` (next to the DB, 0600 permissions): stores the KDF salt (32 random bytes), algorithm params, and a verification blob. **No secrets.** Same public-info model as bcrypt/scrypt — salt and params are safe to expose
 - **Verification blob**: AES-256-GCM encryption of the constant string `"sesh-verify"` using the derived key. On unlock, sesh re-derives the key from the supplied password and tries to decrypt this blob. GCM's authentication tag rejects wrong passwords immediately, without touching any real entries
 - **First run**: prompts for the master password twice (confirmation), generates the salt, derives the key, writes the sidecar
-- **Subsequent runs**: reads sidecar, prompts for password, verifies via the blob, returns the key
+- **Subsequent runs**: the password is checked by the sesh agent (below). The first command after the agent starts prompts; later commands reuse the agent's key without prompting. If the agent is unavailable, sesh prompts on every run and verifies the password itself
 - **Minimum password length**: 8 characters. This is a **floor**, not a recommendation — it exists to reject obvious mistakes (empty input, fat-fingered short strings). With Argon2id at `m=64 MiB, t=3` and an attacker who has the sidecar, an 8-character lowercase-ASCII password is brute-forceable within days on commodity hardware. **Choose a passphrase**: four or more random words from a large wordlist (40+ bits of entropy) gives meaningful resistance; longer is better
-- **Non-interactive mode**: `SESH_MASTER_PASSWORD` env var bypasses the prompt (intended for CI/scripts only; exposes the password to the process environment)
+- **Non-interactive mode**: `SESH_MASTER_PASSWORD` env var bypasses the prompt (intended for CI/scripts only; exposes the password to the process environment). These runs check the password every time and don't use the agent, so a job never starts one; an agent from your interactive use is unaffected
 
 **Threat model.** An attacker with the DB file and sidecar can attempt offline brute-force using the public salt and params. At ~5 attempts/second, a strong passphrase (four random words from a large wordlist, 40+ bits of entropy) is resistant; a weak password is not. This is the same threat model as any password manager — the strength of the master password bounds the security of everything under it.
 
 **Metadata exposure.** Even without the master password, an attacker with the DB file can read service names, account names, timestamps, and audit log entries — only the encrypted secret values are protected. Full-database encryption (SQLCipher-style) would require a CGo dependency and is not implemented.
+
+##### Sesh agent
+
+In password mode, once the vault exists, the first command that needs the key starts a per-user background process (`sesh agent`). The run that creates the vault does not start it. The agent holds the derived key in memory and performs entry encryption and decryption on the CLI's behalf; the key itself never crosses the socket.
+
+- **Socket**: `<user-cache-dir>/sesh/agent.sock` (override with `SESH_AUTH_SOCK`), mode 0600 in a 0700 directory. The agent also checks the peer's UID on every connection (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS) and rejects other users
+- **Unlock**: the CLI prompts, then sends the password and the sidecar's public salt, params, and verify blob to the agent, which derives and checks the key. Unlocks run one at a time
+- **Vault binding**: every encrypt/decrypt request names the sidecar it was unlocked for. If the agent has since been unlocked for a different vault, it refuses rather than use the wrong key
+- **Environment**: runs with `SESH_MASTER_PASSWORD` set never start or use the agent, and an agent started by another run does not inherit that variable
+
+What this changes: while the agent is unlocked, **any process running as your user can ask it to decrypt entries**, and `--list` / `--delete` no longer require the password. This is the same trade-off `ssh-agent` makes. The window is bounded:
+
+- **Idle timeout** (default 10 minutes): the agent locks after this long without an unlock, encrypt, or decrypt. Status checks don't count.
+- **Max lifetime** (default 8 hours): the agent locks this long after each unlock, however busy it is.
+- **On demand**: `sesh agent lock` drops the key, `sesh agent stop` shuts the agent down, and `SIGUSR1` locks it (for example from a screen-lock hook).
+
+A locked agent zeroes the key and keeps running; the next command prompts again.
+
+**Process hardening** (Linux and macOS). Before it accepts any connection, the agent disables core dumps, blocks other processes running as you from attaching a debugger or reading its memory (`PR_SET_DUMPABLE=0` on Linux, `PT_DENY_ATTACH` on macOS), and reserves a page locked into RAM for the key so it is never written to swap. If any of these can't be applied (in practice only the memory lock can fail, when the locked-memory limit is below one page), the agent refuses to start: sesh prints a warning with the agent's reason and prompts for the password on every run instead. Short-lived copies made while encrypting or decrypting stay on the ordinary Go heap, covered by the no-dump/no-attach settings.
+
+Not protected against: root or a debugger attached to the agent (the key is in its memory), core dumps, or memory the Go runtime copies and never zeroes (JSON buffers carrying passwords and plaintext).
 
 ### Encrypted Export
 
@@ -121,7 +142,7 @@ Compare sesh's approach to alternatives:
 |----------------|------------|----------------|-----------------|
 | sesh (Keychain) | OS-level (AES-256) | OS-enforced binary binding | Transparent |
 | sesh (SQLite + Keychain key) | AES-256-GCM + Argon2id | File permissions + encryption key in Keychain | Transparent |
-| sesh (SQLite + master password) | AES-256-GCM + Argon2id | File permissions + passphrase required per invocation | Prompt on every run |
+| sesh (SQLite + master password) | AES-256-GCM + Argon2id | File permissions + passphrase; key cached in a per-user agent after unlock | Prompt once per agent session |
 | Config Files | None/Custom | File permissions only | Manual setup |
 | Environment Vars | None | Process inheritance | Leaks to children |
 | Corporate MFA Apps | Unknown | App-controlled | Privacy concerns |

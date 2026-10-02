@@ -89,7 +89,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if err != nil {
 		return fmt.Errorf("build source key source: %w", err)
 	}
-	srcStore, err := database.Open(dbPath, srcKS)
+	srcStore, err := database.Open(dbPath, database.NewKeySourceOracle(srcKS))
 	if err != nil {
 		return fmt.Errorf("open source database: %w", err)
 	}
@@ -183,7 +183,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		return fmt.Errorf("destination path %s already exists; remove it and retry", destPath)
 	}
 
-	destStore, err = database.Open(destPath, destKS)
+	destStore, err = database.Open(destPath, database.NewKeySourceOracle(destKS))
 	if err != nil {
 		return fmt.Errorf("open destination database: %w", err)
 	}
@@ -436,7 +436,7 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	}
 
 	srcKS := cfg.newSource(dataDir)
-	srcStore, err := database.Open(dbPath, srcKS)
+	srcStore, err := database.Open(dbPath, database.NewKeySourceOracle(srcKS))
 	if err != nil {
 		return fmt.Errorf("open source database: %w", err)
 	}
@@ -544,7 +544,7 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	secure.SecureZeroBytes(destKey)
 	newSidecarMade = true
 
-	destStore, err = database.Open(dbNewPath, destKS)
+	destStore, err = database.Open(dbNewPath, database.NewKeySourceOracle(destKS))
 	if err != nil {
 		return fmt.Errorf("open destination database: %w", err)
 	}

@@ -167,6 +167,9 @@ sesh uses a provider-based configuration system:
 | `SESH_BACKEND`         | Storage backend — only `sqlite` selects SQLite; any other value (or unset) uses the keychain | `keychain`       |
 | `SESH_KEY_SOURCE`      | Master key source for SQLite backend: `keychain` (default) or `password`. Ignored when `SESH_BACKEND` is not `sqlite` | `keychain`       |
 | `SESH_MASTER_PASSWORD` | Non-interactive master password (skips prompt). Intended for CI/scripting only — exposes the password via process environment | unset            |
+| `SESH_AUTH_SOCK`       | Socket path for the sesh agent used by `SESH_KEY_SOURCE=password` | `<user-cache-dir>/sesh/agent.sock` |
+| `SESH_AGENT_IDLE_TIMEOUT` | Agent locks after this long without use; `0` disables. Same as `sesh agent --idle-timeout` | `10m` |
+| `SESH_AGENT_MAX_LIFETIME` | Agent locks this long after each unlock; `0` disables. Same as `sesh agent --max-lifetime` | `8h` |
 
 ## Storage Backend and Key Source
 
@@ -195,16 +198,51 @@ SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --action st
 # Confirm master password: ****
 # Enter password for github (alice): ****
 
-# Subsequent runs — single prompt to unlock
+# Next run — prompts once; the sesh agent keeps the key unlocked
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 # Master password: ****
 
-# Non-interactive (CI/scripts — prefer this only in trusted environments)
-export SESH_MASTER_PASSWORD='...'
+# Later runs — no prompt while the agent is running
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 ```
 
+The first command that needs the key after the vault exists prompts once and starts a per-user `sesh agent` in the background; the run that creates the vault does not start one. The agent holds the derived key so later commands don't prompt. While it is unlocked, commands don't check the password.
+
+The agent locks itself after 10 minutes without use and 8 hours after each unlock; the next command then prompts again. To control it directly:
+
+```bash
+sesh agent status   # running? locked? when does it auto-lock?
+sesh agent lock     # drop the key now
+sesh agent stop     # shut the agent down
+```
+
+`sesh agent status` prints, for example:
+
+```
+agent: running (pid 12345)
+state: unlocked
+unlocked since: 2026-05-03 09:14:00 (38m ago)
+last activity:  2026-05-03 09:51:48 (12s ago)
+auto-lock in:   9m 48s (idle timeout)
+max lifetime:   7h 22m remaining
+```
+
+Change the timeouts with `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` (Go durations such as `30m` or `2h`; `0` disables). They are read when the agent starts, so run `sesh agent stop` after changing them.
+
+If the agent can't be started, sesh prints a warning and prompts on every run instead. See [Sesh agent](SECURITY_MODEL.md#sesh-agent) for what the agent does and doesn't protect.
+
+Secrets are limited to 1 MiB each.
+
 The sidecar file `passwords.key` lives next to the SQLite database. It contains the KDF salt, Argon2id parameters, and a verification blob (not a password hash) — nothing secret. Keep it with the database when moving between machines; without it, the database cannot be unlocked even with the correct password.
+
+#### Scripts and CI
+
+For non-interactive use, set `SESH_MASTER_PASSWORD`. sesh then checks that password on every run and doesn't use the agent, so a script never starts a background process or depends on one being unlocked. If you also use sesh interactively, your agent is unaffected; `sesh agent stop` still stops it if you want it gone. Because the variable exposes the password to the process environment, use it only where that's acceptable.
+
+```bash
+export SESH_MASTER_PASSWORD='...'
+SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
+```
 
 ### Encrypted exports
 

@@ -49,6 +49,13 @@ func mustClose(t *testing.T, c io.Closer) {
 // hello handshake. Mirrors what a real CLI client does on connect.
 func dialAndShake(t *testing.T, sockPath string) *net.UnixConn {
 	t.Helper()
+	return dialClient(t, sockPath).uc
+}
+
+// dialClient dials and handshakes, returning the client connection used
+// by Unlock, Encrypt, Decrypt, and Status.
+func dialClient(t *testing.T, sockPath string) *Conn {
+	t.Helper()
 	conn, err := dialAndHandshake(sockPath)
 	if err != nil {
 		t.Fatalf("dialAndHandshake: %v", err)
@@ -311,13 +318,30 @@ func TestServer_RefusesIfSocketAlreadyBound(t *testing.T) {
 	}
 }
 
-func TestServer_CleansUpStaleSocketFile(t *testing.T) {
-	sockPath := tempSocketPath(t)
-	if err := os.WriteFile(sockPath, []byte("stale"), 0o600); err != nil {
+// leftoverSocket leaves a Unix socket inode with nobody listening. A
+// later dial fails with ECONNREFUSED, which is the only signal that the
+// path is stale.
+func leftoverSocket(t *testing.T, sockPath string) {
+	t.Helper()
+	addr, err := net.ResolveUnixAddr("unix", sockPath)
+	if err != nil {
 		t.Fatal(err)
 	}
+	lis, err := net.ListenUnix("unix", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lis.SetUnlinkOnClose(false)
+	if err := lis.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServer_CleansUpStaleSocketFile(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	leftoverSocket(t, sockPath)
 	if _, err := os.Stat(sockPath); err != nil {
-		t.Fatalf("setup: stale file not present: %v", err)
+		t.Fatalf("setup: stale socket not present: %v", err)
 	}
 
 	srv, err := Listen(sockPath)
@@ -325,6 +349,121 @@ func TestServer_CleansUpStaleSocketFile(t *testing.T) {
 		t.Fatalf("Listen should clean up stale file and succeed: %v", err)
 	}
 	defer mustClose(t, srv)
+}
+
+func TestListen_RefusesUnreadableLiveSocket(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	stop := runServer(t, sockPath)
+	defer func() {
+		if err := os.Chmod(sockPath, 0o600); err != nil && !os.IsNotExist(err) {
+			t.Errorf("restore socket mode: %v", err)
+		}
+		stop()
+	}()
+	if err := os.Chmod(sockPath, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Listen(sockPath)
+	if err == nil {
+		t.Fatal("Listen replaced a live socket it could not probe")
+	}
+	if _, statErr := os.Stat(sockPath); statErr != nil {
+		t.Fatalf("socket removed: %v", statErr)
+	}
+}
+
+func TestServer_WrongVersionAfterHelloCloses(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	stop := runServer(t, sockPath)
+	defer stop()
+
+	conn := dialAndShake(t, sockPath)
+	defer mustClose(t, conn)
+	if err := writeJSON(conn, PingRequest{Type: TypePing, Version: 99}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	r := bufio.NewReader(conn)
+	_, line, err := readEnvelope(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ErrorResponse
+	if err := decodeMessage(line, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Code != ErrCodeProtocolVersionMismatch {
+		t.Fatalf("Code = %q, want %q", got.Code, ErrCodeProtocolVersionMismatch)
+	}
+	if _, _, err := readEnvelope(r); err == nil {
+		t.Fatal("connection stayed open after a version mismatch")
+	}
+}
+
+func TestServer_UnlockRejectsUndecodableRequest(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	stop := runServer(t, sockPath)
+	defer stop()
+
+	conn := dialAndShake(t, sockPath)
+	defer mustClose(t, conn)
+	if _, err := conn.Write([]byte("{\"type\":\"unlock\",\"version\":1,\"password\":1}\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, line, err := readEnvelope(bufio.NewReader(conn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ErrorResponse
+	if err := decodeMessage(line, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Code != ErrCodeBadRequest {
+		t.Fatalf("Code = %q, want %q (%s)", got.Code, ErrCodeBadRequest, got.Message)
+	}
+}
+
+func TestServer_CloseZeroesKey(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	srv, err := Listen(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.Run(context.Background())
+	}()
+
+	params := lightParams()
+	salt, verify := sealVerify(t, "correct-horse", params)
+	conn := dialClient(t, sockPath)
+	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); err != nil {
+		t.Fatal(err)
+	}
+	mustClose(t, conn)
+	if unlocked, _, _ := srv.keys.Status(); !unlocked {
+		t.Fatal("setup: keystore is locked")
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if unlocked, _, _ := srv.keys.Status(); unlocked {
+		t.Fatal("Close left the keystore unlocked")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run returned err = %v, want nil after Close", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after Close")
+	}
 }
 
 func TestServer_ShutdownRemovesSocket(t *testing.T) {
@@ -445,11 +584,11 @@ func TestServer_HandlesManyConcurrentClients(t *testing.T) {
 				return
 			}
 			defer mustClose(t, conn)
-			if werr := writeJSON(conn, PingRequest{Type: TypePing, Version: ProtocolVersion}); werr != nil {
+			if werr := writeJSON(conn.uc, PingRequest{Type: TypePing, Version: ProtocolVersion}); werr != nil {
 				errs <- werr
 				return
 			}
-			env, _, rerr := readEnvelope(bufio.NewReader(conn))
+			env, _, rerr := readEnvelope(conn.r)
 			if rerr != nil {
 				errs <- rerr
 				return
@@ -465,5 +604,36 @@ func TestServer_HandlesManyConcurrentClients(t *testing.T) {
 		if err := <-errs; err != nil {
 			t.Errorf("client err: %v", err)
 		}
+	}
+}
+
+func TestServer_RejectsUndecodableCryptoRequests(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	stop := runServer(t, sockPath)
+	defer stop()
+
+	for _, req := range []string{
+		`{"type":"decrypt","version":1,"ciphertext":1}`,
+		`{"type":"encrypt","version":1,"plaintext":1}`,
+	} {
+		conn := dialAndShake(t, sockPath)
+		if _, err := conn.Write([]byte(req + "\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		_, line, err := readEnvelope(bufio.NewReader(conn))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got ErrorResponse
+		if err := decodeMessage(line, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Code != ErrCodeBadRequest {
+			t.Errorf("%s: Code = %q, want %q (%s)", req, got.Code, ErrCodeBadRequest, got.Message)
+		}
+		mustClose(t, conn)
 	}
 }

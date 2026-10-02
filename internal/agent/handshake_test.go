@@ -133,11 +133,146 @@ func TestDialAndHandshake_AgentClosesBeforeAck(t *testing.T) {
 	}
 }
 
+func TestDialAndHandshake_SilentAgentTimesOut(t *testing.T) {
+	orig := helloTimeout
+	helloTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { helloTimeout = orig })
+
+	sockPath := tempSocketPath(t)
+	addr, err := net.ResolveUnixAddr("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lis, err := net.ListenUnix("unix", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { mustClose(t, lis) })
+	accepted := make(chan *net.UnixConn, 1)
+	go func() {
+		conn, aerr := lis.AcceptUnix()
+		if aerr != nil {
+			return
+		}
+		accepted <- conn
+	}()
+
+	start := time.Now()
+	_, err = dialAndHandshake(sockPath)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("dialAndHandshake succeeded against a silent agent")
+	}
+	var ne net.Error
+	if !errors.As(err, &ne) || !ne.Timeout() {
+		t.Fatalf("err = %v, want a timeout", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("dialAndHandshake took %s, want the hello deadline", elapsed)
+	}
+	select {
+	case conn := <-accepted:
+		mustClose(t, conn)
+	default:
+	}
+}
+
+func TestRoundTrip_SilentAfterHelloTimesOut(t *testing.T) {
+	orig := requestTimeout
+	requestTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { requestTimeout = orig })
+
+	sockPath := tempSocketPath(t)
+	addr, err := net.ResolveUnixAddr("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lis, err := net.ListenUnix("unix", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { mustClose(t, lis) })
+
+	got := make(chan *net.UnixConn, 1)
+	go func() {
+		conn, aerr := lis.AcceptUnix()
+		if aerr != nil {
+			return
+		}
+		r := bufio.NewReader(conn)
+		if _, _, rerr := readEnvelope(r); rerr != nil {
+			closeOrLog(conn, "silent peer")
+			return
+		}
+		if werr := writeJSON(conn, HelloResponse{
+			Type: TypeHelloAck, Version: ProtocolVersion, AgentPID: 1,
+		}); werr != nil {
+			closeOrLog(conn, "silent peer")
+			return
+		}
+		// Leave the connection open and unread so the client blocks in
+		// roundTrip until its own deadline, rather than seeing EOF.
+		got <- conn
+	}()
+
+	conn, err := dialAndHandshake(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, conn)
+
+	start := time.Now()
+	_, err = roundTrip(conn, PingRequest{Type: TypePing, Version: ProtocolVersion}, TypePong)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("roundTrip succeeded against a silent agent")
+	}
+	var ne net.Error
+	if !errors.As(err, &ne) || !ne.Timeout() {
+		t.Fatalf("err = %v, want a timeout", err)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("roundTrip took %s, want the request deadline", elapsed)
+	}
+	select {
+	case peer := <-got:
+		mustClose(t, peer)
+	case <-time.After(time.Second):
+		t.Error("fake agent did not finish hello")
+	}
+}
+
 func TestDialAndHandshake_FailsOnMissingSocket(t *testing.T) {
 	// A fresh short /tmp path. macOS rejects Unix socket names past 104
 	// bytes, and this file is never created.
 	_, err := dialAndHandshake(tempSocketPath(t))
 	if err == nil {
 		t.Fatal("dialAndHandshake should fail on missing socket")
+	}
+}
+
+func TestRoundTrip_UnexpectedReplyRetiresConnection(t *testing.T) {
+	sockPath := startFakeAgent(t, func(t *testing.T, rw *bufio.ReadWriter) {
+		consumeClientHello(t, rw)
+		reply(t, rw, HelloResponse{Type: TypeHelloAck, Version: ProtocolVersion})
+		if err := rw.Flush(); err != nil {
+			t.Logf("fake agent flush: %v", err)
+		}
+		if _, err := rw.ReadBytes('\n'); err != nil {
+			return
+		}
+		reply(t, rw, PingResponse{Type: TypePong, Version: ProtocolVersion}) // wrong reply to status
+	})
+	conn, err := dialAndHandshake(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, conn)
+
+	if _, err := Status(conn); err == nil || !strings.Contains(err.Error(), `unexpected response type "pong"`) {
+		t.Fatalf("Status err = %v, want unexpected response type", err)
+	}
+	if _, err := Status(conn); !errors.Is(err, errConnBroken) {
+		t.Fatalf("second Status err = %v, want errConnBroken", err)
 	}
 }

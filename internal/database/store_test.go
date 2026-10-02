@@ -30,6 +30,20 @@ func (m *mockKeySource) StoreEncryptionKey(key []byte) error { return nil }
 func (m *mockKeySource) RequiresUserInput() bool             { return false }
 func (m *mockKeySource) Name() string                        { return "mock" }
 
+func (m *mockKeySource) EncryptEntry(plaintext []byte) ([]byte, []byte, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	return EncryptEntry(m.key, plaintext)
+}
+
+func (m *mockKeySource) DecryptEntry(encryptedData, salt []byte) ([]byte, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return DecryptEntry(m.key, encryptedData, salt)
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -178,6 +192,18 @@ func TestSetSecretUpsert(t *testing.T) {
 	}
 	if string(got) != "v2" {
 		t.Fatalf("expected v2, got %q", got)
+	}
+}
+
+func TestSetSecret_SizeLimit(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.SetSecret("alice", "svc", make([]byte, MaxSecretSize)); err != nil {
+		t.Fatalf("secret at the limit: %v", err)
+	}
+	err := s.SetSecret("alice", "svc", make([]byte, MaxSecretSize+1))
+	if !errors.Is(err, ErrSecretTooLarge) {
+		t.Fatalf("expected ErrSecretTooLarge, got: %v", err)
 	}
 }
 

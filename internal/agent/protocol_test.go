@@ -63,6 +63,23 @@ func TestReadEnvelope_TruncatedFrame_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestReadEnvelope_RejectsOversizedFrame(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), maxFrameSize+1)
+	_, _, err := readEnvelope(bufio.NewReader(bytes.NewReader(payload)))
+	if err == nil || !strings.Contains(err.Error(), "frame exceeds") {
+		t.Fatalf("err = %v, want frame-size error", err)
+	}
+}
+
+func TestReadEnvelope_AcceptsFrameAtSizeLimit(t *testing.T) {
+	payload := append(bytes.Repeat([]byte("x"), maxFrameSize), '\n')
+	_, _, err := readEnvelope(bufio.NewReader(bytes.NewReader(payload)))
+	// Not JSON, so it fails to parse, but it must get past the size check.
+	if err == nil || errors.Is(err, errFrameTooLarge) {
+		t.Fatalf("err = %v, want a parse error, not the size limit", err)
+	}
+}
+
 func TestReadEnvelope_RejectsMalformedJSON(t *testing.T) {
 	r := bufio.NewReader(strings.NewReader("not json\n"))
 	_, _, err := readEnvelope(r)
@@ -137,5 +154,18 @@ func TestProtocolVersion_IsStable(t *testing.T) {
 	const expected = 1
 	if ProtocolVersion != expected {
 		t.Fatalf("ProtocolVersion changed to %d; if intentional, update this test and SESH_AGENT_PHASE_*_PLAN.md / SECURITY_MODEL.md as needed", ProtocolVersion)
+	}
+}
+
+func TestUnlockRequest_KDFParamsWireShape(t *testing.T) {
+	var buf bytes.Buffer
+	req := UnlockRequest{Type: TypeUnlock, Params: KDFParams{Time: 3, Memory: 65536, Threads: 4, KeyLen: 32}}
+	if err := writeJSON(&buf, req); err != nil {
+		t.Fatal(err)
+	}
+	// Pins the field names on the wire; changing them breaks older agents.
+	const want = `"params":{"time":3,"memory":65536,"threads":4,"key_len":32}`
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("unlock request = %s, want it to contain %s", buf.String(), want)
 	}
 }
