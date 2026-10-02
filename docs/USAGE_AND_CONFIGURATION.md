@@ -206,7 +206,7 @@ SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 ```
 
-From the second run on, a background `sesh agent` holds the key, so later commands don't prompt. See [Using sesh-agent](#using-sesh-agent) for how it starts, locks, and stops.
+From the second run on, a background `sesh agent` holds the key, so later commands don't prompt. See [Using the sesh agent](#using-the-sesh-agent) for how it starts, locks, and stops.
 
 Secrets are limited to 1 MiB each.
 
@@ -221,9 +221,9 @@ export SESH_MASTER_PASSWORD='...'
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 ```
 
-### Using sesh-agent
+### Using the sesh agent
 
-In master password mode, sesh keeps the derived key in a per-user background process, `sesh agent`, so you type the password once instead of on every command. You never start it yourself.
+In master password mode, sesh keeps the derived key in a per-user background process, `sesh agent`, so you type the password once instead of on every command. **You don't need to manage it.** sesh starts it when it's needed, it locks itself, and the only thing it asks of you is your password.
 
 **How it runs**
 
@@ -235,14 +235,16 @@ In master password mode, sesh keeps the derived key in a per-user background pro
 
 Runs with `SESH_MASTER_PASSWORD` set skip the agent entirely (see [Scripts and CI](#scripts-and-ci)), and keychain mode never uses it.
 
-**Checking and controlling it**
+**Optional controls**
 
-```bash
-sesh agent status       # running? locked? when does it auto-lock?
-sesh agent lock         # drop the key now; the agent keeps running
-sesh agent stop         # shut the agent down
-kill -USR1 <pid>        # lock it from a script, e.g. a screen-lock hook (pid from `sesh agent status`)
-```
+None of these are needed in normal use:
+
+| Command | When you'd use it |
+|---------|-------------------|
+| `sesh agent status` | See whether it's running and unlocked, and when it will lock itself |
+| `sesh agent lock` | Drop the key now, for example when stepping away; the agent keeps running |
+| `kill -USR1 <pid>` | Lock it from a script, such as a screen-lock hook (the pid is in `sesh agent status`) |
+| `sesh agent stop` | Shut it down: after changing the timeouts or upgrading sesh, or while troubleshooting |
 
 `sesh agent status` prints, for example:
 
@@ -262,6 +264,12 @@ Set `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` to Go durations such
 - Put them in your shell profile, so whichever terminal starts the agent passes them on.
 - If an editor or app that doesn't load your profile starts the agent, it runs with the defaults until it is stopped.
 - After changing them, run `sesh agent stop`; the next command starts an agent with the new values.
+
+**After upgrading sesh**
+
+The agent is a long-running copy of the sesh binary that started it, so after an upgrade (`brew upgrade`, `make install`) it keeps running the old version until it stops or the machine restarts. Run `sesh agent stop` after upgrading; the next command starts the new version and prompts once.
+
+If a release changes how sesh and the agent talk to each other, the new `sesh` can't reach the old agent at all. Commands warn `sesh agent unavailable: agent rejected hello: protocol_version_mismatch ...` and prompt on every run, and `sesh agent stop` fails with the same message. Stop the old agent directly with `pkill -f 'sesh agent'`; the next command starts the new version.
 
 **Troubleshooting**
 

@@ -34,7 +34,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Extensible Plugin Architecture** — Add new authentication providers with a single interface
 - **Dual Storage Backends** — macOS Keychain (default) or encrypted SQLite with AES-256-GCM and Argon2id key derivation (`SESH_BACKEND=sqlite`)
 - **Two Key Sources for SQLite** — macOS Keychain (default) or user-supplied master password (`SESH_KEY_SOURCE=password`) for keychain-free operation on macOS and Linux
-- **Master-Password Agent** — In master password mode, a per-user background agent holds the key so you type the password once; it locks itself when idle and is hardened against memory inspection ([Using sesh-agent](docs/USAGE_AND_CONFIGURATION.md#using-sesh-agent))
+- **Master-Password Agent** — In master password mode, a per-user background agent holds the key so you type the password once; it locks itself when idle and is hardened against memory inspection ([Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent))
 - **Encrypted Export** — Portable backups protected by a password, safe to transfer between machines (`--format encrypted`)
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes with full-text search
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
@@ -288,7 +288,7 @@ SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh -service password -list
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password SESH_MASTER_PASSWORD=... sesh -service password -list
 ```
 
-See [Using sesh-agent](docs/USAGE_AND_CONFIGURATION.md#using-sesh-agent) for how the agent starts, locks, and stops, and `sesh agent status` / `lock` / `stop` to control it.
+See [Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent) for how the agent starts, locks, and stops. It needs no management; `sesh agent status`, `lock`, and `stop` are there if you want them.
 
 #### Encrypted Export / Import
 ```bash

@@ -82,7 +82,7 @@ func runAgentDaemon(app *App, args []string) error {
 	}
 	// Banner write to stderr is best-effort — a closed parent stderr
 	// shouldn't kill an otherwise healthy daemon.
-	_, _ = fmt.Fprintf(app.Stderr, "sesh-agent listening at %s\n", srv.SocketPath()) //nolint:errcheck // best-effort banner
+	_, _ = fmt.Fprintf(app.Stderr, "sesh agent listening at %s\n", srv.SocketPath()) //nolint:errcheck // best-effort banner
 
 	if err := srv.Run(context.Background()); err != nil {
 		return fmt.Errorf("agent: %w", err)
