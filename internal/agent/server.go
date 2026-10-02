@@ -23,13 +23,16 @@ type Server struct {
 	startedAt   time.Time
 	shutdownErr error
 	listener    *net.UnixListener
-	sockPath    string
-	keys        keystore
-	// lockKeyMemory is set by WithLockedKeyMemory.
-	lockKeyMemory bool
+	// shutdownDone is closed when Close has finished: listener closed,
+	// socket removed, key zeroed. Run waits on it before returning.
+	shutdownDone chan struct{}
+	sockPath     string
+	keys         keystore
 	// shutdownOnce guards Close so concurrent SIGTERM + accept-loop-exit
 	// don't try to remove the socket twice.
 	shutdownOnce sync.Once
+	// lockKeyMemory is set by WithLockedKeyMemory.
+	lockKeyMemory bool
 }
 
 // Listen creates the socket at sockPath, sets perm 0600, and returns a
@@ -38,7 +41,7 @@ type Server struct {
 // Any other dial error leaves the path in place. The auto-lock timeouts
 // default to DefaultIdleTimeout and DefaultMaxLifetime; opts override them.
 func Listen(sockPath string, opts ...Option) (*Server, error) {
-	srv := &Server{sockPath: sockPath}
+	srv := &Server{sockPath: sockPath, shutdownDone: make(chan struct{})}
 	srv.keys.idleTimeout = DefaultIdleTimeout
 	srv.keys.maxLifetime = DefaultMaxLifetime
 	for _, opt := range opts {
@@ -98,8 +101,9 @@ func (s *Server) SocketPath() string {
 
 // Run blocks until ctx is cancelled or SIGTERM/SIGINT arrives, accepting
 // connections and dispatching them on per-connection goroutines. SIGUSR1
-// locks the agent without stopping it. On exit it closes the listener and
-// removes the socket file.
+// locks the agent without stopping it. Run returns only after shutdown has
+// finished: the listener is closed, the socket file removed, and the key
+// zeroed, whichever goroutine started it.
 func (s *Server) Run(ctx context.Context) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1)
@@ -132,9 +136,11 @@ func (s *Server) Run(ctx context.Context) error {
 	for {
 		conn, err := s.listener.AcceptUnix()
 		if err != nil {
-			// Listener closed during shutdown produces a net.ErrClosed
-			// or equivalent; treat that as a clean exit, not an error.
 			if errors.Is(err, net.ErrClosed) {
+				// The listener was closed by Close: a clean exit. Close may
+				// still be running on another goroutine, so return only once
+				// the socket is gone and the key is zeroed.
+				<-s.shutdownDone
 				return nil
 			}
 			if cerr := s.Close(); cerr != nil {
@@ -145,6 +151,10 @@ func (s *Server) Run(ctx context.Context) error {
 		go s.handleConn(conn)
 	}
 }
+
+// testHookBeforeKeyShutdown, when set, runs inside Close after the socket
+// is removed and before the key is zeroed. Tests use it to widen that gap.
+var testHookBeforeKeyShutdown func()
 
 // Close shuts down the server: stops accepting, removes the socket file,
 // then zeroes the cached master key. An unlock still in progress on an
@@ -160,7 +170,11 @@ func (s *Server) Close() error {
 				s.shutdownErr = fmt.Errorf("remove socket: %w", rerr)
 			}
 		}
+		if testHookBeforeKeyShutdown != nil {
+			testHookBeforeKeyShutdown()
+		}
 		s.keys.shutdown()
+		close(s.shutdownDone)
 	})
 	return s.shutdownErr
 }

@@ -196,3 +196,30 @@ func TestListen_KeyLivesInLockedPage(t *testing.T) {
 		t.Fatal("the unlocked key is not in the reserved page")
 	}
 }
+
+func TestServer_RunReturnsAfterKeyIsZeroed(t *testing.T) {
+	// Hold Close between removing the socket and zeroing the key, the
+	// window a slow machine can stretch.
+	testHookBeforeKeyShutdown = func() { time.Sleep(50 * time.Millisecond) }
+	t.Cleanup(func() { testHookBeforeKeyShutdown = nil })
+
+	sockPath := tempSocketPath(t)
+	srv, done := serve(t, sockPath)
+	conn, _ := unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+
+	if err := Stop(conn); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned %v after stop, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server still running 2s after stop")
+	}
+	if unlocked, _, _ := srv.keys.Status(); unlocked {
+		t.Fatal("Run returned before the key was zeroed")
+	}
+}
