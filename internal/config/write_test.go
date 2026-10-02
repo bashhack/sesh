@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 func TestSetTopLevel(t *testing.T) {
@@ -69,5 +71,36 @@ func TestSetTopLevel_ResultParses(t *testing.T) {
 	}
 	if c.KeySource.Value != "keychain" || c.KeySource.Source != FromFile || c.AgentMaxLifetime.Value.String() != "2h0m0s" {
 		t.Errorf("key source %+v, max lifetime %v", c.KeySource, c.AgentMaxLifetime.Value)
+	}
+}
+
+func TestSetTopLevel_NeverWritesADuplicateKey(t *testing.T) {
+	for name, before := range map[string]string{
+		"quoted key":           "\"key_source\" = \"keychain\"\n",
+		"literal string value": "key_source = 'keychain'\n",
+		"no space before #":    "key_source = \"keychain\"#note\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			writeConfig(t, path, before)
+			err := SetTopLevel(path, "key_source", "password")
+			got, rerr := os.ReadFile(path)
+			if rerr != nil {
+				t.Fatal(rerr)
+			}
+			if err == nil {
+				// Updated in place: the result must parse with the new value.
+				var v struct {
+					KeySource string `toml:"key_source"`
+				}
+				if _, derr := toml.Decode(string(got), &v); derr != nil || v.KeySource != "password" {
+					t.Fatalf("file =\n%s\ndecode err %v, key_source %q", got, derr, v.KeySource)
+				}
+				return
+			}
+			if string(got) != before {
+				t.Errorf("a refused edit changed the file:\n%s", got)
+			}
+		})
 	}
 }
