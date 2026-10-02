@@ -212,7 +212,10 @@ func TestServer_RunReturnsAfterKeyIsZeroed(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned %v after stop, want nil", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("server still running 2s after stop")
 	}
