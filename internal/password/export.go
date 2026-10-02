@@ -101,7 +101,7 @@ func (m *Manager) exportJSON(w io.Writer, entries []Entry) (int, error) {
 		// ephemeral per iteration and out of scope after this block.
 		secure.SecureZeroBytes(secretBytes)
 
-		b, err := json.MarshalIndent(ee, "  ", "  ")
+		b, err := json.MarshalIndent(ee, "  ", "  ") //nolint:gosec // plaintext export writes secrets by design; --format encrypted is the protected alternative
 		if err != nil {
 			return count, err
 		}

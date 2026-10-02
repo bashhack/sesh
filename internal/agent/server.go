@@ -57,8 +57,8 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 		srv.keys.keyBuf = page
 	}
 
-	if _, err := os.Stat(sockPath); err == nil {
-		conn, derr := net.DialTimeout("unix", sockPath, dialTimeout)
+	if _, err := os.Stat(sockPath); err == nil { //nolint:gosec // socket path is the agent's own, from SESH_AUTH_SOCK or the user cache dir
+		conn, derr := net.DialTimeout("unix", sockPath, dialTimeout) //nolint:gosec // local Unix socket chosen by the same user, not a network target
 		if derr == nil {
 			closeOrLog(conn, "probe connection")
 			return nil, fmt.Errorf("agent already running at %s", sockPath)
@@ -66,7 +66,7 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 		if !errors.Is(derr, syscall.ECONNREFUSED) {
 			return nil, fmt.Errorf("socket %s is not a stale listener: %w", sockPath, derr)
 		}
-		if rerr := os.Remove(sockPath); rerr != nil {
+		if rerr := os.Remove(sockPath); rerr != nil { //nolint:gosec // socket path is the agent's own, from SESH_AUTH_SOCK or the user cache dir
 			return nil, fmt.Errorf("remove stale socket %s: %w", sockPath, rerr)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -81,9 +81,9 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", sockPath, err)
 	}
-	if err := os.Chmod(sockPath, 0o600); err != nil {
+	if err := os.Chmod(sockPath, 0o600); err != nil { //nolint:gosec // socket path is the agent's own, from SESH_AUTH_SOCK or the user cache dir
 		closeOrLog(lis, "listener after chmod failure")
-		if rerr := os.Remove(sockPath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+		if rerr := os.Remove(sockPath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) { //nolint:gosec // socket path is the agent's own, from SESH_AUTH_SOCK or the user cache dir
 			return nil, fmt.Errorf("chmod socket: %w (cleanup also failed: %v)", err, rerr)
 		}
 		return nil, fmt.Errorf("chmod socket: %w", err)
@@ -165,7 +165,7 @@ func (s *Server) Close() error {
 		if cerr := s.listener.Close(); cerr != nil && !errors.Is(cerr, net.ErrClosed) {
 			s.shutdownErr = fmt.Errorf("close listener: %w", cerr)
 		}
-		if rerr := os.Remove(s.sockPath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+		if rerr := os.Remove(s.sockPath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) { //nolint:gosec // socket path is the agent's own, from SESH_AUTH_SOCK or the user cache dir
 			if s.shutdownErr == nil {
 				s.shutdownErr = fmt.Errorf("remove socket: %w", rerr)
 			}

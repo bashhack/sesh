@@ -14,7 +14,7 @@ type closingKeySource struct {
 func (c *closingKeySource) Close() { c.closed = true }
 
 func TestKeySourceOracle_RoundTripAndClose(t *testing.T) {
-	ks := &closingKeySource{mockKeySource: mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)}}
+	ks := &closingKeySource{key: bytes.Repeat([]byte{0xAB}, 32)}
 	oracle := NewKeySourceOracle(ks)
 
 	ct, salt, err := oracle.EncryptEntry([]byte("secret"))

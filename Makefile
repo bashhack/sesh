@@ -122,7 +122,7 @@ lint:
 .PHONY: lint/golangci
 lint/golangci:
 	@echo 'Running golangci-lint...'
-	@REQUIRED_VERSION="2.6.2"; \
+	@REQUIRED_VERSION="2.14.0"; \
 	INSTALL_NEEDED=false; \
 	if ! command -v golangci-lint >/dev/null 2>&1; then \
 		echo "golangci-lint not found"; \

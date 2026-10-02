@@ -277,8 +277,8 @@ func TestSpawnAgent_StripsMasterPassword(t *testing.T) {
 }
 
 func firstLine(b []byte) string {
-	if i := bytes.IndexByte(b, '\n'); i >= 0 {
-		return string(b[:i])
+	if before, _, ok := bytes.Cut(b, []byte{'\n'}); ok {
+		return string(before)
 	}
 	return string(b)
 }

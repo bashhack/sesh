@@ -401,7 +401,7 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 			Type:     string(et),
 			Password: string(generated),
 		}
-		b, err := json.MarshalIndent(out, "", "  ")
+		b, err := json.MarshalIndent(out, "", "  ") //nolint:gosec // --format json prints the generated password by design
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("marshal JSON output: %w", err)
 		}
@@ -451,7 +451,7 @@ func (p *Provider) getPassword(mgr *password.Manager) (provider.Credentials, err
 			Type:     string(p.effectiveEntryType()),
 			Password: string(secretBytes),
 		}
-		b, err := json.MarshalIndent(out, "", "  ")
+		b, err := json.MarshalIndent(out, "", "  ") //nolint:gosec // --format json prints the requested password by design
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("marshal JSON output: %w", err)
 		}

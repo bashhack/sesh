@@ -75,7 +75,7 @@ func (a *App) LaunchSubshell(serviceName string) error {
 		// In my testing, tools like Python's virtualenv have similar behavior -
 		// swallowing events like Ctrl+C, for example.
 		var exitError *exec.ExitError
-		if errors.As(err, &exitError) {
+		if errors.As(err, &exitError) { //nolint:modernize // errors.AsType would leave a blank error value, which errcheck's check-blank rejects
 			if _, printErr := fmt.Fprintf(a.Stdout, "Exited secure shell\n"); printErr != nil {
 				return fmt.Errorf("failed to write to stdout: %w", printErr)
 			}
