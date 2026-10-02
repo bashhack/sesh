@@ -228,6 +228,8 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	destPath = ""
 	targetCreated = false
 	originalRenamed = false
+	// Locked before any output, so a failed write below can't skip it.
+	agentNote := lockAgentAfterRekey()
 
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRekeyed %d entries: %s → %s\n", result.Migrated, current, *target); perr != nil {
 		return perr
@@ -240,7 +242,11 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 			return perr
 		}
 	}
-	lockAgentAfterRekey(app.Stderr)
+	if agentNote != "" {
+		if _, perr := fmt.Fprintln(app.Stderr, agentNote); perr != nil {
+			return perr
+		}
+	}
 	return nil
 }
 
@@ -598,6 +604,8 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	}
 	sidecarRenamed = true
 	newSidecarMade = false
+	// Locked before any output, so a failed write below can't skip it.
+	agentNote := lockAgentAfterRekey()
 
 	// The .new.lock sentinel was created when destKS first ran
 	// initializeLocked. The .new sidecar it guarded has now been renamed
@@ -620,36 +628,40 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	if _, perr := fmt.Fprintln(app.Stderr, "Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available)."); perr != nil {
 		return perr
 	}
-	lockAgentAfterRekey(app.Stderr)
+	if agentNote != "" {
+		if _, perr := fmt.Fprintln(app.Stderr, agentNote); perr != nil {
+			return perr
+		}
+	}
 	return nil
 }
 
 // lockAgentAfterRekey locks a running, unlocked agent once the database is
-// under a new key. The agent may still hold the old key, which opens the
+// under a new key, and returns a line for the user ("" when there is
+// nothing to say). The agent may still hold the old key, which opens the
 // .pre-rekey or .pre-rotate backup without a password. No agent running is
-// the normal case and prints nothing. The rekey has already succeeded, so a
-// failure here is a warning that names the command to run instead.
-func lockAgentAfterRekey(w io.Writer) {
+// the normal case. The rekey has already succeeded, so a failure here is a
+// warning that names the command to run instead.
+func lockAgentAfterRekey() string {
 	conn, err := agent.DialExisting()
 	if err != nil {
-		if !agent.IsNotRunning(err) {
-			fmt.Fprintf(w, "warning: could not reach the sesh agent to lock it (%v); run `sesh agent lock`\n", err) //nolint:errcheck // best-effort warning
+		if agent.IsNotRunning(err) {
+			return ""
 		}
-		return
+		return fmt.Sprintf("warning: could not reach the sesh agent to lock it (%v); run `sesh agent lock`", err)
 	}
 	defer closeAgentConn(conn)
 	st, err := agent.Status(conn)
 	if err == nil && !st.Unlocked {
-		return
+		return ""
 	}
 	if err == nil {
 		err = agent.Lock(conn)
 	}
 	if err != nil {
-		fmt.Fprintf(w, "warning: could not lock the sesh agent (%v); run `sesh agent lock`\n", err) //nolint:errcheck // best-effort warning
-		return
+		return fmt.Sprintf("warning: could not lock the sesh agent (%v); run `sesh agent lock`", err)
 	}
-	fmt.Fprintln(w, "Locked the sesh agent, which held the old key.") //nolint:errcheck // best-effort notice
+	return "Locked the sesh agent, which held the old key."
 }
 
 // promptYesNo reads a y/N answer from stdin. Empty input (bare Enter) is "No"

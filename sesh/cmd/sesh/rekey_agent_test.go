@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -81,6 +83,45 @@ func TestRekey_PasswordToKeychainLocksAgent(t *testing.T) {
 	}
 }
 
+// failOnWriter fails any write containing marker and passes the rest.
+type failOnWriter struct{ marker string }
+
+func (w failOnWriter) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte(w.marker)) {
+		return 0, errors.New("stderr closed")
+	}
+	return len(p), nil
+}
+
+func TestRotate_LocksAgentEvenIfSummaryWriteFails(t *testing.T) {
+	populateUnlockedPasswordVault(t)
+
+	app, _ := rekeyTestApp("y\n")
+	app.Stderr = failOnWriter{marker: "Rotated"}
+	err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678"))
+	if err == nil || !strings.Contains(err.Error(), "stderr closed") {
+		t.Fatalf("err = %v, want the summary write failure", err)
+	}
+	if testAgentUnlocked(t) {
+		t.Error("agent still unlocked with the old key after a committed rotation")
+	}
+}
+
+func TestRekey_LocksAgentEvenIfSummaryWriteFails(t *testing.T) {
+	populateUnlockedPasswordVault(t)
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+
+	app, _ := rekeyTestApp("y\n")
+	app.Stderr = failOnWriter{marker: "Rekeyed"}
+	err := runRekey(app, []string{"--to=keychain"}, newKCMock(nil))
+	if err == nil || !strings.Contains(err.Error(), "stderr closed") {
+		t.Fatalf("err = %v, want the summary write failure", err)
+	}
+	if testAgentUnlocked(t) {
+		t.Error("agent still unlocked with the old key after a committed rekey")
+	}
+}
+
 func TestRotate_CancelledLeavesAgentUnlocked(t *testing.T) {
 	populateUnlockedPasswordVault(t)
 
@@ -108,13 +149,12 @@ func TestLockAgentAfterRekey(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.setup(t)
-			var out strings.Builder
-			lockAgentAfterRekey(&out)
-			if tc.wantSub == "" && out.Len() != 0 {
-				t.Errorf("output = %q, want none", out.String())
+			note := lockAgentAfterRekey()
+			if tc.wantSub == "" && note != "" {
+				t.Errorf("note = %q, want none", note)
 			}
-			if tc.wantSub != "" && !strings.Contains(out.String(), tc.wantSub) {
-				t.Errorf("output = %q, want it to contain %q", out.String(), tc.wantSub)
+			if tc.wantSub != "" && !strings.Contains(note, tc.wantSub) {
+				t.Errorf("note = %q, want it to contain %q", note, tc.wantSub)
 			}
 		})
 	}
