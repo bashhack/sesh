@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/migration"
@@ -227,6 +228,8 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	destPath = ""
 	targetCreated = false
 	originalRenamed = false
+	// Locked before any output, so a failed write below can't skip it.
+	agentNote := lockAgentAfterRekey()
 
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRekeyed %d entries: %s → %s\n", result.Migrated, current, *target); perr != nil {
 		return perr
@@ -236,6 +239,11 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	}
 	if msg := unusedKeyStateNote(current, dataDir); msg != "" {
 		if _, perr := fmt.Fprintln(app.Stderr, msg); perr != nil {
+			return perr
+		}
+	}
+	if agentNote != "" {
+		if _, perr := fmt.Fprintln(app.Stderr, agentNote); perr != nil {
 			return perr
 		}
 	}
@@ -596,6 +604,8 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	}
 	sidecarRenamed = true
 	newSidecarMade = false
+	// Locked before any output, so a failed write below can't skip it.
+	agentNote := lockAgentAfterRekey()
 
 	// The .new.lock sentinel was created when destKS first ran
 	// initializeLocked. The .new sidecar it guarded has now been renamed
@@ -618,7 +628,40 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	if _, perr := fmt.Fprintln(app.Stderr, "Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available)."); perr != nil {
 		return perr
 	}
+	if agentNote != "" {
+		if _, perr := fmt.Fprintln(app.Stderr, agentNote); perr != nil {
+			return perr
+		}
+	}
 	return nil
+}
+
+// lockAgentAfterRekey locks a running, unlocked agent once the database is
+// under a new key, and returns a line for the user ("" when there is
+// nothing to say). The agent may still hold the old key, which opens the
+// .pre-rekey or .pre-rotate backup without a password. No agent running is
+// the normal case. The rekey has already succeeded, so a failure here is a
+// warning that names the command to run instead.
+func lockAgentAfterRekey() string {
+	conn, err := agent.DialExisting()
+	if err != nil {
+		if agent.IsNotRunning(err) {
+			return ""
+		}
+		return fmt.Sprintf("warning: could not reach the sesh agent to lock it (%v); run `sesh agent lock`", err)
+	}
+	defer closeAgentConn(conn)
+	st, err := agent.Status(conn)
+	if err == nil && !st.Unlocked {
+		return ""
+	}
+	if err == nil {
+		err = agent.Lock(conn)
+	}
+	if err != nil {
+		return fmt.Sprintf("warning: could not lock the sesh agent (%v); run `sesh agent lock`", err)
+	}
+	return "Locked the sesh agent, which held the old key."
 }
 
 // promptYesNo reads a y/N answer from stdin. Empty input (bare Enter) is "No"
