@@ -298,8 +298,8 @@ In master password mode, sesh keeps the derived key in a per-user background pro
 
 **How it runs**
 
-1. The command that creates the vault asks for the new password twice. It does not start an agent.
-2. The next command that needs the key asks for the password once, starts `sesh agent` in the background (detached from your terminal, so it outlives it), and hands it the key.
+1. The command that creates the vault explains what it's creating and asks for the new password twice. It then starts `sesh agent` in the background (detached from your terminal, so it outlives it) and hands it the key. A script that creates the vault with `SESH_MASTER_PASSWORD` doesn't start an agent.
+2. Whenever the agent isn't running, or has locked itself, the next command that needs the key asks for the password once, starts or unlocks the agent, and hands it the key.
 3. Later commands, in any terminal, don't prompt while the agent is unlocked.
 4. The agent locks itself after 10 minutes without use, and 8 hours after each unlock however busy it is. It exits when it does, since a locked agent has nothing to serve; the next command starts a fresh one and prompts once. An agent that nobody unlocks (for example, you abandoned the prompt) exits after the same 10 minutes.
 5. After `sesh agent stop`, a crash, or a reboot, the next command starts a fresh agent and prompts.
