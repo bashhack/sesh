@@ -280,19 +280,29 @@ func setChoice(dst *Setting[string], v string, src Source, origin string, allowe
 
 // setPath accepts an absolute path or one starting with ~/.
 func setPath(dst *Setting[string], v string, src Source, origin string) error {
+	p, err := ResolvePath(v)
+	if err != nil {
+		return fmt.Errorf("%s = %q: %w", origin, v, err)
+	}
+	*dst = Setting[string]{Value: p, Source: src, Origin: origin}
+	return nil
+}
+
+// ResolvePath turns a path setting into a clean absolute path, expanding a
+// leading ~/. Relative paths are refused.
+func ResolvePath(v string) (string, error) {
 	p := v
 	if rest, ok := strings.CutPrefix(v, "~/"); ok {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return fmt.Errorf("%s = %q: expand ~: %w", origin, v, err)
+			return "", fmt.Errorf("expand ~: %w", err)
 		}
 		p = filepath.Join(home, rest)
 	}
 	if !filepath.IsAbs(p) {
-		return fmt.Errorf("%s = %q: want an absolute path or one starting with ~/", origin, v)
+		return "", errors.New("want an absolute path or one starting with ~/")
 	}
-	*dst = Setting[string]{Value: filepath.Clean(p), Source: src, Origin: origin}
-	return nil
+	return filepath.Clean(p), nil
 }
 
 func setDuration(dst *Setting[time.Duration], v string, src Source, origin string) error {

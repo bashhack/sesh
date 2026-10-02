@@ -37,7 +37,7 @@ func TestOpenSQLiteStore_RefusesStaleKeySourceAfterRekey(t *testing.T) {
 	// SESH_KEY_SOURCE still says password, and the old passwords.key is
 	// still there. Before the check, this unlocked and wrote entries under
 	// the old key.
-	wantOpenRefused(t, "this vault uses the keychain key source, but sesh is using password", "SESH_KEY_SOURCE=keychain")
+	wantOpenRefused(t, "this vault uses the keychain key source, but sesh is using password", `key_source = "keychain"`)
 }
 
 func TestOpenSQLiteStore_RefusesNewKeyNextToExistingVault(t *testing.T) {

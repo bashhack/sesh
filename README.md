@@ -273,6 +273,9 @@ sesh -service password -list
 #   password twice, and unlocks the background sesh agent, so later commands
 #   don't prompt until the agent locks itself
 
+# Optional guided setup: choose where secrets live, create the vault
+sesh init
+
 # See every setting and where it came from
 sesh config
 

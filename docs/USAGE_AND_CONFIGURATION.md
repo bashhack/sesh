@@ -125,6 +125,28 @@ max_lifetime = "8h"                     # 0 disables
 
 Each setting comes from, highest first: a command-line flag (`--backend`, `--key-source`, `--db-path`; the agent's timeouts also have `sesh agent` flags), its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
 
+`sesh init` writes the file for you. It's optional: with no config file, sesh uses an encrypted vault in the default location. It asks where secrets should live and where the vault goes, then creates the vault, so setup ends ready to use:
+
+```
+$ sesh init
+Where should sesh keep your secrets?
+  1) Encrypted vault, unlocked with a master password  (default)
+  2) macOS Keychain
+Choice [1]:
+Vault location [~/Library/Application Support/sesh/passwords.db]: ~/vaults/sesh.db
+Creating your sesh vault (first run)
+  ...
+Create master password: ****
+Confirm master password: ****
+Wrote ~/.config/sesh/config.toml
+Ready. Run `sesh config` to see your settings.
+```
+
+- On Linux, the Keychain choice isn't offered; init asks only for the vault location.
+- For scripts, give the choices as flags: `sesh init --backend sqlite --db-path ~/vaults/sesh.db`. The master password for the new vault then comes from `SESH_MASTER_PASSWORD`.
+- An existing config file is never replaced without `--force`.
+- An existing vault at the chosen location is opened, not recreated. If it uses a different key source, init stops and writes nothing.
+
 `sesh config` prints each effective setting and where it came from:
 
 ```
@@ -404,8 +426,7 @@ sesh --rekey --to password
 # Original DB preserved at /Users/alice/Library/Application Support/sesh/passwords.db.pre-rekey
 # Note: old keychain entry 'sesh-sqlite-encryption-key' is now unused. Remove it via Keychain Access if you want to clean up.
 
-# Then change the setting to match: remove key_source from ~/.config/sesh/config.toml
-# (password is the default), or set key_source = "password".
+# Set key_source = "password" in ~/.config/sesh/config.toml.
 sesh --service password --list
 ```
 
@@ -413,6 +434,7 @@ Behaviour:
 
 - **Atomic.** Either every entry is re-encrypted under the new source and the swap completes, or nothing changes. A copy failure cleans up the new key state and leaves the original database and original key state untouched.
 - **Recoverable.** On success, the original database is preserved at `<dbPath>.pre-rekey`. Verify the new state works, then remove the backup manually.
+- **Updates your setting.** When the key source came from the config file (or the default), rekey sets `key_source` in `~/.config/sesh/config.toml` to the new source, editing only that line so your comments stay. When it came from `SESH_KEY_SOURCE` or `--key-source`, rekey says what to change instead. If the setting is left stale, the vault's key check refuses the next command rather than using the old key.
 - **Old key state is left in place.** Switching from keychain → password leaves the keychain entry; switching from password → keychain leaves the sidecar. Both become unused but are not auto-deleted (so you have an additional rollback path). The summary message points at how to clean them up.
 - **Refuses if the target is already initialised.** If a sidecar already exists for `--to password`, or a keychain entry already exists for `--to keychain`, rekey aborts and asks you to clean up manually before retrying.
 - **`--to password` while already in password mode is the rotation case.** See "Rotating your master password" below. The `keychain → keychain` analogue (rotating the random keychain key in place) is not yet supported.

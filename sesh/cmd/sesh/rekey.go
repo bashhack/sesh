@@ -251,6 +251,9 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 			return perr
 		}
 	}
+	if _, perr := fmt.Fprintln(app.Stderr, updateKeySourceSetting(st, *target)); perr != nil {
+		return perr
+	}
 	if agentNote != "" {
 		if _, perr := fmt.Fprintln(app.Stderr, agentNote); perr != nil {
 			return perr
@@ -266,6 +269,29 @@ func appendErr(primary error, label string, secondary error) error {
 		return fmt.Errorf("%s: %w", label, secondary)
 	}
 	return fmt.Errorf("%w (%s also failed: %v)", primary, label, secondary)
+}
+
+// updateKeySourceSetting makes the key source setting match a vault just
+// rekeyed to target, and returns a line saying what it did or what the user
+// must change. The config file is edited in place (comments kept) when the
+// setting came from it, or from the default when target isn't the default.
+// An env var or flag can't be changed from here, so that's an instruction.
+// If the setting is left stale, the vault's key check refuses the next
+// command rather than letting it write with the old key.
+func updateKeySourceSetting(st *config.Config, target string) string {
+	ks := st.KeySource
+	switch {
+	case ks.Source == config.FromEnv:
+		return fmt.Sprintf("Change %s to %q (or remove it) before the next command.", ks.Origin, target)
+	case ks.Source == config.FromFlag:
+		return fmt.Sprintf("Use --key-source %s from now on, or set key_source = %q in %s.", target, target, tildePath(st.Path))
+	case ks.Source == config.FromDefault && target == config.KeySourcePassword:
+		return "The key source is now the default, master password."
+	}
+	if err := config.SetTopLevel(st.Path, "key_source", target); err != nil {
+		return fmt.Sprintf("warning: could not update %s (%v); set key_source = %q there yourself.", tildePath(st.Path), err, target)
+	}
+	return fmt.Sprintf("Set key_source = %q in %s.", target, tildePath(st.Path))
 }
 
 // newKeySourceByName constructs a KeySource without unlocking or initialising

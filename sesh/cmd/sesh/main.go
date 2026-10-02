@@ -114,7 +114,7 @@ func needsCredentialStore(args []string) bool {
 	return true
 }
 
-// subcommand returns the subcommand args name ("agent" or "config") and
+// subcommand returns the subcommand args name ("agent", "config", or "init") and
 // the arguments after it, or "" and nil. Only the first argument counts,
 // so an entry that happens to be named "agent" (-service-name agent) is
 // never mistaken for one.
@@ -123,7 +123,7 @@ func subcommand(args []string) (name string, rest []string) {
 		return "", nil
 	}
 	switch name, rest := args[1], args[2:]; name {
-	case "agent", "config":
+	case "agent", "config", "init":
 		return name, rest
 	}
 	return "", nil
@@ -287,8 +287,8 @@ func refuseNewKeyForExistingVault(dbPath string) error {
 	}
 	return fmt.Errorf("a vault exists at %s, but its key file %s is missing. "+
 		"If passwords.key was lost, restore it from a backup. "+
-		"If this vault uses the Keychain key, set SESH_KEY_SOURCE=keychain. "+
-		"To switch it to a master password, run: SESH_KEY_SOURCE=keychain sesh --rekey --to password",
+		"If this vault uses the Keychain key, set key_source = \"keychain\" in the config file. "+
+		"To switch it to a master password, run: sesh --key-source keychain --rekey --to password",
 		dbPath, sidecar)
 }
 
@@ -367,12 +367,12 @@ func withKeyHint(err error) error {
 	}
 	switch {
 	case wk.VaultSource != "" && wk.VaultSource != wk.Source:
-		return fmt.Errorf("%w. Set SESH_KEY_SOURCE=%s to use this vault, or switch it with: SESH_KEY_SOURCE=%s sesh --rekey --to %s",
-			err, wk.VaultSource, wk.VaultSource, wk.Source)
+		return fmt.Errorf("%w. Set key_source = %q in the config file (or SESH_KEY_SOURCE=%s) to use this vault, or switch it with: sesh --key-source %s --rekey --to %s",
+			err, wk.VaultSource, wk.VaultSource, wk.VaultSource, wk.Source)
 	case wk.Source == "password":
-		return fmt.Errorf("%w. If passwords.key was replaced, restore the original. If you switched key sources with sesh --rekey, set SESH_KEY_SOURCE to the new one", err)
+		return fmt.Errorf("%w. If passwords.key was replaced, restore the original. If you switched key sources with sesh --rekey, set key_source to the new one", err)
 	default:
-		return fmt.Errorf("%w. If the Keychain entry %q was replaced, restore the original. If you switched key sources with sesh --rekey, set SESH_KEY_SOURCE to the new one", err, encKeyService)
+		return fmt.Errorf("%w. If the Keychain entry %q was replaced, restore the original. If you switched key sources with sesh --rekey, set key_source to the new one", err, encKeyService)
 	}
 }
 
@@ -840,6 +840,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "init":
+		if err := runInit(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	}
 
 	// Early exit for version/list-services that don't need service
@@ -1042,6 +1047,7 @@ func (a *App) PrintGettingStarted() error {
 		"  sesh -service totp -setup       add a TOTP account",
 		"  sesh -service aws -setup        set up AWS MFA",
 		"  sesh -service password -help    store passwords, API keys, and notes",
+		"  sesh init                       choose where and how sesh stores secrets (optional)",
 		"  sesh --help                     all options",
 		"",
 	}
@@ -1072,6 +1078,7 @@ func (a *App) PrintUsage() error {
 		"  --key-source keychain|password  Key source for the sqlite backend",
 		"  --db-path path                Vault location for the sqlite backend",
 		"\nCommands:",
+		"  sesh init                     Choose where and how sesh stores secrets",
 		"  sesh config                   Show settings and where each comes from",
 		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"\nExamples:",
