@@ -94,7 +94,7 @@ Derives the master key from a user-supplied passphrase via Argon2id. **No keycha
 
 ##### Sesh agent
 
-In password mode, sesh starts a per-user background process (`sesh agent`) on first use. The agent holds the derived key in memory and performs entry encryption and decryption on the CLI's behalf; the key itself never crosses the socket.
+In password mode, once the vault exists, the first command that needs the key starts a per-user background process (`sesh agent`). The run that creates the vault does not start it. The agent holds the derived key in memory and performs entry encryption and decryption on the CLI's behalf; the key itself never crosses the socket.
 
 - **Socket**: `<user-cache-dir>/sesh/agent.sock` (override with `SESH_AUTH_SOCK`), mode 0600 in a 0700 directory. The agent also checks the peer's UID on every connection (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS) and rejects other users
 - **Unlock**: the CLI prompts, then sends the password and the sidecar's public salt, params, and verify blob to the agent, which derives and checks the key. Unlocks run one at a time

@@ -208,7 +208,7 @@ export SESH_MASTER_PASSWORD='...'
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 ```
 
-The first command that needs the key starts a per-user `sesh agent` in the background. The agent holds the derived key so later commands don't prompt; it stays unlocked until it exits. While it is unlocked, commands don't check the password. With `SESH_MASTER_PASSWORD` set, sesh skips the agent entirely: the password is checked on every run and no background process is left behind, which is what scripts and CI want. To lock, stop it (`pkill -f 'sesh agent'`) — the next command starts a fresh agent and prompts again. If the agent can't be started, sesh prints a warning and prompts on every run instead. See [Sesh agent](SECURITY_MODEL.md#sesh-agent) for what the agent does and doesn't protect.
+The first command that needs the key after the vault exists prompts once and starts a per-user `sesh agent` in the background; the run that creates the vault does not start one. The agent holds the derived key so later commands don't prompt; it stays unlocked until it exits. While it is unlocked, commands don't check the password. With `SESH_MASTER_PASSWORD` set, sesh skips the agent entirely: the password is checked on every run and no background process is left behind, which is what scripts and CI want. To lock, stop it (`pkill -f 'sesh agent'`) — the next command starts a fresh agent and prompts again. If the agent can't be started, sesh prints a warning and prompts on every run instead. See [Sesh agent](SECURITY_MODEL.md#sesh-agent) for what the agent does and doesn't protect.
 
 Secrets are limited to 1 MiB each.
 
