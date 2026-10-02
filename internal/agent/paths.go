@@ -32,20 +32,14 @@ func SocketPath() (string, error) {
 }
 
 // LogPath returns the file the auto-spawned agent's stderr is redirected
-// to. Kept separate from the socket path: socket lives in cache dir
-// (ephemeral, OS may clean), logs live in a state dir (persistent across
-// reboots so post-mortem debugging works).
+// to: <user cache dir>/sesh/logs/agent.log (~/Library/Caches on macOS,
+// $XDG_CACHE_HOME or ~/.cache on Linux). The OS may clean the cache dir;
+// the log is for diagnosing recent runs, not a permanent record.
 func LogPath() (string, error) {
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("locate user cache dir: %w", err)
 	}
-	// macOS conventions put logs under ~/Library/Logs/sesh; Linux's XDG
-	// state dir is the analog. os.UserCacheDir() returns paths under
-	// ~/Library/Caches on macOS and $XDG_CACHE_HOME on Linux — using
-	// a sibling "logs" directory under the same parent keeps platform
-	// branching out of this function while still landing in a sensible
-	// location on each.
 	dir := filepath.Join(cache, "sesh", "logs")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create agent log dir %s: %w", dir, err)

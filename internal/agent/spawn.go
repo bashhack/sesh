@@ -388,19 +388,38 @@ func withoutMasterPassword(env []string) []string {
 	return dst
 }
 
-// openAgentLog opens the agent log file for appending. Caller is
-// responsible for closing the *os.File when done (or letting it be
-// inherited by a spawned process).
+// maxAgentLogSize is the size past which openAgentLog starts a fresh log,
+// keeping the previous one as agent.log.1.
+const maxAgentLogSize = 1 << 20 // 1 MiB
+
+// openAgentLog opens the agent log file for appending, first moving a
+// log over maxAgentLogSize aside. Caller is responsible for closing the
+// *os.File when done (or letting it be inherited by a spawned process).
 func openAgentLog() (*os.File, error) {
 	path, err := LogPath()
 	if err != nil {
 		return nil, err
 	}
+	rotateLog(path)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600) //nolint:gosec // path is <cache>/sesh/logs/agent.log; cache dir is per-user
 	if err != nil {
 		return nil, fmt.Errorf("open agent log %s: %w", path, err)
 	}
 	return f, nil
+}
+
+// rotateLog renames path to path.1, replacing any older one, when path is
+// larger than maxAgentLogSize. EnsureAgent calls it under the spawn lock,
+// when no agent is running to write to the file. A failure only warns: an
+// oversized log is no reason to refuse to start the agent.
+func rotateLog(path string) {
+	info, err := os.Stat(path) //nolint:gosec // path is <cache>/sesh/logs/agent.log
+	if err != nil || info.Size() <= maxAgentLogSize {
+		return
+	}
+	if err := os.Rename(path, path+".1"); err != nil { //nolint:gosec // path is <cache>/sesh/logs/agent.log
+		fmt.Fprintf(os.Stderr, "warning: rotate agent log: %v\n", err) //nolint:errcheck // best-effort warning
+	}
 }
 
 // spawnLock is the flock-backed sentinel used to serialize concurrent

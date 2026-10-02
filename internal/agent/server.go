@@ -23,6 +23,9 @@ type Server struct {
 	startedAt   time.Time
 	shutdownErr error
 	listener    *net.UnixListener
+	log         *agentLog
+	// logOut is where log goes; set by withLogOutput, stderr otherwise.
+	logOut io.Writer
 	// shutdownDone is closed when Close has finished: listener closed,
 	// socket removed, key zeroed. Run waits on it before returning.
 	shutdownDone chan struct{}
@@ -47,6 +50,11 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 	for _, opt := range opts {
 		opt(srv)
 	}
+	if srv.logOut == nil {
+		srv.logOut = os.Stderr
+	}
+	srv.log = &agentLog{w: srv.logOut, now: srv.keys.clock().Now}
+	srv.keys.log = srv.log
 	// Reserved before the socket exists, so an agent that can't protect
 	// its key never accepts a connection.
 	if srv.lockKeyMemory {
@@ -60,7 +68,7 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 	if _, err := os.Stat(sockPath); err == nil { //nolint:gosec // socket path is the agent's own, from SESH_AUTH_SOCK or the user cache dir
 		conn, derr := net.DialTimeout("unix", sockPath, dialTimeout) //nolint:gosec // local Unix socket chosen by the same user, not a network target
 		if derr == nil {
-			closeOrLog(conn, "probe connection")
+			srv.log.closeOrLog(conn, "probe connection")
 			return nil, fmt.Errorf("agent already running at %s", sockPath)
 		}
 		if !errors.Is(derr, syscall.ECONNREFUSED) {
@@ -82,7 +90,7 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 		return nil, fmt.Errorf("listen %s: %w", sockPath, err)
 	}
 	if err := os.Chmod(sockPath, 0o600); err != nil { //nolint:gosec // socket path is the agent's own, from SESH_AUTH_SOCK or the user cache dir
-		closeOrLog(lis, "listener after chmod failure")
+		srv.log.closeOrLog(lis, "listener after chmod failure")
 		if rerr := os.Remove(sockPath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) { //nolint:gosec // socket path is the agent's own, from SESH_AUTH_SOCK or the user cache dir
 			return nil, fmt.Errorf("chmod socket: %w (cleanup also failed: %v)", err, rerr)
 		}
@@ -115,19 +123,25 @@ func (s *Server) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	s.log.printf("listening at %s (pid %d)", s.sockPath, os.Getpid())
 	go func() {
 		for {
 			select {
 			case <-runCtx.Done():
+				// Run's own deferred cancel also lands here, after Close.
+				if ctx.Err() != nil {
+					s.log.printf("stopping (context cancelled)")
+				}
 			case sig := <-sigCh:
 				if sig == syscall.SIGUSR1 {
 					s.keys.lock()
-					fmt.Fprintln(os.Stderr, "sesh agent: locked (SIGUSR1)") //nolint:errcheck // best-effort log line
+					s.log.printf("locked (SIGUSR1)")
 					continue
 				}
+				s.log.printf("stopping (%v)", sig)
 			}
 			if err := s.Close(); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: agent shutdown: %v\n", err) //nolint:errcheck // best-effort warning
+				s.log.printf("warning: agent shutdown: %v", err)
 			}
 			return
 		}
@@ -143,6 +157,7 @@ func (s *Server) Run(ctx context.Context) error {
 				<-s.shutdownDone
 				return nil
 			}
+			s.log.printf("stopping: accept: %v", err)
 			if cerr := s.Close(); cerr != nil {
 				return fmt.Errorf("accept: %w (shutdown: %v)", err, cerr)
 			}
@@ -174,6 +189,11 @@ func (s *Server) Close() error {
 			testHookBeforeKeyShutdown()
 		}
 		s.keys.shutdown()
+		if s.shutdownErr != nil {
+			s.log.printf("stopped, with errors: %v", s.shutdownErr)
+		} else {
+			s.log.printf("stopped")
+		}
 		close(s.shutdownDone)
 	})
 	return s.shutdownErr
@@ -184,10 +204,11 @@ func (s *Server) Close() error {
 // peer disconnects. Each connection runs on its own goroutine; handleConn
 // closes the connection on exit.
 func (s *Server) handleConn(conn *net.UnixConn) {
-	defer closeOrLog(conn, "client connection")
+	defer s.log.closeOrLog(conn, "client connection")
 
 	if err := checkPeerCred(conn); err != nil {
-		sendErrorAndIgnore(conn, ErrCodePeerCredMismatch, err.Error())
+		s.log.printf("refused connection: %v", err)
+		s.sendError(conn, ErrCodePeerCredMismatch, err.Error())
 		return
 	}
 
@@ -197,16 +218,17 @@ func (s *Server) handleConn(conn *net.UnixConn) {
 	env, raw, err := readEnvelope(r)
 	if err != nil {
 		if !isCleanDisconnect(err) {
-			sendErrorAndIgnore(conn, readErrCode(err), err.Error())
+			s.sendError(conn, readErrCode(err), err.Error())
 		}
 		return
 	}
 	if env.Type != TypeHello {
-		sendErrorAndIgnore(conn, ErrCodeUnknownMessageType,
+		s.sendError(conn, ErrCodeUnknownMessageType,
 			fmt.Sprintf("first message must be %q, got %q", TypeHello, env.Type))
 		return
 	}
 	if env.Version != ProtocolVersion {
+		s.log.printf("refused client speaking protocol version %d", env.Version)
 		// Name this process so a newer client, which can't send stop to
 		// an older agent, can tell the user what to kill.
 		if err := writeJSON(conn, ErrorResponse{
@@ -216,13 +238,13 @@ func (s *Server) handleConn(conn *net.UnixConn) {
 			Message:  fmt.Sprintf("client version %d, server %d", env.Version, ProtocolVersion),
 			AgentPID: os.Getpid(),
 		}); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: write error response: %v\n", err) //nolint:errcheck // best-effort warning
+			s.log.printf("warning: write error response: %v", err)
 		}
 		return
 	}
 	var hello HelloRequest
 	if err := decodeMessage(raw, &hello); err != nil {
-		sendErrorAndIgnore(conn, ErrCodeInternal, err.Error())
+		s.sendError(conn, ErrCodeInternal, err.Error())
 		return
 	}
 	if err := writeJSON(conn, HelloResponse{
@@ -240,7 +262,7 @@ func (s *Server) handleConn(conn *net.UnixConn) {
 		env, raw, err := readEnvelope(r)
 		if err != nil {
 			if !isCleanDisconnect(err) {
-				sendErrorAndIgnore(conn, readErrCode(err), err.Error())
+				s.sendError(conn, readErrCode(err), err.Error())
 			}
 			return
 		}
@@ -254,7 +276,7 @@ func (s *Server) handleConn(conn *net.UnixConn) {
 // should close (write failure or a fatal version mismatch).
 func (s *Server) dispatch(conn *net.UnixConn, env envelope, raw []byte) bool {
 	if env.Version != ProtocolVersion {
-		sendErrorAndIgnore(conn, ErrCodeProtocolVersionMismatch,
+		s.sendError(conn, ErrCodeProtocolVersionMismatch,
 			fmt.Sprintf("client version %d, server %d", env.Version, ProtocolVersion))
 		return false
 	}
@@ -274,6 +296,7 @@ func (s *Server) dispatch(conn *net.UnixConn, env envelope, raw []byte) bool {
 		return s.dispatchStatus(conn)
 	case TypeLock:
 		s.keys.lock()
+		s.log.printf("locked (lock request)")
 		return writeJSON(conn, LockResponse{Type: TypeLockAck, Version: ProtocolVersion}) == nil
 	case TypeStop:
 		s.dispatchStop(conn)
@@ -293,11 +316,12 @@ func (s *Server) dispatchUnlock(conn *net.UnixConn, raw []byte) bool {
 	var req UnlockRequest
 	if err := decodeMessage(raw, &req); err != nil {
 		secure.SecureZeroBytes(req.Password)
-		sendErrorAndIgnore(conn, ErrCodeBadRequest, err.Error())
+		s.sendError(conn, ErrCodeBadRequest, err.Error())
 		return true
 	}
 	err := s.keys.Unlock(req.Password, req.Salt, req.Verify, database.Argon2idParams(req.Params))
 	if err == nil {
+		s.log.printf("unlocked")
 		return writeJSON(conn, UnlockResponse{
 			Type:    TypeUnlockAck,
 			Version: ProtocolVersion,
@@ -307,22 +331,26 @@ func (s *Server) dispatchUnlock(conn *net.UnixConn, raw []byte) bool {
 	switch {
 	case errors.Is(err, errWrongPassword):
 		code = ErrCodeWrongPassword
+		s.log.printf("unlock refused: wrong password")
 	case errors.Is(err, errBadRequest):
 		code = ErrCodeBadRequest
+		s.log.printf("unlock refused: %v", err)
+	default:
+		s.log.printf("unlock failed: %v", err)
 	}
-	sendErrorAndIgnore(conn, code, err.Error())
+	s.sendError(conn, code, err.Error())
 	return true
 }
 
 func (s *Server) dispatchDecrypt(conn *net.UnixConn, raw []byte) bool {
 	var req DecryptRequest
 	if err := decodeMessage(raw, &req); err != nil {
-		sendErrorAndIgnore(conn, ErrCodeBadRequest, err.Error())
+		s.sendError(conn, ErrCodeBadRequest, err.Error())
 		return true
 	}
 	plain, err := s.keys.Decrypt(req.Ciphertext, req.Salt, req.UnlockID)
 	if err != nil {
-		sendErrorAndIgnore(conn, keystoreErrCode(err), err.Error())
+		s.sendError(conn, keystoreErrCode(err), err.Error())
 		return true
 	}
 	defer secure.SecureZeroBytes(plain)
@@ -338,13 +366,13 @@ func (s *Server) dispatchEncrypt(conn *net.UnixConn, raw []byte) bool {
 	var req EncryptRequest
 	if err := decodeMessage(raw, &req); err != nil {
 		secure.SecureZeroBytes(req.Plaintext)
-		sendErrorAndIgnore(conn, ErrCodeBadRequest, err.Error())
+		s.sendError(conn, ErrCodeBadRequest, err.Error())
 		return true
 	}
 	defer secure.SecureZeroBytes(req.Plaintext)
 	ciphertext, salt, err := s.keys.Encrypt(req.Plaintext, req.UnlockID)
 	if err != nil {
-		sendErrorAndIgnore(conn, keystoreErrCode(err), err.Error())
+		s.sendError(conn, keystoreErrCode(err), err.Error())
 		return true
 	}
 	return writeJSON(conn, EncryptResponse{
@@ -379,12 +407,13 @@ func (s *Server) dispatchStatus(conn *net.UnixConn) bool {
 // connection open, so the reply still goes out. If shutdown fails, the
 // client gets the error instead of stop_ack.
 func (s *Server) dispatchStop(conn *net.UnixConn) {
+	s.log.printf("stopping (stop request)")
 	if err := s.Close(); err != nil {
-		sendErrorAndIgnore(conn, ErrCodeInternal, fmt.Sprintf("shutdown incomplete: %v", err))
+		s.sendError(conn, ErrCodeInternal, fmt.Sprintf("shutdown incomplete: %v", err))
 		return
 	}
 	if err := writeJSON(conn, StopResponse{Type: TypeStopAck, Version: ProtocolVersion}); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: write stop_ack: %v\n", err) //nolint:errcheck // best-effort warning
+		s.log.printf("warning: write stop_ack: %v", err)
 	}
 }
 
@@ -410,18 +439,17 @@ func keystoreErrCode(err error) string {
 	}
 }
 
-// sendErrorAndIgnore writes an ErrorResponse and silently discards any
-// write failure — by the time we're sending an error, the client has
-// already misbehaved or the connection is dying, so the secondary
-// failure isn't actionable.
-func sendErrorAndIgnore(conn *net.UnixConn, code, message string) {
+// sendError writes an ErrorResponse. A write failure is only logged: by
+// the time we're sending an error, the client has already misbehaved or
+// the connection is dying, so the secondary failure isn't actionable.
+func (s *Server) sendError(conn *net.UnixConn, code, message string) {
 	if err := writeJSON(conn, ErrorResponse{
 		Type:    TypeError,
 		Version: ProtocolVersion,
 		Code:    code,
 		Message: message,
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: write error response: %v\n", err) //nolint:errcheck // best-effort warning
+		s.log.printf("warning: write error response: %v", err)
 	}
 }
 

@@ -1,6 +1,9 @@
 package agent
 
-import "time"
+import (
+	"io"
+	"time"
+)
 
 // Default auto-lock timeouts. Either can be disabled with 0.
 const (
@@ -21,6 +24,11 @@ func WithIdleTimeout(d time.Duration) Option {
 // is. 0 disables the limit.
 func WithMaxLifetime(d time.Duration) Option {
 	return func(s *Server) { s.keys.maxLifetime = d }
+}
+
+// withLogOutput sends the agent log to w instead of stderr. Tests only.
+func withLogOutput(w io.Writer) Option {
+	return func(s *Server) { s.logOut = w }
 }
 
 // withClock replaces the keystore's time source. Tests only.

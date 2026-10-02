@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -55,6 +54,7 @@ type keystore struct {
 	// last installed.
 	lastUnlock time.Time
 	clk        clock
+	log        *agentLog
 	idleTimer  stopper
 	maxTimer   stopper
 	// keyBuf is the key's storage, kept for the life of the keystore and
@@ -308,7 +308,7 @@ func (k *keystore) autoLock(gen uint64, idle bool) {
 		reason = "idle timeout"
 	}
 	k.clearLocked()
-	fmt.Fprintf(os.Stderr, "sesh agent: locked after %s\n", reason) //nolint:errcheck // best-effort log line
+	k.log.printf("locked after %s", reason)
 }
 
 func (k *keystore) clock() clock {
