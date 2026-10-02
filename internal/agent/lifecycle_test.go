@@ -223,3 +223,26 @@ func TestServer_RunReturnsAfterKeyIsZeroed(t *testing.T) {
 		t.Fatal("Run returned before the key was zeroed")
 	}
 }
+
+func TestServer_StopRepliesAfterShutdown(t *testing.T) {
+	// Slow the key zeroing so a reply sent before shutdown would arrive
+	// while the agent is still unlocked and listening.
+	testHookBeforeKeyShutdown = func() { time.Sleep(50 * time.Millisecond) }
+	t.Cleanup(func() { testHookBeforeKeyShutdown = nil })
+
+	sockPath := tempSocketPath(t)
+	srv, _ := serve(t, sockPath)
+	conn, _ := unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+
+	if err := Stop(conn); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	// No waiting: stop_ack must mean the agent is already gone.
+	if unlocked, _, _ := srv.keys.Status(); unlocked {
+		t.Fatal("stop_ack arrived before the key was zeroed")
+	}
+	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stop_ack arrived before the socket was removed: %v", err)
+	}
+}

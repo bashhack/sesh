@@ -364,14 +364,16 @@ func (s *Server) dispatchStatus(conn *net.UnixConn) bool {
 	}) == nil
 }
 
-// dispatchStop acknowledges a stop and then shuts the server down. The
-// reply goes first so the client sees success before the socket closes.
+// dispatchStop shuts the server down and then acknowledges, so a client
+// that sees stop_ack can rely on the agent being gone: no listener, no
+// socket file, key zeroed. Closing the listener leaves this accepted
+// connection open, so the reply still goes out.
 func (s *Server) dispatchStop(conn *net.UnixConn) {
-	if err := writeJSON(conn, StopResponse{Type: TypeStopAck, Version: ProtocolVersion}); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: write stop_ack: %v\n", err) //nolint:errcheck // best-effort warning
-	}
 	if err := s.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: agent shutdown: %v\n", err) //nolint:errcheck // best-effort warning
+	}
+	if err := writeJSON(conn, StopResponse{Type: TypeStopAck, Version: ProtocolVersion}); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: write stop_ack: %v\n", err) //nolint:errcheck // best-effort warning
 	}
 }
 
