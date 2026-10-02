@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -60,5 +61,32 @@ func TestMapLockedPage_ReturnsZeroedPage(t *testing.T) {
 	}
 	if err := unix.Munmap(b); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMapLockedPage_FailsWithoutMemlock(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the locked-memory limit (CAP_IPC_LOCK)")
+	}
+	var orig unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_MEMLOCK, &orig); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &orig); err != nil {
+			t.Errorf("restore memlock limit: %v", err)
+		}
+	})
+	if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &unix.Rlimit{Cur: 0, Max: orig.Max}); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := mapLockedPage()
+	if err == nil {
+		_ = unix.Munmap(b) //nolint:errcheck // cleanup after an unexpected success
+		t.Fatal("mapLockedPage succeeded with a zero memlock limit")
+	}
+	if !strings.Contains(err.Error(), "lock key page in memory") {
+		t.Fatalf("err = %v, want the lock failure", err)
 	}
 }

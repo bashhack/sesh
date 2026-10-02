@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -250,5 +253,73 @@ func TestAgentDaemon_RefusesWhenHardeningFails(t *testing.T) {
 	}
 	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("socket exists after a refused start: %v", err)
+	}
+}
+
+// startRefusingAgent acks hello on every connection and answers every
+// other request with internal_error.
+func startRefusingAgent(t *testing.T) {
+	t.Helper()
+	sock := tempAgentSocket(t)
+	lis, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := lis.Close(); err != nil {
+			t.Errorf("close fake agent: %v", err)
+		}
+	})
+	go func() {
+		for {
+			c, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close() //nolint:errcheck // fake agent teardown
+				r := bufio.NewReader(c)
+				for {
+					line, err := r.ReadBytes('\n')
+					if err != nil {
+						return
+					}
+					var env struct {
+						Type string `json:"type"`
+					}
+					if json.Unmarshal(line, &env) != nil {
+						return
+					}
+					var resp any = agent.ErrorResponse{Type: agent.TypeError, Version: agent.ProtocolVersion, Code: agent.ErrCodeInternal, Message: "boom"}
+					if env.Type == agent.TypeHello {
+						resp = agent.HelloResponse{Type: agent.TypeHelloAck, Version: agent.ProtocolVersion}
+					}
+					b, _ := json.Marshal(resp) //nolint:errcheck // fixed shapes always marshal
+					if _, err := c.Write(append(b, '\n')); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	t.Setenv("SESH_AUTH_SOCK", sock)
+}
+
+func TestAgentControl_ReportsAgentErrors(t *testing.T) {
+	startRefusingAgent(t)
+	for _, cmd := range []string{"lock", "status", "stop"} {
+		err := runAgent(agentTestApp(), []string{cmd})
+		if err == nil || !strings.Contains(err.Error(), cmd+": internal_error: boom") {
+			t.Errorf("sesh agent %s err = %v, want the agent's error", cmd, err)
+		}
+	}
+}
+
+func TestAgentDaemon_RejectsBadMaxLifetime(t *testing.T) {
+	t.Setenv("SESH_AUTH_SOCK", tempAgentSocket(t))
+	t.Setenv("SESH_AGENT_MAX_LIFETIME", "forever")
+	err := runAgent(agentTestApp(), nil)
+	if err == nil || !strings.Contains(err.Error(), "SESH_AGENT_MAX_LIFETIME") {
+		t.Fatalf("err = %v, want SESH_AGENT_MAX_LIFETIME", err)
 	}
 }
