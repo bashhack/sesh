@@ -2,7 +2,7 @@
 
 This document provides detailed instructions for using and configuring sesh for secure authentication workflows across multiple providers.
 
-> **Requirements:** macOS for the default Keychain backend. The SQLite backend (`SESH_BACKEND=sqlite`) works cross-platform. For the AWS provider, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
+> **Requirements:** macOS for the default Keychain backend. The SQLite backend (`SESH_BACKEND=sqlite`) also runs on Linux. For the AWS provider, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
 
 ## Workflow Overview
 
@@ -186,7 +186,7 @@ The matrix:
 |---|---|---|---|---|
 | unset / `keychain` | (ignored) | macOS Keychain | macOS Keychain | macOS only |
 | `sqlite` | unset / `keychain` | SQLite file (encrypted) | macOS Keychain (256-bit random) | macOS only |
-| `sqlite` | `password` | SQLite file (encrypted) | Derived from master password via Argon2id; salt in `passwords.key` sidecar (0600) | macOS, Linux, Windows |
+| `sqlite` | `password` | SQLite file (encrypted) | Derived from master password via Argon2id; salt in `passwords.key` sidecar (0600) | macOS, Linux |
 
 ### Using the master password mode
 

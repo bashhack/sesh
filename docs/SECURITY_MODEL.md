@@ -78,7 +78,7 @@ The 256-bit master encryption key is stored in the macOS Keychain, combining OS-
 
 ##### Master password key source (`SESH_KEY_SOURCE=password`)
 
-Derives the master key from a user-supplied passphrase via Argon2id. **No keychain involvement**, so the SQLite backend is fully cross-platform in this mode.
+Derives the master key from a user-supplied passphrase via Argon2id. **No keychain involvement**, so in this mode the SQLite backend runs on Linux as well as macOS.
 
 - **KDF**: Argon2id with `t=3, m=64 MiB, p=4, keyLen=32`. These parameters exceed OWASP 2023 minimums (`t=1, m=47 MiB, p=1`) and make offline brute-force expensive (~200 ms per attempt)
 - **Sidecar file** `passwords.key` (next to the DB, 0600 permissions): stores the KDF salt (32 random bytes), algorithm params, and a verification blob. **No secrets.** Same public-info model as bcrypt/scrypt — salt and params are safe to expose
