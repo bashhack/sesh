@@ -346,3 +346,28 @@ func TestDialAndHandshake_RejectionWithoutPIDStaysGeneric(t *testing.T) {
 		t.Fatalf("err = %v, want the generic rejection", err)
 	}
 }
+
+func TestDialAndHandshake_MismatchWithoutUsablePIDNeverSuggestsKill(t *testing.T) {
+	for _, tc := range []struct {
+		resp any
+		name string
+	}{
+		{HelloResponse{Type: TypeHelloAck, Version: 7}, "hello_ack without pid"},
+		{HelloResponse{Type: TypeHelloAck, Version: 7, AgentPID: -1}, "hello_ack with negative pid"},
+		{ErrorResponse{Type: TypeError, Version: 7, Code: ErrCodeProtocolVersionMismatch, Message: "client version 1, server 7", AgentPID: -1}, "rejection with negative pid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sockPath := startFakeAgent(t, func(t *testing.T, rw *bufio.ReadWriter) {
+				consumeClientHello(t, rw)
+				reply(t, rw, tc.resp)
+			})
+			_, err := dialAndHandshake(sockPath)
+			if err == nil {
+				t.Fatal("dialAndHandshake should fail on version mismatch")
+			}
+			if strings.Contains(err.Error(), "kill") {
+				t.Errorf("err = %q, must not suggest kill without a positive pid", err)
+			}
+		})
+	}
+}

@@ -149,17 +149,23 @@ func EnsureAgent() (*Conn, error) {
 	}
 }
 
-// errAgentExited reports a spawned agent that exited before binding,
-// with the last line it wrote to the agent log (an agent that refuses to
-// start says why there).
 // protocolMismatchError reports an agent that speaks a different protocol
 // version, typically one left running by an older sesh after an upgrade.
 // This sesh can't send it stop, so the error says which process to kill.
+// A pid that isn't positive is never put in a kill command: kill 0 and
+// kill -1 signal far more than the agent.
 func protocolMismatchError(agentVersion, pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("%w: agent uses protocol version %d, this sesh uses %d",
+			errProtocolMismatch, agentVersion, ProtocolVersion)
+	}
 	return fmt.Errorf("%w: agent (pid %d) uses protocol version %d, this sesh uses %d; stop it with: kill %d",
 		errProtocolMismatch, pid, agentVersion, ProtocolVersion, pid)
 }
 
+// errAgentExited reports a spawned agent that exited before binding,
+// with the last line it wrote to the agent log (an agent that refuses to
+// start says why there).
 func errAgentExited(sockPath string, werr error, child *spawnedAgent) error {
 	err := fmt.Errorf("spawned agent exited before binding %s", sockPath)
 	if werr != nil {
@@ -277,7 +283,7 @@ func dialAndHandshake(sockPath string) (*Conn, error) {
 			return nil, fmt.Errorf("agent rejected hello (and error payload undecodable): %w", derr)
 		}
 		closeOrLog(conn, "agent conn after rejection")
-		if e.Code == ErrCodeProtocolVersionMismatch && e.AgentPID != 0 {
+		if e.Code == ErrCodeProtocolVersionMismatch && e.AgentPID > 0 {
 			return nil, protocolMismatchError(e.Version, e.AgentPID)
 		}
 		return nil, fmt.Errorf("agent rejected hello: %s — %s", e.Code, e.Message)
