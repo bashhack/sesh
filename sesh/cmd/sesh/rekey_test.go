@@ -1054,14 +1054,3 @@ func TestRotate_PasswordCancelledLeavesNoChanges(t *testing.T) {
 		}
 	}
 }
-
-func TestCurrentKeySourceName(t *testing.T) {
-	t.Setenv("SESH_KEY_SOURCE", "")
-	if got := currentKeySourceName(); got != "keychain" {
-		t.Errorf("empty env should default to keychain, got %q", got)
-	}
-	t.Setenv("SESH_KEY_SOURCE", "password")
-	if got := currentKeySourceName(); got != "password" {
-		t.Errorf("explicit password not preserved, got %q", got)
-	}
-}

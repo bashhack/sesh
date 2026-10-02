@@ -16,6 +16,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/migration"
@@ -43,13 +44,25 @@ func main() {
 	// information or open their own store internally. Skipping buildProvider
 	// here means SESH_BACKEND=sqlite doesn't pointlessly open the DB (or
 	// acquire the key-init flock on first run) for those commands.
+	// A broken config only stops commands that use the store; the rest,
+	// including `sesh config`, which reports the problem, still run.
+	cfg, cfgErr := settings()
+	clipboardTimeout := config.DefaultClipboardTimeout
+	if cfgErr == nil {
+		clipboardTimeout = cfg.ClipboardTimeout.Value
+	}
+
 	var (
 		kc     keychain.Provider
 		closer io.Closer
 	)
 	if needsCredentialStore(os.Args) {
+		if cfgErr != nil {
+			fmt.Fprintf(os.Stderr, "❌ %v\n", cfgErr)
+			os.Exit(1)
+		}
 		var err error
-		kc, closer, err = buildProvider()
+		kc, closer, err = buildProvider(cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 			os.Exit(1)
@@ -65,7 +78,7 @@ func main() {
 		kc = noopCredentialStore{}
 	}
 
-	app := NewDefaultApp(versionInfo, kc)
+	app := NewDefaultApp(versionInfo, kc, clipboardTimeout)
 	run(app, os.Args)
 }
 
@@ -74,7 +87,7 @@ func main() {
 // (--help/--version/--list-services) or open their own store internally
 // (--migrate) return false.
 func needsCredentialStore(args []string) bool {
-	if len(args) <= 1 {
+	if len(args) <= 1 || subcommand(args) != "" {
 		return false
 	}
 	for _, a := range args[1:] {
@@ -83,12 +96,24 @@ func needsCredentialStore(args []string) bool {
 			"--version", "-version",
 			"--list-services", "-list-services",
 			"--migrate", "-migrate",
-			"--rekey", "-rekey",
-			"agent":
+			"--rekey", "-rekey":
 			return false
 		}
 	}
 	return true
+}
+
+// subcommand returns the subcommand args name ("agent" or "config"), or
+// "". Only the first argument counts, so an entry that happens to be
+// named "agent" (-service-name agent) is never mistaken for one.
+func subcommand(args []string) string {
+	if len(args) > 1 {
+		switch args[1] {
+		case "agent", "config":
+			return args[1]
+		}
+	}
+	return ""
 }
 
 // noopCredentialStore is a keychain.Provider stand-in used for commands
@@ -115,36 +140,54 @@ func (noopCredentialStore) ListEntries(_ string) ([]keychain.KeychainEntry, erro
 func (noopCredentialStore) DeleteEntry(_, _ string) error       { return errNoStore }
 func (noopCredentialStore) SetDescription(_, _, _ string) error { return errNoStore }
 
-// buildProvider constructs the credential store.
-// When SESH_BACKEND=sqlite it returns a SQLite-backed store (caller must
-// close it). Otherwise it returns the system keychain with no closer.
-func buildProvider() (keychain.Provider, io.Closer, error) {
-	if os.Getenv("SESH_BACKEND") != "sqlite" {
+// cliOverrides holds setting flags given on the command line.
+var cliOverrides config.Overrides
+
+// settings resolves this run's settings: flags, then env, then the config
+// file, then defaults.
+func settings() (*config.Config, error) {
+	return config.Load(cliOverrides)
+}
+
+// buildProvider constructs the credential store for cfg's backend: a
+// SQLite-backed store (caller must close it) or the system keychain with
+// no closer.
+func buildProvider(cfg *config.Config) (keychain.Provider, io.Closer, error) {
+	if cfg.Backend.Value != config.BackendSQLite {
 		return keychain.NewDefaultProvider(), nil, nil
 	}
-	store, err := openSQLiteStore()
+	store, err := openSQLiteStoreWith(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	return store, store, nil
 }
 
-// openSQLiteStore bootstraps the master encryption key (generating one on
-// first run) and returns an opened, schema-initialized SQLite store. The
-// caller must Close it.
+// openSQLiteStore opens the SQLite store with this run's settings.
 func openSQLiteStore() (*database.Store, error) {
-	dbPath, err := database.DefaultDBPath()
+	cfg, err := settings()
 	if err != nil {
-		return nil, fmt.Errorf("resolve database path: %w", err)
+		return nil, err
+	}
+	return openSQLiteStoreWith(cfg)
+}
+
+// openSQLiteStoreWith bootstraps the master encryption key (generating one
+// on first run) and returns an opened, schema-initialized SQLite store at
+// cfg's vault location. The caller must Close it.
+func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
+	dbPath := cfg.DBPath.Value
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil { //nolint:gosec // vault dir from the user's own settings
+		return nil, fmt.Errorf("create vault directory: %w", err)
 	}
 
-	source := currentKeySourceName()
-	if source == "password" {
+	source := cfg.KeySource.Value
+	if source == config.KeySourcePassword {
 		if err := refuseNewKeyForExistingVault(dbPath); err != nil {
 			return nil, err
 		}
 	}
-	ks, err := buildKeySource(filepath.Dir(dbPath))
+	ks, err := buildKeySource(filepath.Dir(dbPath), source)
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +251,11 @@ func refuseNewKeyForExistingVault(dbPath string) error {
 		dbPath, sidecar)
 }
 
+// errNeedsSQLite reports a command that only works on the sqlite backend.
+func errNeedsSQLite(what string) error {
+	return fmt.Errorf("%s requires the sqlite backend: set backend = \"sqlite\" in the config file, or SESH_BACKEND=sqlite", what)
+}
+
 // withKeyHint adds what to do next to a database.WrongKeyError.
 func withKeyHint(err error) error {
 	var wk *database.WrongKeyError
@@ -225,8 +273,8 @@ func withKeyHint(err error) error {
 	}
 }
 
-// buildKeySource returns the CryptoOracle the store encrypts through,
-// chosen by SESH_KEY_SOURCE. Defaults to the macOS Keychain. "password"
+// buildKeySource returns the CryptoOracle the store encrypts through for
+// source ("keychain" or "password"). "password"
 // uses the agent when it can serve this data directory, so later
 // commands do not prompt again. A missing sidecar, or an agent that
 // cannot be reached or fails to unlock, falls back to
@@ -234,9 +282,9 @@ func withKeyHint(err error) error {
 // password is retried against the agent and is returned to the caller
 // when the attempt budget is spent. With SESH_MASTER_PASSWORD set, the
 // agent is not used at all.
-func buildKeySource(dataDir string) (database.CryptoOracle, error) {
-	switch os.Getenv("SESH_KEY_SOURCE") {
-	case "password":
+func buildKeySource(dataDir, source string) (database.CryptoOracle, error) {
+	switch source {
+	case config.KeySourcePassword:
 		cfg := resolvePasswordPrompt()
 		if !cfg.fromEnv {
 			oracle, typed, err := keySourceFromAgent(dataDir, cfg)
@@ -263,7 +311,7 @@ func buildKeySource(dataDir string) (database.CryptoOracle, error) {
 		}
 		secure.SecureZeroBytes(key)
 		return database.NewKeySourceOracle(mps), nil
-	case "", "keychain":
+	case config.KeySourceKeychain:
 		u, err := user.Current()
 		if err != nil {
 			return nil, fmt.Errorf("determine current user: %w", err)
@@ -274,7 +322,7 @@ func buildKeySource(dataDir string) (database.CryptoOracle, error) {
 		}
 		return database.NewKeySourceOracle(ks), nil
 	default:
-		return nil, fmt.Errorf("unknown SESH_KEY_SOURCE %q (valid: keychain, password)", os.Getenv("SESH_KEY_SOURCE"))
+		return nil, fmt.Errorf("unknown key source %q (valid: keychain, password)", source)
 	}
 }
 
@@ -515,15 +563,19 @@ func ensureMasterKey(ks *database.KeychainSource, dataDir string) error {
 }
 
 // runMigrate copies all sesh entries from the macOS Keychain to the SQLite store.
-// Requires SESH_BACKEND=sqlite.
+// Requires the sqlite backend.
 func runMigrate(app *App) error {
-	if os.Getenv("SESH_BACKEND") != "sqlite" {
-		return fmt.Errorf("migration requires SESH_BACKEND=sqlite")
+	cfg, err := settings()
+	if err != nil {
+		return err
+	}
+	if cfg.Backend.Value != config.BackendSQLite {
+		return errNeedsSQLite("migration")
 	}
 
 	source := keychain.NewDefaultProvider()
 
-	dest, err := openSQLiteStore()
+	dest, err := openSQLiteStoreWith(cfg)
 	if err != nil {
 		return err
 	}
@@ -633,6 +685,19 @@ func fatal(app *App, err error) {
 
 // run is the testable entrypoint for the application
 func run(app *App, args []string) {
+	switch subcommand(args) {
+	case "agent":
+		if err := runAgent(app, args[2:]); err != nil {
+			fatal(app, err)
+		}
+		return
+	case "config":
+		if err := runConfig(app, args[2:]); err != nil {
+			fatal(app, err)
+		}
+		return
+	}
+
 	// Early exit for version/list-services that don't need service
 	for _, arg := range args[1:] {
 		switch arg {
@@ -654,12 +719,6 @@ func run(app *App, args []string) {
 		case "--rekey", "-rekey":
 			rest := remainingArgs(args, arg)
 			if err := runRekey(app, rest, keychain.NewDefaultProvider()); err != nil {
-				fatal(app, err)
-			}
-			return
-		case "agent":
-			rest := remainingArgs(args, arg)
-			if err := runAgent(app, rest); err != nil {
 				fatal(app, err)
 			}
 			return

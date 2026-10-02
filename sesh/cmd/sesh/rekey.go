@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/migration"
@@ -38,8 +39,12 @@ const (
 // keychain — keychain branches are only entered when the source or target
 // is "keychain".
 func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
-	if os.Getenv("SESH_BACKEND") != "sqlite" {
-		return fmt.Errorf("rekey requires SESH_BACKEND=sqlite")
+	st, err := settings()
+	if err != nil {
+		return err
+	}
+	if st.Backend.Value != config.BackendSQLite {
+		return errNeedsSQLite("rekey")
 	}
 
 	fs := flag.NewFlagSet("rekey", flag.ContinueOnError)
@@ -52,7 +57,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		return fmt.Errorf("--to must be 'keychain' or 'password', got %q", *target)
 	}
 
-	current := currentKeySourceName()
+	current := st.KeySource.Value
 	if current == *target {
 		// password → password is the in-place rotation case ("change my
 		// master password"). Rotating the generated keychain key
@@ -63,10 +68,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		return fmt.Errorf("already using %s; nothing to do", *target)
 	}
 
-	dbPath, err := database.DefaultDBPath()
-	if err != nil {
-		return fmt.Errorf("resolve database path: %w", err)
-	}
+	dbPath := st.DBPath.Value
 	dataDir := filepath.Dir(dbPath)
 
 	if _, err := os.Stat(dbPath); err != nil {
@@ -266,16 +268,6 @@ func appendErr(primary error, label string, secondary error) error {
 	return fmt.Errorf("%w (%s also failed: %v)", primary, label, secondary)
 }
 
-// currentKeySourceName returns the active key source as named by SESH_KEY_SOURCE.
-// Empty defaults to "keychain" to match buildKeySource's behaviour.
-func currentKeySourceName() string {
-	v := os.Getenv("SESH_KEY_SOURCE")
-	if v == "" {
-		return "keychain"
-	}
-	return v
-}
-
 // newKeySourceByName constructs a KeySource without unlocking or initialising
 // it — the caller decides when to call GetEncryptionKey (which is what
 // triggers the master password prompt or keychain key generation).
@@ -410,14 +402,15 @@ func unusedKeyStateNote(oldSource, dataDir string) string {
 // Production passes resolvePasswordPrompt(); tests inject a sequenced
 // prompt that returns the old password first, then the new one twice.
 func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
-	if os.Getenv("SESH_BACKEND") != "sqlite" {
-		return fmt.Errorf("rotate requires SESH_BACKEND=sqlite")
+	st, err := settings()
+	if err != nil {
+		return err
+	}
+	if st.Backend.Value != config.BackendSQLite {
+		return errNeedsSQLite("rotate")
 	}
 
-	dbPath, err := database.DefaultDBPath()
-	if err != nil {
-		return fmt.Errorf("resolve database path: %w", err)
-	}
+	dbPath := st.DBPath.Value
 	dataDir := filepath.Dir(dbPath)
 	sidecarPath := filepath.Join(dataDir, sidecarFile)
 

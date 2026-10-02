@@ -3,6 +3,7 @@ module github.com/bashhack/sesh
 go 1.27.0
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/klauspost/compress v1.18.0
 	github.com/makiuchi-d/gozxing v0.1.2-0.20250720151325-95e256b768ac
 	github.com/pquerna/otp v1.4.0

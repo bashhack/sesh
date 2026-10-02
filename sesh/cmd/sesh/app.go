@@ -59,7 +59,7 @@ type VersionInfo struct {
 // NewDefaultApp creates a new App with the given credential store.
 // The caller chooses the concrete keychain.Provider (system keychain,
 // SQLite store, etc.) and is responsible for its lifecycle.
-func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider) *App {
+func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider, clipboardTimeout time.Duration) *App {
 	totpSvc := totp.NewDefaultProvider()
 	awsSvc := aws.NewDefaultProvider()
 
@@ -78,7 +78,7 @@ func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider) *App {
 		ExecLookPath: exec.LookPath,
 		Exit:         os.Exit,
 		ClipboardCopy: func(text string) error {
-			return clipboard.CopyWithAutoClear(text, 30*time.Second)
+			return clipboard.CopyWithAutoClear(text, clipboardTimeout)
 		},
 		TimeNow:     time.Now,
 		Stdin:       os.Stdin,

@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -38,20 +37,19 @@ func runAgentDaemon(app *App, args []string) error {
 	// it gets the log's timestamps, including the error run prints through
 	// fatal (same *App) if startup fails.
 	app.Stderr = agent.TimestampLines(app.Stderr)
-	idleDefault, err := durationFromEnv("SESH_AGENT_IDLE_TIMEOUT", agent.DefaultIdleTimeout)
+	// The daemon reads its own settings, from the environment of the sesh
+	// command that started it and the config file.
+	st, err := settings()
 	if err != nil {
 		return err
 	}
-	maxDefault, err := durationFromEnv("SESH_AGENT_MAX_LIFETIME", agent.DefaultMaxLifetime)
-	if err != nil {
-		return err
-	}
+	idleDefault, maxDefault := st.AgentIdleTimeout.Value, st.AgentMaxLifetime.Value
 
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	socket := fs.String("socket", "", "Override the canonical socket path. Defaults to <cache>/sesh/agent.sock.")
-	idle := fs.Duration("idle-timeout", idleDefault, "Lock after this long without use; 0 disables. Env: SESH_AGENT_IDLE_TIMEOUT.")
-	maxLife := fs.Duration("max-lifetime", maxDefault, "Lock this long after each unlock, even if in use; 0 disables. Env: SESH_AGENT_MAX_LIFETIME.")
+	idle := fs.Duration("idle-timeout", idleDefault, "Lock after this long without use; 0 disables. Config: agent.idle_timeout; env: SESH_AGENT_IDLE_TIMEOUT.")
+	maxLife := fs.Duration("max-lifetime", maxDefault, "Lock this long after each unlock, even if in use; 0 disables. Config: agent.max_lifetime; env: SESH_AGENT_MAX_LIFETIME.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -89,22 +87,6 @@ func runAgentDaemon(app *App, args []string) error {
 		return fmt.Errorf("agent: %w", err)
 	}
 	return nil
-}
-
-// durationFromEnv reads a duration from name, or returns def when unset.
-func durationFromEnv(name string, def time.Duration) (time.Duration, error) {
-	v := os.Getenv(name)
-	if v == "" {
-		return def, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", name, err)
-	}
-	if d < 0 {
-		return 0, fmt.Errorf("%s must not be negative, got %s", name, v)
-	}
-	return d, nil
 }
 
 // runAgentControl runs lock, status, or stop against a running agent.

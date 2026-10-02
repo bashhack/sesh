@@ -104,8 +104,40 @@ sesh uses a provider-based configuration system:
 
 1. **Global flags** - Apply to all providers (e.g., `-service`, `-help`)
 2. **Provider-specific flags** - Apply only to the selected provider (e.g., `-profile` for AWS)
-3. **Environment variables** - For default AWS profile and backend selection (`SESH_BACKEND`)
-4. **Credential storage** - macOS Keychain (default) or encrypted SQLite (`SESH_BACKEND=sqlite`)
+3. **Config file** - Persistent settings in `~/.config/sesh/config.toml` (see [Configuration file](#configuration-file))
+4. **Environment variables** - Override the config file for one shell or one command (e.g. `SESH_BACKEND`)
+5. **Credential storage** - macOS Keychain (default) or encrypted SQLite (`backend = "sqlite"`)
+
+### Configuration file
+
+sesh reads `~/.config/sesh/config.toml` on macOS and Linux (`$XDG_CONFIG_HOME/sesh/config.toml` when `XDG_CONFIG_HOME` is set). The file is optional, and every setting in it is optional:
+
+```toml
+backend           = "sqlite"            # or "keychain"
+key_source        = "password"          # or "keychain" (SQLite only)
+db_path           = "~/vaults/sesh.db"  # absolute, or starting with ~/
+clipboard_timeout = "30s"               # how long a copied secret stays on the clipboard
+
+[agent]
+idle_timeout = "10m"                    # 0 disables
+max_lifetime = "8h"                     # 0 disables
+```
+
+Each setting comes from, highest first: a command-line flag, its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
+
+`sesh config` prints each effective setting and where it came from:
+
+```
+config file: /Users/me/.config/sesh/config.toml
+
+backend             sqlite      (config file)
+key_source          password    (environment: SESH_KEY_SOURCE)
+clipboard_timeout   30s         (default)
+agent.idle_timeout  25m         (config file)
+agent.max_lifetime  8h          (default)
+db_path             /Users/me/vaults/sesh.db
+                    (config file)
+```
 
 ## Configuration Options
 
@@ -164,12 +196,14 @@ sesh uses a provider-based configuration system:
 | Variable                | Description                                        | Default          |
 |-------------------------|----------------------------------------------------|------------------|
 | `AWS_PROFILE`          | Default AWS profile                                | `default`        |
-| `SESH_BACKEND`         | Storage backend — only `sqlite` selects SQLite; any other value (or unset) uses the keychain | `keychain`       |
-| `SESH_KEY_SOURCE`      | Master key source for SQLite backend: `keychain` (default) or `password`. Ignored when `SESH_BACKEND` is not `sqlite` | `keychain`       |
+| `SESH_BACKEND`         | Storage backend: `keychain` or `sqlite` (config: `backend`). Any other value is an error | `keychain`       |
+| `SESH_KEY_SOURCE`      | Master key source for the SQLite backend: `keychain` or `password` (config: `key_source`). Ignored unless the backend is `sqlite` | `keychain`       |
+| `SESH_DB_PATH`         | Vault location for the SQLite backend (config: `db_path`). `passwords.key` sits next to it | `~/Library/Application Support/sesh/passwords.db` (macOS), `$XDG_DATA_HOME/sesh/passwords.db` (Linux) |
+| `SESH_CLIPBOARD_TIMEOUT` | How long a copied secret stays on the clipboard (config: `clipboard_timeout`) | `30s` |
 | `SESH_MASTER_PASSWORD` | Non-interactive master password (skips prompt). Intended for CI/scripting only — exposes the password via process environment | unset            |
 | `SESH_AUTH_SOCK`       | Socket path for the sesh agent used by `SESH_KEY_SOURCE=password` | `<user-cache-dir>/sesh/agent.sock` |
-| `SESH_AGENT_IDLE_TIMEOUT` | Agent locks after this long without use; `0` disables. Same as `sesh agent --idle-timeout` | `10m` |
-| `SESH_AGENT_MAX_LIFETIME` | Agent locks this long after each unlock; `0` disables. Same as `sesh agent --max-lifetime` | `8h` |
+| `SESH_AGENT_IDLE_TIMEOUT` | Agent locks after this long without use; `0` disables (config: `agent.idle_timeout`). Same as `sesh agent --idle-timeout` | `10m` |
+| `SESH_AGENT_MAX_LIFETIME` | Agent locks this long after each unlock; `0` disables (config: `agent.max_lifetime`). Same as `sesh agent --max-lifetime` | `8h` |
 
 ## Storage Backend and Key Source
 
@@ -260,10 +294,8 @@ max lifetime:   7h 22m remaining
 
 **Timeouts**
 
-Set `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` to Go durations such as `30m` or `2h`; `0` disables either. The agent reads them once, when it starts, from the environment of the sesh command that started it. So:
+Set `agent.idle_timeout` and `agent.max_lifetime` in the [config file](#configuration-file) to durations such as `30m` or `2h`; `0` disables either. The agent reads them once, when it starts. It reads the config file itself, so the values apply whichever program starts it, including an editor that doesn't load your shell profile. `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` override the file, but only when they're in the environment of the command that starts the agent.
 
-- Put them in your shell profile, so whichever terminal starts the agent passes them on.
-- If an editor or app that doesn't load your profile starts the agent, it runs with the defaults until it is stopped.
 - After changing them, run `sesh agent stop`; the next command starts an agent with the new values.
 
 **After upgrading sesh**
