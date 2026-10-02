@@ -34,6 +34,10 @@ func runAgent(app *App, args []string) error {
 }
 
 func runAgentDaemon(app *App, args []string) error {
+	// A spawned daemon's stderr is the agent log, so everything written to
+	// it gets the log's timestamps, including the error run prints through
+	// fatal (same *App) if startup fails.
+	app.Stderr = agent.TimestampLines(app.Stderr)
 	idleDefault, err := durationFromEnv("SESH_AGENT_IDLE_TIMEOUT", agent.DefaultIdleTimeout)
 	if err != nil {
 		return err
@@ -76,14 +80,11 @@ func runAgentDaemon(app *App, args []string) error {
 		agent.WithIdleTimeout(*idle),
 		agent.WithMaxLifetime(*maxLife),
 		agent.WithLockedKeyMemory(),
+		agent.WithExitOnAutoLock(),
 	)
 	if err != nil {
 		return fmt.Errorf("start agent: %w", err)
 	}
-	// Banner write to stderr is best-effort — a closed parent stderr
-	// shouldn't kill an otherwise healthy daemon.
-	_, _ = fmt.Fprintf(app.Stderr, "sesh agent listening at %s\n", srv.SocketPath()) //nolint:errcheck // best-effort banner
-
 	if err := srv.Run(context.Background()); err != nil {
 		return fmt.Errorf("agent: %w", err)
 	}
@@ -146,6 +147,7 @@ func writeAgentStatus(w io.Writer, st *agent.StatusResponse, now time.Time) erro
 	var b strings.Builder
 	fmt.Fprintf(&b, "agent: running (pid %d)\n", st.AgentPID)
 	line := func(label, value string) { fmt.Fprintf(&b, "%-16s%s\n", label+":", value) }
+	line("build", buildLine(st.AgentBuild, agent.Build()))
 
 	if !st.Unlocked {
 		b.WriteString("state: locked\n")
@@ -184,6 +186,21 @@ func writeAgentStatus(w io.Writer, st *agent.StatusResponse, now time.Time) erro
 func stamp(unix int64, now time.Time) string {
 	t := time.Unix(unix, 0).In(now.Location())
 	return fmt.Sprintf("%s (%s ago)", t.Format(time.DateTime), humanDuration(now.Sub(t)))
+}
+
+// buildLine describes the agent's build next to this sesh's. A mismatch
+// means sesh was upgraded since the agent started; the next command that
+// needs the agent replaces it.
+func buildLine(agentBuild, mine string) string {
+	short := func(b string) string { return b[:min(12, len(b))] }
+	switch {
+	case agentBuild == "":
+		return "unknown (older agent; the next command replaces it)"
+	case mine == "" || agentBuild == mine:
+		return short(agentBuild)
+	default:
+		return short(agentBuild) + " (this sesh is " + short(mine) + "; the next command replaces it)"
+	}
 }
 
 // humanDuration renders d to the second as "7h 21m 22s", leaving out zero

@@ -107,7 +107,7 @@ Where the derived key is, by state:
 |-------|---------------------|
 | No agent (keychain mode, `SESH_MASTER_PASSWORD` runs, or agent unavailable) | In the sesh process, for one command |
 | Agent unlocked | In the agent's locked memory page |
-| Agent locked | Nowhere: zeroed in place; the agent process keeps running |
+| Agent locked | Nowhere: zeroed in place. After an automatic lock the agent also exits; after `sesh agent lock` or SIGUSR1 it keeps running |
 | Agent stopped | Nowhere; the next command starts a fresh agent |
 
 What this changes: while the agent is unlocked, **any process running as your user can ask it to decrypt entries**, and `--list` / `--delete` no longer require the password. This is the same trade-off `ssh-agent` makes. The window is bounded:
@@ -116,7 +116,9 @@ What this changes: while the agent is unlocked, **any process running as your us
 - **Max lifetime** (default 8 hours): the agent locks this long after each unlock, however busy it is.
 - **On demand**: `sesh agent lock` drops the key, `sesh agent stop` shuts the agent down, and `SIGUSR1` locks it (for example from a screen-lock hook).
 
-A locked agent zeroes the key and keeps running; the next command prompts again.
+Locking zeroes the key. An automatic lock (idle timeout or max lifetime) also shuts the agent down, and so does an agent that nobody unlocks within the idle timeout. A lock you ask for leaves it running. Either way, the next command prompts again.
+
+**Upgrades**: the agent reports a hash of its executable. A `sesh` from any other build stops it and starts its own, so a fix in a new release reaches the agent on the first command after upgrading. Without this, the old agent would keep serving until it stopped.
 
 **Process hardening** (Linux and macOS). Before it accepts any connection, the agent disables core dumps, blocks other processes running as you from attaching a debugger or reading its memory (`PR_SET_DUMPABLE=0` on Linux, `PT_DENY_ATTACH` on macOS), and reserves a page locked into RAM for the key so it is never written to swap. If any of these can't be applied (in practice only the memory lock can fail, when the locked-memory limit is below one page), the agent refuses to start: sesh prints a warning with the agent's reason and prompts for the password on every run instead. Short-lived copies made while encrypting or decrypting stay on the ordinary Go heap, covered by the no-dump/no-attach settings.
 

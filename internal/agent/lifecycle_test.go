@@ -133,6 +133,7 @@ func TestServer_StatusReportsSchedule(t *testing.T) {
 		Version:          ProtocolVersion,
 		Unlocked:         true,
 		UnlockID:         id,
+		AgentBuild:       Build(),
 		AgentPID:         os.Getpid(),
 		AgentStartedUnix: start.Unix(),
 		UnlockedAtUnix:   start.Unix(),

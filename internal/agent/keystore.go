@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -55,6 +54,10 @@ type keystore struct {
 	// last installed.
 	lastUnlock time.Time
 	clk        clock
+	log        *agentLog
+	// onAutoLock, when set, runs after a timer locks the keystore, outside
+	// mu, with the reason ("idle timeout" or "max lifetime").
+	onAutoLock func(reason string)
 	idleTimer  stopper
 	maxTimer   stopper
 	// keyBuf is the key's storage, kept for the life of the keystore and
@@ -129,6 +132,9 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 	k.unlockedAt, k.lastActivity, k.lastUnlock = now, now, now
 	k.generation++
 	k.scheduleLocked()
+	// Logged under mu, like every lock, so the log's order is the order
+	// the transitions happened in.
+	k.log.printf("unlocked")
 	return nil
 }
 
@@ -155,12 +161,14 @@ func (k *keystore) Encrypt(plaintext []byte, unlockID string) (ciphertext, salt 
 	return database.EncryptEntry(keyCopy, plaintext)
 }
 
-// lock zeroes the cached key and cancels both timers. A later unlock is
-// allowed. Locking an already-locked keystore is a no-op.
-func (k *keystore) lock() {
+// lock zeroes the cached key and cancels both timers, logging reason. A
+// later unlock is allowed. Locking an already-locked keystore changes
+// nothing.
+func (k *keystore) lock(reason string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.clearLocked()
+	k.log.printf("locked (%s)", reason)
 }
 
 // shutdown zeroes the cached master key and refuses every later unlock.
@@ -296,19 +304,25 @@ func (k *keystore) stopTimersLocked() {
 // one may arrive after fresh activity.
 func (k *keystore) autoLock(gen uint64, idle bool) {
 	k.mu.Lock()
-	defer k.mu.Unlock()
 	if gen != k.generation || k.derivedKey == nil {
+		k.mu.Unlock()
 		return
 	}
 	reason := "max lifetime"
 	if idle {
 		if k.clock().Now().Before(k.lastActivity.Add(k.idleTimeout)) {
+			k.mu.Unlock()
 			return
 		}
 		reason = "idle timeout"
 	}
 	k.clearLocked()
-	fmt.Fprintf(os.Stderr, "sesh agent: locked after %s\n", reason) //nolint:errcheck // best-effort log line
+	k.log.printf("locked after %s", reason)
+	after := k.onAutoLock
+	k.mu.Unlock()
+	if after != nil {
+		after(reason)
+	}
 }
 
 func (k *keystore) clock() clock {
@@ -323,6 +337,17 @@ func (k *keystore) clock() clock {
 func UnlockID(verify []byte) string {
 	sum := sha256.Sum256(verify)
 	return hex.EncodeToString(sum[:])
+}
+
+// unlessUnlocking runs f, holding off new unlocks until it returns, unless
+// an unlock is already in progress. It reports whether f ran.
+func (k *keystore) unlessUnlocking(f func()) bool {
+	if !k.unlockMu.TryLock() {
+		return false
+	}
+	defer k.unlockMu.Unlock()
+	f()
+	return true
 }
 
 func (k *keystore) isShutDown() bool {

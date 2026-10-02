@@ -35,6 +35,10 @@ var unlockTimeout = 2 * time.Minute
 // protocol version. That process still owns the socket.
 var errProtocolMismatch = errors.New("agent protocol mismatch")
 
+// errAgentReplaced means dialCurrent stopped an agent from another sesh
+// build, so the socket is free for this build's agent.
+var errAgentReplaced = errors.New("agent from another sesh build stopped")
+
 // spawnPollInterval is how often EnsureAgent re-tries connecting after
 // it has launched a daemon, waiting for the socket to appear.
 const spawnPollInterval = 20 * time.Millisecond
@@ -75,12 +79,12 @@ func EnsureAgent() (*Conn, error) {
 	// Fast path: agent already running and answering. A live agent that
 	// fails the handshake (version mismatch, timeout, permission) is
 	// returned as-is — replacing it would orphan the process that still
-	// holds the key.
-	conn, err := dialAndHandshake(sockPath)
+	// holds the key. One from another sesh build is stopped and replaced.
+	conn, err := dialCurrent(sockPath)
 	if err == nil {
 		return conn, nil
 	}
-	if !IsNotRunning(err) {
+	if !canSpawn(err) {
 		return nil, err
 	}
 
@@ -97,11 +101,11 @@ func EnsureAgent() (*Conn, error) {
 
 	// Re-check under the lock — another EnsureAgent caller may have
 	// already spawned an agent while we waited.
-	conn, err = dialAndHandshake(sockPath)
+	conn, err = dialCurrent(sockPath)
 	if err == nil {
 		return conn, nil
 	}
-	if !IsNotRunning(err) {
+	if !canSpawn(err) {
 		return nil, err
 	}
 	// ECONNREFUSED means the inode is left over from a dead listener.
@@ -205,6 +209,43 @@ func lastLogLine(path string, from int64) string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
+// dialCurrent connects to the agent at sockPath like dialAndHandshake,
+// except that an agent running another sesh build (an upgrade happened
+// since it started) is stopped and errAgentReplaced is returned, so the
+// caller spawns one from this build. Stopping it costs the user one
+// password prompt.
+func dialCurrent(sockPath string) (*Conn, error) {
+	conn, err := dialAndHandshake(sockPath)
+	if err != nil || !otherBuild(conn.agentBuild) {
+		return conn, err
+	}
+	pid, old := conn.agentPID, conn.agentBuild
+	serr := Stop(conn)
+	closeOrLog(conn, "agent conn after replacing it")
+	if serr != nil {
+		// The agent may have exited between the dial and the stop, for
+		// example because another sesh replaced it first. Look once more.
+		again, derr := dialAndHandshake(sockPath)
+		switch {
+		case derr == nil && !otherBuild(again.agentBuild):
+			return again, nil
+		case derr == nil:
+			closeOrLog(again, "agent conn after a failed stop")
+		case IsNotRunning(derr):
+			return nil, errAgentReplaced
+		}
+		return nil, fmt.Errorf("stop the sesh agent from another build (pid %d, build %s): %w; stop it with: kill %d", pid, shortBuild(old), serr, pid)
+	}
+	fmt.Fprintf(os.Stderr, "Restarted the sesh agent: it was running another sesh build (%s).\n", shortBuild(old)) //nolint:errcheck // best-effort notice
+	return nil, errAgentReplaced
+}
+
+// canSpawn reports whether err from dialCurrent leaves the socket free
+// for a new agent.
+func canSpawn(err error) bool {
+	return IsNotRunning(err) || errors.Is(err, errAgentReplaced)
+}
+
 // IsNotRunning reports whether a dial error means no agent owns the
 // socket: a refused connect is a stale inode, and a missing path means
 // nothing is there. Every other error belongs to a live or unreachable
@@ -275,7 +316,7 @@ func dialAndHandshake(sockPath string) (*Conn, error) {
 			closeOrLog(conn, "agent conn after clearing hello deadline")
 			return nil, err
 		}
-		return &Conn{uc: conn, r: r}, nil
+		return &Conn{uc: conn, r: r, agentBuild: ack.AgentBuild, agentPID: ack.AgentPID}, nil
 	case TypeError:
 		var e ErrorResponse
 		if derr := decodeMessage(raw2, &e); derr != nil {
@@ -388,19 +429,38 @@ func withoutMasterPassword(env []string) []string {
 	return dst
 }
 
-// openAgentLog opens the agent log file for appending. Caller is
-// responsible for closing the *os.File when done (or letting it be
-// inherited by a spawned process).
+// maxAgentLogSize is the size past which openAgentLog starts a fresh log,
+// keeping the previous one as agent.log.1.
+const maxAgentLogSize = 1 << 20 // 1 MiB
+
+// openAgentLog opens the agent log file for appending, first moving a
+// log over maxAgentLogSize aside. Caller is responsible for closing the
+// *os.File when done (or letting it be inherited by a spawned process).
 func openAgentLog() (*os.File, error) {
 	path, err := LogPath()
 	if err != nil {
 		return nil, err
 	}
+	rotateLog(path)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600) //nolint:gosec // path is <cache>/sesh/logs/agent.log; cache dir is per-user
 	if err != nil {
 		return nil, fmt.Errorf("open agent log %s: %w", path, err)
 	}
 	return f, nil
+}
+
+// rotateLog renames path to path.1, replacing any older one, when path is
+// larger than maxAgentLogSize. EnsureAgent calls it under the spawn lock,
+// when no agent is running to write to the file. A failure only warns: an
+// oversized log is no reason to refuse to start the agent.
+func rotateLog(path string) {
+	info, err := os.Stat(path) //nolint:gosec // path is <cache>/sesh/logs/agent.log
+	if err != nil || info.Size() <= maxAgentLogSize {
+		return
+	}
+	if err := os.Rename(path, path+".1"); err != nil { //nolint:gosec // path is <cache>/sesh/logs/agent.log
+		fmt.Fprintf(os.Stderr, "warning: rotate agent log: %v\n", err) //nolint:errcheck // best-effort warning
+	}
 }
 
 // spawnLock is the flock-backed sentinel used to serialize concurrent

@@ -55,9 +55,8 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	current := currentKeySourceName()
 	if current == *target {
 		// password → password is the in-place rotation case ("change my
-		// master password"). Other same-source pairs (e.g. keychain →
-		// keychain) aren't supported in this branch yet; see Flavor B
-		// in docs/KEY_ROTATION_ROADMAP.md.
+		// master password"). Rotating the generated keychain key
+		// (keychain → keychain) isn't supported.
 		if current == "password" {
 			return runRotateMasterPassword(app, resolvePasswordPrompt())
 		}

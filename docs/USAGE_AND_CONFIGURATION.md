@@ -230,7 +230,7 @@ In master password mode, sesh keeps the derived key in a per-user background pro
 1. The command that creates the vault asks for the new password twice. It does not start an agent.
 2. The next command that needs the key asks for the password once, starts `sesh agent` in the background (detached from your terminal, so it outlives it), and hands it the key.
 3. Later commands, in any terminal, don't prompt while the agent is unlocked.
-4. The agent locks itself after 10 minutes without use, and 8 hours after each unlock however busy it is. A locked agent keeps running; the next command prompts once and unlocks it again.
+4. The agent locks itself after 10 minutes without use, and 8 hours after each unlock however busy it is. It exits when it does, since a locked agent has nothing to serve; the next command starts a fresh one and prompts once. An agent that nobody unlocks (for example, you abandoned the prompt) exits after the same 10 minutes.
 5. After `sesh agent stop`, a crash, or a reboot, the next command starts a fresh agent and prompts.
 
 Runs with `SESH_MASTER_PASSWORD` set skip the agent entirely (see [Scripts and CI](#scripts-and-ci)), and keychain mode never uses it.
@@ -242,14 +242,15 @@ None of these are needed in normal use:
 | Command | When you'd use it |
 |---------|-------------------|
 | `sesh agent status` | See whether it's running and unlocked, and when it will lock itself |
-| `sesh agent lock` | Drop the key now, for example when stepping away; the agent keeps running |
+| `sesh agent lock` | Drop the key now, for example when stepping away; the agent keeps running until the next unlock |
 | `kill -USR1 <pid>` | Lock it from a script, such as a screen-lock hook (the pid is in `sesh agent status`) |
-| `sesh agent stop` | Shut it down: after changing the timeouts or upgrading sesh, or while troubleshooting |
+| `sesh agent stop` | Shut it down: after changing the timeouts, or while troubleshooting |
 
 `sesh agent status` prints, for example:
 
 ```
 agent: running (pid 12345)
+build:          3f9a2c1b4d5e
 state: unlocked
 unlocked since: 2026-05-03 09:14:00 (38m ago)
 last activity:  2026-05-03 09:51:48 (12s ago)
@@ -267,7 +268,13 @@ Set `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` to Go durations such
 
 **After upgrading sesh**
 
-The agent is a long-running copy of the sesh binary that started it, so after an upgrade (`brew upgrade`, `make install`) it keeps running the old version until it stops or the machine restarts. Run `sesh agent stop` after upgrading; the next command starts the new version and prompts once.
+Nothing to do. The agent reports which sesh build it runs (a hash of its executable). When a different build of sesh reaches it, after `brew upgrade`, `make install`, or a rebuild, sesh stops it, starts its own, and prompts once:
+
+```
+Restarted the sesh agent: it was running another sesh build (3f9a2c1b4d5e).
+```
+
+`sesh agent status` shows the agent's build, and says when it differs from the `sesh` you ran.
 
 If a release changes how sesh and the agent talk to each other, the new `sesh` can't send the old agent `stop`. Until the old agent is stopped, commands prompt on every run and warn with its pid and what to do:
 
@@ -280,7 +287,7 @@ Run that `kill`; the next command starts the new version.
 **Troubleshooting**
 
 - `warning: sesh agent unavailable: ...` means sesh couldn't start or reach the agent, so it prompts on every run instead. The message says why; if the agent itself refused to start (for example because the process hardening described in [Sesh agent](SECURITY_MODEL.md#sesh-agent) couldn't be applied), it includes the agent's own log line.
-- The agent's log is `~/Library/Caches/sesh/logs/agent.log` on macOS and `~/.cache/sesh/logs/agent.log` on Linux (`$XDG_CACHE_HOME/sesh/logs/agent.log` if set). It records start-up, auto-locks, and errors, never passwords, keys, or secrets.
+- The agent's log is `~/Library/Caches/sesh/logs/agent.log` on macOS and `~/.cache/sesh/logs/agent.log` on Linux (`$XDG_CACHE_HOME/sesh/logs/agent.log` if set). Each line starts with a timestamp. It records start and stop (and why), unlocks and wrong-password attempts, locks (automatic, `sesh agent lock`, or SIGUSR1), refused connections, and errors. It never records passwords, keys, or secrets. Once it passes 1 MiB, the next agent start moves it to `agent.log.1` and begins a new one.
 - To see errors directly, run the agent in the foreground: `sesh agent stop`, then `sesh agent` (Ctrl-C to stop). It accepts `--idle-timeout`, `--max-lifetime`, and `--socket`.
 - The socket is `~/Library/Caches/sesh/agent.sock` on macOS and `~/.cache/sesh/agent.sock` on Linux. `SESH_AUTH_SOCK` overrides the path; if you set it, set it for every sesh command.
 - For a bug report, check that the agent answers on its socket. Each request gets one JSON line back, `hello_ack` then `pong`:
