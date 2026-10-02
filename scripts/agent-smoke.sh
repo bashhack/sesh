@@ -40,7 +40,8 @@ expect_contains() { # <label> <haystack> <needle>
 
 # 1. The run that creates the vault must not start an agent.
 out=$(echo "smoke-secret" | run SESH_MASTER_PASSWORD=$PASSWORD "$SESH" -service password \
-	-action store -service-name smoke -entry-type secure_note 2>&1)
+	-action store -service-name smoke -entry-type secure_note 2>&1) ||
+	fail "vault creation: $out"
 expect_contains "vault created" "$out" "Stored secure_note"
 expect_contains "no agent after vault creation" "$(run "$SESH" agent status)" "agent: not running"
 
@@ -51,11 +52,12 @@ expect_contains "unlock through a terminal" "$out" "smoke-secret"
 expect_contains "agent unlocked" "$(run "$SESH" agent status)" "state: unlocked"
 
 # 3. Later runs need no password and no terminal: the agent serves them.
-out=$(run "$SESH" -service password -action get -service-name smoke -entry-type secure_note -show </dev/null 2>&1)
+out=$(run "$SESH" -service password -action get -service-name smoke -entry-type secure_note -show </dev/null 2>&1) ||
+	fail "passwordless read: $out"
 expect_contains "agent serves a read without a password" "$out" "smoke-secret"
 
 # 4. The wire format a client sees: hello then ping, newline-delimited JSON.
-out=$(python3 - "$SOCK" <<'PY'
+out=$(python3 - "$SOCK" 2>&1 <<'PY'
 import json, socket, sys
 s = socket.socket(socket.AF_UNIX)
 s.settimeout(5)
@@ -66,7 +68,7 @@ for msg in ({"type": "hello", "version": 1}, {"type": "ping", "version": 1}):
     f.flush()
     print(json.loads(f.readline())["type"])
 PY
-)
+) || fail "wire check: $out"
 expect_contains "hello_ack on the wire" "$out" "hello_ack"
 expect_contains "pong on the wire" "$out" "pong"
 
