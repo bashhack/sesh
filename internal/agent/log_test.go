@@ -177,10 +177,12 @@ func TestServer_LogsAutoLock(t *testing.T) {
 
 func TestServer_LogsRefusedConnections(t *testing.T) {
 	t.Run("other user", func(t *testing.T) {
+		// Swapped before the server starts: its connection goroutines read
+		// currentUID, and only starting them orders them after the write.
+		otherUser(t)
 		sockPath := tempSocketPath(t)
 		var log logBuffer
 		serve(t, sockPath, withLogOutput(&log))
-		otherUser(t)
 		if conn, err := dialAndHandshake(sockPath); err == nil {
 			mustClose(t, conn.uc)
 			t.Fatal("handshake succeeded across users")

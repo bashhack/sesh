@@ -189,11 +189,17 @@ func openStoreWith(dbPath string, oracle database.CryptoOracle, source string) (
 // real one.
 func refuseNewKeyForExistingVault(dbPath string) error {
 	sidecar := filepath.Join(filepath.Dir(dbPath), sidecarFile)
-	if _, err := os.Stat(sidecar); !errors.Is(err, os.ErrNotExist) {
+	switch _, err := os.Stat(sidecar); {
+	case err == nil:
 		return nil
+	case !errors.Is(err, os.ErrNotExist):
+		return fmt.Errorf("check for the vault's key file %s: %w", sidecar, err)
 	}
-	if _, err := os.Stat(dbPath); err != nil {
+	switch _, err := os.Stat(dbPath); {
+	case errors.Is(err, os.ErrNotExist):
 		return nil // no vault yet: the first run creates both
+	case err != nil:
+		return fmt.Errorf("check for an existing vault at %s: %w", dbPath, err)
 	}
 	return fmt.Errorf("a vault exists at %s, but its key file %s is missing. "+
 		"If passwords.key was lost, restore it from a backup. "+

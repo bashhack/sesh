@@ -88,3 +88,25 @@ func TestOpenSQLiteStore_RefusesReplacedPasswordsKey(t *testing.T) {
 
 	wantOpenRefused(t, "the password key in use is not the one this vault was created with", "If passwords.key was replaced")
 }
+
+func TestRefuseNewKeyForExistingVault_UnreadableDirFailsClosed(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := filepath.Join(t.TempDir(), "vault")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0); err != nil { //nolint:gosec // deliberately unreadable
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // restore for cleanup
+			t.Error(err)
+		}
+	})
+	err := refuseNewKeyForExistingVault(filepath.Join(dir, "passwords.db"))
+	if err == nil || !strings.Contains(err.Error(), "check for") || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("err = %v, want a refusal carrying the permission error: an unreadable vault dir isn't a first run", err)
+	}
+}
