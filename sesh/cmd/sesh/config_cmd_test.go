@@ -47,7 +47,7 @@ func TestSubcommand_OnlyTheFirstArgument(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			if got := subcommand(tt.args); got != tt.want {
+			if got, _ := subcommand(tt.args); got != tt.want {
 				t.Errorf("subcommand = %q, want %q", got, tt.want)
 			}
 			if got := needsCredentialStore(tt.args); got != tt.needStore {
@@ -175,4 +175,36 @@ func TestAgentDaemon_TimeoutsFromConfigFile(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("daemon still running after stop")
 	}
+}
+
+func TestKeychainOffMacOS(t *testing.T) {
+	orig := goos
+	goos = "linux"
+	t.Cleanup(func() { goos = orig })
+
+	t.Run("backend from env", func(t *testing.T) {
+		useConfigFile(t, "")
+		t.Setenv(config.EnvBackend, "keychain")
+		cfg, err := settings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = buildProvider(cfg)
+		if err == nil || !strings.Contains(err.Error(), `SESH_BACKEND asks for the macOS Keychain (backend = "keychain"), which isn't available on linux`) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("key source from the config file", func(t *testing.T) {
+		path := useConfigFile(t, "key_source = \"keychain\"\n")
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
+		_, err := openSQLiteStore()
+		if err == nil || !strings.Contains(err.Error(), "key_source in "+path+" asks for the macOS Keychain") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("the Keychain stand-in", func(t *testing.T) {
+		if _, err := systemKeychain().GetSecret("me", "sesh-totp/x"); err == nil || !strings.Contains(err.Error(), "isn't available on linux") {
+			t.Fatalf("err = %v", err)
+		}
+	})
 }

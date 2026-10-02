@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -393,10 +394,13 @@ func (s *MasterPasswordSource) unlock() ([]byte, error) {
 	}
 
 	if attempts == 1 {
-		return nil, fmt.Errorf("wrong master password")
+		return nil, ErrWrongPassword
 	}
-	return nil, fmt.Errorf("wrong master password (after %d attempts)", attempts)
+	return nil, fmt.Errorf("%w (after %d attempts)", ErrWrongPassword, attempts)
 }
+
+// ErrWrongPassword means every master password attempt failed.
+var ErrWrongPassword = errors.New("wrong master password")
 
 func (s *MasterPasswordSource) writeSidecar(data sidecarData) error {
 	b, err := json.MarshalIndent(data, "", "  ")

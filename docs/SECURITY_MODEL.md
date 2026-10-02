@@ -7,7 +7,7 @@ This document describes the security architecture and privacy principles that gu
 sesh is built on three fundamental principles:
 
 1. **Privacy First**: sesh stores your secrets locally and never transmits them — only derived values (TOTP codes, session tokens) leave your machine
-2. **Layered Encryption**: macOS Keychain for the default backend, or AES-256-GCM with Argon2id key derivation for the SQLite backend
+2. **Layered Encryption**: AES-256-GCM with Argon2id key derivation in the default encrypted vault, or the macOS Keychain if you choose it
 3. **Transparent Security**: Be honest about what we can and cannot protect against
 
 ## Threat Model
@@ -34,57 +34,30 @@ sesh is NOT designed to protect against:
 
 ### Storage Security
 
-sesh supports two storage backends. The default uses macOS Keychain; the SQLite backend (`SESH_BACKEND=sqlite`) adds application-level encryption.
+sesh supports two storage backends. The default is an encrypted SQLite vault unlocked with your master password, on macOS and Linux. The macOS Keychain backend (`backend = "keychain"`, macOS only) is used only when you choose it.
 
-#### macOS Keychain (default)
-
-Secrets are stored using the system `security` command with binary access restrictions:
-
-```go
-// Get the path to the sesh binary (handles Homebrew, go install, etc.)
-execPath := constants.GetSeshBinaryPath()
-
-// Use -T flag to restrict access to only the sesh binary
-addCmd := fmt.Sprintf("add-generic-password -a %s -s %s -w %s -U -T %s",
-    account, service, secretStr, execPath)
-
-// Execute via security -i (interactive mode) to avoid process listing exposure
-cmd := execCommand("security", "-i")
-err := secure.ExecWithSecretInput(cmd, []byte(addCmd+"\n"))
-```
-
-**Key Features:**
-- **macOS Keychain Encryption**: Secrets encrypted by the OS keychain subsystem
-- **Binary Path Binding**: The `-T` flag ensures only the sesh binary can access secrets without prompting
-- **User Prompts**: macOS prompts when other apps try to access sesh entries
-- **Automatic Path Detection**: Works with Homebrew, go install, or manual installation
-
-#### SQLite Store (`SESH_BACKEND=sqlite`)
+#### SQLite Store (default)
 
 The SQLite backend provides application-level encryption on top of file-system storage:
 
 - **AES-256-GCM**: Authenticated encryption for every stored entry
 - **Per-entry salts**: Each entry derives a unique encryption key from the master key + a random 16-byte salt
 - **Argon2id key derivation**: Memory-hard KDF for per-entry key derivation (16 MiB, 1 iteration, 1 thread). The KDF input is the 256-bit high-entropy master key (see below), *not* a user password — so these parameters are chosen for domain separation between entries rather than password stretching, and fall below OWASP's password-KDF minimums by design
-- **Two key sources** (`SESH_KEY_SOURCE`): the master key can come from the macOS Keychain (default) or be derived from a user-supplied master password (see below)
-- **Vault key check**: the vault stores a constant encrypted with its key (the `vault_key` table), plus the name of the key source that protects it. Every command decrypts the constant before reading or writing any entry, and refuses a key that fails. A mismatched `SESH_KEY_SOURCE`, a replaced `passwords.key`, or a changed Keychain entry therefore can't write entries the vault's real key can't read. Password mode also refuses to create a new master key next to an existing vault whose `passwords.key` is missing
+- **Two key sources** (`key_source`): the master key is derived from your master password (default), or kept in the macOS Keychain (see below)
+- **Vault key check**: the vault stores a constant encrypted with its key (the `vault_key` table), plus the name of the key source that protects it. Every command decrypts the constant before reading or writing any entry, and refuses a key that fails. A mismatched key source setting, a replaced `passwords.key`, or a changed Keychain entry therefore can't write entries the vault's real key can't read. Password mode also refuses to create a new master key next to an existing vault whose `passwords.key` is missing
 - **Key versioning**: Schema supports key rotation via `key_version` column and `key_metadata` table (rotation logic planned)
 - **FTS5 search**: Full-text search indexes service names, accounts, and descriptions — search queries never touch encrypted data
 - **Audit logging**: Append-only `audit_log` table records access, modification, and deletion events with timestamps
 - **WAL mode**: Write-ahead logging for safe concurrent reads
 
-##### Keychain key source (default)
-
-The 256-bit master encryption key is stored in the macOS Keychain, combining OS-level access control with application-level encryption. The key is hex-encoded (64 ASCII characters) before storage because the `security` command's tokenizer can't reliably round-trip raw random bytes; the key is decoded on read and zeroed after use.
-
-##### Master password key source (`SESH_KEY_SOURCE=password`)
+##### Master password key source (default)
 
 Derives the master key from a user-supplied passphrase via Argon2id. **No keychain involvement**, so in this mode the SQLite backend runs on Linux as well as macOS.
 
 - **KDF**: Argon2id with `t=3, m=64 MiB, p=4, keyLen=32`. These parameters exceed OWASP 2023 minimums (`t=1, m=47 MiB, p=1`) and make offline brute-force expensive (~200 ms per attempt)
 - **Sidecar file** `passwords.key` (next to the DB, 0600 permissions): stores the KDF salt (32 random bytes), algorithm params, and a verification blob. **No secrets.** Same public-info model as bcrypt/scrypt — salt and params are safe to expose
 - **Verification blob**: AES-256-GCM encryption of the constant string `"sesh-verify"` using the derived key. On unlock, sesh re-derives the key from the supplied password and tries to decrypt this blob. GCM's authentication tag rejects wrong passwords immediately, without touching any real entries
-- **First run**: prompts for the master password twice (confirmation), generates the salt, derives the key, writes the sidecar
+- **First run**: needs no setup. Before the first prompt, sesh says it's creating a vault, where, and that the password can't be recovered. It then asks for the master password twice, generates the salt, derives the key, writes the sidecar, and unlocks the agent with the new password, so the next command doesn't prompt
 - **Subsequent runs**: the password is checked by the sesh agent (below). The first command after the agent starts prompts; later commands reuse the agent's key without prompting. If the agent is unavailable, sesh prompts on every run and verifies the password itself
 - **Minimum password length**: 8 characters. This is a **floor**, not a recommendation — it exists to reject obvious mistakes (empty input, fat-fingered short strings). With Argon2id at `m=64 MiB, t=3` and an attacker who has the sidecar, an 8-character lowercase-ASCII password is brute-forceable within days on commodity hardware. **Choose a passphrase**: four or more random words from a large wordlist (40+ bits of entropy) gives meaningful resistance; longer is better
 - **Non-interactive mode**: `SESH_MASTER_PASSWORD` env var bypasses the prompt (intended for CI/scripts only; exposes the password to the process environment). These runs check the password every time and don't use the agent, so a job never starts one; an agent from your interactive use is unaffected
@@ -92,6 +65,10 @@ Derives the master key from a user-supplied passphrase via Argon2id. **No keycha
 **Threat model.** An attacker with the DB file and sidecar can attempt offline brute-force using the public salt and params. At ~5 attempts/second, a strong passphrase (four random words from a large wordlist, 40+ bits of entropy) is resistant; a weak password is not. This is the same threat model as any password manager — the strength of the master password bounds the security of everything under it.
 
 **Metadata exposure.** Even without the master password, an attacker with the DB file can read service names, account names, timestamps, and audit log entries — only the encrypted secret values are protected. Full-database encryption (SQLCipher-style) would require a CGo dependency and is not implemented.
+
+##### Keychain key source (`key_source = "keychain"`, macOS only)
+
+The 256-bit master encryption key is stored in the macOS Keychain, combining OS-level access control with application-level encryption. The key is hex-encoded (64 ASCII characters) before storage because the `security` command's tokenizer can't reliably round-trip raw random bytes; the key is decoded on read and zeroed after use.
 
 ##### Sesh agent
 
@@ -133,6 +110,29 @@ Locking zeroes the key. An automatic lock (idle timeout or max lifetime) also sh
 
 Not protected against: root (it can read the agent's memory), physical-memory attacks such as cold boot or DMA, or a process running as you that captures the password as you type it.
 
+#### macOS Keychain backend (`backend = "keychain"`, macOS only)
+
+Secrets are stored using the system `security` command with binary access restrictions:
+
+```go
+// Get the path to the sesh binary (handles Homebrew, go install, etc.)
+execPath := constants.GetSeshBinaryPath()
+
+// Use -T flag to restrict access to only the sesh binary
+addCmd := fmt.Sprintf("add-generic-password -a %s -s %s -w %s -U -T %s",
+    account, service, secretStr, execPath)
+
+// Execute via security -i (interactive mode) to avoid process listing exposure
+cmd := execCommand("security", "-i")
+err := secure.ExecWithSecretInput(cmd, []byte(addCmd+"\n"))
+```
+
+**Key Features:**
+- **macOS Keychain Encryption**: Secrets encrypted by the OS keychain subsystem
+- **Binary Path Binding**: The `-T` flag ensures only the sesh binary can access secrets without prompting
+- **User Prompts**: macOS prompts when other apps try to access sesh entries
+- **Automatic Path Detection**: Works with Homebrew, go install, or manual installation
+
 ### Encrypted Export
 
 Exports produced with `--format encrypted` are wrapped in a portable envelope that anyone with the password can decrypt on any machine:
@@ -161,9 +161,9 @@ Compare sesh's approach to alternatives:
 
 | Storage Method | Encryption | Access Control | User Experience |
 |----------------|------------|----------------|-----------------|
-| sesh (Keychain) | OS-level (AES-256) | OS-enforced binary binding | Transparent |
-| sesh (SQLite + Keychain key) | AES-256-GCM + Argon2id | File permissions + encryption key in Keychain | Transparent |
-| sesh (SQLite + master password) | AES-256-GCM + Argon2id | File permissions + passphrase; key cached in a per-user agent after unlock | Prompt once per agent session |
+| sesh (default: SQLite + master password) | AES-256-GCM + Argon2id | File permissions + passphrase; key cached in a per-user agent after unlock | Prompt once per agent session |
+| sesh (SQLite + Keychain key, macOS) | AES-256-GCM + Argon2id | File permissions + encryption key in Keychain | Transparent |
+| sesh (Keychain backend, macOS) | OS-level (AES-256) | OS-enforced binary binding | Transparent |
 | Config Files | None/Custom | File permissions only | Manual setup |
 | Environment Vars | None | Process inheritance | Leaks to children |
 | Corporate MFA Apps | Unknown | App-controlled | Privacy concerns |

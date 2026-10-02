@@ -116,9 +116,9 @@ The architecture follows a strict layering model where dependencies flow downwar
 
 2. **Dependency Injection**:
    ```go
-   func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider) *App
+   func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider, clipboardTimeout time.Duration) *App
    ```
-   The constructor accepts a `keychain.Provider` (the credential store) and wires all other dependencies internally. `main.go` selects the concrete store (macOS Keychain or SQLite) via `buildProvider()`. Tests can substitute any dependency.
+   The constructor accepts a `keychain.Provider` (the credential store) and wires all other dependencies internally. `main.go` resolves settings through `internal/config` (flag > env > `~/.config/sesh/config.toml` > default) and selects the concrete store (SQLite by default, or the macOS Keychain) via `buildProvider(cfg)`. Tests can substitute any dependency.
 
 3. **Provider Registration**:
    ```go
@@ -190,14 +190,9 @@ Infrastructure components implement the following security controls:
 
 #### Credential Storage
 
-sesh supports two storage backends, selectable via `SESH_BACKEND`:
+sesh supports two storage backends, selected by the `backend` setting (`SESH_BACKEND`, `--backend`):
 
-**macOS Keychain (default)**
-- OS-managed encryption (AES-256)
-- Process-level access control via `-T` flag
-- User-transparent authorization dialogs
-
-**SQLite Store (`SESH_BACKEND=sqlite`)**
+**SQLite Store (default)**
 - Pure-Go SQLite via `modernc.org/sqlite` — zero C dependencies
 - AES-256-GCM encryption with per-entry salts
 - Argon2id key derivation for per-entry keys
@@ -205,6 +200,12 @@ sesh supports two storage backends, selectable via `SESH_BACKEND`:
 - Audit log table tracking all access, modifications, and deletions
 - Pluggable master key source (see below)
 - WAL mode for concurrent read safety
+- A vault key check (`vault_key` table) that refuses a key that can't open the vault before any read or write
+
+**macOS Keychain (`backend = "keychain"`, macOS only)**
+- OS-managed encryption (AES-256)
+- Process-level access control via `-T` flag
+- User-transparent authorization dialogs
 
 **Key sources.** The `database.KeySource` interface abstracts where the 256-bit master encryption key comes from:
 
@@ -219,10 +220,10 @@ type KeySource interface {
 
 Two implementations:
 
-- **`KeychainSource`** (default) — reads the key from the macOS Keychain; first-run generates a random 256-bit key and stores it. macOS-only.
-- **`MasterPasswordSource`** (`SESH_KEY_SOURCE=password`) — derives the key from a user-supplied passphrase via Argon2id. The KDF salt, Argon2id parameters, and a verification blob live in a 0600 sidecar file (`passwords.key`) next to the database. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. No keychain dependency — works on macOS, Linux, and Windows.
+- **`MasterPasswordSource`** (default) — derives the key from a user-supplied passphrase via Argon2id. The KDF salt, Argon2id parameters, and a verification blob live in a 0600 sidecar file (`passwords.key`) next to the database. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. No keychain dependency — works on macOS and Linux. In normal use the sesh agent holds the derived key and the store encrypts through it (`agent.Oracle`).
+- **`KeychainSource`** (`key_source = "keychain"`) — reads the key from the macOS Keychain; first-run generates a random 256-bit key and stores it. macOS-only.
 
-`main.go`'s `buildKeySource(dataDir)` selects between them based on `SESH_KEY_SOURCE`. The store doesn't know or care which source provided the key.
+`main.go`'s `buildKeySource(dbPath, source)` selects between them by the `key_source` setting. The store only sees a `database.CryptoOracle`, so it doesn't know which source provided the key.
 
 **Encrypted export.** The password manager's `ExportEncrypted`/`ImportEncrypted` use the same primitives (Argon2id + AES-256-GCM) but with an independent per-export salt. The envelope is self-contained — the salt and parameters are embedded alongside the ciphertext — so encrypted exports are portable across machines and key sources.
 
@@ -268,7 +269,7 @@ Each entry is a keychain item keyed by `{namespace}/{segments}` (built by `keyfo
 
 **SQLite Data Model**
 
-The SQLite backend (`SESH_BACKEND=sqlite`) stores credentials in `<dataDir>/sesh/passwords.db` using the schema in `internal/database/schema.go`. `passwords_fts` is a virtual FTS5 index shadowing the `passwords` table; `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
+The SQLite backend (the default) stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `passwords_fts` is a virtual FTS5 index shadowing the `passwords` table; `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%

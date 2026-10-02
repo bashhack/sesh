@@ -41,8 +41,8 @@ func TestLoad_DefaultsWithoutAFile(t *testing.T) {
 	if c.FileFound || c.Path != path {
 		t.Errorf("Path = %q, FileFound = %v; want %q, false", c.Path, c.FileFound, path)
 	}
-	if c.Backend.Value != BackendKeychain || c.KeySource.Value != KeySourceKeychain || c.Backend.Source != FromDefault {
-		t.Errorf("backend %+v, key source %+v; want keychain defaults", c.Backend, c.KeySource)
+	if c.Backend.Value != BackendSQLite || c.KeySource.Value != KeySourcePassword || c.Backend.Source != FromDefault {
+		t.Errorf("backend %+v, key source %+v; want the sqlite + password defaults", c.Backend, c.KeySource)
 	}
 	if c.ClipboardTimeout.Value != 30*time.Second || c.AgentIdleTimeout.Value != 10*time.Minute || c.AgentMaxLifetime.Value != 8*time.Hour {
 		t.Errorf("durations = %v, %v, %v", c.ClipboardTimeout.Value, c.AgentIdleTimeout.Value, c.AgentMaxLifetime.Value)

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -42,7 +43,7 @@ func main() {
 	// Only open the credential store if the command will actually use it.
 	// --version, --help, --list-services, and --migrate either just print
 	// information or open their own store internally. Skipping buildProvider
-	// here means SESH_BACKEND=sqlite doesn't pointlessly open the DB (or
+	// here means the SQLite backend doesn't pointlessly open the DB (or
 	// acquire the key-init flock on first run) for those commands.
 	args, overrides, err := takeSettingFlags(os.Args)
 	if err == nil {
@@ -85,7 +86,7 @@ func main() {
 			}()
 		}
 	} else {
-		kc = noopCredentialStore{}
+		kc = unavailableStore{err: errNoStore}
 	}
 
 	app := NewDefaultApp(versionInfo, kc, clipboardTimeout)
@@ -97,7 +98,7 @@ func main() {
 // (--help/--version/--list-services) or open their own store internally
 // (--migrate) return false.
 func needsCredentialStore(args []string) bool {
-	if len(args) <= 1 || subcommand(args) != "" {
+	if name, _ := subcommand(args); len(args) <= 1 || name != "" {
 		return false
 	}
 	for _, a := range args[1:] {
@@ -113,42 +114,64 @@ func needsCredentialStore(args []string) bool {
 	return true
 }
 
-// subcommand returns the subcommand args name ("agent" or "config"), or
-// "". Only the first argument counts, so an entry that happens to be
-// named "agent" (-service-name agent) is never mistaken for one.
-func subcommand(args []string) string {
-	if len(args) > 1 {
-		switch args[1] {
-		case "agent", "config":
-			return args[1]
-		}
+// subcommand returns the subcommand args name ("agent" or "config") and
+// the arguments after it, or "" and nil. Only the first argument counts,
+// so an entry that happens to be named "agent" (-service-name agent) is
+// never mistaken for one.
+func subcommand(args []string) (name string, rest []string) {
+	if len(args) < 2 {
+		return "", nil
 	}
-	return ""
+	switch name, rest := args[1], args[2:]; name {
+	case "agent", "config":
+		return name, rest
+	}
+	return "", nil
 }
 
-// noopCredentialStore is a keychain.Provider stand-in used for commands
-// that don't touch the credential store. Every method returns an error so
-// that a routing bug (e.g. a command that should have needed the store
-// being classified as lightweight) surfaces loudly instead of silently
-// succeeding.
-type noopCredentialStore struct{}
+// unavailableStore is a keychain.Provider whose every call fails with err.
+// It stands in for the store in commands that don't open one, so a routing
+// bug (a command that needs the store classified as one that doesn't)
+// fails loudly instead of silently succeeding. It also stands in for the
+// macOS Keychain on other systems.
+type unavailableStore struct{ err error }
 
 var errNoStore = fmt.Errorf("no credential store opened for this command")
 
-func (noopCredentialStore) GetSecret(_, _ string) ([]byte, error) { return nil, errNoStore }
-func (noopCredentialStore) SetSecret(_, _ string, _ []byte) error { return errNoStore }
-func (noopCredentialStore) GetSecretString(_, _ string) (string, error) {
-	return "", errNoStore
+func (u unavailableStore) GetSecret(_, _ string) ([]byte, error)         { return nil, u.err }
+func (u unavailableStore) SetSecret(_, _ string, _ []byte) error         { return u.err }
+func (u unavailableStore) GetSecretString(_, _ string) (string, error)   { return "", u.err }
+func (u unavailableStore) SetSecretString(_, _, _ string) error          { return u.err }
+func (u unavailableStore) GetMFASerialBytes(_, _ string) ([]byte, error) { return nil, u.err }
+func (u unavailableStore) ListEntries(_ string) ([]keychain.KeychainEntry, error) {
+	return nil, u.err
 }
-func (noopCredentialStore) SetSecretString(_, _, _ string) error { return errNoStore }
-func (noopCredentialStore) GetMFASerialBytes(_, _ string) ([]byte, error) {
-	return nil, errNoStore
+func (u unavailableStore) DeleteEntry(_, _ string) error       { return u.err }
+func (u unavailableStore) SetDescription(_, _, _ string) error { return u.err }
+
+// goos is runtime.GOOS. Tests replace it to check the behaviour on other
+// systems.
+var goos = runtime.GOOS
+
+// systemKeychain returns the macOS Keychain, or elsewhere a stand-in whose
+// every call says the Keychain isn't available.
+func systemKeychain() keychain.Provider {
+	if goos == "darwin" {
+		return keychain.NewDefaultProvider()
+	}
+	return unavailableStore{err: fmt.Errorf("the macOS Keychain isn't available on %s", goos)}
 }
-func (noopCredentialStore) ListEntries(_ string) ([]keychain.KeychainEntry, error) {
-	return nil, errNoStore
+
+// requireMacOSKeychain refuses a setting that asks for the macOS Keychain
+// on another system, naming where the setting came from.
+func requireMacOSKeychain(s config.Setting[string], key string) error {
+	if goos == "darwin" {
+		return nil
+	}
+	return fmt.Errorf("%s asks for the macOS Keychain (%s = %q), which isn't available on %s. "+
+		"Use the defaults instead: backend = \"sqlite\" with key_source = \"password\"",
+		s.Origin, key, s.Value, goos)
 }
-func (noopCredentialStore) DeleteEntry(_, _ string) error       { return errNoStore }
-func (noopCredentialStore) SetDescription(_, _, _ string) error { return errNoStore }
 
 // cliOverrides holds setting flags given on the command line.
 var cliOverrides config.Overrides
@@ -164,7 +187,10 @@ func settings() (*config.Config, error) {
 // no closer.
 func buildProvider(cfg *config.Config) (keychain.Provider, io.Closer, error) {
 	if cfg.Backend.Value != config.BackendSQLite {
-		return keychain.NewDefaultProvider(), nil, nil
+		if err := requireMacOSKeychain(cfg.Backend, "backend"); err != nil {
+			return nil, nil, err
+		}
+		return systemKeychain(), nil, nil
 	}
 	store, err := openSQLiteStoreWith(cfg)
 	if err != nil {
@@ -192,12 +218,17 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 	}
 
 	source := cfg.KeySource.Value
+	if source == config.KeySourceKeychain {
+		if err := requireMacOSKeychain(cfg.KeySource, "key_source"); err != nil {
+			return nil, err
+		}
+	}
 	if source == config.KeySourcePassword {
 		if err := refuseNewKeyForExistingVault(dbPath); err != nil {
 			return nil, err
 		}
 	}
-	ks, err := buildKeySource(filepath.Dir(dbPath), source)
+	ks, err := buildKeySource(dbPath, source)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +297,68 @@ func errNeedsSQLite(what string) error {
 	return fmt.Errorf("%s requires the sqlite backend: set backend = \"sqlite\" in the config file, or SESH_BACKEND=sqlite", what)
 }
 
+// sidecarMissing reports whether dataDir has no passwords.key yet: the
+// next password-mode open creates the vault's key.
+func sidecarMissing(dataDir string) bool {
+	_, err := os.Stat(filepath.Join(dataDir, sidecarFile))
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// vaultCreationNotice is shown before the first "Create master password"
+// prompt.
+func vaultCreationNotice(dbPath string) string {
+	return "Creating your sesh vault (first run)\n" +
+		"  Location: " + tildePath(dbPath) + "\n" +
+		"  Your master password encrypts everything in the vault. It can't be\n" +
+		"  recovered: if you forget it, the vault can't be opened. Store it\n" +
+		"  somewhere safe, and back the vault up with an encrypted export\n" +
+		"  (sesh -service password -action export --format encrypted --file <file>).\n"
+}
+
+// tildePath shows a path under the home directory as ~/...
+func tildePath(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	if rest, ok := strings.CutPrefix(p, home+string(filepath.Separator)); ok {
+		return "~/" + rest
+	}
+	return p
+}
+
+// unlockAgentWith gives a just-created vault's password to the agent, so
+// the next command doesn't ask for it. pw is zeroed. A failure only warns:
+// this command already has the key.
+func unlockAgentWith(dataDir string, pw []byte) {
+	defer secure.SecureZeroBytes(pw)
+	mat, err := database.ReadUnlockMaterial(dataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sesh agent not unlocked: %v\n", err) //nolint:errcheck // best-effort warning
+		return
+	}
+	conn, err := agent.EnsureAgent()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sesh agent unavailable: %v\n", err) //nolint:errcheck // best-effort warning
+		return
+	}
+	defer closeAgentConn(conn)
+	// agent.Unlock zeroes the slice it's given.
+	if err := agent.Unlock(conn, bytes.Clone(pw), mat.Salt, mat.Verify, mat.Params); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sesh agent unlock failed: %v\n", err) //nolint:errcheck // best-effort warning
+	}
+}
+
+// withForgottenPasswordHint adds what a person can do after failing every
+// interactive master password attempt. Scripts get the plain error.
+func withForgottenPasswordHint(err error, cfg passwordPromptConfig) error {
+	if !cfg.interactive || !errors.Is(err, database.ErrWrongPassword) {
+		return err
+	}
+	return fmt.Errorf("%w.\n   If you've forgotten it, the vault can't be opened. To start over, or to restore\n"+
+		"   from an encrypted export, see \"Forgotten master password\" in the usage docs", err)
+}
+
 // withKeyHint adds what to do next to a database.WrongKeyError.
 func withKeyHint(err error) error {
 	var wk *database.WrongKeyError
@@ -292,14 +385,20 @@ func withKeyHint(err error) error {
 // password is retried against the agent and is returned to the caller
 // when the attempt budget is spent. With SESH_MASTER_PASSWORD set, the
 // agent is not used at all.
-func buildKeySource(dataDir, source string) (database.CryptoOracle, error) {
+func buildKeySource(dbPath, source string) (database.CryptoOracle, error) {
+	return buildKeySourceWith(dbPath, source, resolvePasswordPrompt())
+}
+
+// buildKeySourceWith is buildKeySource with the password prompt given, so
+// tests can stand in for a person at a terminal.
+func buildKeySourceWith(dbPath, source string, cfg passwordPromptConfig) (database.CryptoOracle, error) {
+	dataDir := filepath.Dir(dbPath)
 	switch source {
 	case config.KeySourcePassword:
-		cfg := resolvePasswordPrompt()
 		if !cfg.fromEnv {
 			oracle, typed, err := keySourceFromAgent(dataDir, cfg)
 			if err != nil {
-				return nil, err
+				return nil, withForgottenPasswordHint(err, cfg)
 			}
 			if oracle != nil {
 				return oracle, nil
@@ -309,6 +408,17 @@ func buildKeySource(dataDir, source string) (database.CryptoOracle, error) {
 				cfg = cfg.withTypedPassword(typed)
 			}
 		}
+		// A person creating the vault is told what's happening before the
+		// first prompt, and the agent gets the new password afterwards, so
+		// the next command doesn't ask for it again.
+		var created []byte
+		firstRun := !cfg.fromEnv && sidecarMissing(dataDir)
+		if firstRun {
+			fmt.Fprint(os.Stderr, vaultCreationNotice(dbPath)) //nolint:errcheck // best-effort notice
+			cfg = cfg.keepingLastPassword(&created)
+		}
+		defer func() { secure.SecureZeroBytes(created) }()
+
 		mps := cfg.newSource(dataDir)
 		// Eagerly unlock so every operation — including metadata-only reads
 		// like --list and --delete — requires the master password. Without
@@ -317,16 +427,19 @@ func buildKeySource(dataDir, source string) (database.CryptoOracle, error) {
 		// the password.
 		key, err := mps.GetEncryptionKey()
 		if err != nil {
-			return nil, err
+			return nil, withForgottenPasswordHint(err, cfg)
 		}
 		secure.SecureZeroBytes(key)
+		if firstRun {
+			unlockAgentWith(dataDir, created)
+		}
 		return database.NewKeySourceOracle(mps), nil
 	case config.KeySourceKeychain:
 		u, err := user.Current()
 		if err != nil {
 			return nil, fmt.Errorf("determine current user: %w", err)
 		}
-		ks := database.NewKeychainSource(keychain.NewDefaultProvider(), u.Username)
+		ks := database.NewKeychainSource(systemKeychain(), u.Username)
 		if err := ensureMasterKey(ks, dataDir); err != nil {
 			return nil, err
 		}
@@ -404,9 +517,9 @@ func keySourceFromAgent(dataDir string, cfg passwordPromptConfig) (oracle databa
 	// Same wording as MasterPasswordSource, so the user sees one message
 	// whichever path checked the password.
 	if attempts == 1 {
-		return nil, nil, errors.New("wrong master password")
+		return nil, nil, database.ErrWrongPassword
 	}
-	return nil, nil, fmt.Errorf("wrong master password (after %d attempts)", attempts)
+	return nil, nil, fmt.Errorf("%w (after %d attempts)", database.ErrWrongPassword, attempts)
 }
 
 func closeAgentConn(conn *agent.Conn) {
@@ -477,6 +590,22 @@ func (c passwordPromptConfig) options() []database.Option {
 		return []database.Option{database.WithMaxAttempts(interactivePasswordAttempts)}
 	}
 	return nil
+}
+
+// keepingLastPassword returns a config whose prompt also keeps a copy of
+// the last password it returned in *last, zeroing the copy it replaces.
+// The caller zeroes *last.
+func (c passwordPromptConfig) keepingLastPassword(last *[]byte) passwordPromptConfig {
+	next := c.prompt
+	c.prompt = func(p string) ([]byte, error) {
+		pw, err := next(p)
+		if err == nil {
+			secure.SecureZeroBytes(*last)
+			*last = bytes.Clone(pw)
+		}
+		return pw, err
+	}
+	return c
 }
 
 // withTypedPassword returns a config whose first prompt is answered with
@@ -583,7 +712,7 @@ func runMigrate(app *App) error {
 		return errNeedsSQLite("migration")
 	}
 
-	source := keychain.NewDefaultProvider()
+	source := systemKeychain()
 
 	dest, err := openSQLiteStoreWith(cfg)
 	if err != nil {
@@ -695,14 +824,14 @@ func fatal(app *App, err error) {
 
 // run is the testable entrypoint for the application
 func run(app *App, args []string) {
-	switch subcommand(args) {
+	switch name, rest := subcommand(args); name {
 	case "agent":
-		if err := runAgent(app, args[2:]); err != nil {
+		if err := runAgent(app, rest); err != nil {
 			fatal(app, err)
 		}
 		return
 	case "config":
-		if err := runConfig(app, args[2:]); err != nil {
+		if err := runConfig(app, rest); err != nil {
 			fatal(app, err)
 		}
 		return
@@ -728,7 +857,7 @@ func run(app *App, args []string) {
 			return
 		case "--rekey", "-rekey":
 			rest := remainingArgs(args, arg)
-			if err := runRekey(app, rest, keychain.NewDefaultProvider()); err != nil {
+			if err := runRekey(app, rest, systemKeychain()); err != nil {
 				fatal(app, err)
 			}
 			return
@@ -749,6 +878,14 @@ func run(app *App, args []string) {
 	if serviceName == "" {
 		if hasHelp {
 			if err := app.PrintUsage(); err != nil {
+				fatal(app, err)
+			}
+			return
+		}
+		// Plain `sesh` asks what it can do; options without -service are a
+		// mistake.
+		if len(args) == 1 {
+			if err := app.PrintGettingStarted(); err != nil {
 				fatal(app, err)
 			}
 			return
@@ -888,6 +1025,27 @@ func extractServiceName(args []string) string {
 		}
 	}
 	return ""
+}
+
+// PrintGettingStarted prints what plain `sesh` shows: what sesh is for,
+// the first commands to run, and the providers.
+func (a *App) PrintGettingStarted() error {
+	intro := []string{
+		"sesh keeps your TOTP secrets and passwords in an encrypted vault.",
+		"",
+		"Get started:",
+		"  sesh -service totp -setup       add a TOTP account",
+		"  sesh -service aws -setup        set up AWS MFA",
+		"  sesh -service password -help    store passwords, API keys, and notes",
+		"  sesh --help                     all options",
+		"",
+	}
+	for _, line := range intro {
+		if _, err := fmt.Fprintln(a.Stdout, line); err != nil {
+			return err
+		}
+	}
+	return a.ListProviders()
 }
 
 // PrintUsage displays general usage information

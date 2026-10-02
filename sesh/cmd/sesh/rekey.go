@@ -427,7 +427,7 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	}
 	if _, err := os.Stat(sidecarPath); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("no sidecar to rotate at %s — is SESH_KEY_SOURCE=password actually in use?", sidecarPath)
+			return fmt.Errorf("no sidecar to rotate at %s — is the master password key source actually in use?", sidecarPath)
 		}
 		return fmt.Errorf("stat sidecar: %w", err)
 	}

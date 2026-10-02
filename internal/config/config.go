@@ -139,8 +139,8 @@ func Load(o Overrides) (*Config, error) {
 	}
 	c := &Config{
 		Path:             path,
-		Backend:          Setting[string]{Value: BackendKeychain},
-		KeySource:        Setting[string]{Value: KeySourceKeychain},
+		Backend:          Setting[string]{Value: BackendSQLite},
+		KeySource:        Setting[string]{Value: KeySourcePassword},
 		DBPath:           Setting[string]{Value: dbDefault},
 		ClipboardTimeout: Setting[time.Duration]{Value: DefaultClipboardTimeout},
 		AgentIdleTimeout: Setting[time.Duration]{Value: agent.DefaultIdleTimeout},

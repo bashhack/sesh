@@ -32,14 +32,15 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 ## Features
 
 - **Extensible Plugin Architecture** — Add new authentication providers with a single interface
-- **Dual Storage Backends** — macOS Keychain (default) or encrypted SQLite with AES-256-GCM and Argon2id key derivation (`SESH_BACKEND=sqlite`)
-- **Two Key Sources for SQLite** — macOS Keychain (default) or user-supplied master password (`SESH_KEY_SOURCE=password`) for keychain-free operation on macOS and Linux
-- **Master-Password Agent** — In master password mode, a per-user background agent holds the key so you type the password once; it locks itself when idle and is hardened against memory inspection ([Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent))
+- **Encrypted Vault by Default** — Secrets live in an encrypted SQLite vault (AES-256-GCM, Argon2id) unlocked with your master password, on macOS and Linux alike. No setup: the first command creates it
+- **Master-Password Agent** — A per-user background agent holds the key so you type the password once; it locks itself when idle and is hardened against memory inspection ([Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent))
+- **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from
+- **macOS Keychain, If You Choose** — Store secrets in the Keychain instead (`backend = "keychain"`), or keep the vault but its key in the Keychain (`key_source = "keychain"`)
 - **Encrypted Export** — Portable backups protected by a password, safe to transfer between machines (`--format encrypted`)
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes with full-text search
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
 - **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically. Supports non-standard configs (SHA-256/SHA-512, 8 digits, custom periods) extracted from QR codes
-- **Clipboard Auto-Clear** — Clipboard is automatically cleared 30 seconds after copying secrets
+- **Clipboard Auto-Clear** — Clipboard is automatically cleared 30 seconds after copying secrets (configurable: `clipboard_timeout`)
 - **Intelligent Subshell** — Isolate credentials in secure environments with built-in helper commands
 - **QR Code Scanning** — Set up TOTP by selecting the QR code region on screen
 - **Multiple Profile Support** — Manage dev/prod environments and multiple accounts per service
@@ -47,7 +48,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 
 ## Installation
 
-> **Platform:** The default backend (macOS Keychain) requires macOS. The SQLite backend (`SESH_BACKEND=sqlite`) uses pure-Go encryption and works on macOS and Linux. By default it still stores the encryption key in the macOS Keychain, but setting `SESH_KEY_SOURCE=password` enables a master-password mode that is fully keychain-free, on macOS and Linux.
+> **Platform:** macOS and Linux. The default, an encrypted vault unlocked with your master password, works the same on both and needs no setup. The macOS Keychain options are macOS-only.
 
 ```bash
 # Option 1: Install with Homebrew (macOS)
@@ -72,7 +73,7 @@ Start by setting up your first provider entry.
 
 - **For AWS provider:** [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured with at least one profile.
 - **For TOTP provider:** No additional dependencies — works with any service that supports standard TOTP (RFC 6238).
-- **For Password provider:** No additional dependencies. Uses the SQLite backend automatically when `SESH_BACKEND=sqlite` is set, or the system keychain otherwise.
+- **For Password provider:** No additional dependencies.
 
 ### Setup Wizards
 
@@ -264,28 +265,22 @@ When you run `sesh -service aws`, you enter a secure subshell with:
 -offset <n>                     # Skip first N results
 ```
 
-#### Storage Backend
+#### Storage
 ```bash
-# Default: macOS Keychain
-sesh -service aws
+# Default: an encrypted vault unlocked with your master password (macOS and Linux)
+sesh -service password -list
+# → the first command explains what it's creating, asks for a new master
+#   password twice, and unlocks the background sesh agent, so later commands
+#   don't prompt until the agent locks itself
 
-# SQLite backend (AES-256-GCM encrypted, Argon2id key derivation)
-SESH_BACKEND=sqlite sesh -service password -list
-```
-
-#### Key Source (SQLite backend only)
-```bash
-# Default: master key stored in macOS Keychain (keychain-assisted)
-SESH_BACKEND=sqlite sesh -service password -list
-
-# Master password: key derived from passphrase, no keychain needed (macOS and Linux)
-SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh -service password -list
-# → first run creates the vault (asks twice for confirmation); the next run
-#   prompts once and starts a background sesh agent that holds the key, so
-#   later commands don't prompt
+# See every setting and where it came from
+sesh config
 
 # Non-interactive (CI/scripting — exposes password to process env)
-SESH_BACKEND=sqlite SESH_KEY_SOURCE=password SESH_MASTER_PASSWORD=... sesh -service password -list
+SESH_MASTER_PASSWORD=... sesh -service password -list
+
+# macOS Keychain instead (set in ~/.config/sesh/config.toml, or per command)
+sesh --backend keychain -service aws
 ```
 
 See [Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent) for how the agent starts, locks, and stops. It needs no management; `sesh agent status`, `lock`, and `stop` are there if you want them.

@@ -2,7 +2,7 @@
 
 This document provides detailed instructions for using and configuring sesh for secure authentication workflows across multiple providers.
 
-> **Requirements:** macOS for the default Keychain backend. The SQLite backend (`SESH_BACKEND=sqlite`) also runs on Linux. For the AWS provider, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
+> **Requirements:** macOS or Linux. The default, an encrypted vault unlocked with your master password, works the same on both; the macOS Keychain options are macOS-only. For the AWS provider, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
 
 ## Workflow Overview
 
@@ -106,7 +106,7 @@ sesh uses a provider-based configuration system:
 2. **Provider-specific flags** - Apply only to the selected provider (e.g., `-profile` for AWS)
 3. **Config file** - Persistent settings in `~/.config/sesh/config.toml` (see [Configuration file](#configuration-file))
 4. **Environment variables** - Override the config file for one shell or one command (e.g. `SESH_BACKEND`)
-5. **Credential storage** - macOS Keychain (default) or encrypted SQLite (`backend = "sqlite"`)
+5. **Credential storage** - An encrypted SQLite vault unlocked with your master password (default), or the macOS Keychain (`backend = "keychain"`)
 
 ### Configuration file
 
@@ -199,12 +199,12 @@ db_path             /Users/me/vaults/sesh.db
 | Variable                | Description                                        | Default          |
 |-------------------------|----------------------------------------------------|------------------|
 | `AWS_PROFILE`          | Default AWS profile                                | `default`        |
-| `SESH_BACKEND`         | Storage backend: `keychain` or `sqlite` (config: `backend`). Any other value is an error | `keychain`       |
-| `SESH_KEY_SOURCE`      | Master key source for the SQLite backend: `keychain` or `password` (config: `key_source`). Ignored unless the backend is `sqlite` | `keychain`       |
+| `SESH_BACKEND`         | Storage backend: `sqlite` or `keychain` (config: `backend`). Any other value is an error | `sqlite`       |
+| `SESH_KEY_SOURCE`      | Master key source for the SQLite backend: `password` or `keychain` (config: `key_source`). Ignored unless the backend is `sqlite` | `password`       |
 | `SESH_DB_PATH`         | Vault location for the SQLite backend (config: `db_path`). `passwords.key` sits next to it | `~/Library/Application Support/sesh/passwords.db` (macOS), `$XDG_DATA_HOME/sesh/passwords.db` (Linux) |
 | `SESH_CLIPBOARD_TIMEOUT` | How long a copied secret stays on the clipboard (config: `clipboard_timeout`) | `30s` |
 | `SESH_MASTER_PASSWORD` | Non-interactive master password (skips prompt). Intended for CI/scripting only — exposes the password via process environment | unset            |
-| `SESH_AUTH_SOCK`       | Socket path for the sesh agent used by `SESH_KEY_SOURCE=password` | `<user-cache-dir>/sesh/agent.sock` |
+| `SESH_AUTH_SOCK`       | Socket path for the sesh agent used in master password mode | `<user-cache-dir>/sesh/agent.sock` |
 | `SESH_AGENT_IDLE_TIMEOUT` | Agent locks after this long without use; `0` disables (config: `agent.idle_timeout`). Same as `sesh agent --idle-timeout` | `10m` |
 | `SESH_AGENT_MAX_LIFETIME` | Agent locks this long after each unlock; `0` disables (config: `agent.max_lifetime`). Same as `sesh agent --max-lifetime` | `8h` |
 
@@ -214,36 +214,41 @@ sesh has two independent axes:
 
 | Axis | Values | Selected by |
 |------|--------|-------------|
-| Backend | `keychain` (default) or `sqlite` | `SESH_BACKEND` |
-| Key source (SQLite only) | `keychain` (default) or `password` | `SESH_KEY_SOURCE` |
+| Backend | `sqlite` (default) or `keychain` | `backend` / `SESH_BACKEND` / `--backend` |
+| Key source (SQLite only) | `password` (default) or `keychain` | `key_source` / `SESH_KEY_SOURCE` / `--key-source` |
 
 The matrix:
 
-| `SESH_BACKEND` | `SESH_KEY_SOURCE` | Where data lives | Where key lives | Platforms |
+| `backend` | `key_source` | Where data lives | Where key lives | Platforms |
 |---|---|---|---|---|
-| unset / `keychain` | (ignored) | macOS Keychain | macOS Keychain | macOS only |
-| `sqlite` | unset / `keychain` | SQLite file (encrypted) | macOS Keychain (256-bit random) | macOS only |
-| `sqlite` | `password` | SQLite file (encrypted) | Derived from master password via Argon2id; salt in `passwords.key` sidecar (0600) | macOS, Linux |
+| `sqlite` (default) | `password` (default) | SQLite file (encrypted) | Derived from master password via Argon2id; salt in `passwords.key` sidecar (0600) | macOS, Linux |
+| `sqlite` | `keychain` | SQLite file (encrypted) | macOS Keychain (256-bit random) | macOS only |
+| `keychain` | (ignored) | macOS Keychain | macOS Keychain | macOS only |
+
+Asking for the Keychain on Linux is an error that names the setting and where it was set.
 
 ### Using the master password mode
 
 ```bash
-# First run — asked to create the password (twice for confirmation)
-SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --action store \
-    --service-name github --username alice
+# First run — explains what it's creating, then asks for the new password twice
+sesh --service password --action store --service-name github --username alice
+# Creating your sesh vault (first run)
+#   Location: ~/Library/Application Support/sesh/passwords.db
+#   Your master password encrypts everything in the vault. It can't be
+#   recovered: if you forget it, the vault can't be opened. ...
 # Create master password: ****
 # Confirm master password: ****
 # Enter password for github (alice): ****
 
-# Next run — prompts once; the sesh agent keeps the key unlocked
-SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
-# Master password: ****
+# Later runs — no prompt while the agent is unlocked
+sesh --service password --list
 
-# Later runs — no prompt while the agent is running
-SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
+# After the agent has locked itself (10 minutes unused) — one prompt, then quiet again
+sesh --service password --list
+# Master password: ****
 ```
 
-From the second run on, a background `sesh agent` holds the key, so later commands don't prompt. See [Using the sesh agent](#using-the-sesh-agent) for how it starts, locks, and stops.
+Creating the vault also unlocks the background `sesh agent` with the new password, so the next command doesn't ask again. See [Using the sesh agent](#using-the-sesh-agent) for how it starts, locks, and stops.
 
 Secrets are limited to 1 MiB each.
 
@@ -251,12 +256,36 @@ The sidecar file `passwords.key` lives next to the SQLite database. It contains 
 
 #### Scripts and CI
 
-For non-interactive use, set `SESH_MASTER_PASSWORD`. sesh then checks that password on every run and doesn't use the agent, so a script never starts a background process or depends on one being unlocked. If you also use sesh interactively, your agent is unaffected; `sesh agent stop` still stops it if you want it gone. Because the variable exposes the password to the process environment, use it only where that's acceptable.
+For non-interactive use, set `SESH_MASTER_PASSWORD`. sesh then checks that password on every run, prints no first-run explanation, and doesn't use the agent, so a script never starts a background process or depends on one being unlocked. If you also use sesh interactively, your agent is unaffected; `sesh agent stop` still stops it if you want it gone. Because the variable exposes the password to the process environment, use it only where that's acceptable.
 
 ```bash
 export SESH_MASTER_PASSWORD='...'
-SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
+sesh --service password --list
 ```
+
+#### Forgotten master password
+
+There is no recovery, by design. The master password is the only way to derive the vault's key: sesh doesn't store it, and nobody else can open the vault without it. After three wrong attempts at a terminal, sesh says so and points here.
+
+Your options:
+
+- **Restore from an encrypted export**, if you made one. Start a new vault (below), then import the export. It asks for the export's own password, which you chose when exporting:
+
+  ```bash
+  sesh --service password --action import --format encrypted --file backup.enc
+  ```
+
+- **Start over with an empty vault.** First stop the agent with `sesh agent stop`. Then move **both** the vault and its key file aside: `sesh config` shows the vault's path, and `passwords.key` sits next to it. Keep the old files in case the password comes back to you:
+
+  ```bash
+  cd ~/Library/Application\ Support/sesh     # Linux: ~/.local/share/sesh
+  mv passwords.db passwords.db.forgotten
+  mv passwords.key passwords.key.forgotten
+  ```
+
+  The next command creates a new vault. sesh never deletes a vault for you, and it refuses to create a new key next to an existing vault, so moving only one of the two files won't work.
+
+To avoid ending up here, keep the master password somewhere safe and make an encrypted export from time to time (see [Encrypted exports](#encrypted-exports)).
 
 ### Using the sesh agent
 
@@ -354,11 +383,11 @@ Encrypted exports use the same Argon2id + AES-256-GCM primitives as the master p
 
 ### Switching key sources (`sesh rekey`)
 
-Switching `SESH_KEY_SOURCE` after entries exist would otherwise leave the database unreadable — the new source derives a different key. `sesh rekey --to <source>` re-encrypts every entry under the target key source and atomically swaps the result into place.
+Changing the key source setting after entries exist would otherwise leave the database unreadable — the new source derives a different key. `sesh rekey --to <source>` re-encrypts every entry under the target key source and atomically swaps the result into place.
 
 ```bash
-# Currently using keychain; switch to master password.
-SESH_BACKEND=sqlite sesh --rekey --to password
+# Currently using the Keychain key (key_source = "keychain"); switch to a master password.
+sesh --rekey --to password
 # Create master password: ****
 # Confirm master password: ****
 # About to re-encrypt 12 entries: keychain → password
@@ -370,9 +399,9 @@ SESH_BACKEND=sqlite sesh --rekey --to password
 # Original DB preserved at /Users/alice/Library/Application Support/sesh/passwords.db.pre-rekey
 # Note: old keychain entry 'sesh-sqlite-encryption-key' is now unused. Remove it via Keychain Access if you want to clean up.
 
-# Then run with the new source.
-export SESH_KEY_SOURCE=password
-SESH_BACKEND=sqlite sesh --service password --list
+# Then change the setting to match: remove key_source from ~/.config/sesh/config.toml
+# (password is the default), or set key_source = "password".
+sesh --service password --list
 ```
 
 Behaviour:
@@ -387,7 +416,7 @@ Timestamps (`created_at`, `updated_at`) are preserved across the rekey.
 
 **The vault checks its key.** Every SQLite vault stores a small value encrypted with its key, and the name of the key source that protects it. Each command decrypts that value before it reads or writes anything, so a wrong key is refused instead of being used:
 
-- **Forgot to change `SESH_KEY_SOURCE` after a rekey:** `this vault uses the keychain key source, but sesh is using password`. The message gives the setting to use, or the rekey command that switches the vault instead.
+- **Forgot to change the key source setting after a rekey:** `this vault uses the keychain key source, but sesh is using password`. The message gives the setting to use, or the rekey command that switches the vault instead.
 - **`passwords.key` replaced, or the Keychain entry changed:** `the password key in use is not the one this vault was created with`. Restore the original.
 - **`passwords.key` missing next to an existing vault:** sesh won't create a new master password there. It stops, says the key file is missing, and says how to recover.
 
@@ -395,10 +424,10 @@ A vault created before this check gets its check value the first time one of its
 
 ### Rotating your master password
 
-When `SESH_KEY_SOURCE=password` is the active source, `sesh --rekey --to password` rotates the master password in place: every entry is re-encrypted under a freshly-derived key from a new password you choose, and the old sidecar is preserved as a backup.
+When the master password is the active key source (the default), `sesh --rekey --to password` rotates the master password in place: every entry is re-encrypted under a freshly-derived key from a new password you choose, and the old sidecar is preserved as a backup.
 
 ```bash
-SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --rekey --to password
+sesh --rekey --to password
 # Master password: ****                          # current password
 # About to rotate master password and re-encrypt 12 entries.
 #   source DB:           /Users/alice/Library/Application Support/sesh/passwords.db
