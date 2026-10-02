@@ -339,6 +339,17 @@ func UnlockID(verify []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// unlessUnlocking runs f, holding off new unlocks until it returns, unless
+// an unlock is already in progress. It reports whether f ran.
+func (k *keystore) unlessUnlocking(f func()) bool {
+	if !k.unlockMu.TryLock() {
+		return false
+	}
+	defer k.unlockMu.Unlock()
+	f()
+	return true
+}
+
 func (k *keystore) isShutDown() bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()

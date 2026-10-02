@@ -223,6 +223,17 @@ func dialCurrent(sockPath string) (*Conn, error) {
 	serr := Stop(conn)
 	closeOrLog(conn, "agent conn after replacing it")
 	if serr != nil {
+		// The agent may have exited between the dial and the stop, for
+		// example because another sesh replaced it first. Look once more.
+		again, derr := dialAndHandshake(sockPath)
+		switch {
+		case derr == nil && !otherBuild(again.agentBuild):
+			return again, nil
+		case derr == nil:
+			closeOrLog(again, "agent conn after a failed stop")
+		case IsNotRunning(derr):
+			return nil, errAgentReplaced
+		}
 		return nil, fmt.Errorf("stop the sesh agent from another build (pid %d, build %s): %w; stop it with: kill %d", pid, shortBuild(old), serr, pid)
 	}
 	fmt.Fprintf(os.Stderr, "Restarted the sesh agent: it was running another sesh build (%s).\n", shortBuild(old)) //nolint:errcheck // best-effort notice

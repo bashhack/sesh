@@ -136,13 +136,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	s.log.printf("listening at %s (pid %d, build %s)", s.sockPath, os.Getpid(), shortBuild(s.build))
 	if s.exitOnAutoLock && s.keys.idleTimeout > 0 {
-		// An agent nobody unlocks (the prompt was abandoned) is idle too.
-		t := s.keys.clock().AfterFunc(s.keys.idleTimeout, func() {
-			if s.keys.snapshot().lastUnlock.IsZero() {
-				s.stopAfter("not unlocked within the idle timeout")
-			}
-		})
-		defer t.Stop()
+		s.exitIfNeverUnlocked()
 	}
 	go func() {
 		for {
@@ -184,6 +178,28 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		go s.handleConn(conn)
 	}
+}
+
+// exitIfNeverUnlocked shuts the server down one idle timeout from now
+// unless an unlock has succeeded by then: an agent nobody unlocks (the
+// prompt was abandoned) is idle too. An unlock still deriving its key at
+// the deadline gets another idle timeout to finish.
+func (s *Server) exitIfNeverUnlocked() {
+	s.keys.clock().AfterFunc(s.keys.idleTimeout, func() {
+		select {
+		case <-s.shutdownDone:
+			return
+		default:
+		}
+		ran := s.keys.unlessUnlocking(func() {
+			if s.keys.snapshot().lastUnlock.IsZero() {
+				s.stopAfter("not unlocked within the idle timeout")
+			}
+		})
+		if !ran {
+			s.exitIfNeverUnlocked()
+		}
+	})
 }
 
 // stopAfter shuts the server down for reason, logging both.

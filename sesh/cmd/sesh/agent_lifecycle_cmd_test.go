@@ -28,6 +28,9 @@ func TestWriteAgentStatus(t *testing.T) {
 	at := func(hh, mm, ss int) int64 { return time.Date(2026, 5, 3, hh, mm, ss, 0, time.UTC).Unix() }
 
 	mine := agent.Build()
+	if len(mine) < 12 {
+		t.Fatalf("agent.Build() = %q: the test binary's own hash is needed", mine)
+	}
 	tests := map[string]struct {
 		want string
 		st   agent.StatusResponse
