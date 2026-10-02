@@ -287,14 +287,10 @@ func otherUser(t *testing.T) {
 }
 
 func TestDialAndHandshake_RefusesAnotherUsersAgent(t *testing.T) {
-	received := make(chan int, 1)
+	readErr := make(chan error, 1)
 	sockPath := startFakeAgent(t, func(_ *testing.T, rw *bufio.ReadWriter) {
-		b, _ := rw.ReadByte() //nolint:errcheck // EOF is the expected outcome
-		if b != 0 {
-			received <- 1
-			return
-		}
-		received <- 0
+		_, err := rw.ReadByte()
+		readErr <- err
 	})
 	otherUser(t)
 
@@ -307,9 +303,11 @@ func TestDialAndHandshake_RefusesAnotherUsersAgent(t *testing.T) {
 		t.Fatalf("err = %v, want the peer UID refusal", err)
 	}
 	select {
-	case n := <-received:
-		if n != 0 {
-			t.Fatal("client sent data to another user's agent before refusing")
+	case err := <-readErr:
+		// Any successful read, even of a zero byte, means the client sent
+		// something before refusing.
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("fake agent read err = %v, want io.EOF (client sent data before refusing)", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("fake agent never saw the connection close")
