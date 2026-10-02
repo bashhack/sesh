@@ -66,8 +66,12 @@ func (s *stampWriter) Write(p []byte) (int, error) {
 		s.midLine = line[len(line)-1] != '\n'
 		rest = rest[len(line):]
 	}
-	if _, err := s.w.Write(buf); err != nil {
+	n, err := s.w.Write(buf)
+	if err != nil {
 		return 0, err
+	}
+	if n < len(buf) {
+		return 0, io.ErrShortWrite
 	}
 	return len(p), nil
 }

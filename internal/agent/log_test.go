@@ -2,6 +2,8 @@ package agent
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -76,6 +78,18 @@ func TestTimestampLines(t *testing.T) {
 	want := ts + "usage: sesh agent\n" + ts + "  -socket string\n" + ts + "❌ bad\n"
 	if got := out.String(); got != want {
 		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+// shortWriter accepts at most n bytes per write and reports no error,
+// breaking io.Writer's contract.
+type shortWriter struct{ n int }
+
+func (w shortWriter) Write(p []byte) (int, error) { return min(w.n, len(p)), nil }
+
+func TestTimestampLines_ReportsShortWrite(t *testing.T) {
+	if _, err := TimestampLines(shortWriter{n: 3}).Write([]byte("lost\n")); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("err = %v, want io.ErrShortWrite", err)
 	}
 }
 
