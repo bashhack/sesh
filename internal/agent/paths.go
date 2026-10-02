@@ -25,7 +25,7 @@ func SocketPath() (string, error) {
 		return "", fmt.Errorf("locate user cache dir: %w", err)
 	}
 	dir := filepath.Join(cache, "sesh")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := privateDir(dir); err != nil {
 		return "", fmt.Errorf("create agent dir %s: %w", dir, err)
 	}
 	return filepath.Join(dir, "agent.sock"), nil
@@ -40,9 +40,19 @@ func LogPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate user cache dir: %w", err)
 	}
-	dir := filepath.Join(cache, "sesh", "logs")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create agent log dir %s: %w", dir, err)
+	for _, dir := range []string{filepath.Join(cache, "sesh"), filepath.Join(cache, "sesh", "logs")} {
+		if err := privateDir(dir); err != nil {
+			return "", fmt.Errorf("create agent log dir %s: %w", dir, err)
+		}
 	}
-	return filepath.Join(dir, "agent.log"), nil
+	return filepath.Join(cache, "sesh", "logs", "agent.log"), nil
+}
+
+// privateDir creates dir if needed and makes it accessible to this user
+// only, including when it already existed with wider permissions.
+func privateDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o700) //nolint:gosec // a directory needs the execute bit to be entered; 0700 is owner-only
 }

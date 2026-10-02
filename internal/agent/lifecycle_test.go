@@ -84,7 +84,7 @@ func TestServer_StopShutsDown(t *testing.T) {
 	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("socket still present after stop: %v", err)
 	}
-	if unlocked, _, _ := srv.keys.Status(); unlocked {
+	if srv.keys.snapshot().unlocked {
 		t.Fatal("key still cached after stop")
 	}
 }
@@ -102,10 +102,7 @@ func TestServer_SIGUSR1LocksWithoutStopping(t *testing.T) {
 		t.Fatalf("send SIGUSR1: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if unlocked, _, _ := srv.keys.Status(); !unlocked {
-			break
-		}
+	for srv.keys.snapshot().unlocked {
 		if time.Now().After(deadline) {
 			t.Fatal("still unlocked 2s after SIGUSR1")
 		}
@@ -221,7 +218,7 @@ func TestServer_RunReturnsAfterKeyIsZeroed(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("server still running 2s after stop")
 	}
-	if unlocked, _, _ := srv.keys.Status(); unlocked {
+	if srv.keys.snapshot().unlocked {
 		t.Fatal("Run returned before the key was zeroed")
 	}
 }
@@ -241,7 +238,7 @@ func TestServer_StopRepliesAfterShutdown(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 	// No waiting: stop_ack must mean the agent is already gone.
-	if unlocked, _, _ := srv.keys.Status(); unlocked {
+	if srv.keys.snapshot().unlocked {
 		t.Fatal("stop_ack arrived before the key was zeroed")
 	}
 	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
