@@ -247,6 +247,11 @@ build:
 	@mkdir -p build
 	@go build $(LDFLAGS) -o build/sesh ./sesh/cmd/sesh
 
+## agent-smoke: Build sesh and run the agent end-to-end smoke test
+.PHONY: agent-smoke
+agent-smoke: build
+	@scripts/agent-smoke.sh build/sesh
+
 ## build/optimize: Build optimized binary (smaller size)
 .PHONY: build/optimize
 build/optimize:
