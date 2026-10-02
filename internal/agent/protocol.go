@@ -70,9 +70,12 @@ type HelloRequest struct {
 // HelloResponse is the agent's reply to a successful handshake. AgentPID
 // is informational — useful for status / debugging, not security-critical.
 type HelloResponse struct {
-	Type     string `json:"type"`      // TypeHelloAck
-	Version  int    `json:"version"`   // server's ProtocolVersion
-	AgentPID int    `json:"agent_pid"` // os.Getpid() of the agent
+	Type string `json:"type"` // TypeHelloAck
+	// AgentBuild is the agent's Build, so a client from another sesh
+	// build can replace it. Empty from agents that predate it.
+	AgentBuild string `json:"agent_build,omitempty"`
+	Version    int    `json:"version"`   // server's ProtocolVersion
+	AgentPID   int    `json:"agent_pid"` // os.Getpid() of the agent
 }
 
 // PingRequest is a liveness check with no payload. The agent replies
@@ -170,6 +173,7 @@ type StatusRequest struct {
 type StatusResponse struct {
 	Type             string `json:"type"`
 	UnlockID         string `json:"unlock_id,omitempty"`
+	AgentBuild       string `json:"agent_build,omitempty"`
 	Version          int    `json:"version"`
 	AgentPID         int    `json:"agent_pid"`
 	AgentStartedUnix int64  `json:"agent_started_unix"`

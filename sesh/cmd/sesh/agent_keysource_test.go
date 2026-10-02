@@ -474,7 +474,7 @@ func startFailingUnlockAgent(t *testing.T) {
 			}
 			switch env.Type {
 			case agent.TypeHello:
-				send(c, agent.HelloResponse{Type: agent.TypeHelloAck, Version: agent.ProtocolVersion})
+				send(c, agent.HelloResponse{Type: agent.TypeHelloAck, Version: agent.ProtocolVersion, AgentBuild: agent.Build()})
 			case agent.TypeStatus:
 				send(c, agent.StatusResponse{Type: agent.TypeStatusAck, Version: agent.ProtocolVersion})
 			default:

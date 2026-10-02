@@ -55,6 +55,9 @@ type keystore struct {
 	lastUnlock time.Time
 	clk        clock
 	log        *agentLog
+	// onAutoLock, when set, runs after a timer locks the keystore, outside
+	// mu, with the reason ("idle timeout" or "max lifetime").
+	onAutoLock func(reason string)
 	idleTimer  stopper
 	maxTimer   stopper
 	// keyBuf is the key's storage, kept for the life of the keystore and
@@ -301,19 +304,25 @@ func (k *keystore) stopTimersLocked() {
 // one may arrive after fresh activity.
 func (k *keystore) autoLock(gen uint64, idle bool) {
 	k.mu.Lock()
-	defer k.mu.Unlock()
 	if gen != k.generation || k.derivedKey == nil {
+		k.mu.Unlock()
 		return
 	}
 	reason := "max lifetime"
 	if idle {
 		if k.clock().Now().Before(k.lastActivity.Add(k.idleTimeout)) {
+			k.mu.Unlock()
 			return
 		}
 		reason = "idle timeout"
 	}
 	k.clearLocked()
 	k.log.printf("locked after %s", reason)
+	after := k.onAutoLock
+	k.mu.Unlock()
+	if after != nil {
+		after(reason)
+	}
 }
 
 func (k *keystore) clock() clock {

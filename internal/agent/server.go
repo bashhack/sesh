@@ -30,12 +30,17 @@ type Server struct {
 	// socket removed, key zeroed. Run waits on it before returning.
 	shutdownDone chan struct{}
 	sockPath     string
-	keys         keystore
+	// build is Build, read once at Listen, before an upgrade can replace
+	// the executable.
+	build string
+	keys  keystore
 	// shutdownOnce guards Close so concurrent SIGTERM + accept-loop-exit
 	// don't try to remove the socket twice.
 	shutdownOnce sync.Once
 	// lockKeyMemory is set by WithLockedKeyMemory.
 	lockKeyMemory bool
+	// exitOnAutoLock is set by WithExitOnAutoLock.
+	exitOnAutoLock bool
 }
 
 // Listen creates the socket at sockPath, sets perm 0600, and returns a
@@ -55,6 +60,12 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 	}
 	srv.log = &agentLog{w: srv.logOut, now: srv.keys.clock().Now}
 	srv.keys.log = srv.log
+	srv.build = thisBuild()
+	if srv.exitOnAutoLock {
+		srv.keys.onAutoLock = func(reason string) {
+			srv.stopAfter("locked after " + reason)
+		}
+	}
 	// Reserved before the socket exists, so an agent that can't protect
 	// its key never accepts a connection.
 	if srv.lockKeyMemory {
@@ -123,7 +134,16 @@ func (s *Server) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	s.log.printf("listening at %s (pid %d)", s.sockPath, os.Getpid())
+	s.log.printf("listening at %s (pid %d, build %s)", s.sockPath, os.Getpid(), shortBuild(s.build))
+	if s.exitOnAutoLock && s.keys.idleTimeout > 0 {
+		// An agent nobody unlocks (the prompt was abandoned) is idle too.
+		t := s.keys.clock().AfterFunc(s.keys.idleTimeout, func() {
+			if s.keys.snapshot().lastUnlock.IsZero() {
+				s.stopAfter("not unlocked within the idle timeout")
+			}
+		})
+		defer t.Stop()
+	}
 	go func() {
 		for {
 			select {
@@ -163,6 +183,14 @@ func (s *Server) Run(ctx context.Context) error {
 			return fmt.Errorf("accept: %w", err)
 		}
 		go s.handleConn(conn)
+	}
+}
+
+// stopAfter shuts the server down for reason, logging both.
+func (s *Server) stopAfter(reason string) {
+	s.log.printf("stopping (%s)", reason)
+	if err := s.Close(); err != nil {
+		s.log.printf("warning: agent shutdown: %v", err)
 	}
 }
 
@@ -247,9 +275,10 @@ func (s *Server) handleConn(conn *net.UnixConn) {
 		return
 	}
 	if err := writeJSON(conn, HelloResponse{
-		Type:     TypeHelloAck,
-		Version:  ProtocolVersion,
-		AgentPID: os.Getpid(),
+		Type:       TypeHelloAck,
+		Version:    ProtocolVersion,
+		AgentPID:   os.Getpid(),
+		AgentBuild: s.build,
 	}); err != nil {
 		return
 	}
@@ -389,6 +418,7 @@ func (s *Server) dispatchStatus(conn *net.UnixConn) bool {
 		Version:          ProtocolVersion,
 		Unlocked:         st.unlocked,
 		UnlockID:         st.unlockID,
+		AgentBuild:       s.build,
 		AgentPID:         os.Getpid(),
 		AgentStartedUnix: s.startedAt.Unix(),
 		UnlockedAtUnix:   unixOrZero(st.unlockedAt),

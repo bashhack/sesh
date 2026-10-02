@@ -27,29 +27,33 @@ func TestWriteAgentStatus(t *testing.T) {
 	now := time.Date(2026, 5, 3, 9, 52, 0, 0, time.UTC)
 	at := func(hh, mm, ss int) int64 { return time.Date(2026, 5, 3, hh, mm, ss, 0, time.UTC).Unix() }
 
+	mine := agent.Build()
 	tests := map[string]struct {
 		want string
 		st   agent.StatusResponse
 	}{
 		"locked, never unlocked": {
-			st: agent.StatusResponse{AgentPID: 4242},
+			st: agent.StatusResponse{AgentPID: 4242, AgentBuild: mine},
 			want: "agent: running (pid 4242)\n" +
+				"build:          " + mine[:12] + "\n" +
 				"state: locked\n" +
 				"last unlock:    never\n",
 		},
 		"locked after an unlock": {
-			st: agent.StatusResponse{AgentPID: 4242, LastUnlockUnix: at(9, 51, 22)},
+			st: agent.StatusResponse{AgentPID: 4242, AgentBuild: mine, LastUnlockUnix: at(9, 51, 22)},
 			want: "agent: running (pid 4242)\n" +
+				"build:          " + mine[:12] + "\n" +
 				"state: locked\n" +
 				"last unlock:    2026-05-03 09:51:22 (38s ago)\n",
 		},
 		"idle timeout comes first": {
 			st: agent.StatusResponse{
-				AgentPID: 4242, Unlocked: true,
+				AgentPID: 4242, AgentBuild: mine, Unlocked: true,
 				UnlockedAtUnix: at(9, 14, 0), LastActivityUnix: at(9, 51, 48), LocksAtUnix: at(10, 1, 48),
 				IdleTimeoutSec: 600, MaxLifetimeSec: 8 * 3600,
 			},
 			want: "agent: running (pid 4242)\n" +
+				"build:          " + mine[:12] + "\n" +
 				"state: unlocked\n" +
 				"unlocked since: 2026-05-03 09:14:00 (38m ago)\n" +
 				"last activity:  2026-05-03 09:51:48 (12s ago)\n" +
@@ -58,11 +62,12 @@ func TestWriteAgentStatus(t *testing.T) {
 		},
 		"max lifetime comes first": {
 			st: agent.StatusResponse{
-				AgentPID: 4242, Unlocked: true,
+				AgentPID: 4242, AgentBuild: mine, Unlocked: true,
 				UnlockedAtUnix: at(2, 0, 0), LastActivityUnix: at(9, 51, 58), LocksAtUnix: at(10, 0, 0),
 				IdleTimeoutSec: 600, MaxLifetimeSec: 8 * 3600,
 			},
 			want: "agent: running (pid 4242)\n" +
+				"build:          " + mine[:12] + "\n" +
 				"state: unlocked\n" +
 				"unlocked since: 2026-05-03 02:00:00 (7h 52m ago)\n" +
 				"last activity:  2026-05-03 09:51:58 (2s ago)\n" +
@@ -71,11 +76,12 @@ func TestWriteAgentStatus(t *testing.T) {
 		},
 		"idle timeout disabled": {
 			st: agent.StatusResponse{
-				AgentPID: 4242, Unlocked: true,
+				AgentPID: 4242, AgentBuild: mine, Unlocked: true,
 				UnlockedAtUnix: at(9, 30, 0), LastActivityUnix: at(9, 50, 0), LocksAtUnix: at(10, 30, 0),
 				MaxLifetimeSec: 3600,
 			},
 			want: "agent: running (pid 4242)\n" +
+				"build:          " + mine[:12] + "\n" +
 				"state: unlocked\n" +
 				"unlocked since: 2026-05-03 09:30:00 (22m ago)\n" +
 				"last activity:  2026-05-03 09:50:00 (2m ago)\n" +
@@ -84,10 +90,11 @@ func TestWriteAgentStatus(t *testing.T) {
 		},
 		"both timeouts disabled": {
 			st: agent.StatusResponse{
-				AgentPID: 4242, Unlocked: true,
+				AgentPID: 4242, AgentBuild: mine, Unlocked: true,
 				UnlockedAtUnix: at(9, 30, 0), LastActivityUnix: at(9, 50, 0),
 			},
 			want: "agent: running (pid 4242)\n" +
+				"build:          " + mine[:12] + "\n" +
 				"state: unlocked\n" +
 				"unlocked since: 2026-05-03 09:30:00 (22m ago)\n" +
 				"last activity:  2026-05-03 09:50:00 (2m ago)\n" +
@@ -103,6 +110,24 @@ func TestWriteAgentStatus(t *testing.T) {
 			}
 			if got := buf.String(); got != tt.want {
 				t.Fatalf("status output:\n%s\nwant:\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildLine(t *testing.T) {
+	const a = "aaaaaaaaaaaabbbbbbbb"
+	const b = "ccccccccccccdddddddd"
+	tests := map[string]struct{ agentBuild, mine, want string }{
+		"same build":           {a, a, "aaaaaaaaaaaa"},
+		"other build":          {a, b, "aaaaaaaaaaaa (this sesh is cccccccccccc; the next command replaces it)"},
+		"agent predates it":    {"", b, "unknown (older agent; the next command replaces it)"},
+		"own build unreadable": {a, "", "aaaaaaaaaaaa"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := buildLine(tt.agentBuild, tt.mine); got != tt.want {
+				t.Errorf("buildLine = %q, want %q", got, tt.want)
 			}
 		})
 	}

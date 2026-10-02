@@ -256,7 +256,7 @@ agent-smoke: build
 .PHONY: build/optimize
 build/optimize:
 	@echo "Building optimized binary..."
-	@go build $(LDFLAGS) -ldflags="-s -w" -o build/sesh ./sesh/cmd/sesh
+	@go build -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" -o build/sesh ./sesh/cmd/sesh
 
 ## build/all: Build for all supported platforms
 .PHONY: build/all

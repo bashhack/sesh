@@ -26,6 +26,16 @@ func WithMaxLifetime(d time.Duration) Option {
 	return func(s *Server) { s.keys.maxLifetime = d }
 }
 
+// WithExitOnAutoLock makes the agent shut down instead of staying locked
+// when the idle timeout or max lifetime locks it, and when no unlock
+// arrives within the idle timeout of starting. A locked agent has nothing
+// to serve, and a new one starts on the next command, so exiting costs
+// nothing and stops an agent outliving the sesh build that started it.
+// An explicit lock (lock request or SIGUSR1) still leaves it running.
+func WithExitOnAutoLock() Option {
+	return func(s *Server) { s.exitOnAutoLock = true }
+}
+
 // withLogOutput sends the agent log to w instead of stderr. Tests only.
 func withLogOutput(w io.Writer) Option {
 	return func(s *Server) { s.logOut = w }

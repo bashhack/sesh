@@ -241,9 +241,8 @@ func TestRekey_RefusesIfTargetInvalid(t *testing.T) {
 
 func TestRekey_RefusesKeychainToKeychain(t *testing.T) {
 	// password → password is the in-place rotation case and is handled
-	// by runRotateMasterPassword; see TestRotate_*. The keychain → keychain
-	// case isn't supported yet (Flavor B in docs/KEY_ROTATION_ROADMAP.md)
-	// and should still hit the "already using" guard.
+	// by runRotateMasterPassword; see TestRotate_*. keychain → keychain
+	// isn't supported and should still hit the "already using" guard.
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "keychain")
 	kc := newKCMock(hexKey())

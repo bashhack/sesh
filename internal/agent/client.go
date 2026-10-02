@@ -22,7 +22,10 @@ type Conn struct {
 	uc     *net.UnixConn
 	r      *bufio.Reader
 	broken error
-	closed bool
+	// agentBuild and agentPID are what the agent reported in hello_ack.
+	agentBuild string
+	agentPID   int
+	closed     bool
 }
 
 // Close closes the connection. Closing twice, or after a transport failure
