@@ -313,3 +313,61 @@ func TestDialAndHandshake_RefusesAnotherUsersAgent(t *testing.T) {
 		t.Fatal("fake agent never saw the connection close")
 	}
 }
+
+func TestDialAndHandshake_OlderAgentNamesItsPID(t *testing.T) {
+	sockPath := startFakeAgent(t, func(t *testing.T, rw *bufio.ReadWriter) {
+		consumeClientHello(t, rw)
+		reply(t, rw, ErrorResponse{
+			Type:     TypeError,
+			Version:  7,
+			Code:     ErrCodeProtocolVersionMismatch,
+			Message:  "client version 1, server 7",
+			AgentPID: 4242,
+		})
+	})
+	_, err := dialAndHandshake(sockPath)
+	if !errors.Is(err, errProtocolMismatch) {
+		t.Fatalf("err = %v, want errProtocolMismatch", err)
+	}
+	for _, want := range []string{"pid 4242", "protocol version 7", "kill 4242"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+func TestDialAndHandshake_RejectionWithoutPIDStaysGeneric(t *testing.T) {
+	sockPath := startFakeAgent(t, func(t *testing.T, rw *bufio.ReadWriter) {
+		consumeClientHello(t, rw)
+		reply(t, rw, ErrorResponse{Type: TypeError, Version: 7, Code: ErrCodeProtocolVersionMismatch, Message: "client version 1, server 7"})
+	})
+	_, err := dialAndHandshake(sockPath)
+	if err == nil || !strings.Contains(err.Error(), "agent rejected hello: protocol_version_mismatch") {
+		t.Fatalf("err = %v, want the generic rejection", err)
+	}
+}
+
+func TestDialAndHandshake_MismatchWithoutUsablePIDNeverSuggestsKill(t *testing.T) {
+	for _, tc := range []struct {
+		resp any
+		name string
+	}{
+		{HelloResponse{Type: TypeHelloAck, Version: 7}, "hello_ack without pid"},
+		{HelloResponse{Type: TypeHelloAck, Version: 7, AgentPID: -1}, "hello_ack with negative pid"},
+		{ErrorResponse{Type: TypeError, Version: 7, Code: ErrCodeProtocolVersionMismatch, Message: "client version 1, server 7", AgentPID: -1}, "rejection with negative pid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sockPath := startFakeAgent(t, func(t *testing.T, rw *bufio.ReadWriter) {
+				consumeClientHello(t, rw)
+				reply(t, rw, tc.resp)
+			})
+			_, err := dialAndHandshake(sockPath)
+			if err == nil {
+				t.Fatal("dialAndHandshake should fail on version mismatch")
+			}
+			if strings.Contains(err.Error(), "kill") {
+				t.Errorf("err = %q, must not suggest kill without a positive pid", err)
+			}
+		})
+	}
+}

@@ -1,4 +1,4 @@
-// Package agent implements the sesh-agent daemon and its client protocol.
+// Package agent implements the sesh agent daemon and its client protocol.
 // The daemon listens on a per-UID Unix socket and serves a versioned
 // JSON-over-newline protocol; clients (the sesh CLI) auto-spawn it on
 // demand when SESH_KEY_SOURCE=password is in use.

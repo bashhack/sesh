@@ -2,7 +2,7 @@
 
 This document provides detailed instructions for using and configuring sesh for secure authentication workflows across multiple providers.
 
-> **Requirements:** macOS for the default Keychain backend. The SQLite backend (`SESH_BACKEND=sqlite`) works cross-platform. For the AWS provider, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
+> **Requirements:** macOS for the default Keychain backend. The SQLite backend (`SESH_BACKEND=sqlite`) also runs on Linux. For the AWS provider, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
 
 ## Workflow Overview
 
@@ -186,7 +186,7 @@ The matrix:
 |---|---|---|---|---|
 | unset / `keychain` | (ignored) | macOS Keychain | macOS Keychain | macOS only |
 | `sqlite` | unset / `keychain` | SQLite file (encrypted) | macOS Keychain (256-bit random) | macOS only |
-| `sqlite` | `password` | SQLite file (encrypted) | Derived from master password via Argon2id; salt in `passwords.key` sidecar (0600) | macOS, Linux, Windows |
+| `sqlite` | `password` | SQLite file (encrypted) | Derived from master password via Argon2id; salt in `passwords.key` sidecar (0600) | macOS, Linux |
 
 ### Using the master password mode
 
@@ -206,30 +206,7 @@ SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 ```
 
-The first command that needs the key after the vault exists prompts once and starts a per-user `sesh agent` in the background; the run that creates the vault does not start one. The agent holds the derived key so later commands don't prompt. While it is unlocked, commands don't check the password.
-
-The agent locks itself after 10 minutes without use and 8 hours after each unlock; the next command then prompts again. To control it directly:
-
-```bash
-sesh agent status   # running? locked? when does it auto-lock?
-sesh agent lock     # drop the key now
-sesh agent stop     # shut the agent down
-```
-
-`sesh agent status` prints, for example:
-
-```
-agent: running (pid 12345)
-state: unlocked
-unlocked since: 2026-05-03 09:14:00 (38m ago)
-last activity:  2026-05-03 09:51:48 (12s ago)
-auto-lock in:   9m 48s (idle timeout)
-max lifetime:   7h 22m remaining
-```
-
-Change the timeouts with `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` (Go durations such as `30m` or `2h`; `0` disables). They are read when the agent starts, so run `sesh agent stop` after changing them.
-
-If the agent can't be started, sesh prints a warning and prompts on every run instead. See [Sesh agent](SECURITY_MODEL.md#sesh-agent) for what the agent does and doesn't protect.
+From the second run on, a background `sesh agent` holds the key, so later commands don't prompt. See [Using the sesh agent](#using-the-sesh-agent) for how it starts, locks, and stops.
 
 Secrets are limited to 1 MiB each.
 
@@ -243,6 +220,78 @@ For non-interactive use, set `SESH_MASTER_PASSWORD`. sesh then checks that passw
 export SESH_MASTER_PASSWORD='...'
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 ```
+
+### Using the sesh agent
+
+In master password mode, sesh keeps the derived key in a per-user background process, `sesh agent`, so you type the password once instead of on every command. **You don't need to manage it.** sesh starts it when it's needed, it locks itself, and the only thing it asks of you is your password.
+
+**How it runs**
+
+1. The command that creates the vault asks for the new password twice. It does not start an agent.
+2. The next command that needs the key asks for the password once, starts `sesh agent` in the background (detached from your terminal, so it outlives it), and hands it the key.
+3. Later commands, in any terminal, don't prompt while the agent is unlocked.
+4. The agent locks itself after 10 minutes without use, and 8 hours after each unlock however busy it is. A locked agent keeps running; the next command prompts once and unlocks it again.
+5. After `sesh agent stop`, a crash, or a reboot, the next command starts a fresh agent and prompts.
+
+Runs with `SESH_MASTER_PASSWORD` set skip the agent entirely (see [Scripts and CI](#scripts-and-ci)), and keychain mode never uses it.
+
+**Optional controls**
+
+None of these are needed in normal use:
+
+| Command | When you'd use it |
+|---------|-------------------|
+| `sesh agent status` | See whether it's running and unlocked, and when it will lock itself |
+| `sesh agent lock` | Drop the key now, for example when stepping away; the agent keeps running |
+| `kill -USR1 <pid>` | Lock it from a script, such as a screen-lock hook (the pid is in `sesh agent status`) |
+| `sesh agent stop` | Shut it down: after changing the timeouts or upgrading sesh, or while troubleshooting |
+
+`sesh agent status` prints, for example:
+
+```
+agent: running (pid 12345)
+state: unlocked
+unlocked since: 2026-05-03 09:14:00 (38m ago)
+last activity:  2026-05-03 09:51:48 (12s ago)
+auto-lock in:   9m 48s (idle timeout)
+max lifetime:   7h 22m remaining
+```
+
+**Timeouts**
+
+Set `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` to Go durations such as `30m` or `2h`; `0` disables either. The agent reads them once, when it starts, from the environment of the sesh command that started it. So:
+
+- Put them in your shell profile, so whichever terminal starts the agent passes them on.
+- If an editor or app that doesn't load your profile starts the agent, it runs with the defaults until it is stopped.
+- After changing them, run `sesh agent stop`; the next command starts an agent with the new values.
+
+**After upgrading sesh**
+
+The agent is a long-running copy of the sesh binary that started it, so after an upgrade (`brew upgrade`, `make install`) it keeps running the old version until it stops or the machine restarts. Run `sesh agent stop` after upgrading; the next command starts the new version and prompts once.
+
+If a release changes how sesh and the agent talk to each other, the new `sesh` can't send the old agent `stop`. Until the old agent is stopped, commands prompt on every run and warn with its pid and what to do:
+
+```
+warning: sesh agent unavailable: agent protocol mismatch: agent (pid 12345) uses protocol version 1, this sesh uses 2; stop it with: kill 12345
+```
+
+Run that `kill`; the next command starts the new version.
+
+**Troubleshooting**
+
+- `warning: sesh agent unavailable: ...` means sesh couldn't start or reach the agent, so it prompts on every run instead. The message says why; if the agent itself refused to start (for example because the process hardening described in [Sesh agent](SECURITY_MODEL.md#sesh-agent) couldn't be applied), it includes the agent's own log line.
+- The agent's log is `~/Library/Caches/sesh/logs/agent.log` on macOS and `~/.cache/sesh/logs/agent.log` on Linux (`$XDG_CACHE_HOME/sesh/logs/agent.log` if set). It records start-up, auto-locks, and errors, never passwords, keys, or secrets.
+- To see errors directly, run the agent in the foreground: `sesh agent stop`, then `sesh agent` (Ctrl-C to stop). It accepts `--idle-timeout`, `--max-lifetime`, and `--socket`.
+- The socket is `~/Library/Caches/sesh/agent.sock` on macOS and `~/.cache/sesh/agent.sock` on Linux. `SESH_AUTH_SOCK` overrides the path; if you set it, set it for every sesh command.
+- For a bug report, check that the agent answers on its socket. Each request gets one JSON line back, `hello_ack` then `pong`:
+
+  ```bash
+  printf '{"type":"hello","version":1}\n{"type":"ping","version":1}\n' | nc -U ~/Library/Caches/sesh/agent.sock
+  ```
+
+**Turning it off**
+
+There is nothing installed to remove. `sesh agent stop` shuts it down, and only a master-password command starts it again. After switching back to the keychain key source (`sesh --rekey --to keychain`), it is never started.
 
 ### Encrypted exports
 
