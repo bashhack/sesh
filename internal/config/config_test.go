@@ -149,4 +149,8 @@ func TestPath_HonorsXDGConfigHome(t *testing.T) {
 	if got, err := Path(); err != nil || got != "/somewhere/sesh/config.toml" {
 		t.Errorf("Path() with XDG_CONFIG_HOME = %q", got)
 	}
+	t.Setenv("XDG_CONFIG_HOME", "relative/dir")
+	if got, err := Path(); err != nil || got != filepath.Join(home, ".config", "sesh", "config.toml") {
+		t.Errorf("Path() with a relative XDG_CONFIG_HOME = %q, want the ~/.config default", got)
+	}
 }

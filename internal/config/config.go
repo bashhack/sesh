@@ -111,10 +111,11 @@ type fileConfig struct {
 }
 
 // Path returns the config file's location: $XDG_CONFIG_HOME/sesh/config.toml
-// when XDG_CONFIG_HOME is set, otherwise ~/.config/sesh/config.toml, on
-// macOS as well as Linux.
+// when XDG_CONFIG_HOME is an absolute path, otherwise
+// ~/.config/sesh/config.toml, on macOS as well as Linux. A relative
+// XDG_CONFIG_HOME is ignored, as the XDG Base Directory spec requires.
 func Path() (string, error) {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" && filepath.IsAbs(dir) {
 		return filepath.Join(dir, "sesh", "config.toml"), nil
 	}
 	home, err := os.UserHomeDir()
