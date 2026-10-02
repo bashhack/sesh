@@ -123,7 +123,7 @@ idle_timeout = "10m"                    # 0 disables
 max_lifetime = "8h"                     # 0 disables
 ```
 
-Each setting comes from, highest first: a command-line flag, its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
+Each setting comes from, highest first: a command-line flag (`--backend`, `--key-source`, `--db-path`; the agent's timeouts also have `sesh agent` flags), its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
 
 `sesh config` prints each effective setting and where it came from:
 
@@ -153,6 +153,9 @@ db_path             /Users/me/vaults/sesh.db
 | `-delete <id>`    | Delete entry for selected service                  | All providers    |
 | `-setup`          | Run interactive setup wizard                       | All providers    |
 | `-clip`           | Copy generated code to clipboard                   | All providers    |
+| `--backend keychain\|sqlite` | Storage backend for this command (overrides `SESH_BACKEND` and the config file) | Global |
+| `--key-source keychain\|password` | Key source for this command (overrides `SESH_KEY_SOURCE` and the config file) | Global |
+| `--db-path <path>` | Vault location for this command (overrides `SESH_DB_PATH` and the config file) | Global |
 
 
 ### AWS Provider Options

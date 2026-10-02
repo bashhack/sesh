@@ -44,6 +44,13 @@ func main() {
 	// information or open their own store internally. Skipping buildProvider
 	// here means SESH_BACKEND=sqlite doesn't pointlessly open the DB (or
 	// acquire the key-init flock on first run) for those commands.
+	args, overrides, err := takeSettingFlags(os.Args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(2)
+	}
+	cliOverrides = overrides
+
 	// A broken config only stops commands that use the store; the rest,
 	// including `sesh config`, which reports the problem, still run.
 	cfg, cfgErr := settings()
@@ -56,7 +63,7 @@ func main() {
 		kc     keychain.Provider
 		closer io.Closer
 	)
-	if needsCredentialStore(os.Args) {
+	if needsCredentialStore(args) {
 		if cfgErr != nil {
 			fmt.Fprintf(os.Stderr, "❌ %v\n", cfgErr)
 			os.Exit(1)
@@ -79,7 +86,7 @@ func main() {
 	}
 
 	app := NewDefaultApp(versionInfo, kc, clipboardTimeout)
-	run(app, os.Args)
+	run(app, args)
 }
 
 // needsCredentialStore reports whether the given command-line invocation
@@ -894,6 +901,13 @@ func (a *App) PrintUsage() error {
 		"  --list-services, -list-services  List available service providers",
 		"  --version, -version           Show version information",
 		"  --help, -help                 Show usage",
+		"\nSetting overrides (for this command only; see `sesh config`):",
+		"  --backend keychain|sqlite     Storage backend",
+		"  --key-source keychain|password  Key source for the sqlite backend",
+		"  --db-path path                Vault location for the sqlite backend",
+		"\nCommands:",
+		"  sesh config                   Show settings and where each comes from",
+		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",
 		"  sesh --service totp --service-name github   Generate TOTP code for GitHub",
