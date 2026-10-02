@@ -473,3 +473,18 @@ func TestKeystore_ReusesKeyBuffer(t *testing.T) {
 		}
 	}
 }
+
+func TestKeystore_ActivityAtIdleDeadlineKeepsKey(t *testing.T) {
+	ks, clk, verify := timedKeystore(t, 10*time.Minute, 0)
+	clk.mu.Lock()
+	clk.stopIgnored = true // the old idle timer is already running when activity restarts it
+	clk.mu.Unlock()
+	clk.advance(10*time.Minute - time.Second)
+	if _, _, err := ks.Encrypt([]byte("x"), UnlockID(verify)); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(time.Second) // the old deadline passes; the new one is 10m away
+	if !isUnlocked(ks) {
+		t.Fatal("the old idle timer locked the key right after fresh activity")
+	}
+}

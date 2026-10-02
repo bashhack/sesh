@@ -264,10 +264,10 @@ func (k *keystore) scheduleLocked() {
 	k.stopTimersLocked()
 	gen := k.generation
 	if k.idleTimeout > 0 {
-		k.idleTimer = k.clock().AfterFunc(k.idleTimeout, func() { k.autoLock(gen, "idle timeout") })
+		k.idleTimer = k.clock().AfterFunc(k.idleTimeout, func() { k.autoLock(gen, true) })
 	}
 	if k.maxLifetime > 0 {
-		k.maxTimer = k.clock().AfterFunc(k.maxLifetime, func() { k.autoLock(gen, "max lifetime") })
+		k.maxTimer = k.clock().AfterFunc(k.maxLifetime, func() { k.autoLock(gen, false) })
 	}
 }
 
@@ -281,7 +281,7 @@ func (k *keystore) restartIdleLocked() {
 		k.idleTimer.Stop()
 	}
 	gen := k.generation
-	k.idleTimer = k.clock().AfterFunc(k.idleTimeout, func() { k.autoLock(gen, "idle timeout") })
+	k.idleTimer = k.clock().AfterFunc(k.idleTimeout, func() { k.autoLock(gen, true) })
 }
 
 func (k *keystore) stopTimersLocked() {
@@ -296,12 +296,22 @@ func (k *keystore) stopTimersLocked() {
 }
 
 // autoLock locks the keystore when a timer from generation gen fires,
-// unless a later unlock, lock, or shutdown already moved on.
-func (k *keystore) autoLock(gen uint64, reason string) {
+// unless a later unlock, lock, or shutdown already moved on. An idle
+// timer also re-checks the idle deadline: activity restarts the timer,
+// but Stop can't cancel a callback that has already started, so a stale
+// one may arrive after fresh activity.
+func (k *keystore) autoLock(gen uint64, idle bool) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if gen != k.generation || k.derivedKey == nil {
 		return
+	}
+	reason := "max lifetime"
+	if idle {
+		if k.clock().Now().Before(k.lastActivity.Add(k.idleTimeout)) {
+			return
+		}
+		reason = "idle timeout"
 	}
 	k.clearLocked()
 	fmt.Fprintf(os.Stderr, "sesh agent: locked after %s\n", reason) //nolint:errcheck // best-effort log line

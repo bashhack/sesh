@@ -109,7 +109,7 @@ What this changes: while the agent is unlocked, **any process running as your us
 
 A locked agent zeroes the key and keeps running; the next command prompts again.
 
-**Process hardening.** The agent disables core dumps and blocks other processes running as you from attaching a debugger or reading its memory (`PR_SET_DUMPABLE=0` on Linux, `PT_DENY_ATTACH` on macOS). The cached key lives in a page locked into RAM so it is never written to swap. Short-lived copies made while encrypting or decrypting stay on the ordinary Go heap, protected by the same no-dump/no-attach settings.
+**Process hardening** (Linux and macOS, best-effort). At startup the agent tries to disable core dumps and to block other processes running as you from attaching a debugger or reading its memory (`PR_SET_DUMPABLE=0` on Linux, `PT_DENY_ATTACH` on macOS). It also tries to keep the cached key in a page locked into RAM so it is never written to swap. If any step fails, for example because the memory-lock limit is too low, the agent logs a warning to its log file and keeps running without that protection: the key may then be swappable, or the process readable by a debugger. Short-lived copies made while encrypting or decrypting always stay on the ordinary Go heap, covered only by the no-dump/no-attach settings.
 
 Not protected against: root or a debugger attached to the agent (the key is in its memory), core dumps, or memory the Go runtime copies and never zeroes (JSON buffers carrying passwords and plaintext).
 
