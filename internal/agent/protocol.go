@@ -218,6 +218,9 @@ type ErrorResponse struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Version int    `json:"version"`
+	// AgentPID is set on protocol_version_mismatch, so a client that can't
+	// talk to this agent can still tell the user which process to stop.
+	AgentPID int `json:"agent_pid,omitempty"`
 }
 
 // writeJSON marshals v and writes it as one line (no embedded newline)

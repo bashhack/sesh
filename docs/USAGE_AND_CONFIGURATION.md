@@ -269,7 +269,13 @@ Set `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` to Go durations such
 
 The agent is a long-running copy of the sesh binary that started it, so after an upgrade (`brew upgrade`, `make install`) it keeps running the old version until it stops or the machine restarts. Run `sesh agent stop` after upgrading; the next command starts the new version and prompts once.
 
-If a release changes how sesh and the agent talk to each other, the new `sesh` can't reach the old agent at all. Commands warn `sesh agent unavailable: agent rejected hello: protocol_version_mismatch ...` and prompt on every run, and `sesh agent stop` fails with the same message. Stop the old agent directly with `pkill -f 'sesh agent'`; the next command starts the new version.
+If a release changes how sesh and the agent talk to each other, the new `sesh` can't send the old agent `stop`. Until the old agent is stopped, commands prompt on every run and warn with its pid and what to do:
+
+```
+warning: sesh agent unavailable: agent protocol mismatch: agent (pid 12345) uses protocol version 1, this sesh uses 2; stop it with: kill 12345
+```
+
+Run that `kill`; the next command starts the new version.
 
 **Troubleshooting**
 

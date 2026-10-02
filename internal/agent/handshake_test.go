@@ -313,3 +313,36 @@ func TestDialAndHandshake_RefusesAnotherUsersAgent(t *testing.T) {
 		t.Fatal("fake agent never saw the connection close")
 	}
 }
+
+func TestDialAndHandshake_OlderAgentNamesItsPID(t *testing.T) {
+	sockPath := startFakeAgent(t, func(t *testing.T, rw *bufio.ReadWriter) {
+		consumeClientHello(t, rw)
+		reply(t, rw, ErrorResponse{
+			Type:     TypeError,
+			Version:  7,
+			Code:     ErrCodeProtocolVersionMismatch,
+			Message:  "client version 1, server 7",
+			AgentPID: 4242,
+		})
+	})
+	_, err := dialAndHandshake(sockPath)
+	if !errors.Is(err, errProtocolMismatch) {
+		t.Fatalf("err = %v, want errProtocolMismatch", err)
+	}
+	for _, want := range []string{"pid 4242", "protocol version 7", "kill 4242"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to contain %q", err, want)
+		}
+	}
+}
+
+func TestDialAndHandshake_RejectionWithoutPIDStaysGeneric(t *testing.T) {
+	sockPath := startFakeAgent(t, func(t *testing.T, rw *bufio.ReadWriter) {
+		consumeClientHello(t, rw)
+		reply(t, rw, ErrorResponse{Type: TypeError, Version: 7, Code: ErrCodeProtocolVersionMismatch, Message: "client version 1, server 7"})
+	})
+	_, err := dialAndHandshake(sockPath)
+	if err == nil || !strings.Contains(err.Error(), "agent rejected hello: protocol_version_mismatch") {
+		t.Fatalf("err = %v, want the generic rejection", err)
+	}
+}

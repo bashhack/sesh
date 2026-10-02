@@ -207,8 +207,17 @@ func (s *Server) handleConn(conn *net.UnixConn) {
 		return
 	}
 	if env.Version != ProtocolVersion {
-		sendErrorAndIgnore(conn, ErrCodeProtocolVersionMismatch,
-			fmt.Sprintf("client version %d, server %d", env.Version, ProtocolVersion))
+		// Name this process so a newer client, which can't send stop to
+		// an older agent, can tell the user what to kill.
+		if err := writeJSON(conn, ErrorResponse{
+			Type:     TypeError,
+			Version:  ProtocolVersion,
+			Code:     ErrCodeProtocolVersionMismatch,
+			Message:  fmt.Sprintf("client version %d, server %d", env.Version, ProtocolVersion),
+			AgentPID: os.Getpid(),
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: write error response: %v\n", err) //nolint:errcheck // best-effort warning
+		}
 		return
 	}
 	var hello HelloRequest

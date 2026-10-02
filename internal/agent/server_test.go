@@ -191,6 +191,9 @@ func TestServer_VersionMismatchRejectsHello(t *testing.T) {
 	if got.Code != ErrCodeProtocolVersionMismatch {
 		t.Errorf("Code = %q, want %q (full message: %q)", got.Code, ErrCodeProtocolVersionMismatch, got.Message)
 	}
+	if got.AgentPID != os.Getpid() {
+		t.Errorf("AgentPID = %d, want the agent's pid %d", got.AgentPID, os.Getpid())
+	}
 }
 
 func TestServer_NonHelloFirstMessageRejected(t *testing.T) {
