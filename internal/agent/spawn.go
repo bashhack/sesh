@@ -224,6 +224,12 @@ func dialAndHandshake(sockPath string) (*Conn, error) {
 		closeOrLog(raw, "non-Unix dial result")
 		return nil, fmt.Errorf("dialed connection is not *net.UnixConn (%T)", raw)
 	}
+	// Refuse an agent run by another user before sending anything: the
+	// requests that follow can carry the master password.
+	if err := checkPeerCred(conn); err != nil {
+		closeOrLog(conn, "agent conn after peer check")
+		return nil, fmt.Errorf("refuse agent at %s: %w", sockPath, err)
+	}
 	if err := conn.SetDeadline(time.Now().Add(helloTimeout)); err != nil {
 		closeOrLog(conn, "agent conn after hello deadline")
 		return nil, err

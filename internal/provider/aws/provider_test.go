@@ -296,7 +296,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 			p := &Provider{
 				keychain: mockKeychain,
 				profile:  tc.profile,
-				KeyUser:  provider.KeyUser{User: "testuser"},
+				User:     "testuser",
 				keyName:  "sesh-aws",
 			}
 
@@ -391,7 +391,7 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 				keychain: mockKeychain,
 				totp:     mockTOTP,
 				profile:  tc.profile,
-				KeyUser:  provider.KeyUser{User: "testuser"},
+				User:     "testuser",
 				keyName:  "sesh-aws",
 			}
 
@@ -449,7 +449,7 @@ func TestProvider_GetTOTPKeyInfo(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := &Provider{
 				profile: tc.profile,
-				KeyUser: provider.KeyUser{User: tc.user},
+				User:    tc.user,
 				keyName: "sesh-aws",
 			}
 
@@ -566,7 +566,7 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 				aws:      mockAWS,
 				keychain: mockKeychain,
 				profile:  tc.profile,
-				KeyUser:  provider.KeyUser{User: tc.user},
+				User:     tc.user,
 			}
 
 			serialBytes, err := p.GetMFASerialBytes()
@@ -855,9 +855,9 @@ func TestProvider_GetCredentials(t *testing.T) {
 				keychain: mockKeychain,
 				totp:     mockTOTP,
 				profile:  tc.profile,
-				KeyUser:  provider.KeyUser{User: "testuser"},
+				User:     "testuser",
 				keyName:  "sesh-aws",
-				Clock:    provider.Clock{Now: tc.now},
+				Now:      tc.now,
 			}
 
 			creds, err := p.GetCredentials()
@@ -898,7 +898,7 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 		keychain: mockKeychain,
 		totp:     mockTOTP,
 		profile:  "",
-		KeyUser:  provider.KeyUser{User: "testuser"},
+		User:     "testuser",
 		keyName:  "sesh-aws",
 	}
 

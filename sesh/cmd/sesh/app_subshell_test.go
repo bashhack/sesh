@@ -89,13 +89,11 @@ func TestApp_LaunchSubshell(t *testing.T) {
 			serviceName: "aws",
 			setupApp: func(app *App) {
 				mockProvider := &MockSubshellProvider{
-					MockProvider: MockProvider{
-						NameFunc: func() string {
-							return "aws"
-						},
-						ValidateRequestFunc: func() error {
-							return errors.New("validation failed")
-						},
+					NameFunc: func() string {
+						return "aws"
+					},
+					ValidateRequestFunc: func() error {
+						return errors.New("validation failed")
 					},
 				}
 				app.Registry.RegisterProvider(mockProvider)
@@ -107,16 +105,14 @@ func TestApp_LaunchSubshell(t *testing.T) {
 			serviceName: "aws",
 			setupApp: func(app *App) {
 				mockProvider := &MockSubshellProvider{
-					MockProvider: MockProvider{
-						NameFunc: func() string {
-							return "aws"
-						},
-						ValidateRequestFunc: func() error {
-							return nil
-						},
-						GetCredentialsFunc: func() (provider.Credentials, error) {
-							return provider.Credentials{}, errors.New("failed to get credentials")
-						},
+					NameFunc: func() string {
+						return "aws"
+					},
+					ValidateRequestFunc: func() error {
+						return nil
+					},
+					GetCredentialsFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{}, errors.New("failed to get credentials")
 					},
 				}
 				app.Registry.RegisterProvider(mockProvider)
@@ -148,21 +144,19 @@ func TestApp_LaunchSubshell(t *testing.T) {
 			serviceName: "aws",
 			setupApp: func(app *App) {
 				mockProvider := &MockSubshellProvider{
-					MockProvider: MockProvider{
-						NameFunc: func() string {
-							return "aws"
-						},
-						ValidateRequestFunc: func() error {
-							return nil
-						},
-						GetCredentialsFunc: func() (provider.Credentials, error) {
-							return provider.Credentials{
-								Provider: "aws",
-								Variables: map[string]string{
-									"AWS_ACCESS_KEY_ID": "test",
-								},
-							}, nil
-						},
+					NameFunc: func() string {
+						return "aws"
+					},
+					ValidateRequestFunc: func() error {
+						return nil
+					},
+					GetCredentialsFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{
+							Provider: "aws",
+							Variables: map[string]string{
+								"AWS_ACCESS_KEY_ID": "test",
+							},
+						}, nil
 					},
 					NewSubshellConfigFunc: func(creds *provider.Credentials) any {
 						// Return something that's not a subshell.Config
@@ -181,24 +175,22 @@ func TestApp_LaunchSubshell(t *testing.T) {
 			},
 			setupApp: func(app *App) {
 				mockProvider := &MockSubshellProvider{
-					MockProvider: MockProvider{
-						NameFunc: func() string {
-							return "aws"
-						},
-						ValidateRequestFunc: func() error {
-							return nil
-						},
-						GetCredentialsFunc: func() (provider.Credentials, error) {
-							return provider.Credentials{
-								Provider: "aws",
-								Expiry:   time.Now().Add(12 * time.Hour),
-								Variables: map[string]string{
-									"AWS_ACCESS_KEY_ID":     "AKIAIOSFODNN7EXAMPLE",
-									"AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-									"AWS_SESSION_TOKEN":     "FwoGZXIvYXdzEBYaDEXAMPLE",
-								},
-							}, nil
-						},
+					NameFunc: func() string {
+						return "aws"
+					},
+					ValidateRequestFunc: func() error {
+						return nil
+					},
+					GetCredentialsFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{
+							Provider: "aws",
+							Expiry:   time.Now().Add(12 * time.Hour),
+							Variables: map[string]string{
+								"AWS_ACCESS_KEY_ID":     "AKIAIOSFODNN7EXAMPLE",
+								"AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+								"AWS_SESSION_TOKEN":     "FwoGZXIvYXdzEBYaDEXAMPLE",
+							},
+						}, nil
 					},
 					NewSubshellConfigFunc: func(creds *provider.Credentials) any {
 						return subshell.Config{
@@ -228,18 +220,16 @@ func TestApp_LaunchSubshell(t *testing.T) {
 			},
 			setupApp: func(app *App) {
 				mockProvider := &MockSubshellProvider{
-					MockProvider: MockProvider{
-						NameFunc: func() string {
-							return "aws"
-						},
-						ValidateRequestFunc: func() error {
-							return nil
-						},
-						GetCredentialsFunc: func() (provider.Credentials, error) {
-							return provider.Credentials{
-								Provider: "aws",
-							}, nil
-						},
+					NameFunc: func() string {
+						return "aws"
+					},
+					ValidateRequestFunc: func() error {
+						return nil
+					},
+					GetCredentialsFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{
+							Provider: "aws",
+						}, nil
 					},
 					NewSubshellConfigFunc: func(creds *provider.Credentials) any {
 						return subshell.Config{
@@ -269,18 +259,16 @@ func TestApp_LaunchSubshell(t *testing.T) {
 			},
 			setupApp: func(app *App) {
 				mockProvider := &MockSubshellProvider{
-					MockProvider: MockProvider{
-						NameFunc: func() string {
-							return "aws"
-						},
-						ValidateRequestFunc: func() error {
-							return nil
-						},
-						GetCredentialsFunc: func() (provider.Credentials, error) {
-							return provider.Credentials{
-								Provider: "aws",
-							}, nil
-						},
+					NameFunc: func() string {
+						return "aws"
+					},
+					ValidateRequestFunc: func() error {
+						return nil
+					},
+					GetCredentialsFunc: func() (provider.Credentials, error) {
+						return provider.Credentials{
+							Provider: "aws",
+						}, nil
 					},
 					NewSubshellConfigFunc: func(creds *provider.Credentials) any {
 						return subshell.Config{
@@ -360,18 +348,16 @@ func TestApp_LaunchSubshell_RealExitError(t *testing.T) {
 	}
 
 	mockProvider := &MockSubshellProvider{
-		MockProvider: MockProvider{
-			NameFunc: func() string {
-				return "aws"
-			},
-			ValidateRequestFunc: func() error {
-				return nil
-			},
-			GetCredentialsFunc: func() (provider.Credentials, error) {
-				return provider.Credentials{
-					Provider: "aws",
-				}, nil
-			},
+		NameFunc: func() string {
+			return "aws"
+		},
+		ValidateRequestFunc: func() error {
+			return nil
+		},
+		GetCredentialsFunc: func() (provider.Credentials, error) {
+			return provider.Credentials{
+				Provider: "aws",
+			}, nil
 		},
 		NewSubshellConfigFunc: func(creds *provider.Credentials) any {
 			return subshell.Config{

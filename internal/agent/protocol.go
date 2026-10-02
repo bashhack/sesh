@@ -197,13 +197,14 @@ type LockResponse struct {
 }
 
 // StopRequest shuts the agent down, like SIGTERM, through the socket so
-// callers don't need the agent's pid. The agent replies, then stops.
+// callers don't need the agent's pid. The agent stops, then replies.
 type StopRequest struct {
 	Type    string `json:"type"`
 	Version int    `json:"version"`
 }
 
-// StopResponse acknowledges a stop; the agent shuts down after sending it.
+// StopResponse acknowledges a stop. It is sent after the agent has shut
+// down, so the agent is gone by the time the client reads it.
 type StopResponse struct {
 	Type    string `json:"type"`
 	Version int    `json:"version"`

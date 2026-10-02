@@ -237,8 +237,8 @@ func saveEntryMetadata(entries []KeychainEntryMeta) error {
 // (e.g. "sesh-totp/github/personal" → "sesh-totp").
 // Fixed keys without variable segments (e.g. "sesh-mfa") are returned as-is.
 func getServicePrefix(service string) string {
-	if idx := strings.Index(service, "/"); idx >= 0 {
-		return service[:idx]
+	if before, _, ok := strings.Cut(service, "/"); ok {
+		return before
 	}
 	return service
 }

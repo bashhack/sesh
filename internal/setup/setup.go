@@ -25,7 +25,7 @@ import (
 // runCommand executes a command and returns its output.
 // It is a variable so we can swap it out in tests.
 var runCommand = func(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+	return exec.Command(name, args...).Output() //nolint:gosec // callers pass the fixed command "aws"; a variable only so tests can swap it
 }
 
 // readPassword is a variable so we can swap it out in tests

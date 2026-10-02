@@ -191,7 +191,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 				keychain:    mockKeychain,
 				serviceName: tc.serviceName,
 				profile:     tc.profile,
-				KeyUser:     provider.KeyUser{User: "testuser"},
+				User:        "testuser",
 			}
 
 			err := p.ValidateRequest()
@@ -251,8 +251,8 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 				totp:        mockTOTP,
 				serviceName: tc.serviceName,
 				profile:     tc.profile,
-				KeyUser:     provider.KeyUser{User: "testuser"},
-				Clock:       provider.Clock{Now: func() time.Time { return time.Unix(5, 0) }},
+				User:        "testuser",
+				Now:         func() time.Time { return time.Unix(5, 0) },
 			}
 
 			if _, err := p.GetCredentials(); err != nil {
@@ -342,7 +342,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 				keychain:    mockKeychain,
 				totp:        mockTOTP,
 				serviceName: tc.serviceName,
-				KeyUser:     provider.KeyUser{User: "testuser"},
+				User:        "testuser",
 			}
 
 			creds, err := p.GetCredentials()
@@ -442,7 +442,7 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 				keychain:    mockKeychain,
 				totp:        mockTOTP,
 				serviceName: tc.serviceName,
-				KeyUser:     provider.KeyUser{User: "testuser"},
+				User:        "testuser",
 			}
 
 			creds, err := p.GetClipboardValue()

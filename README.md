@@ -53,7 +53,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 brew install bashhack/sesh/sesh
 # Note: Homebrew automatically adds sesh to your PATH, so it's ready to use immediately
 
-# Option 2: Install using Go (requires Go 1.25+)
+# Option 2: Install using Go (requires Go 1.27+)
 go install github.com/bashhack/sesh/sesh/cmd/sesh@latest
 # Note: Ensure your Go bin directory (typically $HOME/go/bin) is in your PATH
 # You can add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):
@@ -308,7 +308,7 @@ sesh -service password -action import -format encrypted -file backup.enc
 ## Development
 
 ### Prerequisites
-- Go 1.25+
+- Go 1.27+
 - macOS (for Keychain integration; SQLite backend works cross-platform)
 - Make (optional — provides convenience targets, but `go build ./sesh/cmd/sesh` works directly)
 

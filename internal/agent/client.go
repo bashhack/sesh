@@ -180,8 +180,9 @@ func Lock(conn *Conn) error {
 	return err
 }
 
-// Stop asks the agent to shut down. The agent replies before it closes
-// its listener, so a nil error means the stop was accepted.
+// Stop asks the agent to shut down. The agent replies only after it has
+// shut down, so a nil error means it is gone: no listener, no socket
+// file, key zeroed.
 func Stop(conn *Conn) error {
 	_, err := roundTrip(conn, StopRequest{Type: TypeStop, Version: ProtocolVersion}, TypeStopAck)
 	return err

@@ -33,7 +33,7 @@ func defaultDataDir() (string, error) {
 		return "", err
 	}
 	dir := filepath.Join(base, "sesh")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // data dir comes from the user's own environment (XDG_DATA_HOME/APPDATA/home)
 		return "", fmt.Errorf("create sesh data dir %q: %w", dir, err)
 	}
 	return dir, nil

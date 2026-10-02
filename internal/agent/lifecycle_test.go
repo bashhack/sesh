@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -221,5 +222,61 @@ func TestServer_RunReturnsAfterKeyIsZeroed(t *testing.T) {
 	}
 	if unlocked, _, _ := srv.keys.Status(); unlocked {
 		t.Fatal("Run returned before the key was zeroed")
+	}
+}
+
+func TestServer_StopRepliesAfterShutdown(t *testing.T) {
+	// Slow the key zeroing so a reply sent before shutdown would arrive
+	// while the agent is still unlocked and listening.
+	testHookBeforeKeyShutdown = func() { time.Sleep(50 * time.Millisecond) }
+	t.Cleanup(func() { testHookBeforeKeyShutdown = nil })
+
+	sockPath := tempSocketPath(t)
+	srv, _ := serve(t, sockPath)
+	conn, _ := unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+
+	if err := Stop(conn); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	// No waiting: stop_ack must mean the agent is already gone.
+	if unlocked, _, _ := srv.keys.Status(); unlocked {
+		t.Fatal("stop_ack arrived before the key was zeroed")
+	}
+	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stop_ack arrived before the socket was removed: %v", err)
+	}
+}
+
+func TestServer_StopReportsFailedShutdown(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the socket removal can't be made to fail")
+	}
+	// Not serve(): its cleanup treats the Close error this test causes as a
+	// failure.
+	sockPath := tempSocketPath(t)
+	srv, err := Listen(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Run(context.Background()) }() //nolint:errcheck // shutdown is driven by Stop below
+	conn, _ := unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+
+	// A read-only directory makes removing the socket file fail.
+	dir := filepath.Dir(sockPath)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Errorf("restore dir permissions: %v", err)
+		}
+	})
+
+	err = Stop(conn)
+	var pe *ProtocolError
+	if !errors.As(err, &pe) || pe.Code != ErrCodeInternal || !strings.Contains(pe.Message, "remove socket") {
+		t.Fatalf("Stop err = %v, want an internal_error naming the failed socket removal", err)
 	}
 }

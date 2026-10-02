@@ -14,7 +14,7 @@ if ! command -v goimports >/dev/null 2>&1; then
 fi
 
 # Check if golangci-lint is installed with correct version
-REQUIRED_GOLANGCI_VERSION="2.6.2"
+REQUIRED_GOLANGCI_VERSION="2.14.0"
 INSTALL_GOLANGCI=false
 if ! command -v golangci-lint >/dev/null 2>&1; then
     echo "golangci-lint not found"

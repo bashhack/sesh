@@ -122,7 +122,7 @@ lint:
 .PHONY: lint/golangci
 lint/golangci:
 	@echo 'Running golangci-lint...'
-	@REQUIRED_VERSION="2.6.2"; \
+	@REQUIRED_VERSION="2.14.0"; \
 	INSTALL_NEEDED=false; \
 	if ! command -v golangci-lint >/dev/null 2>&1; then \
 		echo "golangci-lint not found"; \
@@ -246,6 +246,11 @@ build:
 	@echo "Building sesh..."
 	@mkdir -p build
 	@go build $(LDFLAGS) -o build/sesh ./sesh/cmd/sesh
+
+## agent-smoke: Build sesh and run the agent end-to-end smoke test
+.PHONY: agent-smoke
+agent-smoke: build
+	@scripts/agent-smoke.sh build/sesh
 
 ## build/optimize: Build optimized binary (smaller size)
 .PHONY: build/optimize
