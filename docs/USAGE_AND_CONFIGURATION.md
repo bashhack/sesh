@@ -204,13 +204,9 @@ SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 
 # Later runs — no prompt while the agent is running
 SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
-
-# Non-interactive (CI/scripts — prefer this only in trusted environments)
-export SESH_MASTER_PASSWORD='...'
-SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
 ```
 
-The first command that needs the key after the vault exists prompts once and starts a per-user `sesh agent` in the background; the run that creates the vault does not start one. The agent holds the derived key so later commands don't prompt. While it is unlocked, commands don't check the password. With `SESH_MASTER_PASSWORD` set, sesh skips the agent entirely: the password is checked on every run and the run never starts an agent, which is what scripts and CI want. An agent already running from earlier interactive use is not stopped by such a run; it stays as it was until it locks, times out, or is stopped with `sesh agent stop`.
+The first command that needs the key after the vault exists prompts once and starts a per-user `sesh agent` in the background; the run that creates the vault does not start one. The agent holds the derived key so later commands don't prompt. While it is unlocked, commands don't check the password.
 
 The agent locks itself after 10 minutes without use and 8 hours after each unlock; the next command then prompts again. To control it directly:
 
@@ -238,6 +234,15 @@ If the agent can't be started, sesh prints a warning and prompts on every run in
 Secrets are limited to 1 MiB each.
 
 The sidecar file `passwords.key` lives next to the SQLite database. It contains the KDF salt, Argon2id parameters, and a verification blob (not a password hash) — nothing secret. Keep it with the database when moving between machines; without it, the database cannot be unlocked even with the correct password.
+
+#### Scripts and CI
+
+For non-interactive use, set `SESH_MASTER_PASSWORD`. sesh then checks that password on every run and doesn't use the agent, so a script never starts a background process or depends on one being unlocked. If you also use sesh interactively, your agent is unaffected; `sesh agent stop` still stops it if you want it gone. Because the variable exposes the password to the process environment, use it only where that's acceptable.
+
+```bash
+export SESH_MASTER_PASSWORD='...'
+SESH_BACKEND=sqlite SESH_KEY_SOURCE=password sesh --service password --list
+```
 
 ### Encrypted exports
 
