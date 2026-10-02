@@ -31,6 +31,8 @@ func setupRekeyEnv(t *testing.T) *rekeyTestEnv {
 	t.Setenv("SESH_BACKEND", "sqlite")
 	t.Setenv("SESH_KEY_SOURCE", "")
 	t.Setenv("SESH_MASTER_PASSWORD", "")
+	// Rekey locks a running agent; keep every test away from the user's.
+	t.Setenv("SESH_AUTH_SOCK", tempAgentSocket(t))
 
 	dbPath, err := database.DefaultDBPath()
 	if err != nil {

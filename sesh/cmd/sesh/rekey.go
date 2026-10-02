@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/migration"
@@ -239,6 +240,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 			return perr
 		}
 	}
+	lockAgentAfterRekey(app.Stderr)
 	return nil
 }
 
@@ -618,7 +620,36 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	if _, perr := fmt.Fprintln(app.Stderr, "Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available)."); perr != nil {
 		return perr
 	}
+	lockAgentAfterRekey(app.Stderr)
 	return nil
+}
+
+// lockAgentAfterRekey locks a running, unlocked agent once the database is
+// under a new key. The agent may still hold the old key, which opens the
+// .pre-rekey or .pre-rotate backup without a password. No agent running is
+// the normal case and prints nothing. The rekey has already succeeded, so a
+// failure here is a warning that names the command to run instead.
+func lockAgentAfterRekey(w io.Writer) {
+	conn, err := agent.DialExisting()
+	if err != nil {
+		if !agent.IsNotRunning(err) {
+			fmt.Fprintf(w, "warning: could not reach the sesh agent to lock it (%v); run `sesh agent lock`\n", err) //nolint:errcheck // best-effort warning
+		}
+		return
+	}
+	defer closeAgentConn(conn)
+	st, err := agent.Status(conn)
+	if err == nil && !st.Unlocked {
+		return
+	}
+	if err == nil {
+		err = agent.Lock(conn)
+	}
+	if err != nil {
+		fmt.Fprintf(w, "warning: could not lock the sesh agent (%v); run `sesh agent lock`\n", err) //nolint:errcheck // best-effort warning
+		return
+	}
+	fmt.Fprintln(w, "Locked the sesh agent, which held the old key.") //nolint:errcheck // best-effort notice
 }
 
 // promptYesNo reads a y/N answer from stdin. Empty input (bare Enter) is "No"
