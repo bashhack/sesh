@@ -34,6 +34,10 @@ func runAgent(app *App, args []string) error {
 }
 
 func runAgentDaemon(app *App, args []string) error {
+	// A spawned daemon's stderr is the agent log, so everything written to
+	// it gets the log's timestamps, including the error run prints through
+	// fatal (same *App) if startup fails.
+	app.Stderr = agent.TimestampLines(app.Stderr)
 	idleDefault, err := durationFromEnv("SESH_AGENT_IDLE_TIMEOUT", agent.DefaultIdleTimeout)
 	if err != nil {
 		return err

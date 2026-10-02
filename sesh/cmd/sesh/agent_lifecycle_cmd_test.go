@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -238,6 +239,25 @@ func TestAgentDaemon_RejectsBadTimeouts(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, tt.wantSub)
 			}
 		})
+	}
+}
+
+func TestAgentDaemon_StartupErrorIsTimestamped(t *testing.T) {
+	t.Setenv("SESH_AUTH_SOCK", tempAgentSocket(t))
+	t.Setenv("SESH_AGENT_IDLE_TIMEOUT", "soon")
+	app := agentTestApp()
+	stderr := app.Stderr.(*bytes.Buffer)
+	run(app, []string{"sesh", "agent"})
+
+	got := strings.TrimSpace(stderr.String())
+	if !strings.Contains(got, "SESH_AGENT_IDLE_TIMEOUT") {
+		t.Fatalf("stderr = %q, want the startup error", got)
+	}
+	stamped := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2}) `)
+	for line := range strings.SplitSeq(got, "\n") {
+		if !stamped.MatchString(line) {
+			t.Errorf("line without a timestamp: %q", line)
+		}
 	}
 }
 

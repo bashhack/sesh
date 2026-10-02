@@ -63,6 +63,22 @@ func TestAgentLog_EscapesLineBreaks(t *testing.T) {
 	}
 }
 
+func TestTimestampLines(t *testing.T) {
+	var out bytes.Buffer
+	w := TimestampLines(&out).(*stampWriter)
+	w.now = func() time.Time { return time.Date(2026, 10, 2, 13, 4, 5, 0, time.UTC) }
+	for _, chunk := range []string{"usage: sesh agent\n  -socket", " string\n", "❌ bad\n"} {
+		if _, err := w.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const ts = "2026-10-02T13:04:05Z "
+	want := ts + "usage: sesh agent\n" + ts + "  -socket string\n" + ts + "❌ bad\n"
+	if got := out.String(); got != want {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
 func TestServer_LogsMalformedUnlock(t *testing.T) {
 	sockPath := tempSocketPath(t)
 	var log logBuffer
