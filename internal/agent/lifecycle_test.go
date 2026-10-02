@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -244,5 +245,38 @@ func TestServer_StopRepliesAfterShutdown(t *testing.T) {
 	}
 	if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stop_ack arrived before the socket was removed: %v", err)
+	}
+}
+
+func TestServer_StopReportsFailedShutdown(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions, so the socket removal can't be made to fail")
+	}
+	// Not serve(): its cleanup treats the Close error this test causes as a
+	// failure.
+	sockPath := tempSocketPath(t)
+	srv, err := Listen(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Run(context.Background()) }() //nolint:errcheck // shutdown is driven by Stop below
+	conn, _ := unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+
+	// A read-only directory makes removing the socket file fail.
+	dir := filepath.Dir(sockPath)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Errorf("restore dir permissions: %v", err)
+		}
+	})
+
+	err = Stop(conn)
+	var pe *ProtocolError
+	if !errors.As(err, &pe) || pe.Code != ErrCodeInternal || !strings.Contains(pe.Message, "remove socket") {
+		t.Fatalf("Stop err = %v, want an internal_error naming the failed socket removal", err)
 	}
 }

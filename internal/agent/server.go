@@ -367,10 +367,12 @@ func (s *Server) dispatchStatus(conn *net.UnixConn) bool {
 // dispatchStop shuts the server down and then acknowledges, so a client
 // that sees stop_ack can rely on the agent being gone: no listener, no
 // socket file, key zeroed. Closing the listener leaves this accepted
-// connection open, so the reply still goes out.
+// connection open, so the reply still goes out. If shutdown fails, the
+// client gets the error instead of stop_ack.
 func (s *Server) dispatchStop(conn *net.UnixConn) {
 	if err := s.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: agent shutdown: %v\n", err) //nolint:errcheck // best-effort warning
+		sendErrorAndIgnore(conn, ErrCodeInternal, fmt.Sprintf("shutdown incomplete: %v", err))
+		return
 	}
 	if err := writeJSON(conn, StopResponse{Type: TypeStopAck, Version: ProtocolVersion}); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: write stop_ack: %v\n", err) //nolint:errcheck // best-effort warning
