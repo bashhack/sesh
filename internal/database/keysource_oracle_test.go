@@ -2,6 +2,7 @@ package database
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -35,5 +36,16 @@ func TestKeySourceOracle_RoundTripAndClose(t *testing.T) {
 	closer.Close()
 	if !ks.closed {
 		t.Fatal("Close did not reach the wrapped key source")
+	}
+}
+
+func TestKeySourceOracle_PropagatesKeyError(t *testing.T) {
+	keyErr := errors.New("keychain locked")
+	oracle := NewKeySourceOracle(&mockKeySource{err: keyErr})
+	if _, _, err := oracle.EncryptEntry([]byte("x")); !errors.Is(err, keyErr) {
+		t.Fatalf("EncryptEntry err = %v, want %v", err, keyErr)
+	}
+	if _, err := oracle.DecryptEntry([]byte("x"), []byte("salt")); !errors.Is(err, keyErr) {
+		t.Fatalf("DecryptEntry err = %v, want %v", err, keyErr)
 	}
 }

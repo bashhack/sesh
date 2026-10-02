@@ -250,3 +250,29 @@ func TestDialAndHandshake_FailsOnMissingSocket(t *testing.T) {
 		t.Fatal("dialAndHandshake should fail on missing socket")
 	}
 }
+
+func TestRoundTrip_UnexpectedReplyRetiresConnection(t *testing.T) {
+	sockPath := startFakeAgent(t, func(t *testing.T, rw *bufio.ReadWriter) {
+		consumeClientHello(t, rw)
+		reply(t, rw, HelloResponse{Type: TypeHelloAck, Version: ProtocolVersion})
+		if err := rw.Flush(); err != nil {
+			t.Logf("fake agent flush: %v", err)
+		}
+		if _, err := rw.ReadBytes('\n'); err != nil {
+			return
+		}
+		reply(t, rw, PingResponse{Type: TypePong, Version: ProtocolVersion}) // wrong reply to status
+	})
+	conn, err := dialAndHandshake(sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, conn)
+
+	if _, err := Status(conn); err == nil || !strings.Contains(err.Error(), `unexpected response type "pong"`) {
+		t.Fatalf("Status err = %v, want unexpected response type", err)
+	}
+	if _, err := Status(conn); !errors.Is(err, errConnBroken) {
+		t.Fatalf("second Status err = %v, want errConnBroken", err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -349,4 +350,20 @@ func startFakeAgentLoop(t *testing.T, reply func(i int, req DecryptRequest) Decr
 		}
 	}()
 	return sockPath
+}
+
+func TestOracle_ClosedRefusesRequests(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	stop := runServer(t, sockPath)
+	defer stop()
+
+	o := NewOracle(dialClient(t, sockPath), "id")
+	o.Close()
+	o.Close() // second Close is a no-op
+	if _, _, err := o.EncryptEntry([]byte("x")); err == nil || !strings.Contains(err.Error(), "agent oracle is closed") {
+		t.Fatalf("EncryptEntry after Close err = %v, want agent oracle is closed", err)
+	}
+	if _, err := o.DecryptEntry([]byte("x"), []byte("salt")); err == nil || !strings.Contains(err.Error(), "agent oracle is closed") {
+		t.Fatalf("DecryptEntry after Close err = %v, want agent oracle is closed", err)
+	}
 }

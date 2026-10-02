@@ -606,3 +606,34 @@ func TestServer_HandlesManyConcurrentClients(t *testing.T) {
 		}
 	}
 }
+
+func TestServer_RejectsUndecodableCryptoRequests(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	stop := runServer(t, sockPath)
+	defer stop()
+
+	for _, req := range []string{
+		`{"type":"decrypt","version":1,"ciphertext":1}`,
+		`{"type":"encrypt","version":1,"plaintext":1}`,
+	} {
+		conn := dialAndShake(t, sockPath)
+		if _, err := conn.Write([]byte(req + "\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		_, line, err := readEnvelope(bufio.NewReader(conn))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got ErrorResponse
+		if err := decodeMessage(line, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Code != ErrCodeBadRequest {
+			t.Errorf("%s: Code = %q, want %q (%s)", req, got.Code, ErrCodeBadRequest, got.Message)
+		}
+		mustClose(t, conn)
+	}
+}
