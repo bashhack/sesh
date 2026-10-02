@@ -263,6 +263,13 @@ func (c *Config) applyFlags(o Overrides) error {
 	return nil
 }
 
+// Validate checks flag values the way Load does, so a bad flag is reported
+// even by commands that never load settings.
+func (o Overrides) Validate() error {
+	var c Config
+	return c.applyFlags(o)
+}
+
 func setChoice(dst *Setting[string], v string, src Source, origin string, allowed ...string) error {
 	if slices.Contains(allowed, v) {
 		*dst = Setting[string]{Value: v, Source: src, Origin: origin}

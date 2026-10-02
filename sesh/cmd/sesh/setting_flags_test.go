@@ -86,3 +86,27 @@ func TestSettingFlags_ReachSettingsAndConfigOutput(t *testing.T) {
 		t.Errorf("err = %v, want the bad flag value named", err)
 	}
 }
+
+func TestSettingFlags_ValidatedOnTheirOwn(t *testing.T) {
+	for name, tt := range map[string]struct {
+		wantSub string
+		args    []string
+	}{
+		"bad backend before --version": {`--backend = "bogus": want "sqlite" or "keychain"`, []string{"sesh", "--backend", "bogus", "--version"}},
+		"flag taken as a value":        {`--backend = "--version"`, []string{"sesh", "--backend", "--version"}},
+		"flag taken as a path":         {`--db-path = "--list": want an absolute path`, []string{"sesh", "--db-path", "--list"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, o, err := takeSettingFlags(tt.args)
+			if err == nil {
+				err = o.Validate()
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantSub) {
+				t.Fatalf("err = %v, want %q", err, tt.wantSub)
+			}
+		})
+	}
+	if _, o, err := takeSettingFlags([]string{"sesh", "--backend=sqlite", "--key-source", "password", "--db-path", "~/v.db"}); err != nil || o.Validate() != nil {
+		t.Errorf("valid flags rejected: %v / %v", err, o.Validate())
+	}
+}

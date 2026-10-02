@@ -45,6 +45,9 @@ func main() {
 	// here means SESH_BACKEND=sqlite doesn't pointlessly open the DB (or
 	// acquire the key-init flock on first run) for those commands.
 	args, overrides, err := takeSettingFlags(os.Args)
+	if err == nil {
+		err = overrides.Validate()
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(2)
