@@ -22,7 +22,7 @@ sesh is designed to reduce exposure to:
 
 sesh is NOT designed to protect against:
 
-- **Compromised Local Account**: If an attacker has your macOS account, they can access Keychain
+- **Compromised Local Account**: If an attacker has your macOS account, they can access Keychain. In master password mode they can also use an unlocked sesh agent; see [Sesh agent](#sesh-agent)
 - **Root/Admin Access**: System-level compromise bypasses all application-level protections
 - **Physical Access**: Direct hardware access can bypass software protections
 - **Memory Dump Attacks**: Go's immutable strings mean TOTP codes and some intermediate values persist in memory until GC. Byte slices are zeroed, but string copies from the TOTP library cannot be.
@@ -96,10 +96,19 @@ Derives the master key from a user-supplied passphrase via Argon2id. **No keycha
 
 In password mode, once the vault exists, the first command that needs the key starts a per-user background process (`sesh agent`). The run that creates the vault does not start it. The agent holds the derived key in memory and performs entry encryption and decryption on the CLI's behalf; the key itself never crosses the socket.
 
-- **Socket**: `<user-cache-dir>/sesh/agent.sock` (override with `SESH_AUTH_SOCK`), mode 0600 in a 0700 directory. The agent also checks the peer's UID on every connection (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS) and rejects other users
+- **Socket**: `<user-cache-dir>/sesh/agent.sock` (override with `SESH_AUTH_SOCK`), mode 0600 in a 0700 directory. Both ends check the other's UID (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS): the agent rejects clients run by other users, and the CLI refuses an agent socket owned by another user before sending it anything
 - **Unlock**: the CLI prompts, then sends the password and the sidecar's public salt, params, and verify blob to the agent, which derives and checks the key. Unlocks run one at a time
 - **Vault binding**: every encrypt/decrypt request names the sidecar it was unlocked for. If the agent has since been unlocked for a different vault, it refuses rather than use the wrong key
 - **Environment**: runs with `SESH_MASTER_PASSWORD` set never start or use the agent, and an agent started by another run does not inherit that variable
+
+Where the derived key is, by state:
+
+| State | Where the key lives |
+|-------|---------------------|
+| No agent (keychain mode, `SESH_MASTER_PASSWORD` runs, or agent unavailable) | In the sesh process, for one command |
+| Agent unlocked | In the agent's locked memory page |
+| Agent locked | Nowhere: zeroed in place; the agent process keeps running |
+| Agent stopped | Nowhere; the next command starts a fresh agent |
 
 What this changes: while the agent is unlocked, **any process running as your user can ask it to decrypt entries**, and `--list` / `--delete` no longer require the password. This is the same trade-off `ssh-agent` makes. The window is bounded:
 
@@ -111,7 +120,15 @@ A locked agent zeroes the key and keeps running; the next command prompts again.
 
 **Process hardening** (Linux and macOS). Before it accepts any connection, the agent disables core dumps, blocks other processes running as you from attaching a debugger or reading its memory (`PR_SET_DUMPABLE=0` on Linux, `PT_DENY_ATTACH` on macOS), and reserves a page locked into RAM for the key so it is never written to swap. If any of these can't be applied (in practice only the memory lock can fail, when the locked-memory limit is below one page), the agent refuses to start: sesh prints a warning with the agent's reason and prompts for the password on every run instead. Short-lived copies made while encrypting or decrypting stay on the ordinary Go heap, covered by the no-dump/no-attach settings.
 
-Not protected against: root or a debugger attached to the agent (the key is in its memory), core dumps, or memory the Go runtime copies and never zeroes (JSON buffers carrying passwords and plaintext).
+**What compromise of each piece gives an attacker:**
+
+1. **The agent's socket** (another process running as you). While the agent is unlocked, it can have any entry decrypted or encrypted. Such a process can also read your database file, so in effect it can read and change every secret in the vault for as long as the agent stays unlocked. It never gets the key itself, so the access ends when the agent locks, times out, or stops. Processes run by other users are refused.
+2. **The agent process.** Other processes running as you can't attach a debugger, read its memory, or make it dump core (see process hardening above). root can, and gets the key while the agent is unlocked.
+3. **`SESH_AUTH_SOCK`.** It is a path, not a credential. Pointing it at another user's socket gets nothing: the CLI checks the socket owner's UID and refuses before sending anything. A process running as you could point it at a fake agent of its own and receive the password you type, but such a process can already read your terminal and files, so this adds nothing it couldn't already do.
+4. **The agent's log.** It records start-up, auto-locks, and errors, never passwords, keys, or secrets.
+5. **What the timeouts protect.** They bound how long an unlocked session stays useful, for example on a laptop left unlocked. After a lock the key is zeroed in place. What can remain in the agent's memory are short-lived buffers (the JSON messages that carried a password or a decrypted secret) that Go gives no way to zero; the runtime reuses or frees them later. The no-dump and no-attach settings cover them; the timeouts don't.
+
+Not protected against: root (it can read the agent's memory), physical-memory attacks such as cold boot or DMA, or a process running as you that captures the password as you type it.
 
 ### Encrypted Export
 
@@ -195,6 +212,10 @@ Go makes this hard, but sesh reduces exposure through several techniques:
    // Pass secrets via stdin, not command line
    err := secure.ExecWithSecretInput(cmd, secret)
    ```
+
+5. **Hardening the Long-Lived Agent**
+
+   The sesh agent holds the key for minutes or hours, so zeroing alone isn't enough. It also disables core dumps, blocks debugger attach, and keeps the key in memory that is never swapped, and it refuses to start if it can't. See [Sesh agent](#sesh-agent).
 
 ### Real-World Impact
 
