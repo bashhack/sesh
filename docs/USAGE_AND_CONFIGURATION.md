@@ -350,6 +350,14 @@ Behaviour:
 
 Timestamps (`created_at`, `updated_at`) are preserved across the rekey.
 
+**The vault checks its key.** Every SQLite vault stores a small value encrypted with its key, and the name of the key source that protects it. Each command decrypts that value before it reads or writes anything, so a wrong key is refused instead of being used:
+
+- **Forgot to change `SESH_KEY_SOURCE` after a rekey:** `this vault uses the keychain key source, but sesh is using password`. The message gives the setting to use, or the rekey command that switches the vault instead.
+- **`passwords.key` replaced, or the Keychain entry changed:** `the password key in use is not the one this vault was created with`. Restore the original.
+- **`passwords.key` missing next to an existing vault:** sesh won't create a new master password there. It stops, says the key file is missing, and says how to recover.
+
+A vault created before this check gets its check value the first time one of its entries decrypts.
+
 ### Rotating your master password
 
 When `SESH_KEY_SOURCE=password` is the active source, `sesh --rekey --to password` rotates the master password in place: every entry is re-encrypted under a freshly-derived key from a new password you choose, and the old sidecar is preserved as a backup.

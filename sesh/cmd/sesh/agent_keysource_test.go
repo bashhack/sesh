@@ -495,7 +495,7 @@ func (c *closeRecorder) Close() { c.closed = true }
 func TestOpenStoreWith_ClosesOracleWhenOpenFails(t *testing.T) {
 	oracle := &closeRecorder{}
 	dbPath := filepath.Join(t.TempDir(), "missing-dir", "passwords.db")
-	if _, err := openStoreWith(dbPath, oracle); err == nil {
+	if _, err := openStoreWith(dbPath, oracle, "password"); err == nil {
 		t.Fatal("openStoreWith succeeded in a missing directory")
 	}
 	if !oracle.closed {

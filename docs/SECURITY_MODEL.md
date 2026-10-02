@@ -67,6 +67,7 @@ The SQLite backend provides application-level encryption on top of file-system s
 - **Per-entry salts**: Each entry derives a unique encryption key from the master key + a random 16-byte salt
 - **Argon2id key derivation**: Memory-hard KDF for per-entry key derivation (16 MiB, 1 iteration, 1 thread). The KDF input is the 256-bit high-entropy master key (see below), *not* a user password — so these parameters are chosen for domain separation between entries rather than password stretching, and fall below OWASP's password-KDF minimums by design
 - **Two key sources** (`SESH_KEY_SOURCE`): the master key can come from the macOS Keychain (default) or be derived from a user-supplied master password (see below)
+- **Vault key check**: the vault stores a constant encrypted with its key (the `vault_key` table), plus the name of the key source that protects it. Every command decrypts the constant before reading or writing any entry, and refuses a key that fails. A mismatched `SESH_KEY_SOURCE`, a replaced `passwords.key`, or a changed Keychain entry therefore can't write entries the vault's real key can't read. Password mode also refuses to create a new master key next to an existing vault whose `passwords.key` is missing
 - **Key versioning**: Schema supports key rotation via `key_version` column and `key_metadata` table (rotation logic planned)
 - **FTS5 search**: Full-text search indexes service names, accounts, and descriptions — search queries never touch encrypted data
 - **Audit logging**: Append-only `audit_log` table records access, modification, and deletion events with timestamps
@@ -151,6 +152,7 @@ Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext
 - **Per-row salt regeneration.** Every entry gets a fresh per-row salt under the new key. Encrypted ciphertext changes for every row even when the plaintext is identical.
 - **Recoverable backup.** On success the original database is preserved at `<dbPath>.pre-rekey`. The user is responsible for deleting it once they've verified the new state works (`shred -u` recommended on traditional filesystems).
 - **Old key state is preserved deliberately.** When switching keychain → password, the old keychain entry is left in place (now unused); same for the sidecar when switching password → keychain. This gives an additional rollback path and avoids the situation where a partial failure has destroyed the user's only access to a recoverable backup. The summary message points at the manual cleanup paths.
+- **The key check moves with the vault.** The new database records its own check value for the new key before the swap, so the check switches in the same rename as the entries. Rekey verifies the source vault's key without writing to it.
 - **Refusal-over-overwrite for target state.** If the target's persistent state already exists (a stale sidecar, or a keychain entry left over from a prior switch), rekey refuses and asks the user to clean up manually. The reasoning: silent overwrite of a salt or stored key could destroy access to whatever the user originally had.
 
 ### Why This Matters

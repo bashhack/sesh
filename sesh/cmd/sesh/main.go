@@ -138,23 +138,39 @@ func openSQLiteStore() (*database.Store, error) {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
+	source := currentKeySourceName()
+	if source == "password" {
+		if err := refuseNewKeyForExistingVault(dbPath); err != nil {
+			return nil, err
+		}
+	}
 	ks, err := buildKeySource(filepath.Dir(dbPath))
 	if err != nil {
 		return nil, err
 	}
-	return openStoreWith(dbPath, ks)
+	return openStoreWith(dbPath, ks, source)
 }
 
-// openStoreWith opens the store at dbPath over oracle. The store owns
-// oracle once opened; if opening fails, oracle is closed here so an agent
-// connection or a cached master key doesn't outlive the failure.
-func openStoreWith(dbPath string, oracle database.CryptoOracle) (*database.Store, error) {
+// openStoreWith opens the store at dbPath over oracle and confirms oracle
+// holds the vault's key (source names the key source) before returning, so
+// nothing is read or written with the wrong key. The store owns oracle once
+// opened; if opening fails, oracle is closed here so an agent connection or
+// a cached master key doesn't outlive the failure.
+func openStoreWith(dbPath string, oracle database.CryptoOracle, source string) (*database.Store, error) {
 	store, err := database.Open(dbPath, oracle)
 	if err != nil {
 		if c, ok := oracle.(interface{ Close() }); ok {
 			c.Close()
 		}
 		return nil, fmt.Errorf("open database: %w", err)
+	}
+
+	if err := store.CheckKey(source); err != nil {
+		err = withKeyHint(err)
+		if closeErr := store.Close(); closeErr != nil {
+			return nil, fmt.Errorf("%w (close also failed: %v)", err, closeErr)
+		}
+		return nil, err
 	}
 
 	if err := store.InitKeyMetadata(); err != nil {
@@ -165,6 +181,42 @@ func openStoreWith(dbPath string, oracle database.CryptoOracle) (*database.Store
 	}
 
 	return store, nil
+}
+
+// refuseNewKeyForExistingVault stops password mode from creating a new
+// master key next to a vault that already exists without passwords.key:
+// entries written under a new key would be unreadable with the vault's
+// real one.
+func refuseNewKeyForExistingVault(dbPath string) error {
+	sidecar := filepath.Join(filepath.Dir(dbPath), sidecarFile)
+	if _, err := os.Stat(sidecar); !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil // no vault yet: the first run creates both
+	}
+	return fmt.Errorf("a vault exists at %s, but its key file %s is missing. "+
+		"If passwords.key was lost, restore it from a backup. "+
+		"If this vault uses the Keychain key, set SESH_KEY_SOURCE=keychain. "+
+		"To switch it to a master password, run: SESH_KEY_SOURCE=keychain sesh --rekey --to password",
+		dbPath, sidecar)
+}
+
+// withKeyHint adds what to do next to a database.WrongKeyError.
+func withKeyHint(err error) error {
+	var wk *database.WrongKeyError
+	if !errors.As(err, &wk) {
+		return err
+	}
+	switch {
+	case wk.VaultSource != "" && wk.VaultSource != wk.Source:
+		return fmt.Errorf("%w. Set SESH_KEY_SOURCE=%s to use this vault, or switch it with: SESH_KEY_SOURCE=%s sesh --rekey --to %s",
+			err, wk.VaultSource, wk.VaultSource, wk.Source)
+	case wk.Source == "password":
+		return fmt.Errorf("%w. If passwords.key was replaced, restore the original. If you switched key sources with sesh --rekey, set SESH_KEY_SOURCE to the new one", err)
+	default:
+		return fmt.Errorf("%w. If the Keychain entry %q was replaced, restore the original. If you switched key sources with sesh --rekey, set SESH_KEY_SOURCE to the new one", err, encKeyService)
+	}
 }
 
 // buildKeySource returns the CryptoOracle the store encrypts through,
