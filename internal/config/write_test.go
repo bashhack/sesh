@@ -104,3 +104,50 @@ func TestSetTopLevel_NeverWritesADuplicateKey(t *testing.T) {
 		})
 	}
 }
+
+func TestWrites_KeepASymlinkedConfigFile(t *testing.T) {
+	for name, tt := range map[string]struct {
+		write    func(path string) error
+		existing bool
+	}{
+		"SetTopLevel on a linked file":  {func(p string) error { return SetTopLevel(p, "key_source", "password") }, true},
+		"Write on a linked file":        {func(p string) error { return Write(p, "key_source = \"password\"\n") }, true},
+		"Write through a dangling link": {func(p string) error { return Write(p, "key_source = \"password\"\n") }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dotfiles := filepath.Join(t.TempDir(), "dotfiles", "sesh")
+			if err := os.MkdirAll(dotfiles, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(dotfiles, "config.toml")
+			if tt.existing {
+				writeConfig(t, target, "key_source = \"keychain\"\n")
+			}
+			link := filepath.Join(t.TempDir(), "sesh", "config.toml")
+			if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := tt.write(link); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Lstat(link)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				t.Error("the symlink was replaced by a regular file")
+			}
+			got, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != "key_source = \"password\"\n" {
+				t.Errorf("linked file = %q", got)
+			}
+		})
+	}
+}

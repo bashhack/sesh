@@ -78,6 +78,12 @@ func Write(path, body string) error {
 }
 
 func writeFile(path, body string) error {
+	// Write the file a symlink points at, not over the link: dotfile
+	// managers (stow, chezmoi) often link config files into a repo.
+	path, err := resolveLinks(path)
+	if err != nil {
+		return err
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create config directory %s: %w", dir, err)
@@ -108,6 +114,27 @@ func writeFile(path, body string) error {
 	}
 	renamed = true
 	return nil
+}
+
+// resolveLinks returns the file path names after following symlinks. For a
+// link whose target doesn't exist yet, it returns that target, so the
+// first write creates it rather than replacing the link.
+func resolveLinks(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", fmt.Errorf("resolve config file %s: %w", path, err)
+	}
+	target, lerr := os.Readlink(path)
+	if lerr != nil {
+		return path, nil // no file and no link: write a new file at path
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+	return target, nil
 }
 
 // closeAfter closes f after err, reporting a close failure alongside it.
