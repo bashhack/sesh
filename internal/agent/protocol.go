@@ -37,6 +37,10 @@ const (
 	TypeLockAck    = "lock_ack"
 	TypeStop       = "stop"
 	TypeStopAck    = "stop_ack"
+
+	TypeTouchIDWrap    = "touchid_wrap"
+	TypeTouchIDWrapAck = "touchid_wrap_ack"
+	TypeUnlockTouchID  = "unlock_touchid" // answered with unlock_ack
 )
 
 // Error codes returned in ErrorResponse.Code. Strings (not ints) so they
@@ -51,6 +55,11 @@ const (
 	ErrCodeDecryptFailed           = "decrypt_failed"
 	ErrCodeUnlockMismatch          = "unlock_mismatch"
 	ErrCodeBadRequest              = "bad_request"
+	ErrCodeTouchIDCancelled        = "touchid_cancelled"
+	ErrCodeTouchIDUnavailable      = "touchid_unavailable"
+	ErrCodeTouchIDLockedOut        = "touchid_locked_out"
+	ErrCodeTouchIDFailed           = "touchid_failed"
+	ErrCodeTouchIDStale            = "touchid_stale"
 )
 
 // envelope is the shared shell every message wears. Used during
@@ -102,6 +111,37 @@ type UnlockRequest struct {
 	Verify   []byte    `json:"verify"`
 	Params   KDFParams `json:"params"`
 	Version  int       `json:"version"`
+}
+
+// TouchIDWrapRequest asks an unlocked agent to wrap the key of vault
+// UnlockID to the Secure Enclave public key PublicKey, for a Touch ID
+// unlock file. The key never leaves the agent; only the wrap comes back.
+type TouchIDWrapRequest struct {
+	Type      string `json:"type"`
+	UnlockID  string `json:"unlock_id"`
+	PublicKey []byte `json:"public_key"`
+	Version   int    `json:"version"`
+}
+
+// TouchIDWrapResponse is the wrapped key.
+type TouchIDWrapResponse struct {
+	Type         string `json:"type"`
+	EphemeralPub []byte `json:"ephemeral_pub"`
+	Ciphertext   []byte `json:"ciphertext"`
+	Version      int    `json:"version"`
+}
+
+// UnlockTouchIDRequest asks the agent to unlock with Touch ID: it unwraps
+// the key with the Secure Enclave key KeyBlob (asking for a fingerprint),
+// checks it against the sidecar's Verify blob, and installs it. The reply
+// is an UnlockResponse, or an error with a touchid_* code.
+type UnlockTouchIDRequest struct {
+	Type         string `json:"type"`
+	KeyBlob      []byte `json:"key_blob"`
+	EphemeralPub []byte `json:"ephemeral_pub"`
+	Ciphertext   []byte `json:"ciphertext"`
+	Verify       []byte `json:"verify"`
+	Version      int    `json:"version"`
 }
 
 // KDFParams is the Argon2id parameter set on the wire. It is a separate

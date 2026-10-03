@@ -35,6 +35,9 @@ var (
 	ErrLockedOut = errors.New("touch ID is locked out")
 	// ErrFailed means the fingerprint wasn't recognised.
 	ErrFailed = errors.New("touch ID did not recognise the fingerprint")
+	// ErrWrapMismatch means a wrapped secret doesn't open: it was wrapped
+	// for another key or another binding, or was changed.
+	ErrWrapMismatch = errors.New("touch ID wrapped secret doesn't open with this key")
 )
 
 // hkdfInfo separates this use of the shared secret from any other.
@@ -80,9 +83,18 @@ func Wrap(pub, secret, aad []byte) (Wrapped, error) {
 }
 
 // Unwrap recovers a secret wrapped to the Secure Enclave key in blob. The
-// chip asks for a fingerprint, showing reason. aad must match the wrap's.
+// chip asks for a fingerprint; macOS shows "<program> is trying to
+// <reason>", so reason reads as a verb phrase ("unlock your vault"). aad
+// must match the wrap's.
 func Unwrap(blob []byte, w Wrapped, aad []byte, reason string) ([]byte, error) {
-	shared, err := sharedSecret(blob, w.EphemeralPub, reason)
+	return UnwrapWith(func(peer []byte) ([]byte, error) { return sharedSecret(blob, peer, reason) }, w, aad)
+}
+
+// UnwrapWith recovers a wrapped secret using agree, the key agreement
+// between the wrap's private key and the one-off public key it's given.
+// Unwrap passes the Secure Enclave's; tests pass a software key's.
+func UnwrapWith(agree func(peer []byte) ([]byte, error), w Wrapped, aad []byte) ([]byte, error) {
+	shared, err := agree(w.EphemeralPub)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +109,7 @@ func Unwrap(blob []byte, w Wrapped, aad []byte, reason string) ([]byte, error) {
 	}
 	secret, err := aead.Open(nil, w.Ciphertext[:n], w.Ciphertext[n:], aad)
 	if err != nil {
-		return nil, errors.New("touch ID wrapped secret doesn't open with this key")
+		return nil, ErrWrapMismatch
 	}
 	return secret, nil
 }

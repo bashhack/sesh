@@ -11,6 +11,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/touchid"
 )
 
 // deriveKey is the KDF Unlock runs. Tests replace it to observe how many
@@ -24,6 +25,11 @@ var (
 	errUnlockMismatch = errors.New("unlock mismatch")
 	errBadRequest     = errors.New("bad request")
 	errShutDown       = errors.New("agent is shutting down")
+	// errKeyMismatch: a key didn't open the vault's verify blob.
+	errKeyMismatch = errors.New("key doesn't open this vault")
+	// errTouchIDStale: the Touch ID file's key no longer opens the vault,
+	// e.g. the master password changed without re-wrapping.
+	errTouchIDStale = errors.New("the Touch ID unlock is out of date for this vault")
 )
 
 // clock is the time source the keystore schedules auto-locks with.
@@ -113,11 +119,51 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 
 	derived := deriveKey(password, salt, params)
 	defer secure.SecureZeroBytes(derived)
+	if err := k.installVerified(derived, verify, "unlocked"); err != nil {
+		if errors.Is(err, errKeyMismatch) {
+			return errWrongPassword
+		}
+		return err
+	}
+	return nil
+}
 
-	opened, err := database.Decrypt(derived, verify)
+// UnlockTouchID unlocks the vault whose sidecar verify blob is verify with
+// the key unwrap returns; unwrap asks for a fingerprint. If the keystore
+// already holds that vault's key, unwrap isn't called, so a second request
+// doesn't prompt again. Like Unlock, it runs one at a time.
+func (k *keystore) UnlockTouchID(verify []byte, unwrap func() ([]byte, error)) error {
+	k.unlockMu.Lock()
+	defer k.unlockMu.Unlock()
+
+	if k.isShutDown() {
+		return errShutDown
+	}
+	if st := k.snapshot(); st.unlocked && st.unlockID == UnlockID(verify) {
+		return nil
+	}
+	key, err := unwrap()
+	if err != nil {
+		return err
+	}
+	defer secure.SecureZeroBytes(key)
+	if err := k.installVerified(key, verify, "unlocked (Touch ID)"); err != nil {
+		if errors.Is(err, errKeyMismatch) {
+			return errTouchIDStale
+		}
+		return err
+	}
+	return nil
+}
+
+// installVerified installs key if it opens the verify blob, and logs
+// event. It returns errKeyMismatch when the blob doesn't open. Caller
+// holds unlockMu.
+func (k *keystore) installVerified(key, verify []byte, event string) error {
+	opened, err := database.Decrypt(key, verify)
 	if err != nil || !bytes.Equal(opened, []byte(database.VerifyPlaintext)) {
 		secure.SecureZeroBytes(opened)
-		return errWrongPassword
+		return errKeyMismatch
 	}
 	secure.SecureZeroBytes(opened)
 
@@ -126,7 +172,7 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 	if k.shutDown {
 		return errShutDown
 	}
-	k.installLocked(derived)
+	k.installLocked(key)
 	k.unlockID = UnlockID(verify)
 	now := k.clock().Now()
 	k.unlockedAt, k.lastActivity, k.lastUnlock = now, now, now
@@ -134,8 +180,24 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 	k.scheduleLocked()
 	// Logged under mu, like every lock, so the log's order is the order
 	// the transitions happened in.
-	k.log.printf("unlocked")
+	k.log.printf("%s", event)
 	return nil
+}
+
+// wrapForTouchID wraps the cached key to a Secure Enclave public key for
+// the vault unlockID, binding the wrap to that vault. The key itself never
+// leaves the keystore.
+func (k *keystore) wrapForTouchID(unlockID string, pub []byte) (touchid.Wrapped, error) {
+	keyCopy, err := k.copyKey(unlockID)
+	if err != nil {
+		return touchid.Wrapped{}, err
+	}
+	defer secure.SecureZeroBytes(keyCopy)
+	w, err := touchid.Wrap(pub, keyCopy, []byte(unlockID))
+	if err != nil {
+		return touchid.Wrapped{}, fmt.Errorf("%w: %v", errBadRequest, err)
+	}
+	return w, nil
 }
 
 func (k *keystore) Decrypt(ciphertext, salt []byte, unlockID string) ([]byte, error) {
