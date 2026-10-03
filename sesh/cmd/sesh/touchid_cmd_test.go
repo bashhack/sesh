@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -307,5 +308,40 @@ func TestRekey_ToKeychainTurnsTouchIDOff(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Touch ID unlock is off") {
 		t.Errorf("stderr missing the note:\n%s", stderr)
+	}
+}
+
+func TestAskYes(t *testing.T) {
+	for input, want := range map[string]bool{
+		"\n":    true, // Enter takes the default
+		"y\n":   true,
+		"Yes\n": true,
+		"n\n":   false,
+		"no\n":  false,
+		"":      false, // Ctrl-D: end of input is not an answer
+		"y":     true,  // an answer cut short by end of input still counts
+	} {
+		got, err := askYes(strings.NewReader(input), io.Discard, "? ")
+		if err != nil || got != want {
+			t.Errorf("askYes(%q) = %v, %v; want %v", input, got, err, want)
+		}
+	}
+}
+
+func TestRekey_RemovesTouchIDEvenIfSummaryWriteFails(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	if err := touchid.NewFile("id", []byte("b"), []byte("p"), touchid.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")}).Write(env.dataDir); err != nil {
+		t.Fatal(err)
+	}
+	app, _ := rekeyTestApp("y\n")
+	app.Stderr = failOnWriter{marker: "Rekeyed"}
+	if err := runRekey(app, []string{"--to=keychain"}, newKCMock(nil)); err == nil || !strings.Contains(err.Error(), "stderr closed") {
+		t.Fatalf("err = %v, want the summary write failure", err)
+	}
+	if _, err := touchid.ReadFile(env.dataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("touchid.key survived a committed switch to the Keychain key (err %v)", err)
 	}
 }

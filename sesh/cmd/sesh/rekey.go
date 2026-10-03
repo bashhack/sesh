@@ -239,6 +239,9 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	originalRenamed = false
 	// Locked before any output, so a failed write below can't skip it.
 	agentNote := lockAgentAfterRekey()
+	// Touch ID unlock is removed before any output for the same reason: its
+	// wrap no longer matches the vault's key source.
+	touchNote := dropTouchID(dataDir)
 
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRekeyed %d entries: %s → %s\n", result.Migrated, current, *target); perr != nil {
 		return perr
@@ -254,8 +257,8 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if _, perr := fmt.Fprintln(app.Stderr, updateKeySourceSetting(st, *target)); perr != nil {
 		return perr
 	}
-	if msg := dropTouchID(dataDir); msg != "" {
-		if _, perr := fmt.Fprintln(app.Stderr, msg); perr != nil {
+	if touchNote != "" {
+		if _, perr := fmt.Fprintln(app.Stderr, touchNote); perr != nil {
 			return perr
 		}
 	}

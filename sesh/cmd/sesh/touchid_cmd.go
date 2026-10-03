@@ -236,13 +236,17 @@ func dropTouchID(dataDir string) string {
 	return "Touch ID unlock is off: it only unlocks a vault protected by a master password."
 }
 
-// askYes reads a [Y/n] answer from in, writing prompt to w. Only an explicit
-// n or no declines.
+// askYes reads a [Y/n] answer from in, writing prompt to w. Enter takes the
+// default, yes; n or no declines. End of input with nothing typed (Ctrl-D)
+// isn't an answer, so it declines too.
 func askYes(in io.Reader, w io.Writer, prompt string) (bool, error) {
 	if _, err := fmt.Fprint(w, prompt); err != nil {
 		return false, err
 	}
 	line, err := bufio.NewReader(in).ReadString('\n')
+	if errors.Is(err, io.EOF) && strings.TrimSpace(line) == "" {
+		return false, nil
+	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err
 	}
