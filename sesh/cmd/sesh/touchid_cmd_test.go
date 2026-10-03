@@ -27,6 +27,9 @@ func softwareTouchID(t *testing.T) (prompts *int, fail *error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A developer running the tests over SSH still gets the desktop path.
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_CLIENT", "")
 	var n int
 	var failure error
 	origAvail, origNewKey, origUnwrap := touchIDAvailable, touchIDNewKey, agent.TouchIDUnwrap
@@ -182,6 +185,34 @@ func TestTouchID_ScriptsNeverWaitOnAFingerprint(t *testing.T) {
 	closeKeySource(t, oracle)
 	if *prompts != 0 {
 		t.Errorf("a non-interactive run asked for Touch ID %d time(s)", *prompts)
+	}
+}
+
+func TestTouchID_SkippedOverSSH(t *testing.T) {
+	for _, name := range []string{"SSH_CONNECTION", "SSH_CLIENT"} {
+		t.Run(name, func(t *testing.T) {
+			startTestAgent(t)
+			prompts, _ := softwareTouchID(t)
+			dbPath := createVaultWithTouchID(t)
+			t.Setenv(name, "203.0.113.7 52114 192.0.2.1 22")
+
+			restore := testutil.RedirectStderr(t)
+			oracle, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "first-password-1234"))
+			out := restore()
+			if err != nil {
+				t.Fatalf("password over SSH: %v", err)
+			}
+			closeKeySource(t, oracle)
+			if *prompts != 0 {
+				t.Errorf("a command over SSH asked for Touch ID %d time(s)", *prompts)
+			}
+			if want := "isn't used over SSH"; !strings.Contains(out, want) {
+				t.Errorf("stderr = %q, want %q", out, want)
+			}
+			if _, err := touchid.ReadFile(filepath.Dir(dbPath)); err != nil {
+				t.Errorf("touchid.key gone after an SSH command: %v", err)
+			}
+		})
 	}
 }
 

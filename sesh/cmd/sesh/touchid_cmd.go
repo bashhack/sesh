@@ -39,6 +39,13 @@ func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte) (bool, erro
 	if f.UnlockID != id {
 		return false, nil // made for another vault; not this one's to use
 	}
+	if overSSH() {
+		// The agent may have been started on the desktop, so the Touch ID
+		// sheet would appear on the Mac's own screen, not to the person
+		// typing over SSH, and this command would wait on it.
+		note("Touch ID isn't used over SSH, so enter your master password.")
+		return false, nil
+	}
 	err = agent.UnlockTouchID(conn, f, verify)
 	switch {
 	case err == nil:
@@ -64,6 +71,12 @@ func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte) (bool, erro
 		note("Touch ID unlock failed (%v), so enter your master password. If you changed your fingerprints, turn it back on with: sesh touchid enable", pe)
 	}
 	return false, nil
+}
+
+// overSSH reports whether this command runs in an SSH session, which sshd
+// marks in the environment it gives the remote shell.
+func overSSH() bool {
+	return os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != ""
 }
 
 // enableTouchID turns on Touch ID unlock for the vault in dataDir: a new

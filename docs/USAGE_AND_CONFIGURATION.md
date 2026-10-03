@@ -338,7 +338,8 @@ Touch ID to allow this.
 
 **Your master password still works**, and sesh falls back to it:
 - **You press "Type Password in Terminal", or the fingerprint isn't recognised:** sesh asks for the master password in the terminal. The sheet itself never takes a password; in particular it doesn't accept your Mac's login password.
-- **Touch ID isn't available:** over SSH, with no sensor reachable, or with no enrolled fingerprint. sesh says so and asks for the master password.
+- **Over SSH:** sesh doesn't ask for a fingerprint, since the sheet would appear on the Mac's own screen. It asks for the master password.
+- **Touch ID isn't available:** no sensor reachable (for example with the lid closed), or no enrolled fingerprint. sesh says so and asks for the master password.
 - **Too many failed attempts locked Touch ID:** sesh asks for the master password until the Mac is unlocked with its password.
 - **Scripts** (no terminal, or `SESH_MASTER_PASSWORD`) never wait on a fingerprint.
 
