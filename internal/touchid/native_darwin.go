@@ -35,7 +35,13 @@ static tid_result tid_error(CFErrorRef err) {
 static tid_result tid_bytes(CFDataRef d) {
 	tid_result r = {0};
 	r.len = (int)CFDataGetLength(d);
-	r.data = malloc(r.len);
+	r.data = r.len > 0 ? malloc(r.len) : NULL;
+	if (r.data == NULL) {
+		r.len = 0;
+		r.code = -3;
+		strlcpy(r.domain, "sesh: no bytes (empty result or out of memory)", sizeof r.domain);
+		return r;
+	}
 	memcpy(r.data, CFDataGetBytePtr(d), r.len);
 	return r;
 }
@@ -167,8 +173,10 @@ func nativeSharedSecret(blob, peer []byte, reason string) ([]byte, error) {
 // copy, or converts its error.
 func take(r *C.tid_result) ([]byte, error) {
 	if r.data == nil {
+		// Every native call returns bytes on success, so no bytes and no
+		// error code is still a failure, never an empty success.
 		if r.code == 0 {
-			return nil, nil
+			return nil, errors.New("touch ID: native call returned nothing")
 		}
 		return nil, classify(C.GoString(&r.domain[0]), int64(r.code))
 	}
