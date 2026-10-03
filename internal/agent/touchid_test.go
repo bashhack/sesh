@@ -189,3 +189,28 @@ func TestUnlockTouchID_RefusesAMalformedRequest(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestUnlockTouchID_RefusesMissingWrapMaterialWithoutPrompting(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	serve(t, sockPath)
+	_, prompts := softwareChip(t, nil)
+	conn, verify, _ := unlockForTouchID(t, sockPath)
+	defer mustClose(t, conn)
+	if err := Lock(conn); err != nil {
+		t.Fatal(err)
+	}
+	for name, f := range map[string]*touchid.File{
+		"no one-off public key": {KeyBlob: []byte("blob"), Ciphertext: []byte("ct")},
+		"no ciphertext":         {KeyBlob: []byte("blob"), EphemeralPub: []byte("eph")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := UnlockTouchID(conn, f, verify)
+			if err == nil || !strings.Contains(err.Error(), ErrCodeBadRequest) {
+				t.Fatalf("err = %v, want bad_request", err)
+			}
+		})
+	}
+	if *prompts != 0 {
+		t.Errorf("an incomplete request showed the Touch ID prompt %d time(s)", *prompts)
+	}
+}

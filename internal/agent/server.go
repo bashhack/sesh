@@ -399,7 +399,10 @@ var touchIDUnwrap = func(blob []byte, w touchid.Wrapped, aad []byte) ([]byte, er
 
 func (s *Server) dispatchUnlockTouchID(conn *net.UnixConn, raw []byte) bool {
 	var req UnlockTouchIDRequest
-	if err := decodeMessage(raw, &req); err != nil || len(req.Verify) == 0 || len(req.KeyBlob) == 0 {
+	// Every field is checked before the unwrap, so an incomplete request is
+	// refused without showing the Touch ID prompt.
+	if err := decodeMessage(raw, &req); err != nil || len(req.Verify) == 0 || len(req.KeyBlob) == 0 ||
+		len(req.EphemeralPub) == 0 || len(req.Ciphertext) == 0 {
 		s.log.printf("Touch ID unlock refused: malformed request")
 		s.sendError(conn, ErrCodeBadRequest, "malformed unlock_touchid request")
 		return true
