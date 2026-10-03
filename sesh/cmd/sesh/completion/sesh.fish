@@ -2,13 +2,15 @@
 # Load it with:  sesh completion fish | source
 # or save it as ~/.config/fish/completions/sesh.fish
 function __sesh_complete
-    set -l words (commandline -opc) (commandline -ct)
+    # The words before the cursor come unquoted; the one being typed doesn't,
+    # so drop an opening quote and escaped spaces from it ("pa, My\ Backup).
+    set -l cur (commandline -ct | string replace -r -- '^["\']' '' | string replace -a -- '\\ ' ' ')
+    set -l words (commandline -opc) $cur
     set -l out (command sesh __complete $words[2..-1] 2>/dev/null)
     if test "$out" = ":files"
         # For --flag=path, complete the part after the "=" and keep the flag.
-        set -l tok (commandline -ct)
-        set -l pre (string match -r -- '^-[^=]*=' $tok)
-        for p in (__fish_complete_path (string replace -r -- '^-[^=]*=' '' $tok))
+        set -l pre (string match -r -- '^-[^=]*=' $cur)
+        for p in (__fish_complete_path (string replace -r -- '^-[^=]*=' '' $cur))
             printf '%s%s\n' "$pre" $p
         end
         return

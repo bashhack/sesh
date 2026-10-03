@@ -4,8 +4,12 @@
 # or save it as _sesh in a directory on $fpath.
 _sesh() {
     local out line
-    local -a cands
-    out=$(command sesh __complete "${(@)words[2,CURRENT]}" 2>/dev/null) || return 1
+    local -a cands args
+    # (Q) drops the quoting a word carries (My\ Backup, "x"); the word being
+    # typed may also start with a quote that isn't closed yet ("pa).
+    args=("${(@Q)words[2,CURRENT]}")
+    args[-1]=${args[-1]#[\"\']}
+    out=$(command sesh __complete "${args[@]}" 2>/dev/null) || return 1
     if [[ $out == :files ]]; then
         # For --flag=path, complete only the part after the "=".
         [[ ${words[CURRENT]} == -*=* ]] && compset -P '*='

@@ -184,6 +184,10 @@ func TestCompletionScript_Bash(t *testing.T) {
 			[]string{"--format=j"}, []string{"json"}},
 		{"nothing", "sesh config ", `(sesh config "")`, "2", ``,
 			[]string{"config", ""}, nil},
+		{"value right after = (bash 4+)", "sesh --format=", "(sesh --format =)", "2", `--format=json\n`,
+			[]string{"--format="}, []string{"json"}},
+		{"quoted value", `sesh --service "pa`, `(sesh --service '"pa')`, "2", `password\n`,
+			[]string{"--service", "pa"}, []string{"password"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			argsFile := fakeSesh(t, tt.out)
@@ -203,21 +207,39 @@ func TestCompletionScript_Bash(t *testing.T) {
 		})
 	}
 
-	for _, line := range []string{"sesh --file ba", "sesh --file=ba"} {
-		t.Run("files: "+line, func(t *testing.T) {
-			fakeSesh(t, `:files\n`)
+	// COMP_WORDS keeps a quoted word whole, quote included; bash 4+ also
+	// splits at "=", bash 3.2 doesn't.
+	for _, tt := range []struct {
+		name, line, words, cword, want string
+		wantArgs                       []string
+	}{
+		{"path", "sesh --file ba", "(sesh --file ba)", "2", "backup.enc", []string{"--file", "ba"}},
+		{"path after = (bash 3.2)", "sesh --file=ba", "(sesh --file=ba)", "1", "backup.enc", []string{"--file=ba"}},
+		{"path after = (bash 4+)", "sesh --file=ba", "(sesh --file = ba)", "3", "backup.enc", []string{"--file=ba"}},
+		{"quoted path with a space", `sesh --file "My Backup/ba`, `(sesh --file '"My Backup/ba')`, "2", "My Backup/backup.enc", []string{"--file", "My Backup/ba"}},
+	} {
+		t.Run("files: "+tt.name, func(t *testing.T) {
+			argsFile := fakeSesh(t, `:files\n`)
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "backup.enc"), nil, 0o600); err != nil {
+			if err := os.MkdirAll(filepath.Join(dir, "My Backup"), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command(bash, "--norc", "-c", `source "$1"; cd "$2"; COMP_LINE="$3"; COMP_POINT=${#COMP_LINE}; COMP_WORDS=($3); COMP_CWORD=$((${#COMP_WORDS[@]}-1)); _sesh; printf '%s\n' "${COMPREPLY[@]}"`,
-				"bash", script, dir, line) //nolint:gosec // test inputs
+			for _, f := range []string{"backup.enc", "My Backup/backup.enc"} {
+				if err := os.WriteFile(filepath.Join(dir, f), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command(bash, "--norc", "-c", `source "$1"; cd "$2"; COMP_LINE="$3"; COMP_POINT=${#COMP_LINE}; eval "COMP_WORDS=$4"; COMP_CWORD=$5; _sesh; printf '%s\n' "${COMPREPLY[@]}"`,
+				"bash", script, dir, tt.line, tt.words, tt.cword) //nolint:gosec // test inputs
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("bash: %v\n%s", err, out)
 			}
-			if got := strings.TrimSpace(string(out)); got != "backup.enc" {
-				t.Errorf("COMPREPLY = %q, want backup.enc", got)
+			if got := readArgs(t, argsFile); !slices.Equal(got, append([]string{completeCmd}, tt.wantArgs...)) {
+				t.Errorf("sesh got args %q, want %q", got, tt.wantArgs)
+			}
+			if got := strings.TrimSuffix(string(out), "\n"); got != tt.want {
+				t.Errorf("COMPREPLY = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -240,6 +262,10 @@ func TestCompletionScript_Zsh(t *testing.T) {
 			[]string{"--file", ""}, []string{"FILES"}},
 		{"files after =", "(sesh --file=ba)", "2", `:files\n`,
 			[]string{"--file=ba"}, []string{"compset -P *=", "FILES"}},
+		{"quoted value", `(sesh --service '"pa')`, "3", `password\n`,
+			[]string{"--service", "pa"}, []string{"password"}},
+		{"escaped space", `(sesh --x 'a\ b')`, "3", `a b\n`,
+			[]string{"--x", "a b"}, []string{"a b"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			argsFile := fakeSesh(t, tt.out)
@@ -264,8 +290,13 @@ func TestCompletionScript_Fish(t *testing.T) {
 	fish := needShell(t, "fish")
 	script := completionScript(t, "fish")
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "backup.enc"), nil, 0o600); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "My Backup"), 0o700); err != nil {
 		t.Fatal(err)
+	}
+	for _, f := range []string{"backup.enc", "My Backup/backup.enc"} {
+		if err := os.WriteFile(filepath.Join(dir, f), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, tt := range []struct {
 		name, line, out, want string
@@ -274,6 +305,9 @@ func TestCompletionScript_Fish(t *testing.T) {
 		{"described candidates", "sesh --service pa", `password\tStore passwords\npager\n`, "password\tStore passwords", []string{"--service", "pa"}},
 		{"files", "sesh --file ba", `:files\n`, "backup.enc", []string{"--file", "ba"}},
 		{"files after =", "sesh --file=ba", `:files\n`, "--file=backup.enc", []string{"--file=ba"}},
+		{"after a space", "sesh --service ", `aws\npassword\n`, "aws", []string{"--service", ""}},
+		{"quoted value", `sesh --service "pa`, `password\n`, "password", []string{"--service", "pa"}},
+		{"quoted path with a space", `sesh --file "My Backup/ba`, `:files\n`, "My", []string{"--file", "My Backup/ba"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			argsFile := fakeSesh(t, tt.out)
@@ -285,7 +319,9 @@ func TestCompletionScript_Fish(t *testing.T) {
 			if got := readArgs(t, argsFile); !slices.Equal(got, append([]string{completeCmd}, tt.wantArgs...)) {
 				t.Errorf("sesh got args %q, want %q", got, tt.wantArgs)
 			}
-			if !slices.ContainsFunc(strings.Split(string(out), "\n"), func(l string) bool { return strings.HasPrefix(l, tt.want) }) {
+			if !slices.ContainsFunc(strings.Split(string(out), "\n"), func(l string) bool {
+				return strings.HasPrefix(l, tt.want) && (!strings.Contains(tt.line, "My Backup") || strings.Contains(l, "backup.enc"))
+			}) {
 				t.Errorf("fish offered:\n%s\nwant a line starting %q", out, tt.want)
 			}
 		})
