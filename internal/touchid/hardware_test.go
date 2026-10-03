@@ -24,7 +24,7 @@ func TestHardware_WrapThenUnwrapWithAFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := Unwrap(blob, w, []byte("hardware test"), "run the sesh Touch ID hardware test")
+	got, err := Unwrap(blob, w, []byte("hardware test"), "run the sesh Touch ID hardware test", "Use Test Password")
 	if err != nil {
 		t.Fatalf("Unwrap (touch the sensor when asked): %v", err)
 	}

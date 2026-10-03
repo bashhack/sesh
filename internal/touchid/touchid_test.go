@@ -19,7 +19,7 @@ func softwareEnclave(t *testing.T) (blob, pub []byte) {
 	}
 	blob = []byte("software key")
 	orig := sharedSecret
-	sharedSecret = func(b, peer []byte, reason string) ([]byte, error) {
+	sharedSecret = func(b, peer []byte, reason, _ string) ([]byte, error) {
 		if !bytes.Equal(b, blob) {
 			return nil, errors.New("unknown key blob")
 		}
@@ -48,7 +48,7 @@ func TestWrapUnwrap(t *testing.T) {
 	if bytes.Contains(w.Ciphertext, secret) {
 		t.Fatal("the secret appears in the ciphertext")
 	}
-	got, err := Unwrap(blob, w, aad, "unlock the test vault")
+	got, err := Unwrap(blob, w, aad, "unlock the test vault", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestUnwrap_Refuses(t *testing.T) {
 		"truncated ciphertext":    {"vault A", Wrapped{EphemeralPub: w.EphemeralPub, Ciphertext: w.Ciphertext[:5]}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got, err := Unwrap(blob, tt.w, []byte(tt.aad), "reason"); err == nil {
+			if got, err := Unwrap(blob, tt.w, []byte(tt.aad), "reason", ""); err == nil {
 				t.Fatalf("unwrapped %q, want a refusal", got)
 			}
 		})
@@ -96,7 +96,7 @@ func TestUnwrap_Refuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	softwareEnclave(t) // and yet another one answering the unwrap
-	if _, err := Unwrap([]byte("software key"), w2, []byte("vault A"), "reason"); err == nil {
+	if _, err := Unwrap([]byte("software key"), w2, []byte("vault A"), "reason", ""); err == nil {
 		t.Error("a different key unwrapped the secret")
 	}
 }

@@ -86,8 +86,13 @@ func Wrap(pub, secret, aad []byte) (Wrapped, error) {
 // chip asks for a fingerprint; macOS shows "<program> is trying to
 // <reason>", so reason reads as a verb phrase ("unlock your vault"). aad
 // must match the wrap's.
-func Unwrap(blob []byte, w Wrapped, aad []byte, reason string) ([]byte, error) {
-	return UnwrapWith(func(peer []byte) ([]byte, error) { return sharedSecret(blob, peer, reason) }, w, aad)
+// cancelLabel, when not empty, relabels the prompt's Cancel button, e.g. "Use
+// Master Password" when cancelling means the caller asks for its own
+// password; pressing it returns ErrCancelled. (A separate fallback button
+// isn't shown for Secure Enclave keys, so relabelling Cancel is the way to
+// offer one.) The prompt never accepts the Mac's login password.
+func Unwrap(blob []byte, w Wrapped, aad []byte, reason, cancelLabel string) ([]byte, error) {
+	return UnwrapWith(func(peer []byte) ([]byte, error) { return sharedSecret(blob, peer, reason, cancelLabel) }, w, aad)
 }
 
 // UnwrapWith recovers a wrapped secret using agree, the key agreement

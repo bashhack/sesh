@@ -97,11 +97,13 @@ static tid_result tid_new_key(tid_result *pub) {
 
 // tid_shared_secret has the Secure Enclave key in blob do an ECDH with the
 // uncompressed P-256 public key peer. The chip asks for a fingerprint,
-// showing reason.
-static tid_result tid_shared_secret(const void *blob, int blobLen, const void *peer, int peerLen, const char *reason) {
+// showing reason, with its Cancel button labelled cancelLabel (if not empty).
+static tid_result tid_shared_secret(const void *blob, int blobLen, const void *peer, int peerLen, const char *reason, const char *cancelLabel) {
 	@autoreleasepool {
 		LAContext *ctx = [[LAContext alloc] init];
 		ctx.localizedReason = [NSString stringWithUTF8String:reason];
+		// Relabels the sheet's Cancel button; empty keeps the system's "Cancel".
+		if (cancelLabel[0] != 0) ctx.localizedCancelTitle = [NSString stringWithUTF8String:cancelLabel];
 		NSData *b = [NSData dataWithBytes:blob length:blobLen];
 		NSDictionary *attrs = @{
 			(id)kSecAttrKeyType: (id)kSecAttrKeyTypeECSECPrimeRandom,
@@ -158,14 +160,16 @@ func newKey() (blob, pub []byte, err error) {
 	return blob, pub, nil
 }
 
-func nativeSharedSecret(blob, peer []byte, reason string) ([]byte, error) {
+func nativeSharedSecret(blob, peer []byte, reason, cancelLabel string) ([]byte, error) {
 	if len(blob) == 0 || len(peer) == 0 {
 		return nil, errors.New("touch ID: empty key")
 	}
 	cr := C.CString(reason)
 	defer C.free(unsafe.Pointer(cr))
+	cf := C.CString(cancelLabel)
+	defer C.free(unsafe.Pointer(cf))
 	r := C.tid_shared_secret(unsafe.Pointer(&blob[0]), C.int(len(blob)),
-		unsafe.Pointer(&peer[0]), C.int(len(peer)), cr)
+		unsafe.Pointer(&peer[0]), C.int(len(peer)), cr, cf)
 	return take(&r)
 }
 

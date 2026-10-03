@@ -322,6 +322,7 @@ On a Mac with Touch ID, the agent can unlock with your fingerprint instead of yo
 sesh
 sesh is trying to unlock your vault.
 Touch ID to allow this.
+                                [ Use Master Password ]
 ```
 
 **Turning it on.**
@@ -336,7 +337,7 @@ Touch ID to allow this.
 - The unlock is immediate after the touch: the slow password key derivation doesn't run.
 
 **Your master password still works**, and sesh falls back to it:
-- **You cancel the sheet, or the fingerprint isn't recognised:** sesh asks for the master password.
+- **You press "Use Master Password", or the fingerprint isn't recognised:** sesh asks for the master password in the terminal. The sheet itself never takes a password; in particular it doesn't accept your Mac's login password.
 - **Touch ID isn't available:** over SSH, with no sensor reachable, or with no enrolled fingerprint. sesh says so and asks for the master password.
 - **Too many failed attempts locked Touch ID:** sesh asks for the master password until the Mac is unlocked with its password.
 - **Scripts** (no terminal, or `SESH_MASTER_PASSWORD`) never wait on a fingerprint.
