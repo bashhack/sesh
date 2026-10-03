@@ -15,6 +15,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/touchid"
 )
 
 // Server owns the listening socket and dispatches incoming connections
@@ -332,6 +333,10 @@ func (s *Server) dispatch(conn *net.UnixConn, env envelope, raw []byte) bool {
 		}) == nil
 	case TypeUnlock:
 		return s.dispatchUnlock(conn, raw)
+	case TypeUnlockTouchID:
+		return s.dispatchUnlockTouchID(conn, raw)
+	case TypeTouchIDWrap:
+		return s.dispatchTouchIDWrap(conn, raw)
 	case TypeDecrypt:
 		return s.dispatchDecrypt(conn, raw)
 	case TypeEncrypt:
@@ -384,6 +389,77 @@ func (s *Server) dispatchUnlock(conn *net.UnixConn, raw []byte) bool {
 	}
 	s.sendError(conn, code, err.Error())
 	return true
+}
+
+// TouchIDUnwrap asks the Secure Enclave for the vault key, which shows the
+// Touch ID prompt: "sesh is trying to unlock your vault", with its Cancel
+// button reading "Type Password in Terminal", which is what cancelling
+// leads to (the sheet itself never takes a password).
+// Tests, here and
+// in the CLI, replace it with a software key, as they do AgentSpawnCommand.
+var TouchIDUnwrap = func(blob []byte, w touchid.Wrapped, aad []byte) ([]byte, error) {
+	return touchid.Unwrap(blob, w, aad, "unlock your vault", "Type Password in Terminal")
+}
+
+func (s *Server) dispatchUnlockTouchID(conn *net.UnixConn, raw []byte) bool {
+	var req UnlockTouchIDRequest
+	// Every field is checked before the unwrap, so an incomplete request is
+	// refused without showing the Touch ID prompt.
+	if err := decodeMessage(raw, &req); err != nil || len(req.Verify) == 0 || len(req.KeyBlob) == 0 ||
+		len(req.EphemeralPub) == 0 || len(req.Ciphertext) == 0 {
+		s.log.printf("Touch ID unlock refused: malformed request")
+		s.sendError(conn, ErrCodeBadRequest, "malformed unlock_touchid request")
+		return true
+	}
+	id := UnlockID(req.Verify)
+	w := touchid.Wrapped{EphemeralPub: req.EphemeralPub, Ciphertext: req.Ciphertext}
+	err := s.keys.UnlockTouchID(req.Verify, func() ([]byte, error) {
+		return TouchIDUnwrap(req.KeyBlob, w, []byte(id))
+	})
+	if err == nil {
+		return writeJSON(conn, UnlockResponse{Type: TypeUnlockAck, Version: ProtocolVersion}) == nil
+	}
+	s.log.printf("Touch ID unlock refused: %v", err)
+	s.sendError(conn, touchIDErrCode(err), err.Error())
+	return true
+}
+
+func (s *Server) dispatchTouchIDWrap(conn *net.UnixConn, raw []byte) bool {
+	var req TouchIDWrapRequest
+	if err := decodeMessage(raw, &req); err != nil {
+		s.sendError(conn, ErrCodeBadRequest, err.Error())
+		return true
+	}
+	w, err := s.keys.wrapForTouchID(req.UnlockID, req.PublicKey)
+	if err != nil {
+		s.sendError(conn, keystoreErrCode(err), err.Error())
+		return true
+	}
+	s.log.printf("wrapped the key for Touch ID")
+	return writeJSON(conn, TouchIDWrapResponse{
+		Type:         TypeTouchIDWrapAck,
+		Version:      ProtocolVersion,
+		EphemeralPub: w.EphemeralPub,
+		Ciphertext:   w.Ciphertext,
+	}) == nil
+}
+
+// touchIDErrCode maps a Touch ID unlock failure to its wire code.
+func touchIDErrCode(err error) string {
+	switch {
+	case errors.Is(err, touchid.ErrCancelled):
+		return ErrCodeTouchIDCancelled
+	case errors.Is(err, touchid.ErrUnavailable):
+		return ErrCodeTouchIDUnavailable
+	case errors.Is(err, touchid.ErrLockedOut):
+		return ErrCodeTouchIDLockedOut
+	case errors.Is(err, touchid.ErrFailed):
+		return ErrCodeTouchIDFailed
+	case errors.Is(err, errTouchIDStale), errors.Is(err, touchid.ErrWrapMismatch):
+		return ErrCodeTouchIDStale
+	default:
+		return ErrCodeInternal
+	}
 }
 
 func (s *Server) dispatchDecrypt(conn *net.UnixConn, raw []byte) bool {

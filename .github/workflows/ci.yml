@@ -99,6 +99,11 @@ jobs:
           files: ./coverage.txt
           token: ${{ secrets.CODECOV_TOKEN }}
 
+      - name: Build without cgo
+        # A `go install` on a Mac without Xcode's command-line tools builds
+        # without cgo; Touch ID then reports unavailable, but sesh must build.
+        run: CGO_ENABLED=0 go build ./... && CGO_ENABLED=0 go vet ./internal/touchid
+
       - name: Build binary
         run: make build
 

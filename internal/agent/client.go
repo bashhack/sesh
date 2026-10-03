@@ -9,6 +9,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/touchid"
 )
 
 // errConnBroken means an earlier request on this connection failed in a
@@ -174,6 +175,61 @@ func (c *Conn) exchange(req any, wantType string) (raw []byte, err error) {
 	default:
 		return nil, fmt.Errorf("unexpected response type %q", env.Type)
 	}
+}
+
+// ErrTouchIDStale means a Touch ID file no longer unlocks its vault, for
+// example after the master password changed. The file should be removed.
+var ErrTouchIDStale = errors.New("the Touch ID unlock is out of date for this vault")
+
+// TouchIDWrap asks an unlocked agent to wrap the key of vault unlockID to
+// the Secure Enclave public key pub. The key itself never leaves the agent.
+func TouchIDWrap(conn *Conn, unlockID string, pub []byte) (touchid.Wrapped, error) {
+	raw, err := roundTrip(conn, TouchIDWrapRequest{
+		Type:      TypeTouchIDWrap,
+		Version:   ProtocolVersion,
+		UnlockID:  unlockID,
+		PublicKey: pub,
+	}, TypeTouchIDWrapAck)
+	if err != nil {
+		return touchid.Wrapped{}, err
+	}
+	var resp TouchIDWrapResponse
+	if err := decodeMessage(raw, &resp); err != nil {
+		return touchid.Wrapped{}, err
+	}
+	return touchid.Wrapped{EphemeralPub: resp.EphemeralPub, Ciphertext: resp.Ciphertext}, nil
+}
+
+// UnlockTouchID asks the agent to unlock with the Touch ID file f for the
+// vault whose sidecar verify blob is verify. The agent shows the Touch ID
+// prompt; this waits up to the unlock timeout for the person to answer.
+// Failures match touchid.ErrCancelled, ErrUnavailable, ErrLockedOut,
+// ErrFailed, or ErrTouchIDStale.
+func UnlockTouchID(conn *Conn, f *touchid.File, verify []byte) error {
+	_, err := roundTrip(conn, UnlockTouchIDRequest{
+		Type:         TypeUnlockTouchID,
+		Version:      ProtocolVersion,
+		KeyBlob:      f.KeyBlob,
+		EphemeralPub: f.EphemeralPub,
+		Ciphertext:   f.Ciphertext,
+		Verify:       verify,
+	}, TypeUnlockAck)
+	var pe *ProtocolError
+	if !errors.As(err, &pe) {
+		return err
+	}
+	for code, sentinel := range map[string]error{
+		ErrCodeTouchIDCancelled:   touchid.ErrCancelled,
+		ErrCodeTouchIDUnavailable: touchid.ErrUnavailable,
+		ErrCodeTouchIDLockedOut:   touchid.ErrLockedOut,
+		ErrCodeTouchIDFailed:      touchid.ErrFailed,
+		ErrCodeTouchIDStale:       ErrTouchIDStale,
+	} {
+		if pe.Code == code {
+			return fmt.Errorf("%w (%w)", sentinel, pe)
+		}
+	}
+	return err
 }
 
 // Lock asks the agent to drop its key now. Locking an agent that is

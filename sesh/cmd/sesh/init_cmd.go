@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/touchid"
 )
 
 // initChoices are what `sesh init` sets up.
@@ -61,7 +63,9 @@ func runInit(app *App, args []string) error {
 			return err
 		}
 	} else {
+		existed := false
 		if _, err := os.Stat(choices.dbPath); err == nil {
+			existed = true
 			if _, werr := fmt.Fprintf(app.Stdout, "Using the existing vault at %s\n", tildePath(choices.dbPath)); werr != nil {
 				return werr
 			}
@@ -72,6 +76,15 @@ func runInit(app *App, args []string) error {
 		}
 		if err := store.Close(); err != nil {
 			return fmt.Errorf("close vault: %w", err)
+		}
+		// A new vault was offered Touch ID as it was created; an existing one
+		// gets a pointer instead.
+		if existed && choices.keySource == config.KeySourcePassword && touchIDAvailable() {
+			if _, err := os.Stat(filepath.Join(filepath.Dir(choices.dbPath), touchid.FileName)); err != nil {
+				defer func() {
+					fmt.Fprintln(app.Stdout, "Tip: unlock with Touch ID instead of typing your password: sesh touchid enable") //nolint:errcheck // best-effort tip
+				}()
+			}
 		}
 	}
 

@@ -66,6 +66,17 @@ Derives the master key from a user-supplied passphrase via Argon2id. **No keycha
 
 **Metadata exposure.** Even without the master password, an attacker with the DB file can read service names, account names, timestamps, and audit log entries — only the encrypted secret values are protected. Full-database encryption (SQLCipher-style) would require a CGo dependency and is not implemented.
 
+##### Touch ID unlock (macOS, optional)
+
+With Touch ID unlock on, the agent can unlock with a fingerprint instead of the master password.
+
+- **Key custody.** A P-256 key is created inside the Secure Enclave with access control `privateKeyUsage | biometryCurrentSet`. The private key never leaves the chip. Only a currently enrolled fingerprint can use it, and adding or removing a fingerprint invalidates it permanently. The key is not stored in the Keychain: sesh keeps its chip-bound handle (useless on any other Mac) in `touchid.key` next to the vault, mode 0600.
+- **The wrap.** The agent wraps the vault key to the Secure Enclave public key: one-off P-256 ECDH, HKDF-SHA256, then AES-256-GCM bound to the vault's unlock id. The vault key never leaves the agent to do this. Unwrapping needs the chip to do the ECDH, which shows the system Touch ID sheet ("sesh is trying to unlock your vault"). The agent checks the unwrapped key against the sidecar's verify blob before installing it, exactly as for a password.
+- **What changes.** The vault then opens with the master password **or** an enrolled fingerprint on that Mac. The master password is still needed to turn Touch ID unlock on, after fingerprint changes, over SSH, and as the fallback. It's never stored.
+- **Fingerprint only, deliberately.** Neither the Mac's login password nor an Apple Watch can approve, so the vault's protection is never reduced to that of the login password.
+- **Same-user malware.** A process running as you can make the agent show the Touch ID sheet, but can't approve it. The sheet is system UI that names the program asking. While the agent is unlocked, such a process can already ask it to decrypt; Touch ID doesn't change that.
+- **Copies.** `touchid.key`, or the whole vault with it, copied to another machine gains nothing.
+
 ##### Keychain key source (`key_source = "keychain"`, macOS only)
 
 The 256-bit master encryption key is stored in the macOS Keychain, combining OS-level access control with application-level encryption. The key is hex-encoded (64 ASCII characters) before storage because the `security` command's tokenizer can't reliably round-trip raw random bytes; the key is decoded on read and zeroed after use.

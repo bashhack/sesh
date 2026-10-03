@@ -69,6 +69,13 @@ linters:
           - gosec
           - gocritic
 
+      # gocritic reads cgo's generated code in the Touch ID shim as duplicate
+      # imports and identical comparisons.
+      - path: internal/touchid/native_darwin\.go
+        text: "dupImport|dupSubExpr"
+        linters:
+          - gocritic
+
       # Exclude shadow checking on the variable named err
       - text: 'shadow: declaration of "err"'
         linters:
