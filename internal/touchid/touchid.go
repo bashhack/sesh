@@ -143,6 +143,11 @@ func Available() bool { return available() }
 // and its uncompressed P-256 public key. No prompt is shown.
 func NewKey() (blob, pub []byte, err error) { return newKey() }
 
+// BiometryState returns an identifier for the set of enrolled fingerprints.
+// It changes when a fingerprint is added or removed, which is also what
+// makes a key from NewKey unusable for good. No prompt is shown.
+func BiometryState() ([]byte, error) { return biometryState() }
+
 // LocalAuthentication error codes (LAError) and OSStatus values that the
 // Secure Enclave reports for a fingerprint check.
 const (

@@ -27,7 +27,10 @@ type File struct {
 	PublicKey    []byte `json:"public_key"`
 	EphemeralPub []byte `json:"ephemeral_pub"`
 	Ciphertext   []byte `json:"ciphertext"`
-	Version      int    `json:"version"`
+	// BiometryState identifies the fingerprints enrolled when the key was
+	// made (see BiometryState); empty when it couldn't be read.
+	BiometryState []byte `json:"biometry_state,omitempty"`
+	Version       int    `json:"version"`
 }
 
 // NewFile assembles the file for a vault from a new Secure Enclave key and

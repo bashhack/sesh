@@ -51,6 +51,38 @@ static int tid_available(void) {
 	return [ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:NULL] ? 1 : 0;
 }
 
+// tid_biometry_state returns the identifier of the enrolled fingerprints.
+// macOS 15 added domainState for it; the older property it replaces holds
+// the same bytes but is only set once canEvaluatePolicy has run.
+static tid_result tid_biometry_state(void) {
+	@autoreleasepool {
+		LAContext *ctx = [[LAContext alloc] init];
+		NSError *err = nil;
+		if (![ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics error:&err]) {
+			tid_result r = {0};
+			r.code = err ? err.code : -1;
+			strlcpy(r.domain, err ? err.domain.UTF8String : "unknown", sizeof r.domain);
+			return r;
+		}
+		NSData *state = nil;
+		if (@available(macOS 15.0, *)) {
+			state = ctx.domainState.biometry.stateHash;
+		} else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+			state = ctx.evaluatedPolicyDomainState;
+#pragma clang diagnostic pop
+		}
+		if (state == nil) {
+			tid_result r = {0};
+			r.code = -2;
+			strlcpy(r.domain, "sesh: no biometry state", sizeof r.domain);
+			return r;
+		}
+		return tid_bytes((__bridge CFDataRef)state);
+	}
+}
+
 // tid_new_key creates a Secure Enclave P-256 key, not stored in the
 // Keychain, that only a currently enrolled fingerprint can use. It returns
 // the key's blob (its "toid", the same bytes as CryptoKit's
@@ -145,6 +177,11 @@ import (
 )
 
 func available() bool { return C.tid_available() == 1 }
+
+func biometryState() ([]byte, error) {
+	r := C.tid_biometry_state()
+	return take(&r)
+}
 
 func newKey() (blob, pub []byte, err error) {
 	var p C.tid_result

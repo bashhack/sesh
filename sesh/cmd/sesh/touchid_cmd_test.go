@@ -27,11 +27,15 @@ func softwareTouchID(t *testing.T) (prompts *int, fail *error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A developer running the tests over SSH still gets the desktop path.
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_CLIENT", "")
 	var n int
 	var failure error
-	origAvail, origNewKey, origUnwrap := touchIDAvailable, touchIDNewKey, agent.TouchIDUnwrap
+	origAvail, origNewKey, origState, origUnwrap := touchIDAvailable, touchIDNewKey, touchIDBiometryState, agent.TouchIDUnwrap
 	touchIDAvailable = func() bool { return true }
 	touchIDNewKey = func() ([]byte, []byte, error) { return []byte("software chip key"), priv.PublicKey().Bytes(), nil }
+	touchIDBiometryState = func() ([]byte, error) { return []byte("enrolled fingerprints 1"), nil }
 	agent.TouchIDUnwrap = func(_ []byte, w touchid.Wrapped, aad []byte) ([]byte, error) {
 		n++
 		if failure != nil {
@@ -45,7 +49,9 @@ func softwareTouchID(t *testing.T) (prompts *int, fail *error) {
 			return priv.ECDH(p)
 		}, w, aad)
 	}
-	t.Cleanup(func() { touchIDAvailable, touchIDNewKey, agent.TouchIDUnwrap = origAvail, origNewKey, origUnwrap })
+	t.Cleanup(func() {
+		touchIDAvailable, touchIDNewKey, touchIDBiometryState, agent.TouchIDUnwrap = origAvail, origNewKey, origState, origUnwrap
+	})
 	return &n, &failure
 }
 
@@ -135,6 +141,7 @@ func TestTouchID_FallsBackToThePassword(t *testing.T) {
 		wantNote    string
 		fileRemains bool
 	}{
+		"other error":    {errors.New("touch ID: com.apple.LocalAuthentication error -1004"), "Touch ID unlock didn't work (", true},
 		"cancelled":      {touchid.ErrCancelled, "", true},
 		"unavailable":    {touchid.ErrUnavailable, "Touch ID isn't available here", true},
 		"locked out":     {touchid.ErrLockedOut, "locked after too many attempts", true},
@@ -157,12 +164,80 @@ func TestTouchID_FallsBackToThePassword(t *testing.T) {
 			if tt.wantNote != "" && !strings.Contains(out, tt.wantNote) {
 				t.Errorf("stderr = %q, want %q", out, tt.wantNote)
 			}
+			if strings.Contains(out, "fingerprints") {
+				t.Errorf("stderr guesses at a fingerprint change: %q", out)
+			}
 			if tt.wantNote == "" && strings.Contains(out, "Touch ID") {
 				t.Errorf("a cancelled prompt printed %q", out)
 			}
 			_, ferr := touchid.ReadFile(filepath.Dir(dbPath))
 			if remains := ferr == nil; remains != tt.fileRemains {
 				t.Errorf("touchid.key remains = %v, want %v", remains, tt.fileRemains)
+			}
+		})
+	}
+}
+
+func TestTouchID_FingerprintsChanged(t *testing.T) {
+	startTestAgent(t)
+	prompts, _ := softwareTouchID(t)
+	dbPath := createVaultWithTouchID(t)
+	f, err := touchid.ReadFile(filepath.Dir(dbPath))
+	if err != nil || string(f.BiometryState) != "enrolled fingerprints 1" {
+		t.Fatalf("touchid.key biometry state = %q, %v", f.BiometryState, err)
+	}
+	touchIDBiometryState = func() ([]byte, error) { return []byte("enrolled fingerprints 2"), nil }
+
+	restore := testutil.RedirectStderr(t)
+	oracle, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "first-password-1234"))
+	out := restore()
+	if err != nil {
+		t.Fatalf("password after a fingerprint change: %v", err)
+	}
+	closeKeySource(t, oracle)
+	if *prompts != 0 {
+		t.Errorf("asked for Touch ID %d time(s) with a key that can't work", *prompts)
+	}
+	if want := "Your fingerprints changed since Touch ID unlock was turned on"; !strings.Contains(out, want) {
+		t.Errorf("stderr = %q, want %q", out, want)
+	}
+	if _, err := touchid.ReadFile(filepath.Dir(dbPath)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("touchid.key remains after a fingerprint change (err %v)", err)
+	}
+}
+
+// Without a stored or a current identifier there's nothing to compare, so
+// the fingerprint is asked for as usual.
+func TestTouchID_UnknownFingerprintStateStillPrompts(t *testing.T) {
+	for name, tt := range map[string]struct {
+		now    func() ([]byte, error)
+		stored []byte
+	}{
+		"not stored":     {func() ([]byte, error) { return []byte("enrolled fingerprints 2"), nil }, nil},
+		"unreadable now": {func() ([]byte, error) { return nil, touchid.ErrUnavailable }, []byte("enrolled fingerprints 1")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			startTestAgent(t)
+			prompts, _ := softwareTouchID(t)
+			dbPath := createVaultWithTouchID(t)
+			dir := filepath.Dir(dbPath)
+			f, err := touchid.ReadFile(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.BiometryState = tt.stored
+			if err := f.Write(dir); err != nil {
+				t.Fatal(err)
+			}
+			touchIDBiometryState = tt.now
+
+			oracle, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t))
+			if err != nil {
+				t.Fatalf("Touch ID unlock: %v", err)
+			}
+			closeKeySource(t, oracle)
+			if *prompts != 1 {
+				t.Errorf("Touch ID prompts = %d, want 1", *prompts)
 			}
 		})
 	}
@@ -185,6 +260,34 @@ func TestTouchID_ScriptsNeverWaitOnAFingerprint(t *testing.T) {
 	}
 }
 
+func TestTouchID_SkippedOverSSH(t *testing.T) {
+	for _, name := range []string{"SSH_CONNECTION", "SSH_CLIENT"} {
+		t.Run(name, func(t *testing.T) {
+			startTestAgent(t)
+			prompts, _ := softwareTouchID(t)
+			dbPath := createVaultWithTouchID(t)
+			t.Setenv(name, "203.0.113.7 52114 192.0.2.1 22")
+
+			restore := testutil.RedirectStderr(t)
+			oracle, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "first-password-1234"))
+			out := restore()
+			if err != nil {
+				t.Fatalf("password over SSH: %v", err)
+			}
+			closeKeySource(t, oracle)
+			if *prompts != 0 {
+				t.Errorf("a command over SSH asked for Touch ID %d time(s)", *prompts)
+			}
+			if want := "isn't used over SSH"; !strings.Contains(out, want) {
+				t.Errorf("stderr = %q, want %q", out, want)
+			}
+			if _, err := touchid.ReadFile(filepath.Dir(dbPath)); err != nil {
+				t.Errorf("touchid.key gone after an SSH command: %v", err)
+			}
+		})
+	}
+}
+
 func TestRunTouchID_StatusDisableAndRefusals(t *testing.T) {
 	startTestAgent(t)
 	softwareTouchID(t)
@@ -198,6 +301,10 @@ func TestRunTouchID_StatusDisableAndRefusals(t *testing.T) {
 	}
 	if out, err := run("status"); err != nil || !strings.Contains(out, "Touch ID unlock: on") || !strings.Contains(out, "Touch ID on this Mac: available") {
 		t.Errorf("status = %q, %v", out, err)
+	}
+	touchIDBiometryState = func() ([]byte, error) { return []byte("enrolled fingerprints 2"), nil }
+	if out, err := run("status"); err != nil || !strings.Contains(out, "your fingerprints changed") {
+		t.Errorf("status after a fingerprint change = %q, %v", out, err)
 	}
 	if out, err := run("disable"); err != nil || !strings.Contains(out, "is off") {
 		t.Errorf("disable = %q, %v", out, err)
@@ -278,6 +385,9 @@ func TestRotate_RewrapsTouchIDUnlock(t *testing.T) {
 	f, err := touchid.ReadFile(env.dataDir)
 	if err != nil || f.UnlockID != agent.UnlockID(newMat.Verify) {
 		t.Fatalf("touchid.key after rotation: %+v, %v; want it bound to the new sidecar", f, err)
+	}
+	if string(f.BiometryState) != "enrolled fingerprints 1" {
+		t.Errorf("biometry state after rotation = %q, want it kept", f.BiometryState)
 	}
 	// The agent was locked by the rotation; a fingerprint now opens the
 	// rotated vault, with no password.
