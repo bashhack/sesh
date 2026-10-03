@@ -35,7 +35,8 @@ func TestKeystore_UnlockAndRoundTrip(t *testing.T) {
 	if err := ks.Unlock([]byte("correct-horse"), salt, verify, params); err != nil {
 		t.Fatalf("Unlock: %v", err)
 	}
-	unlocked, id, _ := ks.Status()
+	st := ks.snapshot()
+	unlocked, id := st.unlocked, st.unlockID
 	if !unlocked {
 		t.Fatal("status unlocked = false")
 	}
@@ -64,7 +65,7 @@ func TestKeystore_WrongPasswordStaysLocked(t *testing.T) {
 	if !errors.Is(err, errWrongPassword) {
 		t.Fatalf("Unlock err = %v, want wrong password", err)
 	}
-	if unlocked, _, _ := ks.Status(); unlocked {
+	if ks.snapshot().unlocked {
 		t.Fatal("wrong password left the keystore unlocked")
 	}
 }
@@ -99,7 +100,7 @@ func TestKeystore_ReUnlockReplacesKey(t *testing.T) {
 	if _, err := ks.Decrypt(ct, entrySalt, UnlockID(verifyB)); !errors.Is(err, errDecryptFailed) {
 		t.Fatalf("decrypt under the new key err = %v, want decrypt failed", err)
 	}
-	if _, id, _ := ks.Status(); id != UnlockID(verifyB) {
+	if id := ks.snapshot().unlockID; id != UnlockID(verifyB) {
 		t.Fatalf("unlock id = %q, want password-b id", id)
 	}
 }
@@ -130,7 +131,7 @@ func TestKeystore_ShutdownClearsKeyAndRefusesUnlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	ks.shutdown()
-	if unlocked, _, _ := ks.Status(); unlocked {
+	if ks.snapshot().unlocked {
 		t.Fatal("shutdown left the keystore unlocked")
 	}
 	orig := deriveKey
@@ -174,7 +175,8 @@ func TestKeystore_ConcurrentUnlocksLeaveOneKey(t *testing.T) {
 		t.Error(err)
 	}
 
-	unlocked, id, _ := ks.Status()
+	st := ks.snapshot()
+	unlocked, id := st.unlocked, st.unlockID
 	if !unlocked {
 		t.Fatal("concurrent unlocks left the keystore locked")
 	}
@@ -253,7 +255,7 @@ func TestKeystore_ShutdownDuringUnlockDiscardsKey(t *testing.T) {
 	if err := <-done; !errors.Is(err, errShutDown) {
 		t.Fatalf("Unlock err = %v, want errShutDown", err)
 	}
-	if unlocked, _, _ := ks.Status(); unlocked {
+	if ks.snapshot().unlocked {
 		t.Fatal("an unlock that finished after shutdown installed its key")
 	}
 }
@@ -335,8 +337,7 @@ func timedKeystore(t *testing.T, idle, maxLife time.Duration) (*keystore, *fakeC
 }
 
 func isUnlocked(ks *keystore) bool {
-	unlocked, _, _ := ks.Status()
-	return unlocked
+	return ks.snapshot().unlocked
 }
 
 func TestKeystore_IdleTimeoutLocksAfterInactivity(t *testing.T) {
@@ -371,7 +372,7 @@ func TestKeystore_StatusIsNotActivity(t *testing.T) {
 	ks, clk, _ := timedKeystore(t, 10*time.Minute, 0)
 	clk.advance(9 * time.Minute)
 	ks.snapshot()
-	ks.Status()
+	ks.snapshot()
 	clk.advance(time.Minute)
 	if isUnlocked(ks) {
 		t.Fatal("a status check kept the keystore unlocked")

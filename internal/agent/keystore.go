@@ -181,11 +181,6 @@ func (k *keystore) shutdown() {
 	k.clearLocked()
 }
 
-func (k *keystore) Status() (unlocked bool, id string, last time.Time) {
-	st := k.snapshot()
-	return st.unlocked, st.unlockID, st.lastActivity
-}
-
 func (k *keystore) snapshot() keyState {
 	k.mu.Lock()
 	defer k.mu.Unlock()

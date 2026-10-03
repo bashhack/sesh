@@ -450,13 +450,13 @@ func TestServer_CloseZeroesKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustClose(t, conn)
-	if unlocked, _, _ := srv.keys.Status(); !unlocked {
+	if !srv.keys.snapshot().unlocked {
 		t.Fatal("setup: keystore is locked")
 	}
 	if err := srv.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if unlocked, _, _ := srv.keys.Status(); unlocked {
+	if srv.keys.snapshot().unlocked {
 		t.Fatal("Close left the keystore unlocked")
 	}
 	select {
