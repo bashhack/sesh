@@ -105,6 +105,15 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 			return nil, false // lock, status, and stop take no arguments
 		}
 		specs = flagSpecs(func(fs *flag.FlagSet) { addAgentFlags(fs, 0, 0) }, nil)
+	case "audit":
+		if len(before) == 1 && !strings.HasPrefix(cur, "-") {
+			return matching(auditCommands, cur), false
+		}
+		if len(before) > 1 && before[1] == "prune" {
+			specs = flagSpecs(func(fs *flag.FlagSet) { addAuditPruneFlags(fs) }, nil)
+		} else {
+			specs = flagSpecs(func(fs *flag.FlagSet) { addAuditFlags(fs) }, nil)
+		}
 	case "init":
 		specs = append(flagSpecs(func(fs *flag.FlagSet) { addInitFlags(fs) }, nil), settingSpecs()...)
 	case "touchid":

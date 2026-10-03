@@ -47,7 +47,7 @@ The SQLite backend provides application-level encryption on top of file-system s
 - **Vault key check**: the vault stores a constant encrypted with its key (the `vault_key` table), plus the name of the key source that protects it. Every command decrypts the constant before reading or writing any entry, and refuses a key that fails. A mismatched key source setting, a replaced `passwords.key`, or a changed Keychain entry therefore can't write entries the vault's real key can't read. Password mode also refuses to create a new master key next to an existing vault whose `passwords.key` is missing
 - **Key versioning**: Schema supports key rotation via `key_version` column and `key_metadata` table (rotation logic planned)
 - **FTS5 search**: Full-text search indexes service names, accounts, and descriptions — search queries never touch encrypted data
-- **Audit logging**: Append-only `audit_log` table records access, modification, and deletion events with timestamps
+- **Audit logging**: The `audit_log` table records access, modification, and deletion events with timestamps (never the secrets). `sesh audit` shows it. Events older than `audit.retention_days` (default 90; `0` keeps everything) are removed when the vault is opened, and `sesh audit prune` removes them on demand. It's a record for the user, not tamper-proof: anyone who can write the vault file can change it
 - **WAL mode**: Write-ahead logging for safe concurrent reads
 
 ##### Master password key source (default)

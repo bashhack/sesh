@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,6 +67,13 @@ const (
 // clipboard before sesh clears it.
 const DefaultClipboardTimeout = 30 * time.Second
 
+// DefaultAuditRetentionDays is how long the vault keeps audit log events;
+// MaxAuditRetentionDays is the longest it accepts. 0 keeps everything.
+const (
+	DefaultAuditRetentionDays = 90
+	MaxAuditRetentionDays     = 36500
+)
+
 // Config is sesh's resolved settings.
 type Config struct {
 	// Path is the config file sesh looked for; FileFound says whether it
@@ -77,7 +85,10 @@ type Config struct {
 	ClipboardTimeout Setting[time.Duration]
 	AgentIdleTimeout Setting[time.Duration]
 	AgentMaxLifetime Setting[time.Duration]
-	FileFound        bool
+	// AuditRetentionDays is how many days of audit log events the vault
+	// keeps; 0 keeps everything.
+	AuditRetentionDays Setting[int]
+	FileFound          bool
 }
 
 // Overrides are values given as command-line flags. Empty means unset.
@@ -89,12 +100,13 @@ type Overrides struct {
 
 // Env var names.
 const (
-	EnvBackend          = "SESH_BACKEND"
-	EnvKeySource        = "SESH_KEY_SOURCE"
-	EnvDBPath           = "SESH_DB_PATH"
-	EnvClipboardTimeout = "SESH_CLIPBOARD_TIMEOUT"
-	EnvAgentIdleTimeout = "SESH_AGENT_IDLE_TIMEOUT"
-	EnvAgentMaxLifetime = "SESH_AGENT_MAX_LIFETIME"
+	EnvBackend            = "SESH_BACKEND"
+	EnvKeySource          = "SESH_KEY_SOURCE"
+	EnvDBPath             = "SESH_DB_PATH"
+	EnvClipboardTimeout   = "SESH_CLIPBOARD_TIMEOUT"
+	EnvAgentIdleTimeout   = "SESH_AGENT_IDLE_TIMEOUT"
+	EnvAgentMaxLifetime   = "SESH_AGENT_MAX_LIFETIME"
+	EnvAuditRetentionDays = "SESH_AUDIT_RETENTION_DAYS"
 )
 
 // fileConfig is the config file's shape. Durations are strings such as
@@ -108,6 +120,9 @@ type fileConfig struct {
 		IdleTimeout string `toml:"idle_timeout"`
 		MaxLifetime string `toml:"max_lifetime"`
 	} `toml:"agent"`
+	Audit struct {
+		RetentionDays int64 `toml:"retention_days"`
+	} `toml:"audit"`
 }
 
 // Path returns the config file's location: $XDG_CONFIG_HOME/sesh/config.toml
@@ -138,13 +153,14 @@ func Load(o Overrides) (*Config, error) {
 		return nil, fmt.Errorf("resolve default database path: %w", err)
 	}
 	c := &Config{
-		Path:             path,
-		Backend:          Setting[string]{Value: BackendSQLite},
-		KeySource:        Setting[string]{Value: KeySourcePassword},
-		DBPath:           Setting[string]{Value: dbDefault},
-		ClipboardTimeout: Setting[time.Duration]{Value: DefaultClipboardTimeout},
-		AgentIdleTimeout: Setting[time.Duration]{Value: agent.DefaultIdleTimeout},
-		AgentMaxLifetime: Setting[time.Duration]{Value: agent.DefaultMaxLifetime},
+		Path:               path,
+		Backend:            Setting[string]{Value: BackendSQLite},
+		KeySource:          Setting[string]{Value: KeySourcePassword},
+		DBPath:             Setting[string]{Value: dbDefault},
+		ClipboardTimeout:   Setting[time.Duration]{Value: DefaultClipboardTimeout},
+		AgentIdleTimeout:   Setting[time.Duration]{Value: agent.DefaultIdleTimeout},
+		AgentMaxLifetime:   Setting[time.Duration]{Value: agent.DefaultMaxLifetime},
+		AuditRetentionDays: Setting[int]{Value: DefaultAuditRetentionDays},
 	}
 	if err := c.applyFile(); err != nil {
 		return nil, err
@@ -208,6 +224,11 @@ func (c *Config) applyFile() error {
 			}
 		}
 	}
+	if in("audit.retention_days") {
+		if err := setRetention(&c.AuditRetentionDays, f.Audit.RetentionDays, strconv.FormatInt(f.Audit.RetentionDays, 10), FromFile, from("audit.retention_days")); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -239,6 +260,15 @@ func (c *Config) applyEnv() error {
 			if err := setDuration(d.dst, v, FromEnv, d.env); err != nil {
 				return err
 			}
+		}
+	}
+	if v, ok := os.LookupEnv(EnvAuditRetentionDays); ok && v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			n = -1 // reported as out of range below, with the value as given
+		}
+		if err := setRetention(&c.AuditRetentionDays, n, v, FromEnv, EnvAuditRetentionDays); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -314,6 +344,16 @@ func setDuration(dst *Setting[time.Duration], v string, src Source, origin strin
 		return fmt.Errorf("%s = %q: must not be negative", origin, v)
 	}
 	*dst = Setting[time.Duration]{Value: d, Source: src, Origin: origin}
+	return nil
+}
+
+// setRetention accepts a whole number of days from 0 to
+// MaxAuditRetentionDays; raw is the value as written, for the error.
+func setRetention(dst *Setting[int], n int64, raw string, src Source, origin string) error {
+	if n < 0 || n > MaxAuditRetentionDays {
+		return fmt.Errorf("%s = %q: want a whole number of days from 0 (keep everything) to %d", origin, raw, MaxAuditRetentionDays)
+	}
+	*dst = Setting[int]{Value: int(n), Source: src, Origin: origin}
 	return nil
 }
 

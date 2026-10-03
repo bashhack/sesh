@@ -127,6 +127,7 @@ func needsCredentialStore(args []string) bool {
 // subcommands are the commands named by sesh's first argument.
 var subcommands = []candidate{
 	{"agent", "Control the sesh agent"},
+	{"audit", "Show the vault's audit log, or prune it"},
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 	{"config", "Show settings and where each comes from"},
 	{"init", "Choose where and how sesh stores secrets"},
@@ -252,7 +253,12 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return openStoreWith(dbPath, ks, source)
+	store, err := openStoreWith(dbPath, ks, source)
+	if err != nil {
+		return nil, err
+	}
+	pruneAuditLog(store, cfg)
+	return store, nil
 }
 
 // openStoreWith opens the store at dbPath over oracle and confirms oracle
@@ -888,6 +894,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "audit":
+		if err := runAudit(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "completion":
 		if err := runCompletion(app, rest); err != nil {
 			fatal(app, err)
@@ -1141,6 +1152,7 @@ func (a *App) PrintUsage() error {
 		"  sesh config                   Show settings and where each comes from",
 		"  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)",
 		"  sesh agent [lock|status|stop] Control the sesh agent",
+		"  sesh audit [prune]            Show the vault's audit log, or prune it",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",
