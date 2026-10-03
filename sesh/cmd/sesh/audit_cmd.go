@@ -111,17 +111,37 @@ func runAuditPrune(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	var msg string
-	switch {
-	case *olderThan == 0:
-		msg = fmt.Sprintf("Removed all %s.", plural(n, "event"))
-	case n == 0:
-		msg = fmt.Sprintf("No events older than %s.", plural(int64(*olderThan), "day"))
-	default:
-		msg = fmt.Sprintf("Removed %s older than %s.", plural(n, "event"), plural(int64(*olderThan), "day"))
+	if n == 0 {
+		_, err = fmt.Fprintf(app.Stdout, "No events older than %s.\n", plural(int64(*olderThan), "day"))
+		return err
 	}
-	_, err = fmt.Fprintln(app.Stdout, msg)
+	removed := fmt.Sprintf("Removed %s older than %s", plural(n, "event"), plural(int64(*olderThan), "day"))
+	if *olderThan == 0 {
+		removed = fmt.Sprintf("Removed all %s", plural(n, "event"))
+	}
+	// SQLite keeps the space deleted rows leave for reuse; compacting is
+	// what makes the file smaller.
+	before, err := store.Size()
+	if err == nil {
+		err = store.Compact()
+	}
+	if err != nil {
+		return fmt.Errorf("%s, but compacting the vault failed: %w", removed, err)
+	}
+	after, err := store.Size()
+	if err != nil {
+		return fmt.Errorf("%s and compacted the vault, but couldn't read its size: %w", removed, err)
+	}
+	_, err = fmt.Fprintf(app.Stdout, "%s, and compacted the vault from %s to %s.\n", removed, vaultSize(before), vaultSize(after))
 	return err
+}
+
+// vaultSize prints a file size in KB below a megabyte, else in MB.
+func vaultSize(n int64) string {
+	if n < 1_000_000 {
+		return fmt.Sprintf("%d KB", (n+999)/1000)
+	}
+	return fmt.Sprintf("%.1f MB", float64(n)/1e6)
 }
 
 // openAuditStore opens the vault for sesh audit, which needs the sqlite

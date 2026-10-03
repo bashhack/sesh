@@ -2,7 +2,9 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -67,4 +69,37 @@ func (s *Store) PruneAudit(before time.Time) (int64, error) {
 		return 0, fmt.Errorf("prune audit log: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+// Path is the vault file the store opened.
+func (s *Store) Path() string { return s.path }
+
+// Size is the vault's size on disk in bytes: the database file and its
+// write-ahead log.
+func (s *Store) Size() (int64, error) {
+	var total int64
+	for _, p := range []string{s.path, s.path + "-wal"} {
+		fi, err := os.Stat(p)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		total += fi.Size()
+	}
+	return total, nil
+}
+
+// Compact rewrites the vault without the free space that deleted rows
+// leave behind (SQLite keeps it for reuse rather than shrinking the file),
+// then folds the write-ahead log back into the file.
+func (s *Store) Compact() error {
+	if _, err := s.db.Exec(`VACUUM`); err != nil {
+		return fmt.Errorf("compact vault: %w", err)
+	}
+	if _, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return fmt.Errorf("compact vault: %w", err)
+	}
+	return nil
 }

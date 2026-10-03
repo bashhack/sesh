@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -98,13 +99,14 @@ func TestAudit_Prune(t *testing.T) {
 	if !strings.HasPrefix(out, "Audit log: 4 events since ") || !strings.Contains(out, "Nothing is removed automatically (audit.retention_days = 0); remove old events with: sesh audit prune --older-than <days>") {
 		t.Errorf("summary with retention 0:\n%s", out)
 	}
-	if out, err := runAuditOut(t, "prune", "--older-than", "150"); err != nil || out != "Removed 1 event older than 150 days.\n" {
+	compacted := regexp.MustCompile(`, and compacted the vault from [0-9.]+ (KB|MB) to [0-9.]+ (KB|MB)\.\n$`)
+	if out, err := runAuditOut(t, "prune", "--older-than", "150"); err != nil || !strings.HasPrefix(out, "Removed 1 event older than 150 days, and compacted") || !compacted.MatchString(out) {
 		t.Errorf("prune 150 = %q, %v", out, err)
 	}
 	if out, err := runAuditOut(t, "prune", "--older-than", "150"); err != nil || out != "No events older than 150 days.\n" {
 		t.Errorf("prune 150 again = %q, %v", out, err)
 	}
-	if out, err := runAuditOut(t, "prune", "--older-than", "0"); err != nil || out != "Removed all 3 events.\n" {
+	if out, err := runAuditOut(t, "prune", "--older-than", "0"); err != nil || !strings.HasPrefix(out, "Removed all 3 events, and compacted") || !compacted.MatchString(out) {
 		t.Errorf("prune 0 = %q, %v", out, err)
 	}
 	if out, err := runAuditOut(t); err != nil || out != "Audit log: no events.\n" {
@@ -169,6 +171,14 @@ func TestAuditEntryName(t *testing.T) {
 	} {
 		if kind, name := auditEntryName(tt.id); kind != tt.kind || name != tt.name {
 			t.Errorf("auditEntryName(%q) = %q, %q; want %q, %q", tt.id, kind, name, tt.kind, tt.name)
+		}
+	}
+}
+
+func TestVaultSize(t *testing.T) {
+	for n, want := range map[int64]string{0: "0 KB", 1: "1 KB", 69632: "70 KB", 999_999: "1000 KB", 1_000_000: "1.0 MB", 133_849_088: "133.8 MB"} {
+		if got := vaultSize(n); got != want {
+			t.Errorf("vaultSize(%d) = %q, want %q", n, got, want)
 		}
 	}
 }

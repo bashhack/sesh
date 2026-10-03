@@ -126,3 +126,33 @@ func TestAuditSummary(t *testing.T) {
 		t.Errorf("count = %d", auditCount(t, s))
 	}
 }
+
+func TestCompact(t *testing.T) {
+	s := newTestStore(t)
+	path := s.Path()
+	if _, err := s.db.Exec(`WITH RECURSIVE c(x) AS (SELECT 0 UNION ALL SELECT x+1 FROM c WHERE x < 19999)
+		INSERT INTO audit_log (event_type, entry_id, detail, created_at)
+		SELECT 'access', 'sesh-totp/github/me', 'GetSecret', '2026-01-01 00:00:00 +0000 UTC' FROM c`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PruneAudit(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Size()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Compact(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.Size()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after >= before/4 {
+		t.Errorf("%s: %d bytes before compacting, %d after; want it much smaller", path, before, after)
+	}
+	if err := s.SetSecret("alice", "svc", []byte("still works")); err != nil {
+		t.Fatalf("store after compacting: %v", err)
+	}
+}
