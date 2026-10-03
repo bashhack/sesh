@@ -98,6 +98,26 @@ Potential red flags for compatibility are the same one would face with Authy or 
 - "Use our app only" ❌
 - "Push notification required" ❌
 
+## Shell Completion
+
+sesh can complete its commands, flags, and their values when you press Tab, in bash, zsh, and fish. Add one line to your shell's startup file:
+
+| Shell | Add to | Line |
+|---|---|---|
+| zsh | `~/.zshrc`, after `compinit` | `eval "$(sesh completion zsh)"` |
+| bash | `~/.bashrc` | `eval "$(sesh completion bash)"` |
+| fish | `~/.config/fish/config.fish` | `sesh completion fish \| source` |
+
+For zsh you can instead save the script as `_sesh` in a directory on your `$fpath`, and for fish as `~/.config/fish/completions/sesh.fish`.
+
+What completes:
+- the commands (`agent`, `completion`, `config`, `init`, `touchid`) and theirs (`sesh agent st<Tab>` → `status`, `stop`);
+- flags, including each provider's own once `--service` is given (`sesh --service password --<Tab>`);
+- values from a fixed set: providers, `--action`, `--format`, `--sort`, `--entry-type`, `--on-conflict`, `--backend`, `--key-source`, and `--rekey --to`;
+- file paths for `--file` and `--db-path`.
+
+Entry names (`--service-name`) don't complete: that would mean opening the vault on a Tab press. Completion never reads the vault, the agent, or the config file.
+
 ## Configuration Methods
 
 sesh uses a provider-based configuration system:

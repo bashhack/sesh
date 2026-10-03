@@ -112,6 +112,13 @@ func offerTouchID(cfg passwordPromptConfig, dataDir string) {
 	note("Touch ID unlock is on. When the agent has locked itself, sesh asks for your fingerprint first; your master password still works.")
 }
 
+// touchIDCommands are the commands of `sesh touchid`.
+var touchIDCommands = []candidate{
+	{"enable", "Unlock this vault with Touch ID"},
+	{"disable", "Turn Touch ID unlock off"},
+	{"status", "Show whether Touch ID unlock is on and usable here"},
+}
+
 // runTouchID is `sesh touchid enable|disable|status`.
 func runTouchID(app *App, args []string) error {
 	if len(args) != 1 {
