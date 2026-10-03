@@ -393,11 +393,12 @@ func (s *Server) dispatchUnlock(conn *net.UnixConn, raw []byte) bool {
 
 // TouchIDUnwrap asks the Secure Enclave for the vault key, which shows the
 // Touch ID prompt: "sesh is trying to unlock your vault", with its Cancel
-// button reading "Use Master Password", which is what cancelling leads to.
+// button reading "Type Password in Terminal", which is what cancelling
+// leads to (the sheet itself never takes a password).
 // Tests, here and
 // in the CLI, replace it with a software key, as they do AgentSpawnCommand.
 var TouchIDUnwrap = func(blob []byte, w touchid.Wrapped, aad []byte) ([]byte, error) {
-	return touchid.Unwrap(blob, w, aad, "unlock your vault", "Use Master Password")
+	return touchid.Unwrap(blob, w, aad, "unlock your vault", "Type Password in Terminal")
 }
 
 func (s *Server) dispatchUnlockTouchID(conn *net.UnixConn, raw []byte) bool {
