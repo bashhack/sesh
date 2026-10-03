@@ -164,7 +164,7 @@ func TestNewDefaultApp(t *testing.T) {
 		Commit:  "unknown",
 		Date:    "unknown",
 	}
-	app := NewDefaultApp(versionInfo, &MockKeychainProvider{})
+	app := NewDefaultApp(versionInfo, &MockKeychainProvider{}, 30*time.Second)
 
 	if app.Registry == nil {
 		t.Error("Registry is nil")

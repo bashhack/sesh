@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/migration"
@@ -38,8 +39,12 @@ const (
 // keychain — keychain branches are only entered when the source or target
 // is "keychain".
 func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
-	if os.Getenv("SESH_BACKEND") != "sqlite" {
-		return fmt.Errorf("rekey requires SESH_BACKEND=sqlite")
+	st, err := settings()
+	if err != nil {
+		return err
+	}
+	if st.Backend.Value != config.BackendSQLite {
+		return errNeedsSQLite("rekey")
 	}
 
 	fs := flag.NewFlagSet("rekey", flag.ContinueOnError)
@@ -52,7 +57,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		return fmt.Errorf("--to must be 'keychain' or 'password', got %q", *target)
 	}
 
-	current := currentKeySourceName()
+	current := st.KeySource.Value
 	if current == *target {
 		// password → password is the in-place rotation case ("change my
 		// master password"). Rotating the generated keychain key
@@ -63,10 +68,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		return fmt.Errorf("already using %s; nothing to do", *target)
 	}
 
-	dbPath, err := database.DefaultDBPath()
-	if err != nil {
-		return fmt.Errorf("resolve database path: %w", err)
-	}
+	dbPath := st.DBPath.Value
 	dataDir := filepath.Dir(dbPath)
 
 	if _, err := os.Stat(dbPath); err != nil {
@@ -143,6 +145,9 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		return fmt.Errorf("unlock source: %w", err)
 	}
 	secure.SecureZeroBytes(srcKey)
+	if err := srcStore.VerifyKey(current); err != nil {
+		return fmt.Errorf("check source key: %w", withKeyHint(err))
+	}
 
 	plan, err := migration.Plan(srcStore)
 	if err != nil {
@@ -186,6 +191,11 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	destStore, err = database.Open(destPath, database.NewKeySourceOracle(destKS))
 	if err != nil {
 		return fmt.Errorf("open destination database: %w", err)
+	}
+	// Records the new key's check value in the new database, so it
+	// becomes current in the same rename as the entries.
+	if err := destStore.CheckKey(*target); err != nil {
+		return fmt.Errorf("record destination key check: %w", err)
 	}
 	if err := destStore.InitKeyMetadata(); err != nil {
 		return fmt.Errorf("init target key metadata: %w", err)
@@ -241,6 +251,9 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 			return perr
 		}
 	}
+	if _, perr := fmt.Fprintln(app.Stderr, updateKeySourceSetting(st, *target)); perr != nil {
+		return perr
+	}
 	if agentNote != "" {
 		if _, perr := fmt.Fprintln(app.Stderr, agentNote); perr != nil {
 			return perr
@@ -258,14 +271,27 @@ func appendErr(primary error, label string, secondary error) error {
 	return fmt.Errorf("%w (%s also failed: %v)", primary, label, secondary)
 }
 
-// currentKeySourceName returns the active key source as named by SESH_KEY_SOURCE.
-// Empty defaults to "keychain" to match buildKeySource's behaviour.
-func currentKeySourceName() string {
-	v := os.Getenv("SESH_KEY_SOURCE")
-	if v == "" {
-		return "keychain"
+// updateKeySourceSetting makes the key source setting match a vault just
+// rekeyed to target, and returns a line saying what it did or what the user
+// must change. The config file is edited in place (comments kept) when the
+// setting came from it, or from the default when target isn't the default.
+// An env var or flag can't be changed from here, so that's an instruction.
+// If the setting is left stale, the vault's key check refuses the next
+// command rather than letting it write with the old key.
+func updateKeySourceSetting(st *config.Config, target string) string {
+	ks := st.KeySource
+	switch {
+	case ks.Source == config.FromEnv:
+		return fmt.Sprintf("Change %s to %q (or remove it) before the next command.", ks.Origin, target)
+	case ks.Source == config.FromFlag:
+		return fmt.Sprintf("Use --key-source %s from now on, or set key_source = %q in %s.", target, target, tildePath(st.Path))
+	case ks.Source == config.FromDefault && target == config.KeySourcePassword:
+		return "The key source is now the default, master password."
 	}
-	return v
+	if err := config.SetTopLevel(st.Path, "key_source", target); err != nil {
+		return fmt.Sprintf("warning: could not update %s (%v); set key_source = %q there yourself.", tildePath(st.Path), err, target)
+	}
+	return fmt.Sprintf("Set key_source = %q in %s.", target, tildePath(st.Path))
 }
 
 // newKeySourceByName constructs a KeySource without unlocking or initialising
@@ -402,14 +428,15 @@ func unusedKeyStateNote(oldSource, dataDir string) string {
 // Production passes resolvePasswordPrompt(); tests inject a sequenced
 // prompt that returns the old password first, then the new one twice.
 func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
-	if os.Getenv("SESH_BACKEND") != "sqlite" {
-		return fmt.Errorf("rotate requires SESH_BACKEND=sqlite")
+	st, err := settings()
+	if err != nil {
+		return err
+	}
+	if st.Backend.Value != config.BackendSQLite {
+		return errNeedsSQLite("rotate")
 	}
 
-	dbPath, err := database.DefaultDBPath()
-	if err != nil {
-		return fmt.Errorf("resolve database path: %w", err)
-	}
+	dbPath := st.DBPath.Value
 	dataDir := filepath.Dir(dbPath)
 	sidecarPath := filepath.Join(dataDir, sidecarFile)
 
@@ -426,7 +453,7 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	}
 	if _, err := os.Stat(sidecarPath); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("no sidecar to rotate at %s — is SESH_KEY_SOURCE=password actually in use?", sidecarPath)
+			return fmt.Errorf("no sidecar to rotate at %s — is the master password key source actually in use?", sidecarPath)
 		}
 		return fmt.Errorf("stat sidecar: %w", err)
 	}
@@ -510,6 +537,9 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 		return fmt.Errorf("unlock current sidecar: %w", err)
 	}
 	secure.SecureZeroBytes(srcKey)
+	if err := srcStore.VerifyKey("password"); err != nil {
+		return fmt.Errorf("check current key: %w", withKeyHint(err))
+	}
 
 	plan, err := migration.Plan(srcStore)
 	if err != nil {
@@ -557,6 +587,9 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	}
 	destStoreOpen = true
 	destDBCreated = true
+	if err := destStore.CheckKey("password"); err != nil {
+		return fmt.Errorf("record new key check: %w", err)
+	}
 	if err := destStore.InitKeyMetadata(); err != nil {
 		return fmt.Errorf("init target key metadata: %w", err)
 	}

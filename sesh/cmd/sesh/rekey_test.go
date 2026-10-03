@@ -29,7 +29,8 @@ func setupRekeyEnv(t *testing.T) *rekeyTestEnv {
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "xdg"))
 	t.Setenv("SESH_BACKEND", "sqlite")
-	t.Setenv("SESH_KEY_SOURCE", "")
+	// The vault starts on the Keychain key unless a test says otherwise.
+	t.Setenv("SESH_KEY_SOURCE", "keychain")
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	// Rekey locks a running agent; keep every test away from the user's.
 	t.Setenv("SESH_AUTH_SOCK", tempAgentSocket(t))
@@ -213,7 +214,7 @@ func readEntriesViaKeychain(t *testing.T, env *rekeyTestEnv, kc keychain.Provide
 }
 
 func TestRekey_RefusesIfBackendNotSqlite(t *testing.T) {
-	t.Setenv("SESH_BACKEND", "")
+	t.Setenv("SESH_BACKEND", "keychain")
 	app, _ := rekeyTestApp("")
 	err := runRekey(app, []string{"--to=password"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "SESH_BACKEND=sqlite") {
@@ -894,7 +895,7 @@ func TestRotate_RemovesStagingLockOnCancel(t *testing.T) {
 }
 
 func TestRotate_RefusesIfBackendNotSqlite(t *testing.T) {
-	t.Setenv("SESH_BACKEND", "")
+	t.Setenv("SESH_BACKEND", "keychain")
 	app, _ := rekeyTestApp("")
 	err := runRotateMasterPassword(app, rotateTestCfg("any-pw-1234"))
 	if err == nil || !strings.Contains(err.Error(), "SESH_BACKEND=sqlite") {
@@ -1052,16 +1053,5 @@ func TestRotate_PasswordCancelledLeavesNoChanges(t *testing.T) {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("staging/backup file %s should not exist after cancel: %v", p, err)
 		}
-	}
-}
-
-func TestCurrentKeySourceName(t *testing.T) {
-	t.Setenv("SESH_KEY_SOURCE", "")
-	if got := currentKeySourceName(); got != "keychain" {
-		t.Errorf("empty env should default to keychain, got %q", got)
-	}
-	t.Setenv("SESH_KEY_SOURCE", "password")
-	if got := currentKeySourceName(); got != "password" {
-		t.Errorf("explicit password not preserved, got %q", got)
 	}
 }

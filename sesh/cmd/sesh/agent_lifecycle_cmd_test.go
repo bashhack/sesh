@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"regexp"
@@ -20,7 +21,19 @@ import (
 // process-wide.
 func TestMain(m *testing.M) {
 	hardenProcess = func() error { return nil }
-	os.Exit(m.Run())
+	// Keep a developer's own ~/.config/sesh/config.toml out of every test.
+	dir, err := os.MkdirTemp("", "sesh-test-config")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("XDG_CONFIG_HOME", dir); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	if err := os.RemoveAll(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "remove test config dir: %v\n", err)
+	}
+	os.Exit(code)
 }
 
 func TestWriteAgentStatus(t *testing.T) {

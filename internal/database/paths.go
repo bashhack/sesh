@@ -21,7 +21,17 @@ func DefaultDBPath() (string, error) {
 	return filepath.Join(dir, "passwords.db"), nil
 }
 
-func defaultDataDir() (string, error) {
+// DefaultDBLocation is DefaultDBPath without creating the directory, for
+// showing the path without touching the filesystem.
+func DefaultDBLocation() (string, error) {
+	dir, err := defaultDataDirPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "passwords.db"), nil
+}
+
+func defaultDataDirPath() (string, error) {
 	// Not fatal if UserHomeDir fails: resolveBaseDir surfaces errNoHomeDir
 	// only when the chosen platform branch actually needs a home directory.
 	home, err := os.UserHomeDir()
@@ -32,7 +42,14 @@ func defaultDataDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(base, "sesh")
+	return filepath.Join(base, "sesh"), nil
+}
+
+func defaultDataDir() (string, error) {
+	dir, err := defaultDataDirPath()
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // data dir comes from the user's own environment (XDG_DATA_HOME/APPDATA/home)
 		return "", fmt.Errorf("create sesh data dir %q: %w", dir, err)
 	}
