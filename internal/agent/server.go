@@ -391,9 +391,10 @@ func (s *Server) dispatchUnlock(conn *net.UnixConn, raw []byte) bool {
 	return true
 }
 
-// touchIDUnwrap asks the Secure Enclave for the vault key, which shows the
-// Touch ID prompt: "sesh is trying to unlock your vault". Tests replace it.
-var touchIDUnwrap = func(blob []byte, w touchid.Wrapped, aad []byte) ([]byte, error) {
+// TouchIDUnwrap asks the Secure Enclave for the vault key, which shows the
+// Touch ID prompt: "sesh is trying to unlock your vault". Tests, here and
+// in the CLI, replace it with a software key, as they do AgentSpawnCommand.
+var TouchIDUnwrap = func(blob []byte, w touchid.Wrapped, aad []byte) ([]byte, error) {
 	return touchid.Unwrap(blob, w, aad, "unlock your vault")
 }
 
@@ -410,7 +411,7 @@ func (s *Server) dispatchUnlockTouchID(conn *net.UnixConn, raw []byte) bool {
 	id := UnlockID(req.Verify)
 	w := touchid.Wrapped{EphemeralPub: req.EphemeralPub, Ciphertext: req.Ciphertext}
 	err := s.keys.UnlockTouchID(req.Verify, func() ([]byte, error) {
-		return touchIDUnwrap(req.KeyBlob, w, []byte(id))
+		return TouchIDUnwrap(req.KeyBlob, w, []byte(id))
 	})
 	if err == nil {
 		return writeJSON(conn, UnlockResponse{Type: TypeUnlockAck, Version: ProtocolVersion}) == nil

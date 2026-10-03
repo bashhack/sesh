@@ -314,6 +314,40 @@ Your options:
 
 To avoid ending up here, keep the master password somewhere safe and make an encrypted export from time to time (see [Encrypted exports](#encrypted-exports)).
 
+### Touch ID unlock (macOS)
+
+On a Mac with Touch ID, the agent can unlock with your fingerprint instead of your master password. When the agent has locked itself, the next command shows the macOS Touch ID sheet:
+
+```
+sesh
+sesh is trying to unlock your vault.
+Touch ID to allow this.
+```
+
+**Turning it on.**
+- When you create a vault at a terminal (first run or `sesh init`), sesh asks once: `Unlock with Touch ID instead of typing your password? [Y/n]`.
+- Otherwise, run `sesh touchid enable`. It asks for your master password if the agent is locked.
+- `sesh touchid status` shows whether it's on and whether Touch ID is available here. `sesh touchid disable` turns it off.
+
+**How it works.**
+- sesh creates a key inside your Mac's Secure Enclave that only a currently enrolled fingerprint can use. The private key never leaves the chip.
+- The agent wraps the vault key to it. The result is stored in `touchid.key`, next to the vault (0600).
+- Nothing goes in the Keychain, and `touchid.key` is useless on any other Mac or without your finger.
+- The unlock is immediate after the touch: the slow password key derivation doesn't run.
+
+**Your master password still works**, and sesh falls back to it:
+- **You cancel the sheet, or the fingerprint isn't recognised:** sesh asks for the master password.
+- **Touch ID isn't available:** over SSH, with no sensor reachable, or with no enrolled fingerprint. sesh says so and asks for the master password.
+- **Too many failed attempts locked Touch ID:** sesh asks for the master password until the Mac is unlocked with its password.
+- **Scripts** (no terminal, or `SESH_MASTER_PASSWORD`) never wait on a fingerprint.
+
+**Changes that affect it.**
+- **Changing your master password** (`sesh --rekey --to password`) keeps Touch ID unlock working: sesh re-wraps the new key, with no prompt.
+- **Switching to the Keychain key source** turns Touch ID unlock off. It only unlocks a vault protected by a master password.
+- **Adding or removing a fingerprint** in System Settings makes the Secure Enclave key unusable for good. sesh then falls back to the master password and says how to turn Touch ID unlock back on: `sesh touchid enable`.
+
+Only a fingerprint approves the unlock. The Mac's login password and an Apple Watch don't, so the vault never becomes as weak as a different password.
+
 ### Using the sesh agent
 
 In master password mode, sesh keeps the derived key in a per-user background process, `sesh agent`, so you type the password once instead of on every command. **You don't need to manage it.** sesh starts it when it's needed, it locks itself, and the only thing it asks of you is your password.

@@ -254,6 +254,11 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if _, perr := fmt.Fprintln(app.Stderr, updateKeySourceSetting(st, *target)); perr != nil {
 		return perr
 	}
+	if msg := dropTouchID(dataDir); msg != "" {
+		if _, perr := fmt.Fprintln(app.Stderr, msg); perr != nil {
+			return perr
+		}
+	}
 	if agentNote != "" {
 		if _, perr := fmt.Fprintln(app.Stderr, agentNote); perr != nil {
 			return perr
@@ -578,7 +583,9 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	if err != nil {
 		return fmt.Errorf("create new sidecar: %w", err)
 	}
-	secure.SecureZeroBytes(destKey)
+	// Kept until the end: Touch ID unlock is re-wrapped with it after the
+	// swap, when destKS's cache has been cleared by closing destStore.
+	defer secure.SecureZeroBytes(destKey)
 	newSidecarMade = true
 
 	destStore, err = database.Open(dbNewPath, database.NewKeySourceOracle(destKS))
@@ -638,6 +645,8 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	newSidecarMade = false
 	// Locked before any output, so a failed write below can't skip it.
 	agentNote := lockAgentAfterRekey()
+	// Touch ID unlock is re-wrapped for the new key, also before any output.
+	touchNote := rewrapTouchID(dataDir, destKey)
 
 	// The .new.lock sentinel was created when destKS first ran
 	// initializeLocked. The .new sidecar it guarded has now been renamed
@@ -659,6 +668,11 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	}
 	if _, perr := fmt.Fprintln(app.Stderr, "Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available)."); perr != nil {
 		return perr
+	}
+	if touchNote != "" {
+		if _, perr := fmt.Fprintln(app.Stderr, touchNote); perr != nil {
+			return perr
+		}
 	}
 	if agentNote != "" {
 		if _, perr := fmt.Fprintln(app.Stderr, agentNote); perr != nil {

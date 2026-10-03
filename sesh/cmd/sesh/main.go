@@ -114,7 +114,7 @@ func needsCredentialStore(args []string) bool {
 	return true
 }
 
-// subcommand returns the subcommand args name ("agent", "config", or "init") and
+// subcommand returns the subcommand args name ("agent", "config", "init", or "touchid") and
 // the arguments after it, or "" and nil. Only the first argument counts,
 // so an entry that happens to be named "agent" (-service-name agent) is
 // never mistaken for one.
@@ -123,7 +123,7 @@ func subcommand(args []string) (name string, rest []string) {
 		return "", nil
 	}
 	switch name, rest := args[1], args[2:]; name {
-	case "agent", "config", "init":
+	case "agent", "config", "init", "touchid":
 		return name, rest
 	}
 	return "", nil
@@ -432,6 +432,7 @@ func buildKeySourceWith(dbPath, source string, cfg passwordPromptConfig) (databa
 		secure.SecureZeroBytes(key)
 		if firstRun {
 			unlockAgentWith(dataDir, created)
+			offerTouchID(cfg, dataDir)
 		}
 		return database.NewKeySourceOracle(mps), nil
 	case config.KeySourceKeychain:
@@ -481,6 +482,19 @@ func keySourceFromAgent(dataDir string, cfg passwordPromptConfig) (oracle databa
 	id := agent.UnlockID(mat.Verify)
 	if st.Unlocked && st.UnlockID == id {
 		return agent.NewOracle(conn, id), nil, nil
+	}
+	// A person at the terminal is asked for a fingerprint first, when this
+	// vault has Touch ID unlock on; scripts never wait on one.
+	if cfg.interactive {
+		unlocked, terr := tryTouchID(conn, dataDir, id, mat.Verify)
+		if unlocked {
+			return agent.NewOracle(conn, id), nil, nil
+		}
+		if terr != nil {
+			closeAgentConn(conn)
+			fmt.Fprintf(os.Stderr, "warning: sesh agent unavailable: %v\n", terr) //nolint:errcheck // best-effort warning
+			return nil, nil, nil
+		}
 	}
 
 	attempts := 1
@@ -540,7 +554,10 @@ const interactivePasswordAttempts = 3
 // constant-output prompt (e.g. one backed by SESH_MASTER_PASSWORD), which
 // would just burn N × Argon2id deriving the same wrong key.
 type passwordPromptConfig struct {
-	prompt      database.PasswordPromptFunc
+	prompt database.PasswordPromptFunc
+	// confirm asks a [Y/n] question at the terminal; nil when nobody can
+	// answer one.
+	confirm     func(prompt string) (bool, error)
 	interactive bool
 	// fromEnv means the password came from SESH_MASTER_PASSWORD. Such
 	// runs skip the agent: the value is checked every time, and a script
@@ -569,6 +586,7 @@ func resolvePasswordPrompt() passwordPromptConfig {
 	return passwordPromptConfig{
 		prompt:      terminalPrompt,
 		interactive: term.IsTerminal(int(os.Stdin.Fd())),
+		confirm:     func(p string) (bool, error) { return askYes(os.Stdin, os.Stderr, p) },
 	}
 }
 
@@ -845,6 +863,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "touchid":
+		if err := runTouchID(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	}
 
 	// Early exit for version/list-services that don't need service
@@ -1080,6 +1103,7 @@ func (a *App) PrintUsage() error {
 		"\nCommands:",
 		"  sesh init                     Choose where and how sesh stores secrets",
 		"  sesh config                   Show settings and where each comes from",
+		"  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)",
 		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",

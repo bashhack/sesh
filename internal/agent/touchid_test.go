@@ -20,8 +20,8 @@ func softwareChip(t *testing.T, fail error) (pub []byte, prompts *int) {
 		t.Fatal(err)
 	}
 	n := 0
-	orig := touchIDUnwrap
-	touchIDUnwrap = func(_ []byte, w touchid.Wrapped, aad []byte) ([]byte, error) {
+	orig := TouchIDUnwrap
+	TouchIDUnwrap = func(_ []byte, w touchid.Wrapped, aad []byte) ([]byte, error) {
 		n++
 		if fail != nil {
 			return nil, fail
@@ -34,7 +34,7 @@ func softwareChip(t *testing.T, fail error) (pub []byte, prompts *int) {
 			return priv.ECDH(p)
 		}, w, aad)
 	}
-	t.Cleanup(func() { touchIDUnwrap = orig })
+	t.Cleanup(func() { TouchIDUnwrap = orig })
 	return priv.PublicKey().Bytes(), &n
 }
 
@@ -164,11 +164,11 @@ func TestUnlockTouchID_StaleKeyIsRefused(t *testing.T) {
 	}
 	// The chip hands back a key that doesn't open this vault, as an old wrap
 	// would after the master password changed.
-	orig := touchIDUnwrap
-	touchIDUnwrap = func([]byte, touchid.Wrapped, []byte) ([]byte, error) {
+	orig := TouchIDUnwrap
+	TouchIDUnwrap = func([]byte, touchid.Wrapped, []byte) ([]byte, error) {
 		return make([]byte, 32), nil
 	}
-	t.Cleanup(func() { touchIDUnwrap = orig })
+	t.Cleanup(func() { TouchIDUnwrap = orig })
 
 	f := &touchid.File{KeyBlob: []byte("blob"), EphemeralPub: []byte("e"), Ciphertext: []byte("c")}
 	if err := UnlockTouchID(conn, f, verify); !errors.Is(err, ErrTouchIDStale) {
