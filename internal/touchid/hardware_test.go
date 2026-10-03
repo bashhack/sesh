@@ -4,6 +4,7 @@ package touchid
 
 import (
 	"bytes"
+	"encoding/base64"
 	"testing"
 )
 
@@ -31,4 +32,23 @@ func TestHardware_WrapThenUnwrapWithAFingerprint(t *testing.T) {
 	if !bytes.Equal(got, secret) {
 		t.Fatalf("unwrapped %x, want %x", got, secret)
 	}
+}
+
+// BiometryState never prompts, so this one runs without a touch.
+func TestHardware_BiometryStateIsStable(t *testing.T) {
+	if !Available() {
+		t.Skip("Touch ID isn't available to this process")
+	}
+	a, err := BiometryState()
+	if err != nil {
+		t.Fatalf("BiometryState: %v", err)
+	}
+	b, err := BiometryState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a) == 0 || !bytes.Equal(a, b) {
+		t.Fatalf("BiometryState = %x then %x, want the same non-empty value", a, b)
+	}
+	t.Logf("biometry state: %s", base64.StdEncoding.EncodeToString(a))
 }

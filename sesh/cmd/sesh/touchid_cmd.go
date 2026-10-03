@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -19,8 +20,9 @@ import (
 // The Touch ID calls the CLI makes itself. Tests replace them, so they
 // never create Secure Enclave keys or depend on the machine's sensor.
 var (
-	touchIDAvailable = touchid.Available
-	touchIDNewKey    = touchid.NewKey
+	touchIDAvailable     = touchid.Available
+	touchIDNewKey        = touchid.NewKey
+	touchIDBiometryState = touchid.BiometryState
 )
 
 // tryTouchID unlocks the agent with a fingerprint when this vault has Touch
@@ -46,6 +48,15 @@ func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte) (bool, erro
 		note("Touch ID isn't used over SSH, so enter your master password.")
 		return false, nil
 	}
+	if fingerprintsChanged(f) {
+		// The Secure Enclave key no longer works, so don't show a sheet
+		// that can't succeed.
+		if rerr := touchid.Remove(dataDir); rerr != nil {
+			note("warning: remove the out-of-date Touch ID unlock file: %v", rerr)
+		}
+		note("Your fingerprints changed since Touch ID unlock was turned on, so it no longer works and is now off. Enter your master password; turn it back on afterwards with: sesh touchid enable")
+		return false, nil
+	}
 	err = agent.UnlockTouchID(conn, f, verify)
 	switch {
 	case err == nil:
@@ -68,7 +79,7 @@ func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte) (bool, erro
 		if !ok {
 			return false, err
 		}
-		note("Touch ID unlock failed (%v), so enter your master password. If you changed your fingerprints, turn it back on with: sesh touchid enable", pe)
+		note("Touch ID unlock didn't work (%v), so enter your master password.", pe)
 	}
 	return false, nil
 }
@@ -77,6 +88,17 @@ func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte) (bool, erro
 // marks in the environment it gives the remote shell.
 func overSSH() bool {
 	return os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != ""
+}
+
+// fingerprintsChanged reports whether a fingerprint was added or removed
+// since f was made, which leaves its Secure Enclave key unusable. Without a
+// stored or a current identifier it can't tell, and reports false.
+func fingerprintsChanged(f *touchid.File) bool {
+	if len(f.BiometryState) == 0 {
+		return false
+	}
+	now, err := touchIDBiometryState()
+	return err == nil && len(now) > 0 && !bytes.Equal(now, f.BiometryState)
 }
 
 // enableTouchID turns on Touch ID unlock for the vault in dataDir: a new
@@ -93,7 +115,10 @@ func enableTouchID(conn *agent.Conn, dataDir string, verify []byte) error {
 	if err != nil {
 		return fmt.Errorf("wrap the vault key for Touch ID: %w", err)
 	}
-	return touchid.NewFile(id, blob, pub, w).Write(dataDir)
+	f := touchid.NewFile(id, blob, pub, w)
+	// Unreadable, it stays empty and the check before each unlock is skipped.
+	f.BiometryState, _ = touchIDBiometryState() //nolint:errcheck // optional
+	return f.Write(dataDir)
 }
 
 // offerTouchID asks once, right after a vault is created at a terminal,
@@ -151,6 +176,8 @@ func runTouchID(app *App, args []string) error {
 			state = "on"
 			if mat, merr := database.ReadUnlockMaterial(dataDir); merr == nil && f.UnlockID != agent.UnlockID(mat.Verify) {
 				state = "out of date (turn it back on with: sesh touchid enable)"
+			} else if fingerprintsChanged(f) {
+				state = "out of date: your fingerprints changed (turn it back on with: sesh touchid enable)"
 			}
 		}
 		here := "available"
@@ -225,7 +252,9 @@ func rewrapTouchID(dataDir string, newKey []byte) string {
 			id := agent.UnlockID(mat.Verify)
 			var w touchid.Wrapped
 			if w, err = touchid.Wrap(f.PublicKey, newKey, []byte(id)); err == nil {
-				if err = touchid.NewFile(id, f.KeyBlob, f.PublicKey, w).Write(dataDir); err == nil {
+				nf := touchid.NewFile(id, f.KeyBlob, f.PublicKey, w)
+				nf.BiometryState = f.BiometryState // same Secure Enclave key
+				if err = nf.Write(dataDir); err == nil {
 					return "Touch ID unlock now opens the vault with the new master password."
 				}
 			}

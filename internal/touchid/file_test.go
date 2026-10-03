@@ -11,6 +11,7 @@ import (
 func TestFile_WriteReadRemove(t *testing.T) {
 	dir := t.TempDir()
 	f := NewFile("vault-id", []byte("blob"), []byte("pub"), Wrapped{EphemeralPub: []byte("eph"), Ciphertext: []byte("ct")})
+	f.BiometryState = []byte("fingerprints")
 	if err := f.Write(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +26,7 @@ func TestFile_WriteReadRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.UnlockID != "vault-id" || string(got.KeyBlob) != "blob" || string(got.Wrapped().Ciphertext) != "ct" {
+	if got.UnlockID != "vault-id" || string(got.KeyBlob) != "blob" || string(got.Wrapped().Ciphertext) != "ct" || string(got.BiometryState) != "fingerprints" {
 		t.Errorf("read back %+v", got)
 	}
 	if err := Remove(dir); err != nil {
