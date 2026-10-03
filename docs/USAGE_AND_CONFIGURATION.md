@@ -98,6 +98,35 @@ Potential red flags for compatibility are the same one would face with Authy or 
 - "Use our app only" ❌
 - "Push notification required" ❌
 
+## Shell Completion
+
+sesh can complete its commands, flags, and their values when you press Tab, in bash, zsh, and fish. `sesh completion bash`, `sesh completion zsh`, or `sesh completion fish` prints the script for that shell; your shell needs to load it. Shell setups vary a lot (dotfiles managers, `ZDOTDIR`, plugin managers, frameworks), so below is what each shell needs, with the usual places as examples. Put it wherever your setup keeps such things.
+
+There are two ways, for every shell:
+
+- **Load it at startup**, with a line in a file your interactive shell reads. It's always in step with the installed sesh, at the cost of running sesh once per new shell.
+- **Save it as a file** where your shell looks for completions. Nothing runs at startup. If a sesh upgrade ever changes the script, save it again. (The candidates themselves always come from the installed sesh, so new flags and values show up without that.)
+
+**zsh**
+- At startup: `eval "$(sesh completion zsh)"`, placed **after** your setup runs `compinit`. That's usually in `.zshrc`: `~/.zshrc`, or `$ZDOTDIR/.zshrc` if you set `ZDOTDIR`. Frameworks such as Oh My Zsh run `compinit` for you when they're sourced.
+- As a file: save it as `_sesh` in a directory that's on your `fpath` **before** `compinit` runs, for example `sesh completion zsh > ~/.zfunc/_sesh` with `fpath=(~/.zfunc $fpath)` earlier in your config. `print -l $fpath` shows the directories. If you cache completions (`compinit -C`, or a `.zcompdump` that isn't rebuilt), delete the `.zcompdump` once so zsh notices the new file.
+
+**bash**
+- At startup: `eval "$(sesh completion bash)"` in the file your interactive bash reads. That's usually `~/.bashrc`; note that macOS Terminal starts login shells, which read `~/.bash_profile` instead (many setups source one from the other). Works with macOS's bash 3.2 and with newer bash.
+- As a file: with the bash-completion package (version 2, which needs bash 4.2 or later), save it as `sesh` in its user directory, by default `~/.local/share/bash-completion/completions/sesh`. It loads on the first Tab after `sesh`.
+
+**fish**
+- At startup: `sesh completion fish | source`, in `config.fish` or a file in `conf.d/` (under `~/.config/fish/` by default).
+- As a file: `sesh completion fish > ~/.config/fish/completions/sesh.fish`, or the `completions` directory under your fish config directory if you've moved it. fish loads it on the first Tab after `sesh`.
+
+What completes:
+- the commands (`agent`, `completion`, `config`, `init`, `touchid`) and theirs (`sesh agent st<Tab>` → `status`, `stop`);
+- flags, including each provider's own once `--service` is given (`sesh --service password --<Tab>`);
+- values from a fixed set: providers, `--action`, `--format`, `--sort`, `--entry-type`, `--on-conflict`, `--backend`, `--key-source`, and `--rekey --to`;
+- file paths for `--file` and `--db-path`.
+
+Entry names (`--service-name`) don't complete: that would mean opening the vault on a Tab press. Completion never reads the vault, the agent, or the config file.
+
 ## Configuration Methods
 
 sesh uses a provider-based configuration system:

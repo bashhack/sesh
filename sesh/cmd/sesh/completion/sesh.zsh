@@ -1,0 +1,34 @@
+#compdef sesh
+# zsh completion for sesh. Either load it, after compinit has run, from
+# your .zshrc (~/.zshrc, or $ZDOTDIR/.zshrc):  eval "$(sesh completion zsh)"
+# or save it as _sesh in a directory on $fpath before compinit runs.
+_sesh() {
+    local out line
+    local -a cands args
+    # (Q) drops the quoting a word carries (My\ Backup, "x"); the word being
+    # typed may also have a quote that isn't closed yet ("pa, --format="j).
+    args=("${(@Q)words[2,CURRENT]}")
+    args[-1]=${args[-1]#[\"\']}
+    [[ ${args[-1]} == -*=[\"\']* ]] && args[-1]="${args[-1]%%=*}=${args[-1]#*=?}"
+    out=$(command sesh __complete "${args[@]}" 2>/dev/null) || return 1
+    if [[ $out == :files ]]; then
+        # For --flag=path, complete only the part after the "=".
+        [[ ${words[CURRENT]} == -*=* ]] && compset -P '*='
+        _files
+        return
+    fi
+    for line in "${(@f)out}"; do
+        [[ -z $line ]] && continue
+        if [[ $line == *$'\t'* ]]; then
+            cands+=("${${line%%$'\t'*}//:/\\:}:${line#*$'\t'}")
+        else
+            cands+=("${line//:/\\:}")
+        fi
+    done
+    (( ${#cands} )) && _describe -t sesh sesh cands
+}
+if [[ $funcstack[1] == _sesh ]]; then
+    _sesh "$@"
+else
+    compdef _sesh sesh
+fi

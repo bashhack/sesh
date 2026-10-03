@@ -70,7 +70,13 @@ type FlagInfo struct {
 	Name        string
 	Type        string // "string", "bool", etc.
 	Description string
-	Required    bool
+	// Values lists the values the flag accepts, when it's a fixed set;
+	// shell completion offers them.
+	Values []string
+	// Path marks a flag whose value is a file path; shell completion
+	// completes paths.
+	Path     bool
+	Required bool
 }
 
 // SubshellDecider is an optional interface that providers can implement

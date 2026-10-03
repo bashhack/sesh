@@ -40,6 +40,16 @@ func main() {
 		Date:    date,
 	}
 
+	// Shell completion runs on every Tab, so it answers before the setting
+	// flags, the config, or the store are looked at.
+	if len(os.Args) > 1 && os.Args[1] == completeCmd {
+		app := NewDefaultApp(versionInfo, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+		if err := writeCompletions(app.Stdout, app.Registry, os.Args[2:]); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Only open the credential store if the command will actually use it.
 	// --version, --help, --list-services, and --migrate either just print
 	// information or open their own store internally. Skipping buildProvider
@@ -114,17 +124,27 @@ func needsCredentialStore(args []string) bool {
 	return true
 }
 
-// subcommand returns the subcommand args name ("agent", "config", "init", or "touchid") and
-// the arguments after it, or "" and nil. Only the first argument counts,
-// so an entry that happens to be named "agent" (-service-name agent) is
-// never mistaken for one.
+// subcommands are the commands named by sesh's first argument.
+var subcommands = []candidate{
+	{"agent", "Control the sesh agent"},
+	{"completion", "Print a shell completion script (bash, zsh, fish)"},
+	{"config", "Show settings and where each comes from"},
+	{"init", "Choose where and how sesh stores secrets"},
+	{"touchid", "Unlock with Touch ID (macOS)"},
+}
+
+// subcommand returns the subcommand args name (one of subcommands) and the
+// arguments after it, or "" and nil. Only the first argument counts, so an
+// entry that happens to be named "agent" (-service-name agent) is never
+// mistaken for one.
 func subcommand(args []string) (name string, rest []string) {
 	if len(args) < 2 {
 		return "", nil
 	}
-	switch name, rest := args[1], args[2:]; name {
-	case "agent", "config", "init", "touchid":
-		return name, rest
+	for _, c := range subcommands {
+		if c.value == args[1] {
+			return args[1], args[2:]
+		}
 	}
 	return "", nil
 }
@@ -868,6 +888,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "completion":
+		if err := runCompletion(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	}
 
 	// Early exit for version/list-services that don't need service
@@ -953,15 +978,7 @@ func run(app *App, args []string) {
 		}
 	}
 
-	// Register common flags
-	serviceFlag := fs.String("service", serviceName, "Service provider to use")
-	showVersion := fs.Bool("version", false, "Show version information")
-	showHelp := fs.Bool("help", false, "Show usage")
-	listServices := fs.Bool("list-services", false, "List available service providers")
-	listEntries := fs.Bool("list", false, "List entries for selected service")
-	deleteEntry := fs.String("delete", "", "Delete entry for selected service")
-	runSetup := fs.Bool("setup", false, "Run setup wizard for selected service")
-	copyClipboard := fs.Bool("clip", false, "Copy code to clipboard")
+	common := addCommonFlags(fs, serviceName)
 
 	// Register provider-specific flags
 	if err := svcProvider.SetupFlags(fs); err != nil {
@@ -979,25 +996,25 @@ func run(app *App, args []string) {
 	}
 
 	// Verify service wasn't changed
-	if *serviceFlag != serviceName {
+	if *common.service != serviceName {
 		fatal(app, fmt.Errorf("service provider cannot be changed after initial selection"))
 		return
 	}
 
 	// Handle commands that were re-parsed
-	if *showVersion {
+	if *common.version {
 		if err := app.ShowVersion(); err != nil {
 			fatal(app, err)
 		}
 		return
 	}
-	if *showHelp {
+	if *common.help {
 		if err := app.PrintProviderUsage(serviceName, svcProvider); err != nil {
 			fatal(app, err)
 		}
 		return
 	}
-	if *listServices {
+	if *common.listServices {
 		if err := app.ListProviders(); err != nil {
 			fatal(app, err)
 		}
@@ -1005,19 +1022,19 @@ func run(app *App, args []string) {
 	}
 
 	// Provider-specific operations
-	if *listEntries {
+	if *common.list {
 		if err := app.ListEntries(serviceName); err != nil {
 			fatal(app, err)
 		}
 		return
 	}
-	if *deleteEntry != "" {
-		if err := app.DeleteEntry(serviceName, *deleteEntry); err != nil {
+	if *common.delete != "" {
+		if err := app.DeleteEntry(serviceName, *common.delete); err != nil {
 			fatal(app, err)
 		}
 		return
 	}
-	if *runSetup {
+	if *common.setup {
 		if err := app.RunSetup(serviceName); err != nil {
 			fatal(app, fmt.Errorf("setup failed: %w", err))
 		}
@@ -1025,7 +1042,7 @@ func run(app *App, args []string) {
 	}
 
 	// Main operation - generate credentials
-	if *copyClipboard {
+	if *common.clip {
 		if err := app.CopyToClipboard(serviceName); err != nil {
 			fatal(app, err)
 		}
@@ -1037,6 +1054,25 @@ func run(app *App, args []string) {
 		if err := app.GenerateCredentials(serviceName); err != nil {
 			fatal(app, err)
 		}
+	}
+}
+
+// commonFlags are the flags every provider accepts.
+type commonFlags struct {
+	service, delete                                *string
+	version, help, listServices, list, setup, clip *bool
+}
+
+func addCommonFlags(fs *flag.FlagSet, serviceName string) commonFlags {
+	return commonFlags{
+		service:      fs.String("service", serviceName, "Service provider to use"),
+		version:      fs.Bool("version", false, "Show version information"),
+		help:         fs.Bool("help", false, "Show usage"),
+		listServices: fs.Bool("list-services", false, "List available service providers"),
+		list:         fs.Bool("list", false, "List entries for selected service"),
+		delete:       fs.String("delete", "", "Delete entry for selected service"),
+		setup:        fs.Bool("setup", false, "Run setup wizard for selected service"),
+		clip:         fs.Bool("clip", false, "Copy code to clipboard"),
 	}
 }
 
@@ -1105,6 +1141,7 @@ func (a *App) PrintUsage() error {
 		"  sesh config                   Show settings and where each comes from",
 		"  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)",
 		"  sesh agent [lock|status|stop] Control the sesh agent",
+		"  sesh completion bash|zsh|fish  Print a shell completion script",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",
 		"  sesh --service totp --service-name github   Generate TOTP code for GitHub",

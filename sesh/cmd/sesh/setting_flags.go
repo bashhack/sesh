@@ -7,14 +7,36 @@ import (
 	"github.com/bashhack/sesh/internal/config"
 )
 
+// settingFlag is a global flag that overrides a setting for one run.
+type settingFlag struct {
+	set   func(*config.Overrides, string)
+	usage string
+	// values are the accepted values, when they're a fixed set; path marks
+	// a file path. Shell completion offers them.
+	values []string
+	path   bool
+}
+
 // settingFlags are the global flags that override a setting for one run.
 // They're taken out of the arguments before anything else parses them,
 // because the store is opened, with these settings, before the command's
 // own flags are read.
-var settingFlags = map[string]func(*config.Overrides, string){
-	"backend":    func(o *config.Overrides, v string) { o.Backend = v },
-	"key-source": func(o *config.Overrides, v string) { o.KeySource = v },
-	"db-path":    func(o *config.Overrides, v string) { o.DBPath = v },
+var settingFlags = map[string]settingFlag{
+	"backend": {
+		set:    func(o *config.Overrides, v string) { o.Backend = v },
+		usage:  "Storage backend, for this command only",
+		values: []string{config.BackendSQLite, config.BackendKeychain},
+	},
+	"key-source": {
+		set:    func(o *config.Overrides, v string) { o.KeySource = v },
+		usage:  "Key source for the sqlite backend, for this command only",
+		values: []string{config.KeySourcePassword, config.KeySourceKeychain},
+	},
+	"db-path": {
+		set:   func(o *config.Overrides, v string) { o.DBPath = v },
+		usage: "Vault location for the sqlite backend, for this command only",
+		path:  true,
+	},
 }
 
 // takeSettingFlags removes --backend, --key-source, and --db-path (with one
@@ -33,7 +55,7 @@ func takeSettingFlags(args []string) ([]string, config.Overrides, error) {
 			break
 		}
 		name, value, hasValue := strings.Cut(strings.TrimLeft(a, "-"), "=")
-		set, ok := settingFlags[name]
+		sf, ok := settingFlags[name]
 		if !ok || !strings.HasPrefix(a, "-") {
 			rest = append(rest, a)
 			continue
@@ -48,7 +70,7 @@ func takeSettingFlags(args []string) ([]string, config.Overrides, error) {
 		if value == "" {
 			return nil, o, fmt.Errorf("--%s needs a value", name)
 		}
-		set(&o, value)
+		sf.set(&o, value)
 	}
 	return rest, o, nil
 }

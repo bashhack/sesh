@@ -27,6 +27,11 @@ const (
 	sidecarFile        = "passwords.key"
 )
 
+// addRekeyFlags registers the flags of --rekey and returns its --to.
+func addRekeyFlags(fs *flag.FlagSet) *string {
+	return fs.String("to", "", "Target key source: keychain or password")
+}
+
 // runRekey re-encrypts the SQLite store under a different KeySource and
 // atomically swaps the result into place. The original DB is preserved at
 // <dbPath>.pre-rekey for rollback. The old key state (sidecar or keychain
@@ -49,7 +54,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 
 	fs := flag.NewFlagSet("rekey", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	target := fs.String("to", "", "Target key source: keychain or password")
+	target := addRekeyFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

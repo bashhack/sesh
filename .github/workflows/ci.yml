@@ -130,6 +130,9 @@ jobs:
       - name: Download Go modules
         run: go mod download
 
+      - name: Install zsh and fish for the shell completion tests
+        run: sudo apt-get update && sudo apt-get install -y zsh fish
+
       - name: Run tests with race detection
         run: go test -race $(go list ./... | grep -v /scripts)
 

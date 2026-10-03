@@ -25,6 +25,11 @@ type initChoices struct {
 	dbDefault bool
 }
 
+// addInitFlags registers the flags of sesh init and returns its --force.
+func addInitFlags(fs *flag.FlagSet) *bool {
+	return fs.Bool("force", false, "Replace an existing config file")
+}
+
 // runInit is `sesh init`: it sets up where sesh keeps secrets. With
 // --backend, --key-source, or --db-path it uses those (for scripts);
 // otherwise it asks. For a vault it creates (or opens) the vault first, and
@@ -33,7 +38,7 @@ type initChoices struct {
 func runInit(app *App, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	force := fs.Bool("force", false, "Replace an existing config file")
+	force := addInitFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

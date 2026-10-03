@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,21 +16,33 @@ import (
 // inside the test binary, and hardening is process-wide.
 var hardenProcess = agent.Harden
 
+// agentControls are the `sesh agent` commands that talk to a running agent.
+var agentControls = []candidate{
+	{"lock", "Drop the key now; the agent keeps running"},
+	{"status", "Show whether the agent is running and unlocked"},
+	{"stop", "Shut the agent down"},
+}
+
 // runAgent is the entry point for `sesh agent`. With no subcommand it runs
 // the daemon in the foreground until SIGTERM/SIGINT or a stop request.
 // `lock`, `status`, and `stop` talk to a running agent and never start
 // one.
 func runAgent(app *App, args []string) error {
-	if len(args) > 0 {
-		switch args[0] {
-		case "lock", "status", "stop":
-			if len(args) > 1 {
-				return fmt.Errorf("sesh agent %s takes no arguments, got %q", args[0], strings.Join(args[1:], " "))
-			}
-			return runAgentControl(app, args[0], time.Now())
+	if len(args) > 0 && slices.ContainsFunc(agentControls, func(c candidate) bool { return c.value == args[0] }) {
+		if len(args) > 1 {
+			return fmt.Errorf("sesh agent %s takes no arguments, got %q", args[0], strings.Join(args[1:], " "))
 		}
+		return runAgentControl(app, args[0], time.Now())
 	}
 	return runAgentDaemon(app, args)
+}
+
+// addAgentFlags registers the flags of the agent daemon (sesh agent).
+func addAgentFlags(fs *flag.FlagSet, idleDefault, maxDefault time.Duration) (socket *string, idle, maxLife *time.Duration) {
+	socket = fs.String("socket", "", "Override the canonical socket path. Defaults to <cache>/sesh/agent.sock.")
+	idle = fs.Duration("idle-timeout", idleDefault, "Lock after this long without use; 0 disables. Config: agent.idle_timeout; env: SESH_AGENT_IDLE_TIMEOUT.")
+	maxLife = fs.Duration("max-lifetime", maxDefault, "Lock this long after each unlock, even if in use; 0 disables. Config: agent.max_lifetime; env: SESH_AGENT_MAX_LIFETIME.")
+	return socket, idle, maxLife
 }
 
 func runAgentDaemon(app *App, args []string) error {
@@ -47,9 +60,7 @@ func runAgentDaemon(app *App, args []string) error {
 
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	socket := fs.String("socket", "", "Override the canonical socket path. Defaults to <cache>/sesh/agent.sock.")
-	idle := fs.Duration("idle-timeout", idleDefault, "Lock after this long without use; 0 disables. Config: agent.idle_timeout; env: SESH_AGENT_IDLE_TIMEOUT.")
-	maxLife := fs.Duration("max-lifetime", maxDefault, "Lock this long after each unlock, even if in use; 0 disables. Config: agent.max_lifetime; env: SESH_AGENT_MAX_LIFETIME.")
+	socket, idle, maxLife := addAgentFlags(fs, idleDefault, maxDefault)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
