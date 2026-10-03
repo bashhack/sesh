@@ -91,12 +91,13 @@ func TestAudit_Prune(t *testing.T) {
 	t.Setenv(config.EnvAuditRetentionDays, "0") // keep everything unless pruned
 	addOldAuditEvent(t, dbPath, "old", 100)
 	addOldAuditEvent(t, dbPath, "older", 200)
+	addOldAuditEvent(t, dbPath, "future", -1) // stamped by a clock that was ahead
 
 	out, err := runAuditOut(t)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(out, "Audit log: 4 events since ") || !strings.Contains(out, "Nothing is removed automatically (audit.retention_days = 0); remove old events with: sesh audit prune --older-than <days>") {
+	if !strings.HasPrefix(out, "Audit log: 5 events since ") || !strings.Contains(out, "Nothing is removed automatically (audit.retention_days = 0); remove old events with: sesh audit prune --older-than <days>") {
 		t.Errorf("summary with retention 0:\n%s", out)
 	}
 	compacted := regexp.MustCompile(`, and compacted the vault from [0-9.]+ (KB|MB) to [0-9.]+ (KB|MB)\.\n$`)
@@ -106,7 +107,7 @@ func TestAudit_Prune(t *testing.T) {
 	if out, err := runAuditOut(t, "prune", "--older-than", "150"); err != nil || out != "No events older than 150 days.\n" {
 		t.Errorf("prune 150 again = %q, %v", out, err)
 	}
-	if out, err := runAuditOut(t, "prune", "--older-than", "0"); err != nil || !strings.HasPrefix(out, "Removed all 3 events, and compacted") || !compacted.MatchString(out) {
+	if out, err := runAuditOut(t, "prune", "--older-than", "0"); err != nil || !strings.HasPrefix(out, "Removed all 4 events, and compacted") || !compacted.MatchString(out) {
 		t.Errorf("prune 0 = %q, %v", out, err)
 	}
 	if out, err := runAuditOut(t); err != nil || out != "Audit log: no events.\n" {

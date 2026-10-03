@@ -107,7 +107,13 @@ func runAuditPrune(app *App, args []string) error {
 	}
 	defer closeAuditStore(store)
 
-	n, err := store.PruneAudit(time.Now().AddDate(0, 0, -*olderThan))
+	// 0 means every event, including any stamped by a clock that was ahead.
+	var n int64
+	if *olderThan == 0 {
+		n, err = store.ClearAudit()
+	} else {
+		n, err = store.PruneAudit(time.Now().AddDate(0, 0, -*olderThan))
+	}
 	if err != nil {
 		return err
 	}

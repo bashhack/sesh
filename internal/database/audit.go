@@ -71,6 +71,16 @@ func (s *Store) PruneAudit(before time.Time) (int64, error) {
 	return res.RowsAffected()
 }
 
+// ClearAudit deletes every audit event, whatever its timestamp, and
+// returns how many it deleted.
+func (s *Store) ClearAudit() (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM audit_log`)
+	if err != nil {
+		return 0, fmt.Errorf("clear audit log: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // Path is the vault file the store opened.
 func (s *Store) Path() string { return s.path }
 

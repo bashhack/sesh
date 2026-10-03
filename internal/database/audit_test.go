@@ -156,3 +156,27 @@ func TestCompact(t *testing.T) {
 		t.Fatalf("store after compacting: %v", err)
 	}
 }
+
+// Events are listed in the order they were written. A timestamp from a
+// clock that was ahead must not push later events out of the newest few.
+func TestAuditEvents_WriteOrderNotTimestamp(t *testing.T) {
+	s := newTestStore(t)
+	addAuditAt(t, s, "access", "clock-ahead", time.Now().Add(24*time.Hour))
+	addAuditAt(t, s, "access", "after-the-fix", time.Now())
+	events, err := s.AuditEvents(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].EntryID != "after-the-fix" {
+		t.Errorf("newest event = %+v, want the last one written", events)
+	}
+}
+
+func TestClearAudit(t *testing.T) {
+	s := newTestStore(t)
+	addAuditAt(t, s, "access", "past", time.Now().AddDate(0, 0, -1))
+	addAuditAt(t, s, "access", "future", time.Now().AddDate(0, 0, 1))
+	if n, err := s.ClearAudit(); err != nil || n != 2 || auditCount(t, s) != 0 {
+		t.Errorf("ClearAudit = %d, %v, %d left; want 2 removed, none left", n, err, auditCount(t, s))
+	}
+}
