@@ -1,6 +1,8 @@
 package database
 
 import (
+	"database/sql"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -178,5 +180,77 @@ func TestClearAudit(t *testing.T) {
 	addAuditAt(t, s, "access", "future", time.Now().AddDate(0, 0, 1))
 	if n, err := s.ClearAudit(); err != nil || n != 2 || auditCount(t, s) != 0 {
 		t.Errorf("ClearAudit = %d, %v, %d left; want 2 removed, none left", n, err, auditCount(t, s))
+	}
+}
+
+// Another sesh command reading the vault (an open read transaction) stops
+// the write-ahead log from being folded back; Compact must say so.
+func TestCompact_ReaderHoldsTheLog(t *testing.T) {
+	orig := compactWait
+	compactWait = 100 * time.Millisecond
+	t.Cleanup(func() { compactWait = orig })
+	s := newTestStore(t)
+	if _, err := s.db.Exec(`WITH RECURSIVE c(x) AS (SELECT 0 UNION ALL SELECT x+1 FROM c WHERE x < 4999)
+		INSERT INTO audit_log (event_type, entry_id, detail, created_at)
+		SELECT 'access', 'sesh-totp/github/me', 'GetSecret', '2026-01-01 00:00:00 +0000 UTC' FROM c`); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := sql.Open("sqlite", s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	tx, err := reader.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM audit_log`).Scan(new(int)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PruneAudit(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	err = s.Compact()
+	if rerr := tx.Rollback(); rerr != nil {
+		t.Fatal(rerr)
+	}
+	if !errors.Is(err, ErrVaultBusy) {
+		t.Errorf("Compact with a reader holding the log: err = %v, want ErrVaultBusy", err)
+	}
+}
+
+// A reader that finishes while Compact waits doesn't stop it.
+func TestCompact_WaitsForAReader(t *testing.T) {
+	s := newTestStore(t)
+	reader, err := sql.Open("sqlite", s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	tx, err := reader.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM audit_log`).Scan(new(int)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		done <- tx.Rollback()
+	}()
+	if err := s.Compact(); err != nil {
+		t.Errorf("Compact after the reader finished: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

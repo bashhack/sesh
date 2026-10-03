@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -130,6 +131,10 @@ func runAuditPrune(app *App, args []string) error {
 	before, err := store.Size()
 	if err == nil {
 		err = store.Compact()
+	}
+	if errors.Is(err, database.ErrVaultBusy) {
+		_, err = fmt.Fprintf(app.Stdout, "%s. The vault wasn't compacted, because another sesh command was using it; new events will reuse the freed space.\n", removed)
+		return err
 	}
 	if err != nil {
 		return fmt.Errorf("%s, but compacting the vault failed: %w", removed, err)

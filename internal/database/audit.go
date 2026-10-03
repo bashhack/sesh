@@ -101,15 +101,36 @@ func (s *Store) Size() (int64, error) {
 	return total, nil
 }
 
+// ErrVaultBusy means another connection, such as another sesh command,
+// was reading the vault for longer than Compact waits.
+var ErrVaultBusy = errors.New("another sesh command was using the vault")
+
+// compactWait is how long Compact waits for other readers of the vault to
+// finish. Tests shorten it.
+var compactWait = 5 * time.Second
+
 // Compact rewrites the vault without the free space that deleted rows
 // leave behind (SQLite keeps it for reuse rather than shrinking the file),
-// then folds the write-ahead log back into the file.
+// then folds the write-ahead log back into the file. That last step needs
+// every other reader to have finished; it waits up to compactWait for
+// them, then returns ErrVaultBusy.
 func (s *Store) Compact() error {
 	if _, err := s.db.Exec(`VACUUM`); err != nil {
 		return fmt.Errorf("compact vault: %w", err)
 	}
-	if _, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+	if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA busy_timeout = %d`, compactWait.Milliseconds())); err != nil {
 		return fmt.Errorf("compact vault: %w", err)
+	}
+	var busy, logFrames, checkpointed int
+	err := s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointed)
+	if _, rerr := s.db.Exec(`PRAGMA busy_timeout = 0`); err == nil {
+		err = rerr
+	}
+	if err != nil {
+		return fmt.Errorf("compact vault: %w", err)
+	}
+	if busy != 0 {
+		return fmt.Errorf("compact vault: %w", ErrVaultBusy)
 	}
 	return nil
 }
