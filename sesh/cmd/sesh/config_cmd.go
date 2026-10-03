@@ -70,7 +70,7 @@ func retention(days int) string {
 	if days == 0 {
 		return "0 (keep all)"
 	}
-	return plural(int64(days), "day")
+	return dayCount(int64(days))
 }
 
 // duration prints d as the user would write it: 30s, 10m, 8h, 1h30m.

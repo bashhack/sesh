@@ -3,12 +3,16 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bashhack/sesh/internal/config"
+	"github.com/bashhack/sesh/internal/testutil"
 )
 
 // auditTestVault creates a password-protected vault holding one entry,
@@ -180,6 +184,90 @@ func TestVaultSize(t *testing.T) {
 	for n, want := range map[int64]string{0: "0 KB", 1: "1 KB", 69632: "70 KB", 999_999: "1000 KB", 1_000_000: "1.0 MB", 133_849_088: "133.8 MB"} {
 		if got := vaultSize(n); got != want {
 			t.Errorf("vaultSize(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+// warnAuditSizeAt sets up the size warning for a test: limit events, a
+// terminal or not, and a marker file in a temp dir. It returns the marker.
+func warnAuditSizeAt(t *testing.T, limit int64, terminal bool) string {
+	t.Helper()
+	marker := filepath.Join(t.TempDir(), "sesh", "audit-size-warned")
+	origLimit, origTerm, origPath := auditWarnEvents, stderrIsTerminal, auditWarnedPath
+	auditWarnEvents = limit
+	stderrIsTerminal = func() bool { return terminal }
+	auditWarnedPath = func() (string, error) { return marker, nil }
+	t.Cleanup(func() { auditWarnEvents, stderrIsTerminal, auditWarnedPath = origLimit, origTerm, origPath })
+	return marker
+}
+
+// openForWarning opens the vault as any command does and returns stderr.
+func openForWarning(t *testing.T) string {
+	t.Helper()
+	restore := testutil.RedirectStderr(t)
+	store, err := openSQLiteStore()
+	out := restore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestAuditSizeWarning(t *testing.T) {
+	dbPath := auditTestVault(t)
+	t.Setenv(config.EnvAuditRetentionDays, "0")
+	addOldAuditEvent(t, dbPath, "old", 100)
+	addOldAuditEvent(t, dbPath, "older", 200)
+
+	t.Run("not at a terminal", func(t *testing.T) {
+		marker := warnAuditSizeAt(t, 3, false)
+		if out := openForWarning(t); strings.Contains(out, "audit log") {
+			t.Errorf("warned without a terminal: %q", out)
+		}
+		if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("marker written without a warning (err %v)", err)
+		}
+	})
+	t.Run("below the limit", func(t *testing.T) {
+		warnAuditSizeAt(t, 1000, true)
+		if out := openForWarning(t); strings.Contains(out, "audit log") {
+			t.Errorf("warned below the limit: %q", out)
+		}
+	})
+	t.Run("once a day, with advice for the setting", func(t *testing.T) {
+		marker := warnAuditSizeAt(t, 3, true)
+		out := openForWarning(t)
+		for _, want := range []string{
+			"warning: the vault's audit log has about 4 events, and the vault is ",
+			"Set audit.retention_days (now 0, which keeps everything), or remove old events now with: sesh audit prune --older-than <days>",
+			"This warning shows at most once a day.",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("warning missing %q:\n%s", want, out)
+			}
+		}
+		if again := openForWarning(t); strings.Contains(again, "audit log") {
+			t.Errorf("warned twice in a day: %q", again)
+		}
+		yesterday := time.Now().Add(-25 * time.Hour)
+		if err := os.Chtimes(marker, yesterday, yesterday); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(config.EnvAuditRetentionDays, "365")
+		out = openForWarning(t)
+		if !strings.Contains(out, "Keep fewer days with audit.retention_days (now 365 days), or remove old events now with: sesh audit prune --older-than <days>") {
+			t.Errorf("no warning a day later, or wrong advice:\n%s", out)
+		}
+	})
+}
+
+func TestThousands(t *testing.T) {
+	for n, want := range map[int64]string{0: "0", 999: "999", 1000: "1,000", 1000009: "1,000,009", -1234: "-1,234"} {
+		if got := thousands(n); got != want {
+			t.Errorf("thousands(%d) = %q, want %q", n, got, want)
 		}
 	}
 }

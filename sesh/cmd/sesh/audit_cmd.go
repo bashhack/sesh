@@ -5,8 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/constants"
@@ -65,9 +68,9 @@ func runAudit(app *App, args []string) error {
 		_, err := fmt.Fprint(app.Stdout, b.String())
 		return err
 	}
-	fmt.Fprintf(&b, "Audit log: %s since %s. ", plural(count, "event"), oldest.Local().Format("2006-01-02 15:04"))
+	fmt.Fprintf(&b, "Audit log: %s since %s. ", countOf(count, "event"), oldest.Local().Format("2006-01-02 15:04"))
 	if days := cfg.AuditRetentionDays.Value; days > 0 {
-		fmt.Fprintf(&b, "Events older than %s are removed automatically (audit.retention_days).\n\n", plural(int64(days), "day"))
+		fmt.Fprintf(&b, "Events older than %s are removed automatically (audit.retention_days).\n\n", dayCount(int64(days)))
 	} else {
 		b.WriteString("Nothing is removed automatically (audit.retention_days = 0); remove old events with: sesh audit prune --older-than <days>\n\n")
 	}
@@ -119,12 +122,12 @@ func runAuditPrune(app *App, args []string) error {
 		return err
 	}
 	if n == 0 {
-		_, err = fmt.Fprintf(app.Stdout, "No events older than %s.\n", plural(int64(*olderThan), "day"))
+		_, err = fmt.Fprintf(app.Stdout, "No events older than %s.\n", dayCount(int64(*olderThan)))
 		return err
 	}
-	removed := fmt.Sprintf("Removed %s older than %s", plural(n, "event"), plural(int64(*olderThan), "day"))
+	removed := fmt.Sprintf("Removed %s older than %s", countOf(n, "event"), dayCount(int64(*olderThan)))
 	if *olderThan == 0 {
-		removed = fmt.Sprintf("Removed all %s", plural(n, "event"))
+		removed = fmt.Sprintf("Removed all %s", countOf(n, "event"))
 	}
 	// SQLite keeps the space deleted rows leave for reuse; compacting is
 	// what makes the file smaller.
@@ -221,6 +224,75 @@ func auditEntryName(id string) (kind, name string) {
 	return "", id
 }
 
+// The size warning: it shows when the audit log passes auditWarnEvents
+// (about 10 MB), whatever the retention setting, at most once per
+// auditWarnEvery, and only to a person at a terminal. Tests replace the
+// variables.
+const auditWarnEvery = 24 * time.Hour
+
+var (
+	auditWarnEvents  int64 = 100_000
+	stderrIsTerminal       = func() bool { return term.IsTerminal(int(os.Stderr.Fd())) }
+	// auditWarnedPath is a marker file whose time records the last warning.
+	auditWarnedPath = func() (string, error) {
+		dir, err := os.UserCacheDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(dir, "sesh", "audit-size-warned"), nil
+	}
+)
+
+// warnAuditSize tells a person at the terminal, at most once a day, that
+// the audit log has grown past auditWarnEvents, and how to shrink it.
+// Nothing here stops the command.
+func warnAuditSize(store *database.Store, cfg *config.Config) {
+	if !stderrIsTerminal() {
+		return
+	}
+	n, err := store.AuditCountEstimate()
+	if err != nil || n < auditWarnEvents {
+		return
+	}
+	marker, err := auditWarnedPath()
+	if err != nil {
+		return
+	}
+	if fi, err := os.Stat(marker); err == nil && time.Since(fi.ModTime()) < auditWarnEvery {
+		return
+	}
+	size, err := store.Size()
+	if err != nil {
+		return
+	}
+	advice := fmt.Sprintf("Keep fewer days with audit.retention_days (now %s)", dayCount(int64(cfg.AuditRetentionDays.Value)))
+	if cfg.AuditRetentionDays.Value == 0 {
+		advice = "Set audit.retention_days (now 0, which keeps everything)"
+	}
+	note("warning: the vault's audit log has about %s events, and the vault is %s. sesh writes to the vault on every command, so backups copy all of it each time.\n%s, or remove old events now with: sesh audit prune --older-than <days>\nThis warning shows at most once a day.",
+		thousands(n), vaultSize(size), advice)
+	// Best effort: if the marker can't be written, the warning just shows again.
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err == nil {
+		if err := os.WriteFile(marker, nil, 0o600); err == nil {
+			now := time.Now()
+			_ = os.Chtimes(marker, now, now) //nolint:errcheck // best effort, see above
+		}
+	}
+}
+
+// thousands prints n with comma separators: 1,000,009.
+func thousands(n int64) string {
+	s := fmt.Sprint(n)
+	sign := ""
+	if n < 0 {
+		sign, s = "-", s[1:]
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return sign + s
+}
+
 // flagSet reports whether name was given on the command line.
 func flagSet(fs *flag.FlagSet, name string) bool {
 	found := false
@@ -228,10 +300,18 @@ func flagSet(fs *flag.FlagSet, name string) bool {
 	return found
 }
 
-// plural is "1 event", "2 events".
-func plural(n int64, noun string) string {
+// countOf is plural with thousands separators: "1,204 events".
+func countOf(n int64, noun string) string {
 	if n == 1 {
 		return "1 " + noun
 	}
-	return fmt.Sprintf("%d %ss", n, noun)
+	return thousands(n) + " " + noun + "s"
+}
+
+// dayCount is "1 day", "90 days".
+func dayCount(n int64) string {
+	if n == 1 {
+		return "1 day"
+	}
+	return fmt.Sprintf("%d days", n)
 }
