@@ -1,5 +1,7 @@
-# bash completion for sesh.
-# Load it in ~/.bashrc with:  eval "$(sesh completion bash)"
+# bash completion for sesh. Either load it from a file your interactive bash
+# reads (often ~/.bashrc):  eval "$(sesh completion bash)"
+# or, with bash-completion 2, save it as completions/sesh in its user
+# directory (by default ~/.local/share/bash-completion/completions/sesh).
 _sesh() {
     # The words up to the cursor, from bash's own parse, which keeps a quoted
     # path whole. bash 4+ also splits --flag=value at "=", so the pieces are

@@ -1,6 +1,7 @@
-# fish completion for sesh.
-# Load it with:  sesh completion fish | source
-# or save it as ~/.config/fish/completions/sesh.fish
+# fish completion for sesh. Either load it from config.fish or conf.d:
+#   sesh completion fish | source
+# or save it as sesh.fish in the completions directory of your fish config
+# (by default ~/.config/fish/completions/sesh.fish).
 function __sesh_complete
     # The words before the cursor come unquoted; the one being typed doesn't,
     # so drop an opening quote and escaped spaces from it ("pa, My\ Backup,

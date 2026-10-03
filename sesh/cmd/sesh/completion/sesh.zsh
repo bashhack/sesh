@@ -1,7 +1,7 @@
 #compdef sesh
-# zsh completion for sesh.
-# Load it in ~/.zshrc, after compinit, with:  eval "$(sesh completion zsh)"
-# or save it as _sesh in a directory on $fpath.
+# zsh completion for sesh. Either load it, after compinit has run, from
+# your .zshrc (~/.zshrc, or $ZDOTDIR/.zshrc):  eval "$(sesh completion zsh)"
+# or save it as _sesh in a directory on $fpath before compinit runs.
 _sesh() {
     local out line
     local -a cands args
