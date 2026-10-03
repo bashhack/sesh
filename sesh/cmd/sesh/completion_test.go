@@ -188,6 +188,10 @@ func TestCompletionScript_Bash(t *testing.T) {
 			[]string{"--format="}, []string{"json"}},
 		{"quoted value", `sesh --service "pa`, `(sesh --service '"pa')`, "2", `password\n`,
 			[]string{"--service", "pa"}, []string{"password"}},
+		{"quote after = (bash 3.2)", `sesh --format="j`, `(sesh '--format="j')`, "1", `--format=json\n`,
+			[]string{"--format=j"}, []string{"json"}},
+		{"quote after = (bash 4+)", `sesh --format="j`, `(sesh --format = '"j')`, "3", `--format=json\n`,
+			[]string{"--format=j"}, []string{"json"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			argsFile := fakeSesh(t, tt.out)
@@ -266,6 +270,8 @@ func TestCompletionScript_Zsh(t *testing.T) {
 			[]string{"--service", "pa"}, []string{"password"}},
 		{"escaped space", `(sesh --x 'a\ b')`, "3", `a b\n`,
 			[]string{"--x", "a b"}, []string{"a b"}},
+		{"quote after =", `(sesh '--format="j')`, "2", `--format=json\n`,
+			[]string{"--format=j"}, []string{"--format=json"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			argsFile := fakeSesh(t, tt.out)
@@ -307,6 +313,7 @@ func TestCompletionScript_Fish(t *testing.T) {
 		{"files after =", "sesh --file=ba", `:files\n`, "--file=backup.enc", []string{"--file=ba"}},
 		{"after a space", "sesh --service ", `aws\npassword\n`, "aws", []string{"--service", ""}},
 		{"quoted value", `sesh --service "pa`, `password\n`, "password", []string{"--service", "pa"}},
+		{"quote after =", `sesh --format="j`, `--format=json\n`, "--format=json", []string{"--format=j"}},
 		{"quoted path with a space", `sesh --file "My Backup/ba`, `:files\n`, "My", []string{"--file", "My Backup/ba"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

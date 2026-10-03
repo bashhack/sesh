@@ -17,12 +17,14 @@ _sesh() {
             glue=0
         fi
     done
-    # Drop the quoting a word still carries: "My Backup/ba, 'x, My\ Backup.
+    # Drop the quoting a word still carries: "My Backup/ba, 'x, My\ Backup,
+    # --format="j.
     for (( i = 0; i < ${#args[@]}; i++ )); do
         w=${args[i]}
         case $w in
             \"*) w=${w#\"}; w=${w%\"} ;;
             \'*) w=${w#\'}; w=${w%\'} ;;
+            -*=[\"\']*) w="${w%%=*}=${w#*=?}"; w=${w%[\"\']} ;;
             *) w=${w//\\ / } ;;
         esac
         args[i]=$w
