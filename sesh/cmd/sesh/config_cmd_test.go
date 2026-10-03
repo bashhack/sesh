@@ -18,7 +18,7 @@ func useConfigFile(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	for _, k := range []string{config.EnvBackend, config.EnvKeySource, config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime} {
+	for _, k := range []string{config.EnvBackend, config.EnvKeySource, config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays} {
 		t.Setenv(k, "")
 	}
 	path := filepath.Join(dir, "sesh", "config.toml")
@@ -58,7 +58,7 @@ func TestSubcommand_OnlyTheFirstArgument(t *testing.T) {
 }
 
 func TestRunConfig_ShowsValuesAndSources(t *testing.T) {
-	path := useConfigFile(t, "backend = \"sqlite\"\nclipboard_timeout = \"45s\"\n[agent]\nmax_lifetime = \"2h\"\n")
+	path := useConfigFile(t, "backend = \"sqlite\"\nclipboard_timeout = \"45s\"\n[agent]\nmax_lifetime = \"2h\"\n[audit]\nretention_days = 0\n")
 	t.Setenv(config.EnvKeySource, "password")
 	t.Setenv(config.EnvDBPath, "/tmp/sesh-test/vault.db")
 	app := agentTestApp()
@@ -68,12 +68,13 @@ func TestRunConfig_ShowsValuesAndSources(t *testing.T) {
 	got := app.Stdout.(*bytes.Buffer).String()
 	for _, want := range []string{
 		"config file: " + path + "\n",
-		"backend             sqlite      (config file)\n",
-		"key_source          password    (environment: SESH_KEY_SOURCE)\n",
-		"clipboard_timeout   45s         (config file)\n",
-		"agent.idle_timeout  10m         (default)\n",
-		"agent.max_lifetime  2h          (config file)\n",
-		"db_path             /tmp/sesh-test/vault.db\n                    (environment: SESH_DB_PATH)\n",
+		"backend               sqlite        (config file)\n",
+		"key_source            password      (environment: SESH_KEY_SOURCE)\n",
+		"clipboard_timeout     45s           (config file)\n",
+		"agent.idle_timeout    10m           (default)\n",
+		"agent.max_lifetime    2h            (config file)\n",
+		"audit.retention_days  0 (keep all)  (config file)\n",
+		"db_path               /tmp/sesh-test/vault.db\n                      (environment: SESH_DB_PATH)\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)
