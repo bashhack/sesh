@@ -151,3 +151,49 @@ func TestWrites_KeepASymlinkedConfigFile(t *testing.T) {
 		})
 	}
 }
+
+func TestWrite_FollowsAChainOfDanglingLinks(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "repo", "config.toml") // doesn't exist yet
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	middle := filepath.Join(dir, "middle.toml")
+	if err := os.Symlink(filepath.Join("repo", "config.toml"), middle); err != nil { // relative
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "config.toml")
+	if err := os.Symlink(middle, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Write(link, "backend = \"sqlite\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range []string{link, middle} {
+		info, err := os.Lstat(l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("%s was replaced by a regular file", filepath.Base(l))
+		}
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "backend = \"sqlite\"\n" {
+		t.Errorf("end of the chain = %q, %v", got, err)
+	}
+}
+
+func TestWrite_RefusesALoopOfLinks(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a.toml"), filepath.Join(dir, "b.toml")
+	if err := os.Symlink(b, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(a, b); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(a, "backend = \"sqlite\"\n"); err == nil {
+		t.Fatal("Write followed a loop of links without failing")
+	}
+}

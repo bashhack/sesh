@@ -116,9 +116,13 @@ func writeFile(path, body string) error {
 	return nil
 }
 
-// resolveLinks returns the file path names after following symlinks. For a
-// link whose target doesn't exist yet, it returns that target, so the
-// first write creates it rather than replacing the link.
+// maxLinks bounds how many symlinks resolveLinks follows, as the kernel
+// does, so a loop of links fails instead of spinning.
+const maxLinks = 40
+
+// resolveLinks returns the file path names after following symlinks. When
+// the chain ends at a path that doesn't exist yet, it returns that path, so
+// the first write creates it rather than replacing a link on the way.
 func resolveLinks(path string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err == nil {
@@ -127,14 +131,17 @@ func resolveLinks(path string) (string, error) {
 	if !os.IsNotExist(err) {
 		return "", fmt.Errorf("resolve config file %s: %w", path, err)
 	}
-	target, lerr := os.Readlink(path)
-	if lerr != nil {
-		return path, nil // no file and no link: write a new file at path
+	for range maxLinks {
+		target, lerr := os.Readlink(path)
+		if lerr != nil {
+			return path, nil // the end of the chain: no file there yet
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+		path = target
 	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(path), target)
-	}
-	return target, nil
+	return "", fmt.Errorf("resolve config file %s: too many links", path)
 }
 
 // closeAfter closes f after err, reporting a close failure alongside it.
