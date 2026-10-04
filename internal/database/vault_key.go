@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/bashhack/sesh/internal/secure"
@@ -132,4 +134,33 @@ func (s *Store) verifyKeyCheck(source string) error {
 		return &WrongKeyError{VaultSource: recorded, Source: source}
 	}
 	return nil
+}
+
+// RecordedKeySource reads, without any key, the key source the vault at
+// dbPath records in its key check ("password" or "keychain"). It's "" for
+// a vault without a key check yet. The vault is opened read-only, and a
+// missing file is an error rather than a new vault.
+func RecordedKeySource(dbPath string) (_ string, err error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return "", err
+	}
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro")
+	if err != nil {
+		return "", fmt.Errorf("open vault: %w", err)
+	}
+	defer func() {
+		if cerr := db.Close(); err == nil {
+			err = cerr
+		}
+	}()
+	var source string
+	switch err := db.QueryRow(`SELECT key_source FROM vault_key WHERE id = 1`).Scan(&source); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil && strings.Contains(err.Error(), "no such table"):
+		return "", nil // a vault from before the key check
+	case err != nil:
+		return "", fmt.Errorf("read the vault's key source: %w", err)
+	}
+	return source, nil
 }

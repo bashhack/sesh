@@ -102,3 +102,19 @@ func TestVerifyKey_NeverWrites(t *testing.T) {
 	}
 	wantWrongKey(t, openWithKey(t, dbPath, keyB).VerifyKey("password"), "", "password")
 }
+
+func TestRecordedKeySource(t *testing.T) {
+	s := newTestStore(t)
+	if got, err := RecordedKeySource(s.Path()); err != nil || got != "" {
+		t.Fatalf("before any key check = %q, %v; want none", got, err)
+	}
+	if err := s.CheckKey("keychain"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := RecordedKeySource(s.Path()); err != nil || got != "keychain" {
+		t.Errorf("after a keychain key check = %q, %v", got, err)
+	}
+	if got, err := RecordedKeySource(filepath.Join(t.TempDir(), "missing.db")); err == nil {
+		t.Errorf("a missing vault = %q, want an error", got)
+	}
+}

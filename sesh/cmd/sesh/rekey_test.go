@@ -372,11 +372,13 @@ func TestRekey_KeychainToPassword(t *testing.T) {
 	if _, err := os.Stat(env.sidecarPath); err != nil {
 		t.Errorf("new sidecar missing: %v", err)
 	}
-	// Old keychain entry left in place — the design contract.
-	if existing, err := kc.GetSecret(env.account, encKeyService); err != nil {
-		t.Errorf("old keychain entry should still exist: %v", err)
-	} else if len(existing) != 64 {
-		t.Errorf("old keychain entry hex length = %d, want 64", len(existing))
+	// sesh keeps one vault per user, so the old Keychain key is this
+	// vault's alone, and it opens nothing now.
+	if _, err := kc.GetSecret(env.account, encKeyService); !errors.Is(err, keychain.ErrNotFound) {
+		t.Errorf("old keychain entry still exists (err %v)", err)
+	}
+	if !strings.Contains(stderr.String(), "Removed the old Keychain key (sesh-sqlite-encryption-key): the vault no longer uses it.") {
+		t.Errorf("stderr missing the key removal note:\n%s", stderr)
 	}
 
 	services := make([]string, 0, len(entries))
@@ -411,8 +413,8 @@ func TestRekey_PasswordToKeychain(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Rekeyed 2 entries") {
 		t.Errorf("stderr missing rekey summary:\n%s", stderr.String())
 	}
-	if _, err := os.Stat(env.sidecarPath); err != nil {
-		t.Errorf("old sidecar should still exist: %v", err)
+	if _, err := os.Stat(env.sidecarPath); !os.IsNotExist(err) {
+		t.Errorf("old sidecar still exists (err %v)", err)
 	}
 	storedKey, err := kc.GetSecret(env.account, encKeyService)
 	if err != nil {
@@ -558,7 +560,9 @@ func TestRekey_RoundtripKeychainPasswordKeychain(t *testing.T) {
 
 	t.Setenv("SESH_KEY_SOURCE", "password")
 
-	kc2 := newKCMock(nil)
+	// The same Keychain as before: switching back works, since the first
+	// switch removed the old key rather than leaving it in the way.
+	kc2 := kc1
 	app2, _ := rekeyTestApp("y\n")
 	if err := runRekey(app2, []string{"--to=keychain"}, kc2); err != nil {
 		t.Fatalf("second rekey: %v", err)
@@ -652,23 +656,38 @@ func TestInitializeTargetKeySource_UnknownReturnsError(t *testing.T) {
 	}
 }
 
-func TestUnusedKeyStateNote(t *testing.T) {
+func TestRemoveOldKeyState(t *testing.T) {
 	dir := t.TempDir()
-	if got := unusedKeyStateNote("banana", dir); got != "" {
-		t.Errorf("unknown source should yield empty note, got %q", got)
+	if got := removeOldKeyState("banana", dir, newKCMock(nil)); got != "" {
+		t.Errorf("unknown source: %q", got)
 	}
-	if got := unusedKeyStateNote("keychain", dir); !strings.Contains(got, encKeyService) {
-		t.Errorf("keychain note should mention service name, got %q", got)
+	if got := removeOldKeyState("password", dir, nil); got != "" {
+		t.Errorf("no sidecar: %q", got)
 	}
-	if got := unusedKeyStateNote("password", dir); got != "" {
-		t.Errorf("password note with no sidecar should be empty, got %q", got)
+	sidecar := filepath.Join(dir, sidecarFile)
+	for _, p := range []string{sidecar, sidecar + ".lock"} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	sidecar := filepath.Join(dir, "passwords.key")
-	if err := os.WriteFile(sidecar, nil, 0o600); err != nil {
+	if got := removeOldKeyState("password", dir, nil); got != "Removed the old passwords.key: the vault no longer uses a master password." {
+		t.Errorf("password note = %q", got)
+	}
+	for _, p := range []string{sidecar, sidecar + ".lock"} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s still exists (err %v)", p, err)
+		}
+	}
+	kc := newKCMock(hexKey())
+	if got := removeOldKeyState("keychain", dir, kc); got != "Removed the old Keychain key (sesh-sqlite-encryption-key): the vault no longer uses it." {
+		t.Errorf("keychain note = %q", got)
+	}
+	u, err := user.Current()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := unusedKeyStateNote("password", dir); !strings.Contains(got, sidecar) {
-		t.Errorf("password note with sidecar should mention path, got %q", got)
+	if _, err := kc.GetSecret(u.Username, encKeyService); !errors.Is(err, keychain.ErrNotFound) {
+		t.Errorf("keychain entry still exists (err %v)", err)
 	}
 }
 

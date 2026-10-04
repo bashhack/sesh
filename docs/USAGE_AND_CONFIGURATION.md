@@ -144,7 +144,7 @@ sesh reads `~/.config/sesh/config.toml` on macOS and Linux (`$XDG_CONFIG_HOME/se
 ```toml
 backend           = "sqlite"            # or "keychain"
 key_source        = "password"          # or "keychain" (SQLite only)
-db_path           = "~/vaults/sesh.db"  # absolute, or starting with ~/
+db_path           = "~/vaults/sesh.db"  # where your vault lives: absolute, or starting with ~/
 clipboard_timeout = "30s"               # how long a copied secret stays on the clipboard
 
 [agent]
@@ -154,6 +154,8 @@ max_lifetime = "8h"                     # 0 disables
 [audit]
 retention_days = 90                     # days of audit log events to keep; 0 keeps everything
 ```
+
+sesh keeps one vault per user. `db_path` says where that vault lives; it isn't a way to keep several. To keep things apart inside it, use profiles (`--profile work`) and service names.
 
 Each setting comes from, highest first: a command-line flag (`--backend`, `--key-source`, `--db-path`; the agent's timeouts also have `sesh agent` flags), its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
 
@@ -559,7 +561,7 @@ Behaviour:
 - **Atomic.** Either every entry is re-encrypted under the new source and the swap completes, or nothing changes. A copy failure cleans up the new key state and leaves the original database and original key state untouched.
 - **No old copy left behind.** While it runs, the original database is kept as `<dbPath>.pre-rekey`, so a failure puts it back. Once the new vault is in place, and has been checked to open with the new key and hold every entry, that copy is removed: it would only let the old key open your secrets.
 - **Updates your setting.** When the key source came from the config file (or the default), rekey sets `key_source` in `~/.config/sesh/config.toml` to the new source, editing only that line so your comments stay. When it came from `SESH_KEY_SOURCE` or `--key-source`, rekey says what to change instead. If the setting is left stale, the vault's key check refuses the next command rather than using the old key.
-- **Old key state is left in place.** Switching from keychain → password leaves the keychain entry; switching from password → keychain leaves the sidecar. Both become unused, and open nothing once the old copy is gone. The summary message points at how to clean them up.
+- **The old key goes too.** Switching keychain → password removes the old Keychain key; switching password → keychain removes the old `passwords.key`. Once the switch has succeeded they open nothing, and leaving them would only block switching back. (sesh keeps one vault per user, so they were this vault's alone.)
 - **Refuses if the target is already initialised.** If a sidecar already exists for `--to password`, or a keychain entry already exists for `--to keychain`, rekey aborts and asks you to clean up manually before retrying.
 - **`--to password` while already in password mode is the rotation case.** See "Rotating your master password" below. The `keychain → keychain` analogue (rotating the random keychain key in place) is not yet supported.
 

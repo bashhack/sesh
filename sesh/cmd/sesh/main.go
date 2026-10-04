@@ -315,6 +315,11 @@ func refuseNewKeyForExistingVault(dbPath string) error {
 	case err != nil:
 		return fmt.Errorf("check for an existing vault at %s: %w", dbPath, err)
 	}
+	// A vault switched to the Keychain key has no key file by design; it
+	// records that, so the setting can be named instead of guessed at.
+	if src, rerr := database.RecordedKeySource(dbPath); rerr == nil && src == config.KeySourceKeychain {
+		return withKeyHint(&database.WrongKeyError{VaultSource: src, Source: config.KeySourcePassword})
+	}
 	return fmt.Errorf("a vault exists at %s, but its key file %s is missing. "+
 		"If passwords.key was lost, restore it from a backup. "+
 		"If this vault uses the Keychain key, set key_source = \"keychain\" in the config file. "+

@@ -258,7 +258,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if _, perr := fmt.Fprintln(app.Stderr, removeOldCopies(backupPath)); perr != nil {
 		return perr
 	}
-	if msg := unusedKeyStateNote(current, dataDir); msg != "" {
+	if msg := removeOldKeyState(current, dataDir, kc); msg != "" {
 		if _, perr := fmt.Fprintln(app.Stderr, msg); perr != nil {
 			return perr
 		}
@@ -410,18 +410,34 @@ func cleanupNewKeyState(target, dataDir string, kc keychain.Provider) error {
 	}
 }
 
-// unusedKeyStateNote returns a user-facing message about the now-unused old
-// key state, or empty if there's nothing to say.
-func unusedKeyStateNote(oldSource, dataDir string) string {
+// removeOldKeyState deletes the key state the vault used before a switch:
+// the master password sidecar (and its lock), or the Keychain key. sesh
+// keeps one vault per user, so that key state was this vault's alone, and
+// once the switch has succeeded it opens nothing. Left in place, it would
+// only stop a later switch back. It returns a line to show, or "" when
+// there was nothing to remove.
+func removeOldKeyState(oldSource, dataDir string, kc keychain.Provider) string {
 	switch oldSource {
 	case "password":
 		path := filepath.Join(dataDir, sidecarFile)
-		if _, err := os.Stat(path); err == nil {
-			return fmt.Sprintf("Note: old master-password sidecar at %s is now unused. Remove it manually if you want to clean up.", path)
+		if _, err := os.Stat(path); err != nil {
+			return ""
 		}
-		return ""
+		for _, p := range []string{path, path + ".lock"} {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return fmt.Sprintf("warning: couldn't remove the old %s (%v); remove it yourself: %s", filepath.Base(p), err, p)
+			}
+		}
+		return "Removed the old passwords.key: the vault no longer uses a master password."
 	case "keychain":
-		return "Note: old keychain entry '" + encKeyService + "' is now unused. Remove it via Keychain Access if you want to clean up."
+		u, err := user.Current()
+		if err == nil {
+			err = kc.DeleteEntry(u.Username, encKeyService)
+		}
+		if err != nil {
+			return fmt.Sprintf("warning: couldn't remove the old Keychain key (%v); remove it yourself: security delete-generic-password -s %s", err, encKeyService)
+		}
+		return "Removed the old Keychain key (" + encKeyService + "): the vault no longer uses it."
 	default:
 		return ""
 	}
