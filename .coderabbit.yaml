@@ -1,0 +1,9 @@
+# CodeRabbit settings for this repository.
+# Reference: https://docs.coderabbit.ai/configuration/auto-review
+reviews:
+  auto_review:
+    # Review a pull request when it's opened, but not again on every push.
+    # Fixes often land as several small commits, and each automatic
+    # re-review uses up the review allowance. When the changes are ready,
+    # ask for a review by commenting "@coderabbitai review" on the PR.
+    auto_incremental_review: false
