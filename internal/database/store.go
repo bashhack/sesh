@@ -19,6 +19,7 @@ import (
 type Store struct {
 	db     *sql.DB
 	oracle CryptoOracle
+	path   string
 }
 
 // compile-time checks
@@ -54,7 +55,7 @@ func Open(dbPath string, oracle CryptoOracle) (*Store, error) {
 		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
 
-	return &Store{db: db, oracle: oracle}, nil
+	return &Store{db: db, oracle: oracle, path: dbPath}, nil
 }
 
 // Close releases the database connection and clears any cached key

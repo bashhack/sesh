@@ -73,7 +73,7 @@ func TestSettingFlags_ReachSettingsAndConfigOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := app.Stdout.(*bytes.Buffer).String()
-	for _, want := range []string{"backend             sqlite      (flag: --backend)", "db_path             /tmp/flag/vault.db\n                    (flag: --db-path)"} {
+	for _, want := range []string{"backend               sqlite        (flag: --backend)", "db_path               /tmp/flag/vault.db\n                      (flag: --db-path)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)
 		}

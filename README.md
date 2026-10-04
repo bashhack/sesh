@@ -46,7 +46,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Intelligent Subshell** — Isolate credentials in secure environments with built-in helper commands
 - **QR Code Scanning** — Set up TOTP by selecting the QR code region on screen
 - **Multiple Profile Support** — Manage dev/prod environments and multiple accounts per service
-- **Audit Logging** — Every access, modification, and deletion is logged for security review
+- **Audit Logging** — Every access, modification, and deletion is logged; review it with `sesh audit`. Events are kept 90 days by default (`audit.retention_days`)
 
 ## Installation
 

@@ -8,7 +8,7 @@ import (
 )
 
 // Current schema version. Bump this and add a migration function when the schema changes.
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 // EntryType classifies what kind of credential is stored.
 type EntryType string
@@ -61,6 +61,7 @@ type AuditEntry struct {
 var migrations = map[int]func(tx *sql.Tx) error{
 	1: migrateV1,
 	2: migrateV2,
+	3: migrateV3,
 }
 
 // migrateV1 creates the initial four-table schema.

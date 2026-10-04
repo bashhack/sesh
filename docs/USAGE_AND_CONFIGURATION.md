@@ -150,6 +150,9 @@ clipboard_timeout = "30s"               # how long a copied secret stays on the 
 [agent]
 idle_timeout = "10m"                    # 0 disables
 max_lifetime = "8h"                     # 0 disables
+
+[audit]
+retention_days = 90                     # days of audit log events to keep; 0 keeps everything
 ```
 
 Each setting comes from, highest first: a command-line flag (`--backend`, `--key-source`, `--db-path`; the agent's timeouts also have `sesh agent` flags), its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
@@ -181,13 +184,14 @@ Ready. Run `sesh config` to see your settings.
 ```
 config file: /Users/me/.config/sesh/config.toml
 
-backend             sqlite      (config file)
-key_source          password    (environment: SESH_KEY_SOURCE)
-clipboard_timeout   30s         (default)
-agent.idle_timeout  25m         (config file)
-agent.max_lifetime  8h          (default)
-db_path             /Users/me/vaults/sesh.db
-                    (config file)
+backend               sqlite        (config file)
+key_source            password      (environment: SESH_KEY_SOURCE)
+clipboard_timeout     30s           (default)
+agent.idle_timeout    25m           (config file)
+agent.max_lifetime    8h            (default)
+audit.retention_days  90 days       (default)
+db_path               /Users/me/vaults/sesh.db
+                      (config file)
 ```
 
 ## Configuration Options
@@ -258,6 +262,7 @@ db_path             /Users/me/vaults/sesh.db
 | `SESH_AUTH_SOCK`       | Socket path for the sesh agent used in master password mode | `<user-cache-dir>/sesh/agent.sock` |
 | `SESH_AGENT_IDLE_TIMEOUT` | Agent locks after this long without use; `0` disables (config: `agent.idle_timeout`). Same as `sesh agent --idle-timeout` | `10m` |
 | `SESH_AGENT_MAX_LIFETIME` | Agent locks this long after each unlock; `0` disables (config: `agent.max_lifetime`). Same as `sesh agent --max-lifetime` | `8h` |
+| `SESH_AUDIT_RETENTION_DAYS` | Days of audit log events the vault keeps; `0` keeps everything (config: `audit.retention_days`) | `90` |
 
 ## Storage Backend and Key Source
 
@@ -455,6 +460,31 @@ Run that `kill`; the next command starts the new version.
 **Turning it off**
 
 There is nothing installed to remove. `sesh agent stop` shuts it down, and only a master-password command starts it again. After switching back to the keychain key source (`sesh --rekey --to keychain`), it is never started.
+
+### The audit log
+
+The vault records every read, store, and delete of an entry: when it happened, what kind of event it was (`access`, `modify`, `delete`), and which entry, named the way `--list` names it. It never records the secret itself. The macOS Keychain backend has no audit log.
+
+`sesh audit` shows the newest 50 events, newest first; `--limit 100` shows more, and `--limit 0` shows them all:
+
+```
+$ sesh audit
+Audit log: 1,204 events since 2026-07-05 09:12. Events older than 90 days are removed automatically (audit.retention_days).
+
+2026-10-03 14:39:32  access  totp         github (work)
+2026-10-03 14:38:10  access  aws          default
+2026-10-03 14:37:18  access  password     github (alice)
+2026-10-03 14:37:18  modify  password     github (alice)
+...
+```
+
+Like `--list`, it opens the vault, so it asks for your master password unless the agent is unlocked.
+
+**How long events are kept.** Each command that opens the vault removes events older than `audit.retention_days` (default `90`). Set it to `0` to keep everything. Either way, `sesh audit prune --older-than <days>` removes older events when you choose; `--older-than 0` removes them all.
+
+Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but every command writes an event, so a large vault is copied again by backup tools each time it changes. Removing events doesn't make the file smaller by itself: SQLite keeps the freed space for reuse. So `sesh audit prune` also compacts the vault and reports its size before and after. The automatic cleanup doesn't need to: it frees a little space each day, which new events reuse.
+
+**When it grows large.** If the log passes 100,000 events (about 10 MB), whatever the retention setting, sesh prints a warning with the vault's size and how to shrink it. It shows at most once a day, and only when you're at a terminal, so scripts never see it. Typical personal use stays far below this at the default 90 days; it's meant for, say, a script that reads a secret every minute.
 
 ### Encrypted exports
 

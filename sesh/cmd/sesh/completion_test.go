@@ -21,8 +21,12 @@ func TestComplete(t *testing.T) {
 		lacks []string // none of these
 		files bool
 	}{
-		{name: "subcommands", words: all(""), want: all("agent", "completion", "config", "init", "touchid")},
+		{name: "subcommands", words: all(""), want: all("agent", "audit", "completion", "config", "init", "touchid")},
 		{name: "subcommand prefix", words: all("co"), want: all("completion", "config")},
+		{name: "audit commands", words: all("audit", ""), want: all("prune")},
+		{name: "audit flags", words: all("audit", "-"), want: all("--limit")},
+		{name: "audit prune flags", words: all("audit", "prune", "-"), want: all("--older-than")},
+		{name: "audit prune days", words: all("audit", "prune", "--older-than", "")},
 		{name: "first flag", words: all("-"), has: all("--service", "--list-services", "--migrate", "--rekey", "--backend", "--db-path"), lacks: all("--action")},
 		{name: "one dash as typed", words: all("-se"), want: all("-service", "-setup")},
 		{name: "providers", words: all("--service", ""), want: all("aws", "password", "totp")},
@@ -52,7 +56,7 @@ func TestComplete(t *testing.T) {
 		{name: "completion shells", words: all("completion", ""), want: all("bash", "fish", "zsh")},
 		{name: "init flags", words: all("init", "--"), want: all("--force", "--backend", "--db-path", "--key-source")},
 		{name: "config takes nothing", words: all("config", "")},
-		{name: "no words", words: nil, want: all("agent", "completion", "config", "init", "touchid")},
+		{name: "no words", words: nil, want: all("agent", "audit", "completion", "config", "init", "touchid")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cands, files := complete(reg, tt.words)
