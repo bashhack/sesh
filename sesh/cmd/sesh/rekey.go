@@ -83,11 +83,6 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		return fmt.Errorf("stat database: %w", err)
 	}
 	preBackupPath := dbPath + rekeyBackupSuffix
-	if _, err := os.Stat(preBackupPath); err == nil {
-		return fmt.Errorf("backup path %s already exists; remove it (or rename to preserve a prior backup) and retry", preBackupPath)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat backup path: %w", err)
-	}
 	if err := checkTargetKeyStateClean(*target, dataDir, kc); err != nil {
 		return err
 	}
@@ -153,6 +148,11 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if err := srcStore.VerifyKey(current); err != nil {
 		return fmt.Errorf("check source key: %w", withKeyHint(err))
 	}
+	// The vault opens with its key, so copies left by an earlier change
+	// (from an older sesh, or one that was interrupted) serve no purpose.
+	if err := removeLeftovers(app.Stderr, preBackupPath, dbPath+rekeyDestSuffix); err != nil {
+		return err
+	}
 
 	plan, err := migration.Plan(srcStore)
 	if err != nil {
@@ -165,7 +165,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if _, perr := fmt.Fprintf(app.Stderr, "  source DB:           %s\n", dbPath); perr != nil {
 		return perr
 	}
-	if _, perr := fmt.Fprintf(app.Stderr, "  rollback file after: %s%s\n", dbPath, rekeyBackupSuffix); perr != nil {
+	if _, perr := fmt.Fprintln(app.Stderr, "  The old vault is kept until the new one is in place, then removed."); perr != nil {
 		return perr
 	}
 	confirmed, err := promptYesNo(app.Stdin, app.Stderr, "\nProceed? [y/N]: ")
@@ -213,6 +213,9 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if len(result.Errors) > 0 {
 		return fmt.Errorf("copy reported %d errors:\n  %s", len(result.Errors), strings.Join(result.Errors, "\n  "))
 	}
+	if err := checkCopied(destStore, *target, len(plan)); err != nil {
+		return err
+	}
 
 	// Close stores BEFORE rename so SQLite checkpoints WAL and removes the
 	// -wal/-shm sidecars; otherwise the rename leaves orphans.
@@ -252,7 +255,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRekeyed %d entries: %s → %s\n", result.Migrated, current, *target); perr != nil {
 		return perr
 	}
-	if _, perr := fmt.Fprintf(app.Stderr, "Original DB preserved at %s\n", backupPath); perr != nil {
+	if _, perr := fmt.Fprintln(app.Stderr, removeOldCopies(backupPath)); perr != nil {
 		return perr
 	}
 	if msg := unusedKeyStateNote(current, dataDir); msg != "" {
@@ -482,17 +485,6 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		}
 		return nil, fmt.Errorf("stat sidecar: %w", err)
 	}
-	// Refuse if any staging or backup file from a prior attempt is still
-	// around. Clobbering a prior backup would silently destroy a recovery
-	// path; clobbering a prior staging file might silently mix old and
-	// new state.
-	for _, p := range []string{dbNewPath, dbBackupPath, sidecarNewPath, sidecarBackupPath} {
-		if _, err := os.Stat(p); err == nil {
-			return nil, fmt.Errorf("path %s exists from a prior rotation; remove it (or rename to preserve a prior backup) and retry", p)
-		} else if !os.IsNotExist(err) {
-			return nil, fmt.Errorf("stat %s: %w", p, err)
-		}
-	}
 
 	srcKS := src
 	if srcKS == nil {
@@ -568,6 +560,12 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if err := srcStore.VerifyKey("password"); err != nil {
 		return nil, fmt.Errorf("check current key: %w", withKeyHint(err))
 	}
+	// The vault opens with its key, so files left by an earlier change
+	// (from an older sesh, or one that was interrupted) serve no purpose,
+	// and the staged ones must go before new ones are made.
+	if err := removeLeftovers(app.Stderr, dbNewPath, dbBackupPath, sidecarNewPath, sidecarBackupPath, sidecarNewPath+".lock"); err != nil {
+		return nil, err
+	}
 
 	plan, err := migration.Plan(srcStore)
 	if err != nil {
@@ -580,10 +578,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if _, perr := fmt.Fprintf(app.Stderr, "  source DB:           %s\n", dbPath); perr != nil {
 		return nil, perr
 	}
-	if _, perr := fmt.Fprintf(app.Stderr, "  rollback DB after:   %s\n", dbBackupPath); perr != nil {
-		return nil, perr
-	}
-	if _, perr := fmt.Fprintf(app.Stderr, "  rollback sidecar:    %s\n", sidecarBackupPath); perr != nil {
+	if _, perr := fmt.Fprintln(app.Stderr, "  The old vault is kept until the new one is in place, then removed."); perr != nil {
 		return nil, perr
 	}
 	confirmed, err := promptYesNo(app.Stdin, app.Stderr, "\nProceed? [y/N]: ")
@@ -630,6 +625,9 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	}
 	if len(result.Errors) > 0 {
 		return nil, fmt.Errorf("copy reported %d errors:\n  %s", len(result.Errors), strings.Join(result.Errors, "\n  "))
+	}
+	if err := checkCopied(destStore, "password", len(plan)); err != nil {
+		return nil, err
 	}
 
 	// Close stores before rename so SQLite checkpoints WAL and removes
@@ -687,13 +685,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %d entries under a new master password.\n", result.Migrated); perr != nil {
 		return bytes.Clone(destKey), perr
 	}
-	if _, perr := fmt.Fprintf(app.Stderr, "Old DB preserved at %s\n", dbBackupPath); perr != nil {
-		return bytes.Clone(destKey), perr
-	}
-	if _, perr := fmt.Fprintf(app.Stderr, "Old sidecar preserved at %s\n", sidecarBackupPath); perr != nil {
-		return bytes.Clone(destKey), perr
-	}
-	if _, perr := fmt.Fprintln(app.Stderr, "Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available)."); perr != nil {
+	if _, perr := fmt.Fprintln(app.Stderr, removeOldCopies(dbBackupPath, sidecarBackupPath)); perr != nil {
 		return bytes.Clone(destKey), perr
 	}
 	for _, msg := range []string{touchNote, recoveryNote, agentNote} {
@@ -747,4 +739,58 @@ func promptYesNo(stdin io.Reader, stderr io.Writer, prompt string) (bool, error)
 	}
 	answer := strings.TrimSpace(line)
 	return answer == "y" || answer == "Y", nil
+}
+
+// checkCopied confirms, before the new vault replaces the old one, that it
+// opens with its key and holds every entry planned.
+func checkCopied(dest *database.Store, source string, want int) error {
+	if err := dest.VerifyKey(source); err != nil {
+		return fmt.Errorf("check the new vault's key: %w", err)
+	}
+	got, err := migration.Plan(dest)
+	if err != nil {
+		return fmt.Errorf("check the new vault: %w", err)
+	}
+	if len(got) != want {
+		return fmt.Errorf("the new vault holds %d entries, but %d were copied; nothing was changed", len(got), want)
+	}
+	return nil
+}
+
+// removeOldCopies deletes the old vault's copy (and, for a password
+// change, its key file) once the new vault is in place. A copy would only
+// let the old password or key open the old contents; the change already
+// checked that the new vault works. It returns a line to show.
+func removeOldCopies(paths ...string) string {
+	var failed []string
+	for _, p := range paths {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			failed = append(failed, fmt.Sprintf("%s (%v)", p, err))
+		}
+	}
+	if len(failed) > 0 {
+		return "warning: couldn't remove the old vault's copy, which opens with the old key; remove it yourself: " + strings.Join(failed, ", ")
+	}
+	return "Removed the old vault's copy, so the old key no longer opens anything."
+}
+
+// removeLeftovers deletes files an earlier change left behind, and says
+// which.
+func removeLeftovers(w io.Writer, paths ...string) error {
+	var removed []string
+	for _, p := range paths {
+		err := os.Remove(p)
+		switch {
+		case err == nil:
+			removed = append(removed, filepath.Base(p))
+		case !os.IsNotExist(err):
+			return fmt.Errorf("remove %s, left by an earlier change: %w", p, err)
+		}
+	}
+	if len(removed) > 0 {
+		if _, err := fmt.Fprintf(w, "Removed files left by an earlier change: %s\n", strings.Join(removed, ", ")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
