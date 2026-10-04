@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/bashhack/sesh/internal/atomicfile"
 	"github.com/bashhack/sesh/internal/secure"
 )
 
@@ -408,19 +409,11 @@ func (s *MasterPasswordSource) writeSidecar(data sidecarData) error {
 		return fmt.Errorf("marshal sidecar: %w", err)
 	}
 
-	// Write to a temp file then rename so a crash mid-write leaves the
-	// old sidecar intact (or no sidecar at all on first run). Rename is
-	// atomic on POSIX and close-to-atomic on Windows.
-	path := s.sidecarPath
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	// Replaced atomically and durably: a crash leaves the old sidecar (or
+	// none, on the first run), never an empty one, which would lock the
+	// vault.
+	if err := atomicfile.Write(s.sidecarPath, b, 0o600); err != nil {
 		return fmt.Errorf("write sidecar: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		if rmErr := os.Remove(tmp); rmErr != nil && !os.IsNotExist(rmErr) {
-			return fmt.Errorf("replace sidecar: %w (cleanup of %s also failed: %v)", err, tmp, rmErr)
-		}
-		return fmt.Errorf("replace sidecar: %w", err)
 	}
 	return nil
 }

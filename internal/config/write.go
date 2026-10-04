@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/bashhack/sesh/internal/atomicfile"
 )
 
 // topLevelKey matches a top-level "key = value" line, keeping any trailing
@@ -88,31 +90,9 @@ func writeFile(path, body string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create config directory %s: %w", dir, err)
 	}
-	tmp, err := os.CreateTemp(dir, ".config.toml.*")
-	if err != nil {
-		return fmt.Errorf("write config file: %w", err)
-	}
-	renamed := false
-	defer func() {
-		if !renamed {
-			if err := os.Remove(tmp.Name()); err != nil && !os.IsNotExist(err) {
-				fmt.Fprintf(os.Stderr, "warning: remove temporary config file: %v\n", err) //nolint:errcheck // best-effort warning
-			}
-		}
-	}()
-	if _, err := tmp.WriteString(body); err != nil {
-		return closeAfter(tmp, fmt.Errorf("write config file: %w", err))
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		return closeAfter(tmp, fmt.Errorf("write config file: %w", err))
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("write config file: %w", err)
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := atomicfile.Write(path, []byte(body), 0o600); err != nil {
 		return fmt.Errorf("write config file %s: %w", path, err)
 	}
-	renamed = true
 	return nil
 }
 
@@ -142,12 +122,4 @@ func resolveLinks(path string) (string, error) {
 		path = target
 	}
 	return "", fmt.Errorf("resolve config file %s: too many links", path)
-}
-
-// closeAfter closes f after err, reporting a close failure alongside it.
-func closeAfter(f *os.File, err error) error {
-	if cerr := f.Close(); cerr != nil {
-		return fmt.Errorf("%w (close also failed: %v)", err, cerr)
-	}
-	return err
 }

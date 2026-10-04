@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/bashhack/sesh/internal/atomicfile"
 	"github.com/bashhack/sesh/internal/keywrap"
 )
 
@@ -69,32 +70,15 @@ func ReadFile(dir string) (*File, error) {
 	return &f, nil
 }
 
-// Write stores f in dir, owner-only, replacing any earlier file atomically.
+// Write stores f in dir, owner-only, replacing any earlier file atomically
+// and durably (see atomicfile).
 func (f *File) Write(dir string) error {
 	body, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".recovery.key.*")
-	if err != nil {
+	if err := atomicfile.Write(filepath.Join(dir, FileName), append(body, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", FileName, err)
-	}
-	name := tmp.Name()
-	_, werr := tmp.Write(append(body, '\n'))
-	if werr == nil {
-		werr = tmp.Chmod(0o600)
-	}
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr == nil {
-		werr = os.Rename(name, filepath.Join(dir, FileName))
-	}
-	if werr != nil {
-		if rerr := os.Remove(name); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
-			return fmt.Errorf("write %s: %w (cleanup: %v)", FileName, werr, rerr)
-		}
-		return fmt.Errorf("write %s: %w", FileName, werr)
 	}
 	return nil
 }
