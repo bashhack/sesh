@@ -205,7 +205,7 @@ func (c *Config) applyFile() error {
 		}
 	}
 	if in("db_path") {
-		if err := setPath(&c.DBPath, f.DBPath, FromFile, from("db_path")); err != nil {
+		if err := setDBPath(&c.DBPath, f.DBPath, FromFile, from("db_path")); err != nil {
 			return err
 		}
 	}
@@ -244,7 +244,7 @@ func (c *Config) applyEnv() error {
 		}
 	}
 	if v, ok := os.LookupEnv(EnvDBPath); ok && v != "" {
-		if err := setPath(&c.DBPath, v, FromEnv, EnvDBPath); err != nil {
+		if err := setDBPath(&c.DBPath, v, FromEnv, EnvDBPath); err != nil {
 			return err
 		}
 	}
@@ -286,7 +286,7 @@ func (c *Config) applyFlags(o Overrides) error {
 		}
 	}
 	if o.DBPath != "" {
-		if err := setPath(&c.DBPath, o.DBPath, FromFlag, "--db-path"); err != nil {
+		if err := setDBPath(&c.DBPath, o.DBPath, FromFlag, "--db-path"); err != nil {
 			return err
 		}
 	}
@@ -316,6 +316,21 @@ func setPath(dst *Setting[string], v string, src Source, origin string) error {
 	}
 	*dst = Setting[string]{Value: p, Source: src, Origin: origin}
 	return nil
+}
+
+// reservedVaultNames are files sesh keeps next to the vault: the master
+// password sidecar and its lock (internal/database), the key-init lock
+// (sesh/cmd/sesh), and the Touch ID unlock file (internal/touchid). A vault
+// with one of these names would be overwritten by one of them.
+var reservedVaultNames = []string{"passwords.key", "passwords.key.lock", ".key-init.lock", "touchid.key"}
+
+// setDBPath is setPath for the vault's location, which also refuses a file
+// name sesh uses for its own files next to the vault.
+func setDBPath(dst *Setting[string], v string, src Source, origin string) error {
+	if p, err := ResolvePath(v); err == nil && slices.Contains(reservedVaultNames, filepath.Base(p)) {
+		return fmt.Errorf("%s = %q: %q is the name of a file sesh keeps next to the vault, so the vault would be overwritten; choose another name, such as passwords.db", origin, v, filepath.Base(p))
+	}
+	return setPath(dst, v, src, origin)
 }
 
 // ResolvePath turns a path setting into a clean absolute path, expanding a
