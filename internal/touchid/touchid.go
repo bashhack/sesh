@@ -13,14 +13,10 @@
 package touchid
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/ecdh"
-	"crypto/hkdf"
-	"crypto/rand"
-	"crypto/sha256"
 	"errors"
 	"fmt"
+
+	"github.com/bashhack/sesh/internal/keywrap"
 )
 
 var (
@@ -37,49 +33,20 @@ var (
 	ErrFailed = errors.New("touch ID did not recognise the fingerprint")
 	// ErrWrapMismatch means a wrapped secret doesn't open: it was wrapped
 	// for another key or another binding, or was changed.
-	ErrWrapMismatch = errors.New("touch ID wrapped secret doesn't open with this key")
+	ErrWrapMismatch = keywrap.ErrMismatch
 )
 
-// hkdfInfo separates this use of the shared secret from any other.
+// hkdfInfo names this use of a wrap (see keywrap), so a Touch ID wrap
+// never opens as another kind.
 const hkdfInfo = "sesh touch id unlock v1"
 
 // Wrapped is a secret wrapped to a Secure Enclave key's public half.
-type Wrapped struct {
-	// EphemeralPub is the uncompressed P-256 public key of the one-off key
-	// the wrap used.
-	EphemeralPub []byte
-	// Ciphertext is the AES-256-GCM nonce followed by the sealed secret.
-	Ciphertext []byte
-}
+type Wrapped = keywrap.Wrapped
 
 // Wrap seals secret to pub, the uncompressed P-256 public key of a Secure
 // Enclave key, binding it to aad. It needs no prompt and no native code.
 func Wrap(pub, secret, aad []byte) (Wrapped, error) {
-	peer, err := ecdh.P256().NewPublicKey(pub)
-	if err != nil {
-		return Wrapped{}, fmt.Errorf("touch ID public key: %w", err)
-	}
-	eph, err := ecdh.P256().GenerateKey(rand.Reader)
-	if err != nil {
-		return Wrapped{}, err
-	}
-	shared, err := eph.ECDH(peer)
-	if err != nil {
-		return Wrapped{}, err
-	}
-	aead, err := wrapAEAD(shared, eph.PublicKey().Bytes())
-	clear(shared)
-	if err != nil {
-		return Wrapped{}, err
-	}
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return Wrapped{}, err
-	}
-	return Wrapped{
-		EphemeralPub: eph.PublicKey().Bytes(),
-		Ciphertext:   aead.Seal(nonce, nonce, secret, aad),
-	}, nil
+	return keywrap.Wrap(pub, secret, aad, hkdfInfo)
 }
 
 // Unwrap recovers a secret wrapped to the Secure Enclave key in blob. The
@@ -99,39 +66,7 @@ func Unwrap(blob []byte, w Wrapped, aad []byte, reason, cancelLabel string) ([]b
 // between the wrap's private key and the one-off public key it's given.
 // Unwrap passes the Secure Enclave's; tests pass a software key's.
 func UnwrapWith(agree func(peer []byte) ([]byte, error), w Wrapped, aad []byte) ([]byte, error) {
-	shared, err := agree(w.EphemeralPub)
-	if err != nil {
-		return nil, err
-	}
-	aead, err := wrapAEAD(shared, w.EphemeralPub)
-	clear(shared)
-	if err != nil {
-		return nil, err
-	}
-	n := aead.NonceSize()
-	if len(w.Ciphertext) < n {
-		return nil, errors.New("touch ID wrapped secret is too short")
-	}
-	secret, err := aead.Open(nil, w.Ciphertext[:n], w.Ciphertext[n:], aad)
-	if err != nil {
-		return nil, ErrWrapMismatch
-	}
-	return secret, nil
-}
-
-// wrapAEAD derives the AES-256-GCM key from an ECDH shared secret, salted
-// with the one-off public key.
-func wrapAEAD(shared, ephPub []byte) (cipher.AEAD, error) {
-	key, err := hkdf.Key(sha256.New, shared, ephPub, hkdfInfo, 32)
-	if err != nil {
-		return nil, err
-	}
-	defer clear(key)
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	return cipher.NewGCM(block)
+	return keywrap.Unwrap(agree, w, aad, hkdfInfo)
 }
 
 // Available reports whether this process can ask for a fingerprint now.
