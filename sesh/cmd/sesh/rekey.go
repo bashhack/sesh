@@ -150,7 +150,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	}
 	// The vault opens with its key, so copies left by an earlier change
 	// (from an older sesh, or one that was interrupted) serve no purpose.
-	if err := removeLeftovers(app.Stderr, preBackupPath, dbPath+rekeyDestSuffix); err != nil {
+	if err := removeLeftovers(app.Stderr, keyChangeLeftovers(dbPath, filepath.Join(dataDir, sidecarFile))...); err != nil {
 		return err
 	}
 
@@ -251,14 +251,16 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	// wrap no longer matches the vault's key source.
 	touchNote := dropTouchID(dataDir)
 	recoveryNote := dropRecovery(dataDir)
+	copiesNote := removeOldCopies(backupPath)
+	keyNote := removeOldKeyState(current, dataDir, kc)
 
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRekeyed %d entries: %s → %s\n", result.Migrated, current, *target); perr != nil {
 		return perr
 	}
-	if _, perr := fmt.Fprintln(app.Stderr, removeOldCopies(backupPath)); perr != nil {
+	if _, perr := fmt.Fprintln(app.Stderr, copiesNote); perr != nil {
 		return perr
 	}
-	if msg := removeOldKeyState(current, dataDir, kc); msg != "" {
+	if msg := keyNote; msg != "" {
 		if _, perr := fmt.Fprintln(app.Stderr, msg); perr != nil {
 			return perr
 		}
@@ -579,7 +581,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	// The vault opens with its key, so files left by an earlier change
 	// (from an older sesh, or one that was interrupted) serve no purpose,
 	// and the staged ones must go before new ones are made.
-	if err := removeLeftovers(app.Stderr, dbNewPath, dbBackupPath, sidecarNewPath, sidecarBackupPath, sidecarNewPath+".lock"); err != nil {
+	if err := removeLeftovers(app.Stderr, keyChangeLeftovers(dbPath, sidecarPath)...); err != nil {
 		return nil, err
 	}
 
@@ -688,6 +690,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if src == nil {
 		recoveryNote = rewrapRecovery(dataDir, destKey)
 	}
+	copiesNote := removeOldCopies(dbBackupPath, sidecarBackupPath)
 
 	// The .new.lock sentinel was created when destKS first ran
 	// initializeLocked. The .new sidecar it guarded has now been renamed
@@ -701,7 +704,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %d entries under a new master password.\n", result.Migrated); perr != nil {
 		return bytes.Clone(destKey), perr
 	}
-	if _, perr := fmt.Fprintln(app.Stderr, removeOldCopies(dbBackupPath, sidecarBackupPath)); perr != nil {
+	if _, perr := fmt.Fprintln(app.Stderr, copiesNote); perr != nil {
 		return bytes.Clone(destKey), perr
 	}
 	for _, msg := range []string{touchNote, recoveryNote, agentNote} {
@@ -788,6 +791,17 @@ func removeOldCopies(paths ...string) string {
 		return "warning: couldn't remove the old vault's copy, which opens with the old key; remove it yourself: " + strings.Join(failed, ", ")
 	}
 	return "Removed the old vault's copy, so the old key no longer opens anything."
+}
+
+// keyChangeLeftovers are the files a password change or key-source switch
+// makes while it runs: staged new files, and copies of the old vault and
+// key file. Either kind of change clears both kinds, so a copy from one
+// can't outlive the other.
+func keyChangeLeftovers(dbPath, sidecarPath string) []string {
+	return []string{
+		dbPath + rekeyDestSuffix, dbPath + rekeyBackupSuffix, dbPath + rotateBackupSuffix,
+		sidecarPath + rekeyDestSuffix, sidecarPath + rekeyDestSuffix + ".lock", sidecarPath + rotateBackupSuffix,
+	}
 }
 
 // removeLeftovers deletes files an earlier change left behind, and says

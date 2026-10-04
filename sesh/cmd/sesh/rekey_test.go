@@ -284,7 +284,7 @@ func TestRekey_ClearsLeftovers(t *testing.T) {
 	if err := runRekey(app, []string{"--to=password"}, kc); err != nil {
 		t.Fatalf("rekey with leftovers: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stderr.String(), "Removed files left by an earlier change: passwords.db.pre-rekey, passwords.db.new") {
+	if !strings.Contains(stderr.String(), "Removed files left by an earlier change: passwords.db.new, passwords.db.pre-rekey") {
 		t.Errorf("stderr missing the leftovers note:\n%s", stderr)
 	}
 	for _, p := range []string{env.dbPath + rekeyBackupSuffix, env.dbPath + rekeyDestSuffix} {
@@ -1080,4 +1080,97 @@ func TestCheckCopied(t *testing.T) {
 	if err := checkCopied(wrong, "password", 2); err == nil || !strings.Contains(err.Error(), "check the new vault's key") {
 		t.Errorf("a vault the key doesn't open: err = %v", err)
 	}
+}
+
+// A key-source switch clears a password change's leftovers too, and the
+// reverse, so no old copy survives either kind of change.
+func TestKeyChanges_ClearEachOthersLeftovers(t *testing.T) {
+	t.Run("rekey clears .pre-rotate", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		kc := newKCMock(hexKey())
+		populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+		leftovers := []string{env.dbPath + rotateBackupSuffix, env.sidecarPath + rotateBackupSuffix}
+		for _, p := range leftovers {
+			if err := os.WriteFile(p, []byte("stale"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
+		app, stderr := rekeyTestApp("y\n")
+		if err := runRekey(app, []string{"--to=password"}, kc); err != nil {
+			t.Fatalf("rekey: %v\n%s", err, stderr)
+		}
+		for _, p := range leftovers {
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Errorf("%s survived the key-source switch (err %v)", p, err)
+			}
+		}
+	})
+	t.Run("rotation clears .pre-rekey", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		t.Setenv("SESH_KEY_SOURCE", "password")
+		t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+		populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+		leftover := env.dbPath + rekeyBackupSuffix
+		if err := os.WriteFile(leftover, []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("SESH_MASTER_PASSWORD", "")
+		app, stderr := rekeyTestApp("y\n")
+		if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
+			t.Fatalf("rotate: %v\n%s", err, stderr)
+		}
+		if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+			t.Errorf("%s survived the password change (err %v)", leftover, err)
+		}
+	})
+}
+
+// failingAfter fails every write once one contains marker.
+type failingAfter struct {
+	marker string
+	failed bool
+}
+
+func (w *failingAfter) Write(p []byte) (int, error) {
+	if w.failed || strings.Contains(string(p), w.marker) {
+		w.failed = true
+		return 0, errors.New("stderr closed")
+	}
+	return len(p), nil
+}
+
+// The old copies go even if the success message can't be written.
+func TestKeyChanges_RemoveOldCopiesBeforeReporting(t *testing.T) {
+	t.Run("rotation", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		t.Setenv("SESH_KEY_SOURCE", "password")
+		t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+		populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+		t.Setenv("SESH_MASTER_PASSWORD", "")
+		app, _ := rekeyTestApp("y\n")
+		app.Stderr = &failingAfter{marker: "Rotated"}
+		if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err == nil {
+			t.Fatal("expected the write failure to be returned")
+		}
+		for _, p := range []string{env.dbPath + rotateBackupSuffix, env.sidecarPath + rotateBackupSuffix} {
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Errorf("%s left behind after a failed write (err %v)", p, err)
+			}
+		}
+	})
+	t.Run("rekey", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		kc := newKCMock(hexKey())
+		populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+		t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
+		app, _ := rekeyTestApp("y\n")
+		app.Stderr = &failingAfter{marker: "Rekeyed"}
+		if err := runRekey(app, []string{"--to=password"}, kc); err == nil {
+			t.Fatal("expected the write failure to be returned")
+		}
+		if _, err := os.Stat(env.dbPath + rekeyBackupSuffix); !os.IsNotExist(err) {
+			t.Errorf("old copy left behind after a failed write (err %v)", err)
+		}
+	})
 }
