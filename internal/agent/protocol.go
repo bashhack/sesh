@@ -38,9 +38,9 @@ const (
 	TypeStop       = "stop"
 	TypeStopAck    = "stop_ack"
 
-	TypeTouchIDWrap    = "touchid_wrap"
-	TypeTouchIDWrapAck = "touchid_wrap_ack"
-	TypeUnlockTouchID  = "unlock_touchid" // answered with unlock_ack
+	TypeWrapKey       = "wrap_key"
+	TypeWrapKeyAck    = "wrap_key_ack"
+	TypeUnlockTouchID = "unlock_touchid" // answered with unlock_ack
 )
 
 // Error codes returned in ErrorResponse.Code. Strings (not ints) so they
@@ -113,18 +113,26 @@ type UnlockRequest struct {
 	Version  int       `json:"version"`
 }
 
-// TouchIDWrapRequest asks an unlocked agent to wrap the key of vault
-// UnlockID to the Secure Enclave public key PublicKey, for a Touch ID
-// unlock file. The key never leaves the agent; only the wrap comes back.
-type TouchIDWrapRequest struct {
+// Purposes a WrapKeyRequest names. Each wraps with its own label, so a
+// wrap made for one never opens as another.
+const (
+	WrapForTouchID  = "touchid"  // a Touch ID unlock file
+	WrapForRecovery = "recovery" // a recovery key's file
+)
+
+// WrapKeyRequest asks an unlocked agent to wrap the key of vault UnlockID
+// to the P-256 public key PublicKey, for Purpose. The key never leaves the
+// agent; only the wrap comes back.
+type WrapKeyRequest struct {
 	Type      string `json:"type"`
 	UnlockID  string `json:"unlock_id"`
+	Purpose   string `json:"purpose"`
 	PublicKey []byte `json:"public_key"`
 	Version   int    `json:"version"`
 }
 
-// TouchIDWrapResponse is the wrapped key.
-type TouchIDWrapResponse struct {
+// WrapKeyResponse is the wrapped key.
+type WrapKeyResponse struct {
 	Type         string `json:"type"`
 	EphemeralPub []byte `json:"ephemeral_pub"`
 	Ciphertext   []byte `json:"ciphertext"`

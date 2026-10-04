@@ -111,7 +111,7 @@ func enableTouchID(conn *agent.Conn, dataDir string, verify []byte) error {
 	if err != nil {
 		return fmt.Errorf("create the Touch ID key: %w", err)
 	}
-	w, err := agent.TouchIDWrap(conn, id, pub)
+	w, err := agent.WrapKey(conn, id, agent.WrapForTouchID, pub)
 	if err != nil {
 		return fmt.Errorf("wrap the vault key for Touch ID: %w", err)
 	}

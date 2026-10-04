@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/touchid"
 )
@@ -181,23 +182,25 @@ func (c *Conn) exchange(req any, wantType string) (raw []byte, err error) {
 // example after the master password changed. The file should be removed.
 var ErrTouchIDStale = errors.New("the Touch ID unlock is out of date for this vault")
 
-// TouchIDWrap asks an unlocked agent to wrap the key of vault unlockID to
-// the Secure Enclave public key pub. The key itself never leaves the agent.
-func TouchIDWrap(conn *Conn, unlockID string, pub []byte) (touchid.Wrapped, error) {
-	raw, err := roundTrip(conn, TouchIDWrapRequest{
-		Type:      TypeTouchIDWrap,
+// WrapKey asks an unlocked agent to wrap the key of vault unlockID to the
+// P-256 public key pub, for purpose (WrapForTouchID or WrapForRecovery).
+// The key itself never leaves the agent.
+func WrapKey(conn *Conn, unlockID, purpose string, pub []byte) (keywrap.Wrapped, error) {
+	raw, err := roundTrip(conn, WrapKeyRequest{
+		Type:      TypeWrapKey,
 		Version:   ProtocolVersion,
 		UnlockID:  unlockID,
+		Purpose:   purpose,
 		PublicKey: pub,
-	}, TypeTouchIDWrapAck)
+	}, TypeWrapKeyAck)
 	if err != nil {
-		return touchid.Wrapped{}, err
+		return keywrap.Wrapped{}, err
 	}
-	var resp TouchIDWrapResponse
+	var resp WrapKeyResponse
 	if err := decodeMessage(raw, &resp); err != nil {
-		return touchid.Wrapped{}, err
+		return keywrap.Wrapped{}, err
 	}
-	return touchid.Wrapped{EphemeralPub: resp.EphemeralPub, Ciphertext: resp.Ciphertext}, nil
+	return keywrap.Wrapped{EphemeralPub: resp.EphemeralPub, Ciphertext: resp.Ciphertext}, nil
 }
 
 // UnlockTouchID asks the agent to unlock with the Touch ID file f for the

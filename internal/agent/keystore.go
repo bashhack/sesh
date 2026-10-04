@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/keywrap"
+	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/touchid"
 )
@@ -184,18 +186,27 @@ func (k *keystore) installVerified(key, verify []byte, event string) error {
 	return nil
 }
 
-// wrapForTouchID wraps the cached key to a Secure Enclave public key for
-// the vault unlockID, binding the wrap to that vault. The key itself never
-// leaves the keystore.
-func (k *keystore) wrapForTouchID(unlockID string, pub []byte) (touchid.Wrapped, error) {
+// wrapKey wraps the cached key to a public key for the vault unlockID, for
+// purpose, binding the wrap to that vault. The key itself never leaves the
+// keystore.
+func (k *keystore) wrapKey(unlockID, purpose string, pub []byte) (keywrap.Wrapped, error) {
+	var wrap func(pub, secret, aad []byte) (keywrap.Wrapped, error)
+	switch purpose {
+	case WrapForTouchID:
+		wrap = touchid.Wrap
+	case WrapForRecovery:
+		wrap = recovery.Wrap
+	default:
+		return keywrap.Wrapped{}, fmt.Errorf("%w: unknown wrap purpose %q", errBadRequest, purpose)
+	}
 	keyCopy, err := k.copyKey(unlockID)
 	if err != nil {
-		return touchid.Wrapped{}, err
+		return keywrap.Wrapped{}, err
 	}
 	defer secure.SecureZeroBytes(keyCopy)
-	w, err := touchid.Wrap(pub, keyCopy, []byte(unlockID))
+	w, err := wrap(pub, keyCopy, []byte(unlockID))
 	if err != nil {
-		return touchid.Wrapped{}, fmt.Errorf("%w: %v", errBadRequest, err)
+		return keywrap.Wrapped{}, fmt.Errorf("%w: %v", errBadRequest, err)
 	}
 	return w, nil
 }
