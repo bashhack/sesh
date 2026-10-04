@@ -71,6 +71,19 @@ func (s *Store) PruneAudit(before time.Time) (int64, error) {
 	return res.RowsAffected()
 }
 
+// AuditCountEstimate returns roughly how many events the audit log holds,
+// without counting rows: the newest event's id minus the oldest's, plus
+// one, each a single lookup at the end of the primary key (one query with
+// both MIN and MAX would scan the table). It's exact while pruning removes the oldest events first, as it
+// does unless the clock moved backward, and an overestimate otherwise.
+func (s *Store) AuditCountEstimate() (int64, error) {
+	var n int64
+	if err := s.db.QueryRow(`SELECT COALESCE((SELECT MAX(id) FROM audit_log) - (SELECT MIN(id) FROM audit_log) + 1, 0)`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("read audit log: %w", err)
+	}
+	return n, nil
+}
+
 // ClearAudit deletes every audit event, whatever its timestamp, and
 // returns how many it deleted.
 func (s *Store) ClearAudit() (int64, error) {

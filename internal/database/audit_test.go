@@ -254,3 +254,47 @@ func TestCompact_WaitsForAReader(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAuditCountEstimate(t *testing.T) {
+	s := newTestStore(t)
+	if n, err := s.AuditCountEstimate(); err != nil || n != 0 {
+		t.Fatalf("empty log = %d, %v", n, err)
+	}
+	day := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := range 5 {
+		addAuditAt(t, s, "access", "x", day.AddDate(0, 0, i))
+	}
+	if n, err := s.AuditCountEstimate(); err != nil || n != 5 {
+		t.Errorf("5 events = %d, %v", n, err)
+	}
+	// Pruning removes the oldest, which are also the first written.
+	if _, err := s.PruneAudit(day.AddDate(0, 0, 2)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.AuditCountEstimate(); err != nil || n != 3 {
+		t.Errorf("after pruning 2 = %d, %v; want 3", n, err)
+	}
+}
+
+func TestAuditCountEstimate_NoScan(t *testing.T) {
+	s := newTestStore(t)
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN SELECT COALESCE((SELECT MAX(id) FROM audit_log) - (SELECT MIN(id) FROM audit_log) + 1, 0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(detail, "SCAN audit_log") {
+			t.Errorf("query plan scans the table: %q", detail)
+		}
+	}
+}

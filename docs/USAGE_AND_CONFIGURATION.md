@@ -469,7 +469,7 @@ The vault records every read, store, and delete of an entry: when it happened, w
 
 ```
 $ sesh audit
-Audit log: 1204 events since 2026-07-05 09:12. Events older than 90 days are removed automatically (audit.retention_days).
+Audit log: 1,204 events since 2026-07-05 09:12. Events older than 90 days are removed automatically (audit.retention_days).
 
 2026-10-03 14:39:32  access  totp         github (work)
 2026-10-03 14:38:10  access  aws          default
@@ -483,6 +483,8 @@ Like `--list`, it opens the vault, so it asks for your master password unless th
 **How long events are kept.** Each command that opens the vault removes events older than `audit.retention_days` (default `90`). Set it to `0` to keep everything. Either way, `sesh audit prune --older-than <days>` removes older events when you choose; `--older-than 0` removes them all.
 
 Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but every command writes an event, so a large vault is copied again by backup tools each time it changes. Removing events doesn't make the file smaller by itself: SQLite keeps the freed space for reuse. So `sesh audit prune` also compacts the vault and reports its size before and after. The automatic cleanup doesn't need to: it frees a little space each day, which new events reuse.
+
+**When it grows large.** If the log passes 100,000 events (about 10 MB), whatever the retention setting, sesh prints a warning with the vault's size and how to shrink it. It shows at most once a day, and only when you're at a terminal, so scripts never see it. Typical personal use stays far below this at the default 90 days; it's meant for, say, a script that reads a secret every minute.
 
 ### Encrypted exports
 

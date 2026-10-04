@@ -258,6 +258,7 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 		return nil, err
 	}
 	pruneAuditLog(store, cfg)
+	warnAuditSize(store, cfg)
 	return store, nil
 }
 
