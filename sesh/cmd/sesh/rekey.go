@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -438,13 +439,24 @@ func unusedKeyStateNote(oldSource, dataDir string) string {
 // cfg is the prompt configuration shared by source and target sources.
 // Production passes resolvePasswordPrompt(); tests inject a sequenced
 // prompt that returns the old password first, then the new one twice.
-func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
+func runRotateMasterPassword(app *App, cfg passwordPromptConfig) error {
+	newKey, err := rotateMasterPassword(app, cfg, nil)
+	secure.SecureZeroBytes(newKey)
+	return err
+}
+
+// rotateMasterPassword re-encrypts the vault under a new master password.
+// src opens the vault as it is; nil asks for the current master password.
+// A recovery passes the key its recovery key opened, and then replaces the
+// recovery key itself, so it isn't re-wrapped here. On success it returns
+// the new vault key, which the caller must zero.
+func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySource) (newKey []byte, err error) {
 	st, err := settings()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if st.Backend.Value != config.BackendSQLite {
-		return errNeedsSQLite("rotate")
+		return nil, errNeedsSQLite("rotate")
 	}
 
 	dbPath := st.DBPath.Value
@@ -458,15 +470,15 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 
 	if _, err := os.Stat(dbPath); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("no database to rotate at %s", dbPath)
+			return nil, fmt.Errorf("no database to rotate at %s", dbPath)
 		}
-		return fmt.Errorf("stat database: %w", err)
+		return nil, fmt.Errorf("stat database: %w", err)
 	}
 	if _, err := os.Stat(sidecarPath); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("no sidecar to rotate at %s — is the master password key source actually in use?", sidecarPath)
+			return nil, fmt.Errorf("no sidecar to rotate at %s — is the master password key source actually in use?", sidecarPath)
 		}
-		return fmt.Errorf("stat sidecar: %w", err)
+		return nil, fmt.Errorf("stat sidecar: %w", err)
 	}
 	// Refuse if any staging or backup file from a prior attempt is still
 	// around. Clobbering a prior backup would silently destroy a recovery
@@ -474,16 +486,19 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	// new state.
 	for _, p := range []string{dbNewPath, dbBackupPath, sidecarNewPath, sidecarBackupPath} {
 		if _, err := os.Stat(p); err == nil {
-			return fmt.Errorf("path %s exists from a prior rotation; remove it (or rename to preserve a prior backup) and retry", p)
+			return nil, fmt.Errorf("path %s exists from a prior rotation; remove it (or rename to preserve a prior backup) and retry", p)
 		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("stat %s: %w", p, err)
+			return nil, fmt.Errorf("stat %s: %w", p, err)
 		}
 	}
 
-	srcKS := cfg.newSource(dataDir)
+	srcKS := src
+	if srcKS == nil {
+		srcKS = cfg.newSource(dataDir)
+	}
 	srcStore, err := database.Open(dbPath, database.NewKeySourceOracle(srcKS))
 	if err != nil {
-		return fmt.Errorf("open source database: %w", err)
+		return nil, fmt.Errorf("open source database: %w", err)
 	}
 
 	// Rollback state — same shape as runRekey. Anything *true / non-empty
@@ -545,39 +560,39 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	// TTY — driven by cfg.interactive.
 	srcKey, err := srcKS.GetEncryptionKey()
 	if err != nil {
-		return fmt.Errorf("unlock current sidecar: %w", err)
+		return nil, fmt.Errorf("unlock current sidecar: %w", err)
 	}
 	secure.SecureZeroBytes(srcKey)
 	if err := srcStore.VerifyKey("password"); err != nil {
-		return fmt.Errorf("check current key: %w", withKeyHint(err))
+		return nil, fmt.Errorf("check current key: %w", withKeyHint(err))
 	}
 
 	plan, err := migration.Plan(srcStore)
 	if err != nil {
-		return fmt.Errorf("scan source: %w", err)
+		return nil, fmt.Errorf("scan source: %w", err)
 	}
 
 	if _, perr := fmt.Fprintf(app.Stderr, "About to rotate master password and re-encrypt %d entries.\n", len(plan)); perr != nil {
-		return perr
+		return nil, perr
 	}
 	if _, perr := fmt.Fprintf(app.Stderr, "  source DB:           %s\n", dbPath); perr != nil {
-		return perr
+		return nil, perr
 	}
 	if _, perr := fmt.Fprintf(app.Stderr, "  rollback DB after:   %s\n", dbBackupPath); perr != nil {
-		return perr
+		return nil, perr
 	}
 	if _, perr := fmt.Fprintf(app.Stderr, "  rollback sidecar:    %s\n", sidecarBackupPath); perr != nil {
-		return perr
+		return nil, perr
 	}
 	confirmed, err := promptYesNo(app.Stdin, app.Stderr, "\nProceed? [y/N]: ")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !confirmed {
 		if _, perr := fmt.Fprintln(app.Stderr, "Rotation cancelled."); perr != nil {
-			return perr
+			return nil, perr
 		}
-		return nil
+		return nil, nil
 	}
 
 	// Build the target source against the staged sidecar path. The first
@@ -587,7 +602,7 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	destKS := cfg.newSourceAtPath(sidecarNewPath)
 	destKey, err := destKS.GetEncryptionKey()
 	if err != nil {
-		return fmt.Errorf("create new sidecar: %w", err)
+		return nil, fmt.Errorf("create new sidecar: %w", err)
 	}
 	// Kept until the end: Touch ID unlock is re-wrapped with it after the
 	// swap, when destKS's cache has been cleared by closing destStore.
@@ -596,34 +611,34 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 
 	destStore, err = database.Open(dbNewPath, database.NewKeySourceOracle(destKS))
 	if err != nil {
-		return fmt.Errorf("open destination database: %w", err)
+		return nil, fmt.Errorf("open destination database: %w", err)
 	}
 	destStoreOpen = true
 	destDBCreated = true
 	if err := destStore.CheckKey("password"); err != nil {
-		return fmt.Errorf("record new key check: %w", err)
+		return nil, fmt.Errorf("record new key check: %w", err)
 	}
 	if err := destStore.InitKeyMetadata(); err != nil {
-		return fmt.Errorf("init target key metadata: %w", err)
+		return nil, fmt.Errorf("init target key metadata: %w", err)
 	}
 
 	result, err := migration.Migrate(srcStore, destStore)
 	if err != nil {
-		return fmt.Errorf("copy entries: %w", err)
+		return nil, fmt.Errorf("copy entries: %w", err)
 	}
 	if len(result.Errors) > 0 {
-		return fmt.Errorf("copy reported %d errors:\n  %s", len(result.Errors), strings.Join(result.Errors, "\n  "))
+		return nil, fmt.Errorf("copy reported %d errors:\n  %s", len(result.Errors), strings.Join(result.Errors, "\n  "))
 	}
 
 	// Close stores before rename so SQLite checkpoints WAL and removes
 	// the -wal/-shm sidecars; otherwise the rename leaves orphans.
 	if err := destStore.Close(); err != nil {
-		return fmt.Errorf("close destination store: %w", err)
+		return nil, fmt.Errorf("close destination store: %w", err)
 	}
 	destStore = nil
 	destStoreOpen = false
 	if err := srcStore.Close(); err != nil {
-		return fmt.Errorf("close source store: %w", err)
+		return nil, fmt.Errorf("close source store: %w", err)
 	}
 	srcStoreOpen = false
 
@@ -633,19 +648,19 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	// fails after we've already swapped DB+sidecar, we're committed —
 	// surface both paths so the user can finish manually.
 	if err := os.Rename(dbPath, dbBackupPath); err != nil {
-		return fmt.Errorf("rename source DB to backup: %w", err)
+		return nil, fmt.Errorf("rename source DB to backup: %w", err)
 	}
 	dbRenamed = true
 	if err := os.Rename(dbNewPath, dbPath); err != nil {
-		return fmt.Errorf("rename destination DB into place: %w", err)
+		return nil, fmt.Errorf("rename destination DB into place: %w", err)
 	}
 	destDBCreated = false // canonical now; rollback no longer applies
 
 	if err := os.Rename(sidecarPath, sidecarBackupPath); err != nil {
-		return fmt.Errorf("rename source sidecar to backup: %w (DB is now at %s; restore manually if needed)", err, dbPath)
+		return nil, fmt.Errorf("rename source sidecar to backup: %w (DB is now at %s; restore manually if needed)", err, dbPath)
 	}
 	if err := os.Rename(sidecarNewPath, sidecarPath); err != nil {
-		return fmt.Errorf("rename destination sidecar into place: %w (DB is at %s, old sidecar at %s, new sidecar at %s — finish the rename manually)", err, dbPath, sidecarBackupPath, sidecarNewPath)
+		return nil, fmt.Errorf("rename destination sidecar into place: %w (DB is at %s, old sidecar at %s, new sidecar at %s — finish the rename manually)", err, dbPath, sidecarBackupPath, sidecarNewPath)
 	}
 	sidecarRenamed = true
 	newSidecarMade = false
@@ -653,7 +668,10 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	agentNote := lockAgentAfterRekey()
 	// Touch ID unlock is re-wrapped for the new key, also before any output.
 	touchNote := rewrapTouchID(dataDir, destKey)
-	recoveryNote := rewrapRecovery(dataDir, destKey)
+	recoveryNote := ""
+	if src == nil {
+		recoveryNote = rewrapRecovery(dataDir, destKey)
+	}
 
 	// The .new.lock sentinel was created when destKS first ran
 	// initializeLocked. The .new sidecar it guarded has now been renamed
@@ -665,26 +683,26 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	}
 
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %d entries under a new master password.\n", result.Migrated); perr != nil {
-		return perr
+		return nil, perr
 	}
 	if _, perr := fmt.Fprintf(app.Stderr, "Old DB preserved at %s\n", dbBackupPath); perr != nil {
-		return perr
+		return nil, perr
 	}
 	if _, perr := fmt.Fprintf(app.Stderr, "Old sidecar preserved at %s\n", sidecarBackupPath); perr != nil {
-		return perr
+		return nil, perr
 	}
 	if _, perr := fmt.Fprintln(app.Stderr, "Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available)."); perr != nil {
-		return perr
+		return nil, perr
 	}
 	for _, msg := range []string{touchNote, recoveryNote, agentNote} {
 		if msg == "" {
 			continue
 		}
 		if _, perr := fmt.Fprintln(app.Stderr, msg); perr != nil {
-			return perr
+			return nil, perr
 		}
 	}
-	return nil
+	return bytes.Clone(destKey), nil
 }
 
 // lockAgentAfterRekey locks a running, unlocked agent once the database is

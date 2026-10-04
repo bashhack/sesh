@@ -77,6 +77,17 @@ With Touch ID unlock on, the agent can unlock with a fingerprint instead of the 
 - **Same-user malware.** A process running as you can make the agent show the Touch ID sheet, but can't approve it. The sheet is system UI that names the program asking. While the agent is unlocked, such a process can already ask it to decrypt; Touch ID doesn't change that.
 - **Copies.** `touchid.key`, or the whole vault with it, copied to another machine gains nothing.
 
+##### Recovery key (optional)
+
+A recovery key lets someone who forgot the master password set a new one. There's no server, so there's no second check: **the recovery key plus the vault file opens the vault**. It's offered, not forced, for that reason.
+
+- **The key.** 128 random bits, written down by the user as 7 groups of 4 Crockford base32 characters (the last two a 10-bit checksum, so typos are caught as typos). sesh never stores it, and shows it once. It's saved only after the user types back its last group.
+- **Key custody.** The key is the seed of a P-256 key pair (private key derived with HKDF-SHA256). sesh stores only the public half, in `recovery.key` next to the vault (mode 0600), with the vault key wrapped to it: one-off P-256 ECDH, HKDF-SHA256 with a label of its own (so a recovery wrap never opens as a Touch ID wrap, or the reverse), then AES-256-GCM bound to the vault's unlock id. The agent does the wrap, so the vault key doesn't leave it. Because wrapping needs only the public half, a password change re-wraps the new vault key without the recovery key.
+- **Using it.** `sesh recover` unwraps the vault key with the typed key, checks it against the sidecar's verify blob, and re-encrypts the vault under a new master password, as a password change does. The used key then stops working (its file is removed), and a new one is offered at once.
+- **What changes.** The vault opens with the master password, an enrolled fingerprint on that Mac (Touch ID), **or** the recovery key together with the vault file. The paper key can't be guessed but can be found; keep it away from the computer.
+- **The file alone** reveals nothing: a public key and a wrap only the paper key opens.
+- **Tampering.** A process running as the user could replace the public key in `recovery.key`, so that the next password change wraps the vault key to its own key. The same is true of `touchid.key`. It's accepted for the same reason: code running as the user can already ask an unlocked agent to decrypt everything, or replace the sesh binary.
+
 ##### Keychain key source (`key_source = "keychain"`, macOS only)
 
 The 256-bit master encryption key is stored in the macOS Keychain, combining OS-level access control with application-level encryption. The key is hex-encoded (64 ASCII characters) before storage because the `security` command's tokenizer can't reliably round-trip raw random bytes; the key is decoded on read and zeroed after use.

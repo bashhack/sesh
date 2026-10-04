@@ -227,7 +227,7 @@ func TestRotate_RewrapsRecoveryKey(t *testing.T) {
 	}
 	k, last := fixedRecoveryKey(t)
 	restore := testutil.RedirectStderr(t)
-	saved, err := makeRecoveryKey(conn, env.dataDir, mat.Verify, withLines(interactivePrompt(t), last))
+	saved, err := makeRecoveryKey(agentWrap(conn), env.dataDir, mat.Verify, withLines(interactivePrompt(t), last))
 	restore()
 	closeAgentConn(conn)
 	if err != nil || !saved {
@@ -300,4 +300,190 @@ func TestPrompts_ReadOneLineEach(t *testing.T) {
 	if got, err := readLine(in, &w, "Last group: "); err != nil || got != "VP5H" {
 		t.Fatalf("readLine = %q, %v; want the third answer", got, err)
 	}
+}
+
+// recoverableVault makes a password-protected vault holding one entry, with
+// a recovery key, and returns its environment and key.
+func recoverableVault(t *testing.T) (*rekeyTestEnv, recovery.Key) {
+	t.Helper()
+	env := setupRekeyEnv(t)
+	startTestAgent(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "forgotten-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "the secret"})
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	conn, err := agent.DialExisting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAgentConn(conn)
+	mat, err := database.ReadUnlockMaterial(env.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Unlock(conn, []byte("forgotten-pw-1234"), mat.Salt, mat.Verify, mat.Params); err != nil {
+		t.Fatal(err)
+	}
+	k, last := fixedRecoveryKey(t)
+	restore := testutil.RedirectStderr(t)
+	saved, err := makeRecoveryKey(agentWrap(conn), env.dataDir, mat.Verify, withLines(interactivePrompt(t), last))
+	restore()
+	if err != nil || !saved {
+		t.Fatalf("makeRecoveryKey = %v, %v", saved, err)
+	}
+	if err := agent.Lock(conn); err != nil {
+		t.Fatal(err)
+	}
+	return env, k
+}
+
+// passwordOpens reports whether password opens the vault in dataDir.
+func passwordOpens(t *testing.T, dataDir, password string) bool {
+	t.Helper()
+	mat, err := database.ReadUnlockMaterial(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := database.DeriveKey([]byte(password), mat.Salt, mat.Params)
+	opened, err := database.Decrypt(key, mat.Verify)
+	return err == nil && string(opened) == database.VerifyPlaintext
+}
+
+// runRecoverWith runs sesh recover with typed secrets (the recovery key,
+// then passwords), answers to [Y/n] questions, and lines.
+func runRecoverWith(t *testing.T, secrets []string, offerNew bool, lines ...string) (string, error) {
+	t.Helper()
+	orig := recoveryPrompt
+	recoveryPrompt = func() passwordPromptConfig {
+		return withLines(withAnswer(interactivePrompt(t, secrets...), offerNew), lines...)
+	}
+	t.Cleanup(func() { recoveryPrompt = orig })
+	app, stderr := rekeyTestApp("y\n") // the rotation's "Proceed?"
+	restore := testutil.RedirectStderr(t)
+	err := runRecover(app, nil)
+	notes := restore()
+	return stderr.String() + notes, err
+}
+
+func TestRecover_SetsANewPasswordAndReplacesTheKey(t *testing.T) {
+	env, used := recoverableVault(t)
+	next, last := fixedRecoveryKey(t)
+	out, err := runRecoverWith(t, []string{strings.ToLower(used.String()), "new-pw-5678", "new-pw-5678"}, true, last)
+	if err != nil {
+		t.Fatalf("recover: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"The recovery key opens this vault. Choose a new master password.",
+		"Rotated 1 entries under a new master password.",
+		"Your recovery key has been used, so it no longer works.",
+		"Your recovery key:\n\n    " + next.String(),
+		"The recovery key is set for this vault.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if !passwordOpens(t, env.dataDir, "new-pw-5678") || passwordOpens(t, env.dataDir, "forgotten-pw-1234") {
+		t.Error("the vault doesn't open with the new password only")
+	}
+	opensVault(t, next, env.dataDir)
+	f, err := recovery.ReadFile(env.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := used.Unwrap(f.Wrapped(), []byte(f.UnlockID)); !errors.Is(err, recovery.ErrWrongKey) {
+		t.Errorf("the used key still opens the recovery file (err %v)", err)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	if got, err := store.GetSecret(env.account, "sesh-password/password/x/y"); err != nil || string(got) != "the secret" {
+		t.Errorf("entry after recovery = %q, %v", got, err)
+	}
+}
+
+func TestRecover_TypoThenTheKey(t *testing.T) {
+	env, used := recoverableVault(t)
+	s := used.String()
+	typo := "Z" + s[1:]
+	out, err := runRecoverWith(t, []string{typo, s, "new-pw-5678", "new-pw-5678"}, false)
+	if err != nil {
+		t.Fatalf("recover: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "that's not a valid recovery key: a character is wrong") {
+		t.Errorf("no typo message:\n%s", out)
+	}
+	if !passwordOpens(t, env.dataDir, "new-pw-5678") {
+		t.Error("the new password doesn't open the vault")
+	}
+	// Declining a new key leaves the vault without one.
+	if _, err := recovery.ReadFile(env.dataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a recovery file exists after declining a new key (err %v)", err)
+	}
+	if !strings.Contains(out, "This vault has no recovery key now; make one any time with: sesh recovery new") {
+		t.Errorf("no note about the missing key:\n%s", out)
+	}
+}
+
+func TestRecover_Refuses(t *testing.T) {
+	t.Run("another vault's key", func(t *testing.T) {
+		env, _ := recoverableVault(t)
+		other, err := recovery.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := other.String()
+		_, err = runRecoverWith(t, []string{o, o, o}, false)
+		if err == nil || !strings.Contains(err.Error(), "that recovery key doesn't open this vault") {
+			t.Errorf("err = %v", err)
+		}
+		if !passwordOpens(t, env.dataDir, "forgotten-pw-1234") {
+			t.Error("the vault changed although recovery failed")
+		}
+	})
+	t.Run("cancelled at the confirmation", func(t *testing.T) {
+		env, used := recoverableVault(t)
+		orig := recoveryPrompt
+		recoveryPrompt = func() passwordPromptConfig { return withAnswer(interactivePrompt(t, used.String()), true) }
+		t.Cleanup(func() { recoveryPrompt = orig })
+		app, stderr := rekeyTestApp("n\n")
+		restore := testutil.RedirectStderr(t)
+		err := runRecover(app, nil)
+		restore()
+		if err != nil || !strings.Contains(stderr.String(), "Rotation cancelled.") {
+			t.Errorf("err = %v, stderr:\n%s", err, stderr)
+		}
+		if !passwordOpens(t, env.dataDir, "forgotten-pw-1234") {
+			t.Error("the vault changed although the rotation was cancelled")
+		}
+		opensVault(t, used, env.dataDir)
+	})
+	t.Run("no recovery key", func(t *testing.T) {
+		env, _ := recoverableVault(t)
+		if err := recovery.Remove(env.dataDir); err != nil {
+			t.Fatal(err)
+		}
+		_, err := runRecoverWith(t, nil, false)
+		if err == nil || !strings.Contains(err.Error(), "this vault has no recovery key") {
+			t.Errorf("err = %v", err)
+		}
+	})
+	t.Run("no terminal", func(t *testing.T) {
+		recoverableVault(t)
+		orig := recoveryPrompt
+		recoveryPrompt = func() passwordPromptConfig { return passwordPromptConfig{} }
+		t.Cleanup(func() { recoveryPrompt = orig })
+		if err := runRecover(agentTestApp(), nil); err == nil || !strings.Contains(err.Error(), "sesh recover needs a terminal") {
+			t.Errorf("err = %v", err)
+		}
+	})
+	t.Run("arguments", func(t *testing.T) {
+		if err := runRecover(agentTestApp(), []string{"now"}); err == nil || !strings.Contains(err.Error(), "sesh recover takes no arguments") {
+			t.Errorf("err = %v", err)
+		}
+	})
 }

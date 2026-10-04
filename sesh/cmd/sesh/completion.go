@@ -122,7 +122,7 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		verbs = recoveryCommands
 	case "completion":
 		verbs = completionShells
-	case "config":
+	case "config", "recover":
 		return nil, false
 	default:
 		specs = mainSpecs(reg, before)

@@ -323,9 +323,13 @@ sesh --service password --list
 
 #### Forgotten master password
 
-There is no recovery, by design. The master password is the only way to derive the vault's key: sesh doesn't store it, and nobody else can open the vault without it. After three wrong attempts at a terminal, sesh says so and points here.
+sesh can't reset it for you: the master password derives the vault's key, sesh doesn't store it, and there's no server that could help. After three wrong attempts at a terminal, sesh says so and points to your options:
 
-Your options:
+- **Use your recovery key**, if you made one (see [Recovery key](#recovery-key)). `sesh recover` asks for it, then for a new master password, and re-encrypts the vault:
+
+  ```bash
+  sesh recover
+  ```
 
 - **Restore from an encrypted export**, if you made one. Start a new vault (below), then import the export. It asks for the export's own password, which you chose when exporting:
 
@@ -348,7 +352,30 @@ Your options:
 
   The next command creates a new vault. sesh never deletes a vault for you. It refuses to create a new key next to an existing vault, so moving only some of the files won't work.
 
-To avoid ending up here, keep the master password somewhere safe and make an encrypted export from time to time (see [Encrypted exports](#encrypted-exports)).
+To avoid ending up here, make a recovery key, keep the master password somewhere safe, and make an encrypted export from time to time (see [Encrypted exports](#encrypted-exports)).
+
+### Recovery key
+
+A recovery key is a code you write down when you set it up, like `7P1J-V5ED-HW31-B0KB-HF0A-R4ST-0S81`. If you forget your master password, it lets you set a new one. sesh offers to make one when it creates a vault; you can also make one at any time:
+
+```bash
+sesh recovery new       # make a recovery key (replaces an earlier one)
+sesh recovery status    # does this vault have one, and since when
+sesh recovery remove    # stop it from opening the vault
+sesh recover            # forgot the master password? set a new one
+```
+
+**Making one.** sesh shows the key once, then asks you to type its last group. It's only saved after you do, so a key nobody wrote down never works. Store it the way you'd store a passport: on paper, away from the computer. sesh doesn't keep a copy and can't show it again.
+
+**Using it.** `sesh recover` asks for the key (any case; dashes and spaces optional; it reads I or L as 1 and O as 0), checks it, and asks for a new master password. The vault is re-encrypted as for a password change, with the same backups (`.pre-rotate`), so any `.pre-rotate` files left from an earlier change must be removed first. Touch ID unlock keeps working. Then:
+- the key you used stops working, because it's been taken out of its hiding place and typed in;
+- sesh offers a new one right away. If you decline, `sesh recovery status` shows that the vault has none.
+
+**What it means for security.** Anyone who has both your recovery key and your vault file can open the vault, with no other check, because sesh has no server to add one. That's why it's optional. It can't be guessed (128 random bits), but it can be found, so keep it away from the vault's computer. The `recovery.key` file next to the vault holds only a public key and the wrapped vault key; on its own it opens nothing.
+
+**Changes that affect it.**
+- **Changing your master password** (`sesh --rekey --to password`) keeps the recovery key working, with no prompt.
+- **Switching to the Keychain key source** removes it: a recovery key only works with a vault protected by a master password.
 
 ### Touch ID unlock (macOS)
 

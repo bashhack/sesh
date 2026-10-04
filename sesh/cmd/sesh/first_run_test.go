@@ -9,6 +9,8 @@ import (
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/keywrap"
+	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/testutil"
 )
 
@@ -124,6 +126,24 @@ func TestForgottenPasswordHint(t *testing.T) {
 		_, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "a-wrong-one", "b-wrong-one", "c-wrong-one"))
 		if err == nil || !strings.Contains(err.Error(), "wrong master password (after 3 attempts).\n   If you've forgotten it") {
 			t.Fatalf("err = %v, want the hint", err)
+		}
+		if strings.Contains(err.Error(), "sesh recover") {
+			t.Errorf("hint offers sesh recover without a recovery key: %v", err)
+		}
+	})
+	t.Run("interactive, with a recovery key", func(t *testing.T) {
+		startTestAgent(t)
+		if err := recovery.NewFile("id", []byte("p"), keywrap.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")}).Write(dir); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := recovery.Remove(dir); err != nil {
+				t.Error(err)
+			}
+		})
+		_, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "a-wrong-one", "b-wrong-one", "c-wrong-one"))
+		if err == nil || !strings.Contains(err.Error(), "If you've forgotten it, set a new one with your recovery key: sesh recover") {
+			t.Fatalf("err = %v, want the recovery hint", err)
 		}
 	})
 	t.Run("scripted", func(t *testing.T) {

@@ -22,6 +22,7 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/migration"
 	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
 )
 
@@ -131,6 +132,7 @@ var subcommands = []candidate{
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 	{"config", "Show settings and where each comes from"},
 	{"init", "Choose where and how sesh stores secrets"},
+	{"recover", "Set a new master password with the vault's recovery key"},
 	{"recovery", "Make, remove, or check this vault's recovery key"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
 }
@@ -380,9 +382,12 @@ func unlockAgentWith(dataDir string, pw []byte) {
 
 // withForgottenPasswordHint adds what a person can do after failing every
 // interactive master password attempt. Scripts get the plain error.
-func withForgottenPasswordHint(err error, cfg passwordPromptConfig) error {
+func withForgottenPasswordHint(err error, cfg passwordPromptConfig, dataDir string) error {
 	if !cfg.interactive || !errors.Is(err, database.ErrWrongPassword) {
 		return err
+	}
+	if _, serr := os.Stat(filepath.Join(dataDir, recovery.FileName)); serr == nil {
+		return fmt.Errorf("%w.\n   If you've forgotten it, set a new one with your recovery key: sesh recover", err)
 	}
 	return fmt.Errorf("%w.\n   If you've forgotten it, the vault can't be opened. To start over, or to restore\n"+
 		"   from an encrypted export, see \"Forgotten master password\" in the usage docs", err)
@@ -427,7 +432,7 @@ func buildKeySourceWith(dbPath, source string, cfg passwordPromptConfig) (databa
 		if !cfg.fromEnv {
 			oracle, typed, err := keySourceFromAgent(dataDir, cfg)
 			if err != nil {
-				return nil, withForgottenPasswordHint(err, cfg)
+				return nil, withForgottenPasswordHint(err, cfg, dataDir)
 			}
 			if oracle != nil {
 				return oracle, nil
@@ -456,7 +461,7 @@ func buildKeySourceWith(dbPath, source string, cfg passwordPromptConfig) (databa
 		// the password.
 		key, err := mps.GetEncryptionKey()
 		if err != nil {
-			return nil, withForgottenPasswordHint(err, cfg)
+			return nil, withForgottenPasswordHint(err, cfg, dataDir)
 		}
 		secure.SecureZeroBytes(key)
 		if firstRun {
@@ -907,6 +912,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "recover":
+		if err := runRecover(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "recovery":
 		if err := runRecovery(app, rest); err != nil {
 			fatal(app, err)
@@ -1164,6 +1174,7 @@ func (a *App) PrintUsage() error {
 		"  sesh init                     Choose where and how sesh stores secrets",
 		"  sesh config                   Show settings and where each comes from",
 		"  sesh recovery new|remove|status    A recovery key, in case you forget your master password",
+		"  sesh recover                  Forgot the master password? Set a new one with the recovery key",
 		"  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)",
 		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"  sesh audit [prune]            Show the vault's audit log, or prune it",
