@@ -234,14 +234,14 @@ var (
 	auditWarnEvents  int64 = 100_000
 	stderrIsTerminal       = func() bool { return term.IsTerminal(int(os.Stderr.Fd())) }
 	// auditWarnedPath is a marker file whose time records the last warning.
-	auditWarnedPath = func() (string, error) {
-		dir, err := os.UserCacheDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(dir, "sesh", "audit-size-warned"), nil
-	}
+	auditWarnedPath = defaultAuditWarnedPath
 )
+
+// defaultAuditWarnedPath keeps the marker next to the vault: the warning
+// is about that vault, and its directory exists whenever the warning runs.
+func defaultAuditWarnedPath(dbPath string) string {
+	return filepath.Join(filepath.Dir(dbPath), "audit-size-warned")
+}
 
 // warnAuditSize tells a person at the terminal, at most once a day, that
 // the audit log has grown past auditWarnEvents, and how to shrink it.
@@ -254,12 +254,12 @@ func warnAuditSize(store *database.Store, cfg *config.Config) {
 	if err != nil || n < auditWarnEvents {
 		return
 	}
-	marker, err := auditWarnedPath()
-	if err != nil {
-		return
-	}
-	if fi, err := os.Stat(marker); err == nil && time.Since(fi.ModTime()) < auditWarnEvery {
-		return
+	marker := auditWarnedPath(store.Path())
+	// A marker dated in the future, from a clock that was ahead, doesn't count.
+	if fi, err := os.Stat(marker); err == nil {
+		if age := time.Since(fi.ModTime()); age >= 0 && age < auditWarnEvery {
+			return
+		}
 	}
 	size, err := store.Size()
 	if err != nil {
@@ -272,11 +272,9 @@ func warnAuditSize(store *database.Store, cfg *config.Config) {
 	note("warning: the vault's audit log has about %s events, and the vault is %s. sesh writes to the vault on every command, so backups copy all of it each time.\n%s, or remove old events now with: sesh audit prune --older-than <days>\nThis warning shows at most once a day.",
 		thousands(n), vaultSize(size), advice)
 	// Best effort: if the marker can't be written, the warning just shows again.
-	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err == nil {
-		if err := os.WriteFile(marker, nil, 0o600); err == nil {
-			now := time.Now()
-			_ = os.Chtimes(marker, now, now) //nolint:errcheck // best effort, see above
-		}
+	if err := os.WriteFile(marker, nil, 0o600); err == nil {
+		now := time.Now()
+		_ = os.Chtimes(marker, now, now) //nolint:errcheck // best effort, see above
 	}
 }
 

@@ -192,11 +192,11 @@ func TestVaultSize(t *testing.T) {
 // terminal or not, and a marker file in a temp dir. It returns the marker.
 func warnAuditSizeAt(t *testing.T, limit int64, terminal bool) string {
 	t.Helper()
-	marker := filepath.Join(t.TempDir(), "sesh", "audit-size-warned")
+	marker := filepath.Join(t.TempDir(), "audit-size-warned")
 	origLimit, origTerm, origPath := auditWarnEvents, stderrIsTerminal, auditWarnedPath
 	auditWarnEvents = limit
 	stderrIsTerminal = func() bool { return terminal }
-	auditWarnedPath = func() (string, error) { return marker, nil }
+	auditWarnedPath = func(string) string { return marker }
 	t.Cleanup(func() { auditWarnEvents, stderrIsTerminal, auditWarnedPath = origLimit, origTerm, origPath })
 	return marker
 }
@@ -261,7 +261,46 @@ func TestAuditSizeWarning(t *testing.T) {
 		if !strings.Contains(out, "Keep fewer days with audit.retention_days (now 365 days), or remove old events now with: sesh audit prune --older-than <days>") {
 			t.Errorf("no warning a day later, or wrong advice:\n%s", out)
 		}
+		// A marker from a clock that was ahead doesn't silence the warning.
+		ahead := time.Now().Add(48 * time.Hour)
+		if err := os.Chtimes(marker, ahead, ahead); err != nil {
+			t.Fatal(err)
+		}
+		if out := openForWarning(t); !strings.Contains(out, "audit log") {
+			t.Errorf("a marker dated in the future silenced the warning: %q", out)
+		}
 	})
+}
+
+// The marker sits next to the vault, so the warning doesn't depend on a
+// cache directory (none without HOME, for instance).
+func TestAuditSizeWarning_MarkerNextToTheVault(t *testing.T) {
+	dbPath := auditTestVault(t)
+	t.Setenv(config.EnvAuditRetentionDays, "0")
+	warnAuditSizeAt(t, 1000, true) // no warning while opening
+	auditWarnedPath = defaultAuditWarnedPath
+	addOldAuditEvent(t, dbPath, "old", 100)
+	addOldAuditEvent(t, dbPath, "older", 200)
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	auditWarnEvents = 3
+	restore := testutil.RedirectStderr(t)
+	warnAuditSize(store, cfg)
+	if out := restore(); !strings.Contains(out, "audit log") {
+		t.Errorf("no warning without a cache directory: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(dbPath), "audit-size-warned")); err != nil {
+		t.Errorf("marker not next to the vault: %v", err)
+	}
 }
 
 func TestThousands(t *testing.T) {
