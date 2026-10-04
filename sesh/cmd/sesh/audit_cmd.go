@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -237,10 +236,11 @@ var (
 	auditWarnedPath = defaultAuditWarnedPath
 )
 
-// defaultAuditWarnedPath keeps the marker next to the vault: the warning
-// is about that vault, and its directory exists whenever the warning runs.
+// defaultAuditWarnedPath keeps the marker next to the vault, named after
+// it, so it can never be the vault itself: the warning is about that
+// vault, and its directory exists whenever the warning runs.
 func defaultAuditWarnedPath(dbPath string) string {
-	return filepath.Join(filepath.Dir(dbPath), "audit-size-warned")
+	return dbPath + ".audit-warned"
 }
 
 // warnAuditSize tells a person at the terminal, at most once a day, that
@@ -271,11 +271,21 @@ func warnAuditSize(store *database.Store, cfg *config.Config) {
 	}
 	note("warning: the vault's audit log has about %s events, and the vault is %s. sesh writes to the vault on every command, so backups copy all of it each time.\n%s, or remove old events now with: sesh audit prune --older-than <days>\nThis warning shows at most once a day.",
 		thousands(n), vaultSize(size), advice)
-	// Best effort: if the marker can't be written, the warning just shows again.
-	if err := os.WriteFile(marker, nil, 0o600); err == nil {
-		now := time.Now()
-		_ = os.Chtimes(marker, now, now) //nolint:errcheck // best effort, see above
+	touchMarker(marker)
+}
+
+// touchMarker sets marker's time to now, creating it empty if it doesn't
+// exist. It never writes into an existing file, so whatever sits at that
+// path can't be truncated. Best effort: if it fails, the warning just
+// shows again next time.
+func touchMarker(marker string) {
+	if f, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err == nil { //nolint:gosec // next to the user's own vault
+		if err := f.Close(); err != nil {
+			return
+		}
 	}
+	now := time.Now()
+	_ = os.Chtimes(marker, now, now) //nolint:errcheck // best effort, see above
 }
 
 // thousands prints n with comma separators: 1,000,009.

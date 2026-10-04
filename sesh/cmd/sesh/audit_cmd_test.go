@@ -298,7 +298,7 @@ func TestAuditSizeWarning_MarkerNextToTheVault(t *testing.T) {
 	if out := restore(); !strings.Contains(out, "audit log") {
 		t.Errorf("no warning without a cache directory: %q", out)
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(dbPath), "audit-size-warned")); err != nil {
+	if _, err := os.Stat(dbPath + ".audit-warned"); err != nil {
 		t.Errorf("marker not next to the vault: %v", err)
 	}
 }
@@ -308,5 +308,74 @@ func TestThousands(t *testing.T) {
 		if got := thousands(n); got != want {
 			t.Errorf("thousands(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+// The marker never overwrites anything, even a vault whose name collides
+// with a marker's.
+func TestAuditSizeWarning_NeverTruncatesTheVault(t *testing.T) {
+	setupRekeyEnv(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "audit-password-1234")
+	dbPath := filepath.Join(t.TempDir(), "audit-size-warned")
+	t.Setenv(config.EnvDBPath, dbPath)
+	t.Setenv(config.EnvAuditRetentionDays, "0")
+	warnAuditSizeAt(t, 3, true)
+	auditWarnedPath = defaultAuditWarnedPath
+
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 4 { // 4 audit events, over the limit of 3
+		if err := store.SetSecret("alice", "sesh-password/password/github/alice", []byte("hunter2")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Day-to-day writes go to the write-ahead log, so the vault file's own
+	// time can be days old.
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(dbPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if out := openForWarning(t); !strings.Contains(out, "audit log") {
+		t.Fatalf("expected the size warning: %q", out)
+	}
+	store, err = openSQLiteStore()
+	if err != nil {
+		t.Fatalf("vault unusable after the warning: %v", err)
+	}
+	defer closeAuditStore(store)
+	if got, err := store.GetSecret("alice", "sesh-password/password/github/alice"); err != nil || string(got) != "hunter2" {
+		t.Errorf("entry after the warning = %q, %v", got, err)
+	}
+}
+
+func TestTouchMarker(t *testing.T) {
+	dir := t.TempDir()
+	created := filepath.Join(dir, "new.audit-warned")
+	touchMarker(created)
+	if fi, err := os.Stat(created); err != nil || fi.Size() != 0 || time.Since(fi.ModTime()) > time.Minute {
+		t.Errorf("new marker: %v, %v", fi, err)
+	}
+	existing := filepath.Join(dir, "existing")
+	if err := os.WriteFile(existing, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(existing, old, old); err != nil {
+		t.Fatal(err)
+	}
+	touchMarker(existing)
+	got, err := os.ReadFile(existing) //nolint:gosec // the test's own temp file
+	if err != nil || string(got) != "keep me" {
+		t.Errorf("existing file's contents = %q, %v; want them untouched", got, err)
+	}
+	if fi, err := os.Stat(existing); err != nil || time.Since(fi.ModTime()) > time.Minute {
+		t.Errorf("existing file's time not updated: %v, %v", fi, err)
 	}
 }
