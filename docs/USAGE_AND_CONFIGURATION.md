@@ -290,10 +290,12 @@ Asking for the Keychain on Linux is an error that names the setting and where it
 sesh --service password --action store --service-name github --username alice
 # Creating your sesh vault (first run)
 #   Location: ~/Library/Application Support/sesh/passwords.db
-#   Your master password encrypts everything in the vault. It can't be
-#   recovered: if you forget it, the vault can't be opened. ...
+#   Your master password encrypts everything in the vault. sesh can't
+#   reset it: if you forget it, only a recovery key opens the vault ...
 # Create master password: ****
 # Confirm master password: ****
+# Make a recovery key, in case you forget your master password? [Y/n]
+# Unlock with Touch ID instead of typing your password? [Y/n]     (macOS)
 # Enter password for github (alice): ****
 
 # Later runs — no prompt while the agent is unlocked

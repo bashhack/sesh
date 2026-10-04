@@ -67,7 +67,7 @@ func TestFirstRun_ExplainsThenUnlocksTheAgent(t *testing.T) {
 		t.Fatalf("creating the vault: %v", err)
 	}
 	closeKeySource(t, oracle)
-	for _, want := range []string{"Creating your sesh vault (first run)", "Location: " + dbPath, "can't be\n  recovered"} {
+	for _, want := range []string{"Creating your sesh vault (first run)", "Location: " + dbPath, "if you forget it, only a recovery key opens the vault\n  (sesh recovery new)"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr missing %q:\n%s", want, stderr)
 		}

@@ -21,7 +21,7 @@ func TestComplete(t *testing.T) {
 		lacks []string // none of these
 		files bool
 	}{
-		{name: "subcommands", words: all(""), want: all("agent", "audit", "completion", "config", "init", "touchid")},
+		{name: "subcommands", words: all(""), want: all("agent", "audit", "completion", "config", "init", "recovery", "touchid")},
 		{name: "subcommand prefix", words: all("co"), want: all("completion", "config")},
 		{name: "audit commands", words: all("audit", ""), want: all("prune")},
 		{name: "audit flags", words: all("audit", "-"), want: all("--limit")},
@@ -52,11 +52,13 @@ func TestComplete(t *testing.T) {
 		{name: "agent flags", words: all("agent", "-"), want: all("--idle-timeout", "--max-lifetime", "--socket")},
 		{name: "agent command takes no arguments", words: all("agent", "lock", "")},
 		{name: "touchid commands", words: all("touchid", "e"), want: all("enable")},
+		{name: "recovery commands", words: all("recovery", ""), want: all("new", "remove", "status")},
+		{name: "recovery takes one command", words: all("recovery", "new", "")},
 		{name: "touchid takes one command", words: all("touchid", "enable", "")},
 		{name: "completion shells", words: all("completion", ""), want: all("bash", "fish", "zsh")},
 		{name: "init flags", words: all("init", "--"), want: all("--force", "--backend", "--db-path", "--key-source")},
 		{name: "config takes nothing", words: all("config", "")},
-		{name: "no words", words: nil, want: all("agent", "audit", "completion", "config", "init", "touchid")},
+		{name: "no words", words: nil, want: all("agent", "audit", "completion", "config", "init", "recovery", "touchid")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cands, files := complete(reg, tt.words)
