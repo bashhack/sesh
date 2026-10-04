@@ -600,3 +600,16 @@ func TestSearchEntries_EmptyAndWhitespaceQueryShortCircuit(t *testing.T) {
 		}
 	}
 }
+
+// The options in Open's file URI still apply.
+func TestOpen_AppliesItsOptions(t *testing.T) {
+	s := newTestStore(t)
+	var mode string
+	var fk int
+	if err := s.db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil || mode != "wal" {
+		t.Errorf("journal_mode = %q, %v; want wal", mode, err)
+	}
+	if err := s.db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
+		t.Errorf("foreign_keys = %d, %v; want 1", fk, err)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
@@ -148,6 +149,13 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if err := srcStore.VerifyKey(current); err != nil {
 		return fmt.Errorf("check source key: %w", withKeyHint(err))
 	}
+	// One key change at a time: held until this one ends, so another can't
+	// clear the files this one's rollback needs.
+	release, err := lockKeyChange(dataDir)
+	if err != nil {
+		return err
+	}
+	defer release()
 	// The vault opens with its key, so copies left by an earlier change
 	// (from an older sesh, or one that was interrupted) serve no purpose.
 	if err := removeLeftovers(app.Stderr, keyChangeLeftovers(dbPath, filepath.Join(dataDir, sidecarFile))...); err != nil {
@@ -578,6 +586,13 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if err := srcStore.VerifyKey("password"); err != nil {
 		return nil, fmt.Errorf("check current key: %w", withKeyHint(err))
 	}
+	// One key change at a time: held until this one ends, so another can't
+	// clear the files this one's rollback needs.
+	release, err := lockKeyChange(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	// The vault opens with its key, so files left by an earlier change
 	// (from an older sesh, or one that was interrupted) serve no purpose,
 	// and the staged ones must go before new ones are made.
@@ -823,4 +838,31 @@ func removeLeftovers(w io.Writer, paths ...string) error {
 		}
 	}
 	return nil
+}
+
+// keyChangeLockFile serialises key changes on a vault: a password change,
+// a key-source switch, or a recovery.
+const keyChangeLockFile = ".key-change.lock"
+
+// lockKeyChange takes the vault's key-change lock without waiting. Held from
+// before leftovers are cleared until the change ends, it stops a second
+// change from deleting the first one's in-progress copies, which its
+// rollback needs. The lock goes with the process, so a crash can't leave
+// it held.
+func lockKeyChange(dataDir string) (release func(), err error) {
+	path := filepath.Join(dataDir, keyChangeLockFile)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // next to the user's own vault
+	if err != nil {
+		return nil, fmt.Errorf("open the key-change lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close() //nolint:errcheck // already failing
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errors.New("another sesh command is changing this vault's key; try again when it has finished")
+		}
+		return nil, fmt.Errorf("take the key-change lock: %w", err)
+	}
+	return func() {
+		_ = f.Close() //nolint:errcheck // closing releases the lock; nothing to do on failure
+	}, nil
 }

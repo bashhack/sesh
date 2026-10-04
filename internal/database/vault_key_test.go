@@ -3,6 +3,7 @@ package database
 import (
 	"bytes"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -116,5 +117,30 @@ func TestRecordedKeySource(t *testing.T) {
 	}
 	if got, err := RecordedKeySource(filepath.Join(t.TempDir(), "missing.db")); err == nil {
 		t.Errorf("a missing vault = %q, want an error", got)
+	}
+}
+
+// Folder names with characters that mean something in a URI.
+func TestRecordedKeySource_UnusualPaths(t *testing.T) {
+	for _, dir := range []string{"a#b", "c%20d", "e?f", "g h"} {
+		t.Run(dir, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), dir, "passwords.db")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			s, err := Open(path, &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)})
+			if err != nil {
+				t.Skipf("the vault itself doesn't open at this path: %v", err)
+			}
+			if err := s.CheckKey("keychain"); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := RecordedKeySource(path); err != nil || got != "keychain" {
+				t.Errorf("RecordedKeySource = %q, %v; want keychain", got, err)
+			}
+		})
 	}
 }

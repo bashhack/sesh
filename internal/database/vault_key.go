@@ -144,7 +144,7 @@ func RecordedKeySource(dbPath string) (_ string, err error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return "", err
 	}
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro")
+	db, err := sql.Open("sqlite", fileURI(dbPath, "mode=ro"))
 	if err != nil {
 		return "", fmt.Errorf("open vault: %w", err)
 	}

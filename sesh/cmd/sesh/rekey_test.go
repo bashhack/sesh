@@ -1174,3 +1174,51 @@ func TestKeyChanges_RemoveOldCopiesBeforeReporting(t *testing.T) {
 		}
 	})
 }
+
+// Only one key change runs on a vault at a time; a second one refuses
+// before touching anything, including the first one's in-progress files.
+func TestKeyChanges_OneAtATime(t *testing.T) {
+	t.Run("rotation", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		t.Setenv("SESH_KEY_SOURCE", "password")
+		t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+		populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+		inProgress := env.dbPath + rotateBackupSuffix // another change's in-progress copy
+		if err := os.WriteFile(inProgress, []byte("first change's copy"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		release, err := lockKeyChange(env.dataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("SESH_MASTER_PASSWORD", "")
+		app, _ := rekeyTestApp("y\n")
+		err = runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678"))
+		if err == nil || !strings.Contains(err.Error(), "another sesh command is changing this vault's key") {
+			t.Errorf("second change: err = %v", err)
+		}
+		if _, err := os.Stat(inProgress); err != nil {
+			t.Errorf("the second change removed the first one's copy: %v", err)
+		}
+		release()
+		app, _ = rekeyTestApp("y\n")
+		if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
+			t.Errorf("after the lock was released: %v", err)
+		}
+	})
+	t.Run("rekey", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		kc := newKCMock(hexKey())
+		populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+		release, err := lockKeyChange(env.dataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+		t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
+		app, _ := rekeyTestApp("y\n")
+		if err := runRekey(app, []string{"--to=password"}, kc); err == nil || !strings.Contains(err.Error(), "another sesh command is changing this vault's key") {
+			t.Errorf("second change: err = %v", err)
+		}
+	})
+}

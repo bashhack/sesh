@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -39,7 +40,7 @@ var ErrSecretTooLarge = errors.New("secret too large")
 // Open creates or opens the SQLite database at dbPath, runs any pending
 // migrations, and returns a ready-to-use Store.
 func Open(dbPath string, oracle CryptoOracle) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	db, err := sql.Open("sqlite", fileURI(dbPath, "_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -56,6 +57,13 @@ func Open(dbPath string, oracle CryptoOracle) (*Store, error) {
 	}
 
 	return &Store{db: db, oracle: oracle, path: dbPath}, nil
+}
+
+// fileURI is the SQLite address of the file at path, with query options.
+// The path is escaped, so a ?, #, or % in it is part of the name rather
+// than the start of options (which would open, or create, another file).
+func fileURI(path, query string) string {
+	return (&url.URL{Scheme: "file", Path: path, RawQuery: query}).String()
 }
 
 // Close releases the database connection and clears any cached key
