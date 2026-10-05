@@ -1,6 +1,8 @@
 package database
 
 import (
+	"encoding/hex"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -47,22 +49,73 @@ func TestStore_AuditNamesEntriesByKey(t *testing.T) {
 // Each secret is bound to its entry: one copied into another entry's row,
 // by anyone who can write the file, doesn't decrypt there.
 func TestStore_SecretsCantBeSwappedBetweenEntries(t *testing.T) {
+	from := vault.Key{Kind: vault.KindPassword, Service: "a", Username: "b"}
+	for name, to := range map[string]vault.Key{
+		"another service":  {Kind: vault.KindPassword, Service: "bank", Username: "b"},
+		"another kind":     {Kind: vault.KindAPIKey, Service: "a", Username: "b"},
+		"another username": {Kind: vault.KindPassword, Service: "a", Username: "c"},
+		"no username":      {Kind: vault.KindPassword, Service: "a"},
+		// Written straight into the file: its ID reads the same as from's.
+		"a service with a slash": {Kind: vault.KindPassword, Service: "a/b"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newTestStore(t)
+			if err := s.Put(from, []byte("from-secret")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.Exec(
+				`INSERT INTO entries (kind, service, username, encrypted_data, salt, created_at, updated_at)
+				 SELECT ?, ?, ?, encrypted_data, salt, created_at, updated_at FROM entries WHERE service = 'a' AND username = 'b'`,
+				string(to.Kind), to.Service, to.Username,
+			); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := s.Get(to); err == nil {
+				t.Errorf("Get(%s) = %q from a copy of %s's secret, want an error", to, got, from)
+			}
+			if got, err := s.Get(from); err != nil || string(got) != "from-secret" {
+				t.Errorf("Get(%s) = %q, %v; want its own secret", from, got, err)
+			}
+		})
+	}
+}
+
+// The associated data is part of every stored secret, so its bytes must
+// never change: a change would make every vault's entries unreadable.
+func TestEntryAAD_Golden(t *testing.T) {
+	for k, want := range map[vault.Key]string{
+		{Kind: vault.KindPassword, Service: "github", Username: "alice"}: "736573682d656e7472792d76310000000870617373776f72640000000667697468756200000005616c696365",
+		{Kind: vault.KindAPIKey, Service: "openai"}:                      "736573682d656e7472792d7631000000076170695f6b6579000000066f70656e616900000000",
+	} {
+		if got := hex.EncodeToString(entryAAD(k)); got != want {
+			t.Errorf("entryAAD(%s) = %s, want %s", k, got, want)
+		}
+	}
+}
+
+// The vault's key check and an entry's secret are sealed with different
+// associated data, so neither decrypts in the other's place.
+func TestStore_KeyCheckAndEntriesDontStandInForEachOther(t *testing.T) {
 	s := newTestStore(t)
-	bank := vault.Key{Kind: vault.KindPassword, Service: "bank"}
-	blog := vault.Key{Kind: vault.KindPassword, Service: "blog"}
-	if err := s.Put(bank, []byte("bank-password")); err != nil {
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	if err := s.Put(k, []byte("bank-password")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put(blog, []byte("blog-password")); err != nil {
+	if err := s.CheckKey("password"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`UPDATE entries SET (encrypted_data, salt) = (SELECT encrypted_data, salt FROM entries WHERE service = 'bank') WHERE service = 'blog'`); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO entries (kind, service, username, encrypted_data, salt, created_at, updated_at)
+		SELECT 'password', 'check', '', check_data, check_salt, created_at, created_at FROM vault_key`); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.Get(blog); err == nil {
-		t.Errorf("Get(blog) = %q after copying bank's secret into its row, want an error", got)
+	if got, err := s.Get(vault.Key{Kind: vault.KindPassword, Service: "check"}); err == nil {
+		t.Errorf("the key check decrypted as an entry: %q", got)
 	}
-	if got, err := s.Get(bank); err != nil || string(got) != "bank-password" {
-		t.Errorf("Get(bank) = %q, %v; want its own secret", got, err)
+	if _, err := s.db.Exec(`UPDATE vault_key SET (check_data, check_salt) = (SELECT encrypted_data, salt FROM entries WHERE service = 'bank')`); err != nil {
+		t.Fatal(err)
+	}
+	var wk *WrongKeyError
+	if err := s.VerifyKey("password"); !errors.As(err, &wk) {
+		t.Errorf("VerifyKey with an entry as the key check = %v, want a WrongKeyError", err)
 	}
 }

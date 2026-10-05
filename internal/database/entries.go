@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,8 +20,18 @@ var _ vault.Store = (*Store)(nil)
 // entryAAD binds an entry's ciphertext to its key: a secret copied into
 // another entry's row doesn't decrypt there. The vault key check encrypts
 // with none, so neither can stand in for the other.
+//
+// It's part of every stored secret, so its bytes never change: a version
+// tag, then the kind, service, and username, each as a 4-byte big-endian
+// length and its bytes. The lengths keep fields from running together
+// (service "a/b" is not service "a", username "b"), whatever they contain.
 func entryAAD(k vault.Key) []byte {
-	return []byte("sesh-entry\x00" + k.String())
+	aad := []byte("sesh-entry-v1")
+	for _, f := range []string{string(k.Kind), k.Service, k.Username} {
+		aad = binary.BigEndian.AppendUint32(aad, uint32(len(f))) //nolint:gosec // field lengths are far below 4 GiB
+		aad = append(aad, f...)
+	}
+	return aad
 }
 
 func notFound(k vault.Key) error {
