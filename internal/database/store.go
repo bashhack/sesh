@@ -43,7 +43,7 @@ func Open(dbPath string, oracle CryptoOracle) (*Store, error) {
 	if err := applyMigrations(db); err != nil {
 		if errors.Is(err, ErrOldVault) {
 			_ = db.Close() //nolint:errcheck // the refusal is what matters
-			return nil, ErrOldVault
+			return nil, fmt.Errorf("%s: %w", dbPath, ErrOldVault)
 		}
 		if closeErr := db.Close(); closeErr != nil {
 			return nil, fmt.Errorf("apply migrations: %w (close also failed: %v)", err, closeErr)

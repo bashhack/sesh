@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -265,37 +266,41 @@ func TestMigrateV5_UpgradesAnEmptyVault(t *testing.T) {
 }
 
 func TestMigrateV5_RefusesAVaultWithOldEntries(t *testing.T) {
-	dbPath := oldVault(t, 4, true)
-	_, err := Open(dbPath, &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)})
-	if !errors.Is(err, ErrOldVault) {
-		t.Fatalf("Open = %v, want ErrOldVault", err)
-	}
-	if wantSub := "earlier development build"; !strings.Contains(err.Error(), wantSub) {
-		t.Errorf("err = %v, want it to contain %q", err, wantSub)
-	}
+	for from := 1; from <= 4; from++ {
+		t.Run(fmt.Sprintf("from v%d", from), func(t *testing.T) {
+			dbPath := oldVault(t, from, true)
+			_, err := Open(dbPath, &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)})
+			if !errors.Is(err, ErrOldVault) {
+				t.Fatalf("Open = %v, want ErrOldVault", err)
+			}
+			if wantSub := "earlier development build"; !strings.Contains(err.Error(), wantSub) {
+				t.Errorf("err = %v, want it to contain %q", err, wantSub)
+			}
 
-	// The vault is unchanged: still version 4, its entry still there.
-	raw, err := sql.Open("sqlite", fileURI(dbPath, ""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := raw.Close(); err != nil {
-			t.Errorf("Close: %v", err)
-		}
-	})
-	var version, rows int
-	if err := raw.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	if err := raw.QueryRow(`SELECT COUNT(*) FROM passwords`).Scan(&rows); err != nil {
-		t.Fatal(err)
-	}
-	if version != 4 || rows != 1 {
-		t.Errorf("after the refusal: version %d, %d old rows; want 4 and 1", version, rows)
-	}
-	if got := tableNames(t, raw, "entries"); got != nil {
-		t.Errorf("the refused vault gained %v", got)
+			// The vault is unchanged: still at its version, its entry still there.
+			raw, err := sql.Open("sqlite", fileURI(dbPath, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := raw.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			})
+			var version, rows int
+			if err := raw.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
+				t.Fatal(err)
+			}
+			if err := raw.QueryRow(`SELECT COUNT(*) FROM passwords`).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if version != from || rows != 1 {
+				t.Errorf("after the refusal: version %d, %d old rows; want %d and 1", version, rows, from)
+			}
+			if got := tableNames(t, raw, "entries"); got != nil {
+				t.Errorf("the refused vault gained %v", got)
+			}
+		})
 	}
 }
 

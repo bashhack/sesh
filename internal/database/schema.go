@@ -137,11 +137,12 @@ func migrateV4(tx *sql.Tx) error {
 // ErrOldVault is returned for a vault an earlier development build made
 // with entries in the old table: sesh had no releases then, so v5
 // doesn't convert one.
-var ErrOldVault = errors.New("this vault was made by an earlier development build of sesh, which this version can't open: start a new vault, or export this one with that build and import the export")
+var ErrOldVault = errors.New("this vault was made by an earlier development build of sesh, which this version can't open: start a new one by moving this file aside and running sesh again")
 
 // migrateV5 gives entries their own table, with kind, service name, and
 // username as columns, unique together. A vault whose old table holds
-// entries is refused (ErrOldVault), unchanged.
+// entries is refused (ErrOldVault); applyMigrations checks for that before
+// any migration runs, so the vault is left unchanged.
 func migrateV5(tx *sql.Tx) error {
 	var n int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM passwords`).Scan(&n); err != nil {
@@ -173,6 +174,22 @@ func migrateV5(tx *sql.Tx) error {
 	return nil
 }
 
+// refuseOldEntries returns ErrOldVault for a vault before v5 whose old
+// table holds entries, before any migration changes it.
+func refuseOldEntries(db *sql.DB, applied int) error {
+	if applied == 0 || applied >= 5 {
+		return nil
+	}
+	var has bool
+	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM passwords)`).Scan(&has); err != nil {
+		return fmt.Errorf("check for entries in the old table: %w", err)
+	}
+	if has {
+		return ErrOldVault
+	}
+	return nil
+}
+
 // applyMigrations brings the database up to currentSchemaVersion.
 func applyMigrations(db *sql.DB) error {
 	// Ensure the schema_migrations table exists so we can query it.
@@ -196,6 +213,9 @@ func applyMigrations(db *sql.DB) error {
 	// schema and potentially corrupt or skip rows.
 	if applied > currentSchemaVersion {
 		return fmt.Errorf("database schema version %d is newer than this binary supports (max %d) — upgrade sesh or point at a matching database", applied, currentSchemaVersion)
+	}
+	if err := refuseOldEntries(db, applied); err != nil {
+		return err
 	}
 
 	for v := applied + 1; v <= currentSchemaVersion; v++ {
