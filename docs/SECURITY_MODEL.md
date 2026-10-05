@@ -15,7 +15,7 @@ sesh is built on three fundamental principles:
 sesh is designed to reduce exposure to:
 
 - **Corporate Data Harvesting**: Unlike browser extensions or corporate MFA apps, sesh never phones home
-- **Credential Theft**: Every secret is encrypted in the vault; its key is derived from your master password, or kept in a Keychain item only the sesh binary can read without a prompt
+- **Credential Theft**: Every secret is encrypted in the vault; its key is derived from your master password, or kept in a macOS Keychain item
 - **Memory Scraping**: Best-effort memory zeroing reduces exposure windows
 - **Accidental Exposure**: Subshells isolate credentials from your main environment
 - **Supply Chain Attacks**: Minimal dependencies reduce attack surface
@@ -92,7 +92,7 @@ A recovery key lets someone who forgot the master password set a new one. There'
 
 The 256-bit master encryption key is stored in one macOS Keychain item, combining OS-level access control with application-level encryption. The key is hex-encoded (64 ASCII characters) before storage because the `security` command's tokenizer can't reliably round-trip raw random bytes; the key is decoded on read and zeroed after use.
 
-The item is written with the system `security` command, fed through its interactive mode so the key never appears in a process listing, and with `-T` naming the sesh binary (found whether it came from Homebrew, `go install`, or elsewhere): the sesh binary reads it without a prompt, and macOS asks before any other program does.
+The item is written with the system `security` command, fed through its interactive mode so the key never appears in a process listing. sesh reads it through `security` as well, so the Keychain's access check sees the `security` tool, not sesh. macOS asks before `security` reads the item; choosing Always Allow adds `security` to the item's access list, and from then on any program running as you can read the vault key with `security find-generic-password` without a prompt. The item also names the sesh binary with `-T`, but since sesh never reads the item itself, that restricts nothing. The master password key source doesn't have this exposure, because its key isn't stored anywhere.
 
 ##### Sesh agent
 
@@ -335,7 +335,7 @@ type ServiceProvider interface {
 1. **Protect Your macOS Account**: sesh's security depends on your account security
 2. **Use Unique Profiles**: Separate work/personal accounts with profiles
 3. **Regular Cleanup**: Periodically review stored entries with `-list`
-4. **Install in a Protected Location**: The Keychain `-T` flag binds access to sesh's binary path. Install via Homebrew or to a system directory — avoid running from writable locations like `/tmp` where symlink attacks are possible
+4. **Install in a Protected Location**: Install sesh where other users can't replace it, not a shared writable location like `/tmp`: a replaced binary would see your master password and your secrets
 5. **Understand Mode Tradeoffs**: Subshell mode avoids clipboard exposure but places credentials in environment variables and temp init files. Clipboard mode avoids env var exposure but is visible to clipboard managers. Choose based on your threat model.
 
 ### For Developers

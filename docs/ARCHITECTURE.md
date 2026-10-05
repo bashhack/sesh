@@ -215,17 +215,11 @@ type KeySource interface {
 Two implementations:
 
 - **`MasterPasswordSource`** (default) — derives the key from a user-supplied passphrase via Argon2id. The KDF salt, Argon2id parameters, and a verification blob live in a 0600 sidecar file (`passwords.key`) next to the database. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. No keychain dependency — works on macOS and Linux. In normal use the sesh agent holds the derived key and the store encrypts through it (`agent.Oracle`).
-- **`KeychainSource`** (`key_source = "keychain"`) — reads the key from one macOS Keychain item; first-run generates a random 256-bit key and stores it. The item is created with `-T` naming the sesh binary, so macOS asks before any other program reads it. macOS-only.
+- **`KeychainSource`** (`key_source = "keychain"`) — reads the key from one macOS Keychain item; first-run generates a random 256-bit key and stores it. sesh reads and writes it through the `security` tool, so macOS's access prompt is for `security`, not sesh, and Always Allow lets any program that runs `security` read it (see `SECURITY_MODEL.md`). macOS-only.
 
 `main.go`'s `buildKeySource(dbPath, source)` selects between them by the `key_source` setting. The store only sees a `database.CryptoOracle`, so it doesn't know which source provided the key.
 
 **Encrypted export.** The password manager's `ExportEncrypted`/`ImportEncrypted` use the same primitives (Argon2id + AES-256-GCM) but with an independent per-export salt. The envelope is self-contained — the salt and parameters are embedded alongside the ciphertext — so encrypted exports are portable across machines and key sources.
-
-Binary path restrictions in practice
-```bash
-security add-generic-password ... -T /path/to/sesh
-```
-This means even if another process knows the service name, it cannot access the secret.
 
 **Stored names.** Each entry is stored under a name built by `keyformat.Build` (and parsed by `keyformat.Parse`): `sesh-password/{type}/{service}[/{username}]` for the password manager, `sesh-totp/{service}[/{profile}]` for the TOTP provider, and `sesh-aws/{profile}` (the MFA secret) with `sesh-aws-serial/{profile}` (the MFA device) for AWS. The account is the OS username.
 
@@ -427,7 +421,7 @@ Each layer provides independent security measures:
 
 1. **Storage Security**
    - **Threat**: Other processes reading secrets
-   - **Defense**: Every entry encrypted (AES-256-GCM) under a key derived from the master password, or kept in a Keychain item restricted to the sesh binary (`-T` flag)
+   - **Defense**: Every entry encrypted (AES-256-GCM) under a key derived from the master password, or kept in a macOS Keychain item
    - **Enforcement**: Argon2id and the vault's key check; for the Keychain key, macOS Keychain access control
 
 2. **Memory Security**
