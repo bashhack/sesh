@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,33 @@ func TestSocketPath_DefaultsUnderUserCacheDir(t *testing.T) {
 	}
 }
 
+func TestSocketPath_RefusesAPathTooLongForASocket(t *testing.T) {
+	limit := maxSocketPath()
+	t.Setenv("SESH_AUTH_SOCK", "/"+strings.Repeat("s", limit-1))
+	if _, err := SocketPath(); err != nil {
+		t.Errorf("SocketPath at the limit (%d characters): %v", limit, err)
+	}
+
+	tooLong := "/" + strings.Repeat("s", limit)
+	t.Setenv("SESH_AUTH_SOCK", tooLong)
+	_, err := SocketPath()
+	for _, wantSub := range []string{tooLong, fmt.Sprintf("%d characters", limit+1), fmt.Sprintf("at most %d", limit), "set SESH_AUTH_SOCK to a shorter path"} {
+		if err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("SocketPath with a %d-character SESH_AUTH_SOCK: err = %v, want it to contain %q", limit+1, err, wantSub)
+		}
+	}
+
+	// The default path is too long when the cache folder is nested deep.
+	cache := filepath.Join(t.TempDir(), strings.Repeat("c", limit))
+	t.Setenv("HOME", cache)
+	t.Setenv("XDG_CACHE_HOME", cache)
+	t.Setenv("SESH_AUTH_SOCK", "")
+	_, err = SocketPath()
+	if wantSub := "set SESH_AUTH_SOCK to a shorter path"; err == nil || !strings.Contains(err.Error(), wantSub) {
+		t.Errorf("SocketPath under a deep cache folder: err = %v, want it to contain %q", err, wantSub)
+	}
+}
+
 func TestLogPath_UnderUserCacheLogsDir(t *testing.T) {
 	got, err := LogPath()
 	if err != nil {
@@ -40,7 +68,7 @@ func TestLogPath_UnderUserCacheLogsDir(t *testing.T) {
 }
 
 func TestPaths_TightenExistingDirs(t *testing.T) {
-	home := t.TempDir()
+	home := filepath.Dir(tempSocketPath(t)) // short enough for the socket path
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	t.Setenv("SESH_AUTH_SOCK", "")
