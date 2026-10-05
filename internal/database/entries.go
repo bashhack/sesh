@@ -109,7 +109,11 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
 	if err != nil {
 		return fmt.Errorf("store %s: %w", e.Key, err)
 	}
-	s.audit("modify", e.Key.String(), "Put")
+	detail := "Put"
+	if whole {
+		detail = "Save"
+	}
+	s.audit("modify", e.Key.String(), detail)
 	return nil
 }
 

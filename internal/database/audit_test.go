@@ -301,3 +301,21 @@ func TestAuditCountEstimate_NoScan(t *testing.T) {
 		}
 	}
 }
+
+func TestAudit_NamesTheWrite(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	if err := s.Put(k, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(&vault.Entry{Key: k}, []byte("two")); err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.AuditEvents(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Detail != "Save" || events[1].Detail != "Put" {
+		t.Errorf("events = %+v, want Save then Put, newest first", events)
+	}
+}
