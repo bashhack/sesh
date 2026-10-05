@@ -448,8 +448,10 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) error {
 // rotateMasterPassword re-encrypts the vault under a new master password.
 // src opens the vault as it is; nil asks for the current master password.
 // A recovery passes the key its recovery key opened, and then replaces the
-// recovery key itself, so it isn't re-wrapped here. On success it returns
-// the new vault key, which the caller must zero.
+// recovery key itself, so it isn't re-wrapped here. Once the new vault is
+// in place it returns the new vault key, which the caller must zero, even
+// if writing the summary then fails: a non-nil key means the change
+// committed.
 func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySource) (newKey []byte, err error) {
 	st, err := settings()
 	if err != nil {
@@ -683,23 +685,23 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	}
 
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %d entries under a new master password.\n", result.Migrated); perr != nil {
-		return nil, perr
+		return bytes.Clone(destKey), perr
 	}
 	if _, perr := fmt.Fprintf(app.Stderr, "Old DB preserved at %s\n", dbBackupPath); perr != nil {
-		return nil, perr
+		return bytes.Clone(destKey), perr
 	}
 	if _, perr := fmt.Fprintf(app.Stderr, "Old sidecar preserved at %s\n", sidecarBackupPath); perr != nil {
-		return nil, perr
+		return bytes.Clone(destKey), perr
 	}
 	if _, perr := fmt.Fprintln(app.Stderr, "Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available)."); perr != nil {
-		return nil, perr
+		return bytes.Clone(destKey), perr
 	}
 	for _, msg := range []string{touchNote, recoveryNote, agentNote} {
 		if msg == "" {
 			continue
 		}
 		if _, perr := fmt.Fprintln(app.Stderr, msg); perr != nil {
-			return nil, perr
+			return bytes.Clone(destKey), perr
 		}
 	}
 	return bytes.Clone(destKey), nil

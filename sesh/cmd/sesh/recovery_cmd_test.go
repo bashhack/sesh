@@ -487,3 +487,42 @@ func TestRecover_Refuses(t *testing.T) {
 		}
 	})
 }
+
+// stderrFailsAt fails every write once one contains marker.
+type stderrFailsAt struct {
+	marker string
+	failed bool
+}
+
+func (w *stderrFailsAt) Write(p []byte) (int, error) {
+	if w.failed || strings.Contains(string(p), w.marker) {
+		w.failed = true
+		return 0, errors.New("stderr closed")
+	}
+	return len(p), nil
+}
+
+// If the change commits but its summary can't be written, the used recovery
+// key is still retired: the error is reported, and its file is gone.
+func TestRecover_RetiresTheKeyEvenIfReportingFails(t *testing.T) {
+	env, used := recoverableVault(t)
+	orig := recoveryPrompt
+	recoveryPrompt = func() passwordPromptConfig {
+		return withAnswer(interactivePrompt(t, used.String(), "new-pw-5678", "new-pw-5678"), false)
+	}
+	t.Cleanup(func() { recoveryPrompt = orig })
+	app, _ := rekeyTestApp("y\n")
+	app.Stderr = &stderrFailsAt{marker: "Rotated"}
+	restore := testutil.RedirectStderr(t)
+	err := runRecover(app, nil)
+	restore()
+	if err == nil {
+		t.Fatal("expected the write failure to be reported")
+	}
+	if !passwordOpens(t, env.dataDir, "new-pw-5678") {
+		t.Fatal("the change didn't commit; this test needs it to")
+	}
+	if _, err := recovery.ReadFile(env.dataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the used recovery key's file is still there (err %v)", err)
+	}
+}

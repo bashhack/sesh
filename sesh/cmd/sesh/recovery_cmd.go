@@ -366,16 +366,17 @@ func runRecover(app *App, args []string) error {
 	newKey, err := rotateMasterPassword(app, p, src)
 	src.Close()
 	defer secure.SecureZeroBytes(newKey)
-	if err != nil {
-		return err
-	}
 	if newKey == nil {
-		return nil // the rotation was cancelled; nothing changed
+		return err // nothing changed: cancelled (nil), or failed before the swap
 	}
 
-	// The used key stops working: its file goes, and a new key is offered.
-	if err := recovery.Remove(dataDir); err != nil {
-		return fmt.Errorf("the master password was changed, but the used recovery key's file couldn't be removed (%w); run: sesh recovery remove", err)
+	// The new vault is in place, so the used key stops working: its file
+	// goes, even if writing the summary failed, and a new key is offered.
+	if rerr := recovery.Remove(dataDir); rerr != nil {
+		return fmt.Errorf("the master password was changed, but the used recovery key's file couldn't be removed (%w); run: sesh recovery remove", rerr)
+	}
+	if err != nil {
+		return err
 	}
 	note("Your recovery key has been used, so it no longer works.")
 	newMat, err := database.ReadUnlockMaterial(dataDir)
