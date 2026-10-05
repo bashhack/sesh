@@ -619,7 +619,7 @@ The most efficient AWS development workflow uses sesh's subshell mode, which pro
 ```bash
 $ sesh -service aws
 🔍 Using MFA serial: arn:aws:iam::123456789012:mfa/your-user
-🔑 Retrieved secret from keychain
+🔑 Retrieved secret from the vault
 Starting secure shell with aws credentials
 🔐 Secure shell with aws credentials activated. Type 'sesh_help' for more information.
 (sesh:aws) $
