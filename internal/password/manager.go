@@ -104,36 +104,30 @@ func (m *Manager) StoreTOTPSecret(service, username, secret string) error {
 }
 
 // StoreTOTPSecretWithParams checks and stores a TOTP secret with its code
-// settings (algorithm, digits, period, issuer). The settings decide which
-// codes are right, so failing to store them is an error.
+// settings (algorithm, digits, period, issuer), in one write: the settings
+// decide which codes are right, so the secret is never stored without
+// them. An entry being replaced keeps its other settings and its creation
+// time.
 func (m *Manager) StoreTOTPSecretWithParams(service, username, secret string, params totp.Params) error {
 	normalized, err := totp.ValidateAndNormalizeSecret(secret)
 	if err != nil {
 		return fmt.Errorf("invalid TOTP secret: %w", err)
 	}
-	k := key(service, username, EntryTypeTOTP)
-	if err := m.StorePasswordString(service, username, normalized, EntryTypeTOTP); err != nil {
-		return err
-	}
-	e, err := m.store.Lookup(k)
-	if err != nil {
-		return fmt.Errorf("stored the TOTP secret but couldn't read its settings: %w", err)
+	e, err := m.store.Lookup(key(service, username, EntryTypeTOTP))
+	switch {
+	case errors.Is(err, vault.ErrNotFound):
+		e = vault.Entry{Key: key(service, username, EntryTypeTOTP)}
+	case err != nil:
+		return fmt.Errorf("failed to check for an existing entry: %w", err)
 	}
 	e.Settings.TOTP = params
-	if err := m.store.SetSettings(k, e.Settings); err != nil {
-		return fmt.Errorf("stored the TOTP secret but couldn't store its code settings (codes would use the defaults): %w", err)
+	e.UpdatedAt = time.Time{}
+	plain := []byte(normalized)
+	defer secure.SecureZeroBytes(plain)
+	if err := m.store.Save(&e, plain); err != nil {
+		return fmt.Errorf("failed to store the TOTP secret: %w", err)
 	}
 	return nil
-}
-
-// GetTOTPParams returns a TOTP entry's code settings; zero for an entry
-// with the usual ones, or none.
-func (m *Manager) GetTOTPParams(service, username string) totp.Params {
-	e, err := m.store.Lookup(key(service, username, EntryTypeTOTP))
-	if err != nil {
-		return totp.Params{}
-	}
-	return e.Settings.TOTP
 }
 
 // GenerateTOTPCode returns the current code for a stored TOTP secret,

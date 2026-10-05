@@ -19,7 +19,21 @@ func newTestManager(t *testing.T) (*Manager, *vault.MemStore) {
 // failingStore is a MemStore whose chosen methods fail.
 type failingStore struct {
 	*vault.MemStore
-	lookupErr, setSettingsErr error
+	lookupErr, setSettingsErr, saveErr error
+}
+
+func (f *failingStore) Put(k vault.Key, secret []byte) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	return f.MemStore.Put(k, secret)
+}
+
+func (f *failingStore) Save(e *vault.Entry, secret []byte) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	return f.MemStore.Save(e, secret)
 }
 
 func (f *failingStore) Lookup(k vault.Key) (vault.Entry, error) {
@@ -96,13 +110,17 @@ func TestStoreTOTPSecret(t *testing.T) {
 	if err := m.StoreTOTPSecretWithParams("bank", "me", "JBSWY3DPEHPK3PXP", params); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.GetTOTPParams("bank", "me"); got != params {
-		t.Errorf("GetTOTPParams = %+v, want %+v", got, params)
+	if e, err := store.Lookup(k); err != nil || e.Settings.TOTP != params {
+		t.Errorf("code settings = %+v, %v; want %+v", e.Settings.TOTP, err, params)
 	}
 
 	// Storing again with the usual settings clears them, but keeps the
 	// entry's other settings.
 	if err := store.SetSettings(k, vault.Settings{TOTP: params, AWSMFADevice: "arn:aws:iam::1:mfa/me"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Lookup(k)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := m.StoreTOTPSecret("bank", "me", "JBSWY3DPEHPK3PXP"); err != nil {
@@ -111,6 +129,9 @@ func TestStoreTOTPSecret(t *testing.T) {
 	e, err := store.Lookup(k)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !e.CreatedAt.Equal(before.CreatedAt) {
+		t.Errorf("created %v, want %v kept", e.CreatedAt, before.CreatedAt)
 	}
 	if e.Settings != (vault.Settings{AWSMFADevice: "arn:aws:iam::1:mfa/me"}) {
 		t.Errorf("settings = %+v, want the code settings cleared and the device kept", e.Settings)
@@ -121,12 +142,34 @@ func TestStoreTOTPSecret(t *testing.T) {
 	}
 }
 
-func TestStoreTOTPSecret_SettingsFailureSurfaces(t *testing.T) {
-	store := &failingStore{MemStore: vault.NewMemStore(), setSettingsErr: errors.New("disk full")}
-	m := NewManager(store)
-	err := m.StoreTOTPSecretWithParams("bank", "me", "JBSWY3DPEHPK3PXP", totp.Params{Digits: 8})
-	if wantSub := "couldn't store its code settings"; err == nil || !strings.Contains(err.Error(), wantSub) || !strings.Contains(err.Error(), "disk full") {
-		t.Errorf("err = %v, want it to contain %q and the cause", err, wantSub)
+// A failed store leaves the entry as it was, never the new secret with the
+// old code settings.
+func TestStoreTOTPSecret_FailureLeavesTheEntry(t *testing.T) {
+	k := vault.Key{Kind: vault.KindTOTP, Service: "bank", Username: "me"}
+	old := vault.Settings{TOTP: totp.Params{Digits: 8}}
+	for name, store := range map[string]*failingStore{
+		"settings write fails": {MemStore: vault.NewMemStore(), setSettingsErr: errors.New("disk full")},
+		"write fails":          {MemStore: vault.NewMemStore(), saveErr: errors.New("disk full")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := store.MemStore.Save(&vault.Entry{Key: k, Settings: old}, []byte("OLDSECRETOLDSECR")); err != nil {
+				t.Fatal(err)
+			}
+			err := NewManager(store).StoreTOTPSecretWithParams("bank", "me", "JBSWY3DPEHPK3PXP", totp.Params{})
+			secret, gerr := store.Get(k)
+			e, lerr := store.Lookup(k)
+			if gerr != nil || lerr != nil {
+				t.Fatal(gerr, lerr)
+			}
+			switch {
+			case err == nil && (string(secret) != "JBSWY3DPEHPK3PXP" || e.Settings != vault.Settings{}):
+				t.Errorf("stored without error but entry = %q, %+v; want the new secret and settings", secret, e.Settings)
+			case err != nil && (string(secret) != "OLDSECRETOLDSECR" || e.Settings != old):
+				t.Errorf("err = %v, but entry = %q, %+v; want it unchanged", err, secret, e.Settings)
+			case err != nil && !strings.Contains(err.Error(), "disk full"):
+				t.Errorf("err = %v, want the cause", err)
+			}
+		})
 	}
 }
 
@@ -149,13 +192,6 @@ func TestGenerateTOTPCode_UsesTheCodeSettings(t *testing.T) {
 	}
 	if _, err := m.GenerateTOTPCode("nope", ""); err == nil {
 		t.Error("a missing entry gave a code")
-	}
-}
-
-func TestGetTOTPParams_None(t *testing.T) {
-	m, _ := newTestManager(t)
-	if got := m.GetTOTPParams("nope", ""); got != (totp.Params{}) {
-		t.Errorf("GetTOTPParams of a missing entry = %+v, want zero", got)
 	}
 }
 

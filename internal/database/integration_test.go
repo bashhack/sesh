@@ -18,6 +18,7 @@ import (
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // newIntegrationStore creates a real SQLite store with real encryption for integration tests.
@@ -894,7 +895,7 @@ func TestIntegration_QRCodeToStoreToGenerate(t *testing.T) {
 }
 
 func TestIntegration_TOTPParamsNonDefault(t *testing.T) {
-	_, mgr := newIntegrationStore(t)
+	store, mgr := newIntegrationStore(t)
 
 	// Store TOTP with non-standard params: SHA256, 8 digits, 60-second period
 	t.Log("Store TOTP with non-default params")
@@ -910,7 +911,11 @@ func TestIntegration_TOTPParamsNonDefault(t *testing.T) {
 
 	// Retrieve params
 	t.Log("Retrieve TOTP params")
-	got := mgr.GetTOTPParams("acme", "admin")
+	e, err := store.Lookup(vault.Key{Kind: vault.KindTOTP, Service: "acme", Username: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := e.Settings.TOTP
 	t.Logf("  Issuer: %s, Algorithm: %s, Digits: %d, Period: %d",
 		got.Issuer, got.Algorithm, got.Digits, got.Period)
 
@@ -940,7 +945,7 @@ func TestIntegration_TOTPParamsNonDefault(t *testing.T) {
 }
 
 func TestIntegration_TOTPParamsDefault(t *testing.T) {
-	_, mgr := newIntegrationStore(t)
+	store, mgr := newIntegrationStore(t)
 
 	// Store with default params — should generate 6-digit codes
 	t.Log("Store TOTP with default params")
@@ -949,8 +954,11 @@ func TestIntegration_TOTPParamsDefault(t *testing.T) {
 	}
 
 	// Params should be zero/default
-	params := mgr.GetTOTPParams("github", "alice")
-	if !params.IsDefault() {
+	e, err := store.Lookup(vault.Key{Kind: vault.KindTOTP, Service: "github", Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params := e.Settings.TOTP; !params.IsDefault() {
 		t.Fatalf("expected default params, got %+v", params)
 	}
 	t.Log("  Params: default")
