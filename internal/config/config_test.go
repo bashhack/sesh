@@ -116,7 +116,7 @@ func TestLoad_Rejects(t *testing.T) {
 	}{
 		"unknown file key":                     {file: "key_source = \"password\"\nkey_sorce = \"x\"\n", wantSub: "unknown setting key_sorce"},
 		"unknown agent key":                    {file: "[agent]\nidle = \"1m\"\n", wantSub: "unknown setting agent.idle"},
-		"backend is no longer a setting":       {file: `backend = "sqlite"`, wantSub: "unknown setting backend"},
+		"backend is no longer a setting":       {file: `backend = "sqlite"`, wantSub: "unknown setting backend (remove it: the vault is the only store now)"},
 		"bad key source in env":                {env: map[string]string{EnvKeySource: "pass"}, wantSub: `SESH_KEY_SOURCE = "pass": want "password" or "keychain"`},
 		"bad key source flag":                  {flags: Overrides{KeySource: "pass"}, wantSub: `--key-source = "pass"`},
 		"relative db path":                     {file: `db_path = "vault.db"`, wantSub: "want an absolute path"},

@@ -177,6 +177,9 @@ func (c *Config) applyFile() error {
 		keys := make([]string, len(undecoded))
 		for i, k := range undecoded {
 			keys[i] = k.String()
+			if keys[i] == "backend" {
+				keys[i] += " (remove it: the vault is the only store now)"
+			}
 		}
 		sort.Strings(keys)
 		return fmt.Errorf("config file %s: unknown setting %s", c.Path, strings.Join(keys, ", "))
