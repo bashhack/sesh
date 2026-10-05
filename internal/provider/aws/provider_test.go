@@ -760,6 +760,10 @@ func TestProvider_ListEntries(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				// A TOTP entry named aws with no username isn't a profile.
+				if err := store.Save(&vault.Entry{Kind: vault.KindTOTP, Service: "aws"}, []byte("s")); err != nil {
+					t.Fatal(err)
+				}
 				return store
 			},
 			wantCount: 3,

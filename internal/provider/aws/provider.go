@@ -225,6 +225,9 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 	result := make([]provider.ProviderEntry, 0, len(entries))
 	for i := range entries {
 		e := &entries[i]
+		if e.Key != vault.AWSKey(e.Username) {
+			continue // a TOTP entry named aws with no username: not a profile
+		}
 		result = append(result, provider.ProviderEntry{
 			Name:        fmt.Sprintf("AWS (%s)", e.Username),
 			Description: fmt.Sprintf("AWS MFA for %s", formatProfile(e.Username)),
