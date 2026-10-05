@@ -806,7 +806,7 @@ func runMigrate(app *App) error {
 		return nil
 	}
 
-	if _, err := fmt.Fprintf(app.Stderr, "Found %d entries to migrate:\n", len(plan)); err != nil {
+	if _, err := fmt.Fprintf(app.Stderr, "Found %s to migrate:\n", entryCount(len(plan))); err != nil {
 		return err
 	}
 	for _, e := range plan {
@@ -842,7 +842,7 @@ func runMigrate(app *App) error {
 		return err
 	}
 
-	if _, err := fmt.Fprintf(app.Stderr, "\nMigrated %d entries", result.Migrated); err != nil {
+	if _, err := fmt.Fprintf(app.Stderr, "\nMigrated %s", entryCount(result.Migrated)); err != nil {
 		return err
 	}
 	if result.Skipped > 0 {

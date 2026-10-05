@@ -511,7 +511,7 @@ func (p *Provider) searchPasswords(mgr *password.Manager) (provider.Credentials,
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Found %d entries matching %q:\n", len(entries), p.query)
+	fmt.Fprintf(&sb, "Found %s matching %q:\n", entryCount(len(entries)), p.query)
 	q := strings.ToLower(p.query)
 	for i := range entries {
 		e := &entries[i]
@@ -705,7 +705,7 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 
 	return provider.Credentials{
 		Provider:    p.Name(),
-		DisplayInfo: fmt.Sprintf("Exported %d entries to %s", count, dest),
+		DisplayInfo: fmt.Sprintf("Exported %s to %s", entryCount(count), dest),
 	}, nil
 }
 
@@ -752,7 +752,7 @@ func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, e
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Imported %d entries", result.Imported)
+	fmt.Fprintf(&sb, "Imported %s", entryCount(result.Imported))
 	if result.Skipped > 0 {
 		fmt.Fprintf(&sb, ", skipped %d", result.Skipped)
 	}
@@ -784,4 +784,12 @@ func highlightMatch(text, query string) string {
 		return text
 	}
 	return text[:idx] + "\033[1m" + text[idx:idx+len(query)] + "\033[0m" + text[idx+len(query):]
+}
+
+// entryCount says how many entries, as "1 entry" or "n entries".
+func entryCount(n int) string {
+	if n == 1 {
+		return "1 entry"
+	}
+	return fmt.Sprintf("%d entries", n)
 }

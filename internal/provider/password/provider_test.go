@@ -591,8 +591,8 @@ func TestSearchPasswords_MatchingEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	if !strings.Contains(creds.DisplayInfo, "Found 1 entries") {
-		t.Errorf("DisplayInfo = %q, want to include 'Found 1 entries'", creds.DisplayInfo)
+	if !strings.Contains(creds.DisplayInfo, "Found 1 entry") {
+		t.Errorf("DisplayInfo = %q, want to include 'Found 1 entry'", creds.DisplayInfo)
 	}
 	// "github" prints with the matched "git" wrapped in ANSI bold, so the
 	// literal substring isn't contiguous — check for the unhighlighted tail.
@@ -985,7 +985,7 @@ func TestImport_ReadsFromProviderStdin(t *testing.T) {
 	if stored != 1 {
 		t.Errorf("SetSecret calls = %d, want 1", stored)
 	}
-	if !strings.Contains(creds.DisplayInfo, "Imported 1 entries") {
+	if !strings.Contains(creds.DisplayInfo, "Imported 1 entry") {
 		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
 	}
 }
@@ -1005,6 +1005,14 @@ func TestGetFlagInfo(t *testing.T) {
 	for _, expected := range []string{"action", "service-name", "username", "entry-type", "query", "sort", "format", "show", "force", "limit", "offset"} {
 		if !names[expected] {
 			t.Errorf("missing flag %q in GetFlagInfo", expected)
+		}
+	}
+}
+
+func TestEntryCount(t *testing.T) {
+	for n, want := range map[int]string{0: "0 entries", 1: "1 entry", 2: "2 entries"} {
+		if got := entryCount(n); got != want {
+			t.Errorf("entryCount(%d) = %q, want %q", n, got, want)
 		}
 	}
 }

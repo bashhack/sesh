@@ -1347,3 +1347,11 @@ func TestRotate_LeavesAnotherChangesStagingLock(t *testing.T) {
 		t.Errorf("a refused change removed another change's staging lock: %v", err)
 	}
 }
+
+func TestEntryCount(t *testing.T) {
+	for n, want := range map[int]string{0: "0 entries", 1: "1 entry", 2: "2 entries"} {
+		if got := entryCount(n); got != want {
+			t.Errorf("entryCount(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

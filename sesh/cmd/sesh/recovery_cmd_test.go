@@ -375,7 +375,7 @@ func TestRecover_SetsANewPasswordAndReplacesTheKey(t *testing.T) {
 	}
 	for _, want := range []string{
 		"The recovery key opens this vault. Choose a new master password.",
-		"Rotated 1 entries under a new master password.",
+		"Rotated 1 entry under a new master password.",
 		"Your recovery key has been used, so it no longer works.",
 		"Your recovery key:\n\n    " + next.String(),
 		"The recovery key is set for this vault.",
