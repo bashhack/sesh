@@ -125,6 +125,7 @@ func TestLoad_Rejects(t *testing.T) {
 		"vault named touchid.key":   {file: `db_path = "~/vaults/touchid.key"`, wantSub: `"touchid.key" is the name of a file sesh keeps next to the vault, so the vault would be overwritten; choose another name, such as passwords.db`},
 		"vault named passwords.key": {env: map[string]string{EnvDBPath: "/tmp/v/passwords.key"}, wantSub: `SESH_DB_PATH = "/tmp/v/passwords.key": "passwords.key" is the name of a file sesh keeps`},
 		"vault named like a lock":   {flags: Overrides{DBPath: "/tmp/v/.key-init.lock"}, wantSub: `--db-path = "/tmp/v/.key-init.lock": ".key-init.lock" is the name`},
+		"vault named in other case": {file: `db_path = "~/vaults/TouchID.Key"`, wantSub: `"TouchID.Key" is the name of a file sesh keeps next to the vault`},
 		"bad duration":              {file: `clipboard_timeout = "soon"`, wantSub: "want a duration"},
 		"negative duration":         {env: map[string]string{EnvAgentIdleTimeout: "-1m"}, wantSub: "must not be negative"},
 		"not TOML":                  {file: "backend: sqlite\n", wantSub: "read config file"},

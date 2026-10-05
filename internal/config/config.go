@@ -327,7 +327,9 @@ var reservedVaultNames = []string{"passwords.key", "passwords.key.lock", ".key-i
 // setDBPath is setPath for the vault's location, which also refuses a file
 // name sesh uses for its own files next to the vault.
 func setDBPath(dst *Setting[string], v string, src Source, origin string) error {
-	if p, err := ResolvePath(v); err == nil && slices.Contains(reservedVaultNames, filepath.Base(p)) {
+	// Compared ignoring case: macOS file systems usually do, so TouchID.key
+	// would be the same file as touchid.key.
+	if p, err := ResolvePath(v); err == nil && slices.ContainsFunc(reservedVaultNames, func(r string) bool { return strings.EqualFold(r, filepath.Base(p)) }) {
 		return fmt.Errorf("%s = %q: %q is the name of a file sesh keeps next to the vault, so the vault would be overwritten; choose another name, such as passwords.db", origin, v, filepath.Base(p))
 	}
 	return setPath(dst, v, src, origin)
