@@ -167,6 +167,31 @@ func TestInit_Refuses(t *testing.T) {
 			t.Error("wrote a config file for a refused setup")
 		}
 	})
+	t.Run("a password vault, choosing the Keychain key", func(t *testing.T) {
+		kc := newKCMock(nil)
+		orig := macKeychain
+		macKeychain = func() keychain.ItemStore { return kc }
+		t.Cleanup(func() { macKeychain = orig })
+		app, path := initEnv(t, "darwin", "1\n\n")
+		if err := runInit(app, nil); err != nil {
+			t.Fatal(err)
+		}
+		app.Stdin = strings.NewReader("2\n\n")
+		err := runInit(app, []string{"--force"})
+		if err == nil || !strings.Contains(err.Error(), "uses the password key source") {
+			t.Fatalf("err = %v, want the vault's own key source named", err)
+		}
+		u, uerr := user.Current()
+		if uerr != nil {
+			t.Fatal(uerr)
+		}
+		if _, gerr := kc.GetSecret(u.Username, encKeyService); gerr == nil {
+			t.Error("the refused init left a new key in the Keychain")
+		}
+		if got := readFile(t, path); !strings.Contains(got, "key_source = \"password\"") {
+			t.Errorf("config file =\n%s", got)
+		}
+	})
 	t.Run("an answer that isn't a choice", func(t *testing.T) {
 		app, _ := initEnv(t, "darwin", "3\n")
 		if err := runInit(app, nil); err == nil || !strings.Contains(err.Error(), "choose 1 or 2") {

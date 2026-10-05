@@ -366,6 +366,24 @@ func refuseNewKeyForExistingVault(dbPath string) error {
 		dbPath, sidecar)
 }
 
+// refuseKeychainKeyForExistingVault returns an error when a vault already
+// exists at dbPath, for a Keychain that has no key for it.
+func refuseKeychainKeyForExistingVault(dbPath string) error {
+	switch _, err := os.Stat(dbPath); {
+	case errors.Is(err, os.ErrNotExist):
+		return nil // no vault yet: the first run creates both
+	case err != nil:
+		return fmt.Errorf("check for an existing vault at %s: %w", dbPath, err)
+	}
+	if src, err := database.RecordedKeySource(dbPath); err == nil && src == config.KeySourcePassword {
+		return withKeyHint(&database.WrongKeyError{VaultSource: src, Source: config.KeySourceKeychain})
+	}
+	return fmt.Errorf("a vault exists at %s, but the Keychain has no %q entry for it. "+
+		"If the entry was deleted, restore it from a backup. "+
+		"If this vault uses a master password, set key_source = \"password\" in the config file",
+		dbPath, encKeyService)
+}
+
 // sidecarMissing reports whether dataDir has no passwords.key yet: the
 // next password-mode open creates the vault's key.
 func sidecarMissing(dataDir string) bool {
@@ -515,7 +533,7 @@ func buildKeySourceWith(dbPath, source string, cfg passwordPromptConfig) (databa
 			return nil, fmt.Errorf("determine current user: %w", err)
 		}
 		ks := database.NewKeychainSource(systemKeychain(), u.Username)
-		if err := ensureMasterKey(ks, dataDir); err != nil {
+		if err := ensureMasterKey(ks, dbPath); err != nil {
 			return nil, err
 		}
 		return database.NewKeySourceOracle(ks), nil
@@ -742,13 +760,15 @@ func terminalPrompt(prompt string) ([]byte, error) {
 
 // ensureMasterKey verifies a master encryption key exists in the keychain,
 // generating and storing one on first run. Zeros any retrieved/generated
-// key bytes before returning.
+// key bytes before returning. A vault already at dbPath was made with
+// another key, so it gets none: a new key couldn't open it and would be
+// left behind in the Keychain.
 //
 // Concurrent first-run invocations are serialized via an advisory flock on
-// <dataDir>/.key-init.lock so two sesh processes can't each generate a
+// the vault directory's .key-init.lock so two sesh processes can't each generate a
 // different key and orphan each other's data. The flock is auto-released
 // when the holding process exits, so crashes don't leave stale locks.
-func ensureMasterKey(ks *database.KeychainSource, dataDir string) error {
+func ensureMasterKey(ks *database.KeychainSource, dbPath string) error {
 	// Fast path: key already present.
 	if existing, err := ks.GetEncryptionKey(); err == nil {
 		secure.SecureZeroBytes(existing)
@@ -762,7 +782,7 @@ func ensureMasterKey(ks *database.KeychainSource, dataDir string) error {
 
 	// Slow path: acquire the init lock before generating so we don't race
 	// a concurrent first-run invocation.
-	sentinel := filepath.Join(dataDir, ".key-init.lock")
+	sentinel := filepath.Join(filepath.Dir(dbPath), ".key-init.lock")
 	lockFile, err := os.OpenFile(sentinel, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // path is <dataDir>/.key-init.lock; dataDir comes from our own DefaultDBPath
 	if err != nil {
 		return fmt.Errorf("open key-init sentinel: %w", err)
@@ -784,6 +804,9 @@ func ensureMasterKey(ks *database.KeychainSource, dataDir string) error {
 		return nil
 	} else if !errors.Is(err, keychain.ErrNotFound) {
 		return fmt.Errorf("retrieve encryption key (post-lock): %w", err)
+	}
+	if err := refuseKeychainKeyForExistingVault(dbPath); err != nil {
+		return err
 	}
 
 	key, err := database.GenerateEncryptionKey()

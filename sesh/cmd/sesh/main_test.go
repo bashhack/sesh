@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -656,7 +658,7 @@ func TestEnsureMasterKey_FastPath(t *testing.T) {
 	kc := &flockMockKC{stored: []byte(strings.Repeat("ab", 32))}
 	ks := database.NewKeychainSource(kc, "testuser")
 
-	if err := ensureMasterKey(ks, t.TempDir()); err != nil {
+	if err := ensureMasterKey(ks, filepath.Join(t.TempDir(), "passwords.db")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := kc.setCount.Load(); got != 0 {
@@ -671,7 +673,7 @@ func TestEnsureMasterKey_SlowPath_Generates(t *testing.T) {
 	kc := &flockMockKC{}
 	ks := database.NewKeychainSource(kc, "testuser")
 
-	if err := ensureMasterKey(ks, t.TempDir()); err != nil {
+	if err := ensureMasterKey(ks, filepath.Join(t.TempDir(), "passwords.db")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := kc.setCount.Load(); got != 1 {
@@ -699,11 +701,27 @@ func TestEnsureMasterKey_SlowPath_DoubleCheck(t *testing.T) {
 	}
 	ks := database.NewKeychainSource(kc, "testuser")
 
-	if err := ensureMasterKey(ks, t.TempDir()); err != nil {
+	if err := ensureMasterKey(ks, filepath.Join(t.TempDir(), "passwords.db")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := kc.setCount.Load(); got != 0 {
 		t.Errorf("SetSecret call count = %d, want 0 when double-check finds a key", got)
+	}
+}
+
+func TestEnsureMasterKey_RefusesAnExistingVault(t *testing.T) {
+	kc := &flockMockKC{}
+	ks := database.NewKeychainSource(kc, "testuser")
+	dbPath := filepath.Join(t.TempDir(), "passwords.db")
+	if err := os.WriteFile(dbPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := ensureMasterKey(ks, dbPath)
+	if err == nil || !strings.Contains(err.Error(), "the Keychain has no") {
+		t.Fatalf("err = %v, want the missing Keychain key refusal", err)
+	}
+	if got := kc.setCount.Load(); got != 0 {
+		t.Errorf("SetSecret call count = %d, want 0 for an existing vault", got)
 	}
 }
 
@@ -712,7 +730,7 @@ func TestEnsureMasterKey_NonNotFoundErrorIsSurfaced(t *testing.T) {
 	kc := &flockMockKC{getErr: sentinel}
 	ks := database.NewKeychainSource(kc, "testuser")
 
-	err := ensureMasterKey(ks, t.TempDir())
+	err := ensureMasterKey(ks, filepath.Join(t.TempDir(), "passwords.db"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -787,7 +805,7 @@ func TestEnsureMasterKey_Concurrent(t *testing.T) {
 	for range n {
 		wg.Go(func() {
 			<-start
-			errs <- ensureMasterKey(ks, dataDir)
+			errs <- ensureMasterKey(ks, filepath.Join(dataDir, "passwords.db"))
 		})
 	}
 	close(start)
