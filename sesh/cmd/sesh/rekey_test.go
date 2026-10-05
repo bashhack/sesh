@@ -245,6 +245,11 @@ func TestRotate_EnvPasswordIsOnlyTheCurrentOne(t *testing.T) {
 	if err := runRotateMasterPassword(app, envCfg); err != nil {
 		t.Fatalf("runRotateMasterPassword: %v\nstderr:\n%s", err, stderr.String())
 	}
+	// The variable still holds the old password, so the next command
+	// would fail with "wrong master password" without saying why.
+	if want := "SESH_MASTER_PASSWORD still holds the old password"; !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr doesn't say %q:\n%s", want, stderr.String())
+	}
 
 	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
 	if got := readEntriesViaPassword(t, env, []string{"password/github/alice"}); got["password/github/alice"] != "hunter2" {
@@ -265,7 +270,13 @@ func TestRotate_EnvPasswordWithoutATerminalRefuses(t *testing.T) {
 		t.Fatalf("runRotateMasterPassword without a terminal = %v, want it to contain %q", err, wantSub)
 	}
 
-	// Nothing changed: the old password still opens the vault.
+	// Nothing changed: no staging was started, and the old password still
+	// opens the vault.
+	for _, p := range []string{env.dbPath + rekeyDestSuffix, env.sidecarPath + rekeyDestSuffix, env.sidecarPath + rekeyDestSuffix + ".lock"} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s exists after the refusal (stat: %v)", p, err)
+		}
+	}
 	if got := readEntriesViaPassword(t, env, []string{"password/github/alice"}); got["password/github/alice"] != "hunter2" {
 		t.Errorf("the old password no longer opens the vault: %v", got)
 	}

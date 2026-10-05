@@ -332,7 +332,11 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if _, perr := fmt.Fprintln(app.Stderr, copiesNote); perr != nil {
 		return bytes.Clone(destKey), perr
 	}
-	for _, msg := range []string{touchNote, recoveryNote, agentNote} {
+	envNote := ""
+	if cfg.fromEnv {
+		envNote = "SESH_MASTER_PASSWORD still holds the old password; update it, or the next command will refuse it as wrong."
+	}
+	for _, msg := range []string{touchNote, recoveryNote, agentNote, envNote} {
 		if msg == "" {
 			continue
 		}
