@@ -1222,3 +1222,128 @@ func TestKeyChanges_OneAtATime(t *testing.T) {
 		}
 	})
 }
+
+// failRename makes renameFile fail for one source → destination pair, and
+// calls during(src, dst) on every rename, so a test can look at the state
+// while the change or its rollback is running.
+func failRename(t *testing.T, src, dst string, during func(src, dst string)) {
+	t.Helper()
+	orig := renameFile
+	renameFile = func(s, d string) error {
+		if during != nil {
+			during(s, d)
+		}
+		if s == src && d == dst {
+			return errors.New("injected rename failure")
+		}
+		return orig(s, d)
+	}
+	t.Cleanup(func() { renameFile = orig })
+}
+
+// If the new key file can't be moved into place after the old one was moved
+// aside, rollback puts both the old vault and the old key file back, while
+// still holding the key-change lock.
+func TestRotate_RollsBackAPartialSwap(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "the secret"})
+	lockFreeDuringRollback := false
+	failRename(t, env.sidecarPath+rekeyDestSuffix, env.sidecarPath, func(src, dst string) {
+		if src == env.dbPath+rotateBackupSuffix && dst == env.dbPath { // rollback restoring the vault
+			if release, err := lockKeyChange(env.dataDir); err == nil {
+				lockFreeDuringRollback = true
+				release()
+			}
+		}
+	})
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678"))
+	if err == nil || !strings.Contains(err.Error(), "injected rename failure") {
+		t.Fatalf("err = %v, want the injected failure", err)
+	}
+	if strings.Contains(err.Error(), "finish the rename manually") {
+		t.Errorf("error points at files the rollback removes: %v", err)
+	}
+	if lockFreeDuringRollback {
+		t.Error("another key change could take the lock while rollback was running")
+	}
+	if _, err := os.Stat(env.sidecarPath); err != nil {
+		t.Fatalf("the vault has no passwords.key after rollback: %v", err)
+	}
+	for _, p := range []string{env.sidecarPath + rotateBackupSuffix, env.dbPath + rotateBackupSuffix, env.sidecarPath + rekeyDestSuffix} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s left after rollback (err %v)", p, err)
+		}
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	got := readEntriesViaPassword(t, env, []string{"sesh-password/password/x/y"})
+	if got["sesh-password/password/x/y"] != "the secret" {
+		t.Errorf("entry after rollback = %q, want the old password to open the old vault", got["sesh-password/password/x/y"])
+	}
+}
+
+// A rekey's rollback also runs under the lock.
+func TestRekey_KeepsTheLockThroughRollback(t *testing.T) {
+	env := setupRekeyEnv(t)
+	kc := newKCMock(hexKey())
+	populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+	lockFreeDuringRollback := false
+	failRename(t, env.dbPath+rekeyDestSuffix, env.dbPath, func(src, dst string) {
+		if src == env.dbPath+rekeyBackupSuffix && dst == env.dbPath {
+			if release, err := lockKeyChange(env.dataDir); err == nil {
+				lockFreeDuringRollback = true
+				release()
+			}
+		}
+	})
+	t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
+	app, _ := rekeyTestApp("y\n")
+	if err := runRekey(app, []string{"--to=password"}, kc); err == nil || !strings.Contains(err.Error(), "injected rename failure") {
+		t.Fatalf("err = %v, want the injected failure", err)
+	}
+	if lockFreeDuringRollback {
+		t.Error("another key change could take the lock while rollback was running")
+	}
+	got := readEntriesViaKeychain(t, env, kc, []string{"sesh-password/password/github/alice"})
+	if got["sesh-password/password/github/alice"] != "hunter2" {
+		t.Errorf("entry after rollback = %q", got["sesh-password/password/github/alice"])
+	}
+}
+
+// A change that stops before staging anything leaves another change's
+// staging lock alone.
+func TestRotate_LeavesAnotherChangesStagingLock(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	staging := env.sidecarPath + rekeyDestSuffix + ".lock"
+	if err := os.WriteFile(staging, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+
+	app, _ := rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("wrong-pw-1234")); err == nil {
+		t.Fatal("expected the wrong password to fail")
+	}
+	if _, err := os.Stat(staging); err != nil {
+		t.Errorf("a change with the wrong password removed another change's staging lock: %v", err)
+	}
+
+	release, err := lockKeyChange(env.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	app, _ = rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234")); err == nil {
+		t.Fatal("expected the held lock to refuse the change")
+	}
+	if _, err := os.Stat(staging); err != nil {
+		t.Errorf("a refused change removed another change's staging lock: %v", err)
+	}
+}

@@ -108,6 +108,11 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		backupPath      string
 		originalRenamed bool
 	)
+	// The key-change lock, once taken, is released by this deferred call,
+	// registered before the rollback's so it runs after it: no other change
+	// can start while rollback is still putting files back.
+	release := func() {}
+	defer func() { release() }() //nolint:gocritic // the wrapper calls release as reassigned later; `defer release()` would bind the no-op now
 
 	defer func() {
 		if srcStoreOpen {
@@ -134,7 +139,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 			}
 		}
 		if originalRenamed {
-			if rerr := os.Rename(backupPath, dbPath); rerr != nil {
+			if rerr := renameFile(backupPath, dbPath); rerr != nil {
 				err = appendErr(err, fmt.Sprintf("restore original DB to %s", dbPath), rerr)
 			}
 		}
@@ -151,11 +156,10 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	}
 	// One key change at a time: held until this one ends, so another can't
 	// clear the files this one's rollback needs.
-	release, err := lockKeyChange(dataDir)
-	if err != nil {
+	if release, err = lockKeyChange(dataDir); err != nil {
+		release = func() {}
 		return err
 	}
-	defer release()
 	// The vault opens with its key, so copies left by an earlier change
 	// (from an older sesh, or one that was interrupted) serve no purpose.
 	if err := removeLeftovers(app.Stderr, keyChangeLeftovers(dbPath, filepath.Join(dataDir, sidecarFile))...); err != nil {
@@ -241,11 +245,11 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	// a concurrent open during this interval will fail with ENOENT. POSIX
 	// has no portable atomic-two-file-swap, so we accept the window for
 	// this single-user CLI.
-	if err := os.Rename(dbPath, backupPath); err != nil {
+	if err := renameFile(dbPath, backupPath); err != nil {
 		return fmt.Errorf("rename source DB to backup: %w", err)
 	}
 	originalRenamed = true
-	if err := os.Rename(destPath, dbPath); err != nil {
+	if err := renameFile(destPath, dbPath); err != nil {
 		return fmt.Errorf("rename destination into place: %w", err)
 	}
 
@@ -524,14 +528,21 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	// Rollback state — same shape as runRekey. Anything *true / non-empty
 	// when err != nil gets unwound; commit zeros them so cleanup no-ops.
 	var (
-		destStore      *database.Store
-		destStoreOpen  bool
-		destDBCreated  bool
-		newSidecarMade bool
-		srcStoreOpen   = true
-		dbRenamed      bool
-		sidecarRenamed bool
+		destStore       *database.Store
+		destStoreOpen   bool
+		destDBCreated   bool
+		newSidecarMade  bool
+		srcStoreOpen    = true
+		staging         bool
+		dbRenamed       bool
+		oldSidecarMoved bool
+		sidecarRenamed  bool
 	)
+	// The key-change lock, once taken, is released by this deferred call,
+	// registered before the rollback's so it runs after it: no other change
+	// can start while rollback is still putting files back.
+	release := func() {}
+	defer func() { release() }() //nolint:gocritic // the wrapper calls release as reassigned later; `defer release()` would bind the no-op now
 
 	defer func() {
 		if srcStoreOpen {
@@ -557,20 +568,27 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 				err = appendErr(err, "rollback remove staged sidecar", rerr)
 			}
 		}
-		// The lock-file sentinel (sidecarNewPath + ".lock") gets created
-		// by initializeLocked the moment we open it with O_CREATE — that
-		// happens before any password prompt, so it can be on disk even
-		// when newSidecarMade is false (e.g. mismatched-confirm errors
-		// thrown from initialize). Remove it unconditionally; IsNotExist
-		// handles the never-created case.
-		if rerr := os.Remove(sidecarNewPath + ".lock"); rerr != nil && !os.IsNotExist(rerr) {
-			err = appendErr(err, "rollback remove staged sidecar lock", rerr)
+		// The staged sidecar's lock (sidecarNewPath + ".lock") is created
+		// by initializeLocked the moment it's opened, before any prompt, so
+		// it can exist even when newSidecarMade is false (e.g. a mismatched
+		// confirmation). It's this change's only once staging has begun;
+		// before that, it may belong to another change.
+		if staging {
+			if rerr := os.Remove(sidecarNewPath + ".lock"); rerr != nil && !os.IsNotExist(rerr) {
+				err = appendErr(err, "rollback remove staged sidecar lock", rerr)
+			}
 		}
-		// If only the DB rename succeeded, restore it. The sidecar is
-		// still canonical at this point (rename happens after DB).
+		// Put back whatever the swap had already moved aside: the old DB,
+		// and the old sidecar if it had been moved but the new one never
+		// took its place.
 		if dbRenamed && !sidecarRenamed {
-			if rerr := os.Rename(dbBackupPath, dbPath); rerr != nil {
+			if rerr := renameFile(dbBackupPath, dbPath); rerr != nil {
 				err = appendErr(err, fmt.Sprintf("restore original DB to %s", dbPath), rerr)
+			}
+		}
+		if oldSidecarMoved && !sidecarRenamed {
+			if rerr := renameFile(sidecarBackupPath, sidecarPath); rerr != nil {
+				err = appendErr(err, fmt.Sprintf("restore original sidecar to %s", sidecarPath), rerr)
 			}
 		}
 	}()
@@ -588,17 +606,17 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	}
 	// One key change at a time: held until this one ends, so another can't
 	// clear the files this one's rollback needs.
-	release, err := lockKeyChange(dataDir)
-	if err != nil {
+	if release, err = lockKeyChange(dataDir); err != nil {
+		release = func() {}
 		return nil, err
 	}
-	defer release()
 	// The vault opens with its key, so files left by an earlier change
 	// (from an older sesh, or one that was interrupted) serve no purpose,
 	// and the staged ones must go before new ones are made.
 	if err := removeLeftovers(app.Stderr, keyChangeLeftovers(dbPath, sidecarPath)...); err != nil {
 		return nil, err
 	}
+	staging = true // from here, staged files and their lock are this change's
 
 	plan, err := migration.Plan(srcStore)
 	if err != nil {
@@ -680,20 +698,21 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	// The rollback restores the DB rename. If the sidecar rename also
 	// fails after we've already swapped DB+sidecar, we're committed —
 	// surface both paths so the user can finish manually.
-	if err := os.Rename(dbPath, dbBackupPath); err != nil {
+	if err := renameFile(dbPath, dbBackupPath); err != nil {
 		return nil, fmt.Errorf("rename source DB to backup: %w", err)
 	}
 	dbRenamed = true
-	if err := os.Rename(dbNewPath, dbPath); err != nil {
+	if err := renameFile(dbNewPath, dbPath); err != nil {
 		return nil, fmt.Errorf("rename destination DB into place: %w", err)
 	}
 	destDBCreated = false // canonical now; rollback no longer applies
 
-	if err := os.Rename(sidecarPath, sidecarBackupPath); err != nil {
-		return nil, fmt.Errorf("rename source sidecar to backup: %w (DB is now at %s; restore manually if needed)", err, dbPath)
+	if err := renameFile(sidecarPath, sidecarBackupPath); err != nil {
+		return nil, fmt.Errorf("rename source sidecar to backup: %w; the old vault and key file were put back", err)
 	}
-	if err := os.Rename(sidecarNewPath, sidecarPath); err != nil {
-		return nil, fmt.Errorf("rename destination sidecar into place: %w (DB is at %s, old sidecar at %s, new sidecar at %s — finish the rename manually)", err, dbPath, sidecarBackupPath, sidecarNewPath)
+	oldSidecarMoved = true
+	if err := renameFile(sidecarNewPath, sidecarPath); err != nil {
+		return nil, fmt.Errorf("rename destination sidecar into place: %w; the old vault and key file were put back", err)
 	}
 	sidecarRenamed = true
 	newSidecarMade = false
@@ -866,3 +885,7 @@ func lockKeyChange(dataDir string) (release func(), err error) {
 		_ = f.Close() //nolint:errcheck // closing releases the lock; nothing to do on failure
 	}, nil
 }
+
+// renameFile is os.Rename for the vault swaps and their rollback. Tests
+// replace it to make one step fail.
+var renameFile = os.Rename
