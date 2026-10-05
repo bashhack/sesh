@@ -315,7 +315,7 @@ func TestKeySourceFromAgent_EncryptUsesOriginalUnlockID(t *testing.T) {
 	}
 	defer closeKeySource(t, ksB)
 
-	if _, _, err := ksA.EncryptEntry([]byte("secret")); err == nil {
+	if _, _, err := ksA.EncryptEntry([]byte("secret"), nil); err == nil {
 		t.Fatal("vault A sealed a secret under vault B's key")
 	} else {
 		var pe *agent.ProtocolError
@@ -326,11 +326,11 @@ func TestKeySourceFromAgent_EncryptUsesOriginalUnlockID(t *testing.T) {
 			t.Fatalf("EncryptEntry err = %q, want the user-facing message without the protocol code", err)
 		}
 	}
-	ct, salt, err := ksB.EncryptEntry([]byte("secret"))
+	ct, salt, err := ksB.EncryptEntry([]byte("secret"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := ksB.DecryptEntry(ct, salt)
+	got, err := ksB.DecryptEntry(ct, salt, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
