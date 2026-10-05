@@ -112,6 +112,90 @@ func TestOpen_RejectsNewerSchemaVersion(t *testing.T) {
 	}
 }
 
+func TestMigrateV4_DropsTheSearchIndex(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	ks := &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)}
+	searchObjects := func(s *Store) []string {
+		t.Helper()
+		rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE name LIKE 'passwords_fts%' OR name IN ('passwords_ai', 'passwords_ad', 'passwords_au') ORDER BY name`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := rows.Close(); err != nil {
+				t.Errorf("rows.Close: %v", err)
+			}
+		}()
+		var names []string
+		for rows.Next() {
+			var n string
+			if err := rows.Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			names = append(names, n)
+		}
+		return names
+	}
+
+	s, err := Open(dbPath, ks)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := searchObjects(s); got != nil {
+		t.Errorf("a new vault has search index objects %v, want none", got)
+	}
+
+	// Put the vault back at version 3, index and triggers included, with an
+	// entry in it, as a vault made before version 4 would be.
+	if err := s.SetSecret("alice", "sesh-password/password/github/alice", []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateV1(tx); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO passwords_fts(passwords_fts) VALUES ('rebuild')`,
+		`DELETE FROM schema_migrations WHERE version = 4`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got := searchObjects(s); len(got) == 0 {
+		t.Fatal("setup: the version 3 vault has no search index")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err = Open(dbPath, ks)
+	if err != nil {
+		t.Fatalf("Open after upgrade: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	if got := searchObjects(s); got != nil {
+		t.Errorf("after upgrading, search index objects %v remain, want none", got)
+	}
+	got, err := s.GetSecret("alice", "sesh-password/password/github/alice")
+	if err != nil || string(got) != "pw" {
+		t.Errorf("GetSecret after upgrade = %q, %v; want the stored entry", got, err)
+	}
+	if err := s.DeleteEntry("alice", "sesh-password/password/github/alice"); err != nil {
+		t.Errorf("DeleteEntry after upgrade: %v", err)
+	}
+}
+
 func TestMigrationsIdempotent(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	ks := &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)}

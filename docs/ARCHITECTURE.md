@@ -269,12 +269,11 @@ Each entry is a keychain item keyed by `{namespace}/{segments}` (built by `keyfo
 
 **SQLite Data Model**
 
-The SQLite backend (the default) stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `passwords_fts` is a virtual FTS5 index shadowing the `passwords` table; `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
+The SQLite backend (the default) stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 erDiagram
-    passwords ||--|| passwords_fts : "FTS5 shadow (content='passwords')"
     passwords }o..|| key_metadata : "key_version (logical)"
     passwords ||..o{ audit_log : "entry_id (logical, nullable)"
 
@@ -306,12 +305,6 @@ erDiagram
         TEXT entry_id "→ passwords.id, nullable for auth events"
         TEXT detail
         DATETIME created_at
-    }
-
-    passwords_fts {
-        TEXT service "indexed"
-        TEXT account "indexed"
-        TEXT metadata "indexed"
     }
 ```
 
@@ -672,7 +665,7 @@ sesh/
 │   │   ├── aws/           # AWS provider
 │   │   ├── totp/          # TOTP provider
 │   │   └── password/      # Password manager provider
-│   ├── database/          # SQLite store, encryption, FTS, migrations
+│   ├── database/          # SQLite store, encryption, migrations
 │   ├── password/          # Password manager core (CRUD, search, filter)
 │   ├── keychain/          # macOS Keychain integration
 │   ├── secure/            # Memory security

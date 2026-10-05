@@ -8,7 +8,7 @@ import (
 )
 
 // Current schema version. Bump this and add a migration function when the schema changes.
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // EntryType classifies what kind of credential is stored.
 type EntryType string
@@ -62,6 +62,7 @@ var migrations = map[int]func(tx *sql.Tx) error{
 	1: migrateV1,
 	2: migrateV2,
 	3: migrateV3,
+	4: migrateV4,
 }
 
 // migrateV1 creates the initial four-table schema.
@@ -106,7 +107,8 @@ func migrateV1(tx *sql.Tx) error {
 			applied_at DATETIME NOT NULL
 		)`,
 
-		// FTS5 virtual table for full-text search across service, account, metadata.
+		// FTS5 virtual table for full-text search across service, account,
+		// metadata. v4 drops it, with its triggers.
 		`CREATE VIRTUAL TABLE IF NOT EXISTS passwords_fts USING fts5(
 			service, account, metadata,
 			content='passwords',
@@ -133,6 +135,23 @@ func migrateV1(tx *sql.Tx) error {
 	for _, s := range stmts {
 		if _, err := tx.Exec(s); err != nil {
 			return fmt.Errorf("migration v1: %w", err)
+		}
+	}
+	return nil
+}
+
+// migrateV4 drops the full-text index v1 made, and the triggers that kept
+// it in step: search matches service names and usernames in Go, the same
+// way for every backend, so nothing reads the index.
+func migrateV4(tx *sql.Tx) error {
+	for _, q := range []string{
+		`DROP TRIGGER IF EXISTS passwords_ai`,
+		`DROP TRIGGER IF EXISTS passwords_ad`,
+		`DROP TRIGGER IF EXISTS passwords_au`,
+		`DROP TABLE IF EXISTS passwords_fts`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("migration v4: %w", err)
 		}
 	}
 	return nil
