@@ -75,6 +75,47 @@ func TestValidateRequest(t *testing.T) {
 	}
 }
 
+func TestValidateRequest_EntryType(t *testing.T) {
+	tests := map[string]struct {
+		action, entryType, username string
+		wantSub                     string // empty: no error
+	}{
+		"password":                   {action: "store", entryType: "password"},
+		"api key":                    {action: "store", entryType: "api_key"},
+		"totp":                       {action: "store", entryType: "totp"},
+		"note":                       {action: "store", entryType: "secure_note"},
+		"none":                       {action: "store"},
+		"misspelled":                 {action: "store", entryType: "apikey", wantSub: `unknown --entry-type "apikey": use password, api_key, totp, or secure_note`},
+		"misspelled on get":          {action: "get", entryType: "note", wantSub: `unknown --entry-type "note"`},
+		"misspelled search":          {action: "search", entryType: "pw", wantSub: `unknown --entry-type "pw"`},
+		"misspelled export":          {action: "export", entryType: "keys", wantSub: `unknown --entry-type "keys"`},
+		"generate a key":             {action: "generate", entryType: "api_key"},
+		"generate a TOTP":            {action: "generate", entryType: "totp", wantSub: "sesh can't generate a TOTP secret: the service gives you one. Store it with: sesh --service password --action totp-store --service-name github"},
+		"generate a TOTP for a user": {action: "generate", entryType: "totp", username: "alice", wantSub: "--action totp-store --service-name github --username alice"},
+		"generate misspelled":        {action: "generate", entryType: "totpp", wantSub: `unknown --entry-type "totpp"`},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			p := &Provider{action: tc.action, service: "github", username: tc.username, query: "git", entryType: tc.entryType, format: "json"}
+			err := p.ValidateRequest()
+			switch {
+			case tc.wantSub == "" && err != nil:
+				t.Errorf("ValidateRequest() = %v, want no error", err)
+			case tc.wantSub != "" && (err == nil || !strings.Contains(err.Error(), tc.wantSub)):
+				t.Errorf("ValidateRequest() = %v, want it to contain %q", err, tc.wantSub)
+			}
+		})
+	}
+}
+
+func TestListEntries_RefusesAnUnknownEntryType(t *testing.T) {
+	p, _ := newTestProvider(&mocks.MockProvider{})
+	p.entryType = "apikey"
+	if _, err := p.ListEntries(); err == nil || !strings.Contains(err.Error(), `unknown --entry-type "apikey"`) {
+		t.Errorf("ListEntries() = %v, want an unknown --entry-type error", err)
+	}
+}
+
 func TestListEntriesWithFilters(t *testing.T) {
 	mock := &mocks.MockProvider{
 		ListEntriesFunc: func(service string) ([]keychain.KeychainEntry, error) {
@@ -427,7 +468,7 @@ func TestGeneratePassword_ShowEchoesPassword(t *testing.T) {
 		SetDescriptionFunc: func(_, _, _ string) error { return nil },
 	}
 
-	p, _ := newTestProvider(mock)
+	p, stdout := newTestProvider(mock)
 	p.action = "generate"
 	p.service = "github"
 	p.pwLength = 24
@@ -440,8 +481,11 @@ func TestGeneratePassword_ShowEchoesPassword(t *testing.T) {
 	if creds.CopyValue != "" {
 		t.Errorf("CopyValue = %q, want empty when --show is set", creds.CopyValue)
 	}
-	if !strings.Contains(creds.DisplayInfo, "Generated and stored password for github") {
-		t.Errorf("DisplayInfo = %q, missing status line", creds.DisplayInfo)
+	if creds.DisplayInfo != "✅ Generated and stored password for github" {
+		t.Errorf("DisplayInfo = %q, want only the status line", creds.DisplayInfo)
+	}
+	if pw := strings.TrimSuffix(stdout.String(), "\n"); len(pw) != 24 || strings.Contains(pw, "\n") {
+		t.Errorf("stdout = %q, want the 24-character password on one line", stdout.String())
 	}
 }
 
@@ -451,7 +495,7 @@ func TestGeneratePassword_JSONFormat(t *testing.T) {
 		SetDescriptionFunc: func(_, _, _ string) error { return nil },
 	}
 
-	p, _ := newTestProvider(mock)
+	p, stdout := newTestProvider(mock)
 	p.action = "generate"
 	p.service = "github"
 	p.username = "alice"
@@ -462,14 +506,17 @@ func TestGeneratePassword_JSONFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
+	if creds.DisplayInfo != "" {
+		t.Errorf("DisplayInfo = %q, want nothing on stderr", creds.DisplayInfo)
+	}
 	var payload struct {
 		Service  string `json:"service"`
 		Username string `json:"username"`
 		Type     string `json:"type"`
 		Password string `json:"password"`
 	}
-	if err := json.Unmarshal([]byte(creds.DisplayInfo), &payload); err != nil {
-		t.Fatalf("DisplayInfo not JSON: %v (raw %q)", err, creds.DisplayInfo)
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout not JSON: %v (raw %q)", err, stdout.String())
 	}
 	if payload.Service != "github" || payload.Username != "alice" || payload.Type != "password" {
 		t.Errorf("JSON header mismatch: %+v", payload)
@@ -486,7 +533,7 @@ func TestGetPassword_ShowReturnsPlainSecret(t *testing.T) {
 		},
 	}
 
-	p, _ := newTestProvider(mock)
+	p, stdout := newTestProvider(mock)
 	p.action = "get"
 	p.service = "github"
 	p.show = true
@@ -495,8 +542,11 @@ func TestGetPassword_ShowReturnsPlainSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	if creds.DisplayInfo != "s3cret" {
-		t.Errorf("DisplayInfo = %q, want s3cret", creds.DisplayInfo)
+	if stdout.String() != "s3cret\n" {
+		t.Errorf("stdout = %q, want the secret and a newline", stdout.String())
+	}
+	if creds.DisplayInfo != "" {
+		t.Errorf("DisplayInfo = %q, want nothing on stderr", creds.DisplayInfo)
 	}
 	if creds.CopyValue != "" {
 		t.Errorf("CopyValue should be empty in --show mode, got %q", creds.CopyValue)
@@ -533,7 +583,7 @@ func TestGetPassword_JSONFormat(t *testing.T) {
 		},
 	}
 
-	p, _ := newTestProvider(mock)
+	p, stdout := newTestProvider(mock)
 	p.action = "get"
 	p.service = "github"
 	p.format = "json"
@@ -542,11 +592,14 @@ func TestGetPassword_JSONFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
+	if creds.DisplayInfo != "" {
+		t.Errorf("DisplayInfo = %q, want nothing on stderr", creds.DisplayInfo)
+	}
 	var payload struct {
 		Password string `json:"password"`
 	}
-	if err := json.Unmarshal([]byte(creds.DisplayInfo), &payload); err != nil {
-		t.Fatalf("DisplayInfo not JSON: %v (raw %q)", err, creds.DisplayInfo)
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout not JSON: %v (raw %q)", err, stdout.String())
 	}
 	if payload.Password != "s3cret" {
 		t.Errorf("json.password = %q, want s3cret", payload.Password)
@@ -729,7 +782,7 @@ func TestGenerateTOTP_HappyPath(t *testing.T) {
 		},
 	}
 
-	p, _ := newTestProvider(mock)
+	p, stdout := newTestProvider(mock)
 	p.action = "totp-generate"
 	p.service = "github"
 
@@ -737,11 +790,25 @@ func TestGenerateTOTP_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	if len(creds.CopyValue) != 6 {
-		t.Errorf("TOTP code length = %d, want 6", len(creds.CopyValue))
+	if code := stdout.String(); len(code) != 7 || strings.Trim(code, "0123456789") != "\n" {
+		t.Errorf("stdout = %q, want the 6-digit code and a newline", code)
 	}
-	if !strings.Contains(creds.DisplayInfo, "TOTP code:") {
-		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
+	if creds.DisplayInfo != "" {
+		t.Errorf("DisplayInfo = %q, want nothing on stderr", creds.DisplayInfo)
+	}
+}
+
+func TestGetPassword_ShowKeepsANotesOwnLastNewline(t *testing.T) {
+	mock := &mocks.MockProvider{
+		GetSecretFunc: func(_, _ string) ([]byte, error) { return []byte("line one\nline two\n"), nil },
+	}
+	p, stdout := newTestProvider(mock)
+	p.action, p.service, p.entryType, p.show = "get", "wifi", "secure_note", true
+	if _, err := p.GetCredentials(); err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if stdout.String() != "line one\nline two\n" {
+		t.Errorf("stdout = %q, want the note as stored, with no extra newline", stdout.String())
 	}
 }
 

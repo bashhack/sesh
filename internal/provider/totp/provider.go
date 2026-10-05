@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/env"
 	"github.com/bashhack/sesh/internal/keychain"
@@ -16,6 +18,9 @@ import (
 	"github.com/bashhack/sesh/internal/setup"
 	internalTotp "github.com/bashhack/sesh/internal/totp"
 )
+
+// stdoutIsTerminal reports whether stdout is a terminal; tests replace it.
+var stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
 
 // Provider implements ServiceProvider for generic TOTP.
 type Provider struct {
@@ -71,47 +76,64 @@ func (p *Provider) GetSetupHandler() any {
 }
 
 // GetCredentials generates a TOTP code.
+// GetCredentials returns the current code as Value, which the app prints
+// alone to stdout so it can be captured; the next code and the time left
+// go to stderr. At a terminal it also suggests --clip.
 func (p *Provider) GetCredentials() (provider.Credentials, error) {
-	creds, err := p.generateTOTP()
+	c, err := p.generateTOTP()
 	if err != nil {
-		return creds, err
+		return provider.Credentials{}, err
 	}
+	creds := provider.CreateClipboardCredentials(p.Name(), c.current, c.next, c.secondsLeft, "TOTP code", c.desc)
+	creds.Value = c.current
+	creds.DisplayInfo = fmt.Sprintf("Next: %s  |  Time left: %ds\n🔑 TOTP code for %s", c.next, c.secondsLeft, c.desc)
 
-	// Suggest clipboard mode when called directly
-	cmd := fmt.Sprintf("sesh --service totp --service-name %q", p.serviceName)
-	if p.profile != "" {
-		cmd += fmt.Sprintf(" --profile %q", p.profile)
+	if stdoutIsTerminal() {
+		cmd := fmt.Sprintf("sesh --service totp --service-name %q", p.serviceName)
+		if p.profile != "" {
+			cmd += fmt.Sprintf(" --profile %q", p.profile)
+		}
+		fmt.Fprintf(os.Stderr, "💡 To copy it instead: %s --clip\n", cmd)
 	}
-	fmt.Fprintf(os.Stderr, "⚠️  TOTP codes are typically used with clipboard mode for easy copying.\n💡 Recommended: %s --clip\n\n", cmd)
-
 	return creds, nil
 }
 
 // GetClipboardValue implements the ServiceProvider interface for clipboard mode.
 func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
-	return p.generateTOTP()
+	c, err := p.generateTOTP()
+	if err != nil {
+		return provider.Credentials{}, err
+	}
+	return provider.CreateClipboardCredentials(p.Name(), c.current, c.next, c.secondsLeft, "TOTP code", c.desc), nil
 }
 
-// generateTOTP is the shared implementation for both GetCredentials and GetClipboardValue.
-func (p *Provider) generateTOTP() (provider.Credentials, error) {
+// totpCodes is the current and next code for an entry, with the seconds
+// left on the current one and the entry's description.
+type totpCodes struct {
+	current, next, desc string
+	secondsLeft         int64
+}
+
+// generateTOTP computes the codes for both GetCredentials and GetClipboardValue.
+func (p *Provider) generateTOTP() (totpCodes, error) {
 	if p.serviceName == "" {
-		return provider.Credentials{}, fmt.Errorf("service name is required, use --service-name flag")
+		return totpCodes{}, fmt.Errorf("service name is required, use --service-name flag")
 	}
 
 	if err := p.EnsureUser(); err != nil {
-		return provider.Credentials{}, err
+		return totpCodes{}, err
 	}
 
 	serviceKey, err := buildServiceKey(p.serviceName, p.profile)
 	if err != nil {
-		return provider.Credentials{}, fmt.Errorf("failed to build service key: %w", err)
+		return totpCodes{}, fmt.Errorf("failed to build service key: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "🔑 Retrieving TOTP secret for %s\n", p.serviceName)
 
 	secretBytes, err := p.keychain.GetSecret(p.User, serviceKey)
 	if err != nil {
-		return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for %s: %w", p.serviceName, err)
+		return totpCodes{}, fmt.Errorf("failed to retrieve TOTP secret for %s: %w", p.serviceName, err)
 	}
 
 	secretCopy := make([]byte, len(secretBytes))
@@ -125,7 +147,7 @@ func (p *Provider) generateTOTP() (provider.Credentials, error) {
 
 	currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secretCopy, params)
 	if err != nil {
-		return provider.Credentials{}, fmt.Errorf("could not generate TOTP codes: %w", err)
+		return totpCodes{}, fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
 
 	period := int64(30)
@@ -139,8 +161,7 @@ func (p *Provider) generateTOTP() (provider.Credentials, error) {
 		serviceDesc = fmt.Sprintf("%s (%s)", p.serviceName, p.profile)
 	}
 
-	return provider.CreateClipboardCredentials(p.Name(), currentCode, nextCode, secondsLeft,
-		"TOTP code", serviceDesc), nil
+	return totpCodes{current: currentCode, next: nextCode, desc: serviceDesc, secondsLeft: secondsLeft}, nil
 }
 
 // loadTOTPParams reads stored TOTP params (algorithm, digits, period) from the entry description.

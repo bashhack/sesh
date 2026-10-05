@@ -301,6 +301,12 @@ func (a *App) PrintCredentials(creds *provider.Credentials) error {
 		}
 	}
 
+	if creds.Value != "" {
+		if _, err := fmt.Fprintln(a.Stdout, creds.Value); err != nil {
+			return fmt.Errorf("failed to write to stdout: %w", err)
+		}
+	}
+
 	// Shell-safe export commands go to stdout for eval/source
 	// Built as a single string and written atomically so that callers using
 	// eval "$(sesh ...)" never execute a partial env block.

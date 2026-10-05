@@ -734,6 +734,26 @@ func TestApp_RunSetup(t *testing.T) {
 	}
 }
 
+func TestApp_PrintCredentials_ValueAloneOnStdout(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := &App{TimeNow: time.Now, Stdout: &stdout, Stderr: &stderr}
+	creds := provider.Credentials{
+		Provider:    "totp",
+		DisplayInfo: "Next: 654321  |  Time left: 12s\n🔑 TOTP code for github",
+		Value:       "123456",
+		Variables:   map[string]string{},
+	}
+	if err := app.PrintCredentials(&creds); err != nil {
+		t.Fatalf("PrintCredentials: %v", err)
+	}
+	if stdout.String() != "123456\n" {
+		t.Errorf("stdout = %q, want only the value", stdout.String())
+	}
+	if strings.Contains(stderr.String(), "123456") {
+		t.Errorf("stderr = %q, shouldn't repeat the value", stderr.String())
+	}
+}
+
 func TestApp_PrintCredentials(t *testing.T) {
 	fixedNow := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 

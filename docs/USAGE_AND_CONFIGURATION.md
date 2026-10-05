@@ -680,6 +680,9 @@ sesh -service totp -service-name github -clip
 #   Current: 482901  |  Next: 139847  |  Time left: 22s
 #   🔑 TOTP code for github
 
+# Print the code: alone on stdout (status goes to stderr), so it can be captured
+code=$(sesh -service totp -service-name github)
+
 # Use profiles for multiple accounts
 sesh -service totp -service-name github -profile work
 sesh -service totp -service-name github -profile personal
@@ -721,6 +724,7 @@ sesh -service password -action store -service-name stripe -username admin -entry
 # Store and generate TOTP codes
 sesh -service password -action totp-store -service-name github -username alice
 sesh -service password -action totp-generate -service-name github -username alice
+sesh -service password -action totp-generate -service-name github -username alice -clip   # copy the code
 
 # Search across all entries
 sesh -service password -action search -query github
@@ -750,6 +754,14 @@ sesh -service password -action import -format encrypted -file backup.enc
 
 # JSON output for scripting
 sesh -service password -action search -query stripe -format json
+```
+
+Values you ask for (a secret with `-show`, a TOTP code from `totp-generate`, and `-format json` output) go to stdout, and status messages go to stderr, so they can be captured or piped:
+
+```bash
+token=$(sesh -service password -action get -service-name stripe -entry-type api_key -show)
+code=$(sesh -service password -action totp-generate -service-name github -username alice)
+sesh -service password -action get -service-name github -username alice -format json | jq -r .password
 ```
 
 #### Secure notes and piped input

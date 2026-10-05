@@ -37,6 +37,9 @@ var validEntryTypes = map[EntryType]bool{
 	EntryTypeNote:     true,
 }
 
+// Valid reports whether t is one of the entry types.
+func (t EntryType) Valid() bool { return validEntryTypes[t] }
+
 // Entry represents a password manager entry
 type Entry struct {
 	CreatedAt   time.Time         `json:"created_at"`

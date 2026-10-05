@@ -132,6 +132,9 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 }
 
 func (p *Provider) ValidateRequest() error {
+	if err := p.checkEntryType(); err != nil {
+		return err
+	}
 	switch p.action {
 	case "store":
 		if p.service == "" {
@@ -156,6 +159,13 @@ func (p *Provider) ValidateRequest() error {
 	case "generate":
 		if p.service == "" {
 			return fmt.Errorf("--service-name is required for generate action")
+		}
+		if p.entryType == string(password.EntryTypeTOTP) {
+			store := "sesh --service password --action totp-store --service-name " + p.service
+			if p.username != "" {
+				store += " --username " + p.username
+			}
+			return fmt.Errorf("sesh can't generate a TOTP secret: the service gives you one. Store it with: %s", store)
 		}
 	case "export", "import":
 		if p.format == "table" {
@@ -195,19 +205,47 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	case "totp-store":
 		return p.storeTOTP(mgr)
 	case "totp-generate":
-		return p.generateTOTP(mgr)
+		creds, err := p.generateTOTP(mgr)
+		if err != nil {
+			return provider.Credentials{}, err
+		}
+		return provider.Credentials{Provider: p.Name()}, p.printValue([]byte(creds.CopyValue))
 	default:
 		return provider.Credentials{}, fmt.Errorf("specify --action (store, get, search, generate, export, import, totp-store, totp-generate) or use --list, --delete")
 	}
 }
 
-// GetClipboardValue retrieves a password and prepares it for clipboard.
+// GetClipboardValue returns what --clip copies for the action: the stored
+// secret for get (the default), a newly generated and stored password for
+// generate, or the current code for totp-generate. Other actions have
+// nothing to copy.
 func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
+	switch p.action {
+	case "", "get", "generate", "totp-generate":
+	default:
+		return provider.Credentials{}, fmt.Errorf("--clip works with --action get, generate, or totp-generate, not %s", p.action)
+	}
 	if p.service == "" {
 		return provider.Credentials{}, fmt.Errorf("--service-name is required")
 	}
 
 	mgr := password.NewManager(p.keychain, p.User)
+	switch p.action {
+	case "generate":
+		generated, desc, err := p.generateAndStore(mgr)
+		if err != nil {
+			return provider.Credentials{}, err
+		}
+		defer secure.SecureZeroBytes(generated)
+		return provider.Credentials{
+			Provider:             p.Name(),
+			CopyValue:            string(generated),
+			ClipboardDescription: fmt.Sprintf("generated %s for %s", p.effectiveEntryType(), desc),
+			DisplayInfo:          fmt.Sprintf("✅ Generated and stored %s for %s", p.effectiveEntryType(), desc),
+		}, nil
+	case "totp-generate":
+		return p.generateTOTP(mgr)
+	}
 	et := p.effectiveEntryType()
 
 	secretBytes, err := mgr.GetPassword(p.service, p.username, et)
@@ -230,6 +268,9 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 
 // ListEntries returns all password manager entries.
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
+	if err := p.checkEntryType(); err != nil {
+		return nil, err
+	}
 	mgr := password.NewManager(p.keychain, p.User)
 
 	filter := password.ListFilter{
@@ -278,6 +319,15 @@ func (p *Provider) DeleteEntry(id string) error {
 		return err
 	}
 	return p.keychain.DeleteEntry(account, service)
+}
+
+// checkEntryType refuses an --entry-type that isn't one of the kinds: an
+// entry stored under an unknown kind would never be listed or found.
+func (p *Provider) checkEntryType() error {
+	if p.entryType == "" || password.EntryType(p.entryType).Valid() {
+		return nil
+	}
+	return fmt.Errorf("unknown --entry-type %q: use password, api_key, totp, or secure_note", p.entryType)
 }
 
 // --- action implementations ---
@@ -367,7 +417,10 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 	}, nil
 }
 
-func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials, error) {
+// generateAndStore generates a password with the requested options and
+// stores it, returning it (for the caller to zero) and the entry's
+// description, "service (username)".
+func (p *Provider) generateAndStore(mgr *password.Manager) ([]byte, string, error) {
 	opts := password.DefaultGenerateOptions()
 	opts.Length = p.pwLength
 	if p.noSymbols {
@@ -376,23 +429,30 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 
 	generated, err := password.GeneratePassword(opts)
 	if err != nil {
-		return provider.Credentials{}, fmt.Errorf("failed to generate password: %w", err)
+		return nil, "", fmt.Errorf("failed to generate password: %w", err)
 	}
-	// Zero the generator's raw buffer once we're done. Downstream string
-	// copies (JSON, CopyValue) can't be zeroed — that's a broader API issue —
-	// but we can at least avoid leaving the pre-copy buffer on the heap.
-	defer secure.SecureZeroBytes(generated)
-
-	// Store the generated password
-	et := p.effectiveEntryType()
-	if err := mgr.StorePassword(p.service, p.username, generated, et); err != nil {
-		return provider.Credentials{}, err
+	if err := mgr.StorePassword(p.service, p.username, generated, p.effectiveEntryType()); err != nil {
+		secure.SecureZeroBytes(generated)
+		return nil, "", err
 	}
 
 	desc := p.service
 	if p.username != "" {
 		desc = fmt.Sprintf("%s (%s)", p.service, p.username)
 	}
+	return generated, desc, nil
+}
+
+func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials, error) {
+	generated, desc, err := p.generateAndStore(mgr)
+	if err != nil {
+		return provider.Credentials{}, err
+	}
+	// Zero the generator's raw buffer once we're done. Downstream string
+	// copies (JSON, CopyValue) can't be zeroed — that's a broader API issue —
+	// but we can at least avoid leaving the pre-copy buffer on the heap.
+	defer secure.SecureZeroBytes(generated)
+	et := p.effectiveEntryType()
 
 	if p.format == "json" {
 		out := struct {
@@ -410,10 +470,7 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("marshal JSON output: %w", err)
 		}
-		return provider.Credentials{
-			Provider:    p.Name(),
-			DisplayInfo: string(b),
-		}, nil
+		return provider.Credentials{Provider: p.Name()}, p.printValue(b)
 	}
 
 	if p.show {
@@ -423,8 +480,8 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 		// explicitly-interactive `generate` invocation.
 		return provider.Credentials{
 			Provider:    p.Name(),
-			DisplayInfo: fmt.Sprintf("✅ Generated and stored %s for %s\n%s", et, desc, string(generated)),
-		}, nil
+			DisplayInfo: fmt.Sprintf("✅ Generated and stored %s for %s", et, desc),
+		}, p.printValue(generated)
 	}
 
 	return provider.Credentials{
@@ -460,17 +517,11 @@ func (p *Provider) getPassword(mgr *password.Manager) (provider.Credentials, err
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("marshal JSON output: %w", err)
 		}
-		return provider.Credentials{
-			Provider:    p.Name(),
-			DisplayInfo: string(b),
-		}, nil
+		return provider.Credentials{Provider: p.Name()}, p.printValue(b)
 	}
 
 	if p.show {
-		return provider.Credentials{
-			Provider:    p.Name(),
-			DisplayInfo: string(secretBytes),
-		}, nil
+		return provider.Credentials{Provider: p.Name()}, p.printValue(secretBytes)
 	}
 
 	desc := p.service
@@ -622,6 +673,21 @@ func (p *Provider) generateTOTP(mgr *password.Manager) (provider.Credentials, er
 		ClipboardDescription: fmt.Sprintf("TOTP code for %s", desc),
 		DisplayInfo:          fmt.Sprintf("TOTP code: %s", code),
 	}, nil
+}
+
+// printValue writes a value the user asked for (a secret, a code, or JSON)
+// to stdout, so it can be captured or piped, ending it with a newline
+// unless it has one. Messages about it go to stderr, through DisplayInfo.
+func (p *Provider) printValue(v []byte) error {
+	if _, err := p.stdout.Write(v); err != nil {
+		return fmt.Errorf("write to stdout: %w", err)
+	}
+	if len(v) == 0 || v[len(v)-1] != '\n' {
+		if _, err := io.WriteString(p.stdout, "\n"); err != nil {
+			return fmt.Errorf("write to stdout: %w", err)
+		}
+	}
+	return nil
 }
 
 // readExportPassword prompts for a password used to encrypt/decrypt an
