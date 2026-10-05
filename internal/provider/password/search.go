@@ -106,26 +106,21 @@ func (p *Provider) searchTable(entries []password.Entry) string {
 	return sb.String()
 }
 
-// useCommand is the command that uses e, for a search with one match: it
-// copies a secret, or shows a TOTP entry's current code. (--clip with
-// totp-generate copies a password entry's secret, not a code.)
+// useCommand is the command that copies e, for a search with one match:
+// its secret, or for a TOTP entry its current code.
 func useCommand(e *password.Entry) string {
 	action, label := "get", "Copy it: "
 	if e.Type == password.EntryTypeTOTP {
-		action, label = "totp-generate", "Show a code: "
+		action, label = "totp-generate", "Copy a code: "
 	}
 	args := []string{"sesh", "--service", "password", "--action", action, "--service-name", shellQuote(e.Service)}
 	if e.Username != "" {
 		args = append(args, "--username", shellQuote(e.Username))
 	}
-	switch e.Type {
-	case password.EntryTypeTOTP:
-	case password.EntryTypePassword:
-		args = append(args, "--clip")
-	default:
-		args = append(args, "--entry-type", string(e.Type), "--clip")
+	if e.Type != password.EntryTypePassword && e.Type != password.EntryTypeTOTP {
+		args = append(args, "--entry-type", string(e.Type))
 	}
-	return label + strings.Join(args, " ")
+	return label + strings.Join(append(args, "--clip"), " ")
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9@%+=:,./_-]+$`)

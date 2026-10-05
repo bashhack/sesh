@@ -144,7 +144,7 @@ func TestSearch_OneMatchSaysHowToUseIt(t *testing.T) {
 		"note": {entry: "secure_note/passport",
 			want: "Copy it: sesh --service password --action get --service-name passport --entry-type secure_note --clip"},
 		"totp": {entry: "totp/github/alice",
-			want: "Show a code: sesh --service password --action totp-generate --service-name github --username alice"},
+			want: "Copy a code: sesh --service password --action totp-generate --service-name github --username alice --clip"},
 		"quotes what the shell would split": {entry: "password/my bank/o'brien",
 			want: `Copy it: sesh --service password --action get --service-name 'my bank' --username 'o'\''brien' --clip`},
 	}

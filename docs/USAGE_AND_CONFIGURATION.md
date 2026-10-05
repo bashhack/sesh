@@ -788,7 +788,7 @@ sesh -service password -action get -service-name github -username alice -format 
 
 Messages go to stderr:
 - **Nothing found:** `No entries matching "gihtub". Did you mean: github?` sesh suggests close names (a letter or two off, or two letters swapped). It never mixes them into the results.
-- **One match:** the command that uses it, for example `Copy it: sesh --service password --action get --service-name openai --entry-type api_key --clip`. For a TOTP entry: `Show a code: sesh --service password --action totp-generate ...`.
+- **One match:** the command that uses it, for example `Copy it: sesh --service password --action get --service-name openai --entry-type api_key --clip`. For a TOTP entry: `Copy a code: sesh --service password --action totp-generate ... --clip`.
 
 #### Secure notes and piped input
 
