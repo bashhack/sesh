@@ -127,7 +127,8 @@ func serviceFlags(app *App, cmd, serviceName string, p provider.ServiceProvider)
 // argsParse reports whether args name a provider and parse cleanly with
 // its flags. It's checked before the vault is opened, with a store that
 // can't open anything, so a mistyped command can't open or create the
-// vault. -help doesn't count as parsing: it only prints.
+// vault. -help, -version and -list-services don't count, since they only
+// print, and neither does a second -service naming another provider.
 func argsParse(args []string) bool {
 	serviceName := extractServiceName(args)
 	if serviceName == "" {
@@ -144,7 +145,8 @@ func argsParse(args []string) bool {
 		return false
 	}
 	fs.Usage = func() {}
-	return fs.Parse(args[1:]) == nil && !*common.help
+	return fs.Parse(args[1:]) == nil && *common.service == serviceName &&
+		!*common.help && !*common.version && !*common.listServices
 }
 
 // needsCredentialStore reports whether the given command-line invocation
