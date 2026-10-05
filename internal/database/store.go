@@ -200,53 +200,6 @@ func (s *Store) SetDescription(service, account, description string) error {
 	return nil
 }
 
-// SearchEntries performs a full-text search across service, account, and metadata
-// using the FTS5 index. Returns matching KeychainEntry rows.
-// An empty or whitespace-only query returns no results (FTS5 would reject it).
-func (s *Store) SearchEntries(query string) (_ []keychain.KeychainEntry, err error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return nil, nil
-	}
-	// FTS5 prefix query: quote the user input and append * for prefix matching.
-	// This allows "git" to match "github", "gitlab", etc.
-	escaped := strings.ReplaceAll(query, `"`, `""`)
-	ftsQuery := `"` + escaped + `"*`
-
-	rows, err := s.db.Query(`
-		SELECT p.service, p.account, p.metadata, p.created_at, p.updated_at
-		FROM passwords p
-		JOIN passwords_fts f ON f.rowid = p.rowid
-		WHERE passwords_fts MATCH ?
-		ORDER BY rank`, ftsQuery)
-	if err != nil {
-		return nil, fmt.Errorf("fts search: %w", err)
-	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("close rows: %w", closeErr)
-		}
-	}()
-
-	var entries []keychain.KeychainEntry
-	for rows.Next() {
-		var svc, acct string
-		var meta sql.NullString
-		var created, updated time.Time
-		if err := rows.Scan(&svc, &acct, &meta, &created, &updated); err != nil {
-			return nil, fmt.Errorf("scan fts result: %w", err)
-		}
-		entries = append(entries, keychain.KeychainEntry{
-			Service:     svc,
-			Account:     acct,
-			Description: meta.String,
-			CreatedAt:   created,
-			UpdatedAt:   updated,
-		})
-	}
-	return entries, rows.Err()
-}
-
 // SetSecretAt stores a secret with explicit create/update timestamps.
 // A zero timestamp falls back to the current time, matching SetSecret's
 // behavior. Implements keychain.TimestampedStore.

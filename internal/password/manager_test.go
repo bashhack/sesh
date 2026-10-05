@@ -807,127 +807,81 @@ func TestListEntriesFiltered(t *testing.T) {
 }
 
 func TestSearchEntries(t *testing.T) {
-	mockKeychain := &mocks.MockProvider{}
 	testUser := "testuser"
+	day := func(n int) time.Time { return time.Date(2026, 1, n, 0, 0, 0, 0, time.UTC) }
+	entry := func(name, desc string, updated time.Time) keychain.KeychainEntry {
+		return keychain.KeychainEntry{Service: "sesh-password/" + name, Account: testUser, Description: desc, UpdatedAt: updated}
+	}
+	mockKeychain := &mocks.MockProvider{
+		ListEntriesFunc: func(string) ([]keychain.KeychainEntry, error) {
+			return []keychain.KeychainEntry{
+				entry("password/github/alice", "password (alice) for github", day(1)),
+				entry("totp/github/alice", "totp (alice) for github", day(3)),
+				entry("password/gitlab/bob", "password (bob) for gitlab", day(2)),
+				entry("api_key/openai", "api_key for openai", day(4)),
+				entry("secure_note/passport", "secure_note for passport", day(1)),
+				entry("password/bank/github-bot", "password (github-bot) for bank", day(5)),
+				entry("password/mygithub/carol", "password (carol) for mygithub", day(1)),
+			}, nil
+		},
+	}
 	manager := NewManager(mockKeychain, testUser)
 
-	allEntries := []keychain.KeychainEntry{
-		{Service: "sesh-password/password/github/user1", Account: testUser, Description: "password for github"},
-		{Service: "sesh-password/api_key/stripe", Account: testUser, Description: "api_key for stripe"},
-		{Service: "sesh-password/password/gitlab/user2", Account: testUser, Description: "password for gitlab"},
-	}
-
-	mockKeychain.ListEntriesFunc = func(service string) ([]keychain.KeychainEntry, error) {
-		return allEntries, nil
-	}
-
-	testCases := map[string]struct {
-		query    string
-		expected int
+	tests := map[string]struct {
+		query string
+		want  []string // service/username, best match first
 	}{
-		"match service": {
-			query:    "github",
-			expected: 1,
-		},
-		"match multiple by prefix": {
-			query:    "git",
-			expected: 2,
-		},
-		"match username": {
-			query:    "user1",
-			expected: 1,
-		},
-		"match description": {
-			query:    "stripe",
-			expected: 1,
-		},
-		"case insensitive": {
-			query:    "GITHUB",
-			expected: 1,
-		},
-		"no match": {
-			query:    "nonexistent",
-			expected: 0,
-		},
+		// Exact name, then names that start with the query, then names
+		// that contain it, then username matches; newest first in each.
+		"ranked":                 {query: "github", want: []string{"github/alice (totp)", "github/alice (password)", "mygithub/carol", "bank/github-bot"}},
+		"newest first in a tier": {query: "git", want: []string{"github/alice (totp)", "gitlab/bob", "github/alice (password)", "mygithub/carol", "bank/github-bot"}},
+		"anywhere in a word":     {query: "hub", want: []string{"github/alice (totp)", "github/alice (password)", "mygithub/carol", "bank/github-bot"}},
+		"username":               {query: "bob", want: []string{"gitlab/bob"}},
+		"ignores case":           {query: "GitHub", want: []string{"github/alice (totp)", "github/alice (password)", "mygithub/carol", "bank/github-bot"}},
+		"trims spaces":           {query: "  openai ", want: []string{"openai"}},
+		// Words from sesh's own storage format match only entries the
+		// user named with them.
+		"stored name prefix": {query: "sesh", want: nil},
+		"entry type":         {query: "pass", want: []string{"passport"}},
+		"type with key":      {query: "key", want: nil},
+		"description":        {query: "for", want: nil},
+		"account":            {query: testUser, want: nil},
+		"empty":              {query: "  ", want: nil},
 	}
 
-	for name, tc := range testCases {
+	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			entries, err := manager.SearchEntries(tc.query)
 			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+				t.Fatalf("SearchEntries(%q): %v", tc.query, err)
 			}
-			if len(entries) != tc.expected {
-				t.Errorf("expected %d entries, got %d", tc.expected, len(entries))
-			}
-		})
-	}
-}
-
-// mockSearchableProvider embeds MockProvider and adds SearchEntries for FTS dispatch testing.
-type mockSearchableProvider struct {
-	mocks.MockProvider
-	SearchEntriesFunc func(query string) ([]keychain.KeychainEntry, error)
-}
-
-func (m *mockSearchableProvider) SearchEntries(query string) ([]keychain.KeychainEntry, error) {
-	return m.SearchEntriesFunc(query)
-}
-
-func TestSearchEntriesWithSearcher(t *testing.T) {
-	testUser := "testuser"
-
-	testCases := map[string]struct {
-		ftsErr     error
-		ftsResults []keychain.KeychainEntry
-		expected   int
-		wantErr    bool
-	}{
-		"uses FTS results": {
-			ftsResults: []keychain.KeychainEntry{
-				{Service: "sesh-password/password/github/user1", Account: testUser},
-			},
-			expected: 1,
-		},
-		"FTS error propagates": {
-			ftsErr:  errors.New("fts broken"),
-			wantErr: true,
-		},
-		"empty FTS results": {
-			ftsResults: nil,
-			expected:   0,
-		},
-	}
-
-	for name, tc := range testCases {
-		t.Run(name, func(t *testing.T) {
-			mock := &mockSearchableProvider{
-				SearchEntriesFunc: func(query string) ([]keychain.KeychainEntry, error) {
-					return tc.ftsResults, tc.ftsErr
-				},
-			}
-			// ListEntriesFunc must be set even though it shouldn't be called
-			mock.ListEntriesFunc = func(service string) ([]keychain.KeychainEntry, error) {
-				t.Fatal("ListEntries should not be called when Searcher is available")
-				return nil, nil
-			}
-
-			manager := NewManager(mock, testUser)
-			entries, err := manager.SearchEntries("github")
-
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
+			var got []string
+			for _, e := range entries {
+				s := e.Service
+				if e.Username != "" {
+					s += "/" + e.Username
 				}
-				return
+				if e.Service == "github" {
+					s += " (" + string(e.Type) + ")"
+				}
+				got = append(got, s)
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if len(entries) != tc.expected {
-				t.Errorf("expected %d entries, got %d", tc.expected, len(entries))
+			if strings.Join(got, ", ") != strings.Join(tc.want, ", ") {
+				t.Errorf("SearchEntries(%q) =\n  %v\nwant\n  %v", tc.query, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSearchEntries_ListError(t *testing.T) {
+	mockKeychain := &mocks.MockProvider{
+		ListEntriesFunc: func(string) ([]keychain.KeychainEntry, error) {
+			return nil, errors.New("store unavailable")
+		},
+	}
+	_, err := NewManager(mockKeychain, "testuser").SearchEntries("github")
+	if wantSub := "store unavailable"; err == nil || !strings.Contains(err.Error(), wantSub) {
+		t.Errorf("SearchEntries error = %v, want it to contain %q", err, wantSub)
 	}
 }
 

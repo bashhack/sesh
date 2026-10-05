@@ -393,49 +393,77 @@ func (m *Manager) ListEntriesFiltered(filter ListFilter) ([]Entry, error) {
 	return filtered, nil
 }
 
-// Searcher is an optional interface that credential stores can implement
-// to provide full-text search. The SQLite store implements this via FTS5.
-type Searcher interface {
-	SearchEntries(query string) ([]keychain.KeychainEntry, error)
-}
-
-// SearchEntries returns entries where the query matches service, username, or description.
-// If the underlying store supports FTS (implements Searcher), it is used for ranked results.
-// Otherwise, falls back to in-memory case-insensitive substring matching.
+// SearchEntries returns the entries whose service name or username
+// contains query, ignoring case and surrounding spaces. Both backends
+// search the same way. Best matches come first: an exact service name,
+// then names that start with the query, then names that contain it, then
+// username matches in the same order; the most recently updated first
+// within each. An empty query matches nothing.
 func (m *Manager) SearchEntries(query string) ([]Entry, error) {
-	if searcher, ok := m.keychain.(Searcher); ok {
-		kEntries, err := searcher.SearchEntries(query)
-		if err != nil {
-			return nil, fmt.Errorf("search failed: %w", err)
-		}
-		entries := make([]Entry, 0, len(kEntries))
-		for _, kEntry := range kEntries {
-			entry, err := m.parseEntry(&kEntry)
-			if err != nil {
-				continue
-			}
-			entries = append(entries, entry)
-		}
-		return entries, nil
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil, nil
 	}
-
-	// Fallback: in-memory substring matching
 	entries, err := m.ListEntries()
 	if err != nil {
 		return nil, err
 	}
 
-	q := strings.ToLower(query)
-	var results []Entry
+	type hit struct {
+		entry Entry
+		rank  int
+	}
+	var hits []hit
 	for i := range entries {
-		e := &entries[i]
-		if strings.Contains(strings.ToLower(e.Service), q) ||
-			strings.Contains(strings.ToLower(e.Username), q) ||
-			strings.Contains(strings.ToLower(e.Description), q) {
-			results = append(results, *e)
+		if r := searchRank(&entries[i], q); r >= 0 {
+			hits = append(hits, hit{entries[i], r})
 		}
 	}
+	sort.SliceStable(hits, func(i, j int) bool {
+		a, b := &hits[i], &hits[j]
+		switch {
+		case a.rank != b.rank:
+			return a.rank < b.rank
+		case !a.entry.UpdatedAt.Equal(b.entry.UpdatedAt):
+			return a.entry.UpdatedAt.After(b.entry.UpdatedAt)
+		case a.entry.Service != b.entry.Service:
+			return a.entry.Service < b.entry.Service
+		default:
+			return a.entry.Username < b.entry.Username
+		}
+	})
+	results := make([]Entry, len(hits))
+	for i := range hits {
+		results[i] = hits[i].entry
+	}
 	return results, nil
+}
+
+// searchRank says how well e matches the lowercased query q, lower being
+// better, or -1 for no match: 0-2 for the service name (exact, prefix,
+// anywhere), 3-5 for the username in the same order.
+func searchRank(e *Entry, q string) int {
+	if r := matchRank(e.Service, q); r >= 0 {
+		return r
+	}
+	if r := matchRank(e.Username, q); r >= 0 {
+		return 3 + r
+	}
+	return -1
+}
+
+func matchRank(field, q string) int {
+	f := strings.ToLower(field)
+	switch {
+	case f == q:
+		return 0
+	case strings.HasPrefix(f, q):
+		return 1
+	case strings.Contains(f, q):
+		return 2
+	default:
+		return -1
+	}
 }
 
 // DeleteEntry removes a password entry and its metadata

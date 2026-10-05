@@ -726,7 +726,10 @@ sesh -service password -action totp-store -service-name github -username alice
 sesh -service password -action totp-generate -service-name github -username alice
 sesh -service password -action totp-generate -service-name github -username alice -clip   # copy the code
 
-# Search across all entries
+# Search across all entries: matches any part of the service name or
+# username, ignoring case. Exact names come first, then names that start
+# with the query, then names that contain it, then username matches;
+# the most recently updated first within each.
 sesh -service password -action search -query github
 # Output:
 #   Found 2 entries matching "github":

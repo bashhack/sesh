@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -170,7 +171,7 @@ func TestIntegration_SecureNotes(t *testing.T) {
 	}
 	t.Logf("  Found: %s/%s [%s]", filtered[0].Service, filtered[0].Username, filtered[0].Type)
 
-	// Search finds note via FTS (description contains "recovery")
+	// Search finds the note by its username
 	t.Log("Search for 'recovery'")
 	results, err := mgr.SearchEntries("recovery")
 	if err != nil {
@@ -179,7 +180,7 @@ func TestIntegration_SecureNotes(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("expected 1 search result, got %d", len(results))
 	}
-	t.Logf("  Found via FTS: %s/%s", results[0].Service, results[0].Username)
+	t.Logf("  Found: %s/%s", results[0].Service, results[0].Username)
 
 	// Update note
 	t.Log("Update note")
@@ -317,10 +318,9 @@ func TestIntegration_ListFilterSort(t *testing.T) {
 	}
 }
 
-func TestIntegration_FTSSearch(t *testing.T) {
+func TestIntegration_Search(t *testing.T) {
 	store, mgr := newIntegrationStore(t)
 
-	// Seed data
 	if err := mgr.StorePasswordString("github", "alice", "pw1", password.EntryTypePassword); err != nil {
 		t.Fatal(err)
 	}
@@ -330,47 +330,31 @@ func TestIntegration_FTSSearch(t *testing.T) {
 	if err := mgr.StorePasswordString("stripe", "admin", "key1", password.EntryTypeAPIKey); err != nil {
 		t.Fatal(err)
 	}
-	// Set description containing "git" on a non-git service to verify metadata-only FTS match
+	// Descriptions aren't searched, so this one doesn't make stripe match "git".
 	if err := store.SetDescription("sesh-password/api_key/stripe/admin", "testuser", "Stripe key migrated from gitops"); err != nil {
 		t.Fatal(err)
 	}
 
-	// FTS prefix search: "git" matches github (service), gitlab (service), stripe (metadata)
-	t.Log("FTS search: 'git'")
-	results, err := mgr.SearchEntries("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range results {
-		t.Logf("  %s/%s [%s] %s", e.Service, e.Username, e.Type, e.Description)
-	}
-	t.Logf("  Found: %d", len(results))
-	if len(results) != 3 {
-		t.Fatalf("expected 3 (github/alice via service, gitlab/alice via service, stripe/admin via metadata), got %d", len(results))
-	}
-
-	// FTS search by metadata-only term
-	t.Log("FTS search: 'gitops'")
-	metaResults, err := mgr.SearchEntries("gitops")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("  Found: %d", len(metaResults))
-	if len(metaResults) != 1 {
-		t.Fatalf("expected 1 (stripe via metadata 'gitops'), got %d", len(metaResults))
-	}
-	if metaResults[0].Service != "stripe" {
-		t.Fatalf("expected stripe, got %s", metaResults[0].Service)
-	}
-
-	// No match
-	t.Log("FTS search: 'nonexistent'")
-	noResults, err := mgr.SearchEntries("nonexistent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(noResults) != 0 {
-		t.Fatalf("expected 0, got %d", len(noResults))
+	for query, want := range map[string][]string{
+		"git":         {"github", "gitlab"},
+		"hub":         {"github"},
+		"admin":       {"stripe"},
+		"gitops":      nil,
+		"password":    nil,
+		"nonexistent": nil,
+	} {
+		results, err := mgr.SearchEntries(query)
+		if err != nil {
+			t.Fatalf("SearchEntries(%q): %v", query, err)
+		}
+		var got []string
+		for _, e := range results {
+			got = append(got, e.Service)
+		}
+		slices.Sort(got) // the order is covered by the password package's tests
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("SearchEntries(%q) = %v, want %v", query, got, want)
+		}
 	}
 }
 

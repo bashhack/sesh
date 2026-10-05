@@ -196,7 +196,7 @@ sesh supports two storage backends, selected by the `backend` setting (`SESH_BAC
 - Pure-Go SQLite via `modernc.org/sqlite` — zero C dependencies
 - AES-256-GCM encryption with per-entry salts
 - Argon2id key derivation for per-entry keys
-- FTS5 full-text search across service, account, and description
+- Search by service name or username, matching any part and ignoring case; the password manager does it the same way for both backends
 - Audit log table tracking all access, modifications, and deletions
 - Pluggable master key source (see below)
 - WAL mode for concurrent read safety
@@ -558,15 +558,6 @@ type SubshellDecider interface {
 }
 type SubshellProvider interface {
     NewSubshellConfig(creds *Credentials) interface{}
-}
-```
-
-This same pattern (from Go's io package) is also used by the password manager's `Searcher` interface — the SQLite store implements FTS5 search via `SearchEntries()`, while the keychain backend falls back to in-memory substring matching. The manager uses a type assertion to dispatch:
-
-```go
-// Exists today: FTS search dispatch
-type Searcher interface {
-    SearchEntries(query string) ([]keychain.KeychainEntry, error)
 }
 ```
 

@@ -365,47 +365,6 @@ func TestSetDescriptionNotFoundWithoutEntry(t *testing.T) {
 	}
 }
 
-func TestSearchEntries(t *testing.T) {
-	s := newTestStore(t)
-
-	// Seed data
-	for _, svc := range []string{"sesh-password/github", "sesh-password/gitlab", "sesh-aws/prod"} {
-		if err := s.SetSecret("alice", svc, []byte("secret")); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Set a description to test metadata search
-	if err := s.SetDescription("sesh-password/github", "alice", "My GitHub token"); err != nil {
-		t.Fatal(err)
-	}
-
-	tests := map[string]struct {
-		query    string
-		expected int
-	}{
-		"match service prefix": {query: "github", expected: 1},
-		"match multiple":       {query: "git", expected: 2},
-		"match metadata":       {query: "token", expected: 1},
-		"match account":        {query: "alice", expected: 3},
-		"no match":             {query: "nonexistent", expected: 0},
-		"special chars quotes": {query: `he said "hello"`, expected: 0},
-		"special chars star":   {query: "foo*bar", expected: 0},
-		"special chars paren":  {query: "foo(bar)", expected: 0},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			entries, err := s.SearchEntries(tc.query)
-			if err != nil {
-				t.Fatalf("SearchEntries(%q): %v", tc.query, err)
-			}
-			if len(entries) != tc.expected {
-				t.Errorf("expected %d results, got %d", tc.expected, len(entries))
-			}
-		})
-	}
-}
-
 func TestAuditLogWritten(t *testing.T) {
 	s := newTestStore(t)
 
@@ -578,26 +537,6 @@ func TestSetDescriptionAt_MissingEntryReturnsErrNotFound(t *testing.T) {
 	err := s.SetDescriptionAt("sesh-password/password/ghost/alice", "alice", "", time.Now())
 	if !errors.Is(err, keychain.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
-	}
-}
-
-func TestSearchEntries_EmptyAndWhitespaceQueryShortCircuit(t *testing.T) {
-	// Seed a row so we'd know if the guard was missing — an empty query
-	// would produce an invalid FTS5 expression (`""*`) and surface as an
-	// error rather than silently returning no rows.
-	s := newTestStore(t)
-	if err := s.SetSecret("alice", "sesh-password/github", []byte("secret")); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, q := range []string{"", " ", "\t\n  "} {
-		got, err := s.SearchEntries(q)
-		if err != nil {
-			t.Errorf("SearchEntries(%q): unexpected error %v", q, err)
-		}
-		if got != nil {
-			t.Errorf("SearchEntries(%q) = %v, want nil", q, got)
-		}
 	}
 }
 
