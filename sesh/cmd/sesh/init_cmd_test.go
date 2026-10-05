@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/config"
+	"github.com/bashhack/sesh/internal/keychain"
 )
 
 // initEnv isolates HOME, the config dir, the data dir, and the agent socket,
@@ -43,8 +45,8 @@ func TestInit_InteractiveDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readFile(t, path)
-	if !strings.Contains(got, "backend = \"sqlite\"\nkey_source = \"password\"\n") || strings.Contains(got, "db_path") {
-		t.Errorf("config file =\n%s\nwant sqlite + password and no db_path (the default)", got)
+	if !strings.Contains(got, "key_source = \"password\"\n") || strings.Contains(got, "db_path") || strings.Contains(got, "backend") {
+		t.Errorf("config file =\n%s\nwant key_source = password and no db_path (the default)", got)
 	}
 	cfg, err := settings()
 	if err != nil {
@@ -60,16 +62,34 @@ func TestInit_InteractiveDefaults(t *testing.T) {
 	}
 }
 
-func TestInit_InteractiveKeychainOnMacOS(t *testing.T) {
-	app, path := initEnv(t, "darwin", "2\n")
+func TestInit_InteractiveKeychainKeyOnMacOS(t *testing.T) {
+	kc := newKCMock(nil)
+	orig := macKeychain
+	macKeychain = func() keychain.ItemStore { return kc }
+	t.Cleanup(func() { macKeychain = orig })
+	app, path := initEnv(t, "darwin", "2\n\n")
 	if err := runInit(app, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := readFile(t, path); !strings.Contains(got, "backend = \"keychain\"\n") || strings.Contains(got, "key_source") {
+	if got := readFile(t, path); !strings.Contains(got, "key_source = \"keychain\"\n") || strings.Contains(got, "backend") {
 		t.Errorf("config file =\n%s", got)
 	}
-	if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "login Keychain") {
+	if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "kept in your macOS login Keychain") {
 		t.Errorf("stdout = %q", out)
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kc.GetSecret(u.Username, encKeyService); err != nil {
+		t.Errorf("the vault's key isn't in the Keychain: %v", err)
+	}
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(cfg.DBPath.Value); err != nil {
+		t.Errorf("init didn't create the vault: %v", err)
 	}
 }
 
@@ -112,7 +132,7 @@ func TestInit_FromFlags(t *testing.T) {
 func TestInit_Refuses(t *testing.T) {
 	t.Run("existing config without --force", func(t *testing.T) {
 		app, path := initEnv(t, "darwin", "\n\n")
-		writeTestConfig(t, path, "backend = \"sqlite\"\n")
+		writeTestConfig(t, path, "key_source = \"password\"\n")
 		err := runInit(app, nil)
 		if err == nil || !strings.Contains(err.Error(), "config already exists") {
 			t.Fatalf("err = %v", err)
@@ -123,7 +143,7 @@ func TestInit_Refuses(t *testing.T) {
 	})
 	t.Run("keychain on linux", func(t *testing.T) {
 		app, path := initEnv(t, "linux", "")
-		cliOverrides = config.Overrides{Backend: "keychain"}
+		cliOverrides = config.Overrides{KeySource: "keychain"}
 		err := runInit(app, nil)
 		if err == nil || !strings.Contains(err.Error(), "isn't available on linux") {
 			t.Fatalf("err = %v", err)
@@ -170,7 +190,6 @@ func TestRekey_UpdatesKeySourceInTheConfigFile(t *testing.T) {
 	kc := newKCMock(hexKey())
 	populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
 	path := useConfigFile(t, "# my settings\nkey_source = \"keychain\"  # for now\n\n[agent]\nidle_timeout = \"20m\"\n")
-	t.Setenv("SESH_BACKEND", "sqlite")
 	t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
 
 	app, stderr := rekeyTestApp("y\n")

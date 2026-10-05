@@ -28,7 +28,6 @@ func setupRekeyEnv(t *testing.T) *rekeyTestEnv {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "xdg"))
-	t.Setenv("SESH_BACKEND", "sqlite")
 	// The vault starts on the Keychain key unless a test says otherwise.
 	t.Setenv("SESH_KEY_SOURCE", "keychain")
 	t.Setenv("SESH_MASTER_PASSWORD", "")
@@ -213,17 +212,7 @@ func readEntriesViaKeychain(t *testing.T, env *rekeyTestEnv, kc keychain.Provide
 	return out
 }
 
-func TestRekey_RefusesIfBackendNotSqlite(t *testing.T) {
-	t.Setenv("SESH_BACKEND", "keychain")
-	app, _ := rekeyTestApp("")
-	err := runRekey(app, []string{"--to=password"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "SESH_BACKEND=sqlite") {
-		t.Fatalf("expected SESH_BACKEND error, got %v", err)
-	}
-}
-
 func TestRekey_RefusesIfTargetMissing(t *testing.T) {
-	t.Setenv("SESH_BACKEND", "sqlite")
 	app, _ := rekeyTestApp("")
 	err := runRekey(app, []string{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "--to") {
@@ -232,7 +221,6 @@ func TestRekey_RefusesIfTargetMissing(t *testing.T) {
 }
 
 func TestRekey_RefusesIfTargetInvalid(t *testing.T) {
-	t.Setenv("SESH_BACKEND", "sqlite")
 	app, _ := rekeyTestApp("")
 	err := runRekey(app, []string{"--to=banana"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "--to") {
@@ -879,15 +867,6 @@ func TestRotate_RemovesStagingLockOnCancel(t *testing.T) {
 	stagingLock := env.sidecarPath + rekeyDestSuffix + ".lock"
 	if _, err := os.Stat(stagingLock); !os.IsNotExist(err) {
 		t.Errorf("staging sidecar lock %s should not exist after cancel, got stat err %v", stagingLock, err)
-	}
-}
-
-func TestRotate_RefusesIfBackendNotSqlite(t *testing.T) {
-	t.Setenv("SESH_BACKEND", "keychain")
-	app, _ := rekeyTestApp("")
-	err := runRotateMasterPassword(app, rotateTestCfg("any-pw-1234"))
-	if err == nil || !strings.Contains(err.Error(), "SESH_BACKEND=sqlite") {
-		t.Fatalf("expected SESH_BACKEND error, got %v", err)
 	}
 }
 

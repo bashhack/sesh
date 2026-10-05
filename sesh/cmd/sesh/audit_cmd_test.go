@@ -154,10 +154,6 @@ func TestAudit_Refusals(t *testing.T) {
 			t.Errorf("sesh audit %q: err = %v, want %q", tt.args, err, tt.wantSub)
 		}
 	}
-	t.Setenv(config.EnvBackend, "keychain")
-	if _, err := runAuditOut(t); err == nil || !strings.Contains(err.Error(), "audit") {
-		t.Errorf("keychain backend: err = %v", err)
-	}
 }
 
 func TestAuditEntryName(t *testing.T) {

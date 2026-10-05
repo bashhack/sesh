@@ -51,12 +51,6 @@ type Setting[T any] struct {
 	Source Source
 }
 
-// Backend values.
-const (
-	BackendKeychain = "keychain"
-	BackendSQLite   = "sqlite"
-)
-
 // Key source values.
 const (
 	KeySourceKeychain = "keychain"
@@ -79,7 +73,6 @@ type Config struct {
 	// Path is the config file sesh looked for; FileFound says whether it
 	// existed.
 	Path             string
-	Backend          Setting[string]
 	KeySource        Setting[string]
 	DBPath           Setting[string]
 	ClipboardTimeout Setting[time.Duration]
@@ -93,14 +86,12 @@ type Config struct {
 
 // Overrides are values given as command-line flags. Empty means unset.
 type Overrides struct {
-	Backend   string
 	KeySource string
 	DBPath    string
 }
 
 // Env var names.
 const (
-	EnvBackend            = "SESH_BACKEND"
 	EnvKeySource          = "SESH_KEY_SOURCE"
 	EnvDBPath             = "SESH_DB_PATH"
 	EnvClipboardTimeout   = "SESH_CLIPBOARD_TIMEOUT"
@@ -112,7 +103,6 @@ const (
 // fileConfig is the config file's shape. Durations are strings such as
 // "10m", parsed with time.ParseDuration.
 type fileConfig struct {
-	Backend          string `toml:"backend"`
 	KeySource        string `toml:"key_source"`
 	DBPath           string `toml:"db_path"`
 	ClipboardTimeout string `toml:"clipboard_timeout"`
@@ -154,7 +144,6 @@ func Load(o Overrides) (*Config, error) {
 	}
 	c := &Config{
 		Path:               path,
-		Backend:            Setting[string]{Value: BackendSQLite},
 		KeySource:          Setting[string]{Value: KeySourcePassword},
 		DBPath:             Setting[string]{Value: dbDefault},
 		ClipboardTimeout:   Setting[time.Duration]{Value: DefaultClipboardTimeout},
@@ -194,11 +183,6 @@ func (c *Config) applyFile() error {
 	}
 	in := func(key string) bool { return md.IsDefined(strings.Split(key, ".")...) }
 	from := func(key string) string { return fmt.Sprintf("%s in %s", key, c.Path) }
-	if in("backend") {
-		if err := setChoice(&c.Backend, f.Backend, FromFile, from("backend"), BackendSQLite, BackendKeychain); err != nil {
-			return err
-		}
-	}
 	if in("key_source") {
 		if err := setChoice(&c.KeySource, f.KeySource, FromFile, from("key_source"), KeySourcePassword, KeySourceKeychain); err != nil {
 			return err
@@ -233,11 +217,6 @@ func (c *Config) applyFile() error {
 }
 
 func (c *Config) applyEnv() error {
-	if v, ok := os.LookupEnv(EnvBackend); ok && v != "" {
-		if err := setChoice(&c.Backend, v, FromEnv, EnvBackend, BackendSQLite, BackendKeychain); err != nil {
-			return err
-		}
-	}
 	if v, ok := os.LookupEnv(EnvKeySource); ok && v != "" {
 		if err := setChoice(&c.KeySource, v, FromEnv, EnvKeySource, KeySourcePassword, KeySourceKeychain); err != nil {
 			return err
@@ -275,11 +254,6 @@ func (c *Config) applyEnv() error {
 }
 
 func (c *Config) applyFlags(o Overrides) error {
-	if o.Backend != "" {
-		if err := setChoice(&c.Backend, o.Backend, FromFlag, "--backend", BackendSQLite, BackendKeychain); err != nil {
-			return err
-		}
-	}
 	if o.KeySource != "" {
 		if err := setChoice(&c.KeySource, o.KeySource, FromFlag, "--key-source", KeySourcePassword, KeySourceKeychain); err != nil {
 			return err

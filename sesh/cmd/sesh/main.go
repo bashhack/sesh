@@ -52,7 +52,7 @@ func main() {
 	// Only open the credential store if the command will actually use it.
 	// --version, --help, --list-services, and --rekey either just print
 	// information or open their own store internally. Skipping buildProvider
-	// here means the SQLite backend doesn't pointlessly open the DB (or
+	// here means sesh doesn't pointlessly open the vault (or
 	// acquire the key-init flock on first run) for those commands.
 	args, overrides, err := takeSettingFlags(os.Args)
 	if err == nil {
@@ -219,14 +219,19 @@ func (u unavailableStore) SetDescription(_, _, _ string) error { return u.err }
 // systems.
 var goos = runtime.GOOS
 
-// systemKeychain returns the macOS Keychain, or elsewhere a stand-in whose
-// every call says the Keychain isn't available.
-func systemKeychain() keychain.Provider {
+// systemKeychain returns the macOS Keychain's items, for the keychain key
+// source, or elsewhere a stand-in whose every call says the Keychain isn't
+// available.
+func systemKeychain() keychain.ItemStore {
 	if goos == "darwin" {
-		return keychain.NewDefaultProvider()
+		return macKeychain()
 	}
 	return unavailableStore{err: fmt.Errorf("the macOS Keychain isn't available on %s", goos)}
 }
+
+// macKeychain is the real macOS Keychain. Tests replace it, so none can
+// write to the developer's own Keychain.
+var macKeychain = func() keychain.ItemStore { return keychain.Items{} }
 
 // requireMacOSKeychain refuses a setting that asks for the macOS Keychain
 // on another system, naming where the setting came from.
@@ -235,7 +240,7 @@ func requireMacOSKeychain(s config.Setting[string], key string) error {
 		return nil
 	}
 	return fmt.Errorf("%s asks for the macOS Keychain (%s = %q), which isn't available on %s. "+
-		"Use the defaults instead: backend = \"sqlite\" with key_source = \"password\"",
+		"Use a master password instead: key_source = \"password\"",
 		s.Origin, key, s.Value, goos)
 }
 
@@ -248,16 +253,8 @@ func settings() (*config.Config, error) {
 	return config.Load(cliOverrides)
 }
 
-// buildProvider constructs the credential store for cfg's backend: a
-// SQLite-backed store (caller must close it) or the system keychain with
-// no closer.
+// buildProvider opens the vault with cfg's settings; the caller closes it.
 func buildProvider(cfg *config.Config) (keychain.Provider, io.Closer, error) {
-	if cfg.Backend.Value != config.BackendSQLite {
-		if err := requireMacOSKeychain(cfg.Backend, "backend"); err != nil {
-			return nil, nil, err
-		}
-		return systemKeychain(), nil, nil
-	}
 	store, err := openSQLiteStoreWith(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -367,11 +364,6 @@ func refuseNewKeyForExistingVault(dbPath string) error {
 		"If this vault uses the Keychain key, set key_source = \"keychain\" in the config file. "+
 		"To switch it to a master password, run: sesh --key-source keychain --rekey --to password",
 		dbPath, sidecar)
-}
-
-// errNeedsSQLite reports a command that only works on the sqlite backend.
-func errNeedsSQLite(what string) error {
-	return fmt.Errorf("%s requires the sqlite backend: set backend = \"sqlite\" in the config file, or SESH_BACKEND=sqlite", what)
 }
 
 // sidecarMissing reports whether dataDir has no passwords.key yet: the
@@ -1091,11 +1083,10 @@ func (a *App) PrintUsage() error {
 		"  --version, -version           Show version information",
 		"  --help, -help                 Show usage",
 		"\nSetting overrides (for this command only; see `sesh config`):",
-		"  --backend keychain|sqlite     Storage backend",
-		"  --key-source keychain|password  Key source for the sqlite backend",
-		"  --db-path path                Vault location for the sqlite backend",
+		"  --key-source keychain|password  Where the vault's key comes from",
+		"  --db-path path                Vault location",
 		"\nCommands:",
-		"  sesh init                     Choose where and how sesh stores secrets",
+		"  sesh init                     Set up the vault: how it unlocks and where it lives",
 		"  sesh config                   Show settings and where each comes from",
 		"  sesh recovery new|remove|status    A recovery key, in case you forget your master password",
 		"  sesh recover                  Forgot the master password? Set a new one with the recovery key",

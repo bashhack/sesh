@@ -157,15 +157,11 @@ func vaultSize(n int64) string {
 	return fmt.Sprintf("%.1f MB", float64(n)/1e6)
 }
 
-// openAuditStore opens the vault for sesh audit, which needs the sqlite
-// backend.
+// openAuditStore opens the vault for sesh audit.
 func openAuditStore() (*config.Config, *database.Store, error) {
 	cfg, err := settings()
 	if err != nil {
 		return nil, nil, err
-	}
-	if cfg.Backend.Value != config.BackendSQLite {
-		return nil, nil, errNeedsSQLite("sesh audit")
 	}
 	store, err := openSQLiteStoreWith(cfg)
 	if err != nil {

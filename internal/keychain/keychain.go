@@ -1,4 +1,6 @@
-// Package keychain provides access to the macOS Keychain for storing and retrieving secrets.
+// Package keychain defines the store interface sesh's entries go through,
+// and reads, writes, and deletes the single macOS Keychain item that the
+// keychain key source keeps the vault's key in.
 package keychain
 
 import (
@@ -9,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/constants"
-	"github.com/bashhack/sesh/internal/keyformat"
 	"github.com/bashhack/sesh/internal/secure"
 )
 
@@ -65,15 +66,6 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 		return nil, fmt.Errorf("keychain read failed for account %q and service %q: %w", account, service, err)
 	}
 
-	// For TOTP secrets, ensure they are properly normalized
-	if strings.HasPrefix(service, "sesh-aws") || strings.HasPrefix(service, "sesh-totp") {
-		// Trim whitespace - CRITICAL: removes any newlines, which can cause base32 decode failures
-		secretTrimmed := bytes.TrimSpace(secret)
-		if len(secretTrimmed) != len(secret) {
-			secret = secretTrimmed
-		}
-	}
-
 	// Make a defensive copy to return
 	result := make([]byte, len(secret))
 	copy(result, secret)
@@ -82,22 +74,6 @@ func GetSecretBytes(account, service string) ([]byte, error) {
 	secure.SecureZeroBytes(secret)
 
 	return result, nil
-}
-
-// GetSecretString retrieves a secret from the keychain as a string
-// This is provided for backward compatibility but is less secure
-// than GetSecretBytes
-func GetSecretString(account, service string) (string, error) {
-	secretBytes, err := GetSecretBytes(account, service)
-	if err != nil {
-		return "", err
-	}
-
-	// Convert to string and zero the bytes
-	secret := string(secretBytes)
-	secure.SecureZeroBytes(secretBytes)
-
-	return secret, nil
 }
 
 // SetSecretBytes sets a byte slice secret in the keychain
@@ -141,89 +117,7 @@ func SetSecretBytes(account, service string, secret []byte) error {
 		return fmt.Errorf("failed to set secret in keychain: %w", err)
 	}
 
-	// Store in metadata system — required for ListEntries and DeleteEntry to find this entry
-	serviceType := getServicePrefix(service)
-	if err := StoreEntryMetadata(serviceType, service, account, service); err != nil {
-		return fmt.Errorf("secret stored but metadata write failed (entry won't appear in -list): %w", err)
-	}
-
 	return nil
-}
-
-// SetSecretString sets a string secret in the keychain
-// This is provided for backward compatibility but is less secure
-// than SetSecretBytes
-func SetSecretString(account, service, secret string) error {
-	secretBytes := []byte(secret)
-	defer secure.SecureZeroBytes(secretBytes)
-
-	return SetSecretBytes(account, service, secretBytes)
-}
-
-// GetMFASerialBytes retrieves the MFA device serial number from keychain as bytes
-// This is more secure than GetMFASerial
-func GetMFASerialBytes(account, profile string) ([]byte, error) {
-	if account == "" {
-		user, err := getCurrentUser()
-		if err != nil {
-			return nil, fmt.Errorf("could not determine current user: %w", err)
-		}
-		account = user
-	}
-	if profile == "" {
-		profile = "default"
-	}
-	service, err := keyformat.Build(constants.AWSServiceMFAPrefix, profile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build MFA serial key: %w", err)
-	}
-	cmd := execCommand("security", "find-generic-password",
-		"-a", account,
-		"-s", service,
-		"-w",
-	)
-
-	// Use secure capturing to ensure memory is zeroed if there are errors
-	serialBytes, err := captureSecure(cmd)
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == exitCodeItemNotFound {
-			return nil, fmt.Errorf("%w for account %q and service %q", ErrNotFound, account, service)
-		}
-		return nil, fmt.Errorf("keychain read failed for account %q and service %q: %w", account, service, err)
-	}
-
-	// Make a defensive copy
-	result := make([]byte, len(serialBytes))
-	copy(result, serialBytes)
-
-	// Zero the original
-	secure.SecureZeroBytes(serialBytes)
-
-	return result, nil
-}
-
-// ListEntries lists all entries for a given service prefix
-func ListEntries(servicePrefix string) ([]KeychainEntry, error) {
-	// Use the metadata system to get entries - no fallback to insecure dump-keychain
-	metaEntries, err := LoadEntryMetadata(servicePrefix)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load entry metadata: %w", err)
-	}
-
-	// Convert metadata entries to KeychainEntry format
-	entries := make([]KeychainEntry, 0, len(metaEntries))
-	for _, meta := range metaEntries {
-		entries = append(entries, KeychainEntry{
-			Service:     meta.Service,
-			Account:     meta.Account,
-			Description: meta.Description,
-			CreatedAt:   meta.CreatedAt,
-			UpdatedAt:   meta.UpdatedAt,
-		})
-	}
-
-	return entries, nil
 }
 
 // DeleteEntry deletes an entry from the keychain
@@ -236,13 +130,6 @@ func DeleteEntry(account, service string) error {
 		account = user
 	}
 
-	// Remove metadata first — if this fails, nothing has been deleted yet
-	serviceType := getServicePrefix(service)
-	if err := RemoveEntryMetadata(serviceType, service, account); err != nil {
-		return fmt.Errorf("failed to remove entry metadata: %w", err)
-	}
-
-	// Now delete from the actual keychain
 	cmd := execCommand("security", "delete-generic-password",
 		"-a", account,
 		"-s", service,
@@ -252,8 +139,40 @@ func DeleteEntry(account, service string) error {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == exitCodeItemNotFound {
+			return fmt.Errorf("%w for account %q and service %q", ErrNotFound, account, service)
+		}
 		return fmt.Errorf("failed to delete entry from keychain: %w", err)
 	}
 
 	return nil
+}
+
+// ItemStore reads, writes, and deletes single Keychain items: all the
+// keychain key source needs.
+type ItemStore interface {
+	GetSecret(account, service string) ([]byte, error)
+	SetSecret(account, service string, secret []byte) error
+	DeleteEntry(account, service string) error
+}
+
+// Items is the macOS Keychain as an ItemStore.
+type Items struct{}
+
+var _ ItemStore = Items{}
+
+// GetSecret reads the item's secret.
+func (Items) GetSecret(account, service string) ([]byte, error) {
+	return GetSecretBytes(account, service)
+}
+
+// SetSecret creates or replaces the item.
+func (Items) SetSecret(account, service string, secret []byte) error {
+	return SetSecretBytes(account, service, secret)
+}
+
+// DeleteEntry deletes the item.
+func (Items) DeleteEntry(account, service string) error {
+	return DeleteEntry(account, service)
 }

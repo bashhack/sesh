@@ -7,7 +7,7 @@ This document describes the security architecture and privacy principles that gu
 sesh is built on three fundamental principles:
 
 1. **Privacy First**: sesh stores your secrets locally and never transmits them — only derived values (TOTP codes, session tokens) leave your machine
-2. **Layered Encryption**: AES-256-GCM with Argon2id key derivation in the default encrypted vault, or the macOS Keychain if you choose it
+2. **Layered Encryption**: AES-256-GCM with Argon2id key derivation in an encrypted vault, its key from your master password or, if you choose, the macOS Keychain
 3. **Transparent Security**: Be honest about what we can and cannot protect against
 
 ## Threat Model
@@ -15,7 +15,7 @@ sesh is built on three fundamental principles:
 sesh is designed to reduce exposure to:
 
 - **Corporate Data Harvesting**: Unlike browser extensions or corporate MFA apps, sesh never phones home
-- **Credential Theft**: Secrets are stored in macOS Keychain with binary-level access control
+- **Credential Theft**: Every secret is encrypted in the vault; its key is derived from your master password, or kept in a Keychain item only the sesh binary can read without a prompt
 - **Memory Scraping**: Best-effort memory zeroing reduces exposure windows
 - **Accidental Exposure**: Subshells isolate credentials from your main environment
 - **Supply Chain Attacks**: Minimal dependencies reduce attack surface
@@ -30,15 +30,15 @@ sesh is NOT designed to protect against:
 - **Terminal Recording**: Session recording tools (asciinema, iTerm2 logging, tmux capture) and shell history files can capture commands and output. Consider `export HISTFILE=/dev/null` in sensitive contexts.
 - **Child Process Visibility**: Once credentials are output (clipboard, stdout, or subshell environment variables), any child process spawned from the shell can access them. This is inherent to how Unix environments work.
 
-## Keychain Integration
+## Storage
 
 ### Storage Security
 
-sesh supports two storage backends. The default is an encrypted SQLite vault unlocked with your master password, on macOS and Linux. The macOS Keychain backend (`backend = "keychain"`, macOS only) is used only when you choose it.
+Every secret lives in one encrypted vault, a SQLite file, on macOS and Linux. Its key comes from your master password (the default) or, on macOS, from an item in your login Keychain.
 
-#### SQLite Store (default)
+#### The vault
 
-The SQLite backend provides application-level encryption on top of file-system storage:
+The vault provides application-level encryption on top of file-system storage:
 
 - **AES-256-GCM**: Authenticated encryption for every stored entry
 - **Per-entry salts**: Each entry derives a unique encryption key from the master key + a random 16-byte salt
@@ -52,7 +52,7 @@ The SQLite backend provides application-level encryption on top of file-system s
 
 ##### Master password key source (default)
 
-Derives the master key from a user-supplied passphrase via Argon2id. **No keychain involvement**, so in this mode the SQLite backend runs on Linux as well as macOS.
+Derives the master key from a user-supplied passphrase via Argon2id. **No keychain involvement**, so in this mode sesh runs on Linux as well as macOS.
 
 - **KDF**: Argon2id with `t=3, m=64 MiB, p=4, keyLen=32`. These parameters exceed OWASP 2023 minimums (`t=1, m=47 MiB, p=1`) and make offline brute-force expensive (~200 ms per attempt)
 - **Sidecar file** `passwords.key` (next to the DB, 0600 permissions): stores the KDF salt (32 random bytes), algorithm params, and a verification blob. **No secrets.** Same public-info model as bcrypt/scrypt — salt and params are safe to expose
@@ -90,7 +90,9 @@ A recovery key lets someone who forgot the master password set a new one. There'
 
 ##### Keychain key source (`key_source = "keychain"`, macOS only)
 
-The 256-bit master encryption key is stored in the macOS Keychain, combining OS-level access control with application-level encryption. The key is hex-encoded (64 ASCII characters) before storage because the `security` command's tokenizer can't reliably round-trip raw random bytes; the key is decoded on read and zeroed after use.
+The 256-bit master encryption key is stored in one macOS Keychain item, combining OS-level access control with application-level encryption. The key is hex-encoded (64 ASCII characters) before storage because the `security` command's tokenizer can't reliably round-trip raw random bytes; the key is decoded on read and zeroed after use.
+
+The item is written with the system `security` command, fed through its interactive mode so the key never appears in a process listing, and with `-T` naming the sesh binary (found whether it came from Homebrew, `go install`, or elsewhere): the sesh binary reads it without a prompt, and macOS asks before any other program does.
 
 ##### Sesh agent
 
@@ -105,7 +107,7 @@ Where the derived key is, by state:
 
 | State | Where the key lives |
 |-------|---------------------|
-| No agent (keychain mode, `SESH_MASTER_PASSWORD` runs, or agent unavailable) | In the sesh process, for one command |
+| No agent (the Keychain key source, `SESH_MASTER_PASSWORD` runs, or agent unavailable) | In the sesh process, for one command |
 | Agent unlocked | In the agent's locked memory page |
 | Agent locked | Nowhere: zeroed in place. After an automatic lock the agent also exits; after `sesh agent lock` or SIGUSR1 it keeps running |
 | Agent stopped | Nowhere; the next command starts a fresh agent |
@@ -131,29 +133,6 @@ Locking zeroes the key. An automatic lock (idle timeout or max lifetime) also sh
 5. **What the timeouts protect.** They bound how long an unlocked session stays useful, for example on a laptop left unlocked. After a lock the key is zeroed in place. What can remain in the agent's memory are short-lived buffers (the JSON messages that carried a password or a decrypted secret) that Go gives no way to zero; the runtime reuses or frees them later. The no-dump and no-attach settings cover them; the timeouts don't.
 
 Not protected against: root (it can read the agent's memory), physical-memory attacks such as cold boot or DMA, or a process running as you that captures the password as you type it.
-
-#### macOS Keychain backend (`backend = "keychain"`, macOS only)
-
-Secrets are stored using the system `security` command with binary access restrictions:
-
-```go
-// Get the path to the sesh binary (handles Homebrew, go install, etc.)
-execPath := constants.GetSeshBinaryPath()
-
-// Use -T flag to restrict access to only the sesh binary
-addCmd := fmt.Sprintf("add-generic-password -a %s -s %s -w %s -U -T %s",
-    account, service, secretStr, execPath)
-
-// Execute via security -i (interactive mode) to avoid process listing exposure
-cmd := execCommand("security", "-i")
-err := secure.ExecWithSecretInput(cmd, []byte(addCmd+"\n"))
-```
-
-**Key Features:**
-- **macOS Keychain Encryption**: Secrets encrypted by the OS keychain subsystem
-- **Binary Path Binding**: The `-T` flag ensures only the sesh binary can access secrets without prompting
-- **User Prompts**: macOS prompts when other apps try to access sesh entries
-- **Automatic Path Detection**: Works with Homebrew, go install, or manual installation
 
 ### Encrypted Export
 
@@ -185,7 +164,6 @@ Compare sesh's approach to alternatives:
 |----------------|------------|----------------|-----------------|
 | sesh (default: SQLite + master password) | AES-256-GCM + Argon2id | File permissions + passphrase; key cached in a per-user agent after unlock | Prompt once per agent session |
 | sesh (SQLite + Keychain key, macOS) | AES-256-GCM + Argon2id | File permissions + encryption key in Keychain | Transparent |
-| sesh (Keychain backend, macOS) | OS-level (AES-256) | OS-enforced binary binding | Transparent |
 | Config Files | None/Custom | File permissions only | Manual setup |
 | Environment Vars | None | Process inheritance | Leaks to children |
 | Corporate MFA Apps | Unknown | App-controlled | Privacy concerns |
@@ -314,8 +292,8 @@ type ServiceProvider interface {
 
 ### What sesh DOES Do
 
-- **Local-Only Storage**: All data in macOS Keychain or local encrypted SQLite
-- **Audit Trail**: Every secret access, modification, and deletion is logged (SQLite backend)
+- **Local-Only Storage**: All data in a local encrypted vault
+- **Audit Trail**: Every secret access, modification, and deletion is logged
 - **Explicit User Control**: Every operation requires user action
 - **Open Source**: Complete transparency in implementation
 - **Minimal Dependencies**: Reduced supply chain risk
@@ -326,7 +304,7 @@ type ServiceProvider interface {
 
 | Feature | Mobile Apps | sesh |
 |---------|-------------|------|
-| Storage Location | Phone (unknown security) | macOS Keychain |
+| Storage Location | Phone (unknown security) | Encrypted vault on your machine |
 | Backup/Sync | Often cloud-based | Local only (encrypted backup/export planned) |
 | Privacy | Varies (often poor) | Complete |
 | Scriptability | None | Full CLI |

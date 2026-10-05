@@ -74,10 +74,9 @@ type storeOptions struct {
 	updatedAt time.Time
 }
 
-// WithTimestamps preserves the given create/update timestamps on backends
-// that implement keychain.TimestampedStore (the SQLite store does; the
-// macOS keychain backend does not — there the option is silently ignored
-// and the current time is used). A zero-valued time.Time on either
+// WithTimestamps preserves the given create/update timestamps on stores
+// that implement keychain.TimestampedStore (the vault does; elsewhere the
+// option is ignored and the current time is used). A zero-valued time.Time on either
 // argument is treated as "unset" and falls back to the current time for
 // that field.
 func WithTimestamps(createdAt, updatedAt time.Time) StoreOption {
@@ -234,7 +233,7 @@ func (m *Manager) GetTOTPParams(service, username string) totp.Params {
 	if err != nil || len(entries) == 0 {
 		return totp.Params{}
 	}
-	// ListEntries is a prefix query in the SQLite backend — verify the
+	// ListEntries is a prefix query in the vault — verify the
 	// first entry matches the exact (service, account) we read the secret
 	// under, so neither a prefix sibling nor a cross-user entry can spoof
 	// the params.
@@ -305,7 +304,7 @@ func (m *Manager) EntryExists(service, username string, entryType EntryType) (bo
 	if err != nil {
 		return false, fmt.Errorf("failed to list entries: %w", err)
 	}
-	// ListEntries is a prefix query in the SQLite backend — require exact
+	// ListEntries is a prefix query in the vault — require exact
 	// (service, account) match so a sibling like "github/alice" vs
 	// "github/alicia" or a cross-user entry can't register as a hit.
 	for _, e := range entries {

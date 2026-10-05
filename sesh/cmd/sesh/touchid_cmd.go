@@ -166,7 +166,7 @@ func runTouchID(app *App, args []string) error {
 		return err
 	}
 	dataDir := filepath.Dir(cfg.DBPath.Value)
-	usesPassword := cfg.Backend.Value == config.BackendSQLite && cfg.KeySource.Value == config.KeySourcePassword
+	usesPassword := cfg.KeySource.Value == config.KeySourcePassword
 
 	out := func(format string, a ...any) error {
 		_, err := fmt.Fprintf(app.Stdout, format+"\n", a...)
@@ -201,7 +201,7 @@ func runTouchID(app *App, args []string) error {
 		return out("Touch ID unlock is off; sesh will ask for your master password.")
 	case "enable":
 		if !usesPassword {
-			return errors.New("touch ID unlock works with a vault protected by a master password (backend = \"sqlite\", key_source = \"password\")")
+			return errors.New("touch ID unlock works with a vault protected by a master password (key_source = \"password\")")
 		}
 		if !touchIDAvailable() {
 			return errors.New("touch ID isn't available here: this Mac needs a Touch ID sensor with an enrolled fingerprint, and sesh must run in your desktop session (not over SSH)")

@@ -1,7 +1,6 @@
 package keychain
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -153,93 +152,9 @@ func TestGetSecretBytesNotFound(t *testing.T) {
 	}
 }
 
-func TestGetMFASerialSuccess(t *testing.T) {
-	orig := saveMocks()
-	defer orig.restore()
-
-	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
-		return []byte("arn:aws:iam::123456789012:mfa/user"), nil
-	}
-
-	serialBytes, err := GetMFASerialBytes("testuser", "")
-	if err != nil {
-		t.Errorf("Expected no error but got: %v", err)
-	}
-	if string(serialBytes) != "arn:aws:iam::123456789012:mfa/user" {
-		t.Errorf("Expected serial 'arn:aws:iam::123456789012:mfa/user', got '%s'", string(serialBytes))
-	}
-}
-
-func TestGetMFASerialWithEmptyUsername(t *testing.T) {
-	orig := saveMocks()
-	defer orig.restore()
-
-	getCurrentUser = func() (string, error) {
-		return "testuser", nil
-	}
-	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
-		return []byte("arn:aws:iam::123456789012:mfa/user"), nil
-	}
-
-	serialBytes, err := GetMFASerialBytes("", "")
-	if err != nil {
-		t.Errorf("Expected no error but got: %v", err)
-	}
-	if string(serialBytes) != "arn:aws:iam::123456789012:mfa/user" {
-		t.Errorf("Expected serial 'arn:aws:iam::123456789012:mfa/user', got '%s'", string(serialBytes))
-	}
-}
-
-func TestGetMFASerialWithWhoamiError(t *testing.T) {
-	orig := saveMocks()
-	defer orig.restore()
-
-	getCurrentUser = func() (string, error) {
-		return "", fmt.Errorf("whoami failed")
-	}
-
-	_, err := GetMFASerialBytes("", "")
-	if err == nil {
-		t.Error("Expected error but got nil")
-	}
-	if !strings.Contains(err.Error(), "could not determine current user") {
-		t.Errorf("Expected error with 'could not determine current user', got: %s", err.Error())
-	}
-}
-
-func TestGetMFASerialWithSecurityError(t *testing.T) {
-	orig := saveMocks()
-	defer orig.restore()
-
-	captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
-		return nil, fmt.Errorf("security command failed")
-	}
-
-	_, err := GetMFASerialBytes("testuser", "")
-	if err == nil {
-		t.Error("Expected error but got nil")
-	}
-	if !strings.Contains(err.Error(), "keychain read failed") {
-		t.Errorf("Expected error with 'keychain read failed', got: %s", err.Error())
-	}
-}
-
 func TestSetSecretBytes(t *testing.T) {
 	orig := saveMocks()
 	defer orig.restore()
-
-	origLoad := loadEntryMetadataImpl
-	origSave := saveEntryMetadataImpl
-	defer func() {
-		loadEntryMetadataImpl = origLoad
-		saveEntryMetadataImpl = origSave
-	}()
-	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		return []KeychainEntryMeta{}, nil
-	}
-	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
-		return nil
-	}
 
 	execSecretInput = func(cmd *exec.Cmd, input []byte) error {
 		return nil
@@ -261,110 +176,9 @@ func TestSetSecretBytes(t *testing.T) {
 	}
 }
 
-func TestListEntries(t *testing.T) {
-	originalFunc := loadEntryMetadataImpl
-	defer func() { loadEntryMetadataImpl = originalFunc }()
-
-	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		switch servicePrefix {
-		case "sesh-mfa":
-			return []KeychainEntryMeta{
-				{
-					Service:     "sesh-mfa",
-					Account:     "testuser",
-					Description: "AWS MFA Secret",
-					ServiceType: "aws",
-				},
-			}, nil
-		case "sesh-totp":
-			return []KeychainEntryMeta{
-				{
-					Service:     "sesh-totp-github",
-					Account:     "testuser",
-					Description: "GitHub TOTP",
-					ServiceType: "totp",
-				},
-			}, nil
-		}
-
-		return []KeychainEntryMeta{
-			{
-				Service:     "sesh-mfa",
-				Account:     "testuser",
-				Description: "AWS MFA Secret",
-				ServiceType: "aws",
-			},
-			{
-				Service:     "sesh-totp-github",
-				Account:     "testuser",
-				Description: "GitHub TOTP",
-				ServiceType: "totp",
-			},
-		}, nil
-	}
-
-	entries, err := ListEntries("sesh-mfa")
-	if err != nil {
-		t.Errorf("Expected no error but got: %v", err)
-	}
-
-	if len(entries) != 1 {
-		t.Errorf("Expected 1 entry but got %d", len(entries))
-	}
-
-	if entries[0].Service != "sesh-mfa" {
-		t.Errorf("Expected service 'sesh-mfa' but got '%s'", entries[0].Service)
-	}
-
-	if entries[0].Account != "testuser" {
-		t.Errorf("Expected account 'testuser' but got '%s'", entries[0].Account)
-	}
-
-	if entries[0].Description != "AWS MFA Secret" {
-		t.Errorf("Expected description 'AWS MFA Secret' but got '%s'", entries[0].Description)
-	}
-
-	entries, err = ListEntries("sesh-totp")
-	if err != nil {
-		t.Errorf("Expected no error but got: %v", err)
-	}
-
-	if len(entries) != 1 {
-		t.Errorf("Expected 1 entry but got %d", len(entries))
-	}
-
-	if entries[0].Service != "sesh-mfa" && entries[0].Service != "sesh-totp-github" {
-		t.Errorf("Expected service 'sesh-mfa' or 'sesh-totp-github' but got '%s'", entries[0].Service)
-	}
-
-	t.Run("Error Case", func(t *testing.T) {
-		loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-			return nil, fmt.Errorf("test error")
-		}
-
-		_, err = ListEntries("sesh-mfa")
-		if err == nil {
-			t.Error("Expected error but got nil")
-		}
-	})
-}
-
 func TestDeleteEntry(t *testing.T) {
 	orig := saveMocks()
 	defer orig.restore()
-
-	origLoad := loadEntryMetadataImpl
-	origSave := saveEntryMetadataImpl
-	defer func() {
-		loadEntryMetadataImpl = origLoad
-		saveEntryMetadataImpl = origSave
-	}()
-	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		return []KeychainEntryMeta{}, nil
-	}
-	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
-		return nil
-	}
 
 	// DeleteEntry uses execCommand + cmd.Run() directly — keep subprocess pattern
 	execCommand = func(command string, args ...string) *exec.Cmd {
@@ -397,6 +211,41 @@ func TestDeleteEntry(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error but got nil")
 	}
+
+	// An item that isn't there is ErrNotFound, so callers can treat
+	// "already gone" as done.
+	execCommand = func(command string, args ...string) *exec.Cmd {
+		cs := []string{"-test.run=TestHelperProcess", "--", command}
+		cs = append(cs, args...)
+		cmd := exec.Command(os.Args[0], cs...)
+		cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1", "MOCK_ERROR=1", "MOCK_EXIT_CODE=44"}
+		return cmd
+	}
+	if err := DeleteEntry("testuser", "test-service"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("DeleteEntry of a missing item = %v, want ErrNotFound", err)
+	}
+}
+
+func TestItems_UseTheKeychain(t *testing.T) {
+	orig := saveMocks()
+	defer orig.restore()
+	captureSecure = func(*exec.Cmd) ([]byte, error) { return []byte("the-key"), nil }
+	var stored []byte
+	execSecretInput = func(_ *exec.Cmd, input []byte) error {
+		stored = append([]byte(nil), input...)
+		return nil
+	}
+
+	got, err := Items{}.GetSecret("me", "sesh-sqlite-encryption-key")
+	if err != nil || string(got) != "the-key" {
+		t.Errorf("GetSecret = %q, %v; want the item's secret", got, err)
+	}
+	if err := (Items{}).SetSecret("me", "sesh-sqlite-encryption-key", []byte("new-key")); err != nil {
+		t.Fatalf("SetSecret: %v", err)
+	}
+	if !strings.Contains(string(stored), "add-generic-password -a me -s sesh-sqlite-encryption-key -w new-key") {
+		t.Errorf("SetSecret sent %q to security, want an add-generic-password for the item", stored)
+	}
 }
 
 func TestGetSecretIntegration(t *testing.T) {
@@ -424,237 +273,9 @@ func TestGetSecretIntegration(t *testing.T) {
 	}
 }
 
-func TestGetMFASerialIntegration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping keychain test in short mode")
-	}
-
-	orig := saveMocks()
-	defer orig.restore()
-
-	// Use real implementations for integration test
-	getCurrentUser = orig.getCurrentUser
-	captureSecure = orig.captureSecure
-	execCommand = orig.execCommand
-
-	_, err := GetMFASerialBytes("", "") // should use `whoami`...
-	// ...doesn't really matter here that if it succeeds or fails, just that it doesn't panic!
-	_ = err
-}
-
-func TestGetSecretString(t *testing.T) {
-	orig := saveMocks()
-	defer orig.restore()
-
-	tests := map[string]struct {
-		account    string
-		service    string
-		mockOutput string
-		wantSecret string
-		wantErrMsg string
-		mockError  bool
-		wantErr    bool
-	}{
-		"success": {
-			account:    "testuser",
-			service:    "test-service",
-			mockOutput: "test-secret-string",
-			wantSecret: "test-secret-string",
-		},
-		"success with empty account": {
-			account:    "",
-			service:    "test-service",
-			mockOutput: "test-secret-string",
-			wantSecret: "test-secret-string",
-		},
-		"security command error": {
-			account:    "testuser",
-			service:    "test-service",
-			mockError:  true,
-			wantErr:    true,
-			wantErrMsg: "keychain read failed",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			getCurrentUser = func() (string, error) {
-				return "testuser", nil
-			}
-			if tc.mockError {
-				captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
-					return nil, fmt.Errorf("security command failed")
-				}
-			} else {
-				captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
-					return []byte(tc.mockOutput), nil
-				}
-			}
-
-			secret, err := GetSecretString(tc.account, tc.service)
-
-			if tc.wantErr && err == nil {
-				t.Error("Expected error but got nil")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("Expected no error but got: %v", err)
-			}
-			if tc.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), tc.wantErrMsg) {
-					t.Errorf("Expected error containing %q, got: %s", tc.wantErrMsg, err.Error())
-				}
-			}
-			if !tc.wantErr && secret != tc.wantSecret {
-				t.Errorf("Expected secret %q, got %q", tc.wantSecret, secret)
-			}
-		})
-	}
-}
-
-func TestSetSecretString(t *testing.T) {
-	orig := saveMocks()
-	defer orig.restore()
-
-	origLoad := loadEntryMetadataImpl
-	origSave := saveEntryMetadataImpl
-	defer func() {
-		loadEntryMetadataImpl = origLoad
-		saveEntryMetadataImpl = origSave
-	}()
-	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		return []KeychainEntryMeta{}, nil
-	}
-	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
-		return nil
-	}
-
-	tests := map[string]struct {
-		account    string
-		service    string
-		secret     string
-		wantErrMsg string
-		mockError  bool
-		wantErr    bool
-	}{
-		"success": {
-			account: "testuser",
-			service: "test-service",
-			secret:  "test-secret-string",
-		},
-		"success with empty account": {
-			account: "",
-			service: "test-service",
-			secret:  "test-secret-string",
-		},
-		"security command error": {
-			account:    "testuser",
-			service:    "test-service",
-			secret:     "test-secret-string",
-			mockError:  true,
-			wantErr:    true,
-			wantErrMsg: "failed to set secret in keychain",
-		},
-		"empty secret": {
-			account: "testuser",
-			service: "test-service",
-			secret:  "",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			getCurrentUser = func() (string, error) {
-				return "testuser", nil
-			}
-			if tc.mockError {
-				execSecretInput = func(cmd *exec.Cmd, input []byte) error {
-					return fmt.Errorf("security -i failed")
-				}
-			} else {
-				execSecretInput = func(cmd *exec.Cmd, input []byte) error {
-					return nil
-				}
-			}
-
-			err := SetSecretString(tc.account, tc.service, tc.secret)
-
-			if tc.wantErr && err == nil {
-				t.Error("Expected error but got nil")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("Expected no error but got: %v", err)
-			}
-			if tc.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), tc.wantErrMsg) {
-					t.Errorf("Expected error containing %q, got: %s", tc.wantErrMsg, err.Error())
-				}
-			}
-		})
-	}
-}
-
-func TestSecretTrimmingForTOTPServices(t *testing.T) {
-	orig := saveMocks()
-	defer orig.restore()
-
-	tests := map[string]struct {
-		service    string
-		mockOutput string
-		wantSecret string
-	}{
-		"AWS service with trailing newline": {
-			service:    "sesh-aws-default",
-			mockOutput: "AWSSECRET123\n",
-			wantSecret: "AWSSECRET123",
-		},
-		"TOTP service with trailing spaces": {
-			service:    "sesh-totp-github",
-			mockOutput: "TOTPSECRET456   ",
-			wantSecret: "TOTPSECRET456",
-		},
-		"Non-TOTP service also trims whitespace": {
-			service:    "other-service",
-			mockOutput: "SECRET789\n",
-			wantSecret: "SECRET789",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			captureSecure = func(cmd *exec.Cmd) ([]byte, error) {
-				// Real ExecAndCaptureSecure does bytes.TrimSpace on output
-				return bytes.TrimSpace([]byte(tc.mockOutput)), nil
-			}
-
-			secretBytes, err := GetSecretBytes("testuser", tc.service)
-			if err != nil {
-				t.Errorf("Expected no error but got: %v", err)
-			}
-
-			secret := string(secretBytes)
-			if secret != tc.wantSecret {
-				t.Errorf("Expected secret %q, got %q", tc.wantSecret, secret)
-			}
-		})
-	}
-}
-
 func TestSetSecretBytesWithEmptyAccount(t *testing.T) {
 	orig := saveMocks()
 	defer orig.restore()
-
-	origLoad := loadEntryMetadataImpl
-	origSave := saveEntryMetadataImpl
-	defer func() {
-		loadEntryMetadataImpl = origLoad
-		saveEntryMetadataImpl = origSave
-	}()
-	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		return []KeychainEntryMeta{}, nil
-	}
-	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
-		return nil
-	}
 
 	whoamiCalled := false
 	securityCalled := false
@@ -687,19 +308,6 @@ func TestSetSecretBytesWithEmptyAccount(t *testing.T) {
 func TestDeleteEntryWithEmptyAccount(t *testing.T) {
 	orig := saveMocks()
 	defer orig.restore()
-
-	origLoad := loadEntryMetadataImpl
-	origSave := saveEntryMetadataImpl
-	defer func() {
-		loadEntryMetadataImpl = origLoad
-		saveEntryMetadataImpl = origSave
-	}()
-	loadEntryMetadataImpl = func(servicePrefix string) ([]KeychainEntryMeta, error) {
-		return []KeychainEntryMeta{}, nil
-	}
-	saveEntryMetadataImpl = func(meta []KeychainEntryMeta) error {
-		return nil
-	}
 
 	whoamiCalled := false
 	deleteCalled := false

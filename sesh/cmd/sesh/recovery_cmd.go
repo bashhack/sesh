@@ -151,7 +151,7 @@ func runRecovery(app *App, args []string) error {
 		return err
 	}
 	dataDir := filepath.Dir(cfg.DBPath.Value)
-	usesPassword := cfg.Backend.Value == config.BackendSQLite && cfg.KeySource.Value == config.KeySourcePassword
+	usesPassword := cfg.KeySource.Value == config.KeySourcePassword
 	out := func(format string, a ...any) error {
 		_, err := fmt.Fprintf(app.Stdout, format+"\n", a...)
 		return err
@@ -189,7 +189,7 @@ func runRecovery(app *App, args []string) error {
 		return out("Removed the recovery key; it no longer opens this vault.")
 	case "new":
 		if !usesPassword {
-			return errors.New("a recovery key works with a vault protected by a master password (backend = \"sqlite\", key_source = \"password\")")
+			return errors.New("a recovery key works with a vault protected by a master password (key_source = \"password\")")
 		}
 		if sidecarMissing(dataDir) {
 			return errors.New("there's no vault yet: create it first, by running any sesh command or sesh init")
@@ -331,8 +331,8 @@ func runRecover(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Backend.Value != config.BackendSQLite || cfg.KeySource.Value != config.KeySourcePassword {
-		return errors.New("sesh recover resets a master password, but this vault doesn't use one (backend = \"sqlite\", key_source = \"password\")")
+	if cfg.KeySource.Value != config.KeySourcePassword {
+		return errors.New("sesh recover resets a master password, but this vault's key is kept in the Keychain (key_source = \"keychain\"), not derived from one")
 	}
 	dataDir := filepath.Dir(cfg.DBPath.Value)
 	if sidecarMissing(dataDir) {

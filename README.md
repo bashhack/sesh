@@ -14,7 +14,7 @@
 
 # sesh — An extensible terminal-first authentication toolkit for secure credential workflows
 
-> A developer-friendly CLI that brings AWS MFA, TOTP authentication, and secure password management to your terminal, backed by macOS Keychain or an encrypted SQLite store.
+> A developer-friendly CLI that brings AWS MFA, TOTP authentication, and secure password management to your terminal, backed by an encrypted vault.
 
 ## Purpose
 
@@ -37,7 +37,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Recovery Key** — Optional: a code you write down when the vault is created; if you forget the master password, `sesh recover` uses it to set a new one. No server involved, and sesh keeps no copy
 - **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key (nothing in the Keychain); the password always works as a fallback
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from
-- **macOS Keychain, If You Choose** — Store secrets in the Keychain instead (`backend = "keychain"`), or keep the vault but its key in the Keychain (`key_source = "keychain"`)
+- **macOS Keychain, If You Choose** — Keep the vault's key in your login Keychain instead of typing a master password (`key_source = "keychain"`)
 - **Encrypted Export** — Portable backups protected by a password, safe to transfer between machines (`--format encrypted`)
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes, and find them by any part of a service or user name
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
@@ -51,7 +51,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 
 ## Installation
 
-> **Platform:** macOS and Linux. The default, an encrypted vault unlocked with your master password, works the same on both and needs no setup. The macOS Keychain options are macOS-only.
+> **Platform:** macOS and Linux. The default, an encrypted vault unlocked with your master password, works the same on both and needs no setup. The macOS Keychain key option is macOS-only.
 
 ```bash
 # Option 1: Install with Homebrew (macOS)
@@ -286,8 +286,9 @@ sesh config
 # Non-interactive (CI/scripting — exposes password to process env)
 SESH_MASTER_PASSWORD=... sesh -service password -list
 
-# macOS Keychain instead (set in ~/.config/sesh/config.toml, or per command)
-sesh --backend keychain -service aws
+# Keep the vault's key in the macOS Keychain instead of a master password
+# (set in ~/.config/sesh/config.toml, or per command)
+sesh --key-source keychain -service aws
 ```
 
 See [Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent) for how the agent starts, locks, and stops. It needs no management; `sesh agent status`, `lock`, and `stop` are there if you want them.
@@ -314,7 +315,7 @@ sesh -service password -action import -format encrypted -file backup.enc
 
 ### Prerequisites
 - Go 1.27+
-- macOS or Linux (macOS for Keychain integration; the SQLite backend also runs on Linux)
+- macOS or Linux (the Keychain key option is macOS-only)
 - Make (optional — provides convenience targets, but `go build ./sesh/cmd/sesh` works directly)
 
 ### Building

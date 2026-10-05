@@ -20,9 +20,9 @@ func TestTakeSettingFlags(t *testing.T) {
 			rest: []string{"sesh", "-service", "totp"},
 		},
 		"each form, anywhere": {
-			args: []string{"sesh", "--backend", "sqlite", "-service", "password", "-key-source=password", "-action", "list", "--db-path=/v/s.db"},
+			args: []string{"sesh", "--key-source", "password", "-service", "password", "-action", "list", "-db-path=/v/s.db"},
 			rest: []string{"sesh", "-service", "password", "-action", "list"},
-			want: config.Overrides{Backend: "sqlite", KeySource: "password", DBPath: "/v/s.db"},
+			want: config.Overrides{KeySource: "password", DBPath: "/v/s.db"},
 		},
 		"before a subcommand": {
 			args: []string{"sesh", "--db-path", "/v/s.db", "config"},
@@ -30,14 +30,18 @@ func TestTakeSettingFlags(t *testing.T) {
 			want: config.Overrides{DBPath: "/v/s.db"},
 		},
 		"after -- is left alone": {
-			args: []string{"sesh", "-service", "x", "--", "--backend", "sqlite"},
-			rest: []string{"sesh", "-service", "x", "--", "--backend", "sqlite"},
+			args: []string{"sesh", "-service", "x", "--", "--key-source", "password"},
+			rest: []string{"sesh", "-service", "x", "--", "--key-source", "password"},
 		},
 		"value that isn't a flag": {
-			args: []string{"sesh", "-service-name", "backend"},
-			rest: []string{"sesh", "-service-name", "backend"},
+			args: []string{"sesh", "-service-name", "key-source"},
+			rest: []string{"sesh", "-service-name", "key-source"},
 		},
-		"missing value at the end": {args: []string{"sesh", "--backend"}, wantErr: "--backend needs a value"},
+		"--backend isn't a setting any more": {
+			args: []string{"sesh", "--backend", "sqlite", "-service", "x"},
+			rest: []string{"sesh", "--backend", "sqlite", "-service", "x"},
+		},
+		"missing value at the end": {args: []string{"sesh", "--key-source"}, wantErr: "--key-source needs a value"},
 		"empty value":              {args: []string{"sesh", "--db-path="}, wantErr: "--db-path needs a value"},
 	}
 	for name, tt := range tests {
@@ -60,11 +64,11 @@ func TestTakeSettingFlags(t *testing.T) {
 }
 
 func TestSettingFlags_ReachSettingsAndConfigOutput(t *testing.T) {
-	useConfigFile(t, "backend = \"keychain\"\n")
+	useConfigFile(t, "key_source = \"keychain\"\n")
 	orig := cliOverrides
 	t.Cleanup(func() { cliOverrides = orig })
 	var err error
-	if _, cliOverrides, err = takeSettingFlags([]string{"sesh", "--backend", "sqlite", "--db-path", "/tmp/flag/vault.db"}); err != nil {
+	if _, cliOverrides, err = takeSettingFlags([]string{"sesh", "--key-source", "password", "--db-path", "/tmp/flag/vault.db"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -73,7 +77,7 @@ func TestSettingFlags_ReachSettingsAndConfigOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := app.Stdout.(*bytes.Buffer).String()
-	for _, want := range []string{"backend               sqlite        (flag: --backend)", "db_path               /tmp/flag/vault.db\n                      (flag: --db-path)"} {
+	for _, want := range []string{"key_source            password      (flag: --key-source)", "db_path               /tmp/flag/vault.db\n                      (flag: --db-path)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)
 		}
@@ -92,9 +96,9 @@ func TestSettingFlags_ValidatedOnTheirOwn(t *testing.T) {
 		wantSub string
 		args    []string
 	}{
-		"bad backend before --version": {`--backend = "bogus": want "sqlite" or "keychain"`, []string{"sesh", "--backend", "bogus", "--version"}},
-		"flag taken as a value":        {`--backend = "--version"`, []string{"sesh", "--backend", "--version"}},
-		"flag taken as a path":         {`--db-path = "--list": want an absolute path`, []string{"sesh", "--db-path", "--list"}},
+		"bad key source before --version": {`--key-source = "bogus": want "password" or "keychain"`, []string{"sesh", "--key-source", "bogus", "--version"}},
+		"flag taken as a value":           {`--key-source = "--version"`, []string{"sesh", "--key-source", "--version"}},
+		"flag taken as a path":            {`--db-path = "--list": want an absolute path`, []string{"sesh", "--db-path", "--list"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, o, err := takeSettingFlags(tt.args)
@@ -106,7 +110,7 @@ func TestSettingFlags_ValidatedOnTheirOwn(t *testing.T) {
 			}
 		})
 	}
-	if _, o, err := takeSettingFlags([]string{"sesh", "--backend=sqlite", "--key-source", "password", "--db-path", "~/v.db"}); err != nil || o.Validate() != nil {
+	if _, o, err := takeSettingFlags([]string{"sesh", "--key-source=password", "--db-path", "~/v.db"}); err != nil || o.Validate() != nil {
 		t.Errorf("valid flags rejected: %v / %v", err, o.Validate())
 	}
 }

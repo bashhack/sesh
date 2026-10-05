@@ -49,7 +49,7 @@ Terminal users shouldn't need to context-switch to graphical tools. Subshells pr
 External dependencies are abstracted for testability. AWS CLI, Keychain, and TOTP generation sit behind formal interfaces with mock implementations. Other dependencies (clipboard, QR scanning, command execution) use replaceable package-level variables (`var execCommand = exec.Command`) for the same purpose.
 
 - Unit tests can mock any external system
-- Implementations can be swapped (e.g., different keychain backends)
+- Implementations can be swapped (e.g., an in-memory store in tests)
 - Code stays loosely coupled
 
 ## Architectural Layers
@@ -118,7 +118,7 @@ The architecture follows a strict layering model where dependencies flow downwar
    ```go
    func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider, clipboardTimeout time.Duration) *App
    ```
-   The constructor accepts a `keychain.Provider` (the credential store) and wires all other dependencies internally. `main.go` resolves settings through `internal/config` (flag > env > `~/.config/sesh/config.toml` > default) and selects the concrete store (SQLite by default, or the macOS Keychain) via `buildProvider(cfg)`. Tests can substitute any dependency.
+   The constructor accepts a `keychain.Provider` (the credential store) and wires all other dependencies internally. `main.go` resolves settings through `internal/config` (flag > env > `~/.config/sesh/config.toml` > default) and opens the vault via `buildProvider(cfg)`. Tests can substitute any dependency.
 
 3. **Provider Registration**:
    ```go
@@ -190,22 +190,16 @@ Infrastructure components implement the following security controls:
 
 #### Credential Storage
 
-sesh supports two storage backends, selected by the `backend` setting (`SESH_BACKEND`, `--backend`):
+Every entry lives in one encrypted vault, a SQLite file:
 
-**SQLite Store (default)**
 - Pure-Go SQLite via `modernc.org/sqlite` — zero C dependencies
 - AES-256-GCM encryption with per-entry salts
 - Argon2id key derivation for per-entry keys
-- Search by service name or username, matching any part and ignoring case; the password manager does it the same way for both backends
+- Search by service name or username, matching any part and ignoring case
 - Audit log table tracking all access, modifications, and deletions
 - Pluggable master key source (see below)
 - WAL mode for concurrent read safety
 - A vault key check (`vault_key` table) that refuses a key that can't open the vault before any read or write
-
-**macOS Keychain (`backend = "keychain"`, macOS only)**
-- OS-managed encryption (AES-256)
-- Process-level access control via `-T` flag
-- User-transparent authorization dialogs
 
 **Key sources.** The `database.KeySource` interface abstracts where the 256-bit master encryption key comes from:
 
@@ -221,7 +215,7 @@ type KeySource interface {
 Two implementations:
 
 - **`MasterPasswordSource`** (default) — derives the key from a user-supplied passphrase via Argon2id. The KDF salt, Argon2id parameters, and a verification blob live in a 0600 sidecar file (`passwords.key`) next to the database. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. No keychain dependency — works on macOS and Linux. In normal use the sesh agent holds the derived key and the store encrypts through it (`agent.Oracle`).
-- **`KeychainSource`** (`key_source = "keychain"`) — reads the key from the macOS Keychain; first-run generates a random 256-bit key and stores it. macOS-only.
+- **`KeychainSource`** (`key_source = "keychain"`) — reads the key from one macOS Keychain item; first-run generates a random 256-bit key and stores it. The item is created with `-T` naming the sesh binary, so macOS asks before any other program reads it. macOS-only.
 
 `main.go`'s `buildKeySource(dbPath, source)` selects between them by the `key_source` setting. The store only sees a `database.CryptoOracle`, so it doesn't know which source provided the key.
 
@@ -233,43 +227,11 @@ security add-generic-password ... -T /path/to/sesh
 ```
 This means even if another process knows the service name, it cannot access the secret.
 
-**Keychain Data Model** ([SVG](assets/keychain-data-model.svg))
-
-All keychain entries follow the `keyformat` convention. Metadata for all entries is stored in a single zstd-compressed blob:
-
-```mermaid
-%%{init: {'theme': 'neutral'}}%%
-flowchart LR
-    classDef prefix fill:#f9f,stroke:#333,stroke-width:2px
-    classDef key fill:#bbf,stroke:#333,stroke-width:2px
-    classDef meta fill:#dfd,stroke:#333,stroke-width:2px
-
-    subgraph AWS["AWS Provider"]
-        direction TB
-        AWSDefault["sesh-aws/default"]:::key
-        AWSProd["sesh-aws/prod"]:::key
-        AWSSerialDefault["sesh-aws-serial/default"]:::key
-        AWSSerialProd["sesh-aws-serial/prod"]:::key
-    end
-
-    subgraph TOTP["TOTP Provider"]
-        direction TB
-        TOTPGithub["sesh-totp/github"]:::key
-        TOTPGithubWork["sesh-totp/github/work"]:::key
-        TOTPGoogle["sesh-totp/google"]:::key
-    end
-
-    subgraph Metadata["Metadata"]
-        direction TB
-        MetaKey["sesh-metadata<br>zstd-compressed JSON<br>tracks all entries"]:::meta
-    end
-```
-
-Each entry is a keychain item keyed by `{namespace}/{segments}` (built by `keyformat.Build`, parsed by `keyformat.Parse`). The account field is the OS username. AWS stores both a TOTP secret (`sesh-aws/{profile}`) and an MFA serial (`sesh-aws-serial/{profile}`) per profile.
+**Stored names.** Each entry is stored under a name built by `keyformat.Build` (and parsed by `keyformat.Parse`): `sesh-password/{type}/{service}[/{username}]` for the password manager, `sesh-totp/{service}[/{profile}]` for the TOTP provider, and `sesh-aws/{profile}` (the MFA secret) with `sesh-aws-serial/{profile}` (the MFA device) for AWS. The account is the OS username.
 
 **SQLite Data Model**
 
-The SQLite backend (the default) stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
+The vault stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
@@ -465,8 +427,8 @@ Each layer provides independent security measures:
 
 1. **Storage Security**
    - **Threat**: Other processes reading secrets
-   - **Defense**: Binary path restrictions (`-T` flag)
-   - **Enforcement**: macOS Keychain access control subsystem
+   - **Defense**: Every entry encrypted (AES-256-GCM) under a key derived from the master password, or kept in a Keychain item restricted to the sesh binary (`-T` flag)
+   - **Enforcement**: Argon2id and the vault's key check; for the Keychain key, macOS Keychain access control
 
 2. **Memory Security**
    - **Threat**: Memory dumps, swap files, cold boot attacks
@@ -495,7 +457,7 @@ Understanding where trust transitions occur:
 ```
 User Input → [TRUST BOUNDARY] → sesh
     ↓
-   sesh → [TRUST BOUNDARY] → macOS Keychain
+   sesh → [TRUST BOUNDARY] → Vault file (and the macOS Keychain, for the keychain key source)
     ↓
    sesh → [TRUST BOUNDARY] → AWS CLI
     ↓
@@ -538,7 +500,7 @@ Why this works:
 - Clear contract (ServiceProvider interface)
 - Dependencies are injected, not discovered
 - Registration is explicit and centralized
-- No global state for provider management (note: `keychain/metadata.go` uses `init()` to create zstd encoder/decoder singletons for the keychain backend's internal metadata compression)
+- No global state for provider management
 
 ### Capability Evolution
 
@@ -667,7 +629,7 @@ sesh/
 │   │   └── password/      # Password manager provider
 │   ├── database/          # SQLite store, encryption, migrations
 │   ├── password/          # Password manager core (CRUD, search, filter)
-│   ├── keychain/          # macOS Keychain integration
+│   ├── keychain/          # Store interface; the Keychain key source's item
 │   ├── secure/            # Memory security
 │   └── */                 # Focused packages
 └── docs/                  # Documentation

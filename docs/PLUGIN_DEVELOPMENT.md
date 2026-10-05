@@ -20,7 +20,7 @@ Sesh uses a plugin-based architecture where each service (AWS, TOTP, etc.) is im
 1. **ServiceProvider Interface**: Core contract all providers must implement
 2. **Registry**: Manages provider registration and lookup
 3. **Setup Handlers**: Handle initial configuration for each provider
-4. **Keychain Integration**: Secure storage for secrets
+4. **Credential store**: Secure storage for secrets, in the encrypted vault
 5. **Shell Customizers**: Optional subshell support
 
 > **First time here?** Skip to [Creating a Basic Provider](#creating-a-basic-provider) and refer back to these sections when you encounter unfamiliar concepts.
@@ -343,7 +343,7 @@ func (p *Provider) DeleteEntry(id string) error {
         return fmt.Errorf("invalid entry ID: %w", err)
     }
 
-    // Delete from keychain (metadata cleanup is handled internally)
+    // Delete from the store
     if err := p.keychain.DeleteEntry(account, service); err != nil {
         return fmt.Errorf("failed to delete entry: %w", err)
     }
@@ -578,7 +578,7 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 }
 
 // loadTOTPParams reads stored params from the entry description (JSON).
-// ListEntries is a prefix query in the SQLite backend — verify the first
+// ListEntries is a prefix query in the vault — verify the first
 // result matches the exact (service, account) we read the secret under so
 // a prefix sibling or a cross-user entry can't spoof the params.
 func (p *Provider) loadTOTPParams(serviceKey string) totp.Params {

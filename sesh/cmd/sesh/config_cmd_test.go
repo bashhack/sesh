@@ -18,7 +18,7 @@ func useConfigFile(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	for _, k := range []string{config.EnvBackend, config.EnvKeySource, config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays} {
+	for _, k := range []string{config.EnvKeySource, config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays} {
 		t.Setenv(k, "")
 	}
 	path := filepath.Join(dir, "sesh", "config.toml")
@@ -58,7 +58,7 @@ func TestSubcommand_OnlyTheFirstArgument(t *testing.T) {
 }
 
 func TestRunConfig_ShowsValuesAndSources(t *testing.T) {
-	path := useConfigFile(t, "backend = \"sqlite\"\nclipboard_timeout = \"45s\"\n[agent]\nmax_lifetime = \"2h\"\n[audit]\nretention_days = 0\n")
+	path := useConfigFile(t, "clipboard_timeout = \"45s\"\n[agent]\nmax_lifetime = \"2h\"\n[audit]\nretention_days = 0\n")
 	t.Setenv(config.EnvKeySource, "password")
 	t.Setenv(config.EnvDBPath, "/tmp/sesh-test/vault.db")
 	app := agentTestApp()
@@ -68,7 +68,6 @@ func TestRunConfig_ShowsValuesAndSources(t *testing.T) {
 	got := app.Stdout.(*bytes.Buffer).String()
 	for _, want := range []string{
 		"config file: " + path + "\n",
-		"backend               sqlite        (config file)\n",
 		"key_source            password      (environment: SESH_KEY_SOURCE)\n",
 		"clipboard_timeout     45s           (config file)\n",
 		"agent.idle_timeout    10m           (default)\n",
@@ -94,11 +93,11 @@ func TestRunConfig_NoFile(t *testing.T) {
 }
 
 func TestRunConfig_ReportsABrokenFile(t *testing.T) {
-	path := useConfigFile(t, "backend = \"sqlte\"\n")
+	path := useConfigFile(t, "key_source = \"pasword\"\n")
 	app := agentTestApp()
 	err := runConfig(app, nil)
-	if err == nil || !strings.Contains(err.Error(), `backend in `+path+` = "sqlte"`) {
-		t.Fatalf("err = %v, want the bad backend named with the file", err)
+	if err == nil || !strings.Contains(err.Error(), `key_source in `+path+` = "pasword"`) {
+		t.Fatalf("err = %v, want the bad key source named with the file", err)
 	}
 	if got := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(got, "config file: "+path) {
 		t.Errorf("stdout = %q, want the config file path", got)
@@ -118,7 +117,7 @@ func TestDuration(t *testing.T) {
 
 func TestOpenSQLiteStore_ConfigFileAlone(t *testing.T) {
 	vault := filepath.Join(t.TempDir(), "nested", "vault.db")
-	useConfigFile(t, "backend = \"sqlite\"\nkey_source = \"password\"\ndb_path = \""+vault+"\"\n")
+	useConfigFile(t, "key_source = \"password\"\ndb_path = \""+vault+"\"\n")
 	t.Setenv("SESH_MASTER_PASSWORD", "config-only-1234")
 
 	cfg, err := settings()
@@ -130,7 +129,7 @@ func TestOpenSQLiteStore_ConfigFileAlone(t *testing.T) {
 		t.Fatalf("buildProvider: %v", err)
 	}
 	if closer == nil {
-		t.Fatal("got the keychain provider, want the SQLite store the config file names")
+		t.Fatal("buildProvider returned no closer for the vault the config file names")
 	}
 	if err := kc.SetSecret("me", "sesh-password/password/x", []byte("v")); err != nil {
 		t.Fatal(err)
@@ -183,15 +182,12 @@ func TestKeychainOffMacOS(t *testing.T) {
 	goos = "linux"
 	t.Cleanup(func() { goos = orig })
 
-	t.Run("backend from env", func(t *testing.T) {
+	t.Run("key source from env", func(t *testing.T) {
 		useConfigFile(t, "")
-		t.Setenv(config.EnvBackend, "keychain")
-		cfg, err := settings()
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, _, err = buildProvider(cfg)
-		if err == nil || !strings.Contains(err.Error(), `SESH_BACKEND asks for the macOS Keychain (backend = "keychain"), which isn't available on linux`) {
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
+		t.Setenv(config.EnvKeySource, "keychain")
+		_, err := openSQLiteStore()
+		if err == nil || !strings.Contains(err.Error(), `SESH_KEY_SOURCE asks for the macOS Keychain (key_source = "keychain"), which isn't available on linux`) {
 			t.Fatalf("err = %v", err)
 		}
 	})

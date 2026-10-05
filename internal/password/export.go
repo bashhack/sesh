@@ -15,7 +15,7 @@ import (
 
 // ExportEntry is an entry with its decrypted secret, used for export/import.
 // Timestamps are preserved through round-trip when the underlying store
-// implements keychain.TimestampedStore (the SQLite backend does).
+// implements keychain.TimestampedStore (the vault does).
 type ExportEntry struct {
 	CreatedAt time.Time `json:"created_at,omitzero"`
 	UpdatedAt time.Time `json:"updated_at,omitzero"`

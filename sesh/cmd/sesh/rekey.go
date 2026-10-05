@@ -40,17 +40,14 @@ func addRekeyFlags(fs *flag.FlagSet) *string {
 // summary so the user can clean it up via OS tools if desired.
 //
 // kc is the keychain provider used for keychain-mode key state checks and
-// cleanup. Production passes keychain.NewDefaultProvider(); tests inject
+// cleanup. Production passes systemKeychain(); tests inject
 // a mock. It can be nil if --to=password and the current source isn't
 // keychain — keychain branches are only entered when the source or target
 // is "keychain".
-func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
+func runRekey(app *App, args []string, kc keychain.ItemStore) (err error) {
 	st, err := settings()
 	if err != nil {
 		return err
-	}
-	if st.Backend.Value != config.BackendSQLite {
-		return errNeedsSQLite("rekey")
 	}
 
 	fs := flag.NewFlagSet("rekey", flag.ContinueOnError)
@@ -326,7 +323,7 @@ func updateKeySourceSetting(st *config.Config, target string) string {
 // newKeySourceByName constructs a KeySource without unlocking or initialising
 // it — the caller decides when to call GetEncryptionKey (which is what
 // triggers the master password prompt or keychain key generation).
-func newKeySourceByName(name, dataDir string, kc keychain.Provider) (database.KeySource, error) {
+func newKeySourceByName(name, dataDir string, kc keychain.ItemStore) (database.KeySource, error) {
 	switch name {
 	case "password":
 		return resolvePasswordPrompt().newSource(dataDir), nil
@@ -370,7 +367,7 @@ func initializeTargetKeySource(ks database.KeySource, target string) error {
 // already initialised. Refusing is safer than silently overwriting — the
 // target sidecar's salt or the target keychain entry's stored key may be
 // in use by something the user still needs.
-func checkTargetKeyStateClean(target, dataDir string, kc keychain.Provider) error {
+func checkTargetKeyStateClean(target, dataDir string, kc keychain.ItemStore) error {
 	switch target {
 	case "password":
 		path := filepath.Join(dataDir, sidecarFile)
@@ -402,7 +399,7 @@ func checkTargetKeyStateClean(target, dataDir string, kc keychain.Provider) erro
 // cleanupNewKeyState removes the key state that initializeTargetKeySource
 // created during rekey. Called only on failure paths after the target source
 // successfully initialised.
-func cleanupNewKeyState(target, dataDir string, kc keychain.Provider) error {
+func cleanupNewKeyState(target, dataDir string, kc keychain.ItemStore) error {
 	switch target {
 	case "password":
 		path := filepath.Join(dataDir, sidecarFile)
@@ -430,7 +427,7 @@ func cleanupNewKeyState(target, dataDir string, kc keychain.Provider) error {
 // once the switch has succeeded it opens nothing. Left in place, it would
 // only stop a later switch back. It returns a line to show, or "" when
 // there was nothing to remove.
-func removeOldKeyState(oldSource, dataDir string, kc keychain.Provider) string {
+func removeOldKeyState(oldSource, dataDir string, kc keychain.ItemStore) string {
 	switch oldSource {
 	case "password":
 		path := filepath.Join(dataDir, sidecarFile)
@@ -489,9 +486,6 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	st, err := settings()
 	if err != nil {
 		return nil, err
-	}
-	if st.Backend.Value != config.BackendSQLite {
-		return nil, errNeedsSQLite("rotate")
 	}
 
 	dbPath := st.DBPath.Value

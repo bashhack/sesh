@@ -13,20 +13,20 @@ func TestSetTopLevel(t *testing.T) {
 		before, want string
 	}{
 		"replaces the value, keeping comments and other lines": {
-			before: "# my settings\nbackend = \"sqlite\"\nkey_source = \"keychain\"   # switched in May\n\n[agent]\nidle_timeout = \"30m\"\n",
-			want:   "# my settings\nbackend = \"sqlite\"\nkey_source = \"password\" # switched in May\n\n[agent]\nidle_timeout = \"30m\"\n",
+			before: "# my settings\nclipboard_timeout = \"45s\"\nkey_source = \"keychain\"   # switched in May\n\n[agent]\nidle_timeout = \"30m\"\n",
+			want:   "# my settings\nclipboard_timeout = \"45s\"\nkey_source = \"password\" # switched in May\n\n[agent]\nidle_timeout = \"30m\"\n",
 		},
 		"adds the key before the first table": {
-			before: "# my settings\nbackend = \"sqlite\"\n[agent]\nidle_timeout = \"30m\"\n",
-			want:   "# my settings\nbackend = \"sqlite\"\nkey_source = \"password\"\n\n[agent]\nidle_timeout = \"30m\"\n",
+			before: "# my settings\nclipboard_timeout = \"45s\"\n[agent]\nidle_timeout = \"30m\"\n",
+			want:   "# my settings\nclipboard_timeout = \"45s\"\nkey_source = \"password\"\n\n[agent]\nidle_timeout = \"30m\"\n",
 		},
 		"a key of the same name inside a table is left alone": {
 			before: "[agent]\nkey_source = \"x\"\n",
 			want:   "key_source = \"password\"\n\n[agent]\nkey_source = \"x\"\n",
 		},
 		"appends to a file without tables": {
-			before: "backend = \"sqlite\"\n",
-			want:   "backend = \"sqlite\"\nkey_source = \"password\"\n",
+			before: "clipboard_timeout = \"45s\"\n",
+			want:   "clipboard_timeout = \"45s\"\nkey_source = \"password\"\n",
 		},
 		"creates the file": {
 			want: "key_source = \"password\"\n",
@@ -61,7 +61,7 @@ func TestSetTopLevel(t *testing.T) {
 
 func TestSetTopLevel_ResultParses(t *testing.T) {
 	path := isolate(t)
-	writeConfig(t, path, "backend = \"sqlite\" # keep\n[agent]\nmax_lifetime = \"2h\"\n")
+	writeConfig(t, path, "clipboard_timeout = \"45s\" # keep\n[agent]\nmax_lifetime = \"2h\"\n")
 	if err := SetTopLevel(path, "key_source", "keychain"); err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestWrite_FollowsAChainOfDanglingLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := Write(link, "backend = \"sqlite\"\n"); err != nil {
+	if err := Write(link, "clipboard_timeout = \"45s\"\n"); err != nil {
 		t.Fatal(err)
 	}
 	for _, l := range []string{link, middle} {
@@ -179,7 +179,7 @@ func TestWrite_FollowsAChainOfDanglingLinks(t *testing.T) {
 			t.Errorf("%s was replaced by a regular file", filepath.Base(l))
 		}
 	}
-	if got, err := os.ReadFile(target); err != nil || string(got) != "backend = \"sqlite\"\n" {
+	if got, err := os.ReadFile(target); err != nil || string(got) != "clipboard_timeout = \"45s\"\n" {
 		t.Errorf("end of the chain = %q, %v", got, err)
 	}
 }
@@ -193,7 +193,7 @@ func TestWrite_RefusesALoopOfLinks(t *testing.T) {
 	if err := os.Symlink(a, b); err != nil {
 		t.Fatal(err)
 	}
-	if err := Write(a, "backend = \"sqlite\"\n"); err == nil {
+	if err := Write(a, "clipboard_timeout = \"45s\"\n"); err == nil {
 		t.Fatal("Write followed a loop of links without failing")
 	}
 }

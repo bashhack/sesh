@@ -100,8 +100,8 @@ func (s *KeychainSource) GetEncryptionKey() ([]byte, error) {
 
 // StoreEncryptionKey persists the master key in the keychain. The raw
 // 32-byte key is hex-encoded before storage so the resulting string is
-// guaranteed to contain only [0-9a-f] — safe for the keychain backend's
-// `security -i` text protocol. See GetEncryptionKey for context.
+// guaranteed to contain only [0-9a-f] — safe for the `security -i` text
+// protocol the item is written through. See GetEncryptionKey for context.
 func (s *KeychainSource) StoreEncryptionKey(key []byte) error {
 	if len(key) != encryptionKeyLength {
 		return fmt.Errorf("invalid encryption key length: got %d bytes, want %d", len(key), encryptionKeyLength)

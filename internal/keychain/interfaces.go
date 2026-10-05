@@ -33,11 +33,9 @@ type Provider interface {
 	SetDescription(service, account, description string) error
 }
 
-// TimestampedStore is an optional interface for credential backends that
-// can persist explicit create/update timestamps on write, instead of always
-// using the current wall clock. The SQLite store implements it; the macOS
-// keychain backend does not (its metadata format stamps entries with
-// time.Now at write time).
+// TimestampedStore is an optional interface for stores that can persist
+// explicit create/update timestamps on write, instead of always using the
+// current wall clock. The vault implements it.
 //
 // Callers should use a type assertion to detect support:
 //
@@ -62,55 +60,4 @@ type KeychainEntry struct {
 	Service     string
 	Account     string
 	Description string
-}
-
-// DefaultProvider is the default implementation using the system keychain
-type DefaultProvider struct{}
-
-var _ Provider = (*DefaultProvider)(nil)
-
-// GetSecret implements the Provider interface
-func (p *DefaultProvider) GetSecret(account, service string) ([]byte, error) {
-	return GetSecretBytes(account, service)
-}
-
-// SetSecret implements the Provider interface
-func (p *DefaultProvider) SetSecret(account, service string, secret []byte) error {
-	return SetSecretBytes(account, service, secret)
-}
-
-// GetSecretString implements the Provider interface
-func (p *DefaultProvider) GetSecretString(account, service string) (string, error) {
-	return GetSecretString(account, service)
-}
-
-// SetSecretString implements the Provider interface
-func (p *DefaultProvider) SetSecretString(account, service, secret string) error {
-	return SetSecretString(account, service, secret)
-}
-
-// GetMFASerialBytes implements the Provider interface
-func (p *DefaultProvider) GetMFASerialBytes(account, profile string) ([]byte, error) {
-	return GetMFASerialBytes(account, profile)
-}
-
-// ListEntries implements the Provider interface
-func (p *DefaultProvider) ListEntries(service string) ([]KeychainEntry, error) {
-	return ListEntries(service)
-}
-
-// DeleteEntry implements the Provider interface
-func (p *DefaultProvider) DeleteEntry(account, service string) error {
-	return DeleteEntry(account, service)
-}
-
-// SetDescription implements the Provider interface
-func (p *DefaultProvider) SetDescription(service, account, description string) error {
-	servicePrefix := getServicePrefix(service)
-	return StoreEntryMetadata(servicePrefix, service, account, description)
-}
-
-// NewDefaultProvider creates a new DefaultProvider
-func NewDefaultProvider() Provider {
-	return &DefaultProvider{}
 }
