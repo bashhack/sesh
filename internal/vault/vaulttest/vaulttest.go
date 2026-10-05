@@ -147,6 +147,22 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			if err := s.Put(k, []byte("v")); err == nil {
 				t.Errorf("Put(%+v) succeeded, want an error", k)
 			}
+			if err := s.Save(&vault.Entry{Key: k}, []byte("v")); err == nil {
+				t.Errorf("Save(%+v) succeeded, want an error", k)
+			}
+			// A bad key is never stored, so reading or changing it finds nothing.
+			if _, err := s.Get(k); !errors.Is(err, vault.ErrNotFound) {
+				t.Errorf("Get(%+v) = %v, want ErrNotFound", k, err)
+			}
+			if _, err := s.Lookup(k); !errors.Is(err, vault.ErrNotFound) {
+				t.Errorf("Lookup(%+v) = %v, want ErrNotFound", k, err)
+			}
+			if err := s.SetSettings(k, vault.Settings{}); !errors.Is(err, vault.ErrNotFound) {
+				t.Errorf("SetSettings(%+v) = %v, want ErrNotFound", k, err)
+			}
+			if err := s.Delete(k); !errors.Is(err, vault.ErrNotFound) {
+				t.Errorf("Delete(%+v) = %v, want ErrNotFound", k, err)
+			}
 		}
 	})
 }
