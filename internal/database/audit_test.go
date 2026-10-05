@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // addAuditAt writes an audit event as audit does, but at the given time.
@@ -77,13 +79,14 @@ func TestPruneAudit(t *testing.T) {
 
 func TestAuditEvents(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.SetSecret("alice", "svc", []byte("secret")); err != nil {
+	k := vault.Key{Kind: vault.KindPassword, Service: "svc", Username: "alice"}
+	if err := s.Put(k, []byte("secret")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.GetSecret("alice", "svc"); err != nil {
+	if _, err := s.Get(k); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteEntry("alice", "svc"); err != nil {
+	if err := s.Delete(k); err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,7 +97,7 @@ func TestAuditEvents(t *testing.T) {
 	if len(events) != 2 || events[0].EventType != "delete" || events[1].EventType != "access" {
 		t.Fatalf("events = %+v, want the newest two: delete, then access", events)
 	}
-	if events[0].EntryID != "svc/alice" || events[0].Detail != "DeleteEntry" {
+	if events[0].EntryID != "password/svc/alice" || events[0].Detail != "Delete" {
 		t.Errorf("event = %+v", events[0])
 	}
 	if age := time.Since(events[0].CreatedAt); age < 0 || age > time.Minute {
@@ -154,7 +157,7 @@ func TestCompact(t *testing.T) {
 	if after >= before/4 {
 		t.Errorf("%s: %d bytes before compacting, %d after; want it much smaller", path, before, after)
 	}
-	if err := s.SetSecret("alice", "svc", []byte("still works")); err != nil {
+	if err := s.Put(vault.Key{Kind: vault.KindPassword, Service: "svc"}, []byte("still works")); err != nil {
 		t.Fatalf("store after compacting: %v", err)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // wantOpenRefused fails unless openSQLiteStore refuses with every one of subs.
@@ -28,7 +30,7 @@ func TestOpenSQLiteStore_RefusesStaleKeySourceAfterRekey(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+	populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2"})
 	app, stderr := rekeyTestApp("y\n")
 	if err := runRekey(app, []string{"--to=keychain"}, newKCMock(nil)); err != nil {
 		t.Fatalf("rekey: %v\n%s", err, stderr)
@@ -44,7 +46,7 @@ func TestOpenSQLiteStore_RefusesNewKeyNextToExistingVault(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+	populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2"})
 	if err := os.Remove(env.sidecarPath); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +65,7 @@ func TestOpenSQLiteStore_RefusesReplacedPasswordsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetSecret(env.account, "sesh-password/password/github/alice", []byte("hunter2")); err != nil {
+	if err := store.Put(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}, []byte("hunter2")); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

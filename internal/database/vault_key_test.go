@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 var (
@@ -62,10 +64,15 @@ func TestCheckKey_NewVaultRecordsAndChecksItsKey(t *testing.T) {
 	wantWrongKey(t, openWithKey(t, dbPath, keyB).CheckKey("keychain"), "password", "keychain")
 }
 
+// entryX is an entry the key tests store, so the vault has one to decrypt.
+var entryX = vault.Key{Kind: vault.KindPassword, Service: "x"}
+
+// A vault with entries but no check value yet is checked by decrypting an
+// entry from the entries table.
 func TestCheckKey_VaultFromBeforeTheCheck(t *testing.T) {
 	t.Run("right key records the check", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "passwords.db")
-		if err := openWithKey(t, dbPath, keyA).SetSecret("me", "sesh-password/password/x", []byte("v")); err != nil {
+		if err := openWithKey(t, dbPath, keyA).Put(entryX, []byte("v")); err != nil {
 			t.Fatal(err)
 		}
 		s := openWithKey(t, dbPath, keyA)
@@ -78,7 +85,7 @@ func TestCheckKey_VaultFromBeforeTheCheck(t *testing.T) {
 	})
 	t.Run("wrong key is refused and records nothing", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "passwords.db")
-		if err := openWithKey(t, dbPath, keyA).SetSecret("me", "sesh-password/password/x", []byte("v")); err != nil {
+		if err := openWithKey(t, dbPath, keyA).Put(entryX, []byte("v")); err != nil {
 			t.Fatal(err)
 		}
 		s := openWithKey(t, dbPath, keyB)
@@ -92,7 +99,7 @@ func TestCheckKey_VaultFromBeforeTheCheck(t *testing.T) {
 func TestVerifyKey_NeverWrites(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "passwords.db")
 	s := openWithKey(t, dbPath, keyA)
-	if err := s.SetSecret("me", "sesh-password/password/x", []byte("v")); err != nil {
+	if err := s.Put(entryX, []byte("v")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.VerifyKey("password"); err != nil {

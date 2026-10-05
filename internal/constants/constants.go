@@ -1,4 +1,4 @@
-// Package constants defines shared configuration values and service name prefixes.
+// Package constants defines shared configuration values.
 package constants
 
 import (
@@ -6,20 +6,6 @@ import (
 )
 
 const (
-	// AWSServicePrefix is the keychain service name prefix for AWS TOTP secrets.
-	AWSServicePrefix = "sesh-aws"
-	// AWSServiceMFAPrefix is the keychain service name prefix for AWS MFA serial numbers.
-	AWSServiceMFAPrefix = "sesh-aws-serial"
-
-	// TOTPServicePrefix is the keychain service name prefix for generic TOTP secrets.
-	TOTPServicePrefix = "sesh-totp"
-
-	// PasswordServicePrefix is the keychain service name prefix for stored passwords.
-	PasswordServicePrefix = "sesh-password"
-
-	// MetadataServiceName is the single keychain entry name used to store all metadata
-	MetadataServiceName = "sesh-metadata"
-
 	// DefaultBinaryPath is the installation path as a fallback
 	DefaultBinaryPath = "$HOME/.local/bin/sesh"
 )

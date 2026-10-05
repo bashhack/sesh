@@ -14,6 +14,7 @@ import (
 	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/testutil"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // fixedRecoveryKey makes newRecoveryKey return one known key, and returns
@@ -212,7 +213,7 @@ func TestRotate_RewrapsRecoveryKey(t *testing.T) {
 	startTestAgent(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	conn, err := agent.DialExisting()
 	if err != nil {
@@ -259,7 +260,7 @@ func TestRekey_ToKeychainRemovesRecoveryKey(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	if err := recovery.NewFile("id", []byte("p"), keywrap.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")}).Write(env.dataDir); err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +312,7 @@ func recoverableVault(t *testing.T) (*rekeyTestEnv, recovery.Key) {
 	useConfigFile(t, "")
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "forgotten-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "the secret"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "the secret"})
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	conn, err := agent.DialExisting()
 	if err != nil {
@@ -401,7 +402,7 @@ func TestRecover_SetsANewPasswordAndReplacesTheKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeAuditStore(store)
-	if got, err := store.GetSecret(env.account, "sesh-password/password/x/y"); err != nil || string(got) != "the secret" {
+	if got, err := store.Get(vault.Key{Kind: vault.KindPassword, Service: "x", Username: "y"}); err != nil || string(got) != "the secret" {
 		t.Errorf("entry after recovery = %q, %v", got, err)
 	}
 }

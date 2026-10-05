@@ -98,7 +98,7 @@ func (s *Store) VerifyKey(source string) error {
 // verifyAnEntry decrypts one entry, if the vault has any.
 func (s *Store) verifyAnEntry(source string) error {
 	var data, salt []byte
-	switch err := s.db.QueryRow(`SELECT encrypted_data, salt FROM passwords LIMIT 1`).Scan(&data, &salt); {
+	switch err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries LIMIT 1`).Scan(&data, &salt); {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:

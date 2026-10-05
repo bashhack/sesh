@@ -201,7 +201,7 @@ func TestKeychainOffMacOS(t *testing.T) {
 		}
 	})
 	t.Run("the Keychain stand-in", func(t *testing.T) {
-		if _, err := systemKeychain().GetSecret("me", "sesh-totp/x"); err == nil || !strings.Contains(err.Error(), "isn't available on linux") {
+		if _, err := systemKeychain().GetSecret("me", encKeyService); err == nil || !strings.Contains(err.Error(), "isn't available on linux") {
 			t.Fatalf("err = %v", err)
 		}
 	})

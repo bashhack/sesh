@@ -3,37 +3,13 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
 
 // Current schema version. Bump this and add a migration function when the schema changes.
-const currentSchemaVersion = 4
-
-// EntryType classifies what kind of credential is stored.
-type EntryType string
-
-const (
-	EntryTypePassword EntryType = "password"
-	EntryTypeAPIKey   EntryType = "api_key"
-	EntryTypeTOTP     EntryType = "totp"
-	EntryTypeNote     EntryType = "secure_note"
-	EntryTypeMFA      EntryType = "mfa_serial"
-)
-
-// PasswordEntry represents a row in the passwords table.
-type PasswordEntry struct {
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	ID            string
-	Service       string
-	Account       string
-	EntryType     EntryType
-	Metadata      string
-	EncryptedData []byte
-	Salt          []byte
-	KeyVersion    int
-}
+const currentSchemaVersion = 5
 
 // KeyMetadata stores key derivation parameters for a given key version.
 // This table is readable without decryption so the store can derive the
@@ -63,6 +39,7 @@ var migrations = map[int]func(tx *sql.Tx) error{
 	2: migrateV2,
 	3: migrateV3,
 	4: migrateV4,
+	5: migrateV5,
 }
 
 // migrateV1 creates the initial four-table schema.
@@ -152,6 +129,45 @@ func migrateV4(tx *sql.Tx) error {
 	} {
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("migration v4: %w", err)
+		}
+	}
+	return nil
+}
+
+// ErrOldVault is returned for a vault an earlier development build made
+// with entries in the old table: sesh had no releases then, so v5
+// doesn't convert one.
+var ErrOldVault = errors.New("this vault was made by an earlier development build of sesh, which this version can't open: start a new vault, or export this one with that build and import the export")
+
+// migrateV5 gives entries their own table, with kind, service name, and
+// username as columns, unique together. A vault whose old table holds
+// entries is refused (ErrOldVault), unchanged.
+func migrateV5(tx *sql.Tx) error {
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM passwords`).Scan(&n); err != nil {
+		return fmt.Errorf("migration v5: %w", err)
+	}
+	if n > 0 {
+		return ErrOldVault
+	}
+	for _, q := range []string{
+		`DROP TABLE passwords`,
+		`CREATE TABLE entries (
+			id             INTEGER PRIMARY KEY,
+			kind           TEXT NOT NULL,
+			service        TEXT NOT NULL,
+			username       TEXT NOT NULL DEFAULT '',
+			encrypted_data BLOB NOT NULL,
+			salt           BLOB NOT NULL,
+			key_version    INTEGER NOT NULL DEFAULT 1,
+			settings       TEXT,
+			created_at     DATETIME NOT NULL,
+			updated_at     DATETIME NOT NULL,
+			UNIQUE (kind, service, username)
+		)`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("migration v5: %w", err)
 		}
 	}
 	return nil

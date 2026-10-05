@@ -11,9 +11,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/bashhack/sesh/internal/config"
-	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/database"
-	"github.com/bashhack/sesh/internal/keyformat"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -189,44 +187,19 @@ func pruneAuditLog(store *database.Store, cfg *config.Config) {
 	}
 }
 
-// auditEntryName turns an audit entry ID, an entry's key in text form
-// (or, for events recorded through the keychain.Provider methods, its
-// stored name plus "/" and its account), into the kind of entry and a
-// readable name, as --list names them: ("password", "github (alice)"),
-// ("totp", "github (work)"). An ID it doesn't recognise comes back whole,
-// with no kind.
+// auditEntryName turns an audit entry ID, an entry's key in text form,
+// into the kind of entry and a readable name, as --list names them:
+// ("password", "github (alice)"), ("totp", "github (work)"). An ID it
+// doesn't recognise comes back whole, with no kind.
 func auditEntryName(id string) (kind, name string) {
-	if k, err := vault.ParseKey(id); err == nil {
-		if k.Username != "" {
-			return string(k.Kind), k.Service + " (" + k.Username + ")"
-		}
-		return string(k.Kind), k.Service
-	}
-	// Events recorded through the keychain.Provider methods: the stored
-	// name, then the account.
-	key, _, ok := strings.CutLast(id, "/") // drop the account
-	if !ok {
+	k, err := vault.ParseKey(id)
+	if err != nil {
 		return "", id
 	}
-	withDetail := func(main string, rest []string) string {
-		if len(rest) == 1 {
-			return main + " (" + rest[0] + ")"
-		}
-		return main
+	if k.Username != "" {
+		return string(k.Kind), k.Service + " (" + k.Username + ")"
 	}
-	if s, err := keyformat.Parse(key, constants.PasswordServicePrefix); err == nil && (len(s) == 2 || len(s) == 3) {
-		return s[0], withDetail(s[1], s[2:])
-	}
-	if s, err := keyformat.Parse(key, constants.TOTPServicePrefix); err == nil && (len(s) == 1 || len(s) == 2) {
-		return "totp", withDetail(s[0], s[1:])
-	}
-	if s, err := keyformat.Parse(key, constants.AWSServicePrefix); err == nil && len(s) == 1 {
-		return "aws", s[0]
-	}
-	if s, err := keyformat.Parse(key, constants.AWSServiceMFAPrefix); err == nil && len(s) == 1 {
-		return "aws serial", s[0]
-	}
-	return "", id
+	return string(k.Kind), k.Service
 }
 
 // The size warning: it shows when the audit log passes auditWarnEvents

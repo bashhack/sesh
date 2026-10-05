@@ -352,7 +352,7 @@ func TestRotate_RewrapsTouchIDUnlock(t *testing.T) {
 	prompts, _ := softwareTouchID(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	// Turn Touch ID unlock on for the vault, as `sesh touchid enable` does.
 	conn, err := agent.DialExisting()
@@ -405,7 +405,7 @@ func TestRekey_ToKeychainTurnsTouchIDOff(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	if err := touchid.NewFile("id", []byte("b"), []byte("p"), touchid.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")}).Write(env.dataDir); err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +442,7 @@ func TestRekey_RemovesTouchIDEvenIfSummaryWriteFails(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	if err := touchid.NewFile("id", []byte("b"), []byte("p"), touchid.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")}).Write(env.dataDir); err != nil {
 		t.Fatal(err)
 	}

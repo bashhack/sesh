@@ -213,7 +213,7 @@ func writeTestConfig(t *testing.T, path, body string) {
 func TestRekey_UpdatesKeySourceInTheConfigFile(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc := newKCMock(hexKey())
-	populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+	populateKeychainStore(t, env, kc, map[string]string{"password/github/alice": "hunter2"})
 	path := useConfigFile(t, "# my settings\nkey_source = \"keychain\"  # for now\n\n[agent]\nidle_timeout = \"20m\"\n")
 	t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
 

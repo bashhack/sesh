@@ -13,6 +13,8 @@ import (
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 type rekeyTestEnv struct {
@@ -110,11 +112,6 @@ func (m *kcMock) SetSecret(account, service string, secret []byte) error {
 	return nil
 }
 
-func (m *kcMock) GetSecretString(_, _ string) (string, error)            { return "", nil }
-func (m *kcMock) SetSecretString(_, _, _ string) error                   { return nil }
-func (m *kcMock) GetMFASerialBytes(_, _ string) ([]byte, error)          { return nil, keychain.ErrNotFound }
-func (m *kcMock) ListEntries(_ string) ([]keychain.KeychainEntry, error) { return nil, nil }
-func (m *kcMock) SetDescription(_, _, _ string) error                    { return nil }
 func (m *kcMock) DeleteEntry(account, service string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -126,9 +123,19 @@ func (m *kcMock) DeleteEntry(account, service string) error {
 	return nil
 }
 
-func populateKeychainStore(t *testing.T, env *rekeyTestEnv, kc keychain.Provider, entries map[string]string) {
+// entryKey reads an entry's key in text form, as the tests name entries.
+func entryKey(t *testing.T, id string) vault.Key {
 	t.Helper()
-	ks := database.NewKeychainSource(kc, env.account)
+	k, err := vault.ParseKey(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// seedStore opens the vault with ks and stores entries (key text → secret).
+func seedStore(t *testing.T, env *rekeyTestEnv, ks database.KeySource, entries map[string]string) {
+	t.Helper()
 	store, err := database.Open(env.dbPath, database.NewKeySourceOracle(ks))
 	if err != nil {
 		t.Fatalf("open store for seeding: %v", err)
@@ -141,38 +148,27 @@ func populateKeychainStore(t *testing.T, env *rekeyTestEnv, kc keychain.Provider
 	if err := store.InitKeyMetadata(); err != nil {
 		t.Fatalf("init key metadata: %v", err)
 	}
-	for service, secret := range entries {
-		if err := store.SetSecret(env.account, service, []byte(secret)); err != nil {
-			t.Fatalf("seed entry %s: %v", service, err)
+	for id, secret := range entries {
+		if err := store.Put(entryKey(t, id), []byte(secret)); err != nil {
+			t.Fatalf("seed entry %s: %v", id, err)
 		}
 	}
+}
+
+func populateKeychainStore(t *testing.T, env *rekeyTestEnv, kc keychain.ItemStore, entries map[string]string) {
+	t.Helper()
+	seedStore(t, env, database.NewKeychainSource(kc, env.account), entries)
 }
 
 func populatePasswordStore(t *testing.T, env *rekeyTestEnv, entries map[string]string) {
 	t.Helper()
-	ks := resolvePasswordPrompt().newSource(env.dataDir)
-	store, err := database.Open(env.dbPath, database.NewKeySourceOracle(ks))
-	if err != nil {
-		t.Fatalf("open store for seeding: %v", err)
-	}
-	defer func() {
-		if cerr := store.Close(); cerr != nil {
-			t.Fatalf("close seed store: %v", cerr)
-		}
-	}()
-	if err := store.InitKeyMetadata(); err != nil {
-		t.Fatalf("init key metadata: %v", err)
-	}
-	for service, secret := range entries {
-		if err := store.SetSecret(env.account, service, []byte(secret)); err != nil {
-			t.Fatalf("seed entry %s: %v", service, err)
-		}
-	}
+	seedStore(t, env, resolvePasswordPrompt().newSource(env.dataDir), entries)
 }
 
-func readEntriesViaPassword(t *testing.T, env *rekeyTestEnv, services []string) map[string]string {
+// readEntries opens the vault with ks and returns the secrets of the
+// entries ids name.
+func readEntries(t *testing.T, env *rekeyTestEnv, ks database.KeySource, ids []string) map[string]string {
 	t.Helper()
-	ks := resolvePasswordPrompt().newSource(env.dataDir)
 	store, err := database.Open(env.dbPath, database.NewKeySourceOracle(ks))
 	if err != nil {
 		t.Fatalf("open store for verify: %v", err)
@@ -182,38 +178,25 @@ func readEntriesViaPassword(t *testing.T, env *rekeyTestEnv, services []string) 
 			t.Fatalf("close verify store: %v", cerr)
 		}
 	}()
-	out := make(map[string]string, len(services))
-	for _, svc := range services {
-		b, err := store.GetSecret(env.account, svc)
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		b, err := store.Get(entryKey(t, id))
 		if err != nil {
-			t.Fatalf("get entry %s: %v", svc, err)
+			t.Fatalf("get entry %s: %v", id, err)
 		}
-		out[svc] = string(b)
+		out[id] = string(b)
 	}
 	return out
 }
 
-func readEntriesViaKeychain(t *testing.T, env *rekeyTestEnv, kc keychain.Provider, services []string) map[string]string {
+func readEntriesViaPassword(t *testing.T, env *rekeyTestEnv, ids []string) map[string]string {
 	t.Helper()
-	ks := database.NewKeychainSource(kc, env.account)
-	store, err := database.Open(env.dbPath, database.NewKeySourceOracle(ks))
-	if err != nil {
-		t.Fatalf("open store for verify: %v", err)
-	}
-	defer func() {
-		if cerr := store.Close(); cerr != nil {
-			t.Fatalf("close verify store: %v", cerr)
-		}
-	}()
-	out := make(map[string]string, len(services))
-	for _, svc := range services {
-		b, err := store.GetSecret(env.account, svc)
-		if err != nil {
-			t.Fatalf("get entry %s: %v", svc, err)
-		}
-		out[svc] = string(b)
-	}
-	return out
+	return readEntries(t, env, resolvePasswordPrompt().newSource(env.dataDir), ids)
+}
+
+func readEntriesViaKeychain(t *testing.T, env *rekeyTestEnv, kc keychain.ItemStore, ids []string) map[string]string {
+	t.Helper()
+	return readEntries(t, env, database.NewKeychainSource(kc, env.account), ids)
 }
 
 func TestRekey_RefusesIfTargetMissing(t *testing.T) {
@@ -240,7 +223,7 @@ func TestRekey_RefusesKeychainToKeychain(t *testing.T) {
 	t.Setenv("SESH_KEY_SOURCE", "keychain")
 	kc := newKCMock(hexKey())
 	populateKeychainStore(t, env, kc, map[string]string{
-		"sesh-password/password/github/alice": "hunter2",
+		"password/github/alice": "hunter2",
 	})
 
 	app, _ := rekeyTestApp("")
@@ -263,7 +246,7 @@ func TestRekey_ClearsLeftovers(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc := newKCMock(hexKey())
 	populateKeychainStore(t, env, kc, map[string]string{
-		"sesh-password/password/github/alice": "hunter2",
+		"password/github/alice": "hunter2",
 	})
 	for _, p := range []string{env.dbPath + rekeyBackupSuffix, env.dbPath + rekeyDestSuffix} {
 		if err := os.WriteFile(p, []byte("stale"), 0o600); err != nil {
@@ -290,7 +273,7 @@ func TestRekey_RefusesIfTargetSidecarExists(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc := newKCMock(hexKey())
 	populateKeychainStore(t, env, kc, map[string]string{
-		"sesh-password/password/github/alice": "hunter2",
+		"password/github/alice": "hunter2",
 	})
 
 	if err := os.WriteFile(env.sidecarPath, []byte(`{"version":1}`), 0o600); err != nil {
@@ -316,7 +299,7 @@ func TestRekey_RefusesIfTargetKeychainEntryExists(t *testing.T) {
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "test-password-1234")
 	populatePasswordStore(t, env, map[string]string{
-		"sesh-password/password/github/alice": "hunter2",
+		"password/github/alice": "hunter2",
 	})
 
 	kc := newKCMock(hexKey())
@@ -339,9 +322,9 @@ func TestRekey_KeychainToPassword(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc := newKCMock(hexKey())
 	entries := map[string]string{
-		"sesh-password/password/github/alice": "hunter2",
-		"sesh-totp/github":                    "JBSWY3DPEHPK3PXP",
-		"sesh-password/api_key/stripe/admin":  "sk_test_xyz",
+		"password/github/alice": "hunter2",
+		"totp/github":           "JBSWY3DPEHPK3PXP",
+		"api_key/stripe/admin":  "sk_test_xyz",
 	}
 	populateKeychainStore(t, env, kc, entries)
 
@@ -390,8 +373,8 @@ func TestRekey_PasswordToKeychain(t *testing.T) {
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
 	entries := map[string]string{
-		"sesh-password/password/github/alice": "hunter2",
-		"sesh-totp/github":                    "JBSWY3DPEHPK3PXP",
+		"password/github/alice": "hunter2",
+		"totp/github":           "JBSWY3DPEHPK3PXP",
 	}
 	populatePasswordStore(t, env, entries)
 
@@ -418,7 +401,7 @@ func TestRekey_PasswordToKeychain(t *testing.T) {
 		t.Errorf("the old vault's copy still exists (err %v)", err)
 	}
 
-	services := []string{"sesh-password/password/github/alice", "sesh-totp/github"}
+	services := []string{"password/github/alice", "totp/github"}
 	got := readEntriesViaKeychain(t, env, kc, services)
 	for svc, want := range entries {
 		if got[svc] != want {
@@ -431,7 +414,7 @@ func TestRekey_PreservesTimestamps(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc := newKCMock(hexKey())
 	populateKeychainStore(t, env, kc, map[string]string{
-		"sesh-password/password/github/alice": "hunter2",
+		"password/github/alice": "hunter2",
 	})
 
 	srcKS := database.NewKeychainSource(kc, env.account)
@@ -439,15 +422,18 @@ func TestRekey_PreservesTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srcEntries, err := srcStore.ListEntries("sesh-password")
+	// A TOTP entry's settings travel with it.
+	bank := vault.Entry{Key: entryKey(t, "totp/bank/me"), Settings: vault.Settings{TOTP: totp.Params{Digits: 8, Algorithm: "SHA256"}, AWSMFADevice: "arn:aws:iam::1:mfa/me"}}
+	if err := srcStore.Save(&bank, []byte("JBSWY3DPEHPK3PXP")); err != nil {
+		t.Fatal(err)
+	}
+	srcEntries, err := srcStore.List(vault.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(srcEntries) != 1 {
-		t.Fatalf("setup: expected 1 entry, got %d", len(srcEntries))
+	if len(srcEntries) != 2 {
+		t.Fatalf("setup: expected 2 entries, got %d", len(srcEntries))
 	}
-	wantCreated := srcEntries[0].CreatedAt
-	wantUpdated := srcEntries[0].UpdatedAt
 	if err := srcStore.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -469,18 +455,18 @@ func TestRekey_PreservesTimestamps(t *testing.T) {
 			t.Errorf("close verify store: %v", cerr)
 		}
 	}()
-	postEntries, err := store.ListEntries("sesh-password")
+	postEntries, err := store.List(vault.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(postEntries) != 1 {
-		t.Fatalf("post-rekey: expected 1 entry, got %d", len(postEntries))
+	if len(postEntries) != len(srcEntries) {
+		t.Fatalf("post-rekey: expected %d entries, got %d", len(srcEntries), len(postEntries))
 	}
-	if !postEntries[0].CreatedAt.Equal(wantCreated) {
-		t.Errorf("CreatedAt = %v, want %v", postEntries[0].CreatedAt, wantCreated)
-	}
-	if !postEntries[0].UpdatedAt.Equal(wantUpdated) {
-		t.Errorf("UpdatedAt = %v, want %v", postEntries[0].UpdatedAt, wantUpdated)
+	for i := range srcEntries {
+		want, got := srcEntries[i], postEntries[i]
+		if got.Key != want.Key || got.Settings != want.Settings || !got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) {
+			t.Errorf("after rekey %+v, want %+v (key, settings, and times kept)", got, want)
+		}
 	}
 }
 
@@ -507,7 +493,7 @@ func TestRekey_CancelledLeavesNoChanges(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc := newKCMock(hexKey())
 	populateKeychainStore(t, env, kc, map[string]string{
-		"sesh-password/password/github/alice": "hunter2",
+		"password/github/alice": "hunter2",
 	})
 
 	t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
@@ -529,9 +515,9 @@ func TestRekey_CancelledLeavesNoChanges(t *testing.T) {
 		t.Errorf(".new DB should not exist after cancellation")
 	}
 
-	got := readEntriesViaKeychain(t, env, kc, []string{"sesh-password/password/github/alice"})
-	if got["sesh-password/password/github/alice"] != "hunter2" {
-		t.Errorf("original entry corrupted after cancellation, got %q want %q", got["sesh-password/password/github/alice"], "hunter2")
+	got := readEntriesViaKeychain(t, env, kc, []string{"password/github/alice"})
+	if got["password/github/alice"] != "hunter2" {
+		t.Errorf("original entry corrupted after cancellation, got %q want %q", got["password/github/alice"], "hunter2")
 	}
 }
 
@@ -539,8 +525,8 @@ func TestRekey_RoundtripKeychainPasswordKeychain(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc1 := newKCMock(hexKey())
 	entries := map[string]string{
-		"sesh-password/password/github/alice": "hunter2",
-		"sesh-totp/github":                    "JBSWY3DPEHPK3PXP",
+		"password/github/alice": "hunter2",
+		"totp/github":           "JBSWY3DPEHPK3PXP",
 	}
 	populateKeychainStore(t, env, kc1, entries)
 
@@ -560,7 +546,7 @@ func TestRekey_RoundtripKeychainPasswordKeychain(t *testing.T) {
 		t.Fatalf("second rekey: %v", err)
 	}
 
-	services := []string{"sesh-password/password/github/alice", "sesh-totp/github"}
+	services := []string{"password/github/alice", "totp/github"}
 	got := readEntriesViaKeychain(t, env, kc2, services)
 	for svc, want := range entries {
 		if got[svc] != want {
@@ -737,8 +723,8 @@ func TestRotate_PasswordChangesPassword(t *testing.T) {
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
 	entries := map[string]string{
-		"sesh-password/password/github/alice": "hunter2",
-		"sesh-password/api_key/stripe/admin":  "sk_test_xyz",
+		"password/github/alice": "hunter2",
+		"api_key/stripe/admin":  "sk_test_xyz",
 	}
 	populatePasswordStore(t, env, entries)
 	t.Setenv("SESH_MASTER_PASSWORD", "")
@@ -763,7 +749,7 @@ func TestRotate_PasswordChangesPassword(t *testing.T) {
 
 	// New password unlocks the rotated DB.
 	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
-	services := []string{"sesh-password/password/github/alice", "sesh-password/api_key/stripe/admin"}
+	services := []string{"password/github/alice", "api_key/stripe/admin"}
 	got := readEntriesViaPassword(t, env, services)
 	for svc, want := range entries {
 		if got[svc] != want {
@@ -777,8 +763,8 @@ func TestRotate_PreservesPerEntryFreshness(t *testing.T) {
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
 	populatePasswordStore(t, env, map[string]string{
-		"sesh-password/password/github/alice": "same-secret",
-		"sesh-password/password/github/bob":   "same-secret",
+		"password/github/alice": "same-secret",
+		"password/github/bob":   "same-secret",
 	})
 
 	beforeBlob, err := os.ReadFile(env.dbPath)
@@ -820,7 +806,7 @@ func TestRotate_RemovesStagingLockOnSuccess(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	app, _ := rekeyTestApp("y\n")
@@ -838,7 +824,7 @@ func TestRotate_RemovesStagingLockOnConfirmMismatch(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	app, _ := rekeyTestApp("y\n")
@@ -860,7 +846,7 @@ func TestRotate_RemovesStagingLockOnCancel(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	// Cancel before the destination source is constructed at all — the
@@ -923,7 +909,7 @@ func TestRotate_ClearsLeftovers(t *testing.T) {
 			env := setupRekeyEnv(t)
 			t.Setenv("SESH_KEY_SOURCE", "password")
 			t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-			populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+			populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 			leftover := tt.leftover(env)
 			if err := os.WriteFile(leftover, []byte("stale"), 0o600); err != nil {
 				t.Fatal(err)
@@ -950,7 +936,7 @@ func TestRotate_WrongSourcePassword(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "right-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	beforeSidecar, err := os.ReadFile(env.sidecarPath)
 	if err != nil {
 		t.Fatal(err)
@@ -996,7 +982,7 @@ func TestRotate_PasswordCancelledLeavesNoChanges(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	beforeBlob, err := os.ReadFile(env.dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1046,7 +1032,7 @@ func TestCheckCopied(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "check-copied-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/a/b": "1", "sesh-password/password/c/d": "2"})
+	populatePasswordStore(t, env, map[string]string{"password/a/b": "1", "password/c/d": "2"})
 	store, err := openSQLiteStore()
 	if err != nil {
 		t.Fatal(err)
@@ -1074,7 +1060,7 @@ func TestKeyChanges_ClearEachOthersLeftovers(t *testing.T) {
 	t.Run("rekey clears .pre-rotate", func(t *testing.T) {
 		env := setupRekeyEnv(t)
 		kc := newKCMock(hexKey())
-		populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+		populateKeychainStore(t, env, kc, map[string]string{"password/github/alice": "hunter2"})
 		leftovers := []string{env.dbPath + rotateBackupSuffix, env.sidecarPath + rotateBackupSuffix}
 		for _, p := range leftovers {
 			if err := os.WriteFile(p, []byte("stale"), 0o600); err != nil {
@@ -1096,7 +1082,7 @@ func TestKeyChanges_ClearEachOthersLeftovers(t *testing.T) {
 		env := setupRekeyEnv(t)
 		t.Setenv("SESH_KEY_SOURCE", "password")
 		t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-		populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+		populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 		leftover := env.dbPath + rekeyBackupSuffix
 		if err := os.WriteFile(leftover, []byte("stale"), 0o600); err != nil {
 			t.Fatal(err)
@@ -1132,7 +1118,7 @@ func TestKeyChanges_RemoveOldCopiesBeforeReporting(t *testing.T) {
 		env := setupRekeyEnv(t)
 		t.Setenv("SESH_KEY_SOURCE", "password")
 		t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-		populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+		populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 		t.Setenv("SESH_MASTER_PASSWORD", "")
 		app, _ := rekeyTestApp("y\n")
 		app.Stderr = &failingAfter{marker: "Rotated"}
@@ -1148,7 +1134,7 @@ func TestKeyChanges_RemoveOldCopiesBeforeReporting(t *testing.T) {
 	t.Run("rekey", func(t *testing.T) {
 		env := setupRekeyEnv(t)
 		kc := newKCMock(hexKey())
-		populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+		populateKeychainStore(t, env, kc, map[string]string{"password/github/alice": "hunter2"})
 		t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
 		app, _ := rekeyTestApp("y\n")
 		app.Stderr = &failingAfter{marker: "Rekeyed"}
@@ -1168,7 +1154,7 @@ func TestKeyChanges_OneAtATime(t *testing.T) {
 		env := setupRekeyEnv(t)
 		t.Setenv("SESH_KEY_SOURCE", "password")
 		t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-		populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+		populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 		inProgress := env.dbPath + rotateBackupSuffix // another change's in-progress copy
 		if err := os.WriteFile(inProgress, []byte("first change's copy"), 0o600); err != nil {
 			t.Fatal(err)
@@ -1195,7 +1181,7 @@ func TestKeyChanges_OneAtATime(t *testing.T) {
 	t.Run("rekey", func(t *testing.T) {
 		env := setupRekeyEnv(t)
 		kc := newKCMock(hexKey())
-		populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+		populateKeychainStore(t, env, kc, map[string]string{"password/github/alice": "hunter2"})
 		release, err := lockKeyChange(env.dataDir)
 		if err != nil {
 			t.Fatal(err)
@@ -1234,7 +1220,7 @@ func TestRotate_RollsBackAPartialSwap(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "the secret"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "the secret"})
 	lockFreeDuringRollback := false
 	failRename(t, env.sidecarPath+rekeyDestSuffix, env.sidecarPath, func(src, dst string) {
 		if src == env.dbPath+rotateBackupSuffix && dst == env.dbPath { // rollback restoring the vault
@@ -1265,9 +1251,9 @@ func TestRotate_RollsBackAPartialSwap(t *testing.T) {
 		}
 	}
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	got := readEntriesViaPassword(t, env, []string{"sesh-password/password/x/y"})
-	if got["sesh-password/password/x/y"] != "the secret" {
-		t.Errorf("entry after rollback = %q, want the old password to open the old vault", got["sesh-password/password/x/y"])
+	got := readEntriesViaPassword(t, env, []string{"password/x/y"})
+	if got["password/x/y"] != "the secret" {
+		t.Errorf("entry after rollback = %q, want the old password to open the old vault", got["password/x/y"])
 	}
 }
 
@@ -1275,7 +1261,7 @@ func TestRotate_RollsBackAPartialSwap(t *testing.T) {
 func TestRekey_KeepsTheLockThroughRollback(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc := newKCMock(hexKey())
-	populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+	populateKeychainStore(t, env, kc, map[string]string{"password/github/alice": "hunter2"})
 	lockFreeDuringRollback := false
 	failRename(t, env.dbPath+rekeyDestSuffix, env.dbPath, func(src, dst string) {
 		if src == env.dbPath+rekeyBackupSuffix && dst == env.dbPath {
@@ -1293,9 +1279,9 @@ func TestRekey_KeepsTheLockThroughRollback(t *testing.T) {
 	if lockFreeDuringRollback {
 		t.Error("another key change could take the lock while rollback was running")
 	}
-	got := readEntriesViaKeychain(t, env, kc, []string{"sesh-password/password/github/alice"})
-	if got["sesh-password/password/github/alice"] != "hunter2" {
-		t.Errorf("entry after rollback = %q", got["sesh-password/password/github/alice"])
+	got := readEntriesViaKeychain(t, env, kc, []string{"password/github/alice"})
+	if got["password/github/alice"] != "hunter2" {
+		t.Errorf("entry after rollback = %q", got["password/github/alice"])
 	}
 }
 
@@ -1305,7 +1291,7 @@ func TestRotate_LeavesAnotherChangesStagingLock(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	staging := env.sidecarPath + rekeyDestSuffix + ".lock"
 	if err := os.WriteFile(staging, nil, 0o600); err != nil {
 		t.Fatal(err)

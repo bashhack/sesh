@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 func TestServer_UnlockDecryptEncryptStatus(t *testing.T) {
@@ -115,10 +116,11 @@ func TestOracle_StoreRoundTrip(t *testing.T) {
 			t.Errorf("close store: %v", err)
 		}
 	})
-	if err := store.SetSecret("me", "github", []byte("token")); err != nil {
+	k := vault.Key{Kind: vault.KindAPIKey, Service: "github"}
+	if err := store.Put(k, []byte("token")); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.GetSecret("me", "github")
+	got, err := store.Get(k)
 	if err != nil {
 		t.Fatal(err)
 	}

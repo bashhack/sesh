@@ -115,7 +115,7 @@ func (m *MemStore) List(f Filter) ([]Entry, error) {
 			out = append(out, e)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key.String() < out[j].Key.String() })
+	sort.Slice(out, func(i, j int) bool { return out[i].Key.Less(out[j].Key) })
 	return out, nil
 }
 

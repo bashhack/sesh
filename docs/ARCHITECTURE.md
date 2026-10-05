@@ -116,9 +116,9 @@ The architecture follows a strict layering model where dependencies flow downwar
 
 2. **Dependency Injection**:
    ```go
-   func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider, clipboardTimeout time.Duration) *App
+   func NewDefaultApp(versionInfo VersionInfo, store vault.Store, clipboardTimeout time.Duration) *App
    ```
-   The constructor accepts a `keychain.Provider` (the credential store) and wires all other dependencies internally. `main.go` resolves settings through `internal/config` (flag > env > `~/.config/sesh/config.toml` > default) and opens the vault via `buildProvider(cfg)`. Tests can substitute any dependency.
+   The constructor accepts a `vault.Store` (the vault) and wires all other dependencies internally. `main.go` resolves settings through `internal/config` (flag > env > `~/.config/sesh/config.toml` > default) and opens the vault via `buildProvider(cfg)`. Tests can substitute any dependency.
 
 3. **Provider Registration**:
    ```go
@@ -221,27 +221,27 @@ Two implementations:
 
 **Encrypted export.** The password manager's `ExportEncrypted`/`ImportEncrypted` use the same primitives (Argon2id + AES-256-GCM) but with an independent per-export salt. The envelope is self-contained — the salt and parameters are embedded alongside the ciphertext — so encrypted exports are portable across machines and key sources.
 
-**Stored names.** Each entry is stored under a name built by `keyformat.Build` (and parsed by `keyformat.Parse`): `sesh-password/{type}/{service}[/{username}]` for the password manager, `sesh-totp/{service}[/{profile}]` for the TOTP provider, and `sesh-aws/{profile}` (the MFA secret) with `sesh-aws-serial/{profile}` (the MFA device) for AWS. The account is the OS username.
+**Entries.** Every provider stores through `vault.Store` (`internal/vault`). An entry is keyed by its kind (`password`, `api_key`, `totp`, `secure_note`), service name, and an optional username, unique together; its text form, `kind/service[/username]`, is the ID `--list` shows, `--delete` takes, and the audit log records. Non-secret options are its settings: a TOTP entry's code settings (algorithm, digits, period, issuer), and for AWS the MFA device. `--service totp` and the password manager share the TOTP entries (`--profile` is the username); an AWS profile's MFA secret is the TOTP entry `aws` with the profile as username.
 
 **SQLite Data Model**
 
-The vault stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
+The vault stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` names entries by their key's text form (no foreign key, so audit history survives deleting an entry); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 erDiagram
-    passwords }o..|| key_metadata : "key_version (logical)"
-    passwords ||..o{ audit_log : "entry_id (logical, nullable)"
+    entries }o..|| key_metadata : "key_version (logical)"
+    entries ||..o{ audit_log : "entry_id = kind/service[/username]"
 
-    passwords {
-        TEXT id PK
+    entries {
+        INTEGER id PK
+        TEXT kind "password / api_key / totp / secure_note"
         TEXT service
-        TEXT account
-        TEXT entry_type
+        TEXT username "unique with kind and service"
         BLOB encrypted_data "AES-256-GCM ciphertext"
         BLOB salt "per-entry, 16 bytes"
         INTEGER key_version "→ key_metadata.version"
-        TEXT metadata "description / TOTP params"
+        TEXT settings "JSON: TOTP params, AWS MFA device"
         DATETIME created_at
         DATETIME updated_at
     }
@@ -258,7 +258,7 @@ erDiagram
     audit_log {
         INTEGER id PK
         TEXT event_type "store/retrieve/delete/..."
-        TEXT entry_id "→ passwords.id, nullable for auth events"
+        TEXT entry_id "an entry's key text, nullable for auth events"
         TEXT detail
         DATETIME created_at
     }
@@ -274,7 +274,7 @@ currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secret)
 // Non-standard generation (respects stored algorithm, digits, period)
 currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
 ```
-Generates both current and next codes to handle the transition between TOTP windows. When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored as JSON in the entry's description. Providers read these params before generating codes, falling back to defaults (SHA1, 6 digits, 30 seconds) when no params are stored.
+Generates both current and next codes to handle the transition between TOTP windows. When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored in the entry's settings. Providers read these params before generating codes, falling back to defaults (SHA1, 6 digits, 30 seconds) when no params are stored.
 
 #### Memory Management
 
@@ -476,7 +476,7 @@ Adding a new provider looks like this:
 ```go
 // 1. Define your provider
 type YourProvider struct {
-    keychain keychain.Provider
+    store vault.Store
     // your fields
 }
 
@@ -622,7 +622,8 @@ sesh/
 │   │   └── password/      # Password manager provider
 │   ├── database/          # SQLite store, encryption, migrations
 │   ├── password/          # Password manager core (CRUD, search, filter)
-│   ├── keychain/          # Store interface; the Keychain key source's item
+│   ├── vault/             # Entries and the Store interface
+│   ├── keychain/          # The Keychain key source's item
 │   ├── secure/            # Memory security
 │   └── */                 # Focused packages
 └── docs/                  # Documentation

@@ -55,6 +55,17 @@ func (k Key) String() string {
 	return s
 }
 
+// Less orders keys by kind, then service name, then username.
+func (k Key) Less(o Key) bool {
+	if k.Kind != o.Kind {
+		return k.Kind < o.Kind
+	}
+	if k.Service != o.Service {
+		return k.Service < o.Service
+	}
+	return k.Username < o.Username
+}
+
 // ParseKey reads a key's text form, as String writes it.
 func ParseKey(s string) (Key, error) {
 	parts := strings.Split(s, "/")
@@ -150,7 +161,7 @@ type Store interface {
 	SetSettings(k Key, s Settings) error
 	// Lookup returns the entry without its secret.
 	Lookup(k Key) (Entry, error)
-	// List returns the entries f matches, ordered by key.
+	// List returns the entries f matches, ordered by Key.Less.
 	List(f Filter) ([]Entry, error)
 	// Delete removes the entry.
 	Delete(k Key) error

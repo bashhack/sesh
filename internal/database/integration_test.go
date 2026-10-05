@@ -423,125 +423,62 @@ func TestIntegration_JSONOutput(t *testing.T) {
 	}
 }
 
-// --- Parity tests: ensure SQLite store is a drop-in for existing AWS/TOTP provider workflows ---
+// --- The entries the AWS and TOTP providers keep, through the vault ---
 
 func TestIntegration_AWSTOTPWorkflow(t *testing.T) {
 	store, _ := newIntegrationStore(t)
-
-	user := "testuser"
 	secret := []byte("JBSWY3DPEHPK3PXP")
+	device := "arn:aws:iam::123456789012:mfa/alice"
 
-	// AWS provider stores a TOTP secret under sesh-aws/{profile}
-	t.Log("Store AWS TOTP secret")
-	if err := store.SetSecret(user, "sesh-aws/production", secret); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetDescription("sesh-aws/production", user, "AWS MFA for profile production"); err != nil {
+	// AWS setup stores a profile's MFA secret with its device, in one entry.
+	t.Log("Store AWS MFA secret and device")
+	if err := store.Save(&vault.Entry{Key: vault.AWSKey("production"), Settings: vault.Settings{AWSMFADevice: device}}, secret); err != nil {
 		t.Fatal(err)
 	}
 
-	// Retrieve — this is what the AWS provider does before generating a TOTP code
-	t.Log("Retrieve AWS TOTP secret")
-	got, err := store.GetSecret(user, "sesh-aws/production")
+	got, err := store.Get(vault.AWSKey("production"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("  Secret: %q", string(got))
 	if string(got) != string(secret) {
 		t.Fatalf("expected %q, got %q", secret, got)
 	}
-
-	// Store a second profile
-	if err := store.SetSecret(user, "sesh-aws/staging", []byte("AAAAAAAAAAAAAAAA")); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetDescription("sesh-aws/staging", user, "AWS MFA for profile staging"); err != nil {
-		t.Fatal(err)
+	e, err := store.Lookup(vault.AWSKey("production"))
+	if err != nil || e.Settings.AWSMFADevice != device {
+		t.Fatalf("Lookup = %+v, %v; want the device %s", e.Settings, err, device)
 	}
 
-	// List AWS profiles — the AWS provider calls ListEntries("sesh-aws")
-	t.Log("List AWS profiles")
-	entries, err := store.ListEntries("sesh-aws")
+	// A second profile, and an unrelated TOTP entry the AWS list leaves out.
+	if err := store.Put(vault.AWSKey("staging"), []byte("AAAAAAAAAAAAAAAA")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(vault.Key{Kind: vault.KindTOTP, Service: "github"}, secret); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.List(vault.Filter{Kind: vault.KindTOTP, Service: "aws"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range entries {
-		t.Logf("  %s (%s) — %s", e.Service, e.Account, e.Description)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 AWS entries, got %d", len(entries))
-	}
-}
-
-func TestIntegration_AWSMFASerial(t *testing.T) {
-	store, _ := newIntegrationStore(t)
-
-	user := "testuser"
-	serial := []byte("arn:aws:iam::123456789012:mfa/alice")
-
-	// AWS provider stores MFA serial under sesh-aws-serial/{profile}
-	t.Log("Store MFA serial")
-	if err := store.SetSecret(user, "sesh-aws-serial/production", serial); err != nil {
-		t.Fatal(err)
-	}
-
-	// Retrieve via GetMFASerialBytes — the AWS provider calls this
-	t.Log("Retrieve MFA serial via GetMFASerialBytes")
-	got, err := store.GetMFASerialBytes(user, "production")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("  Serial: %q", string(got))
-	if string(got) != string(serial) {
-		t.Fatalf("expected %q, got %q", serial, got)
-	}
-
-	// Empty profile falls back to bare prefix
-	t.Log("Store MFA serial for default profile")
-	if err := store.SetSecret(user, "sesh-aws-serial", serial); err != nil {
-		t.Fatal(err)
-	}
-	got, err = store.GetMFASerialBytes(user, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(serial) {
-		t.Fatalf("expected %q for empty profile, got %q", serial, got)
+	if len(entries) != 2 || entries[0].Username != "production" || entries[1].Username != "staging" {
+		t.Fatalf("AWS entries = %+v, want production and staging", entries)
 	}
 }
 
 func TestIntegration_GenericTOTPWorkflow(t *testing.T) {
 	store, _ := newIntegrationStore(t)
-
-	user := "testuser"
 	secret := []byte("JBSWY3DPEHPK3PXP")
-
-	// TOTP provider stores secrets under sesh-totp/{service}[/{profile}]
-	t.Log("Store generic TOTP secrets")
-	if err := store.SetSecret(user, "sesh-totp/github", secret); err != nil {
-		t.Fatal(err)
+	keys := []vault.Key{
+		{Kind: vault.KindTOTP, Service: "github"},
+		{Kind: vault.KindTOTP, Service: "gitlab", Username: "work"},
+		{Kind: vault.KindTOTP, Service: "aws-console"},
 	}
-	if err := store.SetDescription("sesh-totp/github", user, "TOTP for github"); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := store.SetSecret(user, "sesh-totp/gitlab/work", secret); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetDescription("sesh-totp/gitlab/work", user, "TOTP for gitlab profile work"); err != nil {
-		t.Fatal(err)
+	for _, k := range keys {
+		if err := store.Put(k, secret); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	if err := store.SetSecret(user, "sesh-totp/aws-console", secret); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetDescription("sesh-totp/aws-console", user, "TOTP for aws-console"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Retrieve
-	t.Log("Retrieve TOTP secret")
-	got, err := store.GetSecret(user, "sesh-totp/github")
+	got, err := store.Get(keys[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,118 +486,82 @@ func TestIntegration_GenericTOTPWorkflow(t *testing.T) {
 		t.Fatalf("expected %q, got %q", secret, got)
 	}
 
-	// List — TOTP provider calls ListEntries("sesh-totp")
-	t.Log("List TOTP services")
-	entries, err := store.ListEntries("sesh-totp")
+	entries, err := store.List(vault.Filter{Kind: vault.KindTOTP})
 	if err != nil {
 		t.Fatal(err)
-	}
-	for _, e := range entries {
-		t.Logf("  %s (%s) — %s", e.Service, e.Account, e.Description)
 	}
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 TOTP entries, got %d", len(entries))
 	}
 
-	// Delete
-	t.Log("Delete TOTP entry")
-	if err := store.DeleteEntry(user, "sesh-totp/gitlab/work"); err != nil {
+	if err := store.Delete(keys[1]); err != nil {
 		t.Fatal(err)
 	}
-	entries, err = store.ListEntries("sesh-totp")
+	entries, err = store.List(vault.Filter{Kind: vault.KindTOTP})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 after delete, got %d", len(entries))
 	}
-	t.Log("  Confirmed deleted")
 }
 
-func TestIntegration_CrossPrefixIsolation(t *testing.T) {
+func TestIntegration_KindIsolation(t *testing.T) {
 	store, _ := newIntegrationStore(t)
-
-	user := "testuser"
-
-	// Store entries across all prefixes
-	for _, s := range []struct {
-		svc    string
-		secret []byte
-	}{
-		{"sesh-aws/prod", []byte("aws-secret")},
-		{"sesh-aws-serial/prod", []byte("arn:aws:iam::123:mfa/user")},
-		{"sesh-totp/github", []byte("totp-secret")},
-		{"sesh-password/password/stripe/admin", []byte("pw")},
+	for _, k := range []vault.Key{
+		vault.AWSKey("prod"),
+		{Kind: vault.KindTOTP, Service: "github"},
+		{Kind: vault.KindPassword, Service: "stripe", Username: "admin"},
+		{Kind: vault.KindPassword, Service: "aws", Username: "prod"}, // same name as the AWS entry, another kind
 	} {
-		if err := store.SetSecret(user, s.svc, s.secret); err != nil {
+		if err := store.Put(k, []byte("x")); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	// Each ListEntries call should only return entries for that prefix
 	tests := map[string]struct {
-		prefix   string
+		filter   vault.Filter
 		expected int
 	}{
-		"aws":        {prefix: "sesh-aws/", expected: 1},
-		"aws-serial": {prefix: "sesh-aws-serial", expected: 1},
-		"totp":       {prefix: "sesh-totp", expected: 1},
-		"password":   {prefix: "sesh-password", expected: 1},
+		"totp":         {filter: vault.Filter{Kind: vault.KindTOTP}, expected: 2},
+		"password":     {filter: vault.Filter{Kind: vault.KindPassword}, expected: 2},
+		"aws profiles": {filter: vault.Filter{Kind: vault.KindTOTP, Service: "aws"}, expected: 1},
+		"note":         {filter: vault.Filter{Kind: vault.KindNote}, expected: 0},
 	}
-
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			entries, err := store.ListEntries(tc.prefix)
+			entries, err := store.List(tc.filter)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(entries) != tc.expected {
-				t.Errorf("prefix %q: expected %d, got %d", tc.prefix, tc.expected, len(entries))
-				for _, e := range entries {
-					t.Logf("  got: %s", e.Service)
-				}
+				t.Errorf("expected %d, got %+v", tc.expected, entries)
 			}
 		})
 	}
 }
 
-func TestIntegration_SetDescriptionExistingEntry(t *testing.T) {
+func TestIntegration_SetSettingsExistingEntry(t *testing.T) {
 	store, _ := newIntegrationStore(t)
-
-	user := "testuser"
-
-	// Store a secret, then update its description
-	if err := store.SetSecret(user, "sesh-totp/github", []byte("secret")); err != nil {
+	k := vault.Key{Kind: vault.KindTOTP, Service: "github"}
+	if err := store.Put(k, []byte("JBSWY3DPEHPK3PXP")); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := store.SetDescription("sesh-totp/github", user, "GitHub 2FA"); err != nil {
-		t.Fatal(err)
+	for _, want := range []vault.Settings{
+		{TOTP: totp.Params{Digits: 8}},
+		{TOTP: totp.Params{Algorithm: "SHA512", Period: 60}},
+		{},
+	} {
+		if err := store.SetSettings(k, want); err != nil {
+			t.Fatal(err)
+		}
+		if e, err := store.Lookup(k); err != nil || e.Settings != want {
+			t.Fatalf("Lookup = %+v, %v; want settings %+v", e.Settings, err, want)
+		}
 	}
-
-	entries, err := store.ListEntries("sesh-totp")
-	if err != nil {
-		t.Fatal(err)
+	if got, err := store.Get(k); err != nil || string(got) != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("the secret after changing settings = %q, %v", got, err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1, got %d", len(entries))
-	}
-	if entries[0].Description != "GitHub 2FA" {
-		t.Fatalf("expected description 'GitHub 2FA', got %q", entries[0].Description)
-	}
-
-	// Update description again
-	if err := store.SetDescription("sesh-totp/github", user, "Updated desc"); err != nil {
-		t.Fatal(err)
-	}
-	entries, err = store.ListEntries("sesh-totp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if entries[0].Description != "Updated desc" {
-		t.Fatalf("expected 'Updated desc', got %q", entries[0].Description)
-	}
-	t.Logf("  Description updated: %q", entries[0].Description)
 }
 
 // --- TOTP code generation parity tests ---
@@ -670,18 +571,17 @@ func TestIntegration_SetDescriptionExistingEntry(t *testing.T) {
 func TestIntegration_TOTPProviderCodeGenFlow(t *testing.T) {
 	store, _ := newIntegrationStore(t)
 	totpSvc := totp.NewDefaultProvider()
-	user := "testuser"
 	secret := []byte("JBSWY3DPEHPK3PXP")
+	k := vault.Key{Kind: vault.KindTOTP, Service: "github"}
 
-	// Store secret under sesh-totp/ — exact path the TOTP provider uses
-	t.Log("Store TOTP secret via store.SetSecret")
-	if err := store.SetSecret(user, "sesh-totp/github", secret); err != nil {
+	t.Log("Store TOTP secret")
+	if err := store.Put(k, secret); err != nil {
 		t.Fatal(err)
 	}
 
-	// Retrieve — the provider calls store.GetSecret then makes a defensive copy
+	// Retrieve — the provider reads the secret then makes a defensive copy
 	t.Log("Retrieve and generate code")
-	secretBytes, err := store.GetSecret(user, "sesh-totp/github")
+	secretBytes, err := store.Get(k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -715,29 +615,26 @@ func TestIntegration_TOTPProviderCodeGenFlow(t *testing.T) {
 func TestIntegration_AWSProviderCodeGenFlow(t *testing.T) {
 	store, _ := newIntegrationStore(t)
 	totpSvc := totp.NewDefaultProvider()
-	user := "testuser"
 	secret := []byte("JBSWY3DPEHPK3PXP")
-	serial := []byte("arn:aws:iam::123456789012:mfa/alice")
+	device := "arn:aws:iam::123456789012:mfa/alice"
 
-	// Store TOTP secret and MFA serial — exact path the AWS provider setup creates
-	t.Log("Store AWS TOTP secret and MFA serial")
-	if err := store.SetSecret(user, "sesh-aws/production", secret); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetSecret(user, "sesh-aws-serial/production", serial); err != nil {
+	// The entry AWS setup creates: the MFA secret with its device.
+	t.Log("Store AWS MFA secret and device")
+	if err := store.Save(&vault.Entry{Key: vault.AWSKey("production"), Settings: vault.Settings{AWSMFADevice: device}}, secret); err != nil {
 		t.Fatal(err)
 	}
 
-	// AWS provider flow: get MFA serial, then get TOTP secret, then generate codes
-	t.Log("Retrieve MFA serial")
-	gotSerial, err := store.GetMFASerialBytes(user, "production")
+	// AWS provider flow: read the device, then the secret, then generate codes
+	t.Log("Read the MFA device")
+	e, err := store.Lookup(vault.AWSKey("production"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("  Serial: %s", string(gotSerial))
+	gotSerial := e.Settings.AWSMFADevice
+	t.Logf("  Device: %s", gotSerial)
 
 	t.Log("Retrieve TOTP secret and generate codes")
-	secretBytes, err := store.GetSecret(user, "sesh-aws/production")
+	secretBytes, err := store.Get(vault.AWSKey("production"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +659,7 @@ func TestIntegration_AWSProviderCodeGenFlow(t *testing.T) {
 	}
 
 	// Verify the complete flow produced non-empty serial and codes
-	if len(gotSerial) == 0 || current == "" || next == "" {
+	if gotSerial == "" || current == "" || next == "" {
 		t.Fatal("AWS provider flow produced empty results")
 	}
 	t.Log("  AWS provider flow complete: serial + current + next codes")
@@ -770,7 +667,7 @@ func TestIntegration_AWSProviderCodeGenFlow(t *testing.T) {
 
 func TestIntegration_TOTPSecretValidationRoundTrip(t *testing.T) {
 	store, _ := newIntegrationStore(t)
-	user := "testuser"
+	k := vault.Key{Kind: vault.KindTOTP, Service: "test-service"}
 
 	// Validate and normalize a secret, then store it, then retrieve and generate
 	t.Log("Validate, store, retrieve, generate")
@@ -781,11 +678,11 @@ func TestIntegration_TOTPSecretValidationRoundTrip(t *testing.T) {
 	}
 	t.Logf("  Normalized: %q", normalized)
 
-	if err := store.SetSecret(user, "sesh-totp/test-service", []byte(normalized)); err != nil {
+	if err := store.Put(k, []byte(normalized)); err != nil {
 		t.Fatal(err)
 	}
 
-	secretBytes, err := store.GetSecret(user, "sesh-totp/test-service")
+	secretBytes, err := store.Get(k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,7 +701,7 @@ func TestIntegration_TOTPSecretValidationRoundTrip(t *testing.T) {
 func TestIntegration_QRCodeToStoreToGenerate(t *testing.T) {
 	store, _ := newIntegrationStore(t)
 	totpSvc := totp.NewDefaultProvider()
-	user := "testuser"
+	k := vault.Key{Kind: vault.KindTOTP, Service: "github"}
 
 	// Generate a QR code image with a known secret — mimics what a service would show
 	t.Log("Generate QR code image")
@@ -851,17 +748,15 @@ func TestIntegration_QRCodeToStoreToGenerate(t *testing.T) {
 	t.Logf("  Normalized: %q", normalized)
 
 	// Store in SQLite
-	t.Log("Store in SQLite")
-	if err := store.SetSecret(user, "sesh-totp/github", []byte(normalized)); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetDescription("sesh-totp/github", user, "TOTP for GitHub (from QR)"); err != nil {
+	t.Log("Store in the vault")
+	settings := vault.Settings{TOTP: totp.Params{Issuer: "GitHub"}}
+	if err := store.Save(&vault.Entry{Key: k, Settings: settings}, []byte(normalized)); err != nil {
 		t.Fatal(err)
 	}
 
 	// Retrieve and generate code
 	t.Log("Retrieve and generate TOTP code")
-	secretBytes, err := store.GetSecret(user, "sesh-totp/github")
+	secretBytes, err := store.Get(k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -879,18 +774,14 @@ func TestIntegration_QRCodeToStoreToGenerate(t *testing.T) {
 		}
 	}
 
-	// Verify it shows up in list with description
-	entries, err := store.ListEntries("sesh-totp")
+	// Verify it shows up in the list with its settings
+	entries, err := store.List(vault.Filter{Kind: vault.KindTOTP})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
+	if len(entries) != 1 || entries[0].Key != k || entries[0].Settings != settings {
+		t.Fatalf("List = %+v, want github with settings %+v", entries, settings)
 	}
-	if entries[0].Description != "TOTP for GitHub (from QR)" {
-		t.Fatalf("expected QR description, got %q", entries[0].Description)
-	}
-	t.Logf("  Listed: %s — %s", entries[0].Service, entries[0].Description)
 	t.Log("  Full QR → store → generate flow complete")
 }
 
@@ -1467,7 +1358,7 @@ func TestIntegration_ExportImportPreservesTimestamps(t *testing.T) {
 	historicCreated := time.Date(2025, 3, 10, 12, 0, 0, 0, time.UTC)
 	historicUpdated := time.Date(2025, 9, 15, 18, 30, 0, 0, time.UTC)
 
-	if err := store1.SetSecretAt("testuser", "sesh-password/password/github/alice", []byte("pw1"), historicCreated, historicUpdated); err != nil {
+	if err := store1.Save(&vault.Entry{Kind: vault.KindPassword, Service: "github", Username: "alice", CreatedAt: historicCreated, UpdatedAt: historicUpdated}, []byte("pw1")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1487,7 +1378,7 @@ func TestIntegration_ExportImportPreservesTimestamps(t *testing.T) {
 				t.Fatalf("expected 1 imported, got %d (errors: %v)", result.Imported, result.Errors)
 			}
 
-			entries, err := store2.ListEntries("sesh-password")
+			entries, err := store2.List(vault.Filter{})
 			if err != nil {
 				t.Fatal(err)
 			}

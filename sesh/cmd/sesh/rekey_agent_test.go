@@ -49,7 +49,7 @@ func populateUnlockedPasswordVault(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+	populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2"})
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	startTestAgent(t)
 	unlockTestAgent(t, env, "old-pw-1234")

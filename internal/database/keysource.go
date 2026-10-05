@@ -49,8 +49,8 @@ type CryptoOracle interface {
 	DecryptEntry(encryptedData, salt []byte) ([]byte, error)
 }
 
-// keychainKeyProvider is the subset of keychain.Provider that KeychainSource needs.
-// Using a narrow interface avoids importing the full keychain package in tests.
+// keychainKeyProvider reads and writes the Keychain item KeychainSource
+// keeps the key in (keychain.Items, or a stand-in in tests).
 type keychainKeyProvider interface {
 	GetSecret(account, service string) ([]byte, error)
 	SetSecret(account, service string, secret []byte) error
