@@ -393,51 +393,6 @@ func (m *Manager) ListEntriesFiltered(filter ListFilter) ([]Entry, error) {
 	return filtered, nil
 }
 
-// Searcher is an optional interface that credential stores can implement
-// to provide full-text search. The SQLite store implements this via FTS5.
-type Searcher interface {
-	SearchEntries(query string) ([]keychain.KeychainEntry, error)
-}
-
-// SearchEntries returns entries where the query matches service, username, or description.
-// If the underlying store supports FTS (implements Searcher), it is used for ranked results.
-// Otherwise, falls back to in-memory case-insensitive substring matching.
-func (m *Manager) SearchEntries(query string) ([]Entry, error) {
-	if searcher, ok := m.keychain.(Searcher); ok {
-		kEntries, err := searcher.SearchEntries(query)
-		if err != nil {
-			return nil, fmt.Errorf("search failed: %w", err)
-		}
-		entries := make([]Entry, 0, len(kEntries))
-		for _, kEntry := range kEntries {
-			entry, err := m.parseEntry(&kEntry)
-			if err != nil {
-				continue
-			}
-			entries = append(entries, entry)
-		}
-		return entries, nil
-	}
-
-	// Fallback: in-memory substring matching
-	entries, err := m.ListEntries()
-	if err != nil {
-		return nil, err
-	}
-
-	q := strings.ToLower(query)
-	var results []Entry
-	for i := range entries {
-		e := &entries[i]
-		if strings.Contains(strings.ToLower(e.Service), q) ||
-			strings.Contains(strings.ToLower(e.Username), q) ||
-			strings.Contains(strings.ToLower(e.Description), q) {
-			results = append(results, *e)
-		}
-	}
-	return results, nil
-}
-
 // DeleteEntry removes a password entry and its metadata
 func (m *Manager) DeleteEntry(service, username string, entryType EntryType) error {
 	serviceKey, err := m.generateServiceKey(service, username, entryType)

@@ -39,7 +39,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from
 - **macOS Keychain, If You Choose** — Store secrets in the Keychain instead (`backend = "keychain"`), or keep the vault but its key in the Keychain (`key_source = "keychain"`)
 - **Encrypted Export** — Portable backups protected by a password, safe to transfer between machines (`--format encrypted`)
-- **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes with full-text search
+- **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes, and find them by any part of a service or user name
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
 - **Shell Completion** — Tab completion for commands, flags, and their values in bash, zsh, and fish (`sesh completion zsh`)
 - **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically. Supports non-standard configs (SHA-256/SHA-512, 8 digits, custom periods) extracted from QR codes

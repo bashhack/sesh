@@ -196,7 +196,7 @@ sesh supports two storage backends, selected by the `backend` setting (`SESH_BAC
 - Pure-Go SQLite via `modernc.org/sqlite` — zero C dependencies
 - AES-256-GCM encryption with per-entry salts
 - Argon2id key derivation for per-entry keys
-- FTS5 full-text search across service, account, and description
+- Search by service name or username, matching any part and ignoring case; the password manager does it the same way for both backends
 - Audit log table tracking all access, modifications, and deletions
 - Pluggable master key source (see below)
 - WAL mode for concurrent read safety
@@ -269,12 +269,11 @@ Each entry is a keychain item keyed by `{namespace}/{segments}` (built by `keyfo
 
 **SQLite Data Model**
 
-The SQLite backend (the default) stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `passwords_fts` is a virtual FTS5 index shadowing the `passwords` table; `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
+The SQLite backend (the default) stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 erDiagram
-    passwords ||--|| passwords_fts : "FTS5 shadow (content='passwords')"
     passwords }o..|| key_metadata : "key_version (logical)"
     passwords ||..o{ audit_log : "entry_id (logical, nullable)"
 
@@ -306,12 +305,6 @@ erDiagram
         TEXT entry_id "→ passwords.id, nullable for auth events"
         TEXT detail
         DATETIME created_at
-    }
-
-    passwords_fts {
-        TEXT service "indexed"
-        TEXT account "indexed"
-        TEXT metadata "indexed"
     }
 ```
 
@@ -561,15 +554,6 @@ type SubshellProvider interface {
 }
 ```
 
-This same pattern (from Go's io package) is also used by the password manager's `Searcher` interface — the SQLite store implements FTS5 search via `SearchEntries()`, while the keychain backend falls back to in-memory substring matching. The manager uses a type assertion to dispatch:
-
-```go
-// Exists today: FTS search dispatch
-type Searcher interface {
-    SearchEntries(query string) ([]keychain.KeychainEntry, error)
-}
-```
-
 The pattern enables future capabilities without breaking existing providers:
 
 ```go
@@ -681,7 +665,7 @@ sesh/
 │   │   ├── aws/           # AWS provider
 │   │   ├── totp/          # TOTP provider
 │   │   └── password/      # Password manager provider
-│   ├── database/          # SQLite store, encryption, FTS, migrations
+│   ├── database/          # SQLite store, encryption, migrations
 │   ├── password/          # Password manager core (CRUD, search, filter)
 │   ├── keychain/          # macOS Keychain integration
 │   ├── secure/            # Memory security

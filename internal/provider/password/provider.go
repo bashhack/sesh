@@ -10,8 +10,6 @@ import (
 	"os"
 	"strings"
 
-	"unicode/utf8"
-
 	"golang.org/x/term"
 
 	"github.com/bashhack/sesh/internal/env"
@@ -57,6 +55,9 @@ var (
 	}
 	stdinIsTerminal = func() bool {
 		return term.IsTerminal(int(os.Stdin.Fd()))
+	}
+	stdoutIsTerminal = func() bool {
+		return term.IsTerminal(int(os.Stdout.Fd()))
 	}
 	scanQRCodeFull = qrcode.ScanQRCodeFull
 )
@@ -537,50 +538,6 @@ func (p *Provider) getPassword(mgr *password.Manager) (provider.Credentials, err
 	}, nil
 }
 
-func (p *Provider) searchPasswords(mgr *password.Manager) (provider.Credentials, error) {
-	entries, err := mgr.SearchEntries(p.query)
-	if err != nil {
-		return provider.Credentials{}, err
-	}
-
-	if len(entries) == 0 {
-		return provider.Credentials{
-			Provider:    p.Name(),
-			DisplayInfo: fmt.Sprintf("No entries matching %q", p.query),
-		}, nil
-	}
-
-	if p.format == "json" {
-		b, err := json.MarshalIndent(entries, "", "  ")
-		if err != nil {
-			return provider.Credentials{}, fmt.Errorf("marshal JSON output: %w", err)
-		}
-		return provider.Credentials{
-			Provider:    p.Name(),
-			DisplayInfo: string(b),
-		}, nil
-	}
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Found %s matching %q:\n", entryCount(len(entries)), p.query)
-	q := strings.ToLower(p.query)
-	for i := range entries {
-		e := &entries[i]
-		name := e.Service
-		if e.Username != "" {
-			name = fmt.Sprintf("%s (%s)", e.Service, e.Username)
-		}
-		// Highlight matching portion in service name
-		highlighted := highlightMatch(name, q)
-		fmt.Fprintf(&sb, "  %-30s [%s] %s\n", highlighted, e.Type, e.Description)
-	}
-
-	return provider.Credentials{
-		Provider:    p.Name(),
-		DisplayInfo: sb.String(),
-	}, nil
-}
-
 func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error) {
 	// Offer QR code scanning option
 	fmt.Fprintln(os.Stderr, "How would you like to provide the TOTP secret?")
@@ -833,23 +790,6 @@ func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, e
 		Provider:    p.Name(),
 		DisplayInfo: sb.String(),
 	}, nil
-}
-
-// highlightMatch wraps the first case-insensitive occurrence of query in text
-// with ANSI bold escape codes. Skips highlighting for non-ASCII input:
-// strings.ToLower can change byte lengths for some Unicode (e.g. Turkish
-// "İ" → "i\u0307"), so byte-index slicing into the original text would
-// land mid-rune and produce mojibake.
-func highlightMatch(text, query string) string {
-	if utf8.RuneCountInString(text) != len(text) || utf8.RuneCountInString(query) != len(query) {
-		return text
-	}
-	lower := strings.ToLower(text)
-	idx := strings.Index(lower, query)
-	if idx < 0 {
-		return text
-	}
-	return text[:idx] + "\033[1m" + text[idx:idx+len(query)] + "\033[0m" + text[idx+len(query):]
 }
 
 // entryCount says how many entries, as "1 entry" or "n entries".

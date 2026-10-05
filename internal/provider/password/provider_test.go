@@ -174,50 +174,6 @@ func TestListEntriesWithFilters(t *testing.T) {
 	}
 }
 
-func TestHighlightMatch(t *testing.T) {
-	tests := map[string]struct {
-		text     string
-		query    string
-		expected string
-	}{
-		"match at start": {
-			text: "github", query: "git",
-			expected: "\033[1mgit\033[0mhub",
-		},
-		"match in middle": {
-			text: "my-github-account", query: "github",
-			expected: "my-\033[1mgithub\033[0m-account",
-		},
-		"no match": {
-			text: "stripe", query: "github",
-			expected: "stripe",
-		},
-		"case insensitive match": {
-			text: "GitHub", query: "github",
-			expected: "\033[1mGitHub\033[0m",
-		},
-		"non-ASCII text skips highlighting": {
-			// Turkish "İ" lowercases to "i\u0307" (two bytes becomes three),
-			// so byte-level slicing could land mid-rune; bail out cleanly.
-			text: "İstanbul", query: "stan",
-			expected: "İstanbul",
-		},
-		"non-ASCII query skips highlighting": {
-			text: "strasse", query: "ß",
-			expected: "strasse",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got := highlightMatch(tc.text, tc.query)
-			if got != tc.expected {
-				t.Errorf("highlightMatch(%q, %q) = %q, want %q", tc.text, tc.query, got, tc.expected)
-			}
-		})
-	}
-}
-
 func TestDeleteEntryWithForce(t *testing.T) {
 	deleted := false
 	mock := &mocks.MockProvider{
@@ -603,54 +559,6 @@ func TestGetPassword_JSONFormat(t *testing.T) {
 	}
 	if payload.Password != "s3cret" {
 		t.Errorf("json.password = %q, want s3cret", payload.Password)
-	}
-}
-
-func TestSearchPasswords_NoMatches(t *testing.T) {
-	mock := &mocks.MockProvider{
-		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
-			return nil, nil
-		},
-	}
-
-	p, _ := newTestProvider(mock)
-	p.action = "search"
-	p.query = "nonexistent"
-
-	creds, err := p.GetCredentials()
-	if err != nil {
-		t.Fatalf("GetCredentials: %v", err)
-	}
-	if !strings.Contains(creds.DisplayInfo, "No entries matching") {
-		t.Errorf("DisplayInfo = %q, want 'No entries matching'", creds.DisplayInfo)
-	}
-}
-
-func TestSearchPasswords_MatchingEntries(t *testing.T) {
-	mock := &mocks.MockProvider{
-		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
-			return []keychain.KeychainEntry{
-				{Service: "sesh-password/password/github/alice", Account: "testuser"},
-				{Service: "sesh-password/password/stripe", Account: "testuser"},
-			}, nil
-		},
-	}
-
-	p, _ := newTestProvider(mock)
-	p.action = "search"
-	p.query = "git"
-
-	creds, err := p.GetCredentials()
-	if err != nil {
-		t.Fatalf("GetCredentials: %v", err)
-	}
-	if !strings.Contains(creds.DisplayInfo, "Found 1 entry") {
-		t.Errorf("DisplayInfo = %q, want to include 'Found 1 entry'", creds.DisplayInfo)
-	}
-	// "github" prints with the matched "git" wrapped in ANSI bold, so the
-	// literal substring isn't contiguous — check for the unhighlighted tail.
-	if !strings.Contains(creds.DisplayInfo, "hub") {
-		t.Errorf("DisplayInfo = %q, want to include the matched entry", creds.DisplayInfo)
 	}
 }
 
