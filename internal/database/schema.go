@@ -141,8 +141,8 @@ func migrateV1(tx *sql.Tx) error {
 }
 
 // migrateV4 drops the full-text index v1 made, and the triggers that kept
-// it in step: search matches service names and usernames in Go, the same
-// way for every backend, so nothing reads the index.
+// it in step: search matches service names and usernames in Go, so
+// nothing reads the index.
 func migrateV4(tx *sql.Tx) error {
 	for _, q := range []string{
 		`DROP TRIGGER IF EXISTS passwords_ai`,

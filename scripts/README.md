@@ -69,23 +69,6 @@ sesh --service aws --setup
 - Shows usage instructions
 - Explains how to test error scenarios
 
-### 🔍 `decode_metadata.go`
-**Purpose**: Decodes and displays keychain metadata entries for debugging.
-
-**Usage**:
-```bash
-# Pass base64 data directly
-go run decode_metadata.go <base64-data>
-
-# Or pipe from keychain
-security find-generic-password -a metadata -s sesh-metadata -w | go run decode_metadata.go
-```
-
-**What it does**:
-- Reads base64-encoded, zstd-compressed metadata from keychain
-- Decodes and pretty-prints the JSON structure
-- Helps debug issues with stored TOTP/AWS/password entries
-
 ## Testing Workflows
 
 ### Testing AWS Setup Without Real AWS
@@ -149,7 +132,6 @@ cd scripts
 
 # Run directly
 go run mock-totp-service.go
-go run decode_metadata.go <base64-data>
 
 # Build the mock AWS CLI
 go build -o mock-bin/aws mock-aws-cli.go

@@ -42,8 +42,8 @@ const separators = " -_./@:+"
 // in an entry's service name (ranked best when it is the whole name, then
 // its start, then a word's start, then anywhere), then its username in the
 // same order, then its kind. An entry's rank adds up its words'; the most
-// recently updated comes first among equals. Both backends search this
-// way. An empty query matches nothing.
+// recently updated comes first among equals. An empty query matches
+// nothing.
 func (m *Manager) SearchEntries(query string) ([]Entry, error) {
 	words := strings.Fields(strings.ToLower(query))
 	if len(words) == 0 {

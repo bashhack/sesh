@@ -609,9 +609,8 @@ sesh is a CLI tool — every invocation should feel instant. The design avoids u
 
 - **Selective execution**: All providers are registered at startup, but only the selected provider's `SetupFlags` → `ValidateRequest` → `GetCredentials` chain runs. No eager initialization.
 - **No framework overhead**: Direct macOS `security` command for keychain, Go's standard `flag` package for parsing, no logging framework in the hot path.
-- **Compressed metadata**: Entry metadata is stored as a zstd-compressed blob in a single keychain entry, keeping keychain operations minimal regardless of how many entries exist.
 
-The dominant cost in any sesh invocation is the keychain read (OS security check) and, for the AWS provider, the network round-trip to AWS STS.
+The dominant cost in any sesh invocation is unlocking the vault (deriving the key from the master password, unless the agent already holds it, or the Keychain read with the Keychain key) and, for the AWS provider, the network round-trip to AWS STS.
 
 ## Implementation Details
 
