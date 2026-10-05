@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // keyCheckPlaintext is what the vault's check value decrypts to under the
@@ -69,7 +70,7 @@ func (s *Store) CheckKey(source string) error {
 	if err := s.verifyAnEntry(source); err != nil {
 		return err
 	}
-	checkData, checkSalt, err := s.oracle.EncryptEntry([]byte(keyCheckPlaintext))
+	checkData, checkSalt, err := s.oracle.EncryptEntry([]byte(keyCheckPlaintext), nil)
 	if err != nil {
 		return fmt.Errorf("encrypt vault key check: %w", err)
 	}
@@ -98,13 +99,16 @@ func (s *Store) VerifyKey(source string) error {
 // verifyAnEntry decrypts one entry, if the vault has any.
 func (s *Store) verifyAnEntry(source string) error {
 	var data, salt []byte
-	switch err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries LIMIT 1`).Scan(&data, &salt); {
+	var kind string
+	var k vault.Key
+	switch err := s.db.QueryRow(`SELECT kind, service, username, encrypted_data, salt FROM entries LIMIT 1`).Scan(&kind, &k.Service, &k.Username, &data, &salt); {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil
 	case err != nil:
 		return fmt.Errorf("read an entry to check the vault key: %w", err)
 	}
-	plain, err := s.oracle.DecryptEntry(data, salt)
+	k.Kind = vault.Kind(kind)
+	plain, err := s.oracle.DecryptEntry(data, salt, entryAAD(k))
 	secure.SecureZeroBytes(plain)
 	if err != nil {
 		return &WrongKeyError{Source: source}
@@ -128,7 +132,7 @@ func (s *Store) verifyKeyCheck(source string) error {
 		}
 		return fmt.Errorf("read vault key check: %w", err)
 	}
-	plain, err := s.oracle.DecryptEntry(data, salt)
+	plain, err := s.oracle.DecryptEntry(data, salt, nil)
 	defer secure.SecureZeroBytes(plain)
 	if err != nil || !bytes.Equal(plain, []byte(keyCheckPlaintext)) {
 		return &WrongKeyError{VaultSource: recorded, Source: source}

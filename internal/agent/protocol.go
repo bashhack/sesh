@@ -15,7 +15,7 @@ import (
 // Versioning rule: bump on any change that breaks the wire format
 // (new required field, type change, removed message). Adding optional
 // fields with omitempty does not require a bump.
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 // Message-type sentinels. Centralised so the dispatch and the message
 // structs can't drift apart.
@@ -179,6 +179,7 @@ type DecryptRequest struct {
 	UnlockID   string `json:"unlock_id"`
 	Ciphertext []byte `json:"ciphertext"`
 	Salt       []byte `json:"salt"`
+	AAD        []byte `json:"aad"` // as given to Encrypt
 	Version    int    `json:"version"`
 }
 
@@ -195,6 +196,7 @@ type EncryptRequest struct {
 	Type      string `json:"type"`
 	UnlockID  string `json:"unlock_id"`
 	Plaintext []byte `json:"plaintext"`
+	AAD       []byte `json:"aad"` // authenticated, not encrypted; binds the ciphertext to an entry
 	Version   int    `json:"version"`
 }
 

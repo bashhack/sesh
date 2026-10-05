@@ -29,23 +29,23 @@ func NewOracle(conn *Conn, unlockID string) *Oracle {
 	return &Oracle{conn: conn, unlockID: unlockID}
 }
 
-func (o *Oracle) EncryptEntry(plaintext []byte) ([]byte, []byte, error) {
+func (o *Oracle) EncryptEntry(plaintext, aad []byte) ([]byte, []byte, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.closed {
 		return nil, nil, fmt.Errorf("agent oracle is closed")
 	}
-	ct, salt, err := Encrypt(o.conn, plaintext, o.unlockID)
+	ct, salt, err := Encrypt(o.conn, plaintext, aad, o.unlockID)
 	return ct, salt, userFacing(err)
 }
 
-func (o *Oracle) DecryptEntry(encryptedData, salt []byte) ([]byte, error) {
+func (o *Oracle) DecryptEntry(encryptedData, salt, aad []byte) ([]byte, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.closed {
 		return nil, fmt.Errorf("agent oracle is closed")
 	}
-	plain, err := Decrypt(o.conn, encryptedData, salt, o.unlockID)
+	plain, err := Decrypt(o.conn, encryptedData, salt, aad, o.unlockID)
 	return plain, userFacing(err)
 }
 

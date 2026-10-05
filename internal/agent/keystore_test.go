@@ -44,11 +44,11 @@ func TestKeystore_UnlockAndRoundTrip(t *testing.T) {
 		t.Fatalf("unlock id = %q, want %q", id, UnlockID(verify))
 	}
 
-	ct, entrySalt, err := ks.Encrypt([]byte("secret"), id)
+	ct, entrySalt, err := ks.Encrypt([]byte("secret"), nil, id)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-	got, err := ks.Decrypt(ct, entrySalt, id)
+	got, err := ks.Decrypt(ct, entrySalt, nil, id)
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestKeystore_WrongPasswordStaysLocked(t *testing.T) {
 
 func TestKeystore_DecryptBeforeUnlock(t *testing.T) {
 	var ks keystore
-	_, err := ks.Decrypt([]byte("ct"), []byte("salt"), "")
+	_, err := ks.Decrypt([]byte("ct"), []byte("salt"), nil, "")
 	if !errors.Is(err, errNotUnlocked) {
 		t.Fatalf("Decrypt err = %v, want locked", err)
 	}
@@ -85,7 +85,7 @@ func TestKeystore_ReUnlockReplacesKey(t *testing.T) {
 	if err := ks.Unlock([]byte("password-a"), saltA, verifyA, params); err != nil {
 		t.Fatal(err)
 	}
-	ct, entrySalt, err := ks.Encrypt([]byte("secret"), UnlockID(verifyA))
+	ct, entrySalt, err := ks.Encrypt([]byte("secret"), nil, UnlockID(verifyA))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,10 +94,10 @@ func TestKeystore_ReUnlockReplacesKey(t *testing.T) {
 	if err := ks.Unlock([]byte("password-b"), saltB, verifyB, params); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ks.Decrypt(ct, entrySalt, UnlockID(verifyA)); !errors.Is(err, errUnlockMismatch) {
+	if _, err := ks.Decrypt(ct, entrySalt, nil, UnlockID(verifyA)); !errors.Is(err, errUnlockMismatch) {
 		t.Fatalf("decrypt with the old id err = %v, want unlock mismatch", err)
 	}
-	if _, err := ks.Decrypt(ct, entrySalt, UnlockID(verifyB)); !errors.Is(err, errDecryptFailed) {
+	if _, err := ks.Decrypt(ct, entrySalt, nil, UnlockID(verifyB)); !errors.Is(err, errDecryptFailed) {
 		t.Fatalf("decrypt under the new key err = %v, want decrypt failed", err)
 	}
 	if id := ks.snapshot().unlockID; id != UnlockID(verifyB) {
@@ -140,7 +140,7 @@ func TestKeystore_ShutdownClearsKeyAndRefusesUnlock(t *testing.T) {
 		t.Error("Unlock ran Argon2id after shutdown")
 		return orig(password, salt, p)
 	}
-	if _, err := ks.Decrypt([]byte("ct"), []byte("0123456789abcdef"), UnlockID(verify)); !errors.Is(err, errNotUnlocked) {
+	if _, err := ks.Decrypt([]byte("ct"), []byte("0123456789abcdef"), nil, UnlockID(verify)); !errors.Is(err, errNotUnlocked) {
 		t.Fatalf("Decrypt after shutdown err = %v, want locked", err)
 	}
 	if err := ks.Unlock([]byte("correct-horse"), salt, verify, params); !errors.Is(err, errShutDown) {
@@ -183,11 +183,11 @@ func TestKeystore_ConcurrentUnlocksLeaveOneKey(t *testing.T) {
 	if id != UnlockID(verifyA) && id != UnlockID(verifyB) {
 		t.Fatalf("unlock id = %q, want one of the two passwords", id)
 	}
-	ct, entrySalt, err := ks.Encrypt([]byte("secret"), id)
+	ct, entrySalt, err := ks.Encrypt([]byte("secret"), nil, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := ks.Decrypt(ct, entrySalt, id)
+	got, err := ks.Decrypt(ct, entrySalt, nil, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestKeystore_IdleTimeoutLocksAfterInactivity(t *testing.T) {
 func TestKeystore_ActivityRestartsIdleTimer(t *testing.T) {
 	ks, clk, verify := timedKeystore(t, 10*time.Minute, 0)
 	clk.advance(6 * time.Minute)
-	if _, _, err := ks.Encrypt([]byte("x"), UnlockID(verify)); err != nil {
+	if _, _, err := ks.Encrypt([]byte("x"), nil, UnlockID(verify)); err != nil {
 		t.Fatal(err)
 	}
 	clk.advance(6 * time.Minute) // past the original deadline
@@ -383,7 +383,7 @@ func TestKeystore_MaxLifetimeLocksDespiteActivity(t *testing.T) {
 	ks, clk, verify := timedKeystore(t, 10*time.Minute, time.Hour)
 	for range 11 {
 		clk.advance(5 * time.Minute)
-		if _, _, err := ks.Encrypt([]byte("x"), UnlockID(verify)); err != nil {
+		if _, _, err := ks.Encrypt([]byte("x"), nil, UnlockID(verify)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -446,7 +446,7 @@ func TestKeystore_LocksAtIsEarlierDeadline(t *testing.T) {
 		t.Fatalf("locksAt = %v, want the idle deadline", got)
 	}
 	clk.advance(8 * time.Minute)
-	if _, _, err := ks.Encrypt([]byte("x"), ks.snapshot().unlockID); err != nil {
+	if _, _, err := ks.Encrypt([]byte("x"), nil, ks.snapshot().unlockID); err != nil {
 		t.Fatal(err)
 	}
 	if got := ks.snapshot().locksAt; !got.Equal(start.Add(15 * time.Minute)) {
@@ -484,7 +484,7 @@ func TestKeystore_ActivityAtIdleDeadlineKeepsKey(t *testing.T) {
 	clk.stopIgnored = true // the old idle timer is already running when activity restarts it
 	clk.mu.Unlock()
 	clk.advance(10*time.Minute - time.Second)
-	if _, _, err := ks.Encrypt([]byte("x"), UnlockID(verify)); err != nil {
+	if _, _, err := ks.Encrypt([]byte("x"), nil, UnlockID(verify)); err != nil {
 		t.Fatal(err)
 	}
 	clk.advance(time.Second) // the old deadline passes; the new one is 10m away

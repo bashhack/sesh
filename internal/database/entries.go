@@ -16,6 +16,13 @@ import (
 
 var _ vault.Store = (*Store)(nil)
 
+// entryAAD binds an entry's ciphertext to its key: a secret copied into
+// another entry's row doesn't decrypt there. The vault key check encrypts
+// with none, so neither can stand in for the other.
+func entryAAD(k vault.Key) []byte {
+	return []byte("sesh-entry\x00" + k.String())
+}
+
 func notFound(k vault.Key) error {
 	return fmt.Errorf("%w: %s", vault.ErrNotFound, k)
 }
@@ -53,7 +60,7 @@ func (s *Store) Get(k vault.Key) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", k, err)
 	}
-	secret, err := s.oracle.DecryptEntry(encData, salt)
+	secret, err := s.oracle.DecryptEntry(encData, salt, entryAAD(k))
 	if err != nil {
 		return nil, fmt.Errorf("decrypt %s: %w", k, err)
 	}
@@ -84,7 +91,7 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
 	if err != nil {
 		return err
 	}
-	encData, salt, err := s.oracle.EncryptEntry(secret)
+	encData, salt, err := s.oracle.EncryptEntry(secret, entryAAD(e.Key))
 	if err != nil {
 		return fmt.Errorf("encrypt %s: %w", e.Key, err)
 	}

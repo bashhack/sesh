@@ -472,7 +472,7 @@ func (s *Server) dispatchDecrypt(conn *net.UnixConn, raw []byte) bool {
 		s.sendError(conn, ErrCodeBadRequest, err.Error())
 		return true
 	}
-	plain, err := s.keys.Decrypt(req.Ciphertext, req.Salt, req.UnlockID)
+	plain, err := s.keys.Decrypt(req.Ciphertext, req.Salt, req.AAD, req.UnlockID)
 	if err != nil {
 		s.sendError(conn, keystoreErrCode(err), err.Error())
 		return true
@@ -494,7 +494,7 @@ func (s *Server) dispatchEncrypt(conn *net.UnixConn, raw []byte) bool {
 		return true
 	}
 	defer secure.SecureZeroBytes(req.Plaintext)
-	ciphertext, salt, err := s.keys.Encrypt(req.Plaintext, req.UnlockID)
+	ciphertext, salt, err := s.keys.Encrypt(req.Plaintext, req.AAD, req.UnlockID)
 	if err != nil {
 		s.sendError(conn, keystoreErrCode(err), err.Error())
 		return true

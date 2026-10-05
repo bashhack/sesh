@@ -24,7 +24,7 @@ func TestWriteJSON_AppendsNewlineFraming(t *testing.T) {
 }
 
 func TestReadEnvelope_DecodesTypeAndVersion(t *testing.T) {
-	line := `{"type":"hello","version":1}` + "\n"
+	line := `{"type":"hello","version":2}` + "\n"
 	r := bufio.NewReader(strings.NewReader(line))
 	env, raw, err := readEnvelope(r)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestReadEnvelope_ReturnsEOFOnCleanDisconnect(t *testing.T) {
 }
 
 func TestReadEnvelope_TruncatedFrame_ReturnsError(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader(`{"type":"hello","version":1`))
+	r := bufio.NewReader(strings.NewReader(`{"type":"hello","version":2`))
 	_, _, err := readEnvelope(r)
 	if err == nil {
 		t.Fatal("readEnvelope accepted a truncated frame")
@@ -151,9 +151,9 @@ func TestRoundTrip_AllMessageTypes(t *testing.T) {
 func TestProtocolVersion_IsStable(t *testing.T) {
 	// Bumping ProtocolVersion is intentional but must be a conscious
 	// decision — this test makes the bump visible in code review.
-	const expected = 1
+	const expected = 2
 	if ProtocolVersion != expected {
-		t.Fatalf("ProtocolVersion changed to %d; if intentional, update this test and SESH_AGENT_PHASE_*_PLAN.md / SECURITY_MODEL.md as needed", ProtocolVersion)
+		t.Fatalf("ProtocolVersion changed to %d; if intentional, update this test and SECURITY_MODEL.md as needed", ProtocolVersion)
 	}
 }
 

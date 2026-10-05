@@ -140,7 +140,7 @@ func TestEncryptEntryDecryptEntry(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			encData, salt, err := EncryptEntry(tc.masterKey, tc.plaintext)
+			encData, salt, err := EncryptEntry(tc.masterKey, tc.plaintext, nil)
 			if err != nil {
 				t.Fatalf("EncryptEntry: %v", err)
 			}
@@ -149,7 +149,7 @@ func TestEncryptEntryDecryptEntry(t *testing.T) {
 				t.Fatalf("expected 16-byte salt, got %d", len(salt))
 			}
 
-			got, err := DecryptEntry(tc.masterKey, encData, salt)
+			got, err := DecryptEntry(tc.masterKey, encData, salt, nil)
 			if err != nil {
 				t.Fatalf("DecryptEntry: %v", err)
 			}
@@ -165,12 +165,12 @@ func TestEncryptEntryUniqueSalts(t *testing.T) {
 	masterKey := bytes.Repeat([]byte{0xAB}, 32)
 	plaintext := []byte("same-data")
 
-	_, salt1, err := EncryptEntry(masterKey, plaintext)
+	_, salt1, err := EncryptEntry(masterKey, plaintext, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, salt2, err := EncryptEntry(masterKey, plaintext)
+	_, salt2, err := EncryptEntry(masterKey, plaintext, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,5 +270,21 @@ func TestArgon2idParamsMarshalRoundTrip(t *testing.T) {
 	// non-comparable field (e.g. a slice).
 	if !reflect.DeepEqual(got, params) {
 		t.Fatalf("round-trip failed: got %+v, want %+v", got, params)
+	}
+}
+
+func TestEncryptEntry_BindsTheAssociatedData(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	ct, salt, err := EncryptEntry(key, []byte("secret"), []byte("entry-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := DecryptEntry(key, ct, salt, []byte("entry-a")); err != nil || string(got) != "secret" {
+		t.Errorf("DecryptEntry with the same data = %q, %v", got, err)
+	}
+	for _, other := range [][]byte{[]byte("entry-b"), nil} {
+		if _, err := DecryptEntry(key, ct, salt, other); err == nil {
+			t.Errorf("DecryptEntry with associated data %q succeeded, want an error", other)
+		}
 	}
 }

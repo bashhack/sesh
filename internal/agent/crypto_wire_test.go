@@ -35,7 +35,7 @@ func TestServer_UnlockDecryptEncryptStatus(t *testing.T) {
 	}
 
 	id := UnlockID(verify)
-	if _, err := Decrypt(conn, []byte("nope"), []byte("salt"), id); err == nil {
+	if _, err := Decrypt(conn, []byte("nope"), []byte("salt"), nil, id); err == nil {
 		t.Fatal("decrypt before unlock succeeded")
 	} else {
 		var pe *ProtocolError
@@ -43,7 +43,7 @@ func TestServer_UnlockDecryptEncryptStatus(t *testing.T) {
 			t.Fatalf("decrypt before unlock err = %v, want not_unlocked", err)
 		}
 	}
-	if _, _, err := Encrypt(conn, []byte("nope"), id); err == nil {
+	if _, _, err := Encrypt(conn, []byte("nope"), nil, id); err == nil {
 		t.Fatal("encrypt before unlock succeeded")
 	} else {
 		var pe *ProtocolError
@@ -63,16 +63,29 @@ func TestServer_UnlockDecryptEncryptStatus(t *testing.T) {
 		t.Fatalf("status after unlock = %+v", st)
 	}
 
-	ct, entrySalt, err := Encrypt(conn, []byte("secret"), id)
+	ct, entrySalt, err := Encrypt(conn, []byte("secret"), nil, id)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-	got, err := Decrypt(conn, ct, entrySalt, id)
+	got, err := Decrypt(conn, ct, entrySalt, nil, id)
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
 	if !bytes.Equal(got, []byte("secret")) {
 		t.Fatalf("plaintext = %q", got)
+	}
+
+	// The associated data travels with the request: a secret sealed for
+	// one entry doesn't open as another's.
+	ct, entrySalt, err = Encrypt(conn, []byte("secret"), []byte("entry-a"), id)
+	if err != nil {
+		t.Fatalf("Encrypt with associated data: %v", err)
+	}
+	if got, err := Decrypt(conn, ct, entrySalt, []byte("entry-a"), id); err != nil || !bytes.Equal(got, []byte("secret")) {
+		t.Fatalf("Decrypt with the same associated data = %q, %v", got, err)
+	}
+	if _, err := Decrypt(conn, ct, entrySalt, []byte("entry-b"), id); err == nil {
+		t.Fatal("Decrypt with another entry's associated data succeeded")
 	}
 }
 
@@ -144,7 +157,7 @@ func TestServer_DecryptCorruptCiphertext(t *testing.T) {
 	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Decrypt(conn, []byte("not-a-ciphertext"), []byte("0123456789abcdef"), UnlockID(verify))
+	_, err := Decrypt(conn, []byte("not-a-ciphertext"), []byte("0123456789abcdef"), nil, UnlockID(verify))
 	var pe *ProtocolError
 	if !errors.As(err, &pe) || pe.Code != ErrCodeDecryptFailed {
 		t.Fatalf("Decrypt err = %v, want decrypt_failed", err)
@@ -163,7 +176,7 @@ func TestServer_EncryptRejectsStaleUnlockID(t *testing.T) {
 	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := Encrypt(conn, []byte("secret"), "not-the-id")
+	_, _, err := Encrypt(conn, []byte("secret"), nil, "not-the-id")
 	var pe *ProtocolError
 	if !errors.As(err, &pe) || pe.Code != ErrCodeUnlockMismatch {
 		t.Fatalf("Encrypt err = %v, want unlock_mismatch", err)
@@ -202,11 +215,11 @@ func TestServer_MaxSizeSecretRoundTrip(t *testing.T) {
 	id := UnlockID(verify)
 
 	secret := bytes.Repeat([]byte{0xff}, database.MaxSecretSize)
-	ct, entrySalt, err := Encrypt(conn, secret, id)
+	ct, entrySalt, err := Encrypt(conn, secret, nil, id)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-	got, err := Decrypt(conn, ct, entrySalt, id)
+	got, err := Decrypt(conn, ct, entrySalt, nil, id)
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
@@ -258,12 +271,12 @@ func TestOracle_ConcurrentEncryptDecrypt(t *testing.T) {
 	for range n {
 		go func() {
 			defer wg.Done()
-			ct, entrySalt, err := ks.EncryptEntry([]byte("secret"))
+			ct, entrySalt, err := ks.EncryptEntry([]byte("secret"), nil)
 			if err != nil {
 				errCh <- err
 				return
 			}
-			got, err := ks.DecryptEntry(ct, entrySalt)
+			got, err := ks.DecryptEntry(ct, entrySalt, nil)
 			if err != nil {
 				errCh <- err
 				return
@@ -297,11 +310,11 @@ func TestOracle_TimeoutRetiresConnection(t *testing.T) {
 	ks := NewOracle(conn, "id")
 	defer ks.Close()
 
-	if _, err := ks.DecryptEntry([]byte("secret-of-A"), []byte("salt")); err == nil {
+	if _, err := ks.DecryptEntry([]byte("secret-of-A"), []byte("salt"), nil); err == nil {
 		t.Fatal("first decrypt succeeded, want a timeout")
 	}
 	time.Sleep(300 * time.Millisecond) // A's late reply is now on the wire
-	got, err := ks.DecryptEntry([]byte("secret-of-B"), []byte("salt"))
+	got, err := ks.DecryptEntry([]byte("secret-of-B"), []byte("salt"), nil)
 	if err == nil {
 		t.Fatalf("second decrypt returned %q, want an error on the retired connection", got)
 	}
@@ -362,10 +375,10 @@ func TestOracle_ClosedRefusesRequests(t *testing.T) {
 	o := NewOracle(dialClient(t, sockPath), "id")
 	o.Close()
 	o.Close() // second Close is a no-op
-	if _, _, err := o.EncryptEntry([]byte("x")); err == nil || !strings.Contains(err.Error(), "agent oracle is closed") {
+	if _, _, err := o.EncryptEntry([]byte("x"), nil); err == nil || !strings.Contains(err.Error(), "agent oracle is closed") {
 		t.Fatalf("EncryptEntry after Close err = %v, want agent oracle is closed", err)
 	}
-	if _, err := o.DecryptEntry([]byte("x"), []byte("salt")); err == nil || !strings.Contains(err.Error(), "agent oracle is closed") {
+	if _, err := o.DecryptEntry([]byte("x"), []byte("salt"), nil); err == nil || !strings.Contains(err.Error(), "agent oracle is closed") {
 		t.Fatalf("DecryptEntry after Close err = %v, want agent oracle is closed", err)
 	}
 }

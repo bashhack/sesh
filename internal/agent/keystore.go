@@ -211,27 +211,27 @@ func (k *keystore) wrapKey(unlockID, purpose string, pub []byte) (keywrap.Wrappe
 	return w, nil
 }
 
-func (k *keystore) Decrypt(ciphertext, salt []byte, unlockID string) ([]byte, error) {
+func (k *keystore) Decrypt(ciphertext, salt, aad []byte, unlockID string) ([]byte, error) {
 	keyCopy, err := k.copyKey(unlockID)
 	if err != nil {
 		return nil, err
 	}
 	defer secure.SecureZeroBytes(keyCopy)
 
-	plain, err := database.DecryptEntry(keyCopy, ciphertext, salt)
+	plain, err := database.DecryptEntry(keyCopy, ciphertext, salt, aad)
 	if err != nil {
 		return nil, errDecryptFailed
 	}
 	return plain, nil
 }
 
-func (k *keystore) Encrypt(plaintext []byte, unlockID string) (ciphertext, salt []byte, err error) {
+func (k *keystore) Encrypt(plaintext, aad []byte, unlockID string) (ciphertext, salt []byte, err error) {
 	keyCopy, err := k.copyKey(unlockID)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer secure.SecureZeroBytes(keyCopy)
-	return database.EncryptEntry(keyCopy, plaintext)
+	return database.EncryptEntry(keyCopy, plaintext, aad)
 }
 
 // lock zeroes the cached key and cancels both timers, logging reason. A

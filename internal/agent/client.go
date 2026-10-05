@@ -70,13 +70,14 @@ func Unlock(conn *Conn, password, salt, verify []byte, params database.Argon2idP
 
 // Decrypt asks the agent to open one entry blob. unlockID is the
 // verify-blob id the caller was built for.
-func Decrypt(conn *Conn, ciphertext, salt []byte, unlockID string) ([]byte, error) {
+func Decrypt(conn *Conn, ciphertext, salt, aad []byte, unlockID string) ([]byte, error) {
 	raw, err := roundTrip(conn, DecryptRequest{
 		Type:       TypeDecrypt,
 		Version:    ProtocolVersion,
 		UnlockID:   unlockID,
 		Ciphertext: ciphertext,
 		Salt:       salt,
+		AAD:        aad,
 	}, TypeDecryptAck)
 	if err != nil {
 		return nil, err
@@ -91,12 +92,13 @@ func Decrypt(conn *Conn, ciphertext, salt []byte, unlockID string) ([]byte, erro
 // Encrypt asks the agent to seal plaintext. The agent chooses the salt.
 // plaintext is only read, so the caller still owns it. unlockID is the
 // verify-blob id the caller was built for.
-func Encrypt(conn *Conn, plaintext []byte, unlockID string) (ciphertext, salt []byte, err error) {
+func Encrypt(conn *Conn, plaintext, aad []byte, unlockID string) (ciphertext, salt []byte, err error) {
 	raw, err := roundTrip(conn, EncryptRequest{
 		Type:      TypeEncrypt,
 		Version:   ProtocolVersion,
 		UnlockID:  unlockID,
 		Plaintext: plaintext,
+		AAD:       aad,
 	}, TypeEncryptAck)
 	if err != nil {
 		return nil, nil, err
