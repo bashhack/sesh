@@ -335,8 +335,8 @@ func (s *Server) dispatch(conn *net.UnixConn, env envelope, raw []byte) bool {
 		return s.dispatchUnlock(conn, raw)
 	case TypeUnlockTouchID:
 		return s.dispatchUnlockTouchID(conn, raw)
-	case TypeTouchIDWrap:
-		return s.dispatchTouchIDWrap(conn, raw)
+	case TypeWrapKey:
+		return s.dispatchWrapKey(conn, raw)
 	case TypeDecrypt:
 		return s.dispatchDecrypt(conn, raw)
 	case TypeEncrypt:
@@ -424,20 +424,24 @@ func (s *Server) dispatchUnlockTouchID(conn *net.UnixConn, raw []byte) bool {
 	return true
 }
 
-func (s *Server) dispatchTouchIDWrap(conn *net.UnixConn, raw []byte) bool {
-	var req TouchIDWrapRequest
+func (s *Server) dispatchWrapKey(conn *net.UnixConn, raw []byte) bool {
+	var req WrapKeyRequest
 	if err := decodeMessage(raw, &req); err != nil {
 		s.sendError(conn, ErrCodeBadRequest, err.Error())
 		return true
 	}
-	w, err := s.keys.wrapForTouchID(req.UnlockID, req.PublicKey)
+	w, err := s.keys.wrapKey(req.UnlockID, req.Purpose, req.PublicKey)
 	if err != nil {
 		s.sendError(conn, keystoreErrCode(err), err.Error())
 		return true
 	}
-	s.log.printf("wrapped the key for Touch ID")
-	return writeJSON(conn, TouchIDWrapResponse{
-		Type:         TypeTouchIDWrapAck,
+	if req.Purpose == WrapForRecovery {
+		s.log.printf("wrapped the key for a recovery key")
+	} else {
+		s.log.printf("wrapped the key for Touch ID")
+	}
+	return writeJSON(conn, WrapKeyResponse{
+		Type:         TypeWrapKeyAck,
 		Version:      ProtocolVersion,
 		EphemeralPub: w.EphemeralPub,
 		Ciphertext:   w.Ciphertext,

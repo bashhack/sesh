@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +10,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
@@ -83,11 +84,6 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		return fmt.Errorf("stat database: %w", err)
 	}
 	preBackupPath := dbPath + rekeyBackupSuffix
-	if _, err := os.Stat(preBackupPath); err == nil {
-		return fmt.Errorf("backup path %s already exists; remove it (or rename to preserve a prior backup) and retry", preBackupPath)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat backup path: %w", err)
-	}
 	if err := checkTargetKeyStateClean(*target, dataDir, kc); err != nil {
 		return err
 	}
@@ -112,6 +108,11 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		backupPath      string
 		originalRenamed bool
 	)
+	// The key-change lock, once taken, is released by this deferred call,
+	// registered before the rollback's so it runs after it: no other change
+	// can start while rollback is still putting files back.
+	release := func() {}
+	defer func() { release() }() //nolint:gocritic // the wrapper calls release as reassigned later; `defer release()` would bind the no-op now
 
 	defer func() {
 		if srcStoreOpen {
@@ -138,7 +139,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 			}
 		}
 		if originalRenamed {
-			if rerr := os.Rename(backupPath, dbPath); rerr != nil {
+			if rerr := renameFile(backupPath, dbPath); rerr != nil {
 				err = appendErr(err, fmt.Sprintf("restore original DB to %s", dbPath), rerr)
 			}
 		}
@@ -153,6 +154,17 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if err := srcStore.VerifyKey(current); err != nil {
 		return fmt.Errorf("check source key: %w", withKeyHint(err))
 	}
+	// One key change at a time: held until this one ends, so another can't
+	// clear the files this one's rollback needs.
+	if release, err = lockKeyChange(dataDir); err != nil {
+		release = func() {}
+		return err
+	}
+	// The vault opens with its key, so copies left by an earlier change
+	// (from an older sesh, or one that was interrupted) serve no purpose.
+	if err := removeLeftovers(app.Stderr, keyChangeLeftovers(dbPath, filepath.Join(dataDir, sidecarFile))...); err != nil {
+		return err
+	}
 
 	plan, err := migration.Plan(srcStore)
 	if err != nil {
@@ -165,7 +177,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if _, perr := fmt.Fprintf(app.Stderr, "  source DB:           %s\n", dbPath); perr != nil {
 		return perr
 	}
-	if _, perr := fmt.Fprintf(app.Stderr, "  rollback file after: %s%s\n", dbPath, rekeyBackupSuffix); perr != nil {
+	if _, perr := fmt.Fprintln(app.Stderr, "  The old vault is kept until the new one is in place, then removed."); perr != nil {
 		return perr
 	}
 	confirmed, err := promptYesNo(app.Stdin, app.Stderr, "\nProceed? [y/N]: ")
@@ -213,6 +225,9 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if len(result.Errors) > 0 {
 		return fmt.Errorf("copy reported %d errors:\n  %s", len(result.Errors), strings.Join(result.Errors, "\n  "))
 	}
+	if err := checkCopied(destStore, *target, len(plan)); err != nil {
+		return err
+	}
 
 	// Close stores BEFORE rename so SQLite checkpoints WAL and removes the
 	// -wal/-shm sidecars; otherwise the rename leaves orphans.
@@ -230,11 +245,11 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	// a concurrent open during this interval will fail with ENOENT. POSIX
 	// has no portable atomic-two-file-swap, so we accept the window for
 	// this single-user CLI.
-	if err := os.Rename(dbPath, backupPath); err != nil {
+	if err := renameFile(dbPath, backupPath); err != nil {
 		return fmt.Errorf("rename source DB to backup: %w", err)
 	}
 	originalRenamed = true
-	if err := os.Rename(destPath, dbPath); err != nil {
+	if err := renameFile(destPath, dbPath); err != nil {
 		return fmt.Errorf("rename destination into place: %w", err)
 	}
 
@@ -247,14 +262,17 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	// Touch ID unlock is removed before any output for the same reason: its
 	// wrap no longer matches the vault's key source.
 	touchNote := dropTouchID(dataDir)
+	recoveryNote := dropRecovery(dataDir)
+	copiesNote := removeOldCopies(backupPath)
+	keyNote := removeOldKeyState(current, dataDir, kc)
 
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRekeyed %d entries: %s → %s\n", result.Migrated, current, *target); perr != nil {
 		return perr
 	}
-	if _, perr := fmt.Fprintf(app.Stderr, "Original DB preserved at %s\n", backupPath); perr != nil {
+	if _, perr := fmt.Fprintln(app.Stderr, copiesNote); perr != nil {
 		return perr
 	}
-	if msg := unusedKeyStateNote(current, dataDir); msg != "" {
+	if msg := keyNote; msg != "" {
 		if _, perr := fmt.Fprintln(app.Stderr, msg); perr != nil {
 			return perr
 		}
@@ -262,13 +280,11 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	if _, perr := fmt.Fprintln(app.Stderr, updateKeySourceSetting(st, *target)); perr != nil {
 		return perr
 	}
-	if touchNote != "" {
-		if _, perr := fmt.Fprintln(app.Stderr, touchNote); perr != nil {
-			return perr
+	for _, msg := range []string{touchNote, recoveryNote, agentNote} {
+		if msg == "" {
+			continue
 		}
-	}
-	if agentNote != "" {
-		if _, perr := fmt.Fprintln(app.Stderr, agentNote); perr != nil {
+		if _, perr := fmt.Fprintln(app.Stderr, msg); perr != nil {
 			return perr
 		}
 	}
@@ -408,18 +424,34 @@ func cleanupNewKeyState(target, dataDir string, kc keychain.Provider) error {
 	}
 }
 
-// unusedKeyStateNote returns a user-facing message about the now-unused old
-// key state, or empty if there's nothing to say.
-func unusedKeyStateNote(oldSource, dataDir string) string {
+// removeOldKeyState deletes the key state the vault used before a switch:
+// the master password sidecar (and its lock), or the Keychain key. sesh
+// keeps one vault per user, so that key state was this vault's alone, and
+// once the switch has succeeded it opens nothing. Left in place, it would
+// only stop a later switch back. It returns a line to show, or "" when
+// there was nothing to remove.
+func removeOldKeyState(oldSource, dataDir string, kc keychain.Provider) string {
 	switch oldSource {
 	case "password":
 		path := filepath.Join(dataDir, sidecarFile)
-		if _, err := os.Stat(path); err == nil {
-			return fmt.Sprintf("Note: old master-password sidecar at %s is now unused. Remove it manually if you want to clean up.", path)
+		if _, err := os.Stat(path); err != nil {
+			return ""
 		}
-		return ""
+		for _, p := range []string{path, path + ".lock"} {
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return fmt.Sprintf("warning: couldn't remove the old %s (%v); remove it yourself: %s", filepath.Base(p), err, p)
+			}
+		}
+		return "Removed the old passwords.key: the vault no longer uses a master password."
 	case "keychain":
-		return "Note: old keychain entry '" + encKeyService + "' is now unused. Remove it via Keychain Access if you want to clean up."
+		u, err := user.Current()
+		if err == nil {
+			err = kc.DeleteEntry(u.Username, encKeyService)
+		}
+		if err != nil {
+			return fmt.Sprintf("warning: couldn't remove the old Keychain key (%v); remove it yourself: security delete-generic-password -s %s", err, encKeyService)
+		}
+		return "Removed the old Keychain key (" + encKeyService + "): the vault no longer uses it."
 	default:
 		return ""
 	}
@@ -440,13 +472,26 @@ func unusedKeyStateNote(oldSource, dataDir string) string {
 // cfg is the prompt configuration shared by source and target sources.
 // Production passes resolvePasswordPrompt(); tests inject a sequenced
 // prompt that returns the old password first, then the new one twice.
-func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
+func runRotateMasterPassword(app *App, cfg passwordPromptConfig) error {
+	newKey, err := rotateMasterPassword(app, cfg, nil)
+	secure.SecureZeroBytes(newKey)
+	return err
+}
+
+// rotateMasterPassword re-encrypts the vault under a new master password.
+// src opens the vault as it is; nil asks for the current master password.
+// A recovery passes the key its recovery key opened, and then replaces the
+// recovery key itself, so it isn't re-wrapped here. Once the new vault is
+// in place it returns the new vault key, which the caller must zero, even
+// if writing the summary then fails: a non-nil key means the change
+// committed.
+func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySource) (newKey []byte, err error) {
 	st, err := settings()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if st.Backend.Value != config.BackendSQLite {
-		return errNeedsSQLite("rotate")
+		return nil, errNeedsSQLite("rotate")
 	}
 
 	dbPath := st.DBPath.Value
@@ -460,45 +505,44 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 
 	if _, err := os.Stat(dbPath); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("no database to rotate at %s", dbPath)
+			return nil, fmt.Errorf("no database to rotate at %s", dbPath)
 		}
-		return fmt.Errorf("stat database: %w", err)
+		return nil, fmt.Errorf("stat database: %w", err)
 	}
 	if _, err := os.Stat(sidecarPath); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("no sidecar to rotate at %s — is the master password key source actually in use?", sidecarPath)
+			return nil, fmt.Errorf("no sidecar to rotate at %s — is the master password key source actually in use?", sidecarPath)
 		}
-		return fmt.Errorf("stat sidecar: %w", err)
-	}
-	// Refuse if any staging or backup file from a prior attempt is still
-	// around. Clobbering a prior backup would silently destroy a recovery
-	// path; clobbering a prior staging file might silently mix old and
-	// new state.
-	for _, p := range []string{dbNewPath, dbBackupPath, sidecarNewPath, sidecarBackupPath} {
-		if _, err := os.Stat(p); err == nil {
-			return fmt.Errorf("path %s exists from a prior rotation; remove it (or rename to preserve a prior backup) and retry", p)
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("stat %s: %w", p, err)
-		}
+		return nil, fmt.Errorf("stat sidecar: %w", err)
 	}
 
-	srcKS := cfg.newSource(dataDir)
+	srcKS := src
+	if srcKS == nil {
+		srcKS = cfg.newSource(dataDir)
+	}
 	srcStore, err := database.Open(dbPath, database.NewKeySourceOracle(srcKS))
 	if err != nil {
-		return fmt.Errorf("open source database: %w", err)
+		return nil, fmt.Errorf("open source database: %w", err)
 	}
 
 	// Rollback state — same shape as runRekey. Anything *true / non-empty
 	// when err != nil gets unwound; commit zeros them so cleanup no-ops.
 	var (
-		destStore      *database.Store
-		destStoreOpen  bool
-		destDBCreated  bool
-		newSidecarMade bool
-		srcStoreOpen   = true
-		dbRenamed      bool
-		sidecarRenamed bool
+		destStore       *database.Store
+		destStoreOpen   bool
+		destDBCreated   bool
+		newSidecarMade  bool
+		srcStoreOpen    = true
+		staging         bool
+		dbRenamed       bool
+		oldSidecarMoved bool
+		sidecarRenamed  bool
 	)
+	// The key-change lock, once taken, is released by this deferred call,
+	// registered before the rollback's so it runs after it: no other change
+	// can start while rollback is still putting files back.
+	release := func() {}
+	defer func() { release() }() //nolint:gocritic // the wrapper calls release as reassigned later; `defer release()` would bind the no-op now
 
 	defer func() {
 		if srcStoreOpen {
@@ -524,20 +568,27 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 				err = appendErr(err, "rollback remove staged sidecar", rerr)
 			}
 		}
-		// The lock-file sentinel (sidecarNewPath + ".lock") gets created
-		// by initializeLocked the moment we open it with O_CREATE — that
-		// happens before any password prompt, so it can be on disk even
-		// when newSidecarMade is false (e.g. mismatched-confirm errors
-		// thrown from initialize). Remove it unconditionally; IsNotExist
-		// handles the never-created case.
-		if rerr := os.Remove(sidecarNewPath + ".lock"); rerr != nil && !os.IsNotExist(rerr) {
-			err = appendErr(err, "rollback remove staged sidecar lock", rerr)
+		// The staged sidecar's lock (sidecarNewPath + ".lock") is created
+		// by initializeLocked the moment it's opened, before any prompt, so
+		// it can exist even when newSidecarMade is false (e.g. a mismatched
+		// confirmation). It's this change's only once staging has begun;
+		// before that, it may belong to another change.
+		if staging {
+			if rerr := os.Remove(sidecarNewPath + ".lock"); rerr != nil && !os.IsNotExist(rerr) {
+				err = appendErr(err, "rollback remove staged sidecar lock", rerr)
+			}
 		}
-		// If only the DB rename succeeded, restore it. The sidecar is
-		// still canonical at this point (rename happens after DB).
+		// Put back whatever the swap had already moved aside: the old DB,
+		// and the old sidecar if it had been moved but the new one never
+		// took its place.
 		if dbRenamed && !sidecarRenamed {
-			if rerr := os.Rename(dbBackupPath, dbPath); rerr != nil {
+			if rerr := renameFile(dbBackupPath, dbPath); rerr != nil {
 				err = appendErr(err, fmt.Sprintf("restore original DB to %s", dbPath), rerr)
+			}
+		}
+		if oldSidecarMoved && !sidecarRenamed {
+			if rerr := renameFile(sidecarBackupPath, sidecarPath); rerr != nil {
+				err = appendErr(err, fmt.Sprintf("restore original sidecar to %s", sidecarPath), rerr)
 			}
 		}
 	}()
@@ -547,39 +598,49 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	// TTY — driven by cfg.interactive.
 	srcKey, err := srcKS.GetEncryptionKey()
 	if err != nil {
-		return fmt.Errorf("unlock current sidecar: %w", err)
+		return nil, fmt.Errorf("unlock current sidecar: %w", err)
 	}
 	secure.SecureZeroBytes(srcKey)
 	if err := srcStore.VerifyKey("password"); err != nil {
-		return fmt.Errorf("check current key: %w", withKeyHint(err))
+		return nil, fmt.Errorf("check current key: %w", withKeyHint(err))
 	}
+	// One key change at a time: held until this one ends, so another can't
+	// clear the files this one's rollback needs.
+	if release, err = lockKeyChange(dataDir); err != nil {
+		release = func() {}
+		return nil, err
+	}
+	// The vault opens with its key, so files left by an earlier change
+	// (from an older sesh, or one that was interrupted) serve no purpose,
+	// and the staged ones must go before new ones are made.
+	if err := removeLeftovers(app.Stderr, keyChangeLeftovers(dbPath, sidecarPath)...); err != nil {
+		return nil, err
+	}
+	staging = true // from here, staged files and their lock are this change's
 
 	plan, err := migration.Plan(srcStore)
 	if err != nil {
-		return fmt.Errorf("scan source: %w", err)
+		return nil, fmt.Errorf("scan source: %w", err)
 	}
 
 	if _, perr := fmt.Fprintf(app.Stderr, "About to rotate master password and re-encrypt %d entries.\n", len(plan)); perr != nil {
-		return perr
+		return nil, perr
 	}
 	if _, perr := fmt.Fprintf(app.Stderr, "  source DB:           %s\n", dbPath); perr != nil {
-		return perr
+		return nil, perr
 	}
-	if _, perr := fmt.Fprintf(app.Stderr, "  rollback DB after:   %s\n", dbBackupPath); perr != nil {
-		return perr
-	}
-	if _, perr := fmt.Fprintf(app.Stderr, "  rollback sidecar:    %s\n", sidecarBackupPath); perr != nil {
-		return perr
+	if _, perr := fmt.Fprintln(app.Stderr, "  The old vault is kept until the new one is in place, then removed."); perr != nil {
+		return nil, perr
 	}
 	confirmed, err := promptYesNo(app.Stdin, app.Stderr, "\nProceed? [y/N]: ")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !confirmed {
 		if _, perr := fmt.Fprintln(app.Stderr, "Rotation cancelled."); perr != nil {
-			return perr
+			return nil, perr
 		}
-		return nil
+		return nil, nil
 	}
 
 	// Build the target source against the staged sidecar path. The first
@@ -589,7 +650,7 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	destKS := cfg.newSourceAtPath(sidecarNewPath)
 	destKey, err := destKS.GetEncryptionKey()
 	if err != nil {
-		return fmt.Errorf("create new sidecar: %w", err)
+		return nil, fmt.Errorf("create new sidecar: %w", err)
 	}
 	// Kept until the end: Touch ID unlock is re-wrapped with it after the
 	// swap, when destKS's cache has been cleared by closing destStore.
@@ -598,34 +659,37 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 
 	destStore, err = database.Open(dbNewPath, database.NewKeySourceOracle(destKS))
 	if err != nil {
-		return fmt.Errorf("open destination database: %w", err)
+		return nil, fmt.Errorf("open destination database: %w", err)
 	}
 	destStoreOpen = true
 	destDBCreated = true
 	if err := destStore.CheckKey("password"); err != nil {
-		return fmt.Errorf("record new key check: %w", err)
+		return nil, fmt.Errorf("record new key check: %w", err)
 	}
 	if err := destStore.InitKeyMetadata(); err != nil {
-		return fmt.Errorf("init target key metadata: %w", err)
+		return nil, fmt.Errorf("init target key metadata: %w", err)
 	}
 
 	result, err := migration.Migrate(srcStore, destStore)
 	if err != nil {
-		return fmt.Errorf("copy entries: %w", err)
+		return nil, fmt.Errorf("copy entries: %w", err)
 	}
 	if len(result.Errors) > 0 {
-		return fmt.Errorf("copy reported %d errors:\n  %s", len(result.Errors), strings.Join(result.Errors, "\n  "))
+		return nil, fmt.Errorf("copy reported %d errors:\n  %s", len(result.Errors), strings.Join(result.Errors, "\n  "))
+	}
+	if err := checkCopied(destStore, "password", len(plan)); err != nil {
+		return nil, err
 	}
 
 	// Close stores before rename so SQLite checkpoints WAL and removes
 	// the -wal/-shm sidecars; otherwise the rename leaves orphans.
 	if err := destStore.Close(); err != nil {
-		return fmt.Errorf("close destination store: %w", err)
+		return nil, fmt.Errorf("close destination store: %w", err)
 	}
 	destStore = nil
 	destStoreOpen = false
 	if err := srcStore.Close(); err != nil {
-		return fmt.Errorf("close source store: %w", err)
+		return nil, fmt.Errorf("close source store: %w", err)
 	}
 	srcStoreOpen = false
 
@@ -634,20 +698,21 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	// The rollback restores the DB rename. If the sidecar rename also
 	// fails after we've already swapped DB+sidecar, we're committed —
 	// surface both paths so the user can finish manually.
-	if err := os.Rename(dbPath, dbBackupPath); err != nil {
-		return fmt.Errorf("rename source DB to backup: %w", err)
+	if err := renameFile(dbPath, dbBackupPath); err != nil {
+		return nil, fmt.Errorf("rename source DB to backup: %w", err)
 	}
 	dbRenamed = true
-	if err := os.Rename(dbNewPath, dbPath); err != nil {
-		return fmt.Errorf("rename destination DB into place: %w", err)
+	if err := renameFile(dbNewPath, dbPath); err != nil {
+		return nil, fmt.Errorf("rename destination DB into place: %w", err)
 	}
 	destDBCreated = false // canonical now; rollback no longer applies
 
-	if err := os.Rename(sidecarPath, sidecarBackupPath); err != nil {
-		return fmt.Errorf("rename source sidecar to backup: %w (DB is now at %s; restore manually if needed)", err, dbPath)
+	if err := renameFile(sidecarPath, sidecarBackupPath); err != nil {
+		return nil, fmt.Errorf("rename source sidecar to backup: %w; the old vault and key file were put back", err)
 	}
-	if err := os.Rename(sidecarNewPath, sidecarPath); err != nil {
-		return fmt.Errorf("rename destination sidecar into place: %w (DB is at %s, old sidecar at %s, new sidecar at %s — finish the rename manually)", err, dbPath, sidecarBackupPath, sidecarNewPath)
+	oldSidecarMoved = true
+	if err := renameFile(sidecarNewPath, sidecarPath); err != nil {
+		return nil, fmt.Errorf("rename destination sidecar into place: %w; the old vault and key file were put back", err)
 	}
 	sidecarRenamed = true
 	newSidecarMade = false
@@ -655,6 +720,11 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	agentNote := lockAgentAfterRekey()
 	// Touch ID unlock is re-wrapped for the new key, also before any output.
 	touchNote := rewrapTouchID(dataDir, destKey)
+	recoveryNote := ""
+	if src == nil {
+		recoveryNote = rewrapRecovery(dataDir, destKey)
+	}
+	copiesNote := removeOldCopies(dbBackupPath, sidecarBackupPath)
 
 	// The .new.lock sentinel was created when destKS first ran
 	// initializeLocked. The .new sidecar it guarded has now been renamed
@@ -666,28 +736,20 @@ func runRotateMasterPassword(app *App, cfg passwordPromptConfig) (err error) {
 	}
 
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %d entries under a new master password.\n", result.Migrated); perr != nil {
-		return perr
+		return bytes.Clone(destKey), perr
 	}
-	if _, perr := fmt.Fprintf(app.Stderr, "Old DB preserved at %s\n", dbBackupPath); perr != nil {
-		return perr
+	if _, perr := fmt.Fprintln(app.Stderr, copiesNote); perr != nil {
+		return bytes.Clone(destKey), perr
 	}
-	if _, perr := fmt.Fprintf(app.Stderr, "Old sidecar preserved at %s\n", sidecarBackupPath); perr != nil {
-		return perr
-	}
-	if _, perr := fmt.Fprintln(app.Stderr, "Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available)."); perr != nil {
-		return perr
-	}
-	if touchNote != "" {
-		if _, perr := fmt.Fprintln(app.Stderr, touchNote); perr != nil {
-			return perr
+	for _, msg := range []string{touchNote, recoveryNote, agentNote} {
+		if msg == "" {
+			continue
+		}
+		if _, perr := fmt.Fprintln(app.Stderr, msg); perr != nil {
+			return bytes.Clone(destKey), perr
 		}
 	}
-	if agentNote != "" {
-		if _, perr := fmt.Fprintln(app.Stderr, agentNote); perr != nil {
-			return perr
-		}
-	}
-	return nil
+	return bytes.Clone(destKey), nil
 }
 
 // lockAgentAfterRekey locks a running, unlocked agent once the database is
@@ -724,10 +786,106 @@ func promptYesNo(stdin io.Reader, stderr io.Writer, prompt string) (bool, error)
 	if _, err := fmt.Fprint(stderr, prompt); err != nil {
 		return false, err
 	}
-	line, err := bufio.NewReader(stdin).ReadString('\n')
+	line, err := readAnswer(stdin)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, fmt.Errorf("read confirmation: %w", err)
 	}
 	answer := strings.TrimSpace(line)
 	return answer == "y" || answer == "Y", nil
 }
+
+// checkCopied confirms, before the new vault replaces the old one, that it
+// opens with its key and holds every entry planned.
+func checkCopied(dest *database.Store, source string, want int) error {
+	if err := dest.VerifyKey(source); err != nil {
+		return fmt.Errorf("check the new vault's key: %w", err)
+	}
+	got, err := migration.Plan(dest)
+	if err != nil {
+		return fmt.Errorf("check the new vault: %w", err)
+	}
+	if len(got) != want {
+		return fmt.Errorf("the new vault holds %d entries, but %d were copied; nothing was changed", len(got), want)
+	}
+	return nil
+}
+
+// removeOldCopies deletes the old vault's copy (and, for a password
+// change, its key file) once the new vault is in place. A copy would only
+// let the old password or key open the old contents; the change already
+// checked that the new vault works. It returns a line to show.
+func removeOldCopies(paths ...string) string {
+	var failed []string
+	for _, p := range paths {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			failed = append(failed, fmt.Sprintf("%s (%v)", p, err))
+		}
+	}
+	if len(failed) > 0 {
+		return "warning: couldn't remove the old vault's copy, which opens with the old key; remove it yourself: " + strings.Join(failed, ", ")
+	}
+	return "Removed the old vault's copy, so the old key no longer opens anything."
+}
+
+// keyChangeLeftovers are the files a password change or key-source switch
+// makes while it runs: staged new files, and copies of the old vault and
+// key file. Either kind of change clears both kinds, so a copy from one
+// can't outlive the other.
+func keyChangeLeftovers(dbPath, sidecarPath string) []string {
+	return []string{
+		dbPath + rekeyDestSuffix, dbPath + rekeyBackupSuffix, dbPath + rotateBackupSuffix,
+		sidecarPath + rekeyDestSuffix, sidecarPath + rekeyDestSuffix + ".lock", sidecarPath + rotateBackupSuffix,
+	}
+}
+
+// removeLeftovers deletes files an earlier change left behind, and says
+// which.
+func removeLeftovers(w io.Writer, paths ...string) error {
+	var removed []string
+	for _, p := range paths {
+		err := os.Remove(p)
+		switch {
+		case err == nil:
+			removed = append(removed, filepath.Base(p))
+		case !os.IsNotExist(err):
+			return fmt.Errorf("remove %s, left by an earlier change: %w", p, err)
+		}
+	}
+	if len(removed) > 0 {
+		if _, err := fmt.Fprintf(w, "Removed files left by an earlier change: %s\n", strings.Join(removed, ", ")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// keyChangeLockFile serialises key changes on a vault: a password change,
+// a key-source switch, or a recovery.
+const keyChangeLockFile = ".key-change.lock"
+
+// lockKeyChange takes the vault's key-change lock without waiting. Held from
+// before leftovers are cleared until the change ends, it stops a second
+// change from deleting the first one's in-progress copies, which its
+// rollback needs. The lock goes with the process, so a crash can't leave
+// it held.
+func lockKeyChange(dataDir string) (release func(), err error) {
+	path := filepath.Join(dataDir, keyChangeLockFile)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // next to the user's own vault
+	if err != nil {
+		return nil, fmt.Errorf("open the key-change lock: %w", err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close() //nolint:errcheck // already failing
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, errors.New("another sesh command is changing this vault's key; try again when it has finished")
+		}
+		return nil, fmt.Errorf("take the key-change lock: %w", err)
+	}
+	return func() {
+		_ = f.Close() //nolint:errcheck // closing releases the lock; nothing to do on failure
+	}, nil
+}
+
+// renameFile is os.Rename for the vault swaps and their rollback. Tests
+// replace it to make one step fail.
+var renameFile = os.Rename

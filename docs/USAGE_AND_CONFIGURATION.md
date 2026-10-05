@@ -144,7 +144,7 @@ sesh reads `~/.config/sesh/config.toml` on macOS and Linux (`$XDG_CONFIG_HOME/se
 ```toml
 backend           = "sqlite"            # or "keychain"
 key_source        = "password"          # or "keychain" (SQLite only)
-db_path           = "~/vaults/sesh.db"  # absolute, or starting with ~/
+db_path           = "~/vaults/sesh.db"  # where your vault lives: absolute, or starting with ~/
 clipboard_timeout = "30s"               # how long a copied secret stays on the clipboard
 
 [agent]
@@ -154,6 +154,8 @@ max_lifetime = "8h"                     # 0 disables
 [audit]
 retention_days = 90                     # days of audit log events to keep; 0 keeps everything
 ```
+
+sesh keeps one vault per user. `db_path` says where that vault lives; it isn't a way to keep several. To keep things apart inside it, use profiles (`--profile work`) and service names.
 
 Each setting comes from, highest first: a command-line flag (`--backend`, `--key-source`, `--db-path`; the agent's timeouts also have `sesh agent` flags), its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
 
@@ -290,10 +292,12 @@ Asking for the Keychain on Linux is an error that names the setting and where it
 sesh --service password --action store --service-name github --username alice
 # Creating your sesh vault (first run)
 #   Location: ~/Library/Application Support/sesh/passwords.db
-#   Your master password encrypts everything in the vault. It can't be
-#   recovered: if you forget it, the vault can't be opened. ...
+#   Your master password encrypts everything in the vault. sesh can't
+#   reset it: if you forget it, only a recovery key opens the vault ...
 # Create master password: ****
 # Confirm master password: ****
+# Make a recovery key, in case you forget your master password? [Y/n]
+# Unlock with Touch ID instead of typing your password? [Y/n]     (macOS)
 # Enter password for github (alice): ****
 
 # Later runs — no prompt while the agent is unlocked
@@ -321,9 +325,13 @@ sesh --service password --list
 
 #### Forgotten master password
 
-There is no recovery, by design. The master password is the only way to derive the vault's key: sesh doesn't store it, and nobody else can open the vault without it. After three wrong attempts at a terminal, sesh says so and points here.
+sesh can't reset it for you: the master password derives the vault's key, sesh doesn't store it, and there's no server that could help. After three wrong attempts at a terminal, sesh says so and points to your options:
 
-Your options:
+- **Use your recovery key**, if you made one (see [Recovery key](#recovery-key)). `sesh recover` asks for it, then for a new master password, and re-encrypts the vault:
+
+  ```bash
+  sesh recover
+  ```
 
 - **Restore from an encrypted export**, if you made one. Start a new vault (below), then import the export. It asks for the export's own password, which you chose when exporting:
 
@@ -346,7 +354,30 @@ Your options:
 
   The next command creates a new vault. sesh never deletes a vault for you. It refuses to create a new key next to an existing vault, so moving only some of the files won't work.
 
-To avoid ending up here, keep the master password somewhere safe and make an encrypted export from time to time (see [Encrypted exports](#encrypted-exports)).
+To avoid ending up here, make a recovery key, keep the master password somewhere safe, and make an encrypted export from time to time (see [Encrypted exports](#encrypted-exports)).
+
+### Recovery key
+
+A recovery key is a code you write down when you set it up, like `7P1J-V5ED-HW31-B0KB-HF0A-R4ST-0S81`. If you forget your master password, it lets you set a new one. sesh offers to make one when it creates a vault; you can also make one at any time:
+
+```bash
+sesh recovery new       # make a recovery key (replaces an earlier one)
+sesh recovery status    # does this vault have one, and since when
+sesh recovery remove    # stop it from opening the vault
+sesh recover            # forgot the master password? set a new one
+```
+
+**Making one.** sesh shows the key once, then asks you to type its last group. It's only saved after you do, so a key nobody wrote down never works. Store it the way you'd store a passport: on paper, away from the computer. sesh doesn't keep a copy and can't show it again.
+
+**Using it.** `sesh recover` asks for the key (any case; dashes and spaces optional; it reads I or L as 1 and O as 0), checks it, and asks for a new master password. The vault is re-encrypted as for a password change, and Touch ID unlock keeps working. Then:
+- the key you used stops working, because it's been taken out of its hiding place and typed in;
+- sesh offers a new one right away. If you decline, `sesh recovery status` shows that the vault has none.
+
+**What it means for security.** Anyone who has both your recovery key and your vault file can open the vault, with no other check, because sesh has no server to add one. That's why it's optional. It can't be guessed (128 random bits), but it can be found, so keep it away from the vault's computer. The `recovery.key` file next to the vault holds only a public key and the wrapped vault key; on its own it opens nothing.
+
+**Changes that affect it.**
+- **Changing your master password** (`sesh --rekey --to password`) keeps the recovery key working, with no prompt.
+- **Switching to the Keychain key source** removes it: a recovery key only works with a vault protected by a master password.
 
 ### Touch ID unlock (macOS)
 
@@ -514,11 +545,11 @@ sesh --rekey --to password
 # Confirm master password: ****
 # About to re-encrypt 12 entries: keychain → password
 #   source DB:           /Users/alice/Library/Application Support/sesh/passwords.db
-#   rollback file after: /Users/alice/Library/Application Support/sesh/passwords.db.pre-rekey
+#   The old vault is kept until the new one is in place, then removed.
 #
 # Proceed? [y/N]: y
 # Rekeyed 12 entries: keychain → password
-# Original DB preserved at /Users/alice/Library/Application Support/sesh/passwords.db.pre-rekey
+# Removed the old vault's copy, so the old key no longer opens anything.
 # Note: old keychain entry 'sesh-sqlite-encryption-key' is now unused. Remove it via Keychain Access if you want to clean up.
 
 # Set key_source = "password" in ~/.config/sesh/config.toml.
@@ -528,9 +559,9 @@ sesh --service password --list
 Behaviour:
 
 - **Atomic.** Either every entry is re-encrypted under the new source and the swap completes, or nothing changes. A copy failure cleans up the new key state and leaves the original database and original key state untouched.
-- **Recoverable.** On success, the original database is preserved at `<dbPath>.pre-rekey`. Verify the new state works, then remove the backup manually.
+- **No old copy left behind.** While it runs, the original database is kept as `<dbPath>.pre-rekey`, so a failure puts it back. Once the new vault is in place, and has been checked to open with the new key and hold every entry, that copy is removed: it would only let the old key open your secrets.
 - **Updates your setting.** When the key source came from the config file (or the default), rekey sets `key_source` in `~/.config/sesh/config.toml` to the new source, editing only that line so your comments stay. When it came from `SESH_KEY_SOURCE` or `--key-source`, rekey says what to change instead. If the setting is left stale, the vault's key check refuses the next command rather than using the old key.
-- **Old key state is left in place.** Switching from keychain → password leaves the keychain entry; switching from password → keychain leaves the sidecar. Both become unused but are not auto-deleted (so you have an additional rollback path). The summary message points at how to clean them up.
+- **The old key goes too.** Switching keychain → password removes the old Keychain key; switching password → keychain removes the old `passwords.key`. Once the switch has succeeded they open nothing, and leaving them would only block switching back. (sesh keeps one vault per user, so they were this vault's alone.)
 - **Refuses if the target is already initialised.** If a sidecar already exists for `--to password`, or a keychain entry already exists for `--to keychain`, rekey aborts and asks you to clean up manually before retrying.
 - **`--to password` while already in password mode is the rotation case.** See "Rotating your master password" below. The `keychain → keychain` analogue (rotating the random keychain key in place) is not yet supported.
 
@@ -546,30 +577,27 @@ A vault created before this check gets its check value the first time one of its
 
 ### Rotating your master password
 
-When the master password is the active key source (the default), `sesh --rekey --to password` rotates the master password in place: every entry is re-encrypted under a freshly-derived key from a new password you choose, and the old sidecar is preserved as a backup.
+When the master password is the active key source (the default), `sesh --rekey --to password` rotates the master password in place: every entry is re-encrypted under a freshly-derived key from a new password you choose. The old vault is kept only while the change runs.
 
 ```bash
 sesh --rekey --to password
 # Master password: ****                          # current password
 # About to rotate master password and re-encrypt 12 entries.
 #   source DB:           /Users/alice/Library/Application Support/sesh/passwords.db
-#   rollback DB after:   /Users/alice/Library/Application Support/sesh/passwords.db.pre-rotate
-#   rollback sidecar:    /Users/alice/Library/Application Support/sesh/passwords.key.pre-rotate
+#   The old vault is kept until the new one is in place, then removed.
 #
 # Proceed? [y/N]: y
 # Create master password: ****                   # new password
 # Confirm master password: ****
 # Rotated 12 entries under a new master password.
-# Old DB preserved at /Users/alice/Library/Application Support/sesh/passwords.db.pre-rotate
-# Old sidecar preserved at /Users/alice/Library/Application Support/sesh/passwords.key.pre-rotate
-# Verify the new password works, then remove the .pre-rotate backups (use `shred -u` if available).
+# Removed the old vault's copy, so the old key no longer opens anything.
 ```
 
 Behaviour:
 
 - **Atomic.** Either every entry is re-encrypted and both the DB + sidecar are swapped, or nothing changes. A copy failure cleans up the staging files and leaves the originals untouched.
-- **Recoverable on user error.** Both `passwords.db.pre-rotate` and `passwords.key.pre-rotate` are kept after success — if you discover later that you typo'd the new password during the confirm step, the old DB and sidecar are still there. Verify the new password works on real entries, then delete both `.pre-rotate` files (`shred -u` if your system has it).
-- **Refuses if any staging or backup file exists.** If a previous rotation crashed mid-flight or wasn't cleaned up, you'll be asked to remove the leftover `.new` / `.pre-rotate` files first. Clobbering them silently could destroy a recovery path.
+- **No old copy left behind.** While it runs, the old vault and key file are kept as `.pre-rotate`, so a failure puts them back. Once the new vault is in place, and has been checked to open with the new key and hold every entry, they're removed: a copy would let the old password, perhaps the reason you changed it, open your secrets. If you forget the new password, your recovery key sets another (see [Recovery key](#recovery-key)).
+- **Tidies up after older versions.** Files an earlier change left behind (older sesh versions kept the `.pre-rotate` copies; an interrupted change can leave `.new` files) are removed once your current password is verified, and sesh says which.
 - **Same Argon2id parameters as the original sidecar.** Rotation generates a new salt and re-derives, but does not bump KDF cost parameters. If you want to upgrade those, that's a separate operation (currently via encrypted export → import with a fresh sidecar).
 
 

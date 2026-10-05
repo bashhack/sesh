@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/touchid"
 )
 
@@ -63,9 +65,9 @@ func TestTouchID_WrapThenUnlockWithAFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := TouchIDWrap(conn, id, pub)
+	w, err := WrapKey(conn, id, WrapForTouchID, pub)
 	if err != nil {
-		t.Fatalf("TouchIDWrap: %v", err)
+		t.Fatalf("WrapKey: %v", err)
 	}
 	if err := Lock(conn); err != nil {
 		t.Fatal(err)
@@ -93,25 +95,58 @@ func TestTouchID_WrapThenUnlockWithAFingerprint(t *testing.T) {
 	}
 }
 
-func TestTouchIDWrap_Refused(t *testing.T) {
+func TestWrapKey_Refused(t *testing.T) {
 	sockPath := tempSocketPath(t)
 	serve(t, sockPath)
 	pub, _ := softwareChip(t, nil)
 	conn, _, id := unlockForTouchID(t, sockPath)
 	defer mustClose(t, conn)
 
-	if _, err := TouchIDWrap(conn, "another vault", pub); err == nil || !strings.Contains(err.Error(), ErrCodeUnlockMismatch) {
+	if _, err := WrapKey(conn, "another vault", WrapForTouchID, pub); err == nil || !strings.Contains(err.Error(), ErrCodeUnlockMismatch) {
 		t.Errorf("wrap for another vault: err = %v", err)
 	}
-	if _, err := TouchIDWrap(conn, id, []byte("not a key")); err == nil || !strings.Contains(err.Error(), ErrCodeBadRequest) {
+	if _, err := WrapKey(conn, id, WrapForTouchID, []byte("not a key")); err == nil || !strings.Contains(err.Error(), ErrCodeBadRequest) {
 		t.Errorf("wrap to a bad public key: err = %v", err)
+	}
+	if _, err := WrapKey(conn, id, "backup", pub); err == nil || !strings.Contains(err.Error(), `unknown wrap purpose "backup"`) {
+		t.Errorf("wrap for an unknown purpose: err = %v", err)
 	}
 	if err := Lock(conn); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := TouchIDWrap(conn, id, pub); err == nil || !strings.Contains(err.Error(), ErrCodeNotUnlocked) {
+	if _, err := WrapKey(conn, id, WrapForTouchID, pub); err == nil || !strings.Contains(err.Error(), ErrCodeNotUnlocked) {
 		t.Errorf("wrap while locked: err = %v", err)
 	}
+}
+
+// A wrap for a recovery key opens with that key, and not as a Touch ID wrap.
+func TestWrapKey_ForRecovery(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	var log logBuffer
+	serve(t, sockPath, withLogOutput(&log))
+	conn, verify, id := unlockForTouchID(t, sockPath)
+	defer mustClose(t, conn)
+
+	rk, err := recovery.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := rk.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := WrapKey(conn, id, WrapForRecovery, pub)
+	if err != nil {
+		t.Fatalf("WrapKey: %v", err)
+	}
+	key, err := rk.Unwrap(w, []byte(id))
+	if err != nil {
+		t.Fatalf("recovery key doesn't open the wrap: %v", err)
+	}
+	if opened, err := database.Decrypt(key, verify); err != nil || string(opened) != database.VerifyPlaintext {
+		t.Errorf("unwrapped key doesn't open the vault: %q, %v", opened, err)
+	}
+	waitForLog(t, &log, "wrapped the key for a recovery key")
 }
 
 func TestUnlockTouchID_Failures(t *testing.T) {
@@ -132,7 +167,7 @@ func TestUnlockTouchID_Failures(t *testing.T) {
 			pub, _ := softwareChip(t, tt.fail)
 			conn, verify, id := unlockForTouchID(t, sockPath)
 			defer mustClose(t, conn)
-			w, err := TouchIDWrap(conn, id, pub)
+			w, err := WrapKey(conn, id, WrapForTouchID, pub)
 			if err != nil {
 				t.Fatal(err)
 			}

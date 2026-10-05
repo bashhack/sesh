@@ -34,6 +34,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Extensible Plugin Architecture** — Add new authentication providers with a single interface
 - **Encrypted Vault by Default** — Secrets live in an encrypted SQLite vault (AES-256-GCM, Argon2id) unlocked with your master password, on macOS and Linux alike. No setup: the first command creates it
 - **Master-Password Agent** — A per-user background agent holds the key so you type the password once; it locks itself when idle and is hardened against memory inspection ([Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent))
+- **Recovery Key** — Optional: a code you write down when the vault is created; if you forget the master password, `sesh recover` uses it to set a new one. No server involved, and sesh keeps no copy
 - **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key (nothing in the Keychain); the password always works as a fallback
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from
 - **macOS Keychain, If You Choose** — Store secrets in the Keychain instead (`backend = "keychain"`), or keep the vault but its key in the Keychain (`key_source = "keychain"`)

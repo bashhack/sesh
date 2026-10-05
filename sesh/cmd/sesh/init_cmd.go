@@ -12,6 +12,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/touchid"
 )
 
@@ -82,12 +83,20 @@ func runInit(app *App, args []string) error {
 		if err := store.Close(); err != nil {
 			return fmt.Errorf("close vault: %w", err)
 		}
-		// A new vault was offered Touch ID as it was created; an existing one
-		// gets a pointer instead.
+		// A new vault was offered a recovery key and Touch ID as it was
+		// created; an existing one gets pointers instead. (Deferred, so the
+		// recovery tip, registered last, prints first.)
 		if existed && choices.keySource == config.KeySourcePassword && touchIDAvailable() {
 			if _, err := os.Stat(filepath.Join(filepath.Dir(choices.dbPath), touchid.FileName)); err != nil {
 				defer func() {
 					fmt.Fprintln(app.Stdout, "Tip: unlock with Touch ID instead of typing your password: sesh touchid enable") //nolint:errcheck // best-effort tip
+				}()
+			}
+		}
+		if existed && choices.keySource == config.KeySourcePassword {
+			if _, err := os.Stat(filepath.Join(filepath.Dir(choices.dbPath), recovery.FileName)); err != nil {
+				defer func() {
+					fmt.Fprintln(app.Stdout, "Tip: make a recovery key, in case you forget your master password: sesh recovery new") //nolint:errcheck // best-effort tip
 				}()
 			}
 		}

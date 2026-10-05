@@ -1,4 +1,4 @@
-package touchid
+package recovery
 
 import (
 	"encoding/json"
@@ -9,39 +9,34 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/atomicfile"
+	"github.com/bashhack/sesh/internal/keywrap"
 )
 
-// FileName is the Touch ID unlock file, kept next to the vault.
-const FileName = "touchid.key"
+// FileName is the recovery file, kept next to the vault.
+const FileName = "recovery.key"
 
 // fileVersion is the format written today.
 const fileVersion = 1
 
-// File is what unlocks one vault with Touch ID on this Mac: the Secure
-// Enclave key's blob and public key, and the vault key wrapped to it.
-// Nothing in it opens the vault without this Mac's Secure Enclave and an
-// enrolled finger.
+// File is what lets a recovery key open one vault: the recovery key's
+// public key, and the vault key wrapped to it. Nothing in it opens the
+// vault without the written-down recovery key.
 type File struct {
 	CreatedAt time.Time `json:"created_at"`
 	// UnlockID is the vault's unlock id; the wrap is bound to it.
 	UnlockID     string `json:"unlock_id"`
-	KeyBlob      []byte `json:"key_blob"`
 	PublicKey    []byte `json:"public_key"`
 	EphemeralPub []byte `json:"ephemeral_pub"`
 	Ciphertext   []byte `json:"ciphertext"`
-	// BiometryState identifies the fingerprints enrolled when the key was
-	// made (see BiometryState); empty when it couldn't be read.
-	BiometryState []byte `json:"biometry_state,omitempty"`
-	Version       int    `json:"version"`
+	Version      int    `json:"version"`
 }
 
-// NewFile assembles the file for a vault from a new Secure Enclave key and
-// the vault key wrapped to it.
-func NewFile(unlockID string, keyBlob, publicKey []byte, w Wrapped) *File {
+// NewFile assembles the file for a vault from a recovery key's public key
+// and the vault key wrapped to it.
+func NewFile(unlockID string, publicKey []byte, w keywrap.Wrapped) *File {
 	return &File{
 		Version:      fileVersion,
 		UnlockID:     unlockID,
-		KeyBlob:      keyBlob,
 		PublicKey:    publicKey,
 		EphemeralPub: w.EphemeralPub,
 		Ciphertext:   w.Ciphertext,
@@ -50,11 +45,11 @@ func NewFile(unlockID string, keyBlob, publicKey []byte, w Wrapped) *File {
 }
 
 // Wrapped returns the file's wrapped vault key.
-func (f *File) Wrapped() Wrapped {
-	return Wrapped{EphemeralPub: f.EphemeralPub, Ciphertext: f.Ciphertext}
+func (f *File) Wrapped() keywrap.Wrapped {
+	return keywrap.Wrapped{EphemeralPub: f.EphemeralPub, Ciphertext: f.Ciphertext}
 }
 
-// ReadFile reads the Touch ID file in dir. A missing file is an error
+// ReadFile reads the recovery file in dir. A missing file is an error
 // matching os.ErrNotExist.
 func ReadFile(dir string) (*File, error) {
 	path := filepath.Join(dir, FileName)
@@ -69,7 +64,7 @@ func ReadFile(dir string) (*File, error) {
 	if f.Version != fileVersion {
 		return nil, fmt.Errorf("read %s: unsupported version %d", path, f.Version)
 	}
-	if f.UnlockID == "" || len(f.KeyBlob) == 0 || len(f.PublicKey) == 0 || len(f.EphemeralPub) == 0 || len(f.Ciphertext) == 0 {
+	if f.UnlockID == "" || len(f.PublicKey) == 0 || len(f.EphemeralPub) == 0 || len(f.Ciphertext) == 0 {
 		return nil, fmt.Errorf("read %s: incomplete", path)
 	}
 	return &f, nil
@@ -88,7 +83,7 @@ func (f *File) Write(dir string) error {
 	return nil
 }
 
-// Remove deletes the Touch ID file in dir. A missing file is fine.
+// Remove deletes the recovery file in dir. A missing file is fine.
 func Remove(dir string) error {
 	if err := os.Remove(filepath.Join(dir, FileName)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err

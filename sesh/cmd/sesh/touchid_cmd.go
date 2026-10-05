@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -111,7 +110,7 @@ func enableTouchID(conn *agent.Conn, dataDir string, verify []byte) error {
 	if err != nil {
 		return fmt.Errorf("create the Touch ID key: %w", err)
 	}
-	w, err := agent.TouchIDWrap(conn, id, pub)
+	w, err := agent.WrapKey(conn, id, agent.WrapForTouchID, pub)
 	if err != nil {
 		return fmt.Errorf("wrap the vault key for Touch ID: %w", err)
 	}
@@ -292,7 +291,7 @@ func askYes(in io.Reader, w io.Writer, prompt string) (bool, error) {
 	if _, err := fmt.Fprint(w, prompt); err != nil {
 		return false, err
 	}
-	line, err := bufio.NewReader(in).ReadString('\n')
+	line, err := readAnswer(in)
 	if errors.Is(err, io.EOF) && strings.TrimSpace(line) == "" {
 		return false, nil
 	}

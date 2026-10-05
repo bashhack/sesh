@@ -267,25 +267,30 @@ func TestRekey_RefusesIfNoDatabase(t *testing.T) {
 	}
 }
 
-func TestRekey_RefusesIfBackupPathExists(t *testing.T) {
+func TestRekey_ClearsLeftovers(t *testing.T) {
 	env := setupRekeyEnv(t)
 	kc := newKCMock(hexKey())
 	populateKeychainStore(t, env, kc, map[string]string{
 		"sesh-password/password/github/alice": "hunter2",
 	})
-
-	if err := os.WriteFile(env.dbPath+rekeyBackupSuffix, []byte("stale"), 0o600); err != nil {
-		t.Fatalf("pre-create backup: %v", err)
+	for _, p := range []string{env.dbPath + rekeyBackupSuffix, env.dbPath + rekeyDestSuffix} {
+		if err := os.WriteFile(p, []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	app, _ := rekeyTestApp("")
-	err := runRekey(app, []string{"--to=password"}, kc)
-	if err == nil || !strings.Contains(err.Error(), "backup path") {
-		t.Fatalf("expected backup-path-exists error, got %v", err)
+	t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
+	app, stderr := rekeyTestApp("y\n")
+	if err := runRekey(app, []string{"--to=password"}, kc); err != nil {
+		t.Fatalf("rekey with leftovers: %v\n%s", err, stderr)
 	}
-
-	if _, err := os.Stat(env.sidecarPath); err == nil {
-		t.Errorf("sidecar should not exist after refusal")
+	if !strings.Contains(stderr.String(), "Removed files left by an earlier change: passwords.db.new, passwords.db.pre-rekey") {
+		t.Errorf("stderr missing the leftovers note:\n%s", stderr)
+	}
+	for _, p := range []string{env.dbPath + rekeyBackupSuffix, env.dbPath + rekeyDestSuffix} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s still exists (err %v)", p, err)
+		}
 	}
 }
 
@@ -358,17 +363,22 @@ func TestRekey_KeychainToPassword(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Rekeyed 3 entries") {
 		t.Errorf("stderr missing rekey summary:\n%s", stderr.String())
 	}
-	if _, err := os.Stat(env.dbPath + rekeyBackupSuffix); err != nil {
-		t.Errorf("backup DB missing: %v", err)
+	if _, err := os.Stat(env.dbPath + rekeyBackupSuffix); !os.IsNotExist(err) {
+		t.Errorf("the old vault's copy still exists (err %v)", err)
+	}
+	if !strings.Contains(stderr.String(), "Removed the old vault's copy, so the old key no longer opens anything.") {
+		t.Errorf("stderr missing the removal note:\n%s", stderr)
 	}
 	if _, err := os.Stat(env.sidecarPath); err != nil {
 		t.Errorf("new sidecar missing: %v", err)
 	}
-	// Old keychain entry left in place — the design contract.
-	if existing, err := kc.GetSecret(env.account, encKeyService); err != nil {
-		t.Errorf("old keychain entry should still exist: %v", err)
-	} else if len(existing) != 64 {
-		t.Errorf("old keychain entry hex length = %d, want 64", len(existing))
+	// sesh keeps one vault per user, so the old Keychain key is this
+	// vault's alone, and it opens nothing now.
+	if _, err := kc.GetSecret(env.account, encKeyService); !errors.Is(err, keychain.ErrNotFound) {
+		t.Errorf("old keychain entry still exists (err %v)", err)
+	}
+	if !strings.Contains(stderr.String(), "Removed the old Keychain key (sesh-sqlite-encryption-key): the vault no longer uses it.") {
+		t.Errorf("stderr missing the key removal note:\n%s", stderr)
 	}
 
 	services := make([]string, 0, len(entries))
@@ -403,8 +413,8 @@ func TestRekey_PasswordToKeychain(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Rekeyed 2 entries") {
 		t.Errorf("stderr missing rekey summary:\n%s", stderr.String())
 	}
-	if _, err := os.Stat(env.sidecarPath); err != nil {
-		t.Errorf("old sidecar should still exist: %v", err)
+	if _, err := os.Stat(env.sidecarPath); !os.IsNotExist(err) {
+		t.Errorf("old sidecar still exists (err %v)", err)
 	}
 	storedKey, err := kc.GetSecret(env.account, encKeyService)
 	if err != nil {
@@ -412,8 +422,8 @@ func TestRekey_PasswordToKeychain(t *testing.T) {
 	} else if len(storedKey) != 64 {
 		t.Errorf("new keychain entry hex length = %d, want 64", len(storedKey))
 	}
-	if _, err := os.Stat(env.dbPath + rekeyBackupSuffix); err != nil {
-		t.Errorf("backup DB missing: %v", err)
+	if _, err := os.Stat(env.dbPath + rekeyBackupSuffix); !os.IsNotExist(err) {
+		t.Errorf("the old vault's copy still exists (err %v)", err)
 	}
 
 	services := []string{"sesh-password/password/github/alice", "sesh-totp/github"}
@@ -549,11 +559,10 @@ func TestRekey_RoundtripKeychainPasswordKeychain(t *testing.T) {
 	}
 
 	t.Setenv("SESH_KEY_SOURCE", "password")
-	if err := os.Remove(env.dbPath + rekeyBackupSuffix); err != nil {
-		t.Fatalf("clean step-1 backup: %v", err)
-	}
 
-	kc2 := newKCMock(nil)
+	// The same Keychain as before: switching back works, since the first
+	// switch removed the old key rather than leaving it in the way.
+	kc2 := kc1
 	app2, _ := rekeyTestApp("y\n")
 	if err := runRekey(app2, []string{"--to=keychain"}, kc2); err != nil {
 		t.Fatalf("second rekey: %v", err)
@@ -647,23 +656,38 @@ func TestInitializeTargetKeySource_UnknownReturnsError(t *testing.T) {
 	}
 }
 
-func TestUnusedKeyStateNote(t *testing.T) {
+func TestRemoveOldKeyState(t *testing.T) {
 	dir := t.TempDir()
-	if got := unusedKeyStateNote("banana", dir); got != "" {
-		t.Errorf("unknown source should yield empty note, got %q", got)
+	if got := removeOldKeyState("banana", dir, newKCMock(nil)); got != "" {
+		t.Errorf("unknown source: %q", got)
 	}
-	if got := unusedKeyStateNote("keychain", dir); !strings.Contains(got, encKeyService) {
-		t.Errorf("keychain note should mention service name, got %q", got)
+	if got := removeOldKeyState("password", dir, nil); got != "" {
+		t.Errorf("no sidecar: %q", got)
 	}
-	if got := unusedKeyStateNote("password", dir); got != "" {
-		t.Errorf("password note with no sidecar should be empty, got %q", got)
+	sidecar := filepath.Join(dir, sidecarFile)
+	for _, p := range []string{sidecar, sidecar + ".lock"} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	sidecar := filepath.Join(dir, "passwords.key")
-	if err := os.WriteFile(sidecar, nil, 0o600); err != nil {
+	if got := removeOldKeyState("password", dir, nil); got != "Removed the old passwords.key: the vault no longer uses a master password." {
+		t.Errorf("password note = %q", got)
+	}
+	for _, p := range []string{sidecar, sidecar + ".lock"} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s still exists (err %v)", p, err)
+		}
+	}
+	kc := newKCMock(hexKey())
+	if got := removeOldKeyState("keychain", dir, kc); got != "Removed the old Keychain key (sesh-sqlite-encryption-key): the vault no longer uses it." {
+		t.Errorf("keychain note = %q", got)
+	}
+	u, err := user.Current()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := unusedKeyStateNote("password", dir); !strings.Contains(got, sidecar) {
-		t.Errorf("password note with sidecar should mention path, got %q", got)
+	if _, err := kc.GetSecret(u.Username, encKeyService); !errors.Is(err, keychain.ErrNotFound) {
+		t.Errorf("keychain entry still exists (err %v)", err)
 	}
 }
 
@@ -733,11 +757,13 @@ func TestRotate_PasswordChangesPassword(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Rotated 2 entries") {
 		t.Errorf("stderr missing rotation summary:\n%s", stderr.String())
 	}
-	if _, err := os.Stat(env.dbPath + rotateBackupSuffix); err != nil {
-		t.Errorf("DB backup missing at .pre-rotate: %v", err)
+	for _, p := range []string{env.dbPath + rotateBackupSuffix, env.sidecarPath + rotateBackupSuffix} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("old copy %s still exists (err %v)", p, err)
+		}
 	}
-	if _, err := os.Stat(env.sidecarPath + rotateBackupSuffix); err != nil {
-		t.Errorf("sidecar backup missing at .pre-rotate: %v", err)
+	if !strings.Contains(stderr.String(), "Removed the old vault's copy, so the old key no longer opens anything.") {
+		t.Errorf("stderr missing the removal note:\n%s", stderr)
 	}
 
 	// New password unlocks the rotated DB.
@@ -764,6 +790,10 @@ func TestRotate_PreservesPerEntryFreshness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeSidecar, err := os.ReadFile(env.sidecarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	app, _ := rekeyTestApp("y\n")
@@ -782,54 +812,12 @@ func TestRotate_PreservesPerEntryFreshness(t *testing.T) {
 
 	// Sidecar salt must also have changed (proves new KDF derivation, not
 	// just a re-encryption with the same derived key).
-	beforeSidecar, err := os.ReadFile(env.sidecarPath + rotateBackupSuffix)
-	if err != nil {
-		t.Fatalf("read backup sidecar: %v", err)
-	}
 	afterSidecar, err := os.ReadFile(env.sidecarPath)
 	if err != nil {
 		t.Fatalf("read rotated sidecar: %v", err)
 	}
 	if bytes.Equal(beforeSidecar, afterSidecar) {
-		t.Fatal("rotated sidecar identical to backup — salt was not regenerated")
-	}
-}
-
-func TestRotate_PasswordRefusesIfNewSidecarExists(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
-
-	if err := os.WriteFile(env.sidecarPath+rekeyDestSuffix, []byte("stale"), 0o600); err != nil {
-		t.Fatalf("pre-create staging sidecar: %v", err)
-	}
-
-	t.Setenv("SESH_MASTER_PASSWORD", "")
-	app, _ := rekeyTestApp("y\n")
-	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
-	err := runRotateMasterPassword(app, cfg)
-	if err == nil || !strings.Contains(err.Error(), "exists from a prior rotation") {
-		t.Fatalf("expected refusal because staging sidecar exists, got %v", err)
-	}
-}
-
-func TestRotate_PasswordRefusesIfBackupSidecarExists(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
-
-	if err := os.WriteFile(env.sidecarPath+rotateBackupSuffix, []byte("stale"), 0o600); err != nil {
-		t.Fatalf("pre-create backup sidecar: %v", err)
-	}
-
-	t.Setenv("SESH_MASTER_PASSWORD", "")
-	app, _ := rekeyTestApp("y\n")
-	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
-	err := runRotateMasterPassword(app, cfg)
-	if err == nil || !strings.Contains(err.Error(), "exists from a prior rotation") {
-		t.Fatalf("expected refusal because backup sidecar exists, got %v", err)
+		t.Fatal("rotated sidecar identical to the old one — salt was not regenerated")
 	}
 }
 
@@ -932,41 +920,43 @@ func TestRotate_RefusesIfSidecarMissing(t *testing.T) {
 	}
 }
 
-func TestRotate_PasswordRefusesIfNewDBExists(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+// Files an earlier change left behind (an older sesh kept backups; an
+// interrupted change can leave staged files) are removed once the current
+// password is verified, and the change goes ahead.
+func TestRotate_ClearsLeftovers(t *testing.T) {
+	for _, tt := range []struct {
+		leftover func(*rekeyTestEnv) string
+		name     string
+	}{
+		{func(e *rekeyTestEnv) string { return e.dbPath + rekeyDestSuffix }, "staged vault"},
+		{func(e *rekeyTestEnv) string { return e.dbPath + rotateBackupSuffix }, "old vault copy"},
+		{func(e *rekeyTestEnv) string { return e.sidecarPath + rekeyDestSuffix }, "staged key file"},
+		{func(e *rekeyTestEnv) string { return e.sidecarPath + rotateBackupSuffix }, "old key file copy"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := setupRekeyEnv(t)
+			t.Setenv("SESH_KEY_SOURCE", "password")
+			t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+			populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+			leftover := tt.leftover(env)
+			if err := os.WriteFile(leftover, []byte("stale"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 
-	if err := os.WriteFile(env.dbPath+rekeyDestSuffix, []byte("stale"), 0o600); err != nil {
-		t.Fatalf("pre-create staging DB: %v", err)
-	}
-
-	t.Setenv("SESH_MASTER_PASSWORD", "")
-	app, _ := rekeyTestApp("y\n")
-	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
-	err := runRotateMasterPassword(app, cfg)
-	if err == nil || !strings.Contains(err.Error(), "exists from a prior rotation") {
-		t.Fatalf("expected refusal because staging DB exists, got %v", err)
-	}
-}
-
-func TestRotate_PasswordRefusesIfBackupDBExists(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
-
-	if err := os.WriteFile(env.dbPath+rotateBackupSuffix, []byte("stale"), 0o600); err != nil {
-		t.Fatalf("pre-create backup DB: %v", err)
-	}
-
-	t.Setenv("SESH_MASTER_PASSWORD", "")
-	app, _ := rekeyTestApp("y\n")
-	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
-	err := runRotateMasterPassword(app, cfg)
-	if err == nil || !strings.Contains(err.Error(), "exists from a prior rotation") {
-		t.Fatalf("expected refusal because backup DB exists, got %v", err)
+			t.Setenv("SESH_MASTER_PASSWORD", "")
+			app, stderr := rekeyTestApp("y\n")
+			if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
+				t.Fatalf("rotate with a leftover: %v\n%s", err, stderr)
+			}
+			if !strings.Contains(stderr.String(), "Removed files left by an earlier change: "+filepath.Base(leftover)) {
+				t.Errorf("stderr missing the leftovers note:\n%s", stderr)
+			}
+			for _, p := range []string{env.dbPath + rekeyDestSuffix, env.dbPath + rotateBackupSuffix, env.sidecarPath + rekeyDestSuffix, env.sidecarPath + rotateBackupSuffix} {
+				if _, err := os.Stat(p); !os.IsNotExist(err) {
+					t.Errorf("%s exists after the change (err %v)", p, err)
+				}
+			}
+		})
 	}
 }
 
@@ -979,6 +969,16 @@ func TestRotate_WrongSourcePassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Only a verified current password clears an earlier change's files.
+	leftover := env.dbPath + rotateBackupSuffix
+	if err := os.WriteFile(leftover, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := os.Stat(leftover); err != nil {
+			t.Errorf("leftover removed although the password was wrong (err %v)", err)
+		}
+	})
 
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	app, _ := rekeyTestApp("y\n")
@@ -1053,5 +1053,297 @@ func TestRotate_PasswordCancelledLeavesNoChanges(t *testing.T) {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("staging/backup file %s should not exist after cancel: %v", p, err)
 		}
+	}
+}
+
+func TestCheckCopied(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "check-copied-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/a/b": "1", "sesh-password/password/c/d": "2"})
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	if err := checkCopied(store, "password", 2); err != nil {
+		t.Errorf("a complete copy: %v", err)
+	}
+	if err := checkCopied(store, "password", 3); err == nil || !strings.Contains(err.Error(), "the new vault holds 2 entries, but 3 were copied; nothing was changed") {
+		t.Errorf("a short copy: err = %v", err)
+	}
+	wrong, err := database.Open(env.dbPath, database.NewKeySourceOracle(&recoveredKey{key: bytes.Repeat([]byte{1}, 32)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(wrong)
+	if err := checkCopied(wrong, "password", 2); err == nil || !strings.Contains(err.Error(), "check the new vault's key") {
+		t.Errorf("a vault the key doesn't open: err = %v", err)
+	}
+}
+
+// A key-source switch clears a password change's leftovers too, and the
+// reverse, so no old copy survives either kind of change.
+func TestKeyChanges_ClearEachOthersLeftovers(t *testing.T) {
+	t.Run("rekey clears .pre-rotate", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		kc := newKCMock(hexKey())
+		populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+		leftovers := []string{env.dbPath + rotateBackupSuffix, env.sidecarPath + rotateBackupSuffix}
+		for _, p := range leftovers {
+			if err := os.WriteFile(p, []byte("stale"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
+		app, stderr := rekeyTestApp("y\n")
+		if err := runRekey(app, []string{"--to=password"}, kc); err != nil {
+			t.Fatalf("rekey: %v\n%s", err, stderr)
+		}
+		for _, p := range leftovers {
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Errorf("%s survived the key-source switch (err %v)", p, err)
+			}
+		}
+	})
+	t.Run("rotation clears .pre-rekey", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		t.Setenv("SESH_KEY_SOURCE", "password")
+		t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+		populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+		leftover := env.dbPath + rekeyBackupSuffix
+		if err := os.WriteFile(leftover, []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("SESH_MASTER_PASSWORD", "")
+		app, stderr := rekeyTestApp("y\n")
+		if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
+			t.Fatalf("rotate: %v\n%s", err, stderr)
+		}
+		if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+			t.Errorf("%s survived the password change (err %v)", leftover, err)
+		}
+	})
+}
+
+// failingAfter fails every write once one contains marker.
+type failingAfter struct {
+	marker string
+	failed bool
+}
+
+func (w *failingAfter) Write(p []byte) (int, error) {
+	if w.failed || strings.Contains(string(p), w.marker) {
+		w.failed = true
+		return 0, errors.New("stderr closed")
+	}
+	return len(p), nil
+}
+
+// The old copies go even if the success message can't be written.
+func TestKeyChanges_RemoveOldCopiesBeforeReporting(t *testing.T) {
+	t.Run("rotation", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		t.Setenv("SESH_KEY_SOURCE", "password")
+		t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+		populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+		t.Setenv("SESH_MASTER_PASSWORD", "")
+		app, _ := rekeyTestApp("y\n")
+		app.Stderr = &failingAfter{marker: "Rotated"}
+		if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err == nil {
+			t.Fatal("expected the write failure to be returned")
+		}
+		for _, p := range []string{env.dbPath + rotateBackupSuffix, env.sidecarPath + rotateBackupSuffix} {
+			if _, err := os.Stat(p); !os.IsNotExist(err) {
+				t.Errorf("%s left behind after a failed write (err %v)", p, err)
+			}
+		}
+	})
+	t.Run("rekey", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		kc := newKCMock(hexKey())
+		populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+		t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
+		app, _ := rekeyTestApp("y\n")
+		app.Stderr = &failingAfter{marker: "Rekeyed"}
+		if err := runRekey(app, []string{"--to=password"}, kc); err == nil {
+			t.Fatal("expected the write failure to be returned")
+		}
+		if _, err := os.Stat(env.dbPath + rekeyBackupSuffix); !os.IsNotExist(err) {
+			t.Errorf("old copy left behind after a failed write (err %v)", err)
+		}
+	})
+}
+
+// Only one key change runs on a vault at a time; a second one refuses
+// before touching anything, including the first one's in-progress files.
+func TestKeyChanges_OneAtATime(t *testing.T) {
+	t.Run("rotation", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		t.Setenv("SESH_KEY_SOURCE", "password")
+		t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+		populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+		inProgress := env.dbPath + rotateBackupSuffix // another change's in-progress copy
+		if err := os.WriteFile(inProgress, []byte("first change's copy"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		release, err := lockKeyChange(env.dataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("SESH_MASTER_PASSWORD", "")
+		app, _ := rekeyTestApp("y\n")
+		err = runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678"))
+		if err == nil || !strings.Contains(err.Error(), "another sesh command is changing this vault's key") {
+			t.Errorf("second change: err = %v", err)
+		}
+		if _, err := os.Stat(inProgress); err != nil {
+			t.Errorf("the second change removed the first one's copy: %v", err)
+		}
+		release()
+		app, _ = rekeyTestApp("y\n")
+		if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
+			t.Errorf("after the lock was released: %v", err)
+		}
+	})
+	t.Run("rekey", func(t *testing.T) {
+		env := setupRekeyEnv(t)
+		kc := newKCMock(hexKey())
+		populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+		release, err := lockKeyChange(env.dataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer release()
+		t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
+		app, _ := rekeyTestApp("y\n")
+		if err := runRekey(app, []string{"--to=password"}, kc); err == nil || !strings.Contains(err.Error(), "another sesh command is changing this vault's key") {
+			t.Errorf("second change: err = %v", err)
+		}
+	})
+}
+
+// failRename makes renameFile fail for one source → destination pair, and
+// calls during(src, dst) on every rename, so a test can look at the state
+// while the change or its rollback is running.
+func failRename(t *testing.T, src, dst string, during func(src, dst string)) {
+	t.Helper()
+	orig := renameFile
+	renameFile = func(s, d string) error {
+		if during != nil {
+			during(s, d)
+		}
+		if s == src && d == dst {
+			return errors.New("injected rename failure")
+		}
+		return orig(s, d)
+	}
+	t.Cleanup(func() { renameFile = orig })
+}
+
+// If the new key file can't be moved into place after the old one was moved
+// aside, rollback puts both the old vault and the old key file back, while
+// still holding the key-change lock.
+func TestRotate_RollsBackAPartialSwap(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "the secret"})
+	lockFreeDuringRollback := false
+	failRename(t, env.sidecarPath+rekeyDestSuffix, env.sidecarPath, func(src, dst string) {
+		if src == env.dbPath+rotateBackupSuffix && dst == env.dbPath { // rollback restoring the vault
+			if release, err := lockKeyChange(env.dataDir); err == nil {
+				lockFreeDuringRollback = true
+				release()
+			}
+		}
+	})
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678"))
+	if err == nil || !strings.Contains(err.Error(), "injected rename failure") {
+		t.Fatalf("err = %v, want the injected failure", err)
+	}
+	if strings.Contains(err.Error(), "finish the rename manually") {
+		t.Errorf("error points at files the rollback removes: %v", err)
+	}
+	if lockFreeDuringRollback {
+		t.Error("another key change could take the lock while rollback was running")
+	}
+	if _, err := os.Stat(env.sidecarPath); err != nil {
+		t.Fatalf("the vault has no passwords.key after rollback: %v", err)
+	}
+	for _, p := range []string{env.sidecarPath + rotateBackupSuffix, env.dbPath + rotateBackupSuffix, env.sidecarPath + rekeyDestSuffix} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s left after rollback (err %v)", p, err)
+		}
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	got := readEntriesViaPassword(t, env, []string{"sesh-password/password/x/y"})
+	if got["sesh-password/password/x/y"] != "the secret" {
+		t.Errorf("entry after rollback = %q, want the old password to open the old vault", got["sesh-password/password/x/y"])
+	}
+}
+
+// A rekey's rollback also runs under the lock.
+func TestRekey_KeepsTheLockThroughRollback(t *testing.T) {
+	env := setupRekeyEnv(t)
+	kc := newKCMock(hexKey())
+	populateKeychainStore(t, env, kc, map[string]string{"sesh-password/password/github/alice": "hunter2"})
+	lockFreeDuringRollback := false
+	failRename(t, env.dbPath+rekeyDestSuffix, env.dbPath, func(src, dst string) {
+		if src == env.dbPath+rekeyBackupSuffix && dst == env.dbPath {
+			if release, err := lockKeyChange(env.dataDir); err == nil {
+				lockFreeDuringRollback = true
+				release()
+			}
+		}
+	})
+	t.Setenv("SESH_MASTER_PASSWORD", "new-master-password-1234")
+	app, _ := rekeyTestApp("y\n")
+	if err := runRekey(app, []string{"--to=password"}, kc); err == nil || !strings.Contains(err.Error(), "injected rename failure") {
+		t.Fatalf("err = %v, want the injected failure", err)
+	}
+	if lockFreeDuringRollback {
+		t.Error("another key change could take the lock while rollback was running")
+	}
+	got := readEntriesViaKeychain(t, env, kc, []string{"sesh-password/password/github/alice"})
+	if got["sesh-password/password/github/alice"] != "hunter2" {
+		t.Errorf("entry after rollback = %q", got["sesh-password/password/github/alice"])
+	}
+}
+
+// A change that stops before staging anything leaves another change's
+// staging lock alone.
+func TestRotate_LeavesAnotherChangesStagingLock(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KEY_SOURCE", "password")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	staging := env.sidecarPath + rekeyDestSuffix + ".lock"
+	if err := os.WriteFile(staging, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+
+	app, _ := rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("wrong-pw-1234")); err == nil {
+		t.Fatal("expected the wrong password to fail")
+	}
+	if _, err := os.Stat(staging); err != nil {
+		t.Errorf("a change with the wrong password removed another change's staging lock: %v", err)
+	}
+
+	release, err := lockKeyChange(env.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	app, _ = rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234")); err == nil {
+		t.Fatal("expected the held lock to refuse the change")
+	}
+	if _, err := os.Stat(staging); err != nil {
+		t.Errorf("a refused change removed another change's staging lock: %v", err)
 	}
 }
