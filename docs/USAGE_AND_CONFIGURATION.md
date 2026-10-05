@@ -510,7 +510,7 @@ Every export, encrypted or not, holds everything about each entry: its kind, ser
 
 ### Changing your master password (`sesh --rekey`)
 
-`sesh --rekey` changes your master password: every entry is re-encrypted under a freshly-derived key from a new password you choose. The old vault is kept only while the change runs.
+`sesh --rekey` changes your master password: every entry is re-encrypted under a freshly-derived key from a new password you choose. The old vault is kept only while the change runs. The new password is always typed at a terminal: `SESH_MASTER_PASSWORD`, if set, gives only the current one, and without a terminal the change is refused.
 
 ```bash
 sesh --rekey

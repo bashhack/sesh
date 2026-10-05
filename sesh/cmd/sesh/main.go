@@ -627,6 +627,13 @@ func resolvePasswordPrompt() passwordPromptConfig {
 			fromEnv:     true,
 		}
 	}
+	return terminalPasswordPrompt()
+}
+
+// terminalPasswordPrompt reads passwords at the terminal, ignoring
+// SESH_MASTER_PASSWORD; interactive says whether stdin is one. Tests
+// replace it.
+var terminalPasswordPrompt = func() passwordPromptConfig {
 	return passwordPromptConfig{
 		prompt:      terminalPrompt,
 		interactive: term.IsTerminal(int(os.Stdin.Fd())),
