@@ -172,6 +172,7 @@ sesh -service password -action get -service-name github -username alice -clip
 # Store and generate TOTP codes
 sesh -service password -action totp-store -service-name github -username alice
 sesh -service password -action totp-generate -service-name github -username alice
+sesh -service password -action totp-generate -service-name github -username alice -clip   # copy the code
 
 # Search across all entries
 sesh -service password -action search -query github
