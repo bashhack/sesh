@@ -19,7 +19,7 @@ func newTestManager(t *testing.T) (*Manager, *vault.MemStore) {
 // failingStore is a MemStore whose chosen methods fail.
 type failingStore struct {
 	*vault.MemStore
-	lookupErr, setSettingsErr, saveErr error
+	lookupErr, saveErr error
 }
 
 func (f *failingStore) Put(k vault.Key, secret []byte) error {
@@ -41,13 +41,6 @@ func (f *failingStore) Lookup(k vault.Key) (vault.Entry, error) {
 		return vault.Entry{}, f.lookupErr
 	}
 	return f.MemStore.Lookup(k)
-}
-
-func (f *failingStore) SetSettings(k vault.Key, s vault.Settings) error {
-	if f.setSettingsErr != nil {
-		return f.setSettingsErr
-	}
-	return f.MemStore.SetSettings(k, s)
 }
 
 func TestStoreAndGetPassword(t *testing.T) {
@@ -148,8 +141,7 @@ func TestStoreTOTPSecret_FailureLeavesTheEntry(t *testing.T) {
 	k := vault.Key{Kind: vault.KindTOTP, Service: "bank", Username: "me"}
 	old := vault.Settings{TOTP: totp.Params{Digits: 8}}
 	for name, store := range map[string]*failingStore{
-		"settings write fails": {MemStore: vault.NewMemStore(), setSettingsErr: errors.New("disk full")},
-		"write fails":          {MemStore: vault.NewMemStore(), saveErr: errors.New("disk full")},
+		"write fails": {MemStore: vault.NewMemStore(), saveErr: errors.New("disk full")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := store.MemStore.Save(&vault.Entry{Key: k, Settings: old}, []byte("OLDSECRETOLDSECR")); err != nil {

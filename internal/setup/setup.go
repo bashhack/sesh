@@ -737,13 +737,15 @@ func (h *TOTPSetupHandler) Setup() error {
 	}
 
 	// The secret and its settings in one write. An entry being replaced
-	// keeps its other settings, such as an AWS profile's MFA device.
-	settings := vault.Settings{TOTP: params}
+	// keeps its other settings, such as an AWS profile's MFA device, and
+	// its creation time.
+	entry := vault.Entry{Key: k}
 	if existing != nil {
-		settings = existing.Settings
-		settings.TOTP = params
+		entry = *existing
+		entry.UpdatedAt = time.Time{}
 	}
-	if err := h.store.Save(&vault.Entry{Key: k, Settings: settings}, []byte(secretStr)); err != nil {
+	entry.Settings.TOTP = params
+	if err := h.store.Save(&entry, []byte(secretStr)); err != nil {
 		return fmt.Errorf("failed to store the TOTP secret: %w", err)
 	}
 

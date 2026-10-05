@@ -1670,13 +1670,14 @@ func TestTOTPSetupHandler_Setup_StoresQRSettings(t *testing.T) {
 }
 
 // Replacing an entry's secret keeps its other settings, such as an AWS
-// profile's MFA device.
+// profile's MFA device, and its creation time.
 func TestTOTPSetupHandler_Setup_OverwriteKeepsMFADevice(t *testing.T) {
 	stubTOTPSetup(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP"}, "JBSWY3DPEHPK3PXP")
 	store := vault.NewMemStore()
 	k := vault.AWSKey("work")
 	device := "arn:aws:iam::123456789012:mfa/work"
-	if err := store.Save(&vault.Entry{Key: k, Settings: vault.Settings{AWSMFADevice: device}}, []byte("OLDSECRETOLDSECR")); err != nil {
+	created := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := store.Save(&vault.Entry{Key: k, Settings: vault.Settings{AWSMFADevice: device}, CreatedAt: created}, []byte("OLDSECRETOLDSECR")); err != nil {
 		t.Fatal(err)
 	}
 	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("aws\nwork\ny\n1\n"))}
@@ -1692,6 +1693,9 @@ func TestTOTPSetupHandler_Setup_OverwriteKeepsMFADevice(t *testing.T) {
 	}
 	if e.Settings.AWSMFADevice != device {
 		t.Errorf("MFA device = %q, want %q kept", e.Settings.AWSMFADevice, device)
+	}
+	if !e.CreatedAt.Equal(created) {
+		t.Errorf("created %v, want %v kept", e.CreatedAt, created)
 	}
 	if secret, err := store.Get(k); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" {
 		t.Errorf("secret = %q, %v; want the new one", secret, err)
