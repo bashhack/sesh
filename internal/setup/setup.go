@@ -473,11 +473,11 @@ func (h *AWSSetupHandler) Setup() error {
 	}
 
 	k := vault.AWSKey(profile)
-	exists, err := entryExists(h.store, k)
+	existing, err := existingEntry(h.store, k)
 	if err != nil {
 		return err
 	}
-	if exists {
+	if existing != nil {
 		// Entry exists, prompt for overwrite
 		profileDisplay := profile
 		if profileDisplay == "" {
@@ -680,11 +680,11 @@ func (h *TOTPSetupHandler) Setup() error {
 	if err := k.Validate(); err != nil {
 		return err
 	}
-	exists, err := entryExists(h.store, k)
+	existing, err := existingEntry(h.store, k)
 	if err != nil {
 		return err
 	}
-	if exists {
+	if existing != nil {
 		// Entry exists, prompt for overwrite
 		fmt.Printf("\n⚠️  An entry already exists for service '%s'", serviceName)
 		if profile != "" {
@@ -736,8 +736,14 @@ func (h *TOTPSetupHandler) Setup() error {
 		return fmt.Errorf("failed to generate TOTP codes: %s", err)
 	}
 
-	// The secret and its settings in one write.
-	if err := h.store.Save(&vault.Entry{Key: k, Settings: vault.Settings{TOTP: params}}, []byte(secretStr)); err != nil {
+	// The secret and its settings in one write. An entry being replaced
+	// keeps its other settings, such as an AWS profile's MFA device.
+	settings := vault.Settings{TOTP: params}
+	if existing != nil {
+		settings = existing.Settings
+		settings.TOTP = params
+	}
+	if err := h.store.Save(&vault.Entry{Key: k, Settings: settings}, []byte(secretStr)); err != nil {
 		return fmt.Errorf("failed to store the TOTP secret: %w", err)
 	}
 
@@ -753,16 +759,16 @@ func (h *TOTPSetupHandler) Setup() error {
 	return nil
 }
 
-// entryExists reports whether store holds k.
-func entryExists(store vault.Store, k vault.Key) (bool, error) {
-	_, err := store.Lookup(k)
+// existingEntry returns the entry store holds at k, or nil when there's none.
+func existingEntry(store vault.Store, k vault.Key) (*vault.Entry, error) {
+	e, err := store.Lookup(k)
 	switch {
 	case err == nil:
-		return true, nil
+		return &e, nil
 	case errors.Is(err, vault.ErrNotFound):
-		return false, nil
+		return nil, nil
 	default:
-		return false, fmt.Errorf("failed to check for an existing entry: %w", err)
+		return nil, fmt.Errorf("failed to check for an existing entry: %w", err)
 	}
 }
 

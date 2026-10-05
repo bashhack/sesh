@@ -1669,6 +1669,35 @@ func TestTOTPSetupHandler_Setup_StoresQRSettings(t *testing.T) {
 	}
 }
 
+// Replacing an entry's secret keeps its other settings, such as an AWS
+// profile's MFA device.
+func TestTOTPSetupHandler_Setup_OverwriteKeepsMFADevice(t *testing.T) {
+	stubTOTPSetup(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP"}, "JBSWY3DPEHPK3PXP")
+	store := vault.NewMemStore()
+	k := vault.AWSKey("work")
+	device := "arn:aws:iam::123456789012:mfa/work"
+	if err := store.Save(&vault.Entry{Key: k, Settings: vault.Settings{AWSMFADevice: device}}, []byte("OLDSECRETOLDSECR")); err != nil {
+		t.Fatal(err)
+	}
+	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("aws\nwork\ny\n1\n"))}
+
+	var err error
+	_ = testutil.CaptureStdout(func() { err = handler.Setup() })
+	if err != nil {
+		t.Fatalf("Setup(): %v", err)
+	}
+	e, err := store.Lookup(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Settings.AWSMFADevice != device {
+		t.Errorf("MFA device = %q, want %q kept", e.Settings.AWSMFADevice, device)
+	}
+	if secret, err := store.Get(k); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("secret = %q, %v; want the new one", secret, err)
+	}
+}
+
 // With non-default settings, a failed write stores nothing: no secret
 // left behind that would give codes with the wrong settings.
 func TestTOTPSetupHandler_Setup_QRSettingsFailClosed(t *testing.T) {
