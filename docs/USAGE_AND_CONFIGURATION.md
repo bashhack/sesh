@@ -730,8 +730,9 @@ sesh -service password -action totp-generate -service-name github -username alic
 sesh -service password -action search -query github
 # Output:
 #   Found 2 entries matching "github":
-#     github (alice)                 [password] password (alice) for github
-#     github (alice)                 [totp] totp (alice) for github
+#     NAME    USER   KIND      UPDATED
+#     github  alice  totp      2026-10-04 19:47
+#     github  alice  password  2026-10-04 19:41
 
 # List with filters
 sesh -service password -list -entry-type api_key -sort updated_at
@@ -782,6 +783,12 @@ sesh -service password -action get -service-name github -username alice -format 
 | `github totp` | GitHub's TOTP entry |
 | `key` | every API key |
 | `mybank` | `my-bank` |
+
+**Output.** Results go to stdout, as a table, or as JSON with `-format json` (an empty list, `[]`, when nothing matches), so they can be piped. At a terminal, the matched letters are bold; set `NO_COLOR` to turn that off. `-entry-type` keeps one kind: `-query github -entry-type totp`.
+
+Messages go to stderr:
+- **Nothing found:** `No entries matching "gihtub". Did you mean: github?` sesh suggests close names (a letter or two off, or two letters swapped). It never mixes them into the results.
+- **One match:** the command that uses it, for example `Copy it: sesh --service password --action get --service-name openai --entry-type api_key --clip`. For a TOTP entry: `Show a code: sesh --service password --action totp-generate ...`.
 
 #### Secure notes and piped input
 
