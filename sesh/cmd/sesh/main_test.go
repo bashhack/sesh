@@ -759,7 +759,6 @@ func TestNeedsCredentialStore(t *testing.T) {
 		"short -h":              {args: []string{"sesh", "-h"}, want: false},
 		"--version":             {args: []string{"sesh", "--version"}, want: false},
 		"--list-services":       {args: []string{"sesh", "--list-services"}, want: false},
-		"--migrate":             {args: []string{"sesh", "--migrate"}, want: false},
 		"--service aws":         {args: []string{"sesh", "--service", "aws"}, want: true},
 		"--service aws --help":  {args: []string{"sesh", "--service", "aws", "--help"}, want: false},
 		"--service aws --list":  {args: []string{"sesh", "--service", "aws", "--list"}, want: true},

@@ -183,7 +183,7 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 }
 
 // mainSpecs are the flags of a sesh command that isn't a subcommand: the
-// common flags, the setting flags, --migrate and --rekey, and the selected
+// common flags, the setting flags, --rekey, and the selected
 // provider's own flags; after --rekey, only its flags.
 func mainSpecs(reg *provider.Registry, before []string) []flagSpec {
 	if slices.ContainsFunc(before, func(w string) bool { return w == "--rekey" || w == "-rekey" }) {
@@ -213,7 +213,6 @@ func mainSpecs(reg *provider.Registry, before []string) []flagSpec {
 		}
 	}
 	specs = append(specs,
-		flagSpec{name: "migrate", usage: "Copy all entries from the macOS Keychain to the vault"},
 		flagSpec{name: "rekey", usage: "Change the key source (--to), or the master password"},
 	)
 	return append(specs, settingSpecs()...)

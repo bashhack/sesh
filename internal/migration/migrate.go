@@ -1,4 +1,6 @@
-// Package migration provides tools for migrating credential data between storage backends.
+// Package migration copies every sesh entry from one vault to another: key
+// changes (rekey, master password rotation, recovery) use it to re-encrypt
+// a vault under a new key.
 package migration
 
 import (
@@ -34,9 +36,8 @@ type Result struct {
 	Skipped  int
 }
 
-// PlanEntry describes a single entry that would be migrated. CreatedAt and
-// UpdatedAt come from the source's ListEntries; they may be zero for sources
-// that don't track timestamps (e.g. macOS Keychain).
+// PlanEntry describes a single entry that would be copied. CreatedAt and
+// UpdatedAt come from the source's ListEntries.
 type PlanEntry struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

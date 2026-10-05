@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"flag"
@@ -20,7 +19,6 @@ import (
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/migration"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
@@ -52,7 +50,7 @@ func main() {
 	}
 
 	// Only open the credential store if the command will actually use it.
-	// --version, --help, --list-services, and --migrate either just print
+	// --version, --help, --list-services, and --rekey either just print
 	// information or open their own store internally. Skipping buildProvider
 	// here means the SQLite backend doesn't pointlessly open the DB (or
 	// acquire the key-init flock on first run) for those commands.
@@ -152,7 +150,7 @@ func argsParse(args []string) bool {
 // needsCredentialStore reports whether the given command-line invocation
 // will touch the credential store. Commands that just print information
 // (--help/--version/--list-services) or open their own store internally
-// (--migrate) return false.
+// (--rekey) return false.
 func needsCredentialStore(args []string) bool {
 	if name, _ := subcommand(args); len(args) <= 1 || name != "" {
 		return false
@@ -162,7 +160,6 @@ func needsCredentialStore(args []string) bool {
 		case "--help", "-help", "-h",
 			"--version", "-version",
 			"--list-services", "-list-services",
-			"--migrate", "-migrate",
 			"--rekey", "-rekey":
 			return false
 		}
@@ -808,111 +805,6 @@ func ensureMasterKey(ks *database.KeychainSource, dataDir string) error {
 	return nil
 }
 
-// runMigrate copies all sesh entries from the macOS Keychain to the SQLite store.
-// Requires the sqlite backend.
-func runMigrate(app *App) error {
-	// Checked before opening the destination, so no vault is created only
-	// for the Keychain scan to fail.
-	if goos != "darwin" {
-		return fmt.Errorf("sesh --migrate copies entries from the macOS Keychain, which isn't available on %s", goos)
-	}
-	cfg, err := settings()
-	if err != nil {
-		return err
-	}
-	if cfg.Backend.Value != config.BackendSQLite {
-		return errNeedsSQLite("migration")
-	}
-
-	source := systemKeychain()
-
-	dest, err := openSQLiteStoreWith(cfg)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := dest.Close(); cerr != nil {
-			// Best-effort warning — app.Stderr is io.Writer so errcheck
-			// wants the return checked, but there's nothing useful to
-			// do from inside a deferred void func if the write fails.
-			_, _ = fmt.Fprintf(app.Stderr, "warning: failed to close database: %v\n", cerr) //nolint:errcheck // see comment above
-		}
-	}()
-
-	plan, err := migration.Plan(source)
-	if err != nil {
-		return fmt.Errorf("scan keychain: %w", err)
-	}
-
-	if len(plan) == 0 {
-		if _, err := fmt.Fprintln(app.Stderr, "No sesh entries found in keychain. Nothing to migrate."); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	if _, err := fmt.Fprintf(app.Stderr, "Found %s to migrate:\n", entryCount(len(plan))); err != nil {
-		return err
-	}
-	for _, e := range plan {
-		desc := e.Description
-		if desc == "" {
-			desc = "(no description)"
-		}
-		if _, err := fmt.Fprintf(app.Stderr, "  %s — %s\n", e.Service, desc); err != nil {
-			return err
-		}
-	}
-
-	if _, err := fmt.Fprintf(app.Stderr, "\nMigrate these entries to SQLite? [y/N]: "); err != nil {
-		return err
-	}
-	// Use bufio so a bare Enter (the canonical "No" for [y/N]) is read
-	// as an empty line rather than surfacing "unexpected newline" from
-	// fmt.Scanln and aborting.
-	line, err := bufio.NewReader(app.Stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return fmt.Errorf("failed to read input: %w", err)
-	}
-	answer := strings.TrimSpace(line)
-	if answer != "y" && answer != "Y" {
-		if _, err := fmt.Fprintln(app.Stderr, "Migration cancelled."); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	result, err := migration.Migrate(source, dest)
-	if err != nil {
-		return err
-	}
-
-	if _, err := fmt.Fprintf(app.Stderr, "\nMigrated %s", entryCount(result.Migrated)); err != nil {
-		return err
-	}
-	if result.Skipped > 0 {
-		if _, err := fmt.Fprintf(app.Stderr, ", skipped %d (already exist)", result.Skipped); err != nil {
-			return err
-		}
-	}
-	if _, err := fmt.Fprintln(app.Stderr); err != nil {
-		return err
-	}
-
-	if len(result.Errors) > 0 {
-		if _, err := fmt.Fprintf(app.Stderr, "%d errors:\n", len(result.Errors)); err != nil {
-			return err
-		}
-		for _, e := range result.Errors {
-			if _, err := fmt.Fprintf(app.Stderr, "  %s\n", e); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 // remainingArgs returns args following (but not including) the first
 // occurrence of name. Used to forward sub-flags to handlers like runRekey
 // without depending on a specific flag-package layout.
@@ -989,11 +881,6 @@ func run(app *App, args []string) {
 			return
 		case "--list-services", "-list-services":
 			if err := app.ListProviders(); err != nil {
-				fatal(app, err)
-			}
-			return
-		case "--migrate", "-migrate":
-			if err := runMigrate(app); err != nil {
 				fatal(app, err)
 			}
 			return

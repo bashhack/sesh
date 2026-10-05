@@ -27,7 +27,7 @@ func TestComplete(t *testing.T) {
 		{name: "audit flags", words: all("audit", "-"), want: all("--limit")},
 		{name: "audit prune flags", words: all("audit", "prune", "-"), want: all("--older-than")},
 		{name: "audit prune days", words: all("audit", "prune", "--older-than", "")},
-		{name: "first flag", words: all("-"), has: all("--service", "--list-services", "--migrate", "--rekey", "--backend", "--db-path"), lacks: all("--action")},
+		{name: "first flag", words: all("-"), has: all("--service", "--list-services", "--rekey", "--backend", "--db-path"), lacks: all("--action", "--migrate")},
 		{name: "one dash as typed", words: all("-se"), want: all("-service", "-setup")},
 		{name: "providers", words: all("--service", ""), want: all("aws", "password", "totp")},
 		{name: "provider prefix", words: all("-service", "p"), want: all("password")},

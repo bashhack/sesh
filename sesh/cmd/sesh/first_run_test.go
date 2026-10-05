@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -154,26 +153,4 @@ func TestForgottenPasswordHint(t *testing.T) {
 			t.Fatalf("err = %v, want the plain wrong-password error", err)
 		}
 	})
-}
-
-func TestMigrate_RefusesOffMacOSBeforeOpeningTheVault(t *testing.T) {
-	orig := goos
-	goos = "linux"
-	t.Cleanup(func() { goos = orig })
-	useConfigFile(t, "")
-	data := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", data)
-	t.Setenv("HOME", data)
-
-	err := runMigrate(agentTestApp())
-	if err == nil || !strings.Contains(err.Error(), "isn't available on linux") {
-		t.Fatalf("err = %v", err)
-	}
-	cfg, serr := settings()
-	if serr != nil {
-		t.Fatal(serr)
-	}
-	if _, err := os.Stat(cfg.DBPath.Value); !os.IsNotExist(err) {
-		t.Errorf("a vault was created at %s before the refusal (stat: %v)", cfg.DBPath.Value, err)
-	}
 }
