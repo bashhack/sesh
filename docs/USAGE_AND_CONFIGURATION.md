@@ -903,7 +903,7 @@ sesh -service totp -help
 | "failed to capture screenshot" | QR scanning cancelled or failed | Press Enter to fall back to manual secret entry |
 | "failed to decode QR code" | QR code blurry, too small, or not `otpauth://` format | Try manual entry instead, or retake a clearer screenshot |
 | "failed to detect MFA device" | AWS CLI can't find an MFA device for the profile | Ensure an MFA device is configured in AWS IAM for this profile |
-| macOS Keychain permission dialog | First-time access from a new sesh binary path | Click "Always Allow" to grant sesh permanent access |
+| macOS Keychain dialog asking whether `security` may read `sesh-sqlite-encryption-key` | The Keychain key source reads its key through the `security` tool | Allow lets this read through; Always Allow stops the dialog, but then any program running as you can read the key without asking (see `SECURITY_MODEL.md`) |
 | "already in a sesh environment" | Tried to nest sesh sessions | Exit the current subshell first with `exit` or Ctrl+D |
 
 ## Environment Variables

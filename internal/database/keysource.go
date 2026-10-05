@@ -69,8 +69,8 @@ func NewKeychainSource(kc keychainKeyProvider, account string) *KeychainSource {
 }
 
 // GetEncryptionKey reads the master key from the keychain. The stored
-// value is a hex-encoded string of the raw 32-byte key. The keychain
-// backend passes values through `security -i`, whose tokenizer splits on
+// value is a hex-encoded string of the raw 32-byte key. The key is
+// written through `security -i`, whose tokenizer splits on
 // whitespace and control bytes — random binary keys regularly contain
 // those bytes and fail to store, so we keep the at-rest form in
 // ASCII-safe hex.
