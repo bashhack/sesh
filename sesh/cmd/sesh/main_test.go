@@ -723,6 +723,26 @@ func TestEnsureMasterKey_NonNotFoundErrorIsSurfaced(t *testing.T) {
 	}
 }
 
+func TestArgsParse(t *testing.T) {
+	for name, tt := range map[string]struct {
+		args []string
+		want bool
+	}{
+		"a service and its flags":     {args: []string{"sesh", "--service", "password", "--action", "search", "--query", "x"}, want: true},
+		"an unknown flag":             {args: []string{"sesh", "--service", "password", "--bogus"}, want: false},
+		"an unknown flag, no service": {args: []string{"sesh", "--bogus"}, want: false},
+		"an unknown service":          {args: []string{"sesh", "--service", "nope"}, want: false},
+		"help for a service":          {args: []string{"sesh", "--service", "password", "--help"}, want: false},
+		"a removed flag":              {args: []string{"sesh", "--service", "password", "--migrate"}, want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := argsParse(tt.args); got != tt.want {
+				t.Errorf("argsParse(%q) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNeedsCredentialStore(t *testing.T) {
 	tests := map[string]struct {
 		args []string
