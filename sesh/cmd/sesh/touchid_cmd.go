@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -292,7 +291,7 @@ func askYes(in io.Reader, w io.Writer, prompt string) (bool, error) {
 	if _, err := fmt.Fprint(w, prompt); err != nil {
 		return false, err
 	}
-	line, err := bufio.NewReader(in).ReadString('\n')
+	line, err := readAnswer(in)
 	if errors.Is(err, io.EOF) && strings.TrimSpace(line) == "" {
 		return false, nil
 	}

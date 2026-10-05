@@ -285,3 +285,19 @@ func TestSameGroup(t *testing.T) {
 		t.Error("handwriting look-alikes (o for 0, l for 1) not accepted")
 	}
 }
+
+// Answers that arrive together (pasted, or typed ahead) each reach the
+// question they were meant for: a prompt reads only its own line.
+func TestPrompts_ReadOneLineEach(t *testing.T) {
+	in := strings.NewReader("y\nyes\nVP5H\n")
+	var w bytes.Buffer
+	if ok, err := promptYesNo(in, &w, "Proceed? "); err != nil || !ok {
+		t.Fatalf("promptYesNo = %v, %v", ok, err)
+	}
+	if ok, err := askYes(in, &w, "Offer? "); err != nil || !ok {
+		t.Fatalf("askYes = %v, %v", ok, err)
+	}
+	if got, err := readLine(in, &w, "Last group: "); err != nil || got != "VP5H" {
+		t.Fatalf("readLine = %q, %v; want the third answer", got, err)
+	}
+}

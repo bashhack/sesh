@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -722,7 +721,7 @@ func promptYesNo(stdin io.Reader, stderr io.Writer, prompt string) (bool, error)
 	if _, err := fmt.Fprint(stderr, prompt); err != nil {
 		return false, err
 	}
-	line, err := bufio.NewReader(stdin).ReadString('\n')
+	line, err := readAnswer(stdin)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, fmt.Errorf("read confirmation: %w", err)
 	}

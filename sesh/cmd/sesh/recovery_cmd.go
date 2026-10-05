@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -264,7 +263,7 @@ func readLine(in io.Reader, w io.Writer, prompt string) (string, error) {
 	if _, err := fmt.Fprint(w, prompt); err != nil {
 		return "", err
 	}
-	line, err := bufio.NewReader(in).ReadString('\n')
+	line, err := readAnswer(in)
 	if errors.Is(err, io.EOF) && strings.TrimSpace(line) == "" {
 		return "", io.EOF
 	}
@@ -272,4 +271,25 @@ func readLine(in io.Reader, w io.Writer, prompt string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(line), nil
+}
+
+// readAnswer reads one line from in, up to and not including its newline,
+// one byte at a time. A buffered reader would read ahead and lose answers
+// that arrive together (pasted, or typed ahead) when the next prompt makes
+// its own. A last line without a newline comes back with io.EOF.
+func readAnswer(in io.Reader) (string, error) {
+	var line []byte
+	var b [1]byte
+	for {
+		n, err := in.Read(b[:])
+		if n == 1 {
+			if b[0] == '\n' {
+				return string(line), nil
+			}
+			line = append(line, b[0])
+		}
+		if err != nil {
+			return string(line), err
+		}
+	}
 }
