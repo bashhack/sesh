@@ -11,7 +11,6 @@ import (
 
 	"github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/clipboard"
-	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
 	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
 	passwordProvider "github.com/bashhack/sesh/internal/provider/password"
@@ -57,28 +56,20 @@ type VersionInfo struct {
 	Date    string
 }
 
-// credentialStore is the vault through both interfaces its callers use:
-// the password manager uses vault.Store, the AWS and TOTP providers and
-// their setup keychain.Provider.
-type credentialStore interface {
-	keychain.Provider
-	vault.Store
-}
-
-// NewDefaultApp creates a new App over the given store; the caller opens
-// and closes it.
-func NewDefaultApp(versionInfo VersionInfo, kc credentialStore, clipboardTimeout time.Duration) *App {
+// NewDefaultApp creates a new App over the vault; the caller opens and
+// closes it.
+func NewDefaultApp(versionInfo VersionInfo, store vault.Store, clipboardTimeout time.Duration) *App {
 	totpSvc := totp.NewDefaultProvider()
 	awsSvc := aws.NewDefaultProvider()
 
 	registry := provider.NewRegistry()
-	registry.RegisterProvider(awsProvider.NewProvider(awsSvc, kc, totpSvc))
-	registry.RegisterProvider(totpProvider.NewProvider(kc, totpSvc))
-	registry.RegisterProvider(passwordProvider.NewProvider(kc))
+	registry.RegisterProvider(awsProvider.NewProvider(awsSvc, store, totpSvc))
+	registry.RegisterProvider(totpProvider.NewProvider(store, totpSvc))
+	registry.RegisterProvider(passwordProvider.NewProvider(store))
 
-	setupSvc := setup.NewSetupService(kc)
-	setupSvc.RegisterHandler(setup.NewAWSSetupHandler(kc))
-	setupSvc.RegisterHandler(setup.NewTOTPSetupHandler(kc))
+	setupSvc := setup.NewSetupService()
+	setupSvc.RegisterHandler(setup.NewAWSSetupHandler(store))
+	setupSvc.RegisterHandler(setup.NewTOTPSetupHandler(store))
 
 	return &App{
 		Registry:     registry,

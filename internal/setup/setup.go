@@ -13,13 +13,10 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/bashhack/sesh/internal/constants"
-	"github.com/bashhack/sesh/internal/env"
-	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/keyformat"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // runCommand executes a command and returns its output.
@@ -41,10 +38,9 @@ var timeSleep = time.Sleep
 var validateAndNormalizeSecret = totp.ValidateAndNormalizeSecret
 
 // generateConsecutiveCodes is a variable so we can swap it out in tests
-var generateConsecutiveCodes = totp.GenerateConsecutiveCodes
-
-// getCurrentUser is a variable so we can swap it out in tests
-var getCurrentUser = env.GetCurrentUser
+var generateConsecutiveCodes = func(secret string, params totp.Params) (string, string, error) {
+	return totp.GenerateConsecutiveCodesBytesWithParams([]byte(secret), params)
+}
 
 // execLookPath is a variable so we can swap it out in tests
 var execLookPath = exec.LookPath
@@ -71,29 +67,21 @@ func waitForEnter(r *bufio.Reader) error {
 
 // AWSSetupHandler implements SetupHandler for AWS
 type AWSSetupHandler struct {
-	keychainProvider keychain.Provider
-	reader           *bufio.Reader
+	store  vault.Store
+	reader *bufio.Reader
 }
 
 // NewAWSSetupHandler creates a new AWS setup handler
-func NewAWSSetupHandler(provider keychain.Provider) *AWSSetupHandler {
+func NewAWSSetupHandler(store vault.Store) *AWSSetupHandler {
 	return &AWSSetupHandler{
-		keychainProvider: provider,
-		reader:           bufio.NewReader(os.Stdin),
+		store:  store,
+		reader: bufio.NewReader(os.Stdin),
 	}
 }
 
 // ServiceName returns the name of the service
 func (h *AWSSetupHandler) ServiceName() string {
 	return "aws"
-}
-
-// Helper to create service names with proper profile handling
-func (h *AWSSetupHandler) createServiceName(prefix, profile string) (string, error) {
-	if profile == "" {
-		profile = "default"
-	}
-	return keyformat.Build(prefix, profile)
 }
 
 // runAWSCommand executes an AWS CLI command with the given profile and args,
@@ -458,7 +446,7 @@ To use this setup, run without the --profile flag
 //  5. Captures the MFA secret (either manually or via QR code)
 //  6. Generates TOTP codes and helps with AWS Console MFA setup
 //  7. Helps identify and select the newly created MFA device, with retry and refresh options
-//  8. Stores the MFA secret and serial number securely in system keychain
+//  8. Stores the MFA secret and its device together in the vault
 //  9. Provides instructions for using the setup with the sesh command
 //
 // The flow includes multiple validation steps, error handling, and user guidance
@@ -484,22 +472,12 @@ func (h *AWSSetupHandler) Setup() error {
 		return err
 	}
 
-	// Check if entry already exists
-	user, err := getCurrentUser()
+	k := vault.AWSKey(profile)
+	exists, err := entryExists(h.store, k)
 	if err != nil {
-		return fmt.Errorf("failed to get current user: %w", err)
+		return err
 	}
-
-	serviceName, err := h.createServiceName(constants.AWSServicePrefix, profile)
-	if err != nil {
-		return fmt.Errorf("failed to build service key: %w", err)
-	}
-	existingSecret, err := h.keychainProvider.GetSecretString(user, serviceName)
-	if err != nil && !errors.Is(err, keychain.ErrNotFound) {
-		return fmt.Errorf("failed to check existing entry: %w", err)
-	}
-
-	if existingSecret != "" {
+	if exists {
 		// Entry exists, prompt for overwrite
 		profileDisplay := profile
 		if profileDisplay == "" {
@@ -554,34 +532,10 @@ func (h *AWSSetupHandler) Setup() error {
 		return fmt.Errorf("failed to select MFA device: %w", err)
 	}
 
-	// Write MFA ARN first — if the main secret write fails afterward,
-	// we avoid leaving an "existing" setup that blocks future runs.
-	serialServiceName, err := h.createServiceName(constants.AWSServiceMFAPrefix, profile)
-	if err != nil {
-		return fmt.Errorf("failed to build MFA serial key: %w", err)
-	}
-	err = h.keychainProvider.SetSecretString(user, serialServiceName, mfaArn)
-	if err != nil {
-		return fmt.Errorf("failed to store MFA serial in keychain: %w", err)
-	}
-
-	serviceName, err = h.createServiceName(constants.AWSServicePrefix, profile)
-	if err != nil {
-		return fmt.Errorf("failed to build service key: %w", err)
-	}
-	err = h.keychainProvider.SetSecretString(user, serviceName, secretStr)
-	if err != nil {
-		return fmt.Errorf("failed to store secret in keychain: %w", err)
-	}
-
-	description := "AWS MFA"
-	if profile != "" {
-		description = fmt.Sprintf("AWS MFA for profile %s", profile)
-	}
-
-	err = h.keychainProvider.SetDescription(serviceName, user, description)
-	if err != nil {
-		fmt.Println("⚠️ Warning: Failed to store description. This entry might not appear when listing available AWS profiles.")
+	// The secret and its device in one write, so a failure leaves no half
+	// setup behind.
+	if err := h.store.Save(&vault.Entry{Key: k, Settings: vault.Settings{AWSMFADevice: mfaArn}}, []byte(secretStr)); err != nil {
+		return fmt.Errorf("failed to store the MFA secret: %w", err)
 	}
 
 	h.showSetupCompletionMessage(profile)
@@ -593,29 +547,21 @@ func (h *AWSSetupHandler) Setup() error {
 
 // TOTPSetupHandler implements SetupHandler for TOTP
 type TOTPSetupHandler struct {
-	keychainProvider keychain.Provider
-	reader           *bufio.Reader
+	store  vault.Store
+	reader *bufio.Reader
 }
 
 // NewTOTPSetupHandler creates a new TOTP setup handler
-func NewTOTPSetupHandler(provider keychain.Provider) *TOTPSetupHandler {
+func NewTOTPSetupHandler(store vault.Store) *TOTPSetupHandler {
 	return &TOTPSetupHandler{
-		keychainProvider: provider,
-		reader:           bufio.NewReader(os.Stdin),
+		store:  store,
+		reader: bufio.NewReader(os.Stdin),
 	}
 }
 
 // ServiceName returns the name of the service
 func (h *TOTPSetupHandler) ServiceName() string {
 	return "totp"
-}
-
-// createTOTPServiceName creates a TOTP service name with proper profile handling
-func (h *TOTPSetupHandler) createTOTPServiceName(serviceName, profile string) (string, error) {
-	if profile == "" {
-		return keyformat.Build(constants.TOTPServicePrefix, serviceName)
-	}
-	return keyformat.Build(constants.TOTPServicePrefix, serviceName, profile)
 }
 
 // promptForServiceName prompts the user to enter a service name and validates it
@@ -730,22 +676,15 @@ func (h *TOTPSetupHandler) Setup() error {
 		return err
 	}
 
-	// Check if entry already exists
-	user, err := getCurrentUser()
+	k := vault.Key{Kind: vault.KindTOTP, Service: serviceName, Username: profile}
+	if err := k.Validate(); err != nil {
+		return err
+	}
+	exists, err := entryExists(h.store, k)
 	if err != nil {
-		return fmt.Errorf("failed to get current user: %w", err)
+		return err
 	}
-
-	serviceKey, err := h.createTOTPServiceName(serviceName, profile)
-	if err != nil {
-		return fmt.Errorf("failed to build service key: %w", err)
-	}
-	existingSecret, err := h.keychainProvider.GetSecretString(user, serviceKey)
-	if err != nil && !errors.Is(err, keychain.ErrNotFound) {
-		return fmt.Errorf("failed to check existing entry: %w", err)
-	}
-
-	if existingSecret != "" {
+	if exists {
 		// Entry exists, prompt for overwrite
 		fmt.Printf("\n⚠️  An entry already exists for service '%s'", serviceName)
 		if profile != "" {
@@ -784,52 +723,22 @@ func (h *TOTPSetupHandler) Setup() error {
 	}
 	secretStr := normalizedSecret
 
-	// Generate two consecutive TOTP codes
-	firstCode, secondCode, err := generateConsecutiveCodes(secretStr)
-	if err != nil {
-		return fmt.Errorf("failed to generate TOTP codes: %s", err)
-	}
-
-	// Build service key using consistent helper pattern
-	serviceKey, err = h.createTOTPServiceName(serviceName, profile)
-	if err != nil {
-		return fmt.Errorf("failed to build service key: %w", err)
-	}
-
-	// Store the secret using the keychain provider
-	err = h.keychainProvider.SetSecretString(user, serviceKey, secretStr)
-	if err != nil {
-		return fmt.Errorf("failed to store secret in keychain: %w", err)
-	}
-
-	// Build the description. For non-default QR params (algorithm, digits,
-	// period) this is load-bearing metadata — GenerateTOTPCode reads it
-	// back to reproduce the correct codes. For default params we fall
-	// back to a cosmetic human-readable label.
+	// The code settings from the QR code (algorithm, digits, period)
+	// decide which codes are right; zero for the usual ones.
 	params := totp.Params{
 		Issuer:    info.Issuer,
 		Algorithm: info.Algorithm,
 		Digits:    info.Digits,
 		Period:    info.Period,
 	}
-	description := params.MarshalDescription()
-	paramsAreLoadBearing := description != ""
-	if !paramsAreLoadBearing {
-		description = fmt.Sprintf("TOTP for %s", serviceName)
-		if profile != "" {
-			description = fmt.Sprintf("TOTP for %s profile %s", serviceName, profile)
-		}
+	firstCode, secondCode, err := generateConsecutiveCodes(secretStr, params)
+	if err != nil {
+		return fmt.Errorf("failed to generate TOTP codes: %s", err)
 	}
 
-	if err := h.keychainProvider.SetDescription(serviceKey, user, description); err != nil {
-		if paramsAreLoadBearing {
-			// Fail closed: the entry would otherwise persist with the
-			// secret but no params, and every future code generation
-			// would silently fall back to defaults and produce wrong
-			// codes for the issuer's expected configuration.
-			return fmt.Errorf("stored TOTP secret but failed to persist non-default params (subsequent codes would fall back to defaults): %w", err)
-		}
-		fmt.Println("⚠️ Warning: Failed to store description. This entry might not appear when listing available TOTP services.")
+	// The secret and its settings in one write.
+	if err := h.store.Save(&vault.Entry{Key: k, Settings: vault.Settings{TOTP: params}}, []byte(secretStr)); err != nil {
+		return fmt.Errorf("failed to store the TOTP secret: %w", err)
 	}
 
 	// Display the generated TOTP codes for setup verification
@@ -842,6 +751,19 @@ func (h *TOTPSetupHandler) Setup() error {
 	h.showTOTPSetupCompletionMessage(serviceName, profile)
 
 	return nil
+}
+
+// entryExists reports whether store holds k.
+func entryExists(store vault.Store, k vault.Key) (bool, error) {
+	_, err := store.Lookup(k)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, vault.ErrNotFound):
+		return false, nil
+	default:
+		return false, fmt.Errorf("failed to check for an existing entry: %w", err)
+	}
 }
 
 // captureQRWithRetry is a shared helper for QR code capture with retry logic.

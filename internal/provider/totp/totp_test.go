@@ -8,25 +8,54 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bashhack/sesh/internal/keychain"
-	keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/testutil"
+	internalTotp "github.com/bashhack/sesh/internal/totp"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
+// totpKey is the TOTP entry for service, with profile as its username.
+func totpKey(service, profile string) vault.Key {
+	return vault.Key{Kind: vault.KindTOTP, Service: service, Username: profile}
+}
+
+// seeded is a store holding the TOTP entries given, each with secret.
+func seeded(t *testing.T, secrets map[vault.Key]string) *vault.MemStore {
+	t.Helper()
+	store := vault.NewMemStore()
+	for k, s := range secrets {
+		if err := store.Put(k, []byte(s)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store
+}
+
+// failingStore is a MemStore whose every read and write fails with err.
+type failingStore struct {
+	*vault.MemStore
+	err error
+}
+
+func (f failingStore) Get(vault.Key) ([]byte, error)            { return nil, f.err }
+func (f failingStore) Lookup(vault.Key) (vault.Entry, error)    { return vault.Entry{}, f.err }
+func (f failingStore) List(vault.Filter) ([]vault.Entry, error) { return nil, f.err }
+func (f failingStore) Delete(vault.Key) error                   { return f.err }
+
 func TestNewProvider(t *testing.T) {
-	mockKeychain := &keychainMocks.MockProvider{}
+	store := vault.NewMemStore()
 	mockTOTP := &totpMocks.MockProvider{}
 
-	p := NewProvider(mockKeychain, mockTOTP)
+	p := NewProvider(store, mockTOTP)
 
 	if p == nil {
 		t.Fatal("NewProvider() returned nil")
 	}
-	if p.keychain != mockKeychain {
-		t.Error("Keychain provider not set correctly")
+	if p.store != store {
+		t.Error("store not set correctly")
 	}
 	if p.totp != mockTOTP {
 		t.Error("TOTP provider not set correctly")
@@ -52,17 +81,14 @@ func TestProvider_SetupFlags(t *testing.T) {
 	p := &Provider{}
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 
-	err := p.SetupFlags(fs)
-	if err != nil {
+	if err := p.SetupFlags(fs); err != nil {
 		t.Fatalf("SetupFlags() unexpected error: %v", err)
 	}
-
-	if err := fs.Parse([]string{}); err != nil {
+	if err := fs.Parse([]string{"--service-name", "github", "--profile", "work"}); err != nil {
 		t.Errorf("Parse() error: %v", err)
 	}
-
-	if p.User == "" {
-		t.Error("User should be set to current user")
+	if p.key() != totpKey("github", "work") {
+		t.Errorf("key() = %+v, want the TOTP entry github/work", p.key())
 	}
 }
 
@@ -90,8 +116,7 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 }
 
 func TestProvider_GetSetupHandler(t *testing.T) {
-	mockKeychain := &keychainMocks.MockProvider{}
-	p := &Provider{keychain: mockKeychain}
+	p := &Provider{store: vault.NewMemStore()}
 
 	handler := p.GetSetupHandler()
 	if handler == nil {
@@ -109,102 +134,66 @@ func TestProvider_GetSetupHandler(t *testing.T) {
 
 func TestProvider_ValidateRequest(t *testing.T) {
 	tests := map[string]struct {
-		setupKeychain func(*keychainMocks.MockProvider)
-		serviceName   string
-		profile       string
-		wantErrMsg    string
-		wantErr       bool
+		store       vault.Store
+		serviceName string
+		profile     string
+		wantErrMsg  string
 	}{
 		"valid request": {
+			store:       seeded(t, map[vault.Key]string{totpKey("github", ""): "secret"}),
 			serviceName: "github",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					if service == "sesh-totp/github" {
-						return []byte("secret"), nil
-					}
-					return nil, fmt.Errorf("unexpected service: %s", service)
-				}
-			},
 		},
 		"valid request with profile": {
+			store:       seeded(t, map[vault.Key]string{totpKey("github", "work"): "secret"}),
 			serviceName: "github",
 			profile:     "work",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					if service == "sesh-totp/github/work" {
-						return []byte("secret"), nil
-					}
-					return nil, fmt.Errorf("unexpected service: %s", service)
-				}
-			},
 		},
 		"no TOTP secret for service": {
+			store:       seeded(t, map[vault.Key]string{totpKey("github", ""): "secret"}),
 			serviceName: "gitlab",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, keychain.ErrNotFound
-				}
-			},
-			wantErr:    true,
-			wantErrMsg: "no TOTP entry found for service 'gitlab'. Run 'sesh --service totp --setup' first",
+			wantErrMsg:  "no TOTP entry found for service 'gitlab'. Run 'sesh --service totp --setup' first",
 		},
 		"no TOTP secret for service with profile": {
+			// The entry without a profile isn't the one asked for.
+			store:       seeded(t, map[vault.Key]string{totpKey("gitlab", ""): "secret"}),
 			serviceName: "gitlab",
 			profile:     "work",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, keychain.ErrNotFound
-				}
-			},
-			wantErr:    true,
-			wantErrMsg: "no TOTP entry found for service 'gitlab' with profile 'work'. Run 'sesh --service totp --setup' first",
+			wantErrMsg:  "no TOTP entry found for service 'gitlab' with profile 'work'. Run 'sesh --service totp --setup' first",
 		},
-		"keychain error surfaces without fallback message": {
+		"another kind under the same name isn't a TOTP entry": {
+			store:       seeded(t, map[vault.Key]string{{Kind: vault.KindPassword, Service: "gitlab"}: "pw"}),
+			serviceName: "gitlab",
+			wantErrMsg:  "no TOTP entry found for service 'gitlab'. Run 'sesh --service totp --setup' first",
+		},
+		"store error surfaces without fallback message": {
+			store:       failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")},
 			serviceName: "github",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, errors.New("keychain locked")
-				}
-			},
-			wantErr:    true,
-			wantErrMsg: "failed to read TOTP secret from keychain: keychain locked",
+			wantErrMsg:  "failed to look up the TOTP entry: vault locked",
 		},
 		"empty service name": {
+			store:       failingStore{MemStore: vault.NewMemStore(), err: errors.New("the store shouldn't be asked")},
 			serviceName: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					t.Error("GetSecret should not be called with empty service name")
-					return nil, errors.New("should not be called")
-				}
-			},
-			wantErr:    true,
-			wantErrMsg: "--service-name is required for TOTP provider",
+			wantErrMsg:  "--service-name is required for TOTP provider",
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			mockKeychain := &keychainMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
-
 			p := &Provider{
-				keychain:    mockKeychain,
+				store:       tc.store,
 				serviceName: tc.serviceName,
 				profile:     tc.profile,
-				User:        "testuser",
 			}
 
 			err := p.ValidateRequest()
-			if tc.wantErr && err == nil {
-				t.Error("ValidateRequest() expected error but got nil")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("ValidateRequest() unexpected error: %v", err)
-			}
-			if tc.wantErrMsg != "" && err != nil {
-				if err.Error() != tc.wantErrMsg {
-					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
+			if tc.wantErrMsg == "" {
+				if err != nil {
+					t.Errorf("ValidateRequest() unexpected error: %v", err)
 				}
+				return
+			}
+			if err == nil || err.Error() != tc.wantErrMsg {
+				t.Errorf("ValidateRequest() = %v, want %q", err, tc.wantErrMsg)
 			}
 		})
 	}
@@ -236,11 +225,6 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 			restore := testutil.RedirectStderr(t)
 			stubStdoutIsTerminal(t, true)
 
-			mockKeychain := &keychainMocks.MockProvider{
-				GetSecretFunc: func(account, service string) ([]byte, error) {
-					return []byte("MYSECRET"), nil
-				},
-			}
 			mockTOTP := &totpMocks.MockProvider{
 				GenerateConsecutiveCodesBytesFunc: func(secret []byte) (string, string, error) {
 					return "123456", "654321", nil
@@ -248,11 +232,10 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 			}
 
 			p := &Provider{
-				keychain:    mockKeychain,
+				store:       seeded(t, map[vault.Key]string{totpKey(tc.serviceName, tc.profile): "MYSECRET"}),
 				totp:        mockTOTP,
 				serviceName: tc.serviceName,
 				profile:     tc.profile,
-				User:        "testuser",
 				Now:         func() time.Time { return time.Unix(5, 0) },
 			}
 
@@ -280,14 +263,11 @@ func TestProvider_GetCredentials_ClipTipOnlyAtATerminal(t *testing.T) {
 		restore := testutil.RedirectStderr(t)
 		stubStdoutIsTerminal(t, terminal)
 		p := &Provider{
-			keychain: &keychainMocks.MockProvider{
-				GetSecretFunc: func(string, string) ([]byte, error) { return []byte("MYSECRET"), nil },
-			},
+			store: seeded(t, map[vault.Key]string{totpKey("github", ""): "MYSECRET"}),
 			totp: &totpMocks.MockProvider{
 				GenerateConsecutiveCodesBytesFunc: func([]byte) (string, string, error) { return "123456", "654321", nil },
 			},
 			serviceName: "github",
-			User:        "testuser",
 			Now:         func() time.Time { return time.Unix(5, 0) },
 		}
 		if _, err := p.GetCredentials(); err != nil {
@@ -306,23 +286,16 @@ func TestProvider_GetCredentials_ClipTipOnlyAtATerminal(t *testing.T) {
 
 func TestProvider_GetCredentials(t *testing.T) {
 	tests := map[string]struct {
-		setupKeychain func(*keychainMocks.MockProvider)
-		setupTOTP     func(*totpMocks.MockProvider)
-		serviceName   string
-		wantCurrent   string
-		wantNext      string
-		wantErr       bool
+		store       vault.Store
+		setupTOTP   func(*totpMocks.MockProvider)
+		serviceName string
+		wantCurrent string
+		wantNext    string
+		wantErr     bool
 	}{
 		"successful TOTP generation": {
+			store:       seeded(t, map[vault.Key]string{totpKey("github", ""): "MYSECRET"}),
 			serviceName: "github",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					if account == "testuser" && service == "sesh-totp/github" {
-						return []byte("MYSECRET"), nil
-					}
-					return nil, fmt.Errorf("unexpected call: %s, %s", account, service)
-				}
-			},
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					if string(secret) == "MYSECRET" {
@@ -334,23 +307,21 @@ func TestProvider_GetCredentials(t *testing.T) {
 			wantCurrent: "123456",
 			wantNext:    "654321",
 		},
-		"keychain error": {
+		"no such entry": {
+			store:       vault.NewMemStore(),
 			serviceName: "gitlab",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, errors.New("keychain locked")
-				}
-			},
-			setupTOTP: func(m *totpMocks.MockProvider) {},
-			wantErr:   true,
+			setupTOTP:   func(m *totpMocks.MockProvider) {},
+			wantErr:     true,
+		},
+		"store error": {
+			store:       failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")},
+			serviceName: "gitlab",
+			setupTOTP:   func(m *totpMocks.MockProvider) {},
+			wantErr:     true,
 		},
 		"TOTP generation error": {
+			store:       seeded(t, map[vault.Key]string{totpKey("bitbucket", ""): "INVALIDSECRET"}),
 			serviceName: "bitbucket",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return []byte("INVALIDSECRET"), nil
-				}
-			},
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "", "", errors.New("invalid secret")
@@ -359,10 +330,10 @@ func TestProvider_GetCredentials(t *testing.T) {
 			wantErr: true,
 		},
 		"empty service name": {
-			serviceName:   "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {},
-			setupTOTP:     func(m *totpMocks.MockProvider) {},
-			wantErr:       true,
+			store:       vault.NewMemStore(),
+			serviceName: "",
+			setupTOTP:   func(m *totpMocks.MockProvider) {},
+			wantErr:     true,
 		},
 	}
 
@@ -370,16 +341,13 @@ func TestProvider_GetCredentials(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			defer testutil.DiscardStderr(t)()
 
-			mockKeychain := &keychainMocks.MockProvider{}
 			mockTOTP := &totpMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
 			tc.setupTOTP(mockTOTP)
 
 			p := &Provider{
-				keychain:    mockKeychain,
+				store:       tc.store,
 				totp:        mockTOTP,
 				serviceName: tc.serviceName,
-				User:        "testuser",
 			}
 
 			creds, err := p.GetCredentials()
@@ -410,24 +378,49 @@ func TestProvider_GetCredentials(t *testing.T) {
 	}
 }
 
+func TestProvider_GetCredentials_UsesTheEntrysCodeSettings(t *testing.T) {
+	defer testutil.DiscardStderr(t)()
+	store := seeded(t, map[vault.Key]string{totpKey("bank", ""): "MYSECRET"})
+	want := internalTotp.Params{Algorithm: "SHA256", Digits: 8, Period: 60}
+	if err := store.SetSettings(totpKey("bank", ""), vault.Settings{TOTP: want}); err != nil {
+		t.Fatal(err)
+	}
+	var got internalTotp.Params
+	p := &Provider{
+		store: store,
+		totp: &totpMocks.MockProvider{
+			GenerateConsecutiveCodesBytesWithParamsFunc: func(_ []byte, params internalTotp.Params) (string, string, error) {
+				got = params
+				return "12345678", "87654321", nil
+			},
+		},
+		serviceName: "bank",
+		Now:         func() time.Time { return time.Unix(5, 0) },
+	}
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("codes generated with %+v, want the entry's settings %+v", got, want)
+	}
+	// A 60-second period: 55 seconds left at t=5s.
+	if !strings.Contains(creds.DisplayInfo, "Time left: 55s") {
+		t.Errorf("DisplayInfo = %q, want the time left in the entry's 60-second period", creds.DisplayInfo)
+	}
+}
+
 func TestProvider_GetClipboardValue(t *testing.T) {
 	tests := map[string]struct {
-		setupKeychain func(*keychainMocks.MockProvider)
-		setupTOTP     func(*totpMocks.MockProvider)
-		checkResult   func(*testing.T, provider.Credentials)
-		serviceName   string
-		wantErr       bool
+		store       vault.Store
+		setupTOTP   func(*totpMocks.MockProvider)
+		checkResult func(*testing.T, provider.Credentials)
+		serviceName string
+		wantErr     bool
 	}{
 		"successful clipboard value": {
+			store:       seeded(t, map[vault.Key]string{totpKey("github", ""): "MYSECRET"}),
 			serviceName: "github",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					if account == "testuser" && service == "sesh-totp/github" {
-						return []byte("MYSECRET"), nil
-					}
-					return nil, fmt.Errorf("unexpected call")
-				}
-			},
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					if string(secret) == "MYSECRET" {
@@ -458,14 +451,10 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 			},
 		},
 		"error getting secret": {
+			store:       failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")},
 			serviceName: "gitlab",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, errors.New("keychain error")
-				}
-			},
-			setupTOTP: func(m *totpMocks.MockProvider) {},
-			wantErr:   true,
+			setupTOTP:   func(m *totpMocks.MockProvider) {},
+			wantErr:     true,
 		},
 	}
 
@@ -473,16 +462,13 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			defer testutil.DiscardStderr(t)()
 
-			mockKeychain := &keychainMocks.MockProvider{}
 			mockTOTP := &totpMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
 			tc.setupTOTP(mockTOTP)
 
 			p := &Provider{
-				keychain:    mockKeychain,
+				store:       tc.store,
 				totp:        mockTOTP,
 				serviceName: tc.serviceName,
-				User:        "testuser",
 			}
 
 			creds, err := p.GetClipboardValue()
@@ -501,80 +487,61 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 
 func TestProvider_ListEntries(t *testing.T) {
 	tests := map[string]struct {
-		setupKeychain func(*keychainMocks.MockProvider)
-		checkEntries  func(*testing.T, []provider.ProviderEntry)
-		wantCount     int
-		wantErr       bool
+		store        vault.Store
+		checkEntries func(*testing.T, []provider.ProviderEntry)
+		wantCount    int
+		wantErr      bool
 	}{
 		"successful list": {
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					if prefix == "sesh-totp" {
-						return []keychain.KeychainEntry{
-							{Service: "sesh-totp/github", Account: "testuser"},
-							{Service: "sesh-totp/gitlab", Account: "testuser"},
-							{Service: "sesh-totp/bitbucket", Account: "testuser"},
-						}, nil
-					}
-					return nil, fmt.Errorf("unexpected prefix: %s", prefix)
-				}
-			},
+			store: seeded(t, map[vault.Key]string{
+				totpKey("github", ""):    "s",
+				totpKey("gitlab", ""):    "s",
+				totpKey("bitbucket", ""): "s",
+				// Not a TOTP entry: not listed.
+				{Kind: vault.KindPassword, Service: "github"}: "pw",
+			}),
 			wantCount: 3,
 			checkEntries: func(t *testing.T, entries []provider.ProviderEntry) {
-				if entries[0].Name != "github" {
-					t.Errorf("entries[0].Name = %v, want 'github'", entries[0].Name)
+				// Listed by key: bitbucket, github, gitlab.
+				if entries[1].Name != "github" {
+					t.Errorf("entries[1].Name = %v, want 'github'", entries[1].Name)
 				}
-				if entries[0].Description != "TOTP for github" {
-					t.Errorf("entries[0].Description = %v, want 'TOTP for github'", entries[0].Description)
+				if entries[1].Description != "TOTP" {
+					t.Errorf("entries[1].Description = %v, want 'TOTP'", entries[1].Description)
 				}
-				if entries[0].ID != "sesh-totp/github:testuser" {
-					t.Errorf("entries[0].ID = %v, want 'sesh-totp/github:testuser'", entries[0].ID)
+				if entries[1].ID != "totp/github" {
+					t.Errorf("entries[1].ID = %v, want 'totp/github'", entries[1].ID)
 				}
 			},
 		},
 		"list with profiles": {
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return []keychain.KeychainEntry{
-						{Service: "sesh-totp/github/work", Account: "testuser"},
-						{Service: "sesh-totp/github/personal", Account: "testuser"},
-					}, nil
-				}
-			},
+			store: seeded(t, map[vault.Key]string{
+				totpKey("github", "work"):     "s",
+				totpKey("github", "personal"): "s",
+			}),
 			wantCount: 2,
 			checkEntries: func(t *testing.T, entries []provider.ProviderEntry) {
-				if entries[0].Name != "github (work)" {
-					t.Errorf("entries[0].Name = %v, want 'github (work)'", entries[0].Name)
+				if entries[1].Name != "github (work)" {
+					t.Errorf("entries[1].Name = %v, want 'github (work)'", entries[1].Name)
 				}
-				if entries[0].Description != "TOTP for github profile work" {
-					t.Errorf("entries[0].Description = %v, want 'TOTP for github profile work'", entries[0].Description)
+				if entries[1].ID != "totp/github/work" {
+					t.Errorf("entries[1].ID = %v, want 'totp/github/work'", entries[1].ID)
 				}
 			},
 		},
 		"empty list": {
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return []keychain.KeychainEntry{}, nil
-				}
-			},
+			store:     vault.NewMemStore(),
 			wantCount: 0,
 		},
-		"keychain error": {
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return nil, errors.New("keychain error")
-				}
-			},
+		"store error": {
+			store:   failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")},
 			wantErr: true,
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			mockKeychain := &keychainMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
-
-			p := &Provider{keychain: mockKeychain}
+			p := &Provider{store: tc.store}
 
 			entries, err := p.ListEntries()
 			if tc.wantErr && err == nil {
@@ -595,140 +562,125 @@ func TestProvider_ListEntries(t *testing.T) {
 	}
 }
 
+// The password manager's TOTP entries and --service totp's are the same
+// entries in the vault.
+func TestProvider_SharesTOTPEntriesWithThePasswordManager(t *testing.T) {
+	defer testutil.DiscardStderr(t)()
+	store := vault.NewMemStore()
+	if err := password.NewManager(store).StoreTOTPSecret("github", "alice", "JBSWY3DPEHPK3PXP"); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Provider{
+		store: store,
+		totp: &totpMocks.MockProvider{
+			GenerateConsecutiveCodesBytesFunc: func(secret []byte) (string, string, error) {
+				if string(secret) != "JBSWY3DPEHPK3PXP" {
+					return "", "", fmt.Errorf("unexpected secret %q", secret)
+				}
+				return "123456", "654321", nil
+			},
+		},
+		Now: func() time.Time { return time.Unix(5, 0) },
+	}
+	entries, err := p.ListEntries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name != "github (alice)" || entries[0].ID != "totp/github/alice" {
+		t.Fatalf("ListEntries = %+v, want the password manager's TOTP entry", entries)
+	}
+
+	p.serviceName, p.profile = "github", "alice"
+	if err := p.ValidateRequest(); err != nil {
+		t.Fatalf("ValidateRequest: %v", err)
+	}
+	creds, err := p.GetClipboardValue()
+	if err != nil || creds.CopyValue != "123456" {
+		t.Errorf("GetClipboardValue = %q, %v; want the entry's code", creds.CopyValue, err)
+	}
+}
+
 func TestProvider_DeleteEntry(t *testing.T) {
+	gitlab := totpKey("gitlab", "")
 	tests := map[string]struct {
-		setupKeychain func(*keychainMocks.MockProvider)
-		entryID       string
-		wantErrMsg    string
-		wantErr       bool
+		store      vault.Store
+		entryID    string
+		wantErrMsg string
+		wantGone   bool
 	}{
 		"successful delete": {
-			entryID: "sesh-totp/github:testuser",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.DeleteEntryFunc = func(account, service string) error {
-					if account == "testuser" && service == "sesh-totp/github" {
-						return nil
-					}
-					return fmt.Errorf("unexpected delete: %s, %s", account, service)
-				}
-			},
+			store:    seeded(t, map[vault.Key]string{gitlab: "s"}),
+			entryID:  "totp/gitlab",
+			wantGone: true,
 		},
 		"invalid ID format": {
-			entryID: "invalid-id",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.DeleteEntryFunc = func(account, service string) error {
-					t.Error("DeleteEntry should not be called with invalid ID")
-					return nil
-				}
-			},
-			wantErr:    true,
-			wantErrMsg: "invalid entry ID format: expected 'service:account', got \"invalid-id\"",
+			store:      seeded(t, map[vault.Key]string{gitlab: "s"}),
+			entryID:    "invalid-id",
+			wantErrMsg: "want kind/service or kind/service/username",
 		},
-		"keychain error": {
-			entryID: "sesh-totp/gitlab:testuser",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.DeleteEntryFunc = func(account, service string) error {
-					return errors.New("keychain error")
-				}
-			},
-			wantErr: true,
+		"missing entry": {
+			store:      seeded(t, map[vault.Key]string{gitlab: "s"}),
+			entryID:    "totp/github",
+			wantErrMsg: "entry not found",
+		},
+		"store error": {
+			store:      failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")},
+			entryID:    "totp/gitlab",
+			wantErrMsg: "failed to delete TOTP entry: vault locked",
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			mockKeychain := &keychainMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
-
-			p := &Provider{keychain: mockKeychain}
+			p := &Provider{store: tc.store}
 
 			err := p.DeleteEntry(tc.entryID)
-			if tc.wantErr && err == nil {
-				t.Error("DeleteEntry() expected error but got nil")
+			if tc.wantErrMsg == "" {
+				if err != nil {
+					t.Errorf("DeleteEntry() unexpected error: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErrMsg) {
+				t.Errorf("DeleteEntry() = %v, want it to contain %q", err, tc.wantErrMsg)
 			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("DeleteEntry() unexpected error: %v", err)
-			}
-			if tc.wantErrMsg != "" && err != nil {
-				if err.Error() != tc.wantErrMsg {
-					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
+			if tc.wantGone {
+				if _, err := tc.store.Lookup(gitlab); !errors.Is(err, vault.ErrNotFound) {
+					t.Errorf("after DeleteEntry, Lookup = %v; want ErrNotFound", err)
 				}
 			}
 		})
 	}
 }
 
-func TestBuildServiceKey(t *testing.T) {
-	tests := map[string]struct {
-		service string
-		profile string
-		want    string
-		wantErr bool
-	}{
-		"service only": {
-			service: "github",
-			want:    "sesh-totp/github",
-		},
-		"service with profile": {
-			service: "github",
-			profile: "work",
-			want:    "sesh-totp/github/work",
-		},
-	}
+func TestProvider_DeleteEntry_RefusesOtherKinds(t *testing.T) {
+	pw := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	store := seeded(t, map[vault.Key]string{pw: "pw"})
+	p := &Provider{store: store}
 
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got, err := buildServiceKey(tc.service, tc.profile)
-			if tc.wantErr && err == nil {
-				t.Error("buildServiceKey() expected error but got nil")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("buildServiceKey() unexpected error: %v", err)
-			}
-			if got != tc.want {
-				t.Errorf("buildServiceKey() = %v, want %v", got, tc.want)
-			}
-		})
+	err := p.DeleteEntry("password/github")
+	if wantSub := "isn't a TOTP entry"; err == nil || !strings.Contains(err.Error(), wantSub) {
+		t.Errorf("DeleteEntry(password/github) = %v, want it to contain %q", err, wantSub)
+	}
+	if got, err := store.Get(pw); err != nil || string(got) != "pw" {
+		t.Errorf("the password entry = %q, %v; want it untouched", got, err)
 	}
 }
 
-func TestParseServiceKey(t *testing.T) {
-	tests := map[string]struct {
-		serviceKey  string
-		wantService string
-		wantProfile string
-	}{
-		"service only": {
-			serviceKey:  "sesh-totp/github",
-			wantService: "github",
-			wantProfile: "",
-		},
-		"service with profile": {
-			serviceKey:  "sesh-totp/github/work",
-			wantService: "github",
-			wantProfile: "work",
-		},
-		"invalid prefix": {
-			serviceKey:  "invalid-key",
-			wantService: "invalid-key",
-			wantProfile: "",
-		},
-		"empty string": {
-			serviceKey:  "",
-			wantService: "",
-			wantProfile: "",
-		},
-	}
+// lookupFailing reads secrets but not entries' settings.
+type lookupFailing struct{ *vault.MemStore }
 
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			service, profile := parseServiceKey(tc.serviceKey)
-			if service != tc.wantService {
-				t.Errorf("parseServiceKey() service = %v, want %v", service, tc.wantService)
-			}
-			if profile != tc.wantProfile {
-				t.Errorf("parseServiceKey() profile = %v, want %v", profile, tc.wantProfile)
-			}
-		})
+func (lookupFailing) Lookup(vault.Key) (vault.Entry, error) {
+	return vault.Entry{}, errors.New("settings unreadable")
+}
+
+func TestProvider_GetCredentials_FailsIfTheCodeSettingsCantBeRead(t *testing.T) {
+	store := lookupFailing{vault.NewMemStore()}
+	if err := store.Put(vault.Key{Kind: vault.KindTOTP, Service: "github"}, []byte("JBSWY3DPEHPK3PXP")); err != nil {
+		t.Fatal(err)
+	}
+	p := &Provider{store: store, totp: &totpMocks.MockProvider{}, serviceName: "github", Now: time.Now}
+	_ = testutil.RedirectStderr(t)
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "settings unreadable") {
+		t.Errorf("GetCredentials = %v, want the settings error rather than a code from the default settings", err)
 	}
 }

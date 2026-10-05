@@ -14,6 +14,7 @@ import (
 	"github.com/bashhack/sesh/internal/constants"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keyformat"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // auditCommands are the commands of `sesh audit`.
@@ -188,12 +189,21 @@ func pruneAuditLog(store *database.Store, cfg *config.Config) {
 	}
 }
 
-// auditEntryName turns an audit entry ID, an entry's storage key plus "/"
-// and its account, into the kind of entry and a readable name, as --list
-// names them: ("password", "github (alice)"), ("totp", "github (work)"),
-// ("aws", "default"). A key it doesn't recognise comes back whole, with no
-// kind.
+// auditEntryName turns an audit entry ID, an entry's key in text form
+// (or, for events recorded through the keychain.Provider methods, its
+// stored name plus "/" and its account), into the kind of entry and a
+// readable name, as --list names them: ("password", "github (alice)"),
+// ("totp", "github (work)"). An ID it doesn't recognise comes back whole,
+// with no kind.
 func auditEntryName(id string) (kind, name string) {
+	if k, err := vault.ParseKey(id); err == nil {
+		if k.Username != "" {
+			return string(k.Kind), k.Service + " (" + k.Username + ")"
+		}
+		return string(k.Kind), k.Service
+	}
+	// Events recorded through the keychain.Provider methods: the stored
+	// name, then the account.
 	key, _, ok := strings.CutLast(id, "/") // drop the account
 	if !ok {
 		return "", id

@@ -5,18 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"golang.org/x/term"
 
-	"github.com/bashhack/sesh/internal/constants"
-	"github.com/bashhack/sesh/internal/env"
-	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/keyformat"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/setup"
 	internalTotp "github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // stdoutIsTerminal reports whether stdout is a terminal; tests replace it.
@@ -24,11 +20,10 @@ var stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd()))
 
 // Provider implements ServiceProvider for generic TOTP.
 type Provider struct {
-	keychain keychain.Provider
-	totp     internalTotp.Provider
+	store vault.Store
+	totp  internalTotp.Provider
 
 	provider.Clock
-	provider.KeyUser
 
 	serviceName string
 	profile     string
@@ -36,15 +31,15 @@ type Provider struct {
 
 var _ provider.ServiceProvider = (*Provider)(nil)
 
-// NewProvider creates a new Generic TOTP provider.
-func NewProvider(
-	kc keychain.Provider,
-	totp internalTotp.Provider,
-) *Provider {
-	return &Provider{
-		keychain: kc,
-		totp:     totp,
-	}
+// NewProvider creates a TOTP provider over the vault's TOTP entries.
+func NewProvider(store vault.Store, totp internalTotp.Provider) *Provider {
+	return &Provider{store: store, totp: totp}
+}
+
+// key is the entry the flags name: the TOTP entry for the service, with
+// the profile as its username.
+func (p *Provider) key() vault.Key {
+	return vault.Key{Kind: vault.KindTOTP, Service: p.serviceName, Username: p.profile}
 }
 
 // Name returns the provider name.
@@ -61,21 +56,14 @@ func (p *Provider) Description() string {
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.serviceName, "service-name", "", "Name of the service to authenticate with")
 	fs.StringVar(&p.profile, "profile", "", "Profile name for the service (for multiple accounts)")
-
-	defaultKeyUser, err := env.GetCurrentUser()
-	if err != nil {
-		return fmt.Errorf("failed to get current user: %w", err)
-	}
-	p.User = defaultKeyUser
 	return nil
 }
 
 // GetSetupHandler returns a setup handler for TOTP.
 func (p *Provider) GetSetupHandler() any {
-	return setup.NewTOTPSetupHandler(p.keychain)
+	return setup.NewTOTPSetupHandler(p.store)
 }
 
-// GetCredentials generates a TOTP code.
 // GetCredentials returns the current code as Value, which the app prints
 // alone to stdout so it can be captured; the next code and the time left
 // go to stderr. At a terminal it also suggests --clip.
@@ -120,18 +108,10 @@ func (p *Provider) generateTOTP() (totpCodes, error) {
 		return totpCodes{}, fmt.Errorf("service name is required, use --service-name flag")
 	}
 
-	if err := p.EnsureUser(); err != nil {
-		return totpCodes{}, err
-	}
-
-	serviceKey, err := buildServiceKey(p.serviceName, p.profile)
-	if err != nil {
-		return totpCodes{}, fmt.Errorf("failed to build service key: %w", err)
-	}
-
+	k := p.key()
 	fmt.Fprintf(os.Stderr, "🔑 Retrieving TOTP secret for %s\n", p.serviceName)
 
-	secretBytes, err := p.keychain.GetSecret(p.User, serviceKey)
+	secretBytes, err := p.store.Get(k)
 	if err != nil {
 		return totpCodes{}, fmt.Errorf("failed to retrieve TOTP secret for %s: %w", p.serviceName, err)
 	}
@@ -142,8 +122,13 @@ func (p *Provider) generateTOTP() (totpCodes, error) {
 
 	secure.SecureZeroBytes(secretBytes)
 
-	// Check for stored TOTP params (algorithm, digits, period) via the entry description
-	params := p.loadTOTPParams(serviceKey)
+	// The entry's code settings (algorithm, digits, period) decide which
+	// codes are right, so not reading them is an error, not the defaults.
+	e, err := p.store.Lookup(k)
+	if err != nil {
+		return totpCodes{}, fmt.Errorf("failed to read the code settings for %s: %w", p.serviceName, err)
+	}
+	params := e.Settings.TOTP
 
 	currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secretCopy, params)
 	if err != nil {
@@ -164,65 +149,36 @@ func (p *Provider) generateTOTP() (totpCodes, error) {
 	return totpCodes{current: currentCode, next: nextCode, desc: serviceDesc, secondsLeft: secondsLeft}, nil
 }
 
-// loadTOTPParams reads stored TOTP params (algorithm, digits, period) from the entry description.
-// Returns zero-value params on miss; the caller falls back to defaults. Pairs
-// the metadata lookup to the same (service, account) as the secret was read
-// under, so a prefix sibling or cross-user entry can't spoof the params.
-func (p *Provider) loadTOTPParams(serviceKey string) internalTotp.Params {
-	entries, err := p.keychain.ListEntries(serviceKey)
-	if err != nil || len(entries) == 0 {
-		return internalTotp.Params{}
-	}
-	if entries[0].Service != serviceKey || entries[0].Account != p.User {
-		return internalTotp.Params{}
-	}
-	return internalTotp.ParseParams(entries[0].Description)
-}
-
-// ListEntries returns all TOTP entries in the keychain.
+// ListEntries returns the TOTP entries; an entry's ID is its key.
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
-	entries, err := p.keychain.ListEntries(constants.TOTPServicePrefix)
+	entries, err := p.store.List(vault.Filter{Kind: vault.KindTOTP})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list TOTP entries: %w", err)
 	}
-
 	result := make([]provider.ProviderEntry, 0, len(entries))
-	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Service, constants.TOTPServicePrefix+"/") {
-			continue
+	for i := range entries {
+		e := &entries[i]
+		name := e.Service
+		if e.Username != "" {
+			name = fmt.Sprintf("%s (%s)", e.Service, e.Username)
 		}
-
-		serviceName, profile := parseServiceKey(entry.Service)
-
-		displayName := serviceName
-		description := fmt.Sprintf("TOTP for %s", serviceName)
-
-		if profile != "" {
-			displayName = fmt.Sprintf("%s (%s)", serviceName, profile)
-			description = fmt.Sprintf("TOTP for %s profile %s", serviceName, profile)
-		}
-
-		result = append(result, provider.ProviderEntry{
-			Name:        displayName,
-			Description: description,
-			ID:          fmt.Sprintf("%s:%s", entry.Service, entry.Account),
-		})
+		result = append(result, provider.ProviderEntry{Name: name, Description: "TOTP", ID: e.Key.String()})
 	}
-
 	return result, nil
 }
 
-// DeleteEntry deletes a TOTP entry from the keychain.
+// DeleteEntry deletes the TOTP entry id names.
 func (p *Provider) DeleteEntry(id string) error {
-	service, account, err := provider.ParseEntryID(id)
+	k, err := vault.ParseKey(id)
 	if err != nil {
 		return err
 	}
-
-	if err := p.keychain.DeleteEntry(account, service); err != nil {
+	if k.Kind != vault.KindTOTP {
+		return fmt.Errorf("%s isn't a TOTP entry; delete it with --service password", id)
+	}
+	if err := p.store.Delete(k); err != nil {
 		return fmt.Errorf("failed to delete TOTP entry: %w", err)
 	}
-
 	return nil
 }
 
@@ -232,27 +188,15 @@ func (p *Provider) ValidateRequest() error {
 		return fmt.Errorf("--service-name is required for TOTP provider")
 	}
 
-	if err := p.EnsureUser(); err != nil {
-		return err
-	}
-
-	keyName, err := buildServiceKey(p.serviceName, p.profile)
-	if err != nil {
-		return fmt.Errorf("failed to build service key: %w", err)
-	}
-
-	secret, err := p.keychain.GetSecret(p.User, keyName)
-	if err != nil {
-		if !errors.Is(err, keychain.ErrNotFound) {
-			return fmt.Errorf("failed to read TOTP secret from keychain: %w", err)
+	if _, err := p.store.Lookup(p.key()); err != nil {
+		if !errors.Is(err, vault.ErrNotFound) {
+			return fmt.Errorf("failed to look up the TOTP entry: %w", err)
 		}
 		if p.profile != "" {
 			return fmt.Errorf("no TOTP entry found for service '%s' with profile '%s'. Run 'sesh --service totp --setup' first", p.serviceName, p.profile)
 		}
 		return fmt.Errorf("no TOTP entry found for service '%s'. Run 'sesh --service totp --setup' first", p.serviceName)
 	}
-	secure.SecureZeroBytes(secret)
-
 	return nil
 }
 
@@ -272,27 +216,4 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Required:    false,
 		},
 	}
-}
-
-// buildServiceKey creates a service key using keyformat.Build.
-// Format: sesh-totp/{service} or sesh-totp/{service}/{profile}
-func buildServiceKey(service, profile string) (string, error) {
-	if profile == "" {
-		return keyformat.Build(constants.TOTPServicePrefix, service)
-	}
-	return keyformat.Build(constants.TOTPServicePrefix, service, profile)
-}
-
-// parseServiceKey extracts service name and profile from a service key.
-// For "sesh-totp/github" returns ("github", "").
-// For "sesh-totp/github/work" returns ("github", "work").
-func parseServiceKey(serviceKey string) (serviceName, profile string) {
-	segments, err := keyformat.Parse(serviceKey, constants.TOTPServicePrefix)
-	if err != nil || len(segments) == 0 {
-		return serviceKey, ""
-	}
-	if len(segments) == 1 {
-		return segments[0], ""
-	}
-	return segments[0], segments[1]
 }

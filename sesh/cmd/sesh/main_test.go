@@ -15,12 +15,12 @@ import (
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
 	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
 	totpProvider "github.com/bashhack/sesh/internal/provider/totp"
 	"github.com/bashhack/sesh/internal/testutil"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // TestHelperProcess is needed for the testutil.MockExecCommand function
@@ -30,16 +30,48 @@ func TestHelperProcess(_ *testing.T) {
 
 // testHarness bundles a test App with its mock dependencies and output buffers.
 type testHarness struct {
-	app      *App
-	stdout   *bytes.Buffer
-	stderr   *bytes.Buffer
-	keychain *mocks.MockProvider
-	aws      *awsMocks.MockProvider
-	totp     *totpMocks.MockProvider
+	app    *App
+	stdout *bytes.Buffer
+	stderr *bytes.Buffer
+	store  *harnessStore
+	aws    *awsMocks.MockProvider
+	totp   *totpMocks.MockProvider
+}
+
+// harnessStore is an in-memory vault whose List and Delete can be made to
+// fail.
+type harnessStore struct {
+	*vault.MemStore
+	listErr, deleteErr error
+}
+
+func (s *harnessStore) List(f vault.Filter) ([]vault.Entry, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.MemStore.List(f)
+}
+
+func (s *harnessStore) Delete(k vault.Key) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	return s.MemStore.Delete(k)
+}
+
+// put stores a TOTP secret under the entry id names (kind/service[/username]).
+func (s *harnessStore) put(id string) {
+	k, err := vault.ParseKey(id)
+	if err != nil {
+		panic(err)
+	}
+	if err := s.Put(k, []byte("JBSWY3DPEHPK3PXP")); err != nil {
+		panic(err)
+	}
 }
 
 func newTestHarness() *testHarness {
-	mockKC := &mocks.MockProvider{}
+	mockKC := &harnessStore{MemStore: vault.NewMemStore()}
 	mockAWS := &awsMocks.MockProvider{}
 	mockTOTP := &totpMocks.MockProvider{}
 
@@ -63,11 +95,11 @@ func newTestHarness() *testHarness {
 			Stderr:        stderrBuf,
 			VersionInfo:   VersionInfo{Version: "test-version", Commit: "test-commit", Date: "test-date"},
 		},
-		stdout:   stdoutBuf,
-		stderr:   stderrBuf,
-		keychain: mockKC,
-		aws:      mockAWS,
-		totp:     mockTOTP,
+		stdout: stdoutBuf,
+		stderr: stderrBuf,
+		store:  mockKC,
+		aws:    mockAWS,
+		totp:   mockTOTP,
 	}
 }
 
@@ -274,24 +306,15 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 		"aws with valid profile flag": {
 			args: []string{"sesh", "--service", "aws", "--profile", "dev", "--list"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return []keychain.KeychainEntry{
-						{Service: "sesh-aws-default", Account: "testuser"},
-						{Service: "sesh-aws-dev", Account: "testuser"},
-					}, nil
-				}
+				h.store.put("totp/aws/default")
+				h.store.put("totp/aws/dev")
 			},
 			wantExitCode: 0,
 		},
 		"totp with service-name flag": {
 			args: []string{"sesh", "--service", "totp", "--service-name", "github", "--clip"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.GetSecretFunc = func(account, service string) ([]byte, error) {
-					if service == "sesh-totp/github" {
-						return []byte("JBSWY3DPEHPK3PXP"), nil // Example TOTP secret
-					}
-					return nil, fmt.Errorf("not found")
-				}
+				h.store.put("totp/github")
 
 				h.totp.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "123456", "654321", nil
@@ -409,12 +432,7 @@ func TestRun_Commands(t *testing.T) {
 			},
 		},
 		"list entries": {
-			args: []string{"sesh", "--service", "aws", "--list"},
-			setupMocks: func(h *testHarness) {
-				h.keychain.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return []keychain.KeychainEntry{}, nil
-				}
-			},
+			args:         []string{"sesh", "--service", "aws", "--list"},
 			wantExitCode: 0,
 			checkStdout: func(t *testing.T, stdout string) {
 				if !strings.Contains(stdout, "Entries for aws") {
@@ -425,18 +443,14 @@ func TestRun_Commands(t *testing.T) {
 		"list entries error": {
 			args: []string{"sesh", "--service", "aws", "--list"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return nil, fmt.Errorf("keychain error")
-				}
+				h.store.listErr = fmt.Errorf("keychain error")
 			},
 			wantExitCode: 1,
 		},
 		"delete entry": {
-			args: []string{"sesh", "--service", "totp", "--delete", "sesh-totp/github:user"},
+			args: []string{"sesh", "--service", "totp", "--delete", "totp/github"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.DeleteEntryFunc = func(account, service string) error {
-					return nil
-				}
+				h.store.put("totp/github")
 			},
 			wantExitCode: 0,
 		},
@@ -445,11 +459,10 @@ func TestRun_Commands(t *testing.T) {
 			wantExitCode: 1,
 		},
 		"delete entry keychain error": {
-			args: []string{"sesh", "--service", "totp", "--delete", "sesh-totp/github:user"},
+			args: []string{"sesh", "--service", "totp", "--delete", "totp/github"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.DeleteEntryFunc = func(account, service string) error {
-					return fmt.Errorf("keychain delete failed")
-				}
+				h.store.put("totp/github")
+				h.store.deleteErr = fmt.Errorf("keychain delete failed")
 			},
 			wantExitCode: 1,
 			checkStderr: func(t *testing.T, stderr string) {
@@ -465,9 +478,6 @@ func TestRun_Commands(t *testing.T) {
 		"clip error": {
 			args: []string{"sesh", "--service", "totp", "--service-name", "github", "--clip"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, fmt.Errorf("secret not found")
-				}
 				h.app.ClipboardCopy = func(text string) error {
 					return fmt.Errorf("clipboard unavailable")
 				}
@@ -477,9 +487,6 @@ func TestRun_Commands(t *testing.T) {
 		"generate credentials error": {
 			args: []string{"sesh", "--service", "totp", "--service-name", "github"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, fmt.Errorf("secret not found")
-				}
 			},
 			wantExitCode: 1,
 		},

@@ -2,323 +2,173 @@ package setup
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
-	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/qrcode"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
-// mockReader wraps a strings.Reader and returns an error when out of input
-// instead of returning empty strings forever
-type mockReader struct {
-	reader    *strings.Reader
-	bufReader *bufio.Reader
-}
-
-func newMockReader(input string) *mockReader {
-	r := strings.NewReader(input)
-	return &mockReader{
-		reader:    r,
-		bufReader: bufio.NewReader(r),
+// assertEmpty fails t if store holds any entry.
+func assertEmpty(t *testing.T, store vault.Store) {
+	t.Helper()
+	entries, err := store.List(vault.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a failed setup left entries: %+v", entries)
 	}
 }
 
-func (m *mockReader) ReadString(delim byte) (string, error) {
-	line, err := m.bufReader.ReadString(delim)
-	if err == io.EOF && line == "" {
-		// Return a clear error when we're out of input
-		return "", fmt.Errorf("mock reader: no more input available")
+// failingSave is a store whose Save fails.
+type failingSave struct{ *vault.MemStore }
+
+func (failingSave) Save(*vault.Entry, []byte) error { return errors.New("disk full") }
+
+// stubAWSSetup replaces the AWS setup seams for one test: the AWS CLI is
+// installed, answers get-caller-identity, and lists devices as given; the
+// typed secret is a valid one.
+func stubAWSSetup(t *testing.T, mfaDevices string) {
+	t.Helper()
+	origExecLookPath, origRunCommand, origValidate := execLookPath, runCommand, validateAndNormalizeSecret
+	origScan, origReadPassword, origSleep := scanQRCodeFull, readPassword, timeSleep
+	t.Cleanup(func() {
+		execLookPath, runCommand, validateAndNormalizeSecret = origExecLookPath, origRunCommand, origValidate
+		scanQRCodeFull, readPassword, timeSleep = origScan, origReadPassword, origSleep
+	})
+	timeSleep = func(time.Duration) {}
+	execLookPath = func(string) (string, error) { return "/usr/local/bin/aws", nil }
+	// A profile goes after the first argument: sts --profile work get-caller-identity.
+	runCommand = func(_ string, args ...string) ([]byte, error) {
+		switch {
+		case slices.Contains(args, "get-caller-identity"):
+			return []byte(`{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`), nil
+		case slices.Contains(args, "list-mfa-devices"):
+			return []byte(mfaDevices), nil
+		}
+		return nil, nil
 	}
-	return line, err
+	validateAndNormalizeSecret = func(secret string) (string, error) { return secret, nil }
+	scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
+		return qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP", Issuer: "AWS"}, nil
+	}
+	readPassword = func(int) ([]byte, error) { return []byte("JBSWY3DPEHPK3PXP"), nil }
 }
 
 func TestAWSSetupHandler_Setup(t *testing.T) {
-	// Save original functions
-	origExecLookPath := execLookPath
-	origRunCommand := runCommand
-	origValidateAndNormalizeSecret := validateAndNormalizeSecret
-	origGetCurrentUser := getCurrentUser
-	origScanQRCodeFull := scanQRCodeFull
-	origReadPassword := readPassword
-	origTimeSleep := timeSleep
-	defer func() {
-		execLookPath = origExecLookPath
-		runCommand = origRunCommand
-		validateAndNormalizeSecret = origValidateAndNormalizeSecret
-		getCurrentUser = origGetCurrentUser
-		scanQRCodeFull = origScanQRCodeFull
-		readPassword = origReadPassword
-		timeSleep = origTimeSleep
-	}()
-
-	// Mock timeSleep to speed up tests
-	timeSleep = func(d time.Duration) {}
-
 	tests := map[string]struct {
-		// Test control flags
-		getCurrentUserError error
 		validateSecretError error
-		keychainSaveError   error
-		scanQRError         error
-		awsCommandOutputs   map[string]string // command -> output mapping
-
-		// Expected results
-		expectedErrorMsg string
-
-		// Input data - this is what the user would type
-		userInput       string
-		awsNotFound     bool
-		awsCommandFails bool
-		expectError     bool
+		wantErrMsg          string
+		userInput           string
+		existing            bool
+		awsNotFound         bool
+		awsCommandFails     bool
 	}{
 		"aws cli not found": {
-			awsNotFound:      true,
-			expectError:      true,
-			expectedErrorMsg: "AWS CLI not found",
-			userInput:        "",
+			awsNotFound: true,
+			wantErrMsg:  "AWS CLI not found",
 		},
 		"verify credentials fails": {
-			awsCommandFails:  true,
-			expectError:      true,
-			expectedErrorMsg: "failed to get AWS identity",
-			userInput:        "test-profile\n",
+			awsCommandFails: true,
+			wantErrMsg:      "failed to get AWS identity",
+			userInput:       "test-profile\n",
 		},
 		"invalid mfa setup choice": {
-			awsCommandOutputs: map[string]string{
-				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-			},
-			expectError:      true,
-			expectedErrorMsg: "invalid choice",
-			userInput:        "\n3\n", // empty profile, invalid choice
+			wantErrMsg: "invalid choice",
+			userInput:  "\n3\n", // empty profile, invalid choice
 		},
 		"empty mfa setup choice": {
-			awsCommandOutputs: map[string]string{
-				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-			},
-			expectError:      true,
-			expectedErrorMsg: "invalid choice, please select 1 or 2",
-			userInput:        "\n\n", // empty profile, empty choice
+			wantErrMsg: "invalid choice, please select 1 or 2",
+			userInput:  "\n\n", // empty profile, empty choice
 		},
 		"invalid totp secret": {
-			awsCommandOutputs: map[string]string{
-				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-			},
 			validateSecretError: fmt.Errorf("invalid base32"),
-			expectError:         true,
-			expectedErrorMsg:    "invalid TOTP secret",
-			userInput:           "\n1\n\n", // empty profile, manual entry (choice 1), extra newline for prompts
+			wantErrMsg:          "invalid TOTP secret",
+			userInput:           "\n1\n\n", // empty profile, manual entry
 		},
 		"existing entry cancelled by user": {
-			awsCommandOutputs: map[string]string{
-				"get-caller-identity": `{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`,
-			},
-			expectError:      true,
-			expectedErrorMsg: "setup cancelled by user",
-			userInput:        "\nn\n", // empty profile, no to overwrite
+			existing:   true,
+			wantErrMsg: "setup cancelled by user",
+			userInput:  "\nn\n", // empty profile, no to overwrite
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Mock runCommand for AWS CLI calls
-			runCommand = func(name string, args ...string) ([]byte, error) {
-				if tc.awsCommandFails {
-					return nil, fmt.Errorf("mock aws error")
-				}
-				if len(args) > 0 {
-					if args[0] == "sts" && len(args) > 1 && args[1] == "get-caller-identity" {
-						if output, ok := tc.awsCommandOutputs["get-caller-identity"]; ok {
-							return []byte(output), nil
-						}
-					} else if args[0] == "iam" && len(args) > 1 && args[1] == "list-mfa-devices" {
-						if output, ok := tc.awsCommandOutputs["list-mfa-devices"]; ok {
-							return []byte(output), nil
-						}
-					}
-				}
-				return []byte(""), nil
-			}
-
-			// Mock execLookPath
+			stubAWSSetup(t, "")
 			if tc.awsNotFound {
-				execLookPath = func(file string) (string, error) {
-					return "", fmt.Errorf("not found")
-				}
-			} else {
-				execLookPath = func(file string) (string, error) {
-					return "/usr/local/bin/aws", nil
-				}
+				execLookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
 			}
-
-			// Mock validateAndNormalizeSecret
+			if tc.awsCommandFails {
+				runCommand = func(string, ...string) ([]byte, error) { return nil, fmt.Errorf("mock aws error") }
+			}
 			if tc.validateSecretError != nil {
-				validateAndNormalizeSecret = func(secret string) (string, error) {
-					return "", tc.validateSecretError
-				}
-			} else {
-				validateAndNormalizeSecret = func(secret string) (string, error) {
-					return secret, nil
-				}
+				validateAndNormalizeSecret = func(string) (string, error) { return "", tc.validateSecretError }
 			}
 
-			// Mock getCurrentUser
-			if tc.getCurrentUserError != nil {
-				getCurrentUser = func() (string, error) {
-					return "", tc.getCurrentUserError
-				}
-			} else {
-				getCurrentUser = func() (string, error) {
-					return "testuser", nil
+			store := vault.NewMemStore()
+			if tc.existing {
+				if err := store.Put(vault.AWSKey(""), []byte("EXISTINGSECRET")); err != nil {
+					t.Fatal(err)
 				}
 			}
+			handler := &AWSSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader(tc.userInput))}
 
-			// Mock scanQRCodeFull
-			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
-				if tc.scanQRError != nil {
-					return qrcode.TOTPInfo{}, tc.scanQRError
-				}
-				return qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP", Issuer: "AWS"}, nil
-			}
-
-			// Mock readPassword for manual entry
-			readPassword = func(fd int) ([]byte, error) {
-				// Extract the secret from userInput if manual entry
-				lines := strings.Split(tc.userInput, "\n")
-				if len(lines) >= 3 && strings.Contains(lines[1], "2") {
-					return []byte(lines[2]), nil
-				}
-				return []byte("JBSWY3DPEHPK3PXP"), nil
-			}
-
-			// Create mock keychain
-			mockKeychain := &mocks.MockProvider{
-				GetSecretStringFunc: func(account, service string) (string, error) {
-					// Return existing secret for overwrite test case
-					if tc.expectedErrorMsg == "setup cancelled by user" {
-						return "EXISTING_SECRET", nil
-					}
-					return "", nil
-				},
-				SetSecretStringFunc: func(account, service, secret string) error {
-					return tc.keychainSaveError
-				},
-				SetDescriptionFunc: func(service, account, description string) error {
-					return nil
-				},
-			}
-
-			// Create handler with mocked reader
-			handler := &AWSSetupHandler{
-				keychainProvider: mockKeychain,
-				reader:           bufio.NewReader(strings.NewReader(tc.userInput)),
-			}
-
-			// Run setup (without capturing stdout for now to debug)
 			err := handler.Setup()
-
-			// Check error
-			if tc.expectError {
-				if err == nil {
-					t.Errorf("Expected error but got nil")
-				} else if tc.expectedErrorMsg != "" && !strings.Contains(err.Error(), tc.expectedErrorMsg) {
-					t.Errorf("Expected error containing %q, got %q", tc.expectedErrorMsg, err.Error())
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Expected no error but got: %v", err)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErrMsg) {
+				t.Fatalf("Setup() = %v, want an error containing %q", err, tc.wantErrMsg)
+			}
+			if !tc.existing {
+				if _, err := store.Lookup(vault.AWSKey("")); !errors.Is(err, vault.ErrNotFound) {
+					t.Errorf("a failed setup stored an entry (lookup: %v)", err)
 				}
 			}
 		})
 	}
 }
 
-func TestAWSSetupHandler_WithMockReader(t *testing.T) {
-	// Test "get current user fails" with proper input
-	t.Run("get_current_user_fails_fixed", func(t *testing.T) {
-		// Save original functions
-		origExecLookPath := execLookPath
-		origRunCommand := runCommand
-		origGetCurrentUser := getCurrentUser
-		origScanQRCodeFull := scanQRCodeFull
-		origTimeSleep := timeSleep
+// The MFA secret and its device are stored together, as one entry.
+func TestAWSSetupHandler_Setup_StoresSecretAndDevice(t *testing.T) {
+	const device = "arn:aws:iam::123456789012:mfa/testuser"
+	for name, profile := range map[string]string{"default profile": "", "named profile": "work"} {
+		t.Run(name, func(t *testing.T) {
+			stubAWSSetup(t, device)
+			store := vault.NewMemStore()
+			// profile, manual entry, Enter after the console codes, first device
+			input := profile + "\n1\n\n1\n"
+			handler := &AWSSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader(input))}
 
-		// Restore after test
-		defer func() {
-			execLookPath = origExecLookPath
-			runCommand = origRunCommand
-			getCurrentUser = origGetCurrentUser
-			scanQRCodeFull = origScanQRCodeFull
-			timeSleep = origTimeSleep
-		}()
-
-		// Mock time.Sleep to speed up tests
-		timeSleep = func(d time.Duration) {}
-
-		// Mock execLookPath
-		execLookPath = func(file string) (string, error) {
-			if file == "aws" {
-				return "/usr/local/bin/aws", nil
+			if err := handler.Setup(); err != nil {
+				t.Fatalf("Setup(): %v", err)
 			}
-			return "", fmt.Errorf("not found")
-		}
-		// Mock getCurrentUser to fail
-		getCurrentUser = func() (string, error) {
-			return "", fmt.Errorf("user error")
-		}
-
-		// QR scanning is unreachable in this subtest — getCurrentUser fails
-		// first. No QR stub needed.
-
-		// Mock runCommand for AWS CLI calls
-		runCommand = func(name string, args ...string) ([]byte, error) {
-			if len(args) > 0 && args[0] == "sts" {
-				return []byte(`{"UserId": "AIDAI23HBD", "Account": "123456789012", "Arn": "arn:aws:iam::123456789012:user/testuser"}`), nil
-			} else if len(args) > 0 && args[0] == "iam" && len(args) > 1 && args[1] == "list-mfa-devices" {
-				return []byte(""), nil
+			k := vault.AWSKey(profile)
+			e, err := store.Lookup(k)
+			if err != nil {
+				t.Fatalf("no entry at %s: %v", k, err)
 			}
-			return []byte(""), nil
-		}
+			if e.Settings.AWSMFADevice != device {
+				t.Errorf("device = %q, want %q", e.Settings.AWSMFADevice, device)
+			}
+			if secret, err := store.Get(k); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" {
+				t.Errorf("secret = %q, %v; want the typed one", secret, err)
+			}
+		})
+	}
+}
 
-		// Create mock keychain
-		mockKeychain := &mocks.MockProvider{
-			SetSecretStringFunc: func(account, service, secret string) error {
-				return nil
-			},
-			SetDescriptionFunc: func(service, account, description string) error {
-				return nil
-			},
-		}
+func TestAWSSetupHandler_Setup_FailedSaveLeavesNothing(t *testing.T) {
+	stubAWSSetup(t, "arn:aws:iam::123456789012:mfa/testuser")
+	store := failingSave{vault.NewMemStore()}
+	handler := &AWSSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("\n1\n\n1\n"))}
 
-		// Complete input sequence for QR code flow:
-		// 1. Empty profile
-		// 2. Choose QR (2)
-		// 3. Enter to capture
-		// 4. Enter after TOTP codes
-		// 5. Choose first MFA device (1)
-		// 6. Add extra input for potential retry prompts
-		userInput := "\n2\n\n\n1\n3\narn:aws:iam::123456789012:mfa/testuser\n"
-
-		// Use our mock reader
-		mockReader := newMockReader(userInput)
-
-		// Create handler
-		handler := &AWSSetupHandler{
-			keychainProvider: mockKeychain,
-			reader:           mockReader.bufReader,
-		}
-
-		// Run setup
-		err := handler.Setup()
-
-		// Should fail with "failed to get current user"
-		if err == nil {
-			t.Errorf("Expected error but got nil")
-		} else if !strings.Contains(err.Error(), "failed to get current user") {
-			t.Errorf("Expected error containing 'failed to get current user', got: %v", err)
-		}
-	})
+	err := handler.Setup()
+	if wantSub := "failed to store the MFA secret"; err == nil || !strings.Contains(err.Error(), wantSub) || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("Setup() = %v, want an error containing %q and the cause", err, wantSub)
+	}
+	assertEmpty(t, store)
 }

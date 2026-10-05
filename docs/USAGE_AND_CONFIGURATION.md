@@ -681,12 +681,14 @@ sesh -service totp -service-name github -profile personal
 sesh -service totp -list
 # Output:
 #   Entries for totp:
-#     github (work)        TOTP for github profile work [ID: sesh-totp/github/work:username]
-#     github (personal)    TOTP for github profile personal [ID: sesh-totp/github/personal:username]
-#     google               TOTP for google [ID: sesh-totp/google:username]
+#     github (personal)    TOTP [ID: totp/github/personal]
+#     github (work)        TOTP [ID: totp/github/work]
+#     google               TOTP [ID: totp/google]
 ```
 
 The `[ID: ...]` value is what you pass to `-delete`.
+
+There's one set of TOTP entries. `-service totp` and the password manager's `totp-store` / `totp-generate` work on the same ones (`-profile` and `-username` mean the same thing), so an entry added either way shows up in both, in search, and in exports. The AWS provider's MFA secret for a profile is the TOTP entry `aws` with the profile as its username, and it remembers the MFA device with it.
 
 ### Password Manager Workflow
 
@@ -845,11 +847,11 @@ List and manage stored entries:
 # List all entries for a service
 $ sesh -service aws -list
 Entries for aws:
-  AWS (default)        AWS MFA for profile (default) [ID: sesh-aws/default:username]
-  AWS (prod)           AWS MFA for profile (prod) [ID: sesh-aws/prod:username]
+  AWS (default)        AWS MFA for profile (default) [ID: totp/aws/default]
+  AWS (prod)           AWS MFA for profile (prod) [ID: totp/aws/prod]
 
 # Delete an entry by copying the ID from -list output
-$ sesh -service aws -delete "sesh-aws/prod:username"
+$ sesh -service aws -delete totp/aws/prod
 ✅ Entry deleted successfully
 ```
 

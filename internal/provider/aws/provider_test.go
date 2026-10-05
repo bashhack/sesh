@@ -12,21 +12,45 @@ import (
 
 	"github.com/bashhack/sesh/internal/aws"
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
-	"github.com/bashhack/sesh/internal/keychain"
-	keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/subshell"
 	"github.com/bashhack/sesh/internal/testutil"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
+	"github.com/bashhack/sesh/internal/vault"
 )
+
+const testDevice = "arn:aws:iam::123456789012:mfa/user"
+
+// awsStore is a store holding profile's AWS entry with secret, and device
+// as its MFA device ("" for none).
+func awsStore(t *testing.T, profile, secret, device string) *vault.MemStore {
+	t.Helper()
+	store := vault.NewMemStore()
+	e := vault.Entry{Key: vault.AWSKey(profile), Settings: vault.Settings{AWSMFADevice: device}}
+	if err := store.Save(&e, []byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+// failingStore is a store whose every read and delete fails with err.
+type failingStore struct {
+	*vault.MemStore
+	err error
+}
+
+func (f failingStore) Get(vault.Key) ([]byte, error)            { return nil, f.err }
+func (f failingStore) Lookup(vault.Key) (vault.Entry, error)    { return vault.Entry{}, f.err }
+func (f failingStore) List(vault.Filter) ([]vault.Entry, error) { return nil, f.err }
+func (f failingStore) Delete(vault.Key) error                   { return f.err }
 
 func TestNewProvider(t *testing.T) {
 	mockAWS := &awsMocks.MockProvider{}
-	mockKeychain := &keychainMocks.MockProvider{}
+	store := vault.NewMemStore()
 	mockTOTP := &totpMocks.MockProvider{}
 
-	p := NewProvider(mockAWS, mockKeychain, mockTOTP)
+	p := NewProvider(mockAWS, store, mockTOTP)
 
 	if p == nil {
 		t.Fatal("NewProvider() returned nil")
@@ -34,14 +58,11 @@ func TestNewProvider(t *testing.T) {
 	if p.aws != mockAWS {
 		t.Error("AWS provider not set correctly")
 	}
-	if p.keychain != mockKeychain {
-		t.Error("Keychain provider not set correctly")
+	if p.store != store {
+		t.Error("store not set correctly")
 	}
 	if p.totp != mockTOTP {
 		t.Error("TOTP provider not set correctly")
-	}
-	if p.keyName != "sesh-aws" {
-		t.Errorf("keyName = %v, want 'sesh-aws'", p.keyName)
 	}
 }
 
@@ -103,9 +124,6 @@ func TestProvider_SetupFlags(t *testing.T) {
 			}
 			if p.noSubshell {
 				t.Error("noSubshell should be false by default")
-			}
-			if p.User == "" {
-				t.Error("User should be set to current user")
 			}
 		})
 	}
@@ -191,8 +209,7 @@ func TestProvider_GetProfile(t *testing.T) {
 }
 
 func TestProvider_GetSetupHandler(t *testing.T) {
-	mockKeychain := &keychainMocks.MockProvider{}
-	p := &Provider{keychain: mockKeychain}
+	p := &Provider{store: vault.NewMemStore()}
 
 	handler := p.GetSetupHandler()
 	if _, ok := handler.(*setup.AWSSetupHandler); !ok {
@@ -202,115 +219,49 @@ func TestProvider_GetSetupHandler(t *testing.T) {
 
 func TestProvider_ValidateRequest(t *testing.T) {
 	tests := map[string]struct {
-		setupKeychain func(*keychainMocks.MockProvider)
-		profile       string
-		wantErrMsg    string
-		wantErr       bool
+		store       func(t *testing.T) vault.Store
+		profile     string
+		wantErrMsg  string
+		wantWarning bool
 	}{
 		"valid request with default profile": {
-			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					switch service {
-					case "sesh-aws/default":
-						return []byte("secret"), nil
-					case "sesh-aws-serial/default":
-						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
-					default:
-						return nil, fmt.Errorf("unexpected service: %s", service)
-					}
-				}
-			},
-			wantErr: false,
+			store: func(t *testing.T) vault.Store { return awsStore(t, "", "secret", testDevice) },
 		},
 		"valid request with custom profile": {
 			profile: "dev",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					switch service {
-					case "sesh-aws/dev":
-						return []byte("secret"), nil
-					case "sesh-aws-serial/dev":
-						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
-					default:
-						return nil, fmt.Errorf("unexpected service: %s", service)
-					}
-				}
-			},
-			wantErr: false,
+			store:   func(t *testing.T) vault.Store { return awsStore(t, "dev", "secret", testDevice) },
 		},
-		"no TOTP secret for profile": {
-			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, keychain.ErrNotFound
-				}
-			},
-			wantErr:    true,
-			wantErrMsg: "no AWS entry found for profile 'default'. Run 'sesh --service aws --setup' first",
+		"no entry for profile": {
+			store:      func(t *testing.T) vault.Store { return awsStore(t, "dev", "secret", testDevice) },
+			wantErrMsg: "no AWS entry found for profile (default). Run 'sesh --service aws --setup' first",
 		},
-		"TOTP keychain error surfaces without fallback message": {
-			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, errors.New("keychain locked")
-				}
+		"store error surfaces without the setup hint": {
+			store: func(*testing.T) vault.Store {
+				return failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")}
 			},
-			wantErr:    true,
-			wantErrMsg: "failed to read TOTP secret from keychain: keychain locked",
+			wantErrMsg: "failed to look up the AWS entry: vault locked",
 		},
-		"no MFA serial (warning only)": {
-			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					if service == "sesh-aws/default" {
-						return []byte("secret"), nil
-					}
-					return nil, keychain.ErrNotFound
-				}
-			},
-			wantErr: false,
-		},
-		"MFA keychain error surfaces as error": {
-			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					if service == "sesh-aws/default" {
-						return []byte("secret"), nil
-					}
-					return nil, errors.New("keychain locked")
-				}
-			},
-			wantErr:    true,
-			wantErrMsg: "failed to read MFA serial from keychain: keychain locked",
+		"no MFA device stored (warning only)": {
+			store:       func(t *testing.T) vault.Store { return awsStore(t, "", "secret", "") },
+			wantWarning: true,
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			defer testutil.DiscardStderr(t)()
-
-			mockKeychain := &keychainMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
-
-			p := &Provider{
-				keychain: mockKeychain,
-				profile:  tc.profile,
-				User:     "testuser",
-				keyName:  "sesh-aws",
-			}
+			restore := testutil.RedirectStderr(t)
+			p := &Provider{store: tc.store(t), profile: tc.profile}
 
 			err := p.ValidateRequest()
-			if tc.wantErr && err == nil {
-				t.Error("ValidateRequest() expected error but got nil")
-			}
-			if !tc.wantErr && err != nil {
+			stderr := restore()
+			switch {
+			case tc.wantErrMsg == "" && err != nil:
 				t.Errorf("ValidateRequest() unexpected error: %v", err)
+			case tc.wantErrMsg != "" && (err == nil || err.Error() != tc.wantErrMsg):
+				t.Errorf("ValidateRequest() = %v, want %q", err, tc.wantErrMsg)
 			}
-			if tc.wantErrMsg != "" && err != nil {
-				if err.Error() != tc.wantErrMsg {
-					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
-				}
+			if got := strings.Contains(stderr, "No MFA device stored"); got != tc.wantWarning {
+				t.Errorf("stderr = %q, want the no-device warning: %v", stderr, tc.wantWarning)
 			}
 		})
 	}
@@ -318,23 +269,15 @@ func TestProvider_ValidateRequest(t *testing.T) {
 
 func TestProvider_GetTOTPCodes(t *testing.T) {
 	tests := map[string]struct {
-		setupKeychain func(*keychainMocks.MockProvider)
-		setupTOTP     func(*totpMocks.MockProvider)
-		profile       string
-		wantCurrent   string
-		wantNext      string
-		wantErr       bool
+		store       func(t *testing.T) vault.Store
+		setupTOTP   func(*totpMocks.MockProvider)
+		profile     string
+		wantCurrent string
+		wantNext    string
+		wantErr     bool
 	}{
 		"successful TOTP generation": {
-			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					if account == "testuser" && service == "sesh-aws/default" {
-						return []byte("MYSECRET"), nil
-					}
-					return nil, fmt.Errorf("unexpected call: %s, %s", account, service)
-				}
-			},
+			store: func(t *testing.T) vault.Store { return awsStore(t, "", "MYSECRET", testDevice) },
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					if string(secret) == "MYSECRET" {
@@ -346,15 +289,22 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 			wantCurrent: "123456",
 			wantNext:    "654321",
 		},
-		"keychain error": {
-			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, errors.New("keychain locked")
+		"another profile's entry isn't used": {
+			profile: "dev",
+			store:   func(t *testing.T) vault.Store { return awsStore(t, "", "MYSECRET", testDevice) },
+			setupTOTP: func(m *totpMocks.MockProvider) {
+				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
+					t.Error("GenerateConsecutiveCodesBytes should not be called")
+					return "", "", nil
 				}
 			},
+			wantErr: true,
+		},
+		"store error": {
+			store: func(*testing.T) vault.Store {
+				return failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")}
+			},
 			setupTOTP: func(m *totpMocks.MockProvider) {
-				// Should not be called
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					t.Error("GenerateConsecutiveCodesBytes should not be called")
 					return "", "", nil
@@ -363,12 +313,7 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 			wantErr: true,
 		},
 		"TOTP generation error": {
-			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return []byte("INVALIDSECRET"), nil
-				}
-			},
+			store: func(t *testing.T) vault.Store { return awsStore(t, "", "INVALIDSECRET", testDevice) },
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "", "", errors.New("invalid secret")
@@ -382,18 +327,10 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			defer testutil.DiscardStderr(t)()
 
-			mockKeychain := &keychainMocks.MockProvider{}
 			mockTOTP := &totpMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
 			tc.setupTOTP(mockTOTP)
 
-			p := &Provider{
-				keychain: mockKeychain,
-				totp:     mockTOTP,
-				profile:  tc.profile,
-				User:     "testuser",
-				keyName:  "sesh-aws",
-			}
+			p := &Provider{store: tc.store(t), totp: mockTOTP, profile: tc.profile}
 
 			current, next, secondsLeft, err := p.GetTOTPCodes()
 			if tc.wantErr && err == nil {
@@ -417,101 +354,27 @@ func TestProvider_GetTOTPCodes(t *testing.T) {
 	}
 }
 
-func TestProvider_GetTOTPKeyInfo(t *testing.T) {
-	tests := map[string]struct {
-		profile  string
-		user     string
-		wantUser string
-		wantKey  string
-		wantErr  bool
-	}{
-		"default profile with preset user": {
-			profile:  "",
-			user:     "testuser",
-			wantUser: "testuser",
-			wantKey:  "sesh-aws/default",
-		},
-		"custom profile with preset user": {
-			profile:  "dev",
-			user:     "testuser",
-			wantUser: "testuser",
-			wantKey:  "sesh-aws/dev",
-		},
-		"unset user - should get current": {
-			profile:  "",
-			user:     "",
-			wantUser: "", // Will be set by env.GetCurrentUser
-			wantKey:  "sesh-aws/default",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			p := &Provider{
-				profile: tc.profile,
-				User:    tc.user,
-				keyName: "sesh-aws",
-			}
-
-			user, key, err := p.GetTOTPKeyInfo()
-			if tc.wantErr && err == nil {
-				t.Error("GetTOTPKeyInfo() expected error but got nil")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("GetTOTPKeyInfo() unexpected error: %v", err)
-			}
-			if !tc.wantErr {
-				if tc.wantUser != "" && user != tc.wantUser {
-					t.Errorf("user = %v, want %v", user, tc.wantUser)
-				}
-				if tc.wantUser == "" && user == "" {
-					t.Error("user should have been set by env.GetCurrentUser")
-				}
-				if key != tc.wantKey {
-					t.Errorf("key = %v, want %v", key, tc.wantKey)
-				}
-			}
-		})
-	}
-}
-
 func TestProvider_GetMFASerialBytes(t *testing.T) {
 	tests := map[string]struct {
-		profile       string
-		user          string
-		setupKeychain func(*keychainMocks.MockProvider)
-		setupAWS      func(*awsMocks.MockProvider)
-		wantSerial    string
-		wantErr       bool
+		store      func(t *testing.T) vault.Store
+		setupAWS   func(*awsMocks.MockProvider)
+		profile    string
+		wantSerial string
+		wantErr    bool
 	}{
-		"serial in keychain": {
-			profile: "",
-			user:    "testuser",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					if account == "testuser" && service == "sesh-aws-serial/default" {
-						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
-					}
-					return nil, fmt.Errorf("unexpected call: %s, %s", account, service)
-				}
-			},
+		"device in the entry's settings": {
+			store: func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
 			setupAWS: func(m *awsMocks.MockProvider) {
-				// Should not be called
 				m.GetFirstMFADeviceFunc = func(profile string) (string, error) {
-					t.Error("GetFirstMFADevice should not be called when serial is in keychain")
+					t.Error("GetFirstMFADevice should not be called when the device is stored")
 					return "", nil
 				}
 			},
-			wantSerial: "arn:aws:iam::123456789012:mfa/user",
+			wantSerial: testDevice,
 		},
-		"serial not in keychain - auto-detect": {
+		"no device stored - auto-detect": {
 			profile: "dev",
-			user:    "testuser",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, keychain.ErrNotFound
-				}
-			},
+			store:   func(t *testing.T) vault.Store { return awsStore(t, "dev", "s", "") },
 			setupAWS: func(m *awsMocks.MockProvider) {
 				m.GetFirstMFADeviceFunc = func(profile string) (string, error) {
 					if profile == "dev" {
@@ -522,14 +385,18 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 			},
 			wantSerial: "arn:aws:iam::123456789012:mfa/auto-detected",
 		},
-		"auto-detect fails": {
-			profile: "",
-			user:    "testuser",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, keychain.ErrNotFound
+		"no entry - auto-detect": {
+			profile: "dev",
+			store:   func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
+			setupAWS: func(m *awsMocks.MockProvider) {
+				m.GetFirstMFADeviceFunc = func(profile string) (string, error) {
+					return "arn:aws:iam::123456789012:mfa/auto-detected", nil
 				}
 			},
+			wantSerial: "arn:aws:iam::123456789012:mfa/auto-detected",
+		},
+		"auto-detect fails": {
+			store: func(t *testing.T) vault.Store { return awsStore(t, "", "s", "") },
 			setupAWS: func(m *awsMocks.MockProvider) {
 				m.GetFirstMFADeviceFunc = func(profile string) (string, error) {
 					return "", errors.New("no MFA device found")
@@ -537,17 +404,13 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 			},
 			wantErr: true,
 		},
-		"keychain error surfaces without fallback": {
-			profile: "",
-			user:    "testuser",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, errors.New("keychain locked")
-				}
+		"store error surfaces without fallback": {
+			store: func(*testing.T) vault.Store {
+				return failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")}
 			},
 			setupAWS: func(m *awsMocks.MockProvider) {
 				m.GetFirstMFADeviceFunc = func(profile string) (string, error) {
-					t.Error("GetFirstMFADevice should not be called on non-ErrNotFound keychain errors")
+					t.Error("GetFirstMFADevice should not be called on a store error other than not found")
 					return "", nil
 				}
 			},
@@ -557,17 +420,10 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			mockKeychain := &keychainMocks.MockProvider{}
 			mockAWS := &awsMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
 			tc.setupAWS(mockAWS)
 
-			p := &Provider{
-				aws:      mockAWS,
-				keychain: mockKeychain,
-				profile:  tc.profile,
-				User:     tc.user,
-			}
+			p := &Provider{aws: mockAWS, store: tc.store(t), profile: tc.profile}
 
 			serialBytes, err := p.GetMFASerialBytes()
 			if tc.wantErr && err == nil {
@@ -587,28 +443,17 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 
 func TestProvider_GetCredentials(t *testing.T) {
 	tests := map[string]struct {
-		now           func() time.Time
-		setupKeychain func(*keychainMocks.MockProvider)
-		setupTOTP     func(*totpMocks.MockProvider)
-		setupAWS      func(*awsMocks.MockProvider)
-		checkResult   func(*testing.T, provider.Credentials)
-		profile       string
-		wantErr       bool
+		now         func() time.Time
+		setupTOTP   func(*totpMocks.MockProvider)
+		setupAWS    func(*awsMocks.MockProvider)
+		checkResult func(*testing.T, provider.Credentials)
+		profile     string
+		device      string // the MFA device stored with the entry; "" for none
+		wantErr     bool
 	}{
 		"successful credential generation": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					switch service {
-					case "sesh-aws-serial/default":
-						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
-					case "sesh-aws/default":
-						return []byte("MYSECRET"), nil
-					default:
-						return nil, fmt.Errorf("unexpected service: %s", service)
-					}
-				}
-			},
+			device:  testDevice,
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "123456", "654321", nil
@@ -649,20 +494,8 @@ func TestProvider_GetCredentials(t *testing.T) {
 				}
 			},
 		},
-		"MFA serial not in keychain - auto-detect": {
+		"no MFA device stored - auto-detect": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					switch service {
-					case "sesh-aws-serial/default":
-						return nil, keychain.ErrNotFound
-					case "sesh-aws/default":
-						return []byte("MYSECRET"), nil
-					default:
-						return nil, fmt.Errorf("unexpected service: %s", service)
-					}
-				}
-			},
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "123456", "654321", nil
@@ -688,18 +521,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 		},
 		"retry with next code on invalid MFA": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					switch service {
-					case "sesh-aws-serial/default":
-						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
-					case "sesh-aws/default":
-						return []byte("MYSECRET"), nil
-					default:
-						return nil, fmt.Errorf("unexpected service: %s", service)
-					}
-				}
-			},
+			device:  testDevice,
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "123456", "654321", nil
@@ -727,18 +549,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 		},
 		"second attempt non-MFA error skips future-window retry": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					switch service {
-					case "sesh-aws-serial/default":
-						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
-					case "sesh-aws/default":
-						return []byte("MYSECRET"), nil
-					default:
-						return nil, fmt.Errorf("unexpected service: %s", service)
-					}
-				}
-			},
+			device:  testDevice,
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "123456", "654321", nil
@@ -766,18 +577,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 				// Second 5 of a 30s window → freshSecondsLeft = 25
 				return time.Unix(5, 0)
 			},
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					switch service {
-					case "sesh-aws-serial/default":
-						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
-					case "sesh-aws/default":
-						return []byte("MYSECRET"), nil
-					default:
-						return nil, fmt.Errorf("unexpected service: %s", service)
-					}
-				}
-			},
+			device: testDevice,
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "123456", "654321", nil
@@ -813,18 +613,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 		},
 		"both codes fail": {
 			profile: "",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.GetSecretFunc = func(account, service string) ([]byte, error) {
-					switch service {
-					case "sesh-aws-serial/default":
-						return []byte("arn:aws:iam::123456789012:mfa/user"), nil
-					case "sesh-aws/default":
-						return []byte("MYSECRET"), nil
-					default:
-						return nil, fmt.Errorf("unexpected service: %s", service)
-					}
-				}
-			},
+			device:  testDevice,
 			setupTOTP: func(m *totpMocks.MockProvider) {
 				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "123456", "654321", nil
@@ -843,21 +632,17 @@ func TestProvider_GetCredentials(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			defer testutil.DiscardStderr(t)()
 
-			mockKeychain := &keychainMocks.MockProvider{}
 			mockTOTP := &totpMocks.MockProvider{}
 			mockAWS := &awsMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
 			tc.setupTOTP(mockTOTP)
 			tc.setupAWS(mockAWS)
 
 			p := &Provider{
-				aws:      mockAWS,
-				keychain: mockKeychain,
-				totp:     mockTOTP,
-				profile:  tc.profile,
-				User:     "testuser",
-				keyName:  "sesh-aws",
-				Now:      tc.now,
+				aws:     mockAWS,
+				store:   awsStore(t, tc.profile, "MYSECRET", tc.device),
+				totp:    mockTOTP,
+				profile: tc.profile,
+				Now:     tc.now,
 			}
 
 			creds, err := p.GetCredentials()
@@ -875,14 +660,6 @@ func TestProvider_GetCredentials(t *testing.T) {
 }
 
 func TestProvider_GetClipboardValue(t *testing.T) {
-	mockKeychain := &keychainMocks.MockProvider{
-		GetSecretFunc: func(account, service string) ([]byte, error) {
-			if account == "testuser" && service == "sesh-aws/default" {
-				return []byte("MYSECRET"), nil
-			}
-			return nil, fmt.Errorf("unexpected call")
-		},
-	}
 	mockTOTP := &totpMocks.MockProvider{
 		GenerateConsecutiveCodesBytesFunc: func(secret []byte) (string, string, error) {
 			if string(secret) == "MYSECRET" {
@@ -894,13 +671,7 @@ func TestProvider_GetClipboardValue(t *testing.T) {
 
 	defer testutil.DiscardStderr(t)()
 
-	p := &Provider{
-		keychain: mockKeychain,
-		totp:     mockTOTP,
-		profile:  "",
-		User:     "testuser",
-		keyName:  "sesh-aws",
-	}
+	p := &Provider{store: awsStore(t, "", "MYSECRET", testDevice), totp: mockTOTP}
 
 	creds, err := p.GetClipboardValue()
 	if err != nil {
@@ -953,25 +724,20 @@ func TestProvider_NewSubshellConfig(t *testing.T) {
 
 func TestProvider_ListEntries(t *testing.T) {
 	tests := map[string]struct {
-		setupKeychain func(*keychainMocks.MockProvider)
-		checkResult   func(*testing.T, []provider.ProviderEntry)
-		wantCount     int
-		wantErr       bool
+		store       func(t *testing.T) vault.Store
+		checkResult func(*testing.T, []provider.ProviderEntry)
+		wantCount   int
+		wantErr     bool
 	}{
-		"successful list with multiple profiles": {
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					if prefix != "sesh-aws" {
-						return nil, fmt.Errorf("unexpected prefix: %s", prefix)
+		"multiple profiles": {
+			store: func(t *testing.T) vault.Store {
+				store := awsStore(t, "", "s", testDevice)
+				for _, profile := range []string{"dev", "prod"} {
+					if err := store.Save(&vault.Entry{Key: vault.AWSKey(profile)}, []byte("s")); err != nil {
+						t.Fatal(err)
 					}
-					return []keychain.KeychainEntry{
-						{Service: "sesh-aws/default", Account: "user1"},
-						{Service: "sesh-aws/dev", Account: "user1"},
-						{Service: "sesh-aws/prod", Account: "user2"},
-						{Service: "sesh-aws-serial/default", Account: "user1"},
-						{Service: "sesh-aws-serial/dev", Account: "user1"},
-					}, nil
 				}
+				return store
 			},
 			wantCount: 3,
 			checkResult: func(t *testing.T, entries []provider.ProviderEntry) {
@@ -981,51 +747,42 @@ func TestProvider_ListEntries(t *testing.T) {
 				if entries[0].Description != "AWS MFA for profile (default)" {
 					t.Errorf("entries[0].Description = %v, want 'AWS MFA for profile (default)'", entries[0].Description)
 				}
-				if entries[0].ID != "sesh-aws/default:user1" {
-					t.Errorf("entries[0].ID = %v, want 'sesh-aws/default:user1'", entries[0].ID)
+				if entries[0].ID != "totp/aws/default" {
+					t.Errorf("entries[0].ID = %v, want 'totp/aws/default'", entries[0].ID)
 				}
-
-				if entries[1].Name != "AWS (dev)" {
-					t.Errorf("entries[1].Name = %v, want 'AWS (dev)'", entries[1].Name)
-				}
-				if entries[1].ID != "sesh-aws/dev:user1" {
-					t.Errorf("entries[1].ID = %v, want 'sesh-aws/dev:user1'", entries[1].ID)
+				if entries[2].Name != "AWS (prod)" || entries[2].ID != "totp/aws/prod" {
+					t.Errorf("entries[2] = %+v, want AWS (prod), totp/aws/prod", entries[2])
 				}
 			},
 		},
-		"serial entries filtered from results": {
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					if prefix != "sesh-aws" {
-						return nil, fmt.Errorf("unexpected prefix: %s", prefix)
+		"other entries are left out": {
+			store: func(t *testing.T) vault.Store {
+				store := awsStore(t, "", "s", testDevice)
+				for _, k := range []vault.Key{
+					{Kind: vault.KindTOTP, Service: "github", Username: "alice"},
+					{Kind: vault.KindTOTP, Service: "aws-console", Username: "admin"},
+					{Kind: vault.KindPassword, Service: "aws", Username: "default"},
+				} {
+					if err := store.Put(k, []byte("s")); err != nil {
+						t.Fatal(err)
 					}
-					return []keychain.KeychainEntry{
-						{Service: "sesh-aws/default", Account: "user1"},
-						{Service: "sesh-aws-serial/default", Account: "user1"},
-						{Service: "sesh-aws-serial/dev", Account: "user1"},
-					}, nil
 				}
+				return store
 			},
 			wantCount: 1,
 			checkResult: func(t *testing.T, entries []provider.ProviderEntry) {
-				if entries[0].Name != "AWS (default)" {
-					t.Errorf("entries[0].Name = %v, want 'AWS (default)'", entries[0].Name)
+				if entries[0].ID != "totp/aws/default" {
+					t.Errorf("entries[0].ID = %v, want 'totp/aws/default'", entries[0].ID)
 				}
 			},
 		},
 		"empty list": {
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return []keychain.KeychainEntry{}, nil
-				}
-			},
+			store:     func(*testing.T) vault.Store { return vault.NewMemStore() },
 			wantCount: 0,
 		},
-		"keychain error": {
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return nil, errors.New("keychain locked")
-				}
+		"store error": {
+			store: func(*testing.T) vault.Store {
+				return failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")}
 			},
 			wantErr: true,
 		},
@@ -1033,10 +790,7 @@ func TestProvider_ListEntries(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			mockKeychain := &keychainMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
-
-			p := &Provider{keychain: mockKeychain}
+			p := &Provider{store: tc.store(t)}
 
 			entries, err := p.ListEntries()
 			if tc.wantErr && err == nil {
@@ -1058,115 +812,89 @@ func TestProvider_ListEntries(t *testing.T) {
 }
 
 func TestProvider_DeleteEntry(t *testing.T) {
+	github := vault.Key{Kind: vault.KindTOTP, Service: "github"}
 	tests := map[string]struct {
-		setupKeychain func(*keychainMocks.MockProvider)
-		id            string
-		wantErrMsg    string
-		wantErr       bool
+		store      func(t *testing.T) vault.Store
+		id         string
+		wantGone   vault.Key // deleted by the call
+		wantErrSub string
 	}{
-		"successful delete": {
-			id: "sesh-aws/default:testuser",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				deleteCalls := 0
-				m.DeleteEntryFunc = func(account, service string) error {
-					deleteCalls++
-					switch deleteCalls {
-					case 1:
-						if account != "testuser" || service != "sesh-aws/default" {
-							return fmt.Errorf("unexpected call 1: %s, %s", account, service)
-						}
-						return nil
-					case 2:
-						if account != "testuser" || service != "sesh-aws-serial/default" {
-							return fmt.Errorf("unexpected call 2: %s, %s", account, service)
-						}
-						return nil
-					default:
-						return fmt.Errorf("unexpected delete call #%d", deleteCalls)
-					}
-				}
-			},
+		"default profile": {
+			id:       "totp/aws/default",
+			store:    func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
+			wantGone: vault.AWSKey(""),
 		},
-		"delete with profile": {
-			id: "sesh-aws/dev:testuser",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				deleteCalls := 0
-				m.DeleteEntryFunc = func(account, service string) error {
-					deleteCalls++
-					switch deleteCalls {
-					case 1:
-						if account != "testuser" || service != "sesh-aws/dev" {
-							return fmt.Errorf("unexpected call 1: %s, %s", account, service)
-						}
-						return nil
-					case 2:
-						if account != "testuser" || service != "sesh-aws-serial/dev" {
-							return fmt.Errorf("unexpected call 2: %s, %s", account, service)
-						}
-						return nil
-					default:
-						return fmt.Errorf("unexpected delete call #%d", deleteCalls)
-					}
-				}
-			},
+		"named profile": {
+			id:       "totp/aws/dev",
+			store:    func(t *testing.T) vault.Store { return awsStore(t, "dev", "s", testDevice) },
+			wantGone: vault.AWSKey("dev"),
 		},
-		"main delete fails": {
-			id: "sesh-aws/default:testuser",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				m.DeleteEntryFunc = func(account, service string) error {
-					return errors.New("keychain locked")
-				}
-			},
-			wantErr: true,
+		"missing entry": {
+			id:         "totp/aws/prod",
+			store:      func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
+			wantErrSub: "failed to delete AWS entry",
 		},
-		"serial delete fails - should not error": {
-			id: "sesh-aws/default:testuser",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				deleteCalls := 0
-				m.DeleteEntryFunc = func(account, service string) error {
-					deleteCalls++
-					if deleteCalls == 1 {
-						return nil // Main delete succeeds
-					}
-					return errors.New("serial delete failed") // Serial delete fails
-				}
+		"store error": {
+			id: "totp/aws/default",
+			store: func(*testing.T) vault.Store {
+				return failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")}
 			},
-			wantErr: false, // Should still succeed
+			wantErrSub: "vault locked",
 		},
 		"invalid ID format": {
-			id: "invalid-id",
-			setupKeychain: func(m *keychainMocks.MockProvider) {
-				// Should not be called
-				m.DeleteEntryFunc = func(account, service string) error {
-					t.Error("DeleteEntry should not be called with invalid ID")
-					return nil
-				}
-			},
-			wantErr:    true,
-			wantErrMsg: "invalid entry ID format: expected 'service:account', got \"invalid-id\"",
+			id:         "invalid-id",
+			store:      func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
+			wantErrSub: "want kind/service",
+		},
+		"another TOTP entry": {
+			id:         "totp/github",
+			store:      func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
+			wantErrSub: "isn't an AWS entry",
+		},
+		"a password named aws": {
+			id:         "password/aws/default",
+			store:      func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
+			wantErrSub: "isn't an AWS entry",
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			defer testutil.DiscardStderr(t)()
-
-			mockKeychain := &keychainMocks.MockProvider{}
-			tc.setupKeychain(mockKeychain)
-
-			p := &Provider{keychain: mockKeychain}
+			store := tc.store(t)
+			// An unrelated entry that no delete may touch.
+			if ms, ok := store.(*vault.MemStore); ok {
+				if err := ms.Put(github, []byte("s")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p := &Provider{store: store}
 
 			err := p.DeleteEntry(tc.id)
-			if tc.wantErr && err == nil {
-				t.Error("DeleteEntry() expected error but got nil")
-			}
-			if !tc.wantErr && err != nil {
+			if tc.wantErrSub == "" && err != nil {
 				t.Errorf("DeleteEntry() unexpected error: %v", err)
 			}
-			if tc.wantErrMsg != "" && err != nil {
-				if err.Error() != tc.wantErrMsg {
-					t.Errorf("error message = %v, want %v", err.Error(), tc.wantErrMsg)
+			if tc.wantErrSub != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErrSub)) {
+				t.Errorf("DeleteEntry() = %v, want it to contain %q", err, tc.wantErrSub)
+			}
+			ms, ok := store.(*vault.MemStore)
+			if !ok {
+				return
+			}
+			if tc.wantGone != (vault.Key{}) {
+				if _, err := ms.Lookup(tc.wantGone); !errors.Is(err, vault.ErrNotFound) {
+					t.Errorf("%s is still there: %v", tc.wantGone, err)
 				}
+			}
+			entries, err := ms.List(vault.Filter{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 2 // the AWS entry and github
+			if tc.wantGone != (vault.Key{}) {
+				want = 1
+			}
+			if len(entries) != want {
+				t.Errorf("%d entries left, want %d: %+v", len(entries), want, entries)
 			}
 		})
 	}
@@ -1280,85 +1008,6 @@ region = ap-southeast-1
 			t.Error("getAWSProfiles() expected error when config doesn't exist")
 		}
 	})
-}
-
-func TestBuildServiceKey(t *testing.T) {
-	tests := map[string]struct {
-		prefix  string
-		profile string
-		want    string
-		wantErr bool
-	}{
-		"default profile": {
-			prefix:  "sesh-aws",
-			profile: "",
-			want:    "sesh-aws/default",
-		},
-		"custom profile": {
-			prefix:  "sesh-aws",
-			profile: "dev",
-			want:    "sesh-aws/dev",
-		},
-		"MFA prefix with profile": {
-			prefix:  "sesh-aws-serial",
-			profile: "prod",
-			want:    "sesh-aws-serial/prod",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got, err := buildServiceKey(tc.prefix, tc.profile)
-			if tc.wantErr && err == nil {
-				t.Error("buildServiceKey() expected error but got nil")
-				return
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("buildServiceKey() unexpected error: %v", err)
-				return
-			}
-			if got != tc.want {
-				t.Errorf("buildServiceKey() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestParseServiceKey(t *testing.T) {
-	tests := map[string]struct {
-		serviceKey string
-		want       string
-	}{
-		"default profile": {
-			serviceKey: "sesh-aws/default",
-			want:       "default",
-		},
-		"custom profile": {
-			serviceKey: "sesh-aws/production",
-			want:       "production",
-		},
-		"hyphenated profile": {
-			serviceKey: "sesh-aws/dev-test",
-			want:       "dev-test",
-		},
-		"invalid prefix": {
-			serviceKey: "invalid-prefix-default",
-			want:       "",
-		},
-		"empty string": {
-			serviceKey: "",
-			want:       "",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got := parseServiceKey(tc.serviceKey)
-			if got != tc.want {
-				t.Errorf("parseServiceKey(%q) = %v, want %v", tc.serviceKey, got, tc.want)
-			}
-		})
-	}
 }
 
 func TestFormatProfile(t *testing.T) {

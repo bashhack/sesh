@@ -283,3 +283,14 @@ func TestDeleteEntry(t *testing.T) {
 		t.Errorf("deleting a missing entry = %v, want ErrNotFound", err)
 	}
 }
+
+func TestGenerateTOTPCode_FailsIfTheCodeSettingsCantBeRead(t *testing.T) {
+	mem := vault.NewMemStore()
+	if err := mem.Put(vault.Key{Kind: vault.KindTOTP, Service: "bank"}, []byte("JBSWY3DPEHPK3PXP")); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(&failingStore{MemStore: mem, lookupErr: errors.New("settings unreadable")})
+	if _, err := m.GenerateTOTPCode("bank", ""); err == nil || !strings.Contains(err.Error(), "settings unreadable") {
+		t.Errorf("GenerateTOTPCode = %v, want the settings error rather than a code from the default settings", err)
+	}
+}

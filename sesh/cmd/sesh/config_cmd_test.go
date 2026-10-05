@@ -10,6 +10,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // useConfigFile points XDG_CONFIG_HOME at a temp dir, clears sesh's setting
@@ -116,8 +117,8 @@ func TestDuration(t *testing.T) {
 }
 
 func TestOpenSQLiteStore_ConfigFileAlone(t *testing.T) {
-	vault := filepath.Join(t.TempDir(), "nested", "vault.db")
-	useConfigFile(t, "key_source = \"password\"\ndb_path = \""+vault+"\"\n")
+	vaultPath := filepath.Join(t.TempDir(), "nested", "vault.db")
+	useConfigFile(t, "key_source = \"password\"\ndb_path = \""+vaultPath+"\"\n")
 	t.Setenv("SESH_MASTER_PASSWORD", "config-only-1234")
 
 	cfg, err := settings()
@@ -131,13 +132,13 @@ func TestOpenSQLiteStore_ConfigFileAlone(t *testing.T) {
 	if closer == nil {
 		t.Fatal("buildProvider returned no closer for the vault the config file names")
 	}
-	if err := kc.SetSecret("me", "sesh-password/password/x", []byte("v")); err != nil {
+	if err := kc.Put(vault.Key{Kind: vault.KindPassword, Service: "x"}, []byte("v")); err != nil {
 		t.Fatal(err)
 	}
 	if err := closer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{vault, filepath.Join(filepath.Dir(vault), sidecarFile)} {
+	for _, p := range []string{vaultPath, filepath.Join(filepath.Dir(vaultPath), sidecarFile)} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("%s not created: %v", p, err)
 		}

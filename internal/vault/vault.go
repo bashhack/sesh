@@ -91,6 +91,16 @@ func (k Key) Validate() error {
 	return nil
 }
 
+// AWSKey is the entry holding an AWS profile's MFA secret: the TOTP entry
+// for service "aws", with the profile ("default" if none) as its username.
+// Its settings name the MFA device.
+func AWSKey(profile string) Key {
+	if profile == "" {
+		profile = "default"
+	}
+	return Key{Kind: KindTOTP, Service: "aws", Username: profile}
+}
+
 // Settings are an entry's non-secret options.
 type Settings struct {
 	// AWSMFADevice is the MFA device (its ARN) the AWS provider sends

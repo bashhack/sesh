@@ -74,7 +74,7 @@ func main() {
 	}
 
 	var (
-		kc     credentialStore
+		kc     vault.Store
 		closer io.Closer
 	)
 	// A command that doesn't parse (an unknown flag, no or an unknown
@@ -205,16 +205,9 @@ type unavailableStore struct{ err error }
 
 var errNoStore = fmt.Errorf("no credential store opened for this command")
 
-func (u unavailableStore) GetSecret(_, _ string) ([]byte, error)         { return nil, u.err }
-func (u unavailableStore) SetSecret(_, _ string, _ []byte) error         { return u.err }
-func (u unavailableStore) GetSecretString(_, _ string) (string, error)   { return "", u.err }
-func (u unavailableStore) SetSecretString(_, _, _ string) error          { return u.err }
-func (u unavailableStore) GetMFASerialBytes(_, _ string) ([]byte, error) { return nil, u.err }
-func (u unavailableStore) ListEntries(_ string) ([]keychain.KeychainEntry, error) {
-	return nil, u.err
-}
-func (u unavailableStore) DeleteEntry(_, _ string) error       { return u.err }
-func (u unavailableStore) SetDescription(_, _, _ string) error { return u.err }
+func (u unavailableStore) GetSecret(_, _ string) ([]byte, error) { return nil, u.err }
+func (u unavailableStore) SetSecret(_, _ string, _ []byte) error { return u.err }
+func (u unavailableStore) DeleteEntry(_, _ string) error         { return u.err }
 
 func (u unavailableStore) Get(vault.Key) ([]byte, error)               { return nil, u.err }
 func (u unavailableStore) Put(vault.Key, []byte) error                 { return u.err }
@@ -263,7 +256,7 @@ func settings() (*config.Config, error) {
 }
 
 // buildProvider opens the vault with cfg's settings; the caller closes it.
-func buildProvider(cfg *config.Config) (credentialStore, io.Closer, error) {
+func buildProvider(cfg *config.Config) (vault.Store, io.Closer, error) {
 	store, err := openSQLiteStoreWith(cfg)
 	if err != nil {
 		return nil, nil, err

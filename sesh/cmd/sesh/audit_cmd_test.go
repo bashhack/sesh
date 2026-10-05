@@ -158,6 +158,10 @@ func TestAudit_Refusals(t *testing.T) {
 
 func TestAuditEntryName(t *testing.T) {
 	for _, tt := range []struct{ id, kind, name string }{
+		{"password/github/alice", "password", "github (alice)"},
+		{"api_key/openai", "api_key", "openai"},
+		{"totp/github/work", "totp", "github (work)"},
+		{"totp/aws/prod", "totp", "aws (prod)"},
 		{"sesh-password/password/github/alice/me", "password", "github (alice)"},
 		{"sesh-password/api_key/stripe/me", "api_key", "stripe"},
 		{"sesh-password/secure_note/wifi/home/me", "secure_note", "wifi (home)"},

@@ -145,7 +145,13 @@ func (m *Manager) GenerateTOTPCode(service, username string) (string, error) {
 	}
 	defer secure.SecureZeroBytes(secret)
 
-	current, _, err := totp.GenerateConsecutiveCodesBytesWithParams(secret, m.GetTOTPParams(service, username))
+	// The code settings decide which codes are right, so not reading them
+	// is an error, not the defaults.
+	e, err := m.store.Lookup(key(service, username, EntryTypeTOTP))
+	if err != nil {
+		return "", fmt.Errorf("failed to read the TOTP code settings: %w", err)
+	}
+	current, _, err := totp.GenerateConsecutiveCodesBytesWithParams(secret, e.Settings.TOTP)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate TOTP code: %w", err)
 	}
