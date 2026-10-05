@@ -72,7 +72,7 @@ func (p *Provider) GetTOTPCodes() (currentCode, nextCode string, secondsLeft int
 
 	secure.SecureZeroBytes(secretBytes)
 
-	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from keychain\n")
+	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from the vault\n")
 
 	// Check if secret looks valid (base32 encoded)
 	secretLen := len(secretCopy)
@@ -319,11 +319,34 @@ func (p *Provider) ValidateRequest() error {
 		}
 		return fmt.Errorf("no AWS entry found for %s. Run 'sesh --service aws --setup' first", formatProfile(p.profile))
 	}
+	if err := checkAWSCodes(e.Settings.TOTP); err != nil {
+		return fmt.Errorf("the AWS entry for %s %w; set it up again with 'sesh --service aws --setup'", formatProfile(p.profile), err)
+	}
 	if e.Settings.AWSMFADevice == "" {
 		// Not fatal: GetMFASerialBytes asks AWS for the profile's device.
 		fmt.Fprintf(os.Stderr, "⚠️  No MFA device stored for %s; asking AWS for it\n", formatProfile(p.profile))
 	}
 	return nil
+}
+
+// checkAWSCodes refuses code settings other than AWS's (SHA-1, 6 digits,
+// 30 seconds), which the entry can hold when it was set up through the
+// TOTP provider: codes made with them would never match.
+func checkAWSCodes(params internalTotp.Params) error {
+	alg, digits, period := strings.ToUpper(params.Algorithm), params.Digits, params.Period
+	if alg == "" {
+		alg = "SHA1"
+	}
+	if digits == 0 {
+		digits = 6
+	}
+	if period == 0 {
+		period = 30
+	}
+	if alg == "SHA1" && digits == 6 && period == 30 {
+		return nil
+	}
+	return fmt.Errorf("has code settings AWS doesn't use (%s, %d digits, %ds)", alg, digits, period)
 }
 
 // GetFlagInfo returns information about AWS provider-specific flags

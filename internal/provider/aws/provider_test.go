@@ -16,6 +16,7 @@ import (
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/subshell"
 	"github.com/bashhack/sesh/internal/testutil"
+	"github.com/bashhack/sesh/internal/totp"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -29,6 +30,17 @@ func awsStore(t *testing.T, profile, secret, device string) *vault.MemStore {
 	store := vault.NewMemStore()
 	e := vault.Entry{Key: vault.AWSKey(profile), Settings: vault.Settings{AWSMFADevice: device}}
 	if err := store.Save(&e, []byte(secret)); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+// awsStoreWithCodes is awsStore for the default profile, with code settings.
+func awsStoreWithCodes(t *testing.T, params totp.Params) *vault.MemStore {
+	t.Helper()
+	store := vault.NewMemStore()
+	e := vault.Entry{Key: vault.AWSKey(""), Settings: vault.Settings{AWSMFADevice: testDevice, TOTP: params}}
+	if err := store.Save(&e, []byte("secret")); err != nil {
 		t.Fatal(err)
 	}
 	return store
@@ -244,6 +256,17 @@ func TestProvider_ValidateRequest(t *testing.T) {
 		"no MFA device stored (warning only)": {
 			store:       func(t *testing.T) vault.Store { return awsStore(t, "", "secret", "") },
 			wantWarning: true,
+		},
+		"AWS's code settings spelled out": {
+			store: func(t *testing.T) vault.Store {
+				return awsStoreWithCodes(t, totp.Params{Issuer: "Amazon Web Services", Algorithm: "sha1", Digits: 6, Period: 30})
+			},
+		},
+		"code settings AWS doesn't use": {
+			store: func(t *testing.T) vault.Store {
+				return awsStoreWithCodes(t, totp.Params{Algorithm: "SHA256", Digits: 8})
+			},
+			wantErrMsg: "the AWS entry for profile (default) has code settings AWS doesn't use (SHA256, 8 digits, 30s); set it up again with 'sesh --service aws --setup'",
 		},
 	}
 
