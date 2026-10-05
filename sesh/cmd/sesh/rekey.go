@@ -171,7 +171,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 		return fmt.Errorf("scan source: %w", err)
 	}
 
-	if _, perr := fmt.Fprintf(app.Stderr, "About to re-encrypt %d entries: %s → %s\n", len(plan), current, *target); perr != nil {
+	if _, perr := fmt.Fprintf(app.Stderr, "About to re-encrypt %s: %s → %s\n", entryCount(len(plan)), current, *target); perr != nil {
 		return perr
 	}
 	if _, perr := fmt.Fprintf(app.Stderr, "  source DB:           %s\n", dbPath); perr != nil {
@@ -266,7 +266,7 @@ func runRekey(app *App, args []string, kc keychain.Provider) (err error) {
 	copiesNote := removeOldCopies(backupPath)
 	keyNote := removeOldKeyState(current, dataDir, kc)
 
-	if _, perr := fmt.Fprintf(app.Stderr, "\nRekeyed %d entries: %s → %s\n", result.Migrated, current, *target); perr != nil {
+	if _, perr := fmt.Fprintf(app.Stderr, "\nRekeyed %s: %s → %s\n", entryCount(result.Migrated), current, *target); perr != nil {
 		return perr
 	}
 	if _, perr := fmt.Fprintln(app.Stderr, copiesNote); perr != nil {
@@ -623,7 +623,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		return nil, fmt.Errorf("scan source: %w", err)
 	}
 
-	if _, perr := fmt.Fprintf(app.Stderr, "About to rotate master password and re-encrypt %d entries.\n", len(plan)); perr != nil {
+	if _, perr := fmt.Fprintf(app.Stderr, "About to rotate master password and re-encrypt %s.\n", entryCount(len(plan))); perr != nil {
 		return nil, perr
 	}
 	if _, perr := fmt.Fprintf(app.Stderr, "  source DB:           %s\n", dbPath); perr != nil {
@@ -735,7 +735,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		fmt.Fprintf(app.Stderr, "warning: remove staged sidecar lock %s: %v\n", sidecarNewPath+".lock", rerr) //nolint:errcheck // best-effort cleanup warning; failing to print it shouldn't fail the rotation
 	}
 
-	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %d entries under a new master password.\n", result.Migrated); perr != nil {
+	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %s under a new master password.\n", entryCount(result.Migrated)); perr != nil {
 		return bytes.Clone(destKey), perr
 	}
 	if _, perr := fmt.Fprintln(app.Stderr, copiesNote); perr != nil {
@@ -805,7 +805,7 @@ func checkCopied(dest *database.Store, source string, want int) error {
 		return fmt.Errorf("check the new vault: %w", err)
 	}
 	if len(got) != want {
-		return fmt.Errorf("the new vault holds %d entries, but %d were copied; nothing was changed", len(got), want)
+		return fmt.Errorf("the new vault holds %s, but %d were copied; nothing was changed", entryCount(len(got)), want)
 	}
 	return nil
 }
@@ -889,3 +889,11 @@ func lockKeyChange(dataDir string) (release func(), err error) {
 // renameFile is os.Rename for the vault swaps and their rollback. Tests
 // replace it to make one step fail.
 var renameFile = os.Rename
+
+// entryCount says how many entries, as "1 entry" or "n entries".
+func entryCount(n int) string {
+	if n == 1 {
+		return "1 entry"
+	}
+	return fmt.Sprintf("%d entries", n)
+}
