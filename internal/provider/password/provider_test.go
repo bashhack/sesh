@@ -223,11 +223,12 @@ func TestEffectiveEntryType(t *testing.T) {
 	}
 }
 
+// TestDeleteEntry_InvalidID: a malformed ID is refused before asking.
 func TestDeleteEntry_InvalidID(t *testing.T) {
-	p := &Provider{store: vault.NewMemStore(), force: true}
+	p := &Provider{store: vault.NewMemStore(), stdin: strings.NewReader("")}
 	err := p.DeleteEntry("not-a-valid-id")
-	if err == nil {
-		t.Fatal("expected error for malformed entry ID")
+	if err == nil || !strings.Contains(err.Error(), "want kind/service") {
+		t.Fatalf("err = %v, want the entry ID refused", err)
 	}
 }
 

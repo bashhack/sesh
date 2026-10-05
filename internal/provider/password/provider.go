@@ -296,6 +296,10 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 
 // DeleteEntry deletes a password entry by ID, with confirmation unless --force.
 func (p *Provider) DeleteEntry(id string) error {
+	k, err := vault.ParseKey(id)
+	if err != nil {
+		return err
+	}
 	if !p.force {
 		fmt.Fprintf(os.Stderr, "Delete entry %q? [y/N]: ", id)
 		answer, err := bufio.NewReader(p.stdin).ReadString('\n')
@@ -305,11 +309,6 @@ func (p *Provider) DeleteEntry(id string) error {
 		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
 			return fmt.Errorf("delete cancelled")
 		}
-	}
-
-	k, err := vault.ParseKey(id)
-	if err != nil {
-		return err
 	}
 	return p.store.Delete(k)
 }
