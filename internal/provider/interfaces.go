@@ -162,6 +162,7 @@ type Credentials struct {
 	Expiry               time.Time         // When these credentials expire
 	Variables            map[string]string // Environment variables to set
 	DisplayInfo          string            // Human-readable display information
+	Value                string            // What the user asked for (e.g. a TOTP code), printed alone to stdout after the messages so it can be captured
 	CopyValue            string            // Value to copy to clipboard; must be non-empty when returned by GetClipboardValue
 	ClipboardDescription string            // Short label for CopyValue (e.g. "TOTP code", "password"); used in CLI output
 	MFAAuthenticated     bool              // Whether these credentials were authenticated with MFA

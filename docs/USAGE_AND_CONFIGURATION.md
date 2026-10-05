@@ -680,6 +680,9 @@ sesh -service totp -service-name github -clip
 #   Current: 482901  |  Next: 139847  |  Time left: 22s
 #   🔑 TOTP code for github
 
+# Print the code: alone on stdout (status goes to stderr), so it can be captured
+code=$(sesh -service totp -service-name github)
+
 # Use profiles for multiple accounts
 sesh -service totp -service-name github -profile work
 sesh -service totp -service-name github -profile personal

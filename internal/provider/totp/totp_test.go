@@ -234,6 +234,7 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			restore := testutil.RedirectStderr(t)
+			stubStdoutIsTerminal(t, true)
 
 			mockKeychain := &keychainMocks.MockProvider{
 				GetSecretFunc: func(account, service string) ([]byte, error) {
@@ -264,6 +265,42 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 				t.Errorf("stderr = %q, want substring %q", stderr, tc.wantSubstr)
 			}
 		})
+	}
+}
+
+func stubStdoutIsTerminal(t *testing.T, v bool) {
+	t.Helper()
+	orig := stdoutIsTerminal
+	stdoutIsTerminal = func() bool { return v }
+	t.Cleanup(func() { stdoutIsTerminal = orig })
+}
+
+func TestProvider_GetCredentials_ClipTipOnlyAtATerminal(t *testing.T) {
+	for _, terminal := range []bool{true, false} {
+		restore := testutil.RedirectStderr(t)
+		stubStdoutIsTerminal(t, terminal)
+		p := &Provider{
+			keychain: &keychainMocks.MockProvider{
+				GetSecretFunc: func(string, string) ([]byte, error) { return []byte("MYSECRET"), nil },
+			},
+			totp: &totpMocks.MockProvider{
+				GenerateConsecutiveCodesBytesFunc: func([]byte) (string, string, error) { return "123456", "654321", nil },
+			},
+			serviceName: "github",
+			User:        "testuser",
+			Now:         func() time.Time { return time.Unix(5, 0) },
+		}
+		if _, err := p.GetCredentials(); err != nil {
+			t.Fatalf("GetCredentials: %v", err)
+		}
+		stderr := restore()
+		const tip = `💡 To copy it instead: sesh --service totp --service-name "github" --clip`
+		if got := strings.Contains(stderr, tip); got != terminal {
+			t.Errorf("stdout a terminal: %v; stderr = %q, want the tip: %v", terminal, stderr, terminal)
+		}
+		if strings.Contains(stderr, "⚠️") {
+			t.Errorf("stderr = %q, printing the code isn't a mistake to warn about", stderr)
+		}
 	}
 }
 
@@ -359,8 +396,11 @@ func TestProvider_GetCredentials(t *testing.T) {
 				if creds.ClipboardDescription != "TOTP code" {
 					t.Errorf("ClipboardDescription = %v, want 'TOTP code'", creds.ClipboardDescription)
 				}
-				if !strings.Contains(creds.DisplayInfo, tc.wantCurrent) {
-					t.Error("DisplayInfo should contain current code")
+				if creds.Value != tc.wantCurrent {
+					t.Errorf("Value = %q, want the current code %q, for stdout", creds.Value, tc.wantCurrent)
+				}
+				if strings.Contains(creds.DisplayInfo, tc.wantCurrent) {
+					t.Errorf("DisplayInfo = %q, shouldn't repeat the current code printed on stdout", creds.DisplayInfo)
 				}
 				if !strings.Contains(creds.DisplayInfo, tc.wantNext) {
 					t.Error("DisplayInfo should contain next code")
