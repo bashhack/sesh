@@ -132,6 +132,9 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 }
 
 func (p *Provider) ValidateRequest() error {
+	if err := p.checkEntryType(); err != nil {
+		return err
+	}
 	switch p.action {
 	case "store":
 		if p.service == "" {
@@ -156,6 +159,13 @@ func (p *Provider) ValidateRequest() error {
 	case "generate":
 		if p.service == "" {
 			return fmt.Errorf("--service-name is required for generate action")
+		}
+		if p.entryType == string(password.EntryTypeTOTP) {
+			store := "sesh --service password --action totp-store --service-name " + p.service
+			if p.username != "" {
+				store += " --username " + p.username
+			}
+			return fmt.Errorf("sesh can't generate a TOTP secret: the service gives you one. Store it with: %s", store)
 		}
 	case "export", "import":
 		if p.format == "table" {
@@ -258,6 +268,9 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 
 // ListEntries returns all password manager entries.
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
+	if err := p.checkEntryType(); err != nil {
+		return nil, err
+	}
 	mgr := password.NewManager(p.keychain, p.User)
 
 	filter := password.ListFilter{
@@ -306,6 +319,15 @@ func (p *Provider) DeleteEntry(id string) error {
 		return err
 	}
 	return p.keychain.DeleteEntry(account, service)
+}
+
+// checkEntryType refuses an --entry-type that isn't one of the kinds: an
+// entry stored under an unknown kind would never be listed or found.
+func (p *Provider) checkEntryType() error {
+	if p.entryType == "" || password.EntryType(p.entryType).Valid() {
+		return nil
+	}
+	return fmt.Errorf("unknown --entry-type %q: use password, api_key, totp, or secure_note", p.entryType)
 }
 
 // --- action implementations ---

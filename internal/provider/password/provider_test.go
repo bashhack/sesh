@@ -75,6 +75,47 @@ func TestValidateRequest(t *testing.T) {
 	}
 }
 
+func TestValidateRequest_EntryType(t *testing.T) {
+	tests := map[string]struct {
+		action, entryType, username string
+		wantSub                     string // empty: no error
+	}{
+		"password":                   {action: "store", entryType: "password"},
+		"api key":                    {action: "store", entryType: "api_key"},
+		"totp":                       {action: "store", entryType: "totp"},
+		"note":                       {action: "store", entryType: "secure_note"},
+		"none":                       {action: "store"},
+		"misspelled":                 {action: "store", entryType: "apikey", wantSub: `unknown --entry-type "apikey": use password, api_key, totp, or secure_note`},
+		"misspelled on get":          {action: "get", entryType: "note", wantSub: `unknown --entry-type "note"`},
+		"misspelled search":          {action: "search", entryType: "pw", wantSub: `unknown --entry-type "pw"`},
+		"misspelled export":          {action: "export", entryType: "keys", wantSub: `unknown --entry-type "keys"`},
+		"generate a key":             {action: "generate", entryType: "api_key"},
+		"generate a TOTP":            {action: "generate", entryType: "totp", wantSub: "sesh can't generate a TOTP secret: the service gives you one. Store it with: sesh --service password --action totp-store --service-name github"},
+		"generate a TOTP for a user": {action: "generate", entryType: "totp", username: "alice", wantSub: "--action totp-store --service-name github --username alice"},
+		"generate misspelled":        {action: "generate", entryType: "totpp", wantSub: `unknown --entry-type "totpp"`},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			p := &Provider{action: tc.action, service: "github", username: tc.username, query: "git", entryType: tc.entryType, format: "json"}
+			err := p.ValidateRequest()
+			switch {
+			case tc.wantSub == "" && err != nil:
+				t.Errorf("ValidateRequest() = %v, want no error", err)
+			case tc.wantSub != "" && (err == nil || !strings.Contains(err.Error(), tc.wantSub)):
+				t.Errorf("ValidateRequest() = %v, want it to contain %q", err, tc.wantSub)
+			}
+		})
+	}
+}
+
+func TestListEntries_RefusesAnUnknownEntryType(t *testing.T) {
+	p, _ := newTestProvider(&mocks.MockProvider{})
+	p.entryType = "apikey"
+	if _, err := p.ListEntries(); err == nil || !strings.Contains(err.Error(), `unknown --entry-type "apikey"`) {
+		t.Errorf("ListEntries() = %v, want an unknown --entry-type error", err)
+	}
+}
+
 func TestListEntriesWithFilters(t *testing.T) {
 	mock := &mocks.MockProvider{
 		ListEntriesFunc: func(service string) ([]keychain.KeychainEntry, error) {
