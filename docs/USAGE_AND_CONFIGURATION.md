@@ -522,6 +522,8 @@ sesh --service password --action import --format encrypted --file backup.enc
 
 Encrypted exports use the same Argon2id + AES-256-GCM primitives as the master password mode. The export is self-contained (envelope includes the salt and KDF params) and works across machines and key sources.
 
+Every export, encrypted or not, holds everything about each entry: its kind, service name, username, secret, times, and settings. A TOTP entry's settings (algorithm, digits, period, issuer) decide which codes are right, so they come back with it on import. In JSON they're the `settings` field; in CSV, a `settings` column holding the same JSON.
+
 ### Switching key sources (`sesh rekey`)
 
 Changing the key source setting after entries exist would otherwise leave the database unreadable — the new source derives a different key. `sesh rekey --to <source>` re-encrypts every entry under the target key source and atomically swaps the result into place.
@@ -755,7 +757,7 @@ sesh -service password -action get -service-name github -username alice -format 
 
 #### Searching
 
-`-action search -query <words>` looks at the two things you name an entry by: its service name and its username. It never looks at secrets, or at the labels sesh adds itself (the stored name's `sesh-password/...` prefix, your login name, the generated description).
+`-action search -query <words>` looks at the two things you name an entry by: its service name and its username. It never looks at secrets.
 
 - **Any part of a name.** `hub` finds `github`. Case doesn't matter.
 - **Punctuation optional.** `mybank` finds `my-bank`, `awsconsole` finds `aws-console`.

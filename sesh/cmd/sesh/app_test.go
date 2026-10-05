@@ -11,11 +11,14 @@ import (
 	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // MockKeychainProvider is a no-op keychain.Provider for tests that don't
 // exercise keychain operations.
-type MockKeychainProvider struct{}
+// MockKeychainProvider is a credential store: an in-memory vault, with
+// the keychain.Provider methods finding nothing.
+type MockKeychainProvider struct{ *vault.MemStore }
 
 func (m *MockKeychainProvider) GetSecret(account, service string) ([]byte, error) {
 	return nil, keychain.ErrNotFound
@@ -164,7 +167,7 @@ func TestNewDefaultApp(t *testing.T) {
 		Commit:  "unknown",
 		Date:    "unknown",
 	}
-	app := NewDefaultApp(versionInfo, &MockKeychainProvider{}, 30*time.Second)
+	app := NewDefaultApp(versionInfo, &MockKeychainProvider{vault.NewMemStore()}, 30*time.Second)
 
 	if app.Registry == nil {
 		t.Error("Registry is nil")

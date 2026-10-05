@@ -6,26 +6,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/password"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // searchProvider returns a provider over the named entries (type/service
 // [/username]), updated one day apart in order, set up to search query.
 func searchProvider(t *testing.T, query string, names ...string) (*Provider, *strings.Builder) {
 	t.Helper()
-	entries := make([]keychain.KeychainEntry, len(names))
+	store := vault.NewMemStore()
 	for i, n := range names {
-		entries[i] = keychain.KeychainEntry{
-			Service:   "sesh-password/" + n,
-			Account:   "testuser",
-			UpdatedAt: time.Date(2026, 1, i+1, 9, 30, 0, 0, time.UTC),
+		k, err := vault.ParseKey(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(&vault.Entry{Key: k, UpdatedAt: time.Date(2026, 1, i+1, 9, 30, 0, 0, time.UTC)}, []byte("x")); err != nil {
+			t.Fatal(err)
 		}
 	}
-	p, _ := newTestProvider(&mocks.MockProvider{
-		ListEntriesFunc: func(string) ([]keychain.KeychainEntry, error) { return entries, nil },
-	})
+	p, _ := newTestProvider(store)
 	var out strings.Builder
 	p.stdout = &out
 	p.action = "search"

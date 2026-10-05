@@ -22,6 +22,7 @@ import (
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // Version information (set by ldflags during build)
@@ -73,7 +74,7 @@ func main() {
 	}
 
 	var (
-		kc     keychain.Provider
+		kc     credentialStore
 		closer io.Closer
 	)
 	// A command that doesn't parse (an unknown flag, no or an unknown
@@ -195,7 +196,7 @@ func subcommand(args []string) (name string, rest []string) {
 	return "", nil
 }
 
-// unavailableStore is a keychain.Provider whose every call fails with err.
+// unavailableStore is a credential store whose every call fails with err.
 // It stands in for the store in commands that don't open one, so a routing
 // bug (a command that needs the store classified as one that doesn't)
 // fails loudly instead of silently succeeding. It also stands in for the
@@ -214,6 +215,14 @@ func (u unavailableStore) ListEntries(_ string) ([]keychain.KeychainEntry, error
 }
 func (u unavailableStore) DeleteEntry(_, _ string) error       { return u.err }
 func (u unavailableStore) SetDescription(_, _, _ string) error { return u.err }
+
+func (u unavailableStore) Get(vault.Key) ([]byte, error)               { return nil, u.err }
+func (u unavailableStore) Put(vault.Key, []byte) error                 { return u.err }
+func (u unavailableStore) Save(*vault.Entry, []byte) error             { return u.err }
+func (u unavailableStore) SetSettings(vault.Key, vault.Settings) error { return u.err }
+func (u unavailableStore) Lookup(vault.Key) (vault.Entry, error)       { return vault.Entry{}, u.err }
+func (u unavailableStore) List(vault.Filter) ([]vault.Entry, error)    { return nil, u.err }
+func (u unavailableStore) Delete(vault.Key) error                      { return u.err }
 
 // goos is runtime.GOOS. Tests replace it to check the behaviour on other
 // systems.
@@ -254,7 +263,7 @@ func settings() (*config.Config, error) {
 }
 
 // buildProvider opens the vault with cfg's settings; the caller closes it.
-func buildProvider(cfg *config.Config) (keychain.Provider, io.Closer, error) {
+func buildProvider(cfg *config.Config) (credentialStore, io.Closer, error) {
 	store, err := openSQLiteStoreWith(cfg)
 	if err != nil {
 		return nil, nil, err

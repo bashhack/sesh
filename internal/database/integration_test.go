@@ -44,7 +44,7 @@ func newIntegrationStore(t *testing.T) (*Store, *password.Manager) {
 		t.Fatal(err)
 	}
 
-	mgr := password.NewManager(store, "testuser")
+	mgr := password.NewManager(store)
 	return store, mgr
 }
 
@@ -130,14 +130,11 @@ func TestIntegration_APIKeys(t *testing.T) {
 }
 
 func TestIntegration_SecureNotes(t *testing.T) {
-	store, mgr := newIntegrationStore(t)
+	_, mgr := newIntegrationStore(t)
 
 	note := "Recovery codes for GitHub:\n1. abc-123-def\n2. ghi-456-jkl\n3. mno-789-pqr\n\nStored on 2026-04-06. Do NOT share."
 	t.Log("Store secure note")
 	if err := mgr.StorePasswordString("github", "recovery-codes", note, password.EntryTypeNote); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetDescription("sesh-password/secure_note/github/recovery-codes", "testuser", "GitHub recovery codes"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -319,7 +316,7 @@ func TestIntegration_ListFilterSort(t *testing.T) {
 }
 
 func TestIntegration_Search(t *testing.T) {
-	store, mgr := newIntegrationStore(t)
+	_, mgr := newIntegrationStore(t)
 
 	if err := mgr.StorePasswordString("github", "alice", "pw1", password.EntryTypePassword); err != nil {
 		t.Fatal(err)
@@ -328,10 +325,6 @@ func TestIntegration_Search(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := mgr.StorePasswordString("stripe", "admin", "key1", password.EntryTypeAPIKey); err != nil {
-		t.Fatal(err)
-	}
-	// Descriptions aren't searched, so this one doesn't make stripe match "git".
-	if err := store.SetDescription("sesh-password/api_key/stripe/admin", "testuser", "Stripe key migrated from gitops"); err != nil {
 		t.Fatal(err)
 	}
 

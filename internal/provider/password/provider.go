@@ -12,20 +12,19 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/bashhack/sesh/internal/env"
-	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // Provider implements ServiceProvider for the password manager.
 type Provider struct {
-	keychain keychain.Provider
-	stdin    io.Reader
-	stdout   io.Writer
+	store  vault.Store
+	stdin  io.Reader
+	stdout io.Writer
 
 	query      string // search query
 	sortBy     string
@@ -34,15 +33,14 @@ type Provider struct {
 	action     string // "store", "get", "search", "generate", "export", "import", "totp-store", "totp-generate"
 	file       string // file path for export/import
 	onConflict string // import conflict strategy: "skip", "overwrite"
-	provider.KeyUser
-	format    string // output format: "table", "json", "csv"
-	service   string
-	pwLength  int // password generation length
-	limit     int
-	offset    int
-	force     bool // skip confirmation
-	noSymbols bool // password generation: exclude symbols
-	show      bool // show password instead of clipboard
+	format     string // output format: "table", "json", "csv"
+	service    string
+	pwLength   int // password generation length
+	limit      int
+	offset     int
+	force      bool // skip confirmation
+	noSymbols  bool // password generation: exclude symbols
+	show       bool // show password instead of clipboard
 }
 
 var _ provider.ServiceProvider = (*Provider)(nil)
@@ -62,12 +60,12 @@ var (
 	scanQRCodeFull = qrcode.ScanQRCodeFull
 )
 
-// NewProvider creates a new password manager provider.
-func NewProvider(kc keychain.Provider) *Provider {
+// NewProvider creates a password manager provider over the vault.
+func NewProvider(store vault.Store) *Provider {
 	return &Provider{
-		keychain: kc,
-		stdin:    os.Stdin,
-		stdout:   os.Stdout,
+		store:  store,
+		stdin:  os.Stdin,
+		stdout: os.Stdout,
 	}
 }
 
@@ -98,12 +96,6 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.IntVar(&p.pwLength, "length", 24, "Generated password length")
 	fs.IntVar(&p.limit, "limit", 0, "Limit number of results (0 = no limit)")
 	fs.IntVar(&p.offset, "offset", 0, "Skip first N results")
-
-	defaultUser, err := env.GetCurrentUser()
-	if err != nil {
-		return fmt.Errorf("failed to get current user: %w", err)
-	}
-	p.User = defaultUser
 	return nil
 }
 
@@ -188,7 +180,7 @@ func (p *Provider) ValidateRequest() error {
 
 // GetCredentials handles the main operation based on --action flag.
 func (p *Provider) GetCredentials() (provider.Credentials, error) {
-	mgr := password.NewManager(p.keychain, p.User)
+	mgr := password.NewManager(p.store)
 
 	switch p.action {
 	case "store":
@@ -230,7 +222,7 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 		return provider.Credentials{}, fmt.Errorf("--service-name is required")
 	}
 
-	mgr := password.NewManager(p.keychain, p.User)
+	mgr := password.NewManager(p.store)
 	switch p.action {
 	case "generate":
 		generated, desc, err := p.generateAndStore(mgr)
@@ -272,7 +264,7 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 	if err := p.checkEntryType(); err != nil {
 		return nil, err
 	}
-	mgr := password.NewManager(p.keychain, p.User)
+	mgr := password.NewManager(p.store)
 
 	filter := password.ListFilter{
 		EntryType: password.EntryType(p.entryType),
@@ -295,7 +287,7 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 		}
 		result = append(result, provider.ProviderEntry{
 			Name:        name,
-			Description: fmt.Sprintf("[%s] %s", e.Type, e.Description),
+			Description: fmt.Sprintf("[%s]", e.Type),
 			ID:          e.ID,
 		})
 	}
@@ -315,11 +307,11 @@ func (p *Provider) DeleteEntry(id string) error {
 		}
 	}
 
-	service, account, err := provider.ParseEntryID(id)
+	k, err := vault.ParseKey(id)
 	if err != nil {
 		return err
 	}
-	return p.keychain.DeleteEntry(account, service)
+	return p.store.Delete(k)
 }
 
 // checkEntryType refuses an --entry-type that isn't one of the kinds: an

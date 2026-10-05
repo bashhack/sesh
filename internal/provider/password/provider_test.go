@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
+	"github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 func TestName(t *testing.T) {
-	p := NewProvider(&mocks.MockProvider{})
+	p := NewProvider(vault.NewMemStore())
 	if p.Name() != "password" {
 		t.Errorf("expected name 'password', got %q", p.Name())
 	}
@@ -109,7 +109,7 @@ func TestValidateRequest_EntryType(t *testing.T) {
 }
 
 func TestListEntries_RefusesAnUnknownEntryType(t *testing.T) {
-	p, _ := newTestProvider(&mocks.MockProvider{})
+	p, _ := newTestProvider(vault.NewMemStore())
 	p.entryType = "apikey"
 	if _, err := p.ListEntries(); err == nil || !strings.Contains(err.Error(), `unknown --entry-type "apikey"`) {
 		t.Errorf("ListEntries() = %v, want an unknown --entry-type error", err)
@@ -117,17 +117,7 @@ func TestListEntries_RefusesAnUnknownEntryType(t *testing.T) {
 }
 
 func TestListEntriesWithFilters(t *testing.T) {
-	mock := &mocks.MockProvider{
-		ListEntriesFunc: func(service string) ([]keychain.KeychainEntry, error) {
-			return []keychain.KeychainEntry{
-				{Service: "sesh-password/password/github/user1", Account: "alice"},
-				{Service: "sesh-password/api_key/stripe", Account: "alice"},
-				{Service: "sesh-password/password/gitlab/user2", Account: "alice"},
-			}, nil
-		},
-		SetDescriptionFunc: func(service, account, description string) error { return nil },
-	}
-
+	store := seeded(t, map[string]string{"password/github/user1": "x", "api_key/stripe": "x", "password/gitlab/user2": "x"})
 	tests := map[string]struct {
 		entryType string
 		sortBy    string
@@ -135,34 +125,15 @@ func TestListEntriesWithFilters(t *testing.T) {
 		offset    int
 		expected  int
 	}{
-		"no filters": {
-			entryType: "", sortBy: "service", expected: 3,
-		},
-		"filter api_key": {
-			entryType: "api_key", sortBy: "service", expected: 1,
-		},
-		"filter password": {
-			entryType: "password", sortBy: "service", expected: 2,
-		},
-		"with limit": {
-			entryType: "", sortBy: "service", limit: 2, expected: 2,
-		},
-		"with offset": {
-			entryType: "", sortBy: "service", offset: 2, expected: 1,
-		},
+		"no filters":      {entryType: "", sortBy: "service", expected: 3},
+		"filter api_key":  {entryType: "api_key", sortBy: "service", expected: 1},
+		"filter password": {entryType: "password", sortBy: "service", expected: 2},
+		"with limit":      {entryType: "", sortBy: "service", limit: 2, expected: 2},
+		"with offset":     {entryType: "", sortBy: "service", offset: 2, expected: 1},
 	}
-
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			p := &Provider{
-				keychain:  mock,
-				entryType: tc.entryType,
-				sortBy:    tc.sortBy,
-				limit:     tc.limit,
-				offset:    tc.offset,
-			}
-			p.User = "alice"
-
+			p := &Provider{store: store, entryType: tc.entryType, sortBy: tc.sortBy, limit: tc.limit, offset: tc.offset}
 			entries, err := p.ListEntries()
 			if err != nil {
 				t.Fatalf("ListEntries: %v", err)
@@ -172,29 +143,29 @@ func TestListEntriesWithFilters(t *testing.T) {
 			}
 		})
 	}
+	entries, err := (&Provider{store: store}).ListEntries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Listed by service name; the ID is what --delete takes.
+	if e := entries[0]; e.ID != "password/github/user1" || e.Name != "github (user1)" || e.Description != "[password]" {
+		t.Errorf("first entry = %+v, want ID password/github/user1, name github (user1), [password]", e)
+	}
 }
 
 func TestDeleteEntryWithForce(t *testing.T) {
-	deleted := false
-	mock := &mocks.MockProvider{
-		DeleteEntryFunc: func(account, service string) error {
-			deleted = true
-			return nil
-		},
-	}
-
-	p := &Provider{keychain: mock, force: true}
-	err := p.DeleteEntry("sesh-password/password/github/user1:alice")
-	if err != nil {
+	store := seeded(t, map[string]string{"password/github/user1": "x"})
+	p := &Provider{store: store, force: true}
+	if err := p.DeleteEntry("password/github/user1"); err != nil {
 		t.Fatalf("DeleteEntry: %v", err)
 	}
-	if !deleted {
-		t.Error("expected entry to be deleted")
+	if _, err := store.Lookup(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "user1"}); !errors.Is(err, vault.ErrNotFound) {
+		t.Errorf("the entry is still there: %v", err)
 	}
 }
 
 func TestDescription(t *testing.T) {
-	p := NewProvider(&mocks.MockProvider{})
+	p := NewProvider(vault.NewMemStore())
 	if p.Description() == "" {
 		t.Error("Description should not be empty")
 	}
@@ -203,19 +174,19 @@ func TestDescription(t *testing.T) {
 func TestGetSetupHandler(t *testing.T) {
 	// Password provider has no interactive setup wizard — ensure it
 	// returns nil so the setup dispatcher doesn't try to invoke one.
-	if h := NewProvider(&mocks.MockProvider{}).GetSetupHandler(); h != nil {
+	if h := NewProvider(vault.NewMemStore()).GetSetupHandler(); h != nil {
 		t.Errorf("GetSetupHandler() = %v, want nil", h)
 	}
 }
 
 func TestSuppressActionFraming(t *testing.T) {
-	if !NewProvider(&mocks.MockProvider{}).SuppressActionFraming() {
+	if !NewProvider(vault.NewMemStore()).SuppressActionFraming() {
 		t.Error("SuppressActionFraming() = false, want true")
 	}
 }
 
 func TestSetupFlags(t *testing.T) {
-	p := NewProvider(&mocks.MockProvider{})
+	p := NewProvider(vault.NewMemStore())
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	if err := p.SetupFlags(fs); err != nil {
 		t.Fatalf("SetupFlags() unexpected error: %v", err)
@@ -232,9 +203,6 @@ func TestSetupFlags(t *testing.T) {
 	if p.pwLength != 32 {
 		t.Errorf("pwLength = %d, want 32", p.pwLength)
 	}
-	if p.User == "" {
-		t.Error("User should default to current OS user")
-	}
 }
 
 func TestEffectiveEntryType(t *testing.T) {
@@ -247,7 +215,7 @@ func TestEffectiveEntryType(t *testing.T) {
 	}
 	for entryType, want := range tests {
 		t.Run("type="+entryType, func(t *testing.T) {
-			p := &Provider{keychain: &mocks.MockProvider{}, entryType: entryType}
+			p := &Provider{store: vault.NewMemStore(), entryType: entryType}
 			if got := p.effectiveEntryType(); got != want {
 				t.Errorf("effectiveEntryType(%q) = %v, want %v", entryType, got, want)
 			}
@@ -256,7 +224,7 @@ func TestEffectiveEntryType(t *testing.T) {
 }
 
 func TestDeleteEntry_InvalidID(t *testing.T) {
-	p := &Provider{keychain: &mocks.MockProvider{}, force: true}
+	p := &Provider{store: vault.NewMemStore(), force: true}
 	err := p.DeleteEntry("not-a-valid-id")
 	if err == nil {
 		t.Fatal("expected error for malformed entry ID")
@@ -295,48 +263,57 @@ func stubScanQRCodeFull(t *testing.T, info qrcode.TOTPInfo, err error) {
 // newTestProvider builds a Provider with a buffered stdout and an empty
 // stdin. Prompts still go to the real os.Stderr — tests don't assert on
 // prompt text, so there's no need to capture it.
-func newTestProvider(kc keychain.Provider) (*Provider, *bytes.Buffer) {
-	p := NewProvider(kc)
-	p.User = "testuser"
+func newTestProvider(store vault.Store) (*Provider, *bytes.Buffer) {
+	p := NewProvider(store)
 	var stdout bytes.Buffer
 	p.stdout = &stdout
 	p.stdin = strings.NewReader("")
 	return p, &stdout
 }
 
+// seeded is a store holding the entries named (kind/service[/username])
+// with the given secrets.
+func seeded(t *testing.T, entries map[string]string) *vault.MemStore {
+	t.Helper()
+	store := vault.NewMemStore()
+	for id, secret := range entries {
+		k, err := vault.ParseKey(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Put(k, []byte(secret)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store
+}
+
+// stored is the secret store holds for the entry id names, or "" if none.
+func stored(t *testing.T, store vault.Store, id string) string {
+	t.Helper()
+	k, err := vault.ParseKey(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, err := store.Get(k)
+	if err != nil {
+		return ""
+	}
+	return string(secret)
+}
+
 func TestStorePassword_HappyPath(t *testing.T) {
 	stubReadPassword(t, "s3cret")
-
-	var storedKey, storedAccount string
-	var storedSecret []byte
-	mock := &mocks.MockProvider{
-		SetSecretFunc: func(account, service string, secret []byte) error {
-			storedAccount = account
-			storedKey = service
-			storedSecret = append([]byte(nil), secret...)
-			return nil
-		},
-		SetDescriptionFunc: func(_, _, _ string) error { return nil },
-	}
-
-	p, _ := newTestProvider(mock)
-	p.action = "store"
-	p.service = "github"
-	p.username = "alice"
-	p.force = true
+	store := vault.NewMemStore()
+	p, _ := newTestProvider(store)
+	p.action, p.service, p.username, p.force = "store", "github", "alice", true
 
 	creds, err := p.GetCredentials()
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	if string(storedSecret) != "s3cret" {
-		t.Errorf("stored secret = %q, want s3cret", storedSecret)
-	}
-	if storedAccount != "testuser" {
-		t.Errorf("stored account = %q, want testuser", storedAccount)
-	}
-	if !strings.Contains(storedKey, "github") {
-		t.Errorf("stored service key = %q, want contains github", storedKey)
+	if got := stored(t, store, "password/github/alice"); got != "s3cret" {
+		t.Errorf("stored secret = %q, want s3cret", got)
 	}
 	if !strings.Contains(creds.DisplayInfo, "Stored password for github") {
 		t.Errorf("DisplayInfo = %q, want contains 'Stored password for github'", creds.DisplayInfo)
@@ -346,15 +323,7 @@ func TestStorePassword_HappyPath(t *testing.T) {
 func TestStorePassword_OverwriteRefusedOnPipedStdin(t *testing.T) {
 	stubStdinIsTerminal(t, false)
 
-	mock := &mocks.MockProvider{
-		ListEntriesFunc: func(service string) ([]keychain.KeychainEntry, error) {
-			return []keychain.KeychainEntry{
-				{Service: service, Account: "testuser"},
-			}, nil
-		},
-	}
-
-	p, _ := newTestProvider(mock)
+	p, _ := newTestProvider(seeded(t, map[string]string{"password/github/alice": "old"}))
 	p.action = "store"
 	p.service = "github"
 	p.username = "alice"
@@ -370,36 +339,21 @@ func TestStorePassword_OverwriteRefusedOnPipedStdin(t *testing.T) {
 
 func TestStorePassword_NoteFromPipedStdin(t *testing.T) {
 	stubStdinIsTerminal(t, false)
-
-	var storedSecret []byte
-	mock := &mocks.MockProvider{
-		SetSecretFunc: func(_, _ string, secret []byte) error {
-			storedSecret = append([]byte(nil), secret...)
-			return nil
-		},
-		SetDescriptionFunc: func(_, _, _ string) error { return nil },
-	}
-
-	p, _ := newTestProvider(mock)
-	p.action = "store"
-	p.service = "diary"
-	p.entryType = "secure_note"
-	p.force = true
+	store := vault.NewMemStore()
+	p, _ := newTestProvider(store)
+	p.action, p.service, p.entryType, p.force = "store", "diary", "secure_note", true
 	p.stdin = strings.NewReader("line one\nline two\n")
 
 	if _, err := p.GetCredentials(); err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	if string(storedSecret) != "line one\nline two\n" {
-		t.Errorf("stored note = %q, want multiline body", storedSecret)
+	if got := stored(t, store, "secure_note/diary"); got != "line one\nline two\n" {
+		t.Errorf("stored note = %q, want multiline body", got)
 	}
 }
 
 func TestGeneratePassword_HappyPathClipboardMode(t *testing.T) {
-	mock := &mocks.MockProvider{
-		SetSecretFunc:      func(_, _ string, _ []byte) error { return nil },
-		SetDescriptionFunc: func(_, _, _ string) error { return nil },
-	}
+	mock := vault.NewMemStore()
 
 	p, _ := newTestProvider(mock)
 	p.action = "generate"
@@ -419,10 +373,7 @@ func TestGeneratePassword_HappyPathClipboardMode(t *testing.T) {
 }
 
 func TestGeneratePassword_ShowEchoesPassword(t *testing.T) {
-	mock := &mocks.MockProvider{
-		SetSecretFunc:      func(_, _ string, _ []byte) error { return nil },
-		SetDescriptionFunc: func(_, _, _ string) error { return nil },
-	}
+	mock := vault.NewMemStore()
 
 	p, stdout := newTestProvider(mock)
 	p.action = "generate"
@@ -446,10 +397,7 @@ func TestGeneratePassword_ShowEchoesPassword(t *testing.T) {
 }
 
 func TestGeneratePassword_JSONFormat(t *testing.T) {
-	mock := &mocks.MockProvider{
-		SetSecretFunc:      func(_, _ string, _ []byte) error { return nil },
-		SetDescriptionFunc: func(_, _, _ string) error { return nil },
-	}
+	mock := vault.NewMemStore()
 
 	p, stdout := newTestProvider(mock)
 	p.action = "generate"
@@ -483,11 +431,7 @@ func TestGeneratePassword_JSONFormat(t *testing.T) {
 }
 
 func TestGetPassword_ShowReturnsPlainSecret(t *testing.T) {
-	mock := &mocks.MockProvider{
-		GetSecretFunc: func(_, _ string) ([]byte, error) {
-			return []byte("s3cret"), nil
-		},
-	}
+	mock := seeded(t, map[string]string{"password/github": "s3cret"})
 
 	p, stdout := newTestProvider(mock)
 	p.action = "get"
@@ -510,11 +454,7 @@ func TestGetPassword_ShowReturnsPlainSecret(t *testing.T) {
 }
 
 func TestGetPassword_DefaultUsesClipboardPayload(t *testing.T) {
-	mock := &mocks.MockProvider{
-		GetSecretFunc: func(_, _ string) ([]byte, error) {
-			return []byte("s3cret"), nil
-		},
-	}
+	mock := seeded(t, map[string]string{"password/github": "s3cret"})
 
 	p, _ := newTestProvider(mock)
 	p.action = "get"
@@ -533,11 +473,7 @@ func TestGetPassword_DefaultUsesClipboardPayload(t *testing.T) {
 }
 
 func TestGetPassword_JSONFormat(t *testing.T) {
-	mock := &mocks.MockProvider{
-		GetSecretFunc: func(_, _ string) ([]byte, error) {
-			return []byte("s3cret"), nil
-		},
-	}
+	mock := seeded(t, map[string]string{"password/github": "s3cret"})
 
 	p, stdout := newTestProvider(mock)
 	p.action = "get"
@@ -563,43 +499,29 @@ func TestGetPassword_JSONFormat(t *testing.T) {
 }
 
 func TestDeleteEntry_CancelsOnNo(t *testing.T) {
-	deleted := false
-	mock := &mocks.MockProvider{
-		DeleteEntryFunc: func(_, _ string) error {
-			deleted = true
-			return nil
-		},
-	}
-
-	p, _ := newTestProvider(mock)
+	store := seeded(t, map[string]string{"password/github/user1": "x"})
+	p, _ := newTestProvider(store)
 	p.stdin = strings.NewReader("n\n")
 
-	err := p.DeleteEntry("sesh-password/password/github/user1:alice")
+	err := p.DeleteEntry("password/github/user1")
 	if err == nil || !strings.Contains(err.Error(), "delete cancelled") {
 		t.Errorf("expected delete-cancelled error, got %v", err)
 	}
-	if deleted {
-		t.Error("DeleteEntry should not have been called when user answered n")
+	if stored(t, store, "password/github/user1") == "" {
+		t.Error("the entry was deleted though the answer was n")
 	}
 }
 
 func TestDeleteEntry_ConfirmsOnYes(t *testing.T) {
-	deleted := false
-	mock := &mocks.MockProvider{
-		DeleteEntryFunc: func(_, _ string) error {
-			deleted = true
-			return nil
-		},
-	}
-
-	p, _ := newTestProvider(mock)
+	store := seeded(t, map[string]string{"password/github/user1": "x"})
+	p, _ := newTestProvider(store)
 	p.stdin = strings.NewReader("y\n")
 
-	if err := p.DeleteEntry("sesh-password/password/github/user1:alice"); err != nil {
+	if err := p.DeleteEntry("password/github/user1"); err != nil {
 		t.Fatalf("DeleteEntry: %v", err)
 	}
-	if !deleted {
-		t.Error("DeleteEntry should have been called when user answered y")
+	if stored(t, store, "password/github/user1") != "" {
+		t.Error("the entry wasn't deleted though the answer was y")
 	}
 }
 
@@ -612,18 +534,8 @@ func TestStoreTOTP_QRPath(t *testing.T) {
 		Digits:    8,
 		Period:    60,
 	}, nil)
-
-	var gotDesc string
-	mock := &mocks.MockProvider{
-		SetSecretFunc:       func(_, _ string, _ []byte) error { return nil },
-		SetSecretStringFunc: func(_, _, _ string) error { return nil },
-		SetDescriptionFunc: func(_, _, description string) error {
-			gotDesc = description
-			return nil
-		},
-	}
-
-	p, _ := newTestProvider(mock)
+	store := vault.NewMemStore()
+	p, _ := newTestProvider(store)
 	p.action = "totp-store"
 	p.service = "github"
 	p.stdin = strings.NewReader("2\n")
@@ -635,8 +547,12 @@ func TestStoreTOTP_QRPath(t *testing.T) {
 	if p.username != "alice@example.com" {
 		t.Errorf("username = %q, want QR account to seed it", p.username)
 	}
-	if !strings.Contains(gotDesc, "GitHub") {
-		t.Errorf("SetDescription payload = %q, want to carry issuer", gotDesc)
+	e, err := store.Lookup(vault.Key{Kind: vault.KindTOTP, Service: "github", Username: "alice@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (totp.Params{Issuer: "GitHub", Algorithm: "SHA256", Digits: 8, Period: 60}); e.Settings.TOTP != want {
+		t.Errorf("code settings = %+v, want the QR code's %+v", e.Settings.TOTP, want)
 	}
 	if !strings.Contains(creds.DisplayInfo, "Stored TOTP secret") {
 		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
@@ -646,13 +562,7 @@ func TestStoreTOTP_QRPath(t *testing.T) {
 func TestStoreTOTP_ManualPath(t *testing.T) {
 	stubReadPassword(t, "JBSWY3DPEHPK3PXP")
 
-	mock := &mocks.MockProvider{
-		SetSecretFunc:       func(_, _ string, _ []byte) error { return nil },
-		SetSecretStringFunc: func(_, _, _ string) error { return nil },
-		SetDescriptionFunc:  func(_, _, _ string) error { return nil },
-	}
-
-	p, _ := newTestProvider(mock)
+	p, _ := newTestProvider(vault.NewMemStore())
 	p.action = "totp-store"
 	p.service = "github"
 	p.stdin = strings.NewReader("1\n")
@@ -669,7 +579,7 @@ func TestStoreTOTP_ManualPath(t *testing.T) {
 func TestStoreTOTP_QRScanFailure(t *testing.T) {
 	stubScanQRCodeFull(t, qrcode.TOTPInfo{}, errors.New("boom"))
 
-	p, _ := newTestProvider(&mocks.MockProvider{})
+	p, _ := newTestProvider(vault.NewMemStore())
 	p.action = "totp-store"
 	p.service = "github"
 	p.stdin = strings.NewReader("2\n")
@@ -681,14 +591,7 @@ func TestStoreTOTP_QRScanFailure(t *testing.T) {
 }
 
 func TestGenerateTOTP_HappyPath(t *testing.T) {
-	mock := &mocks.MockProvider{
-		GetSecretFunc: func(_, _ string) ([]byte, error) {
-			return []byte("JBSWY3DPEHPK3PXP"), nil
-		},
-		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
-			return nil, nil
-		},
-	}
+	mock := seeded(t, map[string]string{"totp/github": "JBSWY3DPEHPK3PXP"})
 
 	p, stdout := newTestProvider(mock)
 	p.action = "totp-generate"
@@ -707,9 +610,7 @@ func TestGenerateTOTP_HappyPath(t *testing.T) {
 }
 
 func TestGetPassword_ShowKeepsANotesOwnLastNewline(t *testing.T) {
-	mock := &mocks.MockProvider{
-		GetSecretFunc: func(_, _ string) ([]byte, error) { return []byte("line one\nline two\n"), nil },
-	}
+	mock := seeded(t, map[string]string{"secure_note/wifi": "line one\nline two\n"})
 	p, stdout := newTestProvider(mock)
 	p.action, p.service, p.entryType, p.show = "get", "wifi", "secure_note", true
 	if _, err := p.GetCredentials(); err != nil {
@@ -721,16 +622,7 @@ func TestGetPassword_ShowKeepsANotesOwnLastNewline(t *testing.T) {
 }
 
 func TestExport_WritesJSONToProviderStdout(t *testing.T) {
-	mock := &mocks.MockProvider{
-		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
-			return []keychain.KeychainEntry{
-				{Service: "sesh-password/password/github", Account: "testuser"},
-			}, nil
-		},
-		GetSecretFunc: func(_, _ string) ([]byte, error) {
-			return []byte("s3cret"), nil
-		},
-	}
+	mock := seeded(t, map[string]string{"password/github": "s3cret"})
 
 	p, stdout := newTestProvider(mock)
 	p.action = "export"
@@ -754,16 +646,7 @@ func TestExport_WritesJSONToProviderStdout(t *testing.T) {
 func TestExport_EncryptedWritesEnvelope(t *testing.T) {
 	stubReadPassword(t, "export-password-1234")
 
-	mock := &mocks.MockProvider{
-		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
-			return []keychain.KeychainEntry{
-				{Service: "sesh-password/password/github", Account: "testuser"},
-			}, nil
-		},
-		GetSecretFunc: func(_, _ string) ([]byte, error) {
-			return []byte("plaintext-secret"), nil
-		},
-	}
+	mock := seeded(t, map[string]string{"password/github": "plaintext-secret"})
 
 	p, stdout := newTestProvider(mock)
 	p.action = "export"
@@ -803,9 +686,7 @@ func TestExport_EncryptedPasswordMismatch(t *testing.T) {
 	}
 	t.Cleanup(func() { readPassword = orig })
 
-	mock := &mocks.MockProvider{
-		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) { return nil, nil },
-	}
+	mock := vault.NewMemStore()
 	p, _ := newTestProvider(mock)
 	p.action = "export"
 	p.format = "encrypted"
@@ -819,9 +700,7 @@ func TestExport_EncryptedPasswordMismatch(t *testing.T) {
 func TestExport_EncryptedEmptyPassword(t *testing.T) {
 	stubReadPassword(t, "")
 
-	mock := &mocks.MockProvider{
-		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) { return nil, nil },
-	}
+	mock := vault.NewMemStore()
 	p, _ := newTestProvider(mock)
 	p.action = "export"
 	p.format = "encrypted"
@@ -835,47 +714,18 @@ func TestExport_EncryptedEmptyPassword(t *testing.T) {
 func TestImport_EncryptedRoundTripThroughProvider(t *testing.T) {
 	stubReadPassword(t, "round-trip-password")
 
-	srcMock := &mocks.MockProvider{
-		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
-			return []keychain.KeychainEntry{
-				// Account must match the manager's user (set by newTestProvider
-				// to "testuser") or parseEntry silently drops the row. The
-				// username "alice" lives in the service-key path segment.
-				{Service: "sesh-password/password/github/alice", Account: "testuser"},
-			}, nil
-		},
-		GetSecretFunc: func(_, _ string) ([]byte, error) {
-			return []byte("hunter2"), nil
-		},
-	}
-
-	pSrc, srcOut := newTestProvider(srcMock)
+	pSrc, srcOut := newTestProvider(seeded(t, map[string]string{"password/github/alice": "hunter2"}))
 	pSrc.action = "export"
 	pSrc.format = "encrypted"
 	if _, err := pSrc.GetCredentials(); err != nil {
 		t.Fatalf("export: %v", err)
 	}
-	envelope := srcOut.Bytes()
 
-	stored := map[string][]byte{}
-	destMock := &mocks.MockProvider{
-		GetSecretFunc: func(_, service string) ([]byte, error) {
-			if v, ok := stored[service]; ok {
-				return v, nil
-			}
-			return nil, keychain.ErrNotFound
-		},
-		SetSecretFunc: func(_, service string, secret []byte) error {
-			stored[service] = append([]byte(nil), secret...)
-			return nil
-		},
-		SetDescriptionFunc: func(_, _, _ string) error { return nil },
-		ListEntriesFunc:    func(_ string) ([]keychain.KeychainEntry, error) { return nil, nil },
-	}
-	pDest, _ := newTestProvider(destMock)
+	dest := vault.NewMemStore()
+	pDest, _ := newTestProvider(dest)
 	pDest.action = "import"
 	pDest.format = "encrypted"
-	pDest.stdin = bytes.NewReader(envelope)
+	pDest.stdin = bytes.NewReader(srcOut.Bytes())
 
 	creds, err := pDest.GetCredentials()
 	if err != nil {
@@ -884,8 +734,8 @@ func TestImport_EncryptedRoundTripThroughProvider(t *testing.T) {
 	if !strings.Contains(creds.DisplayInfo, "Imported 1") {
 		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
 	}
-	if got := stored["sesh-password/password/github/alice"]; string(got) != "hunter2" {
-		t.Errorf("stored secret = %q, want hunter2 (full map: %v)", got, stored)
+	if got := stored(t, dest, "password/github/alice"); got != "hunter2" {
+		t.Errorf("stored secret = %q, want hunter2", got)
 	}
 }
 
@@ -903,23 +753,14 @@ func TestImport_EncryptedWrongPassword(t *testing.T) {
 	}
 	t.Cleanup(func() { readPassword = orig })
 
-	srcMock := &mocks.MockProvider{
-		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) {
-			return []keychain.KeychainEntry{
-				{Service: "sesh-password/password/github", Account: "alice"},
-			}, nil
-		},
-		GetSecretFunc: func(_, _ string) ([]byte, error) { return []byte("s"), nil },
-	}
-	pSrc, srcOut := newTestProvider(srcMock)
+	pSrc, srcOut := newTestProvider(seeded(t, map[string]string{"password/github": "s"}))
 	pSrc.action = "export"
 	pSrc.format = "encrypted"
 	if _, err := pSrc.GetCredentials(); err != nil {
 		t.Fatalf("export: %v", err)
 	}
 
-	destMock := &mocks.MockProvider{}
-	pDest, _ := newTestProvider(destMock)
+	pDest, _ := newTestProvider(vault.NewMemStore())
 	pDest.action = "import"
 	pDest.format = "encrypted"
 	pDest.stdin = bytes.NewReader(srcOut.Bytes())
@@ -931,34 +772,18 @@ func TestImport_EncryptedWrongPassword(t *testing.T) {
 }
 
 func TestImport_ReadsFromProviderStdin(t *testing.T) {
-	var stored int
-	mock := &mocks.MockProvider{
-		SetSecretFunc: func(_, _ string, _ []byte) error {
-			stored++
-			return nil
-		},
-		SetSecretStringFunc: func(_, _, _ string) error { return nil },
-		SetDescriptionFunc:  func(_, _, _ string) error { return nil },
-		// Existence probe during import treats nil/nil as "exists". Return
-		// ErrNotFound so the entry is treated as new and StorePassword runs.
-		GetSecretFunc: func(_, _ string) ([]byte, error) {
-			return nil, keychain.ErrNotFound
-		},
-		ListEntriesFunc: func(_ string) ([]keychain.KeychainEntry, error) { return nil, nil },
-	}
-
-	body := `[{"service":"github","username":"alice","type":"password","secret":"s3cret"}]`
-	p, _ := newTestProvider(mock)
+	store := vault.NewMemStore()
+	p, _ := newTestProvider(store)
 	p.action = "import"
 	p.format = "json"
-	p.stdin = strings.NewReader(body)
+	p.stdin = strings.NewReader(`[{"service":"github","username":"alice","type":"password","secret":"s3cret"}]`)
 
 	creds, err := p.GetCredentials()
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	if stored != 1 {
-		t.Errorf("SetSecret calls = %d, want 1", stored)
+	if got := stored(t, store, "password/github/alice"); got != "s3cret" {
+		t.Errorf("stored secret = %q, want s3cret", got)
 	}
 	if !strings.Contains(creds.DisplayInfo, "Imported 1 entry") {
 		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
@@ -966,7 +791,7 @@ func TestImport_ReadsFromProviderStdin(t *testing.T) {
 }
 
 func TestGetFlagInfo(t *testing.T) {
-	p := NewProvider(&mocks.MockProvider{})
+	p := NewProvider(vault.NewMemStore())
 	flags := p.GetFlagInfo()
 	if len(flags) == 0 {
 		t.Fatal("expected flag info")

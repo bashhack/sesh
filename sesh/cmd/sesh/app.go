@@ -18,6 +18,7 @@ import (
 	totpProvider "github.com/bashhack/sesh/internal/provider/totp"
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // validEnvVarName matches POSIX-compliant environment variable names.
@@ -56,10 +57,17 @@ type VersionInfo struct {
 	Date    string
 }
 
-// NewDefaultApp creates a new App with the given credential store.
-// The caller chooses the concrete keychain.Provider (system keychain,
-// SQLite store, etc.) and is responsible for its lifecycle.
-func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider, clipboardTimeout time.Duration) *App {
+// credentialStore is the vault through both interfaces its callers use:
+// the password manager uses vault.Store, the AWS and TOTP providers and
+// their setup keychain.Provider.
+type credentialStore interface {
+	keychain.Provider
+	vault.Store
+}
+
+// NewDefaultApp creates a new App over the given store; the caller opens
+// and closes it.
+func NewDefaultApp(versionInfo VersionInfo, kc credentialStore, clipboardTimeout time.Duration) *App {
 	totpSvc := totp.NewDefaultProvider()
 	awsSvc := aws.NewDefaultProvider()
 
