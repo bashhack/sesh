@@ -137,7 +137,7 @@ func migrateV4(tx *sql.Tx) error {
 // ErrOldVault is returned for a vault an earlier development build made
 // with entries in the old table: sesh had no releases then, so v5
 // doesn't convert one.
-var ErrOldVault = errors.New("this vault was made by an earlier development build of sesh, which this version can't open: start a new one by moving this file aside and running sesh again")
+var ErrOldVault = errors.New("this vault was made by an earlier development build of sesh, which this version can't open: start a new one by moving this file aside and running sesh again (the new vault keeps your master password)")
 
 // migrateV5 gives entries their own table, with kind, service name, and
 // username as columns, unique together. A vault whose old table holds
