@@ -427,7 +427,7 @@ func TestGeneratePassword_ShowEchoesPassword(t *testing.T) {
 		SetDescriptionFunc: func(_, _, _ string) error { return nil },
 	}
 
-	p, _ := newTestProvider(mock)
+	p, stdout := newTestProvider(mock)
 	p.action = "generate"
 	p.service = "github"
 	p.pwLength = 24
@@ -440,8 +440,11 @@ func TestGeneratePassword_ShowEchoesPassword(t *testing.T) {
 	if creds.CopyValue != "" {
 		t.Errorf("CopyValue = %q, want empty when --show is set", creds.CopyValue)
 	}
-	if !strings.Contains(creds.DisplayInfo, "Generated and stored password for github") {
-		t.Errorf("DisplayInfo = %q, missing status line", creds.DisplayInfo)
+	if creds.DisplayInfo != "✅ Generated and stored password for github" {
+		t.Errorf("DisplayInfo = %q, want only the status line", creds.DisplayInfo)
+	}
+	if pw := strings.TrimSuffix(stdout.String(), "\n"); len(pw) != 24 || strings.Contains(pw, "\n") {
+		t.Errorf("stdout = %q, want the 24-character password on one line", stdout.String())
 	}
 }
 
@@ -451,7 +454,7 @@ func TestGeneratePassword_JSONFormat(t *testing.T) {
 		SetDescriptionFunc: func(_, _, _ string) error { return nil },
 	}
 
-	p, _ := newTestProvider(mock)
+	p, stdout := newTestProvider(mock)
 	p.action = "generate"
 	p.service = "github"
 	p.username = "alice"
@@ -462,14 +465,17 @@ func TestGeneratePassword_JSONFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
+	if creds.DisplayInfo != "" {
+		t.Errorf("DisplayInfo = %q, want nothing on stderr", creds.DisplayInfo)
+	}
 	var payload struct {
 		Service  string `json:"service"`
 		Username string `json:"username"`
 		Type     string `json:"type"`
 		Password string `json:"password"`
 	}
-	if err := json.Unmarshal([]byte(creds.DisplayInfo), &payload); err != nil {
-		t.Fatalf("DisplayInfo not JSON: %v (raw %q)", err, creds.DisplayInfo)
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout not JSON: %v (raw %q)", err, stdout.String())
 	}
 	if payload.Service != "github" || payload.Username != "alice" || payload.Type != "password" {
 		t.Errorf("JSON header mismatch: %+v", payload)
@@ -486,7 +492,7 @@ func TestGetPassword_ShowReturnsPlainSecret(t *testing.T) {
 		},
 	}
 
-	p, _ := newTestProvider(mock)
+	p, stdout := newTestProvider(mock)
 	p.action = "get"
 	p.service = "github"
 	p.show = true
@@ -495,8 +501,11 @@ func TestGetPassword_ShowReturnsPlainSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	if creds.DisplayInfo != "s3cret" {
-		t.Errorf("DisplayInfo = %q, want s3cret", creds.DisplayInfo)
+	if stdout.String() != "s3cret\n" {
+		t.Errorf("stdout = %q, want the secret and a newline", stdout.String())
+	}
+	if creds.DisplayInfo != "" {
+		t.Errorf("DisplayInfo = %q, want nothing on stderr", creds.DisplayInfo)
 	}
 	if creds.CopyValue != "" {
 		t.Errorf("CopyValue should be empty in --show mode, got %q", creds.CopyValue)
@@ -533,7 +542,7 @@ func TestGetPassword_JSONFormat(t *testing.T) {
 		},
 	}
 
-	p, _ := newTestProvider(mock)
+	p, stdout := newTestProvider(mock)
 	p.action = "get"
 	p.service = "github"
 	p.format = "json"
@@ -542,11 +551,14 @@ func TestGetPassword_JSONFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
+	if creds.DisplayInfo != "" {
+		t.Errorf("DisplayInfo = %q, want nothing on stderr", creds.DisplayInfo)
+	}
 	var payload struct {
 		Password string `json:"password"`
 	}
-	if err := json.Unmarshal([]byte(creds.DisplayInfo), &payload); err != nil {
-		t.Fatalf("DisplayInfo not JSON: %v (raw %q)", err, creds.DisplayInfo)
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout not JSON: %v (raw %q)", err, stdout.String())
 	}
 	if payload.Password != "s3cret" {
 		t.Errorf("json.password = %q, want s3cret", payload.Password)
@@ -729,7 +741,7 @@ func TestGenerateTOTP_HappyPath(t *testing.T) {
 		},
 	}
 
-	p, _ := newTestProvider(mock)
+	p, stdout := newTestProvider(mock)
 	p.action = "totp-generate"
 	p.service = "github"
 
@@ -737,11 +749,25 @@ func TestGenerateTOTP_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	if len(creds.CopyValue) != 6 {
-		t.Errorf("TOTP code length = %d, want 6", len(creds.CopyValue))
+	if code := stdout.String(); len(code) != 7 || strings.Trim(code, "0123456789") != "\n" {
+		t.Errorf("stdout = %q, want the 6-digit code and a newline", code)
 	}
-	if !strings.Contains(creds.DisplayInfo, "TOTP code:") {
-		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
+	if creds.DisplayInfo != "" {
+		t.Errorf("DisplayInfo = %q, want nothing on stderr", creds.DisplayInfo)
+	}
+}
+
+func TestGetPassword_ShowKeepsANotesOwnLastNewline(t *testing.T) {
+	mock := &mocks.MockProvider{
+		GetSecretFunc: func(_, _ string) ([]byte, error) { return []byte("line one\nline two\n"), nil },
+	}
+	p, stdout := newTestProvider(mock)
+	p.action, p.service, p.entryType, p.show = "get", "wifi", "secure_note", true
+	if _, err := p.GetCredentials(); err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if stdout.String() != "line one\nline two\n" {
+		t.Errorf("stdout = %q, want the note as stored, with no extra newline", stdout.String())
 	}
 }
 

@@ -753,6 +753,14 @@ sesh -service password -action import -format encrypted -file backup.enc
 sesh -service password -action search -query stripe -format json
 ```
 
+Values you ask for (a secret with `-show`, a TOTP code from `totp-generate`, and `-format json` output) go to stdout, and status messages go to stderr, so they can be captured or piped:
+
+```bash
+token=$(sesh -service password -action get -service-name stripe -entry-type api_key -show)
+code=$(sesh -service password -action totp-generate -service-name github -username alice)
+sesh -service password -action get -service-name github -username alice -format json | jq -r .password
+```
+
 #### Secure notes and piped input
 
 Secure notes accept multi-line bodies from stdin, so pipes and heredocs work:

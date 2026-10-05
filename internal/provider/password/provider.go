@@ -195,7 +195,11 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	case "totp-store":
 		return p.storeTOTP(mgr)
 	case "totp-generate":
-		return p.generateTOTP(mgr)
+		creds, err := p.generateTOTP(mgr)
+		if err != nil {
+			return provider.Credentials{}, err
+		}
+		return provider.Credentials{Provider: p.Name()}, p.printValue([]byte(creds.CopyValue))
 	default:
 		return provider.Credentials{}, fmt.Errorf("specify --action (store, get, search, generate, export, import, totp-store, totp-generate) or use --list, --delete")
 	}
@@ -444,10 +448,7 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("marshal JSON output: %w", err)
 		}
-		return provider.Credentials{
-			Provider:    p.Name(),
-			DisplayInfo: string(b),
-		}, nil
+		return provider.Credentials{Provider: p.Name()}, p.printValue(b)
 	}
 
 	if p.show {
@@ -457,8 +458,8 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 		// explicitly-interactive `generate` invocation.
 		return provider.Credentials{
 			Provider:    p.Name(),
-			DisplayInfo: fmt.Sprintf("✅ Generated and stored %s for %s\n%s", et, desc, string(generated)),
-		}, nil
+			DisplayInfo: fmt.Sprintf("✅ Generated and stored %s for %s", et, desc),
+		}, p.printValue(generated)
 	}
 
 	return provider.Credentials{
@@ -494,17 +495,11 @@ func (p *Provider) getPassword(mgr *password.Manager) (provider.Credentials, err
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("marshal JSON output: %w", err)
 		}
-		return provider.Credentials{
-			Provider:    p.Name(),
-			DisplayInfo: string(b),
-		}, nil
+		return provider.Credentials{Provider: p.Name()}, p.printValue(b)
 	}
 
 	if p.show {
-		return provider.Credentials{
-			Provider:    p.Name(),
-			DisplayInfo: string(secretBytes),
-		}, nil
+		return provider.Credentials{Provider: p.Name()}, p.printValue(secretBytes)
 	}
 
 	desc := p.service
@@ -656,6 +651,21 @@ func (p *Provider) generateTOTP(mgr *password.Manager) (provider.Credentials, er
 		ClipboardDescription: fmt.Sprintf("TOTP code for %s", desc),
 		DisplayInfo:          fmt.Sprintf("TOTP code: %s", code),
 	}, nil
+}
+
+// printValue writes a value the user asked for (a secret, a code, or JSON)
+// to stdout, so it can be captured or piped, ending it with a newline
+// unless it has one. Messages about it go to stderr, through DisplayInfo.
+func (p *Provider) printValue(v []byte) error {
+	if _, err := p.stdout.Write(v); err != nil {
+		return fmt.Errorf("write to stdout: %w", err)
+	}
+	if len(v) == 0 || v[len(v)-1] != '\n' {
+		if _, err := io.WriteString(p.stdout, "\n"); err != nil {
+			return fmt.Errorf("write to stdout: %w", err)
+		}
+	}
+	return nil
 }
 
 // readExportPassword prompts for a password used to encrypt/decrypt an
