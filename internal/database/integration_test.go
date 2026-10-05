@@ -340,7 +340,8 @@ func TestIntegration_Search(t *testing.T) {
 		"hub":         {"github"},
 		"admin":       {"stripe"},
 		"gitops":      nil,
-		"password":    nil,
+		"password":    {"github", "gitlab"}, // names the kind
+		"key":         {"stripe"},
 		"nonexistent": nil,
 	} {
 		results, err := mgr.SearchEntries(query)

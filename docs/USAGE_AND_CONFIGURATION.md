@@ -726,10 +726,7 @@ sesh -service password -action totp-store -service-name github -username alice
 sesh -service password -action totp-generate -service-name github -username alice
 sesh -service password -action totp-generate -service-name github -username alice -clip   # copy the code
 
-# Search across all entries: matches any part of the service name or
-# username, ignoring case. Exact names come first, then names that start
-# with the query, then names that contain it, then username matches;
-# the most recently updated first within each.
+# Search across all entries: see "Searching" below
 sesh -service password -action search -query github
 # Output:
 #   Found 2 entries matching "github":
@@ -766,6 +763,25 @@ token=$(sesh -service password -action get -service-name stripe -entry-type api_
 code=$(sesh -service password -action totp-generate -service-name github -username alice)
 sesh -service password -action get -service-name github -username alice -format json | jq -r .password
 ```
+
+#### Searching
+
+`-action search -query <words>` looks at the two things you name an entry by: its service name and its username. It never looks at secrets, or at the labels sesh adds itself (the stored name's `sesh-password/...` prefix, your login name, the generated description).
+
+- **Any part of a name.** `hub` finds `github`. Case doesn't matter.
+- **Punctuation optional.** `mybank` finds `my-bank`, `awsconsole` finds `aws-console`.
+- **Several words narrow it.** Every word has to match the name, the username, or the kind: `github alice` is GitHub as alice; `github totp` is GitHub's TOTP entry.
+- **Kind words.** `password`; `totp`, `otp`, `2fa`, `mfa`; `key`, `api`, `token` (API keys); `note` (secure notes). Only the whole word counts: `pass` searches names.
+- **Best matches first.** The whole name, then names starting with the word, then a later word in the name (`bank` in `my-bank`), then anywhere (`bank` in `snowbank`); then the same for usernames, then kind. Among equals, the most recently updated comes first.
+
+| Search | Finds |
+|---|---|
+| `github` | `github` (every user and kind), then `github-enterprise` |
+| `hub` | `github`, `github-enterprise` |
+| `github alice` | `github` as `alice`, then `github-enterprise` as `alice` |
+| `github totp` | GitHub's TOTP entry |
+| `key` | every API key |
+| `mybank` | `my-bank` |
 
 #### Secure notes and piped input
 
