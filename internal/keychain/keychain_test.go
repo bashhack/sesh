@@ -248,9 +248,11 @@ func TestItems_UseTheKeychain(t *testing.T) {
 	}
 }
 
+// TestGetSecretIntegration runs the real security tool against the login
+// Keychain, so it runs only with SESH_KEYCHAIN_INTEGRATION=1.
 func TestGetSecretIntegration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping keychain test in short mode")
+	if os.Getenv("SESH_KEYCHAIN_INTEGRATION") != "1" {
+		t.Skip("reads the real Keychain; set SESH_KEYCHAIN_INTEGRATION=1 to run")
 	}
 
 	orig := saveMocks()
