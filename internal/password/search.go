@@ -165,7 +165,8 @@ func squash(s string) string {
 
 // SearchSuggestions returns the names closest to a one-word query, for a
 // "did you mean" when it matched nothing: service names, usernames, the
-// words within them, and kind words, at the smallest edit distance found
+// words within them, and the kind words of kinds the vault holds (so each
+// suggestion finds something), at the smallest edit distance found
 // (letters added, removed, changed, or swapped). A word of up to four
 // letters allows one edit, a longer one two. A query of several words
 // gets no suggestions.
@@ -191,12 +192,16 @@ func (m *Manager) SearchSuggestions(query string) ([]string, error) {
 			candidates[part] = true
 		}
 	}
+	kinds := map[EntryType]bool{}
 	for i := range entries {
 		add(entries[i].Service)
 		add(entries[i].Username)
+		kinds[entries[i].Type] = true
 	}
-	for k := range kindWords {
-		candidates[k] = true
+	for k, t := range kindWords {
+		if kinds[t] {
+			candidates[k] = true
+		}
 	}
 
 	limit := 2

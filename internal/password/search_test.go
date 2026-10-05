@@ -150,6 +150,29 @@ func TestSearchSuggestions(t *testing.T) {
 	}
 }
 
+func TestSearchSuggestions_KindWordsOnlyForKindsInTheVault(t *testing.T) {
+	entries := []keychain.KeychainEntry{
+		{Service: "sesh-password/password/github/alice", Account: "testuser"},
+		{Service: "sesh-password/api_key/openai", Account: "testuser"},
+	}
+	m := NewManager(&mocks.MockProvider{
+		ListEntriesFunc: func(string) ([]keychain.KeychainEntry, error) { return entries, nil },
+	}, "testuser")
+	for query, want := range map[string]string{
+		"2fa":   "",      // no TOTP entries: "mfa" would find nothing either
+		"notes": "",      // no notes
+		"tokn":  "token", // API keys exist
+	} {
+		got, err := m.SearchSuggestions(query)
+		if err != nil {
+			t.Fatalf("SearchSuggestions(%q): %v", query, err)
+		}
+		if strings.Join(got, ", ") != want {
+			t.Errorf("SearchSuggestions(%q) = %v, want %q", query, got, want)
+		}
+	}
+}
+
 func TestSearch_ListError(t *testing.T) {
 	m := NewManager(&mocks.MockProvider{
 		ListEntriesFunc: func(string) ([]keychain.KeychainEntry, error) {
