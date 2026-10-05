@@ -445,6 +445,9 @@ func removeOldKeyState(oldSource, dataDir string, kc keychain.ItemStore) string 
 		if err == nil {
 			err = kc.DeleteEntry(u.Username, encKeyService)
 		}
+		if errors.Is(err, keychain.ErrNotFound) {
+			return ""
+		}
 		if err != nil {
 			return fmt.Sprintf("warning: couldn't remove the old Keychain key (%v); remove it yourself: security delete-generic-password -s %s", err, encKeyService)
 		}

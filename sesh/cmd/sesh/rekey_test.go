@@ -118,7 +118,11 @@ func (m *kcMock) SetDescription(_, _, _ string) error                    { retur
 func (m *kcMock) DeleteEntry(account, service string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.store, kcMockKey(account, service))
+	k := kcMockKey(account, service)
+	if _, ok := m.store[k]; !ok {
+		return keychain.ErrNotFound
+	}
+	delete(m.store, k)
 	return nil
 }
 
@@ -676,6 +680,9 @@ func TestRemoveOldKeyState(t *testing.T) {
 	}
 	if _, err := kc.GetSecret(u.Username, encKeyService); !errors.Is(err, keychain.ErrNotFound) {
 		t.Errorf("keychain entry still exists (err %v)", err)
+	}
+	if got := removeOldKeyState("keychain", dir, kc); got != "" {
+		t.Errorf("keychain key already gone: %q", got)
 	}
 }
 
