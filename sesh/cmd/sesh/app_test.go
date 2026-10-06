@@ -52,7 +52,7 @@ type MockProvider struct {
 	GetCredentialsFunc    func() (provider.Credentials, error)
 	GetClipboardValueFunc func() (provider.Credentials, error)
 	ListEntriesFunc       func() ([]provider.ProviderEntry, error)
-	DeleteEntryFunc       func(id string) error
+	DeleteEntriesFunc     func(ids []string, confirm provider.ConfirmDelete) (int, error)
 	ValidateRequestFunc   func() error
 	GetFlagInfoFunc       func() []provider.FlagInfo
 }
@@ -113,12 +113,12 @@ func (m *MockProvider) ListEntries() ([]provider.ProviderEntry, error) {
 	return []provider.ProviderEntry{}, nil
 }
 
-// DeleteEntry implements provider.ServiceProvider
-func (m *MockProvider) DeleteEntry(id string) error {
-	if m.DeleteEntryFunc != nil {
-		return m.DeleteEntryFunc(id)
+// DeleteEntries implements provider.ServiceProvider
+func (m *MockProvider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {
+	if m.DeleteEntriesFunc != nil {
+		return m.DeleteEntriesFunc(ids, confirm)
 	}
-	return nil
+	return len(ids), nil
 }
 
 // ValidateRequest implements provider.ServiceProvider
@@ -550,88 +550,66 @@ func TestApp_CopyToClipboard(t *testing.T) {
 	}
 }
 
-func TestApp_DeleteEntry(t *testing.T) {
-	tests := map[string]struct {
-		setupApp    func(*App)
-		serviceName string
-		entryID     string
-		wantErrMsg  string
-		wantOutput  string
-		wantErr     bool
-	}{
-		"successful delete": {
-			serviceName: "totp",
-			entryID:     "totp/github",
-			setupApp: func(app *App) {
-				mockProvider := &MockProvider{
-					NameFunc: func() string {
-						return "totp"
-					},
-					DeleteEntryFunc: func(id string) error {
-						if id == "totp/github" {
-							return nil
-						}
-						return fmt.Errorf("unexpected id: %s", id)
-					},
-				}
-				app.Registry.RegisterProvider(mockProvider)
-			},
-			wantErr:    false,
-			wantOutput: "✅ Entry deleted successfully\n",
+func TestApp_DeleteEntries(t *testing.T) {
+	app := &App{Registry: provider.NewRegistry(), Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	var got []string
+	app.Registry.RegisterProvider(&MockProvider{
+		NameFunc: func() string { return "totp" },
+		DeleteEntriesFunc: func(ids []string, _ provider.ConfirmDelete) (int, error) {
+			got = ids
+			if ids[0] == "totp/broken" {
+				return 0, errors.New("store error")
+			}
+			return len(ids), nil
 		},
-		"provider not found": {
-			serviceName: "unknown",
-			entryID:     "some-id",
-			setupApp:    func(app *App) {},
-			wantErr:     true,
-			wantErrMsg:  "provider not found",
-		},
-		"delete entry error": {
-			serviceName: "totp",
-			entryID:     "totp/github",
-			setupApp: func(app *App) {
-				mockProvider := &MockProvider{
-					NameFunc: func() string {
-						return "totp"
-					},
-					DeleteEntryFunc: func(id string) error {
-						return errors.New("store error")
-					},
-				}
-				app.Registry.RegisterProvider(mockProvider)
-			},
-			wantErr:    true,
-			wantErrMsg: "failed to delete entry: store error",
-		},
+	})
+	if err := app.DeleteEntries("totp", []string{"totp/github", "totp/gitlab"}); err != nil {
+		t.Fatal(err)
 	}
+	if out := app.Stdout.(*bytes.Buffer).String(); out != "✅ Deleted 2 entries\n" || len(got) != 2 {
+		t.Errorf("output = %q, ids = %v", out, got)
+	}
+	if err := app.DeleteEntries("totp", []string{"totp/broken"}); err == nil || err.Error() != "store error" {
+		t.Errorf("provider error: err = %v", err)
+	}
+	if err := app.DeleteEntries("unknown", []string{"x/y"}); err == nil || !strings.Contains(err.Error(), "provider not found") {
+		t.Errorf("unknown provider: err = %v", err)
+	}
+}
 
+// A delete names what it will remove and asks once; nobody at a terminal
+// is a refusal that points at --force.
+func TestApp_ConfirmDelete(t *testing.T) {
+	tests := map[string]struct {
+		stdin    string
+		wantErr  string
+		wantAsk  string
+		ids      []string
+		terminal bool
+		want     bool
+	}{
+		"one entry, yes":  {ids: []string{"password/github"}, stdin: "y\n", terminal: true, want: true, wantAsk: `Delete "password/github"? [y/N]: `},
+		"several, listed": {ids: []string{"password/a", "api_key/b"}, stdin: "y\n", terminal: true, want: true, wantAsk: "These entries will be deleted:\n  password/a\n  api_key/b\nDelete these 2 entries? [y/N]: "},
+		"no":              {ids: []string{"password/a"}, stdin: "n\n", terminal: true},
+		"just enter":      {ids: []string{"password/a"}, stdin: "\n", terminal: true},
+		"nobody to ask":   {ids: []string{"password/a"}, stdin: "y\n", wantErr: "add --force to delete without asking"},
+	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			app := &App{
-				Registry: provider.NewRegistry(),
-				Stdout:   &bytes.Buffer{},
-				Stderr:   &bytes.Buffer{},
-			}
-			tc.setupApp(app)
-
-			err := app.DeleteEntry(tc.serviceName, tc.entryID)
-
-			if tc.wantErr && err == nil {
-				t.Error("DeleteEntry() expected error but got nil")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("DeleteEntry() unexpected error: %v", err)
-			}
-			if tc.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), tc.wantErrMsg) {
-					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
+			stderr := &bytes.Buffer{}
+			app := &App{Stdin: strings.NewReader(tc.stdin), Stderr: stderr, StdinIsTerminal: func() bool { return tc.terminal }}
+			ok, err := app.confirmDelete(tc.ids)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tc.wantErr)
 				}
+				return
 			}
-			if tc.wantOutput != "" {
-				output := app.Stdout.(*bytes.Buffer).String()
-				if output != tc.wantOutput {
-					t.Errorf("output = %v, want %v", output, tc.wantOutput)
-				}
+			if err != nil || ok != tc.want {
+				t.Errorf("confirmDelete = %v, %v; want %v", ok, err, tc.want)
+			}
+			if tc.wantAsk != "" && stderr.String() != tc.wantAsk {
+				t.Errorf("asked %q, want %q", stderr.String(), tc.wantAsk)
 			}
 		})
 	}

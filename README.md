@@ -241,12 +241,14 @@ When you run `sesh -service aws`, you enter a secure subshell with:
 ```bash
 -profile <name>                 # AWS profile (default: $AWS_PROFILE)
 -no-subshell                    # Print exports instead of subshell
+-force                          # Delete without asking
 ```
 
 #### TOTP-Specific Options
 ```bash
 -service-name <name>            # Service name (github, google, etc.) [REQUIRED]
 -profile <name>                 # Account profile (work, personal, etc.)
+-force                          # Delete without asking
 ```
 
 #### Password-Specific Options

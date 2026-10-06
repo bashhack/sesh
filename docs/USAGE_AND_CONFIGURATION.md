@@ -209,7 +209,7 @@ db_path                  /Users/me/vaults/sesh.db
 | `-help`           | Show help (use with -service for provider help)  | Global           |
 | `-service`        | Service provider to use (aws, totp, password) [REQUIRED] | All commands     |
 | `-list`           | List entries for selected service                  | All providers    |
-| `-delete <id>`    | Delete entry for selected service                  | All providers    |
+| `-delete <id> …`  | Delete one or more entries, all or none; asks first unless `-force` | All providers    |
 | `-setup`          | Run interactive setup wizard                       | All providers    |
 | `-clip`           | Copy generated code to clipboard                   | All providers    |
 | `--db-path <path>` | Vault location for this command (overrides `SESH_DB_PATH` and the config file) | Global |
@@ -221,6 +221,7 @@ db_path                  /Users/me/vaults/sesh.db
 |--------------------|----------------------|-----------------------------------------|------------------|
 | `-profile`        | `AWS_PROFILE`        | AWS profile to use                      | default profile  |
 | `-no-subshell`    | n/a                  | Print credentials instead of subshell   | false (subshell) |
+| `-force`          | n/a                  | Delete without asking                   | false            |
 
 **Profile precedence:** `-profile` flag > `$AWS_PROFILE` environment variable > `"default"`. If neither flag nor env var is set, sesh uses the profile named `"default"`.
 
@@ -230,6 +231,7 @@ db_path                  /Users/me/vaults/sesh.db
 |--------------------|----------------------------------------------------|------------------|
 | `-service-name`   | Name of service (github, google, slack, etc.)      | Yes              |
 | `-profile`        | Profile name for multiple accounts (work, personal)| No               |
+| `-force`          | Delete without asking                              | No               |
 
 ### Password Provider Options
 
@@ -811,8 +813,30 @@ Entries for aws:
 
 # Delete an entry by copying the ID from -list output
 $ sesh -service aws -delete totp/aws/prod
-✅ Entry deleted successfully
+Delete "totp/aws/prod"? [y/N]: y
+✅ Deleted 1 entry
+
+# Delete several at once: every ID is checked first, and if any is wrong
+# nothing is deleted; then sesh lists them and asks once
+$ sesh -service password -delete password/old-bank api_key/old-service/ci
+These entries will be deleted:
+  password/old-bank
+  api_key/old-service/ci
+Delete these 2 entries? [y/N]: y
+✅ Deleted 2 entries
 ```
+
+A delete asks first, for every provider: `y` or `yes` goes ahead. `-force` deletes without asking, and is needed without a terminal, as in a script; sesh says so before asking for the master password. Flags go before the IDs: in `-delete a b -force`, `-force` would be read as an ID, and sesh says so.
+
+To delete entries chosen by a filter, search for them as JSON (it shows each entry's `id`, never a secret), pick the IDs with `jq`, check them, then hand them to `-delete` with `xargs`. Separate the IDs with NUL characters (`jq -j … + "\u0000"` and `xargs -0`): names can contain spaces and quotes, which plain `xargs` would split on, turning one ID into others.
+
+```bash
+# every API key for old-service: check the list first, then delete it
+sesh -service password -action search -query old-service -entry-type api_key -format json | jq -r '.[] | select(.service == "old-service") | .id'
+sesh -service password -action search -query old-service -entry-type api_key -format json | jq -j '.[] | select(.service == "old-service") | .id + "\u0000"' | xargs -0 sesh -service password -force -delete
+```
+
+For a very long list, `xargs` runs sesh more than once, and each run is all or none on its own; check the count sesh reports.
 
 **Names.** An entry is named by its service name and, optionally, a username (for AWS and `--service totp`, the profile). Spaces inside a name are fine (`My Bank`). sesh refuses a name with:
 

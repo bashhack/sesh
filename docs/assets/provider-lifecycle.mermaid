@@ -21,5 +21,5 @@ flowchart TD
     Sub -->|"false"| Print["Print credentials"]:::mode
 
     Route -->|"-list"| LE["ListEntries()<br>no ValidateRequest"]:::skip
-    Route -->|"-delete"| DE["DeleteEntry(id)<br>no ValidateRequest"]:::skip
+    Route -->|"-delete"| DE["DeleteEntries(ids)<br>no ValidateRequest"]:::skip
     Route -->|"-setup"| Setup["SetupService.SetupService()<br>calls handler's Setup()"]:::skip

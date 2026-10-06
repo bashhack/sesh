@@ -136,6 +136,30 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		}
 	})
 
+	t.Run("delete many", func(t *testing.T) {
+		s := newStore(t)
+		gh := vault.Key{Kind: vault.KindPassword, Service: "github"}
+		for _, k := range []vault.Key{openai, gh} {
+			if err := s.Put(k, []byte("v")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		missing := vault.Key{Kind: vault.KindPassword, Service: "missing"}
+		if err := s.DeleteMany([]vault.Key{openai, missing}); !errors.Is(err, vault.ErrNotFound) {
+			t.Fatalf("with a missing entry: err = %v, want ErrNotFound", err)
+		}
+		if _, err := s.Lookup(openai); err != nil {
+			t.Errorf("an entry was deleted although another was missing: %v", err)
+		}
+		// A key named twice is deleted once.
+		if err := s.DeleteMany([]vault.Key{openai, gh, openai}); err != nil {
+			t.Fatal(err)
+		}
+		if es, err := s.List(vault.Filter{}); err != nil || len(es) != 0 {
+			t.Errorf("left %v, %v; want nothing", es, err)
+		}
+	})
+
 	t.Run("refuses a bad key", func(t *testing.T) {
 		s := newStore(t)
 		for _, k := range []vault.Key{

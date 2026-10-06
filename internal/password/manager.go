@@ -244,6 +244,20 @@ func (m *Manager) ListEntriesFiltered(filter ListFilter) ([]Entry, error) {
 	return filtered, nil
 }
 
+// CaseHint suggests the entries in store that k misses only by case: "did
+// you mean …? Names are case-sensitive", or "" when there are none.
+func CaseHint(store vault.Store, k vault.Key) string {
+	twins, err := NewManager(store).CaseTwins(k)
+	if err != nil || len(twins) == 0 {
+		return ""
+	}
+	ids := make([]string, len(twins))
+	for i, t := range twins {
+		ids[i] = t.String()
+	}
+	return fmt.Sprintf("did you mean %s? Names are case-sensitive", strings.Join(ids, " or "))
+}
+
 // DeleteEntry removes the entry.
 func (m *Manager) DeleteEntry(service, username string, entryType EntryType) error {
 	if err := m.store.Delete(key(service, username, entryType)); err != nil {

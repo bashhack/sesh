@@ -147,7 +147,7 @@ type ServiceProvider interface {
     GetCredentials() (Credentials, error)
     GetClipboardValue() (Credentials, error)
     ListEntries() ([]ProviderEntry, error)
-    DeleteEntry(id string) error
+    DeleteEntries(ids []string, confirm ConfirmDelete) (int, error)
     
     // Validation - Are we ready?
     ValidateRequest() error

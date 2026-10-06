@@ -56,6 +56,7 @@ func (f failingStore) Get(vault.Key) ([]byte, error)            { return nil, f.
 func (f failingStore) Lookup(vault.Key) (vault.Entry, error)    { return vault.Entry{}, f.err }
 func (f failingStore) List(vault.Filter) ([]vault.Entry, error) { return nil, f.err }
 func (f failingStore) Delete(vault.Key) error                   { return f.err }
+func (f failingStore) DeleteMany([]vault.Key) error             { return f.err }
 
 func TestNewProvider(t *testing.T) {
 	mockAWS := &awsMocks.MockProvider{}
@@ -145,8 +146,8 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 	p := &Provider{}
 	flags := p.GetFlagInfo()
 
-	if len(flags) != 2 {
-		t.Errorf("GetFlagInfo() returned %d flags, want 2", len(flags))
+	if len(flags) != 3 || flags[2].Name != "force" || flags[2].Type != "bool" {
+		t.Fatalf("GetFlagInfo() = %+v, want profile, no-subshell and force", flags)
 	}
 
 	if flags[0].Name != "profile" {
@@ -859,7 +860,7 @@ func TestProvider_DeleteEntry(t *testing.T) {
 		"missing entry": {
 			id:         "totp/aws/prod",
 			store:      func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
-			wantErrSub: "failed to delete AWS entry",
+			wantErrSub: "entry not found: totp/aws/prod",
 		},
 		"store error": {
 			id: "totp/aws/default",
@@ -896,7 +897,7 @@ func TestProvider_DeleteEntry(t *testing.T) {
 			}
 			p := &Provider{store: store}
 
-			err := p.DeleteEntry(tc.id)
+			err := deleteOne(p, tc.id)
 			if tc.wantErrSub == "" && err != nil {
 				t.Errorf("DeleteEntry() unexpected error: %v", err)
 			}
@@ -1060,4 +1061,10 @@ func TestFormatProfile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// deleteOne deletes the entry id names, answering yes when asked.
+func deleteOne(p *Provider, id string) error {
+	_, err := p.DeleteEntries([]string{id}, func([]string) (bool, error) { return true, nil })
+	return err
 }

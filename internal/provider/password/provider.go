@@ -349,26 +349,13 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 	return result, nil
 }
 
-// DeleteEntry deletes a password entry by ID, with confirmation unless --force.
-func (p *Provider) DeleteEntry(id string) error {
-	k, err := vault.ParseKey(id)
-	if err != nil {
-		return err
-	}
-	if _, err := p.store.Lookup(k); err != nil {
-		return p.withCaseHint(err, k)
-	}
-	if !p.force {
-		fmt.Fprintf(os.Stderr, "Delete entry %q? [y/N]: ", id)
-		answer, err := p.readLine()
-		if err != nil {
-			return fmt.Errorf("read confirmation: %w", err)
-		}
-		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
-			return fmt.Errorf("delete cancelled")
-		}
-	}
-	return p.store.Delete(k)
+// DeleteForced reports whether --force says to delete without asking.
+func (p *Provider) DeleteForced() bool { return p.force }
+
+// DeleteEntries deletes the entries ids name, of any kind, asking first
+// unless --force.
+func (p *Provider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {
+	return provider.DeleteEntries(p.store, ids, nil, p.caseHint, p.force, confirm)
 }
 
 // checkEntryType refuses an --entry-type that isn't one of the kinds: an
@@ -925,19 +912,7 @@ func (p *Provider) readLine() (string, error) {
 	return p.lines.ReadString('\n')
 }
 
-// withCaseHint adds to a not-found err the IDs of entries k may have meant,
-// when some differ from it only in case.
-func (p *Provider) withCaseHint(err error, k vault.Key) error {
-	if !errors.Is(err, vault.ErrNotFound) {
-		return err
-	}
-	twins, terr := password.NewManager(p.store).CaseTwins(k)
-	if terr != nil || len(twins) == 0 {
-		return err
-	}
-	ids := make([]string, len(twins))
-	for i, t := range twins {
-		ids[i] = t.String()
-	}
-	return fmt.Errorf("%w; did you mean %s? Names are case-sensitive", err, strings.Join(ids, " or "))
+// caseHint names the entries k misses only by case, or is "".
+func (p *Provider) caseHint(k vault.Key) string {
+	return password.CaseHint(p.store, k)
 }

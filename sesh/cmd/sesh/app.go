@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/clipboard"
@@ -47,7 +50,10 @@ type App struct {
 	Stdin         io.Reader
 	Stdout        io.Writer
 	Stderr        io.Writer
-	VersionInfo   VersionInfo
+	// StdinIsTerminal reports whether someone at a terminal can answer a
+	// question on Stdin; nil means nobody can.
+	StdinIsTerminal func() bool
+	VersionInfo     VersionInfo
 }
 
 // VersionInfo contains version information
@@ -88,8 +94,11 @@ func NewDefaultApp(versionInfo VersionInfo, store vault.Store, settings AppSetti
 		ClipboardCopy: func(text string) error {
 			return clipboard.CopyWithAutoClear(text, settings.ClipboardTimeout)
 		},
-		TimeNow:     time.Now,
-		Stdin:       os.Stdin,
+		TimeNow: time.Now,
+		Stdin:   os.Stdin,
+		StdinIsTerminal: func() bool {
+			return term.IsTerminal(int(os.Stdin.Fd()))
+		},
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
 		VersionInfo: versionInfo,
@@ -148,21 +157,46 @@ func (a *App) ListEntries(serviceName string) error {
 	return nil
 }
 
-// DeleteEntry deletes an entry from the vault
-func (a *App) DeleteEntry(serviceName, entryID string) error {
+// DeleteEntries deletes the entries ids name with the provider for
+// serviceName: all or none, after asking at the terminal unless the
+// provider's --force says not to.
+func (a *App) DeleteEntries(serviceName string, ids []string) error {
 	p, err := a.Registry.GetProvider(serviceName)
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
 	}
-
-	if err := p.DeleteEntry(entryID); err != nil {
-		return fmt.Errorf("failed to delete entry: %w", err)
+	n, err := p.DeleteEntries(ids, a.confirmDelete)
+	if err != nil {
+		return err
 	}
-
-	if _, err := fmt.Fprintf(a.Stdout, "✅ Entry deleted successfully\n"); err != nil {
+	if _, err := fmt.Fprintf(a.Stdout, "✅ Deleted %s\n", entryCount(n)); err != nil {
 		return fmt.Errorf("failed to write output: %w", err)
 	}
 	return nil
+}
+
+// errDeleteNeedsForce is a delete with nobody at a terminal to confirm it.
+var errDeleteNeedsForce = errors.New("deleting asks first, and there's no terminal to ask at; add --force to delete without asking")
+
+// confirmDelete names the entries a delete will remove and asks, at the
+// terminal, whether to go ahead; with nobody there to answer, it refuses.
+func (a *App) confirmDelete(ids []string) (bool, error) {
+	if a.StdinIsTerminal == nil || !a.StdinIsTerminal() {
+		return false, errDeleteNeedsForce
+	}
+	var b strings.Builder
+	question := fmt.Sprintf("Delete %q? [y/N]: ", ids[0])
+	if len(ids) > 1 {
+		b.WriteString("These entries will be deleted:\n")
+		for _, id := range ids {
+			fmt.Fprintf(&b, "  %s\n", id)
+		}
+		question = fmt.Sprintf("Delete these %s? [y/N]: ", entryCount(len(ids)))
+	}
+	if _, err := io.WriteString(a.Stderr, b.String()); err != nil {
+		return false, err
+	}
+	return promptYesNo(a.Stdin, a.Stderr, question)
 }
 
 // RunSetup runs the setup wizard for a provider

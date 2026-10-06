@@ -91,3 +91,30 @@ func TestEntryAAD_Golden(t *testing.T) {
 		}
 	}
 }
+
+// DeleteMany logs each deletion (vaulttest checks the rest).
+func TestStore_DeleteManyLogsEach(t *testing.T) {
+	s := newTestStore(t)
+	a, b := vault.Key{Kind: vault.KindPassword, Service: "a"}, vault.Key{Kind: vault.KindAPIKey, Service: "b"}
+	for _, k := range []vault.Key{a, b} {
+		if err := s.Put(k, []byte("v")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.DeleteMany([]vault.Key{a, b}); err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.AuditEvents(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletes := 0
+	for _, e := range events {
+		if e.EventType == "delete" {
+			deletes++
+		}
+	}
+	if deletes != 2 {
+		t.Errorf("logged %d deletions, want 2", deletes)
+	}
+}

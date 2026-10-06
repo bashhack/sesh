@@ -28,6 +28,7 @@ type Provider struct {
 
 	profile    string
 	noSubshell bool
+	force      bool
 }
 
 var _ provider.ServiceProvider = (*Provider)(nil)
@@ -51,6 +52,7 @@ func (p *Provider) Description() string {
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
 	fs.BoolVar(&p.noSubshell, "no-subshell", false, "Print environment variables instead of launching subshell")
+	fs.BoolVar(&p.force, "force", false, "Delete without asking")
 	return nil
 }
 
@@ -265,19 +267,19 @@ func (p *Provider) getAWSProfiles() ([]string, error) {
 	return profiles, nil
 }
 
-// DeleteEntry deletes the AWS profile's entry id names.
-func (p *Provider) DeleteEntry(id string) error {
-	k, err := vault.ParseKey(id)
-	if err != nil {
-		return err
+// DeleteForced reports whether --force says to delete without asking.
+func (p *Provider) DeleteForced() bool { return p.force }
+
+// DeleteEntries deletes the AWS profiles' entries ids name, asking first
+// unless --force.
+func (p *Provider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {
+	own := func(k vault.Key) error {
+		if k != vault.AWSKey(k.Username) {
+			return fmt.Errorf("%s isn't an AWS entry; delete it with --service password", k)
+		}
+		return nil
 	}
-	if k != vault.AWSKey(k.Username) {
-		return fmt.Errorf("%s isn't an AWS entry; delete it with --service password", id)
-	}
-	if err := p.store.Delete(k); err != nil {
-		return fmt.Errorf("failed to delete AWS entry: %w", err)
-	}
-	return nil
+	return provider.DeleteEntries(p.store, ids, own, nil, p.force, confirm)
 }
 
 // GetProfile returns the current AWS profile
@@ -365,6 +367,12 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Name:        "no-subshell",
 			Type:        "bool",
 			Description: "Print environment variables instead of launching subshell",
+			Required:    false,
+		},
+		{
+			Name:        "force",
+			Type:        "bool",
+			Description: "Delete without asking",
 			Required:    false,
 		},
 	}

@@ -53,7 +53,7 @@ flowchart TD
     Sub -->|"false"| Print["Print credentials"]:::mode
 
     Route -->|"-list"| LE["ListEntries()<br>no ValidateRequest"]:::skip
-    Route -->|"-delete"| DE["DeleteEntry(id)<br>no ValidateRequest"]:::skip
+    Route -->|"-delete"| DE["DeleteEntries(ids)<br>no ValidateRequest"]:::skip
     Route -->|"-setup"| Setup["SetupService.SetupService()<br>calls handler's Setup()"]:::skip
 ```
 
@@ -83,7 +83,7 @@ type Credentials struct {
 type ProviderEntry struct {
     Name        string // Display name (e.g., "github (work)")
     Description string // Human-readable description
-    ID          string // The entry's key in text form ("totp/github/work"); DeleteEntry() receives it
+    ID          string // The entry's key in text form ("totp/github/work"); DeleteEntries() receives it
 }
 
 // FlagInfo is returned by GetFlagInfo() for help text generation
@@ -181,6 +181,7 @@ type Provider struct {
 
     // Provider-specific fields
     account string
+    force   bool // --force: delete without asking
 }
 
 func NewProvider(store vault.Store) *Provider {
@@ -212,6 +213,7 @@ func (p *Provider) Description() string {
 ```go
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
     fs.StringVar(&p.account, "account", "", "Account name (for several accounts)")
+    fs.BoolVar(&p.force, "force", false, "Delete without asking")
     return nil
 }
 
@@ -223,6 +225,7 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
             Description: "Account name (for several accounts)",
             Required:    false,
         },
+        {Name: "force", Type: "bool", Description: "Delete without asking"},
     }
 }
 ```
@@ -287,7 +290,7 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 
 #### Entry Management
 
-List your provider's entries with a `vault.Filter`, and use each key's text form as its ID. `DeleteEntry` receives that ID back; check it names one of your provider's entries, so `-service yourservice -delete` can't remove another provider's secret:
+List your provider's entries with a `vault.Filter`, and use each key's text form as its ID. `DeleteEntries` receives those IDs back. Hand them to `provider.DeleteEntries` with a check that each names one of your provider's entries, so `-service yourservice -delete` can't remove another provider's secret. It checks every ID before deleting anything, asks once (`confirm`) unless your `--force` says not to, and deletes them all or none. Define `--force` (a bool flag, also listed in `GetFlagInfo`): without a terminal, as in a script, sesh deletes only when it's set, so a provider without it can't delete from a script:
 
 ```go
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
@@ -308,18 +311,14 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
     return result, nil
 }
 
-func (p *Provider) DeleteEntry(id string) error {
-    k, err := vault.ParseKey(id)
-    if err != nil {
-        return err
+func (p *Provider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {
+    own := func(k vault.Key) error {
+        if k.Kind != vault.KindAPIKey || k.Service != serviceName {
+            return fmt.Errorf("%s isn't a %s entry; delete it with --service password", k, serviceName)
+        }
+        return nil
     }
-    if k.Kind != vault.KindAPIKey || k.Service != serviceName {
-        return fmt.Errorf("%s isn't a %s entry; delete it with --service password", id, serviceName)
-    }
-    if err := p.store.Delete(k); err != nil {
-        return fmt.Errorf("failed to delete entry: %w", err)
-    }
-    return nil
+    return provider.DeleteEntries(p.store, ids, own, nil, p.force, confirm)
 }
 ```
 
@@ -658,6 +657,7 @@ type Provider struct {
     totp  totp.Provider
     provider.Clock
     serviceName string
+    force       bool // --force: delete without asking
 }
 
 func NewProvider(store vault.Store, totp totp.Provider) *Provider {
@@ -673,12 +673,14 @@ func (p *Provider) Description() string { return "Simple TOTP provider" }
 
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
     fs.StringVar(&p.serviceName, "service-name", "", "Service name")
+    fs.BoolVar(&p.force, "force", false, "Delete without asking")
     return nil
 }
 
 func (p *Provider) GetFlagInfo() []provider.FlagInfo {
     return []provider.FlagInfo{
         {Name: "service-name", Type: "string", Description: "Service name", Required: true},
+        {Name: "force", Type: "bool", Description: "Delete without asking"},
     }
 }
 
@@ -733,15 +735,14 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
     return result, nil
 }
 
-func (p *Provider) DeleteEntry(id string) error {
-    k, err := vault.ParseKey(id)
-    if err != nil {
-        return err
+func (p *Provider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {
+    own := func(k vault.Key) error {
+        if k.Kind != vault.KindTOTP {
+            return fmt.Errorf("%s isn't a TOTP entry", k)
+        }
+        return nil
     }
-    if k.Kind != vault.KindTOTP {
-        return fmt.Errorf("%s isn't a TOTP entry", id)
-    }
-    return p.store.Delete(k)
+    return provider.DeleteEntries(p.store, ids, own, nil, p.force, confirm)
 }
 
 // ShouldUseSubshell implements the optional SubshellDecider interface.

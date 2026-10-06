@@ -47,8 +47,11 @@ type ServiceProvider interface {
 	// ListEntries returns the list of entries for this provider
 	ListEntries() ([]ProviderEntry, error)
 
-	// DeleteEntry deletes an entry from the vault
-	DeleteEntry(id string) error
+	// DeleteEntries deletes the entries ids name, all or none (see
+	// DeleteEntries in delete.go), asking confirm first unless told not to,
+	// and returns how many it deleted. It refuses an ID that isn't one of
+	// this provider's entries.
+	DeleteEntries(ids []string, confirm ConfirmDelete) (int, error)
 
 	// ValidateRequest performs early validation of the request
 	// This should check:

@@ -10,6 +10,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/password"
+	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/testutil"
 	"github.com/bashhack/sesh/internal/totp"
@@ -158,8 +159,8 @@ func TestListEntriesWithFilters(t *testing.T) {
 func TestDeleteEntryWithForce(t *testing.T) {
 	store := seeded(t, map[string]string{"password/github/user1": "x"})
 	p := &Provider{store: store, force: true}
-	if err := p.DeleteEntry("password/github/user1"); err != nil {
-		t.Fatalf("DeleteEntry: %v", err)
+	if _, err := p.DeleteEntries([]string{"password/github/user1"}, refuseToAsk(t)); err != nil {
+		t.Fatalf("DeleteEntries: %v", err)
 	}
 	if _, err := store.Lookup(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "user1"}); !errors.Is(err, vault.ErrNotFound) {
 		t.Errorf("the entry is still there: %v", err)
@@ -228,7 +229,7 @@ func TestEffectiveEntryType(t *testing.T) {
 // TestDeleteEntry_InvalidID: a malformed ID is refused before asking.
 func TestDeleteEntry_InvalidID(t *testing.T) {
 	p := &Provider{store: vault.NewMemStore(), stdin: strings.NewReader("")}
-	err := p.DeleteEntry("not-a-valid-id")
+	_, err := p.DeleteEntries([]string{"not-a-valid-id"}, refuseToAsk(t))
 	if err == nil || !strings.Contains(err.Error(), "want kind/service") {
 		t.Fatalf("err = %v, want the entry ID refused", err)
 	}
@@ -505,9 +506,8 @@ func TestGetPassword_JSONFormat(t *testing.T) {
 func TestDeleteEntry_CancelsOnNo(t *testing.T) {
 	store := seeded(t, map[string]string{"password/github/user1": "x"})
 	p, _ := newTestProvider(store)
-	p.stdin = strings.NewReader("n\n")
 
-	err := p.DeleteEntry("password/github/user1")
+	_, err := p.DeleteEntries([]string{"password/github/user1"}, answer(false))
 	if err == nil || !strings.Contains(err.Error(), "delete cancelled") {
 		t.Errorf("expected delete-cancelled error, got %v", err)
 	}
@@ -519,10 +519,9 @@ func TestDeleteEntry_CancelsOnNo(t *testing.T) {
 func TestDeleteEntry_ConfirmsOnYes(t *testing.T) {
 	store := seeded(t, map[string]string{"password/github/user1": "x"})
 	p, _ := newTestProvider(store)
-	p.stdin = strings.NewReader("y\n")
 
-	if err := p.DeleteEntry("password/github/user1"); err != nil {
-		t.Fatalf("DeleteEntry: %v", err)
+	if _, err := p.DeleteEntries([]string{"password/github/user1"}, answer(true)); err != nil {
+		t.Fatalf("DeleteEntries: %v", err)
 	}
 	if stored(t, store, "password/github/user1") != "" {
 		t.Error("the entry wasn't deleted though the answer was y")
@@ -900,7 +899,7 @@ func TestStoreTOTP_QRAccountIsCheckedToo(t *testing.T) {
 
 func TestDeleteEntry_RefusesABadName(t *testing.T) {
 	p, _ := newTestProvider(vault.NewMemStore())
-	if err := p.DeleteEntry("password/github "); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
+	if _, err := p.DeleteEntries([]string{"password/github "}, refuseToAsk(t)); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
 		t.Errorf("DeleteEntry = %v, want the space refused", err)
 	}
 }
@@ -1151,9 +1150,9 @@ func TestGeneratePassword_AsksBeforeANameInAnotherCase(t *testing.T) {
 func TestDeleteEntry_SuggestsANameInAnotherCase(t *testing.T) {
 	p, _ := newTestProvider(seeded(t, map[string]string{"password/GitHub/alice": "pw"}))
 	p.force = true
-	err := p.DeleteEntry("password/github/alice")
+	_, err := p.DeleteEntries([]string{"password/github/alice"}, refuseToAsk(t))
 	if !errors.Is(err, vault.ErrNotFound) || !strings.Contains(err.Error(), "did you mean password/GitHub/alice?") {
-		t.Errorf("DeleteEntry = %v, want not found with the suggestion", err)
+		t.Errorf("DeleteEntries = %v, want not found with the suggestion", err)
 	}
 }
 
@@ -1189,5 +1188,19 @@ func TestValidateRequest_RefusesNegativePaging(t *testing.T) {
 	p.limit, p.offset = 0, 5
 	if err := p.ValidateRequest(); err != nil {
 		t.Errorf("limit 0, offset 5: %v", err)
+	}
+}
+
+// answer is a confirmation that says yes or no.
+func answer(yes bool) provider.ConfirmDelete {
+	return func([]string) (bool, error) { return yes, nil }
+}
+
+// refuseToAsk is a confirmation the test fails if it's asked.
+func refuseToAsk(t *testing.T) provider.ConfirmDelete {
+	t.Helper()
+	return func(ids []string) (bool, error) {
+		t.Errorf("asked to confirm deleting %v", ids)
+		return false, nil
 	}
 }
