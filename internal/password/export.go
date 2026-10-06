@@ -183,11 +183,7 @@ type ImportOptions struct {
 
 // ImportResult reports what happened during import.
 type ImportResult struct {
-	Errors []string
-	// Warnings name imported entries whose names break the rules for new
-	// names: a backup can hold entries saved before those rules, and
-	// restoring it copies them as they are.
-	Warnings []string
+	Errors   []string
 	Imported int
 	Skipped  int
 }
@@ -238,10 +234,6 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
 			continue
 		}
-		nameWarning := ""
-		if err := k.ValidateNew(); err != nil {
-			nameWarning = fmt.Sprintf("%s: %v; imported as it is, but consider renaming it", importName(e), err)
-		}
 		_, err := m.store.Lookup(k)
 		var exists bool
 		switch {
@@ -276,9 +268,6 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			continue
 		}
 		result.Imported++
-		if nameWarning != "" {
-			result.Warnings = append(result.Warnings, nameWarning)
-		}
 	}
 
 	return result, nil

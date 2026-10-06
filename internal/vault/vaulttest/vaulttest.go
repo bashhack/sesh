@@ -136,21 +136,6 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		}
 	})
 
-	t.Run("keeps names saved before the name rules", func(t *testing.T) {
-		s := newStore(t)
-		for _, k := range []vault.Key{
-			{Kind: vault.KindPassword, Service: "github "},
-			{Kind: vault.KindPassword, Service: strings.Repeat("x", vault.MaxNameLength+1)},
-		} {
-			if err := s.Put(k, []byte("v")); err != nil {
-				t.Errorf("Put(%q) = %v, want the store to keep it", k, err)
-			}
-			if got, err := s.Get(k); err != nil || string(got) != "v" {
-				t.Errorf("Get(%q) = %q, %v", k, got, err)
-			}
-		}
-	})
-
 	t.Run("refuses a bad key", func(t *testing.T) {
 		s := newStore(t)
 		for _, k := range []vault.Key{
@@ -158,6 +143,9 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			{Kind: vault.KindPassword},
 			{Kind: vault.KindPassword, Service: "a/b"},
 			{Kind: vault.KindPassword, Service: "x", Username: "a\nb"},
+			{Kind: vault.KindPassword, Service: "github "},
+			{Kind: vault.KindPassword, Service: "x", Username: " alice"},
+			{Kind: vault.KindPassword, Service: strings.Repeat("x", vault.MaxNameLength+1)},
 		} {
 			if err := s.Put(k, []byte("v")); err == nil {
 				t.Errorf("Put(%+v) succeeded, want an error", k)

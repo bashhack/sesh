@@ -705,22 +705,3 @@ func TestRekey_ChangesTheMasterPassword(t *testing.T) {
 		t.Errorf("entry under the new password = %q", got["password/x/y"])
 	}
 }
-
-// Entries named before the name rules (a trailing space, a long name) are
-// still copied by a password change.
-func TestRotate_KeepsNamesSavedBeforeTheNameRules(t *testing.T) {
-	env := setupRekeyEnv(t)
-	long := "password/" + strings.Repeat("x", 300)
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"password/github ": "spaced", long: "long"})
-	t.Setenv("SESH_MASTER_PASSWORD", "")
-	app, stderr := rekeyTestApp("y\n")
-	if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
-		t.Fatalf("rotate: %v\n%s", err, stderr)
-	}
-	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
-	got := readEntriesViaPassword(t, env, []string{"password/github ", long})
-	if got["password/github "] != "spaced" || got[long] != "long" {
-		t.Errorf("after the change: %q", got)
-	}
-}

@@ -819,17 +819,10 @@ func TestEntryCount(t *testing.T) {
 	}
 }
 
-// A name a new entry can't have is refused before the secret is asked for.
-// Reading an entry doesn't check, so ones named before the rules still open.
+// A name no entry can have is refused before anything is asked, and
+// without the vault (CheckNames).
 func TestValidateRequest_RefusesBadNames(t *testing.T) {
-	for _, action := range []string{"get", "totp-generate"} {
-		p, _ := newTestProvider(vault.NewMemStore())
-		p.action, p.service = action, "github "
-		if err := p.ValidateRequest(); err != nil {
-			t.Errorf("%s of an existing name: ValidateRequest = %v, want nil", action, err)
-		}
-	}
-	for _, action := range []string{"store", "generate", "totp-store"} {
+	for _, action := range []string{"store", "generate", "get", "totp-store", "totp-generate"} {
 		for name, tt := range map[string]struct{ service, username, wantSub string }{
 			"trailing space": {"github ", "", `the service name "github " starts or ends with a space`},
 			"leading space":  {"github", " alice", `the username " alice" starts or ends with a space`},
@@ -844,25 +837,21 @@ func TestValidateRequest_RefusesBadNames(t *testing.T) {
 	}
 }
 
-// Refused entries are named as --list names them, quoted so a stray space
-// shows; an entry kept despite its name is reported as a warning.
+// Refused entries are named as --list names them, quoted so a stray space shows.
 func TestImport_ReportsRefusedEntriesByName(t *testing.T) {
 	p, _ := newTestProvider(vault.NewMemStore())
 	p.action, p.format = "import", "json"
-	p.stdin = strings.NewReader(`[{"service":"a/b","type":"password","secret":"a"},
+	p.stdin = strings.NewReader(`[{"service":"github ","type":"password","secret":"a"},
 		{"service":"gitlab","username":"alice","type":"password","secret":""},
-		{"service":"github ","type":"password","secret":"c"},
 		{"service":"ok","type":"password","secret":"b"}]`)
 	creds, err := p.GetCredentials()
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
 	for _, want := range []string{
-		"Imported 2 entries, 2 errors:",
-		`"a/b": the service name "a/b" contains "/"`,
+		"Imported 1 entry, 2 errors:",
+		`"github ": the service name "github " starts or ends with a space`,
 		`"gitlab" ("alice"): empty secret`,
-		"1 warning:",
-		`"github ": the service name "github " starts or ends with a space; imported as it is, but consider renaming it`,
 	} {
 		if !strings.Contains(creds.DisplayInfo, want) {
 			t.Errorf("DisplayInfo = %q, want it to contain %q", creds.DisplayInfo, want)
@@ -883,20 +872,6 @@ func TestImport_OneErrorIsSingular(t *testing.T) {
 	}
 }
 
-// An entry named before the name rules can still be deleted by its ID.
-func TestDeleteEntry_ANameSavedBeforeTheNameRules(t *testing.T) {
-	store := vault.NewMemStore()
-	k := vault.Key{Kind: vault.KindPassword, Service: "github "}
-	if err := store.Put(k, []byte("old")); err != nil {
-		t.Fatalf("an existing name must still save through the store: %v", err)
-	}
-	p, _ := newTestProvider(store)
-	p.force = true
-	if err := p.DeleteEntry("password/github "); err != nil {
-		t.Errorf("DeleteEntry: %v", err)
-	}
-}
-
 // A username taken from a QR code is checked like one given as a flag,
 // before anything is stored.
 func TestStoreTOTP_QRAccountIsCheckedToo(t *testing.T) {
@@ -914,18 +889,21 @@ func TestStoreTOTP_QRAccountIsCheckedToo(t *testing.T) {
 	}
 }
 
-// An entry saved before the name rules can still be updated in place; only
-// a name for a new entry is checked.
-func TestValidateRequest_AllowsUpdatingANameSavedBeforeTheRules(t *testing.T) {
-	for _, tt := range []struct{ action, id string }{
-		{"store", "password/github "},
-		{"generate", "password/github "},
-		{"totp-store", "totp/github "},
-	} {
-		p, _ := newTestProvider(seeded(t, map[string]string{tt.id: "JBSWY3DPEHPK3PXP"}))
-		p.action, p.service = tt.action, "github "
-		if err := p.ValidateRequest(); err != nil {
-			t.Errorf("%s over the existing %q: ValidateRequest = %v, want nil", tt.action, tt.id, err)
-		}
+func TestDeleteEntry_RefusesABadName(t *testing.T) {
+	p, _ := newTestProvider(vault.NewMemStore())
+	if err := p.DeleteEntry("password/github "); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
+		t.Errorf("DeleteEntry = %v, want the space refused", err)
+	}
+}
+
+func TestCheckNames_NeedsNoVault(t *testing.T) {
+	p := NewProvider(nil)
+	p.action, p.service = "store", "github "
+	if err := p.CheckNames(); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
+		t.Errorf("CheckNames = %v, want the space refused", err)
+	}
+	p.service = "github"
+	if err := p.CheckNames(); err != nil {
+		t.Errorf("CheckNames of a good name = %v", err)
 	}
 }

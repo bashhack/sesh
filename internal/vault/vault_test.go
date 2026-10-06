@@ -38,7 +38,7 @@ func TestKey_TextForm(t *testing.T) {
 	}
 }
 
-func TestKey_ValidateNew(t *testing.T) {
+func TestKey_Validate(t *testing.T) {
 	long := strings.Repeat("é", vault.MaxNameLength)
 	for _, k := range []vault.Key{
 		{Kind: vault.KindPassword, Service: "My Bank", Username: "alice smith"},
@@ -46,8 +46,8 @@ func TestKey_ValidateNew(t *testing.T) {
 		// A zero-width joiner inside a name, as emoji sequences use.
 		{Kind: vault.KindPassword, Service: "dev\u200dteam"},
 	} {
-		if err := k.ValidateNew(); err != nil {
-			t.Errorf("ValidateNew(%+v) = %v, want nil", k, err)
+		if err := k.Validate(); err != nil {
+			t.Errorf("Validate(%+v) = %v, want nil", k, err)
 		}
 	}
 	for name, tt := range map[string]struct {
@@ -75,20 +75,14 @@ func TestKey_ValidateNew(t *testing.T) {
 		"username too long":              {vault.Key{Kind: vault.KindPassword, Service: "x", Username: long + "x"}, "the username is 257 characters long; the most is 256"},
 		"the structural rules still":     {vault.Key{Kind: vault.KindPassword, Service: "a/b"}, `contains "/"`},
 	} {
-		if err := tt.key.ValidateNew(); err == nil || !strings.Contains(err.Error(), tt.wantSub) {
-			t.Errorf("%s: ValidateNew = %v, want it to contain %q", name, err, tt.wantSub)
+		if err := tt.key.Validate(); err == nil || !strings.Contains(err.Error(), tt.wantSub) {
+			t.Errorf("%s: Validate = %v, want it to contain %q", name, err, tt.wantSub)
 		}
 	}
 }
 
-// Entries saved before the name rules still parse and validate, so they can
-// be opened, copied, and deleted.
-func TestKey_NamesSavedBeforeTheNameRules(t *testing.T) {
-	k, err := vault.ParseKey("password/github ")
-	if err != nil || k.Service != "github " {
-		t.Errorf("ParseKey = %+v, %v; want the existing name", k, err)
-	}
-	if err := (vault.Key{Kind: vault.KindPassword, Service: strings.Repeat("x", 300)}).Validate(); err != nil {
-		t.Errorf("Validate of a long existing name = %v", err)
+func TestParseKey_AppliesTheNameRules(t *testing.T) {
+	if _, err := vault.ParseKey("password/github "); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
+		t.Errorf("ParseKey with a trailing space = %v, want it refused", err)
 	}
 }

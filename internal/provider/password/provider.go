@@ -178,31 +178,28 @@ func (p *Provider) ValidateRequest() error {
 	return p.checkName()
 }
 
-// checkName refuses a name a new entry can't have, so an action that saves
-// one stops before asking for the secret. An existing entry keeps its name,
-// even one saved before these rules, and actions that only read or delete
-// an entry don't check it.
+// CheckNames refuses a service name or username no entry can have, without
+// the vault, so the CLI can stop before opening it.
+func (p *Provider) CheckNames() error {
+	return p.checkName()
+}
+
+// checkName refuses a name no entry can have, so an action that names an
+// entry says why at once. It needs no vault, so it runs before the vault
+// opens (see CheckNames).
 func (p *Provider) checkName() error {
 	kind := p.effectiveEntryType()
 	switch p.action {
-	case "store", "generate":
-	case "totp-store":
+	case "store", "generate", "get":
+	case "totp-store", "totp-generate":
 		kind = password.EntryTypeTOTP
 	default:
 		return nil
 	}
-	k := vault.Key{Kind: kind, Service: p.service, Username: p.username}
-	if err := k.Validate(); err != nil {
-		return err
+	if p.service == "" {
+		return nil // reported by ValidateRequest
 	}
-	err := k.ValidateNew()
-	if err == nil {
-		return nil
-	}
-	if _, lerr := p.store.Lookup(k); lerr == nil {
-		return nil
-	}
-	return err
+	return vault.Key{Kind: kind, Service: p.service, Username: p.username}.Validate()
 }
 
 // GetCredentials handles the main operation based on --action flag.
@@ -805,12 +802,6 @@ func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, e
 		fmt.Fprintf(&sb, ", %s:", countOf(len(result.Errors), "error"))
 		for _, e := range result.Errors {
 			fmt.Fprintf(&sb, "\n  %s", e)
-		}
-	}
-	if len(result.Warnings) > 0 {
-		fmt.Fprintf(&sb, "\n%s:", countOf(len(result.Warnings), "warning"))
-		for _, w := range result.Warnings {
-			fmt.Fprintf(&sb, "\n  %s", w)
 		}
 	}
 

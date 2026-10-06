@@ -83,14 +83,11 @@ func ParseKey(s string) (Key, error) {
 	return k, nil
 }
 
-// MaxNameLength is the most characters a new entry's service name or
-// username can have.
+// MaxNameLength is the most characters a service name or username can have.
 const MaxNameLength = 256
 
-// Validate checks that k can name an entry at all: a known kind, a service
-// name, and names without "/" (which the text form uses) or control
-// characters. Every entry the vault holds passes it, so it's all that
-// opening, copying, and deleting an entry need.
+// Validate checks that k can name an entry: a known kind, a service name,
+// and a service name and username that pass CheckName.
 func (k Key) Validate() error {
 	if !k.Kind.Valid() {
 		return fmt.Errorf("unknown kind %q", k.Kind)
@@ -98,35 +95,25 @@ func (k Key) Validate() error {
 	if k.Service == "" {
 		return errors.New("the service name is empty")
 	}
-	for _, f := range []struct{ name, v string }{{"service name", k.Service}, {"username", k.Username}} {
-		if strings.Contains(f.v, "/") {
-			return fmt.Errorf("the %s %q contains \"/\"", f.name, f.v)
-		}
-		if strings.IndexFunc(f.v, unicode.IsControl) >= 0 {
-			return fmt.Errorf("the %s %q contains a control character", f.name, f.v)
-		}
-	}
-	return nil
-}
-
-// ValidateNew is Validate plus CheckNewName's rules, for naming a new
-// entry. Entries saved before those rules only need Validate, so they still
-// open, copy, and delete.
-func (k Key) ValidateNew() error {
-	if err := k.Validate(); err != nil {
+	if err := CheckName("service name", k.Service); err != nil {
 		return err
 	}
-	if err := CheckNewName("service name", k.Service); err != nil {
-		return err
-	}
-	return CheckNewName("username", k.Username)
+	return CheckName("username", k.Username)
 }
 
-// CheckNewName refuses a name, called what in errors, that would be hard to
-// tell apart from another: text that isn't valid UTF-8, a text-direction
-// control anywhere, a space or an invisible character at either end, an
-// invisible character inside, or more than MaxNameLength characters.
-func CheckNewName(what, v string) error {
+// CheckName refuses a name, called what in errors, that would break an
+// entry's ID or be hard to tell apart from another: a "/" (which the ID
+// uses as a separator), a control character, text that isn't valid UTF-8,
+// a text-direction control anywhere, a space or an invisible character at
+// either end, an invisible character inside, or more than MaxNameLength
+// characters.
+func CheckName(what, v string) error {
+	if strings.Contains(v, "/") {
+		return fmt.Errorf("the %s %q contains \"/\"", what, v)
+	}
+	if strings.IndexFunc(v, unicode.IsControl) >= 0 {
+		return fmt.Errorf("the %s %q contains a control character", what, v)
+	}
 	if !utf8.ValidString(v) {
 		return fmt.Errorf("the %s %q isn't valid text", what, v)
 	}
