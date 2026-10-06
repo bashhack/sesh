@@ -18,7 +18,6 @@ import (
 
 // initChoices are what `sesh init` sets up.
 type initChoices struct {
-	keySource string
 	// dbPath is the vault location; dbDefault reports whether it's the
 	// built-in default, which the config file then leaves out.
 	dbPath    string
@@ -30,9 +29,8 @@ func addInitFlags(fs *flag.FlagSet) *bool {
 	return fs.Bool("force", false, "Replace an existing config file")
 }
 
-// runInit is `sesh init`: it sets up the vault, how it unlocks and where it
-// lives. With --key-source or --db-path it uses those (for scripts);
-// otherwise it asks. It creates (or opens) the vault first, and only then
+// runInit is `sesh init`: it sets up the vault where it should live. With
+// --db-path it uses that (for scripts); otherwise it asks. It creates (or opens) the vault first, and only then
 // writes ~/.config/sesh/config.toml, so a failure leaves no config pointing
 // at a vault that doesn't work.
 func runInit(app *App, args []string) error {
@@ -80,14 +78,14 @@ func runInit(app *App, args []string) error {
 	// A new vault was offered a recovery key and Touch ID as it was
 	// created; an existing one gets pointers instead. (Deferred, so the
 	// recovery tip, registered last, prints first.)
-	if existed && choices.keySource == config.KeySourcePassword && touchIDAvailable() {
+	if existed && touchIDAvailable() {
 		if _, err := os.Stat(filepath.Join(filepath.Dir(choices.dbPath), touchid.FileName)); err != nil {
 			defer func() {
 				fmt.Fprintln(app.Stdout, "Tip: unlock with Touch ID instead of typing your password: sesh touchid enable") //nolint:errcheck // best-effort tip
 			}()
 		}
 	}
-	if existed && choices.keySource == config.KeySourcePassword {
+	if existed {
 		if _, err := os.Stat(filepath.Join(filepath.Dir(choices.dbPath), recovery.FileName)); err != nil {
 			defer func() {
 				fmt.Fprintln(app.Stdout, "Tip: make a recovery key, in case you forget your master password: sesh recovery new") //nolint:errcheck // best-effort tip
@@ -98,12 +96,7 @@ func runInit(app *App, args []string) error {
 	if err := config.Write(path, choices.file()); err != nil {
 		return err
 	}
-	lines := []string{"Wrote " + tildePath(path)}
-	if choices.keySource == config.KeySourceKeychain {
-		lines = append(lines, "The vault's key is kept in your macOS login Keychain, so there's no master password to type.")
-	}
-	lines = append(lines, "Ready. Run `sesh config` to see your settings.")
-	for _, l := range lines {
+	for _, l := range []string{"Wrote " + tildePath(path), "Ready. Run `sesh config` to see your settings."} {
 		if _, err := fmt.Fprintln(app.Stdout, l); err != nil {
 			return err
 		}
@@ -111,51 +104,25 @@ func runInit(app *App, args []string) error {
 	return nil
 }
 
-// chooseInit takes the choices from the setting flags when any were given,
+// chooseInit takes the vault location from --db-path when it was given,
 // and otherwise asks.
 func chooseInit(app *App) (initChoices, error) {
 	dbDefault, err := database.DefaultDBLocation()
 	if err != nil {
 		return initChoices{}, fmt.Errorf("resolve default vault location: %w", err)
 	}
-	c := initChoices{keySource: config.KeySourcePassword, dbPath: dbDefault, dbDefault: true}
+	c := initChoices{dbPath: dbDefault, dbDefault: true}
 
-	o := cliOverrides
-	if o != (config.Overrides{}) {
-		if o.KeySource != "" {
-			if o.KeySource != config.KeySourcePassword && o.KeySource != config.KeySourceKeychain {
-				return c, fmt.Errorf("--key-source = %q: want \"password\" or \"keychain\"", o.KeySource)
-			}
-			c.keySource = o.KeySource
+	if o := cliOverrides; o.DBPath != "" {
+		p, err := config.ResolvePath(o.DBPath)
+		if err != nil {
+			return c, fmt.Errorf("--db-path = %q: %w", o.DBPath, err)
 		}
-		if o.DBPath != "" {
-			p, err := config.ResolvePath(o.DBPath)
-			if err != nil {
-				return c, fmt.Errorf("--db-path = %q: %w", o.DBPath, err)
-			}
-			c.dbPath, c.dbDefault = p, p == dbDefault
-		}
+		c.dbPath, c.dbDefault = p, p == dbDefault
 		return c, nil
 	}
 
-	in := bufio.NewReader(app.Stdin)
-	if goos == "darwin" {
-		answer, err := ask(app, in, "How should the vault unlock?\n"+
-			"  1) With a master password  (default)\n"+
-			"  2) With its key kept in your macOS login Keychain, no master password\n"+
-			"Choice [1]: ")
-		if err != nil {
-			return c, err
-		}
-		switch answer {
-		case "", "1":
-		case "2":
-			c.keySource = config.KeySourceKeychain
-		default:
-			return c, fmt.Errorf("choose 1 or 2, got %q", answer)
-		}
-	}
-	answer, err := ask(app, in, "Vault location ["+tildePath(dbDefault)+"]: ")
+	answer, err := ask(app, bufio.NewReader(app.Stdin), "Vault location ["+tildePath(dbDefault)+"]: ")
 	if err != nil {
 		return c, err
 	}
@@ -188,7 +155,7 @@ func (c initChoices) config() *config.Config {
 	from := func(v string) config.Setting[string] {
 		return config.Setting[string]{Value: v, Source: config.FromFlag, Origin: "sesh init"}
 	}
-	return &config.Config{KeySource: from(c.keySource), DBPath: from(c.dbPath)}
+	return &config.Config{DBPath: from(c.dbPath)}
 }
 
 // file is the config file sesh init writes.
@@ -196,7 +163,6 @@ func (c initChoices) file() string {
 	var b strings.Builder
 	b.WriteString("# sesh settings, written by `sesh init`. Run `sesh config` to see every\n")
 	b.WriteString("# setting and where it comes from.\n")
-	fmt.Fprintf(&b, "key_source = %q\n", c.keySource)
 	if !c.dbDefault {
 		// ~/ form when it's under home: readable, and it survives a
 		// changed home directory.

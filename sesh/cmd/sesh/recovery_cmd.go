@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/agent"
-	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/recovery"
@@ -151,16 +150,12 @@ func runRecovery(app *App, args []string) error {
 		return err
 	}
 	dataDir := filepath.Dir(cfg.DBPath.Value)
-	usesPassword := cfg.KeySource.Value == config.KeySourcePassword
 	out := func(format string, a ...any) error {
 		_, err := fmt.Fprintf(app.Stdout, format+"\n", a...)
 		return err
 	}
 	switch args[0] {
 	case "status":
-		if !usesPassword {
-			return out("Recovery key: not used (it opens a vault protected by a master password)")
-		}
 		f, err := recovery.ReadFile(dataDir)
 		if errors.Is(err, os.ErrNotExist) {
 			return out("Recovery key: none. Make one with: sesh recovery new")
@@ -188,9 +183,6 @@ func runRecovery(app *App, args []string) error {
 		}
 		return out("Removed the recovery key; it no longer opens this vault.")
 	case "new":
-		if !usesPassword {
-			return errors.New("a recovery key works with a vault protected by a master password (key_source = \"password\")")
-		}
 		if sidecarMissing(dataDir) {
 			return errors.New("there's no vault yet: create it first, by running any sesh command or sesh init")
 		}
@@ -266,18 +258,6 @@ func rewrapRecovery(dataDir string, newKey []byte) string {
 	return fmt.Sprintf("warning: the recovery key no longer opens the vault (%v), so it was removed; make a new one with: sesh recovery new", err)
 }
 
-// dropRecovery removes the recovery key when the vault no longer uses a
-// master password. It returns a line to show, or "" when there was none.
-func dropRecovery(dataDir string) string {
-	if _, err := os.Stat(filepath.Join(dataDir, recovery.FileName)); err != nil {
-		return ""
-	}
-	if err := recovery.Remove(dataDir); err != nil {
-		return fmt.Sprintf("warning: couldn't remove the recovery key file (%v); run: sesh recovery remove", err)
-	}
-	return "Removed the recovery key: it only opens a vault protected by a master password."
-}
-
 // readLine reads one line from in, writing prompt to w. End of input with
 // nothing typed is io.EOF.
 func readLine(in io.Reader, w io.Writer, prompt string) (string, error) {
@@ -330,9 +310,6 @@ func runRecover(app *App, args []string) error {
 	cfg, err := settings()
 	if err != nil {
 		return err
-	}
-	if cfg.KeySource.Value != config.KeySourcePassword {
-		return errors.New("sesh recover resets a master password, but this vault's key is kept in the Keychain (key_source = \"keychain\"), not derived from one")
 	}
 	dataDir := filepath.Dir(cfg.DBPath.Value)
 	if sidecarMissing(dataDir) {

@@ -29,10 +29,6 @@ func (m *mockKeySource) GetEncryptionKey() ([]byte, error) {
 	return cp, nil
 }
 
-func (m *mockKeySource) StoreEncryptionKey(key []byte) error { return nil }
-func (m *mockKeySource) RequiresUserInput() bool             { return false }
-func (m *mockKeySource) Name() string                        { return "mock" }
-
 func (m *mockKeySource) EncryptEntry(plaintext, aad []byte) ([]byte, []byte, error) {
 	if m.err != nil {
 		return nil, nil, m.err

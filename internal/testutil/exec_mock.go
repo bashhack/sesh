@@ -19,7 +19,7 @@ import (
 //
 // Pattern 2 (subprocess mock, below) — I only need this when I care about real
 // process behavior: exit codes, signals, stderr, etc. It spawns the test binary
-// as a child process via TestHelperProcess. See internal/keychain/keychain_test.go.
+// as a child process via TestHelperProcess.
 
 // MockExecCommand builds a mock exec.Command function that returns
 // predetermined output and optionally errors (pattern 2: subprocess mock)

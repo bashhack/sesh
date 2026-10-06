@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/agent"
-	"github.com/bashhack/sesh/internal/keychain"
 )
 
 // TestMain keeps agent hardening out of the test binary: the daemon path
@@ -22,11 +21,6 @@ import (
 // process-wide.
 func TestMain(m *testing.M) {
 	hardenProcess = func() error { return nil }
-	// No test may reach the developer's real Keychain; one that needs the
-	// keychain key source stubs macKeychain with an in-memory store.
-	macKeychain = func() keychain.ItemStore {
-		return unavailableStore{err: errors.New("a test reached the real macOS Keychain; stub macKeychain")}
-	}
 	// Keep a developer's own ~/.config/sesh/config.toml out of every test.
 	dir, err := os.MkdirTemp("", "sesh-test-config")
 	if err != nil {

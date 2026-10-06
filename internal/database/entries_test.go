@@ -101,7 +101,7 @@ func TestStore_KeyCheckAndEntriesDontStandInForEachOther(t *testing.T) {
 	if err := s.Put(k, []byte("bank-password")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CheckKey("password"); err != nil {
+	if err := s.CheckKey(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`INSERT INTO entries (kind, service, username, encrypted_data, salt, created_at, updated_at)
@@ -115,7 +115,7 @@ func TestStore_KeyCheckAndEntriesDontStandInForEachOther(t *testing.T) {
 		t.Fatal(err)
 	}
 	var wk *WrongKeyError
-	if err := s.VerifyKey("password"); !errors.As(err, &wk) {
+	if err := s.VerifyKey(); !errors.As(err, &wk) {
 		t.Errorf("VerifyKey with an entry as the key check = %v, want a WrongKeyError", err)
 	}
 }

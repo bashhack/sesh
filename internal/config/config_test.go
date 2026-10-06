@@ -16,7 +16,7 @@ func isolate(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
-	for _, k := range []string{EnvKeySource, EnvDBPath, EnvClipboardTimeout, EnvAgentIdleTimeout, EnvAgentMaxLifetime, EnvAuditRetentionDays} {
+	for _, k := range []string{EnvDBPath, EnvClipboardTimeout, EnvAgentIdleTimeout, EnvAgentMaxLifetime, EnvAuditRetentionDays} {
 		t.Setenv(k, "")
 	}
 	return filepath.Join(home, "xdg", "sesh", "config.toml")
@@ -41,9 +41,6 @@ func TestLoad_DefaultsWithoutAFile(t *testing.T) {
 	if c.FileFound || c.Path != path {
 		t.Errorf("Path = %q, FileFound = %v; want %q, false", c.Path, c.FileFound, path)
 	}
-	if c.KeySource.Value != KeySourcePassword || c.KeySource.Source != FromDefault {
-		t.Errorf("key source %+v; want the password default", c.KeySource)
-	}
 	if c.ClipboardTimeout.Value != 30*time.Second || c.AgentIdleTimeout.Value != 10*time.Minute || c.AgentMaxLifetime.Value != 8*time.Hour {
 		t.Errorf("durations = %v, %v, %v", c.ClipboardTimeout.Value, c.AgentIdleTimeout.Value, c.AgentMaxLifetime.Value)
 	}
@@ -59,7 +56,6 @@ func TestLoad_FileThenEnvThenFlag(t *testing.T) {
 	path := isolate(t)
 	writeConfig(t, path, `
 # a comment
-key_source = "password"
 db_path = "~/vaults/sesh.db"
 clipboard_timeout = "45s"
 
@@ -77,34 +73,32 @@ retention_days = 30
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.FileFound || c.KeySource.Source != FromFile ||
-		c.KeySource.Value != "password" || c.DBPath.Value != filepath.Join(home, "vaults", "sesh.db") ||
+	if !c.FileFound || c.DBPath.Source != FromFile || c.DBPath.Value != filepath.Join(home, "vaults", "sesh.db") ||
 		c.ClipboardTimeout.Value != 45*time.Second || c.AgentIdleTimeout.Value != 30*time.Minute ||
 		c.AgentMaxLifetime.Source != FromDefault || c.AuditRetentionDays.Value != 30 {
 		t.Fatalf("file values not applied: %+v", c)
 	}
 
-	t.Setenv(EnvKeySource, "keychain")
 	t.Setenv(EnvAgentIdleTimeout, "5m")
 	t.Setenv(EnvAuditRetentionDays, "0")
 	c, err = Load(Overrides{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.KeySource.Value != "keychain" || c.KeySource.Source != FromEnv || c.KeySource.Origin != EnvKeySource ||
-		c.AgentIdleTimeout.Value != 5*time.Minute || c.DBPath.Source != FromFile {
-		t.Fatalf("env didn't override the file: key source %+v, idle %+v", c.KeySource, c.AgentIdleTimeout)
+	if c.AgentIdleTimeout.Value != 5*time.Minute || c.AgentIdleTimeout.Source != FromEnv || c.DBPath.Source != FromFile {
+		t.Fatalf("env didn't override the file: idle %+v, db path %+v", c.AgentIdleTimeout, c.DBPath)
 	}
 	if c.AuditRetentionDays.Value != 0 || c.AuditRetentionDays.Source != FromEnv || c.AuditRetentionDays.Origin != EnvAuditRetentionDays {
 		t.Fatalf("env didn't override the audit retention: %+v", c.AuditRetentionDays)
 	}
 
-	c, err = Load(Overrides{KeySource: "password", DBPath: "/tmp/x.db"})
+	t.Setenv(EnvDBPath, "/tmp/env.db")
+	c, err = Load(Overrides{DBPath: "/tmp/x.db"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.KeySource.Value != "password" || c.KeySource.Source != FromFlag || c.DBPath.Value != "/tmp/x.db" {
-		t.Fatalf("flags didn't override env and file: %+v %+v", c.KeySource, c.DBPath)
+	if c.DBPath.Value != "/tmp/x.db" || c.DBPath.Source != FromFlag {
+		t.Fatalf("flags didn't override env and file: %+v", c.DBPath)
 	}
 }
 
@@ -114,15 +108,14 @@ func TestLoad_Rejects(t *testing.T) {
 		env           map[string]string
 		flags         Overrides
 	}{
-		"unknown file key":                     {file: "key_source = \"password\"\nkey_sorce = \"x\"\n", wantSub: "unknown setting key_sorce"},
+		"unknown file key":                     {file: "db_path = \"/tmp/x.db\"\ndb_pth = \"x\"\n", wantSub: "unknown setting db_pth"},
 		"unknown agent key":                    {file: "[agent]\nidle = \"1m\"\n", wantSub: "unknown setting agent.idle"},
 		"backend is no longer a setting":       {file: `backend = "sqlite"`, wantSub: "unknown setting backend (remove it: the vault is the only store now)"},
-		"bad key source in env":                {env: map[string]string{EnvKeySource: "pass"}, wantSub: `SESH_KEY_SOURCE = "pass": want "password" or "keychain"`},
-		"bad key source flag":                  {flags: Overrides{KeySource: "pass"}, wantSub: `--key-source = "pass"`},
+		"key_source is no longer a setting":    {file: `key_source = "password"`, wantSub: "unknown setting key_source (remove it: the master password is the only key source now)"},
 		"relative db path":                     {file: `db_path = "vault.db"`, wantSub: "want an absolute path"},
 		"vault named touchid.key":              {file: `db_path = "~/vaults/touchid.key"`, wantSub: `"touchid.key" is the name of a file sesh keeps next to the vault, so the vault would be overwritten; choose another name, such as passwords.db`},
 		"vault named passwords.key":            {env: map[string]string{EnvDBPath: "/tmp/v/passwords.key"}, wantSub: `SESH_DB_PATH = "/tmp/v/passwords.key": "passwords.key" is the name of a file sesh keeps`},
-		"vault named like a lock":              {flags: Overrides{DBPath: "/tmp/v/.key-init.lock"}, wantSub: `--db-path = "/tmp/v/.key-init.lock": ".key-init.lock" is the name`},
+		"vault named like a lock":              {flags: Overrides{DBPath: "/tmp/v/Passwords.Key.Lock"}, wantSub: `--db-path = "/tmp/v/Passwords.Key.Lock": "Passwords.Key.Lock" is the name`},
 		"vault named in other case":            {file: `db_path = "~/vaults/TouchID.Key"`, wantSub: `"TouchID.Key" is the name of a file sesh keeps next to the vault`},
 		"vault named recovery.key (file)":      {file: `db_path = "~/vaults/Recovery.Key"`, wantSub: `"Recovery.Key" is the name of a file sesh keeps next to the vault`},
 		"vault named recovery.key (env)":       {env: map[string]string{EnvDBPath: "/tmp/v/RECOVERY.KEY"}, wantSub: `SESH_DB_PATH = "/tmp/v/RECOVERY.KEY": "RECOVERY.KEY" is the name`},
@@ -133,7 +126,7 @@ func TestLoad_Rejects(t *testing.T) {
 		"vault named like the key-change lock": {flags: Overrides{DBPath: "/tmp/v/.Key-Change.Lock"}, wantSub: `".Key-Change.Lock" is the name`},
 		"bad duration":                         {file: `clipboard_timeout = "soon"`, wantSub: "want a duration"},
 		"negative duration":                    {env: map[string]string{EnvAgentIdleTimeout: "-1m"}, wantSub: "must not be negative"},
-		"not TOML":                             {file: "key_source: password\n", wantSub: "read config file"},
+		"not TOML":                             {file: "db_path: /tmp/x.db\n", wantSub: "read config file"},
 		"wrong type in the file":               {file: "clipboard_timeout = 30\n", wantSub: "read config file"},
 		"unknown audit key":                    {file: "[audit]\nretention = 30\n", wantSub: "unknown setting audit.retention"},
 		"retention as a string":                {file: "[audit]\nretention_days = \"30\"\n", wantSub: "read config file"},

@@ -47,13 +47,13 @@ type ServiceProvider interface {
 	// ListEntries returns the list of entries for this provider
 	ListEntries() ([]ProviderEntry, error)
 
-	// DeleteEntry deletes an entry from the keychain
+	// DeleteEntry deletes an entry from the vault
 	DeleteEntry(id string) error
 
 	// ValidateRequest performs early validation of the request
 	// This should check:
 	// - Invalid flag combinations for this provider
-	// - Whether required keychain entries exist
+	// - Whether required vault entries exist
 	// - Any other provider-specific validation
 	// This allows fail-fast behavior before expensive operations
 	ValidateRequest() error

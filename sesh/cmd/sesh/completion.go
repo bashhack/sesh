@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/provider"
 )
 
@@ -184,16 +183,10 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 
 // mainSpecs are the flags of a sesh command that isn't a subcommand: the
 // common flags, the setting flags, --rekey, and the selected
-// provider's own flags; after --rekey, only its flags.
+// provider's own flags; after --rekey, only the setting flags.
 func mainSpecs(reg *provider.Registry, before []string) []flagSpec {
 	if slices.ContainsFunc(before, func(w string) bool { return w == "--rekey" || w == "-rekey" }) {
-		specs := flagSpecs(func(fs *flag.FlagSet) { addRekeyFlags(fs) }, nil)
-		for i := range specs {
-			if specs[i].name == "to" {
-				specs[i].values = []string{config.KeySourcePassword, config.KeySourceKeychain}
-			}
-		}
-		return append(specs, settingSpecs()...)
+		return settingSpecs()
 	}
 	var p provider.ServiceProvider
 	if name := extractServiceName(append([]string{"sesh"}, before...)); name != "" {
@@ -213,7 +206,7 @@ func mainSpecs(reg *provider.Registry, before []string) []flagSpec {
 		}
 	}
 	specs = append(specs,
-		flagSpec{name: "rekey", usage: "Change the key source (--to), or the master password"},
+		flagSpec{name: "rekey", usage: "Change the master password"},
 	)
 	return append(specs, settingSpecs()...)
 }
@@ -245,7 +238,7 @@ func flagSpecs(register func(*flag.FlagSet), p provider.ServiceProvider) []flagS
 func settingSpecs() []flagSpec {
 	var specs []flagSpec
 	for name, sf := range settingFlags {
-		specs = append(specs, flagSpec{name: name, usage: sf.usage, values: sf.values, path: sf.path, takesValue: true})
+		specs = append(specs, flagSpec{name: name, usage: sf.usage, path: sf.path, takesValue: true})
 	}
 	slices.SortFunc(specs, func(a, b flagSpec) int { return strings.Compare(a.name, b.name) })
 	return specs

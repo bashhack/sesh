@@ -20,7 +20,7 @@ trap cleanup EXIT
 # A clean environment, so nothing from the caller's sesh setup leaks in.
 run() {
 	env -i PATH=/usr/bin:/bin HOME="$WORK" TERM=dumb \
-		SESH_KEY_SOURCE=password SESH_AUTH_SOCK="$SOCK" "$@"
+		SESH_AUTH_SOCK="$SOCK" "$@"
 }
 
 fail() {

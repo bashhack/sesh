@@ -4,74 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
-
-	"github.com/BurntSushi/toml"
 
 	"github.com/bashhack/sesh/internal/atomicfile"
 )
-
-// topLevelKey matches a top-level "key = value" line, keeping any trailing
-// comment in group 2.
-var topLevelKey = regexp.MustCompile(`^\s*([A-Za-z0-9_-]+)\s*=\s*(?:"(?:[^"\\]|\\.)*"|[^#\s]*)\s*(#.*)?$`)
-
-// SetTopLevel sets a top-level string setting in the config file at path,
-// keeping every other line, comments included. It replaces the key's line
-// if there is one, otherwise adds it before the first [table] header,
-// creating the file (and its directory, owner-only) if needed. The file is
-// written atomically, mode 0600.
-func SetTopLevel(path, key, value string) error {
-	var lines []string
-	body, err := os.ReadFile(path) //nolint:gosec // the user's own config file
-	switch {
-	case err == nil:
-		lines = strings.Split(strings.TrimRight(string(body), "\n"), "\n")
-	case os.IsNotExist(err):
-	default:
-		return fmt.Errorf("read config file %s: %w", path, err)
-	}
-
-	line := key + " = " + strconv.Quote(value)
-	insertAt, replaced := len(lines), false
-	for i, l := range lines {
-		if strings.HasPrefix(strings.TrimSpace(l), "[") {
-			insertAt = i
-			break
-		}
-		if m := topLevelKey.FindStringSubmatch(l); len(m) == 3 && m[1] == key {
-			if m[2] != "" {
-				lines[i] = line + " " + m[2]
-			} else {
-				lines[i] = line
-			}
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		// A key written in a form this edit doesn't recognize (a quoted key,
-		// say) would end up defined twice, which TOML rejects.
-		var existing map[string]any
-		if md, err := toml.Decode(string(body), &existing); err == nil && md.IsDefined(key) {
-			return fmt.Errorf("%s sets %s in a form sesh can't edit safely", path, key)
-		}
-		// Keep a blank line between the new setting and a table that follows.
-		add := []string{line}
-		if insertAt < len(lines) {
-			add = append(add, "")
-		}
-		lines = append(lines[:insertAt], append(add, lines[insertAt:]...)...)
-	}
-	result := strings.Join(lines, "\n") + "\n"
-	// Write only a file that still parses and says what was asked.
-	var check map[string]any
-	if _, err := toml.Decode(result, &check); err != nil || check[key] != value {
-		return fmt.Errorf("editing %s in %s didn't produce a valid file; set it there yourself", key, path)
-	}
-	return writeFile(path, result)
-}
 
 // Write creates the config file at path with body, replacing any existing
 // one, atomically and owner-only.

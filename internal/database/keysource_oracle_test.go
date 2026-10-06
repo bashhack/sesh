@@ -40,7 +40,7 @@ func TestKeySourceOracle_RoundTripAndClose(t *testing.T) {
 }
 
 func TestKeySourceOracle_PropagatesKeyError(t *testing.T) {
-	keyErr := errors.New("keychain locked")
+	keyErr := errors.New("key unavailable")
 	oracle := NewKeySourceOracle(&mockKeySource{err: keyErr})
 	if _, _, err := oracle.EncryptEntry([]byte("x"), nil); !errors.Is(err, keyErr) {
 		t.Fatalf("EncryptEntry err = %v, want %v", err, keyErr)

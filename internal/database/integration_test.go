@@ -2,6 +2,7 @@ package database
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"image/png"
@@ -25,8 +26,8 @@ import (
 func newIntegrationStore(t *testing.T) (*Store, *password.Manager) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "integration.db")
-	key, err := GenerateEncryptionKey()
-	if err != nil {
+	key := make([]byte, encryptionKeyLength)
+	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { secure.SecureZeroBytes(key) })

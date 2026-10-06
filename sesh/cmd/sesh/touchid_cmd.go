@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/agent"
-	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/touchid"
@@ -166,7 +165,6 @@ func runTouchID(app *App, args []string) error {
 		return err
 	}
 	dataDir := filepath.Dir(cfg.DBPath.Value)
-	usesPassword := cfg.KeySource.Value == config.KeySourcePassword
 
 	out := func(format string, a ...any) error {
 		_, err := fmt.Fprintf(app.Stdout, format+"\n", a...)
@@ -174,9 +172,6 @@ func runTouchID(app *App, args []string) error {
 	}
 	switch args[0] {
 	case "status":
-		if !usesPassword {
-			return out("Touch ID unlock: not used (it unlocks a vault protected by a master password)")
-		}
 		state := "off"
 		if f, err := touchid.ReadFile(dataDir); err == nil {
 			state = "on"
@@ -200,9 +195,6 @@ func runTouchID(app *App, args []string) error {
 		}
 		return out("Touch ID unlock is off; sesh will ask for your master password.")
 	case "enable":
-		if !usesPassword {
-			return errors.New("touch ID unlock works with a vault protected by a master password (key_source = \"password\")")
-		}
 		if !touchIDAvailable() {
 			return errors.New("touch ID isn't available here: this Mac needs a Touch ID sensor with an enrolled fingerprint, and sesh must run in your desktop session (not over SSH)")
 		}
@@ -270,18 +262,6 @@ func rewrapTouchID(dataDir string, newKey []byte) string {
 		return fmt.Sprintf("warning: Touch ID unlock is out of date (%v) and couldn't be removed (%v); run: sesh touchid disable", err, rerr)
 	}
 	return fmt.Sprintf("Touch ID unlock was turned off (%v); turn it back on with: sesh touchid enable", err)
-}
-
-// dropTouchID turns Touch ID unlock off when the vault no longer uses a
-// master password. It returns a line to show, or "" when it wasn't on.
-func dropTouchID(dataDir string) string {
-	if _, err := os.Stat(filepath.Join(dataDir, touchid.FileName)); err != nil {
-		return ""
-	}
-	if err := touchid.Remove(dataDir); err != nil {
-		return fmt.Sprintf("warning: couldn't remove the Touch ID unlock file (%v); run: sesh touchid disable", err)
-	}
-	return "Touch ID unlock is off: it only unlocks a vault protected by a master password."
 }
 
 // askYes reads a [Y/n] answer from in, writing prompt to w. Enter takes the

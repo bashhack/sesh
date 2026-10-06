@@ -19,7 +19,7 @@ func useConfigFile(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	for _, k := range []string{config.EnvKeySource, config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays} {
+	for _, k := range []string{config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays} {
 		t.Setenv(k, "")
 	}
 	path := filepath.Join(dir, "sesh", "config.toml")
@@ -60,7 +60,6 @@ func TestSubcommand_OnlyTheFirstArgument(t *testing.T) {
 
 func TestRunConfig_ShowsValuesAndSources(t *testing.T) {
 	path := useConfigFile(t, "clipboard_timeout = \"45s\"\n[agent]\nmax_lifetime = \"2h\"\n[audit]\nretention_days = 0\n")
-	t.Setenv(config.EnvKeySource, "password")
 	t.Setenv(config.EnvDBPath, "/tmp/sesh-test/vault.db")
 	app := agentTestApp()
 	if err := runConfig(app, nil); err != nil {
@@ -69,7 +68,6 @@ func TestRunConfig_ShowsValuesAndSources(t *testing.T) {
 	got := app.Stdout.(*bytes.Buffer).String()
 	for _, want := range []string{
 		"config file: " + path + "\n",
-		"key_source            password      (environment: SESH_KEY_SOURCE)\n",
 		"clipboard_timeout     45s           (config file)\n",
 		"agent.idle_timeout    10m           (default)\n",
 		"agent.max_lifetime    2h            (config file)\n",
@@ -94,11 +92,11 @@ func TestRunConfig_NoFile(t *testing.T) {
 }
 
 func TestRunConfig_ReportsABrokenFile(t *testing.T) {
-	path := useConfigFile(t, "key_source = \"pasword\"\n")
+	path := useConfigFile(t, "clipboard_timeout = \"soon\"\n")
 	app := agentTestApp()
 	err := runConfig(app, nil)
-	if err == nil || !strings.Contains(err.Error(), `key_source in `+path+` = "pasword"`) {
-		t.Fatalf("err = %v, want the bad key source named with the file", err)
+	if err == nil || !strings.Contains(err.Error(), `clipboard_timeout in `+path+` = "soon"`) {
+		t.Fatalf("err = %v, want the bad setting named with the file", err)
 	}
 	if got := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(got, "config file: "+path) {
 		t.Errorf("stdout = %q, want the config file path", got)
@@ -118,7 +116,7 @@ func TestDuration(t *testing.T) {
 
 func TestOpenSQLiteStore_ConfigFileAlone(t *testing.T) {
 	vaultPath := filepath.Join(t.TempDir(), "nested", "vault.db")
-	useConfigFile(t, "key_source = \"password\"\ndb_path = \""+vaultPath+"\"\n")
+	useConfigFile(t, "db_path = \""+vaultPath+"\"\n")
 	t.Setenv("SESH_MASTER_PASSWORD", "config-only-1234")
 
 	cfg, err := settings()
@@ -176,33 +174,4 @@ func TestAgentDaemon_TimeoutsFromConfigFile(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("daemon still running after stop")
 	}
-}
-
-func TestKeychainOffMacOS(t *testing.T) {
-	orig := goos
-	goos = "linux"
-	t.Cleanup(func() { goos = orig })
-
-	t.Run("key source from env", func(t *testing.T) {
-		useConfigFile(t, "")
-		t.Setenv("XDG_DATA_HOME", t.TempDir())
-		t.Setenv(config.EnvKeySource, "keychain")
-		_, err := openSQLiteStore()
-		if err == nil || !strings.Contains(err.Error(), `SESH_KEY_SOURCE asks for the macOS Keychain (key_source = "keychain"), which isn't available on linux`) {
-			t.Fatalf("err = %v", err)
-		}
-	})
-	t.Run("key source from the config file", func(t *testing.T) {
-		path := useConfigFile(t, "key_source = \"keychain\"\n")
-		t.Setenv("XDG_DATA_HOME", t.TempDir())
-		_, err := openSQLiteStore()
-		if err == nil || !strings.Contains(err.Error(), "key_source in "+path+" asks for the macOS Keychain") {
-			t.Fatalf("err = %v", err)
-		}
-	})
-	t.Run("the Keychain stand-in", func(t *testing.T) {
-		if _, err := systemKeychain().GetSecret("me", encKeyService); err == nil || !strings.Contains(err.Error(), "isn't available on linux") {
-			t.Fatalf("err = %v", err)
-		}
-	})
 }

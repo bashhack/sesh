@@ -21,6 +21,9 @@ const keyCheckPlaintext = "sesh vault key check v1"
 // vault's key, and the name of the key source that protects it. CheckKey
 // uses it to refuse a key that can't open the vault before anything is
 // read or written.
+//
+// The master password is the only key source now; a vault that recorded
+// "keychain" kept its key in the macOS Keychain, which sesh no longer reads.
 func migrateV2(tx *sql.Tx) error {
 	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS vault_key (
 		id         INTEGER PRIMARY KEY CHECK (id = 1),
@@ -34,40 +37,45 @@ func migrateV2(tx *sql.Tx) error {
 	return nil
 }
 
+// passwordSource is the key source every vault records.
+const passwordSource = "password"
+
+// keychainSource is what a vault whose key was kept in the macOS Keychain
+// recorded.
+const keychainSource = "keychain"
+
 // WrongKeyError means the key sesh is using can't open this vault. Writing
 // with it would store entries the vault's real key can't read.
 type WrongKeyError struct {
-	// VaultSource is the key source the vault recorded ("keychain" or
-	// "password"), or "" for a vault that predates the record.
+	// VaultSource is the key source the vault recorded ("password", or
+	// "keychain" for one whose key was in the macOS Keychain), or "" for a
+	// vault that predates the record.
 	VaultSource string
-	// Source is the key source in use.
-	Source string
 }
 
 func (e *WrongKeyError) Error() string {
-	switch {
-	case e.VaultSource == "":
-		return fmt.Sprintf("this vault's entries don't decrypt with the %s key", e.Source)
-	case e.VaultSource != e.Source:
-		return fmt.Sprintf("this vault uses the %s key source, but sesh is using %s", e.VaultSource, e.Source)
+	switch e.VaultSource {
+	case "":
+		return "this vault's entries don't decrypt with this master password's key"
+	case keychainSource:
+		return "this vault's key was kept in the macOS Keychain, which sesh no longer supports"
 	default:
-		return fmt.Sprintf("the %s key in use is not the one this vault was created with", e.Source)
+		return "the master password key in use is not the one this vault was created with"
 	}
 }
 
 // CheckKey confirms the store's oracle holds this vault's key, and records
 // the vault's check value if it has none yet. Callers run it right after
-// Open, before any read or write. source names the key source in use
-// ("keychain" or "password"), for the record and for errors.
+// Open, before any read or write.
 //
 // A vault with a check value must decrypt it. A vault without one is new,
 // or predates the check: if it has entries, one of them must decrypt.
-func (s *Store) CheckKey(source string) error {
-	err := s.verifyKeyCheck(source)
+func (s *Store) CheckKey() error {
+	err := s.verifyKeyCheck()
 	if !errors.Is(err, errNoKeyCheck) {
 		return err
 	}
-	if err := s.verifyAnEntry(source); err != nil {
+	if err := s.verifyAnEntry(); err != nil {
 		return err
 	}
 	checkData, checkSalt, err := s.oracle.EncryptEntry([]byte(keyCheckPlaintext), nil)
@@ -78,26 +86,26 @@ func (s *Store) CheckKey(source string) error {
 	// against that one instead.
 	if _, err := s.db.Exec(
 		`INSERT OR IGNORE INTO vault_key (id, key_source, check_data, check_salt, created_at) VALUES (1, ?, ?, ?, ?)`,
-		source, checkData, checkSalt, time.Now().UTC(),
+		passwordSource, checkData, checkSalt, time.Now().UTC(),
 	); err != nil {
 		return fmt.Errorf("record vault key check: %w", err)
 	}
-	return s.verifyKeyCheck(source)
+	return s.verifyKeyCheck()
 }
 
 // VerifyKey is CheckKey without the write: it never records a check value.
 // Rekey and rotation use it on the vault they copy from, which a cancelled
 // run must leave untouched.
-func (s *Store) VerifyKey(source string) error {
-	err := s.verifyKeyCheck(source)
+func (s *Store) VerifyKey() error {
+	err := s.verifyKeyCheck()
 	if !errors.Is(err, errNoKeyCheck) {
 		return err
 	}
-	return s.verifyAnEntry(source)
+	return s.verifyAnEntry()
 }
 
 // verifyAnEntry decrypts one entry, if the vault has any.
-func (s *Store) verifyAnEntry(source string) error {
+func (s *Store) verifyAnEntry() error {
 	var data, salt []byte
 	var kind string
 	var k vault.Key
@@ -111,7 +119,7 @@ func (s *Store) verifyAnEntry(source string) error {
 	plain, err := s.oracle.DecryptEntry(data, salt, entryAAD(k))
 	secure.SecureZeroBytes(plain)
 	if err != nil {
-		return &WrongKeyError{Source: source}
+		return &WrongKeyError{}
 	}
 	return nil
 }
@@ -121,7 +129,7 @@ var errNoKeyCheck = errors.New("vault has no key check")
 
 // verifyKeyCheck decrypts the recorded check value with the store's
 // oracle, returning errNoKeyCheck when there isn't one yet.
-func (s *Store) verifyKeyCheck(source string) error {
+func (s *Store) verifyKeyCheck() error {
 	var recorded string
 	var data, salt []byte
 	if err := s.db.QueryRow(
@@ -135,7 +143,7 @@ func (s *Store) verifyKeyCheck(source string) error {
 	plain, err := s.oracle.DecryptEntry(data, salt, nil)
 	defer secure.SecureZeroBytes(plain)
 	if err != nil || !bytes.Equal(plain, []byte(keyCheckPlaintext)) {
-		return &WrongKeyError{VaultSource: recorded, Source: source}
+		return &WrongKeyError{VaultSource: recorded}
 	}
 	return nil
 }

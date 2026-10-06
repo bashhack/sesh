@@ -20,9 +20,9 @@ type Store struct {
 	path   string
 }
 
-// MaxSecretSize is the largest secret the store accepts. It applies to
-// every key source so a secret that saves under one also saves under the
-// others, including the agent, whose wire frames must carry it.
+// MaxSecretSize is the largest secret the store accepts. It applies however
+// the store encrypts, so a secret that saves directly also saves through
+// the agent, whose wire frames must carry it.
 const MaxSecretSize = 1 << 20 // 1 MiB
 
 // ErrSecretTooLarge is returned when a secret exceeds MaxSecretSize.
@@ -113,7 +113,7 @@ func (s *Store) GetActiveKeyMetadata() (*KeyMetadata, error) {
 }
 
 // InitKeyMetadata creates the initial key metadata entry if none exists.
-// Called during store initialisation when using a keychain key source.
+// Called when the store is opened.
 func (s *Store) InitKeyMetadata() error {
 	existing, err := s.GetActiveKeyMetadata()
 	if err != nil {

@@ -47,7 +47,6 @@ func testAgentUnlocked(t *testing.T) bool {
 func populateUnlockedPasswordVault(t *testing.T) {
 	t.Helper()
 	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
 	populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2"})
 	t.Setenv("SESH_MASTER_PASSWORD", "")
@@ -67,19 +66,6 @@ func TestRotate_LocksAgentHoldingOldKey(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Locked the sesh agent") {
 		t.Errorf("stderr missing lock notice:\n%s", stderr.String())
-	}
-}
-
-func TestRekey_PasswordToKeychainLocksAgent(t *testing.T) {
-	populateUnlockedPasswordVault(t)
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-
-	app, stderr := rekeyTestApp("y\n")
-	if err := runRekey(app, []string{"--to=keychain"}, newKCMock(nil)); err != nil {
-		t.Fatalf("runRekey: %v\nstderr:\n%s", err, stderr.String())
-	}
-	if testAgentUnlocked(t) {
-		t.Error("agent still unlocked with the old key after rekey")
 	}
 }
 
@@ -104,21 +90,6 @@ func TestRotate_LocksAgentEvenIfSummaryWriteFails(t *testing.T) {
 	}
 	if testAgentUnlocked(t) {
 		t.Error("agent still unlocked with the old key after a committed rotation")
-	}
-}
-
-func TestRekey_LocksAgentEvenIfSummaryWriteFails(t *testing.T) {
-	populateUnlockedPasswordVault(t)
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-
-	app, _ := rekeyTestApp("y\n")
-	app.Stderr = failOnWriter{marker: "Rekeyed"}
-	err := runRekey(app, []string{"--to=keychain"}, newKCMock(nil))
-	if err == nil || !strings.Contains(err.Error(), "stderr closed") {
-		t.Fatalf("err = %v, want the summary write failure", err)
-	}
-	if testAgentUnlocked(t) {
-		t.Error("agent still unlocked with the old key after a committed rekey")
 	}
 }
 

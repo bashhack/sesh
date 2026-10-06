@@ -67,7 +67,7 @@ func createVaultWithTouchID(t *testing.T) string {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "passwords.db")
 	restore := testutil.RedirectStderr(t)
-	oracle, err := buildKeySourceWith(dbPath, "password", withAnswer(interactivePrompt(t, "first-password-1234", "first-password-1234"), true))
+	oracle, err := buildKeySourceWith(dbPath, withAnswer(interactivePrompt(t, "first-password-1234", "first-password-1234"), true))
 	out := restore()
 	if err != nil {
 		t.Fatalf("create vault: %v", err)
@@ -111,7 +111,7 @@ func TestTouchID_OfferedAtFirstRunThenUnlocksWithoutAPassword(t *testing.T) {
 
 	// The agent is locked: the next command asks for a fingerprint, not a
 	// password (interactivePrompt fails the test if a password is asked for).
-	oracle, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t))
+	oracle, err := buildKeySourceWith(dbPath, interactivePrompt(t))
 	if err != nil {
 		t.Fatalf("Touch ID unlock: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestTouchID_OfferDeclined(t *testing.T) {
 	startTestAgent(t)
 	softwareTouchID(t)
 	dbPath := filepath.Join(t.TempDir(), "passwords.db")
-	oracle, err := buildKeySourceWith(dbPath, "password", withAnswer(interactivePrompt(t, "first-password-1234", "first-password-1234"), false))
+	oracle, err := buildKeySourceWith(dbPath, withAnswer(interactivePrompt(t, "first-password-1234", "first-password-1234"), false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestTouchID_FallsBackToThePassword(t *testing.T) {
 			*fail = tt.fail
 
 			restore := testutil.RedirectStderr(t)
-			oracle, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "first-password-1234"))
+			oracle, err := buildKeySourceWith(dbPath, interactivePrompt(t, "first-password-1234"))
 			out := restore()
 			if err != nil {
 				t.Fatalf("password fallback: %v", err)
@@ -189,7 +189,7 @@ func TestTouchID_FingerprintsChanged(t *testing.T) {
 	touchIDBiometryState = func() ([]byte, error) { return []byte("enrolled fingerprints 2"), nil }
 
 	restore := testutil.RedirectStderr(t)
-	oracle, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "first-password-1234"))
+	oracle, err := buildKeySourceWith(dbPath, interactivePrompt(t, "first-password-1234"))
 	out := restore()
 	if err != nil {
 		t.Fatalf("password after a fingerprint change: %v", err)
@@ -231,7 +231,7 @@ func TestTouchID_UnknownFingerprintStateStillPrompts(t *testing.T) {
 			}
 			touchIDBiometryState = tt.now
 
-			oracle, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t))
+			oracle, err := buildKeySourceWith(dbPath, interactivePrompt(t))
 			if err != nil {
 				t.Fatalf("Touch ID unlock: %v", err)
 			}
@@ -250,7 +250,7 @@ func TestTouchID_ScriptsNeverWaitOnAFingerprint(t *testing.T) {
 
 	cfg := interactivePrompt(t, "first-password-1234")
 	cfg.interactive = false
-	oracle, err := buildKeySourceWith(dbPath, "password", cfg)
+	oracle, err := buildKeySourceWith(dbPath, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestTouchID_SkippedOverSSH(t *testing.T) {
 			t.Setenv(name, "203.0.113.7 52114 192.0.2.1 22")
 
 			restore := testutil.RedirectStderr(t)
-			oracle, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "first-password-1234"))
+			oracle, err := buildKeySourceWith(dbPath, interactivePrompt(t, "first-password-1234"))
 			out := restore()
 			if err != nil {
 				t.Fatalf("password over SSH: %v", err)
@@ -317,10 +317,6 @@ func TestRunTouchID_StatusDisableAndRefusals(t *testing.T) {
 	if _, err := run("enable"); err == nil || !strings.Contains(err.Error(), "isn't available here") {
 		t.Errorf("enable without Touch ID: err = %v", err)
 	}
-	useConfigFile(t, "key_source = \"keychain\"\n")
-	if _, err := run("enable"); err == nil || !strings.Contains(err.Error(), "master password") {
-		t.Errorf("enable with the keychain key source: err = %v", err)
-	}
 	if _, err := run("frobnicate"); err == nil {
 		t.Error("an unknown subcommand was accepted")
 	}
@@ -330,7 +326,7 @@ func TestRunTouchID_Enable(t *testing.T) {
 	startTestAgent(t)
 	softwareTouchID(t)
 	dbPath := filepath.Join(t.TempDir(), "passwords.db")
-	oracle, err := buildKeySourceWith(dbPath, "password", withAnswer(interactivePrompt(t, "first-password-1234", "first-password-1234"), false))
+	oracle, err := buildKeySourceWith(dbPath, withAnswer(interactivePrompt(t, "first-password-1234", "first-password-1234"), false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +346,6 @@ func TestRotate_RewrapsTouchIDUnlock(t *testing.T) {
 	env := setupRekeyEnv(t)
 	startTestAgent(t)
 	prompts, _ := softwareTouchID(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
 	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	t.Setenv("SESH_MASTER_PASSWORD", "")
@@ -391,33 +386,13 @@ func TestRotate_RewrapsTouchIDUnlock(t *testing.T) {
 	}
 	// The agent was locked by the rotation; a fingerprint now opens the
 	// rotated vault, with no password.
-	oracle, err := buildKeySourceWith(env.dbPath, "password", interactivePrompt(t))
+	oracle, err := buildKeySourceWith(env.dbPath, interactivePrompt(t))
 	if err != nil {
 		t.Fatalf("Touch ID unlock after rotation: %v", err)
 	}
 	closeKeySource(t, oracle)
 	if *prompts != 1 {
 		t.Errorf("Touch ID prompts = %d, want 1", *prompts)
-	}
-}
-
-func TestRekey_ToKeychainTurnsTouchIDOff(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
-	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
-	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
-	if err := touchid.NewFile("id", []byte("b"), []byte("p"), touchid.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")}).Write(env.dataDir); err != nil {
-		t.Fatal(err)
-	}
-	app, stderr := rekeyTestApp("y\n")
-	if err := runRekey(app, []string{"--to=keychain"}, newKCMock(nil)); err != nil {
-		t.Fatalf("rekey: %v\n%s", err, stderr)
-	}
-	if _, err := touchid.ReadFile(env.dataDir); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("touchid.key still exists after switching to the Keychain key (err %v)", err)
-	}
-	if !strings.Contains(stderr.String(), "Touch ID unlock is off") {
-		t.Errorf("stderr missing the note:\n%s", stderr)
 	}
 }
 
@@ -435,23 +410,5 @@ func TestAskYes(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("askYes(%q) = %v, %v; want %v", input, got, err, want)
 		}
-	}
-}
-
-func TestRekey_RemovesTouchIDEvenIfSummaryWriteFails(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
-	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
-	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
-	if err := touchid.NewFile("id", []byte("b"), []byte("p"), touchid.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")}).Write(env.dataDir); err != nil {
-		t.Fatal(err)
-	}
-	app, _ := rekeyTestApp("y\n")
-	app.Stderr = failOnWriter{marker: "Rekeyed"}
-	if err := runRekey(app, []string{"--to=keychain"}, newKCMock(nil)); err == nil || !strings.Contains(err.Error(), "stderr closed") {
-		t.Fatalf("err = %v, want the summary write failure", err)
-	}
-	if _, err := touchid.ReadFile(env.dataDir); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("touchid.key survived a committed switch to the Keychain key (err %v)", err)
 	}
 }

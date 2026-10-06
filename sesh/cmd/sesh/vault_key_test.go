@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,25 +27,34 @@ func wantOpenRefused(t *testing.T, subs ...string) {
 	}
 }
 
-func TestOpenSQLiteStore_RefusesStaleKeySourceAfterRekey(t *testing.T) {
+// A vault whose key was kept in the macOS Keychain has no passwords.key,
+// and is refused by name rather than given a new one.
+func TestOpenSQLiteStore_RefusesAKeychainVault(t *testing.T) {
 	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
 	populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2"})
-	app, stderr := rekeyTestApp("y\n")
-	if err := runRekey(app, []string{"--to=keychain"}, newKCMock(nil)); err != nil {
-		t.Fatalf("rekey: %v\n%s", err, stderr)
+	db, err := sql.Open("sqlite", env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT OR REPLACE INTO vault_key (id, key_source, check_data, check_salt, created_at) VALUES (1, 'keychain', x'00', x'00', '2026-01-01')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(env.sidecarPath); err != nil {
+		t.Fatal(err)
 	}
 
-	// SESH_KEY_SOURCE still says password, and the old passwords.key is
-	// still there. Before the check, this unlocked and wrote entries under
-	// the old key.
-	wantOpenRefused(t, "this vault uses the keychain key source, but sesh is using password", `key_source = "keychain"`)
+	wantOpenRefused(t, "this vault's key was kept in the macOS Keychain, which sesh no longer supports", "start a new vault")
+	if _, err := os.Stat(env.sidecarPath); !os.IsNotExist(err) {
+		t.Errorf("a new passwords.key was created next to the vault (stat: %v)", err)
+	}
 }
 
 func TestOpenSQLiteStore_RefusesNewKeyNextToExistingVault(t *testing.T) {
 	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
 	populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2"})
 	if err := os.Remove(env.sidecarPath); err != nil {
@@ -59,7 +69,6 @@ func TestOpenSQLiteStore_RefusesNewKeyNextToExistingVault(t *testing.T) {
 
 func TestOpenSQLiteStore_RefusesReplacedPasswordsKey(t *testing.T) {
 	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "first-password-1234")
 	store, err := openSQLiteStore()
 	if err != nil {
@@ -88,7 +97,7 @@ func TestOpenSQLiteStore_RefusesReplacedPasswordsKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantOpenRefused(t, "the password key in use is not the one this vault was created with", "If passwords.key was replaced")
+	wantOpenRefused(t, "the master password key in use is not the one this vault was created with", "If passwords.key was replaced")
 }
 
 func TestRefuseNewKeyForExistingVault_UnreadableDirFailsClosed(t *testing.T) {

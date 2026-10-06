@@ -22,7 +22,6 @@ func auditTestVault(t *testing.T) string {
 	t.Helper()
 	env := setupRekeyEnv(t)
 	useConfigFile(t, "")
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "audit-password-1234")
 	store, err := openSQLiteStore()
 	if err != nil {
@@ -313,7 +312,6 @@ func TestThousands(t *testing.T) {
 func TestAuditSizeWarning_NeverTruncatesTheVault(t *testing.T) {
 	setupRekeyEnv(t)
 	useConfigFile(t, "")
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "audit-password-1234")
 	dbPath := filepath.Join(t.TempDir(), "audit-size-warned")
 	t.Setenv(config.EnvDBPath, dbPath)

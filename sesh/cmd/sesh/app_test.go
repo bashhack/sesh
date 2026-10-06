@@ -252,7 +252,7 @@ func TestApp_ListEntries(t *testing.T) {
 			setupApp: func(app *App) {
 				mockProvider := &MockProvider{
 					NameFunc:        func() string { return "totp" },
-					ListEntriesFunc: func() ([]provider.ProviderEntry, error) { return nil, errors.New("keychain error") },
+					ListEntriesFunc: func() ([]provider.ProviderEntry, error) { return nil, errors.New("store error") },
 				}
 				app.Registry.RegisterProvider(mockProvider)
 			},
@@ -595,13 +595,13 @@ func TestApp_DeleteEntry(t *testing.T) {
 						return "totp"
 					},
 					DeleteEntryFunc: func(id string) error {
-						return errors.New("keychain error")
+						return errors.New("store error")
 					},
 				}
 				app.Registry.RegisterProvider(mockProvider)
 			},
 			wantErr:    true,
-			wantErrMsg: "failed to delete entry: keychain error",
+			wantErrMsg: "failed to delete entry: store error",
 		},
 	}
 

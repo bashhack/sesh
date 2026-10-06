@@ -145,10 +145,9 @@ func TestBuildKeySource_WrongPasswordFails(t *testing.T) {
 	dir := t.TempDir()
 	writeLightSidecar(t, dir, "correct-horse")
 	startTestAgent(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "not-the-password")
 
-	_, err := buildKeySource(filepath.Join(dir, "passwords.db"), "password")
+	_, err := buildKeySource(filepath.Join(dir, "passwords.db"))
 	if err == nil || !strings.Contains(err.Error(), "wrong master password") {
 		t.Fatalf("err = %v, want wrong master password", err)
 	}
@@ -195,7 +194,6 @@ func TestBuildKeySource_EnvPasswordBypassesAgent(t *testing.T) {
 	}
 	closeKeySource(t, ks)
 
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	orig := agent.AgentSpawnCommand
 	agent.AgentSpawnCommand = func(string) (*exec.Cmd, error) {
 		t.Error("buildKeySource spawned an agent with SESH_MASTER_PASSWORD set")
@@ -205,12 +203,12 @@ func TestBuildKeySource_EnvPasswordBypassesAgent(t *testing.T) {
 
 	// The unlocked agent must not let a wrong env password through.
 	t.Setenv("SESH_MASTER_PASSWORD", "not-the-password")
-	if _, err := buildKeySource(filepath.Join(dir, "passwords.db"), "password"); err == nil || !strings.Contains(err.Error(), "wrong master password") {
+	if _, err := buildKeySource(filepath.Join(dir, "passwords.db")); err == nil || !strings.Contains(err.Error(), "wrong master password") {
 		t.Fatalf("wrong env password: err = %v, want wrong master password", err)
 	}
 
 	t.Setenv("SESH_MASTER_PASSWORD", "correct-horse")
-	ks, err = buildKeySource(filepath.Join(dir, "passwords.db"), "password")
+	ks, err = buildKeySource(filepath.Join(dir, "passwords.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +493,7 @@ func (c *closeRecorder) Close() { c.closed = true }
 func TestOpenStoreWith_ClosesOracleWhenOpenFails(t *testing.T) {
 	oracle := &closeRecorder{}
 	dbPath := filepath.Join(t.TempDir(), "missing-dir", "passwords.db")
-	if _, err := openStoreWith(dbPath, oracle, "password"); err == nil {
+	if _, err := openStoreWith(dbPath, oracle); err == nil {
 		t.Fatal("openStoreWith succeeded in a missing directory")
 	}
 	if !oracle.closed {

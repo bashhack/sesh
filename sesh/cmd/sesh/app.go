@@ -140,7 +140,7 @@ func (a *App) ListEntries(serviceName string) error {
 	return nil
 }
 
-// DeleteEntry deletes an entry from the keychain
+// DeleteEntry deletes an entry from the vault
 func (a *App) DeleteEntry(serviceName, entryID string) error {
 	p, err := a.Registry.GetProvider(serviceName)
 	if err != nil {
