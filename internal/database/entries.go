@@ -219,6 +219,31 @@ func (s *Store) List(f vault.Filter) (_ []vault.Entry, err error) {
 	return out, rows.Err()
 }
 
+// DeleteMany implements vault.Store: the entries go in one transaction.
+func (s *Store) DeleteMany(keys []vault.Key) error {
+	err := s.inTx(func(tx *sql.Tx) error {
+		for _, k := range keys {
+			res, err := tx.Exec(`DELETE FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(k.Kind), k.Service, k.Username)
+			if err != nil {
+				return fmt.Errorf("delete %s: %w", k, err)
+			}
+			if n, err := res.RowsAffected(); err != nil {
+				return fmt.Errorf("delete %s: %w", k, err)
+			} else if n == 0 {
+				return notFound(k)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		s.audit("delete", k.String(), "Delete")
+	}
+	return nil
+}
+
 // Delete implements vault.Store.
 func (s *Store) Delete(k vault.Key) error {
 	var res sql.Result

@@ -149,18 +149,23 @@ func argsParse(args []string) bool {
 	}
 	// Arguments that are wrong without the vault are refused before the
 	// master password is asked for; run reports why.
-	return earlyCheck(p, common) == nil
+	return earlyCheck(p, common, fs.Args()) == nil
 }
 
 // earlyCheck refuses arguments that are wrong without looking at the vault,
-// for what the flags select: a --delete ID no entry can have; for --list
+// for what the flags select: a --delete ID no entry can have (the first
+// follows --delete, the rest are the arguments after the flags); for --list
 // and --delete, the provider's paging flags; for any other command but
 // --setup (whose wizard asks for its own names), all the provider's
 // arguments. argsParse runs it before the vault opens, and run reports it
 // before any path that would use the vault.
-func earlyCheck(p provider.ServiceProvider, common commonFlags) error {
-	if *common.delete != "" {
-		if _, err := vault.ParseKey(*common.delete); err != nil {
+func earlyCheck(p provider.ServiceProvider, common commonFlags, args []string) error {
+	for _, id := range deleteIDs(common, args) {
+		// Flags stop at the first ID, so one after the IDs arrives as an ID.
+		if strings.HasPrefix(id, "-") {
+			return fmt.Errorf("%q looks like a flag: put flags before the entry IDs, as in: sesh --service password --force --delete <id> <id>", id)
+		}
+		if _, err := vault.ParseKey(id); err != nil {
 			return err
 		}
 	}
@@ -242,6 +247,7 @@ func (u unavailableStore) SetSettings(vault.Key, vault.Settings) error { return 
 func (u unavailableStore) Lookup(vault.Key) (vault.Entry, error)       { return vault.Entry{}, u.err }
 func (u unavailableStore) List(vault.Filter) ([]vault.Entry, error)    { return nil, u.err }
 func (u unavailableStore) Delete(vault.Key) error                      { return u.err }
+func (u unavailableStore) DeleteMany([]vault.Key) error                { return u.err }
 
 // appSettingsFrom is the settings the app's commands use, from cfg.
 func appSettingsFrom(cfg *config.Config) AppSettings {
@@ -869,7 +875,7 @@ func run(app *App, args []string) {
 
 	// What argsParse refused before opening the vault is reported here,
 	// before any path that would use the vault it didn't open.
-	if err := earlyCheck(svcProvider, common); err != nil {
+	if err := earlyCheck(svcProvider, common, fs.Args()); err != nil {
 		fatal(app, err)
 		return
 	}
@@ -881,8 +887,8 @@ func run(app *App, args []string) {
 		}
 		return
 	}
-	if *common.delete != "" {
-		if err := app.DeleteEntry(serviceName, *common.delete); err != nil {
+	if ids := deleteIDs(common, fs.Args()); len(ids) > 0 {
+		if err := app.DeleteEntries(serviceName, ids); err != nil {
 			fatal(app, err)
 		}
 		return
@@ -908,6 +914,15 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 	}
+}
+
+// deleteIDs are the entry IDs a --delete names: its value, then the
+// arguments after the flags. Nil without --delete.
+func deleteIDs(common commonFlags, args []string) []string {
+	if *common.delete == "" {
+		return nil
+	}
+	return append([]string{*common.delete}, args...)
 }
 
 // commonFlags are the flags every provider accepts.

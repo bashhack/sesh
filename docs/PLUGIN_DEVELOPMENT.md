@@ -53,7 +53,7 @@ flowchart TD
     Sub -->|"false"| Print["Print credentials"]:::mode
 
     Route -->|"-list"| LE["ListEntries()<br>no ValidateRequest"]:::skip
-    Route -->|"-delete"| DE["DeleteEntry(id)<br>no ValidateRequest"]:::skip
+    Route -->|"-delete"| DE["DeleteEntries(ids, confirm)<br>no ValidateRequest"]:::skip
     Route -->|"-setup"| Setup["SetupService.SetupService()<br>calls handler's Setup()"]:::skip
 ```
 
@@ -287,7 +287,7 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 
 #### Entry Management
 
-List your provider's entries with a `vault.Filter`, and use each key's text form as its ID. `DeleteEntry` receives that ID back; check it names one of your provider's entries, so `-service yourservice -delete` can't remove another provider's secret:
+List your provider's entries with a `vault.Filter`, and use each key's text form as its ID. `DeleteEntries` receives those IDs back. Hand them to `provider.DeleteEntries` with a check that each names one of your provider's entries, so `-service yourservice -delete` can't remove another provider's secret. It checks every ID before deleting anything, asks once (`confirm`) unless your `--force` says not to, and deletes them all or none:
 
 ```go
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
@@ -308,18 +308,14 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
     return result, nil
 }
 
-func (p *Provider) DeleteEntry(id string) error {
-    k, err := vault.ParseKey(id)
-    if err != nil {
-        return err
+func (p *Provider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {
+    own := func(k vault.Key) error {
+        if k.Kind != vault.KindAPIKey || k.Service != serviceName {
+            return fmt.Errorf("%s isn't a %s entry; delete it with --service password", k, serviceName)
+        }
+        return nil
     }
-    if k.Kind != vault.KindAPIKey || k.Service != serviceName {
-        return fmt.Errorf("%s isn't a %s entry; delete it with --service password", id, serviceName)
-    }
-    if err := p.store.Delete(k); err != nil {
-        return fmt.Errorf("failed to delete entry: %w", err)
-    }
-    return nil
+    return provider.DeleteEntries(p.store, ids, own, nil, p.force, confirm)
 }
 ```
 
@@ -733,15 +729,14 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
     return result, nil
 }
 
-func (p *Provider) DeleteEntry(id string) error {
-    k, err := vault.ParseKey(id)
-    if err != nil {
-        return err
+func (p *Provider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {
+    own := func(k vault.Key) error {
+        if k.Kind != vault.KindTOTP {
+            return fmt.Errorf("%s isn't a TOTP entry", k)
+        }
+        return nil
     }
-    if k.Kind != vault.KindTOTP {
-        return fmt.Errorf("%s isn't a TOTP entry", id)
-    }
-    return p.store.Delete(k)
+    return provider.DeleteEntries(p.store, ids, own, nil, p.force, confirm)
 }
 
 // ShouldUseSubshell implements the optional SubshellDecider interface.

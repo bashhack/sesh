@@ -44,11 +44,11 @@ func (p *mockProvider) ListEntries() ([]ProviderEntry, error) {
 	}, nil
 }
 
-func (p *mockProvider) DeleteEntry(id string) error {
+func (p *mockProvider) DeleteEntries(ids []string, _ ConfirmDelete) (int, error) {
 	if p.name == "error" {
-		return errors.New("mock error")
+		return 0, errors.New("mock error")
 	}
-	return nil
+	return len(ids), nil
 }
 
 func (p *mockProvider) GetClipboardValue() (Credentials, error) {

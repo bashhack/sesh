@@ -55,6 +55,13 @@ func (s *harnessStore) Delete(k vault.Key) error {
 	return s.MemStore.Delete(k)
 }
 
+func (s *harnessStore) DeleteMany(keys []vault.Key) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	return s.MemStore.DeleteMany(keys)
+}
+
 // put stores a TOTP secret under the entry id names (kind/service[/username]).
 func (s *harnessStore) put(id string) {
 	k, err := vault.ParseKey(id)
@@ -444,18 +451,52 @@ func TestRun_Commands(t *testing.T) {
 			wantExitCode: 1,
 		},
 		"delete entry": {
-			args: []string{"sesh", "--service", "totp", "--delete", "totp/github"},
+			args: []string{"sesh", "--service", "totp", "--force", "--delete", "totp/github"},
 			setupMocks: func(h *testHarness) {
 				h.store.put("totp/github")
 			},
 			wantExitCode: 0,
+		},
+		"delete several entries": {
+			args: []string{"sesh", "--service", "totp", "--force", "--delete", "totp/github", "totp/gitlab"},
+			setupMocks: func(h *testHarness) {
+				h.store.put("totp/github")
+				h.store.put("totp/gitlab")
+			},
+			wantExitCode: 0,
+			checkStdout: func(t *testing.T, stdout string) {
+				if !strings.Contains(stdout, "Deleted 2 entries") {
+					t.Errorf("stdout = %q", stdout)
+				}
+			},
+		},
+		"delete without a terminal or --force": {
+			args: []string{"sesh", "--service", "totp", "--delete", "totp/github"},
+			setupMocks: func(h *testHarness) {
+				h.store.put("totp/github")
+			},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "add --force to delete without asking") {
+					t.Errorf("stderr = %q", stderr)
+				}
+			},
+		},
+		"delete with a flag after the IDs": {
+			args:         []string{"sesh", "--service", "totp", "--delete", "totp/github", "totp/gitlab", "--force"},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, `"--force" looks like a flag: put flags before the entry IDs`) {
+					t.Errorf("stderr = %q", stderr)
+				}
+			},
 		},
 		"delete entry invalid id": {
 			args:         []string{"sesh", "--service", "totp", "--delete", "bad-id"},
 			wantExitCode: 1,
 		},
 		"delete entry store error": {
-			args: []string{"sesh", "--service", "totp", "--delete", "totp/github"},
+			args: []string{"sesh", "--service", "totp", "--force", "--delete", "totp/github"},
 			setupMocks: func(h *testHarness) {
 				h.store.put("totp/github")
 				h.store.deleteErr = fmt.Errorf("store delete failed")

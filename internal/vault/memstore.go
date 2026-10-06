@@ -119,6 +119,21 @@ func (m *MemStore) List(f Filter) ([]Entry, error) {
 	return out, nil
 }
 
+// DeleteMany implements Store.
+func (m *MemStore) DeleteMany(keys []Key) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, k := range keys {
+		if _, ok := m.entries[k]; !ok {
+			return notFound(k)
+		}
+	}
+	for _, k := range keys {
+		delete(m.entries, k)
+	}
+	return nil
+}
+
 // Delete implements Store.
 func (m *MemStore) Delete(k Key) error {
 	m.mu.Lock()

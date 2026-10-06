@@ -29,6 +29,7 @@ type Provider struct {
 
 	serviceName string
 	profile     string
+	force       bool
 }
 
 var _ provider.ServiceProvider = (*Provider)(nil)
@@ -58,6 +59,7 @@ func (p *Provider) Description() string {
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.serviceName, "service-name", "", "Name of the service to authenticate with")
 	fs.StringVar(&p.profile, "profile", "", "Profile name for the service (for multiple accounts)")
+	fs.BoolVar(&p.force, "force", false, "Delete without asking")
 	return nil
 }
 
@@ -169,24 +171,17 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 	return result, nil
 }
 
-// DeleteEntry deletes the TOTP entry id names.
-func (p *Provider) DeleteEntry(id string) error {
-	k, err := vault.ParseKey(id)
-	if err != nil {
-		return err
-	}
-	if k.Kind != vault.KindTOTP {
-		return fmt.Errorf("%s isn't a TOTP entry; delete it with --service password", id)
-	}
-	if err := p.store.Delete(k); err != nil {
-		if errors.Is(err, vault.ErrNotFound) {
-			if twins, terr := password.NewManager(p.store).CaseTwins(k); terr == nil && len(twins) > 0 {
-				return fmt.Errorf("failed to delete TOTP entry: %w; did you mean %s? Names are case-sensitive", err, twins[0])
-			}
+// DeleteEntries deletes the TOTP entries ids name, asking first unless
+// --force.
+func (p *Provider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {
+	own := func(k vault.Key) error {
+		if k.Kind != vault.KindTOTP {
+			return fmt.Errorf("%s isn't a TOTP entry; delete it with --service password", k)
 		}
-		return fmt.Errorf("failed to delete TOTP entry: %w", err)
+		return nil
 	}
-	return nil
+	hint := func(k vault.Key) string { return password.CaseHint(p.store, k) }
+	return provider.DeleteEntries(p.store, ids, own, hint, p.force, confirm)
 }
 
 // ValidateRequest performs early validation before any TOTP operations.
@@ -227,6 +222,12 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Name:        "profile",
 			Type:        "string",
 			Description: "Profile name for the service (for multiple accounts)",
+			Required:    false,
+		},
+		{
+			Name:        "force",
+			Type:        "bool",
+			Description: "Delete without asking",
 			Required:    false,
 		},
 	}

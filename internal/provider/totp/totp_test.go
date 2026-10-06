@@ -44,6 +44,7 @@ func (f failingStore) Get(vault.Key) ([]byte, error)            { return nil, f.
 func (f failingStore) Lookup(vault.Key) (vault.Entry, error)    { return vault.Entry{}, f.err }
 func (f failingStore) List(vault.Filter) ([]vault.Entry, error) { return nil, f.err }
 func (f failingStore) Delete(vault.Key) error                   { return f.err }
+func (f failingStore) DeleteMany([]vault.Key) error             { return f.err }
 
 func TestNewProvider(t *testing.T) {
 	store := vault.NewMemStore()
@@ -96,8 +97,8 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 	p := &Provider{}
 	flags := p.GetFlagInfo()
 
-	if len(flags) != 2 {
-		t.Fatalf("GetFlagInfo() returned %d flags, want 2", len(flags))
+	if len(flags) != 3 || flags[2].Name != "force" || flags[2].Type != "bool" {
+		t.Fatalf("GetFlagInfo() = %+v, want service-name, profile and force", flags)
 	}
 
 	if flags[0].Name != "service-name" {
@@ -638,7 +639,7 @@ func TestProvider_DeleteEntry(t *testing.T) {
 		"store error": {
 			store:      failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")},
 			entryID:    "totp/gitlab",
-			wantErrMsg: "failed to delete TOTP entry: vault locked",
+			wantErrMsg: "vault locked",
 		},
 	}
 
@@ -646,7 +647,7 @@ func TestProvider_DeleteEntry(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p := &Provider{store: tc.store}
 
-			err := p.DeleteEntry(tc.entryID)
+			err := deleteOne(p, tc.entryID)
 			if tc.wantErrMsg == "" {
 				if err != nil {
 					t.Errorf("DeleteEntry() unexpected error: %v", err)
@@ -668,7 +669,7 @@ func TestProvider_DeleteEntry_RefusesOtherKinds(t *testing.T) {
 	store := seeded(t, map[vault.Key]string{pw: "pw"})
 	p := &Provider{store: store}
 
-	err := p.DeleteEntry("password/github")
+	err := deleteOne(p, "password/github")
 	if wantSub := "isn't a TOTP entry"; err == nil || !strings.Contains(err.Error(), wantSub) {
 		t.Errorf("DeleteEntry(password/github) = %v, want it to contain %q", err, wantSub)
 	}
@@ -698,8 +699,14 @@ func TestProvider_GetCredentials_FailsIfTheCodeSettingsCantBeRead(t *testing.T) 
 
 func TestProvider_DeleteEntry_SuggestsANameInAnotherCase(t *testing.T) {
 	p := &Provider{store: seeded(t, map[vault.Key]string{totpKey("GitHub", ""): "secret"})}
-	err := p.DeleteEntry("totp/github")
+	err := deleteOne(p, "totp/github")
 	if !errors.Is(err, vault.ErrNotFound) || !strings.Contains(err.Error(), "did you mean totp/GitHub? Names are case-sensitive") {
 		t.Errorf("DeleteEntry = %v, want not found with the suggestion", err)
 	}
+}
+
+// deleteOne deletes the entry id names, answering yes when asked.
+func deleteOne(p *Provider, id string) error {
+	_, err := p.DeleteEntries([]string{id}, func([]string) (bool, error) { return true, nil })
+	return err
 }
