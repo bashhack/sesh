@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/qrcode"
@@ -46,6 +47,8 @@ type Provider struct {
 	force      bool // skip confirmation
 	noSymbols  bool // password generation: exclude symbols
 	show       bool // show password instead of clipboard
+	// exportKDF is the Argon2id settings for encrypted exports.
+	exportKDF kdf.Params
 }
 
 var _ provider.ServiceProvider = (*Provider)(nil)
@@ -72,6 +75,13 @@ func NewProvider(store vault.Store) *Provider {
 		stdin:  os.Stdin,
 		stdout: os.Stdout,
 	}
+}
+
+// WithExportKDF sets the Argon2id settings an encrypted export's password
+// is stretched with; zero means kdf.Default().
+func (p *Provider) WithExportKDF(k kdf.Params) *Provider {
+	p.exportKDF = k
+	return p
 }
 
 func (p *Provider) Name() string         { return "password" }
@@ -757,6 +767,7 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 			return provider.Credentials{}, perr
 		}
 		defer secure.SecureZeroBytes(pw)
+		opts.KDF = p.exportKDF
 		count, err = mgr.ExportEncrypted(w, opts, pw)
 	} else {
 		opts.Format = password.FormatJSON

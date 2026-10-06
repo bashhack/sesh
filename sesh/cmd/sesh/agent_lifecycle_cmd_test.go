@@ -29,6 +29,13 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("XDG_CONFIG_HOME", dir); err != nil {
 		panic(err)
 	}
+	// The vaults tests create use the cheapest settings sesh accepts, so
+	// the many derivations stay fast.
+	for k, v := range map[string]string{"SESH_KDF_MEMORY": "19MiB", "SESH_KDF_TIME": "2", "SESH_KDF_THREADS": "1"} {
+		if err := os.Setenv(k, v); err != nil {
+			panic(err)
+		}
+	}
 	code := m.Run()
 	if err := os.RemoveAll(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "remove test config dir: %v\n", err)

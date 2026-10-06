@@ -40,7 +40,7 @@ func main() {
 	// Shell completion runs on every Tab, so it answers before the setting
 	// flags, the config, or the store are looked at.
 	if len(os.Args) > 1 && os.Args[1] == completeCmd {
-		app := NewDefaultApp(versionInfo, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+		app := NewDefaultApp(versionInfo, unavailableStore{err: errNoStore}, AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout})
 		if err := writeCompletions(app.Stdout, app.Registry, os.Args[2:]); err != nil {
 			os.Exit(1)
 		}
@@ -65,9 +65,9 @@ func main() {
 	// A broken config only stops commands that use the store; the rest,
 	// including `sesh config`, which reports the problem, still run.
 	cfg, cfgErr := settings()
-	clipboardTimeout := config.DefaultClipboardTimeout
+	appSettings := AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout}
 	if cfgErr == nil {
-		clipboardTimeout = cfg.ClipboardTimeout.Value
+		appSettings = AppSettings{ClipboardTimeout: cfg.ClipboardTimeout.Value, KDF: cfg.KDF()}
 	}
 
 	var (
@@ -99,7 +99,7 @@ func main() {
 		kc = unavailableStore{err: errNoStore}
 	}
 
-	app := NewDefaultApp(versionInfo, kc, clipboardTimeout)
+	app := NewDefaultApp(versionInfo, kc, appSettings)
 	run(app, args)
 }
 
@@ -131,7 +131,7 @@ func argsParse(args []string) bool {
 	if serviceName == "" {
 		return false
 	}
-	app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+	app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout})
 	app.Stdout, app.Stderr = io.Discard, io.Discard
 	p, err := app.Registry.GetProvider(serviceName)
 	if err != nil {
@@ -608,6 +608,12 @@ func (c passwordPromptConfig) newSource(dbPath string) *database.MasterPasswordS
 
 func (c passwordPromptConfig) options() []database.Option {
 	opts := []database.Option{database.WithNewPasswordCheck(c.checkNewPassword)}
+	// A new key record (a new vault, or a changed master password) gets
+	// the configured Argon2id settings. Commands that reach this have
+	// loaded the settings already, so an error here can't be a new one.
+	if cfg, err := settings(); err == nil {
+		opts = append(opts, database.WithKDFParams(cfg.KDF()))
+	}
 	if c.interactive {
 		opts = append(opts, database.WithMaxAttempts(interactivePasswordAttempts))
 	}

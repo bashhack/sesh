@@ -10,65 +10,21 @@ import (
 	"fmt"
 	"io"
 
-	"golang.org/x/crypto/argon2"
-
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/secure"
 )
 
 const encryptedExportVersion = 1
 
-// encryptedExportParams holds Argon2id tuning for the encrypted export envelope.
-// Kept local to avoid importing the database package (import cycle).
-type encryptedExportParams struct {
-	Time    uint32 `json:"time"`
-	Memory  uint32 `json:"memory"`
-	Threads uint8  `json:"threads"`
-	KeyLen  uint32 `json:"key_len"`
-}
-
-func defaultEncryptedExportParams() encryptedExportParams {
-	return encryptedExportParams{
-		Time:    3,
-		Memory:  64 * 1024,
-		Threads: 4,
-		KeyLen:  32,
-	}
-}
-
-// validateEncryptedExportParams bounds-checks Argon2id parameters from an
-// untrusted envelope. Without these checks a malicious file could OOM the
-// user via a huge Memory value, stall the CPU via a huge Time, or trigger
-// a panic via Threads=0.
-func validateEncryptedExportParams(p encryptedExportParams) error {
-	const (
-		maxMemoryKiB = 1 << 20 // 1 GiB
-		maxTime      = 10
-		maxThreads   = 16
-	)
-	if p.Memory == 0 || p.Memory > maxMemoryKiB {
-		return fmt.Errorf("envelope memory param out of range: %d KiB (max %d)", p.Memory, maxMemoryKiB)
-	}
-	if p.Time == 0 || p.Time > maxTime {
-		return fmt.Errorf("envelope time param out of range: %d (max %d)", p.Time, maxTime)
-	}
-	if p.Threads == 0 || p.Threads > maxThreads {
-		return fmt.Errorf("envelope threads param out of range: %d (max %d)", p.Threads, maxThreads)
-	}
-	if p.KeyLen != 32 {
-		return fmt.Errorf("envelope key_len must be 32, got %d", p.KeyLen)
-	}
-	return nil
-}
-
 // EncryptedEnvelope is the on-disk format for a password-encrypted export.
 // salt + params are public (needed to re-derive the key); ciphertext is the
 // AES-256-GCM output of the JSON-serialized entries.
 type EncryptedEnvelope struct {
-	Algorithm  string                `json:"algorithm"`
-	Salt       string                `json:"salt"`       // base64
-	Ciphertext string                `json:"ciphertext"` // base64
-	Params     encryptedExportParams `json:"params"`
-	Version    int                   `json:"version"`
+	Algorithm  string     `json:"algorithm"`
+	Salt       string     `json:"salt"`       // base64
+	Ciphertext string     `json:"ciphertext"` // base64
+	Params     kdf.Params `json:"params"`
+	Version    int        `json:"version"`
 }
 
 // ExportEncrypted writes a password-encrypted export to w.
@@ -94,8 +50,14 @@ func (m *Manager) ExportEncrypted(w io.Writer, opts ExportOptions, password []by
 		return 0, fmt.Errorf("generate salt: %w", err)
 	}
 
-	params := defaultEncryptedExportParams()
-	key := argon2.IDKey(password, salt, params.Time, params.Memory, params.Threads, params.KeyLen)
+	params := opts.KDF
+	if params == (kdf.Params{}) {
+		params = kdf.Default()
+	}
+	if err := params.CheckBounds(); err != nil {
+		return 0, fmt.Errorf("export settings: %w", err)
+	}
+	key := kdf.Derive(password, salt, params)
 	defer secure.SecureZeroBytes(key)
 
 	plaintext := buf.Bytes()
@@ -138,8 +100,10 @@ func (m *Manager) ImportEncrypted(r io.Reader, opts ImportOptions, password []by
 	if envelope.Algorithm != "argon2id" {
 		return ImportResult{}, fmt.Errorf("unsupported algorithm %q", envelope.Algorithm)
 	}
-	if err := validateEncryptedExportParams(envelope.Params); err != nil {
-		return ImportResult{}, err
+	// Bounded, so a damaged or hostile file can't make sesh use unbounded
+	// memory or time.
+	if err := envelope.Params.CheckBounds(); err != nil {
+		return ImportResult{}, fmt.Errorf("export envelope: %w", err)
 	}
 
 	salt, err := base64.StdEncoding.DecodeString(envelope.Salt)
@@ -155,8 +119,7 @@ func (m *Manager) ImportEncrypted(r io.Reader, opts ImportOptions, password []by
 		return ImportResult{}, fmt.Errorf("decode ciphertext: %w", err)
 	}
 
-	p := envelope.Params
-	key := argon2.IDKey(password, salt, p.Time, p.Memory, p.Threads, p.KeyLen)
+	key := kdf.Derive(password, salt, envelope.Params)
 	defer secure.SecureZeroBytes(key)
 
 	payload, err := gcmOpen(key, ciphertext)

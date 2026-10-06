@@ -44,8 +44,8 @@ func TestMasterPasswordSource_FirstRunCreatesTheVault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the vault should have its key record after the first run: %v", err)
 	}
-	if m.Params != DefaultArgon2idParams() || len(m.Salt) != 32 {
-		t.Errorf("key record = %+v, want the default settings and a 32-byte salt", m)
+	if m.Params != newSourceParams() || len(m.Salt) != 32 {
+		t.Errorf("key record = %+v, want the source's settings and a 32-byte salt", m)
 	}
 	if _, err := Decrypt(key, m.Verify); err != nil {
 		t.Errorf("the verify blob doesn't open with the key: %v", err)
@@ -339,5 +339,26 @@ func TestStore_CheckKey(t *testing.T) {
 	defer plain.Close() //nolint:errcheck // test cleanup
 	if err := plain.CheckKey(); err == nil || !strings.Contains(err.Error(), "doesn't say which vault it unlocked") {
 		t.Errorf("a key source that can't say: err = %v", err)
+	}
+}
+
+// A new key record gets the settings the source is given; unlocking uses
+// the ones the record holds, whatever the source is given.
+func TestMasterPasswordSource_KDFParams(t *testing.T) {
+	dir := t.TempDir()
+	want := Argon2idParams{Time: 2, Memory: 2048, Threads: 2, KeyLen: 32}
+	if _, err := NewMasterPasswordSource(vaultPath(dir), staticPrompt("first-password-1", "first-password-1"), WithKDFParams(want)).GetEncryptionKey(); err != nil {
+		t.Fatal(err)
+	}
+	m, err := ReadUnlockMaterial(vaultPath(dir))
+	if err != nil || m.Params != want {
+		t.Fatalf("key record settings = %+v, %v; want %+v", m.Params, err, want)
+	}
+	other := Argon2idParams{Time: 1, Memory: 1024, Threads: 1, KeyLen: 32}
+	if _, err := NewMasterPasswordSource(vaultPath(dir), staticPrompt("first-password-1"), WithKDFParams(other)).GetEncryptionKey(); err != nil {
+		t.Errorf("unlock with other settings configured: %v", err)
+	}
+	if _, err := NewMasterPasswordSource(vaultPath(t.TempDir()), staticPrompt("first-password-1", "first-password-1"), WithKDFParams(Argon2idParams{Time: 99, Memory: 1024, Threads: 1, KeyLen: 32})).GetEncryptionKey(); err == nil || !strings.Contains(err.Error(), "time setting out of range") {
+		t.Errorf("settings beyond the bounds: err = %v", err)
 	}
 }

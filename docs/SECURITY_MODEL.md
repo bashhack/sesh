@@ -53,16 +53,16 @@ The vault provides application-level encryption on top of file-system storage:
 
 sesh derives the master key from your master password via Argon2id, the same way on macOS and Linux.
 
-- **KDF**: Argon2id with `t=3, m=64 MiB, p=4, keyLen=32`. These parameters exceed OWASP 2023 minimums (`t=1, m=47 MiB, p=1`) and make offline brute-force expensive (~200 ms per attempt)
+- **KDF**: Argon2id, by default `t=3, m=256 MiB, p=4, keyLen=32`. The settings are configurable (`master_password` in the config file, or `SESH_KDF_MEMORY`/`_TIME`/`_THREADS`) from OWASP's minimum (`m=19 MiB, t=2, p=1`) up to the most an unlock accepts (`m=1 GiB, t=10, p=16`), so whatever sesh makes it can open. They're stored in the key record: a vault keeps the ones it was created or last re-keyed with
 - **Key record**: one row in the vault file (`vault_key`; sesh creates the file with 0600 permissions) holds the KDF salt (32 random bytes), the Argon2id settings, and a verification blob. **No secrets.** Same public-info model as bcrypt/scrypt — salt and params are safe to expose
 - **Verification blob**: AES-256-GCM encryption of the constant string `"sesh-verify"` using the derived key. On unlock, sesh re-derives the key from the supplied password and tries to decrypt this blob. GCM's authentication tag rejects wrong passwords immediately, without touching any real entries
 - **First run**: needs no setup. Before the first prompt, sesh says it's creating a vault, where, and that a forgotten password can't be reset, only worked around with a recovery key. It then asks for the master password twice, generates the salt, derives the key, records them in the new vault, and unlocks the agent with the new password, so the next command doesn't prompt
 - **Subsequent runs**: the password is checked by the sesh agent (below). The first command after the agent starts prompts; later commands reuse the agent's key without prompting. If the agent is unavailable, sesh prompts on every run and verifies the password itself
-- **Minimum password length**: 8 characters. This is a **floor**, not a recommendation — it exists to reject obvious mistakes (empty input, fat-fingered short strings). With Argon2id at `m=64 MiB, t=3` and an attacker who has the vault file, an 8-character lowercase-ASCII password is brute-forceable within days on commodity hardware. **Choose a passphrase**: four or more random words from a large wordlist (40+ bits of entropy) gives meaningful resistance; longer is better
+- **Minimum password length**: 8 characters. This is a **floor**, not a recommendation — it exists to reject obvious mistakes (empty input, fat-fingered short strings). Argon2id makes each guess expensive, but not enough to save a short password: an attacker who has the vault file can work through the few billion 8-character lowercase-ASCII passwords offline. **Choose a passphrase**: four or more random words from a large wordlist (40+ bits of entropy) gives meaningful resistance; longer is better
 - **Strength check**: a new master password (first run, password change, recovery) is also rated with zxcvbn, as stored passwords are. One it estimates fewer than about 10^8 guesses would find gets a warning, and at a terminal sesh asks whether to use it anyway (the default is no, which asks for another). It's advice, not a guarantee: zxcvbn knows common passwords and English words, not every pattern an attacker might try
 - **Non-interactive mode**: `SESH_MASTER_PASSWORD` env var bypasses the prompt (intended for CI/scripts only; exposes the password to the process environment). These runs check the password every time and don't use the agent, so a job never starts one; an agent from your interactive use is unaffected
 
-**Threat model.** An attacker with the vault file can attempt offline brute-force using the public salt and params. At ~5 attempts/second, a strong passphrase (four random words from a large wordlist, 40+ bits of entropy) is resistant; a weak password is not. This is the same threat model as any password manager — the strength of the master password bounds the security of everything under it.
+**Threat model.** An attacker with the vault file can attempt offline brute-force using the public salt and params, each guess costing one Argon2id derivation at the vault's settings. A strong passphrase (four random words from a large wordlist, 40+ bits of entropy) is resistant; a weak password is not. This is the same threat model as any password manager — the strength of the master password bounds the security of everything under it.
 
 **Metadata exposure.** Even without the master password, an attacker with the DB file can read service names, account names, timestamps, and audit log entries — only the encrypted secret values are protected. Full-database encryption (SQLCipher-style) would require a CGo dependency and is not implemented.
 
@@ -134,7 +134,7 @@ Not protected against: root (it can read the agent's memory), physical-memory at
 
 Exports produced with `--format encrypted` are wrapped in a portable envelope that anyone with the password can decrypt on any machine:
 
-- **Argon2id** key derivation with the same parameters as the master password (`t=3, m=64 MiB, p=4`)
+- **Argon2id** key derivation with the configured master password settings (by default `t=3, m=256 MiB, p=4`); the file records them, so it opens anywhere whatever is configured there
 - **AES-256-GCM** encryption of the JSON payload using the derived key
 - **Random 32-byte salt** per export — the same password produces different ciphertext each time
 - **Envelope format** (JSON): `{version, algorithm, salt, params, ciphertext}` — salt and params are public, as in the vault's key record

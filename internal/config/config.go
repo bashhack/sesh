@@ -18,6 +18,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/kdf"
 )
 
 // Source is where a setting's value came from.
@@ -74,7 +75,17 @@ type Config struct {
 	// AuditRetentionDays is how many days of audit log events the vault
 	// keeps; 0 keeps everything.
 	AuditRetentionDays Setting[int]
-	FileFound          bool
+	// KDFMemory (KiB), KDFTime and KDFThreads are the Argon2id settings a
+	// new master password key, or an encrypted export, is derived with.
+	KDFMemory  Setting[uint32]
+	KDFTime    Setting[uint32]
+	KDFThreads Setting[uint8]
+	FileFound  bool
+}
+
+// KDF is the configured Argon2id settings.
+func (c *Config) KDF() kdf.Params {
+	return kdf.Params{Time: c.KDFTime.Value, Memory: c.KDFMemory.Value, Threads: c.KDFThreads.Value, KeyLen: kdf.KeyLen}
 }
 
 // Overrides are values given as command-line flags. Empty means unset.
@@ -89,6 +100,9 @@ const (
 	EnvAgentIdleTimeout   = "SESH_AGENT_IDLE_TIMEOUT"
 	EnvAgentMaxLifetime   = "SESH_AGENT_MAX_LIFETIME"
 	EnvAuditRetentionDays = "SESH_AUDIT_RETENTION_DAYS"
+	EnvKDFMemory          = "SESH_KDF_MEMORY"
+	EnvKDFTime            = "SESH_KDF_TIME"
+	EnvKDFThreads         = "SESH_KDF_THREADS"
 )
 
 // fileConfig is the config file's shape. Durations are strings such as
@@ -100,6 +114,11 @@ type fileConfig struct {
 		IdleTimeout string `toml:"idle_timeout"`
 		MaxLifetime string `toml:"max_lifetime"`
 	} `toml:"agent"`
+	MasterPassword struct {
+		Memory  string `toml:"memory"`
+		Time    int64  `toml:"time"`
+		Threads int64  `toml:"threads"`
+	} `toml:"master_password"`
 	Audit struct {
 		RetentionDays int64 `toml:"retention_days"`
 	} `toml:"audit"`
@@ -139,6 +158,9 @@ func Load(o Overrides) (*Config, error) {
 		AgentIdleTimeout:   Setting[time.Duration]{Value: agent.DefaultIdleTimeout},
 		AgentMaxLifetime:   Setting[time.Duration]{Value: agent.DefaultMaxLifetime},
 		AuditRetentionDays: Setting[int]{Value: DefaultAuditRetentionDays},
+		KDFMemory:          Setting[uint32]{Value: kdf.DefaultMemoryKiB},
+		KDFTime:            Setting[uint32]{Value: kdf.DefaultTime},
+		KDFThreads:         Setting[uint8]{Value: kdf.DefaultThreads},
 	}
 	if err := c.applyFile(); err != nil {
 		return nil, err
@@ -203,6 +225,21 @@ func (c *Config) applyFile() error {
 			return err
 		}
 	}
+	if in("master_password.memory") {
+		if err := setKDFMemory(&c.KDFMemory, f.MasterPassword.Memory, FromFile, from("master_password.memory")); err != nil {
+			return err
+		}
+	}
+	if in("master_password.time") {
+		if err := setKDFTime(&c.KDFTime, f.MasterPassword.Time, strconv.FormatInt(f.MasterPassword.Time, 10), FromFile, from("master_password.time")); err != nil {
+			return err
+		}
+	}
+	if in("master_password.threads") {
+		if err := setKDFThreads(&c.KDFThreads, f.MasterPassword.Threads, strconv.FormatInt(f.MasterPassword.Threads, 10), FromFile, from("master_password.threads")); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -233,6 +270,28 @@ func (c *Config) applyEnv() error {
 		}
 		if err := setRetention(&c.AuditRetentionDays, n, v, FromEnv, EnvAuditRetentionDays); err != nil {
 			return err
+		}
+	}
+	if v, ok := os.LookupEnv(EnvKDFMemory); ok && v != "" {
+		if err := setKDFMemory(&c.KDFMemory, v, FromEnv, EnvKDFMemory); err != nil {
+			return err
+		}
+	}
+	for _, e := range []struct {
+		set func(n int64, raw string) error
+		env string
+	}{
+		{func(n int64, raw string) error { return setKDFTime(&c.KDFTime, n, raw, FromEnv, EnvKDFTime) }, EnvKDFTime},
+		{func(n int64, raw string) error { return setKDFThreads(&c.KDFThreads, n, raw, FromEnv, EnvKDFThreads) }, EnvKDFThreads},
+	} {
+		if v, ok := os.LookupEnv(e.env); ok && v != "" {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				n = -1 // reported as out of range, with the value as given
+			}
+			if err := e.set(n, v); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -306,6 +365,56 @@ func setDuration(dst *Setting[time.Duration], v string, src Source, origin strin
 		return fmt.Errorf("%s = %q: must not be negative", origin, v)
 	}
 	*dst = Setting[time.Duration]{Value: d, Source: src, Origin: origin}
+	return nil
+}
+
+// setKDFMemory accepts an amount of memory such as 256MiB or 1GiB, from
+// kdf.MinMemoryKiB to kdf.MaxMemoryKiB.
+func setKDFMemory(dst *Setting[uint32], v string, src Source, origin string) error {
+	kib, ok := parseMemory(v)
+	if !ok || kib < kdf.MinMemoryKiB || kib > kdf.MaxMemoryKiB {
+		return fmt.Errorf("%s = %q: want an amount of memory from %dMiB (OWASP's minimum for Argon2id) to %dGiB, such as 256MiB", origin, v, kdf.MinMemoryKiB/1024, kdf.MaxMemoryKiB/(1024*1024))
+	}
+	*dst = Setting[uint32]{Value: uint32(kib), Source: src, Origin: origin} //nolint:gosec // bounded by kdf.MaxMemoryKiB above
+	return nil
+}
+
+// parseMemory reads an amount of memory written with a KiB, MiB or GiB
+// unit, as KiB.
+func parseMemory(v string) (int64, bool) {
+	s := strings.TrimSpace(v)
+	for _, u := range []struct {
+		suffix string
+		kib    int64
+	}{{"KiB", 1}, {"MiB", 1024}, {"GiB", 1024 * 1024}} {
+		if num, ok := strings.CutSuffix(s, u.suffix); ok {
+			n, err := strconv.ParseInt(strings.TrimSpace(num), 10, 64)
+			if err != nil || n < 0 || n > kdf.MaxMemoryKiB {
+				return 0, false
+			}
+			return n * u.kib, true
+		}
+	}
+	return 0, false
+}
+
+// setKDFTime accepts a number of passes from kdf.MinTime to kdf.MaxTime;
+// raw is the value as written, for the error.
+func setKDFTime(dst *Setting[uint32], n int64, raw string, src Source, origin string) error {
+	if n < kdf.MinTime || n > kdf.MaxTime {
+		return fmt.Errorf("%s = %q: want a number of passes from %d (OWASP's minimum for Argon2id) to %d", origin, raw, kdf.MinTime, kdf.MaxTime)
+	}
+	*dst = Setting[uint32]{Value: uint32(n), Source: src, Origin: origin} //nolint:gosec // bounded by kdf.MaxTime above
+	return nil
+}
+
+// setKDFThreads accepts a number of threads from kdf.MinThreads to
+// kdf.MaxThreads; raw is the value as written, for the error.
+func setKDFThreads(dst *Setting[uint8], n int64, raw string, src Source, origin string) error {
+	if n < kdf.MinThreads || n > kdf.MaxThreads {
+		return fmt.Errorf("%s = %q: want a number of threads from %d to %d", origin, raw, kdf.MinThreads, kdf.MaxThreads)
+	}
+	*dst = Setting[uint8]{Value: uint8(n), Source: src, Origin: origin} //nolint:gosec // bounded by kdf.MaxThreads above
 	return nil
 }
 

@@ -11,7 +11,7 @@ import (
 )
 
 func TestComplete(t *testing.T) {
-	reg := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, 0).Registry
+	reg := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, AppSettings{}).Registry
 	all := func(vs ...string) []string { return vs }
 	for _, tt := range []struct {
 		name  string
@@ -89,7 +89,7 @@ func TestComplete(t *testing.T) {
 }
 
 func TestWriteCompletions(t *testing.T) {
-	reg := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, 0).Registry
+	reg := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, AppSettings{}).Registry
 	var b bytes.Buffer
 	if err := writeCompletions(&b, reg, []string{"agent", "st"}); err != nil {
 		t.Fatal(err)

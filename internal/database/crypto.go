@@ -9,41 +9,16 @@ import (
 	"fmt"
 	"io"
 
-	"golang.org/x/crypto/argon2"
-
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/secure"
 )
 
-// Argon2idParams holds the tuning parameters for Argon2id key derivation.
-type Argon2idParams struct {
-	Time    uint32 `json:"time"`    // iterations
-	Memory  uint32 `json:"memory"`  // KiB
-	Threads uint8  `json:"threads"` // parallelism
-	KeyLen  uint32 `json:"key_len"` // derived key length in bytes
-}
+// Argon2idParams are the Argon2id settings a vault's key record holds.
+type Argon2idParams = kdf.Params
 
-// DefaultArgon2idParams returns production-grade Argon2id parameters.
-// Time=3, Memory=64 MiB, Threads=4, KeyLen=32 (AES-256).
-func DefaultArgon2idParams() Argon2idParams {
-	return Argon2idParams{
-		Time:    3,
-		Memory:  64 * 1024, // 64 MiB
-		Threads: 4,
-		KeyLen:  32,
-	}
-}
-
-// MarshalParams serialises Argon2id parameters to JSON for the vault's key record.
-// The struct is composed of fixed-width integers, so json.Marshal cannot fail for
-// any valid Argon2idParams value — a non-nil error here indicates a programming
-// bug (e.g. someone added an unmarshalable field).
-func (p Argon2idParams) MarshalParams() string {
-	b, err := json.Marshal(p)
-	if err != nil {
-		panic(fmt.Sprintf("marshal Argon2idParams: %v (unreachable — fields are all numeric)", err))
-	}
-	return string(b)
-}
+// DefaultArgon2idParams returns the settings a new key record uses unless
+// configured otherwise.
+func DefaultArgon2idParams() Argon2idParams { return kdf.Default() }
 
 // UnmarshalArgon2idParams deserialises Argon2id parameters from JSON.
 func UnmarshalArgon2idParams(data string) (Argon2idParams, error) {
@@ -56,7 +31,7 @@ func UnmarshalArgon2idParams(data string) (Argon2idParams, error) {
 
 // DeriveKey uses Argon2id to derive an encryption key from a password and salt.
 func DeriveKey(password, salt []byte, params Argon2idParams) []byte {
-	return argon2.IDKey(password, salt, params.Time, params.Memory, params.Threads, params.KeyLen)
+	return kdf.Derive(password, salt, params)
 }
 
 // GenerateSalt produces a cryptographically random salt of the given length.

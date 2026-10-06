@@ -151,7 +151,14 @@ max_lifetime = "8h"                     # 0 disables
 
 [audit]
 retention_days = 90                     # days of audit log events to keep; 0 keeps everything
+
+[master_password]                       # how hard your master password is to guess-check (Argon2id)
+memory = "256MiB"                       # memory each check takes: 19MiB to 1GiB
+time = 3                                # passes over that memory: 2 to 10
+threads = 4                             # 1 to 16
 ```
+
+The `master_password` settings make each guess at your master password cost an attacker memory and time; higher is slower for them, and for you at each unlock. They're stored in the vault when it's created, and each `sesh --rekey` stores the ones configured then, so changing them affects a vault only from its next password change, and never stops it from opening. Encrypted exports use them too, and record them in the file. The least sesh accepts is OWASP's minimum for Argon2id (19 MiB, 2 passes, 1 thread).
 
 sesh keeps one vault per user. `db_path` says where that vault lives; it isn't a way to keep several. To keep things apart inside it, use profiles (`--profile work`) and service names. If you do make a second vault, give it its own folder: Touch ID unlock is kept per folder. sesh refuses a `db_path` that points at another program's SQLite database, and leaves that file unchanged.
 
@@ -179,12 +186,15 @@ Ready. Run `sesh config` to see your settings.
 ```
 config file: /Users/me/.config/sesh/config.toml
 
-clipboard_timeout     30s           (default)
-agent.idle_timeout    25m           (config file)
-agent.max_lifetime    8h            (default)
-audit.retention_days  90 days       (default)
-db_path               /Users/me/vaults/sesh.db
-                      (config file)
+clipboard_timeout        30s           (default)
+agent.idle_timeout       25m           (config file)
+agent.max_lifetime       8h            (default)
+audit.retention_days     90 days       (default)
+master_password.memory   256MiB        (default)
+master_password.time     3             (default)
+master_password.threads  4             (default)
+db_path                  /Users/me/vaults/sesh.db
+                         (config file)
 ```
 
 ## Configuration Options
@@ -252,6 +262,9 @@ db_path               /Users/me/vaults/sesh.db
 | `SESH_AGENT_IDLE_TIMEOUT` | Agent locks after this long without use; `0` disables (config: `agent.idle_timeout`). Same as `sesh agent --idle-timeout` | `10m` |
 | `SESH_AGENT_MAX_LIFETIME` | Agent locks this long after each unlock; `0` disables (config: `agent.max_lifetime`). Same as `sesh agent --max-lifetime` | `8h` |
 | `SESH_AUDIT_RETENTION_DAYS` | Days of audit log events the vault keeps; `0` keeps everything (config: `audit.retention_days`) | `90` |
+| `SESH_KDF_MEMORY` | Memory for each master password check, such as `256MiB` (config: `master_password.memory`) | `256MiB` |
+| `SESH_KDF_TIME` | Passes over that memory (config: `master_password.time`) | `3` |
+| `SESH_KDF_THREADS` | Threads (config: `master_password.threads`) | `4` |
 
 ## The Vault and Its Key
 
@@ -531,7 +544,7 @@ Behaviour:
 - **All or nothing.** Every entry, the vault's key record and its recovery key record change in one database transaction: if anything fails, or the computer stops part way, nothing has changed. No second copy of the vault is made.
 - **Your history stays.** The audit log is kept, with one `rekey` event for the change.
 - **Other sesh commands.** Ones that save while the change commits wait a moment for it. One that unlocked the vault before the change finished can't save into it afterwards, or read from it: it's told the master password was changed, and to run again. If one has the vault open when the change finishes, sesh warns that the vault file on its own still holds the vault under the old password until that command ends; don't copy or back up the file until then. Another password change running at the same time is refused the same way, so neither undoes the other.
-- **A new salt.** The new key comes from a new salt, with sesh's Argon2id settings. If you forget the new password, your recovery key sets another (see [Recovery key](#recovery-key)).
+- **A new salt and the configured settings.** The new key comes from a new salt, with the Argon2id settings configured now (`master_password` in the config file), so a password change is how a vault takes up new ones. If you forget the new password, your recovery key sets another (see [Recovery key](#recovery-key)).
 
 **A vault that has lost its key record** (only damage does this) is refused: `the vault at … holds entries but not the record its key is made from, so it can't be opened; restore it from a backup`. sesh never makes a new key for a vault that holds entries.
 

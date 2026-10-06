@@ -32,7 +32,7 @@ func rekeyVault(t *testing.T) (string, *Store) {
 
 func newKeyFor(t *testing.T, pw string) ([]byte, UnlockMaterial) {
 	t.Helper()
-	key, rec, err := newKeyRecord([]byte(pw))
+	key, rec, err := newKeyRecord([]byte(pw), newSourceParams())
 	if err != nil {
 		t.Fatal(err)
 	}

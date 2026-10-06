@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/testutil"
@@ -651,6 +652,8 @@ func TestExport_EncryptedWritesEnvelope(t *testing.T) {
 	mock := seeded(t, map[string]string{"password/github": "plaintext-secret"})
 
 	p, stdout := newTestProvider(mock)
+	settings := kdf.Params{Time: 2, Memory: 19 * 1024, Threads: 1, KeyLen: kdf.KeyLen}
+	p.WithExportKDF(settings)
 	p.action = "export"
 	p.format = "encrypted"
 
@@ -660,13 +663,17 @@ func TestExport_EncryptedWritesEnvelope(t *testing.T) {
 	}
 	out := stdout.Bytes()
 	var envelope struct {
-		Algorithm string `json:"algorithm"`
+		Algorithm string     `json:"algorithm"`
+		Params    kdf.Params `json:"params"`
 	}
 	if err := json.Unmarshal(out, &envelope); err != nil {
 		t.Fatalf("envelope is not valid JSON: %v\n%s", err, string(out))
 	}
 	if envelope.Algorithm != "argon2id" {
 		t.Errorf("envelope algorithm = %q, want argon2id\nfull envelope: %s", envelope.Algorithm, string(out))
+	}
+	if envelope.Params != settings {
+		t.Errorf("envelope settings = %+v, want the provider's %+v", envelope.Params, settings)
 	}
 	if bytes.Contains(out, []byte("plaintext-secret")) {
 		t.Fatal("envelope leaked plaintext secret")
