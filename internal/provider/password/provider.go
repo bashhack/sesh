@@ -190,7 +190,7 @@ func (p *Provider) CheckNames() error {
 func (p *Provider) checkName() error {
 	kind := p.effectiveEntryType()
 	switch p.action {
-	case "store", "generate", "get":
+	case "", "store", "generate", "get": // "" is --clip, which gets the entry
 	case "totp-store", "totp-generate":
 		kind = password.EntryTypeTOTP
 	default:

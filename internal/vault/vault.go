@@ -130,7 +130,7 @@ func CheckName(what, v string) error {
 			return fmt.Errorf("the %s %q starts or ends with an invisible character", what, v)
 		}
 	}
-	if strings.IndexFunc(v, isHiddenInside) >= 0 {
+	if hasHiddenRune(v) {
 		return fmt.Errorf("the %s %q contains an invisible character", what, v)
 	}
 	if n := utf8.RuneCountInString(v); n > MaxNameLength {
@@ -166,15 +166,43 @@ func isTag(r rune) bool {
 	return r >= 0xE0020 && r <= 0xE007F
 }
 
-// isHiddenInside reports whether r is invisible inside a name: a format
-// character other than the zero-width joiner and non-joiner (which emoji
-// and some scripts need) and the tag characters (flag emoji), or a line or
-// paragraph separator.
-func isHiddenInside(r rune) bool {
-	if r == 0x200C || r == 0x200D || isTag(r) {
-		return false
+// hasHiddenRune reports whether v holds a character that's invisible where
+// it stands: a format character other than the zero-width joiner and
+// non-joiner (which emoji and some scripts need), a line or paragraph
+// separator, the combining grapheme joiner, a tag character outside a flag
+// emoji (🏴 followed by tags up to the cancel tag), or a variation selector
+// that doesn't follow a symbol or a keycap's digit, # or *.
+func hasHiddenRune(v string) bool {
+	rs := []rune(v)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case r == 0x1F3F4:
+			j := i + 1
+			for j < len(rs) && isTag(rs[j]) && rs[j] != 0xE007F {
+				j++
+			}
+			if j > i+1 && j < len(rs) && rs[j] == 0xE007F {
+				i = j // a whole flag
+			}
+		case isTag(r):
+			return true
+		case isVariationSelector(r):
+			if i == 0 || (!unicode.IsSymbol(rs[i-1]) && !strings.ContainsRune("0123456789#*", rs[i-1])) {
+				return true
+			}
+		case r == 0x200C, r == 0x200D:
+		case r == 0x034F, unicode.Is(unicode.Cf, r), unicode.Is(unicode.Zl, r), unicode.Is(unicode.Zp, r):
+			return true
+		}
 	}
-	return unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r)
+	return false
+}
+
+// isVariationSelector reports whether r picks how the character before it
+// is drawn (such as emoji or text style); after a letter it shows nothing.
+func isVariationSelector(r rune) bool {
+	return (r >= 0xFE00 && r <= 0xFE0F) || (r >= 0xE0100 && r <= 0xE01EF)
 }
 
 // AWSKey is the entry holding an AWS profile's MFA secret: the TOTP entry

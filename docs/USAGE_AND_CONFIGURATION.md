@@ -811,7 +811,7 @@ $ sesh -service aws -delete totp/aws/prod
 - a character that changes text direction, which can make one name display as another;
 - more than 256 characters.
 
-The password manager's `store`, `generate`, `get`, `totp-store`, and `totp-generate` check names before the vault is opened, so a bad name is reported before the master password is asked for. The setup wizards check each name as you type it, and an import reports each entry it refuses and imports the rest.
+The password manager's `store`, `generate`, `get` (including `--clip` on its own), `totp-store`, and `totp-generate` check names before the vault is opened, so a bad name is reported before the master password is asked for. The TOTP setup checks the service name and profile once you've entered both, the AWS setup checks the profile as soon as you enter it, and an import reports each entry it refuses and imports the rest.
 
 ### Setup Wizard Features
 

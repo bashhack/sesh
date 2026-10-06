@@ -822,7 +822,8 @@ func TestEntryCount(t *testing.T) {
 // A name no entry can have is refused before anything is asked, and
 // without the vault (CheckNames).
 func TestValidateRequest_RefusesBadNames(t *testing.T) {
-	for _, action := range []string{"store", "generate", "get", "totp-store", "totp-generate"} {
+	// "" is --clip without --action, which gets the entry.
+	for _, action := range []string{"", "store", "generate", "get", "totp-store", "totp-generate"} {
 		for name, tt := range map[string]struct{ service, username, wantSub string }{
 			"trailing space": {"github ", "", `the service name "github " starts or ends with a space`},
 			"leading space":  {"github", " alice", `the username " alice" starts or ends with a space`},
