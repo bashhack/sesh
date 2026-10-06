@@ -472,7 +472,12 @@ func (h *AWSSetupHandler) Setup() error {
 		return err
 	}
 
+	// Checked before anything else is asked, so a bad name doesn't cost
+	// the whole setup.
 	k := vault.AWSKey(profile)
+	if err := k.Validate(); err != nil {
+		return fmt.Errorf("AWS profile: %w", err)
+	}
 	existing, err := existingEntry(h.store, k)
 	if err != nil {
 		return err

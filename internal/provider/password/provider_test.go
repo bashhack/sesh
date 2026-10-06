@@ -817,3 +817,62 @@ func TestEntryCount(t *testing.T) {
 		}
 	}
 }
+
+// A name the vault won't take is refused before anything is asked.
+func TestValidateRequest_RefusesBadNames(t *testing.T) {
+	for _, action := range []string{"store", "generate", "get", "totp-store", "totp-generate"} {
+		for name, tt := range map[string]struct{ service, username, wantSub string }{
+			"trailing space": {"github ", "", `the service name "github " starts or ends with a space`},
+			"leading space":  {"github", " alice", `the username " alice" starts or ends with a space`},
+			"long name":      {strings.Repeat("s", 257), "", "the service name is 257 characters long; the most is 256"},
+		} {
+			p, _ := newTestProvider(vault.NewMemStore())
+			p.action, p.service, p.username = action, tt.service, tt.username
+			if err := p.ValidateRequest(); err == nil || !strings.Contains(err.Error(), tt.wantSub) {
+				t.Errorf("%s, %s: ValidateRequest = %v, want it to contain %q", action, name, err, tt.wantSub)
+			}
+		}
+	}
+}
+
+func TestDeleteEntry_RefusesABadName(t *testing.T) {
+	p, _ := newTestProvider(vault.NewMemStore())
+	if err := p.DeleteEntry("password/github "); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
+		t.Errorf("DeleteEntry = %v, want the space refused", err)
+	}
+}
+
+// Refused entries are named as --list names them, quoted so a stray space shows.
+func TestImport_ReportsRefusedEntriesByName(t *testing.T) {
+	p, _ := newTestProvider(vault.NewMemStore())
+	p.action, p.format = "import", "json"
+	p.stdin = strings.NewReader(`[{"service":"github ","type":"password","secret":"a"},
+		{"service":"gitlab","username":"alice","type":"password","secret":""},
+		{"service":"ok","type":"password","secret":"b"}]`)
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	for _, want := range []string{
+		"Imported 1 entry, 2 errors:",
+		`"github ": the service name "github " starts or ends with a space`,
+		`"gitlab" (alice): empty secret`,
+	} {
+		if !strings.Contains(creds.DisplayInfo, want) {
+			t.Errorf("DisplayInfo = %q, want it to contain %q", creds.DisplayInfo, want)
+		}
+	}
+}
+
+func TestImport_OneErrorIsSingular(t *testing.T) {
+	p, _ := newTestProvider(vault.NewMemStore())
+	p.action, p.format = "import", "json"
+	p.stdin = strings.NewReader(`[{"service":"github ","type":"password","secret":"a"}]`)
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if !strings.Contains(creds.DisplayInfo, "Imported 0 entries, 1 error:") {
+		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
+	}
+}

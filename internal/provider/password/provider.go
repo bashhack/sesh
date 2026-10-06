@@ -175,7 +175,21 @@ func (p *Provider) ValidateRequest() error {
 	default:
 		return fmt.Errorf("unknown action: %q (use store, get, search, generate, export, import, totp-store, totp-generate)", p.action)
 	}
-	return nil
+	return p.checkName()
+}
+
+// checkName refuses a service name or username the vault won't take, so an
+// action that names an entry stops before asking for anything.
+func (p *Provider) checkName() error {
+	kind := p.effectiveEntryType()
+	switch p.action {
+	case "store", "generate", "get":
+	case "totp-store", "totp-generate":
+		kind = password.EntryTypeTOTP
+	default:
+		return nil
+	}
+	return vault.Key{Kind: kind, Service: p.service, Username: p.username}.Validate()
 }
 
 // GetCredentials handles the main operation based on --action flag.
@@ -771,7 +785,11 @@ func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, e
 		fmt.Fprintf(&sb, ", skipped %d", result.Skipped)
 	}
 	if len(result.Errors) > 0 {
-		fmt.Fprintf(&sb, ", %d errors:", len(result.Errors))
+		if len(result.Errors) == 1 {
+			sb.WriteString(", 1 error:")
+		} else {
+			fmt.Fprintf(&sb, ", %d errors:", len(result.Errors))
+		}
 		for _, e := range result.Errors {
 			fmt.Fprintf(&sb, "\n  %s", e)
 		}

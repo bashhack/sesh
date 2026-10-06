@@ -1599,6 +1599,10 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			userInput:  "a/b\n\n",
 			wantErrMsg: `contains "/"`,
 		},
+		"service name too long": {
+			userInput:  strings.Repeat("s", 300) + "\n\n",
+			wantErrMsg: "the service name is 300 characters long; the most is 256",
+		},
 	}
 
 	for name, tc := range tests {
