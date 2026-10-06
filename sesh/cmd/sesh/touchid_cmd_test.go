@@ -101,7 +101,7 @@ func TestTouchID_OfferedAtFirstRunThenUnlocksWithoutAPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no touchid.key after accepting the offer: %v", err)
 	}
-	mat, err := database.ReadUnlockMaterial(filepath.Dir(dbPath))
+	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +354,7 @@ func TestRotate_RewrapsTouchIDUnlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mat, err := database.ReadUnlockMaterial(env.dataDir)
+	mat, err := database.ReadUnlockMaterial(env.dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,13 +373,13 @@ func TestRotate_RewrapsTouchIDUnlock(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Touch ID unlock now opens the vault with the new master password") {
 		t.Errorf("stderr missing the re-wrap note:\n%s", stderr.String())
 	}
-	newMat, err := database.ReadUnlockMaterial(env.dataDir)
+	newMat, err := database.ReadUnlockMaterial(env.dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f, err := touchid.ReadFile(env.dataDir)
 	if err != nil || f.UnlockID != agent.UnlockID(newMat.Verify) {
-		t.Fatalf("touchid.key after rotation: %+v, %v; want it bound to the new sidecar", f, err)
+		t.Fatalf("touchid.key after rotation: %+v, %v; want it bound to the new key record", f, err)
 	}
 	if string(f.BiometryState) != "enrolled fingerprints 1" {
 		t.Errorf("biometry state after rotation = %q, want it kept", f.BiometryState)

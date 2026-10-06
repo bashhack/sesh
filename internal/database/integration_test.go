@@ -42,10 +42,6 @@ func newIntegrationStore(t *testing.T) (*Store, *password.Manager) {
 		}
 	})
 
-	if err := store.InitKeyMetadata(); err != nil {
-		t.Fatal(err)
-	}
-
 	mgr := password.NewManager(store)
 	return store, mgr
 }

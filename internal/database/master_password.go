@@ -2,49 +2,27 @@ package database
 
 import (
 	"bytes"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/bashhack/sesh/internal/atomicfile"
 	"github.com/bashhack/sesh/internal/secure"
 )
 
-const (
-	sidecarFileName = "passwords.key"
-	sidecarVersion  = 1
-	// VerifyPlaintext is the known string sealed into the sidecar verify
-	// blob. A successful open under the derived key proves the password.
-	VerifyPlaintext = "sesh-verify"
-)
-
-// sidecarData is the on-disk format for the master password's KDF salt,
-// params, and verification blob. Nothing secret — the salt and params are
-// public (same model as bcrypt), and the verify blob is a known constant
-// encrypted with the derived key so we can check the password before
-// touching any real data.
-type sidecarData struct {
-	Salt      string         `json:"salt"`      // base64
-	Algorithm string         `json:"algorithm"` // "argon2id"
-	Verify    string         `json:"verify"`    // base64, AES-256-GCM(derived_key, "sesh-verify")
-	Params    Argon2idParams `json:"params"`
-	Version   int            `json:"version"`
-}
+// VerifyPlaintext is the known string sealed into the key record's verify
+// blob. A successful open under the derived key proves the password.
+const VerifyPlaintext = "sesh-verify"
 
 // PasswordPromptFunc is called to obtain the master password from the user.
 // Implementations should not echo the input.
 type PasswordPromptFunc func(prompt string) ([]byte, error)
 
 // MasterPasswordSource derives the encryption key from a user-supplied
-// passphrase via Argon2id. The KDF salt and a verification blob are stored
-// in a sidecar file alongside the DB.
+// passphrase via Argon2id, with the salt and settings in the vault's key
+// record (vault_key.go).
 type MasterPasswordSource struct {
 	// sf collapses concurrent slow-path Gets into a single Argon2id
 	// derivation. Without it, N goroutines arriving with an empty cache
@@ -54,12 +32,11 @@ type MasterPasswordSource struct {
 	// newPasswordCheck vets a new master password before it's confirmed;
 	// nil accepts any of at least 8 characters. See WithNewPasswordCheck.
 	newPasswordCheck func(pw []byte) error
-	// sidecarPath is the full path to the on-disk KDF state file. Stored
-	// directly (rather than being derived from a dataDir field) so that
-	// callers staging a rotation can point a target source at e.g.
-	// passwords.key.new while the source instance keeps reading from
-	// passwords.key. See NewMasterPasswordSourceAtPath.
-	sidecarPath string
+	// dbPath is the vault whose key record this source reads, or creates.
+	dbPath string
+	// unlockID names the key record the key was checked against (see
+	// UnlockID); "" until the first unlock. Guarded by mu.
+	unlockID string
 	// cachedKey holds the derived key after the first successful unlock.
 	// Scoped to the process lifetime only — cleared when Close() is called
 	// (or when the process exits). This avoids prompting the user on every
@@ -93,7 +70,8 @@ type Option func(*MasterPasswordSource)
 
 // WithMaxAttempts sets the maximum number of password prompts the unlock
 // loop will issue before giving up. Values < 1 are clamped to 1. Only
-// wrong-password failures are retried; sidecar/IO errors fail immediately.
+// wrong-password failures are retried; key record and I/O errors fail
+// immediately.
 //
 // The prompt callback must produce fresh user input on each invocation —
 // a callback that returns a constant value (e.g., one backed by an env
@@ -120,22 +98,11 @@ func WithNewPasswordCheck(check func(pw []byte) error) Option {
 	return func(s *MasterPasswordSource) { s.newPasswordCheck = check }
 }
 
-// NewMasterPasswordSource creates a MasterPasswordSource whose sidecar
-// lives at <dataDir>/passwords.key — the canonical layout used by the CLI.
-// Callers that need a non-canonical sidecar path (e.g., rotation staging)
-// should use NewMasterPasswordSourceAtPath directly.
-func NewMasterPasswordSource(dataDir string, prompt PasswordPromptFunc, opts ...Option) *MasterPasswordSource {
-	return NewMasterPasswordSourceAtPath(filepath.Join(dataDir, sidecarFileName), prompt, opts...)
-}
-
-// NewMasterPasswordSourceAtPath creates a MasterPasswordSource that reads
-// and writes its sidecar at the given absolute path. Useful when staging
-// a rotation: the source instance can point at passwords.key while a
-// target instance points at passwords.key.new, both running concurrently
-// without colliding.
-func NewMasterPasswordSourceAtPath(sidecarPath string, prompt PasswordPromptFunc, opts ...Option) *MasterPasswordSource {
+// NewMasterPasswordSource creates a MasterPasswordSource for the vault at
+// dbPath, which must be absolute.
+func NewMasterPasswordSource(dbPath string, prompt PasswordPromptFunc, opts ...Option) *MasterPasswordSource {
 	s := &MasterPasswordSource{
-		sidecarPath: sidecarPath,
+		dbPath:      dbPath,
 		promptFunc:  prompt,
 		maxAttempts: 1,
 	}
@@ -159,9 +126,9 @@ func (s *MasterPasswordSource) Close() {
 }
 
 // GetEncryptionKey prompts for the master password and derives the
-// encryption key. On first run (no sidecar), it prompts twice for
-// confirmation and creates the sidecar. On subsequent runs, it verifies the
-// password against the stored verification blob. The derived key is cached
+// encryption key. For a new vault it prompts twice for confirmation and
+// creates the vault with its key record. Otherwise it checks the password
+// against the key record's verify blob. The derived key is cached
 // for the lifetime of this source so repeated Get/Set operations within one
 // invocation do not re-prompt.
 //
@@ -218,88 +185,19 @@ func (s *MasterPasswordSource) GetEncryptionKey() ([]byte, error) {
 	return cloneKey(v.([]byte)), nil
 }
 
-// acquireKey decides whether to initialize a new sidecar or unlock an
-// existing one. First-run is serialized via flock so two concurrent sesh
-// invocations can't each generate a different salt and orphan one
-// process's derived key. Once the sidecar exists, unlock is salt-stable
-// and lock-free.
+// acquireKey unlocks the vault, or creates it when there is none yet.
 func (s *MasterPasswordSource) acquireKey() ([]byte, error) {
-	path := s.sidecarPath
-	_, err := os.Stat(path)
+	if !filepath.IsAbs(s.dbPath) {
+		return nil, fmt.Errorf("vault path must be absolute, got %q", s.dbPath)
+	}
+	m, err := ReadUnlockMaterial(s.dbPath)
 	switch {
 	case err == nil:
-		return s.unlock()
-	case !os.IsNotExist(err):
-		return nil, fmt.Errorf("check sidecar file: %w", err)
+		return s.unlock(m)
+	case !errors.Is(err, ErrNoVault):
+		return nil, err
 	}
-	return s.initializeLocked()
-}
-
-// initializeLocked serializes concurrent first-run invocations with an
-// advisory flock on <sidecar>.lock. The flock is auto-released when the
-// holding process exits, so crashes don't leave stale locks. After
-// acquiring the lock, the sidecar is re-checked — another process may
-// have created it while this one was blocked.
-func (s *MasterPasswordSource) initializeLocked() ([]byte, error) {
-	if !filepath.IsAbs(s.sidecarPath) {
-		return nil, fmt.Errorf("sidecar path must be absolute, got %q", s.sidecarPath)
-	}
-	sentinel := s.sidecarPath + ".lock"
-	lockFile, err := os.OpenFile(sentinel, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // sentinel is <abs-sidecar>.lock; abs check above
-	if err != nil {
-		return nil, fmt.Errorf("open sidecar lock: %w", err)
-	}
-	released := false
-	release := func() {
-		if released {
-			return
-		}
-		released = true
-		if cerr := lockFile.Close(); cerr != nil {
-			fmt.Fprintf(os.Stderr, "warning: release sidecar lock: %v\n", cerr)
-		}
-	}
-	defer func() {
-		release()
-		// Cleanup the sentinel only if the sidecar exists — meaning
-		// either we just wrote it via initialize(), or it existed when
-		// we re-stat'd. In both cases, no future invocation will enter
-		// initializeLocked again (acquireKey's stat at line 204 short-
-		// circuits to unlock when the sidecar is present), so the lock
-		// file is genuinely orphaned.
-		//
-		// Critically, we do NOT remove on error paths where the sidecar
-		// is still missing: a concurrent waiter blocked on our flock
-		// will acquire next and depend on the same lock file inode for
-		// serialization. Removing it would let a third arrival open a
-		// fresh inode and run initialize() in parallel.
-		if _, statErr := os.Stat(s.sidecarPath); statErr == nil {
-			if rerr := os.Remove(sentinel); rerr != nil && !os.IsNotExist(rerr) {
-				fmt.Fprintf(os.Stderr, "warning: remove sidecar lock: %v\n", rerr)
-			}
-		}
-	}()
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return nil, fmt.Errorf("acquire sidecar lock: %w", err)
-	}
-
-	switch _, err := os.Stat(s.sidecarPath); {
-	case err == nil:
-		// The flock's job was to serialize sidecar creation; with the
-		// sidecar already in place, drop it before falling into unlock()
-		// — the retry loop there can block for minutes on an interactive
-		// prompt and would otherwise stall any third concurrent invocation
-		// arriving at the lock.
-		release()
-		return s.unlock()
-	case os.IsNotExist(err):
-		return s.initialize()
-	default:
-		// A non-IsNotExist error here (permission denied, I/O) shouldn't
-		// trigger a fresh init that could overwrite an existing-but-
-		// unreadable sidecar.
-		return nil, fmt.Errorf("re-check sidecar file: %w", err)
-	}
+	return s.create()
 }
 
 func cloneKey(k []byte) []byte {
@@ -308,9 +206,10 @@ func cloneKey(k []byte) []byte {
 	return cp
 }
 
-// initialize handles the first-run case: prompt for password twice, generate
-// salt, derive key, write sidecar.
-func (s *MasterPasswordSource) initialize() ([]byte, error) {
+// create asks for a new master password, derives the key from it and a
+// new salt, and records the key record in a new vault. When another sesh
+// recorded one first, the password typed here is tried against that one.
+func (s *MasterPasswordSource) create() ([]byte, error) {
 	pw, err := s.newPassword()
 	if err != nil {
 		return nil, err
@@ -331,47 +230,68 @@ func (s *MasterPasswordSource) initialize() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	params := DefaultArgon2idParams()
 	key := DeriveKey(pw, salt, params)
-
-	verifyBlob, err := Encrypt(key, []byte(VerifyPlaintext))
+	verify, err := Encrypt(key, []byte(VerifyPlaintext))
 	if err != nil {
 		secure.SecureZeroBytes(key)
 		return nil, fmt.Errorf("create verify blob: %w", err)
 	}
 
-	data := sidecarData{
-		Version:   sidecarVersion,
-		Salt:      base64.StdEncoding.EncodeToString(salt),
-		Algorithm: "argon2id",
-		Params:    params,
-		Verify:    base64.StdEncoding.EncodeToString(verifyBlob),
-	}
-
-	if err := s.writeSidecar(data); err != nil {
+	db, err := openDB(s.dbPath)
+	if err != nil {
 		secure.SecureZeroBytes(key)
 		return nil, err
 	}
+	defer db.Close() //nolint:errcheck // only the key record was written, and that's committed
+	recorded, err := writeKeyRecord(db, UnlockMaterial{Salt: salt, Verify: verify, Params: params})
+	if err != nil || recorded {
+		if err != nil {
+			secure.SecureZeroBytes(key)
+			return nil, err
+		}
+		s.checkedAgainst(verify)
+		return key, nil
+	}
+	secure.SecureZeroBytes(key)
 
+	// Another sesh created the vault while this one asked for a password.
+	m, err := readKeyRecord(db, s.dbPath)
+	if err != nil {
+		return nil, err
+	}
+	key = DeriveKey(pw, m.Salt, m.Params)
+	if _, err := Decrypt(key, m.Verify); err != nil {
+		secure.SecureZeroBytes(key)
+		return nil, errors.New("another sesh command created this vault at the same time, with a different master password; run this again and enter that one")
+	}
+	s.checkedAgainst(m.Verify)
 	return key, nil
 }
 
-// unlock handles the normal case: read sidecar, prompt for password, verify, return key.
-func (s *MasterPasswordSource) unlock() ([]byte, error) {
-	data, err := s.readSidecar()
+// UnlockID is the id of the key record this source's key was checked
+// against, unlocking first if it hasn't yet.
+func (s *MasterPasswordSource) UnlockID() (string, error) {
+	key, err := s.GetEncryptionKey()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
+	secure.SecureZeroBytes(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.unlockID, nil
+}
 
-	// Validated before prompting so a sidecar that can't possibly verify
-	// doesn't cost a prompt and an Argon2id run.
-	mat, err := decodeUnlockMaterial(data)
-	if err != nil {
-		return nil, err
-	}
-	salt, verifyBlob := mat.Salt, mat.Verify
+// checkedAgainst records that the key was checked against verify.
+func (s *MasterPasswordSource) checkedAgainst(verify []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unlockID = UnlockID(verify)
+}
 
+// unlock asks for the master password and checks it against the key
+// record m, returning the key.
+func (s *MasterPasswordSource) unlock(m UnlockMaterial) ([]byte, error) {
 	attempts := max(s.maxAttempts, 1)
 
 	for i := range attempts {
@@ -388,13 +308,14 @@ func (s *MasterPasswordSource) unlock() ([]byte, error) {
 			return nil, fmt.Errorf("read password: %w", err)
 		}
 
-		key := DeriveKey(pw, salt, data.Params)
+		key := DeriveKey(pw, m.Salt, m.Params)
 		secure.SecureZeroBytes(pw)
 
 		// AES-GCM authentication is what guarantees "this plaintext was
 		// produced by encryption under this key" — a successful Decrypt is
 		// already proof of the right master password.
-		if _, err := Decrypt(key, verifyBlob); err == nil {
+		if _, err := Decrypt(key, m.Verify); err == nil {
+			s.checkedAgainst(m.Verify)
 			return key, nil
 		}
 		secure.SecureZeroBytes(key)
@@ -409,43 +330,6 @@ func (s *MasterPasswordSource) unlock() ([]byte, error) {
 // ErrWrongPassword means every master password attempt failed.
 var ErrWrongPassword = errors.New("wrong master password")
 
-func (s *MasterPasswordSource) writeSidecar(data sidecarData) error {
-	b, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal sidecar: %w", err)
-	}
-
-	// Replaced atomically and durably: a crash leaves the old sidecar (or
-	// none, on the first run), never an empty one, which would lock the
-	// vault.
-	if err := atomicfile.Write(s.sidecarPath, b, 0o600); err != nil {
-		return fmt.Errorf("write sidecar: %w", err)
-	}
-	return nil
-}
-
-func (s *MasterPasswordSource) readSidecar() (sidecarData, error) {
-	return readSidecarFile(s.sidecarPath)
-}
-
-// UnlockMaterial is the public sidecar fields an agent unlock needs.
-// Nothing here is the master key.
-type UnlockMaterial struct {
-	Salt   []byte
-	Verify []byte
-	Params Argon2idParams
-}
-
-// ReadUnlockMaterial loads the sidecar next to a data directory and
-// returns the salt, KDF params, and verify blob.
-func ReadUnlockMaterial(dataDir string) (UnlockMaterial, error) {
-	data, err := readSidecarFile(filepath.Join(dataDir, sidecarFileName))
-	if err != nil {
-		return UnlockMaterial{}, err
-	}
-	return decodeUnlockMaterial(data)
-}
-
 const (
 	// minSaltLen is the shortest KDF salt an unlock accepts.
 	minSaltLen = 16
@@ -459,57 +343,16 @@ const (
 // exactly the same material.
 func ValidateUnlockMaterial(salt, verify []byte, params Argon2idParams) error {
 	if len(salt) < minSaltLen {
-		return fmt.Errorf("sidecar salt too short: %d bytes (min %d)", len(salt), minSaltLen)
+		return fmt.Errorf("salt too short: %d bytes (min %d)", len(salt), minSaltLen)
 	}
 	if len(verify) < minVerifyLen {
-		return fmt.Errorf("sidecar verify blob too short: %d bytes (min %d)", len(verify), minVerifyLen)
+		return fmt.Errorf("verify blob too short: %d bytes (min %d)", len(verify), minVerifyLen)
 	}
 	return validateArgon2idBounds(params)
 }
 
-// decodeUnlockMaterial decodes a sidecar's salt and verify blob and
-// validates them with its params.
-func decodeUnlockMaterial(data sidecarData) (UnlockMaterial, error) {
-	salt, err := base64.StdEncoding.DecodeString(data.Salt)
-	if err != nil {
-		return UnlockMaterial{}, fmt.Errorf("decode salt: %w", err)
-	}
-	verify, err := base64.StdEncoding.DecodeString(data.Verify)
-	if err != nil {
-		return UnlockMaterial{}, fmt.Errorf("decode verify blob: %w", err)
-	}
-	if err := ValidateUnlockMaterial(salt, verify, data.Params); err != nil {
-		return UnlockMaterial{}, err
-	}
-	return UnlockMaterial{Salt: salt, Verify: verify, Params: data.Params}, nil
-}
-
-func readSidecarFile(path string) (sidecarData, error) {
-	b, err := os.ReadFile(path) //nolint:gosec // path is <dataDir>/passwords.key; dataDir is caller-controlled via NewMasterPasswordSource
-	if err != nil {
-		return sidecarData{}, fmt.Errorf("read sidecar: %w", err)
-	}
-
-	var data sidecarData
-	if err := json.Unmarshal(b, &data); err != nil {
-		return sidecarData{}, fmt.Errorf("parse sidecar: %w", err)
-	}
-
-	if data.Version != sidecarVersion {
-		return sidecarData{}, fmt.Errorf("unsupported sidecar version %d (expected %d)", data.Version, sidecarVersion)
-	}
-	if data.Algorithm != "argon2id" {
-		return sidecarData{}, fmt.Errorf("unsupported sidecar algorithm %q", data.Algorithm)
-	}
-	if err := validateArgon2idBounds(data.Params); err != nil {
-		return sidecarData{}, err
-	}
-
-	return data, nil
-}
-
 // validateArgon2idBounds bounds-checks Argon2id parameters read from a
-// sidecar or an unlock request. A corrupted or hostile value could
+// key record or an unlock request. A corrupted or hostile value could
 // otherwise trigger a memory DoS.
 func validateArgon2idBounds(p Argon2idParams) error {
 	const (
@@ -518,16 +361,16 @@ func validateArgon2idBounds(p Argon2idParams) error {
 		maxThreads   = 16
 	)
 	if p.Memory == 0 || p.Memory > maxMemoryKiB {
-		return fmt.Errorf("sidecar memory param out of range: %d KiB (max %d)", p.Memory, maxMemoryKiB)
+		return fmt.Errorf("memory setting out of range: %d KiB (max %d)", p.Memory, maxMemoryKiB)
 	}
 	if p.Time == 0 || p.Time > maxTime {
-		return fmt.Errorf("sidecar time param out of range: %d (max %d)", p.Time, maxTime)
+		return fmt.Errorf("time setting out of range: %d (max %d)", p.Time, maxTime)
 	}
 	if p.Threads == 0 || p.Threads > maxThreads {
-		return fmt.Errorf("sidecar threads param out of range: %d (max %d)", p.Threads, maxThreads)
+		return fmt.Errorf("threads setting out of range: %d (max %d)", p.Threads, maxThreads)
 	}
 	if p.KeyLen != 32 {
-		return fmt.Errorf("sidecar key_len must be 32, got %d", p.KeyLen)
+		return fmt.Errorf("key_len must be 32, got %d", p.KeyLen)
 	}
 	return nil
 }

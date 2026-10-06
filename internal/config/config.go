@@ -264,16 +264,11 @@ func setPath(dst *Setting[string], v string, src Source, origin string) error {
 	return nil
 }
 
-// reservedVaultNames are files sesh keeps next to the vault: the master
-// password sidecar and its lock (internal/database), the Touch ID and
-// recovery files (internal/touchid, internal/recovery), and what a
-// password change stages, backs up, and locks while it runs
-// (sesh/cmd/sesh/rekey.go). A vault with one of these names would be
-// overwritten or removed by one of them.
-var reservedVaultNames = []string{
-	"passwords.key", "passwords.key.lock", "touchid.key", "recovery.key",
-	"passwords.key.new", "passwords.key.new.lock", "passwords.key.pre-rotate", ".key-change.lock",
-}
+// reservedVaultNames are files sesh keeps next to the vault: the Touch ID
+// and recovery files (internal/touchid, internal/recovery), and the lock a
+// key change holds (sesh/cmd/sesh/rekey.go). A vault with one of these
+// names would be overwritten by one of them.
+var reservedVaultNames = []string{"touchid.key", "recovery.key", ".key-change.lock"}
 
 // setDBPath is setPath for the vault's location, which also refuses a file
 // name sesh uses for its own files next to the vault.

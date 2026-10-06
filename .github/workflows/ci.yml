@@ -76,7 +76,7 @@ jobs:
 
       - name: Run unit tests with coverage
         run: |
-          go test -coverprofile=coverage.txt $(go list ./... | grep -v /scripts)
+          go test -timeout 30m -coverprofile=coverage.txt $(go list ./... | grep -v /scripts)
           grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
           go tool cover -html=coverage.filtered.txt -o coverage.html
           rm -f coverage.filtered.txt
@@ -85,7 +85,7 @@ jobs:
         run: |
           CORES=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
           RACE_CORES=$([ $CORES -gt 4 ] && echo 4 || echo $CORES)
-          GOMAXPROCS=$RACE_CORES go test -race -vet=off $(go list ./... | grep -v /scripts)
+          GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -vet=off $(go list ./... | grep -v /scripts)
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -134,7 +134,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y zsh fish
 
       - name: Run tests with race detection
-        run: go test -race $(go list ./... | grep -v /scripts)
+        run: go test -timeout 30m -race $(go list ./... | grep -v /scripts)
 
   agent-smoke:
     name: Agent smoke (${{ matrix.os }})

@@ -153,7 +153,7 @@ max_lifetime = "8h"                     # 0 disables
 retention_days = 90                     # days of audit log events to keep; 0 keeps everything
 ```
 
-sesh keeps one vault per user. `db_path` says where that vault lives; it isn't a way to keep several. To keep things apart inside it, use profiles (`--profile work`) and service names.
+sesh keeps one vault per user. `db_path` says where that vault lives; it isn't a way to keep several. To keep things apart inside it, use profiles (`--profile work`) and service names. If you do make a second vault, give it its own folder: Touch ID unlock and the recovery key are kept per folder. sesh refuses a `db_path` that points at another program's SQLite database, and leaves that file unchanged.
 
 Each setting comes from, highest first: a command-line flag (`--db-path`; the agent's timeouts also have `sesh agent` flags), its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
 
@@ -172,7 +172,7 @@ Ready. Run `sesh config` to see your settings.
 
 - For scripts, give the location as a flag: `sesh init --db-path ~/vaults/sesh.db`. The master password for the new vault then comes from `SESH_MASTER_PASSWORD`.
 - An existing config file is never replaced without `--force`.
-- An existing vault at the chosen location is opened, not recreated. If it can't be opened (its `passwords.key` is missing, say), init stops and writes nothing.
+- An existing vault at the chosen location is opened, not recreated. If it can't be opened (it's damaged, say), init stops and writes nothing.
 
 `sesh config` prints each effective setting and where it came from:
 
@@ -245,7 +245,7 @@ db_path               /Users/me/vaults/sesh.db
 | Variable                | Description                                        | Default          |
 |-------------------------|----------------------------------------------------|------------------|
 | `AWS_PROFILE`          | Default AWS profile                                | `default`        |
-| `SESH_DB_PATH`         | Vault location (config: `db_path`). `passwords.key` sits next to it | `~/Library/Application Support/sesh/passwords.db` (macOS), `$XDG_DATA_HOME/sesh/passwords.db` (Linux) |
+| `SESH_DB_PATH`         | Vault location (config: `db_path`) | `~/Library/Application Support/sesh/passwords.db` (macOS), `$XDG_DATA_HOME/sesh/passwords.db` (Linux) |
 | `SESH_CLIPBOARD_TIMEOUT` | How long a copied secret stays on the clipboard (config: `clipboard_timeout`) | `30s` |
 | `SESH_MASTER_PASSWORD` | Non-interactive master password (skips prompt). Intended for CI/scripting only — exposes the password via process environment | unset            |
 | `SESH_AUTH_SOCK`       | Socket path for the sesh agent | `<user-cache-dir>/sesh/agent.sock` |
@@ -255,7 +255,7 @@ db_path               /Users/me/vaults/sesh.db
 
 ## The Vault and Its Key
 
-Every secret lives in one encrypted vault file (SQLite, each entry encrypted with AES-256-GCM). Its key is derived from your master password via Argon2id, with the salt in the `passwords.key` sidecar (0600) next to the vault. It works the same on macOS and Linux. `sesh --rekey` changes the master password.
+Every secret lives in one encrypted vault file (SQLite, each entry encrypted with AES-256-GCM). Its key is derived from your master password via Argon2id, with the salt and settings kept in the vault file too, so the vault is that one file. It works the same on macOS and Linux. `sesh --rekey` changes the master password.
 
 ### Using the master password
 
@@ -286,7 +286,7 @@ Creating the vault also unlocks the background `sesh agent` with the new passwor
 
 Secrets are limited to 1 MiB each.
 
-The sidecar file `passwords.key` lives next to the SQLite database. It contains the KDF salt, Argon2id parameters, and a verification blob (not a password hash) — nothing secret. Keep it with the database when moving between machines; without it, the database cannot be unlocked even with the correct password.
+Next to the encrypted entries, the vault file holds the KDF salt, the Argon2id settings, and a verification blob (not a password hash): nothing secret, and everything needed to unlock it with your password. With no sesh command running, copying `passwords.db` (and its `-wal` file, if a crash left one) copies everything your master password needs to open the vault. A recovery key is kept in `recovery.key` beside it.
 
 #### Scripts and CI
 
@@ -315,18 +315,19 @@ sesh can't reset it for you: the master password derives the vault's key, sesh d
 
 - **Start over with an empty vault.** First stop the agent with `sesh agent stop`, and finish any other sesh command. Then move the vault aside **with every file that belongs to it**:
   - the database;
-  - its SQLite `-wal` and `-shm` files, if present (after a crash they can hold changes not yet in the database);
-  - `passwords.key`.
+  - its SQLite `-wal` and `-shm` files, if present. After a crash they can hold changes not yet in the database, and SQLite would apply a leftover `-wal` file to the new vault;
+  - `recovery.key` and `touchid.key`, if present. They belong to the old vault, and the new one isn't offered them while they're there.
 
   `sesh config` shows the vault's path. Keep the old files together, in case the password comes back to you:
 
   ```bash
   cd ~/Library/Application\ Support/sesh     # Linux: ~/.local/share/sesh
   mkdir forgotten
-  mv passwords.db* passwords.key forgotten/
+  mv passwords.db* forgotten/
+  mv recovery.key touchid.key forgotten/       # whichever of these exist
   ```
 
-  The next command creates a new vault. sesh never deletes a vault for you. It refuses to create a new key next to an existing vault, so moving only some of the files won't work.
+  The next command creates a new vault. sesh never deletes a vault for you.
 
 To avoid ending up here, make a recovery key, keep the master password somewhere safe, and make an encrypted export from time to time (see [Encrypted exports](#encrypted-exports)).
 
@@ -528,18 +529,12 @@ sesh --rekey
 
 Behaviour:
 
-- **Atomic.** Either every entry is re-encrypted and both the DB + sidecar are swapped, or nothing changes. A copy failure cleans up the staging files and leaves the originals untouched.
-- **No old copy left behind.** While it runs, the old vault and key file are kept as `.pre-rotate`, so a failure puts them back. Once the new vault is in place, and has been checked to open with the new key and hold every entry, they're removed: a copy would let the old password, perhaps the reason you changed it, open your secrets. If you forget the new password, your recovery key sets another (see [Recovery key](#recovery-key)).
-- **Tidies up after older versions.** Files an earlier change left behind (older sesh versions kept the `.pre-rotate` copies; an interrupted change can leave `.new` files) are removed once your current password is verified, and sesh says which.
-- **Same Argon2id parameters as the original sidecar.** Rotation generates a new salt and re-derives, but does not bump KDF cost parameters. If you want to upgrade those, that's a separate operation (currently via encrypted export → import with a fresh sidecar).
+- **Atomic.** Either every entry is re-encrypted and the new vault replaces the old one, or nothing changes. A copy failure cleans up the staging files and leaves the originals untouched.
+- **No old copy left behind.** While it runs, the old vault is kept as `.pre-rotate`, so a failure puts it back. Once the new vault is in place, and has been checked to open with the new key and hold every entry, it's removed: a copy would let the old password, perhaps the reason you changed it, open your secrets. If you forget the new password, your recovery key sets another (see [Recovery key](#recovery-key)).
+- **Tidies up.** Files an earlier change left behind (an interrupted change can leave `.new` and `.pre-rotate` files, with their SQLite `-wal` and `-shm` files) are removed once your current password is verified, and sesh says which.
+- **A new salt.** The new vault's key comes from a new salt, with sesh's Argon2id settings.
 
-**The vault checks its key.** Every vault stores a small value encrypted with its key. Each command decrypts that value before it reads or writes anything, so a wrong key is refused instead of being used:
-
-- **`passwords.key` replaced:** `the master password key in use is not the one this vault was created with`. Restore the original.
-- **`passwords.key` missing next to an existing vault:** sesh won't create a new master password there. It stops, says the key file is missing, and says how to recover.
-- **A vault from a development build that kept its key in the macOS Keychain:** `this vault's key was kept in the macOS Keychain, which sesh no longer supports`. Start a new vault by moving it aside.
-
-A vault created before this check gets its check value the first time one of its entries decrypts.
+**A vault that has lost its key record** (only damage does this) is refused: `the vault at … holds entries but not the record its key is made from, so it can't be opened; restore it from a backup`. sesh never makes a new key for a vault that holds entries.
 
 
 ## Usage Patterns

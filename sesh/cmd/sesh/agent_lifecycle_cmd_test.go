@@ -186,9 +186,9 @@ func TestAgentControl_NoAgentRunning(t *testing.T) {
 
 func TestAgentControl_LockStatusStop(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "correct-horse")
+	writeLightVault(t, dir, "correct-horse")
 	startTestAgent(t)
-	ks, _, err := keySourceFromAgent(dir, fixedPrompt("correct-horse"))
+	ks, _, err := keySourceFromAgent(vaultIn(dir), fixedPrompt("correct-horse"))
 	if err != nil || ks == nil {
 		t.Fatalf("unlock agent: %v", err)
 	}

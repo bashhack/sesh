@@ -10,6 +10,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -136,10 +137,8 @@ func TestOpenSQLiteStore_ConfigFileAlone(t *testing.T) {
 	if err := closer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{vaultPath, filepath.Join(filepath.Dir(vaultPath), sidecarFile)} {
-		if _, err := os.Stat(p); err != nil {
-			t.Errorf("%s not created: %v", p, err)
-		}
+	if _, err := database.ReadUnlockMaterial(vaultPath); err != nil {
+		t.Errorf("the vault wasn't created: %v", err)
 	}
 }
 

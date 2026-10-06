@@ -33,7 +33,7 @@ func DefaultArgon2idParams() Argon2idParams {
 	}
 }
 
-// MarshalParams serialises Argon2id parameters to JSON for storage in key_metadata.
+// MarshalParams serialises Argon2id parameters to JSON for the vault's key record.
 // The struct is composed of fixed-width integers, so json.Marshal cannot fail for
 // any valid Argon2idParams value — a non-nil error here indicates a programming
 // bug (e.g. someone added an unmarshalable field).

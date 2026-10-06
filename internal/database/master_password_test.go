@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -27,51 +26,17 @@ func staticPrompt(passwords ...string) PasswordPromptFunc {
 	}
 }
 
-func TestMasterPasswordSource_FirstRunCreatesSidecar(t *testing.T) {
-	dir := t.TempDir()
-	src := NewMasterPasswordSource(dir, staticPrompt("correct-horse-battery-staple", "correct-horse-battery-staple"))
-
-	key, err := src.GetEncryptionKey()
-	if err != nil {
-		t.Fatalf("GetEncryptionKey: %v", err)
-	}
-	if len(key) != 32 {
-		t.Fatalf("expected 32-byte key, got %d", len(key))
-	}
-
-	if _, err := os.Stat(filepath.Join(dir, sidecarFileName)); err != nil {
-		t.Fatalf("sidecar should exist after first run: %v", err)
-	}
-}
-
-func TestMasterPasswordSource_SidecarPermissions(t *testing.T) {
-	dir := t.TempDir()
-	src := NewMasterPasswordSource(dir, staticPrompt("hunter2-password-secure", "hunter2-password-secure"))
-
-	if _, err := src.GetEncryptionKey(); err != nil {
-		t.Fatal(err)
-	}
-
-	info, err := os.Stat(filepath.Join(dir, sidecarFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("sidecar permissions should be 0600, got %o", perm)
-	}
-}
-
 func TestMasterPasswordSource_SecondRunReturnsSameKey(t *testing.T) {
 	dir := t.TempDir()
 	password := "my-master-password"
 
-	src1 := NewMasterPasswordSource(dir, staticPrompt(password, password))
+	src1 := NewMasterPasswordSource(vaultPath(dir), staticPrompt(password, password))
 	key1, err := src1.GetEncryptionKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	src2 := NewMasterPasswordSource(dir, staticPrompt(password))
+	src2 := NewMasterPasswordSource(vaultPath(dir), staticPrompt(password))
 	key2, err := src2.GetEncryptionKey()
 	if err != nil {
 		t.Fatalf("second unlock: %v", err)
@@ -85,12 +50,12 @@ func TestMasterPasswordSource_SecondRunReturnsSameKey(t *testing.T) {
 func TestMasterPasswordSource_WrongPasswordRejected(t *testing.T) {
 	dir := t.TempDir()
 
-	src1 := NewMasterPasswordSource(dir, staticPrompt("original", "original"))
+	src1 := NewMasterPasswordSource(vaultPath(dir), staticPrompt("original", "original"))
 	if _, err := src1.GetEncryptionKey(); err != nil {
 		t.Fatal(err)
 	}
 
-	src2 := NewMasterPasswordSource(dir, staticPrompt("wrong-password"))
+	src2 := NewMasterPasswordSource(vaultPath(dir), staticPrompt("wrong-password"))
 	_, err := src2.GetEncryptionKey()
 	if err == nil {
 		t.Fatal("expected error for wrong password")
@@ -99,77 +64,25 @@ func TestMasterPasswordSource_WrongPasswordRejected(t *testing.T) {
 
 func TestMasterPasswordSource_MismatchedConfirmation(t *testing.T) {
 	dir := t.TempDir()
-	src := NewMasterPasswordSource(dir, staticPrompt("first-password", "different-password"))
+	src := NewMasterPasswordSource(vaultPath(dir), staticPrompt("first-password", "different-password"))
 
 	_, err := src.GetEncryptionKey()
 	if err == nil {
 		t.Fatal("expected error for mismatched confirmation")
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, sidecarFileName)); !os.IsNotExist(err) {
-		t.Fatal("sidecar should not be created when confirmation fails")
+	if _, err := os.Stat(vaultPath(dir)); !os.IsNotExist(err) {
+		t.Fatal("the vault should not be created when confirmation fails")
 	}
 }
 
 func TestMasterPasswordSource_RejectsTooShortPassword(t *testing.T) {
 	dir := t.TempDir()
-	src := NewMasterPasswordSource(dir, staticPrompt("short", "short"))
+	src := NewMasterPasswordSource(vaultPath(dir), staticPrompt("short", "short"))
 
 	_, err := src.GetEncryptionKey()
 	if err == nil {
 		t.Fatal("expected error for too-short password")
-	}
-}
-
-func TestMasterPasswordSource_UnsupportedVersion(t *testing.T) {
-	dir := t.TempDir()
-	bad := []byte(`{"version": 99, "algorithm": "argon2id", "salt": "", "params": {"time":3,"memory":65536,"threads":4,"key_len":32}, "verify": ""}`)
-	if err := os.WriteFile(filepath.Join(dir, sidecarFileName), bad, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	src := NewMasterPasswordSource(dir, staticPrompt("any-password"))
-	_, err := src.GetEncryptionKey()
-	if err == nil {
-		t.Fatal("expected error for unsupported version")
-	}
-}
-
-func TestMasterPasswordSource_UnsupportedAlgorithm(t *testing.T) {
-	dir := t.TempDir()
-	bad := []byte(`{"version": 1, "algorithm": "scrypt", "salt": "", "params": {"time":3,"memory":65536,"threads":4,"key_len":32}, "verify": ""}`)
-	if err := os.WriteFile(filepath.Join(dir, sidecarFileName), bad, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	src := NewMasterPasswordSource(dir, staticPrompt("any-password"))
-	_, err := src.GetEncryptionKey()
-	if err == nil {
-		t.Fatal("expected error for unsupported algorithm")
-	}
-}
-
-func TestMasterPasswordSource_RejectsOutOfRangeParams(t *testing.T) {
-	tests := map[string]string{
-		"zero memory":   `{"version":1,"algorithm":"argon2id","salt":"","verify":"","params":{"time":3,"memory":0,"threads":4,"key_len":32}}`,
-		"huge memory":   `{"version":1,"algorithm":"argon2id","salt":"","verify":"","params":{"time":3,"memory":2147483647,"threads":4,"key_len":32}}`,
-		"zero threads":  `{"version":1,"algorithm":"argon2id","salt":"","verify":"","params":{"time":3,"memory":65536,"threads":0,"key_len":32}}`,
-		"huge time":     `{"version":1,"algorithm":"argon2id","salt":"","verify":"","params":{"time":999,"memory":65536,"threads":4,"key_len":32}}`,
-		"wrong key_len": `{"version":1,"algorithm":"argon2id","salt":"","verify":"","params":{"time":3,"memory":65536,"threads":4,"key_len":16}}`,
-	}
-
-	for name, body := range tests {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, sidecarFileName), []byte(body), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			src := NewMasterPasswordSource(dir, staticPrompt("any-password"))
-			_, err := src.GetEncryptionKey()
-			if err == nil {
-				t.Fatal("expected error for out-of-range params")
-			}
-		})
 	}
 }
 
@@ -183,7 +96,7 @@ func TestMasterPasswordSource_CachesKeyAcrossCalls(t *testing.T) {
 		return []byte(password), nil
 	}
 
-	src := NewMasterPasswordSource(dir, prompt)
+	src := NewMasterPasswordSource(vaultPath(dir), prompt)
 
 	// First call: prompts twice (create + confirm), derives key
 	key1, err := src.GetEncryptionKey()
@@ -238,7 +151,7 @@ func TestMasterPasswordSource_ConcurrentFirstRunSerialized(t *testing.T) {
 	for i := range N {
 		go func(idx int) {
 			defer done.Done()
-			src := NewMasterPasswordSource(dir, prompt)
+			src := NewMasterPasswordSource(vaultPath(dir), prompt)
 			start.Wait()
 			keys[idx], errs[idx] = src.GetEncryptionKey()
 		}(i)
@@ -254,12 +167,12 @@ func TestMasterPasswordSource_ConcurrentFirstRunSerialized(t *testing.T) {
 
 	for i := 1; i < N; i++ {
 		if !bytes.Equal(keys[0], keys[i]) {
-			t.Fatalf("goroutine %d derived a different key — flock did not serialize first run", i)
+			t.Fatalf("goroutine %d derived a different key", i)
 		}
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, sidecarFileName)); err != nil {
-		t.Fatalf("sidecar missing after concurrent init: %v", err)
+	if _, err := ReadUnlockMaterial(vaultPath(dir)); err != nil {
+		t.Fatalf("no key record after concurrent init: %v", err)
 	}
 }
 
@@ -270,7 +183,7 @@ func TestMasterPasswordSourceHelperProcess(t *testing.T) {
 	dir := os.Getenv("SESH_TEST_MP_DIR")
 	password := os.Getenv("SESH_TEST_MP_PASSWORD")
 
-	src := NewMasterPasswordSource(dir, func(_ string) ([]byte, error) {
+	src := NewMasterPasswordSource(vaultPath(dir), func(_ string) ([]byte, error) {
 		return []byte(password), nil
 	})
 
@@ -323,7 +236,7 @@ func TestMasterPasswordSource_ConcurrentFirstRunMultiProcess(t *testing.T) {
 	}
 	for i := 1; i < N; i++ {
 		if outs[i].String() != first {
-			t.Fatalf("process %d derived a different key — flock did not serialize across processes\n  process 0: %s\n  process %d: %s", i, first, i, outs[i].String())
+			t.Fatalf("process %d derived a different key\n  process 0: %s\n  process %d: %s", i, first, i, outs[i].String())
 		}
 	}
 }
@@ -333,7 +246,7 @@ func TestMasterPasswordSource_ConcurrentGetAndCloseAreSafe(t *testing.T) {
 	var prompt PasswordPromptFunc = func(_ string) ([]byte, error) {
 		return []byte("test-password-12345"), nil
 	}
-	src := NewMasterPasswordSource(dir, prompt)
+	src := NewMasterPasswordSource(vaultPath(dir), prompt)
 	if _, err := src.GetEncryptionKey(); err != nil {
 		t.Fatal(err)
 	}
@@ -355,50 +268,7 @@ func TestMasterPasswordSource_ConcurrentGetAndCloseAreSafe(t *testing.T) {
 	wg.Wait()
 }
 
-func TestMasterPasswordSource_RejectsShortSalt(t *testing.T) {
-	dir := t.TempDir()
-	bad := []byte(`{"version":1,"algorithm":"argon2id","salt":"AQID","verify":"","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`)
-	if err := os.WriteFile(filepath.Join(dir, sidecarFileName), bad, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	called := false
-	prompt := func(_ string) ([]byte, error) {
-		called = true
-		return []byte("password"), nil
-	}
-	src := NewMasterPasswordSource(dir, prompt)
-	_, err := src.GetEncryptionKey()
-	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("salt too short")) {
-		t.Fatalf("expected salt-too-short error, got %v", err)
-	}
-	if called {
-		t.Errorf("prompt should not be called when sidecar fails sanity checks")
-	}
-}
-
-func TestMasterPasswordSource_RejectsShortVerify(t *testing.T) {
-	dir := t.TempDir()
-	saltB64 := "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="
-	bad := []byte(`{"version":1,"algorithm":"argon2id","salt":"` + saltB64 + `","verify":"AQID","params":{"time":3,"memory":65536,"threads":4,"key_len":32}}`)
-	if err := os.WriteFile(filepath.Join(dir, sidecarFileName), bad, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	called := false
-	prompt := func(_ string) ([]byte, error) {
-		called = true
-		return []byte("password"), nil
-	}
-	src := NewMasterPasswordSource(dir, prompt)
-	_, err := src.GetEncryptionKey()
-	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("verify blob too short")) {
-		t.Fatalf("expected verify-too-short error, got %v", err)
-	}
-	if called {
-		t.Errorf("prompt should not be called when sidecar fails sanity checks")
-	}
-}
-
-func TestMasterPasswordSource_RejectsNonAbsoluteSidecarPath(t *testing.T) {
+func TestMasterPasswordSource_RejectsNonAbsoluteVaultPath(t *testing.T) {
 	src := NewMasterPasswordSource("relative/path", staticPrompt("password-12345", "password-12345"))
 	_, err := src.GetEncryptionKey()
 	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("must be absolute")) {
@@ -406,111 +276,23 @@ func TestMasterPasswordSource_RejectsNonAbsoluteSidecarPath(t *testing.T) {
 	}
 }
 
-func TestMasterPasswordSource_SidecarHasNoSecrets(t *testing.T) {
-	dir := t.TempDir()
-	password := "super-secret-password-12345"
-	src := NewMasterPasswordSource(dir, staticPrompt(password, password))
-
-	if _, err := src.GetEncryptionKey(); err != nil {
-		t.Fatal(err)
-	}
-
-	b, err := os.ReadFile(filepath.Join(dir, sidecarFileName))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if bytes.Contains(b, []byte(password)) {
-		t.Fatal("sidecar contains the master password in plaintext")
-	}
-}
-
-func TestInitializeLocked_RemovesLockFileAfterFirstInit(t *testing.T) {
-	// The .lock sentinel created by initializeLocked exists only to host
-	// an advisory flock during concurrent first-run. Once first-init has
-	// committed the sidecar, no future invocation will ever flock against
-	// this file again (acquireKey only enters initializeLocked when the
-	// sidecar doesn't exist, and the sidecar exists from now on). Leaving
-	// the .lock file on disk is harmless but noisy — clean it up.
-	dir := t.TempDir()
-	src := NewMasterPasswordSource(dir, staticPrompt("first-init-pw", "first-init-pw"))
-	defer src.Close()
-
-	key, err := src.GetEncryptionKey()
-	if err != nil {
-		t.Fatalf("first-init GetEncryptionKey: %v", err)
-	}
-	secure.SecureZeroBytes(key)
-
-	lockPath := filepath.Join(dir, sidecarFileName+".lock")
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Errorf("lock file %s should be removed after successful first-init, got stat err %v", lockPath, err)
-	}
-}
-
-func TestInitializeLocked_PreservesLockFileWhenInitFails(t *testing.T) {
-	// Safety property: when initialize() errors before writing the
-	// sidecar, the lock file MUST remain on disk so concurrent
-	// initializers stay serialized. Removing the lock file in error
-	// paths would let a new arrival open a fresh inode and run
-	// initialize() in parallel with an in-flight retry — racing on
-	// who writes the sidecar.
-	dir := t.TempDir()
-	src := NewMasterPasswordSource(dir, staticPrompt("create-pw-1234", "different-pw-5678"))
-	defer src.Close()
-
-	_, err := src.GetEncryptionKey()
-	if err == nil || !strings.Contains(err.Error(), "passwords do not match") {
-		t.Fatalf("expected passwords-do-not-match error, got %v", err)
-	}
-	lockPath := filepath.Join(dir, sidecarFileName+".lock")
-	if _, statErr := os.Stat(lockPath); statErr != nil {
-		t.Errorf("lock file %s should be preserved after init error (sidecar not yet written): %v", lockPath, statErr)
-	}
-	// And confirm the sidecar truly wasn't written, so the test setup
-	// matches its premise.
-	if _, statErr := os.Stat(filepath.Join(dir, sidecarFileName)); !os.IsNotExist(statErr) {
-		t.Errorf("sidecar should not exist after init error: %v", statErr)
-	}
-}
-
-func TestNewMasterPasswordSourceAtPath_HonorsCustomPath(t *testing.T) {
-	dir := t.TempDir()
-	customPath := filepath.Join(dir, "custom-name.key")
-	src := NewMasterPasswordSourceAtPath(customPath, staticPrompt("rotation-target", "rotation-target"))
-	defer src.Close()
-
-	key, err := src.GetEncryptionKey()
-	if err != nil {
-		t.Fatalf("GetEncryptionKey: %v", err)
-	}
-	secure.SecureZeroBytes(key)
-
-	if _, err := os.Stat(customPath); err != nil {
-		t.Errorf("sidecar should be at custom path %q: %v", customPath, err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, sidecarFileName)); !os.IsNotExist(err) {
-		t.Errorf("canonical sidecar path should not be touched when custom path is given")
-	}
-}
-
-// seedSidecar creates a sidecar at dir whose master password is "right-one"
+// seedVault creates a vault in dir whose master password is "right-one"
 // so retry-loop tests can drive unlock() directly without re-prompting twice
 // for the create+confirm flow.
-func seedSidecar(t *testing.T, dir string) {
+func seedVault(t *testing.T, dir string) {
 	t.Helper()
-	src := NewMasterPasswordSource(dir, staticPrompt("right-one", "right-one"))
+	src := NewMasterPasswordSource(vaultPath(dir), staticPrompt("right-one", "right-one"))
 	defer src.Close()
 	key, err := src.GetEncryptionKey()
 	if err != nil {
-		t.Fatalf("seed sidecar: %v", err)
+		t.Fatalf("seed vault: %v", err)
 	}
 	secure.SecureZeroBytes(key)
 }
 
 func TestMasterPasswordSource_RetriesWrongPasswordUntilCorrect(t *testing.T) {
 	dir := t.TempDir()
-	seedSidecar(t, dir)
+	seedVault(t, dir)
 
 	var seenPrompts []string
 	prompt := func(p string) ([]byte, error) {
@@ -525,7 +307,7 @@ func TestMasterPasswordSource_RetriesWrongPasswordUntilCorrect(t *testing.T) {
 		}
 	}
 
-	src := NewMasterPasswordSource(dir, prompt, WithMaxAttempts(3))
+	src := NewMasterPasswordSource(vaultPath(dir), prompt, WithMaxAttempts(3))
 	defer src.Close()
 
 	key, err := src.GetEncryptionKey()
@@ -561,7 +343,7 @@ func TestMasterPasswordSource_RetriesWrongPasswordUntilCorrect(t *testing.T) {
 
 func TestMasterPasswordSource_FailsAfterMaxAttempts(t *testing.T) {
 	dir := t.TempDir()
-	seedSidecar(t, dir)
+	seedVault(t, dir)
 
 	prompts := 0
 	prompt := func(_ string) ([]byte, error) {
@@ -569,7 +351,7 @@ func TestMasterPasswordSource_FailsAfterMaxAttempts(t *testing.T) {
 		return []byte("always-wrong"), nil
 	}
 
-	src := NewMasterPasswordSource(dir, prompt, WithMaxAttempts(3))
+	src := NewMasterPasswordSource(vaultPath(dir), prompt, WithMaxAttempts(3))
 	_, err := src.GetEncryptionKey()
 	if err == nil {
 		t.Fatal("expected error after exhausting attempts")
@@ -589,7 +371,7 @@ func TestMasterPasswordSource_FailsAfterMaxAttempts(t *testing.T) {
 
 func TestMasterPasswordSource_DefaultsToSingleAttempt(t *testing.T) {
 	dir := t.TempDir()
-	seedSidecar(t, dir)
+	seedVault(t, dir)
 
 	prompts := 0
 	prompt := func(_ string) ([]byte, error) {
@@ -597,7 +379,7 @@ func TestMasterPasswordSource_DefaultsToSingleAttempt(t *testing.T) {
 		return []byte("wrong"), nil
 	}
 
-	src := NewMasterPasswordSource(dir, prompt)
+	src := NewMasterPasswordSource(vaultPath(dir), prompt)
 	_, err := src.GetEncryptionKey()
 	if err == nil {
 		t.Fatal("expected error for wrong password")
@@ -609,7 +391,7 @@ func TestMasterPasswordSource_DefaultsToSingleAttempt(t *testing.T) {
 
 func TestMasterPasswordSource_PromptErrorBreaksLoop(t *testing.T) {
 	dir := t.TempDir()
-	seedSidecar(t, dir)
+	seedVault(t, dir)
 
 	prompts := 0
 	prompt := func(_ string) ([]byte, error) {
@@ -620,7 +402,7 @@ func TestMasterPasswordSource_PromptErrorBreaksLoop(t *testing.T) {
 		return nil, errors.New("stdin closed")
 	}
 
-	src := NewMasterPasswordSource(dir, prompt, WithMaxAttempts(5))
+	src := NewMasterPasswordSource(vaultPath(dir), prompt, WithMaxAttempts(5))
 	_, err := src.GetEncryptionKey()
 	if err == nil {
 		t.Fatal("expected error from prompt failure")
@@ -633,35 +415,9 @@ func TestMasterPasswordSource_PromptErrorBreaksLoop(t *testing.T) {
 	}
 }
 
-func TestMasterPasswordSource_NoRetryOnSidecarError(t *testing.T) {
-	dir := t.TempDir()
-	// Write a sidecar with an unsupported version so readSidecar fails
-	// before any prompt can fire. Confirms the retry loop doesn't run
-	// for non-password failures (acceptance criterion #3 in the roadmap).
-	bad := `{"version": 99, "algorithm": "argon2id", "salt": "", "verify": "", "params": {"time":3,"memory":65536,"threads":4,"key_len":32}}`
-	if err := os.WriteFile(filepath.Join(dir, sidecarFileName), []byte(bad), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	prompts := 0
-	prompt := func(_ string) ([]byte, error) {
-		prompts++
-		return []byte("anything"), nil
-	}
-
-	src := NewMasterPasswordSource(dir, prompt, WithMaxAttempts(3))
-	_, err := src.GetEncryptionKey()
-	if err == nil {
-		t.Fatal("expected error from corrupt sidecar")
-	}
-	if prompts != 0 {
-		t.Errorf("expected 0 prompts when sidecar is corrupt, got %d", prompts)
-	}
-}
-
 func TestWithMaxAttempts_ClampsBelowOne(t *testing.T) {
 	dir := t.TempDir()
-	seedSidecar(t, dir)
+	seedVault(t, dir)
 
 	for _, n := range []int{0, -1, -100} {
 		t.Run(fmt.Sprintf("n=%d", n), func(t *testing.T) {
@@ -670,7 +426,7 @@ func TestWithMaxAttempts_ClampsBelowOne(t *testing.T) {
 				prompts++
 				return []byte("wrong"), nil
 			}
-			src := NewMasterPasswordSource(dir, prompt, WithMaxAttempts(n))
+			src := NewMasterPasswordSource(vaultPath(dir), prompt, WithMaxAttempts(n))
 			if _, err := src.GetEncryptionKey(); err == nil {
 				t.Fatal("expected error")
 			}
@@ -697,7 +453,7 @@ func TestMasterPasswordSource_NewPasswordCheck(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	src := NewMasterPasswordSource(dir, staticPrompt("weakpass1", "strong-enough-pw", "strong-enough-pw"), WithNewPasswordCheck(check))
+	src := NewMasterPasswordSource(vaultPath(dir), staticPrompt("weakpass1", "strong-enough-pw", "strong-enough-pw"), WithNewPasswordCheck(check))
 	key, err := src.GetEncryptionKey()
 	if err != nil {
 		t.Fatalf("GetEncryptionKey: %v", err)
@@ -706,7 +462,7 @@ func TestMasterPasswordSource_NewPasswordCheck(t *testing.T) {
 	if len(key) != 32 || len(checked) != 2 || checked[1] != "strong-enough-pw" {
 		t.Errorf("checked %q, want the weak one and then the replacement", checked)
 	}
-	reopened := NewMasterPasswordSource(dir, staticPrompt("strong-enough-pw"), WithNewPasswordCheck(check))
+	reopened := NewMasterPasswordSource(vaultPath(dir), staticPrompt("strong-enough-pw"), WithNewPasswordCheck(check))
 	if _, err := reopened.GetEncryptionKey(); err != nil {
 		t.Errorf("the replacement doesn't unlock the vault: %v", err)
 	}
@@ -715,7 +471,7 @@ func TestMasterPasswordSource_NewPasswordCheck(t *testing.T) {
 		t.Errorf("unlocking ran the new-password check: %q", checked)
 	}
 
-	refused := NewMasterPasswordSource(t.TempDir(), staticPrompt("refused-pw"), WithNewPasswordCheck(check))
+	refused := NewMasterPasswordSource(vaultPath(t.TempDir()), staticPrompt("refused-pw"), WithNewPasswordCheck(check))
 	if _, err := refused.GetEncryptionKey(); err == nil || err.Error() != "refused" {
 		t.Errorf("err = %v, want the check's refusal", err)
 	}
@@ -730,7 +486,7 @@ func TestMasterPasswordSource_NewPasswordCheckGivesUp(t *testing.T) {
 		prompts++
 		return []byte("weakpass1"), nil
 	}
-	src := NewMasterPasswordSource(dir, prompt, WithNewPasswordCheck(func([]byte) error { return ErrTryAnotherPassword }))
+	src := NewMasterPasswordSource(vaultPath(dir), prompt, WithNewPasswordCheck(func([]byte) error { return ErrTryAnotherPassword }))
 	_, err := src.GetEncryptionKey()
 	if !errors.Is(err, ErrTryAnotherPassword) {
 		t.Errorf("err = %v, want ErrTryAnotherPassword", err)
@@ -738,7 +494,7 @@ func TestMasterPasswordSource_NewPasswordCheckGivesUp(t *testing.T) {
 	if prompts != 3 {
 		t.Errorf("asked %d times, want 3", prompts)
 	}
-	if _, err := os.Stat(filepath.Join(dir, sidecarFileName)); !os.IsNotExist(err) {
-		t.Errorf("a key file was written (stat: %v)", err)
+	if _, err := os.Stat(vaultPath(dir)); !os.IsNotExist(err) {
+		t.Errorf("a vault was written (stat: %v)", err)
 	}
 }

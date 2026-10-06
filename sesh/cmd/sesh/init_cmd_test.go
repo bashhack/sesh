@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/bashhack/sesh/internal/config"
+	"github.com/bashhack/sesh/internal/database"
+	vaultpkg "github.com/bashhack/sesh/internal/vault"
 )
 
 // initEnv isolates HOME, the config dir, the data dir, and the agent socket,
@@ -50,10 +52,8 @@ func TestInit_InteractiveDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{cfg.DBPath.Value, filepath.Join(filepath.Dir(cfg.DBPath.Value), sidecarFile)} {
-		if _, err := os.Stat(p); err != nil {
-			t.Errorf("init didn't create %s: %v", p, err)
-		}
+	if _, err := database.ReadUnlockMaterial(cfg.DBPath.Value); err != nil {
+		t.Errorf("init didn't create the vault: %v", err)
 	}
 	if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "Ready. Run `sesh config`") {
 		t.Errorf("stdout = %q", out)
@@ -108,16 +108,21 @@ func TestInit_Refuses(t *testing.T) {
 			t.Fatalf("--force: %v", err)
 		}
 	})
-	t.Run("a vault without its key file", func(t *testing.T) {
+	t.Run("a vault without its key record", func(t *testing.T) {
 		app, path := initEnv(t, "")
 		vault := filepath.Join(t.TempDir(), "other.db")
-		if err := os.WriteFile(vault, []byte("not empty"), 0o600); err != nil {
+		store, err := database.Open(vault, database.NewKeySourceOracle(&recoveredKey{key: bytes.Repeat([]byte{1}, 32)}))
+		if err != nil {
 			t.Fatal(err)
 		}
+		if err := store.Put(vaultpkg.Key{Kind: vaultpkg.KindPassword, Service: "github"}, []byte("hunter2")); err != nil {
+			t.Fatal(err)
+		}
+		closeAuditStore(store)
 		cliOverrides = config.Overrides{DBPath: vault}
-		err := runInit(app, nil)
-		if err == nil || !strings.Contains(err.Error(), "its key file") {
-			t.Fatalf("err = %v, want the missing passwords.key refusal", err)
+		err = runInit(app, nil)
+		if err == nil || !strings.Contains(err.Error(), "holds entries but not the record its key is made from") {
+			t.Fatalf("err = %v, want the missing key record refusal", err)
 		}
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Error("wrote a config file for a refused setup")

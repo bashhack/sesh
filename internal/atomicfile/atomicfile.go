@@ -1,8 +1,7 @@
 // Package atomicfile replaces a file so that readers see either the old
 // contents or the new, and a crash or power loss just afterwards can't
 // leave it empty or lose the change. sesh uses it for files whose loss
-// would lock a vault: the master password sidecar, the Touch ID and
-// recovery files, and the config.
+// would lock a vault: the Touch ID and recovery files, and the config.
 package atomicfile
 
 import (

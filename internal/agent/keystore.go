@@ -2,8 +2,6 @@ package agent
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -130,7 +128,7 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 	return nil
 }
 
-// UnlockTouchID unlocks the vault whose sidecar verify blob is verify with
+// UnlockTouchID unlocks the vault whose verify blob is verify with
 // the key unwrap returns; unwrap asks for a fingerprint. If the keystore
 // already holds that vault's key, unwrap isn't called, so a second request
 // doesn't prompt again. Like Unlock, it runs one at a time.
@@ -400,12 +398,9 @@ func (k *keystore) clock() clock {
 	return k.clk
 }
 
-// UnlockID is the hex SHA-256 of the verify blob a key was checked
-// against. The blob itself is stored on disk, so the id is not a secret.
-func UnlockID(verify []byte) string {
-	sum := sha256.Sum256(verify)
-	return hex.EncodeToString(sum[:])
-}
+// UnlockID is the id of the vault whose verify blob is verify
+// (database.UnlockID).
+func UnlockID(verify []byte) string { return database.UnlockID(verify) }
 
 // unlessUnlocking runs f, holding off new unlocks until it returns, unless
 // an unlock is already in progress. It reports whether f ran.

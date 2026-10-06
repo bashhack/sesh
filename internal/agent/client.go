@@ -53,7 +53,7 @@ func (e *ProtocolError) Error() string {
 	return e.Code + ": " + e.Message
 }
 
-// Unlock sends the password and sidecar material. password is zeroed
+// Unlock sends the password and the vault's key record. password is zeroed
 // before return. The connection must already have completed hello.
 func Unlock(conn *Conn, password, salt, verify []byte, params database.Argon2idParams) error {
 	defer secure.SecureZeroBytes(password)
@@ -206,7 +206,7 @@ func WrapKey(conn *Conn, unlockID, purpose string, pub []byte) (keywrap.Wrapped,
 }
 
 // UnlockTouchID asks the agent to unlock with the Touch ID file f for the
-// vault whose sidecar verify blob is verify. The agent shows the Touch ID
+// vault whose verify blob is verify. The agent shows the Touch ID
 // prompt; this waits up to the unlock timeout for the person to answer.
 // Failures match touchid.ErrCancelled, ErrUnavailable, ErrLockedOut,
 // ErrFailed, or ErrTouchIDStale.

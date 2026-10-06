@@ -3,25 +3,12 @@ package database
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 )
 
 // Current schema version. Bump this and add a migration function when the schema changes.
-const currentSchemaVersion = 5
-
-// KeyMetadata stores key derivation parameters for a given key version.
-// This table is readable without decryption so the store can derive the
-// decryption key before reading any password entries.
-type KeyMetadata struct {
-	CreatedAt time.Time
-	Algorithm string // "argon2id", "pbkdf2"
-	Params    string // JSON: time, memory, threads (argon2id) or iterations (pbkdf2)
-	Salt      []byte
-	Version   int
-	Active    bool
-}
+const currentSchemaVersion = 1
 
 // AuditEntry represents a row in the audit_log table.
 type AuditEntry struct {
@@ -36,123 +23,12 @@ type AuditEntry struct {
 // so the migration is atomic.
 var migrations = map[int]func(tx *sql.Tx) error{
 	1: migrateV1,
-	2: migrateV2,
-	3: migrateV3,
-	4: migrateV4,
-	5: migrateV5,
 }
 
-// migrateV1 creates the initial four-table schema.
+// migrateV1 creates the schema: the entries, the vault's key record
+// (vault_key), and the audit log.
 func migrateV1(tx *sql.Tx) error {
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS passwords (
-			id             TEXT PRIMARY KEY,
-			service        TEXT NOT NULL,
-			account        TEXT NOT NULL,
-			entry_type     TEXT NOT NULL,
-			encrypted_data BLOB NOT NULL,
-			salt           BLOB NOT NULL,
-			key_version    INTEGER NOT NULL DEFAULT 1,
-			metadata       TEXT,
-			created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_passwords_service ON passwords(service)`,
-		`CREATE INDEX IF NOT EXISTS idx_passwords_account ON passwords(account)`,
-		`CREATE INDEX IF NOT EXISTS idx_passwords_type ON passwords(entry_type)`,
-		`CREATE INDEX IF NOT EXISTS idx_passwords_service_account ON passwords(service, account)`,
-
-		`CREATE TABLE IF NOT EXISTS key_metadata (
-			version    INTEGER PRIMARY KEY,
-			algorithm  TEXT NOT NULL,
-			params     TEXT NOT NULL,
-			salt       BLOB NOT NULL,
-			created_at DATETIME NOT NULL,
-			active     BOOLEAN NOT NULL DEFAULT 1
-		)`,
-
-		`CREATE TABLE IF NOT EXISTS audit_log (
-			id         INTEGER PRIMARY KEY AUTOINCREMENT,
-			event_type TEXT NOT NULL,
-			entry_id   TEXT,
-			detail     TEXT,
-			created_at DATETIME NOT NULL
-		)`,
-
-		`CREATE TABLE IF NOT EXISTS schema_migrations (
-			version    INTEGER PRIMARY KEY,
-			applied_at DATETIME NOT NULL
-		)`,
-
-		// FTS5 virtual table for full-text search across service, account,
-		// metadata. v4 drops it, with its triggers.
-		`CREATE VIRTUAL TABLE IF NOT EXISTS passwords_fts USING fts5(
-			service, account, metadata,
-			content='passwords',
-			content_rowid='rowid'
-		)`,
-
-		// Triggers to keep FTS in sync with the passwords table.
-		`CREATE TRIGGER IF NOT EXISTS passwords_ai AFTER INSERT ON passwords BEGIN
-			INSERT INTO passwords_fts(rowid, service, account, metadata)
-			VALUES (new.rowid, new.service, new.account, new.metadata);
-		END`,
-		`CREATE TRIGGER IF NOT EXISTS passwords_ad AFTER DELETE ON passwords BEGIN
-			INSERT INTO passwords_fts(passwords_fts, rowid, service, account, metadata)
-			VALUES ('delete', old.rowid, old.service, old.account, old.metadata);
-		END`,
-		`CREATE TRIGGER IF NOT EXISTS passwords_au AFTER UPDATE ON passwords BEGIN
-			INSERT INTO passwords_fts(passwords_fts, rowid, service, account, metadata)
-			VALUES ('delete', old.rowid, old.service, old.account, old.metadata);
-			INSERT INTO passwords_fts(rowid, service, account, metadata)
-			VALUES (new.rowid, new.service, new.account, new.metadata);
-		END`,
-	}
-
-	for _, s := range stmts {
-		if _, err := tx.Exec(s); err != nil {
-			return fmt.Errorf("migration v1: %w", err)
-		}
-	}
-	return nil
-}
-
-// migrateV4 drops the full-text index v1 made, and the triggers that kept
-// it in step: search matches service names and usernames in Go, so
-// nothing reads the index.
-func migrateV4(tx *sql.Tx) error {
 	for _, q := range []string{
-		`DROP TRIGGER IF EXISTS passwords_ai`,
-		`DROP TRIGGER IF EXISTS passwords_ad`,
-		`DROP TRIGGER IF EXISTS passwords_au`,
-		`DROP TABLE IF EXISTS passwords_fts`,
-	} {
-		if _, err := tx.Exec(q); err != nil {
-			return fmt.Errorf("migration v4: %w", err)
-		}
-	}
-	return nil
-}
-
-// ErrOldVault is returned for a vault an earlier development build made
-// with entries in the old table: sesh had no releases then, so v5
-// doesn't convert one.
-var ErrOldVault = errors.New("this vault was made by an earlier development build of sesh, which this version can't open: start a new one by moving this file aside and running sesh again (the new vault keeps your master password)")
-
-// migrateV5 gives entries their own table, with kind, service name, and
-// username as columns, unique together. A vault whose old table holds
-// entries is refused (ErrOldVault); applyMigrations checks for that before
-// any migration runs, so the vault is left unchanged.
-func migrateV5(tx *sql.Tx) error {
-	var n int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM passwords`).Scan(&n); err != nil {
-		return fmt.Errorf("migration v5: %w", err)
-	}
-	if n > 0 {
-		return ErrOldVault
-	}
-	for _, q := range []string{
-		`DROP TABLE passwords`,
 		`CREATE TABLE entries (
 			id             INTEGER PRIMARY KEY,
 			kind           TEXT NOT NULL,
@@ -160,32 +36,34 @@ func migrateV5(tx *sql.Tx) error {
 			username       TEXT NOT NULL DEFAULT '',
 			encrypted_data BLOB NOT NULL,
 			salt           BLOB NOT NULL,
-			key_version    INTEGER NOT NULL DEFAULT 1,
 			settings       TEXT,
 			created_at     DATETIME NOT NULL,
 			updated_at     DATETIME NOT NULL,
 			UNIQUE (kind, service, username)
 		)`,
+		// One row: what turns the master password into the vault's key.
+		// None of it is secret; see vault_key.go.
+		`CREATE TABLE vault_key (
+			id         INTEGER PRIMARY KEY CHECK (id = 1),
+			salt       BLOB NOT NULL,
+			kdf        TEXT NOT NULL,
+			kdf_params TEXT NOT NULL,
+			verify     BLOB NOT NULL,
+			created_at DATETIME NOT NULL
+		)`,
+		`CREATE TABLE audit_log (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			event_type TEXT NOT NULL,
+			entry_id   TEXT,
+			detail     TEXT,
+			created_at DATETIME NOT NULL
+		)`,
+		// Pruning old events on every open goes by time.
+		`CREATE INDEX idx_audit_log_created_at ON audit_log(created_at)`,
 	} {
 		if _, err := tx.Exec(q); err != nil {
-			return fmt.Errorf("migration v5: %w", err)
+			return fmt.Errorf("migration v1: %w", err)
 		}
-	}
-	return nil
-}
-
-// refuseOldEntries returns ErrOldVault for a vault before v5 whose old
-// table holds entries, before any migration changes it.
-func refuseOldEntries(db *sql.DB, applied int) error {
-	if applied == 0 || applied >= 5 {
-		return nil
-	}
-	var has bool
-	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM passwords)`).Scan(&has); err != nil {
-		return fmt.Errorf("check for entries in the old table: %w", err)
-	}
-	if has {
-		return ErrOldVault
 	}
 	return nil
 }
@@ -214,9 +92,6 @@ func applyMigrations(db *sql.DB) error {
 	if applied > currentSchemaVersion {
 		return fmt.Errorf("database schema version %d is newer than this binary supports (max %d) — upgrade sesh or point at a matching database", applied, currentSchemaVersion)
 	}
-	if err := refuseOldEntries(db, applied); err != nil {
-		return err
-	}
 
 	for v := applied + 1; v <= currentSchemaVersion; v++ {
 		fn, ok := migrations[v]
@@ -227,6 +102,19 @@ func applyMigrations(db *sql.DB) error {
 		tx, err := db.Begin()
 		if err != nil {
 			return fmt.Errorf("begin migration v%d: %w", v, err)
+		}
+		// Another sesh may have applied it since the version was read; the
+		// transaction holds the write lock, so this answer stands.
+		var done bool
+		if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = ?)`, v).Scan(&done); err != nil {
+			_ = tx.Rollback() //nolint:errcheck // already failing
+			return fmt.Errorf("check migration v%d: %w", v, err)
+		}
+		if done {
+			if err := tx.Rollback(); err != nil {
+				return fmt.Errorf("end migration v%d: %w", v, err)
+			}
+			continue
 		}
 
 		if err := fn(tx); err != nil {

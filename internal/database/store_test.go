@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -62,14 +61,11 @@ func newTestStore(t *testing.T) *Store {
 func TestOpenAndMigrate(t *testing.T) {
 	s := newTestStore(t)
 
-	for _, tbl := range []string{"entries", "key_metadata", "audit_log", "schema_migrations"} {
+	for _, tbl := range []string{"entries", "vault_key", "audit_log", "schema_migrations"} {
 		var n int
 		if err := s.db.QueryRow("SELECT COUNT(*) FROM " + tbl).Scan(&n); err != nil {
 			t.Errorf("table %q should exist: %v", tbl, err)
 		}
-	}
-	if got := tableNames(t, s.db, "passwords"); got != nil {
-		t.Errorf("a new vault has the old table %v", got)
 	}
 
 	var v int
@@ -109,194 +105,6 @@ func TestOpen_RejectsNewerSchemaVersion(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "newer than this binary supports") {
 		t.Errorf("error should mention version mismatch, got: %v", err)
-	}
-}
-
-// tableNames returns the names in sqlite_master matching the LIKE pattern,
-// sorted; nil for none.
-func tableNames(t *testing.T, db *sql.DB, like string) []string {
-	t.Helper()
-	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE name LIKE ? ORDER BY name`, like)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := rows.Close(); err != nil {
-			t.Errorf("rows.Close: %v", err)
-		}
-	}()
-	var names []string
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		names = append(names, n)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	return names
-}
-
-// oldVault creates a vault at schema version, as a build from before the
-// later migrations left it. With a row, its passwords table holds one
-// entry.
-func oldVault(t *testing.T, version int, row bool) string {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "old.db")
-	db, err := sql.Open("sqlite", fileURI(dbPath, ""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("Close: %v", err)
-		}
-	}()
-	tx, err := db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for v := 1; v <= version; v++ {
-		if err := migrations[v](tx); err != nil {
-			t.Fatalf("migration v%d: %v", v, err)
-		}
-		if _, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, v, time.Now().UTC()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if row {
-		if _, err := tx.Exec(`INSERT INTO passwords (id, service, account, entry_type, encrypted_data, salt) VALUES ('sesh-password/password/github/alice:me', 'sesh-password/password/github/alice', 'me', 'password', x'00', x'00')`); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	return dbPath
-}
-
-func TestMigrateV4_DropsTheSearchIndex(t *testing.T) {
-	ks := &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)}
-	searchObjects := func(db *sql.DB) []string {
-		var names []string
-		for _, like := range []string{"passwords_fts%", "passwords_a_"} {
-			names = append(names, tableNames(t, db, like)...)
-		}
-		return names
-	}
-
-	// An empty vault made before version 4 has the index and its triggers.
-	dbPath := oldVault(t, 3, false)
-	raw, err := sql.Open("sqlite", fileURI(dbPath, ""))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := searchObjects(raw); len(got) == 0 {
-		t.Fatal("setup: the version 3 vault has no search index")
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	s, err := Open(dbPath, ks)
-	if err != nil {
-		t.Fatalf("Open after upgrade: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("Close: %v", err)
-		}
-	})
-	if got := searchObjects(s.db); got != nil {
-		t.Errorf("after upgrading, search index objects %v remain, want none", got)
-	}
-}
-
-func TestMigrateV5_TheEntriesTable(t *testing.T) {
-	s := newTestStore(t)
-	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
-	for _, v := range []string{"v1", "v2"} {
-		if err := s.Put(k, []byte(v)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM entries WHERE kind = 'password' AND service = 'github' AND username = 'alice'`).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := s.Get(k); n != 1 || err != nil || string(got) != "v2" {
-		t.Errorf("after two Puts: %d rows, secret %q (%v); want one row holding v2", n, got, err)
-	}
-	// Kind, service, and username are unique together, not alone.
-	if _, err := s.db.Exec(`INSERT INTO entries (kind, service, username, encrypted_data, salt, created_at, updated_at) VALUES ('password', 'github', 'alice', x'00', x'00', ?, ?)`, time.Now(), time.Now()); err == nil {
-		t.Error("a second row for the same key was accepted")
-	}
-	if err := s.Put(vault.Key{Kind: vault.KindTOTP, Service: "github", Username: "alice"}, []byte("t")); err != nil {
-		t.Errorf("the same name in another kind: %v", err)
-	}
-}
-
-func TestMigrateV5_UpgradesAnEmptyVault(t *testing.T) {
-	dbPath := oldVault(t, 4, false)
-	s, err := Open(dbPath, &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("Close: %v", err)
-		}
-	})
-	if got := tableNames(t, s.db, "passwords"); got != nil {
-		t.Errorf("the old table remains: %v", got)
-	}
-	k := vault.Key{Kind: vault.KindAPIKey, Service: "openai"}
-	if err := s.Put(k, []byte("sk")); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := s.Get(k); err != nil || string(got) != "sk" {
-		t.Errorf("Get = %q, %v; want sk", got, err)
-	}
-}
-
-func TestMigrateV5_RefusesAVaultWithOldEntries(t *testing.T) {
-	for from := 1; from <= 4; from++ {
-		t.Run(fmt.Sprintf("from v%d", from), func(t *testing.T) {
-			dbPath := oldVault(t, from, true)
-			_, err := Open(dbPath, &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)})
-			if !errors.Is(err, ErrOldVault) {
-				t.Fatalf("Open = %v, want ErrOldVault", err)
-			}
-			if wantSub := "earlier development build"; !strings.Contains(err.Error(), wantSub) {
-				t.Errorf("err = %v, want it to contain %q", err, wantSub)
-			}
-
-			// The vault is unchanged: still at its version, its entry still there.
-			raw, err := sql.Open("sqlite", fileURI(dbPath, ""))
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				if err := raw.Close(); err != nil {
-					t.Errorf("Close: %v", err)
-				}
-			})
-			var version, rows int
-			if err := raw.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
-				t.Fatal(err)
-			}
-			if err := raw.QueryRow(`SELECT COUNT(*) FROM passwords`).Scan(&rows); err != nil {
-				t.Fatal(err)
-			}
-			if version != from || rows != 1 {
-				t.Errorf("after the refusal: version %d, %d old rows; want %d and 1", version, rows, from)
-			}
-			if got := tableNames(t, raw, "entries"); got != nil {
-				t.Errorf("the refused vault gained %v", got)
-			}
-		})
 	}
 }
 
@@ -461,33 +269,6 @@ func TestAuditLogWritten(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected 1 audit entry for password/svc, got %d", count)
-	}
-}
-
-func TestInitKeyMetadata(t *testing.T) {
-	s := newTestStore(t)
-
-	if err := s.InitKeyMetadata(); err != nil {
-		t.Fatal(err)
-	}
-
-	meta, err := s.GetActiveKeyMetadata()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if meta == nil {
-		t.Fatal("expected key metadata after init")
-	}
-	if meta.Version != 1 {
-		t.Fatalf("expected version 1, got %d", meta.Version)
-	}
-	if meta.Algorithm != "argon2id" {
-		t.Fatalf("expected argon2id, got %q", meta.Algorithm)
-	}
-
-	// Calling again should be a no-op.
-	if err := s.InitKeyMetadata(); err != nil {
-		t.Fatal(err)
 	}
 }
 
