@@ -78,7 +78,10 @@ func main() {
 		kc     keychain.Provider
 		closer io.Closer
 	)
-	if needsCredentialStore(args) {
+	// A command that doesn't parse (an unknown flag, no or an unknown
+	// provider, --help) never opens the vault: run reports the mistake, and a
+	// typo can't create a vault on the way.
+	if needsCredentialStore(args) && argsParse(args) {
 		if cfgErr != nil {
 			fmt.Fprintf(os.Stderr, "❌ %v\n", cfgErr)
 			os.Exit(1)
@@ -102,6 +105,48 @@ func main() {
 
 	app := NewDefaultApp(versionInfo, kc, clipboardTimeout)
 	run(app, args)
+}
+
+// serviceFlags is the flag set for a command using provider p: the common
+// flags, then p's own, with p's usage on -help.
+func serviceFlags(app *App, cmd, serviceName string, p provider.ServiceProvider) (*flag.FlagSet, commonFlags, error) {
+	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+	fs.SetOutput(app.Stderr)
+	fs.Usage = func() {
+		if err := app.PrintProviderUsage(serviceName, p); err != nil {
+			fatal(app, err)
+		}
+	}
+	common := addCommonFlags(fs, serviceName)
+	if err := p.SetupFlags(fs); err != nil {
+		return nil, common, fmt.Errorf("error setting up provider flags: %w", err)
+	}
+	return fs, common, nil
+}
+
+// argsParse reports whether args name a provider and parse cleanly with
+// its flags. It's checked before the vault is opened, with a store that
+// can't open anything, so a mistyped command can't open or create the
+// vault. -help, -version and -list-services don't count, since they only
+// print, and neither does a second -service naming another provider.
+func argsParse(args []string) bool {
+	serviceName := extractServiceName(args)
+	if serviceName == "" {
+		return false
+	}
+	app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+	app.Stdout, app.Stderr = io.Discard, io.Discard
+	p, err := app.Registry.GetProvider(serviceName)
+	if err != nil {
+		return false
+	}
+	fs, common, err := serviceFlags(app, args[0], serviceName, p)
+	if err != nil {
+		return false
+	}
+	fs.Usage = func() {}
+	return fs.Parse(args[1:]) == nil && *common.service == serviceName &&
+		!*common.help && !*common.version && !*common.listServices
 }
 
 // needsCredentialStore reports whether the given command-line invocation
@@ -1006,22 +1051,9 @@ func run(app *App, args []string) {
 		return
 	}
 
-	// Now create flagset with provider-specific flags
-	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
-	fs.SetOutput(app.Stderr)
-
-	// Set custom usage that includes provider info
-	fs.Usage = func() {
-		if err := app.PrintProviderUsage(serviceName, svcProvider); err != nil {
-			fatal(app, err)
-		}
-	}
-
-	common := addCommonFlags(fs, serviceName)
-
-	// Register provider-specific flags
-	if err := svcProvider.SetupFlags(fs); err != nil {
-		fatal(app, fmt.Errorf("error setting up provider flags: %w", err))
+	fs, common, err := serviceFlags(app, args[0], serviceName, svcProvider)
+	if err != nil {
+		fatal(app, err)
 		return
 	}
 

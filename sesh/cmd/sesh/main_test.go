@@ -723,6 +723,32 @@ func TestEnsureMasterKey_NonNotFoundErrorIsSurfaced(t *testing.T) {
 	}
 }
 
+func TestArgsParse(t *testing.T) {
+	for name, tt := range map[string]struct {
+		args []string
+		want bool
+	}{
+		"a service and its flags":      {args: []string{"sesh", "--service", "password", "--action", "search", "--query", "x"}, want: true},
+		"an unknown flag":              {args: []string{"sesh", "--service", "password", "--bogus"}, want: false},
+		"an unknown flag, no service":  {args: []string{"sesh", "--bogus"}, want: false},
+		"an unknown service":           {args: []string{"sesh", "--service", "nope"}, want: false},
+		"help for a service":           {args: []string{"sesh", "--service", "password", "--help"}, want: false},
+		"a provider's flag on another": {args: []string{"sesh", "--service", "aws", "--action", "get"}, want: false},
+		"the = form":                   {args: []string{"sesh", "--service=password", "--action=list"}, want: true},
+		"help with a value":            {args: []string{"sesh", "--service", "password", "--help=true"}, want: false},
+		"a bad value for a typed flag": {args: []string{"sesh", "--service", "password", "--length", "abc"}, want: false},
+		"two services":                 {args: []string{"sesh", "--service", "totp", "--service", "aws"}, want: false},
+		"version with a value":         {args: []string{"sesh", "--service", "password", "--version=true"}, want: false},
+		"list services with a value":   {args: []string{"sesh", "--service", "password", "--list-services=true"}, want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := argsParse(tt.args); got != tt.want {
+				t.Errorf("argsParse(%q) = %v, want %v", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNeedsCredentialStore(t *testing.T) {
 	tests := map[string]struct {
 		args []string
