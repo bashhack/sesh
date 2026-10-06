@@ -1,6 +1,10 @@
 package database
 
-import "github.com/bashhack/sesh/internal/secure"
+import (
+	"errors"
+
+	"github.com/bashhack/sesh/internal/secure"
+)
 
 // keySourceOracle is the CryptoOracle for a KeySource that can hand out
 // its key. Each call fetches the key, runs the entry crypto, and zeroes
@@ -13,6 +17,16 @@ type keySourceOracle struct {
 // oracle closes ks when ks has a Close method.
 func NewKeySourceOracle(ks KeySource) CryptoOracle {
 	return &keySourceOracle{ks: ks}
+}
+
+// UnlockID is the id of the key record the key source's key was checked
+// against, for a key source that knows it.
+func (o *keySourceOracle) UnlockID() (string, error) {
+	ks, ok := o.ks.(interface{ UnlockID() (string, error) })
+	if !ok {
+		return "", errors.New("check the vault's key: the key source doesn't say which vault it unlocked")
+	}
+	return ks.UnlockID()
 }
 
 func (o *keySourceOracle) EncryptEntry(plaintext, aad []byte) (encryptedData, salt []byte, err error) {

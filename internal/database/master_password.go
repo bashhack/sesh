@@ -34,6 +34,9 @@ type MasterPasswordSource struct {
 	newPasswordCheck func(pw []byte) error
 	// dbPath is the vault whose key record this source reads, or creates.
 	dbPath string
+	// unlockID names the key record the key was checked against (see
+	// UnlockID); "" until the first unlock. Guarded by mu.
+	unlockID string
 	// cachedKey holds the derived key after the first successful unlock.
 	// Scoped to the process lifetime only — cleared when Close() is called
 	// (or when the process exits). This avoids prompting the user on every
@@ -247,6 +250,7 @@ func (s *MasterPasswordSource) create() ([]byte, error) {
 			secure.SecureZeroBytes(key)
 			return nil, err
 		}
+		s.checkedAgainst(verify)
 		return key, nil
 	}
 	secure.SecureZeroBytes(key)
@@ -261,7 +265,28 @@ func (s *MasterPasswordSource) create() ([]byte, error) {
 		secure.SecureZeroBytes(key)
 		return nil, errors.New("another sesh command created this vault at the same time, with a different master password; run this again and enter that one")
 	}
+	s.checkedAgainst(m.Verify)
 	return key, nil
+}
+
+// UnlockID is the id of the key record this source's key was checked
+// against, unlocking first if it hasn't yet.
+func (s *MasterPasswordSource) UnlockID() (string, error) {
+	key, err := s.GetEncryptionKey()
+	if err != nil {
+		return "", err
+	}
+	secure.SecureZeroBytes(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.unlockID, nil
+}
+
+// checkedAgainst records that the key was checked against verify.
+func (s *MasterPasswordSource) checkedAgainst(verify []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unlockID = UnlockID(verify)
 }
 
 // unlock asks for the master password and checks it against the key
@@ -290,6 +315,7 @@ func (s *MasterPasswordSource) unlock(m UnlockMaterial) ([]byte, error) {
 		// produced by encryption under this key" — a successful Decrypt is
 		// already proof of the right master password.
 		if _, err := Decrypt(key, m.Verify); err == nil {
+			s.checkedAgainst(m.Verify)
 			return key, nil
 		}
 		secure.SecureZeroBytes(key)

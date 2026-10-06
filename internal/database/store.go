@@ -4,11 +4,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/url"
 	"os"
 	"time"
 
-	_ "modernc.org/sqlite" // pure-Go SQLite driver
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // Store is the vault: entries in a SQLite file, each encrypted, through the
@@ -38,7 +40,8 @@ func Open(dbPath string, oracle CryptoOracle) (*Store, error) {
 }
 
 // openDB opens the vault file at dbPath, creating it readable only by its
-// owner if it doesn't exist, and brings its schema up to date.
+// owner if it doesn't exist, and brings its schema up to date. A database
+// another program made is refused before anything in it changes.
 func openDB(dbPath string) (*sql.DB, error) {
 	f, err := os.OpenFile(dbPath, os.O_CREATE|os.O_RDONLY, 0o600) //nolint:gosec // the user's own vault location
 	if err != nil {
@@ -50,7 +53,7 @@ func openDB(dbPath string) (*sql.DB, error) {
 	// Another sesh may be writing: wait for it rather than fail, and take
 	// the write lock when a transaction starts, so two first runs can't
 	// both create the schema.
-	db, err := sql.Open("sqlite", fileURI(dbPath, "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_txlock=immediate"))
+	db, err := sql.Open("sqlite", fileURI(dbPath, "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_txlock=immediate"))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -59,13 +62,48 @@ func openDB(dbPath string) (*sql.DB, error) {
 	// "database is locked" under concurrent goroutines.
 	db.SetMaxOpenConns(1)
 
-	if err := applyMigrations(db); err != nil {
+	if err := setUpWhenFree(func() error { return setUp(db, dbPath) }); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
-			return nil, fmt.Errorf("apply migrations: %w (close also failed: %v)", err, closeErr)
+			return nil, fmt.Errorf("%w (close also failed: %v)", err, closeErr)
 		}
-		return nil, fmt.Errorf("apply migrations: %w", err)
+		return nil, err
 	}
 	return db, nil
+}
+
+// setUp refuses a database another program made, then turns on WAL mode
+// and brings the schema up to date.
+func setUp(db *sql.DB, dbPath string) error {
+	var foreign bool
+	if err := db.QueryRow(`SELECT NOT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'schema_migrations')
+		AND EXISTS (SELECT 1 FROM sqlite_master)`).Scan(&foreign); err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	if foreign {
+		return fmt.Errorf("%s isn't a sesh vault: it holds another program's data; choose another location for the vault", dbPath)
+	}
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	if err := applyMigrations(db); err != nil {
+		return fmt.Errorf("apply migrations: %w", err)
+	}
+	return nil
+}
+
+// setUpWhenFree runs setUp, trying again for a few seconds while another
+// sesh holds the file: turning on WAL mode in a new file can report it busy
+// at once, without waiting for the busy timeout.
+func setUpWhenFree(setUp func() error) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := setUp()
+		var se *sqlite.Error
+		if err == nil || !errors.As(err, &se) || se.Code()&0xff != sqlite3.SQLITE_BUSY || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(time.Duration(10+rand.IntN(40)) * time.Millisecond) //nolint:gosec // jitter between tries, not a secret
+	}
 }
 
 // fileURI is the SQLite address of the file at path, with query options.

@@ -29,6 +29,9 @@ func NewOracle(conn *Conn, unlockID string) *Oracle {
 	return &Oracle{conn: conn, unlockID: unlockID}
 }
 
+// UnlockID is the id of the vault this oracle was built for.
+func (o *Oracle) UnlockID() (string, error) { return o.unlockID, nil }
+
 func (o *Oracle) EncryptEntry(plaintext, aad []byte) ([]byte, []byte, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

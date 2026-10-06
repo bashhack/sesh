@@ -18,8 +18,7 @@ import (
 var _ vault.Store = (*Store)(nil)
 
 // entryAAD binds an entry's ciphertext to its key: a secret copied into
-// another entry's row doesn't decrypt there. The vault key check encrypts
-// with none, so neither can stand in for the other.
+// another entry's row doesn't decrypt there.
 //
 // It's part of every stored secret, so its bytes never change: a version
 // tag, then the kind, service, and username, each as a 4-byte big-endian

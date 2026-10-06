@@ -127,13 +127,17 @@ func offerTouchID(cfg passwordPromptConfig, dbPath string) {
 	if !cfg.interactive || cfg.confirm == nil || !touchIDAvailable() {
 		return
 	}
-	yes, err := cfg.confirm("Unlock with Touch ID instead of typing your password? [Y/n] ")
-	if err != nil || !yes {
-		return
-	}
 	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		note("warning: couldn't turn on Touch ID unlock (%v); try later with: sesh touchid enable", err)
+		return
+	}
+	if f, err := touchid.ReadFile(dataDir); err == nil && f.UnlockID != agent.UnlockID(mat.Verify) {
+		note("Touch ID unlock isn't offered for this vault: %s in this folder is another vault's. Keep each vault in its own folder.", touchid.FileName)
+		return
+	}
+	yes, err := cfg.confirm("Unlock with Touch ID instead of typing your password? [Y/n] ")
+	if err != nil || !yes {
 		return
 	}
 	conn, err := agent.DialExisting()
@@ -191,6 +195,9 @@ func runTouchID(app *App, args []string) error {
 		}
 		return out("Touch ID on this Mac: %s", here)
 	case "disable":
+		if f, err := touchid.ReadFile(dataDir); err == nil && anotherVaults(f.UnlockID, cfg.DBPath.Value) {
+			return out("Touch ID unlock isn't on for this vault; %s in this folder is another vault's, so it was left alone.", touchid.FileName)
+		}
 		if err := touchid.Remove(dataDir); err != nil {
 			return err
 		}
@@ -202,8 +209,21 @@ func runTouchID(app *App, args []string) error {
 		if err := requireVault(cfg.DBPath.Value, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
 			return err
 		}
+		p := resolvePasswordPrompt()
+		if f, err := touchid.ReadFile(dataDir); err == nil && anotherVaults(f.UnlockID, cfg.DBPath.Value) {
+			if !p.interactive || p.readLine == nil {
+				return fmt.Errorf("%s in this folder is another vault's; turning Touch ID unlock on for this vault would take it away from that one, so run this at a terminal to confirm", touchid.FileName)
+			}
+			yes, err := askNo(p.readLine, fmt.Sprintf("%s in this folder is another vault's, which would then need its password. Turn Touch ID unlock on for this vault instead? [y/N] ", touchid.FileName))
+			if err != nil {
+				return err
+			}
+			if !yes {
+				return out("Touch ID unlock was left with the other vault.")
+			}
+		}
 		// Unlock the agent for this vault, asking for the password if needed.
-		oracle, typed, err := keySourceFromAgent(cfg.DBPath.Value, resolvePasswordPrompt())
+		oracle, typed, err := keySourceFromAgent(cfg.DBPath.Value, p)
 		secure.SecureZeroBytes(typed)
 		if err != nil {
 			return err
@@ -232,14 +252,36 @@ func runTouchID(app *App, args []string) error {
 	}
 }
 
+// anotherVaults reports whether a Touch ID or recovery file whose unlock id
+// is fileID was made for a vault other than the one at dbPath.
+func anotherVaults(fileID, dbPath string) bool {
+	mat, err := database.ReadUnlockMaterial(dbPath)
+	return err == nil && fileID != agent.UnlockID(mat.Verify)
+}
+
+// askNo asks a [y/N] question with readLine: only y or yes is a yes, and
+// end of input is a no.
+func askNo(readLine func(string) (string, error), prompt string) (bool, error) {
+	answer, err := readLine(prompt)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "y", "yes":
+		return true, nil
+	}
+	return false, nil
+}
+
 // rewrapTouchID keeps Touch ID unlock working after the master password
 // changes: the new key is wrapped to the same Secure Enclave key, which
 // needs only its public half, so there's no prompt. It returns a line to
-// show, or "" when Touch ID unlock wasn't on.
-func rewrapTouchID(dbPath string, newKey []byte) string {
+// show, or "" when Touch ID unlock wasn't on for the vault whose key record
+// had the id oldID.
+func rewrapTouchID(dbPath, oldID string, newKey []byte) string {
 	dataDir := filepath.Dir(dbPath)
 	f, err := touchid.ReadFile(dataDir)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || (err == nil && f.UnlockID != oldID) {
 		return ""
 	}
 	if err == nil && len(newKey) == 0 {

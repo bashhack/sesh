@@ -44,7 +44,7 @@ The vault provides application-level encryption on top of file-system storage:
 - **Per-entry salts**: Each entry derives a unique encryption key from the master key + a random 16-byte salt
 - **Bound to its entry**: each secret is encrypted with its entry's key (kind, service name, username) as AES-GCM associated data, so a secret copied into another entry's row by someone who can write the vault file fails to decrypt there instead of being read as that entry. The binding covers the secret only: someone who can write the file can still change an entry's settings (TOTP code settings, the AWS MFA device) or its times, or put back an older encrypted copy of the same entry's secret
 - **Argon2id key derivation**: Memory-hard KDF for per-entry key derivation (16 MiB, 1 iteration, 1 thread). The KDF input is the 256-bit high-entropy master key (see below), *not* a user password — so these parameters are chosen for domain separation between entries rather than password stretching, and fall below OWASP's password-KDF minimums by design
-- **One file**: what the master password is turned into the key with (below) is stored in the vault file itself, so a copy of `passwords.db` is the whole vault. A vault that holds entries but has lost that record is refused, rather than given a new key that couldn't read them
+- **One file**: what the master password is turned into the key with (below) is stored in the vault file itself, so a copy of the vault file holds everything the master password needs to open it. A vault that holds entries but has lost that record is refused, rather than given a new key that couldn't read them
 - **Search**: matches service names and usernames, which are stored unencrypted; it never decrypts a secret
 - **Audit logging**: The `audit_log` table records access, modification, and deletion events with timestamps (never the secrets). `sesh audit` shows it. Events older than `audit.retention_days` (default 90; `0` keeps everything) are removed when the vault is opened, and `sesh audit prune` removes them on demand. It's a record for the user, not tamper-proof: anyone who can write the vault file can change it
 - **WAL mode**: Write-ahead logging for safe concurrent reads
@@ -76,6 +76,7 @@ With Touch ID unlock on, the agent can unlock with a fingerprint instead of the 
 - **Fingerprint only, deliberately.** Neither the Mac's login password nor an Apple Watch can approve, so the vault's protection is never reduced to that of the login password.
 - **Same-user malware.** A process running as you can make the agent show the Touch ID sheet, but can't approve it. The sheet is system UI that names the program asking. While the agent is unlocked, such a process can already ask it to decrypt; Touch ID doesn't change that.
 - **Copies.** `touchid.key`, or the whole vault with it, copied to another machine gains nothing.
+- **One vault per folder.** `touchid.key` and `recovery.key` sit next to the vault and name the vault they were made for. A password change re-wraps only its own vault's files, a new vault isn't offered another vault's, and `sesh touchid enable` asks before taking `touchid.key` from another vault.
 
 ##### Recovery key (optional)
 
@@ -146,7 +147,7 @@ Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext
 - **No plaintext-on-disk window.** Unlike the export-then-import workaround, the change never writes a plaintext-equivalent file (an encrypted export still sits on disk encrypted only with the export password). All re-encryption happens in-process; only encrypted-at-rest databases ever touch the filesystem.
 - **Per-row salt regeneration.** Every entry gets a fresh per-row salt under the new key. Encrypted ciphertext changes for every row even when the plaintext is identical.
 - **No old copy survives success.** The original vault is kept as a `.pre-rotate` copy only while the change runs, so a failure can roll back. Before the swap, the new vault is checked to open with its key and to hold every planned entry; once it's in place, the old copy is deleted, since it would let the old password (or a leaked one) open the old contents. Copies left by an interrupted change are deleted once the current key is verified. Deletion doesn't scrub the disk: on SSDs and copy-on-write filesystems no in-place overwrite can guarantee that.
-- **The key record moves with the vault.** The new vault holds its own key record (a new salt, and a verify blob for the new key), so the password changes in the same rename as the entries. The change only reads the old vault.
+- **The key record moves with the vault.** The new vault holds its own key record (a new salt, and a verify blob for the new key), so the password changes in the same rename as the entries. The change doesn't alter the old vault's entries or key record.
 
 ### Why This Matters
 

@@ -118,16 +118,20 @@ func offerRecovery(cfg passwordPromptConfig, dbPath string) {
 	if !cfg.interactive || cfg.confirm == nil || cfg.readLine == nil {
 		return
 	}
-	yes, err := cfg.confirm("Make a recovery key, in case you forget your master password? [Y/n] ")
-	if err != nil || !yes {
-		return
-	}
 	failed := func(err error) {
 		note("warning: couldn't make a recovery key (%v); try later with: sesh recovery new", err)
 	}
 	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		failed(err)
+		return
+	}
+	if f, err := recovery.ReadFile(dataDir); err == nil && f.UnlockID != agent.UnlockID(mat.Verify) {
+		note("A recovery key isn't offered for this vault: %s in this folder is another vault's. Keep each vault in its own folder.", recovery.FileName)
+		return
+	}
+	yes, err := cfg.confirm("Make a recovery key, in case you forget your master password? [Y/n] ")
+	if err != nil || !yes {
 		return
 	}
 	conn, err := agent.DialExisting()
@@ -228,11 +232,12 @@ func runRecovery(app *App, args []string) error {
 // rewrapRecovery keeps the recovery key working after the master password
 // changes: the new vault key is wrapped to the same recovery key, which
 // needs only its public half, so there's no prompt. It returns a line to
-// show, or "" when the vault had no recovery key.
-func rewrapRecovery(dbPath string, newKey []byte) string {
+// show, or "" when the folder has no recovery key for the vault whose key
+// record had the id oldID.
+func rewrapRecovery(dbPath, oldID string, newKey []byte) string {
 	dataDir := filepath.Dir(dbPath)
 	f, err := recovery.ReadFile(dataDir)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || (err == nil && f.UnlockID != oldID) {
 		return ""
 	}
 	if err == nil && len(newKey) == 0 {
@@ -340,7 +345,7 @@ func runRecover(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	src := &recoveredKey{key: key}
+	src := &recoveredKey{key: key, id: f.UnlockID}
 	note("The recovery key opens this vault. Choose a new master password.")
 	newKey, err := rotateMasterPassword(app, p, src)
 	src.Close()
@@ -414,7 +419,15 @@ func openWithRecoveryKey(f *recovery.File, verify []byte, p passwordPromptConfig
 
 // recoveredKey is a vault key opened with a recovery key, given to the
 // rotation as the key source of the vault as it is.
-type recoveredKey struct{ key []byte }
+// recoveredKey is the vault key a recovery key opened, and the id of the
+// key record it was checked against.
+type recoveredKey struct {
+	id  string
+	key []byte
+}
+
+// UnlockID is the id of the key record the key was checked against.
+func (r *recoveredKey) UnlockID() (string, error) { return r.id, nil } //nolint:unparam // the signature CheckKey asks key sources for
 
 func (r *recoveredKey) GetEncryptionKey() ([]byte, error) { return bytes.Clone(r.key), nil }
 func (r *recoveredKey) StoreEncryptionKey([]byte) error {

@@ -2,6 +2,7 @@ package database
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -240,5 +241,103 @@ func TestWriteKeyRecord_OnlyOnce(t *testing.T) {
 	got, err := readKeyRecord(db, vaultPath(dir))
 	if err != nil || !bytes.Equal(got.Salt, m.Salt) {
 		t.Errorf("record = %+v, %v; want the first", got, err)
+	}
+}
+
+// Another program's SQLite file at the vault path is refused and left as it
+// was: no sesh tables, and its journal mode unchanged.
+func TestReadUnlockMaterial_LeavesAForeignFileAlone(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "other.sqlite")
+	db, err := sql.Open("sqlite", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE notes (body TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadUnlockMaterial(p); err == nil || !strings.Contains(err.Error(), "isn't a sesh vault") {
+		t.Fatalf("err = %v, want it refused as not a sesh vault", err)
+	}
+	if _, err := NewMasterPasswordSource(p, staticPrompt("any-password-1", "any-password-1")).GetEncryptionKey(); err == nil || !strings.Contains(err.Error(), "isn't a sesh vault") {
+		t.Fatalf("creating there: err = %v, want it refused", err)
+	}
+	db, err = sql.Open("sqlite", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test cleanup
+	var tables int
+	var mode string
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master`).Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 1 || mode != "delete" {
+		t.Errorf("the file now has %d schema objects and journal mode %q, want 1 and delete", tables, mode)
+	}
+}
+
+// Many sesh commands opening a new vault file at once all succeed.
+func TestOpenDB_ManyFirstOpensAtOnce(t *testing.T) {
+	const opens, rounds = 16, 20
+	for range rounds {
+		p := vaultPath(t.TempDir())
+		errs := make(chan error, opens)
+		for range opens {
+			go func() {
+				db, err := openDB(p)
+				if err == nil {
+					err = db.Close()
+				}
+				errs <- err
+			}()
+		}
+		for range opens {
+			if err := <-errs; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+// CheckKey passes for the vault whose key record the key was checked
+// against, and refuses another, or a key source that can't say.
+func TestStore_CheckKey(t *testing.T) {
+	dir := t.TempDir()
+	src := NewMasterPasswordSource(vaultPath(dir), staticPrompt("first-password-1", "first-password-1"))
+	store, err := Open(vaultPath(dir), NewKeySourceOracle(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close() //nolint:errcheck // test cleanup
+	if err := store.CheckKey(); err != nil {
+		t.Errorf("its own vault: %v", err)
+	}
+
+	other := t.TempDir()
+	if _, err := NewMasterPasswordSource(vaultPath(other), staticPrompt("other-password-1", "other-password-1")).GetEncryptionKey(); err != nil {
+		t.Fatal(err)
+	}
+	swapped, err := Open(vaultPath(other), NewKeySourceOracle(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer swapped.Close() //nolint:errcheck // test cleanup
+	if err := swapped.CheckKey(); err == nil || !strings.Contains(err.Error(), "changed while sesh was unlocking it") {
+		t.Errorf("another vault: err = %v", err)
+	}
+
+	plain, err := Open(vaultPath(dir), &mockKeySource{key: bytes.Repeat([]byte{1}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plain.Close() //nolint:errcheck // test cleanup
+	if err := plain.CheckKey(); err == nil || !strings.Contains(err.Error(), "doesn't say which vault it unlocked") {
+		t.Errorf("a key source that can't say: err = %v", err)
 	}
 }

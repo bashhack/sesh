@@ -152,6 +152,16 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		return nil, fmt.Errorf("unlock the vault: %w", err)
 	}
 	secure.SecureZeroBytes(srcKey)
+	if err := srcStore.CheckKey(); err != nil {
+		return nil, err
+	}
+	// Touch ID and recovery files in the folder are re-wrapped only if
+	// they were made for this vault.
+	srcMat, err := database.ReadUnlockMaterial(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	oldID := database.UnlockID(srcMat.Verify)
 	// One key change at a time: held until this one ends, so another can't
 	// clear the files this one's rollback needs.
 	if release, err = lockKeyChange(dataDir); err != nil {
@@ -207,6 +217,9 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		return nil, fmt.Errorf("open destination database: %w", err)
 	}
 	destStoreOpen = true
+	if err := destStore.CheckKey(); err != nil {
+		return nil, err
+	}
 
 	result, err := migration.Migrate(srcStore, destStore)
 	if err != nil {
@@ -238,17 +251,17 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	}
 	dbRenamed = true
 	if err := renameFile(dbNewPath, dbPath); err != nil {
-		return nil, fmt.Errorf("rename destination DB into place: %w; the old vault was put back", err)
+		return nil, fmt.Errorf("rename destination DB into place: %w", err)
 	}
 	swapped = true
 	destDBCreated = false // canonical now; rollback no longer applies
 	// Locked before any output, so a failed write below can't skip it.
 	agentNote := lockAgentAfterRekey()
 	// Touch ID unlock is re-wrapped for the new key, also before any output.
-	touchNote := rewrapTouchID(dbPath, destKey)
+	touchNote := rewrapTouchID(dbPath, oldID, destKey)
 	recoveryNote := ""
 	if src == nil {
-		recoveryNote = rewrapRecovery(dbPath, destKey)
+		recoveryNote = rewrapRecovery(dbPath, oldID, destKey)
 	}
 	copiesNote := removeOldCopies(dbBackupPath)
 

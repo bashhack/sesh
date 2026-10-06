@@ -1,7 +1,9 @@
 package database
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +25,39 @@ type UnlockMaterial struct {
 	Salt   []byte
 	Verify []byte
 	Params Argon2idParams
+}
+
+// UnlockID names a vault's key record by its verify blob: the hex SHA-256
+// of it. The blob is stored in the vault, so the id is not a secret. A
+// password change gives the vault a new one.
+func UnlockID(verify []byte) string {
+	sum := sha256.Sum256(verify)
+	return hex.EncodeToString(sum[:])
+}
+
+// CheckKey confirms that the store's oracle holds this vault's key: that
+// the key record it was checked against is the one in the file the store
+// has open. The file at the vault's path can change between unlocking and
+// opening, when another sesh command's password change swaps in a new
+// vault; entries written then would be unreadable with the new vault's key.
+// Callers run it right after Open, before any read or write.
+func (s *Store) CheckKey() error {
+	o, ok := s.oracle.(interface{ UnlockID() (string, error) })
+	if !ok {
+		return errors.New("check the vault's key: the key source doesn't say which vault it unlocked")
+	}
+	id, err := o.UnlockID()
+	if err != nil {
+		return err
+	}
+	m, err := readKeyRecord(s.db, s.path)
+	if err != nil {
+		return err
+	}
+	if UnlockID(m.Verify) != id {
+		return fmt.Errorf("the vault at %s changed while sesh was unlocking it (another sesh command changed its master password); run this again", s.path)
+	}
+	return nil
 }
 
 // ErrNoVault means there is no vault at the path yet, or one whose master

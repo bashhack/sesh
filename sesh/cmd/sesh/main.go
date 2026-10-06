@@ -292,8 +292,9 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 	return store, nil
 }
 
-// openStoreWith opens the store at dbPath over oracle, which holds the key
-// checked against this vault's key record. The store owns oracle once
+// openStoreWith opens the store at dbPath over oracle, and confirms the
+// file it opened is the vault whose key record oracle's key was checked
+// against. The store owns oracle once
 // opened; if opening fails, oracle is closed here so an agent connection or
 // a cached master key doesn't outlive the failure.
 func openStoreWith(dbPath string, oracle database.CryptoOracle) (*database.Store, error) {
@@ -303,6 +304,12 @@ func openStoreWith(dbPath string, oracle database.CryptoOracle) (*database.Store
 			c.Close()
 		}
 		return nil, fmt.Errorf("open database: %w", err)
+	}
+	if err := store.CheckKey(); err != nil {
+		if closeErr := store.Close(); closeErr != nil {
+			return nil, fmt.Errorf("%w (close also failed: %v)", err, closeErr)
+		}
+		return nil, err
 	}
 
 	return store, nil

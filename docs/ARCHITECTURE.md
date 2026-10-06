@@ -406,7 +406,7 @@ Each layer provides independent security measures:
 1. **Storage Security**
    - **Threat**: Other processes reading secrets
    - **Defense**: Every entry encrypted (AES-256-GCM) under a key derived from the master password
-   - **Enforcement**: Argon2id and the vault's key check
+   - **Enforcement**: Argon2id, and the verify blob in the vault's key record
 
 2. **Memory Security**
    - **Threat**: Memory dumps, swap files, cold boot attacks
