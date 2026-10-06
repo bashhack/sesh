@@ -47,10 +47,8 @@ func appendErr(primary error, label string, secondary error) error {
 }
 
 // runRotateMasterPassword re-encrypts every entry under a freshly-derived
-// key from a new master password. The old sidecar is preserved at
-// passwords.key.pre-rotate and the old DB at <dbPath>.pre-rotate so the
-// user has a recovery path if they later realize they typed the new
-// password wrong (e.g. caps lock during the confirm step).
+// key from a new master password. The old vault and key file are kept
+// (.pre-rotate) only until the new ones are in place, then removed.
 //
 // Source and target both use MasterPasswordSource; the only thing that
 // changes is the salt and the derived key. The target source is constructed against a staging
@@ -77,6 +75,16 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	st, err := settings()
 	if err != nil {
 		return nil, err
+	}
+	// SESH_MASTER_PASSWORD answers every prompt with the current password,
+	// so the new one is always asked at the terminal: otherwise the "new"
+	// password would silently be the old one.
+	newCfg := cfg
+	if cfg.fromEnv {
+		newCfg = terminalPasswordPrompt()
+		if !newCfg.interactive {
+			return nil, errors.New("SESH_MASTER_PASSWORD gives the current master password; the new master password is asked at a terminal, so run this at one")
+		}
 	}
 
 	dbPath := st.DBPath.Value
@@ -230,7 +238,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	// GetEncryptionKey on this source triggers initialize() — i.e. the
 	// "Create master password" + "Confirm master password" prompts that
 	// generate the new salt and write the .new sidecar.
-	destKS := cfg.newSourceAtPath(sidecarNewPath)
+	destKS := newCfg.newSourceAtPath(sidecarNewPath)
 	destKey, err := destKS.GetEncryptionKey()
 	if err != nil {
 		return nil, fmt.Errorf("create new sidecar: %w", err)
@@ -324,7 +332,11 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if _, perr := fmt.Fprintln(app.Stderr, copiesNote); perr != nil {
 		return bytes.Clone(destKey), perr
 	}
-	for _, msg := range []string{touchNote, recoveryNote, agentNote} {
+	envNote := ""
+	if cfg.fromEnv {
+		envNote = "SESH_MASTER_PASSWORD still holds the old password; update it, or the next command will refuse it as wrong."
+	}
+	for _, msg := range []string{touchNote, recoveryNote, agentNote, envNote} {
 		if msg == "" {
 			continue
 		}

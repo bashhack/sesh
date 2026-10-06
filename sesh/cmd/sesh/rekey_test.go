@@ -224,6 +224,64 @@ func TestRotate_PasswordChangesPassword(t *testing.T) {
 	}
 }
 
+// stubTerminalPrompt makes terminalPasswordPrompt return cfg.
+func stubTerminalPrompt(t *testing.T, cfg passwordPromptConfig) {
+	t.Helper()
+	orig := terminalPasswordPrompt
+	terminalPasswordPrompt = func() passwordPromptConfig { return cfg }
+	t.Cleanup(func() { terminalPasswordPrompt = orig })
+}
+
+func TestRotate_EnvPasswordIsOnlyTheCurrentOne(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2"})
+
+	// SESH_MASTER_PASSWORD answers every prompt it's given; the new
+	// password has to come from the terminal instead.
+	stubTerminalPrompt(t, passwordPromptConfig{prompt: sequencedPrompt("new-pw-5678", "new-pw-5678"), interactive: true})
+	app, stderr := rekeyTestApp("y\n")
+	envCfg := passwordPromptConfig{prompt: func(string) ([]byte, error) { return []byte("old-pw-1234"), nil }, fromEnv: true}
+	if err := runRotateMasterPassword(app, envCfg); err != nil {
+		t.Fatalf("runRotateMasterPassword: %v\nstderr:\n%s", err, stderr.String())
+	}
+	// The variable still holds the old password, so the next command
+	// would fail with "wrong master password" without saying why.
+	if want := "SESH_MASTER_PASSWORD still holds the old password"; !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr doesn't say %q:\n%s", want, stderr.String())
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
+	if got := readEntriesViaPassword(t, env, []string{"password/github/alice"}); got["password/github/alice"] != "hunter2" {
+		t.Errorf("the new password doesn't open the rotated vault: %v", got)
+	}
+}
+
+func TestRotate_EnvPasswordWithoutATerminalRefuses(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2"})
+
+	stubTerminalPrompt(t, passwordPromptConfig{prompt: sequencedPrompt(), interactive: false})
+	app, _ := rekeyTestApp("y\n")
+	envCfg := passwordPromptConfig{prompt: func(string) ([]byte, error) { return []byte("old-pw-1234"), nil }, fromEnv: true}
+	err := runRotateMasterPassword(app, envCfg)
+	if wantSub := "the new master password is asked at a terminal"; err == nil || !strings.Contains(err.Error(), wantSub) {
+		t.Fatalf("runRotateMasterPassword without a terminal = %v, want it to contain %q", err, wantSub)
+	}
+
+	// Nothing changed: no staging was started, and the old password still
+	// opens the vault.
+	for _, p := range []string{env.dbPath + rekeyDestSuffix, env.sidecarPath + rekeyDestSuffix, env.sidecarPath + rekeyDestSuffix + ".lock"} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s exists after the refusal (stat: %v)", p, err)
+		}
+	}
+	if got := readEntriesViaPassword(t, env, []string{"password/github/alice"}); got["password/github/alice"] != "hunter2" {
+		t.Errorf("the old password no longer opens the vault: %v", got)
+	}
+}
+
 func TestRotate_PreservesPerEntryFreshness(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
