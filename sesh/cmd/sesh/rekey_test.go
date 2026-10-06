@@ -707,7 +707,7 @@ func TestRekey_ChangesTheMasterPassword(t *testing.T) {
 }
 
 // Entries named before the name rules (a trailing space, a long name) are
-// still copied by a password change and can still be deleted.
+// still copied by a password change.
 func TestRotate_KeepsNamesSavedBeforeTheNameRules(t *testing.T) {
 	env := setupRekeyEnv(t)
 	long := "password/" + strings.Repeat("x", 300)

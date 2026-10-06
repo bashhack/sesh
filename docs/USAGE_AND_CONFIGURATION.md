@@ -805,11 +805,12 @@ $ sesh -service aws -delete totp/aws/prod
 
 **Names.** An entry is named by its service name and, optionally, a username (for AWS and `--service totp`, the profile). Spaces inside a name are fine (`My Bank`). A name can never contain a `/`, which separates the parts of an entry's ID (`password/github/alice`), or control characters such as a tab or newline. When you name a new entry (`store`, `generate`, `totp-store`, a setup wizard, or an import), sesh also refuses, before asking for the secret:
 
-- a space or an invisible character (such as a zero-width space) at the start or end (`"github "`), which would make an entry that `github` doesn't find;
+- a space at the start or end (`"github "`), which would make an entry that `github` doesn't find;
+- an invisible character (such as a zero-width space or soft hyphen, which text copied from web pages can carry) anywhere in the name, for the same reason;
 - a character that changes text direction, which can make one name display as another;
 - more than 256 characters.
 
-An import reports each entry it refuses for these reasons and imports the rest. Entries saved by an earlier sesh that break these rules still open, copy (when you change your master password), and delete.
+Entries saved by an earlier sesh that break these rules still open, update, copy (when you change your master password), and delete. Restoring a backup imports them as they are, with a warning suggesting you rename them; an import refuses only names no entry can have (a `/` or control character).
 
 ### Setup Wizard Features
 
