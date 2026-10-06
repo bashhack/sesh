@@ -154,9 +154,9 @@ func (p *Provider) ValidateRequest() error {
 			return fmt.Errorf("--service-name is required for generate action")
 		}
 		if p.entryType == string(password.EntryTypeTOTP) {
-			store := "sesh --service password --action totp-store --service-name " + p.service
+			store := "sesh --service password --action totp-store --service-name " + shellQuote(p.service)
 			if p.username != "" {
-				store += " --username " + p.username
+				store += " --username " + shellQuote(p.username)
 			}
 			return fmt.Errorf("sesh can't generate a TOTP secret: the service gives you one. Store it with: %s", store)
 		}
@@ -428,9 +428,9 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 	}
 	// A typed password only; API keys and notes come from elsewhere.
 	if et == password.EntryTypePassword && password.IsWeak(pw, p.service, p.username) {
-		generate := "sesh --service password --action generate --service-name " + p.service
+		generate := "sesh --service password --action generate --service-name " + shellQuote(p.service)
 		if p.username != "" {
-			generate += " --username " + p.username
+			generate += " --username " + shellQuote(p.username)
 		}
 		warnWeak("run: " + generate)
 	}

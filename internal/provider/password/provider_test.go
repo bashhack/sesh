@@ -969,3 +969,25 @@ func TestGeneratePassword_WarnsWhenShort(t *testing.T) {
 		}
 	}
 }
+
+// Suggested commands quote names, so one with a space runs as shown.
+func TestSuggestedCommands_QuoteNames(t *testing.T) {
+	stubReadPassword(t, "password1")
+	p, _ := newTestProvider(vault.NewMemStore())
+	p.action, p.service, p.username, p.force = "store", "My Bank", "al ice", true
+	restore := testutil.RedirectStderr(t)
+	_, err := p.GetCredentials()
+	stderr := restore()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if want := "run: sesh --service password --action generate --service-name 'My Bank' --username 'al ice'\n"; !strings.Contains(stderr, want) {
+		t.Errorf("stderr = %q, want it to contain %q", stderr, want)
+	}
+
+	p, _ = newTestProvider(vault.NewMemStore())
+	p.action, p.service, p.entryType = "generate", "My Bank", "totp"
+	if err := p.ValidateRequest(); err == nil || !strings.Contains(err.Error(), "--service-name 'My Bank'") {
+		t.Errorf("err = %v, want the name quoted", err)
+	}
+}
