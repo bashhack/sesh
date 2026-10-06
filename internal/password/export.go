@@ -183,7 +183,11 @@ type ImportOptions struct {
 
 // ImportResult reports what happened during import.
 type ImportResult struct {
-	Errors   []string
+	Errors []string
+	// Warnings name imported entries whose names break the rules for new
+	// names: a backup can hold entries saved before those rules, and
+	// restoring it copies them as they are.
+	Warnings []string
 	Imported int
 	Skipped  int
 }
@@ -230,9 +234,13 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 		// Any other error is ambiguous — fail this entry rather than
 		// risk an upsert that silently overwrites real data.
 		k := key(e.Service, e.Username, e.Type)
-		if err := k.ValidateNew(); err != nil {
+		if err := k.Validate(); err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
 			continue
+		}
+		nameWarning := ""
+		if err := k.ValidateNew(); err != nil {
+			nameWarning = fmt.Sprintf("%s: %v; imported as it is, but consider renaming it", importName(e), err)
 		}
 		_, err := m.store.Lookup(k)
 		var exists bool
@@ -268,6 +276,9 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			continue
 		}
 		result.Imported++
+		if nameWarning != "" {
+			result.Warnings = append(result.Warnings, nameWarning)
+		}
 	}
 
 	return result, nil

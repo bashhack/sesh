@@ -191,8 +191,9 @@ func TestExport_StreamsPartialCountOnWriterFailure(t *testing.T) {
 	}
 }
 
-// An entry whose name the vault won't take is reported, and the rest import.
-func TestImport_ReportsABadNameAndImportsTheRest(t *testing.T) {
+// Restoring a backup is a copy: an entry whose name breaks the rules for
+// new names (saved before them) is imported, with a warning to rename it.
+func TestImport_KeepsANameSavedBeforeTheNameRules(t *testing.T) {
 	m, _ := newTestManager(t)
 	in := `[{"service": "github ", "type": "password", "secret": "a"},
 	        {"service": "gitlab", "type": "password", "secret": "b"}]`
@@ -200,10 +201,13 @@ func TestImport_ReportsABadNameAndImportsTheRest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Imported != 1 || len(res.Errors) != 1 || !strings.HasPrefix(res.Errors[0], `"github ": the service name "github " starts or ends with a space`) {
-		t.Errorf("result = %+v, want gitlab imported and github refused for its space", res)
+	if res.Imported != 2 || len(res.Errors) != 0 {
+		t.Errorf("result = %+v, want both imported", res)
 	}
-	if got, err := m.GetPasswordString("gitlab", "", EntryTypePassword); err != nil || got != "b" {
-		t.Errorf("gitlab = %q, %v", got, err)
+	if len(res.Warnings) != 1 || !strings.HasPrefix(res.Warnings[0], `"github ": the service name "github " starts or ends with a space`) {
+		t.Errorf("warnings = %q, want one for github's space", res.Warnings)
+	}
+	if got, err := m.GetPasswordString("github ", "", EntryTypePassword); err != nil || got != "a" {
+		t.Errorf(`"github " = %q, %v; want it kept`, got, err)
 	}
 }

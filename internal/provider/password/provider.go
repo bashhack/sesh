@@ -179,8 +179,9 @@ func (p *Provider) ValidateRequest() error {
 }
 
 // checkName refuses a name a new entry can't have, so an action that saves
-// one stops before asking for the secret. Actions that read or delete an
-// entry don't check it: entries named before these rules still open.
+// one stops before asking for the secret. An existing entry keeps its name,
+// even one saved before these rules, and actions that only read or delete
+// an entry don't check it.
 func (p *Provider) checkName() error {
 	kind := p.effectiveEntryType()
 	switch p.action {
@@ -190,7 +191,18 @@ func (p *Provider) checkName() error {
 	default:
 		return nil
 	}
-	return vault.Key{Kind: kind, Service: p.service, Username: p.username}.ValidateNew()
+	k := vault.Key{Kind: kind, Service: p.service, Username: p.username}
+	if err := k.Validate(); err != nil {
+		return err
+	}
+	err := k.ValidateNew()
+	if err == nil {
+		return nil
+	}
+	if _, lerr := p.store.Lookup(k); lerr == nil {
+		return nil
+	}
+	return err
 }
 
 // GetCredentials handles the main operation based on --action flag.
@@ -581,7 +593,7 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 			p.username = info.Account
 			// Checked like a --username, before anything is stored.
 			if err := p.checkName(); err != nil {
-				return provider.Credentials{}, err
+				return provider.Credentials{}, fmt.Errorf("the QR code's account name can't be used: %w; choose one with --username", err)
 			}
 		}
 		fmt.Fprintf(os.Stderr, "✅ QR code scanned successfully\n")
@@ -790,13 +802,15 @@ func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, e
 		fmt.Fprintf(&sb, ", skipped %d", result.Skipped)
 	}
 	if len(result.Errors) > 0 {
-		if len(result.Errors) == 1 {
-			sb.WriteString(", 1 error:")
-		} else {
-			fmt.Fprintf(&sb, ", %d errors:", len(result.Errors))
-		}
+		fmt.Fprintf(&sb, ", %s:", countOf(len(result.Errors), "error"))
 		for _, e := range result.Errors {
 			fmt.Fprintf(&sb, "\n  %s", e)
+		}
+	}
+	if len(result.Warnings) > 0 {
+		fmt.Fprintf(&sb, "\n%s:", countOf(len(result.Warnings), "warning"))
+		for _, w := range result.Warnings {
+			fmt.Fprintf(&sb, "\n  %s", w)
 		}
 	}
 
@@ -812,4 +826,12 @@ func entryCount(n int) string {
 		return "1 entry"
 	}
 	return fmt.Sprintf("%d entries", n)
+}
+
+// countOf says how many of a thing, as "1 error" or "n errors".
+func countOf(n int, thing string) string {
+	if n == 1 {
+		return "1 " + thing
+	}
+	return fmt.Sprintf("%d %ss", n, thing)
 }

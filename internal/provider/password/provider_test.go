@@ -844,21 +844,25 @@ func TestValidateRequest_RefusesBadNames(t *testing.T) {
 	}
 }
 
-// Refused entries are named as --list names them, quoted so a stray space shows.
+// Refused entries are named as --list names them, quoted so a stray space
+// shows; an entry kept despite its name is reported as a warning.
 func TestImport_ReportsRefusedEntriesByName(t *testing.T) {
 	p, _ := newTestProvider(vault.NewMemStore())
 	p.action, p.format = "import", "json"
-	p.stdin = strings.NewReader(`[{"service":"github ","type":"password","secret":"a"},
+	p.stdin = strings.NewReader(`[{"service":"a/b","type":"password","secret":"a"},
 		{"service":"gitlab","username":"alice","type":"password","secret":""},
+		{"service":"github ","type":"password","secret":"c"},
 		{"service":"ok","type":"password","secret":"b"}]`)
 	creds, err := p.GetCredentials()
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
 	for _, want := range []string{
-		"Imported 1 entry, 2 errors:",
-		`"github ": the service name "github " starts or ends with a space`,
+		"Imported 2 entries, 2 errors:",
+		`"a/b": the service name "a/b" contains "/"`,
 		`"gitlab" ("alice"): empty secret`,
+		"1 warning:",
+		`"github ": the service name "github " starts or ends with a space; imported as it is, but consider renaming it`,
 	} {
 		if !strings.Contains(creds.DisplayInfo, want) {
 			t.Errorf("DisplayInfo = %q, want it to contain %q", creds.DisplayInfo, want)
@@ -869,7 +873,7 @@ func TestImport_ReportsRefusedEntriesByName(t *testing.T) {
 func TestImport_OneErrorIsSingular(t *testing.T) {
 	p, _ := newTestProvider(vault.NewMemStore())
 	p.action, p.format = "import", "json"
-	p.stdin = strings.NewReader(`[{"service":"github ","type":"password","secret":"a"}]`)
+	p.stdin = strings.NewReader(`[{"service":"a/b","type":"password","secret":"a"}]`)
 	creds, err := p.GetCredentials()
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
@@ -902,10 +906,26 @@ func TestStoreTOTP_QRAccountIsCheckedToo(t *testing.T) {
 	p.action, p.service = "totp-store", "github"
 	p.stdin = strings.NewReader("2\n")
 	defer testutil.DiscardStderr(t)()
-	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "the username is 300 characters long") {
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "the QR code's account name can't be used: the username is 300 characters long; the most is 256; choose one with --username") {
 		t.Errorf("err = %v, want the QR account refused", err)
 	}
 	if entries, err := store.List(vault.Filter{}); err != nil || len(entries) != 0 {
 		t.Errorf("stored %v (%v), want nothing", entries, err)
+	}
+}
+
+// An entry saved before the name rules can still be updated in place; only
+// a name for a new entry is checked.
+func TestValidateRequest_AllowsUpdatingANameSavedBeforeTheRules(t *testing.T) {
+	for _, tt := range []struct{ action, id string }{
+		{"store", "password/github "},
+		{"generate", "password/github "},
+		{"totp-store", "totp/github "},
+	} {
+		p, _ := newTestProvider(seeded(t, map[string]string{tt.id: "JBSWY3DPEHPK3PXP"}))
+		p.action, p.service = tt.action, "github "
+		if err := p.ValidateRequest(); err != nil {
+			t.Errorf("%s over the existing %q: ValidateRequest = %v, want nil", tt.action, tt.id, err)
+		}
 	}
 }
