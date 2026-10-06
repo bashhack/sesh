@@ -15,7 +15,7 @@ sesh is built on three fundamental principles:
 sesh is designed to reduce exposure to:
 
 - **Corporate Data Harvesting**: Unlike browser extensions or corporate MFA apps, sesh never phones home
-- **Credential Theft**: Every secret is encrypted in the vault, with a key derived from your master password. The key itself is stored only wrapped, in the optional recovery key and Touch ID files, and in the agent's memory while it's unlocked
+- **Credential Theft**: Every secret is encrypted in the vault, with a key derived from your master password. The key itself is stored only wrapped, in the vault's optional recovery key record and the optional Touch ID file, and in the agent's memory while it's unlocked
 - **Memory Scraping**: Best-effort memory zeroing reduces exposure windows
 - **Accidental Exposure**: Subshells isolate credentials from your main environment
 - **Supply Chain Attacks**: Minimal dependencies reduce attack surface
@@ -86,7 +86,8 @@ A recovery key lets someone who forgot the master password set a new one. There'
 - **Key custody.** The key is the seed of a P-256 key pair (private key derived with HKDF-SHA256). sesh stores only the public half, in the vault file (the `recovery` table), with the vault key wrapped to it: one-off P-256 ECDH, HKDF-SHA256 with a label of its own (so a recovery wrap never opens as a Touch ID wrap, or the reverse), then AES-256-GCM bound to the vault's unlock id. The agent does the wrap, so the vault key doesn't leave it. Because wrapping needs only the public half, a password change re-wraps the new vault key without the recovery key, into the new vault before it replaces the old one, so the two change together.
 - **Using it.** `sesh recover` unwraps the vault key with the typed key, checks it against the vault's verify blob, and re-encrypts the vault under a new master password, as a password change does. The used key then stops working (the new vault has no record of it), and a new one is offered at once.
 - **What changes.** The vault opens with the master password, an enrolled fingerprint on that Mac (Touch ID), **or** the recovery key together with the vault file. The paper key can't be guessed but can be found; keep it away from the computer.
-- **The file alone** reveals nothing: a public key and a wrap only the paper key opens.
+- **The record alone** reveals nothing: a public key and a wrap only the paper key opens.
+- **Removing it.** `sesh recovery remove` deletes the record, and the vault is written so that deleted rows leave nothing behind in the file (SQLite's `secure_delete`). A backup made while the key was set still holds a wrap of the same vault key, though. If the paper key may have been seen, remove it and then change the master password (`sesh --rekey`), which gives the vault a new key that no old wrap opens.
 - **Tampering.** A process running as the user could replace the public key in the vault's `recovery` record, so that the next password change wraps the vault key to its own key. The same is true of `touchid.key`. It's accepted for the same reason: code running as the user can already ask an unlocked agent to decrypt everything, or replace the sesh binary.
 
 ##### Sesh agent
@@ -147,7 +148,7 @@ Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext
 - **No plaintext-on-disk window.** Unlike the export-then-import workaround, the change never writes a plaintext-equivalent file (an encrypted export still sits on disk encrypted only with the export password). All re-encryption happens in-process; only encrypted-at-rest databases ever touch the filesystem.
 - **Per-row salt regeneration.** Every entry gets a fresh per-row salt under the new key. Encrypted ciphertext changes for every row even when the plaintext is identical.
 - **No old copy survives success.** The original vault is kept as a `.pre-rotate` copy only while the change runs, so a failure can roll back. Before the swap, the new vault is checked to open with its key and to hold every planned entry; once it's in place, the old copy is deleted, since it would let the old password (or a leaked one) open the old contents. Copies left by an interrupted change are deleted once the current key is verified. Deletion doesn't scrub the disk: on SSDs and copy-on-write filesystems no in-place overwrite can guarantee that.
-- **The key record moves with the vault.** The new vault holds its own key record (a new salt, and a verify blob for the new key), so the password changes in the same rename as the entries. The change doesn't alter the old vault's entries or key record.
+- **The key record moves with the vault.** The new vault holds its own key record (a new salt, and a verify blob for the new key), so the password changes in the same rename as the entries. The recovery key record, re-wrapped to the new key, moves in the same rename. The change doesn't alter the old vault's entries or key record.
 
 ### Why This Matters
 

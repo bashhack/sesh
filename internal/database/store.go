@@ -52,8 +52,9 @@ func openDB(dbPath string) (*sql.DB, error) {
 	}
 	// Another sesh may be writing: wait for it rather than fail, and take
 	// the write lock when a transaction starts, so two first runs can't
-	// both create the schema.
-	db, err := sql.Open("sqlite", fileURI(dbPath, "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_txlock=immediate"))
+	// both create the schema. Deleted rows are overwritten with zeros, so
+	// a removed recovery key record or entry leaves nothing in the file.
+	db, err := sql.Open("sqlite", fileURI(dbPath, "_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=secure_delete(ON)&_txlock=immediate"))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}

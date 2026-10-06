@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/testutil"
 	"github.com/bashhack/sesh/internal/vault"
@@ -57,18 +59,18 @@ func opensVault(t *testing.T, k recovery.Key, dbPath string) {
 	t.Helper()
 	f, err := database.ReadRecovery(dbPath)
 	if err != nil {
-		t.Fatalf("recovery file: %v", err)
+		t.Fatalf("recovery key record: %v", err)
 	}
 	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if f.UnlockID != agent.UnlockID(mat.Verify) {
-		t.Fatal("the recovery file is bound to another vault")
+		t.Fatal("the recovery key record is bound to another vault")
 	}
 	key, err := k.Unwrap(recovery.Wrapped(f), []byte(f.UnlockID))
 	if err != nil {
-		t.Fatalf("the recovery key doesn't open its file: %v", err)
+		t.Fatalf("the recovery key doesn't open its record: %v", err)
 	}
 	if opened, err := database.Decrypt(key, mat.Verify); err != nil || string(opened) != database.VerifyPlaintext {
 		t.Fatalf("the unwrapped key doesn't open the vault: %q, %v", opened, err)
@@ -116,7 +118,7 @@ func TestRecovery_NotSavedUnlessConfirmed(t *testing.T) {
 			fixedRecoveryKey(t)
 			dbPath, out := createVaultOfferingRecovery(t, true, lines...)
 			if _, err := database.ReadRecovery(dbPath); !errors.Is(err, database.ErrNoRecovery) {
-				t.Errorf("recovery file written without confirmation (err %v)", err)
+				t.Errorf("recovery key record written without confirmation (err %v)", err)
 			}
 			if !strings.Contains(out, "No recovery key was set, since it wasn't confirmed. Make one when you're ready with: sesh recovery new") {
 				t.Errorf("stderr:\n%s", out)
@@ -134,7 +136,7 @@ func TestRecovery_OfferDeclined(t *testing.T) {
 		t.Error("the key was shown although the offer was declined")
 	}
 	if _, err := database.ReadRecovery(dbPath); !errors.Is(err, database.ErrNoRecovery) {
-		t.Errorf("recovery file exists after declining (err %v)", err)
+		t.Errorf("recovery key record exists after declining (err %v)", err)
 	}
 }
 
@@ -475,7 +477,7 @@ func (w *stderrFailsAt) Write(p []byte) (int, error) {
 }
 
 // If the change commits but its summary can't be written, the used recovery
-// key is still retired: the error is reported, and its file is gone.
+// key is still retired: the error is reported, and the new vault has no record of it.
 func TestRecover_RetiresTheKeyEvenIfReportingFails(t *testing.T) {
 	env, used := recoverableVault(t)
 	orig := recoveryPrompt
@@ -496,5 +498,111 @@ func TestRecover_RetiresTheKeyEvenIfReportingFails(t *testing.T) {
 	}
 	if _, err := database.ReadRecovery(env.dbPath); !errors.Is(err, database.ErrNoRecovery) {
 		t.Errorf("the used recovery key's file is still there (err %v)", err)
+	}
+}
+
+// A recovery key record that can't be carried to the new vault stops a
+// password change before the new password is asked for, and says what to do.
+func TestRotate_RefusesAnUnusableRecoveryRecordFirst(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	mat, err := database.ReadUnlockMaterial(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := recovery.NewRecord(agent.UnlockID(mat.Verify), []byte("not a public key"), keywrap.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")})
+	if err := database.WriteRecovery(env.dbPath, bad); err != nil {
+		t.Fatal(err)
+	}
+	app, _ := rekeyTestApp("y\n")
+	err = runRotateMasterPassword(app, rotateTestCfg("old-pw-1234"))
+	if wantSub := "remove it with: sesh recovery remove"; err == nil || !strings.Contains(err.Error(), wantSub) {
+		t.Fatalf("err = %v, want it to contain %q", err, wantSub)
+	}
+	if _, err := database.ReadRecovery(env.dbPath); err != nil {
+		t.Errorf("the record was changed: %v", err)
+	}
+}
+
+// sesh recovery new and remove wait for no key change: one running could
+// carry the old record into its new vault and undo them.
+func TestRunRecovery_RefusesDuringAKeyChange(t *testing.T) {
+	env, k := recoverableVault(t)
+	release, err := lockKeyChange(env.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	orig := recoveryPrompt
+	recoveryPrompt = func() passwordPromptConfig {
+		return withLines(withAnswer(interactivePrompt(t, "forgotten-pw-1234"), true), "x")
+	}
+	t.Cleanup(func() { recoveryPrompt = orig })
+	for _, cmd := range []string{"remove", "new"} {
+		restore := testutil.RedirectStderr(t)
+		err := runRecovery(agentTestApp(), []string{cmd})
+		restore()
+		if wantSub := "another sesh command is changing this vault's key"; err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("%s: err = %v, want it to contain %q", cmd, err, wantSub)
+		}
+	}
+	opensVault(t, k, env.dbPath)
+}
+
+// A recovery key record that didn't open the vault before a password change
+// isn't carried into the new vault, and the person is told.
+func TestRotate_DropsAStaleRecoveryRecord(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	k, err := recovery.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := k.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := recovery.Wrap(pub, bytes.Repeat([]byte{7}, 32), []byte("another-vault"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.WriteRecovery(env.dbPath, recovery.NewRecord("another-vault", pub, w)); err != nil {
+		t.Fatal(err)
+	}
+	app, stderr := rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
+		t.Fatalf("rotate: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stderr.String(), "Your recovery key's record was for another vault, so the new vault has none") {
+		t.Errorf("stderr missing the note:\n%s", stderr)
+	}
+	if _, err := database.ReadRecovery(env.dbPath); !errors.Is(err, database.ErrNoRecovery) {
+		t.Errorf("the new vault's recovery record: err = %v, want none", err)
+	}
+}
+
+// With no vault yet, status and remove say there's no recovery key, and
+// create nothing.
+func TestRunRecovery_NoVault(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "passwords.db")
+	useConfigFile(t, "db_path = \""+dbPath+"\"\n")
+	for cmd, want := range map[string]string{
+		"status": "Recovery key: none. Make one with: sesh recovery new\n",
+		"remove": "This vault has no recovery key.\n",
+	} {
+		app := agentTestApp()
+		if err := runRecovery(app, []string{cmd}); err != nil {
+			t.Fatalf("%s: %v", cmd, err)
+		}
+		if got := app.Stdout.(*bytes.Buffer).String(); got != want {
+			t.Errorf("%s = %q, want %q", cmd, got, want)
+		}
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Errorf("a vault was created (stat: %v)", err)
 	}
 }

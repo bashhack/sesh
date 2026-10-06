@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/bashhack/sesh/internal/agent"
@@ -127,6 +128,12 @@ func offerRecovery(cfg passwordPromptConfig, dbPath string) {
 	if err != nil || !yes {
 		return
 	}
+	release, err := lockKeyChange(filepath.Dir(dbPath))
+	if err != nil {
+		failed(err)
+		return
+	}
+	defer release()
 	conn, err := agent.DialExisting()
 	if err != nil {
 		failed(err)
@@ -162,13 +169,19 @@ func runRecovery(app *App, args []string) error {
 			return err
 		}
 		if mat, merr := database.ReadUnlockMaterial(dbPath); merr == nil && f.UnlockID != agent.UnlockID(mat.Verify) {
-			return out("Recovery key: out of date, it doesn't open this vault. Make a new one with: sesh recovery new")
+			return out("Recovery key: doesn't open this vault (its record is for another vault). Make a new one with: sesh recovery new")
 		}
 		return out("Recovery key: set (made %s)", f.CreatedAt.Local().Format("2006-01-02 15:04"))
 	case "remove":
 		if _, err := database.ReadRecovery(dbPath); errors.Is(err, database.ErrNoRecovery) || errors.Is(err, database.ErrNoVault) {
 			return out("This vault has no recovery key.")
 		}
+		// A key change running now would carry the record into its new vault.
+		release, err := lockKeyChange(filepath.Dir(dbPath))
+		if err != nil {
+			return err
+		}
+		defer release()
 		p := recoveryPrompt()
 		if p.interactive && p.confirm != nil {
 			yes, err := p.confirm("Remove the recovery key? It will no longer open this vault. [Y/n] ")
@@ -184,6 +197,13 @@ func runRecovery(app *App, args []string) error {
 		if err := requireVault(dbPath, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
 			return err
 		}
+		// A key change running now would carry the old record into its new
+		// vault, and this key would be lost.
+		release, err := lockKeyChange(filepath.Dir(dbPath))
+		if err != nil {
+			return err
+		}
+		defer release()
 		p := recoveryPrompt()
 		if !p.interactive || p.readLine == nil {
 			return errors.New("sesh recovery new needs a terminal: it shows the key once and asks you to confirm you've saved it")
@@ -222,6 +242,23 @@ func runRecovery(app *App, args []string) error {
 	}
 }
 
+// checkRecoveryCarries confirms, before a password change asks for
+// anything, that the vault's recovery key record can be carried to the new
+// vault.
+func checkRecoveryCarries(dbPath string) error {
+	r, err := database.ReadRecovery(dbPath)
+	if errors.Is(err, database.ErrNoRecovery) {
+		return nil
+	}
+	if err == nil {
+		err = recovery.CheckPublicKey(r.PublicKey)
+	}
+	if err != nil {
+		return fmt.Errorf("the vault's recovery key record can't be kept through the change (%v); remove it with: sesh recovery remove, then try again", err)
+	}
+	return nil
+}
+
 // carryRecovery keeps the recovery key working across a password change:
 // the new vault's key, newKey, is wrapped to the same recovery key, which
 // needs only its public half, so there's no prompt, and the record goes
@@ -238,7 +275,7 @@ func carryRecovery(srcPath, destPath, oldID string, newKey []byte) (string, erro
 	}
 	if r.UnlockID != oldID {
 		// It didn't open the vault before the change either.
-		return "Your recovery key was out of date, so the new vault has none; make one with: sesh recovery new", nil
+		return "Your recovery key's record was for another vault, so the new vault has none; make one with: sesh recovery new", nil
 	}
 	mat, err := database.ReadUnlockMaterial(destPath)
 	if err != nil {
@@ -330,7 +367,7 @@ func runRecover(app *App, args []string) error {
 		return err
 	}
 	if f.UnlockID != agent.UnlockID(mat.Verify) {
-		return errors.New("the recovery key is out of date: it was made for this vault before its master password changed some other way, so it can't open it")
+		return errors.New("this vault's recovery key record is for another vault, so it can't open this one")
 	}
 
 	key, err := openWithRecoveryKey(f, mat.Verify, p)

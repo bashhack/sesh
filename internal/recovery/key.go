@@ -180,6 +180,12 @@ func Wrap(pub, secret, aad []byte) (keywrap.Wrapped, error) {
 	return keywrap.Wrap(pub, secret, aad, wrapInfo)
 }
 
+// CheckPublicKey reports whether pub is a public key Wrap can wrap to.
+func CheckPublicKey(pub []byte) error {
+	_, err := ecdh.P256().NewPublicKey(pub)
+	return err
+}
+
 // Unwrap recovers the secret wrapped to this key's public key, bound to aad.
 func (k Key) Unwrap(w keywrap.Wrapped, aad []byte) ([]byte, error) {
 	priv, err := k.privateKey()

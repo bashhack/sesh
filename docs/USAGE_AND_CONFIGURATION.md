@@ -350,6 +350,8 @@ sesh recover            # forgot the master password? set a new one
 
 **What it means for security.** Anyone who has both your recovery key and your vault file can open the vault, with no other check, because sesh has no server to add one. That's why it's optional. It can't be guessed (128 random bits), but it can be found, so keep it away from the vault's computer. The vault keeps only the recovery key's public key and the vault key wrapped to it; without the written-down key they open nothing.
 
+**If the key may have been seen,** run `sesh recovery remove`, then `sesh --rekey`. Removing it stops the vault from opening with it, but a backup made while it was set still would; a password change gives the vault a new key, which no old backup's recovery key opens.
+
 **Changes that affect it.**
 - **Changing your master password** (`sesh --rekey`) keeps the recovery key working, with no prompt.
 

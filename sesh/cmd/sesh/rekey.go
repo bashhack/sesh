@@ -162,6 +162,11 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		return nil, err
 	}
 	oldID := database.UnlockID(srcMat.Verify)
+	if src == nil {
+		if err := checkRecoveryCarries(dbPath); err != nil {
+			return nil, err
+		}
+	}
 	// One key change at a time: held until this one ends, so another can't
 	// clear the files this one's rollback needs.
 	if release, err = lockKeyChange(dataDir); err != nil {
