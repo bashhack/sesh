@@ -211,7 +211,8 @@ func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
 	if err != nil {
 		return TOTPInfo{}, fmt.Errorf("decode account in label: %w", err)
 	}
-	info.Account = account
+	// The format allows spaces before the account name.
+	info.Account = strings.TrimSpace(account)
 
 	if info.Secret == "" {
 		return TOTPInfo{}, fmt.Errorf("no secret found in QR code")
