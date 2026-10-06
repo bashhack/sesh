@@ -111,15 +111,22 @@ func TestOracle_StoreRoundTrip(t *testing.T) {
 	stop := runServer(t, sockPath)
 	defer stop()
 
-	params := lightParams()
-	salt, verify := sealVerify(t, "correct-horse", params)
-	conn := dialClient(t, sockPath)
-	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); err != nil {
+	// A vault with its key record, and the agent unlocked with it.
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	pw := func(string) ([]byte, error) { return []byte("correct-horse"), nil }
+	if _, err := database.NewMasterPasswordSource(dbPath, pw).GetEncryptionKey(); err != nil {
 		t.Fatal(err)
 	}
-	ks := NewOracle(conn, UnlockID(verify))
+	mat, err := database.ReadUnlockMaterial(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := dialClient(t, sockPath)
+	if err := Unlock(conn, []byte("correct-horse"), mat.Salt, mat.Verify, mat.Params); err != nil {
+		t.Fatal(err)
+	}
+	ks := NewOracle(conn, UnlockID(mat.Verify))
 
-	dbPath := filepath.Join(t.TempDir(), "test.db")
 	store, err := database.Open(dbPath, ks)
 	if err != nil {
 		t.Fatal(err)

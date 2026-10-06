@@ -143,12 +143,12 @@ Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext
 
 ### Changing the master password (`sesh --rekey`)
 
-`sesh --rekey` re-encrypts every entry under the key a new master password gives, and swaps the result into place atomically. The cryptographic posture during and after the change:
+`sesh --rekey` re-encrypts every entry, in place, under the key a new master password gives, in one SQLite transaction. The cryptographic posture during and after the change:
 
 - **No plaintext-on-disk window.** Unlike the export-then-import workaround, the change never writes a plaintext-equivalent file (an encrypted export still sits on disk encrypted only with the export password). All re-encryption happens in-process; only encrypted-at-rest databases ever touch the filesystem.
 - **Per-row salt regeneration.** Every entry gets a fresh per-row salt under the new key. Encrypted ciphertext changes for every row even when the plaintext is identical.
-- **No old copy survives success.** The original vault is kept as a `.pre-rotate` copy only while the change runs, so a failure can roll back. Before the swap, the new vault is checked to open with its key and to hold every planned entry; once it's in place, the old copy is deleted, since it would let the old password (or a leaked one) open the old contents. Copies left by an interrupted change are deleted once the current key is verified. Deletion doesn't scrub the disk: on SSDs and copy-on-write filesystems no in-place overwrite can guarantee that.
-- **The key record moves with the vault.** The new vault holds its own key record (a new salt, and a verify blob for the new key), so the password changes in the same rename as the entries. The recovery key record, re-wrapped to the new key, moves in the same rename. The change doesn't alter the old vault's entries or key record.
+- **All or nothing, in one file.** The entries, the key record (a new salt, and a verify blob for the new key) and the recovery key record, re-wrapped to the new key, change in one transaction; a failure or a crash leaves the vault as it was. No copy of the vault under the old key is made. Once the vault is closed, its file no longer holds the old ciphertexts (SQLite folds the change into the file, and `secure_delete` zeroes freed space). On SSDs and copy-on-write filesystems, though, no overwrite can guarantee the old bytes are gone from the disk.
+- **No write under the old key.** Every entry write runs in a transaction that first checks the vault's key record is still the one its key was checked against, so a command that unlocked the vault before the change can't save under the old key afterwards, and a second password change can't undo the first. A recovery key record is saved only for the key record it was wrapped to.
 
 ### Why This Matters
 

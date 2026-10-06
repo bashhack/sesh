@@ -23,15 +23,19 @@ func TestRecovery_WriteReadRemove(t *testing.T) {
 	if _, err := ReadRecovery(p); !errors.Is(err, ErrNoRecovery) {
 		t.Fatalf("none yet: err = %v, want ErrNoRecovery", err)
 	}
+	id := vaultID(t, p)
 	made := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
-	for _, id := range []string{"first", "second"} {
-		if err := WriteRecovery(p, &RecoveryRecord{UnlockID: id, PublicKey: []byte("pub"), EphemeralPub: []byte("eph"), Ciphertext: []byte("ct"), CreatedAt: made}); err != nil {
+	for _, ct := range []string{"first", "second"} {
+		if err := WriteRecovery(p, &RecoveryRecord{UnlockID: id, PublicKey: []byte("pub"), EphemeralPub: []byte("eph"), Ciphertext: []byte(ct), CreatedAt: made}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	r, err := ReadRecovery(p)
-	if err != nil || r.UnlockID != "second" || string(r.Ciphertext) != "ct" || !r.CreatedAt.Equal(made) {
+	if err != nil || r.UnlockID != id || string(r.Ciphertext) != "second" || !r.CreatedAt.Equal(made) {
 		t.Fatalf("read back %+v, %v; want the second record", r, err)
+	}
+	if err := WriteRecovery(p, &RecoveryRecord{UnlockID: "another-key-record", PublicKey: []byte("pub"), EphemeralPub: []byte("eph"), Ciphertext: []byte("ct")}); !errors.Is(err, ErrVaultKeyChanged) {
+		t.Errorf("a record for another key record: err = %v, want ErrVaultKeyChanged", err)
 	}
 	if err := RemoveRecovery(p); err != nil {
 		t.Fatal(err)
@@ -42,7 +46,7 @@ func TestRecovery_WriteReadRemove(t *testing.T) {
 	if err := RemoveRecovery(p); err != nil {
 		t.Errorf("removing none: %v", err)
 	}
-	if err := WriteRecovery(p, &RecoveryRecord{UnlockID: "id", PublicKey: []byte{}, EphemeralPub: []byte{}, Ciphertext: []byte{}}); err != nil {
+	if err := WriteRecovery(p, &RecoveryRecord{UnlockID: id, PublicKey: []byte{}, EphemeralPub: []byte{}, Ciphertext: []byte{}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadRecovery(p); err == nil || !strings.Contains(err.Error(), "incomplete") {
@@ -59,8 +63,9 @@ func TestRecovery_RemovedRecordLeavesNoTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	marker := bytes.Repeat([]byte("WRAPPED-VAULT-KEY-"), 4)
+	id := vaultID(t, p)
 	record := func(ct []byte) *RecoveryRecord {
-		return &RecoveryRecord{UnlockID: "id", PublicKey: []byte("pub"), EphemeralPub: []byte("eph"), Ciphertext: ct, CreatedAt: time.Now()}
+		return &RecoveryRecord{UnlockID: id, PublicKey: []byte("pub"), EphemeralPub: []byte("eph"), Ciphertext: ct, CreatedAt: time.Now()}
 	}
 	held := func() bool {
 		t.Helper()
@@ -93,4 +98,14 @@ func TestRecovery_RemovedRecordLeavesNoTrace(t *testing.T) {
 			}
 		})
 	}
+}
+
+// vaultID is the id of the key record of the vault at p.
+func vaultID(t *testing.T, p string) string {
+	t.Helper()
+	m, err := ReadUnlockMaterial(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return UnlockID(m.Verify)
 }

@@ -513,28 +513,25 @@ Every export, encrypted or not, holds everything about each entry: its kind, ser
 
 ### Changing your master password (`sesh --rekey`)
 
-`sesh --rekey` changes your master password: every entry is re-encrypted under a freshly-derived key from a new password you choose. The old vault is kept only while the change runs. The new password is always typed at a terminal: `SESH_MASTER_PASSWORD`, if set, gives only the current one, and without a terminal the change is refused.
+`sesh --rekey` changes your master password: every entry is re-encrypted, in place, under a freshly-derived key from a new password you choose. The new password is always typed at a terminal: `SESH_MASTER_PASSWORD`, if set, gives only the current one, and without a terminal the change is refused.
 
 ```bash
 sesh --rekey
 # Master password: ****                          # current password
-# About to rotate master password and re-encrypt 12 entries.
-#   source DB:           /Users/alice/Library/Application Support/sesh/passwords.db
-#   The old vault is kept until the new one is in place, then removed.
+# About to change the master password and re-encrypt 12 entries in /Users/alice/Library/Application Support/sesh/passwords.db.
 #
 # Proceed? [y/N]: y
 # Create master password: ****                   # new password
 # Confirm master password: ****
 # Rotated 12 entries under a new master password.
-# Removed the old vault's copy, so the old key no longer opens anything.
 ```
 
 Behaviour:
 
-- **Atomic.** Either every entry is re-encrypted and the new vault replaces the old one, or nothing changes. A copy failure cleans up the staging files and leaves the originals untouched.
-- **No old copy left behind.** While it runs, the old vault is kept as `.pre-rotate`, so a failure puts it back. Once the new vault is in place, and has been checked to open with the new key and hold every entry, it's removed: a copy would let the old password, perhaps the reason you changed it, open your secrets. If you forget the new password, your recovery key sets another (see [Recovery key](#recovery-key)).
-- **Tidies up.** Files an earlier change left behind (an interrupted change can leave `.new` and `.pre-rotate` files, with their SQLite `-wal` and `-shm` files) are removed once your current password is verified, and sesh says which.
-- **A new salt.** The new vault's key comes from a new salt, with sesh's Argon2id settings.
+- **All or nothing.** Every entry, the vault's key record and its recovery key record change in one database transaction: if anything fails, or the computer stops part way, nothing has changed. No second copy of the vault is made.
+- **Your history stays.** The audit log is kept, with one `rekey` event for the change.
+- **Other sesh commands.** One that unlocked the vault before the change finished can't save into it afterwards, or read from it: it's told the master password was changed, and to run again. Another password change running at the same time is refused the same way, so neither undoes the other.
+- **A new salt.** The new key comes from a new salt, with sesh's Argon2id settings. If you forget the new password, your recovery key sets another (see [Recovery key](#recovery-key)).
 
 **A vault that has lost its key record** (only damage does this) is refused: `the vault at … holds entries but not the record its key is made from, so it can't be opened; restore it from a backup`. sesh never makes a new key for a vault that holds entries.
 

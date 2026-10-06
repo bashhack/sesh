@@ -132,7 +132,11 @@ func TestForgottenPasswordHint(t *testing.T) {
 	})
 	t.Run("interactive, with a recovery key", func(t *testing.T) {
 		startTestAgent(t)
-		if err := database.WriteRecovery(dbPath, recovery.NewRecord("id", []byte("p"), keywrap.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")})); err != nil {
+		mat, err := database.ReadUnlockMaterial(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := database.WriteRecovery(dbPath, recovery.NewRecord(database.UnlockID(mat.Verify), []byte("p"), keywrap.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")})); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
@@ -140,7 +144,7 @@ func TestForgottenPasswordHint(t *testing.T) {
 				t.Error(err)
 			}
 		})
-		_, err := buildKeySourceWith(dbPath, interactivePrompt(t, "a-wrong-one", "b-wrong-one", "c-wrong-one"))
+		_, err = buildKeySourceWith(dbPath, interactivePrompt(t, "a-wrong-one", "b-wrong-one", "c-wrong-one"))
 		if err == nil || !strings.Contains(err.Error(), "If you've forgotten it, set a new one with your recovery key: sesh recover") {
 			t.Fatalf("err = %v, want the recovery hint", err)
 		}

@@ -77,8 +77,14 @@ func runAudit(app *App, args []string) error {
 		return err
 	}
 	for _, e := range events {
+		when := e.CreatedAt.Local().Format("2006-01-02 15:04:05")
+		if e.EntryID == "" {
+			// An event about the vault, such as a password change.
+			fmt.Fprintf(&b, "%s  %-6s  %s\n", when, e.EventType, e.Detail)
+			continue
+		}
 		kind, name := auditEntryName(e.EntryID)
-		fmt.Fprintf(&b, "%s  %-6s  %-11s  %s\n", e.CreatedAt.Local().Format("2006-01-02 15:04:05"), e.EventType, kind, name)
+		fmt.Fprintf(&b, "%s  %-6s  %-11s  %s\n", when, e.EventType, kind, name)
 	}
 	if *limit > 0 && count > int64(*limit) {
 		fmt.Fprintf(&b, "\nShowing the newest %d of %d; --limit 0 shows them all.\n", *limit, count)
