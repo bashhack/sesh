@@ -125,8 +125,8 @@ func serviceFlags(app *App, cmd, serviceName string, p provider.ServiceProvider)
 // its flags. It's checked before the vault is opened, with a store that
 // can't open anything, so a mistyped command can't open or create the
 // vault. -help, -version and -list-services don't count, since they only
-// print, and neither does a second -service naming another provider, or a
-// name the provider refuses.
+// print, and neither does a second -service naming another provider, or
+// arguments the provider refuses.
 func argsParse(args []string) bool {
 	serviceName := extractServiceName(args)
 	if serviceName == "" {
@@ -147,9 +147,9 @@ func argsParse(args []string) bool {
 		*common.help || *common.version || *common.listServices {
 		return false
 	}
-	// A provider that can check its entry names without the vault does,
-	// so a bad name is reported before the master password is asked for.
-	if c, ok := p.(interface{ CheckNames() error }); ok && c.CheckNames() != nil {
+	// A provider that can check its arguments without the vault does, so a
+	// bad name or value is reported before the master password is asked for.
+	if c, ok := p.(interface{ CheckArgs() error }); ok && c.CheckArgs() != nil {
 		return false
 	}
 	return true

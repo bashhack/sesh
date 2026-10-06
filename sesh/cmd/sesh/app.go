@@ -114,6 +114,13 @@ func (a *App) ListEntries(serviceName string) error {
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
 	}
+	// Listing skips ValidateRequest, so check the flags that need no vault
+	// (--limit, --offset) here.
+	if c, ok := p.(interface{ CheckArgs() error }); ok {
+		if err := c.CheckArgs(); err != nil {
+			return err
+		}
+	}
 
 	entries, err := p.ListEntries()
 	if err != nil {

@@ -820,7 +820,7 @@ func TestEntryCount(t *testing.T) {
 }
 
 // A name no entry can have is refused before anything is asked, and
-// without the vault (CheckNames).
+// without the vault (CheckArgs).
 func TestValidateRequest_RefusesBadNames(t *testing.T) {
 	// "" is --clip without --action, which gets the entry.
 	for _, action := range []string{"", "store", "generate", "get", "totp-store", "totp-generate"} {
@@ -897,15 +897,15 @@ func TestDeleteEntry_RefusesABadName(t *testing.T) {
 	}
 }
 
-func TestCheckNames_NeedsNoVault(t *testing.T) {
+func TestCheckArgs_NeedsNoVault(t *testing.T) {
 	p := NewProvider(nil)
 	p.action, p.service = "store", "github "
-	if err := p.CheckNames(); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
-		t.Errorf("CheckNames = %v, want the space refused", err)
+	if err := p.CheckArgs(); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
+		t.Errorf("CheckArgs = %v, want the space refused", err)
 	}
 	p.service = "github"
-	if err := p.CheckNames(); err != nil {
-		t.Errorf("CheckNames of a good name = %v", err)
+	if err := p.CheckArgs(); err != nil {
+		t.Errorf("CheckArgs of a good name = %v", err)
 	}
 }
 
@@ -1160,5 +1160,26 @@ func TestStoreTOTP_AsksBeforeANameInAnotherCase(t *testing.T) {
 	defer testutil.DiscardStderr(t)()
 	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "an entry GitHub already exists, and names are case-sensitive") {
 		t.Errorf("err = %v, want the case question refused without a terminal", err)
+	}
+}
+
+func TestValidateRequest_RefusesNegativePaging(t *testing.T) {
+	for _, tt := range []struct {
+		wantSub       string
+		limit, offset int
+	}{
+		{limit: -1, wantSub: "--limit wants 0 (no limit) or more, got -1"},
+		{offset: -3, wantSub: "--offset wants 0 or more, got -3"},
+	} {
+		p, _ := newTestProvider(vault.NewMemStore())
+		p.limit, p.offset = tt.limit, tt.offset
+		if err := p.ValidateRequest(); err == nil || !strings.Contains(err.Error(), tt.wantSub) {
+			t.Errorf("limit %d, offset %d: err = %v, want it to contain %q", tt.limit, tt.offset, err, tt.wantSub)
+		}
+	}
+	p, _ := newTestProvider(vault.NewMemStore())
+	p.limit, p.offset = 0, 5
+	if err := p.ValidateRequest(); err != nil {
+		t.Errorf("limit 0, offset 5: %v", err)
 	}
 }

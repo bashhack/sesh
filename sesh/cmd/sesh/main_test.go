@@ -10,6 +10,7 @@ import (
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
 	"github.com/bashhack/sesh/internal/provider"
 	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
+	passwordProvider "github.com/bashhack/sesh/internal/provider/password"
 	totpProvider "github.com/bashhack/sesh/internal/provider/totp"
 	"github.com/bashhack/sesh/internal/testutil"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
@@ -684,5 +685,23 @@ func TestResolvePasswordPrompt_NonTTYIsTerminalPromptButNotInteractive(t *testin
 	}
 	if cfg.prompt == nil {
 		t.Fatal("prompt callback should be set even when not interactive")
+	}
+}
+
+// --list checks its paging flags like the other actions, rather than
+// failing on the vault it was right not to open.
+func TestList_RefusesNegativePaging(t *testing.T) {
+	for _, args := range [][]string{
+		{"sesh", "--service", "password", "--list", "--limit", "-1"},
+		{"sesh", "--service", "password", "--list", "--offset", "-3"},
+	} {
+		h := newTestHarness()
+		h.app.Registry.RegisterProvider(passwordProvider.NewProvider(vault.NewMemStore()))
+		code := 0
+		h.app.Exit = func(c int) { code = c }
+		run(h.app, args)
+		if code == 0 || !strings.Contains(h.stderr.String(), "wants 0") {
+			t.Errorf("%q: exit %d, stderr %q; want the flag refused", args, code, h.stderr.String())
+		}
 	}
 }

@@ -180,18 +180,25 @@ func (p *Provider) ValidateRequest() error {
 	default:
 		return fmt.Errorf("unknown action: %q (use store, get, search, generate, export, import, totp-store, totp-generate)", p.action)
 	}
-	return p.checkName()
+	return p.CheckArgs()
 }
 
-// CheckNames refuses a service name or username no entry can have, without
-// the vault, so the CLI can stop before opening it.
-func (p *Provider) CheckNames() error {
+// CheckArgs refuses arguments that are wrong without looking at the vault
+// (a name no entry can have, a negative --limit or --offset), so the CLI
+// can stop before opening it.
+func (p *Provider) CheckArgs() error {
+	if p.limit < 0 {
+		return fmt.Errorf("--limit wants 0 (no limit) or more, got %d", p.limit)
+	}
+	if p.offset < 0 {
+		return fmt.Errorf("--offset wants 0 or more, got %d", p.offset)
+	}
 	return p.checkName()
 }
 
 // checkName refuses a name no entry can have, so an action that names an
 // entry says why at once. It needs no vault, so it runs before the vault
-// opens (see CheckNames).
+// opens (see CheckArgs).
 func (p *Provider) checkName() error {
 	kind := p.effectiveEntryType()
 	switch p.action {

@@ -237,8 +237,8 @@ db_path               /Users/me/vaults/sesh.db
 | `-length`         | Generated password length (default 24)             | No               |
 | `-no-symbols`     | Exclude symbols from generated passwords           | No               |
 | `-sort`           | Sort by: service, created_at, updated_at           | No               |
-| `-limit`          | Limit number of results                            | No               |
-| `-offset`         | Skip first N results                               | No               |
+| `-limit`          | Limit number of results; 0 (the default) means no limit, and a negative value is refused | No               |
+| `-offset`         | Skip the first N results; a negative value is refused | No               |
 
 ### Environment Variables
 
