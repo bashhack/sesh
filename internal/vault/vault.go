@@ -124,8 +124,8 @@ func (k Key) ValidateNew() error {
 
 // CheckNewName refuses a name, called what in errors, that would be hard to
 // tell apart from another: text that isn't valid UTF-8, a text-direction
-// control anywhere, a space or an invisible character at either end, or
-// more than MaxNameLength characters.
+// control anywhere, a space or an invisible character at either end, an
+// invisible character inside, or more than MaxNameLength characters.
 func CheckNewName(what, v string) error {
 	if !utf8.ValidString(v) {
 		return fmt.Errorf("the %s %q isn't valid text", what, v)
@@ -143,6 +143,9 @@ func CheckNewName(what, v string) error {
 			return fmt.Errorf("the %s %q starts or ends with an invisible character", what, v)
 		}
 	}
+	if strings.IndexFunc(v, isHiddenInside) >= 0 {
+		return fmt.Errorf("the %s %q contains an invisible character", what, v)
+	}
 	if n := utf8.RuneCountInString(v); n > MaxNameLength {
 		return fmt.Errorf("the %s is %d characters long; the most is %d", what, n, MaxNameLength)
 	}
@@ -156,15 +159,28 @@ func isDirectionControl(r rune) bool {
 		(r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
 }
 
-// isInvisible reports whether r shows as nothing: a format character (such
-// as a zero-width space or soft hyphen), or a filler or blank that Unicode
-// counts as a letter or symbol.
+// isInvisible reports whether r shows as nothing at the edge of a name: a
+// format character (such as a zero-width space or soft hyphen), a filler or
+// blank that Unicode counts as a letter or symbol, or a mark that attaches
+// to nothing visible (the combining grapheme joiner, Khmer inherent vowels,
+// Mongolian variation selectors).
 func isInvisible(r rune) bool {
-	switch r {
-	case 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800:
+	switch {
+	case r == 0x115F, r == 0x1160, r == 0x3164, r == 0xFFA0, r == 0x2800,
+		r == 0x034F, r == 0x17B4, r == 0x17B5, r >= 0x180B && r <= 0x180F:
 		return true
 	}
 	return unicode.Is(unicode.Cf, r)
+}
+
+// isHiddenInside reports whether r is invisible inside a name: a format
+// character other than the zero-width joiner and non-joiner (which emoji
+// and some scripts need), or a line or paragraph separator.
+func isHiddenInside(r rune) bool {
+	if r == 0x200C || r == 0x200D {
+		return false
+	}
+	return unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r)
 }
 
 // AWSKey is the entry holding an AWS profile's MFA secret: the TOTP entry
