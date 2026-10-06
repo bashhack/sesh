@@ -23,10 +23,14 @@ const (
 )
 
 // runRekey changes the master password: every entry is re-encrypted under
-// the key the new password gives. It takes no arguments.
-// cfg is how the passwords are asked for; production passes
-// resolvePasswordPrompt().
+// the key the new password gives. args are the command's other arguments:
+// none, or a help flag. cfg is how the passwords are asked for; production
+// passes resolvePasswordPrompt().
 func runRekey(app *App, args []string, cfg passwordPromptConfig) error {
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-help" || args[0] == "-h") {
+		_, err := fmt.Fprintln(app.Stdout, "Usage: sesh --rekey\n  Change your master password: every entry is re-encrypted under the new one.")
+		return err
+	}
 	if len(args) > 0 {
 		return fmt.Errorf("--rekey takes no arguments, got %q: it changes your master password", strings.Join(args, " "))
 	}

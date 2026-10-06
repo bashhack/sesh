@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"golang.org/x/term"
@@ -672,18 +673,6 @@ func terminalPrompt(prompt string) ([]byte, error) {
 	return pw, nil
 }
 
-// remainingArgs returns args following (but not including) the first
-// occurrence of name. Used to forward sub-flags to handlers like runRekey
-// without depending on a specific flag-package layout.
-func remainingArgs(args []string, name string) []string {
-	for i, a := range args {
-		if a == name {
-			return args[i+1:]
-		}
-	}
-	return nil
-}
-
 // fatal prints an error to stderr and exits
 func fatal(app *App, err error) {
 	if _, printErr := fmt.Fprintf(app.Stderr, "❌ %v\n", err); printErr != nil {
@@ -739,7 +728,7 @@ func run(app *App, args []string) {
 	}
 
 	// Early exit for version/list-services that don't need service
-	for _, arg := range args[1:] {
+	for i, arg := range args[1:] {
 		switch arg {
 		case "--version", "-version":
 			if err := app.ShowVersion(); err != nil {
@@ -752,8 +741,8 @@ func run(app *App, args []string) {
 			}
 			return
 		case "--rekey", "-rekey":
-			rest := remainingArgs(args, arg)
-			if err := runRekey(app, rest, resolvePasswordPrompt()); err != nil {
+			others := append(slices.Clone(args[1:i+1]), args[i+2:]...)
+			if err := runRekey(app, others, resolvePasswordPrompt()); err != nil {
 				fatal(app, err)
 			}
 			return
@@ -962,6 +951,7 @@ func (a *App) PrintUsage() error {
 		"\nCommands:",
 		"  sesh init                     Set up the vault: where it lives",
 		"  sesh config                   Show settings and where each comes from",
+		"  sesh --rekey                  Change your master password",
 		"  sesh recovery new|remove|status    A recovery key, in case you forget your master password",
 		"  sesh recover                  Forgot the master password? Set a new one with the recovery key",
 		"  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)",
