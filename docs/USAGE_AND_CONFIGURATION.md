@@ -807,7 +807,7 @@ $ sesh -service aws -delete totp/aws/prod
 
 - a `/`, which separates the parts of an entry's ID (`password/github/alice`), or a control character such as a tab or newline;
 - a space at the start or end (`"github "`), which would make an entry that `github` doesn't find;
-- an invisible character (such as a zero-width space or soft hyphen, which text copied from web pages can carry) anywhere in it, for the same reason;
+- an invisible character (such as a zero-width space or soft hyphen, which text copied from web pages can carry) anywhere in it, for the same reason. The characters emoji are built from (zero-width joiners, the tags in flags like Scotland's) are fine inside a name;
 - a character that changes text direction, which can make one name display as another;
 - more than 256 characters.
 

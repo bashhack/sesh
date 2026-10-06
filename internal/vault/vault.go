@@ -157,14 +157,21 @@ func isInvisible(r rune) bool {
 		r == 0x034F, r == 0x17B4, r == 0x17B5, r >= 0x180B && r <= 0x180F:
 		return true
 	}
-	return unicode.Is(unicode.Cf, r)
+	return unicode.Is(unicode.Cf, r) && !isTag(r)
+}
+
+// isTag reports whether r is a Unicode tag character, which flag emoji
+// such as Scotland's are spelled with.
+func isTag(r rune) bool {
+	return r >= 0xE0020 && r <= 0xE007F
 }
 
 // isHiddenInside reports whether r is invisible inside a name: a format
 // character other than the zero-width joiner and non-joiner (which emoji
-// and some scripts need), or a line or paragraph separator.
+// and some scripts need) and the tag characters (flag emoji), or a line or
+// paragraph separator.
 func isHiddenInside(r rune) bool {
-	if r == 0x200C || r == 0x200D {
+	if r == 0x200C || r == 0x200D || isTag(r) {
 		return false
 	}
 	return unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r)

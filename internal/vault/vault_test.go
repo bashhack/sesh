@@ -45,6 +45,8 @@ func TestKey_Validate(t *testing.T) {
 		{Kind: vault.KindPassword, Service: long, Username: long},
 		// A zero-width joiner inside a name, as emoji sequences use.
 		{Kind: vault.KindPassword, Service: "dev\u200dteam"},
+		// A flag emoji, spelled with tag characters (Scotland).
+		{Kind: vault.KindPassword, Service: "bank \U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F"},
 	} {
 		if err := k.Validate(); err != nil {
 			t.Errorf("Validate(%+v) = %v, want nil", k, err)
