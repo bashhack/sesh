@@ -198,6 +198,9 @@ func runTouchID(app *App, args []string) error {
 		if !touchIDAvailable() {
 			return errors.New("touch ID isn't available here: this Mac needs a Touch ID sensor with an enrolled fingerprint, and sesh must run in your desktop session (not over SSH)")
 		}
+		if err := refuseNewKeyForExistingVault(cfg.DBPath.Value); err != nil {
+			return err
+		}
 		if sidecarMissing(dataDir) {
 			return errors.New("there's no vault yet: create it first, by running any sesh command or sesh init")
 		}

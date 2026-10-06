@@ -753,7 +753,7 @@ func run(app *App, args []string) {
 			return
 		case "--rekey", "-rekey":
 			rest := remainingArgs(args, arg)
-			if err := runRekey(app, rest); err != nil {
+			if err := runRekey(app, rest, resolvePasswordPrompt()); err != nil {
 				fatal(app, err)
 			}
 			return

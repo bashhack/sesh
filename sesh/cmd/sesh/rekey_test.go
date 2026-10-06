@@ -353,8 +353,8 @@ func TestRotate_RefusesIfSidecarMissing(t *testing.T) {
 	}
 	app, _ := rekeyTestApp("")
 	err := runRotateMasterPassword(app, rotateTestCfg("any-pw-1234"))
-	if err == nil || !strings.Contains(err.Error(), "no key file to rotate") {
-		t.Fatalf("expected no-sidecar error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "its key file") {
+		t.Fatalf("expected the missing key file named, got %v", err)
 	}
 }
 
@@ -683,8 +683,23 @@ func TestEntryCount(t *testing.T) {
 
 func TestRekey_TakesNoArguments(t *testing.T) {
 	app, _ := rekeyTestApp("")
-	err := runRekey(app, []string{"--to", "password"})
+	err := runRekey(app, []string{"--to", "password"}, rotateTestCfg())
 	if wantSub := "--rekey takes no arguments"; err == nil || !strings.Contains(err.Error(), wantSub) {
 		t.Errorf("err = %v, want it to contain %q", err, wantSub)
+	}
+}
+
+func TestRekey_ChangesTheMasterPassword(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "the secret"})
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, stderr := rekeyTestApp("y\n")
+	if err := runRekey(app, nil, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
+		t.Fatalf("rekey: %v\n%s", err, stderr)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
+	if got := readEntriesViaPassword(t, env, []string{"password/x/y"}); got["password/x/y"] != "the secret" {
+		t.Errorf("entry under the new password = %q", got["password/x/y"])
 	}
 }

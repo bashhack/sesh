@@ -183,6 +183,9 @@ func runRecovery(app *App, args []string) error {
 		}
 		return out("Removed the recovery key; it no longer opens this vault.")
 	case "new":
+		if err := refuseNewKeyForExistingVault(cfg.DBPath.Value); err != nil {
+			return err
+		}
 		if sidecarMissing(dataDir) {
 			return errors.New("there's no vault yet: create it first, by running any sesh command or sesh init")
 		}
@@ -312,6 +315,9 @@ func runRecover(app *App, args []string) error {
 		return err
 	}
 	dataDir := filepath.Dir(cfg.DBPath.Value)
+	if err := refuseNewKeyForExistingVault(cfg.DBPath.Value); err != nil {
+		return err
+	}
 	if sidecarMissing(dataDir) {
 		return errors.New("there's no vault here to recover")
 	}

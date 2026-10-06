@@ -33,16 +33,7 @@ func TestOpenSQLiteStore_RefusesAKeychainVault(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
 	populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2"})
-	db, err := sql.Open("sqlite", env.dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`INSERT OR REPLACE INTO vault_key (id, key_source, check_data, check_salt, created_at) VALUES (1, 'keychain', x'00', x'00', '2026-01-01')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
+	recordKeychainSource(t, env.dbPath)
 	if err := os.Remove(env.sidecarPath); err != nil {
 		t.Fatal(err)
 	}
@@ -119,5 +110,58 @@ func TestRefuseNewKeyForExistingVault_UnreadableDirFailsClosed(t *testing.T) {
 	err := refuseNewKeyForExistingVault(filepath.Join(dir, "passwords.db"))
 	if err == nil || !strings.Contains(err.Error(), "check for") || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("err = %v, want a refusal carrying the permission error: an unreadable vault dir isn't a first run", err)
+	}
+}
+
+// Commands that check for passwords.key before opening the vault say what's
+// wrong with an existing vault that has none, rather than that there's no vault.
+func TestKeyFileCommands_NameAVaultWithoutItsKeyFile(t *testing.T) {
+	commands := map[string]func(app *App) error{
+		"recovery new":   func(app *App) error { return runRecovery(app, []string{"new"}) },
+		"touchid enable": func(app *App) error { return runTouchID(app, []string{"enable"}) },
+		"recover":        func(app *App) error { return runRecover(app, nil) },
+		"--rekey":        func(app *App) error { return runRekey(app, nil, rotateTestCfg("pw-1234-5678")) },
+	}
+	for name, run := range commands {
+		for vault, wantSub := range map[string]string{
+			"lost passwords.key": "its key file",
+			"keychain vault":     "kept in the macOS Keychain, which sesh no longer supports",
+		} {
+			t.Run(name+", "+vault, func(t *testing.T) {
+				env := setupRekeyEnv(t)
+				t.Setenv("SESH_MASTER_PASSWORD", "pw-1234-5678")
+				populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2"})
+				t.Setenv("SESH_MASTER_PASSWORD", "")
+				if vault == "keychain vault" {
+					recordKeychainSource(t, env.dbPath)
+				}
+				if err := os.Remove(env.sidecarPath); err != nil {
+					t.Fatal(err)
+				}
+				origAvail := touchIDAvailable
+				touchIDAvailable = func() bool { return true }
+				t.Cleanup(func() { touchIDAvailable = origAvail })
+				app, _ := rekeyTestApp("y\n")
+				if err := run(app); err == nil || !strings.Contains(err.Error(), wantSub) {
+					t.Errorf("err = %v, want it to contain %q", err, wantSub)
+				}
+			})
+		}
+	}
+}
+
+// recordKeychainSource makes the vault at dbPath record the Keychain key
+// source, as a development build's Keychain-key vault did.
+func recordKeychainSource(t *testing.T, dbPath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT OR REPLACE INTO vault_key (id, key_source, check_data, check_salt, created_at) VALUES (1, 'keychain', x'00', x'00', '2026-01-01')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -24,11 +24,13 @@ const (
 
 // runRekey changes the master password: every entry is re-encrypted under
 // the key the new password gives. It takes no arguments.
-func runRekey(app *App, args []string) error {
+// cfg is how the passwords are asked for; production passes
+// resolvePasswordPrompt().
+func runRekey(app *App, args []string, cfg passwordPromptConfig) error {
 	if len(args) > 0 {
 		return fmt.Errorf("--rekey takes no arguments, got %q: it changes your master password", strings.Join(args, " "))
 	}
-	return runRotateMasterPassword(app, resolvePasswordPrompt())
+	return runRotateMasterPassword(app, cfg)
 }
 
 // appendErr decorates a primary error with a secondary one from a cleanup or
@@ -88,11 +90,9 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		}
 		return nil, fmt.Errorf("stat database: %w", err)
 	}
-	if _, err := os.Stat(sidecarPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no key file to rotate at %s", sidecarPath)
-		}
-		return nil, fmt.Errorf("stat sidecar: %w", err)
+	// A vault without its key file is refused here, saying why.
+	if err := refuseNewKeyForExistingVault(dbPath); err != nil {
+		return nil, err
 	}
 
 	srcKS := src
