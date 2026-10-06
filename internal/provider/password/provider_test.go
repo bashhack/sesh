@@ -1083,3 +1083,21 @@ func TestStoreTOTP_AsksBeforeOverwriting(t *testing.T) {
 		})
 	}
 }
+
+// A QR code with no account name still asks before replacing the entry it
+// would overwrite.
+func TestStoreTOTP_QRWithoutAnAccountAsksToo(t *testing.T) {
+	stubStdinIsTerminal(t, false)
+	stubScanQRCodeFull(t, qrcode.TOTPInfo{Secret: "NEWSECRETNEWSECR"}, nil)
+	store := seeded(t, map[string]string{"totp/github": "JBSWY3DPEHPK3PXP"})
+	p, _ := newTestProvider(store)
+	p.action, p.service = "totp-store", "github"
+	p.stdin = strings.NewReader("2\n")
+	defer testutil.DiscardStderr(t)()
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "entry already exists for github; re-run with --force to overwrite") {
+		t.Errorf("err = %v, want the overwrite refused", err)
+	}
+	if got := stored(t, store, "totp/github"); got != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("secret = %q, want it unchanged", got)
+	}
+}

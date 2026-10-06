@@ -556,9 +556,10 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 	}
 	answer = strings.TrimSpace(answer)
 
-	// Ask before replacing an existing secret, before it's captured. A
-	// username that comes from the QR code is checked once it's known.
-	if answer != "2" || p.username != "" {
+	// Ask before replacing an existing secret, before it's captured. When
+	// the username may still come from the QR code, ask after the scan.
+	asked := answer != "2" || p.username != ""
+	if asked {
 		if err := p.confirmOverwrite(mgr, password.EntryTypeTOTP); err != nil {
 			return provider.Credentials{}, err
 		}
@@ -590,6 +591,8 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 			if err := p.checkName(); err != nil {
 				return provider.Credentials{}, fmt.Errorf("the QR code's account name can't be used: %w; choose one with --username", err)
 			}
+		}
+		if !asked {
 			if err := p.confirmOverwrite(mgr, password.EntryTypeTOTP); err != nil {
 				return provider.Credentials{}, err
 			}
