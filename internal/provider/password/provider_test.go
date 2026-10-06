@@ -944,3 +944,28 @@ func TestStorePassword_WarnsAboutAWeakPassword(t *testing.T) {
 		})
 	}
 }
+
+// A generated password short enough to be easy to guess is stored, with a
+// warning that suggests a longer one.
+func TestGeneratePassword_WarnsWhenShort(t *testing.T) {
+	for _, tt := range []struct {
+		length      int
+		wantWarning bool
+	}{{8, true}, {24, false}} {
+		store := vault.NewMemStore()
+		p, _ := newTestProvider(store)
+		p.action, p.service, p.pwLength = "generate", "wifi", tt.length
+		restore := testutil.RedirectStderr(t)
+		_, err := p.GetCredentials()
+		stderr := restore()
+		if err != nil {
+			t.Fatalf("length %d: GetCredentials: %v", tt.length, err)
+		}
+		if got := stored(t, store, "password/wifi"); len(got) != tt.length {
+			t.Errorf("length %d: stored %d characters", tt.length, len(got))
+		}
+		if got := strings.Contains(stderr, "is easy to guess") && strings.Contains(stderr, "use --length 12 or more"); got != tt.wantWarning {
+			t.Errorf("length %d: warning shown = %v, want %v; stderr:\n%s", tt.length, got, tt.wantWarning, stderr)
+		}
+	}
+}

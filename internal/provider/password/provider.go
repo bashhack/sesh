@@ -432,7 +432,7 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 		if p.username != "" {
 			generate += " --username " + p.username
 		}
-		fmt.Fprintf(os.Stderr, "⚠️  This password is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, run: %s\n", generate) //nolint:errcheck // best-effort warning
+		warnWeak("run: " + generate)
 	}
 
 	return provider.Credentials{
@@ -458,6 +458,10 @@ func (p *Provider) generateAndStore(mgr *password.Manager) ([]byte, string, erro
 	if err := mgr.StorePassword(p.service, p.username, generated, p.effectiveEntryType()); err != nil {
 		secure.SecureZeroBytes(generated)
 		return nil, "", err
+	}
+	// Only a short --length makes one weak; the default never is.
+	if password.IsWeak(generated, p.service, p.username) {
+		warnWeak("use --length 12 or more")
 	}
 
 	desc := p.service
@@ -833,4 +837,10 @@ func countOf(n int, thing string) string {
 		return "1 " + thing
 	}
 	return fmt.Sprintf("%d %ss", n, thing)
+}
+
+// warnWeak tells the user the password just stored is easy to guess, and
+// how to get a strong one.
+func warnWeak(fix string) {
+	fmt.Fprintf(os.Stderr, "⚠️  This password is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, %s\n", fix) //nolint:errcheck // best-effort warning
 }
