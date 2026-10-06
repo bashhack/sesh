@@ -154,3 +154,54 @@ func TestForgottenPasswordHint(t *testing.T) {
 		}
 	})
 }
+
+func TestCheckNewPassword(t *testing.T) {
+	answer := func(s string) func(string) (string, error) {
+		return func(string) (string, error) { return s, nil }
+	}
+	for name, tt := range map[string]struct {
+		wantErr     error
+		pw          string
+		cfg         passwordPromptConfig
+		wantWarning bool
+	}{
+		"strong":                {pw: "correct horse battery staple", cfg: passwordPromptConfig{interactive: true, readLine: answer("n")}},
+		"weak, nobody to ask":   {pw: "password1", wantWarning: true},
+		"weak, declined":        {pw: "password1", cfg: passwordPromptConfig{interactive: true, readLine: answer("n")}, wantErr: database.ErrTryAnotherPassword, wantWarning: true},
+		"weak, no answer is no": {pw: "password1", cfg: passwordPromptConfig{interactive: true, readLine: answer("")}, wantErr: database.ErrTryAnotherPassword, wantWarning: true},
+		"weak, used anyway":     {pw: "password1", cfg: passwordPromptConfig{interactive: true, readLine: answer("y")}, wantWarning: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			restore := testutil.RedirectStderr(t)
+			err := tt.cfg.checkNewPassword([]byte(tt.pw))
+			stderr := restore()
+			if !errors.Is(err, tt.wantErr) || (tt.wantErr == nil && err != nil) {
+				t.Errorf("err = %v, want %v", err, tt.wantErr)
+			}
+			if got := strings.Contains(stderr, "This master password is easy to guess"); got != tt.wantWarning {
+				t.Errorf("warning shown = %v, want %v; stderr:\n%s", got, tt.wantWarning, stderr)
+			}
+		})
+	}
+}
+
+// At first run, declining a weak master password asks for another, and the
+// vault is created with that one.
+func TestFirstRun_AWeakMasterPasswordCanBeReplaced(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "passwords.db")
+	t.Setenv("SESH_AUTH_SOCK", tempAgentSocket(t))
+	cfg := interactivePrompt(t, "password1", "correct horse battery staple", "correct horse battery staple")
+	cfg.readLine = func(string) (string, error) { return "n", nil }
+	defer testutil.DiscardStderr(t)()
+	oracle, err := buildKeySourceWith(dbPath, cfg)
+	if err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	closeKeySource(t, oracle)
+	if _, err := database.NewMasterPasswordSource(dir, func(string) ([]byte, error) {
+		return []byte("correct horse battery staple"), nil
+	}).GetEncryptionKey(); err != nil {
+		t.Errorf("the replacement doesn't open the vault: %v", err)
+	}
+}

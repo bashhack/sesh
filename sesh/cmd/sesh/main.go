@@ -16,6 +16,7 @@ import (
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
@@ -624,10 +625,32 @@ func (c passwordPromptConfig) newSourceAtPath(sidecarPath string) *database.Mast
 }
 
 func (c passwordPromptConfig) options() []database.Option {
+	opts := []database.Option{database.WithNewPasswordCheck(c.checkNewPassword)}
 	if c.interactive {
-		return []database.Option{database.WithMaxAttempts(interactivePasswordAttempts)}
+		opts = append(opts, database.WithMaxAttempts(interactivePasswordAttempts))
 	}
-	return nil
+	return opts
+}
+
+// checkNewPassword warns when a new master password is easy to guess. With
+// someone at the terminal it asks whether to use it anyway, and a no (the
+// default) asks for another; with nobody to ask, it only warns.
+func (c passwordPromptConfig) checkNewPassword(pw []byte) error {
+	if !password.IsWeak(pw) {
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "⚠️  This master password is easy to guess: a cracking program would likely find it in under 100 million tries, and it protects every secret in the vault.") //nolint:errcheck // best-effort warning
+	if !c.interactive || c.readLine == nil {
+		return nil
+	}
+	answer, err := c.readLine("Use it anyway? [y/N]: ")
+	if err != nil {
+		return fmt.Errorf("read answer: %w", err)
+	}
+	if a := strings.ToLower(strings.TrimSpace(answer)); a == "y" || a == "yes" {
+		return nil
+	}
+	return database.ErrTryAnotherPassword
 }
 
 // keepingLastPassword returns a config whose prompt also keeps a copy of

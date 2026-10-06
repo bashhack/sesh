@@ -680,3 +680,43 @@ func TestWithMaxAttempts_ClampsBelowOne(t *testing.T) {
 		})
 	}
 }
+
+// A new master password the check turns down is asked for again; one the
+// check refuses outright stops creation; the check never sees the old one.
+func TestMasterPasswordSource_NewPasswordCheck(t *testing.T) {
+	var checked []string
+	check := func(pw []byte) error {
+		checked = append(checked, string(pw))
+		switch string(pw) {
+		case "weakpass1":
+			return ErrTryAnotherPassword
+		case "refused-pw":
+			return errors.New("refused")
+		}
+		return nil
+	}
+
+	dir := t.TempDir()
+	src := NewMasterPasswordSource(dir, staticPrompt("weakpass1", "strong-enough-pw", "strong-enough-pw"), WithNewPasswordCheck(check))
+	key, err := src.GetEncryptionKey()
+	if err != nil {
+		t.Fatalf("GetEncryptionKey: %v", err)
+	}
+	src.Close()
+	if len(key) != 32 || len(checked) != 2 || checked[1] != "strong-enough-pw" {
+		t.Errorf("checked %q, want the weak one and then the replacement", checked)
+	}
+	reopened := NewMasterPasswordSource(dir, staticPrompt("strong-enough-pw"), WithNewPasswordCheck(check))
+	if _, err := reopened.GetEncryptionKey(); err != nil {
+		t.Errorf("the replacement doesn't unlock the vault: %v", err)
+	}
+	reopened.Close()
+	if len(checked) != 2 {
+		t.Errorf("unlocking ran the new-password check: %q", checked)
+	}
+
+	refused := NewMasterPasswordSource(t.TempDir(), staticPrompt("refused-pw"), WithNewPasswordCheck(check))
+	if _, err := refused.GetEncryptionKey(); err == nil || err.Error() != "refused" {
+		t.Errorf("err = %v, want the check's refusal", err)
+	}
+}
