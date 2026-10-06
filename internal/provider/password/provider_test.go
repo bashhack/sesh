@@ -908,3 +908,39 @@ func TestCheckNames_NeedsNoVault(t *testing.T) {
 		t.Errorf("CheckNames of a good name = %v", err)
 	}
 }
+
+// A weak typed password is stored, with a warning; strong ones and other
+// kinds get none.
+func TestStorePassword_WarnsAboutAWeakPassword(t *testing.T) {
+	for name, tt := range map[string]struct {
+		kind, secret string
+		wantWarning  bool
+	}{
+		"weak password":                   {"password", "password1", true},
+		"password built from the service": {"password", "mycorpportal2026", true},
+		"strong password":                 {"password", "correct horse battery staple", false},
+		"weak-looking API key":            {"api_key", "password1", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubReadPassword(t, tt.secret)
+			store := vault.NewMemStore()
+			p, _ := newTestProvider(store)
+			p.action, p.service, p.entryType, p.force = "store", "mycorpportal", tt.kind, true
+			restore := testutil.RedirectStderr(t)
+			_, err := p.GetCredentials()
+			stderr := restore()
+			if err != nil {
+				t.Fatalf("GetCredentials: %v", err)
+			}
+			if got := stored(t, store, tt.kind+"/mycorpportal"); got != tt.secret {
+				t.Errorf("stored %q, want %q stored either way", got, tt.secret)
+			}
+			if got := strings.Contains(stderr, "is easy to guess"); got != tt.wantWarning {
+				t.Errorf("warning shown = %v, want %v; stderr:\n%s", got, tt.wantWarning, stderr)
+			}
+			if tt.wantWarning && !strings.Contains(stderr, "run: sesh --service password --action generate --service-name mycorpportal\n") {
+				t.Errorf("warning doesn't give the generate command; stderr:\n%s", stderr)
+			}
+		})
+	}
+}

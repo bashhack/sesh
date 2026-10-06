@@ -426,6 +426,14 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 	if err := mgr.StorePassword(p.service, p.username, pw, et); err != nil {
 		return provider.Credentials{}, err
 	}
+	// A typed password only; API keys and notes come from elsewhere.
+	if et == password.EntryTypePassword && password.IsWeak(pw, p.service, p.username) {
+		generate := "sesh --service password --action generate --service-name " + p.service
+		if p.username != "" {
+			generate += " --username " + p.username
+		}
+		fmt.Fprintf(os.Stderr, "⚠️  This password is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, run: %s\n", generate) //nolint:errcheck // best-effort warning
+	}
 
 	return provider.Credentials{
 		Provider:    p.Name(),

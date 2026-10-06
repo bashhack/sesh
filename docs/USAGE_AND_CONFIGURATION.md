@@ -649,7 +649,8 @@ sesh -service password -action generate -service-name github -username alice -cl
 # Generate without symbols, custom length
 sesh -service password -action generate -service-name github -username alice -no-symbols -length 32
 
-# Store a password manually (prompts for input securely)
+# Store a password manually (prompts for input securely). An easy-to-guess
+# password is stored with a warning and the generate command to replace it.
 sesh -service password -action store -service-name github -username alice
 
 # Retrieve and show
@@ -812,6 +813,8 @@ $ sesh -service aws -delete totp/aws/prod
 - more than 256 characters.
 
 The password manager's `store`, `generate`, `get` (including `--clip` on its own), `totp-store`, and `totp-generate` check names before the vault is opened, so a bad name is reported before the master password is asked for. The TOTP setup checks the service name and profile once you've entered both, the AWS setup checks the profile as soon as you enter it, and an import reports each entry it refuses and imports the rest.
+
+**Weak passwords.** When you type a password to store (`--action store`, kind `password`), sesh rates it with [zxcvbn](https://github.com/dropbox/zxcvbn), which knows common passwords, words, names, dates, and keyboard patterns, and counts the entry's own service name and username as easy guesses. If zxcvbn estimates fewer than about 100 million guesses would find it (a score of 2 or less out of 4), sesh stores it and warns, with the command to generate a strong one instead. Generated passwords, API keys, and notes aren't rated.
 
 ### Setup Wizard Features
 
