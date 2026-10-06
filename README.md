@@ -157,7 +157,7 @@ sesh -service password -help
 sesh -service password -action generate -service-name github -username alice -clip
 
 # Generate without symbols, custom length
-sesh -service password -action generate -service-name github -username alice -no-symbols -length 32
+sesh -service password -action generate -service-name stripe -username alice -no-symbols -length 32
 
 # Store a password manually (interactive prompt)
 sesh -service password -action store -service-name github -username alice

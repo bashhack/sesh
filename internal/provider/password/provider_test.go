@@ -1014,11 +1014,11 @@ func TestGeneratePassword_AsksBeforeOverwriting(t *testing.T) {
 		terminal, force bool
 		wantReplaced    bool
 	}{
-		"no terminal":     {wantErr: "entry already exists for github (alice); re-run with --force to overwrite"},
-		"answered no":     {terminal: true, answer: "n\n", wantErr: "generate cancelled"},
-		"answered yes":    {terminal: true, answer: "y\n", wantReplaced: true},
-		"--force":         {force: true, wantReplaced: true},
-		"--force, no tty": {force: true, terminal: false, wantReplaced: true},
+		"no terminal":           {wantErr: "entry already exists for github (alice); re-run with --force to overwrite"},
+		"answered no":           {terminal: true, answer: "n\n", wantErr: "generate cancelled"},
+		"answered yes":          {terminal: true, answer: "y\n", wantReplaced: true},
+		"--force at a terminal": {force: true, terminal: true, wantReplaced: true},
+		"--force, no tty":       {force: true, terminal: false, wantReplaced: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			stubStdinIsTerminal(t, tt.terminal)
