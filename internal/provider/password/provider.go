@@ -26,6 +26,9 @@ type Provider struct {
 	store  vault.Store
 	stdin  io.Reader
 	stdout io.Writer
+	// lines reads answers from stdin; one reader for every prompt, so a
+	// line buffered for one answer isn't lost to the next.
+	lines *bufio.Reader
 
 	query      string // search query
 	sortBy     string
@@ -327,7 +330,7 @@ func (p *Provider) DeleteEntry(id string) error {
 	}
 	if !p.force {
 		fmt.Fprintf(os.Stderr, "Delete entry %q? [y/N]: ", id)
-		answer, err := bufio.NewReader(p.stdin).ReadString('\n')
+		answer, err := p.readLine()
 		if err != nil {
 			return fmt.Errorf("read confirmation: %w", err)
 		}
@@ -547,11 +550,19 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 	fmt.Fprintln(os.Stderr, "  2) Scan QR code from screen")
 	fmt.Fprintf(os.Stderr, "Choose [1/2]: ")
 
-	answer, err := bufio.NewReader(p.stdin).ReadString('\n')
+	answer, err := p.readLine()
 	if err != nil {
 		return provider.Credentials{}, fmt.Errorf("read input: %w", err)
 	}
 	answer = strings.TrimSpace(answer)
+
+	// Ask before replacing an existing secret, before it's captured. A
+	// username that comes from the QR code is checked once it's known.
+	if answer != "2" || p.username != "" {
+		if err := p.confirmOverwrite(mgr, password.EntryTypeTOTP); err != nil {
+			return provider.Credentials{}, err
+		}
+	}
 
 	var secret string
 	var params totp.Params
@@ -578,6 +589,9 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 			// Checked like a --username, before anything is stored.
 			if err := p.checkName(); err != nil {
 				return provider.Credentials{}, fmt.Errorf("the QR code's account name can't be used: %w; choose one with --username", err)
+			}
+			if err := p.confirmOverwrite(mgr, password.EntryTypeTOTP); err != nil {
+				return provider.Credentials{}, err
 			}
 		}
 		fmt.Fprintf(os.Stderr, "✅ QR code scanned successfully\n")
@@ -846,7 +860,7 @@ func (p *Provider) confirmOverwrite(mgr *password.Manager, et password.EntryType
 		return fmt.Errorf("entry already exists for %s; re-run with --force to overwrite", who)
 	}
 	fmt.Fprintf(os.Stderr, "Entry already exists for %s. Overwrite? [y/N]: ", who) //nolint:errcheck // best-effort prompt
-	answer, err := bufio.NewReader(p.stdin).ReadString('\n')
+	answer, err := p.readLine()
 	if err != nil {
 		return fmt.Errorf("read confirmation: %w", err)
 	}
@@ -854,4 +868,12 @@ func (p *Provider) confirmOverwrite(mgr *password.Manager, et password.EntryType
 		return fmt.Errorf("%s cancelled", p.action)
 	}
 	return nil
+}
+
+// readLine reads one line of an answer from stdin.
+func (p *Provider) readLine() (string, error) {
+	if p.lines == nil {
+		p.lines = bufio.NewReader(p.stdin)
+	}
+	return p.lines.ReadString('\n')
 }

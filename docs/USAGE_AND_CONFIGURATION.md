@@ -751,7 +751,7 @@ The "Enter note" prompt only appears when stdin is a real terminal. With piped i
 
 #### Overwriting existing entries
 
-By default, `store` and `generate` prompt `[y/N]` if an entry already exists at the given service/username. Without a terminal nobody can answer (and for `store`, reading an answer would swallow the first line of the piped content), so sesh refuses instead:
+By default, `store`, `generate`, and `totp-store` prompt `[y/N]` if an entry already exists at the given service/username. Without a terminal nobody can answer (and for `store`, reading an answer would swallow the first line of the piped content), so sesh refuses instead:
 
 ```bash
 $ echo "new secret" | sesh -service password -action store -service-name github -username alice

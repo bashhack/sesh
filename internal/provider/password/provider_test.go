@@ -1041,3 +1041,45 @@ func TestGeneratePassword_AsksBeforeOverwriting(t *testing.T) {
 		})
 	}
 }
+
+// totp-store asks before replacing an existing TOTP secret, as store does.
+func TestStoreTOTP_AsksBeforeOverwriting(t *testing.T) {
+	for name, tt := range map[string]struct {
+		input, wantErr  string
+		qrAccount       string
+		terminal, force bool
+		wantReplaced    bool
+	}{
+		"manual, no terminal":  {input: "1\n", wantErr: "entry already exists for github (alice); re-run with --force to overwrite"},
+		"manual, answered no":  {input: "1\nn\n", terminal: true, wantErr: "totp-store cancelled"},
+		"manual, answered yes": {input: "1\ny\n", terminal: true, wantReplaced: true},
+		"manual, --force":      {input: "1\n", force: true, wantReplaced: true},
+		// The username comes from the QR code, so the check follows the scan.
+		"QR account, answered no": {input: "2\nn\n", qrAccount: "alice", terminal: true, wantErr: "totp-store cancelled"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubStdinIsTerminal(t, tt.terminal)
+			stubReadPassword(t, "NEWSECRETNEWSECR")
+			stubScanQRCodeFull(t, qrcode.TOTPInfo{Secret: "NEWSECRETNEWSECR", Account: tt.qrAccount}, nil)
+			store := seeded(t, map[string]string{"totp/github/alice": "JBSWY3DPEHPK3PXP"})
+			p, _ := newTestProvider(store)
+			p.action, p.service, p.force = "totp-store", "github", tt.force
+			if tt.qrAccount == "" {
+				p.username = "alice"
+			}
+			p.stdin = strings.NewReader(tt.input)
+			defer testutil.DiscardStderr(t)()
+
+			_, err := p.GetCredentials()
+			switch {
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Errorf("err = %v, want it to contain %q", err, tt.wantErr)
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("err = %v", err)
+			}
+			if replaced := stored(t, store, "totp/github/alice") != "JBSWY3DPEHPK3PXP"; replaced != tt.wantReplaced {
+				t.Errorf("replaced = %v, want %v", replaced, tt.wantReplaced)
+			}
+		})
+	}
+}
