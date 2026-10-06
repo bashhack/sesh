@@ -178,18 +178,19 @@ func (p *Provider) ValidateRequest() error {
 	return p.checkName()
 }
 
-// checkName refuses a service name or username the vault won't take, so an
-// action that names an entry stops before asking for anything.
+// checkName refuses a name a new entry can't have, so an action that saves
+// one stops before asking for the secret. Actions that read or delete an
+// entry don't check it: entries named before these rules still open.
 func (p *Provider) checkName() error {
 	kind := p.effectiveEntryType()
 	switch p.action {
-	case "store", "generate", "get":
-	case "totp-store", "totp-generate":
+	case "store", "generate":
+	case "totp-store":
 		kind = password.EntryTypeTOTP
 	default:
 		return nil
 	}
-	return vault.Key{Kind: kind, Service: p.service, Username: p.username}.Validate()
+	return vault.Key{Kind: kind, Service: p.service, Username: p.username}.ValidateNew()
 }
 
 // GetCredentials handles the main operation based on --action flag.
@@ -578,6 +579,10 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 		// rather than an empty username. An explicit flag always wins.
 		if p.username == "" && info.Account != "" {
 			p.username = info.Account
+			// Checked like a --username, before anything is stored.
+			if err := p.checkName(); err != nil {
+				return provider.Credentials{}, err
+			}
 		}
 		fmt.Fprintf(os.Stderr, "✅ QR code scanned successfully\n")
 		if info.Issuer != "" {

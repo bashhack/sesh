@@ -230,6 +230,10 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 		// Any other error is ambiguous — fail this entry rather than
 		// risk an upsert that silently overwrites real data.
 		k := key(e.Service, e.Username, e.Type)
+		if err := k.ValidateNew(); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
+			continue
+		}
 		_, err := m.store.Lookup(k)
 		var exists bool
 		switch {
@@ -340,10 +344,10 @@ func readCSV(r io.Reader) ([]ExportEntry, error) {
 }
 
 // importName names an imported entry in a report the way --list does,
-// quoted so a stray space shows: "github", or "github" (alice).
+// quoted so a stray space shows: "github", or "github" ("alice").
 func importName(e *ExportEntry) string {
 	if e.Username == "" {
 		return fmt.Sprintf("%q", e.Service)
 	}
-	return fmt.Sprintf("%q (%s)", e.Service, e.Username)
+	return fmt.Sprintf("%q (%q)", e.Service, e.Username)
 }

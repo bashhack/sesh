@@ -10,6 +10,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
+	"github.com/bashhack/sesh/internal/testutil"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -818,9 +819,17 @@ func TestEntryCount(t *testing.T) {
 	}
 }
 
-// A name the vault won't take is refused before anything is asked.
+// A name a new entry can't have is refused before the secret is asked for.
+// Reading an entry doesn't check, so ones named before the rules still open.
 func TestValidateRequest_RefusesBadNames(t *testing.T) {
-	for _, action := range []string{"store", "generate", "get", "totp-store", "totp-generate"} {
+	for _, action := range []string{"get", "totp-generate"} {
+		p, _ := newTestProvider(vault.NewMemStore())
+		p.action, p.service = action, "github "
+		if err := p.ValidateRequest(); err != nil {
+			t.Errorf("%s of an existing name: ValidateRequest = %v, want nil", action, err)
+		}
+	}
+	for _, action := range []string{"store", "generate", "totp-store"} {
 		for name, tt := range map[string]struct{ service, username, wantSub string }{
 			"trailing space": {"github ", "", `the service name "github " starts or ends with a space`},
 			"leading space":  {"github", " alice", `the username " alice" starts or ends with a space`},
@@ -832,13 +841,6 @@ func TestValidateRequest_RefusesBadNames(t *testing.T) {
 				t.Errorf("%s, %s: ValidateRequest = %v, want it to contain %q", action, name, err, tt.wantSub)
 			}
 		}
-	}
-}
-
-func TestDeleteEntry_RefusesABadName(t *testing.T) {
-	p, _ := newTestProvider(vault.NewMemStore())
-	if err := p.DeleteEntry("password/github "); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
-		t.Errorf("DeleteEntry = %v, want the space refused", err)
 	}
 }
 
@@ -856,7 +858,7 @@ func TestImport_ReportsRefusedEntriesByName(t *testing.T) {
 	for _, want := range []string{
 		"Imported 1 entry, 2 errors:",
 		`"github ": the service name "github " starts or ends with a space`,
-		`"gitlab" (alice): empty secret`,
+		`"gitlab" ("alice"): empty secret`,
 	} {
 		if !strings.Contains(creds.DisplayInfo, want) {
 			t.Errorf("DisplayInfo = %q, want it to contain %q", creds.DisplayInfo, want)
@@ -874,5 +876,36 @@ func TestImport_OneErrorIsSingular(t *testing.T) {
 	}
 	if !strings.Contains(creds.DisplayInfo, "Imported 0 entries, 1 error:") {
 		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
+	}
+}
+
+// An entry named before the name rules can still be deleted by its ID.
+func TestDeleteEntry_ANameSavedBeforeTheNameRules(t *testing.T) {
+	store := vault.NewMemStore()
+	k := vault.Key{Kind: vault.KindPassword, Service: "github "}
+	if err := store.Put(k, []byte("old")); err != nil {
+		t.Fatalf("an existing name must still save through the store: %v", err)
+	}
+	p, _ := newTestProvider(store)
+	p.force = true
+	if err := p.DeleteEntry("password/github "); err != nil {
+		t.Errorf("DeleteEntry: %v", err)
+	}
+}
+
+// A username taken from a QR code is checked like one given as a flag,
+// before anything is stored.
+func TestStoreTOTP_QRAccountIsCheckedToo(t *testing.T) {
+	stubScanQRCodeFull(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP", Account: strings.Repeat("a", 300)}, nil)
+	store := vault.NewMemStore()
+	p, _ := newTestProvider(store)
+	p.action, p.service = "totp-store", "github"
+	p.stdin = strings.NewReader("2\n")
+	defer testutil.DiscardStderr(t)()
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "the username is 300 characters long") {
+		t.Errorf("err = %v, want the QR account refused", err)
+	}
+	if entries, err := store.List(vault.Filter{}); err != nil || len(entries) != 0 {
+		t.Errorf("stored %v (%v), want nothing", entries, err)
 	}
 }

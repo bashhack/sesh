@@ -92,7 +92,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			userInput:           "\n1\n\n", // empty profile, manual entry
 		},
 		"a profile name that's too long": {
-			wantErrMsg: "AWS profile: the username is 300 characters long; the most is 256",
+			wantErrMsg: "the AWS profile is 300 characters long; the most is 256",
 			userInput:  strings.Repeat("p", 300) + "\n",
 		},
 		"existing entry cancelled by user": {

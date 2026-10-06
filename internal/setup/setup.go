@@ -474,9 +474,12 @@ func (h *AWSSetupHandler) Setup() error {
 
 	// Checked before anything else is asked, so a bad name doesn't cost
 	// the whole setup.
+	if err := vault.CheckNewName("AWS profile", profile); err != nil {
+		return err
+	}
 	k := vault.AWSKey(profile)
 	if err := k.Validate(); err != nil {
-		return fmt.Errorf("AWS profile: %w", err)
+		return err
 	}
 	existing, err := existingEntry(h.store, k)
 	if err != nil {
@@ -682,7 +685,7 @@ func (h *TOTPSetupHandler) Setup() error {
 	}
 
 	k := vault.Key{Kind: vault.KindTOTP, Service: serviceName, Username: profile}
-	if err := k.Validate(); err != nil {
+	if err := k.ValidateNew(); err != nil {
 		return err
 	}
 	existing, err := existingEntry(h.store, k)

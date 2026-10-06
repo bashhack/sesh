@@ -83,12 +83,14 @@ func ParseKey(s string) (Key, error) {
 	return k, nil
 }
 
-// MaxNameLength is the most characters a service name or username can have.
+// MaxNameLength is the most characters a new entry's service name or
+// username can have.
 const MaxNameLength = 256
 
-// Validate checks that k can name an entry: a known kind, a service name,
-// and names without "/" (which the text form uses), control characters, or
-// a space at either end, of at most MaxNameLength characters.
+// Validate checks that k can name an entry at all: a known kind, a service
+// name, and names without "/" (which the text form uses) or control
+// characters. Every entry the vault holds passes it, so it's all that
+// opening, copying, and deleting an entry need.
 func (k Key) Validate() error {
 	if !k.Kind.Valid() {
 		return fmt.Errorf("unknown kind %q", k.Kind)
@@ -103,14 +105,66 @@ func (k Key) Validate() error {
 		if strings.IndexFunc(f.v, unicode.IsControl) >= 0 {
 			return fmt.Errorf("the %s %q contains a control character", f.name, f.v)
 		}
-		if strings.TrimSpace(f.v) != f.v {
-			return fmt.Errorf("the %s %q starts or ends with a space", f.name, f.v)
-		}
-		if n := utf8.RuneCountInString(f.v); n > MaxNameLength {
-			return fmt.Errorf("the %s is %d characters long; the most is %d", f.name, n, MaxNameLength)
-		}
 	}
 	return nil
+}
+
+// ValidateNew is Validate plus CheckNewName's rules, for naming a new
+// entry. Entries saved before those rules only need Validate, so they still
+// open, copy, and delete.
+func (k Key) ValidateNew() error {
+	if err := k.Validate(); err != nil {
+		return err
+	}
+	if err := CheckNewName("service name", k.Service); err != nil {
+		return err
+	}
+	return CheckNewName("username", k.Username)
+}
+
+// CheckNewName refuses a name, called what in errors, that would be hard to
+// tell apart from another: text that isn't valid UTF-8, a text-direction
+// control anywhere, a space or an invisible character at either end, or
+// more than MaxNameLength characters.
+func CheckNewName(what, v string) error {
+	if !utf8.ValidString(v) {
+		return fmt.Errorf("the %s %q isn't valid text", what, v)
+	}
+	if strings.IndexFunc(v, isDirectionControl) >= 0 {
+		return fmt.Errorf("the %s %q contains a text-direction control character", what, v)
+	}
+	if v != "" {
+		first, _ := utf8.DecodeRuneInString(v)
+		last, _ := utf8.DecodeLastRuneInString(v)
+		if unicode.IsSpace(first) || unicode.IsSpace(last) {
+			return fmt.Errorf("the %s %q starts or ends with a space", what, v)
+		}
+		if isInvisible(first) || isInvisible(last) {
+			return fmt.Errorf("the %s %q starts or ends with an invisible character", what, v)
+		}
+	}
+	if n := utf8.RuneCountInString(v); n > MaxNameLength {
+		return fmt.Errorf("the %s is %d characters long; the most is %d", what, n, MaxNameLength)
+	}
+	return nil
+}
+
+// isDirectionControl reports whether r changes the direction text is shown
+// in, which can make a name display as another.
+func isDirectionControl(r rune) bool {
+	return r == 0x061C || r == 0x200E || r == 0x200F ||
+		(r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
+}
+
+// isInvisible reports whether r shows as nothing: a format character (such
+// as a zero-width space or soft hyphen), or a filler or blank that Unicode
+// counts as a letter or symbol.
+func isInvisible(r rune) bool {
+	switch r {
+	case 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800:
+		return true
+	}
+	return unicode.Is(unicode.Cf, r)
 }
 
 // AWSKey is the entry holding an AWS profile's MFA secret: the TOTP entry
