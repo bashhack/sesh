@@ -803,14 +803,15 @@ $ sesh -service aws -delete totp/aws/prod
 ✅ Entry deleted successfully
 ```
 
-**Names.** An entry is named by its service name and, optionally, a username (for AWS and `--service totp`, the profile). Spaces inside a name are fine (`My Bank`). A name can never contain a `/`, which separates the parts of an entry's ID (`password/github/alice`), or control characters such as a tab or newline. When you name a new entry (`store`, `generate`, `totp-store`, a setup wizard, or an import), sesh also refuses, before asking for the secret:
+**Names.** An entry is named by its service name and, optionally, a username (for AWS and `--service totp`, the profile). Spaces inside a name are fine (`My Bank`). sesh refuses a name with:
 
+- a `/`, which separates the parts of an entry's ID (`password/github/alice`), or a control character such as a tab or newline;
 - a space at the start or end (`"github "`), which would make an entry that `github` doesn't find;
-- an invisible character (such as a zero-width space or soft hyphen, which text copied from web pages can carry) anywhere in the name, for the same reason;
+- an invisible character (such as a zero-width space or soft hyphen, which text copied from web pages can carry) anywhere in it, for the same reason;
 - a character that changes text direction, which can make one name display as another;
 - more than 256 characters.
 
-Entries saved by an earlier sesh that break these rules still open, update, copy (when you change your master password), and delete. Restoring a backup imports them as they are, with a warning suggesting you rename them; an import refuses only names no entry can have (a `/` or control character).
+The password manager's `store`, `generate`, `get`, `totp-store`, and `totp-generate` check names before the vault is opened, so a bad name is reported before the master password is asked for. The setup wizards check each name as you type it, and an import reports each entry it refuses and imports the rest.
 
 ### Setup Wizard Features
 

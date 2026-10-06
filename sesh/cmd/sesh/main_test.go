@@ -620,6 +620,7 @@ func TestArgsParse(t *testing.T) {
 		"two services":                 {args: []string{"sesh", "--service", "totp", "--service", "aws"}, want: false},
 		"version with a value":         {args: []string{"sesh", "--service", "password", "--version=true"}, want: false},
 		"list services with a value":   {args: []string{"sesh", "--service", "password", "--list-services=true"}, want: false},
+		"a name no entry can have":     {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "github "}, want: false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := argsParse(tt.args); got != tt.want {
