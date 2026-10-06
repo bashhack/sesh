@@ -86,3 +86,17 @@ func TestDeleteEntries_Confirmation(t *testing.T) {
 		t.Errorf("no IDs: err = %v", err)
 	}
 }
+
+// failsToDelete finds entries but can't delete them.
+type failsToDelete struct{ *vault.MemStore }
+
+func (failsToDelete) DeleteMany([]vault.Key) error { return errors.New("vault busy") }
+
+// A delete that fails in the store reports it and counts nothing deleted.
+func TestDeleteEntries_StoreFailure(t *testing.T) {
+	s := failsToDelete{deleteTestStore(t, "password/a", "api_key/b")}
+	n, err := DeleteEntries(s, []string{"password/a", "api_key/b"}, nil, nil, true, nil)
+	if err == nil || err.Error() != "vault busy" || n != 0 {
+		t.Errorf("DeleteEntries = %d, %v; want 0 and the store's error", n, err)
+	}
+}

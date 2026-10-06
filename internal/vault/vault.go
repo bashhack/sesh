@@ -282,5 +282,6 @@ type Store interface {
 	Delete(k Key) error
 	// DeleteMany removes every entry keys name, or none: when one is
 	// missing it returns an error wrapping ErrNotFound and removes nothing.
+	// A key named twice is removed once.
 	DeleteMany(keys []Key) error
 }

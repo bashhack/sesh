@@ -175,11 +175,14 @@ func (a *App) DeleteEntries(serviceName string, ids []string) error {
 	return nil
 }
 
+// errDeleteNeedsForce is a delete with nobody at a terminal to confirm it.
+var errDeleteNeedsForce = errors.New("deleting asks first, and there's no terminal to ask at; add --force to delete without asking")
+
 // confirmDelete names the entries a delete will remove and asks, at the
 // terminal, whether to go ahead; with nobody there to answer, it refuses.
 func (a *App) confirmDelete(ids []string) (bool, error) {
 	if a.StdinIsTerminal == nil || !a.StdinIsTerminal() {
-		return false, errors.New("deleting asks first, and there's no terminal to ask at; add --force to delete without asking")
+		return false, errDeleteNeedsForce
 	}
 	var b strings.Builder
 	question := fmt.Sprintf("Delete %q? [y/N]: ", ids[0])

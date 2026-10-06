@@ -225,8 +225,8 @@ func lockAgentAfterRekey() string {
 	return "Locked the sesh agent, which held the old key."
 }
 
-// promptYesNo reads a y/N answer from stdin. Empty input (bare Enter) is "No"
-// to match runMigrate's behaviour. Returns true only on explicit "y" or "Y".
+// promptYesNo reads a y/N answer from stdin: y or yes, in any case, is a
+// yes; anything else, including just Enter, is a no.
 func promptYesNo(stdin io.Reader, stderr io.Writer, prompt string) (bool, error) {
 	if _, err := fmt.Fprint(stderr, prompt); err != nil {
 		return false, err
@@ -235,8 +235,11 @@ func promptYesNo(stdin io.Reader, stderr io.Writer, prompt string) (bool, error)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, fmt.Errorf("read confirmation: %w", err)
 	}
-	answer := strings.TrimSpace(line)
-	return answer == "y" || answer == "Y", nil
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	}
+	return false, nil
 }
 
 // entryCount says how many entries, as "1 entry" or "n entries".

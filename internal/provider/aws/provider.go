@@ -267,6 +267,9 @@ func (p *Provider) getAWSProfiles() ([]string, error) {
 	return profiles, nil
 }
 
+// DeleteForced reports whether --force says to delete without asking.
+func (p *Provider) DeleteForced() bool { return p.force }
+
 // DeleteEntries deletes the AWS profiles' entries ids name, asking first
 // unless --force.
 func (p *Provider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {

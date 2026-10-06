@@ -482,6 +482,15 @@ func TestRun_Commands(t *testing.T) {
 				}
 			},
 		},
+		"delete with several bad IDs": {
+			args:         []string{"sesh", "--service", "totp", "--force", "--delete", "bad1", "totp/ok", "bad2"},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "nothing was deleted:") || !strings.Contains(stderr, `"bad1"`) || !strings.Contains(stderr, `"bad2"`) {
+					t.Errorf("stderr = %q, want both bad IDs named", stderr)
+				}
+			},
+		},
 		"delete with a flag after the IDs": {
 			args:         []string{"sesh", "--service", "totp", "--delete", "totp/github", "totp/gitlab", "--force"},
 			wantExitCode: 1,
@@ -667,6 +676,10 @@ func TestArgsParse(t *testing.T) {
 		"a name no entry can have":     {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "github "}, want: false},
 		"a negative limit":             {args: []string{"sesh", "--service", "password", "--list", "--limit", "-1"}, want: false},
 		"a bad entry ID to delete":     {args: []string{"sesh", "--service", "password", "--delete", "password/github "}, want: false},
+		"a bad second ID to delete":    {args: []string{"sesh", "--service", "password", "--force", "--delete", "password/github", "bad"}, want: false},
+		"a flag after the IDs":         {args: []string{"sesh", "--service", "totp", "--delete", "totp/a", "totp/b", "--force"}, want: false},
+		"delete, forced":               {args: []string{"sesh", "--service", "totp", "--force", "--delete", "totp/a", "totp/b"}, want: true},
+		"delete, nobody to ask":        {args: []string{"sesh", "--service", "aws", "--delete", "totp/aws/dev"}, want: false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := argsParse(tt.args); got != tt.want {
@@ -791,7 +804,7 @@ func TestEarlyCheck_OnlyWhatTheCommandUses(t *testing.T) {
 	}{
 		"aws setup":            {args: []string{"sesh", "--service", "aws", "--setup"}},
 		"aws list":             {args: []string{"sesh", "--service", "aws", "--list"}},
-		"aws delete":           {args: []string{"sesh", "--service", "aws", "--delete", "totp/aws/dev"}},
+		"aws delete":           {args: []string{"sesh", "--service", "aws", "--force", "--delete", "totp/aws/dev"}},
 		"aws credentials":      {args: []string{"sesh", "--service", "aws"}, wantSub: `AWS_PROFILE: the AWS profile "Prod/Admin" contains "/"`},
 		"password list paging": {args: []string{"sesh", "--service", "password", "--list", "--limit", "-1"}, wantSub: "--limit wants 0"},
 		"list with a bad ID":   {args: []string{"sesh", "--service", "totp", "--list", "--delete", "bad"}, wantSub: `entry ID "bad"`},

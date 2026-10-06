@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/bashhack/sesh/internal/vault"
@@ -221,6 +222,17 @@ func (s *Store) List(f vault.Filter) (_ []vault.Entry, err error) {
 
 // DeleteMany implements vault.Store: the entries go in one transaction.
 func (s *Store) DeleteMany(keys []vault.Key) error {
+	keys = slices.Clone(keys)
+	slices.SortFunc(keys, func(a, b vault.Key) int {
+		switch {
+		case a.Less(b):
+			return -1
+		case b.Less(a):
+			return 1
+		}
+		return 0
+	})
+	keys = slices.Compact(keys)
 	err := s.inTx(func(tx *sql.Tx) error {
 		for _, k := range keys {
 			res, err := tx.Exec(`DELETE FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(k.Kind), k.Service, k.Username)

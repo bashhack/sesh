@@ -2,7 +2,6 @@ package database
 
 import (
 	"encoding/hex"
-	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -93,9 +92,8 @@ func TestEntryAAD_Golden(t *testing.T) {
 	}
 }
 
-// DeleteMany removes every entry named, in one transaction, or none when
-// one is missing; each deletion is logged.
-func TestStore_DeleteMany(t *testing.T) {
+// DeleteMany logs each deletion (vaulttest checks the rest).
+func TestStore_DeleteManyLogsEach(t *testing.T) {
 	s := newTestStore(t)
 	a, b := vault.Key{Kind: vault.KindPassword, Service: "a"}, vault.Key{Kind: vault.KindAPIKey, Service: "b"}
 	for _, k := range []vault.Key{a, b} {
@@ -103,18 +101,8 @@ func TestStore_DeleteMany(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	missing := vault.Key{Kind: vault.KindPassword, Service: "missing"}
-	if err := s.DeleteMany([]vault.Key{a, missing}); !errors.Is(err, vault.ErrNotFound) || !strings.Contains(err.Error(), "password/missing") {
-		t.Fatalf("with a missing entry: err = %v", err)
-	}
-	if _, err := s.Lookup(a); err != nil {
-		t.Errorf("an entry was deleted although another was missing: %v", err)
-	}
 	if err := s.DeleteMany([]vault.Key{a, b}); err != nil {
 		t.Fatal(err)
-	}
-	if es, err := s.List(vault.Filter{}); err != nil || len(es) != 0 {
-		t.Errorf("entries left = %v, %v", es, err)
 	}
 	events, err := s.AuditEvents(0)
 	if err != nil {

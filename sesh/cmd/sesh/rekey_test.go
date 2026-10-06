@@ -154,7 +154,9 @@ func TestPromptYesNo(t *testing.T) {
 	cases := map[string]bool{
 		"y\n":     true,
 		"Y\n":     true,
-		"yes\n":   false,
+		"yes\n":   true,
+		"YES\n":   true,
+		"yep\n":   false,
 		"n\n":     false,
 		"\n":      false,
 		"":        false,

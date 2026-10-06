@@ -349,6 +349,9 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 	return result, nil
 }
 
+// DeleteForced reports whether --force says to delete without asking.
+func (p *Provider) DeleteForced() bool { return p.force }
+
 // DeleteEntries deletes the entries ids name, of any kind, asking first
 // unless --force.
 func (p *Provider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {

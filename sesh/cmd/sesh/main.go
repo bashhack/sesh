@@ -149,7 +149,7 @@ func argsParse(args []string) bool {
 	}
 	// Arguments that are wrong without the vault are refused before the
 	// master password is asked for; run reports why.
-	return earlyCheck(p, common, fs.Args()) == nil
+	return earlyCheck(p, common, fs.Args(), app.StdinIsTerminal) == nil
 }
 
 // earlyCheck refuses arguments that are wrong without looking at the vault,
@@ -159,14 +159,30 @@ func argsParse(args []string) bool {
 // --setup (whose wizard asks for its own names), all the provider's
 // arguments. argsParse runs it before the vault opens, and run reports it
 // before any path that would use the vault.
-func earlyCheck(p provider.ServiceProvider, common commonFlags, args []string) error {
-	for _, id := range deleteIDs(common, args) {
-		// Flags stop at the first ID, so one after the IDs arrives as an ID.
-		if strings.HasPrefix(id, "-") {
-			return fmt.Errorf("%q looks like a flag: put flags before the entry IDs, as in: sesh --service password --force --delete <id> <id>", id)
+func earlyCheck(p provider.ServiceProvider, common commonFlags, args []string, stdinIsTerminal func() bool) error {
+	if ids := deleteIDs(common, args); len(ids) > 0 {
+		var bad []string
+		for _, id := range ids {
+			switch _, err := vault.ParseKey(id); {
+			case strings.HasPrefix(id, "-"):
+				// Flags stop at the first ID, so one after the IDs
+				// arrives as an ID.
+				bad = append(bad, fmt.Sprintf("%q looks like a flag: put flags before the entry IDs, as in: sesh --service %s --force --delete <id> <id>", id, p.Name()))
+			case err != nil:
+				bad = append(bad, err.Error())
+			}
 		}
-		if _, err := vault.ParseKey(id); err != nil {
-			return err
+		switch len(bad) {
+		case 0:
+		case 1:
+			return errors.New(bad[0])
+		default:
+			return fmt.Errorf("nothing was deleted:\n  %s", strings.Join(bad, "\n  "))
+		}
+		// Asking needs a terminal; without one, say so before the vault is
+		// unlocked for nothing.
+		if f, ok := p.(interface{ DeleteForced() bool }); ok && !f.DeleteForced() && (stdinIsTerminal == nil || !stdinIsTerminal()) {
+			return errDeleteNeedsForce
 		}
 	}
 	switch {
@@ -875,7 +891,7 @@ func run(app *App, args []string) {
 
 	// What argsParse refused before opening the vault is reported here,
 	// before any path that would use the vault it didn't open.
-	if err := earlyCheck(svcProvider, common, fs.Args()); err != nil {
+	if err := earlyCheck(svcProvider, common, fs.Args(), app.StdinIsTerminal); err != nil {
 		fatal(app, err)
 		return
 	}
@@ -922,7 +938,13 @@ func deleteIDs(common commonFlags, args []string) []string {
 	if *common.delete == "" {
 		return nil
 	}
-	return append([]string{*common.delete}, args...)
+	ids := []string{*common.delete}
+	for _, a := range args {
+		if a != "--" { // the end of the flags, not an ID
+			ids = append(ids, a)
+		}
+	}
+	return ids
 }
 
 // commonFlags are the flags every provider accepts.
@@ -938,7 +960,7 @@ func addCommonFlags(fs *flag.FlagSet, serviceName string) commonFlags {
 		help:         fs.Bool("help", false, "Show usage"),
 		listServices: fs.Bool("list-services", false, "List available service providers"),
 		list:         fs.Bool("list", false, "List entries for selected service"),
-		delete:       fs.String("delete", "", "Delete entry for selected service"),
+		delete:       fs.String("delete", "", "Delete entries by ID: --delete <id> [<id> ...], all or none; asks first unless --force"),
 		setup:        fs.Bool("setup", false, "Run setup wizard for selected service"),
 		clip:         fs.Bool("clip", false, "Copy code to clipboard"),
 	}
@@ -994,7 +1016,7 @@ func (a *App) PrintUsage() error {
 		"\nCommon options:",
 		"  --service, -service           Service provider to use (aws, totp, password) [REQUIRED]",
 		"  --list, -list                 List entries for selected service",
-		"  --delete, -delete string      Delete entry for selected service",
+		"  --delete, -delete <id> ...    Delete entries by ID, all or none; asks first unless --force",
 		"  --setup, -setup               Run setup wizard for selected service",
 		"  --clip, -clip                 Copy code to clipboard",
 		"  --list-services, -list-services  List available service providers",
@@ -1038,7 +1060,7 @@ func (a *App) PrintProviderUsage(serviceName string, p provider.ServiceProvider)
 		"Common options:",
 		"  --service string              Service provider to use",
 		"  --list                        List entries for selected service",
-		"  --delete string               Delete entry for selected service",
+		"  --delete <id> ...             Delete entries by ID, all or none; asks first unless --force",
 		"  --setup                       Run setup wizard for selected service",
 		"  --clip                        Copy code to clipboard",
 		"  --help                        Show this help",

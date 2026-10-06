@@ -221,6 +221,7 @@ db_path                  /Users/me/vaults/sesh.db
 |--------------------|----------------------|-----------------------------------------|------------------|
 | `-profile`        | `AWS_PROFILE`        | AWS profile to use                      | default profile  |
 | `-no-subshell`    | n/a                  | Print credentials instead of subshell   | false (subshell) |
+| `-force`          | n/a                  | Delete without asking                   | false            |
 
 **Profile precedence:** `-profile` flag > `$AWS_PROFILE` environment variable > `"default"`. If neither flag nor env var is set, sesh uses the profile named `"default"`.
 
@@ -230,6 +231,7 @@ db_path                  /Users/me/vaults/sesh.db
 |--------------------|----------------------------------------------------|------------------|
 | `-service-name`   | Name of service (github, google, slack, etc.)      | Yes              |
 | `-profile`        | Profile name for multiple accounts (work, personal)| No               |
+| `-force`          | Delete without asking                              | No               |
 
 ### Password Provider Options
 
@@ -824,15 +826,17 @@ Delete these 2 entries? [y/N]: y
 ✅ Deleted 2 entries
 ```
 
-A delete asks first, for every provider. `-force` deletes without asking, and is needed without a terminal, as in a script. Flags go before the IDs: in `-delete a b -force`, `-force` would be read as an ID, and sesh says so.
+A delete asks first, for every provider: `y` or `yes` goes ahead. `-force` deletes without asking, and is needed without a terminal, as in a script; sesh says so before asking for the master password. Flags go before the IDs: in `-delete a b -force`, `-force` would be read as an ID, and sesh says so.
 
-To delete entries chosen by a filter, search for them as JSON (it shows each entry's `id`, never a secret), pick the IDs with `jq`, check them, then hand them to `-delete` with `xargs`:
+To delete entries chosen by a filter, search for them as JSON (it shows each entry's `id`, never a secret), pick the IDs with `jq`, check them, then hand them to `-delete` with `xargs`. Separate the IDs with NUL characters (`jq -j … + "\u0000"` and `xargs -0`): names can contain spaces and quotes, which plain `xargs` would split on, turning one ID into others.
 
 ```bash
 # every API key for old-service: check the list first, then delete it
 sesh -service password -action search -query old-service -entry-type api_key -format json | jq -r '.[] | select(.service == "old-service") | .id'
-sesh -service password -action search -query old-service -entry-type api_key -format json | jq -r '.[] | select(.service == "old-service") | .id' | xargs sesh -service password -force -delete
+sesh -service password -action search -query old-service -entry-type api_key -format json | jq -j '.[] | select(.service == "old-service") | .id + "\u0000"' | xargs -0 sesh -service password -force -delete
 ```
+
+For a very long list, `xargs` runs sesh more than once, and each run is all or none on its own; check the count sesh reports.
 
 **Names.** An entry is named by its service name and, optionally, a username (for AWS and `--service totp`, the profile). Spaces inside a name are fine (`My Bank`). sesh refuses a name with:
 
