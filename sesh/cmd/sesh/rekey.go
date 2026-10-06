@@ -165,7 +165,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	// Locked before any output, so a failed write below can't skip it.
 	agentNote := lockAgentAfterRekey()
 	// Touch ID unlock is re-wrapped for the new key, also before any output.
-	touchNote := rewrapTouchID(dbPath, oldID, key)
+	touchNote := rewrapTouchID(dbPath, oldID, res.NewID, key)
 	recoveryNote := ""
 	switch res.Recovery {
 	case database.RecoveryKept:
@@ -177,11 +177,15 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %s under a new master password.\n", entryCount(res.Entries)); perr != nil {
 		return bytes.Clone(key), perr
 	}
+	fileNote := ""
+	if res.OldVaultInFile {
+		fileNote = "warning: another sesh command has the vault open, so the vault file on its own still holds the vault under the old password until that command ends; don't copy or back up the file until then."
+	}
 	envNote := ""
 	if cfg.fromEnv {
 		envNote = "SESH_MASTER_PASSWORD still holds the old password; update it, or the next command will refuse it as wrong."
 	}
-	for _, msg := range []string{touchNote, recoveryNote, agentNote, envNote} {
+	for _, msg := range []string{touchNote, recoveryNote, agentNote, fileNote, envNote} {
 		if msg == "" {
 			continue
 		}

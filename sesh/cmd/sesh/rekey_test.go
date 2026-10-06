@@ -616,10 +616,23 @@ func TestRotate_WithTheVaultOpenElsewhere(t *testing.T) {
 		t.Fatalf("the other process never got ready: %s\n%s", r, out.String())
 	}
 
+	old := sealedSecrets(t, env.dbPath)
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	app, stderr := rekeyTestApp("y\n")
 	if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
 		t.Fatalf("rotate: %v\n%s", err, stderr)
+	}
+	// With the other process still open, the vault file itself (what a
+	// backup copies) no longer holds the vault under the old key.
+	b, err := os.ReadFile(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range old {
+		if bytes.Contains(b, c) {
+			t.Error("the vault file still holds an entry encrypted under the old key")
+			break
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "go"), nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -657,4 +670,29 @@ func TestRotate_WithTheVaultOpenElsewhere(t *testing.T) {
 	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&check); err != nil || check != "ok" {
 		t.Errorf("integrity_check = %q, %v", check, err)
 	}
+}
+
+// sealedSecrets reads every entry's encrypted secret from the vault at
+// dbPath.
+func sealedSecrets(t *testing.T, dbPath string) [][]byte {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test cleanup
+	rows, err := db.Query(`SELECT encrypted_data FROM entries`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close() //nolint:errcheck // test cleanup
+	var all [][]byte
+	for rows.Next() {
+		var b []byte
+		if err := rows.Scan(&b); err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, b)
+	}
+	return all
 }

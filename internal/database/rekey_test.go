@@ -2,6 +2,7 @@ package database
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"os"
 	"testing"
@@ -182,5 +183,101 @@ func TestStore_AfterAnotherRekey(t *testing.T) {
 	}
 	if !opensWith(t, p, "new-password-1") {
 		t.Error("the vault no longer opens with the new password")
+	}
+}
+
+// saveDuringOracle runs save once, the first time an entry is decrypted:
+// during a password change, that's while entries are re-encrypted ahead of
+// its transaction.
+type saveDuringOracle struct {
+	CryptoOracle
+	save func()
+	done bool
+}
+
+func (o *saveDuringOracle) UnlockID() (string, error) {
+	return o.CryptoOracle.(interface{ UnlockID() (string, error) }).UnlockID()
+}
+
+func (o *saveDuringOracle) DecryptEntry(data, salt, aad []byte) ([]byte, error) {
+	if !o.done {
+		o.done = true
+		o.save()
+	}
+	return o.CryptoOracle.DecryptEntry(data, salt, aad)
+}
+
+// An entry saved or changed by another command while the change re-encrypts
+// entries ahead of its transaction ends up under the new key too.
+func TestStore_RekeyKeepsSavesMadeWhileItWorks(t *testing.T) {
+	p, _ := rekeyVault(t)
+	other, err := Open(p, NewKeySourceOracle(NewMasterPasswordSource(p, staticPrompt("old-password-1"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close() //nolint:errcheck // test cleanup
+	src := NewMasterPasswordSource(p, staticPrompt("old-password-1"))
+	o := &saveDuringOracle{CryptoOracle: NewKeySourceOracle(src), save: func() {
+		for k, v := range map[string]string{"bank": "changed-secret", "late": "late-secret"} {
+			if err := other.Put(vault.Key{Kind: vault.KindPassword, Service: k}, []byte(v)); err != nil {
+				t.Errorf("save while the change works: %v", err)
+			}
+		}
+	}}
+	s, err := Open(p, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, rec := newKeyFor(t, "new-password-1")
+	if _, err := s.Rekey(key, rec, rewrapTo); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := Open(p, NewKeySourceOracle(NewMasterPasswordSource(p, staticPrompt("new-password-1"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer after.Close() //nolint:errcheck // test cleanup
+	for k, want := range map[string]string{"bank": "changed-secret", "late": "late-secret"} {
+		if got, err := after.Get(vault.Key{Kind: vault.KindPassword, Service: k}); err != nil || string(got) != want {
+			t.Errorf("%s under the new password = %q, %v; want %q", k, got, err, want)
+		}
+	}
+}
+
+// A reader in the middle of a read holds off folding the change into the
+// vault file, and the result says so; with none, the change is folded in.
+func TestStore_RekeyReportsWhenTheFileStillHoldsTheOldVault(t *testing.T) {
+	for _, reading := range []bool{false, true} {
+		p, s := rekeyVault(t)
+		reader, err := sql.Open("sqlite", p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader.SetMaxOpenConns(1)
+		var tx *sql.Tx
+		if reading {
+			if tx, err = reader.Begin(); err != nil {
+				t.Fatal(err)
+			}
+			var n int
+			if err := tx.QueryRow(`SELECT COUNT(*) FROM entries`).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+		}
+		key, rec := newKeyFor(t, "new-password-1")
+		res, err := s.Rekey(key, rec, rewrapTo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.OldVaultInFile != reading {
+			t.Errorf("reading=%v: OldVaultInFile = %v", reading, res.OldVaultInFile)
+		}
+		if tx != nil {
+			_ = tx.Rollback() //nolint:errcheck // test cleanup
+		}
+		_ = reader.Close() //nolint:errcheck // test cleanup
 	}
 }

@@ -530,7 +530,7 @@ Behaviour:
 
 - **All or nothing.** Every entry, the vault's key record and its recovery key record change in one database transaction: if anything fails, or the computer stops part way, nothing has changed. No second copy of the vault is made.
 - **Your history stays.** The audit log is kept, with one `rekey` event for the change.
-- **Other sesh commands.** One that unlocked the vault before the change finished can't save into it afterwards, or read from it: it's told the master password was changed, and to run again. Another password change running at the same time is refused the same way, so neither undoes the other.
+- **Other sesh commands.** Ones that save while the change commits wait a moment for it. One that unlocked the vault before the change finished can't save into it afterwards, or read from it: it's told the master password was changed, and to run again. If one has the vault open when the change finishes, sesh warns that the vault file on its own still holds the vault under the old password until that command ends; don't copy or back up the file until then. Another password change running at the same time is refused the same way, so neither undoes the other.
 - **A new salt.** The new key comes from a new salt, with sesh's Argon2id settings. If you forget the new password, your recovery key sets another (see [Recovery key](#recovery-key)).
 
 **A vault that has lost its key record** (only damage does this) is refused: `the vault at … holds entries but not the record its key is made from, so it can't be opened; restore it from a backup`. sesh never makes a new key for a vault that holds entries.

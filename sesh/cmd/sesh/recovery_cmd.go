@@ -91,6 +91,9 @@ func makeRecoveryKey(wrap wrapFunc, dbPath string, verify []byte, cfg passwordPr
 		}
 		if sameGroup(typed, last) {
 			if err := database.WriteRecovery(dbPath, recovery.NewRecord(id, pub, w)); err != nil {
+				if errors.Is(err, database.ErrVaultKeyChanged) {
+					return false, errors.New("the master password was changed by another sesh command while this key was shown, so it wasn't saved and opens nothing: throw away the key you wrote down, and run: sesh recovery new")
+				}
 				return false, err
 			}
 			note("The recovery key is set for this vault.")
@@ -325,10 +328,10 @@ func runRecover(app *App, args []string) error {
 	src.Close()
 	defer secure.SecureZeroBytes(newKey)
 	if newKey == nil {
-		return err // nothing changed: cancelled (nil), or failed before the swap
+		return err // nothing changed: cancelled (nil), or failed before committing
 	}
 
-	// The new vault has no recovery key record, so the used key opens
+	// The change removed the recovery key record, so the used key opens
 	// nothing; a new one is offered.
 	if err != nil {
 		return err
