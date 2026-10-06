@@ -1021,7 +1021,13 @@ func TestAWSSetupHandler_showSetupCompletionMessage(t *testing.T) {
 			wantContains: []string{
 				"Setup complete!",
 				"Run 'sesh -service aws' to generate a temporary session token",
-				"To use this setup, run: sesh --profile dev",
+				"To use this setup, run: sesh --service aws --profile dev",
+			},
+		},
+		"profile that needs quoting": {
+			profile: "my prod",
+			wantContains: []string{
+				"To use this setup, run: sesh --service aws --profile 'my prod'",
 			},
 		},
 	}

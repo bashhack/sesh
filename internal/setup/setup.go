@@ -434,7 +434,7 @@ func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
 To use this setup, run without the --profile flag
 (The default AWS profile will be used)`)
 	} else {
-		fmt.Printf("\nTo use this setup, run: sesh --profile %s\n", profile)
+		fmt.Printf("\nTo use this setup, run: sesh --service aws --profile %s\n", shell.Quote(profile))
 	}
 }
 
