@@ -384,3 +384,9 @@ func formatProfile(profile string) string {
 	}
 	return fmt.Sprintf("profile (%s)", name)
 }
+
+// CheckArgs refuses a profile name no entry can have, without the vault,
+// so the CLI can stop before opening it.
+func (p *Provider) CheckArgs() error {
+	return vault.CheckName("AWS profile", p.profile)
+}

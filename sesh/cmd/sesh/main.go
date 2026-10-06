@@ -152,6 +152,11 @@ func argsParse(args []string) bool {
 	if c, ok := p.(interface{ CheckArgs() error }); ok && c.CheckArgs() != nil {
 		return false
 	}
+	if *common.delete != "" {
+		if _, err := vault.ParseKey(*common.delete); err != nil {
+			return false // an ID no entry can have; run reports why
+		}
+	}
 	return true
 }
 
@@ -865,6 +870,15 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	}
+
+	// What argsParse refused before opening the vault is reported here,
+	// before any path that would use the vault it didn't open.
+	if c, ok := svcProvider.(interface{ CheckArgs() error }); ok {
+		if err := c.CheckArgs(); err != nil {
+			fatal(app, err)
+			return
+		}
 	}
 
 	// Provider-specific operations

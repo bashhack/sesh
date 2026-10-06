@@ -814,7 +814,7 @@ $ sesh -service aws -delete totp/aws/prod
 - a character that changes text direction, which can make one name display as another;
 - more than 256 characters.
 
-The password manager's `store`, `generate`, `get` (including `--clip` on its own), `totp-store`, and `totp-generate` check names before the vault is opened, so a bad name is reported before the master password is asked for. The TOTP setup checks the service name and profile once you've entered both, the AWS setup checks the profile as soon as you enter it, and an import reports each entry it refuses and imports the rest.
+The password manager's `store`, `generate`, `get` (including `--clip` on its own), `totp-store`, and `totp-generate` check names before the vault is opened, as do `--service totp` (the service name and profile), `--service aws` (the profile), and `--delete` (the entry ID), so a bad name is reported before the master password is asked for. The TOTP setup checks the service name and profile once you've entered both, the AWS setup checks the profile as soon as you enter it, and an import reports each entry it refuses and imports the rest.
 
 Names are case-sensitive: `GitHub` and `github` are two entries. When a lookup (`get`, `totp-generate`, `--service totp`, or `--delete` with `--service password` or `--service totp`) misses only by case, sesh says which entry you may have meant. Creating an entry whose name differs from an existing one only in case asks first, like an overwrite: with `store`, `generate`, and `totp-store` (`--force` skips the question), and in the TOTP setup wizard. AWS profiles are named by your AWS configuration, so the AWS setup doesn't ask.
 

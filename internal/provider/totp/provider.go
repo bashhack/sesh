@@ -231,3 +231,15 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 		},
 	}
 }
+
+// CheckArgs refuses a service name or profile no entry can have, without
+// the vault, so the CLI can stop before opening it.
+func (p *Provider) CheckArgs() error {
+	if p.serviceName == "" {
+		return nil // reported by ValidateRequest when it's needed
+	}
+	if err := vault.CheckName("service name", p.serviceName); err != nil {
+		return err
+	}
+	return vault.CheckName("profile", p.profile)
+}

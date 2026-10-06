@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/provider"
 	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
 	passwordProvider "github.com/bashhack/sesh/internal/provider/password"
@@ -622,6 +624,8 @@ func TestArgsParse(t *testing.T) {
 		"version with a value":         {args: []string{"sesh", "--service", "password", "--version=true"}, want: false},
 		"list services with a value":   {args: []string{"sesh", "--service", "password", "--list-services=true"}, want: false},
 		"a name no entry can have":     {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "github "}, want: false},
+		"a negative limit":             {args: []string{"sesh", "--service", "password", "--list", "--limit", "-1"}, want: false},
+		"a bad entry ID to delete":     {args: []string{"sesh", "--service", "password", "--delete", "password/github "}, want: false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := argsParse(tt.args); got != tt.want {
@@ -703,5 +707,36 @@ func TestList_RefusesNegativePaging(t *testing.T) {
 		if code == 0 || !strings.Contains(h.stderr.String(), "wants 0") {
 			t.Errorf("%q: exit %d, stderr %q; want the flag refused", args, code, h.stderr.String())
 		}
+	}
+}
+
+// Whatever the early check refuses is reported as itself on every path,
+// never as the missing store the CLI was right not to open.
+func TestRun_ReportsWhatTheEarlyCheckRefuses(t *testing.T) {
+	for name, args := range map[string][]string{
+		"--list, negative limit":   {"--service", "password", "--list", "--limit", "-1"},
+		"--delete, negative limit": {"--service", "password", "--delete", "password/a", "--limit", "-1"},
+		"--delete, bad name":       {"--service", "password", "--delete", "password/a", "--action", "get", "--service-name", "x "},
+		"--clip, bad name":         {"--service", "password", "--service-name", "github ", "--clip"},
+		"get, bad name":            {"--service", "password", "--action", "get", "--service-name", "github "},
+		"totp, bad name":           {"--service", "totp", "--service-name", "github "},
+		"aws, bad profile":         {"--service", "aws", "--profile", "prod "},
+		"--delete, bad entry ID":   {"--service", "password", "--delete", "password/github "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			full := append([]string{"sesh"}, args...)
+			if argsParse(full) {
+				t.Errorf("argsParse(%q) = true, want the early check to refuse", full)
+			}
+			app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+			var stderr bytes.Buffer
+			app.Stdout, app.Stderr = io.Discard, &stderr
+			code := 0
+			app.Exit = func(c int) { code = c }
+			run(app, full)
+			if code == 0 || strings.Contains(stderr.String(), "no credential store opened") {
+				t.Errorf("exit %d, stderr %q; want the real error", code, stderr.String())
+			}
+		})
 	}
 }
