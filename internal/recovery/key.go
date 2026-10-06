@@ -3,7 +3,7 @@
 // forgotten.
 //
 // The key is the seed of a P-256 key pair. sesh keeps only the public half
-// (in the recovery file next to the vault) and wraps the vault key to it,
+// (in the vault's recovery record) and wraps the vault key to it,
 // which needs no secret, so a password change re-wraps the new key without
 // asking for the recovery key. Only the written-down key can unwrap it.
 package recovery
@@ -42,7 +42,7 @@ var (
 	// a character that can't appear, or a typo the checksum caught.
 	ErrInvalidKey = errors.New("invalid recovery key")
 	// ErrWrongKey means a valid recovery key that doesn't open this vault's
-	// recovery file: another vault's key, or one that has been replaced.
+	// recovery record: another vault's key, or one that has been replaced.
 	ErrWrongKey = errors.New("this recovery key doesn't open this vault")
 )
 

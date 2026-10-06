@@ -12,7 +12,6 @@ import (
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
-	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/touchid"
 )
 
@@ -86,7 +85,7 @@ func runInit(app *App, args []string) error {
 		}
 	}
 	if existed {
-		if _, err := os.Stat(filepath.Join(filepath.Dir(choices.dbPath), recovery.FileName)); err != nil {
+		if _, err := database.ReadRecovery(choices.dbPath); err != nil {
 			defer func() {
 				fmt.Fprintln(app.Stdout, "Tip: make a recovery key, in case you forget your master password: sesh recovery new") //nolint:errcheck // best-effort tip
 			}()

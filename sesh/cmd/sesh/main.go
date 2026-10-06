@@ -18,7 +18,6 @@ import (
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
-	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -380,11 +379,11 @@ func unlockAgentWith(dbPath string, pw []byte) {
 
 // withForgottenPasswordHint adds what a person can do after failing every
 // interactive master password attempt. Scripts get the plain error.
-func withForgottenPasswordHint(err error, cfg passwordPromptConfig, dataDir string) error {
+func withForgottenPasswordHint(err error, cfg passwordPromptConfig, dbPath string) error {
 	if !cfg.interactive || !errors.Is(err, database.ErrWrongPassword) {
 		return err
 	}
-	if _, serr := os.Stat(filepath.Join(dataDir, recovery.FileName)); serr == nil {
+	if _, rerr := database.ReadRecovery(dbPath); rerr == nil {
 		return fmt.Errorf("%w.\n   If you've forgotten it, set a new one with your recovery key: sesh recover", err)
 	}
 	return fmt.Errorf("%w.\n   If you've forgotten it, the vault can't be opened. To start over, or to restore\n"+
@@ -405,11 +404,10 @@ func buildKeySource(dbPath string) (database.CryptoOracle, error) {
 // buildKeySourceWith is buildKeySource with the password prompt given, so
 // tests can stand in for a person at a terminal.
 func buildKeySourceWith(dbPath string, cfg passwordPromptConfig) (database.CryptoOracle, error) {
-	dataDir := filepath.Dir(dbPath)
 	if !cfg.fromEnv {
 		oracle, typed, err := keySourceFromAgent(dbPath, cfg)
 		if err != nil {
-			return nil, withForgottenPasswordHint(err, cfg, dataDir)
+			return nil, withForgottenPasswordHint(err, cfg, dbPath)
 		}
 		if oracle != nil {
 			return oracle, nil
@@ -438,7 +436,7 @@ func buildKeySourceWith(dbPath string, cfg passwordPromptConfig) (database.Crypt
 	// the password.
 	key, err := mps.GetEncryptionKey()
 	if err != nil {
-		return nil, withForgottenPasswordHint(err, cfg, dataDir)
+		return nil, withForgottenPasswordHint(err, cfg, dbPath)
 	}
 	secure.SecureZeroBytes(key)
 	if firstRun {

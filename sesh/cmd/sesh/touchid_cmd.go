@@ -252,7 +252,7 @@ func runTouchID(app *App, args []string) error {
 	}
 }
 
-// anotherVaults reports whether a Touch ID or recovery file whose unlock id
+// anotherVaults reports whether a Touch ID file whose unlock id
 // is fileID was made for a vault other than the one at dbPath.
 func anotherVaults(fileID, dbPath string) bool {
 	mat, err := database.ReadUnlockMaterial(dbPath)

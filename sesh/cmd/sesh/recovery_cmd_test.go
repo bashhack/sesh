@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,22 +51,22 @@ func withLines(cfg passwordPromptConfig, lines ...string) passwordPromptConfig {
 	return cfg
 }
 
-// opensVault fails the test unless k unwraps the recovery file in dataDir
-// to the vault's key.
-func opensVault(t *testing.T, k recovery.Key, dataDir string) {
+// opensVault fails the test unless k unwraps the recovery key record of the
+// vault at dbPath to the vault's key.
+func opensVault(t *testing.T, k recovery.Key, dbPath string) {
 	t.Helper()
-	f, err := recovery.ReadFile(dataDir)
+	f, err := database.ReadRecovery(dbPath)
 	if err != nil {
 		t.Fatalf("recovery file: %v", err)
 	}
-	mat, err := database.ReadUnlockMaterial(vaultIn(dataDir))
+	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if f.UnlockID != agent.UnlockID(mat.Verify) {
 		t.Fatal("the recovery file is bound to another vault")
 	}
-	key, err := k.Unwrap(f.Wrapped(), []byte(f.UnlockID))
+	key, err := k.Unwrap(recovery.Wrapped(f), []byte(f.UnlockID))
 	if err != nil {
 		t.Fatalf("the recovery key doesn't open its file: %v", err)
 	}
@@ -103,7 +102,7 @@ func TestRecovery_OfferedAtFirstRun(t *testing.T) {
 			t.Errorf("stderr missing %q:\n%s", want, out)
 		}
 	}
-	opensVault(t, k, filepath.Dir(dbPath))
+	opensVault(t, k, dbPath)
 }
 
 func TestRecovery_NotSavedUnlessConfirmed(t *testing.T) {
@@ -116,7 +115,7 @@ func TestRecovery_NotSavedUnlessConfirmed(t *testing.T) {
 			noTouchIDOffer(t)
 			fixedRecoveryKey(t)
 			dbPath, out := createVaultOfferingRecovery(t, true, lines...)
-			if _, err := recovery.ReadFile(filepath.Dir(dbPath)); !errors.Is(err, os.ErrNotExist) {
+			if _, err := database.ReadRecovery(dbPath); !errors.Is(err, database.ErrNoRecovery) {
 				t.Errorf("recovery file written without confirmation (err %v)", err)
 			}
 			if !strings.Contains(out, "No recovery key was set, since it wasn't confirmed. Make one when you're ready with: sesh recovery new") {
@@ -134,7 +133,7 @@ func TestRecovery_OfferDeclined(t *testing.T) {
 	if strings.Contains(out, k.String()) {
 		t.Error("the key was shown although the offer was declined")
 	}
-	if _, err := recovery.ReadFile(filepath.Dir(dbPath)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := database.ReadRecovery(dbPath); !errors.Is(err, database.ErrNoRecovery) {
 		t.Errorf("recovery file exists after declining (err %v)", err)
 	}
 }
@@ -143,7 +142,6 @@ func TestRunRecovery_NewStatusRemove(t *testing.T) {
 	startTestAgent(t)
 	noTouchIDOffer(t)
 	dbPath, _ := createVaultOfferingRecovery(t, false)
-	dataDir := filepath.Dir(dbPath)
 	useConfigFile(t, "db_path = \""+dbPath+"\"\n")
 	answers := []string{}
 	orig := recoveryPrompt
@@ -167,7 +165,7 @@ func TestRunRecovery_NewStatusRemove(t *testing.T) {
 	if _, err := run("new"); err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	opensVault(t, first, dataDir)
+	opensVault(t, first, dbPath)
 	if out, err := run("status"); err != nil || !strings.HasPrefix(out, "Recovery key: set (made ") {
 		t.Errorf("status after new = %q, %v", out, err)
 	}
@@ -178,12 +176,12 @@ func TestRunRecovery_NewStatusRemove(t *testing.T) {
 	if _, err := run("new"); err != nil {
 		t.Fatalf("second new: %v", err)
 	}
-	opensVault(t, second, dataDir)
-	f, err := recovery.ReadFile(dataDir)
+	opensVault(t, second, dbPath)
+	f, err := database.ReadRecovery(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := first.Unwrap(f.Wrapped(), []byte(f.UnlockID)); !errors.Is(err, recovery.ErrWrongKey) {
+	if _, err := first.Unwrap(recovery.Wrapped(f), []byte(f.UnlockID)); !errors.Is(err, recovery.ErrWrongKey) {
 		t.Errorf("the replaced key still opens the file (err %v)", err)
 	}
 
@@ -222,13 +220,13 @@ func TestRotate_RewrapsRecoveryKey(t *testing.T) {
 	}
 	k, last := fixedRecoveryKey(t)
 	restore := testutil.RedirectStderr(t)
-	saved, err := makeRecoveryKey(agentWrap(conn), env.dataDir, mat.Verify, withLines(interactivePrompt(t), last))
+	saved, err := makeRecoveryKey(agentWrap(conn), env.dbPath, mat.Verify, withLines(interactivePrompt(t), last))
 	restore()
 	closeAgentConn(conn)
 	if err != nil || !saved {
 		t.Fatalf("makeRecoveryKey = %v, %v", saved, err)
 	}
-	before, err := recovery.ReadFile(env.dataDir)
+	before, err := database.ReadRecovery(env.dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,8 +238,8 @@ func TestRotate_RewrapsRecoveryKey(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Your recovery key still works: it now opens the vault with the new master password.") {
 		t.Errorf("stderr missing the re-wrap note:\n%s", stderr.String())
 	}
-	opensVault(t, k, env.dataDir)
-	after, err := recovery.ReadFile(env.dataDir)
+	opensVault(t, k, env.dbPath)
+	after, err := database.ReadRecovery(env.dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +299,7 @@ func recoverableVault(t *testing.T) (*rekeyTestEnv, recovery.Key) {
 	}
 	k, last := fixedRecoveryKey(t)
 	restore := testutil.RedirectStderr(t)
-	saved, err := makeRecoveryKey(agentWrap(conn), env.dataDir, mat.Verify, withLines(interactivePrompt(t), last))
+	saved, err := makeRecoveryKey(agentWrap(conn), env.dbPath, mat.Verify, withLines(interactivePrompt(t), last))
 	restore()
 	if err != nil || !saved {
 		t.Fatalf("makeRecoveryKey = %v, %v", saved, err)
@@ -361,12 +359,12 @@ func TestRecover_SetsANewPasswordAndReplacesTheKey(t *testing.T) {
 	if !passwordOpens(t, env.dataDir, "new-pw-5678") || passwordOpens(t, env.dataDir, "forgotten-pw-1234") {
 		t.Error("the vault doesn't open with the new password only")
 	}
-	opensVault(t, next, env.dataDir)
-	f, err := recovery.ReadFile(env.dataDir)
+	opensVault(t, next, env.dbPath)
+	f, err := database.ReadRecovery(env.dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := used.Unwrap(f.Wrapped(), []byte(f.UnlockID)); !errors.Is(err, recovery.ErrWrongKey) {
+	if _, err := used.Unwrap(recovery.Wrapped(f), []byte(f.UnlockID)); !errors.Is(err, recovery.ErrWrongKey) {
 		t.Errorf("the used key still opens the recovery file (err %v)", err)
 	}
 	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
@@ -395,7 +393,7 @@ func TestRecover_TypoThenTheKey(t *testing.T) {
 		t.Error("the new password doesn't open the vault")
 	}
 	// Declining a new key leaves the vault without one.
-	if _, err := recovery.ReadFile(env.dataDir); !errors.Is(err, os.ErrNotExist) {
+	if _, err := database.ReadRecovery(env.dbPath); !errors.Is(err, database.ErrNoRecovery) {
 		t.Errorf("a recovery file exists after declining a new key (err %v)", err)
 	}
 	if !strings.Contains(out, "This vault has no recovery key now; make one any time with: sesh recovery new") {
@@ -434,11 +432,11 @@ func TestRecover_Refuses(t *testing.T) {
 		if !passwordOpens(t, env.dataDir, "forgotten-pw-1234") {
 			t.Error("the vault changed although the rotation was cancelled")
 		}
-		opensVault(t, used, env.dataDir)
+		opensVault(t, used, env.dbPath)
 	})
 	t.Run("no recovery key", func(t *testing.T) {
 		env, _ := recoverableVault(t)
-		if err := recovery.Remove(env.dataDir); err != nil {
+		if err := database.RemoveRecovery(env.dbPath); err != nil {
 			t.Fatal(err)
 		}
 		_, err := runRecoverWith(t, nil, false)
@@ -496,7 +494,7 @@ func TestRecover_RetiresTheKeyEvenIfReportingFails(t *testing.T) {
 	if !passwordOpens(t, env.dataDir, "new-pw-5678") {
 		t.Fatal("the change didn't commit; this test needs it to")
 	}
-	if _, err := recovery.ReadFile(env.dataDir); !errors.Is(err, os.ErrNotExist) {
+	if _, err := database.ReadRecovery(env.dbPath); !errors.Is(err, database.ErrNoRecovery) {
 		t.Errorf("the used recovery key's file is still there (err %v)", err)
 	}
 }

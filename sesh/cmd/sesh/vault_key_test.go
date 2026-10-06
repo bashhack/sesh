@@ -120,9 +120,9 @@ func TestOpenStore_RefusesAVaultSwappedInAfterUnlock(t *testing.T) {
 	}
 }
 
-// otherVaultsFiles writes Touch ID and recovery files in dir for another
-// vault, and returns what they hold.
-func otherVaultsFiles(t *testing.T, dir string) map[string][]byte {
+// otherVaultsTouchID writes a Touch ID file in dir for another vault, and
+// returns what it holds.
+func otherVaultsTouchID(t *testing.T, dir string) []byte {
 	t.Helper()
 	k, err := recovery.New()
 	if err != nil {
@@ -132,64 +132,50 @@ func otherVaultsFiles(t *testing.T, dir string) map[string][]byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	other := bytes.Repeat([]byte{7}, 32)
-	rw, err := recovery.Wrap(pub, other, []byte("another-vault"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := recovery.NewFile("another-vault", pub, rw).Write(dir); err != nil {
-		t.Fatal(err)
-	}
-	tw, err := touchid.Wrap(pub, other, []byte("another-vault"))
+	tw, err := touchid.Wrap(pub, bytes.Repeat([]byte{7}, 32), []byte("another-vault"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := touchid.NewFile("another-vault", []byte("key blob"), pub, tw).Write(dir); err != nil {
 		t.Fatal(err)
 	}
-	held := map[string][]byte{}
-	for _, name := range []string{recovery.FileName, touchid.FileName} {
-		b, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		held[name] = b
+	held, err := os.ReadFile(filepath.Join(dir, touchid.FileName))
+	if err != nil {
+		t.Fatal(err)
 	}
 	return held
 }
 
-// A password change leaves alone the Touch ID and recovery files of another
-// vault in the same folder.
+// A password change leaves alone another vault's Touch ID file in the same
+// folder.
 func TestRotate_LeavesAnotherVaultsFiles(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
 	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	t.Setenv("SESH_MASTER_PASSWORD", "")
-	held := otherVaultsFiles(t, env.dataDir)
+	held := otherVaultsTouchID(t, env.dataDir)
 
 	app, stderr := rekeyTestApp("y\n")
 	if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
 		t.Fatalf("rotate: %v\n%s", err, stderr)
 	}
-	for name, want := range held {
-		if got, err := os.ReadFile(filepath.Join(env.dataDir, name)); err != nil || !bytes.Equal(got, want) {
-			t.Errorf("%s changed (err %v)", name, err)
-		}
+	if got, err := os.ReadFile(filepath.Join(env.dataDir, touchid.FileName)); err != nil || !bytes.Equal(got, held) {
+		t.Errorf("touchid.key changed (err %v)", err)
 	}
-	if out := stderr.String(); strings.Contains(out, "Touch ID") || strings.Contains(out, "recovery key") {
-		t.Errorf("stderr talks about another vault's files:\n%s", out)
+	if out := stderr.String(); strings.Contains(out, "Touch ID") {
+		t.Errorf("stderr talks about another vault's Touch ID:\n%s", out)
 	}
 }
 
-// A new vault in a folder whose Touch ID and recovery files belong to
-// another vault isn't offered them at its first run: accepting would take
-// them from the other vault.
+// A new vault in a folder whose Touch ID file belongs to another vault
+// isn't offered Touch ID at its first run, which would take it from the
+// other vault; it's still offered a recovery key of its own.
 func TestFirstRun_LeavesAnotherVaultsFiles(t *testing.T) {
 	startTestAgent(t)
 	softwareTouchID(t)
 	_, last := fixedRecoveryKey(t)
 	dir := t.TempDir()
-	held := otherVaultsFiles(t, dir)
+	held := otherVaultsTouchID(t, dir)
 	cfg := withLines(withAnswer(interactivePrompt(t, "first-password-1234", "first-password-1234"), true), last)
 	restore := testutil.RedirectStderr(t)
 	oracle, err := buildKeySourceWith(filepath.Join(dir, "work.db"), cfg)
@@ -198,12 +184,10 @@ func TestFirstRun_LeavesAnotherVaultsFiles(t *testing.T) {
 		t.Fatalf("create vault: %v", err)
 	}
 	closeKeySource(t, oracle)
-	for name, want := range held {
-		if got, err := os.ReadFile(filepath.Join(dir, name)); err != nil || !bytes.Equal(got, want) {
-			t.Errorf("%s changed (err %v)", name, err)
-		}
+	if got, err := os.ReadFile(filepath.Join(dir, touchid.FileName)); err != nil || !bytes.Equal(got, held) {
+		t.Errorf("touchid.key changed (err %v)", err)
 	}
-	for _, want := range []string{"isn't offered for this vault: recovery.key in this folder is another vault's", "isn't offered for this vault: touchid.key in this folder is another vault's"} {
+	for _, want := range []string{"Touch ID unlock isn't offered for this vault: touchid.key in this folder is another vault's", "The recovery key is set for this vault."} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stderr missing %q:\n%s", want, out)
 		}
@@ -222,7 +206,7 @@ func TestRunTouchID_AnotherVaultsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	closeKeySource(t, oracle)
-	held := otherVaultsFiles(t, dir)[touchid.FileName]
+	held := otherVaultsTouchID(t, dir)
 	useConfigFile(t, "db_path = \""+dbPath+"\"\n")
 	unchanged := func(when string) {
 		t.Helper()

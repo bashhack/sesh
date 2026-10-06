@@ -155,8 +155,8 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if err := srcStore.CheckKey(); err != nil {
 		return nil, err
 	}
-	// Touch ID and recovery files in the folder are re-wrapped only if
-	// they were made for this vault.
+	// Touch ID unlock and the recovery key are kept only if they were made
+	// for this vault.
 	srcMat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		return nil, err
@@ -231,6 +231,14 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if err := checkCopied(destStore, dbNewPath, destKey, len(plan)); err != nil {
 		return nil, err
 	}
+	// A password change keeps the recovery key; a recovery's new vault has
+	// none, since the used key has been taken out and typed in.
+	recoveryNote := ""
+	if src == nil {
+		if recoveryNote, err = carryRecovery(dbPath, dbNewPath, oldID, destKey); err != nil {
+			return nil, fmt.Errorf("keep the recovery key: %w", err)
+		}
+	}
 
 	// Close stores before rename so SQLite checkpoints WAL and removes
 	// the -wal/-shm sidecars; otherwise the rename leaves orphans.
@@ -259,10 +267,6 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	agentNote := lockAgentAfterRekey()
 	// Touch ID unlock is re-wrapped for the new key, also before any output.
 	touchNote := rewrapTouchID(dbPath, oldID, destKey)
-	recoveryNote := ""
-	if src == nil {
-		recoveryNote = rewrapRecovery(dbPath, oldID, destKey)
-	}
 	copiesNote := removeOldCopies(dbBackupPath)
 
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %s under a new master password.\n", entryCount(result.Migrated)); perr != nil {

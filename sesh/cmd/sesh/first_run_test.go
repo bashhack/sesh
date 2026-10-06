@@ -132,11 +132,11 @@ func TestForgottenPasswordHint(t *testing.T) {
 	})
 	t.Run("interactive, with a recovery key", func(t *testing.T) {
 		startTestAgent(t)
-		if err := recovery.NewFile("id", []byte("p"), keywrap.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")}).Write(dir); err != nil {
+		if err := database.WriteRecovery(dbPath, recovery.NewRecord("id", []byte("p"), keywrap.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")})); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
-			if err := recovery.Remove(dir); err != nil {
+			if err := database.RemoveRecovery(dbPath); err != nil {
 				t.Error(err)
 			}
 		})

@@ -26,7 +26,7 @@ var migrations = map[int]func(tx *sql.Tx) error{
 }
 
 // migrateV1 creates the schema: the entries, the vault's key record
-// (vault_key), and the audit log.
+// (vault_key), its recovery key record, and the audit log.
 func migrateV1(tx *sql.Tx) error {
 	for _, q := range []string{
 		`CREATE TABLE entries (
@@ -50,6 +50,16 @@ func migrateV1(tx *sql.Tx) error {
 			kdf_params TEXT NOT NULL,
 			verify     BLOB NOT NULL,
 			created_at DATETIME NOT NULL
+		)`,
+		// At most one row: the vault key wrapped to a recovery key's public
+		// key; see recovery.go.
+		`CREATE TABLE recovery (
+			id            INTEGER PRIMARY KEY CHECK (id = 1),
+			unlock_id     TEXT NOT NULL,
+			public_key    BLOB NOT NULL,
+			ephemeral_pub BLOB NOT NULL,
+			ciphertext    BLOB NOT NULL,
+			created_at    DATETIME NOT NULL
 		)`,
 		`CREATE TABLE audit_log (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,

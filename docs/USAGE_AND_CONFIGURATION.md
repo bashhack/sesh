@@ -153,7 +153,7 @@ max_lifetime = "8h"                     # 0 disables
 retention_days = 90                     # days of audit log events to keep; 0 keeps everything
 ```
 
-sesh keeps one vault per user. `db_path` says where that vault lives; it isn't a way to keep several. To keep things apart inside it, use profiles (`--profile work`) and service names. If you do make a second vault, give it its own folder: Touch ID unlock and the recovery key are kept per folder. sesh refuses a `db_path` that points at another program's SQLite database, and leaves that file unchanged.
+sesh keeps one vault per user. `db_path` says where that vault lives; it isn't a way to keep several. To keep things apart inside it, use profiles (`--profile work`) and service names. If you do make a second vault, give it its own folder: Touch ID unlock is kept per folder. sesh refuses a `db_path` that points at another program's SQLite database, and leaves that file unchanged.
 
 Each setting comes from, highest first: a command-line flag (`--db-path`; the agent's timeouts also have `sesh agent` flags), its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
 
@@ -286,7 +286,7 @@ Creating the vault also unlocks the background `sesh agent` with the new passwor
 
 Secrets are limited to 1 MiB each.
 
-Next to the encrypted entries, the vault file holds the KDF salt, the Argon2id settings, and a verification blob (not a password hash): nothing secret, and everything needed to unlock it with your password. With no sesh command running, copying `passwords.db` (and its `-wal` file, if a crash left one) copies everything your master password needs to open the vault. A recovery key is kept in `recovery.key` beside it.
+Next to the encrypted entries, the vault file holds the KDF salt, the Argon2id settings, and a verification blob (not a password hash): nothing secret, and everything needed to unlock it with your password. With no sesh command running, copying `passwords.db` (and its `-wal` file, if a crash left one) copies everything your master password, or your recovery key, needs to open the vault.
 
 #### Scripts and CI
 
@@ -316,7 +316,7 @@ sesh can't reset it for you: the master password derives the vault's key, sesh d
 - **Start over with an empty vault.** First stop the agent with `sesh agent stop`, and finish any other sesh command. Then move the vault aside **with every file that belongs to it**:
   - the database;
   - its SQLite `-wal` and `-shm` files, if present. After a crash they can hold changes not yet in the database, and SQLite would apply a leftover `-wal` file to the new vault;
-  - `recovery.key` and `touchid.key`, if present. They belong to the old vault, and the new one isn't offered them while they're there.
+  - `touchid.key`, if present. It belongs to the old vault, and the new one isn't offered Touch ID while it's there.
 
   `sesh config` shows the vault's path. Keep the old files together, in case the password comes back to you:
 
@@ -324,7 +324,7 @@ sesh can't reset it for you: the master password derives the vault's key, sesh d
   cd ~/Library/Application\ Support/sesh     # Linux: ~/.local/share/sesh
   mkdir forgotten
   mv passwords.db* forgotten/
-  mv recovery.key touchid.key forgotten/       # whichever of these exist
+  mv touchid.key forgotten/                    # if it exists
   ```
 
   The next command creates a new vault. sesh never deletes a vault for you.
@@ -348,7 +348,7 @@ sesh recover            # forgot the master password? set a new one
 - the key you used stops working, because it's been taken out of its hiding place and typed in;
 - sesh offers a new one right away. If you decline, `sesh recovery status` shows that the vault has none.
 
-**What it means for security.** Anyone who has both your recovery key and your vault file can open the vault, with no other check, because sesh has no server to add one. That's why it's optional. It can't be guessed (128 random bits), but it can be found, so keep it away from the vault's computer. The `recovery.key` file next to the vault holds only a public key and the wrapped vault key; on its own it opens nothing.
+**What it means for security.** Anyone who has both your recovery key and your vault file can open the vault, with no other check, because sesh has no server to add one. That's why it's optional. It can't be guessed (128 random bits), but it can be found, so keep it away from the vault's computer. The vault keeps only the recovery key's public key and the vault key wrapped to it; without the written-down key they open nothing.
 
 **Changes that affect it.**
 - **Changing your master password** (`sesh --rekey`) keeps the recovery key working, with no prompt.
