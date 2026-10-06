@@ -803,6 +803,15 @@ $ sesh -service aws -delete totp/aws/prod
 ✅ Entry deleted successfully
 ```
 
+**Names.** An entry is named by its service name and, optionally, a username (for AWS and `--service totp`, the profile). Spaces inside a name are fine (`My Bank`). sesh refuses, before asking for anything:
+
+- a `/`, which separates the parts of an entry's ID (`password/github/alice`);
+- control characters, such as a tab or newline;
+- a space at the start or end (`"github "`), which would make an entry that `github` doesn't find;
+- more than 256 characters.
+
+An import reports each entry it refuses for these reasons and imports the rest.
+
 ### Setup Wizard Features
 
 The interactive setup wizard guides you through configuration:
