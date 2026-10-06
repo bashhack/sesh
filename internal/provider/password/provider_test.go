@@ -1006,3 +1006,38 @@ func TestGeneratePassword_WarningNamesTheKind(t *testing.T) {
 		t.Errorf("stderr = %q, want the warning to name an API key", stderr)
 	}
 }
+
+// generate asks before replacing an existing entry, as store does.
+func TestGeneratePassword_AsksBeforeOverwriting(t *testing.T) {
+	for name, tt := range map[string]struct {
+		answer, wantErr string
+		terminal, force bool
+		wantReplaced    bool
+	}{
+		"no terminal":     {wantErr: "entry already exists for github (alice); re-run with --force to overwrite"},
+		"answered no":     {terminal: true, answer: "n\n", wantErr: "generate cancelled"},
+		"answered yes":    {terminal: true, answer: "y\n", wantReplaced: true},
+		"--force":         {force: true, wantReplaced: true},
+		"--force, no tty": {force: true, terminal: false, wantReplaced: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubStdinIsTerminal(t, tt.terminal)
+			store := seeded(t, map[string]string{"password/github/alice": "old-secret"})
+			p, _ := newTestProvider(store)
+			p.action, p.service, p.username, p.force, p.pwLength = "generate", "github", "alice", tt.force, 24
+			p.stdin = strings.NewReader(tt.answer)
+			defer testutil.DiscardStderr(t)()
+
+			_, err := p.GetCredentials()
+			switch {
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Errorf("err = %v, want it to contain %q", err, tt.wantErr)
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("err = %v", err)
+			}
+			if replaced := stored(t, store, "password/github/alice") != "old-secret"; replaced != tt.wantReplaced {
+				t.Errorf("replaced = %v, want %v", replaced, tt.wantReplaced)
+			}
+		})
+	}
+}

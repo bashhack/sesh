@@ -751,14 +751,14 @@ The "Enter note" prompt only appears when stdin is a real terminal. With piped i
 
 #### Overwriting existing entries
 
-By default, `store` will prompt `[y/N]` if an entry already exists at the given service/username. Because a piped stdin can't answer that prompt safely (the first line of the piped content would be consumed as the answer), sesh fails loudly in that case:
+By default, `store` and `generate` prompt `[y/N]` if an entry already exists at the given service/username. Because a piped stdin can't answer that prompt safely (the first line of the piped content would be consumed as the answer), sesh fails loudly in that case:
 
 ```bash
 $ echo "new secret" | sesh -service password -action store -service-name github -username alice
 error: entry already exists for github (alice); re-run with --force to overwrite
 ```
 
-Pass `-force` to overwrite non-interactively.
+Pass `-force` to overwrite non-interactively, for example to replace a password with a newly generated one: `sesh -service password -action generate -service-name github -username alice -force`.
 
 ### Multi-Profile Management ([SVG](assets/multi-profile-management.svg))
 

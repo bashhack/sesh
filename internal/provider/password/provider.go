@@ -359,37 +359,8 @@ func (p *Provider) effectiveEntryType() password.EntryType {
 func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, error) {
 	et := p.effectiveEntryType()
 
-	// Check for existing entry and confirm overwrite unless --force.
-	if !p.force {
-		exists, err := mgr.EntryExists(p.service, p.username, et)
-		if err != nil {
-			return provider.Credentials{}, fmt.Errorf("check existing entry: %w", err)
-		}
-		if exists {
-			// Interactive prompts require a TTY. With piped stdin the
-			// "answer" would silently consume piped content (e.g. the
-			// note body) — fail loudly and direct the caller to --force.
-			if !stdinIsTerminal() {
-				who := ""
-				if p.username != "" {
-					who = fmt.Sprintf(" (%s)", p.username)
-				}
-				return provider.Credentials{}, fmt.Errorf("entry already exists for %s%s; re-run with --force to overwrite",
-					p.service, who)
-			}
-			fmt.Fprintf(os.Stderr, "Entry already exists for %s", p.service)
-			if p.username != "" {
-				fmt.Fprintf(os.Stderr, " (%s)", p.username)
-			}
-			fmt.Fprintf(os.Stderr, ". Overwrite? [y/N]: ")
-			answer, readErr := bufio.NewReader(p.stdin).ReadString('\n')
-			if readErr != nil {
-				return provider.Credentials{}, fmt.Errorf("read confirmation: %w", readErr)
-			}
-			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
-				return provider.Credentials{}, fmt.Errorf("store cancelled")
-			}
-		}
+	if err := p.confirmOverwrite(mgr, et); err != nil {
+		return provider.Credentials{}, err
 	}
 
 	// Read input — method depends on entry type
@@ -446,6 +417,9 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 // stores it, returning it (for the caller to zero) and the entry's
 // description, "service (username)".
 func (p *Provider) generateAndStore(mgr *password.Manager) ([]byte, string, error) {
+	if err := p.confirmOverwrite(mgr, p.effectiveEntryType()); err != nil {
+		return nil, "", err
+	}
 	opts := password.DefaultGenerateOptions()
 	opts.Length = p.pwLength
 	if p.noSymbols {
@@ -848,4 +822,36 @@ func warnWeak(et password.EntryType, fix string) {
 		what = "password"
 	}
 	fmt.Fprintf(os.Stderr, "⚠️  This %s is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, %s\n", what, fix) //nolint:errcheck // best-effort warning
+}
+
+// confirmOverwrite asks before p.action replaces an existing entry, unless
+// --force. Without a terminal it refuses instead: an "answer" read from
+// piped stdin would swallow the piped input (a note's body, say).
+func (p *Provider) confirmOverwrite(mgr *password.Manager, et password.EntryType) error {
+	if p.force {
+		return nil
+	}
+	exists, err := mgr.EntryExists(p.service, p.username, et)
+	if err != nil {
+		return fmt.Errorf("check existing entry: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	who := p.service
+	if p.username != "" {
+		who += fmt.Sprintf(" (%s)", p.username)
+	}
+	if !stdinIsTerminal() {
+		return fmt.Errorf("entry already exists for %s; re-run with --force to overwrite", who)
+	}
+	fmt.Fprintf(os.Stderr, "Entry already exists for %s. Overwrite? [y/N]: ", who) //nolint:errcheck // best-effort prompt
+	answer, err := bufio.NewReader(p.stdin).ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("read confirmation: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
+		return fmt.Errorf("%s cancelled", p.action)
+	}
+	return nil
 }
