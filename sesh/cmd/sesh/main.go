@@ -16,6 +16,7 @@ import (
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
@@ -40,7 +41,7 @@ func main() {
 	// Shell completion runs on every Tab, so it answers before the setting
 	// flags, the config, or the store are looked at.
 	if len(os.Args) > 1 && os.Args[1] == completeCmd {
-		app := NewDefaultApp(versionInfo, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+		app := NewDefaultApp(versionInfo, unavailableStore{err: errNoStore}, AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout})
 		if err := writeCompletions(app.Stdout, app.Registry, os.Args[2:]); err != nil {
 			os.Exit(1)
 		}
@@ -65,9 +66,9 @@ func main() {
 	// A broken config only stops commands that use the store; the rest,
 	// including `sesh config`, which reports the problem, still run.
 	cfg, cfgErr := settings()
-	clipboardTimeout := config.DefaultClipboardTimeout
+	appSettings := AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout}
 	if cfgErr == nil {
-		clipboardTimeout = cfg.ClipboardTimeout.Value
+		appSettings = appSettingsFrom(cfg)
 	}
 
 	var (
@@ -99,7 +100,7 @@ func main() {
 		kc = unavailableStore{err: errNoStore}
 	}
 
-	app := NewDefaultApp(versionInfo, kc, clipboardTimeout)
+	app := NewDefaultApp(versionInfo, kc, appSettings)
 	run(app, args)
 }
 
@@ -131,7 +132,7 @@ func argsParse(args []string) bool {
 	if serviceName == "" {
 		return false
 	}
-	app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+	app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout})
 	app.Stdout, app.Stderr = io.Discard, io.Discard
 	p, err := app.Registry.GetProvider(serviceName)
 	if err != nil {
@@ -242,6 +243,11 @@ func (u unavailableStore) Lookup(vault.Key) (vault.Entry, error)       { return 
 func (u unavailableStore) List(vault.Filter) ([]vault.Entry, error)    { return nil, u.err }
 func (u unavailableStore) Delete(vault.Key) error                      { return u.err }
 
+// appSettingsFrom is the settings the app's commands use, from cfg.
+func appSettingsFrom(cfg *config.Config) AppSettings {
+	return AppSettings{ClipboardTimeout: cfg.ClipboardTimeout.Value, KDF: cfg.KDF()}
+}
+
 // cliOverrides holds setting flags given on the command line.
 var cliOverrides config.Overrides
 
@@ -278,7 +284,7 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 		return nil, fmt.Errorf("create vault directory: %w", err)
 	}
 
-	ks, err := buildKeySource(dbPath)
+	ks, err := buildKeySource(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -397,8 +403,8 @@ func withForgottenPasswordHint(err error, cfg passwordPromptConfig, dbPath strin
 // a password already typed. A wrong password is retried against the agent
 // and is returned to the caller when the attempt budget is spent. With
 // SESH_MASTER_PASSWORD set, the agent is not used at all.
-func buildKeySource(dbPath string) (database.CryptoOracle, error) {
-	return buildKeySourceWith(dbPath, resolvePasswordPrompt())
+func buildKeySource(cfg *config.Config) (database.CryptoOracle, error) {
+	return buildKeySourceWith(cfg.DBPath.Value, resolvePasswordPrompt().withKDF(cfg.KDF()))
 }
 
 // buildKeySourceWith is buildKeySource with the password prompt given, so
@@ -564,6 +570,15 @@ type passwordPromptConfig struct {
 	// runs skip the agent: the value is checked every time, and a script
 	// or CI job doesn't leave an unlocked agent running after it exits.
 	fromEnv bool
+	// kdf is the Argon2id settings a new key record (a new vault, or a
+	// changed master password) gets: the configured ones, set by withKDF.
+	kdf kdf.Params
+}
+
+// withKDF returns c with the Argon2id settings a new key record gets.
+func (c passwordPromptConfig) withKDF(k kdf.Params) passwordPromptConfig {
+	c.kdf = k
+	return c
 }
 
 // resolvePasswordPrompt picks the prompt callback based on the runtime
@@ -608,6 +623,9 @@ func (c passwordPromptConfig) newSource(dbPath string) *database.MasterPasswordS
 
 func (c passwordPromptConfig) options() []database.Option {
 	opts := []database.Option{database.WithNewPasswordCheck(c.checkNewPassword)}
+	if c.kdf != (kdf.Params{}) {
+		opts = append(opts, database.WithKDFParams(c.kdf))
+	}
 	if c.interactive {
 		opts = append(opts, database.WithMaxAttempts(interactivePasswordAttempts))
 	}

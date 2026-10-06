@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -114,7 +115,7 @@ func TestOracle_StoreRoundTrip(t *testing.T) {
 	// A vault with its key record, and the agent unlocked with it.
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	pw := func(string) ([]byte, error) { return []byte("correct-horse"), nil }
-	if _, err := database.NewMasterPasswordSource(dbPath, pw).GetEncryptionKey(); err != nil {
+	if _, err := database.NewMasterPasswordSource(dbPath, pw, database.WithKDFParams(kdf.Minimum())).GetEncryptionKey(); err != nil {
 		t.Fatal(err)
 	}
 	mat, err := database.ReadUnlockMaterial(dbPath)

@@ -197,7 +197,7 @@ func TestDeriveKey(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			params := DefaultArgon2idParams()
+			params := newSourceParams()
 			key := DeriveKey(tc.password, tc.salt, params)
 
 			if len(key) != int(params.KeyLen) {
@@ -214,7 +214,7 @@ func TestDeriveKey(t *testing.T) {
 }
 
 func TestDeriveKeyDifferentInputs(t *testing.T) {
-	params := DefaultArgon2idParams()
+	params := newSourceParams()
 	salt := []byte("test-salt-16byte")
 
 	key1 := DeriveKey([]byte("password-a"), salt, params)
@@ -258,7 +258,7 @@ func TestGenerateSalt(t *testing.T) {
 }
 
 func TestArgon2idParamsMarshalRoundTrip(t *testing.T) {
-	params := DefaultArgon2idParams()
+	params := newSourceParams()
 	data := params.MarshalParams()
 
 	got, err := UnmarshalArgon2idParams(data)

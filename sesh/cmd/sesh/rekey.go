@@ -73,6 +73,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 			return nil, errors.New("SESH_MASTER_PASSWORD gives the current master password; the new master password is asked at a terminal, so run this at one")
 		}
 	}
+	newCfg = newCfg.withKDF(st.KDF())
 
 	dbPath := st.DBPath.Value
 	if err := requireVault(dbPath, fmt.Sprintf("no database to rotate at %s", dbPath)); err != nil {

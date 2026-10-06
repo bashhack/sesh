@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bashhack/sesh/internal/kdf"
 )
 
 // isolate points HOME and XDG_CONFIG_HOME at a temp dir, clears every sesh
@@ -16,7 +18,7 @@ func isolate(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
-	for _, k := range []string{EnvDBPath, EnvClipboardTimeout, EnvAgentIdleTimeout, EnvAgentMaxLifetime, EnvAuditRetentionDays} {
+	for _, k := range []string{EnvDBPath, EnvClipboardTimeout, EnvAgentIdleTimeout, EnvAgentMaxLifetime, EnvAuditRetentionDays, EnvKDFMemory, EnvKDFTime, EnvKDFThreads} {
 		t.Setenv(k, "")
 	}
 	return filepath.Join(home, "xdg", "sesh", "config.toml")
@@ -49,6 +51,30 @@ func TestLoad_DefaultsWithoutAFile(t *testing.T) {
 	}
 	if !strings.HasSuffix(c.DBPath.Value, filepath.Join("sesh", "passwords.db")) {
 		t.Errorf("DBPath = %q", c.DBPath.Value)
+	}
+	if c.KDF() != kdf.Default() || c.KDFMemory.Source != FromDefault {
+		t.Errorf("KDF = %+v (%v), want the defaults", c.KDF(), c.KDFMemory.Source)
+	}
+}
+
+// The Argon2id settings come from the file, then the environment.
+func TestLoad_KDFSettings(t *testing.T) {
+	path := isolate(t)
+	writeConfig(t, path, "[master_password]\nmemory = \"512MiB\"\ntime = 4\nthreads = 2\n")
+	t.Setenv(EnvKDFThreads, "8")
+	c, err := Load(Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := kdf.Params{Time: 4, Memory: 512 * 1024, Threads: 8, KeyLen: kdf.KeyLen}
+	if c.KDF() != want || c.KDFMemory.Source != FromFile || c.KDFThreads.Source != FromEnv {
+		t.Errorf("KDF = %+v (memory from %v, threads from %v), want %+v", c.KDF(), c.KDFMemory.Source, c.KDFThreads.Source, want)
+	}
+	for v, kib := range map[string]uint32{"19MiB": 19 * 1024, "1GiB": 1 << 20, "65536KiB": 65536, " 64 MiB ": 64 * 1024} {
+		t.Setenv(EnvKDFMemory, v)
+		if c, err := Load(Overrides{}); err != nil || c.KDFMemory.Value != kib {
+			t.Errorf("%s = %q: %v; want %d KiB", EnvKDFMemory, v, err, kib)
+		}
 	}
 }
 
@@ -118,6 +144,16 @@ func TestLoad_Rejects(t *testing.T) {
 		"vault named touchid.key (env)":     {env: map[string]string{EnvDBPath: "/tmp/v/TOUCHID.KEY"}, wantSub: `SESH_DB_PATH = "/tmp/v/TOUCHID.KEY": "TOUCHID.KEY" is the name`},
 		"vault named touchid.key (flag)":    {flags: Overrides{DBPath: "/tmp/v/touchid.KEY"}, wantSub: `--db-path = "/tmp/v/touchid.KEY": "touchid.KEY" is the name`},
 		"bad duration":                      {file: `clipboard_timeout = "soon"`, wantSub: "want a duration"},
+		"memory below the floor":            {file: "[master_password]\nmemory = \"8MiB\"\n", wantSub: `master_password.memory in`},
+		"memory above the ceiling":          {env: map[string]string{EnvKDFMemory: "2GiB"}, wantSub: `SESH_KDF_MEMORY = "2GiB": want an amount of memory from 19MiB (OWASP's minimum for Argon2id) to 1GiB`},
+		"memory without a unit":             {env: map[string]string{EnvKDFMemory: "262144"}, wantSub: `SESH_KDF_MEMORY = "262144": want an amount of memory`},
+		"memory as a number in the file":    {file: "[master_password]\nmemory = 262144\n", wantSub: "read config file"},
+		"one pass":                          {file: "[master_password]\ntime = 1\n", wantSub: `= "1": want a number of passes from 2 (OWASP's minimum for Argon2id) to 10`},
+		"too many passes":                   {env: map[string]string{EnvKDFTime: "11"}, wantSub: `SESH_KDF_TIME = "11": want a number of passes`},
+		"passes not a number":               {env: map[string]string{EnvKDFTime: "three"}, wantSub: `SESH_KDF_TIME = "three": want a number of passes`},
+		"no threads":                        {file: "[master_password]\nthreads = 0\n", wantSub: `= "0": want a number of threads from 1 to 16`},
+		"too many threads":                  {env: map[string]string{EnvKDFThreads: "17"}, wantSub: `SESH_KDF_THREADS = "17": want a number of threads`},
+		"unknown master_password key":       {file: "[master_password]\nsalt = \"x\"\n", wantSub: "unknown setting master_password.salt"},
 		"negative duration":                 {env: map[string]string{EnvAgentIdleTimeout: "-1m"}, wantSub: "must not be negative"},
 		"not TOML":                          {file: "db_path: /tmp/x.db\n", wantSub: "read config file"},
 		"wrong type in the file":            {file: "clipboard_timeout = 30\n", wantSub: "read config file"},

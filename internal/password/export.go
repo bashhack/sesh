@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -38,6 +39,9 @@ const (
 type ExportOptions struct {
 	Format    ExportFormat
 	EntryType EntryType // empty means all types
+	// KDF is the Argon2id settings an encrypted export's password is
+	// stretched with; zero means kdf.Default().
+	KDF kdf.Params
 }
 
 // Export decrypts entries and streams them to w, one at a time, so only

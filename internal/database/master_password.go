@@ -26,7 +26,8 @@ type PasswordPromptFunc func(prompt string) ([]byte, error)
 type MasterPasswordSource struct {
 	// sf collapses concurrent slow-path Gets into a single Argon2id
 	// derivation. Without it, N goroutines arriving with an empty cache
-	// would each fire ~64 MiB of Argon2id work in parallel.
+	// would each run a full Argon2id derivation, at the key record's
+	// settings, in parallel.
 	sf         singleflight.Group
 	promptFunc PasswordPromptFunc
 	// newPasswordCheck vets a new master password before it's confirmed;
@@ -55,6 +56,9 @@ type MasterPasswordSource struct {
 	// loop. Defaults to 1 (no retry); callers that know they're talking to
 	// an interactive TTY set this higher via WithMaxAttempts.
 	maxAttempts int
+	// kdf is the Argon2id settings a new key record gets; an existing one
+	// keeps its own.
+	kdf Argon2idParams
 }
 
 // ErrTryAnotherPassword is what a new-password check returns to have a
@@ -98,6 +102,17 @@ func WithNewPasswordCheck(check func(pw []byte) error) Option {
 	return func(s *MasterPasswordSource) { s.newPasswordCheck = check }
 }
 
+// WithKDFParams sets the Argon2id settings a new key record gets (when the
+// vault is created, or its master password changed); the default is
+// kdf.Default(). Unlocking uses the settings the key record holds.
+func WithKDFParams(p Argon2idParams) Option {
+	return func(s *MasterPasswordSource) { s.kdf = p }
+}
+
+// newSourceParams is the settings a source's new key record gets unless
+// WithKDFParams says otherwise. Tests make it cheap.
+var newSourceParams = DefaultArgon2idParams
+
 // NewMasterPasswordSource creates a MasterPasswordSource for the vault at
 // dbPath, which must be absolute.
 func NewMasterPasswordSource(dbPath string, prompt PasswordPromptFunc, opts ...Option) *MasterPasswordSource {
@@ -105,6 +120,7 @@ func NewMasterPasswordSource(dbPath string, prompt PasswordPromptFunc, opts ...O
 		dbPath:      dbPath,
 		promptFunc:  prompt,
 		maxAttempts: 1,
+		kdf:         newSourceParams(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -215,7 +231,7 @@ func (s *MasterPasswordSource) create() ([]byte, error) {
 		return nil, err
 	}
 	defer secure.SecureZeroBytes(pw)
-	key, rec, err := newKeyRecord(pw)
+	key, rec, err := newKeyRecord(pw, s.kdf)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +277,7 @@ func (s *MasterPasswordSource) NewKey() ([]byte, UnlockMaterial, error) {
 		return nil, UnlockMaterial{}, err
 	}
 	defer secure.SecureZeroBytes(pw)
-	return newKeyRecord(pw)
+	return newKeyRecord(pw, s.kdf)
 }
 
 // askNewPassword asks for a new master password and its confirmation. The
@@ -284,14 +300,16 @@ func (s *MasterPasswordSource) askNewPassword() ([]byte, error) {
 	return pw, nil
 }
 
-// newKeyRecord derives a key from pw and a new salt, and the key record
-// that opens with it. The caller zeroes the key.
-func newKeyRecord(pw []byte) ([]byte, UnlockMaterial, error) {
+// newKeyRecord derives a key from pw and a new salt with params, and the
+// key record that opens with it. The caller zeroes the key.
+func newKeyRecord(pw []byte, params Argon2idParams) ([]byte, UnlockMaterial, error) {
+	if err := params.CheckBounds(); err != nil {
+		return nil, UnlockMaterial{}, err
+	}
 	salt, err := GenerateSalt(32)
 	if err != nil {
 		return nil, UnlockMaterial{}, err
 	}
-	params := DefaultArgon2idParams()
 	key := DeriveKey(pw, salt, params)
 	verify, err := Encrypt(key, []byte(VerifyPlaintext))
 	if err != nil {
@@ -386,26 +404,7 @@ func ValidateUnlockMaterial(salt, verify []byte, params Argon2idParams) error {
 // validateArgon2idBounds bounds-checks Argon2id parameters read from a
 // key record or an unlock request. A corrupted or hostile value could
 // otherwise trigger a memory DoS.
-func validateArgon2idBounds(p Argon2idParams) error {
-	const (
-		maxMemoryKiB = 1 << 20 // 1 GiB
-		maxTime      = 10
-		maxThreads   = 16
-	)
-	if p.Memory == 0 || p.Memory > maxMemoryKiB {
-		return fmt.Errorf("memory setting out of range: %d KiB (max %d)", p.Memory, maxMemoryKiB)
-	}
-	if p.Time == 0 || p.Time > maxTime {
-		return fmt.Errorf("time setting out of range: %d (max %d)", p.Time, maxTime)
-	}
-	if p.Threads == 0 || p.Threads > maxThreads {
-		return fmt.Errorf("threads setting out of range: %d (max %d)", p.Threads, maxThreads)
-	}
-	if p.KeyLen != 32 {
-		return fmt.Errorf("key_len must be 32, got %d", p.KeyLen)
-	}
-	return nil
-}
+func validateArgon2idBounds(p Argon2idParams) error { return p.CheckBounds() }
 
 // newPassword asks for a new master password until one passes the length
 // rule and the new-password check, which may ask for another a few times.

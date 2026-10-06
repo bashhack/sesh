@@ -12,6 +12,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/touchid"
 )
 
@@ -54,11 +55,17 @@ func runInit(app *App, args []string) error {
 		return fmt.Errorf("check for an existing config file: %w", err)
 	}
 
+	// The file init writes has no Argon2id settings, so a new vault gets
+	// the environment's, or the defaults: what sesh config shows after.
+	kdfParams, err := config.KDFFromEnv()
+	if err != nil {
+		return err
+	}
 	choices, err := chooseInit(app)
 	if err != nil {
 		return err
 	}
-	cfg := choices.config()
+	cfg := choices.config(kdfParams)
 
 	existed := false
 	if _, err := os.Stat(choices.dbPath); err == nil {
@@ -149,12 +156,18 @@ func ask(app *App, in *bufio.Reader, prompt string) (string, error) {
 }
 
 // config is the settings the vault is created or opened with: exactly the
-// choices, whatever the environment or an old config file says.
-func (c initChoices) config() *config.Config {
+// choices, whatever the environment or an old config file says, and the
+// Argon2id settings k.
+func (c initChoices) config(k kdf.Params) *config.Config {
 	from := func(v string) config.Setting[string] {
 		return config.Setting[string]{Value: v, Source: config.FromFlag, Origin: "sesh init"}
 	}
-	return &config.Config{DBPath: from(c.dbPath)}
+	return &config.Config{
+		DBPath:     from(c.dbPath),
+		KDFMemory:  config.Setting[uint32]{Value: k.Memory},
+		KDFTime:    config.Setting[uint32]{Value: k.Time},
+		KDFThreads: config.Setting[uint8]{Value: k.Threads},
+	}
 }
 
 // file is the config file sesh init writes.

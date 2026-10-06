@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -81,7 +82,12 @@ func seedStore(t *testing.T, env *rekeyTestEnv, ks database.KeySource, entries m
 
 func populatePasswordStore(t *testing.T, env *rekeyTestEnv, entries map[string]string) {
 	t.Helper()
-	seedStore(t, env, resolvePasswordPrompt().newSource(env.dbPath), entries)
+	// A new vault gets the configured settings, as a first run's does.
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedStore(t, env, resolvePasswordPrompt().withKDF(cfg.KDF()).newSource(env.dbPath), entries)
 }
 
 // readEntries opens the vault with ks and returns the secrets of the
@@ -700,4 +706,34 @@ func sealedSecrets(t *testing.T, dbPath string) [][]byte {
 		all = append(all, b)
 	}
 	return all
+}
+
+// A new vault's key record gets the configured Argon2id settings, and a
+// password change gives it the ones configured then.
+func TestKDFSettings_ReachTheKeyRecord(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_KDF_MEMORY", "20MiB")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
+	m, err := database.ReadUnlockMaterial(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (kdf.Params{Time: 2, Memory: 20 * 1024, Threads: 1, KeyLen: kdf.KeyLen}); m.Params != want {
+		t.Errorf("new vault's settings = %+v, want %+v", m.Params, want)
+	}
+
+	t.Setenv("SESH_KDF_MEMORY", "21MiB")
+	t.Setenv("SESH_KDF_TIME", "3")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, stderr := rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
+		t.Fatalf("rotate: %v\n%s", err, stderr)
+	}
+	if m, err = database.ReadUnlockMaterial(env.dbPath); err != nil {
+		t.Fatal(err)
+	}
+	if want := (kdf.Params{Time: 3, Memory: 21 * 1024, Threads: 1, KeyLen: kdf.KeyLen}); m.Params != want {
+		t.Errorf("settings after the change = %+v, want %+v", m.Params, want)
+	}
 }

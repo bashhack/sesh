@@ -11,6 +11,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/clipboard"
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/provider"
 	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
 	passwordProvider "github.com/bashhack/sesh/internal/provider/password"
@@ -56,16 +57,24 @@ type VersionInfo struct {
 	Date    string
 }
 
+// AppSettings are the settings the app's commands use.
+type AppSettings struct {
+	// KDF is the Argon2id settings encrypted exports use; zero means
+	// kdf.Default().
+	KDF              kdf.Params
+	ClipboardTimeout time.Duration
+}
+
 // NewDefaultApp creates a new App over the vault; the caller opens and
 // closes it.
-func NewDefaultApp(versionInfo VersionInfo, store vault.Store, clipboardTimeout time.Duration) *App {
+func NewDefaultApp(versionInfo VersionInfo, store vault.Store, settings AppSettings) *App {
 	totpSvc := totp.NewDefaultProvider()
 	awsSvc := aws.NewDefaultProvider()
 
 	registry := provider.NewRegistry()
 	registry.RegisterProvider(awsProvider.NewProvider(awsSvc, store, totpSvc))
 	registry.RegisterProvider(totpProvider.NewProvider(store, totpSvc))
-	registry.RegisterProvider(passwordProvider.NewProvider(store))
+	registry.RegisterProvider(passwordProvider.NewProvider(store).WithExportKDF(settings.KDF))
 
 	setupSvc := setup.NewSetupService()
 	setupSvc.RegisterHandler(setup.NewAWSSetupHandler(store))
@@ -77,7 +86,7 @@ func NewDefaultApp(versionInfo VersionInfo, store vault.Store, clipboardTimeout 
 		ExecLookPath: exec.LookPath,
 		Exit:         os.Exit,
 		ClipboardCopy: func(text string) error {
-			return clipboard.CopyWithAutoClear(text, clipboardTimeout)
+			return clipboard.CopyWithAutoClear(text, settings.ClipboardTimeout)
 		},
 		TimeNow:     time.Now,
 		Stdin:       os.Stdin,

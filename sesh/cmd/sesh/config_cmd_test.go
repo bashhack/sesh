@@ -60,8 +60,11 @@ func TestSubcommand_OnlyTheFirstArgument(t *testing.T) {
 }
 
 func TestRunConfig_ShowsValuesAndSources(t *testing.T) {
-	path := useConfigFile(t, "clipboard_timeout = \"45s\"\n[agent]\nmax_lifetime = \"2h\"\n[audit]\nretention_days = 0\n")
+	path := useConfigFile(t, "clipboard_timeout = \"45s\"\n[agent]\nmax_lifetime = \"2h\"\n[audit]\nretention_days = 0\n[master_password]\nmemory = \"512MiB\"\n")
 	t.Setenv(config.EnvDBPath, "/tmp/sesh-test/vault.db")
+	t.Setenv(config.EnvKDFTime, "4")
+	t.Setenv(config.EnvKDFThreads, "")
+	t.Setenv(config.EnvKDFMemory, "")
 	app := agentTestApp()
 	if err := runConfig(app, nil); err != nil {
 		t.Fatal(err)
@@ -69,11 +72,14 @@ func TestRunConfig_ShowsValuesAndSources(t *testing.T) {
 	got := app.Stdout.(*bytes.Buffer).String()
 	for _, want := range []string{
 		"config file: " + path + "\n",
-		"clipboard_timeout     45s           (config file)\n",
-		"agent.idle_timeout    10m           (default)\n",
-		"agent.max_lifetime    2h            (config file)\n",
-		"audit.retention_days  0 (keep all)  (config file)\n",
-		"db_path               /tmp/sesh-test/vault.db\n                      (environment: SESH_DB_PATH)\n",
+		"clipboard_timeout        45s           (config file)\n",
+		"agent.idle_timeout       10m           (default)\n",
+		"agent.max_lifetime       2h            (config file)\n",
+		"audit.retention_days     0 (keep all)  (config file)\n",
+		"master_password.memory   512MiB        (config file)\n",
+		"master_password.time     4             (environment: SESH_KDF_TIME)\n",
+		"master_password.threads  4             (default)\n",
+		"db_path                  /tmp/sesh-test/vault.db\n                         (environment: SESH_DB_PATH)\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)
@@ -172,5 +178,18 @@ func TestAgentDaemon_TimeoutsFromConfigFile(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("daemon still running after stop")
+	}
+}
+
+// The configured Argon2id settings reach encrypted exports.
+func TestAppSettings_EncryptedExportsUseTheConfiguredKDF(t *testing.T) {
+	useConfigFile(t, "[master_password]\nmemory = \"20MiB\"\n")
+	t.Setenv(config.EnvKDFMemory, "")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := appSettingsFrom(cfg).KDF; got != cfg.KDF() || got.Memory != 20*1024 {
+		t.Errorf("app settings KDF = %+v, want the configured %+v", got, cfg.KDF())
 	}
 }

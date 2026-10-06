@@ -2,8 +2,11 @@ package password
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/bashhack/sesh/internal/kdf"
 )
 
 func newEncryptedTestManager(t *testing.T) *Manager {
@@ -24,7 +27,7 @@ func TestExportImportEncrypted_RoundTrip(t *testing.T) {
 
 	var buf bytes.Buffer
 	password := []byte("my-export-password")
-	count, err := mgr.ExportEncrypted(&buf, ExportOptions{}, password)
+	count, err := mgr.ExportEncrypted(&buf, ExportOptions{KDF: kdf.Minimum()}, password)
 	if err != nil {
 		t.Fatalf("ExportEncrypted: %v", err)
 	}
@@ -72,7 +75,7 @@ func TestImportEncrypted_WrongPassword(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if _, err := mgr.ExportEncrypted(&buf, ExportOptions{}, []byte("correct-password")); err != nil {
+	if _, err := mgr.ExportEncrypted(&buf, ExportOptions{KDF: kdf.Minimum()}, []byte("correct-password")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -186,5 +189,41 @@ func TestImportEncrypted_BadJSON(t *testing.T) {
 	_, err := mgr.ImportEncrypted(bytes.NewReader([]byte("not json")), ImportOptions{}, []byte("any"))
 	if err == nil {
 		t.Fatal("expected error for malformed JSON envelope")
+	}
+}
+
+// An encrypted export records the settings it was made with; zero ones mean
+// the defaults.
+func TestExportEncrypted_RecordsItsSettings(t *testing.T) {
+	mgr := newEncryptedTestManager(t)
+	if err := mgr.StorePasswordString("github", "alice", "gh-secret", EntryTypePassword); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []kdf.Params{{}, {Time: 2, Memory: 19 * 1024, Threads: 1, KeyLen: kdf.KeyLen}} {
+		var buf bytes.Buffer
+		if _, err := mgr.ExportEncrypted(&buf, ExportOptions{KDF: want}, []byte("export-password")); err != nil {
+			t.Fatal(err)
+		}
+		var env EncryptedEnvelope
+		if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		if want == (kdf.Params{}) {
+			want = kdf.Default()
+		}
+		if env.Params != want {
+			t.Errorf("envelope settings = %+v, want %+v", env.Params, want)
+		}
+	}
+}
+
+// An export whose settings are out of bounds is refused before any key is
+// derived, so a hostile file can't make sesh use unbounded memory.
+func TestImportEncrypted_RefusesSettingsOutOfBounds(t *testing.T) {
+	mgr := newEncryptedTestManager(t)
+	env := `{"version":1,"algorithm":"argon2id","salt":"AAAAAAAAAAAAAAAAAAAAAA==","ciphertext":"AA==","params":{"time":3,"memory":4294967295,"threads":4,"key_len":32}}`
+	_, err := mgr.ImportEncrypted(strings.NewReader(env), ImportOptions{}, []byte("pw"))
+	if err == nil || !strings.Contains(err.Error(), "export envelope: memory setting out of range") {
+		t.Fatalf("err = %v", err)
 	}
 }

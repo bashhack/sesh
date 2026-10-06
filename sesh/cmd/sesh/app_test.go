@@ -143,7 +143,7 @@ func TestNewDefaultApp(t *testing.T) {
 		Commit:  "unknown",
 		Date:    "unknown",
 	}
-	app := NewDefaultApp(versionInfo, vault.NewMemStore(), 30*time.Second)
+	app := NewDefaultApp(versionInfo, vault.NewMemStore(), AppSettings{ClipboardTimeout: 30 * time.Second})
 
 	if app.Registry == nil {
 		t.Error("Registry is nil")

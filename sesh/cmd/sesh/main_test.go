@@ -727,7 +727,7 @@ func TestRun_ReportsWhatTheEarlyCheckRefuses(t *testing.T) {
 			if argsParse(full) {
 				t.Errorf("argsParse(%q) = true, want the early check to refuse", full)
 			}
-			app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+			app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout})
 			var stderr bytes.Buffer
 			app.Stdout, app.Stderr = io.Discard, &stderr
 			code := 0
@@ -762,7 +762,7 @@ func TestEarlyCheck_OnlyWhatTheCommandUses(t *testing.T) {
 			if tt.wantSub == "" {
 				return
 			}
-			app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+			app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout})
 			var stderr bytes.Buffer
 			app.Stdout, app.Stderr = io.Discard, &stderr
 			app.Exit = func(int) {}
