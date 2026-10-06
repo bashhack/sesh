@@ -242,7 +242,7 @@ db_path                  /Users/me/vaults/sesh.db
 | `-username`       | Username for the service                           | No               |
 | `-entry-type`     | Filter: password, api_key, totp, secure_note       | No               |
 | `-query`          | Search query                                       | For search       |
-| `-format`         | Output format for list/get/search: table (default), json. For export/import: json (default), csv, encrypted | No               |
+| `-format`         | Output format for get/search: table (default), json. For export/import: json (default), csv, encrypted | No               |
 | `-show`           | Display password instead of clipboard hint         | No               |
 | `-file`           | File path for export/import (default: stdout/stdin)| No               |
 | `-on-conflict`    | Import conflict: skip, overwrite (default: error)  | No               |
