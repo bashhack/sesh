@@ -8,9 +8,11 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/setup"
+	"github.com/bashhack/sesh/internal/shell"
 	internalTotp "github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -77,9 +79,9 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	creds.DisplayInfo = fmt.Sprintf("Next: %s  |  Time left: %ds\n🔑 TOTP code for %s", c.next, c.secondsLeft, c.desc)
 
 	if stdoutIsTerminal() {
-		cmd := fmt.Sprintf("sesh --service totp --service-name %q", p.serviceName)
+		cmd := "sesh --service totp --service-name " + shell.Quote(p.serviceName)
 		if p.profile != "" {
-			cmd += fmt.Sprintf(" --profile %q", p.profile)
+			cmd += " --profile " + shell.Quote(p.profile)
 		}
 		fmt.Fprintf(os.Stderr, "💡 To copy it instead: %s --clip\n", cmd)
 	}
@@ -177,6 +179,11 @@ func (p *Provider) DeleteEntry(id string) error {
 		return fmt.Errorf("%s isn't a TOTP entry; delete it with --service password", id)
 	}
 	if err := p.store.Delete(k); err != nil {
+		if errors.Is(err, vault.ErrNotFound) {
+			if twins, terr := password.NewManager(p.store).CaseTwins(k); terr == nil && len(twins) > 0 {
+				return fmt.Errorf("failed to delete TOTP entry: %w; did you mean %s? Names are case-sensitive", err, twins[0])
+			}
+		}
 		return fmt.Errorf("failed to delete TOTP entry: %w", err)
 	}
 	return nil
@@ -191,6 +198,13 @@ func (p *Provider) ValidateRequest() error {
 	if _, err := p.store.Lookup(p.key()); err != nil {
 		if !errors.Is(err, vault.ErrNotFound) {
 			return fmt.Errorf("failed to look up the TOTP entry: %w", err)
+		}
+		missing := fmt.Sprintf("no TOTP entry found for service '%s'", p.serviceName)
+		if p.profile != "" {
+			missing += fmt.Sprintf(" with profile '%s'", p.profile)
+		}
+		if twins, terr := password.NewManager(p.store).CaseTwins(p.key()); terr == nil && len(twins) > 0 {
+			return fmt.Errorf("%s; did you mean %s? Names are case-sensitive", missing, password.EntryName(twins[0]))
 		}
 		if p.profile != "" {
 			return fmt.Errorf("no TOTP entry found for service '%s' with profile '%s'. Run 'sesh --service totp --setup' first", p.serviceName, p.profile)
@@ -216,4 +230,16 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Required:    false,
 		},
 	}
+}
+
+// CheckArgs refuses a service name or profile no entry can have, without
+// the vault, so the CLI can stop before opening it.
+func (p *Provider) CheckArgs() error {
+	if p.serviceName == "" {
+		return nil // reported by ValidateRequest when it's needed
+	}
+	if err := vault.CheckName("service name", p.serviceName); err != nil {
+		return err
+	}
+	return vault.CheckName("profile", p.profile)
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
@@ -124,7 +125,8 @@ func serviceFlags(app *App, cmd, serviceName string, p provider.ServiceProvider)
 // its flags. It's checked before the vault is opened, with a store that
 // can't open anything, so a mistyped command can't open or create the
 // vault. -help, -version and -list-services don't count, since they only
-// print, and neither does a second -service naming another provider.
+// print, and neither does a second -service naming another provider, or
+// arguments the provider refuses.
 func argsParse(args []string) bool {
 	serviceName := extractServiceName(args)
 	if serviceName == "" {
@@ -141,8 +143,40 @@ func argsParse(args []string) bool {
 		return false
 	}
 	fs.Usage = func() {}
-	return fs.Parse(args[1:]) == nil && *common.service == serviceName &&
-		!*common.help && !*common.version && !*common.listServices
+	if fs.Parse(args[1:]) != nil || *common.service != serviceName ||
+		*common.help || *common.version || *common.listServices {
+		return false
+	}
+	// Arguments that are wrong without the vault are refused before the
+	// master password is asked for; run reports why.
+	return earlyCheck(p, common) == nil
+}
+
+// earlyCheck refuses arguments that are wrong without looking at the vault,
+// for what the flags select: a --delete ID no entry can have; for --list
+// and --delete, the provider's paging flags; for any other command but
+// --setup (whose wizard asks for its own names), all the provider's
+// arguments. argsParse runs it before the vault opens, and run reports it
+// before any path that would use the vault.
+func earlyCheck(p provider.ServiceProvider, common commonFlags) error {
+	if *common.delete != "" {
+		if _, err := vault.ParseKey(*common.delete); err != nil {
+			return err
+		}
+	}
+	switch {
+	case *common.setup:
+		return nil
+	case *common.list || *common.delete != "":
+		if c, ok := p.(interface{ CheckListArgs() error }); ok {
+			return c.CheckListArgs()
+		}
+		return nil
+	}
+	if c, ok := p.(interface{ CheckArgs() error }); ok {
+		return c.CheckArgs()
+	}
+	return nil
 }
 
 // needsCredentialStore reports whether the given command-line invocation
@@ -615,10 +649,32 @@ func (c passwordPromptConfig) newSourceAtPath(sidecarPath string) *database.Mast
 }
 
 func (c passwordPromptConfig) options() []database.Option {
+	opts := []database.Option{database.WithNewPasswordCheck(c.checkNewPassword)}
 	if c.interactive {
-		return []database.Option{database.WithMaxAttempts(interactivePasswordAttempts)}
+		opts = append(opts, database.WithMaxAttempts(interactivePasswordAttempts))
 	}
-	return nil
+	return opts
+}
+
+// checkNewPassword warns when a new master password is easy to guess. With
+// someone at the terminal it asks whether to use it anyway, and a no (the
+// default) asks for another; with nobody to ask, it only warns.
+func (c passwordPromptConfig) checkNewPassword(pw []byte) error {
+	if !password.IsWeak(pw) {
+		return nil
+	}
+	fmt.Fprintln(os.Stderr, "⚠️  This master password is easy to guess: a cracking program would likely find it in under 100 million tries, and it protects every secret in the vault.") //nolint:errcheck // best-effort warning
+	if !c.interactive || c.readLine == nil {
+		return nil
+	}
+	answer, err := c.readLine("Use it anyway? [y/N]: ")
+	if err != nil {
+		return fmt.Errorf("read answer: %w", err)
+	}
+	if a := strings.ToLower(strings.TrimSpace(answer)); a == "y" || a == "yes" {
+		return nil
+	}
+	return database.ErrTryAnotherPassword
 }
 
 // keepingLastPassword returns a config whose prompt also keeps a copy of
@@ -832,6 +888,13 @@ func run(app *App, args []string) {
 		if err := app.ListProviders(); err != nil {
 			fatal(app, err)
 		}
+		return
+	}
+
+	// What argsParse refused before opening the vault is reported here,
+	// before any path that would use the vault it didn't open.
+	if err := earlyCheck(svcProvider, common); err != nil {
+		fatal(app, err)
 		return
 	}
 

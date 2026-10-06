@@ -143,6 +143,9 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			{Kind: vault.KindPassword},
 			{Kind: vault.KindPassword, Service: "a/b"},
 			{Kind: vault.KindPassword, Service: "x", Username: "a\nb"},
+			{Kind: vault.KindPassword, Service: "github "},
+			{Kind: vault.KindPassword, Service: "x", Username: " alice"},
+			{Kind: vault.KindPassword, Service: strings.Repeat("x", vault.MaxNameLength+1)},
 		} {
 			if err := s.Put(k, []byte("v")); err == nil {
 				t.Errorf("Put(%+v) succeeded, want an error", k)

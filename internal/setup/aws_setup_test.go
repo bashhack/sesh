@@ -91,6 +91,10 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			wantErrMsg:          "invalid TOTP secret",
 			userInput:           "\n1\n\n", // empty profile, manual entry
 		},
+		"a profile name that's too long": {
+			wantErrMsg: "the AWS profile is 300 characters long; the most is 256",
+			userInput:  strings.Repeat("p", 300) + "\n",
+		},
 		"existing entry cancelled by user": {
 			existing:   true,
 			wantErrMsg: "setup cancelled by user",

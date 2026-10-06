@@ -405,9 +405,9 @@ func TestTOTPSetupHandler_showTOTPSetupCompletionMessage(t *testing.T) {
 			profile:     "",
 			wantOutput: []string{
 				"✅ Setup complete! Generate TOTP codes with:",
-				"sesh --service totp --service-name 'github'",
+				"sesh --service totp --service-name github\n",
 				"Copy to clipboard with:",
-				"sesh --service totp --service-name 'github' --clip",
+				"sesh --service totp --service-name github --clip",
 			},
 		},
 		"service with profile": {
@@ -415,9 +415,16 @@ func TestTOTPSetupHandler_showTOTPSetupCompletionMessage(t *testing.T) {
 			profile:     "work",
 			wantOutput: []string{
 				"✅ Setup complete! Generate TOTP codes with:",
-				"sesh --service totp --service-name 'github' --profile 'work'",
+				"sesh --service totp --service-name github --profile work\n",
 				"Copy to clipboard with:",
-				"sesh --service totp --service-name 'github' --profile 'work' --clip",
+				"sesh --service totp --service-name github --profile work --clip",
+			},
+		},
+		"names that need quoting": {
+			serviceName: "Bob's Bank",
+			profile:     "my $alary",
+			wantOutput: []string{
+				`sesh --service totp --service-name 'Bob'\''s Bank' --profile 'my $alary'`,
 			},
 		},
 	}
@@ -1014,7 +1021,13 @@ func TestAWSSetupHandler_showSetupCompletionMessage(t *testing.T) {
 			wantContains: []string{
 				"Setup complete!",
 				"Run 'sesh -service aws' to generate a temporary session token",
-				"To use this setup, run: sesh --profile dev",
+				"To use this setup, run: sesh --service aws --profile dev",
+			},
+		},
+		"profile that needs quoting": {
+			profile: "my prod",
+			wantContains: []string{
+				"To use this setup, run: sesh --service aws --profile 'my prod'",
 			},
 		},
 	}
@@ -1599,6 +1612,10 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			userInput:  "a/b\n\n",
 			wantErrMsg: `contains "/"`,
 		},
+		"service name too long": {
+			userInput:  strings.Repeat("s", 300) + "\n\n",
+			wantErrMsg: "the service name is 300 characters long; the most is 256",
+		},
 	}
 
 	for name, tc := range tests {
@@ -1829,5 +1846,27 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 				t.Error("expected the overwrite warning and prompt")
 			}
 		})
+	}
+}
+
+// The TOTP setup asks before making an entry whose name differs from an
+// existing one only in case.
+func TestTOTPSetupHandler_Setup_AsksBeforeANameInAnotherCase(t *testing.T) {
+	stubTOTPSetup(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP"}, "JBSWY3DPEHPK3PXP")
+	store := vault.NewMemStore()
+	if err := store.Put(vault.Key{Kind: vault.KindTOTP, Service: "GitHub", Username: "alice"}, []byte("OLDSECRETOLDSECR")); err != nil {
+		t.Fatal(err)
+	}
+	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("github\nalice\nn\n"))}
+	var err error
+	output := testutil.CaptureStdout(func() { err = handler.Setup() })
+	if err == nil || !strings.Contains(err.Error(), "setup cancelled") {
+		t.Fatalf("Setup() = %v, want it cancelled", err)
+	}
+	if !strings.Contains(output, "An entry GitHub (alice) already exists, and names are case-sensitive") {
+		t.Errorf("output = %q, want the question", output)
+	}
+	if _, err := store.Lookup(vault.Key{Kind: vault.KindTOTP, Service: "github", Username: "alice"}); !errors.Is(err, vault.ErrNotFound) {
+		t.Errorf("a second entry was made (lookup: %v)", err)
 	}
 }

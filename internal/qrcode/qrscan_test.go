@@ -47,6 +47,12 @@ func TestExtractTOTPFullInfo(t *testing.T) {
 			wantIssuer:  "My Service",
 			wantAccount: "user@email.com",
 		},
+		"spaces before the account, which the format allows": {
+			uri:         "otpauth://totp/GitHub:%20%20alice?secret=JBSWY3DPEHPK3PXP",
+			wantSecret:  "JBSWY3DPEHPK3PXP",
+			wantIssuer:  "GitHub",
+			wantAccount: "alice",
+		},
 		"invalid scheme": {
 			uri:     "http://totp/Example:alice?secret=JBSWY3DPEHPK3PXP",
 			wantErr: true,

@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/shell"
 )
 
 // searchPasswords prints the entries matching p.query, best first, to
@@ -113,24 +113,14 @@ func useCommand(e *password.Entry) string {
 	if e.Type == password.EntryTypeTOTP {
 		action, label = "totp-generate", "Copy a code: "
 	}
-	args := []string{"sesh", "--service", "password", "--action", action, "--service-name", shellQuote(e.Service)}
+	args := []string{"sesh", "--service", "password", "--action", action, "--service-name", shell.Quote(e.Service)}
 	if e.Username != "" {
-		args = append(args, "--username", shellQuote(e.Username))
+		args = append(args, "--username", shell.Quote(e.Username))
 	}
 	if e.Type != password.EntryTypePassword && e.Type != password.EntryTypeTOTP {
 		args = append(args, "--entry-type", string(e.Type))
 	}
 	return label + strings.Join(append(args, "--clip"), " ")
-}
-
-var shellSafe = regexp.MustCompile(`^[A-Za-z0-9@%+=:,./_-]+$`)
-
-// shellQuote quotes s for a POSIX shell when it needs it.
-func shellQuote(s string) string {
-	if shellSafe.MatchString(s) {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // highlightWords bolds every place a word appears in text, ignoring case.

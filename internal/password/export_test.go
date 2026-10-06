@@ -190,3 +190,17 @@ func TestExport_StreamsPartialCountOnWriterFailure(t *testing.T) {
 		t.Fatalf("non-streaming: got count=%d (want < %d) after write failure", count, total)
 	}
 }
+
+// An entry whose name no entry can have is reported, and the rest import.
+func TestImport_ReportsABadNameAndImportsTheRest(t *testing.T) {
+	m, _ := newTestManager(t)
+	in := `[{"service": "github ", "type": "password", "secret": "a"},
+	        {"service": "gitlab", "type": "password", "secret": "b"}]`
+	res, err := m.Import(strings.NewReader(in), ImportOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Imported != 1 || len(res.Errors) != 1 || !strings.HasPrefix(res.Errors[0], `"github ": the service name "github " starts or ends with a space`) {
+		t.Errorf("result = %+v, want gitlab imported and github refused for its space", res)
+	}
+}

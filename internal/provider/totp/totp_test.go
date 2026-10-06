@@ -165,6 +165,12 @@ func TestProvider_ValidateRequest(t *testing.T) {
 			serviceName: "gitlab",
 			wantErrMsg:  "no TOTP entry found for service 'gitlab'. Run 'sesh --service totp --setup' first",
 		},
+		"an entry in another case is suggested": {
+			store:       seeded(t, map[vault.Key]string{totpKey("GitHub", "work"): "secret"}),
+			serviceName: "github",
+			profile:     "work",
+			wantErrMsg:  "no TOTP entry found for service 'github' with profile 'work'; did you mean GitHub (work)? Names are case-sensitive",
+		},
 		"store error surfaces without fallback message": {
 			store:       failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")},
 			serviceName: "github",
@@ -207,16 +213,21 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 	}{
 		"simple service name": {
 			serviceName: "github",
-			wantSubstr:  `--service-name "github"`,
+			wantSubstr:  `--service-name github --clip`,
 		},
 		"service name with spaces": {
 			serviceName: "my service",
-			wantSubstr:  `--service-name "my service"`,
+			wantSubstr:  `--service-name 'my service'`,
 		},
 		"profile with spaces": {
 			serviceName: "github",
 			profile:     "work account",
-			wantSubstr:  `--profile "work account"`,
+			wantSubstr:  `--profile 'work account'`,
+		},
+		// Double quotes would let the shell expand $ and backticks.
+		"a dollar sign": {
+			serviceName: "pay$ite",
+			wantSubstr:  `--service-name 'pay$ite'`,
 		},
 	}
 
@@ -274,7 +285,7 @@ func TestProvider_GetCredentials_ClipTipOnlyAtATerminal(t *testing.T) {
 			t.Fatalf("GetCredentials: %v", err)
 		}
 		stderr := restore()
-		const tip = `💡 To copy it instead: sesh --service totp --service-name "github" --clip`
+		const tip = `💡 To copy it instead: sesh --service totp --service-name github --clip`
 		if got := strings.Contains(stderr, tip); got != terminal {
 			t.Errorf("stdout a terminal: %v; stderr = %q, want the tip: %v", terminal, stderr, terminal)
 		}
@@ -682,5 +693,13 @@ func TestProvider_GetCredentials_FailsIfTheCodeSettingsCantBeRead(t *testing.T) 
 	_ = testutil.RedirectStderr(t)
 	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "settings unreadable") {
 		t.Errorf("GetCredentials = %v, want the settings error rather than a code from the default settings", err)
+	}
+}
+
+func TestProvider_DeleteEntry_SuggestsANameInAnotherCase(t *testing.T) {
+	p := &Provider{store: seeded(t, map[vault.Key]string{totpKey("GitHub", ""): "secret"})}
+	err := p.DeleteEntry("totp/github")
+	if !errors.Is(err, vault.ErrNotFound) || !strings.Contains(err.Error(), "did you mean totp/GitHub? Names are case-sensitive") {
+		t.Errorf("DeleteEntry = %v, want not found with the suggestion", err)
 	}
 }

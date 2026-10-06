@@ -74,9 +74,10 @@ func (m *Manager) StorePassword(service, username string, password []byte, entry
 
 // GetPassword returns the entry's secret, which the caller zeroes.
 func (m *Manager) GetPassword(service, username string, entryType EntryType) ([]byte, error) {
-	secret, err := m.store.Get(key(service, username, entryType))
+	k := key(service, username, entryType)
+	secret, err := m.store.Get(k)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve password: %w", err)
+		return nil, fmt.Errorf("failed to retrieve password: %w", m.withCaseHint(err, k))
 	}
 	return secret, nil
 }
@@ -249,4 +250,47 @@ func (m *Manager) DeleteEntry(service, username string, entryType EntryType) err
 		return fmt.Errorf("failed to delete entry: %w", err)
 	}
 	return nil
+}
+
+// CaseTwins returns the entries of k's kind whose service name and username
+// match k's ignoring case, other than k itself. Names are case-sensitive,
+// so these are what a name typed in another case misses, or duplicates.
+func (m *Manager) CaseTwins(k vault.Key) ([]vault.Key, error) {
+	entries, err := m.store.List(vault.Filter{Kind: k.Kind})
+	if err != nil {
+		return nil, err
+	}
+	var twins []vault.Key
+	for i := range entries {
+		e := entries[i].Key
+		if e != k && strings.EqualFold(e.Service, k.Service) && strings.EqualFold(e.Username, k.Username) {
+			twins = append(twins, e)
+		}
+	}
+	return twins, nil
+}
+
+// EntryName names k the way --list does: "github", or "github (alice)".
+func EntryName(k vault.Key) string {
+	if k.Username == "" {
+		return k.Service
+	}
+	return fmt.Sprintf("%s (%s)", k.Service, k.Username)
+}
+
+// withCaseHint adds to a not-found err the entries k may have meant, when
+// some differ from it only in case.
+func (m *Manager) withCaseHint(err error, k vault.Key) error {
+	if !errors.Is(err, vault.ErrNotFound) {
+		return err
+	}
+	twins, terr := m.CaseTwins(k)
+	if terr != nil || len(twins) == 0 {
+		return err
+	}
+	names := make([]string, len(twins))
+	for i, t := range twins {
+		names[i] = EntryName(t)
+	}
+	return fmt.Errorf("%w; did you mean %s? Names are case-sensitive", err, strings.Join(names, " or "))
 }

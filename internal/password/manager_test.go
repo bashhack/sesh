@@ -322,3 +322,29 @@ func TestGenerateTOTPCode_FailsIfTheCodeSettingsCantBeRead(t *testing.T) {
 		t.Errorf("GenerateTOTPCode = %v, want the settings error rather than a code from the default settings", err)
 	}
 }
+
+// A lookup that misses only by case says which entry it may have meant.
+func TestLookups_SuggestANameInAnotherCase(t *testing.T) {
+	m, _ := newTestManager(t)
+	if err := m.StorePasswordString("GitHub", "alice", "pw", EntryTypePassword); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StoreTOTPSecret("GitHub", "alice", "JBSWY3DPEHPK3PXP"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.GetPassword("github", "alice", EntryTypePassword)
+	if !errors.Is(err, vault.ErrNotFound) || !strings.Contains(err.Error(), "did you mean GitHub (alice)? Names are case-sensitive") {
+		t.Errorf("GetPassword = %v, want not found with the suggestion", err)
+	}
+	_, err = m.GenerateTOTPCode("github", "ALICE")
+	if !errors.Is(err, vault.ErrNotFound) || !strings.Contains(err.Error(), "did you mean GitHub (alice)?") {
+		t.Errorf("GenerateTOTPCode = %v, want not found with the suggestion", err)
+	}
+	if _, err := m.GetPassword("gitlab", "", EntryTypePassword); err == nil || strings.Contains(err.Error(), "did you mean") {
+		t.Errorf("GetPassword of an unrelated name = %v, want plain not found", err)
+	}
+	twins, err := m.CaseTwins(vault.Key{Kind: vault.KindPassword, Service: "GITHUB", Username: "Alice"})
+	if err != nil || len(twins) != 1 || twins[0].Service != "GitHub" {
+		t.Errorf("CaseTwins = %v, %v; want GitHub (alice)", twins, err)
+	}
+}

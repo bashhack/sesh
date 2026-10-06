@@ -51,6 +51,9 @@ type MasterPasswordSource struct {
 	// would each fire ~64 MiB of Argon2id work in parallel.
 	sf         singleflight.Group
 	promptFunc PasswordPromptFunc
+	// newPasswordCheck vets a new master password before it's confirmed;
+	// nil accepts any of at least 8 characters. See WithNewPasswordCheck.
+	newPasswordCheck func(pw []byte) error
 	// sidecarPath is the full path to the on-disk KDF state file. Stored
 	// directly (rather than being derived from a dataDir field) so that
 	// callers staging a rotation can point a target source at e.g.
@@ -77,6 +80,14 @@ type MasterPasswordSource struct {
 	maxAttempts int
 }
 
+// ErrTryAnotherPassword is what a new-password check returns to have a
+// different master password asked for.
+var ErrTryAnotherPassword = errors.New("choose a stronger master password")
+
+// newPasswordTries is how many master passwords creation asks for when the
+// check keeps turning them down.
+const newPasswordTries = 3
+
 // Option configures a MasterPasswordSource. Use with NewMasterPasswordSource.
 type Option func(*MasterPasswordSource)
 
@@ -99,6 +110,14 @@ func WithMaxAttempts(n int) Option {
 		}
 		s.maxAttempts = n
 	}
+}
+
+// WithNewPasswordCheck vets each new master password (at first run, or when
+// a rotation or recovery sets a new one) before it's confirmed. Returning
+// ErrTryAnotherPassword asks for another, up to newPasswordTries times; any
+// other error stops creation. Unlocking never runs it.
+func WithNewPasswordCheck(check func(pw []byte) error) Option {
+	return func(s *MasterPasswordSource) { s.newPasswordCheck = check }
 }
 
 // NewMasterPasswordSource creates a MasterPasswordSource whose sidecar
@@ -292,15 +311,11 @@ func cloneKey(k []byte) []byte {
 // initialize handles the first-run case: prompt for password twice, generate
 // salt, derive key, write sidecar.
 func (s *MasterPasswordSource) initialize() ([]byte, error) {
-	pw, err := s.promptFunc("Create master password: ")
+	pw, err := s.newPassword()
 	if err != nil {
-		return nil, fmt.Errorf("read password: %w", err)
+		return nil, err
 	}
 	defer secure.SecureZeroBytes(pw)
-
-	if len(pw) < 8 {
-		return nil, fmt.Errorf("master password must be at least 8 characters")
-	}
 
 	confirm, err := s.promptFunc("Confirm master password: ")
 	if err != nil {
@@ -515,4 +530,31 @@ func validateArgon2idBounds(p Argon2idParams) error {
 		return fmt.Errorf("sidecar key_len must be 32, got %d", p.KeyLen)
 	}
 	return nil
+}
+
+// newPassword asks for a new master password until one passes the length
+// rule and the new-password check, which may ask for another a few times.
+// The caller zeroes the result.
+func (s *MasterPasswordSource) newPassword() ([]byte, error) {
+	for try := 1; ; try++ {
+		pw, err := s.promptFunc("Create master password: ")
+		if err != nil {
+			return nil, fmt.Errorf("read password: %w", err)
+		}
+		if len(pw) < 8 {
+			secure.SecureZeroBytes(pw)
+			return nil, fmt.Errorf("master password must be at least 8 characters")
+		}
+		if s.newPasswordCheck == nil {
+			return pw, nil
+		}
+		err = s.newPasswordCheck(pw)
+		if err == nil {
+			return pw, nil
+		}
+		secure.SecureZeroBytes(pw)
+		if !errors.Is(err, ErrTryAnotherPassword) || try == newPasswordTries {
+			return nil, err
+		}
+	}
 }

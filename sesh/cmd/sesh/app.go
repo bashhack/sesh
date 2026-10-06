@@ -114,7 +114,6 @@ func (a *App) ListEntries(serviceName string) error {
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
 	}
-
 	entries, err := p.ListEntries()
 	if err != nil {
 		return fmt.Errorf("failed to list entries: %w", err)

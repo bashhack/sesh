@@ -10,6 +10,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
+	"github.com/bashhack/sesh/internal/testutil"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -815,5 +816,370 @@ func TestEntryCount(t *testing.T) {
 		if got := entryCount(n); got != want {
 			t.Errorf("entryCount(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+// A name no entry can have is refused before anything is asked, and
+// without the vault (CheckArgs).
+func TestValidateRequest_RefusesBadNames(t *testing.T) {
+	// "" is --clip without --action, which gets the entry.
+	for _, action := range []string{"", "store", "generate", "get", "totp-store", "totp-generate"} {
+		for name, tt := range map[string]struct{ service, username, wantSub string }{
+			"trailing space": {"github ", "", `the service name "github " starts or ends with a space`},
+			"leading space":  {"github", " alice", `the username " alice" starts or ends with a space`},
+			"long name":      {strings.Repeat("s", 257), "", "the service name is 257 characters long; the most is 256"},
+		} {
+			p, _ := newTestProvider(vault.NewMemStore())
+			p.action, p.service, p.username = action, tt.service, tt.username
+			if err := p.ValidateRequest(); err == nil || !strings.Contains(err.Error(), tt.wantSub) {
+				t.Errorf("%s, %s: ValidateRequest = %v, want it to contain %q", action, name, err, tt.wantSub)
+			}
+		}
+	}
+}
+
+// Refused entries are named as --list names them, quoted so a stray space shows.
+func TestImport_ReportsRefusedEntriesByName(t *testing.T) {
+	p, _ := newTestProvider(vault.NewMemStore())
+	p.action, p.format = "import", "json"
+	p.stdin = strings.NewReader(`[{"service":"github ","type":"password","secret":"a"},
+		{"service":"gitlab","username":"alice","type":"password","secret":""},
+		{"service":"ok","type":"password","secret":"b"}]`)
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	for _, want := range []string{
+		"Imported 1 entry, 2 errors:",
+		`"github ": the service name "github " starts or ends with a space`,
+		`"gitlab" ("alice"): empty secret`,
+	} {
+		if !strings.Contains(creds.DisplayInfo, want) {
+			t.Errorf("DisplayInfo = %q, want it to contain %q", creds.DisplayInfo, want)
+		}
+	}
+}
+
+func TestImport_OneErrorIsSingular(t *testing.T) {
+	p, _ := newTestProvider(vault.NewMemStore())
+	p.action, p.format = "import", "json"
+	p.stdin = strings.NewReader(`[{"service":"a/b","type":"password","secret":"a"}]`)
+	creds, err := p.GetCredentials()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if !strings.Contains(creds.DisplayInfo, "Imported 0 entries, 1 error:") {
+		t.Errorf("DisplayInfo = %q", creds.DisplayInfo)
+	}
+}
+
+// A username taken from a QR code is checked like one given as a flag,
+// before anything is stored.
+func TestStoreTOTP_QRAccountIsCheckedToo(t *testing.T) {
+	stubScanQRCodeFull(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP", Account: strings.Repeat("a", 300)}, nil)
+	store := vault.NewMemStore()
+	p, _ := newTestProvider(store)
+	p.action, p.service = "totp-store", "github"
+	p.stdin = strings.NewReader("2\n")
+	defer testutil.DiscardStderr(t)()
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "the QR code's account name can't be used: the username is 300 characters long; the most is 256; choose one with --username") {
+		t.Errorf("err = %v, want the QR account refused", err)
+	}
+	if entries, err := store.List(vault.Filter{}); err != nil || len(entries) != 0 {
+		t.Errorf("stored %v (%v), want nothing", entries, err)
+	}
+}
+
+func TestDeleteEntry_RefusesABadName(t *testing.T) {
+	p, _ := newTestProvider(vault.NewMemStore())
+	if err := p.DeleteEntry("password/github "); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
+		t.Errorf("DeleteEntry = %v, want the space refused", err)
+	}
+}
+
+func TestCheckArgs_NeedsNoVault(t *testing.T) {
+	p := NewProvider(nil)
+	p.action, p.service = "store", "github "
+	if err := p.CheckArgs(); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
+		t.Errorf("CheckArgs = %v, want the space refused", err)
+	}
+	p.service = "github"
+	if err := p.CheckArgs(); err != nil {
+		t.Errorf("CheckArgs of a good name = %v", err)
+	}
+}
+
+// A weak typed password is stored, with a warning; strong ones and other
+// kinds get none.
+func TestStorePassword_WarnsAboutAWeakPassword(t *testing.T) {
+	for name, tt := range map[string]struct {
+		kind, secret string
+		wantWarning  bool
+	}{
+		"weak password":                   {"password", "password1", true},
+		"password built from the service": {"password", "mycorpportal2026", true},
+		"strong password":                 {"password", "correct horse battery staple", false},
+		"weak-looking API key":            {"api_key", "password1", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubReadPassword(t, tt.secret)
+			store := vault.NewMemStore()
+			p, _ := newTestProvider(store)
+			p.action, p.service, p.entryType, p.force = "store", "mycorpportal", tt.kind, true
+			restore := testutil.RedirectStderr(t)
+			_, err := p.GetCredentials()
+			stderr := restore()
+			if err != nil {
+				t.Fatalf("GetCredentials: %v", err)
+			}
+			if got := stored(t, store, tt.kind+"/mycorpportal"); got != tt.secret {
+				t.Errorf("stored %q, want %q stored either way", got, tt.secret)
+			}
+			if got := strings.Contains(stderr, "is easy to guess"); got != tt.wantWarning {
+				t.Errorf("warning shown = %v, want %v; stderr:\n%s", got, tt.wantWarning, stderr)
+			}
+			if tt.wantWarning && !strings.Contains(stderr, "run: sesh --service password --action generate --service-name mycorpportal\n") {
+				t.Errorf("warning doesn't give the generate command; stderr:\n%s", stderr)
+			}
+		})
+	}
+}
+
+// A generated password short enough to be easy to guess is stored, with a
+// warning that suggests a longer one.
+func TestGeneratePassword_WarnsWhenShort(t *testing.T) {
+	for _, tt := range []struct {
+		length      int
+		wantWarning bool
+	}{{8, true}, {24, false}} {
+		store := vault.NewMemStore()
+		p, _ := newTestProvider(store)
+		p.action, p.service, p.pwLength = "generate", "wifi", tt.length
+		restore := testutil.RedirectStderr(t)
+		_, err := p.GetCredentials()
+		stderr := restore()
+		if err != nil {
+			t.Fatalf("length %d: GetCredentials: %v", tt.length, err)
+		}
+		if got := stored(t, store, "password/wifi"); len(got) != tt.length {
+			t.Errorf("length %d: stored %d characters", tt.length, len(got))
+		}
+		if got := strings.Contains(stderr, "is easy to guess") && strings.Contains(stderr, "use --length 12 or more"); got != tt.wantWarning {
+			t.Errorf("length %d: warning shown = %v, want %v; stderr:\n%s", tt.length, got, tt.wantWarning, stderr)
+		}
+	}
+}
+
+// Suggested commands quote names, so one with a space runs as shown.
+func TestSuggestedCommands_QuoteNames(t *testing.T) {
+	stubReadPassword(t, "password1")
+	p, _ := newTestProvider(vault.NewMemStore())
+	p.action, p.service, p.username, p.force = "store", "My Bank", "al ice", true
+	restore := testutil.RedirectStderr(t)
+	_, err := p.GetCredentials()
+	stderr := restore()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if want := "run: sesh --service password --action generate --service-name 'My Bank' --username 'al ice'\n"; !strings.Contains(stderr, want) {
+		t.Errorf("stderr = %q, want it to contain %q", stderr, want)
+	}
+
+	p, _ = newTestProvider(vault.NewMemStore())
+	p.action, p.service, p.entryType = "generate", "My Bank", "totp"
+	if err := p.ValidateRequest(); err == nil || !strings.Contains(err.Error(), "--service-name 'My Bank'") {
+		t.Errorf("err = %v, want the name quoted", err)
+	}
+}
+
+// The warning names the kind of secret it's about.
+func TestGeneratePassword_WarningNamesTheKind(t *testing.T) {
+	p, _ := newTestProvider(vault.NewMemStore())
+	p.action, p.service, p.entryType, p.pwLength = "generate", "stripe", "api_key", 8
+	restore := testutil.RedirectStderr(t)
+	_, err := p.GetCredentials()
+	stderr := restore()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if !strings.Contains(stderr, "This API key is easy to guess") {
+		t.Errorf("stderr = %q, want the warning to name an API key", stderr)
+	}
+}
+
+// generate asks before replacing an existing entry, as store does.
+func TestGeneratePassword_AsksBeforeOverwriting(t *testing.T) {
+	for name, tt := range map[string]struct {
+		answer, wantErr string
+		terminal, force bool
+		wantReplaced    bool
+	}{
+		"no terminal":           {wantErr: "entry already exists for github (alice); re-run with --force to overwrite"},
+		"answered no":           {terminal: true, answer: "n\n", wantErr: "generate cancelled"},
+		"answered yes":          {terminal: true, answer: "y\n", wantReplaced: true},
+		"--force at a terminal": {force: true, terminal: true, wantReplaced: true},
+		"--force, no tty":       {force: true, terminal: false, wantReplaced: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubStdinIsTerminal(t, tt.terminal)
+			store := seeded(t, map[string]string{"password/github/alice": "old-secret"})
+			p, _ := newTestProvider(store)
+			p.action, p.service, p.username, p.force, p.pwLength = "generate", "github", "alice", tt.force, 24
+			p.stdin = strings.NewReader(tt.answer)
+			defer testutil.DiscardStderr(t)()
+
+			_, err := p.GetCredentials()
+			switch {
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Errorf("err = %v, want it to contain %q", err, tt.wantErr)
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("err = %v", err)
+			}
+			if replaced := stored(t, store, "password/github/alice") != "old-secret"; replaced != tt.wantReplaced {
+				t.Errorf("replaced = %v, want %v", replaced, tt.wantReplaced)
+			}
+		})
+	}
+}
+
+// totp-store asks before replacing an existing TOTP secret, as store does.
+func TestStoreTOTP_AsksBeforeOverwriting(t *testing.T) {
+	for name, tt := range map[string]struct {
+		input, wantErr  string
+		qrAccount       string
+		terminal, force bool
+		wantReplaced    bool
+	}{
+		"manual, no terminal":  {input: "1\n", wantErr: "entry already exists for github (alice); re-run with --force to overwrite"},
+		"manual, answered no":  {input: "1\nn\n", terminal: true, wantErr: "totp-store cancelled"},
+		"manual, answered yes": {input: "1\ny\n", terminal: true, wantReplaced: true},
+		"manual, --force":      {input: "1\n", force: true, wantReplaced: true},
+		// The username comes from the QR code, so the check follows the scan.
+		"QR account, answered no": {input: "2\nn\n", qrAccount: "alice", terminal: true, wantErr: "totp-store cancelled"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubStdinIsTerminal(t, tt.terminal)
+			stubReadPassword(t, "NEWSECRETNEWSECR")
+			stubScanQRCodeFull(t, qrcode.TOTPInfo{Secret: "NEWSECRETNEWSECR", Account: tt.qrAccount}, nil)
+			store := seeded(t, map[string]string{"totp/github/alice": "JBSWY3DPEHPK3PXP"})
+			p, _ := newTestProvider(store)
+			p.action, p.service, p.force = "totp-store", "github", tt.force
+			if tt.qrAccount == "" {
+				p.username = "alice"
+			}
+			p.stdin = strings.NewReader(tt.input)
+			defer testutil.DiscardStderr(t)()
+
+			_, err := p.GetCredentials()
+			switch {
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Errorf("err = %v, want it to contain %q", err, tt.wantErr)
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("err = %v", err)
+			}
+			if replaced := stored(t, store, "totp/github/alice") != "JBSWY3DPEHPK3PXP"; replaced != tt.wantReplaced {
+				t.Errorf("replaced = %v, want %v", replaced, tt.wantReplaced)
+			}
+		})
+	}
+}
+
+// A QR code with no account name still asks before replacing the entry it
+// would overwrite.
+func TestStoreTOTP_QRWithoutAnAccountAsksToo(t *testing.T) {
+	stubStdinIsTerminal(t, false)
+	stubScanQRCodeFull(t, qrcode.TOTPInfo{Secret: "NEWSECRETNEWSECR"}, nil)
+	store := seeded(t, map[string]string{"totp/github": "JBSWY3DPEHPK3PXP"})
+	p, _ := newTestProvider(store)
+	p.action, p.service = "totp-store", "github"
+	p.stdin = strings.NewReader("2\n")
+	defer testutil.DiscardStderr(t)()
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "entry already exists for github; re-run with --force to overwrite") {
+		t.Errorf("err = %v, want the overwrite refused", err)
+	}
+	if got := stored(t, store, "totp/github"); got != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("secret = %q, want it unchanged", got)
+	}
+}
+
+// Creating an entry that differs from an existing one only in case asks
+// first, as an overwrite does.
+func TestGeneratePassword_AsksBeforeANameInAnotherCase(t *testing.T) {
+	for name, tt := range map[string]struct {
+		answer, wantErr string
+		terminal, force bool
+		wantCreated     bool
+	}{
+		"no terminal":  {wantErr: "an entry GitHub (alice) already exists, and names are case-sensitive; use that name, or re-run with --force to create github (alice) too"},
+		"answered no":  {terminal: true, answer: "n\n", wantErr: "generate cancelled"},
+		"answered yes": {terminal: true, answer: "y\n", wantCreated: true},
+		"--force":      {force: true, wantCreated: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubStdinIsTerminal(t, tt.terminal)
+			store := seeded(t, map[string]string{"password/GitHub/alice": "old"})
+			p, _ := newTestProvider(store)
+			p.action, p.service, p.username, p.force, p.pwLength = "generate", "github", "alice", tt.force, 24
+			p.stdin = strings.NewReader(tt.answer)
+			defer testutil.DiscardStderr(t)()
+			_, err := p.GetCredentials()
+			switch {
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Errorf("err = %v, want it to contain %q", err, tt.wantErr)
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("err = %v", err)
+			}
+			_, gerr := store.Get(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"})
+			if created := gerr == nil; created != tt.wantCreated {
+				t.Errorf("created = %v, want %v", created, tt.wantCreated)
+			}
+			if got := stored(t, store, "password/GitHub/alice"); got != "old" {
+				t.Errorf("the existing entry changed to %q", got)
+			}
+		})
+	}
+}
+
+func TestDeleteEntry_SuggestsANameInAnotherCase(t *testing.T) {
+	p, _ := newTestProvider(seeded(t, map[string]string{"password/GitHub/alice": "pw"}))
+	p.force = true
+	err := p.DeleteEntry("password/github/alice")
+	if !errors.Is(err, vault.ErrNotFound) || !strings.Contains(err.Error(), "did you mean password/GitHub/alice?") {
+		t.Errorf("DeleteEntry = %v, want not found with the suggestion", err)
+	}
+}
+
+// totp-store asks before making a name that differs only in case, too.
+func TestStoreTOTP_AsksBeforeANameInAnotherCase(t *testing.T) {
+	stubStdinIsTerminal(t, false)
+	stubReadPassword(t, "NEWSECRETNEWSECR")
+	store := seeded(t, map[string]string{"totp/GitHub": "JBSWY3DPEHPK3PXP"})
+	p, _ := newTestProvider(store)
+	p.action, p.service = "totp-store", "github"
+	p.stdin = strings.NewReader("1\n")
+	defer testutil.DiscardStderr(t)()
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "an entry GitHub already exists, and names are case-sensitive") {
+		t.Errorf("err = %v, want the case question refused without a terminal", err)
+	}
+}
+
+func TestValidateRequest_RefusesNegativePaging(t *testing.T) {
+	for _, tt := range []struct {
+		wantSub       string
+		limit, offset int
+	}{
+		{limit: -1, wantSub: "--limit wants 0 (no limit) or more, got -1"},
+		{offset: -3, wantSub: "--offset wants 0 or more, got -3"},
+	} {
+		p, _ := newTestProvider(vault.NewMemStore())
+		p.limit, p.offset = tt.limit, tt.offset
+		if err := p.ValidateRequest(); err == nil || !strings.Contains(err.Error(), tt.wantSub) {
+			t.Errorf("limit %d, offset %d: err = %v, want it to contain %q", tt.limit, tt.offset, err, tt.wantSub)
+		}
+	}
+	p, _ := newTestProvider(vault.NewMemStore())
+	p.limit, p.offset = 0, 5
+	if err := p.ValidateRequest(); err != nil {
+		t.Errorf("limit 0, offset 5: %v", err)
 	}
 }

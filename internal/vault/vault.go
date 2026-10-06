@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/bashhack/sesh/internal/totp"
 )
@@ -82,8 +83,11 @@ func ParseKey(s string) (Key, error) {
 	return k, nil
 }
 
+// MaxNameLength is the most characters a service name or username can have.
+const MaxNameLength = 256
+
 // Validate checks that k can name an entry: a known kind, a service name,
-// and names without "/" (which the text form uses) or control characters.
+// and a service name and username that pass CheckName.
 func (k Key) Validate() error {
 	if !k.Kind.Valid() {
 		return fmt.Errorf("unknown kind %q", k.Kind)
@@ -91,15 +95,126 @@ func (k Key) Validate() error {
 	if k.Service == "" {
 		return errors.New("the service name is empty")
 	}
-	for _, f := range []struct{ name, v string }{{"service name", k.Service}, {"username", k.Username}} {
-		if strings.Contains(f.v, "/") {
-			return fmt.Errorf("the %s %q contains \"/\"", f.name, f.v)
+	if err := CheckName("service name", k.Service); err != nil {
+		return err
+	}
+	return CheckName("username", k.Username)
+}
+
+// CheckName refuses a name, called what in errors, that would break an
+// entry's ID or be hard to tell apart from another: a "/" (which the ID
+// uses as a separator), a control character, text that isn't valid UTF-8,
+// a text-direction control anywhere, a space or an invisible character at
+// either end, an invisible character inside, or more than MaxNameLength
+// characters.
+func CheckName(what, v string) error {
+	if strings.Contains(v, "/") {
+		return fmt.Errorf("the %s %q contains \"/\"", what, v)
+	}
+	if strings.IndexFunc(v, unicode.IsControl) >= 0 {
+		return fmt.Errorf("the %s %q contains a control character", what, v)
+	}
+	if !utf8.ValidString(v) {
+		return fmt.Errorf("the %s %q isn't valid text", what, v)
+	}
+	if strings.IndexFunc(v, isDirectionControl) >= 0 {
+		return fmt.Errorf("the %s %q contains a text-direction control character", what, v)
+	}
+	if v != "" {
+		first, _ := utf8.DecodeRuneInString(v)
+		last, _ := utf8.DecodeLastRuneInString(v)
+		if unicode.IsSpace(first) || unicode.IsSpace(last) {
+			return fmt.Errorf("the %s %q starts or ends with a space", what, v)
 		}
-		if strings.IndexFunc(f.v, unicode.IsControl) >= 0 {
-			return fmt.Errorf("the %s %q contains a control character", f.name, f.v)
+		if isInvisible(first) || isInvisible(last) {
+			return fmt.Errorf("the %s %q starts or ends with an invisible character", what, v)
 		}
 	}
+	if hasHiddenRune(v) {
+		return fmt.Errorf("the %s %q contains an invisible character", what, v)
+	}
+	if n := utf8.RuneCountInString(v); n > MaxNameLength {
+		return fmt.Errorf("the %s is %d characters long; the most is %d", what, n, MaxNameLength)
+	}
 	return nil
+}
+
+// isDirectionControl reports whether r changes the direction text is shown
+// in, which can make a name display as another.
+func isDirectionControl(r rune) bool {
+	return r == 0x061C || r == 0x200E || r == 0x200F ||
+		(r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
+}
+
+// isInvisible reports whether r shows as nothing at the edge of a name: a
+// format character (such as a zero-width space or soft hyphen), a filler or
+// blank that Unicode counts as a letter or symbol, or a mark that attaches
+// to nothing visible (the combining grapheme joiner, Khmer inherent vowels,
+// Mongolian variation selectors).
+func isInvisible(r rune) bool {
+	switch {
+	case r == 0x115F, r == 0x1160, r == 0x3164, r == 0xFFA0, r == 0x2800,
+		r == 0x034F, r == 0x17B4, r == 0x17B5, r >= 0x180B && r <= 0x180F:
+		return true
+	}
+	return unicode.Is(unicode.Cf, r) && !isTag(r)
+}
+
+// isTag reports whether r is a Unicode tag character, which flag emoji
+// such as Scotland's are spelled with.
+func isTag(r rune) bool {
+	return r >= 0xE0020 && r <= 0xE007F
+}
+
+// hasHiddenRune reports whether v holds a character that's invisible where
+// it stands: a format character other than the zero-width joiner and
+// non-joiner (which emoji and some scripts need), a line or paragraph
+// separator, the combining grapheme joiner, a tag character outside a flag
+// emoji (🏴 followed by tags up to the cancel tag), or a variation selector
+// that doesn't follow a symbol or a keycap's digit, # or *.
+func hasHiddenRune(v string) bool {
+	rs := []rune(v)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case r == 0x1F3F4:
+			j := i + 1
+			for j < len(rs) && isTag(rs[j]) && rs[j] != 0xE007F {
+				j++
+			}
+			if j > i+1 && j < len(rs) && rs[j] == 0xE007F {
+				i = j // a whole flag
+			}
+		case isTag(r):
+			return true
+		case isVariationSelector(r):
+			if i == 0 || !takesVariationSelector(rs[i-1]) {
+				return true
+			}
+		case r == 0x200C, r == 0x200D:
+		case r == 0x034F, unicode.Is(unicode.Cf, r), unicode.Is(unicode.Zl, r), unicode.Is(unicode.Zp, r):
+			return true
+		}
+	}
+	return false
+}
+
+// isVariationSelector reports whether r picks how the character before it
+// is drawn, such as emoji or text style, or a Han character's variant.
+func isVariationSelector(r rune) bool {
+	return (r >= 0xFE00 && r <= 0xFE0F) || (r >= 0xE0100 && r <= 0xE01EF)
+}
+
+// takesVariationSelector reports whether a variation selector after r
+// changes how r looks: after a symbol, a keycap's digit, # or *, the emoji
+// whose base isn't a symbol (‼ ⁉ ℹ 〰 〽), or a Han or Myanmar letter. After
+// any other letter it shows nothing.
+func takesVariationSelector(r rune) bool {
+	switch {
+	case unicode.IsSymbol(r), strings.ContainsRune("0123456789#*\u203c\u2049\u2139\u3030\u303d", r):
+		return true
+	}
+	return unicode.Is(unicode.Han, r) || unicode.Is(unicode.Myanmar, r)
 }
 
 // AWSKey is the entry holding an AWS profile's MFA secret: the TOTP entry

@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/provider"
 	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
+	passwordProvider "github.com/bashhack/sesh/internal/provider/password"
 	totpProvider "github.com/bashhack/sesh/internal/provider/totp"
 	"github.com/bashhack/sesh/internal/testutil"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
@@ -620,6 +623,9 @@ func TestArgsParse(t *testing.T) {
 		"two services":                 {args: []string{"sesh", "--service", "totp", "--service", "aws"}, want: false},
 		"version with a value":         {args: []string{"sesh", "--service", "password", "--version=true"}, want: false},
 		"list services with a value":   {args: []string{"sesh", "--service", "password", "--list-services=true"}, want: false},
+		"a name no entry can have":     {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "github "}, want: false},
+		"a negative limit":             {args: []string{"sesh", "--service", "password", "--list", "--limit", "-1"}, want: false},
+		"a bad entry ID to delete":     {args: []string{"sesh", "--service", "password", "--delete", "password/github "}, want: false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := argsParse(tt.args); got != tt.want {
@@ -683,5 +689,87 @@ func TestResolvePasswordPrompt_NonTTYIsTerminalPromptButNotInteractive(t *testin
 	}
 	if cfg.prompt == nil {
 		t.Fatal("prompt callback should be set even when not interactive")
+	}
+}
+
+// --list checks its paging flags like the other actions, rather than
+// failing on the vault it was right not to open.
+func TestList_RefusesNegativePaging(t *testing.T) {
+	for _, args := range [][]string{
+		{"sesh", "--service", "password", "--list", "--limit", "-1"},
+		{"sesh", "--service", "password", "--list", "--offset", "-3"},
+	} {
+		h := newTestHarness()
+		h.app.Registry.RegisterProvider(passwordProvider.NewProvider(vault.NewMemStore()))
+		code := 0
+		h.app.Exit = func(c int) { code = c }
+		run(h.app, args)
+		if code == 0 || !strings.Contains(h.stderr.String(), "wants 0") {
+			t.Errorf("%q: exit %d, stderr %q; want the flag refused", args, code, h.stderr.String())
+		}
+	}
+}
+
+// Whatever the early check refuses is reported as itself on every path,
+// never as the missing store the CLI was right not to open.
+func TestRun_ReportsWhatTheEarlyCheckRefuses(t *testing.T) {
+	for name, args := range map[string][]string{
+		"--list, negative limit":   {"--service", "password", "--list", "--limit", "-1"},
+		"--delete, negative limit": {"--service", "password", "--delete", "password/a", "--limit", "-1"},
+		"--clip, bad name":         {"--service", "password", "--service-name", "github ", "--clip"},
+		"get, bad name":            {"--service", "password", "--action", "get", "--service-name", "github "},
+		"totp, bad name":           {"--service", "totp", "--service-name", "github "},
+		"aws, bad profile":         {"--service", "aws", "--profile", "prod "},
+		"--delete, bad entry ID":   {"--service", "password", "--delete", "password/github "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			full := append([]string{"sesh"}, args...)
+			if argsParse(full) {
+				t.Errorf("argsParse(%q) = true, want the early check to refuse", full)
+			}
+			app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+			var stderr bytes.Buffer
+			app.Stdout, app.Stderr = io.Discard, &stderr
+			code := 0
+			app.Exit = func(c int) { code = c }
+			run(app, full)
+			if code == 0 || strings.Contains(stderr.String(), "no credential store opened") {
+				t.Errorf("exit %d, stderr %q; want the real error", code, stderr.String())
+			}
+		})
+	}
+}
+
+// The early check covers only what the selected command uses: setup asks
+// for its own names, and --list and --delete don't use a profile.
+func TestEarlyCheck_OnlyWhatTheCommandUses(t *testing.T) {
+	t.Setenv("AWS_PROFILE", "Prod/Admin")
+	for name, tt := range map[string]struct {
+		wantSub string
+		args    []string
+	}{
+		"aws setup":            {args: []string{"sesh", "--service", "aws", "--setup"}},
+		"aws list":             {args: []string{"sesh", "--service", "aws", "--list"}},
+		"aws delete":           {args: []string{"sesh", "--service", "aws", "--delete", "totp/aws/dev"}},
+		"aws credentials":      {args: []string{"sesh", "--service", "aws"}, wantSub: `AWS_PROFILE: the AWS profile "Prod/Admin" contains "/"`},
+		"password list paging": {args: []string{"sesh", "--service", "password", "--list", "--limit", "-1"}, wantSub: "--limit wants 0"},
+		"list with a bad ID":   {args: []string{"sesh", "--service", "totp", "--list", "--delete", "bad"}, wantSub: `entry ID "bad"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := argsParse(tt.args); got != (tt.wantSub == "") {
+				t.Errorf("argsParse = %v, want %v", got, tt.wantSub == "")
+			}
+			if tt.wantSub == "" {
+				return
+			}
+			app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+			var stderr bytes.Buffer
+			app.Stdout, app.Stderr = io.Discard, &stderr
+			app.Exit = func(int) {}
+			run(app, tt.args)
+			if !strings.Contains(stderr.String(), tt.wantSub) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantSub)
+			}
+		})
 	}
 }

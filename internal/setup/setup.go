@@ -13,8 +13,10 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -433,7 +435,7 @@ func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
 To use this setup, run without the --profile flag
 (The default AWS profile will be used)`)
 	} else {
-		fmt.Printf("\nTo use this setup, run: sesh --profile %s\n", profile)
+		fmt.Printf("\nTo use this setup, run: sesh --service aws --profile %s\n", shell.Quote(profile))
 	}
 }
 
@@ -472,7 +474,15 @@ func (h *AWSSetupHandler) Setup() error {
 		return err
 	}
 
+	// Checked before anything else is asked, so a bad name doesn't cost
+	// the whole setup.
+	if err := vault.CheckName("AWS profile", profile); err != nil {
+		return err
+	}
 	k := vault.AWSKey(profile)
+	if err := k.Validate(); err != nil {
+		return err
+	}
 	existing, err := existingEntry(h.store, k)
 	if err != nil {
 		return err
@@ -652,14 +662,14 @@ func (h *TOTPSetupHandler) captureManualEntry() (string, error) {
 
 // showTOTPSetupCompletionMessage displays the final success message with usage instructions
 func (h *TOTPSetupHandler) showTOTPSetupCompletionMessage(serviceName, profile string) {
-	profileFlag := ""
+	cmd := "sesh --service totp --service-name " + shell.Quote(serviceName)
 	if profile != "" {
-		profileFlag = fmt.Sprintf(" --profile '%s'", profile)
+		cmd += " --profile " + shell.Quote(profile)
 	}
 	fmt.Println("✅ Setup complete! Generate TOTP codes with:")
-	fmt.Printf("  sesh --service totp --service-name '%s'%s\n", serviceName, profileFlag)
+	fmt.Printf("  %s\n", cmd)
 	fmt.Println("Copy to clipboard with:")
-	fmt.Printf("  sesh --service totp --service-name '%s'%s --clip\n", serviceName, profileFlag)
+	fmt.Printf("  %s --clip\n", cmd)
 }
 
 // Setup performs the TOTP setup
@@ -683,6 +693,11 @@ func (h *TOTPSetupHandler) Setup() error {
 	existing, err := existingEntry(h.store, k)
 	if err != nil {
 		return err
+	}
+	if existing == nil {
+		if err := h.confirmCaseTwin(k); err != nil {
+			return err
+		}
 	}
 	if existing != nil {
 		// Entry exists, prompt for overwrite
@@ -837,4 +852,28 @@ func captureQRWithRetryFull(reader *bufio.Reader, manualEntryFunc func() (string
 	}
 
 	return qrcode.TOTPInfo{}, fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
+}
+
+// confirmCaseTwin asks before the setup makes k when an entry's name
+// differs from it only in case: names are case-sensitive, so it would be a
+// second entry.
+func (h *TOTPSetupHandler) confirmCaseTwin(k vault.Key) error {
+	twins, err := password.NewManager(h.store).CaseTwins(k)
+	if err != nil {
+		return fmt.Errorf("failed to check existing entries: %w", err)
+	}
+	if len(twins) == 0 {
+		return nil
+	}
+	fmt.Printf("\n⚠️  An entry %s already exists, and names are case-sensitive.\n", password.EntryName(twins[0]))
+	fmt.Printf("Create %s as well? (y/N): ", password.EntryName(k))
+	response, err := readLine(h.reader)
+	if err != nil {
+		return err
+	}
+	if r := strings.ToLower(response); r != "y" && r != "yes" {
+		fmt.Println("\n❌ Setup cancelled")
+		return fmt.Errorf("setup cancelled by user")
+	}
+	return nil
 }

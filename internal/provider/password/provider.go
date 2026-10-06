@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -25,6 +27,9 @@ type Provider struct {
 	store  vault.Store
 	stdin  io.Reader
 	stdout io.Writer
+	// lines reads answers from stdin; one reader for every prompt, so a
+	// line buffered for one answer isn't lost to the next.
+	lines *bufio.Reader
 
 	query      string // search query
 	sortBy     string
@@ -154,9 +159,9 @@ func (p *Provider) ValidateRequest() error {
 			return fmt.Errorf("--service-name is required for generate action")
 		}
 		if p.entryType == string(password.EntryTypeTOTP) {
-			store := "sesh --service password --action totp-store --service-name " + p.service
+			store := "sesh --service password --action totp-store --service-name " + shell.Quote(p.service)
 			if p.username != "" {
-				store += " --username " + p.username
+				store += " --username " + shell.Quote(p.username)
 			}
 			return fmt.Errorf("sesh can't generate a TOTP secret: the service gives you one. Store it with: %s", store)
 		}
@@ -175,7 +180,47 @@ func (p *Provider) ValidateRequest() error {
 	default:
 		return fmt.Errorf("unknown action: %q (use store, get, search, generate, export, import, totp-store, totp-generate)", p.action)
 	}
+	return p.CheckArgs()
+}
+
+// CheckArgs refuses arguments that are wrong without looking at the vault
+// (a name no entry can have, a negative --limit or --offset), so the CLI
+// can stop before opening it.
+func (p *Provider) CheckArgs() error {
+	if err := p.CheckListArgs(); err != nil {
+		return err
+	}
+	return p.checkName()
+}
+
+// CheckListArgs refuses a negative --limit or --offset, the only arguments
+// --list and --delete use.
+func (p *Provider) CheckListArgs() error {
+	if p.limit < 0 {
+		return fmt.Errorf("--limit wants 0 (no limit) or more, got %d", p.limit)
+	}
+	if p.offset < 0 {
+		return fmt.Errorf("--offset wants 0 or more, got %d", p.offset)
+	}
 	return nil
+}
+
+// checkName refuses a name no entry can have, so an action that names an
+// entry says why at once. It needs no vault, so it runs before the vault
+// opens (see CheckArgs).
+func (p *Provider) checkName() error {
+	kind := p.effectiveEntryType()
+	switch p.action {
+	case "", "store", "generate", "get": // "" is --clip, which gets the entry
+	case "totp-store", "totp-generate":
+		kind = password.EntryTypeTOTP
+	default:
+		return nil
+	}
+	if p.service == "" {
+		return nil // reported by ValidateRequest
+	}
+	return vault.Key{Kind: kind, Service: p.service, Username: p.username}.Validate()
 }
 
 // GetCredentials handles the main operation based on --action flag.
@@ -300,9 +345,12 @@ func (p *Provider) DeleteEntry(id string) error {
 	if err != nil {
 		return err
 	}
+	if _, err := p.store.Lookup(k); err != nil {
+		return p.withCaseHint(err, k)
+	}
 	if !p.force {
 		fmt.Fprintf(os.Stderr, "Delete entry %q? [y/N]: ", id)
-		answer, err := bufio.NewReader(p.stdin).ReadString('\n')
+		answer, err := p.readLine()
 		if err != nil {
 			return fmt.Errorf("read confirmation: %w", err)
 		}
@@ -334,37 +382,8 @@ func (p *Provider) effectiveEntryType() password.EntryType {
 func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, error) {
 	et := p.effectiveEntryType()
 
-	// Check for existing entry and confirm overwrite unless --force.
-	if !p.force {
-		exists, err := mgr.EntryExists(p.service, p.username, et)
-		if err != nil {
-			return provider.Credentials{}, fmt.Errorf("check existing entry: %w", err)
-		}
-		if exists {
-			// Interactive prompts require a TTY. With piped stdin the
-			// "answer" would silently consume piped content (e.g. the
-			// note body) — fail loudly and direct the caller to --force.
-			if !stdinIsTerminal() {
-				who := ""
-				if p.username != "" {
-					who = fmt.Sprintf(" (%s)", p.username)
-				}
-				return provider.Credentials{}, fmt.Errorf("entry already exists for %s%s; re-run with --force to overwrite",
-					p.service, who)
-			}
-			fmt.Fprintf(os.Stderr, "Entry already exists for %s", p.service)
-			if p.username != "" {
-				fmt.Fprintf(os.Stderr, " (%s)", p.username)
-			}
-			fmt.Fprintf(os.Stderr, ". Overwrite? [y/N]: ")
-			answer, readErr := bufio.NewReader(p.stdin).ReadString('\n')
-			if readErr != nil {
-				return provider.Credentials{}, fmt.Errorf("read confirmation: %w", readErr)
-			}
-			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
-				return provider.Credentials{}, fmt.Errorf("store cancelled")
-			}
-		}
+	if err := p.confirmSave(mgr, et); err != nil {
+		return provider.Credentials{}, err
 	}
 
 	// Read input — method depends on entry type
@@ -402,6 +421,14 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 	if err := mgr.StorePassword(p.service, p.username, pw, et); err != nil {
 		return provider.Credentials{}, err
 	}
+	// A typed password only; API keys and notes come from elsewhere.
+	if et == password.EntryTypePassword && password.IsWeak(pw, p.service, p.username) {
+		generate := "sesh --service password --action generate --service-name " + shell.Quote(p.service)
+		if p.username != "" {
+			generate += " --username " + shell.Quote(p.username)
+		}
+		warnWeak(et, "run: "+generate)
+	}
 
 	return provider.Credentials{
 		Provider:    p.Name(),
@@ -413,6 +440,9 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 // stores it, returning it (for the caller to zero) and the entry's
 // description, "service (username)".
 func (p *Provider) generateAndStore(mgr *password.Manager) ([]byte, string, error) {
+	if err := p.confirmSave(mgr, p.effectiveEntryType()); err != nil {
+		return nil, "", err
+	}
 	opts := password.DefaultGenerateOptions()
 	opts.Length = p.pwLength
 	if p.noSymbols {
@@ -426,6 +456,10 @@ func (p *Provider) generateAndStore(mgr *password.Manager) ([]byte, string, erro
 	if err := mgr.StorePassword(p.service, p.username, generated, p.effectiveEntryType()); err != nil {
 		secure.SecureZeroBytes(generated)
 		return nil, "", err
+	}
+	// Only a short --length makes one weak; the default never is.
+	if password.IsWeak(generated, p.service, p.username) {
+		warnWeak(p.effectiveEntryType(), "use --length 12 or more")
 	}
 
 	desc := p.service
@@ -536,11 +570,20 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 	fmt.Fprintln(os.Stderr, "  2) Scan QR code from screen")
 	fmt.Fprintf(os.Stderr, "Choose [1/2]: ")
 
-	answer, err := bufio.NewReader(p.stdin).ReadString('\n')
+	answer, err := p.readLine()
 	if err != nil {
 		return provider.Credentials{}, fmt.Errorf("read input: %w", err)
 	}
 	answer = strings.TrimSpace(answer)
+
+	// Ask before replacing an existing secret, before it's captured. When
+	// the username may still come from the QR code, ask after the scan.
+	asked := answer != "2" || p.username != ""
+	if asked {
+		if err := p.confirmSave(mgr, password.EntryTypeTOTP); err != nil {
+			return provider.Credentials{}, err
+		}
+	}
 
 	var secret string
 	var params totp.Params
@@ -564,6 +607,15 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 		// rather than an empty username. An explicit flag always wins.
 		if p.username == "" && info.Account != "" {
 			p.username = info.Account
+			// Checked like a --username, before anything is stored.
+			if err := p.checkName(); err != nil {
+				return provider.Credentials{}, fmt.Errorf("the QR code's account name can't be used: %w; choose one with --username", err)
+			}
+		}
+		if !asked {
+			if err := p.confirmSave(mgr, password.EntryTypeTOTP); err != nil {
+				return provider.Credentials{}, err
+			}
 		}
 		fmt.Fprintf(os.Stderr, "✅ QR code scanned successfully\n")
 		if info.Issuer != "" {
@@ -771,7 +823,7 @@ func (p *Provider) importEntries(mgr *password.Manager) (provider.Credentials, e
 		fmt.Fprintf(&sb, ", skipped %d", result.Skipped)
 	}
 	if len(result.Errors) > 0 {
-		fmt.Fprintf(&sb, ", %d errors:", len(result.Errors))
+		fmt.Fprintf(&sb, ", %s:", countOf(len(result.Errors), "error"))
 		for _, e := range result.Errors {
 			fmt.Fprintf(&sb, "\n  %s", e)
 		}
@@ -789,4 +841,92 @@ func entryCount(n int) string {
 		return "1 entry"
 	}
 	return fmt.Sprintf("%d entries", n)
+}
+
+// countOf says how many of a thing, as "1 error" or "n errors".
+func countOf(n int, thing string) string {
+	if n == 1 {
+		return "1 " + thing
+	}
+	return fmt.Sprintf("%d %ss", n, thing)
+}
+
+// warnWeak tells the user the secret of kind et just stored is easy to
+// guess, and how to get a strong one.
+func warnWeak(et password.EntryType, fix string) {
+	what := map[password.EntryType]string{password.EntryTypeAPIKey: "API key", password.EntryTypeNote: "note"}[et]
+	if what == "" {
+		what = "password"
+	}
+	fmt.Fprintf(os.Stderr, "⚠️  This %s is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, %s\n", what, fix) //nolint:errcheck // best-effort warning
+}
+
+// confirmSave asks before p.action saves the entry, unless --force: when it
+// would replace an existing entry, or make a second one whose name differs
+// from an existing one only in case. Without a terminal it refuses instead:
+// an "answer" read from piped stdin would swallow the piped input (a note's
+// body, say).
+func (p *Provider) confirmSave(mgr *password.Manager, et password.EntryType) error {
+	if p.force {
+		return nil
+	}
+	k := vault.Key{Kind: et, Service: p.service, Username: p.username}
+	exists, err := mgr.EntryExists(p.service, p.username, et)
+	if err != nil {
+		return fmt.Errorf("check existing entry: %w", err)
+	}
+	name := password.EntryName(k)
+	var refusal, question string
+	if exists {
+		refusal = fmt.Sprintf("entry already exists for %s; re-run with --force to overwrite", name)
+		question = fmt.Sprintf("Entry already exists for %s. Overwrite? [y/N]: ", name)
+	} else {
+		twins, err := mgr.CaseTwins(k)
+		if err != nil {
+			return fmt.Errorf("check existing entries: %w", err)
+		}
+		if len(twins) == 0 {
+			return nil
+		}
+		twin := password.EntryName(twins[0])
+		refusal = fmt.Sprintf("an entry %s already exists, and names are case-sensitive; use that name, or re-run with --force to create %s too", twin, name)
+		question = fmt.Sprintf("An entry %s already exists, and names are case-sensitive. Create %s as well? [y/N]: ", twin, name)
+	}
+	if !stdinIsTerminal() {
+		return errors.New(refusal)
+	}
+	fmt.Fprint(os.Stderr, question) //nolint:errcheck // best-effort prompt
+	answer, err := p.readLine()
+	if err != nil {
+		return fmt.Errorf("read confirmation: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
+		return fmt.Errorf("%s cancelled", p.action)
+	}
+	return nil
+}
+
+// readLine reads one line of an answer from stdin.
+func (p *Provider) readLine() (string, error) {
+	if p.lines == nil {
+		p.lines = bufio.NewReader(p.stdin)
+	}
+	return p.lines.ReadString('\n')
+}
+
+// withCaseHint adds to a not-found err the IDs of entries k may have meant,
+// when some differ from it only in case.
+func (p *Provider) withCaseHint(err error, k vault.Key) error {
+	if !errors.Is(err, vault.ErrNotFound) {
+		return err
+	}
+	twins, terr := password.NewManager(p.store).CaseTwins(k)
+	if terr != nil || len(twins) == 0 {
+		return err
+	}
+	ids := make([]string, len(twins))
+	for i, t := range twins {
+		ids[i] = t.String()
+	}
+	return fmt.Errorf("%w; did you mean %s? Names are case-sensitive", err, strings.Join(ids, " or "))
 }

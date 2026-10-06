@@ -237,8 +237,8 @@ db_path               /Users/me/vaults/sesh.db
 | `-length`         | Generated password length (default 24)             | No               |
 | `-no-symbols`     | Exclude symbols from generated passwords           | No               |
 | `-sort`           | Sort by: service, created_at, updated_at           | No               |
-| `-limit`          | Limit number of results                            | No               |
-| `-offset`         | Skip first N results                               | No               |
+| `-limit`          | Limit number of results; 0 (the default) means no limit, and a negative value is refused | No               |
+| `-offset`         | Skip the first N results; a negative value is refused | No               |
 
 ### Environment Variables
 
@@ -279,6 +279,8 @@ sesh --service password --list
 sesh --service password --list
 # Master password: ****
 ```
+
+A new master password (at first run, `sesh --rekey`, or `sesh recover`) must be at least 8 characters, and is rated the way stored passwords are (see "Weak passwords"). If it's easy to guess, sesh warns and asks `Use it anyway? [y/N]`; answering no, or just pressing Enter, asks for a different one. With `SESH_MASTER_PASSWORD`, nobody can answer, so sesh only warns.
 
 Creating the vault also unlocks the background `sesh agent` with the new password, so the next command doesn't ask again. See [Using the sesh agent](#using-the-sesh-agent) for how it starts, locks, and stops.
 
@@ -647,9 +649,10 @@ The password provider stores and retrieves passwords, API keys, TOTP secrets, an
 sesh -service password -action generate -service-name github -username alice -clip
 
 # Generate without symbols, custom length
-sesh -service password -action generate -service-name github -username alice -no-symbols -length 32
+sesh -service password -action generate -service-name stripe -username alice -no-symbols -length 32
 
-# Store a password manually (prompts for input securely)
+# Store a password manually (prompts for input securely). An easy-to-guess
+# password is stored with a warning and the generate command to replace it.
 sesh -service password -action store -service-name github -username alice
 
 # Retrieve and show
@@ -750,14 +753,14 @@ The "Enter note" prompt only appears when stdin is a real terminal. With piped i
 
 #### Overwriting existing entries
 
-By default, `store` will prompt `[y/N]` if an entry already exists at the given service/username. Because a piped stdin can't answer that prompt safely (the first line of the piped content would be consumed as the answer), sesh fails loudly in that case:
+By default, `store`, `generate`, and `totp-store` prompt `[y/N]` if an entry already exists at the given service/username. Without a terminal nobody can answer (and for `store`, reading an answer would swallow the first line of the piped content), so sesh refuses instead:
 
 ```bash
 $ echo "new secret" | sesh -service password -action store -service-name github -username alice
-error: entry already exists for github (alice); re-run with --force to overwrite
+❌ failed to generate credentials: entry already exists for github (alice); re-run with --force to overwrite
 ```
 
-Pass `-force` to overwrite non-interactively.
+Pass `-force` to overwrite non-interactively, for example to replace a password with a newly generated one: `sesh -service password -action generate -service-name github -username alice -force`.
 
 ### Multi-Profile Management ([SVG](assets/multi-profile-management.svg))
 
@@ -802,6 +805,20 @@ Entries for aws:
 $ sesh -service aws -delete totp/aws/prod
 ✅ Entry deleted successfully
 ```
+
+**Names.** An entry is named by its service name and, optionally, a username (for AWS and `--service totp`, the profile). Spaces inside a name are fine (`My Bank`). sesh refuses a name with:
+
+- a `/`, which separates the parts of an entry's ID (`password/github/alice`), or a control character such as a tab or newline;
+- a space at the start or end (`"github "`), which would make an entry that `github` doesn't find;
+- an invisible character (such as a zero-width space or soft hyphen, which text copied from web pages can carry) anywhere in it, for the same reason. The characters emoji are built from (zero-width joiners, the tags in flags like Scotland's) are fine inside a name;
+- a character that changes text direction, which can make one name display as another;
+- more than 256 characters.
+
+The password manager's `store`, `generate`, `get` (including `--clip` on its own), `totp-store`, and `totp-generate` check names before the vault is opened, as do `--service totp` (the service name and profile), `--service aws` (the profile), and `--delete` (the entry ID), so a bad name is reported before the master password is asked for. The TOTP setup checks the service name and profile once you've entered both, the AWS setup checks the profile as soon as you enter it, and an import reports each entry it refuses and imports the rest.
+
+Names are case-sensitive: `GitHub` and `github` are two entries. When a lookup (`get`, `totp-generate`, `--service totp`, or `--delete` with `--service password` or `--service totp`) misses only by case, sesh says which entry you may have meant. Creating an entry whose name differs from an existing one only in case asks first, like an overwrite: with `store`, `generate`, and `totp-store` (`--force` skips the question), and in the TOTP setup wizard. AWS profiles are named by your AWS configuration, so the AWS setup doesn't ask.
+
+**Weak passwords.** When you type a password to store (`--action store`, kind `password`), sesh rates it with [zxcvbn](https://github.com/dropbox/zxcvbn), which knows common passwords, words, names, dates, and keyboard patterns, and counts the entry's own service name and username as easy guesses. If zxcvbn estimates fewer than about 100 million guesses would find it (a score of 2 or less out of 4), sesh stores it and warns, with the command to generate a strong one instead. Generated passwords, and generated API keys, get the same check: at the default length (24) they always pass, but `--length 9` or shorter can fail it, and then the warning suggests `--length 12` or more. API keys and notes you type aren't rated. zxcvbn's word lists are English: for passwords in other languages or scripts, it judges mostly by length and the mix of characters. Only a password's first 64 characters are rated.
 
 ### Setup Wizard Features
 

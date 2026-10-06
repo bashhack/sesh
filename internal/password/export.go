@@ -218,11 +218,11 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			continue
 		}
 		if e.Secret == "" {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: empty secret", e.Service, e.Username))
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: empty secret", importName(e)))
 			continue
 		}
 		if !e.Type.Valid() {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: invalid entry type %q", e.Service, e.Username, e.Type))
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: invalid entry type %q", importName(e), e.Type))
 			continue
 		}
 
@@ -230,6 +230,10 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 		// Any other error is ambiguous — fail this entry rather than
 		// risk an upsert that silently overwrites real data.
 		k := key(e.Service, e.Username, e.Type)
+		if err := k.Validate(); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
+			continue
+		}
 		_, err := m.store.Lookup(k)
 		var exists bool
 		switch {
@@ -238,7 +242,7 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 		case errors.Is(err, vault.ErrNotFound):
 			exists = false
 		default:
-			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: failed to check existence: %v", e.Service, e.Username, err))
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to check existence: %v", importName(e), err))
 			continue
 		}
 
@@ -250,7 +254,7 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			case ConflictOverwrite:
 				// Fall through to store
 			default:
-				result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: already exists (use --on-conflict to resolve)", e.Service, e.Username))
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: already exists (use --on-conflict to resolve)", importName(e)))
 				continue
 			}
 		}
@@ -260,7 +264,7 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 		err = m.store.Save(&vault.Entry{Key: k, Settings: e.Settings, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt}, secret)
 		secure.SecureZeroBytes(secret)
 		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: %v", e.Service, e.Username, err))
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
 			continue
 		}
 		result.Imported++
@@ -337,4 +341,13 @@ func readCSV(r io.Reader) ([]ExportEntry, error) {
 	}
 
 	return entries, nil
+}
+
+// importName names an imported entry in a report the way --list does,
+// quoted so a stray space shows: "github", or "github" ("alice").
+func importName(e *ExportEntry) string {
+	if e.Username == "" {
+		return fmt.Sprintf("%q", e.Service)
+	}
+	return fmt.Sprintf("%q (%q)", e.Service, e.Username)
 }

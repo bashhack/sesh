@@ -55,6 +55,23 @@ func TestGetClipboardValue_FollowsTheAction(t *testing.T) {
 		}
 	})
 
+	t.Run("generate over an existing entry asks first", func(t *testing.T) {
+		stubStdinIsTerminal(t, false)
+		kc := clipStore(t)
+		p, _ := newTestProvider(kc)
+		p.action, p.service, p.username, p.pwLength = "generate", "github", "alice", 24
+		creds, err := p.GetClipboardValue()
+		if err == nil || !strings.Contains(err.Error(), "entry already exists for github (alice); re-run with --force to overwrite") {
+			t.Errorf("err = %v, want the overwrite refused", err)
+		}
+		if creds.CopyValue != "" {
+			t.Errorf("copied %q, want nothing copied", creds.CopyValue)
+		}
+		if got := stored(t, kc, "password/github/alice"); got != "the-password" {
+			t.Errorf("stored %q, want the old password kept", got)
+		}
+	})
+
 	t.Run("totp-generate copies the current code, not a secret", func(t *testing.T) {
 		kc := clipStore(t)
 		p, _ := newTestProvider(kc)
