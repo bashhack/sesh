@@ -147,17 +147,36 @@ func argsParse(args []string) bool {
 		*common.help || *common.version || *common.listServices {
 		return false
 	}
-	// A provider that can check its arguments without the vault does, so a
-	// bad name or value is reported before the master password is asked for.
-	if c, ok := p.(interface{ CheckArgs() error }); ok && c.CheckArgs() != nil {
-		return false
-	}
+	// Arguments that are wrong without the vault are refused before the
+	// master password is asked for; run reports why.
+	return earlyCheck(p, common) == nil
+}
+
+// earlyCheck refuses arguments that are wrong without looking at the vault,
+// for what the flags select: a --delete ID no entry can have; for --list
+// and --delete, the provider's paging flags; for any other command but
+// --setup (whose wizard asks for its own names), all the provider's
+// arguments. argsParse runs it before the vault opens, and run reports it
+// before any path that would use the vault.
+func earlyCheck(p provider.ServiceProvider, common commonFlags) error {
 	if *common.delete != "" {
 		if _, err := vault.ParseKey(*common.delete); err != nil {
-			return false // an ID no entry can have; run reports why
+			return err
 		}
 	}
-	return true
+	switch {
+	case *common.setup:
+		return nil
+	case *common.list || *common.delete != "":
+		if c, ok := p.(interface{ CheckListArgs() error }); ok {
+			return c.CheckListArgs()
+		}
+		return nil
+	}
+	if c, ok := p.(interface{ CheckArgs() error }); ok {
+		return c.CheckArgs()
+	}
+	return nil
 }
 
 // needsCredentialStore reports whether the given command-line invocation
@@ -874,11 +893,9 @@ func run(app *App, args []string) {
 
 	// What argsParse refused before opening the vault is reported here,
 	// before any path that would use the vault it didn't open.
-	if c, ok := svcProvider.(interface{ CheckArgs() error }); ok {
-		if err := c.CheckArgs(); err != nil {
-			fatal(app, err)
-			return
-		}
+	if err := earlyCheck(svcProvider, common); err != nil {
+		fatal(app, err)
+		return
 	}
 
 	// Provider-specific operations

@@ -716,7 +716,6 @@ func TestRun_ReportsWhatTheEarlyCheckRefuses(t *testing.T) {
 	for name, args := range map[string][]string{
 		"--list, negative limit":   {"--service", "password", "--list", "--limit", "-1"},
 		"--delete, negative limit": {"--service", "password", "--delete", "password/a", "--limit", "-1"},
-		"--delete, bad name":       {"--service", "password", "--delete", "password/a", "--action", "get", "--service-name", "x "},
 		"--clip, bad name":         {"--service", "password", "--service-name", "github ", "--clip"},
 		"get, bad name":            {"--service", "password", "--action", "get", "--service-name", "github "},
 		"totp, bad name":           {"--service", "totp", "--service-name", "github "},
@@ -736,6 +735,40 @@ func TestRun_ReportsWhatTheEarlyCheckRefuses(t *testing.T) {
 			run(app, full)
 			if code == 0 || strings.Contains(stderr.String(), "no credential store opened") {
 				t.Errorf("exit %d, stderr %q; want the real error", code, stderr.String())
+			}
+		})
+	}
+}
+
+// The early check covers only what the selected command uses: setup asks
+// for its own names, and --list and --delete don't use a profile.
+func TestEarlyCheck_OnlyWhatTheCommandUses(t *testing.T) {
+	t.Setenv("AWS_PROFILE", "Prod/Admin")
+	for name, tt := range map[string]struct {
+		wantSub string
+		args    []string
+	}{
+		"aws setup":            {args: []string{"sesh", "--service", "aws", "--setup"}},
+		"aws list":             {args: []string{"sesh", "--service", "aws", "--list"}},
+		"aws delete":           {args: []string{"sesh", "--service", "aws", "--delete", "totp/aws/dev"}},
+		"aws credentials":      {args: []string{"sesh", "--service", "aws"}, wantSub: `AWS_PROFILE: the AWS profile "Prod/Admin" contains "/"`},
+		"password list paging": {args: []string{"sesh", "--service", "password", "--list", "--limit", "-1"}, wantSub: "--limit wants 0"},
+		"list with a bad ID":   {args: []string{"sesh", "--service", "totp", "--list", "--delete", "bad"}, wantSub: `entry ID "bad"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := argsParse(tt.args); got != (tt.wantSub == "") {
+				t.Errorf("argsParse = %v, want %v", got, tt.wantSub == "")
+			}
+			if tt.wantSub == "" {
+				return
+			}
+			app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, config.DefaultClipboardTimeout)
+			var stderr bytes.Buffer
+			app.Stdout, app.Stderr = io.Discard, &stderr
+			app.Exit = func(int) {}
+			run(app, tt.args)
+			if !strings.Contains(stderr.String(), tt.wantSub) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantSub)
 			}
 		})
 	}

@@ -187,13 +187,22 @@ func (p *Provider) ValidateRequest() error {
 // (a name no entry can have, a negative --limit or --offset), so the CLI
 // can stop before opening it.
 func (p *Provider) CheckArgs() error {
+	if err := p.CheckListArgs(); err != nil {
+		return err
+	}
+	return p.checkName()
+}
+
+// CheckListArgs refuses a negative --limit or --offset, the only arguments
+// --list and --delete use.
+func (p *Provider) CheckListArgs() error {
 	if p.limit < 0 {
 		return fmt.Errorf("--limit wants 0 (no limit) or more, got %d", p.limit)
 	}
 	if p.offset < 0 {
 		return fmt.Errorf("--offset wants 0 or more, got %d", p.offset)
 	}
-	return p.checkName()
+	return nil
 }
 
 // checkName refuses a name no entry can have, so an action that names an

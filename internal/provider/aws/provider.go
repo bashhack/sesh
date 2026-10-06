@@ -386,7 +386,12 @@ func formatProfile(profile string) string {
 }
 
 // CheckArgs refuses a profile name no entry can have, without the vault,
-// so the CLI can stop before opening it.
+// so the CLI can stop before opening it. The profile can come from
+// AWS_PROFILE rather than --profile; the error says so.
 func (p *Provider) CheckArgs() error {
-	return vault.CheckName("AWS profile", p.profile)
+	err := vault.CheckName("AWS profile", p.profile)
+	if err != nil && p.profile == os.Getenv("AWS_PROFILE") {
+		return fmt.Errorf("AWS_PROFILE: %w", err)
+	}
+	return err
 }
