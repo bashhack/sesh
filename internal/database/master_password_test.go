@@ -720,3 +720,25 @@ func TestMasterPasswordSource_NewPasswordCheck(t *testing.T) {
 		t.Errorf("err = %v, want the check's refusal", err)
 	}
 }
+
+// A check that keeps turning passwords down stops creation after three,
+// with nothing written.
+func TestMasterPasswordSource_NewPasswordCheckGivesUp(t *testing.T) {
+	dir := t.TempDir()
+	prompts := 0
+	prompt := func(string) ([]byte, error) {
+		prompts++
+		return []byte("weakpass1"), nil
+	}
+	src := NewMasterPasswordSource(dir, prompt, WithNewPasswordCheck(func([]byte) error { return ErrTryAnotherPassword }))
+	_, err := src.GetEncryptionKey()
+	if !errors.Is(err, ErrTryAnotherPassword) {
+		t.Errorf("err = %v, want ErrTryAnotherPassword", err)
+	}
+	if prompts != 3 {
+		t.Errorf("asked %d times, want 3", prompts)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sidecarFileName)); !os.IsNotExist(err) {
+		t.Errorf("a key file was written (stat: %v)", err)
+	}
+}
