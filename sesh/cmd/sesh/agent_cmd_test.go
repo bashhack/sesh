@@ -48,19 +48,23 @@ func TestRunAgent_RejectsUnknownFlag(t *testing.T) {
 	}
 }
 
-// waitForSocketBound polls for the socket file to appear, indicating
-// Listen succeeded. Cheaper than reading stderr concurrently — and avoids
-// the obvious data race on app.Stderr that a polling reader would hit.
+// waitForSocketBound polls until the socket accepts a connection. The file
+// alone isn't enough: it appears at bind, a moment before listen, and a
+// dial in between is refused. Polling avoids reading app.Stderr, which the
+// agent is still writing.
 func waitForSocketBound(t *testing.T, sockPath string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(sockPath); err == nil {
+		if conn, err := net.DialTimeout("unix", sockPath, 100*time.Millisecond); err == nil {
+			if err := conn.Close(); err != nil {
+				t.Errorf("close: %v", err)
+			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("socket %q did not appear within 2s", sockPath)
+	t.Fatalf("socket %q did not accept a connection within 2s", sockPath)
 }
 
 func TestRunAgent_BindsAndShutsDownOnSIGTERM(t *testing.T) {
