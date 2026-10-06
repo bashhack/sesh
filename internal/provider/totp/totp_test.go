@@ -165,6 +165,12 @@ func TestProvider_ValidateRequest(t *testing.T) {
 			serviceName: "gitlab",
 			wantErrMsg:  "no TOTP entry found for service 'gitlab'. Run 'sesh --service totp --setup' first",
 		},
+		"an entry in another case is suggested": {
+			store:       seeded(t, map[vault.Key]string{totpKey("GitHub", "work"): "secret"}),
+			serviceName: "github",
+			profile:     "work",
+			wantErrMsg:  "no TOTP entry found for service 'github' with profile 'work'; did you mean GitHub (work)? Names are case-sensitive",
+		},
 		"store error surfaces without fallback message": {
 			store:       failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")},
 			serviceName: "github",

@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -328,6 +329,9 @@ func (p *Provider) DeleteEntry(id string) error {
 	if err != nil {
 		return err
 	}
+	if _, err := p.store.Lookup(k); err != nil {
+		return p.withCaseHint(err, k)
+	}
 	if !p.force {
 		fmt.Fprintf(os.Stderr, "Delete entry %q? [y/N]: ", id)
 		answer, err := p.readLine()
@@ -362,7 +366,7 @@ func (p *Provider) effectiveEntryType() password.EntryType {
 func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, error) {
 	et := p.effectiveEntryType()
 
-	if err := p.confirmOverwrite(mgr, et); err != nil {
+	if err := p.confirmSave(mgr, et); err != nil {
 		return provider.Credentials{}, err
 	}
 
@@ -420,7 +424,7 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 // stores it, returning it (for the caller to zero) and the entry's
 // description, "service (username)".
 func (p *Provider) generateAndStore(mgr *password.Manager) ([]byte, string, error) {
-	if err := p.confirmOverwrite(mgr, p.effectiveEntryType()); err != nil {
+	if err := p.confirmSave(mgr, p.effectiveEntryType()); err != nil {
 		return nil, "", err
 	}
 	opts := password.DefaultGenerateOptions()
@@ -560,7 +564,7 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 	// the username may still come from the QR code, ask after the scan.
 	asked := answer != "2" || p.username != ""
 	if asked {
-		if err := p.confirmOverwrite(mgr, password.EntryTypeTOTP); err != nil {
+		if err := p.confirmSave(mgr, password.EntryTypeTOTP); err != nil {
 			return provider.Credentials{}, err
 		}
 	}
@@ -593,7 +597,7 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 			}
 		}
 		if !asked {
-			if err := p.confirmOverwrite(mgr, password.EntryTypeTOTP); err != nil {
+			if err := p.confirmSave(mgr, password.EntryTypeTOTP); err != nil {
 				return provider.Credentials{}, err
 			}
 		}
@@ -841,28 +845,41 @@ func warnWeak(et password.EntryType, fix string) {
 	fmt.Fprintf(os.Stderr, "⚠️  This %s is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, %s\n", what, fix) //nolint:errcheck // best-effort warning
 }
 
-// confirmOverwrite asks before p.action replaces an existing entry, unless
-// --force. Without a terminal it refuses instead: an "answer" read from
-// piped stdin would swallow the piped input (a note's body, say).
-func (p *Provider) confirmOverwrite(mgr *password.Manager, et password.EntryType) error {
+// confirmSave asks before p.action saves the entry, unless --force: when it
+// would replace an existing entry, or make a second one whose name differs
+// from an existing one only in case. Without a terminal it refuses instead:
+// an "answer" read from piped stdin would swallow the piped input (a note's
+// body, say).
+func (p *Provider) confirmSave(mgr *password.Manager, et password.EntryType) error {
 	if p.force {
 		return nil
 	}
+	k := vault.Key{Kind: et, Service: p.service, Username: p.username}
 	exists, err := mgr.EntryExists(p.service, p.username, et)
 	if err != nil {
 		return fmt.Errorf("check existing entry: %w", err)
 	}
-	if !exists {
-		return nil
-	}
-	who := p.service
-	if p.username != "" {
-		who += fmt.Sprintf(" (%s)", p.username)
+	name := password.EntryName(k)
+	var refusal, question string
+	if exists {
+		refusal = fmt.Sprintf("entry already exists for %s; re-run with --force to overwrite", name)
+		question = fmt.Sprintf("Entry already exists for %s. Overwrite? [y/N]: ", name)
+	} else {
+		twins, err := mgr.CaseTwins(k)
+		if err != nil {
+			return fmt.Errorf("check existing entries: %w", err)
+		}
+		if len(twins) == 0 {
+			return nil
+		}
+		twin := password.EntryName(twins[0])
+		refusal = fmt.Sprintf("an entry %s already exists, and names are case-sensitive; use that name, or re-run with --force to create %s too", twin, name)
+		question = fmt.Sprintf("An entry %s already exists, and names are case-sensitive. Create %s as well? [y/N]: ", twin, name)
 	}
 	if !stdinIsTerminal() {
-		return fmt.Errorf("entry already exists for %s; re-run with --force to overwrite", who)
+		return errors.New(refusal)
 	}
-	fmt.Fprintf(os.Stderr, "Entry already exists for %s. Overwrite? [y/N]: ", who) //nolint:errcheck // best-effort prompt
+	fmt.Fprint(os.Stderr, question) //nolint:errcheck // best-effort prompt
 	answer, err := p.readLine()
 	if err != nil {
 		return fmt.Errorf("read confirmation: %w", err)
@@ -879,4 +896,21 @@ func (p *Provider) readLine() (string, error) {
 		p.lines = bufio.NewReader(p.stdin)
 	}
 	return p.lines.ReadString('\n')
+}
+
+// withCaseHint adds to a not-found err the IDs of entries k may have meant,
+// when some differ from it only in case.
+func (p *Provider) withCaseHint(err error, k vault.Key) error {
+	if !errors.Is(err, vault.ErrNotFound) {
+		return err
+	}
+	twins, terr := password.NewManager(p.store).CaseTwins(k)
+	if terr != nil || len(twins) == 0 {
+		return err
+	}
+	ids := make([]string, len(twins))
+	for i, t := range twins {
+		ids[i] = t.String()
+	}
+	return fmt.Errorf("%w; did you mean %s? Names are case-sensitive", err, strings.Join(ids, " or "))
 }

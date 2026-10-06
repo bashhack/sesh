@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/setup"
@@ -192,6 +193,13 @@ func (p *Provider) ValidateRequest() error {
 	if _, err := p.store.Lookup(p.key()); err != nil {
 		if !errors.Is(err, vault.ErrNotFound) {
 			return fmt.Errorf("failed to look up the TOTP entry: %w", err)
+		}
+		missing := fmt.Sprintf("no TOTP entry found for service '%s'", p.serviceName)
+		if p.profile != "" {
+			missing += fmt.Sprintf(" with profile '%s'", p.profile)
+		}
+		if twins, terr := password.NewManager(p.store).CaseTwins(p.key()); terr == nil && len(twins) > 0 {
+			return fmt.Errorf("%s; did you mean %s? Names are case-sensitive", missing, password.EntryName(twins[0]))
 		}
 		if p.profile != "" {
 			return fmt.Errorf("no TOTP entry found for service '%s' with profile '%s'. Run 'sesh --service totp --setup' first", p.serviceName, p.profile)

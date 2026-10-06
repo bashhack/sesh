@@ -1101,3 +1101,50 @@ func TestStoreTOTP_QRWithoutAnAccountAsksToo(t *testing.T) {
 		t.Errorf("secret = %q, want it unchanged", got)
 	}
 }
+
+// Creating an entry that differs from an existing one only in case asks
+// first, as an overwrite does.
+func TestGeneratePassword_AsksBeforeANameInAnotherCase(t *testing.T) {
+	for name, tt := range map[string]struct {
+		answer, wantErr string
+		terminal, force bool
+		wantCreated     bool
+	}{
+		"no terminal":  {wantErr: "an entry GitHub (alice) already exists, and names are case-sensitive; use that name, or re-run with --force to create github (alice) too"},
+		"answered no":  {terminal: true, answer: "n\n", wantErr: "generate cancelled"},
+		"answered yes": {terminal: true, answer: "y\n", wantCreated: true},
+		"--force":      {force: true, wantCreated: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubStdinIsTerminal(t, tt.terminal)
+			store := seeded(t, map[string]string{"password/GitHub/alice": "old"})
+			p, _ := newTestProvider(store)
+			p.action, p.service, p.username, p.force, p.pwLength = "generate", "github", "alice", tt.force, 24
+			p.stdin = strings.NewReader(tt.answer)
+			defer testutil.DiscardStderr(t)()
+			_, err := p.GetCredentials()
+			switch {
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Errorf("err = %v, want it to contain %q", err, tt.wantErr)
+			case tt.wantErr == "" && err != nil:
+				t.Errorf("err = %v", err)
+			}
+			_, gerr := store.Get(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"})
+			if created := gerr == nil; created != tt.wantCreated {
+				t.Errorf("created = %v, want %v", created, tt.wantCreated)
+			}
+			if got := stored(t, store, "password/GitHub/alice"); got != "old" {
+				t.Errorf("the existing entry changed to %q", got)
+			}
+		})
+	}
+}
+
+func TestDeleteEntry_SuggestsANameInAnotherCase(t *testing.T) {
+	p, _ := newTestProvider(seeded(t, map[string]string{"password/GitHub/alice": "pw"}))
+	p.force = true
+	err := p.DeleteEntry("password/github/alice")
+	if !errors.Is(err, vault.ErrNotFound) || !strings.Contains(err.Error(), "did you mean password/GitHub/alice?") {
+		t.Errorf("DeleteEntry = %v, want not found with the suggestion", err)
+	}
+}
