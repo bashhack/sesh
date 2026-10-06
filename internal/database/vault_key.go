@@ -36,9 +36,9 @@ func UnlockID(verify []byte) string {
 
 // CheckKey confirms that the store's oracle holds this vault's key: that
 // the key record it was checked against is the one in the file the store
-// has open. The file at the vault's path can change between unlocking and
-// opening, when another sesh command's password change swaps in a new
-// vault; entries written then would be unreadable with the new vault's key.
+// has open. The vault's key can change between unlocking and opening, when
+// another sesh command changes the master password; entries written then
+// would be unreadable with the new key.
 // Callers run it right after Open, before any read or write.
 func (s *Store) CheckKey() error {
 	o, ok := s.oracle.(interface{ UnlockID() (string, error) })

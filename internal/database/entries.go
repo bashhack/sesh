@@ -72,6 +72,9 @@ func (s *Store) Get(k vault.Key) ([]byte, error) {
 	}
 	secret, err := s.oracle.DecryptEntry(encData, salt, entryAAD(k))
 	if err != nil {
+		if kerr := s.keyUnchanged(s.db); errors.Is(kerr, ErrVaultKeyChanged) {
+			err = kerr
+		}
 		return nil, fmt.Errorf("decrypt %s: %w", k, err)
 	}
 	s.audit("access", k.String(), "Get")
@@ -117,12 +120,15 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
 	if whole {
 		onConflict += `, settings = excluded.settings, created_at = excluded.created_at`
 	}
-	_, err = s.db.Exec(`
-		INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (kind, service, username) DO UPDATE SET `+onConflict,
-		string(e.Kind), e.Service, e.Username, encData, salt, settings, created, updated,
-	)
+	err = s.inTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
+			INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (kind, service, username) DO UPDATE SET `+onConflict,
+			string(e.Kind), e.Service, e.Username, encData, salt, settings, created, updated,
+		)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("store %s: %w", e.Key, err)
 	}
@@ -140,8 +146,12 @@ func (s *Store) SetSettings(k vault.Key, settings vault.Settings) error {
 	if err != nil {
 		return err
 	}
-	res, err := s.db.Exec(`UPDATE entries SET settings = ?, updated_at = ? WHERE kind = ? AND service = ? AND username = ?`,
-		col, time.Now().UTC(), string(k.Kind), k.Service, k.Username)
+	var res sql.Result
+	err = s.inTx(func(tx *sql.Tx) (err error) {
+		res, err = tx.Exec(`UPDATE entries SET settings = ?, updated_at = ? WHERE kind = ? AND service = ? AND username = ?`,
+			col, time.Now().UTC(), string(k.Kind), k.Service, k.Username)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("set settings of %s: %w", k, err)
 	}
@@ -211,7 +221,11 @@ func (s *Store) List(f vault.Filter) (_ []vault.Entry, err error) {
 
 // Delete implements vault.Store.
 func (s *Store) Delete(k vault.Key) error {
-	res, err := s.db.Exec(`DELETE FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(k.Kind), k.Service, k.Username)
+	var res sql.Result
+	err := s.inTx(func(tx *sql.Tx) (err error) {
+		res, err = tx.Exec(`DELETE FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(k.Kind), k.Service, k.Username)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("delete %s: %w", k, err)
 	}

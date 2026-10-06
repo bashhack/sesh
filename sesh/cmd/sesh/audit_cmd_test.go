@@ -374,3 +374,24 @@ func TestTouchMarker(t *testing.T) {
 		t.Errorf("existing file's time not updated: %v, %v", fi, err)
 	}
 }
+
+// A password change keeps the audit log, adds one event for itself, and
+// sesh audit shows what it did.
+func TestAudit_KeptThroughAPasswordChange(t *testing.T) {
+	auditTestVault(t)
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, stderr := rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("audit-password-1234", "new-password-5678", "new-password-5678")); err != nil {
+		t.Fatalf("rotate: %v\n%s", err, stderr)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "new-password-5678")
+	out, err := runAuditOut(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 5 || !strings.HasSuffix(lines[2], "  rekey   master password changed, 1 entry re-encrypted") ||
+		!strings.HasSuffix(lines[3], "  access  password     github (alice)") || !strings.HasSuffix(lines[4], "  modify  password     github (alice)") {
+		t.Errorf("audit log after the change:\n%s", out)
+	}
+}

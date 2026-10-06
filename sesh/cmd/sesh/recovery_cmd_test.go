@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"io"
 	"os"
@@ -526,31 +527,6 @@ func TestRotate_RefusesAnUnusableRecoveryRecordFirst(t *testing.T) {
 	}
 }
 
-// sesh recovery new and remove wait for no key change: one running could
-// carry the old record into its new vault and undo them.
-func TestRunRecovery_RefusesDuringAKeyChange(t *testing.T) {
-	env, k := recoverableVault(t)
-	release, err := lockKeyChange(env.dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	orig := recoveryPrompt
-	recoveryPrompt = func() passwordPromptConfig {
-		return withLines(withAnswer(interactivePrompt(t, "forgotten-pw-1234"), true), "x")
-	}
-	t.Cleanup(func() { recoveryPrompt = orig })
-	for _, cmd := range []string{"remove", "new"} {
-		restore := testutil.RedirectStderr(t)
-		err := runRecovery(agentTestApp(), []string{cmd})
-		restore()
-		if wantSub := "another sesh command is changing this vault's key"; err == nil || !strings.Contains(err.Error(), wantSub) {
-			t.Errorf("%s: err = %v, want it to contain %q", cmd, err, wantSub)
-		}
-	}
-	opensVault(t, k, env.dbPath)
-}
-
 // A recovery key record that didn't open the vault before a password change
 // isn't carried into the new vault, and the person is told.
 func TestRotate_DropsAStaleRecoveryRecord(t *testing.T) {
@@ -570,14 +546,23 @@ func TestRotate_DropsAStaleRecoveryRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.WriteRecovery(env.dbPath, recovery.NewRecord("another-vault", pub, w)); err != nil {
+	// Only a damaged or copied-in record is for another vault: sesh never
+	// saves one.
+	db, err := sql.Open("sqlite", env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO recovery (id, unlock_id, public_key, ephemeral_pub, ciphertext, created_at) VALUES (1, 'another-vault', ?, ?, ?, CURRENT_TIMESTAMP)`, pub, w.EphemeralPub, w.Ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	app, stderr := rekeyTestApp("y\n")
 	if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err != nil {
 		t.Fatalf("rotate: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stderr.String(), "Your recovery key's record was for another vault, so the new vault has none") {
+	if !strings.Contains(stderr.String(), "Your recovery key's record was for another vault, so it was removed") {
 		t.Errorf("stderr missing the note:\n%s", stderr)
 	}
 	if _, err := database.ReadRecovery(env.dbPath); !errors.Is(err, database.ErrNoRecovery) {

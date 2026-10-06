@@ -32,8 +32,13 @@ func ReadRecovery(dbPath string) (_ *RecoveryRecord, err error) {
 		return nil, err
 	}
 	defer func() { err = closeVault(db, err) }()
+	return scanRecovery(db)
+}
+
+// scanRecovery reads the recovery key record through q.
+func scanRecovery(q querier) (*RecoveryRecord, error) {
 	var r RecoveryRecord
-	err = db.QueryRow(`SELECT unlock_id, public_key, ephemeral_pub, ciphertext, created_at FROM recovery WHERE id = 1`).
+	err := q.QueryRow(`SELECT unlock_id, public_key, ephemeral_pub, ciphertext, created_at FROM recovery WHERE id = 1`).
 		Scan(&r.UnlockID, &r.PublicKey, &r.EphemeralPub, &r.Ciphertext, &r.CreatedAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -47,14 +52,37 @@ func ReadRecovery(dbPath string) (_ *RecoveryRecord, err error) {
 }
 
 // WriteRecovery makes r the recovery key record of the vault at dbPath,
-// replacing any earlier one.
+// replacing any earlier one. It refuses with ErrVaultKeyChanged when r was
+// made for a key record the vault no longer has.
 func WriteRecovery(dbPath string, r *RecoveryRecord) (err error) {
 	db, err := openExisting(dbPath)
 	if err != nil {
 		return err
 	}
 	defer func() { err = closeVault(db, err) }()
-	if _, err := db.Exec(`INSERT OR REPLACE INTO recovery (id, unlock_id, public_key, ephemeral_pub, ciphertext, created_at) VALUES (1, ?, ?, ?, ?, ?)`,
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	var verify []byte
+	if err := tx.QueryRow(`SELECT verify FROM vault_key WHERE id = 1`).Scan(&verify); err != nil {
+		_ = tx.Rollback() //nolint:errcheck // already failing
+		return fmt.Errorf("read the vault's key record: %w", err)
+	}
+	if UnlockID(verify) != r.UnlockID {
+		_ = tx.Rollback() //nolint:errcheck // already failing
+		return ErrVaultKeyChanged
+	}
+	if err := putRecovery(tx, r); err != nil {
+		_ = tx.Rollback() //nolint:errcheck // already failing
+		return err
+	}
+	return tx.Commit()
+}
+
+// putRecovery writes r as the recovery key record in tx.
+func putRecovery(tx *sql.Tx, r *RecoveryRecord) error {
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO recovery (id, unlock_id, public_key, ephemeral_pub, ciphertext, created_at) VALUES (1, ?, ?, ?, ?, ?)`,
 		r.UnlockID, r.PublicKey, r.EphemeralPub, r.Ciphertext, r.CreatedAt.UTC()); err != nil {
 		return fmt.Errorf("save the recovery key record: %w", err)
 	}

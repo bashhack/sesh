@@ -210,33 +210,16 @@ func cloneKey(k []byte) []byte {
 // new salt, and records the key record in a new vault. When another sesh
 // recorded one first, the password typed here is tried against that one.
 func (s *MasterPasswordSource) create() ([]byte, error) {
-	pw, err := s.newPassword()
+	pw, err := s.askNewPassword()
 	if err != nil {
 		return nil, err
 	}
 	defer secure.SecureZeroBytes(pw)
-
-	confirm, err := s.promptFunc("Confirm master password: ")
-	if err != nil {
-		return nil, fmt.Errorf("read confirmation: %w", err)
-	}
-	defer secure.SecureZeroBytes(confirm)
-
-	if !bytes.Equal(pw, confirm) {
-		return nil, fmt.Errorf("passwords do not match")
-	}
-
-	salt, err := GenerateSalt(32)
+	key, rec, err := newKeyRecord(pw)
 	if err != nil {
 		return nil, err
 	}
-	params := DefaultArgon2idParams()
-	key := DeriveKey(pw, salt, params)
-	verify, err := Encrypt(key, []byte(VerifyPlaintext))
-	if err != nil {
-		secure.SecureZeroBytes(key)
-		return nil, fmt.Errorf("create verify blob: %w", err)
-	}
+	salt, verify, params := rec.Salt, rec.Verify, rec.Params
 
 	db, err := openDB(s.dbPath)
 	if err != nil {
@@ -267,6 +250,55 @@ func (s *MasterPasswordSource) create() ([]byte, error) {
 	}
 	s.checkedAgainst(m.Verify)
 	return key, nil
+}
+
+// NewKey asks for a new master password, and returns the key it gives
+// with a new salt and the key record for it, for a password change. Nothing
+// is written. The caller zeroes the key.
+func (s *MasterPasswordSource) NewKey() ([]byte, UnlockMaterial, error) {
+	pw, err := s.askNewPassword()
+	if err != nil {
+		return nil, UnlockMaterial{}, err
+	}
+	defer secure.SecureZeroBytes(pw)
+	return newKeyRecord(pw)
+}
+
+// askNewPassword asks for a new master password and its confirmation. The
+// caller zeroes it.
+func (s *MasterPasswordSource) askNewPassword() ([]byte, error) {
+	pw, err := s.newPassword()
+	if err != nil {
+		return nil, err
+	}
+	confirm, err := s.promptFunc("Confirm master password: ")
+	if err != nil {
+		secure.SecureZeroBytes(pw)
+		return nil, fmt.Errorf("read confirmation: %w", err)
+	}
+	defer secure.SecureZeroBytes(confirm)
+	if !bytes.Equal(pw, confirm) {
+		secure.SecureZeroBytes(pw)
+		return nil, fmt.Errorf("passwords do not match")
+	}
+	return pw, nil
+}
+
+// newKeyRecord derives a key from pw and a new salt, and the key record
+// that opens with it. The caller zeroes the key.
+func newKeyRecord(pw []byte) ([]byte, UnlockMaterial, error) {
+	salt, err := GenerateSalt(32)
+	if err != nil {
+		return nil, UnlockMaterial{}, err
+	}
+	params := DefaultArgon2idParams()
+	key := DeriveKey(pw, salt, params)
+	verify, err := Encrypt(key, []byte(VerifyPlaintext))
+	if err != nil {
+		secure.SecureZeroBytes(key)
+		return nil, UnlockMaterial{}, fmt.Errorf("create verify blob: %w", err)
+	}
+	return key, UnlockMaterial{Salt: salt, Verify: verify, Params: params}, nil
 }
 
 // UnlockID is the id of the key record this source's key was checked

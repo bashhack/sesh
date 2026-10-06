@@ -278,7 +278,7 @@ func askNo(readLine func(string) (string, error), prompt string) (bool, error) {
 // needs only its public half, so there's no prompt. It returns a line to
 // show, or "" when Touch ID unlock wasn't on for the vault whose key record
 // had the id oldID.
-func rewrapTouchID(dbPath, oldID string, newKey []byte) string {
+func rewrapTouchID(dbPath, oldID, newID string, newKey []byte) string {
 	dataDir := filepath.Dir(dbPath)
 	f, err := touchid.ReadFile(dataDir)
 	if errors.Is(err, os.ErrNotExist) || (err == nil && f.UnlockID != oldID) {
@@ -288,17 +288,12 @@ func rewrapTouchID(dbPath, oldID string, newKey []byte) string {
 		err = errors.New("the new key wasn't available")
 	}
 	if err == nil {
-		mat, merr := database.ReadUnlockMaterial(dbPath)
-		err = merr
-		if err == nil {
-			id := agent.UnlockID(mat.Verify)
-			var w touchid.Wrapped
-			if w, err = touchid.Wrap(f.PublicKey, newKey, []byte(id)); err == nil {
-				nf := touchid.NewFile(id, f.KeyBlob, f.PublicKey, w)
-				nf.BiometryState = f.BiometryState // same Secure Enclave key
-				if err = nf.Write(dataDir); err == nil {
-					return "Touch ID unlock now opens the vault with the new master password."
-				}
+		var w touchid.Wrapped
+		if w, err = touchid.Wrap(f.PublicKey, newKey, []byte(newID)); err == nil {
+			nf := touchid.NewFile(newID, f.KeyBlob, f.PublicKey, w)
+			nf.BiometryState = f.BiometryState // same Secure Enclave key
+			if err = nf.Write(dataDir); err == nil {
+				return "Touch ID unlock now opens the vault with the new master password."
 			}
 		}
 	}
