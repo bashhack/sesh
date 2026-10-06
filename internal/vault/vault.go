@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/bashhack/sesh/internal/totp"
 )
@@ -82,8 +83,12 @@ func ParseKey(s string) (Key, error) {
 	return k, nil
 }
 
+// MaxNameLength is the most characters a service name or username can have.
+const MaxNameLength = 256
+
 // Validate checks that k can name an entry: a known kind, a service name,
-// and names without "/" (which the text form uses) or control characters.
+// and names without "/" (which the text form uses), control characters, or
+// a space at either end, of at most MaxNameLength characters.
 func (k Key) Validate() error {
 	if !k.Kind.Valid() {
 		return fmt.Errorf("unknown kind %q", k.Kind)
@@ -97,6 +102,12 @@ func (k Key) Validate() error {
 		}
 		if strings.IndexFunc(f.v, unicode.IsControl) >= 0 {
 			return fmt.Errorf("the %s %q contains a control character", f.name, f.v)
+		}
+		if strings.TrimSpace(f.v) != f.v {
+			return fmt.Errorf("the %s %q starts or ends with a space", f.name, f.v)
+		}
+		if n := utf8.RuneCountInString(f.v); n > MaxNameLength {
+			return fmt.Errorf("the %s is %d characters long; the most is %d", f.name, n, MaxNameLength)
 		}
 	}
 	return nil
