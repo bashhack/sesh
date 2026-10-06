@@ -207,16 +207,21 @@ func TestProvider_GetCredentials_StderrHintQuoting(t *testing.T) {
 	}{
 		"simple service name": {
 			serviceName: "github",
-			wantSubstr:  `--service-name "github"`,
+			wantSubstr:  `--service-name github --clip`,
 		},
 		"service name with spaces": {
 			serviceName: "my service",
-			wantSubstr:  `--service-name "my service"`,
+			wantSubstr:  `--service-name 'my service'`,
 		},
 		"profile with spaces": {
 			serviceName: "github",
 			profile:     "work account",
-			wantSubstr:  `--profile "work account"`,
+			wantSubstr:  `--profile 'work account'`,
+		},
+		// Double quotes would let the shell expand $ and backticks.
+		"a dollar sign": {
+			serviceName: "pay$ite",
+			wantSubstr:  `--service-name 'pay$ite'`,
 		},
 	}
 
@@ -274,7 +279,7 @@ func TestProvider_GetCredentials_ClipTipOnlyAtATerminal(t *testing.T) {
 			t.Fatalf("GetCredentials: %v", err)
 		}
 		stderr := restore()
-		const tip = `💡 To copy it instead: sesh --service totp --service-name "github" --clip`
+		const tip = `💡 To copy it instead: sesh --service totp --service-name github --clip`
 		if got := strings.Contains(stderr, tip); got != terminal {
 			t.Errorf("stdout a terminal: %v; stderr = %q, want the tip: %v", terminal, stderr, terminal)
 		}

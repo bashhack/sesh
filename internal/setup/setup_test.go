@@ -405,9 +405,9 @@ func TestTOTPSetupHandler_showTOTPSetupCompletionMessage(t *testing.T) {
 			profile:     "",
 			wantOutput: []string{
 				"✅ Setup complete! Generate TOTP codes with:",
-				"sesh --service totp --service-name 'github'",
+				"sesh --service totp --service-name github\n",
 				"Copy to clipboard with:",
-				"sesh --service totp --service-name 'github' --clip",
+				"sesh --service totp --service-name github --clip",
 			},
 		},
 		"service with profile": {
@@ -415,9 +415,16 @@ func TestTOTPSetupHandler_showTOTPSetupCompletionMessage(t *testing.T) {
 			profile:     "work",
 			wantOutput: []string{
 				"✅ Setup complete! Generate TOTP codes with:",
-				"sesh --service totp --service-name 'github' --profile 'work'",
+				"sesh --service totp --service-name github --profile work\n",
 				"Copy to clipboard with:",
-				"sesh --service totp --service-name 'github' --profile 'work' --clip",
+				"sesh --service totp --service-name github --profile work --clip",
+			},
+		},
+		"names that need quoting": {
+			serviceName: "Bob's Bank",
+			profile:     "my $alary",
+			wantOutput: []string{
+				`sesh --service totp --service-name 'Bob'\''s Bank' --profile 'my $alary'`,
 			},
 		},
 	}

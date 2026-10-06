@@ -991,3 +991,18 @@ func TestSuggestedCommands_QuoteNames(t *testing.T) {
 		t.Errorf("err = %v, want the name quoted", err)
 	}
 }
+
+// The warning names the kind of secret it's about.
+func TestGeneratePassword_WarningNamesTheKind(t *testing.T) {
+	p, _ := newTestProvider(vault.NewMemStore())
+	p.action, p.service, p.entryType, p.pwLength = "generate", "stripe", "api_key", 8
+	restore := testutil.RedirectStderr(t)
+	_, err := p.GetCredentials()
+	stderr := restore()
+	if err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+	if !strings.Contains(stderr, "This API key is easy to guess") {
+		t.Errorf("stderr = %q, want the warning to name an API key", stderr)
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -154,9 +155,9 @@ func (p *Provider) ValidateRequest() error {
 			return fmt.Errorf("--service-name is required for generate action")
 		}
 		if p.entryType == string(password.EntryTypeTOTP) {
-			store := "sesh --service password --action totp-store --service-name " + shellQuote(p.service)
+			store := "sesh --service password --action totp-store --service-name " + shell.Quote(p.service)
 			if p.username != "" {
-				store += " --username " + shellQuote(p.username)
+				store += " --username " + shell.Quote(p.username)
 			}
 			return fmt.Errorf("sesh can't generate a TOTP secret: the service gives you one. Store it with: %s", store)
 		}
@@ -428,11 +429,11 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 	}
 	// A typed password only; API keys and notes come from elsewhere.
 	if et == password.EntryTypePassword && password.IsWeak(pw, p.service, p.username) {
-		generate := "sesh --service password --action generate --service-name " + shellQuote(p.service)
+		generate := "sesh --service password --action generate --service-name " + shell.Quote(p.service)
 		if p.username != "" {
-			generate += " --username " + shellQuote(p.username)
+			generate += " --username " + shell.Quote(p.username)
 		}
-		warnWeak("run: " + generate)
+		warnWeak(et, "run: "+generate)
 	}
 
 	return provider.Credentials{
@@ -461,7 +462,7 @@ func (p *Provider) generateAndStore(mgr *password.Manager) ([]byte, string, erro
 	}
 	// Only a short --length makes one weak; the default never is.
 	if password.IsWeak(generated, p.service, p.username) {
-		warnWeak("use --length 12 or more")
+		warnWeak(p.effectiveEntryType(), "use --length 12 or more")
 	}
 
 	desc := p.service
@@ -839,8 +840,12 @@ func countOf(n int, thing string) string {
 	return fmt.Sprintf("%d %ss", n, thing)
 }
 
-// warnWeak tells the user the password just stored is easy to guess, and
-// how to get a strong one.
-func warnWeak(fix string) {
-	fmt.Fprintf(os.Stderr, "⚠️  This password is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, %s\n", fix) //nolint:errcheck // best-effort warning
+// warnWeak tells the user the secret of kind et just stored is easy to
+// guess, and how to get a strong one.
+func warnWeak(et password.EntryType, fix string) {
+	what := map[password.EntryType]string{password.EntryTypeAPIKey: "API key", password.EntryTypeNote: "note"}[et]
+	if what == "" {
+		what = "password"
+	}
+	fmt.Fprintf(os.Stderr, "⚠️  This %s is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, %s\n", what, fix) //nolint:errcheck // best-effort warning
 }

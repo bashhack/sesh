@@ -11,6 +11,7 @@ import (
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/setup"
+	"github.com/bashhack/sesh/internal/shell"
 	internalTotp "github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -77,9 +78,9 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	creds.DisplayInfo = fmt.Sprintf("Next: %s  |  Time left: %ds\n🔑 TOTP code for %s", c.next, c.secondsLeft, c.desc)
 
 	if stdoutIsTerminal() {
-		cmd := fmt.Sprintf("sesh --service totp --service-name %q", p.serviceName)
+		cmd := "sesh --service totp --service-name " + shell.Quote(p.serviceName)
 		if p.profile != "" {
-			cmd += fmt.Sprintf(" --profile %q", p.profile)
+			cmd += " --profile " + shell.Quote(p.profile)
 		}
 		fmt.Fprintf(os.Stderr, "💡 To copy it instead: %s --clip\n", cmd)
 	}

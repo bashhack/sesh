@@ -15,6 +15,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -660,14 +661,14 @@ func (h *TOTPSetupHandler) captureManualEntry() (string, error) {
 
 // showTOTPSetupCompletionMessage displays the final success message with usage instructions
 func (h *TOTPSetupHandler) showTOTPSetupCompletionMessage(serviceName, profile string) {
-	profileFlag := ""
+	cmd := "sesh --service totp --service-name " + shell.Quote(serviceName)
 	if profile != "" {
-		profileFlag = fmt.Sprintf(" --profile '%s'", profile)
+		cmd += " --profile " + shell.Quote(profile)
 	}
 	fmt.Println("✅ Setup complete! Generate TOTP codes with:")
-	fmt.Printf("  sesh --service totp --service-name '%s'%s\n", serviceName, profileFlag)
+	fmt.Printf("  %s\n", cmd)
 	fmt.Println("Copy to clipboard with:")
-	fmt.Printf("  sesh --service totp --service-name '%s'%s --clip\n", serviceName, profileFlag)
+	fmt.Printf("  %s --clip\n", cmd)
 }
 
 // Setup performs the TOTP setup
