@@ -47,6 +47,12 @@ func TestKey_Validate(t *testing.T) {
 		{Kind: vault.KindPassword, Service: "dev\u200dteam"},
 		// An emoji with its presentation selector (a heart).
 		{Kind: vault.KindPassword, Service: "I \u2764\ufe0f NY"},
+		// Emoji whose base isn't a symbol (‼️, ℹ️, 〽️).
+		{Kind: vault.KindPassword, Service: "alerts \u203c\ufe0f \u2139\ufe0f \u303d\ufe0f"},
+		// A Japanese name with an ideographic variation selector (葛󠄀飾).
+		{Kind: vault.KindPassword, Service: "\u845b\U000E0100\u98fe"},
+		// Standardized variants after Han and Myanmar letters.
+		{Kind: vault.KindPassword, Service: "\u4e0d\ufe00 \u1000\ufe00"},
 		// A flag emoji, spelled with tag characters (Scotland).
 		{Kind: vault.KindPassword, Service: "bank \U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F"},
 	} {

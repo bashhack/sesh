@@ -188,7 +188,7 @@ func hasHiddenRune(v string) bool {
 		case isTag(r):
 			return true
 		case isVariationSelector(r):
-			if i == 0 || (!unicode.IsSymbol(rs[i-1]) && !strings.ContainsRune("0123456789#*", rs[i-1])) {
+			if i == 0 || !takesVariationSelector(rs[i-1]) {
 				return true
 			}
 		case r == 0x200C, r == 0x200D:
@@ -200,9 +200,21 @@ func hasHiddenRune(v string) bool {
 }
 
 // isVariationSelector reports whether r picks how the character before it
-// is drawn (such as emoji or text style); after a letter it shows nothing.
+// is drawn, such as emoji or text style, or a Han character's variant.
 func isVariationSelector(r rune) bool {
 	return (r >= 0xFE00 && r <= 0xFE0F) || (r >= 0xE0100 && r <= 0xE01EF)
+}
+
+// takesVariationSelector reports whether a variation selector after r
+// changes how r looks: after a symbol, a keycap's digit, # or *, the emoji
+// whose base isn't a symbol (‼ ⁉ ℹ 〰 〽), or a Han or Myanmar letter. After
+// any other letter it shows nothing.
+func takesVariationSelector(r rune) bool {
+	switch {
+	case unicode.IsSymbol(r), strings.ContainsRune("0123456789#*\u203c\u2049\u2139\u3030\u303d", r):
+		return true
+	}
+	return unicode.Is(unicode.Han, r) || unicode.Is(unicode.Myanmar, r)
 }
 
 // AWSKey is the entry holding an AWS profile's MFA secret: the TOTP entry
