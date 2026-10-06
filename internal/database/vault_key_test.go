@@ -5,7 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 var (
@@ -37,39 +40,43 @@ func hasKeyCheck(t *testing.T, s *Store) bool {
 	return n == 1
 }
 
-// wantWrongKey fails unless err is a WrongKeyError for the given sources.
-func wantWrongKey(t *testing.T, err error, vaultSource, source string) {
+// wantWrongKey fails unless err is a WrongKeyError for the given recorded source.
+func wantWrongKey(t *testing.T, err error, vaultSource string) {
 	t.Helper()
 	var wk *WrongKeyError
 	if !errors.As(err, &wk) {
 		t.Fatalf("err = %v, want a WrongKeyError", err)
 	}
-	if wk.VaultSource != vaultSource || wk.Source != source {
-		t.Errorf("WrongKeyError = %+v, want vault source %q, source %q", wk, vaultSource, source)
+	if wk.VaultSource != vaultSource {
+		t.Errorf("WrongKeyError = %+v, want vault source %q", wk, vaultSource)
 	}
 }
 
 func TestCheckKey_NewVaultRecordsAndChecksItsKey(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "passwords.db")
-	if err := openWithKey(t, dbPath, keyA).CheckKey("password"); err != nil {
+	if err := openWithKey(t, dbPath, keyA).CheckKey(); err != nil {
 		t.Fatalf("first CheckKey: %v", err)
 	}
 
-	if err := openWithKey(t, dbPath, keyA).CheckKey("password"); err != nil {
+	if err := openWithKey(t, dbPath, keyA).CheckKey(); err != nil {
 		t.Errorf("same key, same source: %v", err)
 	}
-	wantWrongKey(t, openWithKey(t, dbPath, keyB).CheckKey("password"), "password", "password")
-	wantWrongKey(t, openWithKey(t, dbPath, keyB).CheckKey("keychain"), "password", "keychain")
+	wantWrongKey(t, openWithKey(t, dbPath, keyB).CheckKey(), "password")
 }
 
+// entryX is an entry the key tests store, so the vault has one to decrypt.
+var entryX = vault.Key{Kind: vault.KindPassword, Service: "x"}
+
+// A vault with entries but no check value yet is checked by decrypting an
+// entry from the entries table.
 func TestCheckKey_VaultFromBeforeTheCheck(t *testing.T) {
 	t.Run("right key records the check", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "passwords.db")
-		if err := openWithKey(t, dbPath, keyA).SetSecret("me", "sesh-password/password/x", []byte("v")); err != nil {
+		if err := openWithKey(t, dbPath, keyA).Put(entryX, []byte("v")); err != nil {
 			t.Fatal(err)
 		}
 		s := openWithKey(t, dbPath, keyA)
-		if err := s.CheckKey("password"); err != nil {
+		if err := s.CheckKey(); err != nil {
 			t.Fatalf("CheckKey: %v", err)
 		}
 		if !hasKeyCheck(t, s) {
@@ -78,11 +85,11 @@ func TestCheckKey_VaultFromBeforeTheCheck(t *testing.T) {
 	})
 	t.Run("wrong key is refused and records nothing", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "passwords.db")
-		if err := openWithKey(t, dbPath, keyA).SetSecret("me", "sesh-password/password/x", []byte("v")); err != nil {
+		if err := openWithKey(t, dbPath, keyA).Put(entryX, []byte("v")); err != nil {
 			t.Fatal(err)
 		}
 		s := openWithKey(t, dbPath, keyB)
-		wantWrongKey(t, s.CheckKey("password"), "", "password")
+		wantWrongKey(t, s.CheckKey(), "")
 		if hasKeyCheck(t, s) {
 			t.Error("a refused key recorded a check value")
 		}
@@ -92,16 +99,16 @@ func TestCheckKey_VaultFromBeforeTheCheck(t *testing.T) {
 func TestVerifyKey_NeverWrites(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "passwords.db")
 	s := openWithKey(t, dbPath, keyA)
-	if err := s.SetSecret("me", "sesh-password/password/x", []byte("v")); err != nil {
+	if err := s.Put(entryX, []byte("v")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.VerifyKey("password"); err != nil {
+	if err := s.VerifyKey(); err != nil {
 		t.Fatalf("VerifyKey with the right key: %v", err)
 	}
 	if hasKeyCheck(t, s) {
 		t.Error("VerifyKey recorded a check value")
 	}
-	wantWrongKey(t, openWithKey(t, dbPath, keyB).VerifyKey("password"), "", "password")
+	wantWrongKey(t, openWithKey(t, dbPath, keyB).VerifyKey(), "")
 }
 
 func TestRecordedKeySource(t *testing.T) {
@@ -109,11 +116,11 @@ func TestRecordedKeySource(t *testing.T) {
 	if got, err := RecordedKeySource(s.Path()); err != nil || got != "" {
 		t.Fatalf("before any key check = %q, %v; want none", got, err)
 	}
-	if err := s.CheckKey("keychain"); err != nil {
+	if err := s.CheckKey(); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := RecordedKeySource(s.Path()); err != nil || got != "keychain" {
-		t.Errorf("after a keychain key check = %q, %v", got, err)
+	if got, err := RecordedKeySource(s.Path()); err != nil || got != "password" {
+		t.Errorf("after a key check = %q, %v; want password", got, err)
 	}
 	if got, err := RecordedKeySource(filepath.Join(t.TempDir(), "missing.db")); err == nil {
 		t.Errorf("a missing vault = %q, want an error", got)
@@ -132,15 +139,32 @@ func TestRecordedKeySource_UnusualPaths(t *testing.T) {
 			if err != nil {
 				t.Skipf("the vault itself doesn't open at this path: %v", err)
 			}
-			if err := s.CheckKey("keychain"); err != nil {
+			if err := s.CheckKey(); err != nil {
 				t.Fatal(err)
 			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if got, err := RecordedKeySource(path); err != nil || got != "keychain" {
-				t.Errorf("RecordedKeySource = %q, %v; want keychain", got, err)
+			if got, err := RecordedKeySource(path); err != nil || got != "password" {
+				t.Errorf("RecordedKeySource = %q, %v; want password", got, err)
 			}
 		})
+	}
+}
+
+// A vault whose key was kept in the macOS Keychain is refused by name.
+func TestCheckKey_KeychainVault(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "passwords.db")
+	s := openWithKey(t, dbPath, keyA)
+	if err := s.CheckKey(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE vault_key SET key_source = 'keychain'`); err != nil {
+		t.Fatal(err)
+	}
+	err := openWithKey(t, dbPath, keyB).CheckKey()
+	wantWrongKey(t, err, "keychain")
+	if wantSub := "kept in the macOS Keychain, which sesh no longer supports"; !strings.Contains(err.Error(), wantSub) {
+		t.Errorf("err = %v, want it to contain %q", err, wantSub)
 	}
 }

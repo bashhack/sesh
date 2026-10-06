@@ -3,10 +3,7 @@ package provider
 
 import (
 	"fmt"
-	"strings"
 	"time"
-
-	"github.com/bashhack/sesh/internal/env"
 )
 
 // FlagSet defines the interface for registering flags
@@ -50,13 +47,13 @@ type ServiceProvider interface {
 	// ListEntries returns the list of entries for this provider
 	ListEntries() ([]ProviderEntry, error)
 
-	// DeleteEntry deletes an entry from the keychain
+	// DeleteEntry deletes an entry from the vault
 	DeleteEntry(id string) error
 
 	// ValidateRequest performs early validation of the request
 	// This should check:
 	// - Invalid flag combinations for this provider
-	// - Whether required keychain entries exist
+	// - Whether required vault entries exist
 	// - Any other provider-specific validation
 	// This allows fail-fast behavior before expensive operations
 	ValidateRequest() error
@@ -126,34 +123,6 @@ func (c *Clock) TimeNow() time.Time {
 // SecondsLeftInWindow returns seconds remaining in the current 30-second TOTP window.
 func (c *Clock) SecondsLeftInWindow() int64 {
 	return 30 - (c.TimeNow().Unix() % 30)
-}
-
-// KeyUser provides lazy-initialized OS user lookup. Embed in provider structs
-// alongside a keyUser string field set during SetupFlags.
-type KeyUser struct {
-	User string
-}
-
-// EnsureUser sets User to the current OS user if it is empty.
-func (k *KeyUser) EnsureUser() error {
-	if k.User != "" {
-		return nil
-	}
-	var err error
-	k.User, err = env.GetCurrentUser()
-	if err != nil {
-		return fmt.Errorf("failed to get current user: %w", err)
-	}
-	return nil
-}
-
-// ParseEntryID splits an entry ID of the form "service:account" into its parts.
-func ParseEntryID(id string) (service, account string, err error) {
-	parts := strings.SplitN(id, ":", 2)
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("invalid entry ID format: expected 'service:account', got %q", id)
-	}
-	return parts[0], parts[1], nil
 }
 
 // Credentials represents generic credentials returned by a provider

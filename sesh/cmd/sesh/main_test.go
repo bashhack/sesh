@@ -2,23 +2,18 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
-	"github.com/bashhack/sesh/internal/database"
-	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/provider"
 	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
 	totpProvider "github.com/bashhack/sesh/internal/provider/totp"
 	"github.com/bashhack/sesh/internal/testutil"
 	totpMocks "github.com/bashhack/sesh/internal/totp/mocks"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // TestHelperProcess is needed for the testutil.MockExecCommand function
@@ -28,16 +23,48 @@ func TestHelperProcess(_ *testing.T) {
 
 // testHarness bundles a test App with its mock dependencies and output buffers.
 type testHarness struct {
-	app      *App
-	stdout   *bytes.Buffer
-	stderr   *bytes.Buffer
-	keychain *mocks.MockProvider
-	aws      *awsMocks.MockProvider
-	totp     *totpMocks.MockProvider
+	app    *App
+	stdout *bytes.Buffer
+	stderr *bytes.Buffer
+	store  *harnessStore
+	aws    *awsMocks.MockProvider
+	totp   *totpMocks.MockProvider
+}
+
+// harnessStore is an in-memory vault whose List and Delete can be made to
+// fail.
+type harnessStore struct {
+	*vault.MemStore
+	listErr, deleteErr error
+}
+
+func (s *harnessStore) List(f vault.Filter) ([]vault.Entry, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.MemStore.List(f)
+}
+
+func (s *harnessStore) Delete(k vault.Key) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	return s.MemStore.Delete(k)
+}
+
+// put stores a TOTP secret under the entry id names (kind/service[/username]).
+func (s *harnessStore) put(id string) {
+	k, err := vault.ParseKey(id)
+	if err != nil {
+		panic(err)
+	}
+	if err := s.Put(k, []byte("JBSWY3DPEHPK3PXP")); err != nil {
+		panic(err)
+	}
 }
 
 func newTestHarness() *testHarness {
-	mockKC := &mocks.MockProvider{}
+	mockKC := &harnessStore{MemStore: vault.NewMemStore()}
 	mockAWS := &awsMocks.MockProvider{}
 	mockTOTP := &totpMocks.MockProvider{}
 
@@ -61,11 +88,11 @@ func newTestHarness() *testHarness {
 			Stderr:        stderrBuf,
 			VersionInfo:   VersionInfo{Version: "test-version", Commit: "test-commit", Date: "test-date"},
 		},
-		stdout:   stdoutBuf,
-		stderr:   stderrBuf,
-		keychain: mockKC,
-		aws:      mockAWS,
-		totp:     mockTOTP,
+		stdout: stdoutBuf,
+		stderr: stderrBuf,
+		store:  mockKC,
+		aws:    mockAWS,
+		totp:   mockTOTP,
 	}
 }
 
@@ -272,24 +299,15 @@ func TestRun_ProviderSpecificFlags(t *testing.T) {
 		"aws with valid profile flag": {
 			args: []string{"sesh", "--service", "aws", "--profile", "dev", "--list"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return []keychain.KeychainEntry{
-						{Service: "sesh-aws-default", Account: "testuser"},
-						{Service: "sesh-aws-dev", Account: "testuser"},
-					}, nil
-				}
+				h.store.put("totp/aws/default")
+				h.store.put("totp/aws/dev")
 			},
 			wantExitCode: 0,
 		},
 		"totp with service-name flag": {
 			args: []string{"sesh", "--service", "totp", "--service-name", "github", "--clip"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.GetSecretFunc = func(account, service string) ([]byte, error) {
-					if service == "sesh-totp/github" {
-						return []byte("JBSWY3DPEHPK3PXP"), nil // Example TOTP secret
-					}
-					return nil, fmt.Errorf("not found")
-				}
+				h.store.put("totp/github")
 
 				h.totp.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
 					return "123456", "654321", nil
@@ -407,12 +425,7 @@ func TestRun_Commands(t *testing.T) {
 			},
 		},
 		"list entries": {
-			args: []string{"sesh", "--service", "aws", "--list"},
-			setupMocks: func(h *testHarness) {
-				h.keychain.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return []keychain.KeychainEntry{}, nil
-				}
-			},
+			args:         []string{"sesh", "--service", "aws", "--list"},
 			wantExitCode: 0,
 			checkStdout: func(t *testing.T, stdout string) {
 				if !strings.Contains(stdout, "Entries for aws") {
@@ -423,18 +436,14 @@ func TestRun_Commands(t *testing.T) {
 		"list entries error": {
 			args: []string{"sesh", "--service", "aws", "--list"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.ListEntriesFunc = func(prefix string) ([]keychain.KeychainEntry, error) {
-					return nil, fmt.Errorf("keychain error")
-				}
+				h.store.listErr = fmt.Errorf("store error")
 			},
 			wantExitCode: 1,
 		},
 		"delete entry": {
-			args: []string{"sesh", "--service", "totp", "--delete", "sesh-totp/github:user"},
+			args: []string{"sesh", "--service", "totp", "--delete", "totp/github"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.DeleteEntryFunc = func(account, service string) error {
-					return nil
-				}
+				h.store.put("totp/github")
 			},
 			wantExitCode: 0,
 		},
@@ -442,12 +451,11 @@ func TestRun_Commands(t *testing.T) {
 			args:         []string{"sesh", "--service", "totp", "--delete", "bad-id"},
 			wantExitCode: 1,
 		},
-		"delete entry keychain error": {
-			args: []string{"sesh", "--service", "totp", "--delete", "sesh-totp/github:user"},
+		"delete entry store error": {
+			args: []string{"sesh", "--service", "totp", "--delete", "totp/github"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.DeleteEntryFunc = func(account, service string) error {
-					return fmt.Errorf("keychain delete failed")
-				}
+				h.store.put("totp/github")
+				h.store.deleteErr = fmt.Errorf("store delete failed")
 			},
 			wantExitCode: 1,
 			checkStderr: func(t *testing.T, stderr string) {
@@ -463,9 +471,6 @@ func TestRun_Commands(t *testing.T) {
 		"clip error": {
 			args: []string{"sesh", "--service", "totp", "--service-name", "github", "--clip"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, fmt.Errorf("secret not found")
-				}
 				h.app.ClipboardCopy = func(text string) error {
 					return fmt.Errorf("clipboard unavailable")
 				}
@@ -475,9 +480,6 @@ func TestRun_Commands(t *testing.T) {
 		"generate credentials error": {
 			args: []string{"sesh", "--service", "totp", "--service-name", "github"},
 			setupMocks: func(h *testHarness) {
-				h.keychain.GetSecretFunc = func(account, service string) ([]byte, error) {
-					return nil, fmt.Errorf("secret not found")
-				}
 			},
 			wantExitCode: 1,
 		},
@@ -601,128 +603,6 @@ func TestRun_FlagValidation(t *testing.T) {
 	}
 }
 
-// flockMockKC satisfies the two-method interface that database.KeychainSource
-// consumes. It is goroutine-safe and tracks call counts so tests can assert on
-// how many times ensureMasterKey crossed into the generate-and-store branch.
-//
-// Fields are ordered pointer-heavy first so govet's fieldalignment is happy.
-type flockMockKC struct {
-	getErr error
-	setErr error
-
-	// beforeGet fires before GetSecret reads the stored state. The callback
-	// receives the current call count (1-indexed) so tests can simulate a
-	// concurrent state change between specific calls — e.g. inject a stored
-	// key right before ensureMasterKey's post-lock double-check.
-	beforeGet func(callNum int32)
-
-	stored []byte
-	mu     sync.Mutex
-
-	getCount atomic.Int32
-	setCount atomic.Int32
-}
-
-func (m *flockMockKC) GetSecret(_, _ string) ([]byte, error) {
-	n := m.getCount.Add(1)
-	if fn := m.beforeGet; fn != nil {
-		fn(n)
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.getErr != nil {
-		return nil, m.getErr
-	}
-	if m.stored == nil {
-		return nil, keychain.ErrNotFound
-	}
-	return append([]byte{}, m.stored...), nil
-}
-
-func (m *flockMockKC) SetSecret(_, _ string, secret []byte) error {
-	m.setCount.Add(1)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.setErr != nil {
-		return m.setErr
-	}
-	m.stored = append([]byte{}, secret...)
-	return nil
-}
-
-func TestEnsureMasterKey_FastPath(t *testing.T) {
-	// Stored value is the hex-encoded form of 32 raw bytes; KeychainSource
-	// decodes on read.
-	kc := &flockMockKC{stored: []byte(strings.Repeat("ab", 32))}
-	ks := database.NewKeychainSource(kc, "testuser")
-
-	if err := ensureMasterKey(ks, t.TempDir()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got := kc.setCount.Load(); got != 0 {
-		t.Errorf("SetSecret call count = %d, want 0 on fast path", got)
-	}
-	if got := kc.getCount.Load(); got != 1 {
-		t.Errorf("GetSecret call count = %d, want 1 (fast path only)", got)
-	}
-}
-
-func TestEnsureMasterKey_SlowPath_Generates(t *testing.T) {
-	kc := &flockMockKC{}
-	ks := database.NewKeychainSource(kc, "testuser")
-
-	if err := ensureMasterKey(ks, t.TempDir()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got := kc.setCount.Load(); got != 1 {
-		t.Errorf("SetSecret call count = %d, want 1 on slow path", got)
-	}
-	// Stored form is hex-encoded (2 ASCII chars per raw byte).
-	if len(kc.stored) != 64 {
-		t.Errorf("stored hex length = %d, want 64 (hex of 32 raw bytes)", len(kc.stored))
-	}
-}
-
-func TestEnsureMasterKey_SlowPath_DoubleCheck(t *testing.T) {
-	// The fast-path GetSecret returns ErrNotFound, but by the time we
-	// acquire the flock another process has stored a key. The post-lock
-	// re-read must see it and skip generation — otherwise we'd orphan
-	// whatever the other process already encrypted.
-	kc := &flockMockKC{}
-	kc.beforeGet = func(n int32) {
-		if n == 2 {
-			kc.mu.Lock()
-			// Hex-encoded form of a 32-byte key (all 0xCD).
-			kc.stored = []byte(strings.Repeat("cd", 32))
-			kc.mu.Unlock()
-		}
-	}
-	ks := database.NewKeychainSource(kc, "testuser")
-
-	if err := ensureMasterKey(ks, t.TempDir()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got := kc.setCount.Load(); got != 0 {
-		t.Errorf("SetSecret call count = %d, want 0 when double-check finds a key", got)
-	}
-}
-
-func TestEnsureMasterKey_NonNotFoundErrorIsSurfaced(t *testing.T) {
-	sentinel := errors.New("keychain locked")
-	kc := &flockMockKC{getErr: sentinel}
-	ks := database.NewKeychainSource(kc, "testuser")
-
-	err := ensureMasterKey(ks, t.TempDir())
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	// Must not generate a new key when the read failure is ambiguous —
-	// doing so would orphan the existing (undecryptable) data.
-	if got := kc.setCount.Load(); got != 0 {
-		t.Errorf("SetSecret call count = %d, want 0 on ambiguous get error", got)
-	}
-}
-
 func TestArgsParse(t *testing.T) {
 	for name, tt := range map[string]struct {
 		args []string
@@ -759,7 +639,6 @@ func TestNeedsCredentialStore(t *testing.T) {
 		"short -h":              {args: []string{"sesh", "-h"}, want: false},
 		"--version":             {args: []string{"sesh", "--version"}, want: false},
 		"--list-services":       {args: []string{"sesh", "--list-services"}, want: false},
-		"--migrate":             {args: []string{"sesh", "--migrate"}, want: false},
 		"--service aws":         {args: []string{"sesh", "--service", "aws"}, want: true},
 		"--service aws --help":  {args: []string{"sesh", "--service", "aws", "--help"}, want: false},
 		"--service aws --list":  {args: []string{"sesh", "--service", "aws", "--list"}, want: true},
@@ -771,41 +650,6 @@ func TestNeedsCredentialStore(t *testing.T) {
 				t.Errorf("needsCredentialStore(%v) = %v, want %v", tc.args, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestEnsureMasterKey_Concurrent(t *testing.T) {
-	// Stress-test the flock: N goroutines race through ensureMasterKey
-	// against a shared keychain. Exactly one must generate and store.
-	kc := &flockMockKC{}
-	ks := database.NewKeychainSource(kc, "testuser")
-	dataDir := t.TempDir()
-
-	const n = 20
-	errs := make(chan error, n)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for range n {
-		wg.Go(func() {
-			<-start
-			errs <- ensureMasterKey(ks, dataDir)
-		})
-	}
-	close(start)
-	wg.Wait()
-	close(errs)
-
-	for err := range errs {
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-	}
-	if got := kc.setCount.Load(); got != 1 {
-		t.Errorf("SetSecret call count = %d across %d concurrent invocations, want exactly 1", got, n)
-	}
-	// Stored form is hex-encoded (2 ASCII chars per raw byte).
-	if len(kc.stored) != 64 {
-		t.Errorf("stored hex length = %d, want 64 (hex of 32 raw bytes)", len(kc.stored))
 	}
 }
 

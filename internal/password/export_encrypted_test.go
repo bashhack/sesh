@@ -4,50 +4,12 @@ import (
 	"bytes"
 	"strings"
 	"testing"
-
-	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/keychain/mocks"
 )
 
 func newEncryptedTestManager(t *testing.T) *Manager {
 	t.Helper()
-	data := map[string][]byte{}
-	desc := map[string]string{}
-	kc := &mocks.MockProvider{
-		GetSecretFunc: func(account, service string) ([]byte, error) {
-			v, ok := data[service]
-			if !ok {
-				return nil, keychain.ErrNotFound
-			}
-			cp := make([]byte, len(v))
-			copy(cp, v)
-			return cp, nil
-		},
-		SetSecretFunc: func(account, service string, secret []byte) error {
-			cp := make([]byte, len(secret))
-			copy(cp, secret)
-			data[service] = cp
-			return nil
-		},
-		DeleteEntryFunc: func(account, service string) error {
-			delete(data, service)
-			return nil
-		},
-		SetDescriptionFunc: func(service, account, description string) error {
-			desc[service] = description
-			return nil
-		},
-		ListEntriesFunc: func(prefix string) ([]keychain.KeychainEntry, error) {
-			var entries []keychain.KeychainEntry
-			for svc := range data {
-				if strings.HasPrefix(svc, prefix) {
-					entries = append(entries, keychain.KeychainEntry{Service: svc, Account: "testuser", Description: desc[svc]})
-				}
-			}
-			return entries, nil
-		},
-	}
-	return NewManager(kc, "testuser")
+	m, _ := newTestManager(t)
+	return m
 }
 
 func TestExportImportEncrypted_RoundTrip(t *testing.T) {

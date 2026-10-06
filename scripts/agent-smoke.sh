@@ -20,7 +20,7 @@ trap cleanup EXIT
 # A clean environment, so nothing from the caller's sesh setup leaks in.
 run() {
 	env -i PATH=/usr/bin:/bin HOME="$WORK" TERM=dumb \
-		SESH_BACKEND=sqlite SESH_KEY_SOURCE=password SESH_AUTH_SOCK="$SOCK" "$@"
+		SESH_AUTH_SOCK="$SOCK" "$@"
 }
 
 fail() {
@@ -56,14 +56,18 @@ out=$(run "$SESH" -service password -action get -service-name smoke -entry-type 
 	fail "passwordless read: $out"
 expect_contains "agent serves a read without a password" "$out" "smoke-secret"
 
-# 4. The wire format a client sees: hello then ping, newline-delimited JSON.
-out=$(python3 - "$SOCK" 2>&1 <<'PY'
+# 4. The wire format a client sees: hello then ping, newline-delimited JSON,
+# at the protocol version the agent speaks.
+proto=$(sed -n 's/^const ProtocolVersion = \([0-9][0-9]*\)$/\1/p' "$(dirname "$0")/../internal/agent/protocol.go")
+[ -n "$proto" ] || fail "couldn't read ProtocolVersion from internal/agent/protocol.go"
+out=$(python3 - "$SOCK" "$proto" 2>&1 <<'PY'
 import json, socket, sys
 s = socket.socket(socket.AF_UNIX)
 s.settimeout(5)
 s.connect(sys.argv[1])
 f = s.makefile("rwb")
-for msg in ({"type": "hello", "version": 1}, {"type": "ping", "version": 1}):
+v = int(sys.argv[2])
+for msg in ({"type": "hello", "version": v}, {"type": "ping", "version": v}):
     f.write(json.dumps(msg).encode() + b"\n")
     f.flush()
     print(json.loads(f.readline())["type"])

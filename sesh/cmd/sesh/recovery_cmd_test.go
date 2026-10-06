@@ -11,9 +11,9 @@ import (
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
-	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/testutil"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // fixedRecoveryKey makes newRecoveryKey return one known key, and returns
@@ -84,7 +84,7 @@ func createVaultOfferingRecovery(t *testing.T, offer bool, lines ...string) (str
 	dbPath := filepath.Join(t.TempDir(), "passwords.db")
 	cfg := withLines(withAnswer(interactivePrompt(t, "first-password-1234", "first-password-1234"), offer), lines...)
 	restore := testutil.RedirectStderr(t)
-	oracle, err := buildKeySourceWith(dbPath, "password", cfg)
+	oracle, err := buildKeySourceWith(dbPath, cfg)
 	out := restore()
 	if err != nil {
 		t.Fatalf("create vault: %v", err)
@@ -201,18 +201,13 @@ func TestRunRecovery_NewStatusRemove(t *testing.T) {
 	if _, err := run("frobnicate"); err == nil || !strings.Contains(err.Error(), `unknown recovery command "frobnicate"`) {
 		t.Errorf("unknown command: err = %v", err)
 	}
-	useConfigFile(t, "key_source = \"keychain\"\n")
-	if out, err := run("status"); err != nil || !strings.Contains(out, "not used") {
-		t.Errorf("status with the keychain key source = %q, %v", out, err)
-	}
 }
 
 func TestRotate_RewrapsRecoveryKey(t *testing.T) {
 	env := setupRekeyEnv(t)
 	startTestAgent(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	conn, err := agent.DialExisting()
 	if err != nil {
@@ -255,26 +250,6 @@ func TestRotate_RewrapsRecoveryKey(t *testing.T) {
 	}
 }
 
-func TestRekey_ToKeychainRemovesRecoveryKey(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_KEY_SOURCE", "password")
-	t.Setenv("SESH_MASTER_PASSWORD", "old-master-password-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "v"})
-	if err := recovery.NewFile("id", []byte("p"), keywrap.Wrapped{EphemeralPub: []byte("e"), Ciphertext: []byte("c")}).Write(env.dataDir); err != nil {
-		t.Fatal(err)
-	}
-	app, stderr := rekeyTestApp("y\n")
-	if err := runRekey(app, []string{"--to=keychain"}, newKCMock(nil)); err != nil {
-		t.Fatalf("rekey: %v\n%s", err, stderr)
-	}
-	if _, err := recovery.ReadFile(env.dataDir); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("recovery.key still exists after switching to the Keychain key (err %v)", err)
-	}
-	if !strings.Contains(stderr.String(), "Removed the recovery key: it only opens a vault protected by a master password.") {
-		t.Errorf("stderr missing the note:\n%s", stderr)
-	}
-}
-
 func TestSameGroup(t *testing.T) {
 	for typed, want := range map[string]bool{"VP5H": true, "vp5h": true, " VP5H\n": true, "VP5I": false, "VP5": false} {
 		if got := sameGroup(typed, "VP5H"); got != want {
@@ -309,9 +284,8 @@ func recoverableVault(t *testing.T) (*rekeyTestEnv, recovery.Key) {
 	env := setupRekeyEnv(t)
 	startTestAgent(t)
 	useConfigFile(t, "")
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "forgotten-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"sesh-password/password/x/y": "the secret"})
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "the secret"})
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	conn, err := agent.DialExisting()
 	if err != nil {
@@ -401,7 +375,7 @@ func TestRecover_SetsANewPasswordAndReplacesTheKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeAuditStore(store)
-	if got, err := store.GetSecret(env.account, "sesh-password/password/x/y"); err != nil || string(got) != "the secret" {
+	if got, err := store.Get(vault.Key{Kind: vault.KindPassword, Service: "x", Username: "y"}); err != nil || string(got) != "the secret" {
 		t.Errorf("entry after recovery = %q, %v", got, err)
 	}
 }

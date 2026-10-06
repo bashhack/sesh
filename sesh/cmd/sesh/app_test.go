@@ -8,31 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
+	"github.com/bashhack/sesh/internal/vault"
 )
-
-// MockKeychainProvider is a no-op keychain.Provider for tests that don't
-// exercise keychain operations.
-type MockKeychainProvider struct{}
-
-func (m *MockKeychainProvider) GetSecret(account, service string) ([]byte, error) {
-	return nil, keychain.ErrNotFound
-}
-func (m *MockKeychainProvider) SetSecret(account, service string, secret []byte) error { return nil }
-func (m *MockKeychainProvider) GetSecretString(account, service string) (string, error) {
-	return "", keychain.ErrNotFound
-}
-func (m *MockKeychainProvider) SetSecretString(account, service, secret string) error { return nil }
-func (m *MockKeychainProvider) GetMFASerialBytes(account, profile string) ([]byte, error) {
-	return nil, keychain.ErrNotFound
-}
-func (m *MockKeychainProvider) ListEntries(service string) ([]keychain.KeychainEntry, error) {
-	return nil, nil
-}
-func (m *MockKeychainProvider) DeleteEntry(account, service string) error          { return nil }
-func (m *MockKeychainProvider) SetDescription(service, account, desc string) error { return nil }
 
 // MockSetupService is a mock implementation of setup.SetupService
 type MockSetupService struct {
@@ -164,7 +143,7 @@ func TestNewDefaultApp(t *testing.T) {
 		Commit:  "unknown",
 		Date:    "unknown",
 	}
-	app := NewDefaultApp(versionInfo, &MockKeychainProvider{}, 30*time.Second)
+	app := NewDefaultApp(versionInfo, vault.NewMemStore(), 30*time.Second)
 
 	if app.Registry == nil {
 		t.Error("Registry is nil")
@@ -233,8 +212,8 @@ func TestApp_ListEntries(t *testing.T) {
 					NameFunc: func() string { return "totp" },
 					ListEntriesFunc: func() ([]provider.ProviderEntry, error) {
 						return []provider.ProviderEntry{
-							{Name: "github", Description: "GitHub TOTP", ID: "sesh-totp/github:user"},
-							{Name: "aws", Description: "AWS MFA", ID: "sesh-totp/aws:user"},
+							{Name: "github", Description: "GitHub TOTP", ID: "totp/github"},
+							{Name: "aws", Description: "AWS MFA", ID: "totp/aws/default"},
 						}, nil
 					},
 				}
@@ -273,7 +252,7 @@ func TestApp_ListEntries(t *testing.T) {
 			setupApp: func(app *App) {
 				mockProvider := &MockProvider{
 					NameFunc:        func() string { return "totp" },
-					ListEntriesFunc: func() ([]provider.ProviderEntry, error) { return nil, errors.New("keychain error") },
+					ListEntriesFunc: func() ([]provider.ProviderEntry, error) { return nil, errors.New("store error") },
 				}
 				app.Registry.RegisterProvider(mockProvider)
 			},
@@ -582,14 +561,14 @@ func TestApp_DeleteEntry(t *testing.T) {
 	}{
 		"successful delete": {
 			serviceName: "totp",
-			entryID:     "sesh-totp-github:testuser",
+			entryID:     "totp/github",
 			setupApp: func(app *App) {
 				mockProvider := &MockProvider{
 					NameFunc: func() string {
 						return "totp"
 					},
 					DeleteEntryFunc: func(id string) error {
-						if id == "sesh-totp-github:testuser" {
+						if id == "totp/github" {
 							return nil
 						}
 						return fmt.Errorf("unexpected id: %s", id)
@@ -609,20 +588,20 @@ func TestApp_DeleteEntry(t *testing.T) {
 		},
 		"delete entry error": {
 			serviceName: "totp",
-			entryID:     "sesh-totp-github:testuser",
+			entryID:     "totp/github",
 			setupApp: func(app *App) {
 				mockProvider := &MockProvider{
 					NameFunc: func() string {
 						return "totp"
 					},
 					DeleteEntryFunc: func(id string) error {
-						return errors.New("keychain error")
+						return errors.New("store error")
 					},
 				}
 				app.Registry.RegisterProvider(mockProvider)
 			},
 			wantErr:    true,
-			wantErrMsg: "failed to delete entry: keychain error",
+			wantErrMsg: "failed to delete entry: store error",
 		},
 	}
 

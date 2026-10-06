@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,7 +62,7 @@ func TestFirstRun_ExplainsThenUnlocksTheAgent(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "passwords.db")
 
 	restore := testutil.RedirectStderr(t)
-	oracle, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "new-password-1234", "new-password-1234"))
+	oracle, err := buildKeySourceWith(dbPath, interactivePrompt(t, "new-password-1234", "new-password-1234"))
 	stderr := restore()
 	if err != nil {
 		t.Fatalf("creating the vault: %v", err)
@@ -89,7 +88,7 @@ func TestFirstRun_ExplainsThenUnlocksTheAgent(t *testing.T) {
 	if err != nil || !st.Unlocked || st.UnlockID != agent.UnlockID(mat.Verify) {
 		t.Fatalf("agent status = %+v, %v; want unlocked for the new vault", st, err)
 	}
-	next, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t))
+	next, err := buildKeySourceWith(dbPath, interactivePrompt(t))
 	if err != nil {
 		t.Fatalf("second command: %v", err)
 	}
@@ -102,7 +101,7 @@ func TestFirstRun_FromEnvIsQuietAndSkipsTheAgent(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "passwords.db")
 
 	restore := testutil.RedirectStderr(t)
-	oracle, err := buildKeySource(dbPath, "password")
+	oracle, err := buildKeySource(dbPath)
 	stderr := restore()
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +122,7 @@ func TestForgottenPasswordHint(t *testing.T) {
 
 	t.Run("interactive", func(t *testing.T) {
 		startTestAgent(t)
-		_, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "a-wrong-one", "b-wrong-one", "c-wrong-one"))
+		_, err := buildKeySourceWith(dbPath, interactivePrompt(t, "a-wrong-one", "b-wrong-one", "c-wrong-one"))
 		if err == nil || !strings.Contains(err.Error(), "wrong master password (after 3 attempts).\n   If you've forgotten it") {
 			t.Fatalf("err = %v, want the hint", err)
 		}
@@ -141,7 +140,7 @@ func TestForgottenPasswordHint(t *testing.T) {
 				t.Error(err)
 			}
 		})
-		_, err := buildKeySourceWith(dbPath, "password", interactivePrompt(t, "a-wrong-one", "b-wrong-one", "c-wrong-one"))
+		_, err := buildKeySourceWith(dbPath, interactivePrompt(t, "a-wrong-one", "b-wrong-one", "c-wrong-one"))
 		if err == nil || !strings.Contains(err.Error(), "If you've forgotten it, set a new one with your recovery key: sesh recover") {
 			t.Fatalf("err = %v, want the recovery hint", err)
 		}
@@ -149,31 +148,9 @@ func TestForgottenPasswordHint(t *testing.T) {
 	t.Run("scripted", func(t *testing.T) {
 		t.Setenv("SESH_AUTH_SOCK", tempAgentSocket(t))
 		t.Setenv("SESH_MASTER_PASSWORD", "a-wrong-one")
-		_, err := buildKeySource(dbPath, "password")
+		_, err := buildKeySource(dbPath)
 		if err == nil || strings.Contains(err.Error(), "forgotten") || !errors.Is(err, database.ErrWrongPassword) {
 			t.Fatalf("err = %v, want the plain wrong-password error", err)
 		}
 	})
-}
-
-func TestMigrate_RefusesOffMacOSBeforeOpeningTheVault(t *testing.T) {
-	orig := goos
-	goos = "linux"
-	t.Cleanup(func() { goos = orig })
-	useConfigFile(t, "")
-	data := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", data)
-	t.Setenv("HOME", data)
-
-	err := runMigrate(agentTestApp())
-	if err == nil || !strings.Contains(err.Error(), "isn't available on linux") {
-		t.Fatalf("err = %v", err)
-	}
-	cfg, serr := settings()
-	if serr != nil {
-		t.Fatal(serr)
-	}
-	if _, err := os.Stat(cfg.DBPath.Value); !os.IsNotExist(err) {
-		t.Errorf("a vault was created at %s before the refusal (stat: %v)", cfg.DBPath.Value, err)
-	}
 }

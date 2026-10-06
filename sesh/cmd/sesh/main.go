@@ -1,29 +1,25 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/user"
 	"path/filepath"
-	"runtime"
+	"slices"
 	"strings"
-	"syscall"
 
 	"golang.org/x/term"
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
-	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/migration"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // Version information (set by ldflags during build)
@@ -52,10 +48,10 @@ func main() {
 	}
 
 	// Only open the credential store if the command will actually use it.
-	// --version, --help, --list-services, and --migrate either just print
+	// --version, --help, --list-services, and --rekey either just print
 	// information or open their own store internally. Skipping buildProvider
-	// here means the SQLite backend doesn't pointlessly open the DB (or
-	// acquire the key-init flock on first run) for those commands.
+	// here means sesh doesn't pointlessly open the vault for those
+	// commands.
 	args, overrides, err := takeSettingFlags(os.Args)
 	if err == nil {
 		err = overrides.Validate()
@@ -75,7 +71,7 @@ func main() {
 	}
 
 	var (
-		kc     keychain.Provider
+		kc     vault.Store
 		closer io.Closer
 	)
 	// A command that doesn't parse (an unknown flag, no or an unknown
@@ -152,7 +148,7 @@ func argsParse(args []string) bool {
 // needsCredentialStore reports whether the given command-line invocation
 // will touch the credential store. Commands that just print information
 // (--help/--version/--list-services) or open their own store internally
-// (--migrate) return false.
+// (--rekey) return false.
 func needsCredentialStore(args []string) bool {
 	if name, _ := subcommand(args); len(args) <= 1 || name != "" {
 		return false
@@ -162,7 +158,6 @@ func needsCredentialStore(args []string) bool {
 		case "--help", "-help", "-h",
 			"--version", "-version",
 			"--list-services", "-list-services",
-			"--migrate", "-migrate",
 			"--rekey", "-rekey":
 			return false
 		}
@@ -176,7 +171,7 @@ var subcommands = []candidate{
 	{"audit", "Show the vault's audit log, or prune it"},
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 	{"config", "Show settings and where each comes from"},
-	{"init", "Choose where and how sesh stores secrets"},
+	{"init", "Choose where sesh keeps the vault"},
 	{"recover", "Set a new master password with the vault's recovery key"},
 	{"recovery", "Make, remove, or check this vault's recovery key"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
@@ -198,49 +193,21 @@ func subcommand(args []string) (name string, rest []string) {
 	return "", nil
 }
 
-// unavailableStore is a keychain.Provider whose every call fails with err.
+// unavailableStore is a credential store whose every call fails with err.
 // It stands in for the store in commands that don't open one, so a routing
 // bug (a command that needs the store classified as one that doesn't)
-// fails loudly instead of silently succeeding. It also stands in for the
-// macOS Keychain on other systems.
+// fails loudly instead of silently succeeding.
 type unavailableStore struct{ err error }
 
 var errNoStore = fmt.Errorf("no credential store opened for this command")
 
-func (u unavailableStore) GetSecret(_, _ string) ([]byte, error)         { return nil, u.err }
-func (u unavailableStore) SetSecret(_, _ string, _ []byte) error         { return u.err }
-func (u unavailableStore) GetSecretString(_, _ string) (string, error)   { return "", u.err }
-func (u unavailableStore) SetSecretString(_, _, _ string) error          { return u.err }
-func (u unavailableStore) GetMFASerialBytes(_, _ string) ([]byte, error) { return nil, u.err }
-func (u unavailableStore) ListEntries(_ string) ([]keychain.KeychainEntry, error) {
-	return nil, u.err
-}
-func (u unavailableStore) DeleteEntry(_, _ string) error       { return u.err }
-func (u unavailableStore) SetDescription(_, _, _ string) error { return u.err }
-
-// goos is runtime.GOOS. Tests replace it to check the behaviour on other
-// systems.
-var goos = runtime.GOOS
-
-// systemKeychain returns the macOS Keychain, or elsewhere a stand-in whose
-// every call says the Keychain isn't available.
-func systemKeychain() keychain.Provider {
-	if goos == "darwin" {
-		return keychain.NewDefaultProvider()
-	}
-	return unavailableStore{err: fmt.Errorf("the macOS Keychain isn't available on %s", goos)}
-}
-
-// requireMacOSKeychain refuses a setting that asks for the macOS Keychain
-// on another system, naming where the setting came from.
-func requireMacOSKeychain(s config.Setting[string], key string) error {
-	if goos == "darwin" {
-		return nil
-	}
-	return fmt.Errorf("%s asks for the macOS Keychain (%s = %q), which isn't available on %s. "+
-		"Use the defaults instead: backend = \"sqlite\" with key_source = \"password\"",
-		s.Origin, key, s.Value, goos)
-}
+func (u unavailableStore) Get(vault.Key) ([]byte, error)               { return nil, u.err }
+func (u unavailableStore) Put(vault.Key, []byte) error                 { return u.err }
+func (u unavailableStore) Save(*vault.Entry, []byte) error             { return u.err }
+func (u unavailableStore) SetSettings(vault.Key, vault.Settings) error { return u.err }
+func (u unavailableStore) Lookup(vault.Key) (vault.Entry, error)       { return vault.Entry{}, u.err }
+func (u unavailableStore) List(vault.Filter) ([]vault.Entry, error)    { return nil, u.err }
+func (u unavailableStore) Delete(vault.Key) error                      { return u.err }
 
 // cliOverrides holds setting flags given on the command line.
 var cliOverrides config.Overrides
@@ -251,16 +218,8 @@ func settings() (*config.Config, error) {
 	return config.Load(cliOverrides)
 }
 
-// buildProvider constructs the credential store for cfg's backend: a
-// SQLite-backed store (caller must close it) or the system keychain with
-// no closer.
-func buildProvider(cfg *config.Config) (keychain.Provider, io.Closer, error) {
-	if cfg.Backend.Value != config.BackendSQLite {
-		if err := requireMacOSKeychain(cfg.Backend, "backend"); err != nil {
-			return nil, nil, err
-		}
-		return systemKeychain(), nil, nil
-	}
+// buildProvider opens the vault with cfg's settings; the caller closes it.
+func buildProvider(cfg *config.Config) (vault.Store, io.Closer, error) {
 	store, err := openSQLiteStoreWith(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -286,22 +245,14 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 		return nil, fmt.Errorf("create vault directory: %w", err)
 	}
 
-	source := cfg.KeySource.Value
-	if source == config.KeySourceKeychain {
-		if err := requireMacOSKeychain(cfg.KeySource, "key_source"); err != nil {
-			return nil, err
-		}
+	if err := refuseNewKeyForExistingVault(dbPath); err != nil {
+		return nil, err
 	}
-	if source == config.KeySourcePassword {
-		if err := refuseNewKeyForExistingVault(dbPath); err != nil {
-			return nil, err
-		}
-	}
-	ks, err := buildKeySource(dbPath, source)
+	ks, err := buildKeySource(dbPath)
 	if err != nil {
 		return nil, err
 	}
-	store, err := openStoreWith(dbPath, ks, source)
+	store, err := openStoreWith(dbPath, ks)
 	if err != nil {
 		return nil, err
 	}
@@ -311,11 +262,11 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 }
 
 // openStoreWith opens the store at dbPath over oracle and confirms oracle
-// holds the vault's key (source names the key source) before returning, so
-// nothing is read or written with the wrong key. The store owns oracle once
+// holds the vault's key before returning, so nothing is read or written
+// with the wrong key. The store owns oracle once
 // opened; if opening fails, oracle is closed here so an agent connection or
 // a cached master key doesn't outlive the failure.
-func openStoreWith(dbPath string, oracle database.CryptoOracle, source string) (*database.Store, error) {
+func openStoreWith(dbPath string, oracle database.CryptoOracle) (*database.Store, error) {
 	store, err := database.Open(dbPath, oracle)
 	if err != nil {
 		if c, ok := oracle.(interface{ Close() }); ok {
@@ -324,7 +275,7 @@ func openStoreWith(dbPath string, oracle database.CryptoOracle, source string) (
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	if err := store.CheckKey(source); err != nil {
+	if err := store.CheckKey(); err != nil {
 		err = withKeyHint(err)
 		if closeErr := store.Close(); closeErr != nil {
 			return nil, fmt.Errorf("%w (close also failed: %v)", err, closeErr)
@@ -342,8 +293,8 @@ func openStoreWith(dbPath string, oracle database.CryptoOracle, source string) (
 	return store, nil
 }
 
-// refuseNewKeyForExistingVault stops password mode from creating a new
-// master key next to a vault that already exists without passwords.key:
+// refuseNewKeyForExistingVault stops sesh from creating a new master key
+// next to a vault that already exists without passwords.key:
 // entries written under a new key would be unreadable with the vault's
 // real one.
 func refuseNewKeyForExistingVault(dbPath string) error {
@@ -360,21 +311,14 @@ func refuseNewKeyForExistingVault(dbPath string) error {
 	case err != nil:
 		return fmt.Errorf("check for an existing vault at %s: %w", dbPath, err)
 	}
-	// A vault switched to the Keychain key has no key file by design; it
-	// records that, so the setting can be named instead of guessed at.
-	if src, rerr := database.RecordedKeySource(dbPath); rerr == nil && src == config.KeySourceKeychain {
-		return withKeyHint(&database.WrongKeyError{VaultSource: src, Source: config.KeySourcePassword})
+	// A vault whose key was in the macOS Keychain has no key file; it
+	// records that, so it can be named instead of guessed at.
+	if src, rerr := database.RecordedKeySource(dbPath); rerr == nil && src == "keychain" {
+		return withKeyHint(&database.WrongKeyError{VaultSource: src})
 	}
 	return fmt.Errorf("a vault exists at %s, but its key file %s is missing. "+
-		"If passwords.key was lost, restore it from a backup. "+
-		"If this vault uses the Keychain key, set key_source = \"keychain\" in the config file. "+
-		"To switch it to a master password, run: sesh --key-source keychain --rekey --to password",
+		"If passwords.key was lost, restore it from a backup",
 		dbPath, sidecar)
-}
-
-// errNeedsSQLite reports a command that only works on the sqlite backend.
-func errNeedsSQLite(what string) error {
-	return fmt.Errorf("%s requires the sqlite backend: set backend = \"sqlite\" in the config file, or SESH_BACKEND=sqlite", what)
 }
 
 // sidecarMissing reports whether dataDir has no passwords.key yet: the
@@ -449,90 +393,68 @@ func withKeyHint(err error) error {
 	if !errors.As(err, &wk) {
 		return err
 	}
-	switch {
-	case wk.VaultSource != "" && wk.VaultSource != wk.Source:
-		return fmt.Errorf("%w. Set key_source = %q in the config file (or SESH_KEY_SOURCE=%s) to use this vault, or switch it with: sesh --key-source %s --rekey --to %s",
-			err, wk.VaultSource, wk.VaultSource, wk.VaultSource, wk.Source)
-	case wk.Source == "password":
-		return fmt.Errorf("%w. If passwords.key was replaced, restore the original. If you switched key sources with sesh --rekey, set key_source to the new one", err)
-	default:
-		return fmt.Errorf("%w. If the Keychain entry %q was replaced, restore the original. If you switched key sources with sesh --rekey, set key_source to the new one", err, encKeyService)
+	if wk.VaultSource == "keychain" {
+		return fmt.Errorf("%w: start a new vault by moving this one aside. Its key is still in your login Keychain; once you no longer need the old vault, delete it with: security delete-generic-password -s sesh-sqlite-encryption-key", err)
 	}
+	return fmt.Errorf("%w. If passwords.key was replaced, restore the original", err)
 }
 
-// buildKeySource returns the CryptoOracle the store encrypts through for
-// source ("keychain" or "password"). "password"
-// uses the agent when it can serve this data directory, so later
-// commands do not prompt again. A missing sidecar, or an agent that
-// cannot be reached or fails to unlock, falls back to
-// MasterPasswordSource, reusing a password already typed. A wrong
-// password is retried against the agent and is returned to the caller
-// when the attempt budget is spent. With SESH_MASTER_PASSWORD set, the
-// agent is not used at all.
-func buildKeySource(dbPath, source string) (database.CryptoOracle, error) {
-	return buildKeySourceWith(dbPath, source, resolvePasswordPrompt())
+// buildKeySource returns the CryptoOracle the store encrypts through. It
+// uses the agent when it can serve this data directory, so later commands
+// do not prompt again. A missing sidecar, or an agent that cannot be
+// reached or fails to unlock, falls back to MasterPasswordSource, reusing
+// a password already typed. A wrong password is retried against the agent
+// and is returned to the caller when the attempt budget is spent. With
+// SESH_MASTER_PASSWORD set, the agent is not used at all.
+func buildKeySource(dbPath string) (database.CryptoOracle, error) {
+	return buildKeySourceWith(dbPath, resolvePasswordPrompt())
 }
 
 // buildKeySourceWith is buildKeySource with the password prompt given, so
 // tests can stand in for a person at a terminal.
-func buildKeySourceWith(dbPath, source string, cfg passwordPromptConfig) (database.CryptoOracle, error) {
+func buildKeySourceWith(dbPath string, cfg passwordPromptConfig) (database.CryptoOracle, error) {
 	dataDir := filepath.Dir(dbPath)
-	switch source {
-	case config.KeySourcePassword:
-		if !cfg.fromEnv {
-			oracle, typed, err := keySourceFromAgent(dataDir, cfg)
-			if err != nil {
-				return nil, withForgottenPasswordHint(err, cfg, dataDir)
-			}
-			if oracle != nil {
-				return oracle, nil
-			}
-			if typed != nil {
-				defer secure.SecureZeroBytes(typed)
-				cfg = cfg.withTypedPassword(typed)
-			}
-		}
-		// A person creating the vault is told what's happening before the
-		// first prompt, and the agent gets the new password afterwards, so
-		// the next command doesn't ask for it again.
-		var created []byte
-		firstRun := !cfg.fromEnv && sidecarMissing(dataDir)
-		if firstRun {
-			fmt.Fprint(os.Stderr, vaultCreationNotice(dbPath)) //nolint:errcheck // best-effort notice
-			cfg = cfg.keepingLastPassword(&created)
-		}
-		defer func() { secure.SecureZeroBytes(created) }()
-
-		mps := cfg.newSource(dataDir)
-		// Eagerly unlock so every operation — including metadata-only reads
-		// like --list and --delete — requires the master password. Without
-		// this, the store would only prompt on decryption, letting an
-		// attacker with filesystem access list and delete entries without
-		// the password.
-		key, err := mps.GetEncryptionKey()
+	if !cfg.fromEnv {
+		oracle, typed, err := keySourceFromAgent(dataDir, cfg)
 		if err != nil {
 			return nil, withForgottenPasswordHint(err, cfg, dataDir)
 		}
-		secure.SecureZeroBytes(key)
-		if firstRun {
-			unlockAgentWith(dataDir, created)
-			offerRecovery(cfg, dataDir)
-			offerTouchID(cfg, dataDir)
+		if oracle != nil {
+			return oracle, nil
 		}
-		return database.NewKeySourceOracle(mps), nil
-	case config.KeySourceKeychain:
-		u, err := user.Current()
-		if err != nil {
-			return nil, fmt.Errorf("determine current user: %w", err)
+		if typed != nil {
+			defer secure.SecureZeroBytes(typed)
+			cfg = cfg.withTypedPassword(typed)
 		}
-		ks := database.NewKeychainSource(systemKeychain(), u.Username)
-		if err := ensureMasterKey(ks, dataDir); err != nil {
-			return nil, err
-		}
-		return database.NewKeySourceOracle(ks), nil
-	default:
-		return nil, fmt.Errorf("unknown key source %q (valid: keychain, password)", source)
 	}
+	// A person creating the vault is told what's happening before the
+	// first prompt, and the agent gets the new password afterwards, so
+	// the next command doesn't ask for it again.
+	var created []byte
+	firstRun := !cfg.fromEnv && sidecarMissing(dataDir)
+	if firstRun {
+		fmt.Fprint(os.Stderr, vaultCreationNotice(dbPath)) //nolint:errcheck // best-effort notice
+		cfg = cfg.keepingLastPassword(&created)
+	}
+	defer func() { secure.SecureZeroBytes(created) }()
+
+	mps := cfg.newSource(dataDir)
+	// Eagerly unlock so every operation — including metadata-only reads
+	// like --list and --delete — requires the master password. Without
+	// this, the store would only prompt on decryption, letting an
+	// attacker with filesystem access list and delete entries without
+	// the password.
+	key, err := mps.GetEncryptionKey()
+	if err != nil {
+		return nil, withForgottenPasswordHint(err, cfg, dataDir)
+	}
+	secure.SecureZeroBytes(key)
+	if firstRun {
+		unlockAgentWith(dataDir, created)
+		offerRecovery(cfg, dataDir)
+		offerTouchID(cfg, dataDir)
+	}
+	return database.NewKeySourceOracle(mps), nil
 }
 
 // keySourceFromAgent connects to the agent and returns an oracle when the
@@ -751,180 +673,6 @@ func terminalPrompt(prompt string) ([]byte, error) {
 	return pw, nil
 }
 
-// ensureMasterKey verifies a master encryption key exists in the keychain,
-// generating and storing one on first run. Zeros any retrieved/generated
-// key bytes before returning.
-//
-// Concurrent first-run invocations are serialized via an advisory flock on
-// <dataDir>/.key-init.lock so two sesh processes can't each generate a
-// different key and orphan each other's data. The flock is auto-released
-// when the holding process exits, so crashes don't leave stale locks.
-func ensureMasterKey(ks *database.KeychainSource, dataDir string) error {
-	// Fast path: key already present.
-	if existing, err := ks.GetEncryptionKey(); err == nil {
-		secure.SecureZeroBytes(existing)
-		return nil
-	} else if !errors.Is(err, keychain.ErrNotFound) {
-		// Any non-ErrNotFound failure (locked, permission denied) must be
-		// surfaced immediately — otherwise we'd generate a new key and
-		// orphan the existing one.
-		return fmt.Errorf("retrieve encryption key: %w", err)
-	}
-
-	// Slow path: acquire the init lock before generating so we don't race
-	// a concurrent first-run invocation.
-	sentinel := filepath.Join(dataDir, ".key-init.lock")
-	lockFile, err := os.OpenFile(sentinel, os.O_CREATE|os.O_RDWR, 0o600) //nolint:gosec // path is <dataDir>/.key-init.lock; dataDir comes from our own DefaultDBPath
-	if err != nil {
-		return fmt.Errorf("open key-init sentinel: %w", err)
-	}
-	defer func() {
-		// Closing the fd releases the advisory flock.
-		if cerr := lockFile.Close(); cerr != nil {
-			fmt.Fprintf(os.Stderr, "warning: release key-init lock: %v\n", cerr)
-		}
-	}()
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("acquire key-init lock: %w", err)
-	}
-
-	// Double-check under the lock — a concurrent process may have generated
-	// and stored the key while we were blocking on flock.
-	if existing, err := ks.GetEncryptionKey(); err == nil {
-		secure.SecureZeroBytes(existing)
-		return nil
-	} else if !errors.Is(err, keychain.ErrNotFound) {
-		return fmt.Errorf("retrieve encryption key (post-lock): %w", err)
-	}
-
-	key, err := database.GenerateEncryptionKey()
-	if err != nil {
-		return fmt.Errorf("generate encryption key: %w", err)
-	}
-	defer secure.SecureZeroBytes(key)
-	if err := ks.StoreEncryptionKey(key); err != nil {
-		return fmt.Errorf("store encryption key: %w", err)
-	}
-	return nil
-}
-
-// runMigrate copies all sesh entries from the macOS Keychain to the SQLite store.
-// Requires the sqlite backend.
-func runMigrate(app *App) error {
-	// Checked before opening the destination, so no vault is created only
-	// for the Keychain scan to fail.
-	if goos != "darwin" {
-		return fmt.Errorf("sesh --migrate copies entries from the macOS Keychain, which isn't available on %s", goos)
-	}
-	cfg, err := settings()
-	if err != nil {
-		return err
-	}
-	if cfg.Backend.Value != config.BackendSQLite {
-		return errNeedsSQLite("migration")
-	}
-
-	source := systemKeychain()
-
-	dest, err := openSQLiteStoreWith(cfg)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := dest.Close(); cerr != nil {
-			// Best-effort warning — app.Stderr is io.Writer so errcheck
-			// wants the return checked, but there's nothing useful to
-			// do from inside a deferred void func if the write fails.
-			_, _ = fmt.Fprintf(app.Stderr, "warning: failed to close database: %v\n", cerr) //nolint:errcheck // see comment above
-		}
-	}()
-
-	plan, err := migration.Plan(source)
-	if err != nil {
-		return fmt.Errorf("scan keychain: %w", err)
-	}
-
-	if len(plan) == 0 {
-		if _, err := fmt.Fprintln(app.Stderr, "No sesh entries found in keychain. Nothing to migrate."); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	if _, err := fmt.Fprintf(app.Stderr, "Found %s to migrate:\n", entryCount(len(plan))); err != nil {
-		return err
-	}
-	for _, e := range plan {
-		desc := e.Description
-		if desc == "" {
-			desc = "(no description)"
-		}
-		if _, err := fmt.Fprintf(app.Stderr, "  %s — %s\n", e.Service, desc); err != nil {
-			return err
-		}
-	}
-
-	if _, err := fmt.Fprintf(app.Stderr, "\nMigrate these entries to SQLite? [y/N]: "); err != nil {
-		return err
-	}
-	// Use bufio so a bare Enter (the canonical "No" for [y/N]) is read
-	// as an empty line rather than surfacing "unexpected newline" from
-	// fmt.Scanln and aborting.
-	line, err := bufio.NewReader(app.Stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return fmt.Errorf("failed to read input: %w", err)
-	}
-	answer := strings.TrimSpace(line)
-	if answer != "y" && answer != "Y" {
-		if _, err := fmt.Fprintln(app.Stderr, "Migration cancelled."); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	result, err := migration.Migrate(source, dest)
-	if err != nil {
-		return err
-	}
-
-	if _, err := fmt.Fprintf(app.Stderr, "\nMigrated %s", entryCount(result.Migrated)); err != nil {
-		return err
-	}
-	if result.Skipped > 0 {
-		if _, err := fmt.Fprintf(app.Stderr, ", skipped %d (already exist)", result.Skipped); err != nil {
-			return err
-		}
-	}
-	if _, err := fmt.Fprintln(app.Stderr); err != nil {
-		return err
-	}
-
-	if len(result.Errors) > 0 {
-		if _, err := fmt.Fprintf(app.Stderr, "%d errors:\n", len(result.Errors)); err != nil {
-			return err
-		}
-		for _, e := range result.Errors {
-			if _, err := fmt.Fprintf(app.Stderr, "  %s\n", e); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-// remainingArgs returns args following (but not including) the first
-// occurrence of name. Used to forward sub-flags to handlers like runRekey
-// without depending on a specific flag-package layout.
-func remainingArgs(args []string, name string) []string {
-	for i, a := range args {
-		if a == name {
-			return args[i+1:]
-		}
-	}
-	return nil
-}
-
 // fatal prints an error to stderr and exits
 func fatal(app *App, err error) {
 	if _, printErr := fmt.Fprintf(app.Stderr, "❌ %v\n", err); printErr != nil {
@@ -980,7 +728,7 @@ func run(app *App, args []string) {
 	}
 
 	// Early exit for version/list-services that don't need service
-	for _, arg := range args[1:] {
+	for i, arg := range args[1:] {
 		switch arg {
 		case "--version", "-version":
 			if err := app.ShowVersion(); err != nil {
@@ -992,14 +740,9 @@ func run(app *App, args []string) {
 				fatal(app, err)
 			}
 			return
-		case "--migrate", "-migrate":
-			if err := runMigrate(app); err != nil {
-				fatal(app, err)
-			}
-			return
 		case "--rekey", "-rekey":
-			rest := remainingArgs(args, arg)
-			if err := runRekey(app, rest, systemKeychain()); err != nil {
+			others := append(slices.Clone(args[1:i+1]), args[i+2:]...)
+			if err := runRekey(app, others, resolvePasswordPrompt()); err != nil {
 				fatal(app, err)
 			}
 			return
@@ -1204,12 +947,11 @@ func (a *App) PrintUsage() error {
 		"  --version, -version           Show version information",
 		"  --help, -help                 Show usage",
 		"\nSetting overrides (for this command only; see `sesh config`):",
-		"  --backend keychain|sqlite     Storage backend",
-		"  --key-source keychain|password  Key source for the sqlite backend",
-		"  --db-path path                Vault location for the sqlite backend",
+		"  --db-path path                Vault location",
 		"\nCommands:",
-		"  sesh init                     Choose where and how sesh stores secrets",
+		"  sesh init                     Set up the vault: where it lives",
 		"  sesh config                   Show settings and where each comes from",
+		"  sesh --rekey                  Change your master password",
 		"  sesh recovery new|remove|status    A recovery key, in case you forget your master password",
 		"  sesh recover                  Forgot the master password? Set a new one with the recovery key",
 		"  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)",

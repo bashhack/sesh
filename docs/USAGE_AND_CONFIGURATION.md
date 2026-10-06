@@ -2,7 +2,7 @@
 
 This document provides detailed instructions for using and configuring sesh for secure authentication workflows across multiple providers.
 
-> **Requirements:** macOS or Linux. The default, an encrypted vault unlocked with your master password, works the same on both; the macOS Keychain options are macOS-only. For the AWS provider, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
+> **Requirements:** macOS or Linux. The vault, encrypted and unlocked with your master password, works the same on both; Touch ID unlock is macOS-only. For the AWS provider, the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured.
 
 ## Workflow Overview
 
@@ -24,10 +24,10 @@ flowchart TD
     SetupChoice -->|"QR Code"| QR["Select QR code region on screen<br>Auto-extract secret"]:::process
     SetupChoice -->|"Manual"| Manual["Enter secret manually<br>Validate & store"]:::process
     
-    QR --> Keychain["Store in macOS Keychain<br>Binary-level access control"]:::process
-    Manual --> Keychain
+    QR --> Vault["Store in the encrypted vault<br>AES-256-GCM per entry"]:::process
+    Manual --> Vault
     
-    Keychain --> Daily([Daily Usage]):::start
+    Vault --> Daily([Daily Usage]):::start
     
     Daily --> Service{"Choose Service"}:::decision
     
@@ -122,7 +122,7 @@ There are two ways, for every shell:
 What completes:
 - the commands (`agent`, `completion`, `config`, `init`, `touchid`) and theirs (`sesh agent st<Tab>` → `status`, `stop`);
 - flags, including each provider's own once `--service` is given (`sesh --service password --<Tab>`);
-- values from a fixed set: providers, `--action`, `--format`, `--sort`, `--entry-type`, `--on-conflict`, `--backend`, `--key-source`, and `--rekey --to`;
+- values from a fixed set: providers, `--action`, `--format`, `--sort`, `--entry-type`, and `--on-conflict`;
 - file paths for `--file` and `--db-path`.
 
 Entry names (`--service-name`) don't complete: that would mean opening the vault on a Tab press. Completion never reads the vault, the agent, or the config file.
@@ -134,16 +134,14 @@ sesh uses a provider-based configuration system:
 1. **Global flags** - Apply to all providers (e.g., `-service`, `-help`)
 2. **Provider-specific flags** - Apply only to the selected provider (e.g., `-profile` for AWS)
 3. **Config file** - Persistent settings in `~/.config/sesh/config.toml` (see [Configuration file](#configuration-file))
-4. **Environment variables** - Override the config file for one shell or one command (e.g. `SESH_BACKEND`)
-5. **Credential storage** - An encrypted SQLite vault unlocked with your master password (default), or the macOS Keychain (`backend = "keychain"`)
+4. **Environment variables** - Override the config file for one shell or one command (e.g. `SESH_DB_PATH`)
+5. **Credential storage** - An encrypted vault, unlocked with your master password
 
 ### Configuration file
 
 sesh reads `~/.config/sesh/config.toml` on macOS and Linux (`$XDG_CONFIG_HOME/sesh/config.toml` when `XDG_CONFIG_HOME` is set). The file is optional, and every setting in it is optional:
 
 ```toml
-backend           = "sqlite"            # or "keychain"
-key_source        = "password"          # or "keychain" (SQLite only)
 db_path           = "~/vaults/sesh.db"  # where your vault lives: absolute, or starting with ~/
 clipboard_timeout = "30s"               # how long a copied secret stays on the clipboard
 
@@ -157,16 +155,12 @@ retention_days = 90                     # days of audit log events to keep; 0 ke
 
 sesh keeps one vault per user. `db_path` says where that vault lives; it isn't a way to keep several. To keep things apart inside it, use profiles (`--profile work`) and service names.
 
-Each setting comes from, highest first: a command-line flag (`--backend`, `--key-source`, `--db-path`; the agent's timeouts also have `sesh agent` flags), its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
+Each setting comes from, highest first: a command-line flag (`--db-path`; the agent's timeouts also have `sesh agent` flags), its environment variable, the config file, then the built-in default. An unknown key or an invalid value is an error that names the setting and where it came from. A typo is never silently ignored.
 
-`sesh init` writes the file for you. It's optional: with no config file, sesh uses an encrypted vault in the default location. It asks where secrets should live and where the vault goes, then creates the vault, so setup ends ready to use:
+`sesh init` writes the file for you. It's optional: with no config file, sesh uses an encrypted vault in the default location. It asks where the vault goes, then creates it, so setup ends ready to use:
 
 ```
 $ sesh init
-Where should sesh keep your secrets?
-  1) Encrypted vault, unlocked with a master password  (default)
-  2) macOS Keychain
-Choice [1]:
 Vault location [~/Library/Application Support/sesh/passwords.db]: ~/vaults/sesh.db
 Creating your sesh vault (first run)
   ...
@@ -176,18 +170,15 @@ Wrote ~/.config/sesh/config.toml
 Ready. Run `sesh config` to see your settings.
 ```
 
-- On Linux, the Keychain choice isn't offered; init asks only for the vault location.
-- For scripts, give the choices as flags: `sesh init --backend sqlite --db-path ~/vaults/sesh.db`. The master password for the new vault then comes from `SESH_MASTER_PASSWORD`.
+- For scripts, give the location as a flag: `sesh init --db-path ~/vaults/sesh.db`. The master password for the new vault then comes from `SESH_MASTER_PASSWORD`.
 - An existing config file is never replaced without `--force`.
-- An existing vault at the chosen location is opened, not recreated. If it uses a different key source, init stops and writes nothing.
+- An existing vault at the chosen location is opened, not recreated. If it can't be opened (its `passwords.key` is missing, say), init stops and writes nothing.
 
 `sesh config` prints each effective setting and where it came from:
 
 ```
 config file: /Users/me/.config/sesh/config.toml
 
-backend               sqlite        (config file)
-key_source            password      (environment: SESH_KEY_SOURCE)
 clipboard_timeout     30s           (default)
 agent.idle_timeout    25m           (config file)
 agent.max_lifetime    8h            (default)
@@ -210,8 +201,6 @@ db_path               /Users/me/vaults/sesh.db
 | `-delete <id>`    | Delete entry for selected service                  | All providers    |
 | `-setup`          | Run interactive setup wizard                       | All providers    |
 | `-clip`           | Copy generated code to clipboard                   | All providers    |
-| `--backend keychain\|sqlite` | Storage backend for this command (overrides `SESH_BACKEND` and the config file) | Global |
-| `--key-source keychain\|password` | Key source for this command (overrides `SESH_KEY_SOURCE` and the config file) | Global |
 | `--db-path <path>` | Vault location for this command (overrides `SESH_DB_PATH` and the config file) | Global |
 
 
@@ -256,36 +245,19 @@ db_path               /Users/me/vaults/sesh.db
 | Variable                | Description                                        | Default          |
 |-------------------------|----------------------------------------------------|------------------|
 | `AWS_PROFILE`          | Default AWS profile                                | `default`        |
-| `SESH_BACKEND`         | Storage backend: `sqlite` or `keychain` (config: `backend`). Any other value is an error | `sqlite`       |
-| `SESH_KEY_SOURCE`      | Master key source for the SQLite backend: `password` or `keychain` (config: `key_source`). Ignored unless the backend is `sqlite` | `password`       |
-| `SESH_DB_PATH`         | Vault location for the SQLite backend (config: `db_path`). `passwords.key` sits next to it | `~/Library/Application Support/sesh/passwords.db` (macOS), `$XDG_DATA_HOME/sesh/passwords.db` (Linux) |
+| `SESH_DB_PATH`         | Vault location (config: `db_path`). `passwords.key` sits next to it | `~/Library/Application Support/sesh/passwords.db` (macOS), `$XDG_DATA_HOME/sesh/passwords.db` (Linux) |
 | `SESH_CLIPBOARD_TIMEOUT` | How long a copied secret stays on the clipboard (config: `clipboard_timeout`) | `30s` |
 | `SESH_MASTER_PASSWORD` | Non-interactive master password (skips prompt). Intended for CI/scripting only — exposes the password via process environment | unset            |
-| `SESH_AUTH_SOCK`       | Socket path for the sesh agent used in master password mode | `<user-cache-dir>/sesh/agent.sock` |
+| `SESH_AUTH_SOCK`       | Socket path for the sesh agent | `<user-cache-dir>/sesh/agent.sock` |
 | `SESH_AGENT_IDLE_TIMEOUT` | Agent locks after this long without use; `0` disables (config: `agent.idle_timeout`). Same as `sesh agent --idle-timeout` | `10m` |
 | `SESH_AGENT_MAX_LIFETIME` | Agent locks this long after each unlock; `0` disables (config: `agent.max_lifetime`). Same as `sesh agent --max-lifetime` | `8h` |
 | `SESH_AUDIT_RETENTION_DAYS` | Days of audit log events the vault keeps; `0` keeps everything (config: `audit.retention_days`) | `90` |
 
-## Storage Backend and Key Source
+## The Vault and Its Key
 
-sesh has two independent axes:
+Every secret lives in one encrypted vault file (SQLite, each entry encrypted with AES-256-GCM). Its key is derived from your master password via Argon2id, with the salt in the `passwords.key` sidecar (0600) next to the vault. It works the same on macOS and Linux. `sesh --rekey` changes the master password.
 
-| Axis | Values | Selected by |
-|------|--------|-------------|
-| Backend | `sqlite` (default) or `keychain` | `backend` / `SESH_BACKEND` / `--backend` |
-| Key source (SQLite only) | `password` (default) or `keychain` | `key_source` / `SESH_KEY_SOURCE` / `--key-source` |
-
-The matrix:
-
-| `backend` | `key_source` | Where data lives | Where key lives | Platforms |
-|---|---|---|---|---|
-| `sqlite` (default) | `password` (default) | SQLite file (encrypted) | Derived from master password via Argon2id; salt in `passwords.key` sidecar (0600) | macOS, Linux |
-| `sqlite` | `keychain` | SQLite file (encrypted) | macOS Keychain (256-bit random) | macOS only |
-| `keychain` | (ignored) | macOS Keychain | macOS Keychain | macOS only |
-
-Asking for the Keychain on Linux is an error that names the setting and where it was set.
-
-### Using the master password mode
+### Using the master password
 
 ```bash
 # First run — explains what it's creating, then asks for the new password twice
@@ -376,8 +348,7 @@ sesh recover            # forgot the master password? set a new one
 **What it means for security.** Anyone who has both your recovery key and your vault file can open the vault, with no other check, because sesh has no server to add one. That's why it's optional. It can't be guessed (128 random bits), but it can be found, so keep it away from the vault's computer. The `recovery.key` file next to the vault holds only a public key and the wrapped vault key; on its own it opens nothing.
 
 **Changes that affect it.**
-- **Changing your master password** (`sesh --rekey --to password`) keeps the recovery key working, with no prompt.
-- **Switching to the Keychain key source** removes it: a recovery key only works with a vault protected by a master password.
+- **Changing your master password** (`sesh --rekey`) keeps the recovery key working, with no prompt.
 
 ### Touch ID unlock (macOS)
 
@@ -398,7 +369,7 @@ Touch ID to allow this.
 **How it works.**
 - sesh creates a key inside your Mac's Secure Enclave that only a currently enrolled fingerprint can use. The private key never leaves the chip.
 - The agent wraps the vault key to it. The result is stored in `touchid.key`, next to the vault (0600).
-- Nothing goes in the Keychain, and `touchid.key` is useless on any other Mac or without your finger.
+- `touchid.key` is useless on any other Mac or without your finger.
 - The unlock is immediate after the touch: the slow password key derivation doesn't run.
 
 **Your master password still works**, and sesh falls back to it:
@@ -409,15 +380,14 @@ Touch ID to allow this.
 - **Scripts** (no terminal, or `SESH_MASTER_PASSWORD`) never wait on a fingerprint.
 
 **Changes that affect it.**
-- **Changing your master password** (`sesh --rekey --to password`) keeps Touch ID unlock working: sesh re-wraps the new key, with no prompt.
-- **Switching to the Keychain key source** turns Touch ID unlock off. It only unlocks a vault protected by a master password.
+- **Changing your master password** (`sesh --rekey`) keeps Touch ID unlock working: sesh re-wraps the new key, with no prompt.
 - **Adding or removing a fingerprint** in System Settings makes the Secure Enclave key unusable for good. sesh notices before showing the sheet: it says your fingerprints changed, turns Touch ID unlock off, and asks for the master password. Turn it back on with `sesh touchid enable`.
 
 Only a fingerprint approves the unlock. The Mac's login password and an Apple Watch don't, so the vault never becomes as weak as a different password.
 
 ### Using the sesh agent
 
-In master password mode, sesh keeps the derived key in a per-user background process, `sesh agent`, so you type the password once instead of on every command. **You don't need to manage it.** sesh starts it when it's needed, it locks itself, and the only thing it asks of you is your password.
+sesh keeps the derived key in a per-user background process, `sesh agent`, so you type the password once instead of on every command. **You don't need to manage it.** sesh starts it when it's needed, it locks itself, and the only thing it asks of you is your password.
 
 **How it runs**
 
@@ -427,7 +397,7 @@ In master password mode, sesh keeps the derived key in a per-user background pro
 4. The agent locks itself after 10 minutes without use, and 8 hours after each unlock however busy it is. It exits when it does, since a locked agent has nothing to serve; the next command starts a fresh one and prompts once. An agent that nobody unlocks (for example, you abandoned the prompt) exits after the same 10 minutes.
 5. After `sesh agent stop`, a crash, or a reboot, the next command starts a fresh agent and prompts.
 
-Runs with `SESH_MASTER_PASSWORD` set skip the agent entirely (see [Scripts and CI](#scripts-and-ci)), and keychain mode never uses it.
+Runs with `SESH_MASTER_PASSWORD` set skip the agent entirely (see [Scripts and CI](#scripts-and-ci)).
 
 **Optional controls**
 
@@ -485,16 +455,16 @@ Run that `kill`; the next command starts the new version.
 - For a bug report, check that the agent answers on its socket. Each request gets one JSON line back, `hello_ack` then `pong`:
 
   ```bash
-  printf '{"type":"hello","version":1}\n{"type":"ping","version":1}\n' | nc -U ~/Library/Caches/sesh/agent.sock
+  printf '{"type":"hello","version":2}\n{"type":"ping","version":2}\n' | nc -U ~/Library/Caches/sesh/agent.sock
   ```
 
 **Turning it off**
 
-There is nothing installed to remove. `sesh agent stop` shuts it down, and only a master-password command starts it again. After switching back to the keychain key source (`sesh --rekey --to keychain`), it is never started.
+There is nothing installed to remove. `sesh agent stop` shuts it down, and the next command that needs the vault starts it again.
 
 ### The audit log
 
-The vault records every read, store, and delete of an entry: when it happened, what kind of event it was (`access`, `modify`, `delete`), and which entry, named the way `--list` names it. It never records the secret itself. The macOS Keychain backend has no audit log.
+The vault records every read, store, and delete of an entry: when it happened, what kind of event it was (`access`, `modify`, `delete`), and which entry, named the way `--list` names it. It never records the secret itself.
 
 `sesh audit` shows the newest 50 events, newest first; `--limit 100` shows more, and `--limit 0` shows them all:
 
@@ -532,55 +502,16 @@ sesh --service password --action import --format encrypted --file backup.enc
 # Imported 12 entries
 ```
 
-Encrypted exports use the same Argon2id + AES-256-GCM primitives as the master password mode. The export is self-contained (envelope includes the salt and KDF params) and works across machines, key sources, and backends.
+Encrypted exports use the same Argon2id + AES-256-GCM primitives as the vault. The export is self-contained (envelope includes the salt and KDF params) and works across machines and master passwords.
 
-### Switching key sources (`sesh rekey`)
+Every export, encrypted or not, holds everything about each entry: its kind, service name, username, secret, times, and settings. A TOTP entry's settings (algorithm, digits, period, issuer) decide which codes are right, so they come back with it on import. In JSON they're the `settings` field; in CSV, a `settings` column holding the same JSON.
 
-Changing the key source setting after entries exist would otherwise leave the database unreadable — the new source derives a different key. `sesh rekey --to <source>` re-encrypts every entry under the target key source and atomically swaps the result into place.
+### Changing your master password (`sesh --rekey`)
 
-```bash
-# Currently using the Keychain key (key_source = "keychain"); switch to a master password.
-sesh --rekey --to password
-# Create master password: ****
-# Confirm master password: ****
-# About to re-encrypt 12 entries: keychain → password
-#   source DB:           /Users/alice/Library/Application Support/sesh/passwords.db
-#   The old vault is kept until the new one is in place, then removed.
-#
-# Proceed? [y/N]: y
-# Rekeyed 12 entries: keychain → password
-# Removed the old vault's copy, so the old key no longer opens anything.
-# Note: old keychain entry 'sesh-sqlite-encryption-key' is now unused. Remove it via Keychain Access if you want to clean up.
-
-# Set key_source = "password" in ~/.config/sesh/config.toml.
-sesh --service password --list
-```
-
-Behaviour:
-
-- **Atomic.** Either every entry is re-encrypted under the new source and the swap completes, or nothing changes. A copy failure cleans up the new key state and leaves the original database and original key state untouched.
-- **No old copy left behind.** While it runs, the original database is kept as `<dbPath>.pre-rekey`, so a failure puts it back. Once the new vault is in place, and has been checked to open with the new key and hold every entry, that copy is removed: it would only let the old key open your secrets.
-- **Updates your setting.** When the key source came from the config file (or the default), rekey sets `key_source` in `~/.config/sesh/config.toml` to the new source, editing only that line so your comments stay. When it came from `SESH_KEY_SOURCE` or `--key-source`, rekey says what to change instead. If the setting is left stale, the vault's key check refuses the next command rather than using the old key.
-- **The old key goes too.** Switching keychain → password removes the old Keychain key; switching password → keychain removes the old `passwords.key`. Once the switch has succeeded they open nothing, and leaving them would only block switching back. (sesh keeps one vault per user, so they were this vault's alone.)
-- **Refuses if the target is already initialised.** If a sidecar already exists for `--to password`, or a keychain entry already exists for `--to keychain`, rekey aborts and asks you to clean up manually before retrying.
-- **`--to password` while already in password mode is the rotation case.** See "Rotating your master password" below. The `keychain → keychain` analogue (rotating the random keychain key in place) is not yet supported.
-
-Timestamps (`created_at`, `updated_at`) are preserved across the rekey.
-
-**The vault checks its key.** Every SQLite vault stores a small value encrypted with its key, and the name of the key source that protects it. Each command decrypts that value before it reads or writes anything, so a wrong key is refused instead of being used:
-
-- **Forgot to change the key source setting after a rekey:** `this vault uses the keychain key source, but sesh is using password`. The message gives the setting to use, or the rekey command that switches the vault instead.
-- **`passwords.key` replaced, or the Keychain entry changed:** `the password key in use is not the one this vault was created with`. Restore the original.
-- **`passwords.key` missing next to an existing vault:** sesh won't create a new master password there. It stops, says the key file is missing, and says how to recover.
-
-A vault created before this check gets its check value the first time one of its entries decrypts.
-
-### Rotating your master password
-
-When the master password is the active key source (the default), `sesh --rekey --to password` rotates the master password in place: every entry is re-encrypted under a freshly-derived key from a new password you choose. The old vault is kept only while the change runs.
+`sesh --rekey` changes your master password: every entry is re-encrypted under a freshly-derived key from a new password you choose. The old vault is kept only while the change runs.
 
 ```bash
-sesh --rekey --to password
+sesh --rekey
 # Master password: ****                          # current password
 # About to rotate master password and re-encrypt 12 entries.
 #   source DB:           /Users/alice/Library/Application Support/sesh/passwords.db
@@ -600,6 +531,13 @@ Behaviour:
 - **Tidies up after older versions.** Files an earlier change left behind (older sesh versions kept the `.pre-rotate` copies; an interrupted change can leave `.new` files) are removed once your current password is verified, and sesh says which.
 - **Same Argon2id parameters as the original sidecar.** Rotation generates a new salt and re-derives, but does not bump KDF cost parameters. If you want to upgrade those, that's a separate operation (currently via encrypted export → import with a fresh sidecar).
 
+**The vault checks its key.** Every vault stores a small value encrypted with its key. Each command decrypts that value before it reads or writes anything, so a wrong key is refused instead of being used:
+
+- **`passwords.key` replaced:** `the master password key in use is not the one this vault was created with`. Restore the original.
+- **`passwords.key` missing next to an existing vault:** sesh won't create a new master password there. It stops, says the key file is missing, and says how to recover.
+- **A vault from a development build that kept its key in the macOS Keychain:** `this vault's key was kept in the macOS Keychain, which sesh no longer supports`. Start a new vault by moving it aside.
+
+A vault created before this check gets its check value the first time one of its entries decrypts.
 
 
 ## Usage Patterns
@@ -629,7 +567,7 @@ The most efficient AWS development workflow uses sesh's subshell mode, which pro
 ```bash
 $ sesh -service aws
 🔍 Using MFA serial: arn:aws:iam::123456789012:mfa/your-user
-🔑 Retrieved secret from keychain
+🔑 Retrieved secret from the vault
 Starting secure shell with aws credentials
 🔐 Secure shell with aws credentials activated. Type 'sesh_help' for more information.
 (sesh:aws) $
@@ -691,12 +629,14 @@ sesh -service totp -service-name github -profile personal
 sesh -service totp -list
 # Output:
 #   Entries for totp:
-#     github (work)        TOTP for github profile work [ID: sesh-totp/github/work:username]
-#     github (personal)    TOTP for github profile personal [ID: sesh-totp/github/personal:username]
-#     google               TOTP for google [ID: sesh-totp/google:username]
+#     github (personal)    TOTP [ID: totp/github/personal]
+#     github (work)        TOTP [ID: totp/github/work]
+#     google               TOTP [ID: totp/google]
 ```
 
 The `[ID: ...]` value is what you pass to `-delete`.
+
+There's one set of TOTP entries. `-service totp` and the password manager's `totp-store` / `totp-generate` work on the same ones (`-profile` and `-username` mean the same thing), so an entry added either way shows up in both, in search, and in exports. The AWS provider's MFA secret for a profile is the TOTP entry `aws` with the profile as its username, and it remembers the MFA device with it.
 
 ### Password Manager Workflow
 
@@ -767,7 +707,7 @@ sesh -service password -action get -service-name github -username alice -format 
 
 #### Searching
 
-`-action search -query <words>` looks at the two things you name an entry by: its service name and its username. It never looks at secrets, or at the labels sesh adds itself (the stored name's `sesh-password/...` prefix, your login name, the generated description).
+`-action search -query <words>` looks at the two things you name an entry by: its service name and its username. It never looks at secrets.
 
 - **Any part of a name.** `hub` finds `github`. Case doesn't matter.
 - **Punctuation optional.** `mybank` finds `my-bank`, `awsconsole` finds `aws-console`.
@@ -826,7 +766,7 @@ Pass `-force` to overwrite non-interactively.
 flowchart TD
     classDef profile fill:#bbf,stroke:#333,stroke-width:2px
     classDef service fill:#f9f,stroke:#333,stroke-width:2px
-    classDef keychain fill:#dfd,stroke:#333,stroke-width:2px
+    classDef vault fill:#dfd,stroke:#333,stroke-width:2px
 
     Start([Multiple Accounts])
     
@@ -844,7 +784,7 @@ flowchart TD
     TOTP --> Google["Google"]:::service
     Google --> GoogleMain["Main Account<br>-service-name google"]:::profile
     
-    AWSProd & AWSDev & AWSStaging & GHWork & GHPersonal & GoogleMain --> KC["macOS Keychain<br>Secure Storage"]:::keychain
+    AWSProd & AWSDev & AWSStaging & GHWork & GHPersonal & GoogleMain --> KC["Encrypted vault<br>one file"]:::vault
 ```
 
 ### Entry Management
@@ -855,11 +795,11 @@ List and manage stored entries:
 # List all entries for a service
 $ sesh -service aws -list
 Entries for aws:
-  AWS (default)        AWS MFA for profile (default) [ID: sesh-aws/default:username]
-  AWS (prod)           AWS MFA for profile (prod) [ID: sesh-aws/prod:username]
+  AWS (default)        AWS MFA for profile (default) [ID: totp/aws/default]
+  AWS (prod)           AWS MFA for profile (prod) [ID: totp/aws/prod]
 
 # Delete an entry by copying the ID from -list output
-$ sesh -service aws -delete "sesh-aws/prod:username"
+$ sesh -service aws -delete totp/aws/prod
 ✅ Entry deleted successfully
 ```
 
@@ -915,7 +855,6 @@ sesh -service totp -help
 | "failed to capture screenshot" | QR scanning cancelled or failed | Press Enter to fall back to manual secret entry |
 | "failed to decode QR code" | QR code blurry, too small, or not `otpauth://` format | Try manual entry instead, or retake a clearer screenshot |
 | "failed to detect MFA device" | AWS CLI can't find an MFA device for the profile | Ensure an MFA device is configured in AWS IAM for this profile |
-| macOS Keychain permission dialog | First-time access from a new sesh binary path | Click "Always Allow" to grant sesh permanent access |
 | "already in a sesh environment" | Tried to nest sesh sessions | Exit the current subshell first with `exit` or Ctrl+D |
 
 ## Environment Variables
@@ -939,7 +878,7 @@ When run without additional flags, sesh will:
 2. **For TOTP (`-service totp`)**: Display the current code with time remaining
 3. **Setup Required**: First-time users must run `-setup` for each service
 4. **Profile Selection**: Uses default AWS profile or requires `-service-name` for TOTP
-5. **Security**: Secrets are stored in the macOS Keychain (with binary-level ACLs) or in SQLite encrypted at rest with AES-256-GCM
+5. **Security**: Secrets are stored in one vault file, each encrypted at rest with AES-256-GCM under a key derived from your master password
 6. **Clipboard**: On macOS, values copied via `-clip` are automatically cleared after 30 seconds (only if the clipboard still holds the copied value). On other platforms no auto-clear is performed
 
 ## Subshell Behavior

@@ -11,10 +11,8 @@ import (
 type settingFlag struct {
 	set   func(*config.Overrides, string)
 	usage string
-	// values are the accepted values, when they're a fixed set; path marks
-	// a file path. Shell completion offers them.
-	values []string
-	path   bool
+	// path marks a file path, which shell completion offers.
+	path bool
 }
 
 // settingFlags are the global flags that override a setting for one run.
@@ -22,26 +20,16 @@ type settingFlag struct {
 // because the store is opened, with these settings, before the command's
 // own flags are read.
 var settingFlags = map[string]settingFlag{
-	"backend": {
-		set:    func(o *config.Overrides, v string) { o.Backend = v },
-		usage:  "Storage backend, for this command only",
-		values: []string{config.BackendSQLite, config.BackendKeychain},
-	},
-	"key-source": {
-		set:    func(o *config.Overrides, v string) { o.KeySource = v },
-		usage:  "Key source for the sqlite backend, for this command only",
-		values: []string{config.KeySourcePassword, config.KeySourceKeychain},
-	},
 	"db-path": {
 		set:   func(o *config.Overrides, v string) { o.DBPath = v },
-		usage: "Vault location for the sqlite backend, for this command only",
+		usage: "Vault location, for this command only",
 		path:  true,
 	},
 }
 
-// takeSettingFlags removes --backend, --key-source, and --db-path (with one
-// or two dashes, as "--flag value" or "--flag=value") from args and returns
-// the rest with the overrides they set. Arguments after "--" are left alone.
+// takeSettingFlags removes --db-path (with one or two dashes, as "--flag
+// value" or "--flag=value") from args and returns the rest with the
+// overrides they set. Arguments after "--" are left alone.
 func takeSettingFlags(args []string) ([]string, config.Overrides, error) {
 	var o config.Overrides
 	if len(args) == 0 {

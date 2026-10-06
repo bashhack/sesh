@@ -6,15 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/keychain/mocks"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // searchVault is a manager over a realistic set of entries, updated one day
 // apart in the order listed (the last is the most recent).
 func searchVault(t *testing.T) *Manager {
 	t.Helper()
-	const user = "testuser"
 	names := []string{
 		"password/github/alice",
 		"totp/github/alice",
@@ -31,18 +29,31 @@ func searchVault(t *testing.T) *Manager {
 		"secure_note/wifi-home",
 		"password/netflix/family",
 	}
-	entries := make([]keychain.KeychainEntry, len(names))
+	return managerWith(t, names, func(i int) time.Time { return time.Date(2026, 1, i+1, 0, 0, 0, 0, time.UTC) })
+}
+
+// managerWith is a manager over the entries named (kind/service[/username]),
+// the i-th updated at when(i).
+func managerWith(t *testing.T, names []string, when func(i int) time.Time) *Manager {
+	t.Helper()
+	m, store := newTestManager(t)
 	for i, n := range names {
-		entries[i] = keychain.KeychainEntry{
-			Service:     "sesh-password/" + n,
-			Account:     user,
-			Description: strings.SplitN(n, "/", 2)[0] + " for " + n,
-			UpdatedAt:   time.Date(2026, 1, i+1, 0, 0, 0, 0, time.UTC),
+		k, err := vault.ParseKey(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(&vault.Entry{Key: k, UpdatedAt: when(i)}, []byte("x")); err != nil {
+			t.Fatal(err)
 		}
 	}
-	return NewManager(&mocks.MockProvider{
-		ListEntriesFunc: func(string) ([]keychain.KeychainEntry, error) { return entries, nil },
-	}, user)
+	return m
+}
+
+// listFailing is a store whose List fails.
+type listFailing struct{ *vault.MemStore }
+
+func (listFailing) List(vault.Filter) ([]vault.Entry, error) {
+	return nil, errors.New("store unavailable")
 }
 
 // label names an entry as the tests list it: type/service[/username].
@@ -151,13 +162,7 @@ func TestSearchSuggestions(t *testing.T) {
 }
 
 func TestSearchSuggestions_KindWordsOnlyForKindsInTheVault(t *testing.T) {
-	entries := []keychain.KeychainEntry{
-		{Service: "sesh-password/password/github/alice", Account: "testuser"},
-		{Service: "sesh-password/api_key/openai", Account: "testuser"},
-	}
-	m := NewManager(&mocks.MockProvider{
-		ListEntriesFunc: func(string) ([]keychain.KeychainEntry, error) { return entries, nil },
-	}, "testuser")
+	m := managerWith(t, []string{"password/github/alice", "api_key/openai"}, func(int) time.Time { return time.Time{} })
 	for query, want := range map[string]string{
 		"2fa":   "",      // no TOTP entries: "mfa" would find nothing either
 		"notes": "",      // no notes
@@ -174,11 +179,7 @@ func TestSearchSuggestions_KindWordsOnlyForKindsInTheVault(t *testing.T) {
 }
 
 func TestSearch_ListError(t *testing.T) {
-	m := NewManager(&mocks.MockProvider{
-		ListEntriesFunc: func(string) ([]keychain.KeychainEntry, error) {
-			return nil, errors.New("store unavailable")
-		},
-	}, "testuser")
+	m := NewManager(listFailing{vault.NewMemStore()})
 	if _, err := m.SearchEntries("github"); err == nil || !strings.Contains(err.Error(), "store unavailable") {
 		t.Errorf("SearchEntries error = %v, want it to contain %q", err, "store unavailable")
 	}

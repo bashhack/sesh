@@ -10,45 +10,31 @@ import (
 	"time"
 
 	awsInternal "github.com/bashhack/sesh/internal/aws"
-	"github.com/bashhack/sesh/internal/constants"
-	"github.com/bashhack/sesh/internal/env"
-	"github.com/bashhack/sesh/internal/keychain"
-	"github.com/bashhack/sesh/internal/keyformat"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/subshell"
 	internalTotp "github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // Provider implements ServiceProvider for AWS.
 type Provider struct {
-	aws      awsInternal.Provider
-	keychain keychain.Provider
-	totp     internalTotp.Provider
+	aws   awsInternal.Provider
+	store vault.Store
+	totp  internalTotp.Provider
 
 	provider.Clock
-	provider.KeyUser
 
 	profile    string
-	keyName    string
 	noSubshell bool
 }
 
 var _ provider.ServiceProvider = (*Provider)(nil)
 
 // NewProvider creates a new AWS provider.
-func NewProvider(
-	aws awsInternal.Provider,
-	kc keychain.Provider,
-	totp internalTotp.Provider,
-) *Provider {
-	return &Provider{
-		aws:      aws,
-		keychain: kc,
-		totp:     totp,
-		keyName:  constants.AWSServicePrefix,
-	}
+func NewProvider(aws awsInternal.Provider, store vault.Store, totp internalTotp.Provider) *Provider {
+	return &Provider{aws: aws, store: store, totp: totp}
 }
 
 // Name returns the provider name.
@@ -65,32 +51,17 @@ func (p *Provider) Description() string {
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
 	fs.BoolVar(&p.noSubshell, "no-subshell", false, "Print environment variables instead of launching subshell")
-
-	defaultKeyUser, err := env.GetCurrentUser()
-	if err != nil {
-		return fmt.Errorf("failed to get current user: %w", err)
-	}
-	p.User = defaultKeyUser
 	return nil
 }
 
 // GetSetupHandler returns a setup handler for AWS
 func (p *Provider) GetSetupHandler() any {
-	return setup.NewAWSSetupHandler(p.keychain)
+	return setup.NewAWSSetupHandler(p.store)
 }
 
 // GetTOTPCodes retrieves TOTP codes without performing AWS authentication
 func (p *Provider) GetTOTPCodes() (currentCode, nextCode string, secondsLeft int64, err error) {
-	if err := p.EnsureUser(); err != nil {
-		return "", "", 0, err
-	}
-
-	keyName, err := buildServiceKey(p.keyName, p.profile)
-	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to build service key: %w", err)
-	}
-
-	secretBytes, err := p.keychain.GetSecret(p.User, keyName)
+	secretBytes, err := p.store.Get(vault.AWSKey(p.profile))
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), err)
 	}
@@ -101,7 +72,7 @@ func (p *Provider) GetTOTPCodes() (currentCode, nextCode string, secondsLeft int
 
 	secure.SecureZeroBytes(secretBytes)
 
-	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from keychain\n")
+	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from the vault\n")
 
 	// Check if secret looks valid (base32 encoded)
 	secretLen := len(secretCopy)
@@ -188,12 +159,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 			if secondInvalidMFA && freshSecondsLeft > 10 {
 				fmt.Fprintf(os.Stderr, "⚠️ Both current and next codes were rejected - may need to wait for next time window\n")
 
-				keyName, kErr := buildServiceKey(p.keyName, p.profile)
-				if kErr != nil {
-					return provider.Credentials{}, fmt.Errorf("failed to build service key: %w", kErr)
-				}
-
-				secretBytes, fetchErr := p.keychain.GetSecret(p.User, keyName)
+				secretBytes, fetchErr := p.store.Get(vault.AWSKey(p.profile))
 				if fetchErr != nil {
 					return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), fetchErr)
 				}
@@ -250,36 +216,24 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}, nil
 }
 
-// ListEntries returns all AWS entries in the keychain
+// ListEntries returns an entry for each AWS profile set up; its ID is its key.
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
-	allEntries, err := p.keychain.ListEntries(constants.AWSServicePrefix)
+	entries, err := p.store.List(vault.Filter{Kind: vault.KindTOTP, Service: vault.AWSKey("").Service})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list AWS entries: %w", err)
 	}
-
-	result := make([]provider.ProviderEntry, 0, len(allEntries))
-	for _, entry := range allEntries {
-		// Skip MFA serial entries - we don't want to show these to users
-		// as they're implementation details and paired with the main entries
-		if strings.HasPrefix(entry.Service, constants.AWSServiceMFAPrefix) {
-			continue
+	result := make([]provider.ProviderEntry, 0, len(entries))
+	for i := range entries {
+		e := &entries[i]
+		if e.Key != vault.AWSKey(e.Username) {
+			continue // a TOTP entry named aws with no username: not a profile
 		}
-
-		serviceName := entry.Service
-		profile := parseServiceKey(serviceName)
-
-		name := fmt.Sprintf("AWS (%s)", profile)
-		description := fmt.Sprintf("AWS MFA for %s", formatProfile(profile))
-
-		id := fmt.Sprintf("%s:%s", serviceName, entry.Account)
-
 		result = append(result, provider.ProviderEntry{
-			Name:        name,
-			Description: description,
-			ID:          id,
+			Name:        fmt.Sprintf("AWS (%s)", e.Username),
+			Description: fmt.Sprintf("AWS MFA for %s", formatProfile(e.Username)),
+			ID:          e.Key.String(),
 		})
 	}
-
 	return result, nil
 }
 
@@ -311,29 +265,18 @@ func (p *Provider) getAWSProfiles() ([]string, error) {
 	return profiles, nil
 }
 
-// DeleteEntry deletes an AWS entry from the keychain
+// DeleteEntry deletes the AWS profile's entry id names.
 func (p *Provider) DeleteEntry(id string) error {
-	service, account, err := provider.ParseEntryID(id)
+	k, err := vault.ParseKey(id)
 	if err != nil {
 		return err
 	}
-
-	if err := p.keychain.DeleteEntry(account, service); err != nil {
+	if k != vault.AWSKey(k.Username) {
+		return fmt.Errorf("%s isn't an AWS entry; delete it with --service password", id)
+	}
+	if err := p.store.Delete(k); err != nil {
 		return fmt.Errorf("failed to delete AWS entry: %w", err)
 	}
-
-	// If this was an AWS entry, also delete the corresponding serial entry
-	segments, parseErr := keyformat.Parse(service, constants.AWSServicePrefix)
-	if parseErr == nil && len(segments) > 0 {
-		serialService, buildErr := keyformat.Build(constants.AWSServiceMFAPrefix, segments...)
-		if buildErr == nil {
-			if err := p.keychain.DeleteEntry(account, serialService); err != nil {
-				// Log but don't fail if serial entry deletion fails
-				fmt.Fprintf(os.Stderr, "Warning: Failed to delete serial entry %s: %v\n", serialService, err)
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -342,51 +285,20 @@ func (p *Provider) GetProfile() string {
 	return p.profile
 }
 
-// GetTOTPKeyInfo returns the user and key name for TOTP generation.
-func (p *Provider) GetTOTPKeyInfo() (string, string, error) {
-	if err := p.EnsureUser(); err != nil {
-		return "", "", err
-	}
-
-	keyName, err := buildServiceKey(p.keyName, p.profile)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to build service key: %w", err)
-	}
-
-	return p.User, keyName, nil
-}
-
-// GetMFASerialBytes returns the MFA device serial as bytes
+// GetMFASerialBytes returns the profile's MFA device, from its entry's
+// settings, or else the first device AWS lists for the profile.
 func (p *Provider) GetMFASerialBytes() ([]byte, error) {
-	if err := p.EnsureUser(); err != nil {
-		return nil, err
+	e, err := p.store.Lookup(vault.AWSKey(p.profile))
+	if err != nil && !errors.Is(err, vault.ErrNotFound) {
+		return nil, fmt.Errorf("failed to read the MFA device: %w", err)
 	}
-
-	var serialService string
-	var err error
-	serialService, err = buildServiceKey(constants.AWSServiceMFAPrefix, p.profile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build MFA service key: %w", err)
+	if err == nil && e.Settings.AWSMFADevice != "" {
+		return []byte(e.Settings.AWSMFADevice), nil
 	}
-
-	serialBytes, err := p.keychain.GetSecret(p.User, serialService)
-	if err == nil {
-		result := make([]byte, len(serialBytes))
-		copy(result, serialBytes)
-		secure.SecureZeroBytes(serialBytes)
-		return result, nil
-	}
-
-	// Only fall back to auto-detection on "not found" — surface real errors
-	if !errors.Is(err, keychain.ErrNotFound) {
-		return nil, fmt.Errorf("failed to read MFA serial from keychain: %w", err)
-	}
-
 	serial, autoErr := p.aws.GetFirstMFADevice(p.profile)
 	if autoErr != nil {
 		return nil, fmt.Errorf("failed to detect MFA device: %w", autoErr)
 	}
-
 	return []byte(serial), nil
 }
 
@@ -400,49 +312,44 @@ func (p *Provider) NewSubshellConfig(creds *provider.Credentials) any {
 	}
 }
 
-// ValidateRequest performs early validation before any AWS operations.
+// ValidateRequest checks the profile is set up before any AWS call, which
+// would otherwise be slow to fail.
 func (p *Provider) ValidateRequest() error {
-	if err := p.EnsureUser(); err != nil {
-		return err
-	}
-
-	// Check if we have required keychain entries for this profile
-	// This prevents slow AWS API calls when no entry exists
-	totpKey, err := buildServiceKey(p.keyName, p.profile)
+	e, err := p.store.Lookup(vault.AWSKey(p.profile))
 	if err != nil {
-		return fmt.Errorf("failed to build service key: %w", err)
-	}
-	mfaKey, err := buildServiceKey(constants.AWSServiceMFAPrefix, p.profile)
-	if err != nil {
-		return fmt.Errorf("failed to build MFA service key: %w", err)
-	}
-
-	totpSecret, err := p.keychain.GetSecret(p.User, totpKey)
-	if err != nil {
-		if !errors.Is(err, keychain.ErrNotFound) {
-			return fmt.Errorf("failed to read TOTP secret from keychain: %w", err)
+		if !errors.Is(err, vault.ErrNotFound) {
+			return fmt.Errorf("failed to look up the AWS entry: %w", err)
 		}
-		profileDesc := p.profile
-		if profileDesc == "" {
-			profileDesc = "default"
-		}
-		return fmt.Errorf("no AWS entry found for profile '%s'. Run 'sesh --service aws --setup' first", profileDesc)
+		return fmt.Errorf("no AWS entry found for %s. Run 'sesh --service aws --setup' first", formatProfile(p.profile))
 	}
-	secure.SecureZeroBytes(totpSecret)
-
-	// Check if MFA serial exists (not critical but helps with better error messages)
-	mfaSecret, err := p.keychain.GetSecret(p.User, mfaKey)
-	if err != nil {
-		if !errors.Is(err, keychain.ErrNotFound) {
-			return fmt.Errorf("failed to read MFA serial from keychain: %w", err)
-		}
-		// Not found is not fatal — we can try to auto-detect, but warn the user
-		fmt.Fprintf(os.Stderr, "⚠️  MFA serial not found in keychain for profile '%s', will attempt auto-detection\n", p.profile)
-	} else {
-		secure.SecureZeroBytes(mfaSecret)
+	if err := checkAWSCodes(e.Settings.TOTP); err != nil {
+		return fmt.Errorf("the AWS entry for %s %w; set it up again with 'sesh --service aws --setup'", formatProfile(p.profile), err)
 	}
-
+	if e.Settings.AWSMFADevice == "" {
+		// Not fatal: GetMFASerialBytes asks AWS for the profile's device.
+		fmt.Fprintf(os.Stderr, "⚠️  No MFA device stored for %s; asking AWS for it\n", formatProfile(p.profile))
+	}
 	return nil
+}
+
+// checkAWSCodes refuses code settings other than AWS's (SHA-1, 6 digits,
+// 30 seconds), which the entry can hold when it was set up through the
+// TOTP provider: codes made with them would never match.
+func checkAWSCodes(params internalTotp.Params) error {
+	alg, digits, period := strings.ToUpper(params.Algorithm), params.Digits, params.Period
+	if alg == "" {
+		alg = "SHA1"
+	}
+	if digits == 0 {
+		digits = 6
+	}
+	if period == 0 {
+		period = 30
+	}
+	if alg == "SHA1" && digits == 6 && period == 30 {
+		return nil
+	}
+	return fmt.Errorf("has code settings AWS doesn't use (%s, %d digits, %ds)", alg, digits, period)
 }
 
 // GetFlagInfo returns information about AWS provider-specific flags
@@ -468,15 +375,6 @@ func (p *Provider) ShouldUseSubshell() bool {
 	return !p.noSubshell
 }
 
-// buildServiceKey creates a service key for the keychain using keyformat.Build.
-// Format: {prefix}/{profile} — defaults empty profile to "default".
-func buildServiceKey(prefix, profile string) (string, error) {
-	if profile == "" {
-		profile = "default"
-	}
-	return keyformat.Build(prefix, profile)
-}
-
 // formatProfile returns a formatted profile description
 // Returns "profile (default)" or "profile (name)"
 func formatProfile(profile string) string {
@@ -485,14 +383,4 @@ func formatProfile(profile string) string {
 		name = "default"
 	}
 	return fmt.Sprintf("profile (%s)", name)
-}
-
-// parseServiceKey extracts the profile from a service key using keyformat.Parse.
-// For "sesh-aws/default" returns "default".
-func parseServiceKey(serviceKey string) string {
-	segments, err := keyformat.Parse(serviceKey, constants.AWSServicePrefix)
-	if err != nil || len(segments) == 0 {
-		return ""
-	}
-	return segments[0]
 }

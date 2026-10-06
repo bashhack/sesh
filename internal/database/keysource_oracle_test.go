@@ -17,11 +17,11 @@ func TestKeySourceOracle_RoundTripAndClose(t *testing.T) {
 	ks := &closingKeySource{key: bytes.Repeat([]byte{0xAB}, 32)}
 	oracle := NewKeySourceOracle(ks)
 
-	ct, salt, err := oracle.EncryptEntry([]byte("secret"))
+	ct, salt, err := oracle.EncryptEntry([]byte("secret"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := oracle.DecryptEntry(ct, salt)
+	got, err := oracle.DecryptEntry(ct, salt, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,12 +40,12 @@ func TestKeySourceOracle_RoundTripAndClose(t *testing.T) {
 }
 
 func TestKeySourceOracle_PropagatesKeyError(t *testing.T) {
-	keyErr := errors.New("keychain locked")
+	keyErr := errors.New("key unavailable")
 	oracle := NewKeySourceOracle(&mockKeySource{err: keyErr})
-	if _, _, err := oracle.EncryptEntry([]byte("x")); !errors.Is(err, keyErr) {
+	if _, _, err := oracle.EncryptEntry([]byte("x"), nil); !errors.Is(err, keyErr) {
 		t.Fatalf("EncryptEntry err = %v, want %v", err, keyErr)
 	}
-	if _, err := oracle.DecryptEntry([]byte("x"), []byte("salt")); !errors.Is(err, keyErr) {
+	if _, err := oracle.DecryptEntry([]byte("x"), []byte("salt"), nil); !errors.Is(err, keyErr) {
 		t.Fatalf("DecryptEntry err = %v, want %v", err, keyErr)
 	}
 }

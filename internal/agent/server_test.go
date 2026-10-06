@@ -413,7 +413,7 @@ func TestServer_UnlockRejectsUndecodableRequest(t *testing.T) {
 
 	conn := dialAndShake(t, sockPath)
 	defer mustClose(t, conn)
-	if _, err := conn.Write([]byte("{\"type\":\"unlock\",\"version\":1,\"password\":1}\n")); err != nil {
+	if _, err := conn.Write([]byte("{\"type\":\"unlock\",\"version\":2,\"password\":1}\n")); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
@@ -616,8 +616,8 @@ func TestServer_RejectsUndecodableCryptoRequests(t *testing.T) {
 	defer stop()
 
 	for _, req := range []string{
-		`{"type":"decrypt","version":1,"ciphertext":1}`,
-		`{"type":"encrypt","version":1,"plaintext":1}`,
+		`{"type":"decrypt","version":2,"ciphertext":1}`,
+		`{"type":"encrypt","version":2,"plaintext":1}`,
 	} {
 		conn := dialAndShake(t, sockPath)
 		if _, err := conn.Write([]byte(req + "\n")); err != nil {

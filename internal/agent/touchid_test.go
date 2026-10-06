@@ -61,7 +61,7 @@ func TestTouchID_WrapThenUnlockWithAFingerprint(t *testing.T) {
 	conn, verify, id := unlockForTouchID(t, sockPath)
 	defer mustClose(t, conn)
 
-	ct, salt, err := Encrypt(conn, []byte("stored before the lock"), id)
+	ct, salt, err := Encrypt(conn, []byte("stored before the lock"), nil, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestTouchID_WrapThenUnlockWithAFingerprint(t *testing.T) {
 	if *prompts != 1 {
 		t.Errorf("prompts = %d, want 1", *prompts)
 	}
-	got, err := Decrypt(conn, ct, salt, id)
+	got, err := Decrypt(conn, ct, salt, nil, id)
 	if err != nil || string(got) != "stored before the lock" {
 		t.Fatalf("decrypt after a Touch ID unlock = %q, %v", got, err)
 	}

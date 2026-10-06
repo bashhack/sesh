@@ -2,7 +2,7 @@
 flowchart TD
     classDef profile fill:#bbf,stroke:#333,stroke-width:2px
     classDef service fill:#f9f,stroke:#333,stroke-width:2px
-    classDef keychain fill:#dfd,stroke:#333,stroke-width:2px
+    classDef vault fill:#dfd,stroke:#333,stroke-width:2px
 
     Start([Multiple Accounts])
     
@@ -20,4 +20,4 @@ flowchart TD
     TOTP --> Google["Google"]:::service
     Google --> GoogleMain["Main Account<br>-service-name google"]:::profile
     
-    AWSProd & AWSDev & AWSStaging & GHWork & GHPersonal & GoogleMain --> KC["macOS Keychain<br>Secure Storage"]:::keychain
+    AWSProd & AWSDev & AWSStaging & GHWork & GHPersonal & GoogleMain --> KC["sesh vault<br>Encrypted Storage"]:::vault

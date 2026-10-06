@@ -7,7 +7,7 @@ This document describes the security architecture and privacy principles that gu
 sesh is built on three fundamental principles:
 
 1. **Privacy First**: sesh stores your secrets locally and never transmits them — only derived values (TOTP codes, session tokens) leave your machine
-2. **Layered Encryption**: AES-256-GCM with Argon2id key derivation in the default encrypted vault, or the macOS Keychain if you choose it
+2. **Layered Encryption**: AES-256-GCM with Argon2id key derivation in an encrypted vault, its key from your master password
 3. **Transparent Security**: Be honest about what we can and cannot protect against
 
 ## Threat Model
@@ -15,14 +15,14 @@ sesh is built on three fundamental principles:
 sesh is designed to reduce exposure to:
 
 - **Corporate Data Harvesting**: Unlike browser extensions or corporate MFA apps, sesh never phones home
-- **Credential Theft**: Secrets are stored in macOS Keychain with binary-level access control
+- **Credential Theft**: Every secret is encrypted in the vault, with a key derived from your master password. The key itself is stored only wrapped, in the optional recovery key and Touch ID files, and in the agent's memory while it's unlocked
 - **Memory Scraping**: Best-effort memory zeroing reduces exposure windows
 - **Accidental Exposure**: Subshells isolate credentials from your main environment
 - **Supply Chain Attacks**: Minimal dependencies reduce attack surface
 
 sesh is NOT designed to protect against:
 
-- **Compromised Local Account**: If an attacker has your macOS account, they can access Keychain. In master password mode they can also use an unlocked sesh agent; see [Sesh agent](#sesh-agent)
+- **Compromised Local Account**: A process running as you can use an unlocked sesh agent, and capture a password as you type it; see [Sesh agent](#sesh-agent)
 - **Root/Admin Access**: System-level compromise bypasses all application-level protections
 - **Physical Access**: Direct hardware access can bypass software protections
 - **Memory Dump Attacks**: Go's immutable strings mean TOTP codes and some intermediate values persist in memory until GC. Byte slices are zeroed, but string copies from the TOTP library cannot be.
@@ -30,29 +30,29 @@ sesh is NOT designed to protect against:
 - **Terminal Recording**: Session recording tools (asciinema, iTerm2 logging, tmux capture) and shell history files can capture commands and output. Consider `export HISTFILE=/dev/null` in sensitive contexts.
 - **Child Process Visibility**: Once credentials are output (clipboard, stdout, or subshell environment variables), any child process spawned from the shell can access them. This is inherent to how Unix environments work.
 
-## Keychain Integration
+## Storage
 
 ### Storage Security
 
-sesh supports two storage backends. The default is an encrypted SQLite vault unlocked with your master password, on macOS and Linux. The macOS Keychain backend (`backend = "keychain"`, macOS only) is used only when you choose it.
+Every secret lives in one encrypted vault, a SQLite file, on macOS and Linux. Its key comes from your master password.
 
-#### SQLite Store (default)
+#### The vault
 
-The SQLite backend provides application-level encryption on top of file-system storage:
+The vault provides application-level encryption on top of file-system storage:
 
 - **AES-256-GCM**: Authenticated encryption for every stored entry
 - **Per-entry salts**: Each entry derives a unique encryption key from the master key + a random 16-byte salt
+- **Bound to its entry**: each secret is encrypted with its entry's key (kind, service name, username) as AES-GCM associated data, so a secret copied into another entry's row by someone who can write the vault file fails to decrypt there instead of being read as that entry. The vault key check uses no associated data, so it and an entry can't stand in for each other. The binding covers the secret only: someone who can write the file can still change an entry's settings (TOTP code settings, the AWS MFA device) or its times, or put back an older encrypted copy of the same entry's secret
 - **Argon2id key derivation**: Memory-hard KDF for per-entry key derivation (16 MiB, 1 iteration, 1 thread). The KDF input is the 256-bit high-entropy master key (see below), *not* a user password — so these parameters are chosen for domain separation between entries rather than password stretching, and fall below OWASP's password-KDF minimums by design
-- **Two key sources** (`key_source`): the master key is derived from your master password (default), or kept in the macOS Keychain (see below)
-- **Vault key check**: the vault stores a constant encrypted with its key (the `vault_key` table), plus the name of the key source that protects it. Every command decrypts the constant before reading or writing any entry, and refuses a key that fails. A mismatched key source setting, a replaced `passwords.key`, or a changed Keychain entry therefore can't write entries the vault's real key can't read. Password mode also refuses to create a new master key next to an existing vault whose `passwords.key` is missing
+- **Vault key check**: the vault stores a constant encrypted with its key (the `vault_key` table). Every command decrypts the constant before reading or writing any entry, and refuses a key that fails, so a replaced `passwords.key` can't write entries the vault's real key can't read. sesh also refuses to create a new master key next to an existing vault whose `passwords.key` is missing. A vault from a development build that kept its key in the macOS Keychain is refused by name
 - **Key versioning**: Schema supports key rotation via `key_version` column and `key_metadata` table (rotation logic planned)
 - **Search**: matches service names and usernames, which are stored unencrypted; it never decrypts a secret
 - **Audit logging**: The `audit_log` table records access, modification, and deletion events with timestamps (never the secrets). `sesh audit` shows it. Events older than `audit.retention_days` (default 90; `0` keeps everything) are removed when the vault is opened, and `sesh audit prune` removes them on demand. It's a record for the user, not tamper-proof: anyone who can write the vault file can change it
 - **WAL mode**: Write-ahead logging for safe concurrent reads
 
-##### Master password key source (default)
+##### The master password
 
-Derives the master key from a user-supplied passphrase via Argon2id. **No keychain involvement**, so in this mode the SQLite backend runs on Linux as well as macOS.
+sesh derives the master key from your master password via Argon2id, the same way on macOS and Linux.
 
 - **KDF**: Argon2id with `t=3, m=64 MiB, p=4, keyLen=32`. These parameters exceed OWASP 2023 minimums (`t=1, m=47 MiB, p=1`) and make offline brute-force expensive (~200 ms per attempt)
 - **Sidecar file** `passwords.key` (next to the DB, 0600 permissions): stores the KDF salt (32 random bytes), algorithm params, and a verification blob. **No secrets.** Same public-info model as bcrypt/scrypt — salt and params are safe to expose
@@ -88,13 +88,9 @@ A recovery key lets someone who forgot the master password set a new one. There'
 - **The file alone** reveals nothing: a public key and a wrap only the paper key opens.
 - **Tampering.** A process running as the user could replace the public key in `recovery.key`, so that the next password change wraps the vault key to its own key. The same is true of `touchid.key`. It's accepted for the same reason: code running as the user can already ask an unlocked agent to decrypt everything, or replace the sesh binary.
 
-##### Keychain key source (`key_source = "keychain"`, macOS only)
-
-The 256-bit master encryption key is stored in the macOS Keychain, combining OS-level access control with application-level encryption. The key is hex-encoded (64 ASCII characters) before storage because the `security` command's tokenizer can't reliably round-trip raw random bytes; the key is decoded on read and zeroed after use.
-
 ##### Sesh agent
 
-In password mode, once the vault exists, the first command that needs the key starts a per-user background process (`sesh agent`). The run that creates the vault does not start it. The agent holds the derived key in memory and performs entry encryption and decryption on the CLI's behalf; the key itself never crosses the socket.
+Once the vault exists, the first command that needs the key starts a per-user background process (`sesh agent`). The run that creates the vault does not start it. The agent holds the derived key in memory and performs entry encryption and decryption on the CLI's behalf; the key itself never crosses the socket.
 
 - **Socket**: `<user-cache-dir>/sesh/agent.sock` (override with `SESH_AUTH_SOCK`), mode 0600 in a 0700 directory. Both ends check the other's UID (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS): the agent rejects clients run by other users, and the CLI refuses an agent socket owned by another user before sending it anything
 - **Unlock**: the CLI prompts, then sends the password and the sidecar's public salt, params, and verify blob to the agent, which derives and checks the key. Unlocks run one at a time
@@ -105,7 +101,7 @@ Where the derived key is, by state:
 
 | State | Where the key lives |
 |-------|---------------------|
-| No agent (keychain mode, `SESH_MASTER_PASSWORD` runs, or agent unavailable) | In the sesh process, for one command |
+| No agent (`SESH_MASTER_PASSWORD` runs, or agent unavailable) | In the sesh process, for one command |
 | Agent unlocked | In the agent's locked memory page |
 | Agent locked | Nowhere: zeroed in place. After an automatic lock the agent also exits; after `sesh agent lock` or SIGUSR1 it keeps running |
 | Agent stopped | Nowhere; the next command starts a fresh agent |
@@ -132,50 +128,25 @@ Locking zeroes the key. An automatic lock (idle timeout or max lifetime) also sh
 
 Not protected against: root (it can read the agent's memory), physical-memory attacks such as cold boot or DMA, or a process running as you that captures the password as you type it.
 
-#### macOS Keychain backend (`backend = "keychain"`, macOS only)
-
-Secrets are stored using the system `security` command with binary access restrictions:
-
-```go
-// Get the path to the sesh binary (handles Homebrew, go install, etc.)
-execPath := constants.GetSeshBinaryPath()
-
-// Use -T flag to restrict access to only the sesh binary
-addCmd := fmt.Sprintf("add-generic-password -a %s -s %s -w %s -U -T %s",
-    account, service, secretStr, execPath)
-
-// Execute via security -i (interactive mode) to avoid process listing exposure
-cmd := execCommand("security", "-i")
-err := secure.ExecWithSecretInput(cmd, []byte(addCmd+"\n"))
-```
-
-**Key Features:**
-- **macOS Keychain Encryption**: Secrets encrypted by the OS keychain subsystem
-- **Binary Path Binding**: The `-T` flag ensures only the sesh binary can access secrets without prompting
-- **User Prompts**: macOS prompts when other apps try to access sesh entries
-- **Automatic Path Detection**: Works with Homebrew, go install, or manual installation
-
 ### Encrypted Export
 
 Exports produced with `--format encrypted` are wrapped in a portable envelope that anyone with the password can decrypt on any machine:
 
-- **Argon2id** key derivation with the same parameters as the master-password key source (`t=3, m=64 MiB, p=4`)
+- **Argon2id** key derivation with the same parameters as the master password (`t=3, m=64 MiB, p=4`)
 - **AES-256-GCM** encryption of the JSON payload using the derived key
 - **Random 32-byte salt** per export — the same password produces different ciphertext each time
 - **Envelope format** (JSON): `{version, algorithm, salt, params, ciphertext}` — salt and params are public, matching the sidecar model
 
-Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext and are intended for local scripting. Encrypted exports are the right choice for backups, transferring between machines, or storing in any medium the user doesn't fully trust. Use a strong password — the same brute-force threat model applies as with the master-password key source.
+Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext and are intended for local scripting. Encrypted exports are the right choice for backups, transferring between machines, or storing in any medium the user doesn't fully trust. Use a strong password — the same brute-force threat model applies as with the master password.
 
-### Switching key sources (`sesh rekey`)
+### Changing the master password (`sesh --rekey`)
 
-`sesh rekey --to <source>` re-encrypts every entry under a different key source and swaps the result into place atomically. The cryptographic posture during and after a rekey:
+`sesh --rekey` re-encrypts every entry under the key a new master password gives, and swaps the result into place atomically. The cryptographic posture during and after the change:
 
-- **No plaintext-on-disk window.** Unlike the export-then-import workaround, rekey never writes a plaintext-equivalent file (an encrypted export still sits on disk encrypted only with the export password). All re-encryption happens in-process; only encrypted-at-rest databases ever touch the filesystem.
+- **No plaintext-on-disk window.** Unlike the export-then-import workaround, the change never writes a plaintext-equivalent file (an encrypted export still sits on disk encrypted only with the export password). All re-encryption happens in-process; only encrypted-at-rest databases ever touch the filesystem.
 - **Per-row salt regeneration.** Every entry gets a fresh per-row salt under the new key. Encrypted ciphertext changes for every row even when the plaintext is identical.
-- **No old copy survives success.** The original database is kept as `<dbPath>.pre-rekey` (and, for a master password change, the old sidecar as `.pre-rotate`) only while the change runs, so a failure can roll back. Before the swap, the new vault is checked to open with its key and to hold every planned entry; once it's in place, the old copies are deleted, since they would let the old key (or a leaked old password) open the old contents. Copies left by older sesh versions, or by an interrupted change, are deleted once the current key is verified. Deletion doesn't scrub the disk: on SSDs and copy-on-write filesystems no in-place overwrite can guarantee that.
-- **The old key state is removed too.** After a successful switch keychain → password, the old Keychain key is deleted; after password → keychain, the old sidecar is. With the old database copy gone they would open nothing, and left in place they'd block a later switch back. This relies on sesh keeping **one vault per user**: the Keychain key is one per user and the sidecar one per folder, so with several vaults they could be shared, and deleting them would lock another vault out. When the key file is missing but the vault records the Keychain key source, sesh names the setting to change rather than guessing.
-- **The key check moves with the vault.** The new database records its own check value for the new key before the swap, so the check switches in the same rename as the entries. Rekey verifies the source vault's key without writing to it.
-- **Refusal-over-overwrite for target state.** If the target's persistent state already exists (a stale sidecar, or a keychain entry left over from a prior switch), rekey refuses and asks the user to clean up manually. The reasoning: silent overwrite of a salt or stored key could destroy access to whatever the user originally had.
+- **No old copy survives success.** The original database and `passwords.key` are kept as `.pre-rotate` copies only while the change runs, so a failure can roll back. Before the swap, the new vault is checked to open with its key and to hold every planned entry; once it's in place, the old copies are deleted, since they would let the old password (or a leaked one) open the old contents. Copies left by an interrupted change are deleted once the current key is verified. Deletion doesn't scrub the disk: on SSDs and copy-on-write filesystems no in-place overwrite can guarantee that.
+- **The key check moves with the vault.** The new database records its own check value for the new key before the swap, so the check switches in the same rename as the entries. The change verifies the old vault's key without writing to it.
 
 ### Why This Matters
 
@@ -183,9 +154,7 @@ Compare sesh's approach to alternatives:
 
 | Storage Method | Encryption | Access Control | User Experience |
 |----------------|------------|----------------|-----------------|
-| sesh (default: SQLite + master password) | AES-256-GCM + Argon2id | File permissions + passphrase; key cached in a per-user agent after unlock | Prompt once per agent session |
-| sesh (SQLite + Keychain key, macOS) | AES-256-GCM + Argon2id | File permissions + encryption key in Keychain | Transparent |
-| sesh (Keychain backend, macOS) | OS-level (AES-256) | OS-enforced binary binding | Transparent |
+| sesh (SQLite + master password) | AES-256-GCM + Argon2id | File permissions + passphrase; key cached in a per-user agent after unlock | Prompt once per agent session (or Touch ID) |
 | Config Files | None/Custom | File permissions only | Manual setup |
 | Environment Vars | None | Process inheritance | Leaks to children |
 | Corporate MFA Apps | Unknown | App-controlled | Privacy concerns |
@@ -212,7 +181,7 @@ Go makes this hard, but sesh reduces exposure through several techniques:
 1. **Prefer Bytes Over Strings**
    ```go
    // Keep secrets as []byte throughout the pipeline
-   secretBytes, err := p.keychain.GetSecret(p.User, serviceKey)
+   secretBytes, err := p.store.Get(key)
    defer secure.SecureZeroBytes(secretBytes)
    ```
 
@@ -298,9 +267,9 @@ type ServiceProvider interface {
 ```
 
 ### Provider Isolation
-- Each provider manages its own keychain namespace
-- No cross-provider secret access
-- Clear separation of concerns
+- Every provider stores in the one vault, under its master password
+- TOTP entries are shared: `--service totp`, the password manager, and AWS (each profile's MFA secret) read the same ones
+- `--service totp` and `--service aws` list and delete only their own entries
 
 ## Privacy by Design
 
@@ -314,8 +283,8 @@ type ServiceProvider interface {
 
 ### What sesh DOES Do
 
-- **Local-Only Storage**: All data in macOS Keychain or local encrypted SQLite
-- **Audit Trail**: Every secret access, modification, and deletion is logged (SQLite backend)
+- **Local-Only Storage**: All data in a local encrypted vault
+- **Audit Trail**: Every secret access, modification, and deletion is logged
 - **Explicit User Control**: Every operation requires user action
 - **Open Source**: Complete transparency in implementation
 - **Minimal Dependencies**: Reduced supply chain risk
@@ -326,7 +295,7 @@ type ServiceProvider interface {
 
 | Feature | Mobile Apps | sesh |
 |---------|-------------|------|
-| Storage Location | Phone (unknown security) | macOS Keychain |
+| Storage Location | Phone (unknown security) | Encrypted vault on your machine |
 | Backup/Sync | Often cloud-based | Local only (encrypted backup/export planned) |
 | Privacy | Varies (often poor) | Complete |
 | Scriptability | None | Full CLI |
@@ -357,7 +326,7 @@ type ServiceProvider interface {
 1. **Protect Your macOS Account**: sesh's security depends on your account security
 2. **Use Unique Profiles**: Separate work/personal accounts with profiles
 3. **Regular Cleanup**: Periodically review stored entries with `-list`
-4. **Install in a Protected Location**: The Keychain `-T` flag binds access to sesh's binary path. Install via Homebrew or to a system directory — avoid running from writable locations like `/tmp` where symlink attacks are possible
+4. **Install in a Protected Location**: Install sesh where other users can't replace it, not a shared writable location like `/tmp`: a replaced binary would see your master password and your secrets
 5. **Understand Mode Tradeoffs**: Subshell mode avoids clipboard exposure but places credentials in environment variables and temp init files. Clipboard mode avoids env var exposure but is visible to clipboard managers. Choose based on your threat model.
 
 ### For Developers

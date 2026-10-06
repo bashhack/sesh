@@ -13,10 +13,10 @@ flowchart TD
     SetupChoice -->|"QR Code"| QR["Select QR code region on screen<br>Auto-extract secret"]:::process
     SetupChoice -->|"Manual"| Manual["Enter secret manually<br>Validate & store"]:::process
     
-    QR --> Keychain["Store in macOS Keychain<br>Binary-level access control"]:::process
-    Manual --> Keychain
+    QR --> Vault["Store in the sesh vault<br>Encrypted, master password"]:::process
+    Manual --> Vault
     
-    Keychain --> Daily([Daily Usage]):::start
+    Vault --> Daily([Daily Usage]):::start
     
     Daily --> Service{"Choose Service"}:::decision
     

@@ -9,20 +9,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bashhack/sesh/internal/keychain"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
-// ExportEntry is an entry with its decrypted secret, used for export/import.
-// Timestamps are preserved through round-trip when the underlying store
-// implements keychain.TimestampedStore (the SQLite backend does).
+// ExportEntry is an entry with its decrypted secret, used for export and
+// import. Everything about the entry round-trips: its settings (a TOTP
+// entry's code settings decide which codes are right) and its times.
 type ExportEntry struct {
-	CreatedAt time.Time `json:"created_at,omitzero"`
-	UpdatedAt time.Time `json:"updated_at,omitzero"`
-	Service   string    `json:"service"`
-	Username  string    `json:"username,omitempty"`
-	Type      EntryType `json:"type"`
-	Secret    string    `json:"secret"`
+	CreatedAt time.Time      `json:"created_at,omitzero"`
+	UpdatedAt time.Time      `json:"updated_at,omitzero"`
+	Service   string         `json:"service"`
+	Username  string         `json:"username,omitempty"`
+	Type      EntryType      `json:"type"`
+	Secret    string         `json:"secret"`
+	Settings  vault.Settings `json:"settings,omitzero"`
 }
 
 // ExportFormat specifies the output format for export.
@@ -44,12 +45,7 @@ type ExportOptions struct {
 // entries successfully written; a partial count + error is possible if a
 // decrypt or write fails mid-stream (prior entries remain in the writer).
 func (m *Manager) Export(w io.Writer, opts ExportOptions) (int, error) {
-	filter := ListFilter{}
-	if opts.EntryType != "" {
-		filter.EntryType = opts.EntryType
-	}
-
-	entries, err := m.ListEntriesFiltered(filter)
+	entries, err := m.store.List(vault.Filter{Kind: opts.EntryType})
 	if err != nil {
 		return 0, fmt.Errorf("failed to list entries: %w", err)
 	}
@@ -68,16 +64,16 @@ func (m *Manager) Export(w io.Writer, opts ExportOptions) (int, error) {
 // record at a time. The output matches what json.Encoder.Encode on a full
 // slice would produce, but without holding every plaintext secret in
 // memory simultaneously.
-func (m *Manager) exportJSON(w io.Writer, entries []Entry) (int, error) {
+func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry) (int, error) {
 	if _, err := io.WriteString(w, "["); err != nil {
 		return 0, err
 	}
 	count := 0
 	for i := range entries {
 		e := &entries[i]
-		secretBytes, err := m.GetPassword(e.Service, e.Username, e.Type)
+		secretBytes, err := m.store.Get(e.Key)
 		if err != nil {
-			return count, fmt.Errorf("failed to decrypt %s/%s: %w", e.Service, e.Username, err)
+			return count, fmt.Errorf("failed to decrypt %s: %w", e.Key, err)
 		}
 
 		sep := "\n  "
@@ -92,8 +88,9 @@ func (m *Manager) exportJSON(w io.Writer, entries []Entry) (int, error) {
 		ee := ExportEntry{
 			Service:   e.Service,
 			Username:  e.Username,
-			Type:      e.Type,
+			Type:      e.Kind,
 			Secret:    string(secretBytes),
+			Settings:  e.Settings,
 			CreatedAt: e.CreatedAt,
 			UpdatedAt: e.UpdatedAt,
 		}
@@ -123,29 +120,40 @@ func (m *Manager) exportJSON(w io.Writer, entries []Entry) (int, error) {
 	return count, nil
 }
 
-// exportCSV writes entries as CSV, one row at a time.
-func (m *Manager) exportCSV(w io.Writer, entries []Entry) (int, error) {
+// exportCSV writes entries as CSV, one row at a time. The settings column
+// holds an entry's settings as JSON, empty when it has none.
+func (m *Manager) exportCSV(w io.Writer, entries []vault.Entry) (int, error) {
 	cw := csv.NewWriter(w)
-	if err := cw.Write([]string{"service", "username", "type", "secret", "created_at", "updated_at"}); err != nil {
+	if err := cw.Write([]string{"service", "username", "type", "secret", "created_at", "updated_at", "settings"}); err != nil {
 		return 0, err
 	}
 
 	count := 0
 	for i := range entries {
 		e := &entries[i]
-		secretBytes, err := m.GetPassword(e.Service, e.Username, e.Type)
+		settings := ""
+		if !e.Settings.IsZero() {
+			b, err := json.Marshal(e.Settings)
+			if err != nil {
+				cw.Flush()
+				return count, fmt.Errorf("encode the settings of %s: %w", e.Key, err)
+			}
+			settings = string(b)
+		}
+		secretBytes, err := m.store.Get(e.Key)
 		if err != nil {
 			cw.Flush()
-			return count, fmt.Errorf("failed to decrypt %s/%s: %w", e.Service, e.Username, err)
+			return count, fmt.Errorf("failed to decrypt %s: %w", e.Key, err)
 		}
 
 		writeErr := cw.Write([]string{
 			e.Service,
 			e.Username,
-			string(e.Type),
+			string(e.Kind),
 			string(secretBytes),
 			e.CreatedAt.Format(time.RFC3339),
 			e.UpdatedAt.Format(time.RFC3339),
+			settings,
 		})
 		secure.SecureZeroBytes(secretBytes)
 		if writeErr != nil {
@@ -203,7 +211,8 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 
 	result := ImportResult{}
 
-	for _, e := range entries {
+	for i := range entries {
+		e := &entries[i]
 		if e.Service == "" {
 			result.Errors = append(result.Errors, "entry with empty service name, skipping")
 			continue
@@ -212,7 +221,7 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: empty secret", e.Service, e.Username))
 			continue
 		}
-		if !validEntryTypes[e.Type] {
+		if !e.Type.Valid() {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: invalid entry type %q", e.Service, e.Username, e.Type))
 			continue
 		}
@@ -220,12 +229,13 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 		// Existence probe: only ErrNotFound means "safe to create".
 		// Any other error is ambiguous — fail this entry rather than
 		// risk an upsert that silently overwrites real data.
-		_, err := m.GetPassword(e.Service, e.Username, e.Type)
+		k := key(e.Service, e.Username, e.Type)
+		_, err := m.store.Lookup(k)
 		var exists bool
 		switch {
 		case err == nil:
 			exists = true
-		case errors.Is(err, keychain.ErrNotFound):
+		case errors.Is(err, vault.ErrNotFound):
 			exists = false
 		default:
 			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: failed to check existence: %v", e.Service, e.Username, err))
@@ -245,10 +255,11 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			}
 		}
 
-		// Pass timestamps through so backends that support them (SQLite)
-		// preserve original audit history on round-trip. Zero values are
-		// treated as "use now" by the option.
-		if err := m.StorePasswordString(e.Service, e.Username, e.Secret, e.Type, WithTimestamps(e.CreatedAt, e.UpdatedAt)); err != nil {
+		// The entry keeps its settings and times; a zero time means now.
+		secret := []byte(e.Secret)
+		err = m.store.Save(&vault.Entry{Key: k, Settings: e.Settings, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt}, secret)
+		secure.SecureZeroBytes(secret)
+		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s/%s: %v", e.Service, e.Username, err))
 			continue
 		}
@@ -314,6 +325,11 @@ func readCSV(r io.Reader) ([]ExportEntry, error) {
 		if i, ok := idx["updated_at"]; ok && i < len(record) {
 			if t, err := time.Parse(time.RFC3339, record[i]); err == nil {
 				e.UpdatedAt = t
+			}
+		}
+		if i, ok := idx["settings"]; ok && i < len(record) && record[i] != "" {
+			if err := json.Unmarshal([]byte(record[i]), &e.Settings); err != nil {
+				return nil, fmt.Errorf("the settings of %s/%s aren't valid JSON: %w", e.Service, e.Username, err)
 			}
 		}
 

@@ -73,6 +73,11 @@ func GenerateSalt(length int) ([]byte, error) {
 // be exactly 32 bytes; shorter keys are rejected rather than accepted as
 // AES-128 or AES-192.
 func Encrypt(key, plaintext []byte) ([]byte, error) {
+	return seal(key, plaintext, nil)
+}
+
+// seal is Encrypt with associated data.
+func seal(key, plaintext, aad []byte) ([]byte, error) {
 	if len(key) != encryptionKeyLength {
 		return nil, fmt.Errorf("encrypt: key must be %d bytes (AES-256), got %d", encryptionKeyLength, len(key))
 	}
@@ -92,13 +97,18 @@ func Encrypt(key, plaintext []byte) ([]byte, error) {
 	}
 
 	// Seal appends the ciphertext+tag after the nonce.
-	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, aad)
 	return ciphertext, nil
 }
 
 // Decrypt decrypts ciphertext produced by Encrypt using AES-256-GCM.
 // The key must be exactly 32 bytes.
 func Decrypt(key, ciphertext []byte) ([]byte, error) {
+	return open(key, ciphertext, nil)
+}
+
+// open is Decrypt with associated data.
+func open(key, ciphertext, aad []byte) ([]byte, error) {
 	if len(key) != encryptionKeyLength {
 		return nil, fmt.Errorf("decrypt: key must be %d bytes (AES-256), got %d", encryptionKeyLength, len(key))
 	}
@@ -118,7 +128,7 @@ func Decrypt(key, ciphertext []byte) ([]byte, error) {
 	}
 
 	nonce, enc := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, enc, nil)
+	plaintext, err := gcm.Open(nil, nonce, enc, aad)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt: %w", err)
 	}
@@ -138,9 +148,11 @@ var entryKeyParams = Argon2idParams{
 }
 
 // EncryptEntry encrypts plaintext for storage, generating a per-entry salt
-// and deriving a per-entry key from the master key material + salt.
-// Returns (encryptedData, salt, error).
-func EncryptEntry(masterKey, plaintext []byte) (encryptedData, salt []byte, err error) {
+// and deriving a per-entry key from the master key material + salt. aad is
+// authenticated but not encrypted: decrypting needs the same aad, which
+// binds the ciphertext to what aad names (an entry's key). Returns
+// (encryptedData, salt, error).
+func EncryptEntry(masterKey, plaintext, aad []byte) (encryptedData, salt []byte, err error) {
 	salt, err = GenerateSalt(16)
 	if err != nil {
 		return nil, nil, err
@@ -149,7 +161,7 @@ func EncryptEntry(masterKey, plaintext []byte) (encryptedData, salt []byte, err 
 	entryKey := DeriveKey(masterKey, salt, entryKeyParams)
 	defer secure.SecureZeroBytes(entryKey)
 
-	encryptedData, err = Encrypt(entryKey, plaintext)
+	encryptedData, err = seal(entryKey, plaintext, aad)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -157,10 +169,10 @@ func EncryptEntry(masterKey, plaintext []byte) (encryptedData, salt []byte, err 
 	return encryptedData, salt, nil
 }
 
-// DecryptEntry decrypts data produced by EncryptEntry.
-func DecryptEntry(masterKey, encryptedData, salt []byte) ([]byte, error) {
+// DecryptEntry decrypts data produced by EncryptEntry with the same aad.
+func DecryptEntry(masterKey, encryptedData, salt, aad []byte) ([]byte, error) {
 	entryKey := DeriveKey(masterKey, salt, entryKeyParams)
 	defer secure.SecureZeroBytes(entryKey)
 
-	return Decrypt(entryKey, encryptedData)
+	return open(entryKey, encryptedData, aad)
 }

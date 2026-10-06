@@ -2,21 +2,21 @@ package setup
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/bashhack/sesh/internal/keychain/mocks"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/testutil"
 	"github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 func TestRunCommandDefault(t *testing.T) {
@@ -102,7 +102,7 @@ func TestSetupService(t *testing.T) {
 	}
 
 	// Create setup service
-	service := NewSetupService(nil)
+	service := NewSetupService()
 
 	// Test registering handler
 	service.RegisterHandler(handler)
@@ -460,106 +460,6 @@ func TestTOTPSetupHandler(t *testing.T) {
 
 func TestHelperProcess(*testing.T) {
 	testutil.TestHelperProcess()
-}
-
-func TestAWSSetupHandler_createServiceName(t *testing.T) {
-	handler := &AWSSetupHandler{}
-
-	tests := map[string]struct {
-		prefix  string
-		profile string
-		want    string
-		wantErr bool
-	}{
-		"default profile": {
-			prefix: "sesh-aws",
-			want:   "sesh-aws/default",
-		},
-		"custom profile": {
-			prefix:  "sesh-aws",
-			profile: "dev",
-			want:    "sesh-aws/dev",
-		},
-		"serial prefix with profile": {
-			prefix:  "sesh-aws-serial",
-			profile: "prod",
-			want:    "sesh-aws-serial/prod",
-		},
-		"profile with slash is rejected": {
-			prefix:  "sesh-aws",
-			profile: "a/b",
-			wantErr: true,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got, err := handler.createServiceName(tc.prefix, tc.profile)
-			if tc.wantErr {
-				if err == nil {
-					t.Error("expected error but got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tc.want {
-				t.Errorf("createServiceName(%q, %q) = %v, want %v", tc.prefix, tc.profile, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestTOTPSetupHandler_createTOTPServiceName(t *testing.T) {
-	handler := &TOTPSetupHandler{}
-
-	tests := map[string]struct {
-		serviceName string
-		profile     string
-		want        string
-		wantErr     bool
-	}{
-		"service without profile": {
-			serviceName: "github",
-			want:        "sesh-totp/github",
-		},
-		"service with profile": {
-			serviceName: "github",
-			profile:     "work",
-			want:        "sesh-totp/github/work",
-		},
-		"service with spaces": {
-			serviceName: "my service",
-			want:        "sesh-totp/my service",
-		},
-		"empty service is rejected": {
-			serviceName: "",
-			wantErr:     true,
-		},
-		"service with slash is rejected": {
-			serviceName: "a/b",
-			wantErr:     true,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got, err := handler.createTOTPServiceName(tc.serviceName, tc.profile)
-			if tc.wantErr {
-				if err == nil {
-					t.Error("expected error but got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tc.want {
-				t.Errorf("createTOTPServiceName(%q, %q) = %v, want %v", tc.serviceName, tc.profile, got, tc.want)
-			}
-		})
-	}
 }
 
 func TestAWSSetupHandler_runAWSCommand(t *testing.T) {
@@ -1646,541 +1546,287 @@ func TestAWSSetupHandler_selectMFADevice(t *testing.T) {
 }
 
 // TestTOTPSetupHandler_Setup tests the main TOTP setup flow
+// stubTOTPSetup replaces the TOTP setup seams for one test: QR capture
+// returns info, manual entry types secret, and secrets pass as typed.
+func stubTOTPSetup(t *testing.T, info qrcode.TOTPInfo, secret string) {
+	t.Helper()
+	origScan, origValidate, origGenerate, origReadPassword := scanQRCodeFull, validateAndNormalizeSecret, generateConsecutiveCodes, readPassword
+	t.Cleanup(func() {
+		scanQRCodeFull, validateAndNormalizeSecret, generateConsecutiveCodes, readPassword = origScan, origValidate, origGenerate, origReadPassword
+	})
+	scanQRCodeFull = func() (qrcode.TOTPInfo, error) { return info, nil }
+	validateAndNormalizeSecret = func(s string) (string, error) { return s, nil }
+	readPassword = func(int) ([]byte, error) { return []byte(secret), nil }
+}
+
 func TestTOTPSetupHandler_Setup(t *testing.T) {
-	// Save original functions and restore after test
-	origScanQRCodeFull := scanQRCodeFull
-	defer func() { scanQRCodeFull = origScanQRCodeFull }()
-
-	origValidateAndNormalizeSecret := validateAndNormalizeSecret
-	defer func() { validateAndNormalizeSecret = origValidateAndNormalizeSecret }()
-
-	origGenerateConsecutiveCodes := generateConsecutiveCodes
-	defer func() { generateConsecutiveCodes = origGenerateConsecutiveCodes }()
-
-	origGetCurrentUser := getCurrentUser
-	defer func() { getCurrentUser = origGetCurrentUser }()
-
-	origReadPassword := readPassword
-	defer func() { readPassword = origReadPassword }()
-
 	tests := map[string]struct {
-		getCurrentUserError error
-		scanQRError         error
-		storeMetadataError  error
-		validateError       error
-		setSecretError      error
-		generateError       error
-		firstCode           string
-		secondCode          string
-		userInput           string
-		currentUser         string
-		normalizedSecret    string
-		scanQRResult        string
-		wantErrMsg          string
-		wantErr             bool
+		validateError error
+		generateError error
+		userInput     string
+		wantKey       vault.Key
+		wantErrMsg    string
+		failSave      bool
 	}{
 		"successful setup with QR code": {
-			userInput:           "MyService\ndefault\n2\n\n", // service name, profile, QR choice, press Enter for capture
-			scanQRError:         nil,
-			scanQRResult:        "JBSWY3DPEHPK3PXP",
-			validateError:       nil,
-			normalizedSecret:    "JBSWY3DPEHPK3PXP",
-			generateError:       nil,
-			firstCode:           "123456",
-			secondCode:          "789012",
-			getCurrentUserError: nil,
-			currentUser:         "testuser",
-			setSecretError:      nil,
-			storeMetadataError:  nil,
-			wantErr:             false,
+			userInput: "MyService\ndefault\n2\n\n", // service name, profile, QR choice, Enter to capture
+			wantKey:   vault.Key{Kind: vault.KindTOTP, Service: "MyService", Username: "default"},
 		},
 		"successful setup with manual entry": {
-			userInput:           "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n", // service name, profile, manual choice (1), secret
-			scanQRError:         nil,
-			scanQRResult:        "",
-			validateError:       nil,
-			normalizedSecret:    "JBSWY3DPEHPK3PXP",
-			generateError:       nil,
-			firstCode:           "123456",
-			secondCode:          "789012",
-			getCurrentUserError: nil,
-			currentUser:         "testuser",
-			setSecretError:      nil,
-			storeMetadataError:  nil,
-			wantErr:             false,
-		},
-		"invalid secret": {
-			userInput:           "MyService\ndefault\n1\ninvalid-secret\n",
-			scanQRError:         nil,
-			scanQRResult:        "",
-			validateError:       errors.New("invalid base32"),
-			normalizedSecret:    "",
-			generateError:       nil,
-			firstCode:           "",
-			secondCode:          "",
-			getCurrentUserError: nil,
-			currentUser:         "testuser",
-			setSecretError:      nil,
-			storeMetadataError:  nil,
-			wantErr:             true,
-			wantErrMsg:          "invalid TOTP secret",
-		},
-		"generate codes error": {
-			userInput:           "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
-			scanQRError:         nil,
-			scanQRResult:        "",
-			validateError:       nil,
-			normalizedSecret:    "JBSWY3DPEHPK3PXP",
-			generateError:       errors.New("generate failed"),
-			firstCode:           "",
-			secondCode:          "",
-			getCurrentUserError: nil,
-			currentUser:         "testuser",
-			setSecretError:      nil,
-			storeMetadataError:  nil,
-			wantErr:             true,
-			wantErrMsg:          "failed to generate TOTP codes",
-		},
-		"get current user error": {
-			userInput:           "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
-			scanQRError:         nil,
-			scanQRResult:        "",
-			validateError:       nil,
-			normalizedSecret:    "JBSWY3DPEHPK3PXP",
-			generateError:       nil,
-			firstCode:           "123456",
-			secondCode:          "789012",
-			getCurrentUserError: errors.New("user not found"),
-			currentUser:         "",
-			setSecretError:      nil,
-			storeMetadataError:  nil,
-			wantErr:             true,
-			wantErrMsg:          "failed to get current user",
-		},
-		"keychain store error": {
-			userInput:           "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
-			scanQRError:         nil,
-			scanQRResult:        "",
-			validateError:       nil,
-			normalizedSecret:    "JBSWY3DPEHPK3PXP",
-			generateError:       nil,
-			firstCode:           "123456",
-			secondCode:          "789012",
-			getCurrentUserError: nil,
-			currentUser:         "testuser",
-			setSecretError:      errors.New("keychain error"),
-			storeMetadataError:  nil,
-			wantErr:             true,
-			wantErrMsg:          "failed to store secret in keychain",
-		},
-		"metadata store error (warning only)": {
-			userInput:           "MyService\ndefault\n1\nJBSWY3DPEHPK3PXP\n",
-			scanQRError:         nil,
-			scanQRResult:        "",
-			validateError:       nil,
-			normalizedSecret:    "JBSWY3DPEHPK3PXP",
-			generateError:       nil,
-			firstCode:           "123456",
-			secondCode:          "789012",
-			getCurrentUserError: nil,
-			currentUser:         "testuser",
-			setSecretError:      nil,
-			storeMetadataError:  errors.New("metadata error"),
-			wantErr:             false, // Should not fail the setup
+			userInput: "MyService\ndefault\n1\n", // service name, profile, manual entry
+			wantKey:   vault.Key{Kind: vault.KindTOTP, Service: "MyService", Username: "default"},
 		},
 		"successful setup without profile": {
-			userInput:           "MyService\n\n1\nJBSWY3DPEHPK3PXP\n", // service name, empty profile, manual choice, secret
-			scanQRError:         nil,
-			scanQRResult:        "",
-			validateError:       nil,
-			normalizedSecret:    "JBSWY3DPEHPK3PXP",
-			generateError:       nil,
-			firstCode:           "123456",
-			secondCode:          "789012",
-			getCurrentUserError: nil,
-			currentUser:         "testuser",
-			setSecretError:      nil,
-			storeMetadataError:  nil,
-			wantErr:             false,
+			userInput: "MyService\n\n1\n",
+			wantKey:   vault.Key{Kind: vault.KindTOTP, Service: "MyService"},
+		},
+		"invalid secret": {
+			userInput:     "MyService\ndefault\n1\n",
+			validateError: errors.New("invalid base32"),
+			wantErrMsg:    "invalid TOTP secret",
+		},
+		"generate codes error": {
+			userInput:     "MyService\ndefault\n1\n",
+			generateError: errors.New("generate failed"),
+			wantErrMsg:    "failed to generate TOTP codes",
+		},
+		"store error": {
+			userInput:  "MyService\ndefault\n1\n",
+			failSave:   true,
+			wantErrMsg: "failed to store the TOTP secret",
+		},
+		"service name with a slash": {
+			userInput:  "a/b\n\n",
+			wantErrMsg: `contains "/"`,
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Mock scanQRCodeFull
-			scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
-				if tc.scanQRError != nil {
-					return qrcode.TOTPInfo{}, tc.scanQRError
-				}
-				return qrcode.TOTPInfo{Secret: tc.scanQRResult}, nil
+			stubTOTPSetup(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP"}, "JBSWY3DPEHPK3PXP")
+			if tc.validateError != nil {
+				validateAndNormalizeSecret = func(string) (string, error) { return "", tc.validateError }
 			}
-
-			// Mock totp functions
-			validateAndNormalizeSecret = func(secret string) (string, error) {
-				if tc.validateError != nil {
-					return "", tc.validateError
-				}
-				return tc.normalizedSecret, nil
+			if tc.generateError != nil {
+				generateConsecutiveCodes = func(string, totp.Params) (string, string, error) { return "", "", tc.generateError }
 			}
-
-			generateConsecutiveCodes = func(secret string) (string, string, error) {
-				if tc.generateError != nil {
-					return "", "", tc.generateError
-				}
-				return tc.firstCode, tc.secondCode, nil
+			mem := vault.NewMemStore()
+			var store vault.Store = mem
+			if tc.failSave {
+				store = failingSave{mem}
 			}
-
-			// Mock env.GetCurrentUser
-			getCurrentUser = func() (string, error) {
-				if tc.getCurrentUserError != nil {
-					return "", tc.getCurrentUserError
-				}
-				return tc.currentUser, nil
-			}
-
-			// Mock readPassword for manual entry
-			readPassword = func(fd int) ([]byte, error) {
-				// Extract the secret from userInput (it's the 4th line for manual entry)
-				lines := strings.Split(tc.userInput, "\n")
-				if len(lines) >= 4 && lines[2] == "1" { // Manual entry
-					return []byte(lines[3]), nil
-				}
-				return []byte(""), nil
-			}
-
-			// Create mock keychain provider
-			mockKeychain := &mocks.MockProvider{
-				GetSecretStringFunc: func(user, service string) (string, error) {
-					// Return empty string to indicate no existing entry
-					return "", nil
-				},
-				SetSecretStringFunc: func(user, service, secret string) error {
-					return tc.setSecretError
-				},
-				SetDescriptionFunc: func(service, account, description string) error {
-					return tc.storeMetadataError
-				},
-			}
-
-			// Create handler with mock reader and keychain
-			handler := &TOTPSetupHandler{
-				reader:           bufio.NewReader(strings.NewReader(tc.userInput)),
-				keychainProvider: mockKeychain,
-			}
+			handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader(tc.userInput))}
 
 			var err error
-			output := testutil.CaptureStdout(func() {
-				err = handler.Setup()
-			})
+			output := testutil.CaptureStdout(func() { err = handler.Setup() })
 
-			// Check error
-			if tc.wantErr && err == nil {
-				t.Error("Setup() expected error but got nil")
+			if tc.wantErrMsg != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErrMsg) {
+					t.Fatalf("Setup() = %v, want an error containing %q", err, tc.wantErrMsg)
+				}
+				assertEmpty(t, mem)
+				return
 			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("Setup() unexpected error: %v", err)
+			if err != nil {
+				t.Fatalf("Setup(): %v", err)
 			}
-			if tc.wantErrMsg != "" && err != nil {
-				if !strings.Contains(err.Error(), tc.wantErrMsg) {
-					t.Errorf("error message = %v, want to contain %v", err.Error(), tc.wantErrMsg)
-				}
+			if secret, err := mem.Get(tc.wantKey); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" {
+				t.Errorf("secret at %s = %q, %v; want the captured one", tc.wantKey, secret, err)
 			}
-
-			// Verify output contains expected messages
-			if err == nil {
-				if !strings.Contains(output, "Setting up TOTP credentials") {
-					t.Error("Expected setup message")
-				}
-				if !strings.Contains(output, "Generated TOTP codes for verification") {
-					t.Error("Expected verification codes message")
-				}
-				if tc.storeMetadataError != nil && !strings.Contains(output, "Warning: Failed to store description") {
-					t.Error("Expected description warning")
-				}
+			if !strings.Contains(output, "Generated TOTP codes for verification") {
+				t.Error("expected the verification codes")
 			}
 		})
 	}
 }
 
-func TestTOTPSetupHandler_Setup_NonDefaultParamsFailClosed(t *testing.T) {
-	// When the QR scan produced non-default params (algorithm/digits/
-	// period), the description is load-bearing — GenerateTOTPCode needs
-	// it to reproduce the right codes. A SetDescription failure here
-	// must NOT be downgraded to a warning; the entry would otherwise
-	// persist with the secret but fall back to defaults on every read.
-	origScanQRCodeFull := scanQRCodeFull
-	defer func() { scanQRCodeFull = origScanQRCodeFull }()
-	origValidate := validateAndNormalizeSecret
-	defer func() { validateAndNormalizeSecret = origValidate }()
-	origGenerate := generateConsecutiveCodes
-	defer func() { generateConsecutiveCodes = origGenerate }()
-	origGetUser := getCurrentUser
-	defer func() { getCurrentUser = origGetUser }()
-
-	scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
-		return qrcode.TOTPInfo{
-			Secret:    "JBSWY3DPEHPK3PXP",
-			Algorithm: "SHA256",
-			Digits:    8,
-			Period:    60,
-		}, nil
+// A QR code's code settings are stored with the secret, in one write.
+func TestTOTPSetupHandler_Setup_StoresQRSettings(t *testing.T) {
+	info := qrcode.TOTPInfo{
+		Secret:    "JBSWY3DPEHPK3PXP",
+		Issuer:    "ExampleCorp",
+		Account:   "alice@example.com",
+		Algorithm: "SHA256",
+		Digits:    8,
+		Period:    60,
 	}
-	validateAndNormalizeSecret = func(s string) (string, error) { return s, nil }
-	generateConsecutiveCodes = func(s string) (string, string, error) {
-		return "11111111", "22222222", nil
-	}
-	getCurrentUser = func() (string, error) { return "testuser", nil }
-
-	mockKeychain := &mocks.MockProvider{
-		GetSecretStringFunc: func(_, _ string) (string, error) { return "", nil },
-		SetSecretStringFunc: func(_, _, _ string) error { return nil },
-		SetDescriptionFunc: func(_, _, _ string) error {
-			return errors.New("simulated keychain write failure")
-		},
-	}
-
-	handler := &TOTPSetupHandler{
-		reader:           bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n")),
-		keychainProvider: mockKeychain,
-	}
+	stubTOTPSetup(t, info, "")
+	store := vault.NewMemStore()
+	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n"))}
 
 	var err error
-	_ = testutil.CaptureStdout(func() {
-		err = handler.Setup()
-	})
-
-	if err == nil {
-		t.Fatal("expected error when non-default params cannot be persisted, got nil")
+	_ = testutil.CaptureStdout(func() { err = handler.Setup() })
+	if err != nil {
+		t.Fatalf("Setup(): %v", err)
 	}
-	if !strings.Contains(err.Error(), "failed to persist non-default params") {
-		t.Errorf("error should mention params persistence failure, got: %v", err)
+	e, err := store.Lookup(vault.Key{Kind: vault.KindTOTP, Service: "MyService", Username: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := totp.Params{Issuer: "ExampleCorp", Algorithm: "SHA256", Digits: 8, Period: 60}
+	if e.Settings.TOTP != want {
+		t.Errorf("code settings = %+v, want %+v", e.Settings.TOTP, want)
 	}
 }
 
-func TestTOTPSetupHandler_Setup_QRMetadataPersisted(t *testing.T) {
-	// When a QR scan returns a non-default issuer/algorithm/digits/period,
-	// the description written to the keychain must be the JSON-encoded
-	// Params — GenerateTOTPCode later unmarshals it to reproduce the exact
-	// same codes. Regression guard: if this stops being persisted, codes
-	// for non-default issuers silently drift to defaults.
-	origScanQRCodeFull := scanQRCodeFull
-	defer func() { scanQRCodeFull = origScanQRCodeFull }()
-	origValidate := validateAndNormalizeSecret
-	defer func() { validateAndNormalizeSecret = origValidate }()
-	origGenerate := generateConsecutiveCodes
-	defer func() { generateConsecutiveCodes = origGenerate }()
-	origGetUser := getCurrentUser
-	defer func() { getCurrentUser = origGetUser }()
-
-	scanQRCodeFull = func() (qrcode.TOTPInfo, error) {
-		return qrcode.TOTPInfo{
-			Secret:    "JBSWY3DPEHPK3PXP",
-			Issuer:    "ExampleCorp",
-			Account:   "alice@example.com",
-			Algorithm: "SHA256",
-			Digits:    8,
-			Period:    60,
-		}, nil
+// Replacing an entry's secret keeps its other settings, such as an AWS
+// profile's MFA device, and its creation time.
+func TestTOTPSetupHandler_Setup_OverwriteKeepsMFADevice(t *testing.T) {
+	stubTOTPSetup(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP"}, "JBSWY3DPEHPK3PXP")
+	store := vault.NewMemStore()
+	k := vault.AWSKey("work")
+	device := "arn:aws:iam::123456789012:mfa/work"
+	created := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := store.Save(&vault.Entry{Key: k, Settings: vault.Settings{AWSMFADevice: device}, CreatedAt: created}, []byte("OLDSECRETOLDSECR")); err != nil {
+		t.Fatal(err)
 	}
-	validateAndNormalizeSecret = func(s string) (string, error) { return s, nil }
-	generateConsecutiveCodes = func(s string) (string, string, error) {
-		return "11111111", "22222222", nil
-	}
-	getCurrentUser = func() (string, error) { return "testuser", nil }
+	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("aws\nwork\ny\n1\n"))}
 
-	var gotDescription string
-	mockKeychain := &mocks.MockProvider{
-		GetSecretStringFunc: func(_, _ string) (string, error) { return "", nil },
-		SetSecretStringFunc: func(_, _, _ string) error { return nil },
-		SetDescriptionFunc: func(_, _, description string) error {
-			gotDescription = description
-			return nil
-		},
+	var err error
+	_ = testutil.CaptureStdout(func() { err = handler.Setup() })
+	if err != nil {
+		t.Fatalf("Setup(): %v", err)
 	}
-
-	handler := &TOTPSetupHandler{
-		reader:           bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n")),
-		keychainProvider: mockKeychain,
+	e, err := store.Lookup(k)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if e.Settings.AWSMFADevice != device {
+		t.Errorf("MFA device = %q, want %q kept", e.Settings.AWSMFADevice, device)
+	}
+	if !e.CreatedAt.Equal(created) {
+		t.Errorf("created %v, want %v kept", e.CreatedAt, created)
+	}
+	if secret, err := store.Get(k); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("secret = %q, %v; want the new one", secret, err)
+	}
+}
 
+// With non-default settings, a failed write stores nothing: no secret
+// left behind that would give codes with the wrong settings.
+func TestTOTPSetupHandler_Setup_QRSettingsFailClosed(t *testing.T) {
+	stubTOTPSetup(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA256", Digits: 8, Period: 60}, "")
+	mem := vault.NewMemStore()
+	handler := &TOTPSetupHandler{store: failingSave{mem}, reader: bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n"))}
+
+	var err error
+	_ = testutil.CaptureStdout(func() { err = handler.Setup() })
+	if wantSub := "failed to store the TOTP secret"; err == nil || !strings.Contains(err.Error(), wantSub) {
+		t.Fatalf("Setup() = %v, want an error containing %q", err, wantSub)
+	}
+	assertEmpty(t, mem)
+}
+
+// The verification codes use the QR code's settings, so an 8-digit
+// issuer gets the 8-digit codes it expects.
+func TestTOTPSetupHandler_Setup_VerificationCodesUseQRSettings(t *testing.T) {
+	params := totp.Params{Algorithm: "SHA256", Digits: 8}
+	stubTOTPSetup(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA256", Digits: 8}, "")
+	handler := &TOTPSetupHandler{store: vault.NewMemStore(), reader: bufio.NewReader(strings.NewReader("MyService\n\n2\n\n"))}
+
+	before, after, err := totp.GenerateConsecutiveCodesBytesWithParams([]byte("JBSWY3DPEHPK3PXP"), params)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var setupErr error
-	_ = testutil.CaptureStdout(func() {
-		setupErr = handler.Setup()
-	})
+	output := testutil.CaptureStdout(func() { setupErr = handler.Setup() })
 	if setupErr != nil {
-		t.Fatalf("Setup: %v", setupErr)
+		t.Fatalf("Setup(): %v", setupErr)
 	}
-
-	var got totp.Params
-	if err := json.Unmarshal([]byte(gotDescription), &got); err != nil {
-		t.Fatalf("SetDescription payload is not JSON: %v (raw %q)", err, gotDescription)
+	m := regexp.MustCompile(`Current code: (\d+)`).FindStringSubmatch(output)
+	if m == nil {
+		t.Fatalf("no current code in the output:\n%s", output)
 	}
-	if got.Issuer != "ExampleCorp" {
-		t.Errorf("Issuer = %q, want ExampleCorp", got.Issuer)
-	}
-	if got.Algorithm != "SHA256" {
-		t.Errorf("Algorithm = %q, want SHA256", got.Algorithm)
-	}
-	if got.Digits != 8 {
-		t.Errorf("Digits = %d, want 8", got.Digits)
-	}
-	if got.Period != 60 {
-		t.Errorf("Period = %d, want 60", got.Period)
+	if code := m[1]; len(code) != 8 || (code != before && code != after) {
+		t.Errorf("current code = %q, want the 8-digit SHA-256 code (%s or %s)", code, before, after)
 	}
 }
 
 func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
-	// Save original functions
-	origGetCurrentUser := getCurrentUser
-	origValidateAndNormalizeSecret := validateAndNormalizeSecret
-	origGenerateConsecutiveCodes := generateConsecutiveCodes
-	origReadPassword := readPassword
-	defer func() {
-		getCurrentUser = origGetCurrentUser
-		validateAndNormalizeSecret = origValidateAndNormalizeSecret
-		generateConsecutiveCodes = origGenerateConsecutiveCodes
-		readPassword = origReadPassword
-	}()
-
-	// Mock functions
-	getCurrentUser = func() (string, error) {
-		return "testuser", nil
-	}
-
-	validateAndNormalizeSecret = func(secret string) (string, error) {
-		return secret, nil
-	}
-
-	generateConsecutiveCodes = func(secret string) (string, string, error) {
-		return "123456", "789012", nil
-	}
-
-	readPassword = func(fd int) ([]byte, error) {
-		return []byte("TESTSECRET"), nil
-	}
-
 	tests := map[string]struct {
-		existingSecret   string
+		existingProfile  string
 		userInput        string
 		expectedErrorMsg string
-		expectError      bool
+		existing         bool
 		expectOverwrite  bool
 	}{
 		"existing entry - user cancels with n": {
-			existingSecret:   "EXISTING_SECRET",
-			userInput:        "TestService\n\nn\n", // service: TestService, profile: empty, overwrite: no
-			expectError:      true,
+			existing:         true,
+			userInput:        "TestService\n\nn\n", // service, empty profile, overwrite: no
 			expectedErrorMsg: "setup cancelled by user",
-			expectOverwrite:  false,
 		},
 		"existing entry - user cancels with N": {
-			existingSecret:   "EXISTING_SECRET",
-			userInput:        "TestService\n\nN\n", // service: TestService, profile: empty, overwrite: NO
-			expectError:      true,
+			existing:         true,
+			userInput:        "TestService\n\nN\n",
 			expectedErrorMsg: "setup cancelled by user",
-			expectOverwrite:  false,
 		},
 		"existing entry - user cancels with empty": {
-			existingSecret:   "EXISTING_SECRET",
-			userInput:        "TestService\n\n\n", // service: TestService, profile: empty, overwrite: empty (defaults to no)
-			expectError:      true,
+			existing:         true,
+			userInput:        "TestService\n\n\n", // empty answer defaults to no
 			expectedErrorMsg: "setup cancelled by user",
-			expectOverwrite:  false,
 		},
 		"existing entry - user overwrites with y": {
-			existingSecret:  "EXISTING_SECRET",
-			userInput:       "TestService\n\ny\n1\n", // service: TestService, profile: empty, overwrite: yes, manual entry
-			expectError:     false,
+			existing:        true,
+			userInput:       "TestService\n\ny\n1\n", // overwrite: yes, manual entry
 			expectOverwrite: true,
 		},
 		"existing entry - user overwrites with yes": {
-			existingSecret:  "EXISTING_SECRET",
-			userInput:       "TestService\n\nyes\n1\n", // service: TestService, profile: empty, overwrite: yes, manual entry
-			expectError:     false,
+			existing:        true,
+			userInput:       "TestService\n\nyes\n1\n",
 			expectOverwrite: true,
 		},
 		"existing entry with profile - user cancels": {
-			existingSecret:   "EXISTING_SECRET",
-			userInput:        "TestService\nwork\nn\n", // service: TestService, profile: work, overwrite: no
-			expectError:      true,
+			existing:         true,
+			existingProfile:  "work",
+			userInput:        "TestService\nwork\nn\n",
 			expectedErrorMsg: "setup cancelled by user",
-			expectOverwrite:  false,
 		},
 		"no existing entry - proceeds normally": {
-			existingSecret:  "",                   // No existing entry
-			userInput:       "TestService\n\n1\n", // service: TestService, profile: empty, manual entry
-			expectError:     false,
-			expectOverwrite: false,
+			userInput: "TestService\n\n1\n",
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			// Create mock keychain with controlled behavior
-			mockKeychain := &mocks.MockProvider{
-				GetSecretFunc: func(account, service string) ([]byte, error) {
-					if tc.existingSecret != "" {
-						return []byte(tc.existingSecret), nil
-					}
-					return nil, fmt.Errorf("not found")
-				},
-				GetSecretStringFunc: func(account, service string) (string, error) {
-					return tc.existingSecret, nil
-				},
-				SetSecretFunc: func(account, service string, secret []byte) error {
-					return nil
-				},
-				SetSecretStringFunc: func(account, service string, secret string) error {
-					return nil
-				},
-				SetDescriptionFunc: func(service, account, description string) error {
-					return nil
-				},
+			stubTOTPSetup(t, qrcode.TOTPInfo{}, "TESTSECRET")
+			generateConsecutiveCodes = func(string, totp.Params) (string, string, error) { return "123456", "789012", nil }
+			store := vault.NewMemStore()
+			k := vault.Key{Kind: vault.KindTOTP, Service: "TestService", Username: tc.existingProfile}
+			if tc.existing {
+				if err := store.Put(k, []byte("EXISTING_SECRET")); err != nil {
+					t.Fatal(err)
+				}
 			}
-
-			// Create handler with mock reader
-			reader := bufio.NewReader(strings.NewReader(tc.userInput))
-			handler := &TOTPSetupHandler{
-				reader:           reader,
-				keychainProvider: mockKeychain,
-			}
+			handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader(tc.userInput))}
 
 			var err error
-			output := testutil.CaptureStdout(func() {
-				err = handler.Setup()
-			})
+			output := testutil.CaptureStdout(func() { err = handler.Setup() })
 
-			// Check results
-			if tc.expectError {
-				if err == nil {
-					t.Errorf("Expected error but got none")
-				} else if !strings.Contains(err.Error(), tc.expectedErrorMsg) {
-					t.Errorf("Expected error containing %q, got %q", tc.expectedErrorMsg, err.Error())
+			if tc.expectedErrorMsg != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.expectedErrorMsg) {
+					t.Fatalf("Setup() = %v, want an error containing %q", err, tc.expectedErrorMsg)
 				}
-
-				// Verify cancellation message appears
-				if tc.expectedErrorMsg == "setup cancelled by user" && !strings.Contains(output, "Setup cancelled") {
-					t.Error("Expected 'Setup cancelled' message in output")
+				if !strings.Contains(output, "Setup cancelled") {
+					t.Error("expected the 'Setup cancelled' message")
 				}
 			} else {
 				if err != nil {
-					t.Errorf("Unexpected error: %v", err)
+					t.Fatalf("Setup(): %v", err)
 				}
-
-				// Verify success messages
 				if !strings.Contains(output, "Setup complete!") {
-					t.Error("Expected setup completion message")
+					t.Error("expected the setup completion message")
 				}
 			}
 
-			// Verify overwrite prompt appears when expected
-			if tc.existingSecret != "" {
-				if !strings.Contains(output, "An entry already exists") {
-					t.Error("Expected overwrite warning message")
-				}
-				if !strings.Contains(output, "Overwrite existing configuration?") {
-					t.Error("Expected overwrite prompt")
-				}
+			want := "TESTSECRET"
+			if tc.existing && !tc.expectOverwrite {
+				want = "EXISTING_SECRET"
+			}
+			if got, err := store.Get(k); err != nil || string(got) != want {
+				t.Errorf("stored secret = %q, %v; want %q", got, err, want)
+			}
+			if tc.existing && (!strings.Contains(output, "An entry already exists") || !strings.Contains(output, "Overwrite existing configuration?")) {
+				t.Error("expected the overwrite warning and prompt")
 			}
 		})
 	}

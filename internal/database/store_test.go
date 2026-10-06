@@ -2,13 +2,16 @@ package database
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/bashhack/sesh/internal/keychain"
+	"github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // mockKeySource is an in-memory key source for testing.
@@ -26,22 +29,18 @@ func (m *mockKeySource) GetEncryptionKey() ([]byte, error) {
 	return cp, nil
 }
 
-func (m *mockKeySource) StoreEncryptionKey(key []byte) error { return nil }
-func (m *mockKeySource) RequiresUserInput() bool             { return false }
-func (m *mockKeySource) Name() string                        { return "mock" }
-
-func (m *mockKeySource) EncryptEntry(plaintext []byte) ([]byte, []byte, error) {
+func (m *mockKeySource) EncryptEntry(plaintext, aad []byte) ([]byte, []byte, error) {
 	if m.err != nil {
 		return nil, nil, m.err
 	}
-	return EncryptEntry(m.key, plaintext)
+	return EncryptEntry(m.key, plaintext, aad)
 }
 
-func (m *mockKeySource) DecryptEntry(encryptedData, salt []byte) ([]byte, error) {
+func (m *mockKeySource) DecryptEntry(encryptedData, salt, aad []byte) ([]byte, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
-	return DecryptEntry(m.key, encryptedData, salt)
+	return DecryptEntry(m.key, encryptedData, salt, aad)
 }
 
 func newTestStore(t *testing.T) *Store {
@@ -63,13 +62,14 @@ func newTestStore(t *testing.T) *Store {
 func TestOpenAndMigrate(t *testing.T) {
 	s := newTestStore(t)
 
-	tables := []string{"passwords", "key_metadata", "audit_log", "schema_migrations"}
-	for _, tbl := range tables {
+	for _, tbl := range []string{"entries", "key_metadata", "audit_log", "schema_migrations"} {
 		var n int
-		err := s.db.QueryRow("SELECT COUNT(*) FROM " + tbl).Scan(&n)
-		if err != nil {
+		if err := s.db.QueryRow("SELECT COUNT(*) FROM " + tbl).Scan(&n); err != nil {
 			t.Errorf("table %q should exist: %v", tbl, err)
 		}
+	}
+	if got := tableNames(t, s.db, "passwords"); got != nil {
+		t.Errorf("a new vault has the old table %v", got)
 	}
 
 	var v int
@@ -112,70 +112,95 @@ func TestOpen_RejectsNewerSchemaVersion(t *testing.T) {
 	}
 }
 
-func TestMigrateV4_DropsTheSearchIndex(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	ks := &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)}
-	searchObjects := func(s *Store) []string {
-		t.Helper()
-		rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE name LIKE 'passwords_fts%' OR name IN ('passwords_ai', 'passwords_ad', 'passwords_au') ORDER BY name`)
-		if err != nil {
+// tableNames returns the names in sqlite_master matching the LIKE pattern,
+// sorted; nil for none.
+func tableNames(t *testing.T, db *sql.DB, like string) []string {
+	t.Helper()
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE name LIKE ? ORDER BY name`, like)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Errorf("rows.Close: %v", err)
+		}
+	}()
+	var names []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
 			t.Fatal(err)
 		}
-		defer func() {
-			if err := rows.Close(); err != nil {
-				t.Errorf("rows.Close: %v", err)
-			}
-		}()
-		var names []string
-		for rows.Next() {
-			var n string
-			if err := rows.Scan(&n); err != nil {
-				t.Fatal(err)
-			}
-			names = append(names, n)
+		names = append(names, n)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return names
+}
+
+// oldVault creates a vault at schema version, as a build from before the
+// later migrations left it. With a row, its passwords table holds one
+// entry.
+func oldVault(t *testing.T, version int, row bool) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", fileURI(dbPath, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Close: %v", err)
 		}
-		return names
-	}
-
-	s, err := Open(dbPath, ks)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	if got := searchObjects(s); got != nil {
-		t.Errorf("a new vault has search index objects %v, want none", got)
-	}
-
-	// Put the vault back at version 3, index and triggers included, with an
-	// entry in it, as a vault made before version 4 would be.
-	if err := s.SetSecret("alice", "sesh-password/password/github/alice", []byte("pw")); err != nil {
-		t.Fatal(err)
-	}
-	tx, err := s.db.Begin()
+	}()
+	tx, err := db.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := migrateV1(tx); err != nil {
-		t.Fatal(err)
+	for v := 1; v <= version; v++ {
+		if err := migrations[v](tx); err != nil {
+			t.Fatalf("migration v%d: %v", v, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, v, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
 	}
-	for _, q := range []string{
-		`INSERT INTO passwords_fts(passwords_fts) VALUES ('rebuild')`,
-		`DELETE FROM schema_migrations WHERE version = 4`,
-	} {
-		if _, err := tx.Exec(q); err != nil {
-			t.Fatalf("%s: %v", q, err)
+	if row {
+		if _, err := tx.Exec(`INSERT INTO passwords (id, service, account, entry_type, encrypted_data, salt) VALUES ('sesh-password/password/github/alice:me', 'sesh-password/password/github/alice', 'me', 'password', x'00', x'00')`); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	if got := searchObjects(s); len(got) == 0 {
+	return dbPath
+}
+
+func TestMigrateV4_DropsTheSearchIndex(t *testing.T) {
+	ks := &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)}
+	searchObjects := func(db *sql.DB) []string {
+		var names []string
+		for _, like := range []string{"passwords_fts%", "passwords_a_"} {
+			names = append(names, tableNames(t, db, like)...)
+		}
+		return names
+	}
+
+	// An empty vault made before version 4 has the index and its triggers.
+	dbPath := oldVault(t, 3, false)
+	raw, err := sql.Open("sqlite", fileURI(dbPath, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := searchObjects(raw); len(got) == 0 {
 		t.Fatal("setup: the version 3 vault has no search index")
 	}
-	if err := s.Close(); err != nil {
+	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	s, err = Open(dbPath, ks)
+	s, err := Open(dbPath, ks)
 	if err != nil {
 		t.Fatalf("Open after upgrade: %v", err)
 	}
@@ -184,15 +209,94 @@ func TestMigrateV4_DropsTheSearchIndex(t *testing.T) {
 			t.Errorf("Close: %v", err)
 		}
 	})
-	if got := searchObjects(s); got != nil {
+	if got := searchObjects(s.db); got != nil {
 		t.Errorf("after upgrading, search index objects %v remain, want none", got)
 	}
-	got, err := s.GetSecret("alice", "sesh-password/password/github/alice")
-	if err != nil || string(got) != "pw" {
-		t.Errorf("GetSecret after upgrade = %q, %v; want the stored entry", got, err)
+}
+
+func TestMigrateV5_TheEntriesTable(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	for _, v := range []string{"v1", "v2"} {
+		if err := s.Put(k, []byte(v)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := s.DeleteEntry("alice", "sesh-password/password/github/alice"); err != nil {
-		t.Errorf("DeleteEntry after upgrade: %v", err)
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM entries WHERE kind = 'password' AND service = 'github' AND username = 'alice'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get(k); n != 1 || err != nil || string(got) != "v2" {
+		t.Errorf("after two Puts: %d rows, secret %q (%v); want one row holding v2", n, got, err)
+	}
+	// Kind, service, and username are unique together, not alone.
+	if _, err := s.db.Exec(`INSERT INTO entries (kind, service, username, encrypted_data, salt, created_at, updated_at) VALUES ('password', 'github', 'alice', x'00', x'00', ?, ?)`, time.Now(), time.Now()); err == nil {
+		t.Error("a second row for the same key was accepted")
+	}
+	if err := s.Put(vault.Key{Kind: vault.KindTOTP, Service: "github", Username: "alice"}, []byte("t")); err != nil {
+		t.Errorf("the same name in another kind: %v", err)
+	}
+}
+
+func TestMigrateV5_UpgradesAnEmptyVault(t *testing.T) {
+	dbPath := oldVault(t, 4, false)
+	s, err := Open(dbPath, &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	if got := tableNames(t, s.db, "passwords"); got != nil {
+		t.Errorf("the old table remains: %v", got)
+	}
+	k := vault.Key{Kind: vault.KindAPIKey, Service: "openai"}
+	if err := s.Put(k, []byte("sk")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get(k); err != nil || string(got) != "sk" {
+		t.Errorf("Get = %q, %v; want sk", got, err)
+	}
+}
+
+func TestMigrateV5_RefusesAVaultWithOldEntries(t *testing.T) {
+	for from := 1; from <= 4; from++ {
+		t.Run(fmt.Sprintf("from v%d", from), func(t *testing.T) {
+			dbPath := oldVault(t, from, true)
+			_, err := Open(dbPath, &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)})
+			if !errors.Is(err, ErrOldVault) {
+				t.Fatalf("Open = %v, want ErrOldVault", err)
+			}
+			if wantSub := "earlier development build"; !strings.Contains(err.Error(), wantSub) {
+				t.Errorf("err = %v, want it to contain %q", err, wantSub)
+			}
+
+			// The vault is unchanged: still at its version, its entry still there.
+			raw, err := sql.Open("sqlite", fileURI(dbPath, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := raw.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			})
+			var version, rows int
+			if err := raw.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
+				t.Fatal(err)
+			}
+			if err := raw.QueryRow(`SELECT COUNT(*) FROM passwords`).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			if version != from || rows != 1 {
+				t.Errorf("after the refusal: version %d, %d old rows; want %d and 1", version, rows, from)
+			}
+			if got := tableNames(t, raw, "entries"); got != nil {
+				t.Errorf("the refused vault gained %v", got)
+			}
+		})
 	}
 }
 
@@ -217,42 +321,26 @@ func TestMigrationsIdempotent(t *testing.T) {
 	}
 }
 
-func TestSetGetSecret(t *testing.T) {
+func TestPutGet(t *testing.T) {
 	tests := map[string]struct {
-		account string
-		service string
-		secret  []byte
+		key    vault.Key
+		secret []byte
 	}{
-		"totp secret": {
-			account: "alice",
-			service: "sesh-totp/github",
-			secret:  []byte("JBSWY3DPEHPK3PXP"),
-		},
-		"password": {
-			account: "bob",
-			service: "sesh-password/demo",
-			secret:  []byte("hunter2"),
-		},
-		"mfa serial": {
-			account: "carol",
-			service: "sesh-aws-serial/prod",
-			secret:  []byte("arn:aws:iam::123456:mfa/carol"),
-		},
+		"totp secret": {key: vault.Key{Kind: vault.KindTOTP, Service: "github"}, secret: []byte("JBSWY3DPEHPK3PXP")},
+		"password":    {key: vault.Key{Kind: vault.KindPassword, Service: "demo", Username: "bob"}, secret: []byte("hunter2")},
+		"aws mfa":     {key: vault.AWSKey("prod"), secret: []byte("GEZDGNBVGY3TQOJQ")},
 	}
 
 	s := newTestStore(t)
-
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			if err := s.SetSecret(tc.account, tc.service, tc.secret); err != nil {
-				t.Fatalf("SetSecret: %v", err)
+			if err := s.Put(tc.key, tc.secret); err != nil {
+				t.Fatalf("Put: %v", err)
 			}
-
-			got, err := s.GetSecret(tc.account, tc.service)
+			got, err := s.Get(tc.key)
 			if err != nil {
-				t.Fatalf("GetSecret: %v", err)
+				t.Fatalf("Get: %v", err)
 			}
-
 			if !bytes.Equal(got, tc.secret) {
 				t.Fatalf("got %q, want %q", got, tc.secret)
 			}
@@ -260,208 +348,119 @@ func TestSetGetSecret(t *testing.T) {
 	}
 }
 
-func TestSetSecretUpsert(t *testing.T) {
+func TestPut_SizeLimit(t *testing.T) {
 	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindNote, Service: "big"}
 
-	if err := s.SetSecret("alice", "svc", []byte("v1")); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetSecret("alice", "svc", []byte("v2")); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := s.GetSecret("alice", "svc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "v2" {
-		t.Fatalf("expected v2, got %q", got)
-	}
-}
-
-func TestSetSecret_SizeLimit(t *testing.T) {
-	s := newTestStore(t)
-
-	if err := s.SetSecret("alice", "svc", make([]byte, MaxSecretSize)); err != nil {
+	if err := s.Put(k, make([]byte, MaxSecretSize)); err != nil {
 		t.Fatalf("secret at the limit: %v", err)
 	}
-	err := s.SetSecret("alice", "svc", make([]byte, MaxSecretSize+1))
-	if !errors.Is(err, ErrSecretTooLarge) {
+	if err := s.Put(k, make([]byte, MaxSecretSize+1)); !errors.Is(err, ErrSecretTooLarge) {
 		t.Fatalf("expected ErrSecretTooLarge, got: %v", err)
 	}
 }
 
-func TestGetSecretNotFound(t *testing.T) {
+func TestGet_NotFound(t *testing.T) {
 	s := newTestStore(t)
-
-	_, err := s.GetSecret("alice", "nonexistent")
-	if !errors.Is(err, keychain.ErrNotFound) {
+	if _, err := s.Get(vault.Key{Kind: vault.KindPassword, Service: "nonexistent"}); !errors.Is(err, vault.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got: %v", err)
 	}
 }
 
-func TestSetGetSecretString(t *testing.T) {
+func TestList_ByKind(t *testing.T) {
 	s := newTestStore(t)
-
-	if err := s.SetSecretString("bob", "sesh-password/demo", "hunter2"); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := s.GetSecretString("bob", "sesh-password/demo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "hunter2" {
-		t.Fatalf("got %q, want %q", got, "hunter2")
-	}
-}
-
-func TestGetMFASerialBytes(t *testing.T) {
-	tests := map[string]struct {
-		profile string
-		service string
-	}{
-		"with profile": {
-			profile: "prod",
-			service: "sesh-aws-serial/prod",
-		},
-		"empty profile": {
-			profile: "",
-			service: "sesh-aws-serial",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			s := newTestStore(t)
-			serial := []byte("arn:aws:iam::123456:mfa/alice")
-
-			if err := s.SetSecret("alice", tc.service, serial); err != nil {
-				t.Fatal(err)
-			}
-
-			got, err := s.GetMFASerialBytes("alice", tc.profile)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(got, serial) {
-				t.Fatalf("got %q, want %q", got, serial)
-			}
-		})
-	}
-}
-
-func TestListEntries(t *testing.T) {
-	s := newTestStore(t)
-
-	secrets := map[string]string{
-		"sesh-totp/github": "secret1",
-		"sesh-totp/gitlab": "secret2",
-		"sesh-aws/prod":    "secret3",
-	}
-	for svc, sec := range secrets {
-		if err := s.SetSecret("alice", svc, []byte(sec)); err != nil {
+	for _, k := range []vault.Key{
+		{Kind: vault.KindTOTP, Service: "github"},
+		{Kind: vault.KindTOTP, Service: "gitlab"},
+		{Kind: vault.KindPassword, Service: "github"},
+	} {
+		if err := s.Put(k, []byte("x")); err != nil {
 			t.Fatal(err)
 		}
 	}
-
-	entries, err := s.ListEntries("sesh-totp")
+	entries, err := s.List(vault.Filter{Kind: vault.KindTOTP})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 totp entries, got %d", len(entries))
-	}
-
-	for _, e := range entries {
-		if !strings.HasPrefix(e.Service, "sesh-totp") {
-			t.Errorf("unexpected service: %s", e.Service)
-		}
+	if len(entries) != 2 || entries[0].Service != "github" || entries[1].Service != "gitlab" {
+		t.Fatalf("List(totp) = %+v, want github then gitlab", entries)
 	}
 }
 
-func TestDeleteEntry(t *testing.T) {
+func TestDelete(t *testing.T) {
 	s := newTestStore(t)
-
-	if err := s.SetSecret("alice", "svc", []byte("secret")); err != nil {
+	k := vault.Key{Kind: vault.KindPassword, Service: "svc"}
+	if err := s.Put(k, []byte("secret")); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := s.DeleteEntry("alice", "svc"); err != nil {
+	if err := s.Delete(k); err != nil {
 		t.Fatal(err)
 	}
-
-	_, err := s.GetSecret("alice", "svc")
-	if err == nil {
-		t.Fatal("expected not-found after delete")
+	if _, err := s.Get(k); !errors.Is(err, vault.ErrNotFound) {
+		t.Fatalf("Get after Delete = %v, want ErrNotFound", err)
+	}
+	if err := s.Delete(k); !errors.Is(err, vault.ErrNotFound) {
+		t.Fatalf("Delete of a missing entry = %v, want ErrNotFound", err)
 	}
 }
 
-func TestDeleteEntryNotFound(t *testing.T) {
+func TestSettings_RoundTrip(t *testing.T) {
 	s := newTestStore(t)
-
-	err := s.DeleteEntry("alice", "nonexistent")
-	if !errors.Is(err, keychain.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got: %v", err)
-	}
-}
-
-func TestSetDescription(t *testing.T) {
-	s := newTestStore(t)
-
-	// SetDescription only updates existing rows — create the entry first.
-	if err := s.SetSecret("alice", "sesh-totp/github", []byte("secret")); err != nil {
+	want := vault.Settings{AWSMFADevice: "arn:aws:iam::1:mfa/me", TOTP: totp.Params{Digits: 8, Algorithm: "SHA256", Period: 60, Issuer: "Bank"}}
+	k := vault.AWSKey("prod")
+	if err := s.Save(&vault.Entry{Key: k, Settings: want}, []byte("GEZDGNBVGY3TQOJQ")); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := s.SetDescription("sesh-totp/github", "alice", "GitHub TOTP"); err != nil {
-		t.Fatal(err)
+	if e, err := s.Lookup(k); err != nil || e.Settings != want {
+		t.Errorf("Lookup = %+v, %v; want settings %+v", e.Settings, err, want)
 	}
-
-	entries, err := s.ListEntries("sesh-totp")
+	entries, err := s.List(vault.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
+	if len(entries) != 1 || entries[0].Settings != want {
+		t.Errorf("List = %+v, want one entry with settings %+v", entries, want)
 	}
-	if entries[0].Description != "GitHub TOTP" {
-		t.Fatalf("expected description 'GitHub TOTP', got %q", entries[0].Description)
+	// No settings are stored as none.
+	plain := vault.Key{Kind: vault.KindPassword, Service: "x"}
+	if err := s.Put(plain, []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	var col sql.NullString
+	if err := s.db.QueryRow(`SELECT settings FROM entries WHERE service = 'x'`).Scan(&col); err != nil || col.Valid {
+		t.Errorf("settings column = %+v, %v; want NULL", col, err)
 	}
 }
 
-func TestSetDescriptionNotFoundWithoutEntry(t *testing.T) {
+func TestSettings_CorruptColumnIsAnError(t *testing.T) {
 	s := newTestStore(t)
-
-	// Calling SetDescription without a prior SetSecret surfaces ErrNotFound —
-	// matching DeleteEntry's contract so caller typos/races don't go silent.
-	err := s.SetDescription("sesh-totp/github", "alice", "desc")
-	if !errors.Is(err, keychain.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got: %v", err)
-	}
-
-	entries, err := s.ListEntries("sesh-totp")
-	if err != nil {
+	k := vault.Key{Kind: vault.KindTOTP, Service: "bank"}
+	if err := s.Put(k, []byte("JBSWY3DPEHPK3PXP")); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("expected 0 entries (no row exists), got %d", len(entries))
+	if _, err := s.db.Exec(`UPDATE entries SET settings = '{not json' WHERE service = 'bank'`); err != nil {
+		t.Fatal(err)
+	}
+	// Silently reading none would give TOTP codes from the wrong settings.
+	if _, err := s.Lookup(k); err == nil || !strings.Contains(err.Error(), "settings of totp/bank") {
+		t.Errorf("Lookup = %v, want an error naming the entry's settings", err)
+	}
+	if _, err := s.List(vault.Filter{}); err == nil {
+		t.Error("List succeeded over a corrupt settings column")
 	}
 }
 
 func TestAuditLogWritten(t *testing.T) {
 	s := newTestStore(t)
-
-	if err := s.SetSecret("alice", "svc", []byte("secret")); err != nil {
+	if err := s.Put(vault.Key{Kind: vault.KindPassword, Service: "svc"}, []byte("secret")); err != nil {
 		t.Fatal(err)
 	}
-
 	var count int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE event_type = 'modify'").Scan(&count); err != nil {
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE event_type = 'modify' AND entry_id = 'password/svc'").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
-		t.Fatalf("expected 1 audit entry, got %d", count)
+		t.Fatalf("expected 1 audit entry for password/svc, got %d", count)
 	}
 }
 
@@ -492,135 +491,48 @@ func TestInitKeyMetadata(t *testing.T) {
 	}
 }
 
-func TestInferEntryType(t *testing.T) {
-	tests := map[string]struct {
-		service string
-		want    EntryType
-	}{
-		"totp secret":          {service: "sesh-totp/github", want: EntryTypeTOTP},
-		"aws totp":             {service: "sesh-aws/prod", want: EntryTypeTOTP},
-		"mfa serial":           {service: "sesh-aws-serial/prod", want: EntryTypeMFA},
-		"password via manager": {service: "sesh-password/password/github/alice", want: EntryTypePassword},
-		"totp via manager":     {service: "sesh-password/totp/github/alice", want: EntryTypeTOTP},
-		"api_key via manager":  {service: "sesh-password/api_key/stripe/admin", want: EntryTypeAPIKey},
-		"note via manager":     {service: "sesh-password/secure_note/personal/codes", want: EntryTypeNote},
-		"password bare prefix": {service: "sesh-password/demo", want: EntryTypePassword},
-		"unknown":              {service: "unknown-service", want: EntryTypePassword},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got := inferEntryType(tc.service)
-			if got != tc.want {
-				t.Errorf("inferEntryType(%q) = %q, want %q", tc.service, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestExtractPrefix(t *testing.T) {
-	tests := map[string]struct {
-		service string
-		want    string
-	}{
-		"with slash":   {service: "sesh-totp/github", want: "sesh-totp"},
-		"nested slash": {service: "sesh-aws-serial/prod", want: "sesh-aws-serial"},
-		"no slash":     {service: "sesh-metadata", want: "sesh-metadata"},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got := extractPrefix(tc.service)
-			if got != tc.want {
-				t.Errorf("extractPrefix(%q) = %q, want %q", tc.service, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestSetSecretAt_PreservesTimestamps(t *testing.T) {
+func TestSave_PreservesTimestamps(t *testing.T) {
 	s := newTestStore(t)
 
 	// Historic timestamps — "this entry was first stored ~1 year ago and
-	// last updated ~6 months ago". Truncate to seconds so we don't fight
-	// SQLite's datetime column round-trip precision.
+	// last updated ~6 months ago". Whole seconds, so SQLite's datetime
+	// round-trip can't blur them.
 	created := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
 	updated := time.Date(2025, 7, 15, 10, 0, 0, 0, time.UTC)
-
-	if err := s.SetSecretAt("alice", "sesh-password/password/github/alice", []byte("hunter2"), created, updated); err != nil {
-		t.Fatalf("SetSecretAt: %v", err)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	if err := s.Save(&vault.Entry{Key: k, CreatedAt: created, UpdatedAt: updated}, []byte("hunter2")); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 
-	entries, err := s.ListEntries("sesh-password")
+	entries, err := s.List(vault.Filter{})
 	if err != nil {
-		t.Fatalf("ListEntries: %v", err)
+		t.Fatalf("List: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 entry, got %d", len(entries))
-	}
-	if !entries[0].CreatedAt.Equal(created) {
-		t.Errorf("CreatedAt = %v, want %v", entries[0].CreatedAt, created)
-	}
-	if !entries[0].UpdatedAt.Equal(updated) {
-		t.Errorf("UpdatedAt = %v, want %v", entries[0].UpdatedAt, updated)
+	if len(entries) != 1 || !entries[0].CreatedAt.Equal(created) || !entries[0].UpdatedAt.Equal(updated) {
+		t.Errorf("entries = %+v, want created %v, updated %v", entries, created, updated)
 	}
 }
 
-func TestSetSecretAt_ZeroTimestampsFallBackToNow(t *testing.T) {
+func TestSave_ZeroTimestampsFallBackToNow(t *testing.T) {
 	s := newTestStore(t)
 
 	before := time.Now().UTC().Add(-time.Second)
-	if err := s.SetSecretAt("alice", "sesh-password/password/a/alice", []byte("x"), time.Time{}, time.Time{}); err != nil {
-		t.Fatalf("SetSecretAt: %v", err)
+	if err := s.Save(&vault.Entry{Kind: vault.KindPassword, Service: "a"}, []byte("x")); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 	after := time.Now().UTC().Add(time.Second)
 
-	entries, err := s.ListEntries("sesh-password")
+	entries, err := s.List(vault.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
-	got := entries[0].CreatedAt
-	if got.Before(before) || got.After(after) {
-		t.Errorf("zero-timestamp fallback: CreatedAt = %v, want in [%v, %v]", got, before, after)
-	}
-}
-
-func TestSetDescriptionAt_PreservesTimestamp(t *testing.T) {
-	s := newTestStore(t)
-
-	created := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
-	updated := time.Date(2025, 7, 15, 10, 0, 0, 0, time.UTC)
-	if err := s.SetSecretAt("alice", "sesh-password/password/github/alice", []byte("hunter2"), created, updated); err != nil {
-		t.Fatal(err)
-	}
-
-	// SetDescriptionAt with the same updated_at must not bump the stamp
-	// forward to "now" — that would defeat timestamp preservation on
-	// import (which calls SetSecret + SetDescription in sequence).
-	if err := s.SetDescriptionAt("sesh-password/password/github/alice", "alice", "GitHub password", updated); err != nil {
-		t.Fatalf("SetDescriptionAt: %v", err)
-	}
-
-	entries, err := s.ListEntries("sesh-password")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !entries[0].UpdatedAt.Equal(updated) {
-		t.Errorf("UpdatedAt after SetDescriptionAt = %v, want %v", entries[0].UpdatedAt, updated)
-	}
-	if entries[0].Description != "GitHub password" {
-		t.Errorf("Description = %q, want %q", entries[0].Description, "GitHub password")
-	}
-}
-
-func TestSetDescriptionAt_MissingEntryReturnsErrNotFound(t *testing.T) {
-	s := newTestStore(t)
-	err := s.SetDescriptionAt("sesh-password/password/ghost/alice", "alice", "", time.Now())
-	if !errors.Is(err, keychain.ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got %v", err)
+	for _, got := range []time.Time{entries[0].CreatedAt, entries[0].UpdatedAt} {
+		if got.Before(before) || got.After(after) {
+			t.Errorf("zero-timestamp fallback: %v, want in [%v, %v]", got, before, after)
+		}
 	}
 }
 

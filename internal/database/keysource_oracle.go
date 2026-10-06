@@ -15,22 +15,22 @@ func NewKeySourceOracle(ks KeySource) CryptoOracle {
 	return &keySourceOracle{ks: ks}
 }
 
-func (o *keySourceOracle) EncryptEntry(plaintext []byte) (encryptedData, salt []byte, err error) {
+func (o *keySourceOracle) EncryptEntry(plaintext, aad []byte) (encryptedData, salt []byte, err error) {
 	key, err := o.ks.GetEncryptionKey()
 	if err != nil {
 		return nil, nil, err
 	}
 	defer secure.SecureZeroBytes(key)
-	return EncryptEntry(key, plaintext)
+	return EncryptEntry(key, plaintext, aad)
 }
 
-func (o *keySourceOracle) DecryptEntry(encryptedData, salt []byte) ([]byte, error) {
+func (o *keySourceOracle) DecryptEntry(encryptedData, salt, aad []byte) ([]byte, error) {
 	key, err := o.ks.GetEncryptionKey()
 	if err != nil {
 		return nil, err
 	}
 	defer secure.SecureZeroBytes(key)
-	return DecryptEntry(key, encryptedData, salt)
+	return DecryptEntry(key, encryptedData, salt, aad)
 }
 
 // Close releases the wrapped source (MasterPasswordSource zeroes its

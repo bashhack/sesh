@@ -15,7 +15,7 @@ on:
 jobs:
   lint:
     name: Lint
-    runs-on: macos-latest  # macOS for sesh (Keychain dependency)
+    runs-on: macos-latest  # macOS for sesh (Touch ID's native code)
     steps:
       - uses: actions/checkout@v4
 
@@ -56,7 +56,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: macos-latest  # macOS for sesh (Keychain dependency)
+    runs-on: macos-latest  # macOS for sesh (Touch ID's native code)
     needs: [lint]
     strategy:
       fail-fast: false

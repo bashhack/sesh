@@ -44,7 +44,7 @@ type PasswordPromptFunc func(prompt string) ([]byte, error)
 
 // MasterPasswordSource derives the encryption key from a user-supplied
 // passphrase via Argon2id. The KDF salt and a verification blob are stored
-// in a sidecar file alongside the DB — no keychain involvement.
+// in a sidecar file alongside the DB.
 type MasterPasswordSource struct {
 	// sf collapses concurrent slow-path Gets into a single Argon2id
 	// derivation. Without it, N goroutines arriving with an empty cache
@@ -288,15 +288,6 @@ func cloneKey(k []byte) []byte {
 	copy(cp, k)
 	return cp
 }
-
-// StoreEncryptionKey is a no-op for the master password source — the key is
-// derived from the password, not stored directly.
-func (s *MasterPasswordSource) StoreEncryptionKey(_ []byte) error {
-	return nil
-}
-
-func (s *MasterPasswordSource) RequiresUserInput() bool { return true }
-func (s *MasterPasswordSource) Name() string            { return "master-password" }
 
 // initialize handles the first-run case: prompt for password twice, generate
 // salt, derive key, write sidecar.

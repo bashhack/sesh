@@ -2,8 +2,6 @@ package setup
 
 import (
 	"fmt"
-
-	"github.com/bashhack/sesh/internal/keychain"
 )
 
 // SetupHandler defines a handler for a specific service setup
@@ -26,16 +24,12 @@ type SetupService interface {
 
 // setupServiceImpl is the implementation of SetupService
 type setupServiceImpl struct {
-	handlers         map[string]SetupHandler
-	keychainProvider keychain.Provider
+	handlers map[string]SetupHandler
 }
 
 // NewSetupService creates a new SetupService
-func NewSetupService(provider keychain.Provider) SetupService {
-	return &setupServiceImpl{
-		handlers:         make(map[string]SetupHandler),
-		keychainProvider: provider,
-	}
+func NewSetupService() SetupService {
+	return &setupServiceImpl{handlers: make(map[string]SetupHandler)}
 }
 
 // RegisterHandler registers a setup handler for a service

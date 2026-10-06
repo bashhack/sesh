@@ -121,16 +121,6 @@ func TestMasterPasswordSource_RejectsTooShortPassword(t *testing.T) {
 	}
 }
 
-func TestMasterPasswordSource_Name(t *testing.T) {
-	src := NewMasterPasswordSource("/tmp", staticPrompt())
-	if src.Name() != "master-password" {
-		t.Errorf("expected 'master-password', got %q", src.Name())
-	}
-	if !src.RequiresUserInput() {
-		t.Error("RequiresUserInput should return true")
-	}
-}
-
 func TestMasterPasswordSource_UnsupportedVersion(t *testing.T) {
 	dir := t.TempDir()
 	bad := []byte(`{"version": 99, "algorithm": "argon2id", "salt": "", "params": {"time":3,"memory":65536,"threads":4,"key_len":32}, "verify": ""}`)
@@ -363,13 +353,6 @@ func TestMasterPasswordSource_ConcurrentGetAndCloseAreSafe(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-}
-
-func TestMasterPasswordSource_StoreEncryptionKey_NoOp(t *testing.T) {
-	src := NewMasterPasswordSource(t.TempDir(), staticPrompt())
-	if err := src.StoreEncryptionKey([]byte("ignored")); err != nil {
-		t.Errorf("StoreEncryptionKey should be a no-op, got %v", err)
-	}
 }
 
 func TestMasterPasswordSource_RejectsShortSalt(t *testing.T) {

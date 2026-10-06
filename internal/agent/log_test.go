@@ -101,7 +101,7 @@ func TestServer_LogsMalformedUnlock(t *testing.T) {
 	defer mustClose(t, conn)
 
 	// "c2VjcmV0" is base64 for "secret"; salt has the wrong type.
-	raw := []byte(`{"type":"unlock","version":1,"password":"c2VjcmV0","salt":5}` + "\n")
+	raw := []byte(`{"type":"unlock","version":2,"password":"c2VjcmV0","salt":5}` + "\n")
 	if _, err := conn.uc.Write(raw); err != nil {
 		t.Fatal(err)
 	}

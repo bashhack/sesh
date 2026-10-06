@@ -29,7 +29,7 @@ Authentication providers are pluggable. The `ServiceProvider` interface defines 
 
 ### 2. Component Isolation
 
-Each component accesses only what it needs — nothing more. Keychain entries are scoped per-provider, secrets flow through stdin pipes, and memory is zeroed after use.
+Each component accesses only what it needs — nothing more. Secrets flow through stdin pipes, and memory is zeroed after use.
 
 - Secrets are passed via stdin pipes, never as command arguments
 - Subshell init files are written to temp files and cleaned up on exit
@@ -46,10 +46,10 @@ Terminal users shouldn't need to context-switch to graphical tools. Subshells pr
 
 ### 4. Interface-Driven Design
 
-External dependencies are abstracted for testability. AWS CLI, Keychain, and TOTP generation sit behind formal interfaces with mock implementations. Other dependencies (clipboard, QR scanning, command execution) use replaceable package-level variables (`var execCommand = exec.Command`) for the same purpose.
+External dependencies are abstracted for testability. The vault, the AWS CLI, and TOTP generation sit behind formal interfaces with mock implementations. Other dependencies (clipboard, QR scanning, command execution) use replaceable package-level variables (`var execCommand = exec.Command`) for the same purpose.
 
 - Unit tests can mock any external system
-- Implementations can be swapped (e.g., different keychain backends)
+- Implementations can be swapped (e.g., an in-memory store in tests)
 - Code stays loosely coupled
 
 ## Architectural Layers
@@ -72,8 +72,8 @@ The architecture follows a strict layering model where dependencies flow downwar
                     │   Infrastructure Layer  │
                     │      internal/          │
                     │                         │
-                    │ • Keychain (secrets)    │
-                    │ • SQLite + encryption   │
+                    │ • Vault (SQLite,        │
+                    │   encrypted)            │
                     │ • TOTP generation       │
                     │ • Secure memory         │
                     │ • Clipboard             │
@@ -91,7 +91,7 @@ The architecture follows a strict layering model where dependencies flow downwar
 **Core Layer**: Provider orchestration
 - Isolates provider-specific logic
 - Ensures consistent provider behavior
-- Shared infrastructure (keychain, TOTP, secure memory) available to all providers
+- Shared infrastructure (the vault, TOTP, secure memory) available to all providers
 
 **Provider Layer**: Authentication modules
 - Contains provider dependencies
@@ -116,9 +116,9 @@ The architecture follows a strict layering model where dependencies flow downwar
 
 2. **Dependency Injection**:
    ```go
-   func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider, clipboardTimeout time.Duration) *App
+   func NewDefaultApp(versionInfo VersionInfo, store vault.Store, clipboardTimeout time.Duration) *App
    ```
-   The constructor accepts a `keychain.Provider` (the credential store) and wires all other dependencies internally. `main.go` resolves settings through `internal/config` (flag > env > `~/.config/sesh/config.toml` > default) and selects the concrete store (SQLite by default, or the macOS Keychain) via `buildProvider(cfg)`. Tests can substitute any dependency.
+   The constructor accepts a `vault.Store` (the vault) and wires all other dependencies internally. `main.go` resolves settings through `internal/config` (flag > env > `~/.config/sesh/config.toml` > default) and opens the vault via `buildProvider(cfg)`. Tests can substitute any dependency.
 
 3. **Provider Registration**:
    ```go
@@ -190,102 +190,44 @@ Infrastructure components implement the following security controls:
 
 #### Credential Storage
 
-sesh supports two storage backends, selected by the `backend` setting (`SESH_BACKEND`, `--backend`):
+Every entry lives in one encrypted vault, a SQLite file:
 
-**SQLite Store (default)**
 - Pure-Go SQLite via `modernc.org/sqlite` — zero C dependencies
 - AES-256-GCM encryption with per-entry salts
 - Argon2id key derivation for per-entry keys
-- Search by service name or username, matching any part and ignoring case; the password manager does it the same way for both backends
+- Search by service name or username, matching any part and ignoring case
 - Audit log table tracking all access, modifications, and deletions
-- Pluggable master key source (see below)
+- A master key derived from the master password (see below)
 - WAL mode for concurrent read safety
 - A vault key check (`vault_key` table) that refuses a key that can't open the vault before any read or write
 
-**macOS Keychain (`backend = "keychain"`, macOS only)**
-- OS-managed encryption (AES-256)
-- Process-level access control via `-T` flag
-- User-transparent authorization dialogs
+**The master key.** `database.MasterPasswordSource` derives the 256-bit master encryption key from the master password via Argon2id. The KDF salt, Argon2id parameters, and a verification blob live in a 0600 sidecar file (`passwords.key`) next to the database. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. It works the same on macOS and Linux. In normal use the sesh agent holds the derived key and the store encrypts through it (`agent.Oracle`).
 
-**Key sources.** The `database.KeySource` interface abstracts where the 256-bit master encryption key comes from:
+`main.go`'s `buildKeySource(dbPath)` returns the agent's oracle when it can, and otherwise a `MasterPasswordSource` wrapped as one. The store only sees a `database.CryptoOracle`, so it doesn't know whether the agent or this process holds the key.
 
-```go
-type KeySource interface {
-    GetEncryptionKey() ([]byte, error)
-    StoreEncryptionKey(key []byte) error
-    RequiresUserInput() bool
-    Name() string
-}
-```
+**Encrypted export.** The password manager's `ExportEncrypted`/`ImportEncrypted` use the same primitives (Argon2id + AES-256-GCM) but with an independent per-export salt. The envelope is self-contained — the salt and parameters are embedded alongside the ciphertext — so encrypted exports are portable across machines and master passwords.
 
-Two implementations:
-
-- **`MasterPasswordSource`** (default) — derives the key from a user-supplied passphrase via Argon2id. The KDF salt, Argon2id parameters, and a verification blob live in a 0600 sidecar file (`passwords.key`) next to the database. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. No keychain dependency — works on macOS and Linux. In normal use the sesh agent holds the derived key and the store encrypts through it (`agent.Oracle`).
-- **`KeychainSource`** (`key_source = "keychain"`) — reads the key from the macOS Keychain; first-run generates a random 256-bit key and stores it. macOS-only.
-
-`main.go`'s `buildKeySource(dbPath, source)` selects between them by the `key_source` setting. The store only sees a `database.CryptoOracle`, so it doesn't know which source provided the key.
-
-**Encrypted export.** The password manager's `ExportEncrypted`/`ImportEncrypted` use the same primitives (Argon2id + AES-256-GCM) but with an independent per-export salt. The envelope is self-contained — the salt and parameters are embedded alongside the ciphertext — so encrypted exports are portable across machines and key sources.
-
-Binary path restrictions in practice
-```bash
-security add-generic-password ... -T /path/to/sesh
-```
-This means even if another process knows the service name, it cannot access the secret.
-
-**Keychain Data Model** ([SVG](assets/keychain-data-model.svg))
-
-All keychain entries follow the `keyformat` convention. Metadata for all entries is stored in a single zstd-compressed blob:
-
-```mermaid
-%%{init: {'theme': 'neutral'}}%%
-flowchart LR
-    classDef prefix fill:#f9f,stroke:#333,stroke-width:2px
-    classDef key fill:#bbf,stroke:#333,stroke-width:2px
-    classDef meta fill:#dfd,stroke:#333,stroke-width:2px
-
-    subgraph AWS["AWS Provider"]
-        direction TB
-        AWSDefault["sesh-aws/default"]:::key
-        AWSProd["sesh-aws/prod"]:::key
-        AWSSerialDefault["sesh-aws-serial/default"]:::key
-        AWSSerialProd["sesh-aws-serial/prod"]:::key
-    end
-
-    subgraph TOTP["TOTP Provider"]
-        direction TB
-        TOTPGithub["sesh-totp/github"]:::key
-        TOTPGithubWork["sesh-totp/github/work"]:::key
-        TOTPGoogle["sesh-totp/google"]:::key
-    end
-
-    subgraph Metadata["Metadata"]
-        direction TB
-        MetaKey["sesh-metadata<br>zstd-compressed JSON<br>tracks all entries"]:::meta
-    end
-```
-
-Each entry is a keychain item keyed by `{namespace}/{segments}` (built by `keyformat.Build`, parsed by `keyformat.Parse`). The account field is the OS username. AWS stores both a TOTP secret (`sesh-aws/{profile}`) and an MFA serial (`sesh-aws-serial/{profile}`) per profile.
+**Entries.** Every provider stores through `vault.Store` (`internal/vault`). An entry is keyed by its kind (`password`, `api_key`, `totp`, `secure_note`), service name, and an optional username, unique together; its text form, `kind/service[/username]`, is the ID `--list` shows, `--delete` takes, and the audit log records. Non-secret options are its settings: a TOTP entry's code settings (algorithm, digits, period, issuer), and for AWS the MFA device. `--service totp` and the password manager share the TOTP entries (`--profile` is the username); an AWS profile's MFA secret is the TOTP entry `aws` with the profile as username.
 
 **SQLite Data Model**
 
-The SQLite backend (the default) stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` references password IDs by value (no hard foreign key, so audit history survives entry deletion); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
+The vault stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` names entries by their key's text form (no foreign key, so audit history survives deleting an entry); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 erDiagram
-    passwords }o..|| key_metadata : "key_version (logical)"
-    passwords ||..o{ audit_log : "entry_id (logical, nullable)"
+    entries }o..|| key_metadata : "key_version (logical)"
+    entries ||..o{ audit_log : "entry_id = kind/service[/username]"
 
-    passwords {
-        TEXT id PK
+    entries {
+        INTEGER id PK
+        TEXT kind "password / api_key / totp / secure_note"
         TEXT service
-        TEXT account
-        TEXT entry_type
+        TEXT username "unique with kind and service"
         BLOB encrypted_data "AES-256-GCM ciphertext"
         BLOB salt "per-entry, 16 bytes"
         INTEGER key_version "→ key_metadata.version"
-        TEXT metadata "description / TOTP params"
+        TEXT settings "JSON: TOTP params, AWS MFA device"
         DATETIME created_at
         DATETIME updated_at
     }
@@ -302,7 +244,7 @@ erDiagram
     audit_log {
         INTEGER id PK
         TEXT event_type "store/retrieve/delete/..."
-        TEXT entry_id "→ passwords.id, nullable for auth events"
+        TEXT entry_id "an entry's key text, nullable for auth events"
         TEXT detail
         DATETIME created_at
     }
@@ -318,7 +260,7 @@ currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secret)
 // Non-standard generation (respects stored algorithm, digits, period)
 currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
 ```
-Generates both current and next codes to handle the transition between TOTP windows. When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored as JSON in the entry's description. Providers read these params before generating codes, falling back to defaults (SHA1, 6 digits, 30 seconds) when no params are stored.
+Generates both current and next codes to handle the transition between TOTP windows. When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored in the entry's settings. Providers read these params before generating codes, falling back to defaults (SHA1, 6 digits, 30 seconds) when no params are stored.
 
 #### Memory Management
 
@@ -380,7 +322,7 @@ This gives you:
 
 ## Data Flow Architecture
 
-AWS and TOTP follow different flows because AWS requires a network round-trip to STS to exchange a TOTP code for temporary credentials, while TOTP is purely local computation. Both flows retrieve secrets from Keychain via stdin and route output through the same secured channels (subshell or clipboard).
+AWS and TOTP follow different flows because AWS requires a network round-trip to STS to exchange a TOTP code for temporary credentials, while TOTP is purely local computation. Both flows read secrets from the vault and route output through the same secured channels (subshell or clipboard).
 
 ### AWS Authentication Flow
 
@@ -389,8 +331,8 @@ The mode decision happens in main.go *before* credential generation. Subshell an
 ```
 User ──► CLI ──► ValidateRequest
                       │
-                      ├── Keychain: verify TOTP secret exists
-                      └── Keychain: check MFA serial (warn if missing)
+                      ├── Vault: look up the profile's entry
+                      └── Check its code settings; warn if no MFA device
                       │
                 ┌─────┴──────┐
                 ▼            ▼
@@ -399,8 +341,8 @@ User ──► CLI ──► ValidateRequest
                 ▼            ▼
         GetClipboardValue  GetCredentials
                 │            │
-                ▼            ├── Keychain (get MFA serial, fallback to aws iam)
-           Keychain          ├── Keychain (get TOTP secret)
+                ▼            ├── Vault (MFA device, fallback to aws iam)
+           Vault             ├── Vault (get TOTP secret)
           (get TOTP          ├── TOTP Engine → generate current + next codes
            secret)           ├── AWS CLI (sts get-session-token)
                 │            │   └── retries with next/future code on failure
@@ -427,7 +369,7 @@ TOTP is simpler — no network calls, no subshell. The `-clip` and default paths
 ```
 User ──► CLI ──► ValidateRequest
                       │
-                      └── Keychain: verify secret exists
+                      └── Vault: look up the entry
                       │
                 ┌─────┴──────┐
                 ▼            ▼
@@ -438,7 +380,7 @@ User ──► CLI ──► ValidateRequest
                 │            │
          (both call generateTOTP internally)
                 │
-                ├── Keychain (get TOTP secret)
+                ├── Vault (get TOTP secret)
                 ├── Defensive copy, zero original
                 ├── TOTP Engine (RFC 6238)
                 │   └── Generate current + next codes
@@ -465,8 +407,8 @@ Each layer provides independent security measures:
 
 1. **Storage Security**
    - **Threat**: Other processes reading secrets
-   - **Defense**: Binary path restrictions (`-T` flag)
-   - **Enforcement**: macOS Keychain access control subsystem
+   - **Defense**: Every entry encrypted (AES-256-GCM) under a key derived from the master password
+   - **Enforcement**: Argon2id and the vault's key check
 
 2. **Memory Security**
    - **Threat**: Memory dumps, swap files, cold boot attacks
@@ -495,7 +437,7 @@ Understanding where trust transitions occur:
 ```
 User Input → [TRUST BOUNDARY] → sesh
     ↓
-   sesh → [TRUST BOUNDARY] → macOS Keychain
+   sesh → [TRUST BOUNDARY] → Vault file
     ↓
    sesh → [TRUST BOUNDARY] → AWS CLI
     ↓
@@ -520,7 +462,7 @@ Adding a new provider looks like this:
 ```go
 // 1. Define your provider
 type YourProvider struct {
-    keychain keychain.Provider
+    store vault.Store
     // your fields
 }
 
@@ -538,7 +480,7 @@ Why this works:
 - Clear contract (ServiceProvider interface)
 - Dependencies are injected, not discovered
 - Registration is explicit and centralized
-- No global state for provider management (note: `keychain/metadata.go` uses `init()` to create zstd encoder/decoder singletons for the keychain backend's internal metadata compression)
+- No global state for provider management
 
 ### Capability Evolution
 
@@ -587,7 +529,7 @@ The approach means:
 
 ```go
 // Layer 1: Infrastructure (Technical)
-return fmt.Errorf("keychain access failed: %w", err)
+return fmt.Errorf("decrypt %s: %w", key, err)
 // Preserves full error context for debugging
 
 // Layer 2: Provider (Contextual)  
@@ -606,7 +548,7 @@ if err != nil {
 ### Error Message Examples
 
 - Cryptic: `error: -25300`  
-- Improved: `keychain access denied: no stored credentials for AWS profile 'prod'`  
+- Improved: `entry not found: totp/aws/prod`  
 - Optimal: `No AWS credentials found for profile 'prod'. Run: sesh -service aws -setup`
 
 Errors become progressively more actionable as they flow up through layers.
@@ -646,10 +588,9 @@ The pattern uses the test binary itself as a mock process, eliminating:
 sesh is a CLI tool — every invocation should feel instant. The design avoids unnecessary work:
 
 - **Selective execution**: All providers are registered at startup, but only the selected provider's `SetupFlags` → `ValidateRequest` → `GetCredentials` chain runs. No eager initialization.
-- **No framework overhead**: Direct macOS `security` command for keychain, Go's standard `flag` package for parsing, no logging framework in the hot path.
-- **Compressed metadata**: Entry metadata is stored as a zstd-compressed blob in a single keychain entry, keeping keychain operations minimal regardless of how many entries exist.
+- **No framework overhead**: Go's standard `flag` package for parsing, no logging framework in the hot path.
 
-The dominant cost in any sesh invocation is the keychain read (OS security check) and, for the AWS provider, the network round-trip to AWS STS.
+The dominant cost in any sesh invocation is unlocking the vault (deriving the key from the master password, unless the agent already holds it) and, for the AWS provider, the network round-trip to AWS STS.
 
 ## Implementation Details
 
@@ -667,7 +608,7 @@ sesh/
 │   │   └── password/      # Password manager provider
 │   ├── database/          # SQLite store, encryption, migrations
 │   ├── password/          # Password manager core (CRUD, search, filter)
-│   ├── keychain/          # macOS Keychain integration
+│   ├── vault/             # Entries and the Store interface
 │   ├── secure/            # Memory security
 │   └── */                 # Focused packages
 └── docs/                  # Documentation
@@ -677,7 +618,7 @@ sesh/
 
 **Security Engineers:**
 - Defined trust boundaries
-- Explicit secret flow paths (keychain → provider → subshell/clipboard) — no implicit or hidden data paths
+- Explicit secret flow paths (vault → provider → subshell/clipboard) — no implicit or hidden data paths
 - Layered security implementation
 - Transparent security model (no audit logging yet — see Capability Evolution)
 

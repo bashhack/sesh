@@ -40,8 +40,6 @@ func writeConfig(w io.Writer, cfg *config.Config) error {
 	line := func(key, value, source string) {
 		fmt.Fprintf(&b, "%-22s%-14s(%s)\n", key, value, source)
 	}
-	line("backend", cfg.Backend.Value, sourceOf(cfg.Backend.Source, cfg.Backend.Origin))
-	line("key_source", cfg.KeySource.Value, sourceOf(cfg.KeySource.Source, cfg.KeySource.Origin))
 	line("clipboard_timeout", duration(cfg.ClipboardTimeout.Value), sourceOf(cfg.ClipboardTimeout.Source, cfg.ClipboardTimeout.Origin))
 	line("agent.idle_timeout", duration(cfg.AgentIdleTimeout.Value), sourceOf(cfg.AgentIdleTimeout.Source, cfg.AgentIdleTimeout.Origin))
 	line("agent.max_lifetime", duration(cfg.AgentMaxLifetime.Value), sourceOf(cfg.AgentMaxLifetime.Source, cfg.AgentMaxLifetime.Origin))

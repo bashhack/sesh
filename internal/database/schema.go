@@ -3,37 +3,13 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
 
 // Current schema version. Bump this and add a migration function when the schema changes.
-const currentSchemaVersion = 4
-
-// EntryType classifies what kind of credential is stored.
-type EntryType string
-
-const (
-	EntryTypePassword EntryType = "password"
-	EntryTypeAPIKey   EntryType = "api_key"
-	EntryTypeTOTP     EntryType = "totp"
-	EntryTypeNote     EntryType = "secure_note"
-	EntryTypeMFA      EntryType = "mfa_serial"
-)
-
-// PasswordEntry represents a row in the passwords table.
-type PasswordEntry struct {
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	ID            string
-	Service       string
-	Account       string
-	EntryType     EntryType
-	Metadata      string
-	EncryptedData []byte
-	Salt          []byte
-	KeyVersion    int
-}
+const currentSchemaVersion = 5
 
 // KeyMetadata stores key derivation parameters for a given key version.
 // This table is readable without decryption so the store can derive the
@@ -63,6 +39,7 @@ var migrations = map[int]func(tx *sql.Tx) error{
 	2: migrateV2,
 	3: migrateV3,
 	4: migrateV4,
+	5: migrateV5,
 }
 
 // migrateV1 creates the initial four-table schema.
@@ -141,8 +118,8 @@ func migrateV1(tx *sql.Tx) error {
 }
 
 // migrateV4 drops the full-text index v1 made, and the triggers that kept
-// it in step: search matches service names and usernames in Go, the same
-// way for every backend, so nothing reads the index.
+// it in step: search matches service names and usernames in Go, so
+// nothing reads the index.
 func migrateV4(tx *sql.Tx) error {
 	for _, q := range []string{
 		`DROP TRIGGER IF EXISTS passwords_ai`,
@@ -153,6 +130,62 @@ func migrateV4(tx *sql.Tx) error {
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("migration v4: %w", err)
 		}
+	}
+	return nil
+}
+
+// ErrOldVault is returned for a vault an earlier development build made
+// with entries in the old table: sesh had no releases then, so v5
+// doesn't convert one.
+var ErrOldVault = errors.New("this vault was made by an earlier development build of sesh, which this version can't open: start a new one by moving this file aside and running sesh again (the new vault keeps your master password)")
+
+// migrateV5 gives entries their own table, with kind, service name, and
+// username as columns, unique together. A vault whose old table holds
+// entries is refused (ErrOldVault); applyMigrations checks for that before
+// any migration runs, so the vault is left unchanged.
+func migrateV5(tx *sql.Tx) error {
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM passwords`).Scan(&n); err != nil {
+		return fmt.Errorf("migration v5: %w", err)
+	}
+	if n > 0 {
+		return ErrOldVault
+	}
+	for _, q := range []string{
+		`DROP TABLE passwords`,
+		`CREATE TABLE entries (
+			id             INTEGER PRIMARY KEY,
+			kind           TEXT NOT NULL,
+			service        TEXT NOT NULL,
+			username       TEXT NOT NULL DEFAULT '',
+			encrypted_data BLOB NOT NULL,
+			salt           BLOB NOT NULL,
+			key_version    INTEGER NOT NULL DEFAULT 1,
+			settings       TEXT,
+			created_at     DATETIME NOT NULL,
+			updated_at     DATETIME NOT NULL,
+			UNIQUE (kind, service, username)
+		)`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("migration v5: %w", err)
+		}
+	}
+	return nil
+}
+
+// refuseOldEntries returns ErrOldVault for a vault before v5 whose old
+// table holds entries, before any migration changes it.
+func refuseOldEntries(db *sql.DB, applied int) error {
+	if applied == 0 || applied >= 5 {
+		return nil
+	}
+	var has bool
+	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM passwords)`).Scan(&has); err != nil {
+		return fmt.Errorf("check for entries in the old table: %w", err)
+	}
+	if has {
+		return ErrOldVault
 	}
 	return nil
 }
@@ -180,6 +213,9 @@ func applyMigrations(db *sql.DB) error {
 	// schema and potentially corrupt or skip rows.
 	if applied > currentSchemaVersion {
 		return fmt.Errorf("database schema version %d is newer than this binary supports (max %d) — upgrade sesh or point at a matching database", applied, currentSchemaVersion)
+	}
+	if err := refuseOldEntries(db, applied); err != nil {
+		return err
 	}
 
 	for v := applied + 1; v <= currentSchemaVersion; v++ {

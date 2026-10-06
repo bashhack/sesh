@@ -20,7 +20,7 @@ Sesh uses a plugin-based architecture where each service (AWS, TOTP, etc.) is im
 1. **ServiceProvider Interface**: Core contract all providers must implement
 2. **Registry**: Manages provider registration and lookup
 3. **Setup Handlers**: Handle initial configuration for each provider
-4. **Keychain Integration**: Secure storage for secrets
+4. **The vault (`vault.Store`)**: Where every secret lives, each one encrypted, shared by all providers
 5. **Shell Customizers**: Optional subshell support
 
 > **First time here?** Skip to [Creating a Basic Provider](#creating-a-basic-provider) and refer back to these sections when you encounter unfamiliar concepts.
@@ -37,7 +37,7 @@ flowchart TD
     classDef optional fill:#ffd,stroke:#333,stroke-width:2px
     classDef skip fill:#eee,stroke:#999,stroke-width:1px
 
-    SF["SetupFlags(fs)<br>Register flags, set p.User"]:::always
+    SF["SetupFlags(fs)<br>Register flags"]:::always
     FP["Flag parsing<br>User-provided values populate fields"]:::always
 
     SF --> FP
@@ -58,7 +58,7 @@ flowchart TD
 ```
 
 Key points:
-- `SetupFlags` runs for **all** modes — it's where you register flags and initialize `p.User`
+- `SetupFlags` runs for **all** modes — it's where you register flags
 - `ValidateRequest` only runs for credential and clipboard modes — list/delete/setup skip it
 - `ShouldUseSubshell` and `NewSubshellConfig` are optional interfaces — only implement them if your provider needs a subshell
 
@@ -72,17 +72,18 @@ type Credentials struct {
     Provider             string            // Your provider name
     Expiry               time.Time         // When credentials expire (used by subshell timer)
     Variables            map[string]string // Environment variables to set in subshell
-    DisplayInfo          string            // Shown to the user (use FormatRegularDisplayInfo helper)
+    DisplayInfo          string            // Shown to the user on stderr (use FormatRegularDisplayInfo helper)
+    Value                string            // What the user asked for (e.g. a code), printed alone to stdout so it can be captured
     CopyValue            string            // Value copied to clipboard (set by GetClipboardValue)
     ClipboardDescription string            // Short label for CopyValue (e.g., "TOTP code")
-    MFAAuthenticated     bool              // True if backend accepted an MFA code
+    MFAAuthenticated     bool              // True if the service accepted an MFA code
 }
 
 // ProviderEntry is returned by ListEntries()
 type ProviderEntry struct {
-    Name        string // Display name (e.g., "GitHub (work)")
+    Name        string // Display name (e.g., "github (work)")
     Description string // Human-readable description
-    ID          string // Internal ID in "service:account" format, used by DeleteEntry()
+    ID          string // The entry's key in text form ("totp/github/work"); DeleteEntry() receives it
 }
 
 // FlagInfo is returned by GetFlagInfo() for help text generation
@@ -96,27 +97,45 @@ type FlagInfo struct {
 
 ### Embedded Helpers
 
-Real providers embed two helper structs from the `provider` package. These are recommended but not strictly required — they handle common patterns that you'd otherwise implement yourself:
+**`provider.Clock`** — Testable time. Provides `TimeNow()` (returns `time.Now()` by default, overridable in tests via the `Now` field) and `SecondsLeftInWindow()` (seconds remaining in the current 30-second TOTP window). Real providers embed it; it's recommended, not required.
 
-**`provider.Clock`** — Testable time. Provides `TimeNow()` (returns `time.Now()` by default, overridable in tests via the `Now` field) and `SecondsLeftInWindow()` (seconds remaining in the current 30-second TOTP window).
+### Where a Provider Keeps Its Secrets (`vault` package)
 
-**`provider.KeyUser`** — Deferred OS user lookup. Has a `User` field (string) and an `EnsureUser() error` method that populates `User` on first call (no-op if already set). Initialize `User` in `SetupFlags` via `env.GetCurrentUser()`, and call `EnsureUser()` before keychain access as a safety net.
+Every provider receives the same `vault.Store` (`internal/vault/vault.go`): one encrypted vault per user, which the password manager, `-service totp`, and `-service aws` all use. You don't create storage of your own, and the vault handles encryption, the audit log, backups (export/import), and key changes for every entry.
 
-### Service Key Format (`keyformat` package)
-
-All keychain service keys use `/` as the delimiter. Use `keyformat.Build` and `keyformat.Parse` — never construct keys by hand.
+An entry is named by a `vault.Key`:
 
 ```go
-// Build joins namespace + segments with /
-// Returns error if any segment is empty or contains /
-key, err := keyformat.Build("sesh-totp", "github")         // → "sesh-totp/github"
-key, err = keyformat.Build("sesh-totp", "github", "work")  // → "sesh-totp/github/work"
-
-// Parse splits a key back into segments
-segments, err := keyformat.Parse("sesh-totp/github/work", "sesh-totp") // → ["github", "work"]
+type Key struct {
+    Kind     Kind   // vault.KindPassword, KindAPIKey, KindTOTP, or KindNote
+    Service  string // what the user names it by, e.g. "github"
+    Username string // optional; tells several accounts for one service apart
+}
 ```
 
-Define your service prefix constant in `internal/constants/constants.go` alongside the existing ones (`sesh-aws`, `sesh-totp`, `sesh-password`).
+Kind, service, and username are unique together. Choosing your provider's entries comes down to three decisions:
+
+- **Kind.** Use the kind that matches what the secret is. Most providers store either a TOTP secret (`KindTOTP`) or a token or key (`KindAPIKey`). The kind decides how the rest of sesh treats the entry: TOTP entries show up in `-service totp`, and every entry shows up in the password manager's list, search, and exports.
+- **Service and username.** Use the service the user names (as `-service totp` does with `--service-name`), or a fixed one for your service (as the AWS provider does with `"aws"`). Put the account or profile in the username. Neither may contain `/` or control characters (`Key.Validate` checks).
+- **Settings.** Anything that isn't secret but belongs with the secret goes in `vault.Settings`: a TOTP entry's code settings (`Settings.TOTP`, algorithm, digits, period, issuer) or the AWS MFA device (`Settings.AWSMFADevice`). Settings travel with the entry through exports and key changes.
+
+The store's methods:
+
+```go
+type Store interface {
+    Get(k Key) ([]byte, error)            // the secret; the caller zeroes it
+    Put(k Key, secret []byte) error       // create, or replace the secret (keeps settings and creation time)
+    Save(e *Entry, secret []byte) error   // create or replace the whole entry: secret, settings, times
+    SetSettings(k Key, s Settings) error  // replace the settings
+    Lookup(k Key) (Entry, error)          // the entry without its secret
+    List(f Filter) ([]Entry, error)       // entries matching Filter{Kind, Service}; empty fields match all
+    Delete(k Key) error
+}
+```
+
+Every method returns an error wrapping `vault.ErrNotFound` for an entry the store doesn't hold; check it with `errors.Is`.
+
+A key's text form, `kind/service` or `kind/service/username` (`Key.String()`, read back with `vault.ParseKey`), is the entry's ID: `-list` shows it and `-delete` takes it. The audit log names entries the same way.
 
 ### Reference Files
 
@@ -125,14 +144,16 @@ When implementing a new provider, these are the files to study:
 | File | Priority | What to learn |
 |------|----------|--------------|
 | `internal/provider/interfaces.go` | Essential | All interfaces and type definitions |
+| `internal/vault/vault.go` | Essential | Keys, kinds, settings, and the `Store` interface |
 | `internal/provider/totp/provider.go` | Essential | Clean provider example (no subshell, clipboard-focused) |
-| `internal/provider/password/provider.go` | Essential | Full provider with actions, prompts, JSON output, FTS search |
-| `internal/provider/aws/provider.go` | Reference | Full provider with subshell, TOTP, retry logic |
+| `internal/provider/password/provider.go` | Essential | Full provider with actions, prompts, JSON output, search |
+| `internal/provider/aws/provider.go` | Reference | Full provider with subshell, TOTP, retry logic, settings |
 | `internal/setup/setup.go` | When writing setup | Setup handler patterns |
-| `internal/keychain/mocks/keychain_mock.go` | When writing tests | Pre-built mock for testing |
-| `internal/keyformat/keyformat.go` | Reference | Key building/parsing |
+| `internal/vault/memstore.go` | When writing tests | `vault.NewMemStore()`, an in-memory store |
 
 ## Creating a Basic Provider
+
+The steps below build a provider for a service that issues API tokens, one per account. Its entries are API keys under the service name `yourservice`, with the account as the username: `api_key/yourservice/work`.
 
 ### Step 1: Create Provider Structure
 
@@ -145,33 +166,30 @@ import (
     "errors"
     "fmt"
 
-    "github.com/bashhack/sesh/internal/constants"
-    "github.com/bashhack/sesh/internal/env"
-    "github.com/bashhack/sesh/internal/keychain"
-    "github.com/bashhack/sesh/internal/keyformat"
     "github.com/bashhack/sesh/internal/provider"
     "github.com/bashhack/sesh/internal/secure"
+    "github.com/bashhack/sesh/internal/vault"
 )
 
-// Add your service prefix to internal/constants/constants.go, e.g.:
-//   YourServicePrefix = "sesh-yourservice"
-// Existing prefixes: sesh-aws, sesh-totp, sesh-password
+// serviceName is the service every entry of this provider is stored under.
+const serviceName = "yourservice"
 
 type Provider struct {
-    keychain keychain.Provider
+    store vault.Store
 
-    provider.Clock   // Embeds testable time and SecondsLeftInWindow()
-    provider.KeyUser // Embeds lazy-initialized OS user lookup via EnsureUser()
+    provider.Clock // Embeds testable time and SecondsLeftInWindow()
 
     // Provider-specific fields
-    serviceName string
-    profile     string
+    account string
 }
 
-func NewProvider(kc keychain.Provider) *Provider {
-    return &Provider{
-        keychain: kc,
-    }
+func NewProvider(store vault.Store) *Provider {
+    return &Provider{store: store}
+}
+
+// key is the entry the flags name.
+func (p *Provider) key() vault.Key {
+    return vault.Key{Kind: vault.KindAPIKey, Service: serviceName, Username: p.account}
 }
 ```
 
@@ -193,30 +211,16 @@ func (p *Provider) Description() string {
 
 ```go
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
-    fs.StringVar(&p.serviceName, "service-name", "", "Name of the service")
-    fs.StringVar(&p.profile, "profile", "", "Profile name (optional)")
-
-    // Initialize the embedded KeyUser with the current OS user
-    defaultKeyUser, err := env.GetCurrentUser()
-    if err != nil {
-        return fmt.Errorf("failed to get current user: %w", err)
-    }
-    p.User = defaultKeyUser
+    fs.StringVar(&p.account, "account", "", "Account name (for several accounts)")
     return nil
 }
 
 func (p *Provider) GetFlagInfo() []provider.FlagInfo {
     return []provider.FlagInfo{
         {
-            Name:        "service-name",
+            Name:        "account",
             Type:        "string",
-            Description: "Name of the service",
-            Required:    true,
-        },
-        {
-            Name:        "profile",
-            Type:        "string",
-            Description: "Profile name for multiple accounts",
+            Description: "Account name (for several accounts)",
             Required:    false,
         },
     }
@@ -225,32 +229,16 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 
 #### Validation
 
+`Lookup` checks that the entry exists without decrypting its secret:
+
 ```go
 func (p *Provider) ValidateRequest() error {
-    if p.serviceName == "" {
-        return fmt.Errorf("service name is required")
-    }
-
-    if err := p.EnsureUser(); err != nil {
-        return err
-    }
-
-    // Build service key using keyformat (e.g., "sesh-yourservice/myapp")
-    serviceKey, err := keyformat.Build(constants.YourServicePrefix, p.serviceName)
-    if err != nil {
-        return fmt.Errorf("failed to build service key: %w", err)
-    }
-
-    // Check if credentials exist in keychain
-    secret, err := p.keychain.GetSecret(p.User, serviceKey)
-    if err != nil {
-        if !errors.Is(err, keychain.ErrNotFound) {
-            return fmt.Errorf("failed to read secret from keychain: %w", err)
+    if _, err := p.store.Lookup(p.key()); err != nil {
+        if !errors.Is(err, vault.ErrNotFound) {
+            return fmt.Errorf("failed to look up the token: %w", err)
         }
-        return fmt.Errorf("no stored credentials found for '%s'. Run: sesh -service yourservice -setup", p.serviceName)
+        return fmt.Errorf("no token stored for %s. Run: sesh -service yourservice -setup", p.key())
     }
-    secure.SecureZeroBytes(secret)
-
     return nil
 }
 ```
@@ -259,18 +247,9 @@ func (p *Provider) ValidateRequest() error {
 
 ```go
 func (p *Provider) GetCredentials() (provider.Credentials, error) {
-    if err := p.EnsureUser(); err != nil {
-        return provider.Credentials{}, err
-    }
-
-    serviceKey, err := keyformat.Build(constants.YourServicePrefix, p.serviceName)
+    secret, err := p.store.Get(p.key())
     if err != nil {
-        return provider.Credentials{}, fmt.Errorf("failed to build service key: %w", err)
-    }
-
-    secret, err := p.keychain.GetSecret(p.User, serviceKey)
-    if err != nil {
-        return provider.Credentials{}, fmt.Errorf("failed to retrieve secret for %s: %w", p.serviceName, err)
+        return provider.Credentials{}, fmt.Errorf("failed to retrieve the token: %w", err)
     }
     defer secure.SecureZeroBytes(secret)
 
@@ -283,7 +262,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
         Variables: map[string]string{
             "YOUR_SERVICE_TOKEN": tokenStr,
         },
-        DisplayInfo: provider.FormatRegularDisplayInfo("credentials", p.serviceName),
+        DisplayInfo: provider.FormatRegularDisplayInfo("credentials", serviceName),
     }, nil
 }
 
@@ -292,62 +271,54 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 // Integration below). For non-TOTP providers (passwords, API keys), set
 // CopyValue and ClipboardDescription directly as shown here.
 func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
-    if err := p.EnsureUser(); err != nil {
-        return provider.Credentials{}, err
-    }
-
-    serviceKey, err := keyformat.Build(constants.YourServicePrefix, p.serviceName)
+    secret, err := p.store.Get(p.key())
     if err != nil {
-        return provider.Credentials{}, fmt.Errorf("failed to build service key: %w", err)
-    }
-
-    secret, err := p.keychain.GetSecret(p.User, serviceKey)
-    if err != nil {
-        return provider.Credentials{}, fmt.Errorf("failed to retrieve secret for %s: %w", p.serviceName, err)
+        return provider.Credentials{}, fmt.Errorf("failed to retrieve the token: %w", err)
     }
     defer secure.SecureZeroBytes(secret)
 
     return provider.Credentials{
         Provider:             p.Name(),
         CopyValue:            string(secret),
-        ClipboardDescription: "secret",
+        ClipboardDescription: "token",
     }, nil
 }
 ```
 
 #### Entry Management
 
+List your provider's entries with a `vault.Filter`, and use each key's text form as its ID. `DeleteEntry` receives that ID back; check it names one of your provider's entries, so `-service yourservice -delete` can't remove another provider's secret:
+
 ```go
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
-    entries, err := p.keychain.ListEntries(constants.YourServicePrefix)
+    entries, err := p.store.List(vault.Filter{Kind: vault.KindAPIKey, Service: serviceName})
     if err != nil {
         return nil, fmt.Errorf("failed to list entries: %w", err)
     }
 
-    var result []provider.ProviderEntry
-    for _, entry := range entries {
+    result := make([]provider.ProviderEntry, 0, len(entries))
+    for i := range entries {
+        e := &entries[i]
         result = append(result, provider.ProviderEntry{
-            ID:          fmt.Sprintf("%s:%s", entry.Service, entry.Account),
-            Name:        entry.Service,
-            Description: entry.Description,
+            ID:          e.Key.String(), // e.g. "api_key/yourservice/work"
+            Name:        fmt.Sprintf("%s (%s)", e.Service, e.Username),
+            Description: "API token",
         })
     }
-
     return result, nil
 }
 
 func (p *Provider) DeleteEntry(id string) error {
-    // Parse the entry ID (format: "service:account")
-    service, account, err := provider.ParseEntryID(id)
+    k, err := vault.ParseKey(id)
     if err != nil {
-        return fmt.Errorf("invalid entry ID: %w", err)
+        return err
     }
-
-    // Delete from keychain (metadata cleanup is handled internally)
-    if err := p.keychain.DeleteEntry(account, service); err != nil {
+    if k.Kind != vault.KindAPIKey || k.Service != serviceName {
+        return fmt.Errorf("%s isn't a %s entry; delete it with --service password", id, serviceName)
+    }
+    if err := p.store.Delete(k); err != nil {
         return fmt.Errorf("failed to delete entry: %w", err)
     }
-
     return nil
 }
 ```
@@ -355,40 +326,39 @@ func (p *Provider) DeleteEntry(id string) error {
 #### Setup Handler Reference
 
 ```go
-func (p *Provider) GetSetupHandler() interface{} {
-    return setup.NewYourServiceSetupHandler(p.keychain)
+func (p *Provider) GetSetupHandler() any {
+    return setup.NewYourServiceSetupHandler(p.store)
 }
 ```
 
-This returns an object implementing `setup.SetupHandler` (see Step 3 below). The `interface{}` return type allows the setup system to work without providers importing the setup package's concrete types.
+This returns an object implementing `setup.SetupHandler` (see Step 3 below). The `any` return type allows the setup system to work without providers importing the setup package's concrete types.
 
 ### Step 3: Create Setup Handler
 
-Create `internal/setup/yourservice_setup.go`.
+Create `internal/setup/yourservice_setup.go`. Living in `internal/setup/` gives the handler the package's helpers: `readLine` reads a line, `readPassword` reads a secret without echoing it (both are variables that tests replace), and `entryExists` checks for an entry.
 
-> **Note:** The setup package defines `getCurrentUser` as a package-level variable (`var getCurrentUser = env.GetCurrentUser`) that can be swapped in tests. Your setup handler must live in `internal/setup/` to access `getCurrentUser` directly.
+Store everything about the entry in one write, so a failure can't leave half a setup behind: `Put` for a secret alone, `Save` when it has settings (the TOTP and AWS wizards store the secret and its settings together this way).
 
 ```go
+package setup
+
 import (
     "bufio"
     "fmt"
     "os"
-    "strings"
     "syscall"
 
-    "github.com/bashhack/sesh/internal/constants"
-    "github.com/bashhack/sesh/internal/keychain"
-    "github.com/bashhack/sesh/internal/keyformat"
     "github.com/bashhack/sesh/internal/secure"
-    "golang.org/x/term"
+    "github.com/bashhack/sesh/internal/vault"
 )
 
 type YourServiceSetupHandler struct {
-    keychain keychain.Provider
+    store  vault.Store
+    reader *bufio.Reader
 }
 
-func NewYourServiceSetupHandler(kc keychain.Provider) *YourServiceSetupHandler {
-    return &YourServiceSetupHandler{keychain: kc}
+func NewYourServiceSetupHandler(store vault.Store) *YourServiceSetupHandler {
+    return &YourServiceSetupHandler{store: store, reader: bufio.NewReader(os.Stdin)}
 }
 
 func (h *YourServiceSetupHandler) ServiceName() string {
@@ -397,70 +367,55 @@ func (h *YourServiceSetupHandler) ServiceName() string {
 
 func (h *YourServiceSetupHandler) Setup() error {
     fmt.Println("🔧 Setting up Your Service")
-    
-    // Get service name
-    reader := bufio.NewReader(os.Stdin)
-    fmt.Print("Enter service name: ")
-    serviceName, err := reader.ReadString('\n')
-    if err != nil {
-        return fmt.Errorf("failed to read service name: %w", err)
-    }
-    serviceName = strings.TrimSpace(serviceName)
 
-    // Get credentials (term.ReadPassword hides input)
-    fmt.Print("Enter secret/token: ")
-    secretBytes, err := term.ReadPassword(int(syscall.Stdin))
+    fmt.Print("Account name (leave empty for none): ")
+    account, err := readLine(h.reader)
     if err != nil {
-        return fmt.Errorf("failed to read secret: %w", err)
+        return err
     }
+    k := vault.Key{Kind: vault.KindAPIKey, Service: "yourservice", Username: account}
+    if err := k.Validate(); err != nil {
+        return err
+    }
+    exists, err := entryExists(h.store, k)
+    if err != nil {
+        return err
+    }
+    if exists {
+        fmt.Println("⚠️  A token is already stored for this account; it will be replaced.")
+    }
+
+    fmt.Print("Token: ")
+    secret, err := readPassword(syscall.Stdin)
     fmt.Println()
-    defer secure.SecureZeroBytes(secretBytes)
-
-    secretStr := string(secretBytes)
-    defer secure.SecureZeroString(secretStr)
-
-    // Build service key using keyformat (e.g., "sesh-yourservice/myapp")
-    serviceKey, err := keyformat.Build(constants.YourServicePrefix, serviceName)
     if err != nil {
-        return fmt.Errorf("failed to build service key: %w", err)
+        return fmt.Errorf("failed to read the token: %w", err)
     }
+    defer secure.SecureZeroBytes(secret)
 
-    // Store in keychain (account is the OS user, service is the key)
-    user, err := getCurrentUser()
-    if err != nil {
-        return fmt.Errorf("failed to get current user: %w", err)
+    if err := h.store.Put(k, secret); err != nil {
+        return fmt.Errorf("failed to store the token: %w", err)
     }
-    if err := h.keychain.SetSecretString(user, serviceKey, secretStr); err != nil {
-        return fmt.Errorf("failed to store credentials: %w", err)
-    }
-
-    // Set a human-readable description on the entry
-    description := fmt.Sprintf("Your Service credentials for %s", serviceName)
-    if err := h.keychain.SetDescription(serviceKey, user, description); err != nil {
-        return fmt.Errorf("failed to store description: %w", err)
-    }
-    
-    fmt.Printf("✅ Credentials stored for %s\n", serviceName)
+    fmt.Printf("✅ Token stored as %s\n", k)
     return nil
 }
 ```
 
 ### Step 4: Register Provider
 
-In `sesh/cmd/sesh/app.go`, add registration in `NewDefaultApp()`:
+In `sesh/cmd/sesh/app.go`, add registration in `NewDefaultApp()`, which `main.go` calls with the opened vault:
 
 ```go
-func NewDefaultApp(versionInfo VersionInfo, kc keychain.Provider) *App {
-    // kc is the credential store — passed in by main.go (keychain or SQLite)
+func NewDefaultApp(versionInfo VersionInfo, store vault.Store, clipboardTimeout time.Duration) *App {
     // ... existing setup ...
 
     registry := provider.NewRegistry()
     // ... existing providers ...
-    registry.RegisterProvider(yourservice.NewProvider(kc)) // Add totpSvc if using TOTP integration
+    registry.RegisterProvider(yourservice.NewProvider(store)) // Add totpSvc if using TOTP integration
 
-    setupSvc := setup.NewSetupService(kc)
+    setupSvc := setup.NewSetupService()
     // ... existing handlers ...
-    setupSvc.RegisterHandler(setup.NewYourServiceSetupHandler(kc))
+    setupSvc.RegisterHandler(setup.NewYourServiceSetupHandler(store))
 
     return &App{
         Registry:     registry,
@@ -488,10 +443,10 @@ func (p *Provider) ShouldUseSubshell() bool {
 
 ### Subshell Support
 
-To add subshell support, implement the `SubshellProvider` interface. Note that the real AWS customizer (`internal/aws/subshell.go`) is ~120 lines with expiry countdown, progress bars, and helper commands — the example below is intentionally simplified to show the required structure:
+To add subshell support, implement the `SubshellProvider` interface. The real AWS customizer (`internal/aws/subshell.go`) adds an expiry countdown and helper commands; the example below is simplified to show the required structure:
 
 ```go
-func (p *Provider) NewSubshellConfig(creds *provider.Credentials) interface{} {
+func (p *Provider) NewSubshellConfig(creds *provider.Credentials) any {
     return subshell.Config{
         ServiceName:     p.Name(),
         Variables:       creds.Variables,
@@ -536,37 +491,25 @@ func (c *YourServiceShellCustomizer) GetPromptPrefix() string {
 
 ### TOTP Integration
 
-If your provider needs TOTP codes:
+A provider that generates codes stores its secret as a `KindTOTP` entry and takes a `totp.Provider` (`internal/totp`). Its code settings (algorithm, digits, period) are in the entry's `Settings.TOTP`; zero means the usual ones (SHA1, 6 digits, 30 seconds). Read them with `Lookup` and generate with `GenerateConsecutiveCodesBytesWithParams`:
 
 ```go
-type Provider struct {
-    keychain keychain.Provider
-    totp     totp.Provider  // Add TOTP dependency
-    provider.Clock
-    provider.KeyUser
-    serviceName string
-}
-
 func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
-    if err := p.EnsureUser(); err != nil {
-        return provider.Credentials{}, err
-    }
-
-    serviceKey, err := keyformat.Build(constants.YourServicePrefix, p.serviceName)
-    if err != nil {
-        return provider.Credentials{}, fmt.Errorf("failed to build service key: %w", err)
-    }
-
-    secret, err := p.keychain.GetSecret(p.User, serviceKey)
+    k := vault.Key{Kind: vault.KindTOTP, Service: p.serviceName, Username: p.profile}
+    secret, err := p.store.Get(k)
     if err != nil {
         return provider.Credentials{}, err
     }
     defer secure.SecureZeroBytes(secret)
 
-    // Read stored TOTP params (algorithm, digits, period) — falls back to defaults if none stored
-    params := p.loadTOTPParams(serviceKey)
+    // The settings decide which codes are right, so failing to read them
+    // is an error, not a reason to fall back to the defaults.
+    e, err := p.store.Lookup(k)
+    if err != nil {
+        return provider.Credentials{}, fmt.Errorf("failed to read the code settings: %w", err)
+    }
 
-    currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
+    currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, e.Settings.TOTP)
     if err != nil {
         return provider.Credentials{}, err
     }
@@ -576,124 +519,81 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
         "TOTP code", p.serviceName,
     ), nil
 }
-
-// loadTOTPParams reads stored params from the entry description (JSON).
-// ListEntries is a prefix query in the SQLite backend — verify the first
-// result matches the exact (service, account) we read the secret under so
-// a prefix sibling or a cross-user entry can't spoof the params.
-func (p *Provider) loadTOTPParams(serviceKey string) totp.Params {
-    entries, err := p.keychain.ListEntries(serviceKey)
-    if err != nil || len(entries) == 0 {
-        return totp.Params{}
-    }
-    if entries[0].Service != serviceKey || entries[0].Account != p.User {
-        return totp.Params{}
-    }
-    return totp.ParseParams(entries[0].Description)
-}
 ```
 
-**TOTP Params**: When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored as JSON in the entry description. Most services use defaults (SHA1, 6 digits, 30 seconds), but some (e.g., Steam, certain enterprise SSO) use non-standard configurations. Providers that use `GenerateConsecutiveCodesBytesWithParams` will generate correct codes regardless.
+**Code settings**: When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are taken from the `otpauth://` URI and saved with the secret in `Settings.TOTP`. Most services use the usual settings, but some use others; reading `Settings.TOTP` gives the right codes either way.
+
+Because TOTP entries are shared, a secret stored under `KindTOTP` is also visible to `-service totp` and the password manager's `totp-generate`. Store under your own service name, or the user's, as fits your provider.
 
 ## Testing Your Provider
 
 ### Unit Tests
 
-Create `provider_test.go`:
+Use `vault.NewMemStore()`, an in-memory `vault.Store`, seeded with `Put` or `Save`, and assert against what it holds. There's no mocks package to set up:
 
 ```go
 import (
+    "errors"
     "testing"
 
-    "github.com/bashhack/sesh/internal/keychain"
-    keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
+    "github.com/bashhack/sesh/internal/vault"
 )
 
 func TestProvider_GetCredentials(t *testing.T) {
-    tests := map[string]struct {
-        serviceName string
-        mockData    map[string][]byte
-        wantErr     bool
-        wantProvider string
-    }{
-        "valid credentials": {
-            serviceName: "test",
-            mockData: map[string][]byte{
-                "sesh-yourservice/test": []byte("secret123"),
-            },
-            wantProvider: "yourservice",
-        },
-        "missing credentials": {
-            serviceName: "nonexistent",
-            mockData:    map[string][]byte{},
-            wantErr:     true,
-        },
+    store := vault.NewMemStore()
+    k := vault.Key{Kind: vault.KindAPIKey, Service: "yourservice", Username: "work"}
+    if err := store.Put(k, []byte("secret123")); err != nil {
+        t.Fatal(err)
     }
 
+    tests := map[string]struct {
+        account     string
+        wantNoEntry bool
+    }{
+        "stored token": {account: "work"},
+        "no token":     {account: "home", wantNoEntry: true},
+    }
     for name, tc := range tests {
         t.Run(name, func(t *testing.T) {
-            mockKC := &keychainMocks.MockProvider{
-                GetSecretFunc: func(account, service string) ([]byte, error) {
-                    key := service // service is the keyformat key
-                    if data, ok := tc.mockData[key]; ok {
-                        return data, nil
-                    }
-                    return nil, keychain.ErrNotFound
-                },
-            }
-            p := NewProvider(mockKC)
-            p.serviceName = tc.serviceName
-            p.User = "testuser"
+            p := NewProvider(store)
+            p.account = tc.account
 
             creds, err := p.GetCredentials()
-            if tc.wantErr {
-                if err == nil {
-                    t.Error("expected error, got nil")
+            if tc.wantNoEntry {
+                if !errors.Is(err, vault.ErrNotFound) {
+                    t.Errorf("err = %v, want ErrNotFound", err)
                 }
                 return
             }
             if err != nil {
-                t.Fatalf("unexpected error: %v", err)
+                t.Fatal(err)
             }
-            if creds.Provider != tc.wantProvider {
-                t.Errorf("got provider %q, want %q", creds.Provider, tc.wantProvider)
-            }
-            if creds.Variables["YOUR_SERVICE_TOKEN"] == "" {
-                t.Error("expected non-empty YOUR_SERVICE_TOKEN")
+            if creds.Variables["YOUR_SERVICE_TOKEN"] != "secret123" {
+                t.Errorf("YOUR_SERVICE_TOKEN = %q, want the stored token", creds.Variables["YOUR_SERVICE_TOKEN"])
             }
         })
     }
 }
 ```
 
-### Integration Tests
-
-Test with actual keychain:
+For error paths, wrap the in-memory store and override the method that should fail:
 
 ```go
-func TestProvider_Integration(t *testing.T) {
-    if testing.Short() {
-        t.Skip("Skipping integration test")
-    }
-    
-    kc := keychain.NewDefaultProvider()
-    p := NewProvider(kc)
-    
-    // Test full workflow
-    // ...
+// failingStore is an in-memory store whose Get fails.
+type failingStore struct{ *vault.MemStore }
+
+func (failingStore) Get(vault.Key) ([]byte, error) {
+    return nil, errors.New("vault locked")
 }
 ```
 
-> **Mocking tip:** Use the pre-built `MockProvider` from `internal/keychain/mocks/` instead of writing your own. It has function fields for every `keychain.Provider` method:
-> ```go
-> import keychainMocks "github.com/bashhack/sesh/internal/keychain/mocks"
->
-> mockKC := &keychainMocks.MockProvider{
->     GetSecretFunc: func(account, service string) ([]byte, error) {
->         return []byte("secret"), nil
->     },
-> }
-> ```
+If you write a new `vault.Store` implementation rather than a provider, run the shared behaviour suite against it, as the vault and the in-memory store do:
+
+```go
+func TestMyStore(t *testing.T) {
+    vaulttest.Run(t, func(t *testing.T) vault.Store { return newMyStore(t) })
+}
+```
 
 ### Building and Running Tests
 
@@ -718,28 +618,28 @@ make build && ./build/sesh -help
 
 ### Security
 
-1. **Always zero sensitive data**: Use `secure.SecureZeroBytes()`
-2. **Work with byte slices**: Don't convert secrets to strings unnecessarily — use `GetSecret` (returns `[]byte`) over `GetSecretString` (returns `string`) for secrets
-3. **Validate early**: Check credentials exist before expensive operations
+1. **Always zero sensitive data**: Use `secure.SecureZeroBytes()` on secrets from `Get`
+2. **Work with byte slices**: `Get` returns `[]byte`; convert to a string only where one is required (an environment variable, the clipboard)
+3. **Validate early**: Check the entry exists (`Lookup`, which doesn't decrypt) before expensive operations
 4. **Clipboard awareness**: On macOS, sesh auto-clears the clipboard 30 seconds after copy (only if the clipboard still holds the copied value). On other platforms `-clip` copies without auto-clearing — consider the exposure window and surface it in your provider's UX.
 
 ### User Experience
 
 1. **Clear error messages**: Include setup instructions in errors
 2. **Interactive setup**: Guide users through configuration
-3. **Profile support**: Allow multiple accounts/configurations
+3. **Account support**: Use the username for several accounts of one service
 4. **Consistent naming**: Follow existing patterns for flags and commands
 
 ### Code Organization
 
 1. **Single responsibility**: Keep provider focused on one service
-2. **Dependency injection**: Accept interfaces, not concrete types
+2. **Dependency injection**: Accept interfaces (`vault.Store`, `totp.Provider`), not concrete types
 3. **Error wrapping**: Use `fmt.Errorf` with `%w` for error context
-4. **Constants**: Define prefixes and keys in constants package
+4. **One key helper**: Build your entries' keys in one place (a `key()` method), so every method names the same entry
 
 ## Example: Minimal TOTP Provider
 
-Here's a complete minimal example for a generic TOTP service:
+Here's a complete minimal example for a TOTP service, storing its secrets as TOTP entries under the service name the user gives:
 
 ```go
 package simple
@@ -747,58 +647,44 @@ package simple
 import (
     "fmt"
 
-    "github.com/bashhack/sesh/internal/env"
-    "github.com/bashhack/sesh/internal/keychain"
-    "github.com/bashhack/sesh/internal/keyformat"
     "github.com/bashhack/sesh/internal/provider"
     "github.com/bashhack/sesh/internal/secure"
     "github.com/bashhack/sesh/internal/totp"
+    "github.com/bashhack/sesh/internal/vault"
 )
 
-// simpleServicePrefix would be defined in internal/constants/constants.go
-const simpleServicePrefix = "sesh-simple"
-
 type Provider struct {
-    keychain    keychain.Provider
-    totp        totp.Provider
+    store vault.Store
+    totp  totp.Provider
     provider.Clock
-    provider.KeyUser
     serviceName string
 }
 
-func NewProvider(kc keychain.Provider, totp totp.Provider) *Provider {
-    return &Provider{
-        keychain: kc,
-        totp:     totp,
-    }
+func NewProvider(store vault.Store, totp totp.Provider) *Provider {
+    return &Provider{store: store, totp: totp}
 }
 
-func (p *Provider) Name() string { return "simple" }
+func (p *Provider) key() vault.Key {
+    return vault.Key{Kind: vault.KindTOTP, Service: p.serviceName}
+}
+
+func (p *Provider) Name() string        { return "simple" }
 func (p *Provider) Description() string { return "Simple TOTP provider" }
 
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
-    fs.StringVar(&p.serviceName, "service", "", "Service name")
-
-    defaultKeyUser, err := env.GetCurrentUser()
-    if err != nil {
-        return fmt.Errorf("failed to get current user: %w", err)
-    }
-    p.User = defaultKeyUser
+    fs.StringVar(&p.serviceName, "service-name", "", "Service name")
     return nil
 }
 
 func (p *Provider) GetFlagInfo() []provider.FlagInfo {
     return []provider.FlagInfo{
-        {Name: "service", Type: "string", Description: "Service name", Required: true},
+        {Name: "service-name", Type: "string", Description: "Service name", Required: true},
     }
 }
 
 func (p *Provider) ValidateRequest() error {
     if p.serviceName == "" {
-        return fmt.Errorf("--service flag is required")
-    }
-    if err := p.EnsureUser(); err != nil {
-        return err
+        return fmt.Errorf("--service-name is required")
     }
     return nil
 }
@@ -808,84 +694,54 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 }
 
 func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
-    if err := p.EnsureUser(); err != nil {
-        return provider.Credentials{}, err
-    }
-
-    serviceKey, err := keyformat.Build(simpleServicePrefix, p.serviceName)
-    if err != nil {
-        return provider.Credentials{}, fmt.Errorf("failed to build service key: %w", err)
-    }
-
-    secret, err := p.keychain.GetSecret(p.User, serviceKey)
+    secret, err := p.store.Get(p.key())
     if err != nil {
         return provider.Credentials{}, err
     }
     defer secure.SecureZeroBytes(secret)
 
-    // Generate current and next TOTP codes using any stored QR parameters
-    // (algorithm, digits, period). Services using SHA-256/SHA-512, 8-digit
-    // codes, or a non-30-second period need this — the default generator
-    // would produce codes that don't match.
-    params := p.loadTOTPParams(serviceKey)
-    currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
+    // The entry's code settings (algorithm, digits, period); services using
+    // SHA-256/SHA-512, 8-digit codes, or another period need them.
+    e, err := p.store.Lookup(p.key())
+    if err != nil {
+        return provider.Credentials{}, fmt.Errorf("failed to read the code settings: %w", err)
+    }
+    currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, e.Settings.TOTP)
     if err != nil {
         return provider.Credentials{}, err
     }
 
-    secondsLeft := p.SecondsLeftInWindow()
-
     return provider.CreateClipboardCredentials(
-        p.Name(), currentCode, nextCode, secondsLeft,
+        p.Name(), currentCode, nextCode, p.SecondsLeftInWindow(),
         "TOTP code", p.serviceName,
     ), nil
 }
 
-// loadTOTPParams reads stored TOTP params from the entry's description.
-// Returns zero-value Params on miss, which falls back to defaults (SHA1,
-// 6 digits, 30s period).
-func (p *Provider) loadTOTPParams(serviceKey string) totp.Params {
-    entries, err := p.keychain.ListEntries(serviceKey)
-    if err != nil || len(entries) == 0 {
-        return totp.Params{}
-    }
-    // ListEntries is a prefix query — verify the first entry is the exact
-    // service and account we just read the secret from.
-    if entries[0].Service != serviceKey || entries[0].Account != p.User {
-        return totp.Params{}
-    }
-    return totp.ParseParams(entries[0].Description)
-}
-
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
-    entries, err := p.keychain.ListEntries(simpleServicePrefix)
+    entries, err := p.store.List(vault.Filter{Kind: vault.KindTOTP})
     if err != nil {
         return nil, err
     }
-
-    var result []provider.ProviderEntry
-    for _, entry := range entries {
+    result := make([]provider.ProviderEntry, 0, len(entries))
+    for i := range entries {
         result = append(result, provider.ProviderEntry{
-            ID:          fmt.Sprintf("%s:%s", entry.Service, entry.Account),
-            Name:        entry.Service,
-            Description: entry.Description,
+            ID:          entries[i].Key.String(),
+            Name:        entries[i].Service,
+            Description: "TOTP",
         })
     }
-
     return result, nil
 }
 
 func (p *Provider) DeleteEntry(id string) error {
-    service, account, err := provider.ParseEntryID(id)
+    k, err := vault.ParseKey(id)
     if err != nil {
         return err
     }
-
-    if err := p.keychain.DeleteEntry(account, service); err != nil {
-        return fmt.Errorf("failed to delete entry: %w", err)
+    if k.Kind != vault.KindTOTP {
+        return fmt.Errorf("%s isn't a TOTP entry", id)
     }
-
-    return nil
+    return p.store.Delete(k)
 }
 
 // ShouldUseSubshell implements the optional SubshellDecider interface.
@@ -894,7 +750,7 @@ func (p *Provider) ShouldUseSubshell() bool {
     return false
 }
 
-func (p *Provider) GetSetupHandler() interface{} {
+func (p *Provider) GetSetupHandler() any {
     // Return a setup.SetupHandler implementation (see Step 3 above)
     return nil // Replace with your setup handler
 }

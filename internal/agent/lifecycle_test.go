@@ -52,7 +52,7 @@ func TestServer_LockDropsKeyAndAllowsUnlock(t *testing.T) {
 	if err := Lock(conn); err != nil {
 		t.Fatalf("Lock while locked: %v", err)
 	}
-	_, _, err := Encrypt(conn, []byte("x"), id)
+	_, _, err := Encrypt(conn, []byte("x"), nil, id)
 	var pe *ProtocolError
 	if !errors.As(err, &pe) || pe.Code != ErrCodeNotUnlocked {
 		t.Fatalf("Encrypt after lock err = %v, want not_unlocked", err)

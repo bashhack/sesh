@@ -51,18 +51,6 @@ type Setting[T any] struct {
 	Source Source
 }
 
-// Backend values.
-const (
-	BackendKeychain = "keychain"
-	BackendSQLite   = "sqlite"
-)
-
-// Key source values.
-const (
-	KeySourceKeychain = "keychain"
-	KeySourcePassword = "password"
-)
-
 // DefaultClipboardTimeout is how long a copied secret stays on the
 // clipboard before sesh clears it.
 const DefaultClipboardTimeout = 30 * time.Second
@@ -79,8 +67,6 @@ type Config struct {
 	// Path is the config file sesh looked for; FileFound says whether it
 	// existed.
 	Path             string
-	Backend          Setting[string]
-	KeySource        Setting[string]
 	DBPath           Setting[string]
 	ClipboardTimeout Setting[time.Duration]
 	AgentIdleTimeout Setting[time.Duration]
@@ -93,15 +79,11 @@ type Config struct {
 
 // Overrides are values given as command-line flags. Empty means unset.
 type Overrides struct {
-	Backend   string
-	KeySource string
-	DBPath    string
+	DBPath string
 }
 
 // Env var names.
 const (
-	EnvBackend            = "SESH_BACKEND"
-	EnvKeySource          = "SESH_KEY_SOURCE"
 	EnvDBPath             = "SESH_DB_PATH"
 	EnvClipboardTimeout   = "SESH_CLIPBOARD_TIMEOUT"
 	EnvAgentIdleTimeout   = "SESH_AGENT_IDLE_TIMEOUT"
@@ -112,8 +94,6 @@ const (
 // fileConfig is the config file's shape. Durations are strings such as
 // "10m", parsed with time.ParseDuration.
 type fileConfig struct {
-	Backend          string `toml:"backend"`
-	KeySource        string `toml:"key_source"`
 	DBPath           string `toml:"db_path"`
 	ClipboardTimeout string `toml:"clipboard_timeout"`
 	Agent            struct {
@@ -154,8 +134,6 @@ func Load(o Overrides) (*Config, error) {
 	}
 	c := &Config{
 		Path:               path,
-		Backend:            Setting[string]{Value: BackendSQLite},
-		KeySource:          Setting[string]{Value: KeySourcePassword},
 		DBPath:             Setting[string]{Value: dbDefault},
 		ClipboardTimeout:   Setting[time.Duration]{Value: DefaultClipboardTimeout},
 		AgentIdleTimeout:   Setting[time.Duration]{Value: agent.DefaultIdleTimeout},
@@ -188,22 +166,18 @@ func (c *Config) applyFile() error {
 		keys := make([]string, len(undecoded))
 		for i, k := range undecoded {
 			keys[i] = k.String()
+			switch keys[i] {
+			case "backend":
+				keys[i] += " (remove it: the vault is the only store now)"
+			case "key_source":
+				keys[i] += " (remove it: the master password is the only key source now)"
+			}
 		}
 		sort.Strings(keys)
 		return fmt.Errorf("config file %s: unknown setting %s", c.Path, strings.Join(keys, ", "))
 	}
 	in := func(key string) bool { return md.IsDefined(strings.Split(key, ".")...) }
 	from := func(key string) string { return fmt.Sprintf("%s in %s", key, c.Path) }
-	if in("backend") {
-		if err := setChoice(&c.Backend, f.Backend, FromFile, from("backend"), BackendSQLite, BackendKeychain); err != nil {
-			return err
-		}
-	}
-	if in("key_source") {
-		if err := setChoice(&c.KeySource, f.KeySource, FromFile, from("key_source"), KeySourcePassword, KeySourceKeychain); err != nil {
-			return err
-		}
-	}
 	if in("db_path") {
 		if err := setDBPath(&c.DBPath, f.DBPath, FromFile, from("db_path")); err != nil {
 			return err
@@ -233,16 +207,6 @@ func (c *Config) applyFile() error {
 }
 
 func (c *Config) applyEnv() error {
-	if v, ok := os.LookupEnv(EnvBackend); ok && v != "" {
-		if err := setChoice(&c.Backend, v, FromEnv, EnvBackend, BackendSQLite, BackendKeychain); err != nil {
-			return err
-		}
-	}
-	if v, ok := os.LookupEnv(EnvKeySource); ok && v != "" {
-		if err := setChoice(&c.KeySource, v, FromEnv, EnvKeySource, KeySourcePassword, KeySourceKeychain); err != nil {
-			return err
-		}
-	}
 	if v, ok := os.LookupEnv(EnvDBPath); ok && v != "" {
 		if err := setDBPath(&c.DBPath, v, FromEnv, EnvDBPath); err != nil {
 			return err
@@ -275,16 +239,6 @@ func (c *Config) applyEnv() error {
 }
 
 func (c *Config) applyFlags(o Overrides) error {
-	if o.Backend != "" {
-		if err := setChoice(&c.Backend, o.Backend, FromFlag, "--backend", BackendSQLite, BackendKeychain); err != nil {
-			return err
-		}
-	}
-	if o.KeySource != "" {
-		if err := setChoice(&c.KeySource, o.KeySource, FromFlag, "--key-source", KeySourcePassword, KeySourceKeychain); err != nil {
-			return err
-		}
-	}
 	if o.DBPath != "" {
 		if err := setDBPath(&c.DBPath, o.DBPath, FromFlag, "--db-path"); err != nil {
 			return err
@@ -300,14 +254,6 @@ func (o Overrides) Validate() error {
 	return c.applyFlags(o)
 }
 
-func setChoice(dst *Setting[string], v string, src Source, origin string, allowed ...string) error {
-	if slices.Contains(allowed, v) {
-		*dst = Setting[string]{Value: v, Source: src, Origin: origin}
-		return nil
-	}
-	return fmt.Errorf("%s = %q: want %s", origin, v, quoteOr(allowed))
-}
-
 // setPath accepts an absolute path or one starting with ~/.
 func setPath(dst *Setting[string], v string, src Source, origin string) error {
 	p, err := ResolvePath(v)
@@ -319,14 +265,13 @@ func setPath(dst *Setting[string], v string, src Source, origin string) error {
 }
 
 // reservedVaultNames are files sesh keeps next to the vault: the master
-// password sidecar and its lock (internal/database), the key-init lock
-// (sesh/cmd/sesh), the Touch ID and recovery files (internal/touchid,
-// internal/recovery), and what a password change or key-source switch
-// stages, backs up, and locks while it runs (sesh/cmd/sesh/rekey.go). A
-// vault with one of these names would be overwritten or removed by one of
-// them.
+// password sidecar and its lock (internal/database), the Touch ID and
+// recovery files (internal/touchid, internal/recovery), and what a
+// password change stages, backs up, and locks while it runs
+// (sesh/cmd/sesh/rekey.go). A vault with one of these names would be
+// overwritten or removed by one of them.
 var reservedVaultNames = []string{
-	"passwords.key", "passwords.key.lock", ".key-init.lock", "touchid.key", "recovery.key",
+	"passwords.key", "passwords.key.lock", "touchid.key", "recovery.key",
 	"passwords.key.new", "passwords.key.new.lock", "passwords.key.pre-rotate", ".key-change.lock",
 }
 
@@ -378,12 +323,4 @@ func setRetention(dst *Setting[int], n int64, raw string, src Source, origin str
 	}
 	*dst = Setting[int]{Value: int(n), Source: src, Origin: origin}
 	return nil
-}
-
-func quoteOr(vs []string) string {
-	q := make([]string, len(vs))
-	for i, v := range vs {
-		q[i] = fmt.Sprintf("%q", v)
-	}
-	return strings.Join(q, " or ")
 }

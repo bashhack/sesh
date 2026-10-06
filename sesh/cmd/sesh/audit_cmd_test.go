@@ -13,6 +13,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/testutil"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // auditTestVault creates a password-protected vault holding one entry,
@@ -21,16 +22,16 @@ func auditTestVault(t *testing.T) string {
 	t.Helper()
 	env := setupRekeyEnv(t)
 	useConfigFile(t, "")
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "audit-password-1234")
 	store, err := openSQLiteStore()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetSecret("alice", "sesh-password/password/github/alice", []byte("hunter2")); err != nil {
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	if err := store.Put(gh, []byte("hunter2")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.GetSecret("alice", "sesh-password/password/github/alice"); err != nil {
+	if _, err := store.Get(gh); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -154,23 +155,18 @@ func TestAudit_Refusals(t *testing.T) {
 			t.Errorf("sesh audit %q: err = %v, want %q", tt.args, err, tt.wantSub)
 		}
 	}
-	t.Setenv(config.EnvBackend, "keychain")
-	if _, err := runAuditOut(t); err == nil || !strings.Contains(err.Error(), "audit") {
-		t.Errorf("keychain backend: err = %v", err)
-	}
 }
 
 func TestAuditEntryName(t *testing.T) {
 	for _, tt := range []struct{ id, kind, name string }{
-		{"sesh-password/password/github/alice/me", "password", "github (alice)"},
-		{"sesh-password/api_key/stripe/me", "api_key", "stripe"},
-		{"sesh-password/secure_note/wifi/home/me", "secure_note", "wifi (home)"},
-		{"sesh-password/totp/gitlab/me", "totp", "gitlab"},
-		{"sesh-totp/github/me", "totp", "github"},
-		{"sesh-totp/github/work/me", "totp", "github (work)"},
-		{"sesh-aws/default/me", "aws", "default"},
-		{"sesh-aws-serial/prod/me", "aws serial", "prod"},
-		{"sesh-password/password/me", "", "sesh-password/password/me"},
+		{"password/github/alice", "password", "github (alice)"},
+		{"api_key/openai", "api_key", "openai"},
+		{"totp/github/work", "totp", "github (work)"},
+		{"totp/aws/prod", "totp", "aws (prod)"},
+		{"secure_note/wifi/home", "secure_note", "wifi (home)"},
+		{"password/github/alice/extra", "", "password/github/alice/extra"},
+		{"sesh-totp/github", "", "sesh-totp/github"},
+		{"password", "", "password"},
 		{"something/else", "", "something/else"},
 		{"", "", ""},
 	} {
@@ -316,7 +312,6 @@ func TestThousands(t *testing.T) {
 func TestAuditSizeWarning_NeverTruncatesTheVault(t *testing.T) {
 	setupRekeyEnv(t)
 	useConfigFile(t, "")
-	t.Setenv("SESH_KEY_SOURCE", "password")
 	t.Setenv("SESH_MASTER_PASSWORD", "audit-password-1234")
 	dbPath := filepath.Join(t.TempDir(), "audit-size-warned")
 	t.Setenv(config.EnvDBPath, dbPath)
@@ -329,7 +324,7 @@ func TestAuditSizeWarning_NeverTruncatesTheVault(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 4 { // 4 audit events, over the limit of 3
-		if err := store.SetSecret("alice", "sesh-password/password/github/alice", []byte("hunter2")); err != nil {
+		if err := store.Put(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}, []byte("hunter2")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -350,7 +345,7 @@ func TestAuditSizeWarning_NeverTruncatesTheVault(t *testing.T) {
 		t.Fatalf("vault unusable after the warning: %v", err)
 	}
 	defer closeAuditStore(store)
-	if got, err := store.GetSecret("alice", "sesh-password/password/github/alice"); err != nil || string(got) != "hunter2" {
+	if got, err := store.Get(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}); err != nil || string(got) != "hunter2" {
 		t.Errorf("entry after the warning = %q, %v", got, err)
 	}
 }
