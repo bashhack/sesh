@@ -568,7 +568,8 @@ func TestRekeyHolderProcess(t *testing.T) {
 		return
 	}
 	_ = os.WriteFile(filepath.Join(dir, "ready"), nil, 0o600) //nolint:errcheck // the parent times out without it
-	if !waitForFile(filepath.Join(dir, "go"), 20*time.Second) {
+	// The change can take minutes on a slow CI runner under -race.
+	if !waitForFile(filepath.Join(dir, "go"), holderWait) {
 		report("no go")
 		return
 	}
@@ -576,6 +577,10 @@ func TestRekeyHolderProcess(t *testing.T) {
 	putErr := store.Put(vault.Key{Kind: vault.KindPassword, Service: "from-holder"}, []byte("v"))
 	report(fmt.Sprintf("get: %v", getErr), fmt.Sprintf("put: %v", putErr))
 }
+
+// holderWait bounds each wait between the test and the other process; the
+// whole exchange is killed after twice that.
+const holderWait = 5 * time.Minute
 
 func waitForFile(p string, limit time.Duration) bool {
 	deadline := time.Now().Add(limit)
@@ -601,7 +606,7 @@ func TestRotate_WithTheVaultOpenElsewhere(t *testing.T) {
 	populatePasswordStore(t, env, entries)
 
 	dir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*holderWait)
 	defer cancel()
 	holder := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRekeyHolderProcess$") //nolint:gosec // the test binary itself
 	holder.Env = append(os.Environ(), "SESH_TEST_HOLDER_DIR="+dir)
@@ -611,7 +616,7 @@ func TestRotate_WithTheVaultOpenElsewhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = holder.Wait() }() //nolint:errcheck // its report is what's checked
-	if !waitForFile(filepath.Join(dir, "ready"), 20*time.Second) {
+	if !waitForFile(filepath.Join(dir, "ready"), holderWait) {
 		r, _ := os.ReadFile(filepath.Join(dir, "result")) //nolint:errcheck // shown if present
 		t.Fatalf("the other process never got ready: %s\n%s", r, out.String())
 	}
@@ -637,7 +642,7 @@ func TestRotate_WithTheVaultOpenElsewhere(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "go"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !waitForFile(filepath.Join(dir, "result"), 20*time.Second) {
+	if !waitForFile(filepath.Join(dir, "result"), holderWait) {
 		t.Fatalf("no report from the other process:\n%s", out.String())
 	}
 	report, err := os.ReadFile(filepath.Join(dir, "result"))
