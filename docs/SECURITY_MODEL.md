@@ -15,7 +15,7 @@ sesh is built on three fundamental principles:
 sesh is designed to reduce exposure to:
 
 - **Corporate Data Harvesting**: Unlike browser extensions or corporate MFA apps, sesh never phones home
-- **Credential Theft**: Every secret is encrypted in the vault, with a key derived from your master password. The key itself is stored only wrapped, in the optional recovery key and Touch ID files, and in the agent's memory while it's unlocked
+- **Credential Theft**: Every secret is encrypted in the vault, with a key derived from your master password. The key itself is stored only wrapped, in the vault's optional recovery key record and the optional Touch ID file, and in the agent's memory while it's unlocked
 - **Memory Scraping**: Best-effort memory zeroing reduces exposure windows
 - **Accidental Exposure**: Subshells isolate credentials from your main environment
 - **Supply Chain Attacks**: Minimal dependencies reduce attack surface
@@ -76,18 +76,19 @@ With Touch ID unlock on, the agent can unlock with a fingerprint instead of the 
 - **Fingerprint only, deliberately.** Neither the Mac's login password nor an Apple Watch can approve, so the vault's protection is never reduced to that of the login password.
 - **Same-user malware.** A process running as you can make the agent show the Touch ID sheet, but can't approve it. The sheet is system UI that names the program asking. While the agent is unlocked, such a process can already ask it to decrypt; Touch ID doesn't change that.
 - **Copies.** `touchid.key`, or the whole vault with it, copied to another machine gains nothing.
-- **One vault per folder.** `touchid.key` and `recovery.key` sit next to the vault and name the vault they were made for. A password change re-wraps only its own vault's files, a new vault isn't offered another vault's, and `sesh touchid enable` asks before taking `touchid.key` from another vault.
+- **One vault per folder.** `touchid.key` sits next to the vault and names the vault it was made for. A password change re-wraps it only for its own vault, a new vault isn't offered another vault's, and `sesh touchid enable` asks before taking it from another vault.
 
 ##### Recovery key (optional)
 
 A recovery key lets someone who forgot the master password set a new one. There's no server, so there's no second check: **the recovery key plus the vault file opens the vault**. It's offered, not forced, for that reason.
 
 - **The key.** 128 random bits, written down by the user as 7 groups of 4 Crockford base32 characters (the last two a 10-bit checksum, so typos are caught as typos). sesh never stores it, and shows it once. It's saved only after the user types back its last group.
-- **Key custody.** The key is the seed of a P-256 key pair (private key derived with HKDF-SHA256). sesh stores only the public half, in `recovery.key` next to the vault (mode 0600), with the vault key wrapped to it: one-off P-256 ECDH, HKDF-SHA256 with a label of its own (so a recovery wrap never opens as a Touch ID wrap, or the reverse), then AES-256-GCM bound to the vault's unlock id. The agent does the wrap, so the vault key doesn't leave it. Because wrapping needs only the public half, a password change re-wraps the new vault key without the recovery key.
-- **Using it.** `sesh recover` unwraps the vault key with the typed key, checks it against the vault's verify blob, and re-encrypts the vault under a new master password, as a password change does. The used key then stops working (its file is removed), and a new one is offered at once.
+- **Key custody.** The key is the seed of a P-256 key pair (private key derived with HKDF-SHA256). sesh stores only the public half, in the vault file (the `recovery` table), with the vault key wrapped to it: one-off P-256 ECDH, HKDF-SHA256 with a label of its own (so a recovery wrap never opens as a Touch ID wrap, or the reverse), then AES-256-GCM bound to the vault's unlock id. The agent does the wrap, so the vault key doesn't leave it. Because wrapping needs only the public half, a password change re-wraps the new vault key without the recovery key, into the new vault before it replaces the old one, so the two change together.
+- **Using it.** `sesh recover` unwraps the vault key with the typed key, checks it against the vault's verify blob, and re-encrypts the vault under a new master password, as a password change does. The used key then stops working (the new vault has no record of it), and a new one is offered at once.
 - **What changes.** The vault opens with the master password, an enrolled fingerprint on that Mac (Touch ID), **or** the recovery key together with the vault file. The paper key can't be guessed but can be found; keep it away from the computer.
-- **The file alone** reveals nothing: a public key and a wrap only the paper key opens.
-- **Tampering.** A process running as the user could replace the public key in `recovery.key`, so that the next password change wraps the vault key to its own key. The same is true of `touchid.key`. It's accepted for the same reason: code running as the user can already ask an unlocked agent to decrypt everything, or replace the sesh binary.
+- **The record alone** reveals nothing: a public key and a wrap only the paper key opens.
+- **Removing it.** `sesh recovery remove` deletes the record, and the vault is written so that deleted rows leave nothing behind in the file (SQLite's `secure_delete`). A backup made while the key was set still holds a wrap of the same vault key, though. If the paper key may have been seen, remove it and then change the master password (`sesh --rekey`), which gives the vault a new key that no old wrap opens.
+- **Tampering.** A process running as the user could replace the public key in the vault's `recovery` record, so that the next password change wraps the vault key to its own key. The same is true of `touchid.key`. It's accepted for the same reason: code running as the user can already ask an unlocked agent to decrypt everything, or replace the sesh binary.
 
 ##### Sesh agent
 
@@ -147,7 +148,7 @@ Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext
 - **No plaintext-on-disk window.** Unlike the export-then-import workaround, the change never writes a plaintext-equivalent file (an encrypted export still sits on disk encrypted only with the export password). All re-encryption happens in-process; only encrypted-at-rest databases ever touch the filesystem.
 - **Per-row salt regeneration.** Every entry gets a fresh per-row salt under the new key. Encrypted ciphertext changes for every row even when the plaintext is identical.
 - **No old copy survives success.** The original vault is kept as a `.pre-rotate` copy only while the change runs, so a failure can roll back. Before the swap, the new vault is checked to open with its key and to hold every planned entry; once it's in place, the old copy is deleted, since it would let the old password (or a leaked one) open the old contents. Copies left by an interrupted change are deleted once the current key is verified. Deletion doesn't scrub the disk: on SSDs and copy-on-write filesystems no in-place overwrite can guarantee that.
-- **The key record moves with the vault.** The new vault holds its own key record (a new salt, and a verify blob for the new key), so the password changes in the same rename as the entries. The change doesn't alter the old vault's entries or key record.
+- **The key record moves with the vault.** The new vault holds its own key record (a new salt, and a verify blob for the new key), so the password changes in the same rename as the entries. The recovery key record, re-wrapped to the new key, moves in the same rename. The change doesn't alter the old vault's entries or key record.
 
 ### Why This Matters
 

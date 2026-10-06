@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -327,5 +328,35 @@ func TestOpen_AppliesItsOptions(t *testing.T) {
 	}
 	if err := s.db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
 		t.Errorf("foreign_keys = %d, %v; want 1", fk, err)
+	}
+}
+
+// A deleted entry leaves none of its encrypted secret in the vault file.
+func TestDelete_LeavesNoTrace(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	s, err := Open(dbPath, &mockKeySource{key: bytes.Repeat([]byte{0xAB}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	if err := s.Put(k, []byte("bank-password")); err != nil {
+		t.Fatal(err)
+	}
+	var sealed []byte
+	if err := s.db.QueryRow(`SELECT encrypted_data FROM entries`).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(k); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, sealed) {
+		t.Error("the deleted entry's encrypted secret is still in the vault file")
 	}
 }

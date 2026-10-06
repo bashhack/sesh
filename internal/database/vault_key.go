@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 )
 
@@ -68,21 +67,11 @@ var ErrNoVault = errors.New("no vault yet")
 // any key. It returns ErrNoVault when there is no vault there yet, and
 // never creates one.
 func ReadUnlockMaterial(dbPath string) (_ UnlockMaterial, err error) {
-	switch _, err := os.Stat(dbPath); {
-	case errors.Is(err, os.ErrNotExist):
-		return UnlockMaterial{}, ErrNoVault
-	case err != nil:
-		return UnlockMaterial{}, fmt.Errorf("check for the vault: %w", err)
-	}
-	db, err := openDB(dbPath)
+	db, err := openExisting(dbPath)
 	if err != nil {
 		return UnlockMaterial{}, err
 	}
-	defer func() {
-		if cerr := db.Close(); err == nil && cerr != nil {
-			err = fmt.Errorf("close the vault: %w", cerr)
-		}
-	}()
+	defer func() { err = closeVault(db, err) }()
 	return readKeyRecord(db, dbPath)
 }
 
