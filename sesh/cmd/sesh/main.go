@@ -230,6 +230,7 @@ var subcommands = []candidate{
 	{"recover", "Set a new master password with the vault's recovery key"},
 	{"recovery", "Make, remove, or check this vault's recovery key"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
+	{"verify", "Check the vault can all be read: every entry, the recovery key, Touch ID"},
 }
 
 // subcommand returns the subcommand args name (one of subcommands) and the
@@ -764,6 +765,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "verify":
+		if err := runVerify(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "recover":
 		if err := runRecover(app, rest); err != nil {
 			fatal(app, err)
@@ -1033,6 +1039,7 @@ func (a *App) PrintUsage() error {
 		"  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)",
 		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"  sesh audit [prune]            Show the vault's audit log, or prune it",
+		"  sesh verify                   Check the vault can all be read",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",

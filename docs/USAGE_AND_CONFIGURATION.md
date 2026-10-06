@@ -508,6 +508,27 @@ Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but
 
 **When it grows large.** If the log passes 100,000 events (about 10 MB), whatever the retention setting, sesh prints a warning with the vault's size and how to shrink it. It shows at most once a day, and only when you're at a terminal, so scripts never see it. Typical personal use stays far below this at the default 90 days; it's meant for, say, a script that reads a secret every minute.
 
+### Checking the vault (`sesh verify`)
+
+`sesh verify` unlocks the vault and checks that all of it can be read:
+
+- **The file:** SQLite's own integrity check.
+- **Every entry:** its secret decrypts, and its settings (TOTP code settings, the AWS MFA device) read back. A damaged secret is otherwise found only when you read that entry, perhaps when you need it most: one flipped bit in one entry leaves the file looking fine.
+- **The recovery key**, if you have one: its record is complete and made for the vault's current key, so `sesh recover` would work.
+- **Touch ID unlock**, if it's on: it was set up for this vault and its key, and your fingerprints haven't changed since.
+
+```bash
+sesh verify
+# Vault: ~/Library/Application Support/sesh/passwords.db
+#   File: ok
+#   Entries: 42 entries, all readable
+#   Recovery key: set, and made for this vault's key
+#   Touch ID: on, for this vault
+# Vault OK.
+```
+
+It names every entry it can't read, and never shows a secret. It exits 1 when the file, an entry, or the recovery key has a problem; a Touch ID problem is only a warning, since your password still works. Run it after moving or restoring the vault, after a crash, or now and then if the vault is in a synced folder. It writes nothing while it checks, then one `verify` event to the audit log (not when the file itself is damaged). If an entry or the file is damaged, restore from a backup, such as an encrypted export.
+
 ### Encrypted exports
 
 Use `--format encrypted` to produce a portable, password-protected backup:
