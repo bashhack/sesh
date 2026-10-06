@@ -49,7 +49,7 @@ func auditEvents(t *testing.T, dbPath string) map[string]int {
 		t.Fatal(err)
 	}
 	defer db.Close() //nolint:errcheck // test cleanup
-	rows, err := db.Query(`SELECT event_type FROM audit_log`)
+	rows, err := db.Query(`SELECT event_type FROM audit_log NOT INDEXED`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,17 +135,51 @@ func TestVerify_RecoveryAndTouchID(t *testing.T) {
 		}
 	}
 
-	// A good recovery key record passes.
+	// A record for this vault's key, but not shaped like a wrapped key,
+	// fails; a real one passes.
 	sqlExec(t, env.dbPath, `DELETE FROM recovery`)
 	mat, err := database.ReadUnlockMaterial(env.dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.WriteRecovery(env.dbPath, recovery.NewRecord(database.UnlockID(mat.Verify), pub, w)); err != nil {
+	id := database.UnlockID(mat.Verify)
+	if err := database.WriteRecovery(env.dbPath, recovery.NewRecord(id, pub, w)); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := runVerifyOut(t); err != nil || !strings.Contains(out, "  Recovery key: set, and made for this vault's key\n") {
+	if out, err := runVerifyOut(t); err == nil || !strings.Contains(out, "  Recovery key: its record is damaged") {
+		t.Errorf("with a damaged recovery key record: %v\n%s", err, out)
+	}
+	good, err := recovery.Wrap(pub, bytes.Repeat([]byte{9}, 32), []byte(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.WriteRecovery(env.dbPath, recovery.NewRecord(id, pub, good)); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runVerifyOut(t); err != nil || !strings.Contains(out, "  Recovery key: set, complete, and made for this vault's key\n") {
 		t.Errorf("with a good recovery key: %v\n%s", err, out)
+	}
+}
+
+// A file SQLite finds damaged fails, isn't written to, and, since the
+// entries still read, says to export them now.
+func TestVerify_DamagedFile(t *testing.T) {
+	env := verifyVault(t)
+	before := auditEvents(t, env.dbPath)
+	// The audit log's time index, redefined over another column, no
+	// longer matches its table.
+	sqlExec(t, env.dbPath, `PRAGMA writable_schema = ON; UPDATE sqlite_master SET sql = 'CREATE INDEX idx_audit_log_created_at ON audit_log(event_type)' WHERE name = 'idx_audit_log_created_at'; PRAGMA writable_schema = OFF`)
+	out, err := runVerifyOut(t)
+	if err == nil || !strings.Contains(err.Error(), "the vault has 1 problem") {
+		t.Fatalf("err = %v, want the file counted as 1 problem\n%s", err, out)
+	}
+	for _, want := range []string{"  File: damaged; SQLite reports:\n", "  Entries: 2 entries, all readable\n", "save them now", "--action export --format encrypted"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	if after := auditEvents(t, env.dbPath); after["verify"] != 0 || len(after) != len(before) {
+		t.Errorf("audit events before %v, after %v; want nothing written", before, after)
 	}
 }
 

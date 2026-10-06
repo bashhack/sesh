@@ -88,7 +88,7 @@ func readKeyRecord(db *sql.DB, dbPath string) (UnlockMaterial, error) {
 			return UnlockMaterial{}, fmt.Errorf("read the vault: %w", err)
 		}
 		if hasEntries {
-			return UnlockMaterial{}, fmt.Errorf("the vault at %s holds entries but not the record its key is made from, so it can't be opened; restore it from a backup", dbPath)
+			return UnlockMaterial{}, damaged(fmt.Errorf("the vault at %s holds entries but not the record its key is made from, so it can't be opened; restore it from a backup", dbPath))
 		}
 		return UnlockMaterial{}, ErrNoVault
 	}
@@ -96,13 +96,13 @@ func readKeyRecord(db *sql.DB, dbPath string) (UnlockMaterial, error) {
 		return UnlockMaterial{}, fmt.Errorf("read the vault's key record: %w", err)
 	}
 	if kdf != kdfArgon2id {
-		return UnlockMaterial{}, fmt.Errorf("the vault's key record uses %q, which this sesh doesn't support", kdf)
+		return UnlockMaterial{}, damaged(fmt.Errorf("the vault's key record uses %q, which this sesh doesn't support", kdf))
 	}
 	if m.Params, err = UnmarshalArgon2idParams(params); err != nil {
-		return UnlockMaterial{}, fmt.Errorf("the vault's key record: %w", err)
+		return UnlockMaterial{}, damaged(fmt.Errorf("the vault's key record: %w", err))
 	}
 	if err := ValidateUnlockMaterial(m.Salt, m.Verify, m.Params); err != nil {
-		return UnlockMaterial{}, fmt.Errorf("the vault's key record: %w", err)
+		return UnlockMaterial{}, damaged(fmt.Errorf("the vault's key record: %w", err))
 	}
 	return m, nil
 }
