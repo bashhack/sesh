@@ -268,9 +268,8 @@ func setPath(dst *Setting[string], v string, src Source, origin string) error {
 // password sidecar and its lock (internal/database), the Touch ID and
 // recovery files (internal/touchid, internal/recovery), and what a
 // password change stages, backs up, and locks while it runs
-// (sesh/cmd/sesh/rekey.go). A
-// vault with one of these names would be overwritten or removed by one of
-// them.
+// (sesh/cmd/sesh/rekey.go). A vault with one of these names would be
+// overwritten or removed by one of them.
 var reservedVaultNames = []string{
 	"passwords.key", "passwords.key.lock", "touchid.key", "recovery.key",
 	"passwords.key.new", "passwords.key.new.lock", "passwords.key.pre-rotate", ".key-change.lock",

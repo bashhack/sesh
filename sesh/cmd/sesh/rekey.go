@@ -338,7 +338,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 // lockAgentAfterRekey locks a running, unlocked agent once the database is
 // under a new key, and returns a line for the user ("" when there is
 // nothing to say). The agent may still hold the old key, which opens the
-// .pre-rekey or .pre-rotate backup without a password. No agent running is
+// .pre-rotate backup without a password. No agent running is
 // the normal case. The rekey has already succeeded, so a failure here is a
 // warning that names the command to run instead.
 func lockAgentAfterRekey() string {

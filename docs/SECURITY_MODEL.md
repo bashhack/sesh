@@ -15,7 +15,7 @@ sesh is built on three fundamental principles:
 sesh is designed to reduce exposure to:
 
 - **Corporate Data Harvesting**: Unlike browser extensions or corporate MFA apps, sesh never phones home
-- **Credential Theft**: Every secret is encrypted in the vault, with a key derived from your master password and stored nowhere
+- **Credential Theft**: Every secret is encrypted in the vault, with a key derived from your master password. The key itself is stored only wrapped, in the optional recovery key and Touch ID files, and in the agent's memory while it's unlocked
 - **Memory Scraping**: Best-effort memory zeroing reduces exposure windows
 - **Accidental Exposure**: Subshells isolate credentials from your main environment
 - **Supply Chain Attacks**: Minimal dependencies reduce attack surface

@@ -29,9 +29,9 @@ func addInitFlags(fs *flag.FlagSet) *bool {
 	return fs.Bool("force", false, "Replace an existing config file")
 }
 
-// runInit is `sesh init`: it sets up the vault where it should live. With
-// --db-path it uses that (for scripts); otherwise it asks. It creates (or opens) the vault first, and only then
-// writes ~/.config/sesh/config.toml, so a failure leaves no config pointing
+// runInit is `sesh init`: it sets up the vault where you choose. With
+// --db-path it uses that (for scripts); otherwise it asks. It creates (or
+// opens) the vault first, and only then writes ~/.config/sesh/config.toml, so a failure leaves no config pointing
 // at a vault that doesn't work.
 func runInit(app *App, args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)

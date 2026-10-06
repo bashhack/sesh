@@ -257,7 +257,7 @@ db_path               /Users/me/vaults/sesh.db
 
 Every secret lives in one encrypted vault file (SQLite, each entry encrypted with AES-256-GCM). Its key is derived from your master password via Argon2id, with the salt in the `passwords.key` sidecar (0600) next to the vault. It works the same on macOS and Linux. `sesh --rekey` changes the master password.
 
-### Using the master password mode
+### Using the master password
 
 ```bash
 # First run — explains what it's creating, then asks for the new password twice
@@ -387,7 +387,7 @@ Only a fingerprint approves the unlock. The Mac's login password and an Apple Wa
 
 ### Using the sesh agent
 
-In master password mode, sesh keeps the derived key in a per-user background process, `sesh agent`, so you type the password once instead of on every command. **You don't need to manage it.** sesh starts it when it's needed, it locks itself, and the only thing it asks of you is your password.
+sesh keeps the derived key in a per-user background process, `sesh agent`, so you type the password once instead of on every command. **You don't need to manage it.** sesh starts it when it's needed, it locks itself, and the only thing it asks of you is your password.
 
 **How it runs**
 

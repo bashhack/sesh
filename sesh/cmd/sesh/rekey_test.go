@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,7 +18,6 @@ type rekeyTestEnv struct {
 	dataDir     string
 	dbPath      string
 	sidecarPath string
-	account     string
 }
 
 func setupRekeyEnv(t *testing.T) *rekeyTestEnv {
@@ -36,16 +34,11 @@ func setupRekeyEnv(t *testing.T) *rekeyTestEnv {
 		t.Fatalf("DefaultDBPath: %v", err)
 	}
 	dataDir := filepath.Dir(dbPath)
-	u, err := user.Current()
-	if err != nil {
-		t.Fatalf("user.Current: %v", err)
-	}
 	return &rekeyTestEnv{
 		tmpDir:      tmp,
 		dataDir:     dataDir,
 		dbPath:      dbPath,
 		sidecarPath: filepath.Join(dataDir, "passwords.key"),
-		account:     u.Username,
 	}
 }
 

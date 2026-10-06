@@ -50,8 +50,8 @@ func main() {
 	// Only open the credential store if the command will actually use it.
 	// --version, --help, --list-services, and --rekey either just print
 	// information or open their own store internally. Skipping buildProvider
-	// here means sesh doesn't pointlessly open the vault (or
-	// acquire the key-init flock on first run) for those commands.
+	// here means sesh doesn't pointlessly open the vault for those
+	// commands.
 	args, overrides, err := takeSettingFlags(os.Args)
 	if err == nil {
 		err = overrides.Validate()
@@ -171,7 +171,7 @@ var subcommands = []candidate{
 	{"audit", "Show the vault's audit log, or prune it"},
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 	{"config", "Show settings and where each comes from"},
-	{"init", "Choose where and how sesh stores secrets"},
+	{"init", "Choose where sesh keeps the vault"},
 	{"recover", "Set a new master password with the vault's recovery key"},
 	{"recovery", "Make, remove, or check this vault's recovery key"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
@@ -293,8 +293,8 @@ func openStoreWith(dbPath string, oracle database.CryptoOracle) (*database.Store
 	return store, nil
 }
 
-// refuseNewKeyForExistingVault stops password mode from creating a new
-// master key next to a vault that already exists without passwords.key:
+// refuseNewKeyForExistingVault stops sesh from creating a new master key
+// next to a vault that already exists without passwords.key:
 // entries written under a new key would be unreadable with the vault's
 // real one.
 func refuseNewKeyForExistingVault(dbPath string) error {
@@ -394,7 +394,7 @@ func withKeyHint(err error) error {
 		return err
 	}
 	if wk.VaultSource == "keychain" {
-		return fmt.Errorf("%w: start a new vault by moving this one aside", err)
+		return fmt.Errorf("%w: start a new vault by moving this one aside. Its key is still in your login Keychain; once you no longer need the old vault, delete it with: security delete-generic-password -s sesh-sqlite-encryption-key", err)
 	}
 	return fmt.Errorf("%w. If passwords.key was replaced, restore the original", err)
 }

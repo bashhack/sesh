@@ -22,8 +22,8 @@ const keyCheckPlaintext = "sesh vault key check v1"
 // uses it to refuse a key that can't open the vault before anything is
 // read or written.
 //
-// The master password is the only key source now; a vault that recorded
-// "keychain" kept its key in the macOS Keychain, which sesh no longer reads.
+// Every vault records "password". One that recorded "keychain" kept its key
+// in the macOS Keychain, which sesh doesn't read.
 func migrateV2(tx *sql.Tx) error {
 	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS vault_key (
 		id         INTEGER PRIMARY KEY CHECK (id = 1),
