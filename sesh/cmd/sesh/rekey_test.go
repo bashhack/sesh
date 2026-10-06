@@ -82,7 +82,12 @@ func seedStore(t *testing.T, env *rekeyTestEnv, ks database.KeySource, entries m
 
 func populatePasswordStore(t *testing.T, env *rekeyTestEnv, entries map[string]string) {
 	t.Helper()
-	seedStore(t, env, resolvePasswordPrompt().newSource(env.dbPath), entries)
+	// A new vault gets the configured settings, as a first run's does.
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedStore(t, env, resolvePasswordPrompt().withKDF(cfg.KDF()).newSource(env.dbPath), entries)
 }
 
 // readEntries opens the vault with ks and returns the secrets of the

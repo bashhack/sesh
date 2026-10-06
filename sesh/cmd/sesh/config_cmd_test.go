@@ -180,3 +180,16 @@ func TestAgentDaemon_TimeoutsFromConfigFile(t *testing.T) {
 		t.Fatal("daemon still running after stop")
 	}
 }
+
+// The configured Argon2id settings reach encrypted exports.
+func TestAppSettings_EncryptedExportsUseTheConfiguredKDF(t *testing.T) {
+	useConfigFile(t, "[master_password]\nmemory = \"20MiB\"\n")
+	t.Setenv(config.EnvKDFMemory, "")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := appSettingsFrom(cfg).KDF; got != cfg.KDF() || got.Memory != 20*1024 {
+		t.Errorf("app settings KDF = %+v, want the configured %+v", got, cfg.KDF())
+	}
+}

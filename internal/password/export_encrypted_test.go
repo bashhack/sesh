@@ -27,7 +27,7 @@ func TestExportImportEncrypted_RoundTrip(t *testing.T) {
 
 	var buf bytes.Buffer
 	password := []byte("my-export-password")
-	count, err := mgr.ExportEncrypted(&buf, ExportOptions{}, password)
+	count, err := mgr.ExportEncrypted(&buf, ExportOptions{KDF: kdf.Minimum()}, password)
 	if err != nil {
 		t.Fatalf("ExportEncrypted: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestImportEncrypted_WrongPassword(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if _, err := mgr.ExportEncrypted(&buf, ExportOptions{}, []byte("correct-password")); err != nil {
+	if _, err := mgr.ExportEncrypted(&buf, ExportOptions{KDF: kdf.Minimum()}, []byte("correct-password")); err != nil {
 		t.Fatal(err)
 	}
 

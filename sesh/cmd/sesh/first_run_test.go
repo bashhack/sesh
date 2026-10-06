@@ -8,6 +8,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/testutil"
@@ -20,6 +21,7 @@ func interactivePrompt(t *testing.T, passwords ...string) passwordPromptConfig {
 	i := 0
 	return passwordPromptConfig{
 		interactive: true,
+		kdf:         kdf.Minimum(),
 		prompt: func(p string) ([]byte, error) {
 			if i >= len(passwords) {
 				t.Errorf("unexpected prompt %q", p)
@@ -101,7 +103,7 @@ func TestFirstRun_FromEnvIsQuietAndSkipsTheAgent(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "passwords.db")
 
 	restore := testutil.RedirectStderr(t)
-	oracle, err := buildKeySource(dbPath)
+	oracle, err := buildKeySourceWith(dbPath, resolvePasswordPrompt().withKDF(kdf.Minimum()))
 	stderr := restore()
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +154,7 @@ func TestForgottenPasswordHint(t *testing.T) {
 	t.Run("scripted", func(t *testing.T) {
 		t.Setenv("SESH_AUTH_SOCK", tempAgentSocket(t))
 		t.Setenv("SESH_MASTER_PASSWORD", "a-wrong-one")
-		_, err := buildKeySource(dbPath)
+		_, err := buildKeySourceWith(dbPath, resolvePasswordPrompt().withKDF(kdf.Minimum()))
 		if err == nil || strings.Contains(err.Error(), "forgotten") || !errors.Is(err, database.ErrWrongPassword) {
 			t.Fatalf("err = %v, want the plain wrong-password error", err)
 		}

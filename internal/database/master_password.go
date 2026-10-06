@@ -26,7 +26,8 @@ type PasswordPromptFunc func(prompt string) ([]byte, error)
 type MasterPasswordSource struct {
 	// sf collapses concurrent slow-path Gets into a single Argon2id
 	// derivation. Without it, N goroutines arriving with an empty cache
-	// would each fire ~64 MiB of Argon2id work in parallel.
+	// would each run a full Argon2id derivation, at the key record's
+	// settings, in parallel.
 	sf         singleflight.Group
 	promptFunc PasswordPromptFunc
 	// newPasswordCheck vets a new master password before it's confirmed;

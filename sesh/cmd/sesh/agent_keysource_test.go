@@ -18,6 +18,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/secure"
 )
 
@@ -155,7 +156,7 @@ func TestBuildKeySource_WrongPasswordFails(t *testing.T) {
 	startTestAgent(t)
 	t.Setenv("SESH_MASTER_PASSWORD", "not-the-password")
 
-	_, err := buildKeySource(filepath.Join(dir, "passwords.db"))
+	_, err := buildKeySourceWith(filepath.Join(dir, "passwords.db"), resolvePasswordPrompt().withKDF(kdf.Minimum()))
 	if err == nil || !strings.Contains(err.Error(), "wrong master password") {
 		t.Fatalf("err = %v, want wrong master password", err)
 	}
@@ -211,12 +212,12 @@ func TestBuildKeySource_EnvPasswordBypassesAgent(t *testing.T) {
 
 	// The unlocked agent must not let a wrong env password through.
 	t.Setenv("SESH_MASTER_PASSWORD", "not-the-password")
-	if _, err := buildKeySource(filepath.Join(dir, "passwords.db")); err == nil || !strings.Contains(err.Error(), "wrong master password") {
+	if _, err := buildKeySourceWith(filepath.Join(dir, "passwords.db"), resolvePasswordPrompt().withKDF(kdf.Minimum())); err == nil || !strings.Contains(err.Error(), "wrong master password") {
 		t.Fatalf("wrong env password: err = %v, want wrong master password", err)
 	}
 
 	t.Setenv("SESH_MASTER_PASSWORD", "correct-horse")
-	ks, err = buildKeySource(filepath.Join(dir, "passwords.db"))
+	ks, err = buildKeySourceWith(filepath.Join(dir, "passwords.db"), resolvePasswordPrompt().withKDF(kdf.Minimum()))
 	if err != nil {
 		t.Fatal(err)
 	}

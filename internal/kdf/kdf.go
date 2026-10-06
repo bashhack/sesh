@@ -50,6 +50,11 @@ func Default() Params {
 	return Params{Time: DefaultTime, Memory: DefaultMemoryKiB, Threads: DefaultThreads, KeyLen: KeyLen}
 }
 
+// Minimum returns the least settings that can be configured.
+func Minimum() Params {
+	return Params{Time: MinTime, Memory: MinMemoryKiB, Threads: MinThreads, KeyLen: KeyLen}
+}
+
 // CheckBounds refuses settings read from a vault or an export that are zero
 // or above the maximums, or a key length other than KeyLen.
 func (p Params) CheckBounds() error {

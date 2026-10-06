@@ -158,10 +158,8 @@ func Load(o Overrides) (*Config, error) {
 		AgentIdleTimeout:   Setting[time.Duration]{Value: agent.DefaultIdleTimeout},
 		AgentMaxLifetime:   Setting[time.Duration]{Value: agent.DefaultMaxLifetime},
 		AuditRetentionDays: Setting[int]{Value: DefaultAuditRetentionDays},
-		KDFMemory:          Setting[uint32]{Value: kdf.DefaultMemoryKiB},
-		KDFTime:            Setting[uint32]{Value: kdf.DefaultTime},
-		KDFThreads:         Setting[uint8]{Value: kdf.DefaultThreads},
 	}
+	c.defaultKDF()
 	if err := c.applyFile(); err != nil {
 		return nil, err
 	}
@@ -272,6 +270,28 @@ func (c *Config) applyEnv() error {
 			return err
 		}
 	}
+	return c.applyKDFEnv()
+}
+
+// KDFFromEnv resolves the Argon2id settings from the environment and the
+// defaults alone, ignoring any config file: what sesh init, which writes a
+// file without them, creates a vault with.
+func KDFFromEnv() (kdf.Params, error) {
+	var c Config
+	c.defaultKDF()
+	if err := c.applyKDFEnv(); err != nil {
+		return kdf.Params{}, err
+	}
+	return c.KDF(), nil
+}
+
+func (c *Config) defaultKDF() {
+	c.KDFMemory = Setting[uint32]{Value: kdf.DefaultMemoryKiB}
+	c.KDFTime = Setting[uint32]{Value: kdf.DefaultTime}
+	c.KDFThreads = Setting[uint8]{Value: kdf.DefaultThreads}
+}
+
+func (c *Config) applyKDFEnv() error {
 	if v, ok := os.LookupEnv(EnvKDFMemory); ok && v != "" {
 		if err := setKDFMemory(&c.KDFMemory, v, FromEnv, EnvKDFMemory); err != nil {
 			return err

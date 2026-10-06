@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/testutil"
 	"github.com/bashhack/sesh/internal/touchid"
@@ -105,7 +106,7 @@ func TestOpenStore_RefusesAVaultSwappedInAfterUnlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := filepath.Join(t.TempDir(), "passwords.db")
-	if _, err := database.NewMasterPasswordSource(other, func(string) ([]byte, error) { return []byte("second-password-1234"), nil }).GetEncryptionKey(); err != nil {
+	if _, err := database.NewMasterPasswordSource(other, func(string) ([]byte, error) { return []byte("second-password-1234"), nil }, database.WithKDFParams(kdf.Minimum())).GetEncryptionKey(); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(other, env.dbPath); err != nil {

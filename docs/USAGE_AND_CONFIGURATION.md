@@ -179,6 +179,7 @@ Ready. Run `sesh config` to see your settings.
 
 - For scripts, give the location as a flag: `sesh init --db-path ~/vaults/sesh.db`. The master password for the new vault then comes from `SESH_MASTER_PASSWORD`.
 - An existing config file is never replaced without `--force`.
+- A new vault gets the `master_password` settings from `SESH_KDF_*`, or the defaults: the file init writes doesn't set them, so the vault matches what `sesh config` shows afterwards. Add them to the file later and run `sesh --rekey` to apply them.
 - An existing vault at the chosen location is opened, not recreated. If it can't be opened (it's damaged, say), init stops and writes nothing.
 
 `sesh config` prints each effective setting and where it came from:

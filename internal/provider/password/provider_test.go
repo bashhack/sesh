@@ -267,7 +267,8 @@ func stubScanQRCodeFull(t *testing.T, info qrcode.TOTPInfo, err error) {
 // stdin. Prompts still go to the real os.Stderr — tests don't assert on
 // prompt text, so there's no need to capture it.
 func newTestProvider(store vault.Store) (*Provider, *bytes.Buffer) {
-	p := NewProvider(store)
+	// Encrypted exports use the cheapest settings sesh accepts.
+	p := NewProvider(store).WithExportKDF(kdf.Minimum())
 	var stdout bytes.Buffer
 	p.stdout = &stdout
 	p.stdin = strings.NewReader("")
