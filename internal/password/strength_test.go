@@ -1,6 +1,9 @@
 package password
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestIsWeak(t *testing.T) {
 	for _, tt := range []struct {
@@ -16,6 +19,9 @@ func TestIsWeak(t *testing.T) {
 		{"mycorpportal2026", nil, false},
 		{"mycorpportal2026", []string{"mycorpportal"}, true},
 		{"alicejohnson88", []string{"github", "alicejohnson"}, true},
+		// A name of several words counts word by word and run together.
+		{"mybank2024", nil, false},
+		{"mybank2024", []string{"My Bank"}, true},
 	} {
 		if got := IsWeak([]byte(tt.pw), tt.hints...); got != tt.want {
 			t.Errorf("IsWeak(%q, %q) = %v, want %v", tt.pw, tt.hints, got, tt.want)
@@ -38,5 +44,26 @@ func TestGeneratedPasswordsArentWeak(t *testing.T) {
 				t.Fatalf("generated %q (symbols %v) counts as weak", pw, symbols)
 			}
 		}
+	}
+}
+
+// zxcvbn slows down sharply with length; a long password, generated or
+// pasted, must still be rated at once.
+func TestIsWeak_LongPasswordsAreQuick(t *testing.T) {
+	opts := DefaultGenerateOptions()
+	opts.Length = 2048
+	pw, err := GeneratePassword(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan bool, 1)
+	go func() { done <- IsWeak(pw) }()
+	select {
+	case weak := <-done:
+		if weak {
+			t.Error("a 2048-character random password counts as weak")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rating a 2048-character password took over 2s")
 	}
 }
