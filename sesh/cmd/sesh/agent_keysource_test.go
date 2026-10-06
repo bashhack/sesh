@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,27 +30,35 @@ func closeKeySource(t *testing.T, ks database.CryptoOracle) {
 	c.Close()
 }
 
-func writeLightSidecar(t *testing.T, dir, password string) {
+// vaultIn is the vault file in dir.
+func vaultIn(dir string) string { return filepath.Join(dir, "passwords.db") }
+
+// writeLightVault gives the vault in dir a key record for password, with
+// cheap Argon2id settings, replacing any it has.
+func writeLightVault(t *testing.T, dir, password string) {
 	t.Helper()
 	params := database.Argon2idParams{Time: 1, Memory: 8, Threads: 1, KeyLen: 32}
-	salt := []byte("0123456789abcdef")
+	salt := []byte("0123456789abcdef" + password)
 	key := database.DeriveKey([]byte(password), salt, params)
 	t.Cleanup(func() { secure.SecureZeroBytes(key) })
 	verify, err := database.Encrypt(key, []byte(database.VerifyPlaintext))
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := json.MarshalIndent(map[string]any{
-		"version":   1,
-		"salt":      base64.StdEncoding.EncodeToString(salt),
-		"algorithm": "argon2id",
-		"params":    params,
-		"verify":    base64.StdEncoding.EncodeToString(verify),
-	}, "", "  ")
+	store, err := database.Open(vaultIn(dir), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "passwords.key"), body, 0o600); err != nil {
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", vaultIn(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test cleanup
+	if _, err := db.Exec(`INSERT OR REPLACE INTO vault_key (id, salt, kdf, kdf_params, verify, created_at) VALUES (1, ?, 'argon2id', ?, ?, CURRENT_TIMESTAMP)`,
+		salt, params.MarshalParams(), verify); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -82,7 +90,7 @@ func startTestAgent(t *testing.T) {
 
 func TestKeySourceFromAgent_PromptsOnce(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "correct-horse")
+	writeLightVault(t, dir, "correct-horse")
 	startTestAgent(t)
 
 	var prompts int
@@ -92,7 +100,7 @@ func TestKeySourceFromAgent_PromptsOnce(t *testing.T) {
 			return []byte("correct-horse"), nil
 		},
 	}
-	ks, _, err := keySourceFromAgent(dir, cfg)
+	ks, _, err := keySourceFromAgent(vaultIn(dir), cfg)
 	if err != nil || ks == nil {
 		t.Fatalf("first keySourceFromAgent: %v", err)
 	}
@@ -101,7 +109,7 @@ func TestKeySourceFromAgent_PromptsOnce(t *testing.T) {
 		t.Fatalf("prompts = %d, want 1", prompts)
 	}
 
-	ks, _, err = keySourceFromAgent(dir, cfg)
+	ks, _, err = keySourceFromAgent(vaultIn(dir), cfg)
 	if err != nil || ks == nil {
 		t.Fatalf("second keySourceFromAgent: %v", err)
 	}
@@ -113,12 +121,12 @@ func TestKeySourceFromAgent_PromptsOnce(t *testing.T) {
 
 func TestKeySourceFromAgent_WrongPasswordDoesNotFallBack(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "correct-horse")
+	writeLightVault(t, dir, "correct-horse")
 	startTestAgent(t)
 
 	// A nil error would send buildKeySource to the direct source for a
 	// second round of prompts; the agent's verdict has to stand.
-	ks, _, err := keySourceFromAgent(dir, fixedPrompt("not-the-password"))
+	ks, _, err := keySourceFromAgent(vaultIn(dir), fixedPrompt("not-the-password"))
 	if ks != nil {
 		t.Fatal("keySourceFromAgent returned a source for a wrong password")
 	}
@@ -129,12 +137,12 @@ func TestKeySourceFromAgent_WrongPasswordDoesNotFallBack(t *testing.T) {
 
 func TestKeySourceFromAgent_WrongPasswordMessageAfterRetries(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "correct-horse")
+	writeLightVault(t, dir, "correct-horse")
 	startTestAgent(t)
 
 	cfg := fixedPrompt("not-the-password")
 	cfg.interactive = true
-	_, _, err := keySourceFromAgent(dir, cfg)
+	_, _, err := keySourceFromAgent(vaultIn(dir), cfg)
 	want := fmt.Sprintf("wrong master password (after %d attempts)", interactivePasswordAttempts)
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v, want %q", err, want)
@@ -143,7 +151,7 @@ func TestKeySourceFromAgent_WrongPasswordMessageAfterRetries(t *testing.T) {
 
 func TestBuildKeySource_WrongPasswordFails(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "correct-horse")
+	writeLightVault(t, dir, "correct-horse")
 	startTestAgent(t)
 	t.Setenv("SESH_MASTER_PASSWORD", "not-the-password")
 
@@ -159,7 +167,7 @@ func fixedPrompt(pw string) passwordPromptConfig {
 
 func TestKeySourceFromAgent_SpawnFailureFallsBack(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "correct-horse")
+	writeLightVault(t, dir, "correct-horse")
 	t.Setenv("SESH_AUTH_SOCK", tempAgentSocket(t))
 
 	orig := agent.AgentSpawnCommand
@@ -173,7 +181,7 @@ func TestKeySourceFromAgent_SpawnFailureFallsBack(t *testing.T) {
 	var ks database.CryptoOracle
 	var err error
 	stderr := withCapturedStderr(t, func() {
-		ks, _, err = keySourceFromAgent(dir, fixedPrompt("correct-horse"))
+		ks, _, err = keySourceFromAgent(vaultIn(dir), fixedPrompt("correct-horse"))
 	})
 	if ks != nil || err != nil {
 		t.Fatalf("keySourceFromAgent = (%v, %v), want (nil, nil)", ks, err)
@@ -185,10 +193,10 @@ func TestKeySourceFromAgent_SpawnFailureFallsBack(t *testing.T) {
 
 func TestBuildKeySource_EnvPasswordBypassesAgent(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "correct-horse")
+	writeLightVault(t, dir, "correct-horse")
 	startTestAgent(t)
 	// Unlock the agent for this vault, as an earlier interactive run would.
-	ks, _, err := keySourceFromAgent(dir, fixedPrompt("correct-horse"))
+	ks, _, err := keySourceFromAgent(vaultIn(dir), fixedPrompt("correct-horse"))
 	if err != nil || ks == nil {
 		t.Fatalf("unlock agent: %v", err)
 	}
@@ -220,7 +228,7 @@ func TestBuildKeySource_EnvPasswordBypassesAgent(t *testing.T) {
 
 func TestKeySourceFromAgent_RetriesWrongPassword(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "correct-horse")
+	writeLightVault(t, dir, "correct-horse")
 	startTestAgent(t)
 
 	var prompts []string
@@ -234,7 +242,7 @@ func TestKeySourceFromAgent_RetriesWrongPassword(t *testing.T) {
 			return []byte("correct-horse"), nil
 		},
 	}
-	ks, _, err := keySourceFromAgent(dir, cfg)
+	ks, _, err := keySourceFromAgent(vaultIn(dir), cfg)
 	if err != nil || ks == nil {
 		t.Fatalf("keySourceFromAgent: %v", err)
 	}
@@ -251,9 +259,9 @@ func TestKeySourceFromAgent_RetriesWrongPassword(t *testing.T) {
 	}
 }
 
-func TestKeySourceFromAgent_RePromptsWhenSidecarChanges(t *testing.T) {
+func TestKeySourceFromAgent_RePromptsWhenTheKeyRecordChanges(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "password-a")
+	writeLightVault(t, dir, "password-a")
 	startTestAgent(t)
 
 	var prompts int
@@ -266,7 +274,7 @@ func TestKeySourceFromAgent_RePromptsWhenSidecarChanges(t *testing.T) {
 			return []byte("password-b"), nil
 		},
 	}
-	ks, _, err := keySourceFromAgent(dir, cfg)
+	ks, _, err := keySourceFromAgent(vaultIn(dir), cfg)
 	if err != nil || ks == nil {
 		t.Fatalf("first keySourceFromAgent: %v", err)
 	}
@@ -275,8 +283,8 @@ func TestKeySourceFromAgent_RePromptsWhenSidecarChanges(t *testing.T) {
 		t.Fatalf("prompts = %d, want 1", prompts)
 	}
 
-	writeLightSidecar(t, dir, "password-b")
-	ks, _, err = keySourceFromAgent(dir, cfg)
+	writeLightVault(t, dir, "password-b")
+	ks, _, err = keySourceFromAgent(vaultIn(dir), cfg)
 	if err != nil || ks == nil {
 		t.Fatalf("keySourceFromAgent after rotation: %v", err)
 	}
@@ -289,8 +297,8 @@ func TestKeySourceFromAgent_RePromptsWhenSidecarChanges(t *testing.T) {
 func TestKeySourceFromAgent_EncryptUsesOriginalUnlockID(t *testing.T) {
 	dirA := t.TempDir()
 	dirB := t.TempDir()
-	writeLightSidecar(t, dirA, "password-a")
-	writeLightSidecar(t, dirB, "password-b")
+	writeLightVault(t, dirA, "password-a")
+	writeLightVault(t, dirB, "password-b")
 	startTestAgent(t)
 
 	passwords := []string{"password-a", "password-b"}
@@ -302,12 +310,12 @@ func TestKeySourceFromAgent_EncryptUsesOriginalUnlockID(t *testing.T) {
 			return []byte(pw), nil
 		},
 	}
-	ksA, _, err := keySourceFromAgent(dirA, cfg)
+	ksA, _, err := keySourceFromAgent(vaultIn(dirA), cfg)
 	if err != nil || ksA == nil {
 		t.Fatalf("vault A: %v", err)
 	}
 	defer closeKeySource(t, ksA)
-	ksB, _, err := keySourceFromAgent(dirB, cfg)
+	ksB, _, err := keySourceFromAgent(vaultIn(dirB), cfg)
 	if err != nil || ksB == nil {
 		t.Fatalf("vault B: %v", err)
 	}
@@ -337,13 +345,13 @@ func TestKeySourceFromAgent_EncryptUsesOriginalUnlockID(t *testing.T) {
 	}
 }
 
-func TestKeySourceFromAgent_MissingSidecarIsSilent(t *testing.T) {
+func TestKeySourceFromAgent_NoVaultIsSilent(t *testing.T) {
 	dir := t.TempDir()
 	sock := tempAgentSocket(t)
 	t.Setenv("SESH_AUTH_SOCK", sock)
 	orig := agent.AgentSpawnCommand
 	agent.AgentSpawnCommand = func(string) (*exec.Cmd, error) {
-		t.Error("started an agent for a data directory with no sidecar")
+		t.Error("started an agent for a vault that doesn't exist yet")
 		return nil, errors.New("spawn disabled")
 	}
 	t.Cleanup(func() { agent.AgentSpawnCommand = orig })
@@ -351,9 +359,9 @@ func TestKeySourceFromAgent_MissingSidecarIsSilent(t *testing.T) {
 	var ks database.CryptoOracle
 	var err error
 	stderr := withCapturedStderr(t, func() {
-		ks, _, err = keySourceFromAgent(dir, passwordPromptConfig{
+		ks, _, err = keySourceFromAgent(vaultIn(dir), passwordPromptConfig{
 			prompt: func(string) ([]byte, error) {
-				t.Error("prompted without a sidecar")
+				t.Error("prompted without a vault")
 				return nil, errors.New("prompted")
 			},
 		})
@@ -391,7 +399,7 @@ func withCapturedStderr(t *testing.T, fn func()) string {
 
 func TestKeySourceFromAgent_UnlockFailureReusesTypedPassword(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "correct-horse")
+	writeLightVault(t, dir, "correct-horse")
 	startFailingUnlockAgent(t)
 
 	prompts := 0
@@ -403,7 +411,7 @@ func TestKeySourceFromAgent_UnlockFailureReusesTypedPassword(t *testing.T) {
 	var typed []byte
 	var err error
 	stderr := withCapturedStderr(t, func() {
-		oracle, typed, err = keySourceFromAgent(dir, cfg)
+		oracle, typed, err = keySourceFromAgent(vaultIn(dir), cfg)
 	})
 	if oracle != nil || err != nil {
 		t.Fatalf("keySourceFromAgent = (%v, %v), want fallback", oracle, err)
@@ -416,7 +424,7 @@ func TestKeySourceFromAgent_UnlockFailureReusesTypedPassword(t *testing.T) {
 	}
 
 	// The fallback source must use the typed password, not ask again.
-	mps := cfg.withTypedPassword(typed).newSource(dir)
+	mps := cfg.withTypedPassword(typed).newSource(vaultIn(dir))
 	defer mps.Close()
 	key, err := mps.GetEncryptionKey()
 	if err != nil {

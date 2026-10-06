@@ -1,21 +1,11 @@
 package database
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"time"
 )
-
-// migrateV3 indexes the audit log by time, so pruning old events on every
-// open doesn't scan the whole table.
-func migrateV3(tx *sql.Tx) error {
-	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at)`); err != nil {
-		return fmt.Errorf("migration v3: %w", err)
-	}
-	return nil
-}
 
 // AuditEvents returns the newest limit audit events, newest first; limit 0
 // returns them all.

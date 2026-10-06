@@ -60,7 +60,7 @@ func opensVault(t *testing.T, k recovery.Key, dataDir string) {
 	if err != nil {
 		t.Fatalf("recovery file: %v", err)
 	}
-	mat, err := database.ReadUnlockMaterial(dataDir)
+	mat, err := database.ReadUnlockMaterial(vaultIn(dataDir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestRotate_RewrapsRecoveryKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mat, err := database.ReadUnlockMaterial(env.dataDir)
+	mat, err := database.ReadUnlockMaterial(env.dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func recoverableVault(t *testing.T) (*rekeyTestEnv, recovery.Key) {
 		t.Fatal(err)
 	}
 	defer closeAgentConn(conn)
-	mat, err := database.ReadUnlockMaterial(env.dataDir)
+	mat, err := database.ReadUnlockMaterial(env.dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func recoverableVault(t *testing.T) (*rekeyTestEnv, recovery.Key) {
 // passwordOpens reports whether password opens the vault in dataDir.
 func passwordOpens(t *testing.T, dataDir, password string) bool {
 	t.Helper()
-	mat, err := database.ReadUnlockMaterial(dataDir)
+	mat, err := database.ReadUnlockMaterial(vaultIn(dataDir))
 	if err != nil {
 		t.Fatal(err)
 	}

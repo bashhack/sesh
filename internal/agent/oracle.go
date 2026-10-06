@@ -22,7 +22,7 @@ type Oracle struct {
 }
 
 // NewOracle wraps a connection to an agent that holds this vault's key.
-// unlockID is the vault's id (UnlockID of its sidecar verify blob); the
+// unlockID is the vault's id (UnlockID of its verify blob); the
 // agent refuses requests once it holds a different key. The caller
 // transfers ownership of conn.
 func NewOracle(conn *Conn, unlockID string) *Oracle {

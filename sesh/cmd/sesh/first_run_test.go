@@ -75,7 +75,7 @@ func TestFirstRun_ExplainsThenUnlocksTheAgent(t *testing.T) {
 	}
 
 	// The agent got the new password: the next command asks for nothing.
-	mat, err := database.ReadUnlockMaterial(filepath.Dir(dbPath))
+	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestFirstRun_FromEnvIsQuietAndSkipsTheAgent(t *testing.T) {
 
 func TestForgottenPasswordHint(t *testing.T) {
 	dir := t.TempDir()
-	writeLightSidecar(t, dir, "correct-horse")
+	writeLightVault(t, dir, "correct-horse")
 	dbPath := filepath.Join(dir, "passwords.db")
 
 	t.Run("interactive", func(t *testing.T) {
@@ -199,7 +199,7 @@ func TestFirstRun_AWeakMasterPasswordCanBeReplaced(t *testing.T) {
 		t.Fatalf("first run: %v", err)
 	}
 	closeKeySource(t, oracle)
-	if _, err := database.NewMasterPasswordSource(dir, func(string) ([]byte, error) {
+	if _, err := database.NewMasterPasswordSource(dbPath, func(string) ([]byte, error) {
 		return []byte("correct horse battery staple"), nil
 	}).GetEncryptionKey(); err != nil {
 		t.Errorf("the replacement doesn't open the vault: %v", err)

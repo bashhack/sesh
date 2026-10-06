@@ -279,9 +279,6 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 		return nil, fmt.Errorf("create vault directory: %w", err)
 	}
 
-	if err := refuseNewKeyForExistingVault(dbPath); err != nil {
-		return nil, err
-	}
 	ks, err := buildKeySource(dbPath)
 	if err != nil {
 		return nil, err
@@ -295,9 +292,8 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 	return store, nil
 }
 
-// openStoreWith opens the store at dbPath over oracle and confirms oracle
-// holds the vault's key before returning, so nothing is read or written
-// with the wrong key. The store owns oracle once
+// openStoreWith opens the store at dbPath over oracle, which holds the key
+// checked against this vault's key record. The store owns oracle once
 // opened; if opening fails, oracle is closed here so an agent connection or
 // a cached master key doesn't outlive the failure.
 func openStoreWith(dbPath string, oracle database.CryptoOracle) (*database.Store, error) {
@@ -309,57 +305,24 @@ func openStoreWith(dbPath string, oracle database.CryptoOracle) (*database.Store
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	if err := store.CheckKey(); err != nil {
-		err = withKeyHint(err)
-		if closeErr := store.Close(); closeErr != nil {
-			return nil, fmt.Errorf("%w (close also failed: %v)", err, closeErr)
-		}
-		return nil, err
-	}
-
-	if err := store.InitKeyMetadata(); err != nil {
-		if closeErr := store.Close(); closeErr != nil {
-			return nil, fmt.Errorf("init key metadata: %w (close also failed: %v)", err, closeErr)
-		}
-		return nil, fmt.Errorf("init key metadata: %w", err)
-	}
-
 	return store, nil
 }
 
-// refuseNewKeyForExistingVault stops sesh from creating a new master key
-// next to a vault that already exists without passwords.key:
-// entries written under a new key would be unreadable with the vault's
-// real one.
-func refuseNewKeyForExistingVault(dbPath string) error {
-	sidecar := filepath.Join(filepath.Dir(dbPath), sidecarFile)
-	switch _, err := os.Stat(sidecar); {
-	case err == nil:
-		return nil
-	case !errors.Is(err, os.ErrNotExist):
-		return fmt.Errorf("check for the vault's key file %s: %w", sidecar, err)
+// requireVault returns nil when the vault at dbPath exists, missing as the
+// error when it doesn't yet, or why its key record can't be read.
+func requireVault(dbPath, missing string) error {
+	_, err := database.ReadUnlockMaterial(dbPath)
+	if errors.Is(err, database.ErrNoVault) {
+		return errors.New(missing)
 	}
-	switch _, err := os.Stat(dbPath); {
-	case errors.Is(err, os.ErrNotExist):
-		return nil // no vault yet: the first run creates both
-	case err != nil:
-		return fmt.Errorf("check for an existing vault at %s: %w", dbPath, err)
-	}
-	// A vault whose key was in the macOS Keychain has no key file; it
-	// records that, so it can be named instead of guessed at.
-	if src, rerr := database.RecordedKeySource(dbPath); rerr == nil && src == "keychain" {
-		return withKeyHint(&database.WrongKeyError{VaultSource: src})
-	}
-	return fmt.Errorf("a vault exists at %s, but its key file %s is missing. "+
-		"If passwords.key was lost, restore it from a backup",
-		dbPath, sidecar)
+	return err
 }
 
-// sidecarMissing reports whether dataDir has no passwords.key yet: the
-// next password-mode open creates the vault's key.
-func sidecarMissing(dataDir string) bool {
-	_, err := os.Stat(filepath.Join(dataDir, sidecarFile))
-	return errors.Is(err, os.ErrNotExist)
+// vaultMissing reports whether there's no vault at dbPath yet: the next
+// open creates it.
+func vaultMissing(dbPath string) bool {
+	_, err := database.ReadUnlockMaterial(dbPath)
+	return errors.Is(err, database.ErrNoVault)
 }
 
 // vaultCreationNotice is shown before the first "Create master password"
@@ -389,9 +352,9 @@ func tildePath(p string) string {
 // unlockAgentWith gives a just-created vault's password to the agent, so
 // the next command doesn't ask for it. pw is zeroed. A failure only warns:
 // this command already has the key.
-func unlockAgentWith(dataDir string, pw []byte) {
+func unlockAgentWith(dbPath string, pw []byte) {
 	defer secure.SecureZeroBytes(pw)
-	mat, err := database.ReadUnlockMaterial(dataDir)
+	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sesh agent not unlocked: %v\n", err) //nolint:errcheck // best-effort warning
 		return
@@ -421,21 +384,9 @@ func withForgottenPasswordHint(err error, cfg passwordPromptConfig, dataDir stri
 		"   from an encrypted export, see \"Forgotten master password\" in the usage docs", err)
 }
 
-// withKeyHint adds what to do next to a database.WrongKeyError.
-func withKeyHint(err error) error {
-	var wk *database.WrongKeyError
-	if !errors.As(err, &wk) {
-		return err
-	}
-	if wk.VaultSource == "keychain" {
-		return fmt.Errorf("%w: start a new vault by moving this one aside. Its key is still in your login Keychain; once you no longer need the old vault, delete it with: security delete-generic-password -s sesh-sqlite-encryption-key", err)
-	}
-	return fmt.Errorf("%w. If passwords.key was replaced, restore the original", err)
-}
-
 // buildKeySource returns the CryptoOracle the store encrypts through. It
-// uses the agent when it can serve this data directory, so later commands
-// do not prompt again. A missing sidecar, or an agent that cannot be
+// uses the agent when it can serve this vault, so later commands do not
+// prompt again. A vault not created yet, or an agent that cannot be
 // reached or fails to unlock, falls back to MasterPasswordSource, reusing
 // a password already typed. A wrong password is retried against the agent
 // and is returned to the caller when the attempt budget is spent. With
@@ -449,7 +400,7 @@ func buildKeySource(dbPath string) (database.CryptoOracle, error) {
 func buildKeySourceWith(dbPath string, cfg passwordPromptConfig) (database.CryptoOracle, error) {
 	dataDir := filepath.Dir(dbPath)
 	if !cfg.fromEnv {
-		oracle, typed, err := keySourceFromAgent(dataDir, cfg)
+		oracle, typed, err := keySourceFromAgent(dbPath, cfg)
 		if err != nil {
 			return nil, withForgottenPasswordHint(err, cfg, dataDir)
 		}
@@ -465,14 +416,14 @@ func buildKeySourceWith(dbPath string, cfg passwordPromptConfig) (database.Crypt
 	// first prompt, and the agent gets the new password afterwards, so
 	// the next command doesn't ask for it again.
 	var created []byte
-	firstRun := !cfg.fromEnv && sidecarMissing(dataDir)
+	firstRun := !cfg.fromEnv && vaultMissing(dbPath)
 	if firstRun {
 		fmt.Fprint(os.Stderr, vaultCreationNotice(dbPath)) //nolint:errcheck // best-effort notice
 		cfg = cfg.keepingLastPassword(&created)
 	}
 	defer func() { secure.SecureZeroBytes(created) }()
 
-	mps := cfg.newSource(dataDir)
+	mps := cfg.newSource(dbPath)
 	// Eagerly unlock so every operation — including metadata-only reads
 	// like --list and --delete — requires the master password. Without
 	// this, the store would only prompt on decryption, letting an
@@ -484,28 +435,29 @@ func buildKeySourceWith(dbPath string, cfg passwordPromptConfig) (database.Crypt
 	}
 	secure.SecureZeroBytes(key)
 	if firstRun {
-		unlockAgentWith(dataDir, created)
-		offerRecovery(cfg, dataDir)
-		offerTouchID(cfg, dataDir)
+		unlockAgentWith(dbPath, created)
+		offerRecovery(cfg, dbPath)
+		offerTouchID(cfg, dbPath)
 	}
 	return database.NewKeySourceOracle(mps), nil
 }
 
 // keySourceFromAgent connects to the agent and returns an oracle when the
-// agent can serve crypto for this data directory.
+// agent can serve crypto for the vault at dbPath.
 //
 // A nil oracle and nil error mean the caller should fall back to a direct
-// master-password source: this data directory has no usable sidecar yet,
+// master-password source: the vault has no usable key record yet,
 // or the agent could not be reached or failed during unlock. In the last
 // case typed holds the password the user already entered, so the fallback
 // can use it instead of prompting again; the caller must zero it. A
 // non-nil error means the command should stop: the password attempt
 // budget was spent, or the prompt itself failed. Wrong-password replies
 // stay on the agent for every attempt.
-func keySourceFromAgent(dataDir string, cfg passwordPromptConfig) (oracle database.CryptoOracle, typed []byte, err error) {
-	// The sidecar is a local read. Without one (first run) or with a
-	// corrupt one, the direct source takes over, so don't start an agent.
-	mat, err := database.ReadUnlockMaterial(dataDir)
+func keySourceFromAgent(dbPath string, cfg passwordPromptConfig) (oracle database.CryptoOracle, typed []byte, err error) {
+	// The key record is a local read. Without one (first run) or with a
+	// bad one, the direct source takes over, so don't start an agent.
+	dataDir := filepath.Dir(dbPath)
+	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		return nil, nil, nil
 	}
@@ -642,17 +594,11 @@ var terminalPasswordPrompt = func() passwordPromptConfig {
 	}
 }
 
-// newSource constructs a MasterPasswordSource using this config's prompt
-// and only enables the retry budget when the prompt is interactive.
-func (c passwordPromptConfig) newSource(dataDir string) *database.MasterPasswordSource {
-	return database.NewMasterPasswordSource(dataDir, c.prompt, c.options()...)
-}
-
-// newSourceAtPath is the rotation-friendly variant: caller specifies the
-// sidecar path explicitly so a "target" source can stage at e.g.
-// passwords.key.new while the canonical source still reads passwords.key.
-func (c passwordPromptConfig) newSourceAtPath(sidecarPath string) *database.MasterPasswordSource {
-	return database.NewMasterPasswordSourceAtPath(sidecarPath, c.prompt, c.options()...)
+// newSource constructs a MasterPasswordSource for the vault at dbPath
+// using this config's prompt, and only enables the retry budget when the
+// prompt is interactive.
+func (c passwordPromptConfig) newSource(dbPath string) *database.MasterPasswordSource {
+	return database.NewMasterPasswordSource(dbPath, c.prompt, c.options()...)
 }
 
 func (c passwordPromptConfig) options() []database.Option {

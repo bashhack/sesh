@@ -11,10 +11,10 @@ import (
 )
 
 // unlockTestAgent unlocks the agent at SESH_AUTH_SOCK with the vault's
-// current sidecar, as an interactive sesh run would.
+// current key record, as an interactive sesh run would.
 func unlockTestAgent(t *testing.T, env *rekeyTestEnv, password string) {
 	t.Helper()
-	mat, err := database.ReadUnlockMaterial(env.dataDir)
+	mat, err := database.ReadUnlockMaterial(env.dbPath)
 	if err != nil {
 		t.Fatalf("ReadUnlockMaterial: %v", err)
 	}

@@ -2,7 +2,6 @@ package database
 
 import (
 	"encoding/hex"
-	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -90,32 +89,5 @@ func TestEntryAAD_Golden(t *testing.T) {
 		if got := hex.EncodeToString(entryAAD(k)); got != want {
 			t.Errorf("entryAAD(%s) = %s, want %s", k, got, want)
 		}
-	}
-}
-
-// The vault's key check and an entry's secret are sealed with different
-// associated data, so neither decrypts in the other's place.
-func TestStore_KeyCheckAndEntriesDontStandInForEachOther(t *testing.T) {
-	s := newTestStore(t)
-	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
-	if err := s.Put(k, []byte("bank-password")); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CheckKey(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.db.Exec(`INSERT INTO entries (kind, service, username, encrypted_data, salt, created_at, updated_at)
-		SELECT 'password', 'check', '', check_data, check_salt, created_at, created_at FROM vault_key`); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := s.Get(vault.Key{Kind: vault.KindPassword, Service: "check"}); err == nil {
-		t.Errorf("the key check decrypted as an entry: %q", got)
-	}
-	if _, err := s.db.Exec(`UPDATE vault_key SET (check_data, check_salt) = (SELECT encrypted_data, salt FROM entries WHERE service = 'bank')`); err != nil {
-		t.Fatal(err)
-	}
-	var wk *WrongKeyError
-	if err := s.VerifyKey(); !errors.As(err, &wk) {
-		t.Errorf("VerifyKey with an entry as the key check = %v, want a WrongKeyError", err)
 	}
 }

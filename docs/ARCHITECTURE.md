@@ -199,9 +199,9 @@ Every entry lives in one encrypted vault, a SQLite file:
 - Audit log table tracking all access, modifications, and deletions
 - A master key derived from the master password (see below)
 - WAL mode for concurrent read safety
-- A vault key check (`vault_key` table) that refuses a key that can't open the vault before any read or write
+- The vault's key record (`vault_key` table): what the master password is turned into the key with
 
-**The master key.** `database.MasterPasswordSource` derives the 256-bit master encryption key from the master password via Argon2id. The KDF salt, Argon2id parameters, and a verification blob live in a 0600 sidecar file (`passwords.key`) next to the database. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. It works the same on macOS and Linux. In normal use the sesh agent holds the derived key and the store encrypts through it (`agent.Oracle`).
+**The master key.** `database.MasterPasswordSource` derives the 256-bit master encryption key from the master password via Argon2id. The KDF salt, Argon2id parameters, and a verification blob are the vault's key record, one row in the database's `vault_key` table, so the vault is one file. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. It works the same on macOS and Linux. In normal use the sesh agent holds the derived key and the store encrypts through it (`agent.Oracle`).
 
 `main.go`'s `buildKeySource(dbPath)` returns the agent's oracle when it can, and otherwise a `MasterPasswordSource` wrapped as one. The store only sees a `database.CryptoOracle`, so it doesn't know whether the agent or this process holds the key.
 
@@ -211,12 +211,11 @@ Every entry lives in one encrypted vault, a SQLite file:
 
 **SQLite Data Model**
 
-The vault stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` names entries by their key's text form (no foreign key, so audit history survives deleting an entry); `key_metadata` carries per-version KDF parameters so a future key rotation can decrypt older entries without losing them.
+The vault stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` names entries by their key's text form (no foreign key, so audit history survives deleting an entry); `vault_key` is the one row an unlock reads before any entry.
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 erDiagram
-    entries }o..|| key_metadata : "key_version (logical)"
     entries ||..o{ audit_log : "entry_id = kind/service[/username]"
 
     entries {
@@ -226,19 +225,18 @@ erDiagram
         TEXT username "unique with kind and service"
         BLOB encrypted_data "AES-256-GCM ciphertext"
         BLOB salt "per-entry, 16 bytes"
-        INTEGER key_version "→ key_metadata.version"
         TEXT settings "JSON: TOTP params, AWS MFA device"
         DATETIME created_at
         DATETIME updated_at
     }
 
-    key_metadata {
-        INTEGER version PK
-        TEXT algorithm "argon2id"
-        TEXT params "JSON: time/memory/threads/key_len"
-        BLOB salt "master-key salt"
+    vault_key {
+        INTEGER id PK "always 1"
+        BLOB salt "master-key salt, 32 bytes"
+        TEXT kdf "argon2id"
+        TEXT kdf_params "JSON: time/memory/threads/key_len"
+        BLOB verify "AES-256-GCM of a known constant"
         DATETIME created_at
-        BOOLEAN active
     }
 
     audit_log {

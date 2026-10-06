@@ -122,7 +122,8 @@ func enableTouchID(conn *agent.Conn, dataDir string, verify []byte) error {
 // offerTouchID asks once, right after a vault is created at a terminal,
 // whether to unlock it with Touch ID from now on. The agent must already
 // hold the new vault's key.
-func offerTouchID(cfg passwordPromptConfig, dataDir string) {
+func offerTouchID(cfg passwordPromptConfig, dbPath string) {
+	dataDir := filepath.Dir(dbPath)
 	if !cfg.interactive || cfg.confirm == nil || !touchIDAvailable() {
 		return
 	}
@@ -130,7 +131,7 @@ func offerTouchID(cfg passwordPromptConfig, dataDir string) {
 	if err != nil || !yes {
 		return
 	}
-	mat, err := database.ReadUnlockMaterial(dataDir)
+	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		note("warning: couldn't turn on Touch ID unlock (%v); try later with: sesh touchid enable", err)
 		return
@@ -175,7 +176,7 @@ func runTouchID(app *App, args []string) error {
 		state := "off"
 		if f, err := touchid.ReadFile(dataDir); err == nil {
 			state = "on"
-			if mat, merr := database.ReadUnlockMaterial(dataDir); merr == nil && f.UnlockID != agent.UnlockID(mat.Verify) {
+			if mat, merr := database.ReadUnlockMaterial(cfg.DBPath.Value); merr == nil && f.UnlockID != agent.UnlockID(mat.Verify) {
 				state = "out of date (turn it back on with: sesh touchid enable)"
 			} else if fingerprintsChanged(f) {
 				state = "out of date: your fingerprints changed (turn it back on with: sesh touchid enable)"
@@ -198,14 +199,11 @@ func runTouchID(app *App, args []string) error {
 		if !touchIDAvailable() {
 			return errors.New("touch ID isn't available here: this Mac needs a Touch ID sensor with an enrolled fingerprint, and sesh must run in your desktop session (not over SSH)")
 		}
-		if err := refuseNewKeyForExistingVault(cfg.DBPath.Value); err != nil {
+		if err := requireVault(cfg.DBPath.Value, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
 			return err
 		}
-		if sidecarMissing(dataDir) {
-			return errors.New("there's no vault yet: create it first, by running any sesh command or sesh init")
-		}
 		// Unlock the agent for this vault, asking for the password if needed.
-		oracle, typed, err := keySourceFromAgent(dataDir, resolvePasswordPrompt())
+		oracle, typed, err := keySourceFromAgent(cfg.DBPath.Value, resolvePasswordPrompt())
 		secure.SecureZeroBytes(typed)
 		if err != nil {
 			return err
@@ -216,7 +214,7 @@ func runTouchID(app *App, args []string) error {
 		if c, ok := oracle.(interface{ Close() }); ok {
 			c.Close()
 		}
-		mat, err := database.ReadUnlockMaterial(dataDir)
+		mat, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
 		if err != nil {
 			return err
 		}
@@ -238,7 +236,8 @@ func runTouchID(app *App, args []string) error {
 // changes: the new key is wrapped to the same Secure Enclave key, which
 // needs only its public half, so there's no prompt. It returns a line to
 // show, or "" when Touch ID unlock wasn't on.
-func rewrapTouchID(dataDir string, newKey []byte) string {
+func rewrapTouchID(dbPath string, newKey []byte) string {
+	dataDir := filepath.Dir(dbPath)
 	f, err := touchid.ReadFile(dataDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return ""
@@ -247,7 +246,7 @@ func rewrapTouchID(dataDir string, newKey []byte) string {
 		err = errors.New("the new key wasn't available")
 	}
 	if err == nil {
-		mat, merr := database.ReadUnlockMaterial(dataDir)
+		mat, merr := database.ReadUnlockMaterial(dbPath)
 		err = merr
 		if err == nil {
 			id := agent.UnlockID(mat.Verify)

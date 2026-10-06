@@ -2,7 +2,6 @@ package database
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -31,7 +30,27 @@ var ErrSecretTooLarge = errors.New("secret too large")
 // Open creates or opens the SQLite database at dbPath, runs any pending
 // migrations, and returns a ready-to-use Store.
 func Open(dbPath string, oracle CryptoOracle) (*Store, error) {
-	db, err := sql.Open("sqlite", fileURI(dbPath, "_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)"))
+	db, err := openDB(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{db: db, oracle: oracle, path: dbPath}, nil
+}
+
+// openDB opens the vault file at dbPath, creating it readable only by its
+// owner if it doesn't exist, and brings its schema up to date.
+func openDB(dbPath string) (*sql.DB, error) {
+	f, err := os.OpenFile(dbPath, os.O_CREATE|os.O_RDONLY, 0o600) //nolint:gosec // the user's own vault location
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+	// Another sesh may be writing: wait for it rather than fail, and take
+	// the write lock when a transaction starts, so two first runs can't
+	// both create the schema.
+	db, err := sql.Open("sqlite", fileURI(dbPath, "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)&_txlock=immediate"))
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -41,17 +60,12 @@ func Open(dbPath string, oracle CryptoOracle) (*Store, error) {
 	db.SetMaxOpenConns(1)
 
 	if err := applyMigrations(db); err != nil {
-		if errors.Is(err, ErrOldVault) {
-			_ = db.Close() //nolint:errcheck // the refusal is what matters
-			return nil, fmt.Errorf("%s: %w", dbPath, ErrOldVault)
-		}
 		if closeErr := db.Close(); closeErr != nil {
 			return nil, fmt.Errorf("apply migrations: %w (close also failed: %v)", err, closeErr)
 		}
 		return nil, fmt.Errorf("apply migrations: %w", err)
 	}
-
-	return &Store{db: db, oracle: oracle, path: dbPath}, nil
+	return db, nil
 }
 
 // fileURI is the SQLite address of the file at path, with query options.
@@ -79,67 +93,4 @@ func (s *Store) audit(eventType, entryID, detail string) {
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "audit log write failed: %v\n", err)
 	}
-}
-
-// --- Key metadata helpers (for future key rotation) ---
-
-// StoreKeyMetadata records key derivation parameters for the given key version.
-func (s *Store) StoreKeyMetadata(meta *KeyMetadata) error {
-	_, err := s.db.Exec(
-		`INSERT INTO key_metadata (version, algorithm, params, salt, created_at, active) VALUES (?, ?, ?, ?, ?, ?)`,
-		meta.Version, meta.Algorithm, meta.Params, meta.Salt, meta.CreatedAt, meta.Active,
-	)
-	if err != nil {
-		return fmt.Errorf("store key metadata: %w", err)
-	}
-	return nil
-}
-
-// GetActiveKeyMetadata returns the currently active key metadata.
-func (s *Store) GetActiveKeyMetadata() (*KeyMetadata, error) {
-	var m KeyMetadata
-	var paramsJSON string
-	err := s.db.QueryRow(
-		`SELECT version, algorithm, params, salt, created_at, active FROM key_metadata WHERE active = 1 ORDER BY version DESC LIMIT 1`,
-	).Scan(&m.Version, &m.Algorithm, &paramsJSON, &m.Salt, &m.CreatedAt, &m.Active)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get active key metadata: %w", err)
-	}
-	m.Params = paramsJSON
-	return &m, nil
-}
-
-// InitKeyMetadata creates the initial key metadata entry if none exists.
-// Called when the store is opened.
-func (s *Store) InitKeyMetadata() error {
-	existing, err := s.GetActiveKeyMetadata()
-	if err != nil {
-		return err
-	}
-	if existing != nil {
-		return nil // already initialised
-	}
-
-	salt, err := GenerateSalt(16)
-	if err != nil {
-		return err
-	}
-
-	params := DefaultArgon2idParams()
-	paramsJSON, err := json.Marshal(params)
-	if err != nil {
-		return fmt.Errorf("marshal argon2id params: %w", err)
-	}
-
-	return s.StoreKeyMetadata(&KeyMetadata{
-		Version:   1,
-		Algorithm: "argon2id",
-		Params:    string(paramsJSON),
-		Salt:      salt,
-		CreatedAt: time.Now().UTC(),
-		Active:    true,
-	})
 }

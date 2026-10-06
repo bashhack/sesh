@@ -113,7 +113,8 @@ func sameGroup(typed, want string) bool {
 // offerRecovery asks once, right after a vault is created at a terminal,
 // whether to make a recovery key. The agent must already hold the new
 // vault's key.
-func offerRecovery(cfg passwordPromptConfig, dataDir string) {
+func offerRecovery(cfg passwordPromptConfig, dbPath string) {
+	dataDir := filepath.Dir(dbPath)
 	if !cfg.interactive || cfg.confirm == nil || cfg.readLine == nil {
 		return
 	}
@@ -124,7 +125,7 @@ func offerRecovery(cfg passwordPromptConfig, dataDir string) {
 	failed := func(err error) {
 		note("warning: couldn't make a recovery key (%v); try later with: sesh recovery new", err)
 	}
-	mat, err := database.ReadUnlockMaterial(dataDir)
+	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		failed(err)
 		return
@@ -163,7 +164,7 @@ func runRecovery(app *App, args []string) error {
 		if err != nil {
 			return err
 		}
-		if mat, merr := database.ReadUnlockMaterial(dataDir); merr == nil && f.UnlockID != agent.UnlockID(mat.Verify) {
+		if mat, merr := database.ReadUnlockMaterial(cfg.DBPath.Value); merr == nil && f.UnlockID != agent.UnlockID(mat.Verify) {
 			return out("Recovery key: out of date, it doesn't open this vault. Make a new one with: sesh recovery new")
 		}
 		return out("Recovery key: set (made %s)", f.CreatedAt.Local().Format("2006-01-02 15:04"))
@@ -183,11 +184,8 @@ func runRecovery(app *App, args []string) error {
 		}
 		return out("Removed the recovery key; it no longer opens this vault.")
 	case "new":
-		if err := refuseNewKeyForExistingVault(cfg.DBPath.Value); err != nil {
+		if err := requireVault(cfg.DBPath.Value, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
 			return err
-		}
-		if sidecarMissing(dataDir) {
-			return errors.New("there's no vault yet: create it first, by running any sesh command or sesh init")
 		}
 		p := recoveryPrompt()
 		if !p.interactive || p.readLine == nil {
@@ -200,7 +198,7 @@ func runRecovery(app *App, args []string) error {
 			}
 		}
 		// Unlock the agent for this vault, asking for the password if needed.
-		oracle, typed, err := keySourceFromAgent(dataDir, p)
+		oracle, typed, err := keySourceFromAgent(cfg.DBPath.Value, p)
 		secure.SecureZeroBytes(typed)
 		if err != nil {
 			return err
@@ -211,7 +209,7 @@ func runRecovery(app *App, args []string) error {
 		if c, ok := oracle.(interface{ Close() }); ok {
 			c.Close()
 		}
-		mat, err := database.ReadUnlockMaterial(dataDir)
+		mat, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
 		if err != nil {
 			return err
 		}
@@ -231,7 +229,8 @@ func runRecovery(app *App, args []string) error {
 // changes: the new vault key is wrapped to the same recovery key, which
 // needs only its public half, so there's no prompt. It returns a line to
 // show, or "" when the vault had no recovery key.
-func rewrapRecovery(dataDir string, newKey []byte) string {
+func rewrapRecovery(dbPath string, newKey []byte) string {
+	dataDir := filepath.Dir(dbPath)
 	f, err := recovery.ReadFile(dataDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return ""
@@ -241,7 +240,7 @@ func rewrapRecovery(dataDir string, newKey []byte) string {
 	}
 	if err == nil {
 		var mat database.UnlockMaterial
-		if mat, err = database.ReadUnlockMaterial(dataDir); err == nil {
+		if mat, err = database.ReadUnlockMaterial(dbPath); err == nil {
 			id := agent.UnlockID(mat.Verify)
 			w, werr := recovery.Wrap(f.PublicKey, newKey, []byte(id))
 			if err = werr; err == nil {
@@ -315,11 +314,8 @@ func runRecover(app *App, args []string) error {
 		return err
 	}
 	dataDir := filepath.Dir(cfg.DBPath.Value)
-	if err := refuseNewKeyForExistingVault(cfg.DBPath.Value); err != nil {
+	if err := requireVault(cfg.DBPath.Value, "there's no vault here to recover"); err != nil {
 		return err
-	}
-	if sidecarMissing(dataDir) {
-		return errors.New("there's no vault here to recover")
 	}
 	p := recoveryPrompt()
 	if !p.interactive || p.prompt == nil {
@@ -332,7 +328,7 @@ func runRecover(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	mat, err := database.ReadUnlockMaterial(dataDir)
+	mat, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
 	if err != nil {
 		return err
 	}
@@ -362,7 +358,7 @@ func runRecover(app *App, args []string) error {
 		return err
 	}
 	note("Your recovery key has been used, so it no longer works.")
-	newMat, err := database.ReadUnlockMaterial(dataDir)
+	newMat, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
 	if err != nil {
 		return err
 	}

@@ -141,7 +141,7 @@ type WrapKeyResponse struct {
 
 // UnlockTouchIDRequest asks the agent to unlock with Touch ID: it unwraps
 // the key with the Secure Enclave key KeyBlob (asking for a fingerprint),
-// checks it against the sidecar's Verify blob, and installs it. The reply
+// checks it against the vault's verify blob, and installs it. The reply
 // is an UnlockResponse, or an error with a touchid_* code.
 type UnlockTouchIDRequest struct {
 	Type         string `json:"type"`
@@ -216,7 +216,7 @@ type StatusRequest struct {
 
 // StatusResponse reports lock state and the auto-lock schedule. UnlockID
 // is the hex SHA-256 of the verify blob the cached key was checked
-// against, empty when locked. Callers compare it to the sidecar so a
+// against, empty when locked. Callers compare it to the vault's so a
 // rotated password is not served with the previous key. Times are Unix
 // seconds; 0 means "not applicable". LocksAtUnix is the earlier of the
 // idle and max-lifetime deadlines. A timeout of 0 means disabled.

@@ -14,10 +14,9 @@ import (
 )
 
 type rekeyTestEnv struct {
-	tmpDir      string
-	dataDir     string
-	dbPath      string
-	sidecarPath string
+	tmpDir  string
+	dataDir string
+	dbPath  string
 }
 
 func setupRekeyEnv(t *testing.T) *rekeyTestEnv {
@@ -34,12 +33,7 @@ func setupRekeyEnv(t *testing.T) *rekeyTestEnv {
 		t.Fatalf("DefaultDBPath: %v", err)
 	}
 	dataDir := filepath.Dir(dbPath)
-	return &rekeyTestEnv{
-		tmpDir:      tmp,
-		dataDir:     dataDir,
-		dbPath:      dbPath,
-		sidecarPath: filepath.Join(dataDir, "passwords.key"),
-	}
+	return &rekeyTestEnv{tmpDir: tmp, dataDir: dataDir, dbPath: dbPath}
 }
 
 func rekeyTestApp(stdin string) (*App, *bytes.Buffer) {
@@ -74,9 +68,6 @@ func seedStore(t *testing.T, env *rekeyTestEnv, ks database.KeySource, entries m
 			t.Fatalf("close seed store: %v", cerr)
 		}
 	}()
-	if err := store.InitKeyMetadata(); err != nil {
-		t.Fatalf("init key metadata: %v", err)
-	}
 	for id, secret := range entries {
 		if err := store.Put(entryKey(t, id), []byte(secret)); err != nil {
 			t.Fatalf("seed entry %s: %v", id, err)
@@ -86,7 +77,7 @@ func seedStore(t *testing.T, env *rekeyTestEnv, ks database.KeySource, entries m
 
 func populatePasswordStore(t *testing.T, env *rekeyTestEnv, entries map[string]string) {
 	t.Helper()
-	seedStore(t, env, resolvePasswordPrompt().newSource(env.dataDir), entries)
+	seedStore(t, env, resolvePasswordPrompt().newSource(env.dbPath), entries)
 }
 
 // readEntries opens the vault with ks and returns the secrets of the
@@ -115,7 +106,17 @@ func readEntries(t *testing.T, env *rekeyTestEnv, ks database.KeySource, ids []s
 
 func readEntriesViaPassword(t *testing.T, env *rekeyTestEnv, ids []string) map[string]string {
 	t.Helper()
-	return readEntries(t, env, resolvePasswordPrompt().newSource(env.dataDir), ids)
+	return readEntries(t, env, resolvePasswordPrompt().newSource(env.dbPath), ids)
+}
+
+// keySalt is the salt in the key record of the vault at dbPath.
+func keySalt(t *testing.T, dbPath string) []byte {
+	t.Helper()
+	m, err := database.ReadUnlockMaterial(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m.Salt
 }
 
 func TestAppendErr_NilPrimary(t *testing.T) {
@@ -204,13 +205,21 @@ func TestRotate_PasswordChangesPassword(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Rotated 2 entries") {
 		t.Errorf("stderr missing rotation summary:\n%s", stderr.String())
 	}
-	for _, p := range []string{env.dbPath + rotateBackupSuffix, env.sidecarPath + rotateBackupSuffix} {
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
-			t.Errorf("old copy %s still exists (err %v)", p, err)
-		}
+	if _, err := os.Stat(env.dbPath + rotateBackupSuffix); !os.IsNotExist(err) {
+		t.Errorf("the old copy still exists (err %v)", err)
 	}
 	if !strings.Contains(stderr.String(), "Removed the old vault's copy, so the old key no longer opens anything.") {
 		t.Errorf("stderr missing the removal note:\n%s", stderr)
+	}
+	// The vault is one file; the key-change lock is the only other.
+	names, err := os.ReadDir(env.dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if n.Name() != filepath.Base(env.dbPath) && n.Name() != keyChangeLockFile {
+			t.Errorf("the vault folder holds %s after the change", n.Name())
+		}
 	}
 
 	// New password unlocks the rotated DB.
@@ -272,10 +281,8 @@ func TestRotate_EnvPasswordWithoutATerminalRefuses(t *testing.T) {
 
 	// Nothing changed: no staging was started, and the old password still
 	// opens the vault.
-	for _, p := range []string{env.dbPath + rekeyDestSuffix, env.sidecarPath + rekeyDestSuffix, env.sidecarPath + rekeyDestSuffix + ".lock"} {
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
-			t.Errorf("%s exists after the refusal (stat: %v)", p, err)
-		}
+	if _, err := os.Stat(env.dbPath + rekeyDestSuffix); !os.IsNotExist(err) {
+		t.Errorf("a staged vault exists after the refusal (stat: %v)", err)
 	}
 	if got := readEntriesViaPassword(t, env, []string{"password/github/alice"}); got["password/github/alice"] != "hunter2" {
 		t.Errorf("the old password no longer opens the vault: %v", got)
@@ -294,10 +301,7 @@ func TestRotate_PreservesPerEntryFreshness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeSidecar, err := os.ReadFile(env.sidecarPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	beforeSalt := keySalt(t, env.dbPath)
 
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	app, _ := rekeyTestApp("y\n")
@@ -314,72 +318,10 @@ func TestRotate_PreservesPerEntryFreshness(t *testing.T) {
 		t.Fatal("rotated DB byte-for-byte identical to original — re-encryption did not run")
 	}
 
-	// Sidecar salt must also have changed (proves new KDF derivation, not
+	// The salt must also have changed (proves new KDF derivation, not
 	// just a re-encryption with the same derived key).
-	afterSidecar, err := os.ReadFile(env.sidecarPath)
-	if err != nil {
-		t.Fatalf("read rotated sidecar: %v", err)
-	}
-	if bytes.Equal(beforeSidecar, afterSidecar) {
-		t.Fatal("rotated sidecar identical to the old one — salt was not regenerated")
-	}
-}
-
-func TestRotate_RemovesStagingLockOnSuccess(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
-
-	t.Setenv("SESH_MASTER_PASSWORD", "")
-	app, _ := rekeyTestApp("y\n")
-	cfg := rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")
-	if err := runRotateMasterPassword(app, cfg); err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	stagingLock := env.sidecarPath + rekeyDestSuffix + ".lock"
-	if _, err := os.Stat(stagingLock); !os.IsNotExist(err) {
-		t.Errorf("staging sidecar lock %s should be removed after successful rotation, got stat err %v", stagingLock, err)
-	}
-}
-
-func TestRotate_RemovesStagingLockOnConfirmMismatch(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
-
-	t.Setenv("SESH_MASTER_PASSWORD", "")
-	app, _ := rekeyTestApp("y\n")
-	// Mismatched confirm fires inside initialize(), AFTER the staging
-	// lock file has been created via O_CREATE in initializeLocked. The
-	// lock file should be cleaned up by the rollback path.
-	cfg := rotateTestCfg("old-pw-1234", "new-pw-aaaaaa", "new-pw-bbbbbb")
-	err := runRotateMasterPassword(app, cfg)
-	if err == nil || !strings.Contains(err.Error(), "passwords do not match") {
-		t.Fatalf("expected passwords-do-not-match error, got %v", err)
-	}
-	stagingLock := env.sidecarPath + rekeyDestSuffix + ".lock"
-	if _, err := os.Stat(stagingLock); !os.IsNotExist(err) {
-		t.Errorf("staging sidecar lock %s should be removed after rollback, got stat err %v", stagingLock, err)
-	}
-}
-
-func TestRotate_RemovesStagingLockOnCancel(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
-
-	t.Setenv("SESH_MASTER_PASSWORD", "")
-	// Cancel before the destination source is constructed at all — the
-	// staging lock should never be created. Regression guard against a
-	// future change that moves destKS construction earlier.
-	app, _ := rekeyTestApp("n\n")
-	cfg := rotateTestCfg("old-pw-1234")
-	if err := runRotateMasterPassword(app, cfg); err != nil {
-		t.Fatalf("cancelled rotation should not error: %v", err)
-	}
-	stagingLock := env.sidecarPath + rekeyDestSuffix + ".lock"
-	if _, err := os.Stat(stagingLock); !os.IsNotExist(err) {
-		t.Errorf("staging sidecar lock %s should not exist after cancel, got stat err %v", stagingLock, err)
+	if bytes.Equal(beforeSalt, keySalt(t, env.dbPath)) {
+		t.Fatal("the rotated vault has the old salt")
 	}
 }
 
@@ -392,20 +334,39 @@ func TestRotate_RefusesIfDatabaseMissing(t *testing.T) {
 	}
 }
 
-func TestRotate_RefusesIfSidecarMissing(t *testing.T) {
+// A vault that holds entries but lost its key record is refused, not given
+// a new master password that couldn't read them.
+func TestRotate_RefusesAVaultWithoutItsKeyRecord(t *testing.T) {
 	env := setupRekeyEnv(t)
-	// Create a DB file directly (bypassing sesh) so the DB-stat check passes
-	// but the sidecar doesn't exist.
-	if err := os.MkdirAll(env.dataDir, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
+	dropKeyRecord(t, env.dbPath)
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678"))
+	if err == nil || !strings.Contains(err.Error(), "holds entries but not the record its key is made from") {
+		t.Fatalf("expected the missing key record named, got %v", err)
 	}
-	if err := os.WriteFile(env.dbPath, []byte("not a real db"), 0o600); err != nil {
-		t.Fatalf("write fake db: %v", err)
+	if _, err := os.Stat(env.dbPath + rekeyDestSuffix); !os.IsNotExist(err) {
+		t.Errorf("a staged vault was made (stat: %v)", err)
 	}
-	app, _ := rekeyTestApp("")
-	err := runRotateMasterPassword(app, rotateTestCfg("any-pw-1234"))
-	if err == nil || !strings.Contains(err.Error(), "its key file") {
-		t.Fatalf("expected the missing key file named, got %v", err)
+}
+
+// A new password that isn't confirmed leaves no staged vault.
+func TestRotate_ConfirmMismatchStagesNothing(t *testing.T) {
+	env := setupRekeyEnv(t)
+	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
+	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := rekeyTestApp("y\n")
+	err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-aaaaaa", "new-pw-bbbbbb"))
+	if err == nil || !strings.Contains(err.Error(), "passwords do not match") {
+		t.Fatalf("expected passwords-do-not-match error, got %v", err)
+	}
+	for _, p := range keyChangeLeftovers(env.dbPath) {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s exists after the mismatch (stat: %v)", p, err)
+		}
 	}
 }
 
@@ -419,8 +380,7 @@ func TestRotate_ClearsLeftovers(t *testing.T) {
 	}{
 		{func(e *rekeyTestEnv) string { return e.dbPath + rekeyDestSuffix }, "staged vault"},
 		{func(e *rekeyTestEnv) string { return e.dbPath + rotateBackupSuffix }, "old vault copy"},
-		{func(e *rekeyTestEnv) string { return e.sidecarPath + rekeyDestSuffix }, "staged key file"},
-		{func(e *rekeyTestEnv) string { return e.sidecarPath + rotateBackupSuffix }, "old key file copy"},
+		{func(e *rekeyTestEnv) string { return e.dbPath + rekeyDestSuffix + "-wal" }, "staged vault's journal"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			env := setupRekeyEnv(t)
@@ -439,7 +399,7 @@ func TestRotate_ClearsLeftovers(t *testing.T) {
 			if !strings.Contains(stderr.String(), "Removed files left by an earlier change: "+filepath.Base(leftover)) {
 				t.Errorf("stderr missing the leftovers note:\n%s", stderr)
 			}
-			for _, p := range []string{env.dbPath + rekeyDestSuffix, env.dbPath + rotateBackupSuffix, env.sidecarPath + rekeyDestSuffix, env.sidecarPath + rotateBackupSuffix} {
+			for _, p := range keyChangeLeftovers(env.dbPath) {
 				if _, err := os.Stat(p); !os.IsNotExist(err) {
 					t.Errorf("%s exists after the change (err %v)", p, err)
 				}
@@ -452,10 +412,7 @@ func TestRotate_WrongSourcePassword(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_MASTER_PASSWORD", "right-pw-1234")
 	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
-	beforeSidecar, err := os.ReadFile(env.sidecarPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	beforeSalt := keySalt(t, env.dbPath)
 	// Only a verified current password clears an earlier change's files.
 	leftover := env.dbPath + rotateBackupSuffix
 	if err := os.WriteFile(leftover, []byte("stale"), 0o600); err != nil {
@@ -474,22 +431,15 @@ func TestRotate_WrongSourcePassword(t *testing.T) {
 	// further from the sequence, the "test prompt exhausted" error would
 	// surface and tell us the test no longer pins the right behavior.
 	cfg := rotateTestCfg("wrong-pw-1234")
-	err = runRotateMasterPassword(app, cfg)
-	if err == nil || !strings.Contains(err.Error(), "unlock current sidecar") {
+	err := runRotateMasterPassword(app, cfg)
+	if err == nil || !strings.Contains(err.Error(), "unlock the vault") {
 		t.Fatalf("expected unlock error for wrong source password, got %v", err)
 	}
 	if !strings.Contains(err.Error(), "wrong master password") {
 		t.Errorf("error %q should bubble up the underlying wrong-password message", err.Error())
 	}
-	// Canonical sidecar must be untouched. No write path is reachable
-	// before the failed unlock, so this is a regression guard against
-	// future refactors that move sidecar writes earlier in the flow.
-	afterSidecar, err := os.ReadFile(env.sidecarPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(beforeSidecar, afterSidecar) {
-		t.Error("canonical sidecar modified after wrong-password failure")
+	if !bytes.Equal(beforeSalt, keySalt(t, env.dbPath)) {
+		t.Error("the key record changed after a wrong password")
 	}
 }
 
@@ -501,10 +451,7 @@ func TestRotate_PasswordCancelledLeavesNoChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeSidecar, err := os.ReadFile(env.sidecarPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	beforeSalt := keySalt(t, env.dbPath)
 
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	// Pass "n" to the y/N prompt to abort. Source unlock still happens (one
@@ -523,19 +470,10 @@ func TestRotate_PasswordCancelledLeavesNoChanges(t *testing.T) {
 	if !bytes.Equal(beforeBlob, afterBlob) {
 		t.Error("DB modified after cancelled rotation")
 	}
-	afterSidecar, err := os.ReadFile(env.sidecarPath)
-	if err != nil {
-		t.Fatal(err)
+	if !bytes.Equal(beforeSalt, keySalt(t, env.dbPath)) {
+		t.Error("the key record changed after a cancelled rotation")
 	}
-	if !bytes.Equal(beforeSidecar, afterSidecar) {
-		t.Error("canonical sidecar modified after cancelled rotation")
-	}
-	for _, p := range []string{
-		env.dbPath + rekeyDestSuffix,
-		env.dbPath + rotateBackupSuffix,
-		env.sidecarPath + rekeyDestSuffix,
-		env.sidecarPath + rotateBackupSuffix,
-	} {
+	for _, p := range keyChangeLeftovers(env.dbPath) {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("staging/backup file %s should not exist after cancel: %v", p, err)
 		}
@@ -551,18 +489,17 @@ func TestCheckCopied(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeAuditStore(store)
-	if err := checkCopied(store, 2); err != nil {
-		t.Errorf("a complete copy: %v", err)
-	}
-	if err := checkCopied(store, 3); err == nil || !strings.Contains(err.Error(), "the new vault holds 2 entries, but 3 were copied; nothing was changed") {
-		t.Errorf("a short copy: err = %v", err)
-	}
-	wrong, err := database.Open(env.dbPath, database.NewKeySourceOracle(&recoveredKey{key: bytes.Repeat([]byte{1}, 32)}))
+	key, err := resolvePasswordPrompt().newSource(env.dbPath).GetEncryptionKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer closeAuditStore(wrong)
-	if err := checkCopied(wrong, 2); err == nil || !strings.Contains(err.Error(), "check the new vault's key") {
+	if err := checkCopied(store, env.dbPath, key, 2); err != nil {
+		t.Errorf("a complete copy: %v", err)
+	}
+	if err := checkCopied(store, env.dbPath, key, 3); err == nil || !strings.Contains(err.Error(), "the new vault holds 2 entries, but 3 were copied; nothing was changed") {
+		t.Errorf("a short copy: err = %v", err)
+	}
+	if err := checkCopied(store, env.dbPath, bytes.Repeat([]byte{1}, 32), 2); err == nil || !strings.Contains(err.Error(), "check the new vault's key") {
 		t.Errorf("a vault the key doesn't open: err = %v", err)
 	}
 }
@@ -592,10 +529,8 @@ func TestRotate_RemovesOldCopiesBeforeReporting(t *testing.T) {
 	if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234", "new-pw-5678", "new-pw-5678")); err == nil {
 		t.Fatal("expected the write failure to be returned")
 	}
-	for _, p := range []string{env.dbPath + rotateBackupSuffix, env.sidecarPath + rotateBackupSuffix} {
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
-			t.Errorf("%s left behind after a failed write (err %v)", p, err)
-		}
+	if _, err := os.Stat(env.dbPath + rotateBackupSuffix); !os.IsNotExist(err) {
+		t.Errorf("the old copy was left behind after a failed write (err %v)", err)
 	}
 }
 
@@ -647,15 +582,15 @@ func failRename(t *testing.T, src, dst string, during func(src, dst string)) {
 	t.Cleanup(func() { renameFile = orig })
 }
 
-// If the new key file can't be moved into place after the old one was moved
-// aside, rollback puts both the old vault and the old key file back, while
-// still holding the key-change lock.
+// If the new vault can't be moved into place after the old one was moved
+// aside, rollback puts the old vault back, while still holding the
+// key-change lock.
 func TestRotate_RollsBackAPartialSwap(t *testing.T) {
 	env := setupRekeyEnv(t)
 	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
 	populatePasswordStore(t, env, map[string]string{"password/x/y": "the secret"})
 	lockFreeDuringRollback := false
-	failRename(t, env.sidecarPath+rekeyDestSuffix, env.sidecarPath, func(src, dst string) {
+	failRename(t, env.dbPath+rekeyDestSuffix, env.dbPath, func(src, dst string) {
 		if src == env.dbPath+rotateBackupSuffix && dst == env.dbPath { // rollback restoring the vault
 			if release, err := lockKeyChange(env.dataDir); err == nil {
 				lockFreeDuringRollback = true
@@ -675,10 +610,7 @@ func TestRotate_RollsBackAPartialSwap(t *testing.T) {
 	if lockFreeDuringRollback {
 		t.Error("another key change could take the lock while rollback was running")
 	}
-	if _, err := os.Stat(env.sidecarPath); err != nil {
-		t.Fatalf("the vault has no passwords.key after rollback: %v", err)
-	}
-	for _, p := range []string{env.sidecarPath + rotateBackupSuffix, env.dbPath + rotateBackupSuffix, env.sidecarPath + rekeyDestSuffix} {
+	for _, p := range keyChangeLeftovers(env.dbPath) {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("%s left after rollback (err %v)", p, err)
 		}
@@ -687,40 +619,6 @@ func TestRotate_RollsBackAPartialSwap(t *testing.T) {
 	got := readEntriesViaPassword(t, env, []string{"password/x/y"})
 	if got["password/x/y"] != "the secret" {
 		t.Errorf("entry after rollback = %q, want the old password to open the old vault", got["password/x/y"])
-	}
-}
-
-// A change that stops before staging anything leaves another change's
-// staging lock alone.
-func TestRotate_LeavesAnotherChangesStagingLock(t *testing.T) {
-	env := setupRekeyEnv(t)
-	t.Setenv("SESH_MASTER_PASSWORD", "old-pw-1234")
-	populatePasswordStore(t, env, map[string]string{"password/x/y": "v"})
-	staging := env.sidecarPath + rekeyDestSuffix + ".lock"
-	if err := os.WriteFile(staging, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("SESH_MASTER_PASSWORD", "")
-
-	app, _ := rekeyTestApp("y\n")
-	if err := runRotateMasterPassword(app, rotateTestCfg("wrong-pw-1234")); err == nil {
-		t.Fatal("expected the wrong password to fail")
-	}
-	if _, err := os.Stat(staging); err != nil {
-		t.Errorf("a change with the wrong password removed another change's staging lock: %v", err)
-	}
-
-	release, err := lockKeyChange(env.dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer release()
-	app, _ = rekeyTestApp("y\n")
-	if err := runRotateMasterPassword(app, rotateTestCfg("old-pw-1234")); err == nil {
-		t.Fatal("expected the held lock to refuse the change")
-	}
-	if _, err := os.Stat(staging); err != nil {
-		t.Errorf("a refused change removed another change's staging lock: %v", err)
 	}
 }
 
