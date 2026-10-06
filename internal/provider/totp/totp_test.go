@@ -695,3 +695,11 @@ func TestProvider_GetCredentials_FailsIfTheCodeSettingsCantBeRead(t *testing.T) 
 		t.Errorf("GetCredentials = %v, want the settings error rather than a code from the default settings", err)
 	}
 }
+
+func TestProvider_DeleteEntry_SuggestsANameInAnotherCase(t *testing.T) {
+	p := &Provider{store: seeded(t, map[vault.Key]string{totpKey("GitHub", ""): "secret"})}
+	err := p.DeleteEntry("totp/github")
+	if !errors.Is(err, vault.ErrNotFound) || !strings.Contains(err.Error(), "did you mean totp/GitHub? Names are case-sensitive") {
+		t.Errorf("DeleteEntry = %v, want not found with the suggestion", err)
+	}
+}

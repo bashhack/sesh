@@ -1848,3 +1848,25 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 		})
 	}
 }
+
+// The TOTP setup asks before making an entry whose name differs from an
+// existing one only in case.
+func TestTOTPSetupHandler_Setup_AsksBeforeANameInAnotherCase(t *testing.T) {
+	stubTOTPSetup(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP"}, "JBSWY3DPEHPK3PXP")
+	store := vault.NewMemStore()
+	if err := store.Put(vault.Key{Kind: vault.KindTOTP, Service: "GitHub", Username: "alice"}, []byte("OLDSECRETOLDSECR")); err != nil {
+		t.Fatal(err)
+	}
+	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("github\nalice\nn\n"))}
+	var err error
+	output := testutil.CaptureStdout(func() { err = handler.Setup() })
+	if err == nil || !strings.Contains(err.Error(), "setup cancelled") {
+		t.Fatalf("Setup() = %v, want it cancelled", err)
+	}
+	if !strings.Contains(output, "An entry GitHub (alice) already exists, and names are case-sensitive") {
+		t.Errorf("output = %q, want the question", output)
+	}
+	if _, err := store.Lookup(vault.Key{Kind: vault.KindTOTP, Service: "github", Username: "alice"}); !errors.Is(err, vault.ErrNotFound) {
+		t.Errorf("a second entry was made (lookup: %v)", err)
+	}
+}

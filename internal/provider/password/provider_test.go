@@ -1148,3 +1148,17 @@ func TestDeleteEntry_SuggestsANameInAnotherCase(t *testing.T) {
 		t.Errorf("DeleteEntry = %v, want not found with the suggestion", err)
 	}
 }
+
+// totp-store asks before making a name that differs only in case, too.
+func TestStoreTOTP_AsksBeforeANameInAnotherCase(t *testing.T) {
+	stubStdinIsTerminal(t, false)
+	stubReadPassword(t, "NEWSECRETNEWSECR")
+	store := seeded(t, map[string]string{"totp/GitHub": "JBSWY3DPEHPK3PXP"})
+	p, _ := newTestProvider(store)
+	p.action, p.service = "totp-store", "github"
+	p.stdin = strings.NewReader("1\n")
+	defer testutil.DiscardStderr(t)()
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "an entry GitHub already exists, and names are case-sensitive") {
+		t.Errorf("err = %v, want the case question refused without a terminal", err)
+	}
+}

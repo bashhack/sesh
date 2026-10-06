@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/shell"
@@ -693,6 +694,11 @@ func (h *TOTPSetupHandler) Setup() error {
 	if err != nil {
 		return err
 	}
+	if existing == nil {
+		if err := h.confirmCaseTwin(k); err != nil {
+			return err
+		}
+	}
 	if existing != nil {
 		// Entry exists, prompt for overwrite
 		fmt.Printf("\n⚠️  An entry already exists for service '%s'", serviceName)
@@ -846,4 +852,28 @@ func captureQRWithRetryFull(reader *bufio.Reader, manualEntryFunc func() (string
 	}
 
 	return qrcode.TOTPInfo{}, fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
+}
+
+// confirmCaseTwin asks before the setup makes k when an entry's name
+// differs from it only in case: names are case-sensitive, so it would be a
+// second entry.
+func (h *TOTPSetupHandler) confirmCaseTwin(k vault.Key) error {
+	twins, err := password.NewManager(h.store).CaseTwins(k)
+	if err != nil {
+		return fmt.Errorf("failed to check existing entries: %w", err)
+	}
+	if len(twins) == 0 {
+		return nil
+	}
+	fmt.Printf("\n⚠️  An entry %s already exists, and names are case-sensitive.\n", password.EntryName(twins[0]))
+	fmt.Printf("Create %s as well? (y/N): ", password.EntryName(k))
+	response, err := readLine(h.reader)
+	if err != nil {
+		return err
+	}
+	if r := strings.ToLower(response); r != "y" && r != "yes" {
+		fmt.Println("\n❌ Setup cancelled")
+		return fmt.Errorf("setup cancelled by user")
+	}
+	return nil
 }

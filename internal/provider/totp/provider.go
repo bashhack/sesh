@@ -179,6 +179,11 @@ func (p *Provider) DeleteEntry(id string) error {
 		return fmt.Errorf("%s isn't a TOTP entry; delete it with --service password", id)
 	}
 	if err := p.store.Delete(k); err != nil {
+		if errors.Is(err, vault.ErrNotFound) {
+			if twins, terr := password.NewManager(p.store).CaseTwins(k); terr == nil && len(twins) > 0 {
+				return fmt.Errorf("failed to delete TOTP entry: %w; did you mean %s? Names are case-sensitive", err, twins[0])
+			}
+		}
 		return fmt.Errorf("failed to delete TOTP entry: %w", err)
 	}
 	return nil
