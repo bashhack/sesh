@@ -182,6 +182,20 @@ func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
 	return e, nil
 }
 
+// Exists implements vault.Store.
+func (s *Store) Exists(k vault.Key) error {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return notFound(k)
+	}
+	if err != nil {
+		return fmt.Errorf("look up %s: %w", k, err)
+	}
+	return nil
+}
+
 // List implements vault.Store.
 func (s *Store) List(f vault.Filter) (_ []vault.Entry, err error) {
 	q := `SELECT kind, service, username, settings, created_at, updated_at FROM entries WHERE 1 = 1`

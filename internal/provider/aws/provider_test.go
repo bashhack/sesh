@@ -54,6 +54,7 @@ type failingStore struct {
 
 func (f failingStore) Get(vault.Key) ([]byte, error)            { return nil, f.err }
 func (f failingStore) Lookup(vault.Key) (vault.Entry, error)    { return vault.Entry{}, f.err }
+func (f failingStore) Exists(vault.Key) error                   { return f.err }
 func (f failingStore) List(vault.Filter) ([]vault.Entry, error) { return nil, f.err }
 func (f failingStore) Delete(vault.Key) error                   { return f.err }
 func (f failingStore) DeleteMany([]vault.Key) error             { return f.err }

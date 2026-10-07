@@ -262,6 +262,7 @@ func (u unavailableStore) Put(vault.Key, []byte) error                 { return 
 func (u unavailableStore) Save(*vault.Entry, []byte) error             { return u.err }
 func (u unavailableStore) SetSettings(vault.Key, vault.Settings) error { return u.err }
 func (u unavailableStore) Lookup(vault.Key) (vault.Entry, error)       { return vault.Entry{}, u.err }
+func (u unavailableStore) Exists(vault.Key) error                      { return u.err }
 func (u unavailableStore) List(vault.Filter) ([]vault.Entry, error)    { return nil, u.err }
 func (u unavailableStore) Delete(vault.Key) error                      { return u.err }
 func (u unavailableStore) DeleteMany([]vault.Key) error                { return u.err }
@@ -728,11 +729,11 @@ func terminalPrompt(prompt string) ([]byte, error) {
 	return pw, nil
 }
 
-// fatal prints an error to stderr and exits
 // errReported is a failure the command has already reported in full; fatal
 // only sets the exit code.
 var errReported = errors.New("already reported")
 
+// fatal prints an error to stderr and exits
 func fatal(app *App, err error) {
 	if errors.Is(err, errReported) {
 		app.Exit(1)

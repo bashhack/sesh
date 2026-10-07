@@ -174,7 +174,7 @@ func (m *Manager) GetPasswordsByService(service string) ([]Entry, error) {
 
 // EntryExists reports whether the entry exists, without reading its secret.
 func (m *Manager) EntryExists(service, username string, entryType EntryType) (bool, error) {
-	_, err := m.store.Lookup(key(service, username, entryType))
+	err := m.store.Exists(key(service, username, entryType))
 	switch {
 	case err == nil:
 		return true, nil

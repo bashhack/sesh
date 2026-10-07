@@ -238,7 +238,7 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
 			continue
 		}
-		_, err := m.store.Lookup(k)
+		err := m.store.Exists(k)
 		var exists bool
 		switch {
 		case err == nil:

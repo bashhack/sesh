@@ -12,6 +12,7 @@ import (
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/touchid"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // structureLinesShown is how many of SQLite's findings verify prints.
@@ -94,9 +95,23 @@ func runVerify(app *App, args []string) error {
 		c.row(markOK, "Entries", entryCount(report.Entries)+", all readable")
 	} else {
 		var details, ids []string
+		var named []vault.Key
+		unnamed := false
 		for _, p := range report.Problems {
+			// A name damaged into something that isn't a valid ID, or is
+			// another entry's, can't be given to --delete.
+			if k, err := vault.ParseKey(p.Key.String()); err != nil || k != p.Key {
+				unnamed = true
+				username := "no username"
+				if p.Key.Username != "" {
+					username = fmt.Sprintf("username %q", p.Key.Username)
+				}
+				details = append(details, fmt.Sprintf("%s entry with a damaged name (service %q, %s): %s", p.Key.Kind, p.Key.Service, username, problemText(p.Kind)))
+				continue
+			}
 			details = append(details, fmt.Sprintf("%s: %s", p.Key, problemText(p.Kind)))
 			ids = append(ids, shell.Quote(p.Key.String()))
+			named = append(named, p.Key)
 		}
 		// Why a secret doesn't decrypt goes under the last one that doesn't.
 		for i, p := range slices.Backward(report.Problems) {
@@ -108,11 +123,20 @@ func runVerify(app *App, args []string) error {
 		c.fails += len(report.Problems) - 1
 		c.row(markFail, "Entries", fmt.Sprintf("%d of %s can't be read", len(report.Problems), entryCount(report.Entries)), details...)
 		if len(report.Structure) == 0 {
-			what := "Restore these entries from a backup (an encrypted export), or delete them:"
-			if len(ids) == 1 {
-				what = fmt.Sprintf("Restore %s from a backup (an encrypted export), or delete it:", report.Problems[0].Key)
+			switch len(named) {
+			case 0:
+			case 1:
+				c.todo(fmt.Sprintf("Restore %s from a backup (an encrypted export), or delete it:", named[0]), "sesh --service password --delete "+ids[0])
+			default:
+				what := "Restore these entries from a backup (an encrypted export), or delete them:"
+				if unnamed {
+					what = "Restore the entries named above from a backup (an encrypted export), or delete them:"
+				}
+				c.todo(what, "sesh --service password --delete "+strings.Join(ids, " "))
 			}
-			c.todo(what, "sesh --service password --delete "+strings.Join(ids, " "))
+			if unnamed {
+				c.todo("Restore the vault from a backup, such as an encrypted export: an entry's name is damaged, so sesh can't name it to delete it.")
+			}
 		}
 	}
 	verifyRecovery(&c, &report)
@@ -168,9 +192,9 @@ func (c *verifyChecks) todo(text string, commands ...string) {
 	c.todos = append(c.todos, append([]string{text}, commands...))
 }
 
-func (c *verifyChecks) render(vault string) string {
+func (c *verifyChecks) render(vaultPath string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "sesh verify: %s\n\n%s", vault, c.rows.String())
+	fmt.Fprintf(&b, "sesh verify: %s\n\n%s", vaultPath, c.rows.String())
 	if len(c.todos) > 0 {
 		b.WriteString("\nWhat to do\n")
 		for i, t := range c.todos {
@@ -202,12 +226,14 @@ func (c *verifyChecks) render(vault string) string {
 // problemText says in plain words what's wrong with an entry.
 func problemText(k database.ProblemKind) string {
 	switch k {
+	case database.ProblemSecret:
+		return "secret doesn't decrypt"
 	case database.ProblemSettings:
 		return "settings don't read"
 	case database.ProblemTimes:
 		return "times don't read"
 	}
-	return "secret doesn't decrypt"
+	return "can't be read"
 }
 
 // verifyRecovery checks the vault's recovery key record. None is fine.

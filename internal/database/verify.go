@@ -17,7 +17,7 @@ type ProblemKind int
 // The kinds of entry problem.
 const (
 	// ProblemSecret: the secret doesn't decrypt with the vault's key.
-	ProblemSecret ProblemKind = iota
+	ProblemSecret ProblemKind = iota + 1
 	// ProblemSettings: the settings don't parse.
 	ProblemSettings
 	// ProblemTimes: the creation or update time doesn't read.

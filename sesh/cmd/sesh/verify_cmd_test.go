@@ -9,6 +9,8 @@ import (
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keywrap"
+	"github.com/bashhack/sesh/internal/password"
+	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/touchid"
 )
@@ -122,6 +124,81 @@ func TestVerify_UnreadableEntries(t *testing.T) {
 	}
 }
 
+// openVerifyVault opens the verifyVault's store, as a command would.
+func openVerifyVault(t *testing.T, env *rekeyTestEnv) *database.Store {
+	t.Helper()
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := database.Open(env.dbPath, database.NewKeySourceOracle(resolvePasswordPrompt().withKDF(cfg.KDF()).newSource(env.dbPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() }) //nolint:errcheck // test cleanup
+	return store
+}
+
+// damageThree damages a secret, settings, and times, one entry each.
+func damageThree(t *testing.T) *rekeyTestEnv {
+	t.Helper()
+	env := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_MASTER_PASSWORD", "verify-password-1234")
+	populatePasswordStore(t, env, map[string]string{"password/a/u": "1", "password/b/u": "2", "password/c/u": "3"})
+	sqlExec(t, env.dbPath, `UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899' WHERE service = 'a'`)
+	sqlExec(t, env.dbPath, `UPDATE entries SET settings = '{' WHERE service = 'b'`)
+	sqlExec(t, env.dbPath, `UPDATE entries SET created_at = 'garbage' WHERE service = 'c'`)
+	return env
+}
+
+// The delete verify prints works for every kind of damage.
+func TestVerify_PrintedDeleteWorks(t *testing.T) {
+	env := damageThree(t)
+	out, err := runVerifyOut(t)
+	if !errors.Is(err, errReported) || !strings.Contains(out, "       sesh --service password --delete password/a/u password/b/u password/c/u\n") {
+		t.Fatalf("err = %v, output:\n%s", err, out)
+	}
+	store := openVerifyVault(t, env)
+	if _, err := provider.DeleteEntries(store, []string{"password/a/u", "password/b/u", "password/c/u"}, nil, nil, true, nil); err != nil {
+		t.Fatalf("the printed delete: %v", err)
+	}
+	if out, err := runVerifyOut(t); err != nil {
+		t.Errorf("verify after the delete: %v\n%s", err, out)
+	}
+}
+
+// An entry whose name is damaged into another entry's ID isn't offered for
+// deletion by that ID, which would delete the other entry.
+func TestVerify_DamagedNameIsNotOfferedForDelete(t *testing.T) {
+	env := verifyVault(t)
+	sqlExec(t, env.dbPath, `INSERT INTO entries (kind, service, username, encrypted_data, salt, created_at, updated_at) SELECT kind, 'github/alice', '', x'00112233445566778899aabbccddeeff00112233445566778899', salt, created_at, updated_at FROM entries WHERE service = 'github'`)
+	out, err := runVerifyOut(t)
+	if !errors.Is(err, errReported) {
+		t.Fatalf("err = %v\n%s", err, out)
+	}
+	if strings.Contains(out, "--delete") || !strings.Contains(out, `password entry with a damaged name (service "github/alice", no username): secret doesn't decrypt`) {
+		t.Errorf("output:\n%s", out)
+	}
+	if !strings.Contains(out, "  1. Restore the vault from a backup, such as an encrypted export: an entry's name is damaged, so sesh can't name it to delete it.\n") {
+		t.Errorf("output:\n%s", out)
+	}
+}
+
+// Importing a backup over damaged entries, as verify says, repairs them.
+func TestVerify_RestoreFromABackupWorks(t *testing.T) {
+	env := damageThree(t)
+	store := openVerifyVault(t, env)
+	backup := `[{"service":"a","username":"u","type":"password","secret":"1"},{"service":"b","username":"u","type":"password","secret":"2"},{"service":"c","username":"u","type":"password","secret":"3"}]`
+	res, err := password.NewManager(store).Import(strings.NewReader(backup), password.ImportOptions{Format: password.FormatJSON, OnConflict: password.ConflictOverwrite})
+	if err != nil || len(res.Errors) != 0 || res.Imported != 3 {
+		t.Fatalf("import = %+v, %v", res, err)
+	}
+	if out, err := runVerifyOut(t); err != nil {
+		t.Errorf("verify after the restore: %v\n%s", err, out)
+	}
+}
+
 // A recovery key record made for another key fails the check; Touch ID set
 // up for another only warns.
 func TestVerify_RecoveryAndTouchID(t *testing.T) {
@@ -211,6 +288,24 @@ func TestVerify_DamagedFile(t *testing.T) {
 	}
 	if after := auditEvents(t, env.dbPath); after["verify"] != 0 || len(after) != len(before) {
 		t.Errorf("audit events before %v, after %v; want nothing written", before, after)
+	}
+	// With an entry unreadable too, the whole vault is restored instead.
+	sqlExec(t, env.dbPath, `UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899' WHERE service = 'github'`)
+	out, err = runVerifyOut(t)
+	if !errors.Is(err, errReported) || strings.Contains(out, "--delete") || !strings.Contains(out, "  1. Restore the vault from a backup, such as an encrypted export.\n\nFAIL: 2 problems\n") {
+		t.Errorf("err = %v, output:\n%s", err, out)
+	}
+}
+
+// One unreadable entry is named in the step, with the command for it.
+func TestVerify_OneUnreadableEntry(t *testing.T) {
+	env := verifyVault(t)
+	sqlExec(t, env.dbPath, `UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899' WHERE service = 'github'`)
+	out, err := runVerifyOut(t)
+	want := "  1. Restore password/github/alice from a backup (an encrypted export), or delete it:\n" +
+		"       sesh --service password --delete password/github/alice\n"
+	if !errors.Is(err, errReported) || !strings.Contains(out, want) {
+		t.Errorf("err = %v, output:\n%s", err, out)
 	}
 }
 

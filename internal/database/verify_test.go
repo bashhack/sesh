@@ -148,3 +148,19 @@ func TestErrDecrypt(t *testing.T) {
 		t.Errorf("a bad key length isn't a damaged ciphertext: %v", err)
 	}
 }
+
+// Exists finds an entry whose settings and times are damaged, so it can
+// still be deleted or replaced.
+func TestExists_FindsADamagedEntry(t *testing.T) {
+	_, s := rekeyVault(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	if _, err := s.db.Exec(`UPDATE entries SET settings = '{', created_at = 'garbage' WHERE service = 'bank'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Exists(k); err != nil {
+		t.Errorf("Exists of a damaged entry = %v, want nil", err)
+	}
+	if err := s.Exists(vault.Key{Kind: vault.KindPassword, Service: "other"}); !errors.Is(err, vault.ErrNotFound) {
+		t.Errorf("Exists of a missing entry = %v, want ErrNotFound", err)
+	}
+}

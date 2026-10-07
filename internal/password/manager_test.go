@@ -36,6 +36,13 @@ func (f *failingStore) Save(e *vault.Entry, secret []byte) error {
 	return f.MemStore.Save(e, secret)
 }
 
+func (f *failingStore) Exists(k vault.Key) error {
+	if f.lookupErr != nil {
+		return f.lookupErr
+	}
+	return f.MemStore.Exists(k)
+}
+
 func (f *failingStore) Lookup(k vault.Key) (vault.Entry, error) {
 	if f.lookupErr != nil {
 		return vault.Entry{}, f.lookupErr
