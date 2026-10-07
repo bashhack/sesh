@@ -294,7 +294,7 @@ Go's garbage collector prevents true secure erasure, but we reduce the exposure 
 ```go
 type SetupHandler interface {
     ServiceName() string
-    Setup() error
+    Setup(filing vault.Filing) error // filing: where --folder and --tag say to file the entry
 }
 ```
 
@@ -308,7 +308,7 @@ type SetupHandler interface {
 ```go
 type SetupService interface {
     RegisterHandler(handler SetupHandler)
-    SetupService(serviceName string) error
+    SetupService(serviceName string, filing vault.Filing) error
     GetAvailableServices() []string
 }
 ```

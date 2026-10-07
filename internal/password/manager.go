@@ -35,6 +35,8 @@ type Entry struct {
 	Service  string    `json:"service"`
 	Username string    `json:"username,omitempty"`
 	Type     EntryType `json:"type"`
+	Folder   string    `json:"folder,omitempty"`
+	Tags     []string  `json:"tags,omitempty"`
 }
 
 func entryFrom(e *vault.Entry) Entry {
@@ -43,6 +45,8 @@ func entryFrom(e *vault.Entry) Entry {
 		Service:   e.Service,
 		Username:  e.Username,
 		Type:      e.Kind,
+		Folder:    e.Folder,
+		Tags:      e.Tags,
 		CreatedAt: e.CreatedAt,
 		UpdatedAt: e.UpdatedAt,
 	}
@@ -62,14 +66,41 @@ func key(service, username string, entryType EntryType) vault.Key {
 	return vault.Key{Kind: entryType, Service: service, Username: username}
 }
 
-// StorePassword creates the entry or replaces its secret.
-func (m *Manager) StorePassword(service, username string, password []byte, entryType EntryType) error {
+// StorePassword creates the entry or replaces its secret, filing it as
+// filing says.
+func (m *Manager) StorePassword(service, username string, password []byte, entryType EntryType, filing vault.Filing) error {
 	secret := bytes.Clone(password)
 	defer secure.SecureZeroBytes(secret)
-	if err := m.store.Put(key(service, username, entryType), secret); err != nil {
+	k := key(service, username, entryType)
+	if filing.IsZero() {
+		if err := m.store.Put(k, secret); err != nil {
+			return fmt.Errorf("failed to store password: %w", err)
+		}
+		return nil
+	}
+	e, err := m.existingOrNew(k)
+	if err != nil {
+		return err
+	}
+	filing.Apply(&e)
+	if err := m.store.Save(&e, secret); err != nil {
 		return fmt.Errorf("failed to store password: %w", err)
 	}
 	return nil
+}
+
+// existingOrNew is the entry at k, to be saved again with its settings,
+// folder, tags, and creation time, or a new one when there's none.
+func (m *Manager) existingOrNew(k vault.Key) (vault.Entry, error) {
+	e, err := m.store.Lookup(k)
+	switch {
+	case errors.Is(err, vault.ErrNotFound):
+		return vault.Entry{Key: k}, nil
+	case err != nil:
+		return vault.Entry{}, fmt.Errorf("failed to check for an existing entry: %w", err)
+	}
+	e.UpdatedAt = time.Time{}
+	return e, nil
 }
 
 // GetPassword returns the entry's secret, which the caller zeroes.
@@ -82,11 +113,21 @@ func (m *Manager) GetPassword(service, username string, entryType EntryType) ([]
 	return secret, nil
 }
 
+// LookupEntry returns the entry without its secret.
+func (m *Manager) LookupEntry(service, username string, entryType EntryType) (Entry, error) {
+	k := key(service, username, entryType)
+	e, err := m.store.Lookup(k)
+	if err != nil {
+		return Entry{}, fmt.Errorf("failed to look up entry: %w", m.withCaseHint(err, k))
+	}
+	return entryFrom(&e), nil
+}
+
 // StorePasswordString is StorePassword for a string.
 func (m *Manager) StorePasswordString(service, username, password string, entryType EntryType) error {
 	secret := []byte(password)
 	defer secure.SecureZeroBytes(secret)
-	return m.StorePassword(service, username, secret, entryType)
+	return m.StorePassword(service, username, secret, entryType, vault.Filing{})
 }
 
 // GetPasswordString is GetPassword as a string, which can't be zeroed.
@@ -101,28 +142,25 @@ func (m *Manager) GetPasswordString(service, username string, entryType EntryTyp
 
 // StoreTOTPSecret stores a TOTP secret with the usual code settings.
 func (m *Manager) StoreTOTPSecret(service, username, secret string) error {
-	return m.StoreTOTPSecretWithParams(service, username, secret, totp.Params{})
+	return m.StoreTOTPSecretWithParams(service, username, secret, totp.Params{}, vault.Filing{})
 }
 
 // StoreTOTPSecretWithParams checks and stores a TOTP secret with its code
 // settings (algorithm, digits, period, issuer), in one write: the settings
 // decide which codes are right, so the secret is never stored without
-// them. An entry being replaced keeps its other settings and its creation
-// time.
-func (m *Manager) StoreTOTPSecretWithParams(service, username, secret string, params totp.Params) error {
+// them. An entry being replaced keeps its other settings, its folder and
+// tags (unless filing changes them), and its creation time.
+func (m *Manager) StoreTOTPSecretWithParams(service, username, secret string, params totp.Params, filing vault.Filing) error {
 	normalized, err := totp.ValidateAndNormalizeSecret(secret)
 	if err != nil {
 		return fmt.Errorf("invalid TOTP secret: %w", err)
 	}
-	e, err := m.store.Lookup(key(service, username, EntryTypeTOTP))
-	switch {
-	case errors.Is(err, vault.ErrNotFound):
-		e = vault.Entry{Key: key(service, username, EntryTypeTOTP)}
-	case err != nil:
-		return fmt.Errorf("failed to check for an existing entry: %w", err)
+	e, err := m.existingOrNew(key(service, username, EntryTypeTOTP))
+	if err != nil {
+		return err
 	}
 	e.Settings.TOTP = params
-	e.UpdatedAt = time.Time{}
+	filing.Apply(&e)
 	plain := []byte(normalized)
 	defer secure.SecureZeroBytes(plain)
 	if err := m.store.Save(&e, plain); err != nil {

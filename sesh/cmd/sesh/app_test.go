@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,8 @@ type MockSetupService struct {
 	RegisterHandlerFunc      func(handler setup.SetupHandler)
 	SetupServiceFunc         func(serviceName string) error
 	GetAvailableServicesFunc func() []string
+	// Filing is what the last SetupService call was given.
+	Filing vault.Filing
 }
 
 // RegisterHandler implements setup.SetupService
@@ -28,7 +31,8 @@ func (m *MockSetupService) RegisterHandler(handler setup.SetupHandler) {
 }
 
 // SetupService implements setup.SetupService
-func (m *MockSetupService) SetupService(serviceName string) error {
+func (m *MockSetupService) SetupService(serviceName string, filing vault.Filing) error {
+	m.Filing = filing
 	if m.SetupServiceFunc != nil {
 		return m.SetupServiceFunc(serviceName)
 	}
@@ -212,20 +216,36 @@ func TestApp_ListEntries(t *testing.T) {
 					NameFunc: func() string { return "totp" },
 					ListEntriesFunc: func() ([]provider.ProviderEntry, error) {
 						return []provider.ProviderEntry{
-							{Name: "github", Description: "GitHub TOTP", ID: "totp/github"},
-							{Name: "aws", Description: "AWS MFA", ID: "totp/aws/default"},
+							{Name: "github", Type: "totp", ID: "totp/github"},
+							{Name: "aws (default)", Type: "aws mfa", ID: "totp/aws/default"},
 						}, nil
 					},
 				}
 				app.Registry.RegisterProvider(mockProvider)
 			},
-			wantStdout: []string{
-				"Entries for totp:",
-				"github",
-				"GitHub TOTP",
-				"aws",
-				"AWS MFA",
+			// No entry has a folder or tags, so neither column shows.
+			wantStdout: []string{"Entries for totp:\n" +
+				"  NAME           TYPE     ID\n" +
+				"  github         totp     totp/github\n" +
+				"  aws (default)  aws mfa  totp/aws/default\n"},
+		},
+		"a list with folders and tags": {
+			serviceName: "totp",
+			setupApp: func(app *App) {
+				app.Registry.RegisterProvider(&MockProvider{
+					NameFunc: func() string { return "totp" },
+					ListEntriesFunc: func() ([]provider.ProviderEntry, error) {
+						return []provider.ProviderEntry{
+							{Name: "github", Type: "totp", ID: "totp/github", Folder: "work/dev", Tags: []string{"code", "urgent"}},
+							{Name: "bank", Type: "totp", ID: "totp/bank"},
+						}, nil
+					},
+				})
 			},
+			wantStdout: []string{"Entries for totp:\n" +
+				"  NAME    TYPE  FOLDER    TAGS         ID\n" +
+				"  github  totp  work/dev  code urgent  totp/github\n" +
+				"  bank    totp                         totp/bank\n"},
 		},
 		"empty list": {
 			serviceName: "totp",
@@ -612,6 +632,20 @@ func TestApp_ConfirmDelete(t *testing.T) {
 				t.Errorf("asked %q, want %q", stderr.String(), tc.wantAsk)
 			}
 		})
+	}
+}
+
+// --setup hands the provider's --folder and --tag to the wizard.
+func TestRun_SetupGetsTheFiling(t *testing.T) {
+	h := newTestHarness()
+	svc := &MockSetupService{}
+	h.app.SetupService = svc
+	code := 0
+	h.app.Exit = func(c int) { code = c }
+	run(h.app, []string{"sesh", "--service", "totp", "--setup", "--folder", "work/dev", "--tag", "a", "--tag", "b"})
+	want := vault.Filing{Folder: "work/dev", FolderSet: true, Tags: []string{"a", "b"}}
+	if code != 0 || !reflect.DeepEqual(svc.Filing, want) {
+		t.Errorf("exit %d, filing %+v; want %+v\nstderr: %s", code, svc.Filing, want, h.stderr.String())
 	}
 }
 

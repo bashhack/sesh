@@ -91,7 +91,7 @@ func (h *mockSetupHandler) ServiceName() string {
 	return h.name
 }
 
-func (h *mockSetupHandler) Setup() error {
+func (h *mockSetupHandler) Setup(vault.Filing) error {
 	h.setupCalled = true
 	return h.setupError
 }
@@ -119,7 +119,7 @@ func TestSetupService(t *testing.T) {
 	}
 
 	// Test setup for registered service
-	err := service.SetupService("test-service")
+	err := service.SetupService("test-service", vault.Filing{})
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestSetupService(t *testing.T) {
 	}
 
 	// Test setup for unregistered service
-	err = service.SetupService("unknown-service")
+	err = service.SetupService("unknown-service", vault.Filing{})
 	if err == nil {
 		t.Error("Expected error for unknown service, got nil")
 	}
@@ -1582,15 +1582,15 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 		failSave      bool
 	}{
 		"successful setup with QR code": {
-			userInput: "MyService\ndefault\n2\n\n", // service name, profile, QR choice, Enter to capture
+			userInput: "MyService\ndefault\n2\n\n\n\n", // service name, profile, QR choice, Enter to capture, no folder, no tags
 			wantKey:   vault.Key{Kind: vault.KindTOTP, Service: "MyService", Username: "default"},
 		},
 		"successful setup with manual entry": {
-			userInput: "MyService\ndefault\n1\n", // service name, profile, manual entry
+			userInput: "MyService\ndefault\n1\n\n\n", // service name, profile, manual entry, no folder, no tags
 			wantKey:   vault.Key{Kind: vault.KindTOTP, Service: "MyService", Username: "default"},
 		},
 		"successful setup without profile": {
-			userInput: "MyService\n\n1\n",
+			userInput: "MyService\n\n1\n\n\n",
 			wantKey:   vault.Key{Kind: vault.KindTOTP, Service: "MyService"},
 		},
 		"invalid secret": {
@@ -1604,7 +1604,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			wantErrMsg:    "failed to generate TOTP codes",
 		},
 		"store error": {
-			userInput:  "MyService\ndefault\n1\n",
+			userInput:  "MyService\ndefault\n1\n\n\n",
 			failSave:   true,
 			wantErrMsg: "failed to store the TOTP secret",
 		},
@@ -1635,7 +1635,7 @@ func TestTOTPSetupHandler_Setup(t *testing.T) {
 			handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader(tc.userInput))}
 
 			var err error
-			output := testutil.CaptureStdout(func() { err = handler.Setup() })
+			output := testutil.CaptureStdout(func() { err = handler.Setup(vault.Filing{}) })
 
 			if tc.wantErrMsg != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErrMsg) {
@@ -1669,10 +1669,10 @@ func TestTOTPSetupHandler_Setup_StoresQRSettings(t *testing.T) {
 	}
 	stubTOTPSetup(t, info, "")
 	store := vault.NewMemStore()
-	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n"))}
+	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n\n\n"))}
 
 	var err error
-	_ = testutil.CaptureStdout(func() { err = handler.Setup() })
+	_ = testutil.CaptureStdout(func() { err = handler.Setup(vault.Filing{}) })
 	if err != nil {
 		t.Fatalf("Setup(): %v", err)
 	}
@@ -1697,10 +1697,10 @@ func TestTOTPSetupHandler_Setup_OverwriteKeepsMFADevice(t *testing.T) {
 	if err := store.Save(&vault.Entry{Key: k, Settings: vault.Settings{AWSMFADevice: device}, CreatedAt: created}, []byte("OLDSECRETOLDSECR")); err != nil {
 		t.Fatal(err)
 	}
-	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("aws\nwork\ny\n1\n"))}
+	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("aws\nwork\ny\n1\n\n\n"))}
 
 	var err error
-	_ = testutil.CaptureStdout(func() { err = handler.Setup() })
+	_ = testutil.CaptureStdout(func() { err = handler.Setup(vault.Filing{}) })
 	if err != nil {
 		t.Fatalf("Setup(): %v", err)
 	}
@@ -1724,10 +1724,10 @@ func TestTOTPSetupHandler_Setup_OverwriteKeepsMFADevice(t *testing.T) {
 func TestTOTPSetupHandler_Setup_QRSettingsFailClosed(t *testing.T) {
 	stubTOTPSetup(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA256", Digits: 8, Period: 60}, "")
 	mem := vault.NewMemStore()
-	handler := &TOTPSetupHandler{store: failingSave{mem}, reader: bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n"))}
+	handler := &TOTPSetupHandler{store: failingSave{mem}, reader: bufio.NewReader(strings.NewReader("MyService\ndefault\n2\n\n\n\n"))}
 
 	var err error
-	_ = testutil.CaptureStdout(func() { err = handler.Setup() })
+	_ = testutil.CaptureStdout(func() { err = handler.Setup(vault.Filing{}) })
 	if wantSub := "failed to store the TOTP secret"; err == nil || !strings.Contains(err.Error(), wantSub) {
 		t.Fatalf("Setup() = %v, want an error containing %q", err, wantSub)
 	}
@@ -1739,14 +1739,14 @@ func TestTOTPSetupHandler_Setup_QRSettingsFailClosed(t *testing.T) {
 func TestTOTPSetupHandler_Setup_VerificationCodesUseQRSettings(t *testing.T) {
 	params := totp.Params{Algorithm: "SHA256", Digits: 8}
 	stubTOTPSetup(t, qrcode.TOTPInfo{Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA256", Digits: 8}, "")
-	handler := &TOTPSetupHandler{store: vault.NewMemStore(), reader: bufio.NewReader(strings.NewReader("MyService\n\n2\n\n"))}
+	handler := &TOTPSetupHandler{store: vault.NewMemStore(), reader: bufio.NewReader(strings.NewReader("MyService\n\n2\n\n\n\n"))}
 
 	before, after, err := totp.GenerateConsecutiveCodesBytesWithParams([]byte("JBSWY3DPEHPK3PXP"), params)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var setupErr error
-	output := testutil.CaptureStdout(func() { setupErr = handler.Setup() })
+	output := testutil.CaptureStdout(func() { setupErr = handler.Setup(vault.Filing{}) })
 	if setupErr != nil {
 		t.Fatalf("Setup(): %v", setupErr)
 	}
@@ -1784,12 +1784,12 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 		},
 		"existing entry - user overwrites with y": {
 			existing:        true,
-			userInput:       "TestService\n\ny\n1\n", // overwrite: yes, manual entry
+			userInput:       "TestService\n\ny\n1\n\n\n", // overwrite: yes, manual entry, no folder, no tags
 			expectOverwrite: true,
 		},
 		"existing entry - user overwrites with yes": {
 			existing:        true,
-			userInput:       "TestService\n\nyes\n1\n",
+			userInput:       "TestService\n\nyes\n1\n\n\n",
 			expectOverwrite: true,
 		},
 		"existing entry with profile - user cancels": {
@@ -1799,7 +1799,7 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 			expectedErrorMsg: "setup cancelled by user",
 		},
 		"no existing entry - proceeds normally": {
-			userInput: "TestService\n\n1\n",
+			userInput: "TestService\n\n1\n\n\n",
 		},
 	}
 
@@ -1817,7 +1817,7 @@ func TestTOTPSetupHandler_Setup_Overwrite(t *testing.T) {
 			handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader(tc.userInput))}
 
 			var err error
-			output := testutil.CaptureStdout(func() { err = handler.Setup() })
+			output := testutil.CaptureStdout(func() { err = handler.Setup(vault.Filing{}) })
 
 			if tc.expectedErrorMsg != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.expectedErrorMsg) {
@@ -1859,7 +1859,7 @@ func TestTOTPSetupHandler_Setup_AsksBeforeANameInAnotherCase(t *testing.T) {
 	}
 	handler := &TOTPSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("github\nalice\nn\n"))}
 	var err error
-	output := testutil.CaptureStdout(func() { err = handler.Setup() })
+	output := testutil.CaptureStdout(func() { err = handler.Setup(vault.Filing{}) })
 	if err == nil || !strings.Contains(err.Error(), "setup cancelled") {
 		t.Fatalf("Setup() = %v, want it cancelled", err)
 	}

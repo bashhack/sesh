@@ -81,9 +81,11 @@ type Credentials struct {
 
 // ProviderEntry is returned by ListEntries()
 type ProviderEntry struct {
-    Name        string // Display name (e.g., "github (work)")
-    Description string // Human-readable description
-    ID          string // The entry's key in text form ("totp/github/work"); DeleteEntries() receives it
+    Name   string   // Display name (e.g., "github (work)")
+    Type   string   // What kind of entry it is, shown in --list's TYPE column (e.g., "totp")
+    ID     string   // The entry's key in text form ("totp/github/work"); DeleteEntries() receives it
+    Folder string   // The entry's folder, "" for none
+    Tags   []string // The entry's tags
 }
 
 // FlagInfo is returned by GetFlagInfo() for help text generation
@@ -303,9 +305,11 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
     for i := range entries {
         e := &entries[i]
         result = append(result, provider.ProviderEntry{
-            ID:          e.Key.String(), // e.g. "api_key/yourservice/work"
-            Name:        fmt.Sprintf("%s (%s)", e.Service, e.Username),
-            Description: "API token",
+            ID:     e.Key.String(), // e.g. "api_key/yourservice/work"
+            Name:   fmt.Sprintf("%s (%s)", e.Service, e.Username),
+            Type:   "api token",
+            Folder: e.Folder,
+            Tags:   e.Tags,
         })
     }
     return result, nil
@@ -364,7 +368,9 @@ func (h *YourServiceSetupHandler) ServiceName() string {
     return "yourservice"
 }
 
-func (h *YourServiceSetupHandler) Setup() error {
+// filing is where --folder and --tag say to file the entry; the built-in
+// wizards ask when it's zero.
+func (h *YourServiceSetupHandler) Setup(filing vault.Filing) error {
     fmt.Println("🔧 Setting up Your Service")
 
     fmt.Print("Account name (leave empty for none): ")
@@ -392,7 +398,9 @@ func (h *YourServiceSetupHandler) Setup() error {
     }
     defer secure.SecureZeroBytes(secret)
 
-    if err := h.store.Put(k, secret); err != nil {
+    e := vault.Entry{Key: k}
+    filing.Apply(&e)
+    if err := h.store.Save(&e, secret); err != nil {
         return fmt.Errorf("failed to store the token: %w", err)
     }
     fmt.Printf("✅ Token stored as %s\n", k)
@@ -727,9 +735,11 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
     result := make([]provider.ProviderEntry, 0, len(entries))
     for i := range entries {
         result = append(result, provider.ProviderEntry{
-            ID:          entries[i].Key.String(),
-            Name:        entries[i].Service,
-            Description: "TOTP",
+            ID:     entries[i].Key.String(),
+            Name:   entries[i].Service,
+            Type:   "totp",
+            Folder: entries[i].Folder,
+            Tags:   entries[i].Tags,
         })
     }
     return result, nil

@@ -3,6 +3,7 @@ package password
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func TestExportImport_RoundTripKeepsEverything(t *testing.T) {
 		secret string
 		entry  vault.Entry
 	}{
-		{"pw", vault.Entry{Kind: vault.KindPassword, Service: "github", Username: "alice", CreatedAt: created, UpdatedAt: updated}},
+		{"pw", vault.Entry{Kind: vault.KindPassword, Service: "github", Username: "alice", Folder: "work/dev", Tags: []string{"code", "urgent"}, CreatedAt: created, UpdatedAt: updated}},
 		{"JBSWY3DPEHPK3PXP", vault.Entry{Kind: vault.KindTOTP, Service: "bank", Username: "me", Settings: vault.Settings{TOTP: params}, CreatedAt: created, UpdatedAt: updated}},
 		{"GEZDGNBVGY3TQOJQ", vault.Entry{Kind: vault.KindTOTP, Service: "aws", Username: "work", Settings: vault.Settings{AWSMFADevice: "arn:aws:iam::1:mfa/me"}, CreatedAt: created, UpdatedAt: updated}},
 	}
@@ -48,7 +49,7 @@ func TestExportImport_RoundTripKeepsEverything(t *testing.T) {
 				if err != nil {
 					t.Fatalf("%s: %v", w.entry.Key, err)
 				}
-				if got.Settings != w.entry.Settings || !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(updated) {
+				if got.Settings != w.entry.Settings || got.Folder != w.entry.Folder || !slices.Equal(got.Tags, w.entry.Tags) || !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(updated) {
 					t.Errorf("%s restored as %+v, want %+v", w.entry.Key, got, w.entry)
 				}
 				if secret, err := dstStore.Get(w.entry.Key); err != nil || string(secret) != w.secret {
@@ -94,6 +95,54 @@ func TestImport_Conflicts(t *testing.T) {
 		if err != nil || got != tt.want || res.Skipped != tt.skipped || len(res.Errors) != tt.errors {
 			t.Errorf("on conflict %q: secret %q (%v), result %+v; want %q, %d skipped, %d errors", tt.on, got, err, res, tt.want, tt.skipped, tt.errors)
 		}
+	}
+}
+
+// Overwriting on import replaces the entry's folder and tags with the
+// file's; a bad folder or tag is reported, and the rest still import.
+func TestImport_FolderAndTags(t *testing.T) {
+	m, store := newTestManager(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	if err := store.Save(&vault.Entry{Key: k, Folder: "old", Tags: []string{"stale"}}, []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	in := `[{"service": "github", "username": "alice", "type": "password", "secret": "new", "folder": "work", "tags": ["urgent"]},
+		{"service": "bad", "type": "password", "secret": "s", "tags": ["a b"]},
+		{"service": "ok", "type": "password", "secret": "s"}]`
+	res, err := m.Import(strings.NewReader(in), ImportOptions{OnConflict: ConflictOverwrite})
+	if err != nil || res.Imported != 2 || len(res.Errors) != 1 || !strings.Contains(res.Errors[0], `"bad": the tag "a b" contains ' '`) {
+		t.Fatalf("Import = %+v, %v; want 2 imported and the bad tag reported", res, err)
+	}
+	if e, err := store.Lookup(k); err != nil || e.Folder != "work" || !slices.Equal(e.Tags, []string{"urgent"}) {
+		t.Errorf("overwritten entry = %+v, %v; want folder work, tags [urgent]", e, err)
+	}
+}
+
+// CSV holds tags joined by ";".
+func TestExport_CSVFolderAndTagsColumns(t *testing.T) {
+	m, store := newTestManager(t)
+	if err := store.Save(&vault.Entry{Kind: vault.KindPassword, Service: "github", Folder: "work", Tags: []string{"b", "a"}}, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := m.Export(&buf, ExportOptions{Format: FormatCSV}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 || !strings.HasSuffix(lines[0], ",settings,folder,tags") || !strings.HasSuffix(lines[1], ",work,a;b") {
+		t.Errorf("CSV = %q, want folder and tags columns holding work and a;b", lines)
+	}
+}
+
+// A hand-edited tags cell may have spaces around a tag or an empty one.
+func TestImport_CSVTagsCellIsLenient(t *testing.T) {
+	m, store := newTestManager(t)
+	in := "service,type,secret,tags\ngithub,password,pw,a; b;;c;\n"
+	if res, err := m.Import(strings.NewReader(in), ImportOptions{Format: FormatCSV}); err != nil || res.Imported != 1 {
+		t.Fatalf("Import = %+v, %v", res, err)
+	}
+	if e, err := store.Lookup(vault.Key{Kind: vault.KindPassword, Service: "github"}); err != nil || !slices.Equal(e.Tags, []string{"a", "b", "c"}) {
+		t.Errorf("tags = %q, %v; want [a b c]", e.Tags, err)
 	}
 }
 

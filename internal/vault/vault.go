@@ -139,6 +139,131 @@ func CheckName(what, v string) error {
 	return nil
 }
 
+// MaxTagLength is the most characters a tag can have.
+const MaxTagLength = 64
+
+// MaxFolderLength is the most characters a folder can have, "/"s included.
+const MaxFolderLength = 256
+
+// CheckTag refuses a tag that breaks the label rules (see checkLabel) or
+// has more than MaxTagLength characters.
+func CheckTag(t string) error {
+	if err := checkLabel(t); err != nil {
+		return fmt.Errorf("the tag %q %w", t, err)
+	}
+	if n := utf8.RuneCountInString(t); n > MaxTagLength {
+		return fmt.Errorf("the tag is %d characters long; the most is %d", n, MaxTagLength)
+	}
+	return nil
+}
+
+// CheckFolder refuses a folder that isn't parts joined by "/", each made as
+// a tag is, or has more than MaxFolderLength characters. "" is no folder.
+func CheckFolder(f string) error {
+	if f == "" {
+		return nil
+	}
+	if n := utf8.RuneCountInString(f); n > MaxFolderLength {
+		return fmt.Errorf("the folder is %d characters long; the most is %d", n, MaxFolderLength)
+	}
+	for part := range strings.SplitSeq(f, "/") {
+		if part == "" {
+			return fmt.Errorf("the folder %q has an empty part: \"/\" separates folders, so it can't come first, last, or twice in a row", f)
+		}
+		if strings.Trim(part, ".") == "" {
+			return fmt.Errorf("the folder %q has a part that's only dots, which reads like a path", f)
+		}
+		if err := checkLabel(part); err != nil {
+			return fmt.Errorf("the folder %q %w", f, err)
+		}
+		if n := utf8.RuneCountInString(part); n > MaxTagLength {
+			return fmt.Errorf("the folder %q: a part is %d characters long; the most is %d", f, n, MaxTagLength)
+		}
+	}
+	return nil
+}
+
+// checkLabel refuses an empty tag or folder part, one starting with "-"
+// (which a command would read as a flag), or one holding anything but
+// letters (with their accent and vowel marks), digits, "-", "_" and ".".
+func checkLabel(v string) error {
+	if v == "" {
+		return errors.New("is empty")
+	}
+	if strings.HasPrefix(v, "-") {
+		return errors.New(`can't start with "-"`)
+	}
+	for i, r := range v {
+		ok := unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' ||
+			// A mark belongs to the character before it: "é" can be
+			// written as "e" and an accent.
+			(i > 0 && unicode.In(r, unicode.Mn, unicode.Mc))
+		if !ok || isInvisible(r) {
+			return fmt.Errorf("contains %s: use letters, digits, \"-\", \"_\" and \".\"", quoteRune(r))
+		}
+	}
+	if hasHiddenRune(v) {
+		return errors.New("contains an invisible character")
+	}
+	return nil
+}
+
+// quoteRune quotes r for an error, escaped when it wouldn't show on its
+// own, such as a blank letter or an accent.
+func quoteRune(r rune) string {
+	if r == ' ' || (unicode.IsGraphic(r) && !isInvisible(r) && !unicode.In(r, unicode.Mn, unicode.Mc, unicode.Me) && !unicode.IsSpace(r)) {
+		return fmt.Sprintf("%q", r)
+	}
+	return fmt.Sprintf("%+q", r)
+}
+
+// Filing is where an entry being stored is filed. The zero Filing leaves
+// an entry where it is.
+type Filing struct {
+	// Folder, when FolderSet, is the folder the entry moves to ("" for
+	// none).
+	Folder string
+	// Tags are added to the entry's tags.
+	Tags      []string
+	FolderSet bool
+}
+
+// IsZero reports whether f changes nothing.
+func (f Filing) IsZero() bool {
+	return !f.FolderSet && len(f.Tags) == 0
+}
+
+// Check refuses a folder or tag no entry can have.
+func (f Filing) Check() error {
+	if err := CheckFolder(f.Folder); err != nil {
+		return err
+	}
+	for _, t := range f.Tags {
+		if err := CheckTag(t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Apply files e as f says.
+func (f Filing) Apply(e *Entry) {
+	if f.FolderSet {
+		e.Folder = f.Folder
+	}
+	e.Tags = NormalizeTags(append(slices.Clone(e.Tags), f.Tags...))
+}
+
+// NormalizeTags returns tags sorted, each once.
+func NormalizeTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := slices.Clone(tags)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 // isDirectionControl reports whether r changes the direction text is shown
 // in, which can make a name display as another.
 func isDirectionControl(r rune) bool {
@@ -247,6 +372,11 @@ type Entry struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	Key
+	// Folder is the folder the entry is in, "" for none; folders nest with
+	// "/". It files the entry; it isn't part of its ID.
+	Folder string
+	// Tags are the entry's tags, sorted, each once.
+	Tags     []string
 	Settings Settings
 }
 
@@ -266,11 +396,12 @@ func (f Filter) Matches(e *Entry) bool {
 type Store interface {
 	// Get returns the entry's secret, which the caller zeroes.
 	Get(k Key) ([]byte, error)
-	// Put creates the entry or replaces its secret, keeping its settings
-	// and creation time.
+	// Put creates the entry or replaces its secret, keeping its settings,
+	// folder, tags, and creation time.
 	Put(k Key, secret []byte) error
-	// Save creates or replaces the whole entry: secret, settings, and its
-	// times (a zero time means now). Import and key changes use it.
+	// Save creates or replaces the whole entry: secret, settings, folder,
+	// tags, and its times (a zero time means now). Import and key changes
+	// use it.
 	Save(e *Entry, secret []byte) error
 	// SetSettings replaces the entry's settings.
 	SetSettings(k Key, s Settings) error

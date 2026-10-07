@@ -29,6 +29,7 @@ type Provider struct {
 
 	serviceName string
 	profile     string
+	filing      provider.FilingFlags
 	force       bool
 }
 
@@ -60,6 +61,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.serviceName, "service-name", "", "Name of the service to authenticate with")
 	fs.StringVar(&p.profile, "profile", "", "Profile name for the service (for multiple accounts)")
 	fs.BoolVar(&p.force, "force", false, "Delete without asking")
+	p.filing.Register(fs)
 	return nil
 }
 
@@ -166,7 +168,7 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 		if e.Username != "" {
 			name = fmt.Sprintf("%s (%s)", e.Service, e.Username)
 		}
-		result = append(result, provider.ProviderEntry{Name: name, Description: "TOTP", ID: e.Key.String()})
+		result = append(result, provider.ProviderEntry{Name: name, Type: string(vault.KindTOTP), ID: e.Key.String(), Folder: e.Folder, Tags: e.Tags})
 	}
 	return result, nil
 }
@@ -214,7 +216,7 @@ func (p *Provider) ValidateRequest() error {
 
 // GetFlagInfo returns information about TOTP provider-specific flags.
 func (p *Provider) GetFlagInfo() []provider.FlagInfo {
-	return []provider.FlagInfo{
+	return append([]provider.FlagInfo{
 		{
 			Name:        "service-name",
 			Type:        "string",
@@ -233,8 +235,14 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Description: "Delete without asking",
 			Required:    false,
 		},
-	}
+	}, p.filing.FlagInfo()...)
 }
+
+// Filing is what --folder and --tag say, for --setup.
+func (p *Provider) Filing() vault.Filing { return p.filing.Filing() }
+
+// Storing reports that only --setup stores an entry.
+func (p *Provider) Storing() (bool, string) { return false, "--setup" }
 
 // CheckArgs refuses a service name or profile no entry can have, without
 // the vault, so the CLI can stop before opening it.

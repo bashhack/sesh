@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"slices"
 	"strings"
 	"testing"
 
@@ -151,7 +152,7 @@ func TestListEntriesWithFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Listed by service name; the ID is what --delete takes.
-	if e := entries[0]; e.ID != "password/github/user1" || e.Name != "github (user1)" || e.Description != "[password]" {
+	if e := entries[0]; e.ID != "password/github/user1" || e.Name != "github (user1)" || e.Type != "password" {
 		t.Errorf("first entry = %+v, want ID password/github/user1, name github (user1), [password]", e)
 	}
 }
@@ -322,6 +323,47 @@ func TestStorePassword_HappyPath(t *testing.T) {
 	}
 	if !strings.Contains(creds.DisplayInfo, "Stored password for github") {
 		t.Errorf("DisplayInfo = %q, want contains 'Stored password for github'", creds.DisplayInfo)
+	}
+}
+
+// parseFlags sets p's flags from args, as the CLI does.
+func parseFlags(t *testing.T, p *Provider, args ...string) {
+	t.Helper()
+	fs := flag.NewFlagSet("sesh", flag.ContinueOnError)
+	if err := p.SetupFlags(fs); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.Parse(args); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --folder and --tag file the stored entry, and get --format json shows
+// them.
+func TestStorePassword_FolderAndTags(t *testing.T) {
+	stubReadPassword(t, "s3cret")
+	store := vault.NewMemStore()
+	p, _ := newTestProvider(store)
+	parseFlags(t, p, "--action", "store", "--service-name", "github", "--force", "--folder", "work/dev", "--tag", "b", "--tag", "a")
+	if _, err := p.GetCredentials(); err != nil {
+		t.Fatalf("GetCredentials: %v", err)
+	}
+
+	get, stdout := newTestProvider(store)
+	parseFlags(t, get, "--action", "get", "--service-name", "github", "--format", "json")
+	if _, err := get.GetCredentials(); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	var payload struct {
+		Folder   string   `json:"folder"`
+		Password string   `json:"password"`
+		Tags     []string `json:"tags"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout not JSON: %v (raw %q)", err, stdout.String())
+	}
+	if payload.Folder != "work/dev" || !slices.Equal(payload.Tags, []string{"a", "b"}) || payload.Password != "s3cret" {
+		t.Errorf("get --format json = %+v; want folder work/dev, tags [a b], the password", payload)
 	}
 }
 

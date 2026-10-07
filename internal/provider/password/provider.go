@@ -41,6 +41,7 @@ type Provider struct {
 	onConflict string // import conflict strategy: "skip", "overwrite"
 	format     string // output format: "table", "json", "csv"
 	service    string
+	filing     provider.FilingFlags
 	pwLength   int // password generation length
 	limit      int
 	offset     int
@@ -111,11 +112,24 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.IntVar(&p.pwLength, "length", 24, "Generated password length")
 	fs.IntVar(&p.limit, "limit", 0, "Limit number of results (0 = no limit)")
 	fs.IntVar(&p.offset, "offset", 0, "Skip first N results")
+	p.filing.Register(fs)
 	return nil
 }
 
+// Filing is what --folder and --tag say, for the actions that store.
+func (p *Provider) Filing() vault.Filing { return p.filing.Filing() }
+
+// Storing reports whether the action stores an entry.
+func (p *Provider) Storing() (bool, string) {
+	switch p.action {
+	case "store", "generate", "totp-store":
+		return true, ""
+	}
+	return false, "--action store, generate, or totp-store"
+}
+
 func (p *Provider) GetFlagInfo() []provider.FlagInfo {
-	return []provider.FlagInfo{
+	return append([]provider.FlagInfo{
 		{Name: "action", Type: "string", Description: "Action: store, get, generate, search, export, import, totp-store, totp-generate",
 			Values: []string{"store", "get", "generate", "search", "export", "import", "totp-store", "totp-generate"}},
 		{Name: "service-name", Type: "string", Description: "Service name"},
@@ -136,7 +150,7 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 		{Name: "length", Type: "int", Description: "Generated password length (default 24)"},
 		{Name: "limit", Type: "int", Description: "Limit number of results (0 = no limit)"},
 		{Name: "offset", Type: "int", Description: "Skip first N results"},
-	}
+	}, p.filing.FlagInfo()...)
 }
 
 func (p *Provider) ValidateRequest() error {
@@ -341,9 +355,11 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 			name = fmt.Sprintf("%s (%s)", e.Service, e.Username)
 		}
 		result = append(result, provider.ProviderEntry{
-			Name:        name,
-			Description: fmt.Sprintf("[%s]", e.Type),
-			ID:          e.ID,
+			Name:   name,
+			Type:   string(e.Type),
+			ID:     e.ID,
+			Folder: e.Folder,
+			Tags:   e.Tags,
 		})
 	}
 	return result, nil
@@ -415,7 +431,7 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 	}
 	defer secure.SecureZeroBytes(pw)
 
-	if err := mgr.StorePassword(p.service, p.username, pw, et); err != nil {
+	if err := mgr.StorePassword(p.service, p.username, pw, et, p.Filing()); err != nil {
 		return provider.Credentials{}, err
 	}
 	// A typed password only; API keys and notes come from elsewhere.
@@ -450,7 +466,7 @@ func (p *Provider) generateAndStore(mgr *password.Manager) ([]byte, string, erro
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to generate password: %w", err)
 	}
-	if err := mgr.StorePassword(p.service, p.username, generated, p.effectiveEntryType()); err != nil {
+	if err := mgr.StorePassword(p.service, p.username, generated, p.effectiveEntryType(), p.Filing()); err != nil {
 		secure.SecureZeroBytes(generated)
 		return nil, "", err
 	}
@@ -525,15 +541,23 @@ func (p *Provider) getPassword(mgr *password.Manager) (provider.Credentials, err
 	defer secure.SecureZeroBytes(secretBytes)
 
 	if p.format == "json" {
+		e, err := mgr.LookupEntry(p.service, p.username, et)
+		if err != nil {
+			return provider.Credentials{}, err
+		}
 		out := struct {
-			Service  string `json:"service"`
-			Username string `json:"username,omitempty"`
-			Type     string `json:"type"`
-			Password string `json:"password"`
+			Service  string   `json:"service"`
+			Username string   `json:"username,omitempty"`
+			Type     string   `json:"type"`
+			Folder   string   `json:"folder,omitempty"`
+			Password string   `json:"password"`
+			Tags     []string `json:"tags,omitempty"`
 		}{
 			Service:  p.service,
 			Username: p.username,
-			Type:     string(p.effectiveEntryType()),
+			Type:     string(et),
+			Folder:   e.Folder,
+			Tags:     e.Tags,
 			Password: string(secretBytes),
 		}
 		b, err := json.MarshalIndent(out, "", "  ") //nolint:gosec // --format json prints the requested password by design
@@ -637,7 +661,7 @@ func (p *Provider) storeTOTP(mgr *password.Manager) (provider.Credentials, error
 		secret = string(secretBytes)
 	}
 
-	if err := mgr.StoreTOTPSecretWithParams(p.service, p.username, secret, params); err != nil {
+	if err := mgr.StoreTOTPSecretWithParams(p.service, p.username, secret, params, p.Filing()); err != nil {
 		return provider.Credentials{}, err
 	}
 

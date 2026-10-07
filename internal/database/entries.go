@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/bashhack/sesh/internal/vault"
@@ -32,6 +33,18 @@ func entryAAD(k vault.Key) []byte {
 		aad = append(aad, f...)
 	}
 	return aad
+}
+
+// tagsColumn selects an entries row's tags, joined by ",", which a tag
+// can't contain; NULL for none.
+const tagsColumn = `(SELECT group_concat(tag, ',') FROM entry_tags WHERE entry_id = entries.id)`
+
+// splitTags reads tagsColumn.
+func splitTags(col sql.NullString) []string {
+	if !col.Valid || col.String == "" {
+		return nil
+	}
+	return vault.NormalizeTags(strings.Split(col.String, ","))
 }
 
 func notFound(k vault.Key) error {
@@ -92,11 +105,21 @@ func (s *Store) Save(e *vault.Entry, secret []byte) error {
 	return s.write(e, secret, true)
 }
 
-// write stores e's secret. whole also replaces its settings and times;
-// otherwise an existing entry keeps them, except its update time.
+// write stores e's secret. whole also replaces its settings, folder, tags,
+// and times; otherwise an existing entry keeps them, except its update
+// time.
 func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
 	if err := e.Key.Validate(); err != nil {
 		return err
+	}
+	if err := vault.CheckFolder(e.Folder); err != nil {
+		return err
+	}
+	tags := vault.NormalizeTags(e.Tags)
+	for _, t := range tags {
+		if err := vault.CheckTag(t); err != nil {
+			return err
+		}
 	}
 	if len(secret) > MaxSecretSize {
 		return fmt.Errorf("%w: %d bytes (max %d)", ErrSecretTooLarge, len(secret), MaxSecretSize)
@@ -119,16 +142,29 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
 	}
 	onConflict := `encrypted_data = excluded.encrypted_data, salt = excluded.salt, updated_at = excluded.updated_at`
 	if whole {
-		onConflict += `, settings = excluded.settings, created_at = excluded.created_at`
+		onConflict += `, settings = excluded.settings, folder = excluded.folder, created_at = excluded.created_at`
 	}
 	err = s.inTx(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
-			INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT (kind, service, username) DO UPDATE SET `+onConflict,
-			string(e.Kind), e.Service, e.Username, encData, salt, settings, created, updated,
-		)
-		return err
+		var id int64
+		err := tx.QueryRow(`
+			INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, folder, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (kind, service, username) DO UPDATE SET `+onConflict+`
+			RETURNING id`,
+			string(e.Kind), e.Service, e.Username, encData, salt, settings, e.Folder, created, updated,
+		).Scan(&id)
+		if err != nil || !whole {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM entry_tags WHERE entry_id = ?`, id); err != nil {
+			return err
+		}
+		for _, t := range tags {
+			if _, err := tx.Exec(`INSERT INTO entry_tags (entry_id, tag) VALUES (?, ?)`, id, t); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("store %s: %w", e.Key, err)
@@ -166,10 +202,10 @@ func (s *Store) SetSettings(k vault.Key, settings vault.Settings) error {
 
 // Lookup implements vault.Store.
 func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
-	var col sql.NullString
+	var col, tags sql.NullString
 	e := vault.Entry{Key: k}
-	err := s.db.QueryRow(`SELECT settings, created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`,
-		string(k.Kind), k.Service, k.Username).Scan(&col, &e.CreatedAt, &e.UpdatedAt)
+	err := s.db.QueryRow(`SELECT settings, folder, `+tagsColumn+`, created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&col, &e.Folder, &tags, &e.CreatedAt, &e.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return vault.Entry{}, notFound(k)
 	}
@@ -179,6 +215,7 @@ func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
 	if e.Settings, err = decodeSettings(k, col); err != nil {
 		return vault.Entry{}, err
 	}
+	e.Tags = splitTags(tags)
 	return e, nil
 }
 
@@ -198,7 +235,7 @@ func (s *Store) Exists(k vault.Key) error {
 
 // List implements vault.Store.
 func (s *Store) List(f vault.Filter) (_ []vault.Entry, err error) {
-	q := `SELECT kind, service, username, settings, created_at, updated_at FROM entries WHERE 1 = 1`
+	q := `SELECT kind, service, username, settings, folder, ` + tagsColumn + `, created_at, updated_at FROM entries WHERE 1 = 1`
 	var args []any
 	if f.Kind != "" {
 		q += ` AND kind = ?`
@@ -221,14 +258,15 @@ func (s *Store) List(f vault.Filter) (_ []vault.Entry, err error) {
 	for rows.Next() {
 		var e vault.Entry
 		var kind string
-		var col sql.NullString
-		if err := rows.Scan(&kind, &e.Service, &e.Username, &col, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		var col, tags sql.NullString
+		if err := rows.Scan(&kind, &e.Service, &e.Username, &col, &e.Folder, &tags, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("list entries: %w", err)
 		}
 		e.Kind = vault.Kind(kind)
 		if e.Settings, err = decodeSettings(e.Key, col); err != nil {
 			return nil, err
 		}
+		e.Tags = splitTags(tags)
 		out = append(out, e)
 	}
 	return out, rows.Err()

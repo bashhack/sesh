@@ -25,7 +25,7 @@ var migrations = map[int]func(tx *sql.Tx) error{
 	1: migrateV1,
 }
 
-// migrateV1 creates the schema: the entries, the vault's key record
+// migrateV1 creates the schema: the entries and their tags, the vault's key record
 // (vault_key), its recovery key record, and the audit log.
 func migrateV1(tx *sql.Tx) error {
 	for _, q := range []string{
@@ -37,10 +37,19 @@ func migrateV1(tx *sql.Tx) error {
 			encrypted_data BLOB NOT NULL,
 			salt           BLOB NOT NULL,
 			settings       TEXT,
+			folder         TEXT NOT NULL DEFAULT '',
 			created_at     DATETIME NOT NULL,
 			updated_at     DATETIME NOT NULL,
 			UNIQUE (kind, service, username)
 		)`,
+		`CREATE INDEX idx_entries_folder ON entries(folder)`,
+		// An entry's tags go with it when it's deleted.
+		`CREATE TABLE entry_tags (
+			entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+			tag      TEXT NOT NULL,
+			PRIMARY KEY (entry_id, tag)
+		)`,
+		`CREATE INDEX idx_entry_tags_tag ON entry_tags(tag)`,
 		// One row: what turns the master password into the vault's key.
 		// None of it is secret; see vault_key.go.
 		`CREATE TABLE vault_key (

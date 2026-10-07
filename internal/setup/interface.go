@@ -2,12 +2,16 @@ package setup
 
 import (
 	"fmt"
+
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // SetupHandler defines a handler for a specific service setup
 type SetupHandler interface {
 	ServiceName() string
-	Setup() error
+	// Setup runs the wizard, filing the entry as filing says; when filing
+	// is zero, the wizard asks where to file it.
+	Setup(filing vault.Filing) error
 }
 
 // SetupService is the main service for setting up credentials
@@ -16,7 +20,7 @@ type SetupService interface {
 	RegisterHandler(handler SetupHandler)
 
 	// SetupService initiates the setup process for a specific service
-	SetupService(serviceName string) error
+	SetupService(serviceName string, filing vault.Filing) error
 
 	// GetAvailableServices returns a list of services that can be set up
 	GetAvailableServices() []string
@@ -38,13 +42,13 @@ func (s *setupServiceImpl) RegisterHandler(handler SetupHandler) {
 }
 
 // SetupService initiates the setup process for a specific service
-func (s *setupServiceImpl) SetupService(serviceName string) error {
+func (s *setupServiceImpl) SetupService(serviceName string, filing vault.Filing) error {
 	handler, exists := s.handlers[serviceName]
 	if !exists {
 		return fmt.Errorf("no setup handler registered for service: %s", serviceName)
 	}
 
-	return handler.Setup()
+	return handler.Setup(filing)
 }
 
 // GetAvailableServices returns a list of services that can be set up

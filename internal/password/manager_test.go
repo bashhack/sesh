@@ -2,6 +2,8 @@ package password
 
 import (
 	"errors"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -107,7 +109,7 @@ func TestStoreTOTPSecret(t *testing.T) {
 	}
 
 	params := totp.Params{Digits: 8, Algorithm: "SHA256"}
-	if err := m.StoreTOTPSecretWithParams("bank", "me", "JBSWY3DPEHPK3PXP", params); err != nil {
+	if err := m.StoreTOTPSecretWithParams("bank", "me", "JBSWY3DPEHPK3PXP", params, vault.Filing{}); err != nil {
 		t.Fatal(err)
 	}
 	if e, err := store.Lookup(k); err != nil || e.Settings.TOTP != params {
@@ -154,7 +156,7 @@ func TestStoreTOTPSecret_FailureLeavesTheEntry(t *testing.T) {
 			if err := store.MemStore.Save(&vault.Entry{Key: k, Settings: old}, []byte("OLDSECRETOLDSECR")); err != nil {
 				t.Fatal(err)
 			}
-			err := NewManager(store).StoreTOTPSecretWithParams("bank", "me", "JBSWY3DPEHPK3PXP", totp.Params{})
+			err := NewManager(store).StoreTOTPSecretWithParams("bank", "me", "JBSWY3DPEHPK3PXP", totp.Params{}, vault.Filing{})
 			secret, gerr := store.Get(k)
 			e, lerr := store.Lookup(k)
 			if gerr != nil || lerr != nil {
@@ -175,7 +177,7 @@ func TestStoreTOTPSecret_FailureLeavesTheEntry(t *testing.T) {
 func TestGenerateTOTPCode_UsesTheCodeSettings(t *testing.T) {
 	m, _ := newTestManager(t)
 	params := totp.Params{Digits: 8, Algorithm: "SHA256"}
-	if err := m.StoreTOTPSecretWithParams("bank", "me", "JBSWY3DPEHPK3PXP", params); err != nil {
+	if err := m.StoreTOTPSecretWithParams("bank", "me", "JBSWY3DPEHPK3PXP", params, vault.Filing{}); err != nil {
 		t.Fatal(err)
 	}
 	before, after, err := totp.GenerateConsecutiveCodesBytesWithParams([]byte("JBSWY3DPEHPK3PXP"), params)
@@ -211,7 +213,7 @@ func TestListEntries(t *testing.T) {
 		t.Fatalf("ListEntries = %+v, want 2 entries", entries)
 	}
 	want := Entry{ID: "api_key/openai", Service: "openai", Type: EntryTypeAPIKey, CreatedAt: created, UpdatedAt: created}
-	if entries[0] != want {
+	if !reflect.DeepEqual(entries[0], want) {
 		t.Errorf("first entry = %+v, want %+v", entries[0], want)
 	}
 	if entries[1].ID != "password/github/alice" || entries[1].Username != "alice" {
@@ -300,6 +302,69 @@ func TestEntryExists(t *testing.T) {
 	failing := NewManager(&failingStore{MemStore: vault.NewMemStore(), lookupErr: errors.New("vault locked")})
 	if ok, err := failing.EntryExists("github", "alice", EntryTypePassword); ok || err == nil || !strings.Contains(err.Error(), "vault locked") {
 		t.Errorf("EntryExists when the store fails = %v, %v; want the error", ok, err)
+	}
+}
+
+// Storing with a filing moves the entry and adds tags, keeping its
+// settings and creation time; storing without one leaves it filed as it was.
+func TestStorePassword_Files(t *testing.T) {
+	m, store := newTestManager(t)
+	k := vault.Key{Kind: vault.KindTOTP, Service: "bank", Username: "me"}
+	created := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	settings := vault.Settings{TOTP: totp.Params{Digits: 8}}
+	if err := store.Save(&vault.Entry{Key: k, Folder: "old", Tags: []string{"a"}, Settings: settings, CreatedAt: created}, []byte("JBSWY3DPEHPK3PXP")); err != nil {
+		t.Fatal(err)
+	}
+	check := func(when, folder string, tags ...string) {
+		t.Helper()
+		e, err := store.Lookup(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Folder != folder || !slices.Equal(e.Tags, tags) || e.Settings != settings || !e.CreatedAt.Equal(created) {
+			t.Errorf("%s: %+v; want folder %q, tags %q, settings and creation time kept", when, e, folder, tags)
+		}
+	}
+	if err := m.StorePassword("bank", "me", []byte("GEZDGNBVGY3TQOJQ"), EntryTypeTOTP, vault.Filing{Tags: []string{"b"}}); err != nil {
+		t.Fatal(err)
+	}
+	check("tags only", "old", "a", "b")
+	if err := m.StorePassword("bank", "me", []byte("GEZDGNBVGY3TQOJQ"), EntryTypeTOTP, vault.Filing{Folder: "work", FolderSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	check("a folder", "work", "a", "b")
+	if err := m.StorePassword("bank", "me", []byte("GEZDGNBVGY3TQOJQ"), EntryTypeTOTP, vault.Filing{}); err != nil {
+		t.Fatal(err)
+	}
+	check("no filing", "work", "a", "b")
+	if err := m.StorePassword("bank", "me", []byte("GEZDGNBVGY3TQOJQ"), EntryTypeTOTP, vault.Filing{FolderSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	check(`--folder ""`, "", "a", "b")
+	if secret, err := store.Get(k); err != nil || string(secret) != "GEZDGNBVGY3TQOJQ" {
+		t.Errorf("secret = %q, %v", secret, err)
+	}
+
+	// A new entry, and a bad tag.
+	if err := m.StorePassword("new", "", []byte("pw"), EntryTypePassword, vault.Filing{Folder: "home", FolderSet: true, Tags: []string{"x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := m.LookupEntry("new", "", EntryTypePassword); err != nil || e.Folder != "home" || !slices.Equal(e.Tags, []string{"x"}) {
+		t.Errorf("new entry = %+v, %v", e, err)
+	}
+	if err := m.StorePassword("new", "", []byte("pw"), EntryTypePassword, vault.Filing{Tags: []string{"a b"}}); err == nil || !strings.Contains(err.Error(), `the tag "a b" contains ' '`) {
+		t.Errorf("a bad tag: err = %v", err)
+	}
+}
+
+func TestStoreTOTPSecretWithParams_Files(t *testing.T) {
+	m, store := newTestManager(t)
+	if err := m.StoreTOTPSecretWithParams("bank", "me", "JBSWY3DPEHPK3PXP", totp.Params{Digits: 8}, vault.Filing{Folder: "money", FolderSet: true, Tags: []string{"2fa"}}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := store.Lookup(vault.Key{Kind: vault.KindTOTP, Service: "bank", Username: "me"})
+	if err != nil || e.Folder != "money" || !slices.Equal(e.Tags, []string{"2fa"}) || e.Settings.TOTP.Digits != 8 {
+		t.Errorf("entry = %+v, %v", e, err)
 	}
 }
 

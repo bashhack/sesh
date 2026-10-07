@@ -185,6 +185,21 @@ func earlyCheck(p provider.ServiceProvider, common commonFlags, args []string, s
 			return errDeleteNeedsForce
 		}
 	}
+	if f, ok := p.(provider.Filer); ok {
+		if filing := f.Filing(); !filing.IsZero() {
+			stores, where := f.Storing()
+			switch {
+			case *common.list || *common.delete != "":
+				return errors.New("--folder and --tag don't go with --list or --delete: they file an entry as it's stored")
+			case *common.setup:
+			case !stores:
+				return fmt.Errorf("--folder and --tag file an entry as it's stored: use them with %s", where)
+			}
+			if err := filing.Check(); err != nil {
+				return err
+			}
+		}
+	}
 	switch {
 	case *common.setup:
 		return nil

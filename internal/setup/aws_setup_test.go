@@ -123,7 +123,7 @@ func TestAWSSetupHandler_Setup(t *testing.T) {
 			}
 			handler := &AWSSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader(tc.userInput))}
 
-			err := handler.Setup()
+			err := handler.Setup(vault.Filing{})
 			if err == nil || !strings.Contains(err.Error(), tc.wantErrMsg) {
 				t.Fatalf("Setup() = %v, want an error containing %q", err, tc.wantErrMsg)
 			}
@@ -143,11 +143,12 @@ func TestAWSSetupHandler_Setup_StoresSecretAndDevice(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			stubAWSSetup(t, device)
 			store := vault.NewMemStore()
-			// profile, manual entry, Enter after the console codes, first device
-			input := profile + "\n1\n\n1\n"
+			// profile, manual entry, Enter after the console codes, first
+			// device, no folder, no tags
+			input := profile + "\n1\n\n1\n\n\n"
 			handler := &AWSSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader(input))}
 
-			if err := handler.Setup(); err != nil {
+			if err := handler.Setup(vault.Filing{}); err != nil {
 				t.Fatalf("Setup(): %v", err)
 			}
 			k := vault.AWSKey(profile)
@@ -168,9 +169,9 @@ func TestAWSSetupHandler_Setup_StoresSecretAndDevice(t *testing.T) {
 func TestAWSSetupHandler_Setup_FailedSaveLeavesNothing(t *testing.T) {
 	stubAWSSetup(t, "arn:aws:iam::123456789012:mfa/testuser")
 	store := failingSave{vault.NewMemStore()}
-	handler := &AWSSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("\n1\n\n1\n"))}
+	handler := &AWSSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("\n1\n\n1\n\n\n"))}
 
-	err := handler.Setup()
+	err := handler.Setup(vault.Filing{})
 	if wantSub := "failed to store the MFA secret"; err == nil || !strings.Contains(err.Error(), wantSub) || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("Setup() = %v, want an error containing %q and the cause", err, wantSub)
 	}

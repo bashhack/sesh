@@ -4,6 +4,7 @@ package vaulttest
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -138,8 +139,8 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 
 	t.Run("delete many", func(t *testing.T) {
 		s := newStore(t)
-		gh := vault.Key{Kind: vault.KindPassword, Service: "github"}
-		for _, k := range []vault.Key{openai, gh} {
+		github := vault.Key{Kind: vault.KindPassword, Service: "github"}
+		for _, k := range []vault.Key{openai, github} {
 			if err := s.Put(k, []byte("v")); err != nil {
 				t.Fatal(err)
 			}
@@ -152,11 +153,89 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			t.Errorf("an entry was deleted although another was missing: %v", err)
 		}
 		// A key named twice is deleted once.
-		if err := s.DeleteMany([]vault.Key{openai, gh, openai}); err != nil {
+		if err := s.DeleteMany([]vault.Key{openai, github, openai}); err != nil {
 			t.Fatal(err)
 		}
 		if es, err := s.List(vault.Filter{}); err != nil || len(es) != 0 {
 			t.Errorf("left %v, %v; want nothing", es, err)
+		}
+	})
+
+	t.Run("save files the entry; put keeps it filed", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.Save(&vault.Entry{Key: gh, Folder: "work/dev", Tags: []string{"urgent", "code", "urgent"}}, []byte("pw")); err != nil {
+			t.Fatal(err)
+		}
+		check := func(when, folder string, tags ...string) {
+			t.Helper()
+			e, err := s.Lookup(gh)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed, err := s.List(vault.Filter{})
+			if err != nil || len(listed) != 1 {
+				t.Fatalf("List = %+v, %v", listed, err)
+			}
+			for _, got := range []*vault.Entry{&e, &listed[0]} {
+				if got.Folder != folder || !slices.Equal(got.Tags, tags) {
+					t.Errorf("%s: folder %q, tags %q; want %q, %q", when, got.Folder, got.Tags, folder, tags)
+				}
+			}
+		}
+		check("after Save", "work/dev", "code", "urgent")
+		if err := s.Put(gh, []byte("pw-2")); err != nil {
+			t.Fatal(err)
+		}
+		check("after Put", "work/dev", "code", "urgent")
+		// The tags returned are a copy.
+		e, err := s.Lookup(gh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.Tags[0] = "changed"
+		check("after changing a returned entry", "work/dev", "code", "urgent")
+		if err := s.Save(&vault.Entry{Key: gh, Tags: []string{"later"}}, []byte("pw-3")); err != nil {
+			t.Fatal(err)
+		}
+		check("after Save with another folder and tags", "", "later")
+		if err := s.Save(&vault.Entry{Key: gh}, []byte("pw-4")); err != nil {
+			t.Fatal(err)
+		}
+		check("after Save with none", "")
+	})
+
+	t.Run("a deleted entry's tags go with it", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.Save(&vault.Entry{Key: gh, Folder: "work", Tags: []string{"urgent"}}, []byte("pw")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Delete(gh); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Put(gh, []byte("pw")); err != nil {
+			t.Fatal(err)
+		}
+		if e, err := s.Lookup(gh); err != nil || e.Folder != "" || len(e.Tags) != 0 {
+			t.Errorf("a new entry with a deleted one's name = %+v, %v; want no folder or tags", e, err)
+		}
+	})
+
+	t.Run("refuses a bad folder or tag", func(t *testing.T) {
+		s := newStore(t)
+		for _, e := range []*vault.Entry{
+			{Key: gh, Folder: "/work"},
+			{Key: gh, Folder: "work//dev"},
+			{Key: gh, Folder: "work dev"},
+			{Key: gh, Tags: []string{""}},
+			{Key: gh, Tags: []string{"a,b"}},
+			{Key: gh, Tags: []string{strings.Repeat("t", vault.MaxTagLength+1)}},
+		} {
+			if err := s.Save(e, []byte("v")); err == nil {
+				t.Errorf("Save with folder %q, tags %q succeeded, want an error", e.Folder, e.Tags)
+			}
+		}
+		if err := s.Exists(gh); !errors.Is(err, vault.ErrNotFound) {
+			t.Errorf("after only refused saves, Exists = %v; want ErrNotFound", err)
 		}
 	})
 
