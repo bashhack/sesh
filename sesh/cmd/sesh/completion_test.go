@@ -21,7 +21,7 @@ func TestComplete(t *testing.T) {
 		lacks []string // none of these
 		files bool
 	}{
-		{name: "subcommands", words: all(""), want: all("agent", "audit", "completion", "config", "folder", "init", "recover", "recovery", "tag", "touchid", "verify")},
+		{name: "subcommands", words: all(""), want: all("agent", "audit", "completion", "config", "doctor", "folder", "init", "recover", "recovery", "tag", "touchid")},
 		{name: "subcommand prefix", words: all("co"), want: all("completion", "config")},
 		{name: "audit commands", words: all("audit", ""), want: all("prune")},
 		{name: "audit flags", words: all("audit", "-"), want: all("--limit")},
@@ -60,7 +60,7 @@ func TestComplete(t *testing.T) {
 		{name: "completion shells", words: all("completion", ""), want: all("bash", "fish", "zsh")},
 		{name: "init flags", words: all("init", "--"), want: all("--force", "--db-path")},
 		{name: "config takes nothing", words: all("config", "")},
-		{name: "no words", words: nil, want: all("agent", "audit", "completion", "config", "folder", "init", "recover", "recovery", "tag", "touchid", "verify")},
+		{name: "no words", words: nil, want: all("agent", "audit", "completion", "config", "doctor", "folder", "init", "recover", "recovery", "tag", "touchid")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cands, files := complete(reg, tt.words)

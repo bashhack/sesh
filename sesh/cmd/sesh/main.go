@@ -241,13 +241,13 @@ var subcommands = []candidate{
 	{"audit", "Show the vault's audit log, or prune it"},
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 	{"config", "Show settings and where each comes from"},
+	{"doctor", "Check sesh's setup, and that the vault can all be read"},
 	{"folder", "Move entries between folders, rename folders, list them"},
 	{"init", "Choose where sesh keeps the vault"},
 	{"recover", "Set a new master password with the vault's recovery key"},
 	{"recovery", "Make, remove, or check this vault's recovery key"},
 	{"tag", "Tag entries, take tags off, rename tags, list them"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
-	{"verify", "Check the vault can all be read: every entry, the recovery key, Touch ID"},
 }
 
 // subcommand returns the subcommand args name (one of subcommands) and the
@@ -791,8 +791,8 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
-	case "verify":
-		if err := runVerify(app, rest); err != nil {
+	case "doctor":
+		if err := runDoctor(app, rest); err != nil {
 			fatal(app, err)
 		}
 		return
@@ -1075,7 +1075,7 @@ func (a *App) PrintUsage() error {
 		"  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)",
 		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"  sesh audit [prune]            Show the vault's audit log, or prune it",
-		"  sesh verify                   Check the vault can all be read",
+		"  sesh doctor                   Check the setup, and that the vault can all be read",
 		"  sesh folder move|rename|list  File entries in folders",
 		"  sesh tag add|remove|rename|list  Tag entries",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",
