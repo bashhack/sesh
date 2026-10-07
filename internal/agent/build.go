@@ -43,6 +43,11 @@ func otherBuild(agentBuild string) bool {
 	return mine != "" && agentBuild != mine
 }
 
+// OtherBuild reports whether an agent that reported build agentBuild runs
+// a different program from this one, so a command would replace it rather
+// than use it. An agent that reports nothing counts as different.
+func OtherBuild(agentBuild string) bool { return otherBuild(agentBuild) }
+
 // shortBuild is the first 12 hex digits of a build, for messages.
 func shortBuild(b string) string {
 	if b == "" {

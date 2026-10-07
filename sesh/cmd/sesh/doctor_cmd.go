@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
@@ -52,15 +53,31 @@ func runDoctor(app *App, args []string) error {
 	if err := c.flush(app.Stdout); err != nil {
 		return err
 	}
-	if err := vaultPart(); err != nil {
-		return err
+	if err := vaultPart(app.Stdout); err != nil {
+		// The vault part couldn't finish: say so as its row, so the
+		// setup's steps and the tally still show.
+		if !canAsk(app) {
+			c.row(markNone, "Vault", "not checked", err.Error())
+			c.unchecked = true
+		} else {
+			c.row(markFail, "Vault", "not checked", err.Error())
+			if errors.Is(err, database.ErrVaultKeyChanged) || strings.Contains(err.Error(), "run sesh doctor again") {
+				c.todo("Run it again:", "sesh doctor")
+			}
+		}
 	}
 	return c.finish(app.Stdout)
 }
 
+// canAsk reports whether unlocking can get the master password without an
+// agent: from SESH_MASTER_PASSWORD, or by asking at the terminal.
+func canAsk(app *App) bool {
+	return resolvePasswordPrompt().fromEnv || (app.StdinIsTerminal != nil && app.StdinIsTerminal())
+}
+
 // checkSetup adds the setup rows to c, and returns what checks the vault:
 // its rows, or why it isn't checked.
-func checkSetup(c *doctorChecks, app *App) func() error {
+func checkSetup(c *doctorChecks, app *App) func(io.Writer) error {
 	cfgPath, _ := config.Path() //nolint:errcheck // shown only when known
 	cfg, err := settings()
 	if err != nil {
@@ -83,6 +100,7 @@ func checkSetup(c *doctorChecks, app *App) func() error {
 		return skipVault(c, dbPath, "there's no vault")
 	case matErr != nil && !database.IsDamaged(matErr):
 		c.row(markFail, "Vault file", "can't be read", matErr.Error())
+		c.todo("Check that the vault file and its folder are yours and readable: " + tildePath(dbPath))
 		return skipVault(c, dbPath, "it can't be read")
 	}
 	checkPermissions(c, dbPath)
@@ -90,8 +108,10 @@ func checkSetup(c *doctorChecks, app *App) func() error {
 	agentUnlocked := checkAgent(c, mat, matErr)
 	if matErr == nil {
 		checkKeySettings(c, mat.Params, cfg.KDF())
+	} else {
+		c.row(markNone, "Key settings", "unknown: the key record is damaged")
 	}
-	return func() error {
+	return func(w io.Writer) error {
 		c.section("\nVault: " + tildePath(dbPath))
 		if matErr != nil {
 			// Damaged where the key record is: nothing more can be read.
@@ -99,10 +119,14 @@ func checkSetup(c *doctorChecks, app *App) func() error {
 			c.todo("Restore the vault from a backup, such as an encrypted export.")
 			return nil
 		}
-		if !resolvePasswordPrompt().fromEnv && !agentUnlocked && (app.StdinIsTerminal == nil || !app.StdinIsTerminal()) {
-			c.row(markNone, "Vault", "not checked: unlocking it needs a terminal to ask at, SESH_MASTER_PASSWORD, or an unlocked agent")
+		if !agentUnlocked && !canAsk(app) {
+			c.row(markNone, "Vault", "not checked: unlocking it needs a terminal to ask at, SESH_MASTER_PASSWORD, or an agent unlocked for it and running this sesh build")
 			c.unchecked = true
 			return nil
+		}
+		// The header shows before a password prompt.
+		if err := c.flush(w); err != nil {
+			return err
 		}
 		return checkVault(c, cfg, dbPath, &mat)
 	}
@@ -110,8 +134,8 @@ func checkSetup(c *doctorChecks, app *App) func() error {
 
 // skipVault is the vault part when there's nothing to check: a row saying
 // why, under the vault's path when it's known.
-func skipVault(c *doctorChecks, dbPath, why string) func() error {
-	return func() error {
+func skipVault(c *doctorChecks, dbPath, why string) func(io.Writer) error {
+	return func(io.Writer) error {
 		title := "\nVault"
 		if dbPath != "" {
 			title += ": " + tildePath(dbPath)
@@ -123,30 +147,53 @@ func skipVault(c *doctorChecks, dbPath, why string) func() error {
 	}
 }
 
-// checkPermissions warns when anyone but the owner can read the vault or
-// enter its folder.
+// checkPermissions warns when others can read the vault, or replace or
+// delete it through its folder. It looks at the file a symlink names.
 func checkPermissions(c *doctorChecks, dbPath string) {
-	dir := filepath.Dir(dbPath)
-	var loose []string
-	for _, f := range []struct {
-		path string
-		want os.FileMode
-	}{{dir, 0o700}, {dbPath, 0o600}} {
-		info, err := os.Stat(f.path)
-		if err != nil {
-			c.row(markWarn, "Vault file", "its permissions can't be read", err.Error())
-			return
-		}
-		if info.Mode().Perm()&0o077 != 0 {
-			loose = append(loose, fmt.Sprintf("chmod %o %s", f.want, shell.Quote(f.path)))
-		}
-	}
-	if len(loose) == 0 {
-		c.row(markOK, "Vault file", "only you can read it")
+	target, err := filepath.EvalSymlinks(dbPath)
+	if err != nil {
+		c.row(markWarn, "Vault file", "its permissions can't be read", err.Error())
+		c.todo("Check the vault file at " + tildePath(dbPath) + "; the row says why its permissions can't be read.")
 		return
 	}
-	c.row(markWarn, "Vault file", "others can read it or its folder")
-	c.todo("Make the vault yours alone:", loose...)
+	file, err := os.Stat(target)
+	if err != nil {
+		c.row(markWarn, "Vault file", "its permissions can't be read", err.Error())
+		c.todo("Check the vault file at " + tildePath(dbPath) + "; the row says why its permissions can't be read.")
+		return
+	}
+	dir := filepath.Dir(target)
+	folder, err := os.Stat(dir)
+	if err != nil {
+		c.row(markWarn, "Vault file", "its folder's permissions can't be read", err.Error())
+		c.todo("Check the vault's folder, " + tildePath(dir) + "; the row says why its permissions can't be read.")
+		return
+	}
+	var problems []string
+	if file.Mode().Perm()&0o077 != 0 {
+		problems = append(problems, "others can read it")
+		c.todo("Make the vault file yours alone:", "chmod 600 "+shell.Quote(target))
+	}
+	if folder.Mode().Perm()&0o022 != 0 {
+		problems = append(problems, "others can replace or delete it, through its folder")
+		if ownedByMe(folder) && folder.Mode()&os.ModeSticky == 0 {
+			c.todo("Stop others writing to the vault's folder:", "chmod go-w "+shell.Quote(dir))
+		} else {
+			// A shared folder, such as /tmp, isn't yours to change.
+			c.todo("Move the vault to a folder only you can write to:", "sesh init")
+		}
+	}
+	if len(problems) == 0 {
+		c.row(markOK, "Vault file", "only you can read or change it")
+		return
+	}
+	c.row(markWarn, "Vault file", strings.Join(problems, "; "))
+}
+
+// ownedByMe reports whether info is owned by this process's user.
+func ownedByMe(info os.FileInfo) bool {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Getuid()
 }
 
 // checkAgent reports on the agent, without starting one. It returns
@@ -160,36 +207,63 @@ func checkAgent(c *doctorChecks, mat database.UnlockMaterial, matErr error) bool
 			return false
 		}
 		c.row(markWarn, "Agent", "can't be reached", err.Error())
+		if strings.Contains(err.Error(), "SESH_AUTH_SOCK") {
+			c.todo("Set SESH_AUTH_SOCK to a shorter path, or unset it to use the default.")
+		} else {
+			c.todo("Stop the agent; the next command starts a new one:", "sesh agent stop")
+		}
 		return false
 	}
 	defer closeAgentConn(conn)
 	st, err := agent.Status(conn)
 	if err != nil {
 		c.row(markWarn, "Agent", "doesn't answer", err.Error())
+		c.todo("Stop the agent; the next command starts a new one:", "sesh agent stop")
 		return false
 	}
+	known := matErr == nil
+	unlocked := agentUnlocks(&st, known, database.UnlockID(mat.Verify))
 	state := "locked"
-	unlocked := st.Unlocked && matErr == nil && st.UnlockID == database.UnlockID(mat.Verify)
 	switch {
 	case unlocked:
+		state = "unlocked for this vault"
+	case st.Unlocked && !known:
+		state = "unlocked (can't tell for which vault: the key record is damaged)"
+	case st.Unlocked && st.UnlockID == database.UnlockID(mat.Verify):
 		state = "unlocked for this vault"
 	case st.Unlocked:
 		state = "unlocked for another vault or master password"
 	}
-	if st.AgentBuild != "" && st.AgentBuild != agent.Build() && agent.Build() != "" {
+	if agent.OtherBuild(st.AgentBuild) {
 		state += "; it runs another sesh build, so the next command replaces it"
 	}
 	c.row(markOK, "Agent", "running, "+state)
 	return unlocked
 }
 
+// agentUnlocks reports whether the agent st describes can unlock the vault
+// whose key record id is id without asking: it's unlocked for that vault
+// and runs this build (a command would replace one that doesn't, locked).
+// known is false when the vault's id can't be read.
+func agentUnlocks(st *agent.StatusResponse, known bool, id string) bool {
+	return known && st.Unlocked && st.UnlockID == id && !agent.OtherBuild(st.AgentBuild)
+}
+
 // checkKeySettings warns when the vault's key was made with weaker
 // Argon2id settings than the ones configured now.
 func checkKeySettings(c *doctorChecks, have, want kdf.Params) {
 	desc := describeKDF(have)
-	if have.Memory < want.Memory || have.Time < want.Time {
+	// Weaker means no setting higher and one lower; threads don't change
+	// what guessing costs. A mix (more memory, fewer passes) isn't weaker,
+	// and making the key again would lower one.
+	weaker := have.Memory <= want.Memory && have.Time <= want.Time && (have.Memory < want.Memory || have.Time < want.Time)
+	if weaker {
 		c.row(markWarn, "Key settings", desc+": weaker than configured", "configured: "+describeKDF(want))
 		c.todo("Apply the configured settings by changing the master password (it can be the same one):", "sesh --rekey")
+		return
+	}
+	if have.Memory != want.Memory || have.Time != want.Time {
+		c.row(markOK, "Key settings", desc, "differs from configured: "+describeKDF(want))
 		return
 	}
 	c.row(markOK, "Key settings", desc)
@@ -321,7 +395,12 @@ func checkVault(c *doctorChecks, cfg *config.Config, dbPath string, mat *databas
 func checkAWSCLI(c *doctorChecks, store *database.Store) {
 	k := vault.AWSKey("")
 	entries, err := store.List(&vault.Filter{Kind: k.Kind, Service: k.Service})
-	if err != nil || len(entries) == 0 {
+	if err != nil {
+		c.row(markWarn, "AWS CLI", "can't be checked: the AWS entries can't be listed", err.Error())
+		c.todo("The entries can't all be listed; see the rows above, or run sesh doctor again.")
+		return
+	}
+	if len(entries) == 0 {
 		c.row(markNone, "AWS CLI", "no AWS entries")
 		return
 	}

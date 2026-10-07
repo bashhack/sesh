@@ -491,7 +491,7 @@ There is nothing installed to remove. `sesh agent stop` shuts it down, and the n
 
 ### The audit log
 
-The vault records every read, store, and delete of an entry: when it happened, what kind of event it was (`access`, `modify`, `delete`), and which entry, named the way `--list` names it. It never records the secret itself.
+The vault records every read, store, and delete of an entry: when it happened, what kind of event it was (`access`, `modify`, `delete`), and which entry, named the way `--list` names it. A few events are about the vault rather than an entry: `rekey` (the master password changed) and `doctor` (a `sesh doctor` check, with its result). It never records the secret itself.
 
 `sesh audit` shows the newest 50 events, newest first; `--limit 100` shows more, and `--limit 0` shows them all:
 
@@ -519,9 +519,9 @@ Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but
 `sesh doctor` checks sesh's setup, then unlocks the vault and checks that all of it can be read. The setup part needs no password, and is shown first:
 
 - **Config:** the config file loads (or there's none, and the defaults apply).
-- **Vault file:** the vault exists, and only you can read it and enter its folder.
-- **Agent:** whether it's running and unlocked. It's never started just to check: it starts when a command needs it. One running an older sesh build is replaced by the next command.
-- **Key settings:** the Argon2id settings the vault's key was made with are at least the configured ones (`[master_password]`). Raising them applies only when the key is made again, with `sesh --rekey`.
+- **Vault file:** the vault exists, only you can read it, and no one else can replace or delete it through its folder. A symlink is followed to the real file. For a folder that's yours, sesh gives the `chmod` to run; for a shared one, such as `/tmp`, it says to move the vault with `sesh init`.
+- **Agent:** whether it's running and unlocked. The setup checks never start it; unlocking the vault, below, does, as any command would. One running an older sesh build is replaced by the next command.
+- **Key settings:** the vault's key wasn't made with weaker Argon2id settings than the configured ones (`[master_password]`): none higher, one lower. Raising them applies only when the key is made again, with `sesh --rekey`. Settings higher in one way and lower in another are fine, and noted, since making the key again would lower one.
 
 Then the vault:
 
@@ -539,7 +539,7 @@ sesh doctor
 
 Setup
   -     Config          no file, so the defaults
-  ok    Vault file      only you can read it
+  ok    Vault file      only you can read or change it
   ok    Agent           running, unlocked for this vault
   ok    Key settings    256 MiB, 3 passes, 4 threads
 
@@ -561,7 +561,7 @@ sesh doctor
 
 Setup
   -     Config          no file, so the defaults
-  warn  Vault file      others can read it or its folder
+  warn  Vault file      others can read it
   -     Agent           not running; it starts when a command needs it
   ok    Key settings    256 MiB, 3 passes, 4 threads
 
@@ -575,8 +575,8 @@ Vault: ~/Library/Application Support/sesh/passwords.db
   -     AWS CLI         no AWS entries
 
 What to do
-  1. Make the vault yours alone:
-       chmod 700 '/Users/alice/Library/Application Support/sesh'
+  1. Make the vault file yours alone:
+       chmod 600 '/Users/alice/Library/Application Support/sesh/passwords.db'
   2. Restore password/bank/alice from a backup (an encrypted export), or delete it:
        sesh --service password --delete password/bank/alice
   3. Make a new recovery key:
@@ -587,7 +587,7 @@ What to do
 FAIL: 2 problems, 2 warnings
 ```
 
-It names every entry it can't read, and never shows a secret. It exits 1 when the config doesn't load, there's no vault, or the file, an entry, or the recovery key has a problem; warnings exit 0. If the file is damaged but every entry still reads, it says to export them now and start a new vault from that. If nothing can unlock the vault without asking (no `SESH_MASTER_PASSWORD`, no unlocked agent) and there's no terminal to ask at, as in a script, the setup is still checked and the last line says the vault wasn't. If the agent locks or another command changes the master password while it checks, it says to run it again rather than blaming any entry. Run it when something seems off, after moving or restoring the vault, after a crash, or now and then if the vault is in a synced folder. It writes nothing while it checks, then one `doctor` event to the audit log (not when the file itself is damaged).
+It names every entry it can't read, and never shows a secret. It exits 1 when the config doesn't load, there's no vault, the vault file can't be read, the vault can't be unlocked (a wrong master password, say), or the file, an entry, or the recovery key has a problem; warnings exit 0. Whatever stops the vault part, the setup's steps and the tally still show. If the file is damaged but every entry still reads, it says to export them now and start a new vault from that. If nothing can unlock the vault without asking (no `SESH_MASTER_PASSWORD`, no unlocked agent) and there's no terminal to ask at, as in a script, the setup is still checked, the last line says the vault wasn't, and it exits 0 unless the setup has a problem. If the agent locks or another command changes the master password while it checks, it says to run it again rather than blaming any entry. Run it when something seems off, after moving or restoring the vault, after a crash, or now and then if the vault is in a synced folder. It writes nothing while it checks, then one `doctor` event to the audit log (not when the file itself is damaged).
 
 ### Encrypted exports
 

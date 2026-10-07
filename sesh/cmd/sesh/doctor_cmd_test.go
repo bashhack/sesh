@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/password"
@@ -82,7 +84,7 @@ func TestDoctor_ASoundVault(t *testing.T) {
 	want := "sesh doctor\n\n" +
 		"Setup\n" +
 		"  -     Config          no file, so the defaults\n" +
-		"  ok    Vault file      only you can read it\n" +
+		"  ok    Vault file      only you can read or change it\n" +
 		"  -     Agent           not running; it starts when a command needs it\n" +
 		"  ok    Key settings    19 MiB, 2 passes, 1 thread\n" +
 		"\nVault: " + tildePath(env.dbPath) + "\n" +
@@ -351,15 +353,117 @@ func TestDoctor_ConfigDoesntLoad(t *testing.T) {
 	}
 }
 
-// A vault others can read warns, with the chmod to run.
-func TestDoctor_LoosePermissions(t *testing.T) {
+// A vault file others can read warns, with the chmod to run; so does a
+// folder others can write to, or a move away from one that isn't yours to
+// change.
+func TestDoctor_Permissions(t *testing.T) {
 	env := doctorVault(t)
+	// The paths doctor names are the real ones, past any symlink (macOS's
+	// temporary folder is behind one).
+	real, err := filepath.EvalSymlinks(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(real)
 	if err := os.Chmod(env.dbPath, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	out, err := runDoctorOut(t)
-	if err != nil || !strings.Contains(out, "  warn  Vault file      others can read it or its folder\n") || !strings.Contains(out, "       chmod 600 "+shell.Quote(env.dbPath)+"\n") {
+	if err != nil || !strings.Contains(out, "  warn  Vault file      others can read it\n") || !strings.Contains(out, "       chmod 600 "+shell.Quote(real)+"\n") {
+		t.Errorf("a readable file: err = %v\n%s", err, out)
+	}
+	if err := os.Chmod(env.dbPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A folder others can read is fine: the file keeps them out.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runDoctorOut(t); err != nil || !strings.Contains(out, "  ok    Vault file      only you can read or change it\n") {
+		t.Errorf("a readable folder: err = %v\n%s", err, out)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:errcheck // test cleanup
+	if out, err := runDoctorOut(t); err != nil || !strings.Contains(out, "  warn  Vault file      others can replace or delete it, through its folder\n") || !strings.Contains(out, "       chmod go-w "+shell.Quote(dir)+"\n") {
+		t.Errorf("a writable folder: err = %v\n%s", err, out)
+	}
+	// A shared folder, as /tmp is (sticky), isn't changed: the vault moves.
+	if err := os.Chmod(dir, 0o777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runDoctorOut(t); err != nil || strings.Contains(out, "chmod go-w") || !strings.Contains(out, "Move the vault to a folder only you can write to:\n       sesh init\n") {
+		t.Errorf("a shared folder: err = %v\n%s", err, out)
+	}
+}
+
+// A vault reached through a symlink is checked where it really is.
+func TestDoctor_PermissionsFollowSymlinks(t *testing.T) {
+	env := doctorVault(t)
+	links := filepath.Join(t.TempDir(), "links")
+	if err := os.Mkdir(links, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(links, "passwords.db")
+	if err := os.Symlink(env.dbPath, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESH_DB_PATH", link)
+	// The link's folder is writable by all, the vault's isn't.
+	if out, err := runDoctorOut(t); err != nil || !strings.Contains(out, "  ok    Vault file      only you can read or change it\n") {
 		t.Errorf("err = %v\n%s", err, out)
+	}
+}
+
+// When the vault part can't finish, the setup's steps and the tally still
+// show.
+func TestDoctor_VaultErrorKeepsTheSetupSteps(t *testing.T) {
+	env := doctorVault(t)
+	if err := os.Chmod(env.dbPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "the-wrong-password-1")
+	out, err := runDoctorOut(t)
+	if !errors.Is(err, errReported) || !strings.Contains(out, "  FAIL  Vault           not checked\n") || !strings.Contains(out, "chmod 600 ") ||
+		!strings.HasSuffix(out, "\nFAIL: 1 problem, 1 warning\n") {
+		t.Errorf("err = %v\n%s", err, out)
+	}
+}
+
+// A damaged key record says the key settings are unknown, and fails the
+// file.
+func TestDoctor_DamagedKeyRecord(t *testing.T) {
+	env := doctorVault(t)
+	sqlExec(t, env.dbPath, `UPDATE vault_key SET kdf_params = 'garbage'`)
+	out, err := runDoctorOut(t)
+	if !errors.Is(err, errReported) || !strings.Contains(out, "  -     Key settings    unknown: the key record is damaged\n") || !strings.Contains(out, "  FAIL  File            damaged\n") {
+		t.Errorf("err = %v\n%s", err, out)
+	}
+}
+
+// An agent unlocks the vault without asking only when it's unlocked for it
+// and runs this build: a command replaces one that doesn't, locked.
+func TestAgentUnlocks(t *testing.T) {
+	this := agent.Build()
+	if this == "" {
+		t.Skip("this test binary's build can't be read")
+	}
+	for name, tt := range map[string]struct {
+		st    agent.StatusResponse
+		known bool
+		want  bool
+	}{
+		"this vault, this build":    {agent.StatusResponse{Unlocked: true, UnlockID: "id", AgentBuild: this}, true, true},
+		"locked":                    {agent.StatusResponse{UnlockID: "id", AgentBuild: this}, true, false},
+		"another vault":             {agent.StatusResponse{Unlocked: true, UnlockID: "other", AgentBuild: this}, true, false},
+		"another build":             {agent.StatusResponse{Unlocked: true, UnlockID: "id", AgentBuild: "abc"}, true, false},
+		"an agent with no build":    {agent.StatusResponse{Unlocked: true, UnlockID: "id"}, true, false},
+		"the vault's id is unknown": {agent.StatusResponse{Unlocked: true, UnlockID: "id", AgentBuild: this}, false, false},
+	} {
+		if got := agentUnlocks(&tt.st, tt.known, "id"); got != tt.want {
+			t.Errorf("%s: %v, want %v", name, got, tt.want)
+		}
 	}
 }
 
@@ -382,7 +486,7 @@ func TestDoctor_SkipsTheVaultWhenItCantAsk(t *testing.T) {
 	app.StdinIsTerminal = func() bool { return false }
 	err := runDoctor(app, nil)
 	out := app.Stdout.(*bytes.Buffer).String()
-	if err != nil || !strings.Contains(out, "Setup\n") || !strings.Contains(out, "  -     Vault           not checked: unlocking it needs a terminal to ask at, SESH_MASTER_PASSWORD, or an unlocked agent\n") ||
+	if err != nil || !strings.Contains(out, "Setup\n") || !strings.Contains(out, "  -     Vault           not checked: unlocking it needs a terminal to ask at, SESH_MASTER_PASSWORD, or an agent unlocked for it and running this sesh build\n") ||
 		!strings.HasSuffix(out, "\nOK: no problems; the vault wasn't checked\n") {
 		t.Errorf("err = %v\n%s", err, out)
 	}
@@ -401,5 +505,18 @@ func TestDoctor_AWSCLI(t *testing.T) {
 	lookPath = func(string) (string, error) { return "/usr/local/bin/aws", nil }
 	if out, err := runDoctorOut(t); err != nil || !strings.Contains(out, "  ok    AWS CLI         /usr/local/bin/aws\n") {
 		t.Errorf("aws found: err = %v\n%s", err, out)
+	}
+}
+
+// Settings that are higher in one way and lower in another aren't weaker:
+// remaking the key would lower one.
+func TestDoctor_MixedKeySettings(t *testing.T) {
+	t.Setenv("SESH_KDF_MEMORY", "32MiB")
+	doctorVault(t)
+	t.Setenv("SESH_KDF_MEMORY", "19MiB")
+	t.Setenv("SESH_KDF_TIME", "3")
+	out, err := runDoctorOut(t)
+	if err != nil || !strings.Contains(out, "  ok    Key settings    32 MiB, 2 passes, 1 thread\n                        differs from configured: 19 MiB, 3 passes, 1 thread\n") || strings.Contains(out, "--rekey") {
+		t.Errorf("err = %v\n%s", err, out)
 	}
 }
