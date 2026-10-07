@@ -192,3 +192,99 @@ func TestFolders_ListsTheFoldersAbove(t *testing.T) {
 		t.Errorf("Folders = %+v, want %+v", folders, want)
 	}
 }
+
+// A rename that would make a subfolder's name too long is refused, so no
+// entry ends up with a folder an import would refuse.
+func TestRenameFolder_RefusesATooLongResult(t *testing.T) {
+	s := filedStore(t)
+	part := func(c string, n int) string { return strings.Repeat(c, n) }
+	deep := "lng/" + part("x", 64) + "/" + part("y", 64) + "/" + part("z", 60)
+	if err := s.Save(&vault.Entry{Kind: vault.KindPassword, Service: "long", Folder: deep}, []byte("s")); err != nil {
+		t.Fatal(err)
+	}
+	to := part("p", 64) + "/" + part("q", 64)
+	if _, _, err := s.RenameFolder("lng", to); err == nil || !strings.Contains(err.Error(), "would make the folder of password/long 320 characters long; the most is 256") {
+		t.Errorf("RenameFolder = %v, want it refused", err)
+	}
+	if e, err := s.Lookup(pw("long")); err != nil || e.Folder != deep {
+		t.Errorf("long = %+v, %v; want it unmoved", e, err)
+	}
+}
+
+// Renaming a folder to the folder above it isn't a merge when nothing else
+// was there.
+func TestRenameFolder_IntoItsParentIsNoMerge(t *testing.T) {
+	s := filedStore(t)
+	if n, merged, err := s.RenameFolder("work/dev", "work"); err != nil || n != 1 || !merged {
+		t.Errorf("into work, which holds a: %d, %v, %v; want merged", n, merged, err)
+	}
+	if err := s.Save(&vault.Entry{Kind: vault.KindPassword, Service: "f", Folder: "p/q"}, []byte("s")); err != nil {
+		t.Fatal(err)
+	}
+	if n, merged, err := s.RenameFolder("p/q", "p"); err != nil || n != 1 || merged {
+		t.Errorf("into p, which held only p/q: %d, %v, %v; want no merge", n, merged, err)
+	}
+}
+
+// Filing changes leave every entry's update time alone, and each changed
+// entry gets one audit event; a refused change gets none.
+func TestFilingChanges_UpdateTimesAndAudit(t *testing.T) {
+	s := filedStore(t)
+	modifies := func() int {
+		var n int
+		if err := s.db.QueryRow(`SELECT count(*) FROM audit_log WHERE event_type = 'modify' AND detail IN ('Folder', 'Tag', 'Untag')`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if _, err := s.MoveToFolder([]vault.Key{pw("e"), pw("missing")}, "x"); err == nil {
+		t.Fatal("a move with a missing entry succeeded")
+	}
+	if n := modifies(); n != 0 {
+		t.Errorf("after a refused move: %d events, want 0", n)
+	}
+	if _, err := s.AddTag([]vault.Key{pw("a"), pw("c"), pw("c")}, "x"); err != nil { // a already has x
+		t.Fatal(err)
+	}
+	if _, err := s.RemoveTag([]vault.Key{pw("b")}, "y"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.RenameFolder("work", "job"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.RenameTag("x", "z"); err != nil {
+		t.Fatal(err)
+	}
+	// c tagged, b untagged, a and b moved, a b c retagged.
+	if n := modifies(); n != 1+1+2+3 {
+		t.Errorf("%d events, want 7", n)
+	}
+	all, err := s.List(&vault.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range all {
+		if all[i].UpdatedAt.Year() != 2025 {
+			t.Errorf("%s was updated at %v; want its update time kept", all[i].Key, all[i].UpdatedAt)
+		}
+	}
+}
+
+func TestCheckRenames(t *testing.T) {
+	for _, tt := range []struct{ from, to, wantSub string }{
+		{"", "x", "name the folder to rename"},
+		{"x", "", "name the folder's new name"},
+		{"work", "work", "is already called"},
+		{"work", "work/sub", "into a folder under itself"},
+	} {
+		if err := CheckFolderRename(tt.from, tt.to); err == nil || !strings.Contains(err.Error(), tt.wantSub) {
+			t.Errorf("CheckFolderRename(%q, %q) = %v, want %q", tt.from, tt.to, err, tt.wantSub)
+		}
+	}
+	if err := CheckFolderRename("work", "Work"); err != nil {
+		t.Errorf("a rename by case: %v", err)
+	}
+	if err := CheckTagRename("x", "x"); err == nil || !strings.Contains(err.Error(), "is already called") {
+		t.Errorf("CheckTagRename to itself = %v", err)
+	}
+}

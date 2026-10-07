@@ -6,6 +6,7 @@ import (
 	"path"
 	"strings"
 	"text/tabwriter"
+	"unicode/utf8"
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/password"
@@ -59,6 +60,10 @@ func runFolder(app *App, args []string) error {
 			return err
 		}
 		return changeEntries(app, args[2:], func(s *database.Store, keys []vault.Key) (string, error) {
+			note := ""
+			if folder != "" {
+				note = provider.TwinNote(s, "folder", folder)
+			}
 			n, err := s.MoveToFolder(keys, folder)
 			if err != nil {
 				return "", err
@@ -70,7 +75,7 @@ func runFolder(app *App, args []string) error {
 				}
 				return fmt.Sprintf("Took %s out of %s%s", entryCount(n), their, unchanged(len(keys)-n, "was in no folder", "were in no folder")), nil
 			}
-			return fmt.Sprintf("Moved %s to %s%s", entryCount(n), folder, unchanged(len(keys)-n, "was already there", "were already there")), nil
+			return fmt.Sprintf("Moved %s to %s%s", entryCount(n), folder, unchanged(len(keys)-n, "was already there", "were already there")) + noteLine(note), nil
 		})
 	case "rename":
 		if len(args) != 3 {
@@ -105,14 +110,20 @@ func runTag(app *App, args []string) error {
 		}
 		if args[0] == "add" {
 			return changeEntries(app, args[2:], func(s *database.Store, keys []vault.Key) (string, error) {
+				note := provider.TwinNote(s, "tag", tag)
 				n, err := s.AddTag(keys, tag)
 				if err != nil {
 					return "", err
 				}
-				return fmt.Sprintf("Tagged %s %s%s", entryCount(n), tag, unchanged(len(keys)-n, "already had it", "already had it")), nil
+				return fmt.Sprintf("Tagged %s %s%s", entryCount(n), tag, unchanged(len(keys)-n, "already had it", "already had it")) + noteLine(note), nil
 			})
 		}
 		return changeEntries(app, args[2:], func(s *database.Store, keys []vault.Key) (string, error) {
+			// A tag no entry has is likely mistyped: say so, rather than
+			// report taking it off nothing.
+			if hint := provider.NoMatchHint(s, &vault.Filter{Tags: []string{tag}}, ""); hint != "" {
+				return "", errors.New(hint)
+			}
 			n, err := s.RemoveTag(keys, tag)
 			if err != nil {
 				return "", err
@@ -133,6 +144,14 @@ func runTag(app *App, args []string) error {
 		return listTags(app)
 	}
 	return fmt.Errorf("unknown sesh tag command %q: use add, remove, rename, or list", args[0])
+}
+
+// noteLine is note on a line of its own, or "" for none.
+func noteLine(note string) string {
+	if note == "" {
+		return ""
+	}
+	return "\n" + note
 }
 
 func isHelp(arg string) bool {
@@ -213,14 +232,12 @@ func nothingChanged(problems []string) error {
 // both names before unlocking. When from isn't on any entry, it says so,
 // suggesting one that differs only by case (f is the filter for from).
 func renameFiling(app *App, what, from, to string, rename func(*database.Store) (int, bool, error), f *vault.Filter) error {
-	check := vault.CheckTag
+	check := database.CheckTagRename
 	if what == "folder" {
-		check = vault.CheckFolder
+		check = database.CheckFolderRename
 	}
-	for _, name := range []string{from, to} {
-		if err := check(name); err != nil {
-			return err
-		}
+	if err := check(from, to); err != nil {
+		return err
 	}
 	store, err := openFilingStore()
 	if err != nil {
@@ -278,25 +295,25 @@ func listFolders(app *App) error {
 		b.WriteString("No folders yet. File entries in one with: sesh folder move <folder> <id>…\n")
 	} else {
 		b.WriteString("Folders:\n")
-		tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-		for _, f := range folders {
-			depth := strings.Count(f.Name, "/")
+		// Each folder indented under its parent; counts right-aligned in a
+		// column of their own, then "(N in all)" when it has subfolders.
+		names := make([]string, len(folders))
+		nameWidth, countWidth := 0, 0
+		for i, f := range folders {
+			names[i] = strings.Repeat("  ", strings.Count(f.Name, "/")) + path.Base(f.Name)
+			nameWidth = max(nameWidth, utf8.RuneCountInString(names[i]))
+			countWidth = max(countWidth, len(fmt.Sprint(f.Entries)))
+		}
+		for i, f := range folders {
 			own := ""
 			if f.Entries > 0 {
 				own = fmt.Sprint(f.Entries)
 			}
-			// The last column only when there's one, so no line ends in
-			// spaces.
-			all := ""
+			line := fmt.Sprintf("  %-*s  %*s", nameWidth, names[i], countWidth, own)
 			if f.Total != f.Entries {
-				all = fmt.Sprintf("\t(%d in all)", f.Total)
+				line += fmt.Sprintf("  (%d in all)", f.Total)
 			}
-			if _, err := fmt.Fprintf(tw, "  %s%s\t%s%s\n", strings.Repeat("  ", depth), path.Base(f.Name), own, all); err != nil {
-				return err
-			}
-		}
-		if err := tw.Flush(); err != nil {
-			return err
+			b.WriteString(strings.TrimRight(line, " ") + "\n")
 		}
 	}
 	if unfiled > 0 {

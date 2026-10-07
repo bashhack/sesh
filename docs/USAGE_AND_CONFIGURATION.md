@@ -963,7 +963,6 @@ When nothing matches because the folder or a tag isn't on any of the entries loo
 ```
 $ sesh folder move work api_key/openai
 ✅ Moved 1 entry to work
-$ sesh folder move "" api_key/openai            # out of any folder
 $ sesh tag add urgent api_key/openai totp/bank password/github/alice
 ✅ Tagged 2 entries urgent (1 already had it)
 $ sesh tag remove 2fa totp/google
@@ -986,7 +985,9 @@ Tags:
 1 entry has no tags.
 ```
 
-Renaming a folder or tag to a name already in use merges the two, and sesh says so. A folder can't be moved into a folder under itself. These changes don't change an entry's update time, and each changed entry gets a `modify` event in the audit log. A name that differs only by case gets the usual hint (`there's no folder "Home" (did you mean "home"?)`).
+`sesh folder move "" <id>…` takes entries out of their folder. Renaming a folder or tag to a name already in use merges the two, and sesh says so. A folder can't be moved into a folder under itself, or renamed so that a subfolder's full name would pass 256 characters. These changes don't change an entry's update time, and each changed entry gets a `modify` event in the audit log.
+
+Names are matched exactly, so sesh helps with case: renaming or removing a folder or tag no entry has fails, naming one that differs only by case (`there's no folder "Home" (did you mean "home"?). Folders and tags are case-sensitive`), and adding a tag or moving to a folder that differs only by case from one in use works, with a note saying so.
 
 **Names.** A tag is letters (in any script, with their accents and vowel marks), digits, `-`, `_`, and `.`, up to 64 characters, and doesn't start with `-`, which a command would read as a flag. A folder is parts like that joined by `/`, each up to 64 characters and up to 256 in all, with no empty part (no `/` at either end or twice in a row) and no part that's only dots (`.` or `..`, which read like a path). Both are matched exactly, so `Work` and `work` differ. Like names, they're stored as plain text, not encrypted.
 

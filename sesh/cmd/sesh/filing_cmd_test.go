@@ -134,4 +134,60 @@ func TestFilingCommands_BeforeUnlocking(t *testing.T) {
 	if _, err := runFiling(t, runFolder, "list"); err == nil || !strings.Contains(err.Error(), "there's no vault yet") {
 		t.Errorf("no vault: %v", err)
 	}
+	// Renames that can't work are refused before the vault (which doesn't
+	// exist here) is looked at.
+	for _, tt := range []struct {
+		wantSub string
+		run     func(*App, []string) error
+		args    []string
+	}{
+		{"is already called", runFolder, []string{"rename", "work", "work"}},
+		{"into a folder under itself", runFolder, []string{"rename", "work", "work/sub"}},
+		{"name the folder to rename", runFolder, []string{"rename", "", "x"}},
+		{"name the folder's new name", runFolder, []string{"rename", "work", ""}},
+		{"is already called", runTag, []string{"rename", "x", "x"}},
+	} {
+		if _, err := runFiling(t, tt.run, tt.args...); err == nil || !strings.Contains(err.Error(), tt.wantSub) {
+			t.Errorf("%q: %v, want %q", tt.args, err, tt.wantSub)
+		}
+	}
+}
+
+// Taking off a tag no entry has fails, naming one that differs only by
+// case; adding a tag or folder that differs only by case adds a note.
+func TestFilingCommands_CaseTwins(t *testing.T) {
+	filingVault(t)
+	mustRun(t, runTag, "add", "work", "password/gitlab")
+	mustRun(t, runFolder, "move", "home", "password/gitlab")
+	if _, err := runFiling(t, runTag, "remove", "Work", "password/gitlab"); err == nil || err.Error() != `there's no tag "Work" (did you mean "work"?). Folders and tags are case-sensitive` {
+		t.Errorf("remove by case: %v", err)
+	}
+	if _, err := runFiling(t, runTag, "remove", "nosuch", "password/gitlab"); err == nil || err.Error() != `there's no tag "nosuch"` {
+		t.Errorf("remove a missing tag: %v", err)
+	}
+	if got := mustRun(t, runTag, "add", "WORK", "api_key/openai"); got != "✅ Tagged 1 entry WORK\nnote: there's already a tag \"work\", which differs only by case; folders and tags are case-sensitive\n" {
+		t.Errorf("add by case: %q", got)
+	}
+	if got := mustRun(t, runFolder, "move", "Home", "api_key/openai"); !strings.Contains(got, `note: there's already a folder "home"`) {
+		t.Errorf("move by case: %q", got)
+	}
+	// Once both are in use, no note.
+	if got := mustRun(t, runTag, "add", "WORK", "password/gitlab"); strings.Contains(got, "note") {
+		t.Errorf("add again: %q", got)
+	}
+}
+
+// The folder list lines counts up across widths and folders that only hold
+// others.
+func TestFolderList_Layout(t *testing.T) {
+	filingVault(t)
+	mustRun(t, runFolder, "move", "big", "password/github/alice", "password/gitlab", "api_key/openai")
+	mustRun(t, runFolder, "move", "deep/er", "password/My Bank")
+	want := "Folders:\n" +
+		"  big   3\n" +
+		"  deep     (1 in all)\n" +
+		"    er  1\n"
+	if got := mustRun(t, runFolder, "list"); got != want {
+		t.Errorf("list:\n%s\nwant:\n%s", got, want)
+	}
 }

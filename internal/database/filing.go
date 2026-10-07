@@ -120,24 +120,32 @@ func (s *Store) RemoveTag(keys []vault.Key, tag string) (int, error) {
 	})
 }
 
-// RenameFolder renames folder from, and the folders under it, to to,
-// returning how many entries moved. When to was already in use, the two
-// merge, and merged says so. A folder can't move under itself.
-func (s *Store) RenameFolder(from, to string) (n int, merged bool, err error) {
+// CheckFolderRename refuses renaming folder from to to without looking at
+// the vault: a name either can't have, the same name, or a folder under
+// from, which would move from into itself.
+func CheckFolderRename(from, to string) error {
 	switch {
 	case from == "":
-		return 0, false, fmt.Errorf("name the folder to rename")
+		return fmt.Errorf("name the folder to rename")
 	case to == "":
-		return 0, false, fmt.Errorf("name the folder's new name; to take entries out of a folder: sesh folder move \"\" <id>…")
+		return fmt.Errorf("name the folder's new name; to take entries out of a folder: sesh folder move \"\" <id>…")
 	case from == to:
-		return 0, false, fmt.Errorf("the folder is already called %q", to)
+		return fmt.Errorf("the folder is already called %q", to)
 	case vault.InFolder(to, from):
-		return 0, false, fmt.Errorf("can't move folder %q into a folder under itself (%q)", from, to)
+		return fmt.Errorf("can't move folder %q into a folder under itself (%q)", from, to)
 	}
 	if err := vault.CheckFolder(from); err != nil {
-		return 0, false, err
+		return err
 	}
-	if err := vault.CheckFolder(to); err != nil {
+	return vault.CheckFolder(to)
+}
+
+// RenameFolder renames folder from, and the folders under it, to to,
+// returning how many entries moved. When to already held other entries,
+// the two merge, and merged says so. It's refused when a subfolder's new
+// name would be too long.
+func (s *Store) RenameFolder(from, to string) (n int, merged bool, err error) {
+	if err := CheckFolderRename(from, to); err != nil {
 		return 0, false, err
 	}
 	var moved []vault.Key
@@ -149,11 +157,30 @@ func (s *Store) RenameFolder(from, to string) (n int, merged bool, err error) {
 		if len(inFrom) == 0 {
 			return noSuch{"folder", from}
 		}
+		// The longest new name: to, then what follows from.
+		var longest sql.NullString
+		var length int
+		err = tx.QueryRow(`SELECT kind || '/' || service || CASE username WHEN '' THEN '' ELSE '/' || username END,
+				length(?) + length(folder) - length(?) AS n
+			FROM entries WHERE folder = ? OR substr(folder, 1, length(?) + 1) = ? || '/'
+			ORDER BY n DESC LIMIT 1`, to, from, from, from, from).Scan(&longest, &length)
+		if err != nil {
+			return err
+		}
+		if length > vault.MaxFolderLength {
+			return fmt.Errorf("renaming folder %q to %q would make the folder of %s %d characters long; the most is %d", from, to, longest.String, length, vault.MaxFolderLength)
+		}
 		inTo, err := keysInFolder(tx, to)
 		if err != nil {
 			return err
 		}
-		merged = len(inTo) > 0
+		// to may hold from (renaming p/q to p): only other entries merge.
+		for _, k := range inTo {
+			if !slices.Contains(inFrom, k) {
+				merged = true
+				break
+			}
+		}
 		// from's own entries go to to; one in from/x goes to to/x.
 		if _, err := tx.Exec(`UPDATE entries SET folder = ? || substr(folder, length(?) + 1)
 			WHERE folder = ? OR substr(folder, 1, length(?) + 1) = ? || '/'`, to, from, from, from, from); err != nil {
@@ -177,17 +204,23 @@ func keysInFolder(tx *sql.Tx, folder string) ([]vault.Key, error) {
 		WHERE folder = ? OR substr(folder, 1, length(?) + 1) = ? || '/'`, folder, folder, folder)
 }
 
+// CheckTagRename refuses renaming tag from to to without looking at the
+// vault: a name either can't have, or the same name.
+func CheckTagRename(from, to string) error {
+	if from == to {
+		return fmt.Errorf("the tag is already called %q", to)
+	}
+	if err := vault.CheckTag(from); err != nil {
+		return err
+	}
+	return vault.CheckTag(to)
+}
+
 // RenameTag renames tag from to to on every entry, returning how many
 // entries had it. When to was already in use, the two merge, and merged
 // says so; an entry with both keeps one.
 func (s *Store) RenameTag(from, to string) (n int, merged bool, err error) {
-	if from == to {
-		return 0, false, fmt.Errorf("the tag is already called %q", to)
-	}
-	if err := vault.CheckTag(from); err != nil {
-		return 0, false, err
-	}
-	if err := vault.CheckTag(to); err != nil {
+	if err := CheckTagRename(from, to); err != nil {
 		return 0, false, err
 	}
 	var tagged []vault.Key
