@@ -1,6 +1,7 @@
 package vault_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -98,5 +99,51 @@ func TestKey_Validate(t *testing.T) {
 func TestParseKey_AppliesTheNameRules(t *testing.T) {
 	if _, err := vault.ParseKey("password/github "); err == nil || !strings.Contains(err.Error(), "starts or ends with a space") {
 		t.Errorf("ParseKey with a trailing space = %v, want it refused", err)
+	}
+}
+
+func TestCheckTagAndFolder(t *testing.T) {
+	for _, tag := range []string{"work", "a-b_c.d", "café", "2026", strings.Repeat("t", vault.MaxTagLength)} {
+		if err := vault.CheckTag(tag); err != nil {
+			t.Errorf("CheckTag(%q) = %v, want nil", tag, err)
+		}
+	}
+	for tag, wantSub := range map[string]string{
+		"":         "is empty",
+		"a b":      `contains ' '`,
+		"a,b":      `contains ','`,
+		"a/b":      `contains '/'`,
+		"a\u200bb": `contains '\u200b'`,
+		"\u3164":   "contains '\u3164'",
+		strings.Repeat("t", vault.MaxTagLength+1): "the most is 64",
+	} {
+		if err := vault.CheckTag(tag); err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("CheckTag(%q) = %v, want it to contain %q", tag, err, wantSub)
+		}
+	}
+	for _, f := range []string{"", "work", "work/aws", "personal/banking.old/2026"} {
+		if err := vault.CheckFolder(f); err != nil {
+			t.Errorf("CheckFolder(%q) = %v, want nil", f, err)
+		}
+	}
+	for f, wantSub := range map[string]string{
+		"/work":     "has an empty part",
+		"work/":     "has an empty part",
+		"work//aws": "has an empty part",
+		"work/a b":  `contains ' '`,
+		strings.Repeat("f/", vault.MaxFolderLength/2) + "f": "the most is 256",
+	} {
+		if err := vault.CheckFolder(f); err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("CheckFolder(%q) = %v, want it to contain %q", f, err, wantSub)
+		}
+	}
+}
+
+func TestNormalizeTags(t *testing.T) {
+	if got := vault.NormalizeTags([]string{"b", "a", "b"}); !slices.Equal(got, []string{"a", "b"}) {
+		t.Errorf("NormalizeTags = %q, want [a b]", got)
+	}
+	if got := vault.NormalizeTags(nil); got != nil {
+		t.Errorf("NormalizeTags(nil) = %q, want nil", got)
 	}
 }

@@ -24,6 +24,8 @@ type ExportEntry struct {
 	Username  string         `json:"username,omitempty"`
 	Type      EntryType      `json:"type"`
 	Secret    string         `json:"secret"`
+	Folder    string         `json:"folder,omitempty"`
+	Tags      []string       `json:"tags,omitempty"`
 	Settings  vault.Settings `json:"settings,omitzero"`
 }
 
@@ -94,6 +96,8 @@ func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry) (int, error) {
 			Username:  e.Username,
 			Type:      e.Kind,
 			Secret:    string(secretBytes),
+			Folder:    e.Folder,
+			Tags:      e.Tags,
 			Settings:  e.Settings,
 			CreatedAt: e.CreatedAt,
 			UpdatedAt: e.UpdatedAt,
@@ -125,10 +129,11 @@ func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry) (int, error) {
 }
 
 // exportCSV writes entries as CSV, one row at a time. The settings column
-// holds an entry's settings as JSON, empty when it has none.
+// holds an entry's settings as JSON, empty when it has none; the tags
+// column, its tags joined by ";", which a tag can't contain.
 func (m *Manager) exportCSV(w io.Writer, entries []vault.Entry) (int, error) {
 	cw := csv.NewWriter(w)
-	if err := cw.Write([]string{"service", "username", "type", "secret", "created_at", "updated_at", "settings"}); err != nil {
+	if err := cw.Write([]string{"service", "username", "type", "secret", "created_at", "updated_at", "settings", "folder", "tags"}); err != nil {
 		return 0, err
 	}
 
@@ -158,6 +163,8 @@ func (m *Manager) exportCSV(w io.Writer, entries []vault.Entry) (int, error) {
 			e.CreatedAt.Format(time.RFC3339),
 			e.UpdatedAt.Format(time.RFC3339),
 			settings,
+			e.Folder,
+			strings.Join(e.Tags, ";"),
 		})
 		secure.SecureZeroBytes(secretBytes)
 		if writeErr != nil {
@@ -263,9 +270,10 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			}
 		}
 
-		// The entry keeps its settings and times; a zero time means now.
+		// The entry keeps its settings, folder, tags, and times; a zero
+		// time means now.
 		secret := []byte(e.Secret)
-		err = m.store.Save(&vault.Entry{Key: k, Settings: e.Settings, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt}, secret)
+		err = m.store.Save(&vault.Entry{Key: k, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt}, secret)
 		secure.SecureZeroBytes(secret)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
@@ -339,6 +347,13 @@ func readCSV(r io.Reader) ([]ExportEntry, error) {
 			if err := json.Unmarshal([]byte(record[i]), &e.Settings); err != nil {
 				return nil, fmt.Errorf("the settings of %s/%s aren't valid JSON: %w", e.Service, e.Username, err)
 			}
+		}
+
+		if i, ok := idx["folder"]; ok && i < len(record) {
+			e.Folder = record[i]
+		}
+		if i, ok := idx["tags"]; ok && i < len(record) && record[i] != "" {
+			e.Tags = strings.Split(record[i], ";")
 		}
 
 		entries = append(entries, e)

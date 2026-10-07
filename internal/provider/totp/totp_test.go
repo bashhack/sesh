@@ -98,8 +98,8 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 	p := &Provider{}
 	flags := p.GetFlagInfo()
 
-	if len(flags) != 3 || flags[2].Name != "force" || flags[2].Type != "bool" {
-		t.Fatalf("GetFlagInfo() = %+v, want service-name, profile and force", flags)
+	if len(flags) != 5 || flags[2].Name != "force" || flags[2].Type != "bool" || flags[3].Name != "folder" || flags[4].Name != "tag" {
+		t.Fatalf("GetFlagInfo() = %+v, want service-name, profile, force, folder and tag", flags)
 	}
 
 	if flags[0].Name != "service-name" {
@@ -519,8 +519,8 @@ func TestProvider_ListEntries(t *testing.T) {
 				if entries[1].Name != "github" {
 					t.Errorf("entries[1].Name = %v, want 'github'", entries[1].Name)
 				}
-				if entries[1].Description != "TOTP" {
-					t.Errorf("entries[1].Description = %v, want 'TOTP'", entries[1].Description)
+				if entries[1].Type != "totp" {
+					t.Errorf("entries[1].Type = %v, want totp", entries[1].Type)
 				}
 				if entries[1].ID != "totp/github" {
 					t.Errorf("entries[1].ID = %v, want 'totp/github'", entries[1].ID)

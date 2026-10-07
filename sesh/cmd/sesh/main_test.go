@@ -827,3 +827,43 @@ func TestEarlyCheck_OnlyWhatTheCommandUses(t *testing.T) {
 		})
 	}
 }
+
+// --folder and --tag go only with a command that stores an entry, and a
+// name no folder or tag can have is refused before the vault opens.
+func TestEarlyCheck_FolderAndTag(t *testing.T) {
+	const pwWhere = "--folder and --tag file an entry as it's stored: use them with --action store, generate, or totp-store"
+	for name, tt := range map[string]struct {
+		wantSub string
+		args    []string
+	}{
+		"password store":        {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "x", "--folder", "work/dev", "--tag", "a", "--tag", "b"}},
+		"password generate":     {args: []string{"sesh", "--service", "password", "--action", "generate", "--service-name", "x", "--tag", "a"}},
+		"password totp-store":   {args: []string{"sesh", "--service", "password", "--action", "totp-store", "--service-name", "x", "--folder", ""}},
+		"totp setup":            {args: []string{"sesh", "--service", "totp", "--setup", "--folder", "work", "--tag", "a"}},
+		"aws setup":             {args: []string{"sesh", "--service", "aws", "--setup", "--tag", "a"}},
+		"password list":         {args: []string{"sesh", "--service", "password", "--list", "--tag", "a"}, wantSub: pwWhere},
+		"password get":          {args: []string{"sesh", "--service", "password", "--action", "get", "--service-name", "x", "--folder", "w"}, wantSub: pwWhere},
+		"password delete":       {args: []string{"sesh", "--service", "password", "--force", "--delete", "password/x", "--tag", "a"}, wantSub: pwWhere},
+		"totp code":             {args: []string{"sesh", "--service", "totp", "--service-name", "github", "--folder", "work"}, wantSub: "use them with --setup"},
+		"totp list":             {args: []string{"sesh", "--service", "totp", "--list", "--tag", "a"}, wantSub: "use them with --setup"},
+		"a bad folder":          {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "x", "--folder", "/work"}, wantSub: `the folder "/work" has an empty part`},
+		"a bad tag, with setup": {args: []string{"sesh", "--service", "aws", "--setup", "--tag", "a b"}, wantSub: `the tag "a b" contains ' '`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := argsParse(tt.args); got != (tt.wantSub == "") {
+				t.Errorf("argsParse = %v, want %v", got, tt.wantSub == "")
+			}
+			if tt.wantSub == "" {
+				return
+			}
+			app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout})
+			var stderr bytes.Buffer
+			app.Stdout, app.Stderr = io.Discard, &stderr
+			app.Exit = func(int) {}
+			run(app, tt.args)
+			if !strings.Contains(stderr.String(), tt.wantSub) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantSub)
+			}
+		})
+	}
+}

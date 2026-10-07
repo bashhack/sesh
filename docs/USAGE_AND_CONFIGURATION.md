@@ -222,6 +222,8 @@ db_path                  /Users/me/vaults/sesh.db
 | `-profile`        | `AWS_PROFILE`        | AWS profile to use                      | default profile  |
 | `-no-subshell`    | n/a                  | Print credentials instead of subshell   | false (subshell) |
 | `-force`          | n/a                  | Delete without asking                   | false            |
+| `-folder`         | n/a                  | With `-setup`: folder to file the entry in | none          |
+| `-tag`            | n/a                  | With `-setup`: tag to add; repeat for more | none          |
 
 **Profile precedence:** `-profile` flag > `$AWS_PROFILE` environment variable > `"default"`. If neither flag nor env var is set, sesh uses the profile named `"default"`.
 
@@ -232,6 +234,8 @@ db_path                  /Users/me/vaults/sesh.db
 | `-service-name`   | Name of service (github, google, slack, etc.)      | Yes              |
 | `-profile`        | Profile name for multiple accounts (work, personal)| No               |
 | `-force`          | Delete without asking                              | No               |
+| `-folder`         | With `-setup`: folder to file the entry in         | No               |
+| `-tag`            | With `-setup`: tag to add; repeat for more         | No               |
 
 ### Password Provider Options
 
@@ -252,6 +256,8 @@ db_path                  /Users/me/vaults/sesh.db
 | `-sort`           | Sort by: service, created_at, updated_at           | No               |
 | `-limit`          | Limit number of results; 0 (the default) means no limit, and a negative value is refused | No               |
 | `-offset`         | Skip the first N results; a negative value is refused | No               |
+| `-folder`         | With store, generate, totp-store: folder to file the entry in | No               |
+| `-tag`            | With store, generate, totp-store: tag to add; repeat for more | No               |
 
 ### Environment Variables
 
@@ -690,12 +696,13 @@ sesh -service totp -service-name github -profile personal
 sesh -service totp -list
 # Output:
 #   Entries for totp:
-#     github (personal)    TOTP [ID: totp/github/personal]
-#     github (work)        TOTP [ID: totp/github/work]
-#     google               TOTP [ID: totp/google]
+#     NAME               TYPE  ID
+#     github (personal)  totp  totp/github/personal
+#     github (work)      totp  totp/github/work
+#     google             totp  totp/google
 ```
 
-The `[ID: ...]` value is what you pass to `-delete`.
+The ID is what you pass to `-delete`.
 
 There's one set of TOTP entries. `-service totp` and the password manager's `totp-store` / `totp-generate` work on the same ones (`-profile` and `-username` mean the same thing), so an entry added either way shows up in both, in search, and in exports. The AWS provider's MFA secret for a profile is the TOTP entry `aws` with the profile as its username, and it remembers the MFA device with it.
 
@@ -857,8 +864,9 @@ List and manage stored entries:
 # List all entries for a service
 $ sesh -service aws -list
 Entries for aws:
-  AWS (default)        AWS MFA for profile (default) [ID: totp/aws/default]
-  AWS (prod)           AWS MFA for profile (prod) [ID: totp/aws/prod]
+  NAME           TYPE     ID
+  AWS (default)  aws mfa  totp/aws/default
+  AWS (prod)     aws mfa  totp/aws/prod
 
 # Delete an entry by copying the ID from -list output
 $ sesh -service aws -delete totp/aws/prod
@@ -900,6 +908,46 @@ The password manager's `store`, `generate`, `get` (including `--clip` on its own
 Names are case-sensitive: `GitHub` and `github` are two entries. When a lookup (`get`, `totp-generate`, `--service totp`, or `--delete` with `--service password` or `--service totp`) misses only by case, sesh says which entry you may have meant. Creating an entry whose name differs from an existing one only in case asks first, like an overwrite: with `store`, `generate`, and `totp-store` (`--force` skips the question), and in the TOTP setup wizard. AWS profiles are named by your AWS configuration, so the AWS setup doesn't ask.
 
 **Weak passwords.** When you type a password to store (`--action store`, kind `password`), sesh rates it with [zxcvbn](https://github.com/dropbox/zxcvbn), which knows common passwords, words, names, dates, and keyboard patterns, and counts the entry's own service name and username as easy guesses. If zxcvbn estimates fewer than about 100 million guesses would find it (a score of 2 or less out of 4), sesh stores it and warns, with the command to generate a strong one instead. Generated passwords, and generated API keys, get the same check: at the default length (24) they always pass, but `--length 9` or shorter can fail it, and then the warning suggests `--length 12` or more. API keys and notes you type aren't rated. zxcvbn's word lists are English: for passwords in other languages or scripts, it judges mostly by length and the mix of characters. Only a password's first 64 characters are rated.
+
+### Folders and tags
+
+An entry can be in one folder and have any number of tags. Folders nest with `/` (`work/aws`); tags are flat (`urgent`, `2fa`). Neither is part of the entry's ID or name: two entries with the same name can't sit in different folders.
+
+File an entry as you store it, with `--folder` and `--tag` (repeat `--tag` for more):
+
+```bash
+sesh -service password -action store -service-name github -username alice -folder work/dev -tag urgent -tag code
+sesh -service password -action generate -service-name bank -folder personal
+sesh -service totp -setup -folder personal/money -tag 2fa
+```
+
+They work with the password manager's `store`, `generate`, and `totp-store`, and with `-setup` for TOTP and AWS. Storing over an existing entry with `--folder` moves it; `--tag` adds to its tags. Without either, an existing entry keeps its folder and tags. Anywhere else, such as with `-list`, sesh refuses them rather than ignore them.
+
+Without the flags, the TOTP and AWS setup wizards ask at the end, and Enter skips:
+
+```
+Folder (optional, such as work/aws; Enter for none): work//x
+❌ the folder "work//x" has an empty part: "/" separates folders, so it can't come first, last, or twice in a row
+Folder (optional, such as work/aws; Enter for none): personal
+Tags (optional, separated by spaces; Enter for none): 2fa
+```
+
+A wrong answer is asked again, since the secret has been captured by then. Setting up an entry again shows its folder and tags, and Enter keeps them.
+
+`-list` shows FOLDER and TAGS columns when any listed entry has one:
+
+```
+$ sesh -service password -list
+Entries for password:
+  NAME            TYPE      FOLDER    TAGS         ID
+  github (alice)  password  work/dev  code urgent  password/github/alice
+  google          totp      personal  2fa          totp/google
+  openai          api_key                          api_key/openai
+```
+
+`get -format json` includes `folder` and `tags`. Exports carry them too: JSON as `folder` and `tags` (a list), CSV as `folder` and `tags` columns (tags joined with `;`), and encrypted exports with the JSON. Importing restores them, and `--on-conflict overwrite` replaces an existing entry's folder and tags with the file's.
+
+**Names.** A tag is letters, digits, `-`, `_`, and `.`, up to 64 characters. A folder is parts like that joined by `/`, with no empty part (no `/` at either end or twice in a row), up to 256 characters. Both are matched exactly, so `Work` and `work` differ. Like names, they're stored as plain text, not encrypted.
 
 ### Setup Wizard Features
 

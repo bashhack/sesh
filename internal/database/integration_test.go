@@ -793,7 +793,7 @@ func TestIntegration_TOTPParamsNonDefault(t *testing.T) {
 		Digits:    8,
 		Period:    60,
 	}
-	if err := mgr.StoreTOTPSecretWithParams("acme", "admin", "JBSWY3DPEHPK3PXP", params); err != nil {
+	if err := mgr.StoreTOTPSecretWithParams("acme", "admin", "JBSWY3DPEHPK3PXP", params, vault.Filing{}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -2,6 +2,7 @@
 package provider
 
 import (
+	"flag"
 	"fmt"
 	"time"
 )
@@ -11,6 +12,7 @@ type FlagSet interface {
 	StringVar(p *string, name string, value string, usage string)
 	BoolVar(p *bool, name string, value bool, usage string)
 	IntVar(p *int, name string, value int, usage string)
+	Var(value flag.Value, name string, usage string)
 }
 
 // ServiceProvider defines the interface that all service providers must implement
@@ -105,9 +107,11 @@ type SubshellProvider interface {
 
 // ProviderEntry represents an entry for a specific provider
 type ProviderEntry struct {
-	Name        string // Entry name (e.g. AWS Profile or GCP Project)
-	Description string // Human-readable description
-	ID          string // Internal identifier
+	Name   string // Entry name (e.g. AWS Profile or GCP Project)
+	Type   string // What kind of entry it is, such as password or totp
+	ID     string // Internal identifier
+	Folder string // Its folder, "" for none
+	Tags   []string
 }
 
 // Clock provides testable time. Embed in provider structs and override Now in tests.

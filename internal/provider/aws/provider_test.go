@@ -147,8 +147,8 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 	p := &Provider{}
 	flags := p.GetFlagInfo()
 
-	if len(flags) != 3 || flags[2].Name != "force" || flags[2].Type != "bool" {
-		t.Fatalf("GetFlagInfo() = %+v, want profile, no-subshell and force", flags)
+	if len(flags) != 5 || flags[2].Name != "force" || flags[2].Type != "bool" || flags[3].Name != "folder" || flags[4].Name != "tag" {
+		t.Fatalf("GetFlagInfo() = %+v, want profile, no-subshell, force, folder and tag", flags)
 	}
 
 	if flags[0].Name != "profile" {
@@ -773,8 +773,8 @@ func TestProvider_ListEntries(t *testing.T) {
 				if entries[0].Name != "AWS (default)" {
 					t.Errorf("entries[0].Name = %v, want 'AWS (default)'", entries[0].Name)
 				}
-				if entries[0].Description != "AWS MFA for profile (default)" {
-					t.Errorf("entries[0].Description = %v, want 'AWS MFA for profile (default)'", entries[0].Description)
+				if entries[0].Type != "aws mfa" {
+					t.Errorf("entries[0].Type = %v, want aws mfa", entries[0].Type)
 				}
 				if entries[0].ID != "totp/aws/default" {
 					t.Errorf("entries[0].ID = %v, want 'totp/aws/default'", entries[0].ID)

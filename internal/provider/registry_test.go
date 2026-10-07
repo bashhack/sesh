@@ -37,9 +37,9 @@ func (p *mockProvider) ListEntries() ([]ProviderEntry, error) {
 	}
 	return []ProviderEntry{
 		{
-			Name:        "test-entry",
-			Description: "Test entry",
-			ID:          "test-id",
+			Name: "test-entry",
+			Type: "test",
+			ID:   "test-id",
 		},
 	}, nil
 }

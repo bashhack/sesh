@@ -27,6 +27,7 @@ type Provider struct {
 	provider.Clock
 
 	profile    string
+	filing     provider.FilingFlags
 	noSubshell bool
 	force      bool
 }
@@ -53,6 +54,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
 	fs.BoolVar(&p.noSubshell, "no-subshell", false, "Print environment variables instead of launching subshell")
 	fs.BoolVar(&p.force, "force", false, "Delete without asking")
+	p.filing.Register(fs)
 	return nil
 }
 
@@ -231,9 +233,11 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 			continue // a TOTP entry named aws with no username: not a profile
 		}
 		result = append(result, provider.ProviderEntry{
-			Name:        fmt.Sprintf("AWS (%s)", e.Username),
-			Description: fmt.Sprintf("AWS MFA for %s", formatProfile(e.Username)),
-			ID:          e.Key.String(),
+			Name:   fmt.Sprintf("AWS (%s)", e.Username),
+			Type:   "aws mfa",
+			ID:     e.Key.String(),
+			Folder: e.Folder,
+			Tags:   e.Tags,
 		})
 	}
 	return result, nil
@@ -356,7 +360,7 @@ func checkAWSCodes(params internalTotp.Params) error {
 
 // GetFlagInfo returns information about AWS provider-specific flags
 func (p *Provider) GetFlagInfo() []provider.FlagInfo {
-	return []provider.FlagInfo{
+	return append([]provider.FlagInfo{
 		{
 			Name:        "profile",
 			Type:        "string",
@@ -375,8 +379,14 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Description: "Delete without asking",
 			Required:    false,
 		},
-	}
+	}, p.filing.FlagInfo()...)
 }
+
+// Filing is what --folder and --tag say, for --setup.
+func (p *Provider) Filing() vault.Filing { return p.filing.Filing() }
+
+// Storing reports that only --setup stores an entry.
+func (p *Provider) Storing() (bool, string) { return false, "--setup" }
 
 // ShouldUseSubshell returns whether to use subshell mode
 func (p *Provider) ShouldUseSubshell() bool {

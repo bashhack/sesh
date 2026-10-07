@@ -56,6 +56,59 @@ func readLine(r *bufio.Reader) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
+// askFiling asks where to file the entry the wizard is saving, unless
+// filing already says. existing is the entry being replaced, nil for a new
+// one: Enter keeps its folder and adds no tags. An answer no folder or tag
+// can have is asked again, since the secret is already captured.
+func askFiling(r *bufio.Reader, filing vault.Filing, existing *vault.Entry) (vault.Filing, error) {
+	if !filing.IsZero() {
+		return filing, nil
+	}
+	var folder string
+	var tags []string
+	if existing != nil {
+		folder, tags = existing.Folder, existing.Tags
+	}
+	fmt.Println()
+	for {
+		if folder == "" {
+			fmt.Print("Folder (optional, such as work/aws; Enter for none): ")
+		} else {
+			fmt.Printf("Folder (Enter keeps %s): ", folder)
+		}
+		answer, err := readLine(r)
+		if err != nil {
+			return vault.Filing{}, err
+		}
+		if answer == "" {
+			break
+		}
+		if err := vault.CheckFolder(answer); err != nil {
+			fmt.Printf("❌ %v\n", err)
+			continue
+		}
+		filing.Folder, filing.FolderSet = answer, true
+		break
+	}
+	for {
+		if len(tags) == 0 {
+			fmt.Print("Tags (optional, separated by spaces; Enter for none): ")
+		} else {
+			fmt.Printf("Tags to add (it has %s; Enter adds none): ", strings.Join(tags, " "))
+		}
+		answer, err := readLine(r)
+		if err != nil {
+			return vault.Filing{}, err
+		}
+		filing.Tags = strings.Fields(answer)
+		if err := filing.Check(); err != nil {
+			fmt.Printf("❌ %v\n", err)
+			continue
+		}
+		return filing, nil
+	}
+}
+
 // waitForEnter blocks until the user presses Enter.
 func waitForEnter(r *bufio.Reader) error {
 	_, err := r.ReadString('\n')
@@ -458,7 +511,7 @@ To use this setup, run without the --profile flag
 // Returns an error if any step in the setup process fails. If successful,
 // the user will be able to generate temporary AWS credentials with MFA protection
 // using the 'sesh' command.
-func (h *AWSSetupHandler) Setup() error {
+func (h *AWSSetupHandler) Setup(filing vault.Filing) error {
 	fmt.Println("🔐 Setting up AWS credentials...")
 
 	_, err := execLookPath("aws")
@@ -542,9 +595,21 @@ func (h *AWSSetupHandler) Setup() error {
 		return fmt.Errorf("failed to select MFA device: %w", err)
 	}
 
+	if filing, err = askFiling(h.reader, filing, existing); err != nil {
+		return err
+	}
+
 	// The secret and its device in one write, so a failure leaves no half
-	// setup behind.
-	if err := h.store.Save(&vault.Entry{Key: k, Settings: vault.Settings{AWSMFADevice: mfaArn}}, []byte(secretStr)); err != nil {
+	// setup behind. An entry being replaced keeps its folder, tags (unless
+	// filing changes them), and creation time.
+	entry := vault.Entry{Key: k}
+	if existing != nil {
+		entry = *existing
+		entry.UpdatedAt = time.Time{}
+	}
+	entry.Settings = vault.Settings{AWSMFADevice: mfaArn}
+	filing.Apply(&entry)
+	if err := h.store.Save(&entry, []byte(secretStr)); err != nil {
 		return fmt.Errorf("failed to store the MFA secret: %w", err)
 	}
 
@@ -673,7 +738,7 @@ func (h *TOTPSetupHandler) showTOTPSetupCompletionMessage(serviceName, profile s
 }
 
 // Setup performs the TOTP setup
-func (h *TOTPSetupHandler) Setup() error {
+func (h *TOTPSetupHandler) Setup(filing vault.Filing) error {
 	fmt.Println("🔐 Setting up TOTP credentials...")
 
 	serviceName, err := h.promptForServiceName()
@@ -751,15 +816,20 @@ func (h *TOTPSetupHandler) Setup() error {
 		return fmt.Errorf("failed to generate TOTP codes: %s", err)
 	}
 
+	if filing, err = askFiling(h.reader, filing, existing); err != nil {
+		return err
+	}
+
 	// The secret and its settings in one write. An entry being replaced
-	// keeps its other settings, such as an AWS profile's MFA device, and
-	// its creation time.
+	// keeps its other settings, such as an AWS profile's MFA device, its
+	// folder and tags (unless filing changes them), and its creation time.
 	entry := vault.Entry{Key: k}
 	if existing != nil {
 		entry = *existing
 		entry.UpdatedAt = time.Time{}
 	}
 	entry.Settings.TOTP = params
+	filing.Apply(&entry)
 	if err := h.store.Save(&entry, []byte(secretStr)); err != nil {
 		return fmt.Errorf("failed to store the TOTP secret: %w", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"golang.org/x/term"
@@ -147,13 +148,37 @@ func (a *App) ListEntries(serviceName string) error {
 		return nil
 	}
 
-	for _, entry := range entries {
-		if _, err := fmt.Fprintf(a.Stdout, "  %-20s %s [ID: %s]\n",
-			entry.Name, entry.Description, entry.ID); err != nil {
+	// FOLDER and TAGS only when an entry has one, so a vault that uses
+	// neither lists as it would without them.
+	var folders, tags bool
+	for i := range entries {
+		folders = folders || entries[i].Folder != ""
+		tags = tags || len(entries[i].Tags) > 0
+	}
+	tw := tabwriter.NewWriter(a.Stdout, 0, 0, 2, ' ', 0)
+	row := func(name, typ, folder, tagList, id string) error {
+		cells := []string{"  " + name, typ}
+		if folders {
+			cells = append(cells, folder)
+		}
+		if tags {
+			cells = append(cells, tagList)
+		}
+		_, err := fmt.Fprintln(tw, strings.Join(append(cells, id), "\t"))
+		return err
+	}
+	if err := row("NAME", "TYPE", "FOLDER", "TAGS", "ID"); err != nil {
+		return fmt.Errorf("failed to write output: %w", err)
+	}
+	for i := range entries {
+		e := &entries[i]
+		if err := row(e.Name, e.Type, e.Folder, strings.Join(e.Tags, " "), e.ID); err != nil {
 			return fmt.Errorf("failed to write output: %w", err)
 		}
 	}
-
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("failed to write output: %w", err)
+	}
 	return nil
 }
 
@@ -199,9 +224,16 @@ func (a *App) confirmDelete(ids []string) (bool, error) {
 	return promptYesNo(a.Stdin, a.Stderr, question)
 }
 
-// RunSetup runs the setup wizard for a provider
+// RunSetup runs the setup wizard for a provider, filing the entry as its
+// --folder and --tag say.
 func (a *App) RunSetup(serviceName string) error {
-	return a.SetupService.SetupService(serviceName)
+	var filing vault.Filing
+	if p, err := a.Registry.GetProvider(serviceName); err == nil {
+		if f, ok := p.(provider.Filer); ok {
+			filing = f.Filing()
+		}
+	}
+	return a.SetupService.SetupService(serviceName, filing)
 }
 
 // GenerateCredentials gets credentials from a provider

@@ -3,6 +3,7 @@ package vault
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -22,6 +23,13 @@ type memEntry struct {
 }
 
 var _ Store = (*MemStore)(nil)
+
+// entryCopy is e's entry, sharing nothing with it.
+func (e *memEntry) entryCopy() Entry {
+	c := e.entry
+	c.Tags = slices.Clone(c.Tags)
+	return c
+}
 
 // NewMemStore returns an empty MemStore.
 func NewMemStore() *MemStore {
@@ -68,8 +76,17 @@ func (m *MemStore) Save(e *Entry, secret []byte) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := CheckFolder(e.Folder); err != nil {
+		return err
+	}
+	for _, t := range e.Tags {
+		if err := CheckTag(t); err != nil {
+			return err
+		}
+	}
 	now := m.Now()
 	saved := *e
+	saved.Tags = NormalizeTags(e.Tags)
 	if saved.CreatedAt.IsZero() {
 		saved.CreatedAt = now
 	}
@@ -102,7 +119,7 @@ func (m *MemStore) Lookup(k Key) (Entry, error) {
 	if !ok {
 		return Entry{}, notFound(k)
 	}
-	return e.entry, nil
+	return e.entryCopy(), nil
 }
 
 // Exists implements Store.
@@ -121,7 +138,8 @@ func (m *MemStore) List(f Filter) ([]Entry, error) {
 	defer m.mu.Unlock()
 	var out []Entry
 	for k := range m.entries {
-		if e := m.entries[k].entry; f.Matches(&e) {
+		me := m.entries[k]
+		if e := me.entryCopy(); f.Matches(&e) {
 			out = append(out, e)
 		}
 	}
