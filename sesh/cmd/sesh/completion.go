@@ -119,6 +119,10 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		verbs = touchIDCommands
 	case "recovery":
 		verbs = recoveryCommands
+	case "folder":
+		verbs = folderCommands
+	case "tag":
+		verbs = tagCommands
 	case "completion":
 		verbs = completionShells
 	case "config", "recover":

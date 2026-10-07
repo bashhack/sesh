@@ -70,18 +70,9 @@ type Filer interface {
 // those entries ("TOTP entries"), "" for the whole vault. The hint is ""
 // when the folder and tags all exist and only together match nothing.
 func NoMatchHint(store vault.Store, f *vault.Filter, among string) string {
-	all, err := store.List(&vault.Filter{Kind: f.Kind, Service: f.Service})
+	folders, tags, err := filingNames(store, f)
 	if err != nil {
 		return ""
-	}
-	folders, tags := map[string]bool{}, map[string]bool{}
-	for i := range all {
-		for p := all[i].Folder; p != ""; p, _ = path.Split(strings.TrimSuffix(p, "/")) {
-			folders[strings.TrimSuffix(p, "/")] = true
-		}
-		for _, t := range all[i].Tags {
-			tags[t] = true
-		}
 	}
 	where := ""
 	if among != "" {
@@ -93,13 +84,7 @@ func NoMatchHint(store vault.Store, f *vault.Filter, among string) string {
 		if have[name] {
 			return
 		}
-		var twins []string
-		for h := range have {
-			if foldEqual(h, name) {
-				twins = append(twins, QuoteName(h))
-			}
-		}
-		sort.Strings(twins)
+		twins := twinsOf(have, name)
 		m := fmt.Sprintf("there's no %s %s%s", what, QuoteName(name), where)
 		if len(twins) > 0 {
 			m += " (did you mean " + strings.Join(twins, " or ") + "?)"
@@ -121,6 +106,61 @@ func NoMatchHint(store vault.Store, f *vault.Filter, among string) string {
 		hint += ". Folders and tags are case-sensitive"
 	}
 	return hint
+}
+
+// filingNames returns the folders (with the folders above them) and tags
+// of the entries of f's kind and service.
+func filingNames(store vault.Store, f *vault.Filter) (folders, tags map[string]bool, err error) {
+	all, err := store.List(&vault.Filter{Kind: f.Kind, Service: f.Service})
+	if err != nil {
+		return nil, nil, err
+	}
+	folders, tags = map[string]bool{}, map[string]bool{}
+	for i := range all {
+		for p := all[i].Folder; p != ""; p, _ = path.Split(strings.TrimSuffix(p, "/")) {
+			folders[strings.TrimSuffix(p, "/")] = true
+		}
+		for _, t := range all[i].Tags {
+			tags[t] = true
+		}
+	}
+	return folders, tags, nil
+}
+
+// twinsOf returns the names in have that differ from name only by case or
+// accent spelling, quoted and sorted.
+func twinsOf(have map[string]bool, name string) []string {
+	var twins []string
+	for h := range have {
+		if h != name && foldEqual(h, name) {
+			twins = append(twins, QuoteName(h))
+		}
+	}
+	sort.Strings(twins)
+	return twins
+}
+
+// TwinNote warns that a folder or tag (what) about to be used, which no
+// entry has yet, differs only by case from one that some have: "note:
+// there's already a folder "work", which differs only by case; folders and
+// tags are case-sensitive". It's "" otherwise.
+func TwinNote(store vault.Store, what, name string) string {
+	folders, tags, err := filingNames(store, &vault.Filter{})
+	if err != nil {
+		return ""
+	}
+	have := tags
+	if what == "folder" {
+		have = folders
+	}
+	if have[name] {
+		return ""
+	}
+	twins := twinsOf(have, name)
+	if len(twins) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("note: there's already a %s %s, which differs only by case; folders and tags are case-sensitive", what, strings.Join(twins, " or "))
 }
 
 // foldEqual reports whether a and b differ only by case, or by how an

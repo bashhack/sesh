@@ -241,9 +241,11 @@ var subcommands = []candidate{
 	{"audit", "Show the vault's audit log, or prune it"},
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 	{"config", "Show settings and where each comes from"},
+	{"folder", "Move entries between folders, rename folders, list them"},
 	{"init", "Choose where sesh keeps the vault"},
 	{"recover", "Set a new master password with the vault's recovery key"},
 	{"recovery", "Make, remove, or check this vault's recovery key"},
+	{"tag", "Tag entries, take tags off, rename tags, list them"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
 	{"verify", "Check the vault can all be read: every entry, the recovery key, Touch ID"},
 }
@@ -794,6 +796,16 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "folder":
+		if err := runFolder(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
+	case "tag":
+		if err := runTag(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "recover":
 		if err := runRecover(app, rest); err != nil {
 			fatal(app, err)
@@ -1064,6 +1076,8 @@ func (a *App) PrintUsage() error {
 		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"  sesh audit [prune]            Show the vault's audit log, or prune it",
 		"  sesh verify                   Check the vault can all be read",
+		"  sesh folder move|rename|list  File entries in folders",
+		"  sesh tag add|remove|rename|list  Tag entries",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",

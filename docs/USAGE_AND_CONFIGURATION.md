@@ -958,6 +958,37 @@ When nothing matches because the folder or a tag isn't on any of the entries loo
 
 `-sort folder` (password manager) puts a folder's entries together: entries in no folder first, then each folder followed by its subfolders (`work`, `work/dev`, then `work-old`). Search results show FOLDER and TAGS columns too, when an entry has one. `get -format json` includes `folder` and `tags`. Exports carry them too: JSON as `folder` and `tags` (a list), CSV as `folder` and `tags` columns (tags joined with `;`), and encrypted exports with the JSON. Importing restores them, and `--on-conflict overwrite` replaces an existing entry's folder and tags with the file's.
 
+**Changing them later.** `sesh folder` and `sesh tag` work on entries already stored, of any kind, by their IDs (what `-list` shows). Every ID is checked first: if any is wrong, nothing changes.
+
+```
+$ sesh folder move work api_key/openai
+✅ Moved 1 entry to work
+$ sesh tag add urgent api_key/openai totp/bank password/github/alice
+✅ Tagged 2 entries urgent (1 already had it)
+$ sesh tag remove 2fa totp/google
+✅ Took tag 2fa off 1 entry
+$ sesh folder rename personal home              # its subfolders go with it
+✅ Renamed folder personal to home, on 2 entries
+$ sesh tag rename urgent now
+✅ Renamed tag urgent to now, on 3 entries
+$ sesh folder list
+Folders:
+  home     1  (2 in all)
+    money  1
+  work     1  (2 in all)
+    dev    1
+$ sesh tag list
+Tags:
+  2fa     1
+  code    1
+  now     3
+1 entry has no tags.
+```
+
+`sesh folder move "" <id>…` takes entries out of their folder. Renaming a folder or tag to a name already in use merges the two, and sesh says so. A folder can't be moved into a folder under itself, or renamed so that a subfolder's full name would pass 256 characters. These changes don't change an entry's update time, and each changed entry gets a `modify` event in the audit log.
+
+Names are matched exactly, so sesh helps with case: renaming or removing a folder or tag no entry has fails, naming one that differs only by case (`there's no folder "Home" (did you mean "home"?). Folders and tags are case-sensitive`), and adding a tag or moving to a folder that differs only by case from one in use works, with a note saying so.
+
 **Names.** A tag is letters (in any script, with their accents and vowel marks), digits, `-`, `_`, and `.`, up to 64 characters, and doesn't start with `-`, which a command would read as a flag. A folder is parts like that joined by `/`, each up to 64 characters and up to 256 in all, with no empty part (no `/` at either end or twice in a row) and no part that's only dots (`.` or `..`, which read like a path). Both are matched exactly, so `Work` and `work` differ. Like names, they're stored as plain text, not encrypted.
 
 In CSV, spaces around a tag and empty tags (`a; b;;`) are ignored on import. If input ends at a setup wizard's folder or tag question (Ctrl-D), the entry is saved with what was answered, since the secret has been captured by then.
