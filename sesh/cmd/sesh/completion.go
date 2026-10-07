@@ -120,6 +120,11 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		if cur != "" && !strings.HasPrefix(cur, "-") {
 			return nil, true // the file to write
 		}
+	case "restore":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addRestoreFlags(fs) }, nil)
+		if cur != "" && !strings.HasPrefix(cur, "-") {
+			return nil, true // the backup file
+		}
 	case "touchid":
 		verbs = touchIDCommands
 	case "recovery":

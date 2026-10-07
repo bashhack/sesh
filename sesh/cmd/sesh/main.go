@@ -247,6 +247,7 @@ var subcommands = []candidate{
 	{"init", "Choose where sesh keeps the vault"},
 	{"recover", "Set a new master password with the vault's recovery key"},
 	{"recovery", "Make, remove, or check this vault's recovery key"},
+	{"restore", "List the backups, or replace the vault with one"},
 	{"tag", "Tag entries, take tags off, rename tags, list them"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
 }
@@ -798,6 +799,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "restore":
+		if err := runRestore(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "doctor":
 		if err := runDoctor(app, rest); err != nil {
 			fatal(app, err)
@@ -1084,6 +1090,7 @@ func (a *App) PrintUsage() error {
 		"  sesh audit [prune]            Show the vault's audit log, or prune it",
 		"  sesh doctor                   Check the setup, and that the vault can all be read",
 		"  sesh backup [file]            Copy the vault now (sesh also does this automatically)",
+		"  sesh restore [backup]         List the backups, or replace the vault with one",
 		"  sesh folder move|rename|list  File entries in folders",
 		"  sesh tag add|remove|rename|list  Tag entries",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",

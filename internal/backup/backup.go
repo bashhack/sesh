@@ -260,3 +260,53 @@ func (s Series) RemoveAll() ([]Info, error) {
 	}
 	return removed, nil
 }
+
+// ListAny returns the backups in dir of any vault named as the one at
+// vaultPath, newest first, with the id each was made from: for listing
+// when the vault itself can't be read, to say whose each backup is.
+func ListAny(dir, vaultPath string) ([]Info, []string, error) {
+	base := filepath.Base(vaultPath)
+	ext := filepath.Ext(base)
+	prefix := strings.TrimSuffix(base, ext) + "-"
+	if ext == "" {
+		ext = ".db"
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("list backups in %s: %w", dir, err)
+	}
+	type found struct {
+		id   string
+		info Info
+	}
+	var all []found
+	for _, e := range entries {
+		middle, ok := strings.CutPrefix(e.Name(), prefix)
+		if !ok || !e.Type().IsRegular() {
+			continue
+		}
+		middle, ok = strings.CutSuffix(middle, ext)
+		id, when, ok2 := strings.Cut(middle, "-")
+		if !ok || !ok2 || len(id) != 8 {
+			continue
+		}
+		made, err := time.Parse(stamp, when)
+		if err != nil {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		all = append(all, found{id, Info{Path: filepath.Join(dir, e.Name()), Made: made, Size: info.Size()}})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].info.Made.After(all[j].info.Made) })
+	infos, ids := make([]Info, len(all)), make([]string, len(all))
+	for i, f := range all {
+		infos[i], ids[i] = f.info, f.id
+	}
+	return infos, ids, nil
+}

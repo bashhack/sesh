@@ -120,7 +120,7 @@ func TestLockAgentAfterRekey(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.setup(t)
-			note := lockAgentAfterRekey()
+			note := lockAgentHoldingOldKey()
 			if tc.wantSub == "" && note != "" {
 				t.Errorf("note = %q, want none", note)
 			}
