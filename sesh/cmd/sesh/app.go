@@ -142,7 +142,13 @@ func (a *App) ListEntries(serviceName string) error {
 		return fmt.Errorf("failed to write output: %w", err)
 	}
 	if len(entries) == 0 {
-		if _, err := fmt.Fprintln(a.Stdout, "  No entries found"); err != nil {
+		msg := "  No entries found"
+		if h, ok := p.(interface{ NoMatchHint() string }); ok {
+			if hint := h.NoMatchHint(); hint != "" {
+				msg += ": " + hint
+			}
+		}
+		if _, err := fmt.Fprintln(a.Stdout, msg); err != nil {
 			return fmt.Errorf("failed to write output: %w", err)
 		}
 		return nil

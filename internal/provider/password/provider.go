@@ -104,7 +104,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.query, "query", "", "Search query")
 	fs.StringVar(&p.file, "file", "", "File path for export/import (default: stdout/stdin)")
 	fs.StringVar(&p.onConflict, "on-conflict", "", "Import conflict strategy: skip, overwrite (default: error)")
-	fs.StringVar(&p.sortBy, "sort", "service", "Sort by (service, created_at, updated_at)")
+	fs.StringVar(&p.sortBy, "sort", "service", "Sort by (service, created_at, updated_at, folder)")
 	fs.StringVar(&p.format, "format", "table", "Output format (table, json, csv)")
 	fs.BoolVar(&p.show, "show", false, "Show password instead of copying to clipboard")
 	fs.BoolVar(&p.force, "force", false, "Skip confirmation prompts")
@@ -112,20 +112,60 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.IntVar(&p.pwLength, "length", 24, "Generated password length")
 	fs.IntVar(&p.limit, "limit", 0, "Limit number of results (0 = no limit)")
 	fs.IntVar(&p.offset, "offset", 0, "Skip first N results")
-	p.filing.Register(fs)
+	p.filing.Register(fs, filingNarrows)
 	return nil
 }
 
 // Filing is what --folder and --tag say, for the actions that store.
 func (p *Provider) Filing() vault.Filing { return p.filing.Filing() }
 
-// Storing reports whether the action stores an entry.
-func (p *Provider) Storing() (bool, string) {
+// UsesFiling reports whether the action uses --folder and --tag: to file
+// the entry it stores, or to narrow the entries it searches or exports.
+func (p *Provider) UsesFiling() (bool, string) {
 	switch p.action {
-	case "store", "generate", "totp-store":
+	case "store", "generate", "totp-store", "search", "export":
 		return true, ""
 	}
-	return false, "--action store, generate, or totp-store"
+	return false, "--action store, generate, totp-store, search, or export, or with --list"
+}
+
+// filter is the entries --entry-type, --folder, and --tag let through.
+func (p *Provider) filter() *password.ListFilter {
+	f := p.filing.Filter()
+	return &password.ListFilter{
+		EntryType: password.EntryType(p.entryType),
+		SortBy:    password.SortField(p.sortBy),
+		Limit:     p.limit,
+		Offset:    p.offset,
+		Folder:    f.Folder,
+		FolderSet: f.FolderSet,
+		Tags:      f.Tags,
+	}
+}
+
+// filingNarrows is what --folder and --tag narrow here.
+const filingNarrows = "--list, search, or export"
+
+// NoMatchHint says why --list, search, or export found nothing, when
+// --folder or --tag names what no entry (of --entry-type's kind) has.
+func (p *Provider) NoMatchHint() string {
+	f := p.filing.Filter()
+	f.Kind = password.EntryType(p.entryType)
+	among := ""
+	if p.entryType != "" {
+		among = p.entryType + " entries"
+	}
+	return provider.NoMatchHint(p.store, &f, among)
+}
+
+// scope describes --folder and --tag for a message ("in folder "work""),
+// with a leading space; "" without them.
+func (p *Provider) scope() string {
+	f := p.filing.Filter()
+	if s := provider.Scope(&f); s != "" {
+		return " " + s
+	}
+	return ""
 }
 
 func (p *Provider) GetFlagInfo() []provider.FlagInfo {
@@ -137,8 +177,8 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 		{Name: "entry-type", Type: "string", Description: "Entry type (password, api_key, totp, secure_note)",
 			Values: []string{string(password.EntryTypePassword), string(password.EntryTypeAPIKey), string(password.EntryTypeTOTP), string(password.EntryTypeNote)}},
 		{Name: "query", Type: "string", Description: "Search query"},
-		{Name: "sort", Type: "string", Description: "Sort by (service, created_at, updated_at)",
-			Values: []string{string(password.SortByService), string(password.SortByCreatedAt), string(password.SortByUpdatedAt)}},
+		{Name: "sort", Type: "string", Description: "Sort by (service, created_at, updated_at, folder)",
+			Values: []string{string(password.SortByService), string(password.SortByCreatedAt), string(password.SortByUpdatedAt), string(password.SortByFolder)}},
 		{Name: "format", Type: "string", Description: "Output format (table, json, csv)",
 			Values: []string{"table", "json", "csv", "encrypted"}},
 		{Name: "file", Type: "string", Description: "File path for export/import (default: stdout/stdin)", Path: true},
@@ -150,7 +190,7 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 		{Name: "length", Type: "int", Description: "Generated password length (default 24)"},
 		{Name: "limit", Type: "int", Description: "Limit number of results (0 = no limit)"},
 		{Name: "offset", Type: "int", Description: "Skip first N results"},
-	}, p.filing.FlagInfo()...)
+	}, p.filing.FlagInfo(filingNarrows)...)
 }
 
 func (p *Provider) ValidateRequest() error {
@@ -217,9 +257,14 @@ func (p *Provider) CheckArgs() error {
 	return p.checkName()
 }
 
-// CheckListArgs refuses a negative --limit or --offset, the only arguments
-// --list and --delete use.
+// CheckListArgs refuses a negative --limit or --offset, or an unknown
+// --sort, the arguments --list and --delete use.
 func (p *Provider) CheckListArgs() error {
+	switch password.SortField(p.sortBy) {
+	case "", password.SortByService, password.SortByCreatedAt, password.SortByUpdatedAt, password.SortByFolder:
+	default:
+		return fmt.Errorf("unknown --sort %q: use service, created_at, updated_at, or folder", p.sortBy)
+	}
 	if p.limit < 0 {
 		return fmt.Errorf("--limit wants 0 (no limit) or more, got %d", p.limit)
 	}
@@ -335,14 +380,7 @@ func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
 	}
 	mgr := password.NewManager(p.store)
 
-	filter := password.ListFilter{
-		EntryType: password.EntryType(p.entryType),
-		SortBy:    password.SortField(p.sortBy),
-		Limit:     p.limit,
-		Offset:    p.offset,
-	}
-
-	entries, err := mgr.ListEntriesFiltered(filter)
+	entries, err := mgr.ListEntriesFiltered(p.filter())
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +419,17 @@ func (p *Provider) checkEntryType() error {
 		return nil
 	}
 	return fmt.Errorf("unknown --entry-type %q: use password, api_key, totp, or secure_note", p.entryType)
+}
+
+// noMatch is ": " and the hint when n is zero and there is one.
+func noMatch(n int, hint func() string) string {
+	if n > 0 {
+		return ""
+	}
+	if h := hint(); h != "" {
+		return ": " + h
+	}
+	return ""
 }
 
 // --- action implementations ---
@@ -745,8 +794,29 @@ func (p *Provider) readExportPassword(label string, confirm bool) ([]byte, error
 }
 
 func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, error) {
-	opts := password.ExportOptions{
+	// A filter that matches nothing is likely a typo (folders and tags are
+	// case-sensitive): fail before --file is emptied or a password asked
+	// for.
+	if filter := p.filter(); p.entryType != "" || filter.FolderSet || len(filter.Tags) > 0 {
+		filter.Limit, filter.Offset = 1, 0
+		found, err := mgr.ListEntriesFiltered(filter)
+		if err != nil {
+			return provider.Credentials{}, err
+		}
+		if len(found) == 0 {
+			kind := ""
+			if p.entryType != "" {
+				kind = p.entryType + " "
+			}
+			return provider.Credentials{}, fmt.Errorf("no %sentries%s, so nothing was exported%s", kind, p.scope(), noMatch(0, p.NoMatchHint))
+		}
+	}
+	f := p.filing.Filter()
+	opts := &password.ExportOptions{
 		EntryType: password.EntryType(p.entryType),
+		Folder:    f.Folder,
+		FolderSet: f.FolderSet,
+		Tags:      f.Tags,
 	}
 
 	// Default export target is p.stdout so callers can redirect with

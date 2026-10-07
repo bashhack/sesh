@@ -118,7 +118,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		}
 	}
 
-	entries, err := store.List(vault.Filter{})
+	entries, err := store.List(&vault.Filter{})
 	if err != nil {
 		return nil, err
 	}

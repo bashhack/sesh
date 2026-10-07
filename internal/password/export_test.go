@@ -35,7 +35,7 @@ func TestExportImport_RoundTripKeepsEverything(t *testing.T) {
 				}
 			}
 			var buf bytes.Buffer
-			if n, err := src.Export(&buf, ExportOptions{Format: format}); err != nil || n != len(want) {
+			if n, err := src.Export(&buf, &ExportOptions{Format: format}); err != nil || n != len(want) {
 				t.Fatalf("Export = %d, %v", n, err)
 			}
 
@@ -125,7 +125,7 @@ func TestExport_CSVFolderAndTagsColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if _, err := m.Export(&buf, ExportOptions{Format: FormatCSV}); err != nil {
+	if _, err := m.Export(&buf, &ExportOptions{Format: FormatCSV}); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
@@ -157,7 +157,7 @@ func TestImport_RejectsBadSettingsInCSV(t *testing.T) {
 func TestExport_RejectsUnknownFormat(t *testing.T) {
 	mgr, _ := newTestManager(t)
 	var buf bytes.Buffer
-	_, err := mgr.Export(&buf, ExportOptions{Format: ExportFormat("yaml")})
+	_, err := mgr.Export(&buf, &ExportOptions{Format: ExportFormat("yaml")})
 	if err == nil {
 		t.Fatal("expected error for unknown format, got nil")
 	}
@@ -186,7 +186,7 @@ func TestExport_AcceptsEmptyFormatAsJSON(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	count, err := mgr.Export(&buf, ExportOptions{})
+	count, err := mgr.Export(&buf, &ExportOptions{})
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestExport_StreamsPartialCountOnWriterFailure(t *testing.T) {
 	// of writer success; streaming must return a strictly smaller count
 	// when the writer fails mid-way.
 	fw := &failingWriter{budget: 200}
-	count, err := mgr.Export(fw, ExportOptions{Format: FormatJSON})
+	count, err := mgr.Export(fw, &ExportOptions{Format: FormatJSON})
 	if err == nil {
 		t.Fatal("expected error from truncated writer, got nil")
 	}

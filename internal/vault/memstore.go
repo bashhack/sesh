@@ -133,7 +133,7 @@ func (m *MemStore) Exists(k Key) error {
 }
 
 // List implements Store.
-func (m *MemStore) List(f Filter) ([]Entry, error) {
+func (m *MemStore) List(f *Filter) ([]Entry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []Entry

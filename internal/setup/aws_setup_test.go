@@ -16,7 +16,7 @@ import (
 // assertEmpty fails t if store holds any entry.
 func assertEmpty(t *testing.T, store vault.Store) {
 	t.Helper()
-	entries, err := store.List(vault.Filter{})
+	entries, err := store.List(&vault.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}

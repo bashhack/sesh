@@ -31,15 +31,18 @@ type EncryptedEnvelope struct {
 // The password is used to derive a key via Argon2id; the derived key
 // encrypts the JSON payload with AES-256-GCM. The output is portable —
 // anyone with the password can decrypt it, on any machine.
-func (m *Manager) ExportEncrypted(w io.Writer, opts ExportOptions, password []byte) (int, error) {
+func (m *Manager) ExportEncrypted(w io.Writer, opts *ExportOptions, password []byte) (int, error) {
 	if len(password) == 0 {
 		return 0, fmt.Errorf("password cannot be empty")
 	}
 
 	var buf bytes.Buffer
-	count, err := m.Export(&buf, ExportOptions{
+	count, err := m.Export(&buf, &ExportOptions{
 		Format:    FormatJSON,
 		EntryType: opts.EntryType,
+		Folder:    opts.Folder,
+		FolderSet: opts.FolderSet,
+		Tags:      opts.Tags,
 	})
 	if err != nil {
 		return 0, err

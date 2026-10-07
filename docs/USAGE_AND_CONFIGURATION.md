@@ -222,8 +222,8 @@ db_path                  /Users/me/vaults/sesh.db
 | `-profile`        | `AWS_PROFILE`        | AWS profile to use                      | default profile  |
 | `-no-subshell`    | n/a                  | Print credentials instead of subshell   | false (subshell) |
 | `-force`          | n/a                  | Delete without asking                   | false            |
-| `-folder`         | n/a                  | With `-setup`: folder to file the entry in | none          |
-| `-tag`            | n/a                  | With `-setup`: tag to add; repeat for more | none          |
+| `-folder`         | n/a                  | With `-setup`: folder to file the entry in; with `-list`: only entries in it and its subfolders (`""`: in no folder) | none |
+| `-tag`            | n/a                  | With `-setup`: tag to add; with `-list`: only entries with it; repeat for more | none |
 
 **Profile precedence:** `-profile` flag > `$AWS_PROFILE` environment variable > `"default"`. If neither flag nor env var is set, sesh uses the profile named `"default"`.
 
@@ -234,8 +234,8 @@ db_path                  /Users/me/vaults/sesh.db
 | `-service-name`   | Name of service (github, google, slack, etc.)      | Yes              |
 | `-profile`        | Profile name for multiple accounts (work, personal)| No               |
 | `-force`          | Delete without asking                              | No               |
-| `-folder`         | With `-setup`: folder to file the entry in         | No               |
-| `-tag`            | With `-setup`: tag to add; repeat for more         | No               |
+| `-folder`         | With `-setup`: folder to file the entry in; with `-list`: only entries in it and its subfolders (`""`: in no folder) | No |
+| `-tag`            | With `-setup`: tag to add; with `-list`: only entries with it; repeat for more | No |
 
 ### Password Provider Options
 
@@ -253,11 +253,11 @@ db_path                  /Users/me/vaults/sesh.db
 | `-force`          | Skip confirmation prompts                          | No               |
 | `-length`         | Generated password length (default 24)             | No               |
 | `-no-symbols`     | Exclude symbols from generated passwords           | No               |
-| `-sort`           | Sort by: service, created_at, updated_at           | No               |
+| `-sort`           | Sort by: service, created_at, updated_at, folder   | No               |
 | `-limit`          | Limit number of results; 0 (the default) means no limit, and a negative value is refused | No               |
 | `-offset`         | Skip the first N results; a negative value is refused | No               |
-| `-folder`         | With store, generate, totp-store: folder to file the entry in | No               |
-| `-tag`            | With store, generate, totp-store: tag to add; repeat for more | No               |
+| `-folder`         | With store, generate, totp-store: folder to file the entry in. With `-list`, search, export: only entries in it and its subfolders (`""`: in no folder) | No |
+| `-tag`            | With store, generate, totp-store: tag to add. With `-list`, search, export: only entries with it. Repeat for more | No |
 
 ### Environment Variables
 
@@ -921,7 +921,7 @@ sesh -service password -action generate -service-name bank -folder personal
 sesh -service totp -setup -folder personal/money -tag 2fa
 ```
 
-They work with the password manager's `store`, `generate`, and `totp-store`, and with `-setup` for TOTP and AWS. Storing over an existing entry with `--folder` moves it; `--tag` adds to its tags. Without either, an existing entry keeps its folder and tags. Anywhere else, such as with `-list`, sesh refuses them rather than ignore them.
+They work with the password manager's `store`, `generate`, and `totp-store`, and with `-setup` for TOTP and AWS. Storing over an existing entry with `--folder` moves it; `--tag` adds to its tags. Without either, an existing entry keeps its folder and tags.
 
 Without the flags, the TOTP and AWS setup wizards ask at the end, and Enter skips:
 
@@ -945,7 +945,18 @@ Entries for password:
   openai          api_key                          api_key/openai
 ```
 
-`get -format json` includes `folder` and `tags`. Exports carry them too: JSON as `folder` and `tags` (a list), CSV as `folder` and `tags` columns (tags joined with `;`), and encrypted exports with the JSON. Importing restores them, and `--on-conflict overwrite` replaces an existing entry's folder and tags with the file's.
+With `-list`, and the password manager's `search` and `export`, the same flags narrow the entries instead: `--folder work` keeps those in `work` and its subfolders (`work/dev`, but not `workshop`), `--folder ""` those in no folder, and `--tag` those with the tag; several `--tag`s keep the entries with all of them. They work for every provider's `-list`, and combine with `-entry-type` and the search query:
+
+```bash
+sesh -service password -list -folder work -sort folder
+sesh -service totp -list -tag 2fa
+sesh -service password -action search -query git -folder work/dev
+sesh -service password -action export -format encrypted -folder personal -file personal.enc
+```
+
+When nothing matches because the folder or a tag isn't on any of the entries looked at, sesh says so, and suggests one that differs only by case (`there's no folder "Work" (did you mean "work"?). Folders and tags are case-sensitive`). An export whose `--folder`, `--tag`, or `-entry-type` matches nothing fails instead, before `-file` is touched or a password asked for, so a typo can't empty an existing backup. Elsewhere, such as with `get` or `-delete`, sesh refuses `--folder` and `--tag` rather than ignore them; `-delete` takes entry IDs.
+
+`-sort folder` (password manager) puts a folder's entries together: entries in no folder first, then each folder followed by its subfolders (`work`, `work/dev`, then `work-old`). Search results show FOLDER and TAGS columns too, when an entry has one. `get -format json` includes `folder` and `tags`. Exports carry them too: JSON as `folder` and `tags` (a list), CSV as `folder` and `tags` columns (tags joined with `;`), and encrypted exports with the JSON. Importing restores them, and `--on-conflict overwrite` replaces an existing entry's folder and tags with the file's.
 
 **Names.** A tag is letters (in any script, with their accents and vowel marks), digits, `-`, `_`, and `.`, up to 64 characters, and doesn't start with `-`, which a command would read as a flag. A folder is parts like that joined by `/`, each up to 64 characters and up to 256 in all, with no empty part (no `/` at either end or twice in a row) and no part that's only dots (`.` or `..`, which read like a path). Both are matched exactly, so `Work` and `work` differ. Like names, they're stored as plain text, not encrypted.
 

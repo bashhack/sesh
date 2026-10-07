@@ -247,7 +247,7 @@ func TestListEntriesFiltered(t *testing.T) {
 		"offset past the entries": {"", ListFilter{Offset: 10}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			entries, err := m.ListEntriesFiltered(tt.filter)
+			entries, err := m.ListEntriesFiltered(&tt.filter)
 			if err != nil {
 				t.Fatal(err)
 			}

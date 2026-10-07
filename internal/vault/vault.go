@@ -384,11 +384,37 @@ type Entry struct {
 type Filter struct {
 	Kind    Kind
 	Service string
+	// Folder, when FolderSet, keeps the entries in that folder or one under
+	// it; "" keeps those in no folder.
+	Folder string
+	// Tags keeps the entries that have every one of them.
+	Tags      []string
+	FolderSet bool
 }
 
 // Matches reports whether f lets e through.
-func (f Filter) Matches(e *Entry) bool {
-	return (f.Kind == "" || e.Kind == f.Kind) && (f.Service == "" || e.Service == f.Service)
+func (f *Filter) Matches(e *Entry) bool {
+	if (f.Kind != "" && e.Kind != f.Kind) || (f.Service != "" && e.Service != f.Service) {
+		return false
+	}
+	if f.FolderSet && !InFolder(e.Folder, f.Folder) {
+		return false
+	}
+	for _, t := range f.Tags {
+		if !slices.Contains(e.Tags, t) {
+			return false
+		}
+	}
+	return true
+}
+
+// InFolder reports whether an entry filed in folder is in want or a folder
+// under it; want "" means in no folder.
+func InFolder(folder, want string) bool {
+	if want == "" {
+		return folder == ""
+	}
+	return folder == want || strings.HasPrefix(folder, want+"/")
 }
 
 // Store holds entries. Every method returns an error wrapping ErrNotFound
@@ -412,7 +438,7 @@ type Store interface {
 	// still be found to delete or replace.
 	Exists(k Key) error
 	// List returns the entries f matches, ordered by Key.Less.
-	List(f Filter) ([]Entry, error)
+	List(f *Filter) ([]Entry, error)
 	// Delete removes the entry.
 	Delete(k Key) error
 	// DeleteMany removes every entry keys name, or none: when one is

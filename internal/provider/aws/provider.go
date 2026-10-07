@@ -54,7 +54,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
 	fs.BoolVar(&p.noSubshell, "no-subshell", false, "Print environment variables instead of launching subshell")
 	fs.BoolVar(&p.force, "force", false, "Delete without asking")
-	p.filing.Register(fs)
+	p.filing.Register(fs, "--list")
 	return nil
 }
 
@@ -222,7 +222,8 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 
 // ListEntries returns an entry for each AWS profile set up; its ID is its key.
 func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
-	entries, err := p.store.List(vault.Filter{Kind: vault.KindTOTP, Service: vault.AWSKey("").Service})
+	f := p.listFilter()
+	entries, err := p.store.List(&f)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list AWS entries: %w", err)
 	}
@@ -379,14 +380,29 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Description: "Delete without asking",
 			Required:    false,
 		},
-	}, p.filing.FlagInfo()...)
+	}, p.filing.FlagInfo("--list")...)
 }
 
 // Filing is what --folder and --tag say, for --setup.
 func (p *Provider) Filing() vault.Filing { return p.filing.Filing() }
 
-// Storing reports that only --setup stores an entry.
-func (p *Provider) Storing() (bool, string) { return false, "--setup" }
+// UsesFiling reports that only --setup and --list use --folder and --tag.
+func (p *Provider) UsesFiling() (bool, string) { return false, "--setup or --list" }
+
+// listFilter is the entries --list shows: this provider's, narrowed by
+// --folder and --tag.
+func (p *Provider) listFilter() vault.Filter {
+	f := p.filing.Filter()
+	f.Kind, f.Service = vault.KindTOTP, vault.AWSKey("").Service
+	return f
+}
+
+// NoMatchHint says why --list found nothing, when --folder or --tag names
+// what no entry has.
+func (p *Provider) NoMatchHint() string {
+	f := p.listFilter()
+	return provider.NoMatchHint(p.store, &f, "AWS entries")
+}
 
 // ShouldUseSubshell returns whether to use subshell mode
 func (p *Provider) ShouldUseSubshell() bool {

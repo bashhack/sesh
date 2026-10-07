@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -934,7 +936,7 @@ func TestStoreTOTP_QRAccountIsCheckedToo(t *testing.T) {
 	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "the QR code's account name can't be used: the username is 300 characters long; the most is 256; choose one with --username") {
 		t.Errorf("err = %v, want the QR account refused", err)
 	}
-	if entries, err := store.List(vault.Filter{}); err != nil || len(entries) != 0 {
+	if entries, err := store.List(&vault.Filter{}); err != nil || len(entries) != 0 {
 		t.Errorf("stored %v (%v), want nothing", entries, err)
 	}
 }
@@ -1244,5 +1246,83 @@ func refuseToAsk(t *testing.T) provider.ConfirmDelete {
 	return func(ids []string) (bool, error) {
 		t.Errorf("asked to confirm deleting %v", ids)
 		return false, nil
+	}
+}
+
+// filedStore holds entries in folders and with tags.
+func filedStore(t *testing.T) *vault.MemStore {
+	t.Helper()
+	store := vault.NewMemStore()
+	for _, e := range []*vault.Entry{
+		{Kind: vault.KindPassword, Service: "github", Folder: "work", Tags: []string{"code"}},
+		{Kind: vault.KindPassword, Service: "gitlab", Folder: "home"},
+	} {
+		if err := store.Save(e, []byte("s")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store
+}
+
+// Search keeps the entries in --folder with every --tag, and shows their
+// folder and tags.
+func TestSearch_ByFolderAndTag(t *testing.T) {
+	stubStdoutIsTerminal(t, false)
+	p, stdout := newTestProvider(filedStore(t))
+	parseFlags(t, p, "--action", "search", "--query", "git", "--folder", "work", "--tag", "code")
+	if _, err := p.GetCredentials(); err != nil {
+		t.Fatal(err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Found 1 entry") || !strings.Contains(out, "NAME    USER  KIND      FOLDER  TAGS  UPDATED") || strings.Contains(out, "gitlab") {
+		t.Errorf("search output:\n%s", out)
+	}
+
+	// Nothing found, and the folder only differs by case.
+	p, _ = newTestProvider(filedStore(t))
+	parseFlags(t, p, "--action", "search", "--query", "git", "--folder", "Work")
+	creds, err := p.GetCredentials()
+	if err != nil || !strings.Contains(creds.DisplayInfo, `No entries in folder "Work" matching "git": there's no folder "Work" (did you mean "work"?). Folders and tags are case-sensitive`) {
+		t.Errorf("DisplayInfo = %q, %v", creds.DisplayInfo, err)
+	}
+}
+
+// Export keeps the entries with every --tag, and says why when none match.
+func TestExport_ByTag(t *testing.T) {
+	p, stdout := newTestProvider(filedStore(t))
+	parseFlags(t, p, "--action", "export", "--tag", "code")
+	creds, err := p.GetCredentials()
+	if err != nil || !strings.Contains(creds.DisplayInfo, "Exported 1 entry") || !strings.Contains(stdout.String(), `"service": "github"`) || strings.Contains(stdout.String(), "gitlab") {
+		t.Errorf("export: %q, %v\n%s", creds.DisplayInfo, err, stdout.String())
+	}
+	p, _ = newTestProvider(filedStore(t))
+	parseFlags(t, p, "--action", "export", "--tag", "nope")
+	if _, err := p.GetCredentials(); err == nil || err.Error() != `no entries with tag "nope", so nothing was exported: there's no tag "nope"` {
+		t.Errorf("export of nothing: %v", err)
+	}
+}
+
+// A filter that matches nothing fails without touching --file, so a typo
+// can't empty an existing backup, before asking for an encryption password.
+func TestExport_NothingMatchedLeavesTheFile(t *testing.T) {
+	for _, format := range []string{"json", "encrypted"} {
+		t.Run(format, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "backup.json")
+			if err := os.WriteFile(file, []byte("good backup"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			p, _ := newTestProvider(filedStore(t))
+			orig := readPassword
+			readPassword = func() ([]byte, error) { t.Error("asked for a password"); return nil, errors.New("no") }
+			t.Cleanup(func() { readPassword = orig })
+			parseFlags(t, p, "--action", "export", "--format", format, "--folder", "Work", "--file", file)
+			_, err := p.GetCredentials()
+			if err == nil || err.Error() != `no entries in folder "Work", so nothing was exported: there's no folder "Work" (did you mean "work"?). Folders and tags are case-sensitive` {
+				t.Errorf("err = %v", err)
+			}
+			if b, err := os.ReadFile(file); err != nil || string(b) != "good backup" {
+				t.Errorf("the file now holds %q (%v)", b, err)
+			}
+		})
 	}
 }

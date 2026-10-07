@@ -25,7 +25,7 @@ func deleteTestStore(t *testing.T, ids ...string) *vault.MemStore {
 
 func remaining(t *testing.T, s *vault.MemStore) int {
 	t.Helper()
-	es, err := s.List(vault.Filter{})
+	es, err := s.List(&vault.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}

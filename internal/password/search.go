@@ -45,11 +45,17 @@ const separators = " -_./@:+"
 // recently updated comes first among equals. An empty query matches
 // nothing.
 func (m *Manager) SearchEntries(query string) ([]Entry, error) {
+	return m.SearchIn(query, &ListFilter{})
+}
+
+// SearchIn is SearchEntries over the entries in's kind, folder, and tags
+// let through; its other fields are ignored.
+func (m *Manager) SearchIn(query string, in *ListFilter) ([]Entry, error) {
 	words := strings.Fields(strings.ToLower(query))
 	if len(words) == 0 {
 		return nil, nil
 	}
-	entries, err := m.ListEntries()
+	entries, err := m.list(in)
 	if err != nil {
 		return nil, err
 	}
@@ -171,12 +177,18 @@ func squash(s string) string {
 // letters allows one edit, a longer one two. A query of several words
 // gets no suggestions.
 func (m *Manager) SearchSuggestions(query string) ([]string, error) {
+	return m.SuggestionsIn(query, &ListFilter{})
+}
+
+// SuggestionsIn is SearchSuggestions from the entries in's kind, folder,
+// and tags let through.
+func (m *Manager) SuggestionsIn(query string, in *ListFilter) ([]string, error) {
 	words := strings.Fields(strings.ToLower(query))
 	if len(words) != 1 {
 		return nil, nil
 	}
 	w := words[0]
-	entries, err := m.ListEntries()
+	entries, err := m.list(in)
 	if err != nil {
 		return nil, err
 	}
