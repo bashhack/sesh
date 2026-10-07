@@ -134,6 +134,18 @@ func TestExport_CSVFolderAndTagsColumns(t *testing.T) {
 	}
 }
 
+// A hand-edited tags cell may have spaces around a tag or an empty one.
+func TestImport_CSVTagsCellIsLenient(t *testing.T) {
+	m, store := newTestManager(t)
+	in := "service,type,secret,tags\ngithub,password,pw,a; b;;c;\n"
+	if res, err := m.Import(strings.NewReader(in), ImportOptions{Format: FormatCSV}); err != nil || res.Imported != 1 {
+		t.Fatalf("Import = %+v, %v", res, err)
+	}
+	if e, err := store.Lookup(vault.Key{Kind: vault.KindPassword, Service: "github"}); err != nil || !slices.Equal(e.Tags, []string{"a", "b", "c"}) {
+		t.Errorf("tags = %q, %v; want [a b c]", e.Tags, err)
+	}
+}
+
 func TestImport_RejectsBadSettingsInCSV(t *testing.T) {
 	m, _ := newTestManager(t)
 	in := "service,type,secret,settings\nbank,totp,JBSWY3DPEHPK3PXP,{not json\n"

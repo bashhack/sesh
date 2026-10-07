@@ -101,3 +101,50 @@ func TestAWSSetup_ReplacingKeepsTheFiling(t *testing.T) {
 		t.Errorf("entry = %+v; want the creation time kept and the new device", e)
 	}
 }
+
+// The end of input at the optional questions saves the entry with what was
+// answered, rather than lose the captured secret.
+func TestTOTPSetup_EndOfInputAtTheFilingQuestions(t *testing.T) {
+	for name, tt := range map[string]struct {
+		input, folder, wantOut string
+		tags                   []string
+	}{
+		"before the folder":       {input: "svc\n\n1\n"},
+		"a last answer, no Enter": {input: "svc\n\n1\nwork\nurgent", folder: "work", tags: []string{"urgent"}},
+		"a bad last folder":       {input: "svc\n\n1\nwork//x", wantOut: `twice in a row; saving without a folder`},
+		"a bad last tag":          {input: "svc\n\n1\nwork\na,b", folder: "work", wantOut: `the tag "a,b" contains ','` + `: use letters, digits, "-", "_" and "."; saving without tags`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := vault.NewMemStore()
+			out := runTOTPSetup(t, store, tt.input, vault.Filing{})
+			if !strings.Contains(out, tt.wantOut) {
+				t.Errorf("output missing %q:\n%s", tt.wantOut, out)
+			}
+			checkFiled(t, store, vault.Key{Kind: vault.KindTOTP, Service: "svc"}, tt.folder, tt.tags...)
+		})
+	}
+}
+
+// The AWS wizard asks where to file the entry too.
+func TestAWSSetup_AsksWhereToFile(t *testing.T) {
+	stubAWSSetup(t, "arn:aws:iam::123456789012:mfa/testuser")
+	store := vault.NewMemStore()
+	handler := &AWSSetupHandler{store: store, reader: bufio.NewReader(strings.NewReader("\n1\n\n1\nwork/aws\nprod mfa\n"))}
+	var err error
+	out := testutil.CaptureStdout(func() { err = handler.Setup(vault.Filing{}) })
+	if err != nil {
+		t.Fatalf("Setup(): %v\n%s", err, out)
+	}
+	checkFiled(t, store, vault.AWSKey(""), "work/aws", "mfa", "prod")
+}
+
+// --folder "" takes an entry being set up again out of its folder.
+func TestTOTPSetup_EmptyFolderFlagClearsTheFolder(t *testing.T) {
+	store := vault.NewMemStore()
+	k := vault.Key{Kind: vault.KindTOTP, Service: "svc"}
+	if err := store.Save(&vault.Entry{Key: k, Folder: "old", Tags: []string{"x"}}, []byte("OLDSECRETOLDSECR")); err != nil {
+		t.Fatal(err)
+	}
+	runTOTPSetup(t, store, "svc\n\ny\n1\n", vault.Filing{FolderSet: true})
+	checkFiled(t, store, k, "", "x")
+}

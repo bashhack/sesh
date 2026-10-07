@@ -832,22 +832,25 @@ func TestEarlyCheck_OnlyWhatTheCommandUses(t *testing.T) {
 // name no folder or tag can have is refused before the vault opens.
 func TestEarlyCheck_FolderAndTag(t *testing.T) {
 	const pwWhere = "--folder and --tag file an entry as it's stored: use them with --action store, generate, or totp-store"
+	const listOrDelete = "--folder and --tag don't go with --list or --delete"
 	for name, tt := range map[string]struct {
 		wantSub string
 		args    []string
 	}{
-		"password store":        {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "x", "--folder", "work/dev", "--tag", "a", "--tag", "b"}},
-		"password generate":     {args: []string{"sesh", "--service", "password", "--action", "generate", "--service-name", "x", "--tag", "a"}},
-		"password totp-store":   {args: []string{"sesh", "--service", "password", "--action", "totp-store", "--service-name", "x", "--folder", ""}},
-		"totp setup":            {args: []string{"sesh", "--service", "totp", "--setup", "--folder", "work", "--tag", "a"}},
-		"aws setup":             {args: []string{"sesh", "--service", "aws", "--setup", "--tag", "a"}},
-		"password list":         {args: []string{"sesh", "--service", "password", "--list", "--tag", "a"}, wantSub: pwWhere},
-		"password get":          {args: []string{"sesh", "--service", "password", "--action", "get", "--service-name", "x", "--folder", "w"}, wantSub: pwWhere},
-		"password delete":       {args: []string{"sesh", "--service", "password", "--force", "--delete", "password/x", "--tag", "a"}, wantSub: pwWhere},
-		"totp code":             {args: []string{"sesh", "--service", "totp", "--service-name", "github", "--folder", "work"}, wantSub: "use them with --setup"},
-		"totp list":             {args: []string{"sesh", "--service", "totp", "--list", "--tag", "a"}, wantSub: "use them with --setup"},
-		"a bad folder":          {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "x", "--folder", "/work"}, wantSub: `the folder "/work" has an empty part`},
-		"a bad tag, with setup": {args: []string{"sesh", "--service", "aws", "--setup", "--tag", "a b"}, wantSub: `the tag "a b" contains ' '`},
+		"password store":               {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "x", "--folder", "work/dev", "--tag", "a", "--tag", "b"}},
+		"password generate":            {args: []string{"sesh", "--service", "password", "--action", "generate", "--service-name", "x", "--tag", "a"}},
+		"password totp-store":          {args: []string{"sesh", "--service", "password", "--action", "totp-store", "--service-name", "x", "--folder", ""}},
+		"totp setup":                   {args: []string{"sesh", "--service", "totp", "--setup", "--folder", "work", "--tag", "a"}},
+		"aws setup":                    {args: []string{"sesh", "--service", "aws", "--setup", "--tag", "a"}},
+		"password list":                {args: []string{"sesh", "--service", "password", "--list", "--tag", "a"}, wantSub: listOrDelete},
+		"password get":                 {args: []string{"sesh", "--service", "password", "--action", "get", "--service-name", "x", "--folder", "w"}, wantSub: pwWhere},
+		"password delete":              {args: []string{"sesh", "--service", "password", "--force", "--delete", "password/x", "--tag", "a"}, wantSub: listOrDelete},
+		"totp code":                    {args: []string{"sesh", "--service", "totp", "--service-name", "github", "--folder", "work"}, wantSub: "use them with --setup"},
+		"totp list":                    {args: []string{"sesh", "--service", "totp", "--list", "--tag", "a"}, wantSub: listOrDelete},
+		"a storing action with --list": {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "x", "--list", "--tag", "a"}, wantSub: listOrDelete},
+		"setup with --list":            {args: []string{"sesh", "--service", "totp", "--setup", "--list", "--tag", "a"}, wantSub: listOrDelete},
+		"a bad folder":                 {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "x", "--folder", "/work"}, wantSub: `the folder "/work" has an empty part`},
+		"a bad tag, with setup":        {args: []string{"sesh", "--service", "aws", "--setup", "--tag", "a b"}, wantSub: `the tag "a b" contains ' '`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := argsParse(tt.args); got != (tt.wantSub == "") {

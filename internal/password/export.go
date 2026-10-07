@@ -352,8 +352,13 @@ func readCSV(r io.Reader) ([]ExportEntry, error) {
 		if i, ok := idx["folder"]; ok && i < len(record) {
 			e.Folder = record[i]
 		}
-		if i, ok := idx["tags"]; ok && i < len(record) && record[i] != "" {
-			e.Tags = strings.Split(record[i], ";")
+		if i, ok := idx["tags"]; ok && i < len(record) {
+			// Spaces around a tag and empty ones, as hand editing leaves.
+			for t := range strings.SplitSeq(record[i], ";") {
+				if t = strings.TrimSpace(t); t != "" {
+					e.Tags = append(e.Tags, t)
+				}
+			}
 		}
 
 		entries = append(entries, e)

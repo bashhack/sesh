@@ -947,7 +947,9 @@ Entries for password:
 
 `get -format json` includes `folder` and `tags`. Exports carry them too: JSON as `folder` and `tags` (a list), CSV as `folder` and `tags` columns (tags joined with `;`), and encrypted exports with the JSON. Importing restores them, and `--on-conflict overwrite` replaces an existing entry's folder and tags with the file's.
 
-**Names.** A tag is letters, digits, `-`, `_`, and `.`, up to 64 characters. A folder is parts like that joined by `/`, with no empty part (no `/` at either end or twice in a row), up to 256 characters. Both are matched exactly, so `Work` and `work` differ. Like names, they're stored as plain text, not encrypted.
+**Names.** A tag is letters (in any script, with their accents and vowel marks), digits, `-`, `_`, and `.`, up to 64 characters, and doesn't start with `-`, which a command would read as a flag. A folder is parts like that joined by `/`, each up to 64 characters and up to 256 in all, with no empty part (no `/` at either end or twice in a row) and no part that's only dots (`.` or `..`, which read like a path). Both are matched exactly, so `Work` and `work` differ. Like names, they're stored as plain text, not encrypted.
+
+In CSV, spaces around a tag and empty tags (`a; b;;`) are ignored on import. If input ends at a setup wizard's folder or tag question (Ctrl-D), the entry is saved with what was answered, since the secret has been captured by then.
 
 ### Setup Wizard Features
 

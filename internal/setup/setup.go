@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -59,7 +60,8 @@ func readLine(r *bufio.Reader) (string, error) {
 // askFiling asks where to file the entry the wizard is saving, unless
 // filing already says. existing is the entry being replaced, nil for a new
 // one: Enter keeps its folder and adds no tags. An answer no folder or tag
-// can have is asked again, since the secret is already captured.
+// can have is asked again, and the end of input saves with what was
+// answered, since the secret is already captured.
 func askFiling(r *bufio.Reader, filing vault.Filing, existing *vault.Entry) (vault.Filing, error) {
 	if !filing.IsZero() {
 		return filing, nil
@@ -76,18 +78,24 @@ func askFiling(r *bufio.Reader, filing vault.Filing, existing *vault.Entry) (vau
 		} else {
 			fmt.Printf("Folder (Enter keeps %s): ", folder)
 		}
-		answer, err := readLine(r)
+		answer, end, err := readOptional(r)
 		if err != nil {
 			return vault.Filing{}, err
 		}
-		if answer == "" {
-			break
+		if answer != "" {
+			if err := vault.CheckFolder(answer); err != nil {
+				if !end {
+					fmt.Printf("❌ %v\n", err)
+					continue
+				}
+				fmt.Printf("❌ %v; saving without a folder\n", err)
+			} else {
+				filing.Folder, filing.FolderSet = answer, true
+			}
 		}
-		if err := vault.CheckFolder(answer); err != nil {
-			fmt.Printf("❌ %v\n", err)
-			continue
+		if end {
+			return filing, nil
 		}
-		filing.Folder, filing.FolderSet = answer, true
 		break
 	}
 	for {
@@ -96,17 +104,35 @@ func askFiling(r *bufio.Reader, filing vault.Filing, existing *vault.Entry) (vau
 		} else {
 			fmt.Printf("Tags to add (it has %s; Enter adds none): ", strings.Join(tags, " "))
 		}
-		answer, err := readLine(r)
+		answer, end, err := readOptional(r)
 		if err != nil {
 			return vault.Filing{}, err
 		}
 		filing.Tags = strings.Fields(answer)
 		if err := filing.Check(); err != nil {
-			fmt.Printf("❌ %v\n", err)
-			continue
+			if !end {
+				fmt.Printf("❌ %v\n", err)
+				continue
+			}
+			fmt.Printf("❌ %v; saving without tags\n", err)
+			filing.Tags = nil
 		}
 		return filing, nil
 	}
+}
+
+// readOptional reads the answer to an optional question; end reports that
+// input ended with it, so nothing more can be asked.
+func readOptional(r *bufio.Reader) (answer string, end bool, err error) {
+	line, err := r.ReadString('\n')
+	if errors.Is(err, io.EOF) {
+		fmt.Println()
+		return strings.TrimSpace(line), true, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("failed to read input: %w", err)
+	}
+	return strings.TrimSpace(line), false, nil
 }
 
 // waitForEnter blocks until the user presses Enter.

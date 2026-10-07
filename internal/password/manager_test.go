@@ -337,6 +337,10 @@ func TestStorePassword_Files(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("no filing", "work", "a", "b")
+	if err := m.StorePassword("bank", "me", []byte("GEZDGNBVGY3TQOJQ"), EntryTypeTOTP, vault.Filing{FolderSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	check(`--folder ""`, "", "a", "b")
 	if secret, err := store.Get(k); err != nil || string(secret) != "GEZDGNBVGY3TQOJQ" {
 		t.Errorf("secret = %q, %v", secret, err)
 	}

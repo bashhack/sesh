@@ -145,8 +145,8 @@ const MaxTagLength = 64
 // MaxFolderLength is the most characters a folder can have, "/"s included.
 const MaxFolderLength = 256
 
-// CheckTag refuses a tag that's empty, holds anything but letters, digits,
-// "-", "_" and ".", or has more than MaxTagLength characters.
+// CheckTag refuses a tag that breaks the label rules (see checkLabel) or
+// has more than MaxTagLength characters.
 func CheckTag(t string) error {
 	if err := checkLabel(t); err != nil {
 		return fmt.Errorf("the tag %q %w", t, err)
@@ -170,25 +170,51 @@ func CheckFolder(f string) error {
 		if part == "" {
 			return fmt.Errorf("the folder %q has an empty part: \"/\" separates folders, so it can't come first, last, or twice in a row", f)
 		}
+		if strings.Trim(part, ".") == "" {
+			return fmt.Errorf("the folder %q has a part that's only dots, which reads like a path", f)
+		}
 		if err := checkLabel(part); err != nil {
 			return fmt.Errorf("the folder %q %w", f, err)
+		}
+		if n := utf8.RuneCountInString(part); n > MaxTagLength {
+			return fmt.Errorf("the folder %q: a part is %d characters long; the most is %d", f, n, MaxTagLength)
 		}
 	}
 	return nil
 }
 
-// checkLabel refuses an empty tag or folder part, or one holding anything
-// but letters, digits, "-", "_" and ".".
+// checkLabel refuses an empty tag or folder part, one starting with "-"
+// (which a command would read as a flag), or one holding anything but
+// letters (with their accent and vowel marks), digits, "-", "_" and ".".
 func checkLabel(v string) error {
 	if v == "" {
 		return errors.New("is empty")
 	}
-	for _, r := range v {
-		if (!unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' && r != '.') || isInvisible(r) {
-			return fmt.Errorf("contains %q: use letters, digits, \"-\", \"_\" and \".\"", r)
+	if strings.HasPrefix(v, "-") {
+		return errors.New(`can't start with "-"`)
+	}
+	for i, r := range v {
+		ok := unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' ||
+			// A mark belongs to the character before it: "é" can be
+			// written as "e" and an accent.
+			(i > 0 && unicode.In(r, unicode.Mn, unicode.Mc))
+		if !ok || isInvisible(r) {
+			return fmt.Errorf("contains %s: use letters, digits, \"-\", \"_\" and \".\"", quoteRune(r))
 		}
 	}
+	if hasHiddenRune(v) {
+		return errors.New("contains an invisible character")
+	}
 	return nil
+}
+
+// quoteRune quotes r for an error, escaped when it wouldn't show on its
+// own, such as a blank letter or an accent.
+func quoteRune(r rune) string {
+	if r == ' ' || (unicode.IsGraphic(r) && !isInvisible(r) && !unicode.In(r, unicode.Mn, unicode.Mc, unicode.Me) && !unicode.IsSpace(r)) {
+		return fmt.Sprintf("%q", r)
+	}
+	return fmt.Sprintf("%+q", r)
 }
 
 // Filing is where an entry being stored is filed. The zero Filing leaves
