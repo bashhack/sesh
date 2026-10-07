@@ -288,3 +288,19 @@ func TestMake_RefusesADamagedVault(t *testing.T) {
 		t.Errorf("no vault: %v", err)
 	}
 }
+
+// MakeNew never takes another backup for its own: it moves to the next
+// free second.
+func TestMakeNew(t *testing.T) {
+	v := testVault(t)
+	s := series(t, v, t.TempDir())
+	now := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
+	a, err := s.Make(v, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.MakeNew(v, now)
+	if err != nil || b.Path == a.Path || !b.Made.Equal(now.Add(time.Second)) {
+		t.Errorf("MakeNew = %+v, %v; want the next second", b, err)
+	}
+}

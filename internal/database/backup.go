@@ -1,13 +1,19 @@
 package database
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 )
 
 // VaultID returns the vault's id: random, made with it, and never changed.
+// It reads the vault without writing to it.
 func VaultID(dbPath string) (_ string, err error) {
-	db, err := openExisting(dbPath)
+	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
+		return "", ErrNoVault
+	}
+	db, err := openReadOnly(dbPath)
 	if err != nil {
 		return "", err
 	}

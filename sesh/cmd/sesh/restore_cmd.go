@@ -93,9 +93,15 @@ func listBackups(app *App, cfg *config.Config) error {
 	return err
 }
 
-// findBackup is the file arg names: a path, or a name in the backups
-// folder.
+// findBackup is the file arg names: a name in the backups folder, or a
+// path.
 func findBackup(cfg *config.Config, arg string) (string, error) {
+	if !strings.ContainsRune(arg, os.PathSeparator) {
+		inFolder := filepath.Join(cfg.BackupFolder(), arg)
+		if _, err := os.Stat(inFolder); err == nil {
+			return inFolder, nil
+		}
+	}
 	path, err := config.ResolvePath(arg)
 	if err != nil {
 		if path, err = filepath.Abs(arg); err != nil {
@@ -104,12 +110,6 @@ func findBackup(cfg *config.Config, arg string) (string, error) {
 	}
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
-	}
-	if !strings.ContainsRune(arg, os.PathSeparator) {
-		inFolder := filepath.Join(cfg.BackupFolder(), arg)
-		if _, err := os.Stat(inFolder); err == nil {
-			return inFolder, nil
-		}
 	}
 	return "", fmt.Errorf("no backup at %s; see the backups with: sesh restore", arg)
 }
@@ -120,6 +120,11 @@ func restore(app *App, cfg *config.Config, path string, force bool) error {
 	b, err := database.InspectBackup(path)
 	if err != nil {
 		return err
+	}
+	// Named as listed when it's from the backups folder; by its path when not.
+	name := tildePath(path)
+	if filepath.Dir(path) == filepath.Clean(cfg.BackupFolder()) {
+		name = filepath.Base(path)
 	}
 	made := "an unknown time"
 	if info, err := os.Stat(path); err == nil {
@@ -133,20 +138,27 @@ func restore(app *App, cfg *config.Config, path string, force bool) error {
 		}
 	}
 
+	// In place for a sound vault; whole for a missing or damaged one,
+	// which is moved aside, not deleted. Any other trouble reading it
+	// (permissions, busy) stops here, changing nothing.
+	current, currentErr := database.VaultSummary(vaultPath)
+	whole := currentErr != nil
+	if currentErr != nil && !errors.Is(currentErr, database.ErrNoVault) && !database.IsDamaged(currentErr) {
+		return fmt.Errorf("the vault can't be read, so nothing was restored: %w", currentErr)
+	}
 	var plan strings.Builder
-	fmt.Fprintf(&plan, "Restore the vault from %s, made %s (%s)?\n", filepath.Base(path), made, entryCount(b.Entries))
+	fmt.Fprintf(&plan, "Restore the vault from %s, made %s (%s)?\n", name, made, entryCount(b.Entries))
 	fmt.Fprintf(&plan, "  It opens with the master password, and recovery key, the vault had then.\n")
-	current, nowErr := database.VaultSummary(vaultPath)
 	switch {
-	case nowErr == nil:
+	case currentErr == nil:
 		if current.VaultID != b.VaultID {
 			fmt.Fprintf(&plan, "  It's a backup of another vault (this one's id is %s, the backup's %s).\n", short(current.VaultID), short(b.VaultID))
 		}
 		fmt.Fprintf(&plan, "  The vault now (%s) is backed up first.\n", entryCount(current.Entries))
-	case errors.Is(nowErr, database.ErrNoVault):
-		fmt.Fprintf(&plan, "  There's no vault at %s now; the backup becomes it.\n", tildePath(vaultPath))
+	case errors.Is(currentErr, database.ErrNoVault):
+		fmt.Fprintf(&plan, "  There's no vault at %s now, or it's new and empty; the backup becomes it.\n", tildePath(vaultPath))
 	default:
-		fmt.Fprintf(&plan, "  The vault now can't be read (%v), so it isn't backed up first: it's replaced whole. Make sure no other sesh command is running.\n", nowErr)
+		fmt.Fprintf(&plan, "  The vault now is damaged (%v).\n  It's moved aside, not deleted, and the backup is copied in. Make sure no other sesh command is running.\n", currentErr)
 	}
 	if _, err := fmt.Fprint(app.Stderr, plan.String()); err != nil {
 		return err
@@ -161,26 +173,31 @@ func restore(app *App, cfg *config.Config, path string, force bool) error {
 			return err
 		}
 	}
-	var saved string
-	if nowErr == nil {
+
+	var out strings.Builder
+	if whole {
+		aside, err := database.ReplaceVault(vaultPath, path, now())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", name, entryCount(b.Entries), made)
+		if aside != "" {
+			fmt.Fprintf(&out, "The vault as it was is in %s, with any -wal and -shm files beside it.\n", tildePath(aside))
+		}
+	} else {
 		s, err := backup.SeriesOf(vaultPath, cfg.BackupFolder())
 		if err != nil {
 			return err
 		}
-		info, err := s.Make(vaultPath, now())
+		saved, err := s.MakeNew(vaultPath, now())
 		if err != nil {
 			return fmt.Errorf("back up the vault before restoring (nothing changed): %w", err)
 		}
-		saved = info.Path
-	}
-	if _, err := database.RestoreFrom(vaultPath, path); err != nil {
-		return err
-	}
-
-	var out strings.Builder
-	fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", filepath.Base(path), entryCount(b.Entries), made)
-	if saved != "" {
-		fmt.Fprintf(&out, "The vault as it was is in %s; restore it the same way to undo this.\n", tildePath(saved))
+		if err := database.RestoreInPlace(vaultPath, path); err != nil {
+			return err
+		}
+		fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", name, entryCount(b.Entries), made)
+		fmt.Fprintf(&out, "The vault as it was is in %s; restore it the same way to undo this.\n", tildePath(saved.Path))
 	}
 	if note := lockAgentHoldingOldKey(); note != "" {
 		out.WriteString(note + "\n")

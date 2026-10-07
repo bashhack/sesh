@@ -620,7 +620,7 @@ Backups are named for the vault (`3f9c2a1b`, an id it gets when it's made and ke
 
 A backup opens with the master password, and the recovery key, it was made with. So after `sesh --rekey`, or `sesh recovery new` or `remove`, sesh says how many backups still open with the old one, and at a terminal offers to delete them and make a fresh one: worth doing if the old one may have leaked.
 
-`sesh restore` lists the backups, and `sesh restore <name>` (or a file anywhere) puts one back:
+`sesh restore` lists the backups, and `sesh restore <name>` puts one back. A name is looked up in the backups folder; a path to a backup elsewhere works too:
 
 ```
 $ sesh restore
@@ -639,9 +639,9 @@ The vault as it was is in ~/Library/Application Support/sesh/backups/passwords-9
 ```
 
 - **It checks the backup first:** that it's a sesh vault in this version's format, that SQLite's integrity check passes, and that it has the record its key is made from. It never changes the backup.
-- **It saves the vault as it is first,** as a backup, so a restore can be undone.
-- **A vault that's sound is replaced in place,** in one step, as a password change is: a sesh command using it at that moment never sees half of it, and one that unlocked it before is refused if the password changed. Your audit log is kept, with a `restore` event added.
-- **A vault that's damaged or missing is replaced whole,** by the backup's copy, after removing the `-wal` and `-shm` files beside it, which SQLite would otherwise apply to the restored copy. Make sure no other sesh command is running then.
+- **A vault that's sound is saved first,** as a backup, so the restore can be undone, then replaced in place, in one step, as a password change is. A sesh command using it at that moment never sees half of it, and one that unlocked it before is refused if the password changed. Your audit log is kept, with a `restore` event added.
+- **A vault that's damaged is moved aside, not deleted,** to `passwords.db.before-restore-<time>` beside it, with its `-wal` and `-shm` files, so what can still be read of it isn't lost. The backup's copy takes its place. A missing vault is simply replaced. Make sure no other sesh command is running then. A vault reached through a symlink is restored where it really is.
+- **Any other trouble reading the vault,** such as its permissions, stops the restore before anything changes.
 - **A backup of another vault** can be restored, and sesh says so first.
 - **Afterwards,** the agent is locked, and the next command asks for the master password the backup was made with. If Touch ID unlock was set up for the vault before, sesh says to turn it on again (`sesh touchid enable`).
 

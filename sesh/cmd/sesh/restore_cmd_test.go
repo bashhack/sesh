@@ -140,12 +140,21 @@ func TestRestore_DamagedVault(t *testing.T) {
 	if err := os.WriteFile(env.dbPath, []byte("garbage"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, errOut, err := runRestoreOut(t, "", false, "--force", b)
-	if err != nil || !strings.Contains(errOut, "so it isn't backed up first: it's replaced whole") {
+	out, errOut, err := runRestoreOut(t, "", false, "--force", b)
+	if err != nil || !strings.Contains(errOut, "It's moved aside, not deleted, and the backup is copied in.") {
 		t.Fatalf("restore: %v\n%s", err, errOut)
 	}
 	if n := vaultEntries(t, env); n != 2 {
 		t.Errorf("%d entries, want the backup's 2", n)
+	}
+	if !strings.Contains(out, ".before-restore-") {
+		t.Errorf("it doesn't say where the damaged vault went: %s", out)
+	}
+	aside, err := filepath.Glob(filepath.Join(filepath.Dir(env.dbPath), "*.before-restore-*"))
+	if err != nil || len(aside) != 1 {
+		t.Errorf("the damaged vault wasn't kept: %v, %v", aside, err)
+	} else if got, _ := os.ReadFile(aside[0]); string(got) != "garbage" { //nolint:errcheck // compared
+		t.Errorf("the vault moved aside holds %q", got)
 	}
 }
 
@@ -175,4 +184,72 @@ func services(t *testing.T, store *database.Store) string {
 		names[i] = all[i].Service
 	}
 	return strings.Join(names, " ")
+}
+
+// The vault is saved before a restore even when a backup was made in the
+// same second: the save is the vault as it is, never that older backup.
+func TestRestore_SaveIsTheVaultAsItIs(t *testing.T) {
+	clock := time.Date(2026, 10, 7, 9, 12, 0, 0, time.Local)
+	env, b := restoreVault(t, &clock)
+	// Another backup at the very second of the restore, before a change.
+	if _, err := runBackupOut(t); err != nil {
+		t.Fatal(err)
+	}
+	store := openDoctorVault(t, env)
+	if err := store.Put(entryKey(t, "password/late-change"), []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := runRestoreOut(t, "", false, "--force", b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := backups(t, env)[0].Path
+	if !strings.Contains(out, filepath.Base(saved)) {
+		t.Fatalf("the newest backup isn't the one named as the save: %s", out)
+	}
+	sum, err := database.InspectBackup(saved)
+	if err != nil || sum.Entries != 3 {
+		t.Errorf("the save holds %d entries (%v), want 3, with late-change", sum.Entries, err)
+	}
+}
+
+// A bare name is the one in the backups folder, even with a file of that
+// name where sesh runs; a backup from elsewhere is shown by its path.
+func TestRestore_FindsTheBackup(t *testing.T) {
+	clock := time.Date(2026, 10, 7, 9, 12, 0, 0, time.Local)
+	_, b := restoreVault(t, &clock)
+	wd := t.TempDir()
+	t.Chdir(wd)
+	if err := os.WriteFile(filepath.Join(wd, filepath.Base(b)), []byte("not this one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, err := runRestoreOut(t, "n\n", true, filepath.Base(b)); err != nil || !strings.Contains(errOut, "Restore the vault from "+filepath.Base(b)+",") {
+		t.Errorf("by name: %v\n%s", err, errOut)
+	}
+	elsewhere := filepath.Join(t.TempDir(), "copy.db")
+	if _, err := runBackupOut(t, elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, err := runRestoreOut(t, "n\n", true, elsewhere); err != nil || !strings.Contains(errOut, "Restore the vault from "+tildePath(elsewhere)+",") {
+		t.Errorf("by path: %v\n%s", err, errOut)
+	}
+}
+
+// Listing reads the vault without writing to it, even an empty file a sync
+// tool left.
+func TestRestore_ListingWritesNothing(t *testing.T) {
+	clock := time.Date(2026, 10, 7, 9, 12, 0, 0, time.Local)
+	env, _ := restoreVault(t, &clock)
+	if err := os.WriteFile(env.dbPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runRestoreOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(env.dbPath); err != nil || info.Size() != 0 {
+		t.Errorf("listing changed the vault file: %v, %d bytes", err, info.Size())
+	}
 }

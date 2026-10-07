@@ -144,6 +144,28 @@ func (s Series) Make(vaultPath string, now time.Time) (Info, error) {
 	return stat(dest, now)
 }
 
+// MakeNew is Make that never takes an existing backup for its own: if one
+// was made in the same second, the backup is named for the next free
+// second. A restore saves the vault with it, which must be the vault as it
+// is now.
+func (s Series) MakeNew(vaultPath string, now time.Time) (Info, error) {
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return Info{}, fmt.Errorf("create the backups folder %s: %w", s.Dir, err)
+	}
+	for i := range 60 {
+		at := now.Add(time.Duration(i) * time.Second)
+		dest := filepath.Join(s.Dir, s.Name(at))
+		err := write(vaultPath, dest, false)
+		if err == nil {
+			return stat(dest, at)
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return Info{}, err
+		}
+	}
+	return Info{}, fmt.Errorf("no free name for a backup in %s", s.Dir)
+}
+
 // removeStaleTemps removes the temporary files of this series' backups
 // that were cut short long ago. A failure is ignored: they're only clutter.
 func (s Series) removeStaleTemps(now time.Time) {

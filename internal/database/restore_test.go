@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -103,9 +105,8 @@ func TestRestoreFrom_InPlace(t *testing.T) {
 		return n
 	}
 	before := events()
-	inPlace, err := RestoreFrom(p, b)
-	if err != nil || !inPlace {
-		t.Fatalf("RestoreFrom = %v, %v; want in place", inPlace, err)
+	if err := RestoreInPlace(p, b); err != nil {
+		t.Fatalf("RestoreInPlace: %v", err)
 	}
 	if got := services(t, s); got != "bank" {
 		t.Errorf("after the restore: %q, want bank", got)
@@ -122,49 +123,138 @@ func TestRestoreFrom_InPlace(t *testing.T) {
 	}
 }
 
-// A missing vault, or a damaged one, is replaced whole, and a -wal file
-// left beside it doesn't undo the restore.
-func TestRestoreFrom_ReplacesAMissingOrDamagedVault(t *testing.T) {
+// A missing vault is replaced, and a -wal file left beside it doesn't
+// undo the restore.
+func TestReplaceVault_Missing(t *testing.T) {
 	p, s := rekeyVault(t)
 	b := backupOf(t, p)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for name, spoil := range map[string]func(t *testing.T, path string){
-		"missing": func(t *testing.T, path string) {
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path+"-wal", []byte("stale"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		},
-		"damaged": func(t *testing.T, path string) {
-			if err := os.WriteFile(path, []byte("garbage that isn't sqlite"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			v := filepath.Join(t.TempDir(), "passwords.db")
-			if err := CopyTo(p, v); err != nil {
-				t.Fatal(err)
-			}
-			spoil(t, v)
-			inPlace, err := RestoreFrom(v, b)
-			if err != nil || inPlace {
-				t.Fatalf("RestoreFrom = %v, %v; want the file replaced", inPlace, err)
-			}
-			sum, err := VaultSummary(v)
-			if err != nil || sum.Entries != 1 {
-				t.Errorf("after: %+v, %v", sum, err)
-			}
-			// The leftover -wal was removed; one there now is the restored
-			// vault's own.
-			if b, err := os.ReadFile(v + "-wal"); err == nil && string(b) == "stale" {
-				t.Error("the leftover -wal file is still there")
-			}
-		})
+	v := filepath.Join(t.TempDir(), "passwords.db")
+	if err := os.WriteFile(v+"-wal", []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	aside, err := ReplaceVault(v, b, time.Now())
+	if err != nil || aside != "" {
+		t.Fatalf("ReplaceVault = %q, %v; want nothing moved aside", aside, err)
+	}
+	if sum, err := VaultSummary(v); err != nil || sum.Entries != 1 {
+		t.Errorf("after: %+v, %v", sum, err)
+	}
+	if b, err := os.ReadFile(v + "-wal"); err == nil && string(b) == "stale" {
+		t.Error("the leftover -wal file is still there")
+	}
+}
+
+// A damaged vault is moved aside, with its -wal, never deleted: what can
+// still be read of it, such as an entry newer than the backup, is kept.
+func TestReplaceVault_DamagedIsMovedAside(t *testing.T) {
+	p, s := rekeyVault(t)
+	b := backupOf(t, p)
+	if err := s.Put(vault.Key{Kind: vault.KindPassword, Service: "newer"}, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sqlExecIn(t, p, `PRAGMA writable_schema = ON; UPDATE sqlite_master SET sql = 'CREATE INDEX idx_entries_folder ON entries(service)' WHERE name = 'idx_entries_folder'; PRAGMA writable_schema = OFF`)
+	if _, err := VaultSummary(p); !IsDamaged(err) {
+		t.Fatalf("VaultSummary = %v, want damaged", err)
+	}
+	now := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
+	aside, err := ReplaceVault(p, b, now)
+	if err != nil || filepath.Base(aside) != filepath.Base(p)+".before-restore-2026-10-07T090000Z" {
+		t.Fatalf("ReplaceVault = %q, %v", aside, err)
+	}
+	if sum, err := VaultSummary(p); err != nil || sum.Entries != 1 {
+		t.Errorf("the restored vault: %+v, %v", sum, err)
+	}
+	db, err := sql.Open("sqlite", aside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test cleanup
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM entries NOT INDEXED WHERE service = 'newer'`).Scan(&n); err != nil || n != 1 {
+		t.Errorf("the entry newer than the backup isn't in the vault moved aside: %d, %v", n, err)
+	}
+}
+
+// A symlinked vault is replaced where it really is; the link stays.
+func TestReplaceVault_FollowsSymlinks(t *testing.T) {
+	p, s := rekeyVault(t)
+	b := backupOf(t, p)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	realPath := filepath.Join(t.TempDir(), "passwords.db")
+	if err := os.WriteFile(realPath, []byte("garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "passwords.db")
+	if err := os.Symlink(realPath, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReplaceVault(link, b, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link was replaced: %v", err)
+	}
+	if sum, err := VaultSummary(realPath); err != nil || sum.Entries != 1 {
+		t.Errorf("the link's target: %+v, %v", sum, err)
+	}
+}
+
+// A new vault, with no key record or entries, counts as no vault; the
+// vault's own problems are worded as the vault's.
+func TestVaultSummary(t *testing.T) {
+	p := vaultPath(t.TempDir())
+	s, err := Open(p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VaultSummary(p); !errors.Is(err, ErrNoVault) {
+		t.Errorf("a new vault: %v, want ErrNoVault", err)
+	}
+	if err := os.WriteFile(p, []byte("garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VaultSummary(p); !IsDamaged(err) || !strings.Contains(err.Error(), "the vault") || strings.Contains(err.Error(), "backup") {
+		t.Errorf("a garbage vault: %v", err)
+	}
+}
+
+// Every table but the audit log and the schema version is restored, so a
+// table added later can't be left out by mistake.
+func TestRestoredTablesCoverTheSchema(t *testing.T) {
+	p, _ := rekeyVault(t)
+	db, err := sql.Open("sqlite", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test cleanup
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close() //nolint:errcheck // test cleanup
+	want := append([]string{"audit_log", "schema_migrations"}, restoredTables...)
+	var got []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, name)
+	}
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("tables %q, want each restored or kept on purpose: %q", got, want)
 	}
 }
 
@@ -178,5 +268,28 @@ func sqlExecIn(t *testing.T, path, q string) {
 	defer db.Close() //nolint:errcheck // test cleanup
 	if _, err := db.Exec(q); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A store that unlocked the vault before it was restored from a backup with
+// another key is refused its next write.
+func TestRestoreInPlace_RefusesAStoreOnTheOldKey(t *testing.T) {
+	p, s := rekeyVault(t)
+	other := vaultPath(t.TempDir())
+	o, err := Open(other, NewKeySourceOracle(NewMasterPasswordSource(other, staticPrompt("other-password-1", "other-password-1"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Put(vault.Key{Kind: vault.KindPassword, Service: "x"}, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := RestoreInPlace(p, backupOf(t, other)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(vault.Key{Kind: vault.KindPassword, Service: "y"}, []byte("y")); !errors.Is(err, ErrVaultKeyChanged) {
+		t.Errorf("Put after the restore = %v, want ErrVaultKeyChanged", err)
 	}
 }
