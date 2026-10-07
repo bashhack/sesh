@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/recovery"
+	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/touchid"
 )
 
@@ -20,8 +22,9 @@ const structureLinesShown = 10
 // and its settings and times read; the recovery key's record must be shaped
 // to open the vault, and Touch ID unlock must be this vault's. Nothing is
 // written while it checks; one audit event records the result, if the file
-// is sound. A problem with the file, an entry, or the recovery key is an
-// error; one with Touch ID is a warning.
+// is sound. A problem with the file, an entry, or the recovery key fails the
+// check; one with Touch ID is a warning. The report ends with what to do
+// about each.
 func runVerify(app *App, args []string) error {
 	if len(args) == 1 && (args[0] == "--help" || args[0] == "-help" || args[0] == "-h") {
 		_, err := fmt.Fprintln(app.Stdout, "Usage: sesh verify\n  Unlock the vault and check every entry can be read, and that its recovery key and Touch ID unlock still work.")
@@ -49,7 +52,7 @@ func runVerify(app *App, args []string) error {
 	if err != nil {
 		return damagedFile(err)
 	}
-	touchLine := verifyTouchID(filepath.Dir(dbPath), database.UnlockID(mat.Verify))
+	touchFile, touchErr := touchid.ReadFile(filepath.Dir(dbPath))
 	ks, err := buildKeySource(cfg)
 	if err != nil {
 		return damagedFile(err)
@@ -72,97 +75,179 @@ func runVerify(app *App, args []string) error {
 		return fmt.Errorf("%w; nothing was concluded, so run sesh verify again", err)
 	}
 
-	var b strings.Builder
-	var next []string
-	problems := 0
-	fmt.Fprintf(&b, "Vault: %s\n", tildePath(dbPath))
+	var c verifyChecks
 	if len(report.Structure) == 0 {
-		b.WriteString("  File: ok\n")
+		c.row(markOK, "File", "ok")
 	} else {
-		problems++
-		b.WriteString("  File: damaged; SQLite reports:\n")
-		for i, line := range report.Structure {
-			if i == structureLinesShown {
-				fmt.Fprintf(&b, "    … and %d more\n", len(report.Structure)-structureLinesShown)
-				break
-			}
-			fmt.Fprintf(&b, "    %s\n", line)
+		lines := report.Structure
+		if len(lines) > structureLinesShown {
+			lines = append(lines[:structureLinesShown:structureLinesShown], fmt.Sprintf("… and %d more", len(report.Structure)-structureLinesShown))
+		}
+		c.row(markFail, "File", "damaged; SQLite reports:", lines...)
+		if len(report.Problems) == 0 {
+			c.todo("Your entries all read, so save them now, then start a new vault and import them:", "sesh --service password --action export --format encrypted --file backup.enc")
+		} else {
+			c.todo("Restore the vault from a backup, such as an encrypted export.")
 		}
 	}
 	if len(report.Problems) == 0 {
-		fmt.Fprintf(&b, "  Entries: %s, all readable\n", entryCount(report.Entries))
-		if problems > 0 {
-			next = append(next, "Your entries all read, so save them now, then start a new vault and import them:\n    sesh --service password --action export --format encrypted --file backup.enc")
-		}
+		c.row(markOK, "Entries", entryCount(report.Entries)+", all readable")
 	} else {
-		problems += len(report.Problems)
-		fmt.Fprintf(&b, "  Entries: %d of %s can't be read:\n", len(report.Problems), entryCount(report.Entries))
+		var details, ids []string
 		for _, p := range report.Problems {
-			fmt.Fprintf(&b, "    %s: %v\n", p.Key, p.Err)
+			details = append(details, fmt.Sprintf("%s: %s", p.Key, problemText(p.Kind)))
+			ids = append(ids, shell.Quote(p.Key.String()))
 		}
-		next = append(next, "Restore the entries that can't be read from a backup, such as an encrypted export, or delete them with --delete.")
+		// Why a secret doesn't decrypt goes under the last one that doesn't.
+		for i, p := range slices.Backward(report.Problems) {
+			if p.Kind == database.ProblemSecret {
+				details = slices.Insert(details, i+1, "(damaged, or encrypted with another key)")
+				break
+			}
+		}
+		c.fails += len(report.Problems) - 1
+		c.row(markFail, "Entries", fmt.Sprintf("%d of %s can't be read", len(report.Problems), entryCount(report.Entries)), details...)
+		if len(report.Structure) == 0 {
+			what := "Restore these entries from a backup (an encrypted export), or delete them:"
+			if len(ids) == 1 {
+				what = fmt.Sprintf("Restore %s from a backup (an encrypted export), or delete it:", report.Problems[0].Key)
+			}
+			c.todo(what, "sesh --service password --delete "+strings.Join(ids, " "))
+		}
 	}
-	line, ok := verifyRecovery(&report)
-	fmt.Fprintf(&b, "  Recovery key: %s\n", line)
-	if !ok {
-		problems++
-	}
-	fmt.Fprintf(&b, "  Touch ID: %s\n", touchLine)
+	verifyRecovery(&c, &report)
+	verifyTouchID(&c, touchFile, touchErr, database.UnlockID(mat.Verify))
 
-	result := "ok"
-	if problems > 0 {
-		result = countOf(int64(problems), "problem")
-	}
 	if len(report.Structure) == 0 {
+		result := "ok"
+		if c.fails > 0 {
+			result = countOf(int64(c.fails), "problem")
+		}
 		store.LogVerify(fmt.Sprintf("%s, %s", result, entryCount(report.Entries)))
 	}
-	if problems == 0 {
-		b.WriteString("Vault OK.\n")
-	} else {
-		for _, n := range next {
-			fmt.Fprintf(&b, "%s\n", n)
-		}
-	}
-	if _, err := fmt.Fprint(app.Stdout, b.String()); err != nil {
+	if _, err := fmt.Fprint(app.Stdout, c.render(tildePath(dbPath))); err != nil {
 		return err
 	}
-	if problems > 0 {
-		return fmt.Errorf("the vault has %s (see above)", countOf(int64(problems), "problem"))
+	if c.fails > 0 {
+		return errReported
 	}
 	return nil
 }
 
-// verifyRecovery reports on the vault's recovery key: a line, and whether
-// it's fine (none counts as fine).
-func verifyRecovery(r *database.VerifyReport) (string, bool) {
-	switch {
-	case r.RecoveryErr != nil:
-		return fmt.Sprintf("its record can't be read (%v); make a new one with: sesh recovery new", r.RecoveryErr), false
-	case r.Recovery == nil:
-		return "none", true
-	case r.Recovery.UnlockID != r.KeyID:
-		return "its record is for another vault or key, so it can't open this one; make a new one with: sesh recovery new", false
-	}
-	if err := recovery.CheckRecord(r.Recovery); err != nil {
-		return fmt.Sprintf("its record is damaged (%v); make a new one with: sesh recovery new", err), false
-	}
-	return "set, complete, and made for this vault's key", true
+// The marks at the start of each row of the report.
+const (
+	markOK   = "ok"
+	markFail = "FAIL"
+	markWarn = "warn"
+	markNone = "-"
+)
+
+// verifyChecks collects the report's rows, what to do, and the tally.
+type verifyChecks struct {
+	rows         strings.Builder
+	todos        [][]string
+	fails, warns int
 }
 
-// verifyTouchID reports on Touch ID unlock for the vault whose key record
-// id is id, from its file in dataDir. A stale setup only costs typing the
-// password, so it's a warning, never a failure.
-func verifyTouchID(dataDir, id string) string {
-	f, err := touchid.ReadFile(dataDir)
+// row adds a check's result, with any details under it.
+func (c *verifyChecks) row(mark, label, value string, details ...string) {
+	switch mark {
+	case markFail:
+		c.fails++
+	case markWarn:
+		c.warns++
+	}
+	fmt.Fprintf(&c.rows, "  %-6s%-14s%s\n", mark, label, value)
+	for _, d := range details {
+		fmt.Fprintf(&c.rows, "%24s%s\n", "", d)
+	}
+}
+
+// todo adds a step to what to do: what to do, then any commands to run.
+func (c *verifyChecks) todo(text string, commands ...string) {
+	c.todos = append(c.todos, append([]string{text}, commands...))
+}
+
+func (c *verifyChecks) render(vault string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "sesh verify: %s\n\n%s", vault, c.rows.String())
+	if len(c.todos) > 0 {
+		b.WriteString("\nWhat to do\n")
+		for i, t := range c.todos {
+			fmt.Fprintf(&b, "  %d. %s\n", i+1, t[0])
+			for _, cmd := range t[1:] {
+				fmt.Fprintf(&b, "       %s\n", cmd)
+			}
+		}
+	}
+	b.WriteString("\n")
+	var tally []string
+	if c.fails > 0 {
+		tally = append(tally, countOf(int64(c.fails), "problem"))
+	}
+	if c.warns > 0 {
+		tally = append(tally, countOf(int64(c.warns), "warning"))
+	}
+	switch {
+	case c.fails > 0:
+		fmt.Fprintf(&b, "FAIL: %s\n", strings.Join(tally, ", "))
+	case c.warns > 0:
+		fmt.Fprintf(&b, "OK, with %s\n", tally[0])
+	default:
+		b.WriteString("OK: no problems\n")
+	}
+	return b.String()
+}
+
+// problemText says in plain words what's wrong with an entry.
+func problemText(k database.ProblemKind) string {
+	switch k {
+	case database.ProblemSettings:
+		return "settings don't read"
+	case database.ProblemTimes:
+		return "times don't read"
+	}
+	return "secret doesn't decrypt"
+}
+
+// verifyRecovery checks the vault's recovery key record. None is fine.
+func verifyRecovery(c *verifyChecks, r *database.VerifyReport) {
+	switch {
+	case r.RecoveryErr != nil:
+		c.row(markFail, "Recovery key", "its record can't be read", r.RecoveryErr.Error())
+	case r.Recovery == nil:
+		c.row(markNone, "Recovery key", "none")
+		return
+	case r.Recovery.UnlockID != r.KeyID:
+		c.row(markFail, "Recovery key", "made for another vault or key")
+	default:
+		if err := recovery.CheckRecord(r.Recovery); err != nil {
+			c.row(markFail, "Recovery key", "its record is damaged", err.Error())
+		} else {
+			c.row(markOK, "Recovery key", "set, for this vault's key")
+			return
+		}
+	}
+	c.todo("Make a new recovery key:", "sesh recovery new")
+}
+
+// verifyTouchID checks Touch ID unlock for the vault whose key record id is
+// id, from its file as read before unlocking (f, err). A stale setup only
+// costs typing the password, so it's a warning, never a failure.
+func verifyTouchID(c *verifyChecks, f *touchid.File, err error, id string) {
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return "off"
+		c.row(markNone, "Touch ID", "off")
+		return
 	case err != nil:
-		return fmt.Sprintf("warning: its file can't be read (%v); turn it back on with: sesh touchid enable", err)
+		c.row(markWarn, "Touch ID", "its file can't be read", err.Error())
 	case f.UnlockID != id:
-		return "warning: it was set up for another vault or an earlier master password, so it won't unlock this one; turn it back on with: sesh touchid enable"
+		c.row(markWarn, "Touch ID", "set up for another vault or an earlier master password")
 	case fingerprintsChanged(f):
-		return "warning: your fingerprints changed since it was set up, so it won't unlock; turn it back on with: sesh touchid enable"
+		c.row(markWarn, "Touch ID", "your fingerprints changed since it was set up")
+	default:
+		c.row(markOK, "Touch ID", "on, for this vault")
+		return
 	}
-	return "on, for this vault"
+	c.todo("Optional: turn Touch ID back on:", "sesh touchid enable")
 }

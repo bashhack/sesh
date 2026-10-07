@@ -729,7 +729,15 @@ func terminalPrompt(prompt string) ([]byte, error) {
 }
 
 // fatal prints an error to stderr and exits
+// errReported is a failure the command has already reported in full; fatal
+// only sets the exit code.
+var errReported = errors.New("already reported")
+
 func fatal(app *App, err error) {
+	if errors.Is(err, errReported) {
+		app.Exit(1)
+		return
+	}
 	if _, printErr := fmt.Fprintf(app.Stderr, "❌ %v\n", err); printErr != nil {
 		app.Exit(2)
 		return

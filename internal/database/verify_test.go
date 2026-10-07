@@ -63,9 +63,10 @@ func TestVerify_ReportsEachUnreadableEntry(t *testing.T) {
 	if len(got) != 3 || r.Entries != 4 {
 		t.Fatalf("problems = %q of %d entries, want 3 of 4", got, r.Entries)
 	}
+	kinds := []ProblemKind{ProblemSettings, ProblemTimes, ProblemSecret}
 	for i := range want {
-		if !strings.HasPrefix(got[i], want[i]) {
-			t.Errorf("problem %d = %q, want it to start %q", i, got[i], want[i])
+		if !strings.HasPrefix(got[i], want[i]) || r.Problems[i].Kind != kinds[i] {
+			t.Errorf("problem %d = %q (kind %d), want it to start %q (kind %d)", i, got[i], r.Problems[i].Kind, want[i], kinds[i])
 		}
 	}
 }

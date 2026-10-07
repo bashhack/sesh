@@ -11,11 +11,25 @@ import (
 	"github.com/bashhack/sesh/internal/vault"
 )
 
+// ProblemKind is what Verify couldn't read in an entry.
+type ProblemKind int
+
+// The kinds of entry problem.
+const (
+	// ProblemSecret: the secret doesn't decrypt with the vault's key.
+	ProblemSecret ProblemKind = iota
+	// ProblemSettings: the settings don't parse.
+	ProblemSettings
+	// ProblemTimes: the creation or update time doesn't read.
+	ProblemTimes
+)
+
 // EntryProblem is an entry Verify couldn't read: its secret doesn't decrypt,
 // or its settings or times don't parse.
 type EntryProblem struct {
-	Err error
-	Key vault.Key
+	Err  error
+	Key  vault.Key
+	Kind ProblemKind
 }
 
 // VerifyReport is what Verify found, all from one consistent view of the
@@ -117,17 +131,17 @@ func (s *Store) Verify() (VerifyReport, error) {
 		secure.SecureZeroBytes(plain)
 		switch {
 		case errors.Is(err, ErrDecrypt):
-			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Err: fmt.Errorf("its secret doesn't decrypt with the vault's key: %w", err)})
+			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Kind: ProblemSecret, Err: fmt.Errorf("its secret doesn't decrypt with the vault's key: %w", err)})
 			continue
 		case err != nil:
 			return r, fmt.Errorf("couldn't finish checking %s: %w", e.k, err)
 		}
 		if _, err := decodeSettings(e.k, e.settings); err != nil {
-			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Err: err})
+			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Kind: ProblemSettings, Err: err})
 			continue
 		}
 		if e.timesErr != nil {
-			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Err: e.timesErr})
+			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Kind: ProblemTimes, Err: e.timesErr})
 		}
 	}
 	sort.Slice(r.Problems, func(i, j int) bool { return r.Problems[i].Key.Less(r.Problems[j].Key) })

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
@@ -74,7 +75,16 @@ func TestVerify_ASoundVault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify: %v\n%s", err, out)
 	}
-	for _, want := range []string{"  File: ok\n", "  Entries: 2 entries, all readable\n", "  Recovery key: none\n", "  Touch ID: off\n", "Vault OK.\n"} {
+	want := "\n\n" +
+		"  ok    File          ok\n" +
+		"  ok    Entries       2 entries, all readable\n" +
+		"  -     Recovery key  none\n" +
+		"  -     Touch ID      off\n" +
+		"\nOK: no problems\n"
+	if !strings.HasSuffix(out, want) || strings.Contains(out, "What to do") {
+		t.Errorf("output:\n%s\nwant it to end:\n%s", out, want)
+	}
+	for _, want := range []string{"sesh verify: "} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -88,13 +98,21 @@ func TestVerify_ASoundVault(t *testing.T) {
 // Every entry that can't be read is named, and the check fails.
 func TestVerify_UnreadableEntries(t *testing.T) {
 	env := verifyVault(t)
-	sqlExec(t, env.dbPath, `UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899' WHERE service = 'github'`)
+	sqlExec(t, env.dbPath, `UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899', service = 'git hub' WHERE service = 'github'`)
 	sqlExec(t, env.dbPath, `UPDATE entries SET settings = '{' WHERE service = 'openai'`)
 	out, err := runVerifyOut(t)
-	if err == nil || !strings.Contains(err.Error(), "the vault has 2 problems") {
-		t.Fatalf("err = %v, want 2 problems", err)
+	if !errors.Is(err, errReported) {
+		t.Fatalf("err = %v, want the failure reported", err)
 	}
-	for _, want := range []string{"  Entries: 2 of 2 entries can't be read:\n", "    password/github/alice: its secret doesn't decrypt", "    api_key/openai: read the settings of api_key/openai"} {
+	for _, want := range []string{
+		"  FAIL  Entries       2 of 2 entries can't be read\n" +
+			"                        api_key/openai: settings don't read\n" +
+			"                        password/git hub/alice: secret doesn't decrypt\n" +
+			"                        (damaged, or encrypted with another key)\n",
+		"  1. Restore these entries from a backup (an encrypted export), or delete them:\n" +
+			"       sesh --service password --delete api_key/openai 'password/git hub/alice'\n",
+		"\nFAIL: 2 problems\n",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -126,10 +144,16 @@ func TestVerify_RecoveryAndTouchID(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := runVerifyOut(t)
-	if err == nil || !strings.Contains(err.Error(), "the vault has 1 problem") {
-		t.Fatalf("err = %v, want 1 problem (the recovery key)", err)
+	if !errors.Is(err, errReported) {
+		t.Fatalf("err = %v, want the failure reported", err)
 	}
-	for _, want := range []string{"  Recovery key: its record is for another vault or key", "  Touch ID: warning: it was set up for another vault or an earlier master password"} {
+	for _, want := range []string{
+		"  FAIL  Recovery key  made for another vault or key\n",
+		"  warn  Touch ID      set up for another vault or an earlier master password\n",
+		"  1. Make a new recovery key:\n       sesh recovery new\n",
+		"  2. Optional: turn Touch ID back on:\n       sesh touchid enable\n",
+		"\nFAIL: 1 problem, 1 warning\n",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -146,7 +170,7 @@ func TestVerify_RecoveryAndTouchID(t *testing.T) {
 	if err := database.WriteRecovery(env.dbPath, recovery.NewRecord(id, pub, w)); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := runVerifyOut(t); err == nil || !strings.Contains(out, "  Recovery key: its record is damaged") {
+	if out, err := runVerifyOut(t); err == nil || !strings.Contains(out, "  FAIL  Recovery key  its record is damaged\n") {
 		t.Errorf("with a damaged recovery key record: %v\n%s", err, out)
 	}
 	good, err := recovery.Wrap(pub, bytes.Repeat([]byte{9}, 32), []byte(id))
@@ -156,7 +180,8 @@ func TestVerify_RecoveryAndTouchID(t *testing.T) {
 	if err := database.WriteRecovery(env.dbPath, recovery.NewRecord(id, pub, good)); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := runVerifyOut(t); err != nil || !strings.Contains(out, "  Recovery key: set, complete, and made for this vault's key\n") {
+	// Touch ID's warning alone doesn't fail the check.
+	if out, err := runVerifyOut(t); err != nil || !strings.Contains(out, "  ok    Recovery key  set, for this vault's key\n") || !strings.HasSuffix(out, "\nOK, with 1 warning\n") {
 		t.Errorf("with a good recovery key: %v\n%s", err, out)
 	}
 }
@@ -170,10 +195,16 @@ func TestVerify_DamagedFile(t *testing.T) {
 	// longer matches its table.
 	sqlExec(t, env.dbPath, `PRAGMA writable_schema = ON; UPDATE sqlite_master SET sql = 'CREATE INDEX idx_audit_log_created_at ON audit_log(event_type)' WHERE name = 'idx_audit_log_created_at'; PRAGMA writable_schema = OFF`)
 	out, err := runVerifyOut(t)
-	if err == nil || !strings.Contains(err.Error(), "the vault has 1 problem") {
-		t.Fatalf("err = %v, want the file counted as 1 problem\n%s", err, out)
+	if !errors.Is(err, errReported) {
+		t.Fatalf("err = %v, want the failure reported\n%s", err, out)
 	}
-	for _, want := range []string{"  File: damaged; SQLite reports:\n", "  Entries: 2 entries, all readable\n", "save them now", "--action export --format encrypted"} {
+	for _, want := range []string{
+		"  FAIL  File          damaged; SQLite reports:\n                        ",
+		"  ok    Entries       2 entries, all readable\n",
+		"  1. Your entries all read, so save them now, then start a new vault and import them:\n" +
+			"       sesh --service password --action export --format encrypted --file backup.enc\n",
+		"\nFAIL: 1 problem\n",
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
@@ -191,5 +222,16 @@ func TestVerify_Refusals(t *testing.T) {
 	}
 	if err := runVerify(agentTestApp(), []string{"extra"}); err == nil || !strings.Contains(err.Error(), "takes no arguments") {
 		t.Errorf("extra argument: err = %v", err)
+	}
+}
+
+// A failure the command has already reported exits 1 without a second line.
+func TestFatal_AlreadyReported(t *testing.T) {
+	app := agentTestApp()
+	code := 0
+	app.Exit = func(c int) { code = c }
+	fatal(app, errReported)
+	if got := app.Stderr.(*bytes.Buffer).String(); got != "" || code != 1 {
+		t.Errorf("stderr %q, exit %d; want nothing and 1", got, code)
 	}
 }
