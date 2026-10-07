@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -204,6 +205,15 @@ func (m *Manager) ListEntries() ([]Entry, error) {
 	return entries, nil
 }
 
+// compareFolders orders folders part by part, so a folder's subfolders
+// follow it ("work", "work/dev", "work-old"); no folder comes first.
+func compareFolders(a, b string) int {
+	if a == "" || b == "" {
+		return strings.Compare(a, b)
+	}
+	return slices.Compare(strings.Split(a, "/"), strings.Split(b, "/"))
+}
+
 // list returns the entries f's kind, folder, and tags let through.
 func (m *Manager) list(f *ListFilter) ([]Entry, error) {
 	stored, err := m.store.List(&vault.Filter{Kind: f.EntryType, Folder: f.Folder, FolderSet: f.FolderSet, Tags: f.Tags})
@@ -282,8 +292,8 @@ func (m *Manager) ListEntriesFiltered(filter *ListFilter) ([]Entry, error) {
 	switch filter.SortBy {
 	case SortByFolder:
 		sort.SliceStable(filtered, func(i, j int) bool {
-			if filtered[i].Folder != filtered[j].Folder {
-				return filtered[i].Folder < filtered[j].Folder
+			if c := compareFolders(filtered[i].Folder, filtered[j].Folder); c != 0 {
+				return c < 0
 			}
 			return filtered[i].Service < filtered[j].Service
 		})

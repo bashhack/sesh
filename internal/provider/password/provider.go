@@ -112,7 +112,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.IntVar(&p.pwLength, "length", 24, "Generated password length")
 	fs.IntVar(&p.limit, "limit", 0, "Limit number of results (0 = no limit)")
 	fs.IntVar(&p.offset, "offset", 0, "Skip first N results")
-	p.filing.Register(fs)
+	p.filing.Register(fs, filingNarrows)
 	return nil
 }
 
@@ -143,11 +143,29 @@ func (p *Provider) filter() *password.ListFilter {
 	}
 }
 
+// filingNarrows is what --folder and --tag narrow here.
+const filingNarrows = "--list, search, or export"
+
 // NoMatchHint says why --list, search, or export found nothing, when
-// --folder or --tag names what no entry has.
+// --folder or --tag names what no entry (of --entry-type's kind) has.
 func (p *Provider) NoMatchHint() string {
 	f := p.filing.Filter()
-	return provider.NoMatchHint(p.store, &f)
+	f.Kind = password.EntryType(p.entryType)
+	among := ""
+	if p.entryType != "" {
+		among = p.entryType + " entries"
+	}
+	return provider.NoMatchHint(p.store, &f, among)
+}
+
+// scope describes --folder and --tag for a message ("in folder "work""),
+// with a leading space; "" without them.
+func (p *Provider) scope() string {
+	f := p.filing.Filter()
+	if s := provider.Scope(&f); s != "" {
+		return " " + s
+	}
+	return ""
 }
 
 func (p *Provider) GetFlagInfo() []provider.FlagInfo {
@@ -172,7 +190,7 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 		{Name: "length", Type: "int", Description: "Generated password length (default 24)"},
 		{Name: "limit", Type: "int", Description: "Limit number of results (0 = no limit)"},
 		{Name: "offset", Type: "int", Description: "Skip first N results"},
-	}, p.filing.FlagInfo()...)
+	}, p.filing.FlagInfo(filingNarrows)...)
 }
 
 func (p *Provider) ValidateRequest() error {
@@ -239,9 +257,14 @@ func (p *Provider) CheckArgs() error {
 	return p.checkName()
 }
 
-// CheckListArgs refuses a negative --limit or --offset, the only arguments
-// --list and --delete use.
+// CheckListArgs refuses a negative --limit or --offset, or an unknown
+// --sort, the arguments --list and --delete use.
 func (p *Provider) CheckListArgs() error {
+	switch password.SortField(p.sortBy) {
+	case "", password.SortByService, password.SortByCreatedAt, password.SortByUpdatedAt, password.SortByFolder:
+	default:
+		return fmt.Errorf("unknown --sort %q: use service, created_at, updated_at, or folder", p.sortBy)
+	}
 	if p.limit < 0 {
 		return fmt.Errorf("--limit wants 0 (no limit) or more, got %d", p.limit)
 	}
@@ -771,6 +794,23 @@ func (p *Provider) readExportPassword(label string, confirm bool) ([]byte, error
 }
 
 func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, error) {
+	// A filter that matches nothing is likely a typo (folders and tags are
+	// case-sensitive): fail before --file is emptied or a password asked
+	// for.
+	if filter := p.filter(); p.entryType != "" || filter.FolderSet || len(filter.Tags) > 0 {
+		filter.Limit, filter.Offset = 1, 0
+		found, err := mgr.ListEntriesFiltered(filter)
+		if err != nil {
+			return provider.Credentials{}, err
+		}
+		if len(found) == 0 {
+			kind := ""
+			if p.entryType != "" {
+				kind = p.entryType + " "
+			}
+			return provider.Credentials{}, fmt.Errorf("no %sentries%s, so nothing was exported%s", kind, p.scope(), noMatch(0, p.NoMatchHint))
+		}
+	}
 	f := p.filing.Filter()
 	opts := &password.ExportOptions{
 		EntryType: password.EntryType(p.entryType),
@@ -823,7 +863,7 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 
 	return provider.Credentials{
 		Provider:    p.Name(),
-		DisplayInfo: fmt.Sprintf("Exported %s to %s", entryCount(count), dest) + noMatch(count, p.NoMatchHint),
+		DisplayInfo: fmt.Sprintf("Exported %s to %s", entryCount(count), dest),
 	}, nil
 }
 

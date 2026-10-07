@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -1280,7 +1282,7 @@ func TestSearch_ByFolderAndTag(t *testing.T) {
 	p, _ = newTestProvider(filedStore(t))
 	parseFlags(t, p, "--action", "search", "--query", "git", "--folder", "Work")
 	creds, err := p.GetCredentials()
-	if err != nil || !strings.Contains(creds.DisplayInfo, `No entries matching "git": there's no folder "Work"; did you mean work?`) {
+	if err != nil || !strings.Contains(creds.DisplayInfo, `No entries in folder "Work" matching "git": there's no folder "Work" (did you mean "work"?). Folders and tags are case-sensitive`) {
 		t.Errorf("DisplayInfo = %q, %v", creds.DisplayInfo, err)
 	}
 }
@@ -1295,7 +1297,32 @@ func TestExport_ByTag(t *testing.T) {
 	}
 	p, _ = newTestProvider(filedStore(t))
 	parseFlags(t, p, "--action", "export", "--tag", "nope")
-	if creds, err := p.GetCredentials(); err != nil || creds.DisplayInfo != `Exported 0 entries to stdout: there's no tag "nope"` {
-		t.Errorf("export of nothing: %q, %v", creds.DisplayInfo, err)
+	if _, err := p.GetCredentials(); err == nil || err.Error() != `no entries with tag "nope", so nothing was exported: there's no tag "nope"` {
+		t.Errorf("export of nothing: %v", err)
+	}
+}
+
+// A filter that matches nothing fails without touching --file, so a typo
+// can't empty an existing backup, before asking for an encryption password.
+func TestExport_NothingMatchedLeavesTheFile(t *testing.T) {
+	for _, format := range []string{"json", "encrypted"} {
+		t.Run(format, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "backup.json")
+			if err := os.WriteFile(file, []byte("good backup"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			p, _ := newTestProvider(filedStore(t))
+			orig := readPassword
+			readPassword = func() ([]byte, error) { t.Error("asked for a password"); return nil, errors.New("no") }
+			t.Cleanup(func() { readPassword = orig })
+			parseFlags(t, p, "--action", "export", "--format", format, "--folder", "Work", "--file", file)
+			_, err := p.GetCredentials()
+			if err == nil || err.Error() != `no entries in folder "Work", so nothing was exported: there's no folder "Work" (did you mean "work"?). Folders and tags are case-sensitive` {
+				t.Errorf("err = %v", err)
+			}
+			if b, err := os.ReadFile(file); err != nil || string(b) != "good backup" {
+				t.Errorf("the file now holds %q (%v)", b, err)
+			}
+		})
 	}
 }

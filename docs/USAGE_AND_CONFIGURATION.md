@@ -222,7 +222,7 @@ db_path                  /Users/me/vaults/sesh.db
 | `-profile`        | `AWS_PROFILE`        | AWS profile to use                      | default profile  |
 | `-no-subshell`    | n/a                  | Print credentials instead of subshell   | false (subshell) |
 | `-force`          | n/a                  | Delete without asking                   | false            |
-| `-folder`         | n/a                  | With `-setup`: folder to file the entry in; with `-list`: only entries in it and its subfolders | none |
+| `-folder`         | n/a                  | With `-setup`: folder to file the entry in; with `-list`: only entries in it and its subfolders (`""`: in no folder) | none |
 | `-tag`            | n/a                  | With `-setup`: tag to add; with `-list`: only entries with it; repeat for more | none |
 
 **Profile precedence:** `-profile` flag > `$AWS_PROFILE` environment variable > `"default"`. If neither flag nor env var is set, sesh uses the profile named `"default"`.
@@ -234,7 +234,7 @@ db_path                  /Users/me/vaults/sesh.db
 | `-service-name`   | Name of service (github, google, slack, etc.)      | Yes              |
 | `-profile`        | Profile name for multiple accounts (work, personal)| No               |
 | `-force`          | Delete without asking                              | No               |
-| `-folder`         | With `-setup`: folder to file the entry in; with `-list`: only entries in it and its subfolders | No |
+| `-folder`         | With `-setup`: folder to file the entry in; with `-list`: only entries in it and its subfolders (`""`: in no folder) | No |
 | `-tag`            | With `-setup`: tag to add; with `-list`: only entries with it; repeat for more | No |
 
 ### Password Provider Options
@@ -954,9 +954,9 @@ sesh -service password -action search -query git -folder work/dev
 sesh -service password -action export -format encrypted -folder personal -file personal.enc
 ```
 
-When nothing matches because the folder or a tag isn't on any entry, sesh says so, and suggests one that differs only by case (`there's no folder "Work"; did you mean work? Folders and tags are case-sensitive`). Elsewhere, such as with `get` or `-delete`, sesh refuses `--folder` and `--tag` rather than ignore them; `-delete` takes entry IDs.
+When nothing matches because the folder or a tag isn't on any of the entries looked at, sesh says so, and suggests one that differs only by case (`there's no folder "Work" (did you mean "work"?). Folders and tags are case-sensitive`). An export whose `--folder`, `--tag`, or `-entry-type` matches nothing fails instead, before `-file` is touched or a password asked for, so a typo can't empty an existing backup. Elsewhere, such as with `get` or `-delete`, sesh refuses `--folder` and `--tag` rather than ignore them; `-delete` takes entry IDs.
 
-`-sort folder` (password manager) puts a folder's entries together. Search results show FOLDER and TAGS columns too, when an entry has one. `get -format json` includes `folder` and `tags`. Exports carry them too: JSON as `folder` and `tags` (a list), CSV as `folder` and `tags` columns (tags joined with `;`), and encrypted exports with the JSON. Importing restores them, and `--on-conflict overwrite` replaces an existing entry's folder and tags with the file's.
+`-sort folder` (password manager) puts a folder's entries together: entries in no folder first, then each folder followed by its subfolders (`work`, `work/dev`, then `work-old`). Search results show FOLDER and TAGS columns too, when an entry has one. `get -format json` includes `folder` and `tags`. Exports carry them too: JSON as `folder` and `tags` (a list), CSV as `folder` and `tags` columns (tags joined with `;`), and encrypted exports with the JSON. Importing restores them, and `--on-conflict overwrite` replaces an existing entry's folder and tags with the file's.
 
 **Names.** A tag is letters (in any script, with their accents and vowel marks), digits, `-`, `_`, and `.`, up to 64 characters, and doesn't start with `-`, which a command would read as a flag. A folder is parts like that joined by `/`, each up to 64 characters and up to 256 in all, with no empty part (no `/` at either end or twice in a row) and no part that's only dots (`.` or `..`, which read like a path). Both are matched exactly, so `Work` and `work` differ. Like names, they're stored as plain text, not encrypted.
 

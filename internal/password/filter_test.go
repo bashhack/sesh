@@ -85,6 +85,32 @@ func TestExport_KeepsTheFiltersEntries(t *testing.T) {
 	// An encrypted export keeps the same entries.
 	buf.Reset()
 	if n, err := m.ExportEncrypted(&buf, &ExportOptions{Folder: "personal", FolderSet: true, KDF: kdf.Minimum()}, []byte("export-password")); err != nil || n != 1 {
-		t.Errorf("ExportEncrypted = %d, %v; want 1", n, err)
+		t.Errorf("ExportEncrypted by folder = %d, %v; want 1", n, err)
+	}
+	buf.Reset()
+	if n, err := m.ExportEncrypted(&buf, &ExportOptions{Tags: []string{"code"}, KDF: kdf.Minimum()}, []byte("export-password")); err != nil || n != 2 {
+		t.Errorf("ExportEncrypted by tag = %d, %v; want 2", n, err)
+	}
+}
+
+// --sort folder puts each folder's subfolders right after it, whatever
+// characters sort before "/".
+func TestListEntriesFiltered_SortByFolderKeepsSubfoldersTogether(t *testing.T) {
+	m, store := newTestManager(t)
+	for i, folder := range []string{"work.archive", "work/dev", "", "work-old", "alpha", "work", "Zed"} {
+		if err := store.Save(&vault.Entry{Kind: vault.KindPassword, Service: string(rune('a' + i)), Folder: folder}, []byte("s")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := m.ListEntriesFiltered(&ListFilter{SortBy: SortByFolder})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var folders []string
+	for i := range got {
+		folders = append(folders, got[i].Folder)
+	}
+	if want := []string{"", "Zed", "alpha", "work", "work/dev", "work-old", "work.archive"}; strings.Join(folders, " | ") != strings.Join(want, " | ") {
+		t.Errorf("order %q, want %q", folders, want)
 	}
 }

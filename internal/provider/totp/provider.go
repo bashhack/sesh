@@ -61,7 +61,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.serviceName, "service-name", "", "Name of the service to authenticate with")
 	fs.StringVar(&p.profile, "profile", "", "Profile name for the service (for multiple accounts)")
 	fs.BoolVar(&p.force, "force", false, "Delete without asking")
-	p.filing.Register(fs)
+	p.filing.Register(fs, "--list")
 	return nil
 }
 
@@ -236,7 +236,7 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Description: "Delete without asking",
 			Required:    false,
 		},
-	}, p.filing.FlagInfo()...)
+	}, p.filing.FlagInfo("--list")...)
 }
 
 // Filing is what --folder and --tag say, for --setup.
@@ -257,7 +257,7 @@ func (p *Provider) listFilter() vault.Filter {
 // what no entry has.
 func (p *Provider) NoMatchHint() string {
 	f := p.listFilter()
-	return provider.NoMatchHint(p.store, &f)
+	return provider.NoMatchHint(p.store, &f, "TOTP entries")
 }
 
 // CheckArgs refuses a service name or profile no entry can have, without

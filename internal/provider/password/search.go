@@ -44,7 +44,7 @@ func (p *Provider) searchPasswords(mgr *password.Manager) (provider.Credentials,
 		if p.entryType != "" {
 			kind = p.entryType + " "
 		}
-		creds.DisplayInfo = fmt.Sprintf("No %sentries matching %q", kind, p.query)
+		creds.DisplayInfo = fmt.Sprintf("No %sentries%s matching %q", kind, p.scope(), p.query)
 		if hint := p.NoMatchHint(); hint != "" {
 			creds.DisplayInfo += ": " + hint
 		} else if names, err := mgr.SuggestionsIn(p.query, p.filter()); err == nil && len(names) > 0 {

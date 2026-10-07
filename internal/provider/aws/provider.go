@@ -54,7 +54,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
 	fs.BoolVar(&p.noSubshell, "no-subshell", false, "Print environment variables instead of launching subshell")
 	fs.BoolVar(&p.force, "force", false, "Delete without asking")
-	p.filing.Register(fs)
+	p.filing.Register(fs, "--list")
 	return nil
 }
 
@@ -380,7 +380,7 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Description: "Delete without asking",
 			Required:    false,
 		},
-	}, p.filing.FlagInfo()...)
+	}, p.filing.FlagInfo("--list")...)
 }
 
 // Filing is what --folder and --tag say, for --setup.
@@ -401,7 +401,7 @@ func (p *Provider) listFilter() vault.Filter {
 // what no entry has.
 func (p *Provider) NoMatchHint() string {
 	f := p.listFilter()
-	return provider.NoMatchHint(p.store, &f)
+	return provider.NoMatchHint(p.store, &f, "AWS entries")
 }
 
 // ShouldUseSubshell returns whether to use subshell mode

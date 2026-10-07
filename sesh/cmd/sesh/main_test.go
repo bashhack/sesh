@@ -855,6 +855,9 @@ func TestEarlyCheck_FolderAndTag(t *testing.T) {
 		"totp code":             {args: []string{"sesh", "--service", "totp", "--service-name", "github", "--folder", "work"}, wantSub: "use them with --setup or --list"},
 		"a bad folder":          {args: []string{"sesh", "--service", "password", "--action", "store", "--service-name", "x", "--folder", "/work"}, wantSub: `the folder "/work" has an empty part`},
 		"a bad tag, with setup": {args: []string{"sesh", "--service", "aws", "--setup", "--tag", "a b"}, wantSub: `the tag "a b" contains ' '`},
+		"totp-generate":         {args: []string{"sesh", "--service", "password", "--action", "totp-generate", "--service-name", "x", "--tag", "a"}, wantSub: pwWhere},
+		"the default action":    {args: []string{"sesh", "--service", "password", "--service-name", "x", "--folder", "w"}, wantSub: pwWhere},
+		"an unknown sort":       {args: []string{"sesh", "--service", "password", "--list", "--sort", "folders"}, wantSub: `unknown --sort "folders": use service, created_at, updated_at, or folder`},
 		"a bad tag, listing":    {args: []string{"sesh", "--service", "totp", "--list", "--tag", "-x"}, wantSub: `the tag "-x" can't start with "-"`},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -893,7 +896,7 @@ func TestRun_ListByFolderAndTag(t *testing.T) {
 			"  NAME  TYPE  ID\n" +
 			"  bank  totp  totp/bank\n"},
 		"another case": {args: []string{"--folder", "Work"}, want: "Entries for totp:\n" +
-			`  No entries found: there's no folder "Work"; did you mean work? Folders and tags are case-sensitive` + "\n"},
+			`  No entries found: there's no folder "Work" among TOTP entries (did you mean "work"?). Folders and tags are case-sensitive` + "\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newTestHarness()
