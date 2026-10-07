@@ -152,6 +152,11 @@ max_lifetime = "8h"                     # 0 disables
 [audit]
 retention_days = 90                     # days of audit log events to keep; 0 keeps everything
 
+[backup]
+every_days = 1                          # back up when the newest backup is this many days old; 0 turns it off
+keep = 7                                # how many backups to keep
+dir = "~/Backups/sesh"                  # where they go (default: a backups folder next to the vault)
+
 [master_password]                       # how hard your master password is to guess-check (Argon2id)
 memory = "256MiB"                       # memory each check takes: 19MiB to 1GiB
 time = 3                                # passes over that memory: 2 to 10
@@ -194,8 +199,12 @@ audit.retention_days     90 days       (default)
 master_password.memory   256MiB        (default)
 master_password.time     3             (default)
 master_password.threads  4             (default)
+backup.every_days        1 day         (default)
+backup.keep              7             (default)
 db_path                  /Users/me/vaults/sesh.db
                          (config file)
+backup.dir               /Users/me/vaults/backups
+                         (default: next to the vault)
 ```
 
 ## Configuration Options
@@ -271,6 +280,9 @@ db_path                  /Users/me/vaults/sesh.db
 | `SESH_AGENT_IDLE_TIMEOUT` | Agent locks after this long without use; `0` disables (config: `agent.idle_timeout`). Same as `sesh agent --idle-timeout` | `10m` |
 | `SESH_AGENT_MAX_LIFETIME` | Agent locks this long after each unlock; `0` disables (config: `agent.max_lifetime`). Same as `sesh agent --max-lifetime` | `8h` |
 | `SESH_AUDIT_RETENTION_DAYS` | Days of audit log events the vault keeps; `0` keeps everything (config: `audit.retention_days`) | `90` |
+| `SESH_BACKUP_EVERY_DAYS` | Back up when the newest backup is this many days old; `0` turns automatic backups off (config: `backup.every_days`) | `1` |
+| `SESH_BACKUP_KEEP` | How many backups to keep, 1 to 1000 (config: `backup.keep`) | `7` |
+| `SESH_BACKUP_DIR` | Where backups go (config: `backup.dir`) | a `backups` folder next to the vault |
 | `SESH_KDF_MEMORY` | Memory for each master password check, such as `256MiB` (config: `master_password.memory`) | `256MiB` |
 | `SESH_KDF_TIME` | Passes over that memory (config: `master_password.time`) | `3` |
 | `SESH_KDF_THREADS` | Threads (config: `master_password.threads`) | `4` |
@@ -522,6 +534,7 @@ Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but
 - **Vault file:** the vault exists, only you can read it, and no one else can replace or delete it through its folder. A symlink is followed to the real file. For a folder that's yours, sesh gives the `chmod` to run; for a shared one, such as `/tmp`, it says to move the vault with `sesh init`.
 - **Agent:** whether it's running and unlocked. The setup checks never start it; unlocking the vault, below, does, as any command would. One running an older sesh build is replaced by the next command.
 - **Key settings:** the vault's key wasn't made with weaker Argon2id settings than the configured ones (`[master_password]`): none higher, one lower. Raising them applies only when the key is made again, with `sesh --rekey`. Settings higher in one way and lower in another are fine, and noted, since making the key again would lower one.
+- **Backups:** when the newest was made, how many are kept, and where. None, or a newest older than twice `backup.every_days`, is a warning.
 
 Then the vault:
 
@@ -542,6 +555,7 @@ Setup
   ok    Vault file      only you can read or change it
   ok    Agent           running, unlocked for this vault
   ok    Key settings    256 MiB, 3 passes, 4 threads
+  ok    Backups         newest today 09:12, 7 kept, in ~/Library/Application Support/sesh/backups
 
 Vault: ~/Library/Application Support/sesh/passwords.db
   ok    File            ok
@@ -564,6 +578,7 @@ Setup
   warn  Vault file      others can read it
   -     Agent           not running; it starts when a command needs it
   ok    Key settings    256 MiB, 3 passes, 4 threads
+  ok    Backups         newest today 09:12, 7 kept, in ~/Library/Application Support/sesh/backups
 
 Vault: ~/Library/Application Support/sesh/passwords.db
   ok    File            ok
@@ -588,6 +603,24 @@ FAIL: 2 problems, 2 warnings
 ```
 
 It names every entry it can't read, and never shows a secret. It exits 1 when the config doesn't load, there's no vault, the vault file can't be read, the vault can't be unlocked (a wrong master password, say), or the file, an entry, or the recovery key has a problem; warnings exit 0. Whatever stops the vault part, the setup's steps and the tally still show. If the file is damaged but every entry still reads, it says to export them now and start a new vault from that. If nothing can unlock the vault without asking (no `SESH_MASTER_PASSWORD`, no unlocked agent) and there's no terminal to ask at, as in a script, the setup is still checked, the last line says the vault wasn't, and it exits 0 unless the setup has a problem. If the agent locks or another command changes the master password while it checks, it says to run it again rather than blaming any entry. Run it when something seems off, after moving or restoring the vault, after a crash, or now and then if the vault is in a synced folder. It writes nothing while it checks, then one `doctor` event to the audit log (not when the file itself is damaged).
+
+### Backups
+
+sesh backs up the vault automatically. When a command unlocks it and the newest backup is a day old or more (`backup.every_days`), sesh makes one first, in a `backups` folder next to the vault (`backup.dir`), and keeps the newest 7 (`backup.keep`). A vault with no entries isn't backed up. A failed backup prints a warning and never stops the command.
+
+A backup is a copy of the vault file, made safely while sesh may be using it. The secrets in it are encrypted, as in the vault, so making one needs no password. With the master password you had when it was made (or the recovery key you had then), it restores everything: every entry with its secret, folder, tags and settings, and the recovery key. It doesn't hold your config file or Touch ID unlock, which is per machine (`sesh touchid enable` turns it back on). Names, folders and tags are readable in it, as they are in the vault.
+
+```
+$ sesh backup                       # one now, in the backups folder
+✅ Backed up the vault to ~/Library/Application Support/sesh/backups/passwords-2026-10-07T091200Z.db (48 KB)
+$ sesh backup ~/usb/sesh.db         # or to a file you choose; --force replaces it
+```
+
+Backups are named for when they were made, in UTC (`passwords-2026-10-07T091200Z.db`), and only files named that way are ever removed. The folder is readable only by you, and so is each backup. Point `backup.dir` at a synced or external folder to keep copies off this machine. A vault SQLite finds damaged is never copied, so a damaged vault can't replace good backups.
+
+To restore one by hand: stop the agent (`sesh agent stop`), make sure no sesh command is running, and copy the backup over the vault file.
+
+Backups are for getting this vault back. To move your secrets to another tool, or to keep a copy any machine can open with its own password, use an encrypted export.
 
 ### Encrypted exports
 

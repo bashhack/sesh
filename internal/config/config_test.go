@@ -18,7 +18,7 @@ func isolate(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
-	for _, k := range []string{EnvDBPath, EnvClipboardTimeout, EnvAgentIdleTimeout, EnvAgentMaxLifetime, EnvAuditRetentionDays, EnvKDFMemory, EnvKDFTime, EnvKDFThreads} {
+	for _, k := range []string{EnvDBPath, EnvClipboardTimeout, EnvAgentIdleTimeout, EnvAgentMaxLifetime, EnvAuditRetentionDays, EnvKDFMemory, EnvKDFTime, EnvKDFThreads, EnvBackupDir, EnvBackupEveryDays, EnvBackupKeep} {
 		t.Setenv(k, "")
 	}
 	return filepath.Join(home, "xdg", "sesh", "config.toml")
@@ -161,6 +161,11 @@ func TestLoad_Rejects(t *testing.T) {
 		"retention as a string":             {file: "[audit]\nretention_days = \"30\"\n", wantSub: "read config file"},
 		"negative retention":                {file: "[audit]\nretention_days = -1\n", wantSub: "audit.retention_days in"},
 		"retention too long":                {env: map[string]string{EnvAuditRetentionDays: "36501"}, wantSub: `SESH_AUDIT_RETENTION_DAYS = "36501": want a whole number of days from 0 (keep everything) to 36500`},
+		"backup keep 0":                     {file: "[backup]\nkeep = 0\n", wantSub: `backup.keep in`},
+		"backup keep too many":              {env: map[string]string{EnvBackupKeep: "1001"}, wantSub: `SESH_BACKUP_KEEP = "1001": want a whole number of backups to keep, from 1 to 1000`},
+		"backup every negative":             {env: map[string]string{EnvBackupEveryDays: "-1"}, wantSub: `SESH_BACKUP_EVERY_DAYS = "-1": want a whole number of days from 0 (no automatic backups)`},
+		"backup dir relative":               {file: "[backup]\ndir = \"backups\"\n", wantSub: "backup.dir in"},
+		"unknown backup key":                {file: "[backup]\nfolder = \"/x\"\n", wantSub: "unknown setting backup.folder"},
 		"retention not a number":            {env: map[string]string{EnvAuditRetentionDays: "90d"}, wantSub: `SESH_AUDIT_RETENTION_DAYS = "90d": want a whole number of days`},
 	}
 	for name, tt := range tests {
@@ -198,5 +203,35 @@ func TestPath_HonorsXDGConfigHome(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "relative/dir")
 	if got, err := Path(); err != nil || got != filepath.Join(home, ".config", "sesh", "config.toml") {
 		t.Errorf("Path() with a relative XDG_CONFIG_HOME = %q, want the ~/.config default", got)
+	}
+}
+
+// Backups go next to the vault, daily, keeping 7, unless set otherwise.
+func TestLoad_BackupSettings(t *testing.T) {
+	path := isolate(t)
+	c, err := Load(Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BackupEveryDays.Value != 1 || c.BackupKeep.Value != 7 || c.BackupFolder() != filepath.Join(filepath.Dir(c.DBPath.Value), "backups") {
+		t.Errorf("defaults: every %d, keep %d, in %s", c.BackupEveryDays.Value, c.BackupKeep.Value, c.BackupFolder())
+	}
+	writeConfig(t, path, "[backup]\ndir = \"~/vault-backups\"\nevery_days = 0\nkeep = 30\n")
+	c, err = Load(Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir() //nolint:errcheck // set by isolate
+	if c.BackupFolder() != filepath.Join(home, "vault-backups") || c.BackupEveryDays.Value != 0 || c.BackupKeep.Value != 30 || c.BackupKeep.Source != FromFile {
+		t.Errorf("from the file: %s, every %d, keep %+v", c.BackupFolder(), c.BackupEveryDays.Value, c.BackupKeep)
+	}
+	t.Setenv(EnvBackupKeep, "3")
+	t.Setenv(EnvBackupDir, filepath.Join(home, "other"))
+	c, err = Load(Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BackupKeep.Value != 3 || c.BackupKeep.Source != FromEnv || c.BackupFolder() != filepath.Join(home, "other") {
+		t.Errorf("from the environment: keep %+v, in %s", c.BackupKeep, c.BackupFolder())
 	}
 }

@@ -63,6 +63,14 @@ const (
 	MaxAuditRetentionDays     = 36500
 )
 
+// Backup defaults: one a day, the newest seven kept. MaxBackupKeep is the
+// most a setting can keep.
+const (
+	DefaultBackupEveryDays = 1
+	DefaultBackupKeep      = 7
+	MaxBackupKeep          = 1000
+)
+
 // Config is sesh's resolved settings.
 type Config struct {
 	// Path is the config file sesh looked for; FileFound says whether it
@@ -75,12 +83,29 @@ type Config struct {
 	// AuditRetentionDays is how many days of audit log events the vault
 	// keeps; 0 keeps everything.
 	AuditRetentionDays Setting[int]
+	// BackupDir is where backups go; "" means a backups folder next to the
+	// vault (see BackupFolder).
+	BackupDir Setting[string]
+	// BackupEveryDays is how old the newest backup can be before a command
+	// that unlocks the vault makes another; 0 turns that off.
+	BackupEveryDays Setting[int]
+	// BackupKeep is how many backups are kept; older ones are removed.
+	BackupKeep Setting[int]
 	// KDFMemory (KiB), KDFTime and KDFThreads are the Argon2id settings a
 	// new master password key, or an encrypted export, is derived with.
 	KDFMemory  Setting[uint32]
 	KDFTime    Setting[uint32]
 	KDFThreads Setting[uint8]
 	FileFound  bool
+}
+
+// BackupFolder is where backups go: BackupDir, or a backups folder next to
+// the vault.
+func (c *Config) BackupFolder() string {
+	if c.BackupDir.Value != "" {
+		return c.BackupDir.Value
+	}
+	return filepath.Join(filepath.Dir(c.DBPath.Value), "backups")
 }
 
 // KDF is the configured Argon2id settings.
@@ -103,11 +128,19 @@ const (
 	EnvKDFMemory          = "SESH_KDF_MEMORY"
 	EnvKDFTime            = "SESH_KDF_TIME"
 	EnvKDFThreads         = "SESH_KDF_THREADS"
+	EnvBackupDir          = "SESH_BACKUP_DIR"
+	EnvBackupEveryDays    = "SESH_BACKUP_EVERY_DAYS"
+	EnvBackupKeep         = "SESH_BACKUP_KEEP"
 )
 
 // fileConfig is the config file's shape. Durations are strings such as
 // "10m", parsed with time.ParseDuration.
 type fileConfig struct {
+	Backup struct {
+		Dir       string `toml:"dir"`
+		EveryDays int64  `toml:"every_days"`
+		Keep      int64  `toml:"keep"`
+	} `toml:"backup"`
 	DBPath           string `toml:"db_path"`
 	ClipboardTimeout string `toml:"clipboard_timeout"`
 	Agent            struct {
@@ -158,6 +191,8 @@ func Load(o Overrides) (*Config, error) {
 		AgentIdleTimeout:   Setting[time.Duration]{Value: agent.DefaultIdleTimeout},
 		AgentMaxLifetime:   Setting[time.Duration]{Value: agent.DefaultMaxLifetime},
 		AuditRetentionDays: Setting[int]{Value: DefaultAuditRetentionDays},
+		BackupEveryDays:    Setting[int]{Value: DefaultBackupEveryDays},
+		BackupKeep:         Setting[int]{Value: DefaultBackupKeep},
 	}
 	c.defaultKDF()
 	if err := c.applyFile(); err != nil {
@@ -223,6 +258,21 @@ func (c *Config) applyFile() error {
 			return err
 		}
 	}
+	if in("backup.dir") {
+		if err := setPath(&c.BackupDir, f.Backup.Dir, FromFile, from("backup.dir")); err != nil {
+			return err
+		}
+	}
+	if in("backup.every_days") {
+		if err := setBackupEveryDays(&c.BackupEveryDays, f.Backup.EveryDays, strconv.FormatInt(f.Backup.EveryDays, 10), FromFile, from("backup.every_days")); err != nil {
+			return err
+		}
+	}
+	if in("backup.keep") {
+		if err := setBackupKeep(&c.BackupKeep, f.Backup.Keep, strconv.FormatInt(f.Backup.Keep, 10), FromFile, from("backup.keep")); err != nil {
+			return err
+		}
+	}
 	if in("master_password.memory") {
 		if err := setKDFMemory(&c.KDFMemory, f.MasterPassword.Memory, FromFile, from("master_password.memory")); err != nil {
 			return err
@@ -268,6 +318,29 @@ func (c *Config) applyEnv() error {
 		}
 		if err := setRetention(&c.AuditRetentionDays, n, v, FromEnv, EnvAuditRetentionDays); err != nil {
 			return err
+		}
+	}
+	if v, ok := os.LookupEnv(EnvBackupDir); ok && v != "" {
+		if err := setPath(&c.BackupDir, v, FromEnv, EnvBackupDir); err != nil {
+			return err
+		}
+	}
+	for _, d := range []struct {
+		set func(*Setting[int], int64, string, Source, string) error
+		dst *Setting[int]
+		env string
+	}{
+		{setBackupEveryDays, &c.BackupEveryDays, EnvBackupEveryDays},
+		{setBackupKeep, &c.BackupKeep, EnvBackupKeep},
+	} {
+		if v, ok := os.LookupEnv(d.env); ok && v != "" {
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				n = -1 // reported as out of range, with the value as given
+			}
+			if err := d.set(d.dst, n, v, FromEnv, d.env); err != nil {
+				return err
+			}
 		}
 	}
 	return c.applyKDFEnv()
@@ -440,6 +513,25 @@ func setKDFThreads(dst *Setting[uint8], n int64, raw string, src Source, origin 
 
 // setRetention accepts a whole number of days from 0 to
 // MaxAuditRetentionDays; raw is the value as written, for the error.
+// setBackupEveryDays sets how many days old the newest backup may get, 0
+// (no automatic backups) to MaxAuditRetentionDays.
+func setBackupEveryDays(dst *Setting[int], n int64, raw string, src Source, origin string) error {
+	if n < 0 || n > MaxAuditRetentionDays {
+		return fmt.Errorf("%s = %q: want a whole number of days from 0 (no automatic backups) to %d", origin, raw, MaxAuditRetentionDays)
+	}
+	*dst = Setting[int]{Value: int(n), Source: src, Origin: origin}
+	return nil
+}
+
+// setBackupKeep sets how many backups are kept, 1 to MaxBackupKeep.
+func setBackupKeep(dst *Setting[int], n int64, raw string, src Source, origin string) error {
+	if n < 1 || n > MaxBackupKeep {
+		return fmt.Errorf("%s = %q: want a whole number of backups to keep, from 1 to %d", origin, raw, MaxBackupKeep)
+	}
+	*dst = Setting[int]{Value: int(n), Source: src, Origin: origin}
+	return nil
+}
+
 func setRetention(dst *Setting[int], n int64, raw string, src Source, origin string) error {
 	if n < 0 || n > MaxAuditRetentionDays {
 		return fmt.Errorf("%s = %q: want a whole number of days from 0 (keep everything) to %d", origin, raw, MaxAuditRetentionDays)

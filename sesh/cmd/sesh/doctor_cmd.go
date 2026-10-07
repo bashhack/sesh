@@ -10,8 +10,10 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/backup"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/kdf"
@@ -111,6 +113,7 @@ func checkSetup(c *doctorChecks, app *App) func(io.Writer) error {
 	} else {
 		c.row(markNone, "Key settings", "unknown: the key record is damaged")
 	}
+	checkBackups(c, cfg)
 	return func(w io.Writer) error {
 		c.section("\nVault: " + tildePath(dbPath))
 		if matErr != nil {
@@ -267,6 +270,55 @@ func checkKeySettings(c *doctorChecks, have, want kdf.Params) {
 		return
 	}
 	c.row(markOK, "Key settings", desc)
+}
+
+// checkBackups reports on the vault's backups: the newest, how many, and
+// where. None, or a newest older than twice backup.every_days, warns.
+func checkBackups(c *doctorChecks, cfg *config.Config) {
+	dir := cfg.BackupFolder()
+	all, err := backup.List(dir, cfg.DBPath.Value)
+	if err != nil {
+		c.row(markWarn, "Backups", "can't be listed", err.Error())
+		c.todo("Check the backups folder, " + tildePath(dir) + "; the row says why it can't be listed.")
+		return
+	}
+	every := cfg.BackupEveryDays.Value
+	if every == 0 {
+		what := "automatic backups are off (backup.every_days = 0)"
+		if len(all) > 0 {
+			what += "; newest " + when(all[0].Made, now())
+		}
+		c.row(markNone, "Backups", what)
+		return
+	}
+	if len(all) == 0 {
+		c.row(markWarn, "Backups", "none yet, in "+tildePath(dir))
+		c.todo("Make one now (sesh makes one a day once the vault has entries):", "sesh backup")
+		return
+	}
+	newest := all[0].Made
+	desc := fmt.Sprintf("newest %s, %d kept, in %s", when(newest, now()), len(all), tildePath(dir))
+	if now().Sub(newest) > 2*time.Duration(every)*24*time.Hour {
+		c.row(markWarn, "Backups", desc+": older than expected")
+		c.todo("Make one now:", "sesh backup")
+		return
+	}
+	c.row(markOK, "Backups", desc)
+}
+
+// when says when t was, from now: "today 09:12", "yesterday 09:12", or
+// "2026-10-05 09:12", in local time.
+func when(t, now time.Time) string {
+	t, now = t.Local(), now.Local()
+	y1, m1, d1 := t.Date()
+	y2, m2, d2 := now.Date()
+	switch {
+	case y1 == y2 && m1 == m2 && d1 == d2:
+		return "today " + t.Format("15:04")
+	case t.Add(24*time.Hour).Format("2006-01-02") == now.Format("2006-01-02"):
+		return "yesterday " + t.Format("15:04")
+	}
+	return t.Format("2006-01-02 15:04")
 }
 
 // describeKDF is p in words: "256 MiB, 3 passes, 4 threads".
