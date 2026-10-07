@@ -511,8 +511,6 @@ func setKDFThreads(dst *Setting[uint8], n int64, raw string, src Source, origin 
 	return nil
 }
 
-// setRetention accepts a whole number of days from 0 to
-// MaxAuditRetentionDays; raw is the value as written, for the error.
 // setBackupEveryDays sets how many days old the newest backup may get, 0
 // (no automatic backups) to MaxAuditRetentionDays.
 func setBackupEveryDays(dst *Setting[int], n int64, raw string, src Source, origin string) error {
@@ -532,6 +530,8 @@ func setBackupKeep(dst *Setting[int], n int64, raw string, src Source, origin st
 	return nil
 }
 
+// setRetention accepts a whole number of days from 0 to
+// MaxAuditRetentionDays; raw is the value as written, for the error.
 func setRetention(dst *Setting[int], n int64, raw string, src Source, origin string) error {
 	if n < 0 || n > MaxAuditRetentionDays {
 		return fmt.Errorf("%s = %q: want a whole number of days from 0 (keep everything) to %d", origin, raw, MaxAuditRetentionDays)

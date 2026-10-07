@@ -25,7 +25,7 @@ var migrations = map[int]func(tx *sql.Tx) error{
 	1: migrateV1,
 }
 
-// migrateV1 creates the schema: the entries and their tags, the vault's key record
+// migrateV1 creates the schema: the vault's id, the entries and their tags, the vault's key record
 // (vault_key), its recovery key record, and the audit log.
 func migrateV1(tx *sql.Tx) error {
 	for _, q := range []string{
@@ -79,6 +79,14 @@ func migrateV1(tx *sql.Tx) error {
 		)`,
 		// Pruning old events on every open goes by time.
 		`CREATE INDEX idx_audit_log_created_at ON audit_log(created_at)`,
+		// One row: a random id for the vault, made with it and never
+		// changed, not even by a new master password. Backups are named
+		// with it, so two vaults sharing a backups folder keep their own.
+		`CREATE TABLE vault_info (
+			id       INTEGER PRIMARY KEY CHECK (id = 1),
+			vault_id TEXT NOT NULL
+		)`,
+		`INSERT INTO vault_info (id, vault_id) VALUES (1, lower(hex(randomblob(8))))`,
 	} {
 		if _, err := tx.Exec(q); err != nil {
 			return fmt.Errorf("migration v1: %w", err)

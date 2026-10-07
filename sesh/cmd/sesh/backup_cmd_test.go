@@ -40,7 +40,11 @@ func unlockOnce(t *testing.T) {
 
 func backups(t *testing.T, env *rekeyTestEnv) []backup.Info {
 	t.Helper()
-	all, err := backup.List(filepath.Join(filepath.Dir(env.dbPath), "backups"), env.dbPath)
+	s, err := backup.SeriesOf(env.dbPath, filepath.Join(filepath.Dir(env.dbPath), "backups"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.List()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,10 +66,10 @@ func TestAutoBackup(t *testing.T) {
 	if got := backups(t, env); len(got) != 1 || !got[0].Made.Equal(clock) {
 		t.Fatalf("after the first unlock: %+v", got)
 	}
-	clock = clock.Add(23 * time.Hour)
+	clock = clock.Add(5 * time.Hour)
 	unlockOnce(t)
 	if got := backups(t, env); len(got) != 1 {
-		t.Errorf("23 hours later: %d backups, want still 1", len(got))
+		t.Errorf("later the same day: %d backups, want still 1", len(got))
 	}
 	for range 3 {
 		clock = clock.Add(25 * time.Hour)
@@ -99,7 +103,7 @@ func TestBackupCommand(t *testing.T) {
 	// No password is needed: it's unset here.
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	out, err := runBackupOut(t)
-	want := "✅ Backed up the vault to " + tildePath(filepath.Join(filepath.Dir(env.dbPath), "backups", "passwords-2026-10-07T091200Z.db"))
+	want := "✅ Backed up the vault to " + tildePath(filepath.Join(filepath.Dir(env.dbPath), "backups", "passwords-"))
 	if err != nil || !strings.HasPrefix(out, want) {
 		t.Errorf("into the folder: %q, %v; want it to start %q", out, err, want)
 	}
@@ -170,5 +174,109 @@ func TestWhen(t *testing.T) {
 		if got := when(tt.t, at); got != tt.want {
 			t.Errorf("when(%v) = %q, want %q", tt.t, got, tt.want)
 		}
+	}
+}
+
+// "yesterday" is the calendar day before, even across a daylight-saving
+// change, when a day isn't 24 hours.
+func TestWhen_AcrossDST(t *testing.T) {
+	denver, err := time.LoadLocation("America/Denver")
+	if err != nil {
+		t.Skip("no time zone data")
+	}
+	orig := time.Local
+	time.Local = denver
+	t.Cleanup(func() { time.Local = orig })
+	for _, tt := range []struct{ t, now time.Time }{
+		{time.Date(2026, 3, 7, 23, 30, 0, 0, denver), time.Date(2026, 3, 8, 10, 0, 0, 0, denver)},
+		{time.Date(2026, 11, 1, 0, 30, 0, 0, denver), time.Date(2026, 11, 2, 10, 0, 0, 0, denver)},
+	} {
+		if got := when(tt.t, tt.now); !strings.HasPrefix(got, "yesterday ") {
+			t.Errorf("when(%v, %v) = %q, want yesterday", tt.t, tt.now, got)
+		}
+	}
+}
+
+// An entry whose settings don't read doesn't stop automatic backups: that's
+// when they matter.
+func TestAutoBackup_WithAnUnreadableEntry(t *testing.T) {
+	clock := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
+	env := backupVault(t, &clock)
+	populatePasswordStore(t, env, map[string]string{"password/github": "pw", "password/gitlab": "pw"})
+	sqlExec(t, env.dbPath, `UPDATE entries SET settings = '{not json' WHERE service = 'github'`)
+	unlockOnce(t)
+	if got := backups(t, env); len(got) != 1 {
+		t.Errorf("%d backups, want 1", len(got))
+	}
+}
+
+// A backup dated in the future warns, and doesn't count as the newest.
+func TestDoctor_FutureBackup(t *testing.T) {
+	clock := time.Date(2026, 10, 7, 9, 12, 0, 0, time.Local)
+	env := backupVault(t, &clock)
+	populatePasswordStore(t, env, map[string]string{"password/github": "pw"})
+	future := clock.AddDate(1, 0, 0)
+	clock = future
+	if _, err := runBackupOut(t); err != nil {
+		t.Fatal(err)
+	}
+	clock = time.Date(2026, 10, 7, 9, 12, 0, 0, time.Local)
+	out, err := runDoctorOut(t)
+	if err != nil || !strings.Contains(out, "  warn  Backups         one is dated in the future: 2027-10-07 09:12\n") || !strings.Contains(out, "  warn  Backups         none yet, in ") || !strings.Contains(out, "Check this computer's clock") {
+		t.Errorf("err = %v\n%s", err, out)
+	}
+}
+
+// A folder as the destination gets the backup inside it.
+func TestBackupCommand_IntoAFolder(t *testing.T) {
+	clock := time.Date(2026, 10, 7, 9, 12, 0, 0, time.UTC)
+	env := backupVault(t, &clock)
+	populatePasswordStore(t, env, map[string]string{"password/github": "pw"})
+	dir := t.TempDir()
+	if out, err := runBackupOut(t, dir); err != nil || !strings.Contains(out, tildePath(dir)+"/passwords-") {
+		t.Errorf("into a folder: %q, %v", out, err)
+	}
+}
+
+// After a change the old password or recovery key can't open the vault
+// with, sesh offers to delete the backups that still open with it, and
+// makes a fresh one; without a terminal it only says so.
+func TestOfferToRemoveOldBackups(t *testing.T) {
+	clock := time.Date(2026, 10, 7, 9, 12, 0, 0, time.UTC)
+	env := backupVault(t, &clock)
+	populatePasswordStore(t, env, map[string]string{"password/github": "pw"})
+	for range 3 {
+		if _, err := runBackupOut(t); err != nil {
+			t.Fatal(err)
+		}
+		clock = clock.Add(24 * time.Hour)
+	}
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	app := agentTestApp()
+	app.StdinIsTerminal = func() bool { return false }
+	offerToRemoveOldBackups(app, cfg, "master password")
+	if got := app.Stderr.(*bytes.Buffer).String(); !strings.Contains(got, "3 backups made before this change still open with the old master password") || !strings.Contains(got, "If the old master password may have leaked, delete them.\n") || len(backups(t, env)) != 3 {
+		t.Errorf("without a terminal: %q, %d backups", got, len(backups(t, env)))
+	}
+
+	app = agentTestApp()
+	app.StdinIsTerminal = func() bool { return true }
+	app.Stdin = strings.NewReader("n\n")
+	offerToRemoveOldBackups(app, cfg, "master password")
+	if len(backups(t, env)) != 3 {
+		t.Errorf("answered no: %d backups, want the 3 kept", len(backups(t, env)))
+	}
+
+	app = agentTestApp()
+	app.StdinIsTerminal = func() bool { return true }
+	app.Stdin = strings.NewReader("y\n")
+	offerToRemoveOldBackups(app, cfg, "recovery key")
+	got := backups(t, env)
+	if len(got) != 1 || !got[0].Made.Equal(clock) || !strings.Contains(app.Stderr.(*bytes.Buffer).String(), "Deleted 3 backups; made a fresh one: ") {
+		t.Errorf("answered yes: %+v\n%s", got, app.Stderr.(*bytes.Buffer).String())
 	}
 }

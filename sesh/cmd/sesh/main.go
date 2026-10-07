@@ -1083,7 +1083,7 @@ func (a *App) PrintUsage() error {
 		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"  sesh audit [prune]            Show the vault's audit log, or prune it",
 		"  sesh doctor                   Check the setup, and that the vault can all be read",
-		"  sesh backup [file]            Copy the vault now (sesh also does this daily)",
+		"  sesh backup [file]            Copy the vault now (sesh also does this automatically)",
 		"  sesh folder move|rename|list  File entries in folders",
 		"  sesh tag add|remove|rename|list  Tag entries",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",

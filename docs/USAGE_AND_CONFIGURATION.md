@@ -606,19 +606,21 @@ It names every entry it can't read, and never shows a secret. It exits 1 when th
 
 ### Backups
 
-sesh backs up the vault automatically. When a command unlocks it and the newest backup is a day old or more (`backup.every_days`), sesh makes one first, in a `backups` folder next to the vault (`backup.dir`), and keeps the newest 7 (`backup.keep`). A vault with no entries isn't backed up. A failed backup prints a warning and never stops the command.
+sesh backs up the vault automatically. The first time a command unlocks it on a new day (every `backup.every_days` days, counted by the calendar), sesh makes a backup first, in a `backups` folder next to the vault (`backup.dir`), and keeps the newest 7 (`backup.keep`). A vault with no entries isn't backed up. A failed backup prints a warning and never stops the command.
 
 A backup is a copy of the vault file, made safely while sesh may be using it. The secrets in it are encrypted, as in the vault, so making one needs no password. With the master password you had when it was made (or the recovery key you had then), it restores everything: every entry with its secret, folder, tags and settings, and the recovery key. It doesn't hold your config file or Touch ID unlock, which is per machine (`sesh touchid enable` turns it back on). Names, folders and tags are readable in it, as they are in the vault.
 
 ```
 $ sesh backup                       # one now, in the backups folder
-✅ Backed up the vault to ~/Library/Application Support/sesh/backups/passwords-2026-10-07T091200Z.db (48 KB)
-$ sesh backup ~/usb/sesh.db         # or to a file you choose; --force replaces it
+✅ Backed up the vault to ~/Library/Application Support/sesh/backups/passwords-3f9c2a1b-2026-10-07T091200Z.db (48 KB)
+$ sesh backup ~/usb/sesh.db         # or to a file, or into a folder; --force replaces a file
 ```
 
-Backups are named for when they were made, in UTC (`passwords-2026-10-07T091200Z.db`), and only files named that way are ever removed. The folder is readable only by you, and so is each backup. Point `backup.dir` at a synced or external folder to keep copies off this machine. A vault SQLite finds damaged is never copied, so a damaged vault can't replace good backups.
+Backups are named for the vault (`3f9c2a1b`, an id it gets when it's made and keeps, even through a password change) and for when they were made, in UTC. Only files named that way are ever removed, and only that vault's, so two vaults can share a backups folder. Each backup is readable only by you, and a new backups folder is too. Point `backup.dir` at a synced or external folder to keep copies off this machine; USB sticks (FAT, exFAT) work. A vault SQLite finds damaged is never copied, so a damaged vault can't replace good backups. A backup dated in the future, from a clock set wrong, doesn't stop new ones; `sesh doctor` points it out.
 
-To restore one by hand: stop the agent (`sesh agent stop`), make sure no sesh command is running, and copy the backup over the vault file.
+A backup opens with the master password, and the recovery key, it was made with. So after `sesh --rekey`, or `sesh recovery new` or `remove`, sesh says how many backups still open with the old one, and at a terminal offers to delete them and make a fresh one: worth doing if the old one may have leaked.
+
+To restore one by hand: stop the agent (`sesh agent stop`) and make sure no sesh command is running. Then copy the backup over the vault file, and delete the vault's `-wal` and `-shm` files if they're there (`passwords.db-wal`, `passwords.db-shm`). Left in place, SQLite would apply what's in them to the restored copy. Or copy the backup somewhere new and point `db_path` at it.
 
 Backups are for getting this vault back. To move your secrets to another tool, or to keep a copy any machine can open with its own password, use an encrypted export.
 

@@ -194,6 +194,10 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 			return bytes.Clone(key), perr
 		}
 	}
+	// A recovery (src set) is for a forgotten password, not a leaked one.
+	if src == nil {
+		offerToRemoveOldBackups(app, st, "master password")
+	}
 	return bytes.Clone(key), nil
 }
 
