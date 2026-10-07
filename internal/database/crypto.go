@@ -76,6 +76,18 @@ func seal(key, plaintext, aad []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
+// ErrDecrypt means a ciphertext doesn't decrypt with the key it was given:
+// it's damaged, or was made with another key. Other errors (no key, a lost
+// agent connection) are something else.
+var ErrDecrypt = errors.New("doesn't decrypt")
+
+// decryptError is a ciphertext that doesn't decrypt; it is ErrDecrypt.
+type decryptError struct{ err error }
+
+func (e *decryptError) Error() string        { return "decrypt: " + e.err.Error() }
+func (e *decryptError) Unwrap() error        { return e.err }
+func (e *decryptError) Is(target error) bool { return target == ErrDecrypt }
+
 // Decrypt decrypts ciphertext produced by Encrypt using AES-256-GCM.
 // The key must be exactly 32 bytes.
 func Decrypt(key, ciphertext []byte) ([]byte, error) {
@@ -99,13 +111,13 @@ func open(key, ciphertext, aad []byte) ([]byte, error) {
 
 	nonceSize := gcm.NonceSize()
 	if len(ciphertext) < nonceSize {
-		return nil, errors.New("ciphertext too short")
+		return nil, &decryptError{errors.New("ciphertext too short")}
 	}
 
 	nonce, enc := ciphertext[:nonceSize], ciphertext[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, enc, aad)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt: %w", err)
+		return nil, &decryptError{err}
 	}
 
 	return plaintext, nil

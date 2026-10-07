@@ -276,6 +276,10 @@ type Store interface {
 	SetSettings(k Key, s Settings) error
 	// Lookup returns the entry without its secret.
 	Lookup(k Key) (Entry, error)
+	// Exists returns nil when the store holds the entry. It reads nothing
+	// else of it, so an entry whose settings or times are damaged can
+	// still be found to delete or replace.
+	Exists(k Key) error
 	// List returns the entries f matches, ordered by Key.Less.
 	List(f Filter) ([]Entry, error)
 	// Delete removes the entry.

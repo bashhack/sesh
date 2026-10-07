@@ -48,7 +48,7 @@ func DeleteEntries(store vault.Store, ids []string, own func(vault.Key) error, h
 			err = own(k)
 		}
 		if err == nil {
-			if _, lerr := store.Lookup(k); lerr != nil {
+			if lerr := store.Exists(k); lerr != nil {
 				err = lerr
 				if errors.Is(lerr, vault.ErrNotFound) && hint != nil {
 					if h := hint(k); h != "" {

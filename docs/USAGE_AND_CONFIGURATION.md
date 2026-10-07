@@ -508,6 +508,55 @@ Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but
 
 **When it grows large.** If the log passes 100,000 events (about 10 MB), whatever the retention setting, sesh prints a warning with the vault's size and how to shrink it. It shows at most once a day, and only when you're at a terminal, so scripts never see it. Typical personal use stays far below this at the default 90 days; it's meant for, say, a script that reads a secret every minute.
 
+### Checking the vault (`sesh verify`)
+
+`sesh verify` unlocks the vault and checks that all of it can be read:
+
+- **The file:** SQLite's own integrity check.
+- **Every entry:** its secret decrypts, and its settings (TOTP code settings, the AWS MFA device) read back. A damaged secret is otherwise found only when you read that entry, perhaps when you need it most: one flipped bit in one entry leaves the file looking fine.
+- **The recovery key**, if you have one: its record is complete, well-formed, and made for the vault's current key. (Whether the wrapped key inside it is intact can only be checked with the recovery key itself.)
+- **Touch ID unlock**, if it's on: it was set up for this vault and its key, and your fingerprints haven't changed since.
+
+Each check gets one row, marked `ok`, `FAIL`, `warn`, or `-` (not set up):
+
+```
+$ sesh verify
+sesh verify: ~/Library/Application Support/sesh/passwords.db
+
+  ok    File          ok
+  ok    Entries       42 entries, all readable
+  ok    Recovery key  set, for this vault's key
+  ok    Touch ID      on, for this vault
+
+OK: no problems
+```
+
+When something is wrong, the rows say what, and a numbered list says what to do about each, with the commands to run:
+
+```
+$ sesh verify
+sesh verify: ~/Library/Application Support/sesh/passwords.db
+
+  ok    File          ok
+  FAIL  Entries       1 of 42 entries can't be read
+                        password/bank/alice: secret doesn't decrypt
+                        (damaged, or encrypted with another key)
+  FAIL  Recovery key  made for another vault or key
+  warn  Touch ID      set up for another vault or an earlier master password
+
+What to do
+  1. Restore password/bank/alice from a backup (an encrypted export), or delete it:
+       sesh --service password --delete password/bank/alice
+  2. Make a new recovery key:
+       sesh recovery new
+  3. Optional: turn Touch ID back on:
+       sesh touchid enable
+
+FAIL: 2 problems, 1 warning
+```
+
+It names every entry it can't read, and never shows a secret. It exits 1 when the file, an entry, or the recovery key has a problem. If the file is damaged but every entry still reads, it says to export them now and start a new vault from that. A Touch ID problem is only a warning, since your password still works, so it exits 0. If the agent locks or another command changes the master password while it checks, it says to run it again rather than blaming any entry. Run it after moving or restoring the vault, after a crash, or now and then if the vault is in a synced folder. It writes nothing while it checks, then one `verify` event to the audit log (not when the file itself is damaged).
+
 ### Encrypted exports
 
 Use `--format encrypted` to produce a portable, password-protected backup:

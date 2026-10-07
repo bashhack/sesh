@@ -65,8 +65,13 @@ func (e *vaultChangedError) Unwrap() error { return e.cause }
 
 func userFacing(err error) error {
 	var pe *ProtocolError
-	if errors.As(err, &pe) && pe.Code == ErrCodeUnlockMismatch {
+	switch {
+	case errors.As(err, &pe) && pe.Code == ErrCodeUnlockMismatch:
 		return &vaultChangedError{cause: err}
+	case errors.As(err, &pe) && pe.Code == ErrCodeDecryptFailed:
+		// The ciphertext doesn't decrypt with the agent's key, as the
+		// direct path reports it.
+		return fmt.Errorf("%w (%w)", database.ErrDecrypt, err)
 	}
 	return err
 }

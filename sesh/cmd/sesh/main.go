@@ -230,6 +230,7 @@ var subcommands = []candidate{
 	{"recover", "Set a new master password with the vault's recovery key"},
 	{"recovery", "Make, remove, or check this vault's recovery key"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
+	{"verify", "Check the vault can all be read: every entry, the recovery key, Touch ID"},
 }
 
 // subcommand returns the subcommand args name (one of subcommands) and the
@@ -261,6 +262,7 @@ func (u unavailableStore) Put(vault.Key, []byte) error                 { return 
 func (u unavailableStore) Save(*vault.Entry, []byte) error             { return u.err }
 func (u unavailableStore) SetSettings(vault.Key, vault.Settings) error { return u.err }
 func (u unavailableStore) Lookup(vault.Key) (vault.Entry, error)       { return vault.Entry{}, u.err }
+func (u unavailableStore) Exists(vault.Key) error                      { return u.err }
 func (u unavailableStore) List(vault.Filter) ([]vault.Entry, error)    { return nil, u.err }
 func (u unavailableStore) Delete(vault.Key) error                      { return u.err }
 func (u unavailableStore) DeleteMany([]vault.Key) error                { return u.err }
@@ -727,8 +729,16 @@ func terminalPrompt(prompt string) ([]byte, error) {
 	return pw, nil
 }
 
+// errReported is a failure the command has already reported in full; fatal
+// only sets the exit code.
+var errReported = errors.New("already reported")
+
 // fatal prints an error to stderr and exits
 func fatal(app *App, err error) {
+	if errors.Is(err, errReported) {
+		app.Exit(1)
+		return
+	}
 	if _, printErr := fmt.Fprintf(app.Stderr, "❌ %v\n", err); printErr != nil {
 		app.Exit(2)
 		return
@@ -761,6 +771,11 @@ func run(app *App, args []string) {
 		return
 	case "audit":
 		if err := runAudit(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
+	case "verify":
+		if err := runVerify(app, rest); err != nil {
 			fatal(app, err)
 		}
 		return
@@ -1033,6 +1048,7 @@ func (a *App) PrintUsage() error {
 		"  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)",
 		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"  sesh audit [prune]            Show the vault's audit log, or prune it",
+		"  sesh verify                   Check the vault can all be read",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",

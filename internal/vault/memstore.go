@@ -105,6 +105,16 @@ func (m *MemStore) Lookup(k Key) (Entry, error) {
 	return e.entry, nil
 }
 
+// Exists implements Store.
+func (m *MemStore) Exists(k Key) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.entries[k]; !ok {
+		return notFound(k)
+	}
+	return nil
+}
+
 // List implements Store.
 func (m *MemStore) List(f Filter) ([]Entry, error) {
 	m.mu.Lock()
