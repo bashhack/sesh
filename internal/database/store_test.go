@@ -187,7 +187,7 @@ func TestList_ByKind(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	entries, err := s.List(vault.Filter{Kind: vault.KindTOTP})
+	entries, err := s.List(&vault.Filter{Kind: vault.KindTOTP})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestSettings_RoundTrip(t *testing.T) {
 	if e, err := s.Lookup(k); err != nil || e.Settings != want {
 		t.Errorf("Lookup = %+v, %v; want settings %+v", e.Settings, err, want)
 	}
-	entries, err := s.List(vault.Filter{})
+	entries, err := s.List(&vault.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestSettings_CorruptColumnIsAnError(t *testing.T) {
 	if _, err := s.Lookup(k); err == nil || !strings.Contains(err.Error(), "settings of totp/bank") {
 		t.Errorf("Lookup = %v, want an error naming the entry's settings", err)
 	}
-	if _, err := s.List(vault.Filter{}); err == nil {
+	if _, err := s.List(&vault.Filter{}); err == nil {
 		t.Error("List succeeded over a corrupt settings column")
 	}
 }
@@ -286,7 +286,7 @@ func TestSave_PreservesTimestamps(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	entries, err := s.List(vault.Filter{})
+	entries, err := s.List(&vault.Filter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestSave_ZeroTimestampsFallBackToNow(t *testing.T) {
 	}
 	after := time.Now().UTC().Add(time.Second)
 
-	entries, err := s.List(vault.Filter{})
+	entries, err := s.List(&vault.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,18 +19,9 @@ import (
 // entries" line with any close names, or, for a single match, the command
 // that uses it.
 func (p *Provider) searchPasswords(mgr *password.Manager) (provider.Credentials, error) {
-	entries, err := mgr.SearchEntries(p.query)
+	entries, err := mgr.SearchIn(p.query, p.filter())
 	if err != nil {
 		return provider.Credentials{}, err
-	}
-	if p.entryType != "" {
-		kept := entries[:0]
-		for i := range entries {
-			if entries[i].Type == password.EntryType(p.entryType) {
-				kept = append(kept, entries[i])
-			}
-		}
-		entries = kept
 	}
 	creds := provider.Credentials{Provider: p.Name()}
 
@@ -54,7 +45,9 @@ func (p *Provider) searchPasswords(mgr *password.Manager) (provider.Credentials,
 			kind = p.entryType + " "
 		}
 		creds.DisplayInfo = fmt.Sprintf("No %sentries matching %q", kind, p.query)
-		if names, err := mgr.SearchSuggestions(p.query); err == nil && len(names) > 0 {
+		if hint := p.NoMatchHint(); hint != "" {
+			creds.DisplayInfo += ": " + hint
+		} else if names, err := mgr.SuggestionsIn(p.query, p.filter()); err == nil && len(names) > 0 {
 			creds.DisplayInfo += ". Did you mean: " + strings.Join(names, ", ") + "?"
 		}
 		return creds, nil
@@ -73,10 +66,26 @@ func (p *Provider) searchPasswords(mgr *password.Manager) (provider.Credentials,
 // the query's words in names and usernames when stdout is a terminal
 // that allows color.
 func (p *Provider) searchTable(entries []password.Entry) string {
-	rows := [][]string{{"NAME", "USER", "KIND", "UPDATED"}}
+	// FOLDER and TAGS only when an entry has one.
+	var folders, tags bool
+	for i := range entries {
+		folders = folders || entries[i].Folder != ""
+		tags = tags || len(entries[i].Tags) > 0
+	}
+	row := func(name, user, kind, folder, tagList, updated string) []string {
+		r := []string{name, user, kind}
+		if folders {
+			r = append(r, folder)
+		}
+		if tags {
+			r = append(r, tagList)
+		}
+		return append(r, updated)
+	}
+	rows := [][]string{row("NAME", "USER", "KIND", "FOLDER", "TAGS", "UPDATED")}
 	for i := range entries {
 		e := &entries[i]
-		rows = append(rows, []string{e.Service, e.Username, string(e.Type), e.UpdatedAt.Local().Format("2006-01-02 15:04")})
+		rows = append(rows, row(e.Service, e.Username, string(e.Type), e.Folder, strings.Join(e.Tags, " "), e.UpdatedAt.Local().Format("2006-01-02 15:04")))
 	}
 	widths := make([]int, len(rows[0]))
 	for _, r := range rows {

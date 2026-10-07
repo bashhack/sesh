@@ -99,15 +99,15 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			}
 		}
 		for name, tt := range map[string]struct {
-			f    vault.Filter
 			want string
+			f    vault.Filter
 		}{
-			"all":     {vault.Filter{}, "api_key/openai, password/github/alice, totp/github/alice"},
-			"kind":    {vault.Filter{Kind: vault.KindTOTP}, "totp/github/alice"},
-			"service": {vault.Filter{Service: "github"}, "password/github/alice, totp/github/alice"},
-			"none":    {vault.Filter{Service: "nope"}, ""},
+			"all":     {"api_key/openai, password/github/alice, totp/github/alice", vault.Filter{}},
+			"kind":    {"totp/github/alice", vault.Filter{Kind: vault.KindTOTP}},
+			"service": {"password/github/alice, totp/github/alice", vault.Filter{Service: "github"}},
+			"none":    {"", vault.Filter{Service: "nope"}},
 		} {
-			es, err := s.List(tt.f)
+			es, err := s.List(&tt.f)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -156,7 +156,7 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		if err := s.DeleteMany([]vault.Key{openai, github, openai}); err != nil {
 			t.Fatal(err)
 		}
-		if es, err := s.List(vault.Filter{}); err != nil || len(es) != 0 {
+		if es, err := s.List(&vault.Filter{}); err != nil || len(es) != 0 {
 			t.Errorf("left %v, %v; want nothing", es, err)
 		}
 	})
@@ -172,7 +172,7 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			listed, err := s.List(vault.Filter{})
+			listed, err := s.List(&vault.Filter{})
 			if err != nil || len(listed) != 1 {
 				t.Fatalf("List = %+v, %v", listed, err)
 			}
@@ -217,6 +217,51 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		}
 		if e, err := s.Lookup(gh); err != nil || e.Folder != "" || len(e.Tags) != 0 {
 			t.Errorf("a new entry with a deleted one's name = %+v, %v; want no folder or tags", e, err)
+		}
+	})
+
+	t.Run("filter by folder and tags", func(t *testing.T) {
+		s := newStore(t)
+		for _, e := range []*vault.Entry{
+			{Kind: vault.KindPassword, Service: "a", Folder: "work", Tags: []string{"x", "y"}},
+			{Kind: vault.KindPassword, Service: "b", Folder: "work/dev", Tags: []string{"x"}},
+			{Kind: vault.KindPassword, Service: "c", Folder: "workshop"},
+			{Kind: vault.KindPassword, Service: "d", Folder: "Work", Tags: []string{"X"}},
+			{Kind: vault.KindPassword, Service: "e", Folder: "a_b"},
+			{Kind: vault.KindTOTP, Service: "f", Tags: []string{"y"}},
+		} {
+			if err := s.Save(e, []byte("v")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for name, tt := range map[string]struct {
+			want string
+			f    vault.Filter
+		}{
+			// A folder takes in its subfolders, not a folder that merely
+			// starts with its name, and matches case exactly.
+			"a folder":           {"a b", vault.Filter{Folder: "work", FolderSet: true}},
+			"a subfolder":        {"b", vault.Filter{Folder: "work/dev", FolderSet: true}},
+			"another case":       {"d", vault.Filter{Folder: "Work", FolderSet: true}},
+			"an underscore":      {"", vault.Filter{Folder: "aXb", FolderSet: true}},
+			"no folder":          {"f", vault.Filter{FolderSet: true}},
+			"a tag":              {"a b", vault.Filter{Tags: []string{"x"}}},
+			"two tags, both":     {"a", vault.Filter{Tags: []string{"x", "y"}}},
+			"a tag and a folder": {"b", vault.Filter{Folder: "work/dev", FolderSet: true, Tags: []string{"x"}}},
+			"a tag and a kind":   {"f", vault.Filter{Kind: vault.KindTOTP, Tags: []string{"y"}}},
+			"no folder or tags":  {"a b c d e f", vault.Filter{}},
+		} {
+			got, err := s.List(&tt.f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var names []string
+			for i := range got {
+				names = append(names, got[i].Service)
+			}
+			if strings.Join(names, " ") != tt.want {
+				t.Errorf("%s: List = %q, want %q", name, names, tt.want)
+			}
 		}
 	})
 

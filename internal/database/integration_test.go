@@ -114,7 +114,7 @@ func TestIntegration_APIKeys(t *testing.T) {
 	}
 
 	// Verify it shows up in list with correct type
-	entries, err := mgr.ListEntriesFiltered(password.ListFilter{EntryType: password.EntryTypeAPIKey})
+	entries, err := mgr.ListEntriesFiltered(&password.ListFilter{EntryType: password.EntryTypeAPIKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestIntegration_SecureNotes(t *testing.T) {
 
 	// List filtered by note type
 	t.Log("List filtered by secure_note")
-	filtered, err := mgr.ListEntriesFiltered(password.ListFilter{EntryType: password.EntryTypeNote})
+	filtered, err := mgr.ListEntriesFiltered(&password.ListFilter{EntryType: password.EntryTypeNote})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestIntegration_ListFilterSort(t *testing.T) {
 
 	// Filter by type
 	t.Log("Filter: password only")
-	passwords, err := mgr.ListEntriesFiltered(password.ListFilter{EntryType: password.EntryTypePassword})
+	passwords, err := mgr.ListEntriesFiltered(&password.ListFilter{EntryType: password.EntryTypePassword})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestIntegration_ListFilterSort(t *testing.T) {
 
 	// Pagination
 	t.Log("Pagination: limit=2, offset=1")
-	page, err := mgr.ListEntriesFiltered(password.ListFilter{Limit: 2, Offset: 1})
+	page, err := mgr.ListEntriesFiltered(&password.ListFilter{Limit: 2, Offset: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +304,7 @@ func TestIntegration_ListFilterSort(t *testing.T) {
 
 	// Offset beyond end
 	t.Log("Pagination: offset=100")
-	empty, err := mgr.ListEntriesFiltered(password.ListFilter{Offset: 100})
+	empty, err := mgr.ListEntriesFiltered(&password.ListFilter{Offset: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +452,7 @@ func TestIntegration_AWSTOTPWorkflow(t *testing.T) {
 	if err := store.Put(vault.Key{Kind: vault.KindTOTP, Service: "github"}, secret); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := store.List(vault.Filter{Kind: vault.KindTOTP, Service: "aws"})
+	entries, err := store.List(&vault.Filter{Kind: vault.KindTOTP, Service: "aws"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,7 @@ func TestIntegration_GenericTOTPWorkflow(t *testing.T) {
 		t.Fatalf("expected %q, got %q", secret, got)
 	}
 
-	entries, err := store.List(vault.Filter{Kind: vault.KindTOTP})
+	entries, err := store.List(&vault.Filter{Kind: vault.KindTOTP})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +494,7 @@ func TestIntegration_GenericTOTPWorkflow(t *testing.T) {
 	if err := store.Delete(keys[1]); err != nil {
 		t.Fatal(err)
 	}
-	entries, err = store.List(vault.Filter{Kind: vault.KindTOTP})
+	entries, err = store.List(&vault.Filter{Kind: vault.KindTOTP})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +527,7 @@ func TestIntegration_KindIsolation(t *testing.T) {
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			entries, err := store.List(tc.filter)
+			entries, err := store.List(&tc.filter)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -772,7 +772,7 @@ func TestIntegration_QRCodeToStoreToGenerate(t *testing.T) {
 	}
 
 	// Verify it shows up in the list with its settings
-	entries, err := store.List(vault.Filter{Kind: vault.KindTOTP})
+	entries, err := store.List(&vault.Filter{Kind: vault.KindTOTP})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -918,7 +918,7 @@ func TestIntegration_ExportImportJSON(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	count, err := mgr.Export(&buf, password.ExportOptions{Format: password.FormatJSON})
+	count, err := mgr.Export(&buf, &password.ExportOptions{Format: password.FormatJSON})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -965,7 +965,7 @@ func TestIntegration_ExportImportCSV(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	count, err := mgr.Export(&buf, password.ExportOptions{Format: password.FormatCSV})
+	count, err := mgr.Export(&buf, &password.ExportOptions{Format: password.FormatCSV})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1056,7 +1056,7 @@ func TestIntegration_ExportWithFilter(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	count, err := mgr.Export(&buf, password.ExportOptions{
+	count, err := mgr.Export(&buf, &password.ExportOptions{
 		Format:    password.FormatJSON,
 		EntryType: password.EntryTypeAPIKey,
 	})
@@ -1276,7 +1276,7 @@ func TestIntegration_ExportThenImportRoundTrip(t *testing.T) {
 	for _, format := range []password.ExportFormat{password.FormatJSON, password.FormatCSV} {
 		t.Run(string(format), func(t *testing.T) {
 			var buf bytes.Buffer
-			count, err := mgr1.Export(&buf, password.ExportOptions{Format: format})
+			count, err := mgr1.Export(&buf, &password.ExportOptions{Format: format})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1337,7 +1337,7 @@ func TestIntegration_ExportJSONStreamsEntries(t *testing.T) {
 	// of writer success; streaming must return a strictly smaller count
 	// when the writer fails mid-way.
 	fw := &failingWriter{budget: 200}
-	count, err := mgr.Export(fw, password.ExportOptions{Format: password.FormatJSON})
+	count, err := mgr.Export(fw, &password.ExportOptions{Format: password.FormatJSON})
 	if err == nil {
 		t.Fatal("expected error from truncated writer, got nil")
 	}
@@ -1362,7 +1362,7 @@ func TestIntegration_ExportImportPreservesTimestamps(t *testing.T) {
 	for _, format := range []password.ExportFormat{password.FormatJSON, password.FormatCSV} {
 		t.Run(string(format), func(t *testing.T) {
 			var buf bytes.Buffer
-			if _, err := mgr1.Export(&buf, password.ExportOptions{Format: format}); err != nil {
+			if _, err := mgr1.Export(&buf, &password.ExportOptions{Format: format}); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1375,7 +1375,7 @@ func TestIntegration_ExportImportPreservesTimestamps(t *testing.T) {
 				t.Fatalf("expected 1 imported, got %d (errors: %v)", result.Imported, result.Errors)
 			}
 
-			entries, err := store2.List(vault.Filter{})
+			entries, err := store2.List(&vault.Filter{})
 			if err != nil {
 				t.Fatal(err)
 			}

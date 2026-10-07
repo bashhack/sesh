@@ -52,7 +52,7 @@ func managerWith(t *testing.T, names []string, when func(i int) time.Time) *Mana
 // listFailing is a store whose List fails.
 type listFailing struct{ *vault.MemStore }
 
-func (listFailing) List(vault.Filter) ([]vault.Entry, error) {
+func (listFailing) List(*vault.Filter) ([]vault.Entry, error) {
 	return nil, errors.New("store unavailable")
 }
 

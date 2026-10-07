@@ -234,18 +234,33 @@ func (s *Store) Exists(k vault.Key) error {
 }
 
 // List implements vault.Store.
-func (s *Store) List(f vault.Filter) (_ []vault.Entry, err error) {
-	q := `SELECT kind, service, username, settings, folder, ` + tagsColumn + `, created_at, updated_at FROM entries WHERE 1 = 1`
+func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
+	var q strings.Builder
+	q.WriteString(`SELECT kind, service, username, settings, folder, ` + tagsColumn + `, created_at, updated_at FROM entries WHERE 1 = 1`)
 	var args []any
 	if f.Kind != "" {
-		q += ` AND kind = ?`
+		q.WriteString(` AND kind = ?`)
 		args = append(args, string(f.Kind))
 	}
 	if f.Service != "" {
-		q += ` AND service = ?`
+		q.WriteString(` AND service = ?`)
 		args = append(args, f.Service)
 	}
-	rows, err := s.db.Query(q+` ORDER BY kind, service, username`, args...)
+	// Compared exactly, as text: LIKE would ignore case and read "_" as
+	// any character.
+	switch {
+	case f.FolderSet && f.Folder == "":
+		q.WriteString(` AND folder = ''`)
+	case f.FolderSet:
+		q.WriteString(` AND (folder = ? OR substr(folder, 1, length(?) + 1) = ? || '/')`)
+		args = append(args, f.Folder, f.Folder, f.Folder)
+	}
+	for _, t := range f.Tags {
+		q.WriteString(` AND EXISTS (SELECT 1 FROM entry_tags WHERE entry_id = entries.id AND tag = ?)`)
+		args = append(args, t)
+	}
+	q.WriteString(` ORDER BY kind, service, username`)
+	rows, err := s.db.Query(q.String(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list entries: %w", err)
 	}

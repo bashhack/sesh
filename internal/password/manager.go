@@ -193,7 +193,20 @@ func (m *Manager) GenerateTOTPCode(service, username string) (string, error) {
 
 // ListEntries returns every entry.
 func (m *Manager) ListEntries() ([]Entry, error) {
-	stored, err := m.store.List(vault.Filter{})
+	stored, err := m.store.List(&vault.Filter{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list entries: %w", err)
+	}
+	entries := make([]Entry, len(stored))
+	for i := range stored {
+		entries[i] = entryFrom(&stored[i])
+	}
+	return entries, nil
+}
+
+// list returns the entries f's kind, folder, and tags let through.
+func (m *Manager) list(f *ListFilter) ([]Entry, error) {
+	stored, err := m.store.List(&vault.Filter{Kind: f.EntryType, Folder: f.Folder, FolderSet: f.FolderSet, Tags: f.Tags})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list entries: %w", err)
 	}
@@ -207,7 +220,7 @@ func (m *Manager) ListEntries() ([]Entry, error) {
 // GetPasswordsByService returns the password entries (EntryTypePassword
 // only) for a service name. Use ListEntriesFiltered for other kinds.
 func (m *Manager) GetPasswordsByService(service string) ([]Entry, error) {
-	return m.ListEntriesFiltered(ListFilter{Service: service, EntryType: EntryTypePassword})
+	return m.ListEntriesFiltered(&ListFilter{Service: service, EntryType: EntryTypePassword})
 }
 
 // EntryExists reports whether the entry exists, without reading its secret.
@@ -231,6 +244,9 @@ const (
 	SortByService   SortField = "service"
 	SortByCreatedAt SortField = "created_at"
 	SortByUpdatedAt SortField = "updated_at"
+	// SortByFolder puts a folder's entries together, ordered by folder,
+	// then service name.
+	SortByFolder SortField = "folder"
 )
 
 // ListFilter controls which entries are returned and in what order.
@@ -238,13 +254,18 @@ type ListFilter struct {
 	EntryType EntryType // empty means all types
 	Service   string    // empty means all services; matched ignoring case
 	SortBy    SortField // empty defaults to SortByService
-	Limit     int       // 0 means no limit
+	// Folder, when FolderSet, keeps the entries in it or a folder under
+	// it ("" keeps those in none); Tags keeps those with all of them.
+	Folder    string
+	Tags      []string
+	Limit     int // 0 means no limit
 	Offset    int
+	FolderSet bool
 }
 
 // ListEntriesFiltered returns entries matching the given filter.
-func (m *Manager) ListEntriesFiltered(filter ListFilter) ([]Entry, error) {
-	entries, err := m.ListEntries()
+func (m *Manager) ListEntriesFiltered(filter *ListFilter) ([]Entry, error) {
+	entries, err := m.list(filter)
 	if err != nil {
 		return nil, err
 	}
@@ -252,9 +273,6 @@ func (m *Manager) ListEntriesFiltered(filter ListFilter) ([]Entry, error) {
 	filtered := make([]Entry, 0, len(entries))
 	for i := range entries {
 		e := &entries[i]
-		if filter.EntryType != "" && e.Type != filter.EntryType {
-			continue
-		}
 		if filter.Service != "" && !strings.EqualFold(e.Service, filter.Service) {
 			continue
 		}
@@ -262,6 +280,13 @@ func (m *Manager) ListEntriesFiltered(filter ListFilter) ([]Entry, error) {
 	}
 
 	switch filter.SortBy {
+	case SortByFolder:
+		sort.SliceStable(filtered, func(i, j int) bool {
+			if filtered[i].Folder != filtered[j].Folder {
+				return filtered[i].Folder < filtered[j].Folder
+			}
+			return filtered[i].Service < filtered[j].Service
+		})
 	case SortByCreatedAt:
 		sort.SliceStable(filtered, func(i, j int) bool { return filtered[i].CreatedAt.Before(filtered[j].CreatedAt) })
 	case SortByUpdatedAt:
@@ -308,7 +333,7 @@ func (m *Manager) DeleteEntry(service, username string, entryType EntryType) err
 // match k's ignoring case, other than k itself. Names are case-sensitive,
 // so these are what a name typed in another case misses, or duplicates.
 func (m *Manager) CaseTwins(k vault.Key) ([]vault.Key, error) {
-	entries, err := m.store.List(vault.Filter{Kind: k.Kind})
+	entries, err := m.store.List(&vault.Filter{Kind: k.Kind})
 	if err != nil {
 		return nil, err
 	}

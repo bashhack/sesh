@@ -187,13 +187,13 @@ func earlyCheck(p provider.ServiceProvider, common commonFlags, args []string, s
 	}
 	if f, ok := p.(provider.Filer); ok {
 		if filing := f.Filing(); !filing.IsZero() {
-			stores, where := f.Storing()
+			uses, where := f.UsesFiling()
 			switch {
-			case *common.list || *common.delete != "":
-				return errors.New("--folder and --tag don't go with --list or --delete: they file an entry as it's stored")
-			case *common.setup:
-			case !stores:
-				return fmt.Errorf("--folder and --tag file an entry as it's stored: use them with %s", where)
+			case *common.delete != "":
+				return errors.New("--folder and --tag don't go with --delete: name the entries to delete by ID")
+			case *common.list || *common.setup:
+			case !uses:
+				return fmt.Errorf("--folder and --tag file an entry as it's stored, or narrow a list: use them with %s", where)
 			}
 			if err := filing.Check(); err != nil {
 				return err
@@ -278,7 +278,7 @@ func (u unavailableStore) Save(*vault.Entry, []byte) error             { return 
 func (u unavailableStore) SetSettings(vault.Key, vault.Settings) error { return u.err }
 func (u unavailableStore) Lookup(vault.Key) (vault.Entry, error)       { return vault.Entry{}, u.err }
 func (u unavailableStore) Exists(vault.Key) error                      { return u.err }
-func (u unavailableStore) List(vault.Filter) ([]vault.Entry, error)    { return nil, u.err }
+func (u unavailableStore) List(*vault.Filter) ([]vault.Entry, error)   { return nil, u.err }
 func (u unavailableStore) Delete(vault.Key) error                      { return u.err }
 func (u unavailableStore) DeleteMany([]vault.Key) error                { return u.err }
 

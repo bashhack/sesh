@@ -27,7 +27,7 @@ func TestExportImportEncrypted_RoundTrip(t *testing.T) {
 
 	var buf bytes.Buffer
 	password := []byte("my-export-password")
-	count, err := mgr.ExportEncrypted(&buf, ExportOptions{KDF: kdf.Minimum()}, password)
+	count, err := mgr.ExportEncrypted(&buf, &ExportOptions{KDF: kdf.Minimum()}, password)
 	if err != nil {
 		t.Fatalf("ExportEncrypted: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestImportEncrypted_WrongPassword(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if _, err := mgr.ExportEncrypted(&buf, ExportOptions{KDF: kdf.Minimum()}, []byte("correct-password")); err != nil {
+	if _, err := mgr.ExportEncrypted(&buf, &ExportOptions{KDF: kdf.Minimum()}, []byte("correct-password")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,7 +92,7 @@ func TestImportEncrypted_WrongPassword(t *testing.T) {
 func TestExportEncrypted_EmptyPassword(t *testing.T) {
 	mgr := newEncryptedTestManager(t)
 	var buf bytes.Buffer
-	_, err := mgr.ExportEncrypted(&buf, ExportOptions{}, nil)
+	_, err := mgr.ExportEncrypted(&buf, &ExportOptions{}, nil)
 	if err == nil {
 		t.Fatal("expected error for empty password")
 	}
@@ -201,7 +201,7 @@ func TestExportEncrypted_RecordsItsSettings(t *testing.T) {
 	}
 	for _, want := range []kdf.Params{{}, {Time: 2, Memory: 19 * 1024, Threads: 1, KeyLen: kdf.KeyLen}} {
 		var buf bytes.Buffer
-		if _, err := mgr.ExportEncrypted(&buf, ExportOptions{KDF: want}, []byte("export-password")); err != nil {
+		if _, err := mgr.ExportEncrypted(&buf, &ExportOptions{KDF: want}, []byte("export-password")); err != nil {
 			t.Fatal(err)
 		}
 		var env EncryptedEnvelope

@@ -41,6 +41,11 @@ const (
 type ExportOptions struct {
 	Format    ExportFormat
 	EntryType EntryType // empty means all types
+	// Folder, when FolderSet, keeps the entries in it or a folder under
+	// it ("" keeps those in none); Tags keeps those with all of them.
+	Folder    string
+	Tags      []string
+	FolderSet bool
 	// KDF is the Argon2id settings an encrypted export's password is
 	// stretched with; zero means kdf.Default().
 	KDF kdf.Params
@@ -50,8 +55,8 @@ type ExportOptions struct {
 // one plaintext record is live in memory at a time. Returns the number of
 // entries successfully written; a partial count + error is possible if a
 // decrypt or write fails mid-stream (prior entries remain in the writer).
-func (m *Manager) Export(w io.Writer, opts ExportOptions) (int, error) {
-	entries, err := m.store.List(vault.Filter{Kind: opts.EntryType})
+func (m *Manager) Export(w io.Writer, opts *ExportOptions) (int, error) {
+	entries, err := m.store.List(&vault.Filter{Kind: opts.EntryType, Folder: opts.Folder, FolderSet: opts.FolderSet, Tags: opts.Tags})
 	if err != nil {
 		return 0, fmt.Errorf("failed to list entries: %w", err)
 	}
