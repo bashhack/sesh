@@ -173,7 +173,8 @@ func integrityCheck(tx *sql.Tx) (_ []string, err error) {
 	return found, rows.Err()
 }
 
-// LogVerify records a verify in the audit log, with its result as detail.
-func (s *Store) LogVerify(detail string) {
-	s.audit("verify", "", detail)
+// LogDoctor records a sesh doctor check of the vault in the audit log,
+// with its result as detail.
+func (s *Store) LogDoctor(detail string) {
+	s.audit("doctor", "", detail)
 }

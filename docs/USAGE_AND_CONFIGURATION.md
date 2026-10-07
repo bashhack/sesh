@@ -514,25 +514,41 @@ Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but
 
 **When it grows large.** If the log passes 100,000 events (about 10 MB), whatever the retention setting, sesh prints a warning with the vault's size and how to shrink it. It shows at most once a day, and only when you're at a terminal, so scripts never see it. Typical personal use stays far below this at the default 90 days; it's meant for, say, a script that reads a secret every minute.
 
-### Checking the vault (`sesh verify`)
+### Checking your setup and vault (`sesh doctor`)
 
-`sesh verify` unlocks the vault and checks that all of it can be read:
+`sesh doctor` checks sesh's setup, then unlocks the vault and checks that all of it can be read. The setup part needs no password, and is shown first:
+
+- **Config:** the config file loads (or there's none, and the defaults apply).
+- **Vault file:** the vault exists, and only you can read it and enter its folder.
+- **Agent:** whether it's running and unlocked. It's never started just to check: it starts when a command needs it. One running an older sesh build is replaced by the next command.
+- **Key settings:** the Argon2id settings the vault's key was made with are at least the configured ones (`[master_password]`). Raising them applies only when the key is made again, with `sesh --rekey`.
+
+Then the vault:
 
 - **The file:** SQLite's own integrity check.
 - **Every entry:** its secret decrypts, and its settings (TOTP code settings, the AWS MFA device) read back. A damaged secret is otherwise found only when you read that entry, perhaps when you need it most: one flipped bit in one entry leaves the file looking fine.
-- **The recovery key**, if you have one: its record is complete, well-formed, and made for the vault's current key. (Whether the wrapped key inside it is intact can only be checked with the recovery key itself.)
+- **The recovery key:** its record is complete, well-formed, and made for the vault's current key. (Whether the wrapped key inside it is intact can only be checked with the recovery key itself.) Having none is a warning: without one, a forgotten master password loses the vault.
 - **Touch ID unlock**, if it's on: it was set up for this vault and its key, and your fingerprints haven't changed since.
+- **AWS CLI:** if you have AWS entries, `aws` is on your PATH.
 
-Each check gets one row, marked `ok`, `FAIL`, `warn`, or `-` (not set up):
+Each check gets one row, marked `ok`, `FAIL`, `warn`, or `-` (not set up, or not needed):
 
 ```
-$ sesh verify
-sesh verify: ~/Library/Application Support/sesh/passwords.db
+$ sesh doctor
+sesh doctor
 
-  ok    File          ok
-  ok    Entries       42 entries, all readable
-  ok    Recovery key  set, for this vault's key
-  ok    Touch ID      on, for this vault
+Setup
+  -     Config          no file, so the defaults
+  ok    Vault file      only you can read it
+  ok    Agent           running, unlocked for this vault
+  ok    Key settings    256 MiB, 3 passes, 4 threads
+
+Vault: ~/Library/Application Support/sesh/passwords.db
+  ok    File            ok
+  ok    Entries         42 entries, all readable
+  ok    Recovery key    set, for this vault's key
+  ok    Touch ID        on, for this vault
+  ok    AWS CLI         /opt/homebrew/bin/aws
 
 OK: no problems
 ```
@@ -540,28 +556,38 @@ OK: no problems
 When something is wrong, the rows say what, and a numbered list says what to do about each, with the commands to run:
 
 ```
-$ sesh verify
-sesh verify: ~/Library/Application Support/sesh/passwords.db
+$ sesh doctor
+sesh doctor
 
-  ok    File          ok
-  FAIL  Entries       1 of 42 entries can't be read
+Setup
+  -     Config          no file, so the defaults
+  warn  Vault file      others can read it or its folder
+  -     Agent           not running; it starts when a command needs it
+  ok    Key settings    256 MiB, 3 passes, 4 threads
+
+Vault: ~/Library/Application Support/sesh/passwords.db
+  ok    File            ok
+  FAIL  Entries         1 of 42 entries can't be read
                         password/bank/alice: secret doesn't decrypt
                         (damaged, or encrypted with another key)
-  FAIL  Recovery key  made for another vault or key
-  warn  Touch ID      set up for another vault or an earlier master password
+  FAIL  Recovery key    made for another vault or key
+  warn  Touch ID        set up for another vault or an earlier master password
+  -     AWS CLI         no AWS entries
 
 What to do
-  1. Restore password/bank/alice from a backup (an encrypted export), or delete it:
+  1. Make the vault yours alone:
+       chmod 700 '/Users/alice/Library/Application Support/sesh'
+  2. Restore password/bank/alice from a backup (an encrypted export), or delete it:
        sesh --service password --delete password/bank/alice
-  2. Make a new recovery key:
+  3. Make a new recovery key:
        sesh recovery new
-  3. Optional: turn Touch ID back on:
+  4. Optional: turn Touch ID back on:
        sesh touchid enable
 
-FAIL: 2 problems, 1 warning
+FAIL: 2 problems, 2 warnings
 ```
 
-It names every entry it can't read, and never shows a secret. It exits 1 when the file, an entry, or the recovery key has a problem. If the file is damaged but every entry still reads, it says to export them now and start a new vault from that. A Touch ID problem is only a warning, since your password still works, so it exits 0. If the agent locks or another command changes the master password while it checks, it says to run it again rather than blaming any entry. Run it after moving or restoring the vault, after a crash, or now and then if the vault is in a synced folder. It writes nothing while it checks, then one `verify` event to the audit log (not when the file itself is damaged).
+It names every entry it can't read, and never shows a secret. It exits 1 when the config doesn't load, there's no vault, or the file, an entry, or the recovery key has a problem; warnings exit 0. If the file is damaged but every entry still reads, it says to export them now and start a new vault from that. If nothing can unlock the vault without asking (no `SESH_MASTER_PASSWORD`, no unlocked agent) and there's no terminal to ask at, as in a script, the setup is still checked and the last line says the vault wasn't. If the agent locks or another command changes the master password while it checks, it says to run it again rather than blaming any entry. Run it when something seems off, after moving or restoring the vault, after a crash, or now and then if the vault is in a synced folder. It writes nothing while it checks, then one `doctor` event to the audit log (not when the file itself is damaged).
 
 ### Encrypted exports
 
