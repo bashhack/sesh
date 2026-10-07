@@ -48,8 +48,19 @@ func writeConfig(w io.Writer, cfg *config.Config) error {
 	line("master_password.memory", memory(cfg.KDFMemory.Value), sourceOf(cfg.KDFMemory.Source, cfg.KDFMemory.Origin))
 	line("master_password.time", strconv.FormatUint(uint64(cfg.KDFTime.Value), 10), sourceOf(cfg.KDFTime.Source, cfg.KDFTime.Origin))
 	line("master_password.threads", strconv.FormatUint(uint64(cfg.KDFThreads.Value), 10), sourceOf(cfg.KDFThreads.Source, cfg.KDFThreads.Origin))
-	// The vault path is usually longer than the value column.
+	everyDays := "off"
+	if d := cfg.BackupEveryDays.Value; d > 0 {
+		everyDays = dayCount(int64(d))
+	}
+	line("backup.every_days", everyDays, sourceOf(cfg.BackupEveryDays.Source, cfg.BackupEveryDays.Origin))
+	line("backup.keep", strconv.Itoa(cfg.BackupKeep.Value), sourceOf(cfg.BackupKeep.Source, cfg.BackupKeep.Origin))
+	// Paths are usually longer than the value column.
 	fmt.Fprintf(&b, "%-25s%s\n%-25s(%s)\n", "db_path", cfg.DBPath.Value, "", sourceOf(cfg.DBPath.Source, cfg.DBPath.Origin))
+	backupSource := sourceOf(cfg.BackupDir.Source, cfg.BackupDir.Origin)
+	if cfg.BackupDir.Value == "" {
+		backupSource = "default: next to the vault"
+	}
+	fmt.Fprintf(&b, "%-25s%s\n%-25s(%s)\n", "backup.dir", cfg.BackupFolder(), "", backupSource)
 
 	_, err := io.WriteString(w, b.String())
 	return err

@@ -87,7 +87,7 @@ A recovery key lets someone who forgot the master password set a new one. There'
 - **Using it.** `sesh recover` unwraps the vault key with the typed key, checks it against the vault's verify blob, and re-encrypts the vault under a new master password, as a password change does. The used key then stops working (the change removes its record), and a new one is offered at once.
 - **What changes.** The vault opens with the master password, an enrolled fingerprint on that Mac (Touch ID), **or** the recovery key together with the vault file. The paper key can't be guessed but can be found; keep it away from the computer.
 - **The record alone** reveals nothing: a public key and a wrap only the paper key opens.
-- **Removing it.** `sesh recovery remove` deletes the record, and the vault is written so that deleted rows leave nothing behind in the file (SQLite's `secure_delete`). A backup made while the key was set still holds a wrap of the same vault key, though. If the paper key may have been seen, remove it and then change the master password (`sesh --rekey`), which gives the vault a new key that no old wrap opens.
+- **Removing it.** `sesh recovery remove` deletes the record, and the vault is written so that deleted rows leave nothing behind in the file (SQLite's `secure_delete`). A backup made while the key was set still holds a wrap of the same vault key, though, and sesh makes backups automatically (see Backups, below). If the paper key may have been seen, remove it, then change the master password (`sesh --rekey`), which gives the vault a new key that no old wrap opens, and delete the backups made before: `recovery remove`, `recovery new` (replacing a key) and `--rekey` each offer to, at a terminal.
 - **Tampering.** A process running as the user could replace the public key in the vault's `recovery` record, so that the next password change wraps the vault key to its own key. The same is true of `touchid.key`. It's accepted for the same reason: code running as the user can already ask an unlocked agent to decrypt everything, or replace the sesh binary.
 
 ##### Sesh agent
@@ -147,7 +147,7 @@ Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext
 
 - **No plaintext-on-disk window.** Unlike the export-then-import workaround, the change never writes a plaintext-equivalent file (an encrypted export still sits on disk encrypted only with the export password). All re-encryption happens in-process; only encrypted-at-rest databases ever touch the filesystem.
 - **Per-row salt regeneration.** Every entry gets a fresh per-row salt under the new key. Encrypted ciphertext changes for every row even when the plaintext is identical.
-- **All or nothing, in one file.** The entries, the key record (a new salt, and a verify blob for the new key) and the recovery key record, re-wrapped to the new key, change in one transaction; a failure or a crash leaves the vault as it was. No copy of the vault under the old key is made. Once the change is folded into the vault file, right after it commits, the file no longer holds the old ciphertexts (`secure_delete` zeroes freed space). Another sesh command with the vault open can hold that off; sesh then warns that the file on its own still holds the vault under the old password until that command ends. On SSDs and copy-on-write filesystems, though, no overwrite can guarantee the old bytes are gone from the disk.
+- **All or nothing, in one file.** The entries, the key record (a new salt, and a verify blob for the new key) and the recovery key record, re-wrapped to the new key, change in one transaction; a failure or a crash leaves the vault as it was. The change makes no copy of the vault under the old key, but the automatic backups made before it are copies under the old key (see Backups, below). Once the change is folded into the vault file, right after it commits, the file no longer holds the old ciphertexts (`secure_delete` zeroes freed space). Another sesh command with the vault open can hold that off; sesh then warns that the file on its own still holds the vault under the old password until that command ends. On SSDs and copy-on-write filesystems, though, no overwrite can guarantee the old bytes are gone from the disk.
 - **No write under the old key.** Every entry write runs in a transaction that first checks the vault's key record is still the one its key was checked against, so a command that unlocked the vault before the change can't save under the old key afterwards, and a second password change can't undo the first. A recovery key record is saved only for the key record it was wrapped to.
 
 ### Why This Matters
@@ -291,6 +291,15 @@ type ServiceProvider interface {
 - **Open Source**: Complete transparency in implementation
 - **Minimal Dependencies**: Reduced supply chain risk
 
+## Backups
+
+sesh backs up the vault automatically: once a day by default, the first time a command unlocks it, keeping the newest 7 in a `backups` folder next to the vault (`backup.dir`, `backup.every_days`, `backup.keep`).
+
+- **What a backup is.** A consistent copy of the vault file (SQLite's `VACUUM INTO`). The secrets in it are encrypted with the vault key, as in the vault, so making one needs no password, and nothing is decrypted. The backup is as protected as the vault: names, usernames, folders, tags and the audit log are readable in it, as in the vault, and it's readable only by you (0600).
+- **It opens with the credentials it was made with.** That means the master password at the time, or the recovery key at the time, since the backup holds the recovery record from then. A later password change or a new recovery key doesn't reach old backups. If the old password or recovery key may have leaked, change it and delete the backups made before: `--rekey`, `recovery new` (replacing a key) and `recovery remove` each say how many there are and offer to delete them and make a fresh one. Without a terminal they only say so.
+- **A damaged vault isn't copied.** Each backup runs SQLite's integrity check first, so damage doesn't replace the good backups day by day.
+- **Where they go matters.** A backups folder in a synced folder sends copies of the encrypted vault wherever that folder syncs: the same protection as syncing the vault itself.
+
 ## Comparison with Alternatives
 
 ### vs Mobile Authenticator Apps
@@ -298,7 +307,7 @@ type ServiceProvider interface {
 | Feature | Mobile Apps | sesh |
 |---------|-------------|------|
 | Storage Location | Phone (unknown security) | Encrypted vault on your machine |
-| Backup/Sync | Often cloud-based | Local only (encrypted backup/export planned) |
+| Backup/Sync | Often cloud-based | Automatic local backups of the encrypted vault; encrypted export for moving elsewhere |
 | Privacy | Varies (often poor) | Complete |
 | Scriptability | None | Full CLI |
 | Audit Trail | App-controlled | OS-level |

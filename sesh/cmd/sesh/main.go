@@ -239,6 +239,7 @@ func needsCredentialStore(args []string) bool {
 var subcommands = []candidate{
 	{"agent", "Control the sesh agent"},
 	{"audit", "Show the vault's audit log, or prune it"},
+	{"backup", "Copy the vault now, into the backups folder or a file"},
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 	{"config", "Show settings and where each comes from"},
 	{"doctor", "Check sesh's setup, and that the vault can all be read"},
@@ -335,6 +336,7 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 	}
 	pruneAuditLog(store, cfg)
 	warnAuditSize(store, cfg)
+	autoBackup(store, cfg)
 	return store, nil
 }
 
@@ -791,6 +793,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "backup":
+		if err := runBackup(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "doctor":
 		if err := runDoctor(app, rest); err != nil {
 			fatal(app, err)
@@ -1076,6 +1083,7 @@ func (a *App) PrintUsage() error {
 		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"  sesh audit [prune]            Show the vault's audit log, or prune it",
 		"  sesh doctor                   Check the setup, and that the vault can all be read",
+		"  sesh backup [file]            Copy the vault now (sesh also does this automatically)",
 		"  sesh folder move|rename|list  File entries in folders",
 		"  sesh tag add|remove|rename|list  Tag entries",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",

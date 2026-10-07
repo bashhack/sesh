@@ -148,10 +148,15 @@ func (s *Store) Verify() (VerifyReport, error) {
 	return r, nil
 }
 
+// rowsQuerier is a *sql.DB or a *sql.Tx, for queries returning rows.
+type rowsQuerier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
 // integrityCheck runs SQLite's integrity check, returning what it found
 // wrong (nothing when the file is sound).
-func integrityCheck(tx *sql.Tx) (_ []string, err error) {
-	rows, err := tx.Query(`PRAGMA integrity_check`)
+func integrityCheck(q rowsQuerier) (_ []string, err error) {
+	rows, err := q.Query(`PRAGMA integrity_check`)
 	if err != nil {
 		return nil, err
 	}

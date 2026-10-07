@@ -115,6 +115,11 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		}
 	case "init":
 		specs = append(flagSpecs(func(fs *flag.FlagSet) { addInitFlags(fs) }, nil), settingSpecs()...)
+	case "backup":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) }, nil)
+		if cur != "" && !strings.HasPrefix(cur, "-") {
+			return nil, true // the file to write
+		}
 	case "touchid":
 		verbs = touchIDCommands
 	case "recovery":

@@ -182,7 +182,11 @@ func runRecovery(app *App, args []string) error {
 		if err := database.RemoveRecovery(dbPath); err != nil {
 			return err
 		}
-		return out("Removed the recovery key; it no longer opens this vault.")
+		if err := out("Removed the recovery key; it no longer opens this vault."); err != nil {
+			return err
+		}
+		offerToRemoveOldBackups(app, cfg, "recovery key")
+		return nil
 	case "new":
 		if err := requireVault(dbPath, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
 			return err
@@ -191,7 +195,9 @@ func runRecovery(app *App, args []string) error {
 		if !p.interactive || p.readLine == nil {
 			return errors.New("sesh recovery new needs a terminal: it shows the key once and asks you to confirm you've saved it")
 		}
+		replacing := false
 		if f, err := database.ReadRecovery(dbPath); err == nil {
+			replacing = true
 			yes, err := p.confirm(fmt.Sprintf("This vault already has a recovery key (made %s). A new one replaces it, and the old one stops working. Make a new one? [Y/n] ", f.CreatedAt.Local().Format("2006-01-02")))
 			if err != nil || !yes {
 				return out("The existing recovery key was kept.")
@@ -218,8 +224,12 @@ func runRecovery(app *App, args []string) error {
 			return err
 		}
 		defer closeAgentConn(conn)
-		_, err = makeRecoveryKey(agentWrap(conn), dbPath, mat.Verify, p)
-		return err
+		made, err := makeRecoveryKey(agentWrap(conn), dbPath, mat.Verify, p)
+		if err != nil || !made || !replacing {
+			return err
+		}
+		offerToRemoveOldBackups(app, cfg, "recovery key")
+		return nil
 	default:
 		return fmt.Errorf("unknown recovery command %q (use new, remove, or status)", args[0])
 	}

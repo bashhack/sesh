@@ -20,11 +20,14 @@ import (
 )
 
 // doctorVault is a vault with two entries, opened with SESH_MASTER_PASSWORD.
+// Automatic backups are off, so doctor's Backups row is "-" unless a test
+// is about backups.
 func doctorVault(t *testing.T) *rekeyTestEnv {
 	t.Helper()
 	env := setupRekeyEnv(t)
 	useConfigFile(t, "")
 	t.Setenv("SESH_MASTER_PASSWORD", "verify-password-1234")
+	t.Setenv("SESH_BACKUP_EVERY_DAYS", "0")
 	populatePasswordStore(t, env, map[string]string{"password/github/alice": "hunter2", "api_key/openai": "sk-test"})
 	return env
 }
@@ -87,6 +90,7 @@ func TestDoctor_ASoundVault(t *testing.T) {
 		"  ok    Vault file      only you can read or change it\n" +
 		"  -     Agent           not running; it starts when a command needs it\n" +
 		"  ok    Key settings    19 MiB, 2 passes, 1 thread\n" +
+		"  -     Backups         automatic backups are off (backup.every_days = 0)\n" +
 		"\nVault: " + tildePath(env.dbPath) + "\n" +
 		"  ok    File            ok\n" +
 		"  ok    Entries         2 entries, all readable\n" +

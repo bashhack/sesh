@@ -29,6 +29,13 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("XDG_CONFIG_HOME", dir); err != nil {
 		panic(err)
 	}
+	// A developer's own backup settings never reach a test: a test vault
+	// backed up into their backups folder could prune their real backups.
+	for _, k := range []string{"SESH_BACKUP_DIR", "SESH_BACKUP_EVERY_DAYS", "SESH_BACKUP_KEEP"} {
+		if err := os.Unsetenv(k); err != nil {
+			panic(err)
+		}
+	}
 	// The vaults tests create use the cheapest settings sesh accepts, so
 	// the many derivations stay fast.
 	for k, v := range map[string]string{"SESH_KDF_MEMORY": "19MiB", "SESH_KDF_TIME": "2", "SESH_KDF_THREADS": "1"} {
