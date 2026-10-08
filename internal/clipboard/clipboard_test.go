@@ -42,6 +42,12 @@ func stubExec(t *testing.T, run func(name string, args ...string) *exec.Cmd) *[]
 	return &calls
 }
 
+// drain is a command that reads its stdin and succeeds, so a write to it
+// never meets a closed pipe.
+func drain() *exec.Cmd {
+	return exec.Command("sh", "-c", "cat >/dev/null")
+}
+
 // waitForFile waits for path to hold want, as a detached command writes it.
 func waitForFile(t *testing.T, path, want string) {
 	t.Helper()
@@ -149,7 +155,7 @@ func TestCopy_Errors(t *testing.T) {
 		run     func(string, ...string) *exec.Cmd
 		wantSub string
 	}{
-		"tool fails": {run: func(string, ...string) *exec.Cmd { return exec.Command("false") }, wantSub: "pbcopy: exit status 1"},
+		"tool fails": {run: func(string, ...string) *exec.Cmd { return exec.Command("sh", "-c", "cat >/dev/null; exit 1") }, wantSub: "pbcopy: exit status 1"},
 		"what the tool said": {run: func(string, ...string) *exec.Cmd {
 			return exec.Command("sh", "-c", `cat >/dev/null; echo "Error: Can't open display: :0" >&2; exit 1`)
 		}, wantSub: "pbcopy: exit status 1: Error: Can't open display: :0"},
@@ -166,7 +172,7 @@ func TestCopy_Errors(t *testing.T) {
 	}
 	t.Run("nothing found runs nothing", func(t *testing.T) {
 		stubSystem(t, "linux", nil)
-		calls := stubExec(t, func(string, ...string) *exec.Cmd { return exec.Command("true") })
+		calls := stubExec(t, func(string, ...string) *exec.Cmd { return drain() })
 		if err := Copy("s3cret"); !errors.Is(err, ErrNoDisplay) {
 			t.Errorf("Copy() = %v, want ErrNoDisplay", err)
 		}
@@ -185,7 +191,7 @@ func TestCopyWithAutoClear(t *testing.T) {
 		if name == "sh" {
 			return exec.Command("sh", "-c", `cat > "$0.tmp" && mv "$0.tmp" "$0"`, stdin)
 		}
-		return exec.Command("true")
+		return drain()
 	})
 	if err := CopyWithAutoClear("s3cret", 30*time.Second); err != nil {
 		t.Fatalf("CopyWithAutoClear: %v", err)
@@ -222,7 +228,7 @@ func TestSpawnClear_ScriptShape(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			calls := stubExec(t, func(string, ...string) *exec.Cmd { return exec.Command("true") })
+			calls := stubExec(t, func(string, ...string) *exec.Cmd { return drain() })
 			if err := spawnClear(tool, "the-secret", tc.timeout); err != nil {
 				t.Fatalf("spawnClear: %v", err)
 			}
