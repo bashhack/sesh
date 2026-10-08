@@ -75,13 +75,18 @@ func (d *Details) Field(name string) (Field, bool) {
 //   - notes on a secure note, whose secret is the note;
 //   - a URL or plain value that isn't one line of valid text, or a URL
 //     longer than MaxURLLength;
-//   - a field name that breaks the tag rules, is reserved, is used twice,
-//     or is longer than MaxFieldNameLength;
+//   - notes or a secret value that isn't valid text (they may hold
+//     several lines);
+//   - a field name that breaks the tag rules, is reserved, is used twice
+//     (in any case), or is longer than MaxFieldNameLength;
 //   - an empty value, more than MaxFields fields, or notes and values
 //     together over MaxDetailsSize.
 func (d *Details) Check(kind Kind) error {
 	if kind == KindNote && len(d.Notes) > 0 {
 		return errors.New("a secure note can't have notes: its secret is the note")
+	}
+	if !utf8.Valid(d.Notes) {
+		return errors.New("the notes aren't valid text")
 	}
 	if err := checkLine("URL", d.URL); err != nil {
 		return err
@@ -93,22 +98,27 @@ func (d *Details) Check(kind Kind) error {
 		return fmt.Errorf("an entry can have at most %d fields, not %d", MaxFields, len(d.Fields))
 	}
 	size := len(d.Notes)
-	seen := make(map[string]bool, len(d.Fields))
+	seen := make(map[string]string, len(d.Fields))
 	for _, f := range d.Fields {
 		if err := CheckFieldName(f.Name); err != nil {
 			return err
 		}
-		if seen[f.Name] {
-			return fmt.Errorf("the field %q is there twice", f.Name)
+		if first, ok := seen[strings.ToLower(f.Name)]; ok {
+			if first == f.Name {
+				return fmt.Errorf("the field %q is there twice", f.Name)
+			}
+			return fmt.Errorf("the field %q is there twice (as %q)", f.Name, first)
 		}
-		seen[f.Name] = true
+		seen[strings.ToLower(f.Name)] = f.Name
 		if len(f.Value) == 0 {
 			return fmt.Errorf("the field %q has no value", f.Name)
 		}
-		if !f.Secret {
-			if err := checkLine(fmt.Sprintf("field %q", f.Name), string(f.Value)); err != nil {
-				return err
+		if f.Secret {
+			if !utf8.Valid(f.Value) {
+				return fmt.Errorf("the field %q isn't valid text", f.Name)
 			}
+		} else if err := checkLine(fmt.Sprintf("field %q", f.Name), string(f.Value)); err != nil {
+			return err
 		}
 		size += len(f.Value)
 	}
@@ -243,9 +253,19 @@ func DecodeEntryDetails(e *Entry, url, plain string) error {
 // together: e as DecodeEntryDetails read it, and the opened sealed bytes,
 // nil when there are none. The secret values must be the ones e names;
 // the result holds copies, which the caller zeroes.
-func DecodeDetails(e *Entry, sealed []byte) (Details, error) {
+func DecodeDetails(e *Entry, sealed []byte) (_ Details, err error) {
 	d := Details{URL: e.URL}
 	secrets := map[string][]byte{}
+	// On failure, every secret read so far is zeroed: those in d, and
+	// those still waiting in secrets.
+	defer func() {
+		if err != nil {
+			d.Zero()
+			for _, v := range secrets {
+				secure.SecureZeroBytes(v)
+			}
+		}
+	}()
 	if sealed != nil {
 		notes, values, err := parseSealed(sealed)
 		if err != nil {
@@ -254,15 +274,13 @@ func DecodeDetails(e *Entry, sealed []byte) (Details, error) {
 		d.Notes, secrets = notes, values
 	}
 	if e.HasNotes != (len(d.Notes) > 0) {
-		d.Zero()
 		return Details{}, fmt.Errorf("read the details of %s: the notes don't match their record", e.Key)
 	}
 	for _, f := range e.Fields {
-		field := Field{Name: f.Name, Secret: f.Secret, Value: f.Value}
+		field := Field{Name: f.Name, Secret: f.Secret}
 		if f.Secret {
 			v, ok := secrets[f.Name]
 			if !ok {
-				d.Zero()
 				return Details{}, fmt.Errorf("read the details of %s: the secret field %q has no value", e.Key, f.Name)
 			}
 			field.Value = v
@@ -273,10 +291,6 @@ func DecodeDetails(e *Entry, sealed []byte) (Details, error) {
 		d.Fields = append(d.Fields, field)
 	}
 	if len(secrets) > 0 {
-		d.Zero()
-		for _, v := range secrets {
-			secure.SecureZeroBytes(v)
-		}
 		return Details{}, fmt.Errorf("read the details of %s: there are secret values for fields it doesn't have", e.Key)
 	}
 	return d, nil
@@ -332,6 +346,10 @@ func parseSealed(b []byte) (notes []byte, values map[string][]byte, err error) {
 		}
 		value, ok := next()
 		if !ok {
+			return fail()
+		}
+		if _, ok := values[string(name)]; ok {
+			secure.SecureZeroBytes(value)
 			return fail()
 		}
 		values[string(name)] = value

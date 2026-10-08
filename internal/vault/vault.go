@@ -436,6 +436,9 @@ type Store interface {
 	// and times (a zero time means now), keeping its details (see
 	// SetDetails). Import and key changes use it.
 	Save(e *Entry, secret []byte) error
+	// SaveWithDetails is Save, also replacing the entry's details with d
+	// (none, when d is zero), all in one write; d must pass Details.Check.
+	SaveWithDetails(e *Entry, secret []byte, d *Details) error
 	// Details returns the entry's URL, notes, and custom fields, secret
 	// values included, which the caller zeroes (Details.Zero).
 	Details(k Key) (Details, error)

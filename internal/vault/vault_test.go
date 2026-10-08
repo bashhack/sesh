@@ -210,8 +210,20 @@ func TestDetailsEncoding(t *testing.T) {
 	if _, err := vault.DecodeDetails(&e, onlyPin); err == nil || !strings.Contains(err.Error(), `the secret field "otp-seed" has no value`) {
 		t.Errorf("a missing secret value: %v", err)
 	}
+	// A name sealed twice is damage, not a value to pick from.
+	twice := append(append([]byte{1, 0, 0, 0, 0, 0, 0, 0, 2}, part("pin")...), part("1")...)
+	twice = append(append(twice, part("pin")...), part("2")...)
+	pinOnly := vault.Entry{Key: k, Fields: []vault.Field{{Name: "pin", Secret: true}}}
+	if _, err := vault.DecodeDetails(&pinOnly, twice); err == nil {
+		t.Error("a name sealed twice decoded")
+	}
 	_, _, extra, _ := vault.EncodeDetails(&vault.Details{Notes: []byte("x"), Fields: []vault.Field{{Name: "pin", Value: []byte("1"), Secret: true}, {Name: "otp-seed", Value: []byte("1"), Secret: true}, {Name: "more", Value: []byte("1"), Secret: true}}}) //nolint:errcheck // can't fail
 	if _, err := vault.DecodeDetails(&e, extra); err == nil || !strings.Contains(err.Error(), "secret values for fields it doesn't have") {
 		t.Errorf("an extra secret value: %v", err)
 	}
+}
+
+// part is one length-prefixed part of the sealed layout.
+func part(s string) []byte {
+	return append([]byte{0, 0, 0, byte(len(s))}, s...)
 }

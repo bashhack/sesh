@@ -164,7 +164,8 @@ func (s *Store) Verify() (VerifyReport, error) {
 var errCouldntCheck = errors.New("couldn't check")
 
 // checkDetails opens an entry's details as Details would, returning what
-// doesn't read. A failure that isn't damage wraps errCouldntCheck.
+// doesn't read or breaks the rules SetDetails keeps. A failure that isn't
+// damage wraps errCouldntCheck.
 func (s *Store) checkDetails(k vault.Key, url, details string, sealed, salt []byte) error {
 	e := vault.Entry{Key: k}
 	if err := vault.DecodeEntryDetails(&e, url, details); err != nil {
@@ -186,8 +187,8 @@ func (s *Store) checkDetails(k vault.Key, url, details string, sealed, salt []by
 	if err != nil {
 		return err
 	}
-	d.Zero()
-	return nil
+	defer d.Zero()
+	return d.Check(k.Kind)
 }
 
 // rowsQuerier is a *sql.DB or a *sql.Tx, for queries returning rows.

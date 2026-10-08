@@ -206,8 +206,8 @@ func TestRekey_ReSealsDetails(t *testing.T) {
 }
 
 // The check opens every entry's details too: sealed details that don't
-// decrypt, a readable part that doesn't parse, and the two disagreeing are
-// each a details problem; sound details are none.
+// decrypt, a readable part that doesn't parse, the two disagreeing, and
+// details breaking the rules are each a details problem.
 func TestVerify_ReportsUnreadableDetails(t *testing.T) {
 	_, s := rekeyVault(t)
 	d := testDetails()
@@ -223,6 +223,8 @@ func TestVerify_ReportsUnreadableDetails(t *testing.T) {
 	sqlExecDB(t, s, `UPDATE entries SET sealed_details = x'00112233445566778899aabbccddeeff00112233445566778899' WHERE service = 'sealed'`)
 	sqlExecDB(t, s, `UPDATE entries SET details = '{' WHERE service = 'plain'`)
 	sqlExecDB(t, s, `UPDATE entries SET details = '{"fields":[{"name":"account","value":"1"}]}' WHERE service = 'disagree'`)
+	// Read back fine, but with a name no field can have.
+	sqlExecDB(t, s, `UPDATE entries SET details = '{"notes":true,"fields":[{"name":"url","value":"x"},{"name":"pin","secret":true}]}' WHERE service = 'bank'`)
 	r, err := s.Verify()
 	if err != nil {
 		t.Fatal(err)
@@ -235,6 +237,7 @@ func TestVerify_ReportsUnreadableDetails(t *testing.T) {
 		got = append(got, p.Key.Service+": "+p.Err.Error())
 	}
 	want := []string{
+		`bank: the field name "url" is reserved`,
 		"disagree: read the details of password/disagree: the notes don't match their record",
 		"plain: read the details of password/plain",
 		"sealed: its notes and secret fields don't decrypt with the vault's key",
@@ -265,4 +268,35 @@ func TestRestore_BringsBackDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkDetailsOf(t, s, bank, &d)
+}
+
+// Reading sealed details is an access event; reading readable-only details
+// isn't; setting them is a modify event.
+func TestDetails_Audit(t *testing.T) {
+	_, s := rekeyVault(t)
+	bank := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	count := func(event string) int {
+		var n int
+		if err := s.db.QueryRow(`SELECT count(*) FROM audit_log WHERE event_type = ? AND detail LIKE '%Details'`, event).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if err := s.SetDetails(bank, &vault.Details{URL: "https://bank.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Details(bank); err != nil {
+		t.Fatal(err)
+	}
+	if count("modify") != 1 || count("access") != 0 {
+		t.Errorf("after a readable-only read: modify %d, access %d; want 1, 0", count("modify"), count("access"))
+	}
+	d := testDetails()
+	if err := s.SetDetails(bank, &d); err != nil {
+		t.Fatal(err)
+	}
+	checkDetailsOf(t, s, bank, &d)
+	if count("modify") != 2 || count("access") != 1 {
+		t.Errorf("after a sealed read: modify %d, access %d; want 2, 1", count("modify"), count("access"))
+	}
 }

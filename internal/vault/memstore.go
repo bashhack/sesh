@@ -91,6 +91,19 @@ func (m *MemStore) Put(k Key, secret []byte) error {
 
 // Save implements Store.
 func (m *MemStore) Save(e *Entry, secret []byte) error {
+	return m.save(e, secret, nil)
+}
+
+// SaveWithDetails implements Store.
+func (m *MemStore) SaveWithDetails(e *Entry, secret []byte, d *Details) error {
+	if err := d.Check(e.Kind); err != nil {
+		return err
+	}
+	return m.save(e, secret, d)
+}
+
+// save is Save, replacing the details with d unless it's nil.
+func (m *MemStore) save(e *Entry, secret []byte, d *Details) error {
 	if err := e.Key.Validate(); err != nil {
 		return err
 	}
@@ -114,7 +127,11 @@ func (m *MemStore) Save(e *Entry, secret []byte) error {
 		saved.UpdatedAt = now
 	}
 	saved.URL, saved.Fields, saved.HasNotes = "", nil, false
-	m.entries[e.Key] = memEntry{entry: saved, secret: bytes.Clone(secret), details: m.entries[e.Key].details}
+	details := m.entries[e.Key].details
+	if d != nil {
+		details = cloneDetails(d)
+	}
+	m.entries[e.Key] = memEntry{entry: saved, secret: bytes.Clone(secret), details: details}
 	return nil
 }
 

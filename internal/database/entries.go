@@ -103,18 +103,26 @@ func (s *Store) Get(k vault.Key) ([]byte, error) {
 
 // Put implements vault.Store.
 func (s *Store) Put(k vault.Key, secret []byte) error {
-	return s.write(&vault.Entry{Key: k}, secret, false)
+	return s.write(&vault.Entry{Key: k}, secret, false, nil)
 }
 
 // Save implements vault.Store.
 func (s *Store) Save(e *vault.Entry, secret []byte) error {
-	return s.write(e, secret, true)
+	return s.write(e, secret, true, nil)
+}
+
+// SaveWithDetails implements vault.Store.
+func (s *Store) SaveWithDetails(e *vault.Entry, secret []byte, d *vault.Details) error {
+	if err := d.Check(e.Kind); err != nil {
+		return err
+	}
+	return s.write(e, secret, true, d)
 }
 
 // write stores e's secret. whole also replaces its settings, folder, tags,
 // and times; otherwise an existing entry keeps them, except its update
-// time.
-func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
+// time. Details, when not nil, replace the entry's in the same write.
+func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Details) error {
 	if err := e.Key.Validate(); err != nil {
 		return err
 	}
@@ -138,6 +146,12 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
 	if err != nil {
 		return fmt.Errorf("encrypt %s: %w", e.Key, err)
 	}
+	var sd sealedDetails
+	if d != nil {
+		if sd, err = s.sealDetails(e.Key, d); err != nil {
+			return err
+		}
+	}
 	now := time.Now().UTC()
 	created, updated := e.CreatedAt, e.UpdatedAt
 	if created.IsZero() {
@@ -150,14 +164,17 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
 	if whole {
 		onConflict += `, settings = excluded.settings, folder = excluded.folder, created_at = excluded.created_at`
 	}
+	if d != nil {
+		onConflict += `, url = excluded.url, details = excluded.details, sealed_details = excluded.sealed_details, details_salt = excluded.details_salt`
+	}
 	err = s.inTx(func(tx *sql.Tx) error {
 		var id int64
 		err := tx.QueryRow(`
-			INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, folder, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (kind, service, username) DO UPDATE SET `+onConflict+`
 			RETURNING id`,
-			string(e.Kind), e.Service, e.Username, encData, salt, settings, e.Folder, created, updated,
+			string(e.Kind), e.Service, e.Username, encData, salt, settings, e.Folder, sd.url, sd.plain, sd.sealed, sd.salt, created, updated,
 		).Scan(&id)
 		if err != nil || !whole {
 			return err

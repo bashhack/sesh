@@ -378,6 +378,45 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		}
 	})
 
+	t.Run("details: setting them keeps the update time; saving with them replaces them", func(t *testing.T) {
+		s := newStore(t)
+		made := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+		if err := s.Save(&vault.Entry{Key: gh, CreatedAt: made, UpdatedAt: made}, []byte("pw")); err != nil {
+			t.Fatal(err)
+		}
+		want := details()
+		if err := s.SetDetails(gh, &want); err != nil {
+			t.Fatal(err)
+		}
+		if e, err := s.Lookup(gh); err != nil || !e.UpdatedAt.Equal(made) {
+			t.Errorf("update time after SetDetails = %v, %v; want %v kept", e.UpdatedAt, err, made)
+		}
+		// SaveWithDetails writes the entry and its details together,
+		// replacing what was there; none removes them.
+		if err := s.SaveWithDetails(&vault.Entry{Key: gh, Folder: "work"}, []byte("pw-2"), &vault.Details{URL: "https://new.example"}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.Details(gh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkDetails(t, &got, &vault.Details{URL: "https://new.example"})
+		if err := s.SaveWithDetails(&vault.Entry{Key: gh}, []byte("pw-3"), &vault.Details{}); err != nil {
+			t.Fatal(err)
+		}
+		if d, err := s.Details(gh); err != nil || !d.IsZero() {
+			t.Errorf("Details after saving with none = %+v, %v", d, err)
+		}
+		// Details the entry can't have are refused, and nothing is saved.
+		newKey := vault.Key{Kind: vault.KindNote, Service: "new"}
+		if err := s.SaveWithDetails(&vault.Entry{Key: newKey}, []byte("n"), &vault.Details{Notes: []byte("x")}); err == nil {
+			t.Error("SaveWithDetails with notes on a secure note succeeded")
+		}
+		if err := s.Exists(newKey); !errors.Is(err, vault.ErrNotFound) {
+			t.Errorf("the refused entry was saved: %v", err)
+		}
+	})
+
 	t.Run("details: put and save keep them, delete removes them", func(t *testing.T) {
 		s := newStore(t)
 		if err := s.Put(gh, []byte("pw")); err != nil {
@@ -431,6 +470,9 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			{gh, `the field "pin" is there twice`, vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte("1")}, {Name: "pin", Value: []byte("2"), Secret: true}}}},
 			{gh, `the field "pin" has no value`, vault.Details{Fields: []vault.Field{{Name: "pin", Secret: true}}}},
 			{gh, `the field "host" contains a control character`, vault.Details{Fields: []vault.Field{{Name: "host", Value: []byte("a\tb")}}}},
+			{gh, `the field "PIN" is there twice (as "pin")`, vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte("1")}, {Name: "PIN", Value: []byte("2")}}}},
+			{gh, "the notes aren't valid text", vault.Details{Notes: []byte{0xff, 'x'}}},
+			{gh, `the field "pin" isn't valid text`, vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte{0xfe}, Secret: true}}}},
 			{gh, "take 1048577 bytes together", vault.Details{Notes: make([]byte, vault.MaxDetailsSize), Fields: []vault.Field{{Name: "pin", Value: []byte("1"), Secret: true}}}},
 		}
 		for i := range tests {

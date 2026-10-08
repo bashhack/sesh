@@ -347,15 +347,12 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
 			continue
 		}
-		// The entry keeps its settings, folder, tags, times, and details; a
-		// zero time means now. An entry it replaces gets the file's
-		// details, none included.
+		// The entry keeps its settings, folder, tags, times, and details,
+		// written together; a zero time means now. An entry it replaces
+		// gets the file's details, none included.
 		secret := []byte(e.Secret)
-		err = m.store.Save(&vault.Entry{Key: k, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt}, secret)
+		err = m.store.SaveWithDetails(&vault.Entry{Key: k, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt}, secret, &details)
 		secure.SecureZeroBytes(secret)
-		if err == nil && (exists || !details.IsZero()) {
-			err = m.store.SetDetails(k, &details)
-		}
 		details.Zero()
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))

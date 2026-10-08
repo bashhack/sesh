@@ -57,27 +57,44 @@ func (s *Store) Details(k vault.Key) (vault.Details, error) {
 	return d, nil
 }
 
+// sealedDetails are an entry's details as stored: the URL, the readable
+// part, and the sealed part with its salt (nil for none).
+type sealedDetails struct {
+	url, plain   string
+	sealed, salt []byte
+}
+
+// sealDetails encodes d for k's row, sealing its notes and secret values
+// to k.
+func (s *Store) sealDetails(k vault.Key, d *vault.Details) (sealedDetails, error) {
+	url, plain, sealedPlain, err := vault.EncodeDetails(d)
+	if err != nil {
+		return sealedDetails{}, err
+	}
+	defer secure.SecureZeroBytes(sealedPlain)
+	sd := sealedDetails{url: url, plain: plain}
+	if sealedPlain != nil {
+		if sd.sealed, sd.salt, err = s.oracle.EncryptEntry(sealedPlain, detailsAAD(k)); err != nil {
+			return sealedDetails{}, fmt.Errorf("encrypt the details of %s: %w", k, err)
+		}
+	}
+	return sd, nil
+}
+
 // SetDetails implements vault.Store. The update time stays: it follows
 // the secret.
 func (s *Store) SetDetails(k vault.Key, d *vault.Details) error {
 	if err := d.Check(k.Kind); err != nil {
 		return err
 	}
-	url, plain, sealedPlain, err := vault.EncodeDetails(d)
+	sd, err := s.sealDetails(k, d)
 	if err != nil {
 		return err
-	}
-	defer secure.SecureZeroBytes(sealedPlain)
-	var sealed, salt []byte
-	if sealedPlain != nil {
-		if sealed, salt, err = s.oracle.EncryptEntry(sealedPlain, detailsAAD(k)); err != nil {
-			return fmt.Errorf("encrypt the details of %s: %w", k, err)
-		}
 	}
 	var res sql.Result
 	err = s.inTx(func(tx *sql.Tx) (err error) {
 		res, err = tx.Exec(`UPDATE entries SET url = ?, details = ?, sealed_details = ?, details_salt = ? WHERE kind = ? AND service = ? AND username = ?`,
-			url, plain, sealed, salt, string(k.Kind), k.Service, k.Username)
+			sd.url, sd.plain, sd.sealed, sd.salt, string(k.Kind), k.Service, k.Username)
 		return err
 	})
 	if err != nil {
