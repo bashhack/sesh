@@ -143,6 +143,17 @@ func runEdit(app *App, args []string) error {
 		}
 		return err
 	}
+	// What the details change can't do to this entry is refused before
+	// anything is typed.
+	if change != nil {
+		current, err := store.Lookup(from)
+		if err != nil {
+			return err
+		}
+		if err := provider.CheckAgainst(&current, change); err != nil {
+			return err
+		}
+	}
 
 	if asked {
 		to, err = askNames(app, from)
@@ -209,7 +220,7 @@ func runEdit(app *App, args []string) error {
 		in := &provider.DetailsInput{
 			Stdin: app.Stdin, Stderr: app.Stderr, ReadSecret: readSecret, Name: to.String(), Terminal: terminal,
 			Notes: func() ([]byte, error) {
-				d, err := store.Details(from)
+				d, err := store.Details(from, "notes")
 				if err != nil {
 					return nil, err
 				}
@@ -220,6 +231,10 @@ func runEdit(app *App, args []string) error {
 			},
 		}
 		if err := f.details.Read(change, in); err != nil {
+			if errors.Is(err, provider.ErrNothingTyped) {
+				_, err := fmt.Fprintln(app.Stderr, "Nothing changed.")
+				return err
+			}
 			return err
 		}
 		e.Details = change

@@ -52,9 +52,8 @@ func TestShow_HidesSecrets(t *testing.T) {
 	}
 	want := "password/github/alice\n" +
 		"  URL       https://github.com/login\n" +
-		"  Folder    work\n" +
-		"  Tags      code\n" +
-		"  Password  ••••••••   (--reveal)\n" +
+		"  Folder    work   Tags: code\n" +
+		"  Password  ••••••••   (get, or --reveal)\n" +
 		"  Notes     ••••••••   (--reveal)\n" +
 		"  Fields\n" +
 		"    recovery-email   alice@example.com\n" +
@@ -67,7 +66,7 @@ func TestShow_HidesSecrets(t *testing.T) {
 	}
 	// An entry with nothing more shows its secret's row alone.
 	out, err = runShowOut(t, "api_key/openai")
-	if err != nil || out != "api_key/openai\n  API key  ••••••••   (--reveal)\n" {
+	if err != nil || out != "api_key/openai\n  API key  ••••••••   (get, or --reveal)\n" {
 		t.Errorf("bare entry: %q, %v", out, err)
 	}
 }
@@ -83,8 +82,7 @@ func TestShow_Reveal(t *testing.T) {
 	}
 	want := "password/github/alice\n" +
 		"  URL       https://github.com/login\n" +
-		"  Folder    work\n" +
-		"  Tags      code\n" +
+		"  Folder    work   Tags: code\n" +
 		"  Password  old-pw\n" +
 		"  Notes     line one\n" +
 		"            line two\n" +

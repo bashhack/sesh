@@ -7,8 +7,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
+	"syscall"
 
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/vault"
@@ -196,6 +200,10 @@ func (f *DetailsFlags) Read(c *vault.DetailsChange, in *DetailsInput) error {
 			fmt.Fprintln(in.Stderr) //nolint:errcheck // ends the prompt line
 		} else {
 			v, err = io.ReadAll(io.LimitReader(in.Stdin, vault.MaxDetailsSize+1))
+			if err == nil && len(v) > vault.MaxDetailsSize {
+				secure.SecureZeroBytes(v)
+				return fmt.Errorf("the value for %s is over %d bytes, the most an entry holds; nothing changed", fl.Name, vault.MaxDetailsSize)
+			}
 			v = bytes.TrimSuffix(bytes.TrimSuffix(v, []byte("\n")), []byte("\r"))
 			if err == nil && bytes.ContainsAny(v, "\r\n") {
 				secure.SecureZeroBytes(v)
@@ -203,6 +211,7 @@ func (f *DetailsFlags) Read(c *vault.DetailsChange, in *DetailsInput) error {
 			}
 		}
 		if err != nil {
+			secure.SecureZeroBytes(v)
 			return fmt.Errorf("read the value for %s: %w", fl.Name, err)
 		}
 		if len(v) == 0 {
@@ -223,14 +232,20 @@ func (f *DetailsFlags) Read(c *vault.DetailsChange, in *DetailsInput) error {
 			}
 		}
 		notes, err = EditNotes(current)
-		secure.SecureZeroBytes(current)
+		// The new notes replace these, so they must still be the entry's
+		// when the change is written.
+		c.NotesBase, c.HasNotesBase = current, true
 	} else {
 		if in.Terminal {
-			fmt.Fprintf(in.Stderr, "Type the notes for %s, then press Ctrl-D on a new line:\n", in.Name) //nolint:errcheck // prompt
+			fmt.Fprintf(in.Stderr, "Type the notes for %s, then press Ctrl-D on a new line (Ctrl-D alone changes nothing):\n", in.Name) //nolint:errcheck // prompt
 		}
 		notes, err = io.ReadAll(io.LimitReader(in.Stdin, vault.MaxDetailsSize+1))
+		if err == nil && in.Terminal && len(notes) == 0 {
+			return ErrNothingTyped
+		}
 	}
 	if err != nil {
+		secure.SecureZeroBytes(notes)
 		return fmt.Errorf("read the notes: %w", err)
 	}
 	if len(notes) > vault.MaxDetailsSize {
@@ -241,9 +256,43 @@ func (f *DetailsFlags) Read(c *vault.DetailsChange, in *DetailsInput) error {
 	return nil
 }
 
+// ErrNothingTyped is notes ended at once at a terminal: nothing changes.
+// Piped-in empty notes remove them instead.
+var ErrNothingTyped = errors.New("nothing typed")
+
+// CheckAgainst refuses, before any value is read, what c can't do to the
+// entry e (none for a new entry): remove a field it doesn't have, or put a
+// plain value in place of a secret field.
+func CheckAgainst(e *vault.Entry, c *vault.DetailsChange) error {
+	names := make([]string, len(e.Fields))
+	for i, fl := range e.Fields {
+		names[i] = fl.Name
+	}
+	find := func(name string) int {
+		for i, n := range names {
+			if strings.EqualFold(n, name) {
+				return i
+			}
+		}
+		return -1
+	}
+	for _, name := range c.Remove {
+		if find(name) < 0 {
+			return vault.NoFieldToRemove(name, names)
+		}
+	}
+	for _, fl := range c.Set {
+		if i := find(fl.Name); i >= 0 && e.Fields[i].Secret && !fl.Secret {
+			return fmt.Errorf("%s is a secret field: set it with --secret-field %s, or remove it first to make it plain", names[i], names[i])
+		}
+	}
+	return nil
+}
+
 // ZeroChange overwrites the notes and secret values c holds.
 func ZeroChange(c *vault.DetailsChange) {
 	secure.SecureZeroBytes(c.Notes)
+	secure.SecureZeroBytes(c.NotesBase)
 	for _, fl := range c.Set {
 		if fl.Secret {
 			secure.SecureZeroBytes(fl.Value)
@@ -254,9 +303,11 @@ func ZeroChange(c *vault.DetailsChange) {
 // EditNotes opens notes in the user's editor ($VISUAL, then $EDITOR,
 // then vi), in a folder only they can read, in memory (/dev/shm) where
 // the system has one, and returns what was saved, less the newline an
-// editor ends a file with. The file is overwritten and the folder removed
-// afterwards; the editor may keep its own copies, such as swap files.
-func EditNotes(notes []byte) ([]byte, error) {
+// editor ends a file with; the notes themselves when the file is as it
+// was. Afterwards the file's bytes are overwritten and the folder
+// removed, even when sesh is interrupted or its terminal closes meanwhile;
+// the editor may keep its own copies, such as swap files.
+func EditNotes(notes []byte) (_ []byte, err error) {
 	editor := os.Getenv("VISUAL")
 	if editor == "" {
 		editor = os.Getenv("EDITOR")
@@ -273,18 +324,37 @@ func EditNotes(notes []byte) ([]byte, error) {
 		return nil, fmt.Errorf("make a folder for the editor: %w", err)
 	}
 	path := filepath.Join(dir, "notes.txt")
-	defer func() {
-		if info, err := os.Stat(path); err == nil {
-			_ = os.WriteFile(path, make([]byte, info.Size()), 0o600) //nolint:errcheck,gosec // best effort before removing
+	var once sync.Once
+	cleanUp := func() { once.Do(func() { wipe(path); _ = os.RemoveAll(dir) }) } //nolint:errcheck // best effort
+	defer cleanUp()
+
+	// While the editor runs, Ctrl-C and Ctrl-\ are the editor's, as git
+	// has it; a closed terminal or a request to stop cleans up first.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGTERM)
+	done := make(chan struct{})
+	defer func() { signal.Stop(sigs); close(done) }()
+	go func() {
+		for {
+			select {
+			case sig := <-sigs:
+				if sig == syscall.SIGHUP || sig == syscall.SIGTERM {
+					cleanUp()
+					os.Exit(1)
+				}
+			case <-done:
+				return
+			}
 		}
-		_ = os.RemoveAll(dir) //nolint:errcheck // best effort
 	}()
+
 	if err := os.WriteFile(path, notes, 0o600); err != nil {
 		return nil, fmt.Errorf("write the notes for the editor: %w", err)
 	}
 	// Through sh, so an editor given with flags ("code --wait") works.
 	cmd := exec.Command("sh", "-c", editor+` "$1"`, "sh", path) //nolint:gosec // the user's own editor setting
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "SESH_MASTER_PASSWORD=") })
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("the editor (%s) failed: %w; nothing changed", editor, err)
 	}
@@ -295,7 +365,27 @@ func EditNotes(notes []byte) ([]byte, error) {
 	defer file.Close() //nolint:errcheck // read only
 	saved, err := io.ReadAll(io.LimitReader(file, vault.MaxDetailsSize+2))
 	if err != nil {
+		secure.SecureZeroBytes(saved)
 		return nil, fmt.Errorf("read the notes back: %w", err)
 	}
+	if bytes.Equal(saved, notes) {
+		secure.SecureZeroBytes(saved)
+		return bytes.Clone(notes), nil
+	}
 	return bytes.TrimSuffix(bytes.TrimSuffix(saved, []byte("\n")), []byte("\r")), nil
+}
+
+// wipe overwrites the file at path with zeros, in place, before it's
+// removed. A file system that writes changes elsewhere, as APFS and
+// copy-on-write ones do, can still hold the old bytes until reused.
+func wipe(path string) {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // the file EditNotes made
+	if err != nil {
+		return
+	}
+	defer f.Close() //nolint:errcheck // best effort
+	if info, err := f.Stat(); err == nil {
+		_, _ = f.WriteAt(make([]byte, info.Size()), 0) //nolint:errcheck // best effort
+		_ = f.Sync()                                   //nolint:errcheck // best effort
+	}
 }

@@ -109,7 +109,7 @@ func (m *Manager) StorePasswordWithDetails(service, username string, password []
 	filing.Apply(&e)
 	var d vault.Details
 	if !e.CreatedAt.IsZero() {
-		if d, err = m.store.Details(k); err != nil {
+		if d, err = m.store.Details(k, "all, to change them"); err != nil {
 			return fmt.Errorf("failed to read the entry's details: %w", err)
 		}
 	}
@@ -126,7 +126,7 @@ func (m *Manager) StorePasswordWithDetails(service, username string, password []
 // Notes returns the entry's notes, none when there's no entry; the caller
 // zeroes them.
 func (m *Manager) Notes(k vault.Key) ([]byte, error) {
-	d, err := m.store.Details(k)
+	d, err := m.store.Details(k, "notes")
 	if errors.Is(err, vault.ErrNotFound) {
 		return nil, nil
 	}

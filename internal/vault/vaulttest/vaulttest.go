@@ -315,7 +315,7 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			if err := s.Delete(k); !errors.Is(err, vault.ErrNotFound) {
 				t.Errorf("Delete(%+v) = %v, want ErrNotFound", k, err)
 			}
-			if _, err := s.Details(k); !errors.Is(err, vault.ErrNotFound) {
+			if _, err := s.Details(k, "all"); !errors.Is(err, vault.ErrNotFound) {
 				t.Errorf("Details(%+v) = %v, want ErrNotFound", k, err)
 			}
 		}
@@ -328,7 +328,7 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			Fields: []vault.Field{
 				{Name: "recovery-email", Value: []byte("alice@example.com")},
 				{Name: "pin", Value: []byte("1234"), Secret: true},
-				{Name: "backup.code", Value: []byte("a\x00b"), Secret: true},
+				{Name: "backup.code", Value: []byte("a\tb\nc"), Secret: true},
 			},
 		}
 	}
@@ -338,14 +338,14 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		if err := s.Put(gh, []byte("pw")); err != nil {
 			t.Fatal(err)
 		}
-		if d, err := s.Details(gh); err != nil || !d.IsZero() {
+		if d, err := s.Details(gh, "all"); err != nil || !d.IsZero() {
 			t.Fatalf("Details of a new entry = %+v, %v; want none", d, err)
 		}
 		want := details()
 		if err := s.SetDetails(gh, &want); err != nil {
 			t.Fatal(err)
 		}
-		got, err := s.Details(gh)
+		got, err := s.Details(gh, "all")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -368,7 +368,7 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		if err := s.SetDetails(gh, &vault.Details{URL: "https://example.com"}); err != nil {
 			t.Fatal(err)
 		}
-		got, err = s.Details(gh)
+		got, err = s.Details(gh, "all")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -396,7 +396,7 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		if err := s.SaveWithDetails(&vault.Entry{Key: gh, Folder: "work"}, []byte("pw-2"), &vault.Details{URL: "https://new.example"}); err != nil {
 			t.Fatal(err)
 		}
-		got, err := s.Details(gh)
+		got, err := s.Details(gh, "all")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -404,7 +404,7 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		if err := s.SaveWithDetails(&vault.Entry{Key: gh}, []byte("pw-3"), &vault.Details{}); err != nil {
 			t.Fatal(err)
 		}
-		if d, err := s.Details(gh); err != nil || !d.IsZero() {
+		if d, err := s.Details(gh, "all"); err != nil || !d.IsZero() {
 			t.Errorf("Details after saving with none = %+v, %v", d, err)
 		}
 		// Details the entry can't have are refused, and nothing is saved.
@@ -432,7 +432,7 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		if err := s.Save(&vault.Entry{Key: gh, Folder: "work"}, []byte("pw-3")); err != nil {
 			t.Fatal(err)
 		}
-		got, err := s.Details(gh)
+		got, err := s.Details(gh, "all")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -443,7 +443,7 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 		if err := s.Put(gh, []byte("pw")); err != nil {
 			t.Fatal(err)
 		}
-		if d, err := s.Details(gh); err != nil || !d.IsZero() {
+		if d, err := s.Details(gh, "all"); err != nil || !d.IsZero() {
 			t.Errorf("Details after delete and put = %+v, %v; want none", d, err)
 		}
 	})
@@ -473,7 +473,9 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			{gh, `the field "PIN" is there twice (as "pin")`, vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte("1")}, {Name: "PIN", Value: []byte("2")}}}},
 			{gh, "the notes aren't valid text", vault.Details{Notes: []byte{0xff, 'x'}}},
 			{gh, `the field "pin" isn't valid text`, vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte{0xfe}, Secret: true}}}},
-			{gh, "take 1048577 bytes together", vault.Details{Notes: make([]byte, vault.MaxDetailsSize), Fields: []vault.Field{{Name: "pin", Value: []byte("1"), Secret: true}}}},
+			{gh, "the notes contain a control character", vault.Details{Notes: []byte("hi\x1b]0;title\x07")}},
+			{gh, `the field "pin" contains a control character`, vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte("\x1b[31m"), Secret: true}}}},
+			{gh, "take 1048577 bytes together", vault.Details{Notes: bytes.Repeat([]byte("a"), vault.MaxDetailsSize), Fields: []vault.Field{{Name: "pin", Value: []byte("1"), Secret: true}}}},
 		}
 		for i := range tests {
 			tc := &tests[i]

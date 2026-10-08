@@ -16,7 +16,7 @@ func detailsOf(t *testing.T, env *rekeyTestEnv, k vault.Key) vault.Details {
 	t.Helper()
 	store := openDoctorVault(t, env)
 	defer store.Close() //nolint:errcheck // test cleanup
-	d, err := store.Details(k)
+	d, err := store.Details(k, "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestEdit_DetailsAtATerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr, "Value for pin: ") || !strings.Contains(stderr, "Type the notes for password/github/alice, then press Ctrl-D on a new line:") {
+	if !strings.Contains(stderr, "Value for pin: ") || !strings.Contains(stderr, "Type the notes for password/github/alice, then press Ctrl-D on a new line (Ctrl-D alone changes nothing):") {
 		t.Errorf("prompts = %q", stderr)
 	}
 	if d := detailsOf(t, env, aliceKey); string(d.Notes) != "typed notes\n" || fieldList(&d) != "pin=4321 (secret)" {
@@ -139,6 +139,7 @@ func TestEdit_DetailsRefused(t *testing.T) {
 		{"a\nb\n", "a secret field's value is one line", []string{"password/github/alice", "--secret-field", "pin"}},
 		{"", `there's no field "nope" to remove; it has no fields`, []string{"password/github/alice", "--remove-field", "nope"}},
 		{"", "nothing to change: the entry already has that URL", []string{"password/github/alice", "--url", ""}},
+		{"", "there's no field \"nope\" to remove; it has no fields", []string{"password/github/alice", "--secret-field", "pin", "--remove-field", "nope"}},
 	} {
 		if _, _, err := runEditOut(t, tc.stdin, false, tc.args...); err == nil || !strings.Contains(err.Error(), tc.wantSub) {
 			t.Errorf("edit %q = %v, want an error containing %q", tc.args, err, tc.wantSub)
@@ -162,4 +163,61 @@ func TestEdit_RenameToANoteRemovingNotes(t *testing.T) {
 	if d := detailsOf(t, env, vault.Key{Kind: vault.KindNote, Service: "gitlab"}); d.Notes != nil {
 		t.Errorf("notes = %q", d.Notes)
 	}
+}
+
+// What can't be done to the entry is refused before anything is typed, and
+// Ctrl-D at once at a terminal changes nothing.
+func TestEdit_DetailsRefusedBeforeTyping(t *testing.T) {
+	env := editVault(t)
+	if _, _, err := runEditOut(t, "4321\n", false, "password/github/alice", "--secret-field", "pin"); err != nil {
+		t.Fatal(err)
+	}
+	old := readSecret
+	t.Cleanup(func() { readSecret = old })
+	asked := false
+	readSecret = func() ([]byte, error) { asked = true; return []byte("x"), nil }
+	_, _, err := runEditOut(t, "", true, "password/github/alice", "--field", "PIN=1111", "--secret-field", "token")
+	if err == nil || !strings.Contains(err.Error(), "pin is a secret field: set it with --secret-field pin") || asked {
+		t.Errorf("plain over secret: %v (asked: %v)", err, asked)
+	}
+	_, stderr, err := runEditOut(t, "", true, "password/github/alice", "--notes", "--url", "https://x.example")
+	if err != nil || !strings.HasSuffix(stderr, "Nothing changed.\n") {
+		t.Errorf("Ctrl-D at once: %q, %v", stderr, err)
+	}
+	if d := detailsOf(t, env, aliceKey); d.URL != "" || d.Notes != nil {
+		t.Errorf("details after Ctrl-D: %q %q", d.URL, d.Notes)
+	}
+}
+
+// writeEditor writes an editor script running body, with $1 the notes file.
+func writeEditor(t *testing.T, body string) {
+	t.Helper()
+	script := filepath.Join(t.TempDir(), "editor.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", script)
+}
+
+// Quitting the editor without saving changes nothing, and the editor
+// never sees the master password.
+func TestEdit_EditorEdges(t *testing.T) {
+	env := editVault(t)
+	if _, _, err := runEditOut(t, "line one\n", false, "password/github/alice", "--notes"); err != nil {
+		t.Fatal(err)
+	}
+	seen := filepath.Join(t.TempDir(), "env")
+	writeEditor(t, "env > '"+seen+"'")
+	_, stderr, err := runEditOut(t, "", true, "password/github/alice", "--notes", "--editor")
+	if err != nil || stderr != "Nothing changed.\n" {
+		t.Errorf("unchanged: %q, %v", stderr, err)
+	}
+	if b, err := os.ReadFile(seen); err != nil || strings.Contains(string(b), "SESH_MASTER_PASSWORD") {
+		t.Errorf("the editor's environment has the master password (%v)", err)
+	}
+	if d := detailsOf(t, env, aliceKey); string(d.Notes) != "line one\n" {
+		t.Errorf("notes = %q", d.Notes)
+	}
+
 }

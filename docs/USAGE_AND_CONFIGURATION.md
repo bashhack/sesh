@@ -1061,10 +1061,12 @@ sesh --service password --action store --service-name db --url https://db.intern
 - **Values:**
   - a plain value or URL is one line;
   - a secret field's value is typed hidden, or read as one line from stdin without a terminal;
-  - notes can have many lines. Empty notes remove them;
+  - notes can have many lines. Notes piped in empty remove them (`--notes < /dev/null`); at a terminal, Ctrl-D before typing anything changes nothing;
+  - notes and secret values are text: tabs and line breaks are fine, other control characters aren't, so nothing shown can work the terminal;
+  - setting a field it already has replaces its value. A plain `--field` can't replace a secret field: use `--secret-field`, or remove it first to make it plain;
   - the notes and values together can take up to 1 MiB.
 - **Without a terminal,** only one value can come from stdin per command: the secret, the notes, or one secret field.
-- **`--editor`** opens the current notes in your editor (`$VISUAL`, then `$EDITOR`, then `vi`). The file is in a folder only you can read, in memory (`/dev/shm`) on Linux. It's overwritten and removed afterwards. Your editor may keep its own copies, such as swap or backup files; turn those off for it if that matters to you.
+- **`--editor`** opens the current notes in your editor (`$VISUAL`, then `$EDITOR`, then `vi`); quitting without saving changes nothing. The file is in a folder only you can read: in memory (`/dev/shm`) on Linux, and in your temporary folder (`$TMPDIR`), on disk, on macOS. Afterwards sesh writes zeros over it and removes it, also if its terminal closes meanwhile; Ctrl-C goes to the editor. A file system that writes changes elsewhere, as macOS's does, may keep the old bytes until it reuses the space. Your editor may keep its own copies, such as swap or backup files; turn those off for it if that matters to you. If another command changes the notes while the editor is open, saving is refused rather than overwriting them.
 - **Each change** is one step, with the entry's other changes, and says what changed: `✅ password/github/alice: URL added, field pin added`. The audit log records it. The entry's update time stays: it follows the secret.
 
 **Reading them.** `sesh show <id>` shows the whole entry, with the secret, the notes and secret fields hidden:
@@ -1073,16 +1075,15 @@ sesh --service password --action store --service-name db --url https://db.intern
 $ sesh show password/github/alice
 password/github/alice
   URL       https://github.com/login
-  Folder    work
-  Tags      code
-  Password  ••••••••   (--reveal)
+  Folder    work   Tags: code
+  Password  ••••••••   (get, or --reveal)
   Notes     ••••••••   (--reveal)
   Fields
     recovery-email   alice@example.com
     pin (secret)     ••••••••
 ```
 
-`--reveal` shows them too, and the audit log records reading them. `--format json` gives the same as JSON; hidden values are left out unless revealed.
+`--reveal` shows them too, and the audit log records reading them, naming what was read (all of it, the notes, or one field). `--format json` gives the same as JSON; hidden values are left out unless revealed.
 
 `get --field <name>` shows or copies one value, as `get` does the secret. `<name>` is a field, in any case, or `url`, `notes`, or `password`:
 

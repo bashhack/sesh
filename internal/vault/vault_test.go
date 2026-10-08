@@ -1,6 +1,7 @@
 package vault_test
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -265,6 +266,22 @@ func TestDetailsChange(t *testing.T) {
 	// A field that isn't there can't be removed.
 	if _, err := (&vault.DetailsChange{Remove: []string{"nope"}}).Apply(&d); err == nil || err.Error() != `there's no field "nope" to remove; its fields: email, PIN, port` {
 		t.Errorf("removing a missing field: %v", err)
+	}
+	// A plain value can't replace a secret field; its own value again is
+	// no change; and notes written from others are refused once those
+	// have changed.
+	if _, err := (&vault.DetailsChange{Set: []vault.Field{{Name: "pin", Value: []byte("3")}}}).Apply(&d); err == nil || !strings.Contains(err.Error(), "PIN is a secret field: set it with --secret-field PIN") {
+		t.Errorf("plain over secret: %v", err)
+	}
+	if what, err := (&vault.DetailsChange{Set: []vault.Field{{Name: "email", Value: []byte("a@b")}}}).Apply(&d); err != nil || what != "" {
+		t.Errorf("the same value: %q, %v", what, err)
+	}
+	if _, err := (&vault.DetailsChange{SetNotes: true, Notes: []byte("x"), HasNotesBase: true, NotesBase: []byte("old")}).Apply(&d); !errors.Is(err, vault.ErrNotesChanged) {
+		t.Errorf("notes changed meanwhile: %v", err)
+	}
+	// The fields a removal can't find are those the entry had.
+	if _, err := (&vault.DetailsChange{Set: []vault.Field{{Name: "new", Value: []byte("v")}}, Remove: []string{"nope"}}).Apply(&d); err == nil || err.Error() != `there's no field "nope" to remove; its fields: email, PIN, port` {
+		t.Errorf("removal error: %v", err)
 	}
 	if !(&vault.DetailsChange{}).IsZero() || (&vault.DetailsChange{SetNotes: true}).IsZero() {
 		t.Error("IsZero")

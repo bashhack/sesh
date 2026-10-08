@@ -97,7 +97,7 @@ func runShow(app *App, args []string) error {
 			return err
 		}
 		defer secure.SecureZeroBytes(shown.secret)
-		if shown.d, err = store.Details(k); err != nil {
+		if shown.d, err = store.Details(k, "all"); err != nil {
 			return err
 		}
 		defer shown.d.Zero()
@@ -125,11 +125,14 @@ func (s *shownEntry) text(reveal bool) string {
 	if s.e.URL != "" {
 		rows = append(rows, row{"URL", s.e.URL})
 	}
-	if s.e.Folder != "" {
+	tags := strings.Join(s.e.Tags, ", ")
+	switch {
+	case s.e.Folder != "" && tags != "":
+		rows = append(rows, row{"Folder", s.e.Folder + "   Tags: " + tags})
+	case s.e.Folder != "":
 		rows = append(rows, row{"Folder", s.e.Folder})
-	}
-	if len(s.e.Tags) > 0 {
-		rows = append(rows, row{"Tags", strings.Join(s.e.Tags, ", ")})
+	case tags != "":
+		rows = append(rows, row{"Tags", tags})
 	}
 	if reveal {
 		rows = append(rows, row{secretLabel(s.e.Kind), string(s.secret)})
@@ -137,7 +140,7 @@ func (s *shownEntry) text(reveal bool) string {
 			rows = append(rows, row{"Notes", string(s.d.Notes)})
 		}
 	} else {
-		rows = append(rows, row{secretLabel(s.e.Kind), hidden + "   (--reveal)"})
+		rows = append(rows, row{secretLabel(s.e.Kind), hidden + "   (get, or --reveal)"})
 		if s.e.HasNotes {
 			rows = append(rows, row{"Notes", hidden + "   (--reveal)"})
 		}

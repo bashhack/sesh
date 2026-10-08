@@ -63,7 +63,7 @@ func TestGet_Field(t *testing.T) {
 
 func TestGet_FieldJSON(t *testing.T) {
 	p, stdout := newTestProvider(fieldStore(t))
-	p.action, p.service, p.username, p.field, p.format = "get", "github", "alice", "pin", "json"
+	p.action, p.service, p.username, p.field, p.format = "get", "github", "alice", "PIN", "json"
 	if _, err := p.GetCredentials(); err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +95,36 @@ func TestGet_FieldRefused(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
 			t.Errorf("%q: %v, want an error containing %q", tc.args, err, tc.wantSub)
 		}
+	}
+	// A missing entry gets the case hint plain get gives; a secure note's
+	// notes are its secret.
+	store := fieldStore(t)
+	if err := store.Put(vault.Key{Kind: vault.KindNote, Service: "wifi"}, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	for args, wantSub := range map[string]string{
+		"GitHub alice pin":        "did you mean password/github/alice?",
+		"wifi  notes secure_note": "secure_note/wifi is a secure note: its note is its secret, which --field secret reads",
+	} {
+		a := strings.Split(args, " ")
+		flags := []string{"--action", "get", "--service-name", a[0], "--field", a[2]}
+		if a[1] != "" {
+			flags = append(flags, "--username", a[1])
+		}
+		if len(a) > 3 {
+			flags = append(flags, "--entry-type", a[3])
+		}
+		p := storeWith(t, store, "", nil, flags...)
+		err := p.ValidateRequest()
+		if err == nil {
+			_, err = p.GetCredentials()
+		}
+		if err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("%s: %v, want %q", args, err, wantSub)
+		}
+	}
+	if err := storeWith(t, store, "", nil, "--field", "a=b").CheckListArgs(); err == nil || !strings.Contains(err.Error(), "don't go with --list or --delete") {
+		t.Errorf("--list --field: %v", err)
 	}
 	p := storeWith(t, fieldStore(t), "", nil, "--action", "search", "--query", "git", "--field", "pin")
 	if err := p.ValidateRequest(); err == nil || !strings.Contains(err.Error(), "--field also works with --action get") {
@@ -144,7 +174,7 @@ func TestStore_Details(t *testing.T) {
 		t.Fatal(err)
 	}
 	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
-	d, err := store.Details(k)
+	d, err := store.Details(k, "all")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +191,7 @@ func TestStore_Details(t *testing.T) {
 	if _, err := p.GetCredentials(); err != nil {
 		t.Fatal(err)
 	}
-	if d, err = store.Details(k); err != nil || d.URL != "https://github.com/login" || len(d.Fields) != 1 || string(d.Notes) != "my notes\n" {
+	if d, err = store.Details(k, "all"); err != nil || d.URL != "https://github.com/login" || len(d.Fields) != 1 || string(d.Notes) != "my notes\n" {
 		t.Errorf("after storing over it: %+v, %v", d, err)
 	}
 }
