@@ -37,6 +37,7 @@ type Entry struct {
 	Username string    `json:"username,omitempty"`
 	Type     EntryType `json:"type"`
 	Folder   string    `json:"folder,omitempty"`
+	URL      string    `json:"url,omitempty"`
 	Tags     []string  `json:"tags,omitempty"`
 }
 
@@ -47,6 +48,7 @@ func entryFrom(e *vault.Entry) Entry {
 		Username:  e.Username,
 		Type:      e.Kind,
 		Folder:    e.Folder,
+		URL:       e.URL,
 		Tags:      e.Tags,
 		CreatedAt: e.CreatedAt,
 		UpdatedAt: e.UpdatedAt,
@@ -88,6 +90,53 @@ func (m *Manager) StorePassword(service, username string, password []byte, entry
 		return fmt.Errorf("failed to store password: %w", err)
 	}
 	return nil
+}
+
+// StorePasswordWithDetails is StorePassword, also making change to the
+// entry's details (none for a new one), all in one write; a nil change is
+// StorePassword.
+func (m *Manager) StorePasswordWithDetails(service, username string, password []byte, entryType EntryType, filing vault.Filing, change *vault.DetailsChange) error {
+	if change == nil {
+		return m.StorePassword(service, username, password, entryType, filing)
+	}
+	secret := bytes.Clone(password)
+	defer secure.SecureZeroBytes(secret)
+	k := key(service, username, entryType)
+	e, err := m.existingOrNew(k)
+	if err != nil {
+		return err
+	}
+	filing.Apply(&e)
+	var d vault.Details
+	if !e.CreatedAt.IsZero() {
+		if d, err = m.store.Details(k); err != nil {
+			return fmt.Errorf("failed to read the entry's details: %w", err)
+		}
+	}
+	defer d.Zero()
+	if _, err := change.Apply(&d); err != nil {
+		return err
+	}
+	if err := m.store.SaveWithDetails(&e, secret, &d); err != nil {
+		return fmt.Errorf("failed to store password: %w", err)
+	}
+	return nil
+}
+
+// Notes returns the entry's notes, none when there's no entry; the caller
+// zeroes them.
+func (m *Manager) Notes(k vault.Key) ([]byte, error) {
+	d, err := m.store.Details(k)
+	if errors.Is(err, vault.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	notes := d.Notes
+	d.Notes = nil
+	d.Zero()
+	return notes, nil
 }
 
 // existingOrNew is the entry at k, to be saved again with its settings,

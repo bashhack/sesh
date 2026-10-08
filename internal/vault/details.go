@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -62,9 +63,9 @@ func (d *Details) Zero() {
 	}
 }
 
-// Field returns the field named name, if d has one.
+// Field returns the field named name, in any case, if d has one.
 func (d *Details) Field(name string) (Field, bool) {
-	i := slices.IndexFunc(d.Fields, func(f Field) bool { return f.Name == name })
+	i := slices.IndexFunc(d.Fields, func(f Field) bool { return strings.EqualFold(f.Name, name) })
 	if i < 0 {
 		return Field{}, false
 	}
@@ -358,4 +359,86 @@ func parseSealed(b []byte) (notes []byte, values map[string][]byte, err error) {
 		return fail()
 	}
 	return notes, values, nil
+}
+
+// DetailsChange is a change to an entry's details: what it sets is
+// changed, and the rest kept.
+type DetailsChange struct {
+	// URL, when not nil, is the new URL; "" removes it.
+	URL *string
+	// Notes are the new notes when SetNotes; none removes them. The caller
+	// zeroes them.
+	Notes []byte
+	// Set are fields to add, or to put in place of the field of that name,
+	// in any case; Remove names fields to take out, in any case.
+	Set      []Field
+	Remove   []string
+	SetNotes bool
+}
+
+// IsZero reports whether c changes nothing.
+func (c *DetailsChange) IsZero() bool {
+	return c.URL == nil && !c.SetNotes && len(c.Set) == 0 && len(c.Remove) == 0
+}
+
+// Apply makes c's change to d, and says what changed, as the audit log
+// records it. A field to remove that d doesn't have is an error.
+func (c *DetailsChange) Apply(d *Details) (string, error) {
+	var what []string
+	if c.URL != nil && *c.URL != d.URL {
+		what = append(what, changeWord("URL", d.URL != "", *c.URL != ""))
+		d.URL = *c.URL
+	}
+	if c.SetNotes && !bytes.Equal(c.Notes, d.Notes) {
+		what = append(what, changeWord("notes", len(d.Notes) > 0, len(c.Notes) > 0))
+		secure.SecureZeroBytes(d.Notes)
+		d.Notes = nil
+		if len(c.Notes) > 0 {
+			d.Notes = bytes.Clone(c.Notes)
+		}
+	}
+	for _, f := range c.Set {
+		f.Value = bytes.Clone(f.Value)
+		i := slices.IndexFunc(d.Fields, func(g Field) bool { return strings.EqualFold(g.Name, f.Name) })
+		if i < 0 {
+			d.Fields = append(d.Fields, f)
+			what = append(what, "field "+f.Name+" added")
+			continue
+		}
+		if d.Fields[i].Secret {
+			secure.SecureZeroBytes(d.Fields[i].Value)
+		}
+		d.Fields[i] = f
+		what = append(what, "field "+f.Name+" changed")
+	}
+	for _, name := range c.Remove {
+		i := slices.IndexFunc(d.Fields, func(g Field) bool { return strings.EqualFold(g.Name, name) })
+		if i < 0 {
+			if len(d.Fields) == 0 {
+				return "", fmt.Errorf("there's no field %q to remove; it has no fields", name)
+			}
+			names := make([]string, len(d.Fields))
+			for j, f := range d.Fields {
+				names[j] = f.Name
+			}
+			return "", fmt.Errorf("there's no field %q to remove; its fields: %s", name, strings.Join(names, ", "))
+		}
+		what = append(what, "field "+d.Fields[i].Name+" removed")
+		if d.Fields[i].Secret {
+			secure.SecureZeroBytes(d.Fields[i].Value)
+		}
+		d.Fields = slices.Delete(d.Fields, i, i+1)
+	}
+	return strings.Join(what, ", "), nil
+}
+
+// changeWord says what happened to a part: added, changed, or removed.
+func changeWord(part string, had, has bool) string {
+	switch {
+	case !had:
+		return part + " added"
+	case !has:
+		return part + " removed"
+	}
+	return part + " changed"
 }

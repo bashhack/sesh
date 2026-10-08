@@ -13,6 +13,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/password"
+	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -23,6 +24,7 @@ var readSecret = func() ([]byte, error) { return term.ReadPassword(int(os.Stdin.
 // editFlags are sesh edit's flags.
 type editFlags struct {
 	service, username, kind string
+	details                 provider.DetailsFlags
 	length                  int
 	secret, generate        bool
 	noSymbols, force        bool
@@ -39,17 +41,24 @@ func addEditFlags(fs *flag.FlagSet) *editFlags {
 	fs.IntVar(&f.length, "length", 24, "Generated password length")
 	fs.BoolVar(&f.noSymbols, "no-symbols", false, "Generate without symbols")
 	fs.BoolVar(&f.force, "force", false, "Don't ask before taking an AWS entry out of the AWS provider")
+	f.details.Register(fs)
 	return f
 }
 
 const editUsage = `Usage: sesh edit <id> [flags]
-  Rename an entry, change its username or kind, or give it a new secret.
-  With no flags, at a terminal, it asks, with the current values as defaults.
+  Rename an entry, change its username or kind, give it a new secret, or
+  change its URL, notes, or custom fields. With no flags, at a terminal, it
+  asks for the name, kind and secret, with the current values as defaults.
 
   sesh edit password/github/alice --service github-work
   sesh edit password/github/alice --username alicia     ("" removes it)
   sesh edit password/github/alice --secret              (or --generate [--length N] [--no-symbols])
   sesh edit api_key/openai --type password              (password, api_key, secure_note)
+  sesh edit password/github/alice --url https://github.com/login   ("" removes it)
+  sesh edit password/github/alice --field recovery-email=alice@example.com
+  sesh edit password/github/alice --secret-field pin    (asks, hidden)
+  sesh edit password/github/alice --remove-field pin
+  sesh edit password/github/alice --notes [--editor]    (stdin, or $EDITOR; empty removes them)
 
 Entry IDs are what --list shows.`
 
@@ -95,7 +104,7 @@ func runEdit(app *App, args []string) error {
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
 	asked := len(set) == 0 || (len(set) == 1 && set["force"])
 	if asked && !terminal {
-		return errors.New("nothing to change: give --service, --username, --type, --secret, or --generate (or run it at a terminal to be asked)")
+		return errors.New("nothing to change: give --service, --username, --type, --secret, --generate, --url, --notes, --field, --secret-field, or --remove-field (or run it at a terminal to be asked)")
 	}
 	to, err := plannedKey(from, f, set)
 	if err != nil {
@@ -104,7 +113,20 @@ func runEdit(app *App, args []string) error {
 	if err := checkEditSecret(from, to, f); err != nil {
 		return err
 	}
-	if !asked && to == from && !f.secret && !f.generate {
+	change, err := f.details.Change(from.Kind, to.Kind, terminal)
+	if err != nil {
+		return err
+	}
+	if !terminal {
+		fromStdin := f.details.FromStdin()
+		if f.secret && !f.generate {
+			fromStdin++
+		}
+		if fromStdin > 1 {
+			return errors.New("without a terminal, only one value can come from stdin: give the new secret, the notes, and each secret field in separate edits")
+		}
+	}
+	if !asked && to == from && !f.secret && !f.generate && change == nil {
 		return errors.New("nothing to change: the entry already has that name and kind")
 	}
 
@@ -182,8 +204,38 @@ func runEdit(app *App, args []string) error {
 		defer secure.SecureZeroBytes(secret)
 		e.Secret, weak = secret, w
 	}
+	if change != nil {
+		defer provider.ZeroChange(change)
+		in := &provider.DetailsInput{
+			Stdin: app.Stdin, Stderr: app.Stderr, ReadSecret: readSecret, Name: to.String(), Terminal: terminal,
+			Notes: func() ([]byte, error) {
+				d, err := store.Details(from)
+				if err != nil {
+					return nil, err
+				}
+				notes := d.Notes
+				d.Notes = nil
+				d.Zero()
+				return notes, nil
+			},
+		}
+		if err := f.details.Read(change, in); err != nil {
+			return err
+		}
+		e.Details = change
+	}
 	detail, err := store.Edit(from, e)
 	if err != nil {
+		if errors.Is(err, database.ErrNothingToChange) {
+			if f.details.Editor() {
+				_, err := fmt.Fprintln(app.Stderr, "Nothing changed.")
+				return err
+			}
+			if f.details.OnlyURL() {
+				return errors.New("nothing to change: the entry already has that URL")
+			}
+			return errors.New("nothing to change: the entry already has those details")
+		}
 		if errors.Is(err, database.ErrNameTaken) || errors.Is(err, database.ErrEntryChanged) || errors.Is(err, database.ErrVaultKeyChanged) || errors.Is(err, vault.ErrNotFound) {
 			return err
 		}

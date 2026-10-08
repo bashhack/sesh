@@ -300,3 +300,41 @@ func TestDetails_Audit(t *testing.T) {
 		t.Errorf("after a sealed read: modify %d, access %d; want 2, 1", count("modify"), count("access"))
 	}
 }
+
+// An edit changes details in its one transaction, with or without a
+// rename, and says what changed.
+func TestEdit_ChangesDetails(t *testing.T) {
+	_, s := rekeyVault(t)
+	bank := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	d := testDetails()
+	if err := s.SetDetails(bank, &d); err != nil {
+		t.Fatal(err)
+	}
+	url := "https://new.bank.example"
+	detail, err := s.Edit(bank, EntryEdit{Details: &vault.DetailsChange{URL: &url, Set: []vault.Field{{Name: "pin", Value: []byte("9999"), Secret: true}}, Remove: []string{"account"}}})
+	if err != nil || detail != "URL changed, field pin changed, field account removed" {
+		t.Fatalf("Edit = %q, %v", detail, err)
+	}
+	want := vault.Details{URL: url, Notes: d.Notes, Fields: []vault.Field{{Name: "pin", Value: []byte("9999"), Secret: true}}}
+	checkDetailsOf(t, s, bank, &want)
+
+	// With a rename to a secure note, the notes must go in the same edit.
+	to := vault.Key{Kind: vault.KindNote, Service: "bank"}
+	if _, err := s.Edit(bank, EntryEdit{To: &to, Details: &vault.DetailsChange{URL: &url}}); err == nil || !strings.Contains(err.Error(), "a secure note can't have notes") {
+		t.Errorf("rename to a note keeping notes = %v, want refused", err)
+	}
+	detail, err = s.Edit(bank, EntryEdit{To: &to, Details: &vault.DetailsChange{SetNotes: true}})
+	if err != nil || detail != "renamed from password/bank and notes removed" {
+		t.Fatalf("rename removing notes = %q, %v", detail, err)
+	}
+	want.Notes = nil
+	checkDetailsOf(t, s, to, &want)
+
+	// A change that changes nothing is nothing to do.
+	if _, err := s.Edit(to, EntryEdit{Details: &vault.DetailsChange{URL: &url}}); err == nil || err.Error() != "nothing to change" {
+		t.Errorf("a change to the same URL = %v, want nothing to change", err)
+	}
+	if _, err := s.Edit(to, EntryEdit{Details: &vault.DetailsChange{Remove: []string{"nope"}}}); err == nil || !strings.Contains(err.Error(), `there's no field "nope" to remove`) {
+		t.Errorf("removing a missing field = %v", err)
+	}
+}

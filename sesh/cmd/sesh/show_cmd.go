@@ -175,9 +175,10 @@ func (s *shownEntry) text(reveal bool) string {
 }
 
 // writeRow writes label, padded to width, and value after indent; a
-// value's further lines line up under its first.
+// value's further lines line up under its first, and the newline ending
+// its last one adds no empty line.
 func writeRow(b *strings.Builder, indent, label string, width int, value string) {
-	lines := strings.Split(value, "\n")
+	lines := strings.Split(strings.TrimSuffix(value, "\n"), "\n")
 	fmt.Fprintf(b, "%s%-*s%s\n", indent, width, label, lines[0])
 	for _, l := range lines[1:] {
 		fmt.Fprintf(b, "%s%*s%s\n", indent, width, "", l)

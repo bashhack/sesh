@@ -227,3 +227,46 @@ func TestDetailsEncoding(t *testing.T) {
 func part(s string) []byte {
 	return append([]byte{0, 0, 0, byte(len(s))}, s...)
 }
+
+// A change sets, replaces in place, and removes fields by name in any
+// case, sets or removes the URL and notes, and says what it did.
+func TestDetailsChange(t *testing.T) {
+	url, empty := "https://new.example", ""
+	d := vault.Details{URL: "https://old.example", Notes: []byte("old"), Fields: []vault.Field{
+		{Name: "email", Value: []byte("a@b")},
+		{Name: "pin", Value: []byte("1"), Secret: true},
+		{Name: "host", Value: []byte("db")},
+	}}
+	c := vault.DetailsChange{
+		URL:   &url,
+		Notes: []byte("new"), SetNotes: true,
+		Set:    []vault.Field{{Name: "PIN", Value: []byte("2"), Secret: true}, {Name: "port", Value: []byte("5432")}},
+		Remove: []string{"Host"},
+	}
+	what, err := c.Apply(&d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if what != "URL changed, notes changed, field PIN changed, field port added, field host removed" {
+		t.Errorf("what = %q", what)
+	}
+	var names []string
+	for _, f := range d.Fields {
+		names = append(names, f.Name+"="+string(f.Value))
+	}
+	if d.URL != url || string(d.Notes) != "new" || strings.Join(names, " ") != "email=a@b PIN=2 port=5432" {
+		t.Errorf("after = %q %q %v", d.URL, d.Notes, names)
+	}
+	// Removing the URL and notes.
+	what, err = (&vault.DetailsChange{URL: &empty, SetNotes: true}).Apply(&d)
+	if err != nil || what != "URL removed, notes removed" || d.URL != "" || d.Notes != nil {
+		t.Errorf("removing: %q, %v; %+v", what, err, d)
+	}
+	// A field that isn't there can't be removed.
+	if _, err := (&vault.DetailsChange{Remove: []string{"nope"}}).Apply(&d); err == nil || err.Error() != `there's no field "nope" to remove; its fields: email, PIN, port` {
+		t.Errorf("removing a missing field: %v", err)
+	}
+	if !(&vault.DetailsChange{}).IsZero() || (&vault.DetailsChange{SetNotes: true}).IsZero() {
+		t.Error("IsZero")
+	}
+}

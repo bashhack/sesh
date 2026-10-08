@@ -1,14 +1,16 @@
 package password
 
 import (
+	"net/url"
 	"sort"
 	"strings"
 	"unicode/utf8"
 )
 
 // Search matches each word of a query against the parts of an entry the
-// user named: its service name and username. A word can instead name the
-// entry's kind ("totp", "key", "note", ...). Every word has to match.
+// user named: its service name and username, and the host of its URL. A
+// word can instead name the entry's kind ("totp", "key", "note", ...).
+// Every word has to match.
 // sesh's own labels (the stored name's prefix, the OS account, the
 // generated description) are never searched, and neither is any secret.
 
@@ -23,14 +25,16 @@ var kindWords = map[string]EntryType{
 }
 
 // Ranks of a word's match, lower being better. A field match is one of
-// matchExact..matchInside; a username match adds userRank to it.
+// matchExact..matchInside; a username match adds userRank to it, and a
+// match in the URL's host hostRank.
 const (
 	matchExact  = iota // the whole field: "github"
 	matchPrefix        // the field's start: "git" in "github"
 	matchWord          // a later word's start: "bank" in "my-bank"
 	matchInside        // anywhere else: "hub" in "github"
 	userRank
-	kindRank = 2 * userRank
+	hostRank = 2 * userRank
+	kindRank = 3 * userRank
 )
 
 // separators split a name into words, and may be left out of a query:
@@ -41,9 +45,9 @@ const separators = " -_./@:+"
 // case and surrounding spaces, best match first. A word matches anywhere
 // in an entry's service name (ranked best when it is the whole name, then
 // its start, then a word's start, then anywhere), then its username in the
-// same order, then its kind. An entry's rank adds up its words'; the most
-// recently updated comes first among equals. An empty query matches
-// nothing.
+// same order, then its URL's host, then its kind. An entry's rank adds up
+// its words'; the most recently updated comes first among equals. An
+// empty query matches nothing.
 func (m *Manager) SearchEntries(query string) ([]Entry, error) {
 	return m.SearchIn(query, &ListFilter{})
 }
@@ -113,10 +117,29 @@ func wordRank(e *Entry, w string) int {
 	if r := fieldRank(e.Username, w); r >= 0 {
 		return userRank + r
 	}
+	if r := fieldRank(urlHost(e.URL), w); r >= 0 {
+		return hostRank + r
+	}
 	if t, ok := kindWords[w]; ok && t == e.Type {
 		return kindRank
 	}
 	return -1
+}
+
+// urlHost is the host of an entry's URL, without a port; "" for none. A
+// URL without a scheme ("github.com/login") is read as a web address.
+func urlHost(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // fieldRank ranks where w appears in field, or returns -1. Without a

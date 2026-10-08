@@ -257,6 +257,9 @@ backup.dir               /Users/me/vaults/backups
 | `-query`          | Search query                                       | For search       |
 | `-format`         | Output format for get/search: table (default), json. For export/import: json (default), csv, encrypted | No               |
 | `-show`           | Display password instead of clipboard hint         | No               |
+| `-field`          | With get: a field, `url`, or `notes` instead of the secret. With store: set a field, `name=value`; repeat for more | No |
+| `-secret-field`, `-remove-field` | With store: set a secret field (typed hidden), or remove a field; repeat for more | No |
+| `-url`, `-notes`, `-editor` | With store: the entry's URL; its notes from stdin, or with `-editor` in `$EDITOR` | No |
 | `-file`           | File path for export/import (default: stdout/stdin)| No               |
 | `-on-conflict`    | Import conflict: skip, overwrite (default: error)  | No               |
 | `-force`          | Skip confirmation prompts                          | No               |
@@ -667,7 +670,7 @@ sesh --service password --action import --format encrypted --file backup.enc
 
 Encrypted exports use the same Argon2id + AES-256-GCM primitives as the vault. The export is self-contained (envelope includes the salt and KDF params) and works across machines and master passwords.
 
-Every export, encrypted or not, holds everything about each entry: its kind, service name, username, secret, times, and settings. A TOTP entry's settings (algorithm, digits, period, issuer) decide which codes are right, so they come back with it on import. In JSON they're the `settings` field; in CSV, a `settings` column holding the same JSON.
+Every export, encrypted or not, holds everything about each entry: its kind, service name, username, secret, times, settings, URL, notes, and custom fields (secret ones included). A TOTP entry's settings (algorithm, digits, period, issuer) decide which codes are right, so they come back with it on import. In JSON they're the `settings` field; in CSV, a `settings` column holding the same JSON.
 
 ### Changing your master password (`sesh --rekey`)
 
@@ -863,13 +866,13 @@ sesh -service password -action get -service-name github -username alice -format 
 
 #### Searching
 
-`-action search -query <words>` looks at the two things you name an entry by: its service name and its username. It never looks at secrets.
+`-action search -query <words>` looks at the two things you name an entry by, its service name and its username, and at the host of its URL (`github.com` in `https://github.com/login`). It never looks at secrets, notes or fields.
 
 - **Any part of a name.** `hub` finds `github`. Case doesn't matter.
 - **Punctuation optional.** `mybank` finds `my-bank`, `awsconsole` finds `aws-console`.
 - **Several words narrow it.** Every word has to match the name, the username, or the kind: `github alice` is GitHub as alice; `github totp` is GitHub's TOTP entry.
 - **Kind words.** `password`; `totp`, `otp`, `2fa`, `mfa`; `key`, `api`, `token` (API keys); `note` (secure notes). Only the whole word counts: `pass` searches names.
-- **Best matches first.** The whole name, then names starting with the word, then a later word in the name (`bank` in `my-bank`), then anywhere (`bank` in `snowbank`); then the same for usernames, then kind. Among equals, the most recently updated comes first.
+- **Best matches first.** The whole name, then names starting with the word, then a later word in the name (`bank` in `my-bank`), then anywhere (`bank` in `snowbank`); then the same for usernames, then the URL's host, then kind. Among equals, the most recently updated comes first.
 
 | Search | Finds |
 |---|---|
@@ -998,7 +1001,7 @@ Names are case-sensitive: `GitHub` and `github` are two entries. When a lookup (
 
 ### Editing an entry (`sesh edit`)
 
-`sesh edit <id>` renames an entry, changes its username or kind, or gives it a new secret. It takes the entry's ID (what `-list` shows):
+`sesh edit <id>` renames an entry, changes its username or kind, gives it a new secret, or changes its URL, notes and custom fields (see the next section). It takes the entry's ID (what `-list` shows):
 
 ```
 $ sesh edit api_key/openai --service openai-ci --type password
@@ -1032,6 +1035,63 @@ New password for password/github-work/alice:
 - **AWS entries:** an AWS profile's MFA entry is `totp/aws/<profile>`. Renaming it to another service, or removing its username, takes it out of the AWS provider, so sesh asks first; `--force` skips the question. Changing the profile name keeps it in.
 - **The audit log** shows a rename under the new name: `github-work (renamed from password/github/alice)`.
 - **Another sesh command changing the entry** while it's being edited makes the edit stop rather than overwrite; run it again.
+
+### Notes, a URL, and custom fields
+
+Every entry, whatever its kind, can also have:
+- **a URL:** its web address. It's stored as plain text, so search finds its host;
+- **notes:** encrypted, as the secret is;
+- **custom fields:** each with a name and a value, either plain or secret (encrypted). They cover what other managers have as separate types, such as a database's host and port, a card's PIN, or a licence key.
+
+A secure note has no separate notes: its secret is the note. It can still have a URL and fields.
+
+Set them with `sesh edit`, or with `--action store` as you store the entry:
+
+```
+sesh edit password/github/alice --url https://github.com/login     # "" removes it
+sesh edit password/github/alice --field recovery-email=alice@example.com
+sesh edit password/github/alice --secret-field pin                 # asks for it, hidden
+sesh edit password/github/alice --remove-field pin
+sesh edit password/github/alice --notes                            # typed, then Ctrl-D; or piped in
+sesh edit password/github/alice --notes --editor                   # in $VISUAL or $EDITOR
+sesh --service password --action store --service-name db --url https://db.internal --field host=db.internal --field port=5432
+```
+
+- **Field names** use letters, digits, `-`, `_` and `.`, up to 64 characters. They're unique in an entry whatever their case, and keep the order they were added in. `password`, `secret`, `url` and `notes` are taken: `get` uses them (below). An entry can have up to 50 fields.
+- **Values:**
+  - a plain value or URL is one line;
+  - a secret field's value is typed hidden, or read as one line from stdin without a terminal;
+  - notes can have many lines. Empty notes remove them;
+  - the notes and values together can take up to 1 MiB.
+- **Without a terminal,** only one value can come from stdin per command: the secret, the notes, or one secret field.
+- **`--editor`** opens the current notes in your editor (`$VISUAL`, then `$EDITOR`, then `vi`). The file is in a folder only you can read, in memory (`/dev/shm`) on Linux. It's overwritten and removed afterwards. Your editor may keep its own copies, such as swap or backup files; turn those off for it if that matters to you.
+- **Each change** is one step, with the entry's other changes, and says what changed: `✅ password/github/alice: URL added, field pin added`. The audit log records it. The entry's update time stays: it follows the secret.
+
+**Reading them.** `sesh show <id>` shows the whole entry, with the secret, the notes and secret fields hidden:
+
+```
+$ sesh show password/github/alice
+password/github/alice
+  URL       https://github.com/login
+  Folder    work
+  Tags      code
+  Password  ••••••••   (--reveal)
+  Notes     ••••••••   (--reveal)
+  Fields
+    recovery-email   alice@example.com
+    pin (secret)     ••••••••
+```
+
+`--reveal` shows them too, and the audit log records reading them. `--format json` gives the same as JSON; hidden values are left out unless revealed.
+
+`get --field <name>` shows or copies one value, as `get` does the secret. `<name>` is a field, in any case, or `url`, `notes`, or `password`:
+
+```
+sesh --service password --action get --service-name github --username alice --field pin --clip
+sesh --service password --action get --service-name github --username alice --field url --show
+```
+
+**What's encrypted.** The secret, the notes and secret fields' values are encrypted. The URL, field names, and plain values aren't, so the URL can be searched and `sesh show` can list fields without decrypting anything. Folders and tags are the same. Keep anything private in a secret field or the notes.
 
 ### Folders and tags
 

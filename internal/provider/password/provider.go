@@ -43,8 +43,9 @@ type Provider struct {
 	onConflict string // import conflict strategy: "skip", "overwrite"
 	format     string // output format: "table", "json", "csv"
 	service    string
-	field      string // get: the field to read instead of the secret
+	field      string // get: the field to read instead of the secret, from --field
 	filing     provider.FilingFlags
+	details    provider.DetailsFlags
 	pwLength   int // password generation length
 	limit      int
 	offset     int
@@ -110,13 +111,13 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.sortBy, "sort", "service", "Sort by (service, created_at, updated_at, folder)")
 	fs.StringVar(&p.format, "format", "table", "Output format (table, json, csv)")
 	fs.BoolVar(&p.show, "show", false, "Show password instead of copying to clipboard")
-	fs.StringVar(&p.field, "field", "", "With get: read this field (or url, notes) instead of the secret")
 	fs.BoolVar(&p.force, "force", false, "Skip confirmation prompts")
 	fs.BoolVar(&p.noSymbols, "no-symbols", false, "Exclude symbols from generated passwords")
 	fs.IntVar(&p.pwLength, "length", 24, "Generated password length")
 	fs.IntVar(&p.limit, "limit", 0, "Limit number of results (0 = no limit)")
 	fs.IntVar(&p.offset, "offset", 0, "Skip first N results")
 	p.filing.Register(fs, filingNarrows)
+	p.details.Register(fs)
 	return nil
 }
 
@@ -189,13 +190,12 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 		{Name: "on-conflict", Type: "string", Description: "Import conflict strategy: skip, overwrite",
 			Values: []string{string(password.ConflictSkip), string(password.ConflictOverwrite)}},
 		{Name: "show", Type: "bool", Description: "Show password instead of copying to clipboard"},
-		{Name: "field", Type: "string", Description: "With get: read this field (or url, notes) instead of the secret"},
 		{Name: "force", Type: "bool", Description: "Skip confirmation prompts"},
 		{Name: "no-symbols", Type: "bool", Description: "Exclude symbols from generated passwords"},
 		{Name: "length", Type: "int", Description: "Generated password length (default 24)"},
 		{Name: "limit", Type: "int", Description: "Limit number of results (0 = no limit)"},
 		{Name: "offset", Type: "int", Description: "Skip first N results"},
-	}, p.filing.FlagInfo(filingNarrows)...)
+	}, append(p.filing.FlagInfo(filingNarrows), p.details.FlagInfo()...)...)
 }
 
 func (p *Provider) ValidateRequest() error {
@@ -255,14 +255,23 @@ func (p *Provider) ValidateRequest() error {
 	return p.CheckArgs()
 }
 
-// checkField refuses --field with an action other than get, or a name no
-// field can have.
+// checkField reads --field: with get (or --clip), the name of the one
+// field to read instead of the secret; with store, fields to set, as the
+// other details flags do. Other actions take neither.
 func (p *Provider) checkField() error {
+	fields := p.details.Fields()
+	switch {
+	case p.action == "store":
+		return nil
+	case p.details.GivenBesidesField() || (len(fields) > 0 && p.action != "get" && p.action != ""):
+		return errors.New("--url, --notes and the field flags work with --action store, or with sesh edit; --field also works with --action get, to read one field")
+	case len(fields) > 1:
+		return errors.New("get reads one field: give --field once")
+	case len(fields) == 1:
+		p.field = fields[0]
+	}
 	if p.field == "" {
 		return nil
-	}
-	if p.action != "get" && p.action != "" {
-		return errors.New("--field works with --action get, which shows or copies that field")
 	}
 	if slices.Contains(vault.ReservedFieldNames, strings.ToLower(p.field)) {
 		return nil
@@ -453,7 +462,7 @@ func (p *Provider) fieldValue() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	i := slices.IndexFunc(e.Fields, func(f vault.Field) bool { return f.Name == p.field })
+	i := slices.IndexFunc(e.Fields, func(f vault.Field) bool { return strings.EqualFold(f.Name, p.field) })
 	if i < 0 {
 		if len(e.Fields) == 0 {
 			return nil, fmt.Errorf("%s has no field %q; it has no fields", k, p.field)
@@ -581,6 +590,20 @@ func (p *Provider) effectiveEntryType() password.EntryType {
 
 func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, error) {
 	et := p.effectiveEntryType()
+	terminal := stdinIsTerminal()
+	change, err := p.details.Change(et, et, terminal)
+	if err != nil {
+		return provider.Credentials{}, err
+	}
+	if !terminal && change != nil {
+		fromStdin := p.details.FromStdin()
+		if et == password.EntryTypeNote {
+			fromStdin++
+		}
+		if fromStdin > 1 {
+			return provider.Credentials{}, errors.New("without a terminal, only one value can come from stdin: store the entry, then add the rest with sesh edit")
+		}
+	}
 
 	if err := p.confirmSave(mgr, et); err != nil {
 		return provider.Credentials{}, err
@@ -623,7 +646,18 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 	}
 	defer secure.SecureZeroBytes(pw)
 
-	if err := mgr.StorePassword(p.service, p.username, pw, et, p.Filing()); err != nil {
+	if change != nil {
+		defer provider.ZeroChange(change)
+		k := vault.Key{Kind: et, Service: p.service, Username: p.username}
+		in := &provider.DetailsInput{
+			Stdin: p.stdin, Stderr: os.Stderr, ReadSecret: readPassword, Name: k.String(), Terminal: terminal,
+			Notes: func() ([]byte, error) { return mgr.Notes(k) },
+		}
+		if err := p.details.Read(change, in); err != nil {
+			return provider.Credentials{}, err
+		}
+	}
+	if err := mgr.StorePasswordWithDetails(p.service, p.username, pw, et, p.Filing(), change); err != nil {
 		return provider.Credentials{}, err
 	}
 	// A typed password only; API keys and notes come from elsewhere.

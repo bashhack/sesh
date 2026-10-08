@@ -19,7 +19,7 @@ func showVault(t *testing.T) *rekeyTestEnv {
 	store := openDoctorVault(t, env)
 	d := vault.Details{
 		URL:   "https://github.com/login",
-		Notes: []byte("line one\nline two"),
+		Notes: []byte("line one\nline two\n"),
 		Fields: []vault.Field{
 			{Name: "recovery-email", Value: []byte("alice@example.com")},
 			{Name: "pin", Value: []byte("4321"), Secret: true},
@@ -142,7 +142,7 @@ func TestShow_JSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("%v: %s", err, out)
 	}
-	if got.Secret == nil || *got.Secret != "old-pw" || got.Notes == nil || *got.Notes != "line one\nline two" || got.Fields[1].Value != "4321" {
+	if got.Secret == nil || *got.Secret != "old-pw" || got.Notes == nil || *got.Notes != "line one\nline two\n" || got.Fields[1].Value != "4321" {
 		t.Errorf("revealed JSON = %+v\n%s", got, out)
 	}
 }
