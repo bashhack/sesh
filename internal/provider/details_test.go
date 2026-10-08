@@ -110,3 +110,17 @@ func TestCheckAgainst(t *testing.T) {
 		t.Errorf("a new entry: %v", err)
 	}
 }
+
+// A secret field's value of the most an entry holds, with its line break,
+// is taken whole.
+func TestRead_SecretFieldAtTheLimit(t *testing.T) {
+	f := detailsFlags(t, "--secret-field", "pin")
+	c, err := f.Change(vault.KindPassword, vault.KindPassword, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := strings.Repeat("A", vault.MaxDetailsSize)
+	if err := f.Read(c, &DetailsInput{Stdin: strings.NewReader(value + "\r\n"), Stderr: &bytes.Buffer{}}); err != nil || len(c.Set[0].Value) != vault.MaxDetailsSize {
+		t.Errorf("Read = %v, %d bytes", err, len(c.Set[0].Value))
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -218,4 +220,50 @@ func TestStore_DetailsRefused(t *testing.T) {
 			t.Errorf("%q: %v, want an error containing %q", tc.args, err, tc.wantSub)
 		}
 	}
+}
+
+// Over an existing entry, what the details flags can't do is said before
+// the overwrite question; and Ctrl-D alone at the notes keeps them.
+func TestStore_DetailsOrderAndPrompt(t *testing.T) {
+	stubStdinIsTerminal(t, false)
+	p := storeWith(t, fieldStore(t), "", nil, "--action", "store", "--service-name", "github", "--username", "alice", "--field", "PIN=1")
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "pin is a secret field") {
+		t.Errorf("plain over secret, before the overwrite question: %v", err)
+	}
+	stubStdinIsTerminal(t, true)
+	store := fieldStore(t)
+	p = storeWith(t, store, "", []string{"An0ther-long-passphrase!"}, "--action", "store", "--service-name", "github", "--username", "alice", "--force", "--notes")
+	stderr := captureStderr(t, func() {
+		if _, err := p.GetCredentials(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(stderr, "(Ctrl-D alone keeps the notes as they are)") {
+		t.Errorf("prompt = %q", stderr)
+	}
+	if d, err := store.Details(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}, "all"); err != nil || string(d.Notes) != "line one\nline two" {
+		t.Errorf("notes = %q, %v; want them kept", d.Notes, err)
+	}
+}
+
+// captureStderr runs f and returns what it wrote to os.Stderr.
+func captureStderr(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	out := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r) //nolint:errcheck // what was read is the answer
+		out <- string(b)
+	}()
+	f()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return <-out
 }

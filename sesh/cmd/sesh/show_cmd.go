@@ -5,8 +5,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/secure"
@@ -135,9 +137,9 @@ func (s *shownEntry) text(reveal bool) string {
 		rows = append(rows, row{"Tags", tags})
 	}
 	if reveal {
-		rows = append(rows, row{secretLabel(s.e.Kind), string(s.secret)})
+		rows = append(rows, row{secretLabel(s.e.Kind), shownText(string(s.secret))})
 		if len(s.d.Notes) > 0 {
-			rows = append(rows, row{"Notes", string(s.d.Notes)})
+			rows = append(rows, row{"Notes", shownText(string(s.d.Notes))})
 		}
 	} else {
 		rows = append(rows, row{secretLabel(s.e.Kind), hidden + "   (get, or --reveal)"})
@@ -168,11 +170,31 @@ func (s *shownEntry) text(reveal bool) string {
 		width = max(width, len(names[i]))
 	}
 	for i, f := range s.d.Fields {
-		value := string(f.Value)
+		value := shownText(string(f.Value))
 		if f.Secret && !reveal {
 			value = hidden
 		}
 		writeRow(&b, "    ", names[i], width+3, value)
+	}
+	return b.String()
+}
+
+// shownText is v as show prints it at a terminal: a character that could
+// work the terminal or reorder the line (a control character other than a
+// tab or line break, or a text-direction control) is escaped as Go
+// writes it, so "\x1b" shows as those four characters.
+func shownText(v string) string {
+	var b strings.Builder
+	for _, r := range strings.ReplaceAll(v, "\r\n", "\n") {
+		switch {
+		case r == '\n' || r == '\t':
+			b.WriteRune(r)
+		case unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r):
+			q := strconv.QuoteRune(r)
+			b.WriteString(q[1 : len(q)-1])
+		default:
+			b.WriteRune(r)
+		}
 	}
 	return b.String()
 }

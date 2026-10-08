@@ -1062,7 +1062,7 @@ sesh --service password --action store --service-name db --url https://db.intern
   - a plain value or URL is one line;
   - a secret field's value is typed hidden, or read as one line from stdin without a terminal;
   - notes can have many lines. Notes piped in empty remove them (`--notes < /dev/null`); at a terminal, Ctrl-D before typing anything changes nothing;
-  - notes and secret values are text: tabs and line breaks are fine, other control characters aren't, so nothing shown can work the terminal;
+  - notes and secret values are text: tabs and line breaks are fine, other control characters aren't. `sesh show` also escapes any such character in what it prints, the secret included (`\x1b` shows as those four characters), so what it shows can't work your terminal. `get --show` prints a value exactly as stored, for scripts;
   - setting a field it already has replaces its value. A plain `--field` can't replace a secret field: use `--secret-field`, or remove it first to make it plain;
   - the notes and values together can take up to 1 MiB.
 - **Without a terminal,** only one value can come from stdin per command: the secret, the notes, or one secret field.

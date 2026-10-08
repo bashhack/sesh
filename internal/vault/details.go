@@ -147,8 +147,10 @@ func CheckFieldName(name string) error {
 }
 
 // checkText refuses a value, called what in errors, that isn't valid text
-// or has a control character other than a tab or a line break, which a
-// terminal could take as a command when it's shown.
+// or has a control character other than a tab or a line break (\n, or
+// \r\n), which a terminal could take as a command, or use to show one
+// line over another, when it's shown. The error names the character and
+// its line.
 func checkText(what string, v []byte) error {
 	isnt, has := "isn't", "contains"
 	if what == "notes" {
@@ -157,8 +159,15 @@ func checkText(what string, v []byte) error {
 	if !utf8.Valid(v) {
 		return fmt.Errorf("the %s %s valid text", what, isnt)
 	}
-	if bytes.IndexFunc(v, func(r rune) bool { return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r' }) >= 0 {
-		return fmt.Errorf("the %s %s a control character", what, has)
+	line := 1
+	for i, r := range string(v) {
+		switch {
+		case r == '\n':
+			line++
+		case r == '\t', r == '\r' && i+1 < len(v) && v[i+1] == '\n':
+		case unicode.IsControl(r):
+			return fmt.Errorf("the %s %s a control character, %q on line %d", what, has, string(r), line)
+		}
 	}
 	return nil
 }

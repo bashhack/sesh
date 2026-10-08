@@ -181,6 +181,9 @@ type DetailsInput struct {
 	// Name is the entry, for prompts.
 	Name     string
 	Terminal bool
+	// KeepNotes says that notes ended at once at a terminal keep the
+	// notes as they are, rather than cancelling the command.
+	KeepNotes bool
 }
 
 // Read reads the values c still needs: each secret field, asked for hidden
@@ -199,12 +202,13 @@ func (f *DetailsFlags) Read(c *vault.DetailsChange, in *DetailsInput) error {
 			v, err = in.ReadSecret()
 			fmt.Fprintln(in.Stderr) //nolint:errcheck // ends the prompt line
 		} else {
-			v, err = io.ReadAll(io.LimitReader(in.Stdin, vault.MaxDetailsSize+1))
+			// Room for the value and the line break that ends it.
+			v, err = io.ReadAll(io.LimitReader(in.Stdin, vault.MaxDetailsSize+3))
+			v = bytes.TrimSuffix(bytes.TrimSuffix(v, []byte("\n")), []byte("\r"))
 			if err == nil && len(v) > vault.MaxDetailsSize {
 				secure.SecureZeroBytes(v)
 				return fmt.Errorf("the value for %s is over %d bytes, the most an entry holds; nothing changed", fl.Name, vault.MaxDetailsSize)
 			}
-			v = bytes.TrimSuffix(bytes.TrimSuffix(v, []byte("\n")), []byte("\r"))
 			if err == nil && bytes.ContainsAny(v, "\r\n") {
 				secure.SecureZeroBytes(v)
 				return errors.New("a secret field's value is one line, and this has several; nothing changed")
@@ -237,7 +241,11 @@ func (f *DetailsFlags) Read(c *vault.DetailsChange, in *DetailsInput) error {
 		c.NotesBase, c.HasNotesBase = current, true
 	} else {
 		if in.Terminal {
-			fmt.Fprintf(in.Stderr, "Type the notes for %s, then press Ctrl-D on a new line (Ctrl-D alone changes nothing):\n", in.Name) //nolint:errcheck // prompt
+			alone := "changes nothing"
+			if in.KeepNotes {
+				alone = "keeps the notes as they are"
+			}
+			fmt.Fprintf(in.Stderr, "Type the notes for %s, then press Ctrl-D on a new line (Ctrl-D alone %s):\n", in.Name, alone) //nolint:errcheck // prompt
 		}
 		notes, err = io.ReadAll(io.LimitReader(in.Stdin, vault.MaxDetailsSize+1))
 		if err == nil && in.Terminal && len(notes) == 0 {
@@ -326,20 +334,21 @@ func EditNotes(notes []byte) (_ []byte, err error) {
 	path := filepath.Join(dir, "notes.txt")
 	var once sync.Once
 	cleanUp := func() { once.Do(func() { wipe(path); _ = os.RemoveAll(dir) }) } //nolint:errcheck // best effort
-	defer cleanUp()
 
 	// While the editor runs, Ctrl-C and Ctrl-\ are the editor's, as git
-	// has it; a closed terminal or a request to stop cleans up first.
+	// has it; a closed terminal or a request to stop cleans up first. The
+	// file goes before the handling stops, so no signal finds it there.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT, syscall.SIGHUP, syscall.SIGTERM)
 	done := make(chan struct{})
-	defer func() { signal.Stop(sigs); close(done) }()
+	defer func() { cleanUp(); signal.Stop(sigs); close(done) }()
 	go func() {
 		for {
 			select {
 			case sig := <-sigs:
 				if sig == syscall.SIGHUP || sig == syscall.SIGTERM {
 					cleanUp()
+					fmt.Fprintln(os.Stderr, "Stopped while the editor was open; nothing changed.") //nolint:errcheck // best effort
 					os.Exit(1)
 				}
 			case <-done:

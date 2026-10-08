@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -220,4 +221,41 @@ func TestEdit_EditorEdges(t *testing.T) {
 		t.Errorf("notes = %q", d.Notes)
 	}
 
+}
+
+// sesh audit shows what a read of the details was for.
+func TestAudit_ShowsWhatWasRead(t *testing.T) {
+	env := showVault(t)
+	store := openDoctorVault(t, env)
+	d, err := store.Details(aliceKey, "field pin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Zero()
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	app := agentTestApp()
+	if err := runAudit(app, []string{"--limit", "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "github (alice) (read field pin)") {
+		t.Errorf("audit output:\n%s", out)
+	}
+}
+
+// Revealed values are shown with control characters escaped, so even a
+// secret stored with them can't work the terminal.
+func TestShow_EscapesControlCharacters(t *testing.T) {
+	editVault(t)
+	if _, _, err := runEditOut(t, "k\x1b[2J\u202e\n", false, "password/gitlab", "--secret"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runShowOut(t, "password/gitlab", "--reveal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsRune(out, 0x1b) || strings.ContainsRune(out, 0x202e) || !strings.Contains(out, `k\x1b[2J\u202e`) {
+		t.Errorf("output = %q", out)
+	}
 }

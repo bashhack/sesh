@@ -473,7 +473,8 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			{gh, `the field "PIN" is there twice (as "pin")`, vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte("1")}, {Name: "PIN", Value: []byte("2")}}}},
 			{gh, "the notes aren't valid text", vault.Details{Notes: []byte{0xff, 'x'}}},
 			{gh, `the field "pin" isn't valid text`, vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte{0xfe}, Secret: true}}}},
-			{gh, "the notes contain a control character", vault.Details{Notes: []byte("hi\x1b]0;title\x07")}},
+			{gh, `the notes contain a control character, "\x1b" on line 2`, vault.Details{Notes: []byte("ok\nhi\x1b]0;title\x07")}},
+			{gh, `the notes contain a control character, "\r" on line 1`, vault.Details{Notes: []byte("real\rFAKE")}},
 			{gh, `the field "pin" contains a control character`, vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte("\x1b[31m"), Secret: true}}}},
 			{gh, "take 1048577 bytes together", vault.Details{Notes: bytes.Repeat([]byte("a"), vault.MaxDetailsSize), Fields: []vault.Field{{Name: "pin", Value: []byte("1"), Secret: true}}}},
 		}

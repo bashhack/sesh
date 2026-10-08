@@ -620,11 +620,8 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 		}
 	}
 
-	if err := p.confirmSave(mgr, et); err != nil {
-		return provider.Credentials{}, err
-	}
 	// What the details change can't do to the entry it replaces (or a new
-	// one) is refused before anything is typed.
+	// one) is refused before anything is asked.
 	if change != nil {
 		current, err := p.store.Lookup(vault.Key{Kind: et, Service: p.service, Username: p.username})
 		if err != nil && !errors.Is(err, vault.ErrNotFound) {
@@ -633,6 +630,10 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 		if err := provider.CheckAgainst(&current, change); err != nil {
 			return provider.Credentials{}, err
 		}
+	}
+
+	if err := p.confirmSave(mgr, et); err != nil {
+		return provider.Credentials{}, err
 	}
 
 	// Read input — method depends on entry type
@@ -676,7 +677,7 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 		defer provider.ZeroChange(change)
 		k := vault.Key{Kind: et, Service: p.service, Username: p.username}
 		in := &provider.DetailsInput{
-			Stdin: p.stdin, Stderr: os.Stderr, ReadSecret: readPassword, Name: k.String(), Terminal: terminal,
+			Stdin: p.stdin, Stderr: os.Stderr, ReadSecret: readPassword, Name: k.String(), Terminal: terminal, KeepNotes: true,
 			Notes: func() ([]byte, error) { return mgr.Notes(k) },
 		}
 		// Notes ended at once at a terminal leave the notes as they are.
