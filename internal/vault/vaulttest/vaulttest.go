@@ -3,6 +3,7 @@
 package vaulttest
 
 import (
+	"bytes"
 	"errors"
 	"slices"
 	"strings"
@@ -314,6 +315,157 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			if err := s.Delete(k); !errors.Is(err, vault.ErrNotFound) {
 				t.Errorf("Delete(%+v) = %v, want ErrNotFound", k, err)
 			}
+			if _, err := s.Details(k); !errors.Is(err, vault.ErrNotFound) {
+				t.Errorf("Details(%+v) = %v, want ErrNotFound", k, err)
+			}
 		}
+	})
+
+	details := func() vault.Details {
+		return vault.Details{
+			URL:   "https://github.com/login",
+			Notes: []byte("line one\nline two"),
+			Fields: []vault.Field{
+				{Name: "recovery-email", Value: []byte("alice@example.com")},
+				{Name: "pin", Value: []byte("1234"), Secret: true},
+				{Name: "backup.code", Value: []byte("a\x00b"), Secret: true},
+			},
+		}
+	}
+
+	t.Run("details: set and read back", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.Put(gh, []byte("pw")); err != nil {
+			t.Fatal(err)
+		}
+		if d, err := s.Details(gh); err != nil || !d.IsZero() {
+			t.Fatalf("Details of a new entry = %+v, %v; want none", d, err)
+		}
+		want := details()
+		if err := s.SetDetails(gh, &want); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.Details(gh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkDetails(t, &got, &want)
+		// What's readable without the key: the URL, that there are notes,
+		// and the fields in order, with only the plain values.
+		e, err := s.Lookup(gh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantFields := []vault.Field{{Name: "recovery-email", Value: []byte("alice@example.com")}, {Name: "pin", Secret: true}, {Name: "backup.code", Secret: true}}
+		if e.URL != want.URL || !e.HasNotes || !fieldsEqual(e.Fields, wantFields) {
+			t.Errorf("Lookup = URL %q, notes %v, fields %+v; want %q, true, %+v", e.URL, e.HasNotes, e.Fields, want.URL, wantFields)
+		}
+		list, err := s.List(&vault.Filter{})
+		if err != nil || len(list) != 1 || list[0].URL != want.URL || !list[0].HasNotes || !fieldsEqual(list[0].Fields, wantFields) {
+			t.Errorf("List = %+v, %v; want the details as Lookup has them", list, err)
+		}
+		// Replacing them replaces all of it.
+		if err := s.SetDetails(gh, &vault.Details{URL: "https://example.com"}); err != nil {
+			t.Fatal(err)
+		}
+		got, err = s.Details(gh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkDetails(t, &got, &vault.Details{URL: "https://example.com"})
+		if e, _ := s.Lookup(gh); e.HasNotes || len(e.Fields) != 0 { //nolint:errcheck // checked by Details above
+			t.Errorf("Lookup after replacing = notes %v, fields %+v; want none", e.HasNotes, e.Fields)
+		}
+	})
+
+	t.Run("details: put and save keep them, delete removes them", func(t *testing.T) {
+		s := newStore(t)
+		if err := s.Put(gh, []byte("pw")); err != nil {
+			t.Fatal(err)
+		}
+		want := details()
+		if err := s.SetDetails(gh, &want); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Put(gh, []byte("pw-2")); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Save(&vault.Entry{Key: gh, Folder: "work"}, []byte("pw-3")); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.Details(gh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkDetails(t, &got, &want)
+		if err := s.Delete(gh); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Put(gh, []byte("pw")); err != nil {
+			t.Fatal(err)
+		}
+		if d, err := s.Details(gh); err != nil || !d.IsZero() {
+			t.Errorf("Details after delete and put = %+v, %v; want none", d, err)
+		}
+	})
+
+	t.Run("details: refused", func(t *testing.T) {
+		s := newStore(t)
+		note := vault.Key{Kind: vault.KindNote, Service: "wifi"}
+		for _, k := range []vault.Key{gh, note} {
+			if err := s.Put(k, []byte("v")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tests := []struct {
+			k       vault.Key
+			wantSub string
+			d       vault.Details
+		}{
+			{note, "a secure note can't have notes", vault.Details{Notes: []byte("n")}},
+			{gh, "the URL contains a control character", vault.Details{URL: "https://a\nb"}},
+			{gh, "the URL is 2049 characters long", vault.Details{URL: strings.Repeat("x", vault.MaxURLLength+1)}},
+			{gh, `the field name "url" is reserved`, vault.Details{Fields: []vault.Field{{Name: "url", Value: []byte("v")}}}},
+			{gh, `the field name "Notes" is reserved`, vault.Details{Fields: []vault.Field{{Name: "Notes", Value: []byte("v")}}}},
+			{gh, `the field name "my pin" contains ' '`, vault.Details{Fields: []vault.Field{{Name: "my pin", Value: []byte("v")}}}},
+			{gh, `the field "pin" is there twice`, vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte("1")}, {Name: "pin", Value: []byte("2"), Secret: true}}}},
+			{gh, `the field "pin" has no value`, vault.Details{Fields: []vault.Field{{Name: "pin", Secret: true}}}},
+			{gh, `the field "host" contains a control character`, vault.Details{Fields: []vault.Field{{Name: "host", Value: []byte("a\tb")}}}},
+			{gh, "take 1048577 bytes together", vault.Details{Notes: make([]byte, vault.MaxDetailsSize), Fields: []vault.Field{{Name: "pin", Value: []byte("1"), Secret: true}}}},
+		}
+		for i := range tests {
+			tc := &tests[i]
+			if err := s.SetDetails(tc.k, &tc.d); err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("SetDetails(%s, %+v) = %v, want an error containing %q", tc.k, tc.d.Fields, err, tc.wantSub)
+			}
+		}
+		many := vault.Details{}
+		for i := range vault.MaxFields + 1 {
+			many.Fields = append(many.Fields, vault.Field{Name: "f" + strings.Repeat("x", i), Value: []byte("v")})
+		}
+		if err := s.SetDetails(gh, &many); err == nil || !strings.Contains(err.Error(), "at most 50 fields") {
+			t.Errorf("SetDetails with %d fields = %v, want refused", len(many.Fields), err)
+		}
+		// A secure note still takes a URL and fields.
+		if err := s.SetDetails(note, &vault.Details{URL: "https://router.local", Fields: []vault.Field{{Name: "ssid", Value: []byte("home")}}}); err != nil {
+			t.Errorf("SetDetails on a secure note: %v", err)
+		}
+		if err := s.SetDetails(vault.Key{Kind: vault.KindPassword, Service: "nope"}, &vault.Details{URL: "x"}); !errors.Is(err, vault.ErrNotFound) {
+			t.Errorf("SetDetails of a missing entry = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+// checkDetails fails t unless got is want.
+func checkDetails(t *testing.T, got, want *vault.Details) {
+	t.Helper()
+	if got.URL != want.URL || !bytes.Equal(got.Notes, want.Notes) || !fieldsEqual(got.Fields, want.Fields) {
+		t.Errorf("details = %+v (notes %q), want %+v (notes %q)", got, got.Notes, want, want.Notes)
+	}
+}
+
+func fieldsEqual(a, b []vault.Field) bool {
+	return slices.EqualFunc(a, b, func(x, y vault.Field) bool {
+		return x.Name == y.Name && x.Secret == y.Secret && bytes.Equal(x.Value, y.Value)
 	})
 }

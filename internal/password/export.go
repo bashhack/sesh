@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,8 +26,50 @@ type ExportEntry struct {
 	Type      EntryType      `json:"type"`
 	Secret    string         `json:"secret"`
 	Folder    string         `json:"folder,omitempty"`
+	URL       string         `json:"url,omitempty"`
+	Notes     string         `json:"notes,omitempty"`
 	Tags      []string       `json:"tags,omitempty"`
+	Fields    []ExportField  `json:"fields,omitempty"`
 	Settings  vault.Settings `json:"settings,omitzero"`
+}
+
+// ExportField is a custom field as an export holds it, secret or not.
+type ExportField struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Secret bool   `json:"secret,omitempty"`
+}
+
+// exportDetails reads e's details for an export: from e when they're all
+// readable, or opened from the store when there are notes or secret
+// values.
+func (m *Manager) exportDetails(e *vault.Entry, ee *ExportEntry) error {
+	d := vault.Details{URL: e.URL, Fields: e.Fields}
+	if e.HasNotes || slices.ContainsFunc(e.Fields, func(f vault.Field) bool { return f.Secret }) {
+		var err error
+		if d, err = m.store.Details(e.Key); err != nil {
+			return fmt.Errorf("failed to decrypt the details of %s: %w", e.Key, err)
+		}
+		defer d.Zero()
+	}
+	ee.URL, ee.Notes = d.URL, string(d.Notes)
+	for _, f := range d.Fields {
+		ee.Fields = append(ee.Fields, ExportField{Name: f.Name, Value: string(f.Value), Secret: f.Secret})
+	}
+	return nil
+}
+
+// importDetails is ee's details as the store takes them; the caller zeroes
+// them.
+func importDetails(ee *ExportEntry) vault.Details {
+	d := vault.Details{URL: ee.URL}
+	if ee.Notes != "" {
+		d.Notes = []byte(ee.Notes)
+	}
+	for _, f := range ee.Fields {
+		d.Fields = append(d.Fields, vault.Field{Name: f.Name, Value: []byte(f.Value), Secret: f.Secret})
+	}
+	return d
 }
 
 // ExportFormat specifies the output format for export.
@@ -110,6 +153,9 @@ func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry) (int, error) {
 		// Source buffer can go immediately; the Secret string copy is
 		// ephemeral per iteration and out of scope after this block.
 		secure.SecureZeroBytes(secretBytes)
+		if err := m.exportDetails(e, &ee); err != nil {
+			return count, err
+		}
 
 		b, err := json.MarshalIndent(ee, "  ", "  ") //nolint:gosec // plaintext export writes secrets by design; --format encrypted is the protected alternative
 		if err != nil {
@@ -135,10 +181,11 @@ func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry) (int, error) {
 
 // exportCSV writes entries as CSV, one row at a time. The settings column
 // holds an entry's settings as JSON, empty when it has none; the tags
-// column, its tags joined by ";", which a tag can't contain.
+// column, its tags joined by ";", which a tag can't contain; the fields
+// column, its custom fields as JSON, as the JSON export has them.
 func (m *Manager) exportCSV(w io.Writer, entries []vault.Entry) (int, error) {
 	cw := csv.NewWriter(w)
-	if err := cw.Write([]string{"service", "username", "type", "secret", "created_at", "updated_at", "settings", "folder", "tags"}); err != nil {
+	if err := cw.Write([]string{"service", "username", "type", "secret", "created_at", "updated_at", "settings", "folder", "tags", "url", "notes", "fields"}); err != nil {
 		return 0, err
 	}
 
@@ -153,6 +200,20 @@ func (m *Manager) exportCSV(w io.Writer, entries []vault.Entry) (int, error) {
 				return count, fmt.Errorf("encode the settings of %s: %w", e.Key, err)
 			}
 			settings = string(b)
+		}
+		var ee ExportEntry
+		if err := m.exportDetails(e, &ee); err != nil {
+			cw.Flush()
+			return count, err
+		}
+		fields := ""
+		if len(ee.Fields) > 0 {
+			b, err := json.Marshal(ee.Fields)
+			if err != nil {
+				cw.Flush()
+				return count, fmt.Errorf("encode the fields of %s: %w", e.Key, err)
+			}
+			fields = string(b)
 		}
 		secretBytes, err := m.store.Get(e.Key)
 		if err != nil {
@@ -170,6 +231,9 @@ func (m *Manager) exportCSV(w io.Writer, entries []vault.Entry) (int, error) {
 			settings,
 			e.Folder,
 			strings.Join(e.Tags, ";"),
+			ee.URL,
+			ee.Notes,
+			fields,
 		})
 		secure.SecureZeroBytes(secretBytes)
 		if writeErr != nil {
@@ -275,11 +339,24 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 			}
 		}
 
-		// The entry keeps its settings, folder, tags, and times; a zero
-		// time means now.
+		// The details are checked first, so an entry that can't have them
+		// isn't imported without them.
+		details := importDetails(e)
+		if err := details.Check(k.Kind); err != nil {
+			details.Zero()
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
+			continue
+		}
+		// The entry keeps its settings, folder, tags, times, and details; a
+		// zero time means now. An entry it replaces gets the file's
+		// details, none included.
 		secret := []byte(e.Secret)
 		err = m.store.Save(&vault.Entry{Key: k, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt}, secret)
 		secure.SecureZeroBytes(secret)
+		if err == nil && (exists || !details.IsZero()) {
+			err = m.store.SetDetails(k, &details)
+		}
+		details.Zero()
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
 			continue
@@ -356,6 +433,17 @@ func readCSV(r io.Reader) ([]ExportEntry, error) {
 
 		if i, ok := idx["folder"]; ok && i < len(record) {
 			e.Folder = record[i]
+		}
+		if i, ok := idx["url"]; ok && i < len(record) {
+			e.URL = record[i]
+		}
+		if i, ok := idx["notes"]; ok && i < len(record) {
+			e.Notes = record[i]
+		}
+		if i, ok := idx["fields"]; ok && i < len(record) && record[i] != "" {
+			if err := json.Unmarshal([]byte(record[i]), &e.Fields); err != nil {
+				return nil, fmt.Errorf("the fields of %s/%s aren't valid JSON: %w", e.Service, e.Username, err)
+			}
 		}
 		if i, ok := idx["tags"]; ok && i < len(record) {
 			// Spaces around a tag and empty ones, as hand editing leaves.

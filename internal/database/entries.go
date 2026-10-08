@@ -27,7 +27,13 @@ var _ vault.Store = (*Store)(nil)
 // length and its bytes. The lengths keep fields from running together
 // (service "a/b" is not service "a", username "b"), whatever they contain.
 func entryAAD(k vault.Key) []byte {
-	aad := []byte("sesh-entry-v1")
+	return keyAAD("sesh-entry-v1", k)
+}
+
+// keyAAD is tag, then k's kind, service, and username, each as a 4-byte
+// big-endian length and its bytes.
+func keyAAD(tag string, k vault.Key) []byte {
+	aad := []byte(tag)
 	for _, f := range []string{string(k.Kind), k.Service, k.Username} {
 		aad = binary.BigEndian.AppendUint32(aad, uint32(len(f))) //nolint:gosec // field lengths are far below 4 GiB
 		aad = append(aad, f...)
@@ -203,9 +209,10 @@ func (s *Store) SetSettings(k vault.Key, settings vault.Settings) error {
 // Lookup implements vault.Store.
 func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
 	var col, tags sql.NullString
+	var url, details string
 	e := vault.Entry{Key: k}
-	err := s.db.QueryRow(`SELECT settings, folder, `+tagsColumn+`, created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`,
-		string(k.Kind), k.Service, k.Username).Scan(&col, &e.Folder, &tags, &e.CreatedAt, &e.UpdatedAt)
+	err := s.db.QueryRow(`SELECT settings, folder, `+tagsColumn+`, url, details, created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return vault.Entry{}, notFound(k)
 	}
@@ -216,6 +223,9 @@ func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
 		return vault.Entry{}, err
 	}
 	e.Tags = splitTags(tags)
+	if err := vault.DecodeEntryDetails(&e, url, details); err != nil {
+		return vault.Entry{}, err
+	}
 	return e, nil
 }
 
@@ -236,7 +246,7 @@ func (s *Store) Exists(k vault.Key) error {
 // List implements vault.Store.
 func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 	var q strings.Builder
-	q.WriteString(`SELECT kind, service, username, settings, folder, ` + tagsColumn + `, created_at, updated_at FROM entries WHERE 1 = 1`)
+	q.WriteString(`SELECT kind, service, username, settings, folder, ` + tagsColumn + `, url, details, created_at, updated_at FROM entries WHERE 1 = 1`)
 	var args []any
 	if f.Kind != "" {
 		q.WriteString(` AND kind = ?`)
@@ -274,7 +284,8 @@ func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 		var e vault.Entry
 		var kind string
 		var col, tags sql.NullString
-		if err := rows.Scan(&kind, &e.Service, &e.Username, &col, &e.Folder, &tags, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		var url, details string
+		if err := rows.Scan(&kind, &e.Service, &e.Username, &col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("list entries: %w", err)
 		}
 		e.Kind = vault.Kind(kind)
@@ -282,6 +293,9 @@ func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 			return nil, err
 		}
 		e.Tags = splitTags(tags)
+		if err := vault.DecodeEntryDetails(&e, url, details); err != nil {
+			return nil, err
+		}
 		out = append(out, e)
 	}
 	return out, rows.Err()

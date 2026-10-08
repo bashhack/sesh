@@ -154,3 +154,64 @@ func TestNormalizeTags(t *testing.T) {
 		t.Errorf("NormalizeTags(nil) = %q, want nil", got)
 	}
 }
+
+// The stored parts of an entry's details put back together give the same
+// details; damaged or disagreeing parts are refused, not misread.
+func TestDetailsEncoding(t *testing.T) {
+	k := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	d := vault.Details{URL: "https://github.com", Notes: []byte("n\x00tes"), Fields: []vault.Field{
+		{Name: "email", Value: []byte("a@b")},
+		{Name: "pin", Value: []byte("1234"), Secret: true},
+		{Name: "otp-seed", Value: []byte{0xff, 0x00}, Secret: true},
+	}}
+	url, plain, sealed, err := vault.EncodeDetails(&d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plain, "1234") || strings.Contains(plain, "n\\u0000tes") {
+		t.Errorf("the readable part holds a secret: %s", plain)
+	}
+	e := vault.Entry{Key: k}
+	if err := vault.DecodeEntryDetails(&e, url, plain); err != nil {
+		t.Fatal(err)
+	}
+	got, err := vault.DecodeDetails(&e, sealed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.URL != d.URL || string(got.Notes) != string(d.Notes) || len(got.Fields) != 3 || string(got.Fields[2].Value) != "\xff\x00" || string(got.Fields[0].Value) != "a@b" {
+		t.Errorf("round trip = %+v, want %+v", got, d)
+	}
+
+	// Nothing sealed when there's nothing secret; nothing at all for none.
+	if _, p, s, _ := vault.EncodeDetails(&vault.Details{Fields: []vault.Field{{Name: "a", Value: []byte("b")}}}); p == "" || s != nil { //nolint:errcheck // can't fail
+		t.Errorf("plain only: plain %q, sealed %v", p, s)
+	}
+	if u, p, s, _ := vault.EncodeDetails(&vault.Details{}); u != "" || p != "" || s != nil { //nolint:errcheck // can't fail
+		t.Errorf("none: %q %q %v", u, p, s)
+	}
+
+	for name, damaged := range map[string][]byte{
+		"empty":           {},
+		"unknown layout":  append([]byte{2}, sealed[1:]...),
+		"cut short":       sealed[:len(sealed)-1],
+		"extra bytes":     append(slices.Clone(sealed), 0),
+		"length too long": append([]byte{1, 0xff, 0xff, 0xff, 0xff}, sealed[5:]...),
+	} {
+		if _, err := vault.DecodeDetails(&e, damaged); err == nil {
+			t.Errorf("%s: decoded", name)
+		}
+	}
+	// The readable part and the sealed one must agree.
+	if _, err := vault.DecodeDetails(&e, nil); err == nil || !strings.Contains(err.Error(), "the notes don't match their record") {
+		t.Errorf("no sealed part: %v", err)
+	}
+	_, _, onlyPin, _ := vault.EncodeDetails(&vault.Details{Notes: []byte("n\x00tes"), Fields: []vault.Field{{Name: "pin", Value: []byte("1"), Secret: true}}}) //nolint:errcheck // can't fail
+	if _, err := vault.DecodeDetails(&e, onlyPin); err == nil || !strings.Contains(err.Error(), `the secret field "otp-seed" has no value`) {
+		t.Errorf("a missing secret value: %v", err)
+	}
+	_, _, extra, _ := vault.EncodeDetails(&vault.Details{Notes: []byte("x"), Fields: []vault.Field{{Name: "pin", Value: []byte("1"), Secret: true}, {Name: "otp-seed", Value: []byte("1"), Secret: true}, {Name: "more", Value: []byte("1"), Secret: true}}}) //nolint:errcheck // can't fail
+	if _, err := vault.DecodeDetails(&e, extra); err == nil || !strings.Contains(err.Error(), "secret values for fields it doesn't have") {
+		t.Errorf("an extra secret value: %v", err)
+	}
+}

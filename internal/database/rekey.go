@@ -95,7 +95,7 @@ type RekeyResult struct {
 }
 
 // Rekey re-encrypts the vault in place under newKey, whose key record is
-// rec, in one transaction: every entry, the key record, and the recovery
+// rec, in one transaction: every entry's secret and details, the key record, and the recovery
 // key record, which rewrap re-wraps to the new key. The recovery key record
 // is removed instead when rewrap is nil (a recovery, whose key has been
 // used) or when it was made for another vault. Nothing changes unless all
@@ -124,7 +124,7 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 	sealed := make(map[int64]sealedEntry, len(before))
 	for i := range before {
 		e := &before[i]
-		if e.data, e.salt, err = s.reseal(s.db, e, newKey); err != nil {
+		if err := s.reseal(s.db, e, newKey); err != nil {
 			return res, err
 		}
 		sealed[e.id] = *e
@@ -138,13 +138,13 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 			e := &now[i]
 			// An entry unchanged since it was re-encrypted ahead takes that;
 			// one saved since is re-encrypted now.
-			var data, salt []byte
-			if done, ok := sealed[e.id]; ok && done.k == e.k && bytes.Equal(done.oldData, e.data) && bytes.Equal(done.oldSalt, e.salt) {
-				data, salt = done.data, done.salt
-			} else if data, salt, err = s.reseal(tx, e, newKey); err != nil {
+			if done, ok := sealed[e.id]; ok && done.unchangedFrom(e) {
+				*e = done
+			} else if err := s.reseal(tx, e, newKey); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(`UPDATE entries SET encrypted_data = ?, salt = ? WHERE id = ?`, data, salt, e.id); err != nil {
+			if _, err := tx.Exec(`UPDATE entries SET encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ? WHERE id = ?`,
+				e.data, e.salt, e.details, e.detailsSalt, e.id); err != nil {
 				return fmt.Errorf("store %s: %w", e.k, err)
 			}
 		}
@@ -179,20 +179,30 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 	return res, nil
 }
 
-// sealedEntry is an entry's encrypted secret: as stored (data, salt), and
-// as stored before resealing (oldData, oldSalt).
+// sealedEntry is an entry's encrypted secret and details: as stored
+// (data, salt, details, detailsSalt), and as stored before resealing (the
+// old ones).
 type sealedEntry struct {
-	k                vault.Key
-	data, salt       []byte
-	oldData, oldSalt []byte
-	id               int64
+	k                          vault.Key
+	data, salt                 []byte
+	details, detailsSalt       []byte
+	oldData, oldSalt           []byte
+	oldDetails, oldDetailsSalt []byte
+	id                         int64
 }
 
-// sealedEntries reads every entry's encrypted secret through q.
+// unchangedFrom reports whether now, as stored, is what e was resealed
+// from.
+func (e *sealedEntry) unchangedFrom(now *sealedEntry) bool {
+	return e.k == now.k && bytes.Equal(e.oldData, now.data) && bytes.Equal(e.oldSalt, now.salt) &&
+		bytes.Equal(e.oldDetails, now.details) && bytes.Equal(e.oldDetailsSalt, now.detailsSalt)
+}
+
+// sealedEntries reads every entry's encrypted secret and details through q.
 func sealedEntries(q interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }) (_ []sealedEntry, err error) {
-	rows, err := q.Query(`SELECT id, kind, service, username, encrypted_data, salt FROM entries`)
+	rows, err := q.Query(`SELECT id, kind, service, username, encrypted_data, salt, sealed_details, details_salt FROM entries`)
 	if err != nil {
 		return nil, fmt.Errorf("read entries: %w", err)
 	}
@@ -205,11 +215,12 @@ func sealedEntries(q interface {
 	for rows.Next() {
 		var e sealedEntry
 		var kind string
-		if err := rows.Scan(&e.id, &kind, &e.k.Service, &e.k.Username, &e.data, &e.salt); err != nil {
+		if err := rows.Scan(&e.id, &kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.details, &e.detailsSalt); err != nil {
 			return nil, fmt.Errorf("read entries: %w", err)
 		}
 		e.k.Kind = vault.Kind(kind)
 		e.oldData, e.oldSalt = e.data, e.salt
+		e.oldDetails, e.oldDetailsSalt = e.details, e.detailsSalt
 		all = append(all, e)
 	}
 	if err := rows.Err(); err != nil {
@@ -218,23 +229,37 @@ func sealedEntries(q interface {
 	return all, nil
 }
 
-// reseal decrypts e's secret with the store's key and encrypts it under
-// newKey. q is what the vault is read through: the transaction, inside one,
-// since the store has a single connection.
-func (s *Store) reseal(q querier, e *sealedEntry, newKey []byte) (data, salt []byte, err error) {
-	aad := entryAAD(e.k)
-	plain, err := s.oracle.DecryptEntry(e.oldData, e.oldSalt, aad)
+// reseal decrypts e's secret and details with the store's key and
+// encrypts them under newKey, into e. q is what the vault is read through:
+// the transaction, inside one, since the store has a single connection.
+func (s *Store) reseal(q querier, e *sealedEntry, newKey []byte) error {
+	var err error
+	if e.data, e.salt, err = s.resealOne(q, e.k, e.oldData, e.oldSalt, entryAAD(e.k), newKey, ""); err != nil {
+		return err
+	}
+	if e.oldDetails != nil {
+		if e.details, e.detailsSalt, err = s.resealOne(q, e.k, e.oldDetails, e.oldDetailsSalt, detailsAAD(e.k), newKey, "the details of "); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// resealOne decrypts one sealed value of k's, what in errors, with the
+// store's key and encrypts it under newKey.
+func (s *Store) resealOne(q querier, k vault.Key, data, salt, aad, newKey []byte, what string) (newData, newSalt []byte, err error) {
+	plain, err := s.oracle.DecryptEntry(data, salt, aad)
 	if err != nil {
 		if kerr := s.keyUnchanged(q); errors.Is(kerr, ErrVaultKeyChanged) {
 			err = kerr
 		}
-		return nil, nil, fmt.Errorf("decrypt %s: %w", e.k, err)
+		return nil, nil, fmt.Errorf("decrypt %s%s: %w", what, k, err)
 	}
 	defer secure.SecureZeroBytes(plain)
-	if data, salt, err = EncryptEntry(newKey, plain, aad); err != nil {
-		return nil, nil, fmt.Errorf("encrypt %s: %w", e.k, err)
+	if newData, newSalt, err = EncryptEntry(newKey, plain, aad); err != nil {
+		return nil, nil, fmt.Errorf("encrypt %s%s: %w", what, k, err)
 	}
-	return data, salt, nil
+	return newData, newSalt, nil
 }
 
 // rewrapRecoveryRecord re-wraps the recovery key record in tx from the key

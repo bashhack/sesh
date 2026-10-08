@@ -18,8 +18,9 @@ type MemStore struct {
 }
 
 type memEntry struct {
-	secret []byte
-	entry  Entry
+	secret  []byte
+	details Details
+	entry   Entry
 }
 
 var _ Store = (*MemStore)(nil)
@@ -28,6 +29,25 @@ var _ Store = (*MemStore)(nil)
 func (e *memEntry) entryCopy() Entry {
 	c := e.entry
 	c.Tags = slices.Clone(c.Tags)
+	c.URL, c.HasNotes, c.Fields = e.details.URL, len(e.details.Notes) > 0, nil
+	for _, f := range e.details.Fields {
+		if f.Secret {
+			f.Value = nil
+		} else {
+			f.Value = bytes.Clone(f.Value)
+		}
+		c.Fields = append(c.Fields, f)
+	}
+	return c
+}
+
+// cloneDetails is d, sharing nothing with it.
+func cloneDetails(d *Details) Details {
+	c := Details{URL: d.URL, Notes: bytes.Clone(d.Notes)}
+	for _, f := range d.Fields {
+		f.Value = bytes.Clone(f.Value)
+		c.Fields = append(c.Fields, f)
+	}
 	return c
 }
 
@@ -93,7 +113,35 @@ func (m *MemStore) Save(e *Entry, secret []byte) error {
 	if saved.UpdatedAt.IsZero() {
 		saved.UpdatedAt = now
 	}
-	m.entries[e.Key] = memEntry{entry: saved, secret: bytes.Clone(secret)}
+	saved.URL, saved.Fields, saved.HasNotes = "", nil, false
+	m.entries[e.Key] = memEntry{entry: saved, secret: bytes.Clone(secret), details: m.entries[e.Key].details}
+	return nil
+}
+
+// Details implements Store.
+func (m *MemStore) Details(k Key) (Details, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.entries[k]
+	if !ok {
+		return Details{}, notFound(k)
+	}
+	return cloneDetails(&e.details), nil
+}
+
+// SetDetails implements Store.
+func (m *MemStore) SetDetails(k Key, d *Details) error {
+	if err := d.Check(k.Kind); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.entries[k]
+	if !ok {
+		return notFound(k)
+	}
+	e.details = cloneDetails(d)
+	m.entries[k] = e
 	return nil
 }
 
