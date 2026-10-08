@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,11 @@ func waitForFile(t *testing.T, path, want string) {
 	}
 }
 
+// fileTool is a clipboard tool whose clipboard is the file at path.
+func fileTool(path string) Tool {
+	return Tool{Name: "stub", paste: "cat '" + path + "'", clear: "printf '' > '" + path + "'"}
+}
+
 func TestFind(t *testing.T) {
 	wayland := map[string]string{"WAYLAND_DISPLAY": "wayland-0"}
 	x11 := map[string]string{"DISPLAY": ":0"}
@@ -76,7 +82,7 @@ func TestFind(t *testing.T) {
 		"X11 prefers xclip":              {goos: "linux", env: x11, tools: []string{"xclip", "xsel"}, want: "xclip"},
 		"X11 with xsel":                  {goos: "linux", env: x11, tools: []string{"xsel"}, want: "xsel"},
 		"X11 ignores wl-copy":            {goos: "linux", env: x11, tools: []string{"wl-copy", "wl-paste"}, wantSub: "install xclip or xsel"},
-		"no display, as over SSH":        {goos: "linux", tools: []string{"wl-copy", "wl-paste", "xclip"}, wantSub: "use --show instead"},
+		"no display, as over SSH":        {goos: "linux", tools: []string{"wl-copy", "wl-paste", "xclip"}, wantSub: "no desktop session"},
 		"Windows":                        {goos: "windows", wantSub: "unsupported platform: windows"},
 	}
 	for name, tc := range tests {
@@ -143,7 +149,10 @@ func TestCopy_Errors(t *testing.T) {
 		run     func(string, ...string) *exec.Cmd
 		wantSub string
 	}{
-		"tool fails":        {run: func(string, ...string) *exec.Cmd { return exec.Command("false") }, wantSub: "exit status 1"},
+		"tool fails": {run: func(string, ...string) *exec.Cmd { return exec.Command("false") }, wantSub: "pbcopy: exit status 1"},
+		"what the tool said": {run: func(string, ...string) *exec.Cmd {
+			return exec.Command("sh", "-c", `cat >/dev/null; echo "Error: Can't open display: :0" >&2; exit 1`)
+		}, wantSub: "pbcopy: exit status 1: Error: Can't open display: :0"},
 		"tool not runnable": {run: func(string, ...string) *exec.Cmd { return exec.Command("/nonexistent/pbcopy") }, wantSub: "no such file"},
 	}
 	for name, tc := range tests {
@@ -248,7 +257,7 @@ func TestSpawnClear_RunsScript(t *testing.T) {
 			if err := os.WriteFile(clip, []byte(tc.clipboard), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			tool := Tool{Name: "stub", paste: "cat '" + clip + "'", clear: "printf '' > '" + clip + "'"}
+			tool := fileTool(clip)
 			// Run the real script, detached as sesh runs it, and mark when
 			// it has finished.
 			done := clip + ".done"
@@ -267,5 +276,68 @@ func TestSpawnClear_RunsScript(t *testing.T) {
 				t.Errorf("clipboard after = %q, want cleared = %v", got, tc.wantCleared)
 			}
 		})
+	}
+}
+
+// The secret reaches the clearing script even when sesh exits right after
+// starting it, as it does after every --clip, and on one CPU.
+func TestSpawnClear_SurvivesExit(t *testing.T) {
+	if clip := os.Getenv("SESH_TEST_CLIP_FILE"); clip != "" {
+		if err := spawnClear(fileTool(clip), "s3cret", 0); err != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
+	dir := t.TempDir()
+	clips := make([]string, 5)
+	for i := range clips {
+		clips[i] = filepath.Join(dir, strconv.Itoa(i))
+		if err := os.WriteFile(clips[i], []byte("s3cret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(os.Args[0], "-test.run=^TestSpawnClear_SurvivesExit$")
+		cmd.Env = append(os.Environ(), "SESH_TEST_CLIP_FILE="+clips[i], "GOMAXPROCS=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("helper: %v: %s", err, out)
+		}
+	}
+	for _, clip := range clips {
+		waitForFile(t, clip, "")
+	}
+}
+
+// The tools, which can outlive sesh, run from "/" and never see the master
+// password from SESH_MASTER_PASSWORD.
+func TestToolsDontInheritTheMasterPassword(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "hunter2-master")
+	stubSystem(t, "darwin", nil)
+	dir := t.TempDir()
+	n := 0
+	stubExec(t, func(string, ...string) *exec.Cmd {
+		n++
+		return exec.Command("sh", "-c", `cat >/dev/null; { env; pwd; } > "$0.tmp" && mv "$0.tmp" "$0"`, filepath.Join(dir, strconv.Itoa(n)))
+	})
+	if err := CopyWithAutoClear("s3cret", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"1", "2"} { // the copy, then the clearing script
+		path := filepath.Join(dir, name)
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(path); err == nil || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(got), "hunter2-master") {
+			t.Errorf("command %s saw SESH_MASTER_PASSWORD", name)
+		}
+		if !strings.HasSuffix(string(got), "\n/\n") {
+			t.Errorf("command %s didn't run from /: %q", name, got[max(0, len(got)-40):])
+		}
 	}
 }

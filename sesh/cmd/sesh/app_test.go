@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bashhack/sesh/internal/clipboard"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/vault"
@@ -570,31 +571,63 @@ func TestApp_CopyToClipboard(t *testing.T) {
 	}
 }
 
+// clipCheckingMock is a provider that copies for only some requests.
+type clipCheckingMock struct {
+	*MockProvider
+	checkClip func() error
+}
+
+func (m clipCheckingMock) CheckClip() error { return m.checkClip() }
+
 // With no clipboard to copy to, --clip fails before fetching the secret,
-// so nobody unlocks the vault or answers an MFA prompt for nothing.
+// so nobody unlocks the vault or answers an MFA prompt for nothing. Over
+// SSH it says what to do instead; a request the provider can't copy for is
+// refused as that first.
 func TestApp_CopyToClipboard_NoClipboard(t *testing.T) {
-	fetched := false
-	app := &App{
-		Registry:       provider.NewRegistry(),
-		Stdout:         &bytes.Buffer{},
-		Stderr:         &bytes.Buffer{},
-		ClipboardCheck: func() error { return errors.New("no desktop session") },
-		ClipboardCopy:  func(string) error { return nil },
+	showFlag := func() []provider.FlagInfo { return []provider.FlagInfo{{Name: "show", Type: "bool"}} }
+	tests := map[string]struct {
+		clipErr   error
+		checkClip func() error
+		flags     func() []provider.FlagInfo
+		wantErr   string
+	}{
+		"over SSH, with --show": {clipErr: clipboard.ErrNoDisplay, flags: showFlag, wantErr: "can't copy: " + clipboard.ErrNoDisplay.Error() + "; use --show to print it instead"},
+		"over SSH, no --show":   {clipErr: clipboard.ErrNoDisplay, wantErr: "can't copy: " + clipboard.ErrNoDisplay.Error() + "; run it without --clip"},
+		"no tool":               {clipErr: &clipboard.MissingToolError{Install: "xclip or xsel"}, flags: showFlag, wantErr: "can't copy: no clipboard tool found: install xclip or xsel"},
+		"request can't copy":    {clipErr: clipboard.ErrNoDisplay, checkClip: func() error { return errors.New("--clip works with --action get, not store") }, wantErr: "--clip works with --action get, not store"},
 	}
-	app.Registry.RegisterProvider(&MockProvider{
-		NameFunc:            func() string { return "totp" },
-		ValidateRequestFunc: func() error { return nil },
-		GetClipboardValueFunc: func() (provider.Credentials, error) {
-			fetched = true
-			return provider.Credentials{CopyValue: "123456"}, nil
-		},
-	})
-	err := app.CopyToClipboard("totp")
-	if err == nil || !strings.Contains(err.Error(), "can't copy: no desktop session") {
-		t.Errorf("err = %v, want it to contain %q", err, "can't copy: no desktop session")
-	}
-	if fetched {
-		t.Error("the secret was fetched before the clipboard was checked")
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			fetched := false
+			app := &App{
+				Registry:       provider.NewRegistry(),
+				Stdout:         &bytes.Buffer{},
+				Stderr:         &bytes.Buffer{},
+				ClipboardCheck: func() error { return tc.clipErr },
+				ClipboardCopy:  func(string) error { return nil },
+			}
+			mock := &MockProvider{
+				NameFunc:            func() string { return "totp" },
+				ValidateRequestFunc: func() error { return nil },
+				GetFlagInfoFunc:     tc.flags,
+				GetClipboardValueFunc: func() (provider.Credentials, error) {
+					fetched = true
+					return provider.Credentials{CopyValue: "123456"}, nil
+				},
+			}
+			if tc.checkClip != nil {
+				app.Registry.RegisterProvider(clipCheckingMock{mock, tc.checkClip})
+			} else {
+				app.Registry.RegisterProvider(mock)
+			}
+			err := app.CopyToClipboard("totp")
+			if err == nil || err.Error() != tc.wantErr {
+				t.Errorf("err = %v, want %q", err, tc.wantErr)
+			}
+			if fetched {
+				t.Error("the secret was fetched before the clipboard was checked")
+			}
+		})
 	}
 }
 

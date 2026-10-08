@@ -1193,7 +1193,7 @@ When run without additional flags, sesh will:
 3. **Setup Required**: First-time users must run `-setup` for each service
 4. **Profile Selection**: Uses default AWS profile or requires `-service-name` for TOTP
 5. **Security**: Secrets are stored in one vault file, each encrypted at rest with AES-256-GCM under a key derived from your master password
-6. **Clipboard**: A value copied with `-clip` is cleared from the clipboard after 30 seconds (`clipboard_timeout`), if the clipboard still holds it. macOS has a clipboard tool built in. On Linux, sesh uses `wl-copy` under Wayland (from wl-clipboard), or `xclip` or `xsel` under X11, so install one. Over SSH, with no desktop session, `-clip` can't copy; use `-show`. `sesh doctor` shows which tool it found
+6. **Clipboard**: A value copied with `-clip` is cleared from the clipboard after 30 seconds (`clipboard_timeout`), if the clipboard still holds it. macOS has a clipboard tool built in. On Linux, sesh uses `wl-copy` under Wayland (from wl-clipboard), or `xclip` or `xsel` under X11, so install one. Over SSH, with no desktop session, `-clip` can't copy: use `-show` for a password; for a TOTP code, leave out `-clip` and it's printed. `sesh doctor` shows which tool it found
 
 ## Subshell Behavior
 

@@ -4,10 +4,12 @@ package clipboard
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -44,7 +46,7 @@ func (e *MissingToolError) Error() string {
 }
 
 // ErrNoDisplay is a Linux session with no desktop to copy to, as over SSH.
-var ErrNoDisplay = errors.New("there's no desktop session to copy to here (neither WAYLAND_DISPLAY nor DISPLAY is set), as over SSH; use --show instead")
+var ErrNoDisplay = errors.New("there's no desktop session to copy to here (neither WAYLAND_DISPLAY nor DISPLAY is set), as over SSH")
 
 // Find returns the clipboard tool for this system: pbcopy on macOS; on
 // Linux, wl-copy under Wayland, or xclip or xsel under X11. An error says
@@ -131,15 +133,15 @@ if [ "$current" = "$expected" ]; then
   ` + tool.clear + `
 fi`
 	cmd := execCommand("sh", "-c", script)
-	// Append a trailing newline so $(cat) in the script terminates
-	// cleanly. $(…) strips trailing newlines from its output, so this
-	// extra byte is consumed and the comparison value still equals the
-	// original clipboard content.
-	cmd.Stdin = strings.NewReader(original + "\n")
-
-	// Detach the child process so it survives after sesh exits.
+	detach(cmd)
+	// Its own process group, so it survives after sesh exits.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clipboard auto-clear: failed to start: %v\n", err)
+		return nil
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -147,6 +149,20 @@ fi`
 		// Surface it so the user knows why the clipboard won't clear.
 		fmt.Fprintf(os.Stderr, "clipboard auto-clear: failed to start: %v\n", err)
 		return nil
+	}
+
+	// The secret is written before sesh lets the script go: sesh exits
+	// right after, and a write left to exec's background copy could be
+	// lost, leaving the script nothing to compare and the clipboard never
+	// cleared. The trailing newline ends $(cat); $(…) strips it, so the
+	// script compares the value itself. The script reads at once, so this
+	// doesn't wait on the sleep.
+	_, werr := io.WriteString(stdin, original+"\n")
+	if cerr := stdin.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		fmt.Fprintf(os.Stderr, "clipboard auto-clear: failed to pass the value: %v\n", werr)
 	}
 
 	// Release the Go-side process handle. sesh typically exits before the
@@ -160,9 +176,48 @@ fi`
 	return nil
 }
 
-// copyWith copies text to the clipboard with tool.
-func copyWith(tool Tool, text string) error {
+// detach sets up a command that may outlive sesh: the copy tools on Linux
+// stay running to serve the clipboard, and the clearing script sleeps. It
+// runs from "/", so it holds no folder of the user's, and without
+// SESH_MASTER_PASSWORD, which would stay readable in its environment.
+func detach(cmd *exec.Cmd) {
+	cmd.Dir = "/"
+	env := os.Environ()
+	cmd.Env = slices.DeleteFunc(env, func(kv string) bool {
+		return strings.HasPrefix(kv, "SESH_MASTER_PASSWORD=")
+	})
+}
+
+// toolError adds what the tool said, if anything, to its failure.
+func toolError(tool Tool, err error, stderr *os.File) error {
+	if stderr == nil {
+		return err
+	}
+	b := make([]byte, 512)
+	n, _ := stderr.ReadAt(b, 0) //nolint:errcheck // what was read is all there is to add
+	if msg := strings.TrimSpace(string(b[:n])); msg != "" {
+		return fmt.Errorf("%s: %w: %s", tool.Name, err, msg)
+	}
+	return fmt.Errorf("%s: %w", tool.Name, err)
+}
+
+// copyWith copies text to the clipboard with tool. The tool's error
+// output goes to a temporary file, not a pipe: xclip and wl-copy leave a
+// process running that holds it, and Wait would wait for that to end.
+func copyWith(tool Tool, text string) (err error) {
 	cmd := execCommand(tool.copy[0], tool.copy[1:]...)
+	detach(cmd)
+	stderr, ferr := os.CreateTemp("", "sesh-clipboard-*")
+	if ferr == nil {
+		cmd.Stderr = stderr
+		defer func() {
+			if err != nil {
+				err = toolError(tool, err, stderr)
+			}
+			stderr.Close()           //nolint:errcheck,gosec // only read from
+			os.Remove(stderr.Name()) //nolint:errcheck,gosec // a temporary file
+		}()
+	}
 	pipe, err := cmd.StdinPipe()
 	if err != nil {
 		return err

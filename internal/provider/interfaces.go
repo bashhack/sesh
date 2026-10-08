@@ -97,6 +97,13 @@ type QuietProvider interface {
 	SuppressActionFraming() bool
 }
 
+// ClipChecker is an optional interface for a provider that copies for only
+// some requests: CheckClip refuses --clip for the others, before sesh looks
+// for a clipboard to copy to.
+type ClipChecker interface {
+	CheckClip() error
+}
+
 // SubshellProvider is an optional interface that providers can implement
 // if they support launching a customized subshell environment
 type SubshellProvider interface {

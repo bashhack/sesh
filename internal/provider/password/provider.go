@@ -323,15 +323,22 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}
 }
 
+// CheckClip refuses --clip for an action with nothing to copy.
+func (p *Provider) CheckClip() error {
+	switch p.action {
+	case "", "get", "generate", "totp-generate":
+		return nil
+	}
+	return fmt.Errorf("--clip works with --action get, generate, or totp-generate, not %s", p.action)
+}
+
 // GetClipboardValue returns what --clip copies for the action: the stored
 // secret for get (the default), a newly generated and stored password for
 // generate, or the current code for totp-generate. Other actions have
 // nothing to copy.
 func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
-	switch p.action {
-	case "", "get", "generate", "totp-generate":
-	default:
-		return provider.Credentials{}, fmt.Errorf("--clip works with --action get, generate, or totp-generate, not %s", p.action)
+	if err := p.CheckClip(); err != nil {
+		return provider.Credentials{}, err
 	}
 	if p.service == "" {
 		return provider.Credentials{}, fmt.Errorf("--service-name is required")
