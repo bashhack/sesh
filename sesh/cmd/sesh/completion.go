@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // completeCmd is the hidden command the completion scripts run on each Tab:
@@ -119,6 +120,13 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		specs = flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) }, nil)
 		if cur != "" && !strings.HasPrefix(cur, "-") {
 			return nil, true // the file to write
+		}
+	case "edit":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addEditFlags(fs) }, nil)
+		for i := range specs {
+			if specs[i].name == "type" {
+				specs[i].values = []string{string(vault.KindPassword), string(vault.KindAPIKey), string(vault.KindNote)}
+			}
 		}
 	case "restore":
 		specs = flagSpecs(func(fs *flag.FlagSet) { addRestoreFlags(fs) }, nil)

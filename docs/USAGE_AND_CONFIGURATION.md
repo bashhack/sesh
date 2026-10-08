@@ -995,6 +995,38 @@ Names are case-sensitive: `GitHub` and `github` are two entries. When a lookup (
 
 **Weak passwords.** When you type a password to store (`--action store`, kind `password`), sesh rates it with [zxcvbn](https://github.com/dropbox/zxcvbn), which knows common passwords, words, names, dates, and keyboard patterns, and counts the entry's own service name and username as easy guesses. If zxcvbn estimates fewer than about 100 million guesses would find it (a score of 2 or less out of 4), sesh stores it and warns, with the command to generate a strong one instead. Generated passwords, and generated API keys, get the same check: at the default length (24) they always pass, but `--length 9` or shorter can fail it, and then the warning suggests `--length 12` or more. API keys and notes you type aren't rated. zxcvbn's word lists are English: for passwords in other languages or scripts, it judges mostly by length and the mix of characters. Only a password's first 64 characters are rated.
 
+### Editing an entry (`sesh edit`)
+
+`sesh edit <id>` renames an entry, changes its username or kind, or gives it a new secret. It takes the entry's ID (what `-list` shows):
+
+```
+$ sesh edit api_key/openai --service openai-ci --type password
+✅ password/openai-ci: renamed from api_key/openai
+$ sesh edit password/openai-ci --generate          # or --secret to type one; --length, --no-symbols
+✅ password/openai-ci: secret changed
+$ sesh edit password/github/alice --username ""    # "" removes the username
+```
+
+At a terminal with no flags, it asks, with the current values as defaults; Enter keeps each one:
+
+```
+$ sesh edit password/github/alice
+Service name [github]: github-work
+Username [alice] (- removes it):
+Type [password] (password, api_key, secure_note):
+Change the secret? [y/N]: y
+New password for password/github-work/alice:
+✅ password/github-work/alice: renamed from password/github/alice and secret changed
+```
+
+- **What it keeps:** the entry keeps its folder, tags, settings and creation time. Its update time moves only when the secret changes.
+- **How a rename works:** each secret is sealed to its entry's name, so a rename re-seals it under the new one, in one step. That's why editing unlocks the vault.
+- **A new name another entry has is refused.** Delete or rename that one first. A change of case alone (`GitHub` to `github`) works.
+- **Kinds change only among `password`, `api_key` and `secure_note`.** A TOTP entry can be renamed, but its secret and kind come with its code settings, so store a new one with `--action totp-store` or `sesh --service totp --setup`.
+- **The new secret is read as `store` reads it:** hidden at a terminal; a note, or anything without a terminal, from stdin. A typed password that's easy to guess gets the same warning as `store`.
+- **AWS entries:** renaming an AWS profile's MFA entry (`totp/aws/<profile>`) to another service takes it out of the AWS provider, so sesh asks first. `--force` skips the question.
+- **Another sesh command changing the entry** while it's being edited makes the edit stop rather than overwrite; run it again.
+
 ### Folders and tags
 
 An entry can be in one folder and have any number of tags. Folders nest with `/` (`work/aws`); tags are flat (`urgent`, `2fa`). Neither is part of the entry's ID or name: two entries with the same name can't sit in different folders.
