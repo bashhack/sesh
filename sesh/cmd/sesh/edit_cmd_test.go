@@ -119,7 +119,9 @@ func TestEdit_RefusedBeforeUnlocking(t *testing.T) {
 	for args, wantSub := range map[string]string{
 		"password/a --type totp":           "a TOTP entry's kind can't change",
 		"totp/a --type password":           "a TOTP entry's kind can't change",
-		"password/a --type card":           `unknown --type "card"`,
+		"password/a --type card":           `unknown type "card"`,
+		"password/a --length 8":            "add --generate",
+		"password/a --secret --no-symbols": "add --generate",
 		"totp/a --secret":                  "store it again with --action totp-store",
 		"secure_note/a --generate":         "a note isn't generated",
 		"password/a --secret --generate":   "choose one",
@@ -157,5 +159,82 @@ func TestComplete_EditTypes(t *testing.T) {
 	}
 	if strings.Join(got, " ") != "password api_key secure_note" {
 		t.Errorf("--type completes %q", got)
+	}
+}
+
+// Removing an AWS entry's username takes it out of the AWS provider too,
+// so it asks; renaming its profile doesn't.
+func TestEdit_AWSUsernameRemoval(t *testing.T) {
+	env := editVault(t)
+	populatePasswordStore(t, env, map[string]string{"totp/aws/work": "JBSWY3DPEHPK3PXP"})
+	if _, _, err := runEditOut(t, "", false, "totp/aws/work", "--username", ""); err == nil || !strings.Contains(err.Error(), "add --force") {
+		t.Errorf("removing the username: %v", err)
+	}
+}
+
+// A taken name is refused before the new secret is read: stdin is left
+// unread, and nothing is said about a stored password.
+func TestEdit_NameTakenBeforeTheSecret(t *testing.T) {
+	editVault(t)
+	_, errOut, err := runEditOut(t, "password\n", false, "password/github/alice", "--service", "gitlab", "--username", "", "--secret")
+	if err == nil || !strings.Contains(err.Error(), "another entry has that name: password/gitlab") || strings.Contains(errOut, "stored") {
+		t.Errorf("err = %v, stderr %q", err, errOut)
+	}
+}
+
+func TestEdit_AskingEdges(t *testing.T) {
+	env := editVault(t)
+	// The end of input at the first question, or at the last, changes nothing.
+	for name, stdin := range map[string]string{"at the first": "", "at the last": "renamed-by-eof\n\n\n"} {
+		if _, errOut, err := runEditOut(t, stdin, true, "password/gitlab"); err != nil || !strings.Contains(errOut, "Nothing changed.") {
+			t.Errorf("%s: %v\n%s", name, err, errOut)
+		}
+	}
+	// A bad answer is asked again; "-" removes the username.
+	out, errOut, err := runEditOut(t, "a/b\ngithub2\n-\ncard\npassword\nn\n", true, "password/github/alice")
+	if err != nil || out != "✅ password/github2: renamed from password/github/alice\n" || strings.Count(errOut, "Service name [github]: ") != 2 || strings.Count(errOut, "Type [password]") != 2 {
+		t.Errorf("asked again: %q, %v\n%s", out, err, errOut)
+	}
+	if got := readEntriesViaPassword(t, env, []string{"password/gitlab"})["password/gitlab"]; got != "x" {
+		t.Errorf("gitlab = %q after cancelled edits", got)
+	}
+}
+
+// A piped secret: one trailing newline (\r\n too) is dropped; several lines
+// are refused for a password; a note keeps them all.
+func TestEdit_PipedSecrets(t *testing.T) {
+	env := editVault(t)
+	if _, _, err := runEditOut(t, "crlf-pw-Strong-81\r\n", false, "password/gitlab", "--secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runEditOut(t, "line1-Strong-81\nline2\n", false, "password/gitlab", "--secret"); err == nil || !strings.Contains(err.Error(), "is one line, and this has several") {
+		t.Errorf("several lines: %v", err)
+	}
+	if _, _, err := runEditOut(t, "line one\nline two\n", false, "secure_note/recovery", "--secret"); err != nil {
+		t.Fatal(err)
+	}
+	got := readEntriesViaPassword(t, env, []string{"password/gitlab", "secure_note/recovery"})
+	if got["password/gitlab"] != "crlf-pw-Strong-81" || got["secure_note/recovery"] != "line one\nline two\n" {
+		t.Errorf("stored %q", got)
+	}
+}
+
+func TestEdit_HelpAndAudit(t *testing.T) {
+	editVault(t)
+	if _, errOut, err := runEditOut(t, "", false, "password/gitlab", "-h"); err != nil || !strings.Contains(errOut, "Usage: sesh edit <id> [flags]") {
+		t.Errorf("-h: %v\n%s", err, errOut)
+	}
+	if _, _, err := runEditOut(t, "", false, "password/gitlab", "--service", "gitlab-2"); err != nil {
+		t.Fatal(err)
+	}
+	app := agentTestApp()
+	if err := runAudit(app, []string{"--limit", "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "gitlab-2 (renamed from password/gitlab)") {
+		t.Errorf("audit: %s", out)
+	}
+	if cands, _ := complete(nil, []string{"edit", ""}); len(cands) != 0 {
+		t.Errorf("completion offers %v where the ID goes", cands)
 	}
 }

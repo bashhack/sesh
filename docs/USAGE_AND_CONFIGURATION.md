@@ -1007,7 +1007,7 @@ $ sesh edit password/openai-ci --generate          # or --secret to type one; --
 $ sesh edit password/github/alice --username ""    # "" removes the username
 ```
 
-At a terminal with no flags, it asks, with the current values as defaults; Enter keeps each one:
+At a terminal with no flags, it asks, with the current values as defaults. Enter keeps each one, an answer that can't be is asked again, and Ctrl-D changes nothing:
 
 ```
 $ sesh edit password/github/alice
@@ -1021,10 +1021,15 @@ New password for password/github-work/alice:
 
 - **What it keeps:** the entry keeps its folder, tags, settings and creation time. Its update time moves only when the secret changes.
 - **How a rename works:** each secret is sealed to its entry's name, so a rename re-seals it under the new one, in one step. That's why editing unlocks the vault.
-- **A new name another entry has is refused.** Delete or rename that one first. A change of case alone (`GitHub` to `github`) works.
+- **A new name another entry has is refused,** before any new secret is asked for. Delete or rename that one first. A change of case alone (`GitHub` to `github`) works.
 - **Kinds change only among `password`, `api_key` and `secure_note`.** A TOTP entry can be renamed, but its secret and kind come with its code settings, so store a new one with `--action totp-store` or `sesh --service totp --setup`.
-- **The new secret is read as `store` reads it:** hidden at a terminal; a note, or anything without a terminal, from stdin. A typed password that's easy to guess gets the same warning as `store`.
-- **AWS entries:** renaming an AWS profile's MFA entry (`totp/aws/<profile>`) to another service takes it out of the AWS provider, so sesh asks first. `--force` skips the question.
+- **The new secret:**
+  - at a terminal it's typed hidden; a note is typed, ending with Ctrl-D;
+  - without a terminal it's read from stdin: a password or API key is one line, with the newline that ends it (`\n` or `\r\n`) dropped and several lines refused, and a note is all of it.
+
+  A password that's easy to guess gets the same warning as `store`, once it's saved.
+- **AWS entries:** an AWS profile's MFA entry is `totp/aws/<profile>`. Renaming it to another service, or removing its username, takes it out of the AWS provider, so sesh asks first; `--force` skips the question. Changing the profile name keeps it in.
+- **The audit log** shows a rename under the new name: `github-work (renamed from password/github/alice)`.
 - **Another sesh command changing the entry** while it's being edited makes the edit stop rather than overwrite; run it again.
 
 ### Folders and tags

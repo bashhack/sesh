@@ -34,8 +34,14 @@ type EntryEdit struct {
 // the entry changed meanwhile is ErrEntryChanged. It returns the change, in
 // words, as the audit event records it.
 func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
+	if e.To != nil && *e.To == k {
+		e.To = nil
+	}
 	if e.To == nil && e.Secret == nil {
 		return "", errors.New("nothing to change")
+	}
+	if e.Secret != nil && len(e.Secret) == 0 {
+		return "", errors.New("the new secret is empty")
 	}
 	to := k
 	if e.To != nil {
@@ -70,6 +76,10 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	if plain == nil {
 		plain, err = s.oracle.DecryptEntry(data, salt, entryAAD(k))
 		if err != nil {
+			// A master password changed meanwhile reads as a wrong key; say so.
+			if kerr := s.keyUnchanged(s.db); errors.Is(kerr, ErrVaultKeyChanged) {
+				err = kerr
+			}
 			return "", fmt.Errorf("decrypt %s: %w", k, err)
 		}
 		defer secure.SecureZeroBytes(plain)

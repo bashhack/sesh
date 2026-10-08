@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
@@ -460,9 +461,14 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 			fmt.Fprintf(os.Stderr, "Enter note for %s (end with Ctrl+D):\n", p.service)
 		}
 		var err error
-		pw, err = io.ReadAll(p.stdin)
+		// Read no more than an entry can hold, plus one byte to tell.
+		pw, err = io.ReadAll(io.LimitReader(p.stdin, database.MaxSecretSize+1))
 		if err != nil {
 			return provider.Credentials{}, fmt.Errorf("failed to read note: %w", err)
+		}
+		if len(pw) > database.MaxSecretSize {
+			secure.SecureZeroBytes(pw)
+			return provider.Credentials{}, fmt.Errorf("the note is over %d bytes, the most an entry holds", database.MaxSecretSize)
 		}
 	} else {
 		// Passwords/API keys: hidden single-line input

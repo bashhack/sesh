@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -52,9 +53,12 @@ const editUsage = `Usage: sesh edit <id> [flags]
 
 Entry IDs are what --list shows.`
 
+// errEditCancelled is input ending at a question: nothing changes.
+var errEditCancelled = errors.New("nothing changed")
+
 // runEdit is `sesh edit <id>`: rename an entry, change its username or
 // kind, or give it a new secret. Everything that needs no vault is checked
-// before unlocking it.
+// before unlocking it, and a new name before a new secret is asked for.
 func runEdit(app *App, args []string) error {
 	if len(args) == 0 || isHelp(args[0]) {
 		_, err := fmt.Fprintln(app.Stdout, editUsage)
@@ -68,7 +72,11 @@ func runEdit(app *App, args []string) error {
 	fs := flag.NewFlagSet("edit", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	f := addEditFlags(fs)
+	fs.Usage = func() { fmt.Fprintln(app.Stderr, editUsage) } //nolint:errcheck // usage text
 	if err := fs.Parse(rest); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if fs.NArg() > 0 {
@@ -80,9 +88,12 @@ func runEdit(app *App, args []string) error {
 	}
 	set := map[string]bool{}
 	fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
+	if (set["length"] || set["no-symbols"]) && !f.generate {
+		return errors.New("--length and --no-symbols shape a generated password: add --generate")
+	}
 
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
-	asked := len(set) == 0
+	asked := len(set) == 0 || (len(set) == 1 && set["force"])
 	if asked && !terminal {
 		return errors.New("nothing to change: give --service, --username, --type, --secret, or --generate (or run it at a terminal to be asked)")
 	}
@@ -112,19 +123,44 @@ func runEdit(app *App, args []string) error {
 	}
 
 	if asked {
-		if to, f, err = askEdit(app, from); err != nil {
-			return err
-		}
-		if to == from && !f.secret && !f.generate {
+		to, err = askNames(app, from)
+		if errors.Is(err, errEditCancelled) {
 			_, err := fmt.Fprintln(app.Stderr, "Nothing changed.")
 			return err
 		}
-	}
-	if from.Kind == vault.KindTOTP && from.Service == vault.AWSKey("").Service && to.Service != from.Service && !f.force {
-		if !terminal {
-			return errors.New("this is an AWS profile's MFA entry, and a new service name takes it out of the AWS provider; add --force to do it anyway")
+		if err != nil {
+			return err
 		}
-		yes, err := promptYesNo(app.Stdin, app.Stderr, fmt.Sprintf("%s is an AWS profile's MFA entry; renamed to service %q, `sesh --service aws` won't find it. Rename it anyway? [y/N]: ", from, to.Service))
+	}
+	// A new name another entry has is refused before a new secret is asked
+	// for; the edit checks it again as it writes.
+	if to != from {
+		if err := store.Exists(to); err == nil {
+			return fmt.Errorf("another entry has that name: %s; delete or rename that one first", to)
+		}
+	}
+	if asked && from.Kind != vault.KindTOTP {
+		answer, err := readLine(app.Stdin, app.Stderr, "Change the secret? [y/N]: ")
+		if errors.Is(err, io.EOF) {
+			_, err := fmt.Fprintln(app.Stderr, "Nothing changed.")
+			return err
+		}
+		if err != nil {
+			return err
+		}
+		f.secret = isYes(answer)
+	}
+	if asked && to == from && !f.secret {
+		_, err := fmt.Fprintln(app.Stderr, "Nothing changed.")
+		return err
+	}
+	// An AWS profile's MFA entry is totp/aws/<profile>; any other name
+	// takes it out of the AWS provider.
+	if from == vault.AWSKey(from.Username) && to != vault.AWSKey(to.Username) && !f.force {
+		if !terminal {
+			return errors.New("this is an AWS profile's MFA entry, and its new name takes it out of the AWS provider; add --force to do it anyway")
+		}
+		yes, err := promptYesNo(app.Stdin, app.Stderr, fmt.Sprintf("%s is an AWS profile's MFA entry; as %s, `sesh --service aws` won't find it. Rename it anyway? [y/N]: ", from, to))
 		if err != nil || !yes {
 			if err == nil {
 				_, err = fmt.Fprintln(app.Stderr, "Nothing changed.")
@@ -137,20 +173,40 @@ func runEdit(app *App, args []string) error {
 	if to != from {
 		e.To = &to
 	}
+	weak := false
 	if f.secret || f.generate {
-		secret, err := newSecret(app, to, f, terminal)
+		secret, w, err := newSecret(app, to, f, terminal)
 		if err != nil {
 			return err
 		}
 		defer secure.SecureZeroBytes(secret)
-		e.Secret = secret
+		e.Secret, weak = secret, w
 	}
 	detail, err := store.Edit(from, e)
 	if err != nil {
+		if errors.Is(err, database.ErrNameTaken) || errors.Is(err, database.ErrEntryChanged) || errors.Is(err, database.ErrVaultKeyChanged) || errors.Is(err, vault.ErrNotFound) {
+			return err
+		}
+		// Anything else, such as the agent locking meanwhile, wrote nothing.
+		return fmt.Errorf("nothing was changed: %w", err)
+	}
+	if _, err := fmt.Fprintf(app.Stdout, "✅ %s: %s\n", to, detail); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(app.Stdout, "✅ %s: %s\n", to, detail)
-	return err
+	if weak {
+		if f.generate {
+			fmt.Fprintln(app.Stderr, "⚠️  A password this short is easy to guess; use --length 12 or more.") //nolint:errcheck // best-effort warning
+		} else {
+			fmt.Fprintln(app.Stderr, "⚠️  This password is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, use --generate.") //nolint:errcheck // best-effort warning
+		}
+	}
+	return nil
+}
+
+// isYes reports whether answer is y or yes, in any case.
+func isYes(answer string) bool {
+	a := strings.ToLower(strings.TrimSpace(answer))
+	return a == "y" || a == "yes"
 }
 
 // plannedKey is the entry's key after the flags set says were given.
@@ -182,7 +238,7 @@ func checkKindChange(from, to vault.Kind) error {
 		return nil
 	}
 	if !to.Valid() {
-		return fmt.Errorf("unknown --type %q: use password, api_key, or secure_note", to)
+		return fmt.Errorf("unknown type %q: use password, api_key, or secure_note", to)
 	}
 	if from == vault.KindTOTP || to == vault.KindTOTP {
 		return errors.New("a TOTP entry's kind can't change, nor can another become one: store a TOTP secret with --action totp-store or sesh --service totp --setup")
@@ -205,101 +261,111 @@ func checkEditSecret(from, to vault.Key, f *editFlags) error {
 	return nil
 }
 
-// askEdit asks, at a terminal, what to change about the entry at from, with
-// its current values as defaults.
-func askEdit(app *App, from vault.Key) (vault.Key, *editFlags, error) {
-	f := &editFlags{length: 24}
+// askNames asks, at a terminal, for the entry's new service name, username,
+// and kind, with the current ones as defaults, asking again after an answer
+// that can't be. The end of input is errEditCancelled.
+func askNames(app *App, from vault.Key) (vault.Key, error) {
+	ask := func(prompt, current string, check func(string) error) (string, error) {
+		for {
+			answer, err := readLine(app.Stdin, app.Stderr, prompt)
+			if errors.Is(err, io.EOF) {
+				return "", errEditCancelled
+			}
+			if err != nil {
+				return "", err
+			}
+			if answer == "" {
+				answer = current
+			}
+			if err := check(answer); err != nil {
+				fmt.Fprintf(app.Stderr, "❌ %v\n", err) //nolint:errcheck // asked again
+				continue
+			}
+			return answer, nil
+		}
+	}
 	to := from
-	ask := func(prompt, current string) (string, error) {
-		answer, err := readLine(app.Stdin, app.Stderr, prompt)
-		if err != nil {
-			return "", err
-		}
-		if answer == "" {
-			return current, nil
-		}
-		return answer, nil
-	}
 	var err error
-	if to.Service, err = ask(fmt.Sprintf("Service name [%s]: ", from.Service), from.Service); err != nil {
-		return from, nil, err
+	if to.Service, err = ask(fmt.Sprintf("Service name [%s]: ", from.Service), from.Service, func(v string) error {
+		if v == "" {
+			return errors.New("the service name is empty")
+		}
+		return vault.CheckName("service name", v)
+	}); err != nil {
+		return from, err
 	}
-	current := from.Username
-	prompt := fmt.Sprintf("Username [%s] (- removes it): ", current)
-	if current == "" {
+	prompt := fmt.Sprintf("Username [%s] (- removes it): ", from.Username)
+	if from.Username == "" {
 		prompt = "Username (none; Enter keeps none): "
 	}
-	if to.Username, err = ask(prompt, current); err != nil {
-		return from, nil, err
+	if to.Username, err = ask(prompt, from.Username, func(v string) error {
+		if v == "-" {
+			return nil
+		}
+		return vault.CheckName("username", v)
+	}); err != nil {
+		return from, err
 	}
 	if to.Username == "-" {
 		to.Username = ""
 	}
 	if from.Kind != vault.KindTOTP {
-		kind, err := ask(fmt.Sprintf("Type [%s] (password, api_key, secure_note): ", from.Kind), string(from.Kind))
+		kind, err := ask(fmt.Sprintf("Type [%s] (password, api_key, secure_note): ", from.Kind), string(from.Kind), func(v string) error {
+			return checkKindChange(from.Kind, vault.Kind(v))
+		})
 		if err != nil {
-			return from, nil, err
+			return from, err
 		}
 		to.Kind = vault.Kind(kind)
-		if err := checkKindChange(from.Kind, to.Kind); err != nil {
-			return from, nil, err
-		}
 	}
-	if err := to.Validate(); err != nil {
-		return from, nil, err
-	}
-	if from.Kind != vault.KindTOTP {
-		if f.secret, err = promptYesNo(app.Stdin, app.Stderr, "Change the secret? [y/N]: "); err != nil {
-			return from, nil, err
-		}
-	}
-	return to, f, nil
+	return to, nil
 }
 
-// newSecret is the entry's new secret: generated, or typed (hidden at a
-// terminal; a note, or anything without a terminal, read from stdin).
-func newSecret(app *App, to vault.Key, f *editFlags, terminal bool) ([]byte, error) {
+// newSecret is the entry's new secret, and whether it's easy to guess:
+// generated, or typed (hidden at a terminal; a note, or anything without a
+// terminal, read from stdin, up to the size an entry can hold).
+func newSecret(app *App, to vault.Key, f *editFlags, terminal bool) ([]byte, bool, error) {
 	if f.generate {
 		opts := password.DefaultGenerateOptions()
 		opts.Length = f.length
 		opts.Symbols = !f.noSymbols
 		secret, err := password.GeneratePassword(opts)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		if password.IsWeak(secret, to.Service, to.Username) {
-			fmt.Fprintln(app.Stderr, "⚠️  A password this short is easy to guess; use --length 12 or more.") //nolint:errcheck // best-effort warning
-		}
-		return secret, nil
+		return secret, password.IsWeak(secret, to.Service, to.Username), nil
 	}
 	var secret []byte
 	var err error
 	switch {
-	case to.Kind == vault.KindNote:
-		if terminal {
-			fmt.Fprintf(app.Stderr, "Enter the new note for %s (end with Ctrl+D):\n", to) //nolint:errcheck // prompt
-		}
-		secret, err = io.ReadAll(app.Stdin)
-	case terminal:
+	case terminal && to.Kind != vault.KindNote:
 		fmt.Fprintf(app.Stderr, "New %s for %s: ", to.Kind, to) //nolint:errcheck // prompt
 		secret, err = readSecret()
 		fmt.Fprintln(app.Stderr) //nolint:errcheck // ends the prompt line
 	default:
-		var line string
-		line, err = readAnswer(app.Stdin)
-		if errors.Is(err, io.EOF) {
-			err = nil
+		if terminal {
+			fmt.Fprintf(app.Stderr, "Enter the new note for %s (end with Ctrl+D):\n", to) //nolint:errcheck // prompt
 		}
-		secret = []byte(line)
+		secret, err = io.ReadAll(io.LimitReader(app.Stdin, database.MaxSecretSize+1))
+		if err == nil && len(secret) > database.MaxSecretSize {
+			secure.SecureZeroBytes(secret)
+			return nil, false, fmt.Errorf("the new secret is over %d bytes, the most an entry holds; nothing changed", database.MaxSecretSize)
+		}
+		if err == nil && to.Kind != vault.KindNote {
+			// A password or API key is one line: the newline that ends it,
+			// \n or \r\n, isn't part of it.
+			secret = bytes.TrimSuffix(bytes.TrimSuffix(secret, []byte("\n")), []byte("\r"))
+			if bytes.ContainsAny(secret, "\r\n") {
+				secure.SecureZeroBytes(secret)
+				return nil, false, fmt.Errorf("a %s is one line, and this has several; keep multi-line text as a note (--type secure_note). Nothing changed", to.Kind)
+			}
+		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read the new secret: %w", err)
+		return nil, false, fmt.Errorf("read the new secret: %w", err)
 	}
 	if len(secret) == 0 {
-		return nil, errors.New("the new secret is empty; nothing changed")
+		return nil, false, errors.New("the new secret is empty; nothing changed")
 	}
-	if to.Kind == vault.KindPassword && password.IsWeak(secret, to.Service, to.Username) {
-		fmt.Fprintln(app.Stderr, "⚠️  This password is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, use --generate.") //nolint:errcheck // best-effort warning
-	}
-	return secret, nil
+	return secret, to.Kind == vault.KindPassword && password.IsWeak(secret, to.Service, to.Username), nil
 }

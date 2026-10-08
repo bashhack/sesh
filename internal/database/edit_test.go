@@ -135,3 +135,86 @@ func TestEdit_EntryChangedMeanwhile(t *testing.T) {
 		t.Errorf("bank = %q, %v; want the other command's secret kept", secret, err)
 	}
 }
+
+// countingOracle counts the secrets it seals, and can run something just
+// before sealing.
+type countingOracle struct {
+	CryptoOracle
+	before   func()
+	encrypts int
+}
+
+func (o *countingOracle) UnlockID() (string, error) {
+	return o.CryptoOracle.(interface{ UnlockID() (string, error) }).UnlockID()
+}
+
+func (o *countingOracle) EncryptEntry(plain, aad []byte) ([]byte, []byte, error) {
+	o.encrypts++
+	if o.before != nil {
+		o.before()
+	}
+	return o.CryptoOracle.EncryptEntry(plain, aad)
+}
+
+// openCounting opens the vault at p over a countingOracle.
+func openCounting(t *testing.T, p string) (*Store, *countingOracle) {
+	t.Helper()
+	o := &countingOracle{CryptoOracle: NewKeySourceOracle(NewMasterPasswordSource(p, staticPrompt("old-password-1", "old-password-1")))}
+	s, err := Open(p, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() }) //nolint:errcheck // test cleanup
+	return s, o
+}
+
+// A taken name is refused before anything is sealed; one taken while the
+// secret was sealed is refused in the transaction.
+func TestEdit_NameTakenBeforeAndDuring(t *testing.T) {
+	p, s := rekeyVault(t)
+	bank := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	taken := vault.Key{Kind: vault.KindPassword, Service: "taken"}
+	if err := s.Put(taken, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	c, o := openCounting(t, p)
+	if _, err := c.Edit(bank, EntryEdit{To: &taken}); !errors.Is(err, ErrNameTaken) || o.encrypts != 0 {
+		t.Errorf("a taken name: %v after %d seals; want ErrNameTaken before any", err, o.encrypts)
+	}
+	later := vault.Key{Kind: vault.KindPassword, Service: "later"}
+	o.before = func() {
+		if err := s.Put(later, []byte("y")); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := c.Edit(bank, EntryEdit{To: &later}); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("a name taken while sealing: %v, want ErrNameTaken", err)
+	}
+	if got, err := s.Get(later); err != nil || string(got) != "y" {
+		t.Errorf("later = %q, %v; want the other command's entry kept", got, err)
+	}
+}
+
+// The audit event is under the new name, saying where it came from; an edit
+// to the same name, or to an empty secret, is refused.
+func TestEdit_AuditAndNoChange(t *testing.T) {
+	_, s := rekeyVault(t)
+	bank := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	to := vault.Key{Kind: vault.KindPassword, Service: "bank-2"}
+	if _, err := s.Edit(bank, EntryEdit{To: &to}); err != nil {
+		t.Fatal(err)
+	}
+	var id, detail string
+	if err := s.db.QueryRow(`SELECT entry_id, detail FROM audit_log WHERE event_type = 'modify' ORDER BY id DESC LIMIT 1`).Scan(&id, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if id != "password/bank-2" || detail != "Edit: renamed from password/bank" {
+		t.Errorf("audit event %q %q", id, detail)
+	}
+	if _, err := s.Edit(to, EntryEdit{To: &to}); err == nil || !strings.Contains(err.Error(), "nothing to change") {
+		t.Errorf("to the same name: %v", err)
+	}
+	if _, err := s.Edit(to, EntryEdit{Secret: []byte{}}); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Errorf("an empty secret: %v", err)
+	}
+}

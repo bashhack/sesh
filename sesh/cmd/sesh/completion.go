@@ -122,6 +122,9 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 			return nil, true // the file to write
 		}
 	case "edit":
+		if len(before) == 1 {
+			return nil, false // the entry's ID comes first
+		}
 		specs = flagSpecs(func(fs *flag.FlagSet) { addEditFlags(fs) }, nil)
 		for i := range specs {
 			if specs[i].name == "type" {

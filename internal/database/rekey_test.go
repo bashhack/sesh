@@ -164,11 +164,17 @@ func TestStore_AfterAnotherRekey(t *testing.T) {
 	}
 	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
 	for name, f := range map[string]func() error{
-		"put":         func() error { return other.Put(k, []byte("v")) },
-		"delete":      func() error { return other.Delete(k) },
-		"delete many": func() error { return other.DeleteMany([]vault.Key{k}) },
-		"set":         func() error { return other.SetSettings(k, vault.Settings{AWSMFADevice: "arn"}) },
-		"get":         func() error { _, err := other.Get(k); return err },
+		"put":                func() error { return other.Put(k, []byte("v")) },
+		"delete":             func() error { return other.Delete(k) },
+		"delete many":        func() error { return other.DeleteMany([]vault.Key{k}) },
+		"set":                func() error { return other.SetSettings(k, vault.Settings{AWSMFADevice: "arn"}) },
+		"get":                func() error { _, err := other.Get(k); return err },
+		"edit, a new secret": func() error { _, err := other.Edit(k, EntryEdit{Secret: []byte("v")}); return err },
+		"edit, a rename": func() error {
+			to := vault.Key{Kind: vault.KindPassword, Service: "bank-2"}
+			_, err := other.Edit(k, EntryEdit{To: &to})
+			return err
+		},
 		"rekey": func() error {
 			key, rec := newKeyFor(t, "third-password-1")
 			_, err := other.Rekey(key, rec, rewrapTo)
