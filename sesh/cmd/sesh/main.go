@@ -243,6 +243,7 @@ var subcommands = []candidate{
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 	{"config", "Show settings and where each comes from"},
 	{"doctor", "Check sesh's setup, and that the vault can all be read"},
+	{"edit", "Rename an entry, or change its username, kind, or secret"},
 	{"folder", "Move entries between folders, rename folders, list them"},
 	{"init", "Choose where sesh keeps the vault"},
 	{"recover", "Set a new master password with the vault's recovery key"},
@@ -799,6 +800,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "edit":
+		if err := runEdit(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "restore":
 		if err := runRestore(app, rest); err != nil {
 			fatal(app, err)
@@ -1091,6 +1097,7 @@ func (a *App) PrintUsage() error {
 		"  sesh doctor                   Check the setup, and that the vault can all be read",
 		"  sesh backup [file]            Copy the vault now (sesh also does this automatically)",
 		"  sesh restore [backup]         List the backups, or replace the vault with one",
+		"  sesh edit <id>                Rename an entry, or change its username, kind, or secret",
 		"  sesh folder move|rename|list  File entries in folders",
 		"  sesh tag add|remove|rename|list  Tag entries",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",

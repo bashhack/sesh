@@ -84,6 +84,10 @@ func runAudit(app *App, args []string) error {
 			continue
 		}
 		kind, name := auditEntryName(e.EntryID)
+		// An edit says what changed: "renamed from password/github/alice".
+		if change, ok := strings.CutPrefix(e.Detail, "Edit: "); ok {
+			name += " (" + change + ")"
+		}
 		fmt.Fprintf(&b, "%s  %-6s  %-11s  %s\n", when, e.EventType, kind, name)
 	}
 	if *limit > 0 && count > int64(*limit) {
