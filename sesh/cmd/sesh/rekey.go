@@ -164,7 +164,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	}
 
 	// Locked before any output, so a failed write below can't skip it.
-	agentNote := lockAgentAfterRekey()
+	agentNote := lockAgentHoldingOldKey()
 	// Touch ID unlock is re-wrapped for the new key, also before any output.
 	touchNote := rewrapTouchID(dbPath, oldID, res.NewID, key)
 	recoveryNote := ""
@@ -201,13 +201,14 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	return bytes.Clone(key), nil
 }
 
-// lockAgentAfterRekey locks a running, unlocked agent once the database is
-// under a new key, and returns a line for the user ("" when there is
-// nothing to say). The agent may still hold the old key, which opens any
-// copy of the vault made before the change without a password. No agent running is
-// the normal case. The rekey has already succeeded, so a failure here is a
-// warning that names the command to run instead.
-func lockAgentAfterRekey() string {
+// lockAgentHoldingOldKey locks a running, unlocked agent once the database
+// is under a new key (a password change, or a restore), and returns a line
+// for the user ("" when there is nothing to say). The agent may still hold
+// the old key, which opens any copy of the vault made before the change
+// without a password. No agent running is the normal case. The change has
+// already succeeded, so a failure here is a warning that names the command
+// to run instead.
+func lockAgentHoldingOldKey() string {
 	conn, err := agent.DialExisting()
 	if err != nil {
 		if agent.IsNotRunning(err) {
