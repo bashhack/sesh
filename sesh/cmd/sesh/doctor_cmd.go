@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/backup"
+	"github.com/bashhack/sesh/internal/clipboard"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/kdf"
@@ -114,6 +116,7 @@ func checkSetup(c *doctorChecks, app *App) func(io.Writer) error {
 		c.row(markNone, "Key settings", "unknown: the key record is damaged")
 	}
 	checkBackups(c, cfg)
+	checkClipboard(c)
 	return func(w io.Writer) error {
 		c.section("\nVault: " + tildePath(dbPath))
 		if matErr != nil {
@@ -314,6 +317,34 @@ func checkBackups(c *doctorChecks, cfg *config.Config) {
 		return
 	}
 	c.row(markOK, "Backups", desc)
+}
+
+// clipboardOS and findClipboard are the system and tool --clip copies
+// with; tests replace them.
+var (
+	clipboardOS   = runtime.GOOS
+	findClipboard = clipboard.Find
+)
+
+// checkClipboard shows the tool --clip copies with, on Linux only: macOS
+// always has one.
+func checkClipboard(c *doctorChecks) {
+	if clipboardOS != "linux" {
+		return
+	}
+	tool, err := findClipboard()
+	var missing *clipboard.MissingToolError
+	switch {
+	case err == nil:
+		c.row(markOK, "Clipboard", tool.Name)
+	case errors.Is(err, clipboard.ErrNoDisplay):
+		c.row(markNone, "Clipboard", "no desktop session here, as over SSH, so --clip can't copy")
+	case errors.As(err, &missing):
+		c.row(markWarn, "Clipboard", "no tool found, so --clip can't copy")
+		c.todo("Install " + missing.Install + ", so --clip can copy.")
+	default:
+		c.row(markWarn, "Clipboard", "can't be used", err.Error())
+	}
 }
 
 // when says when t was, from now: "today 09:12", "yesterday 09:12", or

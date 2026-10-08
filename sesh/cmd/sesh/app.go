@@ -47,10 +47,13 @@ type App struct {
 	ExecLookPath  ExecLookPathFunc
 	Exit          ExitFunc
 	ClipboardCopy ClipboardCopyFunc
-	TimeNow       TimeNowFunc
-	Stdin         io.Reader
-	Stdout        io.Writer
-	Stderr        io.Writer
+	// ClipboardCheck reports why nothing can be copied here, if so; nil
+	// skips the check.
+	ClipboardCheck func() error
+	TimeNow        TimeNowFunc
+	Stdin          io.Reader
+	Stdout         io.Writer
+	Stderr         io.Writer
 	// StdinIsTerminal reports whether someone at a terminal can answer a
 	// question on Stdin; nil means nobody can.
 	StdinIsTerminal func() bool
@@ -94,6 +97,10 @@ func NewDefaultApp(versionInfo VersionInfo, store vault.Store, settings AppSetti
 		Exit:         os.Exit,
 		ClipboardCopy: func(text string) error {
 			return clipboard.CopyWithAutoClear(text, settings.ClipboardTimeout)
+		},
+		ClipboardCheck: func() error {
+			_, err := clipboard.Find()
+			return err
 		},
 		TimeNow: time.Now,
 		Stdin:   os.Stdin,
@@ -293,6 +300,12 @@ func (a *App) CopyToClipboard(serviceName string) error {
 
 	if err := p.ValidateRequest(); err != nil {
 		return err
+	}
+
+	if a.ClipboardCheck != nil {
+		if err := a.ClipboardCheck(); err != nil {
+			return fmt.Errorf("can't copy: %w", err)
+		}
 	}
 
 	quiet := isQuietProvider(p)

@@ -161,8 +161,8 @@ func TestNewDefaultApp(t *testing.T) {
 	if app.Exit == nil {
 		t.Error("Exit is nil")
 	}
-	if app.ClipboardCopy == nil {
-		t.Error("ClipboardCopy is nil")
+	if app.ClipboardCopy == nil || app.ClipboardCheck == nil {
+		t.Error("ClipboardCopy or ClipboardCheck is nil")
 	}
 	if app.TimeNow == nil {
 		t.Error("TimeNow is nil")
@@ -567,6 +567,34 @@ func TestApp_CopyToClipboard(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// With no clipboard to copy to, --clip fails before fetching the secret,
+// so nobody unlocks the vault or answers an MFA prompt for nothing.
+func TestApp_CopyToClipboard_NoClipboard(t *testing.T) {
+	fetched := false
+	app := &App{
+		Registry:       provider.NewRegistry(),
+		Stdout:         &bytes.Buffer{},
+		Stderr:         &bytes.Buffer{},
+		ClipboardCheck: func() error { return errors.New("no desktop session") },
+		ClipboardCopy:  func(string) error { return nil },
+	}
+	app.Registry.RegisterProvider(&MockProvider{
+		NameFunc:            func() string { return "totp" },
+		ValidateRequestFunc: func() error { return nil },
+		GetClipboardValueFunc: func() (provider.Credentials, error) {
+			fetched = true
+			return provider.Credentials{CopyValue: "123456"}, nil
+		},
+	})
+	err := app.CopyToClipboard("totp")
+	if err == nil || !strings.Contains(err.Error(), "can't copy: no desktop session") {
+		t.Errorf("err = %v, want it to contain %q", err, "can't copy: no desktop session")
+	}
+	if fetched {
+		t.Error("the secret was fetched before the clipboard was checked")
 	}
 }
 

@@ -443,7 +443,7 @@ AWS CLI → [TRUST BOUNDARY] → AWS APIs
 
 Additional trust boundaries:
    sesh → [TRUST BOUNDARY] → Filesystem (temp shell init files, QR screenshot captures)
-   sesh → [TRUST BOUNDARY] → Clipboard (pbcopy — visible to clipboard managers; auto-cleared after 30s)
+   sesh → [TRUST BOUNDARY] → Clipboard (pbcopy; wl-copy, xclip or xsel on Linux — visible to clipboard managers; auto-cleared after 30s)
 ```
 
 Each boundary represents:

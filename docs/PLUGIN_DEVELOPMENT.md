@@ -628,7 +628,7 @@ make build && ./build/sesh -help
 1. **Always zero sensitive data**: Use `secure.SecureZeroBytes()` on secrets from `Get`
 2. **Work with byte slices**: `Get` returns `[]byte`; convert to a string only where one is required (an environment variable, the clipboard)
 3. **Validate early**: Check the entry exists (`Lookup`, which doesn't decrypt) before expensive operations
-4. **Clipboard awareness**: On macOS, sesh auto-clears the clipboard 30 seconds after copy (only if the clipboard still holds the copied value). On other platforms `-clip` copies without auto-clearing — consider the exposure window and surface it in your provider's UX.
+4. **Clipboard awareness**: sesh clears the clipboard 30 seconds after a copy (`clipboard_timeout`), if it still holds the copied value, on macOS and Linux. Until then, clipboard managers can see it.
 
 ### User Experience
 
