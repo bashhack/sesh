@@ -11,6 +11,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -90,12 +91,20 @@ func resolve(store vault.Store, r Ref, reading string) (Value, error) {
 	}
 	field := strings.ToLower(r.Field)
 	if field == "" || field == "password" || field == "secret" {
+		what := "secret"
 		if k.Kind == vault.KindTOTP {
-			code, err := password.NewManager(store).GenerateTOTPCode(k.Service, k.Username)
-			return Value{Value: []byte(code), Secret: true}, err
+			what = "TOTP secret, for a code"
 		}
-		secret, err := store.Get(k)
-		return Value{Value: secret, Secret: true}, err
+		secret, err := get(store, k, what+", to "+reading)
+		if err != nil || k.Kind != vault.KindTOTP {
+			return Value{Value: secret, Secret: true}, err
+		}
+		defer secure.SecureZeroBytes(secret)
+		code, _, err := totp.GenerateConsecutiveCodesBytesWithParams(secret, e.Settings.TOTP)
+		if err != nil {
+			return Value{}, fmt.Errorf("generate a code for %s: %w", k, err)
+		}
+		return Value{Value: []byte(code), Secret: true}, nil
 	}
 	switch field {
 	case "url":
@@ -139,6 +148,20 @@ func resolve(store vault.Store, r Ref, reading string) (Value, error) {
 		return Value{}, fmt.Errorf("%s has no field %q", k, f.Name)
 	}
 	return Value{Value: bytes.Clone(sf.Value), Secret: true}, nil
+}
+
+// readingGetter is a store that records what a secret is read for.
+type readingGetter interface {
+	GetFor(k vault.Key, reading string) ([]byte, error)
+}
+
+// get reads k's secret from store, recording reading where the store
+// keeps an audit log.
+func get(store vault.Store, k vault.Key, reading string) ([]byte, error) {
+	if g, ok := store.(readingGetter); ok {
+		return g.GetFor(k, reading)
+	}
+	return store.Get(k)
 }
 
 // Zero overwrites v's value.

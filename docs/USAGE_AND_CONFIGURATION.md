@@ -1121,14 +1121,14 @@ DB_HOST=db.internal
 ```
 
 - **Format:**
-  - lines starting with `#` and blank lines are skipped;
+  - lines starting with `#` and blank lines are skipped, and so is a `#` after a space, following a value that isn't in quotes;
   - `export` before a name is allowed;
   - quotes around a value are taken off;
   - nothing is expanded.
 - **Several sources:** `--env-file` can be given more than once, and `--env` replaces a variable a file sets.
 - **The environment:** the command gets your environment, minus `SESH_MASTER_PASSWORD`, plus these variables.
 
-**Before anything runs,** sesh unlocks the vault once and resolves every reference. If one doesn't resolve, nothing runs, and sesh names it. The audit log records each read, as `(read field pin, to run)` for a field.
+**Before anything runs,** sesh unlocks the vault once and resolves every reference. If one doesn't resolve, nothing runs, and sesh names it. The audit log records each read and what it was for, such as `(read secret, to run)` or `(read field pin, to inject)`.
 
 **Output.** Secrets the command prints are shown as `<concealed by sesh>`, on stdout and stderr:
 - **what counts as secret:** an entry's secret, its notes, its secret fields, and TOTP codes. URLs and plain fields are shown as they are.
@@ -1138,10 +1138,9 @@ DB_HOST=db.internal
 
 **The command runs as if you'd started it:**
 - it reads your keyboard;
-- Ctrl-C reaches it;
-- a request to stop sesh (SIGTERM), or a closed terminal, is passed on to it;
-- sesh exits with its exit status;
-- once the command exits, sesh waits a second for the rest of its output, then stops waiting. A process the command left running in the background doesn't keep sesh open.
+- Ctrl-C at the terminal reaches it. A Ctrl-C or other request to stop sent to sesh alone, as an editor's stop button does, is passed on to it;
+- sesh exits with its exit status. If a signal killed it, sesh ends by the same signal, so a shell loop running `sesh run` stops at Ctrl-C as it would for the command;
+- once the command exits, sesh passes on the rest of its output, however slowly it's read. It stops when no more has come for a second, so a process the command left running in the background doesn't keep sesh open.
 
 **`sesh inject`** fills the references in a template, written as `{{ sesh://... }}`, with or without spaces inside the braces. Nothing else in the template changes:
 
@@ -1155,8 +1154,8 @@ sesh inject -i config.yml.tpl -o config.yml
 ```
 
 - **Input and output:** it reads the template from `-i` or stdin, and writes to `-o` or stdout.
-- **The file** is readable only by you (0600). It's written whole to a new file next to the target, then renamed into place, so nothing reads half of it. A file already there is replaced.
-- **Failures:** if a reference doesn't resolve, nothing is written.
+- **The file** is readable only by you (0600). It's written whole to a new file next to the target, then renamed into place, so nothing reads half of it. A file already there is replaced; a symlink there is replaced by the file, not followed. `-o` can't be the template itself.
+- **Failures:** if a reference doesn't resolve, nothing is written. A template can be up to 16 MiB.
 - **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
 
 ### Folders and tags

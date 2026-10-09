@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"golang.org/x/term"
 
@@ -772,6 +773,10 @@ func fatal(app *App, err error) {
 	}
 	if status, ok := errors.AsType[exitStatus](err); ok {
 		app.Exit(int(status))
+		return
+	}
+	if sig, ok := errors.AsType[killedBy](err); ok {
+		endBy(app, syscall.Signal(sig))
 		return
 	}
 	if _, printErr := fmt.Fprintf(app.Stderr, "❌ %v\n", err); printErr != nil {

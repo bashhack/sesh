@@ -30,20 +30,33 @@ func TemplateRefs(tpl, name string) ([]Ref, error) {
 	return refs, nil
 }
 
-// Fill puts each reference's value, from values by reference, in place of
-// the reference in tpl; everything else is left as it is. The caller
-// zeroes the result.
-func Fill(tpl string, values map[string][]byte) []byte {
-	var out []byte
-	last := 0
-	for _, m := range templateRef.FindAllStringSubmatchIndex(tpl, -1) {
-		v, ok := values[tpl[m[2]:m[3]]]
-		if !ok {
-			continue
+// Fill puts each reference's value, from values by the reference in the
+// form Parse reads it (Ref.String), in place of the reference in tpl,
+// however it's written there; everything else is left as it is. A
+// reference without a value is an error. The caller zeroes the result.
+func Fill(tpl string, values map[string][]byte) ([]byte, error) {
+	matches := templateRef.FindAllStringSubmatchIndex(tpl, -1)
+	vals := make([][]byte, len(matches))
+	size := len(tpl)
+	for i, m := range matches {
+		r, err := Parse(tpl[m[2]:m[3]])
+		if err != nil {
+			return nil, err
 		}
+		v, ok := values[r.String()]
+		if !ok {
+			return nil, fmt.Errorf("%s has no value", r)
+		}
+		vals[i] = v
+		size += len(v) - (m[1] - m[0])
+	}
+	// Sized up front, so no copy of a value is left behind by growing.
+	out := make([]byte, 0, size)
+	last := 0
+	for i, m := range matches {
 		out = append(out, tpl[last:m[0]]...)
-		out = append(out, v...)
+		out = append(out, vals[i]...)
 		last = m[1]
 	}
-	return append(out, tpl[last:]...)
+	return append(out, tpl[last:]...), nil
 }

@@ -34,12 +34,12 @@ type Writer struct {
 func NewWriter(w io.Writer, secrets [][]byte) *Writer {
 	m := &Writer{w: w}
 	for _, s := range secrets {
-		if len(s) >= MinLength {
+		// Spaces and line breaks around a value are matched as output, not
+		// as the secret, so a prompt or line ending in one isn't held back.
+		if s = bytes.TrimSpace(s); len(s) >= MinLength {
 			m.secrets = append(m.secrets, bytes.Clone(s))
 		}
 	}
-	// Longest first, so a secret containing another is replaced whole.
-	slices.SortFunc(m.secrets, func(a, b []byte) int { return len(b) - len(a) })
 	return m
 }
 
@@ -75,26 +75,55 @@ func (m *Writer) Close() error {
 	return err
 }
 
-// mask replaces each secret in buf, earliest first. Unless final, it
-// returns separately the end of buf that could start a secret.
+// mask replaces each secret in buf; secrets that overlap, or one inside
+// another, become one Concealed. Unless final, it returns separately the
+// end of buf that could start a secret, and everything from the start of
+// a match reaching into that end, which more output could lengthen.
 func (m *Writer) mask(buf []byte, final bool) (out, rest []byte) {
-	for {
-		at, n := -1, 0
-		for _, s := range m.secrets {
-			if i := bytes.Index(buf, s); i >= 0 && (at < 0 || i < at) {
-				at, n = i, len(s)
+	limit := len(buf)
+	if !final {
+		limit -= m.possibleStart(buf)
+	}
+	type span struct{ start, end int }
+	var spans []span
+	for _, s := range m.secrets {
+		for i := 0; ; {
+			j := bytes.Index(buf[i:], s)
+			if j < 0 {
+				break
 			}
+			spans = append(spans, span{i + j, i + j + len(s)})
+			i += j + 1
 		}
-		if at < 0 {
+	}
+	slices.SortFunc(spans, func(a, b span) int { return a.start - b.start })
+	var merged []span
+	for _, sp := range spans {
+		if n := len(merged); n > 0 && sp.start < merged[n-1].end {
+			merged[n-1].end = max(merged[n-1].end, sp.end)
+			continue
+		}
+		merged = append(merged, sp)
+	}
+	pos := 0
+	for _, sp := range merged {
+		if sp.end > limit {
+			limit = min(limit, sp.start)
 			break
 		}
-		out = append(out, buf[:at]...)
+		out = append(out, buf[pos:sp.start]...)
 		out = append(out, Concealed...)
-		buf = buf[at+n:]
+		pos = sp.end
 	}
-	if final {
-		return append(out, buf...), nil
+	if pos < limit {
+		out = append(out, buf[pos:limit]...)
 	}
+	return out, buf[max(pos, limit):]
+}
+
+// possibleStart is how long the end of buf is that could be the start of
+// a secret.
+func (m *Writer) possibleStart(buf []byte) int {
 	k := 0
 	for _, s := range m.secrets {
 		for j := min(len(s)-1, len(buf)); j > k; j-- {
@@ -104,5 +133,5 @@ func (m *Writer) mask(buf []byte, final bool) (out, rest []byte) {
 			}
 		}
 	}
-	return append(out, buf[:len(buf)-k]...), buf[len(buf)-k:]
+	return k
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -124,6 +125,16 @@ func TestRun_Audit(t *testing.T) {
 	if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "db (app) (read field pin, to run)") {
 		t.Errorf("audit:\n%s", out)
 	}
+	if _, _, err := runRunOut(t, "--env", "K=sesh://api_key/openai", "--", "true"); err != nil {
+		t.Fatal(err)
+	}
+	app = agentTestApp()
+	if err := runAudit(app, []string{"--limit", "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "openai (read secret, to run)") {
+		t.Errorf("audit:\n%s", out)
+	}
 }
 
 func runInjectOut(t *testing.T, stdin string, args ...string) (string, error) {
@@ -186,5 +197,109 @@ func TestRun_DoesntWaitForBackgroundProcesses(t *testing.T) {
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("sesh run took %v, waiting on the background sleep", d)
+	}
+}
+
+// slowWriter takes its time before its first write, as a paused terminal
+// or a pager does.
+type slowWriter struct {
+	bytes.Buffer
+	delay time.Duration
+	once  bool
+}
+
+func (w *slowWriter) Write(p []byte) (int, error) {
+	if !w.once {
+		w.once = true
+		time.Sleep(w.delay)
+	}
+	return w.Buffer.Write(p)
+}
+
+// Output the command wrote before exiting all arrives, however slowly
+// it's read: here the command finishes while the reader is stalled.
+func TestRun_SlowReaderGetsEverything(t *testing.T) {
+	runVault(t)
+	app := agentTestApp()
+	out := &slowWriter{delay: 3 * time.Second}
+	app.Stdout = out
+	if err := runRun(app, []string{"--env", "K=sesh://api_key/openai", "--", "seq", "1", "10000"}); err != nil {
+		t.Fatal(err)
+	}
+	if lines := strings.Count(out.String(), "\n"); lines != 10000 {
+		t.Errorf("%d lines, want 10000", lines)
+	}
+}
+
+// A Ctrl-C sent to sesh alone, not from its terminal, is passed on; a
+// command killed by a signal ends sesh the same way.
+func TestRun_Signals(t *testing.T) {
+	runVault(t)
+	old := fromTerminal
+	t.Cleanup(func() { fromTerminal = old })
+	fromTerminal = func() bool { return false }
+	started := filepath.Join(t.TempDir(), "started")
+	errc := make(chan error, 1)
+	go func() {
+		_, _, err := runRunOut(t, "--env", "K=sesh://api_key/openai", "--", "sh", "-c",
+			`trap 'exit 4' INT; touch `+started+`; sleep 10 & wait`)
+		errc <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the command never started")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-errc:
+		if status, ok := errors.AsType[exitStatus](err); !ok || status != 4 {
+			t.Errorf("err = %v, want exit status 4 from the command's trap", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the Ctrl-C wasn't passed on")
+	}
+
+	_, _, err := runRunOut(t, "--env", "K=sesh://api_key/openai", "--", "sh", "-c", "kill -TERM $$")
+	if sig, ok := errors.AsType[killedBy](err); !ok || syscall.Signal(sig) != syscall.SIGTERM {
+		t.Errorf("err = %v, want killed by SIGTERM", err)
+	}
+}
+
+// inject refuses to write over its own template, fills a reference however
+// it's written, and refuses what it can't do in full.
+func TestInject_Refused(t *testing.T) {
+	runVault(t)
+	dir := t.TempDir()
+	tpl := filepath.Join(dir, "c.tpl")
+	if err := os.WriteFile(tpl, []byte("k: {{ sesh://api_key/openai }}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runInjectOut(t, "", "-i", tpl, "-o", filepath.Join(dir, ".", "c.tpl")); err == nil || !strings.Contains(err.Error(), "is the template itself") {
+		t.Errorf("-o the template: %v", err)
+	}
+	if b, _ := os.ReadFile(tpl); !strings.Contains(string(b), "sesh://") { //nolint:errcheck // compared
+		t.Errorf("the template was overwritten: %q", b)
+	}
+	if got, err := runInjectOut(t, "k={{ sesh://api_key/openai/ }}"); err != nil || got != "k=sk-live-123" {
+		t.Errorf("a trailing slash: %q, %v", got, err)
+	}
+	if _, err := runInjectOut(t, "{{ sesh://api_key/openai }}"+strings.Repeat("x", 16<<20)); err == nil || !strings.Contains(err.Error(), "over 16 MiB") {
+		t.Errorf("a big template: %v", err)
+	}
+	if _, err := runInjectOut(t, "{{ sesh://api_key/openai }}", "-o", dir); err == nil || !strings.Contains(err.Error(), "is a folder") {
+		t.Errorf("-o a folder: %v", err)
+	}
+	app := agentTestApp()
+	app.StdinIsTerminal = func() bool { return true }
+	if err := runInject(app, nil); err == nil || !strings.Contains(err.Error(), "give the template with -i, or pipe it in") {
+		t.Errorf("no template at a terminal: %v", err)
 	}
 }

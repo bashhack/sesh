@@ -25,31 +25,46 @@ func ParseEnvFlag(s string) (EnvVar, error) {
 }
 
 // ParseEnvFile reads an env file, called name in errors: one NAME=value
-// per line. A line starting with # is a comment, and blank lines are
-// skipped. "export " may come before the name; a value in single or
-// double quotes has them taken off; nothing is expanded. A value starting
-// with sesh:// is a reference.
+// per line. A line starting with # is a comment, as is a # after a space
+// following a value not in quotes; blank lines are skipped. "export" may
+// come before the name; a value in single or double quotes has them taken
+// off; nothing is expanded. A value starting with sesh:// is a reference.
 func ParseEnvFile(r io.Reader, name string) ([]EnvVar, error) {
 	var vars []EnvVar
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
 	for n := 1; sc.Scan(); n++ {
-		line := strings.TrimSpace(sc.Text())
+		line := sc.Text()
+		if n == 1 {
+			line = strings.TrimPrefix(line, "\ufeff")
+		}
+		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		line = strings.TrimPrefix(line, "export ")
+		if rest, ok := strings.CutPrefix(line, "export"); ok && rest != "" && (rest[0] == ' ' || rest[0] == '\t') {
+			line = strings.TrimSpace(rest)
+		}
 		k, v, ok := strings.Cut(line, "=")
 		if !ok {
 			return nil, fmt.Errorf("%s line %d: want NAME=value", name, n)
 		}
 		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
-		if v != "" && (v[0] == '"' || v[0] == '\'') {
-			if len(v) < 2 || v[len(v)-1] != v[0] {
+		switch {
+		case v != "" && (v[0] == '"' || v[0] == '\''):
+			end := strings.IndexByte(v[1:], v[0])
+			if end < 0 {
 				return nil, fmt.Errorf("%s line %d: the quote isn't closed", name, n)
 			}
-			v = v[1 : len(v)-1]
+			v = v[1 : end+1]
+		default:
+			// A # after a space starts a comment, as in other env files.
+			if i := strings.Index(v, " #"); i >= 0 {
+				v = strings.TrimSpace(v[:i])
+			} else if i := strings.Index(v, "\t#"); i >= 0 {
+				v = strings.TrimSpace(v[:i])
+			}
 		}
 		ev, err := envVar(k, v)
 		if err != nil {

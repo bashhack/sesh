@@ -60,3 +60,24 @@ func TestParseEnvFlag(t *testing.T) {
 		t.Errorf("no =: %v", err)
 	}
 }
+
+// Comments after a value, a byte-order mark, a tab after export, and CRLF
+// line ends are read as dotenv files write them.
+func TestParseEnvFile_Forms(t *testing.T) {
+	in := "\ufeffA=plain # a note\r\nexport\tB=sesh://api_key/openai  # the key\r\nC=\"quoted # kept\"\r\nD=no#comment\r\n"
+	got, err := ParseEnvFile(strings.NewReader(in), ".env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, v := range got {
+		if v.Ref != nil {
+			lines = append(lines, v.Name+"=ref:"+v.Ref.String())
+		} else {
+			lines = append(lines, v.Name+"="+v.Value)
+		}
+	}
+	if want := "A=plain|B=ref:sesh://api_key/openai|C=quoted # kept|D=no#comment"; strings.Join(lines, "|") != want {
+		t.Errorf("got  %s\nwant %s", strings.Join(lines, "|"), want)
+	}
+}

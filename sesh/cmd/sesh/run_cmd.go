@@ -11,8 +11,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/bashhack/sesh/internal/mask"
 	"github.com/bashhack/sesh/internal/secretref"
@@ -118,40 +121,73 @@ func runRun(app *App, args []string) error {
 	cmd.Args[0] = command[0]
 	cmd.Env = env
 	cmd.Stdin = app.Stdin
-	var outMask, errMask *mask.Writer
 	if f.noMasking {
 		cmd.Stdout, cmd.Stderr = app.Stdout, app.Stderr
-	} else {
-		outMask, errMask = mask.NewWriter(app.Stdout, secrets), mask.NewWriter(app.Stderr, secrets)
-		cmd.Stdout, cmd.Stderr = outMask, errMask
+		return runChild(cmd, nil)
 	}
-	return runChild(cmd, outMask, errMask)
+	outMask, errMask := mask.NewWriter(app.Stdout, secrets), mask.NewWriter(app.Stderr, secrets)
+	return runChild(cmd, []*mask.Writer{outMask, errMask})
 }
 
-// outputDrain is how long sesh waits, once the command has exited, for
-// the rest of its output: a process it left running in the background may
-// hold its output open long after.
-const outputDrain = time.Second
+// outputIdle is how long sesh waits, once the command has exited, for more
+// of its output: a process it left running in the background may hold its
+// output open, writing nothing, long after.
+const outputIdle = time.Second
 
 // runChild runs cmd to its end and returns its exit status as an
-// exitStatus (none for 0). Ctrl-C and Ctrl-\ reach the command from the
-// terminal, so sesh only waits through them; a request to stop or a
-// closed terminal is passed on to it. Output still coming outputDrain
-// after the command exits, from a process it left behind, isn't shown.
-func runChild(cmd *exec.Cmd, masks ...*mask.Writer) error {
-	cmd.WaitDelay = outputDrain
+// exitStatus (none for 0). With masks, the command's stdout and stderr go
+// through them, by pipes sesh reads; once the command has exited, sesh
+// reads what's left until the pipes have been quiet for outputIdle, so
+// output waiting for a slow reader all arrives, while a background process
+// holding them open doesn't keep sesh running.
+//
+// Signals: Ctrl-C and Ctrl-\ at the terminal reach the command directly,
+// so sesh only waits through them; sent to sesh alone, from elsewhere, they
+// and a request to stop or a closed terminal are passed on. A command
+// killed by a signal makes sesh end the same way, so a shell loop running
+// sesh run stops at Ctrl-C as it would for the command.
+func runChild(cmd *exec.Cmd, masks []*mask.Writer) error {
+	var exited atomic.Bool
+	var readEnds, writeEnds []*os.File
+	var copies []chan struct{}
+	defer func() {
+		for _, f := range append(readEnds, writeEnds...) {
+			_ = f.Close() //nolint:errcheck // a write end is closed after Start too
+		}
+	}()
+	for i, m := range masks {
+		r, w, err := os.Pipe()
+		if err != nil {
+			return err
+		}
+		if i == 0 {
+			cmd.Stdout = w
+		} else {
+			cmd.Stderr = w
+		}
+		readEnds, writeEnds = append(readEnds, r), append(writeEnds, w)
+		done := make(chan struct{})
+		copies = append(copies, done)
+		go copyQuietly(r, m, &exited, done)
+	}
+
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigs)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("can't run %s: %w", cmd.Args[0], err)
 	}
+	// sesh keeps no write end, so the pipes end when the command, and
+	// whatever it left running, let go of them.
+	for _, w := range writeEnds {
+		_ = w.Close() //nolint:errcheck // the command has its own
+	}
 	done := make(chan struct{})
 	go func() {
 		for {
 			select {
 			case sig := <-sigs:
-				if sig == syscall.SIGTERM || sig == syscall.SIGHUP {
+				if sig == syscall.SIGTERM || sig == syscall.SIGHUP || !fromTerminal() {
 					_ = cmd.Process.Signal(sig) //nolint:errcheck // it may have ended
 				}
 			case <-done:
@@ -161,23 +197,73 @@ func runChild(cmd *exec.Cmd, masks ...*mask.Writer) error {
 	}()
 	err := cmd.Wait()
 	close(done)
-	if errors.Is(err, exec.ErrWaitDelay) {
-		err = nil // the command itself succeeded
+	exited.Store(true)
+	for i, r := range readEnds {
+		_ = r.SetReadDeadline(time.Now().Add(outputIdle)) //nolint:errcheck // a pipe takes one
+		<-copies[i]
 	}
 	for _, m := range masks {
-		if m != nil {
-			if cerr := m.Close(); cerr != nil && err == nil {
-				err = cerr
-			}
+		if cerr := m.Close(); cerr != nil && err == nil {
+			err = cerr
 		}
 	}
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		if ws, ok := exit.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			return exitStatus(128 + int(ws.Signal()))
+			return killedBy(ws.Signal())
 		}
 		return exitStatus(exit.ExitCode())
 	}
 	return err
+}
+
+// copyQuietly copies r to m until r ends, or, once the command has exited,
+// until r has been quiet for outputIdle: each read then gets that long.
+func copyQuietly(r *os.File, m *mask.Writer, exited *atomic.Bool, done chan struct{}) {
+	defer close(done)
+	buf := make([]byte, 32<<10)
+	defer secure.SecureZeroBytes(buf)
+	for {
+		if exited.Load() {
+			_ = r.SetReadDeadline(time.Now().Add(outputIdle)) //nolint:errcheck // a pipe takes one
+		}
+		n, err := r.Read(buf)
+		if n > 0 {
+			if _, werr := m.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// fromTerminal reports whether a Ctrl-C or Ctrl-\ sesh received came from
+// its terminal, which sends it to the command too: sesh is in the
+// terminal's foreground process group. Tests replace it.
+var fromTerminal = func() bool {
+	tty, err := os.Open("/dev/tty")
+	if err != nil {
+		return false
+	}
+	defer tty.Close() //nolint:errcheck // read only
+	pgrp, err := unix.IoctlGetInt(int(tty.Fd()), unix.TIOCGPGRP)
+	return err == nil && pgrp == syscall.Getpgrp()
+}
+
+// killedBy is the error for a command killed by sig: fatal ends sesh by
+// the same signal, so whatever ran sesh sees it killed, not exited.
+type killedBy syscall.Signal
+
+func (k killedBy) Error() string { return "killed by " + syscall.Signal(k).String() }
+
+// endBy ends sesh by sig, as the command was ended, or with 128+sig if it
+// survives it.
+func endBy(app *App, sig syscall.Signal) {
+	signal.Reset(sig)
+	_ = syscall.Kill(syscall.Getpid(), sig) //nolint:errcheck // falls back to exiting
+	time.Sleep(100 * time.Millisecond)
+	app.Exit(128 + int(sig))
 }
 
 // runVars are the variables the env files, then the --env flags, set; a
@@ -260,6 +346,20 @@ const injectUsage = `Usage: sesh inject [-i <template>] [-o <file>]
 
   sesh inject -i config.yml.tpl -o config.yml`
 
+// maxTemplate is the largest template sesh inject fills.
+const maxTemplate = 16 << 20
+
+// sameFile reports whether paths a and b name one file, so writing b
+// would replace a.
+func sameFile(a, b string) bool {
+	ia, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	ib, err := os.Stat(b)
+	return err == nil && os.SameFile(ia, ib)
+}
+
 func addInjectFlags(fs *flag.FlagSet) (in, out *string) {
 	return fs.String("i", "", "The template (default: stdin)"), fs.String("o", "", "The file to write, readable only by you (default: stdout)")
 }
@@ -286,6 +386,17 @@ func runInject(app *App, args []string) error {
 		return fmt.Errorf("sesh inject takes -i and -o, not %q", strings.Join(fs.Args(), " "))
 	}
 	name, r := "the template", app.Stdin
+	if *in == "" && app.StdinIsTerminal != nil && app.StdinIsTerminal() {
+		return errors.New("give the template with -i, or pipe it in: sesh inject -i <template> [-o <file>]")
+	}
+	if *in != "" && *out != "" && sameFile(*in, *out) {
+		return fmt.Errorf("%s is the template itself: writing the filled file there would replace the template with secrets", *out)
+	}
+	if *out != "" {
+		if info, err := os.Stat(*out); err == nil && info.IsDir() {
+			return fmt.Errorf("%s is a folder: give -o a file name", *out)
+		}
+	}
 	if *in != "" {
 		file, err := os.Open(*in)
 		if err != nil {
@@ -294,9 +405,12 @@ func runInject(app *App, args []string) error {
 		defer file.Close() //nolint:errcheck // read only
 		name, r = *in, file
 	}
-	b, err := io.ReadAll(io.LimitReader(r, 16<<20))
+	b, err := io.ReadAll(io.LimitReader(r, maxTemplate+1))
 	if err != nil {
 		return fmt.Errorf("read %s: %w", name, err)
+	}
+	if len(b) > maxTemplate {
+		return fmt.Errorf("%s is over 16 MiB, the most sesh inject fills", name)
 	}
 	tpl := string(b)
 	refs, err := secretref.TemplateRefs(tpl, name)
@@ -315,7 +429,10 @@ func runInject(app *App, args []string) error {
 	for k, v := range values {
 		byRef[k] = v.Value
 	}
-	filled := secretref.Fill(tpl, byRef)
+	filled, err := secretref.Fill(tpl, byRef)
+	if err != nil {
+		return err
+	}
 	defer secure.SecureZeroBytes(filled)
 	if *out == "" {
 		_, err := app.Stdout.Write(filled)
@@ -330,7 +447,8 @@ func runInject(app *App, args []string) error {
 
 // writePrivate writes b to path, readable only by its owner: whole, to a
 // new file beside it, then renamed into place, so a reader never sees
-// part of it. A file already there is replaced.
+// part of it. A file already there is replaced; a symlink there is
+// replaced by the file, not followed.
 func writePrivate(path string, b []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".sesh-*")
 	if err != nil {
