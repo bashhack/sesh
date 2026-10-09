@@ -1157,6 +1157,32 @@ sesh inject -i config.yml.tpl -o config.yml
 - **The file** is readable only by you (0600). It's written whole to a new file next to the target, then renamed into place, so nothing reads half of it. A file already there is replaced; a symlink there is replaced by the file, not followed. `-o` can't be the template itself.
 - **Failures:** if a reference doesn't resolve, nothing is written. A template can be up to 16 MiB.
 - **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
+### Importing from other apps (`sesh import`)
+
+`sesh import` brings entries over from another app. It reads everything first, shows what it found, then asks:
+- what it will import;
+- which entries you already have;
+- what it will skip, and why.
+
+```
+sesh import --from google-authenticator IMG_1234.png IMG_1235.png
+```
+
+- **`--dry-run`** shows the summary and imports nothing. **`--yes`** imports without asking, and is needed when there's no terminal to ask at.
+- **Entries you already have** stop the import, listed, unless `--on-conflict skip` leaves them as they are or `--on-conflict overwrite` replaces them.
+- **sesh's own exports** are imported with `--service password --action import` (see [Encrypted exports](#encrypted-exports)).
+
+**Google Authenticator.** Its "Transfer accounts" moves your codes off the phone:
+1. In the app, choose Transfer accounts, then Export accounts. It shows one or more QR codes.
+2. Take a screenshot of each. If the phone won't allow one, photograph the code with another device. Copy the pictures to the computer, for example with AirDrop.
+3. Import them all in one command, as above.
+
+- **Images:** PNG and JPEG are read. An iPhone photo (HEIC) needs converting first: `sips -s format png IMG_1234.HEIC --out IMG_1234.png`. The `otpauth-migration://` text of a code works too, given directly or in a text file, one per line.
+- **A large export** is split over several codes. Give all of them; if one is missing, sesh says which, and imports the rest only after asking.
+- **Names:** each account becomes a TOTP entry. Its issuer is the service name (`GitHub`), and its account is the username (`alice`), kept as the app had them. Rename any with `sesh edit`. The code settings (algorithm, digits) come across too.
+- **What sesh skips:** counter-based (HOTP) accounts, accounts using MD5, and names sesh can't hold, each with the reason.
+- **Before removing an account from the phone,** check its code in sesh matches, for example with `sesh --service totp --service-name GitHub --profile alice`.
+- **The pictures** hold every secret they show, in a form any authenticator app can read. Delete them once the import is done, from the phone too.
 
 ### Folders and tags
 

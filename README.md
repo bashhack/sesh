@@ -186,6 +186,9 @@ sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
 sesh run --env-file .env -- npm start      # .env holds NAME=sesh://... references, no secrets
 sesh inject -i config.yml.tpl -o config.yml
 
+# Move TOTP codes off your phone: Google Authenticator's "Transfer accounts" QR, as screenshots
+sesh import --from google-authenticator IMG_1234.png
+
 # Search across all entries
 sesh -service password -action search -query github
 

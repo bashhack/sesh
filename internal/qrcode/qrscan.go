@@ -2,8 +2,10 @@
 package qrcode
 
 import (
+	"bytes"
 	"fmt"
 	"image"
+	_ "image/jpeg" // ReadTextFromFile reads JPEG photos
 	"image/png"
 	"net/url"
 	"os"
@@ -219,4 +221,40 @@ func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
 	}
 
 	return info, nil
+}
+
+// ReadText returns the text of the QR code in img.
+func ReadText(img image.Image) (string, error) {
+	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
+	if err != nil {
+		return "", fmt.Errorf("failed to process image for QR reading: %w", err)
+	}
+	hints := map[gozxing.DecodeHintType]any{gozxing.DecodeHintType_TRY_HARDER: true}
+	result, err := qrcode.NewQRCodeReader().Decode(bmp, hints)
+	if err != nil {
+		return "", err
+	}
+	return result.GetText(), nil
+}
+
+// ReadTextFromFile returns the text of the QR code in the image file at
+// path, a PNG or a JPEG. An iPhone photo (HEIC) is refused, saying how to
+// convert it.
+func ReadTextFromFile(path string) (string, error) {
+	b, err := os.ReadFile(path) //nolint:gosec // the file the user named
+	if err != nil {
+		return "", err
+	}
+	if ext := strings.ToLower(filepath.Ext(path)); ext == ".heic" || ext == ".heif" || (len(b) >= 12 && string(b[4:8]) == "ftyp" && strings.HasPrefix(string(b[8:12]), "hei")) {
+		return "", fmt.Errorf("%s is a HEIC photo, which sesh can't read; convert it to PNG first: sips -s format png %s --out %s.png", path, path, strings.TrimSuffix(path, filepath.Ext(path)))
+	}
+	img, _, err := image.Decode(bytes.NewReader(b))
+	if err != nil {
+		return "", fmt.Errorf("%s isn't a PNG or JPEG image sesh can read: %w", path, err)
+	}
+	text, err := ReadText(img)
+	if err != nil {
+		return "", fmt.Errorf("no QR code found in %s: make sure the whole code is in the picture, sharp and not cut off", path)
+	}
+	return text, nil
 }

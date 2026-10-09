@@ -246,6 +246,7 @@ var subcommands = []candidate{
 	{"doctor", "Check sesh's setup, and that the vault can all be read"},
 	{"edit", "Rename an entry, or change its username, kind, or secret"},
 	{"folder", "Move entries between folders, rename folders, list them"},
+	{"import", "Bring entries over from another app, such as Google Authenticator"},
 	{"init", "Choose where sesh keeps the vault"},
 	{"inject", "Fill a template's sesh:// references into a file"},
 	{"recover", "Set a new master password with the vault's recovery key"},
@@ -824,6 +825,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "import":
+		if err := runImport(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "show":
 		if err := runShow(app, rest); err != nil {
 			fatal(app, err)
@@ -1134,6 +1140,7 @@ func (a *App) PrintUsage() error {
 		"  sesh show <id> [--reveal]     Show an entry: its URL, notes, fields, folder and tags",
 		"  sesh run [--env N=<ref>] -- <cmd>  Run a command with secrets in its environment",
 		"  sesh inject -i <tpl> -o <file>  Fill a template's sesh:// references",
+		"  sesh import --from <source> <file>  Bring entries over from another app (Google Authenticator)",
 		"  sesh edit <id>                Rename an entry, or change its username, kind, or secret",
 		"  sesh folder move|rename|list  File entries in folders",
 		"  sesh tag add|remove|rename|list  Tag entries",

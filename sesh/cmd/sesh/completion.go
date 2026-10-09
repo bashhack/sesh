@@ -152,6 +152,19 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		for i := range specs {
 			specs[i].path = true
 		}
+	case "import":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addImportFlags(fs) }, nil)
+		for i := range specs {
+			switch specs[i].name {
+			case "from":
+				specs[i].values = importSources
+			case "on-conflict":
+				specs[i].values = []string{"skip", "overwrite"}
+			}
+		}
+		if cur != "" && !strings.HasPrefix(cur, "-") {
+			return nil, true // the files to import
+		}
 	case "restore":
 		specs = flagSpecs(func(fs *flag.FlagSet) { addRestoreFlags(fs) }, nil)
 		if cur != "" && !strings.HasPrefix(cur, "-") {
