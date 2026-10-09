@@ -246,9 +246,11 @@ var subcommands = []candidate{
 	{"edit", "Rename an entry, or change its username, kind, or secret"},
 	{"folder", "Move entries between folders, rename folders, list them"},
 	{"init", "Choose where sesh keeps the vault"},
+	{"inject", "Fill a template's sesh:// references into a file"},
 	{"recover", "Set a new master password with the vault's recovery key"},
 	{"recovery", "Make, remove, or check this vault's recovery key"},
 	{"restore", "List the backups, or replace the vault with one"},
+	{"run", "Run a command with secrets from the vault in its environment"},
 	{"show", "Show an entry: its URL, notes, fields, folder and tags"},
 	{"tag", "Tag entries, take tags off, rename tags, list them"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
@@ -768,6 +770,10 @@ func fatal(app *App, err error) {
 		app.Exit(1)
 		return
 	}
+	if status, ok := errors.AsType[exitStatus](err); ok {
+		app.Exit(int(status))
+		return
+	}
 	if _, printErr := fmt.Fprintf(app.Stderr, "❌ %v\n", err); printErr != nil {
 		app.Exit(2)
 		return
@@ -815,6 +821,16 @@ func run(app *App, args []string) {
 		return
 	case "show":
 		if err := runShow(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
+	case "run":
+		if err := runRun(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
+	case "inject":
+		if err := runInject(app, rest); err != nil {
 			fatal(app, err)
 		}
 		return
@@ -1111,6 +1127,8 @@ func (a *App) PrintUsage() error {
 		"  sesh backup [file]            Copy the vault now (sesh also does this automatically)",
 		"  sesh restore [backup]         List the backups, or replace the vault with one",
 		"  sesh show <id> [--reveal]     Show an entry: its URL, notes, fields, folder and tags",
+		"  sesh run [--env N=<ref>] -- <cmd>  Run a command with secrets in its environment",
+		"  sesh inject -i <tpl> -o <file>  Fill a template's sesh:// references",
 		"  sesh edit <id>                Rename an entry, or change its username, kind, or secret",
 		"  sesh folder move|rename|list  File entries in folders",
 		"  sesh tag add|remove|rename|list  Tag entries",
