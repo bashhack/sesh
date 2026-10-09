@@ -25,7 +25,8 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
   Sources:
     google-authenticator  The "Transfer accounts" QR codes: screenshots or
                           photos (PNG or JPEG), or their otpauth-migration://
-                          text. Give every code of a large export.
+                          text in a file, or piped in with - as the file.
+                          Give every code of a large export.
 
   sesh import --from google-authenticator IMG_1234.png IMG_1235.png
 
@@ -87,7 +88,7 @@ func runImport(app *App, args []string) error {
 			return fmt.Errorf("put %s before the files: sesh import [flags] <files>", a)
 		}
 	}
-	payloads, err := readTransferCodes(fs.Args(), app.Stdin)
+	payloads, err := readTransferCodes(fs.Args(), app.Stdin, app.StdinIsTerminal != nil && app.StdinIsTerminal())
 	if err != nil {
 		return err
 	}
@@ -231,7 +232,7 @@ func runImport(app *App, args []string) error {
 // name), or a text file of codes, one per line. Errors name an argument
 // given as a code by its place ("code 2"), never its text, which holds
 // secrets.
-func readTransferCodes(args []string, stdin io.Reader) ([]gauth.Payload, error) {
+func readTransferCodes(args []string, stdin io.Reader, stdinTerminal bool) ([]gauth.Payload, error) {
 	var payloads []gauth.Payload
 	for n, arg := range args {
 		arg = strings.TrimSpace(arg)
@@ -240,12 +241,19 @@ func readTransferCodes(args []string, stdin io.Reader) ([]gauth.Payload, error) 
 		switch {
 		case strings.HasPrefix(arg, gauth.Prefix):
 			name, codes = fmt.Sprintf("code %d", n+1), []string{arg}
+		case strings.Contains(arg, "data="):
+			return nil, fmt.Errorf("argument %d looks like a transfer code, but doesn't start with %s; copy the whole code", n+1, gauth.Prefix)
 		case strings.Contains(arg, "://"):
 			return nil, fmt.Errorf("argument %d isn't a Google Authenticator transfer code (otpauth-migration://) or a file; a single account's otpauth:// code is added with: sesh --service totp --setup", n+1)
 		default:
 			var b []byte
 			var err error
 			if arg == "-" {
+				if stdinTerminal {
+					// A terminal takes only so long a line; a code is
+					// longer.
+					return nil, errors.New("pipe the codes in rather than typing or pasting them: pbpaste | sesh import -")
+				}
 				name = "stdin"
 				b, err = io.ReadAll(io.LimitReader(stdin, 16<<20))
 			} else {
@@ -265,7 +273,7 @@ func readTransferCodes(args []string, stdin io.Reader) ([]gauth.Payload, error) 
 					}
 				}
 				if len(codes) == 0 {
-					return nil, fmt.Errorf("the QR code in %s isn't a Google Authenticator transfer code: in the app, use Transfer accounts, then Export accounts", arg)
+					return nil, fmt.Errorf("the QR code in %s isn't a Google Authenticator transfer code: in the app, use Transfer accounts, then Export accounts", name)
 				}
 				break
 			}

@@ -1179,7 +1179,7 @@ sesh import --from google-authenticator IMG_1234.png IMG_1235.png
 3. Import them all in one command, as above.
 
 - **Images:** PNG and JPEG are read, whatever the file is called. A picture can hold several codes; sesh reads them all, light on dark too, and a full-size photo. An iPhone photo (HEIC) needs converting first: `sips -s format png IMG_1234.HEIC --out IMG_1234.png`.
-- **The code's text** (`otpauth-migration://...`) works too, in a text file one per line, or piped in with `-` as the file. Typed on the command line it also works, but then every secret in it is in your shell history.
+- **The code's text** (`otpauth-migration://...`) works too, in a text file one per line, or piped in with `-` as the file: `pbpaste | sesh import -`. A terminal can't take a line as long as a code, so pasting one at `sesh import -` is refused. Typed on the command line it also works, but then every secret in it is in your shell history.
 - **A large export** is split over several codes. Give all of them: if one is missing, sesh says which.
 - **Names:** each account becomes a TOTP entry. Its issuer is the service name (`GitHub`), and its account is the username (`alice`), kept as the app had them. Rename any with `sesh edit`. A name differing only in case from an entry you have is pointed out, since it would be a second entry. The code settings (algorithm, digits) come across too.
 - **What sesh skips,** each with the reason:

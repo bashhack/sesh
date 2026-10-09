@@ -200,11 +200,9 @@ func writeQR(t *testing.T, path, text string) {
 	}
 }
 
-// What the review found: a secret sesh refuses is skipped up front, not
-// fatal partway; a same-named account with another secret is told apart;
-// a name differing only in case is pointed out; errors never repeat a
-// code's text; flags after files are refused; codes come from stdin; and
-// the import is in the audit log.
+// A secret sesh refuses is skipped before anything is stored, accounts
+// sharing a name are told apart, a name differing only in case is pointed
+// out, errors never repeat a code's text, and the import is logged.
 func TestImport_Edges(t *testing.T) {
 	env := importVault(t)
 	code := transferCode(1, 0, 2,
@@ -241,6 +239,7 @@ func TestImport_Edges(t *testing.T) {
 		"code 1: the transfer code is damaged":                  {damaged + " "},
 		"argument 1 isn't a Google Authenticator transfer code": {"otpauth://totp/x?secret=JBSWY3DPEHPK3PXP"},
 		"put --dry-run before the files":                        {"a.png", "--dry-run"},
+		"argument 1 looks like a transfer code":                 {"offline?data=JBSW"},
 	} {
 		_, _, err := runImportOut(t, "", false, args...)
 		if err == nil || !strings.Contains(err.Error(), wantSub) || strings.Contains(err.Error(), "JBSW") || strings.Contains(err.Error(), "data=") {
@@ -262,5 +261,14 @@ func TestImport_DryRunWithoutAVault(t *testing.T) {
 	}
 	if _, err := os.Stat(env.dbPath); !os.IsNotExist(err) {
 		t.Errorf("a vault was made: %v", err)
+	}
+}
+
+// Codes typed or pasted at a terminal are refused: a terminal cuts a line
+// shorter than a code.
+func TestImport_StdinAtATerminal(t *testing.T) {
+	importVault(t)
+	if _, _, err := runImportOut(t, "", true, "-"); err == nil || !strings.Contains(err.Error(), "pbpaste | sesh import -") {
+		t.Errorf("err = %v", err)
 	}
 }

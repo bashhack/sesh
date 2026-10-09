@@ -239,6 +239,9 @@ func ReadTexts(img image.Image) ([]string, error) {
 		if scaled == nil {
 			continue
 		}
+		// Both ways round at each size, so a picture with a code each way
+		// gives both.
+		var texts []string
 		src := gozxing.NewLuminanceSourceFromImage(scaled)
 		for _, s := range []gozxing.LuminanceSource{src, gozxing.NewInvertedLuminanceSource(src)} {
 			bmp, err := gozxing.NewBinaryBitmap(gozxing.NewHybridBinarizer(s))
@@ -247,16 +250,17 @@ func ReadTexts(img image.Image) ([]string, error) {
 				continue
 			}
 			results, err := multiqr.NewQRCodeMultiReader().DecodeMultiple(bmp, hints)
-			if err != nil || len(results) == 0 {
+			if err != nil {
 				lastErr = err
 				continue
 			}
-			var texts []string
 			for _, r := range results {
 				if t := r.GetText(); !slices.Contains(texts, t) {
 					texts = append(texts, t)
 				}
 			}
+		}
+		if len(texts) > 0 {
 			return texts, nil
 		}
 	}
@@ -303,6 +307,9 @@ func ReadTextsFromFile(path string) ([]string, error) {
 // ReadTextsFromBytes is ReadTextsFromFile for an image already read, b,
 // called path in errors.
 func ReadTextsFromBytes(path string, b []byte) ([]string, error) {
+	if IsHEIC(path, b) && path == "stdin" {
+		return nil, errors.New("the picture is a HEIC photo, which sesh can't read; convert it to PNG first, for example with: sips -s format png <photo> --out <photo>.png")
+	}
 	if IsHEIC(path, b) {
 		out := strings.TrimSuffix(path, filepath.Ext(path)) + ".png"
 		return nil, fmt.Errorf("%s is a HEIC photo, which sesh can't read; convert it to PNG first: sips -s format png %s --out %s", path, shell.Quote(path), shell.Quote(out))

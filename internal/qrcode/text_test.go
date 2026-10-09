@@ -144,6 +144,13 @@ func TestReadTexts_Hard(t *testing.T) {
 			}
 		}
 	}
+	// One of them light on dark: both are still read.
+	for y := range 400 {
+		for x := 500; x < 900; x++ {
+			g := two.GrayAt(x, y)
+			two.SetGray(x, y, color.Gray{Y: 255 - g.Y})
+		}
+	}
 	got, err := ReadTexts(two)
 	slices.Sort(got)
 	if err != nil || len(got) != 2 || got[0] != a || got[1] != b {
