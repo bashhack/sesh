@@ -324,7 +324,9 @@ func TestRun_LeftoverProcesses(t *testing.T) {
 		if _, _, err := runRunOut(t, "--env", "K=sesh://api_key/openai", "--", "sh", "-c", script); err != nil {
 			t.Fatal(err)
 		}
-		if d := time.Since(start); d > 1800*time.Millisecond {
+		// The run includes unlocking the vault, slow on a busy machine; the
+		// process left behind would hold sesh for 10s, or for ever.
+		if d := time.Since(start); d > 5*time.Second {
 			t.Errorf("%s: sesh run took %v", name, d)
 		}
 	}
