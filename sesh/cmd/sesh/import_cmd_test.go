@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -17,6 +18,7 @@ import (
 	"github.com/makiuchi-d/gozxing"
 	zqr "github.com/makiuchi-d/gozxing/qrcode"
 
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -372,9 +374,30 @@ func TestImport_BitwardenOverwrite(t *testing.T) {
 	if err := store.SaveWithDetails(&vault.Entry{Key: router}, []byte("old-pw"), &mine); err != nil {
 		t.Fatal(err)
 	}
+	// The import's GitHub login has fields: they're merged into yours by
+	// name, ignoring case, the import's winning.
+	ghPass := vault.Key{Kind: vault.KindPassword, Service: "GitHub", Username: "alice"}
+	ghMine := vault.Details{Notes: []byte("old notes"), Fields: []vault.Field{
+		{Name: "pin", Value: []byte("0000"), Secret: true},
+		{Name: "2FA-Enabled", Value: []byte("no")},
+		{Name: "team", Value: []byte("blue")},
+	}}
+	if err := store.SaveWithDetails(&vault.Entry{Key: ghPass}, []byte("old-pw"), &ghMine); err != nil {
+		t.Fatal(err)
+	}
+	// One whose merged fields would be more than sesh holds is skipped.
+	deploy := vault.Key{Kind: vault.KindNote, Service: "deploy key"}
+	var many vault.Details
+	for i := range vault.MaxFields {
+		many.Fields = append(many.Fields, vault.Field{Name: fmt.Sprintf("f%d", i), Value: []byte("v")})
+	}
+	if err := store.SaveWithDetails(&vault.Entry{Key: deploy}, []byte("old-pw"), &many); err != nil {
+		t.Fatal(err)
+	}
 	store.Close() //nolint:errcheck,gosec // reopened below
 	_, stderr, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
-	if err != nil || !strings.Contains(stderr, "Already in the vault, to be replaced (2):\n") {
+	if err != nil || !strings.Contains(stderr, "Already in the vault, to be replaced (3):\n") ||
+		!strings.Contains(stderr, `"deploy key": merged with your entry's, its details would break sesh's rules: an entry can have at most 50 fields`) {
 		t.Fatalf("%s\n%v", stderr, err)
 	}
 	store = openDoctorVault(t, env)
@@ -390,7 +413,19 @@ func TestImport_BitwardenOverwrite(t *testing.T) {
 	if secret, err := store.Get(gh); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" || e.Settings.TOTP.Digits != 8 {
 		t.Errorf("secret = %q, %v, code settings %+v: not replaced", secret, err, e.Settings.TOTP)
 	}
-	d, err := store.Details(router, "all")
+	d, err := store.Details(ghPass, "all")
+	var fields []string
+	for _, f := range d.Fields {
+		fields = append(fields, f.Name+"="+string(f.Value))
+	}
+	if err != nil || string(d.Notes) != "main account\nrecovery codes in the safe" ||
+		strings.Join(fields, " ") != "pin=4321 2fa-enabled=true team=blue recovery-email=alice@example.com url-2=github.com" {
+		t.Errorf("GitHub fields = %q, notes %q, %v", fields, d.Notes, err)
+	}
+	if secret, err := store.Get(deploy); err != nil || string(secret) != "old-pw" {
+		t.Errorf("deploy key = %q, %v: should be left as it was", secret, err)
+	}
+	d, err = store.Details(router, "all")
 	if err != nil || d.URL != "192.168.1.1" || string(d.Notes) != "recovery codes: 1111" || len(d.Fields) != 1 || string(d.Fields[0].Value) != "4321" {
 		t.Errorf("Router details = %+v, %v", d, err)
 	}
@@ -410,5 +445,18 @@ func TestImport_GoogleAuthenticatorDeleteReminder(t *testing.T) {
 	}
 	if out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "skip", code); err != nil || strings.Contains(out, "delete them") {
 		t.Errorf("a code given as text: %q, %v", out, err)
+	}
+}
+
+func TestDescribeParams(t *testing.T) {
+	for p, want := range map[totp.Params]string{
+		{}:                               "",
+		{Algorithm: "SHA256", Digits: 8}: "  (SHA256, 8 digits)",
+		{Period: 60}:                     "  (60 seconds)",
+		{Algorithm: "SHA512", Period: 1}: "  (SHA512, 1 second)",
+	} {
+		if got := describeParams(p); got != want {
+			t.Errorf("describeParams(%+v) = %q, want %q", p, got, want)
+		}
 	}
 }

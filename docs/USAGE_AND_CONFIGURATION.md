@@ -1171,7 +1171,7 @@ sesh import --from google-authenticator IMG_1234.png IMG_1235.png
 
 - **`--dry-run`** shows the summary and imports nothing; before you have a vault, it doesn't make one. **`--yes`** imports without asking, and is needed when there's no terminal to ask at.
 - **The audit log** records each entry imported, and the import itself: `import  14 TOTP entries from Google Authenticator`.
-- **Entries you already have** stop the import, listed, unless `--on-conflict skip` leaves them as they are or `--on-conflict overwrite` replaces them. Replacing one takes its secret and code settings from the import, and its folder, URL, notes and fields only where the import has them; its tags are yours and the import's together, and the entry keeps its other settings (an AWS entry's MFA device) and the time it was made.
+- **Entries you already have** stop the import, listed, unless `--on-conflict skip` leaves them as they are or `--on-conflict overwrite` replaces them. Replacing one takes its secret and code settings from the import, and its folder, URL and notes only where the import has them. The import's fields are added to yours, one with the name of a field you have (ignoring case) replacing it; an entry whose fields together would be more than sesh holds is skipped, and listed. Its tags are yours and the import's together, and the entry keeps its other settings (an AWS entry's MFA device) and the time it was made.
 - **sesh's own exports** are imported with `--service password --action import` (see [Encrypted exports](#encrypted-exports)).
 
 **Bitwarden.** Export your vault from Bitwarden as JSON, from the web vault, an app, or `bw export --format json`. Choose "Password protected" to keep it encrypted on disk; sesh asks for that password.

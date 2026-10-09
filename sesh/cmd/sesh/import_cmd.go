@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"errors"
 	"flag"
@@ -140,6 +141,23 @@ func runImport(app *App, args []string) error {
 		}
 		fresh = append(fresh, e)
 	}
+	// Replacing an entry merges its details with the import's, here, so
+	// one that would break sesh's rules is listed before anything is
+	// written.
+	if *onConflict == "overwrite" {
+		kept := clashes[:0]
+		for _, e := range clashes {
+			if err := mergeDetails(store, e); err != nil {
+				return err
+			}
+			if e.Skip != "" {
+				skipped = append(skipped, e)
+				continue
+			}
+			kept = append(kept, e)
+		}
+		clashes = kept
+	}
 
 	if _, err := fmt.Fprint(app.Stderr, importSummary(&f, fresh, clashes, skipped, *onConflict)); err != nil {
 		return err
@@ -247,9 +265,9 @@ func detectSource(args []string) string {
 }
 
 // writeImported stores e. One replacing an entry you have takes its secret
-// and code settings from the import, and its folder, URL, notes and fields
-// each only where the import has it; tags are both sets, and the entry's
-// other settings and creation time are kept.
+// and code settings from the import, and its folder only if it has one;
+// its details are already merged (see mergeDetails); tags are both sets,
+// and the entry's other settings and creation time are kept.
 func writeImported(store *database.Store, e *importer.Entry, exists bool) error {
 	ent := vault.Entry{Key: e.Key, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.Created, UpdatedAt: e.Updated}
 	if !exists {
@@ -270,24 +288,50 @@ func writeImported(store *database.Store, e *importer.Entry, exists bool) error 
 	if e.Details.IsZero() {
 		return store.Save(&ent, e.Secret)
 	}
-	d, err := store.Details(e.Key, "import")
+	return store.SaveWithDetails(&ent, e.Secret, &e.Details)
+}
+
+// mergeDetails makes e's details, for replacing the entry you have, yours
+// merged with the import's: its URL and notes only if it has them, and its
+// fields added to yours, one with a name you have (ignoring case) taking
+// that field's place. e is marked skipped when the merge breaks sesh's
+// rules. e owns every value it then holds; yours are wiped.
+func mergeDetails(store *database.Store, e *importer.Entry) error {
+	if e.Details.IsZero() {
+		return nil
+	}
+	cur, err := store.Details(e.Key, "import")
 	if err != nil {
 		return err
 	}
-	// What's kept of yours is wiped once written; the import's own parts
-	// are wiped with the rest of it.
-	defer d.Zero()
-	merged := d
-	if e.Details.URL != "" {
-		merged.URL = e.Details.URL
+	defer cur.Zero()
+	imp := e.Details
+	merged := vault.Details{URL: cur.URL, Notes: bytes.Clone(cur.Notes)}
+	if imp.URL != "" {
+		merged.URL = imp.URL
 	}
-	if len(e.Details.Notes) > 0 {
-		merged.Notes = e.Details.Notes
+	if len(imp.Notes) > 0 {
+		secure.SecureZeroBytes(merged.Notes)
+		merged.Notes = bytes.Clone(imp.Notes)
 	}
-	if len(e.Details.Fields) > 0 {
-		merged.Fields = e.Details.Fields
+	for _, f := range cur.Fields {
+		merged.Fields = append(merged.Fields, vault.Field{Name: f.Name, Value: bytes.Clone(f.Value), Secret: f.Secret})
 	}
-	return store.SaveWithDetails(&ent, e.Secret, &merged)
+	for _, f := range imp.Fields {
+		g := vault.Field{Name: f.Name, Value: bytes.Clone(f.Value), Secret: f.Secret}
+		if i := slices.IndexFunc(merged.Fields, func(m vault.Field) bool { return strings.EqualFold(m.Name, f.Name) }); i >= 0 {
+			secure.SecureZeroBytes(merged.Fields[i].Value)
+			merged.Fields[i] = g
+		} else {
+			merged.Fields = append(merged.Fields, g)
+		}
+	}
+	imp.Zero()
+	e.Details = merged
+	if err := merged.Check(e.Key.Kind); err != nil {
+		e.Skip = "merged with your entry's, its details would break sesh's rules: " + err.Error()
+	}
+	return nil
 }
 
 // importSummary is what an import found, as sesh shows it before asking:
@@ -633,6 +677,9 @@ func describeParams(p totp.Params) string {
 	}
 	if p.Digits != 0 {
 		parts = append(parts, fmt.Sprintf("%d digits", p.Digits))
+	}
+	if p.Period != 0 {
+		parts = append(parts, nouns(p.Period, "second", "seconds"))
 	}
 	if len(parts) == 0 {
 		return ""
