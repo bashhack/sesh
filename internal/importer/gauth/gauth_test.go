@@ -1,15 +1,19 @@
 package gauth
 
 import (
+	"bytes"
+	"encoding/base32"
 	"encoding/base64"
 	"net/url"
 	"strings"
 	"testing"
 )
 
-// A transfer QR's text, as published with the extract_otp_secrets project:
-// one TOTP account, "Example:alice@google.com", secret JBSWY3DPEHPK3PXP.
-const sample = "otpauth-migration://offline?data=CjEKCkhlbGxvId6tvu8SGEV4YW1wbGU6YWxpY2VAZ29vZ2xlLmNvbRoHRXhhbXBsZSABKAEwAhABGAEgACjr4JKK%2Bv%2F%2F%2F%2F8B"
+// A transfer code published in the README of github.com/dim13/otpauth
+// (commit 7c39ac5), with its documented decoding: one TOTP account,
+// "Example:alice@google.com", issuer "Example", secret JBSWY3DPEHPK3PXP.
+// It has no algorithm, digits, or batch fields, so the defaults apply.
+const sample = "otpauth-migration://offline?data=CjEKCkhlbGxvId6tvu8SGEV4YW1wbGU6YWxpY2VAZ29vZ2xlLmNvbRoHRXhhbXBsZTAC"
 
 func TestParse_Sample(t *testing.T) {
 	p, err := Parse(sample)
@@ -154,11 +158,25 @@ func TestParse_BatchRange(t *testing.T) {
 // The data is read however it was carried: a "+" turned into a space, the
 // URL-safe alphabet, no padding, or a #fragment after it.
 func TestParse_DataForms(t *testing.T) {
-	_, data, _ := strings.Cut(sample, "data=")
-	raw, err := url.QueryUnescape(data)
-	if err != nil {
-		t.Fatal(err)
+	// A secret whose base64 holds "+" and "/", so each form is tested: the
+	// bytes give both at one of the three ways base64 can line up.
+	var secret []byte
+	var raw string
+	for shift := range 3 {
+		secret = append(bytes.Repeat([]byte{0}, shift), 0xfb, 0xef, 0xbe, 0xfb, 0xef, 0xbe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff)
+		_, data, _ := strings.Cut(encode([][]byte{account(secret, "a:b", "a", 1, 1, 2)}, 1, 0), "data=")
+		var err error
+		if raw, err = url.QueryUnescape(data); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(raw, "+") && strings.Contains(raw, "/") {
+			break
+		}
 	}
+	if !strings.Contains(raw, "+") || !strings.Contains(raw, "/") {
+		t.Fatalf("the test data %q has no + or /", raw)
+	}
+	want := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(secret)
 	for name, d := range map[string]string{
 		"a + as a space": strings.ReplaceAll(raw, "+", " "),
 		"URL-safe":       strings.NewReplacer("+", "-", "/", "_").Replace(raw),
@@ -167,7 +185,7 @@ func TestParse_DataForms(t *testing.T) {
 		"literal +":      raw,
 	} {
 		p, err := Parse(Prefix + "offline?data=" + d)
-		if err != nil || len(p.Accounts) != 1 || p.Accounts[0].Secret != "JBSWY3DPEHPK3PXP" {
+		if err != nil || len(p.Accounts) != 1 || p.Accounts[0].Secret != want {
 			t.Errorf("%s: %+v, %v", name, p, err)
 		}
 	}
