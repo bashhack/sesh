@@ -294,13 +294,13 @@ func writeImported(store *database.Store, e *importer.Entry, exists bool) error 
 // mergeDetails makes e's details, for replacing the entry you have, yours
 // merged with the import's: its URL and notes only if it has them, and its
 // fields added to yours, one with a name you have (ignoring case) taking
-// that field's place. e is marked skipped when the merge breaks sesh's
+// that field's place (secret if either is). e is marked skipped when the merge breaks sesh's
 // rules. e owns every value it then holds; yours are wiped.
 func mergeDetails(store *database.Store, e *importer.Entry) error {
 	if e.Details.IsZero() {
 		return nil
 	}
-	cur, err := store.Details(e.Key, "import")
+	cur, err := store.Details(e.Key, "import, to merge its fields")
 	if err != nil {
 		return err
 	}
@@ -320,7 +320,18 @@ func mergeDetails(store *database.Store, e *importer.Entry) error {
 	for _, f := range imp.Fields {
 		g := vault.Field{Name: f.Name, Value: bytes.Clone(f.Value), Secret: f.Secret}
 		if i := slices.IndexFunc(merged.Fields, func(m vault.Field) bool { return strings.EqualFold(m.Name, f.Name) }); i >= 0 {
-			secure.SecureZeroBytes(merged.Fields[i].Value)
+			// A field you keep secret stays secret.
+			mine := merged.Fields[i]
+			change := fmt.Sprintf("field %q replaces yours", f.Name)
+			if mine.Name != f.Name {
+				change += " (" + mine.Name + ")"
+			}
+			if mine.Secret && !g.Secret {
+				g.Secret = true
+				change += ", kept secret"
+			}
+			e.Changes = append(e.Changes, change)
+			secure.SecureZeroBytes(mine.Value)
 			merged.Fields[i] = g
 		} else {
 			merged.Fields = append(merged.Fields, g)

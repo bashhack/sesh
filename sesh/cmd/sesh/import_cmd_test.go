@@ -379,7 +379,7 @@ func TestImport_BitwardenOverwrite(t *testing.T) {
 	ghPass := vault.Key{Kind: vault.KindPassword, Service: "GitHub", Username: "alice"}
 	ghMine := vault.Details{Notes: []byte("old notes"), Fields: []vault.Field{
 		{Name: "pin", Value: []byte("0000"), Secret: true},
-		{Name: "2FA-Enabled", Value: []byte("no")},
+		{Name: "2FA-Enabled", Value: []byte("no"), Secret: true},
 		{Name: "team", Value: []byte("blue")},
 	}}
 	if err := store.SaveWithDetails(&vault.Entry{Key: ghPass}, []byte("old-pw"), &ghMine); err != nil {
@@ -397,6 +397,7 @@ func TestImport_BitwardenOverwrite(t *testing.T) {
 	store.Close() //nolint:errcheck,gosec // reopened below
 	_, stderr, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
 	if err != nil || !strings.Contains(stderr, "Already in the vault, to be replaced (3):\n") ||
+		!strings.Contains(stderr, `field "2fa-enabled" replaces yours (2FA-Enabled), kept secret`) ||
 		!strings.Contains(stderr, `"deploy key": merged with your entry's, its details would break sesh's rules: an entry can have at most 50 fields`) {
 		t.Fatalf("%s\n%v", stderr, err)
 	}
@@ -417,6 +418,9 @@ func TestImport_BitwardenOverwrite(t *testing.T) {
 	var fields []string
 	for _, f := range d.Fields {
 		fields = append(fields, f.Name+"="+string(f.Value))
+		if f.Name == "2fa-enabled" && !f.Secret {
+			t.Error("2fa-enabled, secret in the vault, was made plain by a plain field from the import")
+		}
 	}
 	if err != nil || string(d.Notes) != "main account\nrecovery codes in the safe" ||
 		strings.Join(fields, " ") != "pin=4321 2fa-enabled=true team=blue recovery-email=alice@example.com url-2=github.com" {
