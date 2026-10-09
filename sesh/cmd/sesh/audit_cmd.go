@@ -91,6 +91,8 @@ func runAudit(app *App, args []string) error {
 		// A read of the notes or fields says which: "read field pin".
 		if read, ok := strings.CutPrefix(e.Detail, "Details: "); ok {
 			name += " (read " + read + ")"
+		} else if read, ok := strings.CutPrefix(e.Detail, "Read: "); ok {
+			name += " (read " + read + ")"
 		}
 		fmt.Fprintf(&b, "%s  %-6s  %-11s  %s\n", when, e.EventType, kind, name)
 	}

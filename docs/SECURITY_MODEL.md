@@ -68,6 +68,13 @@ sesh derives the master key from your master password via Argon2id, the same way
 
 **Notes and secret fields.** An entry's notes and secret field values are encrypted together, as one value, with AES-256-GCM under the vault key. Its associated data is the entry's kind, service name and username, under a tag of its own (`sesh-details-v1`, where the secret's is `sesh-entry-v1`). So they open only on their own entry, and can't be swapped with its secret. A rename or a password change re-encrypts them with the secret, in the same step, and `sesh doctor` decrypts and checks them. Notes and secret values can't hold control characters other than tabs and line breaks, and `sesh show` escapes control and text-direction characters in every value it prints, the secret included, so what it shows can't send the terminal commands or make one line look like another. `get --show` prints a value exactly as stored, for scripts and pipes. With `--editor`, the notes are written to a file for the editor, in a folder only the user can read: in memory (`/dev/shm`) where Linux has it, otherwise in `$TMPDIR`, which is on disk on macOS. The editor runs without `SESH_MASTER_PASSWORD` in its environment. Afterwards sesh writes zeros over the file in place and removes it, also on SIGHUP or SIGTERM while the editor is open; a copy-on-write file system such as APFS can keep the old bytes until the space is reused. The editor itself may keep copies, which sesh can't control.
 
+**sesh run and sesh inject.** Both resolve every reference with one unlock before anything runs or is written, and record each read in the audit log.
+- **sesh run:**
+  - The values reach the command only through its environment. Like any environment variable, the command can read them, and so can the processes it starts. On Linux, other processes running as the same user can read them too, through `/proc/<pid>/environ`.
+  - `SESH_MASTER_PASSWORD` isn't passed on.
+  - Masking hides secrets in what the command prints. It's a guard against accidents, such as a log line or an error message, not against a command that sets out to reveal a secret: one encoded or split differently isn't recognised.
+- **sesh inject** writes plaintext to disk, in a file only the user can read (0600). Delete it after use, or use sesh run, which keeps secrets off disk.
+
 ##### Touch ID unlock (macOS, optional)
 
 With Touch ID unlock on, the agent can unlock with a fingerprint instead of the master password.

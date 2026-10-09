@@ -81,6 +81,17 @@ func decodeSettings(k vault.Key, col sql.NullString) (vault.Settings, error) {
 
 // Get implements vault.Store.
 func (s *Store) Get(k vault.Key) ([]byte, error) {
+	return s.get(k, "Get")
+}
+
+// GetFor is Get, recording in the audit log what the secret was read
+// for: reading, such as "secret, to run".
+func (s *Store) GetFor(k vault.Key, reading string) ([]byte, error) {
+	return s.get(k, "Read: "+reading)
+}
+
+// get is Get, with detail as the audit event's.
+func (s *Store) get(k vault.Key, detail string) ([]byte, error) {
 	var encData, salt []byte
 	err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`,
 		string(k.Kind), k.Service, k.Username).Scan(&encData, &salt)
@@ -97,7 +108,7 @@ func (s *Store) Get(k vault.Key) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("decrypt %s: %w", k, err)
 	}
-	s.audit("access", k.String(), "Get")
+	s.audit("access", k.String(), detail)
 	return secret, nil
 }
 

@@ -88,7 +88,8 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 	}
 	cur, before := words[len(words)-1], words[:len(words)-1]
 	if slices.Contains(before, "--") {
-		return nil, false
+		// After sesh run's --, the command and its arguments.
+		return nil, firstWord(before) == "run"
 	}
 	if len(before) == 0 && !strings.HasPrefix(cur, "-") {
 		return matching(subcommands, cur), false
@@ -140,6 +141,16 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 			if specs[i].name == "format" {
 				specs[i].values = []string{"text", "json"}
 			}
+		}
+	case "run":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addRunFlags(fs) }, nil)
+		for i := range specs {
+			specs[i].path = specs[i].name == "env-file"
+		}
+	case "inject":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addInjectFlags(fs) }, nil)
+		for i := range specs {
+			specs[i].path = true
 		}
 	case "restore":
 		specs = flagSpecs(func(fs *flag.FlagSet) { addRestoreFlags(fs) }, nil)

@@ -1094,6 +1094,70 @@ sesh --service password --action get --service-name github --username alice --fi
 
 **What's encrypted.** The secret, the notes and secret fields' values are encrypted. The URL, field names, and plain values aren't, so the URL can be searched and `sesh show` can list fields without decrypting anything. Folders and tags are the same. Keep anything private in a secret field or the notes.
 
+### Running commands with secrets (`sesh run`, `sesh inject`)
+
+`sesh run` runs a command with values from the vault in its environment, so they never sit in a file or your shell history:
+
+```
+sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
+sesh run --env-file .env -- npm start
+```
+
+**References.** `sesh://<id>` names an entry's secret, with the ID as `-list` shows it. `#name` picks one of its fields instead (in any case), and `#url` or `#notes` those parts. A TOTP entry gives its current code.
+
+```
+sesh://api_key/openai
+sesh://password/db/app#host
+sesh://totp/github/alice
+```
+
+**The env file** has one `NAME=value` per line. A value that's a reference is filled in; any other value is passed as it is. So the file holds no secrets, and can be committed with the project:
+
+```
+# .env
+OPENAI_API_KEY=sesh://api_key/openai
+DB_PASSWORD=sesh://password/db/app
+DB_HOST=db.internal
+```
+
+- **Format:**
+  - lines starting with `#` and blank lines are skipped, and so is a `#` after a space, following a value that isn't in quotes;
+  - `export` before a name is allowed;
+  - quotes around a value are taken off; after the closing quote, only a comment can follow;
+  - nothing is expanded.
+- **Several sources:** `--env-file` can be given more than once, and `--env` replaces a variable a file sets.
+- **The environment:** the command gets your environment, minus `SESH_MASTER_PASSWORD`, plus these variables.
+
+**Before anything runs,** sesh unlocks the vault once and resolves every reference. If one doesn't resolve, nothing runs, and sesh names it. The audit log records each read and what it was for, such as `(read secret, to run)` or `(read field pin, to inject)`.
+
+**Output.** Secrets the command prints are shown as `<concealed by sesh>`, on stdout and stderr:
+- **what counts as secret:** an entry's secret, its notes, its secret fields, and TOTP codes. URLs and plain fields are shown as they are.
+- **short values:** values shorter than 3 characters aren't hidden, since they'd match too much.
+- **the cost:** to do this, sesh reads the command's output itself. So the command's output isn't a terminal, and colours, progress bars and prompts may change.
+- **`--no-masking`** gives the command the terminal directly, and hides nothing.
+
+**The command runs as if you'd started it:**
+- it reads your keyboard;
+- Ctrl-C at the terminal reaches it. A Ctrl-C or other request to stop sent to sesh alone, as an editor's stop button does, is passed on to it;
+- sesh exits with its exit status. If Ctrl-C, a request to stop, a closed terminal, or `kill -9` ended it, sesh ends the same way, so a shell loop running `sesh run` stops at Ctrl-C as it would for the command. Ended by another signal, such as `Ctrl-\` or a crash, it gives 128 plus the signal's number, as a shell does;
+- once the command exits, sesh passes on the rest of its output, however slowly it's read. It stops once it has waited a second in all for more, so a process the command left running in the background, quiet or not, doesn't keep sesh open; what that process writes afterwards isn't shown.
+
+**`sesh inject`** fills the references in a template, written as `{{ sesh://... }}`, with or without spaces inside the braces. Nothing else in the template changes:
+
+```
+# config.yml.tpl
+database:
+  password: {{ sesh://password/db/app }}
+  host: {{ sesh://password/db/app#host }}
+
+sesh inject -i config.yml.tpl -o config.yml
+```
+
+- **Input and output:** it reads the template from `-i` or stdin, and writes to `-o` or stdout.
+- **The file** is readable only by you (0600). It's written whole to a new file next to the target, then renamed into place, so nothing reads half of it. A file already there is replaced; a symlink there is replaced by the file, not followed. `-o` can't be the template itself.
+- **Failures:** if a reference doesn't resolve, nothing is written. A template can be up to 16 MiB.
+- **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
+
 ### Folders and tags
 
 An entry can be in one folder and have any number of tags. Folders nest with `/` (`work/aws`); tags are flat (`urgent`, `2fa`). Neither is part of the entry's ID or name: two entries with the same name can't sit in different folders.
