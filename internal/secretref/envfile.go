@@ -59,7 +59,11 @@ func ParseEnvFile(r io.Reader, name string) ([]EnvVar, error) {
 			}
 			// Only spaces, and a comment, can follow the closing quote.
 			if after := strings.TrimSpace(v[end+2:]); after != "" && !strings.HasPrefix(after, "#") {
-				return nil, fmt.Errorf("%s line %d: text after the closing quote: %q", name, n, after)
+				hint := ""
+				if strings.HasSuffix(v[:end+1], "\\") {
+					hint = ` (a \ doesn't escape a quote here; use the other kind of quote around the value)`
+				}
+				return nil, fmt.Errorf("%s line %d: text after the closing quote: %q%s", name, n, after, hint)
 			}
 			v = v[1 : end+1]
 		default:

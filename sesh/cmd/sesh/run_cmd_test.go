@@ -273,10 +273,10 @@ func TestRun_Signals(t *testing.T) {
 		t.Errorf("err = %v, want killed by SIGTERM", err)
 	}
 	// A signal Go itself turns into a crash dump is an exit status instead.
-	for _, sig := range []string{"QUIT", "SEGV", "ABRT"} {
-		_, _, err := runRunOut(t, "--env", "K=sesh://api_key/openai", "--", "sh", "-c", "kill -"+sig+" $$")
-		if status, ok := errors.AsType[exitStatus](err); !ok || status <= 128 {
-			t.Errorf("killed by %s: err = %v (%T), want an exit status over 128", sig, err, err)
+	for name, sig := range map[string]syscall.Signal{"QUIT": syscall.SIGQUIT, "SEGV": syscall.SIGSEGV, "ABRT": syscall.SIGABRT} {
+		_, _, err := runRunOut(t, "--env", "K=sesh://api_key/openai", "--", "sh", "-c", "kill -"+name+" $$")
+		if status, ok := errors.AsType[exitStatus](err); !ok || int(status) != 128+int(sig) {
+			t.Errorf("killed by %s: err = %v (%T), want exit status %d", name, err, err, 128+int(sig))
 		}
 	}
 }

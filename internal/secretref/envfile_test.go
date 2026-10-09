@@ -40,6 +40,7 @@ URL=https://x.example/?a=b#frag
 		"A=x\nA=y":                      ".env line 2: A is set twice",
 		`A="unclosed`:                   ".env line 1: the quote isn't closed",
 		`A="abc"def`:                    ".env line 1: text after the closing quote",
+		`C="say \"hi\""`:                "a \\ doesn't escape a quote here",
 		`B='it''s'`:                     ".env line 1: text after the closing quote",
 		"A=sesh://password":             ".env line 1: sesh://password: entry ID",
 		"A=x\nB=sesh://api_key/o#bad x": ".env line 2: sesh://api_key/o#bad x",
