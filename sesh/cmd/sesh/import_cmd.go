@@ -4,11 +4,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/importer/gauth"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
@@ -48,6 +49,7 @@ type importEntry struct {
 	name   string // as the source names it
 	secret string
 	skip   string
+	note   string // shown after the name in the summary
 	params totp.Params
 }
 
@@ -80,28 +82,46 @@ func runImport(app *App, args []string) error {
 		return fmt.Errorf("sesh can't import from %q yet; it can from: %s", *from, strings.Join(importSources, ", "))
 	}
 
-	payloads, err := readTransferCodes(fs.Args())
+	for _, a := range fs.Args()[1:] {
+		if strings.HasPrefix(a, "-") && a != "-" {
+			return fmt.Errorf("put %s before the files: sesh import [flags] <files>", a)
+		}
+	}
+	payloads, err := readTransferCodes(fs.Args(), app.Stdin)
 	if err != nil {
 		return err
 	}
 	entries := plannedTransfer(payloads)
 
 	// Importing can be the first thing done with sesh: the vault is made
-	// if there's none yet, as any command makes it.
-	_, store, err := openAuditStore()
+	// if there's none yet, as any command makes it, unless this is only a
+	// dry run, which has nothing to clash with then.
+	cfg, err := settings()
 	if err != nil {
 		return err
 	}
-	defer closeAuditStore(store)
+	var store *database.Store
+	if !*dryRun || !vaultMissing(cfg.DBPath.Value) {
+		if _, store, err = openAuditStore(); err != nil {
+			return err
+		}
+		defer closeAuditStore(store)
+	}
 	var clashes []*importEntry
 	for _, e := range entries {
-		if e.skip != "" {
+		if e.skip != "" || store == nil {
 			continue
 		}
 		if err := store.Exists(e.key); err == nil {
 			clashes = append(clashes, e)
+			continue
 		} else if !errors.Is(err, vault.ErrNotFound) {
 			return err
+		}
+		// A name differing only in case from one you have is said, so a
+		// second entry isn't added unnoticed.
+		if twins, err := password.NewManager(store).CaseTwins(e.key); err == nil && len(twins) > 0 {
+			e.note = "  (you have " + twins[0].String() + ")"
 		}
 	}
 
@@ -133,7 +153,7 @@ func runImport(app *App, args []string) error {
 			fresh = append(fresh, e)
 		}
 	}
-	section("To import", fresh, func(e *importEntry) string { return e.key.String() + describeParams(e.params) })
+	section("To import", fresh, func(e *importEntry) string { return e.key.String() + describeParams(e.params) + e.note })
 	clashTitle := "Already in the vault"
 	switch *onConflict {
 	case "skip":
@@ -151,12 +171,16 @@ func runImport(app *App, args []string) error {
 		return err
 	}
 
-	if len(clashes) > 0 && *onConflict == "" {
-		return errors.New("some of these are already in the vault: add --on-conflict skip to leave them, or --on-conflict overwrite to replace them")
-	}
+	clashHint := "some of these are already in the vault: add --on-conflict skip to leave them, or --on-conflict overwrite to replace them"
 	if *dryRun {
+		if len(clashes) > 0 && *onConflict == "" {
+			fmt.Fprintf(app.Stderr, "\nTo import, %s.\n", clashHint) //nolint:errcheck // best effort
+		}
 		_, err := fmt.Fprintln(app.Stderr, "\nNothing imported (--dry-run).")
 		return err
+	}
+	if len(clashes) > 0 && *onConflict == "" {
+		return errors.New(clashHint)
 	}
 	if toImport == 0 {
 		_, err := fmt.Fprintln(app.Stderr, "\nNothing to import.")
@@ -184,10 +208,14 @@ func runImport(app *App, args []string) error {
 	done := 0
 	for _, e := range write {
 		if err := mgr.StoreTOTPSecretWithParams(e.key.Service, e.key.Username, e.secret, e.params, vault.Filing{}); err != nil {
-			return fmt.Errorf("imported %s, then %s failed: %w", nouns(done, "entry", "entries"), e.key, err)
+			if done > 0 {
+				store.LogImport(fmt.Sprintf("%s from Google Authenticator, then stopped", nouns(done, "TOTP entry", "TOTP entries")))
+			}
+			return fmt.Errorf("imported %s, then %s failed: %w; to import the rest, run this again with --on-conflict skip", nouns(done, "entry", "entries"), e.key, err)
 		}
 		done++
 	}
+	store.LogImport(nouns(done, "TOTP entry", "TOTP entries") + " from Google Authenticator")
 	first := write[0].key
 	check := "sesh --service totp --service-name " + shell.Quote(first.Service)
 	if first.Username != "" {
@@ -199,27 +227,47 @@ func runImport(app *App, args []string) error {
 }
 
 // readTransferCodes reads each argument: an otpauth-migration:// code
-// itself, an image of one, or a text file of them, one per line.
-func readTransferCodes(args []string) ([]gauth.Payload, error) {
+// itself, "-" for stdin, an image of codes (by its content, whatever its
+// name), or a text file of codes, one per line. Errors name an argument
+// given as a code by its place ("code 2"), never its text, which holds
+// secrets.
+func readTransferCodes(args []string, stdin io.Reader) ([]gauth.Payload, error) {
 	var payloads []gauth.Payload
-	for _, arg := range args {
+	for n, arg := range args {
+		arg = strings.TrimSpace(arg)
+		name := arg
 		var codes []string
-		switch ext := strings.ToLower(filepath.Ext(arg)); {
+		switch {
 		case strings.HasPrefix(arg, gauth.Prefix):
-			codes = []string{arg}
-		case ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".heic" || ext == ".heif":
-			text, err := qrcode.ReadTextFromFile(arg)
-			if err != nil {
-				return nil, err
-			}
-			if !strings.HasPrefix(text, gauth.Prefix) {
-				return nil, fmt.Errorf("the QR code in %s isn't a Google Authenticator transfer code: in the app, use Transfer accounts, then Export accounts", arg)
-			}
-			codes = []string{text}
+			name, codes = fmt.Sprintf("code %d", n+1), []string{arg}
+		case strings.Contains(arg, "://"):
+			return nil, fmt.Errorf("argument %d isn't a Google Authenticator transfer code (otpauth-migration://) or a file; a single account's otpauth:// code is added with: sesh --service totp --setup", n+1)
 		default:
-			b, err := os.ReadFile(arg) //nolint:gosec // the file the user named
+			var b []byte
+			var err error
+			if arg == "-" {
+				name = "stdin"
+				b, err = io.ReadAll(io.LimitReader(stdin, 16<<20))
+			} else {
+				b, err = os.ReadFile(arg) //nolint:gosec // the file the user named
+			}
 			if err != nil {
 				return nil, err
+			}
+			if qrcode.IsImage(arg, b) {
+				texts, err := qrcode.ReadTextsFromBytes(name, b)
+				if err != nil {
+					return nil, err
+				}
+				for _, t := range texts {
+					if strings.HasPrefix(t, gauth.Prefix) {
+						codes = append(codes, t)
+					}
+				}
+				if len(codes) == 0 {
+					return nil, fmt.Errorf("the QR code in %s isn't a Google Authenticator transfer code: in the app, use Transfer accounts, then Export accounts", arg)
+				}
+				break
 			}
 			for line := range strings.SplitSeq(string(b), "\n") {
 				if line = strings.TrimSpace(line); strings.HasPrefix(line, gauth.Prefix) {
@@ -227,13 +275,13 @@ func readTransferCodes(args []string) ([]gauth.Payload, error) {
 				}
 			}
 			if len(codes) == 0 {
-				return nil, fmt.Errorf("%s has no otpauth-migration:// codes; for a screenshot of one, give a PNG or JPEG", arg)
+				return nil, fmt.Errorf("%s has no otpauth-migration:// codes, and isn't a PNG or JPEG of one", name)
 			}
 		}
 		for _, c := range codes {
 			p, err := gauth.Parse(c)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", arg, err)
+				return nil, fmt.Errorf("%s: %w", name, err)
 			}
 			payloads = append(payloads, p)
 		}
@@ -245,7 +293,7 @@ func readTransferCodes(args []string) ([]gauth.Payload, error) {
 // account given twice is skipped the second time.
 func plannedTransfer(payloads []gauth.Payload) []*importEntry {
 	var entries []*importEntry
-	seen := map[vault.Key]bool{}
+	seen := map[vault.Key]string{} // each name's secret
 	for _, p := range payloads {
 		for i := range p.Accounts {
 			a := &p.Accounts[i]
@@ -254,10 +302,15 @@ func plannedTransfer(payloads []gauth.Payload) []*importEntry {
 			if a.Issuer != "" && !strings.HasPrefix(a.Name, a.Issuer+":") {
 				name = a.Issuer + ": " + a.Name
 			}
-			if skip == "" && seen[k] {
+			if was, ok := seen[k]; ok && skip == "" {
 				skip = "the same account twice"
+				if was != a.Secret {
+					skip = "another account here has this name: rename one in Google Authenticator, export again, and import that"
+				}
 			}
-			seen[k] = true
+			if skip == "" {
+				seen[k] = a.Secret
+			}
 			entries = append(entries, &importEntry{key: k, params: params, name: name, secret: a.Secret, skip: skip})
 		}
 	}
@@ -290,9 +343,13 @@ func missingBatches(payloads []gauth.Payload) []string {
 				missing = append(missing, fmt.Sprint(i+1))
 			}
 		}
-		if len(missing) > 0 {
-			msgs = append(msgs, fmt.Sprintf("The export has %d codes, and code %s of them wasn't given: its accounts aren't here. Add it to import them too.",
-				b.size, strings.Join(missing, ", ")))
+		switch len(missing) {
+		case 0:
+		case 1:
+			msgs = append(msgs, fmt.Sprintf("The export has %d codes, and code %s wasn't given: the accounts on it aren't here. Add it to import them too.", b.size, missing[0]))
+		default:
+			msgs = append(msgs, fmt.Sprintf("The export has %d codes, and codes %s weren't given: the accounts on them aren't here. Add them to import those too.",
+				b.size, strings.Join(missing[:len(missing)-1], ", ")+" and "+missing[len(missing)-1]))
 		}
 	}
 	return msgs

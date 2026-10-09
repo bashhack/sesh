@@ -50,6 +50,9 @@ type Payload struct {
 // Prefix starts every transfer code.
 const Prefix = "otpauth-migration://"
 
+// MaxBatch is the most codes an export is taken to be split into.
+const MaxBatch = 100
+
 // errDamaged is a transfer code whose data doesn't read.
 var errDamaged = errors.New("the transfer code is damaged")
 
@@ -59,7 +62,8 @@ func Parse(s string) (Payload, error) {
 		return Payload{}, errors.New("this isn't a Google Authenticator transfer code (otpauth-migration://)")
 	}
 	// The data is read from the raw query: a "+" in it is base64, not a
-	// space.
+	// space. A #fragment after it isn't part of it.
+	s, _, _ = strings.Cut(s, "#")
 	_, raw, _ := strings.Cut(s, "?")
 	var data string
 	for part := range strings.SplitSeq(raw, "&") {
@@ -71,11 +75,12 @@ func Parse(s string) (Payload, error) {
 	if err != nil || data == "" {
 		return Payload{}, errors.New("the transfer code has no data")
 	}
-	b, err := base64.StdEncoding.DecodeString(data)
+	// Carried through a form or a URL-safe channel, "+" may have become a
+	// space or "-", and "/" "_"; padding may be gone.
+	data = strings.NewReplacer(" ", "+", "-", "+", "_", "/").Replace(strings.TrimRight(data, "="))
+	b, err := base64.RawStdEncoding.DecodeString(data)
 	if err != nil {
-		if b, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(data, "=")); err != nil {
-			return Payload{}, fmt.Errorf("%w: %v", errDamaged, err)
-		}
+		return Payload{}, fmt.Errorf("%w: %v", errDamaged, err)
 	}
 	return parsePayload(b)
 }
@@ -109,6 +114,11 @@ func parsePayload(b []byte) (Payload, error) {
 	}
 	if p.BatchSize == 0 {
 		p.BatchSize = 1
+	}
+	// The app splits an export into a few codes; anything outside that
+	// is damage, not a count to trust.
+	if p.BatchSize > MaxBatch || p.BatchIndex < 0 || p.BatchIndex >= p.BatchSize {
+		return Payload{}, fmt.Errorf("%w: it says it's code %d of %d", errDamaged, p.BatchIndex+1, p.BatchSize)
 	}
 	return p, nil
 }
@@ -243,7 +253,8 @@ func (a *Account) Entry() (k vault.Key, params totp.Params, skip string) {
 		if service == "" {
 			service = before
 		}
-		if service == before {
+		// The label's "issuer:" prefix, however it's written there.
+		if strings.EqualFold(strings.TrimSpace(before), strings.TrimSpace(service)) {
 			user = after
 		}
 	}
@@ -257,6 +268,9 @@ func (a *Account) Entry() (k vault.Key, params totp.Params, skip string) {
 	k = vault.Key{Kind: vault.KindTOTP, Service: service, Username: user}
 	if err := k.Validate(); err != nil {
 		return vault.Key{}, params, err.Error()
+	}
+	if _, err := totp.ValidateAndNormalizeSecret(a.Secret); err != nil {
+		return vault.Key{}, params, "the secret can't be used: " + err.Error()
 	}
 	params.Issuer = a.Issuer
 	if a.Algorithm != "SHA1" {

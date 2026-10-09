@@ -34,7 +34,10 @@ func encode(accounts [][]byte, size, index int) string {
 		b = appendVarint(b, uint64(len(a)))
 		b = append(b, a...)
 	}
-	b = append(b, 0x10, 1, 0x18, byte(size), 0x20, byte(index))
+	b = append(b, 0x10, 1, 0x18)
+	b = appendVarint(b, uint64(size))
+	b = append(b, 0x20)
+	b = appendVarint(b, uint64(index))
 	return "otpauth-migration://offline?data=" + url.QueryEscape(base64.StdEncoding.EncodeToString(b))
 }
 
@@ -111,15 +114,15 @@ func TestAccount_Entry(t *testing.T) {
 		a        Account
 		digits   int
 	}{
-		{a: Account{Name: "Example:alice@google.com", Issuer: "Example", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantID: "totp/Example/alice@google.com"},
-		{a: Account{Name: "GitHub:alice", Issuer: "GitHub", Algorithm: "SHA256", Digits: 8, Type: TypeTOTP}, wantID: "totp/GitHub/alice", wantAlgo: "SHA256", digits: 8},
-		{a: Account{Name: "Corp:carol", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantID: "totp/Corp/carol"},
-		{a: Account{Name: "plainname", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantID: "totp/plainname"},
-		{a: Account{Name: "bob", Issuer: "Acme", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantID: "totp/Acme/bob"},
-		{a: Account{Name: "x", Issuer: "X", Algorithm: "SHA1", Digits: 6, Type: TypeHOTP}, wantSkip: "a counter-based (HOTP) code, which sesh doesn't make"},
-		{a: Account{Name: "x", Issuer: "X", Algorithm: "MD5", Digits: 6, Type: TypeTOTP}, wantSkip: "uses MD5, which sesh doesn't support"},
-		{a: Account{Name: "a/b", Issuer: "X", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantSkip: `the username "a/b" contains "/"`},
-		{a: Account{Name: "", Issuer: "", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantSkip: "has no name"},
+		{a: Account{Secret: "JBSWY3DPEHPK3PXP", Name: "Example:alice@google.com", Issuer: "Example", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantID: "totp/Example/alice@google.com"},
+		{a: Account{Secret: "JBSWY3DPEHPK3PXP", Name: "GitHub:alice", Issuer: "GitHub", Algorithm: "SHA256", Digits: 8, Type: TypeTOTP}, wantID: "totp/GitHub/alice", wantAlgo: "SHA256", digits: 8},
+		{a: Account{Secret: "JBSWY3DPEHPK3PXP", Name: "Corp:carol", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantID: "totp/Corp/carol"},
+		{a: Account{Secret: "JBSWY3DPEHPK3PXP", Name: "plainname", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantID: "totp/plainname"},
+		{a: Account{Secret: "JBSWY3DPEHPK3PXP", Name: "bob", Issuer: "Acme", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantID: "totp/Acme/bob"},
+		{a: Account{Secret: "JBSWY3DPEHPK3PXP", Name: "x", Issuer: "X", Algorithm: "SHA1", Digits: 6, Type: TypeHOTP}, wantSkip: "a counter-based (HOTP) code, which sesh doesn't make"},
+		{a: Account{Secret: "JBSWY3DPEHPK3PXP", Name: "x", Issuer: "X", Algorithm: "MD5", Digits: 6, Type: TypeTOTP}, wantSkip: "uses MD5, which sesh doesn't support"},
+		{a: Account{Secret: "JBSWY3DPEHPK3PXP", Name: "a/b", Issuer: "X", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantSkip: `the username "a/b" contains "/"`},
+		{a: Account{Secret: "JBSWY3DPEHPK3PXP", Name: "", Issuer: "", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}, wantSkip: "has no name"},
 	} {
 		k, params, skip := tc.a.Entry()
 		if tc.wantSkip != "" {
@@ -130,6 +133,69 @@ func TestAccount_Entry(t *testing.T) {
 		}
 		if skip != "" || k.String() != tc.wantID || params.Algorithm != tc.wantAlgo || params.Digits != tc.digits || params.Issuer != tc.a.Issuer {
 			t.Errorf("%+v: %s %+v %q, want %s", tc.a, k, params, skip, tc.wantID)
+		}
+	}
+}
+
+// A batch size or index out of range is damage: sesh would otherwise count
+// up to whatever a crafted code says.
+func TestParse_BatchRange(t *testing.T) {
+	acc := account([]byte("12345678901234567890"), "a", "A", 1, 1, 2)
+	for name, uri := range map[string]string{
+		"huge size":     encode([][]byte{acc}, 200, 0),
+		"index too big": encode([][]byte{acc}, 2, 2),
+	} {
+		if _, err := Parse(uri); err == nil || !strings.Contains(err.Error(), "damaged") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// The data is read however it was carried: a "+" turned into a space, the
+// URL-safe alphabet, no padding, or a #fragment after it.
+func TestParse_DataForms(t *testing.T) {
+	_, data, _ := strings.Cut(sample, "data=")
+	raw, err := url.QueryUnescape(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, d := range map[string]string{
+		"a + as a space": strings.ReplaceAll(raw, "+", " "),
+		"URL-safe":       strings.NewReplacer("+", "-", "/", "_").Replace(raw),
+		"no padding":     strings.TrimRight(raw, "="),
+		"a fragment":     url.QueryEscape(raw) + "#x",
+		"literal +":      raw,
+	} {
+		p, err := Parse(Prefix + "offline?data=" + d)
+		if err != nil || len(p.Accounts) != 1 || p.Accounts[0].Secret != "JBSWY3DPEHPK3PXP" {
+			t.Errorf("%s: %+v, %v", name, p, err)
+		}
+	}
+}
+
+// Names are split however the issuer is written in the label, and a
+// secret sesh can't use is a reason to skip, found before anything is
+// stored.
+func TestAccount_EntryForms(t *testing.T) {
+	for _, tc := range []struct {
+		wantID, wantSkip string
+		a                Account
+	}{
+		{wantID: "totp/GitHub/alice", a: Account{Name: "github:alice", Issuer: "GitHub", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}},
+		{wantID: "totp/Google/me", a: Account{Name: "Google: me", Issuer: "Google", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}},
+		{wantID: "totp/AWS/Amazon Web Services:root", a: Account{Name: "Amazon Web Services:root", Issuer: "AWS", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}},
+		{wantID: "totp/Solo", a: Account{Name: "", Issuer: "Solo", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}},
+		{wantSkip: "the secret can't be used: secret too short", a: Account{Name: "bob", Issuer: "Short", Secret: "MFRGG", Algorithm: "SHA1", Digits: 6, Type: TypeTOTP}},
+	} {
+		k, _, skip := tc.a.Entry()
+		if tc.wantSkip != "" {
+			if !strings.Contains(skip, tc.wantSkip) {
+				t.Errorf("%+v: skip %q, want %q", tc.a, skip, tc.wantSkip)
+			}
+			continue
+		}
+		if skip != "" || k.String() != tc.wantID {
+			t.Errorf("%+v: %s %q, want %s", tc.a, k, skip, tc.wantID)
 		}
 	}
 }

@@ -221,6 +221,12 @@ func integrityCheck(q rowsQuerier) (_ []string, err error) {
 	return found, rows.Err()
 }
 
+// LogImport records an import in the audit log, with what it brought in as
+// detail.
+func (s *Store) LogImport(detail string) {
+	s.audit("import", "", detail)
+}
+
 // LogDoctor records a sesh doctor check of the vault in the audit log,
 // with its result as detail.
 func (s *Store) LogDoctor(detail string) {

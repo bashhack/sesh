@@ -1168,7 +1168,8 @@ sesh inject -i config.yml.tpl -o config.yml
 sesh import --from google-authenticator IMG_1234.png IMG_1235.png
 ```
 
-- **`--dry-run`** shows the summary and imports nothing. **`--yes`** imports without asking, and is needed when there's no terminal to ask at.
+- **`--dry-run`** shows the summary and imports nothing; before you have a vault, it doesn't make one. **`--yes`** imports without asking, and is needed when there's no terminal to ask at.
+- **The audit log** records each entry imported, and the import itself: `import  14 TOTP entries from Google Authenticator`.
 - **Entries you already have** stop the import, listed, unless `--on-conflict skip` leaves them as they are or `--on-conflict overwrite` replaces them.
 - **sesh's own exports** are imported with `--service password --action import` (see [Encrypted exports](#encrypted-exports)).
 
@@ -1177,10 +1178,17 @@ sesh import --from google-authenticator IMG_1234.png IMG_1235.png
 2. Take a screenshot of each. If the phone won't allow one, photograph the code with another device. Copy the pictures to the computer, for example with AirDrop.
 3. Import them all in one command, as above.
 
-- **Images:** PNG and JPEG are read. An iPhone photo (HEIC) needs converting first: `sips -s format png IMG_1234.HEIC --out IMG_1234.png`. The `otpauth-migration://` text of a code works too, given directly or in a text file, one per line.
-- **A large export** is split over several codes. Give all of them; if one is missing, sesh says which, and imports the rest only after asking.
-- **Names:** each account becomes a TOTP entry. Its issuer is the service name (`GitHub`), and its account is the username (`alice`), kept as the app had them. Rename any with `sesh edit`. The code settings (algorithm, digits) come across too.
-- **What sesh skips:** counter-based (HOTP) accounts, accounts using MD5, and names sesh can't hold, each with the reason.
+- **Images:** PNG and JPEG are read, whatever the file is called. A picture can hold several codes; sesh reads them all, light on dark too, and a full-size photo. An iPhone photo (HEIC) needs converting first: `sips -s format png IMG_1234.HEIC --out IMG_1234.png`.
+- **The code's text** (`otpauth-migration://...`) works too, in a text file one per line, or piped in with `-` as the file. Typed on the command line it also works, but then every secret in it is in your shell history.
+- **A large export** is split over several codes. Give all of them: if one is missing, sesh says which.
+- **Names:** each account becomes a TOTP entry. Its issuer is the service name (`GitHub`), and its account is the username (`alice`), kept as the app had them. Rename any with `sesh edit`. A name differing only in case from an entry you have is pointed out, since it would be a second entry. The code settings (algorithm, digits) come across too.
+- **What sesh skips,** each with the reason:
+  - counter-based (HOTP) accounts;
+  - accounts using MD5;
+  - a secret too short to be safe;
+  - names sesh can't hold;
+  - the same account given twice;
+  - two accounts with one name but different secrets: rename one in the app and export again.
 - **Before removing an account from the phone,** check its code in sesh matches, for example with `sesh --service totp --service-name GitHub --profile alice`.
 - **The pictures** hold every secret they show, in a form any authenticator app can read. Delete them once the import is done, from the phone too.
 

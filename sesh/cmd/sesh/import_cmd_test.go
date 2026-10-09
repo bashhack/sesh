@@ -156,7 +156,7 @@ func TestImport_FromImagesAndSplitExports(t *testing.T) {
 	if err != nil || !strings.Contains(out, "Imported 2 TOTP entries") {
 		t.Fatalf("%q, %v", out, err)
 	}
-	if !strings.Contains(stderr, "The export has 3 codes, and code 2 of them wasn't given") {
+	if !strings.Contains(stderr, "The export has 3 codes, and code 2 wasn't given") {
 		t.Errorf("summary:\n%s", stderr)
 	}
 	for args, wantSub := range map[string]string{
@@ -197,5 +197,70 @@ func writeQR(t *testing.T, path, text string) {
 	defer f.Close() //nolint:errcheck // written
 	if err := png.Encode(f, img); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// What the review found: a secret sesh refuses is skipped up front, not
+// fatal partway; a same-named account with another secret is told apart;
+// a name differing only in case is pointed out; errors never repeat a
+// code's text; flags after files are refused; codes come from stdin; and
+// the import is in the audit log.
+func TestImport_Edges(t *testing.T) {
+	env := importVault(t)
+	code := transferCode(1, 0, 2,
+		[]any{"12345678901234567890", "first:a", "first", 1, 1, 2},
+		[]any{"short", "Short:bob", "Short", 1, 1, 2},
+		[]any{"abcdefghijklmnopqrst", "dup:x", "dup", 1, 1, 2},
+		[]any{"zyxwvutsrqponmlkjihg", "dup:x", "dup", 1, 1, 2},
+		[]any{"abcdefghijklmnopqrst", "github:alice", "github", 1, 1, 2},
+		[]any{"later-later-later!!", "later:z", "later", 1, 1, 2},
+	)
+	out, stderr, err := runImportOut(t, code+"\n", false, "--yes", "-")
+	if err != nil || !strings.Contains(out, "Imported 4 TOTP entries") {
+		t.Fatalf("%q, %q, %v", out, stderr, err)
+	}
+	for _, want := range []string{
+		"totp/github/alice  (you have totp/GitHub/alice)",
+		`"Short:bob": the secret can't be used: secret too short`,
+		`"dup:x": another account here has this name`,
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("summary missing %q:\n%s", want, stderr)
+		}
+	}
+	app := agentTestApp()
+	if err := runAudit(app, []string{"--limit", "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(got, "import  4 TOTP entries from Google Authenticator") {
+		t.Errorf("audit:\n%s", got)
+	}
+
+	damaged := "otpauth-migration://offline?data=//8JBSW"
+	for wantSub, args := range map[string][]string{
+		"code 1: the transfer code is damaged":                  {damaged + " "},
+		"argument 1 isn't a Google Authenticator transfer code": {"otpauth://totp/x?secret=JBSWY3DPEHPK3PXP"},
+		"put --dry-run before the files":                        {"a.png", "--dry-run"},
+	} {
+		_, _, err := runImportOut(t, "", false, args...)
+		if err == nil || !strings.Contains(err.Error(), wantSub) || strings.Contains(err.Error(), "JBSW") || strings.Contains(err.Error(), "data=") {
+			t.Errorf("%q: %v", wantSub, err)
+		}
+	}
+	_ = env
+}
+
+// A dry run before there's a vault shows what it found, and makes none.
+func TestImport_DryRunWithoutAVault(t *testing.T) {
+	env := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	code := transferCode(1, 0, 3, []any{"12345678901234567890", "x:y", "x", 1, 1, 2})
+	_, stderr, err := runImportOut(t, "", true, "--dry-run", code)
+	if err != nil || !strings.Contains(stderr, "To import (1):") || !strings.Contains(stderr, "Nothing imported (--dry-run).") {
+		t.Fatalf("%q, %v", stderr, err)
+	}
+	if _, err := os.Stat(env.dbPath); !os.IsNotExist(err) {
+		t.Errorf("a vault was made: %v", err)
 	}
 }
