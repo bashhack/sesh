@@ -11,8 +11,10 @@ import (
 // The fixtures in testdata are genuine exports of one throwaway vault, made
 // with Bitwarden's CLI (bw 2026.9.1) against a local Vaultwarden:
 // plain.json (--format json), password.json (--format encrypted_json
-// --password export-pass-1), and account.json (--format encrypted_json).
-// The values in them are made up.
+// --password export-pass-1; PBKDF2, the account's setting then), and
+// account.json (--format encrypted_json). password-argon2id.json is the
+// same vault after the account's KDF was set to Argon2id in the web vault
+// (--password export-pass-argon). The values in them are made up.
 
 func read(t *testing.T, name string) []byte {
 	t.Helper()
@@ -67,6 +69,16 @@ func TestParse_Encrypted(t *testing.T) {
 	}
 	if !reflect.DeepEqual(plain, opened) {
 		t.Error("the opened export isn't the plain one")
+	}
+	argon, err := Parse(read(t, "password-argon2id.json"), password("export-pass-argon"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(plain, argon) {
+		t.Error("the Argon2id export isn't the plain one")
+	}
+	if _, err := Parse(read(t, "password-argon2id.json"), password("export-pass-1")); !errors.Is(err, ErrWrongPassword) {
+		t.Errorf("Argon2id, wrong password: %v", err)
 	}
 	if _, err := Parse(read(t, "password.json"), password("wrong")); !errors.Is(err, ErrWrongPassword) {
 		t.Errorf("wrong password: %v", err)
