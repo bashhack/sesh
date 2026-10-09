@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/clipboard"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/password"
@@ -522,5 +523,38 @@ func TestDoctor_MixedKeySettings(t *testing.T) {
 	out, err := runDoctorOut(t)
 	if err != nil || !strings.Contains(out, "  ok    Key settings    32 MiB, 2 passes, 1 thread\n                        differs from configured: 19 MiB, 3 passes, 1 thread\n") || strings.Contains(out, "--rekey") {
 		t.Errorf("err = %v\n%s", err, out)
+	}
+}
+
+// On Linux, doctor shows the clipboard tool --clip uses, or why there's
+// none: no desktop session is normal over SSH, but a missing tool warns.
+func TestDoctor_Clipboard(t *testing.T) {
+	tests := map[string]struct {
+		find     func() (clipboard.Tool, error)
+		os       string
+		wantRow  string
+		wantTodo string
+	}{
+		"found":    {os: "linux", find: func() (clipboard.Tool, error) { return clipboard.Tool{Name: "wl-copy"}, nil }, wantRow: "  ok    Clipboard       wl-copy\n"},
+		"over SSH": {os: "linux", find: func() (clipboard.Tool, error) { return clipboard.Tool{}, clipboard.ErrNoDisplay }, wantRow: "  -     Clipboard       no desktop session here, as over SSH, so --clip can't copy\n"},
+		"none": {os: "linux", find: func() (clipboard.Tool, error) {
+			return clipboard.Tool{}, &clipboard.MissingToolError{Install: "xclip or xsel"}
+		}, wantRow: "  warn  Clipboard       no tool found, so --clip can't copy\n", wantTodo: "Install xclip or xsel, so --clip can copy."},
+		"macOS, no row": {os: "darwin", find: func() (clipboard.Tool, error) { t.Error("looked for a tool on macOS"); return clipboard.Tool{}, nil }},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			oldOS, oldFind := clipboardOS, findClipboard
+			t.Cleanup(func() { clipboardOS, findClipboard = oldOS, oldFind })
+			clipboardOS, findClipboard = tc.os, tc.find
+			var c doctorChecks
+			checkClipboard(&c)
+			if got := c.rows.String(); got != tc.wantRow {
+				t.Errorf("row = %q, want %q", got, tc.wantRow)
+			}
+			if got := len(c.todos); (got == 1) != (tc.wantTodo != "") || (got == 1 && c.todos[0][0] != tc.wantTodo) {
+				t.Errorf("todos = %v, want %q", c.todos, tc.wantTodo)
+			}
+		})
 	}
 }

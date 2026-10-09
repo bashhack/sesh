@@ -21,6 +21,9 @@ import (
 // process-wide.
 func TestMain(m *testing.M) {
 	hardenProcess = func() error { return nil }
+	// Doctor's Clipboard row is Linux only: every test sees the macOS
+	// report, on any system.
+	clipboardOS = "darwin"
 	// Keep a developer's own ~/.config/sesh/config.toml out of every test.
 	dir, err := os.MkdirTemp("", "sesh-test-config")
 	if err != nil {

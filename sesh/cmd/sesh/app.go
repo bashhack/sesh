@@ -47,10 +47,13 @@ type App struct {
 	ExecLookPath  ExecLookPathFunc
 	Exit          ExitFunc
 	ClipboardCopy ClipboardCopyFunc
-	TimeNow       TimeNowFunc
-	Stdin         io.Reader
-	Stdout        io.Writer
-	Stderr        io.Writer
+	// ClipboardCheck reports why nothing can be copied here, if so; nil
+	// skips the check.
+	ClipboardCheck func() error
+	TimeNow        TimeNowFunc
+	Stdin          io.Reader
+	Stdout         io.Writer
+	Stderr         io.Writer
 	// StdinIsTerminal reports whether someone at a terminal can answer a
 	// question on Stdin; nil means nobody can.
 	StdinIsTerminal func() bool
@@ -94,6 +97,10 @@ func NewDefaultApp(versionInfo VersionInfo, store vault.Store, settings AppSetti
 		Exit:         os.Exit,
 		ClipboardCopy: func(text string) error {
 			return clipboard.CopyWithAutoClear(text, settings.ClipboardTimeout)
+		},
+		ClipboardCheck: func() error {
+			_, err := clipboard.Find()
+			return err
 		},
 		TimeNow: time.Now,
 		Stdin:   os.Stdin,
@@ -284,6 +291,18 @@ func isQuietProvider(p provider.ServiceProvider) bool {
 	return ok && qp.SuppressActionFraming()
 }
 
+// insteadOfClip says how to get the value without a clipboard: --show,
+// for a provider that has it, or the command without --clip, which prints
+// it or uses it.
+func insteadOfClip(p provider.ServiceProvider) string {
+	for _, f := range p.GetFlagInfo() {
+		if f.Name == "show" {
+			return "use --show to print it instead"
+		}
+	}
+	return "run it without --clip"
+}
+
 // CopyToClipboard copies a value to the system clipboard
 func (a *App) CopyToClipboard(serviceName string) error {
 	p, err := a.Registry.GetProvider(serviceName)
@@ -293,6 +312,20 @@ func (a *App) CopyToClipboard(serviceName string) error {
 
 	if err := p.ValidateRequest(); err != nil {
 		return err
+	}
+
+	if cc, ok := p.(provider.ClipChecker); ok {
+		if err := cc.CheckClip(); err != nil {
+			return err
+		}
+	}
+	if a.ClipboardCheck != nil {
+		if err := a.ClipboardCheck(); err != nil {
+			if errors.Is(err, clipboard.ErrNoDisplay) {
+				return fmt.Errorf("can't copy: %w; %s", err, insteadOfClip(p))
+			}
+			return fmt.Errorf("can't copy: %w", err)
+		}
 	}
 
 	quiet := isQuietProvider(p)

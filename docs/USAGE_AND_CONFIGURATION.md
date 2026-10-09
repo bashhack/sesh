@@ -535,6 +535,7 @@ Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but
 - **Agent:** whether it's running and unlocked. The setup checks never start it; unlocking the vault, below, does, as any command would. One running an older sesh build is replaced by the next command.
 - **Key settings:** the vault's key wasn't made with weaker Argon2id settings than the configured ones (`[master_password]`): none higher, one lower. Raising them applies only when the key is made again, with `sesh --rekey`. Settings higher in one way and lower in another are fine, and noted, since making the key again would lower one.
 - **Backups:** when the newest was made, how many are kept, and where. None, or a newest older than twice `backup.every_days`, is a warning.
+- **Clipboard** (Linux only): the tool `-clip` copies with: `wl-copy`, `xclip` or `xsel`. None installed is a warning; no desktop session, as over SSH, is only noted.
 
 Then the vault:
 
@@ -1192,7 +1193,7 @@ When run without additional flags, sesh will:
 3. **Setup Required**: First-time users must run `-setup` for each service
 4. **Profile Selection**: Uses default AWS profile or requires `-service-name` for TOTP
 5. **Security**: Secrets are stored in one vault file, each encrypted at rest with AES-256-GCM under a key derived from your master password
-6. **Clipboard**: On macOS, values copied via `-clip` are automatically cleared after 30 seconds (only if the clipboard still holds the copied value). On other platforms no auto-clear is performed
+6. **Clipboard**: A value copied with `-clip` is cleared from the clipboard after 30 seconds (`clipboard_timeout`), if the clipboard still holds it. macOS has a clipboard tool built in. On Linux, sesh uses `wl-copy` under Wayland (from wl-clipboard), or `xclip` or `xsel` under X11, so install one. Over SSH, with no desktop session, `-clip` can't copy: use `-show` for a password; for a TOTP code, leave out `-clip` and it's printed. `sesh doctor` shows which tool it found
 
 ## Subshell Behavior
 

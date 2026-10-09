@@ -76,6 +76,7 @@ Start by setting up your first provider entry.
 - **For AWS provider:** [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured with at least one profile.
 - **For TOTP provider:** No additional dependencies — works with any service that supports standard TOTP (RFC 6238).
 - **For Password provider:** No additional dependencies.
+- **For `-clip` on Linux:** `wl-copy` (wl-clipboard) under Wayland, or `xclip` or `xsel` under X11. macOS has one built in.
 
 ### Setup Wizards
 
