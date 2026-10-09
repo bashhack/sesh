@@ -1,13 +1,16 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/importer"
@@ -236,35 +239,37 @@ func detectSource(args []string) string {
 	return "google-authenticator"
 }
 
-// writeImported stores e. One replacing an entry you have keeps that
-// entry's folder, tags, creation time and details where the import
-// brings none.
+// writeImported stores e. One replacing an entry you have takes its secret
+// and code settings from the import, and its folder, details (URL, notes,
+// fields) only where the import has them; tags are both sets, and the
+// entry's other settings and creation time are kept.
 func writeImported(store *database.Store, e *importer.Entry, exists bool) error {
 	ent := vault.Entry{Key: e.Key, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.Created, UpdatedAt: e.Updated}
-	if exists {
-		cur, err := store.Lookup(e.Key)
-		if err != nil {
-			return err
-		}
-		if ent.Folder == "" {
-			ent.Folder = cur.Folder
-		}
-		if len(ent.Tags) == 0 {
-			ent.Tags = cur.Tags
-		}
-		if ent.CreatedAt.IsZero() {
-			ent.CreatedAt = cur.CreatedAt
-		}
-		if e.Details.IsZero() {
-			return store.Save(&ent, e.Secret)
-		}
+	if !exists {
+		return store.SaveWithDetails(&ent, e.Secret, &e.Details)
+	}
+	cur, err := store.Lookup(e.Key)
+	if err != nil {
+		return err
+	}
+	ent.Settings = cur.Settings
+	ent.Settings.TOTP = e.Settings.TOTP
+	if ent.Folder == "" {
+		ent.Folder = cur.Folder
+	}
+	ent.Tags = append(slices.Clone(cur.Tags), e.Tags...)
+	ent.CreatedAt = cur.CreatedAt
+	ent.UpdatedAt = time.Time{}
+	if e.Details.IsZero() {
+		return store.Save(&ent, e.Secret)
 	}
 	return store.SaveWithDetails(&ent, e.Secret, &e.Details)
 }
 
 // importSummary is what an import found, as sesh shows it before asking:
-// folders renamed once, then each entry to import with what changed on
-// the way, the ones already in the vault, and the ones skipped.
+// folders renamed once, then each entry to import, by kind and folder,
+// with what changed on the way, the ones already in the vault, the ones
+// skipped, and what the source had that sesh doesn't keep.
 func importSummary(f *found, fresh, clashes, skipped []*importer.Entry, onConflict string) string {
 	var b strings.Builder
 	b.WriteString(f.header + "\n")
@@ -285,37 +290,117 @@ func importSummary(f *found, fresh, clashes, skipped []*importer.Entry, onConfli
 			fmt.Fprintf(&b, "  %s\n", strings.TrimPrefix(c, "folder "))
 		}
 	}
-	section := func(title string, list []*importer.Entry, line func(*importer.Entry) string) {
-		if len(list) == 0 {
-			return
-		}
-		fmt.Fprintf(&b, "\n%s (%d):\n", title, len(list))
-		for _, e := range list {
-			fmt.Fprintf(&b, "  %s\n", line(e))
-			for _, c := range e.Changes {
-				if !strings.HasPrefix(c, "folder ") {
-					fmt.Fprintf(&b, "      %s\n", c)
-				}
+	entry := func(indent string, e *importer.Entry, line string) {
+		fmt.Fprintf(&b, "%s%s\n", indent, line)
+		for _, c := range e.Changes {
+			if !strings.HasPrefix(c, "folder ") {
+				fmt.Fprintf(&b, "%s    %s\n", indent, c)
 			}
 		}
 	}
-	section("To import", fresh, func(e *importer.Entry) string { return e.Key.String() + describeParams(e.Settings.TOTP) })
-	clashTitle := "Already in the vault"
-	switch onConflict {
-	case "skip":
-		clashTitle += ", left as they are"
-	case "overwrite":
-		clashTitle += ", to be replaced"
-	}
-	section(clashTitle, clashes, func(e *importer.Entry) string { return e.Key.String() })
-	var b2 strings.Builder
-	if len(skipped) > 0 {
-		fmt.Fprintf(&b2, "\nSkipped (%d):\n", len(skipped))
-		for _, e := range skipped {
-			fmt.Fprintf(&b2, "  %q: %s\n", e.Name, e.Skip)
+	if len(fresh) > 0 {
+		fmt.Fprintf(&b, "\nTo import (%d):\n", len(fresh))
+		groups := groupByKindAndFolder(fresh)
+		for _, g := range groups {
+			indent := "  "
+			if len(groups) > 1 {
+				fmt.Fprintf(&b, "  %s (%d):\n", g.title, len(g.entries))
+				indent = "    "
+			}
+			for _, e := range g.entries {
+				entry(indent, e, e.Key.String()+describeParams(e.Settings.TOTP))
+			}
 		}
 	}
-	return b.String() + b2.String()
+	if len(clashes) > 0 {
+		title := "Already in the vault"
+		switch onConflict {
+		case "skip":
+			title += ", left as they are"
+		case "overwrite":
+			title += ", to be replaced"
+		}
+		fmt.Fprintf(&b, "\n%s (%d):\n", title, len(clashes))
+		for _, e := range clashes {
+			entry("  ", e, e.Key.String())
+		}
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(&b, "\nSkipped (%d):\n", len(skipped))
+		for _, e := range skipped {
+			fmt.Fprintf(&b, "  %q: %s\n", e.Name, e.Skip)
+		}
+	}
+	written := fresh
+	if onConflict == "overwrite" {
+		written = append(slices.Clone(fresh), clashes...)
+	}
+	lost := map[string]int{}
+	for _, e := range written {
+		for what, n := range e.Lost {
+			lost[what] += n
+		}
+	}
+	if len(lost) > 0 {
+		b.WriteString("\nNot kept:\n")
+		for _, what := range slices.Sorted(maps.Keys(lost)) {
+			fmt.Fprintf(&b, "  %s: %d\n", what, lost[what])
+		}
+	}
+	return b.String()
+}
+
+// entryGroup is the entries of one kind in one folder.
+type entryGroup struct {
+	title   string
+	entries []*importer.Entry
+}
+
+// groupByKindAndFolder groups entries by kind, then folder, each group
+// keeping the entries' order.
+func groupByKindAndFolder(entries []*importer.Entry) []entryGroup {
+	var groups []entryGroup
+	index := map[[2]string]int{}
+	for _, e := range entries {
+		k := [2]string{string(e.Key.Kind), e.Folder}
+		i, ok := index[k]
+		if !ok {
+			title := kindPlural(e.Key.Kind)
+			if e.Folder == "" {
+				title += ", in no folder"
+			} else {
+				title += ", in " + e.Folder
+			}
+			i = len(groups)
+			index[k] = i
+			groups = append(groups, entryGroup{title: title})
+		}
+		groups[i].entries = append(groups[i].entries, e)
+	}
+	order := []vault.Kind{vault.KindPassword, vault.KindTOTP, vault.KindAPIKey, vault.KindNote}
+	slices.SortStableFunc(groups, func(a, b entryGroup) int {
+		ka, kb := a.entries[0].Key.Kind, b.entries[0].Key.Kind
+		if c := cmp.Compare(slices.Index(order, ka), slices.Index(order, kb)); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.entries[0].Folder, b.entries[0].Folder)
+	})
+	return groups
+}
+
+// kindPlural names a kind's entries in the summary.
+func kindPlural(k vault.Kind) string {
+	switch k {
+	case vault.KindPassword:
+		return "Passwords"
+	case vault.KindTOTP:
+		return "TOTP entries"
+	case vault.KindAPIKey:
+		return "API keys"
+	case vault.KindNote:
+		return "Secure notes"
+	}
+	return string(k)
 }
 
 // readBitwarden reads one Bitwarden JSON export, asking at the terminal
@@ -356,9 +441,13 @@ func readBitwarden(app *App, args []string, terminal bool) (found, error) {
 
 // readGoogleAuthenticator reads Google Authenticator transfer codes.
 func readGoogleAuthenticator(args []string, stdin io.Reader, terminal bool) (found, error) {
-	payloads, err := readTransferCodes(args, stdin, terminal)
+	payloads, files, err := readTransferCodes(args, stdin, terminal)
 	if err != nil {
 		return found{}, err
+	}
+	var after string
+	if len(files) > 0 {
+		after = "The transfer codes in " + strings.Join(files, ", ") + " hold every secret they carry: delete them now, and any copies, on the phone too."
 	}
 	accounts := 0
 	for _, p := range payloads {
@@ -367,6 +456,7 @@ func readGoogleAuthenticator(args []string, stdin io.Reader, terminal bool) (fou
 	return found{
 		source:   "Google Authenticator",
 		header:   fmt.Sprintf("Found %s in %s from Google Authenticator.", nouns(accounts, "account", "accounts"), nouns(len(payloads), "transfer code", "transfer codes")),
+		after:    after,
 		warnings: missingBatches(payloads),
 		entries:  plannedTransfer(payloads),
 	}, nil
@@ -376,9 +466,8 @@ func readGoogleAuthenticator(args []string, stdin io.Reader, terminal bool) (fou
 // itself, "-" for stdin, an image of codes (by its content, whatever its
 // name), or a text file of codes, one per line. Errors name an argument
 // given as a code by its place ("code 2"), never its text, which holds
-// secrets.
-func readTransferCodes(args []string, stdin io.Reader, stdinTerminal bool) ([]gauth.Payload, error) {
-	var payloads []gauth.Payload
+// secrets. files are the files the codes came from.
+func readTransferCodes(args []string, stdin io.Reader, stdinTerminal bool) (payloads []gauth.Payload, files []string, err error) {
 	for n, arg := range args {
 		arg = strings.TrimSpace(arg)
 		name := arg
@@ -387,30 +476,30 @@ func readTransferCodes(args []string, stdin io.Reader, stdinTerminal bool) ([]ga
 		case strings.HasPrefix(arg, gauth.Prefix):
 			name, codes = fmt.Sprintf("code %d", n+1), []string{arg}
 		case strings.Contains(arg, "data="):
-			return nil, fmt.Errorf("argument %d looks like a transfer code, but doesn't start with %s; copy the whole code", n+1, gauth.Prefix)
+			return nil, nil, fmt.Errorf("argument %d looks like a transfer code, but doesn't start with %s; copy the whole code", n+1, gauth.Prefix)
 		case strings.Contains(arg, "://"):
-			return nil, fmt.Errorf("argument %d isn't a Google Authenticator transfer code (otpauth-migration://) or a file; a single account's otpauth:// code is added with: sesh --service totp --setup", n+1)
+			return nil, nil, fmt.Errorf("argument %d isn't a Google Authenticator transfer code (otpauth-migration://) or a file; a single account's otpauth:// code is added with: sesh --service totp --setup", n+1)
 		default:
 			var b []byte
-			var err error
 			if arg == "-" {
 				if stdinTerminal {
 					// A terminal takes only so long a line; a code is
 					// longer.
-					return nil, errors.New("pipe the codes in rather than typing or pasting them: pbpaste | sesh import -")
+					return nil, nil, errors.New("pipe the codes in rather than typing or pasting them: pbpaste | sesh import -")
 				}
 				name = "stdin"
 				b, err = io.ReadAll(io.LimitReader(stdin, 16<<20))
 			} else {
 				b, err = os.ReadFile(arg) //nolint:gosec // the file the user named
+				files = append(files, arg)
 			}
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if qrcode.IsImage(arg, b) {
 				texts, err := qrcode.ReadTextsFromBytes(name, b)
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				for _, t := range texts {
 					if strings.HasPrefix(t, gauth.Prefix) {
@@ -418,7 +507,7 @@ func readTransferCodes(args []string, stdin io.Reader, stdinTerminal bool) ([]ga
 					}
 				}
 				if len(codes) == 0 {
-					return nil, fmt.Errorf("the QR code in %s isn't a Google Authenticator transfer code: in the app, use Transfer accounts, then Export accounts", name)
+					return nil, nil, fmt.Errorf("the QR code in %s isn't a Google Authenticator transfer code: in the app, use Transfer accounts, then Export accounts", name)
 				}
 				break
 			}
@@ -428,18 +517,18 @@ func readTransferCodes(args []string, stdin io.Reader, stdinTerminal bool) ([]ga
 				}
 			}
 			if len(codes) == 0 {
-				return nil, fmt.Errorf("%s has no otpauth-migration:// codes, and isn't a PNG or JPEG of one", name)
+				return nil, nil, fmt.Errorf("%s has no otpauth-migration:// codes, and isn't a PNG or JPEG of one", name)
 			}
 		}
 		for _, c := range codes {
 			p, err := gauth.Parse(c)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", name, err)
+				return nil, nil, fmt.Errorf("%s: %w", name, err)
 			}
 			payloads = append(payloads, p)
 		}
 	}
-	return payloads, nil
+	return payloads, files, nil
 }
 
 // plannedTransfer is the entries the transfer codes hold, in order: the

@@ -14,30 +14,46 @@ import (
 // Entry is an entry an import found: what it would store, or why it can't
 // (Skip).
 type Entry struct {
-	Created  time.Time
-	Updated  time.Time
-	Key      vault.Key
-	Name     string // as the source names it
-	Skip     string
-	Folder   string
-	Secret   []byte
-	Tags     []string
-	Changes  []string // what changed on the way, said in the summary
+	Created time.Time
+	Updated time.Time
+	Key     vault.Key
+	Name    string // as the source names it
+	Skip    string
+	Folder  string
+	Secret  []byte
+	Tags    []string
+	Changes []string // what changed on the way, said in the summary
+	// Lost counts what the source had that sesh doesn't keep, by what it
+	// is ("old passwords"), for the summary to add up.
+	Lost     map[string]int
 	Details  vault.Details
 	Settings vault.Settings
 }
 
 // FitFolder fits a folder path from another app to sesh's folder rules:
 // each "/"-separated part keeps its letters, digits, "-", "_" and ".",
-// anything else becoming "-"; runs of "-" become one, and a part is
-// trimmed of "-" and "." at its ends. Empty parts are dropped. "" is no
+// anything else becoming "-"; runs of "-" become one, a part is trimmed
+// of "-" and "." at its ends and cut to sesh's longest, and empty parts
+// are dropped, as are parts past the longest path sesh holds. "" is no
 // folder.
 func FitFolder(path string) string {
 	var parts []string
+	n := 0
 	for part := range strings.SplitSeq(path, "/") {
-		if p := fitLabel(part); p != "" && vault.CheckFolder(p) == nil {
-			parts = append(parts, p)
+		p := fitLabel(part)
+		if r := []rune(p); len(r) > vault.MaxTagLength {
+			p = strings.Trim(string(r[:vault.MaxTagLength]), "-.")
 		}
+		if p == "" || vault.CheckFolder(p) != nil {
+			continue
+		}
+		// Parts that would take the path past sesh's longest are left
+		// off the end.
+		if n+len([]rune(p))+len(parts) > vault.MaxFolderLength {
+			break
+		}
+		n += len([]rune(p))
+		parts = append(parts, p)
 	}
 	return strings.Join(parts, "/")
 }

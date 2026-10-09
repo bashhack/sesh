@@ -6,10 +6,13 @@
 package bitwarden
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 // Item types, as Bitwarden numbers them (cipher-type.ts).
@@ -49,6 +52,7 @@ type Folder struct {
 type Item struct {
 	CreationDate    time.Time         `json:"creationDate"`
 	RevisionDate    time.Time         `json:"revisionDate"`
+	ArchivedDate    *time.Time        `json:"archivedDate"`
 	Login           *Login            `json:"login"`
 	Card            *Card             `json:"card"`
 	Identity        *Identity         `json:"identity"`
@@ -141,7 +145,17 @@ type envelope struct {
 
 // ErrAccountRestricted is an export only the Bitwarden account that made it
 // can open.
-var ErrAccountRestricted = errors.New("this Bitwarden export is account restricted: only the Bitwarden account that made it can open it. Export again with a password of its own (Export vault, then File password protected), or as plain JSON")
+var ErrAccountRestricted = errors.New(`this Bitwarden export is account restricted: only the Bitwarden account that made it can open it. Export again with "Export type" set to "Password protected", or as plain JSON`)
+
+// errOrganization is an organization's export: its items have
+// collections, not folders, and sesh reads a personal vault's.
+var errOrganization = errors.New(`this is an organization's Bitwarden export; sesh imports your own vault's: export again with "Export from" set to "My vault"`)
+
+// IsCSV reports whether b looks like Bitwarden's CSV export, by its header
+// (bitwarden.com/help/condition-bitwarden-import).
+func IsCSV(b []byte) bool {
+	return bytes.HasPrefix(bytes.TrimPrefix(b, []byte("\ufeff")), []byte("folder,favorite,type,name,"))
+}
 
 // IsExport reports whether b looks like a Bitwarden JSON export.
 func IsExport(b []byte) bool {
@@ -154,8 +168,12 @@ func IsExport(b []byte) bool {
 }
 
 // Parse reads a Bitwarden JSON export. A password-protected one is opened
-// with the password password returns, asked only then.
+// with the password password returns, asked only once the file's own
+// settings are known to be ones sesh accepts.
 func Parse(b []byte, password func() ([]byte, error)) (Export, error) {
+	if IsCSV(b) {
+		return Export{}, errors.New("this is Bitwarden's CSV export, which sesh doesn't read yet: export again as JSON (plain, or password protected)")
+	}
 	var env envelope
 	if err := json.Unmarshal(b, &env); err != nil {
 		return Export{}, fmt.Errorf("this isn't a Bitwarden JSON export: %w", err)
@@ -164,18 +182,30 @@ func Parse(b []byte, password func() ([]byte, error)) (Export, error) {
 		if !env.PasswordProtected {
 			return Export{}, ErrAccountRestricted
 		}
+		if err := checkKDF(&env); err != nil {
+			return Export{}, err
+		}
 		pw, err := password()
 		if err != nil {
 			return Export{}, err
 		}
 		plain, err := decrypt(&env, pw)
+		secure.SecureZeroBytes(pw)
 		if err != nil {
 			return Export{}, err
 		}
+		defer secure.SecureZeroBytes(plain)
+		// An organization's export is protected the same way, with its
+		// collections inside.
+		var inner envelope
+		if err := json.Unmarshal(plain, &inner); err != nil {
+			return Export{}, fmt.Errorf("this Bitwarden export is damaged: %w", err)
+		}
+		env.Collections = inner.Collections
 		b = plain
 	}
 	if env.Collections != nil {
-		return Export{}, errors.New("this is an organization's Bitwarden export; sesh imports a personal vault's export (Export vault, from your own vault)")
+		return Export{}, errOrganization
 	}
 	var exp Export
 	if err := json.Unmarshal(b, &exp); err != nil {

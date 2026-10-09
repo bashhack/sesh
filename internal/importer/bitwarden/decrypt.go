@@ -24,12 +24,14 @@ const (
 	kdfArgon2id = 1
 )
 
-// Bounds on the KDF settings an export may ask for, so a damaged or hostile
-// file can't make sesh spend unbounded time or memory. Bitwarden's own
-// minimums (bitwarden-crypto kdf.rs) are 5000 PBKDF2 iterations, and for
-// Argon2id 16 MiB, 2 iterations, 1 thread.
+// The most an export's KDF settings may ask for, so a damaged or hostile
+// file can't make sesh spend unbounded time or memory: Bitwarden's own
+// maximums (clients libs/legacy-crypto/src/models/kdf-config.ts), which its
+// clients keep an account's settings within. Its minimums (bitwarden-crypto
+// kdf.rs) are 5000 PBKDF2 iterations, and for Argon2id 16 MiB, 2
+// iterations, 1 thread.
 const (
-	maxPBKDF2Iterations = 10_000_000
+	maxPBKDF2Iterations = 2_000_000
 	maxArgon2MemoryMiB  = 1024
 	maxArgon2Iterations = 10
 	maxArgon2Threads    = 16
@@ -77,24 +79,36 @@ func decrypt(env *envelope, password []byte) ([]byte, error) {
 	return plain, nil
 }
 
-func deriveKey(env *envelope, password []byte) ([]byte, error) {
-	salt := []byte(env.Salt)
+// checkKDF refuses KDF settings sesh doesn't accept, before a password is
+// asked for.
+func checkKDF(env *envelope) error {
 	switch env.KDFType {
 	case kdfPBKDF2:
 		if env.KDFIterations < 1 || env.KDFIterations > maxPBKDF2Iterations {
-			return nil, fmt.Errorf("this Bitwarden export asks for %d PBKDF2 iterations, which sesh doesn't accept", env.KDFIterations)
+			return fmt.Errorf("this Bitwarden export asks for %d PBKDF2 iterations, which sesh doesn't accept", env.KDFIterations)
 		}
-		return pbkdf2.Key(sha256.New, string(password), salt, env.KDFIterations, 32)
 	case kdfArgon2id:
 		if env.KDFIterations < 1 || env.KDFIterations > maxArgon2Iterations ||
 			env.KDFMemory < 1 || env.KDFMemory > maxArgon2MemoryMiB ||
 			env.KDFParallelism < 1 || env.KDFParallelism > maxArgon2Threads {
-			return nil, fmt.Errorf("this Bitwarden export asks for Argon2id settings sesh doesn't accept (%d MiB, %d passes, %d threads)", env.KDFMemory, env.KDFIterations, env.KDFParallelism)
+			return fmt.Errorf("this Bitwarden export asks for Argon2id settings sesh doesn't accept (%d MiB, %d passes, %d threads)", env.KDFMemory, env.KDFIterations, env.KDFParallelism)
 		}
-		hashed := sha256.Sum256(salt)
-		return argon2.IDKey(password, hashed[:], uint32(env.KDFIterations), uint32(env.KDFMemory)*1024, uint8(env.KDFParallelism), 32), nil //nolint:gosec // bounded above
+	default:
+		return fmt.Errorf("this Bitwarden export uses a key derivation sesh doesn't know (type %d)", env.KDFType)
 	}
-	return nil, fmt.Errorf("this Bitwarden export uses a key derivation sesh doesn't know (type %d)", env.KDFType)
+	return nil
+}
+
+func deriveKey(env *envelope, password []byte) ([]byte, error) {
+	if err := checkKDF(env); err != nil {
+		return nil, err
+	}
+	salt := []byte(env.Salt)
+	if env.KDFType == kdfArgon2id {
+		hashed := sha256.Sum256(salt)
+		return argon2.IDKey(password, hashed[:], uint32(env.KDFIterations), uint32(env.KDFMemory)*1024, uint8(env.KDFParallelism), 32), nil //nolint:gosec // bounded by checkKDF
+	}
+	return pbkdf2.Key(sha256.New, string(password), salt, env.KDFIterations, 32)
 }
 
 // openEncString checks and decrypts a type 2 EncString, "2.iv|ct|mac".

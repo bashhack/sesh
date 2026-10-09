@@ -1,6 +1,16 @@
 package bitwarden
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
+	"crypto/hmac"
+	"crypto/pbkdf2"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
 	"reflect"
@@ -88,14 +98,95 @@ func TestParse_Encrypted(t *testing.T) {
 	}
 }
 
-// Settings outside what sesh accepts are refused before any work.
+// seal protects plain with pw as Bitwarden's password-protected export
+// does (PBKDF2, 5000 iterations), for exports the CLI can't make here.
+func seal(t *testing.T, pw string, plain []byte) []byte {
+	t.Helper()
+	salt := base64.StdEncoding.EncodeToString([]byte("sixteen byte slt"))
+	key, err := pbkdf2.Key(sha256.New, pw, []byte(salt), 5000, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encKey, err := hkdf.Expand(sha256.New, key, "enc", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	macKey, err := hkdf.Expand(sha256.New, key, "mac", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := aes.NewCipher(encKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encString := func(b []byte) string {
+		n := aes.BlockSize - len(b)%aes.BlockSize
+		b = append(bytes.Clone(b), bytes.Repeat([]byte{byte(n)}, n)...)
+		iv := make([]byte, aes.BlockSize)
+		rand.Read(iv)
+		cipher.NewCBCEncrypter(block, iv).CryptBlocks(b, b)
+		h := hmac.New(sha256.New, macKey)
+		h.Write(iv)
+		h.Write(b)
+		enc := base64.StdEncoding.EncodeToString
+		return "2." + enc(iv) + "|" + enc(b) + "|" + enc(h.Sum(nil))
+	}
+	out, err := json.Marshal(map[string]any{
+		"encrypted": true, "passwordProtected": true, "salt": salt, "kdfType": 0, "kdfIterations": 5000,
+		"encKeyValidation_DO_NOT_EDIT": encString([]byte("check")), "data": encString(plain),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// An organization's export is refused, plain or protected, as is the CSV
+// export; a protected export whose data was changed is damaged.
+func TestParse_Refused(t *testing.T) {
+	if _, err := Parse(read(t, "vault.csv"), noPassword); err == nil || !strings.Contains(err.Error(), "CSV export") {
+		t.Errorf("CSV: %v", err)
+	}
+	org := []byte(`{"encrypted":false,"collections":[{"id":"c1","organizationId":"o1","name":"Team"}],"items":[]}`)
+	if _, err := Parse(org, noPassword); !errors.Is(err, errOrganization) {
+		t.Errorf("organization, plain: %v", err)
+	}
+	if _, err := Parse(seal(t, "pw", org), password("pw")); !errors.Is(err, errOrganization) {
+		t.Errorf("organization, protected: %v", err)
+	}
+	if _, err := Parse(seal(t, "pw", read(t, "plain.json")), password("pw")); err != nil {
+		t.Errorf("sealed personal export: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(read(t, "password.json"), &env); err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(env["data"].(string), "|")
+	ct, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct[0] ^= 1
+	parts[1] = base64.StdEncoding.EncodeToString(ct)
+	env["data"] = strings.Join(parts, "|")
+	tampered, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(tampered, password("export-pass-1")); err == nil || !strings.Contains(err.Error(), "damaged") {
+		t.Errorf("tampered data: %v", err)
+	}
+}
+
+// Settings outside what sesh accepts are refused before any work, and
+// before the password is asked for.
 func TestParse_KDFBounds(t *testing.T) {
 	for name, env := range map[string]string{
 		"pbkdf2":  `{"encrypted":true,"passwordProtected":true,"salt":"c2FsdA==","kdfType":0,"kdfIterations":2000000000,"encKeyValidation_DO_NOT_EDIT":"2.a|b|c","data":"2.a|b|c"}`,
 		"argon2":  `{"encrypted":true,"passwordProtected":true,"salt":"c2FsdA==","kdfType":1,"kdfIterations":3,"kdfMemory":1000000,"kdfParallelism":4,"encKeyValidation_DO_NOT_EDIT":"2.a|b|c","data":"2.a|b|c"}`,
 		"unknown": `{"encrypted":true,"passwordProtected":true,"salt":"c2FsdA==","kdfType":7,"kdfIterations":3,"encKeyValidation_DO_NOT_EDIT":"2.a|b|c","data":"2.a|b|c"}`,
 	} {
-		if _, err := Parse([]byte(env), password("x")); err == nil || !strings.Contains(err.Error(), "sesh doesn't") {
+		if _, err := Parse([]byte(env), noPassword); err == nil || !strings.Contains(err.Error(), "sesh doesn't") {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

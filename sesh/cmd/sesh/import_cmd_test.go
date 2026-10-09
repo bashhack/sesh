@@ -9,8 +9,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/makiuchi-d/gozxing"
 	zqr "github.com/makiuchi-d/gozxing/qrcode"
@@ -293,9 +295,10 @@ func TestImport_Bitwarden(t *testing.T) {
 		"Found 10 items and 5 folders in the Bitwarden export.",
 		"Folders, renamed to fit sesh's rules:\n",
 		`"Work Accounts" is "Work-Accounts"`,
-		"  password/GitHub/alice\n",
-		`      field "linked user" not kept`,
-		"      1 old password not kept: sesh keeps no history yet\n",
+		"  Passwords, in Work-Accounts (1):\n    password/GitHub/alice\n",
+		`        field "linked user" not kept`,
+		"  Secure notes, in no folder (1):\n    secure_note/Me\n",
+		"Not kept:\n  items set to ask for the master password again (sesh doesn't ask): 1\n  old passwords (sesh keeps no history yet): 1\n",
 		"Already in the vault (1):\n  totp/GitHub/alice\n",
 		`named "GitHub (2)" in sesh: another item has its name`,
 		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
@@ -340,5 +343,59 @@ func TestImport_Bitwarden(t *testing.T) {
 	}
 	if _, _, err := runImportOut(t, "", false, "--from", "bitwarden", bitwardenFixture("password.json")); err == nil || !strings.Contains(err.Error(), "run sesh import at a terminal") {
 		t.Errorf("protected, no terminal: %v", err)
+	}
+}
+
+// Overwriting with an import takes the secret and code settings from it,
+// adds its tags to yours, and keeps your other settings, folder (when the
+// import has none) and creation time.
+func TestImport_BitwardenOverwrite(t *testing.T) {
+	env := importVault(t)
+	gh := vault.Key{Kind: vault.KindTOTP, Service: "GitHub", Username: "alice"}
+	store := openDoctorVault(t, env)
+	cur, err := store.Lookup(gh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur.Settings.AWSMFADevice = "arn:aws:iam::123456789012:mfa/alice"
+	cur.Tags = []string{"mine"}
+	cur.CreatedAt = time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := store.Save(&cur, []byte("GEZDGNBVGY3TQOJQ")); err != nil {
+		t.Fatal(err)
+	}
+	store.Close() //nolint:errcheck,gosec // reopened below
+	_, stderr, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
+	if err != nil || !strings.Contains(stderr, "Already in the vault, to be replaced (1):\n  totp/GitHub/alice\n") {
+		t.Fatalf("%s\n%v", stderr, err)
+	}
+	store = openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	e, err := store.Lookup(gh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Settings.AWSMFADevice != "arn:aws:iam::123456789012:mfa/alice" || !e.CreatedAt.Equal(cur.CreatedAt) ||
+		!slices.Contains(e.Tags, "mine") || e.Folder != "Work-Accounts" || time.Since(e.UpdatedAt) > time.Minute {
+		t.Errorf("GitHub TOTP = %+v", e)
+	}
+	if secret, err := store.Get(gh); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" || e.Settings.TOTP.Digits != 8 {
+		t.Errorf("secret = %q, %v, code settings %+v: not replaced", secret, err, e.Settings.TOTP)
+	}
+}
+
+// Google Authenticator's import says to delete the files the codes came from.
+func TestImport_GoogleAuthenticatorDeleteReminder(t *testing.T) {
+	importVault(t)
+	file := filepath.Join(t.TempDir(), "codes.txt")
+	code := transferCode(1, 0, 7, []any{"klmnopqrst", "bob", "", 1, 1, 2})
+	if err := os.WriteFile(file, []byte(code+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := runImportOut(t, "", false, "--yes", file)
+	if err != nil || !strings.Contains(out, "The transfer codes in "+file+" hold every secret they carry: delete them now") {
+		t.Errorf("%q, %v", out, err)
+	}
+	if out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "skip", code); err != nil || strings.Contains(out, "delete them") {
+		t.Errorf("a code given as text: %q, %v", out, err)
 	}
 }
