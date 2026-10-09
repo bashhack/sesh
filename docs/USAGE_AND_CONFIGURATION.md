@@ -1198,6 +1198,7 @@ sesh import --from bitwarden bitwarden_export.json
   - passkeys;
   - Bitwarden's "ask for the master password again";
   - bank accounts, driver's licences, and passports, which sesh can't import yet.
+  - notes, a URL, or a field with a character sesh refuses (such as a control character); the rest of the item still comes across, and a plain field that a secret one could hold is made secret instead.
 - **The times** each item was made and last changed come across. An archived item becomes an ordinary entry, which the summary says.
 - **A plain export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
 

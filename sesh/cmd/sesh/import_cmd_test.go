@@ -341,6 +341,9 @@ func TestImport_Bitwarden(t *testing.T) {
 	if _, _, err := runImportOut(t, "", false, bitwardenFixture("account.json")); err == nil || !strings.Contains(err.Error(), "account restricted") {
 		t.Errorf("account restricted: %v", err)
 	}
+	if _, _, err := runImportOut(t, "", false, bitwardenFixture("vault.csv")); err == nil || !strings.Contains(err.Error(), "Bitwarden's CSV export") {
+		t.Errorf("CSV without --from: %v", err)
+	}
 	if _, _, err := runImportOut(t, "", false, "--from", "bitwarden", bitwardenFixture("password.json")); err == nil || !strings.Contains(err.Error(), "run sesh import at a terminal") {
 		t.Errorf("protected, no terminal: %v", err)
 	}
@@ -363,9 +366,15 @@ func TestImport_BitwardenOverwrite(t *testing.T) {
 	if err := store.Save(&cur, []byte("GEZDGNBVGY3TQOJQ")); err != nil {
 		t.Fatal(err)
 	}
+	// The import's Router has a URL but no notes or fields: yours stay.
+	router := vault.Key{Kind: vault.KindPassword, Service: "Router"}
+	mine := vault.Details{URL: "http://old.example", Notes: []byte("recovery codes: 1111"), Fields: []vault.Field{{Name: "pin", Value: []byte("4321"), Secret: true}}}
+	if err := store.SaveWithDetails(&vault.Entry{Key: router}, []byte("old-pw"), &mine); err != nil {
+		t.Fatal(err)
+	}
 	store.Close() //nolint:errcheck,gosec // reopened below
 	_, stderr, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
-	if err != nil || !strings.Contains(stderr, "Already in the vault, to be replaced (1):\n  totp/GitHub/alice\n") {
+	if err != nil || !strings.Contains(stderr, "Already in the vault, to be replaced (2):\n") {
 		t.Fatalf("%s\n%v", stderr, err)
 	}
 	store = openDoctorVault(t, env)
@@ -380,6 +389,10 @@ func TestImport_BitwardenOverwrite(t *testing.T) {
 	}
 	if secret, err := store.Get(gh); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" || e.Settings.TOTP.Digits != 8 {
 		t.Errorf("secret = %q, %v, code settings %+v: not replaced", secret, err, e.Settings.TOTP)
+	}
+	d, err := store.Details(router, "all")
+	if err != nil || d.URL != "192.168.1.1" || string(d.Notes) != "recovery codes: 1111" || len(d.Fields) != 1 || string(d.Fields[0].Value) != "4321" {
+		t.Errorf("Router details = %+v, %v", d, err)
 	}
 }
 

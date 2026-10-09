@@ -191,13 +191,19 @@ func runImport(app *App, args []string) error {
 		}
 		return nouns(n, "entry", "entries")
 	}
+	// Running again after a failure redoes nothing harmful: entries
+	// already imported clash, and are skipped or replaced the same way.
+	again := "skip"
+	if *onConflict == "overwrite" {
+		again = "overwrite"
+	}
 	done := 0
 	for _, e := range write {
 		if err := writeImported(store, e, slices.Contains(clashes, e)); err != nil {
 			if done > 0 {
 				store.LogImport(fmt.Sprintf("%s from %s, then stopped", what(done), f.source))
 			}
-			return fmt.Errorf("imported %s, then %s failed: %w; to import the rest, run this again with --on-conflict skip", nouns(done, "entry", "entries"), e.Key, err)
+			return fmt.Errorf("imported %s, then %s failed: %w; to import the rest, run this again with --on-conflict %s", nouns(done, "entry", "entries"), e.Key, err, again)
 		}
 		done++
 	}
@@ -229,10 +235,11 @@ type found struct {
 }
 
 // detectSource is the app the files come from: Bitwarden for one of its
-// JSON exports, Google Authenticator otherwise.
+// exports (its CSV one, to be refused as such), Google Authenticator
+// otherwise.
 func detectSource(args []string) string {
 	for _, a := range args {
-		if b, err := os.ReadFile(a); err == nil && bitwarden.IsExport(b) { //nolint:gosec // the file the user named
+		if b, err := os.ReadFile(a); err == nil && (bitwarden.IsExport(b) || bitwarden.IsCSV(b)) { //nolint:gosec // the file the user named
 			return "bitwarden"
 		}
 	}
@@ -240,9 +247,9 @@ func detectSource(args []string) string {
 }
 
 // writeImported stores e. One replacing an entry you have takes its secret
-// and code settings from the import, and its folder, details (URL, notes,
-// fields) only where the import has them; tags are both sets, and the
-// entry's other settings and creation time are kept.
+// and code settings from the import, and its folder, URL, notes and fields
+// each only where the import has it; tags are both sets, and the entry's
+// other settings and creation time are kept.
 func writeImported(store *database.Store, e *importer.Entry, exists bool) error {
 	ent := vault.Entry{Key: e.Key, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.Created, UpdatedAt: e.Updated}
 	if !exists {
@@ -263,7 +270,24 @@ func writeImported(store *database.Store, e *importer.Entry, exists bool) error 
 	if e.Details.IsZero() {
 		return store.Save(&ent, e.Secret)
 	}
-	return store.SaveWithDetails(&ent, e.Secret, &e.Details)
+	d, err := store.Details(e.Key, "import")
+	if err != nil {
+		return err
+	}
+	// What's kept of yours is wiped once written; the import's own parts
+	// are wiped with the rest of it.
+	defer d.Zero()
+	merged := d
+	if e.Details.URL != "" {
+		merged.URL = e.Details.URL
+	}
+	if len(e.Details.Notes) > 0 {
+		merged.Notes = e.Details.Notes
+	}
+	if len(e.Details.Fields) > 0 {
+		merged.Fields = e.Details.Fields
+	}
+	return store.SaveWithDetails(&ent, e.Secret, &merged)
 }
 
 // importSummary is what an import found, as sesh shows it before asking:

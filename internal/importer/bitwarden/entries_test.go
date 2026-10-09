@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/importer"
+	"github.com/bashhack/sesh/internal/totp"
 )
 
 // The genuine export's items become these entries.
@@ -149,16 +150,29 @@ func TestEntries_SameNameItems(t *testing.T) {
 // A TOTP key is read in any case and with spaces or dashes; one sesh
 // can't use is skipped with a reason that never holds the key.
 func TestTOTPKey(t *testing.T) {
-	for in, want := range map[string]string{
-		"OTPAUTH://TOTP/Upper:me?secret=GEZDGNBVGY3TQOJQ": "GEZDGNBVGY3TQOJQ",
-		"jbsw y3dp-ehpk 3pxp":                             "JBSWY3DPEHPK3PXP",
+	// Bitwarden reads a key in any case, with or without a label, and a
+	// setting by its last value (bitwarden-vault totp.rs).
+	for in, want := range map[string]struct {
+		key    string
+		params totp.Params
+	}{
+		"OTPAUTH://TOTP/Upper:me?secret=GEZDGNBVGY3TQOJQ":                     {"GEZDGNBVGY3TQOJQ", totp.Params{Issuer: "Upper"}},
+		"jbsw y3dp-ehpk 3pxp":                                                 {"JBSWY3DPEHPK3PXP", totp.Params{}},
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQ":                              {"GEZDGNBVGY3TQOJQ", totp.Params{}},
+		"otpauth://totp/a%zz?Secret=GEZDGNBVGY3TQOJQ&DIGITS=8":                {"GEZDGNBVGY3TQOJQ", totp.Params{Digits: 8}},
+		"otpauth://totp/x?secret=GEZDGNBVGY3TQOJQ&period=abc&digits=x":        {"GEZDGNBVGY3TQOJQ", totp.Params{}},
+		"otpauth://totp/x?secret=AAAA&secret=GEZDGNBVGY3TQOJQ&issuer=Corp":    {"GEZDGNBVGY3TQOJQ", totp.Params{Issuer: "Corp"}},
+		"otpauth://totp/x?secret=GEZDGNBVGY3TQOJQ&algorithm=sha512&period=60": {"GEZDGNBVGY3TQOJQ", totp.Params{Algorithm: "SHA512", Period: 60}},
 	} {
-		if got, _, why := totpKey(in); got != want || why != "" {
-			t.Errorf("totpKey(%q) = %q, %q", in, got, why)
+		if got, params, why := totpKey(in); got != want.key || params != want.params || why != "" {
+			t.Errorf("totpKey(%q) = %q, %+v, %q", in, got, params, why)
 		}
 	}
 	for in, want := range map[string]string{
-		"otpauth://totp/a%zz?secret=GEZDGNBVGY3TQOJQSECRET":            "it doesn't read as an otpauth:// address",
+		"otpauth://other/a?secret=GEZDGNBVGY3TQOJQSECRET":              "it doesn't read as an otpauth:// address",
+		"otpauth://totp/a?issuer=GEZDGNBVGY3TQOJQSECRET":               "it has no key",
+		"otpauth://totp/a?secret=GEZDGNBVGY3TQOJQSECRET&digits=5":      "5-digit codes, which sesh doesn't make",
+		"otpauth://totp/a?secret=GEZDGNBVGY3TQOJQSECRET&period=100000": "a new code every 100000 seconds",
 		"otpauth://hotp/a?secret=GEZDGNBVGY3TQOJQSECRET&counter=1":     "a counter-based (HOTP) code",
 		"otpauth://totp/a?secret=GEZDGNBVGY3TQOJQSECRET&algorithm=MD5": "it uses MD5",
 		"GEZD!!GNBVGY3TQOJQSECRET":                                     "the key isn't a valid base32 key",
@@ -199,5 +213,40 @@ func TestEntries_Archived(t *testing.T) {
 	exp := Export{Items: []Item{{Type: TypeSecureNote, Name: "old", Notes: "n", ArchivedDate: &now}}}
 	if e := Entries(&exp)[0]; !strings.Contains(strings.Join(e.Changes, ";"), "archived in Bitwarden") {
 		t.Errorf("changes = %q", e.Changes)
+	}
+}
+
+// A detail sesh can't hold is left out, or a field made secret, and said;
+// the password and the rest of the details are still imported.
+func TestEntries_UnfitDetails(t *testing.T) {
+	it := Item{Type: TypeLogin, Name: "site", Notes: "line1\rline2",
+		Fields: []Field{
+			{Name: "hebrew", Value: "שלום\u200f", Type: FieldText},
+			{Name: "escape", Value: "a\x1bb", Type: FieldText},
+			{Name: "ok", Value: "fine", Type: FieldText},
+		},
+		Login: &Login{Password: "p", URIs: []URI{{URI: "a.example\u200e"}, {URI: "b.example\u200e"}, {URI: "c.example"}}}}
+	card := Item{Type: TypeCard, Name: "card", Card: &Card{Number: "4242"}, Fields: []Field{{Name: "nul", Value: "a\x00b", Type: FieldHidden}}}
+	exp := Export{Items: []Item{it, card}}
+	got := Entries(&exp)
+	e, c := got[0], got[1]
+	changes := strings.Join(e.Changes, "\n")
+	if e.Skip != "" || string(e.Secret) != "p" {
+		t.Fatalf("login skipped: %q", e.Skip)
+	}
+	if e.Details.Notes != nil || e.Details.URL != "" || !strings.Contains(changes, "notes not kept: ") || !strings.Contains(changes, "URL not kept: ") {
+		t.Errorf("notes %q, URL %q, changes:\n%s", e.Details.Notes, e.Details.URL, changes)
+	}
+	var names []string
+	for _, f := range e.Details.Fields {
+		names = append(names, fmt.Sprintf("%s:%v", f.Name, f.Secret))
+	}
+	if strings.Join(names, " ") != "hebrew:true ok:false url-2:true url-3:false" ||
+		!strings.Contains(changes, `field "escape" not kept: the field "escape" contains a control character, "\x1b"`) ||
+		!strings.Contains(changes, `field "hebrew" is secret in sesh`) {
+		t.Errorf("fields %v, changes:\n%s", names, changes)
+	}
+	if c.Skip != "" || len(c.Details.Fields) != 1 || !strings.Contains(strings.Join(c.Changes, "\n"), `field "nul" not kept: `) {
+		t.Errorf("card: skip %q, fields %+v, changes %q", c.Skip, c.Details.Fields, c.Changes)
 	}
 }

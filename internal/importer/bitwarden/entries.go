@@ -2,12 +2,13 @@ package bitwarden
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/bashhack/sesh/internal/importer"
-	"github.com/bashhack/sesh/internal/qrcode"
+	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -233,15 +234,15 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 	}
 	var fs fieldSet
 	fs.addCustom(it.Fields)
-	url := ""
+	firstURL := ""
 	for i, u := range l.URIs {
 		if i == 0 {
-			url = u.URI
+			firstURL = u.URI
 			continue
 		}
 		fs.add(fmt.Sprintf("url-%d", i+1), u.URI, false)
 	}
-	details := vault.Details{URL: url, Fields: fs.fields}
+	details := vault.Details{URL: firstURL, Fields: fs.fields}
 	if it.Notes != "" {
 		details.Notes = []byte(it.Notes)
 	}
@@ -292,22 +293,24 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 	}
 	base.Changes = append(base.Changes, "a secure note in sesh: the login has no password or TOTP key")
 	e := noteEntry(base, service, note, &nfs)
-	e.Details.URL = url
+	e.Details.URL = firstURL
 	return []*importer.Entry{checked(e)}
 }
 
-// totpKey reads a login's TOTP key: an otpauth://totp/ address (in any
-// case), a steam:// key, or a bare base32 key, whose spaces and dashes
-// are left out. Bitwarden takes the same three forms (bitwarden-vault
-// totp.rs); sesh refuses what it can't make codes for. A reason never
-// repeats the key.
+// totpKey reads a login's TOTP key as Bitwarden does (bitwarden-vault
+// totp.rs): an otpauth:// address, read in any case, with or without a
+// label, each setting by its last value and one that isn't a number left
+// at its default; a steam:// key; or a bare base32 key, whose spaces and
+// dashes are left out. sesh refuses what it can't make codes for. A
+// reason never repeats the key.
 func totpKey(s string) (secret string, params totp.Params, why string) {
 	s = strings.TrimSpace(s)
 	switch lower := strings.ToLower(s); {
 	case strings.HasPrefix(lower, "steam://"):
 		return "", params, "a Steam code, which sesh doesn't make"
 	case strings.HasPrefix(lower, "otpauth://"):
-		host, path, _ := strings.Cut(s[len("otpauth://"):], "/")
+		rest, query, _ := strings.Cut(s[len("otpauth://"):], "?")
+		host, label, _ := strings.Cut(rest, "/")
 		switch strings.ToLower(host) {
 		case "totp":
 		case "hotp":
@@ -315,25 +318,43 @@ func totpKey(s string) (secret string, params totp.Params, why string) {
 		default:
 			return "", params, "it doesn't read as an otpauth:// address"
 		}
-		info, err := qrcode.ExtractTOTPFullInfo("otpauth://totp/" + path)
-		if err != nil {
-			return "", params, "it doesn't read as an otpauth:// address"
+		// ParseQuery keeps what reads when some of it doesn't.
+		values, _ := url.ParseQuery(query) //nolint:errcheck // see above
+		q := map[string]string{}
+		for k, v := range values {
+			q[strings.ToLower(k)] = v[len(v)-1]
 		}
-		switch alg := strings.ToUpper(info.Algorithm); alg {
+		secret = q["secret"]
+		if secret == "" {
+			return "", params, "it has no key"
+		}
+		switch alg := strings.ToUpper(q["algorithm"]); alg {
 		case "", "SHA1":
 		case "SHA256", "SHA512":
 			params.Algorithm = alg
 		default:
 			return "", params, "it uses " + alg + ", which sesh doesn't support"
 		}
-		if info.Digits != 0 && info.Digits != 6 {
-			params.Digits = info.Digits
+		if n, err := strconv.ParseUint(q["digits"], 10, 32); err == nil && n != 6 {
+			if n < 6 || n > 8 {
+				return "", params, fmt.Sprintf("it makes %d-digit codes, which sesh doesn't make", min(n, 10))
+			}
+			params.Digits = int(n)
 		}
-		if info.Period != 0 && info.Period != 30 {
-			params.Period = info.Period
+		if n, err := strconv.ParseUint(q["period"], 10, 32); err == nil && n != 30 {
+			if n > totp.MaxTOTPPeriodSeconds {
+				return "", params, fmt.Sprintf("it makes a new code every %d seconds, longer than sesh allows", n)
+			}
+			params.Period = max(int(n), 1)
 		}
-		params.Issuer = info.Issuer
-		secret = info.Secret
+		params.Issuer = q["issuer"]
+		if params.Issuer == "" {
+			if l, err := url.PathUnescape(label); err == nil {
+				if issuer, _, ok := strings.Cut(l, ":"); ok {
+					params.Issuer = strings.TrimSpace(issuer)
+				}
+			}
+		}
 	default:
 		secret = strings.NewReplacer(" ", "", "-", "").Replace(s)
 	}
@@ -357,11 +378,13 @@ func noteEntry(base *importer.Entry, service, note string, fs *fieldSet) *import
 }
 
 // checked marks e skipped when its name, folder, tags or details break
-// sesh's rules, and returns it.
+// sesh's rules, and returns it. A detail sesh can't hold is left out
+// first (see fitDetails), so it doesn't cost the entry.
 func checked(e *importer.Entry) *importer.Entry {
 	if e.Skip != "" {
 		return e
 	}
+	fitDetails(e)
 	err := e.Key.Validate()
 	if err == nil {
 		err = vault.CheckFolder(e.Folder)
@@ -378,6 +401,43 @@ func checked(e *importer.Entry) *importer.Entry {
 		e.Skip = err.Error()
 	}
 	return e
+}
+
+// fitDetails leaves out of e's details each part sesh can't hold, saying
+// why: notes or a URL with a character it refuses, or a field's value. A
+// plain field that only a secret one can hold is made secret instead.
+func fitDetails(e *importer.Entry) {
+	d := &e.Details
+	if len(d.Notes) > 0 {
+		if err := (&vault.Details{Notes: d.Notes}).Check(vault.KindPassword); err != nil {
+			secure.SecureZeroBytes(d.Notes)
+			d.Notes = nil
+			e.Changes = append(e.Changes, "notes not kept: "+err.Error())
+		}
+	}
+	if d.URL != "" {
+		if err := (&vault.Details{URL: d.URL}).Check(e.Key.Kind); err != nil {
+			d.URL = ""
+			e.Changes = append(e.Changes, "URL not kept: "+err.Error())
+		}
+	}
+	kept := d.Fields[:0]
+	for _, f := range d.Fields {
+		err := (&vault.Details{Fields: []vault.Field{f}}).Check(e.Key.Kind)
+		if err != nil && !f.Secret {
+			f.Secret = true
+			if err = (&vault.Details{Fields: []vault.Field{f}}).Check(e.Key.Kind); err == nil {
+				e.Changes = append(e.Changes, fmt.Sprintf("field %q is secret in sesh: a plain field can't hold one of its characters", f.Name))
+			}
+		}
+		if err != nil {
+			e.Changes = append(e.Changes, fmt.Sprintf("field %q not kept: %s", f.Name, err))
+			secure.SecureZeroBytes(f.Value)
+			continue
+		}
+		kept = append(kept, f)
+	}
+	d.Fields = kept
 }
 
 // fieldSet gathers an entry's fields as sesh holds them: names fitted and
@@ -411,7 +471,7 @@ func (s *fieldSet) addCustom(in []Field) {
 			continue
 		}
 		secret := f.Type == FieldHidden
-		if !secret && strings.ContainsFunc(f.Value, unicode.IsControl) {
+		if !secret && strings.ContainsAny(f.Value, "\n\r\t") {
 			secret = true
 			s.changes = append(s.changes, fmt.Sprintf("field %q is secret in sesh: it has a line break or tab", f.Name))
 		}
