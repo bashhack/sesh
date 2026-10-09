@@ -21,7 +21,7 @@ func detailsAAD(k vault.Key) []byte {
 }
 
 // Details implements vault.Store.
-func (s *Store) Details(k vault.Key) (vault.Details, error) {
+func (s *Store) Details(k vault.Key, reading string) (vault.Details, error) {
 	var url, details string
 	var sealed, salt []byte
 	err := s.db.QueryRow(`SELECT url, details, sealed_details, details_salt FROM entries WHERE kind = ? AND service = ? AND username = ?`,
@@ -52,7 +52,7 @@ func (s *Store) Details(k vault.Key) (vault.Details, error) {
 		return vault.Details{}, err
 	}
 	if sealed != nil {
-		s.audit("access", k.String(), "Details")
+		s.audit("access", k.String(), "Details: "+reading)
 	}
 	return d, nil
 }

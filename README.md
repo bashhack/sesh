@@ -38,7 +38,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key (nothing in the Keychain); the password always works as a fallback
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from
 - **Encrypted Export** — Portable backups protected by a password, safe to transfer between machines (`--format encrypted`)
-- **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes, and find them by any part of a service or user name
+- **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes, each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
 - **Shell Completion** — Tab completion for commands, flags, and their values in bash, zsh, and fish (`sesh completion zsh`)
 - **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically. Supports non-standard configs (SHA-256/SHA-512, 8 digits, custom periods) extracted from QR codes
@@ -174,6 +174,12 @@ sesh -service password -action totp-store -service-name github -username alice
 sesh -service password -action totp-generate -service-name github -username alice
 sesh -service password -action totp-generate -service-name github -username alice -clip   # copy the code
 
+# A URL, notes, and custom fields (plain, or secret and encrypted)
+sesh edit password/github/alice --url https://github.com/login --field recovery-email=alice@example.com --secret-field pin
+sesh edit password/github/alice --notes --editor
+sesh show password/github/alice            # secrets hidden; --reveal shows them
+sesh -service password -action get -service-name github -username alice -field pin -clip
+
 # Search across all entries
 sesh -service password -action search -query github
 
@@ -261,6 +267,11 @@ When you run `sesh -service aws`, you enter a secure subshell with:
 -query <text>                   # Search query (for -action search)
 -format <format>                # Output format: table (default), json
 -show                           # Display password instead of clipboard hint
+-field <name>                   # With get: a field, url, or notes instead of the secret
+                                # With store: set a field, name=value (repeat for more)
+-secret-field <name>            # With store: set a secret field, typed hidden
+-url <url>                      # With store: the entry's web address
+-notes [-editor]                # With store: notes, from stdin or $EDITOR
 -file <path>                    # File path for export/import (default: stdout/stdin)
 -on-conflict <strategy>         # Import conflict: skip, overwrite (default: error)
 -force                          # Skip confirmation prompts

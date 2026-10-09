@@ -168,7 +168,7 @@ func TestStore_AfterAnotherRekey(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, f := range map[string]func() error{
-		"details":            func() error { _, err := other.Details(k); return err },
+		"details":            func() error { _, err := other.Details(k, "all"); return err },
 		"set details":        func() error { return other.SetDetails(k, &d) },
 		"save with details":  func() error { return other.SaveWithDetails(&vault.Entry{Key: k}, []byte("v"), &d) },
 		"put":                func() error { return other.Put(k, []byte("v")) },

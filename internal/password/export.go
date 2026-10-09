@@ -47,7 +47,7 @@ func (m *Manager) exportDetails(e *vault.Entry, ee *ExportEntry) error {
 	d := vault.Details{URL: e.URL, Fields: e.Fields}
 	if e.HasNotes || slices.ContainsFunc(e.Fields, func(f vault.Field) bool { return f.Secret }) {
 		var err error
-		if d, err = m.store.Details(e.Key); err != nil {
+		if d, err = m.store.Details(e.Key, "all, to export"); err != nil {
 			return fmt.Errorf("failed to decrypt the details of %s: %w", e.Key, err)
 		}
 		defer d.Zero()

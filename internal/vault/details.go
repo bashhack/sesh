@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -62,9 +63,9 @@ func (d *Details) Zero() {
 	}
 }
 
-// Field returns the field named name, if d has one.
+// Field returns the field named name, in any case, if d has one.
 func (d *Details) Field(name string) (Field, bool) {
-	i := slices.IndexFunc(d.Fields, func(f Field) bool { return f.Name == name })
+	i := slices.IndexFunc(d.Fields, func(f Field) bool { return strings.EqualFold(f.Name, name) })
 	if i < 0 {
 		return Field{}, false
 	}
@@ -75,8 +76,9 @@ func (d *Details) Field(name string) (Field, bool) {
 //   - notes on a secure note, whose secret is the note;
 //   - a URL or plain value that isn't one line of valid text, or a URL
 //     longer than MaxURLLength;
-//   - notes or a secret value that isn't valid text (they may hold
-//     several lines);
+//   - notes or a secret value that isn't valid text, or has a control
+//     character other than a tab or line break (they may hold several
+//     lines);
 //   - a field name that breaks the tag rules, is reserved, is used twice
 //     (in any case), or is longer than MaxFieldNameLength;
 //   - an empty value, more than MaxFields fields, or notes and values
@@ -85,8 +87,8 @@ func (d *Details) Check(kind Kind) error {
 	if kind == KindNote && len(d.Notes) > 0 {
 		return errors.New("a secure note can't have notes: its secret is the note")
 	}
-	if !utf8.Valid(d.Notes) {
-		return errors.New("the notes aren't valid text")
+	if err := checkText("notes", d.Notes); err != nil {
+		return err
 	}
 	if err := checkLine("URL", d.URL); err != nil {
 		return err
@@ -114,8 +116,8 @@ func (d *Details) Check(kind Kind) error {
 			return fmt.Errorf("the field %q has no value", f.Name)
 		}
 		if f.Secret {
-			if !utf8.Valid(f.Value) {
-				return fmt.Errorf("the field %q isn't valid text", f.Name)
+			if err := checkText(fmt.Sprintf("field %q", f.Name), f.Value); err != nil {
+				return err
 			}
 		} else if err := checkLine(fmt.Sprintf("field %q", f.Name), string(f.Value)); err != nil {
 			return err
@@ -140,6 +142,32 @@ func CheckFieldName(name string) error {
 	}
 	if slices.Contains(ReservedFieldNames, strings.ToLower(name)) {
 		return fmt.Errorf("the field name %q is reserved for the entry's own %s", name, strings.ToLower(name))
+	}
+	return nil
+}
+
+// checkText refuses a value, called what in errors, that isn't valid text
+// or has a control character other than a tab or a line break (\n, or
+// \r\n), which a terminal could take as a command, or use to show one
+// line over another, when it's shown. The error names the character and
+// its line.
+func checkText(what string, v []byte) error {
+	isnt, has := "isn't", "contains"
+	if what == "notes" {
+		isnt, has = "aren't", "contain"
+	}
+	if !utf8.Valid(v) {
+		return fmt.Errorf("the %s %s valid text", what, isnt)
+	}
+	line := 1
+	for i, r := range string(v) {
+		switch {
+		case r == '\n':
+			line++
+		case r == '\t', r == '\r' && i+1 < len(v) && v[i+1] == '\n':
+		case unicode.IsControl(r):
+			return fmt.Errorf("the %s %s a control character, %q on line %d", what, has, string(r), line)
+		}
 	}
 	return nil
 }
@@ -358,4 +386,112 @@ func parseSealed(b []byte) (notes []byte, values map[string][]byte, err error) {
 		return fail()
 	}
 	return notes, values, nil
+}
+
+// DetailsChange is a change to an entry's details: what it sets is
+// changed, and the rest kept.
+type DetailsChange struct {
+	// URL, when not nil, is the new URL; "" removes it.
+	URL *string
+	// Notes are the new notes when SetNotes; none removes them. The caller
+	// zeroes them.
+	Notes []byte
+	// Set are fields to add, or to put in place of the field of that name,
+	// in any case; Remove names fields to take out, in any case.
+	Set    []Field
+	Remove []string
+	// NotesBase, when HasNotesBase, are the notes the new ones were written
+	// from, as in an editor: the change is refused if the entry's notes
+	// are no longer those. The caller zeroes them.
+	NotesBase    []byte
+	SetNotes     bool
+	HasNotesBase bool
+}
+
+// ErrNotesChanged is notes changed by another command while new ones were
+// being written from them.
+var ErrNotesChanged = errors.New("the notes were changed by another sesh command meanwhile; run this again")
+
+// IsZero reports whether c changes nothing.
+func (c *DetailsChange) IsZero() bool {
+	return c.URL == nil && !c.SetNotes && len(c.Set) == 0 && len(c.Remove) == 0
+}
+
+// Apply makes c's change to d, and says what changed, as the audit log
+// records it. A field to remove that d doesn't have is an error.
+func (c *DetailsChange) Apply(d *Details) (string, error) {
+	if c.HasNotesBase && !bytes.Equal(c.NotesBase, d.Notes) {
+		return "", ErrNotesChanged
+	}
+	names := make([]string, len(d.Fields))
+	for i, f := range d.Fields {
+		names[i] = f.Name
+	}
+	var what []string
+	if c.URL != nil && *c.URL != d.URL {
+		what = append(what, changeWord("URL", d.URL != "", *c.URL != ""))
+		d.URL = *c.URL
+	}
+	if c.SetNotes && !bytes.Equal(c.Notes, d.Notes) {
+		what = append(what, changeWord("notes", len(d.Notes) > 0, len(c.Notes) > 0))
+		secure.SecureZeroBytes(d.Notes)
+		d.Notes = nil
+		if len(c.Notes) > 0 {
+			d.Notes = bytes.Clone(c.Notes)
+		}
+	}
+	for _, f := range c.Set {
+		f.Value = bytes.Clone(f.Value)
+		i := slices.IndexFunc(d.Fields, func(g Field) bool { return strings.EqualFold(g.Name, f.Name) })
+		if i < 0 {
+			d.Fields = append(d.Fields, f)
+			what = append(what, "field "+f.Name+" added")
+			continue
+		}
+		old := d.Fields[i]
+		if old.Secret && !f.Secret {
+			return "", fmt.Errorf("%s is a secret field: set it with --secret-field %s, or remove it first to make it plain", old.Name, old.Name)
+		}
+		if old.Name == f.Name && old.Secret == f.Secret && bytes.Equal(old.Value, f.Value) {
+			secure.SecureZeroBytes(f.Value)
+			continue
+		}
+		if old.Secret {
+			secure.SecureZeroBytes(old.Value)
+		}
+		d.Fields[i] = f
+		what = append(what, "field "+f.Name+" changed")
+	}
+	for _, name := range c.Remove {
+		i := slices.IndexFunc(d.Fields, func(g Field) bool { return strings.EqualFold(g.Name, name) })
+		if i < 0 {
+			return "", NoFieldToRemove(name, names)
+		}
+		what = append(what, "field "+d.Fields[i].Name+" removed")
+		if d.Fields[i].Secret {
+			secure.SecureZeroBytes(d.Fields[i].Value)
+		}
+		d.Fields = slices.Delete(d.Fields, i, i+1)
+	}
+	return strings.Join(what, ", "), nil
+}
+
+// NoFieldToRemove is the error for removing a field named name from an
+// entry whose fields are names.
+func NoFieldToRemove(name string, names []string) error {
+	if len(names) == 0 {
+		return fmt.Errorf("there's no field %q to remove; it has no fields", name)
+	}
+	return fmt.Errorf("there's no field %q to remove; its fields: %s", name, strings.Join(names, ", "))
+}
+
+// changeWord says what happened to a part: added, changed, or removed.
+func changeWord(part string, had, has bool) string {
+	switch {
+	case !had:
+		return part + " added"
+	case !has:
+		return part + " removed"
+	}
+	return part + " changed"
 }

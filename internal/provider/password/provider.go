@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"golang.org/x/term"
@@ -42,7 +43,9 @@ type Provider struct {
 	onConflict string // import conflict strategy: "skip", "overwrite"
 	format     string // output format: "table", "json", "csv"
 	service    string
+	field      string // get: the field to read instead of the secret, from --field
 	filing     provider.FilingFlags
+	details    provider.DetailsFlags
 	pwLength   int // password generation length
 	limit      int
 	offset     int
@@ -114,6 +117,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.IntVar(&p.limit, "limit", 0, "Limit number of results (0 = no limit)")
 	fs.IntVar(&p.offset, "offset", 0, "Skip first N results")
 	p.filing.Register(fs, filingNarrows)
+	p.details.Register(fs)
 	return nil
 }
 
@@ -191,7 +195,7 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 		{Name: "length", Type: "int", Description: "Generated password length (default 24)"},
 		{Name: "limit", Type: "int", Description: "Limit number of results (0 = no limit)"},
 		{Name: "offset", Type: "int", Description: "Skip first N results"},
-	}, p.filing.FlagInfo(filingNarrows)...)
+	}, append(p.filing.FlagInfo(filingNarrows), p.details.FlagInfo()...)...)
 }
 
 func (p *Provider) ValidateRequest() error {
@@ -245,22 +249,58 @@ func (p *Provider) ValidateRequest() error {
 	default:
 		return fmt.Errorf("unknown action: %q (use store, get, search, generate, export, import, totp-store, totp-generate)", p.action)
 	}
+	if err := p.checkField(); err != nil {
+		return err
+	}
 	return p.CheckArgs()
+}
+
+// checkField reads --field: with get (or --clip), the name of the one
+// field to read instead of the secret; with store, fields to set, as the
+// other details flags do. Other actions take neither.
+func (p *Provider) checkField() error {
+	fields := p.details.Fields()
+	switch {
+	case p.action == "store":
+		return nil
+	case p.details.GivenBesidesField() || (len(fields) > 0 && p.action != "get" && p.action != ""):
+		return errors.New("--url, --notes and the field flags work with --action store, or with sesh edit; --field also works with --action get, to read one field")
+	case len(fields) > 1:
+		return errors.New("get reads one field: give --field once")
+	case len(fields) == 1:
+		p.field = fields[0]
+	}
+	if p.field == "" {
+		return nil
+	}
+	if slices.Contains(vault.ReservedFieldNames, strings.ToLower(p.field)) {
+		return nil
+	}
+	return vault.CheckFieldName(p.field)
 }
 
 // CheckArgs refuses arguments that are wrong without looking at the vault
 // (a name no entry can have, a negative --limit or --offset), so the CLI
 // can stop before opening it.
 func (p *Provider) CheckArgs() error {
-	if err := p.CheckListArgs(); err != nil {
+	if err := p.checkListNumbers(); err != nil {
 		return err
 	}
 	return p.checkName()
 }
 
-// CheckListArgs refuses a negative --limit or --offset, or an unknown
-// --sort, the arguments --list and --delete use.
+// CheckListArgs refuses what --list and --delete can't use: the details
+// flags, or what checkListNumbers refuses.
 func (p *Provider) CheckListArgs() error {
+	if p.details.Given() {
+		return errors.New("--field and the other details flags don't go with --list or --delete; --field reads a field with --action get or --clip")
+	}
+	return p.checkListNumbers()
+}
+
+// checkListNumbers refuses a negative --limit or --offset, or an unknown
+// --sort.
+func (p *Provider) checkListNumbers() error {
 	switch password.SortField(p.sortBy) {
 	case "", password.SortByService, password.SortByCreatedAt, password.SortByUpdatedAt, password.SortByFolder:
 	default:
@@ -361,6 +401,18 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 	case "totp-generate":
 		return p.generateTOTP(mgr)
 	}
+	if p.field != "" {
+		value, name, err := p.fieldValue()
+		if err != nil {
+			return provider.Credentials{}, err
+		}
+		defer secure.SecureZeroBytes(value)
+		return provider.Credentials{
+			Provider:             p.Name(),
+			CopyValue:            string(value),
+			ClipboardDescription: fmt.Sprintf("field %s of %s", name, p.desc()),
+		}, nil
+	}
 	et := p.effectiveEntryType()
 
 	secretBytes, err := mgr.GetPassword(p.service, p.username, et)
@@ -369,15 +421,117 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 	}
 	defer secure.SecureZeroBytes(secretBytes)
 
-	desc := p.service
-	if p.username != "" {
-		desc = fmt.Sprintf("%s (%s)", p.service, p.username)
-	}
-
 	return provider.Credentials{
 		Provider:             p.Name(),
 		CopyValue:            string(secretBytes),
-		ClipboardDescription: fmt.Sprintf("%s for %s", et, desc),
+		ClipboardDescription: fmt.Sprintf("%s for %s", et, p.desc()),
+	}, nil
+}
+
+// desc names the entry for a message: "github", or "github (alice)".
+func (p *Provider) desc() string {
+	if p.username == "" {
+		return p.service
+	}
+	return fmt.Sprintf("%s (%s)", p.service, p.username)
+}
+
+// fieldValue reads --field of the entry: the secret for password or
+// secret, its URL, its notes, or a custom field, found in any case. It
+// returns the value, which the caller zeroes, and the name it's stored
+// under.
+func (p *Provider) fieldValue() ([]byte, string, error) {
+	k := vault.Key{Kind: p.effectiveEntryType(), Service: p.service, Username: p.username}
+	name := strings.ToLower(p.field)
+	if name == "password" || name == "secret" {
+		v, err := password.NewManager(p.store).GetPassword(p.service, p.username, k.Kind)
+		return v, name, err
+	}
+	e, err := p.store.Lookup(k)
+	if err != nil {
+		if errors.Is(err, vault.ErrNotFound) {
+			if h := password.CaseHint(p.store, k); h != "" {
+				err = fmt.Errorf("%w; %s", err, h)
+			}
+		}
+		return nil, "", err
+	}
+	switch name {
+	case "url":
+		if e.URL == "" {
+			return nil, "", fmt.Errorf("%s has no URL; add one with: sesh edit %s --url <url>", k, shell.Quote(k.String()))
+		}
+		return []byte(e.URL), name, nil
+	case "notes":
+		if k.Kind == vault.KindNote {
+			return nil, "", fmt.Errorf("%s is a secure note: its note is its secret, which --field secret reads", k)
+		}
+		if !e.HasNotes {
+			return nil, "", fmt.Errorf("%s has no notes; add them with: sesh edit %s --notes", k, shell.Quote(k.String()))
+		}
+		d, err := p.store.Details(k, "notes")
+		if err != nil {
+			return nil, "", err
+		}
+		defer d.Zero()
+		return bytes.Clone(d.Notes), name, nil
+	}
+	i := slices.IndexFunc(e.Fields, func(f vault.Field) bool { return strings.EqualFold(f.Name, p.field) })
+	if i < 0 {
+		if len(e.Fields) == 0 {
+			return nil, "", fmt.Errorf("%s has no field %q; it has no fields", k, p.field)
+		}
+		names := make([]string, len(e.Fields))
+		for j, f := range e.Fields {
+			names[j] = f.Name
+		}
+		return nil, "", fmt.Errorf("%s has no field %q; its fields: %s", k, p.field, strings.Join(names, ", "))
+	}
+	stored := e.Fields[i].Name
+	if !e.Fields[i].Secret {
+		return e.Fields[i].Value, stored, nil
+	}
+	d, err := p.store.Details(k, "field "+stored)
+	if err != nil {
+		return nil, "", err
+	}
+	defer d.Zero()
+	f, ok := d.Field(stored)
+	if !ok {
+		return nil, "", fmt.Errorf("%s has no field %q", k, stored)
+	}
+	return bytes.Clone(f.Value), stored, nil
+}
+
+// getField is get --field: the value shown, as JSON, or offered to copy.
+func (p *Provider) getField() (provider.Credentials, error) {
+	value, name, err := p.fieldValue()
+	if err != nil {
+		return provider.Credentials{}, err
+	}
+	defer secure.SecureZeroBytes(value)
+	switch {
+	case p.format == "json":
+		out := struct {
+			Service  string `json:"service"`
+			Username string `json:"username,omitempty"`
+			Type     string `json:"type"`
+			Field    string `json:"field"`
+			Value    string `json:"value"`
+		}{p.service, p.username, string(p.effectiveEntryType()), name, string(value)}
+		b, err := json.MarshalIndent(out, "", "  ") //nolint:gosec // --format json prints the requested field by design
+		if err != nil {
+			return provider.Credentials{}, fmt.Errorf("marshal JSON output: %w", err)
+		}
+		return provider.Credentials{Provider: p.Name()}, p.printValue(b)
+	case p.show:
+		return provider.Credentials{Provider: p.Name()}, p.printValue(value)
+	}
+	return provider.Credentials{
+		Provider:             p.Name(),
+		CopyValue:            string(value),
+		ClipboardDescription: fmt.Sprintf("field %s of %s", name, p.desc()),
+		DisplayInfo:          "💡 Use --show to display it, or --clip to copy",
 	}, nil
 }
 
@@ -451,6 +605,32 @@ func (p *Provider) effectiveEntryType() password.EntryType {
 
 func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, error) {
 	et := p.effectiveEntryType()
+	terminal := stdinIsTerminal()
+	change, err := p.details.Change(et, et, terminal)
+	if err != nil {
+		return provider.Credentials{}, err
+	}
+	if !terminal && change != nil {
+		fromStdin := p.details.FromStdin()
+		if et == password.EntryTypeNote {
+			fromStdin++
+		}
+		if fromStdin > 1 {
+			return provider.Credentials{}, errors.New("without a terminal, only one value can come from stdin: store the entry, then add the rest with sesh edit")
+		}
+	}
+
+	// What the details change can't do to the entry it replaces (or a new
+	// one) is refused before anything is asked.
+	if change != nil {
+		current, err := p.store.Lookup(vault.Key{Kind: et, Service: p.service, Username: p.username})
+		if err != nil && !errors.Is(err, vault.ErrNotFound) {
+			return provider.Credentials{}, err
+		}
+		if err := provider.CheckAgainst(&current, change); err != nil {
+			return provider.Credentials{}, err
+		}
+	}
 
 	if err := p.confirmSave(mgr, et); err != nil {
 		return provider.Credentials{}, err
@@ -493,7 +673,21 @@ func (p *Provider) storePassword(mgr *password.Manager) (provider.Credentials, e
 	}
 	defer secure.SecureZeroBytes(pw)
 
-	if err := mgr.StorePassword(p.service, p.username, pw, et, p.Filing()); err != nil {
+	if change != nil {
+		defer provider.ZeroChange(change)
+		k := vault.Key{Kind: et, Service: p.service, Username: p.username}
+		in := &provider.DetailsInput{
+			Stdin: p.stdin, Stderr: os.Stderr, ReadSecret: readPassword, Name: k.String(), Terminal: terminal, KeepNotes: true,
+			Notes: func() ([]byte, error) { return mgr.Notes(k) },
+		}
+		// Notes ended at once at a terminal leave the notes as they are.
+		if err := p.details.Read(change, in); errors.Is(err, provider.ErrNothingTyped) {
+			change.SetNotes = false
+		} else if err != nil {
+			return provider.Credentials{}, err
+		}
+	}
+	if err := mgr.StorePasswordWithDetails(p.service, p.username, pw, et, p.Filing(), change); err != nil {
 		return provider.Credentials{}, err
 	}
 	// A typed password only; API keys and notes come from elsewhere.
@@ -594,6 +788,9 @@ func (p *Provider) generatePassword(mgr *password.Manager) (provider.Credentials
 }
 
 func (p *Provider) getPassword(mgr *password.Manager) (provider.Credentials, error) {
+	if p.field != "" {
+		return p.getField()
+	}
 	et := p.effectiveEntryType()
 
 	secretBytes, err := mgr.GetPassword(p.service, p.username, et)

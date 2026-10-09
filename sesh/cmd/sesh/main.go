@@ -249,6 +249,7 @@ var subcommands = []candidate{
 	{"recover", "Set a new master password with the vault's recovery key"},
 	{"recovery", "Make, remove, or check this vault's recovery key"},
 	{"restore", "List the backups, or replace the vault with one"},
+	{"show", "Show an entry: its URL, notes, fields, folder and tags"},
 	{"tag", "Tag entries, take tags off, rename tags, list them"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
 }
@@ -286,8 +287,10 @@ func (u unavailableStore) Exists(vault.Key) error                      { return 
 func (u unavailableStore) List(*vault.Filter) ([]vault.Entry, error)   { return nil, u.err }
 func (u unavailableStore) Delete(vault.Key) error                      { return u.err }
 func (u unavailableStore) DeleteMany([]vault.Key) error                { return u.err }
-func (u unavailableStore) Details(vault.Key) (vault.Details, error)    { return vault.Details{}, u.err }
-func (u unavailableStore) SetDetails(vault.Key, *vault.Details) error  { return u.err }
+func (u unavailableStore) Details(vault.Key, string) (vault.Details, error) {
+	return vault.Details{}, u.err
+}
+func (u unavailableStore) SetDetails(vault.Key, *vault.Details) error { return u.err }
 func (u unavailableStore) SaveWithDetails(*vault.Entry, []byte, *vault.Details) error {
 	return u.err
 }
@@ -810,6 +813,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "show":
+		if err := runShow(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "restore":
 		if err := runRestore(app, rest); err != nil {
 			fatal(app, err)
@@ -1102,6 +1110,7 @@ func (a *App) PrintUsage() error {
 		"  sesh doctor                   Check the setup, and that the vault can all be read",
 		"  sesh backup [file]            Copy the vault now (sesh also does this automatically)",
 		"  sesh restore [backup]         List the backups, or replace the vault with one",
+		"  sesh show <id> [--reveal]     Show an entry: its URL, notes, fields, folder and tags",
 		"  sesh edit <id>                Rename an entry, or change its username, kind, or secret",
 		"  sesh folder move|rename|list  File entries in folders",
 		"  sesh tag add|remove|rename|list  Tag entries",

@@ -187,3 +187,55 @@ func TestSearch_ListError(t *testing.T) {
 		t.Errorf("SearchSuggestions error = %v, want it to contain %q", err, "store unavailable")
 	}
 }
+
+// Search also matches the host of an entry's URL, after its name and
+// username; the rest of the URL isn't searched.
+func TestSearch_URLHost(t *testing.T) {
+	m, store := newTestManager(t)
+	for id, url := range map[string]string{
+		"password/work-sso": "https://login.microsoftonline.com/tenant-42/oauth",
+		"password/code":     "github.com",
+		"password/github":   "",
+		"api_key/acme":      "HTTPS://API.Acme.Example:8443/v1",
+	} {
+		k, err := vault.ParseKey(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Put(k, []byte("s")); err != nil {
+			t.Fatal(err)
+		}
+		if url != "" {
+			if err := store.SetDetails(k, &vault.Details{URL: url}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for query, want := range map[string]string{
+		"microsoft":     "password/work-sso",
+		"login":         "password/work-sso",
+		"tenant":        "",
+		"oauth":         "",
+		"github":        "password/github, password/code",
+		"acme.example":  "api_key/acme",
+		"8443":          "",
+		"acme key":      "api_key/acme",
+		"microsoft sso": "password/work-sso",
+	} {
+		entries, err := m.SearchEntries(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for i := range entries {
+			got = append(got, label(&entries[i]))
+		}
+		if strings.Join(got, ", ") != want {
+			t.Errorf("SearchEntries(%q) = %v, want %q", query, got, want)
+		}
+	}
+	// The URL comes with each found entry.
+	if entries, err := m.SearchEntries("login"); err != nil || len(entries) != 1 || entries[0].URL != "https://login.microsoftonline.com/tenant-42/oauth" {
+		t.Errorf("found entry = %+v, %v; want its URL", entries, err)
+	}
+}

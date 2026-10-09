@@ -440,8 +440,10 @@ type Store interface {
 	// (none, when d is zero), all in one write; d must pass Details.Check.
 	SaveWithDetails(e *Entry, secret []byte, d *Details) error
 	// Details returns the entry's URL, notes, and custom fields, secret
-	// values included, which the caller zeroes (Details.Zero).
-	Details(k Key) (Details, error)
+	// values included, which the caller zeroes (Details.Zero). reading
+	// names what the caller reads, for the audit log: "notes", "field pin",
+	// or "all".
+	Details(k Key, reading string) (Details, error)
 	// SetDetails replaces the entry's URL, notes, and custom fields, after
 	// Details.Check.
 	SetDetails(k Key, d *Details) error

@@ -88,6 +88,10 @@ func runAudit(app *App, args []string) error {
 		if change, ok := strings.CutPrefix(e.Detail, "Edit: "); ok {
 			name += " (" + change + ")"
 		}
+		// A read of the notes or fields says which: "read field pin".
+		if read, ok := strings.CutPrefix(e.Detail, "Details: "); ok {
+			name += " (read " + read + ")"
+		}
 		fmt.Fprintf(&b, "%s  %-6s  %-11s  %s\n", when, e.EventType, kind, name)
 	}
 	if *limit > 0 && count > int64(*limit) {

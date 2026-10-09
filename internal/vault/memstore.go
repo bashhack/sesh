@@ -136,7 +136,7 @@ func (m *MemStore) save(e *Entry, secret []byte, d *Details) error {
 }
 
 // Details implements Store.
-func (m *MemStore) Details(k Key) (Details, error) {
+func (m *MemStore) Details(k Key, _ string) (Details, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.entries[k]

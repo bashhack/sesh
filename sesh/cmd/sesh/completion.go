@@ -131,6 +131,16 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 				specs[i].values = []string{string(vault.KindPassword), string(vault.KindAPIKey), string(vault.KindNote)}
 			}
 		}
+	case "show":
+		if len(before) == 1 {
+			return nil, false // the entry's ID comes first
+		}
+		specs = flagSpecs(func(fs *flag.FlagSet) { addShowFlags(fs) }, nil)
+		for i := range specs {
+			if specs[i].name == "format" {
+				specs[i].values = []string{"text", "json"}
+			}
+		}
 	case "restore":
 		specs = flagSpecs(func(fs *flag.FlagSet) { addRestoreFlags(fs) }, nil)
 		if cur != "" && !strings.HasPrefix(cur, "-") {

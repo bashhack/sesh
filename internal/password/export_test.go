@@ -302,7 +302,7 @@ func TestExportImport_Details(t *testing.T) {
 				t.Fatalf("Import = %+v, %v", res, err)
 			}
 			for k, d := range want {
-				got, err := dstStore.Details(k)
+				got, err := dstStore.Details(k, "all")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -312,7 +312,7 @@ func TestExportImport_Details(t *testing.T) {
 					t.Errorf("%s: details %+v (notes %q), want %+v", k, got, got.Notes, d)
 				}
 			}
-			if d, err := dstStore.Details(vault.Key{Kind: vault.KindPassword, Service: "bare"}); err != nil || !d.IsZero() {
+			if d, err := dstStore.Details(vault.Key{Kind: vault.KindPassword, Service: "bare"}, "all"); err != nil || !d.IsZero() {
 				t.Errorf("bare: details %+v, %v; want none", d, err)
 			}
 		})
@@ -340,7 +340,7 @@ func TestImport_DetailsOverwriteAndRefused(t *testing.T) {
 		!strings.Contains(res.Errors[1], `"note": a secure note can't have notes`) {
 		t.Fatalf("Import = %+v, %v; want 1 imported and 2 refused", res, err)
 	}
-	if d, err := store.Details(gh); err != nil || !d.IsZero() {
+	if d, err := store.Details(gh, "all"); err != nil || !d.IsZero() {
 		t.Errorf("overwritten details = %+v, %v; want none", d, err)
 	}
 	for _, svc := range []string{"bad", "note"} {

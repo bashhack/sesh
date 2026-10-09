@@ -31,7 +31,7 @@ func testDetails() vault.Details {
 
 func checkDetailsOf(t *testing.T, s *Store, k vault.Key, want *vault.Details) {
 	t.Helper()
-	got, err := s.Details(k)
+	got, err := s.Details(k, "all")
 	if err != nil {
 		t.Fatalf("Details(%s): %v", k, err)
 	}
@@ -59,7 +59,7 @@ func TestDetails_BoundToTheirEntry(t *testing.T) {
 	sqlExecDB(t, s, `UPDATE entries SET details = (SELECT details FROM entries WHERE service = 'bank'),
 		sealed_details = (SELECT sealed_details FROM entries WHERE service = 'bank'),
 		details_salt = (SELECT details_salt FROM entries WHERE service = 'bank') WHERE service = 'other'`)
-	if _, err := s.Details(other); err == nil || !strings.Contains(err.Error(), "decrypt the details of password/other") {
+	if _, err := s.Details(other, "all"); err == nil || !strings.Contains(err.Error(), "decrypt the details of password/other") {
 		t.Errorf("Details of another entry's sealed details = %v, want a decrypt error", err)
 	}
 	sqlExecDB(t, s, `UPDATE entries SET encrypted_data = sealed_details, salt = details_salt WHERE service = 'bank'`)
@@ -277,7 +277,7 @@ func TestDetails_Audit(t *testing.T) {
 	bank := vault.Key{Kind: vault.KindPassword, Service: "bank"}
 	count := func(event string) int {
 		var n int
-		if err := s.db.QueryRow(`SELECT count(*) FROM audit_log WHERE event_type = ? AND detail LIKE '%Details'`, event).Scan(&n); err != nil {
+		if err := s.db.QueryRow(`SELECT count(*) FROM audit_log WHERE event_type = ? AND detail LIKE '%Details%'`, event).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		return n
@@ -285,7 +285,7 @@ func TestDetails_Audit(t *testing.T) {
 	if err := s.SetDetails(bank, &vault.Details{URL: "https://bank.example"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Details(bank); err != nil {
+	if _, err := s.Details(bank, "all"); err != nil {
 		t.Fatal(err)
 	}
 	if count("modify") != 1 || count("access") != 0 {
@@ -298,5 +298,85 @@ func TestDetails_Audit(t *testing.T) {
 	checkDetailsOf(t, s, bank, &d)
 	if count("modify") != 2 || count("access") != 1 {
 		t.Errorf("after a sealed read: modify %d, access %d; want 2, 1", count("modify"), count("access"))
+	}
+	// The access names what was read.
+	if _, err := s.Details(bank, "field pin"); err != nil {
+		t.Fatal(err)
+	}
+	var detail string
+	if err := s.db.QueryRow(`SELECT detail FROM audit_log WHERE event_type = 'access' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil || detail != "Details: field pin" {
+		t.Errorf("access detail = %q, %v", detail, err)
+	}
+}
+
+// An edit changes details in its one transaction, with or without a
+// rename, and says what changed.
+func TestEdit_ChangesDetails(t *testing.T) {
+	_, s := rekeyVault(t)
+	bank := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	d := testDetails()
+	if err := s.SetDetails(bank, &d); err != nil {
+		t.Fatal(err)
+	}
+	url := "https://new.bank.example"
+	detail, err := s.Edit(bank, EntryEdit{Details: &vault.DetailsChange{URL: &url, Set: []vault.Field{{Name: "pin", Value: []byte("9999"), Secret: true}}, Remove: []string{"account"}}})
+	if err != nil || detail != "URL changed, field pin changed, field account removed" {
+		t.Fatalf("Edit = %q, %v", detail, err)
+	}
+	want := vault.Details{URL: url, Notes: d.Notes, Fields: []vault.Field{{Name: "pin", Value: []byte("9999"), Secret: true}}}
+	checkDetailsOf(t, s, bank, &want)
+
+	// With a rename to a secure note, the notes must go in the same edit.
+	to := vault.Key{Kind: vault.KindNote, Service: "bank"}
+	if _, err := s.Edit(bank, EntryEdit{To: &to, Details: &vault.DetailsChange{URL: &url}}); err == nil || !strings.Contains(err.Error(), "a secure note can't have notes") {
+		t.Errorf("rename to a note keeping notes = %v, want refused", err)
+	}
+	detail, err = s.Edit(bank, EntryEdit{To: &to, Details: &vault.DetailsChange{SetNotes: true}})
+	if err != nil || detail != "renamed from password/bank and notes removed" {
+		t.Fatalf("rename removing notes = %q, %v", detail, err)
+	}
+	want.Notes = nil
+	checkDetailsOf(t, s, to, &want)
+
+	// A change that changes nothing is nothing to do.
+	if _, err := s.Edit(to, EntryEdit{Details: &vault.DetailsChange{URL: &url}}); err == nil || err.Error() != "nothing to change" {
+		t.Errorf("a change to the same URL = %v, want nothing to change", err)
+	}
+	if _, err := s.Edit(to, EntryEdit{Details: &vault.DetailsChange{Remove: []string{"nope"}}}); err == nil || !strings.Contains(err.Error(), `there's no field "nope" to remove`) {
+		t.Errorf("removing a missing field = %v", err)
+	}
+}
+
+// A change to only the URL or a plain field while an edit is sealing is
+// caught too, not overwritten.
+func TestEdit_ReadableDetailsChangedMeanwhile(t *testing.T) {
+	for name, q := range map[string]string{
+		"URL":         `UPDATE entries SET url = 'https://meddled.example'`,
+		"plain field": `UPDATE entries SET details = replace(details, '12345678', '87654321')`,
+	} {
+		p, s := rekeyVault(t)
+		bank := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+		d := testDetails()
+		if err := s.SetDetails(bank, &d); err != nil {
+			t.Fatal(err)
+		}
+		meddled := false
+		o := &meddlingOracle{CryptoOracle: NewKeySourceOracle(NewMasterPasswordSource(p, staticPrompt("old-password-1", "old-password-1"))), meddle: func() {
+			if !meddled {
+				meddled = true
+				sqlExecDB(t, s, q)
+			}
+		}}
+		s2, err := Open(p, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		url := "https://new.example"
+		if _, err := s2.Edit(bank, EntryEdit{Details: &vault.DetailsChange{URL: &url, Set: []vault.Field{{Name: "pin", Value: []byte("1111"), Secret: true}}}}); !errors.Is(err, ErrEntryChanged) {
+			t.Errorf("%s changed meanwhile: Edit = %v, want ErrEntryChanged", name, err)
+		}
+		if err := s2.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
