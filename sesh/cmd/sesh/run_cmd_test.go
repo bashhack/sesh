@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -271,6 +272,13 @@ func TestRun_Signals(t *testing.T) {
 	if sig, ok := errors.AsType[killedBy](err); !ok || syscall.Signal(sig) != syscall.SIGTERM {
 		t.Errorf("err = %v, want killed by SIGTERM", err)
 	}
+	// A signal Go itself turns into a crash dump is an exit status instead.
+	for _, sig := range []string{"QUIT", "SEGV", "ABRT"} {
+		_, _, err := runRunOut(t, "--env", "K=sesh://api_key/openai", "--", "sh", "-c", "kill -"+sig+" $$")
+		if status, ok := errors.AsType[exitStatus](err); !ok || status <= 128 {
+			t.Errorf("killed by %s: err = %v (%T), want an exit status over 128", sig, err, err)
+		}
+	}
 }
 
 // inject refuses to write over its own template, fills a reference however
@@ -302,4 +310,23 @@ func TestInject_Refused(t *testing.T) {
 	if err := runInject(app, nil); err == nil || !strings.Contains(err.Error(), "give the template with -i, or pipe it in") {
 		t.Errorf("no template at a terminal: %v", err)
 	}
+}
+
+// A process left behind that holds both outputs, or keeps writing, doesn't
+// keep sesh open: it stops after waiting a second in all.
+func TestRun_LeftoverProcesses(t *testing.T) {
+	runVault(t)
+	for name, script := range map[string]string{
+		"quiet, holding both": "echo hi; sleep 10 &",
+		"chatty":              "(while :; do echo tick; sleep 0.3; done) & echo hi",
+	} {
+		start := time.Now()
+		if _, _, err := runRunOut(t, "--env", "K=sesh://api_key/openai", "--", "sh", "-c", script); err != nil {
+			t.Fatal(err)
+		}
+		if d := time.Since(start); d > 1800*time.Millisecond {
+			t.Errorf("%s: sesh run took %v", name, d)
+		}
+	}
+	_ = exec.Command("pkill", "-f", "while :; do echo tick").Run() //nolint:errcheck // cleanup
 }

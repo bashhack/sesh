@@ -1123,7 +1123,7 @@ DB_HOST=db.internal
 - **Format:**
   - lines starting with `#` and blank lines are skipped, and so is a `#` after a space, following a value that isn't in quotes;
   - `export` before a name is allowed;
-  - quotes around a value are taken off;
+  - quotes around a value are taken off; after the closing quote, only a comment can follow;
   - nothing is expanded.
 - **Several sources:** `--env-file` can be given more than once, and `--env` replaces a variable a file sets.
 - **The environment:** the command gets your environment, minus `SESH_MASTER_PASSWORD`, plus these variables.
@@ -1139,8 +1139,8 @@ DB_HOST=db.internal
 **The command runs as if you'd started it:**
 - it reads your keyboard;
 - Ctrl-C at the terminal reaches it. A Ctrl-C or other request to stop sent to sesh alone, as an editor's stop button does, is passed on to it;
-- sesh exits with its exit status. If a signal killed it, sesh ends by the same signal, so a shell loop running `sesh run` stops at Ctrl-C as it would for the command;
-- once the command exits, sesh passes on the rest of its output, however slowly it's read. It stops when no more has come for a second, so a process the command left running in the background doesn't keep sesh open.
+- sesh exits with its exit status. If Ctrl-C, a request to stop, a closed terminal, or `kill -9` ended it, sesh ends the same way, so a shell loop running `sesh run` stops at Ctrl-C as it would for the command. Ended by another signal, such as `Ctrl-\` or a crash, it gives 128 plus the signal's number, as a shell does;
+- once the command exits, sesh passes on the rest of its output, however slowly it's read. It stops once it has waited a second in all for more, so a process the command left running in the background, quiet or not, doesn't keep sesh open; what that process writes afterwards isn't shown.
 
 **`sesh inject`** fills the references in a template, written as `{{ sesh://... }}`, with or without spaces inside the braces. Nothing else in the template changes:
 

@@ -98,3 +98,29 @@ func TestWriter_ManyMatches(t *testing.T) {
 		t.Errorf("took %v", d)
 	}
 }
+
+// A long run matching a secret over and over is passed on as it comes,
+// not held back until the end.
+func TestWriter_LongRunOfOneSecret(t *testing.T) {
+	var out bytes.Buffer
+	w := NewWriter(&out, [][]byte{[]byte("0000")})
+	chunk := bytes.Repeat([]byte("0"), 64<<10)
+	start := time.Now()
+	for range 64 {
+		if _, err := w.Write(chunk); err != nil {
+			t.Fatal(err)
+		}
+		if len(w.held) > 3 {
+			t.Fatalf("holding back %d bytes", len(w.held))
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("took %v", d)
+	}
+	if bytes.Contains(out.Bytes(), []byte("0")) {
+		t.Error("part of the run shows")
+	}
+}

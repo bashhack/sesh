@@ -57,6 +57,10 @@ func ParseEnvFile(r io.Reader, name string) ([]EnvVar, error) {
 			if end < 0 {
 				return nil, fmt.Errorf("%s line %d: the quote isn't closed", name, n)
 			}
+			// Only spaces, and a comment, can follow the closing quote.
+			if after := strings.TrimSpace(v[end+2:]); after != "" && !strings.HasPrefix(after, "#") {
+				return nil, fmt.Errorf("%s line %d: text after the closing quote: %q", name, n, after)
+			}
 			v = v[1 : end+1]
 		default:
 			// A # after a space starts a comment, as in other env files.

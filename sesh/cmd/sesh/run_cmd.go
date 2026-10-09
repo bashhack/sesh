@@ -129,25 +129,26 @@ func runRun(app *App, args []string) error {
 	return runChild(cmd, []*mask.Writer{outMask, errMask})
 }
 
-// outputIdle is how long sesh waits, once the command has exited, for more
-// of its output: a process it left running in the background may hold its
-// output open, writing nothing, long after.
+// outputIdle is how long sesh waits in all, once the command has exited,
+// for more of its output: a process it left running in the background may
+// hold its output open long after.
 const outputIdle = time.Second
 
 // runChild runs cmd to its end and returns its exit status as an
 // exitStatus (none for 0). With masks, the command's stdout and stderr go
-// through them, by pipes sesh reads; once the command has exited, sesh
-// reads what's left until the pipes have been quiet for outputIdle, so
-// output waiting for a slow reader all arrives, while a background process
-// holding them open doesn't keep sesh running.
+// through them, by pipes sesh reads until they end, or, once the command
+// has exited, until sesh has waited outputIdle in all for more (see
+// copyQuietly).
 //
 // Signals: Ctrl-C and Ctrl-\ at the terminal reach the command directly,
 // so sesh only waits through them; sent to sesh alone, from elsewhere, they
 // and a request to stop or a closed terminal are passed on. A command
-// killed by a signal makes sesh end the same way, so a shell loop running
-// sesh run stops at Ctrl-C as it would for the command.
+// killed by SIGINT, SIGTERM, SIGHUP or SIGKILL makes sesh end the same way
+// (killedBy), so a shell loop running sesh run stops at Ctrl-C as it would
+// for the command; other signals are a status of 128 plus the signal.
 func runChild(cmd *exec.Cmd, masks []*mask.Writer) error {
-	var exited atomic.Bool
+	// exitedAt is when the command exited, in Unix nanoseconds; 0 before.
+	var exitedAt atomic.Int64
 	var readEnds, writeEnds []*os.File
 	var copies []chan struct{}
 	defer func() {
@@ -168,13 +169,16 @@ func runChild(cmd *exec.Cmd, masks []*mask.Writer) error {
 		readEnds, writeEnds = append(readEnds, r), append(writeEnds, w)
 		done := make(chan struct{})
 		copies = append(copies, done)
-		go copyQuietly(r, m, &exited, done)
+		go copyQuietly(r, m, &exitedAt, done)
 	}
 
 	sigs := make(chan os.Signal, 4)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(sigs)
 	if err := cmd.Start(); err != nil {
+		for _, m := range masks {
+			_ = m.Close() //nolint:errcheck // zeroes its copies of the secrets
+		}
 		return fmt.Errorf("can't run %s: %w", cmd.Args[0], err)
 	}
 	// sesh keeps no write end, so the pipes end when the command, and
@@ -197,10 +201,14 @@ func runChild(cmd *exec.Cmd, masks []*mask.Writer) error {
 	}()
 	err := cmd.Wait()
 	close(done)
-	exited.Store(true)
-	for i, r := range readEnds {
-		_ = r.SetReadDeadline(time.Now().Add(outputIdle)) //nolint:errcheck // a pipe takes one
-		<-copies[i]
+	now := time.Now()
+	exitedAt.Store(now.UnixNano())
+	// A read already waiting gets the same cut-off as the next ones.
+	for _, r := range readEnds {
+		_ = r.SetReadDeadline(now.Add(outputIdle)) //nolint:errcheck // a pipe takes one
+	}
+	for _, c := range copies {
+		<-c
 	}
 	for _, m := range masks {
 		if cerr := m.Close(); cerr != nil && err == nil {
@@ -209,24 +217,42 @@ func runChild(cmd *exec.Cmd, masks []*mask.Writer) error {
 	}
 	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 		if ws, ok := exit.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			return killedBy(ws.Signal())
+			switch sig := ws.Signal(); sig {
+			case syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGKILL:
+				return killedBy(sig)
+			default:
+				// Go turns ending by most other signals, such as Ctrl-\ or a
+				// crash, into a dump of its own, so these are a status.
+				return exitStatus(128 + int(sig))
+			}
 		}
 		return exitStatus(exit.ExitCode())
 	}
 	return err
 }
 
-// copyQuietly copies r to m until r ends, or, once the command has exited,
-// until r has been quiet for outputIdle: each read then gets that long.
-func copyQuietly(r *os.File, m *mask.Writer, exited *atomic.Bool, done chan struct{}) {
+// copyQuietly copies r to m until r ends, or, once the command has exited
+// (exitedAt), until sesh has waited outputIdle in all for more: time spent
+// passing output on to a slow reader doesn't count, so all of it arrives,
+// while a process left behind, quiet or not, can't hold sesh open.
+func copyQuietly(r *os.File, m *mask.Writer, exitedAt *atomic.Int64, done chan struct{}) {
 	defer close(done)
 	buf := make([]byte, 32<<10)
 	defer secure.SecureZeroBytes(buf)
+	var waited time.Duration
 	for {
-		if exited.Load() {
-			_ = r.SetReadDeadline(time.Now().Add(outputIdle)) //nolint:errcheck // a pipe takes one
+		start := time.Now()
+		if exitedAt.Load() != 0 {
+			left := outputIdle - waited
+			if left <= 0 {
+				return
+			}
+			_ = r.SetReadDeadline(start.Add(left)) //nolint:errcheck // a pipe takes one
 		}
 		n, err := r.Read(buf)
+		if at := exitedAt.Load(); at != 0 {
+			waited += time.Since(maxTime(start, time.Unix(0, at)))
+		}
 		if n > 0 {
 			if _, werr := m.Write(buf[:n]); werr != nil {
 				return
@@ -236,6 +262,13 @@ func copyQuietly(r *os.File, m *mask.Writer, exited *atomic.Bool, done chan stru
 			return
 		}
 	}
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // fromTerminal reports whether a Ctrl-C or Ctrl-\ sesh received came from
@@ -251,8 +284,9 @@ var fromTerminal = func() bool {
 	return err == nil && pgrp == syscall.Getpgrp()
 }
 
-// killedBy is the error for a command killed by sig: fatal ends sesh by
-// the same signal, so whatever ran sesh sees it killed, not exited.
+// killedBy is the error for a command killed by sig (SIGINT, SIGTERM,
+// SIGHUP, or SIGKILL): fatal ends sesh by the same signal, so whatever ran
+// sesh sees it killed, not exited.
 type killedBy syscall.Signal
 
 func (k killedBy) Error() string { return "killed by " + syscall.Signal(k).String() }

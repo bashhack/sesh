@@ -26,7 +26,11 @@ type Writer struct {
 	w       io.Writer
 	secrets [][]byte
 	held    []byte
-	mu      sync.Mutex
+	longest int
+	// known is how much of held is part of a secret already concealed,
+	// which the next match must cover too.
+	known int
+	mu    sync.Mutex
 }
 
 // NewWriter returns a Writer to w masking secrets (those at least
@@ -38,6 +42,7 @@ func NewWriter(w io.Writer, secrets [][]byte) *Writer {
 		// as the secret, so a prompt or line ending in one isn't held back.
 		if s = bytes.TrimSpace(s); len(s) >= MinLength {
 			m.secrets = append(m.secrets, bytes.Clone(s))
+			m.longest = max(m.longest, len(s))
 		}
 	}
 	return m
@@ -50,8 +55,8 @@ func (m *Writer) Write(p []byte) (int, error) {
 	defer m.mu.Unlock()
 	buf := slices.Concat(m.held, p)
 	secure.SecureZeroBytes(m.held)
-	out, rest := m.mask(buf, false)
-	m.held = bytes.Clone(rest)
+	out, rest, known := m.mask(buf, false)
+	m.held, m.known = bytes.Clone(rest), known
 	secure.SecureZeroBytes(buf)
 	if _, err := m.w.Write(out); err != nil {
 		return 0, err
@@ -64,7 +69,7 @@ func (m *Writer) Write(p []byte) (int, error) {
 func (m *Writer) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out, _ := m.mask(m.held, true)
+	out, _, _ := m.mask(m.held, true)
 	secure.SecureZeroBytes(m.held)
 	m.held = nil
 	for _, s := range m.secrets {
@@ -77,15 +82,21 @@ func (m *Writer) Close() error {
 
 // mask replaces each secret in buf; secrets that overlap, or one inside
 // another, become one Concealed. Unless final, it returns separately the
-// end of buf that could start a secret, and everything from the start of
-// a match reaching into that end, which more output could lengthen.
-func (m *Writer) mask(buf []byte, final bool) (out, rest []byte) {
+// end of buf that could start a secret, and a match reaching into that
+// end, which more output could lengthen: from its start, or, when that's
+// further back than the longest secret, from there, the match before it
+// already concealed. So no more than a secret's length is held back, and
+// a long run of a secret can show as several Concealed.
+func (m *Writer) mask(buf []byte, final bool) (out, rest []byte, known int) {
 	limit := len(buf)
 	if !final {
 		limit -= m.possibleStart(buf)
 	}
 	type span struct{ start, end int }
 	var spans []span
+	if m.known > 0 {
+		spans = append(spans, span{0, min(m.known, len(buf))})
+	}
 	for _, s := range m.secrets {
 		for i := 0; ; {
 			j := bytes.Index(buf[i:], s)
@@ -108,7 +119,14 @@ func (m *Writer) mask(buf []byte, final bool) (out, rest []byte) {
 	pos := 0
 	for _, sp := range merged {
 		if sp.end > limit {
-			limit = min(limit, sp.start)
+			from := max(sp.start, len(buf)-(m.longest-1))
+			if from > sp.start {
+				out = append(out, buf[pos:sp.start]...)
+				out = append(out, Concealed...)
+				pos = from
+				known = sp.end - from
+			}
+			limit = min(limit, from)
 			break
 		}
 		out = append(out, buf[pos:sp.start]...)
@@ -118,7 +136,7 @@ func (m *Writer) mask(buf []byte, final bool) (out, rest []byte) {
 	if pos < limit {
 		out = append(out, buf[pos:limit]...)
 	}
-	return out, buf[max(pos, limit):]
+	return out, buf[max(pos, limit):], known
 }
 
 // possibleStart is how long the end of buf is that could be the start of

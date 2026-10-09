@@ -39,6 +39,8 @@ URL=https://x.example/?a=b#frag
 		"1BAD=x":                        `.env line 1: "1BAD" isn't a variable name`,
 		"A=x\nA=y":                      ".env line 2: A is set twice",
 		`A="unclosed`:                   ".env line 1: the quote isn't closed",
+		`A="abc"def`:                    ".env line 1: text after the closing quote",
+		`B='it''s'`:                     ".env line 1: text after the closing quote",
 		"A=sesh://password":             ".env line 1: sesh://password: entry ID",
 		"A=x\nB=sesh://api_key/o#bad x": ".env line 2: sesh://api_key/o#bad x",
 	} {
