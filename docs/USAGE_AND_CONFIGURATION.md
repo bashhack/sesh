@@ -1159,7 +1159,7 @@ sesh inject -i config.yml.tpl -o config.yml
 - **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
 ### Importing from other apps (`sesh import`)
 
-`sesh import` brings entries over from another app. It reads everything first, shows what it found, then asks:
+`sesh import` brings entries over from another app: Bitwarden, or Google Authenticator. It reads everything first, shows what it found, then asks:
 - what it will import;
 - which entries you already have;
 - what it will skip, and why.
@@ -1172,6 +1172,30 @@ sesh import --from google-authenticator IMG_1234.png IMG_1235.png
 - **The audit log** records each entry imported, and the import itself: `import  14 TOTP entries from Google Authenticator`.
 - **Entries you already have** stop the import, listed, unless `--on-conflict skip` leaves them as they are or `--on-conflict overwrite` replaces them.
 - **sesh's own exports** are imported with `--service password --action import` (see [Encrypted exports](#encrypted-exports)).
+
+**Bitwarden.** Export your vault from Bitwarden as JSON, from the web vault, an app, or `bw export --format json`. Choose "Password protected" to keep it encrypted on disk; sesh asks for that password. An "Account restricted" export can only be opened by Bitwarden itself, so sesh refuses it.
+
+```
+sesh import --from bitwarden bitwarden_export.json
+```
+
+- **Logins** become password entries, with the first URL as the entry's URL (more go in fields `url-2`, `url-3`, ...), the notes, and the custom fields. A login's TOTP key becomes a TOTP entry beside it, with the same name.
+- **Secure notes** become secure notes.
+- **Cards, identities, and SSH keys** become secure notes with fields: numbers, codes, and private keys as secret fields, the rest plain. The note is the item's notes, or a line saying what it is ("Visa card ending 4242").
+- **Custom fields:** hidden ones are secret, text and boolean ones plain, and a text one of several lines secret too. Linked fields, which only point at another value, aren't kept.
+- **Names:**
+  - folder names and field names are fitted to sesh's rules, any other character becoming `-` ("Work Accounts" becomes `Work-Accounts`), and the summary lists each one;
+  - a `/` in an item's name becomes `-`;
+  - two items with one name and username get ` (2)` added to the second;
+  - favorites get the tag `favorite`.
+- **What doesn't come across,** said in the summary:
+  - Steam codes (the password still does);
+  - old passwords (sesh keeps no history yet);
+  - passkeys;
+  - Bitwarden's "ask for the master password again";
+  - bank accounts, driver's licences, and passports, which sesh can't import yet.
+- **The times** each item was made and last changed come across.
+- **A plain export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
 
 **Google Authenticator.** Its "Transfer accounts" moves your codes off the phone:
 1. In the app, choose Transfer accounts, then Export accounts. It shows one or more QR codes.

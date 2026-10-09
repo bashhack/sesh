@@ -160,7 +160,7 @@ func TestImport_FromImagesAndSplitExports(t *testing.T) {
 		t.Errorf("summary:\n%s", stderr)
 	}
 	for args, wantSub := range map[string]string{
-		"--from bitwarden x.json": `sesh can't import from "bitwarden" yet`,
+		"--from 1password x.1pux": `sesh can't import from "1password"`,
 		"nothing.txt":             "no such file",
 		text + ".none":            "no such file",
 	} {
@@ -218,7 +218,7 @@ func TestImport_Edges(t *testing.T) {
 		t.Fatalf("%q, %q, %v", out, stderr, err)
 	}
 	for _, want := range []string{
-		"totp/github/alice  (you have totp/GitHub/alice)",
+		"totp/github/alice\n      you have totp/GitHub/alice",
 		`"Short:bob": the secret can't be used: secret too short`,
 		`"dup:x": another account here has this name`,
 	} {
@@ -270,5 +270,75 @@ func TestImport_StdinAtATerminal(t *testing.T) {
 	importVault(t)
 	if _, _, err := runImportOut(t, "", true, "-"); err == nil || !strings.Contains(err.Error(), "pbpaste | sesh import -") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// bitwardenFixture is a genuine Bitwarden export from the importer's
+// testdata (see internal/importer/bitwarden/export_test.go).
+func bitwardenFixture(name string) string {
+	return filepath.Join("..", "..", "..", "internal", "importer", "bitwarden", "testdata", name)
+}
+
+// A Bitwarden export is found without --from, shown with its renamed
+// folders and what changed, and stored with folders, tags, details and
+// times; the password-protected one asks for its password. The vault
+// already has totp/GitHub/alice.
+func TestImport_Bitwarden(t *testing.T) {
+	env := importVault(t)
+	_, stderr, err := runImportOut(t, "", false, "--dry-run", bitwardenFixture("plain.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Found 10 items and 5 folders in the Bitwarden export.",
+		"Folders, renamed to fit sesh's rules:\n",
+		`"Work Accounts" is "Work-Accounts"`,
+		"  password/GitHub/alice\n",
+		`      field "linked user" not kept`,
+		"      1 old password not kept: sesh keeps no history yet\n",
+		"Already in the vault (1):\n  totp/GitHub/alice\n",
+		`named "GitHub (2)" in sesh: another item has its name`,
+		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("summary missing %q:\n%s", want, stderr)
+		}
+	}
+	old := readSecret
+	t.Cleanup(func() { readSecret = old })
+	readSecret = func() ([]byte, error) { return []byte("export-pass-1"), nil }
+	out, stderr, err := runImportOut(t, "y\n", true, "--on-conflict", "skip", bitwardenFixture("password.json"))
+	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from Bitwarden.") || !strings.Contains(stderr, "Password for the Bitwarden export: ") {
+		t.Fatalf("%q\n%s\n%v", out, stderr, err)
+	}
+	if strings.Contains(out, "delete") {
+		t.Errorf("a protected export got the delete warning: %q", out)
+	}
+	store := openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	gh := vault.Key{Kind: vault.KindPassword, Service: "GitHub", Username: "alice"}
+	e, err := store.Lookup(gh)
+	if err != nil || e.Folder != "Work-Accounts" || e.URL != "https://github.com/login" || e.CreatedAt.Year() != 2026 {
+		t.Errorf("GitHub = %+v, %v", e, err)
+	}
+	d, err := store.Details(gh, "all")
+	if err != nil || string(d.Notes) != "main account\nrecovery codes in the safe" || len(d.Fields) != 4 {
+		t.Errorf("GitHub details = %+v, %v", d, err)
+	}
+	if secret, err := store.Get(gh); err != nil || string(secret) != "gh-new-password-2" {
+		t.Errorf("GitHub password = %q, %v", secret, err)
+	}
+	if r, err := store.Lookup(vault.Key{Kind: vault.KindPassword, Service: "Router"}); err != nil || len(r.Tags) != 1 || r.Tags[0] != "favorite" {
+		t.Errorf("Router = %+v, %v", r, err)
+	}
+	// Plain exports say to delete the file; account-restricted ones are refused.
+	if out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "skip", bitwardenFixture("plain.json")); err != nil || !strings.Contains(out, "holds your passwords unencrypted") {
+		t.Errorf("plain: %q, %v", out, err)
+	}
+	if _, _, err := runImportOut(t, "", false, bitwardenFixture("account.json")); err == nil || !strings.Contains(err.Error(), "account restricted") {
+		t.Errorf("account restricted: %v", err)
+	}
+	if _, _, err := runImportOut(t, "", false, "--from", "bitwarden", bitwardenFixture("password.json")); err == nil || !strings.Contains(err.Error(), "run sesh import at a terminal") {
+		t.Errorf("protected, no terminal: %v", err)
 	}
 }
