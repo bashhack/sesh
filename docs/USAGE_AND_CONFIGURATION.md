@@ -1094,6 +1094,71 @@ sesh --service password --action get --service-name github --username alice --fi
 
 **What's encrypted.** The secret, the notes and secret fields' values are encrypted. The URL, field names, and plain values aren't, so the URL can be searched and `sesh show` can list fields without decrypting anything. Folders and tags are the same. Keep anything private in a secret field or the notes.
 
+### Running commands with secrets (`sesh run`, `sesh inject`)
+
+`sesh run` runs a command with values from the vault in its environment, so they never sit in a file or your shell history:
+
+```
+sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
+sesh run --env-file .env -- npm start
+```
+
+**References.** `sesh://<id>` names an entry's secret, with the ID as `-list` shows it. `#name` picks one of its fields instead (in any case), and `#url` or `#notes` those parts. A TOTP entry gives its current code.
+
+```
+sesh://api_key/openai
+sesh://password/db/app#host
+sesh://totp/github/alice
+```
+
+**The env file** has one `NAME=value` per line. A value that's a reference is filled in; any other value is passed as it is. So the file holds no secrets, and can be committed with the project:
+
+```
+# .env
+OPENAI_API_KEY=sesh://api_key/openai
+DB_PASSWORD=sesh://password/db/app
+DB_HOST=db.internal
+```
+
+- **Format:**
+  - lines starting with `#` and blank lines are skipped;
+  - `export` before a name is allowed;
+  - quotes around a value are taken off;
+  - nothing is expanded.
+- **Several sources:** `--env-file` can be given more than once, and `--env` replaces a variable a file sets.
+- **The environment:** the command gets your environment, minus `SESH_MASTER_PASSWORD`, plus these variables.
+
+**Before anything runs,** sesh unlocks the vault once and resolves every reference. If one doesn't resolve, nothing runs, and sesh names it. The audit log records each read, as `(read field pin, to run)` for a field.
+
+**Output.** Secrets the command prints are shown as `<concealed by sesh>`, on stdout and stderr:
+- **what counts as secret:** an entry's secret, its notes, its secret fields, and TOTP codes. URLs and plain fields are shown as they are.
+- **short values:** values shorter than 3 characters aren't hidden, since they'd match too much.
+- **the cost:** to do this, sesh reads the command's output itself. So the command's output isn't a terminal, and colours, progress bars and prompts may change.
+- **`--no-masking`** gives the command the terminal directly, and hides nothing.
+
+**The command runs as if you'd started it:**
+- it reads your keyboard;
+- Ctrl-C reaches it;
+- a request to stop sesh (SIGTERM), or a closed terminal, is passed on to it;
+- sesh exits with its exit status;
+- once the command exits, sesh waits a second for the rest of its output, then stops waiting. A process the command left running in the background doesn't keep sesh open.
+
+**`sesh inject`** fills the references in a template, written as `{{ sesh://... }}`, with or without spaces inside the braces. Nothing else in the template changes:
+
+```
+# config.yml.tpl
+database:
+  password: {{ sesh://password/db/app }}
+  host: {{ sesh://password/db/app#host }}
+
+sesh inject -i config.yml.tpl -o config.yml
+```
+
+- **Input and output:** it reads the template from `-i` or stdin, and writes to `-o` or stdout.
+- **The file** is readable only by you (0600). It's written whole to a new file next to the target, then renamed into place, so nothing reads half of it. A file already there is replaced.
+- **Failures:** if a reference doesn't resolve, nothing is written.
+- **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
+
 ### Folders and tags
 
 An entry can be in one folder and have any number of tags. Folders nest with `/` (`work/aws`); tags are flat (`urgent`, `2fa`). Neither is part of the entry's ID or name: two entries with the same name can't sit in different folders.

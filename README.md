@@ -39,6 +39,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from
 - **Encrypted Export** — Portable backups protected by a password, safe to transfer between machines (`--format encrypted`)
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes, each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
+- **Secrets for commands** — `sesh run` puts vault values in a command's environment and hides them in its output; `sesh inject` fills a config template
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
 - **Shell Completion** — Tab completion for commands, flags, and their values in bash, zsh, and fish (`sesh completion zsh`)
 - **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically. Supports non-standard configs (SHA-256/SHA-512, 8 digits, custom periods) extracted from QR codes
@@ -179,6 +180,11 @@ sesh edit password/github/alice --url https://github.com/login --field recovery-
 sesh edit password/github/alice --notes --editor
 sesh show password/github/alice            # secrets hidden; --reveal shows them
 sesh -service password -action get -service-name github -username alice -field pin -clip
+
+# Run a command with secrets in its environment (hidden in its output), or fill a template
+sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
+sesh run --env-file .env -- npm start      # .env holds NAME=sesh://... references, no secrets
+sesh inject -i config.yml.tpl -o config.yml
 
 # Search across all entries
 sesh -service password -action search -query github
