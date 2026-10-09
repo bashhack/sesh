@@ -26,9 +26,10 @@ type EntryEdit struct {
 	Secret []byte
 }
 
-// Edit changes the entry at k as e says, in one transaction. Its secret is
-// sealed to its key (entryAAD), so a new key re-seals it: decrypted,
-// encrypted for the new key, and written with it. The row stays, so its
+// Edit changes the entry at k as e says, in one transaction. Its secret and
+// details are sealed to its key (entryAAD, detailsAAD), so a new key
+// re-seals them: decrypted, encrypted for the new key, and written with
+// it. An entry with notes can't become a secure note. The row stays, so its
 // folder, tags, settings, and creation time come along; its update time
 // moves only with a new secret. A new key another entry has is ErrNameTaken;
 // the entry changed meanwhile is ErrEntryChanged. It returns the change, in
@@ -55,9 +56,10 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	}
 
 	var id int64
-	var data, salt []byte
-	err := s.db.QueryRow(`SELECT id, encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`,
-		string(k.Kind), k.Service, k.Username).Scan(&id, &data, &salt)
+	var data, salt, sealed, sealedSalt []byte
+	var details string
+	err := s.db.QueryRow(`SELECT id, encrypted_data, salt, details, sealed_details, details_salt FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&id, &data, &salt, &details, &sealed, &sealedSalt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", notFound(k)
 	}
@@ -67,6 +69,15 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	if to != k {
 		if err := s.nameFree(s.db, to, id); err != nil {
 			return "", err
+		}
+	}
+	if to.Kind == vault.KindNote && k.Kind != vault.KindNote {
+		ent := vault.Entry{Key: k}
+		if err := vault.DecodeEntryDetails(&ent, "", details); err != nil {
+			return "", err
+		}
+		if ent.HasNotes {
+			return "", fmt.Errorf("%s has notes, and a secure note can't: its secret is the note; remove the notes first", k)
 		}
 	}
 
@@ -88,6 +99,13 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encrypt %s: %w", to, err)
 	}
+	// The details are sealed to the name too.
+	newSealed, newSealedSalt := sealed, sealedSalt
+	if to != k && sealed != nil {
+		if newSealed, newSealedSalt, err = s.resealDetails(k, to, sealed, sealedSalt); err != nil {
+			return "", err
+		}
+	}
 
 	var what []string
 	if to != k {
@@ -98,10 +116,10 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	}
 	detail := strings.Join(what, " and ")
 	err = s.inTx(func(tx *sql.Tx) error {
-		var now []byte
-		err := tx.QueryRow(`SELECT encrypted_data FROM entries WHERE id = ? AND kind = ? AND service = ? AND username = ?`,
-			id, string(k.Kind), k.Service, k.Username).Scan(&now)
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && !bytes.Equal(now, data)) {
+		var now, sealedNow []byte
+		err := tx.QueryRow(`SELECT encrypted_data, sealed_details FROM entries WHERE id = ? AND kind = ? AND service = ? AND username = ?`,
+			id, string(k.Kind), k.Service, k.Username).Scan(&now, &sealedNow)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && (!bytes.Equal(now, data) || !bytes.Equal(sealedNow, sealed))) {
 			return ErrEntryChanged
 		}
 		if err != nil {
@@ -112,11 +130,11 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 				return err
 			}
 		}
-		q := `UPDATE entries SET kind = ?, service = ?, username = ?, encrypted_data = ?, salt = ? WHERE id = ?`
-		args := []any{string(to.Kind), to.Service, to.Username, newData, newSalt, id}
+		q := `UPDATE entries SET kind = ?, service = ?, username = ?, encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ? WHERE id = ?`
+		args := []any{string(to.Kind), to.Service, to.Username, newData, newSalt, newSealed, newSealedSalt, id}
 		if e.Secret != nil {
-			q = `UPDATE entries SET kind = ?, service = ?, username = ?, encrypted_data = ?, salt = ?, updated_at = ? WHERE id = ?`
-			args = []any{string(to.Kind), to.Service, to.Username, newData, newSalt, time.Now().UTC(), id}
+			q = `UPDATE entries SET kind = ?, service = ?, username = ?, encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ?, updated_at = ? WHERE id = ?`
+			args = []any{string(to.Kind), to.Service, to.Username, newData, newSalt, newSealed, newSealedSalt, time.Now().UTC(), id}
 		}
 		_, err = tx.Exec(q, args...)
 		return err
@@ -126,6 +144,22 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	}
 	s.audit("modify", to.String(), "Edit: "+detail)
 	return detail, nil
+}
+
+// resealDetails opens k's sealed details and seals them for to.
+func (s *Store) resealDetails(k, to vault.Key, sealed, salt []byte) (newSealed, newSalt []byte, err error) {
+	plain, err := s.oracle.DecryptEntry(sealed, salt, detailsAAD(k))
+	if err != nil {
+		if kerr := s.keyUnchanged(s.db); errors.Is(kerr, ErrVaultKeyChanged) {
+			err = kerr
+		}
+		return nil, nil, fmt.Errorf("decrypt the details of %s: %w", k, err)
+	}
+	defer secure.SecureZeroBytes(plain)
+	if newSealed, newSalt, err = s.oracle.EncryptEntry(plain, detailsAAD(to)); err != nil {
+		return nil, nil, fmt.Errorf("encrypt the details of %s: %w", to, err)
+	}
+	return newSealed, newSalt, nil
 }
 
 // nameFree refuses to when an entry other than row id has it.

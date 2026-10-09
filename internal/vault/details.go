@@ -1,0 +1,361 @@
+package vault
+
+import (
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/bashhack/sesh/internal/secure"
+)
+
+// MaxURLLength is the most characters an entry's URL can have.
+const MaxURLLength = 2048
+
+// MaxFields is the most custom fields an entry can have.
+const MaxFields = 50
+
+// MaxFieldNameLength is the most characters a field's name can have.
+const MaxFieldNameLength = 64
+
+// MaxDetailsSize is the most bytes an entry's notes and field values can
+// take together, the same as its secret.
+const MaxDetailsSize = 1 << 20
+
+// ReservedFieldNames are the names `get --field` uses for the entry's own
+// parts, so no custom field can have them.
+var ReservedFieldNames = []string{"password", "secret", "url", "notes"}
+
+// Field is a custom field of an entry. A secret one's value is encrypted
+// with the entry's notes; a plain one's is stored as text.
+type Field struct {
+	Name string
+	// Value is the field's value; in an Entry, a secret field's is nil.
+	Value  []byte
+	Secret bool
+}
+
+// Details are an entry's URL, notes, and custom fields, with the values of
+// its secret ones.
+type Details struct {
+	URL    string
+	Notes  []byte
+	Fields []Field
+}
+
+// IsZero reports whether d holds nothing.
+func (d *Details) IsZero() bool {
+	return d.URL == "" && len(d.Notes) == 0 && len(d.Fields) == 0
+}
+
+// Zero overwrites d's notes and secret values.
+func (d *Details) Zero() {
+	secure.SecureZeroBytes(d.Notes)
+	for _, f := range d.Fields {
+		if f.Secret {
+			secure.SecureZeroBytes(f.Value)
+		}
+	}
+}
+
+// Field returns the field named name, if d has one.
+func (d *Details) Field(name string) (Field, bool) {
+	i := slices.IndexFunc(d.Fields, func(f Field) bool { return f.Name == name })
+	if i < 0 {
+		return Field{}, false
+	}
+	return d.Fields[i], true
+}
+
+// Check refuses details an entry of kind can't have:
+//   - notes on a secure note, whose secret is the note;
+//   - a URL or plain value that isn't one line of valid text, or a URL
+//     longer than MaxURLLength;
+//   - notes or a secret value that isn't valid text (they may hold
+//     several lines);
+//   - a field name that breaks the tag rules, is reserved, is used twice
+//     (in any case), or is longer than MaxFieldNameLength;
+//   - an empty value, more than MaxFields fields, or notes and values
+//     together over MaxDetailsSize.
+func (d *Details) Check(kind Kind) error {
+	if kind == KindNote && len(d.Notes) > 0 {
+		return errors.New("a secure note can't have notes: its secret is the note")
+	}
+	if !utf8.Valid(d.Notes) {
+		return errors.New("the notes aren't valid text")
+	}
+	if err := checkLine("URL", d.URL); err != nil {
+		return err
+	}
+	if n := utf8.RuneCountInString(d.URL); n > MaxURLLength {
+		return fmt.Errorf("the URL is %d characters long; the most is %d", n, MaxURLLength)
+	}
+	if len(d.Fields) > MaxFields {
+		return fmt.Errorf("an entry can have at most %d fields, not %d", MaxFields, len(d.Fields))
+	}
+	size := len(d.Notes)
+	seen := make(map[string]string, len(d.Fields))
+	for _, f := range d.Fields {
+		if err := CheckFieldName(f.Name); err != nil {
+			return err
+		}
+		if first, ok := seen[strings.ToLower(f.Name)]; ok {
+			if first == f.Name {
+				return fmt.Errorf("the field %q is there twice", f.Name)
+			}
+			return fmt.Errorf("the field %q is there twice (as %q)", f.Name, first)
+		}
+		seen[strings.ToLower(f.Name)] = f.Name
+		if len(f.Value) == 0 {
+			return fmt.Errorf("the field %q has no value", f.Name)
+		}
+		if f.Secret {
+			if !utf8.Valid(f.Value) {
+				return fmt.Errorf("the field %q isn't valid text", f.Name)
+			}
+		} else if err := checkLine(fmt.Sprintf("field %q", f.Name), string(f.Value)); err != nil {
+			return err
+		}
+		size += len(f.Value)
+	}
+	if size > MaxDetailsSize {
+		return fmt.Errorf("the notes and field values take %d bytes together; the most is %d", size, MaxDetailsSize)
+	}
+	return nil
+}
+
+// CheckFieldName refuses a field name that breaks the tag rules (letters,
+// digits, "-", "_" and "."), is reserved, or is longer than
+// MaxFieldNameLength.
+func CheckFieldName(name string) error {
+	if err := checkLabel(name); err != nil {
+		return fmt.Errorf("the field name %q %w", name, err)
+	}
+	if n := utf8.RuneCountInString(name); n > MaxFieldNameLength {
+		return fmt.Errorf("the field name is %d characters long; the most is %d", n, MaxFieldNameLength)
+	}
+	if slices.Contains(ReservedFieldNames, strings.ToLower(name)) {
+		return fmt.Errorf("the field name %q is reserved for the entry's own %s", name, strings.ToLower(name))
+	}
+	return nil
+}
+
+// checkLine refuses a value, called what in errors, that isn't valid text
+// or has a control or text-direction character.
+func checkLine(what, v string) error {
+	if !utf8.ValidString(v) {
+		return fmt.Errorf("the %s isn't valid text", what)
+	}
+	if strings.IndexFunc(v, unicode.IsControl) >= 0 {
+		return fmt.Errorf("the %s contains a control character, such as a line break", what)
+	}
+	if strings.IndexFunc(v, isDirectionControl) >= 0 {
+		return fmt.Errorf("the %s contains a text-direction control character", what)
+	}
+	return nil
+}
+
+// plainDetails is how the readable part of an entry's details is stored:
+// the field names in order, which are secret, the plain values, and
+// whether there are notes.
+type plainDetails struct {
+	Fields []plainField `json:"fields,omitempty"`
+	Notes  bool         `json:"notes,omitempty"`
+}
+
+type plainField struct {
+	Name   string `json:"name"`
+	Value  string `json:"value,omitempty"`
+	Secret bool   `json:"secret,omitempty"`
+}
+
+// EncodeDetails splits d into what's stored as it is, the URL and plain
+// JSON ("" when there's nothing), and what's sealed: the notes and secret
+// values, nil when there are none. The caller zeroes sealed.
+func EncodeDetails(d *Details) (url, plain string, sealed []byte, err error) {
+	var p plainDetails
+	p.Notes = len(d.Notes) > 0
+	var secrets []Field
+	for _, f := range d.Fields {
+		pf := plainField{Name: f.Name, Secret: f.Secret}
+		if f.Secret {
+			secrets = append(secrets, f)
+		} else {
+			pf.Value = string(f.Value)
+		}
+		p.Fields = append(p.Fields, pf)
+	}
+	if p.Notes || len(p.Fields) > 0 {
+		b, err := json.Marshal(p)
+		if err != nil {
+			return "", "", nil, fmt.Errorf("encode details: %w", err)
+		}
+		plain = string(b)
+	}
+	if p.Notes || len(secrets) > 0 {
+		sealed = sealedBytes(d.Notes, secrets)
+	}
+	return d.URL, plain, sealed, nil
+}
+
+// sealedBytes lays out the notes and secret values to be sealed: a version
+// byte, the notes, the number of values, and each name and value, every
+// one a 4-byte big-endian length and its bytes.
+func sealedBytes(notes []byte, secrets []Field) []byte {
+	size := 1 + 4 + len(notes) + 4
+	for _, f := range secrets {
+		size += 8 + len(f.Name) + len(f.Value)
+	}
+	b := make([]byte, 0, size)
+	b = append(b, 1)
+	b = appendPart(b, notes)
+	b = binary.BigEndian.AppendUint32(b, uint32(len(secrets))) //nolint:gosec // at most MaxFields
+	for _, f := range secrets {
+		b = appendPart(b, []byte(f.Name))
+		b = appendPart(b, f.Value)
+	}
+	return b
+}
+
+func appendPart(b, part []byte) []byte {
+	b = binary.BigEndian.AppendUint32(b, uint32(len(part))) //nolint:gosec // parts are at most MaxDetailsSize
+	return append(b, part...)
+}
+
+// DecodeEntryDetails reads the stored URL and plain JSON into e: its URL,
+// whether it has notes, and its fields, without secret values.
+func DecodeEntryDetails(e *Entry, url, plain string) error {
+	e.URL = url
+	e.HasNotes, e.Fields = false, nil
+	if plain == "" {
+		return nil
+	}
+	var p plainDetails
+	if err := json.Unmarshal([]byte(plain), &p); err != nil {
+		return fmt.Errorf("read the details of %s: %w", e.Key, err)
+	}
+	e.HasNotes = p.Notes
+	for _, f := range p.Fields {
+		field := Field{Name: f.Name, Secret: f.Secret}
+		if !f.Secret {
+			field.Value = []byte(f.Value)
+		}
+		e.Fields = append(e.Fields, field)
+	}
+	return nil
+}
+
+// DecodeDetails puts the stored parts of an entry's details back
+// together: e as DecodeEntryDetails read it, and the opened sealed bytes,
+// nil when there are none. The secret values must be the ones e names;
+// the result holds copies, which the caller zeroes.
+func DecodeDetails(e *Entry, sealed []byte) (_ Details, err error) {
+	d := Details{URL: e.URL}
+	secrets := map[string][]byte{}
+	// On failure, every secret read so far is zeroed: those in d, and
+	// those still waiting in secrets.
+	defer func() {
+		if err != nil {
+			d.Zero()
+			for _, v := range secrets {
+				secure.SecureZeroBytes(v)
+			}
+		}
+	}()
+	if sealed != nil {
+		notes, values, err := parseSealed(sealed)
+		if err != nil {
+			return Details{}, fmt.Errorf("read the details of %s: %w", e.Key, err)
+		}
+		d.Notes, secrets = notes, values
+	}
+	if e.HasNotes != (len(d.Notes) > 0) {
+		return Details{}, fmt.Errorf("read the details of %s: the notes don't match their record", e.Key)
+	}
+	for _, f := range e.Fields {
+		field := Field{Name: f.Name, Secret: f.Secret}
+		if f.Secret {
+			v, ok := secrets[f.Name]
+			if !ok {
+				return Details{}, fmt.Errorf("read the details of %s: the secret field %q has no value", e.Key, f.Name)
+			}
+			field.Value = v
+			delete(secrets, f.Name)
+		} else {
+			field.Value = slices.Clone(f.Value)
+		}
+		d.Fields = append(d.Fields, field)
+	}
+	if len(secrets) > 0 {
+		return Details{}, fmt.Errorf("read the details of %s: there are secret values for fields it doesn't have", e.Key)
+	}
+	return d, nil
+}
+
+// parseSealed reads sealedBytes' layout, copying each part out.
+func parseSealed(b []byte) (notes []byte, values map[string][]byte, err error) {
+	if len(b) == 0 || b[0] != 1 {
+		return nil, nil, errors.New("unknown layout")
+	}
+	b = b[1:]
+	next := func() ([]byte, bool) {
+		if len(b) < 4 {
+			return nil, false
+		}
+		n := int64(binary.BigEndian.Uint32(b))
+		if n > int64(len(b)-4) {
+			return nil, false
+		}
+		part := slices.Clone(b[4 : 4+n])
+		b = b[4+n:]
+		return part, true
+	}
+	bad := errors.New("damaged")
+	notes, ok := next()
+	if !ok {
+		return nil, nil, bad
+	}
+	if len(notes) == 0 {
+		notes = nil
+	}
+	if len(b) < 4 {
+		secure.SecureZeroBytes(notes)
+		return nil, nil, bad
+	}
+	count := binary.BigEndian.Uint32(b)
+	b = b[4:]
+	values = map[string][]byte{}
+	fail := func() ([]byte, map[string][]byte, error) {
+		secure.SecureZeroBytes(notes)
+		for _, v := range values {
+			secure.SecureZeroBytes(v)
+		}
+		return nil, nil, bad
+	}
+	if count > MaxFields {
+		return fail()
+	}
+	for range count {
+		name, ok := next()
+		if !ok {
+			return fail()
+		}
+		value, ok := next()
+		if !ok {
+			return fail()
+		}
+		if _, ok := values[string(name)]; ok {
+			secure.SecureZeroBytes(value)
+			return fail()
+		}
+		values[string(name)] = value
+	}
+	if len(b) != 0 {
+		return fail()
+	}
+	return notes, values, nil
+}

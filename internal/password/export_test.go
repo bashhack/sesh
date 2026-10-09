@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -129,7 +130,7 @@ func TestExport_CSVFolderAndTagsColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) != 2 || !strings.HasSuffix(lines[0], ",settings,folder,tags") || !strings.HasSuffix(lines[1], ",work,a;b") {
+	if len(lines) != 2 || !strings.HasSuffix(lines[0], ",settings,folder,tags,url,notes,fields") || !strings.HasSuffix(lines[1], ",work,a;b,,,") {
 		t.Errorf("CSV = %q, want folder and tags columns holding work and a;b", lines)
 	}
 }
@@ -251,5 +252,103 @@ func TestImport_ReportsABadNameAndImportsTheRest(t *testing.T) {
 	}
 	if res.Imported != 1 || len(res.Errors) != 1 || !strings.HasPrefix(res.Errors[0], `"github ": the service name "github " starts or ends with a space`) {
 		t.Errorf("result = %+v, want gitlab imported and github refused for its space", res)
+	}
+}
+
+// An export carries each entry's URL, notes, and fields, secret ones
+// included, and an import puts them back, in every format.
+func TestExportImport_Details(t *testing.T) {
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	wifi := vault.Key{Kind: vault.KindNote, Service: "wifi"}
+	plainOnly := vault.Key{Kind: vault.KindAPIKey, Service: "openai"}
+	want := map[vault.Key]vault.Details{
+		gh: {URL: "https://github.com/login", Notes: []byte("line one\nline two, \"quoted\""), Fields: []vault.Field{
+			{Name: "recovery-email", Value: []byte("alice@example.com")},
+			{Name: "pin", Value: []byte("1234"), Secret: true},
+		}},
+		wifi:      {Fields: []vault.Field{{Name: "ssid", Value: []byte("home")}}},
+		plainOnly: {URL: "https://platform.openai.com"},
+	}
+	for _, format := range []ExportFormat{FormatJSON, FormatCSV, "encrypted"} {
+		t.Run(string(format), func(t *testing.T) {
+			src, srcStore := newTestManager(t)
+			for k, d := range want {
+				if err := srcStore.Put(k, []byte("s")); err != nil {
+					t.Fatal(err)
+				}
+				if err := srcStore.SetDetails(k, &d); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := srcStore.Put(vault.Key{Kind: vault.KindPassword, Service: "bare"}, []byte("s")); err != nil {
+				t.Fatal(err)
+			}
+			var buf bytes.Buffer
+			dst, dstStore := newTestManager(t)
+			var res ImportResult
+			var err error
+			if format == "encrypted" {
+				if _, err := src.ExportEncrypted(&buf, &ExportOptions{KDF: kdf.Minimum()}, []byte("pw")); err != nil {
+					t.Fatal(err)
+				}
+				res, err = dst.ImportEncrypted(&buf, ImportOptions{}, []byte("pw"))
+			} else {
+				if _, err := src.Export(&buf, &ExportOptions{Format: format}); err != nil {
+					t.Fatal(err)
+				}
+				res, err = dst.Import(&buf, ImportOptions{Format: format})
+			}
+			if err != nil || res.Imported != 4 || len(res.Errors) != 0 {
+				t.Fatalf("Import = %+v, %v", res, err)
+			}
+			for k, d := range want {
+				got, err := dstStore.Details(k)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.URL != d.URL || string(got.Notes) != string(d.Notes) || !slices.EqualFunc(got.Fields, d.Fields, func(a, b vault.Field) bool {
+					return a.Name == b.Name && a.Secret == b.Secret && string(a.Value) == string(b.Value)
+				}) {
+					t.Errorf("%s: details %+v (notes %q), want %+v", k, got, got.Notes, d)
+				}
+			}
+			if d, err := dstStore.Details(vault.Key{Kind: vault.KindPassword, Service: "bare"}); err != nil || !d.IsZero() {
+				t.Errorf("bare: details %+v, %v; want none", d, err)
+			}
+		})
+	}
+}
+
+// Overwriting on import replaces the details with the file's, none
+// included; details an entry can't have are reported, and that entry isn't
+// imported at all.
+func TestImport_DetailsOverwriteAndRefused(t *testing.T) {
+	m, store := newTestManager(t)
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	if err := store.Put(gh, []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetDetails(gh, &vault.Details{URL: "https://old.example", Notes: []byte("old notes")}); err != nil {
+		t.Fatal(err)
+	}
+	in := `[{"service": "github", "username": "alice", "type": "password", "secret": "new"},
+		{"service": "bad", "type": "password", "secret": "s", "fields": [{"name": "url", "value": "x"}]},
+		{"service": "note", "type": "secure_note", "secret": "s", "notes": "n"}]`
+	res, err := m.Import(strings.NewReader(in), ImportOptions{OnConflict: ConflictOverwrite})
+	if err != nil || res.Imported != 1 || len(res.Errors) != 2 ||
+		!strings.Contains(res.Errors[0], `"bad": the field name "url" is reserved`) ||
+		!strings.Contains(res.Errors[1], `"note": a secure note can't have notes`) {
+		t.Fatalf("Import = %+v, %v; want 1 imported and 2 refused", res, err)
+	}
+	if d, err := store.Details(gh); err != nil || !d.IsZero() {
+		t.Errorf("overwritten details = %+v, %v; want none", d, err)
+	}
+	for _, svc := range []string{"bad", "note"} {
+		if _, err := store.Lookup(vault.Key{Kind: vault.KindPassword, Service: svc}); !errors.Is(err, vault.ErrNotFound) {
+			t.Errorf("%s was imported: %v", svc, err)
+		}
+	}
+	if _, err := store.Lookup(vault.Key{Kind: vault.KindNote, Service: "note"}); !errors.Is(err, vault.ErrNotFound) {
+		t.Errorf("the secure note with notes was imported: %v", err)
 	}
 }

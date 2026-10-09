@@ -138,6 +138,21 @@ func TestDoctor_UnreadableEntries(t *testing.T) {
 	}
 }
 
+// Notes and fields that don't read are named like any other damage.
+func TestDoctor_UnreadableDetails(t *testing.T) {
+	env := doctorVault(t)
+	sqlExec(t, env.dbPath, `UPDATE entries SET details = '{' WHERE service = 'openai'`)
+	out, err := runDoctorOut(t)
+	if !errors.Is(err, errReported) {
+		t.Fatalf("err = %v, want the failure reported", err)
+	}
+	want := "  FAIL  Entries         1 of 2 entries can't be read\n" +
+		"                        api_key/openai: notes or fields don't read\n"
+	if !strings.Contains(out, want) {
+		t.Errorf("output missing %q:\n%s", want, out)
+	}
+}
+
 // openDoctorVault opens the doctorVault's store, as a command would.
 func openDoctorVault(t *testing.T, env *rekeyTestEnv) *database.Store {
 	t.Helper()

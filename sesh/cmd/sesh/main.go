@@ -286,6 +286,11 @@ func (u unavailableStore) Exists(vault.Key) error                      { return 
 func (u unavailableStore) List(*vault.Filter) ([]vault.Entry, error)   { return nil, u.err }
 func (u unavailableStore) Delete(vault.Key) error                      { return u.err }
 func (u unavailableStore) DeleteMany([]vault.Key) error                { return u.err }
+func (u unavailableStore) Details(vault.Key) (vault.Details, error)    { return vault.Details{}, u.err }
+func (u unavailableStore) SetDetails(vault.Key, *vault.Details) error  { return u.err }
+func (u unavailableStore) SaveWithDetails(*vault.Entry, []byte, *vault.Details) error {
+	return u.err
+}
 
 // appSettingsFrom is the settings the app's commands use, from cfg.
 func appSettingsFrom(cfg *config.Config) AppSettings {

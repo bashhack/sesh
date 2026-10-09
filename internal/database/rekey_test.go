@@ -158,12 +158,19 @@ func TestStore_AfterAnotherRekey(t *testing.T) {
 	if err := other.CheckKey(); err != nil {
 		t.Fatal(err)
 	}
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	d := vault.Details{Notes: []byte("notes")}
+	if err := s.SetDetails(k, &d); err != nil {
+		t.Fatal(err)
+	}
 	key, rec := newKeyFor(t, "new-password-1")
 	if _, err := s.Rekey(key, rec, rewrapTo); err != nil {
 		t.Fatal(err)
 	}
-	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
 	for name, f := range map[string]func() error{
+		"details":            func() error { _, err := other.Details(k); return err },
+		"set details":        func() error { return other.SetDetails(k, &d) },
+		"save with details":  func() error { return other.SaveWithDetails(&vault.Entry{Key: k}, []byte("v"), &d) },
 		"put":                func() error { return other.Put(k, []byte("v")) },
 		"delete":             func() error { return other.Delete(k) },
 		"delete many":        func() error { return other.DeleteMany([]vault.Key{k}) },

@@ -22,10 +22,12 @@ const (
 	ProblemSettings
 	// ProblemTimes: the creation or update time doesn't read.
 	ProblemTimes
+	// ProblemDetails: the notes and custom fields don't decrypt or read.
+	ProblemDetails
 )
 
-// EntryProblem is an entry Verify couldn't read: its secret doesn't decrypt,
-// or its settings or times don't parse.
+// EntryProblem is an entry Verify couldn't read: its secret or details
+// don't decrypt, or its settings, times, or details don't parse.
 type EntryProblem struct {
 	Err  error
 	Key  vault.Key
@@ -89,14 +91,16 @@ func (s *Store) Verify() (VerifyReport, error) {
 	}
 
 	type entry struct {
-		timesErr   error
-		k          vault.Key
-		data, salt []byte
-		settings   sql.NullString
+		timesErr           error
+		k                  vault.Key
+		data, salt         []byte
+		sealed, sealedSalt []byte
+		url, details       string
+		settings           sql.NullString
 	}
 	// By row id, not through the name index, so a damaged index can't
 	// hide an entry.
-	rows, err := tx.Query(`SELECT kind, service, username, encrypted_data, salt, settings, created_at, updated_at FROM entries NOT INDEXED ORDER BY id`)
+	rows, err := tx.Query(`SELECT kind, service, username, encrypted_data, salt, settings, url, details, sealed_details, details_salt, created_at, updated_at FROM entries NOT INDEXED ORDER BY id`)
 	if err != nil {
 		return r, fmt.Errorf("read entries: %w", err)
 	}
@@ -105,11 +109,11 @@ func (s *Store) Verify() (VerifyReport, error) {
 		var e entry
 		var kind string
 		var created, updated sql.NullTime
-		if err := rows.Scan(&kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &created, &updated); err != nil {
+		if err := rows.Scan(&kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &e.url, &e.details, &e.sealed, &e.sealedSalt, &created, &updated); err != nil {
 			// A time that doesn't read is the entry's problem; scan the
 			// rest of the row without it.
 			var raw1, raw2 any
-			if err2 := rows.Scan(&kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &raw1, &raw2); err2 != nil {
+			if err2 := rows.Scan(&kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &e.url, &e.details, &e.sealed, &e.sealedSalt, &raw1, &raw2); err2 != nil {
 				_ = rows.Close() //nolint:errcheck // already failing
 				return r, fmt.Errorf("read entries: %w", err2)
 			}
@@ -140,12 +144,51 @@ func (s *Store) Verify() (VerifyReport, error) {
 			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Kind: ProblemSettings, Err: err})
 			continue
 		}
+		if err := s.checkDetails(e.k, e.url, e.details, e.sealed, e.sealedSalt); err != nil {
+			if errors.Is(err, errCouldntCheck) {
+				return r, fmt.Errorf("couldn't finish checking %s: %w", e.k, err)
+			}
+			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Kind: ProblemDetails, Err: err})
+			continue
+		}
 		if e.timesErr != nil {
 			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Kind: ProblemTimes, Err: e.timesErr})
 		}
 	}
 	sort.Slice(r.Problems, func(i, j int) bool { return r.Problems[i].Key.Less(r.Problems[j].Key) })
 	return r, nil
+}
+
+// errCouldntCheck marks a details check that failed for a reason other
+// than damage, such as an agent that went away.
+var errCouldntCheck = errors.New("couldn't check")
+
+// checkDetails opens an entry's details as Details would, returning what
+// doesn't read or breaks the rules SetDetails keeps. A failure that isn't
+// damage wraps errCouldntCheck.
+func (s *Store) checkDetails(k vault.Key, url, details string, sealed, salt []byte) error {
+	e := vault.Entry{Key: k}
+	if err := vault.DecodeEntryDetails(&e, url, details); err != nil {
+		return err
+	}
+	var plain []byte
+	if sealed != nil {
+		var err error
+		plain, err = s.oracle.DecryptEntry(sealed, salt, detailsAAD(k))
+		switch {
+		case errors.Is(err, ErrDecrypt):
+			return fmt.Errorf("its notes and secret fields don't decrypt with the vault's key: %w", err)
+		case err != nil:
+			return fmt.Errorf("%w: %w", errCouldntCheck, err)
+		}
+		defer secure.SecureZeroBytes(plain)
+	}
+	d, err := vault.DecodeDetails(&e, plain)
+	if err != nil {
+		return err
+	}
+	defer d.Zero()
+	return d.Check(k.Kind)
 }
 
 // rowsQuerier is a *sql.DB or a *sql.Tx, for queries returning rows.

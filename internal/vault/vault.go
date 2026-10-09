@@ -376,8 +376,15 @@ type Entry struct {
 	// "/". It files the entry; it isn't part of its ID.
 	Folder string
 	// Tags are the entry's tags, sorted, each once.
-	Tags     []string
+	Tags []string
+	// URL is the entry's web address, "" for none.
+	URL string
+	// Fields are the entry's custom fields, in order; a secret one's
+	// value is left out (see Store.Details).
+	Fields   []Field
 	Settings Settings
+	// HasNotes reports whether the entry has notes (see Store.Details).
+	HasNotes bool
 }
 
 // Filter narrows List; an empty field matches every entry.
@@ -423,12 +430,21 @@ type Store interface {
 	// Get returns the entry's secret, which the caller zeroes.
 	Get(k Key) ([]byte, error)
 	// Put creates the entry or replaces its secret, keeping its settings,
-	// folder, tags, and creation time.
+	// folder, tags, details, and creation time.
 	Put(k Key, secret []byte) error
-	// Save creates or replaces the whole entry: secret, settings, folder,
-	// tags, and its times (a zero time means now). Import and key changes
-	// use it.
+	// Save creates or replaces the entry's secret, settings, folder, tags,
+	// and times (a zero time means now), keeping its details (see
+	// SetDetails). Import and key changes use it.
 	Save(e *Entry, secret []byte) error
+	// SaveWithDetails is Save, also replacing the entry's details with d
+	// (none, when d is zero), all in one write; d must pass Details.Check.
+	SaveWithDetails(e *Entry, secret []byte, d *Details) error
+	// Details returns the entry's URL, notes, and custom fields, secret
+	// values included, which the caller zeroes (Details.Zero).
+	Details(k Key) (Details, error)
+	// SetDetails replaces the entry's URL, notes, and custom fields, after
+	// Details.Check.
+	SetDetails(k Key, d *Details) error
 	// SetSettings replaces the entry's settings.
 	SetSettings(k Key, s Settings) error
 	// Lookup returns the entry without its secret.

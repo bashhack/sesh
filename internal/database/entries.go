@@ -27,7 +27,13 @@ var _ vault.Store = (*Store)(nil)
 // length and its bytes. The lengths keep fields from running together
 // (service "a/b" is not service "a", username "b"), whatever they contain.
 func entryAAD(k vault.Key) []byte {
-	aad := []byte("sesh-entry-v1")
+	return keyAAD("sesh-entry-v1", k)
+}
+
+// keyAAD is tag, then k's kind, service, and username, each as a 4-byte
+// big-endian length and its bytes.
+func keyAAD(tag string, k vault.Key) []byte {
+	aad := []byte(tag)
 	for _, f := range []string{string(k.Kind), k.Service, k.Username} {
 		aad = binary.BigEndian.AppendUint32(aad, uint32(len(f))) //nolint:gosec // field lengths are far below 4 GiB
 		aad = append(aad, f...)
@@ -97,18 +103,26 @@ func (s *Store) Get(k vault.Key) ([]byte, error) {
 
 // Put implements vault.Store.
 func (s *Store) Put(k vault.Key, secret []byte) error {
-	return s.write(&vault.Entry{Key: k}, secret, false)
+	return s.write(&vault.Entry{Key: k}, secret, false, nil)
 }
 
 // Save implements vault.Store.
 func (s *Store) Save(e *vault.Entry, secret []byte) error {
-	return s.write(e, secret, true)
+	return s.write(e, secret, true, nil)
+}
+
+// SaveWithDetails implements vault.Store.
+func (s *Store) SaveWithDetails(e *vault.Entry, secret []byte, d *vault.Details) error {
+	if err := d.Check(e.Kind); err != nil {
+		return err
+	}
+	return s.write(e, secret, true, d)
 }
 
 // write stores e's secret. whole also replaces its settings, folder, tags,
 // and times; otherwise an existing entry keeps them, except its update
-// time.
-func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
+// time. Details, when not nil, replace the entry's in the same write.
+func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Details) error {
 	if err := e.Key.Validate(); err != nil {
 		return err
 	}
@@ -132,6 +146,12 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
 	if err != nil {
 		return fmt.Errorf("encrypt %s: %w", e.Key, err)
 	}
+	var sd sealedDetails
+	if d != nil {
+		if sd, err = s.sealDetails(e.Key, d); err != nil {
+			return err
+		}
+	}
 	now := time.Now().UTC()
 	created, updated := e.CreatedAt, e.UpdatedAt
 	if created.IsZero() {
@@ -144,14 +164,17 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool) error {
 	if whole {
 		onConflict += `, settings = excluded.settings, folder = excluded.folder, created_at = excluded.created_at`
 	}
+	if d != nil {
+		onConflict += `, url = excluded.url, details = excluded.details, sealed_details = excluded.sealed_details, details_salt = excluded.details_salt`
+	}
 	err = s.inTx(func(tx *sql.Tx) error {
 		var id int64
 		err := tx.QueryRow(`
-			INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, folder, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (kind, service, username) DO UPDATE SET `+onConflict+`
 			RETURNING id`,
-			string(e.Kind), e.Service, e.Username, encData, salt, settings, e.Folder, created, updated,
+			string(e.Kind), e.Service, e.Username, encData, salt, settings, e.Folder, sd.url, sd.plain, sd.sealed, sd.salt, created, updated,
 		).Scan(&id)
 		if err != nil || !whole {
 			return err
@@ -203,9 +226,10 @@ func (s *Store) SetSettings(k vault.Key, settings vault.Settings) error {
 // Lookup implements vault.Store.
 func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
 	var col, tags sql.NullString
+	var url, details string
 	e := vault.Entry{Key: k}
-	err := s.db.QueryRow(`SELECT settings, folder, `+tagsColumn+`, created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`,
-		string(k.Kind), k.Service, k.Username).Scan(&col, &e.Folder, &tags, &e.CreatedAt, &e.UpdatedAt)
+	err := s.db.QueryRow(`SELECT settings, folder, `+tagsColumn+`, url, details, created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return vault.Entry{}, notFound(k)
 	}
@@ -216,6 +240,9 @@ func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
 		return vault.Entry{}, err
 	}
 	e.Tags = splitTags(tags)
+	if err := vault.DecodeEntryDetails(&e, url, details); err != nil {
+		return vault.Entry{}, err
+	}
 	return e, nil
 }
 
@@ -236,7 +263,7 @@ func (s *Store) Exists(k vault.Key) error {
 // List implements vault.Store.
 func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 	var q strings.Builder
-	q.WriteString(`SELECT kind, service, username, settings, folder, ` + tagsColumn + `, created_at, updated_at FROM entries WHERE 1 = 1`)
+	q.WriteString(`SELECT kind, service, username, settings, folder, ` + tagsColumn + `, url, details, created_at, updated_at FROM entries WHERE 1 = 1`)
 	var args []any
 	if f.Kind != "" {
 		q.WriteString(` AND kind = ?`)
@@ -274,7 +301,8 @@ func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 		var e vault.Entry
 		var kind string
 		var col, tags sql.NullString
-		if err := rows.Scan(&kind, &e.Service, &e.Username, &col, &e.Folder, &tags, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		var url, details string
+		if err := rows.Scan(&kind, &e.Service, &e.Username, &col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("list entries: %w", err)
 		}
 		e.Kind = vault.Kind(kind)
@@ -282,6 +310,9 @@ func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 			return nil, err
 		}
 		e.Tags = splitTags(tags)
+		if err := vault.DecodeEntryDetails(&e, url, details); err != nil {
+			return nil, err
+		}
 		out = append(out, e)
 	}
 	return out, rows.Err()

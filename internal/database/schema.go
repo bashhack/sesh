@@ -38,6 +38,12 @@ func migrateV1(tx *sql.Tx) error {
 			salt           BLOB NOT NULL,
 			settings       TEXT,
 			folder         TEXT NOT NULL DEFAULT '',
+			url            TEXT NOT NULL DEFAULT '',
+			-- The readable part of the notes and custom fields, as JSON,
+			-- and the sealed part; see details.go.
+			details        TEXT NOT NULL DEFAULT '',
+			sealed_details BLOB,
+			details_salt   BLOB,
 			created_at     DATETIME NOT NULL,
 			updated_at     DATETIME NOT NULL,
 			UNIQUE (kind, service, username)
