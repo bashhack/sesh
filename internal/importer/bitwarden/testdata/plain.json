@@ -1,0 +1,269 @@
+{
+  "encrypted": false,
+  "folders": [
+    {
+      "name": "Bank & Co",
+      "id": "fcd40716-7757-4083-927d-f8a971f003ca"
+    },
+    {
+      "name": "Personal",
+      "id": "33745bd8-5f1a-43c1-bc29-788e53adcd1a"
+    },
+    {
+      "name": "Social/Forums",
+      "id": "26ae00d0-b247-4b27-9e4d-2b3815655dfd"
+    },
+    {
+      "name": "Work Accounts",
+      "id": "e4f0929f-235e-495d-b42a-ff2688421535"
+    },
+    {
+      "name": "Work Accounts/Banking",
+      "id": "e68bacb9-ca7c-455d-9586-60cedbdf9cca"
+    }
+  ],
+  "items": [
+    {
+      "type": 1,
+      "name": "a/b site",
+      "favorite": false,
+      "reprompt": 0,
+      "id": "65109db0-87f9-4cbb-af80-8ded7484626e",
+      "collectionIds": null,
+      "folderId": "fcd40716-7757-4083-927d-f8a971f003ca",
+      "fields": [],
+      "login": {
+        "uris": [],
+        "fido2Credentials": [],
+        "username": "u",
+        "password": "p"
+      },
+      "passwordHistory": [],
+      "creationDate": "2026-10-09T22:50:30.730Z",
+      "revisionDate": "2026-10-09T22:50:30.730Z"
+    },
+    {
+      "type": 1,
+      "name": "AWS console",
+      "favorite": false,
+      "reprompt": 0,
+      "id": "23269596-9629-44f1-9d3c-1eea9f8a0cb8",
+      "collectionIds": null,
+      "folderId": "e68bacb9-ca7c-455d-9586-60cedbdf9cca",
+      "fields": [],
+      "login": {
+        "uris": [
+          {
+            "uri": "https://console.aws.amazon.com"
+          }
+        ],
+        "fido2Credentials": [],
+        "username": "root",
+        "password": "aws-pw",
+        "totp": "GEZDGNBVGY3TQOJQ"
+      },
+      "passwordHistory": [],
+      "creationDate": "2026-10-09T22:50:19.506Z",
+      "revisionDate": "2026-10-09T22:50:19.506Z"
+    },
+    {
+      "type": 5,
+      "name": "deploy key",
+      "favorite": false,
+      "reprompt": 0,
+      "id": "ca0398c2-75b7-45b7-8d21-37cd96e49e58",
+      "collectionIds": null,
+      "folderId": "e4f0929f-235e-495d-b42a-ff2688421535",
+      "fields": [],
+      "sshKey": {
+        "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
+        "publicKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest test@example",
+        "keyFingerprint": "SHA256:testfingerprint"
+      },
+      "passwordHistory": [],
+      "creationDate": "2026-10-09T22:50:42.217Z",
+      "revisionDate": "2026-10-09T22:50:42.217Z"
+    },
+    {
+      "type": 1,
+      "name": "GitHub",
+      "favorite": false,
+      "reprompt": 0,
+      "id": "269bc6e3-4826-4c43-a9eb-168b3854d215",
+      "collectionIds": null,
+      "folderId": "e4f0929f-235e-495d-b42a-ff2688421535",
+      "notes": "main account\nrecovery codes in the safe",
+      "fields": [
+        {
+          "type": 0,
+          "name": "recovery-email",
+          "value": "alice@example.com"
+        },
+        {
+          "type": 1,
+          "name": "pin",
+          "value": "4321"
+        },
+        {
+          "type": 2,
+          "name": "2fa enabled",
+          "value": "true"
+        },
+        {
+          "type": 3,
+          "name": "linked user",
+          "linkedId": 100
+        }
+      ],
+      "login": {
+        "uris": [
+          {
+            "uri": "https://github.com/login"
+          },
+          {
+            "uri": "github.com",
+            "match": 1
+          }
+        ],
+        "fido2Credentials": [],
+        "username": "alice",
+        "password": "gh-new-password-2",
+        "totp": "otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&algorithm=SHA256&digits=8&period=30"
+      },
+      "passwordHistory": [
+        {
+          "password": "gh-old-password-1",
+          "lastUsedDate": "2026-10-09T22:50:47.267Z"
+        }
+      ],
+      "creationDate": "2026-10-09T22:50:16.635Z",
+      "revisionDate": "2026-10-09T22:50:47.287Z"
+    },
+    {
+      "type": 1,
+      "name": "GitHub",
+      "favorite": false,
+      "reprompt": 0,
+      "id": "30dd4154-bd78-4b27-b8a7-f16af3b36463",
+      "collectionIds": null,
+      "folderId": "33745bd8-5f1a-43c1-bc29-788e53adcd1a",
+      "fields": [],
+      "login": {
+        "uris": [],
+        "fido2Credentials": [],
+        "username": "alice",
+        "password": "other-github-pw"
+      },
+      "passwordHistory": [],
+      "creationDate": "2026-10-09T22:50:27.873Z",
+      "revisionDate": "2026-10-09T22:50:27.873Z"
+    },
+    {
+      "type": 4,
+      "name": "Me",
+      "favorite": false,
+      "reprompt": 0,
+      "id": "968bb50d-e995-46da-a70f-01f91aae7164",
+      "collectionIds": null,
+      "fields": [],
+      "identity": {
+        "title": "Ms",
+        "firstName": "Alice",
+        "lastName": "Doe",
+        "address1": "1 Main St",
+        "city": "Springfield",
+        "state": "IL",
+        "postalCode": "62701",
+        "country": "US",
+        "email": "alice@example.com",
+        "phone": "555-0100",
+        "ssn": "000-00-0000",
+        "username": "alice",
+        "passportNumber": "X1234567",
+        "licenseNumber": "D123-4567"
+      },
+      "passwordHistory": [],
+      "creationDate": "2026-10-09T22:50:39.355Z",
+      "revisionDate": "2026-10-09T22:50:39.355Z"
+    },
+    {
+      "type": 1,
+      "name": "Router",
+      "favorite": true,
+      "reprompt": 1,
+      "id": "3ff30051-9914-421c-82cb-f34bb4ab8429",
+      "collectionIds": null,
+      "fields": [],
+      "login": {
+        "uris": [
+          {
+            "uri": "192.168.1.1"
+          }
+        ],
+        "fido2Credentials": [],
+        "password": "router-pw"
+      },
+      "passwordHistory": [],
+      "creationDate": "2026-10-09T22:50:25.128Z",
+      "revisionDate": "2026-10-09T22:50:25.128Z"
+    },
+    {
+      "type": 1,
+      "name": "Steam",
+      "favorite": false,
+      "reprompt": 0,
+      "id": "e864c4e8-de1b-4069-bfac-b14e1c62afc8",
+      "collectionIds": null,
+      "folderId": "26ae00d0-b247-4b27-9e4d-2b3815655dfd",
+      "fields": [],
+      "login": {
+        "uris": [],
+        "fido2Credentials": [],
+        "username": "gamer",
+        "password": "steam-pw",
+        "totp": "steam://JBSWY3DPEHPK3PXP"
+      },
+      "passwordHistory": [],
+      "creationDate": "2026-10-09T22:50:22.376Z",
+      "revisionDate": "2026-10-09T22:50:22.376Z"
+    },
+    {
+      "type": 3,
+      "name": "Visa",
+      "favorite": false,
+      "reprompt": 0,
+      "id": "c56d67c8-b979-4694-85f0-e4efc17dd254",
+      "collectionIds": null,
+      "folderId": "fcd40716-7757-4083-927d-f8a971f003ca",
+      "fields": [],
+      "card": {
+        "cardholderName": "Alice Doe",
+        "brand": "Visa",
+        "number": "4242424242424242",
+        "expMonth": "04",
+        "expYear": "2030",
+        "code": "123"
+      },
+      "passwordHistory": [],
+      "creationDate": "2026-10-09T22:50:36.494Z",
+      "revisionDate": "2026-10-09T22:50:36.494Z"
+    },
+    {
+      "type": 2,
+      "name": "Wifi",
+      "favorite": false,
+      "reprompt": 0,
+      "id": "9ccbb1aa-bff8-44ce-a079-825a404ba622",
+      "collectionIds": null,
+      "folderId": "33745bd8-5f1a-43c1-bc29-788e53adcd1a",
+      "notes": "SSID: home\nPassword: correct horse",
+      "fields": [],
+      "secureNote": {
+        "type": 0
+      },
+      "passwordHistory": [],
+      "creationDate": "2026-10-09T22:50:33.635Z",
+      "revisionDate": "2026-10-09T22:50:33.635Z"
+    }
+  ]
+}

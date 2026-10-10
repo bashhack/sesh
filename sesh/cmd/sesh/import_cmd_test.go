@@ -3,18 +3,22 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/makiuchi-d/gozxing"
 	zqr "github.com/makiuchi-d/gozxing/qrcode"
 
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -160,7 +164,7 @@ func TestImport_FromImagesAndSplitExports(t *testing.T) {
 		t.Errorf("summary:\n%s", stderr)
 	}
 	for args, wantSub := range map[string]string{
-		"--from bitwarden x.json": `sesh can't import from "bitwarden" yet`,
+		"--from 1password x.1pux": `sesh can't import from "1password"`,
 		"nothing.txt":             "no such file",
 		text + ".none":            "no such file",
 	} {
@@ -218,7 +222,7 @@ func TestImport_Edges(t *testing.T) {
 		t.Fatalf("%q, %q, %v", out, stderr, err)
 	}
 	for _, want := range []string{
-		"totp/github/alice  (you have totp/GitHub/alice)",
+		"totp/github/alice\n      you have totp/GitHub/alice",
 		`"Short:bob": the secret can't be used: secret too short`,
 		`"dup:x": another account here has this name`,
 	} {
@@ -270,5 +274,193 @@ func TestImport_StdinAtATerminal(t *testing.T) {
 	importVault(t)
 	if _, _, err := runImportOut(t, "", true, "-"); err == nil || !strings.Contains(err.Error(), "pbpaste | sesh import -") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// bitwardenFixture is a genuine Bitwarden export from the importer's
+// testdata (see internal/importer/bitwarden/export_test.go).
+func bitwardenFixture(name string) string {
+	return filepath.Join("..", "..", "..", "internal", "importer", "bitwarden", "testdata", name)
+}
+
+// A Bitwarden export is found without --from, shown with its renamed
+// folders and what changed, and stored with folders, tags, details and
+// times; the password-protected one asks for its password. The vault
+// already has totp/GitHub/alice.
+func TestImport_Bitwarden(t *testing.T) {
+	env := importVault(t)
+	_, stderr, err := runImportOut(t, "", false, "--dry-run", bitwardenFixture("plain.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Found 10 items and 5 folders in the Bitwarden export.",
+		"Folders, renamed to fit sesh's rules:\n",
+		`"Work Accounts" is "Work-Accounts"`,
+		"  Passwords, in Work-Accounts (1):\n    password/GitHub/alice\n",
+		`        field "linked user" not kept`,
+		"  Secure notes, in no folder (1):\n    secure_note/Me\n",
+		"Not kept:\n  items set to ask for the master password again (sesh doesn't ask): 1\n  old passwords (sesh keeps no history yet): 1\n",
+		"Already in the vault (1):\n  totp/GitHub/alice\n",
+		`named "GitHub (2)" in sesh: another item has its name`,
+		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("summary missing %q:\n%s", want, stderr)
+		}
+	}
+	old := readSecret
+	t.Cleanup(func() { readSecret = old })
+	readSecret = func() ([]byte, error) { return []byte("export-pass-1"), nil }
+	out, stderr, err := runImportOut(t, "y\n", true, "--on-conflict", "skip", bitwardenFixture("password.json"))
+	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from Bitwarden.") || !strings.Contains(stderr, "Password for the Bitwarden export: ") {
+		t.Fatalf("%q\n%s\n%v", out, stderr, err)
+	}
+	if strings.Contains(out, "delete") {
+		t.Errorf("a protected export got the delete warning: %q", out)
+	}
+	store := openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	gh := vault.Key{Kind: vault.KindPassword, Service: "GitHub", Username: "alice"}
+	e, err := store.Lookup(gh)
+	if err != nil || e.Folder != "Work-Accounts" || e.URL != "https://github.com/login" || e.CreatedAt.Year() != 2026 {
+		t.Errorf("GitHub = %+v, %v", e, err)
+	}
+	d, err := store.Details(gh, "all")
+	if err != nil || string(d.Notes) != "main account\nrecovery codes in the safe" || len(d.Fields) != 4 {
+		t.Errorf("GitHub details = %+v, %v", d, err)
+	}
+	if secret, err := store.Get(gh); err != nil || string(secret) != "gh-new-password-2" {
+		t.Errorf("GitHub password = %q, %v", secret, err)
+	}
+	if r, err := store.Lookup(vault.Key{Kind: vault.KindPassword, Service: "Router"}); err != nil || len(r.Tags) != 1 || r.Tags[0] != "favorite" {
+		t.Errorf("Router = %+v, %v", r, err)
+	}
+	// Plain exports say to delete the file; account-restricted ones are refused.
+	if out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "skip", bitwardenFixture("plain.json")); err != nil || !strings.Contains(out, "holds your passwords unencrypted") {
+		t.Errorf("plain: %q, %v", out, err)
+	}
+	if _, _, err := runImportOut(t, "", false, bitwardenFixture("account.json")); err == nil || !strings.Contains(err.Error(), "account restricted") {
+		t.Errorf("account restricted: %v", err)
+	}
+	if _, _, err := runImportOut(t, "", false, bitwardenFixture("vault.csv")); err == nil || !strings.Contains(err.Error(), "Bitwarden's CSV export") {
+		t.Errorf("CSV without --from: %v", err)
+	}
+	if _, _, err := runImportOut(t, "", false, "--from", "bitwarden", bitwardenFixture("password.json")); err == nil || !strings.Contains(err.Error(), "run sesh import at a terminal") {
+		t.Errorf("protected, no terminal: %v", err)
+	}
+}
+
+// Overwriting with an import takes the secret and code settings from it,
+// adds its tags to yours, and keeps your other settings, folder (when the
+// import has none) and creation time.
+func TestImport_BitwardenOverwrite(t *testing.T) {
+	env := importVault(t)
+	gh := vault.Key{Kind: vault.KindTOTP, Service: "GitHub", Username: "alice"}
+	store := openDoctorVault(t, env)
+	cur, err := store.Lookup(gh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur.Settings.AWSMFADevice = "arn:aws:iam::123456789012:mfa/alice"
+	cur.Tags = []string{"mine"}
+	cur.CreatedAt = time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := store.Save(&cur, []byte("GEZDGNBVGY3TQOJQ")); err != nil {
+		t.Fatal(err)
+	}
+	// The import's Router has a URL but no notes or fields: yours stay.
+	router := vault.Key{Kind: vault.KindPassword, Service: "Router"}
+	mine := vault.Details{URL: "http://old.example", Notes: []byte("recovery codes: 1111"), Fields: []vault.Field{{Name: "pin", Value: []byte("4321"), Secret: true}}}
+	if err := store.SaveWithDetails(&vault.Entry{Key: router}, []byte("old-pw"), &mine); err != nil {
+		t.Fatal(err)
+	}
+	// The import's GitHub login has fields: they're merged into yours by
+	// name, ignoring case, the import's winning.
+	ghPass := vault.Key{Kind: vault.KindPassword, Service: "GitHub", Username: "alice"}
+	ghMine := vault.Details{Notes: []byte("old notes"), Fields: []vault.Field{
+		{Name: "pin", Value: []byte("0000"), Secret: true},
+		{Name: "2FA-Enabled", Value: []byte("no"), Secret: true},
+		{Name: "team", Value: []byte("blue")},
+	}}
+	if err := store.SaveWithDetails(&vault.Entry{Key: ghPass}, []byte("old-pw"), &ghMine); err != nil {
+		t.Fatal(err)
+	}
+	// One whose merged fields would be more than sesh holds is skipped.
+	deploy := vault.Key{Kind: vault.KindNote, Service: "deploy key"}
+	var many vault.Details
+	for i := range vault.MaxFields {
+		many.Fields = append(many.Fields, vault.Field{Name: fmt.Sprintf("f%d", i), Value: []byte("v")})
+	}
+	if err := store.SaveWithDetails(&vault.Entry{Key: deploy}, []byte("old-pw"), &many); err != nil {
+		t.Fatal(err)
+	}
+	store.Close() //nolint:errcheck,gosec // reopened below
+	_, stderr, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
+	if err != nil || !strings.Contains(stderr, "Already in the vault, to be replaced (3):\n") ||
+		!strings.Contains(stderr, `field "2fa-enabled" replaces yours (2FA-Enabled), kept secret`) ||
+		!strings.Contains(stderr, `"deploy key": merged with your entry's, its details would break sesh's rules: an entry can have at most 50 fields`) {
+		t.Fatalf("%s\n%v", stderr, err)
+	}
+	store = openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	e, err := store.Lookup(gh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Settings.AWSMFADevice != "arn:aws:iam::123456789012:mfa/alice" || !e.CreatedAt.Equal(cur.CreatedAt) ||
+		!slices.Contains(e.Tags, "mine") || e.Folder != "Work-Accounts" || time.Since(e.UpdatedAt) > time.Minute {
+		t.Errorf("GitHub TOTP = %+v", e)
+	}
+	if secret, err := store.Get(gh); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" || e.Settings.TOTP.Digits != 8 {
+		t.Errorf("secret = %q, %v, code settings %+v: not replaced", secret, err, e.Settings.TOTP)
+	}
+	d, err := store.Details(ghPass, "all")
+	var fields []string
+	for _, f := range d.Fields {
+		fields = append(fields, f.Name+"="+string(f.Value))
+		if f.Name == "2fa-enabled" && !f.Secret {
+			t.Error("2fa-enabled, secret in the vault, was made plain by a plain field from the import")
+		}
+	}
+	if err != nil || string(d.Notes) != "main account\nrecovery codes in the safe" ||
+		strings.Join(fields, " ") != "pin=4321 2fa-enabled=true team=blue recovery-email=alice@example.com url-2=github.com" {
+		t.Errorf("GitHub fields = %q, notes %q, %v", fields, d.Notes, err)
+	}
+	if secret, err := store.Get(deploy); err != nil || string(secret) != "old-pw" {
+		t.Errorf("deploy key = %q, %v: should be left as it was", secret, err)
+	}
+	d, err = store.Details(router, "all")
+	if err != nil || d.URL != "192.168.1.1" || string(d.Notes) != "recovery codes: 1111" || len(d.Fields) != 1 || string(d.Fields[0].Value) != "4321" {
+		t.Errorf("Router details = %+v, %v", d, err)
+	}
+}
+
+// Google Authenticator's import says to delete the files the codes came from.
+func TestImport_GoogleAuthenticatorDeleteReminder(t *testing.T) {
+	importVault(t)
+	file := filepath.Join(t.TempDir(), "codes.txt")
+	code := transferCode(1, 0, 7, []any{"klmnopqrst", "bob", "", 1, 1, 2})
+	if err := os.WriteFile(file, []byte(code+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := runImportOut(t, "", false, "--yes", file)
+	if err != nil || !strings.Contains(out, "The transfer codes in "+file+" hold every secret they carry: delete them now") {
+		t.Errorf("%q, %v", out, err)
+	}
+	if out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "skip", code); err != nil || strings.Contains(out, "delete them") {
+		t.Errorf("a code given as text: %q, %v", out, err)
+	}
+}
+
+func TestDescribeParams(t *testing.T) {
+	for p, want := range map[totp.Params]string{
+		{}:                               "",
+		{Algorithm: "SHA256", Digits: 8}: "  (SHA256, 8 digits)",
+		{Period: 60}:                     "  (60 seconds)",
+		{Algorithm: "SHA512", Period: 1}: "  (SHA512, 1 second)",
+	} {
+		if got := describeParams(p); got != want {
+			t.Errorf("describeParams(%+v) = %q, want %q", p, got, want)
+		}
 	}
 }

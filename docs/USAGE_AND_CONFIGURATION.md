@@ -1159,10 +1159,11 @@ sesh inject -i config.yml.tpl -o config.yml
 - **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
 ### Importing from other apps (`sesh import`)
 
-`sesh import` brings entries over from another app. It reads everything first, shows what it found, then asks:
-- what it will import;
+`sesh import` brings entries over from another app: Bitwarden, or Google Authenticator. It reads everything first, shows what it found, then asks:
+- what it will import, by kind and folder;
 - which entries you already have;
-- what it will skip, and why.
+- what it will skip, and why;
+- what the app had that sesh doesn't keep.
 
 ```
 sesh import --from google-authenticator IMG_1234.png IMG_1235.png
@@ -1170,8 +1171,36 @@ sesh import --from google-authenticator IMG_1234.png IMG_1235.png
 
 - **`--dry-run`** shows the summary and imports nothing; before you have a vault, it doesn't make one. **`--yes`** imports without asking, and is needed when there's no terminal to ask at.
 - **The audit log** records each entry imported, and the import itself: `import  14 TOTP entries from Google Authenticator`.
-- **Entries you already have** stop the import, listed, unless `--on-conflict skip` leaves them as they are or `--on-conflict overwrite` replaces them.
+- **Entries you already have** stop the import, listed, unless `--on-conflict skip` leaves them as they are or `--on-conflict overwrite` replaces them. Replacing one takes its secret and code settings from the import, and its folder, URL and notes only where the import has them. The import's fields are added to yours, one with the name of a field you have (ignoring case) replacing it, and kept secret if yours was; an entry whose fields together would be more than sesh holds is skipped, and listed. To merge them, sesh reads the details of the entries it would replace before showing the summary, even with `--dry-run`, and the audit log records each read. Its tags are yours and the import's together, and the entry keeps its other settings (an AWS entry's MFA device) and the time it was made.
 - **sesh's own exports** are imported with `--service password --action import` (see [Encrypted exports](#encrypted-exports)).
+
+**Bitwarden.** Export your vault from Bitwarden as JSON, from the web vault, an app, or `bw export --format json`. Choose "Password protected" to keep it encrypted on disk; sesh asks for that password.
+- **An "Account restricted" export** can only be opened by Bitwarden itself, so sesh refuses it.
+- **Your own vault only:** export with "Export from" set to "My vault". An organization's export is refused, and a personal export leaves out the organization items you can see.
+- **The CSV export** isn't read yet: export as JSON.
+
+```
+sesh import --from bitwarden bitwarden_export.json
+```
+
+- **Logins** become password entries, with the first URL as the entry's URL (more go in fields `url-2`, `url-3`, ...), the notes, and the custom fields. A login's TOTP key becomes a TOTP entry beside it, with the same name.
+- **Secure notes** become secure notes.
+- **Cards, identities, and SSH keys** become secure notes with fields: numbers, codes, and private keys as secret fields, the rest plain. The note is the item's notes, or a line saying what it is ("Visa card ending 4242").
+- **Custom fields:** hidden ones are secret, text and boolean ones plain, and a text one of several lines secret too. Linked fields, which only point at another value, aren't kept.
+- **Names:**
+  - folder names and field names are fitted to sesh's rules, any other character becoming `-` ("Work Accounts" becomes `Work-Accounts`), and the summary lists each one;
+  - a `/` in an item's name becomes `-`;
+  - two items with one name and username get ` (2)` added to the second;
+  - favorites get the tag `favorite`.
+- **What doesn't come across,** said in the summary:
+  - Steam codes (the password still does);
+  - old passwords (sesh keeps no history yet);
+  - passkeys;
+  - Bitwarden's "ask for the master password again";
+  - bank accounts, driver's licences, and passports, which sesh can't import yet.
+  - notes, a URL, or a field with a character sesh refuses (such as a control character); the rest of the item still comes across, and a plain field that a secret one could hold is made secret instead.
+- **The times** each item was made and last changed come across. An archived item becomes an ordinary entry, which the summary says.
+- **A plain export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
 
 **Google Authenticator.** Its "Transfer accounts" moves your codes off the phone:
 1. In the app, choose Transfer accounts, then Export accounts. It shows one or more QR codes.

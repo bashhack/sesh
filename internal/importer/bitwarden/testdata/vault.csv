@@ -1,0 +1,13 @@
+folder,favorite,type,name,notes,fields,reprompt,archivedDate,login_uri,login_username,login_password,login_totp
+Bank & Co,,login,a/b site,,,0,,,u,p,
+Work Accounts/Banking,,login,AWS console,,,0,,https://console.aws.amazon.com,root,aws-pw,GEZDGNBVGY3TQOJQ
+Work Accounts,,login,GitHub,"main account
+recovery codes in the safe","recovery-email: alice@example.com
+pin: 4321
+2fa enabled: true
+linked user: undefined",0,,"https://github.com/login,github.com",alice,gh-new-password-2,otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&algorithm=SHA256&digits=8&period=30
+Personal,,login,GitHub,,,0,,,alice,other-github-pw,
+,1,login,Router,,,1,,192.168.1.1,,router-pw,
+Social/Forums,,login,Steam,,,0,,,gamer,steam-pw,steam://JBSWY3DPEHPK3PXP
+Personal,,note,Wifi,"SSID: home
+Password: correct horse",,0,,,,,
