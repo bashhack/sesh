@@ -294,8 +294,9 @@ func writeImported(store *database.Store, e *importer.Entry, exists bool) error 
 // mergeDetails makes e's details, for replacing the entry you have, yours
 // merged with the import's: its URL and notes only if it has them, and its
 // fields added to yours, one with a name you have (ignoring case) taking
-// that field's place (secret if either is). e is marked skipped when the merge breaks sesh's
-// rules. e owns every value it then holds; yours are wiped.
+// that field's place, secret if either is. e is marked skipped when the
+// merge breaks sesh's rules. e owns every value it then holds; yours are
+// wiped.
 func mergeDetails(store *database.Store, e *importer.Entry) error {
 	if e.Details.IsZero() {
 		return nil
