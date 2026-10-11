@@ -8,22 +8,41 @@ import (
 	"github.com/bashhack/sesh/internal/vault"
 )
 
+// Names are the keys an import has given out so far.
+type Names struct {
+	taken map[vault.Key]bool
+	// next is, for a key as the source names it, the first number below
+	// which every numbered(key, n) is taken, so placing many entries of
+	// one name doesn't try every number each time.
+	next map[vault.Key]int
+}
+
+// NewNames is Names with none given out.
+func NewNames() *Names {
+	return &Names{taken: map[vault.Key]bool{}, next: map[vault.Key]int{}}
+}
+
 // Place gives an item's entries their keys: as they are, or with " (2)",
 // " (3)" ... added to the service name of all of them together when
 // another item's entry has one already. It checks them again after.
-func Place(entries []*Entry, taken map[vault.Key]bool) {
+func Place(entries []*Entry, names *Names) {
 	var live []*Entry
 	for _, e := range entries {
 		if e.Skip == "" {
 			live = append(live, e)
 		}
 	}
-	for n := 1; ; n++ {
+	// Below each key's next, its numbered keys are all taken.
+	n := 1
+	for _, e := range live {
+		n = max(n, names.next[e.Key])
+	}
+	for ; ; n++ {
 		keys := make([]vault.Key, len(live))
 		free := true
 		for i, e := range live {
 			keys[i] = numbered(e.Key, n)
-			free = free && !taken[keys[i]]
+			free = free && !names.taken[keys[i]]
 		}
 		if !free {
 			continue
@@ -32,8 +51,13 @@ func Place(entries []*Entry, taken map[vault.Key]bool) {
 			if n > 1 {
 				e.Changes = append(e.Changes, fmt.Sprintf("named %q in sesh: an entry before it has the name", keys[i].Service))
 			}
+			names.taken[keys[i]] = true
+			next := max(names.next[e.Key], 1)
+			for names.taken[numbered(e.Key, next)] {
+				next++
+			}
+			names.next[e.Key] = next
 			e.Key = keys[i]
-			taken[keys[i]] = true
 			Checked(e)
 		}
 		return

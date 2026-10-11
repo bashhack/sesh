@@ -50,7 +50,7 @@ const noRecycleBin = "AAAAAAAAAAAAAAAAAAAAAA=="
 // tags are fitted too. An entry whose name another has gets " (2)" on all
 // its entries together. What changed on the way is said in each entry.
 func Entries(exp *Export) []*importer.Entry {
-	w := walker{bin: exp.Meta.RecycleBinUUID, taken: map[vault.Key]bool{}, now: time.Now(), byUUID: map[string]*Entry{}, refs: map[refKey]resolved{}}
+	w := walker{bin: exp.Meta.RecycleBinUUID, names: importer.NewNames(), now: time.Now(), byUUID: map[string]*Entry{}, refs: map[refKey]resolved{}, onPath: map[refKey]bool{}}
 	if w.bin == noRecycleBin {
 		w.bin = ""
 	}
@@ -79,9 +79,10 @@ func Count(exp *Export) (entries, groups int) {
 
 type walker struct {
 	now    time.Time
-	taken  map[vault.Key]bool
+	names  *importer.Names
 	byUUID map[string]*Entry // by its UUID in hex, upper case
 	refs   map[refKey]resolved
+	onPath map[refKey]bool // the fields being filled in, to find a loop
 	bin    string
 	out    []*importer.Entry
 }
@@ -116,10 +117,10 @@ type resolved struct {
 // reference by UUID is followed, which is what KeePassXC's Clone makes;
 // one that loops or grows too long can't be. (KeePassXC also stops ten
 // deep; sesh follows a longer chain, so that the result doesn't depend on
-// the order of entries, as remembering each field's value would make it.) It reports whether every one could be followed, and whether
-// any filled in a password or protected value. path is the fields being
-// filled in on the way here.
-func (w *walker) resolve(s string, path []refKey) (value string, ok, secret bool) {
+// the order of entries, as remembering each field's value would make it.)
+// It reports whether every one could be followed, and whether any filled
+// in a password or protected value.
+func (w *walker) resolve(s string) (value string, ok, secret bool) {
 	if !strings.Contains(s, "{REF:") {
 		return s, true, false
 	}
@@ -136,14 +137,16 @@ func (w *walker) resolve(s string, path []refKey) (value string, ok, secret bool
 			return strings.ToUpper(g[3])
 		}
 		k := refKey{target, field}
-		if slices.Contains(path, k) {
+		if w.onPath[k] {
 			ok = false
 			return m
 		}
 		r, done := w.refs[k]
 		if !done {
 			raw, protected := target.field(field)
-			r.value, r.ok, r.secret = w.resolve(raw, append(slices.Clone(path), k))
+			w.onPath[k] = true
+			r.value, r.ok, r.secret = w.resolve(raw)
+			delete(w.onPath, k)
 			r.secret = r.secret || protected || field == "Password"
 			w.refs[k] = r
 		}
@@ -182,7 +185,7 @@ func (w *walker) group(g *Group, path []string, inBin bool) {
 			base.Changes = append(base.Changes, fmt.Sprintf("folder %q is %q in sesh", folder, fitted))
 		}
 		entries := w.entry(e, base)
-		importer.Place(entries, w.taken)
+		importer.Place(entries, w.names)
 		w.out = append(w.out, entries...)
 	}
 	for i := range g.Groups {
@@ -212,7 +215,7 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 	var followed, unfollowed []string
 	madeSecret := map[string]bool{}
 	for _, str := range e.Strings {
-		v, ok, secret := w.resolve(str.Value.Text, nil)
+		v, ok, secret := w.resolve(str.Value.Text)
 		switch {
 		case !ok:
 			unfollowed = append(unfollowed, str.Key)

@@ -44,7 +44,7 @@ func Entries(exp *Export) []*importer.Entry {
 		}
 	}
 	var out []*importer.Entry
-	taken := map[vault.Key]bool{}
+	names := importer.NewNames()
 	for i := range exp.Items {
 		it := &exp.Items[i]
 		base := &importer.Entry{
@@ -67,7 +67,7 @@ func Entries(exp *Export) []*importer.Entry {
 			base.Changes = append(base.Changes, "archived in Bitwarden; an ordinary entry in sesh")
 		}
 		entries := itemEntries(it, base)
-		importer.Place(entries, taken)
+		importer.Place(entries, names)
 		out = append(out, entries...)
 	}
 	return out
