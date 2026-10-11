@@ -54,7 +54,9 @@ func backups(t *testing.T, env *rekeyTestEnv) []backup.Info {
 // Unlocking makes a backup when the newest is a day old, not before, and
 // keeps backup.keep of them. An empty vault isn't backed up.
 func TestAutoBackup(t *testing.T) {
-	clock := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
+	// Local time, as backups count calendar days in it: 9:00 and 14:00
+	// are one day wherever the tests run.
+	clock := time.Date(2026, 10, 7, 9, 0, 0, 0, time.Local)
 	env := backupVault(t, &clock)
 	t.Setenv("SESH_BACKUP_KEEP", "2")
 	unlockOnce(t)
