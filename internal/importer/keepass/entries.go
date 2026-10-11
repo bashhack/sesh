@@ -31,10 +31,6 @@ var standardFields = []string{"Title", "UserName", "Password", "URL", "Notes", "
 // {REF:<field>@<search>:<text>}, "{REF:" as written, the rest in any case.
 var reference = regexp.MustCompile(`\{REF:(?i:([TUPANI])@([TUPANIO])):([^}]+)\}`)
 
-// maxReferenceDepth is how deep references are followed, as KeePassXC's
-// ResolveMaximumDepth (Entry.cpp).
-const maxReferenceDepth = 10
-
 // maxResolvedLength is the longest a value may grow to with references
 // filled in, so ones that each repeat another can't make it huge.
 const maxResolvedLength = 1 << 16
@@ -118,16 +114,14 @@ type resolved struct {
 // resolve fills in s's references to other entries, as KeePassXC does when
 // it uses a value (Entry.cpp resolveReferencePlaceholderRecursive). Only a
 // reference by UUID is followed, which is what KeePassXC's Clone makes;
-// one that loops, goes deeper than KeePassXC would, or grows too long
-// can't be. It reports whether every one could be followed, and whether
+// one that loops or grows too long can't be. (KeePassXC also stops ten
+// deep; sesh follows a longer chain, so that the result doesn't depend on
+// the order of entries, as remembering each field's value would make it.) It reports whether every one could be followed, and whether
 // any filled in a password or protected value. path is the fields being
 // filled in on the way here.
 func (w *walker) resolve(s string, path []refKey) (value string, ok, secret bool) {
 	if !strings.Contains(s, "{REF:") {
 		return s, true, false
-	}
-	if len(path) >= maxReferenceDepth {
-		return s, false, false
 	}
 	ok = true
 	value = reference.ReplaceAllStringFunc(s, func(m string) string {

@@ -1,7 +1,11 @@
 package keepass
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -271,6 +275,36 @@ func TestEntries_ReferencesKeepSecrecy(t *testing.T) {
 		case "loop":
 			if e.Skip != "its password refers to another entry in a way sesh can't follow" {
 				t.Errorf("loop: skip %q", e.Skip)
+			}
+		}
+	}
+}
+
+// A chain of references comes out the same whatever order its entries are
+// in, however long it is.
+func TestEntries_ReferenceChainOrder(t *testing.T) {
+	const n = 13
+	uuid := func(i int) string { return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{byte(i)}, 16)) }
+	hexID := func(i int) string { return strings.ToUpper(hex.EncodeToString(bytes.Repeat([]byte{byte(i)}, 16))) }
+	entries := make([]Entry, n)
+	for i := range n {
+		var title, pw String
+		title.Key, title.Value.Text = "Title", fmt.Sprintf("e%02d", i+1)
+		pw.Key, pw.Value.ProtectInMemory = "Password", "True"
+		pw.Value.Text = "end"
+		if i < n-1 {
+			pw.Value.Text = "{REF:P@I:" + hexID(i+2) + "}"
+		}
+		entries[i] = Entry{UUID: uuid(i + 1), Strings: []String{title, pw}}
+	}
+	reversed := slices.Clone(entries)
+	slices.Reverse(reversed)
+	for name, order := range map[string][]Entry{"head first": entries, "tail first": reversed} {
+		exp := Export{}
+		exp.Root.Group.Entries = order
+		for _, e := range Entries(&exp) {
+			if e.Skip != "" || string(e.Secret) != "end" {
+				t.Errorf("%s: %s skip %q secret %q", name, e.Name, e.Skip, e.Secret)
 			}
 		}
 	}
