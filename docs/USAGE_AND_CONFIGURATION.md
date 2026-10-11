@@ -1159,7 +1159,7 @@ sesh inject -i config.yml.tpl -o config.yml
 - **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
 ### Importing from other apps (`sesh import`)
 
-`sesh import` brings entries over from another app: Bitwarden, or Google Authenticator. It reads everything first, shows what it found, then asks:
+`sesh import` brings entries over from another app: Bitwarden, KeePass (KeePassXC or KeePass 2), or Google Authenticator. It reads everything first, shows what it found, then asks:
 - what it will import, by kind and folder;
 - which entries you already have;
 - what it will skip, and why;
@@ -1201,6 +1201,27 @@ sesh import --from bitwarden bitwarden_export.json
   - notes, a URL, or a field with a character sesh refuses (such as a control character); the rest of the item still comes across, and a plain field that a secret one could hold is made secret instead.
 - **The times** each item was made and last changed come across. An archived item becomes an ordinary entry, which the summary says.
 - **A plain export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
+
+**KeePass.** Export your database as XML: in KeePassXC, Database > Export > XML File (or `keepassxc-cli export -f xml`); in KeePass 2, "KeePass XML (2.x)". sesh doesn't read the .kdbx database itself, or KeePassXC's CSV export, which leaves out custom fields and tags; it says so if you give it one.
+
+```
+sesh import --from keepass Passwords.xml
+```
+
+- **Entries with a password** become password entries, with the URL, notes, and custom fields: protected ones secret, the rest plain (a value of several lines secret too). A TOTP key set up in KeePassXC becomes a TOTP entry beside the password entry, with its settings.
+- **Entries with neither a password nor TOTP** become secure notes.
+- **Groups** below the database's own become folders, fitted to sesh's rules as for Bitwarden, and listed; a `/` in a group's name becomes `-`, since in sesh it would mean a folder inside a folder. Tags come across, fitted the same way.
+- **References to another entry,** such as KeePassXC's Clone with "Replace username and password with references" makes, are filled in with the value they refer to, and the summary says so. One sesh can't follow (one that finds its entry by anything but its UUID, or loops) skips the entry when it's in the title, username or password, and is kept as written, and said, anywhere else. A value filled in from another entry's password or protected field stays secret: a custom field is made secret, and a URL keeps the reference as written; a title or username referring to one skips the entry, since sesh shows those.
+- **Names:** a `/` in a title becomes `-`, and two entries with one title and username get ` (2)` added to the second.
+- **The recycle bin's entries** are skipped, and listed.
+- **An entry that expires** is imported, with the date said in the summary; sesh has no expiry dates.
+- **What doesn't come across,** said in the summary:
+  - earlier versions of entries (sesh keeps no history yet);
+  - attachments (sesh doesn't hold files; an export from a KDBX 4 database leaves their contents out anyway);
+  - TOTP set up in an older layout (KeePassXC's old "TOTP Seed" and "TOTP Settings", the KeeOtp plugin's, or KeePass 2's own): the password still comes across; add the TOTP with `sesh --service totp --setup`;
+  - Steam codes, counter-based (HOTP) codes (including KeePass 2's `HmacOtp-*` fields), and algorithms other than SHA-1, SHA-256 and SHA-512.
+- **The times** each entry was made and last changed come across.
+- **The export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
 
 **Google Authenticator.** Its "Transfer accounts" moves your codes off the phone:
 1. In the app, choose Transfer accounts, then Export accounts. It shows one or more QR codes.

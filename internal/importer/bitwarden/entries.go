@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/importer"
-	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -45,7 +44,7 @@ func Entries(exp *Export) []*importer.Entry {
 		}
 	}
 	var out []*importer.Entry
-	taken := map[vault.Key]bool{}
+	names := importer.NewNames()
 	for i := range exp.Items {
 		it := &exp.Items[i]
 		base := &importer.Entry{
@@ -68,57 +67,10 @@ func Entries(exp *Export) []*importer.Entry {
 			base.Changes = append(base.Changes, "archived in Bitwarden; an ordinary entry in sesh")
 		}
 		entries := itemEntries(it, base)
-		place(entries, taken)
+		importer.Place(entries, names)
 		out = append(out, entries...)
 	}
 	return out
-}
-
-// place gives an item's entries their keys: as they are, or with " (2)",
-// " (3)" ... added to the service name of all of them together when
-// another item's entry has one already. It checks them again after.
-func place(entries []*importer.Entry, taken map[vault.Key]bool) {
-	var live []*importer.Entry
-	for _, e := range entries {
-		if e.Skip == "" {
-			live = append(live, e)
-		}
-	}
-	for n := 1; ; n++ {
-		keys := make([]vault.Key, len(live))
-		free := true
-		for i, e := range live {
-			keys[i] = numbered(e.Key, n)
-			free = free && !taken[keys[i]]
-		}
-		if !free {
-			continue
-		}
-		for i, e := range live {
-			if n > 1 {
-				e.Changes = append(e.Changes, fmt.Sprintf("named %q in sesh: another item has its name", keys[i].Service))
-			}
-			e.Key = keys[i]
-			taken[keys[i]] = true
-			checked(e)
-		}
-		return
-	}
-}
-
-// numbered is k with " (n)" added to its service name, cut to fit, for n
-// above 1.
-func numbered(k vault.Key, n int) vault.Key {
-	if n == 1 {
-		return k
-	}
-	suffix := fmt.Sprintf(" (%d)", n)
-	r := []rune(k.Service)
-	if limit := vault.MaxNameLength - len([]rune(suffix)); len(r) > limit {
-		r = r[:limit]
-	}
-	k.Service = strings.TrimSpace(string(r)) + suffix
-	return k
 }
 
 // itemEntries is what one item becomes.
@@ -131,7 +83,7 @@ func itemEntries(it *Item, base *importer.Entry) []*importer.Entry {
 	if service != it.Name {
 		base.Changes = append(base.Changes, fmt.Sprintf("named %q in sesh", service))
 	}
-	var fs fieldSet
+	var fs importer.FieldSet
 	switch it.Type {
 	case TypeLogin:
 		return loginEntries(it, base, service)
@@ -140,8 +92,8 @@ func itemEntries(it *Item, base *importer.Entry) []*importer.Entry {
 		if note == "" {
 			note = it.Name
 		}
-		fs.addCustom(it.Fields)
-		return []*importer.Entry{noteEntry(base, service, note, &fs)}
+		addCustom(&fs, it.Fields)
+		return []*importer.Entry{importer.NoteEntry(base, service, note, &fs)}
 	case TypeCard:
 		if it.Card == nil {
 			break
@@ -154,13 +106,13 @@ func itemEntries(it *Item, base *importer.Entry) []*importer.Entry {
 				note += " ending " + c.Number[len(c.Number)-4:]
 			}
 		}
-		fs.add("number", c.Number, true)
-		fs.add("code", c.Code, true)
-		fs.add("cardholder-name", c.CardholderName, false)
-		fs.add("brand", c.Brand, false)
-		fs.add("expiry", strings.Trim(c.ExpMonth+"/"+c.ExpYear, "/"), false)
-		fs.addCustom(it.Fields)
-		return []*importer.Entry{noteEntry(base, service, note, &fs)}
+		fs.Add("number", c.Number, true)
+		fs.Add("code", c.Code, true)
+		fs.Add("cardholder-name", c.CardholderName, false)
+		fs.Add("brand", c.Brand, false)
+		fs.Add("expiry", strings.Trim(c.ExpMonth+"/"+c.ExpYear, "/"), false)
+		addCustom(&fs, it.Fields)
+		return []*importer.Entry{importer.NoteEntry(base, service, note, &fs)}
 	case TypeIdentity:
 		if it.Identity == nil {
 			break
@@ -185,10 +137,10 @@ func itemEntries(it *Item, base *importer.Entry) []*importer.Entry {
 			{"company", d.Company, false}, {"email", d.Email, false}, {"phone", d.Phone, false},
 			{"username", d.Username, false},
 		} {
-			fs.add(f.name, f.value, f.secret)
+			fs.Add(f.name, f.value, f.secret)
 		}
-		fs.addCustom(it.Fields)
-		return []*importer.Entry{noteEntry(base, service, note, &fs)}
+		addCustom(&fs, it.Fields)
+		return []*importer.Entry{importer.NoteEntry(base, service, note, &fs)}
 	case TypeSSHKey:
 		if it.SSHKey == nil || it.SSHKey.PrivateKey == "" {
 			break
@@ -198,11 +150,11 @@ func itemEntries(it *Item, base *importer.Entry) []*importer.Entry {
 		if note == "" {
 			note = strings.TrimSpace("SSH key " + k.KeyFingerprint)
 		}
-		fs.add("private-key", k.PrivateKey, true)
-		fs.add("public-key", k.PublicKey, false)
-		fs.add("fingerprint", k.KeyFingerprint, false)
-		fs.addCustom(it.Fields)
-		return []*importer.Entry{noteEntry(base, service, note, &fs)}
+		fs.Add("private-key", k.PrivateKey, true)
+		fs.Add("public-key", k.PublicKey, false)
+		fs.Add("fingerprint", k.KeyFingerprint, false)
+		addCustom(&fs, it.Fields)
+		return []*importer.Entry{importer.NoteEntry(base, service, note, &fs)}
 	case TypeBankAccount, TypeDriversLicense, TypePassport:
 		base.Skip = fmt.Sprintf("a %s, which sesh can't import yet: no Bitwarden export of one has been available to test against", typeName(it.Type))
 		return []*importer.Entry{base}
@@ -232,17 +184,17 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 	if n := len(l.Fido2Credentials); n > 0 {
 		base.Lost[lostPasskey] += n
 	}
-	var fs fieldSet
-	fs.addCustom(it.Fields)
+	var fs importer.FieldSet
+	addCustom(&fs, it.Fields)
 	firstURL := ""
 	for i, u := range l.URIs {
 		if i == 0 {
 			firstURL = u.URI
 			continue
 		}
-		fs.add(fmt.Sprintf("url-%d", i+1), u.URI, false)
+		fs.Add(fmt.Sprintf("url-%d", i+1), u.URI, false)
 	}
-	details := vault.Details{URL: firstURL, Fields: fs.fields}
+	details := vault.Details{URL: firstURL, Fields: fs.Fields}
 	if it.Notes != "" {
 		details.Notes = []byte(it.Notes)
 	}
@@ -250,11 +202,11 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 	var out []*importer.Entry
 	if l.Password != "" {
 		e := *base
-		e.Changes = append(slices.Clone(base.Changes), fs.changes...)
+		e.Changes = append(slices.Clone(base.Changes), fs.Changes...)
 		e.Key = vault.Key{Kind: vault.KindPassword, Service: service, Username: user}
 		e.Secret = []byte(l.Password)
 		e.Details = details
-		out = append(out, checked(&e))
+		out = append(out, importer.Checked(&e))
 	}
 	if l.TOTP != "" {
 		e := *base
@@ -262,7 +214,7 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 		e.Key = vault.Key{Kind: vault.KindTOTP, Service: service, Username: user}
 		if len(out) == 0 {
 			e.Details = details // nowhere else to keep them
-			e.Changes = append(e.Changes, fs.changes...)
+			e.Changes = append(e.Changes, fs.Changes...)
 		} else {
 			e.Lost = nil // counted once, on the password entry
 		}
@@ -271,7 +223,7 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 			e.Skip = "its TOTP key: " + why
 		} else {
 			e.Secret, e.Settings = []byte(secret), vault.Settings{TOTP: params}
-			checked(&e)
+			importer.Checked(&e)
 		}
 		out = append(out, &e)
 	}
@@ -283,18 +235,18 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 	if note == "" {
 		note = "Login with no password"
 	}
-	var nfs fieldSet
-	nfs.add("username", l.Username, false)
-	nfs.addCustom(it.Fields)
+	var nfs importer.FieldSet
+	nfs.Add("username", l.Username, false)
+	addCustom(&nfs, it.Fields)
 	for i, u := range l.URIs {
 		if i > 0 {
-			nfs.add(fmt.Sprintf("url-%d", i+1), u.URI, false)
+			nfs.Add(fmt.Sprintf("url-%d", i+1), u.URI, false)
 		}
 	}
 	base.Changes = append(base.Changes, "a secure note in sesh: the login has no password or TOTP key")
-	e := noteEntry(base, service, note, &nfs)
+	e := importer.NoteEntry(base, service, note, &nfs)
 	e.Details.URL = firstURL
-	return []*importer.Entry{checked(e)}
+	return []*importer.Entry{importer.Checked(e)}
 }
 
 // totpKey reads a login's TOTP key as Bitwarden does (bitwarden-vault
@@ -368,145 +320,16 @@ func totpKey(s string) (secret string, params totp.Params, why string) {
 	return normalized, params, ""
 }
 
-// noteEntry makes base a secure note holding note, with fs's fields.
-func noteEntry(base *importer.Entry, service, note string, fs *fieldSet) *importer.Entry {
-	base.Key = vault.Key{Kind: vault.KindNote, Service: service}
-	base.Secret = []byte(note)
-	base.Details = vault.Details{Fields: fs.fields}
-	base.Changes = append(base.Changes, fs.changes...)
-	return checked(base)
-}
-
-// checked marks e skipped when its name, folder, tags or details break
-// sesh's rules, and returns it. A detail sesh can't hold is left out
-// first (see fitDetails), so it doesn't cost the entry.
-func checked(e *importer.Entry) *importer.Entry {
-	if e.Skip != "" {
-		return e
-	}
-	fitDetails(e)
-	err := e.Key.Validate()
-	if err == nil {
-		err = vault.CheckFolder(e.Folder)
-	}
-	for _, t := range e.Tags {
-		if err == nil {
-			err = vault.CheckTag(t)
-		}
-	}
-	if err == nil {
-		err = e.Details.Check(e.Key.Kind)
-	}
-	if err != nil {
-		e.Skip = err.Error()
-	}
-	return e
-}
-
-// fitDetails leaves out of e's details each part sesh can't hold, saying
-// why: notes or a URL with a character it refuses, or a field's value. A
-// plain field that only a secret one can hold is made secret instead.
-func fitDetails(e *importer.Entry) {
-	d := &e.Details
-	if len(d.Notes) > 0 {
-		if err := (&vault.Details{Notes: d.Notes}).Check(vault.KindPassword); err != nil {
-			secure.SecureZeroBytes(d.Notes)
-			d.Notes = nil
-			e.Changes = append(e.Changes, "notes not kept: "+err.Error())
-		}
-	}
-	if d.URL != "" {
-		if err := (&vault.Details{URL: d.URL}).Check(e.Key.Kind); err != nil {
-			d.URL = ""
-			e.Changes = append(e.Changes, "URL not kept: "+err.Error())
-		}
-	}
-	kept := d.Fields[:0]
-	for _, f := range d.Fields {
-		err := (&vault.Details{Fields: []vault.Field{f}}).Check(e.Key.Kind)
-		if err != nil && !f.Secret {
-			f.Secret = true
-			if err = (&vault.Details{Fields: []vault.Field{f}}).Check(e.Key.Kind); err == nil {
-				e.Changes = append(e.Changes, fmt.Sprintf("field %q is secret in sesh: a plain field can't hold one of its characters", f.Name))
-			}
-		}
-		if err != nil {
-			e.Changes = append(e.Changes, fmt.Sprintf("field %q not kept: %s", f.Name, err))
-			secure.SecureZeroBytes(f.Value)
-			continue
-		}
-		kept = append(kept, f)
-	}
-	d.Fields = kept
-}
-
-// fieldSet gathers an entry's fields as sesh holds them: names fitted and
-// unique (ignoring case), at most vault.MaxFields, saying what changed.
-type fieldSet struct {
-	used    map[string]bool
-	fields  []vault.Field
-	changes []string
-	dropped int
-}
-
-// add adds a field sesh names, unless its value is empty.
-func (s *fieldSet) add(name, value string, secret bool) {
-	if value == "" {
-		return
-	}
-	s.put(importer.FitFieldName(name), value, secret, "")
-}
-
 // addCustom adds an item's custom fields: hidden ones secret, text and
-// boolean ones plain (a value with a line break or tab secret, as only
-// those can hold one), linked ones left out.
-func (s *fieldSet) addCustom(in []Field) {
+// boolean ones plain, linked ones left out.
+func addCustom(fs *importer.FieldSet, in []Field) {
 	for _, f := range in {
-		switch {
-		case f.Type == FieldLinked:
-			s.changes = append(s.changes, fmt.Sprintf("field %q not kept: it only points at another value", f.Name))
-			continue
-		case f.Value == "":
-			s.changes = append(s.changes, fmt.Sprintf("field %q not kept: it has no value", f.Name))
+		if f.Type == FieldLinked {
+			fs.Changes = append(fs.Changes, fmt.Sprintf("field %q not kept: it only points at another value", f.Name))
 			continue
 		}
-		secret := f.Type == FieldHidden
-		if !secret && strings.ContainsAny(f.Value, "\n\r\t") {
-			secret = true
-			s.changes = append(s.changes, fmt.Sprintf("field %q is secret in sesh: it has a line break or tab", f.Name))
-		}
-		s.put(importer.FitFieldName(f.Name), f.Value, secret, f.Name)
+		fs.Custom(f.Name, f.Value, f.Type == FieldHidden)
 	}
-}
-
-// put adds a field named name, made unique; from is the source's name for
-// it, said when it changed ("" for a field sesh names).
-func (s *fieldSet) put(name, value string, secret bool, from string) {
-	if s.used == nil {
-		s.used = map[string]bool{}
-	}
-	if len(s.fields) == vault.MaxFields {
-		s.dropped++
-		if s.dropped == 1 {
-			s.changes = append(s.changes, "") // the count goes here
-		}
-		for i := len(s.changes) - 1; i >= 0; i-- {
-			if s.changes[i] == "" || strings.HasSuffix(s.changes[i], fmt.Sprintf("sesh holds %d", vault.MaxFields)) {
-				s.changes[i] = fmt.Sprintf("%d fields not kept: sesh holds %d", s.dropped, vault.MaxFields)
-				break
-			}
-		}
-		return
-	}
-	base := name
-	for n := 2; s.used[strings.ToLower(name)]; n++ {
-		name = fmt.Sprintf("%s-%d", base, n)
-	}
-	s.used[strings.ToLower(name)] = true
-	if from != "" && name != from {
-		s.changes = append(s.changes, fmt.Sprintf("field %q is %q in sesh", from, name))
-	}
-	s.fields = append(s.fields, vault.Field{Name: name, Value: []byte(value), Secret: secret})
 }
 
 func typeName(t int) string {
