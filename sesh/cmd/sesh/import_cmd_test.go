@@ -302,7 +302,7 @@ func TestImport_Bitwarden(t *testing.T) {
 		"  Secure notes, in no folder (1):\n    secure_note/Me\n",
 		"Not kept:\n  items set to ask for the master password again (sesh doesn't ask): 1\n  old passwords (sesh keeps no history yet): 1\n",
 		"Already in the vault (1):\n  totp/GitHub/alice\n",
-		`named "GitHub (2)" in sesh: another item has its name`,
+		`named "GitHub (2)" in sesh: an entry before it has the name`,
 		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
 	} {
 		if !strings.Contains(stderr, want) {
@@ -461,6 +461,64 @@ func TestDescribeParams(t *testing.T) {
 	} {
 		if got := describeParams(p); got != want {
 			t.Errorf("describeParams(%+v) = %q, want %q", p, got, want)
+		}
+	}
+}
+
+// keepassFixture is a genuine KeePassXC file from the importer's testdata
+// (see internal/importer/keepass/export_test.go).
+func keepassFixture(name string) string {
+	return filepath.Join("..", "..", "..", "internal", "importer", "keepass", "testdata", name)
+}
+
+// A KeePass XML export is found without --from, shown, and stored with
+// folders, tags, fields and TOTP settings; the database itself and the CSV
+// export are refused.
+func TestImport_KeePass(t *testing.T) {
+	env := importVault(t)
+	_, stderr, err := runImportOut(t, "", false, "--dry-run", keepassFixture("app-kdbx4.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Found 7 entries and 3 groups in the KeePass export.",
+		`"Work Accounts" is "Work-Accounts" in sesh`,
+		"  Passwords, in Work-Accounts (1):\n    password/GitHub/alice\n",
+		"expired in KeePass on 2026-10-11",
+		`"Old account": in KeePass's recycle bin`,
+		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
+		"earlier versions of entries (sesh keeps no history yet): 8\n",
+		"attachments (sesh doesn't hold files): 1\n",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("summary missing %q:\n%s", want, stderr)
+		}
+	}
+	out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "skip", keepassFixture("app-kdbx4.xml"))
+	if err != nil || !strings.Contains(out, "✅ Imported 8 entries from KeePass.") || !strings.Contains(out, "holds your passwords unencrypted") {
+		t.Fatalf("%q, %v", out, err)
+	}
+	store := openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	gh := vault.Key{Kind: vault.KindPassword, Service: "GitHub", Username: "alice"}
+	e, err := store.Lookup(gh)
+	if err != nil || e.Folder != "Work-Accounts" || strings.Join(e.Tags, ",") != "code,work" || e.URL != "https://github.com/login" {
+		t.Errorf("GitHub = %+v, %v", e, err)
+	}
+	d, err := store.Details(gh, "all")
+	if err != nil || len(d.Fields) != 2 || d.Fields[0].Name != "pin" || !d.Fields[0].Secret || string(d.Fields[0].Value) != "4321" {
+		t.Errorf("GitHub details = %+v, %v", d, err)
+	}
+	bank, err := store.Lookup(vault.Key{Kind: vault.KindTOTP, Service: "Bank", Username: "bob"})
+	if err != nil || bank.Folder != "Work-Accounts/Banking" {
+		t.Errorf("Bank TOTP = %+v, %v", bank, err)
+	}
+	for name, want := range map[string]string{
+		"app.kdbx": "Database > Export > XML File",
+		"app.csv":  "KeePassXC's CSV export",
+	} {
+		if _, _, err := runImportOut(t, "", false, keepassFixture(name)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }

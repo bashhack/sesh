@@ -58,6 +58,19 @@ func FitFolder(path string) string {
 	return strings.Join(parts, "/")
 }
 
+// FitTag fits a tag from another app to sesh's tag rules, as FitFolder
+// does a folder part; "" when nothing of it is left.
+func FitTag(tag string) string {
+	t := fitLabel(tag)
+	if r := []rune(t); len(r) > vault.MaxTagLength {
+		t = strings.Trim(string(r[:vault.MaxTagLength]), "-.")
+	}
+	if vault.CheckTag(t) != nil {
+		return ""
+	}
+	return t
+}
+
 // FitFieldName fits a field name from another app to sesh's field-name
 // rules, as FitFolder does a folder part, and to its length; one that
 // would be a reserved name, or empty, gets "-field" added.

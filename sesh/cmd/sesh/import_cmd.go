@@ -17,6 +17,7 @@ import (
 	"github.com/bashhack/sesh/internal/importer"
 	"github.com/bashhack/sesh/internal/importer/bitwarden"
 	"github.com/bashhack/sesh/internal/importer/gauth"
+	"github.com/bashhack/sesh/internal/importer/keepass"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
@@ -36,14 +37,17 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
                           photos (PNG or JPEG), or their otpauth-migration://
                           text in a file, or piped in with - as the file.
                           Give every code of a large export.
+    keepass               A KeePass XML export, from KeePassXC or KeePass 2
+                          (in KeePassXC: Database > Export > XML File).
 
   sesh import --from google-authenticator IMG_1234.png IMG_1235.png
   sesh import --from bitwarden bitwarden_export.json
+  sesh import --from keepass Passwords.xml
 
 sesh's own exports are imported with --service password --action import.`
 
 // importSources are the apps sesh import reads.
-var importSources = []string{"bitwarden", "google-authenticator"}
+var importSources = []string{"bitwarden", "google-authenticator", "keepass"}
 
 func addImportFlags(fs *flag.FlagSet) (from, onConflict *string, dryRun, yes *bool) {
 	from = fs.String("from", "", "Where the file comes from: "+strings.Join(importSources, ", "))
@@ -93,6 +97,8 @@ func runImport(app *App, args []string) error {
 		f, err = readGoogleAuthenticator(fs.Args(), app.Stdin, terminal)
 	case "bitwarden":
 		f, err = readBitwarden(app, fs.Args(), terminal)
+	case "keepass":
+		f, err = readKeePass(fs.Args())
 	default:
 		return fmt.Errorf("sesh can't import from %q; it can from: %s", source, strings.Join(importSources, ", "))
 	}
@@ -252,13 +258,18 @@ type found struct {
 	entries  []*importer.Entry
 }
 
-// detectSource is the app the files come from: Bitwarden for one of its
-// exports (its CSV one, to be refused as such), Google Authenticator
-// otherwise.
+// detectSource is the app the files come from: Bitwarden or KeePass for
+// one of their exports (or a file of theirs to be refused as such), Google
+// Authenticator otherwise.
 func detectSource(args []string) string {
 	for _, a := range args {
-		if b, err := os.ReadFile(a); err == nil && (bitwarden.IsExport(b) || bitwarden.IsCSV(b)) { //nolint:gosec // the file the user named
+		b, err := os.ReadFile(a) //nolint:gosec // the file the user named
+		switch {
+		case err != nil:
+		case bitwarden.IsExport(b) || bitwarden.IsCSV(b):
 			return "bitwarden"
+		case keepass.IsExport(b):
+			return "keepass"
 		}
 	}
 	return "google-authenticator"
@@ -517,6 +528,29 @@ func readBitwarden(app *App, args []string, terminal bool) (found, error) {
 		f.after = "This export holds your passwords unencrypted: delete " + args[0] + " now, and empty the trash."
 	}
 	return f, nil
+}
+
+// readKeePass reads one KeePass XML export.
+func readKeePass(args []string) (found, error) {
+	if len(args) != 1 {
+		return found{}, errors.New("give one KeePass XML export: sesh import --from keepass <export.xml>")
+	}
+	b, err := os.ReadFile(args[0])
+	if err != nil {
+		return found{}, err
+	}
+	defer secure.SecureZeroBytes(b)
+	exp, err := keepass.Parse(b)
+	if err != nil {
+		return found{}, err
+	}
+	entries, groups := keepass.Count(&exp)
+	return found{
+		source:  "KeePass",
+		header:  fmt.Sprintf("Found %s and %s in the KeePass export.", nouns(entries, "entry", "entries"), nouns(groups, "group", "groups")),
+		after:   "This export holds your passwords unencrypted: delete " + args[0] + " now, and empty the trash.",
+		entries: keepass.Entries(&exp),
+	}, nil
 }
 
 // readGoogleAuthenticator reads Google Authenticator transfer codes.

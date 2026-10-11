@@ -1,0 +1,10 @@
+"Group","Title","Username","Password","URL","Notes","TOTP","Icon","Last Modified","Created"
+"Root","Router","","router-pw","","","","0","2026-10-11T01:41:19Z","2026-10-11T01:37:55Z"
+"Root","Steam","gamer","steam-pw","","","otpauth://totp/Steam:gamer?secret=JBSWY3DPEHPK3PXP&period=30&digits=5&issuer=Steam&encoder=steam","0","2026-10-11T01:39:00Z","2026-10-11T01:37:58Z"
+"Root","Wifi","","","","ssid home","","0","2026-10-11T01:38:01Z","2026-10-11T01:38:01Z"
+"Root","a/b site","u","ab-pw","","","","0","2026-10-11T01:41:32Z","2026-10-11T01:38:04Z"
+"Root/Work Accounts","GitHub","alice","gh-pass-2","https://github.com/login","main account
+recovery codes in the safe","otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&period=30&digits=8&issuer=GitHub&algorithm=SHA256","0","2026-10-11T01:40:56Z","2026-10-11T01:37:47Z"
+"Root/Work Accounts/Banking","Bank","bob","bank-pw","","","otpauth://totp/Bank:bob?secret=GEZDGNBVGY3TQOJQ&period=30&digits=6&issuer=Bank","0","2026-10-11T01:39:24Z","2026-10-11T01:37:52Z"
+"Root/Personal","GitHub","alice","gh-personal","","","","0","2026-10-11T01:37:50Z","2026-10-11T01:37:50Z"
+"Root/Recycle Bin","Old account","","old-pw","","","","0","2026-10-11T01:38:15Z","2026-10-11T01:38:07Z"
