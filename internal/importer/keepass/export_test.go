@@ -12,9 +12,12 @@ import (
 //   - app.kdbx: made with the app's new-database wizard (KDBX 4); groups and
 //     plain entries added with keepassxc-cli, then TOTP, tags, custom and
 //     protected fields, an expiry date, and the "a/b site" title set in
-//     the app;
-//   - app-kdbx4.xml and app.csv: the app's Database > Export > XML File and
-//     CSV File of it;
+//     the app, then a clone of GitHub made with "Replace username and
+//     password with references", and a group named "Home/Lab" with an
+//     entry;
+//   - app-kdbx4.xml: the app's Database > Export > XML File of it;
+//   - app.csv: the app's Database > Export > CSV File of it, made before the
+//     clone and "Home/Lab";
 //   - cli-kdbx3.xml: `keepassxc-cli export -f xml` of a KDBX 3 database made
 //     with `keepassxc-cli db-create`.
 
@@ -32,14 +35,14 @@ func TestParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exp.Meta.Generator != "KeePassXC" || exp.Root.Group.Name != "Root" || len(exp.Root.Group.Groups) != 3 {
+	if exp.Meta.Generator != "KeePassXC" || exp.Root.Group.Name != "Root" || len(exp.Root.Group.Groups) != 4 {
 		t.Fatalf("meta %+v, root %q with %d groups", exp.Meta, exp.Root.Group.Name, len(exp.Root.Group.Groups))
 	}
-	if n, g := Count(&exp); n != 7 || g != 3 {
+	if n, g := Count(&exp); n != 9 || g != 4 {
 		t.Errorf("Count = %d entries, %d groups", n, g)
 	}
 	// KDBX 4 writes times as base64 seconds since year 1: Router's expiry
-	// is what the app showed, 11 Oct 2026 01:41:11.
+	// is what the app showed, running in UTC: 11 Oct 2026 01:41:11.
 	router := exp.Root.Group.Entries[0]
 	if title, _ := router.Field("Title"); title != "Router" || !router.Times.ExpiryTime.Equal(time.Date(2026, 10, 11, 1, 41, 11, 0, time.UTC)) {
 		t.Errorf("Router %q expires %v", title, router.Times.ExpiryTime)

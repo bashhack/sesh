@@ -41,12 +41,17 @@ func TestEntries_GenuineExport(t *testing.T) {
 		"totp/Bank/bob":             "Work-Accounts/Banking | GEZDGNBVGY3TQOJQ",
 		"password/GitHub (2)/alice": "Personal | gh-personal",
 		"skip Old account":          "in KeePass's recycle bin",
+		// Made with Clone > "Replace username and password with references".
+		"password/GitHub - Clone/alice": "Work-Accounts | gh-pass-2",
+		"totp/GitHub - Clone/alice":     "Work-Accounts | JBSWY3DPEHPK3PXP",
+		// A group named "Home/Lab", not a group in a group.
+		"password/NAS/admin": "Home-Lab | nas-pw",
 	} {
 		if got[k] != want {
 			t.Errorf("%s = %q, want %q", k, got[k], want)
 		}
 	}
-	if len(entries) != 11 {
+	if len(entries) != 14 {
 		t.Errorf("%d entries: %v", len(entries), got)
 	}
 
@@ -75,8 +80,16 @@ func TestEntries_GenuineExport(t *testing.T) {
 	if b := entries[byKey["totp/Bank/bob"]]; b.Settings.TOTP != (totp.Params{Issuer: "Bank"}) {
 		t.Errorf("Bank TOTP = %+v", b.Settings)
 	}
+	clone := entries[byKey["password/GitHub - Clone/alice"]]
+	if !strings.Contains(strings.Join(clone.Changes, "\n"), "password and username taken from the entry they refer to") {
+		t.Errorf("clone changes = %q", clone.Changes)
+	}
+	if nas := entries[byKey["password/NAS/admin"]]; !strings.Contains(strings.Join(nas.Changes, "\n"), `folder "Home/Lab" is "Home-Lab" in sesh`) {
+		t.Errorf("NAS changes = %q", nas.Changes)
+	}
 	router := entries[byKey["password/Router"]]
-	if !strings.Contains(strings.Join(router.Changes, "\n"), "expired in KeePass on 2026-10-11") {
+	expired := "expired in KeePass on " + time.Date(2026, 10, 11, 1, 41, 11, 0, time.UTC).Local().Format("2006-01-02")
+	if !strings.Contains(strings.Join(router.Changes, "\n"), expired) {
 		t.Errorf("Router changes = %q", router.Changes)
 	}
 	if ab := entries[byKey["password/a-b site/u"]]; !strings.Contains(strings.Join(ab.Changes, "\n"), `named "a-b site" in sesh`) {
@@ -158,5 +171,50 @@ func TestEntries_ExpiryAndTags(t *testing.T) {
 	if strings.Join(got.Tags, ",") != "a-b,work,c-d" || !strings.Contains(changes, "expires in KeePass on ") ||
 		!strings.Contains(changes, `tag "a b" is "a-b" in sesh`) || !strings.Contains(changes, `tag "!!!" not kept`) {
 		t.Errorf("tags %q, changes:\n%s", got.Tags, changes)
+	}
+}
+
+// A reference to another entry that can't be followed costs the entry
+// when it's in the password, username or title, and is said elsewhere;
+// KeePass 2's HOTP fields aren't kept.
+func TestEntries_UnfollowedReferencesAndHOTP(t *testing.T) {
+	str := func(k, v string) String {
+		var s String
+		s.Key, s.Value.Text = k, v
+		return s
+	}
+	exp := Export{}
+	exp.Root.Group.Entries = []Entry{
+		{UUID: "AAECAwQFBgcICQoLDA0ODw==", Strings: []String{str("Title", "target"), str("Password", "{REF:P@I:000102030405060708090A0B0C0D0E0F}")}},
+		{Strings: []String{str("Title", "by-title"), str("Password", "{REF:P@T:target}")}},
+		{Strings: []String{str("Title", "missing"), str("UserName", "{REF:U@I:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF}"), str("Password", "p")}},
+		{Strings: []String{str("Title", "in-notes"), str("Password", "p"), str("Notes", "see {REF:N@T:x}")}},
+		{Strings: []String{str("Title", "hotp"), str("Password", "p"), str("HmacOtp-Secret-Base32", "JBSWY3DPEHPK3PXP"), str("HmacOtp-Counter", "3")}},
+	}
+	want := map[string]string{
+		"target":   "its password refers to another entry in a way sesh can't follow",
+		"by-title": "its password refers to another entry in a way sesh can't follow",
+		"missing":  "its username refers to another entry in a way sesh can't follow",
+	}
+	for _, e := range Entries(&exp) {
+		if w, ok := want[e.Name]; ok {
+			if e.Skip != w {
+				t.Errorf("%s: skip %q, want %q", e.Name, e.Skip, w)
+			}
+			continue
+		}
+		changes := strings.Join(e.Changes, "\n")
+		switch e.Name {
+		case "in-notes":
+			if e.Skip != "" || string(e.Details.Notes) != "see {REF:N@T:x}" || !strings.Contains(changes, "notes refer to another entry in a way sesh can't follow; kept as written") {
+				t.Errorf("in-notes: skip %q, notes %q, changes %q", e.Skip, e.Details.Notes, changes)
+			}
+		case "hotp":
+			if e.Skip != "" || len(e.Details.Fields) != 0 || !strings.Contains(changes, "its counter-based (HOTP) key isn't kept: sesh doesn't make counter-based codes") {
+				t.Errorf("hotp: skip %q, fields %+v, changes %q", e.Skip, e.Details.Fields, changes)
+			}
+		default:
+			t.Errorf("unexpected entry %q", e.Name)
+		}
 	}
 }

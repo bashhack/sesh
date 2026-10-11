@@ -1210,7 +1210,8 @@ sesh import --from keepass Passwords.xml
 
 - **Entries with a password** become password entries, with the URL, notes, and custom fields: protected ones secret, the rest plain (a value of several lines secret too). A TOTP key set up in KeePassXC becomes a TOTP entry beside the password entry, with its settings.
 - **Entries with neither a password nor TOTP** become secure notes.
-- **Groups** below the database's own become folders, fitted to sesh's rules as for Bitwarden, and listed. Tags come across, fitted the same way.
+- **Groups** below the database's own become folders, fitted to sesh's rules as for Bitwarden, and listed; a `/` in a group's name becomes `-`, since in sesh it would mean a folder inside a folder. Tags come across, fitted the same way.
+- **References to another entry,** such as KeePassXC's Clone with "Replace username and password with references" makes, are filled in with the value they refer to, and the summary says so. One sesh can't follow (one that finds its entry by anything but its UUID, or loops) skips the entry when it's in the title, username or password, and is kept as written, and said, anywhere else.
 - **Names:** a `/` in a title becomes `-`, and two entries with one title and username get ` (2)` added to the second.
 - **The recycle bin's entries** are skipped, and listed.
 - **An entry that expires** is imported, with the date said in the summary; sesh has no expiry dates.
@@ -1218,7 +1219,7 @@ sesh import --from keepass Passwords.xml
   - earlier versions of entries (sesh keeps no history yet);
   - attachments (sesh doesn't hold files; an export from a KDBX 4 database leaves their contents out anyway);
   - TOTP set up in an older layout (KeePassXC's old "TOTP Seed" and "TOTP Settings", the KeeOtp plugin's, or KeePass 2's own): the password still comes across; add the TOTP with `sesh --service totp --setup`;
-  - Steam codes, counter-based (HOTP) codes, and algorithms other than SHA-1, SHA-256 and SHA-512.
+  - Steam codes, counter-based (HOTP) codes (including KeePass 2's `HmacOtp-*` fields), and algorithms other than SHA-1, SHA-256 and SHA-512.
 - **The times** each entry was made and last changed come across.
 - **The export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
 

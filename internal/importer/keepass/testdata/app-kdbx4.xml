@@ -34,12 +34,12 @@
 		<CustomData>
 			<Item>
 				<Key>_LAST_MODIFIED</Key>
-				<Value>Sun Oct 11 01:41:32 2026 GMT</Value>
+				<Value>Sun Oct 11 02:02:43 2026 GMT</Value>
 			</Item>
 			<Item>
 				<Key>KPXC_RANDOM_SLUG</Key>
-				<Value>7ff7ea9593528fa81f1d5627307b0b214a195f41227a06a0708360d8ad5292f09acc463e100da2254633aae90180829a7a815d6e9cad76137a2d8987b02465bf7eb2cc91d8d6fdeb62fc63c6f206b8da7b3c6174d0497f996cb05e87a7eea472e118ed4086d45e9f8a1b651cb80852681defa28e49b76420d3aa06d88f3b3e2adb04a3313336abbd8270b15b1fdb43e98355a7e931526b469a951e933b966fd9175033a83a0a9fa6a23ecf0eb4fdc08b74b64ee92aef7a36a9971d398b4ac028acc38c4da7301d23b4f9323600a5014a2afdda3850a170ad2cb4941fd1b1fe6f94e2bcc6ba0f1a53069d52d2ae19b8df2f66c5e7a8bbef42562372b71fea661e6cd6177d471925eaf9055b274797eb2ee4be5bdd0069d8d4aada10c281ebf8e02b7dea6af760927cce127efd25468b6c3bf73bd055999a19eee54c0f97db59cffcccc0aa59abcbbf4af0f7833e6d363f0bf586b84abe60fb108470722a9b78c175ea07c29ce860f5dd10b0902f186a4914a8c12ffa2acdd70ab869f8d659f83839f97a37a7203ecf04c1957fa7395cd3e776dbbf00303404acc0c5d22467aa051c</Value>
-				<LastModificationTime>TOBc4g4AAAA=</LastModificationTime>
+				<Value>7c839b9e9272416adc1aaefe490320d0d1af646d00c90658832de240f0dd33f1d62fb8e1fb6c378b4cf4c0a45a12339887ef79dec7a988f79e18f639737240cbc8684a3cd37042a378891e9f3a0f0688eb9a22cb2a22e2f436203e04c20984eb71a76634358cb6b7b0ccdd176950d55d1869d5029347101b8c4d65385590586141bdb354b5fa41567d6d33ed44487c29e3346398203c632378e234ff69b88b8409112cc8c16c5b484969335cc2069e16cb13136eaa3b250a890ae320683116c0193506e553fec555aa1314bc4ccd8f8240c0658f46237f76f73492aeba02b1ba869bc5b40aefbd2bf6b607fc9ec5d63d4e89f21711e20999b5b6991e15002a209cc89268a0324e2478e10ef929c319bc35882f065e5946e2acfd12d3528aa10eea772957ad7625c29cdb</Value>
+				<LastModificationTime>Q+Vc4g4AAAA=</LastModificationTime>
 			</Item>
 			<Item>
 				<Key>KPXC_DECRYPTION_TIME_PREFERENCE</Key>
@@ -379,9 +379,9 @@
 				<Notes/>
 				<IconID>48</IconID>
 				<Times>
-					<LastModificationTime>a99c4g4AAAA=</LastModificationTime>
+					<LastModificationTime>E+Vc4g4AAAA=</LastModificationTime>
 					<CreationTime>Y99c4g4AAAA=</CreationTime>
-					<LastAccessTime>a99c4g4AAAA=</LastAccessTime>
+					<LastAccessTime>E+Vc4g4AAAA=</LastAccessTime>
 					<ExpiryTime>Y99c4g4AAAA=</ExpiryTime>
 					<Expires>False</Expires>
 					<UsageCount>0</UsageCount>
@@ -641,6 +641,255 @@ recovery codes in the safe</Value>
 						</Entry>
 					</History>
 				</Entry>
+				<Entry>
+					<UUID>3NCWM2g9TdmgNjRnbIVMlQ==</UUID>
+					<IconID>0</IconID>
+					<ForegroundColor/>
+					<BackgroundColor/>
+					<OverrideURL/>
+					<Tags>code,work</Tags>
+					<Times>
+						<LastModificationTime>E+Vc4g4AAAA=</LastModificationTime>
+						<CreationTime>E+Vc4g4AAAA=</CreationTime>
+						<LastAccessTime>E+Vc4g4AAAA=</LastAccessTime>
+						<ExpiryTime>a99c4g4AAAA=</ExpiryTime>
+						<Expires>False</Expires>
+						<UsageCount>0</UsageCount>
+						<LocationChanged>E+Vc4g4AAAA=</LocationChanged>
+					</Times>
+					<String>
+						<Key>Notes</Key>
+						<Value>main account
+recovery codes in the safe</Value>
+					</String>
+					<String>
+						<Key>Password</Key>
+						<Value ProtectInMemory="True">{REF:P@I:B2E9DF7573E94C739C1CE1481DAAB332}</Value>
+					</String>
+					<String>
+						<Key>Title</Key>
+						<Value>GitHub - Clone</Value>
+					</String>
+					<String>
+						<Key>URL</Key>
+						<Value>https://github.com/login</Value>
+					</String>
+					<String>
+						<Key>UserName</Key>
+						<Value>{REF:U@I:B2E9DF7573E94C739C1CE1481DAAB332}</Value>
+					</String>
+					<String>
+						<Key>otp</Key>
+						<Value ProtectInMemory="True">otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&amp;period=30&amp;digits=8&amp;issuer=GitHub&amp;algorithm=SHA256</Value>
+					</String>
+					<String>
+						<Key>pin</Key>
+						<Value ProtectInMemory="True">4321</Value>
+					</String>
+					<String>
+						<Key>recovery-email</Key>
+						<Value>alice@example.com</Value>
+					</String>
+					<Binary>
+						<Key>codes.txt</Key>
+						<Value Ref="0"/>
+					</Binary>
+					<AutoType>
+						<Enabled>True</Enabled>
+						<DataTransferObfuscation>0</DataTransferObfuscation>
+						<DefaultSequence/>
+					</AutoType>
+					<History>
+						<Entry>
+							<UUID>3NCWM2g9TdmgNjRnbIVMlQ==</UUID>
+							<IconID>0</IconID>
+							<ForegroundColor/>
+							<BackgroundColor/>
+							<OverrideURL/>
+							<Tags/>
+							<Times>
+								<LastModificationTime>a99c4g4AAAA=</LastModificationTime>
+								<CreationTime>a99c4g4AAAA=</CreationTime>
+								<LastAccessTime>a99c4g4AAAA=</LastAccessTime>
+								<ExpiryTime>a99c4g4AAAA=</ExpiryTime>
+								<Expires>False</Expires>
+								<UsageCount>0</UsageCount>
+								<LocationChanged>a99c4g4AAAA=</LocationChanged>
+							</Times>
+							<String>
+								<Key>Notes</Key>
+								<Value>main account
+recovery codes in the safe</Value>
+							</String>
+							<String>
+								<Key>Password</Key>
+								<Value ProtectInMemory="True">{REF:P@I:B2E9DF7573E94C739C1CE1481DAAB332}</Value>
+							</String>
+							<String>
+								<Key>Title</Key>
+								<Value>GitHub - Clone</Value>
+							</String>
+							<String>
+								<Key>URL</Key>
+								<Value>https://github.com/login</Value>
+							</String>
+							<String>
+								<Key>UserName</Key>
+								<Value>{REF:U@I:B2E9DF7573E94C739C1CE1481DAAB332}</Value>
+							</String>
+							<AutoType>
+								<Enabled>True</Enabled>
+								<DataTransferObfuscation>0</DataTransferObfuscation>
+								<DefaultSequence/>
+							</AutoType>
+						</Entry>
+						<Entry>
+							<UUID>3NCWM2g9TdmgNjRnbIVMlQ==</UUID>
+							<IconID>0</IconID>
+							<ForegroundColor/>
+							<BackgroundColor/>
+							<OverrideURL/>
+							<Tags/>
+							<Times>
+								<LastModificationTime>gd9c4g4AAAA=</LastModificationTime>
+								<CreationTime>a99c4g4AAAA=</CreationTime>
+								<LastAccessTime>gd9c4g4AAAA=</LastAccessTime>
+								<ExpiryTime>a99c4g4AAAA=</ExpiryTime>
+								<Expires>False</Expires>
+								<UsageCount>0</UsageCount>
+								<LocationChanged>a99c4g4AAAA=</LocationChanged>
+							</Times>
+							<String>
+								<Key>Notes</Key>
+								<Value>main account
+recovery codes in the safe</Value>
+							</String>
+							<String>
+								<Key>Password</Key>
+								<Value ProtectInMemory="True">{REF:P@I:B2E9DF7573E94C739C1CE1481DAAB332}</Value>
+							</String>
+							<String>
+								<Key>Title</Key>
+								<Value>GitHub - Clone</Value>
+							</String>
+							<String>
+								<Key>URL</Key>
+								<Value>https://github.com/login</Value>
+							</String>
+							<String>
+								<Key>UserName</Key>
+								<Value>{REF:U@I:B2E9DF7573E94C739C1CE1481DAAB332}</Value>
+							</String>
+							<Binary>
+								<Key>codes.txt</Key>
+								<Value Ref="0"/>
+							</Binary>
+							<AutoType>
+								<Enabled>True</Enabled>
+								<DataTransferObfuscation>0</DataTransferObfuscation>
+								<DefaultSequence/>
+							</AutoType>
+						</Entry>
+						<Entry>
+							<UUID>3NCWM2g9TdmgNjRnbIVMlQ==</UUID>
+							<IconID>0</IconID>
+							<ForegroundColor/>
+							<BackgroundColor/>
+							<OverrideURL/>
+							<Tags/>
+							<Times>
+								<LastModificationTime>hN9c4g4AAAA=</LastModificationTime>
+								<CreationTime>a99c4g4AAAA=</CreationTime>
+								<LastAccessTime>hN9c4g4AAAA=</LastAccessTime>
+								<ExpiryTime>a99c4g4AAAA=</ExpiryTime>
+								<Expires>False</Expires>
+								<UsageCount>0</UsageCount>
+								<LocationChanged>a99c4g4AAAA=</LocationChanged>
+							</Times>
+							<String>
+								<Key>Notes</Key>
+								<Value>main account
+recovery codes in the safe</Value>
+							</String>
+							<String>
+								<Key>Password</Key>
+								<Value ProtectInMemory="True">{REF:P@I:B2E9DF7573E94C739C1CE1481DAAB332}</Value>
+							</String>
+							<String>
+								<Key>Title</Key>
+								<Value>GitHub - Clone</Value>
+							</String>
+							<String>
+								<Key>URL</Key>
+								<Value>https://github.com/login</Value>
+							</String>
+							<String>
+								<Key>UserName</Key>
+								<Value>{REF:U@I:B2E9DF7573E94C739C1CE1481DAAB332}</Value>
+							</String>
+							<Binary>
+								<Key>codes.txt</Key>
+								<Value Ref="0"/>
+							</Binary>
+							<AutoType>
+								<Enabled>True</Enabled>
+								<DataTransferObfuscation>0</DataTransferObfuscation>
+								<DefaultSequence/>
+							</AutoType>
+						</Entry>
+						<Entry>
+							<UUID>3NCWM2g9TdmgNjRnbIVMlQ==</UUID>
+							<IconID>0</IconID>
+							<ForegroundColor/>
+							<BackgroundColor/>
+							<OverrideURL/>
+							<Tags/>
+							<Times>
+								<LastModificationTime>+d9c4g4AAAA=</LastModificationTime>
+								<CreationTime>a99c4g4AAAA=</CreationTime>
+								<LastAccessTime>+d9c4g4AAAA=</LastAccessTime>
+								<ExpiryTime>a99c4g4AAAA=</ExpiryTime>
+								<Expires>False</Expires>
+								<UsageCount>0</UsageCount>
+								<LocationChanged>a99c4g4AAAA=</LocationChanged>
+							</Times>
+							<String>
+								<Key>Notes</Key>
+								<Value>main account
+recovery codes in the safe</Value>
+							</String>
+							<String>
+								<Key>Password</Key>
+								<Value ProtectInMemory="True">{REF:P@I:B2E9DF7573E94C739C1CE1481DAAB332}</Value>
+							</String>
+							<String>
+								<Key>Title</Key>
+								<Value>GitHub - Clone</Value>
+							</String>
+							<String>
+								<Key>URL</Key>
+								<Value>https://github.com/login</Value>
+							</String>
+							<String>
+								<Key>UserName</Key>
+								<Value>{REF:U@I:B2E9DF7573E94C739C1CE1481DAAB332}</Value>
+							</String>
+							<String>
+								<Key>otp</Key>
+								<Value ProtectInMemory="True">otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&amp;period=30&amp;digits=8&amp;issuer=GitHub&amp;algorithm=SHA256</Value>
+							</String>
+							<Binary>
+								<Key>codes.txt</Key>
+								<Value Ref="0"/>
+							</Binary>
+							<AutoType>
+								<Enabled>True</Enabled>
+								<DataTransferObfuscation>0</DataTransferObfuscation>
+								<DefaultSequence/>
+							</AutoType>
+						</Entry>
+					</History>
+				</Entry>
 				<Group>
 					<UUID>z0b/mKvdQLKHiyKGKat8Fw==</UUID>
 					<Name>Banking</Name>
@@ -870,6 +1119,69 @@ recovery codes in the safe</Value>
 					<String>
 						<Key>UserName</Key>
 						<Value/>
+					</String>
+					<AutoType>
+						<Enabled>True</Enabled>
+						<DataTransferObfuscation>0</DataTransferObfuscation>
+						<DefaultSequence/>
+					</AutoType>
+					<History/>
+				</Entry>
+			</Group>
+			<Group>
+				<UUID>xoU1HNx4Rr6edCD2+5BleA==</UUID>
+				<Name>Home/Lab</Name>
+				<Notes/>
+				<IconID>48</IconID>
+				<Times>
+					<LastModificationTime>Q+Vc4g4AAAA=</LastModificationTime>
+					<CreationTime>I+Vc4g4AAAA=</CreationTime>
+					<LastAccessTime>Q+Vc4g4AAAA=</LastAccessTime>
+					<ExpiryTime>I+Vc4g4AAAA=</ExpiryTime>
+					<Expires>False</Expires>
+					<UsageCount>0</UsageCount>
+					<LocationChanged>LOVc4g4AAAA=</LocationChanged>
+				</Times>
+				<IsExpanded>True</IsExpanded>
+				<DefaultAutoTypeSequence/>
+				<EnableAutoType>null</EnableAutoType>
+				<EnableSearching>null</EnableSearching>
+				<LastTopVisibleEntry>AAAAAAAAAAAAAAAAAAAAAA==</LastTopVisibleEntry>
+				<Entry>
+					<UUID>Hd6y5MhlRmOYqsfSYaYBgA==</UUID>
+					<IconID>0</IconID>
+					<ForegroundColor/>
+					<BackgroundColor/>
+					<OverrideURL/>
+					<Tags/>
+					<Times>
+						<LastModificationTime>Q+Vc4g4AAAA=</LastModificationTime>
+						<CreationTime>OeVc4g4AAAA=</CreationTime>
+						<LastAccessTime>Q+Vc4g4AAAA=</LastAccessTime>
+						<ExpiryTime>OeVc4g4AAAA=</ExpiryTime>
+						<Expires>False</Expires>
+						<UsageCount>0</UsageCount>
+						<LocationChanged>Q+Vc4g4AAAA=</LocationChanged>
+					</Times>
+					<String>
+						<Key>Notes</Key>
+						<Value/>
+					</String>
+					<String>
+						<Key>Password</Key>
+						<Value ProtectInMemory="True">nas-pw</Value>
+					</String>
+					<String>
+						<Key>Title</Key>
+						<Value>NAS</Value>
+					</String>
+					<String>
+						<Key>URL</Key>
+						<Value/>
+					</String>
+					<String>
+						<Key>UserName</Key>
+						<Value>admin</Value>
 					</String>
 					<AutoType>
 						<Enabled>True</Enabled>

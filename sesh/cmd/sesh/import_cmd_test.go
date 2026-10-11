@@ -481,21 +481,23 @@ func TestImport_KeePass(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"Found 7 entries and 3 groups in the KeePass export.",
+		"Found 9 entries and 4 groups in the KeePass export.",
 		`"Work Accounts" is "Work-Accounts" in sesh`,
-		"  Passwords, in Work-Accounts (1):\n    password/GitHub/alice\n",
-		"expired in KeePass on 2026-10-11",
+		"  Passwords, in Work-Accounts (2):\n    password/GitHub/alice\n",
+		"expired in KeePass on " + time.Date(2026, 10, 11, 1, 41, 11, 0, time.UTC).Local().Format("2006-01-02"),
+		"password and username taken from the entry they refer to",
+		`"Home/Lab" is "Home-Lab" in sesh`,
 		`"Old account": in KeePass's recycle bin`,
 		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
-		"earlier versions of entries (sesh keeps no history yet): 8\n",
-		"attachments (sesh doesn't hold files): 1\n",
+		"earlier versions of entries (sesh keeps no history yet): 12\n",
+		"attachments (sesh doesn't hold files): 2\n",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("summary missing %q:\n%s", want, stderr)
 		}
 	}
 	out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "skip", keepassFixture("app-kdbx4.xml"))
-	if err != nil || !strings.Contains(out, "✅ Imported 8 entries from KeePass.") || !strings.Contains(out, "holds your passwords unencrypted") {
+	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from KeePass.") || !strings.Contains(out, "holds your passwords unencrypted") {
 		t.Fatalf("%q, %v", out, err)
 	}
 	store := openDoctorVault(t, env)
@@ -508,6 +510,9 @@ func TestImport_KeePass(t *testing.T) {
 	d, err := store.Details(gh, "all")
 	if err != nil || len(d.Fields) != 2 || d.Fields[0].Name != "pin" || !d.Fields[0].Secret || string(d.Fields[0].Value) != "4321" {
 		t.Errorf("GitHub details = %+v, %v", d, err)
+	}
+	if secret, err := store.Get(vault.Key{Kind: vault.KindPassword, Service: "GitHub - Clone", Username: "alice"}); err != nil || string(secret) != "gh-pass-2" {
+		t.Errorf("clone's password = %q, %v", secret, err)
 	}
 	bank, err := store.Lookup(vault.Key{Kind: vault.KindTOTP, Service: "Bank", Username: "bob"})
 	if err != nil || bank.Folder != "Work-Accounts/Banking" {

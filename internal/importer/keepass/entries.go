@@ -1,8 +1,11 @@
 package keepass
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +26,15 @@ const (
 // The fields every entry has, which aren't custom ones.
 var standardFields = []string{"Title", "UserName", "Password", "URL", "Notes", "otp"}
 
+// reference is a field reference to another entry, as KeePassXC matches
+// one (EntryAttributes.cpp matchReference): {REF:<field>@<search>:<text>},
+// in any case.
+var reference = regexp.MustCompile(`(?i)\{REF:([TUPANI])@([TUPANIO]):([^}]+)\}`)
+
+// maxReferenceDepth is how deep references are followed, as KeePassXC's
+// ResolveMaximumDepth (Entry.cpp).
+const maxReferenceDepth = 10
+
 // noRecycleBin is the UUID of no group, all zero bytes.
 const noRecycleBin = "AAAAAAAAAAAAAAAAAAAAAA=="
 
@@ -38,11 +50,12 @@ const noRecycleBin = "AAAAAAAAAAAAAAAAAAAAAA=="
 // tags are fitted too. An entry whose name another has gets " (2)" on all
 // its entries together. What changed on the way is said in each entry.
 func Entries(exp *Export) []*importer.Entry {
-	w := walker{bin: exp.Meta.RecycleBinUUID, taken: map[vault.Key]bool{}, now: time.Now()}
+	w := walker{bin: exp.Meta.RecycleBinUUID, taken: map[vault.Key]bool{}, now: time.Now(), byUUID: map[string]*Entry{}}
 	if w.bin == noRecycleBin {
 		w.bin = ""
 	}
 	root := &exp.Root.Group
+	w.index(root)
 	w.group(root, nil, false)
 	return w.out
 }
@@ -65,10 +78,64 @@ func Count(exp *Export) (entries, groups int) {
 }
 
 type walker struct {
-	now   time.Time
-	taken map[vault.Key]bool
-	bin   string
-	out   []*importer.Entry
+	now    time.Time
+	taken  map[vault.Key]bool
+	byUUID map[string]*Entry // by its UUID in hex, upper case
+	bin    string
+	out    []*importer.Entry
+}
+
+// index records every entry in g and its groups by UUID, for references.
+func (w *walker) index(g *Group) {
+	for i := range g.Entries {
+		if raw, err := base64.StdEncoding.DecodeString(g.Entries[i].UUID); err == nil && len(raw) == 16 {
+			w.byUUID[strings.ToUpper(hex.EncodeToString(raw))] = &g.Entries[i]
+		}
+	}
+	for i := range g.Groups {
+		w.index(&g.Groups[i])
+	}
+}
+
+// resolve fills in s's references to other entries, as KeePassXC does when
+// it uses a value (Entry.cpp resolveReferencePlaceholderRecursive). Only a
+// reference by UUID is followed, which is what KeePassXC's Clone makes; it
+// reports whether every one could be.
+func (w *walker) resolve(s string, depth int) (string, bool) {
+	if !strings.Contains(strings.ToUpper(s), "{REF:") {
+		return s, true
+	}
+	if depth >= maxReferenceDepth {
+		return s, false
+	}
+	ok := true
+	out := reference.ReplaceAllStringFunc(s, func(m string) string {
+		g := reference.FindStringSubmatch(m)
+		target := w.byUUID[strings.ToUpper(g[3])]
+		if !strings.EqualFold(g[2], "I") || target == nil {
+			ok = false
+			return m
+		}
+		var v string
+		switch strings.ToUpper(g[1]) {
+		case "T":
+			v, _ = target.Field("Title")
+		case "U":
+			v, _ = target.Field("UserName")
+		case "P":
+			v, _ = target.Field("Password")
+		case "A":
+			v, _ = target.Field("URL")
+		case "N":
+			v, _ = target.Field("Notes")
+		case "I":
+			v = strings.ToUpper(g[3])
+		}
+		v, vok := w.resolve(v, depth+1)
+		ok = ok && vok
+		return v
+	})
+	return out, ok
 }
 
 // group adds g's entries, then its groups'. path is g's place below the
@@ -76,7 +143,7 @@ type walker struct {
 func (w *walker) group(g *Group, path []string, inBin bool) {
 	inBin = inBin || (w.bin != "" && g.UUID == w.bin)
 	folder := strings.Join(path, "/")
-	fitted := importer.FitFolder(folder)
+	fitted := folderPath(path)
 	for i := range g.Entries {
 		e := &g.Entries[i]
 		title, _ := e.Field("Title")
@@ -104,9 +171,59 @@ func (w *walker) group(g *Group, path []string, inBin bool) {
 	}
 }
 
+// folderPath is a group path as a sesh folder: a "/" in a group's name
+// becomes "-", as it isn't nesting.
+func folderPath(path []string) string {
+	parts := make([]string, len(path))
+	for i, p := range path {
+		parts[i] = strings.ReplaceAll(p, "/", "-")
+	}
+	return importer.FitFolder(strings.Join(parts, "/"))
+}
+
 // entry is what one entry becomes.
 func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
-	title, _ := e.Field("Title")
+	// Every value with its references filled in. One that can't be
+	// followed costs the entry in its title, username or password, which
+	// would be wrong in sesh; elsewhere it's kept as written, and said.
+	values := map[string]string{}
+	var followed, unfollowed []string
+	for _, str := range e.Strings {
+		v, ok := w.resolve(str.Value.Text, 0)
+		switch {
+		case !ok:
+			unfollowed = append(unfollowed, str.Key)
+		case v != str.Value.Text:
+			followed = append(followed, str.Key)
+		}
+		values[str.Key] = v
+	}
+	for _, key := range []string{"Title", "UserName", "Password"} {
+		if slices.Contains(unfollowed, key) {
+			base.Skip = fmt.Sprintf("its %s refers to another entry in a way sesh can't follow", fieldWord(key))
+			return []*importer.Entry{base}
+		}
+	}
+	if len(followed) > 0 {
+		words := make([]string, len(followed))
+		for i, k := range followed {
+			words[i] = fieldWord(k)
+		}
+		they := "they refer"
+		if len(words) == 1 {
+			they = "it refers"
+		}
+		base.Changes = append(base.Changes, fmt.Sprintf("%s taken from the entry %s to", joinWords(words), they))
+	}
+	for _, k := range unfollowed {
+		if k == "Notes" {
+			base.Changes = append(base.Changes, "notes refer to another entry in a way sesh can't follow; kept as written")
+		} else {
+			base.Changes = append(base.Changes, fmt.Sprintf("%s refers to another entry in a way sesh can't follow; kept as written", fieldWord(k)))
+		}
+	}
+
+	title := values["Title"]
 	service := importer.FitName(title)
 	if service == "" {
 		base.Skip = "it has no title"
@@ -115,7 +232,7 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 	if service != title {
 		base.Changes = append(base.Changes, fmt.Sprintf("named %q in sesh", service))
 	}
-	username, _ := e.Field("UserName")
+	username := values["UserName"]
 	user := importer.FitName(username)
 	if user != username {
 		base.Changes = append(base.Changes, fmt.Sprintf("username %q in sesh", user))
@@ -134,8 +251,9 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 			base.Tags = append(base.Tags, fitted)
 		}
 	}
+	// KeePassXC shows an expiry in local time (EntryModel.cpp).
 	if strings.EqualFold(e.Times.Expires, "True") && !e.Times.ExpiryTime.IsZero() {
-		when := e.Times.ExpiryTime.Format("2006-01-02")
+		when := e.Times.ExpiryTime.Local().Format("2006-01-02")
 		if e.Times.ExpiryTime.Before(w.now) {
 			base.Changes = append(base.Changes, "expired in KeePass on "+when)
 		} else {
@@ -149,18 +267,25 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 		base.Lost[lostAttachment] += n
 	}
 
-	var fs importer.FieldSet
-	oldTOTP := false
-	for _, s := range e.Strings {
+	// Custom fields, leaving out what holds a TOTP or HOTP key.
+	type custom struct {
+		key, value string
+		secret     bool
+	}
+	var customs []custom
+	oldTOTP, hotp := false, false
+	for _, str := range e.Strings {
 		switch {
-		case slices.Contains(standardFields, s.Key):
-		case s.Key == "TOTP Seed", s.Key == "TOTP Settings", strings.HasPrefix(s.Key, "TimeOtp-"):
+		case slices.Contains(standardFields, str.Key):
+		case str.Key == "TOTP Seed", str.Key == "TOTP Settings", strings.HasPrefix(str.Key, "TimeOtp-"):
 			oldTOTP = true
+		case strings.HasPrefix(str.Key, "HmacOtp-"):
+			hotp = true
 		default:
-			fs.Custom(s.Key, s.Value.Text, strings.EqualFold(s.Value.ProtectInMemory, "True"))
+			customs = append(customs, custom{str.Key, values[str.Key], strings.EqualFold(str.Value.ProtectInMemory, "True")})
 		}
 	}
-	otp, _ := e.Field("otp")
+	otp := values["otp"]
 	if otp != "" && !strings.HasPrefix(strings.ToLower(otp), "otpauth://") {
 		oldTOTP = true // KeeOtp's key=…&size=… in the otp field
 		otp = ""
@@ -168,15 +293,21 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 	if oldTOTP && otp == "" {
 		base.Changes = append(base.Changes, "its TOTP is in an older layout sesh doesn't read: add it with sesh --service totp --setup")
 	}
-	urlText, _ := e.Field("URL")
-	notes, _ := e.Field("Notes")
-	details := vault.Details{URL: urlText, Fields: fs.Fields}
-	if notes != "" {
-		details.Notes = []byte(notes)
+	if hotp {
+		base.Changes = append(base.Changes, "its counter-based (HOTP) key isn't kept: sesh doesn't make counter-based codes")
 	}
+	urlText, notes := values["URL"], values["Notes"]
 
 	var out []*importer.Entry
-	if password, _ := e.Field("Password"); password != "" {
+	if password := values["Password"]; password != "" {
+		var fs importer.FieldSet
+		for _, c := range customs {
+			fs.Custom(c.key, c.value, c.secret)
+		}
+		details := vault.Details{URL: urlText, Fields: fs.Fields}
+		if notes != "" {
+			details.Notes = []byte(notes)
+		}
 		p := *base
 		p.Changes = append(slices.Clone(base.Changes), fs.Changes...)
 		p.Key = vault.Key{Kind: vault.KindPassword, Service: service, Username: user}
@@ -189,7 +320,15 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 		t.Changes = slices.Clone(base.Changes)
 		t.Key = vault.Key{Kind: vault.KindTOTP, Service: service, Username: user}
 		if len(out) == 0 {
-			t.Details = details // nowhere else to keep them
+			// Nowhere else to keep the details.
+			var fs importer.FieldSet
+			for _, c := range customs {
+				fs.Custom(c.key, c.value, c.secret)
+			}
+			t.Details = vault.Details{URL: urlText, Fields: fs.Fields}
+			if notes != "" {
+				t.Details.Notes = []byte(notes)
+			}
 			t.Changes = append(t.Changes, fs.Changes...)
 		} else {
 			t.Lost = nil // counted once, on the password entry
@@ -211,16 +350,40 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 	if note == "" {
 		note = "Entry with no password"
 	}
-	var nfs importer.FieldSet
-	nfs.Add("username", username, false)
-	for _, f := range fs.Fields {
-		nfs.Custom(f.Name, string(f.Value), f.Secret)
+	var fs importer.FieldSet
+	fs.Add("username", username, false)
+	for _, c := range customs {
+		fs.Custom(c.key, c.value, c.secret)
 	}
-	nfs.Changes = append(slices.Clone(fs.Changes), nfs.Changes...)
 	base.Changes = append(base.Changes, "a secure note in sesh: the entry has no password or TOTP key")
-	n := importer.NoteEntry(base, service, note, &nfs)
+	n := importer.NoteEntry(base, service, note, &fs)
 	n.Details.URL = urlText
 	return []*importer.Entry{importer.Checked(n)}
+}
+
+// fieldWord names one of an entry's fields in a message.
+func fieldWord(key string) string {
+	switch key {
+	case "Title":
+		return "title"
+	case "UserName":
+		return "username"
+	case "Password":
+		return "password"
+	case "URL":
+		return "URL"
+	case "Notes":
+		return "notes"
+	}
+	return fmt.Sprintf("field %q", key)
+}
+
+// joinWords is words as a list in a sentence: "a", "a and b", "a, b and c".
+func joinWords(words []string) string {
+	if len(words) == 1 {
+		return words[0]
+	}
+	return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
 }
 
 // totpKey reads KeePassXC's otp field, an otpauth:// address, as its
