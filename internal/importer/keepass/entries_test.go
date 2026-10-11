@@ -218,3 +218,60 @@ func TestEntries_UnfollowedReferencesAndHOTP(t *testing.T) {
 		}
 	}
 }
+
+// A value filled in from another entry's password or protected field stays
+// secret: a custom field becomes secret, a URL is kept as written, and a
+// username skips the entry. A reference written in lower case is text, as
+// to KeePassXC; and references that multiply don't take long.
+func TestEntries_ReferencesKeepSecrecy(t *testing.T) {
+	str := func(k, v string, protected bool) String {
+		var s String
+		s.Key, s.Value.Text = k, v
+		if protected {
+			s.Value.ProtectInMemory = "True"
+		}
+		return s
+	}
+	const bank = "AAECAwQFBgcICQoLDA0ODw=="
+	ref := "{REF:P@I:000102030405060708090A0B0C0D0E0F}"
+	self := "{REF:P@I:101112131415161718191A1B1C1D1E1F}"
+	exp := Export{}
+	exp.Root.Group.Entries = []Entry{
+		{UUID: bank, Strings: []String{str("Title", "bank", false), str("Password", "s3cret-PW", true), str("pin", "1234", true)}},
+		{Strings: []String{str("Title", "card", false), str("Password", "p", true), str("bank login", ref, false),
+			str("URL", "https://x/?pw="+ref, false),
+			str("lower", "{ref:P@I:000102030405060708090A0B0C0D0E0F}", false)}},
+		{Strings: []String{str("Title", "user", false), str("UserName", ref, false), str("Password", "p", true)}},
+		{UUID: "EBESExQVFhcYGRobHB0eHw==", Strings: []String{str("Title", "loop", false), str("Password", strings.Repeat(self, 12), true)}},
+	}
+	start := time.Now()
+	out := Entries(&exp)
+	if time.Since(start) > 2*time.Second {
+		t.Errorf("references took %v", time.Since(start))
+	}
+	for _, e := range out {
+		changes := strings.Join(e.Changes, "\n")
+		switch e.Name {
+		case "card":
+			fields := map[string]string{}
+			for _, f := range e.Details.Fields {
+				fields[f.Name] = fmt.Sprintf("%s secret=%v", f.Value, f.Secret)
+			}
+			if fields["bank-login"] != "s3cret-PW secret=true" || fields["lower"] != "{ref:P@I:000102030405060708090A0B0C0D0E0F} secret=false" {
+				t.Errorf("card fields = %v", fields)
+			}
+			if e.Details.URL != "https://x/?pw="+ref || !strings.Contains(changes, `field "bank login" is secret in sesh: it refers to a protected value of another entry`) ||
+				!strings.Contains(changes, "URL refers to a protected value of another entry; kept as written") {
+				t.Errorf("card URL %q, changes:\n%s", e.Details.URL, changes)
+			}
+		case "user":
+			if e.Skip != "its username refers to a protected value of another entry, which sesh would show" {
+				t.Errorf("user: skip %q", e.Skip)
+			}
+		case "loop":
+			if e.Skip != "its password refers to another entry in a way sesh can't follow" {
+				t.Errorf("loop: skip %q", e.Skip)
+			}
+		}
+	}
+}

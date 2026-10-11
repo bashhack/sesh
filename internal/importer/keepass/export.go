@@ -101,6 +101,17 @@ func (t *Time) UnmarshalText(b []byte) error {
 	return nil
 }
 
+// field is the value of an entry's field named key, and whether it's
+// protected.
+func (e *Entry) field(key string) (value string, protected bool) {
+	for _, s := range e.Strings {
+		if s.Key == key {
+			return s.Value.Text, strings.EqualFold(s.Value.ProtectInMemory, "True")
+		}
+	}
+	return "", false
+}
+
 // Field is the value of an entry's field named key, and whether it has it.
 func (e *Entry) Field(key string) (string, bool) {
 	for _, s := range e.Strings {

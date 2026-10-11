@@ -26,14 +26,18 @@ const (
 // The fields every entry has, which aren't custom ones.
 var standardFields = []string{"Title", "UserName", "Password", "URL", "Notes", "otp"}
 
-// reference is a field reference to another entry, as KeePassXC matches
-// one (EntryAttributes.cpp matchReference): {REF:<field>@<search>:<text>},
-// in any case.
-var reference = regexp.MustCompile(`(?i)\{REF:([TUPANI])@([TUPANIO]):([^}]+)\}`)
+// reference is a field reference to another entry, as KeePassXC finds one
+// (Entry.cpp placeholderType, EntryAttributes.cpp matchReference):
+// {REF:<field>@<search>:<text>}, "{REF:" as written, the rest in any case.
+var reference = regexp.MustCompile(`\{REF:(?i:([TUPANI])@([TUPANIO])):([^}]+)\}`)
 
 // maxReferenceDepth is how deep references are followed, as KeePassXC's
 // ResolveMaximumDepth (Entry.cpp).
 const maxReferenceDepth = 10
+
+// maxResolvedLength is the longest a value may grow to with references
+// filled in, so ones that each repeat another can't make it huge.
+const maxResolvedLength = 1 << 16
 
 // noRecycleBin is the UUID of no group, all zero bytes.
 const noRecycleBin = "AAAAAAAAAAAAAAAAAAAAAA=="
@@ -50,7 +54,7 @@ const noRecycleBin = "AAAAAAAAAAAAAAAAAAAAAA=="
 // tags are fitted too. An entry whose name another has gets " (2)" on all
 // its entries together. What changed on the way is said in each entry.
 func Entries(exp *Export) []*importer.Entry {
-	w := walker{bin: exp.Meta.RecycleBinUUID, taken: map[vault.Key]bool{}, now: time.Now(), byUUID: map[string]*Entry{}}
+	w := walker{bin: exp.Meta.RecycleBinUUID, taken: map[vault.Key]bool{}, now: time.Now(), byUUID: map[string]*Entry{}, refs: map[refKey]resolved{}}
 	if w.bin == noRecycleBin {
 		w.bin = ""
 	}
@@ -81,6 +85,7 @@ type walker struct {
 	now    time.Time
 	taken  map[vault.Key]bool
 	byUUID map[string]*Entry // by its UUID in hex, upper case
+	refs   map[refKey]resolved
 	bin    string
 	out    []*importer.Entry
 }
@@ -97,45 +102,65 @@ func (w *walker) index(g *Group) {
 	}
 }
 
+// refKey is a field of an entry that a reference names.
+type refKey struct {
+	entry *Entry
+	field string
+}
+
+// resolved is a referenced field's value, filled in: whether it could be,
+// and whether it holds a password or protected value.
+type resolved struct {
+	value      string
+	ok, secret bool
+}
+
 // resolve fills in s's references to other entries, as KeePassXC does when
 // it uses a value (Entry.cpp resolveReferencePlaceholderRecursive). Only a
-// reference by UUID is followed, which is what KeePassXC's Clone makes; it
-// reports whether every one could be.
-func (w *walker) resolve(s string, depth int) (string, bool) {
-	if !strings.Contains(strings.ToUpper(s), "{REF:") {
-		return s, true
+// reference by UUID is followed, which is what KeePassXC's Clone makes;
+// one that loops, goes deeper than KeePassXC would, or grows too long
+// can't be. It reports whether every one could be followed, and whether
+// any filled in a password or protected value. path is the fields being
+// filled in on the way here.
+func (w *walker) resolve(s string, path []refKey) (value string, ok, secret bool) {
+	if !strings.Contains(s, "{REF:") {
+		return s, true, false
 	}
-	if depth >= maxReferenceDepth {
-		return s, false
+	if len(path) >= maxReferenceDepth {
+		return s, false, false
 	}
-	ok := true
-	out := reference.ReplaceAllStringFunc(s, func(m string) string {
+	ok = true
+	value = reference.ReplaceAllStringFunc(s, func(m string) string {
 		g := reference.FindStringSubmatch(m)
 		target := w.byUUID[strings.ToUpper(g[3])]
 		if !strings.EqualFold(g[2], "I") || target == nil {
 			ok = false
 			return m
 		}
-		var v string
-		switch strings.ToUpper(g[1]) {
-		case "T":
-			v, _ = target.Field("Title")
-		case "U":
-			v, _ = target.Field("UserName")
-		case "P":
-			v, _ = target.Field("Password")
-		case "A":
-			v, _ = target.Field("URL")
-		case "N":
-			v, _ = target.Field("Notes")
-		case "I":
-			v = strings.ToUpper(g[3])
+		field := map[string]string{"T": "Title", "U": "UserName", "P": "Password", "A": "URL", "N": "Notes"}[strings.ToUpper(g[1])]
+		if field == "" { // I, the entry's UUID
+			return strings.ToUpper(g[3])
 		}
-		v, vok := w.resolve(v, depth+1)
-		ok = ok && vok
-		return v
+		k := refKey{target, field}
+		if slices.Contains(path, k) {
+			ok = false
+			return m
+		}
+		r, done := w.refs[k]
+		if !done {
+			raw, protected := target.field(field)
+			r.value, r.ok, r.secret = w.resolve(raw, append(slices.Clone(path), k))
+			r.secret = r.secret || protected || field == "Password"
+			w.refs[k] = r
+		}
+		ok = ok && r.ok
+		secret = secret || r.secret
+		return r.value
 	})
-	return out, ok
+	if len(value) > maxResolvedLength {
+		return s, false, secret
+	}
+	return value, ok, secret
 }
 
 // group adds g's entries, then its groups'. path is g's place below the
@@ -186,15 +211,28 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 	// Every value with its references filled in. One that can't be
 	// followed costs the entry in its title, username or password, which
 	// would be wrong in sesh; elsewhere it's kept as written, and said.
+	// A value filled in from a password or protected field stays secret:
+	// a custom field is made secret, notes are anyway, and the title,
+	// username and URL, which sesh shows, aren't filled in.
 	values := map[string]string{}
 	var followed, unfollowed []string
+	madeSecret := map[string]bool{}
 	for _, str := range e.Strings {
-		v, ok := w.resolve(str.Value.Text, 0)
+		v, ok, secret := w.resolve(str.Value.Text, nil)
 		switch {
 		case !ok:
 			unfollowed = append(unfollowed, str.Key)
-		case v != str.Value.Text:
+			v = str.Value.Text
+		case v == str.Value.Text:
+		case secret && (str.Key == "Title" || str.Key == "UserName"):
+			base.Skip = fmt.Sprintf("its %s refers to a protected value of another entry, which sesh would show", fieldWord(str.Key))
+			return []*importer.Entry{base}
+		case secret && str.Key == "URL":
+			base.Changes = append(base.Changes, "URL refers to a protected value of another entry; kept as written")
+			v = str.Value.Text
+		default:
 			followed = append(followed, str.Key)
+			madeSecret[str.Key] = secret && !slices.Contains(standardFields, str.Key)
 		}
 		values[str.Key] = v
 	}
@@ -282,7 +320,12 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 		case strings.HasPrefix(str.Key, "HmacOtp-"):
 			hotp = true
 		default:
-			customs = append(customs, custom{str.Key, values[str.Key], strings.EqualFold(str.Value.ProtectInMemory, "True")})
+			secret := strings.EqualFold(str.Value.ProtectInMemory, "True")
+			if madeSecret[str.Key] && !secret {
+				secret = true
+				base.Changes = append(base.Changes, fmt.Sprintf("field %q is secret in sesh: it refers to a protected value of another entry", str.Key))
+			}
+			customs = append(customs, custom{str.Key, values[str.Key], secret})
 		}
 	}
 	otp := values["otp"]
