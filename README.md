@@ -251,7 +251,8 @@ When you run `sesh -service aws`, you enter a secure subshell with:
 #### Common Operations
 ```bash
 -list                           # List entries for service
--delete <id>                    # Delete entry by ID
+-delete <id>                    # Delete entry by ID, into the trash (sesh trash restore puts it back)
+-purge                          # With -delete: delete for good
 -setup                          # Run setup wizard
 -clip                           # Copy to clipboard
 ```

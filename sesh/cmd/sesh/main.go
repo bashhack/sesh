@@ -256,6 +256,7 @@ var subcommands = []candidate{
 	{"show", "Show an entry: its URL, notes, fields, folder and tags"},
 	{"tag", "Tag entries, take tags off, rename tags, list them"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
+	{"trash", "List deleted entries, put one back, or delete them for good"},
 }
 
 // subcommand returns the subcommand args name (one of subcommands) and the
@@ -351,6 +352,8 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 	pruneAuditLog(store, cfg)
 	warnAuditSize(store, cfg)
 	autoBackup(store, cfg)
+	store.SetTrashDays(cfg.TrashKeepDays.Value)
+	expireTrash(store, cfg)
 	return store, nil
 }
 
@@ -860,6 +863,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "trash":
+		if err := runTrash(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "tag":
 		if err := runTag(app, rest); err != nil {
 			fatal(app, err)
@@ -1005,7 +1013,7 @@ func run(app *App, args []string) {
 		return
 	}
 	if ids := deleteIDs(common, fs.Args()); len(ids) > 0 {
-		if err := app.DeleteEntries(serviceName, ids); err != nil {
+		if err := app.DeleteEntries(serviceName, ids, *common.purge); err != nil {
 			fatal(app, err)
 		}
 		return
@@ -1050,8 +1058,8 @@ func deleteIDs(common commonFlags, args []string) []string {
 
 // commonFlags are the flags every provider accepts.
 type commonFlags struct {
-	service, delete                                *string
-	version, help, listServices, list, setup, clip *bool
+	service, delete                                       *string
+	version, help, listServices, list, setup, clip, purge *bool
 }
 
 func addCommonFlags(fs *flag.FlagSet, serviceName string) commonFlags {
@@ -1061,7 +1069,8 @@ func addCommonFlags(fs *flag.FlagSet, serviceName string) commonFlags {
 		help:         fs.Bool("help", false, "Show usage"),
 		listServices: fs.Bool("list-services", false, "List available service providers"),
 		list:         fs.Bool("list", false, "List entries for selected service"),
-		delete:       fs.String("delete", "", "Delete entries by ID: --delete <id> [<id> ...], all or none; asks first unless --force"),
+		delete:       fs.String("delete", "", "Delete entries by ID: --delete <id> [<id> ...], all or none, into the trash; asks first unless --force"),
+		purge:        fs.Bool("purge", false, "With --delete: delete for good, not into the trash"),
 		setup:        fs.Bool("setup", false, "Run setup wizard for selected service"),
 		clip:         fs.Bool("clip", false, "Copy code to clipboard"),
 	}

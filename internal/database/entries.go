@@ -329,8 +329,20 @@ func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 	return out, rows.Err()
 }
 
-// DeleteMany implements vault.Store: the entries go in one transaction.
+// DeleteMany implements vault.Store: the entries go, in one transaction,
+// into the trash, or for good when it keeps none (see SetTrashDays).
 func (s *Store) DeleteMany(keys []vault.Key) error {
+	return s.deleteMany(keys, false)
+}
+
+// Delete implements vault.Store, as DeleteMany does one entry.
+func (s *Store) Delete(k vault.Key) error {
+	return s.deleteMany([]vault.Key{k}, false)
+}
+
+// deleteMany deletes the entries in one transaction: into the trash,
+// unless purge or the store keeps none.
+func (s *Store) deleteMany(keys []vault.Key, purge bool) error {
 	keys = slices.Clone(keys)
 	slices.SortFunc(keys, func(a, b vault.Key) int {
 		switch {
@@ -342,16 +354,22 @@ func (s *Store) DeleteMany(keys []vault.Key) error {
 		return 0
 	})
 	keys = slices.Compact(keys)
+	toTrash := !purge && s.trashDays > 0
+	now := time.Now().UTC()
 	err := s.inTx(func(tx *sql.Tx) error {
 		for _, k := range keys {
-			res, err := tx.Exec(`DELETE FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(k.Kind), k.Service, k.Username)
+			var id int64
+			err := tx.QueryRow(`SELECT id FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(k.Kind), k.Service, k.Username).Scan(&id)
+			if errors.Is(err, sql.ErrNoRows) {
+				return notFound(k)
+			}
+			if err == nil && toTrash {
+				err = trash(tx, id, now)
+			} else if err == nil {
+				_, err = tx.Exec(`DELETE FROM entries WHERE id = ?`, id)
+			}
 			if err != nil {
 				return fmt.Errorf("delete %s: %w", k, err)
-			}
-			if n, err := res.RowsAffected(); err != nil {
-				return fmt.Errorf("delete %s: %w", k, err)
-			} else if n == 0 {
-				return notFound(k)
 			}
 		}
 		return nil
@@ -360,26 +378,11 @@ func (s *Store) DeleteMany(keys []vault.Key) error {
 		return err
 	}
 	for _, k := range keys {
-		s.audit("delete", k.String(), "Delete")
+		if toTrash {
+			s.audit("delete", k.String(), "Moved to the trash")
+		} else {
+			s.audit("delete", k.String(), "Delete")
+		}
 	}
-	return nil
-}
-
-// Delete implements vault.Store.
-func (s *Store) Delete(k vault.Key) error {
-	var res sql.Result
-	err := s.inTx(func(tx *sql.Tx) (err error) {
-		res, err = tx.Exec(`DELETE FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(k.Kind), k.Service, k.Username)
-		return err
-	})
-	if err != nil {
-		return fmt.Errorf("delete %s: %w", k, err)
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return fmt.Errorf("delete %s: %w", k, err)
-	} else if n == 0 {
-		return notFound(k)
-	}
-	s.audit("delete", k.String(), "Delete")
 	return nil
 }

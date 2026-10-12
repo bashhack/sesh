@@ -117,38 +117,48 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 	if oldID == "" {
 		return res, errors.New("change the master password: the key source doesn't say which vault it unlocked")
 	}
-	before, err := sealedEntries(s.db)
-	if err != nil {
-		return res, err
+	// The entries, and those in the trash, are re-encrypted ahead, outside
+	// the transaction, then checked in it for any changed meanwhile.
+	type row struct {
+		table string
+		id    int64
 	}
-	sealed := make(map[int64]sealedEntry, len(before))
-	for i := range before {
-		e := &before[i]
-		if err := s.reseal(s.db, e, newKey); err != nil {
+	sealed := map[row]sealedEntry{}
+	for _, table := range sealedTables {
+		before, err := sealedEntries(s.db, table)
+		if err != nil {
 			return res, err
 		}
-		sealed[e.id] = *e
+		for i := range before {
+			e := &before[i]
+			if err := s.reseal(s.db, e, newKey); err != nil {
+				return res, err
+			}
+			sealed[row{table, e.id}] = *e
+		}
 	}
 	err = s.inTx(func(tx *sql.Tx) error {
-		now, err := sealedEntries(tx)
-		if err != nil {
-			return err
-		}
-		for i := range now {
-			e := &now[i]
-			// An entry unchanged since it was re-encrypted ahead takes that;
-			// one saved since is re-encrypted now.
-			if done, ok := sealed[e.id]; ok && done.unchangedFrom(e) {
-				*e = done
-			} else if err := s.reseal(tx, e, newKey); err != nil {
+		for _, table := range sealedTables {
+			now, err := sealedEntries(tx, table)
+			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(`UPDATE entries SET encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ? WHERE id = ?`,
-				e.data, e.salt, e.details, e.detailsSalt, e.id); err != nil {
-				return fmt.Errorf("store %s: %w", e.k, err)
+			for i := range now {
+				e := &now[i]
+				// An entry unchanged since it was re-encrypted ahead takes
+				// that; one saved since is re-encrypted now.
+				if done, ok := sealed[row{table, e.id}]; ok && done.unchangedFrom(e) {
+					*e = done
+				} else if err := s.reseal(tx, e, newKey); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`UPDATE `+table+` SET encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ? WHERE id = ?`, //nolint:gosec // table is one of sealedTables
+					e.data, e.salt, e.details, e.detailsSalt, e.id); err != nil {
+					return fmt.Errorf("store %s: %w", e.k, err)
+				}
 			}
+			res.Entries += len(now)
 		}
-		res.Entries = len(now)
 		if res.Recovery, err = rewrapRecoveryRecord(tx, oldID, res.NewID, rewrap); err != nil {
 			return err
 		}
@@ -198,11 +208,16 @@ func (e *sealedEntry) unchangedFrom(now *sealedEntry) bool {
 		bytes.Equal(e.oldDetails, now.details) && bytes.Equal(e.oldDetailsSalt, now.detailsSalt)
 }
 
-// sealedEntries reads every entry's encrypted secret and details through q.
+// sealedTables are the tables holding entries sealed with the vault's
+// key: the entries, and the trash's.
+var sealedTables = []string{"entries", "trash"}
+
+// sealedEntries reads the encrypted secret and details of every entry in
+// table, one of sealedTables, through q.
 func sealedEntries(q interface {
 	Query(query string, args ...any) (*sql.Rows, error)
-}) (_ []sealedEntry, err error) {
-	rows, err := q.Query(`SELECT id, kind, service, username, encrypted_data, salt, sealed_details, details_salt FROM entries`)
+}, table string) (_ []sealedEntry, err error) {
+	rows, err := q.Query(`SELECT id, kind, service, username, encrypted_data, salt, sealed_details, details_salt FROM ` + table) //nolint:gosec // table is one of sealedTables
 	if err != nil {
 		return nil, fmt.Errorf("read entries: %w", err)
 	}

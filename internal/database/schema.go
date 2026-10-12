@@ -25,8 +25,8 @@ var migrations = map[int]func(tx *sql.Tx) error{
 	1: migrateV1,
 }
 
-// migrateV1 creates the schema: the vault's id, the entries and their tags, the vault's key record
-// (vault_key), its recovery key record, and the audit log.
+// migrateV1 creates the schema: the vault's id, the entries and their tags, the trash, the vault's
+// key record (vault_key), its recovery key record, and the audit log.
 func migrateV1(tx *sql.Tx) error {
 	for _, q := range []string{
 		`CREATE TABLE entries (
@@ -49,6 +49,28 @@ func migrateV1(tx *sql.Tx) error {
 			UNIQUE (kind, service, username)
 		)`,
 		`CREATE INDEX idx_entries_folder ON entries(folder)`,
+		// Deleted entries, kept a while to be restored: an entry's row as
+		// it was, its tags as a JSON array, and when it was deleted. The
+		// secret and details stay sealed for its name; see trash.go.
+		`CREATE TABLE trash (
+			id             INTEGER PRIMARY KEY,
+			kind           TEXT NOT NULL,
+			service        TEXT NOT NULL,
+			username       TEXT NOT NULL DEFAULT '',
+			encrypted_data BLOB NOT NULL,
+			salt           BLOB NOT NULL,
+			settings       TEXT,
+			folder         TEXT NOT NULL DEFAULT '',
+			url            TEXT NOT NULL DEFAULT '',
+			details        TEXT NOT NULL DEFAULT '',
+			sealed_details BLOB,
+			details_salt   BLOB,
+			tags           TEXT NOT NULL DEFAULT '[]',
+			created_at     DATETIME NOT NULL,
+			updated_at     DATETIME NOT NULL,
+			deleted_at     DATETIME NOT NULL
+		)`,
+		`CREATE INDEX idx_trash_deleted_at ON trash(deleted_at)`,
 		// An entry's tags go with it when it's deleted.
 		`CREATE TABLE entry_tags (
 			entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,

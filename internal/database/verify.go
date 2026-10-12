@@ -32,6 +32,8 @@ type EntryProblem struct {
 	Err  error
 	Key  vault.Key
 	Kind ProblemKind
+	// TrashID is the entry's id in the trash, 0 for one that isn't.
+	TrashID int64
 }
 
 // VerifyReport is what Verify found, all from one consistent view of the
@@ -49,8 +51,11 @@ type VerifyReport struct {
 	Structure []string
 	// Problems are the entries that can't be read, ordered by key.
 	Problems []EntryProblem
-	// Entries is how many entries the vault holds.
-	Entries int
+	// TrashProblems are those of the entries in the trash.
+	TrashProblems []EntryProblem
+	// Entries is how many entries the vault holds; Trashed, how many are
+	// in the trash.
+	Entries, Trashed int
 }
 
 // Verify checks the vault without writing to it, from one read-only view of
@@ -90,6 +95,18 @@ func (s *Store) Verify() (VerifyReport, error) {
 		r.Structure = []string{err.Error()}
 	}
 
+	if r.Entries, r.Problems, err = s.verifyTable(tx, "entries"); err != nil {
+		return r, err
+	}
+	if r.Trashed, r.TrashProblems, err = s.verifyTable(tx, "trash"); err != nil {
+		return r, err
+	}
+	return r, nil
+}
+
+// verifyTable checks every entry in table, one of sealedTables, through
+// tx: how many there are, and those that can't be read, ordered by key.
+func (s *Store) verifyTable(tx *sql.Tx, table string) (int, []EntryProblem, error) {
 	type entry struct {
 		timesErr           error
 		k                  vault.Key
@@ -97,25 +114,26 @@ func (s *Store) Verify() (VerifyReport, error) {
 		sealed, sealedSalt []byte
 		url, details       string
 		settings           sql.NullString
+		id                 int64
 	}
 	// By row id, not through the name index, so a damaged index can't
 	// hide an entry.
-	rows, err := tx.Query(`SELECT kind, service, username, encrypted_data, salt, settings, url, details, sealed_details, details_salt, created_at, updated_at FROM entries NOT INDEXED ORDER BY id`)
+	rows, err := tx.Query(`SELECT id, kind, service, username, encrypted_data, salt, settings, url, details, sealed_details, details_salt, created_at, updated_at FROM ` + table + ` NOT INDEXED ORDER BY id`) //nolint:gosec // table is one of sealedTables
 	if err != nil {
-		return r, fmt.Errorf("read entries: %w", err)
+		return 0, nil, fmt.Errorf("read %s: %w", table, err)
 	}
 	var all []entry
 	for rows.Next() {
 		var e entry
 		var kind string
 		var created, updated sql.NullTime
-		if err := rows.Scan(&kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &e.url, &e.details, &e.sealed, &e.sealedSalt, &created, &updated); err != nil {
+		if err := rows.Scan(&e.id, &kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &e.url, &e.details, &e.sealed, &e.sealedSalt, &created, &updated); err != nil {
 			// A time that doesn't read is the entry's problem; scan the
 			// rest of the row without it.
 			var raw1, raw2 any
-			if err2 := rows.Scan(&kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &e.url, &e.details, &e.sealed, &e.sealedSalt, &raw1, &raw2); err2 != nil {
+			if err2 := rows.Scan(&e.id, &kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &e.url, &e.details, &e.sealed, &e.sealedSalt, &raw1, &raw2); err2 != nil {
 				_ = rows.Close() //nolint:errcheck // already failing
-				return r, fmt.Errorf("read entries: %w", err2)
+				return 0, nil, fmt.Errorf("read %s: %w", table, err2)
 			}
 			e.timesErr = fmt.Errorf("its times don't read: %w", err)
 		}
@@ -123,40 +141,47 @@ func (s *Store) Verify() (VerifyReport, error) {
 		all = append(all, e)
 	}
 	if err := rows.Close(); err != nil {
-		return r, fmt.Errorf("read entries: %w", err)
+		return 0, nil, fmt.Errorf("read %s: %w", table, err)
 	}
 	if err := rows.Err(); err != nil {
-		return r, fmt.Errorf("read entries: %w", err)
+		return 0, nil, fmt.Errorf("read %s: %w", table, err)
 	}
-	r.Entries = len(all)
+	var problems []EntryProblem
 	for i := range all {
 		e := &all[i]
+		var trashID int64
+		if table == "trash" {
+			trashID = e.id
+		}
+		problem := func(kind ProblemKind, err error) {
+			problems = append(problems, EntryProblem{Key: e.k, Kind: kind, Err: err, TrashID: trashID})
+		}
 		plain, err := s.oracle.DecryptEntry(e.data, e.salt, entryAAD(e.k))
 		secure.SecureZeroBytes(plain)
 		switch {
 		case errors.Is(err, ErrDecrypt):
-			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Kind: ProblemSecret, Err: fmt.Errorf("its secret doesn't decrypt with the vault's key: %w", err)})
+			problem(ProblemSecret, fmt.Errorf("its secret doesn't decrypt with the vault's key: %w", err))
 			continue
 		case err != nil:
-			return r, fmt.Errorf("couldn't finish checking %s: %w", e.k, err)
+			return 0, nil, fmt.Errorf("couldn't finish checking %s: %w", e.k, err)
 		}
 		if _, err := decodeSettings(e.k, e.settings); err != nil {
-			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Kind: ProblemSettings, Err: err})
+			problem(ProblemSettings, err)
 			continue
 		}
 		if err := s.checkDetails(e.k, e.url, e.details, e.sealed, e.sealedSalt); err != nil {
 			if errors.Is(err, errCouldntCheck) {
-				return r, fmt.Errorf("couldn't finish checking %s: %w", e.k, err)
+				return 0, nil, fmt.Errorf("couldn't finish checking %s: %w", e.k, err)
 			}
-			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Kind: ProblemDetails, Err: err})
+			problem(ProblemDetails, err)
 			continue
 		}
 		if e.timesErr != nil {
-			r.Problems = append(r.Problems, EntryProblem{Key: e.k, Kind: ProblemTimes, Err: e.timesErr})
+			problem(ProblemTimes, e.timesErr)
 		}
 	}
-	sort.Slice(r.Problems, func(i, j int) bool { return r.Problems[i].Key.Less(r.Problems[j].Key) })
-	return r, nil
+	sort.Slice(problems, func(i, j int) bool { return problems[i].Key.Less(problems[j].Key) })
+	return len(all), problems, nil
 }
 
 // errCouldntCheck marks a details check that failed for a reason other

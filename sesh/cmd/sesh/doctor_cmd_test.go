@@ -126,7 +126,7 @@ func TestDoctor_UnreadableEntries(t *testing.T) {
 			"                        password/git hub/alice: secret doesn't decrypt\n" +
 			"                        (damaged, or encrypted with another key)\n",
 		"  1. Restore these entries from a backup (an encrypted export), or delete them:\n" +
-			"       sesh --service password --delete api_key/openai 'password/git hub/alice'\n",
+			"       sesh --service password --purge --delete api_key/openai 'password/git hub/alice'\n",
 		"\nFAIL: 2 problems, 1 warning\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -185,7 +185,7 @@ func damageThree(t *testing.T) *rekeyTestEnv {
 func TestDoctor_PrintedDeleteWorks(t *testing.T) {
 	env := damageThree(t)
 	out, err := runDoctorOut(t)
-	if !errors.Is(err, errReported) || !strings.Contains(out, "       sesh --service password --delete password/a/u password/b/u password/c/u\n") {
+	if !errors.Is(err, errReported) || !strings.Contains(out, "       sesh --service password --purge --delete password/a/u password/b/u password/c/u\n") {
 		t.Fatalf("err = %v, output:\n%s", err, out)
 	}
 	store := openDoctorVault(t, env)
@@ -332,7 +332,7 @@ func TestDoctor_OneUnreadableEntry(t *testing.T) {
 	sqlExec(t, env.dbPath, `UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899' WHERE service = 'github'`)
 	out, err := runDoctorOut(t)
 	want := "  1. Restore password/github/alice from a backup (an encrypted export), or delete it:\n" +
-		"       sesh --service password --delete password/github/alice\n"
+		"       sesh --service password --purge --delete password/github/alice\n"
 	if !errors.Is(err, errReported) || !strings.Contains(out, want) {
 		t.Errorf("err = %v, output:\n%s", err, out)
 	}
