@@ -1247,8 +1247,8 @@ sesh import --from safari Passwords.csv
 ```
 
 - **Each entry** becomes a password entry named by its title, as the Passwords app shows it, with its URL and notes. An entry with no title is named for its site, as for Chrome and Firefox.
-- **A verification code** becomes a TOTP entry beside the password entry, with the same name; one sesh can't make (counter-based, or an algorithm other than SHA-1, SHA-256 or SHA-512) is skipped, and listed, and the password still comes across. An entry with a code but no password becomes the TOTP entry alone.
-- **Two entries with one title and username** get ` (2)` added to the second.
+- **A verification code** becomes a TOTP entry beside the password entry, with the same name; one sesh can't make codes from (counter-based or Steam, an algorithm other than SHA-1, SHA-256 or SHA-512, codes other than 6 to 8 digits, or a key that isn't valid) is skipped, and listed, and the password still comes across. An entry with a code but no password becomes the TOTP entry alone.
+- **Two entries with one title and username** get ` (2)` added to the second where they'd hold the same kind of entry; an entry with only a code and another with only a password, under one title, become `totp/…` and `password/…` with no ` (2)`.
 - **No folder or tag** is given.
 - **The export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
 

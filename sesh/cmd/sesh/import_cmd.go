@@ -584,7 +584,7 @@ func readBrowser(from string, args []string) (found, error) {
 	}
 	return found{
 		source:  exp.Title(),
-		header:  fmt.Sprintf("Found %s in the %s export.", nouns(len(exp.Logins), "password", "passwords"), exp.Title()),
+		header:  fmt.Sprintf("Found %s in the %s export.", nouns(len(exp.Logins), "entry", "entries"), exp.Title()),
 		after:   "This export holds your passwords unencrypted: delete " + args[0] + " now, and empty the trash.",
 		entries: browser.Entries(&exp),
 	}, nil

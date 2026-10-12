@@ -20,12 +20,15 @@ import (
 // (LoginHelper.sys.mjs isUserFacingLogin).
 const firefoxAccount = "chrome://FirefoxAccounts"
 
-// Entries is the password entries an export's logins become, in order.
-// Each is named for its site (see siteName), with the address as its URL.
-// Two of one name and username get " (2)", unless, in Chrome's export, the
-// password is the same too: Chrome writes a row for each address of one
-// login, and the repeats are skipped. A login with no password is skipped, as is
-// Firefox's sign-in to the Mozilla account.
+// Entries is the entries an export's logins become, in order: a password
+// entry for each, and for Safari's a TOTP entry beside it for its
+// verification code (alone, with the details, when there's no password).
+// Each is named for its site (see siteName), or Safari's by its title,
+// with the address as its URL. Two of one name and username get " (2)",
+// unless, in Chrome's export, the password is the same too: Chrome writes
+// a row for each address of one login, and the repeats are skipped. A
+// login with neither a password nor a code is skipped, as is Firefox's
+// sign-in to the Mozilla account.
 func Entries(exp *Export) []*importer.Entry {
 	names := importer.NewNames()
 	type login struct{ site, user, password string }
@@ -34,7 +37,7 @@ func Entries(exp *Export) []*importer.Entry {
 	for i := range exp.Logins {
 		l := &exp.Logins[i]
 		site := siteName(l, exp.Browser)
-		if exp.Browser == Safari && strings.TrimSpace(l.Title) != "" {
+		if exp.Browser == Safari && importer.FitName(l.Title) != "" {
 			site = l.Title
 		}
 		e := &importer.Entry{Name: site, Created: l.Created, Updated: l.Updated}
@@ -144,7 +147,15 @@ func totpKey(s string) (secret string, params totp.Params, why string) {
 			params.Period = n
 		}
 	}
+	if q.Get("encoder") == "steam" {
+		return "", params, "a Steam code, which sesh doesn't make"
+	}
 	params.Issuer = q.Get("issuer")
+	if params.Issuer == "" {
+		if issuer, _, ok := strings.Cut(strings.TrimPrefix(u.Path, "/"), ":"); ok {
+			params.Issuer = strings.TrimSpace(issuer)
+		}
+	}
 	if q.Get("secret") == "" {
 		return "", params, "it has no key"
 	}

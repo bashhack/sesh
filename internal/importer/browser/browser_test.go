@@ -2,7 +2,6 @@ package browser
 
 import (
 	"os"
-
 	"strings"
 	"testing"
 	"time"
@@ -211,14 +210,14 @@ func TestEntries_Safari(t *testing.T) {
 
 	exp = Export{Browser: Safari, Logins: []Login{
 		{Title: "Code only", URL: "https://x.example/", OTPAuth: "otpauth://totp?secret=GEZDGNBVGY3TQOJQ&digits=8", Note: "n"},
-		{Title: "", URL: "https://www.untitled.example/", Username: "u", Password: "p"},
+		{Title: "\u200b", URL: "https://www.untitled.example/", Username: "u", Password: "p"},
 		{Title: "Counter", Password: "p", OTPAuth: "otpauth://hotp?secret=GEZDGNBVGY3TQOJQSECRET&counter=1"},
 	}}
 	var keys []string
 	for _, e := range Entries(&exp) {
-		keys = append(keys, e.Key.String()+"|"+e.Skip+"|"+string(e.Details.Notes))
+		keys = append(keys, e.Key.String()+"|"+e.Skip+"|"+string(e.Details.Notes)+"|"+e.Details.URL)
 	}
-	want := "totp/Code only||n; password/untitled.example/u||; password/Counter||; totp/Counter|its verification code: a counter-based (HOTP) code, which sesh doesn't make|"
+	want := "totp/Code only||n|https://x.example/; password/untitled.example/u|||https://www.untitled.example/; password/Counter|||; totp/Counter|its verification code: a counter-based (HOTP) code, which sesh doesn't make||"
 	if got := strings.Join(keys, "; "); got != want {
 		t.Errorf("got %s", got)
 	}
@@ -231,12 +230,16 @@ func TestTOTPKey(t *testing.T) {
 		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&period=0":      "isn't a positive number",
 		"otpauth://totp?issuer=GEZDGNBVGY3TQOJQSECRET":               "it has no key",
 		"otpauth://totp?secret=GEZD!!GNBVGY3TQOJQSECRET":             "isn't a valid base32 key",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&encoder=steam": "a Steam code",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&period=100000": "longer than sesh allows",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&digits=x":      "isn't a number",
+		"otpauth://totp/a%zz?secret=GEZDGNBVGY3TQOJQSECRET":          "doesn't read as an otpauth:// address",
 	} {
 		if _, _, why := totpKey(in); !strings.Contains(why, want) || strings.Contains(why, "GEZD") {
 			t.Errorf("totpKey(%q) = %q, want %q and no key", in, why, want)
 		}
 	}
-	if k, p, why := totpKey("otpauth://totp/Corp:me?secret=GEZDGNBVGY3TQOJQ&algorithm=SHA256&digits=8&period=60&issuer=Corp"); k != "GEZDGNBVGY3TQOJQ" || why != "" ||
+	if k, p, why := totpKey("OTPAUTH://TOTP/Corp:me?secret=GEZDGNBVGY3TQOJQ&algorithm=SHA256&digits=8&period=60"); k != "GEZDGNBVGY3TQOJQ" || why != "" ||
 		p != (totp.Params{Algorithm: "SHA256", Digits: 8, Period: 60, Issuer: "Corp"}) {
 		t.Errorf("totpKey = %q %+v %q", k, p, why)
 	}

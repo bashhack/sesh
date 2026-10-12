@@ -539,12 +539,12 @@ func browserFixture(name string) string {
 func TestImport_Browsers(t *testing.T) {
 	env := importVault(t)
 	out, stderr, err := runImportOut(t, "", false, "--yes", browserFixture("chromium.csv"))
-	if err != nil || !strings.Contains(stderr, "Found 5 passwords in the Chrome export.") || !strings.Contains(out, "✅ Imported 5 entries from Chrome.") ||
+	if err != nil || !strings.Contains(stderr, "Found 5 entries in the Chrome export.") || !strings.Contains(out, "✅ Imported 5 entries from Chrome.") ||
 		!strings.Contains(out, "holds your passwords unencrypted") {
 		t.Fatalf("Chrome: %q\n%s\n%v", out, stderr, err)
 	}
 	_, stderr, err = runImportOut(t, "", false, "--dry-run", browserFixture("firefox.csv"))
-	if err != nil || !strings.Contains(stderr, "Found 5 passwords in the Firefox export.") || !strings.Contains(stderr, "Already in the vault (5):") {
+	if err != nil || !strings.Contains(stderr, "Found 5 entries in the Firefox export.") || !strings.Contains(stderr, "Already in the vault (5):") {
 		t.Errorf("Firefox: %s\n%v", stderr, err)
 	}
 	if _, _, err := runImportOut(t, "", false, "--from", "chrome", browserFixture("firefox.csv")); err == nil || !strings.Contains(err.Error(), "this is Firefox's password export: use --from firefox") {
@@ -581,7 +581,7 @@ func TestImport_FirefoxTimes(t *testing.T) {
 func TestImport_Safari(t *testing.T) {
 	env := importVault(t)
 	out, stderr, err := runImportOut(t, "", false, "--yes", browserFixture("safari.csv"))
-	if err != nil || !strings.Contains(stderr, "Found 1 password in the Safari export.") || !strings.Contains(out, "✅ Imported 2 entries from Safari.") {
+	if err != nil || !strings.Contains(stderr, "Found 1 entry in the Safari export.") || !strings.Contains(out, "✅ Imported 2 entries from Safari.") {
 		t.Fatalf("%q\n%s\n%v", out, stderr, err)
 	}
 	store := openDoctorVault(t, env)
@@ -592,5 +592,25 @@ func TestImport_Safari(t *testing.T) {
 	}
 	if secret, err := store.Get(vault.Key{Kind: vault.KindTOTP, Service: "GitHub Test", Username: "alice"}); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" {
 		t.Errorf("TOTP entry = %q, %v", secret, err)
+	}
+}
+
+// A Safari entry whose verification code sesh can't make still imports its
+// password, the code listed as skipped; --from chrome on Safari's export
+// says which it is.
+func TestImport_SafariRefusedCode(t *testing.T) {
+	importVault(t)
+	file := filepath.Join(t.TempDir(), "Passwords.csv")
+	csv := "Title,URL,Username,Password,Notes,OTPAuth\nCounter,https://c.example/,u,pw,,otpauth://hotp?secret=GEZDGNBVGY3TQOJQ&counter=1\n"
+	if err := os.WriteFile(file, []byte(csv), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, stderr, err := runImportOut(t, "", false, "--yes", file)
+	if err != nil || !strings.Contains(out, "✅ Imported 1 entry from Safari.") ||
+		!strings.Contains(stderr, `"Counter": its verification code: a counter-based (HOTP) code, which sesh doesn't make`) {
+		t.Errorf("%q\n%s\n%v", out, stderr, err)
+	}
+	if _, _, err := runImportOut(t, "", false, "--from", "chrome", file); err == nil || !strings.Contains(err.Error(), "this is Safari's password export: use --from safari") {
+		t.Errorf("wrong --from: %v", err)
 	}
 }
