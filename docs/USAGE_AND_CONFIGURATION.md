@@ -1004,7 +1004,7 @@ $ sesh trash restore 7
 
 ### Password history
 
-Each time an entry's secret changes (stored over, generated, edited, replaced by an import, or put back from its history), the one it replaces is kept, with when it was replaced: the newest 10 for each entry (`history.keep`). Storing the same secret again keeps nothing, and neither does storing over a secret that's damaged. Lowering `history.keep` drops what's past it the next time a command unlocks the vault, which the audit log records; `0` keeps no new earlier secrets, and drops none of those kept: forget them with `--forget`. Only the secret is versioned, not the URL, notes or fields.
+Each time an entry's secret changes (stored over, generated, edited, replaced by an import, or put back from its history), the one it replaces is kept, with when it was replaced: the newest 10 for each entry (`history.keep`). Importing from Bitwarden or KeePass brings in an entry's old passwords too: below sesh's own when the import replaces an entry you have, and never one the entry has already, so importing again adds nothing twice. `history.keep` limits them as it does the rest, keeping the newest, and the import says how many it kept and how many it had no room for. One whose time the export doesn't give is listed as `replaced ?`. Storing the same secret again keeps nothing, and neither does storing over a secret that's damaged. Lowering `history.keep` drops what's past it the next time a command unlocks the vault, which the audit log records; `0` keeps no new earlier secrets, and drops none of those kept: forget them with `--forget`. Only the secret is versioned, not the URL, notes or fields.
 
 ```
 $ sesh history password/github/alice
@@ -1234,6 +1234,7 @@ sesh import --from bitwarden bitwarden_export.json
 ```
 
 - **Logins** become password entries, with the first URL as the entry's URL (more go in fields `url-2`, `url-3`, ...), the notes, and the custom fields. A login's TOTP key becomes a TOTP entry beside it, with the same name.
+- **A login's old passwords** (Bitwarden keeps the last 5) go into the entry's [history](#password-history), each with when Bitwarden says it was replaced. Bitwarden keeps a hidden field's old value in the same list, written `name: value`, and doesn't mark which is which, so one with `: ` in it is left out and counted in the summary, as are the old values on other kinds of item, which can only be hidden fields'.
 - **Secure notes** become secure notes.
 - **Cards, identities, and SSH keys** become secure notes with fields: numbers, codes, and private keys as secret fields, the rest plain. The note is the item's notes, or a line saying what it is ("Visa card ending 4242").
 - **Custom fields:** hidden ones are secret, text and boolean ones plain, and a text one of several lines secret too. Linked fields, which only point at another value, aren't kept.
@@ -1244,7 +1245,7 @@ sesh import --from bitwarden bitwarden_export.json
   - favorites get the tag `favorite`.
 - **What doesn't come across,** said in the summary:
   - Steam codes (the password still does);
-  - old passwords (not yet imported into history);
+  - old passwords with `: ` in them, and old hidden-field values (see above);
   - passkeys;
   - Bitwarden's "ask for the master password again";
   - bank accounts, driver's licences, and passports, which sesh can't import yet.
@@ -1259,6 +1260,7 @@ sesh import --from keepass Passwords.xml
 ```
 
 - **Entries with a password** become password entries, with the URL, notes, and custom fields: protected ones secret, the rest plain (a value of several lines secret too). A TOTP key set up in KeePassXC becomes a TOTP entry beside the password entry, with its settings.
+- **Old passwords:** KeePass keeps a copy of an entry before each edit of any kind. Each time the password changed, the one before goes into the entry's [history](#password-history), replaced when the next copy was made. Copies that changed only something else aren't kept, as sesh's history holds only secrets; nor is an old password that refers to another entry, since the export doesn't say what it was. The summary counts both.
 - **Entries with neither a password nor TOTP** become secure notes.
 - **Groups** below the database's own become folders, fitted to sesh's rules as for Bitwarden, and listed; a `/` in a group's name becomes `-`, since in sesh it would mean a folder inside a folder. Tags come across, fitted the same way.
 - **References to another entry,** such as KeePassXC's Clone with "Replace username and password with references" makes, are filled in with the value they refer to, and the summary says so. One sesh can't follow (one that finds its entry by anything but its UUID, or loops) skips the entry when it's in the title, username or password, and is kept as written, and said, anywhere else. A value filled in from another entry's password or protected field stays secret: a custom field is made secret, and a URL keeps the reference as written; a title or username referring to one skips the entry, since sesh shows those.
@@ -1266,7 +1268,7 @@ sesh import --from keepass Passwords.xml
 - **The recycle bin's entries** are skipped, and listed.
 - **An entry that expires** is imported, with the date said in the summary; sesh has no expiry dates.
 - **What doesn't come across,** said in the summary:
-  - earlier versions of entries (not yet imported into history);
+  - earlier versions that changed only something other than the password (see above);
   - attachments (sesh doesn't hold files; an export from a KDBX 4 database leaves their contents out anyway);
   - TOTP set up in an older layout (KeePassXC's old "TOTP Seed" and "TOTP Settings", the KeeOtp plugin's, or KeePass 2's own): the password still comes across; add the TOTP with `sesh --service totp --setup`;
   - Steam codes, counter-based (HOTP) codes (including KeePass 2's `HmacOtp-*` fields), and algorithms other than SHA-1, SHA-256 and SHA-512.

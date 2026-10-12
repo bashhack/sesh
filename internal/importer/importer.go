@@ -22,7 +22,8 @@ type Entry struct {
 	Folder  string
 	Secret  []byte
 	Tags    []string
-	Changes []string // what changed on the way, said in the summary
+	Earlier []vault.Earlier // earlier secrets, the newest first
+	Changes []string        // what changed on the way, said in the summary
 	// Lost counts what the source had that sesh doesn't keep, by what it
 	// is ("old passwords"), for the summary to add up.
 	Lost     map[string]int

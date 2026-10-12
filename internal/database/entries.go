@@ -115,12 +115,12 @@ func (s *Store) get(k vault.Key, detail string) ([]byte, error) {
 
 // Put implements vault.Store.
 func (s *Store) Put(k vault.Key, secret []byte) error {
-	return s.write(&vault.Entry{Key: k}, secret, false, nil)
+	return s.write(&vault.Entry{Key: k}, secret, false, nil, nil, nil)
 }
 
 // Save implements vault.Store.
 func (s *Store) Save(e *vault.Entry, secret []byte) error {
-	return s.write(e, secret, true, nil)
+	return s.write(e, secret, true, nil, nil, nil)
 }
 
 // SaveWithDetails implements vault.Store.
@@ -128,13 +128,15 @@ func (s *Store) SaveWithDetails(e *vault.Entry, secret []byte, d *vault.Details)
 	if err := d.Check(e.Kind); err != nil {
 		return err
 	}
-	return s.write(e, secret, true, d)
+	return s.write(e, secret, true, d, nil, nil)
 }
 
 // write stores e's secret. whole also replaces its settings, folder, tags,
 // and times; otherwise an existing entry keeps them, except its update
 // time. Details, when not nil, replace the entry's in the same write.
-func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Details) error {
+// earlier, the newest first, go into the entry's history below what it
+// has (see SaveImported), and got, when not nil, says what became of them.
+func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Details, earlier []vault.Earlier, got *ImportedHistory) error {
 	if err := e.Key.Validate(); err != nil {
 		return err
 	}
@@ -160,9 +162,9 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	// secret, so another command's store in between isn't replaced
 	// without being kept.
 	var old *oldSecret
+	var data, oldSalt []byte
 	keeping, existed := s.historyKeep > 0, false
 	if keeping {
-		var data, oldSalt []byte
 		err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
@@ -176,6 +178,12 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 			if old == nil {
 				old = &oldSecret{from: data}
 			}
+		}
+	}
+	var imported *importedHistory
+	if keeping && len(earlier) > 0 {
+		if imported, err = s.sealEarlier(e.Key, secret, data, oldSalt, old, earlier); err != nil {
+			return err
 		}
 	}
 	encData, salt, err := s.oracle.EncryptEntry(secret, entryAAD(e.Key))
@@ -211,7 +219,11 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 			case !existed && errors.Is(err, sql.ErrNoRows):
 			case !existed, err != nil, !bytes.Equal(dataNow, old.from):
 				return ErrEntryChanged
-			default:
+			}
+			if err := s.keepImported(tx, e.Key, imported); err != nil {
+				return err
+			}
+			if existed {
 				if err := s.keepOld(tx, e.Key, old, now); err != nil {
 					return err
 				}
@@ -245,7 +257,16 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if whole {
 		detail = "Save"
 	}
+	if n := imported.count(); n > 0 {
+		detail += fmt.Sprintf(", with %d earlier secrets imported", n)
+		if n == 1 {
+			detail = strings.TrimSuffix(detail, "s imported") + " imported"
+		}
+	}
 	s.audit("modify", e.Key.String(), detail)
+	if got != nil {
+		*got = imported.result()
+	}
 	return nil
 }
 

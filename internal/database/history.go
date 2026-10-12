@@ -41,8 +41,9 @@ func (s *Store) HistoryKeep() int { return s.historyKeep }
 // history (nil data when there's nothing to keep): from is the row it was
 // read from, so the write can check it hasn't changed since.
 type oldSecret struct {
-	data, salt []byte // sealed for history
-	from       []byte // the entry's encrypted_data it was read from
+	at         time.Time // replaced, for an imported one
+	data, salt []byte    // sealed for history
+	from       []byte    // the entry's encrypted_data it was read from
 }
 
 // replacing is the entry k's secret, sealed (data, salt), kept for its
@@ -85,10 +86,168 @@ func (s *Store) keepOld(tx *sql.Tx, k vault.Key, old *oldSecret, at time.Time) e
 		string(k.Kind), k.Service, k.Username, old.data, old.salt, at); err != nil {
 		return fmt.Errorf("keep %s's earlier secret: %w", k, err)
 	}
+	return s.trimHistory(tx, k)
+}
+
+// trimHistory drops, in tx, k's earlier secrets past the newest
+// history.keep.
+func (s *Store) trimHistory(tx *sql.Tx, k vault.Key) error {
 	_, err := tx.Exec(`DELETE FROM history WHERE trash_id IS NULL AND kind = ? AND service = ? AND username = ? AND id NOT IN (
 		SELECT id FROM history WHERE trash_id IS NULL AND kind = ? AND service = ? AND username = ? ORDER BY id DESC LIMIT ?)`,
 		string(k.Kind), k.Service, k.Username, string(k.Kind), k.Service, k.Username, s.historyKeep)
 	return err
+}
+
+// SaveImported is SaveWithDetails, or Save when d is nil, for an import
+// that also brings the entry's earlier secrets, the newest first. They go
+// into its history below what it has, and below the secret this replaces;
+// one the entry already has, as its secret or an earlier one, isn't kept
+// again, so importing twice adds nothing twice. Only as many as
+// history.keep has room for are kept, the newest, and none over
+// MaxSecretSize; the result says how many.
+func (s *Store) SaveImported(e *vault.Entry, secret []byte, d *vault.Details, earlier []vault.Earlier) (ImportedHistory, error) {
+	if d != nil {
+		if err := d.Check(e.Kind); err != nil {
+			return ImportedHistory{}, err
+		}
+	}
+	var got ImportedHistory
+	err := s.write(e, secret, true, d, earlier, &got)
+	return got, err
+}
+
+// ImportedHistory is what SaveImported did with an entry's earlier
+// secrets, leaving out those the entry already had: how many it kept, and
+// how many it didn't, for lack of room under history.keep or for being
+// over MaxSecretSize.
+type ImportedHistory struct {
+	Kept, NoRoom, TooLarge int
+}
+
+// importedHistory is what an import adds to an entry's history: sealed,
+// the newest first, and the ids of the history the entry had when read,
+// the newest first, which go above them.
+type importedHistory struct {
+	sealed           []oldSecret
+	had              []int64
+	noRoom, tooLarge int
+}
+
+func (h *importedHistory) count() int {
+	if h == nil {
+		return 0
+	}
+	return len(h.sealed)
+}
+
+func (h *importedHistory) result() ImportedHistory {
+	if h == nil {
+		return ImportedHistory{}
+	}
+	return ImportedHistory{Kept: len(h.sealed), NoRoom: h.noRoom, TooLarge: h.tooLarge}
+}
+
+// sealEarlier seals, for k's history, those of earlier that k doesn't
+// have yet: not secret, the one it's about to replace (data and salt, nil
+// when k is new), or one in its history; only as many as history.keep has
+// room for below those, of which old, the replaced secret, will be one
+// when it's kept, and none over MaxSecretSize: those are counted. A
+// secret already kept that doesn't decrypt (damage) can't be compared,
+// and is passed over.
+func (s *Store) sealEarlier(k vault.Key, secret, data, salt []byte, old *oldSecret, earlier []vault.Earlier) (_ *importedHistory, err error) {
+	have := [][]byte{secret}
+	defer func() {
+		for _, p := range have[1:] {
+			secure.SecureZeroBytes(p)
+		}
+	}()
+	open := func(data, salt, aad []byte) error {
+		plain, err := s.oracle.DecryptEntry(data, salt, aad)
+		switch {
+		case errors.Is(err, ErrDecrypt):
+			if kerr := s.keyUnchanged(s.db); errors.Is(kerr, ErrVaultKeyChanged) {
+				return fmt.Errorf("decrypt %s: %w", k, kerr)
+			}
+			return nil
+		case err != nil:
+			return fmt.Errorf("decrypt %s: %w", k, err)
+		}
+		have = append(have, plain)
+		return nil
+	}
+	h := &importedHistory{}
+	if data != nil {
+		if err := open(data, salt, entryAAD(k)); err != nil {
+			return nil, err
+		}
+		rows, err := s.historyRows(s.db, k, 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			h.had = append(h.had, r.id)
+			if err := open(r.data, r.salt, historyAAD(k)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	room := s.historyKeep - len(h.had)
+	if old != nil && old.data != nil {
+		room--
+	}
+	for _, e := range earlier {
+		if len(e.Secret) == 0 || slices.ContainsFunc(have, func(p []byte) bool { return bytes.Equal(p, e.Secret) }) {
+			continue
+		}
+		have = append(have, slices.Clone(e.Secret))
+		switch {
+		case len(e.Secret) > MaxSecretSize:
+			h.tooLarge++
+			continue
+		case len(h.sealed) >= room:
+			h.noRoom++
+			continue
+		}
+		data, salt, err := s.oracle.EncryptEntry(e.Secret, historyAAD(k))
+		if err != nil {
+			return nil, fmt.Errorf("encrypt an earlier secret of %s: %w", k, err)
+		}
+		h.sealed = append(h.sealed, oldSecret{data: data, salt: salt, at: e.ReplacedAt})
+	}
+	return h, nil
+}
+
+// keepImported adds h to k's history, in tx: the imported secrets, the
+// oldest first, then the history k had moved above them, so it stays the
+// newer; history changed since it was read is refused with
+// ErrEntryChanged.
+func (s *Store) keepImported(tx *sql.Tx, k vault.Key, h *importedHistory) error {
+	if h.count() == 0 {
+		return nil
+	}
+	rows, err := s.historyRows(tx, k, 0)
+	if err != nil {
+		return err
+	}
+	if !slices.EqualFunc(rows, h.had, func(r resealedHistory, id int64) bool { return r.id == id }) {
+		return ErrEntryChanged
+	}
+	for _, o := range slices.Backward(h.sealed) {
+		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			string(k.Kind), k.Service, k.Username, o.data, o.salt, o.at.UTC()); err != nil {
+			return fmt.Errorf("keep %s's imported earlier secrets: %w", k, err)
+		}
+	}
+	for _, id := range slices.Backward(h.had) {
+		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at)
+			SELECT kind, service, username, encrypted_data, salt, replaced_at FROM history WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("keep %s's history above what's imported: %w", k, err)
+		}
+		if _, err := tx.Exec(`DELETE FROM history WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("keep %s's history above what's imported: %w", k, err)
+		}
+	}
+	return s.trimHistory(tx, k)
 }
 
 // resealedHistory is an entry's history sealed again for another name:
@@ -254,7 +413,7 @@ func (s *Store) RestoreVersion(k vault.Key, n int) (kept bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	if err := s.write(&vault.Entry{Key: k}, secret, false, nil); err != nil {
+	if err := s.write(&vault.Entry{Key: k}, secret, false, nil, nil, nil); err != nil {
 		return false, err
 	}
 	after, err := s.History(k)

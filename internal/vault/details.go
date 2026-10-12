@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -494,4 +495,11 @@ func changeWord(part string, had, has bool) string {
 		return part + " removed"
 	}
 	return part + " changed"
+}
+
+// Earlier is one of an entry's earlier secrets, as an import brings it,
+// and when it stopped being the secret (zero when the source doesn't say).
+type Earlier struct {
+	ReplacedAt time.Time
+	Secret     []byte
 }

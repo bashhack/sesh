@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -397,5 +398,123 @@ func TestHistory_RekeyNamesDamagedVersion(t *testing.T) {
 	key, rec := newKeyFor(t, "new-password-1")
 	if _, err := s.Rekey(key, rec, rewrapTo); err == nil || !strings.Contains(err.Error(), "(version 2: sesh history password/bank --forget 2 forgets it)") {
 		t.Errorf("Rekey = %v", err)
+	}
+}
+
+// earlier is secrets as imported earlier ones, newest first, replaced a
+// day apart before a fixed time.
+func earlier(secrets ...string) []vault.Earlier {
+	out := make([]vault.Earlier, len(secrets))
+	for i, s := range secrets {
+		out[i] = vault.Earlier{Secret: []byte(s), ReplacedAt: time.Date(2026, 1, 10-i, 12, 0, 0, 0, time.UTC)}
+	}
+	return out
+}
+
+// A new entry's imported earlier secrets are its history, newest first,
+// with their times; repeats and its own secret aren't kept twice.
+func TestHistory_SaveImported(t *testing.T) {
+	s := historyStore(t, 10)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	if got, err := s.SaveImported(&vault.Entry{Key: k}, []byte("now"), nil, earlier("b", "now", "a", "b", "")); err != nil || got != (ImportedHistory{Kept: 2}) {
+		t.Fatalf("SaveImported = %+v, %v", got, err)
+	}
+	if got := strings.Join(versions(t, s, k), " "); got != "b a" {
+		t.Errorf("history = %q, want b a", got)
+	}
+	vs, err := s.History(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, 1, 8, 12, 0, 0, 0, time.UTC); !vs[1].ReplacedAt.Equal(want) {
+		t.Errorf("a replaced at %v, want %v", vs[1].ReplacedAt, want)
+	}
+	// Importing it again adds nothing.
+	if got, err := s.SaveImported(&vault.Entry{Key: k}, []byte("now"), nil, earlier("b", "a")); err != nil || got != (ImportedHistory{}) {
+		t.Fatalf("SaveImported again = %+v, %v", got, err)
+	}
+	if got := strings.Join(versions(t, s, k), " "); got != "b a" {
+		t.Errorf("after importing again, history = %q, want b a", got)
+	}
+}
+
+// Imported over an entry you have, its earlier secrets go below the one
+// replaced and the history it had, and history.keep drops them first.
+func TestHistory_SaveImportedOver(t *testing.T) {
+	s := historyStore(t, 4)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	for _, pw := range []string{"mine-1", "mine-2"} {
+		if err := s.Put(k, []byte(pw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := s.SaveImported(&vault.Entry{Key: k}, []byte("theirs"), nil, earlier("old-1", "mine-1", "old-2", "old-3")); err != nil || got != (ImportedHistory{Kept: 2, NoRoom: 1}) {
+		t.Fatalf("SaveImported = %+v, %v", got, err)
+	}
+	if got := strings.Join(versions(t, s, k), " "); got != "mine-2 mine-1 old-1 old-2" {
+		t.Errorf("history = %q, want mine-2 mine-1 old-1 old-2", got)
+	}
+	if got, err := s.Get(k); err != nil || string(got) != "theirs" {
+		t.Errorf("secret = %q, %v", got, err)
+	}
+	var detail string
+	if err := s.db.QueryRow(`SELECT detail FROM audit_log WHERE event_type = 'modify' ORDER BY id DESC LIMIT 1`).Scan(&detail); err != nil || detail != "Save, with 2 earlier secrets imported" {
+		t.Errorf("audit: %q, %v", detail, err)
+	}
+}
+
+// history.keep 0 imports no earlier secrets.
+func TestHistory_SaveImportedKeepNone(t *testing.T) {
+	s := historyStore(t, 0)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	if _, err := s.SaveImported(&vault.Entry{Key: k}, []byte("now"), nil, earlier("a")); err != nil {
+		t.Fatal(err)
+	}
+	if got := versions(t, s, k); len(got) != 0 {
+		t.Errorf("history = %q, want none", got)
+	}
+}
+
+// An import whose entry's history changes after it's read is refused, so
+// the history it moves above what's imported is the one it read.
+func TestHistory_SaveImportedConcurrentForget(t *testing.T) {
+	s := historyStore(t, 10)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	for _, pw := range []string{"a", "b"} {
+		if err := s.Put(k, []byte(pw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := &changingOracle{CryptoOracle: s.oracle}
+	o.change = func() {
+		if err := s.ForgetVersions(k, 2); err != nil {
+			t.Error(err)
+		}
+	}
+	s.oracle = o
+	if _, err := s.SaveImported(&vault.Entry{Key: k}, []byte("b"), nil, earlier("old")); !errors.Is(err, ErrEntryChanged) {
+		t.Errorf("import across a forget = %v", err)
+	}
+	if got := versions(t, s, k); len(got) != 0 {
+		t.Errorf("history = %q, want none", got)
+	}
+}
+
+// Repeats take no room under history.keep, and an earlier secret too
+// large to keep is counted, not a failure.
+func TestHistory_SaveImportedRoom(t *testing.T) {
+	s := historyStore(t, 2)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	// A, B, C, then B again: Bitwarden's list is C, B, A.
+	if got, err := s.SaveImported(&vault.Entry{Key: k}, []byte("B"), nil, earlier("C", "B", "A")); err != nil || got != (ImportedHistory{Kept: 2}) {
+		t.Fatalf("SaveImported = %+v, %v", got, err)
+	}
+	if got := strings.Join(versions(t, s, k), " "); got != "C A" {
+		t.Errorf("history = %q, want C A", got)
+	}
+	big := vault.Earlier{Secret: make([]byte, MaxSecretSize+1)}
+	k2 := vault.Key{Kind: vault.KindPassword, Service: "gitlab"}
+	if got, err := s.SaveImported(&vault.Entry{Key: k2}, []byte("now"), nil, []vault.Earlier{big, {Secret: []byte("a")}}); err != nil || got != (ImportedHistory{Kept: 1, TooLarge: 1}) {
+		t.Fatalf("SaveImported with a large one = %+v, %v", got, err)
 	}
 }
