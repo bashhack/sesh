@@ -265,7 +265,7 @@ func runImport(app *App, args []string) error {
 		fmt.Fprintf(app.Stdout, "Kept %s in their history (sesh history <id> lists them).\n", nouns(history.Kept, "old password", "old passwords")) //nolint:errcheck // best effort
 	}
 	if history.NoRoom > 0 {
-		fmt.Fprintf(app.Stdout, "Not kept: %s past history.keep (%d), the oldest.\n", nouns(history.NoRoom, "old password", "old passwords"), store.HistoryKeep()) //nolint:errcheck // best effort
+		fmt.Fprintf(app.Stdout, "Not kept: %s past history.keep (%d), the oldest of those imported.\n", nouns(history.NoRoom, "old password", "old passwords"), store.HistoryKeep()) //nolint:errcheck // best effort
 	}
 	if history.TooLarge > 0 {
 		fmt.Fprintf(app.Stdout, "Not kept: %s larger than sesh holds (%d bytes).\n", nouns(history.TooLarge, "old password", "old passwords"), database.MaxSecretSize) //nolint:errcheck // best effort

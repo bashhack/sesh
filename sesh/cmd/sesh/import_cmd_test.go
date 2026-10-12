@@ -650,13 +650,13 @@ func TestImport_HistoryAgainAndKeepNone(t *testing.T) {
 	}
 	putSecrets(t, gh, "mine-2")
 	out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
-	if err != nil || !strings.Contains(out, "Not kept: 1 old password past history.keep (1), the oldest.") || strings.Contains(out, "Kept ") {
+	if err != nil || !strings.Contains(out, "Not kept: 1 old password past history.keep (1), the oldest of those imported.") || strings.Contains(out, "Kept ") {
 		t.Errorf("no room: %v\n%s", err, out)
 	}
 
 	t.Setenv(config.EnvHistoryKeep, "0")
 	_, stderr, err := runImportOut(t, "", false, "--dry-run", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
-	if err != nil || !strings.Contains(stderr, "old passwords (history.keep is 0): 1\n") || strings.Contains(stderr, "into the entries' history") {
+	if err != nil || !strings.Contains(stderr, "old passwords (history.keep is 0): 1\n") || strings.Contains(stderr, "for the entries' history") {
 		t.Errorf("history.keep 0: %v\n%s", err, stderr)
 	}
 }
