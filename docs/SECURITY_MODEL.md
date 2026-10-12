@@ -74,6 +74,12 @@ sesh derives the master key from your master password via Argon2id, the same way
 - **Bitwarden's password-protected export** is decrypted as Bitwarden's own code does: PBKDF2-SHA256 or Argon2id with the file's settings, within bounds sesh sets so a hostile file can't make it spend unbounded time or memory; then HKDF-Expand into an encryption key and a MAC key; then AES-256-CBC, with HMAC-SHA256 checked before anything is decrypted.
 - **Plain exports and screenshots of transfer codes** hold every secret unencrypted. sesh reminds you to delete them, and never writes them anywhere itself.
 
+**sesh ui.** It stays open, so it keeps less than a command would leave behind, and locks itself.
+- **What it holds:** while unlocked, the key of each TOTP entry it has drawn a code for, in its own memory, to draw the next code without asking the agent each time. Those keys are wiped when it locks and when it ends. Passwords and other secrets are read only to copy them, and wiped after.
+- **What it shows:** names, usernames, folders and TOTP codes, never a password or other secret, on the terminal's alternate screen, which the terminal drops on exit, so none of it stays in the scrollback. Nothing is put in the window title.
+- **When it locks:** after the agent's idle timeout without a key pressed and after the agent's longest unlock, as the agent itself locks, and when the agent locks or the vault's master password changes under it. Locked, it shows nothing of the vault until the master password (or Touch ID) unlocks it again.
+- **The audit log** records each copy, as a read. The codes it draws aren't recorded; they're read with a call that only TOTP entries' keys go through.
+
 **sesh run and sesh inject.** Both resolve every reference with one unlock before anything runs or is written, and record each read in the audit log.
 - **sesh run:**
   - The values reach the command only through its environment. Like any environment variable, the command can read them, and so can the processes it starts. On Linux, other processes running as the same user can read them too, through `/proc/<pid>/environ`.

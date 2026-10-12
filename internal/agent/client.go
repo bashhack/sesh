@@ -140,8 +140,28 @@ func roundTrip(conn *Conn, req any, wantType string) ([]byte, error) {
 	if err != nil && !errors.As(err, &pe) {
 		conn.broken = err
 		closeOrLog(conn, "agent connection after transport failure")
+		return raw, &lostError{err: err}
 	}
 	return raw, err
+}
+
+// lostError is a request that failed in a way that retired its
+// connection, such as the agent stopping; Error is the failure's.
+type lostError struct{ err error }
+
+func (e *lostError) Error() string { return e.err.Error() }
+func (e *lostError) Unwrap() error { return e.err }
+
+// Locked says whether err, from a request, means the agent can't serve
+// this vault until it's unlocked again: it holds no key (it locked, or
+// was locked), holds another vault's, or the connection to it failed,
+// as when an agent that locked itself stopped.
+func Locked(err error) bool {
+	if pe, ok := errors.AsType[*ProtocolError](err); ok {
+		return pe.Code == ErrCodeNotUnlocked || pe.Code == ErrCodeUnlockMismatch
+	}
+	var lost *lostError
+	return errors.As(err, &lost) || errors.Is(err, errConnBroken)
 }
 
 func (c *Conn) exchange(req any, wantType string) (raw []byte, err error) {

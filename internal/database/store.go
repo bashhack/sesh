@@ -120,6 +120,18 @@ func fileURI(path, query string) string {
 	return (&url.URL{Scheme: "file", Path: path, RawQuery: query}).String()
 }
 
+// DataVersion is a number that changes when another connection to the
+// vault file, such as another sesh command, commits a change (SQLite's
+// data_version, read on the store's one connection): two that differ say
+// the vault may have changed between them.
+func (s *Store) DataVersion() (int64, error) {
+	var v int64
+	if err := s.db.QueryRow(`PRAGMA data_version`).Scan(&v); err != nil {
+		return 0, fmt.Errorf("check the vault for changes: %w", err)
+	}
+	return v, nil
+}
+
 // Close releases the database connection and clears any cached key
 // material held by the key source.
 func (s *Store) Close() error {

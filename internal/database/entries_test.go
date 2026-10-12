@@ -125,3 +125,49 @@ func TestStore_DeleteManyLogsEach(t *testing.T) {
 		t.Errorf("logged %d deletions, want 2", deletes)
 	}
 }
+
+// CodeKey reads a TOTP entry's key without an audit event, and no other
+// kind of entry's secret.
+func TestCodeKey(t *testing.T) {
+	s := newTestStore(t)
+	code := vault.Key{Kind: vault.KindTOTP, Service: "github"}
+	pw := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	for _, k := range []vault.Key{code, pw} {
+		if err := s.Put(k, []byte("JBSWY3DPEHPK3PXP")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var before, after int
+	if err := s.db.QueryRow(`SELECT count(*) FROM audit_log WHERE event_type = 'access'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.CodeKey(code); err != nil || string(got) != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("CodeKey = %q, %v", got, err)
+	}
+	if err := s.db.QueryRow(`SELECT count(*) FROM audit_log WHERE event_type = 'access'`).Scan(&after); err != nil || after != before {
+		t.Errorf("access events %d → %d, %v", before, after, err)
+	}
+	if _, err := s.CodeKey(pw); err == nil || !strings.Contains(err.Error(), "isn't a TOTP entry") {
+		t.Errorf("CodeKey of a password: %v", err)
+	}
+}
+
+// DataVersion changes when another connection commits.
+func TestDataVersion(t *testing.T) {
+	s := newTestStore(t)
+	v1, err := s.DataVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := Open(s.path, s.oracle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.db.Close() //nolint:errcheck // test cleanup
+	if err := other.Put(vault.Key{Kind: vault.KindPassword, Service: "x"}, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	if v2, err := s.DataVersion(); err != nil || v2 == v1 {
+		t.Errorf("DataVersion %d → %d, %v; want a change", v1, v2, err)
+	}
+}

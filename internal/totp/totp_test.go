@@ -902,3 +902,31 @@ func TestValidateOptsFromParams(t *testing.T) {
 		})
 	}
 }
+
+// CodeAt gives what the other generators give, with or without params,
+// and SecondsLeft counts down within the period.
+func TestCodeAt(t *testing.T) {
+	secret := []byte("JBSWY3DPEHPK3PXP")
+	at := time.Unix(1_700_000_005, 0)
+	want, err := GenerateForTimeBytes(secret, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := CodeAt(secret, Params{}, at); err != nil || got != want {
+		t.Errorf("CodeAt default = %q, %v; want %q", got, err, want)
+	}
+	p := Params{Digits: 8, Period: 60, Algorithm: "SHA256"}
+	if got, err := CodeAt(secret, p, at); err != nil || len(got) != 8 {
+		t.Errorf("CodeAt 8 digits = %q, %v", got, err)
+	}
+	// 1_700_000_005 is 25s into a 30s period, and into a 60s one.
+	if got := SecondsLeft(Params{}, at); got != 5 {
+		t.Errorf("SecondsLeft = %d, want 5", got)
+	}
+	if got := SecondsLeft(p, at); got != 35 {
+		t.Errorf("SecondsLeft 60s = %d, want 35", got)
+	}
+	if _, err := CodeAt(nil, Params{}, at); err == nil {
+		t.Error("CodeAt with no secret: no error")
+	}
+}

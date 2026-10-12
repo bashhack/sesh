@@ -528,6 +528,8 @@ Audit log: 1,204 events since 2026-07-05 09:12. Events older than 90 days are re
 
 Like `--list`, it opens the vault, so it asks for your master password unless the agent is unlocked.
 
+Copying in `sesh ui` is an `access`, read "in sesh ui, to copy it" (or "its code"). The TOTP codes it draws aren't recorded: showing a code isn't reading it out, and an event every 30 seconds for each code on screen would bury the rest.
+
 **How long events are kept.** Each command that opens the vault removes events older than `audit.retention_days` (default `90`). Set it to `0` to keep everything. Either way, `sesh audit prune --older-than <days>` removes older events when you choose; `--older-than 0` removes them all.
 
 Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but every command writes an event, so a large vault is copied again by backup tools each time it changes. Removing events doesn't make the file smaller by itself: SQLite keeps the freed space for reuse. So `sesh audit prune` also compacts the vault and reports its size before and after. The automatic cleanup doesn't need to: it frees a little space each day, which new events reuse.
@@ -981,6 +983,27 @@ Delete these 2 entries? [y/N]: y
 A delete asks first, for every provider: `y` or `yes` goes ahead. `-force` deletes without asking, and is needed without a terminal, as in a script; sesh says so before asking for the master password. Flags go before the IDs: in `-delete a b -force`, `-force` would be read as an ID, and sesh says so.
 
 Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) before they're deleted for good; `-purge` deletes for good straight away (`sesh -service password -purge -delete <id>`), and asks "for good". See [The trash](#the-trash).
+
+### Searching and copying at a terminal (`sesh ui`)
+
+`sesh ui` opens a search over every entry, on the terminal's alternate screen, so nothing it shows stays in the scrollback. It unlocks as any command does, before it draws.
+
+```
+ › git
+ 3 entries
+ password  github (alice)       work/dev
+ totp      github (alice)       work/dev   492 113  12s
+ password  gitlab               work
+ Enter copy · ↑↓ move · Esc clear, or quit · Ctrl-C quit
+```
+
+- **Type to search,** matched and ranked as `--action search` does; with nothing typed, every entry is listed.
+- **Enter copies** the selected entry's secret, or a TOTP entry's current code. The clipboard clears after `clipboard_timeout`, as with `--clip`.
+- **TOTP entries show their code** and the seconds it has left, changing as an authenticator app's do.
+- **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; Backspace, Ctrl-W (a word) and Ctrl-U (all) edit the search; Esc clears it, or quits when it's empty; Ctrl-C quits.
+- **It locks itself** after the agent's idle timeout (`agent.idle_timeout`) without a key pressed, after the agent's longest unlock (`agent.max_lifetime`), when the agent locks, or when another command changes the master password or restores the vault. It then shows nothing of the vault, and asks for the master password again; with Touch ID unlock on, Enter with nothing typed uses it. Three wrong passwords in a row close it.
+- **Changes by other commands** show up within a second.
+- **It needs a terminal;** to search from a script, use `sesh --service password --action search --query <words>`.
 
 ### The trash
 

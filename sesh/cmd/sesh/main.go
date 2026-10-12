@@ -261,6 +261,7 @@ var subcommands = []candidate{
 	{"tag", "Tag entries, take tags off, rename tags, list them"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
 	{"trash", "List deleted entries, put one back, or delete them for good"},
+	{"ui", "Search every entry, and copy its secret or TOTP code"},
 }
 
 // subcommand returns the subcommand args name (one of subcommands) and the
@@ -556,7 +557,7 @@ func keySourceFromAgent(dbPath string, cfg passwordPromptConfig) (oracle databas
 	// A person at the terminal is asked for a fingerprint first, when this
 	// vault has Touch ID unlock on; scripts never wait on one.
 	if cfg.interactive {
-		unlocked, terr := tryTouchID(conn, dataDir, id, mat.Verify)
+		unlocked, terr := tryTouchID(conn, dataDir, id, mat.Verify, note)
 		if unlocked {
 			return agent.NewOracle(conn, id), nil, nil
 		}
@@ -879,6 +880,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "ui":
+		if err := runUI(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "tag":
 		if err := runTag(app, rest); err != nil {
 			fatal(app, err)
@@ -1167,6 +1173,7 @@ func (a *App) PrintUsage() error {
 		"  sesh tag add|remove|rename|list  Tag entries",
 		"  sesh trash [restore|remove|empty]  List deleted entries, put one back, or delete them for good",
 		"  sesh history <id> [--show|--clip|--restore|--forget N]  An entry's earlier secrets",
+		"  sesh ui                          Search every entry, and copy its secret or TOTP code",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",
