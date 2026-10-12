@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -455,19 +456,20 @@ func checkVault(c *doctorChecks, cfg *config.Config, dbPath string, mat *databas
 			switch len(named) {
 			case 0:
 			case 1:
-				c.todo(fmt.Sprintf("Restore %s from a backup (an encrypted export), or delete it:", named[0]), "sesh --service password --delete "+ids[0])
+				c.todo(fmt.Sprintf("Restore %s from a backup (an encrypted export), or delete it:", named[0]), "sesh --service password --purge --delete "+ids[0])
 			default:
 				what := "Restore these entries from a backup (an encrypted export), or delete them:"
 				if unnamed {
 					what = "Restore the entries named above from a backup (an encrypted export), or delete them:"
 				}
-				c.todo(what, "sesh --service password --delete "+strings.Join(ids, " "))
+				c.todo(what, "sesh --service password --purge --delete "+strings.Join(ids, " "))
 			}
 			if unnamed {
 				c.todo("Restore the vault from a backup, such as an encrypted export: an entry's name is damaged, so sesh can't name it to delete it.")
 			}
 		}
 	}
+	checkTrash(c, &report)
 	checkRecovery(c, &report)
 	checkTouchID(c, touchFile, touchErr, database.UnlockID(mat.Verify))
 	checkAWSCLI(c, store)
@@ -597,6 +599,36 @@ func (c *doctorChecks) finish(w io.Writer) error {
 	return nil
 }
 
+// checkTrash reports the entries in the trash, when there are any, and
+// those that can't be read, with the command that deletes them for good.
+func checkTrash(c *doctorChecks, r *database.VerifyReport) {
+	switch {
+	case r.Trashed == 0:
+	case len(r.TrashProblems) == 0:
+		c.row(markOK, "Trash", entryCount(r.Trashed)+", all readable")
+	default:
+		// Only damaged tags still restore, without them; the rest can't.
+		var details, gone, untagged []string
+		for _, p := range r.TrashProblems {
+			details = append(details, fmt.Sprintf("trash id %d, %s: %s", p.TrashID, p.Key, problemText(p.Kind)))
+			id := strconv.FormatInt(p.TrashID, 10)
+			if p.Kind == database.ProblemTags {
+				untagged = append(untagged, id)
+			} else {
+				gone = append(gone, id)
+			}
+		}
+		c.fails += len(r.TrashProblems) - 1
+		c.row(markFail, "Trash", fmt.Sprintf("%d of %s %s a problem", len(r.TrashProblems), entryCount(r.Trashed), map[bool]string{true: "has", false: "have"}[len(r.TrashProblems) == 1]), details...)
+		if len(gone) > 0 {
+			c.todo("Delete them for good, as they can't be restored:", "sesh trash remove "+strings.Join(gone, " "))
+		}
+		for _, id := range untagged {
+			c.todo("Restore it, if you want it back; it comes back without its tags:", "sesh trash restore "+id)
+		}
+	}
+}
+
 // problemText says in plain words what's wrong with an entry.
 func problemText(k database.ProblemKind) string {
 	switch k {
@@ -608,6 +640,8 @@ func problemText(k database.ProblemKind) string {
 		return "times don't read"
 	case database.ProblemDetails:
 		return "notes or fields don't read"
+	case database.ProblemTags:
+		return "tags don't read"
 	}
 	return "can't be read"
 }

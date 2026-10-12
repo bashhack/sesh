@@ -57,7 +57,16 @@ type App struct {
 	// StdinIsTerminal reports whether someone at a terminal can answer a
 	// question on Stdin; nil means nobody can.
 	StdinIsTerminal func() bool
-	VersionInfo     VersionInfo
+	// trash is the vault's trash setting, when the vault keeps one;
+	// --purge turns it off for a delete.
+	trash       trashKeeper
+	VersionInfo VersionInfo
+}
+
+// trashKeeper is a vault that can keep deleted entries in a trash.
+type trashKeeper interface {
+	TrashDays() int
+	SetTrashDays(days int)
 }
 
 // VersionInfo contains version information
@@ -90,7 +99,9 @@ func NewDefaultApp(versionInfo VersionInfo, store vault.Store, settings AppSetti
 	setupSvc.RegisterHandler(setup.NewAWSSetupHandler(store))
 	setupSvc.RegisterHandler(setup.NewTOTPSetupHandler(store))
 
+	trash, _ := store.(trashKeeper)
 	return &App{
+		trash:        trash,
 		Registry:     registry,
 		SetupService: setupSvc,
 		ExecLookPath: exec.LookPath,
@@ -196,18 +207,33 @@ func (a *App) ListEntries(serviceName string) error {
 }
 
 // DeleteEntries deletes the entries ids name with the provider for
-// serviceName: all or none, after asking at the terminal unless the
-// provider's --force says not to.
-func (a *App) DeleteEntries(serviceName string, ids []string) error {
+// serviceName: all or none, into the trash unless purge or the vault keeps
+// none, after asking at the terminal unless the provider's --force says
+// not to.
+func (a *App) DeleteEntries(serviceName string, ids []string, purge bool) error {
 	p, err := a.Registry.GetProvider(serviceName)
 	if err != nil {
 		return fmt.Errorf("provider not found: %w", err)
 	}
-	n, err := p.DeleteEntries(ids, a.confirmDelete)
+	days := 0
+	if a.trash != nil {
+		days = a.trash.TrashDays()
+		if purge {
+			a.trash.SetTrashDays(0)
+			defer a.trash.SetTrashDays(days)
+			days = 0
+		}
+	}
+	confirm := func(ids []string) (bool, error) { return a.confirmDelete(ids, days == 0) }
+	n, err := p.DeleteEntries(ids, confirm)
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(a.Stdout, "✅ Deleted %s\n", entryCount(n)); err != nil {
+	msg := fmt.Sprintf("✅ Deleted %s for good\n", entryCount(n))
+	if days > 0 {
+		msg = fmt.Sprintf("✅ Moved %s to the trash, kept %s: sesh trash lists them, and sesh trash restore <id> puts one back\n", entryCount(n), dayCount(int64(days)))
+	}
+	if _, err := io.WriteString(a.Stdout, msg); err != nil {
 		return fmt.Errorf("failed to write output: %w", err)
 	}
 	return nil
@@ -217,19 +243,24 @@ func (a *App) DeleteEntries(serviceName string, ids []string) error {
 var errDeleteNeedsForce = errors.New("deleting asks first, and there's no terminal to ask at; add --force to delete without asking")
 
 // confirmDelete names the entries a delete will remove and asks, at the
-// terminal, whether to go ahead; with nobody there to answer, it refuses.
-func (a *App) confirmDelete(ids []string) (bool, error) {
+// terminal, whether to go ahead, saying when it's for good; with nobody
+// there to answer, it refuses.
+func (a *App) confirmDelete(ids []string, forGood bool) (bool, error) {
 	if a.StdinIsTerminal == nil || !a.StdinIsTerminal() {
 		return false, errDeleteNeedsForce
 	}
+	how := ""
+	if forGood {
+		how = " for good"
+	}
 	var b strings.Builder
-	question := fmt.Sprintf("Delete %q? [y/N]: ", ids[0])
+	question := fmt.Sprintf("Delete %q%s? [y/N]: ", ids[0], how)
 	if len(ids) > 1 {
-		b.WriteString("These entries will be deleted:\n")
+		fmt.Fprintf(&b, "These entries will be deleted%s:\n", how)
 		for _, id := range ids {
 			fmt.Fprintf(&b, "  %s\n", id)
 		}
-		question = fmt.Sprintf("Delete these %s? [y/N]: ", entryCount(len(ids)))
+		question = fmt.Sprintf("Delete these %s%s? [y/N]: ", entryCount(len(ids)), how)
 	}
 	if _, err := io.WriteString(a.Stderr, b.String()); err != nil {
 		return false, err

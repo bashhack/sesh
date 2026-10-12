@@ -470,6 +470,15 @@ func TestRun_Commands(t *testing.T) {
 				}
 			},
 		},
+		"purge without delete": {
+			args:         []string{"sesh", "--service", "totp", "--purge", "--list"},
+			wantExitCode: 1,
+			checkStderr: func(t *testing.T, stderr string) {
+				if !strings.Contains(stderr, "--purge goes with --delete") {
+					t.Errorf("stderr = %q", stderr)
+				}
+			},
+		},
 		"delete without a terminal or --force": {
 			args: []string{"sesh", "--service", "totp", "--delete", "totp/github"},
 			setupMocks: func(h *testHarness) {

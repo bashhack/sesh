@@ -122,7 +122,11 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if err != nil {
 		return nil, err
 	}
-	if _, perr := fmt.Fprintf(app.Stderr, "About to change the master password and re-encrypt %s in %s.\n", entryCount(len(entries)), dbPath); perr != nil {
+	trashed, err := store.Trash()
+	if err != nil {
+		return nil, err
+	}
+	if _, perr := fmt.Fprintf(app.Stderr, "About to change the master password and re-encrypt %s in %s.\n", withTrash(len(entries), len(trashed)), dbPath); perr != nil {
 		return nil, perr
 	}
 	confirmed, err := promptYesNo(app.Stdin, app.Stderr, "\nProceed? [y/N]: ")
@@ -175,7 +179,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		recoveryNote = "Your recovery key's record was for another vault, so it was removed; make a new one with: sesh recovery new"
 	}
 
-	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %s under a new master password.\n", entryCount(res.Entries)); perr != nil {
+	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %s under a new master password.\n", withTrash(res.Entries, res.Trashed)); perr != nil {
 		return bytes.Clone(key), perr
 	}
 	fileNote := ""
@@ -248,6 +252,14 @@ func promptYesNo(stdin io.Reader, stderr io.Writer, prompt string) (bool, error)
 }
 
 // entryCount says how many entries, as "1 entry" or "n entries".
+// withTrash is entryCount(n), and how many more are in the trash.
+func withTrash(n, trashed int) string {
+	if trashed == 0 {
+		return entryCount(n)
+	}
+	return fmt.Sprintf("%s and %d in the trash", entryCount(n), trashed)
+}
+
 func entryCount(n int) string {
 	if n == 1 {
 		return "1 entry"

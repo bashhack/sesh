@@ -167,12 +167,24 @@ func TestMasterPasswordSource_CreationRace(t *testing.T) {
 // A vault with entries but no key record is refused before any prompt: a
 // new key couldn't read them.
 func TestMasterPasswordSource_EntriesWithoutKeyRecord(t *testing.T) {
+	for _, table := range []string{"entries", "trash"} {
+		t.Run(table, func(t *testing.T) { entriesWithoutKeyRecord(t, table) })
+	}
+}
+
+// entriesWithoutKeyRecord is one entry in table, live or in the trash, in
+// a vault with no key record: it's refused, not given a new key.
+func entriesWithoutKeyRecord(t *testing.T, table string) {
 	dir := t.TempDir()
 	db, err := openDB(vaultPath(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO entries (kind, service, encrypted_data, salt, created_at, updated_at) VALUES ('password', 'github', x'00', x'00', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+	q := `INSERT INTO entries (kind, service, encrypted_data, salt, created_at, updated_at) VALUES ('password', 'github', x'00', x'00', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+	if table == "trash" {
+		q = `INSERT INTO trash (kind, service, encrypted_data, salt, created_at, updated_at, deleted_at) VALUES ('password', 'github', x'00', x'00', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+	}
+	if _, err := db.Exec(q); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

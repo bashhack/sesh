@@ -51,10 +51,11 @@ func CopyTo(dbPath, dest string) (err error) {
 	return nil
 }
 
-// HasEntries reports whether the vault holds any entry, reading none.
+// HasEntries reports whether the vault holds any entry, in the trash or
+// not, reading none.
 func (s *Store) HasEntries() (bool, error) {
 	var has bool
-	if err := s.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM entries)`).Scan(&has); err != nil {
+	if err := s.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM entries) OR EXISTS (SELECT 1 FROM trash)`).Scan(&has); err != nil {
 		return false, fmt.Errorf("check for entries: %w", err)
 	}
 	return has, nil

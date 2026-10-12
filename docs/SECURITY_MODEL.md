@@ -47,6 +47,7 @@ The vault provides application-level encryption on top of file-system storage:
 - **One file**: what the master password is turned into the key with (below) is stored in the vault file itself, so a copy of the vault file holds everything the master password needs to open it. A vault that holds entries but has lost that record is refused, rather than given a new key that couldn't read them
 - **Search**: matches service names and usernames, which are stored unencrypted; it never decrypts a secret
 - **Audit logging**: The `audit_log` table records access, modification, and deletion events with timestamps (never the secrets). `sesh audit` shows it. Events older than `audit.retention_days` (default 90; `0` keeps everything) are removed when the vault is opened, and `sesh audit prune` removes them on demand. It's a record for the user, not tamper-proof: anyone who can write the vault file can change it
+- **The trash**: a deleted entry stays in the vault file, encrypted as before, for `trash.keep_days` (default 30), so it can be restored; then it's deleted for good, as `sesh trash remove`, `sesh trash empty` and `--purge` do at once. Until then, someone with the vault file and the master password can read it, as they could before it was deleted. `0` keeps no trash
 - **WAL mode**: Write-ahead logging for safe concurrent reads
 
 ##### The master password

@@ -178,6 +178,8 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		verbs = folderCommands
 	case "tag":
 		verbs = tagCommands
+	case "trash":
+		verbs = trashCommands
 	case "completion":
 		verbs = completionShells
 	case "config", "recover":

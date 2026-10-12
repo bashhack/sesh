@@ -161,6 +161,9 @@ func argsParse(args []string) bool {
 // arguments. argsParse runs it before the vault opens, and run reports it
 // before any path that would use the vault.
 func earlyCheck(p provider.ServiceProvider, common commonFlags, args []string, stdinIsTerminal func() bool) error {
+	if *common.purge && *common.delete == "" {
+		return errors.New("--purge goes with --delete: sesh --service " + p.Name() + " --purge --delete <id>")
+	}
 	if ids := deleteIDs(common, args); len(ids) > 0 {
 		var bad []string
 		for _, id := range ids {
@@ -256,6 +259,7 @@ var subcommands = []candidate{
 	{"show", "Show an entry: its URL, notes, fields, folder and tags"},
 	{"tag", "Tag entries, take tags off, rename tags, list them"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
+	{"trash", "List deleted entries, put one back, or delete them for good"},
 }
 
 // subcommand returns the subcommand args name (one of subcommands) and the
@@ -351,6 +355,8 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 	pruneAuditLog(store, cfg)
 	warnAuditSize(store, cfg)
 	autoBackup(store, cfg)
+	store.SetTrashDays(cfg.TrashKeepDays.Value)
+	expireTrash(store, cfg)
 	return store, nil
 }
 
@@ -860,6 +866,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "trash":
+		if err := runTrash(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "tag":
 		if err := runTag(app, rest); err != nil {
 			fatal(app, err)
@@ -1005,7 +1016,7 @@ func run(app *App, args []string) {
 		return
 	}
 	if ids := deleteIDs(common, fs.Args()); len(ids) > 0 {
-		if err := app.DeleteEntries(serviceName, ids); err != nil {
+		if err := app.DeleteEntries(serviceName, ids, *common.purge); err != nil {
 			fatal(app, err)
 		}
 		return
@@ -1050,8 +1061,8 @@ func deleteIDs(common commonFlags, args []string) []string {
 
 // commonFlags are the flags every provider accepts.
 type commonFlags struct {
-	service, delete                                *string
-	version, help, listServices, list, setup, clip *bool
+	service, delete                                       *string
+	version, help, listServices, list, setup, clip, purge *bool
 }
 
 func addCommonFlags(fs *flag.FlagSet, serviceName string) commonFlags {
@@ -1061,7 +1072,8 @@ func addCommonFlags(fs *flag.FlagSet, serviceName string) commonFlags {
 		help:         fs.Bool("help", false, "Show usage"),
 		listServices: fs.Bool("list-services", false, "List available service providers"),
 		list:         fs.Bool("list", false, "List entries for selected service"),
-		delete:       fs.String("delete", "", "Delete entries by ID: --delete <id> [<id> ...], all or none; asks first unless --force"),
+		delete:       fs.String("delete", "", "Delete entries by ID: --delete <id> [<id> ...], all or none, into the trash; asks first unless --force"),
+		purge:        fs.Bool("purge", false, "With --delete: delete for good, not into the trash"),
 		setup:        fs.Bool("setup", false, "Run setup wizard for selected service"),
 		clip:         fs.Bool("clip", false, "Copy code to clipboard"),
 	}
@@ -1117,7 +1129,8 @@ func (a *App) PrintUsage() error {
 		"\nCommon options:",
 		"  --service, -service           Service provider to use (aws, totp, password) [REQUIRED]",
 		"  --list, -list                 List entries for selected service",
-		"  --delete, -delete <id> ...    Delete entries by ID, all or none; asks first unless --force",
+		"  --delete, -delete <id> ...    Delete entries by ID, all or none, into the trash; asks first unless --force",
+		"  --purge, -purge               With --delete: delete for good, not into the trash",
 		"  --setup, -setup               Run setup wizard for selected service",
 		"  --clip, -clip                 Copy code to clipboard",
 		"  --list-services, -list-services  List available service providers",
@@ -1140,10 +1153,11 @@ func (a *App) PrintUsage() error {
 		"  sesh show <id> [--reveal]     Show an entry: its URL, notes, fields, folder and tags",
 		"  sesh run [--env N=<ref>] -- <cmd>  Run a command with secrets in its environment",
 		"  sesh inject -i <tpl> -o <file>  Fill a template's sesh:// references",
-		"  sesh import --from <source> <file>  Bring entries over from another app (Google Authenticator)",
+		"  sesh import --from <source> <file>  Bring entries over from another app (Bitwarden, KeePass, a browser, Google Authenticator)",
 		"  sesh edit <id>                Rename an entry, or change its username, kind, or secret",
 		"  sesh folder move|rename|list  File entries in folders",
 		"  sesh tag add|remove|rename|list  Tag entries",
+		"  sesh trash [restore|remove|empty]  List deleted entries, put one back, or delete them for good",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",
@@ -1171,7 +1185,8 @@ func (a *App) PrintProviderUsage(serviceName string, p provider.ServiceProvider)
 		"Common options:",
 		"  --service string              Service provider to use",
 		"  --list                        List entries for selected service",
-		"  --delete <id> ...             Delete entries by ID, all or none; asks first unless --force",
+		"  --delete <id> ...             Delete entries by ID, all or none, into the trash; asks first unless --force",
+		"  --purge                       With --delete: delete for good, not into the trash",
 		"  --setup                       Run setup wizard for selected service",
 		"  --clip                        Copy code to clipboard",
 		"  --help                        Show this help",

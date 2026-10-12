@@ -644,16 +644,16 @@ func TestApp_DeleteEntries(t *testing.T) {
 			return len(ids), nil
 		},
 	})
-	if err := app.DeleteEntries("totp", []string{"totp/github", "totp/gitlab"}); err != nil {
+	if err := app.DeleteEntries("totp", []string{"totp/github", "totp/gitlab"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if out := app.Stdout.(*bytes.Buffer).String(); out != "✅ Deleted 2 entries\n" || len(got) != 2 {
+	if out := app.Stdout.(*bytes.Buffer).String(); out != "✅ Deleted 2 entries for good\n" || len(got) != 2 {
 		t.Errorf("output = %q, ids = %v", out, got)
 	}
-	if err := app.DeleteEntries("totp", []string{"totp/broken"}); err == nil || err.Error() != "store error" {
+	if err := app.DeleteEntries("totp", []string{"totp/broken"}, false); err == nil || err.Error() != "store error" {
 		t.Errorf("provider error: err = %v", err)
 	}
-	if err := app.DeleteEntries("unknown", []string{"x/y"}); err == nil || !strings.Contains(err.Error(), "provider not found") {
+	if err := app.DeleteEntries("unknown", []string{"x/y"}, false); err == nil || !strings.Contains(err.Error(), "provider not found") {
 		t.Errorf("unknown provider: err = %v", err)
 	}
 }
@@ -679,7 +679,7 @@ func TestApp_ConfirmDelete(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			stderr := &bytes.Buffer{}
 			app := &App{Stdin: strings.NewReader(tc.stdin), Stderr: stderr, StdinIsTerminal: func() bool { return tc.terminal }}
-			ok, err := app.confirmDelete(tc.ids)
+			ok, err := app.confirmDelete(tc.ids, false)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want %q", err, tc.wantErr)

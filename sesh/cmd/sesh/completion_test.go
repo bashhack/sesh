@@ -21,7 +21,7 @@ func TestComplete(t *testing.T) {
 		lacks []string // none of these
 		files bool
 	}{
-		{name: "subcommands", words: all(""), want: all("agent", "audit", "backup", "completion", "config", "doctor", "edit", "folder", "import", "init", "inject", "recover", "recovery", "restore", "run", "show", "tag", "touchid")},
+		{name: "subcommands", words: all(""), want: all("agent", "audit", "backup", "completion", "config", "doctor", "edit", "folder", "import", "init", "inject", "recover", "recovery", "restore", "run", "show", "tag", "touchid", "trash")},
 		{name: "subcommand prefix", words: all("co"), want: all("completion", "config")},
 		{name: "run flags", words: all("run", "-"), has: all("--env", "--env-file", "--no-masking")},
 		{name: "run's command", words: all("run", "--env", "K=sesh://api_key/x", "--", ""), files: true},
@@ -68,7 +68,7 @@ func TestComplete(t *testing.T) {
 		{name: "completion shells", words: all("completion", ""), want: all("bash", "fish", "zsh")},
 		{name: "init flags", words: all("init", "--"), want: all("--force", "--db-path")},
 		{name: "config takes nothing", words: all("config", "")},
-		{name: "no words", words: nil, want: all("agent", "audit", "backup", "completion", "config", "doctor", "edit", "folder", "import", "init", "inject", "recover", "recovery", "restore", "run", "show", "tag", "touchid")},
+		{name: "no words", words: nil, want: all("agent", "audit", "backup", "completion", "config", "doctor", "edit", "folder", "import", "init", "inject", "recover", "recovery", "restore", "run", "show", "tag", "touchid", "trash")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cands, files := complete(reg, tt.words)

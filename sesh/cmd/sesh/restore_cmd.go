@@ -147,14 +147,14 @@ func restore(app *App, cfg *config.Config, path string, force bool) error {
 		return fmt.Errorf("the vault can't be read, so nothing was restored: %w", currentErr)
 	}
 	var plan strings.Builder
-	fmt.Fprintf(&plan, "Restore the vault from %s, made %s (%s)?\n", name, made, entryCount(b.Entries))
+	fmt.Fprintf(&plan, "Restore the vault from %s, made %s (%s)?\n", name, made, backupCount(b))
 	fmt.Fprintf(&plan, "  It opens with the master password, and recovery key, the vault had then.\n")
 	switch {
 	case currentErr == nil:
 		if current.VaultID != b.VaultID {
 			fmt.Fprintf(&plan, "  It's a backup of another vault (this one's id is %s, the backup's %s).\n", short(current.VaultID), short(b.VaultID))
 		}
-		fmt.Fprintf(&plan, "  The vault now (%s) is backed up first.\n", entryCount(current.Entries))
+		fmt.Fprintf(&plan, "  The vault now (%s) is backed up first.\n", backupCount(current))
 	case errors.Is(currentErr, database.ErrNoVault):
 		fmt.Fprintf(&plan, "  There's no vault at %s now, or it's new and empty; the backup becomes it.\n", tildePath(vaultPath))
 	default:
@@ -180,7 +180,7 @@ func restore(app *App, cfg *config.Config, path string, force bool) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", name, entryCount(b.Entries), made)
+		fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", name, backupCount(b), made)
 		if aside != "" {
 			fmt.Fprintf(&out, "The vault as it was is in %s, with any -wal and -shm files beside it.\n", tildePath(aside))
 		}
@@ -196,7 +196,7 @@ func restore(app *App, cfg *config.Config, path string, force bool) error {
 		if err := database.RestoreInPlace(vaultPath, path); err != nil {
 			return err
 		}
-		fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", name, entryCount(b.Entries), made)
+		fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", name, backupCount(b), made)
 		fmt.Fprintf(&out, "The vault as it was is in %s; restore it the same way to undo this.\n", tildePath(saved.Path))
 	}
 	if note := lockAgentHoldingOldKey(); note != "" {
@@ -213,3 +213,13 @@ func restore(app *App, cfg *config.Config, path string, force bool) error {
 
 // short is a vault id as backup names show it.
 func short(id string) string { return id[:min(8, len(id))] }
+
+// backupCount says how many entries a vault or backup holds, and how many
+// more are in its trash.
+func backupCount(b database.BackupSummary) string {
+	n := entryCount(b.Entries)
+	if b.Trashed > 0 {
+		n += fmt.Sprintf(", and %d in the trash", b.Trashed)
+	}
+	return n
+}

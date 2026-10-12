@@ -201,6 +201,7 @@ master_password.time     3             (default)
 master_password.threads  4             (default)
 backup.every_days        1 day         (default)
 backup.keep              7             (default)
+trash.keep_days          30 days       (default)
 db_path                  /Users/me/vaults/sesh.db
                          (config file)
 backup.dir               /Users/me/vaults/backups
@@ -218,7 +219,8 @@ backup.dir               /Users/me/vaults/backups
 | `-help`           | Show help (use with -service for provider help)  | Global           |
 | `-service`        | Service provider to use (aws, totp, password) [REQUIRED] | All commands     |
 | `-list`           | List entries for selected service                  | All providers    |
-| `-delete <id> …`  | Delete one or more entries, all or none; asks first unless `-force` | All providers    |
+| `-delete <id> …`  | Delete one or more entries, all or none, into the trash; asks first unless `-force` | All providers    |
+| `-purge`          | With `-delete`: delete for good, not into the trash | All providers    |
 | `-setup`          | Run interactive setup wizard                       | All providers    |
 | `-clip`           | Copy generated code to clipboard                   | All providers    |
 | `--db-path <path>` | Vault location for this command (overrides `SESH_DB_PATH` and the config file) | Global |
@@ -286,6 +288,7 @@ backup.dir               /Users/me/vaults/backups
 | `SESH_BACKUP_EVERY_DAYS` | Back up when the newest backup is this many days old; `0` turns automatic backups off (config: `backup.every_days`) | `1` |
 | `SESH_BACKUP_KEEP` | How many backups to keep, 1 to 1000 (config: `backup.keep`) | `7` |
 | `SESH_BACKUP_DIR` | Where backups go (config: `backup.dir`) | a `backups` folder next to the vault |
+| `SESH_TRASH_KEEP_DAYS` | Days a deleted entry stays in the trash; `0` keeps none, so deleting is for good (config: `trash.keep_days`) | `30` |
 | `SESH_KDF_MEMORY` | Memory for each master password check, such as `256MiB` (config: `master_password.memory`) | `256MiB` |
 | `SESH_KDF_TIME` | Passes over that memory (config: `master_password.time`) | `3` |
 | `SESH_KDF_THREADS` | Threads (config: `master_password.threads`) | `4` |
@@ -506,7 +509,7 @@ There is nothing installed to remove. `sesh agent stop` shuts it down, and the n
 
 ### The audit log
 
-The vault records every read, store, and delete of an entry: when it happened, what kind of event it was (`access`, `modify`, `delete`), and which entry, named the way `--list` names it. A few events are about the vault rather than an entry: `rekey` (the master password changed) and `doctor` (a `sesh doctor` check, with its result). It never records the secret itself.
+The vault records every read, store, and delete of an entry: when it happened, what kind of event it was, and which entry, named the way `--list` names it. For an entry: `access` (read), `modify` (stored or changed), `trash` (moved to the trash), `restore` (put back from the trash), `purge` (deleted for good from the trash, by hand or after its days), and `delete` (deleted for good straight away, with `--purge` or when there's no trash). A few events are about the vault rather than an entry: `rekey` (the master password changed), `restore` (the whole vault restored from a backup), `import` (an import, with how many came from where), and `doctor` (a `sesh doctor` check, with its result). It never records the secret itself.
 
 `sesh audit` shows the newest 50 events, newest first; `--limit 100` shows more, and `--limit 0` shows them all:
 
@@ -597,7 +600,7 @@ What to do
   1. Make the vault file yours alone:
        chmod 600 '/Users/alice/Library/Application Support/sesh/passwords.db'
   2. Restore password/bank/alice from a backup (an encrypted export), or delete it:
-       sesh --service password --delete password/bank/alice
+       sesh --service password --purge --delete password/bank/alice
   3. Make a new recovery key:
        sesh recovery new
   4. Optional: turn Touch ID back on:
@@ -961,7 +964,7 @@ Entries for aws:
 # Delete an entry by copying the ID from -list output
 $ sesh -service aws -delete totp/aws/prod
 Delete "totp/aws/prod"? [y/N]: y
-✅ Deleted 1 entry
+✅ Moved 1 entry to the trash, kept 30 days: sesh trash lists them, and sesh trash restore <id> puts one back
 
 # Delete several at once: every ID is checked first, and if any is wrong
 # nothing is deleted; then sesh lists them and asks once
@@ -970,10 +973,32 @@ These entries will be deleted:
   password/old-bank
   api_key/old-service/ci
 Delete these 2 entries? [y/N]: y
-✅ Deleted 2 entries
+✅ Moved 2 entries to the trash, kept 30 days: sesh trash lists them, and sesh trash restore <id> puts one back
 ```
 
 A delete asks first, for every provider: `y` or `yes` goes ahead. `-force` deletes without asking, and is needed without a terminal, as in a script; sesh says so before asking for the master password. Flags go before the IDs: in `-delete a b -force`, `-force` would be read as an ID, and sesh says so.
+
+Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) before they're deleted for good; `-purge` deletes for good straight away (`sesh -service password -purge -delete <id>`), and asks "for good". See [The trash](#the-trash).
+
+### The trash
+
+```
+$ sesh trash
+ID  ENTRY                  FOLDER  DELETED           GOES FOR GOOD
+7   password/github/alice  work    2026-10-11 09:12  2026-11-10
+6   api_key/openai                 2026-10-10 18:40  2026-11-09
+
+Put one back with: sesh trash restore <id>
+
+$ sesh trash restore 7
+✅ Restored password/github/alice from the trash.
+```
+
+- **`sesh trash`** (or `sesh trash list`) lists what's in it, the most recently deleted first, by trash id. Entries in the trash aren't listed, searched, read or exported; they're in backups, which copy the whole vault file.
+- **`sesh trash restore <id>`** puts one back as it was: its secret, URL, notes, fields, folder, tags and times. If an entry with its name exists again, sesh refuses and says so; rename or delete that one first, or restore under another name with `--as <id>` (the same kind, such as `--as password/github-old/alice`).
+- **`sesh trash remove <id>…`** deletes them for good, and **`sesh trash empty`** everything in the trash. Both ask first; `--force` doesn't, and is needed without a terminal.
+- **Each entry goes for good** `trash.keep_days` after it was deleted, the next time a command unlocks the vault. `0` keeps no trash: deleting is for good, and what's already in the trash stays until you empty it.
+- **A new master password** (`sesh --rekey`) re-encrypts the trash with the vault, so what's in it can still be restored. `sesh doctor` checks it too, and names any entry in it that can't be read, with `sesh trash remove` to delete it.
 
 To delete entries chosen by a filter, search for them as JSON (it shows each entry's `id`, never a secret), pick the IDs with `jq`, check them, then hand them to `-delete` with `xargs`. Separate the IDs with NUL characters (`jq -j … + "\u0000"` and `xargs -0`): names can contain spaces and quotes, which plain `xargs` would split on, turning one ID into others.
 

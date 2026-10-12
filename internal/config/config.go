@@ -71,6 +71,9 @@ const (
 	MaxBackupKeep          = 1000
 )
 
+// DefaultTrashKeepDays is how long deleted entries stay in the trash.
+const DefaultTrashKeepDays = 30
+
 // Config is sesh's resolved settings.
 type Config struct {
 	// Path is the config file sesh looked for; FileFound says whether it
@@ -91,6 +94,9 @@ type Config struct {
 	BackupEveryDays Setting[int]
 	// BackupKeep is how many backups are kept; older ones are removed.
 	BackupKeep Setting[int]
+	// TrashKeepDays is how many days deleted entries stay in the trash; 0
+	// keeps none, deleting for good.
+	TrashKeepDays Setting[int]
 	// KDFMemory (KiB), KDFTime and KDFThreads are the Argon2id settings a
 	// new master password key, or an encrypted export, is derived with.
 	KDFMemory  Setting[uint32]
@@ -131,6 +137,7 @@ const (
 	EnvBackupDir          = "SESH_BACKUP_DIR"
 	EnvBackupEveryDays    = "SESH_BACKUP_EVERY_DAYS"
 	EnvBackupKeep         = "SESH_BACKUP_KEEP"
+	EnvTrashKeepDays      = "SESH_TRASH_KEEP_DAYS"
 )
 
 // fileConfig is the config file's shape. Durations are strings such as
@@ -155,6 +162,9 @@ type fileConfig struct {
 	Audit struct {
 		RetentionDays int64 `toml:"retention_days"`
 	} `toml:"audit"`
+	Trash struct {
+		KeepDays int64 `toml:"keep_days"`
+	} `toml:"trash"`
 }
 
 // Path returns the config file's location: $XDG_CONFIG_HOME/sesh/config.toml
@@ -193,6 +203,7 @@ func Load(o Overrides) (*Config, error) {
 		AuditRetentionDays: Setting[int]{Value: DefaultAuditRetentionDays},
 		BackupEveryDays:    Setting[int]{Value: DefaultBackupEveryDays},
 		BackupKeep:         Setting[int]{Value: DefaultBackupKeep},
+		TrashKeepDays:      Setting[int]{Value: DefaultTrashKeepDays},
 	}
 	c.defaultKDF()
 	if err := c.applyFile(); err != nil {
@@ -273,6 +284,11 @@ func (c *Config) applyFile() error {
 			return err
 		}
 	}
+	if in("trash.keep_days") {
+		if err := setTrashKeepDays(&c.TrashKeepDays, f.Trash.KeepDays, strconv.FormatInt(f.Trash.KeepDays, 10), FromFile, from("trash.keep_days")); err != nil {
+			return err
+		}
+	}
 	if in("master_password.memory") {
 		if err := setKDFMemory(&c.KDFMemory, f.MasterPassword.Memory, FromFile, from("master_password.memory")); err != nil {
 			return err
@@ -332,6 +348,7 @@ func (c *Config) applyEnv() error {
 	}{
 		{setBackupEveryDays, &c.BackupEveryDays, EnvBackupEveryDays},
 		{setBackupKeep, &c.BackupKeep, EnvBackupKeep},
+		{setTrashKeepDays, &c.TrashKeepDays, EnvTrashKeepDays},
 	} {
 		if v, ok := os.LookupEnv(d.env); ok && v != "" {
 			n, err := strconv.ParseInt(v, 10, 64)
@@ -525,6 +542,16 @@ func setBackupEveryDays(dst *Setting[int], n int64, raw string, src Source, orig
 func setBackupKeep(dst *Setting[int], n int64, raw string, src Source, origin string) error {
 	if n < 1 || n > MaxBackupKeep {
 		return fmt.Errorf("%s = %q: want a whole number of backups to keep, from 1 to %d", origin, raw, MaxBackupKeep)
+	}
+	*dst = Setting[int]{Value: int(n), Source: src, Origin: origin}
+	return nil
+}
+
+// setTrashKeepDays sets how many days deleted entries stay in the trash,
+// 0 (none: deleting is for good) to MaxAuditRetentionDays.
+func setTrashKeepDays(dst *Setting[int], n int64, raw string, src Source, origin string) error {
+	if n < 0 || n > MaxAuditRetentionDays {
+		return fmt.Errorf("%s = %q: want a whole number of days from 0 (no trash: deleting is for good) to %d", origin, raw, MaxAuditRetentionDays)
 	}
 	*dst = Setting[int]{Value: int(n), Source: src, Origin: origin}
 	return nil

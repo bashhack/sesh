@@ -19,6 +19,9 @@ type Store struct {
 	db     *sql.DB
 	oracle CryptoOracle
 	path   string
+	// trashDays is how many days deleted entries stay in the trash; 0
+	// deletes for good.
+	trashDays int
 }
 
 // MaxSecretSize is the largest secret the store accepts. It applies however

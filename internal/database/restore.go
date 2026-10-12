@@ -16,7 +16,9 @@ import (
 // how many entries it holds.
 type BackupSummary struct {
 	VaultID string
-	Entries int
+	// Entries is how many entries the backup holds; Trashed, how many of
+	// its entries are in the trash.
+	Entries, Trashed int
 }
 
 // openReadOnly opens the SQLite file at path without writing to it: no
@@ -84,7 +86,7 @@ func inspect(path, what string) (_ BackupSummary, err error) {
 	if err := db.QueryRow(`SELECT vault_id FROM vault_info WHERE id = 1`).Scan(&s.VaultID); err != nil {
 		return BackupSummary{}, damaged(fmt.Errorf("read the id of %s: %w", what, err))
 	}
-	if err := db.QueryRow(`SELECT count(*) FROM entries`).Scan(&s.Entries); err != nil {
+	if err := db.QueryRow(`SELECT (SELECT count(*) FROM entries), (SELECT count(*) FROM trash)`).Scan(&s.Entries, &s.Trashed); err != nil {
 		return BackupSummary{}, fmt.Errorf("count the entries in %s: %w", what, err)
 	}
 	return s, nil
@@ -93,7 +95,7 @@ func inspect(path, what string) (_ BackupSummary, err error) {
 // restoredTables are the tables a restore takes from the backup: all but
 // the audit log, which keeps what happened, and the schema version, which
 // is the same.
-var restoredTables = []string{"vault_info", "vault_key", "recovery", "entries", "entry_tags"}
+var restoredTables = []string{"vault_info", "vault_key", "recovery", "entries", "entry_tags", "trash"}
 
 // RestoreInPlace replaces the sound vault at dbPath with the backup at
 // backupPath, which InspectBackup has passed, in one transaction: every

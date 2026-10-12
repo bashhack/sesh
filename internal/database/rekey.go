@@ -85,9 +85,11 @@ const (
 // RekeyResult reports a password change.
 type RekeyResult struct {
 	// NewID is the id of the vault's new key record.
-	NewID    string
-	Entries  int
-	Recovery RecoveryOutcome
+	NewID string
+	// Entries is how many entries were re-encrypted; Trashed, how many in
+	// the trash.
+	Entries, Trashed int
+	Recovery         RecoveryOutcome
 	// OldVaultInFile means another sesh command had the vault open, so the
 	// change couldn't be folded into the vault file yet: until that command
 	// ends, the file on its own still holds the vault under the old key.
@@ -117,38 +119,52 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 	if oldID == "" {
 		return res, errors.New("change the master password: the key source doesn't say which vault it unlocked")
 	}
-	before, err := sealedEntries(s.db)
-	if err != nil {
-		return res, err
+	// The entries, and those in the trash, are re-encrypted ahead, outside
+	// the transaction, then checked in it for any changed meanwhile.
+	type row struct {
+		table string
+		id    int64
 	}
-	sealed := make(map[int64]sealedEntry, len(before))
-	for i := range before {
-		e := &before[i]
-		if err := s.reseal(s.db, e, newKey); err != nil {
+	sealed := map[row]sealedEntry{}
+	for _, table := range sealedTables {
+		before, err := sealedEntries(s.db, table)
+		if err != nil {
 			return res, err
 		}
-		sealed[e.id] = *e
+		for i := range before {
+			e := &before[i]
+			if err := s.reseal(s.db, e, newKey); err != nil {
+				return res, err
+			}
+			sealed[row{table, e.id}] = *e
+		}
 	}
 	err = s.inTx(func(tx *sql.Tx) error {
-		now, err := sealedEntries(tx)
-		if err != nil {
-			return err
-		}
-		for i := range now {
-			e := &now[i]
-			// An entry unchanged since it was re-encrypted ahead takes that;
-			// one saved since is re-encrypted now.
-			if done, ok := sealed[e.id]; ok && done.unchangedFrom(e) {
-				*e = done
-			} else if err := s.reseal(tx, e, newKey); err != nil {
+		for _, table := range sealedTables {
+			now, err := sealedEntries(tx, table)
+			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(`UPDATE entries SET encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ? WHERE id = ?`,
-				e.data, e.salt, e.details, e.detailsSalt, e.id); err != nil {
-				return fmt.Errorf("store %s: %w", e.k, err)
+			for i := range now {
+				e := &now[i]
+				// An entry unchanged since it was re-encrypted ahead takes
+				// that; one saved since is re-encrypted now.
+				if done, ok := sealed[row{table, e.id}]; ok && done.unchangedFrom(e) {
+					*e = done
+				} else if err := s.reseal(tx, e, newKey); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`UPDATE `+table+` SET encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ? WHERE id = ?`, //nolint:gosec // table is one of sealedTables
+					e.data, e.salt, e.details, e.detailsSalt, e.id); err != nil {
+					return fmt.Errorf("store %s: %w", e.k, err)
+				}
+			}
+			if table == "trash" {
+				res.Trashed = len(now)
+			} else {
+				res.Entries = len(now)
 			}
 		}
-		res.Entries = len(now)
 		if res.Recovery, err = rewrapRecoveryRecord(tx, oldID, res.NewID, rewrap); err != nil {
 			return err
 		}
@@ -159,6 +175,9 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 		entries := fmt.Sprintf("%d entries", res.Entries)
 		if res.Entries == 1 {
 			entries = "1 entry"
+		}
+		if res.Trashed > 0 {
+			entries += fmt.Sprintf(" and %d in the trash", res.Trashed)
 		}
 		if _, err := tx.Exec(`INSERT INTO audit_log (event_type, entry_id, detail, created_at) VALUES ('rekey', NULL, ?, ?)`,
 			"master password changed, "+entries+" re-encrypted", time.Now().UTC()); err != nil {
@@ -189,6 +208,8 @@ type sealedEntry struct {
 	oldData, oldSalt           []byte
 	oldDetails, oldDetailsSalt []byte
 	id                         int64
+	// trashID is the entry's id in the trash, 0 for one that isn't.
+	trashID int64
 }
 
 // unchangedFrom reports whether now, as stored, is what e was resealed
@@ -198,11 +219,16 @@ func (e *sealedEntry) unchangedFrom(now *sealedEntry) bool {
 		bytes.Equal(e.oldDetails, now.details) && bytes.Equal(e.oldDetailsSalt, now.detailsSalt)
 }
 
-// sealedEntries reads every entry's encrypted secret and details through q.
+// sealedTables are the tables holding entries sealed with the vault's
+// key: the entries, and the trash's.
+var sealedTables = []string{"entries", "trash"}
+
+// sealedEntries reads the encrypted secret and details of every entry in
+// table, one of sealedTables, through q.
 func sealedEntries(q interface {
 	Query(query string, args ...any) (*sql.Rows, error)
-}) (_ []sealedEntry, err error) {
-	rows, err := q.Query(`SELECT id, kind, service, username, encrypted_data, salt, sealed_details, details_salt FROM entries`)
+}, table string) (_ []sealedEntry, err error) {
+	rows, err := q.Query(`SELECT id, kind, service, username, encrypted_data, salt, sealed_details, details_salt FROM ` + table) //nolint:gosec // table is one of sealedTables
 	if err != nil {
 		return nil, fmt.Errorf("read entries: %w", err)
 	}
@@ -219,6 +245,9 @@ func sealedEntries(q interface {
 			return nil, fmt.Errorf("read entries: %w", err)
 		}
 		e.k.Kind = vault.Kind(kind)
+		if table == "trash" {
+			e.trashID = e.id
+		}
 		e.oldData, e.oldSalt = e.data, e.salt
 		e.oldDetails, e.oldDetailsSalt = e.details, e.detailsSalt
 		all = append(all, e)
@@ -232,8 +261,16 @@ func sealedEntries(q interface {
 // reseal decrypts e's secret and details with the store's key and
 // encrypts them under newKey, into e. q is what the vault is read through:
 // the transaction, inside one, since the store has a single connection.
-func (s *Store) reseal(q querier, e *sealedEntry, newKey []byte) error {
-	var err error
+func (s *Store) reseal(q querier, e *sealedEntry, newKey []byte) (err error) {
+	if e.trashID != 0 {
+		defer func() {
+			// Not when the master password changed meanwhile: then the
+			// entry is fine, and the advice is to run it again.
+			if err != nil && !errors.Is(err, ErrVaultKeyChanged) {
+				err = fmt.Errorf("%w (it's in the trash, id %d: sesh trash remove %d deletes it for good)", err, e.trashID, e.trashID)
+			}
+		}()
+	}
 	if e.data, e.salt, err = s.resealOne(q, e.k, e.oldData, e.oldSalt, entryAAD(e.k), newKey, ""); err != nil {
 		return err
 	}
