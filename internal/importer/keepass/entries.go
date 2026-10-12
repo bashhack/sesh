@@ -19,8 +19,10 @@ import (
 // What a KeePass entry can have that sesh doesn't keep, as the summary
 // adds it up.
 const (
-	lostHistory    = "earlier versions of entries (not yet imported into history)"
 	lostAttachment = "attachments (sesh doesn't hold files)"
+	lostVersions   = "earlier versions with no other password to keep (sesh's history keeps old passwords only)"
+	lostRefHistory = "old passwords that refer to another entry (what they were isn't in the export)"
+	lostNoPassword = "old passwords of an entry with no password now"
 )
 
 // The fields every entry has, which aren't custom ones.
@@ -203,7 +205,8 @@ func folderPath(path []string) string {
 	return importer.FitFolder(strings.Join(parts, "/"))
 }
 
-// entry is what one entry becomes.
+// entry is what one entry becomes: a password entry, its old passwords
+// as its history, a TOTP entry, or a secure note.
 func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 	// Every value with its references filled in. One that can't be
 	// followed costs the entry in its title, username or password, which
@@ -295,9 +298,6 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 			base.Changes = append(base.Changes, "expires in KeePass on "+when)
 		}
 	}
-	if n := len(e.History.Entries); n > 0 {
-		base.Lost[lostHistory] += n
-	}
 	if n := len(e.Binaries); n > 0 {
 		base.Lost[lostAttachment] += n
 	}
@@ -338,8 +338,13 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 	}
 	urlText, notes := values["URL"], values["Notes"]
 
+	password := values["Password"]
+	earlier := oldPasswords(e, base.Lost)
+	if password == "" && len(earlier) > 0 {
+		base.Lost[lostNoPassword] += len(earlier)
+	}
 	var out []*importer.Entry
-	if password := values["Password"]; password != "" {
+	if password != "" {
 		var fs importer.FieldSet
 		for _, c := range customs {
 			fs.Custom(c.key, c.value, c.secret)
@@ -352,6 +357,7 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 		p.Changes = append(slices.Clone(base.Changes), fs.Changes...)
 		p.Key = vault.Key{Kind: vault.KindPassword, Service: service, Username: user}
 		p.Secret = []byte(password)
+		p.Earlier = earlier
 		p.Details = details
 		out = append(out, importer.Checked(&p))
 	}
@@ -493,4 +499,42 @@ func totpKey(s string) (secret string, params totp.Params, why string) {
 		return "", params, "the key isn't a valid base32 key"
 	}
 	return normalized, params, ""
+}
+
+// oldPasswords is an entry's earlier passwords, the newest first, from its
+// history: the copies KeePass keeps of it before each edit of any kind,
+// the oldest first, each made at its LastModificationTime. Each change of
+// password, as written, is one earlier secret, replaced when the next
+// version was made (the entry's own time for the newest). A changed
+// password that refers to another entry is left out, and each version
+// that didn't end in a password kept, counted in lost.
+func oldPasswords(e *Entry, lost map[string]int) []vault.Earlier {
+	h := e.History.Entries
+	var out []vault.Earlier
+	for i := len(h) - 1; i >= 0; i-- {
+		pw := fieldText(&h[i], "Password")
+		next, at := fieldText(e, "Password"), e.Times.LastModificationTime.Time
+		if i+1 < len(h) {
+			next, at = fieldText(&h[i+1], "Password"), h[i+1].Times.LastModificationTime.Time
+		}
+		switch {
+		case pw == "" || pw == next:
+			lost[lostVersions]++
+		case reference.MatchString(pw):
+			lost[lostRefHistory]++
+		default:
+			out = append(out, vault.Earlier{Secret: []byte(pw), ReplacedAt: at})
+		}
+	}
+	return out
+}
+
+// fieldText is e's field key as written, "" when it has none.
+func fieldText(e *Entry, key string) string {
+	for _, str := range e.Strings {
+		if str.Key == key {
+			return str.Value.Text
+		}
+	}
+	return ""
 }

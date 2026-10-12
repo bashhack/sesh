@@ -18,6 +18,7 @@ import (
 	"github.com/makiuchi-d/gozxing"
 	zqr "github.com/makiuchi-d/gozxing/qrcode"
 
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -300,7 +301,8 @@ func TestImport_Bitwarden(t *testing.T) {
 		"  Passwords, in Work-Accounts (1):\n    password/GitHub/alice\n",
 		`        field "linked user" not kept`,
 		"  Secure notes, in no folder (1):\n    secure_note/Me\n",
-		"Not kept:\n  items set to ask for the master password again (sesh doesn't ask): 1\n  old passwords (not yet imported into history): 1\n",
+		"Old passwords, into the entries' history: 1 (sesh history <id> lists them)\n",
+		"Not kept:\n  items set to ask for the master password again (sesh doesn't ask): 1\n",
 		"Already in the vault (1):\n  totp/GitHub/alice\n",
 		`named "GitHub (2)" in sesh: an entry before it has the name`,
 		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
@@ -325,6 +327,9 @@ func TestImport_Bitwarden(t *testing.T) {
 	e, err := store.Lookup(gh)
 	if err != nil || e.Folder != "Work-Accounts" || e.URL != "https://github.com/login" || e.CreatedAt.Year() != 2026 {
 		t.Errorf("GitHub = %+v, %v", e, err)
+	}
+	if old, err := store.ReadVersion(gh, 2, "test"); err != nil || string(old) != "gh-old-password-1" {
+		t.Errorf("GitHub's version 2 = %q, %v", old, err)
 	}
 	d, err := store.Details(gh, "all")
 	if err != nil || string(d.Notes) != "main account\nrecovery codes in the safe" || len(d.Fields) != 4 {
@@ -489,7 +494,8 @@ func TestImport_KeePass(t *testing.T) {
 		`"Home/Lab" is "Home-Lab" in sesh`,
 		`"Old account": in KeePass's recycle bin`,
 		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
-		"earlier versions of entries (not yet imported into history): 12\n",
+		"Old passwords, into the entries' history: 1 (sesh history <id> lists them)\n",
+		"earlier versions with no other password to keep (sesh's history keeps old passwords only): 11\n",
 		"attachments (sesh doesn't hold files): 2\n",
 	} {
 		if !strings.Contains(stderr, want) {
@@ -506,6 +512,9 @@ func TestImport_KeePass(t *testing.T) {
 	e, err := store.Lookup(gh)
 	if err != nil || e.Folder != "Work-Accounts" || strings.Join(e.Tags, ",") != "code,work" || e.URL != "https://github.com/login" {
 		t.Errorf("GitHub = %+v, %v", e, err)
+	}
+	if old, err := store.ReadVersion(gh, 2, "test"); err != nil || string(old) != "gh-pass-1" {
+		t.Errorf("GitHub's version 2 = %q, %v", old, err)
 	}
 	d, err := store.Details(gh, "all")
 	if err != nil || len(d.Fields) != 2 || d.Fields[0].Name != "pin" || !d.Fields[0].Secret || string(d.Fields[0].Value) != "4321" {
@@ -612,5 +621,28 @@ func TestImport_SafariRefusedCode(t *testing.T) {
 	}
 	if _, _, err := runImportOut(t, "", false, "--from", "chrome", file); err == nil || !strings.Contains(err.Error(), "this is Safari's password export: use --from safari") {
 		t.Errorf("wrong --from: %v", err)
+	}
+}
+
+// Importing again over the same entries adds no old password twice; with
+// history.keep 0 none are kept, and the summary says so.
+func TestImport_HistoryAgainAndKeepNone(t *testing.T) {
+	env := importVault(t)
+	gh := vault.Key{Kind: vault.KindPassword, Service: "GitHub", Username: "alice"}
+	for range 2 {
+		if _, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := openDoctorVault(t, env)
+	if vs, err := store.History(gh); err != nil || len(vs) != 1 {
+		t.Errorf("after importing twice, history = %v, %v; want 1 version", vs, err)
+	}
+	store.Close() //nolint:errcheck // test cleanup
+
+	t.Setenv(config.EnvHistoryKeep, "0")
+	_, stderr, err := runImportOut(t, "", false, "--dry-run", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
+	if err != nil || !strings.Contains(stderr, "old passwords (history.keep is 0): 1\n") || strings.Contains(stderr, "into the entries' history") {
+		t.Errorf("history.keep 0: %v\n%s", err, stderr)
 	}
 }

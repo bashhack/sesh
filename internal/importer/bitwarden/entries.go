@@ -1,11 +1,13 @@
 package bitwarden
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bashhack/sesh/internal/importer"
 	"github.com/bashhack/sesh/internal/totp"
@@ -15,15 +17,21 @@ import (
 // What a Bitwarden item can have that sesh doesn't keep, as the summary
 // adds it up.
 const (
-	lostHistory  = "old passwords (not yet imported into history)"
 	lostPasskey  = "passkeys (sesh doesn't hold them)"
 	lostReprompt = "items set to ask for the master password again (sesh doesn't ask)"
+	// Bitwarden's password history also holds hidden fields' old values,
+	// as "name: value" (cipher.service.ts, updateModelfromExistingCipher).
+	lostFieldHistory = "old hidden-field values (sesh's history keeps old passwords only)"
+	lostColon        = `old passwords with ": " in them (Bitwarden keeps old hidden-field values that way too, without saying which)`
+	lostNoPassword   = "old passwords of a login with no password now"
+	lostUnread       = "old passwords sesh couldn't read"
 )
 
 // Entries is the sesh entries an export's items become, in order:
-//   - a login is a password entry, with its URL, notes and custom fields,
-//     and its TOTP key a TOTP entry beside it; one with neither a password
-//     nor a TOTP key is a secure note, so nothing in it is lost;
+//   - a login is a password entry, with its URL, notes and custom fields
+//     and its old passwords as its history, and its TOTP key a TOTP entry
+//     beside it; one with neither a password nor a TOTP key is a secure
+//     note, so nothing in it is lost;
 //   - a secure note is a secure note;
 //   - a card, identity, or SSH key is a secure note, its notes (or a line
 //     saying what it is) the note, its numbers and keys secret fields and
@@ -82,6 +90,9 @@ func itemEntries(it *Item, base *importer.Entry) []*importer.Entry {
 	}
 	if service != it.Name {
 		base.Changes = append(base.Changes, fmt.Sprintf("named %q in sesh", service))
+	}
+	if it.Type != TypeLogin && len(it.PasswordHistory) > 0 {
+		base.Lost[lostFieldHistory] += len(it.PasswordHistory)
 	}
 	var fs importer.FieldSet
 	switch it.Type {
@@ -178,8 +189,9 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 	if user != l.Username {
 		base.Changes = append(base.Changes, fmt.Sprintf("username %q in sesh", user))
 	}
-	if n := len(it.PasswordHistory); n > 0 {
-		base.Lost[lostHistory] += n
+	earlier := oldPasswords(it.PasswordHistory, base.Lost)
+	if l.Password == "" && len(earlier) > 0 {
+		base.Lost[lostNoPassword] += len(earlier)
 	}
 	if n := len(l.Fido2Credentials); n > 0 {
 		base.Lost[lostPasskey] += n
@@ -205,6 +217,7 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 		e.Changes = append(slices.Clone(base.Changes), fs.Changes...)
 		e.Key = vault.Key{Kind: vault.KindPassword, Service: service, Username: user}
 		e.Secret = []byte(l.Password)
+		e.Earlier = earlier
 		e.Details = details
 		out = append(out, importer.Checked(&e))
 	}
@@ -348,4 +361,35 @@ func typeName(t int) string {
 		return "passport"
 	}
 	return fmt.Sprintf("type %d item", t)
+}
+
+// oldPasswords is a login's password history as earlier secrets, the
+// newest first, as Bitwarden keeps it, each replaced at its lastUsedDate.
+// One with ": " in it may be a hidden field's old value, and one that
+// doesn't read is left out; each is counted in lost.
+func oldPasswords(history []json.RawMessage, lost map[string]int) []vault.Earlier {
+	var out []vault.Earlier
+	for _, raw := range history {
+		var h struct {
+			Password     string `json:"password"`
+			LastUsedDate string `json:"lastUsedDate"`
+		}
+		switch err := json.Unmarshal(raw, &h); {
+		case err != nil:
+			lost[lostUnread]++
+			continue
+		case h.Password == "":
+			continue
+		case strings.Contains(h.Password, ": "):
+			lost[lostColon]++
+			continue
+		}
+		// A time that doesn't read is left unknown (zero).
+		at, err := time.Parse(time.RFC3339Nano, h.LastUsedDate)
+		if err != nil {
+			at = time.Time{}
+		}
+		out = append(out, vault.Earlier{Secret: []byte(h.Password), ReplacedAt: at})
+	}
+	return out
 }

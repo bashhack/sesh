@@ -70,7 +70,13 @@ func TestEntries_GenuineExport(t *testing.T) {
 	if strings.Join(fields, "; ") != "pin=4321 secret=true; recovery-email=alice@example.com secret=false" {
 		t.Errorf("GitHub fields = %q", fields)
 	}
-	if strings.Join(gh.Tags, ",") != "code,work" || gh.Lost[lostHistory] != 4 || gh.Lost[lostAttachment] != 1 ||
+	// Its four earlier versions: gh-pass-1 twice, then gh-pass-2 twice
+	// (as now); the password changed in the version made at 01:38:12.
+	if len(gh.Earlier) != 1 || string(gh.Earlier[0].Secret) != "gh-pass-1" ||
+		!gh.Earlier[0].ReplacedAt.Equal(time.Date(2026, 10, 11, 1, 38, 12, 0, time.UTC)) {
+		t.Errorf("GitHub's old passwords = %+v", gh.Earlier)
+	}
+	if strings.Join(gh.Tags, ",") != "code,work" || gh.Lost[lostVersions] != 3 || gh.Lost[lostAttachment] != 1 ||
 		gh.Created.IsZero() || gh.Updated.Before(gh.Created) {
 		t.Errorf("GitHub tags %q, lost %v, times %v %v", gh.Tags, gh.Lost, gh.Created, gh.Updated)
 	}
@@ -85,6 +91,10 @@ func TestEntries_GenuineExport(t *testing.T) {
 		t.Errorf("Bank TOTP = %+v", b.Settings)
 	}
 	clone := entries[byKey["password/GitHub - Clone/alice"]]
+	// Its four earlier versions each refer to GitHub's password, as it does.
+	if len(clone.Earlier) != 0 || clone.Lost[lostVersions] != 4 || clone.Lost[lostRefHistory] != 0 {
+		t.Errorf("clone's old passwords = %+v, lost %v", clone.Earlier, clone.Lost)
+	}
 	if !strings.Contains(strings.Join(clone.Changes, "\n"), "password and username taken from the entry they refer to") {
 		t.Errorf("clone changes = %q", clone.Changes)
 	}
@@ -307,5 +317,44 @@ func TestEntries_ReferenceChainOrder(t *testing.T) {
 				t.Errorf("%s: %s skip %q secret %q", name, e.Name, e.Skip, e.Secret)
 			}
 		}
+	}
+}
+
+// Each change of password in an entry's history is an old password, the
+// newest first; one referring to another entry, and an entry with no
+// password now, are counted as not kept.
+func TestEntries_OldPasswords(t *testing.T) {
+	str := func(k, v string) String {
+		var s String
+		s.Key, s.Value.Text = k, v
+		return s
+	}
+	at := func(h int) Times {
+		return Times{LastModificationTime: Time{time.Date(2026, 1, 1, h, 0, 0, 0, time.UTC)}}
+	}
+	version := func(pw string, h int) Entry {
+		return Entry{Times: at(h), Strings: []String{str("Title", "site"), str("Password", pw)}}
+	}
+	e := version("d", 9)
+	e.History.Entries = []Entry{version("a", 1), version("", 2), version("b", 3), version("{REF:P@I:0123456789ABCDEF0123456789ABCDEF}", 4), version("c", 5), version("c", 6)}
+	exp := Export{}
+	exp.Root.Group.Entries = []Entry{e}
+	got := Entries(&exp)
+	var old []string
+	for _, o := range got[0].Earlier {
+		old = append(old, fmt.Sprintf("%s@%d", o.Secret, o.ReplacedAt.Hour()))
+	}
+	if want := "c@9 b@4 a@2"; strings.Join(old, " ") != want {
+		t.Errorf("old passwords %q, want %q", strings.Join(old, " "), want)
+	}
+	if l := got[0].Lost; l[lostRefHistory] != 1 || l[lostVersions] != 2 {
+		t.Errorf("lost %v", l)
+	}
+
+	note := Entry{Times: at(9), Strings: []String{str("Title", "wifi"), str("Notes", "n")}}
+	note.History.Entries = []Entry{version("gone", 1)}
+	exp.Root.Group.Entries = []Entry{note}
+	if got := Entries(&exp); len(got[0].Earlier) != 0 || got[0].Lost[lostNoPassword] != 1 {
+		t.Errorf("no password now: %+v", got[0])
 	}
 }

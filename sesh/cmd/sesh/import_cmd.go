@@ -118,6 +118,9 @@ func runImport(app *App, args []string) error {
 		for _, e := range f.entries {
 			secure.SecureZeroBytes(e.Secret)
 			e.Details.Zero()
+			for _, o := range e.Earlier {
+				secure.SecureZeroBytes(o.Secret)
+			}
 		}
 	}()
 
@@ -172,6 +175,15 @@ func runImport(app *App, args []string) error {
 			kept = append(kept, e)
 		}
 		clashes = kept
+	}
+
+	for _, e := range fresh {
+		fitHistory(e, cfg.HistoryKeep.Value)
+	}
+	if *onConflict == "overwrite" {
+		for _, e := range clashes {
+			fitHistory(e, cfg.HistoryKeep.Value)
+		}
 	}
 
 	if _, err := fmt.Fprint(app.Stderr, importSummary(&f, fresh, clashes, skipped, *onConflict)); err != nil {
@@ -286,14 +298,36 @@ func detectSource(args []string) string {
 	return "google-authenticator"
 }
 
-// writeImported stores e. One replacing an entry you have takes its secret
-// and code settings from the import, and its folder only if it has one;
-// its details are already merged (see mergeDetails); tags are both sets,
-// and the entry's other settings and creation time are kept.
+// fitHistory leaves out of e's earlier secrets what history.keep (keep)
+// has no room for, the oldest, counting them as not kept.
+func fitHistory(e *importer.Entry, keep int) {
+	n := len(e.Earlier)
+	if n <= keep {
+		return
+	}
+	if e.Lost == nil {
+		e.Lost = map[string]int{}
+	}
+	if keep == 0 {
+		e.Lost["old passwords (history.keep is 0)"] += n
+	} else {
+		e.Lost[fmt.Sprintf("old passwords past history.keep (%d)", keep)] += n - keep
+	}
+	for _, o := range e.Earlier[keep:] {
+		secure.SecureZeroBytes(o.Secret)
+	}
+	e.Earlier = e.Earlier[:keep]
+}
+
+// writeImported stores e, with its earlier secrets in its history. One
+// replacing an entry you have takes its secret and code settings from the
+// import, and its folder only if it has one; its details are already
+// merged (see mergeDetails); tags are both sets, and the entry's other
+// settings and creation time are kept.
 func writeImported(store *database.Store, e *importer.Entry, exists bool) error {
 	ent := vault.Entry{Key: e.Key, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.Created, UpdatedAt: e.Updated}
 	if !exists {
-		return store.SaveWithDetails(&ent, e.Secret, &e.Details)
+		return store.SaveImported(&ent, e.Secret, &e.Details, e.Earlier)
 	}
 	cur, err := store.Lookup(e.Key)
 	if err != nil {
@@ -308,9 +342,9 @@ func writeImported(store *database.Store, e *importer.Entry, exists bool) error 
 	ent.CreatedAt = cur.CreatedAt
 	ent.UpdatedAt = time.Time{}
 	if e.Details.IsZero() {
-		return store.Save(&ent, e.Secret)
+		return store.SaveImported(&ent, e.Secret, nil, e.Earlier)
 	}
-	return store.SaveWithDetails(&ent, e.Secret, &e.Details)
+	return store.SaveImported(&ent, e.Secret, &e.Details, e.Earlier)
 }
 
 // mergeDetails makes e's details, for replacing the entry you have, yours
@@ -438,10 +472,15 @@ func importSummary(f *found, fresh, clashes, skipped []*importer.Entry, onConfli
 		written = append(slices.Clone(fresh), clashes...)
 	}
 	lost := map[string]int{}
+	old := 0
 	for _, e := range written {
 		for what, n := range e.Lost {
 			lost[what] += n
 		}
+		old += len(e.Earlier)
+	}
+	if old > 0 {
+		fmt.Fprintf(&b, "\nOld passwords, into the entries' history: %d (sesh history <id> lists them)\n", old)
 	}
 	if len(lost) > 0 {
 		b.WriteString("\nNot kept:\n")

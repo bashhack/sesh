@@ -48,8 +48,9 @@ func TestEntries_GenuineExport(t *testing.T) {
 		t.Errorf("fields %q, want %q", strings.Join(fields, " "), want)
 	}
 	changes := strings.Join(gh.Changes, "; ")
-	if gh.Lost[lostHistory] != 1 {
-		t.Errorf("GitHub lost = %v, want 1 old password", gh.Lost)
+	if len(gh.Earlier) != 1 || string(gh.Earlier[0].Secret) != "gh-old-password-1" ||
+		!gh.Earlier[0].ReplacedAt.Equal(time.Date(2026, 10, 9, 22, 50, 47, 267e6, time.UTC)) || len(gh.Lost) != 0 {
+		t.Errorf("GitHub's old passwords = %+v, lost %v", gh.Earlier, gh.Lost)
 	}
 	for _, want := range []string{`folder "Work Accounts" is "Work-Accounts"`, `field "linked user" not kept`, `field "2fa enabled" is "2fa-enabled"`} {
 		if !strings.Contains(changes, want) {
@@ -248,5 +249,43 @@ func TestEntries_UnfitDetails(t *testing.T) {
 	}
 	if c.Skip != "" || len(c.Details.Fields) != 1 || !strings.Contains(strings.Join(c.Changes, "\n"), `field "nul" not kept: `) {
 		t.Errorf("card: skip %q, fields %+v, changes %q", c.Skip, c.Details.Fields, c.Changes)
+	}
+}
+
+// A login's old passwords are its history, newest first; one with ": "
+// (maybe a hidden field's), one that doesn't read, and those of other
+// items (only hidden fields') are counted as not kept.
+func TestEntries_OldPasswords(t *testing.T) {
+	exp := Export{Items: []Item{
+		{Type: TypeLogin, Name: "site", Login: &Login{Password: "now"}, PasswordHistory: []json.RawMessage{
+			[]byte(`{"password":"newer","lastUsedDate":"2026-03-02T10:00:00.5Z"}`),
+			[]byte(`{"password":"pin: 1234","lastUsedDate":"2026-03-02T10:00:00Z"}`),
+			[]byte(`{"password":"older","lastUsedDate":null}`),
+			[]byte(`{"password":7}`),
+		}},
+		{Type: TypeLogin, Name: "code only", Login: &Login{TOTP: "JBSWY3DPEHPK3PXP"}, PasswordHistory: []json.RawMessage{
+			[]byte(`{"password":"gone","lastUsedDate":"2026-03-02T10:00:00Z"}`),
+		}},
+		{Type: TypeSecureNote, Name: "note", Notes: "n", PasswordHistory: []json.RawMessage{
+			[]byte(`{"password":"key: abc","lastUsedDate":"2026-03-02T10:00:00Z"}`),
+		}},
+	}}
+	got := Entries(&exp)
+	site := got[0]
+	var old []string
+	for _, e := range site.Earlier {
+		old = append(old, string(e.Secret)+"@"+e.ReplacedAt.Format(time.RFC3339Nano))
+	}
+	if want := "newer@2026-03-02T10:00:00.5Z older@0001-01-01T00:00:00Z"; strings.Join(old, " ") != want {
+		t.Errorf("old passwords %q, want %q", strings.Join(old, " "), want)
+	}
+	if site.Lost[lostColon] != 1 || site.Lost[lostUnread] != 1 {
+		t.Errorf("site lost %v", site.Lost)
+	}
+	if code := got[1]; len(code.Earlier) != 0 || code.Lost[lostNoPassword] != 1 {
+		t.Errorf("code only: %+v", code)
+	}
+	if note := got[2]; len(note.Earlier) != 0 || note.Lost[lostFieldHistory] != 1 {
+		t.Errorf("note: %+v", note)
 	}
 }
