@@ -225,15 +225,16 @@ func TestEntries_Safari(t *testing.T) {
 
 func TestTOTPKey(t *testing.T) {
 	for in, want := range map[string]string{
-		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&algorithm=MD5": "it uses MD5",
-		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&digits=10":     "10-digit codes",
-		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&period=0":      "isn't a positive number",
-		"otpauth://totp?issuer=GEZDGNBVGY3TQOJQSECRET":               "it has no key",
-		"otpauth://totp?secret=GEZD!!GNBVGY3TQOJQSECRET":             "isn't a valid base32 key",
-		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&encoder=steam": "a Steam code",
-		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&period=100000": "longer than sesh allows",
-		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&digits=x":      "isn't a number",
-		"otpauth://totp/a%zz?secret=GEZDGNBVGY3TQOJQSECRET":          "doesn't read as an otpauth:// address",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&algorithm=MD5":                                             "it uses MD5",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&digits=10":                                                 "10-digit codes",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&period=0":                                                  "isn't a positive number",
+		"otpauth://totp?issuer=GEZDGNBVGY3TQOJQSECRET":                                                           "it has no key",
+		"otpauth://totp?secret=GEZD!!GNBVGY3TQOJQSECRET":                                                         "isn't a valid base32 key",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&encoder=steam":                                             "a Steam code",
+		"otpauth://totp/Steam:gamer?secret=GEZDGNBVGY3TQOJQSECRET&period=30&digits=5&issuer=Steam&encoder=Steam": "a Steam code",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&period=100000":                                             "longer than sesh allows",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&digits=x":                                                  "isn't a number",
+		"otpauth://totp/a%zz?secret=GEZDGNBVGY3TQOJQSECRET":                                                      "doesn't read as an otpauth:// address",
 	} {
 		if _, _, why := totpKey(in); !strings.Contains(why, want) || strings.Contains(why, "GEZD") {
 			t.Errorf("totpKey(%q) = %q, want %q and no key", in, why, want)
