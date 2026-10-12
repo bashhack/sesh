@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"golang.org/x/net/idna"
-	"golang.org/x/text/unicode/bidi"
 
 	"github.com/bashhack/sesh/internal/importer"
 	"github.com/bashhack/sesh/internal/vault"
@@ -21,9 +20,9 @@ const firefoxAccount = "chrome://FirefoxAccounts"
 
 // Entries is the password entries an export's logins become, in order.
 // Each is named for its site (see siteName), with the address as its URL.
-// Two of one name and username get " (2)", unless the password is the
-// same too: Chrome writes a row for each address of one login, and the
-// repeats are skipped. A login with no password is skipped, as is
+// Two of one name and username get " (2)", unless, in Chrome's export, the
+// password is the same too: Chrome writes a row for each address of one
+// login, and the repeats are skipped. A login with no password is skipped, as is
 // Firefox's sign-in to the Mozilla account.
 func Entries(exp *Export) []*importer.Entry {
 	names := importer.NewNames()
@@ -32,7 +31,7 @@ func Entries(exp *Export) []*importer.Entry {
 	var out []*importer.Entry
 	for i := range exp.Logins {
 		l := &exp.Logins[i]
-		site := siteName(l)
+		site := siteName(l, exp.Browser)
 		e := &importer.Entry{Name: site, Created: l.Created, Updated: l.Updated}
 		service := importer.FitName(site)
 		user := importer.FitName(l.Username)
@@ -43,7 +42,7 @@ func Entries(exp *Export) []*importer.Entry {
 			e.Skip = "it has no site"
 		case l.Password == "":
 			e.Skip = "it has no password"
-		case seen[login{site, l.Username, l.Password}]:
+		case exp.Browser == Chrome && seen[login{site, l.Username, l.Password}]:
 			e.Skip = "the same login as an earlier one, for another address on the site"
 		}
 		if e.Skip != "" {
@@ -76,11 +75,15 @@ func Entries(exp *Export) []*importer.Entry {
 //   - an Android app's (Chrome's android://hash@package/) as Chrome names
 //     it, or, where it gave no name, as Chrome would: the package reversed
 //     (affiliation_utils.cc GetAndroidPackageDisplayName);
-//   - an address with a host, the host without a leading "www.", in
-//     Unicode as Chrome shows it (elide_url.cc HostForDisplay: punycode
-//     kept when the Unicode has a right-to-left letter);
+//   - an address with a host, the host without a leading "www.", port
+//     kept. An internationalised one is in Unicode only where Chrome's
+//     own name for it is: Chrome shows Unicode only after its checks for
+//     lookalike letters and right-to-left text (credential_ui_entry.cc
+//     GetOrigin, elide_url.cc HostForDisplay, url_formatter.cc), which
+//     sesh doesn't repeat, so a host Chrome kept as xn--, and every
+//     Firefox one, stays so;
 //   - anything else, Chrome's name for it, or the address itself.
-func siteName(l *Login) string {
+func siteName(l *Login, browser string) string {
 	u, err := url.Parse(l.URL)
 	if err != nil {
 		return l.URL
@@ -103,18 +106,17 @@ func siteName(l *Login) string {
 	if strings.Contains(host, ":") { // an IPv6 address, kept as written
 		return strings.TrimPrefix(u.Host, "www.")
 	}
-	if shown, err := idna.ToUnicode(host); err == nil && !strings.ContainsFunc(shown, rightToLeft) {
-		host = shown
+	port := ""
+	if p := u.Port(); p != "" {
+		port = ":" + p
 	}
-	if port := u.Port(); port != "" {
-		host += ":" + port
+	if browser == Chrome && strings.Contains(host, "xn--") {
+		// Chrome's name is the origin as it shows it, the scheme left out
+		// for https (OMIT_CRYPTOGRAPHIC).
+		shown := strings.TrimPrefix(strings.TrimPrefix(l.Name, u.Scheme+"://"), "www.")
+		if unicode, err := idna.ToUnicode(host); err == nil && shown == unicode+port {
+			return shown
+		}
 	}
-	return host
-}
-
-// rightToLeft reports whether r is a strong right-to-left letter, as
-// Chrome's StringContainsStrongRTLChars counts them.
-func rightToLeft(r rune) bool {
-	p, _ := bidi.LookupRune(r)
-	return p.Class() == bidi.R || p.Class() == bidi.AL
+	return host + port
 }

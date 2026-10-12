@@ -110,7 +110,8 @@ func TestEntries_Naming(t *testing.T) {
 		{URL: "http://www.example.com", Username: "a", Password: "1"},
 		{URL: "https://example.com", Username: "a", Password: "2"},
 		{URL: "https://xn--bcher-kva.example:8443", Username: "a", Password: "1"},
-		{URL: "https://xn--4gbrim.xn----ymcbaaajlc6dj7bxne2c.xn--wgbh1c", Username: "a", Password: "1"},
+		{URL: "https://example.org", Username: "a", Password: "1"},
+		{URL: "https://example.org", Username: "a", Password: "1", Realm: "Admin area"},
 		{URL: "https://[::1]:8443", Username: "a", Password: "1"},
 		{URL: "moz-proxy://127.0.0.1:8888", Username: "a", Password: "1", Realm: "proxy"},
 		{URL: "ftp://ftp.site.com", Username: "a", Password: "1"},
@@ -131,15 +132,51 @@ func TestEntries_Naming(t *testing.T) {
 	}
 	want := []string{
 		"password/example.com/a",
-		"skip: the same login as an earlier one, for another address on the site",
 		"password/example.com (2)/a",
-		"password/bücher.example:8443/a",
-		"password/xn--4gbrim.xn----ymcbaaajlc6dj7bxne2c.xn--wgbh1c/a",
+		"password/example.com (3)/a",
+		"password/xn--bcher-kva.example:8443/a",
+		"password/example.org/a",
+		"password/example.org (2)/a http-realm=Admin area",
 		"password/[::1]:8443/a",
 		"password/127.0.0.1:8888/a http-realm=proxy",
 		"password/ftp.site.com/a",
 		"password/app.example.com/a",
 		"skip: Firefox's own sign-in to your Mozilla account",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// In Chrome's export a repeat of one login is skipped, and an
+// internationalised name is in Unicode only where Chrome's own name for it
+// is, as Chrome shows Unicode only after its lookalike checks.
+func TestEntries_Chrome(t *testing.T) {
+	exp := Export{Browser: Chrome, Logins: []Login{
+		{Name: "example.com", URL: "https://example.com/", Username: "a", Password: "1"},
+		{Name: "example.com", URL: "https://example.com/", Username: "a", Password: "1"},
+		{Name: "bücher.example:8443", URL: "https://xn--bcher-kva.example:8443/", Username: "a", Password: "1"},
+		{Name: "http://www.bücher.example", URL: "http://www.xn--bcher-kva.example/", Username: "b", Password: "1"},
+		// A lookalike of apple.com (Cyrillic а), which Chrome names in xn--.
+		{Name: "xn--pple-43d.com", URL: "https://xn--pple-43d.com/", Username: "a", Password: "1"},
+		// Arabic, right to left, which Chrome names in xn--.
+		{Name: "xn--4gbrim.xn----ymcbaaajlc6dj7bxne2c.xn--wgbh1c", URL: "https://xn--4gbrim.xn----ymcbaaajlc6dj7bxne2c.xn--wgbh1c/", Username: "a", Password: "1"},
+	}}
+	var got []string
+	for _, e := range Entries(&exp) {
+		if e.Skip != "" {
+			got = append(got, "skip: "+e.Skip)
+		} else {
+			got = append(got, e.Key.String())
+		}
+	}
+	want := []string{
+		"password/example.com/a",
+		"skip: the same login as an earlier one, for another address on the site",
+		"password/bücher.example:8443/a",
+		"password/bücher.example/b",
+		"password/xn--pple-43d.com/a",
+		"password/xn--4gbrim.xn----ymcbaaajlc6dj7bxne2c.xn--wgbh1c/a",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

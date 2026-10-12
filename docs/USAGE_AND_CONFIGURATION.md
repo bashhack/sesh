@@ -1232,8 +1232,8 @@ sesh import --from chrome "Chrome Passwords.csv"
 sesh import --from firefox passwords.csv
 ```
 
-- **Each login** becomes a password entry named for its site, without a leading `www.` (`github.com`, `accounts.google.com`, `example.com:8443`), with the full address as its URL. A site with a non-Latin name is named as Chrome shows it (`bücher.example`, not `xn--bcher-kva.example`), except one written right to left, which keeps the `xn--` form, as in Chrome. An app's login in Chrome (`android://…`) is named as Chrome names the app.
-- **Two logins for one site and username** get ` (2)` added to the second. Chrome writes a login once for each address it was saved on; a row with the same site, username and password as an earlier one is skipped, and listed.
+- **Each login** becomes a password entry named for its site, without a leading `www.` (`github.com`, `accounts.google.com`, `example.com:8443`), with the full address as its URL. A site with a non-Latin name from Chrome is named in its letters (`bücher.example`) only where Chrome's export names it so: Chrome keeps the `xn--` form for names that could pass for another site (`xn--pple-43d.com`, with a Cyrillic а) and for right-to-left ones, and so does sesh. Firefox's export doesn't say how Firefox shows a name, so its non-Latin names keep the `xn--` form. An app's login in Chrome (`android://…`) is named as Chrome names the app.
+- **Two logins for one site and username** get ` (2)` added to the second. Chrome writes a login once for each address it was saved on; in its export, a row with the same site, username and password as an earlier one is skipped, and listed.
 - **Firefox's own sign-in to your Mozilla account,** which its export includes though its password manager doesn't show it, is skipped.
 - **Chrome's notes** come across; Firefox's export has none. Firefox's times (made and last changed) come across, and an HTTP-authentication login keeps its realm in a field `http-realm`.
 - **No folder or tag** is given; file them afterwards with `sesh folder` and `sesh tag`.
