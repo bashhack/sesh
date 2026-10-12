@@ -145,7 +145,7 @@ func TestDoctor_Trash(t *testing.T) {
 	}
 	sqlExec(t, env.dbPath, `UPDATE trash SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'`)
 	out, err = runDoctorOut(t)
-	if !errors.Is(err, errReported) || !strings.Contains(out, "1 of 1 entry can't be read") || !strings.Contains(out, "password/a: secret doesn't decrypt") ||
+	if !errors.Is(err, errReported) || !strings.Contains(out, "1 of 1 entry has a problem") || !strings.Contains(out, "password/a: secret doesn't decrypt") ||
 		!strings.Contains(out, "sesh trash remove ") {
 		t.Errorf("%v\n%s", err, out)
 	}

@@ -619,7 +619,7 @@ func checkTrash(c *doctorChecks, r *database.VerifyReport) {
 			}
 		}
 		c.fails += len(r.TrashProblems) - 1
-		c.row(markFail, "Trash", fmt.Sprintf("%d of %s can't be read", len(r.TrashProblems), entryCount(r.Trashed)), details...)
+		c.row(markFail, "Trash", fmt.Sprintf("%d of %s %s a problem", len(r.TrashProblems), entryCount(r.Trashed), map[bool]string{true: "has", false: "have"}[len(r.TrashProblems) == 1]), details...)
 		if len(gone) > 0 {
 			c.todo("Delete them for good, as they can't be restored:", "sesh trash remove "+strings.Join(gone, " "))
 		}
