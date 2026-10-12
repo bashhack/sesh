@@ -49,7 +49,7 @@ func TestTrash_DeleteAndRestore(t *testing.T) {
 		t.Fatalf("Trash = %+v, %v", trashed, err)
 	}
 	got, err := s.RestoreFromTrash(trashed[0].ID, vault.Key{})
-	if err != nil || got != k {
+	if err != nil || got.Key != k || got.TagsLost {
 		t.Fatalf("restore = %v, %v", got, err)
 	}
 	after, err := s.Lookup(k)
@@ -92,7 +92,7 @@ func TestTrash_RestoreClashAndAs(t *testing.T) {
 		t.Errorf("--as a name in use: %v", err)
 	}
 	as := vault.Key{Kind: vault.KindPassword, Service: "github-old", Username: "alice"}
-	if got, err := s.RestoreFromTrash(id, as); err != nil || got != as {
+	if got, err := s.RestoreFromTrash(id, as); err != nil || got.Key != as {
 		t.Fatalf("restore --as = %v, %v", got, err)
 	}
 	if secret, err := s.Get(as); err != nil || string(secret) != "gh-pw" {
@@ -353,5 +353,28 @@ func TestTrash_RekeyNamesDamagedTrash(t *testing.T) {
 	_, err := s.Rekey(key, rec, rewrapTo)
 	if err == nil || !strings.Contains(err.Error(), "decrypt password/bank") || !strings.Contains(err.Error(), "it's in the trash, id 1: sesh trash remove 1 deletes it for good") {
 		t.Errorf("Rekey = %v", err)
+	}
+}
+
+// An entry whose tags were damaged in the trash restores without them, and
+// says so.
+func TestTrash_RestoreWithDamagedTags(t *testing.T) {
+	s, k := trashVault(t)
+	if err := s.Delete(k); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE trash SET tags = 'nope'`); err != nil {
+		t.Fatal(err)
+	}
+	trashed, err := s.Trash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.RestoreFromTrash(trashed[0].ID, vault.Key{})
+	if err != nil || got.Key != k || !got.TagsLost {
+		t.Fatalf("restore = %+v, %v", got, err)
+	}
+	if e, err := s.Lookup(k); err != nil || len(e.Tags) != 0 || e.Folder != "work" {
+		t.Errorf("restored = %+v, %v", e, err)
 	}
 }

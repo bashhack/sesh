@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -95,11 +96,14 @@ func listTrash(app *App) error {
 	fmt.Fprintln(w, "ID\tENTRY\tFOLDER\tDELETED\tGOES FOR GOOD") //nolint:errcheck // flushed below
 	for i := range trashed {
 		t := &trashed[i]
-		goes := "when emptied"
-		if days > 0 {
-			goes = t.DeletedAt.AddDate(0, 0, days).Local().Format("2006-01-02")
+		deleted, goes := "?", "unknown" // when it was deleted doesn't read
+		if !t.DeletedAt.IsZero() {
+			deleted, goes = t.DeletedAt.Local().Format("2006-01-02 15:04"), "when emptied"
+			if days > 0 {
+				goes = t.DeletedAt.AddDate(0, 0, days).Local().Format("2006-01-02")
+			}
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", t.ID, t.Key, t.Folder, t.DeletedAt.Local().Format("2006-01-02 15:04"), goes) //nolint:errcheck // flushed below
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", t.ID, t.Key, t.Folder, deleted, goes) //nolint:errcheck // flushed below
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -152,7 +156,11 @@ func restoreFromTrash(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(app.Stdout, "✅ Restored %s from the trash.\n", got)
+	msg := fmt.Sprintf("✅ Restored %s from the trash.\n", got.Key)
+	if got.TagsLost {
+		msg += "Its tags were damaged in the trash, so it came back without them.\n"
+	}
+	_, err = io.WriteString(app.Stdout, msg)
 	return err
 }
 

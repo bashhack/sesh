@@ -150,3 +150,26 @@ func TestDoctor_Trash(t *testing.T) {
 		t.Errorf("%v\n%s", err, out)
 	}
 }
+
+// A trash entry with damaged tags is shown by doctor with restoring as the
+// fix, not deleting; one whose deletion time doesn't read lists with "?".
+func TestTrash_DamagedRowAdvice(t *testing.T) {
+	env := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_MASTER_PASSWORD", "filing-password-1234")
+	populatePasswordStore(t, env, map[string]string{"password/a": "a", "password/b": "b"})
+	trashDelete(t, false, "password/a", "password/b")
+	sqlExec(t, env.dbPath, `UPDATE trash SET tags = 'nope' WHERE service = 'a'`)
+	sqlExec(t, env.dbPath, `UPDATE trash SET deleted_at = 'garbage' WHERE service = 'b'`)
+	out, err := runDoctorOut(t)
+	if !errors.Is(err, errReported) || !strings.Contains(out, "password/a: tags don't read") || !strings.Contains(out, "it comes back without its tags") ||
+		!strings.Contains(out, "sesh trash restore ") || !strings.Contains(out, "password/b: times don't read") || !strings.Contains(out, "sesh trash remove ") {
+		t.Errorf("%v\n%s", err, out)
+	}
+	list := mustRun(t, runTrash)
+	for line := range strings.SplitSeq(list, "\n") {
+		if strings.Contains(line, "password/b") && !strings.Contains(line, "?") || strings.Contains(line, "password/b") && !strings.Contains(line, "unknown") {
+			t.Errorf("a row with no deletion time: %q", line)
+		}
+	}
+}

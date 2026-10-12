@@ -264,7 +264,9 @@ func sealedEntries(q interface {
 func (s *Store) reseal(q querier, e *sealedEntry, newKey []byte) (err error) {
 	if e.trashID != 0 {
 		defer func() {
-			if err != nil {
+			// Not when the master password changed meanwhile: then the
+			// entry is fine, and the advice is to run it again.
+			if err != nil && !errors.Is(err, ErrVaultKeyChanged) {
 				err = fmt.Errorf("%w (it's in the trash, id %d: sesh trash remove %d deletes it for good)", err, e.trashID, e.trashID)
 			}
 		}()

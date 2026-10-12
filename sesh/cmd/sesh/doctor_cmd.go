@@ -607,14 +607,25 @@ func checkTrash(c *doctorChecks, r *database.VerifyReport) {
 	case len(r.TrashProblems) == 0:
 		c.row(markOK, "Trash", entryCount(r.Trashed)+", all readable")
 	default:
-		var details, ids []string
+		// Only damaged tags still restore, without them; the rest can't.
+		var details, gone, untagged []string
 		for _, p := range r.TrashProblems {
 			details = append(details, fmt.Sprintf("trash id %d, %s: %s", p.TrashID, p.Key, problemText(p.Kind)))
-			ids = append(ids, strconv.FormatInt(p.TrashID, 10))
+			id := strconv.FormatInt(p.TrashID, 10)
+			if p.Kind == database.ProblemTags {
+				untagged = append(untagged, id)
+			} else {
+				gone = append(gone, id)
+			}
 		}
 		c.fails += len(r.TrashProblems) - 1
 		c.row(markFail, "Trash", fmt.Sprintf("%d of %s can't be read", len(r.TrashProblems), entryCount(r.Trashed)), details...)
-		c.todo("Delete them for good, as they can't be restored:", "sesh trash remove "+strings.Join(ids, " "))
+		if len(gone) > 0 {
+			c.todo("Delete them for good, as they can't be restored:", "sesh trash remove "+strings.Join(gone, " "))
+		}
+		for _, id := range untagged {
+			c.todo("Restore it, if you want it back; it comes back without its tags:", "sesh trash restore "+id)
+		}
 	}
 }
 

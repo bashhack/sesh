@@ -88,6 +88,13 @@ func (s *Store) Trash() (_ []TrashedEntry, err error) {
 	return out, rows.Err()
 }
 
+// Restored is an entry put back from the trash: its name, and whether its
+// tags were damaged, so it came back without them.
+type Restored struct {
+	Key      vault.Key
+	TagsLost bool
+}
+
 // RestoreFromTrash puts the trash's entry id back, under as when it isn't
 // the zero Key (its secret and details sealed again for that name), and
 // returns the name it has. A name another entry has is refused with
@@ -95,7 +102,7 @@ func (s *Store) Trash() (_ []TrashedEntry, err error) {
 // before the write, as Edit's does, and the write checks the entry in the
 // trash is as it was read (ErrEntryChanged, if a new master password
 // sealed it again meanwhile).
-func (s *Store) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
+func (s *Store) RestoreFromTrash(id int64, as vault.Key) (Restored, error) {
 	type sealedRow struct{ data, salt, sealed, detailsSalt []byte }
 	read := func(q querier) (e vault.Entry, r sealedRow, settings sql.NullString, url, details, tags string, err error) {
 		var kind string
@@ -112,26 +119,27 @@ func (s *Store) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
 	}
 	e, was, _, _, _, _, err := read(s.db)
 	if err != nil {
-		return vault.Key{}, err
+		return Restored{}, err
 	}
 	to := e.Key
 	if as != (vault.Key{}) {
 		if as.Kind != e.Kind {
-			return vault.Key{}, fmt.Errorf("%s is a %s entry; restore it under another %s name", e.Key, e.Kind, e.Kind)
+			return Restored{}, fmt.Errorf("%s is a %s entry; restore it under another %s name", e.Key, e.Kind, e.Kind)
 		}
 		if err := as.Validate(); err != nil {
-			return vault.Key{}, err
+			return Restored{}, err
 		}
 		to = as
 	}
 	now := was
+	tagsLost := false
 	if to != e.Key {
 		if now.data, now.salt, err = s.resealSecret(e.Key, to, was.data, was.salt, nil); err != nil {
-			return vault.Key{}, err
+			return Restored{}, err
 		}
 		if was.sealed != nil {
 			if now.sealed, now.detailsSalt, err = s.resealDetails(e.Key, to, was.sealed, was.detailsSalt); err != nil {
-				return vault.Key{}, err
+				return Restored{}, err
 			}
 		}
 	}
@@ -164,7 +172,7 @@ func (s *Store) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
 		}
 		var tagList []string
 		if json.Unmarshal([]byte(tags), &tagList) != nil {
-			tagList = nil // damaged tags; the entry comes back without them
+			tagList, tagsLost = nil, true // damaged; it comes back without them
 		}
 		for _, t := range tagList {
 			if _, err := tx.Exec(`INSERT INTO entry_tags (entry_id, tag) VALUES (?, ?)`, newID, t); err != nil {
@@ -175,10 +183,10 @@ func (s *Store) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
 		return err
 	})
 	if err != nil {
-		return vault.Key{}, err
+		return Restored{}, err
 	}
 	s.audit("restore", to.String(), "Restored from the trash")
-	return to, nil
+	return Restored{Key: to, TagsLost: tagsLost}, nil
 }
 
 // RemoveFromTrash deletes the trash's entries ids for good, all or none:
