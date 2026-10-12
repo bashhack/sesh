@@ -1224,7 +1224,7 @@ sesh import --from keepass Passwords.xml
 - **The export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
 
 **Chrome and Firefox.** Export your saved passwords as CSV:
-- **Chrome:** Password Manager (chrome://password-manager/settings), Export passwords. Other browsers built on Chromium that write the same columns (`name,url,username,password,note`) are read the same way.
+- **Chrome:** Password Manager (chrome://password-manager/settings), Export passwords. Other browsers built on Chromium that write the same columns (`name,url,username,password,note`, or before Chrome 123 without `note`) are read the same way.
 - **Firefox:** Passwords (about:logins), the ⋯ menu, Export Passwords.
 
 ```
@@ -1232,8 +1232,9 @@ sesh import --from chrome "Chrome Passwords.csv"
 sesh import --from firefox passwords.csv
 ```
 
-- **Each login** becomes a password entry named for its site, without a leading `www.` (`github.com`, `accounts.google.com`, `example.com:8443`), with the full address as its URL. An app's login in Chrome (`android://…`) is named as Chrome names the app.
-- **Two logins for one site and username** get ` (2)` added to the second.
+- **Each login** becomes a password entry named for its site, without a leading `www.` (`github.com`, `accounts.google.com`, `example.com:8443`), with the full address as its URL. A site with a non-Latin name is named as Chrome shows it (`bücher.example`, not `xn--bcher-kva.example`), except one written right to left, which keeps the `xn--` form, as in Chrome. An app's login in Chrome (`android://…`) is named as Chrome names the app.
+- **Two logins for one site and username** get ` (2)` added to the second. Chrome writes a login once for each address it was saved on; a row with the same site, username and password as an earlier one is skipped, and listed.
+- **Firefox's own sign-in to your Mozilla account,** which its export includes though its password manager doesn't show it, is skipped.
 - **Chrome's notes** come across; Firefox's export has none. Firefox's times (made and last changed) come across, and an HTTP-authentication login keeps its realm in a field `http-realm`.
 - **No folder or tag** is given; file them afterwards with `sesh folder` and `sesh tag`.
 - **A login with no password** is skipped, and listed.

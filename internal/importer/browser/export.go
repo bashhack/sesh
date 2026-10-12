@@ -46,9 +46,12 @@ type Export struct {
 }
 
 // The columns each browser writes, in order, as its header names them.
+// Chrome wrote no note column before 123, when the notes feature flag
+// went (password_csv_writer.cc, chromium 172cae75).
 var (
-	chromeColumns  = []string{"name", "url", "username", "password", "note"}
-	firefoxColumns = []string{"url", "username", "password", "httpRealm", "formActionOrigin", "guid", "timeCreated", "timeLastUsed", "timePasswordChanged"}
+	chromeColumns    = []string{"name", "url", "username", "password", "note"}
+	oldChromeColumns = chromeColumns[:4]
+	firefoxColumns   = []string{"url", "username", "password", "httpRealm", "formActionOrigin", "guid", "timeCreated", "timeLastUsed", "timePasswordChanged"}
 )
 
 // Detect is the browser whose export b is, by its header, or "".
@@ -57,7 +60,7 @@ func Detect(b []byte) string {
 	switch {
 	case err != nil:
 		return ""
-	case slices.Equal(header, chromeColumns):
+	case slices.Equal(header, chromeColumns), slices.Equal(header, oldChromeColumns):
 		return Chrome
 	case slices.Equal(header, firefoxColumns):
 		return Firefox
@@ -65,7 +68,8 @@ func Detect(b []byte) string {
 	return ""
 }
 
-// Parse reads a browser's password export.
+// Parse reads a browser's password export. A line break inside a quoted
+// value is read as "\n", whether the file has "\n" or "\r\n" there.
 func Parse(b []byte) (Export, error) {
 	which := Detect(b)
 	if which == "" {
@@ -74,7 +78,7 @@ func Parse(b []byte) (Export, error) {
 	r := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(b, []byte("\ufeff"))))
 	r.FieldsPerRecord = -1
 	exp := Export{Browser: which}
-	line := 0
+	line, columns := 0, 0
 	for {
 		rec, err := r.Read()
 		if errors.Is(err, io.EOF) {
@@ -85,15 +89,19 @@ func Parse(b []byte) (Export, error) {
 		}
 		line++
 		if line == 1 {
-			continue // the header
+			columns = len(rec) // the header
+			continue
 		}
 		var l Login
 		switch which {
 		case Chrome:
-			if len(rec) != len(chromeColumns) {
-				return Export{}, fmt.Errorf("this Chrome export is damaged: login %d has %d columns, not %d", line-1, len(rec), len(chromeColumns))
+			if len(rec) != columns {
+				return Export{}, fmt.Errorf("this Chrome export is damaged: login %d has %d columns, not %d", line-1, len(rec), columns)
 			}
-			l = Login{Name: rec[0], URL: rec[1], Username: rec[2], Password: rec[3], Note: rec[4]}
+			l = Login{Name: rec[0], URL: rec[1], Username: rec[2], Password: rec[3]}
+			if columns == len(chromeColumns) {
+				l.Note = rec[4]
+			}
 		case Firefox:
 			if len(rec) != len(firefoxColumns) {
 				return Export{}, fmt.Errorf("this Firefox export is damaged: login %d has %d columns, not %d", line-1, len(rec), len(firefoxColumns))

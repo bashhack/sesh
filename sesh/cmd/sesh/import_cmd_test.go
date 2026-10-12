@@ -561,3 +561,17 @@ func TestImport_Browsers(t *testing.T) {
 		t.Errorf("bob = %q, %v", secret, err)
 	}
 }
+
+// Firefox's times come across: made, and the password last changed.
+func TestImport_FirefoxTimes(t *testing.T) {
+	env := importVault(t)
+	if _, _, err := runImportOut(t, "", false, "--yes", "--from", "firefox", browserFixture("firefox.csv")); err != nil {
+		t.Fatal(err)
+	}
+	store := openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	e, err := store.Lookup(vault.Key{Kind: vault.KindPassword, Service: "github.com", Username: "alice"})
+	if err != nil || !e.CreatedAt.Equal(time.UnixMilli(1791686628223)) || !e.UpdatedAt.Equal(time.UnixMilli(1791686730455)) {
+		t.Errorf("github.com/alice = %+v, %v", e, err)
+	}
+}

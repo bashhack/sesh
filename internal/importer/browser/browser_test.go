@@ -88,3 +88,60 @@ func TestEntries(t *testing.T) {
 		t.Errorf("entries = %v, %v, %v, skip %q", got[1].Key, got[2].Key, got[3].Key, got[3].Skip)
 	}
 }
+
+// Chrome's header before it had notes is read too, as is a file starting
+// with a byte-order mark.
+func TestParse_OldChromeAndBOM(t *testing.T) {
+	old, err := Parse([]byte("name,url,username,password\ngithub.com,https://github.com/,alice,pw\n"))
+	if err != nil || old.Browser != Chrome || len(old.Logins) != 1 || old.Logins[0].Password != "pw" || old.Logins[0].Note != "" {
+		t.Errorf("four columns: %+v, %v", old, err)
+	}
+	bom, err := Parse(append([]byte("\ufeff"), read(t, "firefox.csv")...))
+	if err != nil || bom.Browser != Firefox || len(bom.Logins) != 5 {
+		t.Errorf("BOM: %+v, %v", bom, err)
+	}
+}
+
+// Names for addresses that aren't plain web ones, repeats of one login,
+// Firefox's own account, and a realm.
+func TestEntries_Naming(t *testing.T) {
+	exp := Export{Browser: Firefox, Logins: []Login{
+		{URL: "https://example.com", Username: "a", Password: "1"},
+		{URL: "http://www.example.com", Username: "a", Password: "1"},
+		{URL: "https://example.com", Username: "a", Password: "2"},
+		{URL: "https://xn--bcher-kva.example:8443", Username: "a", Password: "1"},
+		{URL: "https://xn--4gbrim.xn----ymcbaaajlc6dj7bxne2c.xn--wgbh1c", Username: "a", Password: "1"},
+		{URL: "https://[::1]:8443", Username: "a", Password: "1"},
+		{URL: "moz-proxy://127.0.0.1:8888", Username: "a", Password: "1", Realm: "proxy"},
+		{URL: "ftp://ftp.site.com", Username: "a", Password: "1"},
+		{URL: "android://hash@com.example.app/", Username: "a", Password: "1"},
+		{URL: "chrome://FirefoxAccounts", Username: "uid", Password: `{"scopedKeys":{}}`, Realm: "Firefox Accounts credentials"},
+	}}
+	var got []string
+	for _, e := range Entries(&exp) {
+		if e.Skip != "" {
+			got = append(got, "skip: "+e.Skip)
+			continue
+		}
+		s := e.Key.String()
+		for _, f := range e.Details.Fields {
+			s += " " + f.Name + "=" + string(f.Value)
+		}
+		got = append(got, s)
+	}
+	want := []string{
+		"password/example.com/a",
+		"skip: the same login as an earlier one, for another address on the site",
+		"password/example.com (2)/a",
+		"password/bücher.example:8443/a",
+		"password/xn--4gbrim.xn----ymcbaaajlc6dj7bxne2c.xn--wgbh1c/a",
+		"password/[::1]:8443/a",
+		"password/127.0.0.1:8888/a http-realm=proxy",
+		"password/ftp.site.com/a",
+		"password/app.example.com/a",
+		"skip: Firefox's own sign-in to your Mozilla account",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}

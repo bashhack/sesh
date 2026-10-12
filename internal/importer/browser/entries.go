@@ -3,19 +3,32 @@ package browser
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
+
+	"golang.org/x/net/idna"
+	"golang.org/x/text/unicode/bidi"
 
 	"github.com/bashhack/sesh/internal/importer"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
+// firefoxAccount is the address of Firefox's own sign-in to the user's
+// Mozilla account (FxAccountsCommon.sys.mjs FXA_PWDMGR_HOST), which its
+// export includes though its password manager hides it
+// (LoginHelper.sys.mjs isUserFacingLogin).
+const firefoxAccount = "chrome://FirefoxAccounts"
+
 // Entries is the password entries an export's logins become, in order.
-// Each is named for its site, without a leading "www." (port kept), with
-// the address as its URL; an app's login (Chrome's android://…) is named
-// as Chrome names it. Two of one name and username get " (2)", and a
-// login with no password is skipped.
+// Each is named for its site (see siteName), with the address as its URL.
+// Two of one name and username get " (2)", unless the password is the
+// same too: Chrome writes a row for each address of one login, and the
+// repeats are skipped. A login with no password is skipped, as is
+// Firefox's sign-in to the Mozilla account.
 func Entries(exp *Export) []*importer.Entry {
 	names := importer.NewNames()
+	type login struct{ site, user, password string }
+	seen := map[login]bool{}
 	var out []*importer.Entry
 	for i := range exp.Logins {
 		l := &exp.Logins[i]
@@ -24,15 +37,20 @@ func Entries(exp *Export) []*importer.Entry {
 		service := importer.FitName(site)
 		user := importer.FitName(l.Username)
 		switch {
+		case l.URL == firefoxAccount:
+			e.Skip = "Firefox's own sign-in to your Mozilla account"
 		case service == "":
 			e.Skip = "it has no site"
 		case l.Password == "":
 			e.Skip = "it has no password"
+		case seen[login{site, l.Username, l.Password}]:
+			e.Skip = "the same login as an earlier one, for another address on the site"
 		}
 		if e.Skip != "" {
 			out = append(out, e)
 			continue
 		}
+		seen[login{site, l.Username, l.Password}] = true
 		if service != site {
 			e.Changes = append(e.Changes, fmt.Sprintf("named %q in sesh", service))
 		}
@@ -54,15 +72,49 @@ func Entries(exp *Export) []*importer.Entry {
 	return out
 }
 
-// siteName is what a login is named for: its web address's host, without
-// a leading "www.", or for anything else Chrome's name for it, or the
-// address itself.
+// siteName is what a login is named for:
+//   - an Android app's (Chrome's android://hash@package/) as Chrome names
+//     it, or, where it gave no name, as Chrome would: the package reversed
+//     (affiliation_utils.cc GetAndroidPackageDisplayName);
+//   - an address with a host, the host without a leading "www.", in
+//     Unicode as Chrome shows it (elide_url.cc HostForDisplay: punycode
+//     kept when the Unicode has a right-to-left letter);
+//   - anything else, Chrome's name for it, or the address itself.
 func siteName(l *Login) string {
-	if u, err := url.Parse(l.URL); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+	u, err := url.Parse(l.URL)
+	if err != nil {
+		return l.URL
+	}
+	if u.Scheme == "android" {
+		if l.Name != "" {
+			return l.Name
+		}
+		parts := strings.Split(u.Hostname(), ".")
+		slices.Reverse(parts)
+		return strings.Join(parts, ".")
+	}
+	if u.Host == "" {
+		if l.Name != "" {
+			return l.Name
+		}
+		return l.URL
+	}
+	host := strings.TrimPrefix(u.Hostname(), "www.")
+	if strings.Contains(host, ":") { // an IPv6 address, kept as written
 		return strings.TrimPrefix(u.Host, "www.")
 	}
-	if l.Name != "" {
-		return l.Name
+	if shown, err := idna.ToUnicode(host); err == nil && !strings.ContainsFunc(shown, rightToLeft) {
+		host = shown
 	}
-	return l.URL
+	if port := u.Port(); port != "" {
+		host += ":" + port
+	}
+	return host
+}
+
+// rightToLeft reports whether r is a strong right-to-left letter, as
+// Chrome's StringContainsStrongRTLChars counts them.
+func rightToLeft(r rune) bool {
+	p, _ := bidi.LookupRune(r)
+	return p.Class() == bidi.R || p.Class() == bidi.AL
 }
