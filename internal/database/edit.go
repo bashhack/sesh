@@ -123,6 +123,18 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	if len(what) == 0 {
 		return "", ErrNothingToChange
 	}
+	// The secret a new one replaces goes into the history, and a renamed
+	// entry's history goes with it, sealed for its new name.
+	old, err := s.replacing(k, to, data, salt, e.Secret)
+	if err != nil {
+		return "", err
+	}
+	var moved []resealedHistory
+	if to != k {
+		if moved, err = s.resealHistory(k, to, 0); err != nil {
+			return "", err
+		}
+	}
 
 	detail := strings.Join(what, " and ")
 	err = s.inTx(func(tx *sql.Tx) error {
@@ -138,6 +150,14 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 		}
 		if to != k {
 			if err := s.nameFree(tx, to, id); err != nil {
+				return err
+			}
+			if err := moveHistory(tx, moved, to); err != nil {
+				return err
+			}
+		}
+		if old != nil {
+			if err := s.keepOld(tx, to, old, time.Now().UTC()); err != nil {
 				return err
 			}
 		}

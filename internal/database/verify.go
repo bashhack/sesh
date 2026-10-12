@@ -39,6 +39,9 @@ type EntryProblem struct {
 	Kind ProblemKind
 	// TrashID is the entry's id in the trash, 0 for one that isn't.
 	TrashID int64
+	// Version is, for an earlier secret of a live entry's, its version
+	// number (2 and up, as sesh history numbers them); 0 otherwise.
+	Version int
 }
 
 // VerifyReport is what Verify found, all from one consistent view of the
@@ -58,9 +61,12 @@ type VerifyReport struct {
 	Problems []EntryProblem
 	// TrashProblems are those of the entries in the trash.
 	TrashProblems []EntryProblem
+	// HistoryProblems are the entries' earlier secrets that can't be read:
+	// of a live entry (with its Version) or one in the trash (TrashID).
+	HistoryProblems []EntryProblem
 	// Entries is how many entries the vault holds; Trashed, how many are
-	// in the trash.
-	Entries, Trashed int
+	// in the trash; History, how many earlier secrets they keep.
+	Entries, Trashed, History int
 }
 
 // Verify checks the vault without writing to it, from one read-only view of
@@ -104,6 +110,9 @@ func (s *Store) Verify() (VerifyReport, error) {
 		return r, err
 	}
 	if r.Trashed, r.TrashProblems, err = s.verifyTable(tx, "trash"); err != nil {
+		return r, err
+	}
+	if r.History, r.HistoryProblems, err = s.verifyHistory(tx); err != nil {
 		return r, err
 	}
 	return r, nil
@@ -280,4 +289,68 @@ func (s *Store) LogImport(detail string) {
 // with its result as detail.
 func (s *Store) LogDoctor(detail string) {
 	s.audit("doctor", "", detail)
+}
+
+// verifyHistory checks every earlier secret through tx: how many there are,
+// and those that don't decrypt or whose time doesn't read.
+func (s *Store) verifyHistory(tx *sql.Tx) (int, []EntryProblem, error) {
+	type old struct {
+		replacedAt any
+		k          vault.Key
+		data, salt []byte
+		trashID    sql.NullInt64
+	}
+	rows, err := tx.Query(`SELECT kind, service, username, trash_id, encrypted_data, salt, replaced_at FROM history NOT INDEXED
+		ORDER BY kind, service, username, trash_id IS NOT NULL, trash_id, replaced_at DESC, id DESC`)
+	if err != nil {
+		return 0, nil, fmt.Errorf("read the history: %w", err)
+	}
+	var all []old
+	for rows.Next() {
+		var o old
+		var kind string
+		if err := rows.Scan(&kind, &o.k.Service, &o.k.Username, &o.trashID, &o.data, &o.salt, &o.replacedAt); err != nil {
+			_ = rows.Close() //nolint:errcheck // already failing
+			return 0, nil, fmt.Errorf("read the history: %w", err)
+		}
+		o.k.Kind = vault.Kind(kind)
+		all = append(all, o)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, nil, fmt.Errorf("read the history: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, nil, fmt.Errorf("read the history: %w", err)
+	}
+	var problems []EntryProblem
+	version := 1
+	for i := range all {
+		o := &all[i]
+		// Versions count from 2 for each live entry, the newest first.
+		if i == 0 || all[i-1].k != o.k || all[i-1].trashID != o.trashID {
+			version = 1
+		}
+		version++
+		p := EntryProblem{Key: o.k}
+		if o.trashID.Valid {
+			p.TrashID = o.trashID.Int64
+		} else {
+			p.Version = version
+		}
+		plain, err := s.oracle.DecryptEntry(o.data, o.salt, historyAAD(o.k))
+		secure.SecureZeroBytes(plain)
+		switch {
+		case errors.Is(err, ErrDecrypt):
+			p.Kind, p.Err = ProblemSecret, fmt.Errorf("an earlier secret doesn't decrypt with the vault's key: %w", err)
+			problems = append(problems, p)
+			continue
+		case err != nil:
+			return 0, nil, fmt.Errorf("couldn't finish checking the history of %s: %w", o.k, err)
+		}
+		if _, ok := o.replacedAt.(time.Time); !ok {
+			p.Kind, p.Err = ProblemTimes, fmt.Errorf("when an earlier secret was replaced doesn't read: %v", o.replacedAt)
+			problems = append(problems, p)
+		}
+	}
+	return len(all), problems, nil
 }

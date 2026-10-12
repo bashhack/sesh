@@ -95,7 +95,7 @@ func inspect(path, what string) (_ BackupSummary, err error) {
 // restoredTables are the tables a restore takes from the backup: all but
 // the audit log, which keeps what happened, and the schema version, which
 // is the same.
-var restoredTables = []string{"vault_info", "vault_key", "recovery", "entries", "entry_tags", "trash"}
+var restoredTables = []string{"vault_info", "vault_key", "recovery", "entries", "entry_tags", "trash", "history"}
 
 // RestoreInPlace replaces the sound vault at dbPath with the backup at
 // backupPath, which InspectBackup has passed, in one transaction: every

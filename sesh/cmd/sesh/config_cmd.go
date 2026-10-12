@@ -59,6 +59,7 @@ func writeConfig(w io.Writer, cfg *config.Config) error {
 		keepDays = "0 (no trash: deleting is for good)"
 	}
 	line("trash.keep_days", keepDays, sourceOf(cfg.TrashKeepDays.Source, cfg.TrashKeepDays.Origin))
+	line("history.keep", strconv.Itoa(cfg.HistoryKeep.Value), sourceOf(cfg.HistoryKeep.Source, cfg.HistoryKeep.Origin))
 	// Paths are usually longer than the value column.
 	fmt.Fprintf(&b, "%-25s%s\n%-25s(%s)\n", "db_path", cfg.DBPath.Value, "", sourceOf(cfg.DBPath.Source, cfg.DBPath.Origin))
 	backupSource := sourceOf(cfg.BackupDir.Source, cfg.BackupDir.Origin)

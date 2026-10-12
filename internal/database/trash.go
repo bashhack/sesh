@@ -35,14 +35,31 @@ func (s *Store) SetTrashDays(days int) { s.trashDays = days }
 // TrashDays is how many days a deleted entry stays in the trash.
 func (s *Store) TrashDays() int { return s.trashDays }
 
-// trash moves the entry in row id into the trash, in tx, its tags with it.
-func trash(tx *sql.Tx, id int64, at time.Time) error {
-	if _, err := tx.Exec(`
+// trash moves the entry k, in row id, into the trash, in tx: its tags and
+// history with it.
+func trash(tx *sql.Tx, id int64, k vault.Key, at time.Time) error {
+	var trashID int64
+	if err := tx.QueryRow(`
 		INSERT INTO trash (kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, tags, created_at, updated_at, deleted_at)
 		SELECT kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt,
 			(SELECT COALESCE(json_group_array(tag), '[]') FROM (SELECT tag FROM entry_tags WHERE entry_id = e.id ORDER BY tag)),
 			created_at, updated_at, ?
-		FROM entries e WHERE id = ?`, at, id); err != nil {
+		FROM entries e WHERE id = ? RETURNING id`, at, id).Scan(&trashID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE history SET trash_id = ? WHERE kind = ? AND service = ? AND username = ? AND trash_id IS NULL`,
+		trashID, string(k.Kind), k.Service, k.Username); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`DELETE FROM entries WHERE id = ?`, id)
+	return err
+}
+
+// forget deletes the entry k, in row id, for good, in tx: its history with
+// it.
+func forget(tx *sql.Tx, id int64, k vault.Key) error {
+	if _, err := tx.Exec(`DELETE FROM history WHERE kind = ? AND service = ? AND username = ? AND trash_id IS NULL`,
+		string(k.Kind), k.Service, k.Username); err != nil {
 		return err
 	}
 	_, err := tx.Exec(`DELETE FROM entries WHERE id = ?`, id)
@@ -133,7 +150,11 @@ func (s *Store) RestoreFromTrash(id int64, as vault.Key) (Restored, error) {
 	}
 	now := was
 	tagsLost := false
+	var history []resealedHistory
 	if to != e.Key {
+		if history, err = s.resealHistory(e.Key, to, id); err != nil {
+			return Restored{}, err
+		}
 		if now.data, now.salt, err = s.resealSecret(e.Key, to, was.data, was.salt, nil); err != nil {
 			return Restored{}, err
 		}
@@ -178,6 +199,15 @@ func (s *Store) RestoreFromTrash(id int64, as vault.Key) (Restored, error) {
 			if _, err := tx.Exec(`INSERT INTO entry_tags (entry_id, tag) VALUES (?, ?)`, newID, t); err != nil {
 				return fmt.Errorf("restore the tags of %s: %w", to, err)
 			}
+		}
+		// Its history comes back with it, sealed for its new name if it
+		// has one.
+		if to != e.Key {
+			if err := moveHistory(tx, history, to); err != nil {
+				return err
+			}
+		} else if _, err := tx.Exec(`UPDATE history SET trash_id = NULL WHERE trash_id = ?`, id); err != nil {
+			return fmt.Errorf("restore the history of %s: %w", to, err)
 		}
 		_, err = tx.Exec(`DELETE FROM trash WHERE id = ?`, id)
 		return err

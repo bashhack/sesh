@@ -202,6 +202,7 @@ master_password.threads  4             (default)
 backup.every_days        1 day         (default)
 backup.keep              7             (default)
 trash.keep_days          30 days       (default)
+history.keep             10            (default)
 db_path                  /Users/me/vaults/sesh.db
                          (config file)
 backup.dir               /Users/me/vaults/backups
@@ -289,6 +290,7 @@ backup.dir               /Users/me/vaults/backups
 | `SESH_BACKUP_KEEP` | How many backups to keep, 1 to 1000 (config: `backup.keep`) | `7` |
 | `SESH_BACKUP_DIR` | Where backups go (config: `backup.dir`) | a `backups` folder next to the vault |
 | `SESH_TRASH_KEEP_DAYS` | Days a deleted entry stays in the trash; `0` keeps none, so deleting is for good (config: `trash.keep_days`) | `30` |
+| `SESH_HISTORY_KEEP` | How many earlier secrets each entry keeps, 0 to 1000 (config: `history.keep`) | `10` |
 | `SESH_KDF_MEMORY` | Memory for each master password check, such as `256MiB` (config: `master_password.memory`) | `256MiB` |
 | `SESH_KDF_TIME` | Passes over that memory (config: `master_password.time`) | `3` |
 | `SESH_KDF_THREADS` | Threads (config: `master_password.threads`) | `4` |
@@ -509,7 +511,7 @@ There is nothing installed to remove. `sesh agent stop` shuts it down, and the n
 
 ### The audit log
 
-The vault records every read, store, and delete of an entry: when it happened, what kind of event it was, and which entry, named the way `--list` names it. For an entry: `access` (read), `modify` (stored or changed), `trash` (moved to the trash), `restore` (put back from the trash), `purge` (deleted for good from the trash, by hand or after its days), and `delete` (deleted for good straight away, with `--purge` or when there's no trash). A few events are about the vault rather than an entry: `rekey` (the master password changed), `restore` (the whole vault restored from a backup), `import` (an import, with how many came from where), and `doctor` (a `sesh doctor` check, with its result). It never records the secret itself.
+The vault records every read, store, and delete of an entry: when it happened, what kind of event it was, and which entry, named the way `--list` names it. For an entry: `access` (read), `modify` (stored or changed), `trash` (moved to the trash), `restore` (put back from the trash), `purge` (deleted for good from the trash, by hand or after its days, or an earlier secret forgotten), and `delete` (deleted for good straight away, with `--purge` or when there's no trash). A few events are about the vault rather than an entry: `rekey` (the master password changed), `restore` (the whole vault restored from a backup), `import` (an import, with how many came from where), and `doctor` (a `sesh doctor` check, with its result). It never records the secret itself.
 
 `sesh audit` shows the newest 50 events, newest first; `--limit 100` shows more, and `--limit 0` shows them all:
 
@@ -999,6 +1001,29 @@ $ sesh trash restore 7
 - **`sesh trash remove <id>…`** deletes them for good, and **`sesh trash empty`** everything in the trash. Both ask first; `--force` doesn't, and is needed without a terminal.
 - **Each entry goes for good** `trash.keep_days` after it was deleted, the next time a command unlocks the vault. `0` keeps no trash: deleting is for good, and what's already in the trash stays until you empty it.
 - **A new master password** (`sesh --rekey`) re-encrypts the trash with the vault, so what's in it can still be restored. `sesh doctor` checks it too, and names any entry in it that can't be read, with `sesh trash remove` to delete it.
+
+### Password history
+
+Each time an entry's secret changes (stored over, generated, edited, replaced by an import, or put back from its history), the one it replaces is kept, with when it was replaced: the newest 10 for each entry (`history.keep`; `0` keeps none). Storing the same secret again keeps nothing. Only the secret is versioned, not the URL, notes or fields.
+
+```
+$ sesh history password/github/alice
+VERSION  SECRET
+1        now, set 2026-10-12 09:30
+2        replaced 2026-10-12 09:30
+3        replaced 2026-09-30 08:11
+
+See one with: sesh history password/github/alice --show <version>
+
+$ sesh history password/github/alice --restore 3
+✅ password/github/alice's secret is version 3's again; the one it replaced is now version 2.
+```
+
+- **`--show N`** prints version N's secret, and **`--clip N`** copies it; both are recorded in the audit log as reads ("History: version N").
+- **`--restore N`** makes version N the secret again; the one it replaces is kept, so a restore can be undone the same way.
+- **`--forget N`** deletes version N for good.
+- **The history follows its entry:** renamed (`sesh edit`), into the trash and back, and for good when the entry is. A new entry with a deleted one's name starts with no history.
+- **A new master password** re-encrypts the history too. `sesh doctor` checks every earlier secret, and names one that can't be read with the `--forget` that deletes it.
 
 To delete entries chosen by a filter, search for them as JSON (it shows each entry's `id`, never a secret), pick the IDs with `jq`, check them, then hand them to `-delete` with `xargs`. Separate the IDs with NUL characters (`jq -j … + "\u0000"` and `xargs -0`): names can contain spaces and quotes, which plain `xargs` would split on, turning one ID into others.
 

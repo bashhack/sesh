@@ -154,14 +154,18 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 				} else if err := s.reseal(tx, e, newKey); err != nil {
 					return err
 				}
-				if _, err := tx.Exec(`UPDATE `+table+` SET encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ? WHERE id = ?`, //nolint:gosec // table is one of sealedTables
-					e.data, e.salt, e.details, e.detailsSalt, e.id); err != nil {
+				q, args := `UPDATE `+table+` SET encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ? WHERE id = ?`, []any{e.data, e.salt, e.details, e.detailsSalt, e.id} //nolint:gosec // table is one of sealedTables
+				if table == "history" {
+					q, args = `UPDATE history SET encrypted_data = ?, salt = ? WHERE id = ?`, []any{e.data, e.salt, e.id}
+				}
+				if _, err := tx.Exec(q, args...); err != nil {
 					return fmt.Errorf("store %s: %w", e.k, err)
 				}
 			}
-			if table == "trash" {
+			switch table {
+			case "trash":
 				res.Trashed = len(now)
-			} else {
+			case "entries":
 				res.Entries = len(now)
 			}
 		}
@@ -210,6 +214,8 @@ type sealedEntry struct {
 	id                         int64
 	// trashID is the entry's id in the trash, 0 for one that isn't.
 	trashID int64
+	// history is an earlier secret of an entry's, sealed with historyAAD.
+	history bool
 }
 
 // unchangedFrom reports whether now, as stored, is what e was resealed
@@ -219,16 +225,20 @@ func (e *sealedEntry) unchangedFrom(now *sealedEntry) bool {
 		bytes.Equal(e.oldDetails, now.details) && bytes.Equal(e.oldDetailsSalt, now.detailsSalt)
 }
 
-// sealedTables are the tables holding entries sealed with the vault's
-// key: the entries, and the trash's.
-var sealedTables = []string{"entries", "trash"}
+// sealedTables are the tables holding secrets sealed with the vault's
+// key: the entries, the trash's, and their earlier secrets.
+var sealedTables = []string{"entries", "trash", "history"}
 
 // sealedEntries reads the encrypted secret and details of every entry in
 // table, one of sealedTables, through q.
 func sealedEntries(q interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }, table string) (_ []sealedEntry, err error) {
-	rows, err := q.Query(`SELECT id, kind, service, username, encrypted_data, salt, sealed_details, details_salt FROM ` + table) //nolint:gosec // table is one of sealedTables
+	details := `sealed_details, details_salt`
+	if table == "history" {
+		details = `NULL, NULL` // an earlier secret has no details
+	}
+	rows, err := q.Query(`SELECT id, kind, service, username, encrypted_data, salt, ` + details + ` FROM ` + table) //nolint:gosec // table is one of sealedTables
 	if err != nil {
 		return nil, fmt.Errorf("read entries: %w", err)
 	}
@@ -245,8 +255,11 @@ func sealedEntries(q interface {
 			return nil, fmt.Errorf("read entries: %w", err)
 		}
 		e.k.Kind = vault.Kind(kind)
-		if table == "trash" {
+		switch table {
+		case "trash":
 			e.trashID = e.id
+		case "history":
+			e.history = true
 		}
 		e.oldData, e.oldSalt = e.data, e.salt
 		e.oldDetails, e.oldDetailsSalt = e.details, e.detailsSalt
@@ -271,7 +284,11 @@ func (s *Store) reseal(q querier, e *sealedEntry, newKey []byte) (err error) {
 			}
 		}()
 	}
-	if e.data, e.salt, err = s.resealOne(q, e.k, e.oldData, e.oldSalt, entryAAD(e.k), newKey, ""); err != nil {
+	aad, what := entryAAD(e.k), ""
+	if e.history {
+		aad, what = historyAAD(e.k), "an earlier secret of "
+	}
+	if e.data, e.salt, err = s.resealOne(q, e.k, e.oldData, e.oldSalt, aad, newKey, what); err != nil {
 		return err
 	}
 	if e.oldDetails != nil {
