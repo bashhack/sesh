@@ -1159,7 +1159,7 @@ sesh inject -i config.yml.tpl -o config.yml
 - **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
 ### Importing from other apps (`sesh import`)
 
-`sesh import` brings entries over from another app: Bitwarden, KeePass (KeePassXC or KeePass 2), Chrome, Firefox, or Google Authenticator. It reads everything first, shows what it found, then asks:
+`sesh import` brings entries over from another app: Bitwarden, KeePass (KeePassXC or KeePass 2), Chrome, Firefox, Safari, or Google Authenticator. It reads everything first, shows what it found, then asks:
 - what it will import, by kind and folder;
 - which entries you already have;
 - what it will skip, and why;
@@ -1238,6 +1238,18 @@ sesh import --from firefox passwords.csv
 - **Chrome's notes** come across; Firefox's export has none. Firefox's times (made and last changed) come across, and an HTTP-authentication login keeps its realm in a field `http-realm`.
 - **No folder or tag** is given; file them afterwards with `sesh folder` and `sesh tag`.
 - **A login with no password** is skipped, and listed.
+- **The export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
+
+**Safari.** Export your passwords from Apple's Passwords app: File > Export All Passwords to File. It leaves out Wi-Fi passwords, and passwords shared with you in a group you didn't create.
+
+```
+sesh import --from safari Passwords.csv
+```
+
+- **Each entry** becomes a password entry named by its title, as the Passwords app shows it, with its URL and notes. An entry with no title is named for its site, as for Chrome and Firefox.
+- **A verification code** becomes a TOTP entry beside the password entry, with the same name; one sesh can't make codes from (counter-based or Steam, an algorithm other than SHA-1, SHA-256 or SHA-512, codes other than 6 to 8 digits, a new code less often than once a day, or a key that isn't valid) is skipped, and listed, and the password still comes across. An entry with a code but no password becomes the TOTP entry alone.
+- **Two entries with one title and username** get ` (2)` added to the second where they'd hold the same kind of entry; an entry with only a code and another with only a password, under one title, become `totp/…` and `password/…` with no ` (2)`.
+- **No folder or tag** is given.
 - **The export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
 
 **Google Authenticator.** Its "Transfer accounts" moves your codes off the phone:

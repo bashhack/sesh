@@ -1,9 +1,11 @@
 // Package browser reads web browsers' password exports: Chrome's, and
 // that of other browsers built on Chromium that write the same columns,
-// and Firefox's. The formats follow the browsers' own code (Chromium's
+// Firefox's, and Safari's (Apple's Passwords app). Chrome's and Firefox's
+// formats follow the browsers' own code (Chromium's
 // components/password_manager/core/browser/export/password_csv_writer.cc,
-// Firefox's toolkit/components/passwordmgr/LoginExport.sys.mjs), and are
-// tested against exports made by Chromium and Firefox.
+// Firefox's toolkit/components/passwordmgr/LoginExport.sys.mjs); Apple
+// publishes none for Safari's. All three are tested against exports made
+// by the browsers.
 package browser
 
 import (
@@ -22,6 +24,7 @@ import (
 const (
 	Chrome  = "chrome"
 	Firefox = "firefox"
+	Safari  = "safari"
 )
 
 // Login is one saved password.
@@ -29,7 +32,9 @@ type Login struct {
 	Created time.Time
 	Updated time.Time
 	// Name is Chrome's name for the site or app; Firefox has none.
-	Name     string
+	Name string
+	// Title is Safari's title for the entry; the others have none.
+	Title    string
 	URL      string
 	Username string
 	Password string
@@ -37,6 +42,9 @@ type Login struct {
 	// Realm is a Firefox login's HTTP authentication realm, "" for a
 	// login form's.
 	Realm string
+	// OTPAuth is a Safari entry's verification code, an otpauth://
+	// address.
+	OTPAuth string
 }
 
 // Export is the logins of one browser's export.
@@ -51,6 +59,7 @@ type Export struct {
 var (
 	chromeColumns    = []string{"name", "url", "username", "password", "note"}
 	oldChromeColumns = chromeColumns[:4]
+	safariColumns    = []string{"Title", "URL", "Username", "Password", "Notes", "OTPAuth"}
 	firefoxColumns   = []string{"url", "username", "password", "httpRealm", "formActionOrigin", "guid", "timeCreated", "timeLastUsed", "timePasswordChanged"}
 )
 
@@ -64,6 +73,8 @@ func Detect(b []byte) string {
 		return Chrome
 	case slices.Equal(header, firefoxColumns):
 		return Firefox
+	case slices.Equal(header, safariColumns):
+		return Safari
 	}
 	return ""
 }
@@ -73,7 +84,7 @@ func Detect(b []byte) string {
 func Parse(b []byte) (Export, error) {
 	which := Detect(b)
 	if which == "" {
-		return Export{}, errors.New("this isn't a Chrome or Firefox password export: its first line isn't one of their headers")
+		return Export{}, errors.New("this isn't a Chrome, Firefox or Safari password export: its first line isn't one of their headers")
 	}
 	r := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(b, []byte("\ufeff"))))
 	r.FieldsPerRecord = -1
@@ -113,6 +124,11 @@ func Parse(b []byte) (Export, error) {
 			if err != nil {
 				return Export{}, fmt.Errorf("this Firefox export is damaged: login %d: %w", line-1, err)
 			}
+		case Safari:
+			if len(rec) != len(safariColumns) {
+				return Export{}, fmt.Errorf("this Safari export is damaged: login %d has %d columns, not %d", line-1, len(rec), len(safariColumns))
+			}
+			l = Login{Title: rec[0], URL: rec[1], Username: rec[2], Password: rec[3], Note: rec[4], OTPAuth: rec[5]}
 		}
 		exp.Logins = append(exp.Logins, l)
 	}
@@ -133,9 +149,6 @@ func millis(s string) (time.Time, error) {
 
 // title is a browser's name as messages give it.
 func title(which string) string {
-	if which == Firefox {
-		return "Firefox"
-	}
 	return strings.ToUpper(which[:1]) + which[1:]
 }
 
