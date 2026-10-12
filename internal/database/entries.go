@@ -379,7 +379,7 @@ func (s *Store) deleteMany(keys []vault.Key, purge bool) error {
 	}
 	for _, k := range keys {
 		if toTrash {
-			s.audit("delete", k.String(), "Moved to the trash")
+			s.audit("trash", k.String(), "Moved to the trash")
 		} else {
 			s.audit("delete", k.String(), "Delete")
 		}

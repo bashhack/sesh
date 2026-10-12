@@ -73,6 +73,20 @@ func TestTrashCommands(t *testing.T) {
 		t.Errorf("a bad id: %v", err)
 	}
 
+	// Flags before the ids, and an id named twice, removed once.
+	trashDelete(t, false, "password/gitlab-old")
+	list = mustRun(t, runTrash)
+	oldID := strings.Fields(strings.Split(list, "\n")[1])[0]
+	if got := mustRun(t, runTrash, "remove", "--force", oldID, oldID); got != "✅ Deleted 1 entry for good.\n" {
+		t.Errorf("remove --force id id: %q", got)
+	}
+	trashDelete(t, false, "password/gitlab")
+	list = mustRun(t, runTrash)
+	newID := strings.Fields(strings.Split(list, "\n")[1])[0]
+	if got := mustRun(t, runTrash, "restore", "--as", "password/gitlab-2", newID); got != "✅ Restored password/gitlab-2 from the trash.\n" {
+		t.Errorf("restore --as before the id: %q", got)
+	}
+
 	trashDelete(t, false, "api_key/openai")
 	if _, err := runFiling(t, runTrash, "empty"); err == nil || !strings.Contains(err.Error(), "add --force") {
 		t.Errorf("empty with nobody to ask: %v", err)

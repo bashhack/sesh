@@ -82,11 +82,14 @@ func TestTrash_RestoreClashAndAs(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := trashed[0].ID
-	if _, err := s.RestoreFromTrash(id, vault.Key{}); !errors.Is(err, ErrNameTaken) || !strings.Contains(err.Error(), "password/github/alice already exists: rename or delete it first, or restore with --as <new name>") {
+	if _, err := s.RestoreFromTrash(id, vault.Key{}); !errors.Is(err, ErrNameTaken) || err.Error() != "password/github/alice already exists: rename or delete it first, or restore with --as <new name>" {
 		t.Errorf("onto a name in use: %v", err)
 	}
 	if _, err := s.RestoreFromTrash(id, vault.Key{Kind: vault.KindNote, Service: "github"}); err == nil || !strings.Contains(err.Error(), "is a password entry") {
 		t.Errorf("as another kind: %v", err)
+	}
+	if _, err := s.RestoreFromTrash(id, k); !errors.Is(err, ErrNameTaken) || err.Error() != "password/github/alice already exists: rename or delete it first, or restore under another name" {
+		t.Errorf("--as a name in use: %v", err)
 	}
 	as := vault.Key{Kind: vault.KindPassword, Service: "github-old", Username: "alice"}
 	if got, err := s.RestoreFromTrash(id, as); err != nil || got != as {
@@ -124,7 +127,7 @@ func TestTrash_RemoveEmptyExpirePurge(t *testing.T) {
 	if err != nil || len(trashed) != 3 {
 		t.Fatalf("Trash = %+v, %v", trashed, err)
 	}
-	if got, err := s.RemoveFromTrash(trashed[0].ID); err != nil || got != trashed[0].Key {
+	if got, err := s.RemoveFromTrash(trashed[0].ID); err != nil || len(got) != 1 || got[0] != trashed[0].Key {
 		t.Errorf("remove = %v, %v", got, err)
 	}
 	if _, err := s.RemoveFromTrash(trashed[0].ID); !errors.Is(err, ErrNotInTrash) {
@@ -170,11 +173,11 @@ func TestTrash_RemoveEmptyExpirePurge(t *testing.T) {
 	}
 	var kinds []string
 	for _, e := range events {
-		if e.EventType == "delete" || e.EventType == "purge" {
+		if e.EventType == "delete" || e.EventType == "trash" || e.EventType == "purge" {
 			kinds = append(kinds, e.EventType+": "+e.Detail)
 		}
 	}
-	for _, want := range []string{"delete: Moved to the trash", "purge: Removed from the trash", "purge: Kept its days in the trash", "delete: Delete", "purge: Trash emptied"} {
+	for _, want := range []string{"trash: Moved to the trash", "purge: Removed from the trash", "purge: Kept its days in the trash", "delete: Delete", "purge: Trash emptied"} {
 		if !strings.Contains(strings.Join(kinds, "\n"), want) {
 			t.Errorf("audit missing %q in %q", want, kinds)
 		}
@@ -229,7 +232,7 @@ func TestTrash_RekeyAndVerify(t *testing.T) {
 		t.Fatalf("Verify = %+v, %v", r, err)
 	}
 	key, rec := newKeyFor(t, "new-password-1")
-	if res, err := s.Rekey(key, rec, rewrapTo); err != nil || res.Entries != 1 {
+	if res, err := s.Rekey(key, rec, rewrapTo); err != nil || res.Entries != 0 || res.Trashed != 1 {
 		t.Fatalf("Rekey = %+v, %v", res, err)
 	}
 	if err := s.Close(); err != nil {
@@ -267,5 +270,88 @@ func TestTrash_VerifyFindsDamage(t *testing.T) {
 	r, err := s.Verify()
 	if err != nil || len(r.Problems) != 0 || len(r.TrashProblems) != 1 || r.TrashProblems[0].Key != k || r.TrashProblems[0].TrashID == 0 || r.TrashProblems[0].Kind != ProblemSecret {
 		t.Errorf("Verify = %+v, %v", r, err)
+	}
+}
+
+// A trash row whose times or tags are damaged still lists, is named by
+// Verify, and can be removed, alone or by emptying; removing is all or
+// none, and an id named twice is removed once.
+func TestTrash_DamagedRow(t *testing.T) {
+	_, s := rekeyVault(t)
+	s.SetTrashDays(30)
+	for _, svc := range []string{"a", "b", "c"} {
+		if err := s.Put(vault.Key{Kind: vault.KindPassword, Service: svc}, []byte("pw")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.DeleteMany([]vault.Key{{Kind: vault.KindPassword, Service: "bank"}, {Kind: vault.KindPassword, Service: "a"}, {Kind: vault.KindPassword, Service: "b"}, {Kind: vault.KindPassword, Service: "c"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE trash SET created_at = 'garbage' WHERE service = 'a'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE trash SET tags = 'nope', deleted_at = 'garbage' WHERE service = 'b'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE trash SET tags = 'nope' WHERE service = 'bank'`); err != nil {
+		t.Fatal(err)
+	}
+	trashed, err := s.Trash()
+	if err != nil || len(trashed) != 4 {
+		t.Fatalf("Trash = %+v, %v", trashed, err)
+	}
+	ids := map[string]int64{}
+	for i := range trashed {
+		ids[trashed[i].Service] = trashed[i].ID
+	}
+	r, err := s.Verify()
+	var problems []string
+	for _, p := range r.TrashProblems {
+		problems = append(problems, p.Key.Service+":"+problemName(p.Kind))
+	}
+	if err != nil || strings.Join(problems, " ") != "a:times b:times bank:tags" {
+		t.Errorf("Verify trash problems = %v, %v", problems, err)
+	}
+	if _, err := s.RemoveFromTrash(ids["a"], ids["a"], 999); !errors.Is(err, ErrNotInTrash) {
+		t.Errorf("remove with an id not in the trash: %v", err)
+	}
+	if trashed, err := s.Trash(); err != nil || len(trashed) != 4 {
+		t.Errorf("a remove that failed removed some: %d left, %v", len(trashed), err)
+	}
+	if gone, err := s.RemoveFromTrash(ids["a"], ids["a"], ids["c"]); err != nil || len(gone) != 2 {
+		t.Errorf("remove = %v, %v", gone, err)
+	}
+	if n, err := s.EmptyTrash(); err != nil || n != 2 {
+		t.Errorf("empty = %d, %v", n, err)
+	}
+}
+
+func problemName(k ProblemKind) string {
+	switch k {
+	case ProblemTimes:
+		return "times"
+	case ProblemTags:
+		return "tags"
+	case ProblemSecret:
+		return "secret"
+	}
+	return "other"
+}
+
+// A new master password stops at an entry in the trash that doesn't
+// decrypt, and says it's in the trash, with how to remove it.
+func TestTrash_RekeyNamesDamagedTrash(t *testing.T) {
+	_, s := rekeyVault(t)
+	s.SetTrashDays(30)
+	if err := s.Delete(vault.Key{Kind: vault.KindPassword, Service: "bank"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE trash SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'`); err != nil {
+		t.Fatal(err)
+	}
+	key, rec := newKeyFor(t, "new-password-1")
+	_, err := s.Rekey(key, rec, rewrapTo)
+	if err == nil || !strings.Contains(err.Error(), "decrypt password/bank") || !strings.Contains(err.Error(), "it's in the trash, id 1: sesh trash remove 1 deletes it for good") {
+		t.Errorf("Rekey = %v", err)
 	}
 }

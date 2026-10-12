@@ -85,9 +85,11 @@ const (
 // RekeyResult reports a password change.
 type RekeyResult struct {
 	// NewID is the id of the vault's new key record.
-	NewID    string
-	Entries  int
-	Recovery RecoveryOutcome
+	NewID string
+	// Entries is how many entries were re-encrypted; Trashed, how many in
+	// the trash.
+	Entries, Trashed int
+	Recovery         RecoveryOutcome
 	// OldVaultInFile means another sesh command had the vault open, so the
 	// change couldn't be folded into the vault file yet: until that command
 	// ends, the file on its own still holds the vault under the old key.
@@ -157,7 +159,11 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 					return fmt.Errorf("store %s: %w", e.k, err)
 				}
 			}
-			res.Entries += len(now)
+			if table == "trash" {
+				res.Trashed = len(now)
+			} else {
+				res.Entries = len(now)
+			}
 		}
 		if res.Recovery, err = rewrapRecoveryRecord(tx, oldID, res.NewID, rewrap); err != nil {
 			return err
@@ -169,6 +175,9 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 		entries := fmt.Sprintf("%d entries", res.Entries)
 		if res.Entries == 1 {
 			entries = "1 entry"
+		}
+		if res.Trashed > 0 {
+			entries += fmt.Sprintf(" and %d in the trash", res.Trashed)
 		}
 		if _, err := tx.Exec(`INSERT INTO audit_log (event_type, entry_id, detail, created_at) VALUES ('rekey', NULL, ?, ?)`,
 			"master password changed, "+entries+" re-encrypted", time.Now().UTC()); err != nil {
@@ -199,6 +208,8 @@ type sealedEntry struct {
 	oldData, oldSalt           []byte
 	oldDetails, oldDetailsSalt []byte
 	id                         int64
+	// trashID is the entry's id in the trash, 0 for one that isn't.
+	trashID int64
 }
 
 // unchangedFrom reports whether now, as stored, is what e was resealed
@@ -234,6 +245,9 @@ func sealedEntries(q interface {
 			return nil, fmt.Errorf("read entries: %w", err)
 		}
 		e.k.Kind = vault.Kind(kind)
+		if table == "trash" {
+			e.trashID = e.id
+		}
 		e.oldData, e.oldSalt = e.data, e.salt
 		e.oldDetails, e.oldDetailsSalt = e.details, e.detailsSalt
 		all = append(all, e)
@@ -247,8 +261,14 @@ func sealedEntries(q interface {
 // reseal decrypts e's secret and details with the store's key and
 // encrypts them under newKey, into e. q is what the vault is read through:
 // the transaction, inside one, since the store has a single connection.
-func (s *Store) reseal(q querier, e *sealedEntry, newKey []byte) error {
-	var err error
+func (s *Store) reseal(q querier, e *sealedEntry, newKey []byte) (err error) {
+	if e.trashID != 0 {
+		defer func() {
+			if err != nil {
+				err = fmt.Errorf("%w (it's in the trash, id %d: sesh trash remove %d deletes it for good)", err, e.trashID, e.trashID)
+			}
+		}()
+	}
 	if e.data, e.salt, err = s.resealOne(q, e.k, e.oldData, e.oldSalt, entryAAD(e.k), newKey, ""); err != nil {
 		return err
 	}

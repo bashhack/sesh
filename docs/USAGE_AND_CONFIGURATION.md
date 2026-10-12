@@ -509,7 +509,7 @@ There is nothing installed to remove. `sesh agent stop` shuts it down, and the n
 
 ### The audit log
 
-The vault records every read, store, and delete of an entry: when it happened, what kind of event it was (`access`, `modify`, `delete`), and which entry, named the way `--list` names it. A few events are about the vault rather than an entry: `rekey` (the master password changed) and `doctor` (a `sesh doctor` check, with its result). It never records the secret itself.
+The vault records every read, store, and delete of an entry: when it happened, what kind of event it was, and which entry, named the way `--list` names it. For an entry: `access` (read), `modify` (stored or changed), `trash` (moved to the trash), `restore` (put back from the trash), `purge` (deleted for good from the trash, by hand or after its days), and `delete` (deleted for good straight away, with `--purge` or when there's no trash). A few events are about the vault rather than an entry: `rekey` (the master password changed), `restore` (the whole vault restored from a backup), `import` (an import, with how many came from where), and `doctor` (a `sesh doctor` check, with its result). It never records the secret itself.
 
 `sesh audit` shows the newest 50 events, newest first; `--limit 100` shows more, and `--limit 0` shows them all:
 

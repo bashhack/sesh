@@ -3,9 +3,11 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/vault"
@@ -20,10 +22,13 @@ const (
 	ProblemSecret ProblemKind = iota + 1
 	// ProblemSettings: the settings don't parse.
 	ProblemSettings
-	// ProblemTimes: the creation or update time doesn't read.
+	// ProblemTimes: the creation or update time doesn't read, or, in the
+	// trash, when it was deleted.
 	ProblemTimes
 	// ProblemDetails: the notes and custom fields don't decrypt or read.
 	ProblemDetails
+	// ProblemTags: an entry in the trash's tags don't read.
+	ProblemTags
 )
 
 // EntryProblem is an entry Verify couldn't read: its secret or details
@@ -114,11 +119,18 @@ func (s *Store) verifyTable(tx *sql.Tx, table string) (int, []EntryProblem, erro
 		sealed, sealedSalt []byte
 		url, details       string
 		settings           sql.NullString
+		deletedAt          any
+		tags               sql.NullString
 		id                 int64
 	}
 	// By row id, not through the name index, so a damaged index can't
 	// hide an entry.
-	rows, err := tx.Query(`SELECT id, kind, service, username, encrypted_data, salt, settings, url, details, sealed_details, details_salt, created_at, updated_at FROM ` + table + ` NOT INDEXED ORDER BY id`) //nolint:gosec // table is one of sealedTables
+	// The trash's rows also have when they were deleted, and their tags.
+	extra := `NULL, NULL`
+	if table == "trash" {
+		extra = `deleted_at, tags`
+	}
+	rows, err := tx.Query(`SELECT id, kind, service, username, encrypted_data, salt, settings, url, details, sealed_details, details_salt, ` + extra + `, created_at, updated_at FROM ` + table + ` NOT INDEXED ORDER BY id`) //nolint:gosec // table is one of sealedTables
 	if err != nil {
 		return 0, nil, fmt.Errorf("read %s: %w", table, err)
 	}
@@ -127,17 +139,22 @@ func (s *Store) verifyTable(tx *sql.Tx, table string) (int, []EntryProblem, erro
 		var e entry
 		var kind string
 		var created, updated sql.NullTime
-		if err := rows.Scan(&e.id, &kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &e.url, &e.details, &e.sealed, &e.sealedSalt, &created, &updated); err != nil {
+		if err := rows.Scan(&e.id, &kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &e.url, &e.details, &e.sealed, &e.sealedSalt, &e.deletedAt, &e.tags, &created, &updated); err != nil {
 			// A time that doesn't read is the entry's problem; scan the
 			// rest of the row without it.
 			var raw1, raw2 any
-			if err2 := rows.Scan(&e.id, &kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &e.url, &e.details, &e.sealed, &e.sealedSalt, &raw1, &raw2); err2 != nil {
+			if err2 := rows.Scan(&e.id, &kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.settings, &e.url, &e.details, &e.sealed, &e.sealedSalt, &e.deletedAt, &e.tags, &raw1, &raw2); err2 != nil {
 				_ = rows.Close() //nolint:errcheck // already failing
 				return 0, nil, fmt.Errorf("read %s: %w", table, err2)
 			}
 			e.timesErr = fmt.Errorf("its times don't read: %w", err)
 		}
 		e.k.Kind = vault.Kind(kind)
+		if table == "trash" && e.timesErr == nil {
+			if _, ok := e.deletedAt.(time.Time); !ok {
+				e.timesErr = fmt.Errorf("when it was deleted doesn't read: %v", e.deletedAt)
+			}
+		}
 		all = append(all, e)
 	}
 	if err := rows.Close(); err != nil {
@@ -178,6 +195,13 @@ func (s *Store) verifyTable(tx *sql.Tx, table string) (int, []EntryProblem, erro
 		}
 		if e.timesErr != nil {
 			problem(ProblemTimes, e.timesErr)
+			continue
+		}
+		if table == "trash" {
+			var tags []string
+			if err := json.Unmarshal([]byte(e.tags.String), &tags); err != nil {
+				problem(ProblemTags, fmt.Errorf("its tags don't read: %w", err))
+			}
 		}
 	}
 	sort.Slice(problems, func(i, j int) bool { return problems[i].Key.Less(problems[j].Key) })

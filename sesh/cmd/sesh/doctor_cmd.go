@@ -629,6 +629,8 @@ func problemText(k database.ProblemKind) string {
 		return "times don't read"
 	case database.ProblemDetails:
 		return "notes or fields don't read"
+	case database.ProblemTags:
+		return "tags don't read"
 	}
 	return "can't be read"
 }

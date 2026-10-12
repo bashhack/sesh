@@ -12,6 +12,13 @@ import (
 
 func TestStore_IsAVaultStore(t *testing.T) {
 	vaulttest.Run(t, func(t *testing.T) vault.Store { return newTestStore(t) })
+	t.Run("with a trash", func(t *testing.T) {
+		vaulttest.Run(t, func(t *testing.T) vault.Store {
+			s := newTestStore(t)
+			s.SetTrashDays(30)
+			return s
+		})
+	})
 }
 
 // The audit log names each entry by its key's text form, for every event.

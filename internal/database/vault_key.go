@@ -84,7 +84,7 @@ func readKeyRecord(db *sql.DB, dbPath string) (UnlockMaterial, error) {
 	err := db.QueryRow(`SELECT salt, kdf, kdf_params, verify FROM vault_key WHERE id = 1`).Scan(&m.Salt, &kdf, &params, &m.Verify)
 	if errors.Is(err, sql.ErrNoRows) {
 		var hasEntries bool
-		if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM entries)`).Scan(&hasEntries); err != nil {
+		if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM entries) OR EXISTS (SELECT 1 FROM trash)`).Scan(&hasEntries); err != nil {
 			return UnlockMaterial{}, fmt.Errorf("read the vault: %w", err)
 		}
 		if hasEntries {
@@ -113,7 +113,7 @@ func writeKeyRecord(db *sql.DB, m UnlockMaterial) (bool, error) {
 	res, err := db.Exec(
 		`INSERT INTO vault_key (id, salt, kdf, kdf_params, verify, created_at)
 		 SELECT 1, ?, ?, ?, ?, ?
-		 WHERE NOT EXISTS (SELECT 1 FROM vault_key) AND NOT EXISTS (SELECT 1 FROM entries)`,
+		 WHERE NOT EXISTS (SELECT 1 FROM vault_key) AND NOT EXISTS (SELECT 1 FROM entries) AND NOT EXISTS (SELECT 1 FROM trash)`,
 		m.Salt, kdfArgon2id, m.Params.MarshalParams(), m.Verify, time.Now().UTC(),
 	)
 	if err != nil {

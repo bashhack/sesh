@@ -126,11 +126,11 @@ func restoreFromTrash(app *App, args []string) error {
 	fs := flag.NewFlagSet("trash restore", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	as := fs.String("as", "", "Restore it under this entry ID instead, such as password/github-old/alice")
-	ids, rest := splitFlags(args)
-	if err := fs.Parse(rest); err != nil {
+	ids, err := parseAnywhere(fs, args)
+	if err != nil {
 		return err
 	}
-	if len(ids) != 1 || fs.NArg() > 0 {
+	if len(ids) != 1 {
 		return errors.New("name one trash id: sesh trash restore <id> [--as <entry id>]")
 	}
 	parsed, err := trashIDs(ids)
@@ -161,11 +161,11 @@ func removeFromTrash(app *App, args []string) error {
 	fs := flag.NewFlagSet("trash remove", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	force := fs.Bool("force", false, "Don't ask first")
-	idArgs, rest := splitFlags(args)
-	if err := fs.Parse(rest); err != nil {
+	idArgs, err := parseAnywhere(fs, args)
+	if err != nil {
 		return err
 	}
-	if len(idArgs) == 0 || fs.NArg() > 0 {
+	if len(idArgs) == 0 {
 		return errors.New("name the trash ids to delete for good: sesh trash remove <id>…")
 	}
 	ids, err := trashIDs(idArgs)
@@ -186,11 +186,16 @@ func removeFromTrash(app *App, args []string) error {
 		byID[trashed[i].ID] = trashed[i].Key
 	}
 	var names []string
+	named := map[int64]bool{}
 	for _, id := range ids {
 		k, ok := byID[id]
 		if !ok {
 			return fmt.Errorf("%w: %d; nothing was removed", database.ErrNotInTrash, id)
 		}
+		if named[id] {
+			continue
+		}
+		named[id] = true
 		names = append(names, k.String())
 	}
 	if !*force {
@@ -199,12 +204,11 @@ func removeFromTrash(app *App, args []string) error {
 			return err
 		}
 	}
-	for _, id := range ids {
-		if _, err := store.RemoveFromTrash(id); err != nil {
-			return err
-		}
+	gone, err := store.RemoveFromTrash(ids...)
+	if err != nil {
+		return err
 	}
-	_, err = fmt.Fprintf(app.Stdout, "✅ Deleted %s for good.\n", entryCount(len(ids)))
+	_, err = fmt.Fprintf(app.Stdout, "✅ Deleted %s for good.\n", entryCount(len(gone)))
 	return err
 }
 
@@ -263,15 +267,34 @@ func confirmForGood(app *App, question string) (bool, error) {
 	return true, nil
 }
 
-// splitFlags parts args into the leading ones that aren't flags and the
-// rest, so trash ids can come before flags.
-func splitFlags(args []string) (plain, flags []string) {
-	for i, a := range args {
-		if strings.HasPrefix(a, "-") {
-			return args[:i], args[i:]
+// parseAnywhere parses fs's flags wherever they are among args, before
+// or after the trash ids, and returns the ids.
+func parseAnywhere(fs *flag.FlagSet, args []string) ([]string, error) {
+	var flags, plain []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			plain = append(plain, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			plain = append(plain, a)
+			continue
+		}
+		flags = append(flags, a)
+		// A flag that takes a value, given as "-as v", takes the next.
+		name := strings.TrimLeft(a, "-")
+		if f := fs.Lookup(name); f != nil && !strings.Contains(a, "=") && i+1 < len(args) {
+			if b, ok := f.Value.(interface{ IsBoolFlag() bool }); !ok || !b.IsBoolFlag() {
+				i++
+				flags = append(flags, args[i])
+			}
 		}
 	}
-	return args, nil
+	if err := fs.Parse(flags); err != nil {
+		return nil, err
+	}
+	return plain, nil
 }
 
 // expireTrash deletes for good what has been in the trash longer than

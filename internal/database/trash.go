@@ -1,10 +1,12 @@
 package database
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/bashhack/sesh/internal/vault"
@@ -16,6 +18,12 @@ type TrashedEntry struct {
 	vault.Entry
 	ID int64 // its trash id, which sesh trash names it by
 }
+
+// nameTaken is ErrNameTaken said as msg.
+type nameTaken string
+
+func (e nameTaken) Error() string        { return string(e) }
+func (e nameTaken) Is(target error) bool { return target == ErrNameTaken }
 
 // ErrNotInTrash is a trash id with no entry.
 var ErrNotInTrash = errors.New("no entry in the trash has that id")
@@ -47,7 +55,9 @@ func (s *Store) PurgeMany(keys []vault.Key) error {
 	return s.deleteMany(keys, true)
 }
 
-// Trash lists the trash, the most recently deleted first.
+// Trash lists the trash, the most recently deleted first. A row whose
+// times or tags don't read is still listed, without them, so it can be
+// removed; sesh doctor names what's wrong with it.
 func (s *Store) Trash() (_ []TrashedEntry, err error) {
 	rows, err := s.db.Query(`SELECT id, kind, service, username, folder, tags, created_at, updated_at, deleted_at FROM trash ORDER BY deleted_at DESC, id DESC`)
 	if err != nil {
@@ -62,12 +72,16 @@ func (s *Store) Trash() (_ []TrashedEntry, err error) {
 	for rows.Next() {
 		var t TrashedEntry
 		var kind, tags string
-		if err := rows.Scan(&t.ID, &kind, &t.Service, &t.Username, &t.Folder, &tags, &t.CreatedAt, &t.UpdatedAt, &t.DeletedAt); err != nil {
+		var created, updated, deleted any
+		if err := rows.Scan(&t.ID, &kind, &t.Service, &t.Username, &t.Folder, &tags, &created, &updated, &deleted); err != nil {
 			return nil, fmt.Errorf("read the trash: %w", err)
 		}
 		t.Kind = vault.Kind(kind)
-		if err := json.Unmarshal([]byte(tags), &t.Tags); err != nil {
-			return nil, fmt.Errorf("read the tags of %s in the trash: %w", t.Key, err)
+		t.CreatedAt, _ = created.(time.Time)
+		t.UpdatedAt, _ = updated.(time.Time)
+		t.DeletedAt, _ = deleted.(time.Time)
+		if json.Unmarshal([]byte(tags), &t.Tags) != nil {
+			t.Tags = nil
 		}
 		out = append(out, t)
 	}
@@ -77,64 +91,80 @@ func (s *Store) Trash() (_ []TrashedEntry, err error) {
 // RestoreFromTrash puts the trash's entry id back, under as when it isn't
 // the zero Key (its secret and details sealed again for that name), and
 // returns the name it has. A name another entry has is refused with
-// ErrNameTaken; as must keep the entry's kind.
+// ErrNameTaken; as must keep the entry's kind. Sealing again happens
+// before the write, as Edit's does, and the write checks the entry in the
+// trash is as it was read (ErrEntryChanged, if a new master password
+// sealed it again meanwhile).
 func (s *Store) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
-	var to vault.Key
-	err := s.inTx(func(tx *sql.Tx) error {
-		var kind, tags string
-		var settings sql.NullString
-		var e vault.Entry
-		var data, salt, sealed, detailsSalt []byte
-		var url, details string
+	type sealedRow struct{ data, salt, sealed, detailsSalt []byte }
+	read := func(q querier) (e vault.Entry, r sealedRow, settings sql.NullString, url, details, tags string, err error) {
+		var kind string
 		var deletedAt time.Time
-		err := tx.QueryRow(`SELECT kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, tags, created_at, updated_at, deleted_at FROM trash WHERE id = ?`, id).
-			Scan(&kind, &e.Service, &e.Username, &data, &salt, &settings, &e.Folder, &url, &details, &sealed, &detailsSalt, &tags, &e.CreatedAt, &e.UpdatedAt, &deletedAt)
+		err = q.QueryRow(`SELECT kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, tags, created_at, updated_at, deleted_at FROM trash WHERE id = ?`, id).
+			Scan(&kind, &e.Service, &e.Username, &r.data, &r.salt, &settings, &e.Folder, &url, &details, &r.sealed, &r.detailsSalt, &tags, &e.CreatedAt, &e.UpdatedAt, &deletedAt)
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %d", ErrNotInTrash, id)
-		}
-		if err != nil {
-			return fmt.Errorf("read the trash: %w", err)
+			err = fmt.Errorf("%w: %d", ErrNotInTrash, id)
+		} else if err != nil {
+			err = fmt.Errorf("read the trash: %w", err)
 		}
 		e.Kind = vault.Kind(kind)
-		to = e.Key
-		if as != (vault.Key{}) {
-			if as.Kind != e.Kind {
-				return fmt.Errorf("%s is a %s entry; restore it under another %s name", e.Key, e.Kind, e.Kind)
+		return e, r, settings, url, details, tags, err
+	}
+	e, was, _, _, _, _, err := read(s.db)
+	if err != nil {
+		return vault.Key{}, err
+	}
+	to := e.Key
+	if as != (vault.Key{}) {
+		if as.Kind != e.Kind {
+			return vault.Key{}, fmt.Errorf("%s is a %s entry; restore it under another %s name", e.Key, e.Kind, e.Kind)
+		}
+		if err := as.Validate(); err != nil {
+			return vault.Key{}, err
+		}
+		to = as
+	}
+	now := was
+	if to != e.Key {
+		if now.data, now.salt, err = s.resealSecret(e.Key, to, was.data, was.salt, nil); err != nil {
+			return vault.Key{}, err
+		}
+		if was.sealed != nil {
+			if now.sealed, now.detailsSalt, err = s.resealDetails(e.Key, to, was.sealed, was.detailsSalt); err != nil {
+				return vault.Key{}, err
 			}
-			if err := as.Validate(); err != nil {
-				return err
-			}
-			to = as
+		}
+	}
+	err = s.inTx(func(tx *sql.Tx) error {
+		e, again, settings, url, details, tags, err := read(tx)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(again.data, was.data) || !bytes.Equal(again.salt, was.salt) || !bytes.Equal(again.sealed, was.sealed) || !bytes.Equal(again.detailsSalt, was.detailsSalt) {
+			return fmt.Errorf("%w (%s, in the trash)", ErrEntryChanged, e.Key)
 		}
 		if err := s.nameFree(tx, to, 0); err != nil {
-			if errors.Is(err, ErrNameTaken) {
-				return fmt.Errorf("%w: %s already exists: rename or delete it first, or restore with --as <new name>", ErrNameTaken, to)
+			if !errors.Is(err, ErrNameTaken) {
+				return err
 			}
-			return err
+			if as != (vault.Key{}) {
+				return nameTaken(fmt.Sprintf("%s already exists: rename or delete it first, or restore under another name", to))
+			}
+			return nameTaken(fmt.Sprintf("%s already exists: rename or delete it first, or restore with --as <new name>", to))
 		}
 		if err := s.keyUnchanged(tx); err != nil {
 			return err
-		}
-		if to != e.Key {
-			if data, salt, err = s.resealSecret(e.Key, to, data, salt, nil); err != nil {
-				return err
-			}
-			if sealed != nil {
-				if sealed, detailsSalt, err = s.resealDetails(e.Key, to, sealed, detailsSalt); err != nil {
-					return err
-				}
-			}
 		}
 		var newID int64
 		if err := tx.QueryRow(`
 			INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-			string(to.Kind), to.Service, to.Username, data, salt, settings, e.Folder, url, details, sealed, detailsSalt, e.CreatedAt, e.UpdatedAt).Scan(&newID); err != nil {
+			string(to.Kind), to.Service, to.Username, now.data, now.salt, settings, e.Folder, url, details, now.sealed, now.detailsSalt, e.CreatedAt, e.UpdatedAt).Scan(&newID); err != nil {
 			return fmt.Errorf("restore %s: %w", to, err)
 		}
 		var tagList []string
-		if err := json.Unmarshal([]byte(tags), &tagList); err != nil {
-			return fmt.Errorf("read the tags of %s in the trash: %w", e.Key, err)
+		if json.Unmarshal([]byte(tags), &tagList) != nil {
+			tagList = nil // damaged tags; the entry comes back without them
 		}
 		for _, t := range tagList {
 			if _, err := tx.Exec(`INSERT INTO entry_tags (entry_id, tag) VALUES (?, ?)`, newID, t); err != nil {
@@ -151,41 +181,54 @@ func (s *Store) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
 	return to, nil
 }
 
-// RemoveFromTrash deletes the trash's entry id for good, and returns its
-// name.
-func (s *Store) RemoveFromTrash(id int64) (vault.Key, error) {
-	var k vault.Key
+// RemoveFromTrash deletes the trash's entries ids for good, all or none:
+// an id not in the trash deletes nothing. An id named twice counts once.
+// It returns their names.
+func (s *Store) RemoveFromTrash(ids ...int64) ([]vault.Key, error) {
+	ids = slices.Clone(ids)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	var gone []vault.Key
 	err := s.inTx(func(tx *sql.Tx) error {
-		var kind string
-		err := tx.QueryRow(`DELETE FROM trash WHERE id = ? RETURNING kind, service, username`, id).Scan(&kind, &k.Service, &k.Username)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %d", ErrNotInTrash, id)
+		for _, id := range ids {
+			var k vault.Key
+			var kind string
+			err := tx.QueryRow(`DELETE FROM trash WHERE id = ? RETURNING kind, service, username`, id).Scan(&kind, &k.Service, &k.Username)
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("%w: %d; nothing was removed", ErrNotInTrash, id)
+			}
+			if err != nil {
+				return fmt.Errorf("remove %d from the trash: %w", id, err)
+			}
+			k.Kind = vault.Kind(kind)
+			gone = append(gone, k)
 		}
-		k.Kind = vault.Kind(kind)
-		return err
+		return nil
 	})
 	if err != nil {
-		return vault.Key{}, err
+		return nil, err
 	}
-	s.audit("purge", k.String(), "Removed from the trash")
-	return k, nil
+	for _, k := range gone {
+		s.audit("purge", k.String(), "Removed from the trash")
+	}
+	return gone, nil
 }
 
 // EmptyTrash deletes every entry in the trash for good, and returns how
 // many there were.
 func (s *Store) EmptyTrash() (int, error) {
-	return s.purgeTrash(`DELETE FROM trash RETURNING kind, service, username`, "Trash emptied")
+	return s.purgeTrash("empty the trash", `DELETE FROM trash RETURNING kind, service, username`, "Trash emptied")
 }
 
 // ExpireTrash deletes for good the entries deleted before cutoff, and
 // returns how many.
 func (s *Store) ExpireTrash(cutoff time.Time) (int, error) {
-	return s.purgeTrash(`DELETE FROM trash WHERE deleted_at < ? RETURNING kind, service, username`, "Kept its days in the trash", cutoff.UTC())
+	return s.purgeTrash("remove what has been in the trash its days", `DELETE FROM trash WHERE deleted_at < ? RETURNING kind, service, username`, "Kept its days in the trash", cutoff.UTC())
 }
 
 // purgeTrash runs query, a DELETE FROM trash returning the names deleted,
-// and logs each with detail.
-func (s *Store) purgeTrash(query, detail string, args ...any) (int, error) {
+// and logs each with detail; what is what it does, in errors.
+func (s *Store) purgeTrash(what, query, detail string, args ...any) (int, error) {
 	var gone []vault.Key
 	err := s.inTx(func(tx *sql.Tx) (err error) {
 		rows, err := tx.Query(query, args...)
@@ -209,7 +252,7 @@ func (s *Store) purgeTrash(query, detail string, args ...any) (int, error) {
 		return rows.Err()
 	})
 	if err != nil {
-		return 0, fmt.Errorf("empty the trash: %w", err)
+		return 0, fmt.Errorf("%s: %w", what, err)
 	}
 	for _, k := range gone {
 		s.audit("purge", k.String(), detail)
