@@ -562,8 +562,13 @@ func TestRekeyHolderProcess(t *testing.T) {
 	if dir == "" {
 		t.Skip("run by TestRotate_WithTheVaultOpenElsewhere")
 	}
+	// The report is written aside and renamed into place, so the parent,
+	// which waits for the file to exist, never reads it half written.
 	report := func(lines ...string) {
-		_ = os.WriteFile(filepath.Join(dir, "result"), []byte(strings.Join(lines, "\n")), 0o600) //nolint:errcheck // the parent fails on a missing report
+		tmp := filepath.Join(dir, "result.tmp")
+		if os.WriteFile(tmp, []byte(strings.Join(lines, "\n")), 0o600) == nil {
+			_ = os.Rename(tmp, filepath.Join(dir, "result")) //nolint:errcheck // the parent fails on a missing report
+		}
 	}
 	store, err := openSQLiteStore()
 	if err != nil {
