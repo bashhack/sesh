@@ -300,7 +300,7 @@ func TestImport_Bitwarden(t *testing.T) {
 		"  Passwords, in Work-Accounts (1):\n    password/GitHub/alice\n",
 		`        field "linked user" not kept`,
 		"  Secure notes, in no folder (1):\n    secure_note/Me\n",
-		"Not kept:\n  items set to ask for the master password again (sesh doesn't ask): 1\n  old passwords (sesh keeps no history yet): 1\n",
+		"Not kept:\n  items set to ask for the master password again (sesh doesn't ask): 1\n  old passwords (not yet imported into history): 1\n",
 		"Already in the vault (1):\n  totp/GitHub/alice\n",
 		`named "GitHub (2)" in sesh: an entry before it has the name`,
 		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
@@ -489,7 +489,7 @@ func TestImport_KeePass(t *testing.T) {
 		`"Home/Lab" is "Home-Lab" in sesh`,
 		`"Old account": in KeePass's recycle bin`,
 		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
-		"earlier versions of entries (sesh keeps no history yet): 12\n",
+		"earlier versions of entries (not yet imported into history): 12\n",
 		"attachments (sesh doesn't hold files): 2\n",
 	} {
 		if !strings.Contains(stderr, want) {

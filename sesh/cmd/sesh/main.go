@@ -249,6 +249,7 @@ var subcommands = []candidate{
 	{"doctor", "Check sesh's setup, and that the vault can all be read"},
 	{"edit", "Rename an entry, or change its username, kind, or secret"},
 	{"folder", "Move entries between folders, rename folders, list them"},
+	{"history", "An entry's earlier secrets: list, show, copy, restore, forget"},
 	{"import", "Bring entries over from another app, such as Google Authenticator"},
 	{"init", "Choose where sesh keeps the vault"},
 	{"inject", "Fill a template's sesh:// references into a file"},
@@ -356,6 +357,8 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 	warnAuditSize(store, cfg)
 	autoBackup(store, cfg)
 	store.SetTrashDays(cfg.TrashKeepDays.Value)
+	store.SetHistoryKeep(cfg.HistoryKeep.Value)
+	pruneHistory(store, cfg)
 	expireTrash(store, cfg)
 	return store, nil
 }
@@ -871,6 +874,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "history":
+		if err := runHistory(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "tag":
 		if err := runTag(app, rest); err != nil {
 			fatal(app, err)
@@ -1158,6 +1166,7 @@ func (a *App) PrintUsage() error {
 		"  sesh folder move|rename|list  File entries in folders",
 		"  sesh tag add|remove|rename|list  Tag entries",
 		"  sesh trash [restore|remove|empty]  List deleted entries, put one back, or delete them for good",
+		"  sesh history <id> [--show|--clip|--restore|--forget N]  An entry's earlier secrets",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",

@@ -470,6 +470,7 @@ func checkVault(c *doctorChecks, cfg *config.Config, dbPath string, mat *databas
 		}
 	}
 	checkTrash(c, &report)
+	checkHistory(c, &report)
 	checkRecovery(c, &report)
 	checkTouchID(c, touchFile, touchErr, database.UnlockID(mat.Verify))
 	checkAWSCLI(c, store)
@@ -627,6 +628,85 @@ func checkTrash(c *doctorChecks, r *database.VerifyReport) {
 			c.todo("Restore it, if you want it back; it comes back without its tags:", "sesh trash restore "+id)
 		}
 	}
+}
+
+// checkHistory reports the entries' earlier secrets, when there are any,
+// and those that can't be read: for each entry, one --forget naming all of
+// its unreadable versions (resolved together, so the numbers hold); for an
+// entry in the trash, restoring it first, or deleting it for good.
+func checkHistory(c *doctorChecks, r *database.VerifyReport) {
+	switch {
+	case r.History == 0:
+		return
+	case len(r.HistoryProblems) == 0:
+		c.row(markOK, "History", countOf(int64(r.History), "earlier secret")+", all readable")
+		return
+	}
+	var details []string
+	forget := map[vault.Key][]string{}
+	var forgetOrder []vault.Key
+	trashed := map[int64]vault.Key{}
+	var trashOrder []int64
+	// Versions whose time alone doesn't read still read: forgetting them is
+	// optional, and said in the entry's one --forget when it has one, so
+	// following the advice in order can't renumber what it names.
+	timeOnly := map[vault.Key][]string{}
+	var timeOrder []vault.Key
+	for _, p := range r.HistoryProblems {
+		switch {
+		case p.TrashID != 0:
+			details = append(details, fmt.Sprintf("%s, in the trash (id %d): an %s", p.Key, p.TrashID, historyProblemText(p.Kind)))
+			if _, ok := trashed[p.TrashID]; !ok {
+				trashed[p.TrashID] = p.Key
+				trashOrder = append(trashOrder, p.TrashID)
+			}
+		case p.Kind == database.ProblemTimes:
+			details = append(details, fmt.Sprintf("%s, version %d: %s", p.Key, p.Version, historyProblemText(p.Kind)))
+			if _, ok := timeOnly[p.Key]; !ok {
+				timeOrder = append(timeOrder, p.Key)
+			}
+			timeOnly[p.Key] = append(timeOnly[p.Key], strconv.Itoa(p.Version))
+		default:
+			details = append(details, fmt.Sprintf("%s, version %d: %s", p.Key, p.Version, historyProblemText(p.Kind)))
+			if _, ok := forget[p.Key]; !ok {
+				forgetOrder = append(forgetOrder, p.Key)
+			}
+			forget[p.Key] = append(forget[p.Key], strconv.Itoa(p.Version))
+		}
+	}
+	for _, k := range forgetOrder {
+		what := fmt.Sprintf("Forget %s's earlier secrets that can't be read:", k)
+		if t := timeOnly[k]; len(t) > 0 {
+			what = fmt.Sprintf("Forget %s's earlier secrets that can't be read (add %s, whose time alone doesn't read, only if you don't need it):", k, strings.Join(t, ","))
+		}
+		c.todo(what, fmt.Sprintf("sesh history %s --forget %s", shell.Quote(k.String()), strings.Join(forget[k], ",")))
+	}
+	for _, k := range timeOrder {
+		if _, ok := forget[k]; ok {
+			continue
+		}
+		what := fmt.Sprintf("%s's version %s still reads, so this needs nothing; forget it only if you don't need it:", k, timeOnly[k][0])
+		if len(timeOnly[k]) > 1 {
+			what = fmt.Sprintf("%s's versions %s still read, so these need nothing; forget them only if you don't need them:", k, strings.Join(timeOnly[k], ", "))
+		}
+		c.todo(what,
+			fmt.Sprintf("sesh history %s --forget %s", shell.Quote(k.String()), strings.Join(timeOnly[k], ",")))
+	}
+	for _, id := range trashOrder {
+		k := trashed[id]
+		c.todo(fmt.Sprintf("%s, in the trash, has earlier secrets that can't be read: restore it, then run sesh doctor again to forget them; or delete it for good with sesh trash remove %d:", k, id),
+			fmt.Sprintf("sesh trash restore %d", id))
+	}
+	c.fails += len(r.HistoryProblems) - 1
+	c.row(markFail, "History", fmt.Sprintf("%d of %s can't be read", len(r.HistoryProblems), countOf(int64(r.History), "earlier secret")), details...)
+}
+
+// historyProblemText says what's wrong with an earlier secret.
+func historyProblemText(k database.ProblemKind) string {
+	if k == database.ProblemTimes {
+		return "when it was replaced doesn't read"
+	}
+	return "earlier secret doesn't decrypt"
 }
 
 // problemText says in plain words what's wrong with an entry.

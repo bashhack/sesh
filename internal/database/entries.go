@@ -1,6 +1,7 @@
 package database
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
@@ -153,6 +154,30 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if err != nil {
 		return err
 	}
+	// A secret it replaces is kept in the entry's history, sealed here,
+	// outside the transaction, as Edit's sealing is.
+	// The write then checks the entry is as read: absent, or with that
+	// secret, so another command's store in between isn't replaced
+	// without being kept.
+	var old *oldSecret
+	keeping, existed := s.historyKeep > 0, false
+	if keeping {
+		var data, oldSalt []byte
+		err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return fmt.Errorf("read %s: %w", e.Key, err)
+		default:
+			existed = true
+			if old, err = s.replacing(e.Key, e.Key, data, oldSalt, secret); err != nil {
+				return err
+			}
+			if old == nil {
+				old = &oldSecret{from: data}
+			}
+		}
+	}
 	encData, salt, err := s.oracle.EncryptEntry(secret, entryAAD(e.Key))
 	if err != nil {
 		return fmt.Errorf("encrypt %s: %w", e.Key, err)
@@ -179,6 +204,19 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 		onConflict += `, url = excluded.url, details = excluded.details, sealed_details = excluded.sealed_details, details_salt = excluded.details_salt`
 	}
 	err = s.inTx(func(tx *sql.Tx) error {
+		if keeping {
+			var dataNow []byte
+			err := tx.QueryRow(`SELECT encrypted_data FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&dataNow)
+			switch {
+			case !existed && errors.Is(err, sql.ErrNoRows):
+			case !existed, err != nil, !bytes.Equal(dataNow, old.from):
+				return ErrEntryChanged
+			default:
+				if err := s.keepOld(tx, e.Key, old, now); err != nil {
+					return err
+				}
+			}
+		}
 		var id int64
 		err := tx.QueryRow(`
 			INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at)
@@ -364,9 +402,9 @@ func (s *Store) deleteMany(keys []vault.Key, purge bool) error {
 				return notFound(k)
 			}
 			if err == nil && toTrash {
-				err = trash(tx, id, now)
+				err = trash(tx, id, k, now)
 			} else if err == nil {
-				_, err = tx.Exec(`DELETE FROM entries WHERE id = ?`, id)
+				err = forget(tx, id, k)
 			}
 			if err != nil {
 				return fmt.Errorf("delete %s: %w", k, err)

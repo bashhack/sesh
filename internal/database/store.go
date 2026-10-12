@@ -22,6 +22,9 @@ type Store struct {
 	// trashDays is how many days deleted entries stay in the trash; 0
 	// deletes for good.
 	trashDays int
+	// historyKeep is how many earlier secrets each entry keeps; 0 keeps
+	// none.
+	historyKeep int
 }
 
 // MaxSecretSize is the largest secret the store accepts. It applies however

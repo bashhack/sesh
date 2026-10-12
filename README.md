@@ -253,6 +253,7 @@ When you run `sesh -service aws`, you enter a secure subshell with:
 -list                           # List entries for service
 -delete <id>                    # Delete entry by ID, into the trash (sesh trash restore puts it back)
 -purge                          # With -delete: delete for good
+sesh history <id>               # An entry's earlier secrets; --show/--clip/--restore/--forget N
 -setup                          # Run setup wizard
 -clip                           # Copy to clipboard
 ```
