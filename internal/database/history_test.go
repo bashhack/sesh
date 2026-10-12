@@ -416,8 +416,8 @@ func earlier(secrets ...string) []vault.Earlier {
 func TestHistory_SaveImported(t *testing.T) {
 	s := historyStore(t, 10)
 	k := vault.Key{Kind: vault.KindPassword, Service: "github"}
-	if err := s.SaveImported(&vault.Entry{Key: k}, []byte("now"), nil, earlier("b", "now", "a", "b", "")); err != nil {
-		t.Fatal(err)
+	if got, err := s.SaveImported(&vault.Entry{Key: k}, []byte("now"), nil, earlier("b", "now", "a", "b", "")); err != nil || got != (ImportedHistory{Kept: 2}) {
+		t.Fatalf("SaveImported = %+v, %v", got, err)
 	}
 	if got := strings.Join(versions(t, s, k), " "); got != "b a" {
 		t.Errorf("history = %q, want b a", got)
@@ -430,8 +430,8 @@ func TestHistory_SaveImported(t *testing.T) {
 		t.Errorf("a replaced at %v, want %v", vs[1].ReplacedAt, want)
 	}
 	// Importing it again adds nothing.
-	if err := s.SaveImported(&vault.Entry{Key: k}, []byte("now"), nil, earlier("b", "a")); err != nil {
-		t.Fatal(err)
+	if got, err := s.SaveImported(&vault.Entry{Key: k}, []byte("now"), nil, earlier("b", "a")); err != nil || got != (ImportedHistory{}) {
+		t.Fatalf("SaveImported again = %+v, %v", got, err)
 	}
 	if got := strings.Join(versions(t, s, k), " "); got != "b a" {
 		t.Errorf("after importing again, history = %q, want b a", got)
@@ -448,8 +448,8 @@ func TestHistory_SaveImportedOver(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.SaveImported(&vault.Entry{Key: k}, []byte("theirs"), nil, earlier("old-1", "mine-1", "old-2", "old-3")); err != nil {
-		t.Fatal(err)
+	if got, err := s.SaveImported(&vault.Entry{Key: k}, []byte("theirs"), nil, earlier("old-1", "mine-1", "old-2", "old-3")); err != nil || got != (ImportedHistory{Kept: 2, NoRoom: 1}) {
+		t.Fatalf("SaveImported = %+v, %v", got, err)
 	}
 	if got := strings.Join(versions(t, s, k), " "); got != "mine-2 mine-1 old-1 old-2" {
 		t.Errorf("history = %q, want mine-2 mine-1 old-1 old-2", got)
@@ -467,7 +467,7 @@ func TestHistory_SaveImportedOver(t *testing.T) {
 func TestHistory_SaveImportedKeepNone(t *testing.T) {
 	s := historyStore(t, 0)
 	k := vault.Key{Kind: vault.KindPassword, Service: "github"}
-	if err := s.SaveImported(&vault.Entry{Key: k}, []byte("now"), nil, earlier("a")); err != nil {
+	if _, err := s.SaveImported(&vault.Entry{Key: k}, []byte("now"), nil, earlier("a")); err != nil {
 		t.Fatal(err)
 	}
 	if got := versions(t, s, k); len(got) != 0 {
@@ -492,10 +492,29 @@ func TestHistory_SaveImportedConcurrentForget(t *testing.T) {
 		}
 	}
 	s.oracle = o
-	if err := s.SaveImported(&vault.Entry{Key: k}, []byte("b"), nil, earlier("old")); !errors.Is(err, ErrEntryChanged) {
+	if _, err := s.SaveImported(&vault.Entry{Key: k}, []byte("b"), nil, earlier("old")); !errors.Is(err, ErrEntryChanged) {
 		t.Errorf("import across a forget = %v", err)
 	}
 	if got := versions(t, s, k); len(got) != 0 {
 		t.Errorf("history = %q, want none", got)
+	}
+}
+
+// Repeats take no room under history.keep, and an earlier secret too
+// large to keep is counted, not a failure.
+func TestHistory_SaveImportedRoom(t *testing.T) {
+	s := historyStore(t, 2)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	// A, B, C, then B again: Bitwarden's list is C, B, A.
+	if got, err := s.SaveImported(&vault.Entry{Key: k}, []byte("B"), nil, earlier("C", "B", "A")); err != nil || got != (ImportedHistory{Kept: 2}) {
+		t.Fatalf("SaveImported = %+v, %v", got, err)
+	}
+	if got := strings.Join(versions(t, s, k), " "); got != "C A" {
+		t.Errorf("history = %q, want C A", got)
+	}
+	big := vault.Earlier{Secret: make([]byte, MaxSecretSize+1)}
+	k2 := vault.Key{Kind: vault.KindPassword, Service: "gitlab"}
+	if got, err := s.SaveImported(&vault.Entry{Key: k2}, []byte("now"), nil, []vault.Earlier{big, {Secret: []byte("a")}}); err != nil || got != (ImportedHistory{Kept: 1, TooLarge: 1}) {
+		t.Fatalf("SaveImported with a large one = %+v, %v", got, err)
 	}
 }

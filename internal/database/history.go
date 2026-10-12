@@ -102,23 +102,35 @@ func (s *Store) trimHistory(tx *sql.Tx, k vault.Key) error {
 // that also brings the entry's earlier secrets, the newest first. They go
 // into its history below what it has, and below the secret this replaces;
 // one the entry already has, as its secret or an earlier one, isn't kept
-// again, so importing twice adds nothing twice. Past history.keep, the
-// oldest are dropped, as ever.
-func (s *Store) SaveImported(e *vault.Entry, secret []byte, d *vault.Details, earlier []vault.Earlier) error {
+// again, so importing twice adds nothing twice. Only as many as
+// history.keep has room for are kept, the newest, and none over
+// MaxSecretSize; the result says how many.
+func (s *Store) SaveImported(e *vault.Entry, secret []byte, d *vault.Details, earlier []vault.Earlier) (ImportedHistory, error) {
 	if d != nil {
 		if err := d.Check(e.Kind); err != nil {
-			return err
+			return ImportedHistory{}, err
 		}
 	}
-	return s.write(e, secret, true, d, earlier)
+	var got ImportedHistory
+	err := s.write(e, secret, true, d, earlier, &got)
+	return got, err
+}
+
+// ImportedHistory is what SaveImported did with an entry's earlier
+// secrets, leaving out those the entry already had: how many it kept, and
+// how many it didn't, for lack of room under history.keep or for being
+// over MaxSecretSize.
+type ImportedHistory struct {
+	Kept, NoRoom, TooLarge int
 }
 
 // importedHistory is what an import adds to an entry's history: sealed,
 // the newest first, and the ids of the history the entry had when read,
 // the newest first, which go above them.
 type importedHistory struct {
-	sealed []oldSecret
-	had    []int64
+	sealed           []oldSecret
+	had              []int64
+	noRoom, tooLarge int
 }
 
 func (h *importedHistory) count() int {
@@ -128,12 +140,20 @@ func (h *importedHistory) count() int {
 	return len(h.sealed)
 }
 
+func (h *importedHistory) result() ImportedHistory {
+	if h == nil {
+		return ImportedHistory{}
+	}
+	return ImportedHistory{Kept: len(h.sealed), NoRoom: h.noRoom, TooLarge: h.tooLarge}
+}
+
 // sealEarlier seals, for k's history, those of earlier that k doesn't
 // have yet: not secret, the one it's about to replace (data and salt, nil
 // when k is new), or one in its history; only as many as history.keep has
 // room for below those, of which old, the replaced secret, will be one
-// when it's kept. A secret already kept that doesn't decrypt (damage)
-// can't be compared, and is passed over.
+// when it's kept, and none over MaxSecretSize: those are counted. A
+// secret already kept that doesn't decrypt (damage) can't be compared,
+// and is passed over.
 func (s *Store) sealEarlier(k vault.Key, secret, data, salt []byte, old *oldSecret, earlier []vault.Earlier) (_ *importedHistory, err error) {
 	have := [][]byte{secret}
 	defer func() {
@@ -176,20 +196,22 @@ func (s *Store) sealEarlier(k vault.Key, secret, data, salt []byte, old *oldSecr
 		room--
 	}
 	for _, e := range earlier {
-		if len(h.sealed) >= room {
-			break
-		}
 		if len(e.Secret) == 0 || slices.ContainsFunc(have, func(p []byte) bool { return bytes.Equal(p, e.Secret) }) {
 			continue
 		}
-		if len(e.Secret) > MaxSecretSize {
-			return nil, fmt.Errorf("%w: an earlier secret of %s is %d bytes (max %d)", ErrSecretTooLarge, k, len(e.Secret), MaxSecretSize)
+		have = append(have, slices.Clone(e.Secret))
+		switch {
+		case len(e.Secret) > MaxSecretSize:
+			h.tooLarge++
+			continue
+		case len(h.sealed) >= room:
+			h.noRoom++
+			continue
 		}
 		data, salt, err := s.oracle.EncryptEntry(e.Secret, historyAAD(k))
 		if err != nil {
 			return nil, fmt.Errorf("encrypt an earlier secret of %s: %w", k, err)
 		}
-		have = append(have, slices.Clone(e.Secret))
 		h.sealed = append(h.sealed, oldSecret{data: data, salt: salt, at: e.ReplacedAt})
 	}
 	return h, nil
@@ -391,7 +413,7 @@ func (s *Store) RestoreVersion(k vault.Key, n int) (kept bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	if err := s.write(&vault.Entry{Key: k}, secret, false, nil, nil); err != nil {
+	if err := s.write(&vault.Entry{Key: k}, secret, false, nil, nil, nil); err != nil {
 		return false, err
 	}
 	after, err := s.History(k)

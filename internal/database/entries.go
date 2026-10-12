@@ -115,12 +115,12 @@ func (s *Store) get(k vault.Key, detail string) ([]byte, error) {
 
 // Put implements vault.Store.
 func (s *Store) Put(k vault.Key, secret []byte) error {
-	return s.write(&vault.Entry{Key: k}, secret, false, nil, nil)
+	return s.write(&vault.Entry{Key: k}, secret, false, nil, nil, nil)
 }
 
 // Save implements vault.Store.
 func (s *Store) Save(e *vault.Entry, secret []byte) error {
-	return s.write(e, secret, true, nil, nil)
+	return s.write(e, secret, true, nil, nil, nil)
 }
 
 // SaveWithDetails implements vault.Store.
@@ -128,15 +128,15 @@ func (s *Store) SaveWithDetails(e *vault.Entry, secret []byte, d *vault.Details)
 	if err := d.Check(e.Kind); err != nil {
 		return err
 	}
-	return s.write(e, secret, true, d, nil)
+	return s.write(e, secret, true, d, nil, nil)
 }
 
 // write stores e's secret. whole also replaces its settings, folder, tags,
 // and times; otherwise an existing entry keeps them, except its update
 // time. Details, when not nil, replace the entry's in the same write.
 // earlier, the newest first, go into the entry's history below what it
-// has (see SaveImported).
-func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Details, earlier []vault.Earlier) error {
+// has (see SaveImported), and got, when not nil, says what became of them.
+func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Details, earlier []vault.Earlier, got *ImportedHistory) error {
 	if err := e.Key.Validate(); err != nil {
 		return err
 	}
@@ -264,6 +264,9 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 		}
 	}
 	s.audit("modify", e.Key.String(), detail)
+	if got != nil {
+		*got = imported.result()
+	}
 	return nil
 }
 

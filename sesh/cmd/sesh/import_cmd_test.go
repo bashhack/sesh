@@ -301,7 +301,7 @@ func TestImport_Bitwarden(t *testing.T) {
 		"  Passwords, in Work-Accounts (1):\n    password/GitHub/alice\n",
 		`        field "linked user" not kept`,
 		"  Secure notes, in no folder (1):\n    secure_note/Me\n",
-		"Old passwords, into the entries' history: 1 (sesh history <id> lists them)\n",
+		"Old passwords, for the entries' history: up to 1 (any an entry has already aren't added again)\n",
 		"Not kept:\n  items set to ask for the master password again (sesh doesn't ask): 1\n",
 		"Already in the vault (1):\n  totp/GitHub/alice\n",
 		`named "GitHub (2)" in sesh: an entry before it has the name`,
@@ -315,7 +315,7 @@ func TestImport_Bitwarden(t *testing.T) {
 	t.Cleanup(func() { readSecret = old })
 	readSecret = func() ([]byte, error) { return []byte("export-pass-1"), nil }
 	out, stderr, err := runImportOut(t, "y\n", true, "--on-conflict", "skip", bitwardenFixture("password.json"))
-	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from Bitwarden.") || !strings.Contains(stderr, "Password for the Bitwarden export: ") {
+	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from Bitwarden.\nKept 1 old password in their history") || !strings.Contains(stderr, "Password for the Bitwarden export: ") {
 		t.Fatalf("%q\n%s\n%v", out, stderr, err)
 	}
 	if strings.Contains(out, "delete") {
@@ -494,7 +494,7 @@ func TestImport_KeePass(t *testing.T) {
 		`"Home/Lab" is "Home-Lab" in sesh`,
 		`"Old account": in KeePass's recycle bin`,
 		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
-		"Old passwords, into the entries' history: 1 (sesh history <id> lists them)\n",
+		"Old passwords, for the entries' history: up to 1 (any an entry has already aren't added again)\n",
 		"earlier versions with no other password to keep (sesh's history keeps old passwords only): 11\n",
 		"attachments (sesh doesn't hold files): 2\n",
 	} {
@@ -503,7 +503,7 @@ func TestImport_KeePass(t *testing.T) {
 		}
 	}
 	out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "skip", keepassFixture("app-kdbx4.xml"))
-	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from KeePass.") || !strings.Contains(out, "holds your passwords unencrypted") {
+	if err != nil || !strings.Contains(out, "✅ Imported 11 entries from KeePass.\nKept 1 old password in their history") || !strings.Contains(out, "holds your passwords unencrypted") {
 		t.Fatalf("%q, %v", out, err)
 	}
 	store := openDoctorVault(t, env)
@@ -624,14 +624,16 @@ func TestImport_SafariRefusedCode(t *testing.T) {
 	}
 }
 
-// Importing again over the same entries adds no old password twice; with
+// Importing again over the same entries adds no old password twice, and
+// says what was kept; one with no room under history.keep is said; with
 // history.keep 0 none are kept, and the summary says so.
 func TestImport_HistoryAgainAndKeepNone(t *testing.T) {
 	env := importVault(t)
 	gh := vault.Key{Kind: vault.KindPassword, Service: "GitHub", Username: "alice"}
-	for range 2 {
-		if _, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json")); err != nil {
-			t.Fatal(err)
+	for i, want := range []string{"Kept 1 old password in their history", ""} {
+		out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
+		if err != nil || (want != "" && !strings.Contains(out, want)) || (want == "" && strings.Contains(out, "old password")) {
+			t.Fatalf("import %d: %v\n%s", i+1, err, out)
 		}
 	}
 	store := openDoctorVault(t, env)
@@ -639,6 +641,18 @@ func TestImport_HistoryAgainAndKeepNone(t *testing.T) {
 		t.Errorf("after importing twice, history = %v, %v; want 1 version", vs, err)
 	}
 	store.Close() //nolint:errcheck // test cleanup
+
+	// Its password changed in sesh: the one replaced fills history.keep 1.
+	putSecrets(t, gh, "mine")
+	t.Setenv(config.EnvHistoryKeep, "1")
+	if _, err := runFiling(t, runHistory, "password/GitHub/alice", "--forget", "2"); err != nil {
+		t.Fatal(err)
+	}
+	putSecrets(t, gh, "mine-2")
+	out, _, err := runImportOut(t, "", false, "--yes", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
+	if err != nil || !strings.Contains(out, "Not kept: 1 old password past history.keep (1), the oldest.") || strings.Contains(out, "Kept ") {
+		t.Errorf("no room: %v\n%s", err, out)
+	}
 
 	t.Setenv(config.EnvHistoryKeep, "0")
 	_, stderr, err := runImportOut(t, "", false, "--dry-run", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
