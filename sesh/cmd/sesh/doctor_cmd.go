@@ -647,6 +647,11 @@ func checkHistory(c *doctorChecks, r *database.VerifyReport) {
 	var forgetOrder []vault.Key
 	trashed := map[int64]vault.Key{}
 	var trashOrder []int64
+	// Versions whose time alone doesn't read still read: forgetting them is
+	// optional, and said in the entry's one --forget when it has one, so
+	// following the advice in order can't renumber what it names.
+	timeOnly := map[vault.Key][]string{}
+	var timeOrder []vault.Key
 	for _, p := range r.HistoryProblems {
 		switch {
 		case p.TrashID != 0:
@@ -657,8 +662,10 @@ func checkHistory(c *doctorChecks, r *database.VerifyReport) {
 			}
 		case p.Kind == database.ProblemTimes:
 			details = append(details, fmt.Sprintf("%s, version %d: %s", p.Key, p.Version, historyProblemText(p.Kind)))
-			c.todo(fmt.Sprintf("%s's version %d still reads, so this needs nothing; forget it only if you don't need it:", p.Key, p.Version),
-				fmt.Sprintf("sesh history %s --forget %d", shell.Quote(p.Key.String()), p.Version))
+			if _, ok := timeOnly[p.Key]; !ok {
+				timeOrder = append(timeOrder, p.Key)
+			}
+			timeOnly[p.Key] = append(timeOnly[p.Key], strconv.Itoa(p.Version))
 		default:
 			details = append(details, fmt.Sprintf("%s, version %d: %s", p.Key, p.Version, historyProblemText(p.Kind)))
 			if _, ok := forget[p.Key]; !ok {
@@ -668,8 +675,18 @@ func checkHistory(c *doctorChecks, r *database.VerifyReport) {
 		}
 	}
 	for _, k := range forgetOrder {
-		c.todo(fmt.Sprintf("Forget %s's earlier secrets that can't be read:", k),
-			fmt.Sprintf("sesh history %s --forget %s", shell.Quote(k.String()), strings.Join(forget[k], ",")))
+		what := fmt.Sprintf("Forget %s's earlier secrets that can't be read:", k)
+		if t := timeOnly[k]; len(t) > 0 {
+			what = fmt.Sprintf("Forget %s's earlier secrets that can't be read (add %s, whose time alone doesn't read, only if you don't need it):", k, strings.Join(t, ","))
+		}
+		c.todo(what, fmt.Sprintf("sesh history %s --forget %s", shell.Quote(k.String()), strings.Join(forget[k], ",")))
+	}
+	for _, k := range timeOrder {
+		if _, ok := forget[k]; ok {
+			continue
+		}
+		c.todo(fmt.Sprintf("%s's version %s still reads, so this needs nothing; forget it only if you don't need it:", k, strings.Join(timeOnly[k], ",")),
+			fmt.Sprintf("sesh history %s --forget %s", shell.Quote(k.String()), strings.Join(timeOnly[k], ",")))
 	}
 	for _, id := range trashOrder {
 		k := trashed[id]

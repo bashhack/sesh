@@ -153,3 +153,27 @@ func TestDoctor_History(t *testing.T) {
 		t.Errorf("after the printed forget: %v\n%s", err, out)
 	}
 }
+
+// An entry with both a version that doesn't decrypt and one whose time
+// alone doesn't read gets one --forget, naming the other as optional, so
+// doing what doctor says can't renumber the versions it names.
+func TestDoctor_HistoryMixedDamage(t *testing.T) {
+	env := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_MASTER_PASSWORD", "filing-password-1234")
+	populatePasswordStore(t, env, map[string]string{"password/a": "one"})
+	putSecrets(t, vault.Key{Kind: vault.KindPassword, Service: "a"}, "two", "three", "four", "five")
+	// Versions: 2 four (time damaged), 3 three, 4 two (doesn't decrypt), 5 one.
+	sqlExec(t, env.dbPath, `UPDATE history SET replaced_at = 'garbage' WHERE id = (SELECT max(id) FROM history)`)
+	sqlExec(t, env.dbPath, `UPDATE history SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff' WHERE id IN (
+		SELECT id FROM history ORDER BY id DESC LIMIT 1 OFFSET 2)`)
+	out, err := runDoctorOut(t)
+	if !errors.Is(err, errReported) || !strings.Contains(out, "add 2, whose time alone doesn't read, only if you don't need it") ||
+		!strings.Contains(out, "sesh history password/a --forget 4\n") || strings.Contains(out, "--forget 2\n") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	mustRun(t, runHistory, "password/a", "--forget", "4")
+	if got := mustRun(t, runHistory, "password/a", "--show", "4"); got != "one\n" {
+		t.Errorf("after the printed forget, version 4 = %q, want one", got)
+	}
+}
