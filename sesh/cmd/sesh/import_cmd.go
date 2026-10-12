@@ -16,6 +16,7 @@ import (
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/importer"
 	"github.com/bashhack/sesh/internal/importer/bitwarden"
+	"github.com/bashhack/sesh/internal/importer/browser"
 	"github.com/bashhack/sesh/internal/importer/gauth"
 	"github.com/bashhack/sesh/internal/importer/keepass"
 	"github.com/bashhack/sesh/internal/password"
@@ -33,6 +34,9 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
   Sources:
     bitwarden             A Bitwarden JSON export: plain, or protected by a
                           password of its own (sesh asks for it).
+    chrome                Chrome's password export (CSV), or that of another
+                          browser built on Chromium that writes the same.
+    firefox               Firefox's password export (CSV).
     google-authenticator  The "Transfer accounts" QR codes: screenshots or
                           photos (PNG or JPEG), or their otpauth-migration://
                           text in a file, or piped in with - as the file.
@@ -43,11 +47,12 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
   sesh import --from google-authenticator IMG_1234.png IMG_1235.png
   sesh import --from bitwarden bitwarden_export.json
   sesh import --from keepass Passwords.xml
+  sesh import --from chrome "Chrome Passwords.csv"
 
 sesh's own exports are imported with --service password --action import.`
 
 // importSources are the apps sesh import reads.
-var importSources = []string{"bitwarden", "google-authenticator", "keepass"}
+var importSources = []string{"bitwarden", "chrome", "firefox", "google-authenticator", "keepass"}
 
 func addImportFlags(fs *flag.FlagSet) (from, onConflict *string, dryRun, yes *bool) {
 	from = fs.String("from", "", "Where the file comes from: "+strings.Join(importSources, ", "))
@@ -99,6 +104,8 @@ func runImport(app *App, args []string) error {
 		f, err = readBitwarden(app, fs.Args(), terminal)
 	case "keepass":
 		f, err = readKeePass(fs.Args())
+	case browser.Chrome, browser.Firefox:
+		f, err = readBrowser(source, fs.Args())
 	default:
 		return fmt.Errorf("sesh can't import from %q; it can from: %s", source, strings.Join(importSources, ", "))
 	}
@@ -258,9 +265,9 @@ type found struct {
 	entries  []*importer.Entry
 }
 
-// detectSource is the app the files come from: Bitwarden or KeePass for
-// one of their exports (or a file of theirs to be refused as such), Google
-// Authenticator otherwise.
+// detectSource is the app the files come from: Bitwarden, KeePass, Chrome
+// or Firefox for one of their exports (or a file of theirs to be refused
+// as such), Google Authenticator otherwise.
 func detectSource(args []string) string {
 	for _, a := range args {
 		b, err := os.ReadFile(a) //nolint:gosec // the file the user named
@@ -270,6 +277,8 @@ func detectSource(args []string) string {
 			return "bitwarden"
 		case keepass.IsExport(b):
 			return "keepass"
+		case browser.Detect(b) != "":
+			return browser.Detect(b)
 		}
 	}
 	return "google-authenticator"
@@ -550,6 +559,32 @@ func readKeePass(args []string) (found, error) {
 		header:  fmt.Sprintf("Found %s and %s in the KeePass export.", nouns(entries, "entry", "entries"), nouns(groups, "group", "groups")),
 		after:   "This export holds your passwords unencrypted: delete " + args[0] + " now, and empty the trash.",
 		entries: keepass.Entries(&exp),
+	}, nil
+}
+
+// readBrowser reads one browser's password export, from the browser
+// --from names.
+func readBrowser(from string, args []string) (found, error) {
+	if len(args) != 1 {
+		return found{}, fmt.Errorf("give one password export: sesh import --from %s <passwords.csv>", from)
+	}
+	b, err := os.ReadFile(args[0])
+	if err != nil {
+		return found{}, err
+	}
+	defer secure.SecureZeroBytes(b)
+	exp, err := browser.Parse(b)
+	if err != nil {
+		return found{}, err
+	}
+	if exp.Browser != from {
+		return found{}, fmt.Errorf("this is %s's password export: use --from %s", exp.Title(), exp.Browser)
+	}
+	return found{
+		source:  exp.Title(),
+		header:  fmt.Sprintf("Found %s in the %s export.", nouns(len(exp.Logins), "password", "passwords"), exp.Title()),
+		after:   "This export holds your passwords unencrypted: delete " + args[0] + " now, and empty the trash.",
+		entries: browser.Entries(&exp),
 	}, nil
 }
 

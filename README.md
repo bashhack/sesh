@@ -186,10 +186,11 @@ sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
 sesh run --env-file .env -- npm start      # .env holds NAME=sesh://... references, no secrets
 sesh inject -i config.yml.tpl -o config.yml
 
-# Bring entries over: Google Authenticator's "Transfer accounts" QR (as screenshots), a Bitwarden export, or a KeePass XML export
+# Bring entries over: Google Authenticator's "Transfer accounts" QR (as screenshots), or a Bitwarden, KeePass, Chrome or Firefox export
 sesh import --from google-authenticator IMG_1234.png
 sesh import --from bitwarden bitwarden_export.json
 sesh import --from keepass Passwords.xml
+sesh import --from chrome "Chrome Passwords.csv"
 
 # Search across all entries
 sesh -service password -action search -query github

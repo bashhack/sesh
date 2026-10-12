@@ -527,3 +527,51 @@ func TestImport_KeePass(t *testing.T) {
 		}
 	}
 }
+
+// browserFixture is a genuine browser export from the importer's testdata
+// (see internal/importer/browser/browser_test.go).
+func browserFixture(name string) string {
+	return filepath.Join("..", "..", "..", "internal", "importer", "browser", "testdata", name)
+}
+
+// Chrome's and Firefox's exports are found without --from and stored with
+// their URLs and notes; giving the wrong browser says which it is.
+func TestImport_Browsers(t *testing.T) {
+	env := importVault(t)
+	out, stderr, err := runImportOut(t, "", false, "--yes", browserFixture("chromium.csv"))
+	if err != nil || !strings.Contains(stderr, "Found 5 passwords in the Chrome export.") || !strings.Contains(out, "✅ Imported 5 entries from Chrome.") ||
+		!strings.Contains(out, "holds your passwords unencrypted") {
+		t.Fatalf("Chrome: %q\n%s\n%v", out, stderr, err)
+	}
+	_, stderr, err = runImportOut(t, "", false, "--dry-run", browserFixture("firefox.csv"))
+	if err != nil || !strings.Contains(stderr, "Found 5 passwords in the Firefox export.") || !strings.Contains(stderr, "Already in the vault (5):") {
+		t.Errorf("Firefox: %s\n%v", stderr, err)
+	}
+	if _, _, err := runImportOut(t, "", false, "--from", "chrome", browserFixture("firefox.csv")); err == nil || !strings.Contains(err.Error(), "this is Firefox's password export: use --from firefox") {
+		t.Errorf("wrong --from: %v", err)
+	}
+	store := openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github.com", Username: "alice"}
+	d, err := store.Details(gh, "all")
+	if err != nil || d.URL != "https://github.com/" || string(d.Notes) != "main account\nrecovery codes in the safe" {
+		t.Errorf("github.com/alice details = %+v, %v", d, err)
+	}
+	if secret, err := store.Get(vault.Key{Kind: vault.KindPassword, Service: "github.com", Username: "bob"}); err != nil || string(secret) != `gh,"bob"pw` {
+		t.Errorf("bob = %q, %v", secret, err)
+	}
+}
+
+// Firefox's times come across: made, and the password last changed.
+func TestImport_FirefoxTimes(t *testing.T) {
+	env := importVault(t)
+	if _, _, err := runImportOut(t, "", false, "--yes", "--from", "firefox", browserFixture("firefox.csv")); err != nil {
+		t.Fatal(err)
+	}
+	store := openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	e, err := store.Lookup(vault.Key{Kind: vault.KindPassword, Service: "github.com", Username: "alice"})
+	if err != nil || !e.CreatedAt.Equal(time.UnixMilli(1791686628223)) || !e.UpdatedAt.Equal(time.UnixMilli(1791686730455)) {
+		t.Errorf("github.com/alice = %+v, %v", e, err)
+	}
+}

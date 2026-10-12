@@ -1,0 +1,6 @@
+"url","username","password","httpRealm","formActionOrigin","guid","timeCreated","timeLastUsed","timePasswordChanged"
+"https://github.com","alice","gh-pass-2",,"","{b0e7d032-40fb-426a-b5f9-8338d395e627}","1791686628223","1791686628223","1791686730455"
+"https://github.com","bob","gh,""bob""pw",,"","{e03468a1-8b92-495e-87ce-d226b612fa2c}","1791686631815","1791686631815","1791686631815"
+"https://www.example.com:8443","","ex-pw",,"","{1a4e192e-80ff-43a3-8cf9-9195cbe7544f}","1791686635403","1791686635403","1791686635403"
+"https://accounts.google.com","alice@example.com","g-pw",,"","{a1e311be-b4cb-4af0-a325-27e4c5c69999}","1791686693040","1791686693040","1791686693040"
+"https://login.example.org","jürgen","pässwörd",,"","{818eefa4-1d73-4a34-ba00-addf99bbf451}","1791686707090","1791686707090","1791686707090"

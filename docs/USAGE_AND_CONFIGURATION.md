@@ -1159,7 +1159,7 @@ sesh inject -i config.yml.tpl -o config.yml
 - **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
 ### Importing from other apps (`sesh import`)
 
-`sesh import` brings entries over from another app: Bitwarden, KeePass (KeePassXC or KeePass 2), or Google Authenticator. It reads everything first, shows what it found, then asks:
+`sesh import` brings entries over from another app: Bitwarden, KeePass (KeePassXC or KeePass 2), Chrome, Firefox, or Google Authenticator. It reads everything first, shows what it found, then asks:
 - what it will import, by kind and folder;
 - which entries you already have;
 - what it will skip, and why;
@@ -1221,6 +1221,23 @@ sesh import --from keepass Passwords.xml
   - TOTP set up in an older layout (KeePassXC's old "TOTP Seed" and "TOTP Settings", the KeeOtp plugin's, or KeePass 2's own): the password still comes across; add the TOTP with `sesh --service totp --setup`;
   - Steam codes, counter-based (HOTP) codes (including KeePass 2's `HmacOtp-*` fields), and algorithms other than SHA-1, SHA-256 and SHA-512.
 - **The times** each entry was made and last changed come across.
+- **The export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
+
+**Chrome and Firefox.** Export your saved passwords as CSV:
+- **Chrome:** Password Manager (chrome://password-manager/settings), Export passwords. Other browsers built on Chromium that write the same columns (`name,url,username,password,note`, or before Chrome 123 without `note`) are read the same way.
+- **Firefox:** Passwords (about:logins), the ⋯ menu, Export Passwords.
+
+```
+sesh import --from chrome "Chrome Passwords.csv"
+sesh import --from firefox passwords.csv
+```
+
+- **Each login** becomes a password entry named for its site, without a leading `www.` (`github.com`, `accounts.google.com`, `example.com:8443`), with the full address as its URL. A site with a non-Latin name from Chrome is named in its letters (`bücher.example`) only where Chrome's export names it so: Chrome keeps the `xn--` form for names that could pass for another site (`xn--pple-43d.com`, with a Cyrillic а) and for right-to-left ones, and so does sesh. Firefox's export doesn't say how Firefox shows a name, so its non-Latin names keep the `xn--` form. An app's login in Chrome (`android://…`) is named as Chrome names the app.
+- **Two logins for one site and username** get ` (2)` added to the second. Chrome writes a login once for each address it was saved on; in its export, a row with the same site, username and password as an earlier one is skipped, and listed.
+- **Firefox's own sign-in to your Mozilla account,** which its export includes though its password manager doesn't show it, is skipped.
+- **Chrome's notes** come across; Firefox's export has none. Firefox's times (made and last changed) come across, and an HTTP-authentication login keeps its realm in a field `http-realm`.
+- **No folder or tag** is given; file them afterwards with `sesh folder` and `sesh tag`.
+- **A login with no password** is skipped, and listed.
 - **The export** holds every password unencrypted. sesh reminds you to delete it once the import is done.
 
 **Google Authenticator.** Its "Transfer accounts" moves your codes off the phone:

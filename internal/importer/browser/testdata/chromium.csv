@@ -1,0 +1,7 @@
+name,url,username,password,note
+accounts.google.com,https://accounts.google.com/,alice@example.com,g-pw,
+github.com,https://github.com/,alice,gh-pass-1,"main account
+recovery codes in the safe"
+github.com,https://github.com/,bob,"gh,""bob""pw",
+login.example.org,https://login.example.org/,jürgen,pässwörd,
+www.example.com:8443,https://www.example.com:8443/,,ex-pw,
