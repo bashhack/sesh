@@ -685,7 +685,11 @@ func checkHistory(c *doctorChecks, r *database.VerifyReport) {
 		if _, ok := forget[k]; ok {
 			continue
 		}
-		c.todo(fmt.Sprintf("%s's version %s still reads, so this needs nothing; forget it only if you don't need it:", k, strings.Join(timeOnly[k], ",")),
+		what := fmt.Sprintf("%s's version %s still reads, so this needs nothing; forget it only if you don't need it:", k, timeOnly[k][0])
+		if len(timeOnly[k]) > 1 {
+			what = fmt.Sprintf("%s's versions %s still read, so these need nothing; forget them only if you don't need them:", k, strings.Join(timeOnly[k], ", "))
+		}
+		c.todo(what,
 			fmt.Sprintf("sesh history %s --forget %s", shell.Quote(k.String()), strings.Join(timeOnly[k], ",")))
 	}
 	for _, id := range trashOrder {

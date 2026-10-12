@@ -177,3 +177,19 @@ func TestDoctor_HistoryMixedDamage(t *testing.T) {
 		t.Errorf("after the printed forget, version 4 = %q, want one", got)
 	}
 }
+
+// Versions whose time alone doesn't read get one optional --forget naming them all.
+func TestDoctor_HistoryTimesOnly(t *testing.T) {
+	env := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_MASTER_PASSWORD", "filing-password-1234")
+	populatePasswordStore(t, env, map[string]string{"password/a": "one"})
+	putSecrets(t, vault.Key{Kind: vault.KindPassword, Service: "a"}, "two", "three", "four")
+	// Versions: 2 three, 3 two, 4 one; damage the times of 2 and 4.
+	sqlExec(t, env.dbPath, `UPDATE history SET replaced_at = 'garbage' WHERE id IN (SELECT max(id) FROM history UNION SELECT min(id) FROM history)`)
+	out, err := runDoctorOut(t)
+	if !errors.Is(err, errReported) || !strings.Contains(out, "password/a's versions 2, 4 still read, so these need nothing") ||
+		!strings.Contains(out, "sesh history password/a --forget 2,4\n") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
