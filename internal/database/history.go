@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/bashhack/sesh/internal/secure"
@@ -268,6 +269,9 @@ func (s *Store) RestoreVersion(k vault.Key, n int) (kept bool, err error) {
 // none: each is resolved before any is deleted, so the numbers mean what
 // they meant when they were listed.
 func (s *Store) ForgetVersions(k vault.Key, ns ...int) error {
+	ns = slices.Clone(ns)
+	slices.Sort(ns)
+	ns = slices.Compact(ns)
 	versions, err := s.History(k)
 	if err != nil {
 		return err
@@ -321,6 +325,13 @@ func (s *Store) PruneHistory(keep int) (int, error) {
 	})
 	if err != nil {
 		return 0, fmt.Errorf("drop earlier secrets past history.keep: %w", err)
+	}
+	if n > 0 {
+		what := fmt.Sprintf("%d earlier secrets", n)
+		if n == 1 {
+			what = "1 earlier secret"
+		}
+		s.audit("purge", "", fmt.Sprintf("History: %s past history.keep (%d) dropped", what, keep))
 	}
 	return int(n), nil
 }

@@ -290,7 +290,7 @@ backup.dir               /Users/me/vaults/backups
 | `SESH_BACKUP_KEEP` | How many backups to keep, 1 to 1000 (config: `backup.keep`) | `7` |
 | `SESH_BACKUP_DIR` | Where backups go (config: `backup.dir`) | a `backups` folder next to the vault |
 | `SESH_TRASH_KEEP_DAYS` | Days a deleted entry stays in the trash; `0` keeps none, so deleting is for good (config: `trash.keep_days`) | `30` |
-| `SESH_HISTORY_KEEP` | How many earlier secrets each entry keeps, 0 to 1000 (config: `history.keep`) | `10` |
+| `SESH_HISTORY_KEEP` | How many earlier secrets each entry keeps, 0 to 1000; `0` keeps no new ones (config: `history.keep`) | `10` |
 | `SESH_KDF_MEMORY` | Memory for each master password check, such as `256MiB` (config: `master_password.memory`) | `256MiB` |
 | `SESH_KDF_TIME` | Passes over that memory (config: `master_password.time`) | `3` |
 | `SESH_KDF_THREADS` | Threads (config: `master_password.threads`) | `4` |
@@ -1004,7 +1004,7 @@ $ sesh trash restore 7
 
 ### Password history
 
-Each time an entry's secret changes (stored over, generated, edited, replaced by an import, or put back from its history), the one it replaces is kept, with when it was replaced: the newest 10 for each entry (`history.keep`; `0` keeps none). Storing the same secret again keeps nothing, and neither does storing over a secret that's damaged. Lowering `history.keep` drops what's past it the next time a command unlocks the vault. Only the secret is versioned, not the URL, notes or fields.
+Each time an entry's secret changes (stored over, generated, edited, replaced by an import, or put back from its history), the one it replaces is kept, with when it was replaced: the newest 10 for each entry (`history.keep`). Storing the same secret again keeps nothing, and neither does storing over a secret that's damaged. Lowering `history.keep` drops what's past it the next time a command unlocks the vault, which the audit log records; `0` keeps no new earlier secrets, and drops none of those kept: forget them with `--forget`. Only the secret is versioned, not the URL, notes or fields.
 
 ```
 $ sesh history password/github/alice

@@ -657,8 +657,8 @@ func checkHistory(c *doctorChecks, r *database.VerifyReport) {
 			}
 		case p.Kind == database.ProblemTimes:
 			details = append(details, fmt.Sprintf("%s, version %d: %s", p.Key, p.Version, historyProblemText(p.Kind)))
-			c.todo(fmt.Sprintf("%s's version %d still reads; see it, and forget it if you don't need it:", p.Key, p.Version),
-				fmt.Sprintf("sesh history %s --show %d", shell.Quote(p.Key.String()), p.Version))
+			c.todo(fmt.Sprintf("%s's version %d still reads, so this needs nothing; forget it only if you don't need it:", p.Key, p.Version),
+				fmt.Sprintf("sesh history %s --forget %d", shell.Quote(p.Key.String()), p.Version))
 		default:
 			details = append(details, fmt.Sprintf("%s, version %d: %s", p.Key, p.Version, historyProblemText(p.Kind)))
 			if _, ok := forget[p.Key]; !ok {

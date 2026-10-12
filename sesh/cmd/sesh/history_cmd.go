@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -106,9 +107,15 @@ func runHistory(app *App, args []string) error {
 		if err := store.ForgetVersions(k, ns...); err != nil {
 			return err
 		}
+		slices.Sort(ns)
+		ns = slices.Compact(ns)
 		what := fmt.Sprintf("version %d", ns[0])
 		if len(ns) > 1 {
-			what = "versions " + value
+			parts := make([]string, len(ns))
+			for i, n := range ns {
+				parts[i] = strconv.Itoa(n)
+			}
+			what = "versions " + strings.Join(parts, ", ")
 		}
 		_, err := fmt.Fprintf(app.Stdout, "✅ Deleted %s's %s for good.\n", k, what)
 		return err
@@ -171,9 +178,13 @@ func listHistory(app *App, store *database.Store, k vault.Key) error {
 }
 
 // pruneHistory drops earlier secrets past history.keep, which may have
-// been lowered since they were kept. A failure is reported but never stops
+// been lowered since they were kept. 0 keeps no new ones but drops none:
+// what's kept stays until forgotten. A failure is reported but never stops
 // the command.
 func pruneHistory(store *database.Store, cfg *config.Config) {
+	if cfg.HistoryKeep.Value == 0 {
+		return
+	}
 	if _, err := store.PruneHistory(cfg.HistoryKeep.Value); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err) //nolint:errcheck // best-effort warning
 	}

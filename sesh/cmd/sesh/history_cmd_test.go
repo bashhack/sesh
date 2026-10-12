@@ -77,27 +77,28 @@ func TestHistoryCommands(t *testing.T) {
 	}
 }
 
-// With history.keep 0, no earlier secrets are kept, those kept before go
-// when the vault is next unlocked, and a restore doesn't claim to keep the
-// one it replaces.
-func TestHistory_KeepNone(t *testing.T) {
+// Lowering history.keep drops what's past it when the vault is next
+// unlocked, and says so in the audit log; 0 keeps no new earlier secrets
+// but drops none of those kept.
+func TestHistory_KeepLoweredOrNone(t *testing.T) {
 	filingVault(t)
 	k := vault.Key{Kind: vault.KindPassword, Service: "gitlab"}
 	putSecrets(t, k, "two", "three")
-	if got := mustRun(t, runHistory, "password/gitlab", "--restore", "2"); got != "✅ password/gitlab's secret is version 2's again; the one it replaced is now version 2.\n" {
-		t.Errorf("restore: %q", got)
-	}
 	t.Setenv(config.EnvHistoryKeep, "1")
-	if got := mustRun(t, runHistory, "password/gitlab"); strings.Contains(got, "3        ") {
-		t.Errorf("history.keep lowered to 1, but:\n%s", got)
+	if got := mustRun(t, runHistory, "password/gitlab"); !strings.Contains(got, "2        replaced") || strings.Contains(got, "3        replaced") {
+		t.Errorf("history.keep lowered to 1:\n%s", got)
 	}
-	if got := mustRun(t, runHistory, "password/gitlab", "--restore", "2"); got != "✅ password/gitlab's secret is version 2's again; the one it replaced is now version 2.\n" {
-		t.Errorf("restore with 1 kept: %q", got)
+	if got := mustRun(t, runAudit); !strings.Contains(got, "1 earlier secret past history.keep (1) dropped") {
+		t.Errorf("audit:\n%s", got)
 	}
 	t.Setenv(config.EnvHistoryKeep, "0")
 	putSecrets(t, k, "four")
-	if got := mustRun(t, runHistory, "password/gitlab"); !strings.Contains(got, "No earlier secrets are kept (history.keep is 0).") {
-		t.Errorf("%s", got)
+	got := mustRun(t, runHistory, "password/gitlab")
+	if !strings.Contains(got, "2        replaced") || strings.Contains(got, "3        replaced") {
+		t.Errorf("history.keep 0 kept a new one or dropped the old:\n%s", got)
+	}
+	if got := mustRun(t, runHistory, "password/gitlab", "--forget", "2,2"); got != "✅ Deleted password/gitlab's version 2 for good.\n" {
+		t.Errorf("--forget 2,2: %q", got)
 	}
 }
 
