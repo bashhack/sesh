@@ -118,6 +118,9 @@ func totpKey(s string) (secret string, params totp.Params, why string) {
 		return "", params, "it doesn't read as an otpauth:// address"
 	}
 	q := u.Query()
+	if strings.EqualFold(q.Get("encoder"), "steam") {
+		return "", params, "a Steam code, which sesh doesn't make"
+	}
 	switch alg := strings.ToUpper(q.Get("algorithm")); alg {
 	case "", "SHA1":
 	case "SHA256", "SHA512":
@@ -146,9 +149,6 @@ func totpKey(s string) (secret string, params totp.Params, why string) {
 		case n != 30:
 			params.Period = n
 		}
-	}
-	if q.Get("encoder") == "steam" {
-		return "", params, "a Steam code, which sesh doesn't make"
 	}
 	params.Issuer = q.Get("issuer")
 	if params.Issuer == "" {
