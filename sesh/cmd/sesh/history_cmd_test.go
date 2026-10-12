@@ -30,7 +30,7 @@ func putSecrets(t *testing.T, k vault.Key, secrets ...string) {
 func TestHistoryCommands(t *testing.T) {
 	filingVault(t)
 	k := vault.Key{Kind: vault.KindPassword, Service: "gitlab"}
-	if got := mustRun(t, runHistory, "password/gitlab"); !strings.Contains(got, "1        now, set ") || !strings.Contains(got, "No earlier secrets yet") {
+	if got := mustRun(t, runHistory, "password/gitlab"); !strings.Contains(got, "1        now\n") || !strings.Contains(got, "No earlier secrets yet") {
 		t.Errorf("no history:\n%s", got)
 	}
 	putSecrets(t, k, "two", "three")
@@ -65,6 +65,8 @@ func TestHistoryCommands(t *testing.T) {
 	}
 	for args, want := range map[string]string{
 		"password/gitlab --restore 1":       "version 1 is the secret now",
+		"password/gitlab --forget 0":        "--forget takes a version number, 1 or more",
+		"password/gitlab --show 2,3":        "--show takes one version",
 		"password/gitlab --show 9":          "no such version: password/gitlab has versions 1 (the current secret) to",
 		"password/gitlab --show 2 --clip 3": "use one of --show, --clip, --restore and --forget at a time",
 		"password/nope":                     "not found",
@@ -75,13 +77,56 @@ func TestHistoryCommands(t *testing.T) {
 	}
 }
 
-// With history.keep 0, no earlier secrets are kept.
+// With history.keep 0, no earlier secrets are kept, those kept before go
+// when the vault is next unlocked, and a restore doesn't claim to keep the
+// one it replaces.
 func TestHistory_KeepNone(t *testing.T) {
 	filingVault(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "gitlab"}
+	putSecrets(t, k, "two", "three")
+	if got := mustRun(t, runHistory, "password/gitlab", "--restore", "2"); got != "✅ password/gitlab's secret is version 2's again; the one it replaced is now version 2.\n" {
+		t.Errorf("restore: %q", got)
+	}
+	t.Setenv(config.EnvHistoryKeep, "1")
+	if got := mustRun(t, runHistory, "password/gitlab"); strings.Contains(got, "3        ") {
+		t.Errorf("history.keep lowered to 1, but:\n%s", got)
+	}
+	if got := mustRun(t, runHistory, "password/gitlab", "--restore", "2"); got != "✅ password/gitlab's secret is version 2's again; the one it replaced is now version 2.\n" {
+		t.Errorf("restore with 1 kept: %q", got)
+	}
 	t.Setenv(config.EnvHistoryKeep, "0")
-	putSecrets(t, vault.Key{Kind: vault.KindPassword, Service: "gitlab"}, "two")
+	putSecrets(t, k, "four")
 	if got := mustRun(t, runHistory, "password/gitlab"); !strings.Contains(got, "No earlier secrets are kept (history.keep is 0).") {
 		t.Errorf("%s", got)
+	}
+}
+
+// Two unreadable versions of one entry get one --forget naming both, which
+// forgets just those.
+func TestDoctor_HistorySeveralDamaged(t *testing.T) {
+	env := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_MASTER_PASSWORD", "filing-password-1234")
+	populatePasswordStore(t, env, map[string]string{"password/a": "one"})
+	k := vault.Key{Kind: vault.KindPassword, Service: "a"}
+	putSecrets(t, k, "two", "three", "four", "five", "six")
+	// Versions: 2 five, 3 four, 4 three, 5 two, 6 one; damage 3 and 5.
+	sqlExec(t, env.dbPath, `UPDATE history SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff' WHERE id IN (
+		SELECT id FROM history ORDER BY id DESC LIMIT 1 OFFSET 1)`)
+	sqlExec(t, env.dbPath, `UPDATE history SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff' WHERE id IN (
+		SELECT id FROM history ORDER BY id DESC LIMIT 1 OFFSET 3)`)
+	out, err := runDoctorOut(t)
+	if !errors.Is(err, errReported) || !strings.Contains(out, "sesh history password/a --forget 3,5") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	mustRun(t, runHistory, "password/a", "--forget", "3,5")
+	for v, want := range map[string]string{"2": "five\n", "3": "three\n", "4": "one\n"} {
+		if got := mustRun(t, runHistory, "password/a", "--show", v); got != want {
+			t.Errorf("version %s = %q, want %q", v, got, want)
+		}
+	}
+	if out, err := runDoctorOut(t); err != nil || !strings.Contains(out, "3 earlier secrets, all readable") {
+		t.Errorf("after the printed forget: %v\n%s", err, out)
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 // What a KeePass entry can have that sesh doesn't keep, as the summary
 // adds it up.
 const (
-	lostHistory    = "earlier versions of entries (sesh keeps no history yet)"
+	lostHistory    = "earlier versions of entries (not yet imported into history)"
 	lostAttachment = "attachments (sesh doesn't hold files)"
 )
 

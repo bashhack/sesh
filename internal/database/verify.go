@@ -301,7 +301,7 @@ func (s *Store) verifyHistory(tx *sql.Tx) (int, []EntryProblem, error) {
 		trashID    sql.NullInt64
 	}
 	rows, err := tx.Query(`SELECT kind, service, username, trash_id, encrypted_data, salt, replaced_at FROM history NOT INDEXED
-		ORDER BY kind, service, username, trash_id IS NOT NULL, trash_id, replaced_at DESC, id DESC`)
+		ORDER BY kind, service, username, trash_id IS NOT NULL, trash_id, id DESC`)
 	if err != nil {
 		return 0, nil, fmt.Errorf("read the history: %w", err)
 	}

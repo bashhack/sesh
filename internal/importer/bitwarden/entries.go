@@ -15,7 +15,7 @@ import (
 // What a Bitwarden item can have that sesh doesn't keep, as the summary
 // adds it up.
 const (
-	lostHistory  = "old passwords (sesh keeps no history yet)"
+	lostHistory  = "old passwords (not yet imported into history)"
 	lostPasskey  = "passkeys (sesh doesn't hold them)"
 	lostReprompt = "items set to ask for the master password again (sesh doesn't ask)"
 )

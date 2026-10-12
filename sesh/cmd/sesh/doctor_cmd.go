@@ -631,30 +631,61 @@ func checkTrash(c *doctorChecks, r *database.VerifyReport) {
 }
 
 // checkHistory reports the entries' earlier secrets, when there are any,
-// and those that can't be read, with what deletes each for good.
+// and those that can't be read: for each entry, one --forget naming all of
+// its unreadable versions (resolved together, so the numbers hold); for an
+// entry in the trash, restoring it first, or deleting it for good.
 func checkHistory(c *doctorChecks, r *database.VerifyReport) {
 	switch {
 	case r.History == 0:
+		return
 	case len(r.HistoryProblems) == 0:
 		c.row(markOK, "History", countOf(int64(r.History), "earlier secret")+", all readable")
-	default:
-		var details []string
-		for _, p := range r.HistoryProblems {
-			what := "earlier secret doesn't decrypt"
-			if p.Kind == database.ProblemTimes {
-				what = "when it was replaced doesn't read"
-			}
-			if p.TrashID != 0 {
-				details = append(details, fmt.Sprintf("%s, in the trash (id %d): an %s", p.Key, p.TrashID, what))
-				c.todo("Delete it for good, as its history can't all be read:", fmt.Sprintf("sesh trash remove %d", p.TrashID))
-				continue
-			}
-			details = append(details, fmt.Sprintf("%s, version %d: %s", p.Key, p.Version, what))
-			c.todo(fmt.Sprintf("Forget %s's version %d, as it can't be read:", p.Key, p.Version), fmt.Sprintf("sesh history %s --forget %d", shell.Quote(p.Key.String()), p.Version))
-		}
-		c.fails += len(r.HistoryProblems) - 1
-		c.row(markFail, "History", fmt.Sprintf("%d of %s can't be read", len(r.HistoryProblems), countOf(int64(r.History), "earlier secret")), details...)
+		return
 	}
+	var details []string
+	forget := map[vault.Key][]string{}
+	var forgetOrder []vault.Key
+	trashed := map[int64]vault.Key{}
+	var trashOrder []int64
+	for _, p := range r.HistoryProblems {
+		switch {
+		case p.TrashID != 0:
+			details = append(details, fmt.Sprintf("%s, in the trash (id %d): an %s", p.Key, p.TrashID, historyProblemText(p.Kind)))
+			if _, ok := trashed[p.TrashID]; !ok {
+				trashed[p.TrashID] = p.Key
+				trashOrder = append(trashOrder, p.TrashID)
+			}
+		case p.Kind == database.ProblemTimes:
+			details = append(details, fmt.Sprintf("%s, version %d: %s", p.Key, p.Version, historyProblemText(p.Kind)))
+			c.todo(fmt.Sprintf("%s's version %d still reads; see it, and forget it if you don't need it:", p.Key, p.Version),
+				fmt.Sprintf("sesh history %s --show %d", shell.Quote(p.Key.String()), p.Version))
+		default:
+			details = append(details, fmt.Sprintf("%s, version %d: %s", p.Key, p.Version, historyProblemText(p.Kind)))
+			if _, ok := forget[p.Key]; !ok {
+				forgetOrder = append(forgetOrder, p.Key)
+			}
+			forget[p.Key] = append(forget[p.Key], strconv.Itoa(p.Version))
+		}
+	}
+	for _, k := range forgetOrder {
+		c.todo(fmt.Sprintf("Forget %s's earlier secrets that can't be read:", k),
+			fmt.Sprintf("sesh history %s --forget %s", shell.Quote(k.String()), strings.Join(forget[k], ",")))
+	}
+	for _, id := range trashOrder {
+		k := trashed[id]
+		c.todo(fmt.Sprintf("%s, in the trash, has earlier secrets that can't be read: restore it, then run sesh doctor again to forget them; or delete it for good with sesh trash remove %d:", k, id),
+			fmt.Sprintf("sesh trash restore %d", id))
+	}
+	c.fails += len(r.HistoryProblems) - 1
+	c.row(markFail, "History", fmt.Sprintf("%d of %s can't be read", len(r.HistoryProblems), countOf(int64(r.History), "earlier secret")), details...)
+}
+
+// historyProblemText says what's wrong with an earlier secret.
+func historyProblemText(k database.ProblemKind) string {
+	if k == database.ProblemTimes {
+		return "when it was replaced doesn't read"
+	}
+	return "earlier secret doesn't decrypt"
 }
 
 // problemText says in plain words what's wrong with an entry.

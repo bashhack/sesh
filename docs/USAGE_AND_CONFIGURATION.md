@@ -694,7 +694,7 @@ sesh --rekey
 
 Behaviour:
 
-- **All or nothing.** Every entry, the vault's key record and its recovery key record change in one database transaction: if anything fails, or the computer stops part way, nothing has changed. No second copy of the vault is made.
+- **All or nothing.** Every entry, those in the trash, every earlier secret in the entries' history, the vault's key record and its recovery key record change in one database transaction: if anything fails, or the computer stops part way, nothing has changed. No second copy of the vault is made.
 - **Your history stays.** The audit log is kept, with one `rekey` event for the change.
 - **Other sesh commands.** Ones that save while the change commits wait a moment for it. One that unlocked the vault before the change finished can't save into it afterwards, or read from it: it's told the master password was changed, and to run again. If one has the vault open when the change finishes, sesh warns that the vault file on its own still holds the vault under the old password until that command ends; don't copy or back up the file until then. Another password change running at the same time is refused the same way, so neither undoes the other.
 - **A new salt and the configured settings.** The new key comes from a new salt, with the Argon2id settings configured now (`master_password` in the config file), so a password change is how a vault takes up new ones. If you forget the new password, your recovery key sets another (see [Recovery key](#recovery-key)).
@@ -1004,12 +1004,12 @@ $ sesh trash restore 7
 
 ### Password history
 
-Each time an entry's secret changes (stored over, generated, edited, replaced by an import, or put back from its history), the one it replaces is kept, with when it was replaced: the newest 10 for each entry (`history.keep`; `0` keeps none). Storing the same secret again keeps nothing. Only the secret is versioned, not the URL, notes or fields.
+Each time an entry's secret changes (stored over, generated, edited, replaced by an import, or put back from its history), the one it replaces is kept, with when it was replaced: the newest 10 for each entry (`history.keep`; `0` keeps none). Storing the same secret again keeps nothing, and neither does storing over a secret that's damaged. Lowering `history.keep` drops what's past it the next time a command unlocks the vault. Only the secret is versioned, not the URL, notes or fields.
 
 ```
 $ sesh history password/github/alice
 VERSION  SECRET
-1        now, set 2026-10-12 09:30
+1        now
 2        replaced 2026-10-12 09:30
 3        replaced 2026-09-30 08:11
 
@@ -1021,7 +1021,7 @@ $ sesh history password/github/alice --restore 3
 
 - **`--show N`** prints version N's secret, and **`--clip N`** copies it; both are recorded in the audit log as reads ("History: version N").
 - **`--restore N`** makes version N the secret again; the one it replaces is kept, so a restore can be undone the same way.
-- **`--forget N`** deletes version N for good.
+- **`--forget N`** deletes version N for good; `--forget 3,5` deletes several, each as numbered when you listed them.
 - **The history follows its entry:** renamed (`sesh edit`), into the trash and back, and for good when the entry is. A new entry with a deleted one's name starts with no history.
 - **A new master password** re-encrypts the history too. `sesh doctor` checks every earlier secret, and names one that can't be read with the `--forget` that deletes it.
 
@@ -1244,7 +1244,7 @@ sesh import --from bitwarden bitwarden_export.json
   - favorites get the tag `favorite`.
 - **What doesn't come across,** said in the summary:
   - Steam codes (the password still does);
-  - old passwords (sesh keeps no history yet);
+  - old passwords (not yet imported into history);
   - passkeys;
   - Bitwarden's "ask for the master password again";
   - bank accounts, driver's licences, and passports, which sesh can't import yet.
@@ -1266,7 +1266,7 @@ sesh import --from keepass Passwords.xml
 - **The recycle bin's entries** are skipped, and listed.
 - **An entry that expires** is imported, with the date said in the summary; sesh has no expiry dates.
 - **What doesn't come across,** said in the summary:
-  - earlier versions of entries (sesh keeps no history yet);
+  - earlier versions of entries (not yet imported into history);
   - attachments (sesh doesn't hold files; an export from a KDBX 4 database leaves their contents out anyway);
   - TOTP set up in an older layout (KeePassXC's old "TOTP Seed" and "TOTP Settings", the KeeOtp plugin's, or KeePass 2's own): the password still comes across; add the TOTP with `sesh --service totp --setup`;
   - Steam codes, counter-based (HOTP) codes (including KeePass 2's `HmacOtp-*` fields), and algorithms other than SHA-1, SHA-256 and SHA-512.

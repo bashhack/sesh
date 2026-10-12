@@ -154,14 +154,14 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if err != nil {
 		return err
 	}
-	encData, salt, err := s.oracle.EncryptEntry(secret, entryAAD(e.Key))
-	if err != nil {
-		return fmt.Errorf("encrypt %s: %w", e.Key, err)
-	}
 	// A secret it replaces is kept in the entry's history, sealed here,
 	// outside the transaction, as Edit's sealing is.
+	// The write then checks the entry is as read: absent, or with that
+	// secret, so another command's store in between isn't replaced
+	// without being kept.
 	var old *oldSecret
-	if s.historyKeep > 0 {
+	keeping, existed := s.historyKeep > 0, false
+	if keeping {
 		var data, oldSalt []byte
 		err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt)
 		switch {
@@ -169,10 +169,18 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 		case err != nil:
 			return fmt.Errorf("read %s: %w", e.Key, err)
 		default:
+			existed = true
 			if old, err = s.replacing(e.Key, e.Key, data, oldSalt, secret); err != nil {
 				return err
 			}
+			if old == nil {
+				old = &oldSecret{from: data}
+			}
 		}
+	}
+	encData, salt, err := s.oracle.EncryptEntry(secret, entryAAD(e.Key))
+	if err != nil {
+		return fmt.Errorf("encrypt %s: %w", e.Key, err)
 	}
 	var sd sealedDetails
 	if d != nil {
@@ -196,14 +204,17 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 		onConflict += `, url = excluded.url, details = excluded.details, sealed_details = excluded.sealed_details, details_salt = excluded.details_salt`
 	}
 	err = s.inTx(func(tx *sql.Tx) error {
-		if old != nil {
+		if keeping {
 			var dataNow []byte
 			err := tx.QueryRow(`SELECT encrypted_data FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&dataNow)
-			if err != nil || !bytes.Equal(dataNow, old.from) {
+			switch {
+			case !existed && errors.Is(err, sql.ErrNoRows):
+			case !existed, err != nil, !bytes.Equal(dataNow, old.from):
 				return ErrEntryChanged
-			}
-			if err := s.keepOld(tx, e.Key, old, now); err != nil {
-				return err
+			default:
+				if err := s.keepOld(tx, e.Key, old, now); err != nil {
+					return err
+				}
 			}
 		}
 		var id int64

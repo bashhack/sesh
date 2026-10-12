@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -214,8 +215,10 @@ type sealedEntry struct {
 	id                         int64
 	// trashID is the entry's id in the trash, 0 for one that isn't.
 	trashID int64
-	// history is an earlier secret of an entry's, sealed with historyAAD.
+	// history is an earlier secret of an entry's, sealed with historyAAD;
+	// version is its number, as sesh history lists it.
 	history bool
+	version int
 }
 
 // unchangedFrom reports whether now, as stored, is what e was resealed
@@ -234,11 +237,13 @@ var sealedTables = []string{"entries", "trash", "history"}
 func sealedEntries(q interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }, table string) (_ []sealedEntry, err error) {
-	details := `sealed_details, details_salt`
+	// An earlier secret has no details; its version (as sesh history
+	// numbers it) and its entry's trash id go in errors instead.
+	extra := `sealed_details, details_salt, 0, 0`
 	if table == "history" {
-		details = `NULL, NULL` // an earlier secret has no details
+		extra = `NULL, NULL, COALESCE(trash_id, 0), ROW_NUMBER() OVER (PARTITION BY kind, service, username, trash_id ORDER BY id DESC) + 1`
 	}
-	rows, err := q.Query(`SELECT id, kind, service, username, encrypted_data, salt, ` + details + ` FROM ` + table) //nolint:gosec // table is one of sealedTables
+	rows, err := q.Query(`SELECT id, kind, service, username, encrypted_data, salt, ` + extra + ` FROM ` + table) //nolint:gosec // table is one of sealedTables
 	if err != nil {
 		return nil, fmt.Errorf("read entries: %w", err)
 	}
@@ -251,7 +256,8 @@ func sealedEntries(q interface {
 	for rows.Next() {
 		var e sealedEntry
 		var kind string
-		if err := rows.Scan(&e.id, &kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.details, &e.detailsSalt); err != nil {
+		var ofTrash, version int64
+		if err := rows.Scan(&e.id, &kind, &e.k.Service, &e.k.Username, &e.data, &e.salt, &e.details, &e.detailsSalt, &ofTrash, &version); err != nil {
 			return nil, fmt.Errorf("read entries: %w", err)
 		}
 		e.k.Kind = vault.Kind(kind)
@@ -259,7 +265,8 @@ func sealedEntries(q interface {
 		case "trash":
 			e.trashID = e.id
 		case "history":
-			e.history = true
+			e.history, e.version = true, int(version)
+			e.trashID = ofTrash
 		}
 		e.oldData, e.oldSalt = e.data, e.salt
 		e.oldDetails, e.oldDetailsSalt = e.details, e.detailsSalt
@@ -275,15 +282,22 @@ func sealedEntries(q interface {
 // encrypts them under newKey, into e. q is what the vault is read through:
 // the transaction, inside one, since the store has a single connection.
 func (s *Store) reseal(q querier, e *sealedEntry, newKey []byte) (err error) {
-	if e.trashID != 0 {
-		defer func() {
-			// Not when the master password changed meanwhile: then the
-			// entry is fine, and the advice is to run it again.
-			if err != nil && !errors.Is(err, ErrVaultKeyChanged) {
-				err = fmt.Errorf("%w (it's in the trash, id %d: sesh trash remove %d deletes it for good)", err, e.trashID, e.trashID)
-			}
-		}()
-	}
+	defer func() {
+		// Not when the master password changed meanwhile: then the entry
+		// is fine, and the advice is to run it again.
+		if err == nil || errors.Is(err, ErrVaultKeyChanged) {
+			return
+		}
+		id := shell.Quote(e.k.String())
+		switch {
+		case e.history && e.trashID != 0:
+			err = fmt.Errorf("%w (version %d of an entry in the trash, id %d: restore it with sesh trash restore %d, then sesh history %s --forget %d)", err, e.version, e.trashID, e.trashID, id, e.version)
+		case e.history:
+			err = fmt.Errorf("%w (version %d: sesh history %s --forget %d forgets it)", err, e.version, id, e.version)
+		case e.trashID != 0:
+			err = fmt.Errorf("%w (it's in the trash, id %d: sesh trash remove %d deletes it for good)", err, e.trashID, e.trashID)
+		}
+	}()
 	aad, what := entryAAD(e.k), ""
 	if e.history {
 		aad, what = historyAAD(e.k), "an earlier secret of "

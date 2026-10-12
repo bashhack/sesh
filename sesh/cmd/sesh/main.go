@@ -358,6 +358,7 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 	autoBackup(store, cfg)
 	store.SetTrashDays(cfg.TrashKeepDays.Value)
 	store.SetHistoryKeep(cfg.HistoryKeep.Value)
+	pruneHistory(store, cfg)
 	expireTrash(store, cfg)
 	return store, nil
 }
