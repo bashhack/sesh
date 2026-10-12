@@ -43,6 +43,8 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
                           Give every code of a large export.
     keepass               A KeePass XML export, from KeePassXC or KeePass 2
                           (in KeePassXC: Database > Export > XML File).
+    safari                Safari's password export (CSV), from Apple's
+                          Passwords app (File > Export All Passwords to File).
 
   sesh import --from google-authenticator IMG_1234.png IMG_1235.png
   sesh import --from bitwarden bitwarden_export.json
@@ -52,7 +54,7 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
 sesh's own exports are imported with --service password --action import.`
 
 // importSources are the apps sesh import reads.
-var importSources = []string{"bitwarden", "chrome", "firefox", "google-authenticator", "keepass"}
+var importSources = []string{"bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "safari"}
 
 func addImportFlags(fs *flag.FlagSet) (from, onConflict *string, dryRun, yes *bool) {
 	from = fs.String("from", "", "Where the file comes from: "+strings.Join(importSources, ", "))
@@ -104,7 +106,7 @@ func runImport(app *App, args []string) error {
 		f, err = readBitwarden(app, fs.Args(), terminal)
 	case "keepass":
 		f, err = readKeePass(fs.Args())
-	case browser.Chrome, browser.Firefox:
+	case browser.Chrome, browser.Firefox, browser.Safari:
 		f, err = readBrowser(source, fs.Args())
 	default:
 		return fmt.Errorf("sesh can't import from %q; it can from: %s", source, strings.Join(importSources, ", "))
@@ -265,8 +267,8 @@ type found struct {
 	entries  []*importer.Entry
 }
 
-// detectSource is the app the files come from: Bitwarden, KeePass, Chrome
-// or Firefox for one of their exports (or a file of theirs to be refused
+// detectSource is the app the files come from: Bitwarden, KeePass, Chrome,
+// Firefox or Safari for one of their exports (or a file of theirs to be refused
 // as such), Google Authenticator otherwise.
 func detectSource(args []string) string {
 	for _, a := range args {

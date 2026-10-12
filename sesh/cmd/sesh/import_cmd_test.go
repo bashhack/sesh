@@ -575,3 +575,22 @@ func TestImport_FirefoxTimes(t *testing.T) {
 		t.Errorf("github.com/alice = %+v, %v", e, err)
 	}
 }
+
+// Safari's export is found without --from; its entry is stored by title,
+// with its verification code as a TOTP entry beside it.
+func TestImport_Safari(t *testing.T) {
+	env := importVault(t)
+	out, stderr, err := runImportOut(t, "", false, "--yes", browserFixture("safari.csv"))
+	if err != nil || !strings.Contains(stderr, "Found 1 password in the Safari export.") || !strings.Contains(out, "✅ Imported 2 entries from Safari.") {
+		t.Fatalf("%q\n%s\n%v", out, stderr, err)
+	}
+	store := openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	d, err := store.Details(vault.Key{Kind: vault.KindPassword, Service: "GitHub Test", Username: "alice"}, "all")
+	if err != nil || d.URL != "https://github.com/" || string(d.Notes) != "main account\nrecovery codes in the safe" {
+		t.Errorf("password entry details = %+v, %v", d, err)
+	}
+	if secret, err := store.Get(vault.Key{Kind: vault.KindTOTP, Service: "GitHub Test", Username: "alice"}); err != nil || string(secret) != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("TOTP entry = %q, %v", secret, err)
+	}
+}

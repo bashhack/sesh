@@ -2,17 +2,23 @@ package browser
 
 import (
 	"os"
+
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bashhack/sesh/internal/totp"
 )
 
-// The fixtures in testdata are genuine exports of the same five made-up
-// logins, made in a throwaway container: chromium.csv by Chromium
-// 154.0.8037.92 (chrome://password-manager/settings, Export passwords),
-// firefox.csv by Firefox ESR 153.4.0 (about:logins, Export Passwords). In
-// Chromium alice's GitHub login has a two-line note; in Firefox its
-// password was changed after it was saved.
+// The fixtures in testdata are genuine exports of made-up logins:
+//   - chromium.csv and firefox.csv, of the same five, made in a throwaway
+//     container by Chromium 154.0.8037.92 (chrome://password-manager/
+//     settings, Export passwords) and Firefox ESR 153.4.0 (about:logins,
+//     Export Passwords); in Chromium alice's GitHub login has a two-line
+//     note, in Firefox its password was changed after it was saved;
+//   - safari.csv, one throwaway entry titled "GitHub Test" with a
+//     two-line note and a verification code, exported from Apple's
+//     Passwords app on macOS (File > Export Selected Password to File).
 
 func read(t *testing.T, name string) []byte {
 	t.Helper()
@@ -46,7 +52,7 @@ func TestParse(t *testing.T) {
 	if j := ff.Logins[4]; j.Username != "jürgen" || j.Password != "pässwörd" {
 		t.Errorf("Firefox jürgen = %+v", j)
 	}
-	if _, err := Parse([]byte("a,b\n1,2\n")); err == nil || !strings.Contains(err.Error(), "isn't a Chrome or Firefox password export") {
+	if _, err := Parse([]byte("a,b\n1,2\n")); err == nil || !strings.Contains(err.Error(), "isn't a Chrome, Firefox or Safari password export") {
 		t.Errorf("other CSV: %v", err)
 	}
 	if _, err := Parse([]byte("name,url,username,password,note\ngithub.com,https://github.com/,a\n")); err == nil || !strings.Contains(err.Error(), "login 1 has 3 columns") {
@@ -180,5 +186,58 @@ func TestEntries_Chrome(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// Safari's entry is named by its title, its verification code a TOTP
+// entry beside the password entry.
+func TestEntries_Safari(t *testing.T) {
+	exp, err := Parse(read(t, "safari.csv"))
+	if err != nil || exp.Browser != Safari || len(exp.Logins) != 1 {
+		t.Fatalf("%+v, %v", exp, err)
+	}
+	got := Entries(&exp)
+	if len(got) != 2 {
+		t.Fatalf("%d entries", len(got))
+	}
+	p, o := got[0], got[1]
+	if p.Key.String() != "password/GitHub Test/alice" || string(p.Secret) != "gh-pass-1" || p.Details.URL != "https://github.com/" ||
+		string(p.Details.Notes) != "main account\nrecovery codes in the safe" {
+		t.Errorf("password entry = %v %q %+v", p.Key, p.Secret, p.Details)
+	}
+	if o.Key.String() != "totp/GitHub Test/alice" || string(o.Secret) != "JBSWY3DPEHPK3PXP" || o.Settings.TOTP != (totp.Params{}) || !o.Details.IsZero() || o.Skip != "" {
+		t.Errorf("TOTP entry = %v %q %+v %+v skip %q", o.Key, o.Secret, o.Settings, o.Details, o.Skip)
+	}
+
+	exp = Export{Browser: Safari, Logins: []Login{
+		{Title: "Code only", URL: "https://x.example/", OTPAuth: "otpauth://totp?secret=GEZDGNBVGY3TQOJQ&digits=8", Note: "n"},
+		{Title: "", URL: "https://www.untitled.example/", Username: "u", Password: "p"},
+		{Title: "Counter", Password: "p", OTPAuth: "otpauth://hotp?secret=GEZDGNBVGY3TQOJQSECRET&counter=1"},
+	}}
+	var keys []string
+	for _, e := range Entries(&exp) {
+		keys = append(keys, e.Key.String()+"|"+e.Skip+"|"+string(e.Details.Notes))
+	}
+	want := "totp/Code only||n; password/untitled.example/u||; password/Counter||; totp/Counter|its verification code: a counter-based (HOTP) code, which sesh doesn't make|"
+	if got := strings.Join(keys, "; "); got != want {
+		t.Errorf("got %s", got)
+	}
+}
+
+func TestTOTPKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&algorithm=MD5": "it uses MD5",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&digits=10":     "10-digit codes",
+		"otpauth://totp?secret=GEZDGNBVGY3TQOJQSECRET&period=0":      "isn't a positive number",
+		"otpauth://totp?issuer=GEZDGNBVGY3TQOJQSECRET":               "it has no key",
+		"otpauth://totp?secret=GEZD!!GNBVGY3TQOJQSECRET":             "isn't a valid base32 key",
+	} {
+		if _, _, why := totpKey(in); !strings.Contains(why, want) || strings.Contains(why, "GEZD") {
+			t.Errorf("totpKey(%q) = %q, want %q and no key", in, why, want)
+		}
+	}
+	if k, p, why := totpKey("otpauth://totp/Corp:me?secret=GEZDGNBVGY3TQOJQ&algorithm=SHA256&digits=8&period=60&issuer=Corp"); k != "GEZDGNBVGY3TQOJQ" || why != "" ||
+		p != (totp.Params{Algorithm: "SHA256", Digits: 8, Period: 60, Issuer: "Corp"}) {
+		t.Errorf("totpKey = %q %+v %q", k, p, why)
 	}
 }

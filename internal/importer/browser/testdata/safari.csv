@@ -1,0 +1,3 @@
+Title,URL,Username,Password,Notes,OTPAuth
+GitHub Test,https://github.com/,alice,gh-pass-1,"main account
+recovery codes in the safe",otpauth://totp?secret=JBSWY3DPEHPK3PXP&algorithm=SHA1&digits=6&period=30
