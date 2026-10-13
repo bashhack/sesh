@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -348,5 +349,22 @@ func TestCompletionScript_Fish(t *testing.T) {
 				t.Errorf("fish offered:\n%s\nwant a line starting %q", out, tt.want)
 			}
 		})
+	}
+}
+
+// A first word that's no command is refused, naming the closest one.
+func TestCheckCommandWord(t *testing.T) {
+	for args, want := range map[string]string{
+		"sesh ui.":      `sesh has no command "ui."; did you mean: sesh ui`,
+		"sesh histroy":  `sesh has no command "histroy"; did you mean: sesh history`,
+		"sesh frobnick": `sesh has no command "frobnick"; the commands are listed by: sesh --help`,
+		"sesh":          "",
+		"sesh ui":       "",
+		"sesh --list":   "",
+	} {
+		err := checkCommandWord(strings.Fields(args))
+		if got := fmt.Sprint(err); (want == "" && err != nil) || (want != "" && got != want) {
+			t.Errorf("%s: %v, want %q", args, err, want)
+		}
 	}
 }

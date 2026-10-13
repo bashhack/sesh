@@ -59,9 +59,12 @@ func (g *gate) shut() tea.Cmd {
 	g.mu.Unlock()
 	return func() tea.Msg {
 		g.close()
-		return nil
+		return gateClosedMsg{g}
 	}
 }
+
+// gateClosedMsg is a gate that shut has finished closing.
+type gateClosedMsg struct{ g *gate }
 
 // close stops new reads, waits for those running, and closes the vault,
 // once however often it's called.

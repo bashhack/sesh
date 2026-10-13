@@ -9,8 +9,11 @@ package tui
 
 import (
 	"errors"
+	"slices"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/bashhack/sesh/internal/secure"
@@ -37,11 +40,14 @@ var ErrWrongPassword = errors.New("wrong password")
 // command's prompt allows.
 const maxAttempts = 3
 
+// wrongPassword is what the locked screen says after one.
+const wrongPassword = "Wrong password, try again."
+
 // Vault is what the app reads, while unlocked.
 type Vault interface {
 	// Search is the entries matching query, best first, as sesh's search
-	// ranks them; every entry for "".
-	Search(query string) ([]vault.Entry, error)
+	// ranks them, every entry for "", and how many entries there are.
+	Search(query string) (found []vault.Entry, total int, err error)
 	// Secret is k's secret, read as the audit log records: for reading.
 	// The caller wipes it.
 	Secret(k vault.Key, reading string) ([]byte, error)
@@ -106,8 +112,11 @@ type Model struct {
 	status    string
 	password  []byte // typed on the locked screen
 
-	rows  []vault.Entry
-	query []rune
+	rows []vault.Entry
+
+	input textinput.Model // the search
+	spin  spinner.Model   // while unlocking
+	th    theme
 
 	opts Options
 
@@ -117,9 +126,13 @@ type Model struct {
 	epoch, searches int
 
 	width, height int
+	total         int // entries in the vault
 	wrong         int
 	top, sel      int
 	unlocking     bool
+	statusBad     bool // the status is something that went wrong
+	showHelp      bool
+	dark          bool
 }
 
 // shownCode is a TOTP code, and the period it's for.
@@ -131,14 +144,46 @@ type shownCode struct {
 // New is the app, unlocked with opts.Vault.
 func New(opts Options) *Model {
 	now := opts.Now()
-	return &Model{
+	m := &Model{
 		opts: opts, v: newGate(opts.Vault),
 		keys: map[vault.Key][]byte{}, pending: map[vault.Key]bool{}, failed: map[vault.Key]bool{},
 		codes:   map[vault.Key]shownCode{},
 		lastKey: now, unlockedAt: now, lastKeepAlive: now,
 		width: 80, height: 24,
 		every: tick,
+		input: searchInput(),
+		spin:  spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		dark:  true,
 	}
+	m.restyle()
+	return m
+}
+
+// searchInput is the search box. It doesn't paste from the clipboard
+// itself (a secret just copied would show in it; the terminal's own
+// paste still works), and the arrows move the list, not suggestions.
+func searchInput() textinput.Model {
+	in := textinput.New()
+	in.Prompt = ""
+	in.Placeholder = "Search names, usernames, sites…"
+	in.KeyMap.Paste.SetEnabled(false)
+	in.KeyMap.AcceptSuggestion.SetEnabled(false)
+	in.KeyMap.NextSuggestion.SetEnabled(false)
+	in.KeyMap.PrevSuggestion.SetEnabled(false)
+	in.Focus()
+	return in
+}
+
+// restyle styles the app for a dark terminal or a light one.
+func (m *Model) restyle() {
+	m.th = newTheme(m.dark)
+	s := textinput.DefaultStyles(m.dark)
+	s.Focused.Text = m.th.style()
+	s.Focused.Placeholder = m.th.dimmed()
+	s.Cursor.Color = m.th.accent
+	s.Cursor.Blink = false
+	m.input.SetStyles(s)
+	m.spin.Style = m.th.accented()
 }
 
 // Err is why the app ended, when it wasn't asked to: too many wrong
@@ -178,6 +223,7 @@ type (
 	resultsMsg struct {
 		err    error
 		rows   []vault.Entry
+		total  int
 		epoch  int
 		search int
 	}
@@ -191,6 +237,7 @@ type (
 		err   error
 		what  string
 		epoch int
+		bad   bool // what went wrong, not what was done
 	}
 	checkedMsg struct {
 		err     error
@@ -207,9 +254,10 @@ type (
 	}
 )
 
-// Init starts the search for every entry and the clock.
+// Init starts the search for every entry and the clock, and asks the
+// terminal whether it's dark or light.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.search(), m.every())
+	return tea.Batch(m.search(), m.every(), tea.RequestBackgroundColor)
 }
 
 // tick fires at the next whole second, when codes and countdowns change.
@@ -226,10 +274,10 @@ func (m *Model) read(f func(v Vault, closed func() bool) tea.Msg) tea.Cmd {
 // search runs the query as it is now.
 func (m *Model) search() tea.Cmd {
 	m.searches++
-	q, epoch, n := string(m.query), m.epoch, m.searches
+	q, epoch, n := m.input.Value(), m.epoch, m.searches
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		rows, err := v.Search(q)
-		return resultsMsg{rows: rows, err: err, epoch: epoch, search: n}
+		rows, total, err := v.Search(q)
+		return resultsMsg{rows: rows, total: total, err: err, epoch: epoch, search: n}
 	})
 }
 
@@ -242,6 +290,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // update handles a message, returning what to do next.
 func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case gateClosedMsg:
+		m.shut = slices.DeleteFunc(m.shut, func(g *gate) bool { return g == msg.g })
+		return nil
+	case tea.BackgroundColorMsg:
+		m.dark = msg.IsDark()
+		m.restyle()
+		return nil
+	case spinner.TickMsg:
+		if !m.unlocking {
+			return nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return cmd
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.scroll()
@@ -262,7 +324,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
-		m.query = append(m.query, []rune(text)...)
+		m.input.SetValue(m.input.Value() + text)
+		m.input.CursorEnd()
 		return tea.Batch(m.requery(), m.keepAlive())
 	case tickMsg:
 		return m.tick()
@@ -273,7 +336,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		if msg.err != nil {
 			return m.failure(msg.err)
 		}
-		m.rows = msg.rows
+		m.rows, m.total = msg.rows, msg.total
 		m.scroll()
 		return m.readKeys()
 	case keyMsg:
@@ -301,7 +364,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		case errors.Is(msg.err, ErrLocked):
 			return m.lock(lockedReason(msg.err))
 		case msg.err != nil:
-			m.say("Couldn't copy it: " + msg.err.Error())
+			m.sayBad("Couldn't copy it: " + msg.err.Error())
+		case msg.bad:
+			m.sayBad(msg.what)
 		default:
 			m.say(msg.what)
 		}
@@ -333,7 +398,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 					m.quitErr = errors.New("wrong master password (after 3 attempts)")
 					return tea.Quit
 				}
-				m.lockedWhy = "Wrong password, try again."
+				m.lockedWhy = wrongPassword
 				return nil
 			}
 			m.lockedWhy = msg.err.Error()
@@ -428,8 +493,14 @@ func (m *Model) lock(why string) tea.Cmd {
 	return closing
 }
 
-// say shows what for a few seconds.
+// say shows what was done for a few seconds.
 func (m *Model) say(what string) {
-	m.status = what
+	m.status, m.statusBad = what, false
 	m.statusUntil = m.opts.Now().Add(5 * time.Second)
+}
+
+// sayBad shows what went wrong for a few seconds.
+func (m *Model) sayBad(what string) {
+	m.say(what)
+	m.statusBad = true
 }

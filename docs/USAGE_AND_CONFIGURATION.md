@@ -989,18 +989,26 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
 `sesh ui` opens a search over every entry, on the terminal's alternate screen, so nothing it shows stays in the scrollback. It unlocks as any command does, before it draws.
 
 ```
- › git
- 3 entries
- password  github (alice)       work/dev
- totp      github (alice)       work/dev   492 113  12s
- password  gitlab               work
- Enter copy · ↑↓ move · Esc clear, or quit · Ctrl-C quit
+╭─ sesh ──────────────────────────────────────────────────────────╮
+│ ⌕ git                                                    3 of 14 │
+├──────────────────────────────┬──────────────────────────────────┤
+│▌● GitHub               alice │ GitHub                           │
+│ ◷ GitHub           492 113   │ PASSWORD  ▸ Work                 │
+│ ● GitLab                     │                                  │
+│                              │ user     alice                   │
+│                              │ url      https://github.com      │
+│                              │ changed  3 days ago              │
+│                              │ ↵ copy its password              │
+├──────────────────────────────┴──────────────────────────────────┤
+│ ↵ copy  ·  ↑↓ move  ·  esc clear      ✓ Copied GitHub (alice)'s… │
+╰─────────────────────────────────────────────────────────────────╯
 ```
 
-- **Type to search,** matched and ranked as `--action search` does; with nothing typed, every entry is listed.
+- **Type to search,** matched and ranked as `--action search` does, with the letters matched picked out; with nothing typed, every entry is listed.
+- **The selected entry is shown beside the list** when the window is wide enough: its kind, folder, username, URL, tags, whether it has notes or fields, and when it last changed, never its secret. A TOTP entry's code is shown large, with a bar counting down the seconds it has left.
 - **Enter copies** the selected entry's secret, or a TOTP entry's current code. The clipboard clears after `clipboard_timeout`, as with `--clip`.
-- **TOTP entries show their code** and the seconds it has left, changing as an authenticator app's do.
-- **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; Backspace, Ctrl-W (a word) and Ctrl-U (all) edit the search; Esc clears it, or quits when it's empty; Ctrl-C quits.
+- **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; the search box edits as a line does (← →, Ctrl-A, Ctrl-E, Ctrl-W a word, Ctrl-U all); Esc clears the search, or quits when it's empty; Ctrl-C quits; `?`, with nothing searched, lists the keys.
+- **Colours** follow the terminal: dark or light, and fewer colours where the terminal shows fewer, or none with `NO_COLOR=1`.
 - **Using it keeps the agent unlocked:** while you press keys, it tells the agent the vault is in use, as a read would, so the agent's idle timer doesn't run out under you.
 - **It locks itself** after the agent's idle timeout (`agent.idle_timeout`) without a key pressed, after the agent's longest unlock (`agent.max_lifetime`) since the app unlocked, and, within a second, when the agent locks or stops (`sesh agent lock`, say) or another command changes the master password or restores the vault. It then shows nothing of the vault, and asks for the master password again, which it checks even when the agent is still unlocked; with Touch ID unlock on, Enter with nothing typed asks for a fingerprint instead, also when the agent is still unlocked. Three wrong passwords in a row close it.
 - **Changes by other commands** show up within a second.

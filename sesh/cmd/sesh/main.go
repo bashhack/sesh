@@ -63,6 +63,10 @@ func main() {
 		os.Exit(2)
 	}
 	cliOverrides = overrides
+	if err := checkCommandWord(args); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(2)
+	}
 
 	// A broken config only stops commands that use the store; the rest,
 	// including `sesh config`, which reports the problem, still run.
@@ -262,6 +266,34 @@ var subcommands = []candidate{
 	{"touchid", "Unlock with Touch ID (macOS)"},
 	{"trash", "List deleted entries, put one back, or delete them for good"},
 	{"ui", "Search every entry, and copy its secret or TOTP code"},
+}
+
+// checkCommandWord refuses a first word that's neither a flag nor a
+// command, which nothing sesh does takes (entry IDs come after flags), and
+// names the command it's closest to.
+func checkCommandWord(args []string) error {
+	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
+		return nil
+	}
+	if name, _ := subcommand(args); name != "" {
+		return nil
+	}
+	word := args[1]
+	trimmed := strings.ToLower(strings.TrimRight(word, ".,;:!?"))
+	best, bestDist := "", 3
+	for _, c := range subcommands {
+		d := password.EditDistance(trimmed, c.value)
+		if trimmed == c.value {
+			d = 0
+		}
+		if d < bestDist {
+			best, bestDist = c.value, d
+		}
+	}
+	if best != "" {
+		return fmt.Errorf("sesh has no command %q; did you mean: sesh %s", word, best)
+	}
+	return fmt.Errorf("sesh has no command %q; the commands are listed by: sesh --help", word)
 }
 
 // subcommand returns the subcommand args name (one of subcommands) and the

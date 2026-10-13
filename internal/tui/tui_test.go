@@ -2,12 +2,14 @@ package tui
 
 import (
 	"errors"
+	"image/color"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bashhack/sesh/internal/secure"
@@ -29,7 +31,7 @@ type fakeVault struct {
 	searched int
 }
 
-func (f *fakeVault) Search(q string) ([]vault.Entry, error) {
+func (f *fakeVault) Search(q string) ([]vault.Entry, int, error) {
 	f.searched++
 	var out []vault.Entry
 	for _, e := range f.entries {
@@ -37,7 +39,7 @@ func (f *fakeVault) Search(q string) ([]vault.Entry, error) {
 			out = append(out, e)
 		}
 	}
-	return out, nil
+	return out, len(f.entries), nil
 }
 
 func (f *fakeVault) Secret(k vault.Key, reading string) ([]byte, error) {
@@ -172,8 +174,9 @@ func (a *app) screen() string {
 	return ansi.Strip(v.Content)
 }
 
-// It opens on every entry, with the TOTP entry's code and countdown, read
-// without an audit; typing narrows the list.
+// It opens on every entry, the selected one beside them, with the TOTP
+// entry's code, read without an audit, and its countdown when selected;
+// typing narrows the list.
 func TestSearchAndCodes(t *testing.T) {
 	f := newFake()
 	a := newApp(t, f, Options{})
@@ -182,7 +185,7 @@ func TestSearchAndCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := a.screen()
-	for _, w := range []string{"3 entries", "password  github (alice)", "work", "api key", want[:3] + " " + want[3:] + "   5s"} {
+	for _, w := range []string{"3 entries", "● github", "alice", "◆ gitlab", "◷ github", want[:3] + " " + want[3:], "PASSWORD", "▸ work", "copy its password"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("screen missing %q:\n%s", w, s)
 		}
@@ -190,13 +193,18 @@ func TestSearchAndCodes(t *testing.T) {
 	if !slices.Equal(f.reads, []string{"code totp/github/alice"}) {
 		t.Errorf("reads = %q", f.reads)
 	}
-	// The code changes with the clock; the key isn't read again.
+	// Selected, the TOTP entry's code is drawn large, counting down; it
+	// changes with the clock, and the key isn't read again.
+	a.press("down")
+	if s := a.screen(); !strings.Contains(s, "TOTP") || !strings.Contains(s, spaced(groupCode(want))) || !strings.Contains(s, " 5s") {
+		t.Errorf("the TOTP entry selected:\n%s", s)
+	}
 	a.tick(10 * time.Second)
 	if s := a.screen(); !strings.Contains(s, "25s") || len(f.reads) != 1 {
 		t.Errorf("after 10s, reads %q:\n%s", f.reads, s)
 	}
 	a.press("gitl")
-	if s := a.screen(); !strings.Contains(s, "› gitl") || !strings.Contains(s, "1 entry") || strings.Contains(s, "github") {
+	if s := a.screen(); !strings.Contains(s, "⌕ gitl") || !strings.Contains(s, "1 of 3") || strings.Contains(s, "github") {
 		t.Errorf("searching gitl:\n%s", s)
 	}
 	a.press("x")
@@ -219,7 +227,7 @@ func TestCopy(t *testing.T) {
 	f := newFake()
 	a := newApp(t, f, Options{ClearAfter: 30 * time.Second})
 	a.press("enter")
-	if !slices.Equal(a.copied, []string{"gh-pass"}) || !strings.Contains(a.screen(), "Copied password/github/alice; the clipboard clears in 30s.") {
+	if !slices.Equal(a.copied, []string{"gh-pass"}) || !strings.Contains(a.screen(), "✓ Copied github (alice)'s password · clears in 30s") {
 		t.Errorf("copied %q:\n%s", a.copied, a.screen())
 	}
 	a.press("down", "enter")
@@ -227,7 +235,7 @@ func TestCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(a.copied) != 2 || a.copied[1] != want || !strings.Contains(a.screen(), "Copied totp/github/alice's code") {
+	if len(a.copied) != 2 || a.copied[1] != want || !strings.Contains(a.screen(), "Copied github (alice)'s code") {
 		t.Errorf("copied %q, want the code %s:\n%s", a.copied, want, a.screen())
 	}
 	if !slices.Contains(f.reads, "secret password/github/alice in sesh ui, to copy it") || !slices.Contains(f.reads, "secret totp/github/alice in sesh ui, to copy its code") {
@@ -235,12 +243,12 @@ func TestCopy(t *testing.T) {
 	}
 	// The message goes after a few seconds.
 	a.tick(6 * time.Second)
-	if s := a.screen(); strings.Contains(s, "Copied") || !strings.Contains(s, "Enter copy") {
+	if s := a.screen(); strings.Contains(s, "Copied") || !strings.Contains(s, "↵ copy") {
 		t.Errorf("after 6s:\n%s", s)
 	}
 	failing := newApp(t, newFake(), Options{Copy: func(string) error { return errors.New("no clipboard") }})
 	failing.press("enter")
-	if s := failing.screen(); !strings.Contains(s, "Couldn't copy: no clipboard") || failing.quit {
+	if s := failing.screen(); !strings.Contains(s, "✗ Couldn't copy: no clipboard") || failing.quit {
 		t.Errorf("a failed copy:\n%s", s)
 	}
 }
@@ -310,10 +318,10 @@ func TestLockedUnderneath(t *testing.T) {
 	f := newFake()
 	again := newFake()
 	a := newApp(t, f, Options{TouchID: func() (Vault, error) { return again, nil }})
-	f.err = Locked("The vault's master password was changed by another sesh command.")
+	f.err = Locked("The master password changed.")
 	a.press("enter")
 	s := a.screen()
-	if a.v != nil || !strings.Contains(s, "master password was changed by another sesh command") || !strings.Contains(s, "Touch ID") {
+	if a.v != nil || !strings.Contains(s, "sesh is locked") || !strings.Contains(s, "The master password changed.") || !strings.Contains(s, "Touch ID") || strings.Contains(s, "github") {
 		t.Fatalf("locked underneath:\n%s", s)
 	}
 	a.press("enter")
@@ -330,7 +338,7 @@ func TestChangedAndStale(t *testing.T) {
 	f.entries = append(f.entries, vault.Entry{Kind: vault.KindNote, Service: "wifi"})
 	f.changed = true
 	a.tick(time.Second)
-	if s := a.screen(); !strings.Contains(s, "4 entries") || !strings.Contains(s, "note      wifi") {
+	if s := a.screen(); !strings.Contains(s, "4 entries") || !strings.Contains(s, "≡ wifi") {
 		t.Errorf("after a change:\n%s", s)
 	}
 	stale := keyMsg{k: code, key: []byte("held"), epoch: a.epoch}
@@ -457,7 +465,7 @@ func TestPasteNewline(t *testing.T) {
 	})
 	a.Update(tea.PasteMsg{Content: "gitl\n"})
 	a.run(a.requery())
-	if s := a.screen(); !strings.Contains(s, "› gitl ") || strings.Count(s, "\n") >= a.height {
+	if s := a.screen(); !strings.Contains(s, "⌕ gitl ") || strings.Count(s, "\n") >= a.height {
 		t.Errorf("pasted search:\n%s", s)
 	}
 	a.tick(time.Minute)
@@ -485,7 +493,7 @@ type slowVault struct {
 	release chan struct{}
 }
 
-func (s *slowVault) Search(q string) ([]vault.Entry, error) {
+func (s *slowVault) Search(q string) ([]vault.Entry, int, error) {
 	<-s.release
 	return s.fakeVault.Search(q)
 }
@@ -515,5 +523,55 @@ func TestLockDoesNotWait(t *testing.T) {
 	<-closed
 	if !f.closed {
 		t.Error("the vault wasn't closed")
+	}
+}
+
+// ? shows the keys with nothing searched, and is searched for otherwise.
+func TestHelp(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("?")
+	if s := a.screen(); !strings.Contains(s, "clear the search, or quit") || strings.Contains(s, "◆ gitlab") {
+		t.Errorf("help:\n%s", s)
+	}
+	a.press("esc")
+	if s := a.screen(); a.quit || !strings.Contains(s, "◆ gitlab") {
+		t.Errorf("Esc closes the help (quit %v):\n%s", a.quit, s)
+	}
+	a.press("git?")
+	if s := a.screen(); !strings.Contains(s, "⌕ git?") || strings.Contains(s, "clear the search, or quit") {
+		t.Errorf("? in a search:\n%s", s)
+	}
+}
+
+// A narrow window shows the list alone; a very small one asks for room;
+// a light terminal gets the light colours.
+func TestLayouts(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	if s := a.screen(); !strings.Contains(s, "● github") || strings.Contains(s, "PASSWORD") || strings.Count(s, "\n") != 19 {
+		t.Errorf("60 columns:\n%s", s)
+	}
+	a.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+	if s := a.screen(); !strings.Contains(s, "needs a bigger window") {
+		t.Errorf("30×8:\n%s", s)
+	}
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	dark := a.View().Content
+	a.Update(tea.BackgroundColorMsg{Color: color.White})
+	if light := a.View().Content; a.dark || light == dark || ansi.Strip(light) != ansi.Strip(dark) {
+		t.Error("a light terminal kept the dark colours")
+	}
+}
+
+// The letters matching a search are picked out, ignoring case.
+func TestHighlight(t *testing.T) {
+	hi := lipgloss.NewStyle().Bold(true)
+	plain := lipgloss.NewStyle()
+	got := highlight("GitHub", []string{"hub"}, &plain, &hi)
+	if ansi.Strip(got) != "GitHub" || !strings.Contains(got, hi.Render("Hub")) {
+		t.Errorf("highlight = %q", got)
+	}
+	if got := highlight("İstanbul", []string{"stan"}, &plain, &hi); ansi.Strip(got) != "İstanbul" || !strings.Contains(got, hi.Render("stan")) {
+		t.Errorf("highlight İstanbul = %q", got)
 	}
 }

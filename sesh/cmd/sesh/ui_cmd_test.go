@@ -49,11 +49,11 @@ func TestUI_Vault(t *testing.T) {
 	}
 	u := newUIVault(store)
 	defer u.Close() //nolint:errcheck // test cleanup
-	all, err := u.Search("")
-	if err != nil || len(all) != 5 {
+	all, total, err := u.Search("")
+	if err != nil || len(all) != 5 || total != 5 {
 		t.Fatalf("Search(\"\") = %d entries, %v", len(all), err)
 	}
-	found, err := u.Search("git")
+	found, _, err := u.Search("git")
 	var names []string
 	for _, e := range found {
 		names = append(names, e.Key.String())
@@ -149,7 +149,7 @@ func TestUI_Run(t *testing.T) {
 	}
 	waitFor(t, "every entry", func() bool { return strings.Contains(out.String(), "4 entries") })
 	send("gitl")
-	waitFor(t, "the search", func() bool { return strings.Contains(out.String(), "1 entry") })
+	waitFor(t, "the search", func() bool { return strings.Contains(out.String(), "1 of 4") })
 	send("\r")
 	select {
 	case got := <-copied:

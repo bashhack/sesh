@@ -219,15 +219,15 @@ func newUIVault(store *database.Store) *uiVault {
 }
 
 // Search is every entry for "", or the ones sesh's search finds, best
-// first.
-func (u *uiVault) Search(query string) ([]vault.Entry, error) {
+// first, and how many entries there are.
+func (u *uiVault) Search(query string) ([]vault.Entry, int, error) {
 	all, err := u.store.List(&vault.Filter{})
 	if err != nil || strings.TrimSpace(query) == "" {
-		return all, err
+		return all, len(all), err
 	}
 	found, err := u.mgr.SearchIn(query, &password.ListFilter{})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	byID := make(map[string]int, len(all))
 	for i := range all {
@@ -239,7 +239,7 @@ func (u *uiVault) Search(query string) ([]vault.Entry, error) {
 			out = append(out, all[j])
 		}
 	}
-	return out, nil
+	return out, len(all), nil
 }
 
 func (u *uiVault) Secret(k vault.Key, reading string) ([]byte, error) {

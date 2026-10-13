@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
@@ -14,17 +13,21 @@ import (
 )
 
 // key handles a key while unlocked: typing searches, the arrows move,
-// Enter copies, Esc clears the search or quits.
+// Enter copies, Esc clears the search or quits, ? shows the keys.
 func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	m.lastKey = m.opts.Now()
 	switch msg.String() {
 	case "ctrl+c":
 		return tea.Quit
 	case "esc":
-		if len(m.query) == 0 {
+		switch {
+		case m.showHelp:
+			m.showHelp = false
+			return nil
+		case m.input.Value() == "":
 			return tea.Quit
 		}
-		m.query = m.query[:0]
+		m.input.SetValue("")
 		return m.requery()
 	case "enter":
 		return m.copySelected()
@@ -36,29 +39,30 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.sel -= m.listHeight()
 	case "pgdown":
 		m.sel += m.listHeight()
-	case "backspace":
-		if len(m.query) == 0 {
+	case "?":
+		if m.input.Value() == "" {
+			m.showHelp = !m.showHelp
 			return nil
 		}
-		m.query = m.query[:len(m.query)-1]
-		return m.requery()
-	case "ctrl+u":
-		m.query = m.query[:0]
-		return m.requery()
-	case "ctrl+w":
-		q := strings.TrimRightFunc(string(m.query), unicode.IsSpace)
-		q = strings.TrimRightFunc(q, func(r rune) bool { return !unicode.IsSpace(r) })
-		m.query = []rune(q)
-		return m.requery()
+		return m.typed(msg)
 	default:
-		if msg.Text == "" || msg.Mod&(tea.ModCtrl|tea.ModAlt) != 0 {
-			return nil
-		}
-		m.query = append(m.query, []rune(msg.Text)...)
-		return m.requery()
+		return m.typed(msg)
 	}
 	m.scroll()
 	return m.readKeys()
+}
+
+// typed hands a key to the search box, and searches again when it
+// changed what's searched for.
+func (m *Model) typed(msg tea.KeyPressMsg) tea.Cmd {
+	before := m.input.Value()
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	if m.input.Value() == before {
+		return cmd
+	}
+	m.showHelp = false
+	return tea.Batch(cmd, m.requery())
 }
 
 // lockedKey handles a key on the locked screen: typing the password,
@@ -80,19 +84,19 @@ func (m *Model) lockedKey(msg tea.KeyPressMsg) tea.Cmd {
 			}
 			m.unlocking = true
 			touch := m.opts.TouchID
-			return func() tea.Msg {
+			return tea.Batch(m.spin.Tick, func() tea.Msg {
 				v, err := touch()
 				return unlockedMsg{v: v, err: err}
-			}
+			})
 		}
 		pw := m.password
 		m.password = nil
 		m.unlocking = true
 		unlock := m.opts.Unlock
-		return func() tea.Msg {
+		return tea.Batch(m.spin.Tick, func() tea.Msg {
 			v, err := unlock(pw)
 			return unlockedMsg{v: v, err: err}
-		}
+		})
 	case "backspace":
 		if _, size := utf8.DecodeLastRune(m.password); size > 0 {
 			secure.SecureZeroBytes(m.password[len(m.password)-size:])
@@ -147,20 +151,18 @@ func (m *Model) copySelected() tea.Cmd {
 			return copiedMsg{err: err, epoch: epoch}
 		}
 		defer secure.SecureZeroBytes(secret)
-		text, what := string(secret), "Copied "+e.Key.String()
+		text, what := string(secret), "Copied "+entryName(&e)+"'s "+secretWord(e.Kind)
 		if e.Kind == vault.KindTOTP {
 			if text, err = totp.CodeAt(secret, e.Settings.TOTP, opts.Now()); err != nil {
-				return copiedMsg{what: fmt.Sprintf("Couldn't make %s's code: %v", e.Key, err), epoch: epoch}
+				return copiedMsg{what: fmt.Sprintf("Couldn't make %s's code: %v", e.Key, err), epoch: epoch, bad: true}
 			}
-			what = "Copied " + e.Key.String() + "'s code"
+			what = "Copied " + entryName(&e) + "'s code"
 		}
 		if err := opts.Copy(text); err != nil {
-			return copiedMsg{what: "Couldn't copy: " + err.Error(), epoch: epoch}
+			return copiedMsg{what: "Couldn't copy: " + err.Error(), epoch: epoch, bad: true}
 		}
 		if opts.ClearAfter > 0 {
-			what += fmt.Sprintf("; the clipboard clears in %s.", opts.ClearAfter)
-		} else {
-			what += "."
+			what += fmt.Sprintf(" · clears in %s", opts.ClearAfter)
 		}
 		return copiedMsg{what: what, epoch: epoch}
 	})
@@ -193,10 +195,10 @@ func (m *Model) readKeys() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// listHeight is how many entries fit: the screen less the search line,
-// the count line, and the footer.
+// listHeight is how many entries fit: the screen less the frame's top
+// and bottom, the search line, the rules around the list, and the keys.
 func (m *Model) listHeight() int {
-	return max(m.height-3, 1)
+	return max(m.height-6, 1)
 }
 
 // scroll keeps the selection on an entry, and on screen.
@@ -216,4 +218,24 @@ func (m *Model) scroll() {
 func (m *Model) requery() tea.Cmd {
 	m.sel, m.top = 0, 0
 	return m.search()
+}
+
+// entryName is an entry as the app names it: its service, and its
+// username after it.
+func entryName(e *vault.Entry) string {
+	if e.Username == "" {
+		return e.Service
+	}
+	return e.Service + " (" + e.Username + ")"
+}
+
+// secretWord names what copying an entry of kind k copies.
+func secretWord(k vault.Kind) string {
+	switch k {
+	case vault.KindAPIKey:
+		return "key"
+	case vault.KindNote:
+		return "note"
+	}
+	return "password"
 }
