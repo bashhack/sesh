@@ -478,3 +478,42 @@ func TestAppendSecret(t *testing.T) {
 		t.Errorf("grown %q, old %q", grown, old)
 	}
 }
+
+// slowVault is a fakeVault whose Search waits to be released.
+type slowVault struct {
+	*fakeVault
+	release chan struct{}
+}
+
+func (s *slowVault) Search(q string) ([]vault.Entry, error) {
+	<-s.release
+	return s.fakeVault.Search(q)
+}
+
+// Locking doesn't wait on a slow read; Close does.
+func TestLockDoesNotWait(t *testing.T) {
+	f := newFake()
+	slow := &slowVault{fakeVault: f, release: make(chan struct{})}
+	m := New(Options{Vault: slow, Now: time.Now, IdleTimeout: time.Minute})
+	m.every = func() tea.Cmd { return nil }
+	go m.search()()
+	time.Sleep(50 * time.Millisecond) // the search is running
+	m.lastKey = time.Now().Add(-time.Hour)
+	start := time.Now()
+	_, cmd := m.Update(tickMsg(time.Now()))
+	if d := time.Since(start); d > 500*time.Millisecond || m.v != nil {
+		t.Fatalf("locking took %s (locked %v)", d, m.v == nil)
+	}
+	closed := make(chan struct{})
+	go func() { cmd(); m.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("the vault closed before the search ended")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(slow.release)
+	<-closed
+	if !f.closed {
+		t.Error("the vault wasn't closed")
+	}
+}

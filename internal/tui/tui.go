@@ -88,6 +88,9 @@ type Model struct {
 
 	v *gate // nil while locked
 
+	// shut are gates locking closed, which Close waits for.
+	shut []*gate
+
 	// keys are TOTP keys held for drawing codes, wiped on lock and exit;
 	// pending are being read, and failed couldn't be. codes are the codes
 	// shown, each made once a period.
@@ -149,6 +152,10 @@ func (m *Model) Close() {
 		m.v.close()
 		m.v = nil
 	}
+	for _, g := range m.shut {
+		g.close()
+	}
+	m.shut = nil
 	m.wipe()
 	secure.SecureZeroBytes(m.password)
 	m.password = nil
@@ -404,11 +411,13 @@ func lockedReason(err error) string {
 	return err.Error()
 }
 
-// lock waits for reads still running, wipes what the app holds, closes
-// the vault, and shows the locked screen, saying why.
+// lock wipes what the app holds and shows the locked screen, saying why;
+// the vault is closed once the reads still running end.
 func (m *Model) lock(why string) tea.Cmd {
+	var closing tea.Cmd
 	if m.v != nil {
-		m.v.close()
+		closing = m.v.shut()
+		m.shut = append(m.shut, m.v)
 		m.v = nil
 	}
 	m.wipe()
@@ -416,7 +425,7 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.rows, m.sel, m.top = nil, 0, 0
 	m.status = ""
 	m.lockedWhy = why
-	return nil
+	return closing
 }
 
 // say shows what for a few seconds.

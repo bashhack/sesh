@@ -27,8 +27,9 @@ var (
 // ID unlock turned on. It reports whether the agent is now unlocked; if not,
 // the caller asks for the master password, and anything worth knowing has
 // been said in one line. An error means the agent connection is no longer
-// usable. Notes go to say: a command's, note.
-func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte, say func(format string, a ...any)) (bool, error) {
+// usable. Notes go to say: a command's, note. again asks for the
+// fingerprint even when the agent already holds the key.
+func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte, again bool, say func(format string, a ...any)) (bool, error) {
 	f, err := touchid.ReadFile(dataDir)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -55,7 +56,11 @@ func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte, say func(fo
 		say("Your fingerprints changed since Touch ID unlock was turned on, so it no longer works and is now off. Enter your master password; turn it back on afterwards with: sesh touchid enable")
 		return false, nil
 	}
-	err = agent.UnlockTouchID(conn, f, verify)
+	unlock := agent.UnlockTouchID
+	if again {
+		unlock = agent.UnlockTouchIDAgain
+	}
+	err = unlock(conn, f, verify)
 	switch {
 	case err == nil:
 		return true, nil

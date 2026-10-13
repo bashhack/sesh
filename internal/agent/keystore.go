@@ -131,15 +131,16 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 // UnlockTouchID unlocks the vault whose verify blob is verify with
 // the key unwrap returns; unwrap asks for a fingerprint. If the keystore
 // already holds that vault's key, unwrap isn't called, so a second request
-// doesn't prompt again. Like Unlock, it runs one at a time.
-func (k *keystore) UnlockTouchID(verify []byte, unwrap func() ([]byte, error)) error {
+// doesn't prompt again, unless fresh asks that it does. Like Unlock, it
+// runs one at a time.
+func (k *keystore) UnlockTouchID(verify []byte, fresh bool, unwrap func() ([]byte, error)) error {
 	k.unlockMu.Lock()
 	defer k.unlockMu.Unlock()
 
 	if k.isShutDown() {
 		return errShutDown
 	}
-	if st := k.snapshot(); st.unlocked && st.unlockID == UnlockID(verify) {
+	if st := k.snapshot(); !fresh && st.unlocked && st.unlockID == UnlockID(verify) {
 		return nil
 	}
 	key, err := unwrap()

@@ -17,6 +17,7 @@ import (
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/touchid"
 	"github.com/bashhack/sesh/internal/tui"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -253,4 +254,34 @@ func TestUI_HoldStderr(t *testing.T) {
 	if string(got) != "warning: held" || os.Stderr != w {
 		t.Errorf("after: %q (stderr restored %v)", got, os.Stderr == w)
 	}
+}
+
+// Unlocking again with Touch ID asks for the fingerprint even while the
+// agent is unlocked; one refused doesn't unlock.
+func TestUI_TouchIDAgainWhileAgentUnlocked(t *testing.T) {
+	startTestAgent(t)
+	prompts, fail := softwareTouchID(t)
+	dbPath := createVaultWithTouchID(t)
+	if !touchIDSetUp(dbPath) {
+		t.Fatal("Touch ID unlock isn't seen as set up")
+	}
+	oracle, err := buildKeySourceWith(dbPath, interactivePrompt(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeKeySource(t, oracle)
+	*fail = touchid.ErrCancelled
+	if store, err := reopenWithTouchID(dbPath); err == nil {
+		store.Close() //nolint:errcheck,gosec // test cleanup
+		t.Error("a refused fingerprint unlocked the app while the agent was unlocked")
+	}
+	if *prompts != 2 {
+		t.Errorf("Touch ID prompts = %d, want 2: the app's unlock didn't ask", *prompts)
+	}
+	*fail = nil
+	store, err := reopenWithTouchID(dbPath)
+	if err != nil {
+		t.Fatalf("a fingerprint given: %v", err)
+	}
+	store.Close() //nolint:errcheck,gosec // test cleanup
 }

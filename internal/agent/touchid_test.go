@@ -93,6 +93,14 @@ func TestTouchID_WrapThenUnlockWithAFingerprint(t *testing.T) {
 	if *prompts != 1 {
 		t.Errorf("an unlocked agent prompted again (prompts = %d)", *prompts)
 	}
+	// Unless the request asks for the fingerprint again, as an app
+	// unlocking again does.
+	if err := UnlockTouchIDAgain(conn, f, verify); err != nil {
+		t.Fatal(err)
+	}
+	if *prompts != 2 {
+		t.Errorf("a fresh request didn't prompt (prompts = %d)", *prompts)
+	}
 }
 
 func TestWrapKey_Refused(t *testing.T) {

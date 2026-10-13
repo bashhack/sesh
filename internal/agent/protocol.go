@@ -152,6 +152,10 @@ type UnlockTouchIDRequest struct {
 	Ciphertext   []byte `json:"ciphertext"`
 	Verify       []byte `json:"verify"`
 	Version      int    `json:"version"`
+	// Fresh asks for the fingerprint even when the agent already holds
+	// this vault's key: an app unlocking again, where a fingerprint asked
+	// for must be given.
+	Fresh bool `json:"fresh,omitempty"`
 }
 
 // KDFParams is the Argon2id parameter set on the wire. It is a separate

@@ -424,7 +424,7 @@ func (s *Server) dispatchUnlockTouchID(conn *net.UnixConn, raw []byte) bool {
 	}
 	id := UnlockID(req.Verify)
 	w := touchid.Wrapped{EphemeralPub: req.EphemeralPub, Ciphertext: req.Ciphertext}
-	err := s.keys.UnlockTouchID(req.Verify, func() ([]byte, error) {
+	err := s.keys.UnlockTouchID(req.Verify, req.Fresh, func() ([]byte, error) {
 		return TouchIDUnwrap(req.KeyBlob, w, []byte(id))
 	})
 	if err == nil {

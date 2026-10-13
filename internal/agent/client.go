@@ -231,6 +231,16 @@ func WrapKey(conn *Conn, unlockID, purpose string, pub []byte) (keywrap.Wrapped,
 // Failures match touchid.ErrCancelled, ErrUnavailable, ErrLockedOut,
 // ErrFailed, or ErrTouchIDStale.
 func UnlockTouchID(conn *Conn, f *touchid.File, verify []byte) error {
+	return unlockTouchID(conn, f, verify, false)
+}
+
+// UnlockTouchIDAgain is UnlockTouchID asking for the fingerprint even when
+// the agent already holds the vault's key, for an app unlocking again.
+func UnlockTouchIDAgain(conn *Conn, f *touchid.File, verify []byte) error {
+	return unlockTouchID(conn, f, verify, true)
+}
+
+func unlockTouchID(conn *Conn, f *touchid.File, verify []byte, fresh bool) error {
 	_, err := roundTrip(conn, UnlockTouchIDRequest{
 		Type:         TypeUnlockTouchID,
 		Version:      ProtocolVersion,
@@ -238,6 +248,7 @@ func UnlockTouchID(conn *Conn, f *touchid.File, verify []byte) error {
 		EphemeralPub: f.EphemeralPub,
 		Ciphertext:   f.Ciphertext,
 		Verify:       verify,
+		Fresh:        fresh,
 	}, TypeUnlockAck)
 	var pe *ProtocolError
 	if !errors.As(err, &pe) {

@@ -557,7 +557,7 @@ func keySourceFromAgent(dbPath string, cfg passwordPromptConfig) (oracle databas
 	// A person at the terminal is asked for a fingerprint first, when this
 	// vault has Touch ID unlock on; scripts never wait on one.
 	if cfg.interactive {
-		unlocked, terr := tryTouchID(conn, dataDir, id, mat.Verify, note)
+		unlocked, terr := tryTouchID(conn, dataDir, id, mat.Verify, false, note)
 		if unlocked {
 			return agent.NewOracle(conn, id), nil, nil
 		}

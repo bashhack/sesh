@@ -12,11 +12,12 @@ import (
 // event. A read that finishes after the gate closed sees it, and wipes
 // what it read.
 type gate struct {
-	v      Vault
-	idle   *sync.Cond
-	mu     sync.Mutex
-	n      int
-	closed bool
+	v         Vault
+	idle      *sync.Cond
+	n         int
+	closeOnce sync.Once
+	mu        sync.Mutex
+	closed    bool
 }
 
 func newGate(v Vault) *gate {
@@ -50,7 +51,20 @@ func (g *gate) isClosed() bool {
 	return g.closed
 }
 
-// close stops new reads, waits for those running, and closes the vault.
+// shut stops new reads now, and is the command that waits for those
+// running and closes the vault, so the app isn't held up by a slow one.
+func (g *gate) shut() tea.Cmd {
+	g.mu.Lock()
+	g.closed = true
+	g.mu.Unlock()
+	return func() tea.Msg {
+		g.close()
+		return nil
+	}
+}
+
+// close stops new reads, waits for those running, and closes the vault,
+// once however often it's called.
 func (g *gate) close() {
 	g.mu.Lock()
 	g.closed = true
@@ -58,5 +72,7 @@ func (g *gate) close() {
 		g.idle.Wait()
 	}
 	g.mu.Unlock()
-	g.v.Close() //nolint:errcheck,gosec // nothing more to do with the vault
+	g.closeOnce.Do(func() {
+		g.v.Close() //nolint:errcheck,gosec // nothing more to do with the vault
+	})
 }

@@ -64,9 +64,11 @@ func runUI(app *App, args []string) error {
 	// unlocks again, say) would land on its screen: it's held, and
 	// written once the app has ended.
 	restore := holdStderr()
+	defer func() {
+		m.Close()
+		restore()
+	}()
 	_, err = tea.NewProgram(m, append([]tea.ProgramOption{tea.WithInput(app.Stdin), tea.WithOutput(app.Stdout)}, uiProgramOptions...)...).Run()
-	m.Close()
-	restore()
 	if err != nil {
 		return fmt.Errorf("sesh ui: %w", err)
 	}
@@ -185,7 +187,7 @@ func reopenWithTouchID(dbPath string) (*database.Store, error) {
 	}
 	id := agent.UnlockID(mat.Verify)
 	var said []string
-	ok, err := tryTouchID(conn, filepath.Dir(dbPath), id, mat.Verify, func(format string, a ...any) {
+	ok, err := tryTouchID(conn, filepath.Dir(dbPath), id, mat.Verify, true, func(format string, a ...any) {
 		said = append(said, fmt.Sprintf(format, a...))
 	})
 	if !ok {
