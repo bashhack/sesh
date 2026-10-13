@@ -324,7 +324,7 @@ func (m *Model) previewLines(w, h int) []string {
 		hint += th.lines().Render("  ·  ") + th.accented().Render("tab") + th.dimmed().Render(word)
 	}
 	if len(body) > room {
-		hint += th.lines().Render("  ·  ") + th.accented().Render("⇧↑↓") + th.dimmed().Render(" scroll")
+		hint += th.lines().Render("  ·  ") + th.accented().Render("shift ↑↓") + th.dimmed().Render(" scroll")
 	}
 	return append(out, " "+hint)
 }

@@ -80,7 +80,9 @@ type Options struct {
 	// set up.
 	TouchID func() (Vault, error)
 	// Copy puts text on the clipboard, cleared after ClearAfter.
-	Copy       func(text string) error
+	Copy func(text string) error
+	// OpenURL opens an entry's URL in the browser.
+	OpenURL    func(url string) error
 	Now        func() time.Time
 	ClearAfter time.Duration
 	// IdleTimeout locks after this long without a key pressed, and
@@ -95,6 +97,7 @@ type Model struct {
 	lastKey, unlockedAt time.Time
 	statusUntil         time.Time
 	lastKeepAlive       time.Time
+	clipUntil           time.Time // when the clipboard clears what was copied
 
 	quitErr error
 
@@ -158,10 +161,10 @@ type shownCode struct {
 }
 
 // New is the app, unlocked with opts.Vault.
-func New(opts Options) *Model {
+func New(opts *Options) *Model {
 	now := opts.Now()
 	m := &Model{
-		opts: opts, v: newGate(opts.Vault),
+		opts: *opts, v: newGate(opts.Vault),
 		keys: map[vault.Key][]byte{}, pending: map[vault.Key]bool{}, failed: map[vault.Key]bool{},
 		codes: map[vault.Key]shownCode{},
 		notes: map[vault.Key][]byte{}, notesPending: map[vault.Key]bool{}, notesFailed: map[vault.Key]string{},
@@ -329,10 +332,46 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return cmd
+	case tea.MouseClickMsg:
+		if m.v == nil || msg.Button != tea.MouseLeft {
+			return nil
+		}
+		m.lastKey = m.opts.Now()
+		if n, ok := m.rowAt(msg.X, msg.Y); ok {
+			m.sel = n
+			m.scroll()
+			return m.moved()
+		}
+		return nil
+	case tea.MouseWheelMsg:
+		if m.v == nil {
+			return nil
+		}
+		m.lastKey = m.opts.Now()
+		step := 1
+		if msg.Button == tea.MouseWheelUp {
+			step = -1
+		} else if msg.Button != tea.MouseWheelDown {
+			return nil
+		}
+		if lw := m.listWidth(); lw < m.width-2 && msg.X > lw+1 {
+			m.scrollPreview(3 * step)
+			return nil
+		}
+		m.sel += step
+		m.scroll()
+		return m.moved()
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.scroll()
 		return m.moved()
+	case openedMsg:
+		if msg.err != nil {
+			m.sayBad(msg.err.Error())
+		} else {
+			m.say("Opened " + msg.url)
+		}
+		return nil
 	case notesMsg:
 		return m.gotNotes(&msg)
 	case revealMsg:
@@ -398,6 +437,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			m.sayBad(msg.what)
 		default:
 			m.say(msg.what)
+			if m.opts.ClearAfter > 0 {
+				m.clipUntil = m.opts.Now().Add(m.opts.ClearAfter)
+			}
 		}
 		return nil
 	case checkedMsg:

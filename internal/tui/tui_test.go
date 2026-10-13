@@ -127,7 +127,7 @@ func newApp(t *testing.T, f *fakeVault, opts Options) *app {
 	if opts.Copy == nil {
 		opts.Copy = func(s string) error { a.copied = append(a.copied, s); return nil }
 	}
-	a.Model = New(opts)
+	a.Model = New(&opts)
 	a.every = func() tea.Cmd { return nil }
 	a.run(a.Init())
 	return a
@@ -532,7 +532,7 @@ func (s *slowVault) Search(q string) ([]vault.Entry, int, error) {
 func TestLockDoesNotWait(t *testing.T) {
 	f := newFake()
 	slow := &slowVault{fakeVault: f, release: make(chan struct{})}
-	m := New(Options{Vault: slow, Now: time.Now, IdleTimeout: time.Minute})
+	m := New(&Options{Vault: slow, Now: time.Now, IdleTimeout: time.Minute})
 	m.every = func() tea.Cmd { return nil }
 	go m.search()()
 	time.Sleep(50 * time.Millisecond) // the search is running
@@ -665,7 +665,7 @@ func TestPreviewSecureNote(t *testing.T) {
 	f.secrets = map[vault.Key]string{wifi: long}
 	a := newApp(t, f, Options{})
 	s := a.screen()
-	if !strings.Contains(s, "ssid home␛[2Jpassword hunter2") || !strings.Contains(s, "⇧↑↓ scroll") || strings.Contains(s, "line 39") {
+	if !strings.Contains(s, "ssid home␛[2Jpassword hunter2") || !strings.Contains(s, "shift ↑↓ scroll") || strings.Contains(s, "line 39") {
 		t.Errorf("a long note:\n%s", s)
 	}
 	if strings.Contains(a.View().Content, "\x1b[2J") {
@@ -676,5 +676,67 @@ func TestPreviewSecureNote(t *testing.T) {
 	}
 	if s := a.screen(); !strings.Contains(s, "line 39") {
 		t.Errorf("scrolled to the end:\n%s", s)
+	}
+}
+
+// Ctrl-Y copies the username, Ctrl-O opens the URL; the footer counts
+// down until the clipboard clears.
+func TestUsernameURLAndCountdown(t *testing.T) {
+	f := newFake()
+	f.entries[0].URL = "github.com"
+	var opened string
+	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, OpenURL: func(u string) error { opened = u; return nil }})
+	a.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+	a.run(a.copyUsername())
+	if len(a.copied) != 1 || a.copied[0] != "alice" || !strings.Contains(a.screen(), "Copied github (alice)'s username") {
+		t.Errorf("copied %q:\n%s", a.copied, a.screen())
+	}
+	if len(f.reads) != 1 { // only the TOTP key, for its code
+		t.Errorf("copying a username read the vault: %q", f.reads)
+	}
+	a.tick(10 * time.Second)
+	if s := a.screen(); !strings.Contains(s, "clipboard clears in 20s") {
+		t.Errorf("countdown:\n%s", s)
+	}
+	a.tick(20 * time.Second)
+	if s := a.screen(); strings.Contains(s, "clipboard clears") {
+		t.Errorf("countdown after it cleared:\n%s", s)
+	}
+	a.run(a.openURL())
+	if opened != "github.com" || !strings.Contains(a.screen(), "Opened github.com") {
+		t.Errorf("opened %q:\n%s", opened, a.screen())
+	}
+	a.press("down", "down")
+	a.run(a.copyUsername())
+	if s := a.screen(); !strings.Contains(s, "gitlab has no username") || len(a.copied) != 1 {
+		t.Errorf("no username:\n%s", s)
+	}
+}
+
+// A click selects the row under it; the wheel moves the selection, or
+// scrolls the details over the pane.
+func TestMouse(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	if a.View().MouseMode != tea.MouseModeCellMotion {
+		t.Error("the mouse isn't on")
+	}
+	_, cmd := a.Update(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft}) // the third row
+	a.run(cmd)
+	if a.sel != 2 {
+		t.Errorf("clicked the third row, selected %d", a.sel)
+	}
+	_, cmd = a.Update(tea.MouseWheelMsg{X: 5, Y: 5, Button: tea.MouseWheelUp})
+	a.run(cmd)
+	if a.sel != 1 {
+		t.Errorf("wheel up selected %d", a.sel)
+	}
+	a.Update(tea.MouseClickMsg{X: 5, Y: 20, Button: tea.MouseLeft}) // below the rows
+	a.Update(tea.MouseClickMsg{X: 60, Y: 4, Button: tea.MouseLeft}) // the details
+	if a.sel != 1 {
+		t.Errorf("a click off the rows moved the selection to %d", a.sel)
+	}
+	a.lock("test")
+	if a.View().MouseMode != tea.MouseModeNone {
+		t.Error("the mouse is on while locked")
 	}
 }

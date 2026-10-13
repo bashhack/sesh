@@ -323,3 +323,58 @@ func TestUI_NotesAndSecretFields(t *testing.T) {
 		}
 	}
 }
+
+// Only web addresses are opened; a bare host gets https://.
+func TestUI_OpenURL(t *testing.T) {
+	old := startBrowser
+	t.Cleanup(func() { startBrowser = old })
+	var opened []string
+	startBrowser = func(a string) error { opened = append(opened, a); return nil }
+	for in, want := range map[string]string{
+		"github.com":                "https://github.com",
+		"http://192.168.1.1/admin":  "http://192.168.1.1/admin",
+		"https://example.com/a?b=c": "https://example.com/a?b=c",
+	} {
+		opened = nil
+		if err := openURL(in); err != nil || len(opened) != 1 || opened[0] != want {
+			t.Errorf("openURL(%q) opened %q, %v; want %q", in, opened, err, want)
+		}
+	}
+	for _, in := range []string{"file:///etc/passwd", "javascript:alert(1)", "ssh://host", "https://"} {
+		opened = nil
+		if err := openURL(in); err == nil || len(opened) != 0 {
+			t.Errorf("openURL(%q) opened %q, %v", in, opened, err)
+		}
+	}
+}
+
+// With nothing searched, the entries read most recently come first; the
+// app's own reads for showing an entry don't count.
+func TestUI_RecentFirst(t *testing.T) {
+	filingVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	gitlab := vault.Key{Kind: vault.KindPassword, Service: "gitlab"}
+	bank := vault.Key{Kind: vault.KindPassword, Service: "My Bank"}
+	if _, err := u.Secret(gitlab, "in sesh ui, to copy it"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Secret(bank, "in sesh ui, to copy it"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Secret(gitlab, "in sesh ui, to reveal it"); err != nil {
+		t.Fatal(err)
+	}
+	all, _, err := u.Search("")
+	if err != nil || len(all) < 3 || all[0].Key != bank || all[1].Key != gitlab {
+		var got []string
+		for _, e := range all {
+			got = append(got, e.Key.String())
+		}
+		t.Errorf("order = %q, %v; want My Bank, then gitlab, first", got, err)
+	}
+}

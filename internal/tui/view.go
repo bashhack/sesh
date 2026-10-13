@@ -36,7 +36,20 @@ func (m *Model) View() tea.View {
 	}
 	v := tea.NewView(s)
 	v.AltScreen = true
+	if m.v != nil {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
+}
+
+// listWidth is the list's width inside the frame: all of it, or less the
+// preview beside it when the window is wide enough.
+func (m *Model) listWidth() int {
+	inner := m.width - 2
+	if m.width < previewFrom || m.showHelp {
+		return inner
+	}
+	return max(inner*9/20, 30)
 }
 
 // frame draws the app's outline: a title in the top border, rows of
@@ -98,8 +111,8 @@ func (m *Model) drawApp() string {
 	f.row(icon + fitTo(m.input.View(), inputWidth+1) + countStyled)
 
 	lw := 0
-	if m.width >= previewFrom && !m.showHelp {
-		lw = max(f.inner()*9/20, 30)
+	if m.listWidth() < f.inner() {
+		lw = m.listWidth()
 	}
 	f.rule(lw, "┬")
 	h := m.listHeight()
@@ -220,7 +233,10 @@ func (m *Model) helpLines(h int) []string {
 		{"pgup pgdn", "move a page"},
 		{"↵", "copy the secret, or the code"},
 		{"tab", "reveal the password and secret fields (30s)"},
-		{"⇧↑ ⇧↓", "scroll the entry beside the list"},
+		{"ctrl+y", "copy the username"},
+		{"ctrl+o", "open the URL in the browser"},
+		{"shift ↑ ↓", "scroll the details on the right"},
+		{"mouse", "click to select, wheel to move or scroll"},
 		{"ctrl+w ctrl+u", "delete a word, or the search"},
 		{"esc", "clear the search, or quit"},
 		{"ctrl+c", "quit"},
@@ -248,8 +264,16 @@ func (m *Model) footer(w int) string {
 		parts = append(parts, th.accented().Render(k[0])+" "+th.dimmed().Render(k[1]))
 	}
 	left := " " + strings.Join(parts, th.lines().Render("  ·  "))
-	if m.status == "" || !m.opts.Now().Before(m.statusUntil) {
-		return left
+	now := m.opts.Now()
+	if m.status == "" || !now.Before(m.statusUntil) {
+		if !now.Before(m.clipUntil) {
+			return left
+		}
+		clip := th.dimmed().Render(fmt.Sprintf("◷ clipboard clears in %ds", int(m.clipUntil.Sub(now).Round(time.Second).Seconds())))
+		if lipgloss.Width(left)+lipgloss.Width(clip)+3 > w {
+			return left
+		}
+		return left + strings.Repeat(" ", w-lipgloss.Width(left)-lipgloss.Width(clip)-1) + clip
 	}
 	mark, c := "✓ ", th.ok
 	if m.statusBad {

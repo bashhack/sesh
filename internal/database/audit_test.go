@@ -319,3 +319,33 @@ func TestAudit_NamesTheWrite(t *testing.T) {
 		t.Errorf("events = %+v, want Save then Put, newest first", events)
 	}
 }
+
+// LastReads orders entries by their latest read, leaving out reads whose
+// detail holds what's ignored.
+func TestLastReads(t *testing.T) {
+	s := newTestStore(t)
+	a := vault.Key{Kind: vault.KindPassword, Service: "a"}
+	b := vault.Key{Kind: vault.KindPassword, Service: "b"}
+	for _, k := range []vault.Key{a, b} {
+		if err := s.Put(k, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, read := range []func() error{
+		func() error { _, err := s.Get(a); return err },
+		func() error { _, err := s.Get(b); return err },
+		func() error { _, err := s.GetFor(a, "in sesh ui, to show it"); return err },
+	} {
+		if err := read(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := s.LastReads()
+	if err != nil || all[a.String()] <= all[b.String()] {
+		t.Errorf("LastReads() = %v, %v; want a read last", all, err)
+	}
+	some, err := s.LastReads("to show it")
+	if err != nil || some[b.String()] <= some[a.String()] || len(some) != 2 {
+		t.Errorf("LastReads(to show it) = %v, %v; want b read last", some, err)
+	}
+}

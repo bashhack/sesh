@@ -2,11 +2,16 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -59,7 +64,8 @@ func runUI(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	m := tui.New(uiOptions(app, cfg, newUIVault(store)))
+	opts := uiOptions(app, cfg, newUIVault(store))
+	m := tui.New(&opts)
 	// What's written to stderr while the app draws (a warning while it
 	// unlocks again, say) would land on its screen: it's held, and
 	// written once the app has ended.
@@ -115,6 +121,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 	opts := tui.Options{
 		Vault:       v,
 		Copy:        app.ClipboardCopy,
+		OpenURL:     openURL,
 		ClearAfter:  cfg.ClipboardTimeout.Value,
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
 		MaxLifetime: cfg.AgentMaxLifetime.Value,
@@ -203,6 +210,34 @@ func reopenWithTouchID(dbPath string) (*database.Store, error) {
 	return openStoreWith(dbPath, agent.NewOracle(conn, id))
 }
 
+// startBrowser opens a web address; tests replace it.
+var startBrowser = func(address string) error {
+	name := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		name = "open"
+	}
+	cmd := exec.Command(name, address) //nolint:gosec // an http(s) address, checked by openURL
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("open %s: %w", address, err)
+	}
+	go cmd.Wait() //nolint:errcheck // the browser's exit isn't ours to report
+	return nil
+}
+
+// openURL opens an entry's URL in the browser: an http or https address
+// only (a bare host gets https://), so a URL in the vault can't open a
+// local file or start another program.
+func openURL(address string) error {
+	if !strings.Contains(address, "://") {
+		address = "https://" + address
+	}
+	u, err := url.Parse(address)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%s isn't a web address sesh opens (http or https)", address)
+	}
+	return startBrowser(u.String())
+}
+
 // uiVault is the vault as the app reads it.
 type uiVault struct {
 	store   *database.Store
@@ -218,12 +253,24 @@ func newUIVault(store *database.Store) *uiVault {
 	return u
 }
 
-// Search is every entry for "", or the ones sesh's search finds, best
-// first, and how many entries there are.
+// Search is every entry for "", the ones read most recently first, or
+// the ones sesh's search finds, best first; and how many entries there
+// are.
 func (u *uiVault) Search(query string) ([]vault.Entry, int, error) {
 	all, err := u.store.List(&vault.Filter{})
-	if err != nil || strings.TrimSpace(query) == "" {
-		return all, len(all), err
+	if err != nil {
+		return nil, 0, err
+	}
+	if strings.TrimSpace(query) == "" {
+		// The app's own reads for showing an entry aren't uses of it.
+		last, err := u.store.LastReads("in sesh ui, to show", "in sesh ui, to reveal")
+		if err != nil {
+			return nil, 0, err
+		}
+		slices.SortStableFunc(all, func(a, b vault.Entry) int {
+			return cmp.Compare(last[b.Key.String()], last[a.Key.String()])
+		})
+		return all, len(all), nil
 	}
 	found, err := u.mgr.SearchIn(query, &password.ListFilter{})
 	if err != nil {

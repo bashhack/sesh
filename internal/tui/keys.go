@@ -41,6 +41,10 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.sel += m.listHeight()
 	case "tab":
 		return m.toggleReveal()
+	case "ctrl+y":
+		return m.copyUsername()
+	case "ctrl+o":
+		return m.openURL()
 	case "shift+up":
 		m.scrollPreview(-1)
 		return nil
@@ -246,4 +250,58 @@ func secretWord(k vault.Kind) string {
 		return "note"
 	}
 	return "password"
+}
+
+// copyUsername copies the selected entry's username, which isn't secret,
+// so nothing is read from the vault for it.
+func (m *Model) copyUsername() tea.Cmd {
+	e := m.selected()
+	if e == nil {
+		return nil
+	}
+	if e.Username == "" {
+		m.sayBad(e.Service + " has no username")
+		return nil
+	}
+	name, user, opts, epoch := entryName(e), e.Username, m.opts, m.epoch
+	return func() tea.Msg {
+		if err := opts.Copy(user); err != nil {
+			return copiedMsg{what: "Couldn't copy: " + err.Error(), epoch: epoch, bad: true}
+		}
+		what := "Copied " + name + "'s username"
+		if opts.ClearAfter > 0 {
+			what += fmt.Sprintf(" · clears in %s", opts.ClearAfter)
+		}
+		return copiedMsg{what: what, epoch: epoch}
+	}
+}
+
+// openedMsg is a URL opened, or why it wasn't.
+type openedMsg struct {
+	err error
+	url string
+}
+
+// openURL opens the selected entry's URL in the browser.
+func (m *Model) openURL() tea.Cmd {
+	e := m.selected()
+	if e == nil {
+		return nil
+	}
+	if e.URL == "" || m.opts.OpenURL == nil {
+		m.sayBad(e.Service + " has no URL")
+		return nil
+	}
+	u, open := e.URL, m.opts.OpenURL
+	return func() tea.Msg { return openedMsg{url: u, err: open(u)} }
+}
+
+// rowAt is the entry at a point on the screen, when the list is there.
+func (m *Model) rowAt(x, y int) (int, bool) {
+	const firstRow = 3 // the frame's top, the search line, the rule
+	n := m.top + y - firstRow
+	if x < 1 || x > m.listWidth() || y < firstRow || y >= firstRow+m.listHeight() || n >= len(m.rows) {
+		return 0, false
+	}
+	return n, true
 }
