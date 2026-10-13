@@ -513,3 +513,51 @@ func TestKeystore_TouchRestartsIdleTimer(t *testing.T) {
 		t.Errorf("touch once locked: %v", err)
 	}
 }
+
+// sleep moves the wall clock forward as a computer asleep for d does: the
+// timers, on a clock that stopped, are as far from firing as before.
+func (c *fakeClock) sleep(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+	for _, t := range c.timers {
+		t.at = t.at.Add(d)
+	}
+}
+
+// After a sleep past the idle timeout or max lifetime, the timers haven't
+// fired, but the key isn't handed out: the next use, a touch, or a sweep
+// locks it, and says so.
+func TestKeystore_LocksAfterSleep(t *testing.T) {
+	for name, tc := range map[string]struct {
+		use           func(ks *keystore, id string) error
+		reason        string
+		idle, maxLife time.Duration
+	}{
+		"use, idle":   {use: func(ks *keystore, id string) error { _, err := ks.copyKey(id); return err }, idle: 10 * time.Minute, reason: "idle timeout"},
+		"touch, max":  {use: func(ks *keystore, id string) error { return ks.touch(id) }, maxLife: time.Hour, reason: "max lifetime"},
+		"sweep, idle": {use: func(ks *keystore, _ string) error { ks.lockIfExpired(); return errNotUnlocked }, idle: 10 * time.Minute, reason: "idle timeout"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ks, clk, verify := timedKeystore(t, tc.idle, tc.maxLife)
+			var locked string
+			ks.onAutoLock = func(reason string) { locked = reason }
+			clk.sleep(8 * time.Hour)
+			if !isUnlocked(ks) {
+				t.Fatal("the timers fired during the sleep")
+			}
+			if err := tc.use(ks, UnlockID(verify)); !errors.Is(err, errNotUnlocked) {
+				t.Errorf("after the sleep: %v, want not unlocked", err)
+			}
+			if isUnlocked(ks) || locked != tc.reason {
+				t.Errorf("unlocked %v, locked for %q, want %q", isUnlocked(ks), locked, tc.reason)
+			}
+		})
+	}
+	// A short sleep, within the timeout, changes nothing.
+	ks, clk, verify := timedKeystore(t, 10*time.Minute, 0)
+	clk.sleep(5 * time.Minute)
+	if _, err := ks.copyKey(UnlockID(verify)); err != nil || !isUnlocked(ks) {
+		t.Errorf("after a short sleep: %v", err)
+	}
+}

@@ -342,3 +342,42 @@ func TestOracle_CheckAndTouch(t *testing.T) {
 		t.Errorf("Touch once locked: %v, not Locked", err)
 	}
 }
+
+// After the computer sleeps past the idle timeout, the agent reports
+// itself locked to the first request, and one that stops when it locks
+// stops; with no request at all, its sweep locks it.
+func TestServer_LocksAfterSleep(t *testing.T) {
+	t.Run("status", func(t *testing.T) {
+		clk := newFakeClock()
+		sockPath := tempSocketPath(t)
+		_, done := serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute), WithExitOnAutoLock())
+		conn, _ := unlockClient(t, sockPath)
+		defer mustClose(t, conn)
+		clk.sleep(8 * time.Hour)
+		st, err := Status(conn)
+		if err != nil || st.Unlocked {
+			t.Fatalf("status after the sleep: %+v, %v", st, err)
+		}
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the agent didn't stop after locking")
+		}
+	})
+	t.Run("sweep", func(t *testing.T) {
+		was := expirySweep
+		expirySweep = 20 * time.Millisecond
+		t.Cleanup(func() { expirySweep = was })
+		clk := newFakeClock()
+		sockPath := tempSocketPath(t)
+		srv, _ := serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute))
+		conn, _ := unlockClient(t, sockPath)
+		defer mustClose(t, conn)
+		clk.sleep(8 * time.Hour)
+		for deadline := time.Now().Add(5 * time.Second); srv.keys.snapshot().unlocked; time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("the sweep didn't lock the agent")
+			}
+		}
+	})
+}

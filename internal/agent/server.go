@@ -119,6 +119,10 @@ func (s *Server) SocketPath() string {
 	return s.sockPath
 }
 
+// expirySweep is how often the agent checks, by the wall clock, whether
+// its key is past its idle timeout or max lifetime; tests shorten it.
+var expirySweep = 15 * time.Second
+
 // Run blocks until ctx is cancelled or SIGTERM/SIGINT arrives, accepting
 // connections and dispatching them on per-connection goroutines. SIGUSR1
 // locks the agent without stopping it. Run returns only after shutdown has
@@ -139,9 +143,16 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.exitOnAutoLock && s.keys.idleTimeout > 0 {
 		s.exitIfNeverUnlocked()
 	}
+	// The lock timers stop while the computer sleeps; the sweep checks the
+	// wall clock, so a key is dropped soon after waking, not hours later.
+	sweep := time.NewTicker(expirySweep)
+	defer sweep.Stop()
 	go func() {
 		for {
 			select {
+			case <-sweep.C:
+				s.keys.lockIfExpired()
+				continue
 			case <-runCtx.Done():
 				// Run's own deferred cancel also lands here, after Close.
 				if ctx.Err() != nil {
@@ -519,6 +530,7 @@ func (s *Server) dispatchEncrypt(conn *net.UnixConn, raw []byte) bool {
 }
 
 func (s *Server) dispatchStatus(conn *net.UnixConn) bool {
+	s.keys.lockIfExpired()
 	st := s.keys.snapshot()
 	return writeJSON(conn, StatusResponse{
 		Type:             TypeStatusAck,

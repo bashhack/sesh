@@ -282,6 +282,7 @@ func (k *keystore) snapshot() keyState {
 // touch starts the idle timer again, as a use of the key wantID names
 // would, without handing it out.
 func (k *keystore) touch(wantID string) error {
+	k.lockIfExpired()
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if k.derivedKey == nil {
@@ -296,6 +297,7 @@ func (k *keystore) touch(wantID string) error {
 }
 
 func (k *keystore) copyKey(wantID string) ([]byte, error) {
+	k.lockIfExpired()
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	// No cached key is not_unlocked, including when wantID is empty or
@@ -406,6 +408,45 @@ func (k *keystore) autoLock(gen uint64, idle bool) {
 	if after != nil {
 		after(reason)
 	}
+}
+
+// lockIfExpired locks the keystore when its idle timeout or max lifetime
+// has passed by the wall clock. The timers can't see that: Go's timers run
+// on a clock that stops while the computer sleeps (mach_absolute_time on
+// macOS, CLOCK_MONOTONIC on Linux), so after a night asleep they're hours
+// from firing. It runs before each use of the key and on the server's
+// sweep.
+func (k *keystore) lockIfExpired() {
+	k.mu.Lock()
+	if k.derivedKey == nil {
+		k.mu.Unlock()
+		return
+	}
+	now := k.clock().Now()
+	var reason string
+	switch {
+	case k.idleTimeout > 0 && since(now, k.lastActivity) >= k.idleTimeout:
+		reason = "idle timeout"
+	case k.maxLifetime > 0 && since(now, k.unlockedAt) >= k.maxLifetime:
+		reason = "max lifetime"
+	default:
+		k.mu.Unlock()
+		return
+	}
+	k.clearLocked()
+	k.log.printf("locked after %s", reason)
+	after := k.onAutoLock
+	k.mu.Unlock()
+	if after != nil {
+		after(reason)
+	}
+}
+
+// since is how long ago t was at now, by whichever clock says longer: the
+// monotonic one, which stops while the computer sleeps, or the wall clock,
+// which doesn't (but can be set back).
+func since(now, t time.Time) time.Duration {
+	return max(now.Sub(t), now.Round(0).Sub(t.Round(0)))
 }
 
 func (k *keystore) clock() clock {
