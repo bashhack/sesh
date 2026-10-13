@@ -52,6 +52,38 @@ func (o *Oracle) DecryptEntry(encryptedData, salt, aad []byte) ([]byte, error) {
 	return plain, userFacing(err)
 }
 
+// Check asks whether the agent still holds this oracle's vault key,
+// without restarting its idle timer: an error Locked reports when it
+// doesn't, or can't be reached.
+func (o *Oracle) Check() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return fmt.Errorf("agent oracle is closed")
+	}
+	st, err := Status(o.conn)
+	switch {
+	case err != nil:
+		return err
+	case !st.Unlocked:
+		return &ProtocolError{Code: ErrCodeNotUnlocked, Message: "agent is locked"}
+	case st.UnlockID != o.unlockID:
+		return &vaultChangedError{cause: &ProtocolError{Code: ErrCodeUnlockMismatch}}
+	}
+	return nil
+}
+
+// Touch tells the agent this oracle's vault is still in use, so its idle
+// timer starts again.
+func (o *Oracle) Touch() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return fmt.Errorf("agent oracle is closed")
+	}
+	return userFacing(Touch(o.conn, o.unlockID))
+}
+
 // vaultChangedError reports that the agent now holds another vault's
 // key. Error() is written for the user; Unwrap keeps the ProtocolError
 // reachable for callers that check the code.

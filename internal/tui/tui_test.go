@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -18,9 +19,11 @@ import (
 // query, and records what was read.
 type fakeVault struct {
 	err      error // returned by every read when set
+	checkErr error // returned by Check when set
 	secrets  map[vault.Key]string
 	entries  []vault.Entry
 	reads    []string // "secret <key> <reading>" or "code <key>"
+	kept     int      // keep-alives
 	closed   bool
 	changed  bool
 	searched int
@@ -53,11 +56,13 @@ func (f *fakeVault) CodeKey(k vault.Key) ([]byte, error) {
 	return []byte(f.secrets[k]), nil
 }
 
-func (f *fakeVault) Changed() (bool, error) {
+func (f *fakeVault) Check() (bool, error) {
 	c := f.changed
 	f.changed = false
-	return c, nil
+	return c, f.checkErr
 }
+
+func (f *fakeVault) KeepAlive() error { f.kept++; return f.err }
 
 func (f *fakeVault) Close() error { f.closed = true; return nil }
 
@@ -276,7 +281,7 @@ func TestIdleLockAndUnlock(t *testing.T) {
 		t.Errorf("a wrong password (typed %q):\n%s", typed, s)
 	}
 	a.press("right", "enter")
-	if s := a.screen(); a.v != again || !strings.Contains(s, "3 entries") || typed != "right" {
+	if s := a.screen(); (a.v == nil || a.v.v != again) || !strings.Contains(s, "3 entries") || typed != "right" {
 		t.Errorf("unlocked again:\n%s", s)
 	}
 }
@@ -312,7 +317,7 @@ func TestLockedUnderneath(t *testing.T) {
 		t.Fatalf("locked underneath:\n%s", s)
 	}
 	a.press("enter")
-	if a.v != again {
+	if a.v == nil || a.v.v != again {
 		t.Errorf("Touch ID didn't unlock:\n%s", a.screen())
 	}
 }
@@ -352,5 +357,124 @@ func TestQuitAndClose(t *testing.T) {
 	a.Close()
 	if !f.closed || string(held) != strings.Repeat("\x00", len(seed)) {
 		t.Errorf("Close: closed %v, key %q", f.closed, held)
+	}
+}
+
+// The agent locking is seen on the next tick, with nothing else read.
+func TestLockedSeenOnTick(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	f.checkErr = Locked("sesh's agent locked.")
+	a.tick(time.Second)
+	if s := a.screen(); a.v != nil || !strings.Contains(s, "sesh's agent locked.") || strings.Contains(s, "github") {
+		t.Errorf("after the agent locked:\n%s", s)
+	}
+}
+
+// Keys pressed keep the agent from idling out: a keep-alive at most once
+// in half its timeout.
+func TestKeepAlive(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{IdleTimeout: 10 * time.Second})
+	a.press("down")
+	if f.kept != 0 {
+		t.Errorf("a keep-alive right after unlocking: %d", f.kept)
+	}
+	a.now = a.now.Add(5 * time.Second)
+	a.press("down", "up")
+	if f.kept != 1 {
+		t.Errorf("keep-alives after 5s = %d, want 1", f.kept)
+	}
+	a.now = a.now.Add(4 * time.Second)
+	a.press("down")
+	if f.kept != 1 {
+		t.Errorf("keep-alives 4s later = %d, want still 1", f.kept)
+	}
+}
+
+// A key read twice, as when the vault changed while it was read, is kept
+// once and the other copy wiped.
+func TestKeyReadTwice(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	held := a.keys[code]
+	again := []byte(seed)
+	a.Update(keyMsg{k: code, key: again, epoch: a.epoch})
+	if string(again) != strings.Repeat("\x00", len(seed)) || &a.keys[code][0] != &held[0] {
+		t.Errorf("the second read: kept %q, wiped %q", a.keys[code], again)
+	}
+}
+
+// Closing waits for a copy that's running, so it isn't cut off; a key
+// read that finishes after the close is wiped.
+func TestCloseWaitsForReads(t *testing.T) {
+	release := make(chan struct{})
+	copying := make(chan struct{})
+	f := newFake()
+	a := newApp(t, f, Options{Copy: func(string) error { close(copying); <-release; return nil }})
+	cmd := a.copySelected()
+	go cmd()
+	<-copying
+	closed := make(chan struct{})
+	go func() { a.Close(); close(closed) }()
+	select {
+	case <-closed:
+		t.Fatal("Close didn't wait for the copy")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	<-closed
+	if !f.closed {
+		t.Error("the vault wasn't closed")
+	}
+
+	g := newGate(newFake())
+	var key []byte
+	msg := g.run(func(v Vault, closed func() bool) tea.Msg {
+		var err error
+		if key, err = v.CodeKey(code); err != nil {
+			t.Error(err)
+		}
+		g.mu.Lock()
+		g.closed = true // as if closed meanwhile
+		g.mu.Unlock()
+		if closed() {
+			secure.SecureZeroBytes(key)
+			return nil
+		}
+		return keyMsg{key: key}
+	})
+	if msg != nil || string(key) != strings.Repeat("\x00", len(seed)) {
+		t.Errorf("a read finishing after the close: %v, key %q", msg, key)
+	}
+}
+
+// A pasted line's end isn't part of the search or the password.
+func TestPasteNewline(t *testing.T) {
+	var typed string
+	a := newApp(t, newFake(), Options{
+		IdleTimeout: time.Minute,
+		Unlock:      func(pw []byte) (Vault, error) { typed = string(pw); return newFake(), nil },
+	})
+	a.Update(tea.PasteMsg{Content: "gitl\n"})
+	a.run(a.requery())
+	if s := a.screen(); !strings.Contains(s, "› gitl ") || strings.Count(s, "\n") >= a.height {
+		t.Errorf("pasted search:\n%s", s)
+	}
+	a.tick(time.Minute)
+	a.Update(tea.PasteMsg{Content: "right\r\n"})
+	a.press("enter")
+	if typed != "right" {
+		t.Errorf("pasted password = %q", typed)
+	}
+}
+
+// A password outgrowing its array leaves no copy behind.
+func TestAppendSecret(t *testing.T) {
+	small := make([]byte, 0, 4)
+	small = appendSecret(small, "abcd")
+	old := small[:cap(small)]
+	grown := appendSecret(small, "e")
+	if string(grown) != "abcde" || string(old) != "\x00\x00\x00\x00" {
+		t.Errorf("grown %q, old %q", grown, old)
 	}
 }

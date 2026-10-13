@@ -48,8 +48,13 @@ type Vault interface {
 	// CodeKey is the TOTP entry k's key, for drawing its codes, which the
 	// audit log doesn't record. The caller wipes it.
 	CodeKey(k vault.Key) ([]byte, error)
-	// Changed says whether the vault may have changed since it last asked.
-	Changed() (bool, error)
+	// Check says whether the vault can still be read, without counting as
+	// a use of it (ErrLocked when it must be unlocked again), and whether
+	// another command may have changed it since the last Check.
+	Check() (changed bool, err error)
+	// KeepAlive says the vault is still in use, so the agent doesn't lock
+	// it for being idle.
+	KeepAlive() error
 	Close() error
 }
 
@@ -67,7 +72,8 @@ type Options struct {
 	Now        func() time.Time
 	ClearAfter time.Duration
 	// IdleTimeout locks after this long without a key pressed, and
-	// MaxLifetime this long after unlocking, as the agent does; 0 never.
+	// MaxLifetime this long after the app unlocked, as the agent does; 0
+	// never.
 	IdleTimeout, MaxLifetime time.Duration
 }
 
@@ -76,15 +82,19 @@ type Options struct {
 type Model struct {
 	lastKey, unlockedAt time.Time
 	statusUntil         time.Time
+	lastKeepAlive       time.Time
 
-	v       Vault // nil while locked
 	quitErr error
 
+	v *gate // nil while locked
+
 	// keys are TOTP keys held for drawing codes, wiped on lock and exit;
-	// pending are being read, and failed couldn't be.
+	// pending are being read, and failed couldn't be. codes are the codes
+	// shown, each made once a period.
 	failed  map[vault.Key]bool
 	keys    map[vault.Key][]byte
 	pending map[vault.Key]bool
+	codes   map[vault.Key]shownCode
 
 	// every is the clock, a tick each whole second; tests replace it.
 	every func() tea.Cmd
@@ -109,13 +119,20 @@ type Model struct {
 	unlocking     bool
 }
 
+// shownCode is a TOTP code, and the period it's for.
+type shownCode struct {
+	text   string
+	period int64
+}
+
 // New is the app, unlocked with opts.Vault.
 func New(opts Options) *Model {
 	now := opts.Now()
 	return &Model{
-		opts: opts, v: opts.Vault,
+		opts: opts, v: newGate(opts.Vault),
 		keys: map[vault.Key][]byte{}, pending: map[vault.Key]bool{}, failed: map[vault.Key]bool{},
-		lastKey: now, unlockedAt: now,
+		codes:   map[vault.Key]shownCode{},
+		lastKey: now, unlockedAt: now, lastKeepAlive: now,
 		width: 80, height: 24,
 		every: tick,
 	}
@@ -125,18 +142,19 @@ func New(opts Options) *Model {
 // passwords, or the vault couldn't be read.
 func (m *Model) Err() error { return m.quitErr }
 
-// Close wipes what the app holds and closes the vault.
+// Close waits for reads still running, wipes what the app holds, and
+// closes the vault.
 func (m *Model) Close() {
+	if m.v != nil {
+		m.v.close()
+		m.v = nil
+	}
 	m.wipe()
 	secure.SecureZeroBytes(m.password)
 	m.password = nil
-	if m.v != nil {
-		m.v.Close() //nolint:errcheck,gosec // nothing more to do with the vault
-		m.v = nil
-	}
 }
 
-// wipe drops the held TOTP keys.
+// wipe drops the held TOTP keys, and the codes made from them.
 func (m *Model) wipe() {
 	for k, key := range m.keys {
 		secure.SecureZeroBytes(key)
@@ -144,6 +162,7 @@ func (m *Model) wipe() {
 	}
 	clear(m.pending)
 	clear(m.failed)
+	clear(m.codes)
 }
 
 // Messages, each from a command started at an epoch.
@@ -166,10 +185,14 @@ type (
 		what  string
 		epoch int
 	}
-	changedMsg struct {
+	checkedMsg struct {
 		err     error
 		epoch   int
 		changed bool
+	}
+	keptAliveMsg struct {
+		err   error
+		epoch int
 	}
 	unlockedMsg struct {
 		err error
@@ -187,14 +210,20 @@ func tick() tea.Cmd {
 	return tea.Every(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
+// read is f run on the open vault, through its gate.
+func (m *Model) read(f func(v Vault, closed func() bool) tea.Msg) tea.Cmd {
+	g := m.v
+	return func() tea.Msg { return g.run(f) }
+}
+
 // search runs the query as it is now.
 func (m *Model) search() tea.Cmd {
 	m.searches++
-	v, q, epoch, n := m.v, string(m.query), m.epoch, m.searches
-	return func() tea.Msg {
+	q, epoch, n := string(m.query), m.epoch, m.searches
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		rows, err := v.Search(q)
 		return resultsMsg{rows: rows, err: err, epoch: epoch, search: n}
-	}
+	})
 }
 
 // Update handles a message.
@@ -214,17 +243,20 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		if m.v == nil {
 			return m.lockedKey(msg)
 		}
-		return m.key(msg)
+		return tea.Batch(m.key(msg), m.keepAlive())
 	case tea.PasteMsg:
+		// A line copied with its end keeps the newline; it's not part of
+		// a name or a password.
+		text := trimNewlines(msg.Content)
 		if m.v == nil {
 			if !m.unlocking {
-				m.password = append(m.password, msg.Content...)
+				m.password = appendSecret(m.password, text)
 			}
 			return nil
 		}
 		m.lastKey = m.opts.Now()
-		m.query = append(m.query, []rune(msg.Content)...)
-		return m.requery()
+		m.query = append(m.query, []rune(text)...)
+		return tea.Batch(m.requery(), m.keepAlive())
 	case tickMsg:
 		return m.tick()
 	case resultsMsg:
@@ -238,7 +270,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.scroll()
 		return m.readKeys()
 	case keyMsg:
-		if msg.epoch != m.epoch || m.v == nil {
+		// A key read twice (the vault changed while it was being read)
+		// is kept once; the other is wiped.
+		if msg.epoch != m.epoch || m.v == nil || m.keys[msg.k] != nil {
 			secure.SecureZeroBytes(msg.key)
 			return nil
 		}
@@ -265,7 +299,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			m.say(msg.what)
 		}
 		return nil
-	case changedMsg:
+	case checkedMsg:
 		if msg.epoch != m.epoch || m.v == nil {
 			return nil
 		}
@@ -276,6 +310,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			// Entries may have changed, keys with them: read again.
 			m.wipe()
 			return m.search()
+		}
+		return nil
+	case keptAliveMsg:
+		if msg.epoch == m.epoch && m.v != nil && errors.Is(msg.err, ErrLocked) {
+			return m.lock(lockedReason(msg.err))
 		}
 		return nil
 	case unlockedMsg:
@@ -293,32 +332,57 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			m.lockedWhy = msg.err.Error()
 			return nil
 		}
-		m.v, m.wrong, m.lockedWhy = msg.v, 0, ""
+		m.v, m.wrong, m.lockedWhy = newGate(msg.v), 0, ""
 		m.epoch++
 		now := m.opts.Now()
-		m.lastKey, m.unlockedAt = now, now
+		m.lastKey, m.unlockedAt, m.lastKeepAlive = now, now, now
 		return m.search()
 	}
 	return nil
 }
 
 // tick locks once the idle timeout or the longest unlock has passed, and
-// otherwise checks whether another command changed the vault.
+// otherwise checks the vault: that it can still be read, and whether
+// another command changed it.
 func (m *Model) tick() tea.Cmd {
 	if m.v == nil {
 		return m.every()
 	}
 	now := m.opts.Now()
 	switch {
-	case m.opts.IdleTimeout > 0 && now.Sub(m.lastKey) >= m.opts.IdleTimeout:
+	case m.opts.IdleTimeout > 0 && since(now, m.lastKey) >= m.opts.IdleTimeout:
 		return tea.Batch(m.every(), m.lock("Locked after "+m.opts.IdleTimeout.String()+" without use."))
-	case m.opts.MaxLifetime > 0 && now.Sub(m.unlockedAt) >= m.opts.MaxLifetime:
+	case m.opts.MaxLifetime > 0 && since(now, m.unlockedAt) >= m.opts.MaxLifetime:
 		return tea.Batch(m.every(), m.lock("Locked "+m.opts.MaxLifetime.String()+" after unlocking."))
 	}
-	v, epoch := m.v, m.epoch
-	return tea.Batch(m.every(), func() tea.Msg {
-		changed, err := v.Changed()
-		return changedMsg{changed: changed, err: err, epoch: epoch}
+	epoch := m.epoch
+	return tea.Batch(m.every(), m.read(func(v Vault, _ func() bool) tea.Msg {
+		changed, err := v.Check()
+		return checkedMsg{changed: changed, err: err, epoch: epoch}
+	}))
+}
+
+// since is how long ago t was at now, by the clock that says longer: the
+// monotonic clock stops while the computer sleeps, the wall clock doesn't.
+func since(now, t time.Time) time.Duration {
+	return max(now.Sub(t), now.Round(0).Sub(t.Round(0)))
+}
+
+// keepAlive tells the vault it's in use, so the agent's idle timer starts
+// again, at most twice in its timeout and once a minute.
+func (m *Model) keepAlive() tea.Cmd {
+	every := time.Minute
+	if m.opts.IdleTimeout > 0 {
+		every = min(every, m.opts.IdleTimeout/2)
+	}
+	now := m.opts.Now()
+	if m.v == nil || since(now, m.lastKeepAlive) < every {
+		return nil
+	}
+	m.lastKeepAlive = now
+	epoch := m.epoch
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
+		return keptAliveMsg{err: v.KeepAlive(), epoch: epoch}
 	})
 }
 
@@ -340,14 +404,14 @@ func lockedReason(err error) string {
 	return err.Error()
 }
 
-// lock wipes what the app holds, closes the vault, and shows the locked
-// screen, saying why.
+// lock waits for reads still running, wipes what the app holds, closes
+// the vault, and shows the locked screen, saying why.
 func (m *Model) lock(why string) tea.Cmd {
-	m.wipe()
 	if m.v != nil {
-		m.v.Close() //nolint:errcheck,gosec // the vault is done with
+		m.v.close()
 		m.v = nil
 	}
+	m.wipe()
 	m.epoch++
 	m.rows, m.sel, m.top = nil, 0, 0
 	m.status = ""

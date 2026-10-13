@@ -471,7 +471,7 @@ max lifetime:   7h 22m remaining
 
 **Timeouts**
 
-Set `agent.idle_timeout` and `agent.max_lifetime` in the [config file](#configuration-file) to durations such as `30m` or `2h`; `0` disables either. The agent reads them once, when it starts. It reads the config file itself, so the values apply whichever program starts it, including an editor that doesn't load your shell profile. `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` override the file, but only when they're in the environment of the command that starts the agent.
+The idle timeout counts from the last use: an unlock, a secret read or stored, or a key pressed in [`sesh ui`](#searching-and-copying-at-a-terminal-sesh-ui). `sesh agent status` isn't a use. Set `agent.idle_timeout` and `agent.max_lifetime` in the [config file](#configuration-file) to durations such as `30m` or `2h`; `0` disables either. The agent reads them once, when it starts. It reads the config file itself, so the values apply whichever program starts it, including an editor that doesn't load your shell profile. `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` override the file, but only when they're in the environment of the command that starts the agent.
 
 - After changing them, run `sesh agent stop`; the next command starts an agent with the new values.
 
@@ -1001,7 +1001,8 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
 - **Enter copies** the selected entry's secret, or a TOTP entry's current code. The clipboard clears after `clipboard_timeout`, as with `--clip`.
 - **TOTP entries show their code** and the seconds it has left, changing as an authenticator app's do.
 - **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; Backspace, Ctrl-W (a word) and Ctrl-U (all) edit the search; Esc clears it, or quits when it's empty; Ctrl-C quits.
-- **It locks itself** after the agent's idle timeout (`agent.idle_timeout`) without a key pressed, after the agent's longest unlock (`agent.max_lifetime`), when the agent locks, or when another command changes the master password or restores the vault. It then shows nothing of the vault, and asks for the master password again; with Touch ID unlock on, Enter with nothing typed uses it. Three wrong passwords in a row close it.
+- **Using it keeps the agent unlocked:** while you press keys, it tells the agent the vault is in use, as a read would, so the agent's idle timer doesn't run out under you.
+- **It locks itself** after the agent's idle timeout (`agent.idle_timeout`) without a key pressed, after the agent's longest unlock (`agent.max_lifetime`) since the app unlocked, and, within a second, when the agent locks or stops (`sesh agent lock`, say) or another command changes the master password or restores the vault. It then shows nothing of the vault, and asks for the master password again, which it checks even when the agent is still unlocked; with Touch ID unlock on, Enter with nothing typed uses it. Three wrong passwords in a row close it.
 - **Changes by other commands** show up within a second.
 - **It needs a terminal;** to search from a script, use `sesh --service password --action search --query <words>`.
 

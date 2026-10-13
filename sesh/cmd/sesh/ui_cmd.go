@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"golang.org/x/term"
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
@@ -41,7 +44,7 @@ func runUI(app *App, args []string) error {
 		}
 		return fmt.Errorf("sesh ui takes no arguments, got %q", strings.Join(args, " "))
 	}
-	if app.StdinIsTerminal == nil || !app.StdinIsTerminal() {
+	if app.StdinIsTerminal == nil || !app.StdinIsTerminal() || !uiStdoutIsTerminal(app.Stdout) {
 		return errors.New("sesh ui needs a terminal; to search from a script, use: sesh --service password --action search --query <words>")
 	}
 	cfg, err := settings()
@@ -57,11 +60,51 @@ func runUI(app *App, args []string) error {
 		return err
 	}
 	m := tui.New(uiOptions(app, cfg, newUIVault(store)))
-	defer m.Close()
-	if _, err := tea.NewProgram(m, tea.WithInput(app.Stdin), tea.WithOutput(app.Stdout)).Run(); err != nil {
+	// What's written to stderr while the app draws (a warning while it
+	// unlocks again, say) would land on its screen: it's held, and
+	// written once the app has ended.
+	restore := holdStderr()
+	_, err = tea.NewProgram(m, append([]tea.ProgramOption{tea.WithInput(app.Stdin), tea.WithOutput(app.Stdout)}, uiProgramOptions...)...).Run()
+	m.Close()
+	restore()
+	if err != nil {
 		return fmt.Errorf("sesh ui: %w", err)
 	}
 	return m.Err()
+}
+
+// uiStdoutIsTerminal says whether w is a terminal, which the app draws on;
+// tests replace it.
+var uiStdoutIsTerminal = func(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+// uiProgramOptions are added to the app's; tests set a window size.
+var uiProgramOptions []tea.ProgramOption
+
+// holdStderr sends what's written to os.Stderr into a pipe, until the
+// function it returns writes it out where it was going.
+func holdStderr() (restore func()) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return func() {}
+	}
+	was := os.Stderr
+	os.Stderr = w
+	var held bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		io.Copy(&held, r) //nolint:errcheck,gosec // what's held is best effort
+		close(done)
+	}()
+	return func() {
+		os.Stderr = was
+		w.Close() //nolint:errcheck,gosec // ends the copy
+		<-done
+		r.Close()               //nolint:errcheck,gosec // read to the end
+		was.Write(held.Bytes()) //nolint:errcheck,gosec // best effort
+	}
 }
 
 // uiOptions are the app's, with v open.
@@ -94,14 +137,20 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 	return opts
 }
 
-// reopenWith opens the vault again with the password pw, which it wipes, as the
-// first unlock did but without a prompt: one try, through the agent
-// unless the master password comes from SESH_MASTER_PASSWORD.
+// reopenWith opens the vault again with the password pw, which it wipes,
+// as the first unlock did but without a prompt: one try, through the agent
+// unless the master password comes from SESH_MASTER_PASSWORD. The password
+// is checked even when the agent is unlocked.
 func reopenWith(cfg *config.Config, pw []byte) (*database.Store, error) {
 	defer secure.SecureZeroBytes(pw)
+	// A vault removed meanwhile isn't made again from a password typed once.
+	if err := requireVault(cfg.DBPath.Value, "the vault is gone from "+cfg.DBPath.Value); err != nil {
+		return nil, err
+	}
 	pc := passwordPromptConfig{
-		prompt:  func(string) ([]byte, error) { return bytes.Clone(pw), nil },
-		fromEnv: os.Getenv("SESH_MASTER_PASSWORD") != "",
+		prompt:      func(string) ([]byte, error) { return bytes.Clone(pw), nil },
+		fromEnv:     os.Getenv("SESH_MASTER_PASSWORD") != "",
+		alwaysCheck: true,
 	}.withKDF(cfg.KDF())
 	oracle, err := buildKeySourceWith(cfg.DBPath.Value, pc)
 	if errors.Is(err, database.ErrWrongPassword) {
@@ -160,7 +209,11 @@ type uiVault struct {
 }
 
 func newUIVault(store *database.Store) *uiVault {
-	return &uiVault{store: store, mgr: password.NewManager(store)}
+	u := &uiVault{store: store, mgr: password.NewManager(store)}
+	if v, err := store.DataVersion(); err == nil {
+		u.version.Store(v)
+	}
+	return u
 }
 
 // Search is every entry for "", or the ones sesh's search finds, best
@@ -197,9 +250,13 @@ func (u *uiVault) CodeKey(k vault.Key) ([]byte, error) {
 	return key, uiLocked(err)
 }
 
-// Changed says whether another command committed a change since the last
-// call; the first call says no.
-func (u *uiVault) Changed() (bool, error) {
+// Check says whether the vault can still be read, without counting as a
+// use of the key, and whether another command committed a change since it
+// was opened or last checked.
+func (u *uiVault) Check() (bool, error) {
+	if err := u.store.CheckUnlocked(); err != nil {
+		return false, uiLocked(err)
+	}
 	v, err := u.store.DataVersion()
 	if err != nil {
 		return false, err
@@ -207,6 +264,8 @@ func (u *uiVault) Changed() (bool, error) {
 	last := u.version.Swap(v)
 	return last != 0 && v != last, nil
 }
+
+func (u *uiVault) KeepAlive() error { return uiLocked(u.store.KeepAlive()) }
 
 func (u *uiVault) Close() error { return u.store.Close() }
 

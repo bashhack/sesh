@@ -105,14 +105,28 @@ func (m *Model) lockedKey(msg tea.KeyPressMsg) tea.Cmd {
 		if msg.Text == "" || msg.Mod&(tea.ModCtrl|tea.ModAlt) != 0 {
 			return nil
 		}
-		if m.password == nil {
-			// Room enough that typing a password rarely leaves an
-			// unwiped copy behind when it grows.
-			m.password = make([]byte, 0, 256)
-		}
-		m.password = append(m.password, msg.Text...)
+		m.password = appendSecret(m.password, msg.Text)
 	}
 	return nil
+}
+
+// appendSecret is secret with text added. When it outgrows its array, the
+// old one is wiped, so no copy of what was typed is left behind.
+func appendSecret(secret []byte, text string) []byte {
+	if len(secret)+len(text) <= cap(secret) {
+		return append(secret, text...)
+	}
+	grown := make([]byte, len(secret), max(2*cap(secret), len(secret)+len(text), 64))
+	copy(grown, secret)
+	secure.SecureZeroBytes(secret)
+	return append(grown, text...)
+}
+
+// trimNewlines is text without the line ends at its end, and with any
+// within it as spaces.
+func trimNewlines(text string) string {
+	text = strings.TrimRight(text, "\r\n")
+	return strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(text)
 }
 
 // copySelected copies the selected entry's secret, or its TOTP code, to
@@ -122,8 +136,8 @@ func (m *Model) copySelected() tea.Cmd {
 		return nil
 	}
 	e := m.rows[m.sel]
-	v, epoch, opts := m.v, m.epoch, m.opts
-	return func() tea.Msg {
+	epoch, opts := m.epoch, m.opts
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		reading := "in sesh ui, to copy it"
 		if e.Kind == vault.KindTOTP {
 			reading = "in sesh ui, to copy its code"
@@ -149,7 +163,7 @@ func (m *Model) copySelected() tea.Cmd {
 			what += "."
 		}
 		return copiedMsg{what: what, epoch: epoch}
-	}
+	})
 }
 
 // readKeys reads the keys of the TOTP entries shown that aren't held yet.
@@ -165,11 +179,16 @@ func (m *Model) readKeys() tea.Cmd {
 			continue
 		}
 		m.pending[k] = true
-		v, epoch := m.v, m.epoch
-		cmds = append(cmds, func() tea.Msg {
+		epoch := m.epoch
+		cmds = append(cmds, m.read(func(v Vault, closed func() bool) tea.Msg {
 			key, err := v.CodeKey(k)
+			if closed() {
+				// The app locked or ended meanwhile: the key isn't kept.
+				secure.SecureZeroBytes(key)
+				return nil
+			}
 			return keyMsg{k: k, key: key, err: err, epoch: epoch}
-		})
+		}))
 	}
 	return tea.Batch(cmds...)
 }

@@ -59,6 +59,29 @@ func (s *Store) CheckKey() error {
 	return nil
 }
 
+// CheckUnlocked says whether the store can still read the vault: an error
+// when its key source can no longer serve it (an agent that locked, or
+// stopped), or ErrVaultKeyChanged when the vault's master password changed
+// since it was unlocked. Neither counts as a use of the key.
+func (s *Store) CheckUnlocked() error {
+	if c, ok := s.oracle.(interface{ Check() error }); ok {
+		if err := c.Check(); err != nil {
+			return err
+		}
+	}
+	return s.keyUnchanged(s.db)
+}
+
+// KeepAlive tells the key source the vault is still in use, so an agent's
+// idle timer starts again; a key source that doesn't time out has nothing
+// to do.
+func (s *Store) KeepAlive() error {
+	if t, ok := s.oracle.(interface{ Touch() error }); ok {
+		return t.Touch()
+	}
+	return nil
+}
+
 // ErrNoVault means there is no vault at the path yet, or one whose master
 // password was never set: the next open creates it.
 var ErrNoVault = errors.New("no vault yet")

@@ -264,6 +264,13 @@ func Lock(conn *Conn) error {
 	return err
 }
 
+// Touch tells the agent the vault unlockID names is still in use, so its
+// idle timer starts again.
+func Touch(conn *Conn, unlockID string) error {
+	_, err := roundTrip(conn, TouchRequest{Type: TypeTouch, Version: ProtocolVersion, UnlockID: unlockID}, TypeTouchAck)
+	return err
+}
+
 // Stop asks the agent to shut down. The agent replies only after it has
 // shut down, so a nil error means it is gone: no listener, no socket
 // file, key zeroed.

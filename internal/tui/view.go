@@ -65,7 +65,7 @@ func (m *Model) drawSearch(b *strings.Builder) {
 	case len(m.rows) == 0:
 		count = "Nothing matches."
 	}
-	b.WriteString(dim + " " + count + reset + "\n")
+	b.WriteString(dim + " " + m.fit(count, 1) + reset + "\n")
 
 	h := m.listHeight()
 	nameWidth, folderWidth := 0, 0
@@ -110,10 +110,22 @@ func (m *Model) code(e *vault.Entry, t time.Time) string {
 	case m.keys[e.Key] == nil:
 		return "…"
 	}
-	code, err := totp.CodeAt(m.keys[e.Key], e.Settings.TOTP, t)
-	if err != nil {
-		return "can't make"
+	// A code is made once a period: making one copies the key where it
+	// can't be wiped.
+	period := int64(e.Settings.TOTP.Period)
+	if period <= 0 {
+		period = 30
 	}
+	shown, ok := m.codes[e.Key]
+	if !ok || shown.period != t.Unix()/period {
+		code, err := totp.CodeAt(m.keys[e.Key], e.Settings.TOTP, t)
+		if err != nil {
+			return "can't make"
+		}
+		shown = shownCode{text: code, period: t.Unix() / period}
+		m.codes[e.Key] = shown
+	}
+	code := shown.text
 	half := len(code) / 2
 	return fmt.Sprintf("%s %s  %2ds", code[:half], code[half:], totp.SecondsLeft(e.Settings.TOTP, t))
 }

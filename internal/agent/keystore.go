@@ -278,6 +278,22 @@ func (k *keystore) snapshot() keyState {
 	return st
 }
 
+// touch starts the idle timer again, as a use of the key wantID names
+// would, without handing it out.
+func (k *keystore) touch(wantID string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.derivedKey == nil {
+		return errNotUnlocked
+	}
+	if wantID != k.unlockID {
+		return errUnlockMismatch
+	}
+	k.lastActivity = k.clock().Now()
+	k.restartIdleLocked()
+	return nil
+}
+
 func (k *keystore) copyKey(wantID string) ([]byte, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()

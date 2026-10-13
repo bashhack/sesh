@@ -41,6 +41,8 @@ const (
 	TypeWrapKey       = "wrap_key"
 	TypeWrapKeyAck    = "wrap_key_ack"
 	TypeUnlockTouchID = "unlock_touchid" // answered with unlock_ack
+	TypeTouch         = "touch"
+	TypeTouchAck      = "touch_ack"
 )
 
 // Error codes returned in ErrorResponse.Code. Strings (not ints) so they
@@ -240,6 +242,22 @@ type StatusResponse struct {
 // encrypt and decrypt requests get not_unlocked until the next unlock.
 // Locking an already-locked agent succeeds.
 type LockRequest struct {
+	Type    string `json:"type"`
+	Version int    `json:"version"`
+}
+
+// TouchRequest says the vault UnlockID names is still in use, as by an
+// app that stays open, so the agent's idle timer starts again; nothing is
+// read. Refused like a decrypt when the agent holds no key, or another
+// vault's.
+type TouchRequest struct {
+	Type     string `json:"type"`
+	UnlockID string `json:"unlock_id"`
+	Version  int    `json:"version"`
+}
+
+// TouchResponse acknowledges a touch.
+type TouchResponse struct {
 	Type    string `json:"type"`
 	Version int    `json:"version"`
 }

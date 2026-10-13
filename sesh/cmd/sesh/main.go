@@ -551,7 +551,7 @@ func keySourceFromAgent(dbPath string, cfg passwordPromptConfig) (oracle databas
 		return nil, nil, nil
 	}
 	id := agent.UnlockID(mat.Verify)
-	if st.Unlocked && st.UnlockID == id {
+	if st.Unlocked && st.UnlockID == id && !cfg.alwaysCheck {
 		return agent.NewOracle(conn, id), nil, nil
 	}
 	// A person at the terminal is asked for a fingerprint first, when this
@@ -637,6 +637,10 @@ type passwordPromptConfig struct {
 	// runs skip the agent: the value is checked every time, and a script
 	// or CI job doesn't leave an unlocked agent running after it exits.
 	fromEnv bool
+	// alwaysCheck asks for the password, and checks it, even when the
+	// agent is already unlocked: for an app unlocking again, where a
+	// password typed must be the right one.
+	alwaysCheck bool
 	// kdf is the Argon2id settings a new key record (a new vault, or a
 	// changed master password) gets: the configured ones, set by withKDF.
 	kdf kdf.Params

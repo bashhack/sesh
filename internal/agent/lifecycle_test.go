@@ -315,3 +315,30 @@ func TestLocked(t *testing.T) {
 		}
 	}
 }
+
+// An oracle's Check reports the agent locked, without restarting its idle
+// timer, and Touch is refused once it's locked.
+func TestOracle_CheckAndTouch(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	serve(t, sockPath)
+	conn, id := unlockClient(t, sockPath)
+	o := NewOracle(conn, id)
+	defer o.Close()
+	if err := o.Check(); err != nil {
+		t.Fatalf("Check while unlocked: %v", err)
+	}
+	if err := o.Touch(); err != nil {
+		t.Fatalf("Touch while unlocked: %v", err)
+	}
+	ctl := dialClient(t, sockPath)
+	defer mustClose(t, ctl)
+	if err := Lock(ctl); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Check(); !Locked(err) {
+		t.Errorf("Check once locked: %v, not Locked", err)
+	}
+	if err := o.Touch(); !Locked(err) {
+		t.Errorf("Touch once locked: %v, not Locked", err)
+	}
+}

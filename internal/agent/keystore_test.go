@@ -492,3 +492,24 @@ func TestKeystore_ActivityAtIdleDeadlineKeepsKey(t *testing.T) {
 		t.Fatal("the old idle timer locked the key right after fresh activity")
 	}
 }
+
+// A touch restarts the idle timer, as a use of the key does, and is
+// refused for another vault or when locked.
+func TestKeystore_TouchRestartsIdleTimer(t *testing.T) {
+	ks, clk, verify := timedKeystore(t, 10*time.Minute, 0)
+	clk.advance(6 * time.Minute)
+	if err := ks.touch(UnlockID(verify)); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(6 * time.Minute)
+	if !isUnlocked(ks) {
+		t.Fatal("touch did not restart the idle timer")
+	}
+	if err := ks.touch("another vault"); !errors.Is(err, errUnlockMismatch) {
+		t.Errorf("touch for another vault: %v", err)
+	}
+	clk.advance(4 * time.Minute)
+	if err := ks.touch(UnlockID(verify)); !errors.Is(err, errNotUnlocked) {
+		t.Errorf("touch once locked: %v", err)
+	}
+}
