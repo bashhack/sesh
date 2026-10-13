@@ -285,3 +285,41 @@ func TestUI_TouchIDAgainWhileAgentUnlocked(t *testing.T) {
 	}
 	store.Close() //nolint:errcheck,gosec // test cleanup
 }
+
+// Notes, a secure note's text, and secret fields are read for the app,
+// each recorded in the audit log.
+func TestUI_NotesAndSecretFields(t *testing.T) {
+	filingVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	note := vault.Key{Kind: vault.KindNote, Service: "wifi"}
+	d := vault.Details{Notes: []byte("recovery codes in the safe"), Fields: []vault.Field{
+		{Name: "pin", Value: []byte("4321"), Secret: true}, {Name: "email", Value: []byte("a@example.com")},
+	}}
+	if err := store.SaveWithDetails(&vault.Entry{Key: gh}, []byte("a"), &d); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(note, []byte("ssid home")); err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	if got, err := u.Notes(gh); err != nil || string(got) != "recovery codes in the safe" {
+		t.Errorf("Notes = %q, %v", got, err)
+	}
+	if got, err := u.Notes(note); err != nil || string(got) != "ssid home" {
+		t.Errorf("a secure note's Notes = %q, %v", got, err)
+	}
+	if got, err := u.SecretFields(gh); err != nil || len(got) != 1 || got[0].Name != "pin" || string(got[0].Value) != "4321" {
+		t.Errorf("SecretFields = %+v, %v", got, err)
+	}
+	log := mustRun(t, runAudit)
+	for _, want := range []string{"in sesh ui, to show its notes", "in sesh ui, to show it", "in sesh ui, to reveal its fields"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("audit missing %q:\n%s", want, log)
+		}
+	}
+}

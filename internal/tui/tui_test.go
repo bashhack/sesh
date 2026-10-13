@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"image/color"
 	"slices"
 	"strings"
@@ -23,6 +24,8 @@ type fakeVault struct {
 	err      error // returned by every read when set
 	checkErr error // returned by Check when set
 	secrets  map[vault.Key]string
+	notes    map[vault.Key]string
+	fields   map[vault.Key][]vault.Field // secret fields, with values
 	entries  []vault.Entry
 	reads    []string // "secret <key> <reading>" or "code <key>"
 	kept     int      // keep-alives
@@ -48,6 +51,29 @@ func (f *fakeVault) Secret(k vault.Key, reading string) ([]byte, error) {
 	}
 	f.reads = append(f.reads, "secret "+k.String()+" "+reading)
 	return []byte(f.secrets[k]), nil
+}
+
+func (f *fakeVault) Notes(k vault.Key) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.reads = append(f.reads, "notes "+k.String())
+	if k.Kind == vault.KindNote {
+		return []byte(f.secrets[k]), nil
+	}
+	return []byte(f.notes[k]), nil
+}
+
+func (f *fakeVault) SecretFields(k vault.Key) ([]vault.Field, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.reads = append(f.reads, "fields "+k.String())
+	var out []vault.Field
+	for _, fl := range f.fields[k] {
+		out = append(out, vault.Field{Name: fl.Name, Value: []byte(string(fl.Value)), Secret: true})
+	}
+	return out, nil
 }
 
 func (f *fakeVault) CodeKey(k vault.Key) ([]byte, error) {
@@ -146,6 +172,10 @@ func (a *app) press(keys ...string) {
 			msg = tea.KeyPressMsg{Code: tea.KeyBackspace}
 		case "ctrl+c":
 			msg = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+		case "tab":
+			msg = tea.KeyPressMsg{Code: tea.KeyTab}
+		case "shift+down":
+			msg = tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}
 		default:
 			for _, r := range k {
 				_, cmd := a.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
@@ -185,7 +215,7 @@ func TestSearchAndCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := a.screen()
-	for _, w := range []string{"3 entries", "● github", "alice", "◆ gitlab", "◷ github", want[:3] + " " + want[3:], "PASSWORD", "▸ work", "copy its password"} {
+	for _, w := range []string{"3 entries", "● github", "alice", "◆ gitlab", "◷ github", want[:3] + " " + want[3:], "PASSWORD", "▸ work", "↵ copy  ·  tab reveal"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("screen missing %q:\n%s", w, s)
 		}
@@ -573,5 +603,78 @@ func TestHighlight(t *testing.T) {
 	}
 	if got := highlight("İstanbul", []string{"stan"}, &plain, &hi); ansi.Strip(got) != "İstanbul" || !strings.Contains(got, hi.Render("stan")) {
 		t.Errorf("highlight İstanbul = %q", got)
+	}
+}
+
+// A selected entry's notes and plain fields are shown, the notes read
+// once; its password and secret fields only once revealed with Tab, until
+// it moves or the time's up.
+func TestPreviewNotesAndReveal(t *testing.T) {
+	f := newFake()
+	f.entries[0].HasNotes = true
+	f.entries[0].Fields = []vault.Field{{Name: "pin", Secret: true}, {Name: "email", Value: []byte("a@example.com")}}
+	f.notes = map[vault.Key]string{github: "recovery codes\nin the safe"}
+	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Value: []byte("4321")}}}
+	a := newApp(t, f, Options{})
+	s := a.screen()
+	for _, w := range []string{"recovery codes", "in the safe", "email     a@example.com", "pin       ••••••••", "password  ••••••••", "tab reveal"} {
+		if !strings.Contains(s, w) {
+			t.Errorf("preview missing %q:\n%s", w, s)
+		}
+	}
+	if strings.Contains(s, "gh-pass") || strings.Contains(s, "4321") {
+		t.Errorf("a secret shown before Tab:\n%s", s)
+	}
+	a.press("down", "up")
+	if n := strings.Count(strings.Join(f.reads, ","), "notes password/github/alice"); n != 1 {
+		t.Errorf("notes read %d times, want once: %q", n, f.reads)
+	}
+	a.press("tab")
+	if s := a.screen(); !strings.Contains(s, "password  gh-pass") || !strings.Contains(s, "pin       4321") || !strings.Contains(s, "tab hide (30s)") {
+		t.Errorf("revealed:\n%s", s)
+	}
+	if !slices.Contains(f.reads, "secret password/github/alice in sesh ui, to reveal it") || !slices.Contains(f.reads, "fields password/github/alice") {
+		t.Errorf("reads = %q", f.reads)
+	}
+	shown := a.shown.secret
+	a.tick(30 * time.Second)
+	if s := a.screen(); strings.Contains(s, "gh-pass") || string(shown) != strings.Repeat("\x00", len("gh-pass")) {
+		t.Errorf("after 30s, still shown (wiped %q):\n%s", shown, s)
+	}
+	a.press("tab")
+	a.press("down")
+	if a.shown != nil {
+		t.Error("moving didn't hide what was revealed")
+	}
+	a.press("up", "tab", "tab")
+	if a.shown != nil {
+		t.Error("Tab again didn't hide it")
+	}
+}
+
+// A secure note's text is shown, its control characters as symbols; a
+// long note scrolls.
+func TestPreviewSecureNote(t *testing.T) {
+	f := newFake()
+	wifi := vault.Key{Kind: vault.KindNote, Service: "wifi"}
+	long := "ssid home\x1b[2Jpassword hunter2"
+	for i := range 40 {
+		long += fmt.Sprintf("\nline %d", i)
+	}
+	f.entries = []vault.Entry{{Key: wifi}}
+	f.secrets = map[vault.Key]string{wifi: long}
+	a := newApp(t, f, Options{})
+	s := a.screen()
+	if !strings.Contains(s, "ssid home␛[2Jpassword hunter2") || !strings.Contains(s, "⇧↑↓ scroll") || strings.Contains(s, "line 39") {
+		t.Errorf("a long note:\n%s", s)
+	}
+	if strings.Contains(a.View().Content, "\x1b[2J") {
+		t.Error("the note's escape code reached the terminal")
+	}
+	for range 50 {
+		a.press("shift+down")
+	}
+	if s := a.screen(); !strings.Contains(s, "line 39") {
+		t.Errorf("scrolled to the end:\n%s", s)
 	}
 }

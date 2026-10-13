@@ -528,7 +528,7 @@ Audit log: 1,204 events since 2026-07-05 09:12. Events older than 90 days are re
 
 Like `--list`, it opens the vault, so it asks for your master password unless the agent is unlocked.
 
-Copying in `sesh ui` is an `access`, read "in sesh ui, to copy it" (or "its code"). The TOTP codes it draws aren't recorded: showing a code isn't reading it out, and an event every 30 seconds for each code on screen would bury the rest.
+In `sesh ui`, copying, showing an entry's notes (once each time it's unlocked), and revealing with Tab are each an `access`, saying which ("in sesh ui, to copy it", "to show its notes", "to reveal it"). The TOTP codes it draws aren't recorded: showing a code isn't reading it out, and an event every 30 seconds for each code on screen would bury the rest.
 
 **How long events are kept.** Each command that opens the vault removes events older than `audit.retention_days` (default `90`). Set it to `0` to keep everything. Either way, `sesh audit prune --older-than <days>` removes older events when you choose; `--older-than 0` removes them all.
 
@@ -1005,9 +1005,10 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
 ```
 
 - **Type to search,** matched and ranked as `--action search` does, with the letters matched picked out; with nothing typed, every entry is listed.
-- **The selected entry is shown beside the list** when the window is wide enough: its kind, folder, username, URL, tags, whether it has notes or fields, and when it last changed, never its secret. A TOTP entry's code is shown large, with a bar counting down the seconds it has left.
+- **The selected entry is shown beside the list** when the window is wide enough: its kind, folder, username, URL, fields, tags, when it last changed, and its notes (a secure note's text); Shift-↑ and Shift-↓ scroll it when it's long. A TOTP entry's code is shown large, with a bar counting down the seconds it has left.
+- **Passwords and secret fields stay hidden** (`••••••••`) until **Tab** reveals them, for 30 seconds, until you move to another entry, or until Tab again.
 - **Enter copies** the selected entry's secret, or a TOTP entry's current code. The clipboard clears after `clipboard_timeout`, as with `--clip`.
-- **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; the search box edits as a line does (← →, Ctrl-A, Ctrl-E, Ctrl-W a word, Ctrl-U all); Esc clears the search, or quits when it's empty; Ctrl-C quits; `?`, with nothing searched, lists the keys.
+- **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; Tab reveals; Shift-↑ and Shift-↓ scroll the entry; the search box edits as a line does (← →, Ctrl-A, Ctrl-E, Ctrl-W a word, Ctrl-U all); Esc clears the search, or quits when it's empty; Ctrl-C quits; `?`, with nothing searched, lists the keys.
 - **Colours** follow the terminal: dark or light, and fewer colours where the terminal shows fewer, or none with `NO_COLOR=1`.
 - **Using it keeps the agent unlocked:** while you press keys, it tells the agent the vault is in use, as a read would, so the agent's idle timer doesn't run out under you.
 - **It locks itself** after the agent's idle timeout (`agent.idle_timeout`) without a key pressed, after the agent's longest unlock (`agent.max_lifetime`) since the app unlocked, and, within a second, when the agent locks or stops (`sesh agent lock`, say) or another command changes the master password or restores the vault. It then shows nothing of the vault, and asks for the master password again, which it checks even when the agent is still unlocked; with Touch ID unlock on, Enter with nothing typed asks for a fingerprint instead, also when the agent is still unlocked. Three wrong passwords in a row close it.

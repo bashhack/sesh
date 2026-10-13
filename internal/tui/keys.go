@@ -39,6 +39,14 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.sel -= m.listHeight()
 	case "pgdown":
 		m.sel += m.listHeight()
+	case "tab":
+		return m.toggleReveal()
+	case "shift+up":
+		m.scrollPreview(-1)
+		return nil
+	case "shift+down":
+		m.scrollPreview(1)
+		return nil
 	case "?":
 		if m.input.Value() == "" {
 			m.showHelp = !m.showHelp
@@ -49,7 +57,7 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		return m.typed(msg)
 	}
 	m.scroll()
-	return m.readKeys()
+	return m.moved()
 }
 
 // typed hands a key to the search box, and searches again when it

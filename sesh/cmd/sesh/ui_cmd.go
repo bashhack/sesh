@@ -247,6 +247,41 @@ func (u *uiVault) Secret(k vault.Key, reading string) ([]byte, error) {
 	return secret, uiLocked(err)
 }
 
+// Notes is a secure note's text, which is its secret, or another entry's
+// notes.
+func (u *uiVault) Notes(k vault.Key) ([]byte, error) {
+	if k.Kind == vault.KindNote {
+		text, err := u.store.GetFor(k, "in sesh ui, to show it")
+		return text, uiLocked(err)
+	}
+	d, err := u.store.Details(k, "in sesh ui, to show its notes")
+	if err != nil {
+		return nil, uiLocked(err)
+	}
+	notes := d.Notes
+	d.Notes = nil
+	d.Zero()
+	return notes, nil
+}
+
+// SecretFields is k's secret fields, with their values.
+func (u *uiVault) SecretFields(k vault.Key) ([]vault.Field, error) {
+	d, err := u.store.Details(k, "in sesh ui, to reveal its fields")
+	if err != nil {
+		return nil, uiLocked(err)
+	}
+	secure.SecureZeroBytes(d.Notes)
+	var out []vault.Field
+	for _, f := range d.Fields {
+		if f.Secret {
+			out = append(out, f)
+		} else {
+			secure.SecureZeroBytes(f.Value)
+		}
+	}
+	return out, nil
+}
+
 func (u *uiVault) CodeKey(k vault.Key) ([]byte, error) {
 	key, err := u.store.CodeKey(k)
 	return key, uiLocked(err)

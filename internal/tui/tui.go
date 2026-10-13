@@ -54,6 +54,12 @@ type Vault interface {
 	// CodeKey is the TOTP entry k's key, for drawing its codes, which the
 	// audit log doesn't record. The caller wipes it.
 	CodeKey(k vault.Key) ([]byte, error)
+	// Notes is k's notes, or a secure note's text, to show; the audit log
+	// records the read. The caller wipes it.
+	Notes(k vault.Key) ([]byte, error)
+	// SecretFields is k's secret fields with their values, to reveal; the
+	// audit log records the read. The caller wipes them.
+	SecretFields(k vault.Key) ([]vault.Field, error)
 	// Check says whether the vault can still be read, without counting as
 	// a use of it (ErrLocked when it must be unlocked again), and whether
 	// another command may have changed it since the last Check.
@@ -105,6 +111,15 @@ type Model struct {
 	pending map[vault.Key]bool
 	codes   map[vault.Key]shownCode
 
+	// notes are entries' notes, or secure notes' text, held while
+	// unlocked to show them, wiped on lock and exit; notesPending are
+	// being read, and notesFailed couldn't be, saying why.
+	notes        map[vault.Key][]byte
+	notesPending map[vault.Key]bool
+	notesFailed  map[vault.Key]string
+	shown        *revealed // secrets revealed with Tab
+	selKey       vault.Key // the selected entry, as last seen
+
 	// every is the clock, a tick each whole second; tests replace it.
 	every func() tea.Cmd
 
@@ -126,6 +141,7 @@ type Model struct {
 	epoch, searches int
 
 	width, height int
+	previewTop    int // the preview's first line shown, when it scrolls
 	total         int // entries in the vault
 	wrong         int
 	top, sel      int
@@ -147,7 +163,8 @@ func New(opts Options) *Model {
 	m := &Model{
 		opts: opts, v: newGate(opts.Vault),
 		keys: map[vault.Key][]byte{}, pending: map[vault.Key]bool{}, failed: map[vault.Key]bool{},
-		codes:   map[vault.Key]shownCode{},
+		codes: map[vault.Key]shownCode{},
+		notes: map[vault.Key][]byte{}, notesPending: map[vault.Key]bool{}, notesFailed: map[vault.Key]string{},
 		lastKey: now, unlockedAt: now, lastKeepAlive: now,
 		width: 80, height: 24,
 		every: tick,
@@ -206,7 +223,8 @@ func (m *Model) Close() {
 	m.password = nil
 }
 
-// wipe drops the held TOTP keys, and the codes made from them.
+// wipe drops the held TOTP keys and the codes made from them, the notes
+// held, and secrets revealed.
 func (m *Model) wipe() {
 	for k, key := range m.keys {
 		secure.SecureZeroBytes(key)
@@ -215,6 +233,13 @@ func (m *Model) wipe() {
 	clear(m.pending)
 	clear(m.failed)
 	clear(m.codes)
+	for k, n := range m.notes {
+		secure.SecureZeroBytes(n)
+		delete(m.notes, k)
+	}
+	clear(m.notesPending)
+	clear(m.notesFailed)
+	m.hide()
 }
 
 // Messages, each from a command started at an epoch.
@@ -307,7 +332,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.scroll()
-		return m.readKeys()
+		return m.moved()
+	case notesMsg:
+		return m.gotNotes(&msg)
+	case revealMsg:
+		return m.gotReveal(&msg)
 	case tea.KeyPressMsg:
 		if m.v == nil {
 			return m.lockedKey(msg)
@@ -338,7 +367,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		m.rows, m.total = msg.rows, msg.total
 		m.scroll()
-		return m.readKeys()
+		return m.moved()
 	case keyMsg:
 		// A key read twice (the vault changed while it was being read)
 		// is kept once; the other is wiped.
@@ -421,6 +450,9 @@ func (m *Model) tick() tea.Cmd {
 		return m.every()
 	}
 	now := m.opts.Now()
+	if m.shown != nil && !now.Before(m.shown.until) {
+		m.hide()
+	}
 	switch {
 	case m.opts.IdleTimeout > 0 && since(now, m.lastKey) >= m.opts.IdleTimeout:
 		return tea.Batch(m.every(), m.lock("Locked after "+m.opts.IdleTimeout.String()+" without use."))

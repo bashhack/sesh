@@ -191,78 +191,6 @@ func (m *Model) listRow(e *vault.Entry, selected bool, w int, words []string, no
 	return fitTo(left+space(w-lipgloss.Width(left)-lipgloss.Width(right)-1)+right+space(1), w)
 }
 
-// previewLines show the selected entry: what it is and where it's filed,
-// never its secret, and a TOTP entry's code counting down.
-func (m *Model) previewLines(w, h int) []string {
-	if m.sel >= len(m.rows) {
-		return make([]string, h)
-	}
-	th := m.th
-	e := &m.rows[m.sel]
-	out := make([]string, 0, h)
-	add := func(s string) { out = append(out, " "+s) }
-	add("")
-	add(th.style().Bold(true).Render(ansi.Truncate(e.Service, w-2, "…")))
-	where := badge(&th, e.Kind)
-	if e.Folder != "" {
-		where += th.dimmed().Render("  ▸ " + e.Folder)
-	}
-	add(where)
-	add("")
-	if e.Kind == vault.KindTOTP {
-		if code, left, ok := m.code(e, m.opts.Now()); ok {
-			add(th.accented().Bold(true).Render(spaced(groupCode(code))))
-			add(m.countdown(left, e.Settings.TOTP, min(w-8, 28)))
-			add("")
-		} else if m.failed[e.Key] {
-			add(lipgloss.NewStyle().Foreground(th.bad).Render("Its key can't be read: run sesh doctor."))
-			add("")
-		}
-	}
-	field := func(label, value string) {
-		if value != "" {
-			add(th.dimmed().Render(fmt.Sprintf("%-9s", label)) + th.style().Render(ansi.Truncate(value, max(w-12, 4), "…")))
-		}
-	}
-	field("user", e.Username)
-	field("url", e.URL)
-	field("tags", strings.Join(e.Tags, ", "))
-	if n := len(e.Fields); n > 0 {
-		field("fields", fmt.Sprintf("%d", n))
-	}
-	if e.HasNotes {
-		field("notes", "yes")
-	}
-	if p := e.Settings.TOTP; e.Kind == vault.KindTOTP && !p.IsDefault() {
-		digits, period := p.Digits, p.Period
-		if digits == 0 {
-			digits = 6
-		}
-		if period == 0 {
-			period = 30
-		}
-		field("code", fmt.Sprintf("%d digits, every %ds", digits, period))
-	}
-	if !e.UpdatedAt.IsZero() {
-		field("changed", ago(m.opts.Now(), e.UpdatedAt))
-	}
-	for len(out) < h {
-		out = append(out, "")
-	}
-	what := "copy its password"
-	switch e.Kind {
-	case vault.KindTOTP:
-		what = "copy its code"
-	case vault.KindAPIKey:
-		what = "copy the key"
-	case vault.KindNote:
-		what = "copy the note"
-	}
-	out = out[:h]
-	out[h-1] = " " + th.accented().Render("↵") + th.dimmed().Render(" "+what)
-	return out
-}
-
 // countdown is a bar of the seconds a code has left, its colour warning as
 // it runs out.
 func (m *Model) countdown(left int, p totp.Params, w int) string {
@@ -291,6 +219,8 @@ func (m *Model) helpLines(h int) []string {
 		{"↑ ↓", "move (or ctrl+p, ctrl+n)"},
 		{"pgup pgdn", "move a page"},
 		{"↵", "copy the secret, or the code"},
+		{"tab", "reveal the password and secret fields (30s)"},
+		{"⇧↑ ⇧↓", "scroll the entry beside the list"},
 		{"ctrl+w ctrl+u", "delete a word, or the search"},
 		{"esc", "clear the search, or quit"},
 		{"ctrl+c", "quit"},
