@@ -334,7 +334,10 @@ type Model struct {
 	// opening once it commits, so it isn't read meanwhile.
 	changing  bool
 	quitAfter bool // Ctrl-C was pressed while changing: it quits once that's done
-	touchOn   bool // Touch ID unlock is on, as last read: at the lock, or a fingerprint failing
+	// touchOn is Touch ID unlock on, as last read: at the lock, after a
+	// fingerprint fails, on Enter with nothing typed while it was off, and
+	// when turning it on or off ends while locked.
+	touchOn   bool
 	statusBad bool // the status is something that went wrong
 	showHelp  bool
 	dark      bool

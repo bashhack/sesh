@@ -172,8 +172,21 @@ func TestUI_TouchIDTake(t *testing.T) {
 	if s := uiTouchID(env.dbPath); s.Said != "its file can't be read" || s.On {
 		t.Errorf("unreadable: %+v", s)
 	}
+	t.Setenv("SESH_MASTER_PASSWORD", "")
 	touchIDPlatform = false
-	if opts := uiOptions(agentTestApp(), cfg, nil); opts.TouchIDState != nil || opts.SetTouchID != nil {
+	if opts := uiOptions(agentTestApp(), cfg, nil); opts.TouchIDState != nil || opts.SetTouchID != nil || opts.TouchID != nil || opts.TouchIDOn != nil {
 		t.Error("offered where there's no Touch ID")
+	}
+	// Over SSH it isn't usable, and the locked screen doesn't offer it.
+	touchIDPlatform = true
+	if _, err := uiSetTouchID(env.dbPath, true, true); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")
+	if s := uiTouchID(env.dbPath); s.Here || s.Why != "sesh doesn't use Touch ID over SSH." || !s.On {
+		t.Errorf("over SSH: %+v", s)
+	}
+	if opts := uiOptions(agentTestApp(), cfg, nil); opts.TouchIDOn == nil || opts.TouchIDOn() {
+		t.Error("the locked screen offers Touch ID over SSH")
 	}
 }

@@ -190,7 +190,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 	if touchIDPlatform && os.Getenv("SESH_MASTER_PASSWORD") == "" {
 		// Offered on the locked screen while it's on, which it can be
 		// turned on or off from the app.
-		opts.TouchIDOn = func() bool { return touchIDSetUp(dbPath) }
+		opts.TouchIDOn = func() bool { return touchIDSetUp(dbPath) && !overSSH() }
 		opts.TouchID = func() (tui.Vault, error) {
 			store, err := reopenWithTouchID(cfg)
 			if err != nil {

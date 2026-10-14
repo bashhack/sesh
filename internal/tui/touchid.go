@@ -46,6 +46,9 @@ func (m *Model) touchIDRow(t TouchID) item {
 	case !t.Here:
 		it.does = "why"
 		it.detail = "Touch ID isn't usable here: " + t.Why
+	case t.Other:
+		it.does = "turn it on for this vault"
+		it.detail = "It's set up for another vault in this folder, or for this one under an earlier master password. Enter turns it on for this vault, after asking: another vault would then need its password."
 	default:
 		it.does = "turn it on"
 		it.detail = "Enter turns it on: a key in this Mac's Secure Enclave, which only your fingerprint unlocks, opens the vault when the app or sesh's agent has locked. Your master password still works."

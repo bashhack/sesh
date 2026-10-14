@@ -12,12 +12,15 @@ import (
 	"github.com/bashhack/sesh/internal/tui"
 )
 
-// uiTouchID is Touch ID unlock's state for the vault at dbPath, as sesh
-// touchid status says it.
+// uiTouchID is Touch ID unlock's state for the vault at dbPath, and
+// whether Touch ID is usable here.
 func uiTouchID(dbPath string) tui.TouchID {
 	t := tui.TouchID{Said: "off", Here: touchIDAvailable()}
-	if !t.Here {
+	switch {
+	case !t.Here:
 		t.Why = "this Mac needs a Touch ID sensor with an enrolled fingerprint, and sesh must run in your desktop session (not over SSH)."
+	case overSSH():
+		t.Here, t.Why = false, "sesh doesn't use Touch ID over SSH."
 	}
 	f, err := touchid.ReadFile(filepath.Dir(dbPath))
 	switch {
