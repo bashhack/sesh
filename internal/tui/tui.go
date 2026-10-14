@@ -447,6 +447,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
+		if m.ov != nil {
+			return nil // not into the search behind a panel
+		}
 		m.input.SetValue(m.input.Value() + text)
 		m.input.CursorEnd()
 		return tea.Batch(m.requery(), m.keepAlive())

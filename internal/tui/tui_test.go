@@ -1119,3 +1119,37 @@ func TestActionFailuresAndLongPanels(t *testing.T) {
 		t.Errorf("lock now with the agent unreachable (%q):\n%s", a.lockedWhy, s)
 	}
 }
+
+// A restore that fails is said above the trash's rows, which stay; a
+// second Enter while one is put back does nothing; a paste doesn't reach
+// the search behind a panel; a long name's question still fits the
+// smallest window.
+func TestPanelEdges(t *testing.T) {
+	f := newFake()
+	long := vault.Key{Kind: vault.KindPassword, Service: strings.Repeat("a-very-long-name-", 6)}
+	f.entries = append(f.entries, vault.Entry{Key: long})
+	a := newApp(t, f, Options{})
+	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
+	a.press("down", "down", "down", "ctrl+k", "d")
+	if s := a.screen(); strings.Count(s, "\n") != minHeight-1 || !strings.Contains(s, "yes") || !strings.Contains(s, "╰") {
+		t.Errorf("a long name's question at the smallest size:\n%s", s)
+	}
+	a.press("esc", "esc")
+	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	f.trash = []Trashed{{ID: 7, Key: github}}
+	a.press("ctrl+k", "t")
+	a.Update(tea.PasteMsg{Content: "zzz"})
+	if a.input.Value() != "" {
+		t.Errorf("a paste reached the search behind the panel: %q", a.input.Value())
+	}
+	first := a.restoreFromTrash(7)
+	if !a.ov.loading {
+		t.Fatal("the panel takes keys while an entry is put back")
+	}
+	a.press("enter")
+	a.Update(doneMsg{err: ErrNameTaken, epoch: a.epoch, closes: panelTrash})
+	_ = first
+	if s := a.screen(); a.ov == nil || !strings.Contains(s, "another entry has that name") || !strings.Contains(s, "password/github/alice") {
+		t.Errorf("a restore that failed:\n%s", s)
+	}
+}

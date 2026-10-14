@@ -151,6 +151,7 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	if ov.loading {
 		return nil
 	}
+	ov.err = "" // said once; the rows it was about are acted on again
 	switch k {
 	case "up", "ctrl+p", "k":
 		ov.sel--
@@ -212,12 +213,12 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 	case ov.kind == panelHistory && k == "r" && ov.sel < len(ov.versions):
 		n, key := ov.sel+2, ov.k
 		m.ov = m.confirm(ov, "Restore",
-			fmt.Sprintf("Make version %d %s's secret again? The secret it replaces is kept.", n, key),
+			fmt.Sprintf("Make version %d %s's secret again? The secret it replaces is kept.", n, short(key.String())),
 			func() tea.Cmd { return m.restoreVersion(key, n) })
 	case ov.kind == panelTrash && (k == "x" || k == "delete") && ov.sel < len(ov.trash):
 		id, k := ov.trash[ov.sel].ID, ov.trash[ov.sel].Key
 		m.ov = m.confirm(ov, "Delete for good",
-			fmt.Sprintf("Delete %s for good? It can't be brought back.", k),
+			fmt.Sprintf("Delete %s for good? It can't be brought back.", short(k.String())),
 			func() tea.Cmd { return m.removeFromTrash(id, k) })
 	}
 	return nil
@@ -227,6 +228,10 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 func (m *Model) confirm(back *overlay, title, question string, yes func() tea.Cmd) *overlay {
 	return &overlay{kind: panelConfirm, back: back, title: title, question: question, yes: yes, opened: m.opts.Now()}
 }
+
+// short is a name cut to fit a question that must stay on screen with
+// its keys.
+func short(name string) string { return ansi.Truncate(name, 40, "…") }
 
 // confirmAfter is how long after a confirmation is asked a y counts.
 const confirmAfter = 400 * time.Millisecond
@@ -340,7 +345,7 @@ func (m *Model) restoreVersion(k vault.Key, n int) tea.Cmd {
 func (m *Model) confirmDelete(e *vault.Entry) tea.Cmd {
 	k := e.Key
 	m.ov = m.confirm(m.ov, "Delete",
-		fmt.Sprintf("Move %s to the trash? It can be put back from there.", entryName(e)),
+		fmt.Sprintf("Move %s to the trash? It can be put back from there.", short(entryName(e))),
 		func() tea.Cmd {
 			epoch := m.epoch
 			return m.read(func(v Vault, _ func() bool) tea.Msg {
@@ -381,6 +386,7 @@ func (m *Model) openTrash() tea.Cmd {
 // restoreFromTrash puts the trash's entry id back.
 func (m *Model) restoreFromTrash(id int64) tea.Cmd {
 	epoch := m.epoch
+	m.ov.loading = true // no second Enter while this one is put back
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		k, err := v.RestoreFromTrash(id)
 		return doneMsg{what: "Put " + k.String() + " back from the trash", err: err, epoch: epoch, reread: true, closes: panelTrash}
@@ -427,7 +433,7 @@ func (m *Model) actionResult(msg tea.Msg) tea.Cmd {
 			return m.lock(lockedReason(msg.err))
 		case msg.err != nil && m.ov != nil && m.ov.kind == msg.closes:
 			// Said in the panel, which has room for it, and stays open.
-			m.ov.err = msg.err.Error()
+			m.ov.err, m.ov.loading = msg.err.Error(), false
 			return nil
 		case msg.err != nil:
 			m.sayBad(msg.err.Error())
@@ -492,8 +498,8 @@ func (m *Model) drawOverlay(base string) string {
 		lines = append(lines, "", th.style().Width(w-6).Render(ov.question), "",
 			th.accented().Render("y")+th.dimmed().Render(" yes")+th.lines().Render("  ·  ")+th.accented().Render("n")+th.dimmed().Render(" no"))
 	case ov.loading:
-		lines = append(lines, "", th.dimmed().Render("Reading…"))
-	case ov.err != "":
+		lines = append(lines, "", th.dimmed().Render("Working…"))
+	case ov.err != "" && ov.len() == 0:
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(th.bad).Width(w-6).Render(ov.err))
 	case ov.kind == panelHistory:
 		now := m.opts.Now()
@@ -527,6 +533,12 @@ func (m *Model) drawOverlay(base string) string {
 			}
 			lines = append(lines, row(i, it.key, it.label))
 		}
+	}
+	if ov.err != "" && ov.len() > 0 && !ov.loading {
+		// Above the rows, which stay, since the keys still act on them.
+		said := lipgloss.NewStyle().Foreground(th.bad).Width(w - 6).Render(ov.err)
+		room = max(room-lipgloss.Height(said)-1, 1)
+		lines = append([]string{said, ""}, lines[max(len(lines)-room, 0):]...)
 	}
 	var hint string
 	switch ov.kind {
