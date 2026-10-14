@@ -35,11 +35,15 @@ type input struct {
 	choices []string
 	secret  []byte
 	rows    []fieldRow
+	offers  []string // what a line of text can be completed to
 	text    textinput.Model
 	area    textarea.Model
 	kind    inputKind
 	choice  int
 	row     int
+	pick    int  // the offer chosen with the arrows, from 1; 0: none
+	many    bool // the text is a list, separated by commas
+	reveal  bool // the secret typed is shown, while the input has the focus
 	rated   bool // a password, whose strength is said
 	weak    bool // the secret typed is easy to guess
 }
@@ -56,6 +60,63 @@ func (in *input) visible() bool { return in.shown == nil || in.shown() }
 
 // value is a text input's value, trimmed.
 func (in *input) value() string { return strings.TrimSpace(in.text.Value()) }
+
+// maxOffers is how many of an input's offers are listed under it.
+const maxOffers = 5
+
+// piece is what the offers are matched against: the text, or the last of
+// a list's items.
+func (in *input) piece() (before, piece string) {
+	v := in.text.Value()
+	if !in.many {
+		return "", strings.TrimSpace(v)
+	}
+	i := strings.LastIndex(v, ",") + 1
+	return v[:i], strings.TrimSpace(v[i:])
+}
+
+// matches is the offers with what's typed anywhere in them, whatever its
+// case, those starting with it first; all of them when nothing is typed.
+// One already typed in full, or already in the list, isn't offered.
+func (in *input) matches() []string {
+	if in.kind != inputText {
+		return nil
+	}
+	before, piece := in.piece()
+	have := map[string]bool{piece: true}
+	for item := range strings.SplitSeq(before, ",") {
+		have[strings.TrimSpace(item)] = true
+	}
+	lower := strings.ToLower(piece)
+	var starts, within []string
+	for _, o := range in.offers {
+		switch at := strings.Index(strings.ToLower(o), lower); {
+		case have[o] || at < 0:
+		case at == 0:
+			starts = append(starts, o)
+		default:
+			within = append(within, o)
+		}
+	}
+	starts = append(starts, within...)
+	return starts[:min(len(starts), maxOffers)]
+}
+
+// take puts the offer picked in place of what's typed of it.
+func (in *input) take() bool {
+	found := in.matches()
+	if in.pick < 1 || in.pick > len(found) {
+		return false
+	}
+	before, _ := in.piece()
+	if before != "" {
+		before += " "
+	}
+	in.text.SetValue(before + found[in.pick-1])
+	in.text.CursorEnd()
+	in.pick = 0
+	return true
+}
 
 // fieldRow is a custom field in a form: its name, and its value, which a
 // secret field the form hasn't changed doesn't hold (nil).
@@ -115,6 +176,7 @@ func (m *Model) notesInput(label, value string) *input {
 // focusInput moves the form's focus to its input i.
 func (f *form) focusInput(i int) {
 	for j, in := range f.inputs {
+		in.reveal = false
 		switch {
 		case in.kind == inputText && j == i:
 			in.text.Focus()
@@ -219,7 +281,22 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "ctrl+s":
 		return f.submit()
+	case "ctrl+r":
+		if in.kind == inputSecret {
+			in.reveal = !in.reveal
+		}
+		return nil
+	case "up", "down":
+		if in.kind == inputText {
+			step := map[string]int{"up": -1, "down": 1}[msg.String()]
+			in.pick = max(min(in.pick+step, len(in.matches())), 0)
+			return nil
+		}
 	case "enter":
+		if in.kind == inputText && in.take() {
+			f.changed = true
+			return nil
+		}
 		switch in.kind {
 		case inputNotes:
 		case inputFields:
@@ -234,6 +311,7 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 	case inputText:
 		var cmd tea.Cmd
 		in.text, cmd = in.text.Update(msg)
+		in.pick = 0
 		return cmd
 	case inputNotes:
 		if msg.String() == "ctrl+e" && m.opts.EditNotes != nil {
@@ -403,6 +481,11 @@ func (m *Model) drawForm(base string) string {
 			body = in.text.View()
 		case inputSecret:
 			body = th.style().Render(strings.Repeat("•", min(utf8.RuneCount(in.secret), inner-8)))
+			if in.reveal {
+				// Its end is kept in view: that's where it's being typed.
+				shown := strings.ReplaceAll(wrapText(string(in.secret), 1<<20), "\n", "␤")
+				body = th.style().Render(ansi.TruncateLeft(shown, max(ansi.StringWidth(shown)-(inner-8), 0), ""))
+			}
 			if focused {
 				body += th.accented().Render("▌")
 			}
@@ -442,15 +525,33 @@ func (m *Model) drawForm(base string) string {
 			body = strings.Join(rows, "\n")
 		}
 		lines := append([]string{label}, strings.Split(th.field(focused, body), "\n")...)
+		if focused && in.kind == inputText {
+			for j, o := range in.matches() {
+				row := "   " + fitTo(th.dimmed().Render(o), inner-8)
+				if j+1 == in.pick {
+					row = "   " + lipgloss.NewStyle().Background(th.selBg).Render(fitTo(th.style().Render(o), inner-8))
+				}
+				lines = append(lines, row)
+			}
+		}
 		if focused {
 			switch {
+			case in.kind == inputText && len(in.matches()) > 0:
+				lines = append(lines, "   "+th.hints([2]string{"↓", "choose one you have"}, [2]string{"↵", "take it"}))
 			case in.kind == inputFields:
 				lines = append(lines, "   "+th.hints([2]string{"a", "add"}, [2]string{"↵", "edit"}, [2]string{"x", "remove"}))
 			case in.kind == inputChoice:
 				lines = append(lines, "   "+th.hints([2]string{"← →", "choose"}))
 			case in.kind == inputNotes && m.opts.EditNotes != nil:
 				lines = append(lines, "   "+th.hints([2]string{"ctrl+e", "edit in your $EDITOR"}))
-			case in.hint != "":
+			case in.kind == inputSecret:
+				word := "show what you typed"
+				if in.reveal {
+					word = "hide it"
+				}
+				lines = append(lines, "   "+th.hints([2]string{"ctrl+r", word}))
+			}
+			if in.hint != "" && len(in.matches()) == 0 {
 				lines = append(lines, "   "+th.dimmed().Render(in.hint))
 			}
 		}

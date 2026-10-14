@@ -1014,6 +1014,8 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
     - **Adding** makes a password, an API key, a secure note, or a TOTP entry (its key pasted, or an `otpauth://` link, which also sets the code's digits, period and algorithm; reading a QR code from the screen stays in `--setup`).
     - **Notes** are typed in the form; Ctrl-E opens them in your editor (`$VISUAL`, then `$EDITOR`), as `sesh edit --notes --editor` does.
     - **Fields:** `a` adds one, Enter edits it, `x` removes it; a secret field's value is typed unseen.
+    - **Secrets typed** (a new secret, a TOTP key, a secret field's value) show as dots; Ctrl-R shows what you've typed, and hides it again, as does moving to another input.
+    - **Folder and tags** list the ones you already have under the input as you type, matched anywhere in their names; ↓ picks one and Enter takes it. Anything else you type is a new folder or tag.
     - A name another entry has is refused, and said in the form; so are notes another command changed while you were editing them.
   - **copy a value…** (`f`): any one of the entry's values, its secret, username, URL or a field, picked by its number;
   - **earlier secrets…** (`h`): its [password history](#password-history); Enter copies a version, `r` makes it the secret again (after a yes);

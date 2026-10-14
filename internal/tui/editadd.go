@@ -20,6 +20,14 @@ type savedMsg struct {
 	epoch int
 }
 
+// filingMsg is the folders and tags there are, for the inputs that offer
+// them.
+type filingMsg struct {
+	folder, tags      *input
+	folders, tagNames []string
+	epoch             int
+}
+
 // The kinds an entry added can be, in the order the form offers them.
 var addKinds = []vault.Kind{vault.KindPassword, vault.KindAPIKey, vault.KindNote, vault.KindTOTP}
 
@@ -86,7 +94,8 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	url := m.textInput("URL", e.URL)
 	folder := m.textInput("folder", e.Folder)
 	tags := m.textInput("tags", strings.Join(e.Tags, ", "))
-	tags.hint = "separated by commas"
+	folder.hint = "a new name makes a folder; work/aws is aws inside work"
+	tags.hint, tags.many = "separated by commas", true
 	text := m.notesInput("notes", notes)
 	text.named = func() string {
 		if kind() == vault.KindNote {
@@ -187,7 +196,12 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	}
 	f.focusInput(0)
 	m.form = f
-	return nil
+	epoch := m.epoch
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
+		// Without them the form still works: there's only nothing offered.
+		folders, tagNames, _ := v.Filing() //nolint:errcheck // see above
+		return filingMsg{folder: folder, tags: tags, folders: folders, tagNames: tagNames, epoch: epoch}
+	})
 }
 
 // save saves c, generating its password first when asked to, which is

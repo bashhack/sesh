@@ -128,6 +128,20 @@ func (f *fakeVault) Delete(k vault.Key) error {
 	return errors.New("not found")
 }
 
+func (f *fakeVault) Filing() (folders, tags []string, err error) {
+	for _, e := range f.entries {
+		if e.Folder != "" && !slices.Contains(folders, e.Folder) {
+			folders = append(folders, e.Folder)
+		}
+		for _, t := range e.Tags {
+			if !slices.Contains(tags, t) {
+				tags = append(tags, t)
+			}
+		}
+	}
+	return folders, tags, f.err
+}
+
 func (f *fakeVault) Trash() ([]Trashed, error) { return slices.Clone(f.trash), nil }
 
 func (f *fakeVault) RestoreFromTrash(id int64) (vault.Key, error) {
@@ -276,6 +290,8 @@ func (a *app) press(keys ...string) {
 			msg = tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}
 		case "ctrl+k":
 			msg = tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl}
+		case "ctrl+r":
+			msg = tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl}
 		case "ctrl+s":
 			msg = tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}
 		case "→":
@@ -1391,5 +1407,51 @@ func TestFormLabelsAndStrength(t *testing.T) {
 	a.press("tab", "abc")
 	if s := a.screen(); !strings.Contains(s, "easy to guess") {
 		t.Errorf("a weak password typed:\n%s", s)
+	}
+}
+
+// The folder and tags inputs offer the ones there are, matched anywhere.
+func TestFormOffersFoldersAndTags(t *testing.T) {
+	f := newFake()
+	f.entries[0].Tags = []string{"prod", "personal"}
+	f.entries[2].Folder = "home/network"
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "a", "tab", "x")
+	a.tabs(3) // username, the secret's choice → the secret
+	a.press("pw")
+	a.tabs(2) // URL → folder
+	if s := a.screen(); !strings.Contains(s, "work") || !strings.Contains(s, "home/network") {
+		t.Fatalf("the folders there are aren't offered:\n%s", s)
+	}
+	a.press("NET")
+	if s := a.screen(); !strings.Contains(s, "home/network") || strings.Contains(s, "   work") {
+		t.Errorf("typed NET, want only home/network offered:\n%s", s)
+	}
+	a.press("down", "enter", "tab", "x, pr", "down", "enter", "ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saved %d entries:\n%s", len(f.saves), a.screen())
+	}
+	c := f.saves[0]
+	if c.Folder == nil || *c.Folder != "home/network" || !slices.Equal(c.Tags, []string{"x", "prod"}) {
+		t.Errorf("saved in folder %v with tags %q", c.Folder, c.Tags)
+	}
+}
+
+// Ctrl-R shows a secret being typed into a form, until the focus moves on.
+func TestFormShowsATypedSecret(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("ctrl+k", "a")
+	a.tabs(4) // name, username, the secret's choice → the secret
+	a.press("hunter2")
+	if s := a.screen(); strings.Contains(s, "hunter2") || !strings.Contains(s, "show what you typed") {
+		t.Fatalf("a secret typed should be hidden, with the key that shows it:\n%s", s)
+	}
+	a.press("ctrl+r", "!")
+	if s := a.screen(); !strings.Contains(s, "hunter2!") {
+		t.Errorf("after ctrl+r, the secret isn't shown:\n%s", s)
+	}
+	a.press("tab", "shift+tab")
+	if s := a.screen(); strings.Contains(s, "hunter2") {
+		t.Errorf("the secret is still shown after the focus left it:\n%s", s)
 	}
 }

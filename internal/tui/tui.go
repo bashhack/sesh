@@ -130,6 +130,8 @@ type Vault interface {
 	RestoreFromTrash(id int64) (vault.Key, error)
 	// RemoveFromTrash deletes the trash's entry id for good.
 	RemoveFromTrash(id int64) error
+	// Filing is the folders and the tags the vault's entries have.
+	Filing() (folders, tags []string, err error)
 	// Save adds an entry (c.Key zero) or changes one, and says the name
 	// it has after. ErrNameTaken when the name is another entry's.
 	Save(c *Change) (vault.Key, error)
@@ -475,6 +477,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.saved(&msg)
 	case editorMsg:
 		return m.editedNotes(&msg)
+	case filingMsg:
+		if msg.epoch == m.epoch {
+			msg.folder.offers, msg.tags.offers = msg.folders, msg.tagNames
+		}
+		return nil
 	case notesMsg:
 		return m.gotNotes(&msg)
 	case revealMsg:

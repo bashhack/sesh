@@ -398,6 +398,26 @@ func (u *uiVault) RestoreVersion(k vault.Key, n int) error {
 
 func (u *uiVault) Delete(k vault.Key) error { return u.wrote(u.store.Delete(k)) }
 
+func (u *uiVault) Filing() (folders, tags []string, err error) {
+	fs, err := u.store.Folders()
+	if err != nil {
+		return nil, nil, uiLocked(err)
+	}
+	for _, f := range fs {
+		if f.Name != "" {
+			folders = append(folders, f.Name)
+		}
+	}
+	ts, _, err := u.store.Tags()
+	if err != nil {
+		return nil, nil, uiLocked(err)
+	}
+	for _, t := range ts {
+		tags = append(tags, t.Name)
+	}
+	return folders, tags, nil
+}
+
 func (u *uiVault) Trash() ([]tui.Trashed, error) {
 	entries, err := u.store.Trash()
 	if err != nil {
