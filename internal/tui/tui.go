@@ -249,6 +249,8 @@ func (m *Model) wipe() {
 	clear(m.notesFailed)
 	clear(m.wraps)
 	m.hide()
+	// A reveal still being read when this runs never comes back.
+	m.revealing = false
 }
 
 // Messages, each from a command started at an epoch.

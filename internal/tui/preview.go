@@ -211,12 +211,13 @@ type wrapped struct {
 	width int
 }
 
-// wrap is s wrapped to w, wrapped once for id at each width.
-func (m *Model) wrap(id, s string, w int) []string {
+// wrap is s wrapped to w, wrapped once for id at each width: s is made a
+// string only then, so a secret isn't copied again each time it's drawn.
+func (m *Model) wrap(id string, s []byte, w int) []string {
 	if c, ok := m.wraps[id]; ok && c.width == w {
 		return c.lines
 	}
-	lines := strings.Split(wrapText(s, w), "\n")
+	lines := strings.Split(wrapText(string(s), w), "\n")
 	m.wraps[id] = wrapped{lines: lines, width: w}
 	return lines
 }
@@ -297,7 +298,7 @@ func (m *Model) previewLines(w, h int) []string {
 			name = "key"
 		}
 		if shown {
-			secretField(name, m.wrap("reveal "+name, string(m.shown.secret), valueWidth), th.accented())
+			secretField(name, m.wrap("reveal "+name, m.shown.secret, valueWidth), th.accented())
 		} else {
 			add(label(name) + hidden)
 		}
@@ -332,7 +333,7 @@ func (m *Model) previewLines(w, h int) []string {
 		add("")
 		switch notes, ok := m.notes[e.Key]; {
 		case ok:
-			for _, l := range m.wrap("notes "+e.Key.String(), string(notes), w-3) {
+			for _, l := range m.wrap("notes "+e.Key.String(), notes, w-3) {
 				add(plain.Render(l))
 			}
 		case m.notesFailed[e.Key] != "":
@@ -374,13 +375,13 @@ func hasSecretFields(e *vault.Entry) bool {
 }
 
 // revealedField is the revealed value of the secret field named name.
-func revealedField(r *revealed, name string) string {
+func revealedField(r *revealed, name string) []byte {
 	for _, f := range r.fields {
 		if f.Name == name {
-			return string(f.Value)
+			return f.Value
 		}
 	}
-	return ""
+	return nil
 }
 
 // wrapText wraps s to w columns, keeping its own line breaks. Control

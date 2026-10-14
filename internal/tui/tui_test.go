@@ -797,3 +797,17 @@ func TestRevealOnceAndMouseKeepAlive(t *testing.T) {
 		t.Errorf("keep-alives after the wheel = %d, want 1", f.kept)
 	}
 }
+
+// A lock while a reveal is read doesn't leave Tab dead after unlocking.
+func TestRevealAfterLockMidRead(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{Unlock: func([]byte) (Vault, error) { return f, nil }})
+	pending := a.toggleReveal()
+	a.lock("test")
+	a.run(pending)
+	a.press("pw", "enter")
+	a.run(a.toggleReveal())
+	if a.shown == nil {
+		t.Error("Tab after the re-unlock revealed nothing")
+	}
+}
