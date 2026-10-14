@@ -1153,3 +1153,31 @@ func TestPanelEdges(t *testing.T) {
 		t.Errorf("a restore that failed:\n%s", s)
 	}
 }
+
+// A secure note's text can be copied from its values, though it has no
+// fields; an entry's notes can be too.
+func TestCopyANotesText(t *testing.T) {
+	f := newFake()
+	wifi := vault.Key{Kind: vault.KindNote, Service: "wifi"}
+	f.entries = append(f.entries, vault.Entry{Key: wifi})
+	f.secrets[wifi] = "ssid home"
+	f.entries[0].HasNotes = true
+	f.notes = map[vault.Key]string{github: "recovery codes"}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "f")
+	if s := a.screen(); !strings.Contains(s, "notes") {
+		t.Fatalf("github's values:\n%s", s)
+	}
+	a.press("2")
+	if len(a.copied) != 1 || a.copied[0] != "recovery codes" {
+		t.Errorf("copied %q, want github's notes", a.copied)
+	}
+	a.press("down", "down", "down", "ctrl+k", "f")
+	if s := a.screen(); !strings.Contains(s, "Copy from wifi") || !strings.Contains(s, "note") {
+		t.Fatalf("wifi's values:\n%s", s)
+	}
+	a.press("1")
+	if len(a.copied) != 2 || a.copied[1] != "ssid home" {
+		t.Errorf("copied %q, want the note's text", a.copied)
+	}
+}

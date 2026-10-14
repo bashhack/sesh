@@ -248,8 +248,11 @@ func (m *Model) openFields(e *vault.Entry) tea.Cmd {
 		}
 		items = append(items, item{key: key, label: label, run: run})
 	}
-	if ek.Kind != vault.KindNote {
-		add(secretWord(ek.Kind), func() tea.Cmd { return m.copySecret(&ek) })
+	// Its secret first: the password, key or code, or a secure note's text.
+	add(secretWord(ek.Kind), func() tea.Cmd { return m.copySecret(&ek) })
+	if notes := m.notes[ek.Key]; ek.Kind != vault.KindNote && len(notes) > 0 {
+		// The notes as shown beside the list, which the app holds.
+		add("notes", func() tea.Cmd { return m.copyPlain(&ek, "notes", string(m.notes[ek.Key])) })
 	}
 	if ek.Username != "" {
 		add("username", func() tea.Cmd { return m.copyUsername(&ek) })
