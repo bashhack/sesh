@@ -80,7 +80,7 @@ func TestUI_Recovery(t *testing.T) {
 	if err := runRotateMasterPassword(app, rotateTestCfg("forgotten-pw-1234", "new-password-5678", "new-password-5678")); err != nil {
 		t.Fatalf("rotate: %v\n%s", err, stderr)
 	}
-	if _, err := nr.Save(); err == nil || !strings.Contains(err.Error(), "it wasn't saved and opens nothing") {
+	if _, err := nr.Save(); !errors.Is(err, tui.ErrRefused) || !strings.Contains(err.Error(), "it wasn't saved and opens nothing") {
 		t.Errorf("saved after the password changed: %v", err)
 	}
 }

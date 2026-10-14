@@ -58,7 +58,7 @@ func uiNewRecovery(dbPath string) (*tui.NewRecovery, error) {
 		Save: func() (tui.Done, error) {
 			if err := p.save(); err != nil {
 				if errors.Is(err, database.ErrVaultKeyChanged) {
-					return tui.Done{}, errors.New("the master password was changed by another sesh command while this key was shown, so it wasn't saved and opens nothing: throw away the key you wrote down, and make a new one")
+					return tui.Done{}, tui.Refused("the master password was changed by another sesh command while this key was shown, so it wasn't saved and opens nothing: throw away the key you wrote down, and make a new one.")
 				}
 				return tui.Done{}, err
 			}

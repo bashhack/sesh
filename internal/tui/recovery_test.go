@@ -259,7 +259,7 @@ func TestRecoveryQuit(t *testing.T) {
 		t.Fatalf("quit %v\n%s", a.quit, a.screen())
 	}
 	a.run(save)
-	if !a.quit || !strings.HasPrefix(a.Afterword(), "The recovery key is set for this vault.") {
+	if !a.quit || a.Afterword() != "The recovery key is set for this vault." {
 		t.Errorf("quit %v, said after %q", a.quit, a.Afterword())
 	}
 }
@@ -277,15 +277,25 @@ func TestRecoverySaveRetried(t *testing.T) {
 	}
 }
 
-// At the smallest window the key stays whole and the input in view; the note's end is cut.
+// At every window size the key stays whole, and what's typed and the error stay in view; the note's end is cut.
 func TestRecoveryFormFits(t *testing.T) {
-	for _, size := range [][2]int{{minWidth, minHeight}, {60, 16}, {80, 24}} {
-		a, _ := keyApp(t, false)
-		a.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		a.press("ctrl+k", ",", "enter")
-		s := a.screen()
-		if strings.Count(s, "\n")+1 > size[1] || !strings.Contains(s, "ABCD-EFGH-JKMN-PQRS-TVWX-YZ01-2345") || !strings.Contains(s, "type its last group") || !strings.Contains(s, "done") {
-			t.Errorf("at %dx%d:\n%s", size[0], size[1], s)
+	for w := minWidth; w <= 100; w += 8 {
+		for h := minHeight; h <= 30; h++ {
+			for _, wrong := range []bool{false, true} {
+				a, _ := keyApp(t, false)
+				a.Update(tea.WindowSizeMsg{Width: w, Height: h})
+				a.press("ctrl+k", ",", "enter")
+				// Typing clears the error, so the wrong group is what's seen with it.
+				a.press("9Z")
+				if wrong {
+					a.press("enter")
+				}
+				s := a.screen()
+				if strings.Count(s, "\n")+1 > h || !strings.Contains(s, "ABCD-EFGH-JKMN-PQRS-TVWX-YZ01-2345") || !strings.Contains(s, "9Z") ||
+					(wrong && !strings.Contains(s, "That's not the last")) {
+					t.Fatalf("at %dx%d, a wrong group typed %v:\n%s", w, h, wrong, s)
+				}
+			}
 		}
 	}
 }
@@ -315,15 +325,50 @@ func TestRecoveryAcrossLock(t *testing.T) {
 
 // A form with a note and many inputs fits the window, scrolling the inputs.
 func TestFormNoteFits(t *testing.T) {
-	a := newApp(t, newFake(), Options{})
-	a.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
-	f := &form{title: "Many", row: -1, note: strings.Repeat("A long note that wraps. ", 6)}
-	for i := range 6 {
-		f.inputs = append(f.inputs, a.textInput(fmt.Sprintf("input %d", i), ""))
+	for h := minHeight; h <= 30; h++ {
+		a := newApp(t, newFake(), Options{})
+		a.Update(tea.WindowSizeMsg{Width: minWidth, Height: h})
+		f := &form{title: "Many", row: -1, note: strings.Repeat("A long note that wraps. ", 6)}
+		for i := range 6 {
+			// Labels long enough to wrap at this width.
+			f.inputs = append(f.inputs, a.textInput(fmt.Sprintf("input %d, whose label is long enough to wrap", i), ""))
+		}
+		f.focusInput(3)
+		a.form = f
+		a.press("9Z")
+		if s := a.screen(); strings.Count(s, "\n")+1 > h || !strings.Contains(s, "input 3") || !strings.Contains(s, "9Z") {
+			t.Fatalf("at %dx%d:\n%s", minWidth, h, s)
+		}
 	}
-	f.focusInput(0)
-	a.form = f
-	if s := a.screen(); strings.Count(s, "\n")+1 > 16 || !strings.Contains(s, "input 0") {
-		t.Errorf("drawn:\n%s", s)
+}
+
+// Ctrl-C while it's saving, then a lock, quits at the lock, saying why, rather than at some later save.
+func TestRecoveryQuitThenLock(t *testing.T) {
+	a, _ := keyApp(t, false)
+	a.press("ctrl+k", ",", "enter", "2345")
+	_, save := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.press("ctrl+c")
+	a.run(a.lock("No use for 5 minutes."))
+	if !a.quit || !strings.HasPrefix(a.Afterword(), "No use for 5 minutes. The recovery key shown may not have been saved") {
+		t.Fatalf("quit %v, said after %q", a.quit, a.Afterword())
+	}
+	a.run(save)
+}
+
+// A save refused for good closes the form, saying why; Esc after a save that failed says so.
+func TestRecoverySaveRefused(t *testing.T) {
+	a, asked := keyApp(t, false, Refused("the master password was changed: throw away the key."))
+	a.press("ctrl+k", ",", "enter", "2345", "enter")
+	if a.form != nil || a.ov == nil || !strings.Contains(a.ov.err, "Not changed: the master password was changed: throw away the key.") {
+		t.Fatalf("form %v, panel %+v", a.form != nil, a.ov)
+	}
+	a.press("enter", "2345", "enter")
+	if !slices.Equal(*asked, []string{"new", "save", "new", "save"}) {
+		t.Errorf("asked %q", *asked)
+	}
+	b, _ := keyApp(t, false, errors.New("database is locked"))
+	b.press("ctrl+k", ",", "enter", "2345", "enter", "esc", "esc")
+	if b.form != nil || b.ov == nil || b.ov.err != "No recovery key was set, since it couldn't be saved." {
+		t.Errorf("Esc after a failed save: form %v, panel %+v", b.form != nil, b.ov)
 	}
 }

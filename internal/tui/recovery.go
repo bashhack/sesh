@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -135,12 +136,18 @@ func (m *Model) showRecovery(msg *newRecoveryMsg) tea.Cmd {
 // keyForm shows the recovery key nr, and saves it once its last group is
 // typed back.
 func (m *Model) keyForm(nr *NewRecovery) {
-	in := m.textInput("type its last group (4 characters)", "")
+	in := m.textInput("its last group (4 characters)", "")
 	f := &form{title: "Your recovery key", row: -1, inputs: []*input{in}, working: "Saving the recovery key…",
 		quitting: "Quitting once the recovery key is saved…", shown: nr.Key,
 		note: "Write it down and keep it somewhere safe, away from this computer. If you forget your master password, sesh recover uses it to set a new one. Anyone who has it and your vault file can open the vault. sesh doesn't keep a copy, so it can't show it again. Type its last group to confirm you've saved it."}
 	tries := 0
-	f.cancel = func() { m.recoverySaid("No recovery key was set, since it wasn't confirmed.", true) }
+	f.cancel = func() {
+		why := "No recovery key was set, since it wasn't confirmed."
+		if f.failed {
+			why = "No recovery key was set, since it couldn't be saved."
+		}
+		m.recoverySaid(why, true)
+	}
 	f.lost = func() string {
 		if f.saving {
 			return "The recovery key shown may not have been saved; see with: sesh recovery status"
@@ -183,15 +190,15 @@ func (m *Model) gotRecovery(msg *recoveryMsg) tea.Cmd {
 			return nil
 		case m.quitAfter:
 			m.form = nil
-			m.afterword = msg.done.Said + " " + msg.done.OldBackups
+			m.afterword = strings.TrimSpace(msg.done.Said + " " + msg.done.OldBackups)
 			if msg.err != nil {
 				m.afterword = "The recovery key wasn't saved: " + msg.err.Error()
 			}
 			return tea.Quit
-		case msg.err != nil && !errors.Is(msg.err, ErrLocked):
+		case msg.err != nil && !errors.Is(msg.err, ErrLocked) && !errors.Is(msg.err, ErrRefused):
 			// The key shown can still be saved.
-			f.saving = false
-			f.err = "Not saved: " + msg.err.Error() + " Press Enter to try again, or Esc to leave it unsaved."
+			f.saving, f.failed = false, true
+			f.err = "Not saved: " + strings.TrimSuffix(msg.err.Error(), ".") + ". Press Enter to try again, or Esc to leave it unsaved."
 			return nil
 		}
 		m.form = nil

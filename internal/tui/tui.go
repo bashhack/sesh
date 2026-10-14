@@ -34,6 +34,17 @@ type lockedError struct{ why string }
 func (e *lockedError) Error() string        { return e.why }
 func (e *lockedError) Is(target error) bool { return target == ErrLocked }
 
+// ErrRefused is a change refused for good: trying it again can't help.
+var ErrRefused = errors.New("refused")
+
+// Refused is ErrRefused, saying why.
+func Refused(why string) error { return &refusedError{why: why} }
+
+type refusedError struct{ why string }
+
+func (e *refusedError) Error() string        { return e.why }
+func (e *refusedError) Is(target error) bool { return target == ErrRefused }
+
 // Trashed is an entry in the trash.
 type Trashed struct {
 	DeletedAt time.Time
@@ -837,6 +848,11 @@ func (m *Model) lock(why string) tea.Cmd {
 	}
 	m.status = ""
 	m.lockedWhy = why
+	if m.quitAfter {
+		// Ctrl-C waited for what the lock cut off: it quits now, saying why.
+		m.afterword = why
+		return tea.Batch(closing, tea.Quit)
+	}
 	return closing
 }
 
