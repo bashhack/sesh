@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -870,6 +871,21 @@ func TestUI_Checks(t *testing.T) {
 	}
 	if log := mustRun(t, runAudit); !strings.Contains(log, "doctor") {
 		t.Errorf("audit:\n%s", log)
+	}
+	// With db_path changed since the app opened, the Backups row is still the open vault's.
+	t.Setenv("SESH_DB_PATH", filepath.Join(t.TempDir(), "other.db"))
+	if c, err = u.Checks(); err != nil {
+		t.Fatal(err)
+	}
+	want := tildePath(filepath.Join(filepath.Dir(store.Path()), "backups"))
+	got := ""
+	for _, ch := range c.Checks {
+		if ch.Label == "Backups" {
+			got = ch.Value
+		}
+	}
+	if !strings.Contains(got, want) {
+		t.Errorf("the Backups row after db_path changed: %q, want it in %s", got, want)
 	}
 }
 
