@@ -288,3 +288,21 @@ func TestIsPlainExport(t *testing.T) {
 		}
 	}
 }
+
+// The buffer an encrypted export is built in wipes each array it outgrows.
+func TestWipingBuffer(t *testing.T) {
+	var w wipingBuffer
+	if _, err := w.Write(bytes.Repeat([]byte("s"), 4000)); err != nil {
+		t.Fatal(err)
+	}
+	first := w.b[:cap(w.b)]
+	if _, err := w.Write(bytes.Repeat([]byte("t"), 4000)); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.ContainsAny(first, "st") {
+		t.Error("the outgrown array still holds what was written")
+	}
+	if len(w.b) != 8000 || w.b[0] != 's' || w.b[7999] != 't' {
+		t.Errorf("held %d bytes", len(w.b))
+	}
+}

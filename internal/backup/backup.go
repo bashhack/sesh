@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/exportfile"
 )
 
 // stamp is the time in a backup's name: UTC, so names sort by time.
@@ -191,7 +192,7 @@ func MakeTo(vaultPath, dest string, force bool, now time.Time) (Info, error) {
 		}
 		dest = filepath.Join(dest, s.Name(now))
 	}
-	if isVaultFile(vaultPath, dest) {
+	if exportfile.IsVaultFile(vaultPath, dest) {
 		return Info{}, fmt.Errorf("%s is the vault itself, or one of its files; back it up somewhere else", dest)
 	}
 	if err := write(vaultPath, dest, force); err != nil {
@@ -359,40 +360,4 @@ func Remove(dir, vaultPath, path string) error {
 		}
 	}
 	return fmt.Errorf("%s isn't one of the backups in %s", filepath.Base(path), dir)
-}
-
-// isVaultFile says whether path is the vault at vaultPath, or its -wal,
-// -shm or -journal file: a backup written there would replace a file the
-// vault, open in another sesh, is using. Names are compared ignoring case,
-// as macOS's file system does, and through links; files there already are
-// compared as files.
-func isVaultFile(vaultPath, path string) bool {
-	clean := func(p string) string {
-		if abs, err := filepath.Abs(p); err == nil {
-			p = abs
-		}
-		// The folders through links, as the files are reached.
-		if dir, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
-			p = filepath.Join(dir, filepath.Base(p))
-		}
-		return p
-	}
-	vaults := []string{clean(vaultPath)}
-	if target, err := filepath.EvalSymlinks(vaultPath); err == nil {
-		// A vault reached through a link: its files are beside the target.
-		vaults = append(vaults, clean(target))
-	}
-	dest := clean(path)
-	destInfo, destErr := os.Stat(path)
-	for _, vault := range vaults {
-		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
-			if strings.EqualFold(dest, vault+suffix) {
-				return true
-			}
-			if info, err := os.Stat(vault + suffix); err == nil && destErr == nil && os.SameFile(info, destInfo) {
-				return true
-			}
-		}
-	}
-	return false
 }

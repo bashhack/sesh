@@ -1591,27 +1591,6 @@ func TestExport_ReadOnlyFolder(t *testing.T) {
 	}
 }
 
-// Only the names for a process's own output are devices by name; any other path is one when it's not a regular file.
-func TestIsDevice(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "backup.json")
-	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	fifo := filepath.Join(dir, "pipe")
-	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for path, want := range map[string]bool{
-		"/dev/stdout": true, "/dev/stderr": true, "/dev/tty": true, "/dev/fd/1": true, "/proc/self/fd/1": true, "/dev/null": true, fifo: true,
-		"/dev/shm/backup.json": false, file: false, dir: false, filepath.Join(dir, "missing.json"): false,
-	} {
-		if got := isDevice(path); got != want {
-			t.Errorf("isDevice(%q) = %v", path, got)
-		}
-	}
-}
-
 // A link whose relative target leaves a linked folder is followed as the system follows it.
 func TestExport_LinkThroughLinkedFolder(t *testing.T) {
 	stubReadPassword(t, "export-password-1234")
@@ -1693,5 +1672,23 @@ func TestExport_LinkThroughLinkedFolder(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "elsewhere", "g")); err != nil {
 		t.Errorf("the missing file at the end of sub/../g: %v", err)
+	}
+}
+
+// The CLI's export doesn't write over the vault's own file, even with --force.
+func TestExport_RefusesTheVault(t *testing.T) {
+	stubReadPassword(t, "export-password-1234")
+	vaultFile := filepath.Join(t.TempDir(), "passwords.db")
+	if err := os.WriteFile(vaultFile, []byte("the vault"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := newTestProvider(seeded(t, map[string]string{"password/github": "s"}))
+	p.WithVaultPath(vaultFile)
+	parseFlags(t, p, "--action", "export", "--format", "encrypted", "--file", vaultFile, "--force")
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "is the vault itself") {
+		t.Errorf("%v", err)
+	}
+	if b, _ := os.ReadFile(vaultFile); string(b) != "the vault" { //nolint:errcheck // compared
+		t.Errorf("the vault now holds %q", b)
 	}
 }

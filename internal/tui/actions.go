@@ -134,6 +134,7 @@ func (m *Model) globalItems() []item {
 		{key: "a", label: "add an entry…", run: m.openAdd},
 		{key: "t", label: "the trash…", run: m.openTrash},
 		{key: "b", label: "backups…", run: m.openBackups},
+		{key: "i", label: "import and export…", run: m.openTransfer},
 		{key: "r", label: "health report…", run: m.openHealth},
 		{key: ",", label: "settings and safety…", run: m.openSettings},
 		{key: "l", label: "lock sesh", run: m.lockNow},
