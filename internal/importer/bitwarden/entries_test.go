@@ -331,16 +331,18 @@ func TestPasswordSet(t *testing.T) {
 		want             time.Time
 		earlier          []vault.Earlier
 		history          []time.Time
+		kept             int
 	}{
-		{"history, oldest first", t1, t3, t2, []vault.Earlier{{ReplacedAt: t1}, {ReplacedAt: t2}}, []time.Time{t1, t2}},
-		{"a device clock ahead", t1, t2, t2, []vault.Earlier{{ReplacedAt: t4}}, []time.Time{t4}},
-		{"an earlier password without a time", t1, t3, t3, []vault.Earlier{{}}, nil},
-		{"no history", t1, t3, t1, nil, nil},
-		{"a few field values, no password", t1, t3, t1, nil, []time.Time{t2, t3}},
-		{"a full history of field values", t1, t4, t2, nil, five},
-		{"nothing known but the edit", time.Time{}, t3, t3, nil, nil},
+		{"history, oldest first", t1, t3, t2, []vault.Earlier{{ReplacedAt: t1}, {ReplacedAt: t2}}, []time.Time{t1, t2}, 0},
+		{"a device clock ahead", t1, t2, t2, []vault.Earlier{{ReplacedAt: t4}}, []time.Time{t4}, 0},
+		{"an earlier password without a time", t1, t3, t3, []vault.Earlier{{}}, nil, 0},
+		{"no history", t1, t3, t1, nil, nil, 0},
+		{"a few field values, no password", t1, t3, t1, nil, []time.Time{t2, t3}, 0},
+		{"a full history of field values", t1, t4, t2, nil, five, 0},
+		{"a full history, one of its times unread", t1, t4, t2, nil, five[:4], 5},
+		{"nothing known but the edit", time.Time{}, t3, t3, nil, nil, 0},
 	} {
-		if got := passwordSet(c.earlier, c.history, c.created, c.revised); !got.Equal(c.want) {
+		if got := passwordSet(c.earlier, max(len(c.history), c.kept), c.history, c.created, c.revised); !got.Equal(c.want) {
 			t.Errorf("%s: %v; want %v", c.name, got, c.want)
 		}
 	}
