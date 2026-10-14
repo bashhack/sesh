@@ -1,0 +1,207 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/bashhack/sesh/internal/atomicfile"
+)
+
+// quoted are the settings the config file has as strings; the rest are
+// whole numbers.
+var quoted = map[string]bool{
+	"db_path": true, "clipboard_timeout": true, "agent.idle_timeout": true, "agent.max_lifetime": true,
+	"master_password.memory": true, "backup.dir": true,
+}
+
+// header is a table's header line: [name], perhaps with a comment.
+var header = regexp.MustCompile(`^\s*\[\s*([A-Za-z0-9_.-]+)\s*\]\s*(#.*)?$`)
+
+// Set writes key = value into the config file at path, keeping its other
+// lines, their comments and order; value "" takes the key out, so its
+// default applies. The file after must load as sesh loads it, with the
+// key read from it: otherwise it's an error, and the file is left as it
+// was. A file that isn't there yet is made.
+func Set(path, key, value string) error {
+	if _, ok := quoted[key]; !ok && !isNumberKey(key) {
+		return fmt.Errorf("%s isn't a setting sesh changes", key)
+	}
+	old, err := os.ReadFile(path) //nolint:gosec // the user's config file
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	line := ""
+	if value != "" {
+		v := value
+		if quoted[key] {
+			v = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
+		} else if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+			return fmt.Errorf("%s = %q: want a whole number", key, value)
+		}
+		line = v
+	}
+	updated := setLine(string(old), key, line)
+	if err := checkSet(path, updated, key, value != ""); err != nil {
+		return err
+	}
+	mode := os.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("make %s: %w", filepath.Dir(path), err)
+	}
+	return atomicfile.Write(path, []byte(updated), mode)
+}
+
+func isNumberKey(key string) bool {
+	switch key {
+	case "audit.retention_days", "master_password.time", "master_password.threads", "backup.every_days", "backup.keep",
+		"trash.keep_days", "history.keep", "health.old_after_days":
+		return true
+	}
+	return false
+}
+
+// checkSet loads content as the config file would be, and checks key is
+// read from it (set) or isn't (not set).
+func checkSet(path, content, key string, set bool) error {
+	tmp, err := os.CreateTemp("", "sesh-config-*.toml")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) //nolint:errcheck // a temp file
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close() //nolint:errcheck,gosec // already failing
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	c, err := defaults(tmp.Name())
+	if err != nil {
+		return err
+	}
+	if err := c.applyFile(); err != nil {
+		return errors.New(strings.ReplaceAll(err.Error(), tmp.Name(), path))
+	}
+	for _, it := range c.List() {
+		if it.Key == key && (it.Source == FromFile) != set {
+			return fmt.Errorf("%s couldn't be changed in %s as it's written there; edit the file yourself", key, path)
+		}
+	}
+	return nil
+}
+
+// setLine is the file's text with key's line set to key = value (a TOML
+// value, written as is), or taken out when value is "". It changes only
+// that line, or adds one: in the key's table, after its last line, or a
+// new table at the end; a key outside any table goes before the first.
+func setLine(text, key, value string) string {
+	table, name, inTable := strings.CutLast(key, ".")
+	if !inTable {
+		table, name = "", key
+	}
+	lines := strings.SplitAfter(text, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	keyLine := regexp.MustCompile(`^(\s*` + regexp.QuoteMeta(name) + `\s*=\s*)`)
+	dotted := regexp.MustCompile(`^(\s*` + regexp.QuoteMeta(key) + `\s*=\s*)`)
+	current, lastInTable, tableAt, firstTable := "", -1, -1, -1
+	for i, l := range lines {
+		if m := header.FindStringSubmatch(l); m != nil {
+			current = m[1]
+			if firstTable < 0 {
+				firstTable = i
+			}
+			if current == table {
+				tableAt, lastInTable = i, i
+			}
+			continue
+		}
+		var m []string
+		switch {
+		case current == table:
+			m = keyLine.FindStringSubmatch(l)
+		case current == "" && table != "":
+			m = dotted.FindStringSubmatch(l)
+		}
+		if m != nil {
+			if value == "" {
+				return strings.Join(append(lines[:i:i], lines[i+1:]...), "")
+			}
+			lines[i] = m[1] + value + afterValue(l[len(m[1]):])
+			return strings.Join(lines, "")
+		}
+		if current == table && strings.TrimSpace(l) != "" && !strings.HasPrefix(strings.TrimSpace(l), "#") {
+			lastInTable = i
+		}
+	}
+	if value == "" {
+		return text
+	}
+	add := name + " = " + value + "\n"
+	switch {
+	case table == "" && firstTable >= 0:
+		at := firstTable
+		for at > 0 && strings.TrimSpace(lines[at-1]) == "" {
+			at--
+		}
+		return strings.Join(append(append(lines[:at:at], add), lines[at:]...), "")
+	case table == "":
+		return ensureNewline(text) + add
+	case tableAt >= 0:
+		at := lastInTable + 1
+		return strings.Join(append(append(lines[:at:at], add), lines[at:]...), "")
+	}
+	sep := ""
+	if strings.TrimSpace(text) != "" {
+		sep = "\n"
+	}
+	return ensureNewline(text) + sep + "[" + table + "]\n" + add
+}
+
+// afterValue is what follows a value on its line: its comment, spaces
+// and line end, with the value itself left out.
+func afterValue(rest string) string {
+	end := 0
+	switch {
+	case strings.HasPrefix(rest, `"`):
+		for end = 1; end < len(rest); end++ {
+			if rest[end] == '\\' {
+				end++
+				continue
+			}
+			if rest[end] == '"' {
+				end++
+				break
+			}
+		}
+	case strings.HasPrefix(rest, "'"):
+		if i := strings.Index(rest[1:], "'"); i >= 0 {
+			end = i + 2
+		}
+	default:
+		end = strings.IndexAny(rest, "#\n")
+		if end < 0 {
+			end = len(rest)
+		}
+		for end > 0 && (rest[end-1] == ' ' || rest[end-1] == '\t' || rest[end-1] == '\r') {
+			end--
+		}
+	}
+	return rest[min(end, len(rest)):]
+}
+
+func ensureNewline(text string) string {
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		return text + "\n"
+	}
+	return text
+}

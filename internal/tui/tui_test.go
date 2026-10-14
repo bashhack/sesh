@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -2301,5 +2302,65 @@ func TestHealthReportDoubleEnter(t *testing.T) {
 	a.run(held)
 	if len(a.copied) != 0 || a.form == nil {
 		t.Errorf("Enter twice: copied %q, form %v", a.copied, a.form != nil)
+	}
+}
+
+// settingsApp is the app with a fake config: its settings, and the changes asked of it.
+func settingsApp(t *testing.T) (*app, *[]string) {
+	t.Helper()
+	values := map[string]string{"history.keep": "10", "health.old_after_days": "365"}
+	var asked []string
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) {
+			return []Setting{
+				{Key: "history.keep", Value: values["history.keep"], Raw: values["history.keep"], Said: "default", Applies: "for other commands now", Editable: true},
+				{Key: "health.old_after_days", Value: values["health.old_after_days"], Raw: values["health.old_after_days"], Said: "default", Applies: "at the next health check", Editable: true},
+				{Key: "trash.keep_days", Value: "0", Raw: "0", Said: "environment: SESH_TRASH_KEEP_DAYS", Env: "SESH_TRASH_KEEP_DAYS", Editable: true},
+				{Key: "db_path", Value: "/v.db", Said: "default"},
+			}, nil
+		},
+		SetSetting: func(key, value string) (Live, error) {
+			asked = append(asked, key+"="+value)
+			if value == "-1" {
+				return Live{}, errors.New(key + ` = "-1": want a whole number`)
+			}
+			values[key] = value
+			days, _ := strconv.Atoi(values["health.old_after_days"]) //nolint:errcheck // test
+			return Live{OldAfter: time.Duration(days) * 24 * time.Hour}, nil
+		},
+	})
+	return a, &asked
+}
+
+// A setting is changed through a one-line form; the panel stays, shows it, and the app takes up what it uses.
+func TestSettingsChange(t *testing.T) {
+	a, asked := settingsApp(t)
+	a.press("ctrl+k", ",", "down", "enter", "ctrl+u", "90", "enter")
+	if !slices.Equal(*asked, []string{"health.old_after_days=90"}) || a.opts.OldAfter != 90*24*time.Hour {
+		t.Fatalf("asked %q, old after %v", *asked, a.opts.OldAfter)
+	}
+	if s := a.screen(); a.ov == nil || a.ov.kind != panelSettings || !strings.Contains(s, "health.old_after_days    90") || !strings.Contains(s, "Saved health.old_after_days") {
+		t.Errorf("after saving:\n%s", s)
+	}
+	a.press("up", "enter", "ctrl+u", "-1", "enter")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "want a whole number") {
+		t.Errorf("a value refused:\n%s", s)
+	}
+	a.press("ctrl+u", "enter")
+	if (*asked)[len(*asked)-1] != "history.keep=" || !strings.Contains(a.screen(), "Took history.keep out of the config file") {
+		t.Errorf("emptied: asked %q\n%s", *asked, a.screen())
+	}
+}
+
+// One set by the environment, or the vault's place, isn't changed from the app, and says why.
+func TestSettingsNotChanged(t *testing.T) {
+	a, asked := settingsApp(t)
+	a.press("ctrl+k", ",", "down", "down", "enter")
+	if s := a.screen(); a.form != nil || !strings.Contains(s, "set by SESH_TRASH_KEEP_DAYS") {
+		t.Errorf("one set by the environment:\n%s", s)
+	}
+	a.press("down", "enter")
+	if s := a.screen(); a.form != nil || !strings.Contains(s, "sesh init") || len(*asked) != 0 {
+		t.Errorf("the vault's place: asked %q\n%s", *asked, s)
 	}
 }

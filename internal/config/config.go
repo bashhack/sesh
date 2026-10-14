@@ -215,6 +215,24 @@ func Load(o Overrides) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	c, err := defaults(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.applyFile(); err != nil {
+		return nil, err
+	}
+	if err := c.applyEnv(); err != nil {
+		return nil, err
+	}
+	if err := c.applyFlags(o); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// defaults is the built-in settings, the config file at path to be read.
+func defaults(path string) (*Config, error) {
 	dbDefault, err := database.DefaultDBLocation()
 	if err != nil {
 		return nil, fmt.Errorf("resolve default database path: %w", err)
@@ -233,15 +251,6 @@ func Load(o Overrides) (*Config, error) {
 		HealthOldAfterDays: Setting[int]{Value: DefaultHealthOldAfterDays},
 	}
 	c.defaultKDF()
-	if err := c.applyFile(); err != nil {
-		return nil, err
-	}
-	if err := c.applyEnv(); err != nil {
-		return nil, err
-	}
-	if err := c.applyFlags(o); err != nil {
-		return nil, err
-	}
 	return c, nil
 }
 

@@ -110,17 +110,6 @@ func TestRunConfig_ReportsABrokenFile(t *testing.T) {
 	}
 }
 
-func TestDuration(t *testing.T) {
-	for d, want := range map[time.Duration]string{
-		30 * time.Second: "30s", 90 * time.Second: "1m30s", 10 * time.Minute: "10m",
-		8 * time.Hour: "8h", 90 * time.Minute: "1h30m", 0: "0 (off)",
-	} {
-		if got := duration(d); got != want {
-			t.Errorf("duration(%v) = %q, want %q", d, got, want)
-		}
-	}
-}
-
 func TestOpenSQLiteStore_ConfigFileAlone(t *testing.T) {
 	vaultPath := filepath.Join(t.TempDir(), "nested", "vault.db")
 	useConfigFile(t, "db_path = \""+vaultPath+"\"\n")

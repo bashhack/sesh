@@ -193,8 +193,13 @@ type Options struct {
 	// IsWeak says whether a secret typed is easy to guess.
 	IsWeak func([]byte) bool
 	// Generate makes a new password.
-	Generate   func() ([]byte, error)
-	Now        func() time.Time
+	Generate func() ([]byte, error)
+	Now      func() time.Time
+	// Settings are the config settings, for the settings panel; nil when
+	// there's none to show. SetSetting writes one to the config file (""
+	// takes it out) and says what the app now uses.
+	Settings   func() ([]Setting, error)
+	SetSetting func(key, value string) (Live, error)
 	ClearAfter time.Duration
 	// OldAfter is how long a secret can go unchanged before the health
 	// report calls it old; 0 doesn't check.
@@ -536,6 +541,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case historyMsg, trashMsg, doneMsg, healthMsg:
 		return m.actionResult(msg)
+	case settingsMsg:
+		return m.gotSettings(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"
