@@ -26,6 +26,9 @@ type Store struct {
 	// historyKeep is how many earlier secrets each entry keeps; 0 keeps
 	// none.
 	historyKeep int
+	// borrowed says the key is another store's (see Reader), which Close
+	// leaves open.
+	borrowed bool
 }
 
 // MaxSecretSize is the largest secret the store accepts. It applies however
@@ -180,7 +183,7 @@ func (s *Store) Fingerprint() ([sha256.Size]byte, error) {
 // Close releases the database connection and clears any cached key
 // material held by the key source.
 func (s *Store) Close() error {
-	if closer, ok := s.oracle.(interface{ Close() }); ok {
+	if closer, ok := s.oracle.(interface{ Close() }); ok && !s.borrowed {
 		closer.Close()
 	}
 	return s.db.Close()
@@ -200,15 +203,16 @@ func (s *Store) audit(eventType, entryID, detail string) {
 // Reader is the vault opened again, on its own connection, for a long read
 // (sesh doctor's checks) that would otherwise hold the one connection this
 // store has, and with it every other read and write, until it's done. It
-// shares this store's key, which its Close leaves open.
+// shares this store's key, as it is (so it still notices a master password
+// changed or an agent locked), which its Close leaves open. A vault file
+// gone from its place isn't made again.
 func (s *Store) Reader() (*Store, error) {
+	if info, err := os.Stat(s.path); err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("the vault is gone from %s", s.path)
+	}
 	db, err := openDB(s.path)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db, oracle: sharedOracle{s.oracle}, path: s.path, trashDays: s.trashDays, historyKeep: s.historyKeep}, nil
+	return &Store{db: db, oracle: s.oracle, path: s.path, trashDays: s.trashDays, historyKeep: s.historyKeep, borrowed: true}, nil
 }
-
-// sharedOracle is another store's key, which closing this one leaves open:
-// it has no Close.
-type sharedOracle struct{ CryptoOracle }

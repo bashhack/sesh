@@ -873,8 +873,34 @@ func TestUI_Checks(t *testing.T) {
 	}
 }
 
-// A master password changed while the checks run locks the app, as any other read would.
+// A master password changed since the app unlocked locks it when the checks run, rather than
+// calling every entry damaged; a vault moved away isn't made again.
 func TestUI_ChecksKeyChanged(t *testing.T) {
+	healthVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, stderr := rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("health-password-1234", "new-password-5678", "new-password-5678")); err != nil {
+		t.Fatalf("rotate: %v\n%s", err, stderr)
+	}
+	if c, err := u.Checks(); !errors.Is(err, tui.ErrLocked) {
+		t.Errorf("checks after the master password changed = %q, %v", c.Summary, err)
+	}
+	moved := store.Path() + ".moved"
+	if err := os.Rename(store.Path(), moved); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Checks(); err == nil || !strings.Contains(err.Error(), "the vault is gone") {
+		t.Errorf("checks with the vault moved away: %v", err)
+	}
+	if _, err := os.Stat(store.Path()); !os.IsNotExist(err) {
+		t.Errorf("a vault was made where the moved one was: %v", err)
+	}
 	if err := uiLocked(keyChangedError{}); !errors.Is(err, tui.ErrLocked) {
 		t.Errorf("uiLocked(keyChangedError) = %v", err)
 	}

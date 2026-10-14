@@ -84,6 +84,12 @@ func canAsk(app *App) bool {
 // checkSetup adds the setup rows to c, and returns what checks the vault:
 // its rows, or why it isn't checked.
 func checkSetup(c *doctorChecks, app *App) func(io.Writer) error {
+	return checkSetupOf(c, app, "")
+}
+
+// checkSetupOf is checkSetup for the vault at dbPath; "" is the one the
+// config names.
+func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) error {
 	cfgPath, _ := config.Path() //nolint:errcheck // shown only when known
 	cfg, err := settings()
 	if err != nil {
@@ -97,7 +103,9 @@ func checkSetup(c *doctorChecks, app *App) func(io.Writer) error {
 		c.row(markNone, "Config", "no file, so the defaults")
 	}
 
-	dbPath := cfg.DBPath.Value
+	if dbPath == "" {
+		dbPath = cfg.DBPath.Value
+	}
 	mat, matErr := database.ReadUnlockMaterial(dbPath)
 	switch {
 	case errors.Is(matErr, database.ErrNoVault):
@@ -804,10 +812,10 @@ func checkTouchID(c *doctorChecks, f *touchid.File, err error, id string) {
 // password. The run is recorded in the audit log, as sesh doctor's is.
 func doctorReport(app *App, store *database.Store) (tui.Checks, error) {
 	var c doctorChecks
-	c.section("Setup")
-	checkSetup(&c, app)
 	// The vault checked is the one open, wherever the config says now.
 	dbPath := store.Path()
+	c.section("Setup")
+	checkSetupOf(&c, app, dbPath)
 	c.section("Vault: " + tildePath(dbPath))
 	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
