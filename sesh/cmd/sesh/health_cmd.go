@@ -6,28 +6,22 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/health"
-	"github.com/bashhack/sesh/internal/hibp"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
-const healthUsage = `Usage: sesh health [--hibp <file or folder>] [--json]
+const healthUsage = `Usage: sesh health [--json]
 
 Checks the vault's passwords and API keys: passwords easy to guess, a
-secret used on more than one entry, secrets not changed in
-health.old_after_days (365 by default), and, with a downloaded copy of
-Have I Been Pwned's passwords, passwords seen in data breaches. Nothing is
-sent anywhere. Reading the secrets is one event in the audit log.
+secret used on more than one entry, and secrets not changed in
+health.old_after_days (365 by default). Reading the secrets is one event
+in the audit log.
 
-  --hibp    the Pwned Passwords download (one file, or its folder of ranges);
-            health.hibp_file in the config file sets it for every run
   --json    print the report as JSON`
 
 // runHealth checks the vault's secrets and prints what it found.
@@ -38,7 +32,6 @@ func runHealth(app *App, args []string) error {
 	}
 	fs := flag.NewFlagSet("health", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	breachFile := fs.String("hibp", "", "The Pwned Passwords download")
 	asJSON := fs.Bool("json", false, "Print the report as JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -50,40 +43,23 @@ func runHealth(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	path := cfg.HealthHIBPFile.Value
-	if *breachFile != "" {
-		// A flag's path may be relative, to where the command runs.
-		if path, err = filepath.Abs(*breachFile); strings.HasPrefix(*breachFile, "~") {
-			path, err = config.ResolvePath(*breachFile)
-		}
-		if err != nil {
-			return fmt.Errorf("--hibp %q: %w", *breachFile, err)
-		}
-	}
-	c := &health.Checker{Now: time.Now(), IsWeak: password.IsWeak, OldAfter: time.Duration(cfg.HealthOldAfterDays.Value) * 24 * time.Hour}
-	// The download is opened first, so one that's wrong is said before
-	// the vault is unlocked for nothing.
-	if path != "" {
-		p, err := hibp.Open(path)
-		if err != nil {
-			return err
-		}
-		defer p.Close() //nolint:errcheck // read only
-		c.Breaches = p
+	if err := requireVault(cfg.DBPath.Value, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
+		return err
 	}
 	store, err := openSQLiteStoreWith(cfg)
 	if err != nil {
 		return err
 	}
 	defer store.Close() //nolint:errcheck // read only, but for the audit event
+	c := &health.Checker{Now: time.Now(), IsWeak: password.IsWeak, OldAfter: time.Duration(cfg.HealthOldAfterDays.Value) * 24 * time.Hour}
 	report, err := checkHealth(store, c)
 	if err != nil {
 		return err
 	}
 	if *asJSON {
-		return writeHealthJSON(app.Stdout, &report, path != "", cfg.HealthOldAfterDays.Value)
+		return writeHealthJSON(app.Stdout, &report, cfg.HealthOldAfterDays.Value)
 	}
-	return writeHealth(app.Stdout, &report, path != "", cfg.HealthOldAfterDays.Value)
+	return writeHealth(app.Stdout, &report, cfg.HealthOldAfterDays.Value)
 }
 
 // checkHealth reads every secret in store into c, and says what it found.
@@ -99,7 +75,7 @@ func checkHealth(store *database.Store, c *health.Checker) (health.Report, error
 
 // writeHealth prints the report as text: each kind of problem, the
 // entries with it, and how to fix them.
-func writeHealth(w io.Writer, r *health.Report, breaches bool, oldDays int) error {
+func writeHealth(w io.Writer, r *health.Report, oldDays int) error {
 	var b strings.Builder
 	checked := countOf(int64(r.Checked), "password or API key")
 	if r.Checked != 1 {
@@ -135,23 +111,14 @@ func writeHealth(w io.Writer, r *health.Report, breaches bool, oldDays int) erro
 	for _, a := range r.Old {
 		fmt.Fprintf(&b, "  %-40s changed %s\n", a.Key, a.Changed.Local().Format("2006-01-02"))
 	}
-	section("Breached", len(r.Breached), "seen in data breaches, as Have I Been Pwned counts them")
-	for _, x := range r.Breached {
-		fmt.Fprintf(&b, "  %-40s seen %s\n", x.Key, countOf(int64(x.Count), "time"))
+	section("Couldn't check", len(r.Unreadable), "the secret doesn't decrypt; sesh doctor says more")
+	for _, k := range r.Unreadable {
+		fmt.Fprintf(&b, "  %s\n", k)
 	}
-	if r.Problems() > 0 {
+	if len(r.Weak)+reused+len(r.Old) > 0 {
 		b.WriteString("\nTo replace a password: sesh edit <id> --generate (or --secret to type one)\n")
 	}
-	switch {
-	case !breaches:
-		b.WriteString(`
-Breaches weren't checked. To check them, download Have I Been Pwned's
-passwords (about 100 GB) with their downloader, which needs the .NET 10 SDK:
-  dotnet tool install --global haveibeenpwned-downloader
-  haveibeenpwned-downloader pwnedpasswords --single
-then: sesh health --hibp pwnedpasswords.txt   (or set health.hibp_file)
-`)
-	case oldDays == 0:
+	if oldDays == 0 {
 		b.WriteString("\nAge wasn't checked: health.old_after_days is 0.\n")
 	}
 	_, err := io.WriteString(w, b.String())
@@ -160,13 +127,12 @@ then: sesh health --hibp pwnedpasswords.txt   (or set health.hibp_file)
 
 // healthJSON is the report as --json prints it.
 type healthJSON struct {
-	Weak            []string        `json:"weak"`
-	Reused          [][]string      `json:"reused"`
-	Old             []healthOldJSON `json:"old"`
-	Breached        []healthBreach  `json:"breached"`
-	Checked         int             `json:"checked"`
-	OldAfterDays    int             `json:"old_after_days"`
-	BreachesChecked bool            `json:"breaches_checked"`
+	Weak         []string        `json:"weak"`
+	Reused       [][]string      `json:"reused"`
+	Old          []healthOldJSON `json:"old"`
+	Unreadable   []string        `json:"unreadable"`
+	Checked      int             `json:"checked"`
+	OldAfterDays int             `json:"old_after_days"`
 }
 
 type healthOldJSON struct {
@@ -174,14 +140,7 @@ type healthOldJSON struct {
 	ID      string    `json:"id"`
 }
 
-type healthBreach struct {
-	ID    string `json:"id"`
-	Count int    `json:"count"`
-}
-
-func writeHealthJSON(w io.Writer, r *health.Report, breaches bool, oldDays int) error {
-	out := healthJSON{Checked: r.Checked, OldAfterDays: oldDays, BreachesChecked: breaches,
-		Weak: []string{}, Reused: [][]string{}, Old: []healthOldJSON{}, Breached: []healthBreach{}}
+func writeHealthJSON(w io.Writer, r *health.Report, oldDays int) error {
 	ids := func(keys []vault.Key) []string {
 		s := make([]string, len(keys))
 		for i, k := range keys {
@@ -189,15 +148,13 @@ func writeHealthJSON(w io.Writer, r *health.Report, breaches bool, oldDays int) 
 		}
 		return s
 	}
-	out.Weak = append(out.Weak, ids(r.Weak)...)
+	out := healthJSON{Checked: r.Checked, OldAfterDays: oldDays, Weak: ids(r.Weak), Unreadable: ids(r.Unreadable),
+		Reused: [][]string{}, Old: []healthOldJSON{}}
 	for _, g := range r.Reused {
 		out.Reused = append(out.Reused, ids(g))
 	}
 	for _, a := range r.Old {
 		out.Old = append(out.Old, healthOldJSON{ID: a.Key.String(), Changed: a.Changed.UTC()})
-	}
-	for _, x := range r.Breached {
-		out.Breached = append(out.Breached, healthBreach{ID: x.Key.String(), Count: x.Count})
 	}
 	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

@@ -72,11 +72,6 @@ func writeConfig(w io.Writer, cfg *config.Config) error {
 		backupSource = "default: next to the vault"
 	}
 	fmt.Fprintf(&b, "%-25s%s\n%-25s(%s)\n", "backup.dir", cfg.BackupFolder(), "", backupSource)
-	hibp, hibpSource := cfg.HealthHIBPFile.Value, sourceOf(cfg.HealthHIBPFile.Source, cfg.HealthHIBPFile.Origin)
-	if hibp == "" {
-		hibp, hibpSource = "none", "default: passwords aren't checked against breaches"
-	}
-	fmt.Fprintf(&b, "%-25s%s\n%-25s(%s)\n", "health.hibp_file", hibp, "", hibpSource)
 
 	_, err := io.WriteString(w, b.String())
 	return err

@@ -159,7 +159,6 @@ dir = "~/Backups/sesh"                  # where they go (default: a backups fold
 
 [health]                                # what sesh health checks
 old_after_days = 365                    # a password or API key unchanged this long is old; 0 doesn't check
-hibp_file = "~/hibp/pwnedpasswords.txt" # Have I Been Pwned's passwords, downloaded, to check against
 
 [master_password]                       # how hard your master password is to guess-check (Argon2id)
 memory = "256MiB"                       # memory each check takes: 19MiB to 1GiB
@@ -212,8 +211,6 @@ db_path                  /Users/me/vaults/sesh.db
                          (config file)
 backup.dir               /Users/me/vaults/backups
                          (default: next to the vault)
-health.hibp_file         none
-                         (default: passwords aren't checked against breaches)
 ```
 
 ## Configuration Options
@@ -299,7 +296,6 @@ health.hibp_file         none
 | `SESH_TRASH_KEEP_DAYS` | Days a deleted entry stays in the trash; `0` keeps none, so deleting is for good (config: `trash.keep_days`) | `30` |
 | `SESH_HISTORY_KEEP` | How many earlier secrets each entry keeps, 0 to 1000; `0` keeps no new ones (config: `history.keep`) | `10` |
 | `SESH_HEALTH_OLD_AFTER_DAYS` | Days a password or API key can go unchanged before `sesh health` calls it old; `0` doesn't check (config: `health.old_after_days`) | `365` |
-| `SESH_HEALTH_HIBP_FILE` | Have I Been Pwned's passwords, downloaded, for `sesh health` to check against (config: `health.hibp_file`) | none |
 | `SESH_KDF_MEMORY` | Memory for each master password check, such as `256MiB` (config: `master_password.memory`) | `256MiB` |
 | `SESH_KDF_TIME` | Passes over that memory (config: `master_password.time`) | `3` |
 | `SESH_KDF_THREADS` | Threads (config: `master_password.threads`) | `4` |
@@ -1135,8 +1131,9 @@ To replace a password: sesh edit <id> --generate (or --secret to type one)
 - **Weak:** passwords that are easy to guess, rated as `sesh` rates a new one (zxcvbn, with the entry's name and username counted against it). API keys and TOTP keys aren't rated, since people don't choose them.
 - **Reused:** a password or API key that's the same on more than one entry, so one leak opens them all.
 - **Old:** a password or API key whose secret hasn't changed in `health.old_after_days` (365 by default; `0` doesn't check). Editing anything else about an entry doesn't count as a change.
-- **Breached:** passwords seen in data breaches, checked against a copy of Have I Been Pwned's Pwned Passwords on your own disk, so nothing about them leaves your machine. Download it with Have I Been Pwned's [downloader](https://github.com/HaveIBeenPwned/PwnedPasswordsDownloader), which needs the .NET 10 SDK: `dotnet tool install --global haveibeenpwned-downloader`, then `haveibeenpwned-downloader pwnedpasswords --single` (the SHA-1 download, not `--ntlm`). It's about 100 GB: one range held 2,509 hashes in October 2026, and there are 1,048,576 ranges. One file (`--single`) or the folder of ranges it makes without it, either works. Then run `sesh health --hibp pwnedpasswords.txt`, or set `health.hibp_file`. Without it, the report says breaches weren't checked.
+- **Couldn't check:** an entry whose secret doesn't decrypt is listed, not checked; `sesh doctor` says more about it.
 - **Reading the secrets** is one event in the audit log ("Health check: read 41 secrets"), not one per entry. Secure notes and TOTP keys aren't read.
+- **Breached passwords aren't checked.** The ways to check would be Have I Been Pwned's file of every breached password's hash, about 100 GB to download, or its online lookup, which sends the start of each password's hash; sesh does neither.
 - `--json` prints the report for scripts. `sesh health` exits 0 whatever it finds, as `sesh doctor`'s warnings do.
 
 ### Editing an entry (`sesh edit`)

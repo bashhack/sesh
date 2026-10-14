@@ -1,6 +1,6 @@
 // Package health finds what's wrong with the secrets in a vault: weak
-// passwords, secrets used on more than one entry, ones not changed in a
-// long time, and passwords seen in breaches.
+// passwords, secrets used on more than one entry, and ones not changed in
+// a long time.
 package health
 
 import (
@@ -12,16 +12,9 @@ import (
 	"github.com/bashhack/sesh/internal/vault"
 )
 
-// Breaches says how many times a password was seen in breaches.
-type Breaches interface {
-	Count(password []byte) (int, error)
-}
-
 // Checker checks entries one at a time, as their secrets are read, and
 // keeps no secret: a secret used again is found by its SHA-256 alone.
 type Checker struct {
-	// Breaches looks passwords up; nil checks none.
-	Breaches Breaches
 	// IsWeak says whether a password is easy to guess, given words it
 	// shouldn't lean on; nil checks none.
 	IsWeak func(pw []byte, hints ...string) bool
@@ -36,11 +29,11 @@ type Checker struct {
 
 // Report is what a check found. Each list is in name order.
 type Report struct {
-	Weak     []vault.Key
-	Reused   [][]vault.Key // the entries sharing each secret
-	Old      []Aged
-	Breached []Breached
-	Checked  int // the secrets checked
+	Weak       []vault.Key
+	Reused     [][]vault.Key // the entries sharing each secret
+	Old        []Aged
+	Unreadable []vault.Key // entries whose secret doesn't decrypt, so weren't checked
+	Checked    int         // the secrets checked
 }
 
 // Aged is an entry whose secret is old: when it last changed.
@@ -49,15 +42,9 @@ type Aged struct {
 	Key     vault.Key
 }
 
-// Breached is a password seen in breaches, and how many times.
-type Breached struct {
-	Key   vault.Key
-	Count int
-}
-
 // Problems is how many things the report found.
 func (r *Report) Problems() int {
-	n := len(r.Weak) + len(r.Old) + len(r.Breached)
+	n := len(r.Weak) + len(r.Old) + len(r.Unreadable)
 	for _, g := range r.Reused {
 		n += len(g)
 	}
@@ -71,14 +58,24 @@ var Kinds = []vault.Kind{vault.KindPassword, vault.KindAPIKey}
 
 func checked(k vault.Kind) bool { return slices.Contains(Kinds, k) }
 
-// Add checks e, whose secret is secret. Only passwords are rated and
-// looked up in breaches; passwords and API keys are checked for reuse and
-// age.
-func (c *Checker) Add(e *vault.Entry, secret []byte) error {
-	if !checked(e.Kind) || len(secret) == 0 {
+// Add checks e, whose secret is secret, or which couldn't be read (err),
+// as EachSecret hands it over. Only passwords are rated; passwords and API
+// keys are checked for reuse and age. An empty password is weak.
+func (c *Checker) Add(e *vault.Entry, secret []byte, err error) error {
+	if !checked(e.Kind) {
+		return nil
+	}
+	if err != nil {
+		c.r.Unreadable = append(c.r.Unreadable, e.Key)
 		return nil
 	}
 	c.r.Checked++
+	if len(secret) == 0 {
+		if e.Kind == vault.KindPassword {
+			c.r.Weak = append(c.r.Weak, e.Key)
+		}
+		return nil
+	}
 	if c.seen == nil {
 		c.seen = map[[sha256.Size]byte][]vault.Key{}
 	}
@@ -92,15 +89,6 @@ func (c *Checker) Add(e *vault.Entry, secret []byte) error {
 	}
 	if c.IsWeak != nil && c.IsWeak(secret, e.Service, e.Username) {
 		c.r.Weak = append(c.r.Weak, e.Key)
-	}
-	if c.Breaches != nil {
-		n, err := c.Breaches.Count(secret)
-		if err != nil {
-			return err
-		}
-		if n > 0 {
-			c.r.Breached = append(c.r.Breached, Breached{Key: e.Key, Count: n})
-		}
 	}
 	return nil
 }
@@ -122,7 +110,7 @@ func (c *Checker) Report() Report {
 	slices.SortFunc(r.Weak, byName)
 	r.Old = slices.Clone(r.Old)
 	slices.SortFunc(r.Old, func(a, b Aged) int { return byName(a.Key, b.Key) })
-	r.Breached = slices.Clone(r.Breached)
-	slices.SortFunc(r.Breached, func(a, b Breached) int { return byName(a.Key, b.Key) })
+	r.Unreadable = slices.Clone(r.Unreadable)
+	slices.SortFunc(r.Unreadable, byName)
 	return r
 }

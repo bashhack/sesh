@@ -114,9 +114,6 @@ type Config struct {
 	// HealthOldAfterDays is how many days a secret can go unchanged before
 	// sesh health calls it old; 0 doesn't check.
 	HealthOldAfterDays Setting[int]
-	// HealthHIBPFile is a downloaded copy of Have I Been Pwned's Pwned
-	// Passwords that sesh health looks passwords up in; "" checks none.
-	HealthHIBPFile Setting[string]
 	// KDFMemory (KiB), KDFTime and KDFThreads are the Argon2id settings a
 	// new master password key, or an encrypted export, is derived with.
 	KDFMemory  Setting[uint32]
@@ -160,7 +157,6 @@ const (
 	EnvTrashKeepDays      = "SESH_TRASH_KEEP_DAYS"
 	EnvHistoryKeep        = "SESH_HISTORY_KEEP"
 	EnvHealthOldAfterDays = "SESH_HEALTH_OLD_AFTER_DAYS"
-	EnvHealthHIBPFile     = "SESH_HEALTH_HIBP_FILE"
 )
 
 // fileConfig is the config file's shape. Durations are strings such as
@@ -177,10 +173,6 @@ type fileConfig struct {
 		IdleTimeout string `toml:"idle_timeout"`
 		MaxLifetime string `toml:"max_lifetime"`
 	} `toml:"agent"`
-	Health struct {
-		HIBPFile     string `toml:"hibp_file"`
-		OldAfterDays int64  `toml:"old_after_days"`
-	} `toml:"health"`
 	MasterPassword struct {
 		Memory  string `toml:"memory"`
 		Time    int64  `toml:"time"`
@@ -195,6 +187,9 @@ type fileConfig struct {
 	History struct {
 		Keep int64 `toml:"keep"`
 	} `toml:"history"`
+	Health struct {
+		OldAfterDays int64 `toml:"old_after_days"`
+	} `toml:"health"`
 }
 
 // Path returns the config file's location: $XDG_CONFIG_HOME/sesh/config.toml
@@ -331,11 +326,6 @@ func (c *Config) applyFile() error {
 			return err
 		}
 	}
-	if in("health.hibp_file") {
-		if err := setPath(&c.HealthHIBPFile, f.Health.HIBPFile, FromFile, from("health.hibp_file")); err != nil {
-			return err
-		}
-	}
 	if in("master_password.memory") {
 		if err := setKDFMemory(&c.KDFMemory, f.MasterPassword.Memory, FromFile, from("master_password.memory")); err != nil {
 			return err
@@ -385,11 +375,6 @@ func (c *Config) applyEnv() error {
 	}
 	if v, ok := os.LookupEnv(EnvBackupDir); ok && v != "" {
 		if err := setPath(&c.BackupDir, v, FromEnv, EnvBackupDir); err != nil {
-			return err
-		}
-	}
-	if v, ok := os.LookupEnv(EnvHealthHIBPFile); ok && v != "" {
-		if err := setPath(&c.HealthHIBPFile, v, FromEnv, EnvHealthHIBPFile); err != nil {
 			return err
 		}
 	}

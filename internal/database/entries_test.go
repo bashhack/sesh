@@ -209,12 +209,20 @@ func TestEachSecret(t *testing.T) {
 	}
 	got := map[string]string{}
 	var held [][]byte
-	n, err := s.EachSecret("Health check", []vault.Kind{vault.KindPassword, vault.KindAPIKey}, func(e *vault.Entry, secret []byte) error {
+	// One entry's secret damaged: handed over with its error, not stopping the rest.
+	if _, err := s.db.Exec(`UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233' WHERE service = 'b'`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.EachSecret("Health check", []vault.Kind{vault.KindPassword, vault.KindAPIKey}, func(e *vault.Entry, secret []byte, err error) error {
+		if err != nil {
+			got[e.Service] = "unreadable: " + err.Error()
+			return nil
+		}
 		got[e.Service] = string(secret)
 		held = append(held, secret)
 		return nil
 	})
-	if err != nil || n != 2 || got["a"] != "secret of a" || got["b"] != "secret of b" || got["c"] != "" {
+	if err != nil || n != 1 || got["a"] != "secret of a" || !strings.HasPrefix(got["b"], "unreadable: ") || got["c"] != "" {
 		t.Fatalf("EachSecret = %d, %v, %v", n, err, got)
 	}
 	for _, h := range held {
@@ -232,7 +240,7 @@ func TestEachSecret(t *testing.T) {
 			reads = append(reads, e.EntryID+"|"+e.Detail)
 		}
 	}
-	if len(reads) != 1 || reads[0] != "|Health check: read 2 secrets" {
+	if len(reads) != 1 || reads[0] != "|Health check: read 1 secret" {
 		t.Errorf("audit reads = %q", reads)
 	}
 }

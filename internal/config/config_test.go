@@ -18,7 +18,7 @@ func isolate(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
-	for _, k := range []string{EnvDBPath, EnvClipboardTimeout, EnvAgentIdleTimeout, EnvAgentMaxLifetime, EnvAuditRetentionDays, EnvKDFMemory, EnvKDFTime, EnvKDFThreads, EnvBackupDir, EnvBackupEveryDays, EnvBackupKeep} {
+	for _, k := range []string{EnvDBPath, EnvClipboardTimeout, EnvAgentIdleTimeout, EnvAgentMaxLifetime, EnvAuditRetentionDays, EnvKDFMemory, EnvKDFTime, EnvKDFThreads, EnvBackupDir, EnvBackupEveryDays, EnvBackupKeep, EnvTrashKeepDays, EnvHistoryKeep, EnvHealthOldAfterDays} {
 		t.Setenv(k, "")
 	}
 	return filepath.Join(home, "xdg", "sesh", "config.toml")
@@ -162,6 +162,9 @@ func TestLoad_Rejects(t *testing.T) {
 		"negative retention":                {file: "[audit]\nretention_days = -1\n", wantSub: "audit.retention_days in"},
 		"retention too long":                {env: map[string]string{EnvAuditRetentionDays: "36501"}, wantSub: `SESH_AUDIT_RETENTION_DAYS = "36501": want a whole number of days from 0 (keep everything) to 36500`},
 		"backup keep 0":                     {file: "[backup]\nkeep = 0\n", wantSub: `backup.keep in`},
+		"old after negative days":           {file: "[health]\nold_after_days = -1\n", wantSub: `health.old_after_days in`},
+		"old after too many days":           {env: map[string]string{EnvHealthOldAfterDays: "36501"}, wantSub: `SESH_HEALTH_OLD_AFTER_DAYS = "36501": want a whole number of days from 0 (not checked) to 36500`},
+		"unknown health key":                {file: "[health]\nhibp_file = \"x\"\n", wantSub: "unknown setting health.hibp_file"},
 		"backup keep too many":              {env: map[string]string{EnvBackupKeep: "1001"}, wantSub: `SESH_BACKUP_KEEP = "1001": want a whole number of backups to keep, from 1 to 1000`},
 		"backup every negative":             {env: map[string]string{EnvBackupEveryDays: "-1"}, wantSub: `SESH_BACKUP_EVERY_DAYS = "-1": want a whole number of days from 0 (no automatic backups)`},
 		"backup dir relative":               {file: "[backup]\ndir = \"backups\"\n", wantSub: "backup.dir in"},
@@ -233,5 +236,21 @@ func TestLoad_BackupSettings(t *testing.T) {
 	}
 	if c.BackupKeep.Value != 3 || c.BackupKeep.Source != FromEnv || c.BackupFolder() != filepath.Join(home, "other") {
 		t.Errorf("from the environment: keep %+v, in %s", c.BackupKeep, c.BackupFolder())
+	}
+}
+
+func TestLoad_HealthSettings(t *testing.T) {
+	path := isolate(t)
+	c, err := Load(Overrides{})
+	if err != nil || c.HealthOldAfterDays.Value != DefaultHealthOldAfterDays {
+		t.Fatalf("default = %+v, %v", c.HealthOldAfterDays, err)
+	}
+	writeConfig(t, path, "[health]\nold_after_days = 0\n")
+	if c, err = Load(Overrides{}); err != nil || c.HealthOldAfterDays.Value != 0 || c.HealthOldAfterDays.Source != FromFile {
+		t.Errorf("from the file = %+v, %v", c.HealthOldAfterDays, err)
+	}
+	t.Setenv(EnvHealthOldAfterDays, "90")
+	if c, err = Load(Overrides{}); err != nil || c.HealthOldAfterDays.Value != 90 || c.HealthOldAfterDays.Source != FromEnv {
+		t.Errorf("from the environment = %+v, %v", c.HealthOldAfterDays, err)
 	}
 }

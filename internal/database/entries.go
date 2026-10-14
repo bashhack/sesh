@@ -462,8 +462,10 @@ func (s *Store) deleteMany(keys []vault.Key, purge bool) error {
 // EachSecret calls each with every entry of kinds and its secret,
 // decrypted, which it zeroes after each call, and records the reads as one
 // audit event: "<reading>: read N secrets". Other kinds' secrets aren't
-// read. It stops at the first error from each.
-func (s *Store) EachSecret(reading string, kinds []vault.Kind, each func(e *vault.Entry, secret []byte) error) (n int, err error) {
+// read. An entry whose secret doesn't decrypt (ErrDecrypt) is handed to
+// each with that error and no secret; one deleted meanwhile is passed
+// over. Any other error, or one from each, stops it.
+func (s *Store) EachSecret(reading string, kinds []vault.Kind, each func(e *vault.Entry, secret []byte, err error) error) (n int, err error) {
 	entries, err := s.List(&vault.Filter{})
 	if err != nil {
 		return 0, err
@@ -482,11 +484,19 @@ func (s *Store) EachSecret(reading string, kinds []vault.Kind, each func(e *vaul
 			continue
 		}
 		secret, err := s.get(entries[i].Key, "")
-		if err != nil {
+		switch {
+		case errors.Is(err, vault.ErrNotFound):
+			continue
+		case errors.Is(err, ErrDecrypt):
+			if err := each(&entries[i], nil, err); err != nil {
+				return n, err
+			}
+			continue
+		case err != nil:
 			return n, err
 		}
 		n++
-		err = each(&entries[i], secret)
+		err = each(&entries[i], secret, nil)
 		secure.SecureZeroBytes(secret)
 		if err != nil {
 			return n, err

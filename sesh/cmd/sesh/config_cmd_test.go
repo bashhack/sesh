@@ -20,7 +20,7 @@ func useConfigFile(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	for _, k := range []string{config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays, config.EnvBackupEveryDays, config.EnvBackupKeep, config.EnvBackupDir, config.EnvTrashKeepDays, config.EnvHistoryKeep} {
+	for _, k := range []string{config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays, config.EnvBackupEveryDays, config.EnvBackupKeep, config.EnvBackupDir, config.EnvTrashKeepDays, config.EnvHistoryKeep, config.EnvHealthOldAfterDays} {
 		t.Setenv(k, "")
 	}
 	path := filepath.Join(dir, "sesh", "config.toml")

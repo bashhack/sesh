@@ -10,22 +10,20 @@ import (
 	"github.com/bashhack/sesh/internal/vault"
 )
 
-// breaches is a made-up breach list.
-type breaches map[string]int
-
-func (b breaches) Count(pw []byte) (int, error) {
-	if string(pw) == "unreadable" {
-		return 0, errors.New("the download is missing a range")
-	}
-	return b[string(pw)], nil
-}
-
 func key(kind vault.Kind, service string) vault.Key { return vault.Key{Kind: kind, Service: service} }
+
+// names are keys' services, in order.
+func names(keys []vault.Key) (out []string) {
+	for _, k := range keys {
+		out = append(out, k.Service)
+	}
+	return out
+}
 
 // Each check finds what it should, and only for the kinds it covers.
 func TestChecks(t *testing.T) {
 	now := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
-	c := &Checker{Now: now, OldAfter: 365 * 24 * time.Hour, IsWeak: password.IsWeak, Breaches: breaches{"password1": 2_000_000, "hunter2": 0}}
+	c := &Checker{Now: now, OldAfter: 365 * 24 * time.Hour, IsWeak: password.IsWeak}
 	recent, old := now.Add(-24*time.Hour), now.AddDate(-2, 0, 0)
 	for _, x := range []struct {
 		secret string
@@ -38,19 +36,18 @@ func TestChecks(t *testing.T) {
 		{"JBSWY3DPEHPK3PXP", vault.Entry{Key: key(vault.KindTOTP, "code"), UpdatedAt: old}},
 		{"password1", vault.Entry{Key: key(vault.KindNote, "wifi"), UpdatedAt: old}},
 		{"github", vault.Entry{Key: key(vault.KindPassword, "github"), UpdatedAt: recent}},
+		{"", vault.Entry{Key: key(vault.KindPassword, "blank"), UpdatedAt: recent}},
 	} {
-		if err := c.Add(&x.e, []byte(x.secret)); err != nil {
+		if err := c.Add(&x.e, []byte(x.secret), nil); err != nil {
 			t.Fatal(err)
 		}
 	}
-	r := c.Report()
-	names := func(keys []vault.Key) (out []string) {
-		for _, k := range keys {
-			out = append(out, k.Service)
-		}
-		return out
+	damaged := vault.Entry{Key: key(vault.KindPassword, "damaged")}
+	if err := c.Add(&damaged, nil, errors.New("doesn't decrypt")); err != nil {
+		t.Fatal(err)
 	}
-	if got := names(r.Weak); !slices.Equal(got, []string{"bank", "github", "shop"}) {
+	r := c.Report()
+	if got := names(r.Weak); !slices.Equal(got, []string{"bank", "blank", "github", "shop"}) {
 		t.Errorf("weak = %q", got)
 	}
 	if len(r.Reused) != 1 || !slices.Equal(names(r.Reused[0]), []string{"ci", "bank", "shop"}) {
@@ -63,26 +60,22 @@ func TestChecks(t *testing.T) {
 	if !slices.Equal(oldNames, []string{"ci", "mail"}) {
 		t.Errorf("old = %q", oldNames)
 	}
-	if len(r.Breached) != 2 || r.Breached[0].Key.Service != "bank" || r.Breached[0].Count != 2_000_000 {
-		t.Errorf("breached = %+v", r.Breached)
+	if !slices.Equal(names(r.Unreadable), []string{"damaged"}) {
+		t.Errorf("unreadable = %v", r.Unreadable)
 	}
-	if r.Checked != 5 || r.Problems() != 3+3+2+2 {
+	if r.Checked != 6 || r.Problems() != 4+3+2+1 {
 		t.Errorf("checked %d, problems %d", r.Checked, r.Problems())
 	}
 }
 
-// Checks left off find nothing; a breach list that can't be read stops the check.
+// Checks left off find nothing.
 func TestChecksOff(t *testing.T) {
 	c := &Checker{Now: time.Now()}
 	e := vault.Entry{Key: key(vault.KindPassword, "a"), UpdatedAt: time.Now().AddDate(-10, 0, 0)}
-	if err := c.Add(&e, []byte("password1")); err != nil {
+	if err := c.Add(&e, []byte("password1"), nil); err != nil {
 		t.Fatal(err)
 	}
 	if r := c.Report(); r.Problems() != 0 || r.Checked != 1 {
 		t.Errorf("with every check off: %+v", r)
-	}
-	c = &Checker{Now: time.Now(), Breaches: breaches{}}
-	if err := c.Add(&e, []byte("unreadable")); err == nil {
-		t.Error("a breach lookup's error was dropped")
 	}
 }
