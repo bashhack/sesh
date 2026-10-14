@@ -297,3 +297,97 @@ func TestSameSecretKeepsUpdateTime(t *testing.T) {
 		})
 	}
 }
+
+// openCountingOracle counts seals and openings, and runs onOpen (once) as the first opening starts.
+type openCountingOracle struct {
+	CryptoOracle
+	onOpen         func()
+	sealed, opened int
+}
+
+func (o *openCountingOracle) EncryptEntry(plain, aad []byte) ([]byte, []byte, error) {
+	o.sealed++
+	return o.CryptoOracle.EncryptEntry(plain, aad)
+}
+
+func (o *openCountingOracle) DecryptEntry(data, salt, aad []byte) ([]byte, error) {
+	o.opened++
+	if f := o.onOpen; f != nil {
+		o.onOpen = nil
+		f()
+	}
+	return o.CryptoOracle.DecryptEntry(data, salt, aad)
+}
+
+// The same secret again isn't sealed again; a time given is used; created_at stays too;
+// a secret another command stores in between isn't dated by what it replaced.
+func TestSameSecretDetails(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	if err := s.Put(k, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	then := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	if _, err := s.db.Exec(`UPDATE entries SET created_at = ?, updated_at = ? WHERE service = 'bank'`, then, then); err != nil {
+		t.Fatal(err)
+	}
+	o := &openCountingOracle{CryptoOracle: s.oracle}
+	s.oracle = o
+	if err := s.Save(&vault.Entry{Key: k}, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.Lookup(k)
+	if err != nil || o.sealed != 0 || o.opened != 1 || !e.CreatedAt.UTC().Equal(then) || !e.UpdatedAt.UTC().Equal(then) {
+		t.Errorf("saved the same: sealed %d, opened %d, times %v %v, %v", o.sealed, o.opened, e.CreatedAt, e.UpdatedAt, err)
+	}
+	given := time.Date(2019, 5, 5, 0, 0, 0, 0, time.UTC)
+	if err := s.Save(&vault.Entry{Key: k, UpdatedAt: given}, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := s.Lookup(k); err != nil || !e.UpdatedAt.UTC().Equal(given) {
+		t.Errorf("a time given = %v, %v", e.UpdatedAt, err)
+	}
+	// Another command stores "two" while this one compares: the write is newer than 2019.
+	o.onOpen = func() {
+		data, salt, err := o.CryptoOracle.EncryptEntry([]byte("two"), entryAAD(k))
+		if err == nil {
+			_, err = s.db.Exec(`UPDATE entries SET encrypted_data = ?, salt = ? WHERE service = 'bank'`, data, salt)
+		}
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	if err := s.Put(k, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := s.Lookup(k); err != nil || e.UpdatedAt.UTC().Equal(given) {
+		t.Errorf("the same secret stored over another's: updated %v, %v", e.UpdatedAt, err)
+	}
+}
+
+// An edit to the same secret with a rename opens the secret once; a damaged secret is still replaced.
+func TestEditSameSecretOpensOnce(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	if err := s.Put(k, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	o := &openCountingOracle{CryptoOracle: s.oracle}
+	s.oracle = o
+	to := vault.Key{Kind: vault.KindPassword, Service: "bank2"}
+	if _, err := s.Edit(k, EntryEdit{To: &to, Secret: []byte("one")}); err != nil {
+		t.Fatal(err)
+	}
+	if o.opened != 1 {
+		t.Errorf("a rename with the same secret opened it %d times", o.opened)
+	}
+	if _, err := s.db.Exec(`UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233' WHERE service = 'bank2'`); err != nil {
+		t.Fatal(err)
+	}
+	if what, err := s.Edit(to, EntryEdit{Secret: []byte("one")}); err != nil || !strings.Contains(what, "secret changed") {
+		t.Errorf("replacing a damaged secret = %q, %v", what, err)
+	}
+	if got, err := s.Get(to); err != nil || string(got) != "one" {
+		t.Errorf("after: %q, %v", got, err)
+	}
+}

@@ -169,13 +169,13 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if err != nil {
 		return err
 	}
-	// A secret it replaces is kept in the entry's history, sealed here,
-	// outside the transaction, as Edit's sealing is.
-	// The write then checks the entry is as read: absent, or with that
-	// secret, so another command's store in between isn't replaced
-	// without being kept.
-	// An entry stored over with the secret it has keeps its update time,
-	// which says when its secret last changed.
+	// With history kept, a secret it replaces is kept there, sealed here,
+	// outside the transaction, as Edit's sealing is, and the write checks
+	// the entry is as read: absent, or with that secret, so another
+	// command's store in between isn't replaced without being kept.
+	// An entry stored over with the secret it has keeps its times, which
+	// say when its secret last changed; the write keeps them only while
+	// its secret is still the one compared.
 	var old *oldSecret
 	var data, oldSalt []byte
 	keeping, existed, same := s.historyKeep > 0, false, false
@@ -198,15 +198,26 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 			return err
 		}
 	}
+	if same {
+		// Times that don't read (damage) aren't kept: this write mends them.
+		var created, updated time.Time
+		if err := s.db.QueryRow(`SELECT created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&created, &updated); err != nil {
+			same = false
+		}
+	}
 	var imported *importedHistory
 	if keeping && len(earlier) > 0 {
 		if imported, err = s.sealEarlier(e.Key, secret, data, oldSalt, old, earlier); err != nil {
 			return err
 		}
 	}
-	encData, salt, err := s.oracle.EncryptEntry(secret, entryAAD(e.Key))
-	if err != nil {
-		return fmt.Errorf("encrypt %s: %w", e.Key, err)
+	// The secret it has is kept as it's sealed: sealing it again would
+	// change nothing but cost a key derivation.
+	encData, salt := data, oldSalt
+	if !same {
+		if encData, salt, err = s.oracle.EncryptEntry(secret, entryAAD(e.Key)); err != nil {
+			return fmt.Errorf("encrypt %s: %w", e.Key, err)
+		}
 	}
 	var sd sealedDetails
 	if d != nil {
@@ -222,12 +233,27 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if updated.IsZero() {
 		updated = now
 	}
+	// With the same secret and no times given, the entry keeps its own,
+	// so long as its secret is still the one compared: another command's
+	// write in between (unchecked without history) makes these new times.
 	onConflict := `encrypted_data = excluded.encrypted_data, salt = excluded.salt`
-	if !same || !e.UpdatedAt.IsZero() {
+	var keepTimes []any
+	keepTime := func(col string) string {
+		keepTimes = append(keepTimes, data)
+		return `, ` + col + ` = CASE WHEN entries.encrypted_data = ? THEN entries.` + col + ` ELSE excluded.` + col + ` END`
+	}
+	if same && e.UpdatedAt.IsZero() {
+		onConflict += keepTime("updated_at")
+	} else {
 		onConflict += `, updated_at = excluded.updated_at`
 	}
 	if whole {
-		onConflict += `, settings = excluded.settings, folder = excluded.folder, created_at = excluded.created_at`
+		onConflict += `, settings = excluded.settings, folder = excluded.folder`
+		if same && e.CreatedAt.IsZero() {
+			onConflict += keepTime("created_at")
+		} else {
+			onConflict += `, created_at = excluded.created_at`
+		}
 	}
 	if d != nil {
 		onConflict += `, url = excluded.url, details = excluded.details, sealed_details = excluded.sealed_details, details_salt = excluded.details_salt`
@@ -256,7 +282,7 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (kind, service, username) DO UPDATE SET `+onConflict+`
 			RETURNING id`,
-			string(e.Kind), e.Service, e.Username, encData, salt, settings, e.Folder, sd.url, sd.plain, sd.sealed, sd.salt, created, updated,
+			append([]any{string(e.Kind), e.Service, e.Username, encData, salt, settings, e.Folder, sd.url, sd.plain, sd.sealed, sd.salt, created, updated}, keepTimes...)...,
 		).Scan(&id)
 		if err != nil || !whole {
 			return err

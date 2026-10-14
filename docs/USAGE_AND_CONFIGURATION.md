@@ -1160,7 +1160,7 @@ New password for password/github-work/alice:
 ✅ password/github-work/alice: renamed from password/github/alice and secret changed
 ```
 
-- **What it keeps:** the entry keeps its folder, tags, settings and creation time. Its update time moves only when the secret changes.
+- **What it keeps:** the entry keeps its folder, tags, settings and creation time. Its update time moves only when the secret changes: the secret it already has, given again, changes nothing ("Nothing changed: the entry already has that secret."), as storing it again doesn't.
 - **How a rename works:** each secret is sealed to its entry's name, so a rename re-seals it under the new one, in one step. That's why editing unlocks the vault.
 - **A new name another entry has is refused,** before any new secret is asked for. Delete or rename that one first. A change of case alone (`GitHub` to `github`) works.
 - **Kinds change only among `password`, `api_key` and `secure_note`.** A TOTP entry can be renamed, but its secret and kind come with its code settings, so store a new one with `--action totp-store` or `sesh --service totp --setup`.

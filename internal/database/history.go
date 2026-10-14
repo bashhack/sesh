@@ -50,6 +50,9 @@ type oldSecret struct {
 // sameSecret says whether the entry k's secret, sealed (data, salt), is
 // next. One that doesn't decrypt isn't.
 func (s *Store) sameSecret(k vault.Key, data, salt, next []byte) (bool, error) {
+	if next == nil {
+		return false, nil
+	}
 	plain, err := s.oracle.DecryptEntry(data, salt, entryAAD(k))
 	switch {
 	case err == nil:
