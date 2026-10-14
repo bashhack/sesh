@@ -14,8 +14,11 @@ import (
 
 // uiTouchID is Touch ID unlock's state for the vault at dbPath, as sesh
 // touchid status says it.
-func uiTouchID(dbPath string) (tui.TouchID, error) {
+func uiTouchID(dbPath string) tui.TouchID {
 	t := tui.TouchID{Said: "off", Here: touchIDAvailable()}
+	if !t.Here {
+		t.Why = "this Mac needs a Touch ID sensor with an enrolled fingerprint, and sesh must run in your desktop session (not over SSH)."
+	}
 	f, err := touchid.ReadFile(filepath.Dir(dbPath))
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -28,16 +31,16 @@ func uiTouchID(dbPath string) (tui.TouchID, error) {
 	default:
 		t.Said, t.On = "on", true
 	}
-	if !t.Here && !t.On {
+	if !t.Here {
 		t.Said += " (Touch ID isn't usable here)"
 	}
-	return t, nil
+	return t
 }
 
 // uiSetTouchID turns Touch ID unlock for the vault at dbPath on, through
 // the agent the app unlocked, or off, as sesh touchid enable and disable
 // do.
-func uiSetTouchID(dbPath string, on bool) (string, error) {
+func uiSetTouchID(dbPath string, on, takeOther bool) (string, error) {
 	dataDir := filepath.Dir(dbPath)
 	if !on {
 		if f, err := touchid.ReadFile(dataDir); err == nil && anotherVaults(f.UnlockID, dbPath) {
@@ -58,6 +61,10 @@ func uiSetTouchID(dbPath string, on bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Made another vault's since the panel was read, it's asked about.
+	if f, err := touchid.ReadFile(dataDir); err == nil && f.UnlockID != agent.UnlockID(mat.Verify) && !takeOther {
+		return "", tui.Refused(fmt.Sprintf("%s in this folder is set up for another vault or an earlier master password; Enter again asks whether to take it.", touchid.FileName))
+	}
 	conn, err := agent.DialExisting()
 	if agent.IsNotRunning(err) {
 		return "", errors.New("touch ID unlock is set up through sesh's agent, which isn't running; run: sesh touchid enable")
@@ -69,5 +76,5 @@ func uiSetTouchID(dbPath string, on bool) (string, error) {
 	if err := enableTouchID(conn, dataDir, mat.Verify); err != nil {
 		return "", uiLocked(err)
 	}
-	return "Touch ID unlock is on: when the app locks, Enter with nothing typed uses your fingerprint. Your master password still works.", nil
+	return "Touch ID unlock is on.", nil
 }

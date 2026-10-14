@@ -11,6 +11,8 @@ import (
 type TouchID struct {
 	// Said is its state in a few words: "on", "off".
 	Said string
+	// Why says why Touch ID isn't usable here, when it isn't.
+	Why string
 	// On is it set up for this vault, and working.
 	On bool
 	// Other is its file set up for another vault, or an earlier master
@@ -35,12 +37,15 @@ func (m *Model) touchIDRow(t TouchID) item {
 		stay:  true,
 	}
 	switch {
+	case t.On && !t.Here:
+		it.does = "turn it off"
+		it.detail = "It's on, but not usable here: " + t.Why + " Enter turns it off."
 	case t.On:
 		it.does = "turn it off"
 		it.detail = "When the app locks, Enter with nothing typed unlocks it with your fingerprint, as sesh does when its agent has locked; your master password still works. Enter turns it off."
 	case !t.Here:
 		it.does = "why"
-		it.detail = "Touch ID isn't usable here: this Mac needs a Touch ID sensor with an enrolled fingerprint, and sesh must run in your desktop session (not over SSH)."
+		it.detail = "Touch ID isn't usable here: " + t.Why
 	default:
 		it.does = "turn it on"
 		it.detail = "Enter turns it on: a key in this Mac's Secure Enclave, which only your fingerprint unlocks, opens the vault when the app or sesh's agent has locked. Your master password still works."
@@ -53,33 +58,38 @@ func (m *Model) touchIDRow(t TouchID) item {
 func (m *Model) toggleTouchID(t *TouchID) tea.Cmd {
 	switch {
 	case t.On:
-		return m.setTouchID(false)
+		return m.setTouchID(false, false)
 	case !t.Here:
-		m.ov.err = "Touch ID isn't usable here: this Mac needs a Touch ID sensor with an enrolled fingerprint, and sesh must run in your desktop session (not over SSH)."
+		m.ov.err = "Touch ID isn't usable here: " + t.Why
 		return nil
 	case t.Other:
 		settings := m.ov
 		m.ov = m.confirm(settings, "Touch ID unlock", "Touch ID unlock in this folder is set up for another vault, or for an earlier master password; another vault would then need its password. Turn it on for this vault?", func() tea.Cmd {
 			m.ov = settings
-			return m.setTouchID(true)
+			return m.setTouchID(true, true)
 		})
 		m.ov.danger = true
 		return nil
 	}
-	return m.setTouchID(true)
+	return m.setTouchID(true, false)
 }
 
-// setTouchID turns Touch ID unlock on or off.
-func (m *Model) setTouchID(on bool) tea.Cmd {
+// setTouchID turns Touch ID unlock on or off; takeOther is taking it from
+// another vault asked about.
+func (m *Model) setTouchID(on, takeOther bool) tea.Cmd {
 	set, epoch := m.opts.SetTouchID, m.epoch
 	return func() tea.Msg {
-		said, err := set(on)
+		said, err := set(on, takeOther)
 		return touchIDMsg{said: said, err: err, epoch: epoch}
 	}
 }
 
 // gotTouchID says what turning Touch ID unlock on or off did.
 func (m *Model) gotTouchID(msg *touchIDMsg) tea.Cmd {
+	if m.v == nil {
+		// Turned on or off as it locked: the locked screen follows.
+		m.touchOn = m.touchIDOn()
+	}
 	if msg.epoch != m.epoch || m.v == nil {
 		return nil
 	}
@@ -87,9 +97,16 @@ func (m *Model) gotTouchID(msg *touchIDMsg) tea.Cmd {
 	case errors.Is(msg.err, ErrLocked):
 		return m.lock(lockedReason(msg.err))
 	case msg.err != nil:
+		// One refused for another vault's is read again, and asked about.
 		m.safetySaid("Not changed: "+msg.err.Error(), true)
 	default:
 		m.say(msg.said)
 	}
 	return m.refreshSettings()
+}
+
+// touchIDOn says whether the locked screen offers a fingerprint: Touch ID
+// unlock on for this vault, now.
+func (m *Model) touchIDOn() bool {
+	return m.opts.TouchID != nil && (m.opts.TouchIDOn == nil || m.opts.TouchIDOn())
 }
