@@ -950,7 +950,7 @@ func TestActionMenu(t *testing.T) {
 	a := newApp(t, f, Options{})
 	a.press("ctrl+k")
 	s := a.screen()
-	for _, w := range []string{"github (alice)", "copy a value…", "copy the username", "open the URL", "earlier secrets…", "move to the trash", "the trash…", "lock"} {
+	for _, w := range []string{"github (alice)", "copy a value…", "copy the username", "open the URL", "earlier secrets…", "move to the trash", "the trash…", "lock sesh"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("menu missing %q:\n%s", w, s)
 		}
@@ -1047,7 +1047,7 @@ func TestActionLockNow(t *testing.T) {
 	agentLocked := false
 	a := newApp(t, f, Options{LockAgent: func() error { agentLocked = true; return nil }})
 	a.press("ctrl+k")
-	if !strings.Contains(a.screen(), "lock (and sesh's agent)") {
+	if !strings.Contains(a.screen(), "lock sesh") {
 		t.Fatalf("menu:\n%s", a.screen())
 	}
 	a.press("l")

@@ -113,14 +113,10 @@ func (m *Model) openMenu() tea.Cmd {
 
 // globalItems are the menu's actions that aren't about one entry.
 func (m *Model) globalItems() []item {
-	lockLabel := "lock"
-	if m.opts.LockAgent != nil {
-		lockLabel = "lock (and sesh's agent)"
-	}
 	return []item{
 		{key: "a", label: "add an entry…", run: m.openAdd},
 		{key: "t", label: "the trash…", run: m.openTrash},
-		{key: "l", label: lockLabel, run: m.lockNow},
+		{key: "l", label: "lock sesh", run: m.lockNow},
 	}
 }
 
