@@ -533,7 +533,7 @@ func (m *Model) drawOverlay(base string) string {
 		first, last := window(ov.sel, len(ov.trash), room)
 		for i := first; i < last; i++ {
 			t := ov.trash[i]
-			lines = append(lines, row(i, "", fmt.Sprintf("%s  %s", keyName(t.Key), th.dimmed().Render(fmt.Sprintf("%s · deleted %s · id %d", kindWord(t.Key.Kind), ago(now, t.DeletedAt), t.ID)))))
+			lines = append(lines, row(i, "", fmt.Sprintf("%s  %s", keyName(t.Key), th.dimmed().Render(fmt.Sprintf("%s · deleted %s · id %d", kindLabel(t.Key.Kind), ago(now, t.DeletedAt), t.ID)))))
 		}
 	default:
 		first, last := window(ov.sel, len(ov.items), room)
@@ -567,7 +567,7 @@ func (m *Model) drawOverlay(base string) string {
 			edge, titleStyle = th.bad, lipgloss.NewStyle().Foreground(th.bad).Bold(true)
 		}
 	default:
-		hint = th.hints([2]string{"↵", "choose, or press its letter"}, [2]string{"esc", "back"})
+		hint = th.hints([2]string{"↵", "choose, or press its key"}, [2]string{"esc", "back"})
 	}
 	lines = append(lines, "", hint)
 	title := titleStyle.Render(ansi.Truncate(ov.title, w-8, "…"))

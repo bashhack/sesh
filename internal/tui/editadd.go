@@ -249,9 +249,9 @@ func (m *Model) save(f *form, c *Change, generate bool) tea.Cmd {
 		}
 		if generate {
 			if err := opts.Copy(string(c.Secret)); err != nil {
-				what += "; the new password couldn't be copied: " + err.Error()
+				what += "; the new " + secretWord(k.Kind) + " couldn't be copied: " + err.Error()
 			} else {
-				what = copied("the new password for "+keyName(k), opts.ClearAfter)
+				what = copied("the new "+secretWord(k.Kind)+" for "+keyName(k), opts.ClearAfter)
 			}
 		}
 		return savedMsg{k: k, of: of, what: what, epoch: epoch}

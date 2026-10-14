@@ -260,12 +260,14 @@ func keyName(k vault.Key) string { return entryName(&vault.Entry{Key: k}) }
 
 // kindName is an entry named with its kind, which tells apart entries of
 // one name: "TOTP github (alice)".
-func kindName(k vault.Key) string {
-	kind := map[vault.Kind]string{vault.KindPassword: "password", vault.KindAPIKey: "API key", vault.KindNote: "secure note", vault.KindTOTP: "TOTP"}[k.Kind]
-	if kind == "" {
-		kind = string(k.Kind)
+func kindName(k vault.Key) string { return kindLabel(k.Kind) + " " + keyName(k) }
+
+// kindLabel names a kind of entry in a sentence: "TOTP", "API key".
+func kindLabel(k vault.Kind) string {
+	if label, ok := map[vault.Kind]string{vault.KindPassword: "password", vault.KindAPIKey: "API key", vault.KindNote: "secure note", vault.KindTOTP: "TOTP"}[k]; ok {
+		return label
 	}
-	return kind + " " + keyName(k)
+	return string(k)
 }
 
 // secretWord names what copying an entry of kind k copies.
