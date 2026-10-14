@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/tui"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -188,5 +189,49 @@ func TestUI_ImportPlanFails(t *testing.T) {
 	}
 	if n, err := store.List(&vault.Filter{Kind: vault.KindPassword}); err != nil || len(n) != 0 {
 		t.Errorf("entries written: %d, %v", len(n), err)
+	}
+}
+
+// A lock that stops an import says how many entries it imported first.
+func TestImportLocked(t *testing.T) {
+	locked := tui.Locked("sesh's agent locked the vault.")
+	stopped := &stoppedError{err: database.ErrVaultKeyChanged, done: 2, again: "skip"}
+	if err := importLocked(locked, stopped); !errors.Is(err, tui.ErrLocked) || err.Error() != "sesh's agent locked the vault. The import stopped, having imported 2 entries." {
+		t.Errorf("stopped: %v", err)
+	}
+	if err := importLocked(locked, database.ErrVaultKeyChanged); err != locked {
+		t.Errorf("not stopped: %v", err)
+	}
+}
+
+// An import whose vault's master password changes before it's written is a lock that says how far it got.
+func TestUI_ImportKeyChanged(t *testing.T) {
+	env := importVault(t)
+	store := openDoctorVault(t, env)
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	file, err := filepath.Abs(browserFixture("chromium.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	im, err := u.StartImport("chrome", []string{file}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer im.Close()
+	if _, err := im.Plan("skip"); err != nil {
+		t.Fatal(err)
+	}
+	// Unlocked, as the app is, before the password changes.
+	if _, err := store.Get(entryKey(t, "totp/GitHub/alice")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, stderr := rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("import-password-1234", "new-password-5678", "new-password-5678")); err != nil {
+		t.Fatalf("rotate: %v\n%s", err, stderr)
+	}
+	if _, err := im.Apply(); !errors.Is(err, tui.ErrLocked) || !strings.HasSuffix(err.Error(), " The import stopped, having imported 0 entries.") {
+		t.Errorf("%v", err)
 	}
 }

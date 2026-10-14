@@ -147,7 +147,7 @@ func TestImportEscWhileApplied(t *testing.T) {
 	b.now = b.now.Add(time.Second)
 	_, apply = b.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	b.press("ctrl+c")
-	if b.quit || !strings.Contains(b.screen(), "Quitting once the import is written") {
+	if s := b.screen(); b.quit || !strings.Contains(s, "Quitting once the import is written") || strings.Contains(s, "quit once it's written") {
 		t.Fatalf("quit %v\n%s", b.quit, b.screen())
 	}
 	b.run(apply)
@@ -171,12 +171,41 @@ func TestImportChangedWhileApplied(t *testing.T) {
 	if a.ov == nil || a.ov.kind != panelNotice || a.ov.question != "Imported 2 entries from Bitwarden." {
 		t.Errorf("after: %+v", a.ov)
 	}
+	// The entry's menu the import was opened from, made before the change, isn't gone back to.
+	a.press("enter")
+	if a.ov == nil || a.ov.title != "Import and export" {
+		t.Fatalf("back to %+v", a.ov)
+	}
+	a.press("esc")
+	if a.ov != nil {
+		t.Errorf("under the import and export panel: %+v", a.ov)
+	}
 	b, _ := previewApp(t, map[string]ImportPlan{"": {Summary: "Found 1.", Count: 1}})
 	b.now = b.now.Add(time.Second)
 	b.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	b.run(b.lock("You locked it."))
 	if !strings.HasPrefix(b.lockedWhy, "You locked it. An import was being written") {
 		t.Errorf("locked: %q", b.lockedWhy)
+	}
+}
+
+// A lock that stops the import says how far it got, once; quitting, that's said after.
+func TestImportLockedWhileApplied(t *testing.T) {
+	const why = "sesh's agent locked the vault. The import stopped, having imported 2 entries."
+	a, f := previewApp(t, map[string]ImportPlan{"": {Summary: "Found 3.", Count: 3}})
+	f.importing.applyTo = func() (string, error) { return "", Locked(why) }
+	a.press("wait", "y")
+	if a.v != nil || a.lockedWhy != why {
+		t.Errorf("locked %v: %q", a.v == nil, a.lockedWhy)
+	}
+	b, g := previewApp(t, map[string]ImportPlan{"": {Summary: "Found 3.", Count: 3}})
+	g.importing.applyTo = func() (string, error) { return "", Locked(why) }
+	b.now = b.now.Add(time.Second)
+	_, apply := b.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	b.press("ctrl+c")
+	b.run(apply)
+	if !b.quit || b.Afterword() != why {
+		t.Errorf("quit %v, said after %q", b.quit, b.Afterword())
 	}
 }
 

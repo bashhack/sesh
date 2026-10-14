@@ -281,6 +281,22 @@ func (p *importPlan) count() int {
 }
 
 // apply writes the import's entries to the vault store holds, and says
+
+// stoppedError is an import that stopped at key, done entries imported
+// first.
+type stoppedError struct {
+	err   error
+	key   vault.Key
+	again string // the --on-conflict that imports the rest
+	done  int
+}
+
+func (e *stoppedError) Error() string {
+	return fmt.Sprintf("imported %s, then %s failed: %v; to import the rest, run this again with --on-conflict %s", nouns(e.done, "entry", "entries"), e.key, e.err, e.again)
+}
+
+func (e *stoppedError) Unwrap() error { return e.err }
+
 // what it did, a line each.
 func (p *importPlan) apply(store *database.Store) (string, error) {
 	write := p.fresh
@@ -308,7 +324,7 @@ func (p *importPlan) apply(store *database.Store) (string, error) {
 			if done > 0 {
 				store.LogImport(fmt.Sprintf("%s from %s, then stopped", what(done), p.f.source))
 			}
-			return "", fmt.Errorf("imported %s, then %s failed: %w; to import the rest, run this again with --on-conflict %s", nouns(done, "entry", "entries"), e.Key, err, again)
+			return "", &stoppedError{err: err, key: e.Key, done: done, again: again}
 		}
 		done++
 		history.Kept += h.Kept

@@ -251,39 +251,37 @@ func (m *Model) imported(msg *importedMsg) tea.Cmd {
 	if msg.epoch != m.epoch || msg.in != m.importing {
 		return nil
 	}
-	ended := m.endImport()
 	said := msg.said
 	if msg.err != nil {
 		said = importFailed(msg.err)
 	}
+	ended := m.endImport()
 	switch {
 	case m.quitAfter:
 		m.afterword = said
 		return tea.Batch(ended, tea.Quit)
 	case errors.Is(msg.err, ErrLocked):
-		return tea.Batch(ended, m.lock(lockedReason(msg.err)))
+		return tea.Batch(ended, m.lock(said))
 	}
-	m.ov = &overlay{kind: panelNotice, back: m.transferPanel(), title: "Import", question: said}
+	// The entries may have changed under the panels below, by the
+	// import's writes or another command's: the notice goes back to an
+	// import and export panel of its own.
+	m.ov = nil
+	m.openTransfer()
+	m.ov = &overlay{kind: panelNotice, back: m.ov, title: "Import", question: said}
 	return tea.Batch(ended, m.reread())
 }
 
 // importFailed says an import's failure: one that stopped partway says
 // what it imported first.
 func importFailed(err error) string {
-	if strings.HasPrefix(err.Error(), "imported ") {
+	switch {
+	case errors.Is(err, ErrLocked):
+		return lockedReason(err)
+	case strings.HasPrefix(err.Error(), "imported "):
 		return "The import stopped: " + err.Error()
 	}
 	return "Not imported: " + err.Error()
-}
-
-// transferPanel is the import and export panel under the preview.
-func (m *Model) transferPanel() *overlay {
-	for ov := m.ov; ov != nil; ov = ov.back {
-		if ov.kind == panelMenu && ov.title == "Import and export" {
-			return ov
-		}
-	}
-	return nil
 }
 
 // endImport lets the import go: closed, which wipes what it read, once a
@@ -306,6 +304,8 @@ func (m *Model) importHint(width int) string {
 	th, in := m.th, m.importing
 	var keys [][2]string
 	switch {
+	case in != nil && in.applying && m.quitAfter:
+		return ""
 	case in != nil && in.applying:
 		keys = [][2]string{{"ctrl+c", "quit once it's written"}}
 	case in == nil || m.ov.loading:

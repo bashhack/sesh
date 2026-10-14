@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -112,8 +113,8 @@ func (im *uiImport) Apply() (string, error) {
 	if werr := im.u.wrote(nil); err == nil {
 		err = werr
 	}
-	if err = uiLocked(err); errors.Is(err, tui.ErrLocked) {
-		return "", err
+	if locked := uiLocked(err); errors.Is(locked, tui.ErrLocked) {
+		return "", importLocked(locked, err)
 	}
 	if err != nil {
 		// sesh import's advice is for the command line; the app's s and o
@@ -139,4 +140,13 @@ func (im *uiImport) Close() {
 		im.f = nil
 	}
 	secure.SecureZeroBytes(im.password)
+}
+
+// importLocked is a lock that came during an import, saying how far the
+// import got first.
+func importLocked(locked, err error) error {
+	if stopped := (*stoppedError)(nil); errors.As(err, &stopped) {
+		return tui.Locked(fmt.Sprintf("%s The import stopped, having imported %s.", locked.Error(), nouns(stopped.done, "entry", "entries")))
+	}
+	return locked
 }
