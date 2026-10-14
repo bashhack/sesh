@@ -82,15 +82,12 @@ func (p *Pending) Commit() (err error) {
 	return syncDir(filepath.Dir(p.path))
 }
 
-// Abort removes the temporary file, leaving path as it was; after Commit
-// it does nothing.
+// Abort removes the temporary file, leaving path as it was. It may run
+// while Commit does (a signal's handler, say): the file is removed unless
+// it has been renamed to path already, which Abort then leaves.
 func (p *Pending) Abort() {
-	if p.done {
-		return
-	}
-	p.done = true
 	p.f.Close()           //nolint:errcheck,gosec // it's being thrown away
-	os.Remove(p.f.Name()) //nolint:errcheck,gosec // best effort
+	os.Remove(p.f.Name()) //nolint:errcheck,gosec // gone already once renamed
 }
 
 // syncDir flushes a directory's entries, so a rename in it is on disk.

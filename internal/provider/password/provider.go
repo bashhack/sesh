@@ -1087,11 +1087,14 @@ func (e *exportFile) abort() {
 	}
 }
 
-// isDevice says whether path is a device or pipe, written as it is: one
-// under /dev (/dev/stdout is the file it's redirected to, which isn't
-// replaced), or one that isn't a regular file or folder.
+// isDevice says whether path is a device or pipe, written as it is: a
+// name for a process's own output (/dev/stdout is whatever it's
+// redirected to, which isn't replaced), or a file that isn't a regular
+// file or folder.
 func isDevice(path string) bool {
-	if path == "/dev" || strings.HasPrefix(path, "/dev/") {
+	switch {
+	case path == "/dev/stdout", path == "/dev/stderr", path == "/dev/tty",
+		strings.HasPrefix(path, "/dev/fd/"), strings.HasPrefix(path, "/proc/self/fd/"):
 		return true
 	}
 	info, err := os.Stat(path)
@@ -1132,10 +1135,15 @@ func openExport(path string, force bool) (*exportFile, error) {
 	return &exportFile{target: target}, nil
 }
 
-// followLinks is the file path's links lead to: one not there yet when
-// the last link points at it.
+// followLinks is the file path's links lead to, as the system follows
+// them: one not there yet when the last link points at it.
 func followLinks(path string) (string, error) {
 	for range 40 {
+		// The folder through its own links first: a link's relative
+		// target, ../x say, is from the folder it's really in.
+		if dir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+			path = filepath.Join(dir, filepath.Base(path))
+		}
 		info, err := os.Lstat(path)
 		if err != nil || info.Mode()&os.ModeSymlink == 0 {
 			return path, nil
@@ -1212,15 +1220,19 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 		// Interrupted while it's written, the file being made is removed:
 		// it holds part of the export.
 		stop := make(chan os.Signal, 1)
-		signal.Notify(stop, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		signal.Notify(stop, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
 		defer signal.Stop(stop)
 		done := make(chan struct{})
 		defer close(done)
 		go func() {
 			select {
-			case <-stop:
+			case sig := <-stop:
 				out.abort()
-				os.Exit(130)
+				code := 1
+				if s, ok := sig.(syscall.Signal); ok {
+					code = 128 + int(s)
+				}
+				os.Exit(code)
 			case <-done:
 			}
 		}()

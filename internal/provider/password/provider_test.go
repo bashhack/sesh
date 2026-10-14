@@ -1590,3 +1590,73 @@ func TestExport_ReadOnlyFolder(t *testing.T) {
 		t.Errorf("the file: %q", b)
 	}
 }
+
+// Only the names for a process's own output are devices by name; any other path is one when it's not a regular file.
+func TestIsDevice(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "backup.json")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(dir, "pipe")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]bool{
+		"/dev/stdout": true, "/dev/stderr": true, "/dev/tty": true, "/dev/fd/1": true, "/proc/self/fd/1": true, "/dev/null": true, fifo: true,
+		"/dev/shm/backup.json": false, file: false, dir: false, filepath.Join(dir, "missing.json"): false,
+	} {
+		if got := isDevice(path); got != want {
+			t.Errorf("isDevice(%q) = %v", path, got)
+		}
+	}
+}
+
+// A link whose relative target leaves a linked folder is followed as the system follows it.
+func TestExport_LinkThroughLinkedFolder(t *testing.T) {
+	stubReadPassword(t, "export-password-1234")
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "real", "a", "b"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "real", "a", "target.json")
+	if err := os.WriteFile(target, []byte("real target"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	decoy := filepath.Join(dir, "target.json") // where ../target.json is, by the link's path as written
+	if err := os.WriteFile(decoy, []byte("unrelated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "real", "a", "b"), filepath.Join(dir, "L")); err != nil {
+		t.Fatal(err)
+	}
+	for name, to := range map[string]string{"lnk": "../target.json", "new": "../new.json"} {
+		if err := os.Symlink(to, filepath.Join(dir, "real", "a", "b", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	export := func(file string) error {
+		p, _ := newTestProvider(seeded(t, map[string]string{"password/github": "s"}))
+		parseFlags(t, p, "--action", "export", "--file", file, "--force")
+		_, err := p.GetCredentials()
+		return err
+	}
+	if err := export(filepath.Join(dir, "L", "lnk")); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(target); string(b) == "real target" { //nolint:errcheck // compared
+		t.Error("the link's file wasn't written")
+	}
+	if b, _ := os.ReadFile(decoy); string(b) != "unrelated" { //nolint:errcheck // compared
+		t.Errorf("the file beside the linked folder was written: %q", b)
+	}
+	if err := export(filepath.Join(dir, "L", "new")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "real", "a", "new.json")); err != nil {
+		t.Errorf("a link to a file not there yet: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "new.json")); err == nil {
+		t.Error("made beside the linked folder")
+	}
+}
