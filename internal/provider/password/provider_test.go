@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/kdf"
@@ -799,9 +800,9 @@ func TestImport_EncryptedWrongPassword(t *testing.T) {
 		calls++
 		switch calls {
 		case 1, 2:
-			return []byte("password-a"), nil
+			return []byte("first-export-pass-71"), nil
 		default:
-			return []byte("password-b"), nil
+			return []byte("other-export-pass-93"), nil
 		}
 	}
 	t.Cleanup(func() { readPassword = orig })
@@ -1360,6 +1361,9 @@ func TestExport_FileKeptUntilWhole(t *testing.T) {
 	if b, _ := os.ReadFile(file); string(b) != "an earlier export" { //nolint:errcheck // compared
 		t.Fatalf("after a mismatch the file holds %q", b)
 	}
+	if entries, _ := os.ReadDir(filepath.Dir(file)); len(entries) != 1 { //nolint:errcheck // counted
+		t.Errorf("after a mismatch the folder holds %d files", len(entries))
+	}
 	answers = []string{"export-password-1234", "export-password-1234"}
 	if err := export("--force"); err != nil {
 		t.Fatal(err)
@@ -1387,13 +1391,150 @@ func TestExport_PasswordRules(t *testing.T) {
 	if err := export("short", "", true); err == nil || err.Error() != "the export password must be at least 8 characters" {
 		t.Errorf("short: %v", err)
 	}
-	if err := export("password1", "n\n", true); err == nil || !strings.Contains(err.Error(), "choose a stronger password") {
-		t.Errorf("easy, no: %v", err)
+	restore := testutil.RedirectStderr(t)
+	err := export("password1", "n\n", true)
+	said := restore()
+	if err == nil || !strings.Contains(err.Error(), "choose a stronger password") || !strings.Contains(said, "This export password is easy to guess") || !strings.Contains(said, "Use it anyway? [y/N]") {
+		t.Errorf("easy, no: %v\n%s", err, said)
 	}
-	if err := export("password1", "y\n", true); err != nil {
-		t.Errorf("easy, yes: %v", err)
+	for answer, ok := range map[string]bool{"y\n": true, "yes\n": true, "yeah no\n": false, "": false} {
+		if err := export("password1", answer, true); (err == nil) != ok {
+			t.Errorf("easy, %q: %v", answer, err)
+		}
 	}
-	if err := export("password1", "", false); err != nil {
-		t.Errorf("easy, nobody to ask: %v", err)
+	// A decryption password is the export's, whatever it was: no rules.
+	var exp bytes.Buffer
+	if _, err := password.NewManager(seeded(t, map[string]string{"password/github": "s"})).ExportEncrypted(&exp, &password.ExportOptions{KDF: kdf.Minimum()}, []byte("short")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "short.enc")
+	if err := os.WriteFile(file, exp.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubReadPassword(t, "short")
+	p, _ := newTestProvider(vault.NewMemStore())
+	parseFlags(t, p, "--action", "import", "--format", "encrypted", "--file", file)
+	if _, err := p.GetCredentials(); err != nil {
+		t.Errorf("importing with a short password: %v", err)
+	}
+}
+
+// Every format refuses an existing file without --force, and replaces it with --force.
+func TestExport_ExistingFileEveryFormat(t *testing.T) {
+	stubReadPassword(t, "export-password-1234")
+	for _, format := range []string{"json", "csv", "encrypted"} {
+		file := filepath.Join(t.TempDir(), "backup")
+		if err := os.WriteFile(file, []byte("earlier"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, force := range []bool{false, true} {
+			p, _ := newTestProvider(seeded(t, map[string]string{"password/github": "s"}))
+			args := []string{"--action", "export", "--format", format, "--file", file}
+			if force {
+				args = append(args, "--force")
+			}
+			parseFlags(t, p, args...)
+			_, err := p.GetCredentials()
+			b, _ := os.ReadFile(file) //nolint:errcheck // compared
+			if force != (err == nil) || force == (string(b) == "earlier") {
+				t.Errorf("%s, force %v: %v, the file holds %q", format, force, err, b)
+			}
+		}
+	}
+}
+
+// A link is followed: the file it points at gets the export, the link stays; a pipe or device is written as it is;
+// a folder, or a folder that isn't there, fails before the password is asked.
+func TestExport_Targets(t *testing.T) {
+	asked := 0
+	orig := readPassword
+	readPassword = func() ([]byte, error) { asked++; return []byte("export-password-1234"), nil }
+	t.Cleanup(func() { readPassword = orig })
+	export := func(file string, force bool) error {
+		p, _ := newTestProvider(seeded(t, map[string]string{"password/github": "s"}))
+		args := []string{"--action", "export", "--format", "encrypted", "--file", file}
+		if force {
+			args = append(args, "--force")
+		}
+		parseFlags(t, p, args...)
+		_, err := p.GetCredentials()
+		return err
+	}
+	dir := t.TempDir()
+	real, link := filepath.Join(dir, "real.enc"), filepath.Join(dir, "link.enc")
+	if err := os.WriteFile(real, []byte("earlier"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := export(link, true); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link was replaced: %v, %v", info, err)
+	}
+	if b, _ := os.ReadFile(real); !bytes.Contains(b, []byte("argon2id")) { //nolint:errcheck // compared
+		t.Errorf("the file the link points at: %q", b)
+	}
+	// A link to a file not there yet makes that file.
+	dangling, made := filepath.Join(dir, "dangling.enc"), filepath.Join(dir, "made.enc")
+	if err := os.Symlink(made, dangling); err != nil {
+		t.Fatal(err)
+	}
+	if err := export(dangling, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(made); err != nil {
+		t.Errorf("the link's file: %v", err)
+	}
+	// A pipe, as a shell's >(…) gives, is written to without --force.
+	fifo := filepath.Join(dir, "pipe")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan []byte)
+	go func() {
+		b, _ := os.ReadFile(fifo) //nolint:errcheck // checked by its content
+		got <- b
+	}()
+	if err := export(fifo, false); err != nil {
+		t.Fatal(err)
+	}
+	if b := <-got; !bytes.Contains(b, []byte("argon2id")) {
+		t.Errorf("through the pipe: %q", b)
+	}
+	before := asked
+	if err := export(dir, true); err == nil || !strings.Contains(err.Error(), "is a folder") {
+		t.Errorf("a folder: %v", err)
+	}
+	if err := export(filepath.Join(dir, "missing", "x.enc"), false); err == nil || !strings.Contains(err.Error(), "create ") {
+		t.Errorf("a folder that isn't there: %v", err)
+	}
+	if asked != before {
+		t.Errorf("asked for a password %d times before failing", asked-before)
+	}
+}
+
+// In a folder sesh can't make a file in, an existing file is written where it is, after the password.
+func TestExport_ReadOnlyFolder(t *testing.T) {
+	stubReadPassword(t, "export-password-1234")
+	dir := t.TempDir()
+	file := filepath.Join(dir, "backup.enc")
+	// Longer than the export: emptied first, nothing of it stays at the end.
+	if err := os.WriteFile(file, bytes.Repeat([]byte("earlier "), 4000), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) }) //nolint:errcheck,gosec // so the test's folder can be removed
+	p, _ := newTestProvider(seeded(t, map[string]string{"password/github": "s"}))
+	parseFlags(t, p, "--action", "export", "--format", "encrypted", "--file", file, "--force")
+	if _, err := p.GetCredentials(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(file); !bytes.Contains(b, []byte("argon2id")) || bytes.Contains(b, []byte("earlier")) { //nolint:errcheck // compared
+		t.Errorf("the file: %q", b)
 	}
 }

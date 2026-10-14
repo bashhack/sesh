@@ -269,7 +269,7 @@ backup.dir               /Users/me/vaults/backups
 | `-url`, `-notes`, `-editor` | With store: the entry's URL; its notes from stdin, or with `-editor` in `$EDITOR` | No |
 | `-file`           | File path for export/import (default: stdout/stdin)| No               |
 | `-on-conflict`    | Import conflict: skip, overwrite (default: error)  | No               |
-| `-force`          | Skip confirmation prompts                          | No               |
+| `-force`          | Skip confirmation prompts; replace an existing export file | No       |
 | `-length`         | Generated password length (default 24)             | No               |
 | `-no-symbols`     | Exclude symbols from generated passwords           | No               |
 | `-sort`           | Sort by: service, created_at, updated_at, folder   | No               |
@@ -680,7 +680,9 @@ sesh --service password --action import --format encrypted --file backup.enc
 # Imported 12 entries
 ```
 
-The export password follows the master password's rules: at least 8 characters, and an easy one is warned about and asked about, since anyone with the file can try passwords against it. An existing file isn't replaced without `--force`, and the file is written only once the export is whole, through a temporary file renamed into place: a mistyped confirmation, or Ctrl-C, leaves what was there.
+The export password follows the master password's rules: at least 8 characters, and an easy one is warned about and asked about, since anyone with the file can try passwords against it.
+
+An export to a file, in any format, doesn't replace an existing one without `--force`, and the file is written only once the export is whole, through a temporary file beside it renamed into place: a mistyped confirmation, or Ctrl-C, leaves what was there. A link is followed to the file it points at. A device or a pipe, such as `/dev/stdout` or a shell's `>(…)`, is written to as it is. In a folder sesh can't make a file in, an existing file is written where it is, once the password has been asked.
 
 Encrypted exports use the same Argon2id + AES-256-GCM primitives as the vault. The export is self-contained (envelope includes the salt and KDF params) and works across machines and master passwords.
 

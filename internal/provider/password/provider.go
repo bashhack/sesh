@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -112,7 +113,7 @@ func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.sortBy, "sort", "service", "Sort by (service, created_at, updated_at, folder)")
 	fs.StringVar(&p.format, "format", "table", "Output format (table, json, csv)")
 	fs.BoolVar(&p.show, "show", false, "Show password instead of copying to clipboard")
-	fs.BoolVar(&p.force, "force", false, "Skip confirmation prompts")
+	fs.BoolVar(&p.force, "force", false, "Skip confirmation prompts, and replace an existing export file")
 	fs.BoolVar(&p.noSymbols, "no-symbols", false, "Exclude symbols from generated passwords")
 	fs.IntVar(&p.pwLength, "length", 24, "Generated password length")
 	fs.IntVar(&p.limit, "limit", 0, "Limit number of results (0 = no limit)")
@@ -191,7 +192,7 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 		{Name: "on-conflict", Type: "string", Description: "Import conflict strategy: skip, overwrite",
 			Values: []string{string(password.ConflictSkip), string(password.ConflictOverwrite)}},
 		{Name: "show", Type: "bool", Description: "Show password instead of copying to clipboard"},
-		{Name: "force", Type: "bool", Description: "Skip confirmation prompts"},
+		{Name: "force", Type: "bool", Description: "Skip confirmation prompts, and replace an existing export file"},
 		{Name: "no-symbols", Type: "bool", Description: "Exclude symbols from generated passwords"},
 		{Name: "length", Type: "int", Description: "Generated password length (default 24)"},
 		{Name: "limit", Type: "int", Description: "Limit number of results (0 = no limit)"},
@@ -993,14 +994,13 @@ func (p *Provider) readExportPassword(label string, confirm bool) ([]byte, error
 			return nil, errors.New("the export password must be at least 8 characters")
 		}
 		if password.IsWeak(pw) {
+			// Asked at the terminal the password was typed at.
 			fmt.Fprintln(os.Stderr, "⚠️  This export password is easy to guess: a cracking program would likely find it in under 100 million tries, and anyone with the file can try.") //nolint:errcheck // best-effort warning
-			if stdinIsTerminal() {
-				fmt.Fprint(os.Stderr, "Use it anyway? [y/N]: ") //nolint:errcheck // best-effort prompt
-				answer, err := p.readLine()
-				if err != nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
-					secure.SecureZeroBytes(pw)
-					return nil, errors.New("export cancelled: choose a stronger password")
-				}
+			fmt.Fprint(os.Stderr, "Use it anyway? [y/N]: ")                                                                                                                             //nolint:errcheck // best-effort prompt
+			answer, err := p.readLine()
+			if a := strings.ToLower(strings.TrimSpace(answer)); err != nil || (a != "y" && a != "yes") {
+				secure.SecureZeroBytes(pw)
+				return nil, errors.New("export cancelled: choose a stronger password")
 			}
 		}
 		fmt.Fprintf(os.Stderr, "Confirm %s: ", label)
@@ -1019,6 +1019,102 @@ func (p *Provider) readExportPassword(label string, confirm bool) ([]byte, error
 	}
 
 	return pw, nil
+}
+
+// exportFile is where an export to a file goes: a file that replaces the
+// one there once the export is whole; a device or pipe (/dev/stdout, a
+// shell's >(…)), written as it goes; or, in a folder sesh can't make a
+// file in, the existing file, emptied only when the export starts.
+type exportFile struct {
+	w       io.Writer
+	commit  func() error
+	discard func()
+	inPlace *os.File // emptied at the first write
+	emptied bool
+}
+
+func (e *exportFile) Write(b []byte) (int, error) {
+	if e.inPlace != nil && !e.emptied {
+		if err := e.inPlace.Truncate(0); err != nil {
+			return 0, err
+		}
+		e.emptied = true
+	}
+	return e.w.Write(b)
+}
+
+func (e *exportFile) finish() error {
+	if l, ok := e.w.(*lateOpen); ok && l.f != nil {
+		return l.f.Close()
+	}
+	return e.commit()
+}
+
+func (e *exportFile) abort() {
+	if l, ok := e.w.(*lateOpen); ok && l.f != nil {
+		l.f.Close() //nolint:errcheck,gosec // nothing more to do with it
+	}
+	e.discard()
+}
+
+// lateOpen is a device or pipe, opened at the first write.
+type lateOpen struct {
+	f    *os.File
+	path string
+}
+
+func (l *lateOpen) Write(b []byte) (int, error) {
+	if l.f == nil {
+		f, err := os.OpenFile(l.path, os.O_WRONLY, 0) //nolint:gosec // the device or pipe the user named
+		if err != nil {
+			return 0, err
+		}
+		l.f = f
+	}
+	return l.f.Write(b)
+}
+
+// openExport opens path for an export: a link is followed to its file; an
+// existing file is replaced only when force.
+func openExport(path string, force bool) (*exportFile, error) {
+	target := path
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if resolved, err := filepath.EvalSymlinks(path); err == nil {
+			target = resolved
+		} else if to, err := os.Readlink(path); err == nil {
+			// A link to a file not there yet: that file is made.
+			if !filepath.IsAbs(to) {
+				to = filepath.Join(filepath.Dir(path), to)
+			}
+			target = to
+		}
+	}
+	info, err := os.Stat(target)
+	exists := err == nil
+	switch {
+	case exists && info.IsDir():
+		return nil, fmt.Errorf("%s is a folder: name a file to export to", path)
+	case exists && !info.Mode().IsRegular():
+		// Opened only when the export starts: opening the terminal
+		// (/dev/stdout) would make it non-blocking, and the password is
+		// then read from it.
+		return &exportFile{w: &lateOpen{path: target}, commit: func() error { return nil }, discard: func() {}}, nil
+	case exists && !force:
+		return nil, fmt.Errorf("%s already exists; add --force to replace it", path)
+	}
+	pending, err := atomicfile.Create(target, 0o600)
+	if err == nil {
+		return &exportFile{w: pending, commit: pending.Commit, discard: pending.Abort}, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("create %s: %w", path, err)
+	}
+	// A folder sesh can't make a file in: the file is written where it is.
+	f, ferr := os.OpenFile(target, os.O_WRONLY, 0) //nolint:gosec // the file the user named
+	if ferr != nil {
+		return nil, fmt.Errorf("open %s: %w", path, ferr)
+	}
+	return &exportFile{w: f, inPlace: f, commit: f.Close, discard: func() { f.Close() }}, nil //nolint:errcheck,gosec // nothing more to do with it
 }
 
 func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, error) {
@@ -1051,35 +1147,28 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 	// `sesh ... --action export > backup.json`. Status text is returned
 	// via DisplayInfo, which the caller routes to stderr; keeping status
 	// off stdout preserves the data stream for shell redirection.
-	// The file is left as it is until the export is whole: an existing one
-	// (an earlier export, say) isn't replaced without --force, and the
-	// password is asked before anything is written.
+	// The file is opened before the password is asked, so a path that
+	// can't be written fails first, and is left as it is until the export
+	// is whole.
+	w := p.stdout
 	dest := "stdout"
 	if p.file != "" {
 		dest = p.file
-		if _, err := os.Lstat(p.file); err == nil && !p.force {
-			return provider.Credentials{}, fmt.Errorf("%s already exists; add --force to replace it", p.file)
-		}
-	}
-	var pw []byte
-	if p.format == "encrypted" {
-		var err error
-		if pw, err = p.readExportPassword("Encryption password", true); err != nil {
+		out, err := openExport(p.file, p.force)
+		if err != nil {
 			return provider.Credentials{}, err
 		}
-		defer secure.SecureZeroBytes(pw)
+		defer out.abort()
+		w = out
 	}
-	var buf bytes.Buffer
-	w := p.stdout
-	if p.file != "" {
-		w = &buf
-		// What was written, the plain JSON or CSV too, is wiped after.
-		defer func() { secure.SecureZeroBytes(buf.Bytes()) }()
-	}
-
 	var count int
 	var err error
 	if p.format == "encrypted" {
+		pw, perr := p.readExportPassword("Encryption password", true)
+		if perr != nil {
+			return provider.Credentials{}, perr
+		}
+		defer secure.SecureZeroBytes(pw)
 		opts.KDF = p.exportKDF
 		count, err = mgr.ExportEncrypted(w, opts, pw)
 	} else {
@@ -1092,11 +1181,9 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 	if err != nil {
 		return provider.Credentials{}, err
 	}
-	if p.file != "" {
-		// Through a temporary file renamed into place: a failure leaves
-		// what was there.
-		if err := atomicfile.Write(p.file, buf.Bytes(), 0o600); err != nil {
-			return provider.Credentials{}, fmt.Errorf("write the export: %w", err)
+	if out, ok := w.(*exportFile); ok {
+		if err := out.finish(); err != nil {
+			return provider.Credentials{}, fmt.Errorf("write the export to %s: %w", p.file, err)
 		}
 	}
 

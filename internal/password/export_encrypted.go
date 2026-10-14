@@ -37,6 +37,8 @@ func (m *Manager) ExportEncrypted(w io.Writer, opts *ExportOptions, password []b
 	}
 
 	var buf bytes.Buffer
+	// The plain JSON is wiped however this ends.
+	defer func() { secure.SecureZeroBytes(buf.Bytes()) }()
 	count, err := m.Export(&buf, &ExportOptions{
 		Format:    FormatJSON,
 		EntryType: opts.EntryType,

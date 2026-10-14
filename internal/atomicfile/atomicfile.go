@@ -16,13 +16,49 @@ import (
 // syncs the directory so the rename itself survives a crash. A rename alone
 // is atomic for readers but not durable: after a power loss the file can
 // come back empty, or the old one can reappear.
-func Write(path string, data []byte, perm os.FileMode) (err error) {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")
+func Write(path string, data []byte, perm os.FileMode) error {
+	p, err := Create(path, perm)
 	if err != nil {
 		return err
 	}
-	name := tmp.Name()
+	if _, err := p.Write(data); err != nil {
+		p.Abort()
+		return err
+	}
+	return p.Commit()
+}
+
+// Pending is a file being written that replaces path once committed, as
+// Write replaces it; until then path is as it was.
+type Pending struct {
+	f    *os.File
+	path string
+	perm os.FileMode
+	done bool
+}
+
+// Create starts a file to replace path, with mode perm once committed: a
+// temporary file in path's directory, made now, so a directory it can't be
+// made in fails before anything is written.
+func Create(path string, perm os.FileMode) (*Pending, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return nil, err
+	}
+	return &Pending{f: f, path: path, perm: perm}, nil
+}
+
+func (p *Pending) Write(b []byte) (int, error) { return p.f.Write(b) }
+
+// Commit syncs the file and renames it over path, then syncs the
+// directory. On an error the temporary file is removed and path is as it
+// was.
+func (p *Pending) Commit() (err error) {
+	if p.done {
+		return errors.New("already committed or abandoned")
+	}
+	p.done = true
+	name := p.f.Name()
 	defer func() {
 		if err != nil {
 			if rerr := os.Remove(name); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
@@ -30,23 +66,31 @@ func Write(path string, data []byte, perm os.FileMode) (err error) {
 			}
 		}
 	}()
-	_, err = tmp.Write(data)
+	err = p.f.Chmod(p.perm)
 	if err == nil {
-		err = tmp.Chmod(perm)
+		err = p.f.Sync()
 	}
-	if err == nil {
-		err = tmp.Sync()
-	}
-	if cerr := tmp.Close(); err == nil {
+	if cerr := p.f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(name, path); err != nil {
+	if err := os.Rename(name, p.path); err != nil {
 		return err
 	}
-	return syncDir(dir)
+	return syncDir(filepath.Dir(p.path))
+}
+
+// Abort removes the temporary file, leaving path as it was; after Commit
+// it does nothing.
+func (p *Pending) Abort() {
+	if p.done {
+		return
+	}
+	p.done = true
+	p.f.Close()           //nolint:errcheck,gosec // it's being thrown away
+	os.Remove(p.f.Name()) //nolint:errcheck,gosec // best effort
 }
 
 // syncDir flushes a directory's entries, so a rename in it is on disk.

@@ -289,7 +289,7 @@ sesh ui                         # Search every entry; Enter copies its secret or
 -notes [-editor]                # With store: notes, from stdin or $EDITOR
 -file <path>                    # File path for export/import (default: stdout/stdin)
 -on-conflict <strategy>         # Import conflict: skip, overwrite (default: error)
--force                          # Skip confirmation prompts
+-force                          # Skip confirmation prompts; replace an existing export file
 -length <n>                     # Generated password length (default 24)
 -no-symbols                     # Exclude symbols from generated passwords
 -sort <field>                   # Sort by: service, created_at, updated_at
