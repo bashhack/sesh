@@ -768,3 +768,33 @@ func TestUI_Tidy(t *testing.T) {
 		t.Errorf("Check after the app's own writes = %v, %v; want no change", changed, err)
 	}
 }
+
+// The app's health check is the command's, recorded as one audit event.
+func TestUI_Health(t *testing.T) {
+	healthVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	r, err := u.Health(time.Now(), 365*24*time.Hour)
+	if err != nil || r.Checked != 4 || len(r.Weak) != 2 || len(r.Reused) != 1 {
+		t.Fatalf("Health = %+v, %v", r, err)
+	}
+	if log := mustRun(t, runAudit); !strings.Contains(log, "Health check, in sesh ui: read 4 secrets") {
+		t.Errorf("audit:\n%s", log)
+	}
+}
+
+// health.old_after_days reaches the app as the age its report calls old.
+func TestUI_OptionsOldAfter(t *testing.T) {
+	useConfigFile(t, "[health]\nold_after_days = 30\n")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := uiOptions(agentTestApp(), cfg, nil).OldAfter; got != 30*24*time.Hour {
+		t.Errorf("OldAfter = %v", got)
+	}
+}

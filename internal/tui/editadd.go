@@ -32,7 +32,11 @@ const (
 )
 
 // openEdit opens the form that edits e.
-func (m *Model) openEdit(e *vault.Entry) tea.Cmd {
+func (m *Model) openEdit(e *vault.Entry) tea.Cmd { return m.openEditWith(e, "") }
+
+// openEditWith opens the form that edits e, its secret's choice at choice
+// ("" leaves it at keeping the secret).
+func (m *Model) openEditWith(e *vault.Entry, choice string) tea.Cmd {
 	notes, held := m.notes[e.Key]
 	switch why := m.notesFailed[e.Key]; {
 	case hasNotes(e) && !held && why != "":
@@ -43,7 +47,15 @@ func (m *Model) openEdit(e *vault.Entry) tea.Cmd {
 		return nil
 	}
 	ek := *e
-	return m.openForm(&ek, string(notes))
+	cmd := m.openForm(&ek, string(notes))
+	if m.form != nil && choice != "" {
+		for _, in := range m.form.inputs {
+			if in.kind == inputChoice && in.label == "secret" {
+				in.choice = max(slices.Index(in.choices, choice), 0)
+			}
+		}
+	}
+	return cmd
 }
 
 // openAdd opens the form that adds an entry.

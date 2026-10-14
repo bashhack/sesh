@@ -124,7 +124,7 @@ func (m *Model) gotNotes(msg *notesMsg) tea.Cmd {
 	default:
 		m.notes[msg.k] = msg.notes
 	}
-	return nil
+	return m.editWhenReady(false)
 }
 
 // toggleReveal shows the selected entry's password and secret fields, or
