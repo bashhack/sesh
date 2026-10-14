@@ -42,6 +42,9 @@ type Server struct {
 	lockKeyMemory bool
 	// exitOnAutoLock is set by WithExitOnAutoLock.
 	exitOnAutoLock bool
+	// sweepEvery is how often Run checks the key's deadlines by the wall
+	// clock (expirySweep; tests shorten it).
+	sweepEvery time.Duration
 }
 
 // Listen creates the socket at sockPath, sets perm 0600, and returns a
@@ -53,6 +56,7 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 	srv := &Server{sockPath: sockPath, shutdownDone: make(chan struct{})}
 	srv.keys.idleTimeout = DefaultIdleTimeout
 	srv.keys.maxLifetime = DefaultMaxLifetime
+	srv.sweepEvery = expirySweep
 	for _, opt := range opts {
 		opt(srv)
 	}
@@ -66,6 +70,7 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 		srv.keys.onAutoLock = func(reason string) {
 			srv.stopAfter("locked after " + reason)
 		}
+		srv.keys.onLateLock = srv.exitIfNotUnlockedAgain
 	}
 	// Reserved before the socket exists, so an agent that can't protect
 	// its key never accepts a connection.
@@ -119,6 +124,10 @@ func (s *Server) SocketPath() string {
 	return s.sockPath
 }
 
+// expirySweep is how often the agent checks, by the wall clock, whether
+// its key is past its idle timeout or max lifetime.
+const expirySweep = 15 * time.Second
+
 // Run blocks until ctx is cancelled or SIGTERM/SIGINT arrives, accepting
 // connections and dispatching them on per-connection goroutines. SIGUSR1
 // locks the agent without stopping it. Run returns only after shutdown has
@@ -139,9 +148,16 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.exitOnAutoLock && s.keys.idleTimeout > 0 {
 		s.exitIfNeverUnlocked()
 	}
+	// The lock timers stop while the computer sleeps; the sweep checks the
+	// wall clock, so a key is dropped soon after waking, not hours later.
+	sweep := time.NewTicker(s.sweepEvery)
+	defer sweep.Stop()
 	go func() {
 		for {
 			select {
+			case <-sweep.C:
+				s.keys.sweepExpired()
+				continue
 			case <-runCtx.Done():
 				// Run's own deferred cancel also lands here, after Close.
 				if ctx.Err() != nil {
@@ -199,6 +215,33 @@ func (s *Server) exitIfNeverUnlocked() {
 		})
 		if !ran {
 			s.exitIfNeverUnlocked()
+		}
+	})
+}
+
+// exitIfNotUnlockedAgain stops the server when nothing unlocks it within
+// the idle timeout of a request finding it past its deadline (lock
+// generation gen): the request that found it, after waking, is left to
+// unlock it, but an agent nobody unlocks stops, as one locked by its
+// timers does.
+func (s *Server) exitIfNotUnlockedAgain(gen uint64) {
+	wait := s.keys.idleTimeout
+	if wait <= 0 {
+		wait = DefaultIdleTimeout
+	}
+	s.keys.clock().AfterFunc(wait, func() {
+		select {
+		case <-s.shutdownDone:
+			return
+		default:
+		}
+		ran := s.keys.unlessUnlocking(func() {
+			if s.keys.lockedSince(gen) {
+				s.stopAfter("not unlocked again within the idle timeout")
+			}
+		})
+		if !ran {
+			s.exitIfNotUnlockedAgain(gen)
 		}
 	})
 }
@@ -519,6 +562,7 @@ func (s *Server) dispatchEncrypt(conn *net.UnixConn, raw []byte) bool {
 }
 
 func (s *Server) dispatchStatus(conn *net.UnixConn) bool {
+	s.keys.lockIfExpired()
 	st := s.keys.snapshot()
 	return writeJSON(conn, StatusResponse{
 		Type:             TypeStatusAck,

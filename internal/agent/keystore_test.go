@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/secure"
@@ -326,7 +327,7 @@ func (c *fakeClock) advance(d time.Duration) {
 
 func timedKeystore(t *testing.T, idle, maxLife time.Duration) (*keystore, *fakeClock, []byte) {
 	t.Helper()
-	clk := newFakeClock()
+	clk := monoClock()
 	ks := &keystore{clk: clk, idleTimeout: idle, maxLifetime: maxLife}
 	params := lightParams()
 	salt, verify := sealVerify(t, "correct-horse", params)
@@ -511,5 +512,120 @@ func TestKeystore_TouchRestartsIdleTimer(t *testing.T) {
 	clk.advance(4 * time.Minute)
 	if err := ks.touch(UnlockID(verify)); !errors.Is(err, errNotUnlocked) {
 		t.Errorf("touch once locked: %v", err)
+	}
+}
+
+// wallJump is t with its wall reading moved by d (whole seconds) and its
+// monotonic reading kept, as a computer asleep for d sees: the wall clock
+// moves on, the monotonic one stops. The time package can't make such a
+// value, so this sets the field directly (wall's seconds are bits 30–62
+// while it has a monotonic reading).
+func wallJump(t time.Time, d time.Duration) time.Time {
+	type timeLayout struct { //nolint:govet // time.Time's fields, in its order
+		wall uint64
+		ext  int64
+		loc  unsafe.Pointer
+	}
+	const hasMonotonic = 1 << 63
+	p := (*timeLayout)(unsafe.Pointer(&t)) //nolint:gosec // a test's model of sleep
+	if p.wall&hasMonotonic == 0 {
+		panic("wallJump needs a time with a monotonic reading")
+	}
+	p.wall += uint64(int64(d/time.Second) << 30) //nolint:gosec // signed seconds, shifted into place
+	return t
+}
+
+// monoClock is a fake clock whose times carry a monotonic reading, so a
+// sleep moves only their wall reading.
+func monoClock() *fakeClock { return &fakeClock{now: time.Now()} }
+
+// sleep moves the clock as a computer asleep for d does: its wall reading
+// on, its monotonic one not (on a monoClock), and the timers, on that
+// clock, as far from firing as before.
+func (c *fakeClock) sleep(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.now != c.now.Round(0) {
+		// The timers' deadlines are compared by the monotonic reading,
+		// which the sleep leaves where it was.
+		c.now = wallJump(c.now, d)
+		return
+	}
+	c.now = c.now.Add(d)
+	for _, t := range c.timers {
+		t.at = t.at.Add(d)
+	}
+}
+
+// since takes the wall clock when the monotonic one stopped (sleep), and
+// the monotonic one when the wall clock was set back.
+func TestSince(t *testing.T) {
+	start := time.Now()
+	if got := since(wallJump(start.Add(time.Second), 8*time.Hour), start); got < 8*time.Hour {
+		t.Errorf("after a night asleep: %s, want 8h or more", got)
+	}
+	if got := since(wallJump(start.Add(time.Minute), -2*time.Hour), start); got != time.Minute {
+		t.Errorf("after the clock was set back: %s, want 1m", got)
+	}
+}
+
+// After a sleep past the idle timeout or max lifetime, the timers haven't
+// fired, but the key isn't handed out: the next request locks it, leaving
+// the agent to be unlocked again (onLateLock); the sweep's lock is an
+// auto lock (onAutoLock).
+func TestKeystore_LocksAfterSleep(t *testing.T) {
+	for name, tc := range map[string]struct {
+		use           func(ks *keystore, id string) error
+		reason        string
+		idle, maxLife time.Duration
+		sweep         bool
+	}{
+		"use, idle":  {use: func(ks *keystore, id string) error { _, err := ks.copyKey(id); return err }, idle: 10 * time.Minute, reason: "idle timeout"},
+		"touch, max": {use: func(ks *keystore, id string) error { return ks.touch(id) }, maxLife: time.Hour, reason: "max lifetime"},
+		"sweep, idle": {use: func(ks *keystore, id string) error {
+			ks.sweepExpired()
+			_, err := ks.copyKey(id)
+			return err
+		}, idle: 10 * time.Minute, reason: "idle timeout", sweep: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ks, clk, verify := timedKeystore(t, tc.idle, tc.maxLife)
+			var auto string
+			late := false
+			ks.onAutoLock = func(reason string) { auto = reason }
+			ks.onLateLock = func(uint64) { late = true }
+			clk.sleep(8 * time.Hour)
+			if !isUnlocked(ks) {
+				t.Fatal("the timers fired during the sleep")
+			}
+			if err := tc.use(ks, UnlockID(verify)); !errors.Is(err, errNotUnlocked) {
+				t.Errorf("after the sleep: %v, want not unlocked", err)
+			}
+			switch {
+			case isUnlocked(ks):
+				t.Error("still unlocked")
+			case tc.sweep && (auto != tc.reason || late):
+				t.Errorf("the sweep: auto lock %q, late %v; want an auto lock for %q", auto, late, tc.reason)
+			case !tc.sweep && (auto != "" || !late):
+				t.Errorf("a request: auto lock %q, late %v; want a late lock", auto, late)
+			}
+		})
+	}
+	// A short sleep, within the timeout, changes nothing.
+	ks, clk, verify := timedKeystore(t, 10*time.Minute, 0)
+	clk.sleep(5 * time.Minute)
+	if _, err := ks.copyKey(UnlockID(verify)); err != nil || !isUnlocked(ks) {
+		t.Errorf("after a short sleep: %v", err)
+	}
+}
+
+// A sleep moves no timer nearer, or farther: an idle timer still fires its
+// timeout after the last use, by the monotonic clock.
+func TestFakeClockSleepKeepsTimers(t *testing.T) {
+	ks, clk, _ := timedKeystore(t, 10*time.Minute, 0)
+	clk.sleep(time.Minute)
+	clk.advance(10 * time.Minute)
+	if isUnlocked(ks) {
+		t.Error("the idle timer didn't fire 10 minutes after the use, sleep aside")
 	}
 }

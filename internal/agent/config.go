@@ -41,6 +41,12 @@ func withLogOutput(w io.Writer) Option {
 	return func(s *Server) { s.logOut = w }
 }
 
+// withSweepEvery sets how often the server checks its key's deadlines by
+// the wall clock. Tests only.
+func withSweepEvery(d time.Duration) Option {
+	return func(s *Server) { s.sweepEvery = d }
+}
+
 // withClock replaces the keystore's time source. Tests only.
 func withClock(c clock) Option {
 	return func(s *Server) { s.keys.clk = c }

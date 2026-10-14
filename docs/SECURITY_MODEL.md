@@ -132,9 +132,11 @@ Where the derived key is, by state:
 
 What this changes: while the agent is unlocked, **any process running as your user can ask it to decrypt entries**, and `--list` / `--delete` no longer require the password. This is the same trade-off `ssh-agent` makes. The window is bounded:
 
-- **Idle timeout** (default 10 minutes): the agent locks after this long without an unlock, encrypt, or decrypt. Status checks don't count.
+- **Idle timeout** (default 10 minutes): the agent locks after this long without an unlock, encrypt, or decrypt, or `sesh ui` saying it's in use. Status checks don't count.
 - **Max lifetime** (default 8 hours): the agent locks this long after each unlock, however busy it is.
 - **On demand**: `sesh agent lock` drops the key, `sesh agent stop` shuts the agent down, and `SIGUSR1` locks it (for example from a screen-lock hook).
+
+**Sleep counts.** Time the computer spends asleep counts toward both, as it does on the clock: a laptop closed overnight wakes with the agent past its timeouts. The agent locks at the first request after waking, before answering it: one for the key (to read or store a secret) is refused, and a status says it's locked. An unlock that follows, from the same command, unlocks it again; if nothing does within the idle timeout, it stops, as it does after its timers lock it. With no request, it locks and stops within 15 seconds of waking. (Go's timers run on a clock that stops during sleep, `mach_absolute_time` on macOS and `CLOCK_MONOTONIC` on Linux, so the agent also checks the wall clock, before each request and every 15 seconds. Setting the clock forward locks it early; setting it back doesn't keep it unlocked longer than its timers allow.)
 
 Locking zeroes the key. An automatic lock (idle timeout or max lifetime) also shuts the agent down, and so does an agent that nobody unlocks within the idle timeout. A lock you ask for leaves it running. Either way, the next command prompts again.
 
