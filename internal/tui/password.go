@@ -33,7 +33,6 @@ func (m *Model) changePassword() tea.Cmd {
 	next := &input{kind: inputSecret, label: "new master password", rated: true, hint: "at least 8 characters"}
 	again := &input{kind: inputSecret, label: "new master password again"}
 	f := &form{title: "Change the master password", inputs: []*input{current, next, again}, row: -1, enterDone: "change it", working: "Changing the master password…"}
-	sure := false // to an easy one, asked about once
 	f.submit = func() tea.Cmd {
 		switch {
 		case len(current.secret) == 0:
@@ -44,8 +43,8 @@ func (m *Model) changePassword() tea.Cmd {
 			f.err = "The new master password and its repeat don't match."
 		case bytes.Equal(next.secret, current.secret):
 			f.err = "That's the master password now; type a new one."
-		case next.weak && !sure:
-			sure = true
+		case next.weak && !next.accepted:
+			next.accepted = true
 			f.err = "The new master password is easy to guess: a cracking program would likely find it in under 100 million tries, and it protects every secret in the vault. Press Enter again to use it anyway."
 		default:
 			return m.runChange(bytes.Clone(current.secret), bytes.Clone(next.secret))
@@ -64,6 +63,11 @@ func (m *Model) changePassword() tea.Cmd {
 func (m *Model) runChange(current, next []byte) tea.Cmd {
 	m.form.saving, m.form.err = true, ""
 	m.changing = true
+	// What's being read now comes back to an epoch gone: it's read again
+	// when next wanted.
+	m.checking = false
+	clear(m.pending)
+	clear(m.notesPending)
 	m.epoch++
 	change := m.opts.ChangePassword
 	return func() tea.Msg {
@@ -77,6 +81,15 @@ func (m *Model) runChange(current, next []byte) tea.Cmd {
 func (m *Model) changed(msg *changedMsg) tea.Cmd {
 	m.changing = false
 	m.lastKey = m.opts.Now()
+	cmd := m.takeChange(msg)
+	if m.quitAfter {
+		return tea.Quit
+	}
+	return cmd
+}
+
+// takeChange is changed, but for a quit asked meanwhile.
+func (m *Model) takeChange(msg *changedMsg) tea.Cmd {
 	if msg.err != nil {
 		if m.form != nil {
 			m.form.saving = false
@@ -85,7 +98,10 @@ func (m *Model) changed(msg *changedMsg) tea.Cmd {
 				m.form.err = "Not changed: that's not the current master password."
 			}
 		}
-		if errors.Is(msg.err, ErrLocked) {
+		switch {
+		case m.v == nil:
+			return nil
+		case errors.Is(msg.err, ErrLocked):
 			return m.lock(lockedReason(msg.err))
 		}
 		return m.reread()
@@ -95,12 +111,16 @@ func (m *Model) changed(msg *changedMsg) tea.Cmd {
 		m.form = nil
 	}
 	said := strings.Join(msg.ch.Said, " ")
-	if msg.ch.Vault == nil {
-		return m.lock(said)
+	if msg.ch.OldBackups != "" && msg.ch.Vault == nil {
+		said += " " + msg.ch.OldBackups + " If the old master password may have leaked, delete them."
 	}
-	if m.v == nil {
-		// Locked meanwhile: it's unlocked again as usual.
+	switch {
+	case msg.ch.Vault == nil:
+		return m.lock(said)
+	case m.v == nil:
+		// Locked meanwhile: it's unlocked again as usual, with the new one.
 		msg.ch.Vault.Close() //nolint:errcheck,gosec // nothing more to do with it
+		m.lockedWhy = said + " Unlock with the new master password."
 		return nil
 	}
 	// The vault opened anew, with the agent's timers started again.

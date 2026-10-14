@@ -2,11 +2,15 @@ package tui
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // passwordApp is the app with a fake master password change, which records what it's given and returns ch.
@@ -132,9 +136,172 @@ func TestChangePasswordOldBackups(t *testing.T) {
 
 // Changed, but not opened again: the app locks, saying so.
 func TestChangePasswordNotReopened(t *testing.T) {
-	a, _ := passwordApp(t, newFake(), Changed{Said: []string{"Changed the master password.", "It couldn't open the vault again (gone): unlock it with the new master password."}}, nil)
+	a, _ := passwordApp(t, newFake(), Changed{Said: []string{"Changed the master password.", "It couldn't open the vault again (gone): unlock it with the new master password."},
+		OldBackups: "2 backups made before this change still open with the old master password, in ~/b."}, nil)
 	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
-	if a.v != nil || !strings.Contains(a.lockedWhy, "unlock it with the new master password") {
+	if a.v != nil || !strings.Contains(a.lockedWhy, "unlock it with the new master password") || !strings.Contains(a.lockedWhy, "still open with the old master password") {
 		t.Errorf("locked %v: %q", a.v == nil, a.lockedWhy)
+	}
+}
+
+// A window resized during the change reads nothing from the vault being changed, though new rows come into view.
+func TestChangePasswordResized(t *testing.T) {
+	old, fresh := newFake(), newFake()
+	for i := range 40 {
+		k := vault.Key{Kind: vault.KindTOTP, Service: fmt.Sprintf("site%02d", i)}
+		old.entries = append(old.entries, vault.Entry{Key: k})
+	}
+	a, _ := passwordApp(t, old, Changed{Vault: fresh, Said: []string{"Changed."}}, nil)
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	a.run(a.reread())
+	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	old.err, old.checkErr = Locked("the key changed"), Locked("the key changed")
+	reads := len(old.reads)
+	_, cmd := a.Update(tea.WindowSizeMsg{Width: 100, Height: 60})
+	a.run(cmd)
+	if len(old.reads) != reads || a.v == nil {
+		t.Fatalf("read %q meanwhile, locked %v (%q)", old.reads[reads:], a.v == nil, a.lockedWhy)
+	}
+	a.run(change)
+	if a.v == nil || a.v.v != Vault(fresh) || a.ov == nil || a.ov.kind != panelNotice {
+		t.Errorf("after: locked %v (%q), panel %+v", a.v == nil, a.lockedWhy, a.ov)
+	}
+}
+
+// The longest unlock running out during the change doesn't lock the app under it.
+func TestChangePasswordLifetime(t *testing.T) {
+	old, fresh := newFake(), newFake()
+	var asked []string
+	a := newApp(t, old, Options{
+		Settings:    func() ([]Setting, error) { return nil, nil },
+		MaxLifetime: time.Minute,
+		ChangePassword: func(current, next []byte) (Changed, error) {
+			asked = append(asked, "change")
+			return Changed{Vault: fresh, Said: []string{"Changed."}}, nil
+		},
+	})
+	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.tick(2 * time.Minute)
+	if a.v == nil {
+		t.Fatalf("locked meanwhile: %q", a.lockedWhy)
+	}
+	a.run(change)
+	if a.v == nil || a.v.v != Vault(fresh) || len(asked) != 1 {
+		t.Errorf("after: locked %v, asked %q", a.v == nil, asked)
+	}
+}
+
+// Ctrl-C during the change quits once it's done, not under it.
+func TestChangePasswordQuit(t *testing.T) {
+	a, _ := passwordApp(t, newFake(), Changed{Vault: newFake(), Said: []string{"Changed."}}, nil)
+	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.press("ctrl+c")
+	if a.quit {
+		t.Fatal("quit before the change was done")
+	}
+	a.run(change)
+	if !a.quit {
+		t.Error("didn't quit once it was done")
+	}
+}
+
+// Checks still running when the change starts don't leave the panel waiting for them for good.
+func TestChangePasswordChecksRunning(t *testing.T) {
+	old, fresh := newFake(), newFake()
+	fresh.checks = Checks{Summary: "OK: no problems"}
+	a, _ := passwordApp(t, old, Changed{Vault: fresh, Said: []string{"Changed."}}, nil)
+	a.press("ctrl+k", ",", "down")
+	_, checks := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.press("esc", "up", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
+	a.run(checks)
+	a.press("enter", "down", "enter")
+	if s := a.screen(); !strings.Contains(s, "OK: no problems") || !slices.Contains(fresh.reads, "checks") {
+		t.Errorf("checks after the change:\n%s", s)
+	}
+}
+
+// Each easy password is asked about: saying yes to one doesn't let another through.
+func TestChangePasswordEachEasyOne(t *testing.T) {
+	var asked []string
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		IsWeak:   func(pw []byte) bool { return strings.HasPrefix(string(pw), "password") },
+		ChangePassword: func(current, next []byte) (Changed, error) {
+			asked = append(asked, string(next))
+			return Changed{}, ErrWrongPassword
+		},
+	})
+	a.press("ctrl+k", ",", "enter", "old-password", "enter", "password", "enter", "password", "enter", "enter")
+	if len(asked) != 1 {
+		t.Fatalf("the first easy one, said yes to: asked %q, form %+v", asked, a.form)
+	}
+	a.press("shift+tab", "ctrl+u", "password2", "tab", "ctrl+u", "password2", "enter")
+	if len(asked) != 1 || a.form == nil || !strings.Contains(a.form.err, "easy to guess") {
+		t.Errorf("another easy one: asked %q, form %+v", asked, a.form)
+	}
+}
+
+// A danger confirmation is drawn in the warning colour; another isn't.
+func TestConfirmDanger(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.ov = a.confirm(nil, "Delete", "Delete it for good?", func() tea.Cmd { return nil })
+	plain := a.View().Content
+	a.ov.danger = true
+	if a.View().Content == plain {
+		t.Error("a danger confirmation looks like any other")
+	}
+}
+
+// Notes being read as the change starts are read again after it fails, and not from the vault meanwhile.
+func TestChangePasswordNotesInFlight(t *testing.T) {
+	old := newFake()
+	old.notes = map[vault.Key]string{}
+	for i := range old.entries {
+		old.entries[i].HasNotes = true
+		old.notes[old.entries[i].Key] = "notes of " + old.entries[i].Key.String()
+	}
+	a, _ := passwordApp(t, old, Changed{}, ErrWrongPassword)
+	_, inFlight := a.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	k := a.selected().Key
+	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.run(inFlight)
+	reads := len(old.reads)
+	_, cmd := a.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	a.run(cmd)
+	if len(old.reads) != reads {
+		t.Fatalf("read %q meanwhile", old.reads[reads:])
+	}
+	a.run(change)
+	a.press("esc", "esc", "esc")
+	if string(a.notes[k]) != "notes of "+k.String() {
+		t.Errorf("notes after the change failed: %q (pending %v)", a.notes[k], a.notesPending[k])
+	}
+}
+
+// A TOTP key being read as the change starts is read again after it fails, so its code shows.
+func TestChangePasswordKeyInFlight(t *testing.T) {
+	old := &fakeVault{secrets: map[vault.Key]string{}}
+	for i := range 30 {
+		k := vault.Key{Kind: vault.KindPassword, Service: fmt.Sprintf("a%02d", i)}
+		old.entries = append(old.entries, vault.Entry{Key: k})
+	}
+	totp := vault.Key{Kind: vault.KindTOTP, Service: "zz"}
+	old.entries = append(old.entries, vault.Entry{Key: totp})
+	old.secrets[totp] = seed
+	a, _ := passwordApp(t, old, Changed{}, ErrWrongPassword)
+	if a.keys[totp] != nil || a.pending[totp] {
+		t.Fatal("the TOTP entry's key read before it's in view")
+	}
+	_, inFlight := a.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
+	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.run(inFlight)
+	a.run(change)
+	if a.keys[totp] == nil {
+		t.Errorf("the key after the change failed: pending %v", a.pending[totp])
 	}
 }

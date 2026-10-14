@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/tui"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -98,5 +100,49 @@ func TestUI_ChangePasswordAgent(t *testing.T) {
 	}
 	if _, err := u.Check(); !errors.Is(err, tui.ErrLocked) {
 		t.Errorf("the vault open before: %v", err)
+	}
+	conn, err := agent.DialExisting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAgentConn(conn)
+	mat, err := database.ReadUnlockMaterial(env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := agent.Status(conn); err != nil || !st.Unlocked || st.UnlockID != agent.UnlockID(mat.Verify) {
+		t.Errorf("the agent after: %+v, %v", st, err)
+	}
+}
+
+// With SESH_MASTER_PASSWORD set the app doesn't use the agent, so the agent's being locked is said.
+func TestUI_ChangePasswordAgentFromEnv(t *testing.T) {
+	recoverableVault(t)
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := agent.DialExisting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAgentConn(conn)
+	mat, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.Unlock(conn, []byte("forgotten-pw-1234"), mat.Salt, mat.Verify, mat.Params); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "forgotten-pw-1234")
+	ch, err := uiChangePassword(cfg, []byte("forgotten-pw-1234"), []byte("new-password-5678"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch.Vault != nil {
+		defer ch.Vault.Close() //nolint:errcheck // test cleanup
+	}
+	if said := strings.Join(ch.Said, " "); !strings.Contains(said, "Locked the sesh agent, which held the old key.") {
+		t.Errorf("said %q", said)
 	}
 }

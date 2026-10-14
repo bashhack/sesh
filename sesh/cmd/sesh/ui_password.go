@@ -64,18 +64,20 @@ func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, er
 	}
 
 	ch := tui.Changed{Said: []string{"Changed the master password, and re-encrypted " + withTrash(res.Entries, res.Trashed) + "."}}
-	// The agent is unlocked again below with the new key, so its being
-	// locked is said only when it couldn't be.
-	agentNote := ""
-	if strings.HasPrefix(notes.agent, "warning:") {
-		agentNote = notes.agent
+	// The agent is unlocked again below with the new key, unless the
+	// master password comes from SESH_MASTER_PASSWORD, so its being locked
+	// is said only then, or when it couldn't be.
+	fromEnv := os.Getenv("SESH_MASTER_PASSWORD") != ""
+	agentNote := notes.agent
+	if !fromEnv && !strings.HasPrefix(notes.agent, "warning:") {
+		agentNote = ""
 	}
 	for _, n := range []string{notes.touch, notes.recovery, agentNote, notes.file} {
 		if n != "" {
 			ch.Said = append(ch.Said, n)
 		}
 	}
-	if os.Getenv("SESH_MASTER_PASSWORD") != "" {
+	if fromEnv {
 		ch.Said = append(ch.Said, "SESH_MASTER_PASSWORD still holds the old password; update it, or the next command will refuse it as wrong.")
 	}
 	s, err := backup.SeriesOf(dbPath, st.BackupFolder())

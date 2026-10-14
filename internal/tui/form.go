@@ -57,6 +57,7 @@ type input struct {
 	loading  bool
 	rated    bool // a password, whose strength is said
 	weak     bool // the secret typed is easy to guess
+	accepted bool // weak, and to be used anyway: typing again asks again
 }
 
 // name is the input's label.
@@ -331,7 +332,14 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 	m.lastKey = m.opts.Now()
 	f := m.form
 	if f.saving {
-		if msg.String() == "ctrl+c" {
+		switch {
+		case msg.String() != "ctrl+c":
+		case m.changing:
+			// A change cut off between its commit and what follows it
+			// would leave Touch ID unlock, and the agent, on the old key.
+			m.quitAfter = true
+			f.working = "Quitting once the master password is changed…"
+		default:
 			return tea.Quit
 		}
 		return nil
@@ -515,6 +523,7 @@ func (m *Model) formPaste(text string) tea.Cmd {
 // rateSecret notes whether the secret typed is easy to guess.
 func (m *Model) rateSecret(in *input) {
 	in.weak = in.rated && len(in.secret) > 0 && m.opts.IsWeak != nil && m.opts.IsWeak(in.secret)
+	in.accepted = false
 }
 
 // openFieldForm opens a form for the custom field at row (-1: a new one)

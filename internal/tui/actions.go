@@ -647,11 +647,11 @@ func (m *Model) drawOverlay(base string) string {
 		}
 	case panelConfirm:
 		hint = th.hints([2]string{"y", "yes"}, [2]string{"n", "no"}, [2]string{"esc", "cancel"})
-	case panelNotice:
-		hint = th.hints([2]string{"↵", "ok"})
 		if ov.danger {
 			edge, titleStyle = th.bad, lipgloss.NewStyle().Foreground(th.bad).Bold(true)
 		}
+	case panelNotice:
+		hint = th.hints([2]string{"↵", "ok"})
 	default:
 		hint = th.hints([2]string{"↵", "choose, or press its key"}, [2]string{"esc", "back"})
 	}

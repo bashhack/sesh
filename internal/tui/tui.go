@@ -306,6 +306,7 @@ type Model struct {
 	// changing is the master password being changed: the vault open stops
 	// opening once it commits, so it isn't read meanwhile.
 	changing  bool
+	quitAfter bool // Ctrl-C was pressed while changing: it quits once that's done
 	statusBad bool // the status is something that went wrong
 	showHelp  bool
 	dark      bool

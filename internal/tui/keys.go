@@ -229,7 +229,7 @@ func (m *Model) copySecret(sel *vault.Entry) tea.Cmd {
 
 // readKeys reads the keys of the TOTP entries shown that aren't held yet.
 func (m *Model) readKeys() tea.Cmd {
-	if m.v == nil {
+	if m.v == nil || m.changing {
 		return nil
 	}
 	var cmds []tea.Cmd
