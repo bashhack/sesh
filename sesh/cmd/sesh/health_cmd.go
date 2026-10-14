@@ -144,7 +144,13 @@ func writeHealth(w io.Writer, r *health.Report, breaches bool, oldDays int) erro
 	}
 	switch {
 	case !breaches:
-		b.WriteString("\nBreaches weren't checked: download Have I Been Pwned's passwords (PwnedPasswordsDownloader), then run with --hibp <file>, or set health.hibp_file.\n")
+		b.WriteString(`
+Breaches weren't checked. To check them, download Have I Been Pwned's
+passwords (about 100 GB) with their downloader, which needs the .NET 10 SDK:
+  dotnet tool install --global haveibeenpwned-downloader
+  haveibeenpwned-downloader pwnedpasswords --single
+then: sesh health --hibp pwnedpasswords.txt   (or set health.hibp_file)
+`)
 	case oldDays == 0:
 		b.WriteString("\nAge wasn't checked: health.old_after_days is 0.\n")
 	}

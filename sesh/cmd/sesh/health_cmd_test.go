@@ -53,7 +53,8 @@ func TestHealth(t *testing.T) {
 		"Weak passwords (2): easy to guess\n  password/github/alice\n  password/gitlab\n",
 		"Reused (2): the same secret on more than one entry\n  password/github/alice, password/gitlab\n",
 		"sesh edit <id> --generate",
-		"Breaches weren't checked",
+		"Breaches weren't checked. To check them",
+		"haveibeenpwned-downloader pwnedpasswords --single",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
