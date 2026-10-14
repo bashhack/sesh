@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/secure"
@@ -103,36 +104,17 @@ func (m *Manager) ImportEncrypted(r io.Reader, opts ImportOptions, password []by
 	return m.Import(bytes.NewReader(payload), forwardOpts)
 }
 
-// ReadEncrypted reads the entries of a password-encrypted export from r,
-// importing nothing. Their secrets are in Go strings, which can't be
-// wiped.
-func ReadEncrypted(r io.Reader, password []byte) ([]ExportEntry, error) {
-	payload, err := DecryptExport(r, password)
-	if err != nil {
-		return nil, err
-	}
-	defer secure.SecureZeroBytes(payload)
-	entries, err := readJSON(bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("read the export: %w", err)
-	}
-	return entries, nil
+// Sealed is a password-encrypted export whose envelope has been read and
+// checked: its settings are ones sesh accepts, so its password can be
+// asked for.
+type Sealed struct {
+	salt, ciphertext []byte
+	params           kdf.Params
 }
 
-// IsEncryptedExport says whether b is a password-encrypted export's
-// envelope.
-func IsEncryptedExport(b []byte) bool {
-	var envelope EncryptedEnvelope
-	return json.Unmarshal(b, &envelope) == nil && envelope.Algorithm == "argon2id" && envelope.Ciphertext != "" && envelope.Salt != ""
-}
-
-// DecryptExport opens a password-encrypted export from r: its JSON, which
-// the caller wipes.
-func DecryptExport(r io.Reader, password []byte) ([]byte, error) {
-	if len(password) == 0 {
-		return nil, fmt.Errorf("password cannot be empty")
-	}
-
+// ReadSealed reads and checks a password-encrypted export's envelope from
+// r, opening nothing.
+func ReadSealed(r io.Reader) (*Sealed, error) {
 	var envelope EncryptedEnvelope
 	if err := json.NewDecoder(r).Decode(&envelope); err != nil {
 		return nil, fmt.Errorf("read envelope: %w", err)
@@ -162,15 +144,70 @@ func DecryptExport(r io.Reader, password []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode ciphertext: %w", err)
 	}
+	return &Sealed{salt: salt, ciphertext: ciphertext, params: envelope.Params}, nil
+}
 
-	key := kdf.Derive(password, salt, envelope.Params)
+// Open is the export's JSON, which the caller wipes.
+func (s *Sealed) Open(password []byte) ([]byte, error) {
+	if len(password) == 0 {
+		return nil, fmt.Errorf("password cannot be empty")
+	}
+	key := kdf.Derive(password, s.salt, s.params)
 	defer secure.SecureZeroBytes(key)
-
-	payload, err := gcmOpen(key, ciphertext)
+	payload, err := gcmOpen(key, s.ciphertext)
 	if err != nil {
 		return nil, fmt.Errorf("wrong password or corrupted export: %w", err)
 	}
 	return payload, nil
+}
+
+// Entries are the export's entries, importing nothing. Their secrets are
+// in Go strings, which can't be wiped.
+func (s *Sealed) Entries(password []byte) ([]ExportEntry, error) {
+	payload, err := s.Open(password)
+	if err != nil {
+		return nil, err
+	}
+	defer secure.SecureZeroBytes(payload)
+	entries, err := readJSON(bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("read the export: %w", err)
+	}
+	return entries, nil
+}
+
+// IsEncryptedExport says whether b is a password-encrypted export's
+// envelope.
+func IsEncryptedExport(b []byte) bool {
+	var envelope EncryptedEnvelope
+	return json.Unmarshal(b, &envelope) == nil && envelope.Algorithm == "argon2id" && envelope.Ciphertext != "" && envelope.Salt != ""
+}
+
+// IsPlainExport says whether b is a plain export of sesh's: JSON or CSV.
+func IsPlainExport(b []byte) bool {
+	if bytes.HasPrefix(b, []byte(strings.Join(csvHeader, ",")+"\n")) {
+		return true
+	}
+	var entries []map[string]json.RawMessage
+	if json.Unmarshal(b, &entries) != nil || len(entries) == 0 {
+		return false
+	}
+	_, service := entries[0]["service"]
+	_, kind := entries[0]["type"]
+	return service && kind
+}
+
+// DecryptExport opens a password-encrypted export from r: its JSON, which
+// the caller wipes.
+func DecryptExport(r io.Reader, password []byte) ([]byte, error) {
+	if len(password) == 0 {
+		return nil, fmt.Errorf("password cannot be empty")
+	}
+	s, err := ReadSealed(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.Open(password)
 }
 
 // gcmSeal returns nonce || ciphertext || tag.

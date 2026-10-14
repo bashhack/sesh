@@ -243,11 +243,42 @@ func TestReadEncrypted(t *testing.T) {
 	if !IsEncryptedExport(buf.Bytes()) || IsEncryptedExport([]byte(`[{"service":"x"}]`)) || IsEncryptedExport([]byte(`{"service":"x"}`)) || IsEncryptedExport([]byte("not json")) {
 		t.Error("the envelope isn't told from other files")
 	}
-	list, err := ReadEncrypted(bytes.NewReader(buf.Bytes()), []byte("export-password-1"))
+	sealed, err := ReadSealed(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := sealed.Entries([]byte("export-password-1"))
 	if err != nil || len(list) != 1 || list[0].Service != "github" || list[0].Secret != "s3cret" {
 		t.Fatalf("%+v, %v", list, err)
 	}
-	if _, err := ReadEncrypted(bytes.NewReader(buf.Bytes()), []byte("wrong-password-1")); err == nil || !strings.Contains(err.Error(), "wrong password") {
+	if _, err := sealed.Entries([]byte("wrong-password-1")); err == nil || !strings.Contains(err.Error(), "wrong password") {
 		t.Errorf("a wrong password: %v", err)
+	}
+	// Settings sesh refuses are found before any password is asked.
+	bad := `{"version":1,"algorithm":"argon2id","salt":"AAAAAAAAAAAAAAAAAAAAAA==","ciphertext":"AA==","params":{"time":3,"memory":4294967295,"threads":4,"key_len":32}}`
+	if _, err := ReadSealed(strings.NewReader(bad)); err == nil || !strings.Contains(err.Error(), "memory setting out of range") {
+		t.Errorf("out of bounds: %v", err)
+	}
+}
+
+// A plain export, JSON or CSV, is told from other files.
+func TestIsPlainExport(t *testing.T) {
+	m := NewManager(vault.NewMemStore())
+	if err := m.StorePassword("github", "alice", []byte("s3cret"), EntryTypePassword, vault.Filing{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []ExportFormat{FormatJSON, FormatCSV} {
+		var buf bytes.Buffer
+		if _, err := m.Export(&buf, &ExportOptions{Format: f}); err != nil {
+			t.Fatal(err)
+		}
+		if !IsPlainExport(buf.Bytes()) {
+			t.Errorf("%s isn't told:\n%s", f, buf.String())
+		}
+	}
+	for _, other := range []string{`[]`, `[{"name":"x"}]`, `[{"service":"x"}]`, `{"service":"x","type":"password"}`, "url,username,password\n", "not json"} {
+		if IsPlainExport([]byte(other)) {
+			t.Errorf("%q taken for an export", other)
+		}
 	}
 }

@@ -99,7 +99,8 @@ func TestImport_GoogleAuthenticator(t *testing.T) {
 		}
 	}
 	out, stderr, err := runImportOut(t, "y\n", true, "--from", "google-authenticator", "--on-conflict", "skip", code)
-	if err != nil || !strings.Contains(out, "✅ Imported 2 TOTP entries from Google Authenticator.") || !strings.Contains(stderr, "Import 2 entries? [y/N]: ") {
+	if err != nil || !strings.Contains(out, "✅ Imported 2 TOTP entries from Google Authenticator.") || !strings.Contains(stderr, "Import 2 entries? [y/N]: ") ||
+		!strings.Contains(out, "Before removing an account from your phone, check that its code matches, as with: sesh --service totp --service-name ") {
 		t.Fatalf("import: %q, %q, %v", out, stderr, err)
 	}
 	store := openDoctorVault(t, env)
@@ -731,5 +732,93 @@ func TestImport_Sesh(t *testing.T) {
 	}
 	if _, _, err := runImportOut(t, "", true, "--from", "sesh", file, file); err == nil || !strings.Contains(err.Error(), "give one sesh export") {
 		t.Errorf("two files: %v", err)
+	}
+}
+
+// Replacing an AWS entry from sesh's export takes the export's device with its key; a new entry keeps its code
+// settings, tags, notes, fields and times. A file whose settings sesh refuses isn't asked a password for, and a plain
+// export is sent to --action import, with or without --from.
+func TestImport_SeshOverwriteAndRefusals(t *testing.T) {
+	env := importVault(t)
+	aws := vault.AWSKey("prof")
+	store := openDoctorVault(t, env)
+	if err := store.SaveWithDetails(&vault.Entry{Key: aws, Settings: vault.Settings{AWSMFADevice: "arn:aws:iam::1:mfa/OLD"}}, []byte("JBSWY3DPEHPK3PXP"), &vault.Details{}); err != nil {
+		t.Fatal(err)
+	}
+	store.Close() //nolint:errcheck,gosec // test cleanup
+
+	src := vault.NewMemStore()
+	made := time.Date(2025, 3, 4, 5, 6, 7, 0, time.UTC)
+	fresh := vault.Key{Kind: vault.KindTOTP, Service: "new", Username: "x"}
+	for _, e := range []struct {
+		k      vault.Key
+		secret string
+		s      vault.Settings
+	}{
+		{aws, "GEZDGNBVGY3TQOJQ", vault.Settings{AWSMFADevice: "arn:aws:iam::1:mfa/NEW"}},
+		{fresh, "JBSWY3DPEHPK3PXP", vault.Settings{TOTP: totp.Params{Algorithm: "SHA256", Digits: 8, Period: 60}}},
+	} {
+		if err := src.Save(&vault.Entry{Key: e.k, Settings: e.s, Tags: []string{"phone"}, CreatedAt: made, UpdatedAt: made}, []byte(e.secret)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := src.SetDetails(fresh, &vault.Details{Notes: []byte("backup codes in the safe"), Fields: []vault.Field{{Name: "pin", Value: []byte("1234"), Secret: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := password.NewManager(src).ExportEncrypted(&buf, &password.ExportOptions{KDF: kdf.Minimum()}, []byte("export-pass-1234")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "backup.enc")
+	if err := os.WriteFile(file, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := readSecret
+	t.Cleanup(func() { readSecret = old })
+	asked := 0
+	readSecret = func() ([]byte, error) { asked++; return []byte("export-pass-1234"), nil }
+	// Its TOTP entries aren't from a phone: no word of checking one before removing it there.
+	if out, stderr, err := runImportOut(t, "", true, "--yes", "--on-conflict", "overwrite", file); err != nil || strings.Contains(out, "your phone") {
+		t.Fatalf("%q\n%s\n%v", out, stderr, err)
+	}
+	store = openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	a, err := store.Lookup(aws)
+	secret, gerr := store.Get(aws)
+	if err != nil || gerr != nil || a.Settings.AWSMFADevice != "arn:aws:iam::1:mfa/NEW" || string(secret) != "GEZDGNBVGY3TQOJQ" {
+		t.Errorf("the AWS entry: device %q, secret %q, %v %v", a.Settings.AWSMFADevice, secret, err, gerr)
+	}
+	n, err := store.Lookup(fresh)
+	if err != nil || n.Settings.TOTP != (totp.Params{Algorithm: "SHA256", Digits: 8, Period: 60}) || !slices.Equal(n.Tags, []string{"phone"}) ||
+		!n.CreatedAt.Equal(made) || !n.UpdatedAt.Equal(made) {
+		t.Errorf("the new entry: %+v, %v", n, err)
+	}
+	if d, err := store.Details(fresh, "test"); err != nil || len(d.Fields) != 1 || !d.Fields[0].Secret || string(d.Notes) != "backup codes in the safe" {
+		t.Errorf("its details: %+v, %v", d, err)
+	}
+
+	bad := filepath.Join(t.TempDir(), "bad.enc")
+	if err := os.WriteFile(bad, []byte(`{"version":1,"algorithm":"argon2id","salt":"AAAAAAAAAAAAAAAAAAAAAA==","ciphertext":"AA==","params":{"time":3,"memory":4294967295,"threads":4,"key_len":32}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	asked = 0
+	if _, _, err := runImportOut(t, "", true, bad); err == nil || !strings.Contains(err.Error(), "memory setting out of range") || asked != 0 {
+		t.Errorf("settings refused: %v, asked %d", err, asked)
+	}
+	plain := filepath.Join(t.TempDir(), "plain.json")
+	if err := os.WriteFile(plain, []byte(`[{"service":"x","type":"password","secret":"y"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runImportOut(t, "", true, plain); err == nil || !strings.Contains(err.Error(), "--action import") {
+		t.Errorf("a plain export without --from: %v", err)
+	}
+}
+
+// Without a terminal, a protected Bitwarden export says how to type its password.
+func TestImport_BitwardenNoTerminal(t *testing.T) {
+	importVault(t)
+	if _, _, err := runImportOut(t, "", false, "--from", "bitwarden", bitwardenFixture("password.json")); err == nil ||
+		err.Error() != "this Bitwarden export is protected by a password: run sesh import at a terminal to type it" {
+		t.Errorf("%v", err)
 	}
 }

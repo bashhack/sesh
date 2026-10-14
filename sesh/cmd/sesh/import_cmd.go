@@ -359,7 +359,8 @@ func detectSource(args []string) string {
 			return "bitwarden"
 		case keepass.IsExport(b):
 			return "keepass"
-		case password.IsEncryptedExport(b):
+		case password.IsEncryptedExport(b), password.IsPlainExport(b):
+			// A plain one is sent where it's imported from.
 			return "sesh"
 		case browser.Detect(b) != "":
 			return browser.Detect(b)
@@ -387,9 +388,10 @@ func fitHistory(e *importer.Entry, keep int) {
 
 // writeImported stores e, with its earlier secrets in its history. One
 // replacing an entry you have takes its secret and code settings from the
-// import, and its folder only if it has one; its details are already
-// merged (see mergeDetails); tags are both sets, and the entry's other
-// settings and creation time are kept.
+// import, with an AWS entry's device when the import has one, and its
+// folder only if it has one; its details are already merged (see
+// mergeDetails); tags are both sets, and the entry's other settings and
+// creation time are kept.
 func writeImported(store *database.Store, e *importer.Entry, exists bool) (database.ImportedHistory, error) {
 	ent := vault.Entry{Key: e.Key, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.Created, UpdatedAt: e.Updated}
 	if !exists {
@@ -401,6 +403,10 @@ func writeImported(store *database.Store, e *importer.Entry, exists bool) (datab
 	}
 	ent.Settings = cur.Settings
 	ent.Settings.TOTP = e.Settings.TOTP
+	// An AWS entry's device goes with its key, when the import has one.
+	if e.Settings.AWSMFADevice != "" {
+		ent.Settings.AWSMFADevice = e.Settings.AWSMFADevice
+	}
 	if ent.Folder == "" {
 		ent.Folder = cur.Folder
 	}
@@ -653,12 +659,17 @@ func readSeshExport(args []string, ask func(what string) ([]byte, error)) (found
 	if !password.IsEncryptedExport(b) {
 		return found{}, errors.New("this isn't one of sesh's encrypted exports: a plain one (JSON or CSV) is imported with sesh --service password --action import")
 	}
+	// Its settings are checked before its password is asked for.
+	sealed, err := password.ReadSealed(bytes.NewReader(b))
+	if err != nil {
+		return found{}, err
+	}
 	key, err := ask("sesh export")
 	if err != nil {
 		return found{}, err
 	}
 	defer secure.SecureZeroBytes(key)
-	list, err := password.ReadEncrypted(bytes.NewReader(b), key)
+	list, err := sealed.Entries(key)
 	if err != nil {
 		return found{}, err
 	}

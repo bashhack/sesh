@@ -16,8 +16,12 @@ func Entries(list []password.ExportEntry) []*importer.Entry {
 	out := make([]*importer.Entry, 0, len(list))
 	for i := range list {
 		ee := &list[i]
+		name := ee.Service
+		if ee.Username != "" {
+			name += " (" + ee.Username + ")"
+		}
 		e := &importer.Entry{
-			Key: ee.Key(), Name: ee.Name(), Folder: ee.Folder, Tags: ee.Tags,
+			Key: ee.Key(), Name: name, Folder: ee.Folder, Tags: ee.Tags,
 			Settings: ee.Settings, Created: ee.CreatedAt, Updated: ee.UpdatedAt,
 		}
 		switch {
