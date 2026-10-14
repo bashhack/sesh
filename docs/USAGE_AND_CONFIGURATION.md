@@ -157,6 +157,10 @@ every_days = 1                          # back up when the newest backup is this
 keep = 7                                # how many backups to keep
 dir = "~/Backups/sesh"                  # where they go (default: a backups folder next to the vault)
 
+[health]                                # what sesh health checks
+old_after_days = 365                    # a password or API key unchanged this long is old; 0 doesn't check
+hibp_file = "~/hibp/pwnedpasswords.txt" # Have I Been Pwned's passwords, downloaded, to check against
+
 [master_password]                       # how hard your master password is to guess-check (Argon2id)
 memory = "256MiB"                       # memory each check takes: 19MiB to 1GiB
 time = 3                                # passes over that memory: 2 to 10
@@ -203,10 +207,13 @@ backup.every_days        1 day         (default)
 backup.keep              7             (default)
 trash.keep_days          30 days       (default)
 history.keep             10            (default)
+health.old_after_days    365 days      (default)
 db_path                  /Users/me/vaults/sesh.db
                          (config file)
 backup.dir               /Users/me/vaults/backups
                          (default: next to the vault)
+health.hibp_file         none
+                         (default: passwords aren't checked against breaches)
 ```
 
 ## Configuration Options
@@ -291,6 +298,8 @@ backup.dir               /Users/me/vaults/backups
 | `SESH_BACKUP_DIR` | Where backups go (config: `backup.dir`) | a `backups` folder next to the vault |
 | `SESH_TRASH_KEEP_DAYS` | Days a deleted entry stays in the trash; `0` keeps none, so deleting is for good (config: `trash.keep_days`) | `30` |
 | `SESH_HISTORY_KEEP` | How many earlier secrets each entry keeps, 0 to 1000; `0` keeps no new ones (config: `history.keep`) | `10` |
+| `SESH_HEALTH_OLD_AFTER_DAYS` | Days a password or API key can go unchanged before `sesh health` calls it old; `0` doesn't check (config: `health.old_after_days`) | `365` |
+| `SESH_HEALTH_HIBP_FILE` | Have I Been Pwned's passwords, downloaded, for `sesh health` to check against (config: `health.hibp_file`) | none |
 | `SESH_KDF_MEMORY` | Memory for each master password check, such as `256MiB` (config: `master_password.memory`) | `256MiB` |
 | `SESH_KDF_TIME` | Passes over that memory (config: `master_password.time`) | `3` |
 | `SESH_KDF_THREADS` | Threads (config: `master_password.threads`) | `4` |
@@ -1101,6 +1110,34 @@ The password manager's `store`, `generate`, `get` (including `--clip` on its own
 Names are case-sensitive: `GitHub` and `github` are two entries. When a lookup (`get`, `totp-generate`, `--service totp`, or `--delete` with `--service password` or `--service totp`) misses only by case, sesh says which entry you may have meant. Creating an entry whose name differs from an existing one only in case asks first, like an overwrite: with `store`, `generate`, and `totp-store` (`--force` skips the question), and in the TOTP setup wizard. AWS profiles are named by your AWS configuration, so the AWS setup doesn't ask.
 
 **Weak passwords.** When you type a password to store (`--action store`, kind `password`), sesh rates it with [zxcvbn](https://github.com/dropbox/zxcvbn), which knows common passwords, words, names, dates, and keyboard patterns, and counts the entry's own service name and username as easy guesses. If zxcvbn estimates fewer than about 100 million guesses would find it (a score of 2 or less out of 4), sesh stores it and warns, with the command to generate a strong one instead. Generated passwords, and generated API keys, get the same check: at the default length (24) they always pass, but `--length 9` or shorter can fail it, and then the warning suggests `--length 12` or more. API keys and notes you type aren't rated. zxcvbn's word lists are English: for passwords in other languages or scripts, it judges mostly by length and the mix of characters. Only a password's first 64 characters are rated.
+
+### Password health (`sesh health`)
+
+`sesh health` reads every password and API key in the vault and lists what's wrong with them:
+
+```
+$ sesh health
+Checked 41 passwords and API keys.
+
+Weak passwords (2): easy to guess
+  password/forum/me
+  password/router
+
+Reused (2): the same secret on more than one entry
+  password/github/alice, password/gitlab
+
+Old (1): not changed in 365 days or more
+  api_key/ci                               changed 2024-03-02
+
+To replace a password: sesh edit <id> --generate (or --secret to type one)
+```
+
+- **Weak:** passwords that are easy to guess, rated as `sesh` rates a new one (zxcvbn, with the entry's name and username counted against it). API keys and TOTP keys aren't rated, since people don't choose them.
+- **Reused:** a password or API key that's the same on more than one entry, so one leak opens them all.
+- **Old:** a password or API key whose secret hasn't changed in `health.old_after_days` (365 by default; `0` doesn't check). Editing anything else about an entry doesn't count as a change.
+- **Breached:** passwords seen in data breaches, checked against a copy of Have I Been Pwned's Pwned Passwords on your own disk, so nothing about them leaves your machine. Download it with Have I Been Pwned's [PwnedPasswordsDownloader](https://github.com/HaveIBeenPwned/PwnedPasswordsDownloader) (the SHA-1 download, not `--ntlm`): as one file (`--single`, tens of gigabytes) or its folder of ranges, either works. Then run `sesh health --hibp <file or folder>`, or set `health.hibp_file`. Without it, the report says breaches weren't checked.
+- **Reading the secrets** is one event in the audit log ("Health check: read 41 secrets"), not one per entry. Secure notes and TOTP keys aren't read.
+- `--json` prints the report for scripts. `sesh health` exits 0 whatever it finds, as `sesh doctor`'s warnings do.
 
 ### Editing an entry (`sesh edit`)
 

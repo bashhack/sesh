@@ -81,6 +81,10 @@ const (
 	MaxHistoryKeep     = 1000
 )
 
+// DefaultHealthOldAfterDays is how long a password or API key can go
+// unchanged before sesh health calls it old.
+const DefaultHealthOldAfterDays = 365
+
 // Config is sesh's resolved settings.
 type Config struct {
 	// Path is the config file sesh looked for; FileFound says whether it
@@ -107,6 +111,12 @@ type Config struct {
 	// HistoryKeep is how many earlier secrets each entry keeps; 0 keeps
 	// none.
 	HistoryKeep Setting[int]
+	// HealthOldAfterDays is how many days a secret can go unchanged before
+	// sesh health calls it old; 0 doesn't check.
+	HealthOldAfterDays Setting[int]
+	// HealthHIBPFile is a downloaded copy of Have I Been Pwned's Pwned
+	// Passwords that sesh health looks passwords up in; "" checks none.
+	HealthHIBPFile Setting[string]
 	// KDFMemory (KiB), KDFTime and KDFThreads are the Argon2id settings a
 	// new master password key, or an encrypted export, is derived with.
 	KDFMemory  Setting[uint32]
@@ -149,6 +159,8 @@ const (
 	EnvBackupKeep         = "SESH_BACKUP_KEEP"
 	EnvTrashKeepDays      = "SESH_TRASH_KEEP_DAYS"
 	EnvHistoryKeep        = "SESH_HISTORY_KEEP"
+	EnvHealthOldAfterDays = "SESH_HEALTH_OLD_AFTER_DAYS"
+	EnvHealthHIBPFile     = "SESH_HEALTH_HIBP_FILE"
 )
 
 // fileConfig is the config file's shape. Durations are strings such as
@@ -165,6 +177,10 @@ type fileConfig struct {
 		IdleTimeout string `toml:"idle_timeout"`
 		MaxLifetime string `toml:"max_lifetime"`
 	} `toml:"agent"`
+	Health struct {
+		HIBPFile     string `toml:"hibp_file"`
+		OldAfterDays int64  `toml:"old_after_days"`
+	} `toml:"health"`
 	MasterPassword struct {
 		Memory  string `toml:"memory"`
 		Time    int64  `toml:"time"`
@@ -219,6 +235,7 @@ func Load(o Overrides) (*Config, error) {
 		BackupKeep:         Setting[int]{Value: DefaultBackupKeep},
 		TrashKeepDays:      Setting[int]{Value: DefaultTrashKeepDays},
 		HistoryKeep:        Setting[int]{Value: DefaultHistoryKeep},
+		HealthOldAfterDays: Setting[int]{Value: DefaultHealthOldAfterDays},
 	}
 	c.defaultKDF()
 	if err := c.applyFile(); err != nil {
@@ -309,6 +326,16 @@ func (c *Config) applyFile() error {
 			return err
 		}
 	}
+	if in("health.old_after_days") {
+		if err := setOldAfterDays(&c.HealthOldAfterDays, f.Health.OldAfterDays, strconv.FormatInt(f.Health.OldAfterDays, 10), FromFile, from("health.old_after_days")); err != nil {
+			return err
+		}
+	}
+	if in("health.hibp_file") {
+		if err := setPath(&c.HealthHIBPFile, f.Health.HIBPFile, FromFile, from("health.hibp_file")); err != nil {
+			return err
+		}
+	}
 	if in("master_password.memory") {
 		if err := setKDFMemory(&c.KDFMemory, f.MasterPassword.Memory, FromFile, from("master_password.memory")); err != nil {
 			return err
@@ -361,6 +388,11 @@ func (c *Config) applyEnv() error {
 			return err
 		}
 	}
+	if v, ok := os.LookupEnv(EnvHealthHIBPFile); ok && v != "" {
+		if err := setPath(&c.HealthHIBPFile, v, FromEnv, EnvHealthHIBPFile); err != nil {
+			return err
+		}
+	}
 	for _, d := range []struct {
 		set func(*Setting[int], int64, string, Source, string) error
 		dst *Setting[int]
@@ -370,6 +402,7 @@ func (c *Config) applyEnv() error {
 		{setBackupKeep, &c.BackupKeep, EnvBackupKeep},
 		{setTrashKeepDays, &c.TrashKeepDays, EnvTrashKeepDays},
 		{setHistoryKeep, &c.HistoryKeep, EnvHistoryKeep},
+		{setOldAfterDays, &c.HealthOldAfterDays, EnvHealthOldAfterDays},
 	} {
 		if v, ok := os.LookupEnv(d.env); ok && v != "" {
 			n, err := strconv.ParseInt(v, 10, 64)
@@ -583,6 +616,16 @@ func setTrashKeepDays(dst *Setting[int], n int64, raw string, src Source, origin
 func setHistoryKeep(dst *Setting[int], n int64, raw string, src Source, origin string) error {
 	if n < 0 || n > MaxHistoryKeep {
 		return fmt.Errorf("%s = %q: want a whole number of earlier secrets to keep, from 0 (none) to %d", origin, raw, MaxHistoryKeep)
+	}
+	*dst = Setting[int]{Value: int(n), Source: src, Origin: origin}
+	return nil
+}
+
+// setOldAfterDays sets how many days a secret can go unchanged before
+// it's old, 0 (not checked) to MaxAuditRetentionDays.
+func setOldAfterDays(dst *Setting[int], n int64, raw string, src Source, origin string) error {
+	if n < 0 || n > MaxAuditRetentionDays {
+		return fmt.Errorf("%s = %q: want a whole number of days from 0 (not checked) to %d", origin, raw, MaxAuditRetentionDays)
 	}
 	*dst = Setting[int]{Value: int(n), Source: src, Origin: origin}
 	return nil
