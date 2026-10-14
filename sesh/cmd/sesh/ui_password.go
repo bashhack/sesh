@@ -80,22 +80,7 @@ func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, er
 	if fromEnv {
 		ch.Said = append(ch.Said, "SESH_MASTER_PASSWORD still holds the old password; update it, or the next command will refuse it as wrong.")
 	}
-	s, err := backup.SeriesOf(dbPath, st.BackupFolder())
-	if err == nil {
-		all, lerr := s.List()
-		if len(all) > 0 {
-			them := "them"
-			if len(all) == 1 {
-				them = "it"
-			}
-			ch.OldBackups = oldBackupsSaid(len(all), "master password", s.Dir) + " If the old master password may have leaked, delete " + them + "."
-			ch.Renew = "Delete " + them + " and make a fresh backup?"
-		}
-		err = lerr
-	}
-	if err != nil {
-		ch.Said = append(ch.Said, fmt.Sprintf("warning: old backups: %v", err))
-	}
+	ch.OldBackups, ch.Renew = uiOldBackups(dbPath, "master password")
 	v, err := reopenWith(cfg, bytes.Clone(next))
 	if err != nil {
 		ch.Said = append(ch.Said, fmt.Sprintf("It couldn't open the vault again (%v): unlock it with the new master password.", err))
@@ -103,6 +88,32 @@ func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, er
 	}
 	ch.Vault = newUIVault(v)
 	return ch, nil
+}
+
+// uiOldBackups says the backups of the vault at dbPath, which still open
+// with the old what a change replaced, if there are any, and asks whether
+// to delete them; a backups folder that can't be listed is said too.
+func uiOldBackups(dbPath, what string) (said, ask string) {
+	st, err := settingsOf(dbPath)
+	if err != nil {
+		return "warning: old backups: " + err.Error(), ""
+	}
+	s, err := backup.SeriesOf(dbPath, st.BackupFolder())
+	if err != nil {
+		return "warning: old backups: " + err.Error(), ""
+	}
+	all, err := s.List()
+	switch {
+	case err != nil:
+		return "warning: old backups: " + err.Error(), ""
+	case len(all) == 0:
+		return "", ""
+	}
+	them := "them"
+	if len(all) == 1 {
+		them = "it"
+	}
+	return oldBackupsSaid(len(all), what, s.Dir) + " If the old " + what + " may have leaked, delete " + them + ".", "Delete " + them + " and make a fresh backup?"
 }
 
 // uiRenewBackups deletes the backups of the vault the app has open, and

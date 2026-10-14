@@ -209,7 +209,13 @@ type Options struct {
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
-	ClearAfter   time.Duration
+	// Recovery says the vault's recovery key's state; nil: the recovery
+	// key isn't offered. NewRecovery makes one, and RemoveRecovery
+	// removes it.
+	Recovery       func() (Recovery, error)
+	NewRecovery    func() (*NewRecovery, error)
+	RemoveRecovery func() (Done, error)
+	ClearAfter     time.Duration
 	// OldAfter is how long a secret can go unchanged before the health
 	// report calls it old; 0 doesn't check.
 	OldAfter time.Duration
@@ -567,6 +573,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.gotChecks(&msg)
 	case changedMsg:
 		return m.changed(&msg)
+	case newRecoveryMsg:
+		return m.showRecovery(&msg)
+	case recoveryMsg:
+		return m.gotRecovery(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"

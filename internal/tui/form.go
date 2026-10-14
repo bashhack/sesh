@@ -143,6 +143,7 @@ type fieldRow struct {
 // custom field's.
 type form struct {
 	submit func() tea.Cmd // checks the inputs and saves
+	cancel func()         // what Esc closing it does, besides; nil: nothing
 	back   *form          // the form a field's form returns to
 	title  string
 	err    string
@@ -151,6 +152,8 @@ type form struct {
 	enterDone string
 	// working says the form is being submitted, instead of "Saving…".
 	working string
+	// note is said above the inputs.
+	note    string
 	inputs  []*input
 	focus   int
 	row     int // the field a field's form edits; -1 for a new one
@@ -366,6 +369,9 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 		// stays in its entry's form as it was.
 		f.wipeOwn()
 		m.form = f.back
+		if f.cancel != nil {
+			f.cancel()
+		}
 		return nil
 	case "tab":
 		f.move(1)
@@ -789,6 +795,9 @@ func (m *Model) drawForm(base string) string {
 		all = all[top : top+room]
 	}
 	lines := []string{th.accented().Bold(true).Render(ansi.Truncate(f.title, inner, "…")), th.lines().Render(strings.Repeat("─", inner))}
+	if f.note != "" {
+		lines = append(lines, "", th.style().Width(inner).Render(f.note), "")
+	}
 	lines = append(lines, all...)
 	lines = append(lines, errLines...)
 	hint := th.hints([2]string{"tab", "next"}, [2]string{"ctrl+s", "save"}, [2]string{"esc", "cancel"})
