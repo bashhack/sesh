@@ -29,12 +29,14 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		m.input.SetValue("")
 		return m.requery()
-	case "enter", "tab", "ctrl+y", "ctrl+o":
+	case "enter", "tab", "ctrl+y", "ctrl+o", "ctrl+k":
 		if !m.listShown() {
 			// The entries aren't on screen: nothing is done to one unseen.
 			return nil
 		}
 		switch msg.String() {
+		case "ctrl+k":
+			return m.openMenu()
 		case "tab":
 			return m.toggleReveal()
 		case "ctrl+y":

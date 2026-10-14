@@ -26,6 +26,9 @@ type fakeVault struct {
 	secrets  map[vault.Key]string
 	notes    map[vault.Key]string
 	fields   map[vault.Key][]vault.Field // secret fields, with values
+	history  map[vault.Key][]string      // earlier secrets, the newest first
+	trash    []Trashed
+	trashed  map[int64]vault.Entry
 	entries  []vault.Entry
 	reads    []string // "secret <key> <reading>" or "code <key>"
 	kept     int      // keep-alives
@@ -74,6 +77,67 @@ func (f *fakeVault) SecretFields(k vault.Key) ([]vault.Field, error) {
 		out = append(out, vault.Field{Name: fl.Name, Value: []byte(string(fl.Value)), Secret: true})
 	}
 	return out, nil
+}
+
+func (f *fakeVault) Field(k vault.Key, name string) ([]byte, error) {
+	f.reads = append(f.reads, "field "+k.String()+" "+name)
+	for _, fl := range f.fields[k] {
+		if fl.Name == name {
+			return []byte(string(fl.Value)), nil
+		}
+	}
+	return nil, errors.New("no such field")
+}
+
+func (f *fakeVault) History(k vault.Key) ([]time.Time, error) {
+	out := make([]time.Time, len(f.history[k]))
+	for i := range out {
+		out[i] = time.Unix(1_700_000_000-int64(i)*86400, 0)
+	}
+	return out, nil
+}
+
+func (f *fakeVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
+	f.reads = append(f.reads, fmt.Sprintf("version %s %d", k, n))
+	return []byte(f.history[k][n-2]), nil
+}
+
+func (f *fakeVault) RestoreVersion(k vault.Key, n int) error {
+	h := f.history[k]
+	now := f.secrets[k]
+	f.secrets[k] = h[n-2]
+	f.history[k] = append([]string{now}, append(append([]string{}, h[:n-2]...), h[n-1:]...)...)
+	return nil
+}
+
+func (f *fakeVault) Delete(k vault.Key) error {
+	for i, e := range f.entries {
+		if e.Key == k {
+			f.entries = append(f.entries[:i:i], f.entries[i+1:]...)
+			id := int64(len(f.trash) + 1)
+			f.trash = append(f.trash, Trashed{ID: id, Key: k, DeletedAt: time.Unix(1_700_000_000, 0)})
+			if f.trashed == nil {
+				f.trashed = map[int64]vault.Entry{}
+			}
+			f.trashed[id] = e
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+
+func (f *fakeVault) Trash() ([]Trashed, error) { return slices.Clone(f.trash), nil }
+
+func (f *fakeVault) RestoreFromTrash(id int64) (vault.Key, error) {
+	e := f.trashed[id]
+	f.entries = append(f.entries, e)
+	f.trash = slices.DeleteFunc(f.trash, func(t Trashed) bool { return t.ID == id })
+	return e.Key, nil
+}
+
+func (f *fakeVault) RemoveFromTrash(id int64) error {
+	f.trash = slices.DeleteFunc(f.trash, func(t Trashed) bool { return t.ID == id })
+	return nil
 }
 
 func (f *fakeVault) CodeKey(k vault.Key) ([]byte, error) {
@@ -176,6 +240,8 @@ func (a *app) press(keys ...string) {
 			msg = tea.KeyPressMsg{Code: tea.KeyTab}
 		case "shift+down":
 			msg = tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}
+		case "ctrl+k":
+			msg = tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl}
 		default:
 			for _, r := range k {
 				_, cmd := a.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
@@ -809,5 +875,121 @@ func TestRevealAfterLockMidRead(t *testing.T) {
 	a.run(a.toggleReveal())
 	if a.shown == nil {
 		t.Error("Tab after the re-unlock revealed nothing")
+	}
+}
+
+// Ctrl-K opens the actions on the selected entry; a key runs one; Esc
+// closes it.
+func TestActionMenu(t *testing.T) {
+	f := newFake()
+	f.entries[0].URL = "github.com"
+	f.entries[0].Fields = []vault.Field{{Name: "pin", Secret: true}, {Name: "email", Value: []byte("a@example.com")}}
+	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Value: []byte("4321")}}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k")
+	s := a.screen()
+	for _, w := range []string{"github (alice)", "copy a value…", "copy the username", "open the URL", "earlier secrets…", "delete (to the trash)", "the trash…", "lock now"} {
+		if !strings.Contains(s, w) {
+			t.Errorf("menu missing %q:\n%s", w, s)
+		}
+	}
+	a.press("esc")
+	if a.ov != nil {
+		t.Fatal("Esc didn't close the menu")
+	}
+	// Copy a value: the secret field is read for it, the plain one isn't.
+	a.press("ctrl+k", "f")
+	if s := a.screen(); !strings.Contains(s, "pin (secret)") || !strings.Contains(s, "email") {
+		t.Errorf("values:\n%s", s)
+	}
+	a.press("4") // password, username, URL, then pin
+	if len(a.copied) != 1 || a.copied[0] != "4321" || !slices.Contains(f.reads, "field password/github/alice pin") {
+		t.Errorf("copied %q, reads %q", a.copied, f.reads)
+	}
+	a.press("ctrl+k", "f", "5")
+	if len(a.copied) != 2 || a.copied[1] != "a@example.com" {
+		t.Errorf("copied %q", a.copied)
+	}
+	a.press("ctrl+k", "u")
+	if len(a.copied) != 3 || a.copied[2] != "alice" {
+		t.Errorf("copied %q", a.copied)
+	}
+}
+
+// The entry's earlier secrets are listed, copied, and restored after a yes.
+func TestActionHistory(t *testing.T) {
+	f := newFake()
+	f.history = map[vault.Key][]string{github: {"old-1", "old-2"}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "h")
+	if s := a.screen(); !strings.Contains(s, "version 2") || !strings.Contains(s, "version 3") {
+		t.Fatalf("history:\n%s", s)
+	}
+	a.press("down", "enter")
+	if len(a.copied) != 1 || a.copied[0] != "old-2" || !slices.Contains(f.reads, "version password/github/alice 3") {
+		t.Errorf("copied %q, reads %q", a.copied, f.reads)
+	}
+	a.press("r")
+	if s := a.screen(); !strings.Contains(s, "Make version 3 password/github/alice's secret again?") {
+		t.Fatalf("confirm:\n%s", s)
+	}
+	a.press("n")
+	if f.secrets[github] != "gh-pass" || a.ov == nil || a.ov.kind != panelHistory {
+		t.Fatalf("no restored it, or closed the history (secret %q)", f.secrets[github])
+	}
+	a.press("r", "y")
+	if f.secrets[github] != "old-2" || !strings.Contains(a.screen(), "secret is version 3's again") {
+		t.Errorf("restore: secret %q:\n%s", f.secrets[github], a.screen())
+	}
+}
+
+// Delete asks first, then moves the entry to the trash; the trash puts it
+// back, or deletes it for good after a yes.
+func TestActionDeleteAndTrash(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "d")
+	if s := a.screen(); !strings.Contains(s, "Move github (alice) to the trash?") {
+		t.Fatalf("confirm:\n%s", s)
+	}
+	a.press("n")
+	if len(f.entries) != 3 {
+		t.Fatal("no deleted it")
+	}
+	a.press("ctrl+k", "d", "y")
+	if s := a.screen(); len(f.entries) != 2 || !strings.Contains(s, "2 entries") || !strings.Contains(s, "Moved password/github/alice to the trash") {
+		t.Fatalf("after delete:\n%s", s)
+	}
+	a.press("ctrl+k", "t")
+	if s := a.screen(); !strings.Contains(s, "password/github/alice") || !strings.Contains(s, "deleted") {
+		t.Fatalf("trash:\n%s", s)
+	}
+	a.press("enter")
+	if s := a.screen(); len(f.entries) != 3 || !strings.Contains(s, "3 entries") {
+		t.Fatalf("put back:\n%s", s)
+	}
+	// The selection moved on to the TOTP entry when github left the list.
+	a.press("ctrl+k", "d", "y", "ctrl+k", "t", "x")
+	if s := a.screen(); !strings.Contains(s, "Delete totp/github/alice for good?") {
+		t.Fatalf("confirm for good:\n%s", s)
+	}
+	a.press("y")
+	if len(f.trash) != 0 || !strings.Contains(a.screen(), "Deleted totp/github/alice for good") {
+		t.Errorf("for good: trash %v", f.trash)
+	}
+}
+
+// Lock now locks the app, and the agent.
+func TestActionLockNow(t *testing.T) {
+	f := newFake()
+	agentLocked := false
+	a := newApp(t, f, Options{LockAgent: func() error { agentLocked = true; return nil }})
+	a.press("ctrl+k")
+	if !strings.Contains(a.screen(), "lock now, and sesh's agent") {
+		t.Fatalf("menu:\n%s", a.screen())
+	}
+	a.press("l")
+	if s := a.screen(); a.v != nil || !agentLocked || !strings.Contains(s, "sesh is locked") || !f.closed {
+		t.Errorf("lock now: app locked %v, agent locked %v:\n%s", a.v == nil, agentLocked, s)
 	}
 }

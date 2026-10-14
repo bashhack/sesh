@@ -417,3 +417,62 @@ func TestUI_CheckIgnoresAuditOnly(t *testing.T) {
 		t.Errorf("Check after a store = %v, %v; want a change", changed, err)
 	}
 }
+
+// The actions' reads and writes on a real vault: a secret field and an
+// earlier secret read (audited), a restore, the trash round trip, a name
+// clash on restore; the app's own writes aren't another command's change.
+func TestUI_Actions(t *testing.T) {
+	filingVault(t)
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := vault.Details{Fields: []vault.Field{{Name: "pin", Value: []byte("4321"), Secret: true}}}
+	if err := store.SaveWithDetails(&vault.Entry{Key: gh}, []byte("a2"), &d); err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	if v, err := u.Field(gh, "pin"); err != nil || string(v) != "4321" {
+		t.Errorf("Field = %q, %v", v, err)
+	}
+	if h, err := u.History(gh); err != nil || len(h) != 1 {
+		t.Fatalf("History = %v, %v", h, err)
+	}
+	if v, err := u.ReadVersion(gh, 2); err != nil || string(v) != "a" {
+		t.Errorf("ReadVersion = %q, %v", v, err)
+	}
+	if err := u.RestoreVersion(gh, 2); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := u.Secret(gh, "test"); err != nil || string(v) != "a" {
+		t.Errorf("after restore = %q, %v", v, err)
+	}
+	if err := u.Delete(gh); err != nil {
+		t.Fatal(err)
+	}
+	trash, err := u.Trash()
+	if err != nil || len(trash) != 1 || trash[0].Key != gh {
+		t.Fatalf("Trash = %+v, %v", trash, err)
+	}
+	if changed, err := u.Check(); changed || err != nil {
+		t.Errorf("Check after the app's own writes = %v, %v; want no change", changed, err)
+	}
+	putSecrets(t, gh, "someone else's")
+	if _, err := u.RestoreFromTrash(trash[0].ID); !errors.Is(err, tui.ErrNameTaken) || !strings.Contains(err.Error(), "--as <new name>") {
+		t.Errorf("restore onto a name in use: %v", err)
+	}
+	if err := u.RemoveFromTrash(trash[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if trash, err := u.Trash(); err != nil || len(trash) != 0 {
+		t.Errorf("trash after removing = %+v, %v", trash, err)
+	}
+	log := mustRun(t, runAudit)
+	for _, want := range []string{"in sesh ui, to copy its field pin", "in sesh ui, to copy it"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("audit missing %q:\n%s", want, log)
+		}
+	}
+}
