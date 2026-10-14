@@ -37,9 +37,9 @@ func (m *Manager) ExportEncrypted(w io.Writer, opts *ExportOptions, password []b
 		return 0, fmt.Errorf("password cannot be empty")
 	}
 
-	var buf bytes.Buffer
+	var buf wipingBuffer
 	// The plain JSON is wiped however this ends.
-	defer func() { secure.SecureZeroBytes(buf.Bytes()) }()
+	defer func() { secure.SecureZeroBytes(buf.b) }()
 	count, err := m.Export(&buf, &ExportOptions{
 		Format:    FormatJSON,
 		EntryType: opts.EntryType,
@@ -66,7 +66,7 @@ func (m *Manager) ExportEncrypted(w io.Writer, opts *ExportOptions, password []b
 	key := kdf.Derive(password, salt, params)
 	defer secure.SecureZeroBytes(key)
 
-	plaintext := buf.Bytes()
+	plaintext := buf.b
 	ciphertext, err := gcmSeal(key, plaintext)
 	secure.SecureZeroBytes(plaintext)
 	if err != nil {
@@ -247,4 +247,19 @@ func gcmOpen(key, ciphertext []byte) ([]byte, error) {
 	}
 	nonce, enc := ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():]
 	return gcm.Open(nil, nonce, enc, nil)
+}
+
+// wipingBuffer collects what's written, wiping each array it outgrows, so
+// no earlier copy of what it holds is left behind as it grows.
+type wipingBuffer struct{ b []byte }
+
+func (w *wipingBuffer) Write(p []byte) (int, error) {
+	if len(w.b)+len(p) > cap(w.b) {
+		grown := make([]byte, len(w.b), max(2*cap(w.b), len(w.b)+len(p), 4096))
+		copy(grown, w.b)
+		secure.SecureZeroBytes(w.b[:cap(w.b)])
+		w.b = grown
+	}
+	w.b = append(w.b, p...)
+	return len(p), nil
 }

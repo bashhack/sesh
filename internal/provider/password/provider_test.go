@@ -1674,3 +1674,21 @@ func TestExport_LinkThroughLinkedFolder(t *testing.T) {
 		t.Errorf("the missing file at the end of sub/../g: %v", err)
 	}
 }
+
+// The CLI's export doesn't write over the vault's own file, even with --force.
+func TestExport_RefusesTheVault(t *testing.T) {
+	stubReadPassword(t, "export-password-1234")
+	vaultFile := filepath.Join(t.TempDir(), "passwords.db")
+	if err := os.WriteFile(vaultFile, []byte("the vault"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := newTestProvider(seeded(t, map[string]string{"password/github": "s"}))
+	p.WithVaultPath(vaultFile)
+	parseFlags(t, p, "--action", "export", "--format", "encrypted", "--file", vaultFile, "--force")
+	if _, err := p.GetCredentials(); err == nil || !strings.Contains(err.Error(), "is the vault itself") {
+		t.Errorf("%v", err)
+	}
+	if b, _ := os.ReadFile(vaultFile); string(b) != "the vault" { //nolint:errcheck // compared
+		t.Errorf("the vault now holds %q", b)
+	}
+}

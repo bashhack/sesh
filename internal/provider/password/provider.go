@@ -48,6 +48,7 @@ type Provider struct {
 	format     string // output format: "table", "json", "csv"
 	service    string
 	field      string // get: the field to read instead of the secret, from --field
+	vaultPath  string // the vault's file, which an export never replaces
 	filing     provider.FilingFlags
 	details    provider.DetailsFlags
 	pwLength   int // password generation length
@@ -84,6 +85,13 @@ func NewProvider(store vault.Store) *Provider {
 		stdin:  os.Stdin,
 		stdout: os.Stdout,
 	}
+}
+
+// WithVaultPath names the vault's file, which an export to a file never
+// replaces.
+func (p *Provider) WithVaultPath(path string) *Provider {
+	p.vaultPath = path
+	return p
 }
 
 // WithExportKDF sets the Argon2id settings an encrypted export's password
@@ -1060,7 +1068,7 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 	dest := "stdout"
 	if p.file != "" {
 		dest = p.file
-		out, err := exportfile.Open(p.file, p.force)
+		out, err := exportfile.Open(p.file, p.force, p.vaultPath)
 		if err != nil {
 			return provider.Credentials{}, err
 		}

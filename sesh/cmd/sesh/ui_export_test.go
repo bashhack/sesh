@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/tui"
 )
@@ -50,11 +51,58 @@ func TestUI_Export(t *testing.T) {
 	if _, err := u.Export("/dev/null", []byte("export-pass-1234"), false); err == nil || !strings.Contains(err.Error(), "device or pipe") {
 		t.Errorf("a device: %v", err)
 	}
+	// A device through a link is one too.
+	link := filepath.Join(t.TempDir(), "null.enc")
+	if err := os.Symlink("/dev/null", link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Export(link, []byte("export-pass-1234"), false); err == nil || !strings.Contains(err.Error(), "device or pipe") {
+		t.Errorf("a device through a link: %v", err)
+	}
+	// The vault's own files aren't written over, asked or not.
+	for _, f := range []string{store.Path(), store.Path() + "-wal"} {
+		for _, replace := range []bool{false, true} {
+			if _, err := u.Export(f, []byte("export-pass-1234"), replace); err == nil || !strings.Contains(err.Error(), "is the vault itself") {
+				t.Errorf("%s, replace %v: %v", f, replace, err)
+			}
+		}
+	}
+	if _, err := database.VaultSummary(store.Path()); err != nil {
+		t.Fatalf("the vault after: %v", err)
+	}
+	// The password given is wiped.
+	pw := []byte("export-pass-1234")
+	if _, err := u.Export(filepath.Join(t.TempDir(), "x.enc"), pw, false); err != nil || string(pw) == "export-pass-1234" {
+		t.Errorf("the password after: %q, %v", pw, err)
+	}
 	if _, err := u.Export("backup.enc", []byte("export-pass-1234"), false); err == nil || !strings.Contains(err.Error(), "isn't a full path") {
 		t.Errorf("a relative path: %v", err)
 	}
-	// Each export read every entry, and the audit log says so: two exports of four.
-	if log := mustRun(t, runAudit); strings.Count(log, "  access  ") != 8 {
+	// Each export read every entry, and the audit log says so: three exports of four.
+	if log := mustRun(t, runAudit); strings.Count(log, "  access  ") != 12 {
 		t.Errorf("the audit log doesn't record the reads:\n%s", log)
+	}
+}
+
+// A master password changed by another command while the app has the vault open locks it, rather than exporting.
+func TestUI_ExportKeyChanged(t *testing.T) {
+	healthVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, stderr := rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("health-password-1234", "new-password-5678", "new-password-5678")); err != nil {
+		t.Fatalf("rotate: %v\n%s", err, stderr)
+	}
+	file := filepath.Join(t.TempDir(), "x.enc")
+	if _, err := u.Export(file, []byte("export-pass-1234"), false); !errors.Is(err, tui.ErrLocked) {
+		t.Errorf("%v", err)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Errorf("a file was left: %v", err)
 	}
 }

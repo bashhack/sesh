@@ -31,9 +31,43 @@ func TestExport(t *testing.T) {
 			t.Fatalf("%+v: exports %q, form %+v", c, f.exports, a.form)
 		}
 	}
-	fill("~/b.enc", "export-pass-1", "export-pass-1")
-	if !slices.Equal(f.exports, []string{"~/b.enc export-pass-1 false"}) || a.form != nil || !strings.Contains(a.screen(), "Exported 3 entries to ~/b.enc.") {
+	// Enter again: the easy one is used.
+	a.press("enter")
+	if !slices.Equal(f.exports, []string{"~/b.enc password false"}) {
+		t.Fatalf("an easy password, Enter again: exports %q", f.exports)
+	}
+	a.press("ctrl+k", "i", "e")
+	inputs := a.form.inputs
+	fill("~/c.enc", "export-pass-1", "export-pass-1")
+	if f.exports[1] != "~/c.enc export-pass-1 false" || a.form != nil || !strings.Contains(a.screen(), "Exported 3 entries to ~/c.enc.") {
 		t.Errorf("exports %q, form %v\n%s", f.exports, a.form != nil, a.screen())
+	}
+	// What was typed is wiped once it's written.
+	for _, in := range inputs[1:] {
+		if strings.Trim(string(in.secret), "\x00") != "" {
+			t.Errorf("%s still holds %q", in.label, in.secret)
+		}
+	}
+}
+
+// An export's result that comes after a lock and unlock leaves the form opened since alone.
+func TestExportAcrossLock(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
+	_, write := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Written, its result held back until after the lock and unlock.
+	result := write()
+	a.run(a.lock("You locked it."))
+	if !strings.Contains(a.lockedWhy, "The export may or may not have been written: look at ~/b.enc") {
+		t.Errorf("locked: %q", a.lockedWhy)
+	}
+	a.run(func() tea.Msg { return unlockedMsg{v: newFake()} })
+	a.press("ctrl+k", "i", "e")
+	open := a.form
+	a.run(func() tea.Msg { return result })
+	if a.form == nil || a.form != open {
+		t.Error("the old export's result closed the form opened since")
 	}
 }
 
@@ -85,5 +119,28 @@ func TestExportFails(t *testing.T) {
 	b.run(write)
 	if !b.quit || b.Afterword() != "Exported 3 entries to ~/b.enc." {
 		t.Errorf("quit %v, said after %q", b.quit, b.Afterword())
+	}
+	// One that fails says so after.
+	k := newFake()
+	q := newApp(t, k, Options{})
+	q.press("ctrl+k", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
+	k.err = errors.New("disk full")
+	_, write = q.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	q.press("ctrl+c")
+	q.run(write)
+	if !q.quit || q.Afterword() != "The vault wasn't exported: disk full" {
+		t.Errorf("quit %v, said after %q", q.quit, q.Afterword())
+	}
+}
+
+// A secret handed to a read that never runs, the app having locked first, is wiped.
+func TestWipeUnread(t *testing.T) {
+	secret := []byte("export-pass-1")
+	if msg := wipeUnread(secret, func() tea.Msg { return nil })(); msg != nil || strings.Trim(string(secret), "\x00") != "" {
+		t.Errorf("not run: %v, %q", msg, secret)
+	}
+	kept := []byte("export-pass-1")
+	if msg := wipeUnread(kept, func() tea.Msg { return "ran" })(); msg != "ran" || string(kept) != "export-pass-1" {
+		t.Errorf("run: %v, %q", msg, kept)
 	}
 }

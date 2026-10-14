@@ -10,11 +10,13 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -79,7 +81,18 @@ func runUI(app *App, args []string) error {
 		m.Close()
 		restore()
 	}()
-	_, err = tea.NewProgram(m, append([]tea.ProgramOption{tea.WithInput(app.Stdin), tea.WithOutput(app.Stdout)}, uiProgramOptions...)...).Run()
+	p := tea.NewProgram(m, append([]tea.ProgramOption{tea.WithInput(app.Stdin), tea.WithOutput(app.Stdout)}, uiProgramOptions...)...)
+	// The terminal closed: the app ends as when it's quit, so what it's
+	// writing (an export) is finished, or its file removed, first.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	go func() {
+		if _, ok := <-hup; ok {
+			p.Quit()
+		}
+	}()
+	_, err = p.Run()
 	if err != nil {
 		return fmt.Errorf("sesh ui: %w", err)
 	}

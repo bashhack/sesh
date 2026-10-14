@@ -19,10 +19,7 @@ func (u *uiVault) Export(to string, pw []byte, replace bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if exportfile.IsDevice(dest) {
-		return "", errors.New("export to a file: sesh ui has the terminal, so a device or pipe isn't written to here")
-	}
-	out, err := exportfile.Open(dest, replace)
+	out, err := exportfile.Open(dest, replace, u.store.Path())
 	if exists := (*exportfile.ExistsError)(nil); errors.As(err, &exists) {
 		return "", tui.Exists(tildePath(dest) + " already exists.")
 	}
@@ -30,6 +27,10 @@ func (u *uiVault) Export(to string, pw []byte, replace bool) (string, error) {
 		return "", err
 	}
 	defer out.Abort()
+	// As Open found it, through any link: sesh ui has the terminal.
+	if out.Device() {
+		return "", errors.New("export to a file: sesh ui has the terminal, so a device or pipe isn't written to here")
+	}
 	st, err := settings()
 	if err != nil {
 		return "", err

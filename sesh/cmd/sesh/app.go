@@ -78,6 +78,8 @@ type VersionInfo struct {
 
 // AppSettings are the settings the app's commands use.
 type AppSettings struct {
+	// VaultPath is the vault's file, which an export never replaces.
+	VaultPath string
 	// KDF is the Argon2id settings encrypted exports use; zero means
 	// kdf.Default().
 	KDF              kdf.Params
@@ -93,7 +95,7 @@ func NewDefaultApp(versionInfo VersionInfo, store vault.Store, settings AppSetti
 	registry := provider.NewRegistry()
 	registry.RegisterProvider(awsProvider.NewProvider(awsSvc, store, totpSvc))
 	registry.RegisterProvider(totpProvider.NewProvider(store, totpSvc))
-	registry.RegisterProvider(passwordProvider.NewProvider(store).WithExportKDF(settings.KDF))
+	registry.RegisterProvider(passwordProvider.NewProvider(store).WithExportKDF(settings.KDF).WithVaultPath(settings.VaultPath))
 
 	setupSvc := setup.NewSetupService()
 	setupSvc.RegisterHandler(setup.NewAWSSetupHandler(store))

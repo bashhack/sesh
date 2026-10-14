@@ -55,6 +55,10 @@ func (e *File) Start() error {
 	return nil
 }
 
+// Device says whether the file is a device or pipe, written as it goes,
+// rather than a file replaced whole: as Open found it, through links.
+func (e *File) Device() bool { return !e.regular() }
+
 // regular says whether the target is a file replaced whole, not a device.
 func (e *File) regular() bool { return !IsDevice(e.target) }
 
@@ -92,9 +96,10 @@ func IsDevice(path string) bool {
 }
 
 // Open checks path for an export, before the password is asked: a
-// link is followed to its file, a folder is refused, an existing file is
-// replaced only when force, and the file's folder must take a new file.
-func Open(path string, force bool) (*File, error) {
+// link is followed to its file, a folder is refused, as are the vault at
+// vaultPath and its files, an existing file is replaced only when force,
+// and the file's folder must take a new file.
+func Open(path string, force bool, vaultPath string) (*File, error) {
 	// A device as named: /dev/stdout is a link to the file it's redirected
 	// to on Linux, which is written to through it, not replaced.
 	if IsDevice(path) {
@@ -106,6 +111,9 @@ func Open(path string, force bool) (*File, error) {
 	}
 	if IsDevice(target) {
 		return &File{target: target}, nil
+	}
+	if vaultPath != "" && (IsVaultFile(vaultPath, path) || IsVaultFile(vaultPath, target)) {
+		return nil, fmt.Errorf("%s is the vault itself, or one of its files; export somewhere else", path)
 	}
 	info, err := os.Stat(target)
 	switch {
@@ -166,3 +174,39 @@ type ExistsError struct{ Path string }
 
 func (e *ExistsError) Error() string { return e.Path + " already exists; add --force to replace it" }
 func (e *ExistsError) Unwrap() error { return os.ErrExist }
+
+// IsVaultFile says whether path is the vault at vaultPath, or its -wal,
+// -shm or -journal file: a backup written there would replace a file the
+// vault, open in another sesh, is using. Names are compared ignoring case,
+// as macOS's file system does, and through links; files there already are
+// compared as files.
+func IsVaultFile(vaultPath, path string) bool {
+	clean := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		// The folders through links, as the files are reached.
+		if dir, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
+			p = filepath.Join(dir, filepath.Base(p))
+		}
+		return p
+	}
+	vaults := []string{clean(vaultPath)}
+	if target, err := filepath.EvalSymlinks(vaultPath); err == nil {
+		// A vault reached through a link: its files are beside the target.
+		vaults = append(vaults, clean(target))
+	}
+	dest := clean(path)
+	destInfo, destErr := os.Stat(path)
+	for _, vault := range vaults {
+		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+			if strings.EqualFold(dest, vault+suffix) {
+				return true
+			}
+			if info, err := os.Stat(vault + suffix); err == nil && destErr == nil && os.SameFile(info, destInfo) {
+				return true
+			}
+		}
+	}
+	return false
+}

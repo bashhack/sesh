@@ -338,7 +338,7 @@ func (u unavailableStore) SaveWithDetails(*vault.Entry, []byte, *vault.Details) 
 
 // appSettingsFrom is the settings the app's commands use, from cfg.
 func appSettingsFrom(cfg *config.Config) AppSettings {
-	return AppSettings{ClipboardTimeout: cfg.ClipboardTimeout.Value, KDF: cfg.KDF()}
+	return AppSettings{ClipboardTimeout: cfg.ClipboardTimeout.Value, KDF: cfg.KDF(), VaultPath: cfg.DBPath.Value}
 }
 
 // cliOverrides holds setting flags given on the command line.

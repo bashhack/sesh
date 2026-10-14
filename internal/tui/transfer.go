@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/bashhack/sesh/internal/secure"
 )
 
 // exportedMsg is an export written, or why not.
@@ -34,6 +36,12 @@ func (m *Model) exportForm() tea.Cmd {
 	f := &form{title: "Export the vault", inputs: []*input{file, pw, again}, row: -1, enterDone: "export",
 		working: "Exporting…", quitting: "Quitting once the export is written…"}
 	replaceOf := ""
+	f.lost = func() string {
+		if f.saving {
+			return "The export may or may not have been written: look at " + file.value() + " before exporting again."
+		}
+		return ""
+	}
 	f.submit = func() tea.Cmd {
 		to := file.value()
 		switch {
@@ -49,10 +57,10 @@ func (m *Model) exportForm() tea.Cmd {
 		default:
 			f.saving, f.err = true, ""
 			secret, replace := bytes.Clone(pw.secret), to == replaceOf
-			return m.read(func(v Vault, _ func() bool) tea.Msg {
+			return wipeUnread(secret, m.read(func(v Vault, _ func() bool) tea.Msg {
 				said, err := v.Export(to, secret, replace)
 				return exportedMsg{f: f, said: said, err: err, to: to, replaceOf: &replaceOf}
-			})
+			}))
 		}
 		return nil
 	}
@@ -93,4 +101,16 @@ func (m *Model) exported(msg *exportedMsg) tea.Cmd {
 	m.form = nil
 	m.say(msg.said)
 	return nil
+}
+
+// wipeUnread is read, wiping secret when the app locked before it could
+// run (and take secret to wipe it).
+func wipeUnread(secret []byte, read tea.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		msg := read()
+		if msg == nil {
+			secure.SecureZeroBytes(secret)
+		}
+		return msg
+	}
 }
