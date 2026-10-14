@@ -1273,7 +1273,7 @@ func TestEditForm(t *testing.T) {
 	a.press("ctrl+k", "e")
 	a.tabs(2)
 	a.press("→", "tab", "hunter2")
-	typed := a.form.inputs[3].secret
+	typed := a.form.inputs[a.form.focus].secret
 	if s := a.screen(); strings.Contains(s, "hunter2") || !strings.Contains(s, "•••••••") {
 		t.Errorf("the secret typed is shown, or not marked:\n%s", s)
 	}
@@ -1366,7 +1366,7 @@ func TestFormFieldsNotesAndLock(t *testing.T) {
 	f.notes = map[vault.Key]string{github: "old notes"}
 	a := newApp(t, f, Options{IdleTimeout: time.Hour, Unlock: func([]byte) (Vault, error) { return f, nil }})
 	a.press("ctrl+k", "e")
-	a.tabs(6) // name, username, secret, URL, folder, tags → notes
+	a.tabs(7) // username, secret, current, URL, folder, tags → notes
 	a.press("!")
 	a.Update(editorMsg{notes: []byte("from the editor")})
 	a.press("tab")             // the fields
@@ -1390,7 +1390,7 @@ func TestFormFieldsNotesAndLock(t *testing.T) {
 	a.press("ctrl+k", "e")
 	a.tabs(2)
 	a.press("→", "tab", "secret")
-	typed := a.form.inputs[3].secret
+	typed := a.form.inputs[a.form.focus].secret
 	a.lock("test")
 	if a.form != nil || string(typed[:6]) != strings.Repeat("\x00", 6) {
 		t.Errorf("a lock left the form, or what was typed: %q", typed)
@@ -1466,7 +1466,7 @@ func TestFormShowsAFieldsValue(t *testing.T) {
 	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Secret: true, Value: []byte("4711")}}}
 	a := newApp(t, f, Options{})
 	a.press("ctrl+k", "e")
-	a.tabs(7) // username, secret, URL, folder, tags, notes → the fields
+	a.tabs(8) // username, secret, current, URL, folder, tags, notes → the fields
 	a.press("enter", "tab", "tab")
 	if s := a.screen(); strings.Contains(s, "4711") || !strings.Contains(s, "••••••••▌") || !strings.Contains(s, "ctrl+r  show it") {
 		t.Fatalf("the field's value should be unread, with the key that shows it:\n%s", s)
@@ -1493,7 +1493,7 @@ func fieldsApp(t *testing.T) (*app, *fakeVault) {
 	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Secret: true, Value: []byte("4711")}}}
 	a := newApp(t, f, Options{})
 	a.press("ctrl+k", "e")
-	a.tabs(7) // username, secret, URL, folder, tags, notes → the fields
+	a.tabs(8) // username, secret, current, URL, folder, tags, notes → the fields
 	return a, f
 }
 
@@ -1567,7 +1567,7 @@ func TestFormEditorTimeIsUse(t *testing.T) {
 	f := newFake()
 	a := newApp(t, f, Options{IdleTimeout: 10 * time.Minute, EditNotes: func(b []byte) ([]byte, error) { return b, nil }})
 	a.press("ctrl+k", "e")
-	a.tabs(6) // → notes
+	a.tabs(7) // → notes
 	a.press("ctrl+e")
 	// The program delivers the ticks due while the editor ran before the
 	// editor's own message.
@@ -1629,7 +1629,7 @@ func TestFormLongFieldsAndErrors(t *testing.T) {
 	}
 	a := newApp(t, f, Options{})
 	a.press("ctrl+k", "e")
-	a.tabs(7)
+	a.tabs(8)
 	for range 25 {
 		a.press("down")
 	}
@@ -1704,5 +1704,27 @@ func TestFormFieldSaveWhileReading(t *testing.T) {
 	a.press("enter", "ctrl+s", "esc")
 	if a.form != nil {
 		t.Errorf("a field saved as it was counted as a change:\n%s", a.screen())
+	}
+}
+
+// Keeping the secret shows it as dots, unread until Ctrl-R; nothing typed there changes it.
+func TestFormShowsTheCurrentSecret(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e")
+	a.tabs(3) // username, the secret's choice → the current password
+	if s := a.screen(); !strings.Contains(s, "current password") || strings.Contains(s, "gh-pass") || slices.ContainsFunc(f.reads, func(r string) bool { return strings.HasPrefix(r, "secret ") }) {
+		t.Fatalf("the current password should be unread dots:\n%s\nreads %q", s, f.reads)
+	}
+	a.press("x")
+	_, cmd := a.Update(tea.PasteMsg{Content: "y"})
+	a.run(cmd)
+	a.press("ctrl+r")
+	if s := a.screen(); !strings.Contains(s, "gh-pass") || strings.Contains(s, "gh-passx") {
+		t.Fatalf("after ctrl+r:\n%s", s)
+	}
+	a.press("esc")
+	if a.form != nil {
+		t.Error("looking at the current password counted as a change")
 	}
 }

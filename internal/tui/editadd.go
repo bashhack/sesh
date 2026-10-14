@@ -90,6 +90,25 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	typed := &input{kind: inputSecret, label: "new secret", rated: true}
 	typed.named = func() string { return "new " + secretWord(kind()) }
 	typed.shown = func() bool { return secretChoice.visible() && secretChoice.choices[secretChoice.choice] == secretType }
+	// The secret kept, unread until Ctrl-R asks to see it.
+	current := &input{kind: inputSecret, readOnly: true}
+	current.named = func() string { return "current " + secretWord(kind()) }
+	current.shown = func() bool {
+		return !adding && secretChoice.visible() && secretChoice.choices[secretChoice.choice] == secretKeep
+	}
+	if !adding {
+		k, epoch := e.Key, m.epoch
+		current.load = func() tea.Cmd {
+			return m.read(func(v Vault, closed func() bool) tea.Msg {
+				value, err := v.Secret(k, "in sesh ui, to reveal it")
+				if closed() {
+					secure.SecureZeroBytes(value)
+					return nil
+				}
+				return fieldValueMsg{in: current, value: value, err: err, epoch: epoch}
+			})
+		}
+	}
 	totpKey := &input{kind: inputSecret, label: "TOTP key, or otpauth:// link", hint: "a link brings its own code settings; a key alone gives 6-digit codes every 30s"}
 	totpKey.shown = func() bool { return kind() == vault.KindTOTP }
 	if !adding {
@@ -117,7 +136,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	}
 
 	title := "Edit " + entryName(e)
-	inputs := []*input{name, user, secretChoice, typed, totpKey, url, folder, tags, text, fields}
+	inputs := []*input{name, user, secretChoice, current, typed, totpKey, url, folder, tags, text, fields}
 	if adding {
 		title = "Add an entry"
 		inputs = append([]*input{kindIn}, inputs...)

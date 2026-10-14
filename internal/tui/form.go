@@ -33,29 +33,30 @@ const (
 
 // input is one of a form's inputs.
 type input struct {
-	shown   func() bool    // nil: always shown
-	load    func() tea.Cmd // reads the secret an empty input stands for, to show it
-	then    func() tea.Cmd // what to do once load has read it, instead of showing it
-	named   func() string  // its label, when that depends on other inputs
-	label   string
-	hint    string
-	choices []string
-	secret  []byte
-	loaded  []byte // the secret load read, to tell whether it was changed
-	rows    []fieldRow
-	of      vault.Key // the entry whose fields these are; zero for one being added
-	offers  []string  // what a line of text can be completed to
-	text    textinput.Model
-	area    textarea.Model
-	kind    inputKind
-	choice  int
-	row     int
-	pick    int  // the offer chosen with the arrows, from 1; 0: none
-	many    bool // the text is a list, separated by commas
-	reveal  bool // the secret typed is shown, while the input has the focus
-	loading bool
-	rated   bool // a password, whose strength is said
-	weak    bool // the secret typed is easy to guess
+	shown    func() bool    // nil: always shown
+	load     func() tea.Cmd // reads the secret an empty input stands for, to show it
+	then     func() tea.Cmd // what to do once load has read it, instead of showing it
+	named    func() string  // its label, when that depends on other inputs
+	label    string
+	hint     string
+	choices  []string
+	secret   []byte
+	loaded   []byte // the secret load read, to tell whether it was changed
+	rows     []fieldRow
+	of       vault.Key // the entry whose fields these are; zero for one being added
+	offers   []string  // what a line of text can be completed to
+	text     textinput.Model
+	area     textarea.Model
+	kind     inputKind
+	choice   int
+	row      int
+	pick     int  // the offer chosen with the arrows, from 1; 0: none
+	many     bool // the text is a list, separated by commas
+	reveal   bool // the secret typed is shown, while the input has the focus
+	readOnly bool // a secret shown, not typed: the one an entry has
+	loading  bool
+	rated    bool // a password, whose strength is said
+	weak     bool // the secret typed is easy to guess
 }
 
 // name is the input's label.
@@ -406,6 +407,10 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 		in.area, cmd = in.area.Update(msg)
 		return cmd
 	case inputSecret:
+		if in.readOnly {
+			f.changed = was
+			return nil
+		}
 		switch msg.String() {
 		case "backspace":
 			if _, size := utf8.DecodeLastRune(in.secret); size > 0 {
@@ -468,6 +473,9 @@ func (m *Model) formPaste(text string) tea.Cmd {
 		return nil
 	}
 	in := f.inputs[f.focus]
+	if in.readOnly {
+		return nil
+	}
 	f.changed, f.leaving, f.err = true, false, ""
 	switch in.kind {
 	case inputText:
@@ -634,7 +642,7 @@ func (m *Model) drawForm(base string) string {
 				// Its value, unread: dots, as the preview shows a secret.
 				body = th.dimmed().Render("••••••••")
 			}
-			if focused {
+			if focused && !in.readOnly {
 				body += th.accented().Render("▌")
 			}
 			if in.weak {
