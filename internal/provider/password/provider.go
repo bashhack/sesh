@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"golang.org/x/term"
 
@@ -1022,99 +1024,132 @@ func (p *Provider) readExportPassword(label string, confirm bool) ([]byte, error
 }
 
 // exportFile is where an export to a file goes: a file that replaces the
-// one there once the export is whole; a device or pipe (/dev/stdout, a
-// shell's >(…)), written as it goes; or, in a folder sesh can't make a
-// file in, the existing file, emptied only when the export starts.
+// one there once the export is whole, made once the password has been
+// asked; or a device or pipe (/dev/stdout, a shell's >(…)), written as it
+// goes.
 type exportFile struct {
-	w       io.Writer
-	commit  func() error
-	discard func()
-	inPlace *os.File // emptied at the first write
-	emptied bool
+	pending *atomicfile.Pending
+	device  *os.File
+	target  string
 }
 
 func (e *exportFile) Write(b []byte) (int, error) {
-	if e.inPlace != nil && !e.emptied {
-		if err := e.inPlace.Truncate(0); err != nil {
-			return 0, err
+	switch {
+	case e.pending != nil:
+		return e.pending.Write(b)
+	case e.device == nil:
+		// Not made non-blocking, as os.OpenFile makes a terminal: the
+		// terminal the password was read from, and the shell after.
+		// Appended to: a file a shell's >> redirected stdout to keeps
+		// what it had.
+		fd, err := syscall.Open(e.target, syscall.O_WRONLY|syscall.O_APPEND|syscall.O_CLOEXEC, 0)
+		if err != nil {
+			return 0, &os.PathError{Op: "open", Path: e.target, Err: err}
 		}
-		e.emptied = true
+		e.device = os.NewFile(uintptr(fd), e.target)
 	}
-	return e.w.Write(b)
+	return e.device.Write(b)
 }
 
-func (e *exportFile) finish() error {
-	if l, ok := e.w.(*lateOpen); ok && l.f != nil {
-		return l.f.Close()
+// start makes the file a regular target is written to, once the password
+// has been asked: a Ctrl-C at the prompt leaves nothing behind.
+func (e *exportFile) start() error {
+	if e.device != nil || !e.regular() {
+		return nil
 	}
-	return e.commit()
+	p, err := atomicfile.Create(e.target, 0o600)
+	if err != nil {
+		return err
+	}
+	e.pending = p
+	return nil
+}
+
+// regular says whether the target is a file replaced whole, not a device.
+func (e *exportFile) regular() bool { return !isDevice(e.target) }
+
+func (e *exportFile) finish() error {
+	if e.pending != nil {
+		return e.pending.Commit()
+	}
+	if e.device != nil {
+		return e.device.Close()
+	}
+	return nil
 }
 
 func (e *exportFile) abort() {
-	if l, ok := e.w.(*lateOpen); ok && l.f != nil {
-		l.f.Close() //nolint:errcheck,gosec // nothing more to do with it
+	if e.pending != nil {
+		e.pending.Abort()
 	}
-	e.discard()
-}
-
-// lateOpen is a device or pipe, opened at the first write.
-type lateOpen struct {
-	f    *os.File
-	path string
-}
-
-func (l *lateOpen) Write(b []byte) (int, error) {
-	if l.f == nil {
-		f, err := os.OpenFile(l.path, os.O_WRONLY, 0) //nolint:gosec // the device or pipe the user named
-		if err != nil {
-			return 0, err
-		}
-		l.f = f
+	if e.device != nil {
+		e.device.Close() //nolint:errcheck,gosec // nothing more to do with it
 	}
-	return l.f.Write(b)
 }
 
-// openExport opens path for an export: a link is followed to its file; an
-// existing file is replaced only when force.
+// isDevice says whether path is a device or pipe, written as it is: one
+// under /dev (/dev/stdout is the file it's redirected to, which isn't
+// replaced), or one that isn't a regular file or folder.
+func isDevice(path string) bool {
+	if path == "/dev" || strings.HasPrefix(path, "/dev/") {
+		return true
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.Mode().IsRegular() && !info.IsDir()
+}
+
+// openExport checks path for an export, before the password is asked: a
+// link is followed to its file, a folder is refused, an existing file is
+// replaced only when force, and the file's folder must take a new file.
 func openExport(path string, force bool) (*exportFile, error) {
-	target := path
-	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		if resolved, err := filepath.EvalSymlinks(path); err == nil {
-			target = resolved
-		} else if to, err := os.Readlink(path); err == nil {
-			// A link to a file not there yet: that file is made.
-			if !filepath.IsAbs(to) {
-				to = filepath.Join(filepath.Dir(path), to)
-			}
-			target = to
-		}
+	// A device as named: /dev/stdout is a link to the file it's redirected
+	// to on Linux, which is written to through it, not replaced.
+	if isDevice(path) {
+		return &exportFile{target: path}, nil
+	}
+	target, err := followLinks(path)
+	if err != nil {
+		return nil, err
+	}
+	if isDevice(target) {
+		return &exportFile{target: target}, nil
 	}
 	info, err := os.Stat(target)
-	exists := err == nil
 	switch {
-	case exists && info.IsDir():
+	case err == nil && info.IsDir():
 		return nil, fmt.Errorf("%s is a folder: name a file to export to", path)
-	case exists && !info.Mode().IsRegular():
-		// Opened only when the export starts: opening the terminal
-		// (/dev/stdout) would make it non-blocking, and the password is
-		// then read from it.
-		return &exportFile{w: &lateOpen{path: target}, commit: func() error { return nil }, discard: func() {}}, nil
-	case exists && !force:
+	case err == nil && !force:
 		return nil, fmt.Errorf("%s already exists; add --force to replace it", path)
 	}
-	pending, err := atomicfile.Create(target, 0o600)
-	if err == nil {
-		return &exportFile{w: pending, commit: pending.Commit, discard: pending.Abort}, nil
+	// The folder is tried now, so one that can't take the file fails
+	// before the password is asked; the file itself is made after.
+	probe, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".*")
+	if err != nil {
+		return nil, fmt.Errorf("can't write an export in %s: %w", filepath.Dir(path), err)
 	}
-	if !exists {
-		return nil, fmt.Errorf("create %s: %w", path, err)
+	probe.Close()           //nolint:errcheck,gosec // only tried
+	os.Remove(probe.Name()) //nolint:errcheck,gosec // only tried
+	return &exportFile{target: target}, nil
+}
+
+// followLinks is the file path's links lead to: one not there yet when
+// the last link points at it.
+func followLinks(path string) (string, error) {
+	for range 40 {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			return path, nil
+		}
+		to, err := os.Readlink(path)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(to) {
+			to = filepath.Join(filepath.Dir(path), to)
+		}
+		path = to
 	}
-	// A folder sesh can't make a file in: the file is written where it is.
-	f, ferr := os.OpenFile(target, os.O_WRONLY, 0) //nolint:gosec // the file the user named
-	if ferr != nil {
-		return nil, fmt.Errorf("open %s: %w", path, ferr)
-	}
-	return &exportFile{w: f, inPlace: f, commit: f.Close, discard: func() { f.Close() }}, nil //nolint:errcheck,gosec // nothing more to do with it
+	return "", fmt.Errorf("%s: too many links", path)
 }
 
 func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, error) {
@@ -1163,12 +1198,34 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 	}
 	var count int
 	var err error
+	var pw []byte
 	if p.format == "encrypted" {
-		pw, perr := p.readExportPassword("Encryption password", true)
-		if perr != nil {
-			return provider.Credentials{}, perr
+		if pw, err = p.readExportPassword("Encryption password", true); err != nil {
+			return provider.Credentials{}, err
 		}
 		defer secure.SecureZeroBytes(pw)
+	}
+	if out, ok := w.(*exportFile); ok {
+		if err := out.start(); err != nil {
+			return provider.Credentials{}, fmt.Errorf("can't write an export in %s: %w", filepath.Dir(p.file), err)
+		}
+		// Interrupted while it's written, the file being made is removed:
+		// it holds part of the export.
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		defer signal.Stop(stop)
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			select {
+			case <-stop:
+				out.abort()
+				os.Exit(130)
+			case <-done:
+			}
+		}()
+	}
+	if p.format == "encrypted" {
 		opts.KDF = p.exportKDF
 		count, err = mgr.ExportEncrypted(w, opts, pw)
 	} else {
