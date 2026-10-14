@@ -1659,4 +1659,39 @@ func TestExport_LinkThroughLinkedFolder(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "new.json")); err == nil {
 		t.Error("made beside the linked folder")
 	}
+	// A .. in a link's own target, after a linked folder: sub/../f is elsewhere/f, not the f beside the link.
+	d, elsewhere := filepath.Join(dir, "d"), filepath.Join(dir, "elsewhere", "x")
+	for _, p := range []string{d, elsewhere} {
+		if err := os.MkdirAll(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("../elsewhere/x", filepath.Join(d, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	for name, to := range map[string]string{"lnk": "sub/../f", "lnk2": "sub/../g"} {
+		if err := os.Symlink(to, filepath.Join(d, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{filepath.Join(dir, "elsewhere", "f"), filepath.Join(d, "f")} {
+		if err := os.WriteFile(f, []byte("earlier"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := export(filepath.Join(d, "lnk")); err != nil {
+		t.Fatal(err)
+	}
+	if err := export(filepath.Join(d, "lnk2")); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(d, "f")); string(b) != "earlier" { //nolint:errcheck // compared
+		t.Errorf("the decoy beside the link was written: %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "elsewhere", "f")); string(b) == "earlier" { //nolint:errcheck // compared
+		t.Error("the link's file wasn't written")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "elsewhere", "g")); err != nil {
+		t.Errorf("the missing file at the end of sub/../g: %v", err)
+	}
 }

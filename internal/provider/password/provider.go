@@ -1138,12 +1138,22 @@ func openExport(path string, force bool) (*exportFile, error) {
 // followLinks is the file path's links lead to, as the system follows
 // them: one not there yet when the last link points at it.
 func followLinks(path string) (string, error) {
+	// Each link's folder is followed through its own links before its
+	// name is read, and a .. in a link's target is left for that, not
+	// cleaned away first; the last link may point at a file not there yet.
 	for range 40 {
-		// The folder through its own links first: a link's relative
-		// target, ../x say, is from the folder it's really in.
-		if dir, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
-			path = filepath.Join(dir, filepath.Base(path))
+		slash := strings.LastIndex(path, "/")
+		dir, name := ".", path
+		if slash >= 0 {
+			dir, name = path[:slash], path[slash+1:]
+			if dir == "" {
+				dir = "/"
+			}
 		}
+		if followed, err := filepath.EvalSymlinks(dir); err == nil {
+			dir = followed
+		}
+		path = filepath.Join(dir, name)
 		info, err := os.Lstat(path)
 		if err != nil || info.Mode()&os.ModeSymlink == 0 {
 			return path, nil
@@ -1153,7 +1163,7 @@ func followLinks(path string) (string, error) {
 			return "", err
 		}
 		if !filepath.IsAbs(to) {
-			to = filepath.Join(filepath.Dir(path), to)
+			to = dir + "/" + to
 		}
 		path = to
 	}
