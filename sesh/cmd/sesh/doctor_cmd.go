@@ -91,7 +91,7 @@ func checkSetup(c *doctorChecks, app *App) func(io.Writer) error {
 // config names.
 func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) error {
 	cfgPath, _ := config.Path() //nolint:errcheck // shown only when known
-	cfg, err := settings()
+	cfg, err := settingsOf(dbPath)
 	if err != nil {
 		c.row(markFail, "Config", "doesn't load", err.Error())
 		c.todo("Fix the config file, or the setting the error names:", "sesh config")
@@ -103,14 +103,7 @@ func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) erro
 		c.row(markNone, "Config", "no file, so the defaults")
 	}
 
-	if dbPath == "" {
-		dbPath = cfg.DBPath.Value
-	} else if dbPath != cfg.DBPath.Value {
-		// The rows that follow the vault's place (its backups) follow it.
-		moved := *cfg
-		moved.DBPath.Value = dbPath
-		cfg = &moved
-	}
+	dbPath = cfg.DBPath.Value
 	mat, matErr := database.ReadUnlockMaterial(dbPath)
 	switch {
 	case errors.Is(matErr, database.ErrNoVault):

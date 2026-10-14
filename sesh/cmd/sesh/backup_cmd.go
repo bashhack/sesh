@@ -133,11 +133,11 @@ func offerToRemoveOldBackupsOnce(app *App, cfg *config.Config, what string) erro
 	if err != nil || len(all) == 0 {
 		return err
 	}
-	old, opens, them := countOf(int64(len(all)), "backup"), "open", "them"
+	them := "them"
 	if len(all) == 1 {
-		opens, them = "opens", "it"
+		them = "it"
 	}
-	if _, err := fmt.Fprintf(app.Stderr, "\n%s made before this change still %s with the old %s, in %s.\n", old, opens, what, tildePath(s.Dir)); err != nil {
+	if _, err := fmt.Fprintf(app.Stderr, "\n%s\n", oldBackupsSaid(len(all), what, s.Dir)); err != nil {
 		return err
 	}
 	if app.StdinIsTerminal == nil || !app.StdinIsTerminal() {
@@ -148,14 +148,34 @@ func offerToRemoveOldBackupsOnce(app *App, cfg *config.Config, what string) erro
 	if err != nil || !yes {
 		return err
 	}
-	removed, err := s.RemoveAll()
+	said, err := renewBackups(s, vaultPath)
 	if err != nil {
 		return err
+	}
+	_, err = fmt.Fprintln(app.Stderr, said)
+	return err
+}
+
+// oldBackupsSaid says that n backups, in dir, made before a change still
+// open with the old what.
+func oldBackupsSaid(n int, what, dir string) string {
+	opens := "open"
+	if n == 1 {
+		opens = "opens"
+	}
+	return fmt.Sprintf("%s made before this change still %s with the old %s, in %s.", countOf(int64(n), "backup"), opens, what, tildePath(dir))
+}
+
+// renewBackups deletes the backups in s and makes a fresh one of the vault
+// at vaultPath, and says so.
+func renewBackups(s backup.Series, vaultPath string) (string, error) {
+	removed, err := s.RemoveAll()
+	if err != nil {
+		return "", err
 	}
 	b, err := s.Make(vaultPath, now())
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = fmt.Fprintf(app.Stderr, "Deleted %s; made a fresh one: %s\n", countOf(int64(len(removed)), "backup"), tildePath(b.Path))
-	return err
+	return fmt.Sprintf("Deleted %s; made a fresh one: %s", countOf(int64(len(removed)), "backup"), tildePath(b.Path)), nil
 }

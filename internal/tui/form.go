@@ -141,10 +141,15 @@ type fieldRow struct {
 // form is a form over the app: an entry's edit, an entry to add, or one
 // custom field's.
 type form struct {
-	submit  func() tea.Cmd // checks the inputs and saves
-	back    *form          // the form a field's form returns to
-	title   string
-	err     string
+	submit func() tea.Cmd // checks the inputs and saves
+	back   *form          // the form a field's form returns to
+	title  string
+	err    string
+	// enterDone is what Enter on the last input does, which submits the
+	// form; "" when Enter only moves on, and Ctrl-S saves.
+	enterDone string
+	// working says the form is being submitted, instead of "Saving…".
+	working string
 	inputs  []*input
 	focus   int
 	row     int // the field a field's form edits; -1 for a new one
@@ -210,6 +215,16 @@ func (f *form) move(step int) {
 			return
 		}
 	}
+}
+
+// last says whether the focus is on the form's last input shown.
+func (f *form) last() bool {
+	for i := f.focus + 1; i < len(f.inputs); i++ {
+		if f.inputs[i].visible() {
+			return false
+		}
+	}
+	return true
 }
 
 // wipe overwrites the secrets the form, and the forms it returns to, hold.
@@ -380,6 +395,8 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.openFieldForm(in, in.row)
 		case len(f.inputs) == 1:
 			// A one-line form is done when its line is.
+			return f.submit()
+		case f.enterDone != "" && f.last():
 			return f.submit()
 		default:
 			f.move(1)
@@ -766,11 +783,17 @@ func (m *Model) drawForm(base string) string {
 	lines = append(lines, all...)
 	lines = append(lines, errLines...)
 	hint := th.hints([2]string{"tab", "next"}, [2]string{"ctrl+s", "save"}, [2]string{"esc", "cancel"})
-	if len(f.inputs) == 1 {
-		hint = th.hints([2]string{"↵", "done"}, [2]string{"esc", "cancel"})
-	}
-	if f.saving {
+	switch {
+	case f.saving && f.working != "":
+		hint = th.dimmed().Render(f.working)
+	case f.saving:
 		hint = th.dimmed().Render("Saving…")
+	case len(f.inputs) == 1:
+		hint = th.hints([2]string{"↵", "done"}, [2]string{"esc", "cancel"})
+	case f.enterDone != "" && f.last():
+		hint = th.hints([2]string{"↵", f.enterDone}, [2]string{"shift+tab", "back"}, [2]string{"esc", "cancel"})
+	case f.enterDone != "":
+		hint = th.hints([2]string{"↵", "next"}, [2]string{"esc", "cancel"})
 	}
 	lines = append(lines, "", hint)
 	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(th.accent).Padding(0, 2).Width(w).

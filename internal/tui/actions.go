@@ -27,6 +27,7 @@ const (
 	panelHealth                    // what's wrong with the passwords and API keys
 	panelSettings                  // settings and safety
 	panelChecks                    // sesh doctor's checks
+	panelNotice                    // what a change did, to read
 )
 
 // overlay is a panel over the app, about the entry k.
@@ -55,6 +56,7 @@ type item struct {
 	key    string
 	label  string
 	detail string // said below the rows while it's the one selected
+	does   string // what Enter does to it, when not the panel's usual
 	rule   bool   // a line between groups, before it
 	stay   bool   // running it leaves the panel open
 }
@@ -147,6 +149,12 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.width < minWidth || m.height < minHeight {
 		// The panel isn't on screen: nothing is done unseen.
+		return nil
+	}
+	if ov.kind == panelNotice {
+		if k == "enter" {
+			m.ov = ov.back
+		}
 		return nil
 	}
 	if ov.kind == panelConfirm {
@@ -548,7 +556,7 @@ func (m *Model) drawOverlay(base string) string {
 		itemRoom = room - len(said) - 1
 	}
 	switch {
-	case ov.kind == panelConfirm:
+	case ov.kind == panelConfirm || ov.kind == panelNotice:
 		lines = append(lines, "", th.style().Width(w-6).Render(ov.question))
 	case ov.loading:
 		lines = append(lines, "", th.dimmed().Render("Loading…"))
@@ -622,10 +630,11 @@ func (m *Model) drawOverlay(base string) string {
 			hint = th.hints([2]string{"esc", "back"})
 		}
 	case panelSettings:
-		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})
-		if ov.sel == 0 {
-			hint = th.hints([2]string{"↵", "run them"}, [2]string{"esc", "back"})
+		does := "change it"
+		if ov.sel < len(ov.items) && ov.items[ov.sel].does != "" {
+			does = ov.items[ov.sel].does
 		}
+		hint = th.hints([2]string{"↵", does}, [2]string{"esc", "back"})
 	case panelChecks:
 		hint = th.hints([2]string{"↑↓", "read"}, [2]string{"esc", "back"})
 	case panelHealth:
@@ -638,6 +647,8 @@ func (m *Model) drawOverlay(base string) string {
 		}
 	case panelConfirm:
 		hint = th.hints([2]string{"y", "yes"}, [2]string{"n", "no"}, [2]string{"esc", "cancel"})
+	case panelNotice:
+		hint = th.hints([2]string{"↵", "ok"})
 		if ov.danger {
 			edge, titleStyle = th.bad, lipgloss.NewStyle().Foreground(th.bad).Bold(true)
 		}

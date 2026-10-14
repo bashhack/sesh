@@ -153,6 +153,10 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			return tui.Live{OldAfter: time.Duration(now.HealthOldAfterDays.Value) * 24 * time.Hour}, nil
 		},
 		Now: time.Now,
+		ChangePassword: func(current, next []byte) (tui.Changed, error) {
+			return uiChangePassword(cfg, current, next)
+		},
+		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
 		Unlock: func(pw []byte) (tui.Vault, error) {
 			store, err := reopenWith(cfg, pw)
 			if err != nil {

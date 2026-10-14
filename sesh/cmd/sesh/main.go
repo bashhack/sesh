@@ -350,6 +350,19 @@ func settings() (*config.Config, error) {
 	return config.Load(cliOverrides)
 }
 
+// settingsOf is settings, for the vault at dbPath: what follows the
+// vault's place (its backups' folder) follows it, when the config names
+// another vault now. "" is the config's vault.
+func settingsOf(dbPath string) (*config.Config, error) {
+	cfg, err := settings()
+	if err != nil || dbPath == "" || dbPath == cfg.DBPath.Value {
+		return cfg, err
+	}
+	moved := *cfg
+	moved.DBPath.Value = dbPath
+	return &moved, nil
+}
+
 // buildProvider opens the vault with cfg's settings; the caller closes it.
 func buildProvider(cfg *config.Config) (vault.Store, io.Closer, error) {
 	store, err := openSQLiteStoreWith(cfg)

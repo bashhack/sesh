@@ -55,10 +55,19 @@ func (m *Model) showSettings(settings []Setting) {
 	ov := m.ov
 	sel := ov.sel
 	ov.items = nil
+	if m.opts.ChangePassword != nil {
+		ov.items = append(ov.items, item{
+			label:  fmt.Sprintf("%-24s %s", "Master password", "change…"),
+			detail: "Every entry is re-encrypted under the new one; Touch ID unlock and the recovery key go on working with it. The current one is asked first.",
+			run:    m.changePassword,
+			stay:   true,
+		})
+	}
 	ov.items = append(ov.items, item{
-		label:  "Checks (sesh doctor)     run…",
+		label:  fmt.Sprintf("%-24s %s", "Checks (sesh doctor)", "run…"),
 		detail: "Checks sesh's setup, then that the vault's file, every entry, the trash, the history, the recovery key and Touch ID all read, as sesh doctor does. Reading the vault is recorded in the audit log.",
 		run:    m.openChecks,
+		does:   "run them",
 		stay:   true,
 	})
 	for i, s := range settings {
