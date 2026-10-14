@@ -201,6 +201,9 @@ func TestUI_AgentLockAndUnlockAgain(t *testing.T) {
 	useConfigFile(t, "")
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	t.Setenv(config.EnvDBPath, vaultIn(dir))
+	// Settings other than the defaults, so a store given the defaults shows.
+	t.Setenv(config.EnvTrashKeepDays, "7")
+	t.Setenv(config.EnvHistoryKeep, "4")
 	cfg, err := settings()
 	if err != nil {
 		t.Fatal(err)
@@ -214,6 +217,10 @@ func TestUI_AgentLockAndUnlockAgain(t *testing.T) {
 	store, err := reopenWith(cfg, []byte("correct-horse"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if store.HistoryKeep() != cfg.HistoryKeep.Value || store.TrashDays() != cfg.TrashKeepDays.Value || store.TrashDays() == 0 {
+		t.Errorf("unlocked again keeping %d earlier secrets and %d days of trash; want %d and %d",
+			store.HistoryKeep(), store.TrashDays(), cfg.HistoryKeep.Value, cfg.TrashKeepDays.Value)
 	}
 	u := newUIVault(store)
 	defer u.Close() //nolint:errcheck // test cleanup
@@ -276,6 +283,14 @@ func TestUI_TouchIDAgainWhileAgentUnlocked(t *testing.T) {
 	startTestAgent(t)
 	prompts, fail := softwareTouchID(t)
 	dbPath := createVaultWithTouchID(t)
+	useConfigFile(t, "")
+	t.Setenv(config.EnvDBPath, dbPath)
+	t.Setenv(config.EnvTrashKeepDays, "7")
+	t.Setenv(config.EnvHistoryKeep, "4")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !touchIDSetUp(dbPath) {
 		t.Fatal("Touch ID unlock isn't seen as set up")
 	}
@@ -285,7 +300,7 @@ func TestUI_TouchIDAgainWhileAgentUnlocked(t *testing.T) {
 	}
 	closeKeySource(t, oracle)
 	*fail = touchid.ErrCancelled
-	if store, err := reopenWithTouchID(dbPath); err == nil {
+	if store, err := reopenWithTouchID(cfg); err == nil {
 		store.Close() //nolint:errcheck,gosec // test cleanup
 		t.Error("a refused fingerprint unlocked the app while the agent was unlocked")
 	}
@@ -293,9 +308,12 @@ func TestUI_TouchIDAgainWhileAgentUnlocked(t *testing.T) {
 		t.Errorf("Touch ID prompts = %d, want 2: the app's unlock didn't ask", *prompts)
 	}
 	*fail = nil
-	store, err := reopenWithTouchID(dbPath)
+	store, err := reopenWithTouchID(cfg)
 	if err != nil {
 		t.Fatalf("a fingerprint given: %v", err)
+	}
+	if store.HistoryKeep() != cfg.HistoryKeep.Value || store.TrashDays() != cfg.TrashKeepDays.Value || store.TrashDays() == 0 {
+		t.Errorf("unlocked with Touch ID keeping %d earlier secrets and %d days of trash", store.HistoryKeep(), store.TrashDays())
 	}
 	store.Close() //nolint:errcheck,gosec // test cleanup
 }
