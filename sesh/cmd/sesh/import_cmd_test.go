@@ -19,6 +19,8 @@ import (
 	zqr "github.com/makiuchi-d/gozxing/qrcode"
 
 	"github.com/bashhack/sesh/internal/config"
+	"github.com/bashhack/sesh/internal/kdf"
+	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -658,5 +660,76 @@ func TestImport_HistoryAgainAndKeepNone(t *testing.T) {
 	_, stderr, err := runImportOut(t, "", false, "--dry-run", "--on-conflict", "overwrite", bitwardenFixture("plain.json"))
 	if err != nil || !strings.Contains(stderr, "old passwords (history.keep is 0): 1\n") || strings.Contains(stderr, "for the entries' history") {
 		t.Errorf("history.keep 0: %v\n%s", err, stderr)
+	}
+}
+
+// sesh's own encrypted export is told from other files, previewed with its clashes, imported after its password and
+// a yes, its details kept; a wrong password, a plain export, and nobody to type the password are refused.
+func TestImport_Sesh(t *testing.T) {
+	env := importVault(t)
+	src := vault.NewMemStore()
+	m := password.NewManager(src)
+	for _, k := range []vault.Key{{Kind: vault.KindPassword, Service: "github", Username: "alice"}, {Kind: vault.KindTOTP, Service: "GitHub", Username: "alice"}} {
+		secret := "s3cret"
+		if k.Kind == vault.KindTOTP {
+			secret = "JBSWY3DPEHPK3PXP"
+		}
+		if err := m.StorePassword(k.Service, k.Username, []byte(secret), k.Kind, vault.Filing{Folder: "Work", FolderSet: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	if err := src.SetDetails(gh, &vault.Details{URL: "https://github.com", Notes: []byte("n")}); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := m.ExportEncrypted(&buf, &password.ExportOptions{KDF: kdf.Minimum()}, []byte("export-pass-1234")); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "backup.enc")
+	if err := os.WriteFile(file, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := readSecret
+	t.Cleanup(func() { readSecret = old })
+	typed := "export-pass-1234"
+	readSecret = func() ([]byte, error) { return []byte(typed), nil }
+
+	_, stderr, err := runImportOut(t, "", true, "--dry-run", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Password for the sesh export: ", "Found 2 entries in the sesh export.", "password/github/alice", "Already in the vault (1):\n  totp/GitHub/alice\n"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("missing %q:\n%s", want, stderr)
+		}
+	}
+	out, stderr, err := runImportOut(t, "y\n", true, "--from", "sesh", "--on-conflict", "skip", file)
+	if err != nil || !strings.Contains(out, "✅ Imported 1 entry from a sesh export.") {
+		t.Fatalf("%q\n%s\n%v", out, stderr, err)
+	}
+	store := openDoctorVault(t, env)
+	e, err := store.Lookup(gh)
+	store.Close() //nolint:errcheck,gosec // test cleanup
+	if err != nil || e.Folder != "Work" || e.URL != "https://github.com" {
+		t.Errorf("imported: folder %q url %q, %v", e.Folder, e.URL, err)
+	}
+
+	typed = "wrong-pass-1234"
+	if _, _, err := runImportOut(t, "", true, "--from", "sesh", file); err == nil || !strings.Contains(err.Error(), "wrong password") {
+		t.Errorf("a wrong password: %v", err)
+	}
+	plain := filepath.Join(t.TempDir(), "plain.json")
+	if err := os.WriteFile(plain, []byte(`[{"service":"x","type":"password","secret":"y"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runImportOut(t, "", true, "--from", "sesh", plain); err == nil || !strings.Contains(err.Error(), "--action import") {
+		t.Errorf("a plain export: %v", err)
+	}
+	if _, _, err := runImportOut(t, "", false, "--from", "sesh", file); err == nil || err.Error() != "this sesh export is protected by a password: run sesh import at a terminal to type it" {
+		t.Errorf("no terminal: %v", err)
+	}
+	if _, _, err := runImportOut(t, "", true, "--from", "sesh", file, file); err == nil || !strings.Contains(err.Error(), "give one sesh export") {
+		t.Errorf("two files: %v", err)
 	}
 }

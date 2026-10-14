@@ -1299,7 +1299,7 @@ sesh inject -i config.yml.tpl -o config.yml
 - **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
 ### Importing from other apps (`sesh import`)
 
-`sesh import` brings entries over from another app: Bitwarden, KeePass (KeePassXC or KeePass 2), Chrome, Firefox, Safari, or Google Authenticator. It reads everything first, shows what it found, then asks:
+`sesh import` brings entries over from another app: Bitwarden, KeePass (KeePassXC or KeePass 2), Chrome, Firefox, Safari, or Google Authenticator; or from sesh's own encrypted export. It reads everything first, shows what it found, then asks:
 - what it will import, by kind and folder;
 - which entries you already have;
 - what it will skip, and why;
@@ -1312,7 +1312,11 @@ sesh import --from google-authenticator IMG_1234.png IMG_1235.png
 - **`--dry-run`** shows the summary and imports nothing; before you have a vault, it doesn't make one. **`--yes`** imports without asking, and is needed when there's no terminal to ask at.
 - **The audit log** records each entry imported, and the import itself: `import  14 TOTP entries from Google Authenticator`.
 - **Entries you already have** stop the import, listed, unless `--on-conflict skip` leaves them as they are or `--on-conflict overwrite` replaces them. Replacing one takes its secret and code settings from the import, and its folder, URL and notes only where the import has them. The import's fields are added to yours, one with the name of a field you have (ignoring case) replacing it, and kept secret if yours was; an entry whose fields together would be more than sesh holds is skipped, and listed. To merge them, sesh reads the details of the entries it would replace before showing the summary, even with `--dry-run`, and the audit log records each read. Its tags are yours and the import's together, and the entry keeps its other settings (an AWS entry's MFA device) and the time it was made.
-- **sesh's own exports** are imported with `--service password --action import` (see [Encrypted exports](#encrypted-exports)).
+- **sesh's own encrypted export** (`--from sesh`, or found as one without `--from`) is read with its password, which sesh asks for, then previewed and imported as any other: entries you have are skipped or replaced with `--on-conflict`, their details merged. Each entry keeps its secret, folder, tags, URL, notes, fields, code settings and times. A plain export (JSON or CSV) is imported with `--service password --action import`, which also takes the encrypted one without a preview (see [Encrypted exports](#encrypted-exports)).
+
+```
+sesh import --from sesh backup.enc
+```
 
 **Bitwarden.** Export your vault from Bitwarden as JSON, from the web vault, an app, or `bw export --format json`. Choose "Password protected" to keep it encrypted on disk; sesh asks for that password.
 - **An "Account restricted" export** can only be opened by Bitwarden itself, so sesh refuses it.

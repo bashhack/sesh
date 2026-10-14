@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/bashhack/sesh/internal/kdf"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 func newEncryptedTestManager(t *testing.T) *Manager {
@@ -225,5 +226,28 @@ func TestImportEncrypted_RefusesSettingsOutOfBounds(t *testing.T) {
 	_, err := mgr.ImportEncrypted(strings.NewReader(env), ImportOptions{}, []byte("pw"))
 	if err == nil || !strings.Contains(err.Error(), "export envelope: memory setting out of range") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// ReadEncrypted reads an export's entries without importing them; the envelope is told from other files.
+func TestReadEncrypted(t *testing.T) {
+	store := vault.NewMemStore()
+	m := NewManager(store)
+	if err := m.StorePassword("github", "alice", []byte("s3cret"), EntryTypePassword, vault.Filing{}); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := m.ExportEncrypted(&buf, &ExportOptions{KDF: kdf.Minimum()}, []byte("export-password-1")); err != nil {
+		t.Fatal(err)
+	}
+	if !IsEncryptedExport(buf.Bytes()) || IsEncryptedExport([]byte(`[{"service":"x"}]`)) || IsEncryptedExport([]byte(`{"service":"x"}`)) || IsEncryptedExport([]byte("not json")) {
+		t.Error("the envelope isn't told from other files")
+	}
+	list, err := ReadEncrypted(bytes.NewReader(buf.Bytes()), []byte("export-password-1"))
+	if err != nil || len(list) != 1 || list[0].Service != "github" || list[0].Secret != "s3cret" {
+		t.Fatalf("%+v, %v", list, err)
+	}
+	if _, err := ReadEncrypted(bytes.NewReader(buf.Bytes()), []byte("wrong-password-1")); err == nil || !strings.Contains(err.Error(), "wrong password") {
+		t.Errorf("a wrong password: %v", err)
 	}
 }

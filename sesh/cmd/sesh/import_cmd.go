@@ -19,6 +19,7 @@ import (
 	"github.com/bashhack/sesh/internal/importer/browser"
 	"github.com/bashhack/sesh/internal/importer/gauth"
 	"github.com/bashhack/sesh/internal/importer/keepass"
+	"github.com/bashhack/sesh/internal/importer/seshexport"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
@@ -45,16 +46,19 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
                           (in KeePassXC: Database > Export > XML File).
     safari                Safari's password export (CSV), from Apple's
                           Passwords app (File > Export All Passwords to File).
+    sesh                  sesh's own encrypted export (--action export
+                          --format encrypted); sesh asks for its password.
 
   sesh import --from google-authenticator IMG_1234.png IMG_1235.png
   sesh import --from bitwarden bitwarden_export.json
   sesh import --from keepass Passwords.xml
   sesh import --from chrome "Chrome Passwords.csv"
 
-sesh's own exports are imported with --service password --action import.`
+sesh's own plain exports (JSON, CSV) are imported with --service password
+--action import.`
 
 // importSources are the apps sesh import reads.
-var importSources = []string{"bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "safari"}
+var importSources = []string{"bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "safari", "sesh"}
 
 func addImportFlags(fs *flag.FlagSet) (from, onConflict *string, dryRun, yes *bool) {
 	from = fs.String("from", "", "Where the file comes from: "+strings.Join(importSources, ", "))
@@ -97,32 +101,19 @@ func runImport(app *App, args []string) error {
 	if source == "" {
 		source = detectSource(fs.Args())
 	}
-	var f found
-	var err error
-	switch source {
-	case "google-authenticator":
-		f, err = readGoogleAuthenticator(fs.Args(), app.Stdin, terminal)
-	case "bitwarden":
-		f, err = readBitwarden(app, fs.Args(), terminal)
-	case "keepass":
-		f, err = readKeePass(fs.Args())
-	case browser.Chrome, browser.Firefox, browser.Safari:
-		f, err = readBrowser(source, fs.Args())
-	default:
-		return fmt.Errorf("sesh can't import from %q; it can from: %s", source, strings.Join(importSources, ", "))
-	}
+	f, err := readImport(source, fs.Args(), app.Stdin, terminal, func(prompt string) ([]byte, error) {
+		if !terminal {
+			return nil, fmt.Errorf("this %s is protected by a password: run sesh import at a terminal to type it", prompt)
+		}
+		fmt.Fprintf(app.Stderr, "Password for the %s: ", prompt) //nolint:errcheck // prompt
+		pw, err := readSecret()
+		fmt.Fprintln(app.Stderr) //nolint:errcheck // ends the prompt line
+		return pw, err
+	})
 	if err != nil {
 		return err
 	}
-	defer func() {
-		for _, e := range f.entries {
-			secure.SecureZeroBytes(e.Secret)
-			e.Details.Zero()
-			for _, o := range e.Earlier {
-				secure.SecureZeroBytes(o.Secret)
-			}
-		}
-	}()
+	defer f.wipe()
 
 	// Importing can be the first thing done with sesh: the vault is made
 	// if there's none yet, as any command makes it, unless this is only a
@@ -138,73 +129,25 @@ func runImport(app *App, args []string) error {
 		}
 		defer closeAuditStore(store)
 	}
-	var fresh, clashes, skipped []*importer.Entry
-	for _, e := range f.entries {
-		if e.Skip != "" {
-			skipped = append(skipped, e)
-			continue
-		}
-		if store != nil {
-			if err := store.Exists(e.Key); err == nil {
-				clashes = append(clashes, e)
-				continue
-			} else if !errors.Is(err, vault.ErrNotFound) {
-				return err
-			}
-			// A name differing only in case from one you have is said,
-			// so a second entry isn't added unnoticed.
-			if twins, err := password.NewManager(store).CaseTwins(e.Key); err == nil && len(twins) > 0 {
-				e.Changes = append(e.Changes, "you have "+twins[0].String())
-			}
-		}
-		fresh = append(fresh, e)
-	}
-	// Replacing an entry merges its details with the import's, here, so
-	// one that would break sesh's rules is listed before anything is
-	// written.
-	if *onConflict == "overwrite" {
-		kept := clashes[:0]
-		for _, e := range clashes {
-			if err := mergeDetails(store, e); err != nil {
-				return err
-			}
-			if e.Skip != "" {
-				skipped = append(skipped, e)
-				continue
-			}
-			kept = append(kept, e)
-		}
-		clashes = kept
-	}
-
-	for _, e := range fresh {
-		fitHistory(e, cfg.HistoryKeep.Value)
-	}
-	if *onConflict == "overwrite" {
-		for _, e := range clashes {
-			fitHistory(e, cfg.HistoryKeep.Value)
-		}
-	}
-
-	if _, err := fmt.Fprint(app.Stderr, importSummary(&f, fresh, clashes, skipped, *onConflict)); err != nil {
+	plan, err := planImport(store, &f, *onConflict, cfg.HistoryKeep.Value)
+	if err != nil {
 		return err
 	}
-	toImport := len(fresh)
-	if *onConflict == "overwrite" {
-		toImport += len(clashes)
+	if _, err := fmt.Fprint(app.Stderr, plan.summary()); err != nil {
+		return err
 	}
 	clashHint := "some of these are already in the vault: add --on-conflict skip to leave them, or --on-conflict overwrite to replace them"
 	if *dryRun {
-		if len(clashes) > 0 && *onConflict == "" {
+		if len(plan.clashes) > 0 && *onConflict == "" {
 			fmt.Fprintf(app.Stderr, "\nTo import, %s.\n", clashHint) //nolint:errcheck // best effort
 		}
 		_, err := fmt.Fprintln(app.Stderr, "\nNothing imported (--dry-run).")
 		return err
 	}
-	if len(clashes) > 0 && *onConflict == "" {
+	if len(plan.clashes) > 0 && *onConflict == "" {
 		return errors.New(clashHint)
 	}
-	if toImport == 0 {
+	if plan.count() == 0 {
 		if _, err := fmt.Fprintln(app.Stderr, "\nNothing to import."); err != nil || f.after == "" {
 			return err
 		}
@@ -215,7 +158,7 @@ func runImport(app *App, args []string) error {
 		if !terminal {
 			return errors.New("add --yes to import without being asked")
 		}
-		ok, err := promptYesNo(app.Stdin, app.Stderr, fmt.Sprintf("\nImport %s? [y/N]: ", nouns(toImport, "entry", "entries")))
+		ok, err := promptYesNo(app.Stdin, app.Stderr, fmt.Sprintf("\nImport %s? [y/N]: ", nouns(plan.count(), "entry", "entries")))
 		if err != nil {
 			return err
 		}
@@ -224,10 +167,111 @@ func runImport(app *App, args []string) error {
 			return err
 		}
 	}
+	said, err := plan.apply(store)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(app.Stdout, said)
+	return err
+}
 
-	write := fresh
-	if *onConflict == "overwrite" {
-		write = append(write, clashes...)
+// readImport reads the files of an import from source. ask asks for the
+// password of an export protected by one, naming it ("Bitwarden export").
+func readImport(source string, args []string, stdin io.Reader, terminal bool, ask func(what string) ([]byte, error)) (found, error) {
+	switch source {
+	case "google-authenticator":
+		return readGoogleAuthenticator(args, stdin, terminal)
+	case "bitwarden":
+		return readBitwarden(args, ask)
+	case "keepass":
+		return readKeePass(args)
+	case browser.Chrome, browser.Firefox, browser.Safari:
+		return readBrowser(source, args)
+	case "sesh":
+		return readSeshExport(args, ask)
+	}
+	return found{}, fmt.Errorf("sesh can't import from %q; it can from: %s", source, strings.Join(importSources, ", "))
+}
+
+// importPlan is an import read and checked against the vault: the entries
+// new to it, those it has (clashes), and those skipped, with onConflict
+// saying what's done with clashes ("" asks).
+type importPlan struct {
+	f                       *found
+	onConflict              string
+	fresh, clashes, skipped []*importer.Entry
+}
+
+// planImport sorts f's entries against the vault store holds (nil: none
+// yet, so nothing clashes). Replacing an entry merges its details with the
+// import's, here, so one that would break sesh's rules is listed before
+// anything is written; old passwords are fitted to historyKeep.
+func planImport(store *database.Store, f *found, onConflict string, historyKeep int) (*importPlan, error) {
+	p := &importPlan{f: f, onConflict: onConflict}
+	for _, e := range f.entries {
+		if e.Skip != "" {
+			p.skipped = append(p.skipped, e)
+			continue
+		}
+		if store != nil {
+			if err := store.Exists(e.Key); err == nil {
+				p.clashes = append(p.clashes, e)
+				continue
+			} else if !errors.Is(err, vault.ErrNotFound) {
+				return nil, err
+			}
+			// A name differing only in case from one you have is said,
+			// so a second entry isn't added unnoticed.
+			if twins, err := password.NewManager(store).CaseTwins(e.Key); err == nil && len(twins) > 0 {
+				e.Changes = append(e.Changes, "you have "+twins[0].String())
+			}
+		}
+		p.fresh = append(p.fresh, e)
+	}
+	if onConflict == "overwrite" {
+		kept := p.clashes[:0]
+		for _, e := range p.clashes {
+			if err := mergeDetails(store, e); err != nil {
+				return nil, err
+			}
+			if e.Skip != "" {
+				p.skipped = append(p.skipped, e)
+				continue
+			}
+			kept = append(kept, e)
+		}
+		p.clashes = kept
+	}
+	for _, e := range p.fresh {
+		fitHistory(e, historyKeep)
+	}
+	if onConflict == "overwrite" {
+		for _, e := range p.clashes {
+			fitHistory(e, historyKeep)
+		}
+	}
+	return p, nil
+}
+
+// summary says what the import will do, as sesh import shows it.
+func (p *importPlan) summary() string {
+	return importSummary(p.f, p.fresh, p.clashes, p.skipped, p.onConflict)
+}
+
+// count is how many entries the import writes.
+func (p *importPlan) count() int {
+	if p.onConflict == "overwrite" {
+		return len(p.fresh) + len(p.clashes)
+	}
+	return len(p.fresh)
+}
+
+// apply writes the import's entries to the vault store holds, and says
+// what it did, a line each.
+func (p *importPlan) apply(store *database.Store) (string, error) {
+	write := p.fresh
+	if p.onConflict == "overwrite" {
+		write = append(write, p.clashes...)
 	}
 	allTOTP := !slices.ContainsFunc(write, func(e *importer.Entry) bool { return e.Key.Kind != vault.KindTOTP })
 	what := func(n int) string {
@@ -239,49 +283,48 @@ func runImport(app *App, args []string) error {
 	// Running again after a failure redoes nothing harmful: entries
 	// already imported clash, and are skipped or replaced the same way.
 	again := "skip"
-	if *onConflict == "overwrite" {
+	if p.onConflict == "overwrite" {
 		again = "overwrite"
 	}
 	done := 0
 	var history database.ImportedHistory
 	for _, e := range write {
-		h, err := writeImported(store, e, slices.Contains(clashes, e))
+		h, err := writeImported(store, e, slices.Contains(p.clashes, e))
 		if err != nil {
 			if done > 0 {
-				store.LogImport(fmt.Sprintf("%s from %s, then stopped", what(done), f.source))
+				store.LogImport(fmt.Sprintf("%s from %s, then stopped", what(done), p.f.source))
 			}
-			return fmt.Errorf("imported %s, then %s failed: %w; to import the rest, run this again with --on-conflict %s", nouns(done, "entry", "entries"), e.Key, err, again)
+			return "", fmt.Errorf("imported %s, then %s failed: %w; to import the rest, run this again with --on-conflict %s", nouns(done, "entry", "entries"), e.Key, err, again)
 		}
 		done++
 		history.Kept += h.Kept
 		history.NoRoom += h.NoRoom
 		history.TooLarge += h.TooLarge
 	}
-	store.LogImport(what(done) + " from " + f.source)
-	if _, err := fmt.Fprintf(app.Stdout, "✅ Imported %s from %s.\n", what(done), f.source); err != nil {
-		return err
-	}
+	store.LogImport(what(done) + " from " + p.f.source)
+	var b strings.Builder
+	fmt.Fprintf(&b, "✅ Imported %s from %s.\n", what(done), p.f.source)
 	if history.Kept > 0 {
-		fmt.Fprintf(app.Stdout, "Kept %s in their history (sesh history <id> lists them).\n", nouns(history.Kept, "old password", "old passwords")) //nolint:errcheck // best effort
+		fmt.Fprintf(&b, "Kept %s in their history (sesh history <id> lists them).\n", nouns(history.Kept, "old password", "old passwords"))
 	}
 	if history.NoRoom > 0 {
-		fmt.Fprintf(app.Stdout, "Not kept: %s past history.keep (%d), the oldest of those imported.\n", nouns(history.NoRoom, "old password", "old passwords"), store.HistoryKeep()) //nolint:errcheck // best effort
+		fmt.Fprintf(&b, "Not kept: %s past history.keep (%d), the oldest of those imported.\n", nouns(history.NoRoom, "old password", "old passwords"), store.HistoryKeep())
 	}
 	if history.TooLarge > 0 {
-		fmt.Fprintf(app.Stdout, "Not kept: %s larger than sesh holds (%d bytes).\n", nouns(history.TooLarge, "old password", "old passwords"), database.MaxSecretSize) //nolint:errcheck // best effort
+		fmt.Fprintf(&b, "Not kept: %s larger than sesh holds (%d bytes).\n", nouns(history.TooLarge, "old password", "old passwords"), database.MaxSecretSize)
 	}
-	if i := slices.IndexFunc(write, func(e *importer.Entry) bool { return e.Key.Kind == vault.KindTOTP }); i >= 0 && source == "google-authenticator" {
+	if i := slices.IndexFunc(write, func(e *importer.Entry) bool { return e.Key.Kind == vault.KindTOTP }); i >= 0 && p.f.source == "Google Authenticator" {
 		k := write[i].Key
 		check := "sesh --service totp --service-name " + shell.Quote(k.Service)
 		if k.Username != "" {
 			check += " --profile " + shell.Quote(k.Username)
 		}
-		fmt.Fprintf(app.Stdout, "Before removing an account from your phone, check that its code matches, as with: %s\n", check) //nolint:errcheck // best effort
+		fmt.Fprintf(&b, "Before removing an account from your phone, check that its code matches, as with: %s\n", check)
 	}
-	if f.after != "" {
-		_, err = fmt.Fprintln(app.Stdout, f.after)
+	if p.f.after != "" {
+		b.WriteString(p.f.after + "\n")
 	}
-	return err
+	return b.String(), nil
 }
 
 // found is what an import read from its files.
@@ -291,6 +334,17 @@ type found struct {
 	after    string // said once the import is done, if anything
 	warnings []string
 	entries  []*importer.Entry
+}
+
+// wipe overwrites the secrets f read.
+func (f *found) wipe() {
+	for _, e := range f.entries {
+		secure.SecureZeroBytes(e.Secret)
+		e.Details.Zero()
+		for _, o := range e.Earlier {
+			secure.SecureZeroBytes(o.Secret)
+		}
+	}
 }
 
 // detectSource is the app the files come from: Bitwarden, KeePass, Chrome,
@@ -305,6 +359,8 @@ func detectSource(args []string) string {
 			return "bitwarden"
 		case keepass.IsExport(b):
 			return "keepass"
+		case password.IsEncryptedExport(b):
+			return "sesh"
 		case browser.Detect(b) != "":
 			return browser.Detect(b)
 		}
@@ -554,9 +610,9 @@ func kindPlural(k vault.Kind) string {
 	return string(k)
 }
 
-// readBitwarden reads one Bitwarden JSON export, asking at the terminal
-// for the password of one protected by a password.
-func readBitwarden(app *App, args []string, terminal bool) (found, error) {
+// readBitwarden reads one Bitwarden JSON export, with ask asking for the
+// password of one protected by a password.
+func readBitwarden(args []string, ask func(what string) ([]byte, error)) (found, error) {
 	if len(args) != 1 {
 		return found{}, errors.New("give one Bitwarden export: sesh import --from bitwarden <export.json>")
 	}
@@ -568,13 +624,7 @@ func readBitwarden(app *App, args []string, terminal bool) (found, error) {
 	protected := false
 	exp, err := bitwarden.Parse(b, func() ([]byte, error) {
 		protected = true
-		if !terminal {
-			return nil, errors.New("this Bitwarden export is protected by a password: run sesh import at a terminal to type it")
-		}
-		fmt.Fprint(app.Stderr, "Password for the Bitwarden export: ") //nolint:errcheck // prompt
-		pw, err := readSecret()
-		fmt.Fprintln(app.Stderr) //nolint:errcheck // ends the prompt line
-		return pw, err
+		return ask("Bitwarden export")
 	})
 	if err != nil {
 		return found{}, err
@@ -588,6 +638,35 @@ func readBitwarden(app *App, args []string, terminal bool) (found, error) {
 		f.after = "This export holds your passwords unencrypted: delete " + args[0] + " now, and empty the trash."
 	}
 	return f, nil
+}
+
+// readSeshExport reads one of sesh's own encrypted exports, with ask
+// asking for its password.
+func readSeshExport(args []string, ask func(what string) ([]byte, error)) (found, error) {
+	if len(args) != 1 {
+		return found{}, errors.New("give one sesh export: sesh import --from sesh <export.enc>")
+	}
+	b, err := os.ReadFile(args[0])
+	if err != nil {
+		return found{}, err
+	}
+	if !password.IsEncryptedExport(b) {
+		return found{}, errors.New("this isn't one of sesh's encrypted exports: a plain one (JSON or CSV) is imported with sesh --service password --action import")
+	}
+	key, err := ask("sesh export")
+	if err != nil {
+		return found{}, err
+	}
+	defer secure.SecureZeroBytes(key)
+	list, err := password.ReadEncrypted(bytes.NewReader(b), key)
+	if err != nil {
+		return found{}, err
+	}
+	return found{
+		source:  "a sesh export",
+		header:  fmt.Sprintf("Found %s in the sesh export.", nouns(len(list), "entry", "entries")),
+		entries: seshexport.Entries(list),
+	}, nil
 }
 
 // readKeePass reads one KeePass XML export.

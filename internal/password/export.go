@@ -33,6 +33,15 @@ type ExportEntry struct {
 	Settings  vault.Settings `json:"settings,omitzero"`
 }
 
+// Key is the entry's key.
+func (e *ExportEntry) Key() vault.Key { return key(e.Service, e.Username, e.Type) }
+
+// Details is the entry's details, which the caller zeroes.
+func (e *ExportEntry) Details() vault.Details { return importDetails(e) }
+
+// Name is the entry as an import names it: "svc", or "svc" ("user").
+func (e *ExportEntry) Name() string { return importName(e) }
+
 // ExportField is a custom field as an export holds it, secret or not.
 type ExportField struct {
 	Name   string `json:"name"`
