@@ -343,41 +343,70 @@ func TestOracle_CheckAndTouch(t *testing.T) {
 	}
 }
 
-// After the computer sleeps past the idle timeout, the agent reports
-// itself locked to the first request, and one that stops when it locks
-// stops; with no request at all, its sweep locks it.
+// After the computer sleeps past the idle timeout, the first request finds
+// the agent locked, and an unlock on the same connection unlocks it again;
+// one that stops when it locks stops when nothing unlocks it within the
+// idle timeout, and when its sweep, with no request at all, locks it.
 func TestServer_LocksAfterSleep(t *testing.T) {
-	t.Run("status", func(t *testing.T) {
-		clk := newFakeClock()
+	t.Run("status, then unlock again", func(t *testing.T) {
+		clk := monoClock()
+		sockPath := tempSocketPath(t)
+		srv, done := serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute), WithExitOnAutoLock())
+		conn, _ := unlockClient(t, sockPath)
+		defer mustClose(t, conn)
+		clk.sleep(8 * time.Hour)
+		if st, err := Status(conn); err != nil || st.Unlocked {
+			t.Fatalf("status after the sleep: %+v, %v", st, err)
+		}
+		params := lightParams()
+		salt, verify := sealVerify(t, "correct-horse", params)
+		if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); err != nil {
+			t.Fatalf("unlock on the same connection after the sleep: %v", err)
+		}
+		// Unlocked again and in use: the stop it scheduled, due 10 minutes
+		// after the late lock, finds it so, and leaves it.
+		clk.advance(9 * time.Minute)
+		if err := Touch(conn, UnlockID(verify)); err != nil {
+			t.Fatal(err)
+		}
+		clk.advance(2 * time.Minute)
+		select {
+		case <-done:
+			t.Fatal("the agent stopped though it was unlocked again")
+		case <-time.After(100 * time.Millisecond):
+		}
+		if !srv.keys.snapshot().unlocked {
+			t.Error("the agent isn't unlocked")
+		}
+	})
+	t.Run("not unlocked again", func(t *testing.T) {
+		clk := monoClock()
 		sockPath := tempSocketPath(t)
 		_, done := serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute), WithExitOnAutoLock())
 		conn, _ := unlockClient(t, sockPath)
 		defer mustClose(t, conn)
 		clk.sleep(8 * time.Hour)
-		st, err := Status(conn)
-		if err != nil || st.Unlocked {
+		if st, err := Status(conn); err != nil || st.Unlocked {
 			t.Fatalf("status after the sleep: %+v, %v", st, err)
 		}
+		clk.advance(10 * time.Minute)
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			t.Fatal("the agent didn't stop after locking")
+			t.Fatal("the agent didn't stop, though nothing unlocked it")
 		}
 	})
 	t.Run("sweep", func(t *testing.T) {
-		was := expirySweep
-		expirySweep = 20 * time.Millisecond
-		t.Cleanup(func() { expirySweep = was })
-		clk := newFakeClock()
+		clk := monoClock()
 		sockPath := tempSocketPath(t)
-		srv, _ := serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute))
+		_, done := serve(t, sockPath, withClock(clk), withSweepEvery(20*time.Millisecond), WithIdleTimeout(10*time.Minute), WithExitOnAutoLock())
 		conn, _ := unlockClient(t, sockPath)
 		defer mustClose(t, conn)
 		clk.sleep(8 * time.Hour)
-		for deadline := time.Now().Add(5 * time.Second); srv.keys.snapshot().unlocked; time.Sleep(10 * time.Millisecond) {
-			if time.Now().After(deadline) {
-				t.Fatal("the sweep didn't lock the agent")
-			}
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the sweep didn't lock and stop the agent")
 		}
 	})
 }

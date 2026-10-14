@@ -64,6 +64,10 @@ type keystore struct {
 	// onAutoLock, when set, runs after a timer locks the keystore, outside
 	// mu, with the reason ("idle timeout" or "max lifetime").
 	onAutoLock func(reason string)
+	// onLateLock, when set, runs after a request finds the keystore past
+	// its deadline and locks it (see lockIfExpired), outside mu, with the
+	// generation the lock began.
+	onLateLock func(gen uint64)
 	idleTimer  stopper
 	maxTimer   stopper
 	// keyBuf is the key's storage, kept for the life of the keystore and
@@ -113,6 +117,9 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 		return errShutDown
 	}
 
+	// A key past its deadline is locked first, so the unlock that follows
+	// waking is logged after it.
+	k.lockIfExpired()
 	if err := database.ValidateUnlockMaterial(salt, verify, params); err != nil {
 		return fmt.Errorf("%w: %v", errBadRequest, err)
 	}
@@ -140,6 +147,8 @@ func (k *keystore) UnlockTouchID(verify []byte, fresh bool, unwrap func() ([]byt
 	if k.isShutDown() {
 		return errShutDown
 	}
+	// Past its deadline, the key held doesn't count as unlocked.
+	k.lockIfExpired()
 	if st := k.snapshot(); !fresh && st.unlocked && st.unlockID == UnlockID(verify) {
 		return nil
 	}
@@ -414,9 +423,18 @@ func (k *keystore) autoLock(gen uint64, idle bool) {
 // has passed by the wall clock. The timers can't see that: Go's timers run
 // on a clock that stops while the computer sleeps (mach_absolute_time on
 // macOS, CLOCK_MONOTONIC on Linux), so after a night asleep they're hours
-// from firing. It runs before each use of the key and on the server's
-// sweep.
-func (k *keystore) lockIfExpired() {
+// from firing. It runs before each request and on the server's sweep.
+//
+// A lock found by the sweep is an auto lock, as a timer's (onAutoLock).
+// One found by a request isn't: that request, or the next on its
+// connection, may be the unlock that follows waking, so the keystore is
+// locked but left to it (onLateLock).
+func (k *keystore) lockIfExpired() { k.lockIfExpiredFor(false) }
+
+// sweepExpired is lockIfExpired for the server's sweep.
+func (k *keystore) sweepExpired() { k.lockIfExpiredFor(true) }
+
+func (k *keystore) lockIfExpiredFor(sweep bool) {
 	k.mu.Lock()
 	if k.derivedKey == nil {
 		k.mu.Unlock()
@@ -435,11 +453,22 @@ func (k *keystore) lockIfExpired() {
 	}
 	k.clearLocked()
 	k.log.printf("locked after %s", reason)
-	after := k.onAutoLock
+	after, late, gen := k.onAutoLock, k.onLateLock, k.generation
 	k.mu.Unlock()
-	if after != nil {
+	switch {
+	case sweep && after != nil:
 		after(reason)
+	case !sweep && late != nil:
+		late(gen)
 	}
+}
+
+// lockedSince says whether the keystore is still locked as it was at
+// generation gen: nothing unlocked it since.
+func (k *keystore) lockedSince(gen uint64) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.generation == gen && k.derivedKey == nil
 }
 
 // since is how long ago t was at now, by whichever clock says longer: the
