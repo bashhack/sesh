@@ -1130,7 +1130,7 @@ To replace a password: sesh edit <id> --generate (or --secret to type one)
 
 - **Weak:** passwords that are easy to guess, rated as `sesh` rates a new one (zxcvbn, with the entry's name and username counted against it). API keys and TOTP keys aren't rated, since people don't choose them.
 - **Reused:** a password or API key that's the same on more than one entry, so one leak opens them all.
-- **Old:** a password or API key whose secret hasn't changed in `health.old_after_days` (365 by default; `0` doesn't check). Editing anything else about an entry doesn't count as a change.
+- **Old:** a password or API key whose secret hasn't changed in `health.old_after_days` (365 by default; `0` doesn't check). Editing anything else about an entry doesn't count as a change, and nor does storing or importing the secret it already has.
 - **Couldn't check:** an entry whose secret doesn't decrypt is listed, not checked; `sesh doctor` says more about it.
 - **Reading the secrets** is one event in the audit log ("Health check: read 41 secrets"), not one per entry. Secure notes and TOTP keys aren't read.
 - **Breached passwords aren't checked.** The ways to check would be Have I Been Pwned's file of every breached password's hash, about 100 GB to download, or its online lookup, which sends the start of each password's hash; sesh does neither.

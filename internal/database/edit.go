@@ -100,6 +100,17 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 			return "", err
 		}
 	}
+	// The secret it has, given again, isn't a change: the entry keeps its
+	// update time, which says when its secret last changed.
+	if e.Secret != nil {
+		same, err := s.sameSecret(k, data, salt, e.Secret)
+		if err != nil {
+			return "", err
+		}
+		if same {
+			e.Secret = nil
+		}
+	}
 	ent := vault.Entry{Key: k}
 	if err := vault.DecodeEntryDetails(&ent, url, details); err != nil {
 		return "", err

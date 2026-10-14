@@ -44,6 +44,24 @@ type oldSecret struct {
 	at         time.Time // replaced, for an imported one
 	data, salt []byte    // sealed for history
 	from       []byte    // the entry's encrypted_data it was read from
+	same       bool      // next is the secret it has: nothing changes
+}
+
+// sameSecret says whether the entry k's secret, sealed (data, salt), is
+// next. One that doesn't decrypt isn't.
+func (s *Store) sameSecret(k vault.Key, data, salt, next []byte) (bool, error) {
+	plain, err := s.oracle.DecryptEntry(data, salt, entryAAD(k))
+	switch {
+	case err == nil:
+		defer secure.SecureZeroBytes(plain)
+		return bytes.Equal(plain, next), nil
+	case errors.Is(err, ErrDecrypt):
+		if kerr := s.keyUnchanged(s.db); errors.Is(kerr, ErrVaultKeyChanged) {
+			return false, fmt.Errorf("decrypt %s: %w", k, kerr)
+		}
+		return false, nil
+	}
+	return false, fmt.Errorf("decrypt %s: %w", k, err)
 }
 
 // replacing is the entry k's secret, sealed (data, salt), kept for its
@@ -67,7 +85,7 @@ func (s *Store) replacing(k, to vault.Key, data, salt, next []byte) (*oldSecret,
 	}
 	defer secure.SecureZeroBytes(plain)
 	if bytes.Equal(plain, next) {
-		return &oldSecret{from: data}, nil
+		return &oldSecret{from: data, same: true}, nil
 	}
 	hd, hs, err := s.oracle.EncryptEntry(plain, historyAAD(to))
 	if err != nil {

@@ -3,9 +3,12 @@ package database
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/vault"
 	"github.com/bashhack/sesh/internal/vault/vaulttest"
@@ -242,5 +245,55 @@ func TestEachSecret(t *testing.T) {
 	}
 	if len(reads) != 1 || reads[0] != "|Health check: read 1 secret" {
 		t.Errorf("audit reads = %q", reads)
+	}
+}
+
+// Storing the secret an entry has keeps its update time, with history kept or not; a new one moves it.
+func TestSameSecretKeepsUpdateTime(t *testing.T) {
+	for _, keep := range []int{0, 10} {
+		t.Run(fmt.Sprintf("history.keep %d", keep), func(t *testing.T) {
+			s := newTestStore(t)
+			s.SetHistoryKeep(keep)
+			k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+			if err := s.Put(k, []byte("one")); err != nil {
+				t.Fatal(err)
+			}
+			then := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+			if _, err := s.db.Exec(`UPDATE entries SET updated_at = ? WHERE service = 'bank'`, then); err != nil {
+				t.Fatal(err)
+			}
+			updated := func() time.Time {
+				e, err := s.Lookup(k)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return e.UpdatedAt.UTC()
+			}
+			if err := s.Put(k, []byte("one")); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SaveWithDetails(&vault.Entry{Key: k}, []byte("one"), &vault.Details{}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Edit(k, EntryEdit{Secret: []byte("one")}); !errors.Is(err, ErrNothingToChange) {
+				t.Errorf("an edit to the same secret = %v; want nothing to change", err)
+			}
+			if got := updated(); !got.Equal(then) {
+				t.Errorf("after the same secret again: updated %v; want %v", got, then)
+			}
+			to := vault.Key{Kind: vault.KindPassword, Service: "bank2"}
+			if what, err := s.Edit(k, EntryEdit{To: &to, Secret: []byte("one")}); err != nil || strings.Contains(what, "secret") {
+				t.Errorf("a rename with the same secret = %q, %v", what, err)
+			}
+			if e, err := s.Lookup(to); err != nil || !e.UpdatedAt.UTC().Equal(then) {
+				t.Errorf("renamed with the same secret: updated %v, %v", e.UpdatedAt, err)
+			}
+			if err := s.Put(to, []byte("two")); err != nil {
+				t.Fatal(err)
+			}
+			if e, err := s.Lookup(to); err != nil || e.UpdatedAt.UTC().Equal(then) {
+				t.Errorf("a new secret didn't move the update time: %v, %v", e.UpdatedAt, err)
+			}
+		})
 	}
 }

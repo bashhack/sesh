@@ -174,23 +174,28 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	// The write then checks the entry is as read: absent, or with that
 	// secret, so another command's store in between isn't replaced
 	// without being kept.
+	// An entry stored over with the secret it has keeps its update time,
+	// which says when its secret last changed.
 	var old *oldSecret
 	var data, oldSalt []byte
-	keeping, existed := s.historyKeep > 0, false
-	if keeping {
-		err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-		case err != nil:
-			return fmt.Errorf("read %s: %w", e.Key, err)
-		default:
-			existed = true
-			if old, err = s.replacing(e.Key, e.Key, data, oldSalt, secret); err != nil {
-				return err
-			}
-			if old == nil {
-				old = &oldSecret{from: data}
-			}
+	keeping, existed, same := s.historyKeep > 0, false, false
+	switch err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("read %s: %w", e.Key, err)
+	case keeping:
+		existed = true
+		if old, err = s.replacing(e.Key, e.Key, data, oldSalt, secret); err != nil {
+			return err
+		}
+		if old == nil {
+			old = &oldSecret{from: data}
+		}
+		same = old.same
+	default:
+		existed = true
+		if same, err = s.sameSecret(e.Key, data, oldSalt, secret); err != nil {
+			return err
 		}
 	}
 	var imported *importedHistory
@@ -217,7 +222,10 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if updated.IsZero() {
 		updated = now
 	}
-	onConflict := `encrypted_data = excluded.encrypted_data, salt = excluded.salt, updated_at = excluded.updated_at`
+	onConflict := `encrypted_data = excluded.encrypted_data, salt = excluded.salt`
+	if !same || !e.UpdatedAt.IsZero() {
+		onConflict += `, updated_at = excluded.updated_at`
+	}
 	if whole {
 		onConflict += `, settings = excluded.settings, folder = excluded.folder, created_at = excluded.created_at`
 	}
