@@ -482,6 +482,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.spin, cmd = m.spin.Update(msg)
 		return cmd
 	case tea.MouseClickMsg:
+		m.editing = vault.Key{}
 		if m.v == nil || msg.Button != tea.MouseLeft || !m.listShown() || m.ov != nil || m.form != nil {
 			return nil
 		}
@@ -498,6 +499,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		return m.keepAlive()
 	case tea.MouseWheelMsg:
+		m.editing = vault.Key{}
 		if m.v == nil || !m.listShown() || m.ov != nil || m.form != nil {
 			return nil
 		}
@@ -552,6 +554,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case revealMsg:
 		return m.gotReveal(&msg)
 	case tea.KeyPressMsg:
+		// A form the health report is waiting to open isn't, once the
+		// user does something else.
+		m.editing = vault.Key{}
 		if m.v == nil {
 			return m.lockedKey(msg)
 		}
@@ -563,6 +568,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		return tea.Batch(m.key(msg), m.keepAlive())
 	case tea.PasteMsg:
+		m.editing = vault.Key{}
 		// A line copied with its end keeps the newline; it's not part of
 		// a name or a password.
 		text := trimNewlines(msg.Content)
@@ -766,6 +772,7 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.wipe()
 	m.epoch++
 	m.found, m.rows, m.sel, m.top = nil, nil, 0, 0
+	m.editing = vault.Key{}
 	clear(m.marked)
 	m.folders, m.tags, m.side, m.sideSel, m.sideTop = nil, nil, nil, 0, 0
 	m.filter = sideRow{kind: sideAll, label: "All"}

@@ -26,22 +26,24 @@ import (
 // fakeVault holds entries and secrets, finds entries whose name holds the
 // query, and records what was read.
 type fakeVault struct {
-	err      error // returned by every read when set
-	checkErr error // returned by Check when set
-	secrets  map[vault.Key]string
-	notes    map[vault.Key]string
-	fields   map[vault.Key][]vault.Field // secret fields, with values
-	history  map[vault.Key][]string      // earlier secrets, the newest first
-	trash    []Trashed
-	trashed  map[int64]vault.Entry
-	saves    []Change // what Save was given
-	entries  []vault.Entry
-	reads    []string // "secret <key> <reading>" or "code <key>"
-	kept     int      // keep-alives
-	closed   bool
-	changed  bool
-	searched int
-	changes  int // folder and tag changes made
+	err        error       // returned by every read when set
+	checkErr   error       // returned by Check when set
+	healthErr  error       // returned by Health when set
+	unreadable []vault.Key // entries whose secret doesn't decrypt, for Health
+	secrets    map[vault.Key]string
+	notes      map[vault.Key]string
+	fields     map[vault.Key][]vault.Field // secret fields, with values
+	history    map[vault.Key][]string      // earlier secrets, the newest first
+	trash      []Trashed
+	trashed    map[int64]vault.Entry
+	saves      []Change // what Save was given
+	entries    []vault.Entry
+	reads      []string // "secret <key> <reading>" or "code <key>"
+	kept       int      // keep-alives
+	closed     bool
+	changed    bool
+	searched   int
+	changes    int // folder and tag changes made
 }
 
 func (f *fakeVault) Search(q string) ([]vault.Entry, int, error) {
@@ -135,10 +137,17 @@ func (f *fakeVault) Delete(k vault.Key) error {
 
 func (f *fakeVault) Health(now time.Time, oldAfter time.Duration) (health.Report, error) {
 	f.reads = append(f.reads, "health")
+	if f.healthErr != nil {
+		return health.Report{}, f.healthErr
+	}
 	c := &health.Checker{Now: now, IsWeak: password.IsWeak, OldAfter: oldAfter}
 	for i := range f.entries {
 		e := &f.entries[i]
-		if err := c.Add(e, []byte(f.secrets[e.Key]), nil); err != nil {
+		var err error
+		if slices.Contains(f.unreadable, e.Key) {
+			err = errors.New("doesn't decrypt")
+		}
+		if err := c.Add(e, []byte(f.secrets[e.Key]), err); err != nil {
 			return health.Report{}, err
 		}
 	}
@@ -2188,5 +2197,94 @@ func TestHealthReportWaitsForNotes(t *testing.T) {
 	}
 	if i := slices.IndexFunc(a.form.inputs, func(in *input) bool { return in.kind == inputNotes }); a.form.inputs[i].area.Value() != "the note" {
 		t.Errorf("the form's notes = %q", a.form.inputs[i].area.Value())
+	}
+}
+
+// enterHeld is Enter on the report's row, its search not run yet.
+func enterHeld(a *app) tea.Cmd {
+	_, cmd := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	return cmd
+}
+
+// A form waited for isn't opened once the user does something else, or the app locks.
+func TestHealthReportPendingEdit(t *testing.T) {
+	a := newApp(t, healthFake(), Options{})
+	a.press("ctrl+k", "r")
+	held := enterHeld(a)
+	a.press("x")
+	if a.editing != (vault.Key{}) {
+		t.Error("a key pressed while it waited left the form to open")
+	}
+	a.run(held)
+	if s := a.screen(); a.form != nil || strings.Contains(s, "isn't in the vault") {
+		t.Errorf("typing while it waited:\n%s", s)
+	}
+
+	a = newApp(t, healthFake(), Options{})
+	a.press("ctrl+k", "r")
+	held = enterHeld(a)
+	a.press("ctrl+k", "a", "my new entry")
+	a.editing = github // as if nothing the user did had dropped it
+	a.run(held)
+	if a.form == nil || a.form.title != "Add an entry" {
+		t.Errorf("a form opened meanwhile was replaced: %v", a.form)
+	}
+
+	a = newApp(t, healthFake(), Options{})
+	a.press("ctrl+k", "r")
+	enterHeld(a)
+	a.lock("test")
+	if a.editing != (vault.Key{}) {
+		t.Error("a lock left a form to open after the next unlock")
+	}
+}
+
+// An error stays said; an unreadable row says why and keeps the report; a second report replaces the first.
+func TestHealthReportPanel(t *testing.T) {
+	f := healthFake()
+	f.healthErr = errors.New("database disk image is malformed")
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "r", "down")
+	if s := a.screen(); !strings.Contains(s, "malformed") || strings.Contains(s, "Nothing is weak") {
+		t.Errorf("an error, then a key:\n%s", s)
+	}
+
+	f = healthFake()
+	f.unreadable = []vault.Key{gitlab}
+	a = newApp(t, f, Options{})
+	a.press("ctrl+k", "r")
+	for range 3 {
+		a.press("down")
+	}
+	a.press("enter")
+	if s := a.screen(); a.ov == nil || !strings.Contains(s, "doesn't decrypt: sesh doctor says more") || !strings.Contains(s, "in 3 passwords and API keys") {
+		t.Errorf("Enter on an unreadable row:\n%s", s)
+	}
+
+	a = newApp(t, healthFake(), Options{})
+	a.press("ctrl+k")
+	_, first := a.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	a.press("esc")
+	_, second := a.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	a.run(first)
+	a.run(second)
+	if len(a.ov.items) != 3 { // weak, and the two reused; nothing old with the age check off
+		t.Errorf("two reports in one panel: %d rows", len(a.ov.items))
+	}
+}
+
+// A long report, with lines between its groups, fits the window.
+func TestHealthReportFits(t *testing.T) {
+	f := healthFake()
+	for i := range 20 {
+		k := vault.Key{Kind: vault.KindPassword, Service: fmt.Sprintf("weak%02d", i)}
+		f.entries = append(f.entries, vault.Entry{Key: k, UpdatedAt: time.Unix(1_600_000_000, 0)})
+		f.secrets[k] = "abc"
+		f.unreadable = append(f.unreadable, k)
+	}
+	a := newApp(t, f, Options{OldAfter: time.Hour})
+	a.press("ctrl+k", "r") // the top of it, where the groups and the lines between them are
+	if lines := strings.Count(a.View().Content, "\n") + 1; lines > a.height {
+		t.Errorf("the report drew %d lines in %d:\n%s", lines, a.height, a.screen())
 	}
 }

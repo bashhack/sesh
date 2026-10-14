@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -31,7 +32,8 @@ func (m *Model) openHealth() tea.Cmd {
 // that goes to its entry to change it.
 func (m *Model) showHealth(r *health.Report) {
 	ov := m.ov
-	checked := countOfKeys(r.Checked)
+	ov.items, ov.sel, ov.filled = nil, 0, true
+	checked := countOfKeys(r.Checked + len(r.Unreadable))
 	if r.Problems() == 0 {
 		ov.title = "Health report: no problems in " + checked
 		return
@@ -69,7 +71,10 @@ func (m *Model) showHealth(r *health.Report) {
 	group(rows)
 	rows = nil
 	for _, k := range r.Unreadable {
-		rows = append(rows, item{label: kindName(k) + " · can't be read; sesh doctor says more", run: func() tea.Cmd { return nil }})
+		rows = append(rows, item{label: keyName(k) + " · can't be read", stay: true, run: func() tea.Cmd {
+			m.sayBad(keyName(k) + "'s secret doesn't decrypt: sesh doctor says more")
+			return nil
+		}})
 	}
 	group(rows)
 }
@@ -93,7 +98,12 @@ func (m *Model) healthRow(k vault.Key, why string) item {
 func (m *Model) goEdit(k vault.Key) tea.Cmd {
 	m.ov = nil
 	m.input.SetValue("")
-	m.filter = sideRow{kind: sideAll, label: "All"}
+	m.filter, m.sideSel = sideRow{kind: sideAll, label: "All"}, 0
+	if m.selKey != k {
+		// What was revealed or scrolled to is the entry selected before.
+		m.hide()
+		m.previewTop = 0
+	}
 	m.selKey, m.editing = k, k
 	return m.search()
 }
@@ -103,13 +113,18 @@ func (m *Model) goEdit(k vault.Key) tea.Cmd {
 // so an entry not in it is gone.
 func (m *Model) editWhenReady(listed bool) tea.Cmd {
 	k := m.editing
-	if k == (vault.Key{}) {
+	switch {
+	case k == (vault.Key{}):
+		return nil
+	case m.form != nil || m.ov != nil:
+		// Something else was opened meanwhile: it isn't replaced.
+		m.editing = vault.Key{}
 		return nil
 	}
 	e := m.selected()
 	switch {
 	case e == nil || e.Key != k:
-		if listed {
+		if listed && m.input.Value() == "" && !slices.ContainsFunc(m.found, func(x vault.Entry) bool { return x.Key == k }) {
 			m.editing = vault.Key{}
 			m.sayBad(keyName(k) + " isn't in the vault any more.")
 		}

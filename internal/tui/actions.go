@@ -43,6 +43,7 @@ type overlay struct {
 	sel      int
 	loading  bool
 	danger   bool // a confirmation of something that can't be undone
+	filled   bool // a report's rows are in, so none means nothing was found
 }
 
 // item is one line of a menu: a key that runs it, what it says, and what
@@ -52,6 +53,7 @@ type item struct {
 	key   string
 	label string
 	rule  bool // a line between groups, before it
+	stay  bool // running it leaves the panel open
 }
 
 // Messages from the actions.
@@ -159,7 +161,9 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	if ov.loading {
 		return nil
 	}
-	ov.err = "" // said once; the rows it was about are acted on again
+	if ov.len() > 0 {
+		ov.err = "" // said once; the rows it was about are acted on again
+	}
 	switch k {
 	case "up", "ctrl+p", "k":
 		ov.sel--
@@ -207,7 +211,7 @@ func (m *Model) choose(i int) tea.Cmd {
 	// An action that opens a panel puts it over this one, to go back to;
 	// any other closes it.
 	cmd := ov.items[i].run()
-	if m.ov == ov {
+	if m.ov == ov && !ov.items[i].stay {
 		m.ov = nil
 	}
 	return cmd
@@ -530,7 +534,7 @@ func (m *Model) drawOverlay(base string) string {
 		lines = append(lines, "", th.dimmed().Render("Loading…"))
 	case ov.err != "" && ov.len() == 0:
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(th.bad).Width(w-6).Render(ov.err))
-	case ov.kind == panelHealth && len(ov.items) == 0:
+	case ov.kind == panelHealth && ov.filled && len(ov.items) == 0:
 		lines = append(lines, "", th.dimmed().Width(w-6).Render("Nothing is weak, used twice, or old."))
 	case ov.kind == panelHistory:
 		now := m.opts.Now()
@@ -557,6 +561,19 @@ func (m *Model) drawOverlay(base string) string {
 		}
 	default:
 		first, last := window(ov.sel, len(ov.items), room)
+		// The lines between groups take room too.
+		for range 3 {
+			rules := 0
+			for i := first + 1; i < last; i++ {
+				if ov.items[i].rule {
+					rules++
+				}
+			}
+			if last-first+rules <= room {
+				break
+			}
+			first, last = window(ov.sel, len(ov.items), max(room-rules, 1))
+		}
 		for i := first; i < last; i++ {
 			it := ov.items[i]
 			if it.rule && i > first {
@@ -583,8 +600,11 @@ func (m *Model) drawOverlay(base string) string {
 		}
 	case panelHealth:
 		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})
-		if len(ov.items) == 0 {
+		switch {
+		case len(ov.items) == 0:
 			hint = th.hints([2]string{"esc", "back"})
+		case ov.sel < len(ov.items) && ov.items[ov.sel].stay:
+			hint = th.hints([2]string{"↵", "why"}, [2]string{"esc", "back"})
 		}
 	case panelConfirm:
 		hint = th.hints([2]string{"y", "yes"}, [2]string{"n", "no"}, [2]string{"esc", "cancel"})
