@@ -479,28 +479,41 @@ func (u *uiVault) Save(c *tui.Change) (vault.Key, error) {
 	if c.Key == (vault.Key{}) {
 		return to, u.add(c, secret, params)
 	}
-	edit := database.EntryEdit{Secret: secret}
+	if to.Kind == vault.KindTOTP && len(secret) > 0 && params == nil {
+		// A key alone is a new enrolment's: its codes are the usual six
+		// digits every 30 seconds, whatever the key before it made.
+		cur, err := u.store.Lookup(c.Key)
+		if err != nil {
+			return vault.Key{}, uiLocked(err)
+		}
+		params = &totp.Params{Issuer: cur.Settings.TOTP.Issuer}
+	}
+	edit := database.EntryEdit{Secret: secret, Folder: c.Folder, TOTP: params}
 	if to != c.Key {
 		edit.To = &to
+	}
+	if c.TagsSet {
+		tags := slices.Clone(c.Tags)
+		if tags == nil {
+			tags = []string{}
+		}
+		edit.Tags = &tags
 	}
 	if c.URL != nil || c.SetNotes || len(c.SetFields) > 0 || len(c.RemoveFields) > 0 {
 		edit.Details = &vault.DetailsChange{
 			URL: c.URL, Notes: c.Notes, SetNotes: c.SetNotes, NotesBase: c.NotesBase, HasNotesBase: c.SetNotes,
-			Set: c.SetFields, Remove: c.RemoveFields,
+			Set: c.SetFields, Remove: c.RemoveFields, RemoveFirst: true,
 		}
 	}
-	if edit.To != nil || edit.Details != nil || edit.Secret != nil {
-		if _, err := u.store.Edit(c.Key, edit); err != nil && !errors.Is(err, database.ErrNothingToChange) {
-			if errors.Is(err, database.ErrNameTaken) {
-				return vault.Key{}, fmt.Errorf("%w: %s", tui.ErrNameTaken, to)
-			}
-			return vault.Key{}, uiLocked(err)
-		}
+	// One transaction: a part refused leaves the entry as it was.
+	switch _, err := u.store.Edit(c.Key, edit); {
+	case err == nil, errors.Is(err, database.ErrNothingToChange):
+		return to, u.wrote(nil)
+	case errors.Is(err, database.ErrNameTaken):
+		return vault.Key{}, fmt.Errorf("%w: %s", tui.ErrNameTaken, to)
+	default:
+		return vault.Key{}, uiLocked(err)
 	}
-	if err := u.file(to, c, params); err != nil {
-		return to, err
-	}
-	return to, u.wrote(nil)
 }
 
 // add stores a new entry, refusing a name another entry has.
@@ -525,46 +538,6 @@ func (u *uiVault) add(c *tui.Change, secret []byte, params *totp.Params) error {
 	return u.wrote(u.store.SaveWithDetails(&ent, secret, &d))
 }
 
-// file sets an edited entry's folder and tags, and its TOTP settings when
-// a new key came with them.
-func (u *uiVault) file(k vault.Key, c *tui.Change, params *totp.Params) error {
-	if c.Folder != nil {
-		if _, err := u.store.MoveToFolder([]vault.Key{k}, *c.Folder); err != nil {
-			return uiLocked(err)
-		}
-	}
-	if !c.TagsSet && params == nil {
-		return nil
-	}
-	cur, err := u.store.Lookup(k)
-	if err != nil {
-		return uiLocked(err)
-	}
-	if c.TagsSet {
-		for _, t := range c.Tags {
-			if !slices.Contains(cur.Tags, t) {
-				if _, err := u.store.AddTag([]vault.Key{k}, t); err != nil {
-					return uiLocked(err)
-				}
-			}
-		}
-		for _, t := range cur.Tags {
-			if !slices.Contains(c.Tags, t) {
-				if _, err := u.store.RemoveTag([]vault.Key{k}, t); err != nil {
-					return uiLocked(err)
-				}
-			}
-		}
-	}
-	if params != nil {
-		cur.Settings.TOTP = *params
-		if err := u.store.SetSettings(k, cur.Settings); err != nil {
-			return uiLocked(err)
-		}
-	}
-	return nil
-}
-
 // readTOTPKey is a TOTP key as typed: a base32 key, or an otpauth:// link
 // with its settings.
 func readTOTPKey(typed []byte) ([]byte, *totp.Params, error) {
@@ -574,7 +547,11 @@ func readTOTPKey(typed []byte) ([]byte, *totp.Params, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("that otpauth:// link can't be read: %w", err)
 		}
-		return []byte(info.Secret), &totp.Params{Issuer: info.Issuer, Algorithm: info.Algorithm, Digits: info.Digits, Period: info.Period}, nil
+		key, err := totp.ValidateAndNormalizeSecret(info.Secret)
+		if err != nil {
+			return nil, nil, fmt.Errorf("that otpauth:// link's key can't be used: %w", err)
+		}
+		return []byte(key), &totp.Params{Issuer: info.Issuer, Algorithm: info.Algorithm, Digits: info.Digits, Period: info.Period}, nil
 	}
 	key, err := totp.ValidateAndNormalizeSecret(text)
 	if err != nil {

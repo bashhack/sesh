@@ -94,6 +94,10 @@ func runAudit(app *App, args []string) error {
 		} else if read, ok := strings.CutPrefix(e.Detail, "Read: "); ok {
 			name += " (read " + read + ")"
 		}
+		// An earlier secret read, restored or forgotten says which version.
+		if history, ok := strings.CutPrefix(e.Detail, "History: "); ok {
+			name += " (" + history + ")"
+		}
 		fmt.Fprintf(&b, "%s  %-6s  %-11s  %s\n", when, e.EventType, kind, name)
 	}
 	if *limit > 0 && count > int64(*limit) {

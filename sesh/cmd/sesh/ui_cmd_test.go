@@ -583,3 +583,136 @@ func TestUI_Save(t *testing.T) {
 		t.Errorf("Check after the app's own saves = %v, %v", changed, err)
 	}
 }
+
+// fieldsOf is k's fields as "name=value" (a secret one "name=*value"), in order.
+func fieldsOf(t *testing.T, store *database.Store, k vault.Key) string {
+	t.Helper()
+	d, err := store.Details(k, "a test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, f := range d.Fields {
+		mark := ""
+		if f.Secret {
+			mark = "*"
+		}
+		out = append(out, f.Name+"="+mark+string(f.Value))
+	}
+	return strings.Join(out, " ")
+}
+
+// A form's field renames, swaps and re-adds leave the fields the form showed.
+func TestUI_SaveFieldRenames(t *testing.T) {
+	filingVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	site := vault.Key{Kind: vault.KindPassword, Service: "site", Username: "me"}
+	if _, err := u.Save(&tui.Change{To: site, Secret: []byte("pw-1"), SetFields: []vault.Field{
+		{Name: "email", Value: []byte("a@b")}, {Name: "other", Value: []byte("o")}, {Name: "pin", Value: []byte("4321"), Secret: true},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		why, want string
+		change    tui.Change
+	}{
+		{"a rename that only changes case", "other=o pin=*4321 Email=a@b",
+			tui.Change{RemoveFields: []string{"email"}, SetFields: []vault.Field{{Name: "Email", Value: []byte("a@b")}}}},
+		{"a field removed and added again", "pin=*4321 Email=a@b other=new",
+			tui.Change{RemoveFields: []string{"other"}, SetFields: []vault.Field{{Name: "other", Value: []byte("new")}}}},
+		{"two names swapped", "pin=*4321 other=a@b Email=new",
+			tui.Change{RemoveFields: []string{"Email", "other"}, SetFields: []vault.Field{{Name: "other", Value: []byte("a@b")}, {Name: "Email", Value: []byte("new")}}}},
+		{"a secret field made plain", "other=a@b Email=new pin=4321",
+			tui.Change{RemoveFields: []string{"pin"}, SetFields: []vault.Field{{Name: "pin", Value: []byte("4321")}}}},
+	} {
+		c.change.Key, c.change.To = site, site
+		if _, err := u.Save(&c.change); err != nil {
+			t.Fatalf("%s: %v", c.why, err)
+		}
+		if got := fieldsOf(t, store, site); got != c.want {
+			t.Errorf("%s: fields %q, want %q", c.why, got, c.want)
+		}
+	}
+}
+
+// A save one part of which is refused changes nothing.
+func TestUI_SaveIsAllOrNothing(t *testing.T) {
+	filingVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	site := vault.Key{Kind: vault.KindPassword, Service: "site", Username: "me"}
+	if _, err := u.Save(&tui.Change{To: site, Secret: []byte("pw-1"), Tags: []string{"old"}, TagsSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	to := vault.Key{Kind: vault.KindPassword, Service: "site2", Username: "me"}
+	badFolder := "work/"
+	for why, c := range map[string]*tui.Change{
+		"a tag with a space": {Key: site, To: to, Secret: []byte("pw-2"), Tags: []string{"a", "work prod"}, TagsSet: true},
+		"a folder refused":   {Key: site, To: site, Secret: []byte("pw-2"), Folder: &badFolder},
+	} {
+		if _, err := u.Save(c); err == nil {
+			t.Fatalf("%s: saved", why)
+		}
+		e, err := store.Lookup(site)
+		if err != nil || strings.Join(e.Tags, ",") != "old" || e.Folder != "" {
+			t.Errorf("%s: the entry is now %+v, %v", why, e, err)
+		}
+		if pw, err := store.Get(site); err != nil || string(pw) != "pw-1" {
+			t.Errorf("%s: its secret is now %q, %v", why, pw, err)
+		}
+	}
+	// And one that's fine does all of it.
+	folder := "work"
+	if _, err := u.Save(&tui.Change{Key: site, To: to, Secret: []byte("pw-2"), Folder: &folder, Tags: []string{"a"}, TagsSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := store.Lookup(to)
+	if err != nil || strings.Join(e.Tags, ",") != "a" || e.Folder != "work" {
+		t.Errorf("saved = %+v, %v", e, err)
+	}
+	if _, err := u.Save(&tui.Change{Key: to, To: to, Tags: nil, TagsSet: true}); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := store.Lookup(to); err != nil || len(e.Tags) != 0 {
+		t.Errorf("tags cleared = %+v, %v", e.Tags, err)
+	}
+}
+
+// A TOTP key from a link must be a usable key; a key alone on an edit makes
+// the usual codes, whatever the key before it made.
+func TestUI_SaveTOTPKeys(t *testing.T) {
+	filingVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	code := vault.Key{Kind: vault.KindTOTP, Service: "site", Username: "me"}
+	if _, err := u.Save(&tui.Change{To: code, Secret: []byte("otpauth://totp/x?secret=not-base32!1")}); err == nil || !strings.Contains(err.Error(), "key can't be used") {
+		t.Errorf("a link with a bad key: %v", err)
+	}
+	link := "otpauth://totp/Site:me?secret=JBSWY3DPEHPK3PXP&issuer=Site&algorithm=SHA256&digits=8&period=60"
+	if _, err := u.Save(&tui.Change{To: code, Secret: []byte(link)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Save(&tui.Change{Key: code, To: code, Secret: []byte("GEZDGNBVGY3TQOJQ")}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := store.Lookup(code)
+	if err != nil || !c.Settings.TOTP.IsDefault() || c.Settings.TOTP.Issuer != "Site" {
+		t.Errorf("after a key alone, settings = %+v, %v", c.Settings.TOTP, err)
+	}
+	if key, err := store.Get(code); err != nil || string(key) != "GEZDGNBVGY3TQOJQ" {
+		t.Errorf("key = %q, %v", key, err)
+	}
+}

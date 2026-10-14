@@ -407,6 +407,9 @@ type DetailsChange struct {
 	NotesBase    []byte
 	SetNotes     bool
 	HasNotesBase bool
+	// RemoveFirst takes Remove's fields out before Set's go in, so a
+	// field can be removed and set again: renamed, or made plain.
+	RemoveFirst bool
 }
 
 // ErrNotesChanged is notes changed by another command while new ones were
@@ -441,38 +444,53 @@ func (c *DetailsChange) Apply(d *Details) (string, error) {
 			d.Notes = bytes.Clone(c.Notes)
 		}
 	}
-	for _, f := range c.Set {
-		f.Value = bytes.Clone(f.Value)
-		i := slices.IndexFunc(d.Fields, func(g Field) bool { return strings.EqualFold(g.Name, f.Name) })
-		if i < 0 {
-			d.Fields = append(d.Fields, f)
-			what = append(what, "field "+f.Name+" added")
-			continue
+	set := func() error {
+		for _, f := range c.Set {
+			f.Value = bytes.Clone(f.Value)
+			i := slices.IndexFunc(d.Fields, func(g Field) bool { return strings.EqualFold(g.Name, f.Name) })
+			if i < 0 {
+				d.Fields = append(d.Fields, f)
+				what = append(what, "field "+f.Name+" added")
+				continue
+			}
+			old := d.Fields[i]
+			if old.Secret && !f.Secret {
+				return fmt.Errorf("%s is a secret field: set it with --secret-field %s, or remove it first to make it plain", old.Name, old.Name)
+			}
+			if old.Name == f.Name && old.Secret == f.Secret && bytes.Equal(old.Value, f.Value) {
+				secure.SecureZeroBytes(f.Value)
+				continue
+			}
+			if old.Secret {
+				secure.SecureZeroBytes(old.Value)
+			}
+			d.Fields[i] = f
+			what = append(what, "field "+f.Name+" changed")
 		}
-		old := d.Fields[i]
-		if old.Secret && !f.Secret {
-			return "", fmt.Errorf("%s is a secret field: set it with --secret-field %s, or remove it first to make it plain", old.Name, old.Name)
-		}
-		if old.Name == f.Name && old.Secret == f.Secret && bytes.Equal(old.Value, f.Value) {
-			secure.SecureZeroBytes(f.Value)
-			continue
-		}
-		if old.Secret {
-			secure.SecureZeroBytes(old.Value)
-		}
-		d.Fields[i] = f
-		what = append(what, "field "+f.Name+" changed")
+		return nil
 	}
-	for _, name := range c.Remove {
-		i := slices.IndexFunc(d.Fields, func(g Field) bool { return strings.EqualFold(g.Name, name) })
-		if i < 0 {
-			return "", NoFieldToRemove(name, names)
+	remove := func() error {
+		for _, name := range c.Remove {
+			i := slices.IndexFunc(d.Fields, func(g Field) bool { return strings.EqualFold(g.Name, name) })
+			if i < 0 {
+				return NoFieldToRemove(name, names)
+			}
+			what = append(what, "field "+d.Fields[i].Name+" removed")
+			if d.Fields[i].Secret {
+				secure.SecureZeroBytes(d.Fields[i].Value)
+			}
+			d.Fields = slices.Delete(d.Fields, i, i+1)
 		}
-		what = append(what, "field "+d.Fields[i].Name+" removed")
-		if d.Fields[i].Secret {
-			secure.SecureZeroBytes(d.Fields[i].Value)
+		return nil
+	}
+	steps := []func() error{set, remove}
+	if c.RemoveFirst {
+		steps = []func() error{remove, set}
+	}
+	for _, step := range steps {
+		if err := step(); err != nil {
+			return "", err
 		}
-		d.Fields = slices.Delete(d.Fields, i, i+1)
 	}
 	return strings.Join(what, ", "), nil
 }

@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -23,11 +25,16 @@ var ErrEntryChanged = errors.New("the entry was changed by another sesh command 
 var ErrNothingToChange = errors.New("nothing to change")
 
 // EntryEdit is a change to an entry: To, its new key (nil keeps it);
-// Secret, its new secret (nil keeps it; the caller zeroes it); and
-// Details, a change to its details (nil keeps them).
+// Secret, its new secret (nil keeps it; the caller zeroes it); Details, a
+// change to its details (nil keeps them); Folder, the folder it's in after
+// (nil keeps it, "" is none); Tags, all its tags after (nil keeps them);
+// and TOTP, its code's settings after (nil keeps them).
 type EntryEdit struct {
 	To      *vault.Key
 	Details *vault.DetailsChange
+	Folder  *string
+	Tags    *[]string
+	TOTP    *totp.Params
 	Secret  []byte
 }
 
@@ -47,8 +54,21 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	if e.Details != nil && e.Details.IsZero() {
 		e.Details = nil
 	}
-	if e.To == nil && e.Secret == nil && e.Details == nil {
+	filing := e.Folder != nil || e.Tags != nil || e.TOTP != nil
+	if e.To == nil && e.Secret == nil && e.Details == nil && !filing {
 		return "", ErrNothingToChange
+	}
+	if e.Folder != nil {
+		if err := vault.CheckFolder(*e.Folder); err != nil {
+			return "", err
+		}
+	}
+	if e.Tags != nil {
+		for _, t := range *e.Tags {
+			if err := vault.CheckTag(t); err != nil {
+				return "", err
+			}
+		}
 	}
 	if e.Secret != nil && len(e.Secret) == 0 {
 		return "", errors.New("the new secret is empty")
@@ -120,7 +140,7 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 			return "", err
 		}
 	}
-	if len(what) == 0 {
+	if len(what) == 0 && !filing {
 		return "", ErrNothingToChange
 	}
 	// The secret a new one replaces goes into the history, and a renamed
@@ -136,7 +156,7 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 		}
 	}
 
-	detail := strings.Join(what, " and ")
+	var filed []string
 	err = s.inTx(func(tx *sql.Tx) error {
 		var dataNow, sealedNow []byte
 		var urlNow, detailsNow string
@@ -167,14 +187,84 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 			q = `UPDATE entries SET kind = ?, service = ?, username = ?, encrypted_data = ?, salt = ?, url = ?, details = ?, sealed_details = ?, details_salt = ?, updated_at = ? WHERE id = ?`
 			args = []any{string(to.Kind), to.Service, to.Username, newData, newSalt, nd.url, nd.plain, nd.sealed, nd.salt, time.Now().UTC(), id}
 		}
-		_, err = tx.Exec(q, args...)
+		if _, err = tx.Exec(q, args...); err != nil {
+			return err
+		}
+		filed, err = fileInTx(tx, id, to, &e)
 		return err
 	})
 	if err != nil {
 		return "", err
 	}
+	what = append(what, filed...)
+	if len(what) == 0 {
+		return "", ErrNothingToChange
+	}
+	detail := strings.Join(what, " and ")
 	s.audit("modify", to.String(), "Edit: "+detail)
 	return detail, nil
+}
+
+// fileInTx sets the folder, tags and code settings e names on row id, the
+// entry k, and says what changed.
+func fileInTx(tx *sql.Tx, id int64, k vault.Key, e *EntryEdit) (what []string, err error) {
+	if e.Folder != nil {
+		moved, err := rowsChanged(tx.Exec(`UPDATE entries SET folder = ? WHERE id = ? AND folder <> ?`, *e.Folder, id, *e.Folder))
+		if err != nil {
+			return nil, err
+		}
+		if moved {
+			what = append(what, "folder changed")
+		}
+	}
+	if e.Tags != nil {
+		var col sql.NullString
+		if err := tx.QueryRow(`SELECT `+tagsColumn+` FROM entries WHERE id = ?`, id).Scan(&col); err != nil {
+			return nil, err
+		}
+		had, retagged := splitTags(col), false
+		for _, t := range *e.Tags {
+			if !slices.Contains(had, t) {
+				if _, err := tx.Exec(`INSERT OR IGNORE INTO entry_tags (entry_id, tag) VALUES (?, ?)`, id, t); err != nil {
+					return nil, err
+				}
+				retagged = true
+			}
+		}
+		for _, t := range had {
+			if !slices.Contains(*e.Tags, t) {
+				if _, err := tx.Exec(`DELETE FROM entry_tags WHERE entry_id = ? AND tag = ?`, id, t); err != nil {
+					return nil, err
+				}
+				retagged = true
+			}
+		}
+		if retagged {
+			what = append(what, "tags changed")
+		}
+	}
+	if e.TOTP != nil {
+		var col sql.NullString
+		if err := tx.QueryRow(`SELECT settings FROM entries WHERE id = ?`, id).Scan(&col); err != nil {
+			return nil, err
+		}
+		settings, err := decodeSettings(k, col)
+		if err != nil {
+			return nil, err
+		}
+		if settings.TOTP != *e.TOTP {
+			settings.TOTP = *e.TOTP
+			enc, err := encodeSettings(settings)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := tx.Exec(`UPDATE entries SET settings = ? WHERE id = ?`, enc, id); err != nil {
+				return nil, err
+			}
+			what = append(what, "code settings changed")
+		}
+	}
+	return what, nil
 }
 
 // resealSecret is the secret for to: secret when given, or k's sealed

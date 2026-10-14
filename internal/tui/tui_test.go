@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1478,5 +1479,196 @@ func TestFormShowsAFieldsValue(t *testing.T) {
 	a.press("ctrl+s", "tab", "shift+tab", "ctrl+s")
 	if len(f.saves) != 1 || len(f.saves[0].SetFields) != 0 || len(f.saves[0].RemoveFields) != 0 {
 		t.Errorf("a value only shown was saved as a change: %+v", f.saves)
+	}
+}
+
+// fieldsApp is the app with github's form open on its fields: email (plain)
+// and pin (secret, not read).
+func fieldsApp(t *testing.T) (*app, *fakeVault) {
+	t.Helper()
+	f := newFake()
+	f.entries[0].Fields = []vault.Field{{Name: "email", Value: []byte("a@b")}, {Name: "pin", Secret: true}}
+	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Secret: true, Value: []byte("4711")}}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e")
+	a.tabs(7) // username, secret, URL, folder, tags, notes → the fields
+	return a, f
+}
+
+// A field renamed, or made plain, is taken out and set again; names differ by more than case.
+func TestFormFieldChanges(t *testing.T) {
+	a, f := fieldsApp(t)
+	a.press("enter", "backspace", "backspace", "backspace", "backspace", "backspace", "Email", "ctrl+s")
+	a.press("a", "EMAIL", "ctrl+s")
+	if s := a.screen(); !strings.Contains(s, "Another field is called that") {
+		t.Errorf("a second field named EMAIL:\n%s", s)
+	}
+	a.press("esc", "esc", "down", "enter", "tab", "h", "tab", "ctrl+s")
+	if s := a.screen(); !strings.Contains(s, "Type its value") {
+		t.Errorf("a secret field made plain without a value:\n%s", s)
+	}
+	a.press("1234", "ctrl+s", "ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saved %d:\n%s", len(f.saves), a.screen())
+	}
+	c := f.saves[0]
+	var set []string
+	for _, fl := range c.SetFields {
+		set = append(set, fmt.Sprintf("%s=%s/%v", fl.Name, fl.Value, fl.Secret))
+	}
+	if !slices.Equal(c.RemoveFields, []string{"email", "pin"}) || !slices.Equal(set, []string{"Email=a@b/false", "pin=1234/false"}) {
+		t.Errorf("removed %q, set %q", c.RemoveFields, set)
+	}
+}
+
+// A field's form cancelled wipes what was typed into it, and an edit made in one counts as a change.
+func TestFormFieldFormWipesAndCounts(t *testing.T) {
+	a, _ := fieldsApp(t)
+	a.press("a", "pin2", "tab", "→", "tab", "4321")
+	typed := a.form.inputs[3].secret
+	a.press("esc", "esc")
+	if string(typed) == "4321" {
+		t.Error("a field's form cancelled left its secret in memory")
+	}
+	if a.form == nil || a.form.back != nil {
+		t.Fatal("Esc should go back to the entry's form")
+	}
+	a.press("up", "down", "esc")
+	if a.form != nil {
+		t.Fatal("moving between fields counted as a change")
+	}
+	a, _ = fieldsApp(t)
+	a.press("enter", "x", "ctrl+s", "esc")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "Esc again") {
+		t.Errorf("a field renamed and then one Esc discarded the form:\n%s", s)
+	}
+}
+
+// Notes the input shows differently aren't saved unless changed; a secure note needs its text.
+func TestFormNotesKeptAsTheyAre(t *testing.T) {
+	f := newFake()
+	f.entries[0].HasNotes = true
+	f.notes = map[vault.Key]string{github: "a\tb\r\nc"}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e", "tab", "x", "ctrl+s")
+	if len(f.saves) != 1 || f.saves[0].SetNotes {
+		t.Errorf("notes nobody changed were saved: %+v", f.saves)
+	}
+	a.press("ctrl+k", "a", "→", "→", "tab", "a note", "ctrl+s")
+	if s := a.screen(); len(f.saves) != 1 || !strings.Contains(s, "Write the note") {
+		t.Errorf("an empty secure note: %d saves\n%s", len(f.saves), s)
+	}
+}
+
+// Time spent in the editor doesn't lock the app as idle when it returns.
+func TestFormEditorTimeIsUse(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{IdleTimeout: 10 * time.Minute})
+	a.press("ctrl+k", "e")
+	a.tabs(6) // → notes
+	a.now = a.now.Add(15 * time.Minute)
+	_, cmd := a.Update(editorMsg{notes: []byte("from the editor")})
+	a.run(cmd)
+	a.tick(time.Second)
+	if a.form == nil || a.v == nil {
+		t.Fatal("the app locked as idle after the editor returned")
+	}
+	if got := a.form.inputs[a.form.focus].area.Value(); got != "from the editor" {
+		t.Errorf("notes = %q", got)
+	}
+}
+
+// A paste is held to what a key is: not into a form that isn't drawn, and it counts against Esc.
+func TestFormPasteGuards(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("ctrl+k", "e", "x", "esc")
+	_, cmd := a.Update(tea.PasteMsg{Content: "y"})
+	a.run(cmd)
+	a.press("esc")
+	if a.form == nil {
+		t.Fatal("Esc, a paste, Esc discarded the form")
+	}
+	a.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+	a.Update(tea.PasteMsg{Content: "unseen"})
+	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if s := a.screen(); strings.Contains(s, "unseen") {
+		t.Errorf("a paste went into a form that wasn't drawn:\n%s", s)
+	}
+}
+
+// An entry whose notes can't be read says why it can't be edited.
+func TestEditNotesUnreadable(t *testing.T) {
+	f := newFake()
+	f.entries[0].HasNotes = true
+	a := newApp(t, f, Options{})
+	delete(a.notes, github)
+	a.notesFailed[github] = "boom"
+	a.press("ctrl+k", "e")
+	if s := a.screen(); a.form != nil || !strings.Contains(s, "can't be edited here: its notes can't be read: boom") {
+		t.Errorf("editing with unreadable notes:\n%s", s)
+	}
+}
+
+// The field chosen in a long list stays on screen, and an error stays in the window.
+func TestFormLongFieldsAndErrors(t *testing.T) {
+	f := newFake()
+	for i := range 30 {
+		f.entries[0].Fields = append(f.entries[0].Fields, vault.Field{Name: fmt.Sprintf("field%02d", i), Value: []byte("v")})
+	}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e")
+	a.tabs(7)
+	for range 25 {
+		a.press("down")
+	}
+	if s := a.screen(); !strings.Contains(s, "field25") {
+		t.Errorf("the chosen field is off screen:\n%s", s)
+	}
+	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
+	a.form.err = strings.Repeat("a long error that wraps ", 12)
+	if lines := strings.Count(a.View().Content, "\n") + 1; lines > minHeight {
+		t.Errorf("the form drew %d lines in a window of %d:\n%s", lines, minHeight, a.screen())
+	}
+}
+
+// The vault is kept from idling out while the notes editor is open.
+func TestEditorKeepsTheVaultInUse(t *testing.T) {
+	var kept atomic.Int32
+	e := &editor{
+		edit:  func(b []byte) ([]byte, error) { time.Sleep(60 * time.Millisecond); return b, nil },
+		keep:  func() { kept.Add(1) },
+		every: 10 * time.Millisecond,
+		notes: []byte("n"),
+	}
+	if err := e.Run(); err != nil {
+		t.Fatal(err)
+	}
+	after := kept.Load()
+	if after == 0 {
+		t.Error("nothing kept the vault in use while the editor was open")
+	}
+	time.Sleep(30 * time.Millisecond)
+	if kept.Load() != after {
+		t.Error("the vault was still kept in use after the editor closed")
+	}
+}
+
+// A secret field renamed is set again under its new name with the value read for it.
+func TestFormRenamesAnUnreadSecretField(t *testing.T) {
+	a, f := fieldsApp(t)
+	a.press("down", "enter", "backspace", "backspace", "backspace", "PIN", "ctrl+s")
+	if a.form == nil || a.form.back != nil {
+		t.Fatalf("the field's form didn't go back once its value was read:\n%s", a.screen())
+	}
+	a.press("ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saved %d:\n%s", len(f.saves), a.screen())
+	}
+	c := f.saves[0]
+	if !slices.Equal(c.RemoveFields, []string{"pin"}) || len(c.SetFields) != 1 || c.SetFields[0].Name != "PIN" || !c.SetFields[0].Secret {
+		t.Errorf("removed %q, set %+v", c.RemoveFields, c.SetFields)
+	}
+	if !slices.Contains(f.reads, "field "+github.String()+" pin") {
+		t.Errorf("the value wasn't read: %q", f.reads)
 	}
 }

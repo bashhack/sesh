@@ -6,6 +6,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
@@ -33,6 +34,7 @@ const (
 type input struct {
 	shown   func() bool    // nil: always shown
 	load    func() tea.Cmd // reads the secret an empty input stands for, to show it
+	then    func() tea.Cmd // what to do once load has read it, instead of showing it
 	named   func() string  // its label, when that depends on other inputs
 	label   string
 	hint    string
@@ -208,16 +210,21 @@ func (f *form) move(step int) {
 	}
 }
 
-// wipe overwrites the secrets the form holds.
+// wipe overwrites the secrets the form, and the forms it returns to, hold.
 func (f *form) wipe() {
 	for ; f != nil; f = f.back {
-		for _, in := range f.inputs {
-			secure.SecureZeroBytes(in.secret)
-			secure.SecureZeroBytes(in.loaded)
-			for _, r := range in.rows {
-				if r.secret {
-					secure.SecureZeroBytes(r.value)
-				}
+		f.wipeOwn()
+	}
+}
+
+// wipeOwn overwrites the secrets in the form's own inputs.
+func (f *form) wipeOwn() {
+	for _, in := range f.inputs {
+		secure.SecureZeroBytes(in.secret)
+		secure.SecureZeroBytes(in.loaded)
+		for _, r := range in.rows {
+			if r.secret {
+				secure.SecureZeroBytes(r.value)
 			}
 		}
 	}
@@ -246,8 +253,14 @@ func (m *Model) gotFieldValue(msg *fieldValueMsg) tea.Cmd {
 	case msg.err != nil:
 		m.form.err = "Couldn't read its value: " + msg.err.Error()
 	default:
-		in.secret, in.loaded, in.reveal, in.hint = msg.value, bytes.Clone(msg.value), true, ""
+		in.secret, in.loaded, in.hint = msg.value, bytes.Clone(msg.value), ""
+		if then := in.then; then != nil {
+			in.then = nil
+			return then()
+		}
+		in.reveal = true
 	}
+	in.then = nil
 	return nil
 }
 
@@ -260,11 +273,29 @@ type editorMsg struct {
 // editor runs the user's editor on notes with the terminal handed to it.
 type editor struct {
 	edit  func([]byte) ([]byte, error)
+	keep  func() // tells the vault it's in use, every so often while editing
 	err   error
 	notes []byte
+	every time.Duration
 }
 
 func (e *editor) Run() error {
+	// The app's loop waits for the editor, so it can't keep the agent from
+	// locking for being idle meanwhile; this does.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		t := time.NewTicker(e.every)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				e.keep()
+			}
+		}
+	}()
 	out, err := e.edit(e.notes)
 	secure.SecureZeroBytes(e.notes)
 	e.notes, e.err = out, err
@@ -304,9 +335,9 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 			f.leaving, f.err = true, "Not saved. Esc again discards what you changed."
 			return nil
 		}
-		if f.back == nil {
-			f.wipe()
-		}
+		// A field's form holds only what was typed into it: the field
+		// stays in its entry's form as it was.
+		f.wipeOwn()
 		m.form = f.back
 		return nil
 	case "tab":
@@ -348,7 +379,9 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 	}
-	f.err, f.changed = "", true
+	f.err = ""
+	was := f.changed
+	f.changed = true
 	switch in.kind {
 	case inputText:
 		var cmd tea.Cmd
@@ -357,7 +390,12 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	case inputNotes:
 		if msg.String() == "ctrl+e" && m.opts.EditNotes != nil {
-			e := &editor{edit: m.opts.EditNotes, notes: []byte(in.area.Value())}
+			g, every := m.v, time.Minute
+			if m.opts.IdleTimeout > 0 {
+				every = min(every, m.opts.IdleTimeout/2)
+			}
+			keep := func() { g.run(func(v Vault, _ func() bool) tea.Msg { _ = v.KeepAlive(); return nil }) } //nolint:errcheck // a lock shows on return
+			e := &editor{edit: m.opts.EditNotes, keep: keep, every: every, notes: []byte(in.area.Value())}
 			return tea.Exec(e, func(err error) tea.Msg { return editorMsg{notes: e.notes, err: e.err} })
 		}
 		var cmd tea.Cmd
@@ -386,14 +424,19 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 			in.choice = (in.choice + len(in.choices) - 1) % len(in.choices)
 		case "right", "l", "space":
 			in.choice = (in.choice + 1) % len(in.choices)
+		default:
+			f.changed = was
 		}
 	case inputFields:
 		switch msg.String() {
 		case "up", "k":
 			in.row = max(in.row-1, 0)
+			f.changed = was
 		case "down", "j":
 			in.row = min(in.row+1, max(len(in.rows)-1, 0))
+			f.changed = was
 		case "a", "n":
+			f.changed = was // a field added in its form is the change
 			return m.openFieldForm(in, -1)
 		case "x", "delete":
 			if in.row < len(in.rows) {
@@ -403,6 +446,8 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 				in.rows = append(in.rows[:in.row], in.rows[in.row+1:]...)
 				in.row = max(min(in.row, len(in.rows)-1), 0)
 			}
+		default:
+			f.changed = was
 		}
 	}
 	return nil
@@ -414,12 +459,17 @@ func (m *Model) formPaste(text string) tea.Cmd {
 	if f.saving {
 		return nil
 	}
+	if m.width < minWidth || m.height < minHeight {
+		// The form isn't on screen: nothing is pasted into it unseen.
+		return nil
+	}
 	in := f.inputs[f.focus]
-	f.changed = true
+	f.changed, f.leaving, f.err = true, false, ""
 	switch in.kind {
 	case inputText:
 		var cmd tea.Cmd
 		in.text, cmd = in.text.Update(tea.PasteMsg{Content: trimNewlines(text)})
+		in.pick = 0
 		return cmd
 	case inputNotes:
 		in.area.InsertString(text)
@@ -481,25 +531,44 @@ func (m *Model) openFieldForm(in *input, row int) tea.Cmd {
 			ff.err = "Give the field a name."
 			return nil
 		}
+		for j, o := range in.rows {
+			if j != row && strings.EqualFold(o.name, n) {
+				ff.err = "Another field is called that; field names differ by more than case."
+				return nil
+			}
+		}
 		nr := fieldRow{name: n, orig: r.orig, secret: isSecret(), changed: true}
+		kept := false
 		switch {
+		case !nr.secret && r.secret && plain.text.Value() == "":
+			ff.err = "Type its value: what it has is secret, and stays so unless you replace it."
+			return nil
 		case !nr.secret:
 			nr.value = []byte(plain.text.Value())
 			secure.SecureZeroBytes(hidden.secret)
 		case hidden.loaded != nil && bytes.Equal(hidden.secret, hidden.loaded) && n == r.name:
-			nr.value, nr.changed = r.value, r.changed // read to be shown, and left as it was
+			nr.value, nr.changed, kept = r.value, r.changed, true // read to be shown, and left as it was
 			secure.SecureZeroBytes(hidden.secret)
 		case len(hidden.secret) > 0:
 			nr.value = hidden.secret
 		case r.secret && row >= 0 && n == r.name:
-			nr.value, nr.changed = r.value, r.changed // kept as it was
+			nr.value, nr.changed, kept = r.value, r.changed, true
+		case hidden.load != nil && !hidden.loading:
+			// Renamed, it's set again under its new name: its value is read
+			// first, and the field saved once it has been.
+			hidden.loading, hidden.then = true, ff.submit
+			return hidden.load()
+		case hidden.loading:
+			return nil
 		default:
 			ff.err = "Type the secret value."
 			return nil
 		}
-		if row >= 0 && r.secret && !bytes.Equal(nr.value, r.value) {
+		secure.SecureZeroBytes(hidden.loaded)
+		if row >= 0 && r.secret && !kept {
 			secure.SecureZeroBytes(r.value)
 		}
+		ff.back.changed = ff.back.changed || nr.changed
 		if row >= 0 {
 			in.rows[row] = nr
 		} else {
@@ -622,8 +691,21 @@ func (m *Model) drawForm(base string) string {
 		}
 		blocks = append(blocks, lines)
 	}
-	// What doesn't fit is scrolled away, keeping the focused input shown.
-	room := max(m.height-10, 4)
+	var errLines []string
+	if f.err != "" {
+		// At most three lines of it, so the card fits the window.
+		wrapped := strings.Split(lipgloss.NewStyle().Width(inner).Render(f.err), "\n")
+		if len(wrapped) > 3 {
+			wrapped = append(wrapped[:2], ansi.Truncate(wrapped[2], inner-1, "")+"…")
+		}
+		errLines = append([]string{""}, wrapped...)
+		for i, l := range errLines {
+			errLines[i] = lipgloss.NewStyle().Foreground(th.bad).Render(l)
+		}
+	}
+	// What doesn't fit is scrolled away, keeping the focused input, or the
+	// field chosen in it, shown.
+	room := max(m.height-10-len(errLines), 1)
 	var all []string
 	focusTop := 0
 	for i, b := range blocks {
@@ -632,6 +714,9 @@ func (m *Model) drawForm(base string) string {
 		}
 		if i == f.focus {
 			focusTop = len(all)
+			if in := f.inputs[i]; in.kind == inputFields && len(in.rows) > 0 {
+				focusTop += 1 + in.row // its label, then the rows above
+			}
 		}
 		all = append(all, b...)
 	}
@@ -641,9 +726,7 @@ func (m *Model) drawForm(base string) string {
 	}
 	lines := []string{th.accented().Bold(true).Render(ansi.Truncate(f.title, inner, "…")), th.lines().Render(strings.Repeat("─", inner))}
 	lines = append(lines, all...)
-	if f.err != "" {
-		lines = append(lines, "", lipgloss.NewStyle().Foreground(th.bad).Width(inner).Render(f.err))
-	}
+	lines = append(lines, errLines...)
 	hint := th.hints([2]string{"tab", "next"}, [2]string{"ctrl+s", "save"}, [2]string{"esc", "cancel"})
 	if f.saving {
 		hint = th.dimmed().Render("Saving…")

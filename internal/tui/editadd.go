@@ -42,7 +42,11 @@ const (
 // openEdit opens the form that edits e.
 func (m *Model) openEdit(e *vault.Entry) tea.Cmd {
 	notes, held := m.notes[e.Key]
-	if hasNotes(e) && !held {
+	switch why := m.notesFailed[e.Key]; {
+	case hasNotes(e) && !held && why != "":
+		m.sayBad("It can't be edited here: its notes can't be read: " + why)
+		return nil
+	case hasNotes(e) && !held:
 		m.sayBad("Its notes are still being read; try again in a moment.")
 		return nil
 	}
@@ -85,10 +89,10 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	secretChoice.shown = func() bool { k := kind(); return k == vault.KindPassword || k == vault.KindAPIKey }
 	typed := &input{kind: inputSecret, label: "new secret", rated: true}
 	typed.shown = func() bool { return secretChoice.visible() && secretChoice.choices[secretChoice.choice] == secretType }
-	totpKey := &input{kind: inputSecret, label: "TOTP key, or otpauth:// link", hint: "a link also fills in the code's settings"}
+	totpKey := &input{kind: inputSecret, label: "TOTP key, or otpauth:// link", hint: "a link sets how its codes are made; a key alone makes 6 digits every 30s"}
 	totpKey.shown = func() bool { return kind() == vault.KindTOTP }
 	if !adding {
-		totpKey.label, totpKey.hint = "new TOTP key, or otpauth:// link", "leave it empty to keep the key it has"
+		totpKey.label, totpKey.hint = "new TOTP key, or otpauth:// link", "empty keeps the key it has; a key alone makes 6 digits every 30s"
 	}
 
 	url := m.textInput("URL", e.URL)
@@ -97,6 +101,9 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	folder.hint = "a new name makes a folder; work/aws is aws inside work"
 	tags.hint, tags.many = "separated by commas", true
 	text := m.notesInput("notes", notes)
+	// The input may show the notes a little differently (a tab as spaces):
+	// they're saved only when what it shows was changed.
+	shownNotes := text.area.Value()
 	text.named = func() string {
 		if kind() == vault.KindNote {
 			return "note"
@@ -150,7 +157,11 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		noteText := []byte(text.area.Value())
 		switch {
 		case k == vault.KindNote:
-			if adding || string(noteText) != notes {
+			if len(bytes.TrimSpace(noteText)) == 0 {
+				f.err = "Write the note: a secure note's text is what it keeps."
+				return nil
+			}
+			if adding || string(noteText) != shownNotes {
 				c.Secret = noteText
 			}
 		case k == vault.KindTOTP:
@@ -170,7 +181,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			generate = true
 		}
 		if k != vault.KindNote {
-			if adding && len(noteText) > 0 || !adding && string(noteText) != notes {
+			if adding && len(noteText) > 0 || !adding && string(noteText) != shownNotes {
 				c.Notes, c.SetNotes = noteText, true
 				if !adding {
 					c.NotesBase = []byte(notes)
@@ -179,8 +190,13 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		}
 
 		// The fields: those taken out, renamed, changed, or added.
+		// A field renamed, or made plain, is taken out before it's set
+		// again (the store removes first).
+		wasSecret := func(name string) bool {
+			return slices.ContainsFunc(orig.Fields, func(of vault.Field) bool { return of.Name == name && of.Secret })
+		}
 		for _, r := range fields.rows {
-			if r.orig != "" && r.orig != r.name {
+			if r.orig != "" && (r.orig != r.name || r.changed && !r.secret && wasSecret(r.orig)) {
 				c.RemoveFields = append(c.RemoveFields, r.orig)
 			}
 			if r.changed {
@@ -209,7 +225,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 func (m *Model) save(f *form, c *Change, generate bool) tea.Cmd {
 	f.saving, f.err = true, ""
 	opts, epoch, of := m.opts, m.epoch, c.Key
-	return m.read(func(v Vault, _ func() bool) tea.Msg {
+	read := m.read(func(v Vault, _ func() bool) tea.Msg {
 		defer c.Wipe()
 		if generate {
 			if opts.Generate == nil {
@@ -238,6 +254,14 @@ func (m *Model) save(f *form, c *Change, generate bool) tea.Cmd {
 		}
 		return savedMsg{k: k, of: of, what: what, epoch: epoch}
 	})
+	return func() tea.Msg {
+		msg := read()
+		if msg == nil {
+			// The app locked before the save began: nothing was saved.
+			c.Wipe()
+		}
+		return msg
+	}
 }
 
 // saved closes the form for an entry saved, or says why it wasn't.
@@ -271,6 +295,8 @@ func (m *Model) saved(msg *savedMsg) tea.Cmd {
 // editedNotes puts what the editor saved into the notes input.
 func (m *Model) editedNotes(msg *editorMsg) tea.Cmd {
 	defer secure.SecureZeroBytes(msg.notes)
+	// The time in the editor was use: the idle lock starts again from now.
+	m.lastKey = m.opts.Now()
 	f := m.form
 	if f == nil || f.inputs[f.focus].kind != inputNotes {
 		return nil
