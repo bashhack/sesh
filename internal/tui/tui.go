@@ -554,6 +554,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case revealMsg:
 		return m.gotReveal(&msg)
 	case tea.KeyPressMsg:
+		// Enter again while a form waits to open (a double press) waits
+		// with it, rather than copying the entry's secret.
+		if m.editing != (vault.Key{}) && m.form == nil && m.ov == nil && msg.String() == "enter" {
+			return nil
+		}
 		// A form the health report is waiting to open isn't, once the
 		// user does something else.
 		m.editing = vault.Key{}

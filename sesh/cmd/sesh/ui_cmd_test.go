@@ -786,3 +786,15 @@ func TestUI_Health(t *testing.T) {
 		t.Errorf("audit:\n%s", log)
 	}
 }
+
+// health.old_after_days reaches the app as the age its report calls old.
+func TestUI_OptionsOldAfter(t *testing.T) {
+	useConfigFile(t, "[health]\nold_after_days = 30\n")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := uiOptions(agentTestApp(), cfg, nil).OldAfter; got != 30*24*time.Hour {
+		t.Errorf("OldAfter = %v", got)
+	}
+}

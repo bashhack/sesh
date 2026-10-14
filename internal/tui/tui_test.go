@@ -2288,3 +2288,18 @@ func TestHealthReportFits(t *testing.T) {
 		t.Errorf("the report drew %d lines in %d:\n%s", lines, a.height, a.screen())
 	}
 }
+
+// Enter pressed twice opens the form, and copies nothing.
+func TestHealthReportDoubleEnter(t *testing.T) {
+	f := healthFake()
+	f.entries[2].HasNotes = true // gitlab: its notes read after it's listed
+	f.notes = map[vault.Key]string{gitlab: "n"}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "r", "down")
+	held := enterHeld(a)
+	a.press("enter")
+	a.run(held)
+	if len(a.copied) != 0 || a.form == nil {
+		t.Errorf("Enter twice: copied %q, form %v", a.copied, a.form != nil)
+	}
+}
