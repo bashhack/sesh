@@ -387,11 +387,17 @@ func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
 	pruneAuditLog(store, cfg)
 	warnAuditSize(store, cfg)
 	autoBackup(store, cfg)
-	store.SetTrashDays(cfg.TrashKeepDays.Value)
-	store.SetHistoryKeep(cfg.HistoryKeep.Value)
+	keepAsSet(store, cfg)
 	pruneHistory(store, cfg)
 	expireTrash(store, cfg)
 	return store, nil
+}
+
+// keepAsSet gives store cfg's trash and history settings: without them a
+// store keeps no earlier secrets, and deleting is for good.
+func keepAsSet(store *database.Store, cfg *config.Config) {
+	store.SetTrashDays(cfg.TrashKeepDays.Value)
+	store.SetHistoryKeep(cfg.HistoryKeep.Value)
 }
 
 // openStoreWith opens the store at dbPath over oracle, and confirms the

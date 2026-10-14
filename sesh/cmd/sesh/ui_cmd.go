@@ -138,7 +138,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 	}
 	if os.Getenv("SESH_MASTER_PASSWORD") == "" && touchIDSetUp(dbPath) {
 		opts.TouchID = func() (tui.Vault, error) {
-			store, err := reopenWithTouchID(dbPath)
+			store, err := reopenWithTouchID(cfg)
 			if err != nil {
 				return nil, err
 			}
@@ -170,7 +170,12 @@ func reopenWith(cfg *config.Config, pw []byte) (*database.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return openStoreWith(cfg.DBPath.Value, oracle)
+	store, err := openStoreWith(cfg.DBPath.Value, oracle)
+	if err != nil {
+		return nil, err
+	}
+	keepAsSet(store, cfg)
+	return store, nil
 }
 
 // touchIDSetUp says whether Touch ID unlock is on for the vault at dbPath.
@@ -185,7 +190,8 @@ func touchIDSetUp(dbPath string) bool {
 
 // reopenWithTouchID opens the vault again with a fingerprint, through the
 // agent; why it didn't is the error.
-func reopenWithTouchID(dbPath string) (*database.Store, error) {
+func reopenWithTouchID(cfg *config.Config) (*database.Store, error) {
+	dbPath := cfg.DBPath.Value
 	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
 		return nil, err
@@ -209,7 +215,12 @@ func reopenWithTouchID(dbPath string) (*database.Store, error) {
 		}
 		return nil, errors.New("unlocking with Touch ID didn't work; enter your master password")
 	}
-	return openStoreWith(dbPath, agent.NewOracle(conn, id))
+	store, err := openStoreWith(dbPath, agent.NewOracle(conn, id))
+	if err != nil {
+		return nil, err
+	}
+	keepAsSet(store, cfg)
+	return store, nil
 }
 
 // startBrowser opens a web address; tests replace it.
