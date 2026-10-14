@@ -25,7 +25,10 @@ import (
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/password"
+	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/touchid"
 	"github.com/bashhack/sesh/internal/tui"
 	"github.com/bashhack/sesh/internal/vault"
@@ -124,6 +127,9 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		Copy:        app.ClipboardCopy,
 		OpenURL:     openURL,
 		LockAgent:   lockAgent,
+		EditNotes:   provider.EditNotes,
+		IsWeak:      func(pw []byte) bool { return password.IsWeak(pw) },
+		Generate:    func() ([]byte, error) { return password.GeneratePassword(password.DefaultGenerateOptions()) },
 		ClearAfter:  cfg.ClipboardTimeout.Value,
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
 		MaxLifetime: cfg.AgentMaxLifetime.Value,
@@ -436,6 +442,125 @@ func (u *uiVault) wrote(err error) error {
 		u.fingerprint = f
 	}
 	return nil
+}
+
+// Save adds an entry, or changes one, as the app's form describes it.
+func (u *uiVault) Save(c *tui.Change) (vault.Key, error) {
+	to, secret := c.To, c.Secret
+	var params *totp.Params
+	if to.Kind == vault.KindTOTP && len(secret) > 0 {
+		key, p, err := readTOTPKey(secret)
+		if err != nil {
+			return vault.Key{}, err
+		}
+		defer secure.SecureZeroBytes(key)
+		secret, params = key, p
+	}
+	if c.Key == (vault.Key{}) {
+		return to, u.add(c, secret, params)
+	}
+	edit := database.EntryEdit{Secret: secret}
+	if to != c.Key {
+		edit.To = &to
+	}
+	if c.URL != nil || c.SetNotes || len(c.SetFields) > 0 || len(c.RemoveFields) > 0 {
+		edit.Details = &vault.DetailsChange{
+			URL: c.URL, Notes: c.Notes, SetNotes: c.SetNotes, NotesBase: c.NotesBase, HasNotesBase: c.SetNotes,
+			Set: c.SetFields, Remove: c.RemoveFields,
+		}
+	}
+	if edit.To != nil || edit.Details != nil || edit.Secret != nil {
+		if _, err := u.store.Edit(c.Key, edit); err != nil && !errors.Is(err, database.ErrNothingToChange) {
+			if errors.Is(err, database.ErrNameTaken) {
+				return vault.Key{}, fmt.Errorf("%w: %s", tui.ErrNameTaken, to)
+			}
+			return vault.Key{}, uiLocked(err)
+		}
+	}
+	if err := u.file(to, c, params); err != nil {
+		return to, err
+	}
+	return to, u.wrote(nil)
+}
+
+// add stores a new entry, refusing a name another entry has.
+func (u *uiVault) add(c *tui.Change, secret []byte, params *totp.Params) error {
+	switch err := u.store.Exists(c.To); {
+	case err == nil:
+		return fmt.Errorf("%w: %s", tui.ErrNameTaken, c.To)
+	case !errors.Is(err, vault.ErrNotFound):
+		return uiLocked(err)
+	}
+	ent := vault.Entry{Key: c.To, Tags: c.Tags}
+	if c.Folder != nil {
+		ent.Folder = *c.Folder
+	}
+	if params != nil {
+		ent.Settings.TOTP = *params
+	}
+	d := vault.Details{Notes: c.Notes, Fields: c.SetFields}
+	if c.URL != nil {
+		d.URL = *c.URL
+	}
+	return u.wrote(u.store.SaveWithDetails(&ent, secret, &d))
+}
+
+// file sets an edited entry's folder and tags, and its TOTP settings when
+// a new key came with them.
+func (u *uiVault) file(k vault.Key, c *tui.Change, params *totp.Params) error {
+	if c.Folder != nil {
+		if _, err := u.store.MoveToFolder([]vault.Key{k}, *c.Folder); err != nil {
+			return uiLocked(err)
+		}
+	}
+	if !c.TagsSet && params == nil {
+		return nil
+	}
+	cur, err := u.store.Lookup(k)
+	if err != nil {
+		return uiLocked(err)
+	}
+	if c.TagsSet {
+		for _, t := range c.Tags {
+			if !slices.Contains(cur.Tags, t) {
+				if _, err := u.store.AddTag([]vault.Key{k}, t); err != nil {
+					return uiLocked(err)
+				}
+			}
+		}
+		for _, t := range cur.Tags {
+			if !slices.Contains(c.Tags, t) {
+				if _, err := u.store.RemoveTag([]vault.Key{k}, t); err != nil {
+					return uiLocked(err)
+				}
+			}
+		}
+	}
+	if params != nil {
+		cur.Settings.TOTP = *params
+		if err := u.store.SetSettings(k, cur.Settings); err != nil {
+			return uiLocked(err)
+		}
+	}
+	return nil
+}
+
+// readTOTPKey is a TOTP key as typed: a base32 key, or an otpauth:// link
+// with its settings.
+func readTOTPKey(typed []byte) ([]byte, *totp.Params, error) {
+	text := strings.TrimSpace(string(typed))
+	if strings.HasPrefix(strings.ToLower(text), "otpauth://") {
+		info, err := qrcode.ExtractTOTPFullInfo(text)
+		if err != nil {
+			return nil, nil, fmt.Errorf("that otpauth:// link can't be read: %w", err)
+		}
+		return []byte(info.Secret), &totp.Params{Issuer: info.Issuer, Algorithm: info.Algorithm, Digits: info.Digits, Period: info.Period}, nil
+	}
+	key, err := totp.ValidateAndNormalizeSecret(text)
+	if err != nil {
+		return nil, nil, fmt.Errorf("that TOTP key can't be used: %w", err)
+	}
+	return []byte(key), nil, nil
 }
 
 // lockAgent locks sesh's agent; none running is nothing to lock.

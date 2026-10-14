@@ -41,6 +41,38 @@ type Trashed struct {
 	ID        int64
 }
 
+// Change is an entry added (Key zero) or changed: To is its name after;
+// nil and empty fields leave what the entry has. Secret is the new secret
+// (a TOTP entry's key, or an otpauth:// link to read it from); Notes are
+// the new notes when SetNotes, written from NotesBase, the notes they
+// replace, so a change by another command meanwhile is refused. The
+// caller wipes Secret, Notes, NotesBase, and secret fields' values.
+type Change struct {
+	URL          *string
+	Folder       *string
+	Key, To      vault.Key
+	Secret       []byte
+	Notes        []byte
+	NotesBase    []byte
+	SetFields    []vault.Field
+	RemoveFields []string
+	Tags         []string // the entry's tags after, when TagsSet
+	TagsSet      bool
+	SetNotes     bool
+}
+
+// Wipe overwrites what's secret in c.
+func (c *Change) Wipe() {
+	secure.SecureZeroBytes(c.Secret)
+	secure.SecureZeroBytes(c.Notes)
+	secure.SecureZeroBytes(c.NotesBase)
+	for _, f := range c.SetFields {
+		if f.Secret {
+			secure.SecureZeroBytes(f.Value)
+		}
+	}
+}
+
 // ErrNameTaken is a trash entry restored onto a name another entry has.
 var ErrNameTaken = errors.New("another entry has that name")
 
@@ -98,6 +130,9 @@ type Vault interface {
 	RestoreFromTrash(id int64) (vault.Key, error)
 	// RemoveFromTrash deletes the trash's entry id for good.
 	RemoveFromTrash(id int64) error
+	// Save adds an entry (c.Key zero) or changes one, and says the name
+	// it has after. ErrNameTaken when the name is another entry's.
+	Save(c *Change) (vault.Key, error)
 	Close() error
 }
 
@@ -116,7 +151,14 @@ type Options struct {
 	OpenURL func(url string) error
 	// LockAgent locks sesh's agent, for "lock now"; nil when there's none
 	// to lock.
-	LockAgent  func() error
+	LockAgent func() error
+	// EditNotes opens notes in the user's editor and returns them as
+	// saved; nil when there's none.
+	EditNotes func([]byte) ([]byte, error)
+	// IsWeak says whether a secret typed is easy to guess.
+	IsWeak func([]byte) bool
+	// Generate makes a new password.
+	Generate   func() ([]byte, error)
 	Now        func() time.Time
 	ClearAfter time.Duration
 	// IdleTimeout locks after this long without a key pressed, and
@@ -137,7 +179,8 @@ type Model struct {
 
 	v *gate // nil while locked
 
-	ov *overlay // the panel over the app, nil when none
+	ov   *overlay // the panel over the app, nil when none
+	form *form    // the form over the app, nil when none
 
 	// shut are gates locking closed, which Close waits for.
 	shut []*gate
@@ -263,6 +306,10 @@ func (m *Model) Close() {
 	}
 	m.shut = nil
 	m.wipe()
+	if m.form != nil {
+		m.form.wipe()
+		m.form = nil
+	}
 	secure.SecureZeroBytes(m.password)
 	m.password = nil
 }
@@ -377,7 +424,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.spin, cmd = m.spin.Update(msg)
 		return cmd
 	case tea.MouseClickMsg:
-		if m.v == nil || msg.Button != tea.MouseLeft || !m.listShown() || m.ov != nil {
+		if m.v == nil || msg.Button != tea.MouseLeft || !m.listShown() || m.ov != nil || m.form != nil {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
@@ -388,7 +435,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		return m.keepAlive()
 	case tea.MouseWheelMsg:
-		if m.v == nil || !m.listShown() || m.ov != nil {
+		if m.v == nil || !m.listShown() || m.ov != nil || m.form != nil {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
@@ -424,6 +471,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			m.lockedWhy = "Locked, but sesh's agent couldn't be locked (" + msg.err.Error() + "): lock it with sesh agent lock."
 		}
 		return nil
+	case savedMsg:
+		return m.saved(&msg)
+	case editorMsg:
+		return m.editedNotes(&msg)
 	case notesMsg:
 		return m.gotNotes(&msg)
 	case revealMsg:
@@ -431,6 +482,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case tea.KeyPressMsg:
 		if m.v == nil {
 			return m.lockedKey(msg)
+		}
+		if m.form != nil {
+			return tea.Batch(m.formKey(msg), m.keepAlive())
 		}
 		if m.ov != nil {
 			return tea.Batch(m.overlayKey(msg), m.keepAlive())
@@ -447,6 +501,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
+		if m.form != nil {
+			return m.formPaste(msg.Content)
+		}
 		if m.ov != nil {
 			return nil // not into the search behind a panel
 		}
@@ -635,6 +692,10 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.epoch++
 	m.rows, m.sel, m.top = nil, 0, 0
 	m.ov = nil
+	if m.form != nil {
+		m.form.wipe()
+		m.form = nil
+	}
 	m.status = ""
 	m.lockedWhy = why
 	return closing

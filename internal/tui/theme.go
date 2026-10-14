@@ -2,8 +2,10 @@ package tui
 
 import (
 	"image/color"
+	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -11,7 +13,7 @@ import (
 // theme is the app's colours, for a dark terminal or a light one, and the
 // styles made from them.
 type theme struct {
-	accent, text, dim, faint, border, ok, warn, bad, selBg, badgeText color.Color
+	accent, text, dim, faint, border, ok, warn, bad, selBg, badgeText, keyBg color.Color
 }
 
 func newTheme(dark bool) theme {
@@ -27,6 +29,7 @@ func newTheme(dark bool) theme {
 		bad:       c(lipgloss.Color("#CF222E"), lipgloss.Color("#F85149")),
 		selBg:     c(lipgloss.Color("#F3EEFF"), lipgloss.Color("#2A2140")),
 		badgeText: c(lipgloss.Color("#FFFFFF"), lipgloss.Color("#1B1325")),
+		keyBg:     c(lipgloss.Color("#E6EAEF"), lipgloss.Color("#262C36")),
 	}
 }
 
@@ -35,6 +38,37 @@ func (t *theme) dimmed() lipgloss.Style { return lipgloss.NewStyle().Foreground(
 func (t *theme) lines() lipgloss.Style  { return lipgloss.NewStyle().Foreground(t.border) }
 func (t *theme) accented() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(t.accent)
+}
+
+// key is a key's name drawn as a key: a small label.
+func (t *theme) key(name string) string {
+	return lipgloss.NewStyle().Foreground(t.accent).Background(t.keyBg).Bold(true).Padding(0, 1).Render(name)
+}
+
+// hints are keys and what they do, as a line: each a key's name and a
+// word or two.
+func (t *theme) hints(pairs ...[2]string) string {
+	parts := make([]string, len(pairs))
+	for i, p := range pairs {
+		parts[i] = t.key(p[0]) + " " + t.dimmed().Render(p[1])
+	}
+	return strings.Join(parts, "  ")
+}
+
+// field is content in a form's input: a bar beside it, in the accent
+// colour while it's the one being typed in.
+func (t *theme) field(focused bool, content string) string {
+	c := t.faint
+	if focused {
+		c = t.accent
+	}
+	return lipgloss.NewStyle().Border(lipgloss.ThickBorder(), false, false, false, true).BorderForeground(c).
+		PaddingLeft(1).MarginLeft(1).Render(content)
+}
+
+// behind is the app as drawn, dimmed, for a panel or a form to sit over.
+func (t *theme) behind(app string) string {
+	return lipgloss.NewStyle().Foreground(t.faint).Render(ansi.Strip(app))
 }
 
 // kindColor is the colour each kind of entry is marked with.

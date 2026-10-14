@@ -41,6 +41,7 @@ type overlay struct {
 	kind     panel
 	sel      int
 	loading  bool
+	danger   bool // a confirmation of something that can't be undone
 }
 
 // item is one line of a menu: a key that runs it, what it says, and what
@@ -90,7 +91,10 @@ func (m *Model) openMenu() tea.Cmd {
 	// selected by the time it runs.
 	ek := *e
 	var items []item
-	items = append(items, item{key: "f", label: "copy a value…", run: func() tea.Cmd { return m.openFields(&ek) }})
+	items = append(items,
+		item{key: "e", label: "edit…", run: func() tea.Cmd { return m.openEdit(&ek) }},
+		item{key: "f", label: "copy a value…", run: func() tea.Cmd { return m.openFields(&ek) }},
+	)
 	if e.Username != "" {
 		items = append(items, item{key: "u", label: "copy the username", run: func() tea.Cmd { return m.copyUsername(&ek) }})
 	}
@@ -114,6 +118,7 @@ func (m *Model) globalItems() []item {
 		lockLabel = "lock now, and sesh's agent"
 	}
 	return []item{
+		{key: "a", label: "add an entry…", run: m.openAdd},
 		{key: "t", label: "the trash…", run: m.openTrash},
 		{key: "l", label: lockLabel, run: m.lockNow},
 	}
@@ -220,6 +225,7 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 		m.ov = m.confirm(ov, "Delete for good",
 			fmt.Sprintf("Delete %s for good? It can't be brought back.", short(k.String())),
 			func() tea.Cmd { return m.removeFromTrash(id, k) })
+		m.ov.danger = true
 	}
 	return nil
 }
@@ -490,7 +496,10 @@ func (m *Model) drawOverlay(base string) string {
 	room := max(m.height-8, 1)
 	var lines []string
 	row := func(i int, key, text string) string {
-		k := th.accented().Render(fmt.Sprintf("%-2s", key))
+		k := "   "
+		if key != "" {
+			k = th.key(key)
+		}
 		if i == ov.sel {
 			return lipgloss.NewStyle().Background(th.selBg).Render(th.accented().Render("▌") + " " + fitTo(th.style().Bold(true).Render(text), w-12) + " " + k)
 		}
@@ -498,8 +507,7 @@ func (m *Model) drawOverlay(base string) string {
 	}
 	switch {
 	case ov.kind == panelConfirm:
-		lines = append(lines, "", th.style().Width(w-6).Render(ov.question), "",
-			th.accented().Render("y")+th.dimmed().Render(" yes")+th.lines().Render("  ·  ")+th.accented().Render("n")+th.dimmed().Render(" no"))
+		lines = append(lines, "", th.style().Width(w-6).Render(ov.question))
 	case ov.loading:
 		lines = append(lines, "", th.dimmed().Render("Working…"))
 	case ov.err != "" && ov.len() == 0:
@@ -544,21 +552,25 @@ func (m *Model) drawOverlay(base string) string {
 		lines = append([]string{said, ""}, lines[max(len(lines)-room, 0):]...)
 	}
 	var hint string
+	edge, titleStyle := th.accent, th.accented().Bold(true)
 	switch ov.kind {
 	case panelHistory:
-		hint = "↵ copy  ·  r restore  ·  esc back"
+		hint = th.hints([2]string{"↵", "copy"}, [2]string{"r", "restore"}, [2]string{"esc", "back"})
 	case panelTrash:
-		hint = "↵ put back  ·  x delete for good  ·  esc back"
+		hint = th.hints([2]string{"↵", "put back"}, [2]string{"x", "delete for good"}, [2]string{"esc", "back"})
 	case panelConfirm:
-		hint = "esc cancel"
+		hint = th.hints([2]string{"y", "yes"}, [2]string{"n", "no"}, [2]string{"esc", "cancel"})
+		if ov.danger {
+			edge, titleStyle = th.bad, lipgloss.NewStyle().Foreground(th.bad).Bold(true)
+		}
 	default:
-		hint = "↵ or a key  ·  esc close"
+		hint = th.hints([2]string{"↵", "or its key"}, [2]string{"esc", "back"})
 	}
-	lines = append(lines, "", th.dimmed().Render(hint))
-	title := th.accented().Bold(true).Render(ansi.Truncate(ov.title, w-8, "…"))
-	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(th.accent).Padding(0, 2).Width(w).
-		Render(lipgloss.JoinVertical(lipgloss.Left, append([]string{title}, lines...)...))
+	lines = append(lines, "", hint)
+	title := titleStyle.Render(ansi.Truncate(ov.title, w-8, "…"))
+	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(edge).Padding(0, 2).Width(w).
+		Render(lipgloss.JoinVertical(lipgloss.Left, append([]string{title, th.lines().Render(strings.Repeat("─", w-6))}, lines...)...))
 	x := max((m.width-lipgloss.Width(card))/2, 0)
 	y := max(min((m.height-lipgloss.Height(card))/3, m.height-lipgloss.Height(card)), 0)
-	return lipgloss.NewCompositor(lipgloss.NewLayer(base), lipgloss.NewLayer(card).X(x).Y(y).Z(1)).Render()
+	return lipgloss.NewCompositor(lipgloss.NewLayer(th.behind(base)), lipgloss.NewLayer(card).X(x).Y(y).Z(1)).Render()
 }

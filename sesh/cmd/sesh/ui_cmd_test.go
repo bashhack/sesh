@@ -520,3 +520,66 @@ func TestUI_OwnWriteKeepsOthersChange(t *testing.T) {
 		t.Errorf("lockAgent with no agent running: %v", err)
 	}
 }
+
+// Save on a real vault: an entry added, a TOTP entry from an otpauth://
+// link with its settings, a name that's taken, and an edit of name, notes,
+// fields, folder and tags.
+func TestUI_Save(t *testing.T) {
+	filingVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	site := vault.Key{Kind: vault.KindPassword, Service: "site", Username: "me"}
+	url, folder := "https://site.example", "work"
+	if _, err := u.Save(&tui.Change{To: site, Secret: []byte("pw-1"), URL: &url, Folder: &folder, Tags: []string{"a"}, TagsSet: true,
+		SetFields: []vault.Field{{Name: "pin", Value: []byte("4321"), Secret: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := store.Lookup(site)
+	if err != nil || e.URL != url || e.Folder != folder || strings.Join(e.Tags, ",") != "a" || len(e.Fields) != 1 {
+		t.Errorf("added = %+v, %v", e, err)
+	}
+	if _, err := u.Save(&tui.Change{To: site, Secret: []byte("again")}); !errors.Is(err, tui.ErrNameTaken) {
+		t.Errorf("adding a name that's taken: %v", err)
+	}
+	code := vault.Key{Kind: vault.KindTOTP, Service: "site", Username: "me"}
+	link := "otpauth://totp/Site:me?secret=JBSWY3DPEHPK3PXP&issuer=Site&algorithm=SHA256&digits=8&period=60"
+	if _, err := u.Save(&tui.Change{To: code, Secret: []byte(link)}); err != nil {
+		t.Fatal(err)
+	}
+	if key, err := store.Get(code); err != nil || string(key) != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("TOTP key = %q, %v", key, err)
+	}
+	if c, err := store.Lookup(code); err != nil || c.Settings.TOTP.Digits != 8 || c.Settings.TOTP.Period != 60 || c.Settings.TOTP.Algorithm != "SHA256" {
+		t.Errorf("TOTP settings = %+v, %v", c.Settings.TOTP, err)
+	}
+	if _, err := u.Save(&tui.Change{To: vault.Key{Kind: vault.KindTOTP, Service: "bad"}, Secret: []byte("not base32!")}); err == nil {
+		t.Error("a TOTP key that isn't one was saved")
+	}
+
+	renamed := vault.Key{Kind: vault.KindPassword, Service: "site2", Username: "me"}
+	folder2 := ""
+	k, err := u.Save(&tui.Change{Key: site, To: renamed, Notes: []byte("new notes"), SetNotes: true, NotesBase: nil,
+		SetFields: []vault.Field{{Name: "email", Value: []byte("me@example.com")}}, RemoveFields: []string{"pin"},
+		Folder: &folder2, Tags: []string{"b", "c"}, TagsSet: true})
+	if err != nil || k != renamed {
+		t.Fatalf("edit = %v, %v", k, err)
+	}
+	e, err = store.Lookup(renamed)
+	if err != nil || e.Folder != "" || strings.Join(e.Tags, ",") != "b,c" || len(e.Fields) != 1 || e.Fields[0].Name != "email" || !e.HasNotes {
+		t.Errorf("edited = %+v, %v", e, err)
+	}
+	if secret, err := store.Get(renamed); err != nil || string(secret) != "pw-1" {
+		t.Errorf("the secret after a rename = %q, %v", secret, err)
+	}
+	// Notes changed by another command meanwhile are not written over.
+	if _, err := u.Save(&tui.Change{Key: renamed, To: renamed, Notes: []byte("mine"), SetNotes: true, NotesBase: []byte("what I saw")}); err == nil {
+		t.Error("notes written over ones that changed meanwhile")
+	}
+	if changed, err := u.Check(); changed || err != nil {
+		t.Errorf("Check after the app's own saves = %v, %v", changed, err)
+	}
+}

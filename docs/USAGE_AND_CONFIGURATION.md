@@ -1009,6 +1009,12 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
 - **Passwords and secret fields stay hidden** (`••••••••`) until **Tab** reveals them, for 30 seconds, until you move to another entry, or until Tab again.
 - **Enter copies** the selected entry's secret, or a TOTP entry's current code; **Ctrl-Y** copies its username. The clipboard clears after `clipboard_timeout`, as with `--clip`, and the footer counts down until it does.
 - **Ctrl-K opens the actions** on the selected entry, each run by its letter (or ↑↓ and Enter); Esc goes back, and closes them. (With text after the cursor in the search, Ctrl-K deletes it instead, as in a shell.) A change asks first, and only `y` is a yes, not Enter, and not one typed in the same breath as the key that asked:
+  - **edit…** (`e`) and **add an entry…** (`a`): a form. Tab and Shift-Tab move between its inputs, Ctrl-S saves, and Esc cancels (twice, once something's been typed).
+    - **Editing** changes the name, username, URL, folder, tags, notes and fields, and the secret if you choose to: typed, unseen, or generated; a generated password is copied when it's saved, since you haven't seen it. A TOTP entry takes a new key, or an `otpauth://` link, or keeps the one it has.
+    - **Adding** makes a password, an API key, a secure note, or a TOTP entry (its key pasted, or an `otpauth://` link, which also sets the code's digits, period and algorithm; reading a QR code from the screen stays in `--setup`).
+    - **Notes** are typed in the form; Ctrl-E opens them in your editor (`$VISUAL`, then `$EDITOR`), as `sesh edit --notes --editor` does.
+    - **Fields:** `a` adds one, Enter edits it, `x` removes it; a secret field's value is typed unseen.
+    - A name another entry has is refused, and said in the form; so are notes another command changed while you were editing them.
   - **copy a value…** (`f`): any one of the entry's values, its secret, username, URL or a field, picked by its number;
   - **earlier secrets…** (`h`): its [password history](#password-history); Enter copies a version, `r` makes it the secret again (after a yes);
   - **delete** (`d`): to the [trash](#the-trash), after a yes;

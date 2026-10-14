@@ -36,6 +36,9 @@ func (m *Model) View() tea.View {
 		if m.ov != nil {
 			s = m.drawOverlay(s)
 		}
+		if m.form != nil {
+			s = m.drawForm(s)
+		}
 	}
 	v := tea.NewView(s)
 	v.AltScreen = true
@@ -251,7 +254,7 @@ func (m *Model) helpLines(h int) []string {
 		if i+1 >= h {
 			break
 		}
-		out[i+1] = "   " + th.accented().Render(fmt.Sprintf("%-15s", k[0])) + th.dimmed().Render(k[1])
+		out[i+1] = "   " + fitTo(th.key(k[0]), 17) + th.dimmed().Render(k[1])
 	}
 	return out
 }
@@ -259,20 +262,16 @@ func (m *Model) helpLines(h int) []string {
 // footer is the keys, and what was just done, or went wrong.
 func (m *Model) footer(w int) string {
 	th := m.th
-	keys := [][2]string{{"↵", "copy"}, {"^k", "actions"}, {"↑↓", "move"}, {"esc", "clear"}}
+	keys := [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"↑↓", "move"}, {"esc", "clear"}}
 	if m.input.Value() == "" {
-		keys = [][2]string{{"↵", "copy"}, {"^k", "actions"}, {"↑↓", "move"}, {"esc", "quit"}, {"?", "help"}}
+		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"↑↓", "move"}, {"esc", "quit"}, {"?", "help"}}
 	}
 	now := m.opts.Now()
 	if (m.status != "" && now.Before(m.statusUntil)) || now.Before(m.clipUntil) {
 		// Room for what's said on the right: the keys used most.
 		keys = keys[:2]
 	}
-	var parts []string
-	for _, k := range keys {
-		parts = append(parts, th.accented().Render(k[0])+" "+th.dimmed().Render(k[1]))
-	}
-	left := " " + strings.Join(parts, th.lines().Render("  ·  "))
+	left := " " + th.hints(keys...)
 	if m.status == "" || !now.Before(m.statusUntil) {
 		if !now.Before(m.clipUntil) {
 			return left
@@ -299,7 +298,6 @@ func (m *Model) footer(w int) string {
 func (m *Model) drawLocked() string {
 	th := m.th
 	w := min(60, m.width-4)
-	sep := th.lines().Render("  ·  ")
 	lines := []string{"", th.accented().Bold(true).Render("sesh is locked")}
 	if m.lockedWhy != "" {
 		whyStyle := th.dimmed()
@@ -317,9 +315,9 @@ func (m *Model) drawLocked() string {
 		field = th.accented().Render("▌") + th.dimmed().Render(" hidden as you type")
 	}
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(th.accent).Padding(0, 1).Width(w - 6)
-	hint := th.accented().Render("↵") + th.dimmed().Render(" unlock") + sep + th.accented().Render("esc") + th.dimmed().Render(" quit")
+	hint := th.hints([2]string{"↵", "unlock"}, [2]string{"esc", "quit"})
 	if m.opts.TouchID != nil {
-		hint = th.accented().Render("↵") + th.dimmed().Render(" unlock, or with nothing typed, Touch ID") + sep + th.accented().Render("esc") + th.dimmed().Render(" quit")
+		hint = th.hints([2]string{"↵", "unlock, or with nothing typed, Touch ID"}, [2]string{"esc", "quit"})
 	}
 	lines = append(lines, box.Render(field), "", hint, "")
 	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(th.border).Padding(0, 2).Width(w).
