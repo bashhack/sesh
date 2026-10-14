@@ -36,6 +36,10 @@ type checksMsg struct {
 // settings.
 func (m *Model) openChecks() tea.Cmd {
 	m.ov = &overlay{kind: panelChecks, back: m.ov, title: "Checks", loading: true}
+	if m.checking {
+		return nil // the run already going fills this panel
+	}
+	m.checking = true
 	epoch := m.epoch
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		c, err := v.Checks()
@@ -81,6 +85,9 @@ func (m *Model) showChecks(c *Checks) {
 
 // gotChecks fills the checks panel, when it's open.
 func (m *Model) gotChecks(msg *checksMsg) tea.Cmd {
+	if msg.epoch == m.epoch {
+		m.checking = false
+	}
 	if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelChecks {
 		return nil
 	}

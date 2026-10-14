@@ -872,3 +872,13 @@ func TestUI_Checks(t *testing.T) {
 		t.Errorf("audit:\n%s", log)
 	}
 }
+
+// A master password changed while the checks run locks the app, as any other read would.
+func TestUI_ChecksKeyChanged(t *testing.T) {
+	if err := uiLocked(keyChangedError{}); !errors.Is(err, tui.ErrLocked) {
+		t.Errorf("uiLocked(keyChangedError) = %v", err)
+	}
+	if (keyChangedError{}).Error() != "the master password was changed by another sesh command while this one was checking; run sesh doctor again" {
+		t.Error("sesh doctor's words changed")
+	}
+}

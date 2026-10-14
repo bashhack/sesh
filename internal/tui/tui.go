@@ -295,6 +295,7 @@ type Model struct {
 	// inEditor is the notes editor having the terminal: its time is use, so
 	// the idle lock waits for it. Ticks due meanwhile arrive before it ends.
 	inEditor  bool
+	checking  bool // sesh doctor's checks are running
 	statusBad bool // the status is something that went wrong
 	showHelp  bool
 	dark      bool
@@ -788,6 +789,7 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.wipe()
 	m.epoch++
 	m.found, m.rows, m.sel, m.top = nil, nil, 0, 0
+	m.checking = false
 	m.editing = vault.Key{}
 	clear(m.marked)
 	m.folders, m.tags, m.side, m.sideSel, m.sideTop = nil, nil, nil, 0, 0

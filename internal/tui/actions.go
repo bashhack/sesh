@@ -534,6 +534,19 @@ func (m *Model) drawOverlay(base string) string {
 		}
 		return "  " + fitTo(th.style().Render(text), w-12) + " " + k
 	}
+	// The selected row's details go below the rows, cut to leave two of
+	// those beside them; with less room than that, they're left out.
+	var detail string
+	itemRoom := room
+	if ov.sel < len(ov.items) && ov.items[ov.sel].detail != "" && !ov.loading && room >= 5 {
+		said := strings.Split(th.dimmed().Width(w-6).Render(ov.items[ov.sel].detail), "\n")
+		if most := room - 3; len(said) > most {
+			cut := len(said) - most + 1
+			said = append(said[:most-1], th.dimmed().Render(fmt.Sprintf("… and %d more %s", cut, plural(cut, "line", "lines"))))
+		}
+		detail = strings.Join(said, "\n")
+		itemRoom = room - len(said) - 1
+	}
 	switch {
 	case ov.kind == panelConfirm:
 		lines = append(lines, "", th.style().Width(w-6).Render(ov.question))
@@ -567,7 +580,7 @@ func (m *Model) drawOverlay(base string) string {
 			lines = append(lines, row(i, "", fmt.Sprintf("%s  %s", keyName(t.Key), th.dimmed().Render(fmt.Sprintf("%s · deleted %s · id %d", kindLabel(t.Key.Kind), ago(now, t.DeletedAt), t.ID)))))
 		}
 	default:
-		first, last := window(ov.sel, len(ov.items), room)
+		first, last := window(ov.sel, len(ov.items), itemRoom)
 		// The lines between groups take room too.
 		for range 3 {
 			rules := 0
@@ -576,10 +589,10 @@ func (m *Model) drawOverlay(base string) string {
 					rules++
 				}
 			}
-			if last-first+rules <= room {
+			if last-first+rules <= itemRoom {
 				break
 			}
-			first, last = window(ov.sel, len(ov.items), max(room-rules, 1))
+			first, last = window(ov.sel, len(ov.items), max(itemRoom-rules, 1))
 		}
 		for i := first; i < last; i++ {
 			it := ov.items[i]
@@ -589,20 +602,8 @@ func (m *Model) drawOverlay(base string) string {
 			lines = append(lines, row(i, it.key, it.label))
 		}
 	}
-	// The selected setting's details, below its rows, when two of those
-	// still fit beside them.
-	if ov.sel < len(ov.items) && ov.items[ov.sel].detail != "" && !ov.loading {
-		detail := th.dimmed().Width(w - 6).Render(ov.items[ov.sel].detail)
-		if fit := room - lipgloss.Height(detail) - 1; fit >= 2 {
-			if len(lines) > fit {
-				first, last := window(ov.sel, len(ov.items), fit)
-				lines = lines[:0]
-				for i := first; i < last; i++ {
-					lines = append(lines, row(i, ov.items[i].key, ov.items[i].label))
-				}
-			}
-			lines = append(lines, "", detail)
-		}
+	if detail != "" {
+		lines = append(lines, "", detail)
 	}
 	if ov.err != "" && ov.len() > 0 && !ov.loading {
 		// Above the rows, which stay, since the keys still act on them.

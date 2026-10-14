@@ -400,6 +400,16 @@ func checkVault(c *doctorChecks, cfg *config.Config, dbPath string, mat *databas
 	return verifyVault(c, store, mat, touchFile, touchErr)
 }
 
+// keyChangedError is the master password changed by another command while
+// the vault was being checked: ErrVaultKeyChanged, as sesh ui takes it, said
+// as sesh doctor says it.
+type keyChangedError struct{}
+
+func (keyChangedError) Error() string {
+	return "the master password was changed by another sesh command while this one was checking; run sesh doctor again"
+}
+func (keyChangedError) Unwrap() error { return database.ErrVaultKeyChanged }
+
 // verifyVault checks the open vault store: its file, every entry, the
 // trash, the history, the recovery key, and Touch ID (as found, touchFile).
 func verifyVault(c *doctorChecks, store *database.Store, mat *database.UnlockMaterial, touchFile *touchid.File, touchErr error) error {
@@ -414,7 +424,7 @@ func verifyVault(c *doctorChecks, store *database.Store, mat *database.UnlockMat
 	report, err := store.Verify()
 	switch {
 	case errors.Is(err, database.ErrVaultKeyChanged):
-		return errors.New("the master password was changed by another sesh command while this one was checking; run sesh doctor again")
+		return keyChangedError{}
 	case database.IsDamaged(err):
 		return damaged(err)
 	case err != nil:
@@ -789,22 +799,20 @@ func checkTouchID(c *doctorChecks, f *touchid.File, err error, id string) {
 	c.todo("Optional: turn Touch ID back on:", "sesh touchid enable")
 }
 
-// doctorChecks is sesh doctor's checks, for sesh ui: the setup's, then the
+// doctorReport is sesh doctor's checks, for sesh ui: the setup's, then the
 // vault's on store, which the app has open, so nothing asks for the master
 // password. The run is recorded in the audit log, as sesh doctor's is.
 func doctorReport(app *App, store *database.Store) (tui.Checks, error) {
 	var c doctorChecks
 	c.section("Setup")
 	checkSetup(&c, app)
-	cfg, err := settings()
-	if err != nil {
-		return c.report(), nil // the setup's rows say so
-	}
-	dbPath := cfg.DBPath.Value
+	// The vault checked is the one open, wherever the config says now.
+	dbPath := store.Path()
 	c.section("Vault: " + tildePath(dbPath))
 	mat, err := database.ReadUnlockMaterial(dbPath)
 	if err != nil {
-		c.row(markFail, "File", "damaged", err.Error())
+		c.row(markFail, "File", "can't be read", err.Error())
+		c.todo("Restore the vault from a backup, such as an encrypted export.")
 		return c.report(), nil
 	}
 	touchFile, touchErr := touchid.ReadFile(filepath.Dir(dbPath))

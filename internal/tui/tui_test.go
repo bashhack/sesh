@@ -2465,3 +2465,41 @@ func TestChecksPanel(t *testing.T) {
 		t.Errorf("Esc went to %+v", a.ov)
 	}
 }
+
+// A check's long details are cut to the window, saying how many lines are left out; the lines between sections stay.
+func TestChecksPanelFits(t *testing.T) {
+	f := newFake()
+	var details []string
+	for i := range 60 {
+		details = append(details, fmt.Sprintf("password/e%02d: secret doesn't decrypt", i))
+	}
+	f.checks = Checks{Summary: "FAIL: 60 problems", Checks: []Check{
+		{Section: "Setup", Mark: "ok", Label: "Agent", Value: "running"},
+		{Section: "Vault", Mark: "FAIL", Label: "Entries", Value: "60 of 60 entries can't be read", Details: details},
+	}}
+	a := newApp(t, f, Options{Settings: func() ([]Setting, error) { return nil, nil }})
+	a.press("ctrl+k", ",", "enter", "down")
+	s := a.screen()
+	if strings.Count(s, "\n")+1 > a.height || !strings.Contains(s, "more lines") || !strings.Contains(s, "password/e00") {
+		t.Errorf("long details:\n%s", s)
+	}
+	if !strings.Contains(s, "│  ────") {
+		t.Errorf("the line between the sections went:\n%s", s)
+	}
+}
+
+// Opened again while it runs, the panel waits for that run rather than starting another.
+func TestChecksOnce(t *testing.T) {
+	f := newFake()
+	f.checks = Checks{Summary: "OK: no problems"}
+	a := newApp(t, f, Options{Settings: func() ([]Setting, error) { return nil, nil }})
+	a.press("ctrl+k", ",")
+	_, run := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.press("esc")
+	_, again := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.run(run)
+	a.run(again)
+	if n := strings.Count(strings.Join(f.reads, " "), "checks"); n != 1 || !strings.Contains(a.screen(), "OK: no problems") {
+		t.Errorf("checks run %d times:\n%s", n, a.screen())
+	}
+}

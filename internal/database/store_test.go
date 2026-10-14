@@ -2,6 +2,7 @@ package database
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"os"
@@ -360,3 +361,51 @@ func TestDelete_LeavesNoTrace(t *testing.T) {
 		t.Error("the deleted entry's encrypted secret is still in the vault file")
 	}
 }
+
+// A reader's long read doesn't hold up the store's writes, and closing it leaves the store's key open.
+func TestReader(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	if err := s.Put(k, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	key := &closeRecorder{CryptoOracle: s.oracle}
+	s.oracle = key
+	r, err := s.Reader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := r.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := tx.QueryRow(`SELECT count(*) FROM entries`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("read = %d, %v", n, err)
+	}
+	start := time.Now()
+	if err := s.Put(k, []byte("two")); err != nil {
+		t.Fatalf("a write during the reader's read: %v", err)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("the write waited %v for the reader's read", took)
+	}
+	_ = tx.Rollback() //nolint:errcheck // test
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if key.closed {
+		t.Error("closing the reader closed the store's key")
+	}
+	if got, err := s.Get(k); err != nil || string(got) != "two" {
+		t.Errorf("after the reader closed: %q, %v", got, err)
+	}
+}
+
+// closeRecorder is a key that says whether it was closed.
+type closeRecorder struct {
+	CryptoOracle
+	closed bool
+}
+
+func (c *closeRecorder) Close() { c.closed = true }

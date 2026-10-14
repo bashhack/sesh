@@ -196,3 +196,19 @@ func (s *Store) audit(eventType, entryID, detail string) {
 		fmt.Fprintf(os.Stderr, "audit log write failed: %v\n", err)
 	}
 }
+
+// Reader is the vault opened again, on its own connection, for a long read
+// (sesh doctor's checks) that would otherwise hold the one connection this
+// store has, and with it every other read and write, until it's done. It
+// shares this store's key, which its Close leaves open.
+func (s *Store) Reader() (*Store, error) {
+	db, err := openDB(s.path)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{db: db, oracle: sharedOracle{s.oracle}, path: s.path, trashDays: s.trashDays, historyKeep: s.historyKeep}, nil
+}
+
+// sharedOracle is another store's key, which closing this one leaves open:
+// it has no Close.
+type sharedOracle struct{ CryptoOracle }
