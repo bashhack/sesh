@@ -2066,3 +2066,36 @@ func TestSidebarDeepFolder(t *testing.T) {
 		t.Errorf("the deepest folder's count:\n%s", s)
 	}
 }
+
+// A trash of one marked entry names it shortened, as the other questions do.
+func TestMarkedTrashLongName(t *testing.T) {
+	f := filedFake()
+	for i := range f.entries {
+		f.entries[i].Key.Service = strings.Repeat("git-long-name-", 18) + fmt.Sprint(i)
+	}
+	a := newApp(t, f, Options{})
+	a.press("down", "down", "space", "ctrl+k", "d")
+	if q := a.ov.question; !strings.Contains(q, "…") || strings.Count(q, "git-long-name") > 8 {
+		t.Errorf("the question's name isn't shortened: %q", q)
+	}
+	a.press("esc", "esc", "zzz") // the mark kept, its entry no longer listed
+	a.press("ctrl+k", "d")
+	if q := a.ov.question; !strings.Contains(q, "…") || !strings.Contains(q, "not shown") {
+		t.Errorf("a mark not shown, with a long name: %q", q)
+	}
+}
+
+// A reveal that comes back once its entry is no longer listed isn't kept.
+func TestRevealLandsOnNothingListed(t *testing.T) {
+	f := filedFake()
+	a := wideApp(t, f)
+	_, read := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	entries := f.entries
+	f.entries, f.changed = nil, true // another command empties the vault
+	a.tick(time.Second)
+	f.entries = entries
+	a.run(read)
+	if a.shown != nil {
+		t.Error("a reveal was kept for an entry not listed")
+	}
+}

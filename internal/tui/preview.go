@@ -180,7 +180,8 @@ func whatsHidden(k vault.Kind) string {
 func (m *Model) gotReveal(msg *revealMsg) tea.Cmd {
 	m.revealing = false
 	r := &revealed{k: msg.k, secret: msg.secret, fields: msg.fields, until: m.opts.Now().Add(revealFor)}
-	if msg.epoch != m.epoch || m.v == nil || m.selKey != msg.k {
+	if e := m.selected(); msg.epoch != m.epoch || m.v == nil || e == nil || e.Key != msg.k {
+		// Not for the entry selected now, or none is: not shown.
 		r.wipe()
 		return nil
 	}

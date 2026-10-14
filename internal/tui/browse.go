@@ -484,9 +484,9 @@ func (m *Model) confirmDeleteMany(keys []vault.Key) tea.Cmd {
 	question := "Move " + countOf(len(keys)) + " to the trash? They can be put back from there."
 	switch h := m.hiddenMarks(); {
 	case len(keys) == 1 && h == 1:
-		question = "Move " + kindName(keys[0]) + " to the trash? It's marked, but not shown in the list now. It can be put back from there."
+		question = "Move " + short(kindName(keys[0])) + " to the trash? It's marked, but not shown in the list now. It can be put back from there."
 	case len(keys) == 1:
-		question = "Move " + kindName(keys[0]) + " to the trash? It can be put back from there."
+		question = "Move " + short(kindName(keys[0])) + " to the trash? It can be put back from there."
 	case h > 0:
 		question = fmt.Sprintf("Move %s to the trash, %d of them not shown in the list now? They can be put back from there.", countOf(len(keys)), h)
 	}
