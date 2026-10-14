@@ -44,8 +44,9 @@ func TestUI_ChangePassword(t *testing.T) {
 			t.Errorf("missing %q in %q", want, said)
 		}
 	}
-	if !strings.HasPrefix(ch.OldBackups, "1 backup made before this change still opens with the old master password, in ") {
-		t.Errorf("old backups: %q", ch.OldBackups)
+	if !strings.HasPrefix(ch.OldBackups, "1 backup made before this change still opens with the old master password, in ") ||
+		!strings.HasSuffix(ch.OldBackups, "If the old master password may have leaked, delete it.") || ch.Renew != "Delete it and make a fresh backup?" {
+		t.Errorf("old backups: %q, %q", ch.OldBackups, ch.Renew)
 	}
 	if ch.Vault == nil {
 		t.Fatal("not opened again")

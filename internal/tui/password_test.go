@@ -123,7 +123,7 @@ func TestChangePasswordMeanwhile(t *testing.T) {
 
 // Backups made before are offered for deleting, as sesh --rekey offers them.
 func TestChangePasswordOldBackups(t *testing.T) {
-	a, asked := passwordApp(t, newFake(), Changed{Vault: newFake(), Said: []string{"Changed."}, OldBackups: "2 backups made before this change still open with the old master password, in ~/b."}, nil)
+	a, asked := passwordApp(t, newFake(), Changed{Vault: newFake(), Said: []string{"Changed."}, OldBackups: "2 backups made before this change still open with the old master password, in ~/b.", Renew: "Delete them and make a fresh backup?"}, nil)
 	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
 	if a.ov == nil || a.ov.kind != panelConfirm || !strings.Contains(a.ov.question, "Delete them and make a fresh backup?") {
 		t.Fatalf("panel %+v", a.ov)
@@ -195,7 +195,7 @@ func TestChangePasswordLifetime(t *testing.T) {
 
 // Ctrl-C during the change quits once it's done, not under it.
 func TestChangePasswordQuit(t *testing.T) {
-	a, _ := passwordApp(t, newFake(), Changed{Vault: newFake(), Said: []string{"Changed."}}, nil)
+	a, _ := passwordApp(t, newFake(), Changed{Vault: newFake(), Said: []string{"Changed.", "warning: could not lock the sesh agent."}, OldBackups: "2 backups still open."}, nil)
 	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
 	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.press("ctrl+c")
@@ -203,8 +203,8 @@ func TestChangePasswordQuit(t *testing.T) {
 		t.Fatal("quit before the change was done")
 	}
 	a.run(change)
-	if !a.quit {
-		t.Error("didn't quit once it was done")
+	if !a.quit || a.Afterword() != "Changed. warning: could not lock the sesh agent. 2 backups still open." {
+		t.Errorf("quit %v, said after: %q", a.quit, a.Afterword())
 	}
 }
 

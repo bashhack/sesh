@@ -84,7 +84,12 @@ func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, er
 	if err == nil {
 		all, lerr := s.List()
 		if len(all) > 0 {
-			ch.OldBackups = oldBackupsSaid(len(all), "master password", s.Dir)
+			them := "them"
+			if len(all) == 1 {
+				them = "it"
+			}
+			ch.OldBackups = oldBackupsSaid(len(all), "master password", s.Dir) + " If the old master password may have leaked, delete " + them + "."
+			ch.Renew = "Delete " + them + " and make a fresh backup?"
 		}
 		err = lerr
 	}

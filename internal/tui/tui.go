@@ -228,6 +228,8 @@ type Model struct {
 	clipUntil           time.Time // when the clipboard clears what was copied
 
 	quitErr error
+	// afterword is said once the app has ended.
+	afterword string
 
 	v *gate // nil while locked
 
@@ -370,6 +372,10 @@ func (m *Model) restyle() {
 // Err is why the app ended, when it wasn't asked to: too many wrong
 // passwords, or the vault couldn't be read.
 func (m *Model) Err() error { return m.quitErr }
+
+// Afterword is what the app has left to say once it has ended; "" when
+// nothing.
+func (m *Model) Afterword() string { return m.afterword }
 
 // Close waits for reads still running, wipes what the app holds, and
 // closes the vault.

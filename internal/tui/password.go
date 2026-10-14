@@ -14,8 +14,9 @@ type Changed struct {
 	// when it couldn't be, and the app locks.
 	Vault Vault
 	// OldBackups says the backups made before the change, which still
-	// open with the old master password; "" when there are none.
-	OldBackups string
+	// open with the old master password; "" when there are none. Renew
+	// asks whether to delete them and make a fresh one.
+	OldBackups, Renew string
 	// Said is what the change did, then what else to know.
 	Said []string
 }
@@ -82,10 +83,19 @@ func (m *Model) changed(msg *changedMsg) tea.Cmd {
 	m.changing = false
 	m.lastKey = m.opts.Now()
 	cmd := m.takeChange(msg)
-	if m.quitAfter {
-		return tea.Quit
+	if !m.quitAfter {
+		return cmd
 	}
-	return cmd
+	// Said once the app has ended, since it won't be on screen.
+	switch {
+	case errors.Is(msg.err, ErrWrongPassword):
+		m.afterword = "The master password wasn't changed: that's not the current one."
+	case msg.err != nil:
+		m.afterword = "The master password wasn't changed: " + msg.err.Error()
+	default:
+		m.afterword = strings.TrimSpace(strings.Join(msg.ch.Said, " ") + " " + msg.ch.OldBackups)
+	}
+	return tea.Quit
 }
 
 // takeChange is changed, but for a quit asked meanwhile.
@@ -112,7 +122,7 @@ func (m *Model) takeChange(msg *changedMsg) tea.Cmd {
 	}
 	said := strings.Join(msg.ch.Said, " ")
 	if msg.ch.OldBackups != "" && msg.ch.Vault == nil {
-		said += " " + msg.ch.OldBackups + " If the old master password may have leaked, delete them."
+		said += " " + msg.ch.OldBackups
 	}
 	switch {
 	case msg.ch.Vault == nil:
@@ -133,7 +143,7 @@ func (m *Model) takeChange(msg *changedMsg) tea.Cmd {
 	m.unlockedAt, m.lastKeepAlive = now, now
 	back := m.ov
 	if msg.ch.OldBackups != "" && m.opts.RenewBackups != nil {
-		m.ov = m.confirm(back, "Master password changed", said+"\n\n"+msg.ch.OldBackups+" If the old master password may have leaked, delete them. Delete them and make a fresh backup?", func() tea.Cmd {
+		m.ov = m.confirm(back, "Master password changed", said+"\n\n"+msg.ch.OldBackups+" "+msg.ch.Renew, func() tea.Cmd {
 			m.ov = back
 			return m.renewBackups()
 		})

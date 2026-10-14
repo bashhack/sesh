@@ -83,6 +83,11 @@ func runUI(app *App, args []string) error {
 	if err != nil {
 		return fmt.Errorf("sesh ui: %w", err)
 	}
+	if said := m.Afterword(); said != "" {
+		if _, err := fmt.Fprintln(app.Stderr, said); err != nil {
+			return err
+		}
+	}
 	return m.Err()
 }
 
