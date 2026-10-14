@@ -7,8 +7,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
 	"github.com/bashhack/sesh/internal/kdf"
@@ -254,8 +256,13 @@ func gcmOpen(key, ciphertext []byte) ([]byte, error) {
 type wipingBuffer struct{ b []byte }
 
 func (w *wipingBuffer) Write(p []byte) (int, error) {
-	if len(w.b)+len(p) > cap(w.b) {
-		grown := make([]byte, len(w.b), max(2*cap(w.b), len(w.b)+len(p), 4096))
+	// Sizes stay below half the largest int, so doubling one can't wrap.
+	const most = math.MaxInt / 4
+	if len(p) > most || len(w.b) > most-len(p) {
+		return 0, errors.New("the export is too large to hold in memory")
+	}
+	if need := len(w.b) + len(p); need > cap(w.b) {
+		grown := make([]byte, len(w.b), max(2*min(cap(w.b), most), need, 4096))
 		copy(grown, w.b)
 		secure.SecureZeroBytes(w.b[:cap(w.b)])
 		w.b = grown
