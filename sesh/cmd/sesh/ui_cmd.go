@@ -161,7 +161,10 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		ChangePassword: func(current, next []byte) (tui.Changed, error) {
 			return uiChangePassword(cfg, current, next)
 		},
-		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
+		RenewBackups:   func() (string, error) { return uiRenewBackups(dbPath) },
+		Recovery:       func() (tui.Recovery, error) { return uiRecovery(dbPath) },
+		NewRecovery:    func() (*tui.NewRecovery, error) { return uiNewRecovery(dbPath) },
+		RemoveRecovery: func() (tui.Done, error) { return uiRemoveRecovery(dbPath) },
 		Unlock: func(pw []byte) (tui.Vault, error) {
 			store, err := reopenWith(cfg, pw)
 			if err != nil {

@@ -143,20 +143,30 @@ type fieldRow struct {
 // custom field's.
 type form struct {
 	submit func() tea.Cmd // checks the inputs and saves
-	back   *form          // the form a field's form returns to
-	title  string
-	err    string
+	cancel func()         // what Esc closing it does, besides; nil: nothing
+	// lost is what to say of it when a lock throws it away; nil: nothing.
+	lost  func() string
+	back  *form // the form a field's form returns to
+	title string
+	err   string
 	// enterDone is what Enter on the last input does, which submits the
 	// form; "" when Enter only moves on, and Ctrl-S saves.
 	enterDone string
 	// working says the form is being submitted, instead of "Saving…".
 	working string
-	inputs  []*input
-	focus   int
-	row     int // the field a field's form edits; -1 for a new one
-	saving  bool
-	changed bool // something was typed or chosen
-	leaving bool // Esc was pressed once on a changed form
+	// shown is drawn above the inputs, unwrapped where it fits (a key to
+	// write down), and note under it.
+	shown, note string
+	// quitting is said when Ctrl-C while it's saving waits for the save
+	// to quit; "" quits at once.
+	quitting string
+	inputs   []*input
+	focus    int
+	row      int // the field a field's form edits; -1 for a new one
+	saving   bool
+	failed   bool // a save failed, and can be tried again
+	changed  bool // something was typed or chosen
+	leaving  bool // Esc was pressed once on a changed form
 }
 
 // textInput is a line of text, at first value.
@@ -226,6 +236,57 @@ func (f *form) last() bool {
 		}
 	}
 	return true
+}
+
+// formHead is what's drawn above f's inputs, the error lines to draw
+// below them, and the room left for the inputs, keeping the focused one's
+// lines (focusLines) and the hint's (hintLines) in view. The window is
+// shared out in turn: the focused input, what's shown (a key to write
+// down: drawn whole), the error, then the note, whose end is cut; blank
+// lines between go first.
+func (m *Model) formHead(f *form, inner, focusLines, hintLines int, errLines []string) (head, errs []string, room int) {
+	th := m.th
+	// The card's title, the line under it, the line above the hint, and
+	// its border, take 5 lines, and the hint hintLines.
+	left := m.height - 5 - hintLines - focusLines
+	if f.shown != "" {
+		shown := f.shown
+		if lipgloss.Width(shown)+4 <= inner {
+			shown = "    " + shown
+		}
+		key := strings.Split(th.accented().Bold(true).Width(inner).Render(shown), "\n")
+		if left > len(key) {
+			head = append(head, "")
+		}
+		head = append(head, key...)
+		left -= len(head)
+	}
+	left = max(left, 0)
+	if len(errLines) > left {
+		// Without its blank line, then cut, saying so.
+		errLines = errLines[1:]
+		if len(errLines) > left {
+			errLines = errLines[:left]
+			if left > 0 {
+				errLines[left-1] = ansi.Truncate(errLines[left-1], inner-1, "") + lipgloss.NewStyle().Foreground(th.bad).Render("…")
+			}
+		}
+	}
+	left -= len(errLines)
+	if f.note != "" && left >= 2 {
+		note := strings.Split(th.style().Width(inner).Render(f.note), "\n")
+		if most := left - 1; len(note) > most {
+			note = append(note[:most-1], th.dimmed().Render("…"))
+		}
+		head = append(head, "")
+		head = append(head, note...)
+		left -= 1 + len(note)
+	}
+	if left >= 1 {
+		head = append(head, "")
+		left--
+	}
+	return head, errLines, max(focusLines+left, focusLines)
 }
 
 // wipe overwrites the secrets the form, and the forms it returns to, hold.
@@ -334,11 +395,9 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 	if f.saving {
 		switch {
 		case msg.String() != "ctrl+c":
-		case m.changing:
-			// A change cut off between its commit and what follows it
-			// would leave Touch ID unlock, and the agent, on the old key.
+		case f.quitting != "":
 			m.quitAfter = true
-			f.working = "Quitting once the master password is changed…"
+			f.working = f.quitting
 		default:
 			return tea.Quit
 		}
@@ -366,6 +425,9 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 		// stays in its entry's form as it was.
 		f.wipeOwn()
 		m.form = f.back
+		if f.cancel != nil {
+			f.cancel()
+		}
 		return nil
 	case "tab":
 		f.move(1)
@@ -769,28 +831,23 @@ func (m *Model) drawForm(base string) string {
 	}
 	// What doesn't fit is scrolled away, keeping the focused input, or the
 	// field chosen in it, shown.
-	room := max(m.height-10-len(errLines), 1)
 	var all []string
-	focusTop := 0
+	focusTop, focusLines := 0, 1
 	for i, b := range blocks {
 		if b == nil {
 			continue
 		}
+		// Line by line, as the card wraps them: a label can.
+		b = strings.Split(lipgloss.NewStyle().Width(inner).Render(strings.Join(b, "\n")), "\n")
 		if i == f.focus {
-			focusTop = len(all)
+			focusTop, focusLines = len(all), len(b)
 			if in := f.inputs[i]; in.kind == inputFields && len(in.rows) > 0 {
 				focusTop += 1 + in.row // its label, then the rows above
+				focusLines = 1
 			}
 		}
 		all = append(all, b...)
 	}
-	if len(all) > room {
-		top := min(max(focusTop-2, 0), len(all)-room)
-		all = all[top : top+room]
-	}
-	lines := []string{th.accented().Bold(true).Render(ansi.Truncate(f.title, inner, "…")), th.lines().Render(strings.Repeat("─", inner))}
-	lines = append(lines, all...)
-	lines = append(lines, errLines...)
 	hint := th.hints([2]string{"tab", "next"}, [2]string{"ctrl+s", "save"}, [2]string{"esc", "cancel"})
 	switch {
 	case f.saving && f.working != "":
@@ -804,7 +861,20 @@ func (m *Model) drawForm(base string) string {
 	case f.enterDone != "":
 		hint = th.hints([2]string{"↵", "next"}, [2]string{"esc", "cancel"})
 	}
-	lines = append(lines, "", hint)
+	room := max(m.height-10-len(errLines), 1)
+	var head []string
+	if f.shown != "" || f.note != "" {
+		head, errLines, room = m.formHead(f, inner, focusLines, lipgloss.Height(lipgloss.NewStyle().Width(inner).Render(hint)), errLines)
+	}
+	if len(all) > room {
+		top := min(max(focusTop-2, focusTop+focusLines-room, 0), focusTop, len(all)-room)
+		all = all[top : top+room]
+	}
+	lines := []string{th.accented().Bold(true).Render(ansi.Truncate(f.title, inner, "…")), th.lines().Render(strings.Repeat("─", inner))}
+	lines = append(lines, head...)
+	lines = append(lines, all...)
+	lines = append(lines, errLines...)
+	lines = append(lines, "", lipgloss.NewStyle().Width(inner).Render(hint))
 	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(th.accent).Padding(0, 2).Width(w).
 		Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 	x := max((m.width-lipgloss.Width(card))/2, 0)

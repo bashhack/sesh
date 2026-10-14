@@ -61,22 +61,13 @@ func makeRecoveryKey(wrap wrapFunc, dbPath string, verify []byte, cfg passwordPr
 	if cfg.readLine == nil {
 		return false, errors.New("a recovery key is shown once and has to be confirmed, so this needs a terminal")
 	}
-	k, err := newRecoveryKey()
+	p, err := prepareRecovery(wrap, dbPath, verify)
 	if err != nil {
 		return false, err
 	}
-	pub, err := k.PublicKey()
-	if err != nil {
-		return false, err
-	}
-	id := agent.UnlockID(verify)
-	w, err := wrap(id, pub)
-	if err != nil {
-		return false, fmt.Errorf("wrap the vault key for the recovery key: %w", err)
-	}
-	s := k.String()
+	s := p.shown
 	note("\nYour recovery key:\n\n    %s\n\nWrite it down and keep it somewhere safe, away from this computer. If you forget\nyour master password, sesh recover uses it to set a new one. Anyone who has it\nand your vault file can open the vault. sesh doesn't keep a copy, so it can't\nshow it again.\n", s)
-	last := s[len(s)-4:]
+	last := p.last()
 	for try := range confirmTries {
 		prompt := "Type the last group (4 characters) to confirm you've saved it: "
 		if try > 0 {
@@ -90,7 +81,7 @@ func makeRecoveryKey(wrap wrapFunc, dbPath string, verify []byte, cfg passwordPr
 			return false, err
 		}
 		if sameGroup(typed, last) {
-			if err := database.WriteRecovery(dbPath, recovery.NewRecord(id, pub, w)); err != nil {
+			if err := p.save(); err != nil {
 				if errors.Is(err, database.ErrVaultKeyChanged) {
 					return false, errors.New("the master password was changed by another sesh command while this key was shown, so it wasn't saved and opens nothing: throw away the key you wrote down, and run: sesh recovery new")
 				}
@@ -103,6 +94,41 @@ func makeRecoveryKey(wrap wrapFunc, dbPath string, verify []byte, cfg passwordPr
 	note("No recovery key was set, since it wasn't confirmed. Make one when you're ready with: sesh recovery new")
 	return false, nil
 }
+
+// pendingRecovery is a recovery key made for a vault, shown but not yet
+// saved: until it is, it opens nothing.
+type pendingRecovery struct {
+	record *database.RecoveryRecord
+	dbPath string
+	shown  string // the key, as it's written down
+}
+
+// prepareRecovery makes a recovery key for the vault at dbPath, whose key
+// record's verify blob is verify; wrap seals the vault key to it.
+func prepareRecovery(wrap wrapFunc, dbPath string, verify []byte) (*pendingRecovery, error) {
+	k, err := newRecoveryKey()
+	if err != nil {
+		return nil, err
+	}
+	pub, err := k.PublicKey()
+	if err != nil {
+		return nil, err
+	}
+	id := agent.UnlockID(verify)
+	w, err := wrap(id, pub)
+	if err != nil {
+		return nil, fmt.Errorf("wrap the vault key for the recovery key: %w", err)
+	}
+	return &pendingRecovery{record: recovery.NewRecord(id, pub, w), dbPath: dbPath, shown: k.String()}, nil
+}
+
+// last is the key's last group, typed back to confirm it was saved.
+func (p *pendingRecovery) last() string { return p.shown[len(p.shown)-4:] }
+
+// save saves the key's record in the vault, replacing any other;
+// database.ErrVaultKeyChanged when the master password changed since it
+// was made, and it opens nothing.
+func (p *pendingRecovery) save() error { return database.WriteRecovery(p.dbPath, p.record) }
 
 // sameGroup compares a typed group with the key's, reading it the way
 // recovery.Parse does: any case, I or L for 1, O for 0.

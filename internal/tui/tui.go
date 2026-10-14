@@ -34,6 +34,17 @@ type lockedError struct{ why string }
 func (e *lockedError) Error() string        { return e.why }
 func (e *lockedError) Is(target error) bool { return target == ErrLocked }
 
+// ErrRefused is a change refused for good: trying it again can't help.
+var ErrRefused = errors.New("refused")
+
+// Refused is ErrRefused, saying why.
+func Refused(why string) error { return &refusedError{why: why} }
+
+type refusedError struct{ why string }
+
+func (e *refusedError) Error() string        { return e.why }
+func (e *refusedError) Is(target error) bool { return target == ErrRefused }
+
 // Trashed is an entry in the trash.
 type Trashed struct {
 	DeletedAt time.Time
@@ -209,7 +220,13 @@ type Options struct {
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
-	ClearAfter   time.Duration
+	// Recovery says the vault's recovery key's state; nil: the recovery
+	// key isn't offered. NewRecovery makes one, and RemoveRecovery
+	// removes it.
+	Recovery       func() (Recovery, error)
+	NewRecovery    func() (*NewRecovery, error)
+	RemoveRecovery func() (Done, error)
+	ClearAfter     time.Duration
 	// OldAfter is how long a secret can go unchanged before the health
 	// report calls it old; 0 doesn't check.
 	OldAfter time.Duration
@@ -567,6 +584,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.gotChecks(&msg)
 	case changedMsg:
 		return m.changed(&msg)
+	case newRecoveryMsg:
+		return m.showRecovery(&msg)
+	case recoveryMsg:
+		return m.gotRecovery(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"
@@ -819,11 +840,19 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.focusSearch()
 	m.ov = nil
 	if m.form != nil {
+		if m.form.lost != nil {
+			why += " " + m.form.lost()
+		}
 		m.form.wipe()
 		m.form = nil
 	}
 	m.status = ""
 	m.lockedWhy = why
+	if m.quitAfter {
+		// Ctrl-C waited for what the lock cut off: it quits now, saying why.
+		m.afterword = why
+		return tea.Batch(closing, tea.Quit)
+	}
 	return closing
 }
 

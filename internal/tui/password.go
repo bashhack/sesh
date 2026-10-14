@@ -33,7 +33,8 @@ func (m *Model) changePassword() tea.Cmd {
 	current := &input{kind: inputSecret, label: "current master password"}
 	next := &input{kind: inputSecret, label: "new master password", rated: true, hint: "at least 8 characters"}
 	again := &input{kind: inputSecret, label: "new master password again"}
-	f := &form{title: "Change the master password", inputs: []*input{current, next, again}, row: -1, enterDone: "change it", working: "Changing the master password…"}
+	f := &form{title: "Change the master password", inputs: []*input{current, next, again}, row: -1, enterDone: "change it",
+		working: "Changing the master password…", quitting: "Quitting once the master password is changed…"}
 	f.submit = func() tea.Cmd {
 		switch {
 		case len(current.secret) == 0:
@@ -141,17 +142,26 @@ func (m *Model) takeChange(msg *changedMsg) tea.Cmd {
 	m.epoch++
 	now := m.opts.Now()
 	m.unlockedAt, m.lastKeepAlive = now, now
-	back := m.ov
-	if msg.ch.OldBackups != "" && m.opts.RenewBackups != nil {
-		m.ov = m.confirm(back, "Master password changed", said+"\n\n"+msg.ch.OldBackups+" "+msg.ch.Renew, func() tea.Cmd {
+	m.afterChange(m.ov, "Master password changed", said, msg.ch.OldBackups, msg.ch.Renew)
+	return tea.Batch(closing, m.reread())
+}
+
+// afterChange says, over back, what a change did, and the backups it left
+// opening with what it replaced (old), asking whether to delete them
+// (ask), when there's a question to ask.
+func (m *Model) afterChange(back *overlay, title, said, old, ask string) {
+	if ask != "" && m.opts.RenewBackups != nil {
+		m.ov = m.confirm(back, title, said+"\n\n"+old+" "+ask, func() tea.Cmd {
 			m.ov = back
 			return m.renewBackups()
 		})
 		m.ov.danger = true
-	} else {
-		m.ov = &overlay{kind: panelNotice, back: back, title: "Master password changed", question: said}
+		return
 	}
-	return tea.Batch(closing, m.reread())
+	if old != "" {
+		said += "\n\n" + old
+	}
+	m.ov = &overlay{kind: panelNotice, back: back, title: title, question: said}
 }
 
 // renewBackups deletes the vault's backups and makes a fresh one.

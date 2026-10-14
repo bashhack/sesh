@@ -33,6 +33,7 @@ type Live struct {
 // settingsMsg is the settings, read for the panel.
 type settingsMsg struct {
 	err      error
+	recovery *Recovery // nil when it isn't shown
 	settings []Setting
 }
 
@@ -43,15 +44,11 @@ func (m *Model) openSettings() tea.Cmd {
 		return nil
 	}
 	m.ov = &overlay{kind: panelSettings, back: m.ov, title: "Settings and safety", loading: true}
-	read := m.opts.Settings
-	return func() tea.Msg {
-		s, err := read()
-		return settingsMsg{settings: s, err: err}
-	}
+	return m.refreshSettings()
 }
 
 // showSettings lists the settings in the open panel.
-func (m *Model) showSettings(settings []Setting) {
+func (m *Model) showSettings(settings []Setting, recovery *Recovery) {
 	ov := m.ov
 	sel := ov.sel
 	ov.items = nil
@@ -62,6 +59,9 @@ func (m *Model) showSettings(settings []Setting) {
 			run:    m.changePassword,
 			stay:   true,
 		})
+	}
+	if recovery != nil {
+		ov.items = append(ov.items, m.recoveryRow(*recovery))
 	}
 	ov.items = append(ov.items, item{
 		label:  fmt.Sprintf("%-24s %s", "Checks (sesh doctor)", "run…"),
@@ -187,19 +187,35 @@ func settingLoss(key, from, to string) string {
 
 // refreshSettings reads the settings again into the open panel.
 func (m *Model) refreshSettings() tea.Cmd {
-	read := m.opts.Settings
+	read, recovery := m.opts.Settings, m.opts.Recovery
 	return func() tea.Msg {
-		s, err := read()
-		return settingsMsg{settings: s, err: err}
+		var msg settingsMsg
+		msg.settings, msg.err = read()
+		if recovery != nil && msg.err == nil {
+			r, err := recovery()
+			msg.recovery, msg.err = &r, err
+		}
+		return msg
 	}
 }
 
-// gotSettings fills the settings panel, when it's open.
+// gotSettings fills the settings panel, when it's open: on top, or under
+// a question about one of its rows.
 func (m *Model) gotSettings(msg *settingsMsg) tea.Cmd {
-	if m.ov == nil || m.ov.kind != panelSettings {
+	panel := m.ov
+	for panel != nil && panel.kind != panelSettings {
+		panel = panel.back
+	}
+	if panel == nil {
 		return nil
 	}
-	return m.loaded(msg.err, func() { m.showSettings(msg.settings) })
+	top := m.ov
+	m.ov = panel
+	cmd := m.loaded(msg.err, func() { m.showSettings(msg.settings, msg.recovery) })
+	if m.ov == panel {
+		m.ov = top
+	}
+	return cmd
 }
 
 // settingDetail says more of the selected setting than its row: its
