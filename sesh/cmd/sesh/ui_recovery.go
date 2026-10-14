@@ -37,9 +37,12 @@ func uiNewRecovery(dbPath string) (*tui.NewRecovery, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, rerr := database.ReadRecovery(dbPath)
+	old, rerr := database.ReadRecovery(dbPath)
 	replacing := rerr == nil
 	conn, err := agent.DialExisting()
+	if agent.IsNotRunning(err) {
+		return nil, errors.New("a recovery key is made through sesh's agent, which isn't running; run: sesh recovery new")
+	}
 	if err != nil {
 		return nil, uiLocked(err)
 	}
@@ -48,9 +51,10 @@ func uiNewRecovery(dbPath string) (*tui.NewRecovery, error) {
 	if err != nil {
 		return nil, uiLocked(err)
 	}
-	return &tui.NewRecovery{
-		Key:     p.shown,
-		Matches: func(typed string) bool { return sameGroup(typed, p.last()) },
+	nr := &tui.NewRecovery{
+		Replacing: replacing,
+		Key:       p.shown,
+		Matches:   func(typed string) bool { return sameGroup(typed, p.last()) },
 		Save: func() (tui.Done, error) {
 			if err := p.save(); err != nil {
 				if errors.Is(err, database.ErrVaultKeyChanged) {
@@ -64,7 +68,11 @@ func uiNewRecovery(dbPath string) (*tui.NewRecovery, error) {
 			}
 			return d, nil
 		},
-	}, nil
+	}
+	if replacing {
+		nr.Made = old.CreatedAt
+	}
+	return nr, nil
 }
 
 // uiRemoveRecovery removes the recovery key of the vault at dbPath, as

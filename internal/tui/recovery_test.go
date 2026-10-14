@@ -2,10 +2,13 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // recoveryApp is the app with a fake recovery key, set or not, recording what's asked of it.
@@ -131,7 +134,7 @@ func TestRecoveryNotMade(t *testing.T) {
 	for _, c := range []struct {
 		err    error
 		locked bool
-	}{{errors.New("sesh's agent isn't running"), false}, {Locked("sesh's agent locked the vault."), true}} {
+	}{{errors.New("a recovery key is made through sesh's agent, which isn't running; run: sesh recovery new"), false}, {Locked("sesh's agent locked the vault."), true}} {
 		a := newApp(t, newFake(), Options{
 			Settings:    func() ([]Setting, error) { return nil, nil },
 			Recovery:    func() (Recovery, error) { return Recovery{Said: "none"}, nil },
@@ -141,7 +144,7 @@ func TestRecoveryNotMade(t *testing.T) {
 		switch {
 		case c.locked && a.v != nil:
 			t.Errorf("%v: not locked", c.err)
-		case !c.locked && (a.ov == nil || !strings.Contains(a.ov.err, "No recovery key was made: sesh's agent isn't running")):
+		case !c.locked && (a.ov == nil || !strings.Contains(a.ov.err, "No recovery key was made: a recovery key is made through sesh's agent, which isn't running")):
 			t.Errorf("%v: panel %+v", c.err, a.ov)
 		}
 	}
@@ -164,5 +167,163 @@ func TestRecoveryBackupsWarning(t *testing.T) {
 	a.press("enter")
 	if a.ov == nil || a.ov.kind != panelSettings {
 		t.Errorf("Enter went to %+v", a.ov)
+	}
+}
+
+// keyApp is the app showing a new recovery key, made replacing one or not, whose saves fail with each of fails in turn.
+func keyApp(t *testing.T, replacing bool, fails ...error) (*app, *[]string) {
+	t.Helper()
+	var asked []string
+	a := newApp(t, newFake(), Options{
+		Settings: func() ([]Setting, error) { return nil, nil },
+		Recovery: func() (Recovery, error) { return Recovery{Said: "none"}, nil },
+		NewRecovery: func() (*NewRecovery, error) {
+			asked = append(asked, "new")
+			return &NewRecovery{
+				Key: "ABCD-EFGH-JKMN-PQRS-TVWX-YZ01-2345", Replacing: replacing, Made: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC),
+				Matches: func(typed string) bool { return typed == "2345" },
+				Save: func() (Done, error) {
+					asked = append(asked, "save")
+					if len(fails) > 0 {
+						err := fails[0]
+						fails = fails[1:]
+						return Done{}, err
+					}
+					return Done{Said: "The recovery key is set for this vault."}, nil
+				},
+			}, nil
+		},
+	})
+	return a, &asked
+}
+
+// One another command made since the panel was read is replaced only after asking.
+func TestRecoveryMadeMeanwhile(t *testing.T) {
+	a, asked := keyApp(t, true)
+	a.press("ctrl+k", ",", "enter")
+	if a.form != nil || a.ov == nil || a.ov.kind != panelConfirm || !strings.Contains(a.ov.question, "already has a recovery key (made 2026-10-01)") {
+		t.Fatalf("form %v, panel %+v", a.form != nil, a.ov)
+	}
+	a.press("n")
+	if a.form != nil || a.ov == nil || a.ov.kind != panelSettings {
+		t.Fatalf("no: form %v, panel %+v", a.form != nil, a.ov)
+	}
+	a.press("enter", "wait", "y")
+	if a.form == nil || slices.Contains(*asked, "save") {
+		t.Errorf("yes: asked %q, form %v", *asked, a.form != nil)
+	}
+}
+
+// No to replacing one, or Esc from the menu, makes nothing.
+func TestRecoveryKept(t *testing.T) {
+	a, asked := recoveryApp(t, true)
+	a.press("ctrl+k", ",", "enter", "esc")
+	if a.ov == nil || a.ov.kind != panelSettings || len(*asked) != 0 {
+		t.Errorf("Esc from the menu: asked %q, panel %+v", *asked, a.ov)
+	}
+	a.press("enter", "n", "n")
+	if a.ov == nil || a.ov.kind != panelSettings || len(*asked) != 0 {
+		t.Errorf("no to replacing: asked %q, panel %+v", *asked, a.ov)
+	}
+	a.press("enter", "n", "esc")
+	if a.ov == nil || a.ov.kind != panelSettings || len(*asked) != 0 {
+		t.Errorf("Esc on replacing: asked %q, panel %+v", *asked, a.ov)
+	}
+}
+
+// A lock while the key is shown says it wasn't set; one while it's saving says it may not have been.
+func TestRecoveryLocked(t *testing.T) {
+	a, _ := keyApp(t, false)
+	a.press("ctrl+k", ",", "enter")
+	a.run(a.lock("No use for 5 minutes."))
+	if !strings.Contains(a.lockedWhy, "No use for 5 minutes. No recovery key was set, since it wasn't confirmed: throw away the one shown") {
+		t.Errorf("shown: %q", a.lockedWhy)
+	}
+	b, _ := keyApp(t, false)
+	b.press("ctrl+k", ",", "enter", "2345")
+	_, save := b.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	b.run(b.lock("No use for 5 minutes."))
+	b.run(save)
+	if !strings.Contains(b.lockedWhy, "may not have been saved; see with: sesh recovery status") || b.v != nil {
+		t.Errorf("saving: %q, locked %v", b.lockedWhy, b.v == nil)
+	}
+}
+
+// Ctrl-C while it's saving quits once it's saved, and says so after.
+func TestRecoveryQuit(t *testing.T) {
+	a, _ := keyApp(t, false)
+	a.press("ctrl+k", ",", "enter", "2345")
+	_, save := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.press("ctrl+c")
+	if a.quit || !strings.Contains(a.screen(), "Quitting once the recovery key is saved") {
+		t.Fatalf("quit %v\n%s", a.quit, a.screen())
+	}
+	a.run(save)
+	if !a.quit || !strings.HasPrefix(a.Afterword(), "The recovery key is set for this vault.") {
+		t.Errorf("quit %v, said after %q", a.quit, a.Afterword())
+	}
+}
+
+// A save that fails keeps the key shown, to try again.
+func TestRecoverySaveRetried(t *testing.T) {
+	a, asked := keyApp(t, false, errors.New("database is locked"))
+	a.press("ctrl+k", ",", "enter", "2345", "enter")
+	if a.form == nil || a.form.saving || !strings.Contains(a.form.err, "Not saved: database is locked") {
+		t.Fatalf("form %+v", a.form)
+	}
+	a.press("enter")
+	if a.form != nil || !slices.Equal(*asked, []string{"new", "save", "save"}) || !strings.Contains(a.screen(), "The recovery key is set") {
+		t.Errorf("asked %q, form %v\n%s", *asked, a.form != nil, a.screen())
+	}
+}
+
+// At the smallest window the key stays whole and the input in view; the note's end is cut.
+func TestRecoveryFormFits(t *testing.T) {
+	for _, size := range [][2]int{{minWidth, minHeight}, {60, 16}, {80, 24}} {
+		a, _ := keyApp(t, false)
+		a.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		a.press("ctrl+k", ",", "enter")
+		s := a.screen()
+		if strings.Count(s, "\n")+1 > size[1] || !strings.Contains(s, "ABCD-EFGH-JKMN-PQRS-TVWX-YZ01-2345") || !strings.Contains(s, "type its last group") || !strings.Contains(s, "done") {
+			t.Errorf("at %dx%d:\n%s", size[0], size[1], s)
+		}
+	}
+}
+
+// What was under way when the app locked doesn't reach what's open after it unlocks again.
+func TestRecoveryAcrossLock(t *testing.T) {
+	a, _ := keyApp(t, false)
+	a.press("ctrl+k", ",")
+	_, made := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.run(a.lock("You locked it."))
+	a.run(func() tea.Msg { return unlockedMsg{v: newFake()} })
+	a.run(made)
+	if a.form != nil {
+		t.Fatal("a key made before the lock was shown after it")
+	}
+	a.press("ctrl+k", ",", "enter", "2345")
+	_, save := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.run(a.lock("You locked it."))
+	a.run(func() tea.Msg { return unlockedMsg{v: newFake()} })
+	a.press("ctrl+k", ",", "enter")
+	open := a.form
+	a.run(save)
+	if a.form == nil || a.form != open || strings.Contains(a.screen(), "The recovery key is set") {
+		t.Errorf("a save from before the lock closed the form opened after it")
+	}
+}
+
+// A form with a note and many inputs fits the window, scrolling the inputs.
+func TestFormNoteFits(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
+	f := &form{title: "Many", row: -1, note: strings.Repeat("A long note that wraps. ", 6)}
+	for i := range 6 {
+		f.inputs = append(f.inputs, a.textInput(fmt.Sprintf("input %d", i), ""))
+	}
+	f.focusInput(0)
+	a.form = f
+	if s := a.screen(); strings.Count(s, "\n")+1 > 16 || !strings.Contains(s, "input 0") {
+		t.Errorf("drawn:\n%s", s)
 	}
 }

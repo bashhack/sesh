@@ -33,7 +33,8 @@ func (m *Model) changePassword() tea.Cmd {
 	current := &input{kind: inputSecret, label: "current master password"}
 	next := &input{kind: inputSecret, label: "new master password", rated: true, hint: "at least 8 characters"}
 	again := &input{kind: inputSecret, label: "new master password again"}
-	f := &form{title: "Change the master password", inputs: []*input{current, next, again}, row: -1, enterDone: "change it", working: "Changing the master password…"}
+	f := &form{title: "Change the master password", inputs: []*input{current, next, again}, row: -1, enterDone: "change it",
+		working: "Changing the master password…", quitting: "Quitting once the master password is changed…"}
 	f.submit = func() tea.Cmd {
 		switch {
 		case len(current.secret) == 0:

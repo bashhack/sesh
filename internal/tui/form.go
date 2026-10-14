@@ -144,22 +144,28 @@ type fieldRow struct {
 type form struct {
 	submit func() tea.Cmd // checks the inputs and saves
 	cancel func()         // what Esc closing it does, besides; nil: nothing
-	back   *form          // the form a field's form returns to
-	title  string
-	err    string
+	// lost is what to say of it when a lock throws it away; nil: nothing.
+	lost  func() string
+	back  *form // the form a field's form returns to
+	title string
+	err   string
 	// enterDone is what Enter on the last input does, which submits the
 	// form; "" when Enter only moves on, and Ctrl-S saves.
 	enterDone string
 	// working says the form is being submitted, instead of "Saving…".
 	working string
-	// note is said above the inputs.
-	note    string
-	inputs  []*input
-	focus   int
-	row     int // the field a field's form edits; -1 for a new one
-	saving  bool
-	changed bool // something was typed or chosen
-	leaving bool // Esc was pressed once on a changed form
+	// shown is drawn above the inputs, unwrapped where it fits (a key to
+	// write down), and note under it.
+	shown, note string
+	// quitting is said when Ctrl-C while it's saving waits for the save
+	// to quit; "" quits at once.
+	quitting string
+	inputs   []*input
+	focus    int
+	row      int // the field a field's form edits; -1 for a new one
+	saving   bool
+	changed  bool // something was typed or chosen
+	leaving  bool // Esc was pressed once on a changed form
 }
 
 // textInput is a line of text, at first value.
@@ -337,11 +343,9 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 	if f.saving {
 		switch {
 		case msg.String() != "ctrl+c":
-		case m.changing:
-			// A change cut off between its commit and what follows it
-			// would leave Touch ID unlock, and the agent, on the old key.
+		case f.quitting != "":
 			m.quitAfter = true
-			f.working = "Quitting once the master password is changed…"
+			f.working = f.quitting
 		default:
 			return tea.Quit
 		}
@@ -775,7 +779,32 @@ func (m *Model) drawForm(base string) string {
 	}
 	// What doesn't fit is scrolled away, keeping the focused input, or the
 	// field chosen in it, shown.
-	room := max(m.height-10-len(errLines), 1)
+	// A note's end is cut to leave the inputs room; what's shown isn't.
+	var head []string
+	if f.shown != "" {
+		shown := f.shown
+		if lipgloss.Width(shown)+4 <= inner {
+			shown = "    " + shown
+		}
+		head = append(head, "", th.accented().Bold(true).Width(inner).Render(shown))
+	}
+	if f.note != "" {
+		note := strings.Split(th.style().Width(inner).Render(f.note), "\n")
+		if most := m.height - 10 - len(errLines) - len(head) - 3; len(note) > most {
+			note = note[:max(most-1, 0)]
+			if most > 0 {
+				note = append(note, th.dimmed().Render("…"))
+			}
+		}
+		if len(note) > 0 {
+			head = append(head, "")
+			head = append(head, note...)
+		}
+	}
+	if len(head) > 0 {
+		head = append(head, "")
+	}
+	room := max(m.height-10-len(errLines)-len(head), 1)
 	var all []string
 	focusTop := 0
 	for i, b := range blocks {
@@ -795,9 +824,7 @@ func (m *Model) drawForm(base string) string {
 		all = all[top : top+room]
 	}
 	lines := []string{th.accented().Bold(true).Render(ansi.Truncate(f.title, inner, "…")), th.lines().Render(strings.Repeat("─", inner))}
-	if f.note != "" {
-		lines = append(lines, "", th.style().Width(inner).Render(f.note), "")
-	}
+	lines = append(lines, head...)
 	lines = append(lines, all...)
 	lines = append(lines, errLines...)
 	hint := th.hints([2]string{"tab", "next"}, [2]string{"ctrl+s", "save"}, [2]string{"esc", "cancel"})

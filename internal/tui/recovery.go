@@ -25,7 +25,10 @@ type NewRecovery struct {
 	Matches func(typed string) bool
 	// Save saves it, replacing the vault's other one.
 	Save func() (Done, error)
-	Key  string
+	// Made is when the key it replaces was made, if Replacing one.
+	Made      time.Time
+	Key       string
+	Replacing bool
 }
 
 // Done is what a change to the vault's safety did, and the backups it
@@ -38,11 +41,14 @@ type Done struct {
 // Messages from the recovery key's changes.
 type (
 	newRecoveryMsg struct {
-		err error
-		nr  *NewRecovery
+		err   error
+		nr    *NewRecovery
+		epoch int
+		asked bool // replacing one was asked about
 	}
 	recoveryMsg struct {
 		err  error
+		f    *form // the key's form, when one was saved; nil for a removal
 		done Done
 	}
 )
@@ -52,17 +58,13 @@ type (
 func (m *Model) openRecovery(r *Recovery) tea.Cmd {
 	settings := m.ov
 	if !r.Set {
-		return m.makeRecovery()
-	}
-	made := ""
-	if !r.Made.IsZero() {
-		made = " (made " + r.Made.Local().Format("2006-01-02") + ")"
+		return m.makeRecovery(false)
 	}
 	m.ov = &overlay{kind: panelMenu, back: settings, title: "Recovery key", items: []item{
 		{key: "n", label: "make a new one…", stay: true, run: func() tea.Cmd {
-			m.ov = m.confirm(settings, "Recovery key", "This vault already has a recovery key"+made+". A new one replaces it, and the old one stops working. Make a new one?", func() tea.Cmd {
+			m.ov = m.confirm(settings, "Recovery key", replaceQuestion(r.Made), func() tea.Cmd {
 				m.ov = settings
-				return m.makeRecovery()
+				return m.makeRecovery(true)
 			})
 			m.ov.danger = true
 			return nil
@@ -83,19 +85,29 @@ func (m *Model) openRecovery(r *Recovery) tea.Cmd {
 	return nil
 }
 
-// makeRecovery makes a recovery key, to show.
-func (m *Model) makeRecovery() tea.Cmd {
-	newKey := m.opts.NewRecovery
+// makeRecovery makes a recovery key, to show; asked is whether replacing
+// the one the panel showed was asked about.
+func (m *Model) makeRecovery(asked bool) tea.Cmd {
+	newKey, epoch := m.opts.NewRecovery, m.epoch
 	return func() tea.Msg {
 		nr, err := newKey()
-		return newRecoveryMsg{nr: nr, err: err}
+		return newRecoveryMsg{nr: nr, err: err, asked: asked, epoch: epoch}
 	}
 }
 
-// showRecovery shows a recovery key made, and saves it once its last
-// group is typed back.
+// replaceQuestion asks whether to replace the recovery key made at made.
+func replaceQuestion(made time.Time) string {
+	when := ""
+	if !made.IsZero() {
+		when = " (made " + made.Local().Format("2006-01-02") + ")"
+	}
+	return "This vault already has a recovery key" + when + ". A new one replaces it, and the old one stops working. Make a new one?"
+}
+
+// showRecovery shows a recovery key made, once replacing one is asked
+// about: one another command made since the panel was read is too.
 func (m *Model) showRecovery(msg *newRecoveryMsg) tea.Cmd {
-	if m.v == nil {
+	if msg.epoch != m.epoch || m.v == nil {
 		return nil
 	}
 	switch {
@@ -106,11 +118,35 @@ func (m *Model) showRecovery(msg *newRecoveryMsg) tea.Cmd {
 		return nil
 	}
 	nr := msg.nr
-	in := m.textInput("its last group (4 characters), to confirm you've saved it", "")
+	if nr.Replacing && !msg.asked {
+		settings := m.ov
+		m.ov = m.confirm(settings, "Recovery key", replaceQuestion(nr.Made), func() tea.Cmd {
+			m.ov = settings
+			m.keyForm(nr)
+			return nil
+		})
+		m.ov.danger = true
+		return m.refreshSettings()
+	}
+	m.keyForm(nr)
+	return nil
+}
+
+// keyForm shows the recovery key nr, and saves it once its last group is
+// typed back.
+func (m *Model) keyForm(nr *NewRecovery) {
+	in := m.textInput("type its last group (4 characters)", "")
 	f := &form{title: "Your recovery key", row: -1, inputs: []*input{in}, working: "Saving the recovery key…",
-		note: "    " + nr.Key + "\n\nWrite it down and keep it somewhere safe, away from this computer. If you forget your master password, sesh recover uses it to set a new one. Anyone who has it and your vault file can open the vault. sesh doesn't keep a copy, so it can't show it again."}
+		quitting: "Quitting once the recovery key is saved…", shown: nr.Key,
+		note: "Write it down and keep it somewhere safe, away from this computer. If you forget your master password, sesh recover uses it to set a new one. Anyone who has it and your vault file can open the vault. sesh doesn't keep a copy, so it can't show it again. Type its last group to confirm you've saved it."}
 	tries := 0
 	f.cancel = func() { m.recoverySaid("No recovery key was set, since it wasn't confirmed.", true) }
+	f.lost = func() string {
+		if f.saving {
+			return "The recovery key shown may not have been saved; see with: sesh recovery status"
+		}
+		return "No recovery key was set, since it wasn't confirmed: throw away the one shown, and make one again."
+	}
 	f.submit = func() tea.Cmd {
 		if !nr.Matches(in.value()) {
 			tries++
@@ -126,12 +162,11 @@ func (m *Model) showRecovery(msg *newRecoveryMsg) tea.Cmd {
 		save := nr.Save
 		return func() tea.Msg {
 			done, err := save()
-			return recoveryMsg{done: done, err: err}
+			return recoveryMsg{f: f, done: done, err: err}
 		}
 	}
 	f.focusInput(0)
 	m.form = f
-	return nil
 }
 
 // confirmTries is how many times a recovery key's last group may be typed
@@ -141,7 +176,24 @@ const confirmTries = 3
 // gotRecovery says what a change to the recovery key did, and offers the
 // backups it leaves opening with the one replaced.
 func (m *Model) gotRecovery(msg *recoveryMsg) tea.Cmd {
-	if m.form != nil && m.form.saving {
+	if f := msg.f; f != nil {
+		switch {
+		case m.form != f:
+			// Locked meanwhile, which said so.
+			return nil
+		case m.quitAfter:
+			m.form = nil
+			m.afterword = msg.done.Said + " " + msg.done.OldBackups
+			if msg.err != nil {
+				m.afterword = "The recovery key wasn't saved: " + msg.err.Error()
+			}
+			return tea.Quit
+		case msg.err != nil && !errors.Is(msg.err, ErrLocked):
+			// The key shown can still be saved.
+			f.saving = false
+			f.err = "Not saved: " + msg.err.Error() + " Press Enter to try again, or Esc to leave it unsaved."
+			return nil
+		}
 		m.form = nil
 	}
 	if m.v == nil {

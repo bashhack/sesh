@@ -829,6 +829,9 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.focusSearch()
 	m.ov = nil
 	if m.form != nil {
+		if m.form.lost != nil {
+			why += " " + m.form.lost()
+		}
 		m.form.wipe()
 		m.form = nil
 	}
