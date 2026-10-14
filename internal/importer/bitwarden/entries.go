@@ -218,7 +218,7 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 		e.Key = vault.Key{Kind: vault.KindPassword, Service: service, Username: user}
 		e.Secret = []byte(l.Password)
 		e.Earlier = earlier
-		e.Updated = passwordSet(earlier, it.CreationDate, it.RevisionDate)
+		e.Updated = passwordSet(earlier, historyDates(it.PasswordHistory), it.CreationDate, it.RevisionDate)
 		e.Details = details
 		out = append(out, importer.Checked(&e))
 	}
@@ -395,23 +395,65 @@ func oldPasswords(history []json.RawMessage, lost map[string]int) []vault.Earlie
 	return out
 }
 
+// historyKept is how many entries Bitwarden keeps in an item's password
+// history, the newest (CipherService.adjustPasswordHistoryLength).
+const historyKept = 5
+
+// historyDates are the times in a login's password history, of its old
+// passwords and its hidden fields' old values alike; those that don't
+// read are left out.
+func historyDates(history []json.RawMessage) []time.Time {
+	var out []time.Time
+	for _, raw := range history {
+		var h struct {
+			LastUsedDate string `json:"lastUsedDate"`
+		}
+		if json.Unmarshal(raw, &h) != nil {
+			continue
+		}
+		if at, err := time.Parse(time.RFC3339Nano, h.LastUsedDate); err == nil {
+			out = append(out, at)
+		}
+	}
+	return out
+}
+
 // passwordSet is when a login's password was set, which sesh keeps as the
-// entry's update time: when the newest of its earlier passwords was
-// replaced, or, with none, when the login was made. Bitwarden's export has
-// no time of its own for that; its revisionDate moves with any edit, and
-// is used only when neither is known.
-func passwordSet(earlier []vault.Earlier, created, revised time.Time) time.Time {
+// entry's update time. Bitwarden's export has no time of its own for that,
+// and its revisionDate moves with any edit of the item, so:
+//   - its earlier passwords' newest replacement, when there is one;
+//   - with none, and a history full of hidden fields' old values, the
+//     oldest of those: a password change, if any, was before it;
+//   - with none otherwise, when the login was made (a password first set
+//     later, on a login made without one, leaves no trace);
+//   - and never after its last edit, revised, which the server dates: a
+//     history's times are the device's.
+//
+// An earlier password with no time says only that it changed: revised.
+func passwordSet(earlier []vault.Earlier, history []time.Time, created, revised time.Time) time.Time {
 	var newest time.Time
+	undated := false
 	for _, e := range earlier {
-		if e.ReplacedAt.After(newest) {
+		if e.ReplacedAt.IsZero() {
+			undated = true
+		} else if e.ReplacedAt.After(newest) {
 			newest = e.ReplacedAt
 		}
 	}
+	set := created
 	switch {
 	case !newest.IsZero():
-		return newest
-	case !created.IsZero():
-		return created
+		set = newest
+	case undated:
+		set = revised
+	case len(history) >= historyKept:
+		set = slices.MinFunc(history, func(a, b time.Time) int { return a.Compare(b) })
 	}
-	return revised
+	switch {
+	case set.IsZero():
+		return revised
+	case !revised.IsZero() && set.After(revised):
+		return revised
+	}
+	return set
 }

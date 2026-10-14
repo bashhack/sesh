@@ -1322,7 +1322,12 @@ sesh import --from bitwarden bitwarden_export.json
 
 - **Logins** become password entries, with the first URL as the entry's URL (more go in fields `url-2`, `url-3`, ...), the notes, and the custom fields. A login's TOTP key becomes a TOTP entry beside it, with the same name.
 - **A login's old passwords** (Bitwarden keeps the last 5) go into the entry's [history](#password-history), each with when Bitwarden says it was replaced. Bitwarden keeps a hidden field's old value in the same list, written `name: value`, and doesn't mark which is which, so one with `: ` in it is left out and counted in the summary, as are the old values on other kinds of item, which can only be hidden fields'.
-- **A login's password is dated** when it was set, which [`sesh health`](#password-health-sesh-health) uses to say it's old: when the newest of its old passwords was replaced, or, with none, when the login was made. Bitwarden's export has no date for the password itself, and its edit date moves with any change to the item. An old password with `: ` in it, left out as above, doesn't count.
+- **A login's password is dated** when it was set, which [`sesh health`](#password-health-sesh-health) uses to say it's old. Bitwarden's export has no date for the password itself, and its edit date moves with any change to the item, so sesh works it out:
+  - **From the history:** when the newest of the login's old passwords was replaced. An old password with `: ` in it, left out as above, doesn't count.
+  - **From when it was made:** with no old passwords, when the login was made. A password first added to a login made without one leaves no trace in the export, so such a login is dated from its making.
+  - **From the oldest kept value:** if the history is full (Bitwarden keeps 5) of hidden fields' old values, a password change, if any, came before the oldest of them, so that's the date.
+  - **Never after the item's last edit:** the history's times come from the device that made the change, so a device whose clock ran fast is corrected.
+  - **New entries only:** this date goes on an entry the import adds. One that replaces an entry already in sesh (`--on-conflict overwrite`) is dated as any change in sesh is.
 - **Secure notes** become secure notes.
 - **Cards, identities, and SSH keys** become secure notes with fields: numbers, codes, and private keys as secret fields, the rest plain. The note is the item's notes, or a line saying what it is ("Visa card ending 4242").
 - **Custom fields:** hidden ones are secret, text and boolean ones plain, and a text one of several lines secret too. Linked fields, which only point at another value, aren't kept.

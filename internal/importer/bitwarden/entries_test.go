@@ -320,22 +320,48 @@ func TestEntries_PasswordDate(t *testing.T) {
 	}
 }
 
-// The newest replacement wins whatever the order; with none, the making; with neither, the last edit.
+// The newest replacement wins whatever the order, never after the last edit; without one,
+// a full history of field values dates it by its oldest, and otherwise the making.
 func TestPasswordSet(t *testing.T) {
-	t1, t2, t3 := time.Unix(100, 0), time.Unix(200, 0), time.Unix(300, 0)
+	t1, t2, t3, t4 := time.Unix(100, 0), time.Unix(200, 0), time.Unix(300, 0), time.Unix(400, 0)
+	five := []time.Time{t3, t3, t2, t3, t3}
 	for _, c := range []struct {
 		name             string
 		created, revised time.Time
 		want             time.Time
 		earlier          []vault.Earlier
+		history          []time.Time
 	}{
-		{"history, oldest first", t1, t3, t2, []vault.Earlier{{ReplacedAt: t1}, {ReplacedAt: t2}}},
-		{"history without times", t1, t3, t1, []vault.Earlier{{}}},
-		{"no history", t1, t3, t1, nil},
-		{"nothing known but the edit", time.Time{}, t3, t3, nil},
+		{"history, oldest first", t1, t3, t2, []vault.Earlier{{ReplacedAt: t1}, {ReplacedAt: t2}}, []time.Time{t1, t2}},
+		{"a device clock ahead", t1, t2, t2, []vault.Earlier{{ReplacedAt: t4}}, []time.Time{t4}},
+		{"an earlier password without a time", t1, t3, t3, []vault.Earlier{{}}, nil},
+		{"no history", t1, t3, t1, nil, nil},
+		{"a few field values, no password", t1, t3, t1, nil, []time.Time{t2, t3}},
+		{"a full history of field values", t1, t4, t2, nil, five},
+		{"nothing known but the edit", time.Time{}, t3, t3, nil, nil},
 	} {
-		if got := passwordSet(c.earlier, c.created, c.revised); !got.Equal(c.want) {
+		if got := passwordSet(c.earlier, c.history, c.created, c.revised); !got.Equal(c.want) {
 			t.Errorf("%s: %v; want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// From an export: an item edited after its making, with no password history, is dated by the making;
+// a field value newer than its last password change doesn't date the password.
+func TestEntries_PasswordDateEdits(t *testing.T) {
+	made, edited := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
+	exp := Export{Items: []Item{
+		{Type: TypeLogin, Name: "edited", CreationDate: made, RevisionDate: edited, Login: &Login{Username: "u", Password: "pw"}},
+		{Type: TypeLogin, Name: "fields", CreationDate: made, RevisionDate: edited, Login: &Login{Username: "u", Password: "pw"}, PasswordHistory: []json.RawMessage{
+			[]byte(`{"password":"pin: 1234","lastUsedDate":"2025-05-01T00:00:00Z"}`),
+			[]byte(`{"password":"old","lastUsedDate":"2022-02-02T00:00:00Z"}`),
+		}},
+	}}
+	got := map[string]time.Time{}
+	for _, e := range Entries(&exp) {
+		got[e.Key.Service] = e.Updated.UTC()
+	}
+	if !got["edited"].Equal(made) || !got["fields"].Equal(time.Date(2022, 2, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("dates = %v", got)
 	}
 }
