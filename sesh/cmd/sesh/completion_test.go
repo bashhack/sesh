@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +22,7 @@ func TestComplete(t *testing.T) {
 		lacks []string // none of these
 		files bool
 	}{
-		{name: "subcommands", words: all(""), want: all("agent", "audit", "backup", "completion", "config", "doctor", "edit", "folder", "history", "import", "init", "inject", "recover", "recovery", "restore", "run", "show", "tag", "touchid", "trash")},
+		{name: "subcommands", words: all(""), want: all("agent", "audit", "backup", "completion", "config", "doctor", "edit", "folder", "history", "import", "init", "inject", "recover", "recovery", "restore", "run", "show", "tag", "touchid", "trash", "ui")},
 		{name: "subcommand prefix", words: all("co"), want: all("completion", "config")},
 		{name: "run flags", words: all("run", "-"), has: all("--env", "--env-file", "--no-masking")},
 		{name: "run's command", words: all("run", "--env", "K=sesh://api_key/x", "--", ""), files: true},
@@ -68,7 +69,7 @@ func TestComplete(t *testing.T) {
 		{name: "completion shells", words: all("completion", ""), want: all("bash", "fish", "zsh")},
 		{name: "init flags", words: all("init", "--"), want: all("--force", "--db-path")},
 		{name: "config takes nothing", words: all("config", "")},
-		{name: "no words", words: nil, want: all("agent", "audit", "backup", "completion", "config", "doctor", "edit", "folder", "history", "import", "init", "inject", "recover", "recovery", "restore", "run", "show", "tag", "touchid", "trash")},
+		{name: "no words", words: nil, want: all("agent", "audit", "backup", "completion", "config", "doctor", "edit", "folder", "history", "import", "init", "inject", "recover", "recovery", "restore", "run", "show", "tag", "touchid", "trash", "ui")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cands, files := complete(reg, tt.words)
@@ -348,5 +349,25 @@ func TestCompletionScript_Fish(t *testing.T) {
 				t.Errorf("fish offered:\n%s\nwant a line starting %q", out, tt.want)
 			}
 		})
+	}
+}
+
+// A first word that's no command is refused, naming the closest one.
+func TestCheckCommandWord(t *testing.T) {
+	for args, want := range map[string]string{
+		"sesh ui.":      `sesh has no command "ui."; did you mean: sesh ui`,
+		"sesh histroy":  `sesh has no command "histroy"; did you mean: sesh history`,
+		"sesh frobnick": `sesh has no command "frobnick"; the commands are listed by: sesh --help`,
+		"sesh x":        `sesh has no command "x"; the commands are listed by: sesh --help`,
+		"sesh ls":       `sesh has no command "ls"; the commands are listed by: sesh --help`,
+		"sesh trsh":     `sesh has no command "trsh"; did you mean: sesh trash`,
+		"sesh":          "",
+		"sesh ui":       "",
+		"sesh --list":   "",
+	} {
+		err := checkCommandWord(strings.Fields(args))
+		if got := fmt.Sprint(err); (want == "" && err != nil) || (want != "" && got != want) {
+			t.Errorf("%s: %v, want %q", args, err, want)
+		}
 	}
 }

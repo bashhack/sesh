@@ -471,7 +471,7 @@ max lifetime:   7h 22m remaining
 
 **Timeouts**
 
-Set `agent.idle_timeout` and `agent.max_lifetime` in the [config file](#configuration-file) to durations such as `30m` or `2h`; `0` disables either. The agent reads them once, when it starts. It reads the config file itself, so the values apply whichever program starts it, including an editor that doesn't load your shell profile. `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` override the file, but only when they're in the environment of the command that starts the agent.
+The idle timeout counts from the last use: an unlock, a secret read or stored, or a key pressed in [`sesh ui`](#searching-and-copying-at-a-terminal-sesh-ui). `sesh agent status` isn't a use. Set `agent.idle_timeout` and `agent.max_lifetime` in the [config file](#configuration-file) to durations such as `30m` or `2h`; `0` disables either. The agent reads them once, when it starts. It reads the config file itself, so the values apply whichever program starts it, including an editor that doesn't load your shell profile. `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` override the file, but only when they're in the environment of the command that starts the agent.
 
 - After changing them, run `sesh agent stop`; the next command starts an agent with the new values.
 
@@ -527,6 +527,8 @@ Audit log: 1,204 events since 2026-07-05 09:12. Events older than 90 days are re
 ```
 
 Like `--list`, it opens the vault, so it asks for your master password unless the agent is unlocked.
+
+In `sesh ui`, copying, showing an entry's notes (once each time it's unlocked, and again after another command changes the vault's entries), and revealing with Tab are each an `access`, saying which ("in sesh ui, to copy it", "to show its notes", "to reveal it"). The TOTP codes it draws aren't recorded: showing a code isn't reading it out, and an event every 30 seconds for each code on screen would bury the rest.
 
 **How long events are kept.** Each command that opens the vault removes events older than `audit.retention_days` (default `90`). Set it to `0` to keep everything. Either way, `sesh audit prune --older-than <days>` removes older events when you choose; `--older-than 0` removes them all.
 
@@ -981,6 +983,39 @@ Delete these 2 entries? [y/N]: y
 A delete asks first, for every provider: `y` or `yes` goes ahead. `-force` deletes without asking, and is needed without a terminal, as in a script; sesh says so before asking for the master password. Flags go before the IDs: in `-delete a b -force`, `-force` would be read as an ID, and sesh says so.
 
 Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) before they're deleted for good; `-purge` deletes for good straight away (`sesh -service password -purge -delete <id>`), and asks "for good". See [The trash](#the-trash).
+
+### Searching and copying at a terminal (`sesh ui`)
+
+`sesh ui` opens a search over every entry, on the terminal's alternate screen, so nothing it shows stays in the scrollback. It unlocks as any command does, before it draws.
+
+```
+╭─ sesh ──────────────────────────────────────────────────────────╮
+│ ⌕ git                                                    3 of 14 │
+├──────────────────────────────┬──────────────────────────────────┤
+│▌● GitHub               alice │ GitHub                           │
+│ ◷ GitHub           492 113   │ PASSWORD  ▸ Work                 │
+│ ● GitLab                     │ password  ••••••••               │
+│                              │ user      alice                  │
+│                              │ url       https://github.com     │
+│                              │ changed   3 days ago             │
+│                              │ ↵ copy  ·  tab reveal            │
+├──────────────────────────────┴──────────────────────────────────┤
+│ ↵ copy  ·  ↑↓ move  ·  esc clear      ✓ Copied GitHub (alice)'s… │
+╰─────────────────────────────────────────────────────────────────╯
+```
+
+- **Type to search,** matched and ranked as `--action search` does, with the letters matched picked out; with nothing typed, every entry is listed, the ones read most recently first (as the audit log records reads; showing an entry in the app isn't one).
+- **The selected entry is shown beside the list** when the window is wide enough: its kind, folder, username, URL, fields, tags, when it last changed, and its notes (a secure note's text); Shift-↑ and Shift-↓ scroll it when it's long. A TOTP entry's code is shown large, with a bar counting down the seconds it has left.
+- **Passwords and secret fields stay hidden** (`••••••••`) until **Tab** reveals them, for 30 seconds, until you move to another entry, or until Tab again.
+- **Enter copies** the selected entry's secret, or a TOTP entry's current code; **Ctrl-Y** copies its username. The clipboard clears after `clipboard_timeout`, as with `--clip`, and the footer counts down until it does.
+- **Ctrl-O opens the entry's URL** in the browser: a web address only (`http` or `https`; a bare host gets `https://`), so a stored URL can't open a file or another program.
+- **The mouse:** click an entry to select it; the wheel moves the selection, or scrolls the details when over them. While the app has the mouse, most terminals still select text with a key held: Option in iTerm2, Shift in many others.
+- **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; Tab reveals; Ctrl-Y copies the username; Ctrl-O opens the URL; Shift-↑ and Shift-↓ scroll the details; the search box edits as a line does (← →, Ctrl-A, Ctrl-E, Ctrl-W a word, Ctrl-U all); Esc clears the search, or quits when it's empty; Ctrl-C quits; `?`, with nothing searched, lists the keys.
+- **Colours** follow the terminal: dark or light, and fewer colours where the terminal shows fewer, or none with `NO_COLOR=1`.
+- **Using it keeps the agent unlocked:** while you press keys, it tells the agent the vault is in use, as a read would, so the agent's idle timer doesn't run out under you.
+- **It locks itself** after the agent's idle timeout (`agent.idle_timeout`) without a key pressed, after the agent's longest unlock (`agent.max_lifetime`) since the app unlocked, and, within a second, when the agent locks or stops (`sesh agent lock`, say) or another command changes the master password or restores the vault. It then shows nothing of the vault, and asks for the master password again, which it checks even when the agent is still unlocked; with Touch ID unlock on, Enter with nothing typed asks for a fingerprint instead, also when the agent is still unlocked. Three wrong passwords in a row close it.
+- **Changes by other commands** show up within a second.
+- **It needs a terminal;** to search from a script, use `sesh --service password --action search --query <words>`.
 
 ### The trash
 

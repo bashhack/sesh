@@ -125,3 +125,75 @@ func TestStore_DeleteManyLogsEach(t *testing.T) {
 		t.Errorf("logged %d deletions, want 2", deletes)
 	}
 }
+
+// CodeKey reads a TOTP entry's key without an audit event, and no other
+// kind of entry's secret.
+func TestCodeKey(t *testing.T) {
+	s := newTestStore(t)
+	code := vault.Key{Kind: vault.KindTOTP, Service: "github"}
+	pw := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	for _, k := range []vault.Key{code, pw} {
+		if err := s.Put(k, []byte("JBSWY3DPEHPK3PXP")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var before, after int
+	if err := s.db.QueryRow(`SELECT count(*) FROM audit_log WHERE event_type = 'access'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.CodeKey(code); err != nil || string(got) != "JBSWY3DPEHPK3PXP" {
+		t.Errorf("CodeKey = %q, %v", got, err)
+	}
+	if err := s.db.QueryRow(`SELECT count(*) FROM audit_log WHERE event_type = 'access'`).Scan(&after); err != nil || after != before {
+		t.Errorf("access events %d → %d, %v", before, after, err)
+	}
+	if _, err := s.CodeKey(pw); err == nil || !strings.Contains(err.Error(), "isn't a TOTP entry") {
+		t.Errorf("CodeKey of a password: %v", err)
+	}
+}
+
+// DataVersion changes when another connection commits.
+func TestDataVersion(t *testing.T) {
+	s := newTestStore(t)
+	v1, err := s.DataVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := Open(s.path, s.oracle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.db.Close() //nolint:errcheck // test cleanup
+	if err := other.Put(vault.Key{Kind: vault.KindPassword, Service: "x"}, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	if v2, err := s.DataVersion(); err != nil || v2 == v1 {
+		t.Errorf("DataVersion %d → %d, %v; want a change", v1, v2, err)
+	}
+}
+
+// The fingerprint changes when an entry or its tags do, not when only the
+// audit log is written.
+func TestFingerprint(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "x"}
+	if err := s.Put(k, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	f1, err := s.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Get(k); err != nil { // an audit row only
+		t.Fatal(err)
+	}
+	if f2, err := s.Fingerprint(); err != nil || f2 != f1 {
+		t.Errorf("a read changed the fingerprint: %v", err)
+	}
+	if err := s.Save(&vault.Entry{Key: k, Tags: []string{"work"}}, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	if f3, err := s.Fingerprint(); err != nil || f3 == f1 {
+		t.Errorf("a tag didn't change the fingerprint: %v", err)
+	}
+}

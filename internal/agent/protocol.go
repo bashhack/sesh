@@ -41,6 +41,8 @@ const (
 	TypeWrapKey       = "wrap_key"
 	TypeWrapKeyAck    = "wrap_key_ack"
 	TypeUnlockTouchID = "unlock_touchid" // answered with unlock_ack
+	TypeTouch         = "touch"
+	TypeTouchAck      = "touch_ack"
 )
 
 // Error codes returned in ErrorResponse.Code. Strings (not ints) so they
@@ -150,6 +152,10 @@ type UnlockTouchIDRequest struct {
 	Ciphertext   []byte `json:"ciphertext"`
 	Verify       []byte `json:"verify"`
 	Version      int    `json:"version"`
+	// Fresh asks for the fingerprint even when the agent already holds
+	// this vault's key: an app unlocking again, where a fingerprint asked
+	// for must be given.
+	Fresh bool `json:"fresh,omitempty"`
 }
 
 // KDFParams is the Argon2id parameter set on the wire. It is a separate
@@ -240,6 +246,22 @@ type StatusResponse struct {
 // encrypt and decrypt requests get not_unlocked until the next unlock.
 // Locking an already-locked agent succeeds.
 type LockRequest struct {
+	Type    string `json:"type"`
+	Version int    `json:"version"`
+}
+
+// TouchRequest says the vault UnlockID names is still in use, as by an
+// app that stays open, so the agent's idle timer starts again; nothing is
+// read. Refused like a decrypt when the agent holds no key, or another
+// vault's.
+type TouchRequest struct {
+	Type     string `json:"type"`
+	UnlockID string `json:"unlock_id"`
+	Version  int    `json:"version"`
+}
+
+// TouchResponse acknowledges a touch.
+type TouchResponse struct {
 	Type    string `json:"type"`
 	Version int    `json:"version"`
 }

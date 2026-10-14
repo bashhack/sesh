@@ -343,6 +343,17 @@ func (s *Server) dispatch(conn *net.UnixConn, env envelope, raw []byte) bool {
 		return s.dispatchEncrypt(conn, raw)
 	case TypeStatus:
 		return s.dispatchStatus(conn)
+	case TypeTouch:
+		var req TouchRequest
+		if err := decodeMessage(raw, &req); err != nil {
+			s.sendError(conn, ErrCodeBadRequest, err.Error())
+			return true
+		}
+		if err := s.keys.touch(req.UnlockID); err != nil {
+			s.sendError(conn, keystoreErrCode(err), err.Error())
+			return true
+		}
+		return writeJSON(conn, TouchResponse{Type: TypeTouchAck, Version: ProtocolVersion}) == nil
 	case TypeLock:
 		s.keys.lock("lock request")
 		return writeJSON(conn, LockResponse{Type: TypeLockAck, Version: ProtocolVersion}) == nil
@@ -413,7 +424,7 @@ func (s *Server) dispatchUnlockTouchID(conn *net.UnixConn, raw []byte) bool {
 	}
 	id := UnlockID(req.Verify)
 	w := touchid.Wrapped{EphemeralPub: req.EphemeralPub, Ciphertext: req.Ciphertext}
-	err := s.keys.UnlockTouchID(req.Verify, func() ([]byte, error) {
+	err := s.keys.UnlockTouchID(req.Verify, req.Fresh, func() ([]byte, error) {
 		return TouchIDUnwrap(req.KeyBlob, w, []byte(id))
 	})
 	if err == nil {

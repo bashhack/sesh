@@ -176,6 +176,7 @@ func TestStore_AfterAnotherRekey(t *testing.T) {
 		"delete many":        func() error { return other.DeleteMany([]vault.Key{k}) },
 		"set":                func() error { return other.SetSettings(k, vault.Settings{AWSMFADevice: "arn"}) },
 		"get":                func() error { _, err := other.Get(k); return err },
+		"check unlocked":     other.CheckUnlocked,
 		"edit, a new secret": func() error { _, err := other.Edit(k, EntryEdit{Secret: []byte("v")}); return err },
 		"edit, a rename": func() error {
 			to := vault.Key{Kind: vault.KindPassword, Service: "bank-2"}

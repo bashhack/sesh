@@ -245,7 +245,7 @@ func (m *Manager) SuggestionsIn(query string, in *ListFilter) ([]string, error) 
 	}
 	var best []string
 	for c := range candidates {
-		d := editDistance(w, c)
+		d := EditDistance(w, c)
 		switch {
 		case d == 0 || d > limit:
 		case d < limit:
@@ -258,9 +258,9 @@ func (m *Manager) SuggestionsIn(query string, in *ListFilter) ([]string, error) 
 	return best, nil
 }
 
-// editDistance counts the single-letter additions, removals, changes, and
+// EditDistance counts the single-letter additions, removals, changes, and
 // swaps of neighbours that turn a into b (optimal string alignment).
-func editDistance(a, b string) int {
+func EditDistance(a, b string) int {
 	x, y := []rune(a), []rune(b)
 	prev2 := make([]int, len(y)+1)
 	prev := make([]int, len(y)+1)

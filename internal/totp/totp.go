@@ -328,6 +328,36 @@ func GenerateConsecutiveCodesBytesWithParams(secret []byte, params Params) (curr
 	return current, next, nil
 }
 
+// CodeAt is the code secret (base32) gives at t, with params (zero values
+// meaning 6 digits, 30 seconds, SHA1), as the other generators make it.
+func CodeAt(secret []byte, params Params, t time.Time) (string, error) {
+	if params.Period > MaxTOTPPeriodSeconds {
+		return "", fmt.Errorf("TOTP period %d seconds exceeds maximum of %d", params.Period, MaxTOTPPeriodSeconds)
+	}
+	secretCopy := make([]byte, len(secret))
+	copy(secretCopy, secret)
+	defer secure.SecureZeroBytes(secretCopy)
+	secretStr := string(stripWhitespaceInPlace(secretCopy))
+	if secretStr == "" {
+		return "", fmt.Errorf("empty secret provided")
+	}
+	code, err := totp.GenerateCodeCustom(secretStr, t, validateOptsFromParams(params))
+	if err != nil {
+		return "", fmt.Errorf("failed to generate TOTP: %w", err)
+	}
+	return code, nil
+}
+
+// SecondsLeft is how long the code at t has left, for a period of params'
+// (30 seconds when unset).
+func SecondsLeft(params Params, t time.Time) int {
+	period := int64(30)
+	if params.Period > 0 {
+		period = int64(params.Period)
+	}
+	return int(period - t.Unix()%period)
+}
+
 // GenerateForTimeBytes generates a TOTP code for a specific time from a byte slice secret
 // The secret is expected to be a byte slice containing a base32-encoded string
 func GenerateForTimeBytes(secret []byte, t time.Time) (string, error) {

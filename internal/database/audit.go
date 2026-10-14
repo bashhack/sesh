@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -136,4 +137,33 @@ func (s *Store) Compact() error {
 		return fmt.Errorf("compact vault: %w", ErrVaultBusy)
 	}
 	return nil
+}
+
+// LastReads is, for each entry the audit log has a read of, the id of its
+// latest read: a higher id is a later read. Reads whose detail holds any
+// of ignoring are left out.
+func (s *Store) LastReads(ignoring ...string) (map[string]int64, error) {
+	var q strings.Builder
+	q.WriteString(`SELECT entry_id, MAX(id) FROM audit_log WHERE event_type = 'access' AND entry_id <> ''`)
+	args := make([]any, 0, len(ignoring))
+	for _, ig := range ignoring {
+		q.WriteString(` AND instr(COALESCE(detail, ''), ?) = 0`)
+		args = append(args, ig)
+	}
+	q.WriteString(` GROUP BY entry_id`)
+	rows, err := s.db.Query(q.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("read the audit log: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only query
+	out := map[string]int64{}
+	for rows.Next() {
+		var id string
+		var last int64
+		if err := rows.Scan(&id, &last); err != nil {
+			return nil, fmt.Errorf("read the audit log: %w", err)
+		}
+		out[id] = last
+	}
+	return out, rows.Err()
 }

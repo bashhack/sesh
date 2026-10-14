@@ -91,7 +91,17 @@ func (s *Store) GetFor(k vault.Key, reading string) ([]byte, error) {
 	return s.get(k, "Read: "+reading)
 }
 
-// get is Get, with detail as the audit event's.
+// CodeKey is the TOTP entry k's key, for drawing its codes on screen,
+// which the audit log doesn't record, as it does reading a secret: a code
+// shown isn't one copied or revealed. Only a TOTP entry's key is read so.
+func (s *Store) CodeKey(k vault.Key) ([]byte, error) {
+	if k.Kind != vault.KindTOTP {
+		return nil, fmt.Errorf("%s isn't a TOTP entry: only a TOTP key is read for drawing codes", k)
+	}
+	return s.get(k, "")
+}
+
+// get is Get, with detail as the audit event's; "" records none.
 func (s *Store) get(k vault.Key, detail string) ([]byte, error) {
 	var encData, salt []byte
 	err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`,
@@ -109,7 +119,9 @@ func (s *Store) get(k vault.Key, detail string) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("decrypt %s: %w", k, err)
 	}
-	s.audit("access", k.String(), detail)
+	if detail != "" {
+		s.audit("access", k.String(), detail)
+	}
 	return secret, nil
 }
 

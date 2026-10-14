@@ -63,6 +63,10 @@ func main() {
 		os.Exit(2)
 	}
 	cliOverrides = overrides
+	if err := checkCommandWord(args); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(2)
+	}
 
 	// A broken config only stops commands that use the store; the rest,
 	// including `sesh config`, which reports the problem, still run.
@@ -261,6 +265,33 @@ var subcommands = []candidate{
 	{"tag", "Tag entries, take tags off, rename tags, list them"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
 	{"trash", "List deleted entries, put one back, or delete them for good"},
+	{"ui", "Search every entry, and copy its secret or TOTP code"},
+}
+
+// checkCommandWord refuses a first word that's neither a flag nor a
+// command, which nothing sesh does takes (entry IDs come after flags), and
+// names the command it's closest to.
+func checkCommandWord(args []string) error {
+	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
+		return nil
+	}
+	if name, _ := subcommand(args); name != "" {
+		return nil
+	}
+	word := args[1]
+	trimmed := strings.ToLower(strings.TrimRight(word, ".,;:!?"))
+	// A typo is a slip or two in a word of some length: a short word is
+	// suggested only when it's exactly a command.
+	best, bestDist := "", min(len([]rune(trimmed))/3, 2)+1
+	for _, c := range subcommands {
+		if d := password.EditDistance(trimmed, c.value); d < bestDist {
+			best, bestDist = c.value, d
+		}
+	}
+	if best != "" {
+		return fmt.Errorf("sesh has no command %q; did you mean: sesh %s", word, best)
+	}
+	return fmt.Errorf("sesh has no command %q; the commands are listed by: sesh --help", word)
 }
 
 // subcommand returns the subcommand args name (one of subcommands) and the
@@ -550,13 +581,13 @@ func keySourceFromAgent(dbPath string, cfg passwordPromptConfig) (oracle databas
 		return nil, nil, nil
 	}
 	id := agent.UnlockID(mat.Verify)
-	if st.Unlocked && st.UnlockID == id {
+	if st.Unlocked && st.UnlockID == id && !cfg.alwaysCheck {
 		return agent.NewOracle(conn, id), nil, nil
 	}
 	// A person at the terminal is asked for a fingerprint first, when this
 	// vault has Touch ID unlock on; scripts never wait on one.
 	if cfg.interactive {
-		unlocked, terr := tryTouchID(conn, dataDir, id, mat.Verify)
+		unlocked, terr := tryTouchID(conn, dataDir, id, mat.Verify, false, note)
 		if unlocked {
 			return agent.NewOracle(conn, id), nil, nil
 		}
@@ -636,6 +667,10 @@ type passwordPromptConfig struct {
 	// runs skip the agent: the value is checked every time, and a script
 	// or CI job doesn't leave an unlocked agent running after it exits.
 	fromEnv bool
+	// alwaysCheck asks for the password, and checks it, even when the
+	// agent is already unlocked: for an app unlocking again, where a
+	// password typed must be the right one.
+	alwaysCheck bool
 	// kdf is the Argon2id settings a new key record (a new vault, or a
 	// changed master password) gets: the configured ones, set by withKDF.
 	kdf kdf.Params
@@ -876,6 +911,11 @@ func run(app *App, args []string) {
 		return
 	case "history":
 		if err := runHistory(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
+	case "ui":
+		if err := runUI(app, rest); err != nil {
 			fatal(app, err)
 		}
 		return
@@ -1167,6 +1207,7 @@ func (a *App) PrintUsage() error {
 		"  sesh tag add|remove|rename|list  Tag entries",
 		"  sesh trash [restore|remove|empty]  List deleted entries, put one back, or delete them for good",
 		"  sesh history <id> [--show|--clip|--restore|--forget N]  An entry's earlier secrets",
+		"  sesh ui                          Search every entry, and copy its secret or TOTP code",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",

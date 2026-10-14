@@ -131,15 +131,16 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 // UnlockTouchID unlocks the vault whose verify blob is verify with
 // the key unwrap returns; unwrap asks for a fingerprint. If the keystore
 // already holds that vault's key, unwrap isn't called, so a second request
-// doesn't prompt again. Like Unlock, it runs one at a time.
-func (k *keystore) UnlockTouchID(verify []byte, unwrap func() ([]byte, error)) error {
+// doesn't prompt again, unless fresh asks that it does. Like Unlock, it
+// runs one at a time.
+func (k *keystore) UnlockTouchID(verify []byte, fresh bool, unwrap func() ([]byte, error)) error {
 	k.unlockMu.Lock()
 	defer k.unlockMu.Unlock()
 
 	if k.isShutDown() {
 		return errShutDown
 	}
-	if st := k.snapshot(); st.unlocked && st.unlockID == UnlockID(verify) {
+	if st := k.snapshot(); !fresh && st.unlocked && st.unlockID == UnlockID(verify) {
 		return nil
 	}
 	key, err := unwrap()
@@ -276,6 +277,22 @@ func (k *keystore) snapshot() keyState {
 		}
 	}
 	return st
+}
+
+// touch starts the idle timer again, as a use of the key wantID names
+// would, without handing it out.
+func (k *keystore) touch(wantID string) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.derivedKey == nil {
+		return errNotUnlocked
+	}
+	if wantID != k.unlockID {
+		return errUnlockMismatch
+	}
+	k.lastActivity = k.clock().Now()
+	k.restartIdleLocked()
+	return nil
 }
 
 func (k *keystore) copyKey(wantID string) ([]byte, error) {

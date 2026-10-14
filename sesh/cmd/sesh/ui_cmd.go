@@ -1,0 +1,386 @@
+package main
+
+import (
+	"bytes"
+	"cmp"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+
+	"golang.org/x/term"
+
+	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/config"
+	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/password"
+	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/touchid"
+	"github.com/bashhack/sesh/internal/tui"
+	"github.com/bashhack/sesh/internal/vault"
+)
+
+const uiUsage = `Usage:
+  sesh ui    Search every entry; Enter copies its secret, or its TOTP code
+
+Type to search, as --action search does; ↑ and ↓ move; Enter copies, and
+the clipboard clears after clipboard_timeout; Esc clears the search, or
+quits. TOTP entries show their code and the seconds it has left.
+
+It locks after the agent's idle timeout (agent.idle_timeout) without a key
+pressed, or when the agent locks, and asks for the master password again.`
+
+// runUI is sesh ui: the search screen.
+func runUI(app *App, args []string) error {
+	if len(args) > 0 {
+		if isHelp(args[0]) {
+			_, err := fmt.Fprintln(app.Stdout, uiUsage)
+			return err
+		}
+		return fmt.Errorf("sesh ui takes no arguments, got %q", strings.Join(args, " "))
+	}
+	if app.StdinIsTerminal == nil || !app.StdinIsTerminal() || !uiStdoutIsTerminal(app.Stdout) {
+		return errors.New("sesh ui needs a terminal; to search from a script, use: sesh --service password --action search --query <words>")
+	}
+	cfg, err := settings()
+	if err != nil {
+		return err
+	}
+	if err := requireVault(cfg.DBPath.Value, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
+		return err
+	}
+	// The first unlock is the usual prompt, before the app draws.
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		return err
+	}
+	opts := uiOptions(app, cfg, newUIVault(store))
+	m := tui.New(&opts)
+	// What's written to stderr while the app draws (a warning while it
+	// unlocks again, say) would land on its screen: it's held, and
+	// written once the app has ended.
+	restore := holdStderr()
+	defer func() {
+		m.Close()
+		restore()
+	}()
+	_, err = tea.NewProgram(m, append([]tea.ProgramOption{tea.WithInput(app.Stdin), tea.WithOutput(app.Stdout)}, uiProgramOptions...)...).Run()
+	if err != nil {
+		return fmt.Errorf("sesh ui: %w", err)
+	}
+	return m.Err()
+}
+
+// uiStdoutIsTerminal says whether w is a terminal, which the app draws on;
+// tests replace it.
+var uiStdoutIsTerminal = func(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+// uiProgramOptions are added to the app's; tests set a window size.
+var uiProgramOptions []tea.ProgramOption
+
+// holdStderr sends what's written to os.Stderr into a pipe, until the
+// function it returns writes it out where it was going.
+func holdStderr() (restore func()) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return func() {}
+	}
+	was := os.Stderr
+	os.Stderr = w
+	var held bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		io.Copy(&held, r) //nolint:errcheck,gosec // what's held is best effort
+		close(done)
+	}()
+	return func() {
+		os.Stderr = was
+		w.Close() //nolint:errcheck,gosec // ends the copy
+		<-done
+		r.Close()               //nolint:errcheck,gosec // read to the end
+		was.Write(held.Bytes()) //nolint:errcheck,gosec // best effort
+	}
+}
+
+// uiOptions are the app's, with v open.
+func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
+	dbPath := cfg.DBPath.Value
+	opts := tui.Options{
+		Vault:       v,
+		Copy:        app.ClipboardCopy,
+		OpenURL:     openURL,
+		ClearAfter:  cfg.ClipboardTimeout.Value,
+		IdleTimeout: cfg.AgentIdleTimeout.Value,
+		MaxLifetime: cfg.AgentMaxLifetime.Value,
+		Now:         time.Now,
+		Unlock: func(pw []byte) (tui.Vault, error) {
+			store, err := reopenWith(cfg, pw)
+			if err != nil {
+				return nil, err
+			}
+			return newUIVault(store), nil
+		},
+	}
+	if os.Getenv("SESH_MASTER_PASSWORD") == "" && touchIDSetUp(dbPath) {
+		opts.TouchID = func() (tui.Vault, error) {
+			store, err := reopenWithTouchID(dbPath)
+			if err != nil {
+				return nil, err
+			}
+			return newUIVault(store), nil
+		}
+	}
+	return opts
+}
+
+// reopenWith opens the vault again with the password pw, which it wipes,
+// as the first unlock did but without a prompt: one try, through the agent
+// unless the master password comes from SESH_MASTER_PASSWORD. The password
+// is checked even when the agent is unlocked.
+func reopenWith(cfg *config.Config, pw []byte) (*database.Store, error) {
+	defer secure.SecureZeroBytes(pw)
+	// A vault removed meanwhile isn't made again from a password typed once.
+	if err := requireVault(cfg.DBPath.Value, "the vault is gone from "+cfg.DBPath.Value); err != nil {
+		return nil, err
+	}
+	pc := passwordPromptConfig{
+		prompt:      func(string) ([]byte, error) { return bytes.Clone(pw), nil },
+		fromEnv:     os.Getenv("SESH_MASTER_PASSWORD") != "",
+		alwaysCheck: true,
+	}.withKDF(cfg.KDF())
+	oracle, err := buildKeySourceWith(cfg.DBPath.Value, pc)
+	if errors.Is(err, database.ErrWrongPassword) {
+		return nil, tui.ErrWrongPassword
+	}
+	if err != nil {
+		return nil, err
+	}
+	return openStoreWith(cfg.DBPath.Value, oracle)
+}
+
+// touchIDSetUp says whether Touch ID unlock is on for the vault at dbPath.
+func touchIDSetUp(dbPath string) bool {
+	mat, err := database.ReadUnlockMaterial(dbPath)
+	if err != nil {
+		return false
+	}
+	f, err := touchid.ReadFile(filepath.Dir(dbPath))
+	return err == nil && f.UnlockID == agent.UnlockID(mat.Verify)
+}
+
+// reopenWithTouchID opens the vault again with a fingerprint, through the
+// agent; why it didn't is the error.
+func reopenWithTouchID(dbPath string) (*database.Store, error) {
+	mat, err := database.ReadUnlockMaterial(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := agent.EnsureAgent()
+	if err != nil {
+		return nil, fmt.Errorf("sesh agent unavailable: %w", err)
+	}
+	id := agent.UnlockID(mat.Verify)
+	var said []string
+	ok, err := tryTouchID(conn, filepath.Dir(dbPath), id, mat.Verify, true, func(format string, a ...any) {
+		said = append(said, fmt.Sprintf(format, a...))
+	})
+	if !ok {
+		closeAgentConn(conn)
+		switch {
+		case err != nil:
+			return nil, err
+		case len(said) > 0:
+			return nil, errors.New(strings.Join(said, " "))
+		}
+		return nil, errors.New("unlocking with Touch ID didn't work; enter your master password")
+	}
+	return openStoreWith(dbPath, agent.NewOracle(conn, id))
+}
+
+// startBrowser opens a web address; tests replace it.
+var startBrowser = func(address string) error {
+	name := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		name = "open"
+	}
+	cmd := exec.Command(name, address) //nolint:gosec // an http(s) address, checked by openURL
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("open %s: %w", address, err)
+	}
+	go cmd.Wait() //nolint:errcheck // the browser's exit isn't ours to report
+	return nil
+}
+
+// openURL opens an entry's URL in the browser: an http or https address
+// only (a bare host gets https://), so a URL in the vault can't open a
+// local file or start another program.
+func openURL(address string) error {
+	if !strings.Contains(address, "://") {
+		address = "https://" + address
+	}
+	u, err := url.Parse(address)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%s isn't a web address sesh opens (http or https)", address)
+	}
+	return startBrowser(u.String())
+}
+
+// uiVault is the vault as the app reads it.
+type uiVault struct {
+	store *database.Store
+	mgr   *password.Manager
+	// version is the data version Check last saw, and fingerprint the
+	// entries' then: a new version (any commit, the audit log's too) is a
+	// change only when the fingerprint is new as well.
+	mu          sync.Mutex
+	version     int64
+	fingerprint [sha256.Size]byte
+}
+
+func newUIVault(store *database.Store) *uiVault {
+	u := &uiVault{store: store, mgr: password.NewManager(store)}
+	if v, err := store.DataVersion(); err == nil {
+		u.version = v
+	}
+	if f, err := store.Fingerprint(); err == nil {
+		u.fingerprint = f
+	}
+	return u
+}
+
+// Search is every entry for "", the ones read most recently first, or
+// the ones sesh's search finds, best first; and how many entries there
+// are.
+func (u *uiVault) Search(query string) ([]vault.Entry, int, error) {
+	all, err := u.store.List(&vault.Filter{})
+	if err != nil {
+		return nil, 0, err
+	}
+	if strings.TrimSpace(query) == "" {
+		// The app's own reads for showing an entry aren't uses of it.
+		last, err := u.store.LastReads("in sesh ui, to show", "in sesh ui, to reveal")
+		if err != nil {
+			return nil, 0, err
+		}
+		slices.SortStableFunc(all, func(a, b vault.Entry) int {
+			return cmp.Compare(last[b.Key.String()], last[a.Key.String()])
+		})
+		return all, len(all), nil
+	}
+	found, err := u.mgr.SearchIn(query, &password.ListFilter{})
+	if err != nil {
+		return nil, 0, err
+	}
+	byID := make(map[string]int, len(all))
+	for i := range all {
+		byID[all[i].Key.String()] = i
+	}
+	out := make([]vault.Entry, 0, len(found))
+	for i := range found {
+		if j, ok := byID[found[i].ID]; ok {
+			out = append(out, all[j])
+		}
+	}
+	return out, len(all), nil
+}
+
+func (u *uiVault) Secret(k vault.Key, reading string) ([]byte, error) {
+	secret, err := u.store.GetFor(k, reading)
+	return secret, uiLocked(err)
+}
+
+// Notes is a secure note's text, which is its secret, or another entry's
+// notes.
+func (u *uiVault) Notes(k vault.Key) ([]byte, error) {
+	if k.Kind == vault.KindNote {
+		text, err := u.store.GetFor(k, "in sesh ui, to show it")
+		return text, uiLocked(err)
+	}
+	d, err := u.store.Details(k, "in sesh ui, to show its notes")
+	if err != nil {
+		return nil, uiLocked(err)
+	}
+	notes := d.Notes
+	d.Notes = nil
+	d.Zero()
+	return notes, nil
+}
+
+// SecretFields is k's secret fields, with their values.
+func (u *uiVault) SecretFields(k vault.Key) ([]vault.Field, error) {
+	d, err := u.store.Details(k, "in sesh ui, to reveal its fields")
+	if err != nil {
+		return nil, uiLocked(err)
+	}
+	secure.SecureZeroBytes(d.Notes)
+	var out []vault.Field
+	for _, f := range d.Fields {
+		if f.Secret {
+			out = append(out, f)
+		} else {
+			secure.SecureZeroBytes(f.Value)
+		}
+	}
+	return out, nil
+}
+
+func (u *uiVault) CodeKey(k vault.Key) ([]byte, error) {
+	key, err := u.store.CodeKey(k)
+	return key, uiLocked(err)
+}
+
+// Check says whether the vault can still be read, without counting as a
+// use of the key, and whether another command changed its entries since
+// it was opened or last checked. Writes that leave them as they were, such
+// as another window's audit events, aren't changes.
+func (u *uiVault) Check() (bool, error) {
+	if err := u.store.CheckUnlocked(); err != nil {
+		return false, uiLocked(err)
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	v, err := u.store.DataVersion()
+	if err != nil || v == u.version {
+		return false, err
+	}
+	u.version = v
+	f, err := u.store.Fingerprint()
+	if err != nil {
+		return false, err
+	}
+	changed := f != u.fingerprint
+	u.fingerprint = f
+	return changed, nil
+}
+
+func (u *uiVault) KeepAlive() error { return uiLocked(u.store.KeepAlive()) }
+
+func (u *uiVault) Close() error { return u.store.Close() }
+
+// uiLocked is err as the app takes it: one meaning the vault must be
+// unlocked again is tui.ErrLocked, saying why.
+func uiLocked(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, database.ErrVaultKeyChanged):
+		return tui.Locked("The vault's master password was changed, or the vault restored, by another sesh command.")
+	case agent.Locked(err):
+		return tui.Locked("sesh's agent locked.")
+	}
+	return err
+}

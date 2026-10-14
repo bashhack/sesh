@@ -27,12 +27,13 @@ var (
 // ID unlock turned on. It reports whether the agent is now unlocked; if not,
 // the caller asks for the master password, and anything worth knowing has
 // been said in one line. An error means the agent connection is no longer
-// usable.
-func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte) (bool, error) {
+// usable. Notes go to say: a command's, note. again asks for the
+// fingerprint even when the agent already holds the key.
+func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte, again bool, say func(format string, a ...any)) (bool, error) {
 	f, err := touchid.ReadFile(dataDir)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			note("warning: ignoring the Touch ID unlock file: %v", err)
+			say("warning: ignoring the Touch ID unlock file: %v", err)
 		}
 		return false, nil
 	}
@@ -43,41 +44,45 @@ func tryTouchID(conn *agent.Conn, dataDir, id string, verify []byte) (bool, erro
 		// The agent may have been started on the desktop, so the Touch ID
 		// sheet would appear on the Mac's own screen, not to the person
 		// typing over SSH, and this command would wait on it.
-		note("Touch ID isn't used over SSH, so enter your master password.")
+		say("Touch ID isn't used over SSH, so enter your master password.")
 		return false, nil
 	}
 	if fingerprintsChanged(f) {
 		// The Secure Enclave key no longer works, so don't show a sheet
 		// that can't succeed.
 		if rerr := touchid.Remove(dataDir); rerr != nil {
-			note("warning: remove the out-of-date Touch ID unlock file: %v", rerr)
+			say("warning: remove the out-of-date Touch ID unlock file: %v", rerr)
 		}
-		note("Your fingerprints changed since Touch ID unlock was turned on, so it no longer works and is now off. Enter your master password; turn it back on afterwards with: sesh touchid enable")
+		say("Your fingerprints changed since Touch ID unlock was turned on, so it no longer works and is now off. Enter your master password; turn it back on afterwards with: sesh touchid enable")
 		return false, nil
 	}
-	err = agent.UnlockTouchID(conn, f, verify)
+	unlock := agent.UnlockTouchID
+	if again {
+		unlock = agent.UnlockTouchIDAgain
+	}
+	err = unlock(conn, f, verify)
 	switch {
 	case err == nil:
 		return true, nil
 	case errors.Is(err, touchid.ErrCancelled):
 		// The person chose to type the password instead.
 	case errors.Is(err, touchid.ErrUnavailable):
-		note("Touch ID isn't available here, so enter your master password.")
+		say("Touch ID isn't available here, so enter your master password.")
 	case errors.Is(err, touchid.ErrLockedOut):
-		note("Touch ID is locked after too many attempts, so enter your master password.")
+		say("Touch ID is locked after too many attempts, so enter your master password.")
 	case errors.Is(err, touchid.ErrFailed):
-		note("Touch ID didn't recognise the fingerprint, so enter your master password.")
+		say("Touch ID didn't recognise the fingerprint, so enter your master password.")
 	case errors.Is(err, agent.ErrTouchIDStale):
 		if rerr := touchid.Remove(dataDir); rerr != nil {
-			note("warning: remove the out-of-date Touch ID unlock file: %v", rerr)
+			say("warning: remove the out-of-date Touch ID unlock file: %v", rerr)
 		}
-		note("Touch ID unlock was out of date for this vault and is now off. Enter your master password; turn it back on afterwards with: sesh touchid enable")
+		say("Touch ID unlock was out of date for this vault and is now off. Enter your master password; turn it back on afterwards with: sesh touchid enable")
 	default:
 		pe, ok := errors.AsType[*agent.ProtocolError](err)
 		if !ok {
 			return false, err
 		}
-		note("Touch ID unlock didn't work (%v), so enter your master password.", pe)
+		say("Touch ID unlock didn't work (%v), so enter your master password.", pe)
 	}
 	return false, nil
 }

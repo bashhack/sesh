@@ -278,3 +278,67 @@ func TestServer_StopReportsFailedShutdown(t *testing.T) {
 		t.Fatalf("Stop err = %v, want an internal_error naming the failed socket removal", err)
 	}
 }
+
+// Locked is true once the agent locks, and once its connection is lost,
+// as when it stops; not for a secret that doesn't decrypt.
+func TestLocked(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	_, done := serve(t, sockPath)
+	conn, id := unlockClient(t, sockPath)
+	o := NewOracle(conn, id)
+	defer o.Close()
+	if _, err := o.DecryptEntry([]byte("not sealed"), make([]byte, 16), nil); err == nil || Locked(err) {
+		t.Errorf("a secret that doesn't decrypt: %v, Locked %v", err, Locked(err))
+	}
+	if Locked(nil) {
+		t.Error("Locked(nil)")
+	}
+	ctl := dialClient(t, sockPath)
+	defer mustClose(t, ctl)
+	if err := Lock(ctl); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.DecryptEntry([]byte("x"), make([]byte, 16), nil); !Locked(err) {
+		t.Errorf("after lock: %v, not Locked", err)
+	}
+	if err := Stop(ctl); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the agent didn't stop")
+	}
+	for i := range 2 { // the request that loses it, then one on the retired connection
+		if _, err := o.DecryptEntry([]byte("x"), make([]byte, 16), nil); !Locked(err) {
+			t.Errorf("request %d after stop: %v, not Locked", i+1, err)
+		}
+	}
+}
+
+// An oracle's Check reports the agent locked, without restarting its idle
+// timer, and Touch is refused once it's locked.
+func TestOracle_CheckAndTouch(t *testing.T) {
+	sockPath := tempSocketPath(t)
+	serve(t, sockPath)
+	conn, id := unlockClient(t, sockPath)
+	o := NewOracle(conn, id)
+	defer o.Close()
+	if err := o.Check(); err != nil {
+		t.Fatalf("Check while unlocked: %v", err)
+	}
+	if err := o.Touch(); err != nil {
+		t.Fatalf("Touch while unlocked: %v", err)
+	}
+	ctl := dialClient(t, sockPath)
+	defer mustClose(t, ctl)
+	if err := Lock(ctl); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Check(); !Locked(err) {
+		t.Errorf("Check once locked: %v, not Locked", err)
+	}
+	if err := o.Touch(); !Locked(err) {
+		t.Errorf("Touch once locked: %v, not Locked", err)
+	}
+}
