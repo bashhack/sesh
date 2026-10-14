@@ -364,7 +364,19 @@ func TestMakeToRefusesTheVault(t *testing.T) {
 	if err := os.Symlink(dir, linkDir); err != nil {
 		t.Fatal(err)
 	}
-	for _, dest := range []string{vault, vault + "-wal", vault + "-shm", vault + "-journal", link, filepath.Join(dir, ".", "passwords.db"), filepath.Join(linkDir, "passwords.db-wal")} {
+	// A vault reached through a link, with its -wal file beside the target, and another case.
+	if err := os.WriteFile(vault+"-wal", []byte("w"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vaultLink := filepath.Join(t.TempDir(), "sesh.db")
+	if err := os.Symlink(vault, vaultLink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MakeTo(vaultLink, vault+"-wal", true, time.Now()); err == nil || !strings.Contains(err.Error(), "is the vault itself") {
+		t.Errorf("the target's -wal of a linked vault: %v", err)
+	}
+	for _, dest := range []string{vault, vault + "-wal", vault + "-shm", vault + "-journal", link, filepath.Join(dir, ".", "passwords.db"),
+		filepath.Join(linkDir, "passwords.db-wal"), filepath.Join(dir, "passwords.DB-WAL"), filepath.Join(dir, "Passwords.db-SHM")} {
 		if _, err := MakeTo(vault, dest, true, time.Now()); err == nil || !strings.Contains(err.Error(), "is the vault itself") {
 			t.Errorf("%s: %v", dest, err)
 		}

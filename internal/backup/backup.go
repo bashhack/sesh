@@ -363,7 +363,9 @@ func Remove(dir, vaultPath, path string) error {
 
 // isVaultFile says whether path is the vault at vaultPath, or its -wal,
 // -shm or -journal file: a backup written there would replace a file the
-// vault, open in another sesh, is using.
+// vault, open in another sesh, is using. Names are compared ignoring case,
+// as macOS's file system does, and through links; files there already are
+// compared as files.
 func isVaultFile(vaultPath, path string) bool {
 	clean := func(p string) string {
 		if abs, err := filepath.Abs(p); err == nil {
@@ -375,13 +377,22 @@ func isVaultFile(vaultPath, path string) bool {
 		}
 		return p
 	}
-	vault, dest := clean(vaultPath), clean(path)
-	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
-		if dest == vault+suffix {
-			return true
+	vaults := []string{clean(vaultPath)}
+	if target, err := filepath.EvalSymlinks(vaultPath); err == nil {
+		// A vault reached through a link: its files are beside the target.
+		vaults = append(vaults, clean(target))
+	}
+	dest := clean(path)
+	destInfo, destErr := os.Stat(path)
+	for _, vault := range vaults {
+		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+			if strings.EqualFold(dest, vault+suffix) {
+				return true
+			}
+			if info, err := os.Stat(vault + suffix); err == nil && destErr == nil && os.SameFile(info, destInfo) {
+				return true
+			}
 		}
 	}
-	a, aerr := os.Stat(vaultPath)
-	b, berr := os.Stat(path)
-	return aerr == nil && berr == nil && os.SameFile(a, b)
+	return false
 }
