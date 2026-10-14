@@ -269,7 +269,7 @@ backup.dir               /Users/me/vaults/backups
 | `-url`, `-notes`, `-editor` | With store: the entry's URL; its notes from stdin, or with `-editor` in `$EDITOR` | No |
 | `-file`           | File path for export/import (default: stdout/stdin)| No               |
 | `-on-conflict`    | Import conflict: skip, overwrite (default: error)  | No               |
-| `-force`          | Skip confirmation prompts                          | No               |
+| `-force`          | Skip confirmation prompts; replace an existing export file | No       |
 | `-length`         | Generated password length (default 24)             | No               |
 | `-no-symbols`     | Exclude symbols from generated passwords           | No               |
 | `-sort`           | Sort by: service, created_at, updated_at, folder   | No               |
@@ -679,6 +679,10 @@ sesh --service password --action import --format encrypted --file backup.enc
 # Decryption password: ****
 # Imported 12 entries
 ```
+
+The export password follows the master password's rules: at least 8 characters, and an easy one is warned about and asked about, since anyone with the file can try passwords against it.
+
+An export to a file, in any format, doesn't replace an existing one without `--force`, and the file is written only once the export is whole, through a temporary file beside it renamed into place: a mistyped confirmation, or Ctrl-C, leaves what was there, and nothing beside it. A folder sesh can't make that file in is refused before the password is asked. A link is followed to the file it points at. A device or a pipe, such as `/dev/stdout` (and whatever it's redirected to, added to) or a shell's `>(…)`, is written to as it is; a file in a folder like `/dev/shm` is a file like any other.
 
 Encrypted exports use the same Argon2id + AES-256-GCM primitives as the vault. The export is self-contained (envelope includes the salt and KDF params) and works across machines and master passwords.
 

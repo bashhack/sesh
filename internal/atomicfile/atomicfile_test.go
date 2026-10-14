@@ -59,3 +59,46 @@ func TestWrite_Fails(t *testing.T) {
 		t.Error("expected an error for a missing directory")
 	}
 }
+
+// A pending file leaves path as it was until committed; abandoned, it leaves nothing behind.
+func TestCreate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "export.enc")
+	if err := os.WriteFile(path, []byte("before"), 0o644); err != nil { //nolint:gosec // test
+		t.Fatal(err)
+	}
+	p, err := Create(path, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Write([]byte("half")); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "before" { //nolint:errcheck,gosec // compared
+		t.Errorf("while pending: %q", b)
+	}
+	p.Abort()
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 { //nolint:errcheck // counted
+		t.Errorf("after abandoning, %d files", len(entries))
+	}
+	p, err = Create(path, 0o640)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Write([]byte("after")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	p.Abort()                                            // does nothing once committed
+	if b, _ := os.ReadFile(path); string(b) != "after" { //nolint:errcheck,gosec // compared
+		t.Errorf("committed: %q", b)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+		t.Errorf("mode: %v, %v", info, err)
+	}
+	if _, err := Create(filepath.Join(dir, "missing", "x"), 0o600); err == nil {
+		t.Error("a missing folder made a file")
+	}
+}
