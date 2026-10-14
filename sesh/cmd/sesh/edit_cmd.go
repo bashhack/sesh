@@ -242,6 +242,11 @@ func runEdit(app *App, args []string) error {
 	detail, err := store.Edit(from, e)
 	if err != nil {
 		if errors.Is(err, database.ErrNothingToChange) {
+			if e.Secret != nil {
+				// As storing it again is: not an error, only nothing done.
+				_, err := fmt.Fprintln(app.Stderr, "Nothing changed: the entry already has that secret.")
+				return err
+			}
 			if f.details.Editor() {
 				_, err := fmt.Fprintln(app.Stderr, "Nothing changed.")
 				return err

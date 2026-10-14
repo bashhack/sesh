@@ -100,6 +100,25 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 			return "", err
 		}
 	}
+	// The secret it has, given again, isn't a change: the entry keeps its
+	// update time, which says when its secret last changed. The one it
+	// replaces, when it is a change, goes into the history, read here
+	// once for both.
+	var old *oldSecret
+	changed := e.Secret != nil
+	switch {
+	case changed && s.historyKeep > 0:
+		if old, err = s.replacing(k, to, data, salt, e.Secret); err != nil {
+			return "", err
+		}
+		changed = old == nil || !old.same
+	case changed:
+		same, err := s.sameSecret(k, data, salt, e.Secret)
+		if err != nil {
+			return "", err
+		}
+		changed = !same
+	}
 	ent := vault.Entry{Key: k}
 	if err := vault.DecodeEntryDetails(&ent, url, details); err != nil {
 		return "", err
@@ -112,13 +131,15 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	if to != k {
 		what = append(what, "renamed from "+k.String())
 	}
-	if e.Secret != nil {
+	if changed {
 		what = append(what, "secret changed")
 	}
 	// Seal outside the transaction, as a password change does: the agent
-	// may take a moment, and the write lock shouldn't wait on it.
+	// may take a moment, and the write lock shouldn't wait on it. The
+	// secret given, the same or new, is sealed for to without reading the
+	// one it has.
 	newData, newSalt := data, salt
-	if to != k || e.Secret != nil {
+	if to != k || changed {
 		if newData, newSalt, err = s.resealSecret(k, to, data, salt, e.Secret); err != nil {
 			return "", err
 		}
@@ -143,12 +164,7 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	if len(what) == 0 && !filing {
 		return "", ErrNothingToChange
 	}
-	// The secret a new one replaces goes into the history, and a renamed
-	// entry's history goes with it, sealed for its new name.
-	old, err := s.replacing(k, to, data, salt, e.Secret)
-	if err != nil {
-		return "", err
-	}
+	// A renamed entry's history goes with it, sealed for its new name.
 	var moved []resealedHistory
 	if to != k {
 		if moved, err = s.resealHistory(k, to, 0); err != nil {
@@ -183,7 +199,7 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 		}
 		q := `UPDATE entries SET kind = ?, service = ?, username = ?, encrypted_data = ?, salt = ?, url = ?, details = ?, sealed_details = ?, details_salt = ? WHERE id = ?`
 		args := []any{string(to.Kind), to.Service, to.Username, newData, newSalt, nd.url, nd.plain, nd.sealed, nd.salt, id}
-		if e.Secret != nil {
+		if changed {
 			q = `UPDATE entries SET kind = ?, service = ?, username = ?, encrypted_data = ?, salt = ?, url = ?, details = ?, sealed_details = ?, details_salt = ?, updated_at = ? WHERE id = ?`
 			args = []any{string(to.Kind), to.Service, to.Username, newData, newSalt, nd.url, nd.plain, nd.sealed, nd.salt, time.Now().UTC(), id}
 		}

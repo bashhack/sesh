@@ -169,28 +169,42 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if err != nil {
 		return err
 	}
-	// A secret it replaces is kept in the entry's history, sealed here,
-	// outside the transaction, as Edit's sealing is.
-	// The write then checks the entry is as read: absent, or with that
-	// secret, so another command's store in between isn't replaced
-	// without being kept.
+	// With history kept, a secret it replaces is kept there, sealed here,
+	// outside the transaction, as Edit's sealing is, and the write checks
+	// the entry is as read: absent, or with that secret, so another
+	// command's store in between isn't replaced without being kept.
+	// An entry stored over with the secret it has keeps its times, which
+	// say when its secret last changed; the write keeps them only while
+	// its secret is still the one compared.
 	var old *oldSecret
 	var data, oldSalt []byte
-	keeping, existed := s.historyKeep > 0, false
-	if keeping {
-		err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-		case err != nil:
-			return fmt.Errorf("read %s: %w", e.Key, err)
-		default:
-			existed = true
-			if old, err = s.replacing(e.Key, e.Key, data, oldSalt, secret); err != nil {
-				return err
-			}
-			if old == nil {
-				old = &oldSecret{from: data}
-			}
+	keeping, existed, same := s.historyKeep > 0, false, false
+	switch err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("read %s: %w", e.Key, err)
+	case keeping:
+		existed = true
+		if old, err = s.replacing(e.Key, e.Key, data, oldSalt, secret); err != nil {
+			return err
+		}
+		if old == nil {
+			old = &oldSecret{from: data}
+		}
+		same = old.same
+	default:
+		existed = true
+		if same, err = s.sameSecret(e.Key, data, oldSalt, secret); err != nil {
+			return err
+		}
+	}
+	mend := false
+	if existed {
+		// Times that don't read (damage) aren't kept: this write mends
+		// both, whatever the secret.
+		var created, updated time.Time
+		if err := s.db.QueryRow(`SELECT created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&created, &updated); err != nil {
+			same, mend = false, true
 		}
 	}
 	var imported *importedHistory
@@ -199,9 +213,13 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 			return err
 		}
 	}
-	encData, salt, err := s.oracle.EncryptEntry(secret, entryAAD(e.Key))
-	if err != nil {
-		return fmt.Errorf("encrypt %s: %w", e.Key, err)
+	// The secret it has is kept as it's sealed: sealing it again would
+	// change nothing but cost a key derivation.
+	encData, salt := data, oldSalt
+	if !same {
+		if encData, salt, err = s.oracle.EncryptEntry(secret, entryAAD(e.Key)); err != nil {
+			return fmt.Errorf("encrypt %s: %w", e.Key, err)
+		}
 	}
 	var sd sealedDetails
 	if d != nil {
@@ -217,9 +235,27 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if updated.IsZero() {
 		updated = now
 	}
-	onConflict := `encrypted_data = excluded.encrypted_data, salt = excluded.salt, updated_at = excluded.updated_at`
-	if whole {
+	// With the same secret and no times given, the entry keeps its own,
+	// so long as its secret is still the one compared: another command's
+	// write in between (unchecked without history) makes these new times.
+	onConflict := `encrypted_data = excluded.encrypted_data, salt = excluded.salt`
+	var keepTimes []any
+	keepTime := func(col string) string {
+		keepTimes = append(keepTimes, data)
+		return `, ` + col + ` = CASE WHEN entries.encrypted_data = ? THEN entries.` + col + ` ELSE excluded.` + col + ` END`
+	}
+	if same && e.UpdatedAt.IsZero() {
+		onConflict += keepTime("updated_at")
+	} else {
+		onConflict += `, updated_at = excluded.updated_at`
+	}
+	switch {
+	case whole && same && e.CreatedAt.IsZero():
+		onConflict += `, settings = excluded.settings, folder = excluded.folder` + keepTime("created_at")
+	case whole:
 		onConflict += `, settings = excluded.settings, folder = excluded.folder, created_at = excluded.created_at`
+	case mend:
+		onConflict += `, created_at = excluded.created_at`
 	}
 	if d != nil {
 		onConflict += `, url = excluded.url, details = excluded.details, sealed_details = excluded.sealed_details, details_salt = excluded.details_salt`
@@ -248,7 +284,7 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (kind, service, username) DO UPDATE SET `+onConflict+`
 			RETURNING id`,
-			string(e.Kind), e.Service, e.Username, encData, salt, settings, e.Folder, sd.url, sd.plain, sd.sealed, sd.salt, created, updated,
+			append([]any{string(e.Kind), e.Service, e.Username, encData, salt, settings, e.Folder, sd.url, sd.plain, sd.sealed, sd.salt, created, updated}, keepTimes...)...,
 		).Scan(&id)
 		if err != nil || !whole {
 			return err

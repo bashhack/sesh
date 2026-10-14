@@ -83,7 +83,10 @@ func (m *MemStore) Put(k Key, secret []byte) error {
 	if !ok {
 		e.entry = Entry{Key: k, CreatedAt: now}
 	}
-	e.entry.UpdatedAt = now
+	// As the vault does: the secret it has, stored again, isn't a change.
+	if !ok || secret == nil || !bytes.Equal(e.secret, secret) {
+		e.entry.UpdatedAt = now
+	}
 	e.secret = bytes.Clone(secret)
 	m.entries[k] = e
 	return nil
@@ -120,6 +123,16 @@ func (m *MemStore) save(e *Entry, secret []byte, d *Details) error {
 	now := m.Now()
 	saved := *e
 	saved.Tags = NormalizeTags(e.Tags)
+	// As the vault does: the secret it has, saved again with no times,
+	// keeps the times it has.
+	if had, ok := m.entries[e.Key]; ok && bytes.Equal(had.secret, secret) {
+		if saved.CreatedAt.IsZero() {
+			saved.CreatedAt = had.entry.CreatedAt
+		}
+		if saved.UpdatedAt.IsZero() {
+			saved.UpdatedAt = had.entry.UpdatedAt
+		}
+	}
 	if saved.CreatedAt.IsZero() {
 		saved.CreatedAt = now
 	}

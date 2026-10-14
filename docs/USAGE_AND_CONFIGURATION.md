@@ -1131,7 +1131,7 @@ To replace a password: sesh edit <id> --generate (or --secret to type one)
 
 - **Weak:** passwords that are easy to guess, rated as `sesh` rates a new one (zxcvbn, with the entry's name and username counted against it). API keys and TOTP keys aren't rated, since people don't choose them.
 - **Reused:** a password or API key that's the same on more than one entry, so one leak opens them all.
-- **Old:** a password or API key whose secret hasn't changed in `health.old_after_days` (365 by default; `0` doesn't check). Editing anything else about an entry doesn't count as a change.
+- **Old:** a password or API key whose secret hasn't changed in `health.old_after_days` (365 by default; `0` doesn't check). Editing anything else about an entry doesn't count as a change, and nor does storing or importing the secret it already has.
 - **Couldn't check:** an entry whose secret doesn't decrypt is listed, not checked; `sesh doctor` says more about it.
 - **Reading the secrets** is one event in the audit log ("Health check: read 41 secrets"), not one per entry. Secure notes and TOTP keys aren't read.
 - **Breached passwords aren't checked.** The ways to check would be Have I Been Pwned's file of every breached password's hash, about 100 GB to download, or its online lookup, which sends the start of each password's hash; sesh does neither.
@@ -1161,7 +1161,7 @@ New password for password/github-work/alice:
 ✅ password/github-work/alice: renamed from password/github/alice and secret changed
 ```
 
-- **What it keeps:** the entry keeps its folder, tags, settings and creation time. Its update time moves only when the secret changes.
+- **What it keeps:** the entry keeps its folder, tags, settings and creation time. Its update time moves only when the secret changes: the secret it already has, given again, changes nothing ("Nothing changed: the entry already has that secret."), as storing it again doesn't.
 - **How a rename works:** each secret is sealed to its entry's name, so a rename re-seals it under the new one, in one step. That's why editing unlocks the vault.
 - **A new name another entry has is refused,** before any new secret is asked for. Delete or rename that one first. A change of case alone (`GitHub` to `github`) works.
 - **Kinds change only among `password`, `api_key` and `secure_note`.** A TOTP entry can be renamed, but its secret and kind come with its code settings, so store a new one with `--action totp-store` or `sesh --service totp --setup`.

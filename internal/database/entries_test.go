@@ -3,9 +3,12 @@ package database
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/vault"
 	"github.com/bashhack/sesh/internal/vault/vaulttest"
@@ -242,5 +245,173 @@ func TestEachSecret(t *testing.T) {
 	}
 	if len(reads) != 1 || reads[0] != "|Health check: read 1 secret" {
 		t.Errorf("audit reads = %q", reads)
+	}
+}
+
+// Storing the secret an entry has keeps its update time, with history kept or not; a new one moves it.
+func TestSameSecretKeepsUpdateTime(t *testing.T) {
+	for _, keep := range []int{0, 10} {
+		t.Run(fmt.Sprintf("history.keep %d", keep), func(t *testing.T) {
+			s := newTestStore(t)
+			s.SetHistoryKeep(keep)
+			k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+			if err := s.Put(k, []byte("one")); err != nil {
+				t.Fatal(err)
+			}
+			then := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+			if _, err := s.db.Exec(`UPDATE entries SET updated_at = ? WHERE service = 'bank'`, then); err != nil {
+				t.Fatal(err)
+			}
+			updated := func() time.Time {
+				e, err := s.Lookup(k)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return e.UpdatedAt.UTC()
+			}
+			if err := s.Put(k, []byte("one")); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SaveWithDetails(&vault.Entry{Key: k}, []byte("one"), &vault.Details{}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.Edit(k, EntryEdit{Secret: []byte("one")}); !errors.Is(err, ErrNothingToChange) {
+				t.Errorf("an edit to the same secret = %v; want nothing to change", err)
+			}
+			if got := updated(); !got.Equal(then) {
+				t.Errorf("after the same secret again: updated %v; want %v", got, then)
+			}
+			to := vault.Key{Kind: vault.KindPassword, Service: "bank2"}
+			if what, err := s.Edit(k, EntryEdit{To: &to, Secret: []byte("one")}); err != nil || strings.Contains(what, "secret") {
+				t.Errorf("a rename with the same secret = %q, %v", what, err)
+			}
+			if e, err := s.Lookup(to); err != nil || !e.UpdatedAt.UTC().Equal(then) {
+				t.Errorf("renamed with the same secret: updated %v, %v", e.UpdatedAt, err)
+			}
+			if err := s.Put(to, []byte("two")); err != nil {
+				t.Fatal(err)
+			}
+			if e, err := s.Lookup(to); err != nil || e.UpdatedAt.UTC().Equal(then) {
+				t.Errorf("a new secret didn't move the update time: %v, %v", e.UpdatedAt, err)
+			}
+		})
+	}
+}
+
+// openCountingOracle counts seals and openings, and runs onOpen (once) as the first opening starts.
+type openCountingOracle struct {
+	CryptoOracle
+	onOpen         func()
+	sealed, opened int
+}
+
+func (o *openCountingOracle) EncryptEntry(plain, aad []byte) ([]byte, []byte, error) {
+	o.sealed++
+	return o.CryptoOracle.EncryptEntry(plain, aad)
+}
+
+func (o *openCountingOracle) DecryptEntry(data, salt, aad []byte) ([]byte, error) {
+	o.opened++
+	if f := o.onOpen; f != nil {
+		o.onOpen = nil
+		f()
+	}
+	return o.CryptoOracle.DecryptEntry(data, salt, aad)
+}
+
+// The same secret again isn't sealed again; a time given is used; created_at stays too;
+// a secret another command stores in between isn't dated by what it replaced.
+func TestSameSecretDetails(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	if err := s.Put(k, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	then := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	if _, err := s.db.Exec(`UPDATE entries SET created_at = ?, updated_at = ? WHERE service = 'bank'`, then, then); err != nil {
+		t.Fatal(err)
+	}
+	o := &openCountingOracle{CryptoOracle: s.oracle}
+	s.oracle = o
+	if err := s.Save(&vault.Entry{Key: k}, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.Lookup(k)
+	if err != nil || o.sealed != 0 || o.opened != 1 || !e.CreatedAt.UTC().Equal(then) || !e.UpdatedAt.UTC().Equal(then) {
+		t.Errorf("saved the same: sealed %d, opened %d, times %v %v, %v", o.sealed, o.opened, e.CreatedAt, e.UpdatedAt, err)
+	}
+	given := time.Date(2019, 5, 5, 0, 0, 0, 0, time.UTC)
+	if err := s.Save(&vault.Entry{Key: k, UpdatedAt: given}, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := s.Lookup(k); err != nil || !e.UpdatedAt.UTC().Equal(given) {
+		t.Errorf("a time given = %v, %v", e.UpdatedAt, err)
+	}
+	// Another command stores "two" while this one compares: the write is newer than 2019.
+	o.onOpen = func() {
+		data, salt, err := o.CryptoOracle.EncryptEntry([]byte("two"), entryAAD(k))
+		if err == nil {
+			_, err = s.db.Exec(`UPDATE entries SET encrypted_data = ?, salt = ? WHERE service = 'bank'`, data, salt)
+		}
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	if err := s.Put(k, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	if e, err := s.Lookup(k); err != nil || e.UpdatedAt.UTC().Equal(given) {
+		t.Errorf("the same secret stored over another's: updated %v, %v", e.UpdatedAt, err)
+	}
+}
+
+// An edit to the same secret with a rename opens the secret once; a damaged secret is still replaced.
+func TestEditSameSecretOpensOnce(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	if err := s.Put(k, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	o := &openCountingOracle{CryptoOracle: s.oracle}
+	s.oracle = o
+	to := vault.Key{Kind: vault.KindPassword, Service: "bank2"}
+	if _, err := s.Edit(k, EntryEdit{To: &to, Secret: []byte("one")}); err != nil {
+		t.Fatal(err)
+	}
+	if o.opened != 1 {
+		t.Errorf("a rename with the same secret opened it %d times", o.opened)
+	}
+	if _, err := s.db.Exec(`UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233' WHERE service = 'bank2'`); err != nil {
+		t.Fatal(err)
+	}
+	if what, err := s.Edit(to, EntryEdit{Secret: []byte("one")}); err != nil || !strings.Contains(what, "secret changed") {
+		t.Errorf("replacing a damaged secret = %q, %v", what, err)
+	}
+	if got, err := s.Get(to); err != nil || string(got) != "one" {
+		t.Errorf("after: %q, %v", got, err)
+	}
+}
+
+// A write over damaged times mends them both, whether the secret changes or not.
+func TestWriteMendsDamagedTimes(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	for _, write := range []func() error{
+		func() error { return s.Put(k, []byte("one")) },
+		func() error { return s.Save(&vault.Entry{Key: k}, []byte("one")) },
+		func() error { return s.Put(k, []byte("two")) },
+	} {
+		if err := s.Put(k, []byte("one")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`UPDATE entries SET created_at = 'not a time', updated_at = 'nor this' WHERE service = 'bank'`); err != nil {
+			t.Fatal(err)
+		}
+		if err := write(); err != nil {
+			t.Fatal(err)
+		}
+		if e, err := s.Lookup(k); err != nil || e.CreatedAt.IsZero() || e.UpdatedAt.IsZero() {
+			t.Errorf("after the write: %+v, %v", e, err)
+		}
 	}
 }

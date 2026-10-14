@@ -376,7 +376,7 @@ func TestHistory_ConcurrentStore(t *testing.T) {
 				}
 			}
 			s.oracle = o
-			if err := s.Put(k, []byte("mine")); !errors.Is(err, ErrEntryChanged) {
+			if err := s.Put(k, []byte("ours")); !errors.Is(err, ErrEntryChanged) {
 				t.Errorf("store across another's = %v", err)
 			}
 		})

@@ -238,3 +238,12 @@ func TestEdit_HelpAndAudit(t *testing.T) {
 		t.Errorf("completion offers %v where the ID goes", cands)
 	}
 }
+
+// --secret given the secret the entry has changes nothing, and says so, as storing it again would.
+func TestEdit_SameSecret(t *testing.T) {
+	editVault(t)
+	out, errOut, err := runEditOut(t, "sk-1\n", false, "api_key/openai", "--secret")
+	if err != nil || out != "" || errOut != "Nothing changed: the entry already has that secret.\n" {
+		t.Errorf("the same secret: out %q, err out %q, %v", out, errOut, err)
+	}
+}
