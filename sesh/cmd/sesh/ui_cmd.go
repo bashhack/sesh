@@ -24,6 +24,7 @@ import (
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/health"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/qrcode"
@@ -133,6 +134,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		ClearAfter:  cfg.ClipboardTimeout.Value,
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
 		MaxLifetime: cfg.AgentMaxLifetime.Value,
+		OldAfter:    time.Duration(cfg.HealthOldAfterDays.Value) * 24 * time.Hour,
 		Now:         time.Now,
 		Unlock: func(pw []byte) (tui.Vault, error) {
 			store, err := reopenWith(cfg, pw)
@@ -397,6 +399,14 @@ func (u *uiVault) RestoreVersion(k vault.Key, n int) error {
 }
 
 func (u *uiVault) Delete(k vault.Key) error { return u.wrote(u.store.Delete(k)) }
+
+func (u *uiVault) Health(now time.Time, oldAfter time.Duration) (health.Report, error) {
+	c := &health.Checker{Now: now, IsWeak: password.IsWeak, OldAfter: oldAfter}
+	if _, err := u.store.EachSecret("Health check, in sesh ui", health.Kinds, c.Add); err != nil {
+		return health.Report{}, uiLocked(err)
+	}
+	return c.Report(), nil
+}
 
 func (u *uiVault) Filing() ([]tui.Folder, []tui.Tag, error) {
 	fs, err := u.store.Folders()

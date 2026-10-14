@@ -768,3 +768,21 @@ func TestUI_Tidy(t *testing.T) {
 		t.Errorf("Check after the app's own writes = %v, %v; want no change", changed, err)
 	}
 }
+
+// The app's health check is the command's, recorded as one audit event.
+func TestUI_Health(t *testing.T) {
+	healthVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	r, err := u.Health(time.Now(), 365*24*time.Hour)
+	if err != nil || r.Checked != 4 || len(r.Weak) != 2 || len(r.Reused) != 1 {
+		t.Fatalf("Health = %+v, %v", r, err)
+	}
+	if log := mustRun(t, runAudit); !strings.Contains(log, "Health check, in sesh ui: read 4 secrets") {
+		t.Errorf("audit:\n%s", log)
+	}
+}

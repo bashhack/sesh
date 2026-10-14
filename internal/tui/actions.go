@@ -24,6 +24,7 @@ const (
 	panelHistory                  // its earlier secrets
 	panelTrash                    // the trash
 	panelConfirm                  // a yes or no before a change
+	panelHealth                   // what's wrong with the passwords and API keys
 )
 
 // overlay is a panel over the app, about the entry k.
@@ -121,6 +122,7 @@ func (m *Model) globalItems() []item {
 	return []item{
 		{key: "a", label: "add an entry…", run: m.openAdd},
 		{key: "t", label: "the trash…", run: m.openTrash},
+		{key: "r", label: "health report…", run: m.openHealth},
 		{key: "l", label: "lock sesh", run: m.lockNow},
 	}
 }
@@ -434,6 +436,11 @@ func (m *Model) actionResult(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		return m.loaded(msg.err, func() { m.ov.trash = msg.trash })
+	case healthMsg:
+		if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelHealth {
+			return nil
+		}
+		return m.loaded(msg.err, func() { m.showHealth(&msg.report) })
 	case doneMsg:
 		if msg.epoch != m.epoch || m.v == nil {
 			return nil
@@ -523,6 +530,8 @@ func (m *Model) drawOverlay(base string) string {
 		lines = append(lines, "", th.dimmed().Render("Loading…"))
 	case ov.err != "" && ov.len() == 0:
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(th.bad).Width(w-6).Render(ov.err))
+	case ov.kind == panelHealth && len(ov.items) == 0:
+		lines = append(lines, "", th.dimmed().Width(w-6).Render("Nothing is weak, used twice, or old."))
 	case ov.kind == panelHistory:
 		now := m.opts.Now()
 		if len(ov.versions) == 0 {
@@ -570,6 +579,11 @@ func (m *Model) drawOverlay(base string) string {
 	case panelTrash:
 		hint = th.hints([2]string{"↵", "put back"}, [2]string{"x", "delete for good"}, [2]string{"esc", "back"})
 		if len(ov.trash) == 0 {
+			hint = th.hints([2]string{"esc", "back"})
+		}
+	case panelHealth:
+		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})
+		if len(ov.items) == 0 {
 			hint = th.hints([2]string{"esc", "back"})
 		}
 	case panelConfirm:

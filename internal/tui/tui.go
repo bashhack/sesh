@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/bashhack/sesh/internal/health"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -143,6 +144,10 @@ type Vault interface {
 	RestoreFromTrash(id int64) (vault.Key, error)
 	// RemoveFromTrash deletes the trash's entry id for good.
 	RemoveFromTrash(id int64) error
+	// Health checks the passwords and API keys, as sesh health does: weak,
+	// reused, and not changed in oldAfter (0 doesn't check). Reading them
+	// is one audit event.
+	Health(now time.Time, oldAfter time.Duration) (health.Report, error)
 	// Filing is the folders, with the folders above them, and the tags the
 	// vault's entries have, each with how many entries are in it.
 	Filing() ([]Folder, []Tag, error)
@@ -191,6 +196,9 @@ type Options struct {
 	Generate   func() ([]byte, error)
 	Now        func() time.Time
 	ClearAfter time.Duration
+	// OldAfter is how long a secret can go unchanged before the health
+	// report calls it old; 0 doesn't check.
+	OldAfter time.Duration
 	// IdleTimeout locks after this long without a key pressed, and
 	// MaxLifetime this long after the app unlocked, as the agent does; 0
 	// never.
@@ -231,6 +239,7 @@ type Model struct {
 	notesFailed  map[vault.Key]string
 	shown        *revealed // secrets revealed with Tab
 	selKey       vault.Key // the selected entry, as last seen
+	editing      vault.Key // an entry the health report is to open the form of, once listed
 	// wraps are notes and revealed values wrapped to the pane, by what
 	// they are, so they're wrapped once rather than each time it's drawn.
 	wraps map[string]wrapped
@@ -523,7 +532,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			m.say("Opened " + msg.url)
 		}
 		return nil
-	case historyMsg, trashMsg, doneMsg:
+	case historyMsg, trashMsg, doneMsg, healthMsg:
 		return m.actionResult(msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
@@ -595,7 +604,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		// The list may have changed order under the selection: it stays
 		// on the entry, not the row, so Enter copies what was picked.
 		m.showFound()
-		return m.moved()
+		return tea.Batch(m.moved(), m.editWhenReady(true))
 	case keyMsg:
 		// A key read twice (the vault changed while it was being read)
 		// is kept once; the other is wiped.

@@ -16,6 +16,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/bashhack/sesh/internal/health"
+	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
@@ -129,6 +131,18 @@ func (f *fakeVault) Delete(k vault.Key) error {
 		}
 	}
 	return errors.New("not found")
+}
+
+func (f *fakeVault) Health(now time.Time, oldAfter time.Duration) (health.Report, error) {
+	f.reads = append(f.reads, "health")
+	c := &health.Checker{Now: now, IsWeak: password.IsWeak, OldAfter: oldAfter}
+	for i := range f.entries {
+		e := &f.entries[i]
+		if err := c.Add(e, []byte(f.secrets[e.Key]), nil); err != nil {
+			return health.Report{}, err
+		}
+	}
+	return c.Report(), f.err
 }
 
 func (f *fakeVault) Filing() ([]Folder, []Tag, error) {
@@ -2097,5 +2111,82 @@ func TestRevealLandsOnNothingListed(t *testing.T) {
 	a.run(read)
 	if a.shown != nil {
 		t.Error("a reveal was kept for an entry not listed")
+	}
+}
+
+// healthFake has github and gitlab sharing a weak secret, and an old strong password.
+func healthFake() *fakeVault {
+	f := newFake()
+	f.secrets[github], f.secrets[gitlab] = "password1", "password1"
+	bank := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	f.entries = append(f.entries, vault.Entry{Key: bank, UpdatedAt: time.Unix(1_600_000_000, 0)})
+	f.secrets[bank] = "Wq7#vPz!2kLm9$Xr-Tb4"
+	return f
+}
+
+// The report lists each problem; Enter goes to its entry, set to generate a new password.
+func TestHealthReport(t *testing.T) {
+	f := healthFake()
+	a := newApp(t, f, Options{OldAfter: 365 * 24 * time.Hour})
+	a.press("git", "ctrl+k", "r")
+	s := a.screen()
+	for _, want := range []string{"4 problems in 3 passwords and API keys", "github (alice) · weak", "github (alice) · reused: same as gitlab", "gitlab · reused: same as github (alice)", "bank · old: changed"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("report missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Count(strings.Join(f.reads, " "), "health") != 1 {
+		t.Errorf("reads = %q", f.reads)
+	}
+	a.press("enter")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "Edit github (alice)") || !strings.Contains(s, "● generate one") {
+		t.Fatalf("Enter on the weak password:\n%s", s)
+	}
+	if a.input.Value() != "" || len(a.rows) != 4 {
+		t.Errorf("the search should be cleared to find it: %q, %d rows", a.input.Value(), len(a.rows))
+	}
+}
+
+// An entry gone by the time it's chosen is said to be; an API key's form keeps its secret.
+func TestHealthReportGoneAndKeys(t *testing.T) {
+	f := healthFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "r")
+	f.entries = slices.DeleteFunc(f.entries, func(e vault.Entry) bool { return e.Key == github })
+	a.press("enter")
+	if s := a.screen(); a.form != nil || !strings.Contains(s, "github (alice) isn't in the vault any more") {
+		t.Errorf("choosing an entry that's gone:\n%s", s)
+	}
+	a = newApp(t, healthFake(), Options{})
+	a.press("ctrl+k", "r", "down", "enter") // gitlab, the first reused row
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "Edit gitlab") || !strings.Contains(s, "● keep") {
+		t.Errorf("an API key's form:\n%s", s)
+	}
+}
+
+// A vault with nothing wrong says so.
+func TestHealthReportClean(t *testing.T) {
+	f := newFake()
+	f.entries = f.entries[:1]
+	f.secrets[github] = "Wq7#vPz!2kLm9$Xr-Tb4"
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "r")
+	if s := a.screen(); !strings.Contains(s, "no problems in 1 password or API key") || !strings.Contains(s, "Nothing is weak, used twice, or old.") {
+		t.Errorf("a clean report:\n%s", s)
+	}
+}
+
+// An entry with notes opens once they've been read.
+func TestHealthReportWaitsForNotes(t *testing.T) {
+	f := healthFake()
+	f.entries[2].HasNotes = true // gitlab: not selected, so its notes aren't read yet
+	f.notes = map[vault.Key]string{gitlab: "the note"}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "r", "down", "enter")
+	if a.form == nil {
+		t.Fatalf("no form once its notes were read:\n%s", a.screen())
+	}
+	if i := slices.IndexFunc(a.form.inputs, func(in *input) bool { return in.kind == inputNotes }); a.form.inputs[i].area.Value() != "the note" {
+		t.Errorf("the form's notes = %q", a.form.inputs[i].area.Value())
 	}
 }

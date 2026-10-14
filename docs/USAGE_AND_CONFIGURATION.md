@@ -1029,6 +1029,7 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
   - **earlier secrets…** (`h`): its [password history](#password-history); Enter copies a version, `r` makes it the secret again (after a yes);
   - **move to the trash** (`d`): see [the trash](#the-trash); after a yes;
   - **the trash…** (`t`): each entry with its kind, when it was deleted, and its trash id; Enter puts one back (one whose name is taken now is restored with `sesh trash restore <id> --as <name>`), `x` deletes it for good, after a yes;
+  - **health report…** (`r`): what [`sesh health`](#password-health-sesh-health) finds, one row per problem: weak, reused, old, or unreadable. Enter on a row goes to its entry and opens its form; for a password, set to generate a new one. Reading the secrets is one audit event;
   - **lock sesh** (`l`): locks the app, and sesh's agent, so commands ask for the master password again (those given it in `SESH_MASTER_PASSWORD` never used the agent); if the agent can't be locked, the locked screen says so;
   - also **copy the username** (`u`) and **open the URL** (`o`).
 - **Ctrl-O opens the entry's URL** in the browser: a web address only (`http` or `https`; a bare host gets `https://`), so a stored URL can't open a file or another program.
