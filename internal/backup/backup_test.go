@@ -304,3 +304,29 @@ func TestMakeNew(t *testing.T) {
 		t.Errorf("MakeNew = %+v, %v; want the next second", b, err)
 	}
 }
+
+// Remove removes one listed backup, and refuses any other file.
+func TestRemove(t *testing.T) {
+	dir := t.TempDir()
+	vault := filepath.Join(dir, "passwords.db")
+	keep := filepath.Join(dir, "passwords-3f9c2a1b-2026-10-01T120000Z.db")
+	gone := filepath.Join(dir, "passwords-3f9c2a1b-2026-10-02T120000Z.db")
+	other := filepath.Join(dir, "notes.txt")
+	for _, p := range []string{keep, gone, other} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Remove(dir, vault, gone); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(gone); !os.IsNotExist(err) {
+		t.Errorf("not removed: %v", err)
+	}
+	if err := Remove(dir, vault, other); err == nil || !strings.Contains(err.Error(), "isn't one of the backups") {
+		t.Errorf("another file: %v", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("the other backup: %v", err)
+	}
+}

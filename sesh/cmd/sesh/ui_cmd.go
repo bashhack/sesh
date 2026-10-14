@@ -165,6 +165,11 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			return uiChangePassword(cfg, current, next)
 		},
 		RenewBackups:   func() (string, error) { return uiRenewBackups(dbPath) },
+		Backups:        func() (tui.Backups, error) { return uiBackups(dbPath) },
+		BackUp:         func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
+		DeleteBackup:   func(path string) (string, error) { return uiDeleteBackup(dbPath, path) },
+		PlanRestore:    func(path string) (string, error) { return uiPlanRestore(dbPath, path) },
+		Restore:        func(path string) (string, error) { return uiRestore(dbPath, path) },
 		Recovery:       func() (tui.Recovery, error) { return uiRecovery(dbPath) },
 		NewRecovery:    func() (*tui.NewRecovery, error) { return uiNewRecovery(dbPath) },
 		RemoveRecovery: func() (tui.Done, error) { return uiRemoveRecovery(dbPath) },

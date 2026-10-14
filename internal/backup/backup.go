@@ -193,12 +193,19 @@ func MakeTo(vaultPath, dest string, force bool, now time.Time) (Info, error) {
 	}
 	if err := write(vaultPath, dest, force); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return Info{}, fmt.Errorf("%s already exists; add --force to replace it", dest)
+			return Info{}, &ExistsError{Path: dest}
 		}
 		return Info{}, err
 	}
 	return stat(dest, now)
 }
+
+// ExistsError is a backup refused because a file is where it would go;
+// it matches os.ErrExist.
+type ExistsError struct{ Path string }
+
+func (e *ExistsError) Error() string { return e.Path + " already exists; add --force to replace it" }
+func (e *ExistsError) Unwrap() error { return os.ErrExist }
 
 // write copies the vault to dest through a private file beside it, renamed
 // into place, so a copy cut short never stands as a backup. It's an error
@@ -331,4 +338,22 @@ func ListAny(dir, vaultPath string) ([]Info, []string, error) {
 		infos[i], ids[i] = f.info, f.id
 	}
 	return infos, ids, nil
+}
+
+// Remove removes the backup at path: one ListAny lists in dir for the
+// vault at vaultPath, and nothing else.
+func Remove(dir, vaultPath, path string) error {
+	all, _, err := ListAny(dir, vaultPath)
+	if err != nil {
+		return err
+	}
+	for _, b := range all {
+		if b.Path == path {
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("remove the backup: %w", err)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("%s isn't one of the backups in %s", filepath.Base(path), dir)
 }

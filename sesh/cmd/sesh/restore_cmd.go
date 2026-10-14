@@ -116,10 +116,49 @@ func findBackup(cfg *config.Config, arg string) (string, error) {
 
 // restore replaces the vault with the backup at path.
 func restore(app *App, cfg *config.Config, path string, force bool) error {
+	p, err := planRestore(cfg, path)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(app.Stderr, p.question); err != nil {
+		return err
+	}
+	if !force {
+		yes, err := promptYesNo(app.Stdin, app.Stderr, "Restore? [y/N]: ")
+		if err != nil {
+			return err
+		}
+		if !yes {
+			_, err := fmt.Fprintln(app.Stderr, "Restore cancelled; nothing changed.")
+			return err
+		}
+	}
+	said, err := p.run(cfg)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(app.Stdout, said)
+	return err
+}
+
+// restorePlan is a restore checked and said, not yet done.
+type restorePlan struct {
+	path, name, made string
+	// question says what will happen, and asks.
+	question string
+	backup   database.BackupSummary
+	// whole is the vault missing or damaged: it's moved aside, and the
+	// backup copied in, rather than restored in place.
+	whole bool
+}
+
+// planRestore checks the backup at path, and says what restoring the
+// vault from it will do.
+func planRestore(cfg *config.Config, path string) (*restorePlan, error) {
 	vaultPath := cfg.DBPath.Value
 	b, err := database.InspectBackup(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Named as listed when it's from the backups folder; by its path when not.
 	name := tildePath(path)
@@ -142,9 +181,8 @@ func restore(app *App, cfg *config.Config, path string, force bool) error {
 	// which is moved aside, not deleted. Any other trouble reading it
 	// (permissions, busy) stops here, changing nothing.
 	current, currentErr := database.VaultSummary(vaultPath)
-	whole := currentErr != nil
 	if currentErr != nil && !errors.Is(currentErr, database.ErrNoVault) && !database.IsDamaged(currentErr) {
-		return fmt.Errorf("the vault can't be read, so nothing was restored: %w", currentErr)
+		return nil, fmt.Errorf("the vault can't be read, so nothing was restored: %w", currentErr)
 	}
 	var plan strings.Builder
 	fmt.Fprintf(&plan, "Restore the vault from %s, made %s (%s)?\n", name, made, backupCount(b))
@@ -160,43 +198,35 @@ func restore(app *App, cfg *config.Config, path string, force bool) error {
 	default:
 		fmt.Fprintf(&plan, "  The vault now is damaged (%v).\n  It's moved aside, not deleted, and the backup is copied in. Make sure no other sesh command is running.\n", currentErr)
 	}
-	if _, err := fmt.Fprint(app.Stderr, plan.String()); err != nil {
-		return err
-	}
-	if !force {
-		yes, err := promptYesNo(app.Stdin, app.Stderr, "Restore? [y/N]: ")
-		if err != nil {
-			return err
-		}
-		if !yes {
-			_, err := fmt.Fprintln(app.Stderr, "Restore cancelled; nothing changed.")
-			return err
-		}
-	}
+	return &restorePlan{path: path, name: name, made: made, question: plan.String(), backup: b, whole: currentErr != nil}, nil
+}
 
+// run restores the vault as planned, and says what it did.
+func (p *restorePlan) run(cfg *config.Config) (string, error) {
+	vaultPath := cfg.DBPath.Value
 	var out strings.Builder
-	if whole {
-		aside, err := database.ReplaceVault(vaultPath, path, now())
+	if p.whole {
+		aside, err := database.ReplaceVault(vaultPath, p.path, now())
 		if err != nil {
-			return err
+			return "", err
 		}
-		fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", name, backupCount(b), made)
+		fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", p.name, backupCount(p.backup), p.made)
 		if aside != "" {
 			fmt.Fprintf(&out, "The vault as it was is in %s, with any -wal and -shm files beside it.\n", tildePath(aside))
 		}
 	} else {
 		s, err := backup.SeriesOf(vaultPath, cfg.BackupFolder())
 		if err != nil {
-			return err
+			return "", err
 		}
 		saved, err := s.MakeNew(vaultPath, now())
 		if err != nil {
-			return fmt.Errorf("back up the vault before restoring (nothing changed): %w", err)
+			return "", fmt.Errorf("back up the vault before restoring (nothing changed): %w", err)
 		}
-		if err := database.RestoreInPlace(vaultPath, path); err != nil {
-			return err
+		if err := database.RestoreInPlace(vaultPath, p.path); err != nil {
+			return "", err
 		}
-		fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", name, backupCount(b), made)
+		fmt.Fprintf(&out, "✅ Restored the vault from %s (%s). It opens with the master password it had on %s.\n", p.name, backupCount(p.backup), p.made)
 		fmt.Fprintf(&out, "The vault as it was is in %s; restore it the same way to undo this.\n", tildePath(saved.Path))
 	}
 	if note := lockAgentHoldingOldKey(); note != "" {
@@ -207,8 +237,7 @@ func restore(app *App, cfg *config.Config, path string, force bool) error {
 			out.WriteString("Touch ID unlock was set up for the vault before; turn it on again with: sesh touchid enable\n")
 		}
 	}
-	_, err = fmt.Fprint(app.Stdout, out.String())
-	return err
+	return out.String(), nil
 }
 
 // short is a vault id as backup names show it.
