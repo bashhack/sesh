@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -838,5 +839,88 @@ func TestUI_Settings(t *testing.T) {
 	}
 	if _, err := opts.SetSetting("history.keep", "-1"); err == nil || !strings.Contains(err.Error(), "history.keep") {
 		t.Errorf("a refused value: %v", err)
+	}
+}
+
+// The app's checks are sesh doctor's, run on its open vault without asking for the master password,
+// and recorded as doctor's are.
+func TestUI_Checks(t *testing.T) {
+	healthVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	c, err := u.Checks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []string
+	for _, ch := range c.Checks {
+		rows = append(rows, ch.Section+"|"+ch.Mark+"|"+ch.Label+"|"+ch.Value)
+	}
+	all := strings.Join(rows, "\n")
+	for _, want := range []string{"Setup|", "|ok|Entries|4 entries, all readable", "|warn|Recovery key|"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("missing %q in:\n%s", want, all)
+		}
+	}
+	if !strings.HasPrefix(c.Summary, "OK") || len(c.ToDo) == 0 {
+		t.Errorf("summary %q, to do %q", c.Summary, c.ToDo)
+	}
+	if log := mustRun(t, runAudit); !strings.Contains(log, "doctor") {
+		t.Errorf("audit:\n%s", log)
+	}
+	// With db_path changed since the app opened, the Backups row is still the open vault's.
+	t.Setenv("SESH_DB_PATH", filepath.Join(t.TempDir(), "other.db"))
+	if c, err = u.Checks(); err != nil {
+		t.Fatal(err)
+	}
+	want := tildePath(filepath.Join(filepath.Dir(store.Path()), "backups"))
+	got := ""
+	for _, ch := range c.Checks {
+		if ch.Label == "Backups" {
+			got = ch.Value
+		}
+	}
+	if !strings.Contains(got, want) {
+		t.Errorf("the Backups row after db_path changed: %q, want it in %s", got, want)
+	}
+}
+
+// A master password changed since the app unlocked locks it when the checks run, rather than
+// calling every entry damaged; a vault moved away isn't made again.
+func TestUI_ChecksKeyChanged(t *testing.T) {
+	healthVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, stderr := rekeyTestApp("y\n")
+	if err := runRotateMasterPassword(app, rotateTestCfg("health-password-1234", "new-password-5678", "new-password-5678")); err != nil {
+		t.Fatalf("rotate: %v\n%s", err, stderr)
+	}
+	if c, err := u.Checks(); !errors.Is(err, tui.ErrLocked) {
+		t.Errorf("checks after the master password changed = %q, %v", c.Summary, err)
+	}
+	moved := store.Path() + ".moved"
+	if err := os.Rename(store.Path(), moved); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Checks(); err == nil || !strings.Contains(err.Error(), "the vault is gone") {
+		t.Errorf("checks with the vault moved away: %v", err)
+	}
+	if _, err := os.Stat(store.Path()); !os.IsNotExist(err) {
+		t.Errorf("a vault was made where the moved one was: %v", err)
+	}
+	if err := uiLocked(keyChangedError{}); !errors.Is(err, tui.ErrLocked) {
+		t.Errorf("uiLocked(keyChangedError) = %v", err)
+	}
+	if (keyChangedError{}).Error() != "the master password was changed by another sesh command while this one was checking; run sesh doctor again" {
+		t.Error("sesh doctor's words changed")
 	}
 }

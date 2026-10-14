@@ -26,6 +26,7 @@ const (
 	panelConfirm                   // a yes or no before a change
 	panelHealth                    // what's wrong with the passwords and API keys
 	panelSettings                  // settings and safety
+	panelChecks                    // sesh doctor's checks
 )
 
 // overlay is a panel over the app, about the entry k.
@@ -40,7 +41,6 @@ type overlay struct {
 	items    []item
 	versions []time.Time
 	trash    []Trashed
-	settings []Setting
 	kind     panel
 	sel      int
 	loading  bool
@@ -51,11 +51,12 @@ type overlay struct {
 // item is one line of a menu: a key that runs it, what it says, and what
 // it does.
 type item struct {
-	run   func() tea.Cmd
-	key   string
-	label string
-	rule  bool // a line between groups, before it
-	stay  bool // running it leaves the panel open
+	run    func() tea.Cmd
+	key    string
+	label  string
+	detail string // said below the rows while it's the one selected
+	rule   bool   // a line between groups, before it
+	stay   bool   // running it leaves the panel open
 }
 
 // Messages from the actions.
@@ -516,7 +517,7 @@ func (m *Model) drawOverlay(base string) string {
 	th := m.th
 	ov := m.ov
 	w := min(64, m.width-6)
-	if ov.kind == panelSettings {
+	if ov.kind == panelSettings || ov.kind == panelChecks {
 		w = min(96, m.width-6)
 	}
 	// The rows that fit: the screen less the card's border, title, hint
@@ -532,6 +533,19 @@ func (m *Model) drawOverlay(base string) string {
 			return lipgloss.NewStyle().Background(th.selBg).Render(th.accented().Render("▌") + " " + fitTo(th.style().Bold(true).Render(text), w-12) + " " + k)
 		}
 		return "  " + fitTo(th.style().Render(text), w-12) + " " + k
+	}
+	// The selected row's details go below the rows, cut to leave two of
+	// those beside them; with less room than that, they're left out.
+	var detail string
+	itemRoom := room
+	if ov.sel < len(ov.items) && ov.items[ov.sel].detail != "" && !ov.loading && room >= 5 {
+		said := strings.Split(th.dimmed().Width(w-6).Render(ov.items[ov.sel].detail), "\n")
+		if most := room - 3; len(said) > most {
+			cut := len(said) - most + 1
+			said = append(said[:most-1], th.dimmed().Render(fmt.Sprintf("… and %d more %s", cut, plural(cut, "line", "lines"))))
+		}
+		detail = strings.Join(said, "\n")
+		itemRoom = room - len(said) - 1
 	}
 	switch {
 	case ov.kind == panelConfirm:
@@ -566,7 +580,7 @@ func (m *Model) drawOverlay(base string) string {
 			lines = append(lines, row(i, "", fmt.Sprintf("%s  %s", keyName(t.Key), th.dimmed().Render(fmt.Sprintf("%s · deleted %s · id %d", kindLabel(t.Key.Kind), ago(now, t.DeletedAt), t.ID)))))
 		}
 	default:
-		first, last := window(ov.sel, len(ov.items), room)
+		first, last := window(ov.sel, len(ov.items), itemRoom)
 		// The lines between groups take room too.
 		for range 3 {
 			rules := 0
@@ -575,10 +589,10 @@ func (m *Model) drawOverlay(base string) string {
 					rules++
 				}
 			}
-			if last-first+rules <= room {
+			if last-first+rules <= itemRoom {
 				break
 			}
-			first, last = window(ov.sel, len(ov.items), max(room-rules, 1))
+			first, last = window(ov.sel, len(ov.items), max(itemRoom-rules, 1))
 		}
 		for i := first; i < last; i++ {
 			it := ov.items[i]
@@ -588,20 +602,8 @@ func (m *Model) drawOverlay(base string) string {
 			lines = append(lines, row(i, it.key, it.label))
 		}
 	}
-	// The selected setting's details, below its rows, when two of those
-	// still fit beside them.
-	if detail := ""; ov.kind == panelSettings && ov.sel < len(ov.settings) && !ov.loading {
-		detail = th.dimmed().Width(w - 6).Render(settingDetail(&ov.settings[ov.sel]))
-		if fit := room - lipgloss.Height(detail) - 1; fit >= 2 {
-			if len(lines) > fit {
-				first, last := window(ov.sel, len(ov.items), fit)
-				lines = lines[:0]
-				for i := first; i < last; i++ {
-					lines = append(lines, row(i, ov.items[i].key, ov.items[i].label))
-				}
-			}
-			lines = append(lines, "", detail)
-		}
+	if detail != "" {
+		lines = append(lines, "", detail)
 	}
 	if ov.err != "" && ov.len() > 0 && !ov.loading {
 		// Above the rows, which stay, since the keys still act on them.
@@ -621,6 +623,11 @@ func (m *Model) drawOverlay(base string) string {
 		}
 	case panelSettings:
 		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})
+		if ov.sel == 0 {
+			hint = th.hints([2]string{"↵", "run them"}, [2]string{"esc", "back"})
+		}
+	case panelChecks:
+		hint = th.hints([2]string{"↑↓", "read"}, [2]string{"esc", "back"})
 	case panelHealth:
 		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})
 		switch {

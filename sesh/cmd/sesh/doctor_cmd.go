@@ -23,6 +23,7 @@ import (
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/touchid"
+	"github.com/bashhack/sesh/internal/tui"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -83,6 +84,12 @@ func canAsk(app *App) bool {
 // checkSetup adds the setup rows to c, and returns what checks the vault:
 // its rows, or why it isn't checked.
 func checkSetup(c *doctorChecks, app *App) func(io.Writer) error {
+	return checkSetupOf(c, app, "")
+}
+
+// checkSetupOf is checkSetup for the vault at dbPath; "" is the one the
+// config names.
+func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) error {
 	cfgPath, _ := config.Path() //nolint:errcheck // shown only when known
 	cfg, err := settings()
 	if err != nil {
@@ -96,7 +103,14 @@ func checkSetup(c *doctorChecks, app *App) func(io.Writer) error {
 		c.row(markNone, "Config", "no file, so the defaults")
 	}
 
-	dbPath := cfg.DBPath.Value
+	if dbPath == "" {
+		dbPath = cfg.DBPath.Value
+	} else if dbPath != cfg.DBPath.Value {
+		// The rows that follow the vault's place (its backups) follow it.
+		moved := *cfg
+		moved.DBPath.Value = dbPath
+		cfg = &moved
+	}
 	mat, matErr := database.ReadUnlockMaterial(dbPath)
 	switch {
 	case errors.Is(matErr, database.ErrNoVault):
@@ -396,11 +410,34 @@ func checkVault(c *doctorChecks, cfg *config.Config, dbPath string, mat *databas
 		return damaged(err)
 	}
 	defer closeAuditStore(store)
+	return verifyVault(c, store, mat, touchFile, touchErr)
+}
 
+// keyChangedError is the master password changed by another command while
+// the vault was being checked: ErrVaultKeyChanged, as sesh ui takes it, said
+// as sesh doctor says it.
+type keyChangedError struct{}
+
+func (keyChangedError) Error() string {
+	return "the master password was changed by another sesh command while this one was checking; run sesh doctor again"
+}
+func (keyChangedError) Unwrap() error { return database.ErrVaultKeyChanged }
+
+// verifyVault checks the open vault store: its file, every entry, the
+// trash, the history, the recovery key, and Touch ID (as found, touchFile).
+func verifyVault(c *doctorChecks, store *database.Store, mat *database.UnlockMaterial, touchFile *touchid.File, touchErr error) error {
+	damaged := func(err error) error {
+		if database.IsDamaged(err) {
+			c.row(markFail, "File", "damaged", err.Error())
+			c.todo("Restore the vault from a backup, such as an encrypted export.")
+			return nil
+		}
+		return err
+	}
 	report, err := store.Verify()
 	switch {
 	case errors.Is(err, database.ErrVaultKeyChanged):
-		return errors.New("the master password was changed by another sesh command while this one was checking; run sesh doctor again")
+		return keyChangedError{}
 	case database.IsDamaged(err):
 		return damaged(err)
 	case err != nil:
@@ -518,10 +555,13 @@ const (
 	markNone = "-"
 )
 
-// doctorChecks collects the report's rows, what to do, and the tally.
+// doctorChecks collects the report's rows, what to do, and the tally:
+// as text, and as checks, for sesh ui.
 type doctorChecks struct {
+	part         string // the section rows go under
 	rows         strings.Builder
 	todos        [][]string
+	checks       []tui.Check
 	fails, warns int
 	// unchecked is set when the vault part was skipped, so the tally
 	// doesn't speak for it.
@@ -531,6 +571,7 @@ type doctorChecks struct {
 // section starts a part of the report under title.
 func (c *doctorChecks) section(title string) {
 	c.rows.WriteString(title + "\n")
+	c.part = strings.TrimSpace(title[strings.LastIndex(title, "\n")+1:])
 }
 
 // row adds a check's result, with any details under it.
@@ -545,6 +586,7 @@ func (c *doctorChecks) row(mark, label, value string, details ...string) {
 	for _, d := range details {
 		fmt.Fprintf(&c.rows, "%24s%s\n", "", d)
 	}
+	c.checks = append(c.checks, tui.Check{Section: c.part, Mark: mark, Label: label, Value: value, Details: details})
 }
 
 // todo adds a step to what to do: what to do, then any commands to run.
@@ -768,4 +810,47 @@ func checkTouchID(c *doctorChecks, f *touchid.File, err error, id string) {
 		return
 	}
 	c.todo("Optional: turn Touch ID back on:", "sesh touchid enable")
+}
+
+// doctorReport is sesh doctor's checks, for sesh ui: the setup's, then the
+// vault's on store, which the app has open, so nothing asks for the master
+// password. The run is recorded in the audit log, as sesh doctor's is.
+func doctorReport(app *App, store *database.Store) (tui.Checks, error) {
+	var c doctorChecks
+	// The vault checked is the one open, wherever the config says now.
+	dbPath := store.Path()
+	c.section("Setup")
+	checkSetupOf(&c, app, dbPath)
+	c.section("Vault: " + tildePath(dbPath))
+	mat, err := database.ReadUnlockMaterial(dbPath)
+	if err != nil {
+		c.row(markFail, "File", "can't be read", err.Error())
+		c.todo("Restore the vault from a backup, such as an encrypted export.")
+		return c.report(), nil
+	}
+	touchFile, touchErr := touchid.ReadFile(filepath.Dir(dbPath))
+	if err := verifyVault(&c, store, &mat, touchFile, touchErr); err != nil {
+		return tui.Checks{}, err
+	}
+	return c.report(), nil
+}
+
+// report is the checks made, what to do, and their sum, as sesh ui shows
+// them.
+func (c *doctorChecks) report() tui.Checks {
+	var tally []string
+	if c.fails > 0 {
+		tally = append(tally, countOf(int64(c.fails), "problem"))
+	}
+	if c.warns > 0 {
+		tally = append(tally, countOf(int64(c.warns), "warning"))
+	}
+	summary := "OK: no problems"
+	switch {
+	case c.fails > 0:
+		summary = "FAIL: " + strings.Join(tally, ", ")
+	case c.warns > 0:
+		summary = "OK, with " + tally[0]
+	}
+	return tui.Checks{Summary: summary, Checks: c.checks, ToDo: c.todos}
 }

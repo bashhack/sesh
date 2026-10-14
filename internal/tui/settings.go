@@ -55,8 +55,13 @@ func (m *Model) showSettings(settings []Setting) {
 	ov := m.ov
 	sel := ov.sel
 	ov.items = nil
-	ov.settings = settings
-	for _, s := range settings {
+	ov.items = append(ov.items, item{
+		label:  "Checks (sesh doctor)     run…",
+		detail: "Checks sesh's setup, then that the vault's file, every entry, the trash, the history, the recovery key and Touch ID all read, as sesh doctor does. Reading the vault is recorded in the audit log.",
+		run:    m.openChecks,
+		stay:   true,
+	})
+	for i, s := range settings {
 		from := ""
 		switch {
 		case s.Env != "":
@@ -65,9 +70,11 @@ func (m *Model) showSettings(settings []Setting) {
 			from = "  (config file)"
 		}
 		ov.items = append(ov.items, item{
-			label: fmt.Sprintf("%-24s %s%s", s.Key, s.Value, from),
-			run:   func() tea.Cmd { return m.changeSetting(&s) },
-			stay:  true,
+			label:  fmt.Sprintf("%-24s %s%s", s.Key, s.Value, from),
+			detail: settingDetail(&s),
+			run:    func() tea.Cmd { return m.changeSetting(&s) },
+			stay:   true,
+			rule:   i == 0,
 		})
 	}
 	ov.sel = min(sel, max(len(ov.items)-1, 0))

@@ -148,6 +148,8 @@ type Vault interface {
 	// reused, and not changed in oldAfter (0 doesn't check). Reading them
 	// is one audit event.
 	Health(now time.Time, oldAfter time.Duration) (health.Report, error)
+	// Checks runs sesh doctor's checks on the vault, open as it is.
+	Checks() (Checks, error)
 	// Filing is the folders, with the folders above them, and the tags the
 	// vault's entries have, each with how many entries are in it.
 	Filing() ([]Folder, []Tag, error)
@@ -293,6 +295,7 @@ type Model struct {
 	// inEditor is the notes editor having the terminal: its time is use, so
 	// the idle lock waits for it. Ticks due meanwhile arrive before it ends.
 	inEditor  bool
+	checking  bool // sesh doctor's checks are running
 	statusBad bool // the status is something that went wrong
 	showHelp  bool
 	dark      bool
@@ -543,6 +546,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.actionResult(msg)
 	case settingsMsg:
 		return m.gotSettings(&msg)
+	case checksMsg:
+		return m.gotChecks(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"
@@ -784,6 +789,7 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.wipe()
 	m.epoch++
 	m.found, m.rows, m.sel, m.top = nil, nil, 0, 0
+	m.checking = false
 	m.editing = vault.Key{}
 	clear(m.marked)
 	m.folders, m.tags, m.side, m.sideSel, m.sideTop = nil, nil, nil, 0, 0

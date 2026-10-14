@@ -30,6 +30,7 @@ type fakeVault struct {
 	err        error       // returned by every read when set
 	checkErr   error       // returned by Check when set
 	healthErr  error       // returned by Health when set
+	checks     Checks      // what Checks gives
 	unreadable []vault.Key // entries whose secret doesn't decrypt, for Health
 	secrets    map[vault.Key]string
 	notes      map[vault.Key]string
@@ -153,6 +154,11 @@ func (f *fakeVault) Health(now time.Time, oldAfter time.Duration) (health.Report
 		}
 	}
 	return c.Report(), f.err
+}
+
+func (f *fakeVault) Checks() (Checks, error) {
+	f.reads = append(f.reads, "checks")
+	return f.checks, f.err
 }
 
 func (f *fakeVault) Filing() ([]Folder, []Tag, error) {
@@ -2342,7 +2348,7 @@ func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
 // A setting is changed through a one-line form; the panel stays, shows it, and the app takes up what it uses.
 func TestSettingsChange(t *testing.T) {
 	a, asked := settingsApp(t)
-	a.press("ctrl+k", ",", "down", "enter", "ctrl+u", "90", "enter")
+	a.press("ctrl+k", ",", "down", "down", "enter", "ctrl+u", "90", "enter")
 	if !slices.Equal(*asked, []string{"health.old_after_days=90"}) || a.opts.OldAfter != 90*24*time.Hour {
 		t.Fatalf("asked %q, old after %v", *asked, a.opts.OldAfter)
 	}
@@ -2362,7 +2368,7 @@ func TestSettingsChange(t *testing.T) {
 // One set by the environment, or the vault's place, isn't changed from the app, and says why.
 func TestSettingsNotChanged(t *testing.T) {
 	a, asked := settingsApp(t)
-	a.press("ctrl+k", ",", "down", "down", "enter")
+	a.press("ctrl+k", ",", "down", "down", "down", "enter")
 	if s := a.screen(); a.form != nil || !strings.Contains(s, "set by SESH_TRASH_KEEP_DAYS") {
 		t.Errorf("one set by the environment:\n%s", s)
 	}
@@ -2375,7 +2381,7 @@ func TestSettingsNotChanged(t *testing.T) {
 // An unchanged value writes nothing; lowering one that deletes asks first, and emptying one compares its default.
 func TestSettingsLoss(t *testing.T) {
 	a, asked := settingsApp(t)
-	a.press("ctrl+k", ",", "enter", "enter")
+	a.press("ctrl+k", ",", "down", "enter", "enter")
 	if len(*asked) != 0 || !strings.Contains(a.screen(), "Nothing changed.") {
 		t.Fatalf("unchanged: asked %q\n%s", *asked, a.screen())
 	}
@@ -2422,8 +2428,78 @@ func TestSettingsLossAgainstNow(t *testing.T) {
 	a, asked, values := settingsAppValues(t)
 	a.press("ctrl+k", ",")
 	values["history.keep"] = "20" // another command raises it
-	a.press("enter", "ctrl+u", "15", "enter")
+	a.press("down", "enter", "ctrl+u", "15", "enter")
 	if a.ov == nil || !strings.Contains(a.ov.question, "beyond its newest 15") || len(*asked) != 0 {
 		t.Errorf("15 from 20 (the panel showing 10): asked %q, panel %+v", *asked, a.ov)
+	}
+}
+
+// The settings' first row runs the checks on the open vault and lists them, with what to do; Esc goes back.
+func TestChecksPanel(t *testing.T) {
+	f := newFake()
+	f.checks = Checks{Summary: "FAIL: 1 problem", Checks: []Check{
+		{Section: "Setup", Mark: "ok", Label: "Agent", Value: "running, unlocked"},
+		{Section: "Vault", Mark: "FAIL", Label: "Entries", Value: "1 of 3 entries can't be read", Details: []string{"password/c/u: times don't read"}},
+	}, ToDo: [][]string{{"Restore it from a backup, or delete it:", "sesh --service password --purge --delete password/c/u"}}}
+	a := newApp(t, f, Options{Settings: func() ([]Setting, error) { return nil, nil }})
+	a.press("ctrl+k", ",", "enter")
+	s := a.screen()
+	for _, want := range []string{"Checks: FAIL: 1 problem", "Agent", "1 of 3 entries can't be read", "Restore it from a backup"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q:\n%s", want, s)
+		}
+	}
+	if !slices.Contains(f.reads, "checks") {
+		t.Errorf("reads = %q", f.reads)
+	}
+	a.press("down")
+	if s := a.screen(); !strings.Contains(s, "password/c/u: times don't read") {
+		t.Errorf("the selected check's details:\n%s", s)
+	}
+	a.press("down")
+	if s := a.screen(); !strings.Contains(s, "Run: sesh --service password --purge --delete") {
+		t.Errorf("the step's command:\n%s", s)
+	}
+	a.press("esc")
+	if a.ov == nil || a.ov.kind != panelSettings {
+		t.Errorf("Esc went to %+v", a.ov)
+	}
+}
+
+// A check's long details are cut to the window, saying how many lines are left out; the lines between sections stay.
+func TestChecksPanelFits(t *testing.T) {
+	f := newFake()
+	var details []string
+	for i := range 60 {
+		details = append(details, fmt.Sprintf("password/e%02d: secret doesn't decrypt", i))
+	}
+	f.checks = Checks{Summary: "FAIL: 60 problems", Checks: []Check{
+		{Section: "Setup", Mark: "ok", Label: "Agent", Value: "running"},
+		{Section: "Vault", Mark: "FAIL", Label: "Entries", Value: "60 of 60 entries can't be read", Details: details},
+	}}
+	a := newApp(t, f, Options{Settings: func() ([]Setting, error) { return nil, nil }})
+	a.press("ctrl+k", ",", "enter", "down")
+	s := a.screen()
+	if strings.Count(s, "\n")+1 > a.height || !strings.Contains(s, "more lines") || !strings.Contains(s, "password/e00") {
+		t.Errorf("long details:\n%s", s)
+	}
+	if !strings.Contains(s, "│  ────") {
+		t.Errorf("the line between the sections went:\n%s", s)
+	}
+}
+
+// Opened again while it runs, the panel waits for that run rather than starting another.
+func TestChecksOnce(t *testing.T) {
+	f := newFake()
+	f.checks = Checks{Summary: "OK: no problems"}
+	a := newApp(t, f, Options{Settings: func() ([]Setting, error) { return nil, nil }})
+	a.press("ctrl+k", ",")
+	_, run := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.press("esc")
+	_, again := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	a.run(run)
+	a.run(again)
+	if n := strings.Count(strings.Join(f.reads, " "), "checks"); n != 1 || !strings.Contains(a.screen(), "OK: no problems") {
+		t.Errorf("checks run %d times:\n%s", n, a.screen())
 	}
 }

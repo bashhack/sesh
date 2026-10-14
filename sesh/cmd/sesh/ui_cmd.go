@@ -425,6 +425,18 @@ func (u *uiVault) Health(now time.Time, oldAfter time.Duration) (health.Report, 
 	return c.Report(), nil
 }
 
+func (u *uiVault) Checks() (tui.Checks, error) {
+	// On a connection of their own: the checks read every entry, which on
+	// the store's one connection would hold up everything else the app does.
+	r, err := u.store.Reader()
+	if err != nil {
+		return tui.Checks{}, uiLocked(err)
+	}
+	defer r.Close() //nolint:errcheck // read only, but for the audit event
+	c, err := doctorReport(nil, r)
+	return c, uiLocked(err)
+}
+
 func (u *uiVault) Filing() ([]tui.Folder, []tui.Tag, error) {
 	fs, err := u.store.Folders()
 	if err != nil {
