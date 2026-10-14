@@ -105,6 +105,11 @@ func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) erro
 
 	if dbPath == "" {
 		dbPath = cfg.DBPath.Value
+	} else if dbPath != cfg.DBPath.Value {
+		// The rows that follow the vault's place (its backups) follow it.
+		moved := *cfg
+		moved.DBPath.Value = dbPath
+		cfg = &moved
 	}
 	mat, matErr := database.ReadUnlockMaterial(dbPath)
 	switch {
