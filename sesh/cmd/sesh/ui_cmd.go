@@ -135,7 +135,24 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
 		MaxLifetime: cfg.AgentMaxLifetime.Value,
 		OldAfter:    time.Duration(cfg.HealthOldAfterDays.Value) * 24 * time.Hour,
-		Now:         time.Now,
+		Settings: func() ([]tui.Setting, error) {
+			now, err := settings()
+			if err != nil {
+				return nil, err
+			}
+			return uiSettings(now), nil
+		},
+		SetSetting: func(key, value string) (tui.Live, error) {
+			if err := config.Set(cfg.Path, key, value); err != nil {
+				return tui.Live{}, err
+			}
+			now, err := settings()
+			if err != nil {
+				return tui.Live{}, err
+			}
+			return tui.Live{OldAfter: time.Duration(now.HealthOldAfterDays.Value) * 24 * time.Hour}, nil
+		},
+		Now: time.Now,
 		Unlock: func(pw []byte) (tui.Vault, error) {
 			store, err := reopenWith(cfg, pw)
 			if err != nil {
@@ -655,4 +672,17 @@ func uiLocked(err error) error {
 		return tui.Locked("sesh's agent locked the vault.")
 	}
 	return err
+}
+
+// uiSettings are cfg's settings as the app's settings panel lists them.
+func uiSettings(cfg *config.Config) []tui.Setting {
+	var out []tui.Setting
+	for _, it := range cfg.List() {
+		s := tui.Setting{Key: it.Key, Value: it.Value, Raw: it.Raw, Default: it.Default, Said: it.Said(), Applies: it.Applies, Editable: it.Editable}
+		if it.Source == config.FromEnv || it.Source == config.FromFlag {
+			s.Env = it.Origin
+		}
+		out = append(out, s)
+	}
+	return out
 }

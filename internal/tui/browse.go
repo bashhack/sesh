@@ -392,6 +392,12 @@ func (m *Model) openMarkedMenu() tea.Cmd {
 // from; done gets what was typed, and says what's wrong with it, if
 // anything, or runs the change.
 func (m *Model) ask(title, label, value, hint string, offers []string, done func(string) (string, tea.Cmd)) tea.Cmd {
+	return m.askOver(false, title, label, value, hint, offers, done)
+}
+
+// askOver is ask, leaving the panel under the form open after it when
+// keep says to.
+func (m *Model) askOver(keep bool, title, label, value, hint string, offers []string, done func(string) (string, tea.Cmd)) tea.Cmd {
 	in := m.textInput(label, value)
 	in.hint, in.offers = hint, offers
 	f := &form{title: title, inputs: []*input{in}, row: -1}
@@ -401,7 +407,10 @@ func (m *Model) ask(title, label, value, hint string, offers []string, done func
 			f.err = bad
 			return nil
 		}
-		m.form, m.ov = nil, nil
+		m.form = nil
+		if !keep {
+			m.ov = nil
+		}
 		return cmd
 	}
 	f.focusInput(0)

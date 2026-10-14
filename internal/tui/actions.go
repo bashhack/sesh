@@ -19,12 +19,13 @@ import (
 type panel int
 
 const (
-	panelMenu    panel = iota + 1 // what can be done to the entry
-	panelFields                   // which of its values to copy
-	panelHistory                  // its earlier secrets
-	panelTrash                    // the trash
-	panelConfirm                  // a yes or no before a change
-	panelHealth                   // what's wrong with the passwords and API keys
+	panelMenu     panel = iota + 1 // what can be done to the entry
+	panelFields                    // which of its values to copy
+	panelHistory                   // its earlier secrets
+	panelTrash                     // the trash
+	panelConfirm                   // a yes or no before a change
+	panelHealth                    // what's wrong with the passwords and API keys
+	panelSettings                  // settings and safety
 )
 
 // overlay is a panel over the app, about the entry k.
@@ -39,6 +40,7 @@ type overlay struct {
 	items    []item
 	versions []time.Time
 	trash    []Trashed
+	settings []Setting
 	kind     panel
 	sel      int
 	loading  bool
@@ -125,6 +127,7 @@ func (m *Model) globalItems() []item {
 		{key: "a", label: "add an entry…", run: m.openAdd},
 		{key: "t", label: "the trash…", run: m.openTrash},
 		{key: "r", label: "health report…", run: m.openHealth},
+		{key: ",", label: "settings and safety…", run: m.openSettings},
 		{key: "l", label: "lock sesh", run: m.lockNow},
 	}
 }
@@ -513,6 +516,9 @@ func (m *Model) drawOverlay(base string) string {
 	th := m.th
 	ov := m.ov
 	w := min(64, m.width-6)
+	if ov.kind == panelSettings {
+		w = min(96, m.width-6)
+	}
 	// The rows that fit: the screen less the card's border, title, hint
 	// and the blank lines between.
 	room := max(m.height-8, 1)
@@ -582,6 +588,21 @@ func (m *Model) drawOverlay(base string) string {
 			lines = append(lines, row(i, it.key, it.label))
 		}
 	}
+	// The selected setting's details, below its rows, when two of those
+	// still fit beside them.
+	if detail := ""; ov.kind == panelSettings && ov.sel < len(ov.settings) && !ov.loading {
+		detail = th.dimmed().Width(w - 6).Render(settingDetail(&ov.settings[ov.sel]))
+		if fit := room - lipgloss.Height(detail) - 1; fit >= 2 {
+			if len(lines) > fit {
+				first, last := window(ov.sel, len(ov.items), fit)
+				lines = lines[:0]
+				for i := first; i < last; i++ {
+					lines = append(lines, row(i, ov.items[i].key, ov.items[i].label))
+				}
+			}
+			lines = append(lines, "", detail)
+		}
+	}
 	if ov.err != "" && ov.len() > 0 && !ov.loading {
 		// Above the rows, which stay, since the keys still act on them.
 		said := lipgloss.NewStyle().Foreground(th.bad).Width(w - 6).Render(ov.err)
@@ -598,6 +619,8 @@ func (m *Model) drawOverlay(base string) string {
 		if len(ov.trash) == 0 {
 			hint = th.hints([2]string{"esc", "back"})
 		}
+	case panelSettings:
+		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})
 	case panelHealth:
 		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})
 		switch {

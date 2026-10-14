@@ -798,3 +798,45 @@ func TestUI_OptionsOldAfter(t *testing.T) {
 		t.Errorf("OldAfter = %v", got)
 	}
 }
+
+// The app's settings are the config's; a change is written to the config file, and one set by the
+// environment is said to be.
+func TestUI_Settings(t *testing.T) {
+	path := useConfigFile(t, "# mine\n[history]\nkeep = 10\n")
+	t.Setenv(config.EnvTrashKeepDays, "3")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := uiOptions(agentTestApp(), cfg, nil)
+	if _, err := opts.SetSetting("history.keep", "4"); err != nil {
+		t.Fatal(err)
+	}
+	live, err := opts.SetSetting("health.old_after_days", "30")
+	if err != nil || live.OldAfter != 30*24*time.Hour {
+		t.Fatalf("OldAfter = %v, %v", live.OldAfter, err)
+	}
+	if body, _ := os.ReadFile(path); !strings.HasPrefix(string(body), "# mine\n[history]\nkeep = 4\n") || !strings.Contains(string(body), "[health]\nold_after_days = 30\n") { //nolint:errcheck // compared
+		t.Errorf("config file:\n%s", body)
+	}
+	list, err := opts.Settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]tui.Setting{}
+	for _, s := range list {
+		got[s.Key] = s
+	}
+	if h := got["history.keep"]; h.Value != "4" || h.Said != "config file" || h.Env != "" {
+		t.Errorf("history.keep = %+v", h)
+	}
+	if tr := got["trash.keep_days"]; tr.Env != config.EnvTrashKeepDays {
+		t.Errorf("trash.keep_days = %+v", tr)
+	}
+	if d := got["db_path"]; d.Editable {
+		t.Errorf("db_path = %+v", d)
+	}
+	if _, err := opts.SetSetting("history.keep", "-1"); err == nil || !strings.Contains(err.Error(), "history.keep") {
+		t.Errorf("a refused value: %v", err)
+	}
+}
