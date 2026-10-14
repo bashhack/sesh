@@ -716,3 +716,55 @@ func TestUI_SaveTOTPKeys(t *testing.T) {
 		t.Errorf("key = %q, %v", key, err)
 	}
 }
+
+// The app's tidying reaches the vault: folders and tags set, renamed and
+// counted, and entries trashed together.
+func TestUI_Tidy(t *testing.T) {
+	filingVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	gl := vault.Key{Kind: vault.KindPassword, Service: "gitlab"}
+	if n, err := u.MoveToFolder([]vault.Key{gh, gl}, "work/git"); err != nil || n != 2 {
+		t.Fatalf("MoveToFolder = %d, %v", n, err)
+	}
+	if n, err := u.AddTag([]vault.Key{gh, gl}, "code"); err != nil || n != 2 {
+		t.Fatalf("AddTag = %d, %v", n, err)
+	}
+	if n, err := u.RemoveTag([]vault.Key{gl}, "code"); err != nil || n != 1 {
+		t.Fatalf("RemoveTag = %d, %v", n, err)
+	}
+	if n, merged, err := u.RenameFolder("work", "job"); err != nil || n != 2 || merged {
+		t.Fatalf("RenameFolder = %d, %v, %v", n, merged, err)
+	}
+	if n, _, err := u.RenameTag("code", "src"); err != nil || n != 1 {
+		t.Fatalf("RenameTag = %d, %v", n, err)
+	}
+	folders, tags, err := u.Filing()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range folders {
+		got = append(got, fmt.Sprintf("%s=%d/%d", f.Name, f.Entries, f.Total))
+	}
+	for _, tg := range tags {
+		got = append(got, fmt.Sprintf("#%s=%d", tg.Name, tg.Entries))
+	}
+	if want := "=2/2 job=0/2 job/git=2/2 #src=1"; strings.Join(got, " ") != want {
+		t.Errorf("Filing = %q, want %q", strings.Join(got, " "), want)
+	}
+	if err := u.DeleteMany([]vault.Key{gh, gl}); err != nil {
+		t.Fatal(err)
+	}
+	if trash, err := u.Trash(); err != nil || len(trash) != 2 {
+		t.Errorf("Trash = %d, %v", len(trash), err)
+	}
+	if changed, err := u.Check(); changed || err != nil {
+		t.Errorf("Check after the app's own writes = %v, %v; want no change", changed, err)
+	}
+}

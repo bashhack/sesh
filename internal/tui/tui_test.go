@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -38,6 +39,7 @@ type fakeVault struct {
 	closed   bool
 	changed  bool
 	searched int
+	changes  int // folder and tag changes made
 }
 
 func (f *fakeVault) Search(q string) ([]vault.Entry, int, error) {
@@ -129,18 +131,114 @@ func (f *fakeVault) Delete(k vault.Key) error {
 	return errors.New("not found")
 }
 
-func (f *fakeVault) Filing() (folders, tags []string, err error) {
+func (f *fakeVault) Filing() ([]Folder, []Tag, error) {
+	var folders []Folder
+	var tags []Tag
 	for _, e := range f.entries {
-		if e.Folder != "" && !slices.Contains(folders, e.Folder) {
-			folders = append(folders, e.Folder)
+		// Each folder, and those above it, count the entry in their total.
+		for p := e.Folder; ; {
+			i := slices.IndexFunc(folders, func(x Folder) bool { return x.Name == p })
+			if i < 0 {
+				folders = append(folders, Folder{Name: p})
+				i = len(folders) - 1
+			}
+			folders[i].Total++
+			if p == e.Folder {
+				folders[i].Entries++
+			}
+			if p == "" || !strings.Contains(p, "/") {
+				break
+			}
+			p = p[:strings.LastIndex(p, "/")]
 		}
 		for _, t := range e.Tags {
-			if !slices.Contains(tags, t) {
-				tags = append(tags, t)
+			i := slices.IndexFunc(tags, func(x Tag) bool { return x.Name == t })
+			if i < 0 {
+				tags = append(tags, Tag{Name: t})
+				i = len(tags) - 1
 			}
+			tags[i].Entries++
 		}
 	}
+	slices.SortFunc(folders, func(a, b Folder) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(tags, func(a, b Tag) int { return strings.Compare(a.Name, b.Name) })
 	return folders, tags, f.err
+}
+
+// each runs change on the entries keys name, and says how many it changed.
+func (f *fakeVault) each(keys []vault.Key, change func(e *vault.Entry) bool) (int, error) {
+	// As the store does, an entry not there fails the lot.
+	for _, k := range keys {
+		if !slices.ContainsFunc(f.entries, func(e vault.Entry) bool { return e.Key == k }) {
+			return 0, fmt.Errorf("entry not found: %s", k)
+		}
+	}
+	n := 0
+	for i := range f.entries {
+		if slices.Contains(keys, f.entries[i].Key) && change(&f.entries[i]) {
+			n++
+		}
+	}
+	f.changes++
+	return n, f.err
+}
+
+func (f *fakeVault) MoveToFolder(keys []vault.Key, folder string) (int, error) {
+	return f.each(keys, func(e *vault.Entry) bool { moved := e.Folder != folder; e.Folder = folder; return moved })
+}
+
+func (f *fakeVault) AddTag(keys []vault.Key, tag string) (int, error) {
+	return f.each(keys, func(e *vault.Entry) bool {
+		if slices.Contains(e.Tags, tag) {
+			return false
+		}
+		e.Tags = append(slices.Clone(e.Tags), tag)
+		return true
+	})
+}
+
+func (f *fakeVault) RemoveTag(keys []vault.Key, tag string) (int, error) {
+	return f.each(keys, func(e *vault.Entry) bool {
+		had := slices.Contains(e.Tags, tag)
+		e.Tags = slices.DeleteFunc(slices.Clone(e.Tags), func(t string) bool { return t == tag })
+		return had
+	})
+}
+
+func (f *fakeVault) DeleteMany(keys []vault.Key) error {
+	for _, k := range keys {
+		if err := f.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *fakeVault) RenameFolder(from, to string) (int, bool, error) {
+	f.changes++
+	merged := slices.ContainsFunc(f.entries, func(e vault.Entry) bool { return vault.InFolder(e.Folder, to) })
+	n := 0
+	for i := range f.entries {
+		if vault.InFolder(f.entries[i].Folder, from) {
+			f.entries[i].Folder = to + strings.TrimPrefix(f.entries[i].Folder, from)
+			n++
+		}
+	}
+	return n, merged, f.err
+}
+
+func (f *fakeVault) RenameTag(from, to string) (int, bool, error) {
+	merged := slices.ContainsFunc(f.entries, func(e vault.Entry) bool { return slices.Contains(e.Tags, to) })
+	n := 0
+	f.changes++
+	for i := range f.entries {
+		if j := slices.Index(f.entries[i].Tags, from); j >= 0 {
+			f.entries[i].Tags = slices.Clone(f.entries[i].Tags)
+			f.entries[i].Tags[j] = to
+			n++
+		}
+	}
+	return n, merged, f.err
 }
 
 func (f *fakeVault) Trash() ([]Trashed, error) { return slices.Clone(f.trash), nil }
@@ -299,6 +397,12 @@ func (a *app) press(keys ...string) {
 			msg = tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}
 		case "→":
 			msg = tea.KeyPressMsg{Code: tea.KeyRight}
+		case "←":
+			msg = tea.KeyPressMsg{Code: tea.KeyLeft}
+		case "ctrl+u":
+			msg = tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
+		case "space":
+			msg = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 		case "shift+tab":
 			msg = tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 		case "wait": // past the moment a confirmation's y starts to count
@@ -688,7 +792,7 @@ func TestLockDoesNotWait(t *testing.T) {
 func TestHelp(t *testing.T) {
 	a := newApp(t, newFake(), Options{})
 	a.press("?")
-	if s := a.screen(); !strings.Contains(s, "clear the search, or quit") || strings.Contains(s, "◆ gitlab") {
+	if s := a.screen(); !strings.Contains(s, "clear the search and folder, or quit") || strings.Contains(s, "◆ gitlab") {
 		t.Errorf("help:\n%s", s)
 	}
 	a.press("esc")
@@ -1726,5 +1830,272 @@ func TestFormShowsTheCurrentSecret(t *testing.T) {
 	a.press("esc")
 	if a.form != nil {
 		t.Error("looking at the current password counted as a change")
+	}
+}
+
+// wideApp is the app on f in a window wide enough for the sidebar.
+func wideApp(t *testing.T, f *fakeVault) *app {
+	t.Helper()
+	a := newApp(t, f, Options{})
+	a.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
+	return a
+}
+
+// filedFake has github in work, its code in work, gitlab in work/aws, and github tagged prod.
+func filedFake() *fakeVault {
+	f := newFake()
+	f.entries[0].Tags = []string{"prod"}
+	f.entries[2].Folder = "work/aws"
+	return f
+}
+
+// The sidebar lists folders (counting those inside) and tags, and picking one filters the list.
+func TestSidebarFilters(t *testing.T) {
+	a := wideApp(t, filedFake())
+	s := a.screen()
+	for _, w := range []string{"All     3", "work    3", "  aws   1", "#prod   1"} {
+		if !strings.Contains(s, w) {
+			t.Fatalf("sidebar missing %q:\n%s", w, s)
+		}
+	}
+	a.press("down", "←", "down", "down")
+	if s := a.screen(); len(a.rows) != 1 || a.rows[0].Key != gitlab || !strings.Contains(s, "1 of 3 in work/aws") {
+		t.Fatalf("work/aws picked: %d rows\n%s", len(a.rows), s)
+	}
+	a.press("down")
+	if len(a.rows) != 1 || a.rows[0].Key != github {
+		t.Errorf("#prod picked: %v", a.rows)
+	}
+	a.press("enter", "esc")
+	if a.filter.kind != sideAll || len(a.rows) != 3 || a.quit {
+		t.Errorf("Esc in the list should clear the filter first (quit %v, %d rows)", a.quit, len(a.rows))
+	}
+	a.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	a.press("down", "←")
+	if a.focus == focusSide {
+		t.Error("← went to a sidebar that isn't shown")
+	}
+}
+
+// ↑↓ move into the list, where Space marks; typing goes back to the search, where Space is a space.
+func TestFocusFollowsUse(t *testing.T) {
+	a := wideApp(t, filedFake())
+	a.press("space")
+	if a.input.Value() != " " || len(a.marked) != 0 {
+		t.Fatalf("Space in the search: query %q, marked %v", a.input.Value(), a.marked)
+	}
+	a.press("backspace", "down", "space")
+	if !a.marked[code] || a.sel != 2 || !strings.Contains(a.screen(), "✓") {
+		t.Fatalf("Space in the list should mark and move on: marked %v, sel %d", a.marked, a.sel)
+	}
+	a.press("g")
+	if a.focus != focusSearch || a.input.Value() != "g" {
+		t.Errorf("typing in the list: focus %v, query %q", a.focus, a.input.Value())
+	}
+	a.press("esc")
+	if len(a.marked) != 0 || a.input.Value() != "g" {
+		t.Errorf("Esc should unmark first: marked %v, query %q", a.marked, a.input.Value())
+	}
+}
+
+// Ctrl-K with entries marked moves, tags, untags and trashes them together.
+func TestMarkedActions(t *testing.T) {
+	f := filedFake()
+	a := wideApp(t, f)
+	a.press("down", "space", "space") // the code and gitlab
+	a.press("ctrl+k", "m", "home", "enter")
+	if f.entries[1].Folder != "home" || f.entries[2].Folder != "home" || f.entries[0].Folder != "work" || len(a.marked) != 0 {
+		t.Fatalf("moved: %+v, still marked %v", f.entries, a.marked)
+	}
+	if s := a.screen(); !strings.Contains(s, "Moved 2 entries to home") || !strings.Contains(s, "home    2") {
+		t.Errorf("after moving:\n%s", s)
+	}
+	a.press("up", "space", "down", "space", "ctrl+k", "+", "pr", "down", "enter", "enter")
+	if !slices.Contains(f.entries[1].Tags, "prod") || !slices.Contains(f.entries[0].Tags, "prod") {
+		t.Fatalf("tagged: %+v", f.entries)
+	}
+	a.press("space", "ctrl+k", "-", "prod", "enter")
+	if slices.Contains(f.entries[2].Tags, "prod") || !slices.Contains(f.entries[0].Tags, "prod") {
+		t.Errorf("untagged: %+v", f.entries)
+	}
+	a.press("up", "space", "space", "ctrl+k", "d", "wait", "y")
+	if len(f.entries) != 1 || len(f.trash) != 2 || !strings.Contains(a.screen(), "Moved 2 entries to the trash") {
+		t.Errorf("trashed: %d left, %d in the trash\n%s", len(f.entries), len(f.trash), a.screen())
+	}
+}
+
+// Ctrl-K in the sidebar renames a folder, the filter following it.
+func TestSidebarRename(t *testing.T) {
+	f := filedFake()
+	a := wideApp(t, f)
+	a.press("down", "←", "down", "ctrl+k", "r", "ctrl+u", "job", "enter")
+	if f.entries[0].Folder != "job" || f.entries[2].Folder != "job/aws" {
+		t.Fatalf("renamed: %+v", f.entries)
+	}
+	if s := a.screen(); a.filter.name != "job" || len(a.rows) != 3 || !strings.Contains(s, "Renamed the folder work to job (3 entries)") {
+		t.Errorf("filter %q, %d rows:\n%s", a.filter.name, len(a.rows), s)
+	}
+	if r := a.side[a.sideSel]; r.name != "job" {
+		t.Errorf("the sidebar's cursor left the folder renamed: on %+v", r)
+	}
+	a.press("ctrl+k", "r", "ctrl+u", "job/inner", "enter")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "can't move inside itself") {
+		t.Errorf("a folder renamed into itself:\n%s", s)
+	}
+	a.press("esc", "esc", "down", "down", "ctrl+k", "r", "ctrl+u", "bad tag", "enter")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "the tag") {
+		t.Errorf("a tag name with a space:\n%s", s)
+	}
+}
+
+// A click in the sidebar picks its row.
+func TestSidebarClick(t *testing.T) {
+	a := wideApp(t, filedFake())
+	a.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: 3, Y: 4}) // the second row: work
+	if a.filter.name != "work" || a.focus != focusSide {
+		t.Errorf("clicked: filter %+v, focus %v", a.filter, a.focus)
+	}
+}
+
+// A marked entry another command deleted is left out of what's done to the marks, and unmarked.
+func TestMarksGoneElsewhere(t *testing.T) {
+	f := filedFake()
+	a := wideApp(t, f)
+	a.press("down", "space", "space", "gitlab") // the code and gitlab marked, then a search
+	f.entries = slices.DeleteFunc(f.entries, func(e vault.Entry) bool { return e.Key == code })
+	f.changed = true
+	a.tick(time.Second)
+	if len(a.marked) != 2 {
+		t.Fatalf("marks after a search's results: %v", a.marked)
+	}
+	a.press("ctrl+k", "m", "home", "enter")
+	if s := a.screen(); f.entries[1].Folder != "home" || len(a.marked) != 0 || !strings.Contains(s, "Moved 1 entry to home; 1 marked was gone") {
+		t.Errorf("moving with one gone: %+v, marked %v\n%s", f.entries, a.marked, s)
+	}
+	a.press("esc", "down", "space")
+	var gone vault.Key
+	for k := range a.marked {
+		gone = k
+	}
+	f.entries = slices.DeleteFunc(f.entries, func(e vault.Entry) bool { return e.Key == gone })
+	a.press("ctrl+k", "d", "wait", "y")
+	if s := a.screen(); len(a.marked) != 0 || len(f.trash) != 0 || !strings.Contains(s, "the entries marked are gone") {
+		t.Errorf("acting on marks all gone: marked %v\n%s", a.marked, s)
+	}
+}
+
+// Marks the list doesn't show are said to be, and a trash of one names it.
+func TestHiddenMarksNamed(t *testing.T) {
+	a := wideApp(t, filedFake())
+	a.press("down", "down", "space", "←", "down", "down", "down") // gitlab marked, then #prod
+	a.press("enter", "ctrl+k")
+	if s := a.screen(); !strings.Contains(s, "1 entry marked (1 not shown)") || !strings.Contains(s, "the selected entry's actions") {
+		t.Fatalf("menu with a mark not shown:\n%s", s)
+	}
+	a.press("d")
+	if q := a.ov.question; !strings.Contains(q, "API key gitlab") || !strings.Contains(q, "not shown") {
+		t.Errorf("the trash's question: %q", q)
+	}
+}
+
+// A filter another command empties goes back to every entry, keeping the selection and its code.
+func TestFilterGoneElsewhere(t *testing.T) {
+	f := filedFake()
+	a := wideApp(t, f)
+	a.press("down", "←", "down", "enter", "down") // work, then its code selected
+	if e := a.selected(); e == nil || e.Key != code {
+		t.Fatalf("selected %v", e)
+	}
+	for i := range f.entries {
+		f.entries[i].Folder = strings.Replace(f.entries[i].Folder, "work", "job", 1)
+	}
+	f.changed = true
+	a.tick(time.Second)
+	if e := a.selected(); a.filter.kind != sideAll || e == nil || e.Key != code || a.keys[code] == nil {
+		t.Errorf("filter %+v, selected %v, its key held %v", a.filter, e, a.keys[code] != nil)
+	}
+}
+
+// The sidebar keeps its rows in view as the window changes, and gives up the focus when it goes.
+func TestSidebarResize(t *testing.T) {
+	f := filedFake()
+	for i := range 30 {
+		f.entries[0].Tags = append(f.entries[0].Tags, fmt.Sprintf("t%02d", i))
+	}
+	a := wideApp(t, f)
+	a.press("down", "←")
+	for range 40 {
+		a.press("down")
+	}
+	a.Update(tea.WindowSizeMsg{Width: 120, Height: 60})
+	if a.sideTop != 0 {
+		t.Errorf("after growing, the sidebar starts at row %d", a.sideTop)
+	}
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	filter := a.filter
+	a.press("enter")
+	a.Update(tea.WindowSizeMsg{Width: 120, Height: 20})
+	a.press("up")
+	if a.filter != filter || a.focus != focusList {
+		t.Errorf("↑ after the sidebar went and came back: filter %+v, focus %v", a.filter, a.focus)
+	}
+}
+
+// A paste goes to the search, which takes the focus; a click lands on the list beside the sidebar.
+func TestPasteAndClickBesideSidebar(t *testing.T) {
+	a := wideApp(t, filedFake())
+	a.press("down")
+	_, cmd := a.Update(tea.PasteMsg{Content: "git"})
+	a.run(cmd)
+	if a.focus != focusSearch {
+		t.Errorf("after a paste the focus is %v", a.focus)
+	}
+	a.press("esc")
+	a.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: a.listX() + 3, Y: 5}) // the third entry
+	if a.sel != 2 || a.focus != focusList {
+		t.Errorf("clicked the third entry: sel %d, focus %v", a.sel, a.focus)
+	}
+}
+
+// A deep folder keeps its count in the sidebar.
+func TestSidebarDeepFolder(t *testing.T) {
+	f := filedFake()
+	f.entries[2].Folder = "a/b/c/d/e/f/g/h/i/j/k/l"
+	a := wideApp(t, f)
+	if s := a.screen(); !regexp.MustCompile(`│ +l +1 │`).MatchString(s) {
+		t.Errorf("the deepest folder's count:\n%s", s)
+	}
+}
+
+// A trash of one marked entry names it shortened, as the other questions do.
+func TestMarkedTrashLongName(t *testing.T) {
+	f := filedFake()
+	for i := range f.entries {
+		f.entries[i].Key.Service = strings.Repeat("git-long-name-", 18) + fmt.Sprint(i)
+	}
+	a := newApp(t, f, Options{})
+	a.press("down", "down", "space", "ctrl+k", "d")
+	if q := a.ov.question; !strings.Contains(q, "…") || strings.Count(q, "git-long-name") > 8 {
+		t.Errorf("the question's name isn't shortened: %q", q)
+	}
+	a.press("esc", "esc", "zzz") // the mark kept, its entry no longer listed
+	a.press("ctrl+k", "d")
+	if q := a.ov.question; !strings.Contains(q, "…") || !strings.Contains(q, "not shown") {
+		t.Errorf("a mark not shown, with a long name: %q", q)
+	}
+}
+
+// A reveal that comes back once its entry is no longer listed isn't kept.
+func TestRevealLandsOnNothingListed(t *testing.T) {
+	f := filedFake()
+	a := wideApp(t, f)
+	_, read := a.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	entries := f.entries
+	f.entries, f.changed = nil, true // another command empties the vault
+	a.tick(time.Second)
+	f.entries = entries
+	a.run(read)
+	if a.shown != nil {
+		t.Error("a reveal was kept for an entry not listed")
 	}
 }

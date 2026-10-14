@@ -12,10 +12,18 @@ import (
 	"github.com/bashhack/sesh/internal/vault"
 )
 
-// key handles a key while unlocked: typing searches, the arrows move,
-// Enter copies, Esc clears the search or quits, ? shows the keys.
+// key handles a key while unlocked: typing searches, the arrows move
+// into the list (where Space marks, and ← goes to the sidebar), Enter
+// copies, Esc unmarks, clears the search and the filter, then quits, ?
+// shows the keys.
 func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	m.lastKey = m.opts.Now()
+	if m.focus == focusSide {
+		if m.listShown() && m.sideWidth() > 0 {
+			return m.sideKey(msg)
+		}
+		m.focus = focusList // the sidebar went with a narrower window
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		return tea.Quit
@@ -24,11 +32,32 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		case m.showHelp:
 			m.showHelp = false
 			return nil
-		case m.input.Value() == "":
-			return tea.Quit
+		case len(m.marked) > 0:
+			m.say("Unmarked " + countOf(len(m.marked)))
+			clear(m.marked)
+			return nil
+		case m.input.Value() != "":
+			m.input.SetValue("")
+			return m.requery()
+		case m.filter.kind != sideAll:
+			return m.pick(0)
 		}
-		m.input.SetValue("")
-		return m.requery()
+		return tea.Quit
+	case "space":
+		if m.focus != focusList || !m.listShown() {
+			return m.typed(msg)
+		}
+		m.toggleMark()
+		return m.moved()
+	case "left":
+		if m.focus != focusList {
+			return m.typed(msg)
+		}
+		if m.listShown() && m.sideWidth() > 0 {
+			m.focusOn(focusSide)
+			m.scrollSide()
+		}
+		return nil
 	case "enter", "tab", "ctrl+y", "ctrl+o", "ctrl+k":
 		if !m.listShown() {
 			// The entries aren't on screen: nothing is done to one unseen.
@@ -37,8 +66,11 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		switch msg.String() {
 		case "ctrl+k":
 			// With text after the cursor, Ctrl-K deletes it, as in a shell.
-			if m.input.Position() < len([]rune(m.input.Value())) {
+			if m.focus == focusSearch && m.input.Position() < len([]rune(m.input.Value())) {
 				return m.typed(msg)
+			}
+			if len(m.marked) > 0 {
+				return m.openMarkedMenu()
 			}
 			return m.openMenu()
 		case "tab":
@@ -50,12 +82,16 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.copySecret(m.selected())
 	case "up", "ctrl+p":
+		m.focusOn(focusList)
 		m.sel--
 	case "down", "ctrl+n":
+		m.focusOn(focusList)
 		m.sel++
 	case "pgup":
+		m.focusOn(focusList)
 		m.sel -= m.listHeight()
 	case "pgdown":
+		m.focusOn(focusList)
 		m.sel += m.listHeight()
 	case "shift+up":
 		m.scrollPreview(-1)
@@ -76,9 +112,12 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	return m.moved()
 }
 
-// typed hands a key to the search box, and searches again when it
-// changed what's searched for.
+// typed hands a key to the search box, which takes the focus, and
+// searches again when it changed what's searched for.
 func (m *Model) typed(msg tea.KeyPressMsg) tea.Cmd {
+	if m.focus != focusSearch {
+		m.focusSearch()
+	}
 	before := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -325,7 +364,7 @@ func (m *Model) openURL(e *vault.Entry) tea.Cmd {
 func (m *Model) rowAt(x, y int) (int, bool) {
 	const firstRow = 3 // the frame's top, the search line, the rule
 	n := m.top + y - firstRow
-	if x < 1 || x > m.listWidth() || y < firstRow || y >= firstRow+m.listHeight() || n >= len(m.rows) {
+	if x < m.listX() || x >= m.listX()+m.listWidth() || y < firstRow || y >= firstRow+m.listHeight() || n >= len(m.rows) {
 		return 0, false
 	}
 	return n, true

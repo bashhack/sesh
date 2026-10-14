@@ -65,11 +65,14 @@ func (m *Model) selected() *vault.Entry {
 // and the keys and notes now shown are read.
 func (m *Model) moved() tea.Cmd {
 	e := m.selected()
-	var k vault.Key
-	if e != nil {
-		k = e.Key
+	if e == nil {
+		// Nothing listed: the selection is remembered, to come back to
+		// when its entry is listed again.
+		m.previewTop = 0
+		m.hide()
+		return nil
 	}
-	if k != m.selKey {
+	if k := e.Key; k != m.selKey {
 		m.selKey, m.previewTop = k, 0
 		m.hide()
 	}
@@ -177,7 +180,8 @@ func whatsHidden(k vault.Kind) string {
 func (m *Model) gotReveal(msg *revealMsg) tea.Cmd {
 	m.revealing = false
 	r := &revealed{k: msg.k, secret: msg.secret, fields: msg.fields, until: m.opts.Now().Add(revealFor)}
-	if msg.epoch != m.epoch || m.v == nil || m.selKey != msg.k {
+	if e := m.selected(); msg.epoch != m.epoch || m.v == nil || e == nil || e.Key != msg.k {
+		// Not for the entry selected now, or none is: not shown.
 		r.wipe()
 		return nil
 	}
