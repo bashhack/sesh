@@ -14,6 +14,8 @@ import (
 // The app's master password change re-encrypts the vault as sesh --rekey does, opens it again with the new one,
 // and offers the backups made before; a wrong current password changes nothing.
 func TestUI_ChangePassword(t *testing.T) {
+	// The one backup counted below is the test's own: none made when the vault is opened, a second apart.
+	t.Setenv("SESH_BACKUP_EVERY_DAYS", "0")
 	healthVault(t)
 	store, err := openSQLiteStore()
 	if err != nil {
