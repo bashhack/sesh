@@ -176,7 +176,7 @@ func (e *ExistsError) Error() string { return e.Path + " already exists; add --f
 func (e *ExistsError) Unwrap() error { return os.ErrExist }
 
 // IsVaultFile says whether path is the vault at vaultPath, or its -wal,
-// -shm or -journal file: a backup written there would replace a file the
+// -shm or -journal file: a file written there would replace one the
 // vault, open in another sesh, is using. Names are compared ignoring case,
 // as macOS's file system does, and through links; files there already are
 // compared as files.

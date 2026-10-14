@@ -56,7 +56,10 @@ func (m *Model) exportForm() tea.Cmd {
 			f.err = "That password is easy to guess, and anyone with the file can try passwords against it. Press Enter again to use it anyway."
 		default:
 			f.saving, f.err = true, ""
-			secret, replace := bytes.Clone(pw.secret), to == replaceOf
+			// The export takes what was typed; the form keeps a copy to try
+			// again with.
+			secret, replace := pw.secret, to == replaceOf
+			pw.secret = bytes.Clone(secret)
 			return wipeUnread(secret, m.read(func(v Vault, _ func() bool) tea.Msg {
 				said, err := v.Export(to, secret, replace)
 				return exportedMsg{f: f, said: said, err: err, to: to, replaceOf: &replaceOf}

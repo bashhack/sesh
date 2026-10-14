@@ -29,7 +29,7 @@ func TestIsDevice(t *testing.T) {
 	}
 }
 
-// The vault's own files are refused, through a link too, and a device through a link is a device.
+// The vault's own files are refused, through a link too, even to one not there yet, and a device through a link is a device.
 func TestOpenRefusesTheVault(t *testing.T) {
 	dir := t.TempDir()
 	vault := filepath.Join(dir, "passwords.db")
@@ -40,7 +40,12 @@ func TestOpenRefusesTheVault(t *testing.T) {
 	if err := os.Symlink(vault, link); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{vault, vault + "-wal", link} {
+	// A link to a vault file not there yet.
+	journal := filepath.Join(t.TempDir(), "j.enc")
+	if err := os.Symlink(vault+"-journal", journal); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{vault, vault + "-wal", link, journal} {
 		if _, err := Open(p, true, vault); err == nil || !strings.Contains(err.Error(), "is the vault itself") {
 			t.Errorf("%s: %v", p, err)
 		}

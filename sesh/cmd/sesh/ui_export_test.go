@@ -106,3 +106,29 @@ func TestUI_ExportKeyChanged(t *testing.T) {
 		t.Errorf("a file was left: %v", err)
 	}
 }
+
+// The command line's export, set up as main sets it up, refuses the vault's
+// own file even with --force, and the vault is left whole.
+func TestExport_RefusesTheVault(t *testing.T) {
+	healthVault(t)
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, closer, err := buildProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closer.Close() //nolint:errcheck // test cleanup
+	stderr := new(bytes.Buffer)
+	app := NewDefaultApp(VersionInfo{}, store, appSettingsFrom(cfg))
+	app.Stdin, app.Stdout, app.Stderr = strings.NewReader(""), new(bytes.Buffer), stderr
+	app.Exit = func(int) {}
+	run(app, []string{"sesh", "--service", "password", "--action", "export", "--format", "encrypted", "--file", cfg.DBPath.Value, "--force"})
+	if !strings.Contains(stderr.String(), "is the vault itself") {
+		t.Errorf("exporting over the vault:\n%s", stderr)
+	}
+	if _, err := database.VaultSummary(cfg.DBPath.Value); err != nil {
+		t.Errorf("the vault after: %v", err)
+	}
+}

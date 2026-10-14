@@ -84,12 +84,17 @@ func runUI(app *App, args []string) error {
 	p := tea.NewProgram(m, append([]tea.ProgramOption{tea.WithInput(app.Stdin), tea.WithOutput(app.Stdout)}, uiProgramOptions...)...)
 	// The terminal closed: the app ends as when it's quit, so what it's
 	// writing (an export) is finished, or its file removed, first.
-	hup := make(chan os.Signal, 1)
+	hup, done := make(chan os.Signal, 1), make(chan struct{})
 	signal.Notify(hup, syscall.SIGHUP)
-	defer signal.Stop(hup)
+	defer func() {
+		signal.Stop(hup)
+		close(done)
+	}()
 	go func() {
-		if _, ok := <-hup; ok {
+		select {
+		case <-hup:
 			p.Quit()
+		case <-done:
 		}
 	}()
 	_, err = p.Run()

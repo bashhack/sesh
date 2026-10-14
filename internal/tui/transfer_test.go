@@ -69,6 +69,15 @@ func TestExportAcrossLock(t *testing.T) {
 	if a.form == nil || a.form != open {
 		t.Error("the old export's result closed the form opened since")
 	}
+	// Locked before it's written: the password it was handed is wiped.
+	b := newApp(t, newFake(), Options{})
+	b.press("ctrl+k", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
+	typed := b.form.inputs[1].secret
+	_, write = b.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	b.run(b.lock("You locked it."))
+	if msg := write(); msg != nil || strings.Trim(string(typed), "\x00") != "" {
+		t.Errorf("not written: %v, %q", msg, typed)
+	}
 }
 
 // A file there already is said, and Enter again replaces it; another file asks again.
@@ -116,9 +125,15 @@ func TestExportFails(t *testing.T) {
 	if b.quit || !strings.Contains(b.screen(), "Quitting once the export is written") {
 		t.Fatalf("quit %v\n%s", b.quit, b.screen())
 	}
+	inputs := b.form.inputs
 	b.run(write)
 	if !b.quit || b.Afterword() != "Exported 3 entries to ~/b.enc." {
 		t.Errorf("quit %v, said after %q", b.quit, b.Afterword())
+	}
+	for _, in := range inputs[1:] {
+		if strings.Trim(string(in.secret), "\x00") != "" {
+			t.Errorf("quitting, %s still holds %q", in.label, in.secret)
+		}
 	}
 	// One that fails says so after.
 	k := newFake()
