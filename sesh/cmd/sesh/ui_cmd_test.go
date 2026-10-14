@@ -94,7 +94,7 @@ func TestUI_Vault(t *testing.T) {
 	if changed, err := v2.Check(); !changed || err != nil {
 		t.Errorf("first Check after a change = %v, %v", changed, err)
 	}
-	if err := uiLocked(database.ErrVaultKeyChanged); !errors.Is(err, tui.ErrLocked) || !strings.Contains(err.Error(), "master password was changed") {
+	if err := uiLocked(database.ErrVaultKeyChanged); !errors.Is(err, tui.ErrLocked) || !strings.Contains(err.Error(), "changed the master password") {
 		t.Errorf("uiLocked(ErrVaultKeyChanged) = %v", err)
 	}
 }
@@ -238,7 +238,7 @@ func TestUI_AgentLockAndUnlockAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn.Close() //nolint:errcheck,gosec // test cleanup
-	if _, err := u.Check(); !errors.Is(err, tui.ErrLocked) || err.Error() != "sesh's agent locked." {
+	if _, err := u.Check(); !errors.Is(err, tui.ErrLocked) || err.Error() != "sesh's agent locked the vault." {
 		t.Errorf("Check once the agent locked: %v", err)
 	}
 	if err := u.KeepAlive(); !errors.Is(err, tui.ErrLocked) {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -283,8 +284,10 @@ func (e *editor) Run() error {
 	// The app's loop waits for the editor, so it can't keep the agent from
 	// locking for being idle meanwhile; this does.
 	done := make(chan struct{})
+	var wg sync.WaitGroup
+	defer wg.Wait()
 	defer close(done)
-	go func() {
+	wg.Go(func() {
 		t := time.NewTicker(e.every)
 		defer t.Stop()
 		for {
@@ -295,7 +298,7 @@ func (e *editor) Run() error {
 				e.keep()
 			}
 		}
-	}()
+	})
 	out, err := e.edit(e.notes)
 	secure.SecureZeroBytes(e.notes)
 	e.notes, e.err = out, err
@@ -332,7 +335,7 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "esc":
 		// What was typed isn't thrown away on one stray Esc.
 		if f.changed && !f.leaving {
-			f.leaving, f.err = true, "Not saved. Esc again discards what you changed."
+			f.leaving, f.err = true, "You have unsaved changes. Press Esc again to discard them."
 			return nil
 		}
 		// A field's form holds only what was typed into it: the field
@@ -395,7 +398,8 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 				every = min(every, m.opts.IdleTimeout/2)
 			}
 			keep := func() { g.run(func(v Vault, _ func() bool) tea.Msg { _ = v.KeepAlive(); return nil }) } //nolint:errcheck // a lock shows on return
-			e := &editor{edit: m.opts.EditNotes, keep: keep, every: every, notes: []byte(in.area.Value())}
+			e := &editor{edit: m.opts.EditNotes, keep: keep, every: max(every, time.Second), notes: []byte(in.area.Value())}
+			m.inEditor = true
 			return tea.Exec(e, func(err error) tea.Msg { return editorMsg{notes: e.notes, err: e.err} })
 		}
 		var cmd tea.Cmd
@@ -525,7 +529,11 @@ func (m *Model) openFieldForm(in *input, row int) tea.Cmd {
 	if r.secret && r.value != nil {
 		hidden.secret = bytes.Clone(r.value)
 	}
-	ff := &form{title: "A field", back: m.form, row: row, inputs: []*input{name, secretChoice, plain, hidden}}
+	title := "New field"
+	if row >= 0 {
+		title = "Field " + r.name
+	}
+	ff := &form{title: title, back: m.form, row: row, inputs: []*input{name, secretChoice, plain, hidden}}
 	ff.submit = func() tea.Cmd {
 		n := name.value()
 		if n == "" {
@@ -534,7 +542,7 @@ func (m *Model) openFieldForm(in *input, row int) tea.Cmd {
 		}
 		for j, o := range in.rows {
 			if j != row && strings.EqualFold(o.name, n) {
-				ff.err = "Another field is called that; field names differ by more than case."
+				ff.err = "Another field already has that name (names can't differ only in case)."
 				return nil
 			}
 		}
@@ -542,7 +550,7 @@ func (m *Model) openFieldForm(in *input, row int) tea.Cmd {
 		kept := false
 		switch {
 		case !nr.secret && r.secret && plain.text.Value() == "":
-			ff.err = "Type its value: what it has is secret, and stays so unless you replace it."
+			ff.err = "Type a new value to make it plain; the current one stays secret."
 			return nil
 		case !nr.secret:
 			nr.value = []byte(plain.text.Value())
@@ -560,10 +568,19 @@ func (m *Model) openFieldForm(in *input, row int) tea.Cmd {
 			hidden.loading, hidden.then = true, ff.submit
 			return hidden.load()
 		case hidden.loading:
+			// Ctrl-R's read is still on its way: the field is saved once it lands.
+			hidden.then = ff.submit
 			return nil
 		default:
 			ff.err = "Type the secret value."
 			return nil
+		}
+		if row >= 0 && !kept && nr.name == r.name && nr.secret == r.secret && r.value != nil && bytes.Equal(nr.value, r.value) {
+			// Saved as it was: no change.
+			if nr.secret {
+				secure.SecureZeroBytes(nr.value)
+			}
+			nr.value, nr.changed, kept = r.value, r.changed, true
 		}
 		secure.SecureZeroBytes(hidden.loaded)
 		if row >= 0 && r.secret && !kept {
@@ -621,7 +638,7 @@ func (m *Model) drawForm(base string) string {
 				body += th.accented().Render("▌")
 			}
 			if in.weak {
-				body += "\n" + lipgloss.NewStyle().Foreground(th.warn).Render("easy to guess: a longer one, or generated, is safer")
+				body += "\n" + lipgloss.NewStyle().Foreground(th.warn).Render("easy to guess; a longer or generated one is safer")
 			}
 		case inputNotes:
 			in.area.SetWidth(inner - 5)
@@ -651,7 +668,7 @@ func (m *Model) drawForm(base string) string {
 				rows = append(rows, row)
 			}
 			if len(rows) == 0 {
-				rows = []string{th.dimmed().Render("none")}
+				rows = []string{th.dimmed().Render("none yet")}
 			}
 			body = strings.Join(rows, "\n")
 		}
@@ -668,7 +685,7 @@ func (m *Model) drawForm(base string) string {
 		if focused {
 			switch {
 			case in.kind == inputText && len(in.matches()) > 0:
-				lines = append(lines, "   "+th.hints([2]string{"↓", "choose one you have"}, [2]string{"↵", "take it"}))
+				lines = append(lines, "   "+th.hints([2]string{"↓", "pick an existing one"}, [2]string{"↵", "use it"}))
 			case in.kind == inputFields:
 				lines = append(lines, "   "+th.hints([2]string{"a", "add"}, [2]string{"↵", "edit"}, [2]string{"x", "remove"}))
 			case in.kind == inputChoice:

@@ -1014,14 +1014,14 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
     - **Adding** makes a password, an API key, a secure note (which needs its text), or a TOTP entry (its key pasted, or an `otpauth://` link, which also sets the code's digits, period and algorithm; reading a QR code from the screen stays in `--setup`).
     - **Notes** are typed in the form; Ctrl-E opens them in your editor (`$VISUAL`, then `$EDITOR`), as `sesh edit --notes --editor` does. They're saved only if changed. An entry whose notes couldn't be read can't be edited in the app; the message says why.
     - **Fields:** `a` adds one, Enter edits it (its name, whether it's secret, its value), `x` removes it. Two fields can't have names that differ only in case. A secret field made plain needs its value typed.
-    - **Secrets typed** (a new secret, a TOTP key, a secret field's value) show as dots; Ctrl-R shows what you've typed, and hides it again, as does moving to another input. A secret field an entry already has isn't read until you ask: its input shows dots, Ctrl-R there reads its value (the audit log records it) and shows it, and typing replaces it.
+    - **Secrets typed** (a new secret, a TOTP key, a secret field's value) show as dots; Ctrl-R shows what you've typed, and hides it again, as does moving to another input. A secret field an entry already has isn't read until it's needed: its input shows dots; Ctrl-R there reads its value and shows it, as renaming it reads it to keep it (the audit log records either read); typing replaces it.
     - **Folder and tags** list the ones you already have under the input as you type, matched anywhere in their names; ↓ picks one and Enter takes it. Anything else you type is a new folder or tag.
     - A name another entry has is refused, and said in the form; so are notes another command changed while you were editing them.
   - **copy a value…** (`f`): any one of the entry's values, its secret, username, URL or a field, picked by its number;
   - **earlier secrets…** (`h`): its [password history](#password-history); Enter copies a version, `r` makes it the secret again (after a yes);
-  - **delete** (`d`): to the [trash](#the-trash), after a yes;
-  - **the trash…** (`t`): each entry with its trash id; Enter puts one back (one whose name is taken now is restored with `sesh trash restore <id> --as <name>`), `x` deletes it for good, after a yes;
-  - **lock now** (`l`): locks the app, and sesh's agent, so commands ask for the master password again (those given it in `SESH_MASTER_PASSWORD` never used the agent); if the agent can't be locked, the locked screen says so;
+  - **move to the trash** (`d`): see [the trash](#the-trash); after a yes;
+  - **the trash…** (`t`): each entry with its kind, when it was deleted, and its trash id; Enter puts one back (one whose name is taken now is restored with `sesh trash restore <id> --as <name>`), `x` deletes it for good, after a yes;
+  - **lock** (`l`): locks the app, and sesh's agent, so commands ask for the master password again (those given it in `SESH_MASTER_PASSWORD` never used the agent); if the agent can't be locked, the locked screen says so;
   - also **copy the username** (`u`) and **open the URL** (`o`).
 - **Ctrl-O opens the entry's URL** in the browser: a web address only (`http` or `https`; a bare host gets `https://`), so a stored URL can't open a file or another program.
 - **The mouse:** click an entry to select it; the wheel moves the selection, or scrolls the details when over them. While the app has the mouse, most terminals still select text with a key held: Option in iTerm2, Shift in many others.

@@ -234,9 +234,12 @@ type Model struct {
 	top, sel      int
 	unlocking     bool
 	revealing     bool // a reveal asked for hasn't come back yet
-	statusBad     bool // the status is something that went wrong
-	showHelp      bool
-	dark          bool
+	// inEditor is the notes editor having the terminal: its time is use, so
+	// the idle lock waits for it. Ticks due meanwhile arrive before it ends.
+	inEditor  bool
+	statusBad bool // the status is something that went wrong
+	showHelp  bool
+	dark      bool
 }
 
 // shownCode is a TOTP code, and the period it's for.
@@ -470,7 +473,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.actionResult(msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
-			m.lockedWhy = "Locked, but sesh's agent couldn't be locked (" + msg.err.Error() + "): lock it with sesh agent lock."
+			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"
 		}
 		return nil
 	case savedMsg:
@@ -634,10 +637,10 @@ func (m *Model) tick() tea.Cmd {
 		m.hide()
 	}
 	switch {
-	case m.opts.IdleTimeout > 0 && since(now, m.lastKey) >= m.opts.IdleTimeout:
-		return tea.Batch(m.every(), m.lock("Locked after "+m.opts.IdleTimeout.String()+" without use."))
+	case m.opts.IdleTimeout > 0 && !m.inEditor && since(now, m.lastKey) >= m.opts.IdleTimeout:
+		return tea.Batch(m.every(), m.lock("No use for "+spoken(m.opts.IdleTimeout)+"."))
 	case m.opts.MaxLifetime > 0 && since(now, m.unlockedAt) >= m.opts.MaxLifetime:
-		return tea.Batch(m.every(), m.lock("Locked "+m.opts.MaxLifetime.String()+" after unlocking."))
+		return tea.Batch(m.every(), m.lock("It's been "+spoken(m.opts.MaxLifetime)+" since it was unlocked."))
 	}
 	epoch := m.epoch
 	return tea.Batch(m.every(), m.read(func(v Vault, _ func() bool) tea.Msg {

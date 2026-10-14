@@ -44,7 +44,7 @@ func (m *Model) openEdit(e *vault.Entry) tea.Cmd {
 	notes, held := m.notes[e.Key]
 	switch why := m.notesFailed[e.Key]; {
 	case hasNotes(e) && !held && why != "":
-		m.sayBad("It can't be edited here: its notes can't be read: " + why)
+		m.sayBad("Can't edit it here: its notes couldn't be read (" + why + ").")
 		return nil
 	case hasNotes(e) && !held:
 		m.sayBad("Its notes are still being read; try again in a moment.")
@@ -64,7 +64,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	if adding {
 		e = &vault.Entry{}
 	}
-	kindIn := &input{kind: inputChoice, label: "kind", choices: []string{"password", "api key", "secure note", "TOTP"}}
+	kindIn := &input{kind: inputChoice, label: "kind", choices: []string{"password", "API key", "secure note", "TOTP"}}
 	kind := func() vault.Kind {
 		if adding {
 			return addKinds[kindIn.choice]
@@ -88,17 +88,18 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	secretChoice := &input{kind: inputChoice, label: "secret", choices: choices}
 	secretChoice.shown = func() bool { k := kind(); return k == vault.KindPassword || k == vault.KindAPIKey }
 	typed := &input{kind: inputSecret, label: "new secret", rated: true}
+	typed.named = func() string { return "new " + secretWord(kind()) }
 	typed.shown = func() bool { return secretChoice.visible() && secretChoice.choices[secretChoice.choice] == secretType }
-	totpKey := &input{kind: inputSecret, label: "TOTP key, or otpauth:// link", hint: "a link sets how its codes are made; a key alone makes 6 digits every 30s"}
+	totpKey := &input{kind: inputSecret, label: "TOTP key, or otpauth:// link", hint: "a link brings its own code settings; a key alone gives 6-digit codes every 30s"}
 	totpKey.shown = func() bool { return kind() == vault.KindTOTP }
 	if !adding {
-		totpKey.label, totpKey.hint = "new TOTP key, or otpauth:// link", "empty keeps the key it has; a key alone makes 6 digits every 30s"
+		totpKey.label, totpKey.hint = "new TOTP key, or otpauth:// link", "leave it empty to keep the current key; a key alone gives 6-digit codes every 30s"
 	}
 
 	url := m.textInput("URL", e.URL)
 	folder := m.textInput("folder", e.Folder)
 	tags := m.textInput("tags", strings.Join(e.Tags, ", "))
-	folder.hint = "a new name makes a folder; work/aws is aws inside work"
+	folder.hint = "a new name makes a new folder; / puts one inside another (work/aws)"
 	tags.hint, tags.many = "separated by commas", true
 	text := m.notesInput("notes", notes)
 	// The input may show the notes a little differently (a tab as spaces):
@@ -157,13 +158,14 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		noteText := []byte(text.area.Value())
 		switch {
 		case k == vault.KindNote:
+			if !adding && string(noteText) == shownNotes {
+				break
+			}
 			if len(bytes.TrimSpace(noteText)) == 0 {
-				f.err = "Write the note: a secure note's text is what it keeps."
+				f.err = "Write the note's text."
 				return nil
 			}
-			if adding || string(noteText) != shownNotes {
-				c.Secret = noteText
-			}
+			c.Secret = noteText
 		case k == vault.KindTOTP:
 			if len(totpKey.secret) > 0 {
 				c.Secret = bytes.Clone(totpKey.secret)
@@ -173,7 +175,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			}
 		case secretChoice.choices[secretChoice.choice] == secretType:
 			if len(typed.secret) == 0 {
-				f.err = "Type the new secret, or choose another way."
+				f.err = "Type the new " + secretWord(k) + ", or choose another option."
 				return nil
 			}
 			c.Secret = bytes.Clone(typed.secret)
@@ -241,15 +243,15 @@ func (m *Model) save(f *form, c *Change, generate bool) tea.Cmd {
 		if err != nil {
 			return savedMsg{err: err, epoch: epoch}
 		}
-		what := "Saved " + k.String()
+		what := "Saved " + kindName(k)
 		if of == (vault.Key{}) {
-			what = "Added " + k.String()
+			what = "Added " + kindName(k)
 		}
 		if generate {
 			if err := opts.Copy(string(c.Secret)); err != nil {
 				what += "; the new password couldn't be copied: " + err.Error()
 			} else {
-				what = copied(k.String()+"'s new password", opts.ClearAfter)
+				what = copied("the new password for "+keyName(k), opts.ClearAfter)
 			}
 		}
 		return savedMsg{k: k, of: of, what: what, epoch: epoch}
@@ -296,7 +298,7 @@ func (m *Model) saved(msg *savedMsg) tea.Cmd {
 func (m *Model) editedNotes(msg *editorMsg) tea.Cmd {
 	defer secure.SecureZeroBytes(msg.notes)
 	// The time in the editor was use: the idle lock starts again from now.
-	m.lastKey = m.opts.Now()
+	m.lastKey, m.inEditor = m.opts.Now(), false
 	f := m.form
 	if f == nil || f.inputs[f.focus].kind != inputNotes {
 		return nil

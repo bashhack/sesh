@@ -219,7 +219,7 @@ func reopenWithTouchID(cfg *config.Config) (*database.Store, error) {
 		case len(said) > 0:
 			return nil, errors.New(strings.Join(said, " "))
 		}
-		return nil, errors.New("unlocking with Touch ID didn't work; enter your master password")
+		return nil, errors.New("Touch ID didn't unlock it; type your master password") //nolint:staticcheck // a sentence the locked screen shows, starting with a name
 	}
 	store, err := openStoreWith(dbPath, agent.NewOracle(conn, id))
 	if err != nil {
@@ -613,9 +613,9 @@ func uiLocked(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, database.ErrVaultKeyChanged):
-		return tui.Locked("The vault's master password was changed, or the vault restored, by another sesh command.")
+		return tui.Locked("Another sesh command changed the master password or restored the vault.")
 	case agent.Locked(err):
-		return tui.Locked("sesh's agent locked.")
+		return tui.Locked("sesh's agent locked the vault.")
 	}
 	return err
 }

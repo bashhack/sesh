@@ -175,20 +175,16 @@ func (m *Model) copySecret(sel *vault.Entry) tea.Cmd {
 			return copiedMsg{err: err, epoch: epoch}
 		}
 		defer secure.SecureZeroBytes(secret)
-		text, what := string(secret), "Copied "+entryName(&e)+"'s "+secretWord(e.Kind)
+		text, what := string(secret), "the "+secretWord(e.Kind)+" for "+entryName(&e)
 		if e.Kind == vault.KindTOTP {
 			if text, err = totp.CodeAt(secret, e.Settings.TOTP, opts.Now()); err != nil {
-				return copiedMsg{what: fmt.Sprintf("Couldn't make %s's code: %v", e.Key, err), epoch: epoch, bad: true}
+				return copiedMsg{what: fmt.Sprintf("Couldn't make the code for %s: %v", entryName(&e), err), epoch: epoch, bad: true}
 			}
-			what = "Copied " + entryName(&e) + "'s code"
 		}
 		if err := opts.Copy(text); err != nil {
 			return copiedMsg{what: "Couldn't copy: " + err.Error(), epoch: epoch, bad: true}
 		}
-		if opts.ClearAfter > 0 {
-			what += fmt.Sprintf(" · clears in %s", opts.ClearAfter)
-		}
-		return copiedMsg{what: what, epoch: epoch}
+		return copiedMsg{what: copied(what, opts.ClearAfter), epoch: epoch}
 	})
 }
 
@@ -259,6 +255,19 @@ func entryName(e *vault.Entry) string {
 	return e.Service + " (" + e.Username + ")"
 }
 
+// keyName is an entry named by its key, as entryName names it.
+func keyName(k vault.Key) string { return entryName(&vault.Entry{Key: k}) }
+
+// kindName is an entry named with its kind, which tells apart entries of
+// one name: "TOTP github (alice)".
+func kindName(k vault.Key) string {
+	kind := map[vault.Kind]string{vault.KindPassword: "password", vault.KindAPIKey: "API key", vault.KindNote: "secure note", vault.KindTOTP: "TOTP"}[k.Kind]
+	if kind == "" {
+		kind = string(k.Kind)
+	}
+	return kind + " " + keyName(k)
+}
+
 // secretWord names what copying an entry of kind k copies.
 func secretWord(k vault.Kind) string {
 	switch k {
@@ -287,11 +296,7 @@ func (m *Model) copyUsername(e *vault.Entry) tea.Cmd {
 		if err := opts.Copy(user); err != nil {
 			return copiedMsg{what: "Couldn't copy: " + err.Error(), epoch: epoch, bad: true}
 		}
-		what := "Copied " + name + "'s username"
-		if opts.ClearAfter > 0 {
-			what += fmt.Sprintf(" · clears in %s", opts.ClearAfter)
-		}
-		return copiedMsg{what: what, epoch: epoch}
+		return copiedMsg{what: copied("the username for "+name, opts.ClearAfter), epoch: epoch}
 	}
 }
 

@@ -170,7 +170,7 @@ func whatsHidden(k vault.Kind) string {
 	if k == vault.KindTOTP {
 		return "a TOTP entry shows its code, not its key"
 	}
-	return "the note is shown already"
+	return "the note is already shown"
 }
 
 // gotReveal shows what was revealed, while the entry stays selected.
