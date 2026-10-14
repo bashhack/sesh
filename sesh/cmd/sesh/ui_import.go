@@ -146,6 +146,9 @@ func (im *uiImport) Close() {
 // import got first.
 func importLocked(locked, err error) error {
 	if stopped := (*stoppedError)(nil); errors.As(err, &stopped) {
+		if stopped.done == 0 {
+			return tui.Locked(locked.Error() + " The import stopped before importing anything.")
+		}
 		return tui.Locked(fmt.Sprintf("%s The import stopped, having imported %s.", locked.Error(), nouns(stopped.done, "entry", "entries")))
 	}
 	return locked

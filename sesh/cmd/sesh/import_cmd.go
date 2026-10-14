@@ -280,8 +280,6 @@ func (p *importPlan) count() int {
 	return len(p.fresh)
 }
 
-// apply writes the import's entries to the vault store holds, and says
-
 // stoppedError is an import that stopped at key, done entries imported
 // first.
 type stoppedError struct {
@@ -297,6 +295,7 @@ func (e *stoppedError) Error() string {
 
 func (e *stoppedError) Unwrap() error { return e.err }
 
+// apply writes the import's entries to the vault store holds, and says
 // what it did, a line each.
 func (p *importPlan) apply(store *database.Store) (string, error) {
 	write := p.fresh

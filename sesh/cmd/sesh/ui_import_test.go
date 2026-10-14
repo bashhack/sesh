@@ -231,7 +231,7 @@ func TestUI_ImportKeyChanged(t *testing.T) {
 	if err := runRotateMasterPassword(app, rotateTestCfg("import-password-1234", "new-password-5678", "new-password-5678")); err != nil {
 		t.Fatalf("rotate: %v\n%s", err, stderr)
 	}
-	if _, err := im.Apply(); !errors.Is(err, tui.ErrLocked) || !strings.HasSuffix(err.Error(), " The import stopped, having imported 0 entries.") {
+	if _, err := im.Apply(); !errors.Is(err, tui.ErrLocked) || !strings.HasSuffix(err.Error(), " The import stopped before importing anything.") {
 		t.Errorf("%v", err)
 	}
 }
