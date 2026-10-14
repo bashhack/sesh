@@ -361,7 +361,7 @@ func (m *Model) drawLocked() string {
 	}
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(th.accent).Padding(0, 1).Width(w - 6)
 	hint := th.hints([2]string{"↵", "unlock"}, [2]string{"esc", "quit"})
-	if m.opts.TouchID != nil {
+	if m.opts.TouchID != nil && m.touchOn {
 		hint = th.hints([2]string{"↵", "unlock (Touch ID if nothing is typed)"}, [2]string{"esc", "quit"})
 	}
 	lines = append(lines, box.Render(field), "", hint, "")

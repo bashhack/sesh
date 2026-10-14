@@ -91,6 +91,9 @@ func runUI(app *App, args []string) error {
 	return m.Err()
 }
 
+// touchIDPlatform is a system with Touch ID: macOS. Tests set it.
+var touchIDPlatform = runtime.GOOS == "darwin"
+
 // uiStdoutIsTerminal says whether w is a terminal, which the app draws on;
 // tests replace it.
 var uiStdoutIsTerminal = func(w io.Writer) bool {
@@ -173,7 +176,21 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			return newUIVault(store), nil
 		},
 	}
-	if os.Getenv("SESH_MASTER_PASSWORD") == "" && touchIDSetUp(dbPath) {
+	if touchIDPlatform {
+		opts.TouchIDState = func() (tui.TouchID, error) {
+			t := uiTouchID(dbPath)
+			if os.Getenv("SESH_MASTER_PASSWORD") != "" && t.Here {
+				t.Here, t.Why = false, "sesh doesn't use it while SESH_MASTER_PASSWORD gives the master password."
+				t.Said += " (not used while SESH_MASTER_PASSWORD is set)"
+			}
+			return t, nil
+		}
+		opts.SetTouchID = func(on, takeOther bool) (string, error) { return uiSetTouchID(dbPath, on, takeOther) }
+	}
+	if touchIDPlatform && os.Getenv("SESH_MASTER_PASSWORD") == "" {
+		// Offered on the locked screen while it's on, which it can be
+		// turned on or off from the app.
+		opts.TouchIDOn = func() bool { return touchIDSetUp(dbPath) && !overSSH() }
 		opts.TouchID = func() (tui.Vault, error) {
 			store, err := reopenWithTouchID(cfg)
 			if err != nil {

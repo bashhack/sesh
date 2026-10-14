@@ -190,8 +190,8 @@ type Options struct {
 	// Unlock opens the vault again with password, which it wipes;
 	// ErrWrongPassword when it's wrong.
 	Unlock func(password []byte) (Vault, error)
-	// TouchID opens the vault again with a fingerprint; nil when it isn't
-	// set up.
+	// TouchID opens the vault again with a fingerprint; nil when it's
+	// never offered. TouchIDOn says whether it's on now.
 	TouchID func() (Vault, error)
 	// Copy puts text on the clipboard, cleared after ClearAfter.
 	Copy func(text string) error
@@ -226,7 +226,15 @@ type Options struct {
 	Recovery       func() (Recovery, error)
 	NewRecovery    func() (*NewRecovery, error)
 	RemoveRecovery func() (Done, error)
-	ClearAfter     time.Duration
+	// TouchIDState says Touch ID unlock's state; nil: it isn't offered.
+	// SetTouchID turns it on or off, and says so; takeOther takes it from
+	// another vault's file, which it otherwise refuses with ErrRefused.
+	TouchIDState func() (TouchID, error)
+	SetTouchID   func(on, takeOther bool) (string, error)
+	// TouchIDOn says whether Touch ID unlock is on now, for the locked
+	// screen; nil: TouchID being there says so.
+	TouchIDOn  func() bool
+	ClearAfter time.Duration
 	// OldAfter is how long a secret can go unchanged before the health
 	// report calls it old; 0 doesn't check.
 	OldAfter time.Duration
@@ -326,6 +334,10 @@ type Model struct {
 	// opening once it commits, so it isn't read meanwhile.
 	changing  bool
 	quitAfter bool // Ctrl-C was pressed while changing: it quits once that's done
+	// touchOn is Touch ID unlock on, as last read: at the lock, after a
+	// fingerprint fails, on Enter with nothing typed while it was off, and
+	// when turning it on or off ends while locked.
+	touchOn   bool
 	statusBad bool // the status is something that went wrong
 	showHelp  bool
 	dark      bool
@@ -588,6 +600,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.showRecovery(&msg)
 	case recoveryMsg:
 		return m.gotRecovery(&msg)
+	case touchIDMsg:
+		return m.gotTouchID(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"
@@ -730,6 +744,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case unlockedMsg:
 		m.unlocking = false
 		if msg.err != nil {
+			// A fingerprint that failed may have turned Touch ID unlock off
+			// (fingerprints changed, or out of date).
+			m.touchOn = m.touchIDOn()
 			if errors.Is(msg.err, ErrWrongPassword) {
 				m.wrong++
 				if m.wrong >= maxAttempts {
@@ -848,6 +865,7 @@ func (m *Model) lock(why string) tea.Cmd {
 	}
 	m.status = ""
 	m.lockedWhy = why
+	m.touchOn = m.touchIDOn()
 	if m.quitAfter {
 		// Ctrl-C waited for what the lock cut off: it quits now, saying why.
 		m.afterword = why
