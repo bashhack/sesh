@@ -95,7 +95,9 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		save := func() tea.Cmd {
 			live, err := set(key, value)
 			if err != nil {
-				m.sayBad("Not saved: " + err.Error())
+				if m.ov != nil {
+					m.ov.err = "Not saved: " + err.Error()
+				}
 				return m.refreshSettings()
 			}
 			m.opts.OldAfter = live.OldAfter
@@ -110,7 +112,17 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		if to == "" {
 			to = def
 		}
-		if loss := settingLoss(key, raw, to); loss != "" {
+		// Against the file as it is now, which another command may have
+		// changed since the panel was read.
+		from := raw
+		if now, err := m.opts.Settings(); err == nil {
+			for _, x := range now {
+				if x.Key == key {
+					from = x.Raw
+				}
+			}
+		}
+		if loss := settingLoss(key, from, to); loss != "" {
 			// What's deleted for good is asked about first.
 			panel := m.ov
 			m.ov = m.confirm(panel, "Change "+key, loss+" Change it?", func() tea.Cmd {
@@ -171,10 +183,7 @@ func (m *Model) gotSettings(msg *settingsMsg) tea.Cmd {
 	if m.ov == nil || m.ov.kind != panelSettings {
 		return nil
 	}
-	return m.loaded(msg.err, func() {
-		m.ov.err = ""
-		m.showSettings(msg.settings)
-	})
+	return m.loaded(msg.err, func() { m.showSettings(msg.settings) })
 }
 
 // settingDetail says more of the selected setting than its row: its

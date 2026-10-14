@@ -156,7 +156,7 @@ func setLine(text, key, value string) string {
 	}
 	keyLine := regexp.MustCompile(`^(\s*` + regexp.QuoteMeta(name) + `\s*=\s*)`)
 	dotted := regexp.MustCompile(`^(\s*` + regexp.QuoteMeta(key) + `\s*=\s*)`)
-	current, lastInTable, tableAt, firstTable := "", -1, -1, -1
+	current, lastInTable, tableAt, firstTable, lastTop := "", -1, -1, -1, -1
 	for i := range lines {
 		l := bare(i)
 		if m := header.FindStringSubmatch(l); m != nil {
@@ -186,25 +186,38 @@ func setLine(text, key, value string) string {
 			lines[i] = lead + m[1] + value + afterValue(l[len(m[1]):]) + end
 			return strings.Join(lines, "")
 		}
-		if current == table && strings.TrimSpace(l) != "" && !strings.HasPrefix(strings.TrimSpace(l), "#") {
-			lastInTable = i
+		if strings.TrimSpace(l) != "" && !strings.HasPrefix(strings.TrimSpace(l), "#") {
+			if current == table {
+				lastInTable = i
+			}
+			if firstTable < 0 {
+				lastTop = i
+			}
 		}
 	}
 	if value == "" {
 		return text
 	}
 	add := name + " = " + value + eol
-	// insert puts add before line at, ending the line before it first.
+	// insert puts add before line at, ending the line before it first; a
+	// byte order mark stays the file's first.
 	insert := func(at int) string {
 		if at > 0 && !strings.HasSuffix(lines[at-1], "\n") {
 			lines[at-1] += eol
 		}
+		if rest, ok := strings.CutPrefix(lines[0], "\uFEFF"); at == 0 && ok {
+			lines[0], add = rest, "\uFEFF"+add
+		}
 		return strings.Join(append(append(lines[:at:at], add), lines[at:]...), "")
 	}
 	switch {
+	case table == "" && lastTop >= 0:
+		return insert(lastTop + 1) // after the keys outside any table
 	case table == "" && firstTable >= 0:
+		// Before the first table and the comments right above it, not the
+		// file's opening ones, a blank line apart.
 		at := firstTable
-		for at > 0 && (strings.TrimSpace(bare(at-1)) == "" || strings.HasPrefix(strings.TrimSpace(bare(at-1)), "#")) {
+		for at > 0 && strings.HasPrefix(strings.TrimSpace(bare(at-1)), "#") {
 			at--
 		}
 		return insert(at)

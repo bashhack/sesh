@@ -2308,6 +2308,13 @@ func TestHealthReportDoubleEnter(t *testing.T) {
 // settingsApp is the app with a fake config: its settings, and the changes asked of it.
 func settingsApp(t *testing.T) (*app, *[]string) {
 	t.Helper()
+	a, asked, _ := settingsAppValues(t)
+	return a, asked
+}
+
+// settingsAppValues is settingsApp, with the fake config's values, to change as another command would.
+func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
+	t.Helper()
 	values := map[string]string{"history.keep": "10", "health.old_after_days": "365"}
 	var asked []string
 	a := newApp(t, newFake(), Options{
@@ -2329,7 +2336,7 @@ func settingsApp(t *testing.T) (*app, *[]string) {
 			return Live{OldAfter: time.Duration(days) * 24 * time.Hour}, nil
 		},
 	})
-	return a, &asked
+	return a, &asked, values
 }
 
 // A setting is changed through a one-line form; the panel stays, shows it, and the app takes up what it uses.
@@ -2407,5 +2414,16 @@ func TestSettingsSmallWindow(t *testing.T) {
 	a.press("ctrl+k", ",")
 	if s := a.screen(); strings.Count(s, "\n")+1 > minHeight || !strings.Contains(s, "backup.dir") {
 		t.Errorf("the panel at %dx%d:\n%s", minWidth, minHeight, s)
+	}
+}
+
+// A loss is judged against the file as it is when saving, not as the panel last read it.
+func TestSettingsLossAgainstNow(t *testing.T) {
+	a, asked, values := settingsAppValues(t)
+	a.press("ctrl+k", ",")
+	values["history.keep"] = "20" // another command raises it
+	a.press("enter", "ctrl+u", "15", "enter")
+	if a.ov == nil || !strings.Contains(a.ov.question, "beyond its newest 15") || len(*asked) != 0 {
+		t.Errorf("15 from 20 (the panel showing 10): asked %q, panel %+v", *asked, a.ov)
 	}
 }

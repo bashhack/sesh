@@ -40,6 +40,8 @@ keep = 10
 		{"an added line with Windows line ends", "[backup]\r\nkeep = 7\r\n", "backup.dir", `"/b"`, "[backup]\r\nkeep = 7\r\ndir = \"/b\"\r\n"},
 		{"a byte order mark", "\uFEFF[backup]\nkeep = 7\n", "backup.keep", "9", "\uFEFF[backup]\nkeep = 9\n"},
 		{"a byte order mark before a key", "\uFEFFclipboard_timeout = \"30s\"\n", "clipboard_timeout", `"45s"`, "\uFEFFclipboard_timeout = \"45s\"\n"},
+		{"a byte order mark before the first table", "\uFEFF[backup]\nkeep = 7\n", "db_path", `"/v.db"`, "\uFEFFdb_path = \"/v.db\"\n[backup]\nkeep = 7\n"},
+		{"below the file's opening comment", "# sesh settings\n# see docs\n\n[backup]\nkeep = 7\n", "db_path", `"/v.db"`, "# sesh settings\n# see docs\n\ndb_path = \"/v.db\"\n[backup]\nkeep = 7\n"},
 		{"above the comment that names a table", "clipboard_timeout = \"30s\"\n\n# Backups go here\n[backup]\nkeep = 7\n", "db_path", `"/v.db"`, "clipboard_timeout = \"30s\"\ndb_path = \"/v.db\"\n\n# Backups go here\n[backup]\nkeep = 7\n"},
 	} {
 		if got := setLine(c.text, c.key, c.value); got != c.want {
