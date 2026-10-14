@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // importApp is the app with a fake import: two entries, one the vault has, its export asking for a password.
@@ -100,5 +104,129 @@ func TestImportFiles(t *testing.T) {
 	a.press("~/a.png, ~/b.png", "enter")
 	if len(f.starts) != 1 || f.starts[0] != `google-authenticator ["~/a.png" "~/b.png"] ` {
 		t.Errorf("starts %q", f.starts)
+	}
+}
+
+// previewApp is the app showing an import's preview, the vault having none of its entries.
+func previewApp(t *testing.T, plans map[string]ImportPlan) (*app, *fakeVault) {
+	t.Helper()
+	f := newFake()
+	f.importing = &fakeImport{plans: plans}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "i", "b", "~/bw.json", "enter")
+	if a.ov == nil || a.ov.kind != panelImport {
+		t.Fatalf("panel %+v", a.ov)
+	}
+	return a, f
+}
+
+// Enter on the preview's lines does nothing; it doesn't end the app.
+func TestImportPreviewEnter(t *testing.T) {
+	a, _ := previewApp(t, map[string]ImportPlan{"": {Summary: "Found 1.\\nTo import (1):\\n  password/new", Count: 1}})
+	a.press("enter")
+	if a.quit || a.ov == nil || a.ov.kind != panelImport {
+		t.Errorf("quit %v, panel %+v", a.quit, a.ov)
+	}
+}
+
+// While the import is written Esc doesn't let it go: it carries on to the end, as the hint says.
+func TestImportEscWhileApplied(t *testing.T) {
+	a, f := previewApp(t, map[string]ImportPlan{"": {Summary: "Found 1.", Count: 1}})
+	a.now = a.now.Add(time.Second)
+	_, apply := a.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	a.press("esc")
+	if f.importing.closed || a.ov == nil || a.ov.kind != panelImport || !strings.Contains(a.screen(), "carries on to the end") {
+		t.Fatalf("closed %v, panel %+v\\n%s", f.importing.closed, a.ov, a.screen())
+	}
+	a.run(apply)
+	if !f.importing.closed || a.ov == nil || a.ov.kind != panelNotice {
+		t.Errorf("after: closed %v, panel %+v", f.importing.closed, a.ov)
+	}
+}
+
+// A plan that fails leaves nothing to import: y does nothing, and s or o plans again.
+func TestImportPlanFails(t *testing.T) {
+	f := newFake()
+	f.importing = &fakeImport{
+		plans:   map[string]ImportPlan{"": {Summary: "Found 2.", Count: 1, Clashes: 1}, "overwrite": {Summary: "Found 2, replacing.", Count: 2, Clashes: 1}},
+		failing: map[string]error{"skip": errors.New("the file is gone")},
+	}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "i", "b", "~/bw.json", "enter", "s")
+	if a.ov == nil || !strings.Contains(a.ov.err, "Not read: the file is gone") || strings.Contains(a.screen(), "Found 2.") {
+		t.Fatalf("after a failed plan: %+v\\n%s", a.ov, a.screen())
+	}
+	a.press("wait", "y")
+	if slices.Contains(f.importing.asked, "apply") || !strings.Contains(a.ov.err, "Not read: the file is gone") {
+		t.Fatalf("y after a failed plan: asked %q, said %q", f.importing.asked, a.ov.err)
+	}
+	a.press("o")
+	if !strings.Contains(a.screen(), "replacing") {
+		t.Errorf("o after a failed plan:\\n%s", a.screen())
+	}
+}
+
+// A plan from an import let go doesn't show in the next one's preview.
+func TestImportStalePlan(t *testing.T) {
+	f := newFake()
+	first := &fakeImport{plans: map[string]ImportPlan{"": {Summary: "FROM THE FIRST", Count: 7}}}
+	f.importing = first
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "i", "b", "~/a.json")
+	_, read := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	started := read()
+	_, plan := a.Update(started)
+	held := plan
+	a.press("esc")
+	f.importing = &fakeImport{plans: map[string]ImportPlan{"": {Summary: "FROM THE SECOND", Count: 1}}}
+	a.press("b", "~/b.json", "enter")
+	a.run(held)
+	if s := a.screen(); strings.Contains(s, "FROM THE FIRST") || !strings.Contains(s, "FROM THE SECOND") {
+		t.Errorf("the second import's preview:\\n%s", s)
+	}
+}
+
+// Another command changing the vault closes the preview, and lets the import go; so does quitting.
+func TestImportLetGo(t *testing.T) {
+	a, f := previewApp(t, map[string]ImportPlan{"": {Summary: "Found 1.", Count: 1}})
+	f.changed = true
+	a.tick(time.Second)
+	if a.ov != nil || !f.importing.closed {
+		t.Errorf("vault changed: panel %+v, closed %v", a.ov, f.importing.closed)
+	}
+	b, g := previewApp(t, map[string]ImportPlan{"": {Summary: "Found 1.", Count: 1}})
+	b.Close()
+	if !g.importing.closed {
+		t.Error("quitting didn't let the import go")
+	}
+}
+
+// With nothing to import, what to do about the file is still said; a narrow window keeps every letter's key.
+func TestImportNothingAndNarrow(t *testing.T) {
+	a, _ := previewApp(t, map[string]ImportPlan{"": {Summary: "Found 1.", Count: 0, After: "Delete ~/bw.json now."}})
+	a.press("wait", "y")
+	if a.ov == nil || a.ov.err != "Nothing to import. Delete ~/bw.json now." {
+		t.Errorf("nothing: %+v", a.ov)
+	}
+	b, _ := previewApp(t, map[string]ImportPlan{"": {Summary: "Found 2.", Count: 1, Clashes: 1}})
+	b.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
+	s := b.screen()
+	if !strings.Contains(s, " s ") || !strings.Contains(s, " o ") {
+		t.Errorf("narrow, the keys:\\n%s", s)
+	}
+}
+
+// One file's path keeps its commas; a long line of the summary is wrapped, not cut.
+func TestImportPathsAndLongLines(t *testing.T) {
+	f := newFake()
+	long := "  " + strings.Repeat("word ", 30) + "end"
+	f.importing = &fakeImport{plans: map[string]ImportPlan{"": {Summary: long, Count: 1}}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "i", "b", "~/export, 2026.json", "enter")
+	if len(f.starts) != 1 || f.starts[0] != `bitwarden ["~/export, 2026.json"] ` {
+		t.Errorf("starts %q", f.starts)
+	}
+	if s := a.screen(); strings.Contains(s, "word…") || !strings.Contains(s, "word end") {
+		t.Errorf("the long line:\\n%s", s)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -73,5 +74,83 @@ func TestUI_Import(t *testing.T) {
 		if _, err := u.StartImport("bitwarden", files, nil); err == nil {
 			t.Errorf("%q taken", files)
 		}
+	}
+}
+
+// Let go while it's applied, the import finishes before what it read is wiped: no entry is stored with a wiped
+// secret. After it's let go, nothing is read again.
+func TestUI_ImportClosedWhileApplied(t *testing.T) {
+	env := importVault(t)
+	store := openDoctorVault(t, env)
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	file, err := filepath.Abs(browserFixture("chromium.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	im, err := u.StartImport("chrome", []string{file}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := im.Plan("skip"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := im.Apply()
+		done <- err
+	}()
+	im.Close()
+	if err := <-done; err != nil && !errors.Is(err, errImportClosed) {
+		t.Fatal(err)
+	}
+	keys, err := store.List(&vault.Filter{Kind: vault.KindPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range keys {
+		secret, err := store.Get(e.Key)
+		if err != nil || len(secret) == 0 || strings.Trim(string(secret), "\x00") == "" {
+			t.Errorf("%s stored with %q, %v", e.Key, secret, err)
+		}
+	}
+	if _, err := im.Plan(""); !errors.Is(err, errImportClosed) || im.(*uiImport).f != nil {
+		t.Errorf("planned after it was let go: %v", err)
+	}
+}
+
+// A plan that fails leaves nothing to apply, so the plan before it, whose entries it wiped, isn't written.
+func TestUI_ImportPlanFails(t *testing.T) {
+	env := importVault(t)
+	store := openDoctorVault(t, env)
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	src, err := os.ReadFile(browserFixture("chromium.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "chrome.csv")
+	if err := os.WriteFile(file, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	im, err := u.StartImport("chrome", []string{file}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer im.Close()
+	if _, err := im.Plan(""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := im.Plan("skip"); err == nil {
+		t.Fatal("planned with the file gone")
+	}
+	if _, err := im.Apply(); err == nil || err.Error() != "nothing is planned" {
+		t.Errorf("applied after a failed plan: %v", err)
+	}
+	if n, err := store.List(&vault.Filter{Kind: vault.KindPassword}); err != nil || len(n) != 0 {
+		t.Errorf("entries written: %d, %v", len(n), err)
 	}
 }

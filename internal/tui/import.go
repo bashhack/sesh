@@ -18,6 +18,10 @@ type importing struct {
 	name       string
 	onConflict string
 	plan       ImportPlan
+	// failed is the last plan having failed: there's nothing to import
+	// until s or o plans again. applying is y's import under way, which
+	// carries on to the end.
+	failed, applying bool
 }
 
 // Messages from an import.
@@ -30,11 +34,13 @@ type (
 	}
 	importPlannedMsg struct {
 		err   error
+		in    *importing
 		plan  ImportPlan
 		epoch int
 	}
 	importedMsg struct {
 		err   error
+		in    *importing
 		said  string
 		epoch int
 	}
@@ -67,12 +73,18 @@ func (m *Model) importRows() []item {
 func (m *Model) importForm(source, name, files string) tea.Cmd {
 	in := m.textInput(files, "")
 	in.hint = "a full path, or one starting with ~/"
-	in.many = strings.Contains(files, "separated")
+	many := strings.Contains(files, "separated")
 	asked := false
 	pw := &input{kind: inputSecret, label: "the export's password", shown: func() bool { return asked }}
 	f := &form{title: "Import from " + name, inputs: []*input{in, pw}, row: -1, enterDone: "read it", working: "Reading…"}
 	f.submit = func() tea.Cmd {
-		paths := splitPaths(in.value())
+		var paths []string
+		switch {
+		case many:
+			paths = splitPaths(in.value())
+		case in.value() != "":
+			paths = []string{in.value()}
+		}
 		switch {
 		case len(paths) == 0:
 			f.err = "Type the file to import."
@@ -137,9 +149,10 @@ func (m *Model) importStarted(msg *importStartedMsg) tea.Cmd {
 	f.wipe()
 	m.form = nil
 	m.importAsk = nil
+	ended := m.endImport() // one still held, from before
 	m.importing = &importing{im: msg.im, name: m.importName}
 	m.ov = &overlay{kind: panelImport, back: m.ov, title: "Import from " + m.importName, loading: true, busy: "Comparing with the vault…"}
-	return m.planImport("")
+	return tea.Batch(ended, m.planImport(""))
 }
 
 // planImport plans the import with onConflict.
@@ -148,14 +161,14 @@ func (m *Model) planImport(onConflict string) tea.Cmd {
 	in.onConflict = onConflict
 	return m.read(func(_ Vault, _ func() bool) tea.Msg {
 		plan, err := in.im.Plan(onConflict)
-		return importPlannedMsg{plan: plan, err: err, epoch: epoch}
+		return importPlannedMsg{plan: plan, err: err, in: in, epoch: epoch}
 	})
 }
 
 // importPlanned shows what the import would do.
 func (m *Model) importPlanned(msg *importPlannedMsg) tea.Cmd {
-	ov := m.ov
-	if msg.epoch != m.epoch || m.importing == nil || ov == nil || ov.kind != panelImport {
+	ov, in := m.ov, msg.in
+	if msg.epoch != m.epoch || in != m.importing || ov == nil || ov.kind != panelImport {
 		return nil
 	}
 	ov.loading, ov.busy = false, ""
@@ -163,13 +176,21 @@ func (m *Model) importPlanned(msg *importPlannedMsg) tea.Cmd {
 	case errors.Is(msg.err, ErrLocked):
 		return m.lock(lockedReason(msg.err))
 	case msg.err != nil:
+		// Nothing is planned, so nothing is imported until s or o plans
+		// again.
+		in.plan, in.failed, ov.items = ImportPlan{}, true, nil
 		ov.err = "Not read: " + msg.err.Error()
 		return nil
 	}
-	m.importing.plan = msg.plan
+	in.plan, in.failed = msg.plan, false
 	ov.items = nil
+	// Each line wrapped to the panel, so none is cut.
+	width := max(min(96, m.width-6)-12, 20)
 	for l := range strings.SplitSeq(msg.plan.Summary, "\n") {
-		ov.items = append(ov.items, item{label: l})
+		indent := l[:len(l)-len(strings.TrimLeft(l, " "))]
+		for w := range strings.SplitSeq(m.th.style().Width(width-len(indent)).Render(strings.TrimLeft(l, " ")), "\n") {
+			ov.items = append(ov.items, item{label: indent + strings.TrimRight(w, " ")})
+		}
 	}
 	ov.sel = min(ov.sel, max(len(ov.items)-1, 0))
 	ov.opened = m.opts.Now()
@@ -183,29 +204,32 @@ func (m *Model) importLetter(k string) tea.Cmd {
 	if in == nil || ov.loading {
 		return nil
 	}
+	retry := in.failed || in.plan.Clashes > 0
 	switch {
-	case k == "s" && in.plan.Clashes > 0 && in.onConflict != "skip":
+	case k == "s" && retry && (in.failed || in.onConflict != "skip"):
 		ov.loading, ov.busy = true, "Comparing with the vault…"
 		return m.planImport("skip")
-	case k == "o" && in.plan.Clashes > 0 && in.onConflict != "overwrite":
+	case k == "o" && retry && (in.failed || in.onConflict != "overwrite"):
 		ov.loading, ov.busy = true, "Comparing with the vault…"
 		return m.planImport("overwrite")
 	case k == "y":
 		switch {
+		case in.failed:
+			return nil
 		case in.plan.Clashes > 0 && in.onConflict == "":
 			ov.err = "Some of these are in the vault already: s leaves them as they are, o replaces them."
 			return nil
 		case in.plan.Count == 0:
-			ov.err = "Nothing to import."
+			ov.err = strings.TrimSpace("Nothing to import. " + in.plan.After)
 			return nil
 		case m.opts.Now().Sub(ov.opened) < confirmAfter:
 			return nil
 		}
-		ov.loading, ov.busy = true, "Importing…"
+		ov.loading, ov.busy, in.applying = true, "Importing…", true
 		epoch := m.epoch
 		return m.read(func(_ Vault, _ func() bool) tea.Msg {
 			said, err := in.im.Apply()
-			return importedMsg{said: said, err: err, epoch: epoch}
+			return importedMsg{said: said, err: err, in: in, epoch: epoch}
 		})
 	}
 	return nil
@@ -213,19 +237,19 @@ func (m *Model) importLetter(k string) tea.Cmd {
 
 // imported says what the import did, and reads the entries again.
 func (m *Model) imported(msg *importedMsg) tea.Cmd {
-	if msg.epoch != m.epoch || m.importing == nil {
+	if msg.epoch != m.epoch || msg.in != m.importing {
 		return nil
 	}
-	m.endImport()
+	ended := m.endImport()
 	switch {
 	case errors.Is(msg.err, ErrLocked):
-		return m.lock(lockedReason(msg.err))
+		return tea.Batch(ended, m.lock(lockedReason(msg.err)))
 	case msg.err != nil:
 		m.ov = &overlay{kind: panelNotice, back: m.transferPanel(), title: "Import", question: "Not imported: " + msg.err.Error()}
-		return m.reread()
+		return tea.Batch(ended, m.reread())
 	}
 	m.ov = &overlay{kind: panelNotice, back: m.transferPanel(), title: "Import", question: msg.said}
-	return m.reread()
+	return tea.Batch(ended, m.reread())
 }
 
 // transferPanel is the import and export panel under the preview.
@@ -238,19 +262,31 @@ func (m *Model) transferPanel() *overlay {
 	return nil
 }
 
-// endImport wipes the import read.
-func (m *Model) endImport() {
-	if m.importing != nil {
-		m.importing.im.Close()
-		m.importing = nil
+// endImport lets the import go: closed, which wipes what it read, once a
+// plan or apply under way has finished, so not here, where that would
+// hold the app up.
+func (m *Model) endImport() tea.Cmd {
+	if m.importing == nil {
+		return nil
+	}
+	im := m.importing.im
+	m.importing = nil
+	return func() tea.Msg {
+		im.Close()
+		return nil
 	}
 }
 
 // importHint is the preview's keys, as they fit width.
 func (m *Model) importHint(width int) string {
 	th, in := m.th, m.importing
-	if in == nil || m.ov.loading {
+	switch {
+	case in != nil && in.applying:
+		return th.dimmed().Render("The import carries on to the end.")
+	case in == nil || m.ov.loading:
 		return th.hints([2]string{"esc", "cancel"})
+	case in.failed:
+		return th.hints([2]string{"s", "read it again, leaving those you have"}, [2]string{"o", "replacing them"}, [2]string{"esc", "cancel"})
 	}
 	var keys [][2]string
 	switch {
@@ -268,5 +304,13 @@ func (m *Model) importHint(width int) string {
 	if h := th.hints(keys...); lipgloss.Width(h) <= width {
 		return h
 	}
-	return th.hints(keys[0], keys[len(keys)-1])
+	// Narrower, the letters alone, then the first and Esc.
+	letters := make([][2]string, len(keys))
+	for i, k := range keys {
+		letters[i] = [2]string{k[0], ""}
+	}
+	if h := th.hints(letters...); lipgloss.Width(h) <= width {
+		return h
+	}
+	return th.hints([2]string{keys[0][0], ""}, [2]string{"esc", ""})
 }

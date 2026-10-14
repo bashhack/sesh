@@ -152,8 +152,13 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 		return tea.Quit
 	case "esc":
 		if ov.kind == panelImport {
+			if m.importing != nil && m.importing.applying {
+				// The import under way carries on to the end.
+				return nil
+			}
 			// What the import read is let go, and wiped.
-			m.endImport()
+			m.ov = ov.back
+			return m.endImport()
 		}
 		m.ov = ov.back
 		return nil
@@ -230,6 +235,8 @@ func (m *Model) choose(i int) tea.Cmd {
 		return m.copyVersion(ov.k, i+2)
 	case panelTrash:
 		return m.restoreFromTrash(ov.trash[i].ID)
+	case panelImport:
+		return nil // the summary's lines, to read
 	}
 	// An action that opens a panel puts it over this one, to go back to;
 	// any other closes it.

@@ -219,7 +219,10 @@ type Importer interface {
 // ImportPlan is what an import would do: said as sesh import says it, the
 // entries it writes, and those the vault has already.
 type ImportPlan struct {
-	Summary        string
+	Summary string
+	// After is what to do once the import is done (delete a plain
+	// export), said even when there's nothing to import.
+	After          string
 	Count, Clashes int
 }
 
@@ -486,6 +489,11 @@ func (m *Model) Close() {
 	}
 	m.shut = nil
 	m.wipe()
+	if m.importing != nil {
+		// Its plan or apply is done: the vault's reads have been waited for.
+		m.importing.im.Close()
+		m.importing = nil
+	}
 	if m.form != nil {
 		m.form.wipe()
 		m.form = nil
@@ -828,7 +836,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 				m.ov = nil
 				m.sayBad("Another command changed the vault; open the actions again.")
 			}
-			return m.reread()
+			return tea.Batch(m.endImport(), m.reread())
 		}
 		return nil
 	case keptAliveMsg:
@@ -961,16 +969,16 @@ func (m *Model) lock(why string) tea.Cmd {
 		m.form = nil
 	}
 	m.status = ""
-	m.endImport()
+	ended := m.endImport()
 	m.importAsk = nil
 	m.lockedWhy = why
 	m.touchOn = m.touchIDOn()
 	if m.quitAfter {
 		// Ctrl-C waited for what the lock cut off: it quits now, saying why.
 		m.afterword = why
-		return tea.Batch(closing, tea.Quit)
+		return tea.Batch(closing, ended, tea.Quit)
 	}
-	return closing
+	return tea.Batch(closing, ended)
 }
 
 // say shows what was done for a few seconds.

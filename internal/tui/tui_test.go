@@ -2528,6 +2528,7 @@ func TestChecksOnce(t *testing.T) {
 // fakeImport is an import of the fake vault's, planning what its plans say.
 type fakeImport struct {
 	plans   map[string]ImportPlan
+	failing map[string]error // what each plan fails with, if it does
 	applyTo func() (string, error)
 	asked   []string // each plan's onConflict, then "apply"
 	closed  bool
@@ -2535,7 +2536,7 @@ type fakeImport struct {
 
 func (f *fakeImport) Plan(onConflict string) (ImportPlan, error) {
 	f.asked = append(f.asked, "plan "+onConflict)
-	return f.plans[onConflict], nil
+	return f.plans[onConflict], f.failing[onConflict]
 }
 
 func (f *fakeImport) Apply() (string, error) {
