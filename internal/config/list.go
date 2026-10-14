@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 // from, and when a change to it takes effect.
 type Item struct {
 	Key, Value, Raw string
+	Default         string // Raw's default
 	Origin          string // the env var or flag, for FromEnv and FromFlag
 	Applies         string // when a change takes effect
 	Source          Source
@@ -20,8 +23,18 @@ type Item struct {
 	Editable bool
 }
 
-// List is every setting, in the order sesh shows them.
+// List is every setting, in the order sesh shows them, with its default.
 func (c *Config) List() []Item {
+	out := c.list()
+	if d, err := defaults(c.Path); err == nil {
+		for i, it := range d.list() {
+			out[i].Default = it.Raw
+		}
+	}
+	return out
+}
+
+func (c *Config) list() []Item {
 	var out []Item
 	add := func(key, value, raw string, src Source, origin, applies string) {
 		out = append(out, Item{Key: key, Value: value, Raw: raw, Source: src, Origin: origin, Applies: applies, Editable: key != "db_path"})
@@ -36,21 +49,22 @@ func (c *Config) List() []Item {
 		}
 		add(key, v, strconv.Itoa(s.Value), s.Source, s.Origin, applies)
 	}
-	const agentNext = "when sesh's agent next starts"
+	const agentNext = "for sesh's agent when it next starts, and in sesh ui from its next start"
+	const kdfNext = "for encrypted exports now, and the vault at its next master password change"
 	dur("clipboard_timeout", &c.ClipboardTimeout, "for other commands now, and in sesh ui from its next start")
 	dur("agent.idle_timeout", &c.AgentIdleTimeout, agentNext)
 	dur("agent.max_lifetime", &c.AgentMaxLifetime, agentNext)
 	days("audit.retention_days", &c.AuditRetentionDays, "0 (keep all)", "the next time a command unlocks the vault")
-	add("master_password.memory", Memory(c.KDFMemory.Value), Memory(c.KDFMemory.Value), c.KDFMemory.Source, c.KDFMemory.Origin, "at the next master password change")
-	add("master_password.time", strconv.FormatUint(uint64(c.KDFTime.Value), 10), strconv.FormatUint(uint64(c.KDFTime.Value), 10), c.KDFTime.Source, c.KDFTime.Origin, "at the next master password change")
-	add("master_password.threads", strconv.FormatUint(uint64(c.KDFThreads.Value), 10), strconv.FormatUint(uint64(c.KDFThreads.Value), 10), c.KDFThreads.Source, c.KDFThreads.Origin, "at the next master password change")
+	add("master_password.memory", Memory(c.KDFMemory.Value), Memory(c.KDFMemory.Value), c.KDFMemory.Source, c.KDFMemory.Origin, kdfNext)
+	add("master_password.time", strconv.FormatUint(uint64(c.KDFTime.Value), 10), strconv.FormatUint(uint64(c.KDFTime.Value), 10), c.KDFTime.Source, c.KDFTime.Origin, kdfNext)
+	add("master_password.threads", strconv.FormatUint(uint64(c.KDFThreads.Value), 10), strconv.FormatUint(uint64(c.KDFThreads.Value), 10), c.KDFThreads.Source, c.KDFThreads.Origin, kdfNext)
 	days("backup.every_days", &c.BackupEveryDays, "off", "the next time a command unlocks the vault")
 	add("backup.keep", strconv.Itoa(c.BackupKeep.Value), strconv.Itoa(c.BackupKeep.Value), c.BackupKeep.Source, c.BackupKeep.Origin, "at the next backup")
 	days("trash.keep_days", &c.TrashKeepDays, "0 (no trash: deleting is for good)", "for other commands now, and in sesh ui from its next start")
 	add("history.keep", strconv.Itoa(c.HistoryKeep.Value), strconv.Itoa(c.HistoryKeep.Value), c.HistoryKeep.Source, c.HistoryKeep.Origin, "for other commands now, and in sesh ui from its next start")
 	days("health.old_after_days", &c.HealthOldAfterDays, "0 (not checked)", "at the next health check")
 	add("db_path", c.DBPath.Value, c.DBPath.Value, c.DBPath.Source, c.DBPath.Origin, "")
-	dir := Item{Key: "backup.dir", Value: c.BackupFolder(), Raw: c.BackupDir.Value, Source: c.BackupDir.Source, Origin: c.BackupDir.Origin, Applies: "at the next backup", Editable: true}
+	dir := Item{Key: "backup.dir", Value: c.BackupFolder(), Raw: underHome(c.BackupDir.Value), Source: c.BackupDir.Source, Origin: c.BackupDir.Origin, Applies: "at the next backup", Editable: true}
 	out = append(out, dir)
 	return out
 }
@@ -110,4 +124,17 @@ func Duration(d time.Duration) string {
 		return "0 (off)"
 	}
 	return DurationRaw(d)
+}
+
+// underHome is path with the home folder written ~, as a config file
+// shared between computers has it.
+func underHome(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" || path == "" {
+		return path
+	}
+	if rest, ok := strings.CutPrefix(path, home+string(filepath.Separator)); ok {
+		return "~/" + filepath.ToSlash(rest)
+	}
+	return path
 }

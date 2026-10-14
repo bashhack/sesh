@@ -678,7 +678,7 @@ func uiLocked(err error) error {
 func uiSettings(cfg *config.Config) []tui.Setting {
 	var out []tui.Setting
 	for _, it := range cfg.List() {
-		s := tui.Setting{Key: it.Key, Value: it.Value, Raw: it.Raw, Said: it.Said(), Applies: it.Applies, Editable: it.Editable}
+		s := tui.Setting{Key: it.Key, Value: it.Value, Raw: it.Raw, Default: it.Default, Said: it.Said(), Applies: it.Applies, Editable: it.Editable}
 		if it.Source == config.FromEnv || it.Source == config.FromFlag {
 			s.Env = it.Origin
 		}

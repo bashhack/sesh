@@ -2313,7 +2313,7 @@ func settingsApp(t *testing.T) (*app, *[]string) {
 	a := newApp(t, newFake(), Options{
 		Settings: func() ([]Setting, error) {
 			return []Setting{
-				{Key: "history.keep", Value: values["history.keep"], Raw: values["history.keep"], Said: "default", Applies: "for other commands now", Editable: true},
+				{Key: "history.keep", Value: values["history.keep"], Raw: values["history.keep"], Default: "10", Said: "default", Applies: "for other commands now, and in sesh ui from its next start", Editable: true},
 				{Key: "health.old_after_days", Value: values["health.old_after_days"], Raw: values["health.old_after_days"], Said: "default", Applies: "at the next health check", Editable: true},
 				{Key: "trash.keep_days", Value: "0", Raw: "0", Said: "environment: SESH_TRASH_KEEP_DAYS", Env: "SESH_TRASH_KEEP_DAYS", Editable: true},
 				{Key: "db_path", Value: "/v.db", Said: "default"},
@@ -2362,5 +2362,50 @@ func TestSettingsNotChanged(t *testing.T) {
 	a.press("down", "enter")
 	if s := a.screen(); a.form != nil || !strings.Contains(s, "sesh init") || len(*asked) != 0 {
 		t.Errorf("the vault's place: asked %q\n%s", *asked, s)
+	}
+}
+
+// An unchanged value writes nothing; lowering one that deletes asks first, and emptying one compares its default.
+func TestSettingsLoss(t *testing.T) {
+	a, asked := settingsApp(t)
+	a.press("ctrl+k", ",", "enter", "enter")
+	if len(*asked) != 0 || !strings.Contains(a.screen(), "Nothing changed.") {
+		t.Fatalf("unchanged: asked %q\n%s", *asked, a.screen())
+	}
+	a.press("enter", "ctrl+u", "4", "enter")
+	if q := a.ov.question; len(*asked) != 0 || !strings.Contains(q, "beyond its newest 4 will be deleted for good") {
+		t.Fatalf("lowering history.keep: asked %q, question %q", *asked, q)
+	}
+	a.press("n")
+	if len(*asked) != 0 || a.ov == nil || a.ov.kind != panelSettings {
+		t.Errorf("no: asked %q, panel %v", *asked, a.ov)
+	}
+	a.press("enter", "ctrl+u", "4", "enter", "wait", "y")
+	if !slices.Equal(*asked, []string{"history.keep=4"}) || a.ov == nil || a.ov.kind != panelSettings {
+		t.Errorf("yes: asked %q", *asked)
+	}
+	// From 4, an empty value goes back to the default 10: nothing lost, nothing asked.
+	a.press("enter", "ctrl+u", "enter")
+	if (*asked)[len(*asked)-1] != "history.keep=" || a.ov.kind != panelSettings {
+		t.Errorf("back to the default: asked %q", *asked)
+	}
+	// From 50, it would lose: asked.
+	a.press("enter", "ctrl+u", "50", "enter", "enter", "ctrl+u", "enter")
+	if q := a.ov.question; !strings.Contains(q, "beyond its newest 10 will be deleted") {
+		t.Errorf("back to the default from 50: question %q", q)
+	}
+}
+
+// The panel fits the smallest window it's drawn in.
+func TestSettingsSmallWindow(t *testing.T) {
+	a := newApp(t, newFake(), Options{Settings: func() ([]Setting, error) {
+		// The longest of the details the real settings have.
+		return []Setting{{Key: "backup.dir", Value: "/Users/someone/Library/Application Support/sesh/backups", Raw: "", Said: "default: next to the vault", Editable: true,
+			Applies: "for sesh's agent when it next starts, and in sesh ui from its next start"}}, nil
+	}})
+	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
+	a.press("ctrl+k", ",")
+	if s := a.screen(); strings.Count(s, "\n")+1 > minHeight || !strings.Contains(s, "backup.dir") {
+		t.Errorf("the panel at %dx%d:\n%s", minWidth, minHeight, s)
 	}
 }

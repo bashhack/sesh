@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -15,8 +16,10 @@ type Setting struct {
 	Said  string // where it comes from: "default", "config file"
 	// Applies is when a change takes effect.
 	Applies string
-	// Env is the environment variable that sets it, when one does: it
-	// can't be changed from the app then.
+	// Default is Raw's default, which an empty value goes back to.
+	Default string
+	// Env is the environment variable (or flag) that sets it, when one
+	// does: it can't be changed from the app then.
 	Env      string
 	Editable bool
 }
@@ -75,7 +78,7 @@ func (m *Model) showSettings(settings []Setting) {
 func (m *Model) changeSetting(s *Setting) tea.Cmd {
 	switch {
 	case s.Env != "":
-		m.sayBad(s.Key + " is set by " + s.Env + " in the environment; change it there.")
+		m.sayBad(s.Key + " is set by " + s.Env + ", outside the config file; change it there.")
 		return nil
 	case !s.Editable:
 		m.sayBad(s.Key + " is where the vault is; it's changed with sesh init, not under an open vault.")
@@ -83,8 +86,41 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 	case m.opts.SetSetting == nil:
 		return nil
 	}
-	key, applies, set := s.Key, s.Applies, m.opts.SetSetting
+	key, raw, def, applies, set := s.Key, s.Raw, s.Default, s.Applies, m.opts.SetSetting
 	return m.askOver(true, "Change "+key, key, s.Raw, "empty: back to the default; it takes effect "+applies, nil, func(value string) (string, tea.Cmd) {
+		if value == raw {
+			m.say("Nothing changed.")
+			return "", nil
+		}
+		save := func() tea.Cmd {
+			live, err := set(key, value)
+			if err != nil {
+				m.sayBad("Not saved: " + err.Error())
+				return m.refreshSettings()
+			}
+			m.opts.OldAfter = live.OldAfter
+			said := "Saved " + key + ": it takes effect " + applies
+			if value == "" {
+				said = "Took " + key + " out of the config file: its default takes effect " + applies
+			}
+			m.say(said)
+			return m.refreshSettings()
+		}
+		to := value
+		if to == "" {
+			to = def
+		}
+		if loss := settingLoss(key, raw, to); loss != "" {
+			// What's deleted for good is asked about first.
+			panel := m.ov
+			m.ov = m.confirm(panel, "Change "+key, loss+" Change it?", func() tea.Cmd {
+				m.ov = panel
+				return save()
+			})
+			m.ov.danger = true
+			return "", nil
+		}
+		// Checked before the form closes, so a value refused is said in it.
 		live, err := set(key, value)
 		if err != nil {
 			return err.Error(), nil
@@ -97,6 +133,28 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		m.say(said)
 		return "", m.refreshSettings()
 	})
+}
+
+// settingLoss is what changing key from from to to deletes for good, in
+// words; "" when nothing. Each of these keeps everything at 0, so only a
+// smaller number deletes.
+func settingLoss(key, from, to string) string {
+	f, ferr := strconv.Atoi(from)
+	t, terr := strconv.Atoi(to)
+	if ferr != nil || terr != nil || t <= 0 || (f > 0 && t >= f) {
+		return ""
+	}
+	switch key {
+	case "history.keep":
+		return fmt.Sprintf("Each entry's earlier secrets beyond its newest %d will be deleted for good, the next time a command unlocks the vault.", t)
+	case "trash.keep_days":
+		return fmt.Sprintf("Entries in the trash for more than %s will be deleted for good, the next time a command unlocks the vault.", plural(t, "1 day", fmt.Sprintf("%d days", t)))
+	case "audit.retention_days":
+		return fmt.Sprintf("Audit log events older than %s will be deleted, the next time a command unlocks the vault.", plural(t, "1 day", fmt.Sprintf("%d days", t)))
+	case "backup.keep":
+		return fmt.Sprintf("Backups beyond the newest %d will be deleted at the next backup.", t)
+	}
+	return ""
 }
 
 // refreshSettings reads the settings again into the open panel.
@@ -113,7 +171,10 @@ func (m *Model) gotSettings(msg *settingsMsg) tea.Cmd {
 	if m.ov == nil || m.ov.kind != panelSettings {
 		return nil
 	}
-	return m.loaded(msg.err, func() { m.showSettings(msg.settings) })
+	return m.loaded(msg.err, func() {
+		m.ov.err = ""
+		m.showSettings(msg.settings)
+	})
 }
 
 // settingDetail says more of the selected setting than its row: its
@@ -121,7 +182,7 @@ func (m *Model) gotSettings(msg *settingsMsg) tea.Cmd {
 func settingDetail(s *Setting) string {
 	switch {
 	case s.Env != "":
-		return s.Value + " · set by " + s.Env + " in the environment: change it there"
+		return s.Value + " · set by " + s.Env + ", outside the config file: change it there"
 	case !s.Editable:
 		return s.Value + " · where the vault is: sesh init moves it"
 	}

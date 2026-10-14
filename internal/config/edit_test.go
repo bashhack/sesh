@@ -34,6 +34,13 @@ keep = 10
 		{"an empty file", "", "clipboard_timeout", `"45s"`, "clipboard_timeout = \"45s\"\n"},
 		{"a dotted key at the top", "agent.idle_timeout = \"5m\"\n", "agent.idle_timeout", `"7m"`, "agent.idle_timeout = \"7m\"\n"},
 		{"Windows line ends", "[backup]\r\nkeep = 7\r\n", "backup.keep", "9", "[backup]\r\nkeep = 9\r\n"},
+		{"a table header with a comment", "[backup]\ndir = \"/b\"\n[history] # earlier secrets\nkeep = 10\n", "history.keep", "4", "[backup]\ndir = \"/b\"\n[history] # earlier secrets\nkeep = 4\n"},
+		{"taken out of another table, not this", "[backup]\ndir = \"/b\"\n[history] # x\nkeep = 10\n", "backup.keep", "", "[backup]\ndir = \"/b\"\n[history] # x\nkeep = 10\n"},
+		{"no line end at the end", "[backup]\nkeep = 7", "backup.dir", `"/b"`, "[backup]\nkeep = 7\ndir = \"/b\"\n"},
+		{"an added line with Windows line ends", "[backup]\r\nkeep = 7\r\n", "backup.dir", `"/b"`, "[backup]\r\nkeep = 7\r\ndir = \"/b\"\r\n"},
+		{"a byte order mark", "\uFEFF[backup]\nkeep = 7\n", "backup.keep", "9", "\uFEFF[backup]\nkeep = 9\n"},
+		{"a byte order mark before a key", "\uFEFFclipboard_timeout = \"30s\"\n", "clipboard_timeout", `"45s"`, "\uFEFFclipboard_timeout = \"45s\"\n"},
+		{"above the comment that names a table", "clipboard_timeout = \"30s\"\n\n# Backups go here\n[backup]\nkeep = 7\n", "db_path", `"/v.db"`, "clipboard_timeout = \"30s\"\ndb_path = \"/v.db\"\n\n# Backups go here\n[backup]\nkeep = 7\n"},
 	} {
 		if got := setLine(c.text, c.key, c.value); got != c.want {
 			t.Errorf("%s:\ngot\n%s\nwant\n%s", c.name, got, c.want)
@@ -87,5 +94,72 @@ func TestDuration(t *testing.T) {
 		if got := Duration(d); got != want {
 			t.Errorf("Duration(%v) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+// A linked config file (a dotfile manager's) is changed where it is, the link kept;
+// nothing changed writes nothing; a removal leaves every other setting alone.
+func TestSetFilesAndOthers(t *testing.T) {
+	path := isolate(t)
+	dotfiles := filepath.Join(t.TempDir(), "dotfiles", "sesh.toml")
+	writeConfig(t, dotfiles, "[history]\nkeep = 10\n")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dotfiles, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(path, "history.keep", "4"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link was replaced: %v, %v", info, err)
+	}
+	if body, _ := os.ReadFile(dotfiles); string(body) != "[history]\nkeep = 4\n" { //nolint:errcheck // compared
+		t.Errorf("the linked file: %q", body)
+	}
+	empty := filepath.Join(t.TempDir(), "config.toml")
+	if err := Set(empty, "history.keep", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(empty); !os.IsNotExist(err) {
+		t.Errorf("taking out a setting that isn't there made a file: %v", err)
+	}
+	if err := os.WriteFile(empty, []byte("[backup]\nkeep = 7\n[history] # x\nkeep = 10\n"), 0o644); err != nil { //nolint:gosec // test
+		t.Fatal(err)
+	}
+	if err := Set(empty, "backup.keep", "3"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(empty); err != nil || info.Mode().Perm() != 0o644 {
+		t.Errorf("the file's mode: %v, %v", info, err)
+	}
+}
+
+// checkSet refuses a change that would move another setting.
+func TestCheckSetOthers(t *testing.T) {
+	old := "[backup]\nkeep = 7\n[history]\nkeep = 10\n"
+	if err := checkSet("config.toml", old, "[backup]\nkeep = 7\n[history]\n", "backup.keep", true); err == nil || !strings.Contains(err.Error(), "would change history.keep too") {
+		t.Errorf("another setting lost: %v", err)
+	}
+}
+
+// A path under home is shown, and so written back, with ~; each setting says its default.
+func TestListRawAndDefaults(t *testing.T) {
+	path := isolate(t)
+	writeConfig(t, path, "[backup]\ndir = \"~/bk\"\n[history]\nkeep = 4\n")
+	c, err := Load(Overrides{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Item{}
+	for _, it := range c.List() {
+		got[it.Key] = it
+	}
+	if d := got["backup.dir"]; d.Raw != "~/bk" {
+		t.Errorf("backup.dir raw = %q", d.Raw)
+	}
+	if h := got["history.keep"]; h.Raw != "4" || h.Default != "10" {
+		t.Errorf("history.keep = %+v", h)
 	}
 }

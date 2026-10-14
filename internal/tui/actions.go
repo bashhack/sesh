@@ -588,16 +588,20 @@ func (m *Model) drawOverlay(base string) string {
 			lines = append(lines, row(i, it.key, it.label))
 		}
 	}
-	if ov.kind == panelSettings && ov.sel < len(ov.settings) && !ov.loading {
-		detail := th.dimmed().Width(w - 6).Render(settingDetail(&ov.settings[ov.sel]))
-		if fit := max(room-lipgloss.Height(detail)-1, 1); len(lines) > fit {
-			first, last := window(ov.sel, len(ov.items), fit)
-			lines = lines[:0]
-			for i := first; i < last; i++ {
-				lines = append(lines, row(i, ov.items[i].key, ov.items[i].label))
+	// The selected setting's details, below its rows, when two of those
+	// still fit beside them.
+	if detail := ""; ov.kind == panelSettings && ov.sel < len(ov.settings) && !ov.loading {
+		detail = th.dimmed().Width(w - 6).Render(settingDetail(&ov.settings[ov.sel]))
+		if fit := room - lipgloss.Height(detail) - 1; fit >= 2 {
+			if len(lines) > fit {
+				first, last := window(ov.sel, len(ov.items), fit)
+				lines = lines[:0]
+				for i := first; i < last; i++ {
+					lines = append(lines, row(i, ov.items[i].key, ov.items[i].label))
+				}
 			}
+			lines = append(lines, "", detail)
 		}
-		lines = append(lines, "", detail)
 	}
 	if ov.err != "" && ov.len() > 0 && !ov.loading {
 		// Above the rows, which stay, since the keys still act on them.
