@@ -218,6 +218,7 @@ func loginEntries(it *Item, base *importer.Entry, service string) []*importer.En
 		e.Key = vault.Key{Kind: vault.KindPassword, Service: service, Username: user}
 		e.Secret = []byte(l.Password)
 		e.Earlier = earlier
+		e.Updated = passwordSet(earlier, it.CreationDate, it.RevisionDate)
 		e.Details = details
 		out = append(out, importer.Checked(&e))
 	}
@@ -392,4 +393,25 @@ func oldPasswords(history []json.RawMessage, lost map[string]int) []vault.Earlie
 		out = append(out, vault.Earlier{Secret: []byte(h.Password), ReplacedAt: at})
 	}
 	return out
+}
+
+// passwordSet is when a login's password was set, which sesh keeps as the
+// entry's update time: when the newest of its earlier passwords was
+// replaced, or, with none, when the login was made. Bitwarden's export has
+// no time of its own for that; its revisionDate moves with any edit, and
+// is used only when neither is known.
+func passwordSet(earlier []vault.Earlier, created, revised time.Time) time.Time {
+	var newest time.Time
+	for _, e := range earlier {
+		if e.ReplacedAt.After(newest) {
+			newest = e.ReplacedAt
+		}
+	}
+	switch {
+	case !newest.IsZero():
+		return newest
+	case !created.IsZero():
+		return created
+	}
+	return revised
 }

@@ -1322,6 +1322,7 @@ sesh import --from bitwarden bitwarden_export.json
 
 - **Logins** become password entries, with the first URL as the entry's URL (more go in fields `url-2`, `url-3`, ...), the notes, and the custom fields. A login's TOTP key becomes a TOTP entry beside it, with the same name.
 - **A login's old passwords** (Bitwarden keeps the last 5) go into the entry's [history](#password-history), each with when Bitwarden says it was replaced. Bitwarden keeps a hidden field's old value in the same list, written `name: value`, and doesn't mark which is which, so one with `: ` in it is left out and counted in the summary, as are the old values on other kinds of item, which can only be hidden fields'.
+- **A login's password is dated** when it was set, which [`sesh health`](#password-health-sesh-health) uses to say it's old: when the newest of its old passwords was replaced, or, with none, when the login was made. Bitwarden's export has no date for the password itself, and its edit date moves with any change to the item. An old password with `: ` in it, left out as above, doesn't count.
 - **Secure notes** become secure notes.
 - **Cards, identities, and SSH keys** become secure notes with fields: numbers, codes, and private keys as secret fields, the rest plain. The note is the item's notes, or a line saying what it is ("Visa card ending 4242").
 - **Custom fields:** hidden ones are secret, text and boolean ones plain, and a text one of several lines secret too. Linked fields, which only point at another value, aren't kept.

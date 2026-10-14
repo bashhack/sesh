@@ -9,6 +9,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/importer"
 	"github.com/bashhack/sesh/internal/totp"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // The genuine export's items become these entries.
@@ -287,5 +288,54 @@ func TestEntries_OldPasswords(t *testing.T) {
 	}
 	if note := got[2]; len(note.Earlier) != 0 || note.Lost[lostFieldHistory] != 1 {
 		t.Errorf("note: %+v", note)
+	}
+}
+
+// A login's password entry is dated when its password was set: its newest earlier password's
+// replacement, or the login's making; not its last edit of anything.
+func TestEntries_PasswordDate(t *testing.T) {
+	exp, err := Parse(read(t, "plain.json"), noPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]time.Time{}
+	for _, e := range Entries(&exp) {
+		got[e.Key.String()] = e.Updated.UTC()
+	}
+	at := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	// From the genuine export: GitHub's password was changed (its history says when), Steam's never was.
+	for id, want := range map[string]time.Time{
+		"password/GitHub/alice": at("2026-10-09T22:50:47.267Z"),
+		"password/Steam/gamer":  at("2026-10-09T22:50:22.376Z"),
+	} {
+		if !got[id].Equal(want) {
+			t.Errorf("%s updated %v; want %v", id, got[id], want)
+		}
+	}
+}
+
+// The newest replacement wins whatever the order; with none, the making; with neither, the last edit.
+func TestPasswordSet(t *testing.T) {
+	t1, t2, t3 := time.Unix(100, 0), time.Unix(200, 0), time.Unix(300, 0)
+	for _, c := range []struct {
+		name             string
+		created, revised time.Time
+		want             time.Time
+		earlier          []vault.Earlier
+	}{
+		{"history, oldest first", t1, t3, t2, []vault.Earlier{{ReplacedAt: t1}, {ReplacedAt: t2}}},
+		{"history without times", t1, t3, t1, []vault.Earlier{{}}},
+		{"no history", t1, t3, t1, nil},
+		{"nothing known but the edit", time.Time{}, t3, t3, nil},
+	} {
+		if got := passwordSet(c.earlier, c.created, c.revised); !got.Equal(c.want) {
+			t.Errorf("%s: %v; want %v", c.name, got, c.want)
+		}
 	}
 }
