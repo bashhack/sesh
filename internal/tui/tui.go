@@ -193,6 +193,10 @@ type Vault interface {
 	// Save adds an entry (c.Key zero) or changes one, and says the name
 	// it has after. ErrNameTaken when the name is another entry's.
 	Save(c *Change) (vault.Key, error)
+	// Export writes an encrypted export of every entry to the file to
+	// names, with password, which it wipes; a file there is replaced only
+	// when replace (ErrExists otherwise). It says what it wrote.
+	Export(to string, password []byte, replace bool) (string, error)
 	Close() error
 }
 
@@ -632,6 +636,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.askRestore(&msg)
 	case restoredMsg:
 		return m.restored(&msg)
+	case exportedMsg:
+		return m.exported(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"

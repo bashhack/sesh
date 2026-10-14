@@ -38,9 +38,11 @@ type fakeVault struct {
 	history    map[vault.Key][]string      // earlier secrets, the newest first
 	trash      []Trashed
 	trashed    map[int64]vault.Entry
-	saves      []Change // what Save was given
+	exported   map[string]bool // files there already, which an export doesn't replace without asking
+	saves      []Change        // what Save was given
 	entries    []vault.Entry
 	reads      []string // "secret <key> <reading>" or "code <key>"
+	exports    []string // "to password replace", each Export asked for
 	kept       int      // keep-alives
 	closed     bool
 	changed    bool
@@ -332,6 +334,21 @@ func (f *fakeVault) Check() (bool, error) {
 }
 
 func (f *fakeVault) KeepAlive() error { f.kept++; return f.err }
+
+func (f *fakeVault) Export(to string, password []byte, replace bool) (string, error) {
+	f.exports = append(f.exports, fmt.Sprintf("%s %s %v", to, password, replace))
+	if f.err != nil {
+		return "", f.err
+	}
+	if f.exported[to] && !replace {
+		return "", Exists(to + " already exists.")
+	}
+	if f.exported == nil {
+		f.exported = map[string]bool{}
+	}
+	f.exported[to] = true
+	return "Exported 3 entries to " + to + ".", nil
+}
 
 func (f *fakeVault) Close() error { f.closed = true; return nil }
 
