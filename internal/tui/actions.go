@@ -49,6 +49,7 @@ type overlay struct {
 	sel      int
 	loading  bool
 	danger   bool // a confirmation of something that can't be undone
+	wide     bool // drawn as wide as the settings panel: a long question
 	filled   bool // a report's rows are in, so none means nothing was found
 }
 
@@ -531,7 +532,7 @@ func (m *Model) drawOverlay(base string) string {
 	th := m.th
 	ov := m.ov
 	w := min(64, m.width-6)
-	if ov.kind == panelSettings || ov.kind == panelChecks || ov.kind == panelBackups {
+	if ov.kind == panelSettings || ov.kind == panelChecks || ov.kind == panelBackups || ov.wide {
 		w = min(96, m.width-6)
 	}
 	// The rows that fit: the screen less the card's border, title, hint
@@ -563,7 +564,13 @@ func (m *Model) drawOverlay(base string) string {
 	}
 	switch {
 	case ov.kind == panelConfirm || ov.kind == panelNotice:
-		lines = append(lines, "", th.style().Width(w-6).Render(ov.question))
+		// Its end is cut to fit, keeping the keys that answer it on screen.
+		said := strings.Split(th.style().Width(w-6).Render(ov.question), "\n")
+		if len(said) > room {
+			said = append(said[:max(room-1, 0)], th.dimmed().Render("… (a bigger window shows the rest)"))
+		}
+		lines = append(lines, "")
+		lines = append(lines, said...)
 	case ov.loading && ov.busy != "":
 		lines = append(lines, "", th.dimmed().Render(ov.busy))
 	case ov.loading:
@@ -673,6 +680,12 @@ func (m *Model) drawOverlay(base string) string {
 		}
 		if len(ov.items) == 0 {
 			hint = th.hints([2]string{"n", "back up now"}, [2]string{"f", "to a file"}, [2]string{"esc", "back"})
+			if lipgloss.Width(hint) > w-6 {
+				hint = th.hints([2]string{"n", "back up"}, [2]string{"esc", "back"})
+			}
+		}
+		if ov.loading && ov.busy != "" {
+			hint = th.hints([2]string{"ctrl+c", "quit once it's done"})
 		}
 	default:
 		hint = th.hints([2]string{"↵", "choose, or press its key"}, [2]string{"esc", "back"})

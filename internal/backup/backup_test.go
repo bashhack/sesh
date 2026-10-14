@@ -329,4 +329,47 @@ func TestRemove(t *testing.T) {
 	if _, err := os.Stat(keep); err != nil {
 		t.Errorf("the other backup: %v", err)
 	}
+	// A link named as a backup, and a backup's name in another folder, aren't removed.
+	outside := filepath.Join(t.TempDir(), "passwords-3f9c2a1b-2026-10-03T120000Z.db")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "passwords-3f9c2a1b-2026-10-04T120000Z.db")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{link, outside} {
+		if err := Remove(dir, vault, p); err == nil {
+			t.Errorf("%s was removed", p)
+		}
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("the file outside: %v", err)
+	}
+}
+
+// A backup to the vault itself, or its -wal or -shm file, or the vault through a link, is refused, even with force.
+func TestMakeToRefusesTheVault(t *testing.T) {
+	dir := t.TempDir()
+	vault := filepath.Join(dir, "passwords.db")
+	if err := os.WriteFile(vault, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link.db")
+	if err := os.Symlink(vault, link); err != nil {
+		t.Fatal(err)
+	}
+	// The vault's folder through a link: its -wal file, not there yet, is still the vault's.
+	linkDir := filepath.Join(t.TempDir(), "linked")
+	if err := os.Symlink(dir, linkDir); err != nil {
+		t.Fatal(err)
+	}
+	for _, dest := range []string{vault, vault + "-wal", vault + "-shm", vault + "-journal", link, filepath.Join(dir, ".", "passwords.db"), filepath.Join(linkDir, "passwords.db-wal")} {
+		if _, err := MakeTo(vault, dest, true, time.Now()); err == nil || !strings.Contains(err.Error(), "is the vault itself") {
+			t.Errorf("%s: %v", dest, err)
+		}
+	}
+	if b, _ := os.ReadFile(vault); string(b) != "x" { //nolint:errcheck // compared
+		t.Errorf("the vault was written: %q", b)
+	}
 }

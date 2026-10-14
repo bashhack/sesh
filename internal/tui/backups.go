@@ -53,7 +53,8 @@ type (
 
 // openBackups opens the backups panel.
 func (m *Model) openBackups() tea.Cmd {
-	if m.opts.Backups == nil {
+	o := &m.opts
+	if o.Backups == nil || o.BackUp == nil || o.DeleteBackup == nil || o.PlanRestore == nil || o.Restore == nil {
 		m.sayBad("Backups can't be shown here.")
 		return nil
 	}
@@ -84,7 +85,8 @@ func (m *Model) backupsPanel() *overlay {
 // gotBackups lists the backups in their panel, when it's open.
 func (m *Model) gotBackups(msg *backupsMsg) tea.Cmd {
 	panel := m.backupsPanel()
-	if panel == nil {
+	if panel == nil || m.changing {
+		// While the vault is restored, the panel stays as it is.
 		return nil
 	}
 	top := m.ov
@@ -99,6 +101,11 @@ func (m *Model) gotBackups(msg *backupsMsg) tea.Cmd {
 // showBackups lists b in the open panel.
 func (m *Model) showBackups(b Backups) {
 	ov := m.ov
+	// The selection stays on its backup, as backups come and go above it.
+	selected := ""
+	if ov.sel < len(ov.backups) {
+		selected = ov.backups[ov.sel].Path
+	}
 	ov.title, ov.filled = "Backups in "+b.Dir, true
 	ov.items, ov.backups = nil, b.List
 	for _, bk := range b.List {
@@ -116,6 +123,11 @@ func (m *Model) showBackups(b Backups) {
 		})
 	}
 	ov.sel = min(ov.sel, max(len(ov.items)-1, 0))
+	for i, bk := range b.List {
+		if bk.Path == selected {
+			ov.sel = i
+		}
+	}
 }
 
 // backupsLetter is what the backups panel's letters do: back up now (n),
@@ -241,7 +253,7 @@ func (m *Model) askRestore(msg *restorePlanMsg) tea.Cmd {
 		m.ov = panel
 		return m.runRestore(path)
 	})
-	m.ov.danger = true
+	m.ov.danger, m.ov.wide = true, true
 	return nil
 }
 

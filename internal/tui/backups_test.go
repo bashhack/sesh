@@ -149,11 +149,17 @@ func TestBackupsRestoreFails(t *testing.T) {
 
 // With none, the panel says how to make one; it fits the smallest window.
 func TestBackupsEmpty(t *testing.T) {
-	a := newApp(t, newFake(), Options{Backups: func() (Backups, error) { return Backups{Dir: "~/b"}, nil }})
+	a, _ := backupsApp(t, nil)
+	a.opts.Backups = func() (Backups, error) { return Backups{Dir: "~/b"}, nil }
 	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
 	a.press("ctrl+k", "b")
-	if s := a.screen(); !strings.Contains(s, "No backups yet") || strings.Count(s, "\n")+1 > minHeight {
-		t.Errorf("empty:\n%s", s)
+	s := a.screen()
+	hint := false
+	for l := range strings.SplitSeq(s, "\n") {
+		hint = hint || strings.Contains(l, "back up") && strings.Contains(l, "esc")
+	}
+	if !strings.Contains(s, "No backups yet") || strings.Count(s, "\n")+1 > minHeight || !hint {
+		t.Errorf("empty, with its hint on one line:\n%s", s)
 	}
 }
 
@@ -169,8 +175,8 @@ func TestBackupsFits(t *testing.T) {
 			for l := range strings.SplitSeq(s, "\n") {
 				hint = hint || strings.Contains(l, "restore") && strings.Contains(l, "esc")
 			}
-			if strings.Count(s, "\n")+1 > h || !hint {
-				t.Fatalf("at %dx%d, the hint on one line:\n%s", w, h, s)
+			if strings.Count(s, "\n")+1 > h || !hint || (h >= 18 && !strings.Contains(s, "restores")) {
+				t.Fatalf("at %dx%d, the hint on one line, and the detail where there's room:\n%s", w, h, s)
 			}
 		}
 	}
@@ -212,4 +218,45 @@ func TestBackupsPlanAcrossLock(t *testing.T) {
 	if a.ov == nil || a.ov.kind != panelBackups {
 		t.Errorf("panel %+v", a.ov)
 	}
+}
+
+// The restore question fits every window, cut with a note when it must be, keeping its keys.
+func TestBackupsQuestionFits(t *testing.T) {
+	long := "Restore the vault from passwords-3f9c2a1b-2026-10-14T090000Z.db, made 2026-10-14 09:00 (40 entries, and 3 in the trash)?\n  It opens with the master password, and recovery key, the vault had then.\n  It's a backup of another vault (this one's id is 3f9c2a1b, the backup's 77aa0000).\n  The vault now (41 entries, and 2 in the trash) is backed up first."
+	for w := minWidth; w <= 100; w += 8 {
+		for h := minHeight; h <= 30; h += 3 {
+			a, _ := backupsApp(t, nil)
+			a.opts.PlanRestore = func(string) (string, error) { return long, nil }
+			a.Update(tea.WindowSizeMsg{Width: w, Height: h})
+			a.press("ctrl+k", "b", "enter")
+			s := a.screen()
+			if strings.Count(s, "\n")+1 > h || !strings.Contains(s, "yes") || (w >= 96 && h >= 24 && !strings.Contains(s, "is backed up first")) {
+				t.Fatalf("at %dx%d, whole when it fits:\n%s", w, h, s)
+			}
+		}
+	}
+}
+
+// After a refresh, the selection stays on the backup it was on.
+func TestBackupsSelectionStays(t *testing.T) {
+	a, asked := backupsApp(t, nil)
+	a.press("ctrl+k", "b", "down", "n", "x")
+	if a.ov == nil || !strings.Contains(a.ov.question, "77aa0000") {
+		t.Errorf("asked %q, panel %+v", *asked, a.ov)
+	}
+}
+
+// A list read that comes back while the vault is restored leaves the panel saying so.
+func TestBackupsListDuringRestore(t *testing.T) {
+	a, _ := backupsApp(t, nil)
+	a.press("ctrl+k", "b")
+	read := a.readBackups()
+	a.press("enter")
+	a.now = a.now.Add(time.Second)
+	_, restore := a.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	a.run(read)
+	if s := a.screen(); !strings.Contains(s, "Restoring the vault…") || !strings.Contains(s, "quit once it's done") {
+		t.Errorf("during:\n%s", s)
+	}
+	a.run(restore)
 }

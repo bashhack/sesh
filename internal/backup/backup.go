@@ -191,6 +191,9 @@ func MakeTo(vaultPath, dest string, force bool, now time.Time) (Info, error) {
 		}
 		dest = filepath.Join(dest, s.Name(now))
 	}
+	if isVaultFile(vaultPath, dest) {
+		return Info{}, fmt.Errorf("%s is the vault itself, or one of its files; back it up somewhere else", dest)
+	}
 	if err := write(vaultPath, dest, force); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return Info{}, &ExistsError{Path: dest}
@@ -356,4 +359,29 @@ func Remove(dir, vaultPath, path string) error {
 		}
 	}
 	return fmt.Errorf("%s isn't one of the backups in %s", filepath.Base(path), dir)
+}
+
+// isVaultFile says whether path is the vault at vaultPath, or its -wal,
+// -shm or -journal file: a backup written there would replace a file the
+// vault, open in another sesh, is using.
+func isVaultFile(vaultPath, path string) bool {
+	clean := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		// The folders through links, as the files are reached.
+		if dir, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
+			p = filepath.Join(dir, filepath.Base(p))
+		}
+		return p
+	}
+	vault, dest := clean(vaultPath), clean(path)
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		if dest == vault+suffix {
+			return true
+		}
+	}
+	a, aerr := os.Stat(vaultPath)
+	b, berr := os.Stat(path)
+	return aerr == nil && berr == nil && os.SameFile(a, b)
 }

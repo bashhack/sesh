@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/backup"
-	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/tui"
 )
@@ -58,22 +57,36 @@ func uiBackUp(dbPath, to string, replace bool) (string, error) {
 			return "", err
 		}
 	} else {
-		// ~/ is expanded; a relative path is from where sesh ui started.
-		dest, err := config.ResolvePath(to)
+		dest, err := uiPath(to)
 		if err != nil {
-			if dest, err = filepath.Abs(to); err != nil {
-				return "", fmt.Errorf("find %s: %w", to, err)
-			}
+			return "", err
 		}
 		b, err = backup.MakeTo(dbPath, dest, replace, now())
-		if errors.Is(err, os.ErrExist) {
-			return "", tui.Exists(tildePath(dest) + " already exists.")
+		if exists := (*backup.ExistsError)(nil); errors.As(err, &exists) {
+			return "", tui.Exists(tildePath(exists.Path) + " already exists.")
 		}
 		if err != nil {
 			return "", err
 		}
 	}
 	return fmt.Sprintf("Backed up the vault to %s (%s).", tildePath(b.Path), vaultSize(b.Size)), nil
+}
+
+// uiPath is a path typed in the app: ~ is the home folder, and anything
+// else must be a full path, since the folder the app started in isn't on
+// screen.
+func uiPath(typed string) (string, error) {
+	if typed == "~" || strings.HasPrefix(typed, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, strings.TrimPrefix(typed, "~")), nil
+	}
+	if !filepath.IsAbs(typed) {
+		return "", fmt.Errorf("%s isn't a full path: start it with / or ~/", typed)
+	}
+	return filepath.Clean(typed), nil
 }
 
 // uiDeleteBackup deletes the backup at path, one listed for the vault at
@@ -108,7 +121,7 @@ func uiPlanRestore(dbPath, path string) (string, error) {
 
 // errCantRestoreHere is a vault missing or damaged, which the app can't
 // have open to restore it in place.
-var errCantRestoreHere = tui.Refused("the vault can't be read as it is, so it's restored from the command line: sesh restore")
+var errCantRestoreHere = tui.Refused("the vault can't be read as it is, so it's restored from the command line: quit sesh ui, then run: sesh restore")
 
 // uiRestore restores the vault at dbPath from the backup at path in place,
 // as sesh restore does, backing it up as it is first.
