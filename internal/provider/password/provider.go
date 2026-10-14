@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/bashhack/sesh/internal/atomicfile"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/password"
@@ -985,6 +986,23 @@ func (p *Provider) readExportPassword(label string, confirm bool) ([]byte, error
 	}
 
 	if confirm {
+		// A new one: the master password's rules, since anyone with the
+		// file can try passwords against it.
+		if len(pw) < 8 {
+			secure.SecureZeroBytes(pw)
+			return nil, errors.New("the export password must be at least 8 characters")
+		}
+		if password.IsWeak(pw) {
+			fmt.Fprintln(os.Stderr, "⚠️  This export password is easy to guess: a cracking program would likely find it in under 100 million tries, and anyone with the file can try.") //nolint:errcheck // best-effort warning
+			if stdinIsTerminal() {
+				fmt.Fprint(os.Stderr, "Use it anyway? [y/N]: ") //nolint:errcheck // best-effort prompt
+				answer, err := p.readLine()
+				if err != nil || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y") {
+					secure.SecureZeroBytes(pw)
+					return nil, errors.New("export cancelled: choose a stronger password")
+				}
+			}
+		}
 		fmt.Fprintf(os.Stderr, "Confirm %s: ", label)
 		pw2, err := readPassword()
 		fmt.Fprintln(os.Stderr)
@@ -1033,31 +1051,35 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 	// `sesh ... --action export > backup.json`. Status text is returned
 	// via DisplayInfo, which the caller routes to stderr; keeping status
 	// off stdout preserves the data stream for shell redirection.
-	w := p.stdout
+	// The file is left as it is until the export is whole: an existing one
+	// (an earlier export, say) isn't replaced without --force, and the
+	// password is asked before anything is written.
 	dest := "stdout"
 	if p.file != "" {
-		f, err := os.OpenFile(p.file, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-		if err != nil {
-			return provider.Credentials{}, fmt.Errorf("create export file: %w", err)
-		}
-		defer func() {
-			if cerr := f.Close(); cerr != nil {
-				fmt.Fprintf(os.Stderr, "warning: failed to close export file: %v\n", cerr)
-			}
-		}()
-		w = f
 		dest = p.file
+		if _, err := os.Lstat(p.file); err == nil && !p.force {
+			return provider.Credentials{}, fmt.Errorf("%s already exists; add --force to replace it", p.file)
+		}
+	}
+	var pw []byte
+	if p.format == "encrypted" {
+		var err error
+		if pw, err = p.readExportPassword("Encryption password", true); err != nil {
+			return provider.Credentials{}, err
+		}
+		defer secure.SecureZeroBytes(pw)
+	}
+	var buf bytes.Buffer
+	w := p.stdout
+	if p.file != "" {
+		w = &buf
+		// What was written, the plain JSON or CSV too, is wiped after.
+		defer func() { secure.SecureZeroBytes(buf.Bytes()) }()
 	}
 
 	var count int
 	var err error
-
 	if p.format == "encrypted" {
-		pw, perr := p.readExportPassword("Encryption password", true)
-		if perr != nil {
-			return provider.Credentials{}, perr
-		}
-		defer secure.SecureZeroBytes(pw)
 		opts.KDF = p.exportKDF
 		count, err = mgr.ExportEncrypted(w, opts, pw)
 	} else {
@@ -1069,6 +1091,13 @@ func (p *Provider) exportEntries(mgr *password.Manager) (provider.Credentials, e
 	}
 	if err != nil {
 		return provider.Credentials{}, err
+	}
+	if p.file != "" {
+		// Through a temporary file renamed into place: a failure leaves
+		// what was there.
+		if err := atomicfile.Write(p.file, buf.Bytes(), 0o600); err != nil {
+			return provider.Credentials{}, fmt.Errorf("write the export: %w", err)
+		}
 	}
 
 	return provider.Credentials{

@@ -680,6 +680,8 @@ sesh --service password --action import --format encrypted --file backup.enc
 # Imported 12 entries
 ```
 
+The export password follows the master password's rules: at least 8 characters, and an easy one is warned about and asked about, since anyone with the file can try passwords against it. An existing file isn't replaced without `--force`, and the file is written only once the export is whole, through a temporary file renamed into place: a mistyped confirmation, or Ctrl-C, leaves what was there.
+
 Encrypted exports use the same Argon2id + AES-256-GCM primitives as the vault. The export is self-contained (envelope includes the salt and KDF params) and works across machines and master passwords.
 
 Every export, encrypted or not, holds everything about each entry: its kind, service name, username, secret, times, settings, URL, notes, and custom fields (secret ones included). A TOTP entry's settings (algorithm, digits, period, issuer) decide which codes are right, so they come back with it on import. In JSON they're the `settings` field; in CSV, a `settings` column holding the same JSON.

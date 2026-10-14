@@ -1326,3 +1326,74 @@ func TestExport_NothingMatchedLeavesTheFile(t *testing.T) {
 		})
 	}
 }
+
+// An export to an existing file is refused without --force, before any password is asked; with --force, a mismatched
+// confirmation leaves the file as it was; a good one replaces it whole, readable only by you.
+func TestExport_FileKeptUntilWhole(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "backup.enc")
+	if err := os.WriteFile(file, []byte("an earlier export"), 0o644); err != nil { //nolint:gosec // test
+		t.Fatal(err)
+	}
+	asked := 0
+	orig := readPassword
+	t.Cleanup(func() { readPassword = orig })
+	answers := []string{}
+	readPassword = func() ([]byte, error) {
+		asked++
+		a := answers[0]
+		answers = answers[1:]
+		return []byte(a), nil
+	}
+	export := func(args ...string) error {
+		p, _ := newTestProvider(seeded(t, map[string]string{"password/github": "plaintext-secret"}))
+		parseFlags(t, p, append([]string{"--action", "export", "--format", "encrypted", "--file", file}, args...)...)
+		_, err := p.GetCredentials()
+		return err
+	}
+	if err := export(); err == nil || !strings.Contains(err.Error(), "already exists; add --force to replace it") || asked != 0 {
+		t.Errorf("without --force: %v, %d asked", err, asked)
+	}
+	answers = []string{"export-password-1234", "export-password-5678"}
+	if err := export("--force"); err == nil || !strings.Contains(err.Error(), "do not match") {
+		t.Errorf("mismatched: %v", err)
+	}
+	if b, _ := os.ReadFile(file); string(b) != "an earlier export" { //nolint:errcheck // compared
+		t.Fatalf("after a mismatch the file holds %q", b)
+	}
+	answers = []string{"export-password-1234", "export-password-1234"}
+	if err := export("--force"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(file)
+	if err != nil || !bytes.Contains(b, []byte(`"algorithm": "argon2id"`)) || bytes.Contains(b, []byte("plaintext-secret")) {
+		t.Errorf("the export: %q, %v", b, err)
+	}
+	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("its mode: %v, %v", info, err)
+	}
+}
+
+// The export password has the master password's rules: at least 8 characters, and an easy one is asked about.
+func TestExport_PasswordRules(t *testing.T) {
+	export := func(pw, answer string, terminal bool) error {
+		stubReadPassword(t, pw)
+		stubStdinIsTerminal(t, terminal)
+		p, _ := newTestProvider(seeded(t, map[string]string{"password/github": "s"}))
+		p.stdin = strings.NewReader(answer)
+		p.action, p.format = "export", "encrypted"
+		_, err := p.GetCredentials()
+		return err
+	}
+	if err := export("short", "", true); err == nil || err.Error() != "the export password must be at least 8 characters" {
+		t.Errorf("short: %v", err)
+	}
+	if err := export("password1", "n\n", true); err == nil || !strings.Contains(err.Error(), "choose a stronger password") {
+		t.Errorf("easy, no: %v", err)
+	}
+	if err := export("password1", "y\n", true); err != nil {
+		t.Errorf("easy, yes: %v", err)
+	}
+	if err := export("password1", "", false); err != nil {
+		t.Errorf("easy, nobody to ask: %v", err)
+	}
+}

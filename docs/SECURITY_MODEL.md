@@ -170,7 +170,7 @@ Exports produced with `--format encrypted` are wrapped in a portable envelope th
 - **Random 32-byte salt** per export — the same password produces different ciphertext each time
 - **Envelope format** (JSON): `{version, algorithm, salt, params, ciphertext}` — salt and params are public, as in the vault's key record
 
-Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext and are intended for local scripting. Encrypted exports are the right choice for backups, transferring between machines, or storing in any medium the user doesn't fully trust. Use a strong password — the same brute-force threat model applies as with the master password.
+Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext and are intended for local scripting. Encrypted exports are the right choice for backups, transferring between machines, or storing in any medium the user doesn't fully trust. The same brute-force threat model applies as with the master password, so the export password has its rules: at least 8 characters, and an easy one is warned about and asked about. The file is written only once the export is whole, through a private temporary file renamed into place, and an existing one is replaced only with `--force`. The JSON is built in memory, which is wiped after; the plain JSON or CSV of an unencrypted export is too.
 
 ### Changing the master password (`sesh --rekey`)
 
