@@ -201,6 +201,9 @@ func TestUI_AgentLockAndUnlockAgain(t *testing.T) {
 	useConfigFile(t, "")
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	t.Setenv(config.EnvDBPath, vaultIn(dir))
+	// Settings other than the defaults, so a store given the defaults shows.
+	t.Setenv(config.EnvTrashKeepDays, "7")
+	t.Setenv(config.EnvHistoryKeep, "4")
 	cfg, err := settings()
 	if err != nil {
 		t.Fatal(err)
@@ -280,7 +283,10 @@ func TestUI_TouchIDAgainWhileAgentUnlocked(t *testing.T) {
 	startTestAgent(t)
 	prompts, fail := softwareTouchID(t)
 	dbPath := createVaultWithTouchID(t)
+	useConfigFile(t, "")
 	t.Setenv(config.EnvDBPath, dbPath)
+	t.Setenv(config.EnvTrashKeepDays, "7")
+	t.Setenv(config.EnvHistoryKeep, "4")
 	cfg, err := settings()
 	if err != nil {
 		t.Fatal(err)
