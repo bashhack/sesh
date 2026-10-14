@@ -25,7 +25,10 @@ import (
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/password"
+	"github.com/bashhack/sesh/internal/provider"
+	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/touchid"
 	"github.com/bashhack/sesh/internal/tui"
 	"github.com/bashhack/sesh/internal/vault"
@@ -124,6 +127,9 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		Copy:        app.ClipboardCopy,
 		OpenURL:     openURL,
 		LockAgent:   lockAgent,
+		EditNotes:   provider.EditNotes,
+		IsWeak:      func(pw []byte) bool { return password.IsWeak(pw) },
+		Generate:    func() ([]byte, error) { return password.GeneratePassword(password.DefaultGenerateOptions()) },
 		ClearAfter:  cfg.ClipboardTimeout.Value,
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
 		MaxLifetime: cfg.AgentMaxLifetime.Value,
@@ -213,7 +219,7 @@ func reopenWithTouchID(cfg *config.Config) (*database.Store, error) {
 		case len(said) > 0:
 			return nil, errors.New(strings.Join(said, " "))
 		}
-		return nil, errors.New("unlocking with Touch ID didn't work; enter your master password")
+		return nil, errors.New("Touch ID didn't unlock it; type your master password") //nolint:staticcheck // a sentence the locked screen shows, starting with a name
 	}
 	store, err := openStoreWith(dbPath, agent.NewOracle(conn, id))
 	if err != nil {
@@ -352,7 +358,7 @@ func (u *uiVault) SecretFields(k vault.Key) ([]vault.Field, error) {
 
 // Field is k's secret field name's value.
 func (u *uiVault) Field(k vault.Key, name string) ([]byte, error) {
-	d, err := u.store.Details(k, "in sesh ui, to copy its field "+name)
+	d, err := u.store.Details(k, "in sesh ui, to copy or show its field "+name)
 	if err != nil {
 		return nil, uiLocked(err)
 	}
@@ -391,6 +397,26 @@ func (u *uiVault) RestoreVersion(k vault.Key, n int) error {
 }
 
 func (u *uiVault) Delete(k vault.Key) error { return u.wrote(u.store.Delete(k)) }
+
+func (u *uiVault) Filing() (folders, tags []string, err error) {
+	fs, err := u.store.Folders()
+	if err != nil {
+		return nil, nil, uiLocked(err)
+	}
+	for _, f := range fs {
+		if f.Name != "" {
+			folders = append(folders, f.Name)
+		}
+	}
+	ts, _, err := u.store.Tags()
+	if err != nil {
+		return nil, nil, uiLocked(err)
+	}
+	for _, t := range ts {
+		tags = append(tags, t.Name)
+	}
+	return folders, tags, nil
+}
 
 func (u *uiVault) Trash() ([]tui.Trashed, error) {
 	entries, err := u.store.Trash()
@@ -436,6 +462,102 @@ func (u *uiVault) wrote(err error) error {
 		u.fingerprint = f
 	}
 	return nil
+}
+
+// Save adds an entry, or changes one, as the app's form describes it.
+func (u *uiVault) Save(c *tui.Change) (vault.Key, error) {
+	to, secret := c.To, c.Secret
+	var params *totp.Params
+	if to.Kind == vault.KindTOTP && len(secret) > 0 {
+		key, p, err := readTOTPKey(secret)
+		if err != nil {
+			return vault.Key{}, err
+		}
+		defer secure.SecureZeroBytes(key)
+		secret, params = key, p
+	}
+	if c.Key == (vault.Key{}) {
+		return to, u.add(c, secret, params)
+	}
+	if to.Kind == vault.KindTOTP && len(secret) > 0 && params == nil {
+		// A key alone is a new enrolment's: its codes are the usual six
+		// digits every 30 seconds, whatever the key before it made.
+		cur, err := u.store.Lookup(c.Key)
+		if err != nil {
+			return vault.Key{}, uiLocked(err)
+		}
+		params = &totp.Params{Issuer: cur.Settings.TOTP.Issuer}
+	}
+	edit := database.EntryEdit{Secret: secret, Folder: c.Folder, TOTP: params}
+	if to != c.Key {
+		edit.To = &to
+	}
+	if c.TagsSet {
+		tags := slices.Clone(c.Tags)
+		if tags == nil {
+			tags = []string{}
+		}
+		edit.Tags = &tags
+	}
+	if c.URL != nil || c.SetNotes || len(c.SetFields) > 0 || len(c.RemoveFields) > 0 {
+		edit.Details = &vault.DetailsChange{
+			URL: c.URL, Notes: c.Notes, SetNotes: c.SetNotes, NotesBase: c.NotesBase, HasNotesBase: c.SetNotes,
+			Set: c.SetFields, Remove: c.RemoveFields, RemoveFirst: true,
+		}
+	}
+	// One transaction: a part refused leaves the entry as it was.
+	switch _, err := u.store.Edit(c.Key, edit); {
+	case err == nil, errors.Is(err, database.ErrNothingToChange):
+		return to, u.wrote(nil)
+	case errors.Is(err, database.ErrNameTaken):
+		return vault.Key{}, fmt.Errorf("%w: %s", tui.ErrNameTaken, to)
+	default:
+		return vault.Key{}, uiLocked(err)
+	}
+}
+
+// add stores a new entry, refusing a name another entry has.
+func (u *uiVault) add(c *tui.Change, secret []byte, params *totp.Params) error {
+	switch err := u.store.Exists(c.To); {
+	case err == nil:
+		return fmt.Errorf("%w: %s", tui.ErrNameTaken, c.To)
+	case !errors.Is(err, vault.ErrNotFound):
+		return uiLocked(err)
+	}
+	ent := vault.Entry{Key: c.To, Tags: c.Tags}
+	if c.Folder != nil {
+		ent.Folder = *c.Folder
+	}
+	if params != nil {
+		ent.Settings.TOTP = *params
+	}
+	d := vault.Details{Notes: c.Notes, Fields: c.SetFields}
+	if c.URL != nil {
+		d.URL = *c.URL
+	}
+	return u.wrote(u.store.SaveWithDetails(&ent, secret, &d))
+}
+
+// readTOTPKey is a TOTP key as typed: a base32 key, or an otpauth:// link
+// with its settings.
+func readTOTPKey(typed []byte) ([]byte, *totp.Params, error) {
+	text := strings.TrimSpace(string(typed))
+	if strings.HasPrefix(strings.ToLower(text), "otpauth://") {
+		info, err := qrcode.ExtractTOTPFullInfo(text)
+		if err != nil {
+			return nil, nil, fmt.Errorf("that otpauth:// link can't be read: %w", err)
+		}
+		key, err := totp.ValidateAndNormalizeSecret(info.Secret)
+		if err != nil {
+			return nil, nil, fmt.Errorf("that otpauth:// link's key can't be used: %w", err)
+		}
+		return []byte(key), &totp.Params{Issuer: info.Issuer, Algorithm: info.Algorithm, Digits: info.Digits, Period: info.Period}, nil
+	}
+	key, err := totp.ValidateAndNormalizeSecret(text)
+	if err != nil {
+		return nil, nil, fmt.Errorf("that TOTP key can't be used: %w", err)
+	}
+	return []byte(key), nil, nil
 }
 
 // lockAgent locks sesh's agent; none running is nothing to lock.
@@ -491,9 +613,9 @@ func uiLocked(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, database.ErrVaultKeyChanged):
-		return tui.Locked("The vault's master password was changed, or the vault restored, by another sesh command.")
+		return tui.Locked("Another sesh command changed the master password or restored the vault.")
 	case agent.Locked(err):
-		return tui.Locked("sesh's agent locked.")
+		return tui.Locked("sesh's agent locked the vault.")
 	}
 	return err
 }

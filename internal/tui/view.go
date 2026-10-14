@@ -36,6 +36,9 @@ func (m *Model) View() tea.View {
 		if m.ov != nil {
 			s = m.drawOverlay(s)
 		}
+		if m.form != nil {
+			s = m.drawForm(s)
+		}
 	}
 	v := tea.NewView(s)
 	v.AltScreen = true
@@ -151,7 +154,7 @@ func (m *Model) listLines(w, h int) []string {
 	if len(m.rows) == 0 {
 		msg := "Nothing matches."
 		if m.total == 0 {
-			msg = "The vault is empty."
+			msg = "The vault is empty. To add an entry: ctrl+k, then a."
 		}
 		out[h/2] = lipgloss.PlaceHorizontal(w, lipgloss.Center, m.th.dimmed().Render(msg))
 		return out
@@ -234,14 +237,14 @@ func (m *Model) helpLines(h int) []string {
 		{"type", "search names, usernames and sites"},
 		{"↑ ↓", "move (or ctrl+p, ctrl+n)"},
 		{"pgup pgdn", "move a page"},
-		{"↵", "copy the secret, or the code"},
-		{"tab", "reveal the password and secret fields (30s)"},
-		{"ctrl+k", "actions: copy a value, earlier secrets, delete, the trash, lock"},
+		{"↵", "copy the password, key or code"},
+		{"tab", "show the password and secret fields for 30s"},
+		{"ctrl+k", "actions: edit, add, copy a value, earlier secrets, trash, lock"},
 		{"ctrl+y", "copy the username"},
 		{"ctrl+o", "open the URL in the browser"},
 		{"shift ↑ ↓", "scroll the details on the right"},
 		{"mouse", "click to select, wheel to move or scroll"},
-		{"ctrl+w ctrl+u", "delete a word, or the search"},
+		{"ctrl+w ctrl+u", "delete a word, or the whole search"},
 		{"esc", "clear the search, or quit"},
 		{"ctrl+c", "quit"},
 		{"?", "close this help"},
@@ -251,7 +254,7 @@ func (m *Model) helpLines(h int) []string {
 		if i+1 >= h {
 			break
 		}
-		out[i+1] = "   " + th.accented().Render(fmt.Sprintf("%-15s", k[0])) + th.dimmed().Render(k[1])
+		out[i+1] = "   " + fitTo(th.key(k[0]), 17) + th.dimmed().Render(k[1])
 	}
 	return out
 }
@@ -259,20 +262,16 @@ func (m *Model) helpLines(h int) []string {
 // footer is the keys, and what was just done, or went wrong.
 func (m *Model) footer(w int) string {
 	th := m.th
-	keys := [][2]string{{"↵", "copy"}, {"^k", "actions"}, {"↑↓", "move"}, {"esc", "clear"}}
+	keys := [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"↑↓", "move"}, {"esc", "clear"}}
 	if m.input.Value() == "" {
-		keys = [][2]string{{"↵", "copy"}, {"^k", "actions"}, {"↑↓", "move"}, {"esc", "quit"}, {"?", "help"}}
+		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"↑↓", "move"}, {"esc", "quit"}, {"?", "help"}}
 	}
 	now := m.opts.Now()
 	if (m.status != "" && now.Before(m.statusUntil)) || now.Before(m.clipUntil) {
 		// Room for what's said on the right: the keys used most.
 		keys = keys[:2]
 	}
-	var parts []string
-	for _, k := range keys {
-		parts = append(parts, th.accented().Render(k[0])+" "+th.dimmed().Render(k[1]))
-	}
-	left := " " + strings.Join(parts, th.lines().Render("  ·  "))
+	left := " " + th.hints(keys...)
 	if m.status == "" || !now.Before(m.statusUntil) {
 		if !now.Before(m.clipUntil) {
 			return left
@@ -299,7 +298,6 @@ func (m *Model) footer(w int) string {
 func (m *Model) drawLocked() string {
 	th := m.th
 	w := min(60, m.width-4)
-	sep := th.lines().Render("  ·  ")
 	lines := []string{"", th.accented().Bold(true).Render("sesh is locked")}
 	if m.lockedWhy != "" {
 		whyStyle := th.dimmed()
@@ -309,17 +307,17 @@ func (m *Model) drawLocked() string {
 		lines = append(lines, whyStyle.Width(w-6).Render(m.lockedWhy))
 	}
 	lines = append(lines, "", th.style().Render("Master password"))
-	field := th.dimmed().Render("type it, then press ↵")
+	field := th.dimmed().Render("type it and press ↵")
 	switch {
 	case m.unlocking:
 		field = m.spin.View() + th.dimmed().Render(" Unlocking…")
 	case len(m.password) > 0:
-		field = th.accented().Render("▌") + th.dimmed().Render(" hidden as you type")
+		field = th.accented().Render("▌") + th.dimmed().Render(" typed, not shown")
 	}
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(th.accent).Padding(0, 1).Width(w - 6)
-	hint := th.accented().Render("↵") + th.dimmed().Render(" unlock") + sep + th.accented().Render("esc") + th.dimmed().Render(" quit")
+	hint := th.hints([2]string{"↵", "unlock"}, [2]string{"esc", "quit"})
 	if m.opts.TouchID != nil {
-		hint = th.accented().Render("↵") + th.dimmed().Render(" unlock, or with nothing typed, Touch ID") + sep + th.accented().Render("esc") + th.dimmed().Render(" quit")
+		hint = th.hints([2]string{"↵", "unlock (Touch ID if nothing is typed)"}, [2]string{"esc", "quit"})
 	}
 	lines = append(lines, box.Render(field), "", hint, "")
 	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(th.border).Padding(0, 2).Width(w).
@@ -450,6 +448,23 @@ func fitTo(s string, w int) string {
 	}
 	s = ansi.Truncate(s, w, "…")
 	return s + strings.Repeat(" ", max(w-lipgloss.Width(s), 0))
+}
+
+// spoken is d as said aloud: "10 minutes", "1 hour 30 minutes", "45 seconds".
+func spoken(d time.Duration) string {
+	d = d.Round(time.Second)
+	h, m, s := int(d/time.Hour), int(d%time.Hour/time.Minute), int(d%time.Minute/time.Second)
+	var parts []string
+	if h > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", h, plural(h, "hour", "hours")))
+	}
+	if m > 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", m, plural(m, "minute", "minutes")))
+	}
+	if s > 0 || len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("%d %s", s, plural(s, "second", "seconds")))
+	}
+	return strings.Join(parts, " ")
 }
 
 func plural(n int, one, many string) string {

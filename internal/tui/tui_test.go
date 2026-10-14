@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"image/color"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +31,7 @@ type fakeVault struct {
 	history  map[vault.Key][]string      // earlier secrets, the newest first
 	trash    []Trashed
 	trashed  map[int64]vault.Entry
+	saves    []Change // what Save was given
 	entries  []vault.Entry
 	reads    []string // "secret <key> <reading>" or "code <key>"
 	kept     int      // keep-alives
@@ -126,6 +129,20 @@ func (f *fakeVault) Delete(k vault.Key) error {
 	return errors.New("not found")
 }
 
+func (f *fakeVault) Filing() (folders, tags []string, err error) {
+	for _, e := range f.entries {
+		if e.Folder != "" && !slices.Contains(folders, e.Folder) {
+			folders = append(folders, e.Folder)
+		}
+		for _, t := range e.Tags {
+			if !slices.Contains(tags, t) {
+				tags = append(tags, t)
+			}
+		}
+	}
+	return folders, tags, f.err
+}
+
 func (f *fakeVault) Trash() ([]Trashed, error) { return slices.Clone(f.trash), nil }
 
 func (f *fakeVault) RestoreFromTrash(id int64) (vault.Key, error) {
@@ -138,6 +155,38 @@ func (f *fakeVault) RestoreFromTrash(id int64) (vault.Key, error) {
 func (f *fakeVault) RemoveFromTrash(id int64) error {
 	f.trash = slices.DeleteFunc(f.trash, func(t Trashed) bool { return t.ID == id })
 	return nil
+}
+
+func (f *fakeVault) Save(c *Change) (vault.Key, error) {
+	if f.err != nil {
+		return vault.Key{}, f.err
+	}
+	saved := *c
+	saved.Secret, saved.Notes, saved.NotesBase = bytes.Clone(c.Secret), bytes.Clone(c.Notes), bytes.Clone(c.NotesBase)
+	saved.SetFields = nil
+	for _, fl := range c.SetFields {
+		saved.SetFields = append(saved.SetFields, vault.Field{Name: fl.Name, Value: bytes.Clone(fl.Value), Secret: fl.Secret})
+	}
+	f.saves = append(f.saves, saved)
+	for i, e := range f.entries {
+		if e.Key == c.To && c.Key != c.To {
+			return vault.Key{}, ErrNameTaken
+		}
+		if e.Key == c.Key && c.Key != (vault.Key{}) {
+			f.entries[i].Key = c.To
+			if c.URL != nil {
+				f.entries[i].URL = *c.URL
+			}
+			if c.Secret != nil {
+				delete(f.secrets, c.Key)
+				f.secrets[c.To] = string(c.Secret)
+			}
+			return c.To, nil
+		}
+	}
+	f.entries = append(f.entries, vault.Entry{Key: c.To})
+	f.secrets[c.To] = string(c.Secret)
+	return c.To, nil
 }
 
 func (f *fakeVault) CodeKey(k vault.Key) ([]byte, error) {
@@ -242,6 +291,16 @@ func (a *app) press(keys ...string) {
 			msg = tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}
 		case "ctrl+k":
 			msg = tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl}
+		case "ctrl+e":
+			msg = tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl}
+		case "ctrl+r":
+			msg = tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl}
+		case "ctrl+s":
+			msg = tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl}
+		case "→":
+			msg = tea.KeyPressMsg{Code: tea.KeyRight}
+		case "shift+tab":
+			msg = tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 		case "wait": // past the moment a confirmation's y starts to count
 			a.now = a.now.Add(time.Second)
 			continue
@@ -284,7 +343,7 @@ func TestSearchAndCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := a.screen()
-	for _, w := range []string{"3 entries", "● github", "alice", "◆ gitlab", "◷ github", want[:3] + " " + want[3:], "PASSWORD", "▸ work", "↵ copy  ·  tab reveal"} {
+	for _, w := range []string{"3 entries", "● github", "alice", "◆ gitlab", "◷ github", want[:3] + " " + want[3:], "PASSWORD", "▸ work", "↵  copy", "tab  reveal"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("screen missing %q:\n%s", w, s)
 		}
@@ -326,7 +385,7 @@ func TestCopy(t *testing.T) {
 	f := newFake()
 	a := newApp(t, f, Options{ClearAfter: 30 * time.Second})
 	a.press("enter")
-	if !slices.Equal(a.copied, []string{"gh-pass"}) || !strings.Contains(a.screen(), "✓ Copied github (alice)'s password · clears in 30s") {
+	if !slices.Equal(a.copied, []string{"gh-pass"}) || !strings.Contains(a.screen(), "✓ Copied the password for github (alice) · clears in 30 seconds") {
 		t.Errorf("copied %q:\n%s", a.copied, a.screen())
 	}
 	a.press("down", "enter")
@@ -334,7 +393,7 @@ func TestCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(a.copied) != 2 || a.copied[1] != want || !strings.Contains(a.screen(), "Copied github (alice)'s code") {
+	if len(a.copied) != 2 || a.copied[1] != want || !strings.Contains(a.screen(), "Copied the code for github (alice)") {
 		t.Errorf("copied %q, want the code %s:\n%s", a.copied, want, a.screen())
 	}
 	if !slices.Contains(f.reads, "secret password/github/alice in sesh ui, to copy it") || !slices.Contains(f.reads, "secret totp/github/alice in sesh ui, to copy its code") {
@@ -342,7 +401,7 @@ func TestCopy(t *testing.T) {
 	}
 	// The message goes after a few seconds.
 	a.tick(6 * time.Second)
-	if s := a.screen(); strings.Contains(s, "Copied") || !strings.Contains(s, "↵ copy") {
+	if s := a.screen(); strings.Contains(s, "Copied") || !strings.Contains(s, "↵  copy") {
 		t.Errorf("after 6s:\n%s", s)
 	}
 	failing := newApp(t, newFake(), Options{Copy: func(string) error { return errors.New("no clipboard") }})
@@ -377,7 +436,7 @@ func TestIdleLockAndUnlock(t *testing.T) {
 	}
 	a.tick(time.Second)
 	s := a.screen()
-	if a.v != nil || !f.closed || !strings.Contains(s, "sesh is locked") || !strings.Contains(s, "Locked after 1m0s without use.") || strings.Contains(s, "github") {
+	if a.v != nil || !f.closed || !strings.Contains(s, "sesh is locked") || !strings.Contains(s, "No use for 1 minute.") || strings.Contains(s, "github") {
 		t.Fatalf("after the idle timeout (closed %v):\n%s", f.closed, s)
 	}
 	if string(held) != strings.Repeat("\x00", len(seed)) || len(a.keys) != 0 {
@@ -400,7 +459,7 @@ func TestUnlockAttempts(t *testing.T) {
 		Unlock:      func([]byte) (Vault, error) { return nil, ErrWrongPassword },
 	})
 	a.tick(time.Hour)
-	if s := a.screen(); !strings.Contains(s, "Locked 1h0m0s after unlocking.") {
+	if s := a.screen(); !strings.Contains(s, "It's been 1 hour since it was unlocked.") {
 		t.Fatalf("past the longest unlock:\n%s", s)
 	}
 	for range 3 {
@@ -686,7 +745,7 @@ func TestPreviewNotesAndReveal(t *testing.T) {
 	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Value: []byte("4321")}}}
 	a := newApp(t, f, Options{})
 	s := a.screen()
-	for _, w := range []string{"recovery codes", "in the safe", "email     a@example.com", "pin       ••••••••", "password  ••••••••", "tab reveal"} {
+	for _, w := range []string{"recovery codes", "in the safe", "email     a@example.com", "pin       ••••••••", "password  ••••••••", "tab  reveal"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("preview missing %q:\n%s", w, s)
 		}
@@ -699,7 +758,7 @@ func TestPreviewNotesAndReveal(t *testing.T) {
 		t.Errorf("notes read %d times, want once: %q", n, f.reads)
 	}
 	a.press("tab")
-	if s := a.screen(); !strings.Contains(s, "password  gh-pass") || !strings.Contains(s, "pin       4321") || !strings.Contains(s, "tab hide (30s)") {
+	if s := a.screen(); !strings.Contains(s, "password  gh-pass") || !strings.Contains(s, "pin       4321") || !strings.Contains(s, "tab  hide (30s)") {
 		t.Errorf("revealed:\n%s", s)
 	}
 	if !slices.Contains(f.reads, "secret password/github/alice in sesh ui, to reveal it") || !slices.Contains(f.reads, "fields password/github/alice") {
@@ -734,7 +793,7 @@ func TestPreviewSecureNote(t *testing.T) {
 	f.secrets = map[vault.Key]string{wifi: long}
 	a := newApp(t, f, Options{})
 	s := a.screen()
-	if !strings.Contains(s, "ssid home␛[2Jpassword hunter2") || !strings.Contains(s, "shift ↑↓ scroll") || strings.Contains(s, "line 39") {
+	if !strings.Contains(s, "ssid home␛[2Jpassword hunter2") || !strings.Contains(s, "shift ↑↓  scroll") || strings.Contains(s, "line 39") {
 		t.Errorf("a long note:\n%s", s)
 	}
 	if strings.Contains(a.View().Content, "\x1b[2J") {
@@ -757,7 +816,7 @@ func TestUsernameURLAndCountdown(t *testing.T) {
 	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, OpenURL: func(u string) error { opened = u; return nil }})
 	a.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
 	a.run(a.copyUsername(a.selected()))
-	if len(a.copied) != 1 || a.copied[0] != "alice" || !strings.Contains(a.screen(), "Copied github (alice)'s username") {
+	if len(a.copied) != 1 || a.copied[0] != "alice" || !strings.Contains(a.screen(), "Copied the username for github (alice)") {
 		t.Errorf("copied %q:\n%s", a.copied, a.screen())
 	}
 	if len(f.reads) != 1 { // only the TOTP key, for its code
@@ -891,7 +950,7 @@ func TestActionMenu(t *testing.T) {
 	a := newApp(t, f, Options{})
 	a.press("ctrl+k")
 	s := a.screen()
-	for _, w := range []string{"github (alice)", "copy a value…", "copy the username", "open the URL", "earlier secrets…", "delete (to the trash)", "the trash…", "lock now"} {
+	for _, w := range []string{"github (alice)", "copy a value…", "copy the username", "open the URL", "earlier secrets…", "move to the trash", "the trash…", "lock sesh"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("menu missing %q:\n%s", w, s)
 		}
@@ -933,7 +992,7 @@ func TestActionHistory(t *testing.T) {
 		t.Errorf("copied %q, reads %q", a.copied, f.reads)
 	}
 	a.press("r")
-	if s := a.screen(); !strings.Contains(s, "Make version 3 password/github/alice's secret again?") {
+	if s := a.screen(); !strings.Contains(s, "Make version 3 the secret for github (alice) again?") {
 		t.Fatalf("confirm:\n%s", s)
 	}
 	a.press("n")
@@ -941,7 +1000,7 @@ func TestActionHistory(t *testing.T) {
 		t.Fatalf("no restored it, or closed the history (secret %q)", f.secrets[github])
 	}
 	a.press("r", "wait", "y")
-	if f.secrets[github] != "old-2" || !strings.Contains(a.screen(), "Restored an earlier secret of password/github/alice") {
+	if f.secrets[github] != "old-2" || !strings.Contains(a.screen(), "Restored an earlier secret for github (alice)") {
 		t.Errorf("restore: secret %q:\n%s", f.secrets[github], a.screen())
 	}
 }
@@ -960,11 +1019,11 @@ func TestActionDeleteAndTrash(t *testing.T) {
 		t.Fatal("no deleted it")
 	}
 	a.press("ctrl+k", "d", "wait", "y")
-	if s := a.screen(); len(f.entries) != 2 || !strings.Contains(s, "2 entries") || !strings.Contains(s, "Moved password/github/alice to the trash") {
+	if s := a.screen(); len(f.entries) != 2 || !strings.Contains(s, "2 entries") || !strings.Contains(s, "Moved password github (alice) to the trash") {
 		t.Fatalf("after delete:\n%s", s)
 	}
 	a.press("ctrl+k", "t")
-	if s := a.screen(); !strings.Contains(s, "password/github/alice") || !strings.Contains(s, "deleted") {
+	if s := a.screen(); !strings.Contains(s, "github (alice)  password · deleted") {
 		t.Fatalf("trash:\n%s", s)
 	}
 	a.press("enter")
@@ -973,11 +1032,11 @@ func TestActionDeleteAndTrash(t *testing.T) {
 	}
 	// The selection moved on to the TOTP entry when github left the list.
 	a.press("ctrl+k", "d", "wait", "y", "ctrl+k", "t", "x")
-	if s := a.screen(); !strings.Contains(s, "Delete totp/github/alice for good?") {
+	if s := a.screen(); !strings.Contains(s, "Delete TOTP github (alice) for good?") {
 		t.Fatalf("confirm for good:\n%s", s)
 	}
 	a.press("wait", "y")
-	if len(f.trash) != 0 || !strings.Contains(a.screen(), "Deleted totp/github/alice for good") {
+	if len(f.trash) != 0 || !strings.Contains(a.screen(), "Deleted TOTP github (alice) for good") {
 		t.Errorf("for good: trash %v", f.trash)
 	}
 }
@@ -988,7 +1047,7 @@ func TestActionLockNow(t *testing.T) {
 	agentLocked := false
 	a := newApp(t, f, Options{LockAgent: func() error { agentLocked = true; return nil }})
 	a.press("ctrl+k")
-	if !strings.Contains(a.screen(), "lock now, and sesh's agent") {
+	if !strings.Contains(a.screen(), "lock sesh") {
 		t.Fatalf("menu:\n%s", a.screen())
 	}
 	a.press("l")
@@ -1110,7 +1169,7 @@ func TestActionFailuresAndLongPanels(t *testing.T) {
 		a.press("down")
 	}
 	s := a.screen()
-	if !strings.Contains(s, "old-30") || !strings.Contains(s, "trash id 31") || !strings.Contains(s, "put back") || strings.Count(s, "\n") != a.height-1 {
+	if !strings.Contains(s, "old-30") || !strings.Contains(s, "deleted") || !strings.Contains(s, "put back") || strings.Count(s, "\n") != a.height-1 {
 		t.Errorf("a long trash:\n%s", s)
 	}
 	a.press("esc", "esc", "ctrl+k", "l")
@@ -1149,7 +1208,7 @@ func TestPanelEdges(t *testing.T) {
 	a.press("enter")
 	a.Update(doneMsg{err: ErrNameTaken, epoch: a.epoch, closes: panelTrash})
 	_ = first
-	if s := a.screen(); a.ov == nil || !strings.Contains(s, "another entry has that name") || !strings.Contains(s, "password/github/alice") {
+	if s := a.screen(); a.ov == nil || !strings.Contains(s, "another entry has that name") || !strings.Contains(s, "github (alice)") {
 		t.Errorf("a restore that failed:\n%s", s)
 	}
 }
@@ -1179,5 +1238,493 @@ func TestCopyANotesText(t *testing.T) {
 	a.press("1")
 	if len(a.copied) != 2 || a.copied[1] != "ssid home" {
 		t.Errorf("copied %q, want the note's text", a.copied)
+	}
+}
+
+// tabs presses Tab n times.
+func (a *app) tabs(n int) {
+	for range n {
+		a.press("tab")
+	}
+}
+
+// The edit form changes what was changed, and nothing else: a username,
+// then a new secret typed, which is wiped once saved.
+func TestEditForm(t *testing.T) {
+	f := newFake()
+	f.entries[0].URL = "github.com"
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e")
+	if s := a.screen(); !strings.Contains(s, "Edit github (alice)") || !strings.Contains(s, "ctrl+s") {
+		t.Fatalf("the form:\n%s", s)
+	}
+	a.press("tab", "2", "ctrl+s") // the username, then save
+	if len(f.saves) != 1 {
+		t.Fatalf("saves = %d:\n%s", len(f.saves), a.screen())
+	}
+	c := f.saves[0]
+	if c.Key != github || c.To.Username != "alice2" || c.URL != nil || c.Secret != nil || c.SetNotes || c.TagsSet || c.Folder != nil {
+		t.Errorf("change = %+v", c)
+	}
+	if s := a.screen(); a.form != nil || !strings.Contains(s, "Saved password github (alice2)") || !strings.Contains(s, "alice2") {
+		t.Errorf("after saving:\n%s", s)
+	}
+	// A new secret: the choice, then the secret typed unseen.
+	a.press("ctrl+k", "e")
+	a.tabs(2)
+	a.press("→", "tab", "hunter2")
+	typed := a.form.inputs[a.form.focus].secret
+	if s := a.screen(); strings.Contains(s, "hunter2") || !strings.Contains(s, "•••••••") {
+		t.Errorf("the secret typed is shown, or not marked:\n%s", s)
+	}
+	a.press("ctrl+s")
+	if len(f.saves) != 2 || string(f.saves[1].Secret) != "hunter2" || string(typed[:7]) != strings.Repeat("\x00", 7) {
+		t.Errorf("saved %+v; typed buffer %q", f.saves, typed)
+	}
+}
+
+// A generated password is saved, and copied, since nobody has seen it; a
+// name another entry has is said in the form, which stays.
+func TestEditGenerateAndNameTaken(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, Generate: func() ([]byte, error) { return []byte("generated-pw"), nil }})
+	a.press("ctrl+k", "e")
+	a.tabs(2)
+	a.press("→", "→", "ctrl+s")
+	if len(f.saves) != 1 || string(f.saves[0].Secret) != "generated-pw" || len(a.copied) != 1 || a.copied[0] != "generated-pw" {
+		t.Fatalf("saves %+v, copied %q", f.saves, a.copied)
+	}
+	if s := a.screen(); !strings.Contains(s, "new password") || !strings.Contains(s, "clears in 30 seconds") {
+		t.Errorf("after generating:\n%s", s)
+	}
+	// A rename to a name that's free is saved.
+	a.press("down", "ctrl+k", "e")
+	for range len("github") {
+		a.press("backspace")
+	}
+	a.press("gitlab", "ctrl+s")
+	if a.form != nil {
+		t.Fatalf("saved onto a free name? saves %+v", f.saves[len(f.saves)-1])
+	}
+	f.entries = append(f.entries, vault.Entry{Kind: vault.KindPassword, Service: "taken"})
+	a.press("esc", "ctrl+k", "a")
+	a.press("tab", "taken")
+	a.tabs(2)
+	a.press("→") // type → generate
+	a.press("ctrl+s")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "Another entry has that name") {
+		t.Errorf("a name taken:\n%s", s)
+	}
+}
+
+// Adding: a secure note's text is its secret; a TOTP entry needs its key;
+// Esc on a form with something typed asks once before discarding it.
+func TestAddForm(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "a")
+	if s := a.screen(); !strings.Contains(s, "Add an entry") || !strings.Contains(s, "● password") {
+		t.Fatalf("the form:\n%s", s)
+	}
+	a.press("→", "→") // secure note
+	a.press("tab", "wifi")
+	a.tabs(4) // folder, tags, then the note
+	a.press("ssid home")
+	a.press("ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saves = %d:\n%s", len(f.saves), a.screen())
+	}
+	c := f.saves[0]
+	if c.Key != (vault.Key{}) || c.To != (vault.Key{Kind: vault.KindNote, Service: "wifi"}) || string(c.Secret) != "ssid home" || c.SetNotes {
+		t.Errorf("change = %+v", c)
+	}
+	if !strings.Contains(a.screen(), "Added secure note wifi") {
+		t.Errorf("after adding:\n%s", a.screen())
+	}
+	a.press("ctrl+k", "a", "→", "→", "→") // TOTP
+	a.press("tab", "site", "ctrl+s")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "Paste the TOTP key") {
+		t.Errorf("a TOTP entry with no key:\n%s", s)
+	}
+	a.press("esc")
+	if a.form == nil || !strings.Contains(a.screen(), "Press Esc again to discard") {
+		t.Fatalf("one Esc closed a form with something typed:\n%s", a.screen())
+	}
+	a.press("esc")
+	if a.form != nil {
+		t.Error("the second Esc didn't close the form")
+	}
+}
+
+// Fields are added (a secret one typed unseen), and removed; changed
+// notes are saved with the notes they replace; what the editor saved goes
+// into the notes; a lock wipes what was typed.
+func TestFormFieldsNotesAndLock(t *testing.T) {
+	f := newFake()
+	f.entries[0].HasNotes = true
+	f.entries[0].Fields = []vault.Field{{Name: "email", Value: []byte("a@example.com")}}
+	f.notes = map[vault.Key]string{github: "old notes"}
+	a := newApp(t, f, Options{IdleTimeout: time.Hour, Unlock: func([]byte) (Vault, error) { return f, nil }})
+	a.press("ctrl+k", "e")
+	a.tabs(7) // username, secret, current, URL, folder, tags → notes
+	a.press("!")
+	a.Update(editorMsg{notes: []byte("from the editor")})
+	a.press("tab")             // the fields
+	a.press("x")               // remove email
+	a.press("a", "pin", "tab") // a new field: its name, then "secret"
+	a.press("→", "tab")        // yes; its value, unseen
+	a.press("4321", "ctrl+s")  // the field's form
+	if s := a.screen(); !strings.Contains(s, "pin") || strings.Contains(s, "4321") || strings.Contains(s, "email") {
+		t.Fatalf("the fields:\n%s", s)
+	}
+	a.press("ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saves = %d:\n%s", len(f.saves), a.screen())
+	}
+	c := f.saves[0]
+	if !c.SetNotes || string(c.Notes) != "from the editor" || string(c.NotesBase) != "old notes" ||
+		len(c.SetFields) != 1 || c.SetFields[0].Name != "pin" || !c.SetFields[0].Secret || string(c.SetFields[0].Value) != "4321" ||
+		!slices.Equal(c.RemoveFields, []string{"email"}) {
+		t.Errorf("change = %+v", c)
+	}
+	a.press("ctrl+k", "e")
+	a.tabs(2)
+	a.press("→", "tab", "secret")
+	typed := a.form.inputs[a.form.focus].secret
+	a.lock("test")
+	if a.form != nil || string(typed[:6]) != strings.Repeat("\x00", 6) {
+		t.Errorf("a lock left the form, or what was typed: %q", typed)
+	}
+}
+
+// A TOTP entry's form asks for an account, and doesn't rate its key as a
+// password; a password typed that's easy to guess is said to be.
+func TestFormLabelsAndStrength(t *testing.T) {
+	a := newApp(t, newFake(), Options{IsWeak: func([]byte) bool { return true }})
+	a.press("ctrl+k", "a", "→", "→", "→", "tab", "x", "tab", "me", "tab", "JBSWY3DP")
+	if s := a.screen(); !strings.Contains(s, " account ") || strings.Contains(s, " username ") || strings.Contains(s, "easy to guess") {
+		t.Errorf("a TOTP entry's form:\n%s", s)
+	}
+	a.press("esc", "esc", "ctrl+k", "a")
+	a.tabs(3) // kind, name, username → the secret's choice (type a new one)
+	a.press("tab", "abc")
+	if s := a.screen(); !strings.Contains(s, "easy to guess") {
+		t.Errorf("a weak password typed:\n%s", s)
+	}
+}
+
+// The folder and tags inputs offer the ones there are, matched anywhere.
+func TestFormOffersFoldersAndTags(t *testing.T) {
+	f := newFake()
+	f.entries[0].Tags = []string{"prod", "personal"}
+	f.entries[2].Folder = "home/network"
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "a", "tab", "x")
+	a.tabs(3) // username, the secret's choice → the secret
+	a.press("pw")
+	a.tabs(2) // URL → folder
+	if s := a.screen(); !strings.Contains(s, "work") || !strings.Contains(s, "home/network") {
+		t.Fatalf("the folders there are aren't offered:\n%s", s)
+	}
+	a.press("NET")
+	if s := a.screen(); !strings.Contains(s, "home/network") || strings.Contains(s, "   work") {
+		t.Errorf("typed NET, want only home/network offered:\n%s", s)
+	}
+	a.press("down", "enter", "tab", "x, pr", "down", "enter", "ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saved %d entries:\n%s", len(f.saves), a.screen())
+	}
+	c := f.saves[0]
+	if c.Folder == nil || *c.Folder != "home/network" || !slices.Equal(c.Tags, []string{"x", "prod"}) {
+		t.Errorf("saved in folder %v with tags %q", c.Folder, c.Tags)
+	}
+}
+
+// Ctrl-R shows a secret being typed into a form, until the focus moves on.
+func TestFormShowsATypedSecret(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("ctrl+k", "a")
+	a.tabs(4) // name, username, the secret's choice → the secret
+	a.press("hunter2")
+	if s := a.screen(); strings.Contains(s, "hunter2") || !strings.Contains(s, "show what you typed") {
+		t.Fatalf("a secret typed should be hidden, with the key that shows it:\n%s", s)
+	}
+	a.press("ctrl+r", "!")
+	if s := a.screen(); !strings.Contains(s, "hunter2!") {
+		t.Errorf("after ctrl+r, the secret isn't shown:\n%s", s)
+	}
+	a.press("tab", "shift+tab")
+	if s := a.screen(); strings.Contains(s, "hunter2") {
+		t.Errorf("the secret is still shown after the focus left it:\n%s", s)
+	}
+}
+
+// Ctrl-R on a secret field's empty input reads the value it has and shows it.
+func TestFormShowsAFieldsValue(t *testing.T) {
+	f := newFake()
+	f.entries[0].Fields = []vault.Field{{Name: "pin", Secret: true}}
+	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Secret: true, Value: []byte("4711")}}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e")
+	a.tabs(8) // username, secret, current, URL, folder, tags, notes → the fields
+	a.press("enter", "tab", "tab")
+	if s := a.screen(); strings.Contains(s, "4711") || !strings.Contains(s, "••••••••▌") || !strings.Contains(s, "ctrl+r  show it") {
+		t.Fatalf("the field's value should be unread, with the key that shows it:\n%s", s)
+	}
+	a.press("ctrl+r")
+	if s := a.screen(); !strings.Contains(s, "4711") {
+		t.Fatalf("after ctrl+r, the field's value isn't shown:\n%s", s)
+	}
+	if !slices.Contains(f.reads, "field "+github.String()+" pin") {
+		t.Errorf("the read wasn't recorded: %q", f.reads)
+	}
+	a.press("ctrl+s", "tab", "shift+tab", "ctrl+s")
+	if len(f.saves) != 1 || len(f.saves[0].SetFields) != 0 || len(f.saves[0].RemoveFields) != 0 {
+		t.Errorf("a value only shown was saved as a change: %+v", f.saves)
+	}
+}
+
+// fieldsApp is the app with github's form open on its fields: email (plain)
+// and pin (secret, not read).
+func fieldsApp(t *testing.T) (*app, *fakeVault) {
+	t.Helper()
+	f := newFake()
+	f.entries[0].Fields = []vault.Field{{Name: "email", Value: []byte("a@b")}, {Name: "pin", Secret: true}}
+	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Secret: true, Value: []byte("4711")}}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e")
+	a.tabs(8) // username, secret, current, URL, folder, tags, notes → the fields
+	return a, f
+}
+
+// A field renamed, or made plain, is taken out and set again; names differ by more than case.
+func TestFormFieldChanges(t *testing.T) {
+	a, f := fieldsApp(t)
+	a.press("enter", "backspace", "backspace", "backspace", "backspace", "backspace", "Email", "ctrl+s")
+	a.press("a", "EMAIL", "ctrl+s")
+	if s := a.screen(); !strings.Contains(s, "Another field already has that name") {
+		t.Errorf("a second field named EMAIL:\n%s", s)
+	}
+	a.press("esc", "esc", "down", "enter", "tab", "h", "tab", "ctrl+s")
+	if s := a.screen(); !strings.Contains(s, "Type a new value to make it plain") {
+		t.Errorf("a secret field made plain without a value:\n%s", s)
+	}
+	a.press("1234", "ctrl+s", "ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saved %d:\n%s", len(f.saves), a.screen())
+	}
+	c := f.saves[0]
+	var set []string
+	for _, fl := range c.SetFields {
+		set = append(set, fmt.Sprintf("%s=%s/%v", fl.Name, fl.Value, fl.Secret))
+	}
+	if !slices.Equal(c.RemoveFields, []string{"email", "pin"}) || !slices.Equal(set, []string{"Email=a@b/false", "pin=1234/false"}) {
+		t.Errorf("removed %q, set %q", c.RemoveFields, set)
+	}
+}
+
+// A field's form cancelled wipes what was typed into it, and an edit made in one counts as a change.
+func TestFormFieldFormWipesAndCounts(t *testing.T) {
+	a, _ := fieldsApp(t)
+	a.press("a", "pin2", "tab", "→", "tab", "4321")
+	typed := a.form.inputs[3].secret
+	a.press("esc", "esc")
+	if string(typed) == "4321" {
+		t.Error("a field's form cancelled left its secret in memory")
+	}
+	if a.form == nil || a.form.back != nil {
+		t.Fatal("Esc should go back to the entry's form")
+	}
+	a.press("up", "down", "esc")
+	if a.form != nil {
+		t.Fatal("moving between fields counted as a change")
+	}
+	a, _ = fieldsApp(t)
+	a.press("enter", "x", "ctrl+s", "esc")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "Esc again") {
+		t.Errorf("a field renamed and then one Esc discarded the form:\n%s", s)
+	}
+}
+
+// Notes the input shows differently aren't saved unless changed; a secure note needs its text.
+func TestFormNotesKeptAsTheyAre(t *testing.T) {
+	f := newFake()
+	f.entries[0].HasNotes = true
+	f.notes = map[vault.Key]string{github: "a\tb\r\nc"}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e", "tab", "x", "ctrl+s")
+	if len(f.saves) != 1 || f.saves[0].SetNotes {
+		t.Errorf("notes nobody changed were saved: %+v", f.saves)
+	}
+	a.press("ctrl+k", "a", "→", "→", "tab", "a note", "ctrl+s")
+	if s := a.screen(); len(f.saves) != 1 || !strings.Contains(s, "Write the note") {
+		t.Errorf("an empty secure note: %d saves\n%s", len(f.saves), s)
+	}
+}
+
+// Time spent in the editor doesn't lock the app as idle when it returns.
+func TestFormEditorTimeIsUse(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{IdleTimeout: 10 * time.Minute, EditNotes: func(b []byte) ([]byte, error) { return b, nil }})
+	a.press("ctrl+k", "e")
+	a.tabs(7) // → notes
+	a.press("ctrl+e")
+	// The program delivers the ticks due while the editor ran before the
+	// editor's own message.
+	a.tick(15 * time.Minute)
+	if a.form == nil || a.v == nil {
+		t.Fatal("the app locked as idle while the editor had the terminal")
+	}
+	_, cmd := a.Update(editorMsg{notes: []byte("from the editor")})
+	a.run(cmd)
+	a.tick(time.Second)
+	if a.form == nil || a.v == nil {
+		t.Fatal("the app locked as idle after the editor returned")
+	}
+	if got := a.form.inputs[a.form.focus].area.Value(); got != "from the editor" {
+		t.Errorf("notes = %q", got)
+	}
+	a.tick(10 * time.Minute)
+	if a.v != nil {
+		t.Error("the idle lock didn't start again after the editor")
+	}
+}
+
+// A paste is held to what a key is: not into a form that isn't drawn, and it counts against Esc.
+func TestFormPasteGuards(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("ctrl+k", "e", "x", "esc")
+	_, cmd := a.Update(tea.PasteMsg{Content: "y"})
+	a.run(cmd)
+	a.press("esc")
+	if a.form == nil {
+		t.Fatal("Esc, a paste, Esc discarded the form")
+	}
+	a.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+	a.Update(tea.PasteMsg{Content: "unseen"})
+	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if s := a.screen(); strings.Contains(s, "unseen") {
+		t.Errorf("a paste went into a form that wasn't drawn:\n%s", s)
+	}
+}
+
+// An entry whose notes can't be read says why it can't be edited.
+func TestEditNotesUnreadable(t *testing.T) {
+	f := newFake()
+	f.entries[0].HasNotes = true
+	a := newApp(t, f, Options{})
+	delete(a.notes, github)
+	a.notesFailed[github] = "boom"
+	a.press("ctrl+k", "e")
+	if s := a.screen(); a.form != nil || !strings.Contains(s, "Can't edit it here: its notes couldn't be read (boom).") {
+		t.Errorf("editing with unreadable notes:\n%s", s)
+	}
+}
+
+// The field chosen in a long list stays on screen, and an error stays in the window.
+func TestFormLongFieldsAndErrors(t *testing.T) {
+	f := newFake()
+	for i := range 30 {
+		f.entries[0].Fields = append(f.entries[0].Fields, vault.Field{Name: fmt.Sprintf("field%02d", i), Value: []byte("v")})
+	}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e")
+	a.tabs(8)
+	for range 25 {
+		a.press("down")
+	}
+	if s := a.screen(); !strings.Contains(s, "field25") {
+		t.Errorf("the chosen field is off screen:\n%s", s)
+	}
+	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
+	a.form.err = strings.Repeat("a long error that wraps ", 12)
+	if lines := strings.Count(a.View().Content, "\n") + 1; lines > minHeight {
+		t.Errorf("the form drew %d lines in a window of %d:\n%s", lines, minHeight, a.screen())
+	}
+}
+
+// The vault is kept from idling out while the notes editor is open.
+func TestEditorKeepsTheVaultInUse(t *testing.T) {
+	var kept atomic.Int32
+	e := &editor{
+		edit:  func(b []byte) ([]byte, error) { time.Sleep(60 * time.Millisecond); return b, nil },
+		keep:  func() { kept.Add(1) },
+		every: 10 * time.Millisecond,
+		notes: []byte("n"),
+	}
+	if err := e.Run(); err != nil {
+		t.Fatal(err)
+	}
+	after := kept.Load()
+	if after == 0 {
+		t.Error("nothing kept the vault in use while the editor was open")
+	}
+	time.Sleep(30 * time.Millisecond)
+	if kept.Load() != after {
+		t.Error("the vault was still kept in use after the editor closed")
+	}
+}
+
+// A secret field renamed is set again under its new name with the value read for it.
+func TestFormRenamesAnUnreadSecretField(t *testing.T) {
+	a, f := fieldsApp(t)
+	a.press("down", "enter", "backspace", "backspace", "backspace", "PIN", "ctrl+s")
+	if a.form == nil || a.form.back != nil {
+		t.Fatalf("the field's form didn't go back once its value was read:\n%s", a.screen())
+	}
+	a.press("ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saved %d:\n%s", len(f.saves), a.screen())
+	}
+	c := f.saves[0]
+	if !slices.Equal(c.RemoveFields, []string{"pin"}) || len(c.SetFields) != 1 || c.SetFields[0].Name != "PIN" || !c.SetFields[0].Secret {
+		t.Errorf("removed %q, set %+v", c.RemoveFields, c.SetFields)
+	}
+	if !slices.Contains(f.reads, "field "+github.String()+" pin") {
+		t.Errorf("the value wasn't read: %q", f.reads)
+	}
+}
+
+// Ctrl-S while Ctrl-R's read is on its way saves the field once it lands; a field saved as it was is no change.
+func TestFormFieldSaveWhileReading(t *testing.T) {
+	a, f := fieldsApp(t)
+	a.press("down", "enter", "backspace", "backspace", "backspace", "PIN", "tab", "tab")
+	_, read := a.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	a.press("ctrl+s")
+	a.run(read)
+	if a.form == nil || a.form.back != nil {
+		t.Fatalf("the field wasn't saved once its value landed:\n%s", a.screen())
+	}
+	a.press("ctrl+s")
+	if len(f.saves) != 1 || len(f.saves[0].SetFields) != 1 || f.saves[0].SetFields[0].Name != "PIN" {
+		t.Errorf("saved %+v", f.saves)
+	}
+
+	a, _ = fieldsApp(t)
+	a.press("enter", "ctrl+s", "esc")
+	if a.form != nil {
+		t.Errorf("a field saved as it was counted as a change:\n%s", a.screen())
+	}
+}
+
+// Keeping the secret shows it as dots, unread until Ctrl-R; nothing typed there changes it.
+func TestFormShowsTheCurrentSecret(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e")
+	a.tabs(3) // username, the secret's choice → the current password
+	if s := a.screen(); !strings.Contains(s, "current password") || strings.Contains(s, "gh-pass") || slices.ContainsFunc(f.reads, func(r string) bool { return strings.HasPrefix(r, "secret ") }) {
+		t.Fatalf("the current password should be unread dots:\n%s\nreads %q", s, f.reads)
+	}
+	a.press("x")
+	_, cmd := a.Update(tea.PasteMsg{Content: "y"})
+	a.run(cmd)
+	a.press("ctrl+r")
+	if s := a.screen(); !strings.Contains(s, "gh-pass") || strings.Contains(s, "gh-passx") {
+		t.Fatalf("after ctrl+r:\n%s", s)
+	}
+	a.press("esc")
+	if a.form != nil {
+		t.Error("looking at the current password counted as a change")
 	}
 }

@@ -170,7 +170,7 @@ func whatsHidden(k vault.Kind) string {
 	if k == vault.KindTOTP {
 		return "a TOTP entry shows its code, not its key"
 	}
-	return "the note is shown already"
+	return "the note is already shown"
 }
 
 // gotReveal shows what was revealed, while the entry stays selected.
@@ -351,18 +351,18 @@ func (m *Model) previewLines(w, h int) []string {
 	for len(out) < room {
 		out = append(out, "")
 	}
-	hint := th.accented().Render("↵") + th.dimmed().Render(" copy")
+	keys := [][2]string{{"↵", "copy"}}
 	if e.Kind != vault.KindTOTP && e.Kind != vault.KindNote || hasSecretFields(e) {
-		word := " reveal"
+		word := "reveal"
 		if shown {
-			word = fmt.Sprintf(" hide (%ds)", max(int(m.shown.until.Sub(m.opts.Now()).Seconds()), 0))
+			word = fmt.Sprintf("hide (%ds)", max(int(m.shown.until.Sub(m.opts.Now()).Seconds()), 0))
 		}
-		hint += th.lines().Render("  ·  ") + th.accented().Render("tab") + th.dimmed().Render(word)
+		keys = append(keys, [2]string{"tab", word})
 	}
 	if len(body) > room {
-		hint += th.lines().Render("  ·  ") + th.accented().Render("shift ↑↓") + th.dimmed().Render(" scroll")
+		keys = append(keys, [2]string{"shift ↑↓", "scroll"})
 	}
-	return append(out, " "+hint)
+	return append(out, " "+th.hints(keys...))
 }
 
 func hasSecretFields(e *vault.Entry) bool {
