@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/secure"
@@ -90,46 +91,9 @@ func (m *Manager) ExportEncrypted(w io.Writer, opts *ExportOptions, password []b
 
 // ImportEncrypted reads a password-encrypted export from r and imports it.
 func (m *Manager) ImportEncrypted(r io.Reader, opts ImportOptions, password []byte) (ImportResult, error) {
-	if len(password) == 0 {
-		return ImportResult{}, fmt.Errorf("password cannot be empty")
-	}
-
-	var envelope EncryptedEnvelope
-	if err := json.NewDecoder(r).Decode(&envelope); err != nil {
-		return ImportResult{}, fmt.Errorf("read envelope: %w", err)
-	}
-
-	if envelope.Version != encryptedExportVersion {
-		return ImportResult{}, fmt.Errorf("unsupported envelope version %d (expected %d)", envelope.Version, encryptedExportVersion)
-	}
-	if envelope.Algorithm != "argon2id" {
-		return ImportResult{}, fmt.Errorf("unsupported algorithm %q", envelope.Algorithm)
-	}
-	// Bounded, so a damaged or hostile file can't make sesh use unbounded
-	// memory or time.
-	if err := envelope.Params.CheckBounds(); err != nil {
-		return ImportResult{}, fmt.Errorf("export envelope: %w", err)
-	}
-
-	salt, err := base64.StdEncoding.DecodeString(envelope.Salt)
+	payload, err := DecryptExport(r, password)
 	if err != nil {
-		return ImportResult{}, fmt.Errorf("decode salt: %w", err)
-	}
-	if len(salt) < 16 {
-		return ImportResult{}, fmt.Errorf("envelope salt too short: %d bytes (min 16)", len(salt))
-	}
-
-	ciphertext, err := base64.StdEncoding.DecodeString(envelope.Ciphertext)
-	if err != nil {
-		return ImportResult{}, fmt.Errorf("decode ciphertext: %w", err)
-	}
-
-	key := kdf.Derive(password, salt, envelope.Params)
-	defer secure.SecureZeroBytes(key)
-
-	payload, err := gcmOpen(key, ciphertext)
-	if err != nil {
-		return ImportResult{}, fmt.Errorf("wrong password or corrupted export: %w", err)
+		return ImportResult{}, err
 	}
 	// Zeroes the JSON envelope buffer once Import returns, but the parsed
 	// entry secrets land in immutable Go strings inside the unmarshalled
@@ -140,6 +104,116 @@ func (m *Manager) ImportEncrypted(r io.Reader, opts ImportOptions, password []by
 	forwardOpts := opts
 	forwardOpts.Format = FormatJSON
 	return m.Import(bytes.NewReader(payload), forwardOpts)
+}
+
+// Sealed is a password-encrypted export whose envelope has been read and
+// checked: its settings are ones sesh accepts, so its password can be
+// asked for.
+type Sealed struct {
+	salt, ciphertext []byte
+	params           kdf.Params
+}
+
+// ReadSealed reads and checks a password-encrypted export's envelope from
+// r, opening nothing.
+func ReadSealed(r io.Reader) (*Sealed, error) {
+	var envelope EncryptedEnvelope
+	if err := json.NewDecoder(r).Decode(&envelope); err != nil {
+		return nil, fmt.Errorf("read envelope: %w", err)
+	}
+
+	if envelope.Version != encryptedExportVersion {
+		return nil, fmt.Errorf("unsupported envelope version %d (expected %d)", envelope.Version, encryptedExportVersion)
+	}
+	if envelope.Algorithm != "argon2id" {
+		return nil, fmt.Errorf("unsupported algorithm %q", envelope.Algorithm)
+	}
+	// Bounded, so a damaged or hostile file can't make sesh use unbounded
+	// memory or time.
+	if err := envelope.Params.CheckBounds(); err != nil {
+		return nil, fmt.Errorf("export envelope: %w", err)
+	}
+
+	salt, err := base64.StdEncoding.DecodeString(envelope.Salt)
+	if err != nil {
+		return nil, fmt.Errorf("decode salt: %w", err)
+	}
+	if len(salt) < 16 {
+		return nil, fmt.Errorf("envelope salt too short: %d bytes (min 16)", len(salt))
+	}
+
+	ciphertext, err := base64.StdEncoding.DecodeString(envelope.Ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decode ciphertext: %w", err)
+	}
+	return &Sealed{salt: salt, ciphertext: ciphertext, params: envelope.Params}, nil
+}
+
+// Open is the export's JSON, which the caller wipes.
+func (s *Sealed) Open(password []byte) ([]byte, error) {
+	if len(password) == 0 {
+		return nil, fmt.Errorf("password cannot be empty")
+	}
+	key := kdf.Derive(password, s.salt, s.params)
+	defer secure.SecureZeroBytes(key)
+	payload, err := gcmOpen(key, s.ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("wrong password or corrupted export: %w", err)
+	}
+	return payload, nil
+}
+
+// Entries are the export's entries, importing nothing. Their secrets are
+// in Go strings, which can't be wiped.
+func (s *Sealed) Entries(password []byte) ([]ExportEntry, error) {
+	payload, err := s.Open(password)
+	if err != nil {
+		return nil, err
+	}
+	defer secure.SecureZeroBytes(payload)
+	entries, err := readJSON(bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("read the export: %w", err)
+	}
+	return entries, nil
+}
+
+// IsEncryptedExport says whether b is a password-encrypted export's
+// envelope.
+func IsEncryptedExport(b []byte) bool {
+	var envelope EncryptedEnvelope
+	return json.Unmarshal(b, &envelope) == nil && envelope.Algorithm == "argon2id" && envelope.Ciphertext != "" && envelope.Salt != ""
+}
+
+// IsPlainExport says whether b is a plain export of sesh's: JSON or CSV.
+func IsPlainExport(b []byte) bool {
+	if bytes.HasPrefix(b, []byte(strings.Join(csvHeader, ",")+"\n")) {
+		return true
+	}
+	var entries []map[string]json.RawMessage
+	if json.Unmarshal(b, &entries) != nil {
+		return false
+	}
+	if len(entries) == 0 {
+		// An empty export: nothing in it says another app's.
+		return true
+	}
+	_, service := entries[0]["service"]
+	_, kind := entries[0]["type"]
+	return service && kind
+}
+
+// DecryptExport opens a password-encrypted export from r: its JSON, which
+// the caller wipes.
+func DecryptExport(r io.Reader, password []byte) ([]byte, error) {
+	if len(password) == 0 {
+		return nil, fmt.Errorf("password cannot be empty")
+	}
+	s, err := ReadSealed(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.Open(password)
 }
 
 // gcmSeal returns nonce || ciphertext || tag.

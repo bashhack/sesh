@@ -29,6 +29,10 @@ type Entry struct {
 	Lost     map[string]int
 	Details  vault.Details
 	Settings vault.Settings
+	// WholeSettings says Settings are all the entry's, an AWS entry's MFA
+	// device included, as sesh's own export has them: one replacing yours
+	// takes them as they are, rather than the code settings alone.
+	WholeSettings bool
 }
 
 // FitFolder fits a folder path from another app to sesh's folder rules:

@@ -33,6 +33,12 @@ type ExportEntry struct {
 	Settings  vault.Settings `json:"settings,omitzero"`
 }
 
+// Key is the entry's key.
+func (e *ExportEntry) Key() vault.Key { return key(e.Service, e.Username, e.Type) }
+
+// Details is the entry's details, which the caller zeroes.
+func (e *ExportEntry) Details() vault.Details { return importDetails(e) }
+
 // ExportField is a custom field as an export holds it, secret or not.
 type ExportField struct {
 	Name   string `json:"name"`
@@ -179,13 +185,16 @@ func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry) (int, error) {
 	return count, nil
 }
 
+// csvHeader is the CSV export's first row.
+var csvHeader = []string{"service", "username", "type", "secret", "created_at", "updated_at", "settings", "folder", "tags", "url", "notes", "fields"}
+
 // exportCSV writes entries as CSV, one row at a time. The settings column
 // holds an entry's settings as JSON, empty when it has none; the tags
 // column, its tags joined by ";", which a tag can't contain; the fields
 // column, its custom fields as JSON, as the JSON export has them.
 func (m *Manager) exportCSV(w io.Writer, entries []vault.Entry) (int, error) {
 	cw := csv.NewWriter(w)
-	if err := cw.Write([]string{"service", "username", "type", "secret", "created_at", "updated_at", "settings", "folder", "tags", "url", "notes", "fields"}); err != nil {
+	if err := cw.Write(csvHeader); err != nil {
 		return 0, err
 	}
 
