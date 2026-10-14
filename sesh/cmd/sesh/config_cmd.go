@@ -60,6 +60,11 @@ func writeConfig(w io.Writer, cfg *config.Config) error {
 	}
 	line("trash.keep_days", keepDays, sourceOf(cfg.TrashKeepDays.Source, cfg.TrashKeepDays.Origin))
 	line("history.keep", strconv.Itoa(cfg.HistoryKeep.Value), sourceOf(cfg.HistoryKeep.Source, cfg.HistoryKeep.Origin))
+	oldAfter := dayCount(int64(cfg.HealthOldAfterDays.Value))
+	if cfg.HealthOldAfterDays.Value == 0 {
+		oldAfter = "0 (not checked)"
+	}
+	line("health.old_after_days", oldAfter, sourceOf(cfg.HealthOldAfterDays.Source, cfg.HealthOldAfterDays.Origin))
 	// Paths are usually longer than the value column.
 	fmt.Fprintf(&b, "%-25s%s\n%-25s(%s)\n", "db_path", cfg.DBPath.Value, "", sourceOf(cfg.DBPath.Source, cfg.DBPath.Origin))
 	backupSource := sourceOf(cfg.BackupDir.Source, cfg.BackupDir.Origin)

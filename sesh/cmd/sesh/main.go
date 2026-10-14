@@ -253,6 +253,7 @@ var subcommands = []candidate{
 	{"doctor", "Check sesh's setup, and that the vault can all be read"},
 	{"edit", "Rename an entry, or change its username, kind, or secret"},
 	{"folder", "Move entries between folders, rename folders, list them"},
+	{"health", "Find weak, reused and old passwords"},
 	{"history", "An entry's earlier secrets: list, show, copy, restore, forget"},
 	{"import", "Bring entries over from another app, such as Google Authenticator"},
 	{"init", "Choose where sesh keeps the vault"},
@@ -915,6 +916,11 @@ func run(app *App, args []string) {
 			fatal(app, err)
 		}
 		return
+	case "health":
+		if err := runHealth(app, rest); err != nil {
+			fatal(app, err)
+		}
+		return
 	case "history":
 		if err := runHistory(app, rest); err != nil {
 			fatal(app, err)
@@ -1202,6 +1208,7 @@ func (a *App) PrintUsage() error {
 		"  sesh agent [lock|status|stop] Control the sesh agent",
 		"  sesh audit [prune]            Show the vault's audit log, or prune it",
 		"  sesh doctor                   Check the setup, and that the vault can all be read",
+		"  sesh health                   Find weak, reused and old passwords",
 		"  sesh backup [file]            Copy the vault now (sesh also does this automatically)",
 		"  sesh restore [backup]         List the backups, or replace the vault with one",
 		"  sesh show <id> [--reveal]     Show an entry: its URL, notes, fields, folder and tags",

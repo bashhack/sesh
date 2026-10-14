@@ -1,6 +1,7 @@
 package database
 
 import (
+	"bytes"
 	"encoding/hex"
 	"slices"
 	"strings"
@@ -195,5 +196,51 @@ func TestFingerprint(t *testing.T) {
 	}
 	if f3, err := s.Fingerprint(); err != nil || f3 == f1 {
 		t.Errorf("a tag didn't change the fingerprint: %v", err)
+	}
+}
+
+// EachSecret hands over every entry's secret, wiped after, and logs the run once.
+func TestEachSecret(t *testing.T) {
+	s := newTestStore(t)
+	for _, k := range []vault.Key{{Kind: vault.KindPassword, Service: "a"}, {Kind: vault.KindAPIKey, Service: "b"}, {Kind: vault.KindNote, Service: "c"}} {
+		if err := s.Put(k, []byte("secret of "+k.Service)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := map[string]string{}
+	var held [][]byte
+	// One entry's secret damaged: handed over with its error, not stopping the rest.
+	if _, err := s.db.Exec(`UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233' WHERE service = 'b'`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.EachSecret("Health check", []vault.Kind{vault.KindPassword, vault.KindAPIKey}, func(e *vault.Entry, secret []byte, err error) error {
+		if err != nil {
+			got[e.Service] = "unreadable: " + err.Error()
+			return nil
+		}
+		got[e.Service] = string(secret)
+		held = append(held, secret)
+		return nil
+	})
+	if err != nil || n != 1 || got["a"] != "secret of a" || !strings.HasPrefix(got["b"], "unreadable: ") || got["c"] != "" {
+		t.Fatalf("EachSecret = %d, %v, %v", n, err, got)
+	}
+	for _, h := range held {
+		if !bytes.Equal(h, make([]byte, len(h))) {
+			t.Errorf("a secret wasn't wiped after its call: %q", h)
+		}
+	}
+	events, err := s.AuditEvents(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reads []string
+	for _, e := range events {
+		if e.EventType == "access" {
+			reads = append(reads, e.EntryID+"|"+e.Detail)
+		}
+	}
+	if len(reads) != 1 || reads[0] != "|Health check: read 1 secret" {
+		t.Errorf("audit reads = %q", reads)
 	}
 }
