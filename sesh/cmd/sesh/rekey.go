@@ -150,47 +150,19 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 
 	// A password change keeps the recovery key; a recovery's change removes
 	// it, since the used key has been taken out and typed in.
-	var rewrap func(*database.RecoveryRecord, string) (*database.RecoveryRecord, error)
-	if src == nil {
-		rewrap = func(r *database.RecoveryRecord, newID string) (*database.RecoveryRecord, error) {
-			w, err := recovery.Wrap(r.PublicKey, key, []byte(newID))
-			if err != nil {
-				return nil, err
-			}
-			nr := recovery.NewRecord(newID, r.PublicKey, w)
-			nr.CreatedAt = r.CreatedAt // the same key
-			return nr, nil
-		}
-	}
-	res, err := store.Rekey(key, rec, rewrap)
+	res, notes, err := rekeyTo(store, dbPath, oldID, key, rec, src == nil)
 	if err != nil {
 		return nil, err
-	}
-
-	// Locked before any output, so a failed write below can't skip it.
-	agentNote := lockAgentHoldingOldKey()
-	// Touch ID unlock is re-wrapped for the new key, also before any output.
-	touchNote := rewrapTouchID(dbPath, oldID, res.NewID, key)
-	recoveryNote := ""
-	switch res.Recovery {
-	case database.RecoveryKept:
-		recoveryNote = "Your recovery key still works: it now opens the vault with the new master password."
-	case database.RecoveryStale:
-		recoveryNote = "Your recovery key's record was for another vault, so it was removed; make a new one with: sesh recovery new"
 	}
 
 	if _, perr := fmt.Fprintf(app.Stderr, "\nRotated %s under a new master password.\n", withTrash(res.Entries, res.Trashed)); perr != nil {
 		return bytes.Clone(key), perr
 	}
-	fileNote := ""
-	if res.OldVaultInFile {
-		fileNote = "warning: another sesh command has the vault open, so the vault file on its own still holds the vault under the old password until that command ends; don't copy or back up the file until then."
-	}
 	envNote := ""
 	if cfg.fromEnv {
 		envNote = "SESH_MASTER_PASSWORD still holds the old password; update it, or the next command will refuse it as wrong."
 	}
-	for _, msg := range []string{touchNote, recoveryNote, agentNote, fileNote, envNote} {
+	for _, msg := range []string{notes.touch, notes.recovery, notes.agent, notes.file, envNote} {
 		if msg == "" {
 			continue
 		}
@@ -203,6 +175,49 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		offerToRemoveOldBackups(app, st, "master password")
 	}
 	return bytes.Clone(key), nil
+}
+
+// rekeyNotes are what a master password change says once it has
+// committed, each "" when there's nothing to say.
+type rekeyNotes struct {
+	touch, recovery, agent, file string
+}
+
+// rekeyTo re-encrypts the vault open in store, at dbPath under the key
+// record oldID names, with key, whose key record is rec; keepRecovery keeps
+// the recovery key working, and otherwise it's removed. Once it commits it
+// locks the agent, which held the old key, and moves Touch ID unlock to
+// the new key.
+func rekeyTo(store *database.Store, dbPath, oldID string, key []byte, rec database.UnlockMaterial, keepRecovery bool) (database.RekeyResult, rekeyNotes, error) {
+	var rewrap func(*database.RecoveryRecord, string) (*database.RecoveryRecord, error)
+	if keepRecovery {
+		rewrap = func(r *database.RecoveryRecord, newID string) (*database.RecoveryRecord, error) {
+			w, err := recovery.Wrap(r.PublicKey, key, []byte(newID))
+			if err != nil {
+				return nil, err
+			}
+			nr := recovery.NewRecord(newID, r.PublicKey, w)
+			nr.CreatedAt = r.CreatedAt // the same key
+			return nr, nil
+		}
+	}
+	res, err := store.Rekey(key, rec, rewrap)
+	if err != nil {
+		return res, rekeyNotes{}, err
+	}
+	var notes rekeyNotes
+	notes.agent = lockAgentHoldingOldKey()
+	notes.touch = rewrapTouchID(dbPath, oldID, res.NewID, key)
+	switch res.Recovery {
+	case database.RecoveryKept:
+		notes.recovery = "Your recovery key still works: it now opens the vault with the new master password."
+	case database.RecoveryStale:
+		notes.recovery = "Your recovery key's record was for another vault, so it was removed; make a new one with: sesh recovery new"
+	}
+	if res.OldVaultInFile {
+		notes.file = "warning: another sesh command has the vault open, so the vault file on its own still holds the vault under the old password until that command ends; don't copy or back up the file until then."
+	}
+	return res, notes, nil
 }
 
 // lockAgentHoldingOldKey locks a running, unlocked agent once the database

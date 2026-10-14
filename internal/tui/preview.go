@@ -88,7 +88,7 @@ func hasNotes(e *vault.Entry) bool {
 // readNotes reads the selected entry's notes, when it has some not held.
 func (m *Model) readNotes() tea.Cmd {
 	e := m.selected()
-	if m.v == nil || e == nil || !hasNotes(e) {
+	if m.v == nil || m.changing || e == nil || !hasNotes(e) {
 		return nil
 	}
 	k := e.Key

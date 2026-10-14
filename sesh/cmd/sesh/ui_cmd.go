@@ -83,6 +83,11 @@ func runUI(app *App, args []string) error {
 	if err != nil {
 		return fmt.Errorf("sesh ui: %w", err)
 	}
+	if said := m.Afterword(); said != "" {
+		if _, err := fmt.Fprintln(app.Stderr, said); err != nil {
+			return err
+		}
+	}
 	return m.Err()
 }
 
@@ -153,6 +158,10 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			return tui.Live{OldAfter: time.Duration(now.HealthOldAfterDays.Value) * 24 * time.Hour}, nil
 		},
 		Now: time.Now,
+		ChangePassword: func(current, next []byte) (tui.Changed, error) {
+			return uiChangePassword(cfg, current, next)
+		},
+		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
 		Unlock: func(pw []byte) (tui.Vault, error) {
 			store, err := reopenWith(cfg, pw)
 			if err != nil {

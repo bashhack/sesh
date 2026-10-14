@@ -202,7 +202,14 @@ type Options struct {
 	// takes it out) and says what the app now uses.
 	Settings   func() ([]Setting, error)
 	SetSetting func(key, value string) (Live, error)
-	ClearAfter time.Duration
+	// ChangePassword changes the master password from current to next,
+	// which it wipes, and opens the vault again with next; an error means
+	// nothing changed. nil: it isn't offered.
+	ChangePassword func(current, next []byte) (Changed, error)
+	// RenewBackups deletes the vault's backups and makes a fresh one, and
+	// says so.
+	RenewBackups func() (string, error)
+	ClearAfter   time.Duration
 	// OldAfter is how long a secret can go unchanged before the health
 	// report calls it old; 0 doesn't check.
 	OldAfter time.Duration
@@ -221,6 +228,8 @@ type Model struct {
 	clipUntil           time.Time // when the clipboard clears what was copied
 
 	quitErr error
+	// afterword is said once the app has ended.
+	afterword string
 
 	v *gate // nil while locked
 
@@ -294,8 +303,12 @@ type Model struct {
 	revealing     bool // a reveal asked for hasn't come back yet
 	// inEditor is the notes editor having the terminal: its time is use, so
 	// the idle lock waits for it. Ticks due meanwhile arrive before it ends.
-	inEditor  bool
-	checking  bool // sesh doctor's checks are running
+	inEditor bool
+	checking bool // sesh doctor's checks are running
+	// changing is the master password being changed: the vault open stops
+	// opening once it commits, so it isn't read meanwhile.
+	changing  bool
+	quitAfter bool // Ctrl-C was pressed while changing: it quits once that's done
 	statusBad bool // the status is something that went wrong
 	showHelp  bool
 	dark      bool
@@ -359,6 +372,10 @@ func (m *Model) restyle() {
 // Err is why the app ended, when it wasn't asked to: too many wrong
 // passwords, or the vault couldn't be read.
 func (m *Model) Err() error { return m.quitErr }
+
+// Afterword is what the app has left to say once it has ended; "" when
+// nothing.
+func (m *Model) Afterword() string { return m.afterword }
 
 // Close waits for reads still running, wipes what the app holds, and
 // closes the vault.
@@ -548,6 +565,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.gotSettings(&msg)
 	case checksMsg:
 		return m.gotChecks(&msg)
+	case changedMsg:
+		return m.changed(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"
@@ -722,6 +741,9 @@ func (m *Model) tick() tea.Cmd {
 	if m.shown != nil && !now.Before(m.shown.until) {
 		m.hide()
 	}
+	if m.changing {
+		return m.every()
+	}
 	switch {
 	case m.opts.IdleTimeout > 0 && !m.inEditor && since(now, m.lastKey) >= m.opts.IdleTimeout:
 		return tea.Batch(m.every(), m.lock("No use for "+spoken(m.opts.IdleTimeout)+"."))
@@ -749,7 +771,7 @@ func (m *Model) keepAlive() tea.Cmd {
 		every = min(every, m.opts.IdleTimeout/2)
 	}
 	now := m.opts.Now()
-	if m.v == nil || since(now, m.lastKeepAlive) < every {
+	if m.v == nil || m.changing || since(now, m.lastKeepAlive) < every {
 		return nil
 	}
 	m.lastKeepAlive = now
