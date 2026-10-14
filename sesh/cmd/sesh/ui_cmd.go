@@ -165,6 +165,8 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		Recovery:       func() (tui.Recovery, error) { return uiRecovery(dbPath) },
 		NewRecovery:    func() (*tui.NewRecovery, error) { return uiNewRecovery(dbPath) },
 		RemoveRecovery: func() (tui.Done, error) { return uiRemoveRecovery(dbPath) },
+		TouchIDState:   func() (tui.TouchID, error) { return uiTouchID(dbPath) },
+		SetTouchID:     func(on bool) (string, error) { return uiSetTouchID(dbPath, on) },
 		Unlock: func(pw []byte) (tui.Vault, error) {
 			store, err := reopenWith(cfg, pw)
 			if err != nil {
@@ -173,7 +175,10 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			return newUIVault(store), nil
 		},
 	}
-	if os.Getenv("SESH_MASTER_PASSWORD") == "" && touchIDSetUp(dbPath) {
+	if os.Getenv("SESH_MASTER_PASSWORD") == "" {
+		// Offered on the locked screen while it's on, which it can be
+		// turned on or off from the app.
+		opts.TouchIDOn = func() bool { return touchIDSetUp(dbPath) }
 		opts.TouchID = func() (tui.Vault, error) {
 			store, err := reopenWithTouchID(cfg)
 			if err != nil {

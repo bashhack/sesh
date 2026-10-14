@@ -142,7 +142,7 @@ func (m *Model) lockedKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "enter":
 		if len(m.password) == 0 {
-			if m.opts.TouchID == nil {
+			if m.opts.TouchID == nil || !m.touchOn {
 				return nil
 			}
 			m.unlocking = true

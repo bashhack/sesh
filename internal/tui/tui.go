@@ -226,7 +226,14 @@ type Options struct {
 	Recovery       func() (Recovery, error)
 	NewRecovery    func() (*NewRecovery, error)
 	RemoveRecovery func() (Done, error)
-	ClearAfter     time.Duration
+	// TouchIDState says Touch ID unlock's state; nil: it isn't offered.
+	// SetTouchID turns it on or off, and says so.
+	TouchIDState func() (TouchID, error)
+	SetTouchID   func(on bool) (string, error)
+	// TouchIDOn says whether Touch ID unlock is on now, for the locked
+	// screen; nil: TouchID being there says so.
+	TouchIDOn  func() bool
+	ClearAfter time.Duration
 	// OldAfter is how long a secret can go unchanged before the health
 	// report calls it old; 0 doesn't check.
 	OldAfter time.Duration
@@ -326,6 +333,7 @@ type Model struct {
 	// opening once it commits, so it isn't read meanwhile.
 	changing  bool
 	quitAfter bool // Ctrl-C was pressed while changing: it quits once that's done
+	touchOn   bool // Touch ID unlock was on when it locked
 	statusBad bool // the status is something that went wrong
 	showHelp  bool
 	dark      bool
@@ -588,6 +596,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.showRecovery(&msg)
 	case recoveryMsg:
 		return m.gotRecovery(&msg)
+	case touchIDMsg:
+		return m.gotTouchID(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"
@@ -848,6 +858,7 @@ func (m *Model) lock(why string) tea.Cmd {
 	}
 	m.status = ""
 	m.lockedWhy = why
+	m.touchOn = m.opts.TouchID != nil && (m.opts.TouchIDOn == nil || m.opts.TouchIDOn())
 	if m.quitAfter {
 		// Ctrl-C waited for what the lock cut off: it quits now, saying why.
 		m.afterword = why

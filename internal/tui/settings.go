@@ -34,6 +34,7 @@ type Live struct {
 type settingsMsg struct {
 	err      error
 	recovery *Recovery // nil when it isn't shown
+	touchID  *TouchID  // nil when it isn't shown
 	settings []Setting
 }
 
@@ -48,7 +49,7 @@ func (m *Model) openSettings() tea.Cmd {
 }
 
 // showSettings lists the settings in the open panel.
-func (m *Model) showSettings(settings []Setting, recovery *Recovery) {
+func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *TouchID) {
 	ov := m.ov
 	sel := ov.sel
 	ov.items = nil
@@ -62,6 +63,9 @@ func (m *Model) showSettings(settings []Setting, recovery *Recovery) {
 	}
 	if recovery != nil {
 		ov.items = append(ov.items, m.recoveryRow(*recovery))
+	}
+	if touch != nil {
+		ov.items = append(ov.items, m.touchIDRow(*touch))
 	}
 	ov.items = append(ov.items, item{
 		label:  fmt.Sprintf("%-24s %s", "Checks (sesh doctor)", "run…"),
@@ -187,13 +191,17 @@ func settingLoss(key, from, to string) string {
 
 // refreshSettings reads the settings again into the open panel.
 func (m *Model) refreshSettings() tea.Cmd {
-	read, recovery := m.opts.Settings, m.opts.Recovery
+	read, recovery, touch := m.opts.Settings, m.opts.Recovery, m.opts.TouchIDState
 	return func() tea.Msg {
 		var msg settingsMsg
 		msg.settings, msg.err = read()
 		if recovery != nil && msg.err == nil {
 			r, err := recovery()
 			msg.recovery, msg.err = &r, err
+		}
+		if touch != nil && msg.err == nil {
+			t, err := touch()
+			msg.touchID, msg.err = &t, err
 		}
 		return msg
 	}
@@ -211,7 +219,7 @@ func (m *Model) gotSettings(msg *settingsMsg) tea.Cmd {
 	}
 	top := m.ov
 	m.ov = panel
-	cmd := m.loaded(msg.err, func() { m.showSettings(msg.settings, msg.recovery) })
+	cmd := m.loaded(msg.err, func() { m.showSettings(msg.settings, msg.recovery, msg.touchID) })
 	if m.ov == panel {
 		m.ov = top
 	}

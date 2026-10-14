@@ -115,7 +115,7 @@ func (m *Model) showRecovery(msg *newRecoveryMsg) tea.Cmd {
 	case errors.Is(msg.err, ErrLocked):
 		return m.lock(lockedReason(msg.err))
 	case msg.err != nil:
-		m.recoverySaid("No recovery key was made: "+msg.err.Error(), true)
+		m.safetySaid("No recovery key was made: "+msg.err.Error(), true)
 		return nil
 	}
 	nr := msg.nr
@@ -146,7 +146,7 @@ func (m *Model) keyForm(nr *NewRecovery) {
 		if f.failed {
 			why = "No recovery key was set, since it couldn't be saved."
 		}
-		m.recoverySaid(why, true)
+		m.safetySaid(why, true)
 	}
 	f.lost = func() string {
 		if f.saving {
@@ -211,20 +211,20 @@ func (m *Model) gotRecovery(msg *recoveryMsg) tea.Cmd {
 	case errors.Is(msg.err, ErrLocked):
 		return m.lock(lockedReason(msg.err))
 	case msg.err != nil:
-		m.recoverySaid("Not changed: "+msg.err.Error(), true)
+		m.safetySaid("Not changed: "+msg.err.Error(), true)
 		return nil
 	}
 	if msg.done.OldBackups != "" {
 		m.afterChange(m.ov, "Recovery key", msg.done.Said, msg.done.OldBackups, msg.done.Renew)
 	} else {
-		m.recoverySaid(msg.done.Said, false)
+		m.safetySaid(msg.done.Said, false)
 	}
 	return m.refreshSettings()
 }
 
-// recoverySaid says what happened to the recovery key: in the settings
+// safetySaid says what a change to the vault's safety did: in the settings
 // panel when it's open, which has room for it, and otherwise below.
-func (m *Model) recoverySaid(said string, bad bool) {
+func (m *Model) safetySaid(said string, bad bool) {
 	if m.ov != nil && m.ov.kind == panelSettings && bad {
 		m.ov.err = said
 		return
