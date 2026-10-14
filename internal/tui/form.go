@@ -374,10 +374,13 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 			f.changed = true
 			return nil
 		}
-		switch in.kind {
-		case inputNotes:
-		case inputFields:
+		switch {
+		case in.kind == inputNotes:
+		case in.kind == inputFields:
 			return m.openFieldForm(in, in.row)
+		case len(f.inputs) == 1:
+			// A one-line form is done when its line is.
+			return f.submit()
 		default:
 			f.move(1)
 			return nil
@@ -763,6 +766,9 @@ func (m *Model) drawForm(base string) string {
 	lines = append(lines, all...)
 	lines = append(lines, errLines...)
 	hint := th.hints([2]string{"tab", "next"}, [2]string{"ctrl+s", "save"}, [2]string{"esc", "cancel"})
+	if len(f.inputs) == 1 {
+		hint = th.hints([2]string{"↵", "done"}, [2]string{"esc", "cancel"})
+	}
 	if f.saving {
 		hint = th.dimmed().Render("Saving…")
 	}

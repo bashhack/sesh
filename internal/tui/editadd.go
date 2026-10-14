@@ -20,14 +20,6 @@ type savedMsg struct {
 	epoch int
 }
 
-// filingMsg is the folders and tags there are, for the inputs that offer
-// them.
-type filingMsg struct {
-	folder, tags      *input
-	folders, tagNames []string
-	epoch             int
-}
-
 // The kinds an entry added can be, in the order the form offers them.
 var addKinds = []vault.Kind{vault.KindPassword, vault.KindAPIKey, vault.KindNote, vault.KindTOTP}
 
@@ -231,14 +223,10 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		}
 		return m.save(f, c, generate)
 	}
+	folder.offers, tags.offers = m.folderNames(), m.tagNames()
 	f.focusInput(0)
 	m.form = f
-	epoch := m.epoch
-	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		// Without them the form still works: there's only nothing offered.
-		folders, tagNames, _ := v.Filing() //nolint:errcheck // see above
-		return filingMsg{folder: folder, tags: tags, folders: folders, tagNames: tagNames, epoch: epoch}
-	})
+	return nil
 }
 
 // save saves c, generating its password first when asked to, which is
@@ -310,7 +298,7 @@ func (m *Model) saved(msg *savedMsg) tea.Cmd {
 	m.forget(msg.of)
 	m.selKey = msg.k
 	m.say(msg.what)
-	return m.search()
+	return m.reread()
 }
 
 // editedNotes puts what the editor saved into the notes input.

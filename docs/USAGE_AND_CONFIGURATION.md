@@ -1000,13 +1000,16 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
 │                              │ changed   3 days ago             │
 │                              │ ↵ copy  ·  tab reveal            │
 ├──────────────────────────────┴──────────────────────────────────┤
-│ ↵ copy  ·  ↑↓ move  ·  esc clear      ✓ Copied GitHub (alice)'s… │
+│ ↵ copy  ·  ↑↓ move  ·  esc clear   ✓ Copied the password for G… │
 ╰─────────────────────────────────────────────────────────────────╯
 ```
 
 - **Type to search,** matched and ranked as `--action search` does, with the letters matched picked out; with nothing typed, every entry is listed, the ones read most recently first (as the audit log records reads; showing an entry in the app isn't one).
 - **The selected entry is shown beside the list** when the window is wide enough: its kind, folder, username, URL, fields, tags, when it last changed, and its notes (a secure note's text); Shift-↑ and Shift-↓ scroll it when it's long. A TOTP entry's code is shown large, with a bar counting down the seconds it has left.
 - **Passwords and secret fields stay hidden** (`••••••••`) until **Tab** reveals them, for 30 seconds, until you move to another entry, or until Tab again.
+- **Folders and tags are in a sidebar** on the left when the window is at least 110 columns wide: every entry, each folder (with those inside it, and how many entries each holds, counting its subfolders), entries in no folder, and each tag. Picking one shows only its entries, and the search line says which (`1 of 41 in work/aws`); searching then looks within it. Esc clears it, after the search.
+- **Where keys go follows what you do:** typing goes to the search, where Space types a space. ↑ and ↓ move into the list; there, **Space marks** the entry (✓) and moves to the next, ← moves into the sidebar, and typing goes back to the search. In the sidebar ↑↓ pick a folder or tag, Enter, → or Esc go back to the list, and Ctrl-K renames the folder (with those inside it) or tag picked. A click picks a row in either.
+- **With entries marked, Ctrl-K acts on all of them:** move to a folder… (`m`; empty takes them out of their folders), add a tag… (`+`), remove a tag… (`-`), move to the trash (`d`, after a yes), or unmark them (`u`). Esc unmarks them first, before it clears the search.
 - **Enter copies** the selected entry's secret, or a TOTP entry's current code; **Ctrl-Y** copies its username. The clipboard clears after `clipboard_timeout`, as with `--clip`, and the footer counts down until it does.
 - **Ctrl-K opens the actions** on the selected entry, each run by its letter (or ↑↓ and Enter); Esc goes back, and closes them. (With text after the cursor in the search, Ctrl-K deletes it instead, as in a shell.) A change asks first, and only `y` is a yes, not Enter, and not one typed in the same breath as the key that asked:
   - **edit…** (`e`) and **add an entry…** (`a`): a form. Tab and Shift-Tab move between its inputs, Ctrl-S saves, and Esc cancels (twice, once something's been typed).

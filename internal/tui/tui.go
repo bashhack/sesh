@@ -73,6 +73,19 @@ func (c *Change) Wipe() {
 	}
 }
 
+// Folder is a folder, its entries, and those in it and the folders under
+// it (Total); "" is the entries in none.
+type Folder struct {
+	Name           string
+	Entries, Total int
+}
+
+// Tag is a tag, and how many entries have it.
+type Tag struct {
+	Name    string
+	Entries int
+}
+
 // ErrNameTaken is a trash entry restored onto a name another entry has.
 var ErrNameTaken = errors.New("another entry has that name")
 
@@ -130,8 +143,23 @@ type Vault interface {
 	RestoreFromTrash(id int64) (vault.Key, error)
 	// RemoveFromTrash deletes the trash's entry id for good.
 	RemoveFromTrash(id int64) error
-	// Filing is the folders and the tags the vault's entries have.
-	Filing() (folders, tags []string, err error)
+	// Filing is the folders, with the folders above them, and the tags the
+	// vault's entries have, each with how many entries are in it.
+	Filing() ([]Folder, []Tag, error)
+	// MoveToFolder puts the entries keys name in folder ("" takes them
+	// out of theirs), and says how many moved.
+	MoveToFolder(keys []vault.Key, folder string) (int, error)
+	// AddTag and RemoveTag tag the entries keys name, or take the tag off
+	// them, and say how many changed.
+	AddTag(keys []vault.Key, tag string) (int, error)
+	RemoveTag(keys []vault.Key, tag string) (int, error)
+	// DeleteMany moves the entries keys name to the trash, together.
+	DeleteMany(keys []vault.Key) error
+	// RenameFolder and RenameTag rename a folder (with the folders under
+	// it) or a tag on every entry, and say how many entries changed, and
+	// whether the new name was in use already, so the two merged.
+	RenameFolder(from, to string) (n int, merged bool, err error)
+	RenameTag(from, to string) (n int, merged bool, err error)
 	// Save adds an entry (c.Key zero) or changes one, and says the name
 	// it has after. ErrNameTaken when the name is another entry's.
 	Save(c *Change) (vault.Key, error)
@@ -214,13 +242,23 @@ type Model struct {
 	status    string
 	password  []byte // typed on the locked screen
 
-	rows []vault.Entry
+	// found are the entries the search found, and rows those of them the
+	// sidebar's filter lets through, as listed.
+	found, rows []vault.Entry
+
+	// The sidebar's rows, from the folders and tags the vault has; marked
+	// are entries marked with Space, for acting on together.
+	folders []Folder
+	tags    []Tag
+	side    []sideRow
+	marked  map[vault.Key]bool
 
 	input textinput.Model // the search
 	spin  spinner.Model   // while unlocking
 	th    theme
 
-	opts Options
+	opts   Options
+	filter sideRow // the sidebar's row filtering the list
 
 	// epoch counts unlocks: a message from before the last lock or unlock
 	// is dropped. searches counts searches: only the latest's results are
@@ -232,6 +270,9 @@ type Model struct {
 	total         int // entries in the vault
 	wrong         int
 	top, sel      int
+	sideSel       int // the sidebar's row its cursor is on
+	sideTop       int // the sidebar's first row shown
+	focus         focus
 	unlocking     bool
 	revealing     bool // a reveal asked for hasn't come back yet
 	// inEditor is the notes editor having the terminal: its time is use, so
@@ -257,6 +298,8 @@ func New(opts *Options) *Model {
 		codes: map[vault.Key]shownCode{},
 		notes: map[vault.Key][]byte{}, notesPending: map[vault.Key]bool{}, notesFailed: map[vault.Key]string{},
 		wraps:   map[string]wrapped{},
+		marked:  map[vault.Key]bool{},
+		filter:  sideRow{kind: sideAll, label: "All"},
 		lastKey: now, unlockedAt: now, lastKeepAlive: now,
 		width: 80, height: 24,
 		every: tick,
@@ -346,6 +389,7 @@ type (
 	tickMsg    time.Time
 	resultsMsg struct {
 		err    error
+		query  string
 		rows   []vault.Entry
 		total  int
 		epoch  int
@@ -381,7 +425,7 @@ type (
 // Init starts the search for every entry and the clock, and asks the
 // terminal whether it's dark or light.
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(m.search(), m.every(), tea.RequestBackgroundColor)
+	return tea.Batch(m.reread(), m.every(), tea.RequestBackgroundColor)
 }
 
 // tick fires at the next whole second, when codes and countdowns change.
@@ -401,7 +445,7 @@ func (m *Model) search() tea.Cmd {
 	q, epoch, n := m.input.Value(), m.epoch, m.searches
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		rows, total, err := v.Search(q)
-		return resultsMsg{rows: rows, total: total, err: err, epoch: epoch, search: n}
+		return resultsMsg{query: q, rows: rows, total: total, err: err, epoch: epoch, search: n}
 	})
 }
 
@@ -433,7 +477,12 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
+		if n, ok := m.sideAt(msg.X, msg.Y); ok {
+			m.focusOn(focusSide)
+			return tea.Batch(m.pick(n), m.keepAlive())
+		}
 		if n, ok := m.rowAt(msg.X, msg.Y); ok {
+			m.focusOn(focusList)
 			m.sel = n
 			m.scroll()
 			return tea.Batch(m.moved(), m.keepAlive())
@@ -451,7 +500,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		} else if msg.Button != tea.MouseWheelDown {
 			return nil
 		}
-		if lw := m.listWidth(); lw < m.width-2 && msg.X > lw+1 {
+		if sw := m.sideWidth(); sw > 0 && msg.X <= sw {
+			m.sideTop = max(min(m.sideTop+step, len(m.side)-m.listHeight()), 0)
+			return keep
+		}
+		if lw := m.listWidth(); lw < m.mainWidth() && msg.X >= m.listX()+lw {
 			m.scrollPreview(3 * step)
 			return keep
 		}
@@ -483,10 +536,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case fieldValueMsg:
 		return m.gotFieldValue(&msg)
 	case filingMsg:
-		if msg.epoch == m.epoch {
-			msg.folder.offers, msg.tags.offers = msg.folders, msg.tagNames
-		}
-		return nil
+		return m.gotFiling(&msg)
 	case notesMsg:
 		return m.gotNotes(&msg)
 	case revealMsg:
@@ -531,16 +581,18 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		if msg.err != nil {
 			return m.failure(msg.err)
 		}
-		m.rows, m.total = msg.rows, msg.total
-		// The list may have changed order under the selection: it stays
-		// on the entry, not the row, so Enter copies what was picked.
-		for i := range m.rows {
-			if m.selKey != (vault.Key{}) && m.rows[i].Key == m.selKey {
-				m.sel = i
-				break
+		m.found, m.total = msg.rows, msg.total
+		if msg.query == "" {
+			// Every entry is here: a mark on one that's gone goes too.
+			for k := range m.marked {
+				if !slices.ContainsFunc(m.found, func(e vault.Entry) bool { return e.Key == k }) {
+					delete(m.marked, k)
+				}
 			}
 		}
-		m.scroll()
+		// The list may have changed order under the selection: it stays
+		// on the entry, not the row, so Enter copies what was picked.
+		m.showFound()
 		return m.moved()
 	case keyMsg:
 		// A key read twice (the vault changed while it was being read)
@@ -593,7 +645,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 				m.ov = nil
 				m.sayBad("Another command changed the vault; open the actions again.")
 			}
-			return m.search()
+			return m.reread()
 		}
 		return nil
 	case keptAliveMsg:
@@ -620,7 +672,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.epoch++
 		now := m.opts.Now()
 		m.lastKey, m.unlockedAt, m.lastKeepAlive = now, now, now
-		return m.search()
+		return m.reread()
 	}
 	return nil
 }
@@ -702,7 +754,8 @@ func (m *Model) lock(why string) tea.Cmd {
 	}
 	m.wipe()
 	m.epoch++
-	m.rows, m.sel, m.top = nil, 0, 0
+	m.found, m.rows, m.sel, m.top = nil, nil, 0, 0
+	clear(m.marked)
 	m.ov = nil
 	if m.form != nil {
 		m.form.wipe()

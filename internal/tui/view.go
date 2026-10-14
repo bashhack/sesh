@@ -48,19 +48,19 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// listWidth is the list's width inside the frame: all of it, or less the
-// preview beside it when the window is wide enough.
+// listWidth is the list's width beside the sidebar: all of that room, or
+// less the preview beside it when the window is wide enough.
 func (m *Model) listWidth() int {
-	inner := m.width - 2
+	room := m.mainWidth()
 	if m.width < previewFrom || m.showHelp {
-		return inner
+		return room
 	}
-	return max(inner*9/20, 30)
+	return max(room*9/20, 30)
 }
 
 // frame draws the app's outline: a title in the top border, rows of
-// content, and rules between groups of them. A split row is two cells
-// and a divider.
+// content, and rules between groups of them. A row in columns is cells
+// with dividers between them.
 type frame struct {
 	th    theme
 	b     strings.Builder
@@ -81,20 +81,35 @@ func (f *frame) row(s string) {
 	f.b.WriteString(l.Render("│") + fitTo(s, f.inner()) + l.Render("│") + "\n")
 }
 
-func (f *frame) split(left string, lw int, right string) {
+// cols is a row of cells: each but the last as wide as widths says, the
+// last taking what's left.
+func (f *frame) cols(cells []string, widths []int) {
 	l := f.th.lines()
-	f.b.WriteString(l.Render("│") + fitTo(left, lw) + l.Render("│") + fitTo(right, f.inner()-lw-1) + l.Render("│") + "\n")
+	f.b.WriteString(l.Render("│"))
+	left := f.inner()
+	for i, c := range cells {
+		w := left
+		if i < len(widths) {
+			w = widths[i]
+		}
+		f.b.WriteString(fitTo(c, w) + l.Render("│"))
+		left -= w + 1
+	}
+	f.b.WriteString("\n")
 }
 
-// rule is a line across, with junction where the split meets it; lw 0
-// has no split.
-func (f *frame) rule(lw int, junction string) {
-	l := f.th.lines()
-	if lw == 0 {
-		f.b.WriteString(l.Render("├"+strings.Repeat("─", f.inner())+"┤") + "\n")
-		return
+// rule is a line across, with junction where the columns' dividers meet
+// it; no widths is no columns.
+func (f *frame) rule(junction string, widths []int) {
+	var b strings.Builder
+	b.WriteString("├")
+	left := f.inner()
+	for _, w := range widths {
+		b.WriteString(strings.Repeat("─", w) + junction)
+		left -= w + 1
 	}
-	f.b.WriteString(l.Render("├"+strings.Repeat("─", lw)+junction+strings.Repeat("─", f.inner()-lw-1)+"┤") + "\n")
+	b.WriteString(strings.Repeat("─", max(left, 0)) + "┤")
+	f.b.WriteString(f.th.lines().Render(b.String()) + "\n")
 }
 
 func (f *frame) bottom() {
@@ -107,8 +122,11 @@ func (m *Model) drawApp() string {
 	f := &frame{th: m.th, width: m.width}
 	f.top("sesh")
 	count := fmt.Sprintf("%d of %d", len(m.rows), m.total)
-	if m.input.Value() == "" {
-		count = fmt.Sprintf("%d %s", m.total, plural(m.total, "entry", "entries"))
+	if m.input.Value() == "" && m.filter.kind == sideAll {
+		count = countOf(m.total)
+	}
+	if m.filter.kind != sideAll {
+		count += " in " + m.filter.filterName()
 	}
 	countStyled := m.th.dimmed().Render(count) + " "
 	icon := m.th.accented().Render(" ⌕ ")
@@ -116,33 +134,41 @@ func (m *Model) drawApp() string {
 	m.input.SetWidth(inputWidth)
 	f.row(icon + fitTo(m.input.View(), inputWidth+1) + countStyled)
 
-	lw := 0
-	if m.listWidth() < f.inner() {
-		lw = m.listWidth()
+	sw, lw, room := m.sideWidth(), m.listWidth(), m.mainWidth()
+	var widths []int
+	if sw > 0 {
+		widths = append(widths, sw)
 	}
-	f.rule(lw, "┬")
+	if lw < room {
+		widths = append(widths, lw)
+	}
+	f.rule("┬", widths)
 	h := m.listHeight()
-	listWidth := f.inner()
-	if lw > 0 {
-		listWidth = lw
-	}
 	var body []string
 	if m.showHelp {
 		body = m.helpLines(h)
 	} else {
-		body = m.listLines(listWidth, h)
+		body = m.listLines(lw, h)
 	}
-	if lw > 0 {
-		pane := m.previewLines(f.inner()-lw-1, h)
-		for i := range h {
-			f.split(body[i], lw, pane[i])
-		}
-	} else {
-		for i := range h {
-			f.row(body[i])
-		}
+	var side, pane []string
+	if sw > 0 {
+		side = m.sideLines(sw, h)
 	}
-	f.rule(lw, "┴")
+	if lw < room {
+		pane = m.previewLines(room-lw-1, h)
+	}
+	for i := range h {
+		var cells []string
+		if sw > 0 {
+			cells = append(cells, side[i])
+		}
+		cells = append(cells, body[i])
+		if lw < room {
+			cells = append(cells, pane[i])
+		}
+		f.cols(cells, widths)
+	}
+	f.rule("┴", widths)
 	f.row(m.footer(f.inner()))
 	f.bottom()
 	return f.b.String()
@@ -203,7 +229,11 @@ func (m *Model) listRow(e *vault.Entry, selected bool, w int, words []string, no
 		}
 	}
 	space := func(n int) string { return bg(lipgloss.NewStyle()).Render(strings.Repeat(" ", max(n, 0))) }
-	left := bar + space(1) + mark + space(1) + name
+	check := space(1)
+	if m.marked[e.Key] {
+		check = bg(th.accented().Bold(true)).Render("✓")
+	}
+	left := bar + check + mark + space(1) + name
 	if room := w - lipgloss.Width(left) - 2; lipgloss.Width(right) > room {
 		right = ansi.Truncate(right, max(room, 0), "…")
 	}
@@ -235,17 +265,19 @@ func (m *Model) helpLines(h int) []string {
 	th := m.th
 	keys := [][2]string{
 		{"type", "search names, usernames and sites"},
-		{"↑ ↓", "move (or ctrl+p, ctrl+n)"},
+		{"↑ ↓", "move in the list (or ctrl+p, ctrl+n)"},
+		{"space", "in the list: mark entries to act on together"},
+		{"←", "from the list: the folders and tags"},
 		{"pgup pgdn", "move a page"},
 		{"↵", "copy the password, key or code"},
 		{"tab", "show the password and secret fields for 30s"},
-		{"ctrl+k", "actions: edit, add, copy a value, earlier secrets, trash, lock"},
+		{"ctrl+k", "actions on the entry, or on those marked"},
 		{"ctrl+y", "copy the username"},
 		{"ctrl+o", "open the URL in the browser"},
 		{"shift ↑ ↓", "scroll the details on the right"},
 		{"mouse", "click to select, wheel to move or scroll"},
 		{"ctrl+w ctrl+u", "delete a word, or the whole search"},
-		{"esc", "clear the search, or quit"},
+		{"esc", "unmark, clear the search and folder, or quit"},
 		{"ctrl+c", "quit"},
 		{"?", "close this help"},
 	}
@@ -263,7 +295,17 @@ func (m *Model) helpLines(h int) []string {
 func (m *Model) footer(w int) string {
 	th := m.th
 	keys := [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"↑↓", "move"}, {"esc", "clear"}}
-	if m.input.Value() == "" {
+	switch {
+	case m.focus == focusSide && m.sideWidth() > 0:
+		keys = [][2]string{{"↑↓", "choose"}, {"↵", "back to the list"}, {"ctrl+k", "rename"}}
+	case len(m.marked) > 0:
+		keys = [][2]string{{"ctrl+k", "act on " + countOf(len(m.marked)) + " marked"}, {"space", "mark"}, {"esc", "unmark"}}
+	case m.focus == focusList:
+		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"space", "mark"}}
+		if m.sideWidth() > 0 {
+			keys = append(keys, [2]string{"←", "folders"})
+		}
+	case m.input.Value() == "" && m.filter.kind == sideAll:
 		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"↑↓", "move"}, {"esc", "quit"}, {"?", "help"}}
 	}
 	now := m.opts.Now()

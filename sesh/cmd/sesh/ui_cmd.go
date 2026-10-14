@@ -398,24 +398,51 @@ func (u *uiVault) RestoreVersion(k vault.Key, n int) error {
 
 func (u *uiVault) Delete(k vault.Key) error { return u.wrote(u.store.Delete(k)) }
 
-func (u *uiVault) Filing() (folders, tags []string, err error) {
+func (u *uiVault) Filing() ([]tui.Folder, []tui.Tag, error) {
 	fs, err := u.store.Folders()
 	if err != nil {
 		return nil, nil, uiLocked(err)
-	}
-	for _, f := range fs {
-		if f.Name != "" {
-			folders = append(folders, f.Name)
-		}
 	}
 	ts, _, err := u.store.Tags()
 	if err != nil {
 		return nil, nil, uiLocked(err)
 	}
-	for _, t := range ts {
-		tags = append(tags, t.Name)
+	folders := make([]tui.Folder, len(fs))
+	for i, f := range fs {
+		folders[i] = tui.Folder{Name: f.Name, Entries: f.Entries, Total: f.Total}
+	}
+	tags := make([]tui.Tag, len(ts))
+	for i, t := range ts {
+		tags[i] = tui.Tag{Name: t.Name, Entries: t.Entries}
 	}
 	return folders, tags, nil
+}
+
+func (u *uiVault) MoveToFolder(keys []vault.Key, folder string) (int, error) {
+	n, err := u.store.MoveToFolder(keys, folder)
+	return n, u.wrote(err)
+}
+
+func (u *uiVault) AddTag(keys []vault.Key, tag string) (int, error) {
+	n, err := u.store.AddTag(keys, tag)
+	return n, u.wrote(err)
+}
+
+func (u *uiVault) RemoveTag(keys []vault.Key, tag string) (int, error) {
+	n, err := u.store.RemoveTag(keys, tag)
+	return n, u.wrote(err)
+}
+
+func (u *uiVault) DeleteMany(keys []vault.Key) error { return u.wrote(u.store.DeleteMany(keys)) }
+
+func (u *uiVault) RenameFolder(from, to string) (int, bool, error) {
+	n, merged, err := u.store.RenameFolder(from, to)
+	return n, merged, u.wrote(err)
+}
+
+func (u *uiVault) RenameTag(from, to string) (int, bool, error) {
+	n, merged, err := u.store.RenameTag(from, to)
+	return n, merged, u.wrote(err)
 }
 
 func (u *uiVault) Trash() ([]tui.Trashed, error) {
