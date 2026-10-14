@@ -358,7 +358,7 @@ func (u *uiVault) SecretFields(k vault.Key) ([]vault.Field, error) {
 
 // Field is k's secret field name's value.
 func (u *uiVault) Field(k vault.Key, name string) ([]byte, error) {
-	d, err := u.store.Details(k, "in sesh ui, to copy its field "+name)
+	d, err := u.store.Details(k, "in sesh ui, to copy or show its field "+name)
 	if err != nil {
 		return nil, uiLocked(err)
 	}

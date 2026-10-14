@@ -110,7 +110,7 @@ type Vault interface {
 	// KeepAlive says the vault is still in use, so the agent doesn't lock
 	// it for being idle.
 	KeepAlive() error
-	// Field is k's secret field name's value, to copy; the audit log
+	// Field is k's secret field name's value, to copy or show; the audit log
 	// records the read. The caller wipes it.
 	Field(k vault.Key, name string) ([]byte, error)
 	// History is when each of k's earlier secrets was replaced, the
@@ -477,6 +477,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.saved(&msg)
 	case editorMsg:
 		return m.editedNotes(&msg)
+	case fieldValueMsg:
+		return m.gotFieldValue(&msg)
 	case filingMsg:
 		if msg.epoch == m.epoch {
 			msg.folder.offers, msg.tags.offers = msg.folders, msg.tagNames

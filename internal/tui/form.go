@@ -2,7 +2,9 @@ package tui
 
 import (
 	"bytes"
+	"errors"
 	"io"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // inputKind is what an input of a form takes.
@@ -28,14 +31,17 @@ const (
 
 // input is one of a form's inputs.
 type input struct {
-	shown   func() bool   // nil: always shown
-	named   func() string // its label, when that depends on other inputs
+	shown   func() bool    // nil: always shown
+	load    func() tea.Cmd // reads the secret an empty input stands for, to show it
+	named   func() string  // its label, when that depends on other inputs
 	label   string
 	hint    string
 	choices []string
 	secret  []byte
+	loaded  []byte // the secret load read, to tell whether it was changed
 	rows    []fieldRow
-	offers  []string // what a line of text can be completed to
+	of      vault.Key // the entry whose fields these are; zero for one being added
+	offers  []string  // what a line of text can be completed to
 	text    textinput.Model
 	area    textarea.Model
 	kind    inputKind
@@ -44,6 +50,7 @@ type input struct {
 	pick    int  // the offer chosen with the arrows, from 1; 0: none
 	many    bool // the text is a list, separated by commas
 	reveal  bool // the secret typed is shown, while the input has the focus
+	loading bool
 	rated   bool // a password, whose strength is said
 	weak    bool // the secret typed is easy to guess
 }
@@ -206,6 +213,7 @@ func (f *form) wipe() {
 	for ; f != nil; f = f.back {
 		for _, in := range f.inputs {
 			secure.SecureZeroBytes(in.secret)
+			secure.SecureZeroBytes(in.loaded)
 			for _, r := range in.rows {
 				if r.secret {
 					secure.SecureZeroBytes(r.value)
@@ -213,6 +221,34 @@ func (f *form) wipe() {
 			}
 		}
 	}
+}
+
+// fieldValueMsg is a secret field's value, read to be shown in its input.
+type fieldValueMsg struct {
+	err   error
+	in    *input
+	value []byte
+	epoch int
+}
+
+// gotFieldValue shows the value read in its input, when nothing was typed
+// there meanwhile.
+func (m *Model) gotFieldValue(msg *fieldValueMsg) tea.Cmd {
+	in := msg.in
+	in.loading = false
+	switch {
+	case msg.epoch != m.epoch || m.form == nil || !slices.Contains(m.form.inputs, in) || len(in.secret) > 0:
+		secure.SecureZeroBytes(msg.value)
+	case errors.Is(msg.err, ErrLocked):
+		m.form.wipe()
+		m.form = nil
+		return m.lock(lockedReason(msg.err))
+	case msg.err != nil:
+		m.form.err = "Couldn't read its value: " + msg.err.Error()
+	default:
+		in.secret, in.loaded, in.reveal, in.hint = msg.value, bytes.Clone(msg.value), true, ""
+	}
+	return nil
 }
 
 // editorMsg is notes back from the editor.
@@ -282,7 +318,13 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+s":
 		return f.submit()
 	case "ctrl+r":
-		if in.kind == inputSecret {
+		switch {
+		case in.kind != inputSecret || in.loading:
+		case len(in.secret) == 0 && in.load != nil:
+			// The value it has isn't held until it's asked for.
+			in.loading = true
+			return in.load()
+		default:
 			in.reveal = !in.reveal
 		}
 		return nil
@@ -416,6 +458,18 @@ func (m *Model) openFieldForm(in *input, row int) tea.Cmd {
 	hidden := &input{kind: inputSecret, label: "value", shown: isSecret}
 	if r.secret && r.value == nil && row >= 0 {
 		hidden.hint = "leave it empty to keep the value it has"
+		if of, field, epoch := in.of, r.orig, m.epoch; field != "" {
+			hidden.load = func() tea.Cmd {
+				return m.read(func(v Vault, closed func() bool) tea.Msg {
+					value, err := v.Field(of, field)
+					if closed() {
+						secure.SecureZeroBytes(value)
+						return nil
+					}
+					return fieldValueMsg{in: hidden, value: value, err: err, epoch: epoch}
+				})
+			}
+		}
 	}
 	if r.secret && r.value != nil {
 		hidden.secret = bytes.Clone(r.value)
@@ -431,6 +485,9 @@ func (m *Model) openFieldForm(in *input, row int) tea.Cmd {
 		switch {
 		case !nr.secret:
 			nr.value = []byte(plain.text.Value())
+			secure.SecureZeroBytes(hidden.secret)
+		case hidden.loaded != nil && bytes.Equal(hidden.secret, hidden.loaded) && n == r.name:
+			nr.value, nr.changed = r.value, r.changed // read to be shown, and left as it was
 			secure.SecureZeroBytes(hidden.secret)
 		case len(hidden.secret) > 0:
 			nr.value = hidden.secret
@@ -489,6 +546,9 @@ func (m *Model) drawForm(base string) string {
 			if focused {
 				body += th.accented().Render("▌")
 			}
+			if len(in.secret) == 0 && in.load != nil {
+				body += th.dimmed().Render(" •••••••• the value it has")
+			}
 			if in.weak {
 				body += "\n" + lipgloss.NewStyle().Foreground(th.warn).Render("easy to guess: a longer one, or generated, is safer")
 			}
@@ -546,8 +606,13 @@ func (m *Model) drawForm(base string) string {
 				lines = append(lines, "   "+th.hints([2]string{"ctrl+e", "edit in your $EDITOR"}))
 			case in.kind == inputSecret:
 				word := "show what you typed"
-				if in.reveal {
+				switch {
+				case in.reveal:
 					word = "hide it"
+				case in.loading:
+					word = "reading it…"
+				case len(in.secret) == 0 && in.load != nil:
+					word = "show the value it has"
 				}
 				lines = append(lines, "   "+th.hints([2]string{"ctrl+r", word}))
 			}

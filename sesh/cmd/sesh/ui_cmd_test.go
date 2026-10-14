@@ -488,7 +488,7 @@ func TestUI_Actions(t *testing.T) {
 		t.Errorf("trash after removing = %+v, %v", trash, err)
 	}
 	log := mustRun(t, runAudit)
-	for _, want := range []string{"in sesh ui, to copy its field pin", "in sesh ui, to copy it"} {
+	for _, want := range []string{"in sesh ui, to copy or show its field pin", "in sesh ui, to copy it"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("audit missing %q:\n%s", want, log)
 		}

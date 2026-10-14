@@ -103,7 +103,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		}
 		return "notes"
 	}
-	fields := &input{kind: inputFields, label: "fields"}
+	fields := &input{kind: inputFields, label: "fields", of: e.Key}
 	for _, f := range e.Fields {
 		fields.rows = append(fields.rows, fieldRow{name: f.Name, orig: f.Name, secret: f.Secret, value: bytes.Clone(f.Value)})
 	}

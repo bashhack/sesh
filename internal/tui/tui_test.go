@@ -1455,3 +1455,28 @@ func TestFormShowsATypedSecret(t *testing.T) {
 		t.Errorf("the secret is still shown after the focus left it:\n%s", s)
 	}
 }
+
+// Ctrl-R on a secret field's empty input reads the value it has and shows it.
+func TestFormShowsAFieldsValue(t *testing.T) {
+	f := newFake()
+	f.entries[0].Fields = []vault.Field{{Name: "pin", Secret: true}}
+	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Secret: true, Value: []byte("4711")}}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e")
+	a.tabs(7) // username, secret, URL, folder, tags, notes → the fields
+	a.press("enter", "tab", "tab")
+	if s := a.screen(); strings.Contains(s, "4711") || !strings.Contains(s, "show the value it has") {
+		t.Fatalf("the field's value should be unread, with the key that shows it:\n%s", s)
+	}
+	a.press("ctrl+r")
+	if s := a.screen(); !strings.Contains(s, "4711") {
+		t.Fatalf("after ctrl+r, the field's value isn't shown:\n%s", s)
+	}
+	if !slices.Contains(f.reads, "field "+github.String()+" pin") {
+		t.Errorf("the read wasn't recorded: %q", f.reads)
+	}
+	a.press("ctrl+s", "tab", "shift+tab", "ctrl+s")
+	if len(f.saves) != 1 || len(f.saves[0].SetFields) != 0 || len(f.saves[0].RemoveFields) != 0 {
+		t.Errorf("a value only shown was saved as a change: %+v", f.saves)
+	}
+}
