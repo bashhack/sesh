@@ -33,6 +33,9 @@ func (m *Model) View() tea.View {
 		s = m.drawLocked()
 	default:
 		s = m.drawApp()
+		if m.ov != nil {
+			s = m.drawOverlay(s)
+		}
 	}
 	v := tea.NewView(s)
 	v.AltScreen = true
@@ -233,6 +236,7 @@ func (m *Model) helpLines(h int) []string {
 		{"pgup pgdn", "move a page"},
 		{"↵", "copy the secret, or the code"},
 		{"tab", "reveal the password and secret fields (30s)"},
+		{"ctrl+k", "actions: copy a value, earlier secrets, delete, the trash, lock"},
 		{"ctrl+y", "copy the username"},
 		{"ctrl+o", "open the URL in the browser"},
 		{"shift ↑ ↓", "scroll the details on the right"},
@@ -255,16 +259,20 @@ func (m *Model) helpLines(h int) []string {
 // footer is the keys, and what was just done, or went wrong.
 func (m *Model) footer(w int) string {
 	th := m.th
-	keys := [][2]string{{"↵", "copy"}, {"↑↓", "move"}, {"esc", "clear"}}
+	keys := [][2]string{{"↵", "copy"}, {"^k", "actions"}, {"↑↓", "move"}, {"esc", "clear"}}
 	if m.input.Value() == "" {
-		keys = [][2]string{{"↵", "copy"}, {"↑↓", "move"}, {"esc", "quit"}, {"?", "help"}}
+		keys = [][2]string{{"↵", "copy"}, {"^k", "actions"}, {"↑↓", "move"}, {"esc", "quit"}, {"?", "help"}}
+	}
+	now := m.opts.Now()
+	if (m.status != "" && now.Before(m.statusUntil)) || now.Before(m.clipUntil) {
+		// Room for what's said on the right: the keys used most.
+		keys = keys[:2]
 	}
 	var parts []string
 	for _, k := range keys {
 		parts = append(parts, th.accented().Render(k[0])+" "+th.dimmed().Render(k[1]))
 	}
 	left := " " + strings.Join(parts, th.lines().Render("  ·  "))
-	now := m.opts.Now()
 	if m.status == "" || !now.Before(m.statusUntil) {
 		if !now.Before(m.clipUntil) {
 			return left

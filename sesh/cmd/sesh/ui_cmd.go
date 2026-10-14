@@ -123,6 +123,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		Vault:       v,
 		Copy:        app.ClipboardCopy,
 		OpenURL:     openURL,
+		LockAgent:   lockAgent,
 		ClearAfter:  cfg.ClipboardTimeout.Value,
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
 		MaxLifetime: cfg.AgentMaxLifetime.Value,
@@ -336,6 +337,107 @@ func (u *uiVault) SecretFields(k vault.Key) ([]vault.Field, error) {
 		}
 	}
 	return out, nil
+}
+
+// Field is k's secret field name's value.
+func (u *uiVault) Field(k vault.Key, name string) ([]byte, error) {
+	d, err := u.store.Details(k, "in sesh ui, to copy its field "+name)
+	if err != nil {
+		return nil, uiLocked(err)
+	}
+	defer d.Zero()
+	for i, f := range d.Fields {
+		if f.Name == name {
+			value := f.Value
+			d.Fields[i].Value = nil
+			return value, nil
+		}
+	}
+	return nil, fmt.Errorf("%s has no field %s", k, name)
+}
+
+// History is when each of k's earlier secrets was replaced.
+func (u *uiVault) History(k vault.Key) ([]time.Time, error) {
+	versions, err := u.store.History(k)
+	if err != nil {
+		return nil, uiLocked(err)
+	}
+	out := make([]time.Time, len(versions))
+	for i, v := range versions {
+		out[i] = v.ReplacedAt
+	}
+	return out, nil
+}
+
+func (u *uiVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
+	secret, err := u.store.ReadVersion(k, n, "in sesh ui, to copy it")
+	return secret, uiLocked(err)
+}
+
+func (u *uiVault) RestoreVersion(k vault.Key, n int) error {
+	_, err := u.store.RestoreVersion(k, n)
+	return u.wrote(err)
+}
+
+func (u *uiVault) Delete(k vault.Key) error { return u.wrote(u.store.Delete(k)) }
+
+func (u *uiVault) Trash() ([]tui.Trashed, error) {
+	entries, err := u.store.Trash()
+	if err != nil {
+		return nil, uiLocked(err)
+	}
+	out := make([]tui.Trashed, len(entries))
+	for i := range entries {
+		e := &entries[i]
+		out[i] = tui.Trashed{ID: e.ID, Key: e.Key, Folder: e.Folder, DeletedAt: e.DeletedAt}
+	}
+	return out, nil
+}
+
+func (u *uiVault) RestoreFromTrash(id int64) (vault.Key, error) {
+	r, err := u.store.RestoreFromTrash(id, vault.Key{})
+	if errors.Is(err, database.ErrNameTaken) {
+		return vault.Key{}, fmt.Errorf("%w: restore it under another name with: sesh trash restore %d --as <new name>", tui.ErrNameTaken, id)
+	}
+	return r.Key, u.wrote(err)
+}
+
+func (u *uiVault) RemoveFromTrash(id int64) error {
+	_, err := u.store.RemoveFromTrash(id)
+	return u.wrote(err)
+}
+
+// wrote is err, after the app's own write: the fingerprint is taken
+// again, as the write isn't another command's change. Not when another
+// command committed since the last Check, though (the store's own commits
+// don't move its data version, so a version that moved is theirs): that
+// change is left for Check to find.
+func (u *uiVault) wrote(err error) error {
+	if err != nil {
+		return uiLocked(err)
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if v, verr := u.store.DataVersion(); verr != nil || v != u.version {
+		return nil
+	}
+	if f, ferr := u.store.Fingerprint(); ferr == nil {
+		u.fingerprint = f
+	}
+	return nil
+}
+
+// lockAgent locks sesh's agent; none running is nothing to lock.
+func lockAgent() error {
+	conn, err := agent.DialExisting()
+	if agent.IsNotRunning(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer closeAgentConn(conn)
+	return agent.Lock(conn)
 }
 
 func (u *uiVault) CodeKey(k vault.Key) ([]byte, error) {

@@ -26,6 +26,9 @@ type fakeVault struct {
 	secrets  map[vault.Key]string
 	notes    map[vault.Key]string
 	fields   map[vault.Key][]vault.Field // secret fields, with values
+	history  map[vault.Key][]string      // earlier secrets, the newest first
+	trash    []Trashed
+	trashed  map[int64]vault.Entry
 	entries  []vault.Entry
 	reads    []string // "secret <key> <reading>" or "code <key>"
 	kept     int      // keep-alives
@@ -74,6 +77,67 @@ func (f *fakeVault) SecretFields(k vault.Key) ([]vault.Field, error) {
 		out = append(out, vault.Field{Name: fl.Name, Value: []byte(string(fl.Value)), Secret: true})
 	}
 	return out, nil
+}
+
+func (f *fakeVault) Field(k vault.Key, name string) ([]byte, error) {
+	f.reads = append(f.reads, "field "+k.String()+" "+name)
+	for _, fl := range f.fields[k] {
+		if fl.Name == name {
+			return []byte(string(fl.Value)), nil
+		}
+	}
+	return nil, errors.New("no such field")
+}
+
+func (f *fakeVault) History(k vault.Key) ([]time.Time, error) {
+	out := make([]time.Time, len(f.history[k]))
+	for i := range out {
+		out[i] = time.Unix(1_700_000_000-int64(i)*86400, 0)
+	}
+	return out, nil
+}
+
+func (f *fakeVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
+	f.reads = append(f.reads, fmt.Sprintf("version %s %d", k, n))
+	return []byte(f.history[k][n-2]), nil
+}
+
+func (f *fakeVault) RestoreVersion(k vault.Key, n int) error {
+	h := f.history[k]
+	now := f.secrets[k]
+	f.secrets[k] = h[n-2]
+	f.history[k] = append([]string{now}, append(append([]string{}, h[:n-2]...), h[n-1:]...)...)
+	return nil
+}
+
+func (f *fakeVault) Delete(k vault.Key) error {
+	for i, e := range f.entries {
+		if e.Key == k {
+			f.entries = append(f.entries[:i:i], f.entries[i+1:]...)
+			id := int64(len(f.trash) + 1)
+			f.trash = append(f.trash, Trashed{ID: id, Key: k, DeletedAt: time.Unix(1_700_000_000, 0)})
+			if f.trashed == nil {
+				f.trashed = map[int64]vault.Entry{}
+			}
+			f.trashed[id] = e
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+
+func (f *fakeVault) Trash() ([]Trashed, error) { return slices.Clone(f.trash), nil }
+
+func (f *fakeVault) RestoreFromTrash(id int64) (vault.Key, error) {
+	e := f.trashed[id]
+	f.entries = append(f.entries, e)
+	f.trash = slices.DeleteFunc(f.trash, func(t Trashed) bool { return t.ID == id })
+	return e.Key, nil
+}
+
+func (f *fakeVault) RemoveFromTrash(id int64) error {
+	f.trash = slices.DeleteFunc(f.trash, func(t Trashed) bool { return t.ID == id })
+	return nil
 }
 
 func (f *fakeVault) CodeKey(k vault.Key) ([]byte, error) {
@@ -176,6 +240,11 @@ func (a *app) press(keys ...string) {
 			msg = tea.KeyPressMsg{Code: tea.KeyTab}
 		case "shift+down":
 			msg = tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}
+		case "ctrl+k":
+			msg = tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl}
+		case "wait": // past the moment a confirmation's y starts to count
+			a.now = a.now.Add(time.Second)
+			continue
 		default:
 			for _, r := range k {
 				_, cmd := a.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
@@ -449,7 +518,7 @@ func TestCloseWaitsForReads(t *testing.T) {
 	copying := make(chan struct{})
 	f := newFake()
 	a := newApp(t, f, Options{Copy: func(string) error { close(copying); <-release; return nil }})
-	cmd := a.copySelected()
+	cmd := a.copySecret(a.selected())
 	go cmd()
 	<-copying
 	closed := make(chan struct{})
@@ -687,7 +756,7 @@ func TestUsernameURLAndCountdown(t *testing.T) {
 	var opened string
 	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, OpenURL: func(u string) error { opened = u; return nil }})
 	a.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
-	a.run(a.copyUsername())
+	a.run(a.copyUsername(a.selected()))
 	if len(a.copied) != 1 || a.copied[0] != "alice" || !strings.Contains(a.screen(), "Copied github (alice)'s username") {
 		t.Errorf("copied %q:\n%s", a.copied, a.screen())
 	}
@@ -702,12 +771,12 @@ func TestUsernameURLAndCountdown(t *testing.T) {
 	if s := a.screen(); strings.Contains(s, "clipboard clears") {
 		t.Errorf("countdown after it cleared:\n%s", s)
 	}
-	a.run(a.openURL())
+	a.run(a.openURL(a.selected()))
 	if opened != "github.com" || !strings.Contains(a.screen(), "Opened github.com") {
 		t.Errorf("opened %q:\n%s", opened, a.screen())
 	}
 	a.press("down", "down")
-	a.run(a.copyUsername())
+	a.run(a.copyUsername(a.selected()))
 	if s := a.screen(); !strings.Contains(s, "gitlab has no username") || len(a.copied) != 1 {
 		t.Errorf("no username:\n%s", s)
 	}
@@ -809,5 +878,306 @@ func TestRevealAfterLockMidRead(t *testing.T) {
 	a.run(a.toggleReveal())
 	if a.shown == nil {
 		t.Error("Tab after the re-unlock revealed nothing")
+	}
+}
+
+// Ctrl-K opens the actions on the selected entry; a key runs one; Esc
+// closes it.
+func TestActionMenu(t *testing.T) {
+	f := newFake()
+	f.entries[0].URL = "github.com"
+	f.entries[0].Fields = []vault.Field{{Name: "pin", Secret: true}, {Name: "email", Value: []byte("a@example.com")}}
+	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Value: []byte("4321")}}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k")
+	s := a.screen()
+	for _, w := range []string{"github (alice)", "copy a value…", "copy the username", "open the URL", "earlier secrets…", "delete (to the trash)", "the trash…", "lock now"} {
+		if !strings.Contains(s, w) {
+			t.Errorf("menu missing %q:\n%s", w, s)
+		}
+	}
+	a.press("esc")
+	if a.ov != nil {
+		t.Fatal("Esc didn't close the menu")
+	}
+	// Copy a value: the secret field is read for it, the plain one isn't.
+	a.press("ctrl+k", "f")
+	if s := a.screen(); !strings.Contains(s, "pin (secret)") || !strings.Contains(s, "email") {
+		t.Errorf("values:\n%s", s)
+	}
+	a.press("4") // password, username, URL, then pin
+	if len(a.copied) != 1 || a.copied[0] != "4321" || !slices.Contains(f.reads, "field password/github/alice pin") {
+		t.Errorf("copied %q, reads %q", a.copied, f.reads)
+	}
+	a.press("ctrl+k", "f", "5")
+	if len(a.copied) != 2 || a.copied[1] != "a@example.com" {
+		t.Errorf("copied %q", a.copied)
+	}
+	a.press("ctrl+k", "u")
+	if len(a.copied) != 3 || a.copied[2] != "alice" {
+		t.Errorf("copied %q", a.copied)
+	}
+}
+
+// The entry's earlier secrets are listed, copied, and restored after a yes.
+func TestActionHistory(t *testing.T) {
+	f := newFake()
+	f.history = map[vault.Key][]string{github: {"old-1", "old-2"}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "h")
+	if s := a.screen(); !strings.Contains(s, "version 2") || !strings.Contains(s, "version 3") {
+		t.Fatalf("history:\n%s", s)
+	}
+	a.press("down", "enter")
+	if len(a.copied) != 1 || a.copied[0] != "old-2" || !slices.Contains(f.reads, "version password/github/alice 3") {
+		t.Errorf("copied %q, reads %q", a.copied, f.reads)
+	}
+	a.press("r")
+	if s := a.screen(); !strings.Contains(s, "Make version 3 password/github/alice's secret again?") {
+		t.Fatalf("confirm:\n%s", s)
+	}
+	a.press("n")
+	if f.secrets[github] != "gh-pass" || a.ov == nil || a.ov.kind != panelHistory {
+		t.Fatalf("no restored it, or closed the history (secret %q)", f.secrets[github])
+	}
+	a.press("r", "wait", "y")
+	if f.secrets[github] != "old-2" || !strings.Contains(a.screen(), "Restored an earlier secret of password/github/alice") {
+		t.Errorf("restore: secret %q:\n%s", f.secrets[github], a.screen())
+	}
+}
+
+// Delete asks first, then moves the entry to the trash; the trash puts it
+// back, or deletes it for good after a yes.
+func TestActionDeleteAndTrash(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "d")
+	if s := a.screen(); !strings.Contains(s, "Move github (alice) to the trash?") {
+		t.Fatalf("confirm:\n%s", s)
+	}
+	a.press("n")
+	if len(f.entries) != 3 {
+		t.Fatal("no deleted it")
+	}
+	a.press("ctrl+k", "d", "wait", "y")
+	if s := a.screen(); len(f.entries) != 2 || !strings.Contains(s, "2 entries") || !strings.Contains(s, "Moved password/github/alice to the trash") {
+		t.Fatalf("after delete:\n%s", s)
+	}
+	a.press("ctrl+k", "t")
+	if s := a.screen(); !strings.Contains(s, "password/github/alice") || !strings.Contains(s, "deleted") {
+		t.Fatalf("trash:\n%s", s)
+	}
+	a.press("enter")
+	if s := a.screen(); len(f.entries) != 3 || !strings.Contains(s, "3 entries") {
+		t.Fatalf("put back:\n%s", s)
+	}
+	// The selection moved on to the TOTP entry when github left the list.
+	a.press("ctrl+k", "d", "wait", "y", "ctrl+k", "t", "x")
+	if s := a.screen(); !strings.Contains(s, "Delete totp/github/alice for good?") {
+		t.Fatalf("confirm for good:\n%s", s)
+	}
+	a.press("wait", "y")
+	if len(f.trash) != 0 || !strings.Contains(a.screen(), "Deleted totp/github/alice for good") {
+		t.Errorf("for good: trash %v", f.trash)
+	}
+}
+
+// Lock now locks the app, and the agent.
+func TestActionLockNow(t *testing.T) {
+	f := newFake()
+	agentLocked := false
+	a := newApp(t, f, Options{LockAgent: func() error { agentLocked = true; return nil }})
+	a.press("ctrl+k")
+	if !strings.Contains(a.screen(), "lock now, and sesh's agent") {
+		t.Fatalf("menu:\n%s", a.screen())
+	}
+	a.press("l")
+	if s := a.screen(); a.v != nil || !agentLocked || !strings.Contains(s, "sesh is locked") || !f.closed {
+		t.Errorf("lock now: app locked %v, agent locked %v:\n%s", a.v == nil, agentLocked, s)
+	}
+}
+
+// A word typed after Ctrl-K by habit deletes nothing: a confirmation's y
+// doesn't count in the same breath as the key that asked, and Enter is
+// never a yes.
+func TestConfirmNeedsADeliberateYes(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "r", "e", "a", "d", "y")
+	if len(f.entries) != 3 {
+		t.Fatal("typing a word after Ctrl-K deleted an entry")
+	}
+	a.press("esc", "esc", "ctrl+k", "d", "wait", "enter")
+	if len(f.entries) != 3 || a.ov == nil {
+		t.Fatalf("Enter confirmed a delete (entries %d)", len(f.entries))
+	}
+	// Unseen, in a window too small, it answers nothing.
+	a.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+	a.press("y")
+	if len(f.entries) != 3 {
+		t.Error("a confirmation that wasn't on screen was answered")
+	}
+}
+
+// With text after the cursor, Ctrl-K deletes it, as in a shell, and opens
+// nothing.
+func TestCtrlKKillsToEndOfLine(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("github")
+	for range 3 {
+		a.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	}
+	a.press("ctrl+k")
+	if a.ov != nil || a.input.Value() != "git" {
+		t.Errorf("Ctrl-K mid-line: menu open %v, search %q", a.ov != nil, a.input.Value())
+	}
+}
+
+// An action is done to the entry its panel names, whatever is selected by
+// then: a click on the card moves nothing, and another command's change
+// closes the panel.
+func TestActionsKeepTheirEntry(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "f")
+	a.Update(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft}) // gitlab's row, under the card
+	if a.sel != 0 {
+		t.Fatalf("a click through the panel selected row %d", a.sel)
+	}
+	a.sel = 2 // however the selection came to move
+	a.press("1")
+	if len(a.copied) != 1 || a.copied[0] != "gh-pass" {
+		t.Errorf("copied %q, want github's password, which the panel named", a.copied)
+	}
+	a.sel = 0
+	a.press("ctrl+k", "h")
+	f.changed = true
+	a.tick(time.Second)
+	if s := a.screen(); a.ov != nil || !strings.Contains(s, "Another command changed the vault") {
+		t.Errorf("a change under an open panel:\n%s", s)
+	}
+}
+
+// Esc goes back from a panel to the menu it came from; a TOTP entry's
+// value to copy is its code.
+func TestPanelsGoBack(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("down", "ctrl+k", "f")
+	if s := a.screen(); !strings.Contains(s, "code") || strings.Contains(s, "password ") {
+		t.Errorf("a TOTP entry's values:\n%s", s)
+	}
+	a.press("esc")
+	if a.ov == nil || a.ov.kind != panelMenu {
+		t.Fatal("Esc from the values didn't go back to the menu")
+	}
+	a.press("h", "esc")
+	if a.ov == nil || a.ov.kind != panelMenu {
+		t.Error("Esc from the history didn't go back to the menu")
+	}
+	a.press("esc")
+	if a.ov != nil {
+		t.Error("Esc from the menu didn't close it")
+	}
+}
+
+// What the app held of an entry is wiped when its secret is restored or
+// it's deleted.
+func TestActionsForgetWhatsHeld(t *testing.T) {
+	f := newFake()
+	f.history = map[vault.Key][]string{code: {"OLDKEYOLDKEYOLDK"}}
+	a := newApp(t, f, Options{})
+	held := a.keys[code]
+	a.press("down", "ctrl+k", "h", "r", "wait", "y")
+	if string(held) != strings.Repeat("\x00", len(seed)) {
+		t.Errorf("the TOTP key held before the restore wasn't wiped: %q", held)
+	}
+	if string(a.keys[code]) != "OLDKEYOLDKEYOLDK" {
+		t.Errorf("the key held after = %q, want the restored one", a.keys[code])
+	}
+}
+
+// Lock now says so when the agent couldn't be locked; a restore from the
+// trash that fails is said in the panel, which stays open; a long list
+// keeps its selection on screen.
+func TestActionFailuresAndLongPanels(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{LockAgent: func() error { return errors.New("broken pipe") }})
+	for i := range 40 {
+		f.trash = append(f.trash, Trashed{ID: int64(i + 1), Key: vault.Key{Kind: vault.KindPassword, Service: fmt.Sprintf("old-%02d", i)}})
+	}
+	a.press("ctrl+k", "t")
+	for range 30 {
+		a.press("down")
+	}
+	s := a.screen()
+	if !strings.Contains(s, "old-30") || !strings.Contains(s, "trash id 31") || !strings.Contains(s, "put back") || strings.Count(s, "\n") != a.height-1 {
+		t.Errorf("a long trash:\n%s", s)
+	}
+	a.press("esc", "esc", "ctrl+k", "l")
+	// The card wraps the sentence, so it's checked as the app holds it.
+	if s := a.screen(); a.v != nil || !strings.Contains(a.lockedWhy, "sesh's agent couldn't be locked (broken pipe)") || !strings.Contains(s, "sesh agent lock") {
+		t.Errorf("lock now with the agent unreachable (%q):\n%s", a.lockedWhy, s)
+	}
+}
+
+// A restore that fails is said above the trash's rows, which stay; a
+// second Enter while one is put back does nothing; a paste doesn't reach
+// the search behind a panel; a long name's question still fits the
+// smallest window.
+func TestPanelEdges(t *testing.T) {
+	f := newFake()
+	long := vault.Key{Kind: vault.KindPassword, Service: strings.Repeat("a-very-long-name-", 6)}
+	f.entries = append(f.entries, vault.Entry{Key: long})
+	a := newApp(t, f, Options{})
+	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
+	a.press("down", "down", "down", "ctrl+k", "d")
+	if s := a.screen(); strings.Count(s, "\n") != minHeight-1 || !strings.Contains(s, "yes") || !strings.Contains(s, "╰") {
+		t.Errorf("a long name's question at the smallest size:\n%s", s)
+	}
+	a.press("esc", "esc")
+	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	f.trash = []Trashed{{ID: 7, Key: github}}
+	a.press("ctrl+k", "t")
+	a.Update(tea.PasteMsg{Content: "zzz"})
+	if a.input.Value() != "" {
+		t.Errorf("a paste reached the search behind the panel: %q", a.input.Value())
+	}
+	first := a.restoreFromTrash(7)
+	if !a.ov.loading {
+		t.Fatal("the panel takes keys while an entry is put back")
+	}
+	a.press("enter")
+	a.Update(doneMsg{err: ErrNameTaken, epoch: a.epoch, closes: panelTrash})
+	_ = first
+	if s := a.screen(); a.ov == nil || !strings.Contains(s, "another entry has that name") || !strings.Contains(s, "password/github/alice") {
+		t.Errorf("a restore that failed:\n%s", s)
+	}
+}
+
+// A secure note's text can be copied from its values, though it has no
+// fields; an entry's notes can be too.
+func TestCopyANotesText(t *testing.T) {
+	f := newFake()
+	wifi := vault.Key{Kind: vault.KindNote, Service: "wifi"}
+	f.entries = append(f.entries, vault.Entry{Key: wifi})
+	f.secrets[wifi] = "ssid home"
+	f.entries[0].HasNotes = true
+	f.notes = map[vault.Key]string{github: "recovery codes"}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "f")
+	if s := a.screen(); !strings.Contains(s, "notes") {
+		t.Fatalf("github's values:\n%s", s)
+	}
+	a.press("2")
+	if len(a.copied) != 1 || a.copied[0] != "recovery codes" {
+		t.Errorf("copied %q, want github's notes", a.copied)
+	}
+	a.press("down", "down", "down", "ctrl+k", "f")
+	if s := a.screen(); !strings.Contains(s, "Copy from wifi") || !strings.Contains(s, "note") {
+		t.Fatalf("wifi's values:\n%s", s)
+	}
+	a.press("1")
+	if len(a.copied) != 2 || a.copied[1] != "ssid home" {
+		t.Errorf("copied %q, want the note's text", a.copied)
 	}
 }

@@ -33,6 +33,17 @@ type lockedError struct{ why string }
 func (e *lockedError) Error() string        { return e.why }
 func (e *lockedError) Is(target error) bool { return target == ErrLocked }
 
+// Trashed is an entry in the trash.
+type Trashed struct {
+	DeletedAt time.Time
+	Key       vault.Key
+	Folder    string
+	ID        int64
+}
+
+// ErrNameTaken is a trash entry restored onto a name another entry has.
+var ErrNameTaken = errors.New("another entry has that name")
+
 // ErrWrongPassword is a password Unlock refused.
 var ErrWrongPassword = errors.New("wrong password")
 
@@ -67,6 +78,26 @@ type Vault interface {
 	// KeepAlive says the vault is still in use, so the agent doesn't lock
 	// it for being idle.
 	KeepAlive() error
+	// Field is k's secret field name's value, to copy; the audit log
+	// records the read. The caller wipes it.
+	Field(k vault.Key, name string) ([]byte, error)
+	// History is when each of k's earlier secrets was replaced, the
+	// newest first: version 2 is the first.
+	History(k vault.Key) ([]time.Time, error)
+	// ReadVersion is k's version n (2 and up), to copy; the audit log
+	// records the read. The caller wipes it.
+	ReadVersion(k vault.Key, n int) ([]byte, error)
+	// RestoreVersion makes k's version n its secret again; the one it
+	// replaces is kept.
+	RestoreVersion(k vault.Key, n int) error
+	// Delete moves k to the trash.
+	Delete(k vault.Key) error
+	// Trash is the trash's entries, the newest first.
+	Trash() ([]Trashed, error)
+	// RestoreFromTrash puts the trash's entry id back, and says its name.
+	RestoreFromTrash(id int64) (vault.Key, error)
+	// RemoveFromTrash deletes the trash's entry id for good.
+	RemoveFromTrash(id int64) error
 	Close() error
 }
 
@@ -82,7 +113,10 @@ type Options struct {
 	// Copy puts text on the clipboard, cleared after ClearAfter.
 	Copy func(text string) error
 	// OpenURL opens an entry's URL in the browser.
-	OpenURL    func(url string) error
+	OpenURL func(url string) error
+	// LockAgent locks sesh's agent, for "lock now"; nil when there's none
+	// to lock.
+	LockAgent  func() error
 	Now        func() time.Time
 	ClearAfter time.Duration
 	// IdleTimeout locks after this long without a key pressed, and
@@ -102,6 +136,8 @@ type Model struct {
 	quitErr error
 
 	v *gate // nil while locked
+
+	ov *overlay // the panel over the app, nil when none
 
 	// shut are gates locking closed, which Close waits for.
 	shut []*gate
@@ -341,7 +377,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.spin, cmd = m.spin.Update(msg)
 		return cmd
 	case tea.MouseClickMsg:
-		if m.v == nil || msg.Button != tea.MouseLeft || !m.listShown() {
+		if m.v == nil || msg.Button != tea.MouseLeft || !m.listShown() || m.ov != nil {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
@@ -352,7 +388,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		return m.keepAlive()
 	case tea.MouseWheelMsg:
-		if m.v == nil || !m.listShown() {
+		if m.v == nil || !m.listShown() || m.ov != nil {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
@@ -381,6 +417,13 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			m.say("Opened " + msg.url)
 		}
 		return nil
+	case historyMsg, trashMsg, doneMsg:
+		return m.actionResult(msg)
+	case agentLockedMsg:
+		if msg.err != nil && m.v == nil {
+			m.lockedWhy = "Locked, but sesh's agent couldn't be locked (" + msg.err.Error() + "): lock it with sesh agent lock."
+		}
+		return nil
 	case notesMsg:
 		return m.gotNotes(&msg)
 	case revealMsg:
@@ -388,6 +431,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case tea.KeyPressMsg:
 		if m.v == nil {
 			return m.lockedKey(msg)
+		}
+		if m.ov != nil {
+			return tea.Batch(m.overlayKey(msg), m.keepAlive())
 		}
 		return tea.Batch(m.key(msg), m.keepAlive())
 	case tea.PasteMsg:
@@ -401,6 +447,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
+		if m.ov != nil {
+			return nil // not into the search behind a panel
+		}
 		m.input.SetValue(m.input.Value() + text)
 		m.input.CursorEnd()
 		return tea.Batch(m.requery(), m.keepAlive())
@@ -467,8 +516,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return m.failure(msg.err)
 		}
 		if msg.changed {
-			// Entries may have changed, keys with them: read again.
+			// Entries may have changed, keys with them: read again. A
+			// panel open on what they were is closed, not left to act on
+			// what they are now.
 			m.wipe()
+			if m.ov != nil {
+				m.ov = nil
+				m.sayBad("Another command changed the vault; open the actions again.")
+			}
 			return m.search()
 		}
 		return nil
@@ -579,6 +634,7 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.wipe()
 	m.epoch++
 	m.rows, m.sel, m.top = nil, 0, 0
+	m.ov = nil
 	m.status = ""
 	m.lockedWhy = why
 	return closing
