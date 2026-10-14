@@ -28,7 +28,8 @@ const (
 
 // input is one of a form's inputs.
 type input struct {
-	shown   func() bool // nil: always shown
+	shown   func() bool   // nil: always shown
+	named   func() string // its label, when that depends on other inputs
 	label   string
 	hint    string
 	choices []string
@@ -39,7 +40,16 @@ type input struct {
 	kind    inputKind
 	choice  int
 	row     int
+	rated   bool // a password, whose strength is said
 	weak    bool // the secret typed is easy to guess
+}
+
+// name is the input's label.
+func (in *input) name() string {
+	if in.named != nil {
+		return in.named()
+	}
+	return in.label
 }
 
 func (in *input) visible() bool { return in.shown == nil || in.shown() }
@@ -302,7 +312,7 @@ func (m *Model) formPaste(text string) tea.Cmd {
 
 // rateSecret notes whether the secret typed is easy to guess.
 func (m *Model) rateSecret(in *input) {
-	in.weak = len(in.secret) > 0 && m.opts.IsWeak != nil && m.opts.IsWeak(in.secret)
+	in.weak = in.rated && len(in.secret) > 0 && m.opts.IsWeak != nil && m.opts.IsWeak(in.secret)
 }
 
 // openFieldForm opens a form for the custom field at row (-1: a new one)
@@ -382,9 +392,9 @@ func (m *Model) drawForm(base string) string {
 			continue
 		}
 		focused := i == f.focus
-		label := th.dimmed().Render(" " + in.label)
+		label := th.dimmed().Render(" " + in.name())
 		if focused {
-			label = th.accented().Bold(true).Render(" " + in.label)
+			label = th.accented().Bold(true).Render(" " + in.name())
 		}
 		var body string
 		switch in.kind {

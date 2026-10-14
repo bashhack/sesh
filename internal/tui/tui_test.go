@@ -1377,3 +1377,19 @@ func TestFormFieldsNotesAndLock(t *testing.T) {
 		t.Errorf("a lock left the form, or what was typed: %q", typed)
 	}
 }
+
+// A TOTP entry's form asks for an account, and doesn't rate its key as a
+// password; a password typed that's easy to guess is said to be.
+func TestFormLabelsAndStrength(t *testing.T) {
+	a := newApp(t, newFake(), Options{IsWeak: func([]byte) bool { return true }})
+	a.press("ctrl+k", "a", "→", "→", "→", "tab", "x", "tab", "me", "tab", "JBSWY3DP")
+	if s := a.screen(); !strings.Contains(s, " account ") || strings.Contains(s, " username ") || strings.Contains(s, "easy to guess") {
+		t.Errorf("a TOTP entry's form:\n%s", s)
+	}
+	a.press("esc", "esc", "ctrl+k", "a")
+	a.tabs(3) // kind, name, username → the secret's choice (type a new one)
+	a.press("tab", "abc")
+	if s := a.screen(); !strings.Contains(s, "easy to guess") {
+		t.Errorf("a weak password typed:\n%s", s)
+	}
+}

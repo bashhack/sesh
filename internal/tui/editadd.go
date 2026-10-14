@@ -62,8 +62,11 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	name := m.textInput("name", e.Service)
 	user := m.textInput("username", e.Username)
 	user.shown = func() bool { return kind() != vault.KindNote }
-	if kind() == vault.KindTOTP {
-		user.label = "account"
+	user.named = func() string {
+		if kind() == vault.KindTOTP {
+			return "account"
+		}
+		return "username"
 	}
 
 	choices := []string{secretKeep, secretType, secretGenerate}
@@ -72,7 +75,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	}
 	secretChoice := &input{kind: inputChoice, label: "secret", choices: choices}
 	secretChoice.shown = func() bool { k := kind(); return k == vault.KindPassword || k == vault.KindAPIKey }
-	typed := &input{kind: inputSecret, label: "new secret"}
+	typed := &input{kind: inputSecret, label: "new secret", rated: true}
 	typed.shown = func() bool { return secretChoice.visible() && secretChoice.choices[secretChoice.choice] == secretType }
 	totpKey := &input{kind: inputSecret, label: "TOTP key, or otpauth:// link", hint: "a link also fills in the code's settings"}
 	totpKey.shown = func() bool { return kind() == vault.KindTOTP }
@@ -84,11 +87,12 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	folder := m.textInput("folder", e.Folder)
 	tags := m.textInput("tags", strings.Join(e.Tags, ", "))
 	tags.hint = "separated by commas"
-	notesLabel := "notes"
-	text := m.notesInput(notesLabel, notes)
-	text.shown = func() bool { return true }
-	if kind() == vault.KindNote {
-		text.label = "note"
+	text := m.notesInput("notes", notes)
+	text.named = func() string {
+		if kind() == vault.KindNote {
+			return "note"
+		}
+		return "notes"
 	}
 	fields := &input{kind: inputFields, label: "fields"}
 	for _, f := range e.Fields {
@@ -105,10 +109,6 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	orig := *e
 	f.submit = func() tea.Cmd {
 		k := kind()
-		text.label = "notes"
-		if k == vault.KindNote {
-			text.label = "note"
-		}
 		c := &Change{To: vault.Key{Kind: k, Service: name.value(), Username: user.value()}}
 		if k == vault.KindNote {
 			c.To.Username = ""
