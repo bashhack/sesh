@@ -1466,7 +1466,7 @@ func TestFormShowsAFieldsValue(t *testing.T) {
 	a.press("ctrl+k", "e")
 	a.tabs(7) // username, secret, URL, folder, tags, notes → the fields
 	a.press("enter", "tab", "tab")
-	if s := a.screen(); strings.Contains(s, "4711") || !strings.Contains(s, "show the value it has") {
+	if s := a.screen(); strings.Contains(s, "4711") || !strings.Contains(s, "••••••••▌") || !strings.Contains(s, "ctrl+r  show it") {
 		t.Fatalf("the field's value should be unread, with the key that shows it:\n%s", s)
 	}
 	a.press("ctrl+r")

@@ -509,6 +509,7 @@ func (m *Model) openFieldForm(in *input, row int) tea.Cmd {
 	if r.secret && r.value == nil && row >= 0 {
 		hidden.hint = "leave it empty to keep the value it has"
 		if of, field, epoch := in.of, r.orig, m.epoch; field != "" {
+			hidden.hint = "typing replaces it"
 			hidden.load = func() tea.Cmd {
 				return m.read(func(v Vault, closed func() bool) tea.Msg {
 					value, err := v.Field(of, field)
@@ -612,11 +613,12 @@ func (m *Model) drawForm(base string) string {
 				shown := strings.ReplaceAll(wrapText(string(in.secret), 1<<20), "\n", "␤")
 				body = th.style().Render(ansi.TruncateLeft(shown, max(ansi.StringWidth(shown)-(inner-8), 0), ""))
 			}
+			if len(in.secret) == 0 && in.load != nil {
+				// Its value, unread: dots, as the preview shows a secret.
+				body = th.dimmed().Render("••••••••")
+			}
 			if focused {
 				body += th.accented().Render("▌")
-			}
-			if len(in.secret) == 0 && in.load != nil {
-				body += th.dimmed().Render(" •••••••• the value it has")
 			}
 			if in.weak {
 				body += "\n" + lipgloss.NewStyle().Foreground(th.warn).Render("easy to guess: a longer one, or generated, is safer")
@@ -681,11 +683,19 @@ func (m *Model) drawForm(base string) string {
 				case in.loading:
 					word = "reading it…"
 				case len(in.secret) == 0 && in.load != nil:
-					word = "show the value it has"
+					word = "show it"
 				}
-				lines = append(lines, "   "+th.hints([2]string{"ctrl+r", word}))
+				line := "   " + th.hints([2]string{"ctrl+r", word})
+				switch hint := th.dimmed().Render(in.hint); {
+				case in.hint == "":
+					lines = append(lines, line)
+				case lipgloss.Width(line)+3+lipgloss.Width(hint) <= inner:
+					lines = append(lines, line+"   "+hint)
+				default:
+					lines = append(lines, line, "   "+hint)
+				}
 			}
-			if in.hint != "" && len(in.matches()) == 0 {
+			if in.hint != "" && in.kind != inputSecret && len(in.matches()) == 0 {
 				lines = append(lines, "   "+th.dimmed().Render(in.hint))
 			}
 		}
