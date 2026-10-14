@@ -70,7 +70,11 @@ func (c *Checker) Add(e *vault.Entry, secret []byte, err error) error {
 		return nil
 	}
 	c.r.Checked++
+	if c.OldAfter > 0 && !e.UpdatedAt.IsZero() && c.Now.Sub(e.UpdatedAt) >= c.OldAfter {
+		c.r.Old = append(c.r.Old, Aged{Key: e.Key, Changed: e.UpdatedAt})
+	}
 	if len(secret) == 0 {
+		// Empty: nothing to compare with others, and a password as weak as can be.
 		if e.Kind == vault.KindPassword {
 			c.r.Weak = append(c.r.Weak, e.Key)
 		}
@@ -81,9 +85,6 @@ func (c *Checker) Add(e *vault.Entry, secret []byte, err error) error {
 	}
 	sum := sha256.Sum256(secret)
 	c.seen[sum] = append(c.seen[sum], e.Key)
-	if c.OldAfter > 0 && !e.UpdatedAt.IsZero() && c.Now.Sub(e.UpdatedAt) >= c.OldAfter {
-		c.r.Old = append(c.r.Old, Aged{Key: e.Key, Changed: e.UpdatedAt})
-	}
 	if e.Kind != vault.KindPassword {
 		return nil
 	}

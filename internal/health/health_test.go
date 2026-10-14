@@ -36,7 +36,7 @@ func TestChecks(t *testing.T) {
 		{"JBSWY3DPEHPK3PXP", vault.Entry{Key: key(vault.KindTOTP, "code"), UpdatedAt: old}},
 		{"password1", vault.Entry{Key: key(vault.KindNote, "wifi"), UpdatedAt: old}},
 		{"github", vault.Entry{Key: key(vault.KindPassword, "github"), UpdatedAt: recent}},
-		{"", vault.Entry{Key: key(vault.KindPassword, "blank"), UpdatedAt: recent}},
+		{"", vault.Entry{Key: key(vault.KindPassword, "blank"), UpdatedAt: old}},
 	} {
 		if err := c.Add(&x.e, []byte(x.secret), nil); err != nil {
 			t.Fatal(err)
@@ -57,13 +57,13 @@ func TestChecks(t *testing.T) {
 	for _, a := range r.Old {
 		oldNames = append(oldNames, a.Key.Service)
 	}
-	if !slices.Equal(oldNames, []string{"ci", "mail"}) {
+	if !slices.Equal(oldNames, []string{"ci", "blank", "mail"}) {
 		t.Errorf("old = %q", oldNames)
 	}
 	if !slices.Equal(names(r.Unreadable), []string{"damaged"}) {
 		t.Errorf("unreadable = %v", r.Unreadable)
 	}
-	if r.Checked != 6 || r.Problems() != 4+3+2+1 {
+	if r.Checked != 6 || r.Problems() != 4+3+3+1 {
 		t.Errorf("checked %d, problems %d", r.Checked, r.Problems())
 	}
 }
