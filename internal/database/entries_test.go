@@ -391,3 +391,27 @@ func TestEditSameSecretOpensOnce(t *testing.T) {
 		t.Errorf("after: %q, %v", got, err)
 	}
 }
+
+// A write over damaged times mends them both, whether the secret changes or not.
+func TestWriteMendsDamagedTimes(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	for _, write := range []func() error{
+		func() error { return s.Put(k, []byte("one")) },
+		func() error { return s.Save(&vault.Entry{Key: k}, []byte("one")) },
+		func() error { return s.Put(k, []byte("two")) },
+	} {
+		if err := s.Put(k, []byte("one")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`UPDATE entries SET created_at = 'not a time', updated_at = 'nor this' WHERE service = 'bank'`); err != nil {
+			t.Fatal(err)
+		}
+		if err := write(); err != nil {
+			t.Fatal(err)
+		}
+		if e, err := s.Lookup(k); err != nil || e.CreatedAt.IsZero() || e.UpdatedAt.IsZero() {
+			t.Errorf("after the write: %+v, %v", e, err)
+		}
+	}
+}

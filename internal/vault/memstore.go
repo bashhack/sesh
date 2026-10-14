@@ -84,7 +84,7 @@ func (m *MemStore) Put(k Key, secret []byte) error {
 		e.entry = Entry{Key: k, CreatedAt: now}
 	}
 	// As the vault does: the secret it has, stored again, isn't a change.
-	if !ok || !bytes.Equal(e.secret, secret) {
+	if !ok || secret == nil || !bytes.Equal(e.secret, secret) {
 		e.entry.UpdatedAt = now
 	}
 	e.secret = bytes.Clone(secret)

@@ -198,11 +198,13 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 			return err
 		}
 	}
-	if same {
-		// Times that don't read (damage) aren't kept: this write mends them.
+	mend := false
+	if existed {
+		// Times that don't read (damage) aren't kept: this write mends
+		// both, whatever the secret.
 		var created, updated time.Time
 		if err := s.db.QueryRow(`SELECT created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&created, &updated); err != nil {
-			same = false
+			same, mend = false, true
 		}
 	}
 	var imported *importedHistory
@@ -247,13 +249,13 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	} else {
 		onConflict += `, updated_at = excluded.updated_at`
 	}
-	if whole {
-		onConflict += `, settings = excluded.settings, folder = excluded.folder`
-		if same && e.CreatedAt.IsZero() {
-			onConflict += keepTime("created_at")
-		} else {
-			onConflict += `, created_at = excluded.created_at`
-		}
+	switch {
+	case whole && same && e.CreatedAt.IsZero():
+		onConflict += `, settings = excluded.settings, folder = excluded.folder` + keepTime("created_at")
+	case whole:
+		onConflict += `, settings = excluded.settings, folder = excluded.folder, created_at = excluded.created_at`
+	case mend:
+		onConflict += `, created_at = excluded.created_at`
 	}
 	if d != nil {
 		onConflict += `, url = excluded.url, details = excluded.details, sealed_details = excluded.sealed_details, details_salt = excluded.details_salt`
