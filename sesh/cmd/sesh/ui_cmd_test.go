@@ -14,6 +14,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
@@ -132,7 +134,19 @@ func TestUI_Run(t *testing.T) {
 	oldTerm, oldOpts := uiStdoutIsTerminal, uiProgramOptions
 	t.Cleanup(func() { uiStdoutIsTerminal, uiProgramOptions = oldTerm, oldOpts })
 	uiStdoutIsTerminal = func(io.Writer) bool { return true }
-	uiProgramOptions = []tea.ProgramOption{tea.WithWindowSize(80, 24)}
+	// What the screen shows, as the app draws it: the renderer writes only
+	// what changed, so the output can't be searched for whole words. The
+	// filter runs on the program's own loop, before each message.
+	var screen syncBuffer
+	uiProgramOptions = []tea.ProgramOption{tea.WithWindowSize(80, 24), tea.WithFilter(func(m tea.Model, msg tea.Msg) tea.Msg {
+		if v, ok := m.(interface{ View() tea.View }); ok {
+			screen.mu.Lock()
+			screen.b.Reset()
+			screen.b.WriteString(ansi.Strip(v.View().Content))
+			screen.mu.Unlock()
+		}
+		return msg
+	})}
 	in, keys := io.Pipe()
 	out := &syncBuffer{}
 	app := agentTestApp()
@@ -147,9 +161,9 @@ func TestUI_Run(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	waitFor(t, "every entry", func() bool { return strings.Contains(out.String(), "4 entries") })
+	waitFor(t, "every entry", func() bool { return strings.Contains(screen.String(), "4 entries") })
 	send("gitl")
-	waitFor(t, "the search", func() bool { return strings.Contains(out.String(), "1 of 4") })
+	waitFor(t, "the search", func() bool { return strings.Contains(screen.String(), "1 of 4") })
 	send("\r")
 	select {
 	case got := <-copied:
