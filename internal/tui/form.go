@@ -240,9 +240,10 @@ func (f *form) last() bool {
 
 // formHead is what's drawn above f's inputs, the error lines to draw
 // below them, and the room left for the inputs, keeping the focused one's
-// lines (focusLines) and the hint's (hintLines) in view. The window is shared out in turn: the
-// focused input, what's shown (a key to write down: drawn whole), the
-// error, then the note, whose end is cut; blank lines between go first.
+// lines (focusLines) and the hint's (hintLines) in view. The window is
+// shared out in turn: the focused input, what's shown (a key to write
+// down: drawn whole), the error, then the note, whose end is cut; blank
+// lines between go first.
 func (m *Model) formHead(f *form, inner, focusLines, hintLines int, errLines []string) (head, errs []string, room int) {
 	th := m.th
 	// The card's title, the line under it, the line above the hint, and
@@ -260,10 +261,16 @@ func (m *Model) formHead(f *form, inner, focusLines, hintLines int, errLines []s
 		head = append(head, key...)
 		left -= len(head)
 	}
+	left = max(left, 0)
 	if len(errLines) > left {
-		// Without its blank line, then cut.
+		// Without its blank line, then cut, saying so.
 		errLines = errLines[1:]
-		errLines = errLines[:max(min(len(errLines), left), 0)]
+		if len(errLines) > left {
+			errLines = errLines[:left]
+			if left > 0 {
+				errLines[left-1] = ansi.Truncate(errLines[left-1], inner-1, "") + lipgloss.NewStyle().Foreground(th.bad).Render("…")
+			}
+		}
 	}
 	left -= len(errLines)
 	if f.note != "" && left >= 2 {

@@ -371,4 +371,29 @@ func TestRecoverySaveRefused(t *testing.T) {
 	if b.form != nil || b.ov == nil || b.ov.err != "No recovery key was set, since it couldn't be saved." {
 		t.Errorf("Esc after a failed save: form %v, panel %+v", b.form != nil, b.ov)
 	}
+	// A failed save, then three wrong groups: it wasn't confirmed.
+	c, _ := keyApp(t, false, errors.New("database is locked"))
+	c.press("ctrl+k", ",", "enter", "2345", "enter", "ctrl+u", "1", "enter", "ctrl+u", "2", "enter", "ctrl+u", "3", "enter")
+	if c.form != nil || c.ov == nil || c.ov.err != "No recovery key was set, since it wasn't confirmed." {
+		t.Errorf("wrong groups after a failed save: form %v, panel %+v", c.form != nil, c.ov)
+	}
+}
+
+// What's shown too long for the window doesn't break the form; a cut error ends with "…".
+func TestFormShownTooLong(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
+	in := a.textInput("x", "")
+	a.form = &form{title: "Long", row: -1, inputs: []*input{in}, shown: strings.Repeat("ABCD-", 40), err: strings.Repeat("Not saved: the vault is busy. ", 4)}
+	a.form.focusInput(0)
+	_ = a.screen()
+	a.form.shown = "ABCD"
+	s := a.screen()
+	cut := false
+	for l := range strings.SplitSeq(s, "\n") {
+		cut = cut || (strings.Contains(l, "busy") || strings.Contains(l, "saved")) && strings.Contains(l, "…")
+	}
+	if !cut {
+		t.Errorf("a cut error, without its …:\n%s", s)
+	}
 }

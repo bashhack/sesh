@@ -155,6 +155,7 @@ func (m *Model) keyForm(nr *NewRecovery) {
 		return "No recovery key was set, since it wasn't confirmed: throw away the one shown, and make one again."
 	}
 	f.submit = func() tea.Cmd {
+		f.failed = false
 		if !nr.Matches(in.value()) {
 			tries++
 			if tries < confirmTries {
