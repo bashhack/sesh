@@ -75,11 +75,11 @@ type (
 		refilter *sideRow
 		what     string
 		renamed  string
-		forget   vault.Key // an entry whose held values are stale now
+		forget   vault.Key   // an entry whose held values are stale now
+		unmark   []vault.Key // marked entries acted on, or gone: unmarked after
 		epoch    int
 		closes   panel // a panel the change closes, when it's still open
 		reread   bool
-		unmark   bool // the entries marked were what changed
 	}
 	// agentLockedMsg is "lock now" having locked the agent, or not.
 	agentLockedMsg struct{ err error }
@@ -438,6 +438,9 @@ func (m *Model) actionResult(msg tea.Msg) tea.Cmd {
 		if msg.epoch != m.epoch || m.v == nil {
 			return nil
 		}
+		for _, k := range msg.unmark {
+			delete(m.marked, k)
+		}
 		switch {
 		case errors.Is(msg.err, ErrLocked):
 			return m.lock(lockedReason(msg.err))
@@ -455,11 +458,12 @@ func (m *Model) actionResult(msg tea.Msg) tea.Cmd {
 			if msg.forget != (vault.Key{}) {
 				m.forget(msg.forget)
 			}
-			if msg.unmark {
-				clear(m.marked)
-			}
 			if r := msg.refilter; r != nil && m.filter.kind == r.kind && m.filter.name == msg.renamed {
 				m.filter.name = r.name
+			}
+			// The sidebar's cursor stays on the row renamed.
+			if r := msg.refilter; r != nil && m.sideSel < len(m.side) && m.side[m.sideSel].kind == r.kind && m.side[m.sideSel].name == msg.renamed {
+				m.side[m.sideSel].name = r.name
 			}
 		}
 		if msg.reread {

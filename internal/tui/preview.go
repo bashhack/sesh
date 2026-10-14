@@ -65,11 +65,14 @@ func (m *Model) selected() *vault.Entry {
 // and the keys and notes now shown are read.
 func (m *Model) moved() tea.Cmd {
 	e := m.selected()
-	var k vault.Key
-	if e != nil {
-		k = e.Key
+	if e == nil {
+		// Nothing listed: the selection is remembered, to come back to
+		// when its entry is listed again.
+		m.previewTop = 0
+		m.hide()
+		return nil
 	}
-	if k != m.selKey {
+	if k := e.Key; k != m.selKey {
 		m.selKey, m.previewTop = k, 0
 		m.hide()
 	}

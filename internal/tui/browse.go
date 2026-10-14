@@ -62,14 +62,16 @@ type filingMsg struct {
 	folders []Folder
 	tags    []Tag
 	epoch   int
+	n       int // which read it is: only the latest's is kept
 }
 
 // refile reads the folders and tags again.
 func (m *Model) refile() tea.Cmd {
-	epoch := m.epoch
+	m.filings++
+	epoch, n := m.epoch, m.filings
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		folders, tags, err := v.Filing()
-		return filingMsg{folders: folders, tags: tags, err: err, epoch: epoch}
+		return filingMsg{folders: folders, tags: tags, err: err, epoch: epoch, n: n}
 	})
 }
 
@@ -77,7 +79,7 @@ func (m *Model) refile() tea.Cmd {
 func (m *Model) reread() tea.Cmd { return tea.Batch(m.search(), m.refile()) }
 
 func (m *Model) gotFiling(msg *filingMsg) tea.Cmd {
-	if msg.epoch != m.epoch || m.v == nil {
+	if msg.epoch != m.epoch || msg.n != m.filings || m.v == nil {
 		return nil
 	}
 	if msg.err != nil {
@@ -88,14 +90,16 @@ func (m *Model) gotFiling(msg *filingMsg) tea.Cmd {
 		return nil
 	}
 	m.folders, m.tags = msg.folders, msg.tags
-	m.buildSide()
+	if m.buildSide() {
+		return m.moved()
+	}
 	return nil
 }
 
 // buildSide lays out the sidebar from the folders and tags held, keeping
 // its cursor, and the filter, on the rows they were on. A filter whose
 // folder or tag is gone goes back to every entry.
-func (m *Model) buildSide() {
+func (m *Model) buildSide() (refiltered bool) {
 	var was sideRow
 	if m.sideSel >= 0 && m.sideSel < len(m.side) {
 		was = m.side[m.sideSel]
@@ -122,7 +126,9 @@ func (m *Model) buildSide() {
 	if !slices.ContainsFunc(rows, func(r sideRow) bool { return same(&r, &m.filter) }) {
 		m.filter = sideRow{kind: sideAll, label: "All"}
 		m.showFound()
+		return true
 	}
+	return false
 }
 
 // filtered is rows in the folder or with the tag the sidebar picked.
@@ -234,9 +240,10 @@ func (m *Model) sideLines(w, h int) []string {
 		case r.kind == sideTag:
 			labelStyle = bg(lipgloss.NewStyle().Foreground(th.kindColor(vault.KindTOTP)))
 		}
-		indent := bg(lipgloss.NewStyle()).Render(strings.Repeat(" ", 2*r.depth))
+		// Deep folders indent no further than a third of the width, keeping room for the name and count.
+		indent := bg(lipgloss.NewStyle()).Render(strings.Repeat(" ", min(2*r.depth, w/3)))
 		num := bg(th.dimmed()).Render(fmt.Sprint(count))
-		label := labelStyle.Render(ansi.Truncate(r.label, max(w-2*r.depth-lipgloss.Width(num)-4, 1), "…"))
+		label := labelStyle.Render(ansi.Truncate(r.label, max(w-lipgloss.Width(indent)-lipgloss.Width(num)-4, 1), "…"))
 		left := bar + bg(lipgloss.NewStyle()).Render(" ") + indent + label
 		gap := bg(lipgloss.NewStyle()).Render(strings.Repeat(" ", max(w-lipgloss.Width(left)-lipgloss.Width(num)-1, 1)))
 		out[i] = fitTo(left+gap+num+bg(lipgloss.NewStyle()).Render(" "), w)
@@ -271,6 +278,12 @@ func (m *Model) sideKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.openSideMenu()
 	case "ctrl+c":
 		return tea.Quit
+	case "?":
+		if m.input.Value() == "" {
+			m.showHelp = true
+			m.focus = focusList
+			return nil
+		}
 	}
 	if msg.Text != "" && msg.Mod&(tea.ModCtrl|tea.ModAlt) == 0 {
 		m.focusSearch()
@@ -330,24 +343,48 @@ func (m *Model) markedKeys() []vault.Key {
 // countOf is n entries in words: "1 entry", "3 entries".
 func countOf(n int) string { return fmt.Sprintf("%d %s", n, plural(n, "entry", "entries")) }
 
+// hiddenMarks is how many of the entries marked the list doesn't show.
+func (m *Model) hiddenMarks() int {
+	shown := 0
+	for i := range m.rows {
+		if m.marked[m.rows[i].Key] {
+			shown++
+		}
+	}
+	return len(m.marked) - shown
+}
+
+// markedWords is the entries marked in words, saying how many aren't
+// shown: "3 entries marked (1 not shown)".
+func (m *Model) markedWords() string {
+	s := countOf(len(m.marked)) + " marked"
+	if h := m.hiddenMarks(); h > 0 {
+		s += fmt.Sprintf(" (%d not shown)", h)
+	}
+	return s
+}
+
 // openMarkedMenu opens the actions on the entries marked.
 func (m *Model) openMarkedMenu() tea.Cmd {
 	keys := m.markedKeys()
-	n := countOf(len(keys))
-	items := []item{
+	var items []item
+	if e := m.selected(); e != nil {
+		items = append(items, item{key: "s", label: "the selected entry's actions…", run: m.openMenu})
+	}
+	items = append(items, []item{
 		{key: "m", label: "move to a folder…", run: func() tea.Cmd { return m.askFolder(keys) }},
 		{key: "+", label: "add a tag…", run: func() tea.Cmd { return m.askTag(keys, true) }},
 		{key: "-", label: "remove a tag…", run: func() tea.Cmd { return m.askTag(keys, false) }},
 		{key: "d", label: "move to the trash", run: func() tea.Cmd { return m.confirmDeleteMany(keys) }},
-		{key: "u", label: "unmark them", run: func() tea.Cmd {
+		{key: "c", label: "clear the marks", run: func() tea.Cmd {
 			clear(m.marked)
 			m.ov = nil
 			return nil
 		}},
-	}
+	}...)
 	g := m.globalItems()
 	g[0].rule = true
-	m.ov = &overlay{kind: panelMenu, title: n + " marked", items: append(items, g...)}
+	m.ov = &overlay{kind: panelMenu, title: m.markedWords(), items: append(items, g...)}
 	return nil
 }
 
@@ -372,14 +409,38 @@ func (m *Model) ask(title, label, value, hint string, offers []string, done func
 	return nil
 }
 
-// change runs a change to the entries marked and says what it did: what
-// is how it's said, given how many entries changed. They're unmarked
-// after.
-func (m *Model) change(run func(v Vault) (int, error), what func(n int) string) tea.Cmd {
+// change runs a change to the entries marked, keys, and says what it
+// did: what is how it's said, given how many entries changed. Marked
+// entries another command has deleted or renamed meanwhile are left
+// out, and said to be; all of them are unmarked after.
+func (m *Model) change(keys []vault.Key, run func(v Vault, keys []vault.Key) (int, error), what func(n int) string) tea.Cmd {
 	epoch := m.epoch
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		n, err := run(v)
-		return doneMsg{what: what(n), err: err, epoch: epoch, reread: true, unmark: true}
+		all, _, err := v.Search("")
+		if err != nil {
+			return doneMsg{err: err, epoch: epoch}
+		}
+		var here, gone []vault.Key
+		for _, k := range keys {
+			if slices.ContainsFunc(all, func(e vault.Entry) bool { return e.Key == k }) {
+				here = append(here, k)
+			} else {
+				gone = append(gone, k)
+			}
+		}
+		if len(here) == 0 {
+			return doneMsg{err: errors.New("the entries marked are gone: another sesh command deleted or renamed them"), epoch: epoch, unmark: gone, reread: true}
+		}
+		n, err := run(v, here)
+		said := what(n)
+		if len(gone) > 0 {
+			said += fmt.Sprintf("; %d marked %s gone", len(gone), plural(len(gone), "was", "were"))
+		}
+		unmark := gone
+		if err == nil {
+			unmark = keys
+		}
+		return doneMsg{what: said, err: err, epoch: epoch, reread: true, unmark: unmark}
 	})
 }
 
@@ -390,7 +451,7 @@ func (m *Model) askFolder(keys []vault.Key) tea.Cmd {
 			if err := vault.CheckFolder(folder); err != nil {
 				return err.Error(), nil
 			}
-			return "", m.change(func(v Vault) (int, error) { return v.MoveToFolder(keys, folder) }, func(n int) string {
+			return "", m.change(keys, func(v Vault, keys []vault.Key) (int, error) { return v.MoveToFolder(keys, folder) }, func(n int) string {
 				if folder == "" {
 					return "Took " + countOf(n) + " out of their folders"
 				}
@@ -410,32 +471,47 @@ func (m *Model) askTag(keys []vault.Key, add bool) tea.Cmd {
 			return err.Error(), nil
 		}
 		if add {
-			return "", m.change(func(v Vault) (int, error) { return v.AddTag(keys, tag) },
+			return "", m.change(keys, func(v Vault, keys []vault.Key) (int, error) { return v.AddTag(keys, tag) },
 				func(n int) string { return "Tagged " + countOf(n) + " #" + tag })
 		}
-		return "", m.change(func(v Vault) (int, error) { return v.RemoveTag(keys, tag) },
+		return "", m.change(keys, func(v Vault, keys []vault.Key) (int, error) { return v.RemoveTag(keys, tag) },
 			func(n int) string { return "Took #" + tag + " off " + countOf(n) })
 	})
 }
 
 // confirmDeleteMany asks before moving the entries keys to the trash.
 func (m *Model) confirmDeleteMany(keys []vault.Key) tea.Cmd {
-	m.ov = m.confirm(m.ov, "Delete", "Move "+countOf(len(keys))+" to the trash? They can be put back from there.", func() tea.Cmd {
+	question := "Move " + countOf(len(keys)) + " to the trash? They can be put back from there."
+	switch h := m.hiddenMarks(); {
+	case len(keys) == 1 && h == 1:
+		question = "Move " + kindName(keys[0]) + " to the trash? It's marked, but not shown in the list now. It can be put back from there."
+	case len(keys) == 1:
+		question = "Move " + kindName(keys[0]) + " to the trash? It can be put back from there."
+	case h > 0:
+		question = fmt.Sprintf("Move %s to the trash, %d of them not shown in the list now? They can be put back from there.", countOf(len(keys)), h)
+	}
+	m.ov = m.confirm(m.ov, "Delete", question, func() tea.Cmd {
 		for _, k := range keys {
 			m.forget(k)
 		}
-		return m.change(func(v Vault) (int, error) { return len(keys), v.DeleteMany(keys) },
+		return m.change(keys, func(v Vault, keys []vault.Key) (int, error) { return len(keys), v.DeleteMany(keys) },
 			func(n int) string { return "Moved " + countOf(n) + " to the trash" })
 	})
 	m.ov.danger = true
 	return nil
 }
 
+// renamable says whether the sidebar's cursor is on a folder or tag: All,
+// and No folder, have nothing to rename.
+func (m *Model) renamable() bool {
+	return m.sideSel > 0 && m.sideSel < len(m.side) && m.side[m.sideSel].name != ""
+}
+
 // openSideMenu opens the actions on the folder or tag the sidebar's
 // cursor is on.
 func (m *Model) openSideMenu() tea.Cmd {
-	if m.sideSel <= 0 || m.sideSel >= len(m.side) || m.side[m.sideSel].name == "" {
-		return nil // All, and No folder, have nothing to rename
+	if !m.renamable() {
+		return nil
 	}
 	r := m.side[m.sideSel]
 	what, rename := "folder "+r.name, m.askRenameFolder
@@ -451,11 +527,13 @@ func (m *Model) openSideMenu() tea.Cmd {
 // askRenameFolder asks for folder from's new name.
 func (m *Model) askRenameFolder(from string) tea.Cmd {
 	return m.ask("Rename the folder "+from, "new name", from, "the folders inside it move with it", nil, func(to string) (string, tea.Cmd) {
-		if err := vault.CheckFolder(to); err != nil || to == "" || to == from {
-			if to == "" || to == from {
-				return "Type its new name.", nil
-			}
+		switch err := vault.CheckFolder(to); {
+		case to == "" || to == from:
+			return "Type its new name.", nil
+		case err != nil:
 			return err.Error(), nil
+		case vault.InFolder(to, from):
+			return "A folder can't move inside itself.", nil
 		}
 		epoch := m.epoch
 		return "", m.read(func(v Vault, _ func() bool) tea.Msg {

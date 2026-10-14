@@ -18,8 +18,11 @@ import (
 // shows the keys.
 func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	m.lastKey = m.opts.Now()
-	if m.focus == focusSide && m.listShown() && m.sideWidth() > 0 {
-		return m.sideKey(msg)
+	if m.focus == focusSide {
+		if m.listShown() && m.sideWidth() > 0 {
+			return m.sideKey(msg)
+		}
+		m.focus = focusList // the sidebar went with a narrower window
 	}
 	switch msg.String() {
 	case "ctrl+c":

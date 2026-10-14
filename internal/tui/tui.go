@@ -264,6 +264,7 @@ type Model struct {
 	// is dropped. searches counts searches: only the latest's results are
 	// shown.
 	epoch, searches int
+	filings         int // reads of the folders and tags: only the latest's is kept
 
 	width, height int
 	previewTop    int // the preview's first line shown, when it scrolls
@@ -389,7 +390,6 @@ type (
 	tickMsg    time.Time
 	resultsMsg struct {
 		err    error
-		query  string
 		rows   []vault.Entry
 		total  int
 		epoch  int
@@ -445,7 +445,7 @@ func (m *Model) search() tea.Cmd {
 	q, epoch, n := m.input.Value(), m.epoch, m.searches
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		rows, total, err := v.Search(q)
-		return resultsMsg{query: q, rows: rows, total: total, err: err, epoch: epoch, search: n}
+		return resultsMsg{rows: rows, total: total, err: err, epoch: epoch, search: n}
 	})
 }
 
@@ -514,6 +514,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.scroll()
+		m.scrollSide()
 		return m.moved()
 	case openedMsg:
 		if msg.err != nil {
@@ -569,6 +570,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		if m.ov != nil {
 			return nil // not into the search behind a panel
 		}
+		m.focusSearch()
 		m.input.SetValue(m.input.Value() + text)
 		m.input.CursorEnd()
 		return tea.Batch(m.requery(), m.keepAlive())
@@ -582,7 +584,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return m.failure(msg.err)
 		}
 		m.found, m.total = msg.rows, msg.total
-		if msg.query == "" {
+		if len(msg.rows) == msg.total {
 			// Every entry is here: a mark on one that's gone goes too.
 			for k := range m.marked {
 				if !slices.ContainsFunc(m.found, func(e vault.Entry) bool { return e.Key == k }) {
@@ -756,6 +758,9 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.epoch++
 	m.found, m.rows, m.sel, m.top = nil, nil, 0, 0
 	clear(m.marked)
+	m.folders, m.tags, m.side, m.sideSel, m.sideTop = nil, nil, nil, 0, 0
+	m.filter = sideRow{kind: sideAll, label: "All"}
+	m.focusSearch()
 	m.ov = nil
 	if m.form != nil {
 		m.form.wipe()

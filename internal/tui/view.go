@@ -297,9 +297,12 @@ func (m *Model) footer(w int) string {
 	keys := [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"↑↓", "move"}, {"esc", "clear"}}
 	switch {
 	case m.focus == focusSide && m.sideWidth() > 0:
-		keys = [][2]string{{"↑↓", "choose"}, {"↵", "back to the list"}, {"ctrl+k", "rename"}}
+		keys = [][2]string{{"↑↓", "choose"}, {"↵", "open"}}
+		if m.renamable() {
+			keys = append(keys, [2]string{"ctrl+k", "rename"})
+		}
 	case len(m.marked) > 0:
-		keys = [][2]string{{"ctrl+k", "act on " + countOf(len(m.marked)) + " marked"}, {"space", "mark"}, {"esc", "unmark"}}
+		keys = [][2]string{{"ctrl+k", "act on " + m.markedWords()}, {"space", "mark"}, {"esc", "unmark"}}
 	case m.focus == focusList:
 		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"space", "mark"}}
 		if m.sideWidth() > 0 {
