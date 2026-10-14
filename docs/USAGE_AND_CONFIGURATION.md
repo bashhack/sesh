@@ -1008,12 +1008,12 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
 - **The selected entry is shown beside the list** when the window is wide enough: its kind, folder, username, URL, fields, tags, when it last changed, and its notes (a secure note's text); Shift-↑ and Shift-↓ scroll it when it's long. A TOTP entry's code is shown large, with a bar counting down the seconds it has left.
 - **Passwords and secret fields stay hidden** (`••••••••`) until **Tab** reveals them, for 30 seconds, until you move to another entry, or until Tab again.
 - **Enter copies** the selected entry's secret, or a TOTP entry's current code; **Ctrl-Y** copies its username. The clipboard clears after `clipboard_timeout`, as with `--clip`, and the footer counts down until it does.
-- **Ctrl-K opens the actions** on the selected entry, each run by its letter (or ↑↓ and Enter); Esc closes them:
+- **Ctrl-K opens the actions** on the selected entry, each run by its letter (or ↑↓ and Enter); Esc goes back, and closes them. (With text after the cursor in the search, Ctrl-K deletes it instead, as in a shell.) A change asks first, and only `y` is a yes, not Enter, and not one typed in the same breath as the key that asked:
   - **copy a value…** (`f`): any one of the entry's values, its secret, username, URL or a field, picked by its number;
   - **earlier secrets…** (`h`): its [password history](#password-history); Enter copies a version, `r` makes it the secret again (after a yes);
   - **delete** (`d`): to the [trash](#the-trash), after a yes;
-  - **the trash…** (`t`): Enter puts an entry back (one whose name is taken now is restored with `sesh trash restore <id> --as <name>`), `x` deletes it for good, after a yes;
-  - **lock now** (`l`): locks the app, and sesh's agent, so every command asks for the master password again;
+  - **the trash…** (`t`): each entry with its trash id; Enter puts one back (one whose name is taken now is restored with `sesh trash restore <id> --as <name>`), `x` deletes it for good, after a yes;
+  - **lock now** (`l`): locks the app, and sesh's agent, so commands ask for the master password again (those given it in `SESH_MASTER_PASSWORD` never used the agent); if the agent can't be locked, the locked screen says so;
   - also **copy the username** (`u`) and **open the URL** (`o`).
 - **Ctrl-O opens the entry's URL** in the browser: a web address only (`http` or `https`; a bare host gets `https://`), so a stored URL can't open a file or another program.
 - **The mouse:** click an entry to select it; the wheel moves the selection, or scrolls the details when over them. While the app has the mouse, most terminals still select text with a key held: Option in iTerm2, Shift in many others.

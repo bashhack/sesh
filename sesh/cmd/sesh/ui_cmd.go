@@ -408,25 +408,33 @@ func (u *uiVault) RemoveFromTrash(id int64) error {
 }
 
 // wrote is err, after the app's own write: the fingerprint is taken
-// again, as the write isn't another command's change (and the store's
-// own commits don't move its data version).
+// again, as the write isn't another command's change. Not when another
+// command committed since the last Check, though (the store's own commits
+// don't move its data version, so a version that moved is theirs): that
+// change is left for Check to find.
 func (u *uiVault) wrote(err error) error {
 	if err != nil {
 		return uiLocked(err)
 	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if v, verr := u.store.DataVersion(); verr != nil || v != u.version {
+		return nil
+	}
 	if f, ferr := u.store.Fingerprint(); ferr == nil {
-		u.mu.Lock()
 		u.fingerprint = f
-		u.mu.Unlock()
 	}
 	return nil
 }
 
-// lockAgent locks sesh's agent, when one is running.
+// lockAgent locks sesh's agent; none running is nothing to lock.
 func lockAgent() error {
 	conn, err := agent.DialExisting()
+	if agent.IsNotRunning(err) {
+		return nil
+	}
 	if err != nil {
-		return nil // no agent to lock
+		return err
 	}
 	defer closeAgentConn(conn)
 	return agent.Lock(conn)

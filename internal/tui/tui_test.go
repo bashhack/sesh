@@ -242,6 +242,9 @@ func (a *app) press(keys ...string) {
 			msg = tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}
 		case "ctrl+k":
 			msg = tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl}
+		case "wait": // past the moment a confirmation's y starts to count
+			a.now = a.now.Add(time.Second)
+			continue
 		default:
 			for _, r := range k {
 				_, cmd := a.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
@@ -515,7 +518,7 @@ func TestCloseWaitsForReads(t *testing.T) {
 	copying := make(chan struct{})
 	f := newFake()
 	a := newApp(t, f, Options{Copy: func(string) error { close(copying); <-release; return nil }})
-	cmd := a.copySelected()
+	cmd := a.copySecret(a.selected())
 	go cmd()
 	<-copying
 	closed := make(chan struct{})
@@ -753,7 +756,7 @@ func TestUsernameURLAndCountdown(t *testing.T) {
 	var opened string
 	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, OpenURL: func(u string) error { opened = u; return nil }})
 	a.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
-	a.run(a.copyUsername())
+	a.run(a.copyUsername(a.selected()))
 	if len(a.copied) != 1 || a.copied[0] != "alice" || !strings.Contains(a.screen(), "Copied github (alice)'s username") {
 		t.Errorf("copied %q:\n%s", a.copied, a.screen())
 	}
@@ -768,12 +771,12 @@ func TestUsernameURLAndCountdown(t *testing.T) {
 	if s := a.screen(); strings.Contains(s, "clipboard clears") {
 		t.Errorf("countdown after it cleared:\n%s", s)
 	}
-	a.run(a.openURL())
+	a.run(a.openURL(a.selected()))
 	if opened != "github.com" || !strings.Contains(a.screen(), "Opened github.com") {
 		t.Errorf("opened %q:\n%s", opened, a.screen())
 	}
 	a.press("down", "down")
-	a.run(a.copyUsername())
+	a.run(a.copyUsername(a.selected()))
 	if s := a.screen(); !strings.Contains(s, "gitlab has no username") || len(a.copied) != 1 {
 		t.Errorf("no username:\n%s", s)
 	}
@@ -937,8 +940,8 @@ func TestActionHistory(t *testing.T) {
 	if f.secrets[github] != "gh-pass" || a.ov == nil || a.ov.kind != panelHistory {
 		t.Fatalf("no restored it, or closed the history (secret %q)", f.secrets[github])
 	}
-	a.press("r", "y")
-	if f.secrets[github] != "old-2" || !strings.Contains(a.screen(), "secret is version 3's again") {
+	a.press("r", "wait", "y")
+	if f.secrets[github] != "old-2" || !strings.Contains(a.screen(), "Restored an earlier secret of password/github/alice") {
 		t.Errorf("restore: secret %q:\n%s", f.secrets[github], a.screen())
 	}
 }
@@ -956,7 +959,7 @@ func TestActionDeleteAndTrash(t *testing.T) {
 	if len(f.entries) != 3 {
 		t.Fatal("no deleted it")
 	}
-	a.press("ctrl+k", "d", "y")
+	a.press("ctrl+k", "d", "wait", "y")
 	if s := a.screen(); len(f.entries) != 2 || !strings.Contains(s, "2 entries") || !strings.Contains(s, "Moved password/github/alice to the trash") {
 		t.Fatalf("after delete:\n%s", s)
 	}
@@ -969,11 +972,11 @@ func TestActionDeleteAndTrash(t *testing.T) {
 		t.Fatalf("put back:\n%s", s)
 	}
 	// The selection moved on to the TOTP entry when github left the list.
-	a.press("ctrl+k", "d", "y", "ctrl+k", "t", "x")
+	a.press("ctrl+k", "d", "wait", "y", "ctrl+k", "t", "x")
 	if s := a.screen(); !strings.Contains(s, "Delete totp/github/alice for good?") {
 		t.Fatalf("confirm for good:\n%s", s)
 	}
-	a.press("y")
+	a.press("wait", "y")
 	if len(f.trash) != 0 || !strings.Contains(a.screen(), "Deleted totp/github/alice for good") {
 		t.Errorf("for good: trash %v", f.trash)
 	}
@@ -991,5 +994,128 @@ func TestActionLockNow(t *testing.T) {
 	a.press("l")
 	if s := a.screen(); a.v != nil || !agentLocked || !strings.Contains(s, "sesh is locked") || !f.closed {
 		t.Errorf("lock now: app locked %v, agent locked %v:\n%s", a.v == nil, agentLocked, s)
+	}
+}
+
+// A word typed after Ctrl-K by habit deletes nothing: a confirmation's y
+// doesn't count in the same breath as the key that asked, and Enter is
+// never a yes.
+func TestConfirmNeedsADeliberateYes(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "r", "e", "a", "d", "y")
+	if len(f.entries) != 3 {
+		t.Fatal("typing a word after Ctrl-K deleted an entry")
+	}
+	a.press("esc", "esc", "ctrl+k", "d", "wait", "enter")
+	if len(f.entries) != 3 || a.ov == nil {
+		t.Fatalf("Enter confirmed a delete (entries %d)", len(f.entries))
+	}
+	// Unseen, in a window too small, it answers nothing.
+	a.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+	a.press("y")
+	if len(f.entries) != 3 {
+		t.Error("a confirmation that wasn't on screen was answered")
+	}
+}
+
+// With text after the cursor, Ctrl-K deletes it, as in a shell, and opens
+// nothing.
+func TestCtrlKKillsToEndOfLine(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("github")
+	for range 3 {
+		a.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	}
+	a.press("ctrl+k")
+	if a.ov != nil || a.input.Value() != "git" {
+		t.Errorf("Ctrl-K mid-line: menu open %v, search %q", a.ov != nil, a.input.Value())
+	}
+}
+
+// An action is done to the entry its panel names, whatever is selected by
+// then: a click on the card moves nothing, and another command's change
+// closes the panel.
+func TestActionsKeepTheirEntry(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "f")
+	a.Update(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft}) // gitlab's row, under the card
+	if a.sel != 0 {
+		t.Fatalf("a click through the panel selected row %d", a.sel)
+	}
+	a.sel = 2 // however the selection came to move
+	a.press("1")
+	if len(a.copied) != 1 || a.copied[0] != "gh-pass" {
+		t.Errorf("copied %q, want github's password, which the panel named", a.copied)
+	}
+	a.sel = 0
+	a.press("ctrl+k", "h")
+	f.changed = true
+	a.tick(time.Second)
+	if s := a.screen(); a.ov != nil || !strings.Contains(s, "Another command changed the vault") {
+		t.Errorf("a change under an open panel:\n%s", s)
+	}
+}
+
+// Esc goes back from a panel to the menu it came from; a TOTP entry's
+// value to copy is its code.
+func TestPanelsGoBack(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("down", "ctrl+k", "f")
+	if s := a.screen(); !strings.Contains(s, "code") || strings.Contains(s, "password ") {
+		t.Errorf("a TOTP entry's values:\n%s", s)
+	}
+	a.press("esc")
+	if a.ov == nil || a.ov.kind != panelMenu {
+		t.Fatal("Esc from the values didn't go back to the menu")
+	}
+	a.press("h", "esc")
+	if a.ov == nil || a.ov.kind != panelMenu {
+		t.Error("Esc from the history didn't go back to the menu")
+	}
+	a.press("esc")
+	if a.ov != nil {
+		t.Error("Esc from the menu didn't close it")
+	}
+}
+
+// What the app held of an entry is wiped when its secret is restored or
+// it's deleted.
+func TestActionsForgetWhatsHeld(t *testing.T) {
+	f := newFake()
+	f.history = map[vault.Key][]string{code: {"OLDKEYOLDKEYOLDK"}}
+	a := newApp(t, f, Options{})
+	held := a.keys[code]
+	a.press("down", "ctrl+k", "h", "r", "wait", "y")
+	if string(held) != strings.Repeat("\x00", len(seed)) {
+		t.Errorf("the TOTP key held before the restore wasn't wiped: %q", held)
+	}
+	if string(a.keys[code]) != "OLDKEYOLDKEYOLDK" {
+		t.Errorf("the key held after = %q, want the restored one", a.keys[code])
+	}
+}
+
+// Lock now says so when the agent couldn't be locked; a restore from the
+// trash that fails is said in the panel, which stays open; a long list
+// keeps its selection on screen.
+func TestActionFailuresAndLongPanels(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{LockAgent: func() error { return errors.New("broken pipe") }})
+	for i := range 40 {
+		f.trash = append(f.trash, Trashed{ID: int64(i + 1), Key: vault.Key{Kind: vault.KindPassword, Service: fmt.Sprintf("old-%02d", i)}})
+	}
+	a.press("ctrl+k", "t")
+	for range 30 {
+		a.press("down")
+	}
+	s := a.screen()
+	if !strings.Contains(s, "old-30") || !strings.Contains(s, "trash id 31") || !strings.Contains(s, "put back") || strings.Count(s, "\n") != a.height-1 {
+		t.Errorf("a long trash:\n%s", s)
+	}
+	a.press("esc", "esc", "ctrl+k", "l")
+	// The card wraps the sentence, so it's checked as the app holds it.
+	if s := a.screen(); a.v != nil || !strings.Contains(a.lockedWhy, "sesh's agent couldn't be locked (broken pipe)") || !strings.Contains(s, "sesh agent lock") {
+		t.Errorf("lock now with the agent unreachable (%q):\n%s", a.lockedWhy, s)
 	}
 }

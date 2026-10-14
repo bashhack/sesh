@@ -28,6 +28,7 @@ const (
 
 // overlay is a panel over the app, about the entry k.
 type overlay struct {
+	opened   time.Time      // when a confirmation was asked
 	yes      func() tea.Cmd // what a confirmation's yes does
 	back     *overlay       // what Esc goes back to
 	k        vault.Key
@@ -69,9 +70,13 @@ type (
 	doneMsg struct {
 		err    error
 		what   string
+		forget vault.Key // an entry whose held values are stale now
 		epoch  int
+		closes panel // a panel the change closes, when it's still open
 		reread bool
 	}
+	// agentLockedMsg is "lock now" having locked the agent, or not.
+	agentLockedMsg struct{ err error }
 )
 
 // openMenu opens the action menu over the selected entry.
@@ -81,17 +86,20 @@ func (m *Model) openMenu() tea.Cmd {
 		m.ov = &overlay{kind: panelMenu, title: "Actions", items: m.globalItems()}
 		return nil
 	}
+	// Each action is about the entry the menu was opened on, whatever is
+	// selected by the time it runs.
+	ek := *e
 	var items []item
-	items = append(items, item{key: "f", label: "copy a value…", run: m.openFields})
+	items = append(items, item{key: "f", label: "copy a value…", run: func() tea.Cmd { return m.openFields(&ek) }})
 	if e.Username != "" {
-		items = append(items, item{key: "u", label: "copy the username", run: m.copyUsername})
+		items = append(items, item{key: "u", label: "copy the username", run: func() tea.Cmd { return m.copyUsername(&ek) }})
 	}
 	if e.URL != "" {
-		items = append(items, item{key: "o", label: "open the URL", run: m.openURL})
+		items = append(items, item{key: "o", label: "open the URL", run: func() tea.Cmd { return m.openURL(&ek) }})
 	}
 	items = append(items,
-		item{key: "h", label: "earlier secrets…", run: m.openHistory},
-		item{key: "d", label: "delete (to the trash)", run: m.confirmDelete},
+		item{key: "h", label: "earlier secrets…", run: func() tea.Cmd { return m.openHistory(&ek) }},
+		item{key: "d", label: "delete (to the trash)", run: func() tea.Cmd { return m.confirmDelete(&ek) }},
 	)
 	g := m.globalItems()
 	g[0].rule = true
@@ -123,12 +131,19 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.ov = ov.back
 		return nil
 	}
+	if m.width < minWidth || m.height < minHeight {
+		// The panel isn't on screen: nothing is done unseen.
+		return nil
+	}
 	if ov.kind == panelConfirm {
-		switch k {
-		case "y", "enter":
+		// Only y is a yes, as sesh's prompts have it (Enter isn't), and
+		// not one typed in the same breath as the key that asked: a word
+		// typed after Ctrl-K by habit mustn't delete anything.
+		switch {
+		case k == "y" && m.opts.Now().Sub(ov.opened) >= confirmAfter:
 			m.ov = nil
 			return ov.yes()
-		case "n":
+		case k == "n":
 			m.ov = ov.back
 		}
 		return nil
@@ -180,8 +195,13 @@ func (m *Model) choose(i int) tea.Cmd {
 	case panelTrash:
 		return m.restoreFromTrash(ov.trash[i].ID)
 	}
-	m.ov = nil
-	return ov.items[i].run()
+	// An action that opens a panel puts it over this one, to go back to;
+	// any other closes it.
+	cmd := ov.items[i].run()
+	if m.ov == ov {
+		m.ov = nil
+	}
+	return cmd
 }
 
 // panelLetter is what a panel's own letters do: restoring an earlier
@@ -191,25 +211,29 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 	switch {
 	case ov.kind == panelHistory && k == "r" && ov.sel < len(ov.versions):
 		n, key := ov.sel+2, ov.k
-		m.ov = &overlay{kind: panelConfirm, back: ov, title: "Restore",
-			question: fmt.Sprintf("Make version %d %s's secret again? The secret it replaces is kept, as version 2.", n, key),
-			yes:      func() tea.Cmd { return m.restoreVersion(key, n) }}
+		m.ov = m.confirm(ov, "Restore",
+			fmt.Sprintf("Make version %d %s's secret again? The secret it replaces is kept.", n, key),
+			func() tea.Cmd { return m.restoreVersion(key, n) })
 	case ov.kind == panelTrash && (k == "x" || k == "delete") && ov.sel < len(ov.trash):
 		id, k := ov.trash[ov.sel].ID, ov.trash[ov.sel].Key
-		m.ov = &overlay{kind: panelConfirm, back: ov, title: "Delete for good",
-			question: fmt.Sprintf("Delete %s for good? It can't be brought back.", k),
-			yes:      func() tea.Cmd { return m.removeFromTrash(id, k) }}
+		m.ov = m.confirm(ov, "Delete for good",
+			fmt.Sprintf("Delete %s for good? It can't be brought back.", k),
+			func() tea.Cmd { return m.removeFromTrash(id, k) })
 	}
 	return nil
 }
 
-// openFields lists the selected entry's values to copy: its secret, its
-// username and URL, and its fields.
-func (m *Model) openFields() tea.Cmd {
-	e := m.selected()
-	if e == nil {
-		return nil
-	}
+// confirm is a yes or no, asked now, over back.
+func (m *Model) confirm(back *overlay, title, question string, yes func() tea.Cmd) *overlay {
+	return &overlay{kind: panelConfirm, back: back, title: title, question: question, yes: yes, opened: m.opts.Now()}
+}
+
+// confirmAfter is how long after a confirmation is asked a y counts.
+const confirmAfter = 400 * time.Millisecond
+
+// openFields lists e's values to copy: its secret, its username and URL,
+// and its fields.
+func (m *Model) openFields(e *vault.Entry) tea.Cmd {
 	ek := *e
 	var items []item
 	add := func(label string, run func() tea.Cmd) {
@@ -220,10 +244,10 @@ func (m *Model) openFields() tea.Cmd {
 		items = append(items, item{key: key, label: label, run: run})
 	}
 	if ek.Kind != vault.KindNote {
-		add(secretWord(ek.Kind), m.copySelected)
+		add(secretWord(ek.Kind), func() tea.Cmd { return m.copySecret(&ek) })
 	}
 	if ek.Username != "" {
-		add("username", m.copyUsername)
+		add("username", func() tea.Cmd { return m.copyUsername(&ek) })
 	}
 	if ek.URL != "" {
 		add("URL", func() tea.Cmd { return m.copyPlain(&ek, "URL", ek.URL) })
@@ -276,14 +300,10 @@ func copied(what string, clearAfter time.Duration) string {
 	return "Copied " + what
 }
 
-// openHistory lists the selected entry's earlier secrets.
-func (m *Model) openHistory() tea.Cmd {
-	e := m.selected()
-	if e == nil {
-		return nil
-	}
+// openHistory lists e's earlier secrets.
+func (m *Model) openHistory(e *vault.Entry) tea.Cmd {
 	k, epoch := e.Key, m.epoch
-	m.ov = &overlay{kind: panelHistory, back: nil, title: "Earlier secrets of " + entryName(e), k: k, loading: true}
+	m.ov = &overlay{kind: panelHistory, back: m.ov, title: "Earlier secrets of " + entryName(e), k: k, loading: true}
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		versions, err := v.History(k)
 		return historyMsg{k: k, versions: versions, err: err, epoch: epoch}
@@ -309,36 +329,49 @@ func (m *Model) copyVersion(k vault.Key, n int) tea.Cmd {
 // restoreVersion makes k's version n its secret again.
 func (m *Model) restoreVersion(k vault.Key, n int) tea.Cmd {
 	epoch := m.epoch
-	delete(m.keys, k)
-	delete(m.codes, k)
+	m.forget(k)
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		err := v.RestoreVersion(k, n)
-		return doneMsg{what: fmt.Sprintf("%s's secret is version %d's again; the one it replaced is version 2", k, n), err: err, epoch: epoch, reread: true}
+		return doneMsg{what: fmt.Sprintf("Restored an earlier secret of %s; the one it replaced is kept", k), err: err, epoch: epoch, reread: true, forget: k}
 	})
 }
 
-// confirmDelete asks before moving the selected entry to the trash.
-func (m *Model) confirmDelete() tea.Cmd {
-	e := m.selected()
-	if e == nil {
-		return nil
-	}
+// confirmDelete asks before moving e to the trash.
+func (m *Model) confirmDelete(e *vault.Entry) tea.Cmd {
 	k := e.Key
-	m.ov = &overlay{kind: panelConfirm, title: "Delete",
-		question: fmt.Sprintf("Move %s to the trash? It can be put back from there.", entryName(e)),
-		yes: func() tea.Cmd {
+	m.ov = m.confirm(m.ov, "Delete",
+		fmt.Sprintf("Move %s to the trash? It can be put back from there.", entryName(e)),
+		func() tea.Cmd {
 			epoch := m.epoch
 			return m.read(func(v Vault, _ func() bool) tea.Msg {
-				return doneMsg{what: "Moved " + k.String() + " to the trash", err: v.Delete(k), epoch: epoch, reread: true}
+				return doneMsg{what: "Moved " + k.String() + " to the trash", err: v.Delete(k), epoch: epoch, reread: true, forget: k}
 			})
-		}}
+		})
 	return nil
+}
+
+// forget wipes what the app holds of k: its TOTP key and codes, its
+// notes, and its secrets if they're revealed. They're read again when
+// next shown.
+func (m *Model) forget(k vault.Key) {
+	secure.SecureZeroBytes(m.keys[k])
+	secure.SecureZeroBytes(m.notes[k])
+	delete(m.keys, k)
+	delete(m.pending, k)
+	delete(m.codes, k)
+	delete(m.notes, k)
+	delete(m.notesPending, k)
+	delete(m.notesFailed, k)
+	clear(m.wraps)
+	if m.shown != nil && m.shown.k == k {
+		m.hide()
+	}
 }
 
 // openTrash lists the trash.
 func (m *Model) openTrash() tea.Cmd {
 	epoch := m.epoch
-	m.ov = &overlay{kind: panelTrash, title: "The trash", loading: true}
+	m.ov = &overlay{kind: panelTrash, back: m.ov, title: "The trash", loading: true}
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		trash, err := v.Trash()
 		return trashMsg{trash: trash, err: err, epoch: epoch}
@@ -348,10 +381,9 @@ func (m *Model) openTrash() tea.Cmd {
 // restoreFromTrash puts the trash's entry id back.
 func (m *Model) restoreFromTrash(id int64) tea.Cmd {
 	epoch := m.epoch
-	m.ov = nil
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		k, err := v.RestoreFromTrash(id)
-		return doneMsg{what: "Put " + k.String() + " back from the trash", err: err, epoch: epoch, reread: true}
+		return doneMsg{what: "Put " + k.String() + " back from the trash", err: err, epoch: epoch, reread: true, closes: panelTrash}
 	})
 }
 
@@ -359,7 +391,7 @@ func (m *Model) restoreFromTrash(id int64) tea.Cmd {
 func (m *Model) removeFromTrash(id int64, k vault.Key) tea.Cmd {
 	epoch := m.epoch
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		return doneMsg{what: "Deleted " + k.String() + " for good", err: v.RemoveFromTrash(id), epoch: epoch}
+		return doneMsg{what: "Deleted " + k.String() + " for good", err: v.RemoveFromTrash(id), epoch: epoch, reread: true}
 	})
 }
 
@@ -370,10 +402,7 @@ func (m *Model) lockNow() tea.Cmd {
 	if lockAgent == nil {
 		return closing
 	}
-	return tea.Batch(closing, func() tea.Msg {
-		lockAgent() //nolint:errcheck,gosec // the app is locked either way
-		return nil
-	})
+	return tea.Batch(closing, func() tea.Msg { return agentLockedMsg{err: lockAgent()} })
 }
 
 // actionResult handles what an action's command came back with.
@@ -396,10 +425,20 @@ func (m *Model) actionResult(msg tea.Msg) tea.Cmd {
 		switch {
 		case errors.Is(msg.err, ErrLocked):
 			return m.lock(lockedReason(msg.err))
+		case msg.err != nil && m.ov != nil && m.ov.kind == msg.closes:
+			// Said in the panel, which has room for it, and stays open.
+			m.ov.err = msg.err.Error()
+			return nil
 		case msg.err != nil:
 			m.sayBad(msg.err.Error())
 		default:
 			m.say(msg.what)
+			if m.ov != nil && m.ov.kind == msg.closes {
+				m.ov = nil
+			}
+			if msg.forget != (vault.Key{}) {
+				m.forget(msg.forget)
+			}
 		}
 		if msg.reread {
 			return m.search()
@@ -422,11 +461,24 @@ func (m *Model) loaded(err error, fill func()) tea.Cmd {
 	return nil
 }
 
+// window is the rows [first, last) of n shown when only room fit, the
+// selected one among them.
+func window(sel, n, room int) (first, last int) {
+	if n <= room {
+		return 0, n
+	}
+	first = min(max(sel-room/2, 0), n-room)
+	return first, first + room
+}
+
 // drawOverlay draws the open panel as a card over the app, base.
 func (m *Model) drawOverlay(base string) string {
 	th := m.th
 	ov := m.ov
 	w := min(64, m.width-6)
+	// The rows that fit: the screen less the card's border, title, hint
+	// and the blank lines between.
+	room := max(m.height-8, 1)
 	var lines []string
 	row := func(i int, key, text string) string {
 		k := th.accented().Render(fmt.Sprintf("%-2s", key))
@@ -446,11 +498,12 @@ func (m *Model) drawOverlay(base string) string {
 	case ov.kind == panelHistory:
 		now := m.opts.Now()
 		if len(ov.versions) == 0 {
-			lines = append(lines, "", th.dimmed().Render("No earlier secrets: each time this one changes, the one it replaces is kept here."))
+			lines = append(lines, "", th.dimmed().Width(w-6).Render("No earlier secrets: each time this one changes, the one it replaces is kept here."))
 		}
-		for i, at := range ov.versions {
+		first, last := window(ov.sel, len(ov.versions), room)
+		for i := first; i < last; i++ {
 			when := "replaced at an unknown time"
-			if !at.IsZero() {
+			if at := ov.versions[i]; !at.IsZero() {
 				when = "replaced " + ago(now, at)
 			}
 			lines = append(lines, row(i, "", fmt.Sprintf("version %d  %s", i+2, when)))
@@ -460,12 +513,16 @@ func (m *Model) drawOverlay(base string) string {
 		if len(ov.trash) == 0 {
 			lines = append(lines, "", th.dimmed().Render("The trash is empty."))
 		}
-		for i, t := range ov.trash {
-			lines = append(lines, row(i, "", fmt.Sprintf("%s  %s", t.Key, th.dimmed().Render("deleted "+ago(now, t.DeletedAt)))))
+		first, last := window(ov.sel, len(ov.trash), room)
+		for i := first; i < last; i++ {
+			t := ov.trash[i]
+			lines = append(lines, row(i, "", fmt.Sprintf("%s  %s", t.Key, th.dimmed().Render(fmt.Sprintf("trash id %d, deleted %s", t.ID, ago(now, t.DeletedAt))))))
 		}
 	default:
-		for i, it := range ov.items {
-			if it.rule {
+		first, last := window(ov.sel, len(ov.items), room)
+		for i := first; i < last; i++ {
+			it := ov.items[i]
+			if it.rule && i > first {
 				lines = append(lines, th.lines().Render(strings.Repeat("─", w-6)))
 			}
 			lines = append(lines, row(i, it.key, it.label))
@@ -487,6 +544,6 @@ func (m *Model) drawOverlay(base string) string {
 	card := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(th.accent).Padding(0, 2).Width(w).
 		Render(lipgloss.JoinVertical(lipgloss.Left, append([]string{title}, lines...)...))
 	x := max((m.width-lipgloss.Width(card))/2, 0)
-	y := max((m.height-lipgloss.Height(card))/3, 0)
+	y := max(min((m.height-lipgloss.Height(card))/3, m.height-lipgloss.Height(card)), 0)
 	return lipgloss.NewCompositor(lipgloss.NewLayer(base), lipgloss.NewLayer(card).X(x).Y(y).Z(1)).Render()
 }

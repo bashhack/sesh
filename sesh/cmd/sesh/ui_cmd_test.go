@@ -476,3 +476,29 @@ func TestUI_Actions(t *testing.T) {
 		}
 	}
 }
+
+// The app's own write doesn't hide a change another command made just
+// before it; with no agent running, there's none to lock.
+func TestUI_OwnWriteKeepsOthersChange(t *testing.T) {
+	filingVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	if changed, err := u.Check(); changed || err != nil {
+		t.Fatalf("Check = %v, %v", changed, err)
+	}
+	putSecrets(t, vault.Key{Kind: vault.KindPassword, Service: "gitlab"}, "changed elsewhere")
+	if err := u.Delete(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := u.Check(); !changed || err != nil {
+		t.Errorf("Check after another command's change and the app's own write = %v, %v; want a change", changed, err)
+	}
+	t.Setenv("SESH_AUTH_SOCK", tempAgentSocket(t))
+	if err := lockAgent(); err != nil {
+		t.Errorf("lockAgent with no agent running: %v", err)
+	}
+}

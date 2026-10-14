@@ -377,7 +377,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.spin, cmd = m.spin.Update(msg)
 		return cmd
 	case tea.MouseClickMsg:
-		if m.v == nil || msg.Button != tea.MouseLeft || !m.listShown() {
+		if m.v == nil || msg.Button != tea.MouseLeft || !m.listShown() || m.ov != nil {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
@@ -388,7 +388,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		return m.keepAlive()
 	case tea.MouseWheelMsg:
-		if m.v == nil || !m.listShown() {
+		if m.v == nil || !m.listShown() || m.ov != nil {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
@@ -419,6 +419,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case historyMsg, trashMsg, doneMsg:
 		return m.actionResult(msg)
+	case agentLockedMsg:
+		if msg.err != nil && m.v == nil {
+			m.lockedWhy = "Locked, but sesh's agent couldn't be locked (" + msg.err.Error() + "): lock it with sesh agent lock."
+		}
+		return nil
 	case notesMsg:
 		return m.gotNotes(&msg)
 	case revealMsg:
@@ -508,8 +513,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return m.failure(msg.err)
 		}
 		if msg.changed {
-			// Entries may have changed, keys with them: read again.
+			// Entries may have changed, keys with them: read again. A
+			// panel open on what they were is closed, not left to act on
+			// what they are now.
 			m.wipe()
+			if m.ov != nil {
+				m.ov = nil
+				m.sayBad("Another command changed the vault; open the actions again.")
+			}
 			return m.search()
 		}
 		return nil

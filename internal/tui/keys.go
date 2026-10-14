@@ -36,15 +36,19 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		switch msg.String() {
 		case "ctrl+k":
+			// With text after the cursor, Ctrl-K deletes it, as in a shell.
+			if m.input.Position() < len([]rune(m.input.Value())) {
+				return m.typed(msg)
+			}
 			return m.openMenu()
 		case "tab":
 			return m.toggleReveal()
 		case "ctrl+y":
-			return m.copyUsername()
+			return m.copyUsername(m.selected())
 		case "ctrl+o":
-			return m.openURL()
+			return m.openURL(m.selected())
 		}
-		return m.copySelected()
+		return m.copySecret(m.selected())
 	case "up", "ctrl+p":
 		m.sel--
 	case "down", "ctrl+n":
@@ -153,13 +157,13 @@ func trimNewlines(text string) string {
 	return strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(text)
 }
 
-// copySelected copies the selected entry's secret, or its TOTP code, to
-// the clipboard: a read the audit log records.
-func (m *Model) copySelected() tea.Cmd {
-	if m.sel < 0 || m.sel >= len(m.rows) {
+// copySecret copies the entry sel's secret, or its TOTP code, to the
+// clipboard: a read the audit log records.
+func (m *Model) copySecret(sel *vault.Entry) tea.Cmd {
+	if sel == nil {
 		return nil
 	}
-	e := m.rows[m.sel]
+	e := *sel
 	epoch, opts := m.epoch, m.opts
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		reading := "in sesh ui, to copy it"
@@ -258,6 +262,8 @@ func entryName(e *vault.Entry) string {
 // secretWord names what copying an entry of kind k copies.
 func secretWord(k vault.Kind) string {
 	switch k {
+	case vault.KindTOTP:
+		return "code"
 	case vault.KindAPIKey:
 		return "key"
 	case vault.KindNote:
@@ -266,10 +272,9 @@ func secretWord(k vault.Kind) string {
 	return "password"
 }
 
-// copyUsername copies the selected entry's username, which isn't secret,
+// copyUsername copies e's username, which isn't secret,
 // so nothing is read from the vault for it.
-func (m *Model) copyUsername() tea.Cmd {
-	e := m.selected()
+func (m *Model) copyUsername(e *vault.Entry) tea.Cmd {
 	if e == nil {
 		return nil
 	}
@@ -296,9 +301,8 @@ type openedMsg struct {
 	url string
 }
 
-// openURL opens the selected entry's URL in the browser.
-func (m *Model) openURL() tea.Cmd {
-	e := m.selected()
+// openURL opens e's URL in the browser.
+func (m *Model) openURL(e *vault.Entry) tea.Cmd {
 	if e == nil {
 		return nil
 	}
