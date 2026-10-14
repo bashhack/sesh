@@ -34,6 +34,18 @@ type lockedError struct{ why string }
 func (e *lockedError) Error() string        { return e.why }
 func (e *lockedError) Is(target error) bool { return target == ErrLocked }
 
+// ErrExists is a file refused because one is already where it would go:
+// asked about, it can be replaced.
+var ErrExists = errors.New("exists")
+
+// Exists is ErrExists, saying why.
+func Exists(why string) error { return &existsError{why: why} }
+
+type existsError struct{ why string }
+
+func (e *existsError) Error() string        { return e.why }
+func (e *existsError) Is(target error) bool { return target == ErrExists }
+
 // ErrRefused is a change refused for good: trying it again can't help.
 var ErrRefused = errors.New("refused")
 
@@ -231,6 +243,16 @@ type Options struct {
 	// another vault's file, which it otherwise refuses with ErrRefused.
 	TouchIDState func() (TouchID, error)
 	SetTouchID   func(on, takeOther bool) (string, error)
+	// Backups lists the vault's backups; nil: they aren't offered. BackUp
+	// makes one: in the backups folder, or at to, replacing a file there
+	// only when replace (ErrExists otherwise). DeleteBackup deletes one.
+	// PlanRestore says what restoring the vault from one does, and Restore
+	// does it, saying what it did.
+	Backups      func() (Backups, error)
+	BackUp       func(to string, replace bool) (string, error)
+	DeleteBackup func(path string) (string, error)
+	PlanRestore  func(path string) (string, error)
+	Restore      func(path string) (string, error)
 	// TouchIDOn says whether Touch ID unlock is on now, for the locked
 	// screen; nil: TouchID being there says so.
 	TouchIDOn  func() bool
@@ -602,6 +624,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.gotRecovery(&msg)
 	case touchIDMsg:
 		return m.gotTouchID(&msg)
+	case backupsMsg:
+		return m.gotBackups(&msg)
+	case backedUpMsg:
+		return m.backedUp(&msg)
+	case restorePlanMsg:
+		return m.askRestore(&msg)
+	case restoredMsg:
+		return m.restored(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"
@@ -630,6 +660,17 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.editing = vault.Key{}
 		if m.v == nil {
 			return m.lockedKey(msg)
+		}
+		if m.changing && m.form == nil {
+			// The vault is being restored: only Ctrl-C does anything, once
+			// that's done.
+			if msg.String() == "ctrl+c" {
+				m.quitAfter = true
+				if p := m.backupsPanel(); p != nil {
+					p.busy = "Quitting once the vault is restored…"
+				}
+			}
+			return nil
 		}
 		if m.form != nil {
 			return tea.Batch(m.formKey(msg), m.keepAlive())

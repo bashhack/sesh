@@ -28,6 +28,7 @@ const (
 	panelSettings                  // settings and safety
 	panelChecks                    // sesh doctor's checks
 	panelNotice                    // what a change did, to read
+	panelBackups                   // the vault's backups
 )
 
 // overlay is a panel over the app, about the entry k.
@@ -39,13 +40,16 @@ type overlay struct {
 	question string // a confirmation's
 	title    string
 	err      string
+	busy     string // said instead of "Loading…" while it waits
 	items    []item
 	versions []time.Time
 	trash    []Trashed
+	backups  []Backup // the backups panel's, as its rows list them
 	kind     panel
 	sel      int
 	loading  bool
 	danger   bool // a confirmation of something that can't be undone
+	wide     bool // drawn as wide as the settings panel: a long question
 	filled   bool // a report's rows are in, so none means nothing was found
 }
 
@@ -129,6 +133,7 @@ func (m *Model) globalItems() []item {
 	return []item{
 		{key: "a", label: "add an entry…", run: m.openAdd},
 		{key: "t", label: "the trash…", run: m.openTrash},
+		{key: "b", label: "backups…", run: m.openBackups},
 		{key: "r", label: "health report…", run: m.openHealth},
 		{key: ",", label: "settings and safety…", run: m.openSettings},
 		{key: "l", label: "lock sesh", run: m.lockNow},
@@ -239,6 +244,8 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 		m.ov = m.confirm(ov, "Restore",
 			fmt.Sprintf("Make version %d the secret for %s again? The current one is kept as an earlier secret.", n, short(keyName(key))),
 			func() tea.Cmd { return m.restoreVersion(key, n) })
+	case ov.kind == panelBackups:
+		return m.backupsLetter(k)
 	case ov.kind == panelTrash && (k == "x" || k == "delete") && ov.sel < len(ov.trash):
 		id, k := ov.trash[ov.sel].ID, ov.trash[ov.sel].Key
 		m.ov = m.confirm(ov, "Delete for good",
@@ -525,7 +532,7 @@ func (m *Model) drawOverlay(base string) string {
 	th := m.th
 	ov := m.ov
 	w := min(64, m.width-6)
-	if ov.kind == panelSettings || ov.kind == panelChecks {
+	if ov.kind == panelSettings || ov.kind == panelChecks || ov.kind == panelBackups || ov.wide {
 		w = min(96, m.width-6)
 	}
 	// The rows that fit: the screen less the card's border, title, hint
@@ -557,11 +564,21 @@ func (m *Model) drawOverlay(base string) string {
 	}
 	switch {
 	case ov.kind == panelConfirm || ov.kind == panelNotice:
-		lines = append(lines, "", th.style().Width(w-6).Render(ov.question))
+		// Its end is cut to fit, keeping the keys that answer it on screen.
+		said := strings.Split(th.style().Width(w-6).Render(ov.question), "\n")
+		if len(said) > room {
+			said = append(said[:max(room-1, 0)], th.dimmed().Render("… (a bigger window shows the rest)"))
+		}
+		lines = append(lines, "")
+		lines = append(lines, said...)
+	case ov.loading && ov.busy != "":
+		lines = append(lines, "", th.dimmed().Render(ov.busy))
 	case ov.loading:
 		lines = append(lines, "", th.dimmed().Render("Loading…"))
 	case ov.err != "" && ov.len() == 0:
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(th.bad).Width(w-6).Render(ov.err))
+	case ov.kind == panelBackups && ov.filled && len(ov.items) == 0:
+		lines = append(lines, "", th.dimmed().Width(w-6).Render("No backups yet: n backs the vault up now."))
 	case ov.kind == panelHealth && ov.filled && len(ov.items) == 0:
 		lines = append(lines, "", th.dimmed().Width(w-6).Render("Nothing is weak, used twice, or old."))
 	case ov.kind == panelHistory:
@@ -652,6 +669,24 @@ func (m *Model) drawOverlay(base string) string {
 		}
 	case panelNotice:
 		hint = th.hints([2]string{"↵", "ok"})
+	case panelBackups:
+		hint = th.hints([2]string{"↵", "restore"}, [2]string{"n", "back up now"}, [2]string{"f", "to a file"}, [2]string{"x", "delete"}, [2]string{"a", "delete all"}, [2]string{"esc", "back"})
+		// Narrower, the letters alone, which the selected backup's detail
+		// spells out; then only Enter's.
+		for _, h := range []string{th.hints([2]string{"↵", "restore"}, [2]string{"n f x a", ""}, [2]string{"esc", "back"}), th.hints([2]string{"↵", "restore"}, [2]string{"esc", "back"})} {
+			if lipgloss.Width(hint) > w-6 {
+				hint = h
+			}
+		}
+		if len(ov.items) == 0 {
+			hint = th.hints([2]string{"n", "back up now"}, [2]string{"f", "to a file"}, [2]string{"esc", "back"})
+			if lipgloss.Width(hint) > w-6 {
+				hint = th.hints([2]string{"n", "back up"}, [2]string{"esc", "back"})
+			}
+		}
+		if ov.loading && ov.busy != "" {
+			hint = th.hints([2]string{"ctrl+c", "quit once it's done"})
+		}
 	default:
 		hint = th.hints([2]string{"↵", "choose, or press its key"}, [2]string{"esc", "back"})
 	}

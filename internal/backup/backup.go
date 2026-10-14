@@ -191,14 +191,24 @@ func MakeTo(vaultPath, dest string, force bool, now time.Time) (Info, error) {
 		}
 		dest = filepath.Join(dest, s.Name(now))
 	}
+	if isVaultFile(vaultPath, dest) {
+		return Info{}, fmt.Errorf("%s is the vault itself, or one of its files; back it up somewhere else", dest)
+	}
 	if err := write(vaultPath, dest, force); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return Info{}, fmt.Errorf("%s already exists; add --force to replace it", dest)
+			return Info{}, &ExistsError{Path: dest}
 		}
 		return Info{}, err
 	}
 	return stat(dest, now)
 }
+
+// ExistsError is a backup refused because a file is where it would go;
+// it matches os.ErrExist.
+type ExistsError struct{ Path string }
+
+func (e *ExistsError) Error() string { return e.Path + " already exists; add --force to replace it" }
+func (e *ExistsError) Unwrap() error { return os.ErrExist }
 
 // write copies the vault to dest through a private file beside it, renamed
 // into place, so a copy cut short never stands as a backup. It's an error
@@ -331,4 +341,58 @@ func ListAny(dir, vaultPath string) ([]Info, []string, error) {
 		infos[i], ids[i] = f.info, f.id
 	}
 	return infos, ids, nil
+}
+
+// Remove removes the backup at path: one ListAny lists in dir for the
+// vault at vaultPath, and nothing else.
+func Remove(dir, vaultPath, path string) error {
+	all, _, err := ListAny(dir, vaultPath)
+	if err != nil {
+		return err
+	}
+	for _, b := range all {
+		if b.Path == path {
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("remove the backup: %w", err)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("%s isn't one of the backups in %s", filepath.Base(path), dir)
+}
+
+// isVaultFile says whether path is the vault at vaultPath, or its -wal,
+// -shm or -journal file: a backup written there would replace a file the
+// vault, open in another sesh, is using. Names are compared ignoring case,
+// as macOS's file system does, and through links; files there already are
+// compared as files.
+func isVaultFile(vaultPath, path string) bool {
+	clean := func(p string) string {
+		if abs, err := filepath.Abs(p); err == nil {
+			p = abs
+		}
+		// The folders through links, as the files are reached.
+		if dir, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
+			p = filepath.Join(dir, filepath.Base(p))
+		}
+		return p
+	}
+	vaults := []string{clean(vaultPath)}
+	if target, err := filepath.EvalSymlinks(vaultPath); err == nil {
+		// A vault reached through a link: its files are beside the target.
+		vaults = append(vaults, clean(target))
+	}
+	dest := clean(path)
+	destInfo, destErr := os.Stat(path)
+	for _, vault := range vaults {
+		for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+			if strings.EqualFold(dest, vault+suffix) {
+				return true
+			}
+			if info, err := os.Stat(vault + suffix); err == nil && destErr == nil && os.SameFile(info, destInfo) {
+				return true
+			}
+		}
+	}
+	return false
 }
