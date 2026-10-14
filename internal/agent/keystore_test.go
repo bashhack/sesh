@@ -546,10 +546,12 @@ func (c *fakeClock) sleep(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.now != c.now.Round(0) {
+		// The timers' deadlines are compared by the monotonic reading,
+		// which the sleep leaves where it was.
 		c.now = wallJump(c.now, d)
-	} else {
-		c.now = c.now.Add(d)
+		return
 	}
+	c.now = c.now.Add(d)
 	for _, t := range c.timers {
 		t.at = t.at.Add(d)
 	}
@@ -614,5 +616,16 @@ func TestKeystore_LocksAfterSleep(t *testing.T) {
 	clk.sleep(5 * time.Minute)
 	if _, err := ks.copyKey(UnlockID(verify)); err != nil || !isUnlocked(ks) {
 		t.Errorf("after a short sleep: %v", err)
+	}
+}
+
+// A sleep moves no timer nearer, or farther: an idle timer still fires its
+// timeout after the last use, by the monotonic clock.
+func TestFakeClockSleepKeepsTimers(t *testing.T) {
+	ks, clk, _ := timedKeystore(t, 10*time.Minute, 0)
+	clk.sleep(time.Minute)
+	clk.advance(10 * time.Minute)
+	if isUnlocked(ks) {
+		t.Error("the idle timer didn't fire 10 minutes after the use, sleep aside")
 	}
 }

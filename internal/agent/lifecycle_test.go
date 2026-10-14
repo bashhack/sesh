@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/bashhack/sesh/internal/touchid"
 )
 
 // serve starts a server with opts and returns it plus a channel that
@@ -409,4 +411,55 @@ func TestServer_LocksAfterSleep(t *testing.T) {
 			t.Fatal("the sweep didn't lock and stop the agent")
 		}
 	})
+}
+
+// After a sleep, an unlock with Touch ID as the first request asks for the
+// fingerprint: the key past its deadline isn't taken as unlocked.
+func TestTouchIDFirstAfterSleep(t *testing.T) {
+	clk := monoClock()
+	sockPath := tempSocketPath(t)
+	serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute))
+	pub, prompts := softwareChip(t, nil)
+	conn, verify, id := unlockForTouchID(t, sockPath)
+	defer mustClose(t, conn)
+	w, err := WrapKey(conn, id, WrapForTouchID, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.sleep(8 * time.Hour)
+	if err := UnlockTouchID(conn, touchid.NewFile(id, []byte("chip blob"), pub, w), verify); err != nil {
+		t.Fatal(err)
+	}
+	if *prompts != 1 {
+		t.Errorf("Touch ID prompts = %d, want 1: the expired key was taken as unlocked", *prompts)
+	}
+}
+
+// After a late lock, an agent unlocked again and then locked by hand keeps
+// running: a lock asked for doesn't stop it, and the stop scheduled at the
+// late lock is for that lock only.
+func TestServer_ManualLockAfterLateLock(t *testing.T) {
+	clk := monoClock()
+	sockPath := tempSocketPath(t)
+	_, done := serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute), WithExitOnAutoLock())
+	conn, _ := unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+	clk.sleep(8 * time.Hour)
+	if st, err := Status(conn); err != nil || st.Unlocked {
+		t.Fatalf("status after the sleep: %+v, %v", st, err)
+	}
+	params := lightParams()
+	salt, verify := sealVerify(t, "correct-horse", params)
+	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); err != nil {
+		t.Fatal(err)
+	}
+	if err := Lock(conn); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(11 * time.Minute)
+	select {
+	case <-done:
+		t.Fatal("the agent stopped after a lock asked for")
+	case <-time.After(100 * time.Millisecond):
+	}
 }
