@@ -29,6 +29,7 @@ const (
 	panelChecks                    // sesh doctor's checks
 	panelNotice                    // what a change did, to read
 	panelBackups                   // the vault's backups
+	panelImport                    // what an import would do
 )
 
 // overlay is a panel over the app, about the entry k.
@@ -150,6 +151,10 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+c":
 		return tea.Quit
 	case "esc":
+		if ov.kind == panelImport {
+			// What the import read is let go, and wiped.
+			m.endImport()
+		}
 		m.ov = ov.back
 		return nil
 	}
@@ -247,6 +252,8 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 			func() tea.Cmd { return m.restoreVersion(key, n) })
 	case ov.kind == panelBackups:
 		return m.backupsLetter(k)
+	case ov.kind == panelImport:
+		return m.importLetter(k)
 	case ov.kind == panelTrash && (k == "x" || k == "delete") && ov.sel < len(ov.trash):
 		id, k := ov.trash[ov.sel].ID, ov.trash[ov.sel].Key
 		m.ov = m.confirm(ov, "Delete for good",
@@ -533,7 +540,7 @@ func (m *Model) drawOverlay(base string) string {
 	th := m.th
 	ov := m.ov
 	w := min(64, m.width-6)
-	if ov.kind == panelSettings || ov.kind == panelChecks || ov.kind == panelBackups || ov.wide {
+	if ov.kind == panelSettings || ov.kind == panelChecks || ov.kind == panelBackups || ov.kind == panelImport || ov.wide {
 		w = min(96, m.width-6)
 	}
 	// The rows that fit: the screen less the card's border, title, hint
@@ -670,6 +677,8 @@ func (m *Model) drawOverlay(base string) string {
 		}
 	case panelNotice:
 		hint = th.hints([2]string{"↵", "ok"})
+	case panelImport:
+		hint = m.importHint(w - 6)
 	case panelBackups:
 		hint = th.hints([2]string{"↵", "restore"}, [2]string{"n", "back up now"}, [2]string{"f", "to a file"}, [2]string{"x", "delete"}, [2]string{"a", "delete all"}, [2]string{"esc", "back"})
 		// Narrower, the letters alone, which the selected backup's detail
