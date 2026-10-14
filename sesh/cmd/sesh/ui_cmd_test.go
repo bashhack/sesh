@@ -840,3 +840,35 @@ func TestUI_Settings(t *testing.T) {
 		t.Errorf("a refused value: %v", err)
 	}
 }
+
+// The app's checks are sesh doctor's, run on its open vault without asking for the master password,
+// and recorded as doctor's are.
+func TestUI_Checks(t *testing.T) {
+	healthVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	c, err := u.Checks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []string
+	for _, ch := range c.Checks {
+		rows = append(rows, ch.Section+"|"+ch.Mark+"|"+ch.Label+"|"+ch.Value)
+	}
+	all := strings.Join(rows, "\n")
+	for _, want := range []string{"Setup|", "|ok|Entries|4 entries, all readable", "|warn|Recovery key|"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("missing %q in:\n%s", want, all)
+		}
+	}
+	if !strings.HasPrefix(c.Summary, "OK") || len(c.ToDo) == 0 {
+		t.Errorf("summary %q, to do %q", c.Summary, c.ToDo)
+	}
+	if log := mustRun(t, runAudit); !strings.Contains(log, "doctor") {
+		t.Errorf("audit:\n%s", log)
+	}
+}

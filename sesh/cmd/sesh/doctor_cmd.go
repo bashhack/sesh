@@ -23,6 +23,7 @@ import (
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/touchid"
+	"github.com/bashhack/sesh/internal/tui"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -396,7 +397,20 @@ func checkVault(c *doctorChecks, cfg *config.Config, dbPath string, mat *databas
 		return damaged(err)
 	}
 	defer closeAuditStore(store)
+	return verifyVault(c, store, mat, touchFile, touchErr)
+}
 
+// verifyVault checks the open vault store: its file, every entry, the
+// trash, the history, the recovery key, and Touch ID (as found, touchFile).
+func verifyVault(c *doctorChecks, store *database.Store, mat *database.UnlockMaterial, touchFile *touchid.File, touchErr error) error {
+	damaged := func(err error) error {
+		if database.IsDamaged(err) {
+			c.row(markFail, "File", "damaged", err.Error())
+			c.todo("Restore the vault from a backup, such as an encrypted export.")
+			return nil
+		}
+		return err
+	}
 	report, err := store.Verify()
 	switch {
 	case errors.Is(err, database.ErrVaultKeyChanged):
@@ -518,10 +532,13 @@ const (
 	markNone = "-"
 )
 
-// doctorChecks collects the report's rows, what to do, and the tally.
+// doctorChecks collects the report's rows, what to do, and the tally:
+// as text, and as checks, for sesh ui.
 type doctorChecks struct {
+	part         string // the section rows go under
 	rows         strings.Builder
 	todos        [][]string
+	checks       []tui.Check
 	fails, warns int
 	// unchecked is set when the vault part was skipped, so the tally
 	// doesn't speak for it.
@@ -531,6 +548,7 @@ type doctorChecks struct {
 // section starts a part of the report under title.
 func (c *doctorChecks) section(title string) {
 	c.rows.WriteString(title + "\n")
+	c.part = strings.TrimSpace(title[strings.LastIndex(title, "\n")+1:])
 }
 
 // row adds a check's result, with any details under it.
@@ -545,6 +563,7 @@ func (c *doctorChecks) row(mark, label, value string, details ...string) {
 	for _, d := range details {
 		fmt.Fprintf(&c.rows, "%24s%s\n", "", d)
 	}
+	c.checks = append(c.checks, tui.Check{Section: c.part, Mark: mark, Label: label, Value: value, Details: details})
 }
 
 // todo adds a step to what to do: what to do, then any commands to run.
@@ -768,4 +787,49 @@ func checkTouchID(c *doctorChecks, f *touchid.File, err error, id string) {
 		return
 	}
 	c.todo("Optional: turn Touch ID back on:", "sesh touchid enable")
+}
+
+// doctorChecks is sesh doctor's checks, for sesh ui: the setup's, then the
+// vault's on store, which the app has open, so nothing asks for the master
+// password. The run is recorded in the audit log, as sesh doctor's is.
+func doctorReport(app *App, store *database.Store) (tui.Checks, error) {
+	var c doctorChecks
+	c.section("Setup")
+	checkSetup(&c, app)
+	cfg, err := settings()
+	if err != nil {
+		return c.report(), nil // the setup's rows say so
+	}
+	dbPath := cfg.DBPath.Value
+	c.section("Vault: " + tildePath(dbPath))
+	mat, err := database.ReadUnlockMaterial(dbPath)
+	if err != nil {
+		c.row(markFail, "File", "damaged", err.Error())
+		return c.report(), nil
+	}
+	touchFile, touchErr := touchid.ReadFile(filepath.Dir(dbPath))
+	if err := verifyVault(&c, store, &mat, touchFile, touchErr); err != nil {
+		return tui.Checks{}, err
+	}
+	return c.report(), nil
+}
+
+// report is the checks made, what to do, and their sum, as sesh ui shows
+// them.
+func (c *doctorChecks) report() tui.Checks {
+	var tally []string
+	if c.fails > 0 {
+		tally = append(tally, countOf(int64(c.fails), "problem"))
+	}
+	if c.warns > 0 {
+		tally = append(tally, countOf(int64(c.warns), "warning"))
+	}
+	summary := "OK: no problems"
+	switch {
+	case c.fails > 0:
+		summary = "FAIL: " + strings.Join(tally, ", ")
+	case c.warns > 0:
+		summary = "OK, with " + tally[0]
+	}
+	return tui.Checks{Summary: summary, Checks: c.checks, ToDo: c.todos}
 }

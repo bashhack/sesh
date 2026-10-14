@@ -425,6 +425,11 @@ func (u *uiVault) Health(now time.Time, oldAfter time.Duration) (health.Report, 
 	return c.Report(), nil
 }
 
+func (u *uiVault) Checks() (tui.Checks, error) {
+	c, err := doctorReport(nil, u.store)
+	return c, uiLocked(err)
+}
+
 func (u *uiVault) Filing() ([]tui.Folder, []tui.Tag, error) {
 	fs, err := u.store.Folders()
 	if err != nil {

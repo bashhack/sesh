@@ -148,6 +148,8 @@ type Vault interface {
 	// reused, and not changed in oldAfter (0 doesn't check). Reading them
 	// is one audit event.
 	Health(now time.Time, oldAfter time.Duration) (health.Report, error)
+	// Checks runs sesh doctor's checks on the vault, open as it is.
+	Checks() (Checks, error)
 	// Filing is the folders, with the folders above them, and the tags the
 	// vault's entries have, each with how many entries are in it.
 	Filing() ([]Folder, []Tag, error)
@@ -543,6 +545,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.actionResult(msg)
 	case settingsMsg:
 		return m.gotSettings(&msg)
+	case checksMsg:
+		return m.gotChecks(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"

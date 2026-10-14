@@ -26,6 +26,7 @@ const (
 	panelConfirm                   // a yes or no before a change
 	panelHealth                    // what's wrong with the passwords and API keys
 	panelSettings                  // settings and safety
+	panelChecks                    // sesh doctor's checks
 )
 
 // overlay is a panel over the app, about the entry k.
@@ -40,7 +41,6 @@ type overlay struct {
 	items    []item
 	versions []time.Time
 	trash    []Trashed
-	settings []Setting
 	kind     panel
 	sel      int
 	loading  bool
@@ -51,11 +51,12 @@ type overlay struct {
 // item is one line of a menu: a key that runs it, what it says, and what
 // it does.
 type item struct {
-	run   func() tea.Cmd
-	key   string
-	label string
-	rule  bool // a line between groups, before it
-	stay  bool // running it leaves the panel open
+	run    func() tea.Cmd
+	key    string
+	label  string
+	detail string // said below the rows while it's the one selected
+	rule   bool   // a line between groups, before it
+	stay   bool   // running it leaves the panel open
 }
 
 // Messages from the actions.
@@ -516,7 +517,7 @@ func (m *Model) drawOverlay(base string) string {
 	th := m.th
 	ov := m.ov
 	w := min(64, m.width-6)
-	if ov.kind == panelSettings {
+	if ov.kind == panelSettings || ov.kind == panelChecks {
 		w = min(96, m.width-6)
 	}
 	// The rows that fit: the screen less the card's border, title, hint
@@ -590,8 +591,8 @@ func (m *Model) drawOverlay(base string) string {
 	}
 	// The selected setting's details, below its rows, when two of those
 	// still fit beside them.
-	if detail := ""; ov.kind == panelSettings && ov.sel < len(ov.settings) && !ov.loading {
-		detail = th.dimmed().Width(w - 6).Render(settingDetail(&ov.settings[ov.sel]))
+	if ov.sel < len(ov.items) && ov.items[ov.sel].detail != "" && !ov.loading {
+		detail := th.dimmed().Width(w - 6).Render(ov.items[ov.sel].detail)
 		if fit := room - lipgloss.Height(detail) - 1; fit >= 2 {
 			if len(lines) > fit {
 				first, last := window(ov.sel, len(ov.items), fit)
@@ -621,6 +622,11 @@ func (m *Model) drawOverlay(base string) string {
 		}
 	case panelSettings:
 		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})
+		if ov.sel == 0 {
+			hint = th.hints([2]string{"↵", "run them"}, [2]string{"esc", "back"})
+		}
+	case panelChecks:
+		hint = th.hints([2]string{"↑↓", "read"}, [2]string{"esc", "back"})
 	case panelHealth:
 		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})
 		switch {
