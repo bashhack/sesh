@@ -135,6 +135,9 @@ func (m *Model) toggleReveal() tea.Cmd {
 		m.hide()
 		return nil
 	}
+	if m.revealing {
+		return nil
+	}
 	k, kind := e.Key, e.Kind
 	secretFields := false
 	for _, f := range e.Fields {
@@ -145,6 +148,7 @@ func (m *Model) toggleReveal() tea.Cmd {
 		return nil
 	}
 	epoch := m.epoch
+	m.revealing = true
 	return m.read(func(v Vault, closed func() bool) tea.Msg {
 		msg := revealMsg{k: k, epoch: epoch}
 		if kind != vault.KindNote && kind != vault.KindTOTP {
@@ -171,6 +175,7 @@ func whatsHidden(k vault.Kind) string {
 
 // gotReveal shows what was revealed, while the entry stays selected.
 func (m *Model) gotReveal(msg *revealMsg) tea.Cmd {
+	m.revealing = false
 	r := &revealed{k: msg.k, secret: msg.secret, fields: msg.fields, until: m.opts.Now().Add(revealFor)}
 	if msg.epoch != m.epoch || m.v == nil || m.selKey != msg.k {
 		r.wipe()
@@ -189,10 +194,31 @@ func (m *Model) gotReveal(msg *revealMsg) tea.Cmd {
 	return nil
 }
 
-// hide wipes secrets revealed.
+// hide wipes secrets revealed, and their wrapped lines.
 func (m *Model) hide() {
 	m.shown.wipe()
 	m.shown = nil
+	for id := range m.wraps {
+		if strings.HasPrefix(id, "reveal ") {
+			delete(m.wraps, id)
+		}
+	}
+}
+
+// wrapped is text wrapped to a width.
+type wrapped struct {
+	lines []string
+	width int
+}
+
+// wrap is s wrapped to w, wrapped once for id at each width.
+func (m *Model) wrap(id, s string, w int) []string {
+	if c, ok := m.wraps[id]; ok && c.width == w {
+		return c.lines
+	}
+	lines := strings.Split(wrapText(s, w), "\n")
+	m.wraps[id] = wrapped{lines: lines, width: w}
+	return lines
 }
 
 // scrollPreview moves the preview by n lines.
@@ -253,6 +279,15 @@ func (m *Model) previewLines(w, h int) []string {
 			add(label(lab) + style.Render(l))
 		}
 	}
+	secretField := func(name string, lines []string, style lipgloss.Style) {
+		for i, l := range lines {
+			lab := ""
+			if i == 0 {
+				lab = name
+			}
+			add(label(lab) + style.Render(l))
+		}
+	}
 	plain := th.style()
 	shown := m.shown != nil && m.shown.k == e.Key
 	hidden := th.dimmed().Render("••••••••")
@@ -262,7 +297,7 @@ func (m *Model) previewLines(w, h int) []string {
 			name = "key"
 		}
 		if shown {
-			field(name, string(m.shown.secret), th.accented())
+			secretField(name, m.wrap("reveal "+name, string(m.shown.secret), valueWidth), th.accented())
 		} else {
 			add(label(name) + hidden)
 		}
@@ -274,7 +309,7 @@ func (m *Model) previewLines(w, h int) []string {
 		case !f.Secret:
 			field(f.Name, string(f.Value), plain)
 		case shown:
-			field(f.Name, revealedField(m.shown, f.Name), th.accented())
+			secretField(f.Name, m.wrap("reveal field "+f.Name, revealedField(m.shown, f.Name), valueWidth), th.accented())
 		default:
 			add(label(f.Name) + hidden)
 		}
@@ -297,7 +332,7 @@ func (m *Model) previewLines(w, h int) []string {
 		add("")
 		switch notes, ok := m.notes[e.Key]; {
 		case ok:
-			for l := range strings.SplitSeq(wrapText(string(notes), w-3), "\n") {
+			for _, l := range m.wrap("notes "+e.Key.String(), string(notes), w-3) {
 				add(plain.Render(l))
 			}
 		case m.notesFailed[e.Key] != "":

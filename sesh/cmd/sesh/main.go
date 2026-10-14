@@ -280,13 +280,11 @@ func checkCommandWord(args []string) error {
 	}
 	word := args[1]
 	trimmed := strings.ToLower(strings.TrimRight(word, ".,;:!?"))
-	best, bestDist := "", 3
+	// A typo is a slip or two in a word of some length: a short word is
+	// suggested only when it's exactly a command.
+	best, bestDist := "", min(len([]rune(trimmed))/3, 2)+1
 	for _, c := range subcommands {
-		d := password.EditDistance(trimmed, c.value)
-		if trimmed == c.value {
-			d = 0
-		}
-		if d < bestDist {
+		if d := password.EditDistance(trimmed, c.value); d < bestDist {
 			best, bestDist = c.value, d
 		}
 	}

@@ -392,3 +392,28 @@ func TestUI_RecentFirst(t *testing.T) {
 		t.Errorf("order = %q, %v; want My Bank, then gitlab, first", got, err)
 	}
 }
+
+// Another window's reads (audit events) aren't changes; a store is.
+func TestUI_CheckIgnoresAuditOnly(t *testing.T) {
+	filingVault(t)
+	open := func() *uiVault {
+		store, err := openSQLiteStore()
+		if err != nil {
+			t.Fatal(err)
+		}
+		u := newUIVault(store)
+		t.Cleanup(func() { u.Close() }) //nolint:errcheck,gosec // test cleanup
+		return u
+	}
+	one, other := open(), open()
+	if _, err := other.Notes(vault.Key{Kind: vault.KindPassword, Service: "gitlab"}); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := one.Check(); changed || err != nil {
+		t.Errorf("Check after another window's read = %v, %v; want no change", changed, err)
+	}
+	putSecrets(t, vault.Key{Kind: vault.KindPassword, Service: "new"}, "x")
+	if changed, err := one.Check(); !changed || err != nil {
+		t.Errorf("Check after a store = %v, %v; want a change", changed, err)
+	}
+}

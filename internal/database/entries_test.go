@@ -171,3 +171,29 @@ func TestDataVersion(t *testing.T) {
 		t.Errorf("DataVersion %d → %d, %v; want a change", v1, v2, err)
 	}
 }
+
+// The fingerprint changes when an entry or its tags do, not when only the
+// audit log is written.
+func TestFingerprint(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "x"}
+	if err := s.Put(k, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	f1, err := s.Fingerprint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Get(k); err != nil { // an audit row only
+		t.Fatal(err)
+	}
+	if f2, err := s.Fingerprint(); err != nil || f2 != f1 {
+		t.Errorf("a read changed the fingerprint: %v", err)
+	}
+	if err := s.Save(&vault.Entry{Key: k, Tags: []string{"work"}}, []byte("pw")); err != nil {
+		t.Fatal(err)
+	}
+	if f3, err := s.Fingerprint(); err != nil || f3 == f1 {
+		t.Errorf("a tag didn't change the fingerprint: %v", err)
+	}
+}

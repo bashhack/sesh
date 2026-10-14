@@ -29,7 +29,19 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		m.input.SetValue("")
 		return m.requery()
-	case "enter":
+	case "enter", "tab", "ctrl+y", "ctrl+o":
+		if !m.listShown() {
+			// The entries aren't on screen: nothing is done to one unseen.
+			return nil
+		}
+		switch msg.String() {
+		case "tab":
+			return m.toggleReveal()
+		case "ctrl+y":
+			return m.copyUsername()
+		case "ctrl+o":
+			return m.openURL()
+		}
 		return m.copySelected()
 	case "up", "ctrl+p":
 		m.sel--
@@ -39,12 +51,6 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.sel -= m.listHeight()
 	case "pgdown":
 		m.sel += m.listHeight()
-	case "tab":
-		return m.toggleReveal()
-	case "ctrl+y":
-		return m.copyUsername()
-	case "ctrl+o":
-		return m.openURL()
 	case "shift+up":
 		m.scrollPreview(-1)
 		return nil
@@ -228,8 +234,14 @@ func (m *Model) scroll() {
 
 // requery searches again for a changed query, from its best match.
 func (m *Model) requery() tea.Cmd {
-	m.sel, m.top = 0, 0
+	m.sel, m.top, m.selKey = 0, 0, vault.Key{}
 	return m.search()
+}
+
+// listShown says whether the entries are on screen: not behind the help,
+// nor in a window too small to draw them.
+func (m *Model) listShown() bool {
+	return !m.showHelp && m.width >= minWidth && m.height >= minHeight
 }
 
 // entryName is an entry as the app names it: its service, and its

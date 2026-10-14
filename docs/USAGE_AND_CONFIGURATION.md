@@ -528,7 +528,7 @@ Audit log: 1,204 events since 2026-07-05 09:12. Events older than 90 days are re
 
 Like `--list`, it opens the vault, so it asks for your master password unless the agent is unlocked.
 
-In `sesh ui`, copying, showing an entry's notes (once each time it's unlocked), and revealing with Tab are each an `access`, saying which ("in sesh ui, to copy it", "to show its notes", "to reveal it"). The TOTP codes it draws aren't recorded: showing a code isn't reading it out, and an event every 30 seconds for each code on screen would bury the rest.
+In `sesh ui`, copying, showing an entry's notes (once each time it's unlocked, and again after another command changes the vault's entries), and revealing with Tab are each an `access`, saying which ("in sesh ui, to copy it", "to show its notes", "to reveal it"). The TOTP codes it draws aren't recorded: showing a code isn't reading it out, and an event every 30 seconds for each code on screen would bury the rest.
 
 **How long events are kept.** Each command that opens the vault removes events older than `audit.retention_days` (default `90`). Set it to `0` to keep everything. Either way, `sesh audit prune --older-than <days>` removes older events when you choose; `--older-than 0` removes them all.
 
@@ -994,11 +994,11 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
 ├──────────────────────────────┬──────────────────────────────────┤
 │▌● GitHub               alice │ GitHub                           │
 │ ◷ GitHub           492 113   │ PASSWORD  ▸ Work                 │
-│ ● GitLab                     │                                  │
-│                              │ user     alice                   │
-│                              │ url      https://github.com      │
-│                              │ changed  3 days ago              │
-│                              │ ↵ copy its password              │
+│ ● GitLab                     │ password  ••••••••               │
+│                              │ user      alice                  │
+│                              │ url       https://github.com     │
+│                              │ changed   3 days ago             │
+│                              │ ↵ copy  ·  tab reveal            │
 ├──────────────────────────────┴──────────────────────────────────┤
 │ ↵ copy  ·  ↑↓ move  ·  esc clear      ✓ Copied GitHub (alice)'s… │
 ╰─────────────────────────────────────────────────────────────────╯

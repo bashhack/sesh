@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"cmp"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +14,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -240,15 +241,23 @@ func openURL(address string) error {
 
 // uiVault is the vault as the app reads it.
 type uiVault struct {
-	store   *database.Store
-	mgr     *password.Manager
-	version atomic.Int64 // the data version Changed last saw
+	store *database.Store
+	mgr   *password.Manager
+	// version is the data version Check last saw, and fingerprint the
+	// entries' then: a new version (any commit, the audit log's too) is a
+	// change only when the fingerprint is new as well.
+	mu          sync.Mutex
+	version     int64
+	fingerprint [sha256.Size]byte
 }
 
 func newUIVault(store *database.Store) *uiVault {
 	u := &uiVault{store: store, mgr: password.NewManager(store)}
 	if v, err := store.DataVersion(); err == nil {
-		u.version.Store(v)
+		u.version = v
+	}
+	if f, err := store.Fingerprint(); err == nil {
+		u.fingerprint = f
 	}
 	return u
 }
@@ -335,18 +344,27 @@ func (u *uiVault) CodeKey(k vault.Key) ([]byte, error) {
 }
 
 // Check says whether the vault can still be read, without counting as a
-// use of the key, and whether another command committed a change since it
-// was opened or last checked.
+// use of the key, and whether another command changed its entries since
+// it was opened or last checked. Writes that leave them as they were, such
+// as another window's audit events, aren't changes.
 func (u *uiVault) Check() (bool, error) {
 	if err := u.store.CheckUnlocked(); err != nil {
 		return false, uiLocked(err)
 	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	v, err := u.store.DataVersion()
+	if err != nil || v == u.version {
+		return false, err
+	}
+	u.version = v
+	f, err := u.store.Fingerprint()
 	if err != nil {
 		return false, err
 	}
-	last := u.version.Swap(v)
-	return last != 0 && v != last, nil
+	changed := f != u.fingerprint
+	u.fingerprint = f
+	return changed, nil
 }
 
 func (u *uiVault) KeepAlive() error { return uiLocked(u.store.KeepAlive()) }

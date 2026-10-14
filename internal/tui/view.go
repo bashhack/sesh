@@ -36,7 +36,7 @@ func (m *Model) View() tea.View {
 	}
 	v := tea.NewView(s)
 	v.AltScreen = true
-	if m.v != nil {
+	if m.v != nil && m.width >= minWidth && m.height >= minHeight {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v

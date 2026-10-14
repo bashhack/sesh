@@ -1,6 +1,7 @@
 package database
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -130,6 +131,50 @@ func (s *Store) DataVersion() (int64, error) {
 		return 0, fmt.Errorf("check the vault for changes: %w", err)
 	}
 	return v, nil
+}
+
+// Fingerprint is a hash of what the entries are: every entry's names,
+// filing, details and sealed values, their tags, and the key record. It
+// changes when any of those does, and not for what else is written, such
+// as the audit log, so a change it shows is one to what's stored.
+func (s *Store) Fingerprint() ([sha256.Size]byte, error) {
+	h := sha256.New()
+	write := func(query string) error {
+		rows, err := s.db.Query(query)
+		if err != nil {
+			return err
+		}
+		defer rows.Close() //nolint:errcheck // read-only query
+		cols, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		for rows.Next() {
+			if err := rows.Scan(ptrs...); err != nil {
+				return err
+			}
+			for _, v := range vals {
+				fmt.Fprintf(h, "%d:%v|", len(fmt.Sprint(v)), v) //nolint:errcheck // hash writes don't fail
+			}
+			h.Write([]byte{'\n'}) //nolint:errcheck // hash writes don't fail
+		}
+		return rows.Err()
+	}
+	for _, q := range []string{
+		`SELECT id, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at FROM entries ORDER BY id`,
+		`SELECT entry_id, tag FROM entry_tags ORDER BY entry_id, tag`,
+		`SELECT verify FROM vault_key`,
+	} {
+		if err := write(q); err != nil {
+			return [sha256.Size]byte{}, fmt.Errorf("check the vault for changes: %w", err)
+		}
+	}
+	return [sha256.Size]byte(h.Sum(nil)), nil
 }
 
 // Close releases the database connection and clears any cached key

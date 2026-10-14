@@ -122,6 +122,9 @@ type Model struct {
 	notesFailed  map[vault.Key]string
 	shown        *revealed // secrets revealed with Tab
 	selKey       vault.Key // the selected entry, as last seen
+	// wraps are notes and revealed values wrapped to the pane, by what
+	// they are, so they're wrapped once rather than each time it's drawn.
+	wraps map[string]wrapped
 
 	// every is the clock, a tick each whole second; tests replace it.
 	every func() tea.Cmd
@@ -149,6 +152,7 @@ type Model struct {
 	wrong         int
 	top, sel      int
 	unlocking     bool
+	revealing     bool // a reveal asked for hasn't come back yet
 	statusBad     bool // the status is something that went wrong
 	showHelp      bool
 	dark          bool
@@ -168,6 +172,7 @@ func New(opts *Options) *Model {
 		keys: map[vault.Key][]byte{}, pending: map[vault.Key]bool{}, failed: map[vault.Key]bool{},
 		codes: map[vault.Key]shownCode{},
 		notes: map[vault.Key][]byte{}, notesPending: map[vault.Key]bool{}, notesFailed: map[vault.Key]string{},
+		wraps:   map[string]wrapped{},
 		lastKey: now, unlockedAt: now, lastKeepAlive: now,
 		width: 80, height: 24,
 		every: tick,
@@ -242,6 +247,7 @@ func (m *Model) wipe() {
 	}
 	clear(m.notesPending)
 	clear(m.notesFailed)
+	clear(m.wraps)
 	m.hide()
 }
 
@@ -333,21 +339,22 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.spin, cmd = m.spin.Update(msg)
 		return cmd
 	case tea.MouseClickMsg:
-		if m.v == nil || msg.Button != tea.MouseLeft {
+		if m.v == nil || msg.Button != tea.MouseLeft || !m.listShown() {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
 		if n, ok := m.rowAt(msg.X, msg.Y); ok {
 			m.sel = n
 			m.scroll()
-			return m.moved()
+			return tea.Batch(m.moved(), m.keepAlive())
 		}
-		return nil
+		return m.keepAlive()
 	case tea.MouseWheelMsg:
-		if m.v == nil {
+		if m.v == nil || !m.listShown() {
 			return nil
 		}
 		m.lastKey = m.opts.Now()
+		keep := m.keepAlive()
 		step := 1
 		if msg.Button == tea.MouseWheelUp {
 			step = -1
@@ -356,11 +363,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		if lw := m.listWidth(); lw < m.width-2 && msg.X > lw+1 {
 			m.scrollPreview(3 * step)
-			return nil
+			return keep
 		}
 		m.sel += step
 		m.scroll()
-		return m.moved()
+		return tea.Batch(m.moved(), keep)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.scroll()
@@ -405,6 +412,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return m.failure(msg.err)
 		}
 		m.rows, m.total = msg.rows, msg.total
+		// The list may have changed order under the selection: it stays
+		// on the entry, not the row, so Enter copies what was picked.
+		for i := range m.rows {
+			if m.selKey != (vault.Key{}) && m.rows[i].Key == m.selKey {
+				m.sel = i
+				break
+			}
+		}
 		m.scroll()
 		return m.moved()
 	case keyMsg:

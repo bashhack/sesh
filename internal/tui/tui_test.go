@@ -740,3 +740,60 @@ func TestMouse(t *testing.T) {
 		t.Error("the mouse is on while locked")
 	}
 }
+
+// When the list reorders under it, the selection stays on its entry; a
+// new search starts from the best match.
+func TestSelectionFollowsEntry(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("down")                                                     // totp/github/alice
+	f.entries = []vault.Entry{f.entries[1], f.entries[2], f.entries[0]} // it moves to the top
+	f.changed = true
+	a.tick(time.Second)
+	if e := a.selected(); e == nil || e.Key != code {
+		t.Errorf("after a reorder, selected %v", e)
+	}
+	a.press("git")
+	if a.sel != 0 {
+		t.Errorf("a new search selected row %d", a.sel)
+	}
+}
+
+// Nothing is done to an entry that isn't on screen: behind the help, or
+// in a window too small to draw the list.
+func TestNoActionsUnseen(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("?")
+	a.press("enter")
+	a.Update(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	if len(a.copied) != 0 || a.sel != 0 {
+		t.Errorf("behind the help: copied %q, selected %d", a.copied, a.sel)
+	}
+	a.press("?")
+	a.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+	a.press("enter")
+	if len(a.copied) != 0 || a.View().MouseMode != tea.MouseModeNone {
+		t.Errorf("too small: copied %q, mouse %v", a.copied, a.View().MouseMode)
+	}
+}
+
+// A second Tab before the first reveal comes back reads nothing more;
+// the mouse keeps the agent unlocked as keys do.
+func TestRevealOnceAndMouseKeepAlive(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{IdleTimeout: 10 * time.Second})
+	first := a.toggleReveal()
+	if second := a.toggleReveal(); second != nil {
+		t.Error("a second Tab started another reveal")
+	}
+	a.run(first)
+	if n := strings.Count(strings.Join(f.reads, ","), "to reveal it"); n != 1 || a.shown == nil {
+		t.Errorf("reveals read %d times (shown %v)", n, a.shown != nil)
+	}
+	a.now = a.now.Add(6 * time.Second)
+	_, cmd := a.Update(tea.MouseWheelMsg{X: 5, Y: 5, Button: tea.MouseWheelDown})
+	a.run(cmd)
+	if f.kept != 1 {
+		t.Errorf("keep-alives after the wheel = %d, want 1", f.kept)
+	}
+}
