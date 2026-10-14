@@ -47,11 +47,12 @@ type (
 )
 
 // importSources are the sources the panel offers, as sesh import names
-// them, with their keys and how they're said.
+// them, with their keys and how they're said. No key is j or k, which
+// move through the panel's rows.
 var importSources = []struct{ key, source, name, files string }{
 	{"s", "sesh", "sesh's own encrypted export", "file"},
 	{"b", "bitwarden", "Bitwarden", "file (its JSON export)"},
-	{"k", "keepass", "KeePass", "file (its XML export)"},
+	{"p", "keepass", "KeePass", "file (its XML export)"},
 	{"c", "chrome", "Chrome", "file (its CSV export)"},
 	{"f", "firefox", "Firefox", "file (its CSV export)"},
 	{"a", "safari", "Safari", "file (its CSV export)"},
@@ -183,18 +184,28 @@ func (m *Model) importPlanned(msg *importPlannedMsg) tea.Cmd {
 		return nil
 	}
 	in.plan, in.failed = msg.plan, false
+	ov.err = ""
+	m.showPlan()
+	ov.opened = m.opts.Now()
+	return nil
+}
+
+// showPlan puts the import's plan in its panel, each line wrapped to the
+// panel's width, so none is cut.
+func (m *Model) showPlan() {
+	ov, in := m.ov, m.importing
+	if in == nil || in.failed || ov == nil || ov.kind != panelImport {
+		return
+	}
 	ov.items = nil
-	// Each line wrapped to the panel, so none is cut.
 	width := max(min(96, m.width-6)-12, 20)
-	for l := range strings.SplitSeq(msg.plan.Summary, "\n") {
+	for l := range strings.SplitSeq(in.plan.Summary, "\n") {
 		indent := l[:len(l)-len(strings.TrimLeft(l, " "))]
 		for w := range strings.SplitSeq(m.th.style().Width(width-len(indent)).Render(strings.TrimLeft(l, " ")), "\n") {
 			ov.items = append(ov.items, item{label: indent + strings.TrimRight(w, " ")})
 		}
 	}
 	ov.sel = min(ov.sel, max(len(ov.items)-1, 0))
-	ov.opened = m.opts.Now()
-	return nil
 }
 
 // importLetter is what the preview's letters do: s and o say what's done
@@ -241,15 +252,28 @@ func (m *Model) imported(msg *importedMsg) tea.Cmd {
 		return nil
 	}
 	ended := m.endImport()
+	said := msg.said
+	if msg.err != nil {
+		said = importFailed(msg.err)
+	}
 	switch {
+	case m.quitAfter:
+		m.afterword = said
+		return tea.Batch(ended, tea.Quit)
 	case errors.Is(msg.err, ErrLocked):
 		return tea.Batch(ended, m.lock(lockedReason(msg.err)))
-	case msg.err != nil:
-		m.ov = &overlay{kind: panelNotice, back: m.transferPanel(), title: "Import", question: "Not imported: " + msg.err.Error()}
-		return tea.Batch(ended, m.reread())
 	}
-	m.ov = &overlay{kind: panelNotice, back: m.transferPanel(), title: "Import", question: msg.said}
+	m.ov = &overlay{kind: panelNotice, back: m.transferPanel(), title: "Import", question: said}
 	return tea.Batch(ended, m.reread())
+}
+
+// importFailed says an import's failure: one that stopped partway says
+// what it imported first.
+func importFailed(err error) string {
+	if strings.HasPrefix(err.Error(), "imported ") {
+		return "The import stopped: " + err.Error()
+	}
+	return "Not imported: " + err.Error()
 }
 
 // transferPanel is the import and export panel under the preview.
@@ -280,16 +304,14 @@ func (m *Model) endImport() tea.Cmd {
 // importHint is the preview's keys, as they fit width.
 func (m *Model) importHint(width int) string {
 	th, in := m.th, m.importing
+	var keys [][2]string
 	switch {
 	case in != nil && in.applying:
-		return th.dimmed().Render("The import carries on to the end.")
+		keys = [][2]string{{"ctrl+c", "quit once it's written"}}
 	case in == nil || m.ov.loading:
 		return th.hints([2]string{"esc", "cancel"})
 	case in.failed:
-		return th.hints([2]string{"s", "read it again, leaving those you have"}, [2]string{"o", "replacing them"}, [2]string{"esc", "cancel"})
-	}
-	var keys [][2]string
-	switch {
+		keys = [][2]string{{"s", "read it again, leaving those you have"}, {"o", "replacing them"}, {"esc", "cancel"}}
 	case in.plan.Clashes > 0 && in.onConflict == "":
 		keys = [][2]string{{"s", "leave those you have"}, {"o", "replace them"}, {"esc", "cancel"}}
 	case in.plan.Count == 0:
@@ -309,7 +331,7 @@ func (m *Model) importHint(width int) string {
 	for i, k := range keys {
 		letters[i] = [2]string{k[0], ""}
 	}
-	if h := th.hints(letters...); lipgloss.Width(h) <= width {
+	if h := th.hints(letters...); lipgloss.Width(h) <= width || len(keys) == 1 {
 		return h
 	}
 	return th.hints([2]string{keys[0][0], ""}, [2]string{"esc", ""})

@@ -656,6 +656,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.width, m.height = msg.Width, msg.Height
 		m.scroll()
 		m.scrollSide()
+		m.showPlan()
 		return m.moved()
 	case openedMsg:
 		if msg.err != nil {
@@ -832,6 +833,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			// panel open on what they were is closed, not left to act on
 			// what they are now.
 			m.wipe()
+			if m.importing != nil && m.importing.applying {
+				// The import being written changes the vault: its panel
+				// stays, to say what it did.
+				return m.reread()
+			}
 			if m.ov != nil {
 				m.ov = nil
 				m.sayBad("Another command changed the vault; open the actions again.")
@@ -969,6 +975,9 @@ func (m *Model) lock(why string) tea.Cmd {
 		m.form = nil
 	}
 	m.status = ""
+	if m.importing != nil && m.importing.applying {
+		why += " An import was being written: it carried on to the end, or stopped where it failed; look at the entries to see what it imported."
+	}
 	ended := m.endImport()
 	m.importAsk = nil
 	m.lockedWhy = why

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/tui"
 	"github.com/bashhack/sesh/internal/vault"
@@ -77,8 +80,8 @@ func TestUI_Import(t *testing.T) {
 	}
 }
 
-// Let go while it's applied, the import finishes before what it read is wiped: no entry is stored with a wiped
-// secret. After it's let go, nothing is read again.
+// Let go while it's being written, the import finishes before what it read is wiped: entries are stored, none with a
+// wiped secret. After it's let go, nothing is read again.
 func TestUI_ImportClosedWhileApplied(t *testing.T) {
 	env := importVault(t)
 	store := openDoctorVault(t, env)
@@ -95,18 +98,51 @@ func TestUI_ImportClosedWhileApplied(t *testing.T) {
 	if _, err := im.Plan("skip"); err != nil {
 		t.Fatal(err)
 	}
+	// The vault's write lock, held from another connection, keeps Apply
+	// writing, its own lock held, until it's let go.
+	db, err := sql.Open("sqlite", env.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test cleanup
+	conn, err := db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() //nolint:errcheck // test cleanup
+	if _, err := conn.ExecContext(t.Context(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan error, 1)
 	go func() {
 		_, err := im.Apply()
 		done <- err
 	}()
-	im.Close()
-	if err := <-done; err != nil && !errors.Is(err, errImportClosed) {
+	mu := &im.(*uiImport).mu
+	for mu.TryLock() {
+		mu.Unlock()
+		runtime.Gosched()
+	}
+	closed := make(chan struct{})
+	go func() {
+		im.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+		t.Error("let go while it was being written")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := conn.ExecContext(t.Context(), "ROLLBACK"); err != nil {
 		t.Fatal(err)
 	}
-	keys, err := store.List(&vault.Filter{Kind: vault.KindPassword})
-	if err != nil {
+	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	<-closed
+	keys, err := store.List(&vault.Filter{Kind: vault.KindPassword})
+	if err != nil || len(keys) == 0 {
+		t.Fatalf("stored %d, %v", len(keys), err)
 	}
 	for _, e := range keys {
 		secret, err := store.Get(e.Key)

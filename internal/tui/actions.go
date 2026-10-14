@@ -149,6 +149,12 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	k := msg.String()
 	switch k {
 	case "ctrl+c":
+		if ov.kind == panelImport && m.importing != nil && m.importing.applying {
+			// It quits once the import is written, saying what it did.
+			m.quitAfter = true
+			ov.busy = "Quitting once the import is written…"
+			return nil
+		}
 		return tea.Quit
 	case "esc":
 		if ov.kind == panelImport {
