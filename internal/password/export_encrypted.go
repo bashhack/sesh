@@ -189,8 +189,12 @@ func IsPlainExport(b []byte) bool {
 		return true
 	}
 	var entries []map[string]json.RawMessage
-	if json.Unmarshal(b, &entries) != nil || len(entries) == 0 {
+	if json.Unmarshal(b, &entries) != nil {
 		return false
+	}
+	if len(entries) == 0 {
+		// An empty export: nothing in it says another app's.
+		return true
 	}
 	_, service := entries[0]["service"]
 	_, kind := entries[0]["type"]

@@ -254,6 +254,9 @@ func TestReadEncrypted(t *testing.T) {
 	if _, err := sealed.Entries([]byte("wrong-password-1")); err == nil || !strings.Contains(err.Error(), "wrong password") {
 		t.Errorf("a wrong password: %v", err)
 	}
+	if _, err := sealed.Entries(nil); err == nil || err.Error() != "password cannot be empty" {
+		t.Errorf("no password: %v", err)
+	}
 	// Settings sesh refuses are found before any password is asked.
 	bad := `{"version":1,"algorithm":"argon2id","salt":"AAAAAAAAAAAAAAAAAAAAAA==","ciphertext":"AA==","params":{"time":3,"memory":4294967295,"threads":4,"key_len":32}}`
 	if _, err := ReadSealed(strings.NewReader(bad)); err == nil || !strings.Contains(err.Error(), "memory setting out of range") {
@@ -276,7 +279,10 @@ func TestIsPlainExport(t *testing.T) {
 			t.Errorf("%s isn't told:\n%s", f, buf.String())
 		}
 	}
-	for _, other := range []string{`[]`, `[{"name":"x"}]`, `[{"service":"x"}]`, `{"service":"x","type":"password"}`, "url,username,password\n", "not json"} {
+	if !IsPlainExport([]byte(`[]`)) {
+		t.Error("an empty export isn't told")
+	}
+	for _, other := range []string{`[{"name":"x"}]`, `[{"service":"x"}]`, `{"service":"x","type":"password"}`, "url,username,password\n", "not json"} {
 		if IsPlainExport([]byte(other)) {
 			t.Errorf("%q taken for an export", other)
 		}

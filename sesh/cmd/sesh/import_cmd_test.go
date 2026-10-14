@@ -740,10 +740,12 @@ func TestImport_Sesh(t *testing.T) {
 // export is sent to --action import, with or without --from.
 func TestImport_SeshOverwriteAndRefusals(t *testing.T) {
 	env := importVault(t)
-	aws := vault.AWSKey("prof")
+	aws, aws2 := vault.AWSKey("prof"), vault.AWSKey("prof2")
 	store := openDoctorVault(t, env)
-	if err := store.SaveWithDetails(&vault.Entry{Key: aws, Settings: vault.Settings{AWSMFADevice: "arn:aws:iam::1:mfa/OLD"}}, []byte("JBSWY3DPEHPK3PXP"), &vault.Details{}); err != nil {
-		t.Fatal(err)
+	for _, k := range []vault.Key{aws, aws2} {
+		if err := store.SaveWithDetails(&vault.Entry{Key: k, Settings: vault.Settings{AWSMFADevice: "arn:aws:iam::1:mfa/OLD"}}, []byte("JBSWY3DPEHPK3PXP"), &vault.Details{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	store.Close() //nolint:errcheck,gosec // test cleanup
 
@@ -756,6 +758,7 @@ func TestImport_SeshOverwriteAndRefusals(t *testing.T) {
 		s      vault.Settings
 	}{
 		{aws, "GEZDGNBVGY3TQOJQ", vault.Settings{AWSMFADevice: "arn:aws:iam::1:mfa/NEW"}},
+		{aws2, "GEZDGNBVGY3TQOJQ", vault.Settings{}}, // no device: sesh asks AWS for it
 		{fresh, "JBSWY3DPEHPK3PXP", vault.Settings{TOTP: totp.Params{Algorithm: "SHA256", Digits: 8, Period: 60}}},
 	} {
 		if err := src.Save(&vault.Entry{Key: e.k, Settings: e.s, Tags: []string{"phone"}, CreatedAt: made, UpdatedAt: made}, []byte(e.secret)); err != nil {
@@ -777,6 +780,11 @@ func TestImport_SeshOverwriteAndRefusals(t *testing.T) {
 	t.Cleanup(func() { readSecret = old })
 	asked := 0
 	readSecret = func() ([]byte, error) { asked++; return []byte("export-pass-1234"), nil }
+	// The preview says each device that changes.
+	if _, stderr, err := runImportOut(t, "", true, "--dry-run", "--on-conflict", "overwrite", file); err != nil ||
+		!strings.Contains(stderr, "its MFA device becomes arn:aws:iam::1:mfa/NEW") || !strings.Contains(stderr, "its MFA device (arn:aws:iam::1:mfa/OLD) is taken out") {
+		t.Errorf("the preview: %v\n%s", err, stderr)
+	}
 	// Its TOTP entries aren't from a phone: no word of checking one before removing it there.
 	if out, stderr, err := runImportOut(t, "", true, "--yes", "--on-conflict", "overwrite", file); err != nil || strings.Contains(out, "your phone") {
 		t.Fatalf("%q\n%s\n%v", out, stderr, err)
@@ -787,6 +795,9 @@ func TestImport_SeshOverwriteAndRefusals(t *testing.T) {
 	secret, gerr := store.Get(aws)
 	if err != nil || gerr != nil || a.Settings.AWSMFADevice != "arn:aws:iam::1:mfa/NEW" || string(secret) != "GEZDGNBVGY3TQOJQ" {
 		t.Errorf("the AWS entry: device %q, secret %q, %v %v", a.Settings.AWSMFADevice, secret, err, gerr)
+	}
+	if a2, err := store.Lookup(aws2); err != nil || a2.Settings.AWSMFADevice != "" {
+		t.Errorf("the AWS entry exported without a device: %q, %v", a2.Settings.AWSMFADevice, err)
 	}
 	n, err := store.Lookup(fresh)
 	if err != nil || n.Settings.TOTP != (totp.Params{Algorithm: "SHA256", Digits: 8, Period: 60}) || !slices.Equal(n.Tags, []string{"phone"}) ||

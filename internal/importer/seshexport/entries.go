@@ -22,7 +22,7 @@ func Entries(list []password.ExportEntry) []*importer.Entry {
 		}
 		e := &importer.Entry{
 			Key: ee.Key(), Name: name, Folder: ee.Folder, Tags: ee.Tags,
-			Settings: ee.Settings, Created: ee.CreatedAt, Updated: ee.UpdatedAt,
+			Settings: ee.Settings, WholeSettings: true, Created: ee.CreatedAt, Updated: ee.UpdatedAt,
 		}
 		switch {
 		case ee.Service == "":

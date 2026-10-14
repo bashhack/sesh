@@ -234,6 +234,20 @@ func planImport(store *database.Store, f *found, onConflict string, historyKeep 
 			if err := mergeDetails(store, e); err != nil {
 				return nil, err
 			}
+			// An AWS entry's device that the import changes is said.
+			if e.WholeSettings {
+				cur, err := store.Lookup(e.Key)
+				if err != nil {
+					return nil, err
+				}
+				switch was, now := cur.Settings.AWSMFADevice, e.Settings.AWSMFADevice; {
+				case was == now:
+				case now == "":
+					e.Changes = append(e.Changes, "its MFA device ("+was+") is taken out: sesh asks AWS for the profile's")
+				default:
+					e.Changes = append(e.Changes, "its MFA device becomes "+now)
+				}
+			}
 			if e.Skip != "" {
 				p.skipped = append(p.skipped, e)
 				continue
@@ -388,10 +402,10 @@ func fitHistory(e *importer.Entry, keep int) {
 
 // writeImported stores e, with its earlier secrets in its history. One
 // replacing an entry you have takes its secret and code settings from the
-// import, with an AWS entry's device when the import has one, and its
-// folder only if it has one; its details are already merged (see
-// mergeDetails); tags are both sets, and the entry's other settings and
-// creation time are kept.
+// import (all its settings, an AWS entry's device included, when the
+// import has them whole), and its folder only if it has one; its details
+// are already merged (see mergeDetails); tags are both sets, and the
+// entry's other settings and creation time are kept.
 func writeImported(store *database.Store, e *importer.Entry, exists bool) (database.ImportedHistory, error) {
 	ent := vault.Entry{Key: e.Key, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.Created, UpdatedAt: e.Updated}
 	if !exists {
@@ -401,11 +415,9 @@ func writeImported(store *database.Store, e *importer.Entry, exists bool) (datab
 	if err != nil {
 		return database.ImportedHistory{}, err
 	}
-	ent.Settings = cur.Settings
-	ent.Settings.TOTP = e.Settings.TOTP
-	// An AWS entry's device goes with its key, when the import has one.
-	if e.Settings.AWSMFADevice != "" {
-		ent.Settings.AWSMFADevice = e.Settings.AWSMFADevice
+	if !e.WholeSettings {
+		ent.Settings = cur.Settings
+		ent.Settings.TOTP = e.Settings.TOTP
 	}
 	if ent.Folder == "" {
 		ent.Folder = cur.Folder
