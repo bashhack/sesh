@@ -31,13 +31,13 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 
 ## Features
 
-- **Extensible Plugin Architecture** — Add new authentication providers with a single interface
+- **Terminal App** — `sesh ui`: search every entry as you type, copy with Enter, and edit, file, and look after the vault, in one screen
 - **Encrypted Vault by Default** — Secrets live in an encrypted SQLite vault (AES-256-GCM, Argon2id) unlocked with your master password, on macOS and Linux alike. No setup: the first command creates it
 - **Master-Password Agent** — A per-user background agent holds the key so you type the password once; it locks itself when idle and is hardened against memory inspection ([Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent))
 - **Recovery Key** — Optional: a code you write down when the vault is created; if you forget the master password, `sesh recover` uses it to set a new one. No server involved, and sesh keeps no copy
 - **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key (nothing in the Keychain); the password always works as a fallback
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from
-- **Encrypted Export** — Portable backups protected by a password, safe to transfer between machines (`--format encrypted`)
+- **Encrypted Export** — Portable backups protected by a password of their own, safe to move between machines (`sesh export`)
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes, each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
 - **Secrets for commands** — `sesh run` puts vault values in a command's environment and hides them in its output; `sesh inject` fills a config template
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
@@ -70,273 +70,128 @@ go install github.com/bashhack/sesh/sesh/cmd/sesh@latest
 
 ## Quick Start
 
-Start by setting up your first provider entry.
+Type `sesh` for every command, or `sesh <command> --help` for one.
+
+```bash
+sesh add password github --username alice   # type it (hidden), or pipe it in
+sesh add password shop --generate           # a strong one, copied as it's saved
+sesh add totp github --qr                   # select the QR code on screen
+sesh copy github                            # its password, or a TOTP entry's code
+sesh ui                                     # search everything; Enter copies
+```
+
+The first command creates your vault: it says where, and asks for a master
+password, twice. A background agent then keeps it unlocked for a while, so
+later commands don't ask again until it locks itself.
 
 ### Prerequisites
 
-- **For AWS provider:** [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) must be installed and configured with at least one profile.
-- **For TOTP provider:** No additional dependencies — works with any service that supports standard TOTP (RFC 6238).
-- **For Password provider:** No additional dependencies.
-- **For `-clip` on Linux:** `wl-copy` (wl-clipboard) under Wayland, or `xclip` or `xsel` under X11. macOS has one built in.
-
-### Setup Wizards
-
-Each available `-setup` guides you through configuration for a given provider:
-
-```bash
-# Setup AWS MFA
-sesh -service aws -setup
-
-# Setup TOTP service
-sesh -service totp -setup
-```
-
-Features:
-- Interactive QR code scanning (select the QR code region on screen)
-- Manual secret entry fallback
-- Automatic secret validation
-- Step-by-step instructions
-
+- **AWS sign-in:** the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), installed and configured with at least one profile.
+- **TOTP codes:** nothing more; any service that uses standard TOTP (RFC 6238).
+- **Copying on Linux:** `wl-copy` (wl-clipboard) under Wayland, or `xclip` or `xsel` under X11. macOS has one built in.
 
 ## Usage
 
-### Available Service Providers
+Every command works on the whole vault: passwords, API keys, notes and TOTP
+entries. An `<entry>` is a few words of its name or username, as `sesh ui`'s
+search takes them (`github alice`; a kind word such as `totp` or `note`
+narrows), or its ID, such as `password/github/alice`. When several entries
+match, sesh asks which at a terminal, and lists them otherwise.
 
-#### AWS Provider (`-service aws`)
-Manages AWS CLI authentication with MFA support. Without flags, launches a secure subshell with temporary credentials.
+### Finding and using entries
 
 ```bash
-# Access provider-specific help
-sesh -service aws -help
-
-# Launch secure subshell (default)
-sesh -service aws
-
-# Copy TOTP code(s) for AWS Web Console
-sesh -service aws -clip
-
-# Use specific AWS profile
-sesh -service aws -profile production
-
-# Print credentials instead of subshell
-sesh -service aws -no-subshell
-
-# List all AWS entries
-sesh -service aws -list
-
-# Delete an AWS entry
-sesh -service aws -delete <entry-id>
+sesh list                          # every entry
+sesh list notes                    # or of a kind: passwords, keys, notes, totp
+sesh list --folder work --tag dev  # narrowed by folder and tag
+sesh search github                 # by any part of a name, username, or site
+sesh copy github alice             # copy the password (the clipboard clears after 30s)
+sesh copy github --username        # or --url, or --field pin
+sesh get openai                    # print it, for a pipe
+sesh code github                   # a TOTP code, and how long it has left
+sesh show github --reveal          # URL, notes, fields, folder and tags
+sesh open github                   # its URL, in the browser
 ```
 
-#### TOTP Provider (`-service totp`)
-Generic TOTP provider for any service (GitHub, Google, Slack, etc.).
+Add `--json` to `list`, `search`, `get`, `code` or `show` for output a program reads.
+
+### Adding and changing entries
 
 ```bash
-# Access provider-specific help
-sesh -service totp -help
-
-# Copy code to clipboard
-sesh -service totp -service-name github -clip
-
-# Use specific profile (for multiple accounts)
-sesh -service totp -service-name github -profile work
-
-# List all TOTP entries
-sesh -service totp -list
-
-# Delete a TOTP entry
-sesh -service totp -delete <entry-id>
+sesh add password github --username alice --url https://github.com/login
+sesh add key openai                # an API key
+echo "door code 4711" | sesh add note house
+sesh add totp github --qr          # or type the key, or paste an otpauth:// link
+sesh edit github --rename github-work
+sesh edit github --field recovery-email=alice@example.com --secret-field pin
+sesh edit github --notes --editor
+sesh generate --length 32          # a new password, stored nowhere
+sesh trash github                  # into the trash; sesh trash lists and restores
+sesh history github                # earlier secrets: --show N, --clip N, --restore N
+sesh folder move work github       # and sesh tag add urgent github
 ```
 
-#### Password Provider (`-service password`)
-Secure password manager for passwords, API keys, TOTP secrets, and secure notes.
+### Secrets for commands
 
 ```bash
-# Access provider-specific help
-sesh -service password -help
-
-# Generate a password, store it, and copy to clipboard
-sesh -service password -action generate -service-name github -username alice -clip
-
-# Generate without symbols, custom length
-sesh -service password -action generate -service-name stripe -username alice -no-symbols -length 32
-
-# Store a password manually (interactive prompt)
-sesh -service password -action store -service-name github -username alice
-
-# Retrieve a password
-sesh -service password -action get -service-name github -username alice -show
-
-# Copy password to clipboard
-sesh -service password -action get -service-name github -username alice -clip
-
-# Store and generate TOTP codes
-sesh -service password -action totp-store -service-name github -username alice
-sesh -service password -action totp-generate -service-name github -username alice
-sesh -service password -action totp-generate -service-name github -username alice -clip   # copy the code
-
-# A URL, notes, and custom fields (plain, or secret and encrypted)
-sesh edit password/github/alice --url https://github.com/login --field recovery-email=alice@example.com --secret-field pin
-sesh edit password/github/alice --notes --editor
-sesh show password/github/alice            # secrets hidden; --reveal shows them
-sesh -service password -action get -service-name github -username alice -field pin -clip
-
-# Run a command with secrets in its environment (hidden in its output), or fill a template
 sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
 sesh run --env-file .env -- npm start      # .env holds NAME=sesh://... references, no secrets
 sesh inject -i config.yml.tpl -o config.yml
+```
 
-# Bring entries over: Google Authenticator's "Transfer accounts" QR (as screenshots), or a Bitwarden, KeePass, Chrome, Firefox or Safari export
-sesh import --from google-authenticator IMG_1234.png
+### Bringing entries over, and taking them out
+
+```bash
+sesh import --from google-authenticator IMG_1234.png   # its "Transfer accounts" QR codes
 sesh import --from bitwarden bitwarden_export.json
 sesh import --from keepass Passwords.xml
-sesh import --from chrome "Chrome Passwords.csv"
-
-# Search across all entries
-sesh -service password -action search -query github
-
-# List all entries (with optional filters)
-sesh -service password -list
-sesh -service password -list -entry-type api_key
-sesh -service password -list -sort updated_at -limit 10
-
-# Delete an entry
-sesh -service password -delete <entry-id>
-
-# Export all entries to JSON file
-sesh -service password -action export -file backup.json
-
-# Export API keys only as CSV
-sesh -service password -action export -format csv -entry-type api_key -file keys.csv
-
-# Import from file
-sesh -service password -action import -file backup.json
-sesh -service password -action import -file data.csv -format csv -on-conflict skip
-
-# JSON output
-sesh -service password -action get -service-name github -username alice -format json
-sesh -service password -action search -query github -format json
+sesh import --from chrome "Chrome Passwords.csv"       # also firefox, safari
+sesh export --file backup.enc       # encrypted with a password of its own
+sesh import --from sesh backup.enc  # back in, on this machine or another
 ```
 
-### Subshell Features (AWS)
+Each import shows what it found, and what's already in the vault, before it asks.
 
-When you run `sesh -service aws`, you enter a secure subshell with:
+### AWS
 
-#### Visual Indicators
-- Custom prompt showing active sesh session (e.g., `(sesh:aws) $`)
-- Credential expiry countdown via `sesh_status` command
-
-#### Built-in Commands
-- `sesh_status` — Show session details and test AWS connection
-- `verify_aws` — Quick AWS authentication check
-- `sesh_help` — Display available subshell commands
-- `exit` or `Ctrl+D` — Leave the secure environment
-
-#### Environment Variables
-- `SESH_ACTIVE=1` — Detect a sesh session in scripts
-- `SESH_SERVICE=aws` — Which provider is active
-- Standard AWS credential variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`)
-
-
-### Quick Reference
-
-#### Global Options
 ```bash
--service <provider>              # Required for provider operations (aws, totp, password)
--list-services                   # Show available providers (no -service needed)
--version                         # Display version info
--help                            # Show help
+sesh aws setup                     # store a profile's MFA key: from a QR code, or typed
+sesh aws                           # sign in: a shell with the session's credentials
+sesh aws --profile production
+sesh aws --no-subshell             # print the credentials, to eval
+sesh aws --clip                    # copy the MFA code, for the AWS console
 ```
 
-#### Common Operations
+`sesh aws` opens a shell with the session's credentials and:
+- a prompt that shows the session, such as `(sesh:aws) $`;
+- `sesh_status` (the session, and a check of the AWS connection), `verify_aws`, and `sesh_help`;
+- `SESH_ACTIVE=1` and `SESH_SERVICE=aws`, with the standard `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`;
+- `exit` or Ctrl-D to leave.
+
+### The vault and keeping it safe
+
 ```bash
--list                           # List entries for service
--delete <id>                    # Delete entry by ID, into the trash (sesh trash restore puts it back)
--purge                          # With -delete: delete for good
-sesh history <id>               # An entry's earlier secrets; --show/--clip/--restore/--forget N
-sesh ui                         # Search every entry; Enter copies its secret or TOTP code
--setup                          # Run setup wizard
--clip                           # Copy to clipboard
+sesh config                        # every setting, and where it comes from
+sesh init                          # choose where the vault lives (optional)
+sesh lock                          # lock now: the next command asks for the master password
+sesh passwd                        # change the master password (every entry is re-encrypted)
+sesh recovery new                  # a recovery key, in case you forget it
+sesh touchid enable                # unlock with your fingerprint (macOS)
+sesh backup                        # sesh also backs up on its own (backup.every_days)
+sesh health                        # weak, reused and old passwords
+sesh doctor                        # check the setup, and that everything reads
 ```
 
-#### AWS-Specific Options
-```bash
--profile <name>                 # AWS profile (default: $AWS_PROFILE)
--no-subshell                    # Print exports instead of subshell
--force                          # Delete without asking
-```
-
-#### TOTP-Specific Options
-```bash
--service-name <name>            # Service name (github, google, etc.) [REQUIRED]
--profile <name>                 # Account profile (work, personal, etc.)
--force                          # Delete without asking
-```
-
-#### Password-Specific Options
-```bash
--action <action>                # store, get, generate, search, export, import, totp-store, totp-generate
--service-name <name>            # Service name
--username <name>                # Username for the service
--entry-type <type>              # password, api_key, totp, secure_note (filter for -list)
--query <text>                   # Search query (for -action search)
--format <format>                # Output format: table (default), json
--show                           # Display password instead of clipboard hint
--field <name>                   # With get: a field, url, or notes instead of the secret
-                                # With store: set a field, name=value (repeat for more)
--secret-field <name>            # With store: set a secret field, typed hidden
--url <url>                      # With store: the entry's web address
--notes [-editor]                # With store: notes, from stdin or $EDITOR
--file <path>                    # File path for export/import (default: stdout/stdin)
--on-conflict <strategy>         # Import conflict: skip, overwrite (default: error)
--force                          # Skip confirmation prompts; replace an existing export file
--length <n>                     # Generated password length (default 24)
--no-symbols                     # Exclude symbols from generated passwords
--sort <field>                   # Sort by: service, created_at, updated_at
--limit <n>                      # Limit results
--offset <n>                     # Skip first N results
-```
-
-#### Storage
-```bash
-# Default: an encrypted vault unlocked with your master password (macOS and Linux)
-sesh -service password -list
-# → the first command explains what it's creating, asks for a new master
-#   password twice, and unlocks the background sesh agent, so later commands
-#   don't prompt until the agent locks itself
-
-# Optional guided setup: choose where secrets live, create the vault
-sesh init
-
-# See every setting and where it came from
-sesh config
-
-# Non-interactive (CI/scripting — exposes password to process env)
-SESH_MASTER_PASSWORD=... sesh -service password -list
-
-# Change your master password (every entry is re-encrypted)
-sesh --rekey
-```
-
-See [Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent) for how the agent starts, locks, and stops. It needs no management; `sesh agent status`, `lock`, and `stop` are there if you want them.
-
-#### Encrypted Export / Import
-```bash
-# Export to a portable password-encrypted file (uses Argon2id + AES-256-GCM)
-sesh -service password -action export -format encrypted -file backup.enc
-# → prompts for password (twice for confirmation)
-
-# Import an encrypted backup
-sesh -service password -action import -format encrypted -file backup.enc
-# → prompts for password
-```
+For scripts, `SESH_MASTER_PASSWORD` gives the master password without a prompt;
+it exposes the password to the process environment, so keep it to CI. See
+[Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent) for
+how the agent starts, locks, and stops.
 
 ## Documentation
 
 - [Usage & Configuration](docs/USAGE_AND_CONFIGURATION.md) — Start here for setup prerequisites, example output, and daily workflows
 - [Security Model](docs/SECURITY_MODEL.md) — Threat model, what sesh protects and what it doesn't
 - [Architecture Overview](docs/ARCHITECTURE.md) — Technical design for contributors
-- [Plugin Development](docs/PLUGIN_DEVELOPMENT.md) — Step-by-step guide to building new providers
 
 ## Development
 

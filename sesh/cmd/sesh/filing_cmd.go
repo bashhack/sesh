@@ -236,7 +236,7 @@ func openFilingStore() (*database.Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := requireVault(cfg.DBPath.Value, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
+	if err := requireVault(cfg.DBPath.Value, "there's no vault yet: sesh add creates it with your first entry (sesh init first chooses where it lives)"); err != nil {
 		return nil, err
 	}
 	_, store, err := openAuditStore()

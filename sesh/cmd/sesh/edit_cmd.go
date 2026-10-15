@@ -40,7 +40,7 @@ func addEditFlags(fs *flag.FlagSet) *editFlags {
 	fs.BoolVar(&f.generate, "generate", false, "Generate a new password")
 	fs.IntVar(&f.length, "length", 24, "Generated password length")
 	fs.BoolVar(&f.noSymbols, "no-symbols", false, "Generate without symbols")
-	fs.BoolVar(&f.force, "force", false, "Don't ask before taking an AWS entry out of the AWS provider")
+	fs.BoolVar(&f.force, "force", false, "Don't ask before renaming an AWS profile's MFA entry, which sesh aws then won't find")
 	f.details.Register(fs)
 	return f
 }
@@ -195,10 +195,10 @@ func runEdit(app *App, args []string) error {
 		return err
 	}
 	// An AWS profile's MFA entry is totp/aws/<profile>; any other name
-	// takes it out of the AWS provider.
+	// means sesh aws no longer finds it.
 	if from == vault.AWSKey(from.Username) && to != vault.AWSKey(to.Username) && !f.force {
 		if !terminal {
-			return errors.New("this is an AWS profile's MFA entry, and its new name takes it out of the AWS provider; add --force to do it anyway")
+			return errors.New("this is an AWS profile's MFA entry, and under its new name sesh aws won't find it; add --force to do it anyway")
 		}
 		yes, err := promptYesNo(app.Stdin, app.Stderr, fmt.Sprintf("%s is an AWS profile's MFA entry; as %s, `sesh aws` won't find it. Rename it anyway? [y/N]: ", from, to))
 		if err != nil || !yes {

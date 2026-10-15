@@ -646,6 +646,9 @@ func (c passwordPromptConfig) withTypedPassword(pw []byte) passwordPromptConfig 
 // echo. Does not consult SESH_MASTER_PASSWORD — that decision belongs to
 // resolvePasswordPrompt so the env-var policy lives in exactly one place.
 func terminalPrompt(prompt string) ([]byte, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil, errors.New("sesh is locked, and there's no terminal here to type the master password at: run a command at one first (the agent then stays unlocked for a while), or give it in SESH_MASTER_PASSWORD")
+	}
 	if _, err := fmt.Fprint(os.Stderr, prompt); err != nil {
 		return nil, err
 	}

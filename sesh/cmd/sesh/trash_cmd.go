@@ -85,6 +85,10 @@ func trashEntries(app *App, args []string) error {
 	if len(named) == 0 {
 		return errors.New("name the entries to delete: sesh trash <entry>…")
 	}
+	// Asking needs a terminal: without one, it's said before unlocking.
+	if !*force && (app.StdinIsTerminal == nil || !app.StdinIsTerminal()) {
+		return errDeleteNeedsForce
+	}
 	store, err := openFilingStore()
 	if err != nil {
 		return err
@@ -364,8 +368,20 @@ func parseAnywhere(fs *flag.FlagSet, args []string) ([]string, error) {
 			}
 		}
 	}
+	// A flag that's wrong is said once, by the caller, with where the
+	// right ones are listed; -h and --help show the command's usage.
+	out, usage := fs.Output(), fs.Usage
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	defer func() { fs.SetOutput(out); fs.Usage = usage }()
 	if err := fs.Parse(flags); err != nil {
-		return nil, err
+		if errors.Is(err, flag.ErrHelp) {
+			if usage != nil {
+				usage()
+			}
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w; sesh %s --help lists its flags", err, fs.Name())
 	}
 	return plain, nil
 }

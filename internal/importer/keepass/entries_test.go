@@ -132,7 +132,7 @@ func TestEntries_OldTOTPLayouts(t *testing.T) {
 		exp.Root.Group.Entries = []Entry{e}
 		got := Entries(&exp)
 		if len(got) != 1 || got[0].Skip != "" || got[0].Key.Kind != vault.KindPassword ||
-			!strings.Contains(strings.Join(got[0].Changes, "\n"), "older layout sesh doesn't read: add it with sesh --service totp --setup") {
+			!strings.Contains(strings.Join(got[0].Changes, "\n"), "older layout sesh doesn't read: add it with sesh add totp <name>") {
 			t.Errorf("%s: %+v", name, got)
 			continue
 		}

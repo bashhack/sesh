@@ -2563,7 +2563,7 @@ func TestChecksPanel(t *testing.T) {
 	f.checks = Checks{Summary: "FAIL: 1 problem", Checks: []Check{
 		{Section: "Setup", Mark: "ok", Label: "Agent", Value: "running, unlocked"},
 		{Section: "Vault", Mark: "FAIL", Label: "Entries", Value: "1 of 3 entries can't be read", Details: []string{"password/c/u: times don't read"}},
-	}, ToDo: [][]string{{"Restore it from a backup, or delete it:", "sesh --service password --purge --delete password/c/u"}}}
+	}, ToDo: [][]string{{"Restore it from a backup, or delete it:", "sesh trash --purge --force password/c/u"}}}
 	a := newApp(t, f, Options{Settings: func() ([]Setting, error) { return nil, nil }})
 	a.press("ctrl+g", ",", "enter")
 	s := a.screen()
@@ -2580,7 +2580,7 @@ func TestChecksPanel(t *testing.T) {
 		t.Errorf("the selected check's details:\n%s", s)
 	}
 	a.press("down")
-	if s := a.screen(); !strings.Contains(s, "Run: sesh --service password --purge --delete") {
+	if s := a.screen(); !strings.Contains(s, "Run: sesh trash --purge --force password/c/u") {
 		t.Errorf("the step's command:\n%s", s)
 	}
 	a.press("esc")

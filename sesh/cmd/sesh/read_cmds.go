@@ -402,62 +402,72 @@ func (v *valueFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&v.field, "field", "", "A field instead: a custom field's name, or notes")
 }
 
-// which is the part named, "" for the secret, or an error for more than
-// one.
-func (v *valueFlags) which() (string, error) {
-	var picked []string
-	if v.username {
-		picked = append(picked, "username")
-	}
-	if v.url {
-		picked = append(picked, "url")
-	}
-	if v.field != "" {
-		picked = append(picked, v.field)
-	}
-	if len(picked) > 1 {
-		return "", errors.New("take one of --username, --url and --field at a time")
-	}
-	if len(picked) == 0 {
-		return "", nil
-	}
-	return picked[0], nil
+// part is what of an entry copy and get take.
+type part struct {
+	field         string // a field's name, or password, secret, url or notes
+	username, url bool
 }
 
-// entryValue is what of entry k part names ("" for its secret, or for a
-// TOTP entry its current code), for the caller to zero, with how it's said
-// ("github (alice)'s password"). Reading a secret is recorded in the audit
-// log as being for why.
-func entryValue(store *database.Store, k vault.Key, part, why string) ([]byte, string, error) {
+// String names the part, as get --json says it.
+func (p part) String() string {
+	switch {
+	case p.username:
+		return "username"
+	case p.url:
+		return "url"
+	case p.field != "":
+		return p.field
+	}
+	return "secret"
+}
+
+// which is the part named, or an error for more than one.
+func (v *valueFlags) which() (part, error) {
+	n := 0
+	for _, given := range []bool{v.username, v.url, v.field != ""} {
+		if given {
+			n++
+		}
+	}
+	if n > 1 {
+		return part{}, errors.New("take one of --username, --url and --field at a time")
+	}
+	return part{field: v.field, username: v.username, url: v.url}, nil
+}
+
+// entryValue is what of entry k p names (its secret, or for a TOTP entry
+// its current code, unless p names a part), for the caller to zero, with
+// how it's said ("github (alice)'s password"). Reading a secret is
+// recorded in the audit log as being for why.
+func entryValue(store *database.Store, k vault.Key, p part, why string) ([]byte, string, error) {
 	e, err := store.Lookup(k)
 	if err != nil {
 		return nil, "", err
 	}
 	name := password.EntryName(k)
-	switch strings.ToLower(part) {
-	case "":
-		if k.Kind == vault.KindTOTP {
-			c, err := totpCodesOf(store, &e, why)
-			if err != nil {
-				return nil, "", err
-			}
-			return []byte(c.current), name + "'s code", nil
-		}
-		v, err := store.GetFor(k, "secret, "+why)
-		return v, name + "'s " + strings.ToLower(secretLabel(k.Kind)), err
-	case "password", "secret":
-		v, err := store.GetFor(k, "secret, "+why)
-		return v, name + "'s " + strings.ToLower(secretLabel(k.Kind)), err
-	case "username":
+	switch {
+	case p.username:
 		if e.Username == "" {
 			return nil, "", fmt.Errorf("%s has no username", name)
 		}
 		return []byte(e.Username), name + "'s username", nil
-	case "url":
-		if e.URL == "" {
-			return nil, "", fmt.Errorf("%s has no URL; add one with: sesh edit %s --url <url>", name, shell.Quote(k.String()))
+	case p.url:
+		return entryURL(&e, name)
+	case p.field == "" && k.Kind == vault.KindTOTP:
+		c, err := totpCodesOf(store, &e, why)
+		if err != nil {
+			return nil, "", err
 		}
-		return []byte(e.URL), name + "'s URL", nil
+		return []byte(c.current), name + "'s code", nil
+	}
+	// --field takes the entry's own parts by their reserved names, and
+	// otherwise its custom fields, found in any case.
+	switch strings.ToLower(p.field) {
+	case "", "password", "secret":
+		v, err := store.GetFor(k, "secret, "+why)
+		return v, name + "'s " + strings.ToLower(secretLabel(k.Kind)), err
+	case "url":
+		return entryURL(&e, name)
 	case "notes":
 		if k.Kind == vault.KindNote {
 			return nil, "", fmt.Errorf("%s is a note: its text is its secret, which sesh copy and get give without --field", name)
@@ -472,16 +482,16 @@ func entryValue(store *database.Store, k vault.Key, part, why string) ([]byte, s
 		defer d.Zero()
 		return bytes.Clone(d.Notes), name + "'s notes", nil
 	}
-	i := slices.IndexFunc(e.Fields, func(f vault.Field) bool { return strings.EqualFold(f.Name, part) })
+	i := slices.IndexFunc(e.Fields, func(f vault.Field) bool { return strings.EqualFold(f.Name, p.field) })
 	if i < 0 {
 		if len(e.Fields) == 0 {
-			return nil, "", fmt.Errorf("%s has no field %q; it has no fields", name, part)
+			return nil, "", fmt.Errorf("%s has no field %q; it has no fields", name, p.field)
 		}
 		names := make([]string, len(e.Fields))
 		for j, f := range e.Fields {
 			names[j] = f.Name
 		}
-		return nil, "", fmt.Errorf("%s has no field %q; its fields: %s", name, part, strings.Join(names, ", "))
+		return nil, "", fmt.Errorf("%s has no field %q; its fields: %s", name, p.field, strings.Join(names, ", "))
 	}
 	stored := e.Fields[i].Name
 	if !e.Fields[i].Secret {
@@ -497,6 +507,14 @@ func entryValue(store *database.Store, k vault.Key, part, why string) ([]byte, s
 		return nil, "", fmt.Errorf("%s has no field %q", name, stored)
 	}
 	return bytes.Clone(f.Value), name + "'s " + stored, nil
+}
+
+// entryURL is e's URL, or why it has none.
+func entryURL(e *vault.Entry, name string) ([]byte, string, error) {
+	if e.URL == "" {
+		return nil, "", fmt.Errorf("%s has no URL; add one with: sesh edit %s --url <url>", name, shell.Quote(e.Key.String()))
+	}
+	return []byte(e.URL), name + "'s URL", nil
 }
 
 // totpCodes is a TOTP entry's current and next code, with the seconds the
@@ -542,7 +560,7 @@ func runCopy(app *App, args []string) error {
 		}
 		return err
 	}
-	part, err := v.which()
+	picked, err := v.which()
 	if err != nil {
 		return err
 	}
@@ -566,7 +584,7 @@ func runCopy(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	value, said, err := entryValue(store, k, part, "to copy it")
+	value, said, err := entryValue(store, k, picked, "to copy it")
 	if err != nil {
 		return err
 	}
@@ -599,7 +617,7 @@ func runGet(app *App, args []string) error {
 		}
 		return err
 	}
-	part, err := v.which()
+	picked, err := v.which()
 	if err != nil {
 		return err
 	}
@@ -615,7 +633,7 @@ func runGet(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	value, _, err := entryValue(store, k, part, "to print it")
+	value, _, err := entryValue(store, k, picked, "to print it")
 	if err != nil {
 		return err
 	}
@@ -628,7 +646,7 @@ func runGet(app *App, args []string) error {
 			Kind     string `json:"kind"`
 			Part     string `json:"part"`
 			Value    string `json:"value"`
-		}{k.String(), k.Service, k.Username, string(k.Kind), cmpOr(part, "secret"), string(value)}
+		}{k.String(), k.Service, k.Username, string(k.Kind), picked.String(), string(value)}
 		return writeJSON(app.Stdout, out) //nolint:gosec // --json prints the value asked for by design
 	}
 	return printValue(app.Stdout, value)

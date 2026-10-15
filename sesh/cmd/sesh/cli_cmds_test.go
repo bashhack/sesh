@@ -163,6 +163,21 @@ func TestCopyAndGet(t *testing.T) {
 	if _, _, err := runCLI(app, runCopy, "openai"); err == nil || !strings.Contains(err.Error(), "sesh get prints it instead") {
 		t.Errorf("no clipboard: %v", err)
 	}
+	// --field names a custom field, even one called username; --username is the entry's own.
+	app, _ = cliApp("", false)
+	if _, _, err := runCLI(app, runEdit, "github", "--field", "username=alt"); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	for args, want := range map[string]string{"github --field username": "alt\n", "github --username": "alice\n", "github --field password": "a\n"} {
+		app, _ = cliApp("", false)
+		if out, _, err := runCLI(app, runGet, strings.Fields(args)...); err != nil || out != want {
+			t.Errorf("%s: %q, %v, want %q", args, out, err, want)
+		}
+	}
+	app, _ = cliApp("", false)
+	if _, errOut, err := runCLI(app, runGet, "github", "--bogus"); err == nil || !strings.Contains(err.Error(), "sesh get --help lists its flags") || errOut != "" {
+		t.Errorf("unknown flag: %q, %v", errOut, err)
+	}
 	app, _ = cliApp("", false)
 	out, _, err := runCLI(app, runGet, "github", "--json")
 	var got struct{ ID, Part, Value string }
@@ -253,7 +268,7 @@ func TestAdd(t *testing.T) {
 		"password github --username alice": "github (alice) already exists; add --force to replace it",
 		"password GitHub --username alice": "github (alice) already exists, and names are case-sensitive",
 		"widget x":                         `takes a kind first (password, key, note, or totp), not "widget"`,
-		"key x --generate":                 "--generate makes a password; a API key comes from elsewhere",
+		"key x --generate":                 "--generate makes a password; an API key comes from wherever it was issued",
 		"password x --length 8":            "add --generate",
 		"note x --qr":                      "--qr reads a TOTP entry's key",
 		"password":                         "name the entry: sesh add password <name>",
@@ -265,8 +280,12 @@ func TestAdd(t *testing.T) {
 		}
 	}
 	app, _ = cliApp("replaced-Strong-pass-81\n", false)
-	if _, _, err := runCLI(app, runAdd, "password", "github", "--username", "alice", "--force"); err != nil {
-		t.Errorf("--force: %v", err)
+	if _, errOut, err := runCLI(app, runAdd, "password", "github", "--username", "alice", "--force"); err != nil || !strings.Contains(errOut, "✅ Replaced github (alice)") {
+		t.Errorf("--force: %q, %v", errOut, err)
+	}
+	app, _ = cliApp("JBSWY3DPEHPK3PXP\n", false)
+	if _, errOut, err := runCLI(app, runAdd, "totp", "Acme", "--username", "jo@acme.io", "--force"); err != nil || !strings.Contains(errOut, "✅ Replaced Acme (jo@acme.io)") {
+		t.Errorf("--force, totp: %q, %v", errOut, err)
 	}
 	typedSecrets(t, "typed-Strong-pass-81")
 	app, _ = cliApp("", true)

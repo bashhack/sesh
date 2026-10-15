@@ -63,7 +63,7 @@ func runUI(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := requireVault(cfg.DBPath.Value, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
+	if err := requireVault(cfg.DBPath.Value, "there's no vault yet: sesh add creates it with your first entry (sesh init first chooses where it lives)"); err != nil {
 		return err
 	}
 	// The first unlock is the usual prompt, before the app draws.

@@ -54,7 +54,7 @@ func addRunFlags(fs *flag.FlagSet) *runFlags {
 
 const runUsage = `Usage: sesh run [--env NAME=<ref>]... [--env-file <file>]... [--no-masking] -- <command> [args...]
   Run a command with secrets from the vault in its environment. A reference
-  is sesh://<id>[#field], with the entry ID as --list shows it.
+  is sesh://<id>[#field], with the entry ID as sesh list shows it.
   Secrets the command prints are shown as <concealed by sesh>, unless
   --no-masking gives it the terminal directly.
 

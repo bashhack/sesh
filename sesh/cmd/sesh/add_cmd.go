@@ -104,7 +104,7 @@ func runAdd(app *App, args []string) error {
 	case (set["length"] || set["no-symbols"]) && !f.generate:
 		return errors.New("--length and --no-symbols shape a generated password: add --generate")
 	case f.generate && kind != vault.KindPassword:
-		return fmt.Errorf("--generate makes a password; a %s comes from elsewhere", kindName(kind))
+		return fmt.Errorf("--generate makes a password; %s comes from wherever it was issued", map[vault.Kind]string{vault.KindAPIKey: "an API key", vault.KindNote: "a note", vault.KindTOTP: "a TOTP key"}[kind])
 	case f.qr && kind != vault.KindTOTP:
 		return errors.New("--qr reads a TOTP entry's key: sesh add totp <name> --qr")
 	}
@@ -158,6 +158,7 @@ func runAdd(app *App, args []string) error {
 	if err := confirmReplace(app, store, k, f.force, terminal); err != nil {
 		return err
 	}
+	replacing := store.Exists(k) == nil
 	var secret []byte
 	if f.generate {
 		opts := password.DefaultGenerateOptions()
@@ -181,6 +182,9 @@ func runAdd(app *App, args []string) error {
 		return err
 	}
 	said := "✅ Added " + password.EntryName(k)
+	if replacing {
+		said = "✅ Replaced " + password.EntryName(k)
+	}
 	if f.generate {
 		switch err := app.ClipboardCopy(string(secret)); {
 		case err != nil:
@@ -429,6 +433,7 @@ func addTOTP(app *App, store *database.Store, name string, f *addFlags, change *
 	if err := confirmReplace(app, store, k, f.force, terminal); err != nil {
 		return err
 	}
+	replacing := store.Exists(k) == nil
 	mgr := password.NewManager(store)
 	if err := readDetails(app, mgr, k, &f.details, change, terminal); err != nil {
 		return err
@@ -440,6 +445,9 @@ func addTOTP(app *App, store *database.Store, name string, f *addFlags, change *
 		return err
 	}
 	said := "✅ Added " + password.EntryName(k)
+	if replacing {
+		said = "✅ Replaced " + password.EntryName(k)
+	}
 	if !params.IsDefault() {
 		algorithm, digits, period := cmpOr(params.Algorithm, "SHA1"), params.Digits, params.Period
 		if digits == 0 {

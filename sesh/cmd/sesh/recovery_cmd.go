@@ -226,7 +226,7 @@ func runRecovery(app *App, args []string) error {
 		offerToRemoveOldBackups(app, cfg, "recovery key")
 		return nil
 	case "new":
-		if err := requireVault(dbPath, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
+		if err := requireVault(dbPath, "there's no vault yet: sesh add creates it with your first entry (sesh init first chooses where it lives)"); err != nil {
 			return err
 		}
 		p := recoveryPrompt()

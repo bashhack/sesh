@@ -53,6 +53,8 @@ func TestComplete(t *testing.T) {
 		{name: "first flag", words: all("-"), has: all("--help", "--version", "--db-path"), lacks: all("--service", "--rekey", "--list-services")},
 		{name: "after --", words: all("list", "--", "-")},
 		{name: "db path", words: all("--db-path", ""), files: true},
+		{name: "db path after a command", words: all("list", "--db-path", ""), files: true},
+		{name: "db path in export", words: all("export", "notes", "--db-path", ""), files: true},
 		{name: "passwd flags", words: all("passwd", "--"), has: all("--db-path")},
 		{name: "lock takes nothing", words: all("lock", "")},
 		{name: "audit commands", words: all("audit", ""), want: all("prune")},

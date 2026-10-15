@@ -94,6 +94,12 @@ func complete(words []string) (cands []candidate, files bool) {
 		// After sesh run's --, the command and its arguments.
 		return nil, firstWord(before) == "run"
 	}
+	// A setting flag's value, with any command: --db-path takes a path.
+	if prev := lastWord(before); strings.HasPrefix(prev, "-") && !strings.Contains(prev, "=") {
+		if spec, ok := findSpec(settingSpecs(), prev); ok {
+			return nil, spec.path
+		}
+	}
 	if len(before) == 0 && !strings.HasPrefix(cur, "-") {
 		return matching(subcommands, cur), false
 	}
