@@ -157,6 +157,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		EditNotes:   provider.EditNotes,
 		IsWeak:      func(pw []byte) bool { return password.IsWeak(pw) },
 		Generate:    func() ([]byte, error) { return password.GeneratePassword(password.DefaultGenerateOptions()) },
+		ScanQR:      uiScanQR(),
 		ClearAfter:  cfg.ClipboardTimeout.Value,
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
 		MaxLifetime: cfg.AgentMaxLifetime.Value,
@@ -549,12 +550,49 @@ func (u *uiVault) Trash() ([]tui.Trashed, error) {
 	return out, nil
 }
 
-func (u *uiVault) RestoreFromTrash(id int64) (vault.Key, error) {
-	r, err := u.store.RestoreFromTrash(id, vault.Key{})
+func (u *uiVault) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
+	r, err := u.store.RestoreFromTrash(id, as)
 	if errors.Is(err, database.ErrNameTaken) {
-		return vault.Key{}, fmt.Errorf("%w: restore it under another name with: sesh trash restore %d --as <new name>", tui.ErrNameTaken, id)
+		return vault.Key{}, tui.ErrNameTaken
 	}
 	return r.Key, u.wrote(err)
+}
+
+func (u *uiVault) EmptyTrash() (int, error) {
+	n, err := u.store.EmptyTrash()
+	return n, u.wrote(err)
+}
+
+func (u *uiVault) ForgetVersion(k vault.Key, n int) error {
+	return u.wrote(u.store.ForgetVersions(k, n))
+}
+
+// AuditLog is the audit log's newest limit events, said as sesh audit
+// says them.
+func (u *uiVault) AuditLog(limit int) (tui.AuditLog, error) {
+	count, oldest, err := u.store.AuditSummary()
+	if err != nil {
+		return tui.AuditLog{}, uiLocked(err)
+	}
+	events, err := u.store.AuditEvents(limit)
+	if err != nil {
+		return tui.AuditLog{}, uiLocked(err)
+	}
+	log := tui.AuditLog{Count: count, Oldest: oldest}
+	if cfg, err := settings(); err == nil {
+		log.Keep = "Nothing is removed automatically (audit.retention_days is 0)."
+		if days := cfg.AuditRetentionDays.Value; days > 0 {
+			log.Keep = fmt.Sprintf("Events older than %s are removed automatically (audit.retention_days).", dayCount(int64(days)))
+		}
+	}
+	for i := range events {
+		kind, what := auditWhat(&events[i])
+		if kind != "" {
+			what = kind + " " + what
+		}
+		log.Events = append(log.Events, tui.AuditEvent{When: events[i].CreatedAt, Event: events[i].EventType, What: what})
+	}
+	return log, nil
 }
 
 func (u *uiVault) RemoveFromTrash(id int64) error {
@@ -739,6 +777,29 @@ func uiLocked(err error) error {
 }
 
 // uiSettings are cfg's settings as the app's settings panel lists them.
+// uiScanQR reads a TOTP entry's link from a QR code on screen, for the
+// add form; nil where the screen can't be captured (macOS's screencapture
+// does it). The link is checked as sesh add totp --qr checks it.
+func uiScanQR() func() (tui.ScannedQR, error) {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	return func() (tui.ScannedQR, error) {
+		text, err := captureQRText()
+		if err != nil {
+			return tui.ScannedQR{}, err
+		}
+		info, err := qrcode.ExtractTOTPFullInfo(text)
+		if err != nil {
+			return tui.ScannedQR{}, err
+		}
+		return tui.ScannedQR{Link: []byte(text), Issuer: info.Issuer, Account: info.Account}, nil
+	}
+}
+
+// captureQRText is the text of a QR code on screen; tests replace it.
+var captureQRText = qrcode.CaptureText
+
 func uiSettings(cfg *config.Config) []tui.Setting {
 	var out []tui.Setting
 	for _, it := range cfg.List() {

@@ -34,6 +34,18 @@ func (c *Config) List() []Item {
 	return out
 }
 
+// Keys is the key of every setting sesh changes, in the order sesh shows
+// them; it reads nothing.
+func Keys() []string {
+	var out []string
+	for _, it := range (&Config{}).list() {
+		if it.Editable {
+			out = append(out, it.Key)
+		}
+	}
+	return out
+}
+
 func (c *Config) list() []Item {
 	var out []Item
 	add := func(key, value, raw string, src Source, origin, applies string) {

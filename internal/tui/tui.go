@@ -65,6 +65,31 @@ type Trashed struct {
 	ID        int64
 }
 
+// AuditLog is the newest events of the vault's audit log, the newest
+// first, with how many there are in all.
+type AuditLog struct {
+	Oldest time.Time // when the oldest event of all was
+	// Keep says what's removed on its own: "Events older than 365 days
+	// are removed automatically (audit.retention_days)."
+	Keep   string
+	Events []AuditEvent
+	Count  int64
+}
+
+// AuditEvent is one event of the audit log, as sesh audit says it.
+type AuditEvent struct {
+	When  time.Time
+	Event string // "read", "edit", "delete", …
+	What  string // the entry, or the vault, and what of it
+}
+
+// ScannedQR is a TOTP entry's otpauth:// link read from a QR code on
+// screen, with the issuer and account it names.
+type ScannedQR struct {
+	Issuer, Account string
+	Link            []byte
+}
+
 // Change is an entry added (Key zero) or changed: To is its name after;
 // nil and empty fields leave what the entry has. Secret is the new secret
 // (a TOTP entry's key, or an otpauth:// link to read it from); Notes are
@@ -163,10 +188,20 @@ type Vault interface {
 	Delete(k vault.Key) error
 	// Trash is the trash's entries, the newest first.
 	Trash() ([]Trashed, error)
-	// RestoreFromTrash puts the trash's entry id back, and says its name.
-	RestoreFromTrash(id int64) (vault.Key, error)
+	// RestoreFromTrash puts the trash's entry id back, under its own name,
+	// or as the entry as names when it isn't zero, and says the name it
+	// has. ErrNameTaken when another entry has that name.
+	RestoreFromTrash(id int64, as vault.Key) (vault.Key, error)
 	// RemoveFromTrash deletes the trash's entry id for good.
 	RemoveFromTrash(id int64) error
+	// EmptyTrash deletes everything in the trash for good, and says how
+	// many entries that was.
+	EmptyTrash() (int, error)
+	// ForgetVersion deletes k's version n (2 and up) for good; the
+	// versions after it move up a number.
+	ForgetVersion(k vault.Key, n int) error
+	// AuditLog is the newest limit events of the vault's audit log.
+	AuditLog(limit int) (AuditLog, error)
 	// Health checks the passwords and API keys, as sesh health does: weak,
 	// reused, and not changed in oldAfter (0 doesn't check). Reading them
 	// is one audit event.
@@ -262,7 +297,11 @@ type Options struct {
 	IsWeak func([]byte) bool
 	// Generate makes a new password.
 	Generate func() ([]byte, error)
-	Now      func() time.Time
+	// ScanQR reads a TOTP entry's link from a QR code on screen, where
+	// the area with it is selected; nil when it can't be done here. The
+	// caller wipes the link.
+	ScanQR func() (ScannedQR, error)
+	Now    func() time.Time
 	// Settings are the config settings, for the settings panel; nil when
 	// there's none to show. SetSetting writes one to the config file (""
 	// takes it out) and says what the app now uses.
@@ -671,6 +710,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.gotSettings(&msg)
 	case checksMsg:
 		return m.gotChecks(&msg)
+	case auditMsg:
+		return m.gotAudit(&msg)
+	case scannedMsg:
+		return m.scanned(&msg)
 	case changedMsg:
 		return m.changed(&msg)
 	case newRecoveryMsg:

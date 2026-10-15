@@ -1,0 +1,65 @@
+package tui
+
+import (
+	"fmt"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+// auditShown is how many of the audit log's newest events its panel
+// lists; sesh audit --limit 0 lists them all.
+const auditShown = 500
+
+// auditMsg is the audit log, read for its panel.
+type auditMsg struct {
+	err   error
+	log   AuditLog
+	epoch int
+}
+
+// openAudit shows the audit log's newest events in a panel over the
+// settings, to read.
+func (m *Model) openAudit() tea.Cmd {
+	m.ov = &overlay{kind: panelAudit, back: m.ov, title: "Audit log", loading: true}
+	epoch := m.epoch
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
+		log, err := v.AuditLog(auditShown)
+		return auditMsg{log: log, err: err, epoch: epoch}
+	})
+}
+
+// showAudit lists the events in the open panel, the newest first, each
+// with its time, what was done, and to what.
+func (m *Model) showAudit(log *AuditLog) {
+	ov, th := m.ov, m.th
+	ov.items, ov.filled = nil, true
+	if log.Count == 0 {
+		ov.title = "Audit log: no events"
+		return
+	}
+	ov.title = fmt.Sprintf("Audit log: %s since %s", plural(int(log.Count), "1 event", fmt.Sprintf("%d events", log.Count)), log.Oldest.Local().Format("2006-01-02"))
+	for _, e := range log.Events {
+		when := e.When.Local().Format("2006-01-02 15:04")
+		ov.items = append(ov.items, item{
+			label:  th.dimmed().Render(when) + "  " + fitTo(e.Event, 6) + "  " + e.What,
+			detail: e.When.Local().Format("2006-01-02 15:04:05") + " · " + e.Event + " · " + e.What,
+			stay:   true,
+			run:    func() tea.Cmd { return nil },
+		})
+	}
+	more := log.Keep
+	if n := int64(len(log.Events)); log.Count > n {
+		more = fmt.Sprintf("The newest %d of %d are shown; sesh audit --limit 0 lists them all. ", n, log.Count) + more
+	}
+	if more != "" {
+		ov.items = append(ov.items, item{label: th.dimmed().Render(more), detail: more, stay: true, rule: true, run: func() tea.Cmd { return nil }})
+	}
+}
+
+// gotAudit fills the audit log's panel, when it's open.
+func (m *Model) gotAudit(msg *auditMsg) tea.Cmd {
+	if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelAudit {
+		return nil
+	}
+	return m.loaded(msg.err, func() { m.showAudit(&msg.log) })
+}

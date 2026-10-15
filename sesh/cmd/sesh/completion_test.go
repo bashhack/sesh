@@ -85,7 +85,15 @@ func TestComplete(t *testing.T) {
 		{name: "touchid takes one command", words: all("touchid", "enable", "")},
 		{name: "completion shells", words: all("completion", ""), want: all("bash", "fish", "zsh")},
 		{name: "init flags", words: all("init", "--"), want: all("--force", "--db-path")},
-		{name: "config takes nothing", words: all("config", "")},
+		{name: "config takes set", words: all("config", ""), want: all("set")},
+		{name: "config set takes a setting", words: all("config", "set", ""), has: all("clipboard_timeout", "history.keep", "backup.dir"), lacks: all("db_path")},
+		{name: "config set flags", words: all("config", "set", "history.keep", "3", "-"), want: all("--force", "--db-path")},
+		{name: "backup takes list, delete or a file", words: all("backup", ""), want: all("list", "delete")},
+		{name: "backup de", words: all("backup", "de"), want: all("delete")},
+		{name: "backup's file", words: all("backup", "my.db"), files: true},
+		{name: "backup flags", words: all("backup", "-"), want: all("--force", "--db-path")},
+		{name: "backup delete flags", words: all("backup", "delete", "-"), want: all("--all", "--force", "--db-path")},
+		{name: "backup list takes only settings", words: all("backup", "list", "-"), want: all("--db-path")},
 		{name: "no words", words: nil, want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "aws", "completion")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

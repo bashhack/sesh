@@ -89,27 +89,13 @@ func runAudit(app *App, args []string) error {
 	}
 	for _, e := range events {
 		when := e.CreatedAt.Local().Format("2006-01-02 15:04:05")
-		if e.EntryID == "" {
+		kind, what := auditWhat(&e)
+		if kind == "" {
 			// An event about the vault, such as a password change.
-			fmt.Fprintf(&b, "%s  %-6s  %s\n", when, e.EventType, e.Detail)
+			fmt.Fprintf(&b, "%s  %-6s  %s\n", when, e.EventType, what)
 			continue
 		}
-		kind, name := auditEntryName(e.EntryID)
-		// An edit says what changed: "renamed from password/github/alice".
-		if change, ok := strings.CutPrefix(e.Detail, "Edit: "); ok {
-			name += " (" + change + ")"
-		}
-		// A read of the notes or fields says which: "read field pin".
-		if read, ok := strings.CutPrefix(e.Detail, "Details: "); ok {
-			name += " (read " + read + ")"
-		} else if read, ok := strings.CutPrefix(e.Detail, "Read: "); ok {
-			name += " (read " + read + ")"
-		}
-		// An earlier secret read, restored or forgotten says which version.
-		if history, ok := strings.CutPrefix(e.Detail, "History: "); ok {
-			name += " (" + history + ")"
-		}
-		fmt.Fprintf(&b, "%s  %-6s  %-11s  %s\n", when, e.EventType, kind, name)
+		fmt.Fprintf(&b, "%s  %-6s  %-11s  %s\n", when, e.EventType, kind, what)
 	}
 	if *limit > 0 && count > int64(*limit) {
 		fmt.Fprintf(&b, "\nShowing the newest %d of %d; --limit 0 shows them all.\n", *limit, count)
@@ -222,8 +208,33 @@ func pruneAuditLog(store *database.Store, cfg *config.Config) {
 	}
 }
 
+// auditWhat is what event e was about, as sesh audit and sesh ui say it:
+// the entry's kind and name, with what of it; or, for an event about the
+// vault (a password change), no kind and its detail.
+func auditWhat(e *database.AuditEntry) (kind, what string) {
+	if e.EntryID == "" {
+		return "", e.Detail
+	}
+	kind, what = auditEntryName(e.EntryID)
+	// An edit says what changed: "renamed from password/github/alice".
+	if change, ok := strings.CutPrefix(e.Detail, "Edit: "); ok {
+		what += " (" + change + ")"
+	}
+	// A read of the notes or fields says which: "read field pin".
+	if read, ok := strings.CutPrefix(e.Detail, "Details: "); ok {
+		what += " (read " + read + ")"
+	} else if read, ok := strings.CutPrefix(e.Detail, "Read: "); ok {
+		what += " (read " + read + ")"
+	}
+	// An earlier secret read, restored or forgotten says which version.
+	if history, ok := strings.CutPrefix(e.Detail, "History: "); ok {
+		what += " (" + history + ")"
+	}
+	return kind, what
+}
+
 // auditEntryName turns an audit entry ID, an entry's key in text form,
-// into the kind of entry and a readable name, as --list names them:
+// into the kind of entry and a readable name, as sesh names them:
 // ("password", "github (alice)"), ("totp", "github (work)"). An ID it
 // doesn't recognise comes back whole, with no kind.
 func auditEntryName(id string) (kind, name string) {

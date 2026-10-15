@@ -31,6 +31,12 @@ const (
 	secretPaste    = "paste a new key"
 )
 
+// How a TOTP entry added gets its key.
+const (
+	totpPaste = "paste it, or its otpauth:// link"
+	totpScan  = "scan a QR code on screen"
+)
+
 // openEdit opens the form that edits e.
 func (m *Model) openEdit(e *vault.Entry) tea.Cmd { return m.openEditWith(e, "") }
 
@@ -113,8 +119,13 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			})
 		}
 	}
+	// A QR code on screen gives the key, when it can be read here.
+	totpFrom := &input{kind: inputChoice, label: "TOTP key", choices: []string{totpPaste, totpScan},
+		hint: "scanning, you select the area of the screen with the QR code once the form is saved; its issuer and account fill a name and username left empty"}
+	totpFrom.shown = func() bool { return adding && kind() == vault.KindTOTP && m.opts.ScanQR != nil }
+	scanning := func() bool { return totpFrom.visible() && totpFrom.choices[totpFrom.choice] == totpScan }
 	totpKey := &input{kind: inputSecret, label: "TOTP key, or otpauth:// link", hint: "a link brings its own code settings; a key alone gives 6-digit codes every 30s"}
-	totpKey.shown = func() bool { return kind() == vault.KindTOTP }
+	totpKey.shown = func() bool { return kind() == vault.KindTOTP && !scanning() }
 	if !adding {
 		totpKey.label, totpKey.hint = "new TOTP key, or otpauth:// link", "leave it empty to keep the current key; a key alone gives 6-digit codes every 30s"
 	}
@@ -140,7 +151,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	}
 
 	title := "Edit " + entryName(e)
-	inputs := []*input{name, user, secretChoice, current, typed, totpKey, url, folder, tags, text, fields}
+	inputs := []*input{name, user, secretChoice, current, typed, totpFrom, totpKey, url, folder, tags, text, fields}
 	if adding {
 		title = "Add an entry"
 		inputs = append([]*input{kindIn}, inputs...)
@@ -153,7 +164,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		if k == vault.KindNote {
 			c.To.Username = ""
 		}
-		if c.To.Service == "" {
+		if c.To.Service == "" && !scanning() {
 			f.err = "Give it a name."
 			return nil
 		}
@@ -189,6 +200,8 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 				return nil
 			}
 			c.Secret = noteText
+		case k == vault.KindTOTP && scanning():
+			// Read once the rest is checked, below.
 		case k == vault.KindTOTP:
 			if len(totpKey.secret) > 0 {
 				c.Secret = bytes.Clone(totpKey.secret)
@@ -232,6 +245,9 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			if !slices.ContainsFunc(fields.rows, func(r fieldRow) bool { return r.orig == of.Name }) {
 				c.RemoveFields = append(c.RemoveFields, of.Name)
 			}
+		}
+		if scanning() {
+			return m.scanThenSave(f, c)
 		}
 		return m.save(f, c, generate)
 	}
@@ -283,6 +299,58 @@ func (m *Model) save(f *form, c *Change, generate bool) tea.Cmd {
 		}
 		return msg
 	}
+}
+
+// scannedMsg is a QR code read for the add form, or why it wasn't.
+type scannedMsg struct {
+	err   error
+	c     *Change
+	qr    ScannedQR
+	epoch int
+}
+
+// scanThenSave reads the TOTP key for c from a QR code on screen, then
+// saves it as save does.
+func (m *Model) scanThenSave(f *form, c *Change) tea.Cmd {
+	f.saving, f.err, f.working = true, "", "Select the area of the screen with the QR code…"
+	scan, epoch := m.opts.ScanQR, m.epoch
+	return func() tea.Msg {
+		qr, err := scan()
+		return scannedMsg{qr: qr, err: err, c: c, epoch: epoch}
+	}
+}
+
+// scanned saves the entry the add form describes with the key a QR code
+// gave, its issuer and account naming it where the form left that empty;
+// or says why the code couldn't be used.
+func (m *Model) scanned(msg *scannedMsg) tea.Cmd {
+	c := msg.c
+	if msg.epoch != m.epoch || m.v == nil || m.form == nil {
+		secure.SecureZeroBytes(msg.qr.Link)
+		c.Wipe()
+		return nil
+	}
+	f := m.form
+	f.saving, f.working = false, ""
+	switch {
+	case msg.err != nil:
+		f.err = "No QR code read: " + msg.err.Error()
+		c.Wipe()
+		return nil
+	case c.To.Service == "" && msg.qr.Issuer == "":
+		f.err = "The QR code doesn't name its issuer: give the entry a name, and scan it again."
+		secure.SecureZeroBytes(msg.qr.Link)
+		c.Wipe()
+		return nil
+	}
+	if c.To.Service == "" {
+		c.To.Service = msg.qr.Issuer
+	}
+	if c.To.Username == "" {
+		c.To.Username = msg.qr.Account
+	}
+	c.Secret = msg.qr.Link
+	return m.save(f, c, false)
 }
 
 // saved closes the form for an entry saved, or says why it wasn't.

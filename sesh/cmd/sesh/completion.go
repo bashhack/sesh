@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -127,9 +128,22 @@ func complete(words []string) (cands []candidate, files bool) {
 	case "init":
 		specs = append(flagSpecs(func(fs *flag.FlagSet) { addInitFlags(fs) }), settingSpecs()...)
 	case "backup":
-		specs = flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) })
-		if cur != "" && !strings.HasPrefix(cur, "-") {
-			return nil, true // the file to write
+		switch {
+		case len(before) == 1 && cur != "" && !strings.HasPrefix(cur, "-"):
+			// list, delete, or the file to write.
+			if c := matching(backupCommands, cur); len(c) > 0 {
+				return c, false
+			}
+			return nil, true
+		case len(before) == 1 && cur == "":
+			return backupCommands, false
+		case len(before) > 1 && before[1] == "delete":
+			// The backups' names aren't completed: that would list the
+			// folder on a Tab press.
+			specs = flagSpecs(func(fs *flag.FlagSet) { addBackupDeleteFlags(fs) })
+		case len(before) > 1 && before[1] == "list":
+		default:
+			specs = flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) })
 		}
 	case "edit":
 		specs = flagSpecs(func(fs *flag.FlagSet) { addEditFlags(fs) })
@@ -238,7 +252,18 @@ func complete(words []string) (cands []candidate, files bool) {
 		verbs = tagCommands
 	case "completion":
 		verbs = completionShells
-	case "config", "recover", "lock", "open":
+	case "config":
+		switch {
+		case len(before) == 1 && !strings.HasPrefix(cur, "-"):
+			return matching([]candidate{{"set", "Change a setting in the config file"}}, cur), false
+		case len(before) == 2 && before[1] == "set" && !strings.HasPrefix(cur, "-"):
+			return matching(settingKeys(), cur), false
+		case len(before) > 1 && before[1] == "set":
+			specs = flagSpecs(func(fs *flag.FlagSet) { addConfigSetFlags(fs) })
+		case !strings.HasPrefix(cur, "-"):
+			return nil, false
+		}
+	case "recover", "lock", "open":
 		// Only the settings' flags, once a dash is typed.
 		if !strings.HasPrefix(cur, "-") {
 			return nil, false
@@ -306,6 +331,22 @@ func complete(words []string) (cands []candidate, files bool) {
 		}
 	}
 	return matching(all, cur), false
+}
+
+// backupCommands are what sesh backup takes besides a file.
+var backupCommands = []candidate{
+	{"list", "List the backups, newest first"},
+	{"delete", "Delete backups for good"},
+}
+
+// settingKeys are the settings sesh config set changes, in the order sesh
+// config shows them.
+func settingKeys() []candidate {
+	var out []candidate
+	for _, k := range config.Keys() {
+		out = append(out, candidate{k, ""})
+	}
+	return out
 }
 
 // kindWords are the kinds sesh list and export take.

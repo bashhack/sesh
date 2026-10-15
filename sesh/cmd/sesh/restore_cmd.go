@@ -88,7 +88,7 @@ func listBackups(app *App, cfg *config.Config) error {
 	if other {
 		b.WriteString("Another vault's backups open with that vault's master password.\n")
 	}
-	b.WriteString("Restore one with: sesh restore <name>\n")
+	b.WriteString("Restore one with: sesh restore <name>; delete one with: sesh backup delete <name>\n")
 	_, err = fmt.Fprint(app.Stdout, b.String())
 	return err
 }

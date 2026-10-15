@@ -106,6 +106,52 @@ func TestRunConfig_ReportsABrokenFile(t *testing.T) {
 	}
 }
 
+// sesh config set writes the file; "" puts the default back; lowering a keep setting asks, or needs --force.
+func TestRunConfig_Set(t *testing.T) {
+	path := useConfigFile(t, "[history]\nkeep = 10\n")
+	read := func() string {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	app, _ := cliApp("", false)
+	if out, _, err := runCLI(app, runConfig, "set", "clipboard_timeout", "15s"); err != nil || !strings.Contains(out, "✅ Set clipboard_timeout to 15s") || !strings.Contains(read(), `clipboard_timeout = "15s"`) {
+		t.Errorf("set: %q, %v\n%s", out, err, read())
+	}
+	app, _ = cliApp("", false)
+	if _, _, err := runCLI(app, runConfig, "set", "history.keep", "3"); err == nil || !strings.Contains(err.Error(), "beyond its newest 3 will be deleted for good") || !strings.Contains(err.Error(), "--force") || !strings.Contains(read(), "keep = 10") {
+		t.Errorf("lowering without a terminal: %v\n%s", err, read())
+	}
+	app, _ = cliApp("n\n", true)
+	if _, errOut, err := runCLI(app, runConfig, "set", "history.keep", "3"); err != nil || !strings.Contains(errOut, "Nothing changed") || !strings.Contains(read(), "keep = 10") {
+		t.Errorf("lowering, answered no: %q, %v", errOut, err)
+	}
+	app, _ = cliApp("y\n", true)
+	if _, _, err := runCLI(app, runConfig, "set", "history.keep", "3"); err != nil || !strings.Contains(read(), "keep = 3") {
+		t.Errorf("lowering, answered yes: %v\n%s", err, read())
+	}
+	app, _ = cliApp("", false)
+	if out, _, err := runCLI(app, runConfig, "set", "history.keep", "", "--force"); err != nil || !strings.Contains(out, "Took history.keep out of") || strings.Contains(read(), "keep =") {
+		t.Errorf("back to the default: %q, %v\n%s", out, err, read())
+	}
+	t.Setenv(config.EnvTrashKeepDays, "7")
+	for args, wantSub := range map[string]string{
+		"set nope 1":                 "nope isn't a setting; sesh config lists them",
+		"set db_path /tmp/x.db":      "sesh init moves it",
+		"set trash.keep_days 3":      "set by SESH_TRASH_KEEP_DAYS",
+		"set clipboard_timeout soon": "clipboard_timeout",
+		"set clipboard_timeout":      "name the setting and its value",
+		"frobnicate":                 `sesh config takes set, or nothing, not "frobnicate"`,
+	} {
+		app, _ := cliApp("", false)
+		if _, _, err := runCLI(app, runConfig, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("%s: %v, want %q", args, err, wantSub)
+		}
+	}
+}
+
 func TestOpenSQLiteStore_ConfigFileAlone(t *testing.T) {
 	vaultPath := filepath.Join(t.TempDir(), "nested", "vault.db")
 	useConfigFile(t, "db_path = \""+vaultPath+"\"\n")

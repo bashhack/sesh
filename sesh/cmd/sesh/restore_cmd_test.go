@@ -70,7 +70,7 @@ func TestRestore_ListsBackups(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _, err := runRestoreOut(t, "", false)
-	if err != nil || !strings.Contains(out, "2026-10-07 09:12") || !strings.Contains(out, "passwords-00000000-2026-10-01T090000Z.db  (another vault)") || !strings.HasSuffix(out, "Restore one with: sesh restore <name>\n") {
+	if err != nil || !strings.Contains(out, "2026-10-07 09:12") || !strings.Contains(out, "passwords-00000000-2026-10-01T090000Z.db  (another vault)") || !strings.HasSuffix(out, "Restore one with: sesh restore <name>; delete one with: sesh backup delete <name>\n") {
 		t.Errorf("list:\n%s\n%v", out, err)
 	}
 }

@@ -47,6 +47,7 @@ type fakeVault struct {
 	reads          []string // "secret <key> <reading>" or "code <key>"
 	exports        []string // "to password replace", each Export asked for
 	starts         []string // "source files password", each StartImport asked for
+	audit          AuditLog // what AuditLog gives
 	kept           int      // keep-alives
 	closed         bool
 	changed        bool
@@ -279,11 +280,35 @@ func (f *fakeVault) RenameTag(from, to string) (int, bool, error) {
 
 func (f *fakeVault) Trash() ([]Trashed, error) { return slices.Clone(f.trash), nil }
 
-func (f *fakeVault) RestoreFromTrash(id int64) (vault.Key, error) {
+func (f *fakeVault) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
 	e := f.trashed[id]
+	if as != (vault.Key{}) {
+		e.Key = as
+	}
+	if slices.ContainsFunc(f.entries, func(x vault.Entry) bool { return x.Key == e.Key }) {
+		return vault.Key{}, ErrNameTaken
+	}
 	f.entries = append(f.entries, e)
 	f.trash = slices.DeleteFunc(f.trash, func(t Trashed) bool { return t.ID == id })
 	return e.Key, nil
+}
+
+func (f *fakeVault) EmptyTrash() (int, error) {
+	n := len(f.trash)
+	f.trash = nil
+	return n, nil
+}
+
+func (f *fakeVault) ForgetVersion(k vault.Key, n int) error {
+	h := f.history[k]
+	f.history[k] = append(slices.Clone(h[:n-2]), h[n-1:]...)
+	return nil
+}
+
+func (f *fakeVault) AuditLog(limit int) (AuditLog, error) {
+	log := f.audit
+	log.Events = log.Events[:min(limit, len(log.Events))]
+	return log, f.err
 }
 
 func (f *fakeVault) RemoveFromTrash(id int64) error {
@@ -1274,6 +1299,110 @@ func TestActionDeleteAndTrash(t *testing.T) {
 	}
 }
 
+// An entry put back under a name that's taken says so; a puts it back under another; e empties the trash after a yes.
+func TestTrashRestoreAsAndEmpty(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "d", "wait", "y")
+	f.entries = append(f.entries, vault.Entry{Key: github}) // another entry takes its name
+	a.press("ctrl+g", "t", "enter")
+	if s := a.screen(); a.ov == nil || a.ov.kind != panelTrash || !strings.Contains(s, "a puts it back under another") {
+		t.Fatalf("a name taken:\n%s", s)
+	}
+	a.press("a")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "password/github/alice") {
+		t.Fatalf("the name to put it back as:\n%s", s)
+	}
+	a.press("enter")
+	if a.form == nil || !strings.Contains(a.screen(), "That's its own name") {
+		t.Fatalf("its own name again:\n%s", a.screen())
+	}
+	a.press("ctrl+u", "password/github-old/alice", "enter")
+	old := vault.Key{Kind: vault.KindPassword, Service: "github-old", Username: "alice"}
+	if !slices.ContainsFunc(f.entries, func(e vault.Entry) bool { return e.Key == old }) || len(f.trash) != 0 || !strings.Contains(a.screen(), "Restored password github-old (alice)") {
+		t.Fatalf("put back as another: trash %v:\n%s", f.trash, a.screen())
+	}
+	a.press("down", "ctrl+k", "d", "wait", "y", "ctrl+k", "d", "wait", "y", "ctrl+g", "t", "e")
+	if s := a.screen(); !strings.Contains(s, "Delete all 2 entries in the trash for good?") {
+		t.Fatalf("confirm emptying:\n%s", s)
+	}
+	a.press("wait", "y")
+	if s := a.screen(); len(f.trash) != 0 || a.ov == nil || a.ov.kind != panelTrash || !strings.Contains(s, "The trash is empty.") || !strings.Contains(s, "Deleted 2 entries in the trash for good") {
+		t.Errorf("emptied: trash %v:\n%s", f.trash, s)
+	}
+}
+
+// x deletes an earlier secret for good after a yes; the panel stays, listing those left.
+func TestHistoryDeleteVersion(t *testing.T) {
+	f := newFake()
+	f.history = map[vault.Key][]string{github: {"old-1", "old-2"}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "h", "down", "x")
+	if s := a.screen(); !strings.Contains(s, "Delete version 3 of github (alice) for good?") {
+		t.Fatalf("confirm:\n%s", s)
+	}
+	a.press("n")
+	if len(f.history[github]) != 2 {
+		t.Fatal("no deleted it")
+	}
+	a.press("x", "wait", "y")
+	if s := a.screen(); !slices.Equal(f.history[github], []string{"old-1"}) || a.ov == nil || a.ov.kind != panelHistory || strings.Contains(s, "version 3  replaced") || !strings.Contains(s, "Deleted version 3 of github (alice) for good") {
+		t.Errorf("deleted: history %q:\n%s", f.history[github], s)
+	}
+}
+
+// The settings' audit log row lists the newest events, saying when more are kept than shown; none says so.
+func TestAuditPanel(t *testing.T) {
+	f := newFake()
+	when := time.Date(2026, 10, 14, 9, 30, 0, 0, time.Local)
+	f.audit = AuditLog{Count: 600, Oldest: when.AddDate(0, -1, 0), Keep: "Nothing is removed automatically.",
+		Events: []AuditEvent{{When: when, Event: "read", What: "password github (alice) (in sesh ui, to copy it)"}}}
+	a := newApp(t, f, Options{Settings: func() ([]Setting, error) { return nil, nil }})
+	a.press("ctrl+g", ",", "down", "enter")
+	s := a.screen()
+	for _, want := range []string{"Audit log: 600 events since", "2026-10-14 09:30  read    password github (alice)", "The newest 1 of 600 are shown"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q:\n%s", want, s)
+		}
+	}
+	a.press("esc")
+	f.audit = AuditLog{}
+	a.press("enter")
+	if s := a.screen(); !strings.Contains(s, "No events yet") {
+		t.Errorf("no events:\n%s", s)
+	}
+}
+
+// A TOTP entry's key can come from a QR code on screen, whose issuer and account name it when left empty; a code
+// that can't be read is said, and nothing saved.
+func TestAddScanQR(t *testing.T) {
+	f := newFake()
+	var scanErr error
+	link := "otpauth://totp/Acme:jo@acme.io?secret=JBSWY3DPEHPK3PXP&issuer=Acme"
+	a := newApp(t, f, Options{ScanQR: func() (ScannedQR, error) {
+		return ScannedQR{Link: []byte(link), Issuer: "Acme", Account: "jo@acme.io"}, scanErr
+	}})
+	a.press("ctrl+g", "a", "→", "→", "→") // TOTP
+	if s := a.screen(); !strings.Contains(s, "scan a QR code on screen") {
+		t.Fatalf("the choice:\n%s", s)
+	}
+	a.tabs(3) // name, account, then the key's choice
+	a.press("→")
+	scanErr = errors.New("screenshot capture was canceled or failed")
+	a.press("ctrl+s")
+	if s := a.screen(); len(f.saves) != 0 || a.form == nil || !strings.Contains(s, "No QR code read: screenshot capture was canceled") {
+		t.Fatalf("a failed scan:\n%s", s)
+	}
+	scanErr = nil
+	a.press("ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saves = %d:\n%s", len(f.saves), a.screen())
+	}
+	if c := f.saves[0]; c.To != (vault.Key{Kind: vault.KindTOTP, Service: "Acme", Username: "jo@acme.io"}) || string(c.Secret) != link {
+		t.Errorf("change = %+v", c)
+	}
+}
+
 // Lock now locks the app, and the agent.
 func TestActionLockNow(t *testing.T) {
 	f := newFake()
@@ -1434,7 +1563,7 @@ func TestPanelEdges(t *testing.T) {
 	if a.input.Value() != "" {
 		t.Errorf("a paste reached the search behind the panel: %q", a.input.Value())
 	}
-	first := a.restoreFromTrash(7)
+	first := a.restoreFromTrash(7, vault.Key{})
 	if !a.ov.loading {
 		t.Fatal("the panel takes keys while an entry is put back")
 	}
@@ -2471,7 +2600,7 @@ func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
 // A setting is changed through a one-line form; the panel stays, shows it, and the app takes up what it uses.
 func TestSettingsChange(t *testing.T) {
 	a, asked := settingsApp(t)
-	a.press("ctrl+g", ",", "down", "down", "enter", "ctrl+u", "90", "enter")
+	a.press("ctrl+g", ",", "down", "down", "down", "enter", "ctrl+u", "90", "enter")
 	if !slices.Equal(*asked, []string{"health.old_after_days=90"}) || a.opts.OldAfter != 90*24*time.Hour {
 		t.Fatalf("asked %q, old after %v", *asked, a.opts.OldAfter)
 	}
@@ -2491,7 +2620,7 @@ func TestSettingsChange(t *testing.T) {
 // One set by the environment, or the vault's place, isn't changed from the app, and says why.
 func TestSettingsNotChanged(t *testing.T) {
 	a, asked := settingsApp(t)
-	a.press("ctrl+g", ",", "down", "down", "down", "enter")
+	a.press("ctrl+g", ",", "down", "down", "down", "down", "enter")
 	if s := a.screen(); a.form != nil || !strings.Contains(s, "set by SESH_TRASH_KEEP_DAYS") {
 		t.Errorf("one set by the environment:\n%s", s)
 	}
@@ -2504,7 +2633,7 @@ func TestSettingsNotChanged(t *testing.T) {
 // An unchanged value writes nothing; lowering one that deletes asks first, and emptying one compares its default.
 func TestSettingsLoss(t *testing.T) {
 	a, asked := settingsApp(t)
-	a.press("ctrl+g", ",", "down", "enter", "enter")
+	a.press("ctrl+g", ",", "down", "down", "enter", "enter")
 	if len(*asked) != 0 || !strings.Contains(a.screen(), "Nothing changed.") {
 		t.Fatalf("unchanged: asked %q\n%s", *asked, a.screen())
 	}
@@ -2551,7 +2680,7 @@ func TestSettingsLossAgainstNow(t *testing.T) {
 	a, asked, values := settingsAppValues(t)
 	a.press("ctrl+g", ",")
 	values["history.keep"] = "20" // another command raises it
-	a.press("down", "enter", "ctrl+u", "15", "enter")
+	a.press("down", "down", "enter", "ctrl+u", "15", "enter")
 	if a.ov == nil || !strings.Contains(a.ov.question, "beyond its newest 15") || len(*asked) != 0 {
 		t.Errorf("15 from 20 (the panel showing 10): asked %q, panel %+v", *asked, a.ov)
 	}

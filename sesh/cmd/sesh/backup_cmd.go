@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,16 +54,46 @@ func addBackupFlags(fs *flag.FlagSet) *bool {
 	return fs.Bool("force", false, "Replace the file if it exists")
 }
 
+const backupUsage = `Usage:
+  sesh backup [--force] [file]                 Copy the vault now: into the backups folder (backup.dir),
+                                               or to file (or into a folder); --force replaces a file there
+  sesh backup list                             List the backups, newest first (as sesh restore does)
+  sesh backup delete <backup>… [--force]       Delete backups for good, named as the list names them
+  sesh backup delete --all [--force]           Delete all of this vault's backups, and make a fresh one
+
+No password is needed: the secrets in a backup stay encrypted, as in the
+vault. A backup still opens with the master password (and recovery key) it
+was made under, so after changing one that may have leaked, delete the
+old backups. Deleting asks first; --force deletes without asking. (To back
+up to a file named list or delete, write ./list.)`
+
 // runBackup is `sesh backup [file]`: a copy of the vault now, in the
 // backups folder (pruned to backup.keep) or at file. It needs no password:
-// the secrets in the copy are encrypted, as in the vault.
+// the secrets in the copy are encrypted, as in the vault. sesh backup list
+// and delete see to the backups made.
 func runBackup(app *App, args []string) error {
+	if len(args) > 0 {
+		switch {
+		case isHelp(args[0]):
+			_, err := fmt.Fprintln(app.Stdout, backupUsage)
+			return err
+		case args[0] == "list":
+			if len(args) > 1 {
+				return fmt.Errorf("sesh backup list takes nothing more, not %q", strings.Join(args[1:], " "))
+			}
+			cfg, err := settings()
+			if err != nil {
+				return err
+			}
+			return listBackups(app, cfg)
+		case args[0] == "delete":
+			return deleteBackups(app, args[1:])
+		}
+	}
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	force := addBackupFlags(fs)
-	fs.Usage = func() {
-		fmt.Fprintln(app.Stderr, "Usage: sesh backup [--force] [file]\n  Copy the vault now: into the backups folder (backup.dir), or to file (or into a folder).\n  No password is needed; the secrets in the copy stay encrypted.") //nolint:errcheck // usage text
-	}
+	fs.Usage = func() { fmt.Fprintln(app.Stderr, backupUsage) } //nolint:errcheck // usage text
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -108,6 +139,104 @@ func runBackup(app *App, args []string) error {
 		}
 	}
 	_, err = fmt.Fprintf(app.Stdout, "✅ Backed up the vault to %s (%s)\n", tildePath(b.Path), vaultSize(b.Size))
+	return err
+}
+
+// addBackupDeleteFlags defines sesh backup delete's flags on fs.
+func addBackupDeleteFlags(fs *flag.FlagSet) (all, force *bool) {
+	return fs.Bool("all", false, "Delete all of this vault's backups, and make a fresh one"), fs.Bool("force", false, "Delete without asking")
+}
+
+// deleteBackups is sesh backup delete: backups the list names deleted for
+// good, or all of the vault's, with a fresh one made, as sesh ui's backups
+// panel does. Every backup named is found before any is deleted.
+func deleteBackups(app *App, args []string) error {
+	fs := flag.NewFlagSet("backup delete", flag.ContinueOnError)
+	fs.SetOutput(app.Stderr)
+	all, force := addBackupDeleteFlags(fs)
+	names, err := parseAnywhere(fs, args)
+	if err != nil {
+		return err
+	}
+	switch {
+	case *all && len(names) > 0:
+		return errors.New("--all deletes every backup of the vault; name backups, or give --all, not both")
+	case !*all && len(names) == 0:
+		return errors.New("name the backups to delete (sesh backup list shows them), or give --all")
+	}
+	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
+	if !*force && !terminal {
+		return errors.New("deleting backups asks first, and there's no terminal to ask at; add --force to delete without asking")
+	}
+	cfg, err := settings()
+	if err != nil {
+		return err
+	}
+	dir, vaultPath := cfg.BackupFolder(), cfg.DBPath.Value
+	if *all {
+		if err := requireVault(vaultPath, "there's no vault to back up afresh; delete the backups by name instead"); err != nil {
+			return err
+		}
+		s, err := backup.SeriesOf(vaultPath, dir)
+		if err != nil {
+			return err
+		}
+		if !*force {
+			yes, err := promptYesNo(app.Stdin, app.Stderr, "Delete this vault's backups in "+tildePath(dir)+" for good, and make a fresh one? [y/N]: ")
+			if err != nil || !yes {
+				return nothingDeleted(app, err)
+			}
+		}
+		said, err := renewBackups(s, vaultPath)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(app.Stdout, "✅ "+said)
+		return err
+	}
+	listed, _, err := backup.ListAny(dir, vaultPath)
+	if err != nil {
+		return err
+	}
+	var paths []string
+	for _, name := range names {
+		i := slices.IndexFunc(listed, func(b backup.Info) bool { return filepath.Base(b.Path) == name || b.Path == name })
+		if i < 0 {
+			return fmt.Errorf("no backup named %s in %s; sesh backup list shows them", name, tildePath(dir))
+		}
+		if !slices.Contains(paths, listed[i].Path) {
+			paths = append(paths, listed[i].Path)
+		}
+	}
+	if !*force {
+		what := "the backup " + filepath.Base(paths[0])
+		if len(paths) > 1 {
+			what = countOf(int64(len(paths)), "backup")
+		}
+		yes, err := promptYesNo(app.Stdin, app.Stderr, "Delete "+what+" for good? [y/N]: ")
+		if err != nil || !yes {
+			return nothingDeleted(app, err)
+		}
+	}
+	for i, path := range paths {
+		if err := backup.Remove(dir, vaultPath, path); err != nil {
+			return fmt.Errorf("%w (deleted %d of %d)", err, i, len(paths))
+		}
+	}
+	said := "✅ Deleted the backup " + filepath.Base(paths[0])
+	if len(paths) > 1 {
+		said = "✅ Deleted " + countOf(int64(len(paths)), "backup")
+	}
+	_, err = fmt.Fprintln(app.Stdout, said)
+	return err
+}
+
+// nothingDeleted is err, or, for a no, saying nothing was deleted.
+func nothingDeleted(app *App, err error) error {
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(app.Stderr, "Nothing deleted.")
 	return err
 }
 

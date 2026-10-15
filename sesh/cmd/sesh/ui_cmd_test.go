@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -479,20 +480,44 @@ func TestUI_Actions(t *testing.T) {
 		t.Errorf("Check after the app's own writes = %v, %v; want no change", changed, err)
 	}
 	putSecrets(t, gh, "someone else's")
-	if _, err := u.RestoreFromTrash(trash[0].ID); !errors.Is(err, tui.ErrNameTaken) || !strings.Contains(err.Error(), "--as <new name>") {
+	if _, err := u.RestoreFromTrash(trash[0].ID, vault.Key{}); !errors.Is(err, tui.ErrNameTaken) {
 		t.Errorf("restore onto a name in use: %v", err)
 	}
-	if err := u.RemoveFromTrash(trash[0].ID); err != nil {
+	old := vault.Key{Kind: vault.KindPassword, Service: "github-old", Username: "alice"}
+	if k, err := u.RestoreFromTrash(trash[0].ID, old); err != nil || k != old {
+		t.Errorf("restore as another = %v, %v", k, err)
+	}
+	// An earlier secret deleted for good; the trash emptied.
+	if err := u.ForgetVersion(old, 2); err != nil {
 		t.Fatal(err)
 	}
+	if h, err := u.History(old); err != nil || len(h) != 1 {
+		t.Errorf("History after forgetting = %v, %v", h, err)
+	}
+	for _, k := range []vault.Key{old, {Kind: vault.KindPassword, Service: "gitlab"}} {
+		if err := u.Delete(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := u.EmptyTrash(); err != nil || n != 2 {
+		t.Errorf("EmptyTrash = %d, %v", n, err)
+	}
 	if trash, err := u.Trash(); err != nil || len(trash) != 0 {
-		t.Errorf("trash after removing = %+v, %v", trash, err)
+		t.Errorf("trash after emptying = %+v, %v", trash, err)
 	}
 	log := mustRun(t, runAudit)
 	for _, want := range []string{"in sesh ui, to copy or show its field pin", "in sesh ui, to copy it"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("audit missing %q:\n%s", want, log)
 		}
+	}
+	// The app's audit log says each event as sesh audit does, the newest first.
+	got, err := u.AuditLog(3)
+	if err != nil || got.Count < 3 || len(got.Events) != 3 || got.Oldest.IsZero() || !strings.Contains(got.Keep, "audit.retention_days") {
+		t.Fatalf("AuditLog = %+v, %v", got, err)
+	}
+	if e := got.Events[0]; e.Event != "purge" || e.What != "password gitlab" {
+		t.Errorf("the newest event = %+v", e)
 	}
 }
 
@@ -922,5 +947,29 @@ func TestUI_ChecksKeyChanged(t *testing.T) {
 	}
 	if (keyChangedError{}).Error() != "the master password was changed by another sesh command while this one was checking; run sesh doctor again" {
 		t.Error("sesh doctor's words changed")
+	}
+}
+
+// The app's QR scan gives the link a code holds, with its issuer and account; a code that isn't one is refused
+// without being quoted. Only macOS can capture the screen.
+func TestUIScanQR(t *testing.T) {
+	scan := uiScanQR()
+	if runtime.GOOS != "darwin" {
+		if scan != nil {
+			t.Error("offered where the screen can't be captured")
+		}
+		return
+	}
+	orig := captureQRText
+	t.Cleanup(func() { captureQRText = orig })
+	captureQRText = func() (string, error) {
+		return "otpauth://totp/Acme:jo@acme.io?secret=JBSWY3DPEHPK3PXP&issuer=Acme", nil
+	}
+	if qr, err := scan(); err != nil || qr.Issuer != "Acme" || qr.Account != "jo@acme.io" || !strings.HasPrefix(string(qr.Link), "otpauth://") {
+		t.Errorf("scan = %+v, %v", qr, err)
+	}
+	captureQRText = func() (string, error) { return "WIFI:T:WPA;S:net;P:SECRETWIFI;;", nil }
+	if _, err := scan(); err == nil || strings.Contains(err.Error(), "SECRETWIFI") {
+		t.Errorf("not a TOTP code: %v", err)
 	}
 }
