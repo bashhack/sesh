@@ -1177,7 +1177,12 @@ func extractServiceName(args []string) string {
 // and command, as --help does.
 func (a *App) PrintGettingStarted() error {
 	intro := []string{"sesh keeps your TOTP secrets and passwords in an encrypted vault.", ""}
-	if cfg, err := settings(); err != nil || vaultMissing(cfg.DBPath.Value) {
+	switch cfg, err := settings(); {
+	case err != nil:
+		// Not the same as no vault: say what's wrong, which every command
+		// using the vault would stop at.
+		intro = append(intro, "Your settings have a problem, which `sesh config` shows: "+err.Error(), "")
+	case vaultMissing(cfg.DBPath.Value):
 		intro = append(intro,
 			"Get started:",
 			"  sesh -service totp -setup       add a TOTP account",

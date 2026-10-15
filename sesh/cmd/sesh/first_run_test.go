@@ -61,9 +61,25 @@ func TestPlainSeshPrintsGettingStarted(t *testing.T) {
 			t.Errorf("missing %q", want)
 		}
 	}
+	commands := out[strings.Index(out, "Commands:\n")+len("Commands:\n"):]
+	if !strings.HasPrefix(out, "sesh keeps your TOTP secrets") || !strings.HasPrefix(commands, "  sesh ui ") {
+		t.Errorf("the intro first, and sesh ui first among the commands:\n%s", out)
+	}
+	for _, c := range subcommands {
+		if !strings.Contains(out, "  sesh "+c.value) {
+			t.Errorf("missing sesh %s", c.value)
+		}
+	}
 	t.Setenv("SESH_DB_PATH", filepath.Join(t.TempDir(), "none.db"))
-	if out := plain(); !strings.Contains(out, "Get started:") || !strings.Contains(out, "sesh -service totp -setup") || !strings.Contains(out, help.String()) {
+	out = plain()
+	if i := strings.Index(out, "Get started:"); i < 0 || i > strings.Index(out, "Usage: sesh") || !strings.Contains(out, "sesh -service totp -setup") || !strings.Contains(out, help.String()) {
 		t.Errorf("with no vault, the first steps then the help:\n%s", out)
+	}
+	// A config file that doesn't load isn't "no vault": it's said, without the first steps.
+	healthVault(t)
+	useConfigFile(t, "clipboard_timeout = \"banana\"\n")
+	if out := plain(); strings.Contains(out, "Get started:") || !strings.Contains(out, "Your settings have a problem") || !strings.Contains(out, "banana") {
+		t.Errorf("a broken config:\n%s", out)
 	}
 }
 
