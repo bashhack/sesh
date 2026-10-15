@@ -327,4 +327,36 @@ func TestRevealHintOnceTyped(t *testing.T) {
 	if s := a.screen(); !strings.Contains(s, "ctrl+r  show what you typed") || row() != at {
 		t.Errorf("typed: the new password's label at %d, was %d\n%s", row(), at, s)
 	}
+	// Shown, then emptied, or shown with nothing typed: the hint says it's shown, before what's typed next is.
+	a.press("ctrl+r", "backspace")
+	if s := a.screen(); !strings.Contains(s, "ctrl+r  hide it") {
+		t.Errorf("shown, then emptied:\n%s", s)
+	}
+	a.press("tab", "ctrl+r")
+	if s := a.screen(); !strings.Contains(s, "ctrl+r  hide it") {
+		t.Errorf("shown with nothing typed:\n%s", s)
+	}
+}
+
+// The export password's line, its own hint beside or below Ctrl-R's, is kept while it's empty: the form doesn't move.
+func TestRevealHintKeepsLines(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("ctrl+k", "i", "e", "tab")
+	row := func() int {
+		for i, l := range strings.Split(a.screen(), "\n") {
+			if strings.Contains(l, "export password again") {
+				return i
+			}
+		}
+		return -1
+	}
+	for _, w := range []int{80, 60} {
+		a.Update(tea.WindowSizeMsg{Width: w, Height: 30})
+		at := row()
+		a.press("x")
+		if row() != at || at < 0 {
+			t.Errorf("at %d columns: the next label at %d, was %d\n%s", w, row(), at, a.screen())
+		}
+		a.press("backspace")
+	}
 }
