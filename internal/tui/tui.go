@@ -197,8 +197,47 @@ type Vault interface {
 	// names, with password, which it wipes; a file there is replaced only
 	// when replace (ErrExists otherwise). It says what it wrote.
 	Export(to string, password []byte, replace bool) (string, error)
+	// StartImport reads files from source ("bitwarden", "sesh", …) for an
+	// import, as sesh import does; password is an export's own, nil until
+	// one is asked for with NeedsPassword. The caller closes what it gives.
+	StartImport(source string, files []string, password []byte) (Importer, error)
 	Close() error
 }
+
+// Importer is an import read: planned against the vault, as often as
+// what's done with entries the vault has changes, then applied.
+type Importer interface {
+	// Plan sorts the import's entries against the vault: onConflict is
+	// "skip" or "overwrite" for those the vault has, "" for neither yet.
+	Plan(onConflict string) (ImportPlan, error)
+	// Apply writes the last plan's entries, and says what it did.
+	Apply() (string, error)
+	// Close wipes what the import read.
+	Close()
+}
+
+// ImportPlan is what an import would do: said as sesh import says it, the
+// entries it writes, and those the vault has already.
+type ImportPlan struct {
+	Summary string
+	// After is what to do once the import is done (delete a plain
+	// export), said even when there's nothing to import.
+	After          string
+	Count, Clashes int
+}
+
+// ErrNeedsPassword is an import's export protected by a password, which
+// is asked for: NeedsPassword names the export.
+var ErrNeedsPassword = errors.New("needs a password")
+
+// NeedsPassword is ErrNeedsPassword, naming the export ("Bitwarden
+// export").
+func NeedsPassword(what string) error { return &needsPasswordError{what: what} }
+
+type needsPasswordError struct{ what string }
+
+func (e *needsPasswordError) Error() string        { return "the " + e.what + " is protected by a password" }
+func (e *needsPasswordError) Is(target error) bool { return target == ErrNeedsPassword }
 
 // Options are what the app works with.
 type Options struct {
@@ -281,6 +320,12 @@ type Model struct {
 	quitErr error
 	// afterword is said once the app has ended.
 	afterword string
+	// importing is the import being previewed; importAsk shows its form's
+	// password input, when the export asks for one, and importName says
+	// where it's from.
+	importing  *importing
+	importAsk  func()
+	importName string
 
 	v *gate // nil while locked
 
@@ -444,6 +489,11 @@ func (m *Model) Close() {
 	}
 	m.shut = nil
 	m.wipe()
+	if m.importing != nil {
+		// Its plan or apply is done: the vault's reads have been waited for.
+		m.importing.im.Close()
+		m.importing = nil
+	}
 	if m.form != nil {
 		m.form.wipe()
 		m.form = nil
@@ -606,6 +656,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.width, m.height = msg.Width, msg.Height
 		m.scroll()
 		m.scrollSide()
+		m.showPlan()
 		return m.moved()
 	case openedMsg:
 		if msg.err != nil {
@@ -638,6 +689,12 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.restored(&msg)
 	case exportedMsg:
 		return m.exported(&msg)
+	case importStartedMsg:
+		return m.importStarted(&msg)
+	case importPlannedMsg:
+		return m.importPlanned(&msg)
+	case importedMsg:
+		return m.imported(&msg)
 	case agentLockedMsg:
 		if msg.err != nil && m.v == nil {
 			m.lockedWhy = "sesh's agent couldn't be locked (" + msg.err.Error() + "). Lock it with: sesh agent lock"
@@ -776,11 +833,16 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			// panel open on what they were is closed, not left to act on
 			// what they are now.
 			m.wipe()
+			if m.importing != nil && m.importing.applying {
+				// The import being written changes the vault: its panel
+				// stays, to say what it did.
+				return m.reread()
+			}
 			if m.ov != nil {
 				m.ov = nil
 				m.sayBad("Another command changed the vault; open the actions again.")
 			}
-			return m.reread()
+			return tea.Batch(m.endImport(), m.reread())
 		}
 		return nil
 	case keptAliveMsg:
@@ -913,14 +975,19 @@ func (m *Model) lock(why string) tea.Cmd {
 		m.form = nil
 	}
 	m.status = ""
+	if m.importing != nil && m.importing.applying {
+		why += " An import was being written: it carried on to the end, or stopped where it failed; look at the entries to see what it imported."
+	}
+	ended := m.endImport()
+	m.importAsk = nil
 	m.lockedWhy = why
 	m.touchOn = m.touchIDOn()
 	if m.quitAfter {
 		// Ctrl-C waited for what the lock cut off: it quits now, saying why.
 		m.afterword = why
-		return tea.Batch(closing, tea.Quit)
+		return tea.Batch(closing, ended, tea.Quit)
 	}
-	return closing
+	return tea.Batch(closing, ended)
 }
 
 // say shows what was done for a few seconds.

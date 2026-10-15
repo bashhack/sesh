@@ -39,15 +39,19 @@ type fakeVault struct {
 	trash      []Trashed
 	trashed    map[int64]vault.Entry
 	exported   map[string]bool // files there already, which an export doesn't replace without asking
-	saves      []Change        // what Save was given
-	entries    []vault.Entry
-	reads      []string // "secret <key> <reading>" or "code <key>"
-	exports    []string // "to password replace", each Export asked for
-	kept       int      // keep-alives
-	closed     bool
-	changed    bool
-	searched   int
-	changes    int // folder and tag changes made
+	importing  *fakeImport     // what StartImport gives
+	// importPassword is the export's, which StartImport asks for when set.
+	importPassword string
+	saves          []Change // what Save was given
+	entries        []vault.Entry
+	reads          []string // "secret <key> <reading>" or "code <key>"
+	exports        []string // "to password replace", each Export asked for
+	starts         []string // "source files password", each StartImport asked for
+	kept           int      // keep-alives
+	closed         bool
+	changed        bool
+	searched       int
+	changes        int // folder and tag changes made
 }
 
 func (f *fakeVault) Search(q string) ([]vault.Entry, int, error) {
@@ -2519,4 +2523,39 @@ func TestChecksOnce(t *testing.T) {
 	if n := strings.Count(strings.Join(f.reads, " "), "checks"); n != 1 || !strings.Contains(a.screen(), "OK: no problems") {
 		t.Errorf("checks run %d times:\n%s", n, a.screen())
 	}
+}
+
+// fakeImport is an import of the fake vault's, planning what its plans say.
+type fakeImport struct {
+	plans   map[string]ImportPlan
+	failing map[string]error // what each plan fails with, if it does
+	applyTo func() (string, error)
+	asked   []string // each plan's onConflict, then "apply"
+	closed  bool
+}
+
+func (f *fakeImport) Plan(onConflict string) (ImportPlan, error) {
+	f.asked = append(f.asked, "plan "+onConflict)
+	return f.plans[onConflict], f.failing[onConflict]
+}
+
+func (f *fakeImport) Apply() (string, error) {
+	f.asked = append(f.asked, "apply")
+	if f.applyTo != nil {
+		return f.applyTo()
+	}
+	return "Imported 2 entries from Bitwarden.", nil
+}
+
+func (f *fakeImport) Close() { f.closed = true }
+
+func (f *fakeVault) StartImport(source string, files []string, password []byte) (Importer, error) {
+	f.starts = append(f.starts, fmt.Sprintf("%s %q %s", source, files, password))
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.importPassword != "" && string(password) != f.importPassword {
+		return nil, NeedsPassword("Bitwarden export")
+	}
+	return f.importing, nil
 }

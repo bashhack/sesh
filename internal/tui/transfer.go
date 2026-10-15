@@ -20,9 +20,9 @@ type exportedMsg struct {
 
 // openTransfer opens the import and export panel.
 func (m *Model) openTransfer() tea.Cmd {
-	m.ov = &overlay{kind: panelMenu, back: m.ov, title: "Import and export", items: []item{
+	m.ov = &overlay{kind: panelMenu, back: m.ov, title: "Import and export", items: append([]item{
 		{key: "e", label: "export the vault, encrypted…", stay: true, run: m.exportForm},
-	}}
+	}, m.importRows()...)}
 	return nil
 }
 
