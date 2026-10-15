@@ -89,6 +89,9 @@ func TestNoTerminalFor(t *testing.T) {
 	if err := noTerminalFor("Master password: "); !strings.Contains(err.Error(), "type the master password at") || !strings.Contains(err.Error(), "SESH_MASTER_PASSWORD") || strings.Contains(err.Error(), "locked,") {
 		t.Errorf("master password: %v", err)
 	}
+	if err := noTerminalFor("Create master password: "); !strings.Contains(err.Error(), "choose the new vault's master password") || strings.Contains(err.Error(), "unlocked") {
+		t.Errorf("a new vault: %v", err)
+	}
 	if err := noTerminalFor("Recovery key: "); !strings.Contains(err.Error(), "type the recovery key at") || strings.Contains(err.Error(), "SESH_MASTER_PASSWORD") {
 		t.Errorf("recovery key: %v", err)
 	}
@@ -127,7 +130,22 @@ func TestRun_NotACommand(t *testing.T) {
 	}
 }
 
-// sesh help is sesh --help.
+// sesh run's command keeps its own -h: run parses its flags, and stops at the command.
+func TestRun_RunKeepsTheCommandsHelp(t *testing.T) {
+	h := newTestHarness()
+	h.app.Exit = func(int) {}
+	run(h.app, []string{"sesh", "run", "--env", "K=v", "printf", "-h"})
+	if strings.Contains(h.stdout.String(), "Usage: sesh run") || !strings.Contains(h.stderr.String(), "nothing from the vault") {
+		t.Errorf("printed %q, %q", h.stdout.String(), h.stderr.String())
+	}
+	h = newTestHarness()
+	run(h.app, []string{"sesh", "run", "--env", "K=v", "--help"})
+	if !strings.Contains(h.stderr.String()+h.stdout.String(), "Usage: sesh run") {
+		t.Errorf("--help: %q, %q", h.stdout.String(), h.stderr.String())
+	}
+}
+
+// sesh help is sesh --help; sesh help <command> is that command's.
 func TestRun_Help(t *testing.T) {
 	if err := checkCommandWord([]string{"sesh", "help"}); err != nil {
 		t.Errorf("checkCommandWord: %v", err)
@@ -136,6 +154,11 @@ func TestRun_Help(t *testing.T) {
 	run(h.app, []string{"sesh", "help"})
 	if !strings.Contains(h.stdout.String(), "Everyday") {
 		t.Errorf("sesh help printed %q, %q", h.stdout.String(), h.stderr.String())
+	}
+	h = newTestHarness()
+	run(h.app, []string{"sesh", "help", "copy"})
+	if !strings.HasPrefix(h.stdout.String(), "Usage: sesh copy") {
+		t.Errorf("sesh help copy printed %q, %q", h.stdout.String(), h.stderr.String())
 	}
 }
 

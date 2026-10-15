@@ -108,6 +108,14 @@ func runAdd(app *App, args []string) error {
 	case f.qr && kind != vault.KindTOTP:
 		return errors.New("--qr reads a TOTP entry's key: sesh add totp <name> --qr")
 	}
+	opts := password.DefaultGenerateOptions()
+	opts.Length = f.length
+	opts.Symbols = !f.noSymbol
+	if f.generate {
+		if err := opts.Check(); err != nil {
+			return fmt.Errorf("--length: %w", err)
+		}
+	}
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
 	name := strings.Join(words[1:], " ")
 	// A TOTP entry's name can come from its QR code or otpauth:// link.
@@ -135,15 +143,6 @@ func runAdd(app *App, args []string) error {
 		}
 		if fromStdin > 1 {
 			return errors.New("without a terminal, only one value can come from stdin: add the entry, then the rest with sesh edit")
-		}
-	}
-
-	opts := password.DefaultGenerateOptions()
-	opts.Length = f.length
-	opts.Symbols = !f.noSymbol
-	if f.generate {
-		if err := opts.Check(); err != nil {
-			return fmt.Errorf("--length: %w", err)
 		}
 	}
 

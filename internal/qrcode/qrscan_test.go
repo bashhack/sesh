@@ -189,13 +189,17 @@ func TestExtractTOTPFullInfo_ErrorsDontQuoteTheLink(t *testing.T) {
 	for _, uri := range []string{
 		"otpauth://totp/Ex%zz:bob?secret=SECRETKEYXYZ&issuer=Ex",
 		"WIFI:T:WPA;S:net;P:SECRETKEYXYZ;;",
+		"otpauth://SECRETKEYXYZ",
+		"otpauth://totp:SECRETKEYXYZ/Ex:bob",
+		"otpauth://totp/Ex:bob?secret=JBSWY3DPEHPK3PXP&digits=SECRETKEYXYZ",
+		"otpauth://totp/Ex:bob?secret=JBSWY3DPEHPK3PXP&period=SECRETKEYXYZ",
 	} {
 		_, err := ExtractTOTPFullInfo(uri)
-		_, err2 := ExtractSecretFromOTPAuthURL(uri)
-		for _, e := range []error{err, err2} {
-			if e == nil || strings.Contains(e.Error(), "SECRETKEYXYZ") {
-				t.Errorf("%s: %v", uri, e)
-			}
+		if err == nil || strings.Contains(err.Error(), "SECRETKEYXYZ") {
+			t.Errorf("%s: %v", uri, err)
+		}
+		if _, err := ExtractSecretFromOTPAuthURL(uri); err != nil && strings.Contains(err.Error(), "SECRETKEYXYZ") {
+			t.Errorf("%s, the secret alone: %v", uri, err)
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/bashhack/sesh/internal/password"
+	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -128,10 +129,14 @@ func writeChoices(w io.Writer, query string, found []password.Entry) error {
 
 // resolveEach is the entries args name: one entry's ID, spaces and all;
 // several IDs, one each, in order and without repeats; otherwise words
-// naming one entry, as elsewhere. The bool says the words were a search,
-// so what was found should be said.
+// naming one entry, as elsewhere. IDs that are also, joined, another
+// entry's ID are refused, as either. The bool says the words were a
+// search, so what was found should be said.
 func resolveEach(app *App, store vault.Store, args []string) ([]vault.Key, bool, error) {
 	if k, err := vault.ParseKey(strings.Join(args, " ")); err == nil && store.Exists(k) == nil {
+		if len(args) > 1 && allEntryIDs(store, args) {
+			return nil, false, fmt.Errorf("%s is one entry's ID, and %d others' too: for the one, quote it (%s); for the others, name them one at a time", quoteArgs(args), len(args), shell.Quote(k.String()))
+		}
 		return []vault.Key{k}, false, nil
 	}
 	for _, a := range args {
@@ -156,6 +161,26 @@ func resolveEach(app *App, store vault.Store, args []string) ([]vault.Key, bool,
 		}
 	}
 	return keys, false, nil
+}
+
+// allEntryIDs says whether each of args is an entry's ID.
+func allEntryIDs(store vault.Store, args []string) bool {
+	for _, a := range args {
+		k, err := vault.ParseKey(a)
+		if err != nil || store.Exists(k) != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// quoteArgs is args as typed, each quoted for the shell where it must be.
+func quoteArgs(args []string) string {
+	q := make([]string, len(args))
+	for i, a := range args {
+		q[i] = shell.Quote(a)
+	}
+	return strings.Join(q, " ")
 }
 
 // keyList is keys' IDs, as a list to read.

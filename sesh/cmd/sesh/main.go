@@ -669,8 +669,11 @@ func terminalPrompt(prompt string) ([]byte, error) {
 // type at: it says what was asked for, and for the master password, the
 // ways that need none.
 func noTerminalFor(prompt string) error {
-	if strings.Contains(strings.ToLower(prompt), "recovery key") {
+	switch p := strings.ToLower(prompt); {
+	case strings.Contains(p, "recovery key"):
 		return errors.New("there's no terminal here to type the recovery key at")
+	case strings.Contains(p, "create"), strings.Contains(p, "confirm"):
+		return errors.New("there's no terminal here to choose the new vault's master password at: run sesh at one, or give the password in SESH_MASTER_PASSWORD")
 	}
 	return errors.New("there's no terminal here to type the master password at: run sesh at one first, after which its agent keeps the vault unlocked for a while, or give the password in SESH_MASTER_PASSWORD")
 }
@@ -702,8 +705,15 @@ func fatal(app *App, err error) {
 
 // run is the testable entrypoint for the application
 func run(app *App, args []string) {
+	// sesh help <command> is sesh <command> --help.
+	if len(args) > 2 && args[1] == "help" {
+		if _, ok := commands[args[2]]; ok {
+			args = []string{args[0], args[2], "--help"}
+		}
+	}
 	if name, rest := subcommand(args); name != "" {
-		if askedForHelp(rest) {
+		// sesh run's command, after its flags, can take -h of its own.
+		if name != "run" && askedForHelp(rest) {
 			rest = []string{"--help"}
 		}
 		if err := commands[name](app, rest); err != nil {

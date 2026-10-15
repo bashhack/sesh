@@ -348,7 +348,7 @@ func TestTrashEntries(t *testing.T) {
 	}
 }
 
-// Folder and tag changes name what a search found; an ID with spaces is one entry, even when its halves are IDs too.
+// Folder and tag changes name what a search found; IDs that, joined, are another entry's ID are refused.
 func TestChangeEntriesNamesWhatWasFound(t *testing.T) {
 	filingVault(t)
 	for _, args := range [][]string{{"password", "a password", "--username", "b"}, {"password", "a"}, {"password", "b"}} {
@@ -363,7 +363,11 @@ func TestChangeEntriesNamesWhatWasFound(t *testing.T) {
 	if out := mustRun(t, runTag, "add", "u", "password/gitlab"); !strings.Contains(out, "Tagged 1 entry u\n") {
 		t.Errorf("an ID: %q", out)
 	}
-	mustRun(t, runTag, "add", "v", "password/a", "password/b")
+	// password/a and password/b are entries too: either reading could be meant.
+	if _, err := runFiling(t, runTag, "add", "v", "password/a", "password/b"); err == nil || !strings.Contains(err.Error(), "for the one, quote it ('password/a password/b')") {
+		t.Errorf("both readings: %v", err)
+	}
+	mustRun(t, runTag, "add", "v", "password/a password/b")
 	app, _ := cliApp("", false)
 	if out, _, err := runCLI(app, runList, "--tag", "v"); err != nil || !strings.Contains(out, "password/a password/b") || strings.Count(out, "\n") != 2 {
 		t.Errorf("a spaced ID: %q, %v", out, err)
@@ -384,6 +388,7 @@ func TestChecksBeforeTheVault(t *testing.T) {
 		{runExport, "", nil, "asks for its password at a terminal"},
 		{runAdd, "password x --generate --length 3", nil, "too short for 4 required character sets"},
 		{runAdd, "password x --generate --length 5000", nil, "more than the 1024 sesh makes"},
+		{runAdd, "password --generate --length 5000", func(app *App) { app.StdinIsTerminal = func() bool { return true } }, "more than the 1024 sesh makes"},
 		{runAWS, "--clip", noClipboard, "can't copy"},
 		{runOpen, "--", nil, "name the entry"},
 	} {

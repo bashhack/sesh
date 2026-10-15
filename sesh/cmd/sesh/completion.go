@@ -239,7 +239,10 @@ func complete(words []string) (cands []candidate, files bool) {
 	case "completion":
 		verbs = completionShells
 	case "config", "recover", "lock", "open":
-		return nil, false
+		// Only the settings' flags, once a dash is typed.
+		if !strings.HasPrefix(cur, "-") {
+			return nil, false
+		}
 	default:
 		// Before a command, the options plain sesh takes.
 		specs = append([]flagSpec{{name: "help", usage: "Show the commands"}, {name: "version", usage: "Show the version"}}, settingSpecs()...)
@@ -250,7 +253,7 @@ func complete(words []string) (cands []candidate, files bool) {
 			specs = append(specs, s)
 		}
 	}
-	if verbs != nil {
+	if verbs != nil && !strings.HasPrefix(cur, "-") {
 		if len(before) == 1 {
 			return matching(verbs, cur), false
 		}

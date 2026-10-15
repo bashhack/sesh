@@ -45,7 +45,8 @@ const searchUsage = `Usage: sesh search <words> [--folder F] [--tag T] [--json]
 const copyUsage = `Usage: sesh copy <entry> [--username | --url | --field NAME]
   Copy an entry's password, API key or note, or a TOTP entry's current code,
   to the clipboard, which clears after clipboard_timeout. --username,
-  --url and --field copy that instead.
+  --url and --field copy that instead (--field secret copies a TOTP entry's
+  key).
 
   sesh copy github
   sesh copy aws totp
