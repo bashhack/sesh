@@ -30,7 +30,8 @@ type changedMsg struct {
 // changePassword asks for the current master password and a new one,
 // twice, and changes it.
 func (m *Model) changePassword() tea.Cmd {
-	current := &input{kind: inputSecret, label: "current master password"}
+	// Empty until typed: sesh keeps no copy of it to show.
+	current := &input{kind: inputSecret, label: "current master password", prompt: "type it: sesh keeps no copy to show you"}
 	next := &input{kind: inputSecret, label: "new master password", rated: true, hint: "at least 8 characters"}
 	again := &input{kind: inputSecret, label: "new master password again"}
 	f := &form{title: "Change the master password", inputs: []*input{current, next, again}, row: -1, enterDone: "change it",

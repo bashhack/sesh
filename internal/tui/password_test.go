@@ -306,7 +306,8 @@ func TestChangePasswordKeyInFlight(t *testing.T) {
 	}
 }
 
-// Ctrl-R's hint shows once something is typed to show, not over an empty input, and the form doesn't move when it does.
+// Ctrl-R's hint shows once something is typed to show, not over an empty input, which says to type it; the form doesn't
+// move when it does.
 func TestRevealHintOnceTyped(t *testing.T) {
 	a, _ := passwordApp(t, newFake(), Changed{}, nil)
 	a.press("ctrl+k", ",", "enter")
@@ -319,8 +320,8 @@ func TestRevealHintOnceTyped(t *testing.T) {
 		return -1
 	}
 	before, at := a.screen(), row()
-	if strings.Contains(before, "ctrl+r") {
-		t.Errorf("a hint to show nothing:\n%s", before)
+	if strings.Contains(before, "ctrl+r") || !strings.Contains(before, "type it: sesh keeps no copy to show you") {
+		t.Errorf("empty, the current password's hints:\n%s", before)
 	}
 	a.press("x")
 	if s := a.screen(); !strings.Contains(s, "ctrl+r  show what you typed") || row() != at {

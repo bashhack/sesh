@@ -39,6 +39,7 @@ type input struct {
 	named    func() string  // its label, when that depends on other inputs
 	label    string
 	hint     string
+	prompt   string // a secret input's line while nothing is typed
 	choices  []string
 	secret   []byte
 	loaded   []byte // the secret load read, to tell whether it was changed
@@ -808,6 +809,8 @@ func (m *Model) drawForm(base string) string {
 					line = ""
 				}
 				switch hint := th.dimmed().Render(in.hint); {
+				case line == "" && in.prompt != "":
+					lines = append(lines, "   "+th.dimmed().Render(in.prompt))
 				case line == "":
 					lines = append(lines, "   "+hint)
 				case in.hint == "":
