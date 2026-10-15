@@ -142,6 +142,7 @@ func TestBackupCommand(t *testing.T) {
 func TestBackupListAndDelete(t *testing.T) {
 	clock := time.Date(2026, 10, 7, 9, 12, 0, 0, time.UTC)
 	env := backupVault(t, &clock)
+	t.Chdir(t.TempDir()) // a backup to a file named as a word lands there, not in the repo
 	populatePasswordStore(t, env, map[string]string{"password/github": "pw"})
 	for range 3 {
 		if _, err := runBackupOut(t); err != nil {
