@@ -100,7 +100,7 @@ func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) erro
 	if _, serr := os.Stat(cfgPath); serr == nil {
 		c.row(markOK, "Config", tildePath(cfgPath))
 	} else {
-		c.row(markNone, "Config", "no file, so the defaults")
+		c.row(markNone, "Config", "no file yet, so the defaults", "changing a setting makes "+tildePath(cfgPath))
 	}
 
 	dbPath = cfg.DBPath.Value

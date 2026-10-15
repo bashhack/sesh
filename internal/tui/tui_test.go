@@ -2993,13 +2993,18 @@ func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
 	var asked []string
 	a := newApp(t, newFake(), Options{
 		Settings: func() ([]Setting, error) {
-			return []Setting{
+			all := []Setting{
 				{Key: "history.keep", Value: values["history.keep"], Raw: values["history.keep"], Default: "10", Said: said("history.keep"), Applies: "for other commands now, and in sesh ui from its next start", Editable: true},
 				{Key: "health.old_after_days", Value: values["health.old_after_days"], Raw: values["health.old_after_days"], Default: "365", Said: said("health.old_after_days"), Applies: "at the next health check", Editable: true},
 				{Key: "trash.keep_days", Value: "0", Raw: "0", Said: "environment: SESH_TRASH_KEEP_DAYS", Env: "SESH_TRASH_KEEP_DAYS", Editable: true},
 				{Key: "db_path", Value: "/v.db", Said: "default"},
 				{Key: "ui.lock_on_quit", Value: map[string]string{"true": "on", "false": "off"}[values["ui.lock_on_quit"]], Raw: values["ui.lock_on_quit"], Default: "true", Said: "default", Applies: "when sesh ui next quits", Editable: true, Switch: true},
-			}, nil
+				{Key: "agent.lock_on_sleep", Value: "off", Raw: "false", Default: "true", Said: "environment: SESH_AGENT_LOCK_ON_SLEEP", Env: "SESH_AGENT_LOCK_ON_SLEEP", Editable: true, Switch: true},
+			}
+			for i := range all {
+				all[i].File, all[i].NoFile = "~/.config/sesh/config.toml", len(inFile) == 0
+			}
+			return all, nil
 		},
 		SetSetting: func(key, value string) (Live, error) {
 			asked = append(asked, key+"="+value)
@@ -3017,11 +3022,15 @@ func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
 // A setting is changed through a one-line form; the panel stays, shows it, and the app takes up what it uses.
 func TestSettingsChange(t *testing.T) {
 	a, asked := settingsApp(t)
-	a.press("ctrl+g", ",", "down", "down", "down", "enter", "ctrl+u", "90", "enter")
+	a.press("ctrl+g", ",", "down", "down", "down")
+	if s := a.screen(); !strings.Contains(s, "saved in ~/.config/sesh/config.toml, which the first change makes") {
+		t.Errorf("before the file is made:\n%s", s)
+	}
+	a.press("enter", "ctrl+u", "90", "enter")
 	if !slices.Equal(*asked, []string{"health.old_after_days=90"}) || a.opts.OldAfter != 90*24*time.Hour {
 		t.Fatalf("asked %q, old after %v", *asked, a.opts.OldAfter)
 	}
-	if s := a.screen(); a.ov == nil || a.ov.kind != panelSettings || !strings.Contains(s, "health.old_after_days     90") || !strings.Contains(s, "Saved health.old_after_days") {
+	if s := a.screen(); a.ov == nil || a.ov.kind != panelSettings || !strings.Contains(s, "health.old_after_days     90") || !strings.Contains(s, "Saved health.old_after_days in ~/.config/sesh/config.toml") || !strings.Contains(s, "saved in ~/.config/sesh/config.toml") || strings.Contains(s, "the first change makes") {
 		t.Errorf("after saving:\n%s", s)
 	}
 	a.press("up", "enter", "ctrl+u", "-1", "enter")
@@ -3043,7 +3052,7 @@ func TestSettingsChange(t *testing.T) {
 		t.Errorf("emptied at its default: asked %q\n%s", *asked, a.screen())
 	}
 	a.press("down", "enter", "ctrl+u", "enter")
-	if (*asked)[len(*asked)-1] != "health.old_after_days=" || !strings.Contains(a.screen(), "Took health.old_after_days out of the config file") {
+	if (*asked)[len(*asked)-1] != "health.old_after_days=" || !strings.Contains(a.screen(), "Took health.old_after_days out of ~/.config/sesh/config.toml") {
 		t.Errorf("emptied: asked %q\n%s", *asked, a.screen())
 	}
 }
@@ -3052,7 +3061,7 @@ func TestSettingsChange(t *testing.T) {
 func TestSettingsSwitch(t *testing.T) {
 	a, asked := settingsApp(t)
 	a.press("ctrl+g", ",", "down", "down", "down", "down", "down", "down", "enter")
-	if s := a.screen(); a.form != nil || !slices.Equal(*asked, []string{"ui.lock_on_quit=true"}) || !strings.Contains(s, "Turned ui.lock_on_quit on") || !strings.Contains(s, "ui.lock_on_quit           on") || !strings.Contains(s, "turn it off") {
+	if s := a.screen(); a.form != nil || !slices.Equal(*asked, []string{"ui.lock_on_quit=true"}) || !strings.Contains(s, "Turned ui.lock_on_quit on in ~/.config/sesh/config.toml:") || !strings.Contains(s, "ui.lock_on_quit           on") || !strings.Contains(s, "turn it off") {
 		t.Fatalf("asked %q, form %v\n%s", *asked, a.form != nil, s)
 	}
 	a.press("enter")
@@ -3071,6 +3080,15 @@ func TestSettingsNotChanged(t *testing.T) {
 	a.press("down", "enter")
 	if s := a.screen(); a.form != nil || !strings.Contains(s, "sesh init") || len(*asked) != 0 {
 		t.Errorf("the vault's place: asked %q\n%s", *asked, s)
+	}
+	// A switch the environment sets doesn't offer to turn it over.
+	a.press("down", "down")
+	if s := a.screen(); strings.Contains(s, "turn it") || !strings.Contains(s, "set by SESH_AGENT_LOCK_ON_SLEEP") {
+		t.Errorf("a switch set by the environment:\n%s", s)
+	}
+	a.press("enter")
+	if len(*asked) != 0 {
+		t.Errorf("a switch set by the environment was changed: %q", *asked)
 	}
 }
 

@@ -23,10 +23,14 @@ type Setting struct {
 	Default string
 	// Env is the environment variable (or flag) that sets it, when one
 	// does: it can't be changed from the app then.
-	Env      string
+	Env string
+	// File is the config file a change is saved in; NoFile, that it isn't
+	// there yet, and the first change makes it.
+	File     string
 	Editable bool
 	// Switch says it's on or off (Raw true or false): Enter turns it over.
 	Switch bool
+	NoFile bool
 }
 
 // Live is what of the settings the app takes up as it runs: the rest it
@@ -85,7 +89,8 @@ func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *Touc
 		does:   "read it",
 		stay:   true,
 	})
-	for i, s := range settings {
+	for i := range settings {
+		s := &settings[i]
 		from := ""
 		switch {
 		case s.Env != "":
@@ -94,7 +99,7 @@ func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *Touc
 			from = "  (config file)"
 		}
 		does := ""
-		if s.Switch {
+		if s.Switch && s.Env == "" {
 			does = "turn it on"
 			if s.Raw == "true" {
 				does = "turn it off"
@@ -102,8 +107,8 @@ func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *Touc
 		}
 		ov.items = append(ov.items, item{
 			label:  fmt.Sprintf("%-25s %s%s", s.Key, s.Value, from),
-			detail: settingDetail(&s),
-			run:    func() tea.Cmd { return m.changeSetting(&s) },
+			detail: settingDetail(s),
+			run:    func() tea.Cmd { return m.changeSetting(s) },
 			does:   does,
 			stay:   true,
 			rule:   i == 0,
@@ -126,6 +131,10 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		return nil
 	}
 	key, raw, def, applies, said, set := s.Key, s.Raw, s.Default, s.Applies, s.Said, m.opts.SetSetting
+	in := "the config file"
+	if s.File != "" {
+		in = s.File
+	}
 	if s.Switch {
 		to, word := "true", "on"
 		if raw == "true" {
@@ -139,7 +148,7 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 			return m.refreshSettings()
 		}
 		m.opts.OldAfter = live.OldAfter
-		m.say("Turned " + key + " " + word + ": it takes effect " + applies)
+		m.say("Turned " + key + " " + word + " in " + in + ": it takes effect " + applies)
 		return m.refreshSettings()
 	}
 	return m.askOver(true, "Change "+key, key, s.Raw, "empty: back to the default; it takes effect "+applies, nil, func(value string) (string, tea.Cmd) {
@@ -147,8 +156,8 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		// changed since the panel was read.
 		from, fromSaid := raw, said
 		if now, err := m.opts.Settings(); err == nil {
-			for _, x := range now {
-				if x.Key == key {
+			for i := range now {
+				if x := &now[i]; x.Key == key {
 					from, fromSaid = x.Raw, x.Said
 				}
 			}
@@ -169,9 +178,9 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 				return m.refreshSettings()
 			}
 			m.opts.OldAfter = live.OldAfter
-			said := "Saved " + key + ": it takes effect " + applies
+			said := "Saved " + key + " in " + in + ": it takes effect " + applies
 			if value == "" {
-				said = "Took " + key + " out of the config file: its default takes effect " + applies
+				said = "Took " + key + " out of " + in + ": its default takes effect " + applies
 			}
 			m.say(said)
 			return m.refreshSettings()
@@ -196,9 +205,9 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 			return err.Error(), nil
 		}
 		m.opts.OldAfter = live.OldAfter
-		said := "Saved " + key + ": it takes effect " + applies
+		said := "Saved " + key + " in " + in + ": it takes effect " + applies
 		if value == "" {
-			said = "Took " + key + " out of the config file: its default takes effect " + applies
+			said = "Took " + key + " out of " + in + ": its default takes effect " + applies
 		}
 		m.say(said)
 		return "", m.refreshSettings()
@@ -251,5 +260,13 @@ func settingDetail(s *Setting) string {
 	case !s.Editable:
 		return s.Value + " · where the vault is: sesh init moves it"
 	}
-	return s.Value + " · " + s.Said + " · a change takes effect " + s.Applies
+	d := s.Value + " · " + s.Said + " · a change takes effect " + s.Applies
+	switch {
+	case s.File == "":
+	case s.NoFile:
+		d += " · saved in " + s.File + ", which the first change makes"
+	default:
+		d += " · saved in " + s.File
+	}
+	return d
 }

@@ -233,3 +233,25 @@ func TestAppSettings_EncryptedExportsUseTheConfiguredKDF(t *testing.T) {
 		t.Errorf("app settings KDF = %+v, want the configured %+v", got, cfg.KDF())
 	}
 }
+
+// The app's settings name the config file, and whether a change makes it.
+func TestUISettings_File(t *testing.T) {
+	path := useConfigFile(t, "")
+	t.Setenv("HOME", filepath.Dir(filepath.Dir(path))) // said from ~
+	for _, made := range []bool{false, true} {
+		if made {
+			if err := config.Set(path, "history.keep", "7"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg, err := settings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range uiSettings(cfg) {
+			if s.File != "~/sesh/config.toml" || s.NoFile == made {
+				t.Errorf("file made %v: %s has File %q, NoFile %v", made, s.Key, s.File, s.NoFile)
+			}
+		}
+	}
+}

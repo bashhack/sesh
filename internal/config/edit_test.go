@@ -195,7 +195,7 @@ func TestLockOnQuit(t *testing.T) {
 	if !it.Switch || it.Raw != "false" || it.Default != "true" || it.Value != "off" {
 		t.Errorf("listed: %+v", it)
 	}
-	if err := Set(path, "ui.lock_on_quit", "yes"); err == nil || !strings.Contains(err.Error(), "want true or false") {
+	if err := Set(path, "ui.lock_on_quit", "yes"); err == nil || !strings.Contains(err.Error(), "want on or off") {
 		t.Errorf("yes: %v", err)
 	}
 	t.Setenv(EnvUILockOnQuit, "true")

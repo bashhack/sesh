@@ -11,6 +11,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/clipboard"
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/password"
@@ -84,9 +85,14 @@ func TestDoctor_ASoundVault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("doctor: %v\n%s", err, out)
 	}
+	cfgPath, err := config.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := "sesh doctor\n\n" +
 		"Setup\n" +
-		"  -     Config          no file, so the defaults\n" +
+		"  -     Config          no file yet, so the defaults\n" +
+		"                        changing a setting makes " + tildePath(cfgPath) + "\n" +
 		"  ok    Vault file      only you can read or change it\n" +
 		"  -     Agent           not running; it starts when a command needs it\n" +
 		"  ok    Key settings    19 MiB, 2 passes, 1 thread\n" +

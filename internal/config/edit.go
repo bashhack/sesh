@@ -50,7 +50,7 @@ func Set(path, key, value string) error {
 		line = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
 	case switches[key]:
 		if value != "true" && value != "false" {
-			return fmt.Errorf("%s = %q: want true or false", key, value)
+			return fmt.Errorf("%s = %q: want on or off (true or false)", key, value)
 		}
 		line = value
 	default:
