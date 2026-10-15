@@ -30,6 +30,14 @@ newest history.keep (10 unless set).
 
 ` + entryWordsHelp
 
+// addHistoryFlags defines sesh history's flags on fs.
+func addHistoryFlags(fs *flag.FlagSet) {
+	fs.String("show", "", "Print version N's secret")
+	fs.String("clip", "", "Copy version N's secret to the clipboard")
+	fs.String("restore", "", "Make version N the secret again")
+	fs.String("forget", "", "Delete versions for good: N, or N,M,...")
+}
+
 // runHistory is sesh history: an entry's earlier secrets.
 func runHistory(app *App, args []string) error {
 	if len(args) == 0 || isHelp(args[0]) {
@@ -38,10 +46,7 @@ func runHistory(app *App, args []string) error {
 	}
 	fs := flag.NewFlagSet("history", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	fs.String("show", "", "Print version N's secret")
-	fs.String("clip", "", "Copy version N's secret to the clipboard")
-	fs.String("restore", "", "Make version N the secret again")
-	fs.String("forget", "", "Delete versions for good: N, or N,M,...")
+	addHistoryFlags(fs)
 	ids, err := parseAnywhere(fs, args)
 	if err != nil {
 		return err

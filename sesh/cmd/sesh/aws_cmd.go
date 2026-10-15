@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/bashhack/sesh/internal/aws"
+	"github.com/bashhack/sesh/internal/clipboard"
 	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
 	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/totp"
@@ -65,6 +66,15 @@ func runAWS(app *App, args []string) error {
 		return errors.New("--clip copies a code; sesh aws setup stores the key it comes from")
 	case !setupAsked && !flags.Filing().IsZero():
 		return errors.New("--folder and --tag file the entry sesh aws setup stores")
+	}
+	// Copying, the clipboard is checked before the vault is unlocked.
+	if *clip && app.ClipboardCheck != nil {
+		if err := app.ClipboardCheck(); err != nil {
+			if errors.Is(err, clipboard.ErrNoDisplay) {
+				return fmt.Errorf("can't copy: %w; %s", err, insteadOfClip(flags))
+			}
+			return fmt.Errorf("can't copy: %w", err)
+		}
 	}
 
 	cfg, err := settings()

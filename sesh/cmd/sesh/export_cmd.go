@@ -69,6 +69,9 @@ func runExport(app *App, args []string) error {
 	if *format != "encrypted" && *format != "json" && *format != "csv" {
 		return fmt.Errorf("--format is encrypted, json, or csv, not %q", *format)
 	}
+	if *format == "encrypted" && (app.StdinIsTerminal == nil || !app.StdinIsTerminal()) {
+		return errExportNeedsTerminal
+	}
 
 	cfg, err := settings()
 	if err != nil {
@@ -179,12 +182,14 @@ func runExport(app *App, args []string) error {
 	return err
 }
 
+var errExportNeedsTerminal = errors.New("an encrypted export asks for its password at a terminal; --format json or csv writes one without")
+
 // readExportPassword asks for a new export's password, twice, at the
 // terminal: at least 8 characters, and one that's easy to guess is asked
 // about, since anyone with the file can try passwords against it.
 func readExportPassword(app *App) ([]byte, error) {
 	if app.StdinIsTerminal == nil || !app.StdinIsTerminal() {
-		return nil, errors.New("an encrypted export asks for its password at a terminal; --format json or csv writes one without")
+		return nil, errExportNeedsTerminal
 	}
 	fmt.Fprint(app.Stderr, "Export password: ") //nolint:errcheck // prompt
 	pw, err := readSecret()

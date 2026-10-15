@@ -174,8 +174,8 @@ func unchanged(n int, one, many string) string {
 }
 
 // changeEntries runs change on the entries args name (see resolveEach),
-// or on none when they name no entry. It prints what change
-// returns.
+// or on none when they name no entry. It prints what change returns,
+// with the entries' IDs when they were found by a search.
 func changeEntries(app *App, args []string, change func(*database.Store, []vault.Key) (string, error)) error {
 	if len(args) == 0 {
 		return errors.New("name the entries to change")
@@ -185,13 +185,17 @@ func changeEntries(app *App, args []string, change func(*database.Store, []vault
 		return err
 	}
 	defer closeAuditStore(store)
-	keys, err := resolveEach(app, store, args)
+	keys, searched, err := resolveEach(app, store, args)
 	if err != nil {
 		return err
 	}
 	msg, err := change(store, keys)
 	if err != nil {
 		return err
+	}
+	if searched {
+		first, rest, _ := strings.Cut(msg, "\n")
+		msg = first + ": " + keyList(keys) + noteLine(rest)
 	}
 	_, err = fmt.Fprintln(app.Stdout, "✅ "+msg)
 	return err

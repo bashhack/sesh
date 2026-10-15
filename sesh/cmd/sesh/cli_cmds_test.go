@@ -199,8 +199,14 @@ func TestCode(t *testing.T) {
 		t.Errorf("code: %q, %q, %v", out, errOut, err)
 	}
 	app, copied := cliApp("", false)
-	if _, _, err := runCLI(app, runCopy, "github", "totp"); err != nil || len(*copied) != 1 || len((*copied)[0]) != 6 {
-		t.Errorf("copy a code: %q, %v", *copied, err)
+	if _, errOut, err := runCLI(app, runCopy, "github", "totp"); err != nil || len(*copied) != 1 || len((*copied)[0]) != 6 || !strings.Contains(errOut, "Copied github (alice)'s code (for ") {
+		t.Errorf("copy a code: %q, %q, %v", *copied, errOut, err)
+	}
+	app, _ = cliApp("", false)
+	out, _, err = runCLI(app, runGet, "github", "totp", "--json")
+	var got struct{ Part, Value string }
+	if err != nil || json.Unmarshal([]byte(out), &got) != nil || got.Part != "code" || len(got.Value) != 6 {
+		t.Errorf("--json: %q, %v", out, err)
 	}
 	app, _ = cliApp("", false)
 	if _, _, err := runCLI(app, runCode, "openai"); err == nil || !strings.Contains(err.Error(), `no TOTP entry matches "openai"`) {
@@ -323,17 +329,74 @@ func TestTrashEntries(t *testing.T) {
 		t.Errorf("two words: %v", err)
 	}
 	app, _ = cliApp("y\n", true)
-	if out, errOut, err := runCLI(app, runTrash, "my", "bank"); err != nil || !strings.Contains(errOut, `Delete "password/My Bank"? [y/N]`) || !strings.Contains(out, "Moved 1 entry to the trash") {
+	if out, errOut, err := runCLI(app, runTrash, "my", "bank"); err != nil || !strings.Contains(errOut, `Delete "password/My Bank"? [y/N]`) || !strings.Contains(out, "Moved password/My Bank to the trash") {
 		t.Errorf("words: %q, %q, %v", out, errOut, err)
 	}
 	if out, err := runFiling(t, runTrash, "--force", "password/gitlab", "api_key/openai"); err != nil || !strings.Contains(out, "Moved 2 entries to the trash") {
 		t.Errorf("IDs: %q, %v", out, err)
 	}
-	if out, err := runFiling(t, runTrash, "github", "--purge", "--force"); err != nil || !strings.Contains(out, "Deleted 1 entry for good") {
+	// Found by a search, what was trashed is named.
+	if out, err := runFiling(t, runTrash, "--force", "hub"); err != nil || !strings.Contains(out, "Moved password/github/alice to the trash") {
+		t.Errorf("searched: %q, %v", out, err)
+	}
+	mustRun(t, runTrash, "restore", "4")
+	if out, err := runFiling(t, runTrash, "github", "--purge", "--force"); err != nil || !strings.Contains(out, "Deleted password/github/alice for good") {
 		t.Errorf("--purge: %q, %v", out, err)
 	}
 	if out := mustRun(t, runTrash, "list"); !strings.Contains(out, "password/My Bank") || strings.Contains(out, "github") {
 		t.Errorf("the trash:\n%s", out)
+	}
+}
+
+// Folder and tag changes name what a search found; an ID with spaces is one entry, even when its halves are IDs too.
+func TestChangeEntriesNamesWhatWasFound(t *testing.T) {
+	filingVault(t)
+	for _, args := range [][]string{{"password", "a password", "--username", "b"}, {"password", "a"}, {"password", "b"}} {
+		app, _ := cliApp("x-Strong-pass-81\n", false)
+		if _, _, err := runCLI(app, runAdd, args...); err != nil {
+			t.Fatalf("add %q: %v", args, err)
+		}
+	}
+	if out := mustRun(t, runTag, "add", "t", "hub"); !strings.Contains(out, "Tagged 1 entry t: password/github/alice") {
+		t.Errorf("searched: %q", out)
+	}
+	if out := mustRun(t, runTag, "add", "u", "password/gitlab"); !strings.Contains(out, "Tagged 1 entry u\n") {
+		t.Errorf("an ID: %q", out)
+	}
+	mustRun(t, runTag, "add", "v", "password/a", "password/b")
+	app, _ := cliApp("", false)
+	if out, _, err := runCLI(app, runList, "--tag", "v"); err != nil || !strings.Contains(out, "password/a password/b") || strings.Count(out, "\n") != 2 {
+		t.Errorf("a spaced ID: %q, %v", out, err)
+	}
+}
+
+// Checks that need nothing from the vault come before it's unlocked, or made on a first run.
+func TestChecksBeforeTheVault(t *testing.T) {
+	env := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	noClipboard := func(app *App) { app.ClipboardCheck = func() error { return clipboard.ErrNoDisplay } }
+	for _, c := range []struct {
+		run     func(*App, []string) error
+		args    string
+		setup   func(*App)
+		wantSub string
+	}{
+		{runExport, "", nil, "asks for its password at a terminal"},
+		{runAdd, "password x --generate --length 3", nil, "too short for 4 required character sets"},
+		{runAdd, "password x --generate --length 5000", nil, "more than the 1024 sesh makes"},
+		{runAWS, "--clip", noClipboard, "can't copy"},
+		{runOpen, "--", nil, "name the entry"},
+	} {
+		app, _ := cliApp("", false)
+		if c.setup != nil {
+			c.setup(app)
+		}
+		if _, _, err := runCLI(app, c.run, strings.Fields(c.args)...); err == nil || !strings.Contains(err.Error(), c.wantSub) {
+			t.Errorf("%s: %v, want %q", c.args, err, c.wantSub)
+		}
+		if _, err := os.Stat(env.dbPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s made the vault: %v", c.args, err)
+		}
 	}
 }
 

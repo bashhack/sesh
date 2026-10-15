@@ -122,18 +122,31 @@ func ScanQRCodeFull() (TOTPInfo, error) {
 	return DecodeQRCodeFromImageFull(img)
 }
 
+// parseOTPAuth parses an otpauth:// URI, its scheme in any case. The URI
+// holds the secret, or is whatever else a QR code held, so no error quotes
+// it, not even url.Parse's.
+func parseOTPAuth(otpauthURL string) (*url.URL, error) {
+	if !strings.HasPrefix(strings.ToLower(otpauthURL), "otpauth://") {
+		return nil, errors.New("not a valid otpauth URL")
+	}
+	parsedURL, err := url.Parse(otpauthURL)
+	if err != nil {
+		if ue, ok := errors.AsType[*url.Error](err); ok {
+			err = ue.Err
+		}
+		return nil, fmt.Errorf("failed to parse otpauth URL: %w", err)
+	}
+	return parsedURL, nil
+}
+
 // ExtractSecretFromOTPAuthURL extracts just the secret from an otpauth
 // URL. Only otpauth://totp/ URIs are accepted.
 func ExtractSecretFromOTPAuthURL(otpauthURL string) (string, error) {
-	if !strings.HasPrefix(otpauthURL, "otpauth://") {
-		return "", fmt.Errorf("not a valid otpauth URL: %s", otpauthURL)
-	}
-
-	parsedURL, err := url.Parse(otpauthURL)
+	parsedURL, err := parseOTPAuth(otpauthURL)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse otpauth URL: %w", err)
+		return "", err
 	}
-	if parsedURL.Host != "totp" {
+	if !strings.EqualFold(parsedURL.Host, "totp") {
 		return "", fmt.Errorf("unsupported OTP type %q (only TOTP is supported)", parsedURL.Host)
 	}
 
@@ -161,15 +174,11 @@ type TOTPInfo struct {
 // Only otpauth://totp/ URIs are accepted; HOTP and other types are
 // rejected because sesh does not support counter-based OTP.
 func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
-	if !strings.HasPrefix(otpauthURL, "otpauth://") {
-		return TOTPInfo{}, fmt.Errorf("not a valid otpauth URL: %s", otpauthURL)
-	}
-
-	parsedURL, err := url.Parse(otpauthURL)
+	parsedURL, err := parseOTPAuth(otpauthURL)
 	if err != nil {
-		return TOTPInfo{}, fmt.Errorf("failed to parse otpauth URL: %w", err)
+		return TOTPInfo{}, err
 	}
-	if parsedURL.Host != "totp" {
+	if !strings.EqualFold(parsedURL.Host, "totp") {
 		return TOTPInfo{}, fmt.Errorf("unsupported OTP type %q (only TOTP is supported)", parsedURL.Host)
 	}
 

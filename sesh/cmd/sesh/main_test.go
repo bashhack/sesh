@@ -84,6 +84,28 @@ func TestPrintUsage(t *testing.T) {
 	}
 }
 
+// With no terminal, a prompt says what it wanted, and for the master password how to give it without one.
+func TestNoTerminalFor(t *testing.T) {
+	if err := noTerminalFor("Master password: "); !strings.Contains(err.Error(), "type the master password at") || !strings.Contains(err.Error(), "SESH_MASTER_PASSWORD") || strings.Contains(err.Error(), "locked,") {
+		t.Errorf("master password: %v", err)
+	}
+	if err := noTerminalFor("Recovery key: "); !strings.Contains(err.Error(), "type the recovery key at") || strings.Contains(err.Error(), "SESH_MASTER_PASSWORD") {
+		t.Errorf("recovery key: %v", err)
+	}
+}
+
+// -h or --help anywhere before "--" asks for a command's usage; help alone only first, since it can name an entry.
+func TestAskedForHelp(t *testing.T) {
+	for args, want := range map[string]bool{
+		"restore 1 --help": true, "github -h": true, "-help": true, "help": true,
+		"help me": true, "copy help": false, "github": false, "-- echo --help": false, "--env A=b -- x -h": false, "": false,
+	} {
+		if got := askedForHelp(strings.Fields(args)); got != want {
+			t.Errorf("%q: %v, want %v", args, got, want)
+		}
+	}
+}
+
 // A first word that isn't a command is refused, naming the closest; an old option names the command it became.
 func TestRun_NotACommand(t *testing.T) {
 	for args, wantSub := range map[string]string{
@@ -102,6 +124,18 @@ func TestRun_NotACommand(t *testing.T) {
 		if code != 1 || !strings.Contains(h.stderr.String(), wantSub) {
 			t.Errorf("sesh %s: exit %d, said %q; want %q", args, code, h.stderr.String(), wantSub)
 		}
+	}
+}
+
+// sesh help is sesh --help.
+func TestRun_Help(t *testing.T) {
+	if err := checkCommandWord([]string{"sesh", "help"}); err != nil {
+		t.Errorf("checkCommandWord: %v", err)
+	}
+	h := newTestHarness()
+	run(h.app, []string{"sesh", "help"})
+	if !strings.Contains(h.stdout.String(), "Everyday") {
+		t.Errorf("sesh help printed %q, %q", h.stdout.String(), h.stderr.String())
 	}
 }
 

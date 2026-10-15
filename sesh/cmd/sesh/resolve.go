@@ -126,16 +126,21 @@ func writeChoices(w io.Writer, query string, found []password.Entry) error {
 	return tw.Flush()
 }
 
-// resolveEach is the entries args name: several IDs, one each, in order
-// and without repeats; otherwise words naming one entry, as elsewhere.
-func resolveEach(app *App, store vault.Store, args []string) ([]vault.Key, error) {
+// resolveEach is the entries args name: one entry's ID, spaces and all;
+// several IDs, one each, in order and without repeats; otherwise words
+// naming one entry, as elsewhere. The bool says the words were a search,
+// so what was found should be said.
+func resolveEach(app *App, store vault.Store, args []string) ([]vault.Key, bool, error) {
+	if k, err := vault.ParseKey(strings.Join(args, " ")); err == nil && store.Exists(k) == nil {
+		return []vault.Key{k}, false, nil
+	}
 	for _, a := range args {
 		if _, err := vault.ParseKey(a); err != nil {
 			k, err := resolveEntry(app, store, args, "")
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
-			return []vault.Key{k}, nil
+			return []vault.Key{k}, true, nil
 		}
 	}
 	var keys []vault.Key
@@ -143,14 +148,23 @@ func resolveEach(app *App, store vault.Store, args []string) ([]vault.Key, error
 	for _, a := range args {
 		k, err := resolveEntry(app, store, []string{a}, "")
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if !seen[k] {
 			seen[k] = true
 			keys = append(keys, k)
 		}
 	}
-	return keys, nil
+	return keys, false, nil
+}
+
+// keyList is keys' IDs, as a list to read.
+func keyList(keys []vault.Key) string {
+	ids := make([]string, len(keys))
+	for i, k := range keys {
+		ids[i] = k.String()
+	}
+	return strings.Join(ids, ", ")
 }
 
 // kindName is a kind as said to the user.

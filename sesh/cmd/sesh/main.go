@@ -146,7 +146,7 @@ func checkCommandWord(args []string) error {
 		}
 		return fmt.Errorf("sesh takes a command first, not %q; the commands are listed by: sesh --help", args[1])
 	}
-	if name, _ := subcommand(args); name != "" {
+	if name, _ := subcommand(args); name != "" || args[1] == "help" {
 		return nil
 	}
 	word := args[1]
@@ -647,7 +647,7 @@ func (c passwordPromptConfig) withTypedPassword(pw []byte) passwordPromptConfig 
 // resolvePasswordPrompt so the env-var policy lives in exactly one place.
 func terminalPrompt(prompt string) ([]byte, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return nil, errors.New("sesh is locked, and there's no terminal here to type the master password at: run a command at one first (the agent then stays unlocked for a while), or give it in SESH_MASTER_PASSWORD")
+		return nil, noTerminalFor(prompt)
 	}
 	if _, err := fmt.Fprint(os.Stderr, prompt); err != nil {
 		return nil, err
@@ -663,6 +663,16 @@ func terminalPrompt(prompt string) ([]byte, error) {
 		return nil, err
 	}
 	return pw, nil
+}
+
+// noTerminalFor is the error for a password prompt with no terminal to
+// type at: it says what was asked for, and for the master password, the
+// ways that need none.
+func noTerminalFor(prompt string) error {
+	if strings.Contains(strings.ToLower(prompt), "recovery key") {
+		return errors.New("there's no terminal here to type the recovery key at")
+	}
+	return errors.New("there's no terminal here to type the master password at: run sesh at one first, after which its agent keeps the vault unlocked for a while, or give the password in SESH_MASTER_PASSWORD")
 }
 
 // errReported is a failure the command has already reported in full; fatal
@@ -693,6 +703,9 @@ func fatal(app *App, err error) {
 // run is the testable entrypoint for the application
 func run(app *App, args []string) {
 	if name, rest := subcommand(args); name != "" {
+		if askedForHelp(rest) {
+			rest = []string{"--help"}
+		}
 		if err := commands[name](app, rest); err != nil {
 			fatal(app, err)
 		}
@@ -719,6 +732,22 @@ func run(app *App, args []string) {
 	if err := checkCommandWord(args); err != nil {
 		fatal(app, err)
 	}
+}
+
+// askedForHelp says whether -h or --help is among a command's words,
+// before any "--" (after it, the words are another program's, as with sesh
+// run): it shows the command's usage, wherever it's typed, and does nothing
+// else. The word help alone can name an entry, so it counts only first.
+func askedForHelp(args []string) bool {
+	for i, a := range args {
+		switch {
+		case a == "--":
+			return false
+		case a == "-h" || a == "-help" || a == "--help", i == 0 && a == "help":
+			return true
+		}
+	}
+	return false
 }
 
 // runLock is sesh lock: sesh's agent forgets the key.

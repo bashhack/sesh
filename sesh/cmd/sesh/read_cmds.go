@@ -56,7 +56,7 @@ const copyUsage = `Usage: sesh copy <entry> [--username | --url | --field NAME]
 const getUsage = `Usage: sesh get <entry> [--username | --url | --field NAME] [--json]
   Print an entry's password, API key or note, or a TOTP entry's current
   code, for a pipe or a script; --username, --url and --field print that
-  instead.
+  instead (--field secret prints a TOTP entry's key).
 
   sesh get github
   sesh get stripe key | pbcopy
@@ -458,7 +458,8 @@ func entryValue(store *database.Store, k vault.Key, p part, why string) ([]byte,
 		if err != nil {
 			return nil, "", err
 		}
-		return []byte(c.current), name + "'s code", nil
+		// A code copied near its end may be stale by the time it's pasted.
+		return []byte(c.current), fmt.Sprintf("%s's code (for %ds more)", name, c.secondsLeft), nil
 	}
 	// --field takes the entry's own parts by their reserved names, and
 	// otherwise its custom fields, found in any case.
@@ -646,10 +647,19 @@ func runGet(app *App, args []string) error {
 			Kind     string `json:"kind"`
 			Part     string `json:"part"`
 			Value    string `json:"value"`
-		}{k.String(), k.Service, k.Username, string(k.Kind), picked.String(), string(value)}
+		}{k.String(), k.Service, k.Username, string(k.Kind), partName(k, picked), string(value)}
 		return writeJSON(app.Stdout, out) //nolint:gosec // --json prints the value asked for by design
 	}
 	return printValue(app.Stdout, value)
+}
+
+// partName is the part of k's entry that p gives, as --json says it: a
+// TOTP entry's code when no part is asked for.
+func partName(k vault.Key, p part) string {
+	if p == (part{}) && k.Kind == vault.KindTOTP {
+		return "code"
+	}
+	return p.String()
 }
 
 // cmpOr is s, or else when s is empty.
@@ -744,6 +754,9 @@ func runOpen(app *App, args []string) error {
 			return nil
 		}
 		return err
+	}
+	if len(words) == 0 {
+		return errors.New("name the entry: sesh open <entry>")
 	}
 	store, err := openFilingStore()
 	if err != nil {

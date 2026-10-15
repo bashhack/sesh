@@ -1290,7 +1290,7 @@ password/github/alice
 
 `--reveal` shows them too, and the audit log records reading them, naming what was read (all of it, the notes, or one field). `--json` gives the same as JSON; hidden values are left out unless revealed.
 
-`sesh copy` and `sesh get` take one value instead of the secret: `--field <name>` (a field, in any case, or `notes`), `--url`, or `--username`:
+`sesh copy` and `sesh get` take one value instead of the secret: `--field <name>` (a field, in any case, or `notes`), `--url`, or `--username`. `--field secret` (or `password`) is the secret itself; on a TOTP entry, that's its key rather than a code, for moving it to another app:
 
 ```
 sesh copy github password --field pin

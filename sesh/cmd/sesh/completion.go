@@ -140,6 +140,8 @@ func complete(words []string) (cands []candidate, files bool) {
 		}
 	case "show":
 		specs = flagSpecs(func(fs *flag.FlagSet) { addShowFlags(fs) })
+	case "history":
+		specs = flagSpecs(addHistoryFlags)
 	case "list":
 		if !strings.HasPrefix(cur, "-") && !takesValueAfter(before, "folder", "tag", "sort") {
 			return matching(kindWords, cur), false
@@ -189,10 +191,15 @@ func complete(words []string) (cands []candidate, files bool) {
 		if len(before) == 1 && !strings.HasPrefix(cur, "-") {
 			return matching(trashCommands, cur), false
 		}
-		if len(before) > 1 && slices.ContainsFunc(trashCommands, func(c candidate) bool { return c.value == before[1] }) {
-			return nil, false
+		switch {
+		case len(before) < 2 || !slices.ContainsFunc(trashCommands, func(c candidate) bool { return c.value == before[1] }):
+			specs = flagSpecs(func(fs *flag.FlagSet) { addTrashFlags(fs) })
+		case before[1] == "restore":
+			specs = flagSpecs(func(fs *flag.FlagSet) { addTrashRestoreFlags(fs) })
+		case before[1] == "remove", before[1] == "empty":
+			specs = flagSpecs(func(fs *flag.FlagSet) { addForceFlag(fs) })
 		}
-		specs = flagSpecs(func(fs *flag.FlagSet) { addTrashFlags(fs) })
+		// sesh trash list takes only the settings' flags.
 	case "run":
 		specs = flagSpecs(func(fs *flag.FlagSet) { addRunFlags(fs) })
 		for i := range specs {
@@ -236,6 +243,12 @@ func complete(words []string) (cands []candidate, files bool) {
 	default:
 		// Before a command, the options plain sesh takes.
 		specs = append([]flagSpec{{name: "help", usage: "Show the commands"}, {name: "version", usage: "Show the version"}}, settingSpecs()...)
+	}
+	// The settings' flags go with any command.
+	for _, s := range settingSpecs() {
+		if _, ok := findSpec(specs, "--"+s.name); !ok {
+			specs = append(specs, s)
+		}
 	}
 	if verbs != nil {
 		if len(before) == 1 {

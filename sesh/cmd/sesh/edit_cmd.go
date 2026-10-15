@@ -334,8 +334,13 @@ func checkEditSecret(from, to vault.Key, f *editFlags) error {
 		return errors.New("a TOTP entry's secret comes with its code settings: add it again with sesh add totp --force")
 	case f.generate && to.Kind == vault.KindNote:
 		return errors.New("a note isn't generated: give it with --secret")
-	case f.generate && f.length < 1:
-		return fmt.Errorf("--length wants 1 or more, got %d", f.length)
+	case f.generate:
+		opts := password.DefaultGenerateOptions()
+		opts.Length = f.length
+		opts.Symbols = !f.noSymbols
+		if err := opts.Check(); err != nil {
+			return fmt.Errorf("--length: %w", err)
+		}
 	}
 	return nil
 }

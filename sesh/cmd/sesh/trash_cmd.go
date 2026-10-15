@@ -94,7 +94,7 @@ func trashEntries(app *App, args []string) error {
 		return err
 	}
 	defer closeAuditStore(store)
-	keys, err := resolveEach(app, store, named)
+	keys, searched, err := resolveEach(app, store, named)
 	if err != nil {
 		return err
 	}
@@ -120,9 +120,15 @@ func trashEntries(app *App, args []string) error {
 	if err := store.DeleteMany(keys); err != nil {
 		return err
 	}
-	msg := fmt.Sprintf("✅ Deleted %s for good\n", entryCount(len(keys)))
+	// Entries found by a search are named: the words may have matched
+	// one that wasn't meant.
+	what := entryCount(len(keys))
+	if searched {
+		what = keyList(keys)
+	}
+	msg := fmt.Sprintf("✅ Deleted %s for good\n", what)
 	if days > 0 {
-		msg = fmt.Sprintf("✅ Moved %s to the trash, kept %s: sesh trash lists them, and sesh trash restore <id> puts one back\n", entryCount(len(keys)), dayCount(int64(days)))
+		msg = fmt.Sprintf("✅ Moved %s to the trash, kept %s: sesh trash lists them, and sesh trash restore <id> puts one back\n", what, dayCount(int64(days)))
 	}
 	_, err = io.WriteString(app.Stdout, msg)
 	return err
@@ -194,11 +200,21 @@ func trashIDs(args []string) ([]int64, error) {
 	return ids, nil
 }
 
+// addTrashRestoreFlags defines sesh trash restore's flag on fs.
+func addTrashRestoreFlags(fs *flag.FlagSet) (as *string) {
+	return fs.String("as", "", "Restore it under this entry ID instead, such as password/github-old/alice")
+}
+
+// addForceFlag defines --force, for sesh trash remove and empty, on fs.
+func addForceFlag(fs *flag.FlagSet) *bool {
+	return fs.Bool("force", false, "Don't ask first")
+}
+
 // restoreFromTrash is sesh trash restore <id> [--as <entry id>].
 func restoreFromTrash(app *App, args []string) error {
 	fs := flag.NewFlagSet("trash restore", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	as := fs.String("as", "", "Restore it under this entry ID instead, such as password/github-old/alice")
+	as := addTrashRestoreFlags(fs)
 	ids, err := parseAnywhere(fs, args)
 	if err != nil {
 		return err
@@ -237,7 +253,7 @@ func restoreFromTrash(app *App, args []string) error {
 func removeFromTrash(app *App, args []string) error {
 	fs := flag.NewFlagSet("trash remove", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	force := fs.Bool("force", false, "Don't ask first")
+	force := addForceFlag(fs)
 	idArgs, err := parseAnywhere(fs, args)
 	if err != nil {
 		return err
@@ -293,7 +309,7 @@ func removeFromTrash(app *App, args []string) error {
 func emptyTrash(app *App, args []string) error {
 	fs := flag.NewFlagSet("trash empty", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	force := fs.Bool("force", false, "Don't ask first")
+	force := addForceFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

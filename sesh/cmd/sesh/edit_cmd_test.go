@@ -126,7 +126,8 @@ func TestEdit_RefusedBeforeUnlocking(t *testing.T) {
 		"secure_note/a --generate":         "a note isn't generated",
 		"password/a --secret --generate":   "choose one",
 		"password/a --rename a/b":          `contains "/"`,
-		"password/a --generate --length 0": "--length wants 1 or more",
+		"password/a --generate --length 0": "--length: password length must be at least 1",
+		"password/a --generate --length 3": "--length: password length 3 is too short for 4 required character sets",
 		"nope":                             "nothing to change",
 	} {
 		if _, _, err := runEditOut(t, "", false, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {

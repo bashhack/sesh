@@ -138,6 +138,15 @@ func runAdd(app *App, args []string) error {
 		}
 	}
 
+	opts := password.DefaultGenerateOptions()
+	opts.Length = f.length
+	opts.Symbols = !f.noSymbol
+	if f.generate {
+		if err := opts.Check(); err != nil {
+			return fmt.Errorf("--length: %w", err)
+		}
+	}
+
 	cfg, err := settings()
 	if err != nil {
 		return err
@@ -161,9 +170,6 @@ func runAdd(app *App, args []string) error {
 	replacing := store.Exists(k) == nil
 	var secret []byte
 	if f.generate {
-		opts := password.DefaultGenerateOptions()
-		opts.Length = f.length
-		opts.Symbols = !f.noSymbol
 		if secret, err = password.GeneratePassword(opts); err != nil {
 			return err
 		}

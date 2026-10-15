@@ -119,7 +119,7 @@ func TestExport_RefusesTheVault(t *testing.T) {
 	app := NewDefaultApp(VersionInfo{}, appSettingsFrom(cfg))
 	app.Stdin, app.Stdout, app.Stderr = strings.NewReader(""), new(bytes.Buffer), stderr
 	app.Exit = func(int) {}
-	run(app, []string{"sesh", "export", "--file", cfg.DBPath.Value, "--force"})
+	run(app, []string{"sesh", "export", "--format", "json", "--file", cfg.DBPath.Value, "--force"})
 	if !strings.Contains(stderr.String(), "is the vault itself") {
 		t.Errorf("exporting over the vault:\n%s", stderr)
 	}
