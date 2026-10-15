@@ -320,13 +320,24 @@ func TestRevealHintOnceTyped(t *testing.T) {
 		return -1
 	}
 	before, at := a.screen(), row()
-	if strings.Contains(before, "ctrl+r") || !strings.Contains(before, "type it: sesh keeps no copy to show you") {
+	if strings.Contains(before, "ctrl+r") || !strings.Contains(before, "type it: sesh keeps no copy") {
 		t.Errorf("empty, the current password's hints:\n%s", before)
 	}
 	a.press("x")
 	if s := a.screen(); !strings.Contains(s, "ctrl+r  show what you typed") || row() != at {
 		t.Errorf("typed: the new password's label at %d, was %d\n%s", row(), at, s)
 	}
+	// At the narrowest window the prompt still fits one line, so the form doesn't move there either.
+	a.press("backspace")
+	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: 30})
+	narrow := row()
+	a.press("x")
+	if row() != narrow {
+		t.Errorf("at %d columns: the new password's label at %d, was %d\n%s", minWidth, row(), narrow, a.screen())
+	}
+	a.press("backspace")
+	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a.press("x")
 	// Shown, then emptied, or shown with nothing typed: the hint says it's shown, before what's typed next is.
 	a.press("ctrl+r", "backspace")
 	if s := a.screen(); !strings.Contains(s, "ctrl+r  hide it") {
