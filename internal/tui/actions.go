@@ -128,7 +128,7 @@ func (m *Model) openMenu() tea.Cmd {
 	items = append(items,
 		item{key: "h", label: "earlier secrets…", run: func() tea.Cmd { return m.openHistory(&ek) }},
 		item{key: "d", label: "move to the trash", run: func() tea.Cmd { return m.confirmDelete(&ek) }},
-		item{key: "x", label: "delete for good", run: func() tea.Cmd { return m.confirmPurge([]vault.Key{ek.Key}) }},
+		item{key: "x", label: "delete for good", run: func() tea.Cmd { return m.confirmPurge([]vault.Key{ek.Key}, false) }},
 		// Ctrl-G's menu, where a terminal (zellij's) takes Ctrl-G.
 		item{key: "g", label: "sesh's actions…", rule: true, run: m.openSeshMenu},
 	)
@@ -237,6 +237,18 @@ func (m *Model) overlayKey(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	ov.sel = max(min(ov.sel, ov.len()-1), 0)
 	return nil
+}
+
+// listTrash lists trash in the trash panel, keeping the marks on entries
+// still in it.
+func (ov *overlay) listTrash(trash []Trashed) {
+	for id := range ov.marked {
+		if !slices.ContainsFunc(trash, func(t Trashed) bool { return t.ID == id }) {
+			delete(ov.marked, id)
+		}
+	}
+	ov.trash = trash
+	ov.sel = max(min(ov.sel, len(trash)-1), 0)
 }
 
 // len is how many lines the panel's choice is among.
@@ -594,25 +606,39 @@ func (m *Model) removeMarked(listed []Trashed) tea.Cmd {
 }
 
 // confirmPurge asks before deleting the entries keys for good, skipping
-// the trash.
-func (m *Model) confirmPurge(keys []vault.Key) tea.Cmd {
+// the trash: the entry the menu was opened on, or those marked. Marked
+// ones another command has deleted or renamed meanwhile are left out, and
+// said to be, as moving them to the trash does.
+func (m *Model) confirmPurge(keys []vault.Key, marked bool) tea.Cmd {
 	what := countOf(len(keys))
 	if len(keys) == 1 {
 		what = short(kindName(keys[0]))
 	}
-	m.ov = m.confirm(m.ov, "Delete for good",
-		"Delete "+what+" for good? It skips the trash, so it can't be brought back, nor its earlier secrets.",
-		func() tea.Cmd {
+	question := "Delete " + what + " for good? It skips the trash, so it can't be brought back, nor its earlier secrets."
+	if h := m.hiddenMarks(); marked && h > 0 {
+		question = fmt.Sprintf("Delete %s for good, %d of them not shown in the list now? It skips the trash, so they can't be brought back, nor their earlier secrets.", what, h)
+		if len(keys) == 1 {
+			question = "Delete " + what + " for good? It's marked, but not shown in the list now. It skips the trash, so it can't be brought back, nor its earlier secrets."
+		}
+	}
+	m.ov = m.confirm(m.ov, "Delete for good", question, func() tea.Cmd {
+		for _, k := range keys {
+			m.forget(k)
+		}
+		if !marked {
 			epoch := m.epoch
 			return m.read(func(v Vault, _ func() bool) tea.Msg {
-				err := v.Purge(keys)
-				msg := doneMsg{what: "Deleted " + what + " for good", err: err, epoch: epoch, reread: true, unmark: keys}
-				if len(keys) == 1 {
-					msg.forget = keys[0]
-				}
-				return msg
+				return doneMsg{what: "Deleted " + what + " for good", err: v.Purge(keys), epoch: epoch, reread: true}
 			})
-		})
+		}
+		return m.change(keys, func(v Vault, keys []vault.Key) (int, error) { return len(keys), v.Purge(keys) },
+			func(n int) string {
+				if n == 1 && len(keys) == 1 {
+					return "Deleted " + what + " for good"
+				}
+				return "Deleted " + countOf(n) + " for good"
+			})
+	})
 	m.ov.danger = true
 	return nil
 }
@@ -691,13 +717,12 @@ func (m *Model) actionResult(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		if msg.err != nil && !errors.Is(msg.err, ErrLocked) && msg.trash != nil {
-			m.ov.trash, m.ov.loading, m.ov.err = msg.trash, false, msg.err.Error()
-			m.ov.sel = max(min(m.ov.sel, len(msg.trash)-1), 0)
+			m.ov.loading, m.ov.err = false, msg.err.Error()
+			m.ov.listTrash(msg.trash)
 			return nil
 		}
 		return m.loaded(msg.err, func() {
-			m.ov.trash, m.ov.marked = msg.trash, nil
-			m.ov.sel = max(min(m.ov.sel, len(msg.trash)-1), 0)
+			m.ov.listTrash(msg.trash)
 			if msg.said != "" {
 				m.say(msg.said)
 			}

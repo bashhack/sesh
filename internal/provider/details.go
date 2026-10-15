@@ -176,8 +176,8 @@ func (f *DetailsFlags) Change(fromKind, kind vault.Kind, terminal bool) (*vault.
 		}
 		c.Remove = append(c.Remove, n)
 	}
-	// A field renamed or made plain is moved once the entry's fields are
-	// known (see Move); here its names are checked.
+	// A field renamed or made plain keeps the value it has when the
+	// change is written; CheckAgainst sees that the entry has it.
 	for _, kv := range f.renames {
 		from, to, ok := strings.Cut(kv, "=")
 		if !ok {
@@ -194,85 +194,18 @@ func (f *DetailsFlags) Change(fromKind, kind vault.Kind, terminal bool) (*vault.
 			if err := vault.CheckFieldName(to); err != nil {
 				return nil, err
 			}
-			continue
-		}
-		if err := name(to, "set"); err != nil {
+		} else if err := name(to, "the new name of a field renamed"); err != nil {
 			return nil, err
 		}
+		c.Moves = append(c.Moves, vault.FieldMove{From: from, To: to})
 	}
 	for _, n := range f.plains {
 		if err := name(n, "made plain"); err != nil {
 			return nil, err
 		}
+		c.Moves = append(c.Moves, vault.FieldMove{From: n, Plain: true})
 	}
 	return c, nil
-}
-
-// Move adds to c the fields --rename-field and --plain-field move on the
-// entry e: each taken out, then set again under its new name, or plain,
-// with its value, which a secret field has read with read (the audit log
-// records it). The caller zeroes c.
-func (f *DetailsFlags) Move(e *vault.Entry, c *vault.DetailsChange, read func(field, why string) ([]byte, error)) error {
-	find := func(name string) int {
-		return slices.IndexFunc(e.Fields, func(fl vault.Field) bool { return strings.EqualFold(fl.Name, name) })
-	}
-	names := make([]string, len(e.Fields))
-	for i, fl := range e.Fields {
-		names[i] = fl.Name
-	}
-	value := func(fl *vault.Field, why string) ([]byte, error) {
-		if !fl.Secret {
-			return bytes.Clone(fl.Value), nil
-		}
-		return read(fl.Name, why)
-	}
-	move := func(fl *vault.Field, to string, secret bool, why string) error {
-		v, err := value(fl, why)
-		if err != nil {
-			return err
-		}
-		c.Remove = append(c.Remove, fl.Name)
-		c.Set = append(c.Set, vault.Field{Name: to, Value: v, Secret: secret})
-		c.RemoveFirst = true
-		return nil
-	}
-	for _, kv := range f.renames {
-		from, to, _ := strings.Cut(kv, "=")
-		i := find(from)
-		switch {
-		case i < 0:
-			return noField(from, "rename", names)
-		case e.Fields[i].Name == to:
-			return fmt.Errorf("the field %s is named that already", to)
-		case find(to) >= 0 && find(to) != i:
-			return fmt.Errorf("the entry has a field %s already; remove it first, or choose another name", e.Fields[find(to)].Name)
-		}
-		if err := move(&e.Fields[i], to, e.Fields[i].Secret, "to rename it"); err != nil {
-			return err
-		}
-	}
-	for _, n := range f.plains {
-		i := find(n)
-		switch {
-		case i < 0:
-			return noField(n, "make plain", names)
-		case !e.Fields[i].Secret:
-			return fmt.Errorf("the field %s is plain already", e.Fields[i].Name)
-		}
-		if err := move(&e.Fields[i], e.Fields[i].Name, false, "to make it plain"); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// noField is there being no field name to do something to, with the
-// fields there are.
-func noField(name, do string, names []string) error {
-	if len(names) == 0 {
-		return fmt.Errorf("there's no field %q to %s; it has no fields", name, do)
-	}
-	return fmt.Errorf("there's no field %q to %s; its fields: %s", name, do, strings.Join(names, ", "))
 }
 
 // DetailsInput is where Read reads values from.
@@ -298,8 +231,7 @@ type DetailsInput struct {
 func (f *DetailsFlags) Read(c *vault.DetailsChange, in *DetailsInput) error {
 	for i := range c.Set {
 		fl := &c.Set[i]
-		if !fl.Secret || fl.Value != nil {
-			// Plain, or moved with the value it has (see Move).
+		if !fl.Secret {
 			continue
 		}
 		var v []byte
@@ -398,10 +330,34 @@ func CheckAgainst(e *vault.Entry, c *vault.DetailsChange) error {
 	}
 	for _, fl := range c.Set {
 		if i := find(fl.Name); i >= 0 && e.Fields[i].Secret && !fl.Secret {
-			return fmt.Errorf("%s is a secret field: set it with --secret-field %s, or remove it first to make it plain", names[i], names[i])
+			return fmt.Errorf("%s is a secret field: set it with --secret-field %s, or make it plain with --plain-field %s", names[i], names[i], names[i])
+		}
+	}
+	for _, mv := range c.Moves {
+		i := find(mv.From)
+		switch {
+		case i < 0 && mv.Plain:
+			return noField(mv.From, "make plain", names)
+		case i < 0:
+			return noField(mv.From, "rename", names)
+		case mv.Plain && !e.Fields[i].Secret:
+			return fmt.Errorf("the field %s is plain already", e.Fields[i].Name)
+		case mv.To == e.Fields[i].Name:
+			return fmt.Errorf("the field %s is named that already", mv.To)
+		case mv.To != "" && find(mv.To) >= 0 && find(mv.To) != i:
+			return fmt.Errorf("the entry has a field %s already; remove it first, or choose another name", e.Fields[find(mv.To)].Name)
 		}
 	}
 	return nil
+}
+
+// noField is there being no field name to do something to, with the
+// fields there are.
+func noField(name, do string, names []string) error {
+	if len(names) == 0 {
+		return fmt.Errorf("there's no field %q to %s; it has no fields", name, do)
+	}
+	return fmt.Errorf("there's no field %q to %s; its fields: %s", name, do, strings.Join(names, ", "))
 }
 
 // ZeroChange overwrites the notes and secret values c holds.

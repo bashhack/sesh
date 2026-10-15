@@ -404,12 +404,22 @@ type DetailsChange struct {
 	// NotesBase, when HasNotesBase, are the notes the new ones were written
 	// from, as in an editor: the change is refused if the entry's notes
 	// are no longer those. The caller zeroes them.
-	NotesBase    []byte
+	NotesBase []byte
+	// Moves rename fields, or make secret ones plain, keeping their values
+	// and places, before the rest of the change.
+	Moves        []FieldMove
 	SetNotes     bool
 	HasNotesBase bool
 	// RemoveFirst takes Remove's fields out before Set's go in, so a
 	// field can be removed and set again: renamed, or made plain.
 	RemoveFirst bool
+}
+
+// FieldMove is a field renamed (To, when not ""), or made plain (Plain),
+// with the value it has when the change is written.
+type FieldMove struct {
+	From, To string
+	Plain    bool
 }
 
 // ErrNotesChanged is notes changed by another command while new ones were
@@ -418,7 +428,7 @@ var ErrNotesChanged = errors.New("the notes were changed by another sesh command
 
 // IsZero reports whether c changes nothing.
 func (c *DetailsChange) IsZero() bool {
-	return c.URL == nil && !c.SetNotes && len(c.Set) == 0 && len(c.Remove) == 0
+	return c.URL == nil && !c.SetNotes && len(c.Set) == 0 && len(c.Remove) == 0 && len(c.Moves) == 0
 }
 
 // Apply makes c's change to d, and says what changed, as the audit log
@@ -455,7 +465,7 @@ func (c *DetailsChange) Apply(d *Details) (string, error) {
 			}
 			old := d.Fields[i]
 			if old.Secret && !f.Secret {
-				return fmt.Errorf("%s is a secret field: set it with --secret-field %s, or remove it first to make it plain", old.Name, old.Name)
+				return fmt.Errorf("%s is a secret field: set it with --secret-field %s, or make it plain with --plain-field %s", old.Name, old.Name, old.Name)
 			}
 			if old.Name == f.Name && old.Secret == f.Secret && bytes.Equal(old.Value, f.Value) {
 				secure.SecureZeroBytes(f.Value)
@@ -483,9 +493,36 @@ func (c *DetailsChange) Apply(d *Details) (string, error) {
 		}
 		return nil
 	}
-	steps := []func() error{set, remove}
+	move := func() error {
+		for _, mv := range c.Moves {
+			find := func(name string) int {
+				return slices.IndexFunc(d.Fields, func(g Field) bool { return strings.EqualFold(g.Name, name) })
+			}
+			i := find(mv.From)
+			if i < 0 {
+				return fmt.Errorf("there's no field %q any more; its fields: %s", mv.From, strings.Join(names, ", "))
+			}
+			f := &d.Fields[i]
+			if mv.Plain {
+				if !f.Secret {
+					return fmt.Errorf("the field %s is plain already", f.Name)
+				}
+				f.Secret = false
+				what = append(what, "field "+f.Name+" made plain")
+			}
+			if mv.To != "" && mv.To != f.Name {
+				if j := find(mv.To); j >= 0 && j != i {
+					return fmt.Errorf("the entry has a field %s already", d.Fields[j].Name)
+				}
+				what = append(what, "field "+f.Name+" renamed to "+mv.To)
+				f.Name = mv.To
+			}
+		}
+		return nil
+	}
+	steps := []func() error{move, set, remove}
 	if c.RemoveFirst {
-		steps = []func() error{remove, set}
+		steps = []func() error{move, remove, set}
 	}
 	for _, step := range steps {
 		if err := step(); err != nil {

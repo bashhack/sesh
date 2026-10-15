@@ -1586,13 +1586,20 @@ func TestPurge(t *testing.T) {
 	if len(f.entries) != 2 || len(f.trash) != 0 || !strings.Contains(a.screen(), "Deleted password github (alice) for good") {
 		t.Fatalf("entries %d, trash %d:\n%s", len(f.entries), len(f.trash), a.screen())
 	}
-	a.press("down", "up", "space", "space", "ctrl+k", "x")
-	if s := a.screen(); !strings.Contains(s, "Delete 2 entries for good?") {
-		t.Fatalf("confirm marked:\n%s", s)
+	a.press("down", "up", "space", "space")
+	if len(a.keys[code]) == 0 {
+		t.Fatal("the TOTP entry's key isn't held: the test can't see it wiped")
 	}
+	// Marked ones hidden by a search are said; one gone meanwhile is left out, the rest deleted and wiped.
+	a.press("n", "o", "p", "e")
+	a.press("ctrl+k", "x")
+	if s := a.screen(); !strings.Contains(s, "2 of them not shown in the list") {
+		t.Fatalf("confirm marked, hidden:\n%s", s)
+	}
+	f.entries = slices.DeleteFunc(f.entries, func(e vault.Entry) bool { return e.Key == gitlab })
 	a.press("wait", "y")
-	if len(f.entries) != 0 || len(f.trash) != 0 || len(a.marked) != 0 {
-		t.Errorf("entries %d, trash %d, marked %d", len(f.entries), len(f.trash), len(a.marked))
+	if s := a.screen(); len(f.entries) != 0 || len(f.trash) != 0 || len(a.marked) != 0 || len(a.keys[code]) != 0 || !strings.Contains(s, "1 marked was gone") {
+		t.Errorf("entries %d, trash %d, marked %d, key held %v:\n%s", len(f.entries), len(f.trash), len(a.marked), len(a.keys[code]) != 0, s)
 	}
 }
 
@@ -1614,6 +1621,16 @@ func TestTrashMarks(t *testing.T) {
 	a.press("wait", "y")
 	if s := a.screen(); len(f.trash) != 1 || a.ov == nil || a.ov.kind != panelTrash || len(a.ov.marked) != 0 || !strings.Contains(s, "Deleted 2 entries in the trash for good") {
 		t.Errorf("trash %+v:\n%s", f.trash, s)
+	}
+	// Marked, then put back elsewhere: the delete is refused, the list read again, and the mark stays on what's left.
+	for range 2 {
+		f.trash = append(f.trash, Trashed{ID: int64(10 + len(f.trash)), Key: vault.Key{Kind: vault.KindPassword, Service: fmt.Sprint("x", len(f.trash))}})
+	}
+	a.press("esc", "ctrl+g", "t", "space", "space", "space")
+	f.trash = f.trash[1:]
+	a.press("x", "wait", "y")
+	if s := a.screen(); len(f.trash) != 2 || len(a.ov.marked) != 2 || !strings.Contains(s, "the trash changed meanwhile") {
+		t.Errorf("refused: trash %d, marked %v:\n%s", len(f.trash), a.ov.marked, s)
 	}
 }
 
@@ -1912,7 +1929,7 @@ func TestEditGenerateAndNameTaken(t *testing.T) {
 func TestGenerator(t *testing.T) {
 	f := newFake()
 	var asked []generating
-	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, Generate: func(length int, symbols bool) ([]byte, error) {
+	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, IsWeak: func(pw []byte) bool { return len(asked) > 0 && asked[len(asked)-1].length < 12 }, Generate: func(length int, symbols bool) ([]byte, error) {
 		asked = append(asked, generating{length, symbols})
 		if length > 1024 {
 			return nil, errors.New("password length 2000 is more than the 1024 sesh makes")
@@ -1931,8 +1948,12 @@ func TestGenerator(t *testing.T) {
 	if a.form != nil || !slices.Equal(a.copied, []string{"made-pw"}) || asked[len(asked)-1] != (generating{12, false}) || len(f.saves) != 0 {
 		t.Errorf("generated: copied %q, asked %v, saves %d:\n%s", a.copied, asked, len(f.saves), a.screen())
 	}
-	if s := a.screen(); !strings.Contains(s, "Copied a new password, 12 characters,") {
+	if s := a.screen(); !strings.Contains(s, "Copied a new password, 12 characters,") || a.clipUntil.IsZero() {
 		t.Errorf("what's said:\n%s", s)
+	}
+	a.press("ctrl+g", "p", "ctrl+u", "6", "enter", "enter")
+	if s := a.screen(); !strings.Contains(s, "easy to guess") {
+		t.Errorf("a short one:\n%s", s)
 	}
 }
 
@@ -2364,9 +2385,25 @@ func TestEditKind(t *testing.T) {
 	if len(f.saves) != 1 || f.saves[0].To != (vault.Key{Kind: vault.KindAPIKey, Service: "github", Username: "alice"}) || f.saves[0].Secret != nil || f.saves[0].SetNotes {
 		t.Fatalf("saves = %+v", f.saves)
 	}
+	// Made a note, it keeps its username, as sesh edit --type does.
+	a.press("ctrl+k", "e")
+	a.tabs(2)
+	a.press("→", "ctrl+s") // API key → secure note
+	if last := f.saves[len(f.saves)-1]; last.To != (vault.Key{Kind: vault.KindNote, Service: "github", Username: "alice"}) {
+		t.Errorf("made a note: %+v", last.To)
+	}
+	// Notes typed, then the kind crossing a note: refused, so they aren't lost.
+	g := newFake()
+	b := newApp(t, g, Options{})
+	b.press("down", "down", "ctrl+k", "e") // gitlab, an API key
+	b.tabs(8)                              // → its notes
+	b.press("x", "shift+tab", "shift+tab", "shift+tab", "shift+tab", "shift+tab", "shift+tab", "→", "ctrl+s")
+	if s := b.screen(); len(g.saves) != 0 || !strings.Contains(s, "Changing the kind keeps the text as it was") {
+		t.Errorf("notes typed, then the kind: saves %+v:\n%s", g.saves, s)
+	}
 	// A TOTP entry's form has no kind.
 	a.press("down", "ctrl+k", "e")
-	if s := a.screen(); a.form == nil || strings.Contains(s, "secure note") {
+	if s := a.screen(); a.form == nil || strings.Contains(s, "○ secure note") || strings.Contains(s, "● secure note") {
 		t.Errorf("a TOTP entry's form:\n%s", s)
 	}
 	a.press("esc")

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -63,6 +64,11 @@ func (m *Model) gotAudit(msg *auditMsg) tea.Cmd {
 	if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelAudit {
 		return nil
 	}
+	if msg.err != nil && !errors.Is(msg.err, ErrLocked) && msg.log.Count > 0 {
+		m.ov.loading, m.ov.err = false, msg.err.Error()
+		m.showAudit(&msg.log)
+		return nil
+	}
 	return m.loaded(msg.err, func() {
 		m.showAudit(&msg.log)
 		if msg.said != "" {
@@ -91,7 +97,13 @@ func (m *Model) askPrune() tea.Cmd {
 			return m.read(func(v Vault, _ func() bool) tea.Msg {
 				said, err := v.PruneAudit(days)
 				if err != nil {
-					return auditMsg{err: err, epoch: epoch}
+					// What's left, under why: a compact that failed may
+					// follow a prune that went through.
+					log, lerr := v.AuditLog(auditShown)
+					if lerr != nil {
+						return auditMsg{err: err, epoch: epoch}
+					}
+					return auditMsg{log: log, err: err, epoch: epoch}
 				}
 				log, err := v.AuditLog(auditShown)
 				return auditMsg{log: log, err: err, said: said, epoch: epoch}

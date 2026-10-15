@@ -185,7 +185,10 @@ func complete(words []string) (cands []candidate, files bool) {
 		if len(before) == 1 && !strings.HasPrefix(cur, "-") {
 			return matching(addKindWords, cur), false
 		}
-		specs = flagSpecs(func(fs *flag.FlagSet) { addAddFlags(fs) })
+		// --rename-field and --plain-field change fields an entry has.
+		specs = slices.DeleteFunc(flagSpecs(func(fs *flag.FlagSet) { addAddFlags(fs) }), func(s flagSpec) bool {
+			return s.name == "rename-field" || s.name == "plain-field"
+		})
 	case "export":
 		if !strings.HasPrefix(cur, "-") && !takesValueAfter(before, "file", "format", "folder", "tag") {
 			return matching(kindWords, cur), false

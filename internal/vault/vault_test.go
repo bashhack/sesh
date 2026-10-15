@@ -287,3 +287,43 @@ func TestDetailsChange(t *testing.T) {
 		t.Error("IsZero")
 	}
 }
+
+// A field moved keeps its place and the value it has when the change is applied: renamed, made plain, or both; a
+// field not there, a name taken, or a plain one made plain is refused.
+func TestDetailsChangeMoves(t *testing.T) {
+	d := vault.Details{Fields: []vault.Field{
+		{Name: "pin", Value: []byte("changed-meanwhile"), Secret: true},
+		{Name: "host", Value: []byte("db")},
+		{Name: "acct", Value: []byte("42"), Secret: true},
+	}}
+	c := vault.DetailsChange{Moves: []vault.FieldMove{{From: "PIN", To: "card-pin"}, {From: "acct", To: "account", Plain: true}}}
+	what, err := c.Apply(&d)
+	if err != nil || what != "field pin renamed to card-pin, field acct made plain, field acct renamed to account" {
+		t.Fatalf("what = %q, %v", what, err)
+	}
+	want := []vault.Field{
+		{Name: "card-pin", Value: []byte("changed-meanwhile"), Secret: true},
+		{Name: "host", Value: []byte("db")},
+		{Name: "account", Value: []byte("42")},
+	}
+	if len(d.Fields) != len(want) {
+		t.Fatalf("fields = %+v", d.Fields)
+	}
+	for i := range want {
+		if d.Fields[i].Name != want[i].Name || string(d.Fields[i].Value) != string(want[i].Value) || d.Fields[i].Secret != want[i].Secret {
+			t.Errorf("field %d = %+v, want %+v", i, d.Fields[i], want[i])
+		}
+	}
+	for _, c := range []struct {
+		wantSub string
+		mv      vault.FieldMove
+	}{
+		{`no field "nope" any more`, vault.FieldMove{From: "nope", To: "x"}},
+		{"has a field account already", vault.FieldMove{From: "host", To: "ACCOUNT"}},
+		{"plain already", vault.FieldMove{From: "host", Plain: true}},
+	} {
+		if _, err := (&vault.DetailsChange{Moves: []vault.FieldMove{c.mv}}).Apply(&d); err == nil || !strings.Contains(err.Error(), c.wantSub) {
+			t.Errorf("%+v: %v, want %q", c.mv, err, c.wantSub)
+		}
+	}
+}

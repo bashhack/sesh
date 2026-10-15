@@ -181,7 +181,9 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	f.submit = func() tea.Cmd {
 		k := kind()
 		c := &Change{To: vault.Key{Kind: k, Service: name.value(), Username: user.value()}}
-		if k == vault.KindNote {
+		if k == vault.KindNote && adding {
+			// Edited, a note keeps the username it has, as sesh edit
+			// --type does; added, it has none.
 			c.To.Username = ""
 		}
 		if c.To.Service == "" && !scanning() {
@@ -211,7 +213,10 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		var generate *generating
 		noteText := []byte(text.area.Value())
 		if crossesNote() {
-			noteText = []byte(shownNotes)
+			if string(noteText) != shownNotes {
+				f.err = "Changing the kind keeps the text as it was: undo your change to it, or save that first, then change the kind."
+				return nil
+			}
 			if k == vault.KindNote && hasNotes(&orig) {
 				f.err = "A secure note can't have notes: its text is its secret. Remove the notes first, then make it a note."
 				return nil

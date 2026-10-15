@@ -73,7 +73,12 @@ func (m *Model) openGenerator() tea.Cmd {
 			if err := opts.Copy(string(pw)); err != nil {
 				return generatedMsg{err: err, epoch: epoch}
 			}
-			return generatedMsg{what: copied("a new password, "+strconv.Itoa(g.length)+" characters,", opts.ClearAfter), epoch: epoch}
+			what := "a new password, " + strconv.Itoa(g.length) + " characters,"
+			if opts.IsWeak != nil && opts.IsWeak(pw) {
+				what = "a new password, " + strconv.Itoa(g.length) + " characters: easy to guess, 12 or more is safer;"
+			}
+			what = copied(what, opts.ClearAfter)
+			return generatedMsg{what: what, epoch: epoch}
 		}
 	}
 	f.focusInput(0)
@@ -95,5 +100,8 @@ func (m *Model) generated(msg *generatedMsg) tea.Cmd {
 	}
 	m.form = nil
 	m.say(msg.what)
+	if m.opts.ClearAfter > 0 {
+		m.clipUntil = m.opts.Now().Add(m.opts.ClearAfter)
+	}
 	return nil
 }

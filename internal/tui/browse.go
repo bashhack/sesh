@@ -379,7 +379,7 @@ func (m *Model) openMarkedMenu() tea.Cmd {
 		{key: "+", label: "add a tag…", run: func() tea.Cmd { return m.askTag(keys, true) }},
 		{key: "-", label: "remove a tag…", run: func() tea.Cmd { return m.askTag(keys, false) }},
 		{key: "d", label: "move to the trash", run: func() tea.Cmd { return m.confirmDeleteMany(keys) }},
-		{key: "x", label: "delete for good", run: func() tea.Cmd { return m.confirmPurge(keys) }},
+		{key: "x", label: "delete for good", run: func() tea.Cmd { return m.confirmPurge(keys, true) }},
 		{key: "c", label: "clear the marks", run: func() tea.Cmd {
 			clear(m.marked)
 			m.ov = nil

@@ -249,8 +249,8 @@ func TestEdit_SameSecret(t *testing.T) {
 	}
 }
 
-// --rename-field keeps a field's value and secrecy, reading a secret one (audited); --plain-field makes a secret
-// field plain with its value. Names that clash, or fields not there, are refused before anything changes.
+// --rename-field keeps a field's value and secrecy; --plain-field makes a secret field plain with its value. Names
+// that clash, or fields not there, are refused before anything changes.
 func TestEdit_RenameAndPlainField(t *testing.T) {
 	env := editVault(t)
 	gh := "password/github/alice"
@@ -262,7 +262,7 @@ func TestEdit_RenameAndPlainField(t *testing.T) {
 	}
 	for args, wantSub := range map[string]string{
 		gh + " --rename-field nope=x":                   `no field "nope" to rename; its fields: email, pin`,
-		gh + " --rename-field email=PIN":                "has a field pin already",
+		gh + " --rename-field email=PIN":                "has a field pin already; remove it first",
 		gh + " --rename-field email=email":              "named that already",
 		gh + " --rename-field email":                    "wants old=new",
 		gh + " --plain-field email":                     "plain already",
@@ -300,7 +300,7 @@ func TestEdit_RenameAndPlainField(t *testing.T) {
 	if got := fields(); !slices.ContainsFunc(got, func(f vault.Field) bool { return f.Name == "card-pin" && !f.Secret && string(f.Value) == "4321" }) {
 		t.Errorf("made plain = %+v", got)
 	}
-	if log := mustRun(t, runAudit); !strings.Contains(log, "field pin, to rename it") || !strings.Contains(log, "field card-pin, to make it plain") {
-		t.Errorf("the reads aren't in the audit log:\n%s", log)
+	if log := mustRun(t, runAudit); !strings.Contains(log, "field pin renamed to card-pin") || !strings.Contains(log, "field card-pin made plain") {
+		t.Errorf("the changes aren't in the audit log:\n%s", log)
 	}
 }

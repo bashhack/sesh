@@ -165,24 +165,6 @@ func runEdit(app *App, args []string) error {
 		if err := provider.CheckAgainst(&current, change); err != nil {
 			return err
 		}
-		// A field renamed, or made plain, keeps its value: a secret one's
-		// is read for it.
-		read := func(field, why string) ([]byte, error) {
-			d, err := store.Details(from, "field "+field+", "+why)
-			if err != nil {
-				return nil, err
-			}
-			defer d.Zero()
-			for _, fl := range d.Fields {
-				if fl.Name == field {
-					return bytes.Clone(fl.Value), nil
-				}
-			}
-			return nil, fmt.Errorf("the field %s can't be read", field)
-		}
-		if err := f.details.Move(&current, change, read); err != nil {
-			return err
-		}
 	}
 
 	if asked {
