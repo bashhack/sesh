@@ -1163,18 +1163,26 @@ func TestSeshMenu(t *testing.T) {
 	a.press("down", "ctrl+g")
 	menu("from the list")
 	a.press("←")
-	if a.focus != focusSide {
-		t.Fatal("not in the sidebar")
+	if a.focus != focusSide || !strings.Contains(a.screen(), "ctrl+g  sesh") {
+		t.Fatalf("not in the sidebar, or its footer doesn't say ctrl+g:\n%s", a.screen())
 	}
 	a.press("ctrl+g")
 	menu("from the sidebar")
 	a.press("esc", "zzz", "ctrl+k")
 	menu("with nothing matching")
 	// Where a terminal keeps Ctrl-G, Ctrl-K's g opens it from an entry, or those marked.
+	// Esc from it goes back to the menu it was opened from.
 	a.press("ctrl+u", "ctrl+k", "g")
 	menu("from the entry's menu")
-	a.press("down", "space", "ctrl+k", "g")
+	if a.ov == nil || a.ov.title != "github (alice)" {
+		t.Fatalf("back to %+v", a.ov)
+	}
+	a.press("esc", "down", "space", "ctrl+k", "g")
 	menu("from the marked entries' menu")
+	if a.ov == nil || !strings.Contains(a.ov.title, "marked") {
+		t.Fatalf("back to %+v", a.ov)
+	}
+	a.press("esc")
 	if !strings.Contains(a.screen(), "ctrl+g  sesh") {
 		t.Errorf("the marked entries' footer doesn't say ctrl+g:\n%s", a.screen())
 	}

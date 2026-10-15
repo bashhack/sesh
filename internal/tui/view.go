@@ -308,6 +308,7 @@ func (m *Model) footer(w int) string {
 		if m.renamable() {
 			keys = append(keys, [2]string{"ctrl+k", "rename"})
 		}
+		keys = append(keys, [2]string{"ctrl+g", "sesh"})
 	case len(m.marked) > 0:
 		keys = [][2]string{{"ctrl+k", "act on " + m.markedWords()}, {"ctrl+g", "sesh"}, {"space", "mark"}, {"esc", "unmark"}}
 	case m.focus == focusList:

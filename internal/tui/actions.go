@@ -135,7 +135,8 @@ func (m *Model) openSeshMenu() tea.Cmd {
 		// It wouldn't be on screen.
 		return nil
 	}
-	m.ov = &overlay{kind: panelMenu, title: "sesh", items: m.seshItems()}
+	// Opened from Ctrl-K's menu, it goes back to it.
+	m.ov = &overlay{kind: panelMenu, title: "sesh", back: m.ov, items: m.seshItems()}
 	return nil
 }
 
