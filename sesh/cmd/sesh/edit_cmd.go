@@ -33,7 +33,7 @@ type editFlags struct {
 // addEditFlags defines sesh edit's flags on fs.
 func addEditFlags(fs *flag.FlagSet) *editFlags {
 	f := &editFlags{}
-	fs.StringVar(&f.service, "service", "", "New service name")
+	fs.StringVar(&f.service, "rename", "", "New name")
 	fs.StringVar(&f.username, "username", "", `New username ("" removes it)`)
 	fs.StringVar(&f.kind, "type", "", "New kind: password, api_key, or secure_note")
 	fs.BoolVar(&f.secret, "secret", false, "Type a new secret (a note reads stdin)")
@@ -45,55 +45,48 @@ func addEditFlags(fs *flag.FlagSet) *editFlags {
 	return f
 }
 
-const editUsage = `Usage: sesh edit <id> [flags]
+const editUsage = `Usage: sesh edit <entry> [flags]
   Rename an entry, change its username or kind, give it a new secret, or
   change its URL, notes, or custom fields. With no flags, at a terminal, it
   asks for the name, kind and secret, with the current values as defaults.
 
-  sesh edit password/github/alice --service github-work
-  sesh edit password/github/alice --username alicia     ("" removes it)
-  sesh edit password/github/alice --secret              (or --generate [--length N] [--no-symbols])
-  sesh edit api_key/openai --type password              (password, api_key, secure_note)
-  sesh edit password/github/alice --url https://github.com/login   ("" removes it)
-  sesh edit password/github/alice --field recovery-email=alice@example.com
-  sesh edit password/github/alice --secret-field pin    (asks, hidden)
-  sesh edit password/github/alice --remove-field pin
-  sesh edit password/github/alice --notes [--editor]    (stdin, or $EDITOR; empty removes them)
+  sesh edit github --rename github-work
+  sesh edit github --username alicia     ("" removes it)
+  sesh edit github --secret              (or --generate [--length N] [--no-symbols])
+  sesh edit openai --type password       (password, api_key, secure_note)
+  sesh edit github --url https://github.com/login   ("" removes it)
+  sesh edit github --field recovery-email=alice@example.com
+  sesh edit github --secret-field pin    (asks, hidden)
+  sesh edit github --remove-field pin
+  sesh edit github --notes [--editor]    (stdin, or $EDITOR; empty removes them)
 
-Entry IDs are what --list shows.`
+` + entryWordsHelp
 
 // errEditCancelled is input ending at a question: nothing changes.
 var errEditCancelled = errors.New("nothing changed")
 
-// runEdit is `sesh edit <id>`: rename an entry, change its username or
-// kind, or give it a new secret. Everything that needs no vault is checked
-// before unlocking it, and a new name before a new secret is asked for.
+// runEdit is `sesh edit <entry>`: rename an entry, change its username or
+// kind, or give it a new secret. What the flags alone get wrong is said
+// before unlocking, and a new name is checked before a new secret is
+// asked for.
 func runEdit(app *App, args []string) error {
 	if len(args) == 0 || isHelp(args[0]) {
 		_, err := fmt.Fprintln(app.Stdout, editUsage)
 		return err
 	}
-	// The ID comes first; the flags after it.
-	id, rest := args[0], args[1:]
-	if strings.HasPrefix(id, "-") {
-		return errors.New("name the entry first: sesh edit <id> [flags]")
-	}
 	fs := flag.NewFlagSet("edit", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	f := addEditFlags(fs)
 	fs.Usage = func() { fmt.Fprintln(app.Stderr, editUsage) } //nolint:errcheck // usage text
-	if err := fs.Parse(rest); err != nil {
+	words, err := parseAnywhere(fs, args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("sesh edit edits one entry; got %q after its flags", strings.Join(fs.Args(), " "))
-	}
-	from, err := vault.ParseKey(id)
-	if err != nil {
-		return err
+	if len(words) == 0 {
+		return errors.New("name the entry: sesh edit <entry> [flags]")
 	}
 	set := map[string]bool{}
 	fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
@@ -104,7 +97,34 @@ func runEdit(app *App, args []string) error {
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
 	asked := len(set) == 0 || (len(set) == 1 && set["force"])
 	if asked && !terminal {
-		return errors.New("nothing to change: give --service, --username, --type, --secret, --generate, --url, --notes, --field, --secret-field, or --remove-field (or run it at a terminal to be asked)")
+		return errors.New("nothing to change: give --rename, --username, --type, --secret, --generate, --url, --notes, --field, --secret-field, or --remove-field (or run it at a terminal to be asked)")
+	}
+
+	// An entry named by its ID has its kind known: what the flags get wrong
+	// for it is said before unlocking.
+	if len(words) == 1 {
+		if k, err := vault.ParseKey(words[0]); err == nil {
+			to, err := plannedKey(k, f, set)
+			if err == nil {
+				err = checkEditSecret(k, to, f)
+			}
+			if err == nil {
+				_, err = f.details.Change(k.Kind, to.Kind, terminal)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	store, err := openFilingStore()
+	if err != nil {
+		return err
+	}
+	defer closeAuditStore(store)
+	from, err := resolveEntry(app, store, words, "")
+	if err != nil {
+		return err
 	}
 	to, err := plannedKey(from, f, set)
 	if err != nil {
@@ -130,19 +150,6 @@ func runEdit(app *App, args []string) error {
 		return errors.New("nothing to change: the entry already has that name and kind")
 	}
 
-	store, err := openFilingStore()
-	if err != nil {
-		return err
-	}
-	defer closeAuditStore(store)
-	if err := store.Exists(from); err != nil {
-		if errors.Is(err, vault.ErrNotFound) {
-			if h := password.CaseHint(store, from); h != "" {
-				err = fmt.Errorf("%w; %s", err, h)
-			}
-		}
-		return err
-	}
 	// What the details change can't do to this entry is refused before
 	// anything is typed.
 	if change != nil {
@@ -193,7 +200,7 @@ func runEdit(app *App, args []string) error {
 		if !terminal {
 			return errors.New("this is an AWS profile's MFA entry, and its new name takes it out of the AWS provider; add --force to do it anyway")
 		}
-		yes, err := promptYesNo(app.Stdin, app.Stderr, fmt.Sprintf("%s is an AWS profile's MFA entry; as %s, `sesh --service aws` won't find it. Rename it anyway? [y/N]: ", from, to))
+		yes, err := promptYesNo(app.Stdin, app.Stderr, fmt.Sprintf("%s is an AWS profile's MFA entry; as %s, `sesh aws` won't find it. Rename it anyway? [y/N]: ", from, to))
 		if err != nil || !yes {
 			if err == nil {
 				_, err = fmt.Fprintln(app.Stderr, "Nothing changed.")
@@ -284,7 +291,7 @@ func isYes(answer string) bool {
 // plannedKey is the entry's key after the flags set says were given.
 func plannedKey(from vault.Key, f *editFlags, set map[string]bool) (vault.Key, error) {
 	to := from
-	if set["service"] {
+	if set["rename"] {
 		to.Service = f.service
 	}
 	if set["username"] {
@@ -313,7 +320,7 @@ func checkKindChange(from, to vault.Kind) error {
 		return fmt.Errorf("unknown type %q: use password, api_key, or secure_note", to)
 	}
 	if from == vault.KindTOTP || to == vault.KindTOTP {
-		return errors.New("a TOTP entry's kind can't change, nor can another become one: store a TOTP secret with --action totp-store or sesh --service totp --setup")
+		return errors.New("a TOTP entry's kind can't change, nor can another become one: add a TOTP entry with sesh add totp")
 	}
 	return nil
 }
@@ -324,7 +331,7 @@ func checkEditSecret(from, to vault.Key, f *editFlags) error {
 	case f.secret && f.generate:
 		return errors.New("--secret and --generate both give a new secret; choose one")
 	case (f.secret || f.generate) && from.Kind == vault.KindTOTP:
-		return errors.New("a TOTP entry's secret comes with its code settings: store it again with --action totp-store, or sesh --service totp --setup")
+		return errors.New("a TOTP entry's secret comes with its code settings: add it again with sesh add totp --force")
 	case f.generate && to.Kind == vault.KindNote:
 		return errors.New("a note isn't generated: give it with --secret")
 	case f.generate && f.length < 1:
@@ -358,7 +365,7 @@ func askNames(app *App, from vault.Key) (vault.Key, error) {
 	}
 	to := from
 	var err error
-	if to.Service, err = ask(fmt.Sprintf("Service name [%s]: ", from.Service), from.Service, func(v string) error {
+	if to.Service, err = ask(fmt.Sprintf("Name [%s]: ", from.Service), from.Service, func(v string) error {
 		if v == "" {
 			return errors.New("the service name is empty")
 		}

@@ -40,7 +40,7 @@ import (
 const uiUsage = `Usage:
   sesh ui    Search every entry; Enter copies its secret, or its TOTP code
 
-Type to search, as --action search does; ↑ and ↓ move; Enter copies, and
+Type to search, as sesh search does; ↑ and ↓ move; Enter copies, and
 the clipboard clears after clipboard_timeout; Esc clears the search, or
 quits. TOTP entries show their code and the seconds it has left.
 
@@ -57,7 +57,7 @@ func runUI(app *App, args []string) error {
 		return fmt.Errorf("sesh ui takes no arguments, got %q", strings.Join(args, " "))
 	}
 	if app.StdinIsTerminal == nil || !app.StdinIsTerminal() || !uiStdoutIsTerminal(app.Stdout) {
-		return errors.New("sesh ui needs a terminal; to search from a script, use: sesh --service password --action search --query <words>")
+		return errors.New("sesh ui needs a terminal; to search from a script, use: sesh search <words>")
 	}
 	cfg, err := settings()
 	if err != nil {

@@ -12,7 +12,6 @@ import (
 )
 
 func TestComplete(t *testing.T) {
-	reg := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, AppSettings{}).Registry
 	all := func(vs ...string) []string { return vs }
 	for _, tt := range []struct {
 		name  string
@@ -22,38 +21,44 @@ func TestComplete(t *testing.T) {
 		lacks []string // none of these
 		files bool
 	}{
-		{name: "subcommands", words: all(""), want: all("agent", "audit", "backup", "completion", "config", "doctor", "edit", "folder", "health", "history", "import", "init", "inject", "recover", "recovery", "restore", "run", "show", "tag", "touchid", "trash", "ui")},
-		{name: "subcommand prefix", words: all("co"), want: all("completion", "config")},
+		{name: "commands", words: all(""), want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "aws", "completion")},
+		{name: "command prefix", words: all("co"), want: all("copy", "code", "config", "completion")},
 		{name: "run flags", words: all("run", "-"), has: all("--env", "--env-file", "--no-masking")},
 		{name: "run's command", words: all("run", "--env", "K=sesh://api_key/x", "--", ""), files: true},
 		{name: "run --env-file", words: all("run", "--env-file", ""), files: true},
 		{name: "inject flags", words: all("inject", "-"), has: all("--i", "--o")},
 		{name: "import sources", words: all("import", "--from", ""), want: all("bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "safari", "sesh")},
-		{name: "show flags", words: all("show", "password/github", "-"), has: all("--reveal", "--format")},
-		{name: "show formats", words: all("show", "password/github", "--format", ""), has: all("text", "json")},
-		{name: "show's ID first", words: all("show", ""), lacks: all("--reveal")},
+		{name: "show flags", words: all("show", "github", "-"), has: all("--reveal", "--json")},
+		{name: "entry words aren't completed, flags are", words: all("show", ""), want: all("--json", "--reveal")},
+		{name: "list kinds", words: all("list", ""), want: all("passwords", "keys", "notes", "totp")},
+		{name: "list flags", words: all("list", "notes", "-"), has: all("--folder", "--tag", "--sort", "--json")},
+		{name: "list sorts", words: all("list", "--sort", ""), want: all("name", "created", "updated", "folder")},
+		{name: "list folder is free text", words: all("list", "--folder", "")},
+		{name: "copy flags", words: all("copy", "github", "-"), has: all("--username", "--url", "--field"), lacks: all("--json")},
+		{name: "get flags", words: all("get", "github", "-"), has: all("--field", "--json")},
+		{name: "code flags", words: all("code", "github", "-"), want: all("--json")},
+		{name: "add kinds", words: all("add", ""), want: all("password", "key", "note", "totp")},
+		{name: "add flags", words: all("add", "password", "github", "--"), has: all("--username", "--generate", "--qr", "--folder", "--tag", "--url", "--notes", "--force")},
+		{name: "edit flags", words: all("edit", "github", "--"), has: all("--rename", "--username", "--type", "--generate")},
+		{name: "edit types", words: all("edit", "github", "--type", ""), want: all("password", "api_key", "secure_note")},
+		{name: "generate flags", words: all("generate", "-"), want: all("--copy", "--length", "--no-symbols")},
+		{name: "export kinds", words: all("export", ""), want: all("passwords", "keys", "notes", "totp")},
+		{name: "export formats", words: all("export", "--format", ""), want: all("encrypted", "json", "csv")},
+		{name: "export file", words: all("export", "--file", ""), files: true},
+		{name: "aws setup", words: all("aws", ""), want: all("setup")},
+		{name: "aws flags", words: all("aws", "-"), has: all("--clip", "--profile", "--no-subshell")},
+		{name: "trash commands", words: all("trash", ""), want: all("list", "restore", "remove", "empty")},
+		{name: "trash entry flags", words: all("trash", "github", "-"), want: all("--force", "--purge")},
+		{name: "trash command takes no entry words", words: all("trash", "restore", "")},
+		{name: "first flag", words: all("-"), has: all("--help", "--version", "--db-path"), lacks: all("--service", "--rekey", "--list-services")},
+		{name: "after --", words: all("list", "--", "-")},
+		{name: "db path", words: all("--db-path", ""), files: true},
+		{name: "passwd flags", words: all("passwd", "--"), has: all("--db-path")},
+		{name: "lock takes nothing", words: all("lock", "")},
 		{name: "audit commands", words: all("audit", ""), want: all("prune")},
 		{name: "audit flags", words: all("audit", "-"), want: all("--limit")},
 		{name: "audit prune flags", words: all("audit", "prune", "-"), want: all("--older-than")},
 		{name: "audit prune days", words: all("audit", "prune", "--older-than", "")},
-		{name: "first flag", words: all("-"), has: all("--service", "--list-services", "--rekey", "--db-path"), lacks: all("--action", "--migrate", "--backend", "--key-source")},
-		{name: "one dash as typed", words: all("-se"), want: all("-service", "-setup")},
-		{name: "providers", words: all("--service", ""), want: all("aws", "password", "totp")},
-		{name: "provider prefix", words: all("-service", "p"), want: all("password")},
-		{name: "provider after =", words: all("--service=t"), want: all("--service=totp")},
-		{name: "provider flags", words: all("--service", "password", "--sh"), want: all("--show")},
-		{name: "used flags not offered", words: all("--service", "password", "--list", "--l"), want: all("--length", "--limit", "--list-services")},
-		{name: "unknown provider adds no flags", words: all("--service", "nosuch", "--"), has: all("--list"), lacks: all("--action")},
-		{name: "actions", words: all("--service", "password", "--action", ""), want: all("store", "get", "generate", "search", "export", "import", "totp-store", "totp-generate")},
-		{name: "value after =", words: all("--service", "password", "--format=j"), want: all("--format=json")},
-		{name: "entry types", words: all("--service", "password", "--entry-type", ""), want: all("password", "api_key", "totp", "secure_note")},
-		{name: "file path", words: all("--service", "password", "--file", ""), files: true},
-		{name: "file path after =", words: all("--service", "password", "--file=ba"), files: true},
-		{name: "free-text value", words: all("--service", "password", "--service-name", "")},
-		{name: "positional word", words: all("--service", "password", "sto")},
-		{name: "after --", words: all("--service", "password", "--", "-")},
-		{name: "db path", words: all("--db-path", ""), files: true},
-		{name: "rekey flags", words: all("--rekey", "--"), has: all("--db-path"), lacks: all("--service", "--rekey", "--to")},
 		{name: "agent commands", words: all("agent", ""), want: all("lock", "status", "stop")},
 		{name: "agent flags", words: all("agent", "-"), want: all("--idle-timeout", "--max-lifetime", "--socket")},
 		{name: "agent command takes no arguments", words: all("agent", "lock", "")},
@@ -64,15 +69,15 @@ func TestComplete(t *testing.T) {
 		{name: "tag commands", words: all("tag", ""), want: all("add", "remove", "rename", "list")},
 		{name: "no folder or tag names", words: all("tag", "add", "")},
 		{name: "recover takes nothing", words: all("recover", "")},
-		{name: "recover and recovery", words: all("reco"), want: all("recover", "recovery")},
+		{name: "recover and recovery", words: all("reco"), want: all("recovery", "recover")},
 		{name: "touchid takes one command", words: all("touchid", "enable", "")},
 		{name: "completion shells", words: all("completion", ""), want: all("bash", "fish", "zsh")},
 		{name: "init flags", words: all("init", "--"), want: all("--force", "--db-path")},
 		{name: "config takes nothing", words: all("config", "")},
-		{name: "no words", words: nil, want: all("agent", "audit", "backup", "completion", "config", "doctor", "edit", "folder", "health", "history", "import", "init", "inject", "recover", "recovery", "restore", "run", "show", "tag", "touchid", "trash", "ui")},
+		{name: "no words", words: nil, want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "aws", "completion")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			cands, files := complete(reg, tt.words)
+			cands, files := complete(tt.words)
 			if files != tt.files {
 				t.Fatalf("files = %v, want %v", files, tt.files)
 			}
@@ -101,16 +106,15 @@ func TestComplete(t *testing.T) {
 }
 
 func TestWriteCompletions(t *testing.T) {
-	reg := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, AppSettings{}).Registry
 	var b bytes.Buffer
-	if err := writeCompletions(&b, reg, []string{"agent", "st"}); err != nil {
+	if err := writeCompletions(&b, []string{"agent", "st"}); err != nil {
 		t.Fatal(err)
 	}
 	if want := "status\tShow whether the agent is running and unlocked\nstop\tShut the agent down\n"; b.String() != want {
 		t.Errorf("output = %q, want %q", b.String(), want)
 	}
 	b.Reset()
-	if err := writeCompletions(&b, reg, []string{"--db-path", ""}); err != nil {
+	if err := writeCompletions(&b, []string{"--db-path", ""}); err != nil {
 		t.Fatal(err)
 	}
 	if b.String() != filesDirective+"\n" {
@@ -363,7 +367,8 @@ func TestCheckCommandWord(t *testing.T) {
 		"sesh trsh":     `sesh has no command "trsh"; did you mean: sesh trash`,
 		"sesh":          "",
 		"sesh ui":       "",
-		"sesh --list":   "",
+		"sesh --list":   "sesh has no --list: sesh list",
+		"sesh --help":   "",
 	} {
 		err := checkCommandWord(strings.Fields(args))
 		if got := fmt.Sprint(err); (want == "" && err != nil) || (want != "" && got != want) {

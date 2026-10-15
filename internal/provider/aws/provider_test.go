@@ -4,8 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +11,6 @@ import (
 	"github.com/bashhack/sesh/internal/aws"
 	awsMocks "github.com/bashhack/sesh/internal/aws/mocks"
 	"github.com/bashhack/sesh/internal/provider"
-	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/subshell"
 	"github.com/bashhack/sesh/internal/testutil"
 	"github.com/bashhack/sesh/internal/totp"
@@ -87,14 +84,6 @@ func TestProvider_Name(t *testing.T) {
 	}
 }
 
-func TestProvider_Description(t *testing.T) {
-	p := &Provider{}
-	want := "Amazon Web Services CLI authentication"
-	if got := p.Description(); got != want {
-		t.Errorf("Description() = %v, want %v", got, want)
-	}
-}
-
 func TestProvider_SetupFlags(t *testing.T) {
 	tests := map[string]struct {
 		envProfile  string
@@ -147,8 +136,8 @@ func TestProvider_GetFlagInfo(t *testing.T) {
 	p := &Provider{}
 	flags := p.GetFlagInfo()
 
-	if len(flags) != 5 || flags[2].Name != "force" || flags[2].Type != "bool" || flags[3].Name != "folder" || flags[4].Name != "tag" {
-		t.Fatalf("GetFlagInfo() = %+v, want profile, no-subshell, force, folder and tag", flags)
+	if len(flags) != 4 || flags[0].Name != "profile" || flags[1].Name != "no-subshell" || flags[2].Name != "folder" || flags[3].Name != "tag" {
+		t.Fatalf("GetFlagInfo() = %+v, want profile, no-subshell, folder and tag", flags)
 	}
 
 	if flags[0].Name != "profile" {
@@ -222,15 +211,6 @@ func TestProvider_GetProfile(t *testing.T) {
 	}
 }
 
-func TestProvider_GetSetupHandler(t *testing.T) {
-	p := &Provider{store: vault.NewMemStore()}
-
-	handler := p.GetSetupHandler()
-	if _, ok := handler.(*setup.AWSSetupHandler); !ok {
-		t.Errorf("GetSetupHandler() returned %T, want *setup.AWSSetupHandler", handler)
-	}
-}
-
 func TestProvider_ValidateRequest(t *testing.T) {
 	tests := map[string]struct {
 		store       func(t *testing.T) vault.Store
@@ -247,7 +227,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 		},
 		"no entry for profile": {
 			store:      func(t *testing.T) vault.Store { return awsStore(t, "dev", "secret", testDevice) },
-			wantErrMsg: "no AWS entry found for profile (default). Run 'sesh --service aws --setup' first",
+			wantErrMsg: "no AWS entry found for profile (default). Run 'sesh aws setup' first",
 		},
 		"store error surfaces without the setup hint": {
 			store: func(*testing.T) vault.Store {
@@ -268,7 +248,7 @@ func TestProvider_ValidateRequest(t *testing.T) {
 			store: func(t *testing.T) vault.Store {
 				return awsStoreWithCodes(t, totp.Params{Algorithm: "SHA256", Digits: 8})
 			},
-			wantErrMsg: "the AWS entry for profile (default) has code settings AWS doesn't use (SHA256, 8 digits, 30s); set it up again with 'sesh --service aws --setup'",
+			wantErrMsg: "the AWS entry for profile (default) has code settings AWS doesn't use (SHA256, 8 digits, 30s); set it up again with 'sesh aws setup'",
 		},
 	}
 
@@ -747,298 +727,6 @@ func TestProvider_NewSubshellConfig(t *testing.T) {
 	}
 }
 
-func TestProvider_ListEntries(t *testing.T) {
-	tests := map[string]struct {
-		store       func(t *testing.T) vault.Store
-		checkResult func(*testing.T, []provider.ProviderEntry)
-		wantCount   int
-		wantErr     bool
-	}{
-		"multiple profiles": {
-			store: func(t *testing.T) vault.Store {
-				store := awsStore(t, "", "s", testDevice)
-				for _, profile := range []string{"dev", "prod"} {
-					if err := store.Save(&vault.Entry{Key: vault.AWSKey(profile)}, []byte("s")); err != nil {
-						t.Fatal(err)
-					}
-				}
-				// A TOTP entry named aws with no username isn't a profile.
-				if err := store.Save(&vault.Entry{Kind: vault.KindTOTP, Service: "aws"}, []byte("s")); err != nil {
-					t.Fatal(err)
-				}
-				return store
-			},
-			wantCount: 3,
-			checkResult: func(t *testing.T, entries []provider.ProviderEntry) {
-				if entries[0].Name != "AWS (default)" {
-					t.Errorf("entries[0].Name = %v, want 'AWS (default)'", entries[0].Name)
-				}
-				if entries[0].Type != "aws mfa" {
-					t.Errorf("entries[0].Type = %v, want aws mfa", entries[0].Type)
-				}
-				if entries[0].ID != "totp/aws/default" {
-					t.Errorf("entries[0].ID = %v, want 'totp/aws/default'", entries[0].ID)
-				}
-				if entries[2].Name != "AWS (prod)" || entries[2].ID != "totp/aws/prod" {
-					t.Errorf("entries[2] = %+v, want AWS (prod), totp/aws/prod", entries[2])
-				}
-			},
-		},
-		"other entries are left out": {
-			store: func(t *testing.T) vault.Store {
-				store := awsStore(t, "", "s", testDevice)
-				for _, k := range []vault.Key{
-					{Kind: vault.KindTOTP, Service: "github", Username: "alice"},
-					{Kind: vault.KindTOTP, Service: "aws-console", Username: "admin"},
-					{Kind: vault.KindPassword, Service: "aws", Username: "default"},
-				} {
-					if err := store.Put(k, []byte("s")); err != nil {
-						t.Fatal(err)
-					}
-				}
-				return store
-			},
-			wantCount: 1,
-			checkResult: func(t *testing.T, entries []provider.ProviderEntry) {
-				if entries[0].ID != "totp/aws/default" {
-					t.Errorf("entries[0].ID = %v, want 'totp/aws/default'", entries[0].ID)
-				}
-			},
-		},
-		"empty list": {
-			store:     func(*testing.T) vault.Store { return vault.NewMemStore() },
-			wantCount: 0,
-		},
-		"store error": {
-			store: func(*testing.T) vault.Store {
-				return failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")}
-			},
-			wantErr: true,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			p := &Provider{store: tc.store(t)}
-
-			entries, err := p.ListEntries()
-			if tc.wantErr && err == nil {
-				t.Error("ListEntries() expected error but got nil")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("ListEntries() unexpected error: %v", err)
-			}
-			if !tc.wantErr {
-				if len(entries) != tc.wantCount {
-					t.Errorf("ListEntries() returned %d entries, want %d", len(entries), tc.wantCount)
-				}
-				if tc.checkResult != nil {
-					tc.checkResult(t, entries)
-				}
-			}
-		})
-	}
-}
-
-func TestProvider_DeleteEntry(t *testing.T) {
-	github := vault.Key{Kind: vault.KindTOTP, Service: "github"}
-	tests := map[string]struct {
-		store      func(t *testing.T) vault.Store
-		id         string
-		wantGone   vault.Key // deleted by the call
-		wantErrSub string
-	}{
-		"default profile": {
-			id:       "totp/aws/default",
-			store:    func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
-			wantGone: vault.AWSKey(""),
-		},
-		"named profile": {
-			id:       "totp/aws/dev",
-			store:    func(t *testing.T) vault.Store { return awsStore(t, "dev", "s", testDevice) },
-			wantGone: vault.AWSKey("dev"),
-		},
-		"missing entry": {
-			id:         "totp/aws/prod",
-			store:      func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
-			wantErrSub: "entry not found: totp/aws/prod",
-		},
-		"store error": {
-			id: "totp/aws/default",
-			store: func(*testing.T) vault.Store {
-				return failingStore{MemStore: vault.NewMemStore(), err: errors.New("vault locked")}
-			},
-			wantErrSub: "vault locked",
-		},
-		"invalid ID format": {
-			id:         "invalid-id",
-			store:      func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
-			wantErrSub: "want kind/service",
-		},
-		"another TOTP entry": {
-			id:         "totp/github",
-			store:      func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
-			wantErrSub: "isn't an AWS entry",
-		},
-		"a password named aws": {
-			id:         "password/aws/default",
-			store:      func(t *testing.T) vault.Store { return awsStore(t, "", "s", testDevice) },
-			wantErrSub: "isn't an AWS entry",
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			store := tc.store(t)
-			// An unrelated entry that no delete may touch.
-			if ms, ok := store.(*vault.MemStore); ok {
-				if err := ms.Put(github, []byte("s")); err != nil {
-					t.Fatal(err)
-				}
-			}
-			p := &Provider{store: store}
-
-			err := deleteOne(p, tc.id)
-			if tc.wantErrSub == "" && err != nil {
-				t.Errorf("DeleteEntry() unexpected error: %v", err)
-			}
-			if tc.wantErrSub != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErrSub)) {
-				t.Errorf("DeleteEntry() = %v, want it to contain %q", err, tc.wantErrSub)
-			}
-			ms, ok := store.(*vault.MemStore)
-			if !ok {
-				return
-			}
-			if tc.wantGone != (vault.Key{}) {
-				if _, err := ms.Lookup(tc.wantGone); !errors.Is(err, vault.ErrNotFound) {
-					t.Errorf("%s is still there: %v", tc.wantGone, err)
-				}
-			}
-			entries, err := ms.List(&vault.Filter{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := 2 // the AWS entry and github
-			if tc.wantGone != (vault.Key{}) {
-				want = 1
-			}
-			if len(entries) != want {
-				t.Errorf("%d entries left, want %d: %+v", len(entries), want, entries)
-			}
-		})
-	}
-}
-
-func TestProvider_getAWSProfiles(t *testing.T) {
-	tests := map[string]struct {
-		configContent string
-		wantProfiles  []string
-		wantErr       bool
-	}{
-		"standard config file": {
-			configContent: `[default]
-region = us-east-1
-
-[profile dev]
-region = us-west-2
-
-[profile production]
-region = eu-west-1
-`,
-			wantProfiles: []string{"default", "dev", "production"},
-		},
-		"empty config file": {
-			configContent: "",
-			wantProfiles:  []string{"default"}, // Always includes default
-		},
-		"config with comments and extra spaces": {
-			configContent: `# This is a comment
-[default]
-region = us-east-1
-
-# Dev profile
-[profile  dev  ]
-region = us-west-2
-
-[profile staging]
-# Another comment
-region = ap-southeast-1
-`,
-			wantProfiles: []string{"default", "dev", "staging"},
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			tmpDir, err := os.MkdirTemp("", "sesh-test-*")
-			if err != nil {
-				t.Fatalf("Failed to create temp dir: %v", err)
-			}
-			defer func() {
-				if err := os.RemoveAll(tmpDir); err != nil {
-					t.Errorf("failed to clean up tmpDir: %v", err)
-				}
-			}()
-
-			awsDir := filepath.Join(tmpDir, ".aws")
-			if err := os.MkdirAll(awsDir, 0o700); err != nil {
-				t.Fatalf("Failed to create .aws dir: %v", err)
-			}
-
-			configPath := filepath.Join(awsDir, "config")
-			if err := os.WriteFile(configPath, []byte(tc.configContent), 0o600); err != nil {
-				t.Fatalf("Failed to write config file: %v", err)
-			}
-
-			t.Setenv("HOME", tmpDir)
-
-			p := &Provider{}
-
-			profiles, err := p.getAWSProfiles()
-			if tc.wantErr && err == nil {
-				t.Error("getAWSProfiles() expected error but got nil")
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("getAWSProfiles() unexpected error: %v", err)
-			}
-			if !tc.wantErr {
-				if len(profiles) != len(tc.wantProfiles) {
-					t.Errorf("got %d profiles, want %d", len(profiles), len(tc.wantProfiles))
-				}
-				for i, want := range tc.wantProfiles {
-					if i >= len(profiles) {
-						break
-					}
-					if profiles[i] != want {
-						t.Errorf("profiles[%d] = %v, want %v", i, profiles[i], want)
-					}
-				}
-			}
-		})
-	}
-
-	t.Run("no config file", func(t *testing.T) {
-		tmpDir, err := os.MkdirTemp("", "sesh-test-*")
-		if err != nil {
-			t.Fatalf("Failed to create temp dir: %v", err)
-		}
-		defer func() {
-			if err := os.RemoveAll(tmpDir); err != nil {
-				t.Errorf("failed to clean up tmpDir: %v", err)
-			}
-		}()
-
-		t.Setenv("HOME", tmpDir)
-
-		p := &Provider{}
-
-		_, err = p.getAWSProfiles()
-		if err == nil {
-			t.Error("getAWSProfiles() expected error when config doesn't exist")
-		}
-	})
-}
-
 func TestFormatProfile(t *testing.T) {
 	tests := map[string]struct {
 		profile string
@@ -1062,10 +750,4 @@ func TestFormatProfile(t *testing.T) {
 			}
 		})
 	}
-}
-
-// deleteOne deletes the entry id names, answering yes when asked.
-func deleteOne(p *Provider, id string) error {
-	_, err := p.DeleteEntries([]string{id}, func([]string) (bool, error) { return true, nil })
-	return err
 }

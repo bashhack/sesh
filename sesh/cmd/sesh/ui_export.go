@@ -11,7 +11,7 @@ import (
 )
 
 // Export writes an encrypted export of every entry to the file to names,
-// as sesh --action export --format encrypted does, with pw, which it
+// as sesh export does, with pw, which it
 // wipes; a file there is replaced only when replace.
 func (u *uiVault) Export(to string, pw []byte, replace bool) (string, error) {
 	defer secure.SecureZeroBytes(pw)

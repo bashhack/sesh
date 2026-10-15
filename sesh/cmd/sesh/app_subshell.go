@@ -11,15 +11,11 @@ import (
 )
 
 // LaunchSubshell launches a new shell with credentials loaded
-func (a *App) LaunchSubshell(serviceName string) error {
+func (a *App) LaunchSubshell(p provider.ServiceProvider) error {
 	if os.Getenv("SESH_ACTIVE") == "1" {
 		return fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
 	}
-
-	p, err := a.Registry.GetProvider(serviceName)
-	if err != nil {
-		return fmt.Errorf("provider not found: %w", err)
-	}
+	serviceName := p.Name()
 
 	// Validate request early to fail fast
 	if err := p.ValidateRequest(); err != nil {

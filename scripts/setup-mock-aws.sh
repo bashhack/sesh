@@ -41,15 +41,15 @@ echo -e "${BLUE}2. Verify mock AWS is being used:${NC}"
 echo -e "   which aws  # Should show: $MOCK_BIN_DIR/aws"
 echo
 echo -e "${BLUE}3. Test sesh AWS setup flow:${NC}"
-echo -e "   sesh --service aws --setup"
+echo -e "   sesh aws setup"
 echo
 echo -e "${BLUE}4. When you need to scan a QR code:${NC}"
 echo -e "   # In another terminal, run the mock TOTP service:"
 echo -e "   go run $SCRIPT_DIR/mock-totp-service.go AWS"
 echo
 echo -e "${BLUE}5. Test sesh AWS credential generation:${NC}"
-echo -e "   sesh --service aws"
-echo -e "   sesh --service aws --clip"
+echo -e "   sesh aws"
+echo -e "   sesh aws --clip"
 echo
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo

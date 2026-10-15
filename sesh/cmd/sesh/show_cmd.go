@@ -10,24 +10,23 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
-const showUsage = `Usage: sesh show <id> [--reveal] [--format json]
+const showUsage = `Usage: sesh show <entry> [--reveal] [--json]
   Show an entry: its URL, folder, tags, notes and custom fields. Its secret,
   notes and secret fields stay hidden, and aren't read, unless --reveal.
 
-  sesh show password/github/alice
-  sesh show password/github/alice --reveal
+  sesh show github
+  sesh show github alice --reveal
 
-Entry IDs are what --list shows.`
+` + entryWordsHelp
 
 // addShowFlags defines sesh show's flags on fs.
-func addShowFlags(fs *flag.FlagSet) (reveal *bool, format *string) {
+func addShowFlags(fs *flag.FlagSet) (reveal, asJSON *bool) {
 	return fs.Bool("reveal", false, "Show the secret, notes and secret fields"),
-		fs.String("format", "text", "Output format: text or json")
+		fs.Bool("json", false, "Print it as JSON")
 }
 
 // hidden stands in for a value show doesn't reveal.
@@ -46,7 +45,7 @@ func secretLabel(k vault.Kind) string {
 	return "Password"
 }
 
-// runShow is `sesh show <id>`: everything about one entry. Without
+// runShow is `sesh show <entry>`: everything about one entry. Without
 // --reveal it reads only what's stored readable; with it, the secret and
 // details are decrypted too, which the audit log records as access.
 func runShow(app *App, args []string) error {
@@ -54,29 +53,19 @@ func runShow(app *App, args []string) error {
 		_, err := fmt.Fprintln(app.Stdout, showUsage)
 		return err
 	}
-	id, rest := args[0], args[1:]
-	if strings.HasPrefix(id, "-") {
-		return errors.New("name the entry first: sesh show <id> [--reveal] [--format json]")
-	}
 	fs := flag.NewFlagSet("show", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	reveal, format := addShowFlags(fs)
+	reveal, asJSON := addShowFlags(fs)
 	fs.Usage = func() { fmt.Fprintln(app.Stderr, showUsage) } //nolint:errcheck // usage text
-	if err := fs.Parse(rest); err != nil {
+	words, err := parseAnywhere(fs, args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("sesh show shows one entry; got %q after its flags", strings.Join(fs.Args(), " "))
-	}
-	if *format != "text" && *format != "json" {
-		return fmt.Errorf("--format is text or json, not %q", *format)
-	}
-	k, err := vault.ParseKey(id)
-	if err != nil {
-		return err
+	if len(words) == 0 {
+		return errors.New("name the entry: sesh show <entry> [--reveal] [--json]")
 	}
 
 	store, err := openFilingStore()
@@ -84,13 +73,12 @@ func runShow(app *App, args []string) error {
 		return err
 	}
 	defer closeAuditStore(store)
+	k, err := resolveEntry(app, store, words, "")
+	if err != nil {
+		return err
+	}
 	e, err := store.Lookup(k)
 	if err != nil {
-		if errors.Is(err, vault.ErrNotFound) {
-			if h := password.CaseHint(store, k); h != "" {
-				err = fmt.Errorf("%w; %s", err, h)
-			}
-		}
 		return err
 	}
 	shown := shownEntry{e: &e, d: vault.Details{URL: e.URL, Fields: e.Fields}}
@@ -104,7 +92,7 @@ func runShow(app *App, args []string) error {
 		}
 		defer shown.d.Zero()
 	}
-	if *format == "json" {
+	if *asJSON {
 		return shown.writeJSON(app, *reveal)
 	}
 	_, err = fmt.Fprint(app.Stdout, shown.text(*reveal))

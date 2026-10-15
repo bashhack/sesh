@@ -65,29 +65,20 @@ func (m *MockSubshellProvider) ShouldUseSubshell() bool {
 func TestApp_LaunchSubshell(t *testing.T) {
 	tests := map[string]struct {
 		setupEnv    map[string]string
-		setupApp    func(*App)
+		newProvider func() provider.ServiceProvider
 		checkOutput func(*testing.T, string, string)
-		serviceName string
 		wantErrMsg  string
 		wantErr     bool
 	}{
 		"already in sesh environment": {
-			serviceName: "aws",
 			setupEnv: map[string]string{
 				"SESH_ACTIVE": "1",
 			},
 			wantErr:    true,
 			wantErrMsg: "already in a sesh environment",
 		},
-		"provider not found": {
-			serviceName: "unknown",
-			setupApp:    func(app *App) {},
-			wantErr:     true,
-			wantErrMsg:  "provider not found",
-		},
 		"validate request fails": {
-			serviceName: "aws",
-			setupApp: func(app *App) {
+			newProvider: func() provider.ServiceProvider {
 				mockProvider := &MockSubshellProvider{
 					NameFunc: func() string {
 						return "aws"
@@ -96,14 +87,13 @@ func TestApp_LaunchSubshell(t *testing.T) {
 						return errors.New("validation failed")
 					},
 				}
-				app.Registry.RegisterProvider(mockProvider)
+				return mockProvider
 			},
 			wantErr:    true,
 			wantErrMsg: "validation failed",
 		},
 		"get credentials fails": {
-			serviceName: "aws",
-			setupApp: func(app *App) {
+			newProvider: func() provider.ServiceProvider {
 				mockProvider := &MockSubshellProvider{
 					NameFunc: func() string {
 						return "aws"
@@ -115,14 +105,13 @@ func TestApp_LaunchSubshell(t *testing.T) {
 						return provider.Credentials{}, errors.New("failed to get credentials")
 					},
 				}
-				app.Registry.RegisterProvider(mockProvider)
+				return mockProvider
 			},
 			wantErr:    true,
 			wantErrMsg: "failed to generate credentials",
 		},
 		"provider does not support subshell": {
-			serviceName: "totp",
-			setupApp: func(app *App) {
+			newProvider: func() provider.ServiceProvider {
 				// Regular provider without subshell support
 				mockProvider := &MockProvider{
 					NameFunc: func() string {
@@ -135,14 +124,13 @@ func TestApp_LaunchSubshell(t *testing.T) {
 						return provider.Credentials{}, nil
 					},
 				}
-				app.Registry.RegisterProvider(mockProvider)
+				return mockProvider
 			},
 			wantErr:    true,
 			wantErrMsg: "provider totp does not support subshell customization",
 		},
 		"invalid subshell configuration": {
-			serviceName: "aws",
-			setupApp: func(app *App) {
+			newProvider: func() provider.ServiceProvider {
 				mockProvider := &MockSubshellProvider{
 					NameFunc: func() string {
 						return "aws"
@@ -163,17 +151,16 @@ func TestApp_LaunchSubshell(t *testing.T) {
 						return "invalid config"
 					},
 				}
-				app.Registry.RegisterProvider(mockProvider)
+				return mockProvider
 			},
 			wantErr:    true,
 			wantErrMsg: "provider aws returned invalid subshell configuration",
 		},
 		"successful subshell launch": {
-			serviceName: "aws",
 			setupEnv: map[string]string{
 				"SHELL": "/bin/echo", // Use echo as shell for testing
 			},
-			setupApp: func(app *App) {
+			newProvider: func() provider.ServiceProvider {
 				mockProvider := &MockSubshellProvider{
 					NameFunc: func() string {
 						return "aws"
@@ -201,7 +188,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 						}
 					},
 				}
-				app.Registry.RegisterProvider(mockProvider)
+				return mockProvider
 			},
 			wantErr: false,
 			checkOutput: func(t *testing.T, stdout, stderr string) {
@@ -214,11 +201,10 @@ func TestApp_LaunchSubshell(t *testing.T) {
 			},
 		},
 		"subshell exits with error": {
-			serviceName: "aws",
 			setupEnv: map[string]string{
 				"SHELL": "/usr/bin/false", // Shell that always exits with error
 			},
-			setupApp: func(app *App) {
+			newProvider: func() provider.ServiceProvider {
 				mockProvider := &MockSubshellProvider{
 					NameFunc: func() string {
 						return "aws"
@@ -240,7 +226,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 						}
 					},
 				}
-				app.Registry.RegisterProvider(mockProvider)
+				return mockProvider
 			},
 			wantErr: false, // ExitError is expected and handled
 			checkOutput: func(t *testing.T, stdout, stderr string) {
@@ -253,11 +239,10 @@ func TestApp_LaunchSubshell(t *testing.T) {
 			},
 		},
 		"subshell command not found": {
-			serviceName: "aws",
 			setupEnv: map[string]string{
 				"SHELL": "/nonexistent/shell", // Non-existent shell
 			},
-			setupApp: func(app *App) {
+			newProvider: func() provider.ServiceProvider {
 				mockProvider := &MockSubshellProvider{
 					NameFunc: func() string {
 						return "aws"
@@ -279,7 +264,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 						}
 					},
 				}
-				app.Registry.RegisterProvider(mockProvider)
+				return mockProvider
 			},
 			wantErr:    true,
 			wantErrMsg: "subshell encountered an unexpected error",
@@ -293,16 +278,15 @@ func TestApp_LaunchSubshell(t *testing.T) {
 			}
 
 			app := &App{
-				Registry: provider.NewRegistry(),
-				Stdout:   &bytes.Buffer{},
-				Stderr:   &bytes.Buffer{},
+				Stdout: &bytes.Buffer{},
+				Stderr: &bytes.Buffer{},
 			}
 
-			if tc.setupApp != nil {
-				tc.setupApp(app)
+			var p provider.ServiceProvider = &MockSubshellProvider{NameFunc: func() string { return "aws" }}
+			if tc.newProvider != nil {
+				p = tc.newProvider()
 			}
-
-			err := app.LaunchSubshell(tc.serviceName)
+			err := app.LaunchSubshell(p)
 
 			if tc.wantErr && err == nil {
 				t.Error("LaunchSubshell() expected error but got nil")
@@ -342,9 +326,8 @@ func TestApp_LaunchSubshell_RealExitError(t *testing.T) {
 	t.Setenv("SHELL", "/bin/bash")
 
 	app := &App{
-		Registry: provider.NewRegistry(),
-		Stdout:   &bytes.Buffer{},
-		Stderr:   &bytes.Buffer{},
+		Stdout: &bytes.Buffer{},
+		Stderr: &bytes.Buffer{},
 	}
 
 	mockProvider := &MockSubshellProvider{
@@ -368,9 +351,8 @@ func TestApp_LaunchSubshell_RealExitError(t *testing.T) {
 			}
 		},
 	}
-	app.Registry.RegisterProvider(mockProvider)
 
-	err := app.LaunchSubshell("aws")
+	err := app.LaunchSubshell(mockProvider)
 	if err != nil {
 		t.Errorf("LaunchSubshell() should handle ExitError gracefully, got: %v", err)
 	}

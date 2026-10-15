@@ -23,11 +23,22 @@ var agentControls = []candidate{
 	{"stop", "Shut the agent down"},
 }
 
+const agentUsage = `Usage:
+  sesh agent status   Whether the agent is running and unlocked, and how long it has left
+  sesh agent lock     Forget the vault's key; the agent keeps running (sesh lock does this too)
+  sesh agent stop     Shut the agent down
+  sesh agent [--idle-timeout D] [--max-lifetime D] [--socket path]
+                      Run the agent in the foreground (sesh starts it when a command needs it)`
+
 // runAgent is the entry point for `sesh agent`. With no subcommand it runs
 // the daemon in the foreground until SIGTERM/SIGINT or a stop request.
 // `lock`, `status`, and `stop` talk to a running agent and never start
 // one.
 func runAgent(app *App, args []string) error {
+	if len(args) > 0 && isHelp(args[0]) {
+		_, err := fmt.Fprintln(app.Stdout, agentUsage)
+		return err
+	}
 	if len(args) > 0 && slices.ContainsFunc(agentControls, func(c candidate) bool { return c.value == args[0] }) {
 		if len(args) > 1 {
 			return fmt.Errorf("sesh agent %s takes no arguments, got %q", args[0], strings.Join(args[1:], " "))

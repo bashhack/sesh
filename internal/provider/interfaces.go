@@ -20,15 +20,9 @@ type ServiceProvider interface {
 	// Name returns the name of the provider (aws, github, gcp, etc.)
 	Name() string
 
-	// Description returns a human-readable description of the provider
-	Description() string
-
 	// SetupFlags adds provider-specific flags to the given FlagSet
 	// The provided flagset will be an interface that won't have nil checks
 	SetupFlags(fs FlagSet) error
-
-	// GetSetupHandler returns a setup handler for this provider
-	GetSetupHandler() any
 
 	// GetCredentials retrieves credentials using TOTP
 	GetCredentials() (Credentials, error)
@@ -45,15 +39,6 @@ type ServiceProvider interface {
 	// Non-TOTP providers (e.g., password managers) should populate CopyValue and
 	// ClipboardDescription directly.
 	GetClipboardValue() (Credentials, error)
-
-	// ListEntries returns the list of entries for this provider
-	ListEntries() ([]ProviderEntry, error)
-
-	// DeleteEntries deletes the entries ids name, all or none (see
-	// DeleteEntries in delete.go), asking confirm first unless told not to,
-	// and returns how many it deleted. It refuses an ID that isn't one of
-	// this provider's entries.
-	DeleteEntries(ids []string, confirm ConfirmDelete) (int, error)
 
 	// ValidateRequest performs early validation of the request
 	// This should check:
@@ -110,15 +95,6 @@ type SubshellProvider interface {
 	// NewSubshellConfig creates a configuration for the subshell package
 	// based on the provided credentials
 	NewSubshellConfig(creds *Credentials) any
-}
-
-// ProviderEntry represents an entry for a specific provider
-type ProviderEntry struct {
-	Name   string // Entry name (e.g. AWS Profile or GCP Project)
-	Type   string // What kind of entry it is, such as password or totp
-	ID     string // Internal identifier
-	Folder string // Its folder, "" for none
-	Tags   []string
 }
 
 // Clock provides testable time. Embed in provider structs and override Now in tests.

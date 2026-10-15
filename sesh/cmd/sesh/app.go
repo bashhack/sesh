@@ -8,21 +8,13 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"golang.org/x/term"
 
-	"github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/clipboard"
 	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/provider"
-	awsProvider "github.com/bashhack/sesh/internal/provider/aws"
-	passwordProvider "github.com/bashhack/sesh/internal/provider/password"
-	totpProvider "github.com/bashhack/sesh/internal/provider/totp"
-	"github.com/bashhack/sesh/internal/setup"
-	"github.com/bashhack/sesh/internal/totp"
-	"github.com/bashhack/sesh/internal/vault"
 )
 
 // validEnvVarName matches POSIX-compliant environment variable names.
@@ -42,8 +34,6 @@ type TimeNowFunc func() time.Time
 
 // App represents the main application
 type App struct {
-	Registry      *provider.Registry
-	SetupService  setup.SetupService
 	ExecLookPath  ExecLookPathFunc
 	Exit          ExitFunc
 	ClipboardCopy ClipboardCopyFunc
@@ -57,16 +47,9 @@ type App struct {
 	// StdinIsTerminal reports whether someone at a terminal can answer a
 	// question on Stdin; nil means nobody can.
 	StdinIsTerminal func() bool
-	// trash is the vault's trash setting, when the vault keeps one;
-	// --purge turns it off for a delete.
-	trash       trashKeeper
-	VersionInfo VersionInfo
-}
-
-// trashKeeper is a vault that can keep deleted entries in a trash.
-type trashKeeper interface {
-	TrashDays() int
-	SetTrashDays(days int)
+	VersionInfo     VersionInfo
+	// settings are the settings the commands use.
+	settings AppSettings
 }
 
 // VersionInfo contains version information
@@ -86,26 +69,10 @@ type AppSettings struct {
 	ClipboardTimeout time.Duration
 }
 
-// NewDefaultApp creates a new App over the vault; the caller opens and
-// closes it.
-func NewDefaultApp(versionInfo VersionInfo, store vault.Store, settings AppSettings) *App {
-	totpSvc := totp.NewDefaultProvider()
-	awsSvc := aws.NewDefaultProvider()
-
-	registry := provider.NewRegistry()
-	registry.RegisterProvider(awsProvider.NewProvider(awsSvc, store, totpSvc))
-	registry.RegisterProvider(totpProvider.NewProvider(store, totpSvc))
-	registry.RegisterProvider(passwordProvider.NewProvider(store).WithExportKDF(settings.KDF).WithVaultPath(settings.VaultPath))
-
-	setupSvc := setup.NewSetupService()
-	setupSvc.RegisterHandler(setup.NewAWSSetupHandler(store))
-	setupSvc.RegisterHandler(setup.NewTOTPSetupHandler(store))
-
-	trash, _ := store.(trashKeeper)
+// NewDefaultApp creates the app; each command opens the vault itself.
+func NewDefaultApp(versionInfo VersionInfo, settings AppSettings) *App {
 	return &App{
-		trash:        trash,
-		Registry:     registry,
-		SetupService: setupSvc,
+		settings:     settings,
 		ExecLookPath: exec.LookPath,
 		Exit:         os.Exit,
 		ClipboardCopy: func(text string) error {
@@ -131,114 +98,6 @@ func (a *App) ShowVersion() error {
 	_, err := fmt.Fprintf(a.Stdout, "sesh version %s (%s) built on %s\n",
 		a.VersionInfo.Version, a.VersionInfo.Commit, a.VersionInfo.Date)
 	return err
-}
-
-// ListProviders lists all available service providers
-func (a *App) ListProviders() error {
-	if _, err := fmt.Fprintln(a.Stdout, "Available service providers:"); err != nil {
-		return err
-	}
-
-	for _, p := range a.Registry.ListProviders() {
-		if _, err := fmt.Fprintf(a.Stdout, "  %-10s %s\n", p.Name(), p.Description()); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ListEntries lists all entries for a service
-func (a *App) ListEntries(serviceName string) error {
-	p, err := a.Registry.GetProvider(serviceName)
-	if err != nil {
-		return fmt.Errorf("provider not found: %w", err)
-	}
-	entries, err := p.ListEntries()
-	if err != nil {
-		return fmt.Errorf("failed to list entries: %w", err)
-	}
-
-	if _, err := fmt.Fprintf(a.Stdout, "Entries for %s:\n", serviceName); err != nil {
-		return fmt.Errorf("failed to write output: %w", err)
-	}
-	if len(entries) == 0 {
-		msg := "  No entries found"
-		if h, ok := p.(interface{ NoMatchHint() string }); ok {
-			if hint := h.NoMatchHint(); hint != "" {
-				msg += ": " + hint
-			}
-		}
-		if _, err := fmt.Fprintln(a.Stdout, msg); err != nil {
-			return fmt.Errorf("failed to write output: %w", err)
-		}
-		return nil
-	}
-
-	// FOLDER and TAGS only when an entry has one, so a vault that uses
-	// neither lists as it would without them.
-	var folders, tags bool
-	for i := range entries {
-		folders = folders || entries[i].Folder != ""
-		tags = tags || len(entries[i].Tags) > 0
-	}
-	tw := tabwriter.NewWriter(a.Stdout, 0, 0, 2, ' ', 0)
-	row := func(name, typ, folder, tagList, id string) error {
-		cells := []string{"  " + name, typ}
-		if folders {
-			cells = append(cells, folder)
-		}
-		if tags {
-			cells = append(cells, tagList)
-		}
-		_, err := fmt.Fprintln(tw, strings.Join(append(cells, id), "\t"))
-		return err
-	}
-	if err := row("NAME", "TYPE", "FOLDER", "TAGS", "ID"); err != nil {
-		return fmt.Errorf("failed to write output: %w", err)
-	}
-	for i := range entries {
-		e := &entries[i]
-		if err := row(e.Name, e.Type, e.Folder, strings.Join(e.Tags, " "), e.ID); err != nil {
-			return fmt.Errorf("failed to write output: %w", err)
-		}
-	}
-	if err := tw.Flush(); err != nil {
-		return fmt.Errorf("failed to write output: %w", err)
-	}
-	return nil
-}
-
-// DeleteEntries deletes the entries ids name with the provider for
-// serviceName: all or none, into the trash unless purge or the vault keeps
-// none, after asking at the terminal unless the provider's --force says
-// not to.
-func (a *App) DeleteEntries(serviceName string, ids []string, purge bool) error {
-	p, err := a.Registry.GetProvider(serviceName)
-	if err != nil {
-		return fmt.Errorf("provider not found: %w", err)
-	}
-	days := 0
-	if a.trash != nil {
-		days = a.trash.TrashDays()
-		if purge {
-			a.trash.SetTrashDays(0)
-			defer a.trash.SetTrashDays(days)
-			days = 0
-		}
-	}
-	confirm := func(ids []string) (bool, error) { return a.confirmDelete(ids, days == 0) }
-	n, err := p.DeleteEntries(ids, confirm)
-	if err != nil {
-		return err
-	}
-	msg := fmt.Sprintf("✅ Deleted %s for good\n", entryCount(n))
-	if days > 0 {
-		msg = fmt.Sprintf("✅ Moved %s to the trash, kept %s: sesh trash lists them, and sesh trash restore <id> puts one back\n", entryCount(n), dayCount(int64(days)))
-	}
-	if _, err := io.WriteString(a.Stdout, msg); err != nil {
-		return fmt.Errorf("failed to write output: %w", err)
-	}
-	return nil
 }
 
 // errDeleteNeedsForce is a delete with nobody at a terminal to confirm it.
@@ -270,25 +129,9 @@ func (a *App) confirmDelete(ids []string, forGood bool) (bool, error) {
 	return promptYesNo(a.Stdin, a.Stderr, question)
 }
 
-// RunSetup runs the setup wizard for a provider, filing the entry as its
-// --folder and --tag say.
-func (a *App) RunSetup(serviceName string) error {
-	var filing vault.Filing
-	if p, err := a.Registry.GetProvider(serviceName); err == nil {
-		if f, ok := p.(provider.Filer); ok {
-			filing = f.Filing()
-		}
-	}
-	return a.SetupService.SetupService(serviceName, filing)
-}
-
-// GenerateCredentials gets credentials from a provider
-func (a *App) GenerateCredentials(serviceName string) error {
-	p, err := a.Registry.GetProvider(serviceName)
-	if err != nil {
-		return fmt.Errorf("provider not found: %w", err)
-	}
-
+// GenerateCredentials gets credentials from p.
+func (a *App) GenerateCredentials(p provider.ServiceProvider) error {
+	serviceName := p.Name()
 	if err := p.ValidateRequest(); err != nil {
 		return err
 	}
@@ -336,13 +179,9 @@ func insteadOfClip(p provider.ServiceProvider) string {
 	return "run it without --clip"
 }
 
-// CopyToClipboard copies a value to the system clipboard
-func (a *App) CopyToClipboard(serviceName string) error {
-	p, err := a.Registry.GetProvider(serviceName)
-	if err != nil {
-		return fmt.Errorf("provider not found: %w", err)
-	}
-
+// CopyToClipboard copies p's code to the system clipboard.
+func (a *App) CopyToClipboard(p provider.ServiceProvider) error {
+	serviceName := p.Name()
 	if err := p.ValidateRequest(); err != nil {
 		return err
 	}

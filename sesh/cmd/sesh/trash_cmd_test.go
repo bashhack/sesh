@@ -9,24 +9,21 @@ import (
 	"github.com/bashhack/sesh/internal/config"
 )
 
-// trashDelete deletes ids through the app over the real vault, answering
-// yes at the terminal, with --purge when purge.
+// trashDelete deletes the entries ids name with sesh trash <entry>,
+// answering yes at the terminal, with --purge when purge.
 func trashDelete(t *testing.T, purge bool, ids ...string) (string, string) {
 	t.Helper()
-	store, err := openSQLiteStore()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeAuditStore(store)
-	app := NewDefaultApp(VersionInfo{}, store, AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout})
+	app := agentTestApp()
 	app.Stdin = strings.NewReader("y\n")
 	app.StdinIsTerminal = func() bool { return true }
-	var out, errOut bytes.Buffer
-	app.Stdout, app.Stderr = &out, &errOut
-	if err := app.DeleteEntries("password", ids, purge); err != nil {
+	args := ids
+	if purge {
+		args = append([]string{"--purge"}, ids...)
+	}
+	if err := runTrash(app, args); err != nil {
 		t.Fatalf("delete %v: %v", ids, err)
 	}
-	return out.String(), errOut.String()
+	return app.Stdout.(*bytes.Buffer).String(), app.Stderr.(*bytes.Buffer).String()
 }
 
 // Deleting moves entries to the trash, which lists them; restoring puts

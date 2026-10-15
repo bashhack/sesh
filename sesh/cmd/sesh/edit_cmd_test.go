@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,7 +34,7 @@ func TestEdit_RenameKeepsFiling(t *testing.T) {
 	env := editVault(t)
 	mustRun(t, runFolder, "move", "work", "password/github/alice")
 	mustRun(t, runTag, "add", "code", "password/github/alice")
-	out, _, err := runEditOut(t, "", false, "password/github/alice", "--service", "github-work", "--username", "")
+	out, _, err := runEditOut(t, "", false, "password/github/alice", "--rename", "github-work", "--username", "")
 	if err != nil || out != "✅ password/github-work: renamed from password/github/alice\n" {
 		t.Fatalf("rename: %q, %v", out, err)
 	}
@@ -79,7 +80,7 @@ func TestEdit_Asks(t *testing.T) {
 	if err != nil || out != "✅ password/github-work/alice: renamed from password/github/alice\n" {
 		t.Fatalf("asked: %q, %v\n%s", out, err, errOut)
 	}
-	for _, want := range []string{"Service name [github]: ", "Username [alice] (- removes it): ", "Type [password] (password, api_key, secure_note): ", "Change the secret? [y/N]: "} {
+	for _, want := range []string{"Name [github]: ", "Username [alice] (- removes it): ", "Type [password] (password, api_key, secure_note): ", "Change the secret? [y/N]: "} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("didn't ask %q:\n%s", want, errOut)
 		}
@@ -95,11 +96,10 @@ func TestEdit_Refusals(t *testing.T) {
 		wantSub string
 		args    []string
 	}{
-		"a name taken":            {`another entry has that name: password/gitlab`, []string{"password/github/alice", "--service", "gitlab", "--username", ""}},
-		"a missing entry":         {"did you mean password/github/alice?", []string{"password/GitHub/alice", "--username", "bob"}},
-		"nothing changes":         {"nothing to change: the entry already has that name and kind", []string{"password/gitlab", "--service", "gitlab"}},
-		"no flags, no terminal":   {"nothing to change: give --service", []string{"password/gitlab"}},
-		"flags after the ID only": {"name the entry first", []string{"--service", "x", "password/gitlab"}},
+		"a name taken":          {`another entry has that name: password/gitlab`, []string{"password/github/alice", "--rename", "gitlab", "--username", ""}},
+		"a missing entry":       {"did you mean password/github/alice?", []string{"password/GitHub/alice", "--username", "bob"}},
+		"nothing changes":       {"nothing to change: the entry already has that name and kind", []string{"password/gitlab", "--rename", "gitlab"}},
+		"no flags, no terminal": {"nothing to change: give --rename", []string{"password/gitlab"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := runEditOut(t, "", false, tt.args...); err == nil || !strings.Contains(err.Error(), tt.wantSub) {
@@ -112,7 +112,7 @@ func TestEdit_Refusals(t *testing.T) {
 	}
 }
 
-// What's wrong without a vault is said before looking for one.
+// What's wrong with the flags for an entry named by its ID is said before looking for a vault; words need one.
 func TestEdit_RefusedBeforeUnlocking(t *testing.T) {
 	setupRekeyEnv(t)
 	useConfigFile(t, "")
@@ -122,12 +122,12 @@ func TestEdit_RefusedBeforeUnlocking(t *testing.T) {
 		"password/a --type card":           `unknown type "card"`,
 		"password/a --length 8":            "add --generate",
 		"password/a --secret --no-symbols": "add --generate",
-		"totp/a --secret":                  "store it again with --action totp-store",
+		"totp/a --secret":                  "add it again with sesh add totp --force",
 		"secure_note/a --generate":         "a note isn't generated",
 		"password/a --secret --generate":   "choose one",
-		"password/a --service a/b":         `contains "/"`,
+		"password/a --rename a/b":          `contains "/"`,
 		"password/a --generate --length 0": "--length wants 1 or more",
-		"nope":                             `entry ID "nope"`,
+		"nope":                             "nothing to change",
 	} {
 		if _, _, err := runEditOut(t, "", false, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
 			t.Errorf("%s: %v, want %q", args, err, wantSub)
@@ -139,20 +139,20 @@ func TestEdit_RefusedBeforeUnlocking(t *testing.T) {
 func TestEdit_AWSEntry(t *testing.T) {
 	env := editVault(t)
 	populatePasswordStore(t, env, map[string]string{"totp/aws/work": "JBSWY3DPEHPK3PXP"})
-	if _, _, err := runEditOut(t, "", false, "totp/aws/work", "--service", "aws-old"); err == nil || !strings.Contains(err.Error(), "add --force to do it anyway") {
+	if _, _, err := runEditOut(t, "", false, "totp/aws/work", "--rename", "aws-old"); err == nil || !strings.Contains(err.Error(), "add --force to do it anyway") {
 		t.Errorf("no terminal: %v", err)
 	}
 	// Renaming the profile keeps it an AWS entry: no question.
 	if out, _, err := runEditOut(t, "", false, "totp/aws/work", "--username", "prod"); err != nil || !strings.Contains(out, "renamed from totp/aws/work") {
 		t.Errorf("profile rename: %q, %v", out, err)
 	}
-	if out, _, err := runEditOut(t, "", false, "totp/aws/prod", "--service", "aws-old", "--force"); err != nil || !strings.Contains(out, "✅ totp/aws-old/prod") {
+	if out, _, err := runEditOut(t, "", false, "totp/aws/prod", "--rename", "aws-old", "--force"); err != nil || !strings.Contains(out, "✅ totp/aws-old/prod") {
 		t.Errorf("--force: %q, %v", out, err)
 	}
 }
 
 func TestComplete_EditTypes(t *testing.T) {
-	cands, _ := complete(nil, []string{"edit", "password/x", "--type", ""})
+	cands, _ := complete([]string{"edit", "password/x", "--type", ""})
 	var got []string
 	for _, c := range cands {
 		got = append(got, c.value)
@@ -176,7 +176,7 @@ func TestEdit_AWSUsernameRemoval(t *testing.T) {
 // unread, and nothing is said about a stored password.
 func TestEdit_NameTakenBeforeTheSecret(t *testing.T) {
 	editVault(t)
-	_, errOut, err := runEditOut(t, "password\n", false, "password/github/alice", "--service", "gitlab", "--username", "", "--secret")
+	_, errOut, err := runEditOut(t, "password\n", false, "password/github/alice", "--rename", "gitlab", "--username", "", "--secret")
 	if err == nil || !strings.Contains(err.Error(), "another entry has that name: password/gitlab") || strings.Contains(errOut, "stored") {
 		t.Errorf("err = %v, stderr %q", err, errOut)
 	}
@@ -192,7 +192,7 @@ func TestEdit_AskingEdges(t *testing.T) {
 	}
 	// A bad answer is asked again; "-" removes the username.
 	out, errOut, err := runEditOut(t, "a/b\ngithub2\n-\ncard\npassword\nn\n", true, "password/github/alice")
-	if err != nil || out != "✅ password/github2: renamed from password/github/alice\n" || strings.Count(errOut, "Service name [github]: ") != 2 || strings.Count(errOut, "Type [password]") != 2 {
+	if err != nil || out != "✅ password/github2: renamed from password/github/alice\n" || strings.Count(errOut, "Name [github]: ") != 2 || strings.Count(errOut, "Type [password]") != 2 {
 		t.Errorf("asked again: %q, %v\n%s", out, err, errOut)
 	}
 	if got := readEntriesViaPassword(t, env, []string{"password/gitlab"})["password/gitlab"]; got != "x" {
@@ -221,10 +221,10 @@ func TestEdit_PipedSecrets(t *testing.T) {
 
 func TestEdit_HelpAndAudit(t *testing.T) {
 	editVault(t)
-	if _, errOut, err := runEditOut(t, "", false, "password/gitlab", "-h"); err != nil || !strings.Contains(errOut, "Usage: sesh edit <id> [flags]") {
+	if _, errOut, err := runEditOut(t, "", false, "password/gitlab", "-h"); err != nil || !strings.Contains(errOut, "Usage: sesh edit <entry> [flags]") {
 		t.Errorf("-h: %v\n%s", err, errOut)
 	}
-	if _, _, err := runEditOut(t, "", false, "password/gitlab", "--service", "gitlab-2"); err != nil {
+	if _, _, err := runEditOut(t, "", false, "password/gitlab", "--rename", "gitlab-2"); err != nil {
 		t.Fatal(err)
 	}
 	app := agentTestApp()
@@ -234,8 +234,8 @@ func TestEdit_HelpAndAudit(t *testing.T) {
 	if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "gitlab-2 (renamed from password/gitlab)") {
 		t.Errorf("audit: %s", out)
 	}
-	if cands, _ := complete(nil, []string{"edit", ""}); len(cands) != 0 {
-		t.Errorf("completion offers %v where the ID goes", cands)
+	if cands, _ := complete([]string{"edit", ""}); !slices.ContainsFunc(cands, func(c candidate) bool { return c.value == "--rename" }) {
+		t.Errorf("completion offers %v, not edit's flags", cands)
 	}
 }
 

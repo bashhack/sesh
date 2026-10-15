@@ -33,11 +33,25 @@ func addInitFlags(fs *flag.FlagSet) *bool {
 // --db-path it uses that (for scripts); otherwise it asks. It creates (or
 // opens) the vault first, and only then writes ~/.config/sesh/config.toml, so a failure leaves no config pointing
 // at a vault that doesn't work.
+const initUsage = `Usage: sesh init [--db-path path] [--force]
+  Choose where the vault lives: at a terminal it asks, with the default
+  offered; --db-path gives it. It writes the config file that says so
+  (sesh config shows it), and creates the vault there, or opens one already
+  there. --force replaces a config file already written.`
+
 func runInit(app *App, args []string) error {
+	if len(args) > 0 && isHelp(args[0]) {
+		_, err := fmt.Fprintln(app.Stdout, initUsage)
+		return err
+	}
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	force := addInitFlags(fs)
+	fs.Usage = func() { fmt.Fprintln(app.Stderr, initUsage) } //nolint:errcheck // usage text
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if fs.NArg() > 0 {

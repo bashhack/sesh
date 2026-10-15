@@ -25,13 +25,16 @@ var trashCommands = []candidate{
 }
 
 const trashUsage = `Usage:
+  sesh trash <entry>… [--purge] [--force]   Move entries to the trash (asks first; --purge: for good)
   sesh trash [list]                         Show the deleted entries, the newest first
   sesh trash restore <trash id> [--as <id>] Put one back, under its own name or another
   sesh trash remove <trash id>… [--force]   Delete them for good
   sesh trash empty [--force]                Delete everything in the trash for good
 
 Deleted entries stay in the trash for trash.keep_days (30 unless set), then
-go for good. To delete an entry for good straight away, delete it with --purge.`
+go for good. To name several entries at once, give their IDs.
+
+` + entryWordsHelp
 
 // runTrash is sesh trash: list, restore, remove, empty.
 func runTrash(app *App, args []string) error {
@@ -56,7 +59,69 @@ func runTrash(app *App, args []string) error {
 	case "empty":
 		return emptyTrash(app, args)
 	}
-	return fmt.Errorf("sesh trash has no %q: list, restore, remove or empty", verb)
+	return trashEntries(app, append([]string{verb}, args...))
+}
+
+// addTrashFlags defines sesh trash <entry>'s flags on fs.
+func addTrashFlags(fs *flag.FlagSet) (purge, force *bool) {
+	return fs.Bool("purge", false, "Delete them for good, not into the trash"), fs.Bool("force", false, "Don't ask first")
+}
+
+// trashEntries is sesh trash <entry>…: the entry the words name, or the
+// entries several IDs name, moved to the trash, or deleted for good with --purge or when the
+// vault keeps no trash; it asks first unless --force.
+func trashEntries(app *App, args []string) error {
+	fs := flag.NewFlagSet("trash", flag.ContinueOnError)
+	fs.SetOutput(app.Stderr)
+	purge, force := addTrashFlags(fs)
+	fs.Usage = func() { fmt.Fprintln(app.Stderr, trashUsage) } //nolint:errcheck // usage text
+	named, err := parseAnywhere(fs, args)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if len(named) == 0 {
+		return errors.New("name the entries to delete: sesh trash <entry>…")
+	}
+	store, err := openFilingStore()
+	if err != nil {
+		return err
+	}
+	defer closeAuditStore(store)
+	keys, err := resolveEach(app, store, named)
+	if err != nil {
+		return err
+	}
+	days := store.TrashDays()
+	if *purge {
+		store.SetTrashDays(0)
+		days = 0
+	}
+	if !*force {
+		names := make([]string, len(keys))
+		for i, k := range keys {
+			names[i] = k.String()
+		}
+		ok, err := app.confirmDelete(names, days == 0)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			_, err := fmt.Fprintln(app.Stderr, "Nothing deleted.")
+			return err
+		}
+	}
+	if err := store.DeleteMany(keys); err != nil {
+		return err
+	}
+	msg := fmt.Sprintf("✅ Deleted %s for good\n", entryCount(len(keys)))
+	if days > 0 {
+		msg = fmt.Sprintf("✅ Moved %s to the trash, kept %s: sesh trash lists them, and sesh trash restore <id> puts one back\n", entryCount(len(keys)), dayCount(int64(days)))
+	}
+	_, err = io.WriteString(app.Stdout, msg)
+	return err
 }
 
 // openTrashStore opens the vault for a trash command, with its settings.

@@ -16,12 +16,12 @@ func TestTakeSettingFlags(t *testing.T) {
 		args, rest []string
 	}{
 		"none": {
-			args: []string{"sesh", "-service", "totp"},
-			rest: []string{"sesh", "-service", "totp"},
+			args: []string{"sesh", "list", "totp"},
+			rest: []string{"sesh", "list", "totp"},
 		},
 		"each form, anywhere": {
-			args: []string{"sesh", "-service", "password", "-action", "list", "-db-path=/v/s.db"},
-			rest: []string{"sesh", "-service", "password", "-action", "list"},
+			args: []string{"sesh", "list", "--json", "-db-path=/v/s.db"},
+			rest: []string{"sesh", "list", "--json"},
 			want: config.Overrides{DBPath: "/v/s.db"},
 		},
 		"before a subcommand": {
@@ -30,20 +30,12 @@ func TestTakeSettingFlags(t *testing.T) {
 			want: config.Overrides{DBPath: "/v/s.db"},
 		},
 		"after -- is left alone": {
-			args: []string{"sesh", "-service", "x", "--", "--db-path", "/v/s.db"},
-			rest: []string{"sesh", "-service", "x", "--", "--db-path", "/v/s.db"},
+			args: []string{"sesh", "run", "--", "--db-path", "/v/s.db"},
+			rest: []string{"sesh", "run", "--", "--db-path", "/v/s.db"},
 		},
 		"value that isn't a flag": {
-			args: []string{"sesh", "-service-name", "db-path"},
-			rest: []string{"sesh", "-service-name", "db-path"},
-		},
-		"--backend isn't a setting any more": {
-			args: []string{"sesh", "--backend", "sqlite", "-service", "x"},
-			rest: []string{"sesh", "--backend", "sqlite", "-service", "x"},
-		},
-		"--key-source isn't a setting any more": {
-			args: []string{"sesh", "--key-source", "password", "-service", "x"},
-			rest: []string{"sesh", "--key-source", "password", "-service", "x"},
+			args: []string{"sesh", "copy", "db-path"},
+			rest: []string{"sesh", "copy", "db-path"},
 		},
 		"missing value at the end": {args: []string{"sesh", "--db-path"}, wantErr: "--db-path needs a value"},
 		"empty value":              {args: []string{"sesh", "--db-path="}, wantErr: "--db-path needs a value"},

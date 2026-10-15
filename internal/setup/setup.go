@@ -14,7 +14,6 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/shell"
@@ -39,11 +38,6 @@ var timeSleep = time.Sleep
 
 // validateAndNormalizeSecret is a variable so we can swap it out in tests
 var validateAndNormalizeSecret = totp.ValidateAndNormalizeSecret
-
-// generateConsecutiveCodes is a variable so we can swap it out in tests
-var generateConsecutiveCodes = func(secret string, params totp.Params) (string, string, error) {
-	return totp.GenerateConsecutiveCodesBytesWithParams([]byte(secret), params)
-}
 
 // execLookPath is a variable so we can swap it out in tests
 var execLookPath = exec.LookPath
@@ -505,7 +499,7 @@ func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
 ✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.
 
 🚀 Next steps:
-1. Run 'sesh -service aws' to generate a temporary session token
+1. Run 'sesh aws' to generate a temporary session token
 2. The credentials will be automatically exported to your shell
 3. You can now use AWS CLI commands with MFA security`)
 
@@ -514,7 +508,7 @@ func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
 To use this setup, run without the --profile flag
 (The default AWS profile will be used)`)
 	} else {
-		fmt.Printf("\nTo use this setup, run: sesh --service aws --profile %s\n", shell.Quote(profile))
+		fmt.Printf("\nTo use this setup, run: sesh aws --profile %s\n", shell.Quote(profile))
 	}
 }
 
@@ -644,234 +638,6 @@ func (h *AWSSetupHandler) Setup(filing vault.Filing) error {
 	return nil
 }
 
-// TOTP Setup Handler
-
-// TOTPSetupHandler implements SetupHandler for TOTP
-type TOTPSetupHandler struct {
-	store  vault.Store
-	reader *bufio.Reader
-}
-
-// NewTOTPSetupHandler creates a new TOTP setup handler
-func NewTOTPSetupHandler(store vault.Store) *TOTPSetupHandler {
-	return &TOTPSetupHandler{
-		store:  store,
-		reader: bufio.NewReader(os.Stdin),
-	}
-}
-
-// ServiceName returns the name of the service
-func (h *TOTPSetupHandler) ServiceName() string {
-	return "totp"
-}
-
-// promptForServiceName prompts the user to enter a service name and validates it
-func (h *TOTPSetupHandler) promptForServiceName() (string, error) {
-	fmt.Print("Enter name for this TOTP service: ")
-	serviceName, err := readLine(h.reader)
-	if err != nil {
-		return "", err
-	}
-
-	if serviceName == "" {
-		return "", fmt.Errorf("service name cannot be empty")
-	}
-
-	return serviceName, nil
-}
-
-// promptForProfile prompts the user to enter an optional profile name
-func (h *TOTPSetupHandler) promptForProfile() (string, error) {
-	fmt.Print("Enter profile name (optional, for multiple accounts with the same service): ")
-	profile, err := readLine(h.reader)
-	if err != nil {
-		return "", err
-	}
-	return profile, nil
-}
-
-// promptForCaptureMethod prompts the user to choose how to capture the TOTP secret
-func (h *TOTPSetupHandler) promptForCaptureMethod() (string, error) {
-	fmt.Println()
-	fmt.Println("How would you like to capture the TOTP secret?")
-	fmt.Println("1: Enter the secret key manually")
-	fmt.Println("2: Capture QR code from screen")
-	fmt.Print("Enter your choice (1-2): ")
-	choice, err := readLine(h.reader)
-	if err != nil {
-		return "", err
-	}
-
-	if choice != "1" && choice != "2" {
-		return "", fmt.Errorf("invalid choice, please select 1 or 2")
-	}
-
-	return choice, nil
-}
-
-// captureTOTPSecret captures the TOTP secret using the specified method
-func (h *TOTPSetupHandler) captureTOTPSecret(choice string) (string, error) {
-	info, err := h.captureTOTPSecretFull(choice)
-	if err != nil {
-		return "", err
-	}
-	return info.Secret, nil
-}
-
-// captureTOTPSecretFull captures the TOTP secret and full params using the specified method
-func (h *TOTPSetupHandler) captureTOTPSecretFull(choice string) (qrcode.TOTPInfo, error) {
-	switch choice {
-	case "1": // Manual entry
-		secret, err := h.captureManualEntry()
-		return qrcode.TOTPInfo{Secret: secret}, err
-	case "2": // QR code capture with retry + fallback — returns full params
-		return captureQRWithRetryFull(h.reader, h.captureManualEntry)
-	default:
-		return qrcode.TOTPInfo{}, fmt.Errorf("invalid choice, please select 1 or 2")
-	}
-}
-
-// captureQRCodeWithFallback attempts QR capture with retry and manual fallback
-func (h *TOTPSetupHandler) captureQRCodeWithFallback() (string, error) {
-	return captureQRWithRetry(h.reader, h.captureManualEntry)
-}
-
-// captureManualEntry handles manual secret entry with secure memory handling
-func (h *TOTPSetupHandler) captureManualEntry() (string, error) {
-	fmt.Print("\n📋 Enter or paste your TOTP secret key and press Enter:\n→ ")
-	secret, err := readPassword(syscall.Stdin)
-	if err != nil {
-		return "", fmt.Errorf("failed to read secret: %w", err)
-	}
-	fmt.Println("✓") // Visual confirmation that input was received
-
-	// Handle secret securely
-	secretBytes := secret
-	defer secure.SecureZeroBytes(secretBytes)
-	return strings.TrimSpace(string(secretBytes)), nil
-}
-
-// showTOTPSetupCompletionMessage displays the final success message with usage instructions
-func (h *TOTPSetupHandler) showTOTPSetupCompletionMessage(serviceName, profile string) {
-	cmd := "sesh --service totp --service-name " + shell.Quote(serviceName)
-	if profile != "" {
-		cmd += " --profile " + shell.Quote(profile)
-	}
-	fmt.Println("✅ Setup complete! Generate TOTP codes with:")
-	fmt.Printf("  %s\n", cmd)
-	fmt.Println("Copy to clipboard with:")
-	fmt.Printf("  %s --clip\n", cmd)
-}
-
-// Setup performs the TOTP setup
-func (h *TOTPSetupHandler) Setup(filing vault.Filing) error {
-	fmt.Println("🔐 Setting up TOTP credentials...")
-
-	serviceName, err := h.promptForServiceName()
-	if err != nil {
-		return err
-	}
-
-	profile, err := h.promptForProfile()
-	if err != nil {
-		return err
-	}
-
-	k := vault.Key{Kind: vault.KindTOTP, Service: serviceName, Username: profile}
-	if err := k.Validate(); err != nil {
-		return err
-	}
-	existing, err := existingEntry(h.store, k)
-	if err != nil {
-		return err
-	}
-	if existing == nil {
-		if err := h.confirmCaseTwin(k); err != nil {
-			return err
-		}
-	}
-	if existing != nil {
-		// Entry exists, prompt for overwrite
-		fmt.Printf("\n⚠️  An entry already exists for service '%s'", serviceName)
-		if profile != "" {
-			fmt.Printf(" with profile '%s'", profile)
-		}
-		fmt.Println()
-		fmt.Print("\nOverwrite existing configuration? (y/N): ")
-
-		response, readErr := readLine(h.reader)
-		if readErr != nil {
-			return readErr
-		}
-		response = strings.ToLower(response)
-
-		if response != "y" && response != "yes" {
-			fmt.Println("\n❌ Setup cancelled")
-			return fmt.Errorf("setup cancelled by user")
-		}
-		fmt.Println() // Add spacing before continuing
-	}
-
-	choice, err := h.promptForCaptureMethod()
-	if err != nil {
-		return err
-	}
-
-	info, err := h.captureTOTPSecretFull(choice)
-	if err != nil {
-		return err
-	}
-
-	// Validate and normalize the TOTP secret
-	normalizedSecret, err := validateAndNormalizeSecret(info.Secret)
-	if err != nil {
-		return fmt.Errorf("invalid TOTP secret: %w", err)
-	}
-	secretStr := normalizedSecret
-
-	// The code settings from the QR code (algorithm, digits, period)
-	// decide which codes are right; zero for the usual ones.
-	params := totp.Params{
-		Issuer:    info.Issuer,
-		Algorithm: info.Algorithm,
-		Digits:    info.Digits,
-		Period:    info.Period,
-	}
-	firstCode, secondCode, err := generateConsecutiveCodes(secretStr, params)
-	if err != nil {
-		return fmt.Errorf("failed to generate TOTP codes: %s", err)
-	}
-
-	if filing, err = askFiling(h.reader, filing, existing); err != nil {
-		return err
-	}
-
-	// The secret and its settings in one write. An entry being replaced
-	// keeps its other settings, such as an AWS profile's MFA device, its
-	// folder and tags (unless filing changes them), and its creation time.
-	entry := vault.Entry{Key: k}
-	if existing != nil {
-		entry = *existing
-		entry.UpdatedAt = time.Time{}
-	}
-	entry.Settings.TOTP = params
-	filing.Apply(&entry)
-	if err := h.store.Save(&entry, []byte(secretStr)); err != nil {
-		return fmt.Errorf("failed to store the TOTP secret: %w", err)
-	}
-
-	// Display the generated TOTP codes for setup verification
-	fmt.Println("✅ Generated TOTP codes for verification:")
-	fmt.Printf("   Current code: %s\n", firstCode)
-	fmt.Printf("   Next code: %s\n", secondCode)
-	fmt.Println("   (Use these codes if your service requires verification during setup)")
-	fmt.Println()
-
-	h.showTOTPSetupCompletionMessage(serviceName, profile)
-
-	return nil
-}
-
 // existingEntry returns the entry store holds at k, or nil when there's none.
 func existingEntry(store vault.Store, k vault.Key) (*vault.Entry, error) {
 	e, err := store.Lookup(k)
@@ -952,24 +718,3 @@ func captureQRWithRetryFull(reader *bufio.Reader, manualEntryFunc func() (string
 
 // confirmCaseTwin asks before the setup makes k when an entry's name
 // differs from it only in case: names are case-sensitive, so it would be a
-// second entry.
-func (h *TOTPSetupHandler) confirmCaseTwin(k vault.Key) error {
-	twins, err := password.NewManager(h.store).CaseTwins(k)
-	if err != nil {
-		return fmt.Errorf("failed to check existing entries: %w", err)
-	}
-	if len(twins) == 0 {
-		return nil
-	}
-	fmt.Printf("\n⚠️  An entry %s already exists, and names are case-sensitive.\n", password.EntryName(twins[0]))
-	fmt.Printf("Create %s as well? (y/N): ", password.EntryName(k))
-	response, err := readLine(h.reader)
-	if err != nil {
-		return err
-	}
-	if r := strings.ToLower(response); r != "y" && r != "yes" {
-		fmt.Println("\n❌ Setup cancelled")
-		return fmt.Errorf("setup cancelled by user")
-	}
-	return nil
-}

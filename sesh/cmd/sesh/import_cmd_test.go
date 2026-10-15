@@ -100,7 +100,7 @@ func TestImport_GoogleAuthenticator(t *testing.T) {
 	}
 	out, stderr, err := runImportOut(t, "y\n", true, "--from", "google-authenticator", "--on-conflict", "skip", code)
 	if err != nil || !strings.Contains(out, "✅ Imported 2 TOTP entries from Google Authenticator.") || !strings.Contains(stderr, "Import 2 entries? [y/N]: ") ||
-		!strings.Contains(out, "Before removing an account from your phone, check that its code matches, as with: sesh --service totp --service-name ") {
+		!strings.Contains(out, "Before removing an account from your phone, check that its code matches, as with: sesh code totp/") {
 		t.Fatalf("import: %q, %q, %v", out, stderr, err)
 	}
 	store := openDoctorVault(t, env)
@@ -246,7 +246,6 @@ func TestImport_Edges(t *testing.T) {
 	for wantSub, args := range map[string][]string{
 		"code 1: the transfer code is damaged":                  {damaged + " "},
 		"argument 1 isn't a Google Authenticator transfer code": {"otpauth://totp/x?secret=JBSWY3DPEHPK3PXP"},
-		"put --dry-run before the files":                        {"a.png", "--dry-run"},
 		"argument 1 looks like a transfer code":                 {"offline?data=JBSW"},
 	} {
 		_, _, err := runImportOut(t, "", false, args...)
@@ -724,8 +723,9 @@ func TestImport_Sesh(t *testing.T) {
 	if err := os.WriteFile(plain, []byte(`[{"service":"x","type":"password","secret":"y"}]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := runImportOut(t, "", true, "--from", "sesh", plain); err == nil || !strings.Contains(err.Error(), "--action import") {
-		t.Errorf("a plain export: %v", err)
+	// A plain export is previewed too, and its file said to be deleted.
+	if out, errOut, err := runImportOut(t, "", true, "--from", "sesh", plain); err != nil || !strings.Contains(out+errOut, "Found 1 entry in the sesh export.") {
+		t.Errorf("a plain export: %v\n%s%s", err, out, errOut)
 	}
 	if _, _, err := runImportOut(t, "", false, "--from", "sesh", file); err == nil || err.Error() != "this sesh export is protected by a password: run sesh import at a terminal to type it" {
 		t.Errorf("no terminal: %v", err)
@@ -820,8 +820,8 @@ func TestImport_SeshOverwriteAndRefusals(t *testing.T) {
 	if err := os.WriteFile(plain, []byte(`[{"service":"x","type":"password","secret":"y"}]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := runImportOut(t, "", true, plain); err == nil || !strings.Contains(err.Error(), "--action import") {
-		t.Errorf("a plain export without --from: %v", err)
+	if out, errOut, err := runImportOut(t, "", true, plain); err != nil || !strings.Contains(out+errOut, "Found 1 entry in the sesh export.") {
+		t.Errorf("a plain export without --from: %v\n%s%s", err, out, errOut)
 	}
 }
 

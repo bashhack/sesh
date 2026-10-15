@@ -133,7 +133,7 @@ func main() {
 
 	// Simplified setup instructions
 	fmt.Printf("%s━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", colorGreen, colorReset)
-	fmt.Printf("%sSetup:%s  sesh --service totp --setup\n", colorGreen, colorReset)
-	fmt.Printf("%sTest:%s   sesh --service totp --service-name %s\n", colorGreen, colorReset, serviceName)
-	fmt.Printf("%sClip:%s   sesh --service totp --service-name %s --clip\n", colorGreen, colorReset, serviceName)
+	fmt.Printf("%sSetup:%s  sesh add totp <name> --qr\n", colorGreen, colorReset)
+	fmt.Printf("%sTest:%s   sesh code %s\n", colorGreen, colorReset, serviceName)
+	fmt.Printf("%sClip:%s   sesh copy %s totp\n", colorGreen, colorReset, serviceName)
 }

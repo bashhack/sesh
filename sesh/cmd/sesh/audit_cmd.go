@@ -31,10 +31,21 @@ func addAuditPruneFlags(fs *flag.FlagSet) *int {
 	return fs.Int("older-than", -1, "Remove events older than this many days; 0 removes them all")
 }
 
+const auditUsage = `Usage:
+  sesh audit [--limit N]                The vault's audit log, the newest first (--limit 0: all of it)
+  sesh audit prune --older-than DAYS    Delete the events older than that (0: all of them)
+
+The log records each secret read, each change, delete and restore, and
+master password changes: names and what was done, never a secret.`
+
 // runAudit is `sesh audit [--limit N]`, which shows the vault's audit log,
 // and `sesh audit prune --older-than DAYS`. Both open the vault, so they
 // ask for the master password the way --list does.
 func runAudit(app *App, args []string) error {
+	if len(args) > 0 && isHelp(args[0]) {
+		_, err := fmt.Fprintln(app.Stdout, auditUsage)
+		return err
+	}
 	if len(args) > 0 && args[0] == "prune" {
 		return runAuditPrune(app, args[1:])
 	}
@@ -111,7 +122,11 @@ func runAuditPrune(app *App, args []string) error {
 	fs := flag.NewFlagSet("audit prune", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	olderThan := addAuditPruneFlags(fs)
+	fs.Usage = func() { fmt.Fprintln(app.Stderr, auditUsage) } //nolint:errcheck // usage text
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if fs.NArg() > 0 {

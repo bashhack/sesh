@@ -31,7 +31,8 @@ const (
 type Entry struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	// ID is the entry's key in text form: what --delete takes.
+	// ID is the entry's key in text form: what sesh list shows, and every
+	// command that names an entry takes.
 	ID       string    `json:"id"`
 	Service  string    `json:"service"`
 	Username string    `json:"username,omitempty"`

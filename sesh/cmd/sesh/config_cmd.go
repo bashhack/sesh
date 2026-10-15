@@ -8,9 +8,18 @@ import (
 	"github.com/bashhack/sesh/internal/config"
 )
 
+const configUsage = `Usage: sesh config
+  Show each setting, its value, and where it comes from: the config file,
+  an environment variable, a flag, or the default. sesh ui's settings panel
+  changes them; so does editing the file it names.`
+
 // runConfig is `sesh config`: it prints each effective setting and where
 // it came from, so a user can see why sesh behaves as it does.
 func runConfig(app *App, args []string) error {
+	if len(args) > 0 && isHelp(args[0]) {
+		_, err := fmt.Fprintln(app.Stdout, configUsage)
+		return err
+	}
 	if len(args) > 0 {
 		return fmt.Errorf("sesh config takes no arguments, got %q", strings.Join(args, " "))
 	}

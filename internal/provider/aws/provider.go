@@ -5,14 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	awsInternal "github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
-	"github.com/bashhack/sesh/internal/setup"
 	"github.com/bashhack/sesh/internal/subshell"
 	internalTotp "github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
@@ -29,7 +27,6 @@ type Provider struct {
 	profile    string
 	filing     provider.FilingFlags
 	noSubshell bool
-	force      bool
 }
 
 var _ provider.ServiceProvider = (*Provider)(nil)
@@ -39,28 +36,24 @@ func NewProvider(aws awsInternal.Provider, store vault.Store, totp internalTotp.
 	return &Provider{aws: aws, store: store, totp: totp}
 }
 
+// WithStore is p over store: its flags are parsed first, so a mistake in
+// them is said before the vault is unlocked.
+func (p *Provider) WithStore(store vault.Store) *Provider {
+	p.store = store
+	return p
+}
+
 // Name returns the provider name.
 func (p *Provider) Name() string {
 	return "aws"
-}
-
-// Description returns the provider description.
-func (p *Provider) Description() string {
-	return "Amazon Web Services CLI authentication"
 }
 
 // SetupFlags adds provider-specific flags to the given FlagSet
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
 	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
 	fs.BoolVar(&p.noSubshell, "no-subshell", false, "Print environment variables instead of launching subshell")
-	fs.BoolVar(&p.force, "force", false, "Delete without asking")
-	p.filing.Register(fs, "--list")
+	p.filing.Register(fs)
 	return nil
-}
-
-// GetSetupHandler returns a setup handler for AWS
-func (p *Provider) GetSetupHandler() any {
-	return setup.NewAWSSetupHandler(p.store)
 }
 
 // GetTOTPCodes retrieves TOTP codes without performing AWS authentication
@@ -220,73 +213,6 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	}, nil
 }
 
-// ListEntries returns an entry for each AWS profile set up; its ID is its key.
-func (p *Provider) ListEntries() ([]provider.ProviderEntry, error) {
-	f := p.listFilter()
-	entries, err := p.store.List(&f)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list AWS entries: %w", err)
-	}
-	result := make([]provider.ProviderEntry, 0, len(entries))
-	for i := range entries {
-		e := &entries[i]
-		if e.Key != vault.AWSKey(e.Username) {
-			continue // a TOTP entry named aws with no username: not a profile
-		}
-		result = append(result, provider.ProviderEntry{
-			Name:   fmt.Sprintf("AWS (%s)", e.Username),
-			Type:   "aws mfa",
-			ID:     e.Key.String(),
-			Folder: e.Folder,
-			Tags:   e.Tags,
-		})
-	}
-	return result, nil
-}
-
-// getAWSProfiles reads AWS profiles from ~/.aws/config
-func (p *Provider) getAWSProfiles() ([]string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-
-	configPath := filepath.Join(homeDir, ".aws", "config")
-	data, err := os.ReadFile(configPath) //nolint:gosec // path is constructed from os.UserHomeDir() + hardcoded suffix
-	if err != nil {
-		return nil, err
-	}
-
-	var profiles []string
-	profiles = append(profiles, "default") // Always include default
-
-	for line := range strings.SplitSeq(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "[profile ") && strings.HasSuffix(line, "]") {
-			profile := strings.TrimPrefix(line, "[profile ")
-			profile = strings.TrimSuffix(profile, "]")
-			profiles = append(profiles, strings.TrimSpace(profile))
-		}
-	}
-
-	return profiles, nil
-}
-
-// DeleteForced reports whether --force says to delete without asking.
-func (p *Provider) DeleteForced() bool { return p.force }
-
-// DeleteEntries deletes the AWS profiles' entries ids name, asking first
-// unless --force.
-func (p *Provider) DeleteEntries(ids []string, confirm provider.ConfirmDelete) (int, error) {
-	own := func(k vault.Key) error {
-		if k != vault.AWSKey(k.Username) {
-			return fmt.Errorf("%s isn't an AWS entry; delete it with --service password", k)
-		}
-		return nil
-	}
-	return provider.DeleteEntries(p.store, ids, own, nil, p.force, confirm)
-}
-
 // GetProfile returns the current AWS profile
 func (p *Provider) GetProfile() string {
 	return p.profile
@@ -327,10 +253,10 @@ func (p *Provider) ValidateRequest() error {
 		if !errors.Is(err, vault.ErrNotFound) {
 			return fmt.Errorf("failed to look up the AWS entry: %w", err)
 		}
-		return fmt.Errorf("no AWS entry found for %s. Run 'sesh --service aws --setup' first", formatProfile(p.profile))
+		return fmt.Errorf("no AWS entry found for %s. Run 'sesh aws setup' first", formatProfile(p.profile))
 	}
 	if err := checkAWSCodes(e.Settings.TOTP); err != nil {
-		return fmt.Errorf("the AWS entry for %s %w; set it up again with 'sesh --service aws --setup'", formatProfile(p.profile), err)
+		return fmt.Errorf("the AWS entry for %s %w; set it up again with 'sesh aws setup'", formatProfile(p.profile), err)
 	}
 	if e.Settings.AWSMFADevice == "" {
 		// Not fatal: GetMFASerialBytes asks AWS for the profile's device.
@@ -374,35 +300,11 @@ func (p *Provider) GetFlagInfo() []provider.FlagInfo {
 			Description: "Print environment variables instead of launching subshell",
 			Required:    false,
 		},
-		{
-			Name:        "force",
-			Type:        "bool",
-			Description: "Delete without asking",
-			Required:    false,
-		},
-	}, p.filing.FlagInfo("--list")...)
+	}, p.filing.FlagInfo()...)
 }
 
-// Filing is what --folder and --tag say, for --setup.
+// Filing is what --folder and --tag say, for sesh aws setup.
 func (p *Provider) Filing() vault.Filing { return p.filing.Filing() }
-
-// UsesFiling reports that only --setup and --list use --folder and --tag.
-func (p *Provider) UsesFiling() (bool, string) { return false, "--setup or --list" }
-
-// listFilter is the entries --list shows: this provider's, narrowed by
-// --folder and --tag.
-func (p *Provider) listFilter() vault.Filter {
-	f := p.filing.Filter()
-	f.Kind, f.Service = vault.KindTOTP, vault.AWSKey("").Service
-	return f
-}
-
-// NoMatchHint says why --list found nothing, when --folder or --tag names
-// what no entry has.
-func (p *Provider) NoMatchHint() string {
-	f := p.listFilter()
-	return provider.NoMatchHint(p.store, &f, "AWS entries")
-}
 
 // ShouldUseSubshell returns whether to use subshell mode
 func (p *Provider) ShouldUseSubshell() bool {

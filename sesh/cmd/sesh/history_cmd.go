@@ -19,14 +19,16 @@ import (
 )
 
 const historyUsage = `Usage:
-  sesh history <id>                 List an entry's versions: 1 is its secret now
-  sesh history <id> --show N        Print version N's secret
-  sesh history <id> --clip N        Copy version N's secret to the clipboard
-  sesh history <id> --restore N     Make version N the secret again (the one it replaces is kept)
-  sesh history <id> --forget N,...  Delete versions for good (several at once keep their numbers)
+  sesh history <entry>                 List an entry's versions: 1 is its secret now
+  sesh history <entry> --show N        Print version N's secret
+  sesh history <entry> --clip N        Copy version N's secret to the clipboard
+  sesh history <entry> --restore N     Make version N the secret again (the one it replaces is kept)
+  sesh history <entry> --forget N,...  Delete versions for good (several at once keep their numbers)
 
 Each time an entry's secret changes, the one it replaces is kept, the
-newest history.keep (10 unless set). Entry IDs are what --list shows.`
+newest history.keep (10 unless set).
+
+` + entryWordsHelp
 
 // runHistory is sesh history: an entry's earlier secrets.
 func runHistory(app *App, args []string) error {
@@ -44,12 +46,8 @@ func runHistory(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(ids) != 1 {
-		return errors.New("name one entry: sesh history <id> [--show|--clip|--restore|--forget N]")
-	}
-	k, err := vault.ParseKey(ids[0])
-	if err != nil {
-		return err
+	if len(ids) == 0 {
+		return errors.New("name the entry: sesh history <entry> [--show|--clip|--restore|--forget N]")
 	}
 	var action, value string
 	var twice bool
@@ -89,6 +87,10 @@ func runHistory(app *App, args []string) error {
 		return err
 	}
 	defer closeAuditStore(store)
+	k, err := resolveEntry(app, store, ids, "")
+	if err != nil {
+		return err
+	}
 	switch action {
 	case "":
 		return listHistory(app, store, k)

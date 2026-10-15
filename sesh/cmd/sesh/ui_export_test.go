@@ -115,16 +115,11 @@ func TestExport_RefusesTheVault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, closer, err := buildProvider(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closer.Close() //nolint:errcheck // test cleanup
 	stderr := new(bytes.Buffer)
-	app := NewDefaultApp(VersionInfo{}, store, appSettingsFrom(cfg))
+	app := NewDefaultApp(VersionInfo{}, appSettingsFrom(cfg))
 	app.Stdin, app.Stdout, app.Stderr = strings.NewReader(""), new(bytes.Buffer), stderr
 	app.Exit = func(int) {}
-	run(app, []string{"sesh", "--service", "password", "--action", "export", "--format", "encrypted", "--file", cfg.DBPath.Value, "--force"})
+	run(app, []string{"sesh", "export", "--file", cfg.DBPath.Value, "--force"})
 	if !strings.Contains(stderr.String(), "is the vault itself") {
 		t.Errorf("exporting over the vault:\n%s", stderr)
 	}

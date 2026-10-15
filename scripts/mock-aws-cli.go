@@ -6,8 +6,8 @@
 //   2. Make it executable:
 //      go build -o aws mock-aws-cli.go && chmod +x aws
 //   3. Use sesh normally:
-//      sesh --service aws --setup
-//      sesh --service aws
+//      sesh aws setup
+//      sesh aws
 
 package main
 

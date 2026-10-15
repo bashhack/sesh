@@ -100,11 +100,11 @@ func TestFilingCommands_Refusals(t *testing.T) {
 		args    []string
 	}{
 		"a missing entry, by case":  {"did you mean password/github/alice?", runTag, []string{"add", "x", "password/GitHub/alice"}},
-		"several problems":          {"nothing was changed:\n  entry ID \"bad\"", runFolder, []string{"move", "w", "bad", "worse", "password/gitlab"}},
-		"several missing":           {"nothing was changed:\n  entry not found: password/nope\n  entry not found: password/none", runFolder, []string{"move", "w", "password/nope", "password/gitlab", "password/none"}},
+		"no match":                  {`no entry matches "bad worse password/gitlab"`, runFolder, []string{"move", "w", "bad", "worse", "password/gitlab"}},
+		"a missing ID":              {"entry not found: password/nope", runFolder, []string{"move", "w", "password/nope", "password/gitlab", "password/none"}},
 		"a bad folder":              {"has an empty part", runFolder, []string{"move", "w/", "password/gitlab"}},
 		"a bad tag":                 {`can't start with "-"`, runTag, []string{"remove", "-x", "password/gitlab"}},
-		"no IDs":                    {"needs a tag and at least one entry ID", runTag, []string{"add", "x"}},
+		"no IDs":                    {"needs a tag and at least one entry", runTag, []string{"add", "x"}},
 		"a missing folder, by case": {`there's no folder "Nope"`, runFolder, []string{"rename", "Nope", "x"}},
 		"into itself":               {"into a folder under itself", runFolder, []string{"rename", "a", "a/b"}},
 		"a missing tag":             {`there's no tag "nope"`, runTag, []string{"rename", "nope", "x"}},
@@ -123,13 +123,12 @@ func TestFilingCommands_Refusals(t *testing.T) {
 	}
 }
 
-// IDs are checked before the vault is unlocked, and a missing vault isn't
-// created.
+// Entries are found in the vault, and a missing vault isn't created.
 func TestFilingCommands_BeforeUnlocking(t *testing.T) {
 	setupRekeyEnv(t)
 	useConfigFile(t, "")
-	if _, err := runFiling(t, runTag, "add", "x", "bad"); err == nil || !strings.Contains(err.Error(), `entry ID "bad"`) {
-		t.Errorf("a bad ID: %v", err)
+	if _, err := runFiling(t, runTag, "add", "x", "bad"); err == nil || !strings.Contains(err.Error(), "there's no vault yet") {
+		t.Errorf("no vault, an entry named: %v", err)
 	}
 	if _, err := runFiling(t, runFolder, "list"); err == nil || !strings.Contains(err.Error(), "there's no vault yet") {
 		t.Errorf("no vault: %v", err)

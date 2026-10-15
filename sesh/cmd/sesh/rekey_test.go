@@ -526,7 +526,7 @@ func TestRekey_TakesNoArguments(t *testing.T) {
 	for _, args := range [][]string{{"--to", "password"}, {"--key-source", "password"}} {
 		app, _ := rekeyTestApp("")
 		err := runRekey(app, args, rotateTestCfg())
-		if wantSub := "--rekey takes no arguments"; err == nil || !strings.Contains(err.Error(), wantSub) {
+		if wantSub := "sesh passwd takes no arguments"; err == nil || !strings.Contains(err.Error(), wantSub) {
 			t.Errorf("%q: err = %v, want it to contain %q", args, err, wantSub)
 		}
 	}
@@ -534,7 +534,7 @@ func TestRekey_TakesNoArguments(t *testing.T) {
 	if err := runRekey(app, []string{"--help"}, rotateTestCfg()); err != nil {
 		t.Fatalf("--help: %v", err)
 	}
-	if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "Usage: sesh --rekey") {
+	if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, "Usage: sesh passwd") {
 		t.Errorf("--help printed %q", out)
 	}
 }

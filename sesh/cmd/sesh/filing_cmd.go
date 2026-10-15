@@ -9,7 +9,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/bashhack/sesh/internal/database"
-	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -30,19 +29,23 @@ var (
 )
 
 const folderUsage = `Usage:
-  sesh folder move <folder> <id>…     Put entries in a folder, such as work/aws ("" takes them out)
+  sesh folder move <folder> <entry>…  Put entries in a folder, such as work/aws ("" takes them out)
   sesh folder rename <old> <new>      Rename a folder, and the folders under it
   sesh folder list                    Show the folders, with how many entries each holds
 
-Entry IDs are what --list shows. Folders nest with "/".`
+Folders nest with "/". To name several entries at once, give their IDs.
+
+` + entryWordsHelp
 
 const tagUsage = `Usage:
-  sesh tag add <tag> <id>…            Tag entries
-  sesh tag remove <tag> <id>…         Take a tag off entries
+  sesh tag add <tag> <entry>…         Tag entries
+  sesh tag remove <tag> <entry>…      Take a tag off entries
   sesh tag rename <old> <new>         Rename a tag on every entry
   sesh tag list                       Show the tags, with how many entries have each
 
-Entry IDs are what --list shows.`
+To name several entries at once, give their IDs.
+
+` + entryWordsHelp
 
 // runFolder is sesh folder: move, rename, list.
 func runFolder(app *App, args []string) error {
@@ -53,7 +56,7 @@ func runFolder(app *App, args []string) error {
 	switch args[0] {
 	case "move":
 		if len(args) < 3 {
-			return errors.New(`sesh folder move needs a folder and at least one entry ID: sesh folder move <folder> <id>… ("" for no folder)`)
+			return errors.New(`sesh folder move needs a folder and at least one entry: sesh folder move <folder> <entry>… ("" for no folder)`)
 		}
 		folder := args[1]
 		if err := vault.CheckFolder(folder); err != nil {
@@ -102,7 +105,7 @@ func runTag(app *App, args []string) error {
 	switch args[0] {
 	case "add", "remove":
 		if len(args) < 3 {
-			return fmt.Errorf("sesh tag %s needs a tag and at least one entry ID: sesh tag %s <tag> <id>…", args[0], args[0])
+			return fmt.Errorf("sesh tag %s needs a tag and at least one entry: sesh tag %s <tag> <entry>…", args[0], args[0])
 		}
 		tag := args[1]
 		if err := vault.CheckTag(tag); err != nil {
@@ -170,43 +173,20 @@ func unchanged(n int, one, many string) string {
 	return fmt.Sprintf(" (%d %s)", n, many)
 }
 
-// changeEntries checks ids before unlocking (every one, so all the bad ones
-// are reported together), then that each names an entry, and runs change
-// on them all, or on none. It prints what change returns.
-func changeEntries(app *App, ids []string, change func(*database.Store, []vault.Key) (string, error)) error {
-	var keys []vault.Key
-	var bad []string
-	seen := map[vault.Key]bool{}
-	for _, id := range ids {
-		k, err := vault.ParseKey(id)
-		if err != nil {
-			bad = append(bad, err.Error())
-			continue
-		}
-		if !seen[k] {
-			seen[k] = true
-			keys = append(keys, k)
-		}
-	}
-	if err := nothingChanged(bad); err != nil {
-		return err
+// changeEntries runs change on the entries args name (see resolveEach),
+// or on none when they name no entry. It prints what change
+// returns.
+func changeEntries(app *App, args []string, change func(*database.Store, []vault.Key) (string, error)) error {
+	if len(args) == 0 {
+		return errors.New("name the entries to change")
 	}
 	store, err := openFilingStore()
 	if err != nil {
 		return err
 	}
 	defer closeAuditStore(store)
-	for _, k := range keys {
-		if err := store.Exists(k); err != nil {
-			if errors.Is(err, vault.ErrNotFound) {
-				if h := password.CaseHint(store, k); h != "" {
-					err = fmt.Errorf("%w; %s", err, h)
-				}
-			}
-			bad = append(bad, err.Error())
-		}
-	}
-	if err := nothingChanged(bad); err != nil {
+	keys, err := resolveEach(app, store, args)
+	if err != nil {
 		return err
 	}
 	msg, err := change(store, keys)
@@ -215,17 +195,6 @@ func changeEntries(app *App, ids []string, change func(*database.Store, []vault.
 	}
 	_, err = fmt.Fprintln(app.Stdout, "✅ "+msg)
 	return err
-}
-
-// nothingChanged is the error for the problems found, or nil for none.
-func nothingChanged(problems []string) error {
-	switch len(problems) {
-	case 0:
-		return nil
-	case 1:
-		return errors.New(problems[0])
-	}
-	return fmt.Errorf("nothing was changed:\n  %s", strings.Join(problems, "\n  "))
 }
 
 // renameFiling renames a folder or tag (what) with rename, after checking
