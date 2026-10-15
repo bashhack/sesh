@@ -38,10 +38,10 @@ func WithScreenLock(locked func() bool) Option {
 	return func(s *Server) { s.screenLocked = locked }
 }
 
-// withScreenEvery sets how often the server asks whether the screen is
-// locked. Tests only.
-func withScreenEvery(d time.Duration) Option {
-	return func(s *Server) { s.screenEvery = d }
+// withQuickScreenChecks has the server ask whether the screen is locked
+// every 10ms. Tests only.
+func withQuickScreenChecks() Option {
+	return func(s *Server) { s.screenEvery = 10 * time.Millisecond }
 }
 
 // WithExitOnAutoLock makes the agent shut down instead of staying locked

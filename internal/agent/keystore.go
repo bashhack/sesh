@@ -121,6 +121,9 @@ type keyState struct {
 // opens. password is zeroed before return. A cached key is zeroed first
 // so a re-unlock replaces it completely.
 func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2idParams) error {
+	// Counted as the request arrives, before it waits on another unlock:
+	// a screen lock while it waits drops it too.
+	locks := k.screenLockCount()
 	k.unlockMu.Lock()
 	defer k.unlockMu.Unlock()
 	defer secure.SecureZeroBytes(password)
@@ -136,7 +139,6 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 		return fmt.Errorf("%w: %v", errBadRequest, err)
 	}
 
-	locks := k.screenLockCount()
 	derived := deriveKey(password, salt, params)
 	defer secure.SecureZeroBytes(derived)
 	if err := k.installVerified(derived, verify, "unlocked", locks); err != nil {
@@ -154,6 +156,7 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 // doesn't prompt again, unless fresh asks that it does. Like Unlock, it
 // runs one at a time.
 func (k *keystore) UnlockTouchID(verify []byte, fresh bool, unwrap func() ([]byte, error)) error {
+	locks := k.screenLockCount() // as for Unlock
 	k.unlockMu.Lock()
 	defer k.unlockMu.Unlock()
 
@@ -165,7 +168,6 @@ func (k *keystore) UnlockTouchID(verify []byte, fresh bool, unwrap func() ([]byt
 	if st := k.snapshot(); !fresh && st.unlocked && st.unlockID == UnlockID(verify) {
 		return nil
 	}
-	locks := k.screenLockCount()
 	key, err := unwrap()
 	if err != nil {
 		return err
@@ -198,7 +200,6 @@ func (k *keystore) installVerified(key, verify []byte, event string, locks uint6
 		return errShutDown
 	}
 	if k.screenLocks != locks {
-		k.log.printf("unlock dropped: the screen locked meanwhile")
 		return errScreenLockedMeanwhile
 	}
 	k.installLocked(key)
@@ -267,6 +268,11 @@ func (k *keystore) Encrypt(plaintext, aad []byte, unlockID string) (ciphertext, 
 func (k *keystore) lock(reason string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if k.derivedKey == nil {
+		// Locked already: nothing changes, so a stop planned since (after
+		// a late or screen lock) still holds.
+		return
+	}
 	k.clearLocked()
 	k.log.printf("locked (%s)", reason)
 }

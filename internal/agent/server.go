@@ -472,6 +472,9 @@ func (s *Server) dispatchUnlock(conn *net.UnixConn, raw []byte) bool {
 	case errors.Is(err, errWrongPassword):
 		code = ErrCodeWrongPassword
 		s.log.printf("unlock refused: wrong password")
+	case errors.Is(err, errScreenLockedMeanwhile):
+		code = ErrCodeScreenLocked
+		s.log.printf("unlock refused: the screen locked meanwhile")
 	case errors.Is(err, errBadRequest):
 		code = ErrCodeBadRequest
 		s.log.printf("unlock refused: %v", err)
@@ -552,6 +555,8 @@ func touchIDErrCode(err error) string {
 		return ErrCodeTouchIDFailed
 	case errors.Is(err, errTouchIDStale), errors.Is(err, touchid.ErrWrapMismatch):
 		return ErrCodeTouchIDStale
+	case errors.Is(err, errScreenLockedMeanwhile):
+		return ErrCodeScreenLocked
 	default:
 		return ErrCodeInternal
 	}

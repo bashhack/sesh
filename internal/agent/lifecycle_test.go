@@ -514,7 +514,7 @@ func TestLockOnSleep(t *testing.T) {
 func TestLockOnScreenLock(t *testing.T) {
 	var screen atomic.Bool
 	sockPath := tempSocketPath(t)
-	serve(t, sockPath, WithScreenLock(screen.Load), withScreenEvery(10*time.Millisecond))
+	serve(t, sockPath, WithScreenLock(screen.Load), withQuickScreenChecks())
 	conn, id := unlockClient(t, sockPath)
 	defer mustClose(t, conn)
 	locked := func() bool {
@@ -556,12 +556,16 @@ func TestScreenLockStops(t *testing.T) {
 	var screen atomic.Bool
 	clk := monoClock()
 	sockPath := tempSocketPath(t)
-	_, done := serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute), WithExitOnAutoLock(), WithScreenLock(screen.Load), withScreenEvery(10*time.Millisecond))
+	_, done := serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute), WithExitOnAutoLock(), WithScreenLock(screen.Load), withQuickScreenChecks())
 	conn, _ := unlockClient(t, sockPath)
 	defer mustClose(t, conn)
 	time.Sleep(50 * time.Millisecond)
 	screen.Store(true)
 	time.Sleep(100 * time.Millisecond)
+	// Locked again by hand (sesh ui quitting, say): the stop still holds.
+	if err := Lock(conn); err != nil {
+		t.Fatal(err)
+	}
 	clk.advance(11 * time.Minute)
 	select {
 	case <-done:
@@ -574,21 +578,89 @@ func TestScreenLockStops(t *testing.T) {
 func TestScreenLockDuringUnlock(t *testing.T) {
 	var screen atomic.Bool
 	sockPath := tempSocketPath(t)
-	serve(t, sockPath, WithScreenLock(screen.Load), withScreenEvery(10*time.Millisecond))
+	serve(t, sockPath, WithScreenLock(screen.Load), withQuickScreenChecks())
 	time.Sleep(50 * time.Millisecond)
 	orig := deriveKey
 	t.Cleanup(func() { deriveKey = orig })
 	deriveKey = func(password, salt []byte, p database.Argon2idParams) []byte {
 		key := orig(password, salt, p)
-		screen.Store(true) // the screen locks while the key is derived
-		time.Sleep(100 * time.Millisecond)
+		lockScreenNow(&screen)
 		return key
 	}
 	params := lightParams()
 	salt, verify := sealVerify(t, "correct-horse", params)
 	conn := dialClient(t, sockPath)
 	defer mustClose(t, conn)
-	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); err == nil || !strings.Contains(err.Error(), "screen locked") {
+	var pe *ProtocolError
+	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); !errors.As(err, &pe) || pe.Code != ErrCodeScreenLocked {
 		t.Errorf("Unlock = %v, want refused: the screen locked meanwhile", err)
 	}
+	// Two at once: the one waiting on the first is dropped too.
+	screen.Store(false)
+	time.Sleep(50 * time.Millisecond)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			c := dialClient(t, sockPath)
+			defer mustClose(t, c)
+			errs <- Unlock(c, []byte("correct-horse"), salt, verify, params)
+		}()
+	}
+	for range 2 {
+		if err := <-errs; !errors.As(err, &pe) || pe.Code != ErrCodeScreenLocked {
+			t.Errorf("queued Unlock = %v, want refused", err)
+		}
+	}
+}
+
+// An unlock with a fingerprint under way when the screen locks doesn't
+// install its key either.
+func TestScreenLockDuringTouchIDUnlock(t *testing.T) {
+	var screen atomic.Bool
+	sockPath := tempSocketPath(t)
+	serve(t, sockPath, WithScreenLock(screen.Load), withQuickScreenChecks())
+	pub, _ := softwareChip(t, nil)
+	conn, verify, id := unlockForTouchID(t, sockPath)
+	defer mustClose(t, conn)
+	w, err := WrapKey(conn, id, WrapForTouchID, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Lock(conn); err != nil {
+		t.Fatal(err)
+	}
+	unwrap := TouchIDUnwrap
+	TouchIDUnwrap = func(blob []byte, w touchid.Wrapped, aad []byte) ([]byte, error) {
+		key, err := unwrap(blob, w, aad)
+		lockScreenNow(&screen) // as the fingerprint is read
+		return key, err
+	}
+	f := touchid.NewFile(id, []byte("chip blob"), pub, w)
+	var pe *ProtocolError
+	if err := UnlockTouchID(conn, f, verify); !errors.As(err, &pe) || pe.Code != ErrCodeScreenLocked {
+		t.Errorf("UnlockTouchID = %v, want refused: the screen locked meanwhile", err)
+	}
+	screen.Store(false)
+	time.Sleep(50 * time.Millisecond)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			c := dialClient(t, sockPath)
+			defer mustClose(t, c)
+			errs <- UnlockTouchID(c, f, verify)
+		}()
+	}
+	for range 2 {
+		if err := <-errs; !errors.As(err, &pe) || pe.Code != ErrCodeScreenLocked {
+			t.Errorf("queued UnlockTouchID = %v, want refused", err)
+		}
+	}
+}
+
+// lockScreenNow locks the screen during an unlock: after a pause in which
+// a second request queues behind it, and long enough for the agent to see.
+func lockScreenNow(screen *atomic.Bool) {
+	time.Sleep(50 * time.Millisecond)
+	screen.Store(true)
+	time.Sleep(100 * time.Millisecond)
 }
