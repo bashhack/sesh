@@ -39,7 +39,7 @@ func touchApp(t *testing.T, state TouchID, fail error) (*app, *[]string) {
 // Enter turns it off when it's on, and on when it's off; the row says so after.
 func TestTouchIDToggle(t *testing.T) {
 	a, asked := touchApp(t, TouchID{Said: "on", On: true, Here: true}, nil)
-	a.press("ctrl+k", ",")
+	a.press("ctrl+g", ",")
 	if s := a.screen(); !strings.Contains(s, "Touch ID unlock          on") || !strings.Contains(s, "turn it off") {
 		t.Fatalf("the row:\n%s", s)
 	}
@@ -56,7 +56,7 @@ func TestTouchIDToggle(t *testing.T) {
 // Taking it from another vault asks first; where Touch ID isn't usable, Enter says why.
 func TestTouchIDAsks(t *testing.T) {
 	a, asked := touchApp(t, TouchID{Said: "set up for another vault", Other: true, Here: true}, nil)
-	a.press("ctrl+k", ",", "enter")
+	a.press("ctrl+g", ",", "enter")
 	if a.ov == nil || a.ov.kind != panelConfirm || !a.ov.danger || len(*asked) != 0 {
 		t.Fatalf("asked %q, panel %+v", *asked, a.ov)
 	}
@@ -69,7 +69,7 @@ func TestTouchIDAsks(t *testing.T) {
 		t.Errorf("yes: asked %q", *asked)
 	}
 	b, asked := touchApp(t, TouchID{Said: "off (Touch ID isn't usable here)", Why: "not over SSH."}, nil)
-	b.press("ctrl+k", ",", "enter")
+	b.press("ctrl+g", ",", "enter")
 	if len(*asked) != 0 || b.ov == nil || !strings.Contains(b.ov.err, "not over SSH") {
 		t.Errorf("not usable: asked %q, panel %+v", *asked, b.ov)
 	}
@@ -78,12 +78,12 @@ func TestTouchIDAsks(t *testing.T) {
 // A failure is said in the panel; the agent locked meanwhile locks the app.
 func TestTouchIDFails(t *testing.T) {
 	a, _ := touchApp(t, TouchID{Said: "off", Here: true}, errors.New("touch ID unlock is set up through sesh's agent, which isn't running"))
-	a.press("ctrl+k", ",", "enter")
+	a.press("ctrl+g", ",", "enter")
 	if a.ov == nil || !strings.Contains(a.ov.err, "Not changed: touch ID unlock is set up through sesh's agent") {
 		t.Errorf("panel %+v", a.ov)
 	}
 	b, _ := touchApp(t, TouchID{Said: "off", Here: true}, Locked("sesh's agent locked the vault."))
-	b.press("ctrl+k", ",", "enter")
+	b.press("ctrl+g", ",", "enter")
 	if b.v != nil {
 		t.Error("not locked")
 	}
@@ -116,7 +116,7 @@ func TestTouchIDLockedScreen(t *testing.T) {
 // Turned on or off just before the app locked, what it did isn't said over what's open after it unlocks again.
 func TestTouchIDAcrossLock(t *testing.T) {
 	a, _ := touchApp(t, TouchID{Said: "off", Here: true}, nil)
-	a.press("ctrl+k", ",")
+	a.press("ctrl+g", ",")
 	_, set := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.run(a.lock("You locked it."))
 	a.run(func() tea.Msg { return unlockedMsg{v: newFake()} })
@@ -157,7 +157,7 @@ func TestTouchIDLockedScreenFollows(t *testing.T) {
 // One refused because another vault took the file meanwhile says so, and the next Enter asks.
 func TestTouchIDTakenMeanwhile(t *testing.T) {
 	a, asked := touchApp(t, TouchID{Said: "off", Here: true}, Refused("touchid.key in this folder is set up for another vault; Enter again asks whether to take it."))
-	a.press("ctrl+k", ",", "enter")
+	a.press("ctrl+g", ",", "enter")
 	if a.ov == nil || !strings.Contains(a.ov.err, "Enter again asks") || !slices.Equal(*asked, []string{"on"}) {
 		t.Fatalf("asked %q, panel %+v", *asked, a.ov)
 	}
@@ -166,7 +166,7 @@ func TestTouchIDTakenMeanwhile(t *testing.T) {
 // On, but not usable here, the row says so, and Enter turns it off.
 func TestTouchIDOnNotHere(t *testing.T) {
 	a, asked := touchApp(t, TouchID{Said: "on (Touch ID isn't usable here)", On: true, Why: "not over SSH."}, nil)
-	a.press("ctrl+k", ",")
+	a.press("ctrl+g", ",")
 	if s := a.screen(); !strings.Contains(s, "It's on, but not usable here: not over SSH.") {
 		t.Errorf("the row:\n%s", s)
 	}
@@ -186,7 +186,7 @@ func TestTouchIDOnAsItLocked(t *testing.T) {
 		TouchID:      func() (Vault, error) { return newFake(), nil },
 		TouchIDOn:    func() bool { return on },
 	})
-	a.press("ctrl+k", ",")
+	a.press("ctrl+g", ",")
 	_, set := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.run(a.lock("No use for 5 minutes."))
 	a.run(set)

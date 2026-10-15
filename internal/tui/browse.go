@@ -276,6 +276,8 @@ func (m *Model) sideKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	case "ctrl+k":
 		return m.openSideMenu()
+	case "ctrl+g":
+		return m.openSeshMenu()
 	case "ctrl+c":
 		return tea.Quit
 	case "?":
@@ -382,9 +384,7 @@ func (m *Model) openMarkedMenu() tea.Cmd {
 			return nil
 		}},
 	}...)
-	g := m.globalItems()
-	g[0].rule = true
-	m.ov = &overlay{kind: panelMenu, title: m.markedWords(), items: append(items, g...)}
+	m.ov = &overlay{kind: panelMenu, title: m.markedWords(), items: items}
 	return nil
 }
 

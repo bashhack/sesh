@@ -35,7 +35,7 @@ func passwordApp(t *testing.T, f *fakeVault, ch Changed, err error) (*app, *[]st
 // The form says what's wrong before anything changes, and asks once about an easy password.
 func TestChangePasswordChecks(t *testing.T) {
 	a, asked := passwordApp(t, newFake(), Changed{}, errors.New("unused"))
-	a.press("ctrl+k", ",")
+	a.press("ctrl+g", ",")
 	if s := a.screen(); !strings.Contains(s, "Master password          change…") {
 		t.Fatalf("the panel:\n%s", s)
 	}
@@ -70,7 +70,7 @@ func TestChangePassword(t *testing.T) {
 	old, fresh := newFake(), newFake()
 	fresh.entries = fresh.entries[:1]
 	a, asked := passwordApp(t, old, Changed{Vault: fresh, Said: []string{"Changed the master password, and re-encrypted 1 entry.", "Your recovery key still works."}}, nil)
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
 	if len(*asked) != 1 || a.form != nil || a.ov == nil || a.ov.kind != panelNotice {
 		t.Fatalf("asked %q, form %+v, panel %+v", *asked, a.form, a.ov)
 	}
@@ -89,7 +89,7 @@ func TestChangePassword(t *testing.T) {
 // A wrong current password keeps the form, and what was typed, to try again.
 func TestChangePasswordWrong(t *testing.T) {
 	a, asked := passwordApp(t, newFake(), Changed{}, ErrWrongPassword)
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
 	if a.form == nil || a.form.saving || !strings.Contains(a.form.err, "that's not the current master password") || len(*asked) != 1 {
 		t.Fatalf("asked %q, form %+v", *asked, a.form)
 	}
@@ -102,7 +102,7 @@ func TestChangePasswordWrong(t *testing.T) {
 func TestChangePasswordMeanwhile(t *testing.T) {
 	old, fresh := newFake(), newFake()
 	a, _ := passwordApp(t, old, Changed{Vault: fresh, Said: []string{"Changed."}}, nil)
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
 	// A check begun before, and answered after the change committed.
 	a.now = a.now.Add(time.Second)
 	_, before := a.Update(tickMsg(a.now))
@@ -124,7 +124,7 @@ func TestChangePasswordMeanwhile(t *testing.T) {
 // Backups made before are offered for deleting, as sesh --rekey offers them.
 func TestChangePasswordOldBackups(t *testing.T) {
 	a, asked := passwordApp(t, newFake(), Changed{Vault: newFake(), Said: []string{"Changed."}, OldBackups: "2 backups made before this change still open with the old master password, in ~/b.", Renew: "Delete them and make a fresh backup?"}, nil)
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
 	if a.ov == nil || a.ov.kind != panelConfirm || !strings.Contains(a.ov.question, "Delete them and make a fresh backup?") {
 		t.Fatalf("panel %+v", a.ov)
 	}
@@ -138,7 +138,7 @@ func TestChangePasswordOldBackups(t *testing.T) {
 func TestChangePasswordNotReopened(t *testing.T) {
 	a, _ := passwordApp(t, newFake(), Changed{Said: []string{"Changed the master password.", "It couldn't open the vault again (gone): unlock it with the new master password."},
 		OldBackups: "2 backups made before this change still open with the old master password, in ~/b."}, nil)
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
 	if a.v != nil || !strings.Contains(a.lockedWhy, "unlock it with the new master password") || !strings.Contains(a.lockedWhy, "still open with the old master password") {
 		t.Errorf("locked %v: %q", a.v == nil, a.lockedWhy)
 	}
@@ -154,7 +154,7 @@ func TestChangePasswordResized(t *testing.T) {
 	a, _ := passwordApp(t, old, Changed{Vault: fresh, Said: []string{"Changed."}}, nil)
 	a.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	a.run(a.reread())
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
 	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	old.err, old.checkErr = Locked("the key changed"), Locked("the key changed")
 	reads := len(old.reads)
@@ -181,7 +181,7 @@ func TestChangePasswordLifetime(t *testing.T) {
 			return Changed{Vault: fresh, Said: []string{"Changed."}}, nil
 		},
 	})
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
 	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.tick(2 * time.Minute)
 	if a.v == nil {
@@ -196,7 +196,7 @@ func TestChangePasswordLifetime(t *testing.T) {
 // Ctrl-C during the change quits once it's done, not under it.
 func TestChangePasswordQuit(t *testing.T) {
 	a, _ := passwordApp(t, newFake(), Changed{Vault: newFake(), Said: []string{"Changed.", "warning: could not lock the sesh agent."}, OldBackups: "2 backups still open."}, nil)
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
 	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.press("ctrl+c")
 	if a.quit {
@@ -213,7 +213,7 @@ func TestChangePasswordChecksRunning(t *testing.T) {
 	old, fresh := newFake(), newFake()
 	fresh.checks = Checks{Summary: "OK: no problems"}
 	a, _ := passwordApp(t, old, Changed{Vault: fresh, Said: []string{"Changed."}}, nil)
-	a.press("ctrl+k", ",", "down")
+	a.press("ctrl+g", ",", "down")
 	_, checks := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.press("esc", "up", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1", "enter")
 	a.run(checks)
@@ -234,7 +234,7 @@ func TestChangePasswordEachEasyOne(t *testing.T) {
 			return Changed{}, ErrWrongPassword
 		},
 	})
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "password", "enter", "password", "enter", "enter")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "password", "enter", "password", "enter", "enter")
 	if len(asked) != 1 {
 		t.Fatalf("the first easy one, said yes to: asked %q, form %+v", asked, a.form)
 	}
@@ -266,7 +266,7 @@ func TestChangePasswordNotesInFlight(t *testing.T) {
 	a, _ := passwordApp(t, old, Changed{}, ErrWrongPassword)
 	_, inFlight := a.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	k := a.selected().Key
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
 	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.run(inFlight)
 	reads := len(old.reads)
@@ -297,7 +297,7 @@ func TestChangePasswordKeyInFlight(t *testing.T) {
 		t.Fatal("the TOTP entry's key read before it's in view")
 	}
 	_, inFlight := a.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
-	a.press("ctrl+k", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
+	a.press("ctrl+g", ",", "enter", "old-password", "enter", "new-password-1", "enter", "new-password-1")
 	_, change := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.run(inFlight)
 	a.run(change)

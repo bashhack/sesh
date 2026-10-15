@@ -27,7 +27,7 @@ func importApp(t *testing.T) (*app, *fakeVault) {
 // says what's done with those the vault has, and y imports.
 func TestImport(t *testing.T) {
 	a, f := importApp(t)
-	a.press("ctrl+k", "i", "b")
+	a.press("ctrl+g", "i", "b")
 	if a.form == nil || a.form.title != "Import from Bitwarden" {
 		t.Fatalf("form %+v", a.form)
 	}
@@ -80,13 +80,13 @@ func TestImport(t *testing.T) {
 func TestImportCancelled(t *testing.T) {
 	a, f := importApp(t)
 	f.importPassword = ""
-	a.press("ctrl+k", "i", "b", "~/bw.json", "enter", "esc")
+	a.press("ctrl+g", "i", "b", "~/bw.json", "enter", "esc")
 	if !f.importing.closed || slices.Contains(f.importing.asked, "apply") || a.ov == nil || a.ov.title != "Import and export" {
 		t.Errorf("Esc: asked %q, closed %v, panel %+v", f.importing.asked, f.importing.closed, a.ov)
 	}
 	b, g := importApp(t)
 	g.importPassword = ""
-	b.press("ctrl+k", "i", "b", "~/bw.json", "enter")
+	b.press("ctrl+g", "i", "b", "~/bw.json", "enter")
 	b.run(b.lock("You locked it."))
 	if !g.importing.closed {
 		t.Error("the lock didn't let the import go")
@@ -97,7 +97,7 @@ func TestImportCancelled(t *testing.T) {
 func TestImportFiles(t *testing.T) {
 	a, f := importApp(t)
 	f.importPassword = ""
-	a.press("ctrl+k", "i", "g", "enter")
+	a.press("ctrl+g", "i", "g", "enter")
 	if a.form == nil || a.form.err != "Type the file to import." {
 		t.Fatalf("form %+v", a.form)
 	}
@@ -113,7 +113,7 @@ func previewApp(t *testing.T, plans map[string]ImportPlan) (*app, *fakeVault) {
 	f := newFake()
 	f.importing = &fakeImport{plans: plans}
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "i", "b", "~/bw.json", "enter")
+	a.press("ctrl+g", "i", "b", "~/bw.json", "enter")
 	if a.ov == nil || a.ov.kind != panelImport {
 		t.Fatalf("panel %+v", a.ov)
 	}
@@ -237,7 +237,7 @@ func TestImportApplyFails(t *testing.T) {
 func TestImportLetters(t *testing.T) {
 	for _, s := range importSources {
 		a := newApp(t, newFake(), Options{})
-		a.press("ctrl+k", "i", s.key)
+		a.press("ctrl+g", "i", s.key)
 		if a.form == nil || a.form.title != "Import from "+s.name {
 			t.Errorf("%s: form %+v", s.key, a.form)
 		}
@@ -252,7 +252,7 @@ func TestImportPlanFails(t *testing.T) {
 		failing: map[string]error{"skip": errors.New("the file is gone")},
 	}
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "i", "b", "~/bw.json", "enter", "s")
+	a.press("ctrl+g", "i", "b", "~/bw.json", "enter", "s")
 	if a.ov == nil || !strings.Contains(a.ov.err, "Not read: the file is gone") || strings.Contains(a.screen(), "Found 2.") {
 		t.Fatalf("after a failed plan: %+v\n%s", a.ov, a.screen())
 	}
@@ -272,7 +272,7 @@ func TestImportStalePlan(t *testing.T) {
 	first := &fakeImport{plans: map[string]ImportPlan{"": {Summary: "FROM THE FIRST", Count: 7}}}
 	f.importing = first
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "i", "b", "~/a.json")
+	a.press("ctrl+g", "i", "b", "~/a.json")
 	_, read := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	started := read()
 	_, plan := a.Update(started)
@@ -330,7 +330,7 @@ func TestImportPathsAndLongLines(t *testing.T) {
 	long := "  " + strings.Repeat("word ", 30) + "end"
 	f.importing = &fakeImport{plans: map[string]ImportPlan{"": {Summary: long, Count: 1}}}
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "i", "b", "~/export, 2026.json", "enter")
+	a.press("ctrl+g", "i", "b", "~/export, 2026.json", "enter")
 	if len(f.starts) != 1 || f.starts[0] != `bitwarden ["~/export, 2026.json"] ` {
 		t.Errorf("starts %q", f.starts)
 	}

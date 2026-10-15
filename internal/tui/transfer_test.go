@@ -13,7 +13,7 @@ import (
 func TestExport(t *testing.T) {
 	f := newFake()
 	a := newApp(t, f, Options{IsWeak: func(pw []byte) bool { return string(pw) == "password" }})
-	a.press("ctrl+k", "i", "e")
+	a.press("ctrl+g", "i", "e")
 	if a.form == nil || a.form.title != "Export the vault" {
 		t.Fatalf("form %+v", a.form)
 	}
@@ -36,7 +36,7 @@ func TestExport(t *testing.T) {
 	if !slices.Equal(f.exports, []string{"~/b.enc password false"}) {
 		t.Fatalf("an easy password, Enter again: exports %q", f.exports)
 	}
-	a.press("ctrl+k", "i", "e")
+	a.press("ctrl+g", "i", "e")
 	inputs := a.form.inputs
 	fill("~/c.enc", "export-pass-1", "export-pass-1")
 	if f.exports[1] != "~/c.enc export-pass-1 false" || a.form != nil || !strings.Contains(a.screen(), "Exported 3 entries to ~/c.enc.") {
@@ -54,7 +54,7 @@ func TestExport(t *testing.T) {
 func TestExportAcrossLock(t *testing.T) {
 	f := newFake()
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
+	a.press("ctrl+g", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
 	_, write := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	// Written, its result held back until after the lock and unlock.
 	result := write()
@@ -63,7 +63,7 @@ func TestExportAcrossLock(t *testing.T) {
 		t.Errorf("locked: %q", a.lockedWhy)
 	}
 	a.run(func() tea.Msg { return unlockedMsg{v: newFake()} })
-	a.press("ctrl+k", "i", "e")
+	a.press("ctrl+g", "i", "e")
 	open := a.form
 	a.run(func() tea.Msg { return result })
 	if a.form == nil || a.form != open {
@@ -71,7 +71,7 @@ func TestExportAcrossLock(t *testing.T) {
 	}
 	// Locked before it's written: the password it was handed is wiped.
 	b := newApp(t, newFake(), Options{})
-	b.press("ctrl+k", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
+	b.press("ctrl+g", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
 	typed := b.form.inputs[1].secret
 	_, write = b.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	b.run(b.lock("You locked it."))
@@ -85,7 +85,7 @@ func TestExportReplaces(t *testing.T) {
 	f := newFake()
 	f.exported = map[string]bool{"~/b.enc": true, "~/c.enc": true}
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1", "enter")
+	a.press("ctrl+g", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1", "enter")
 	if a.form == nil || !strings.Contains(a.form.err, "~/b.enc already exists. Press Enter again to replace it.") {
 		t.Fatalf("form %+v", a.form)
 	}
@@ -103,7 +103,7 @@ func TestExportReplaces(t *testing.T) {
 func TestExportFails(t *testing.T) {
 	f := newFake()
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
+	a.press("ctrl+g", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
 	f.err = Locked("sesh's agent locked the vault.")
 	a.press("enter")
 	if a.v != nil {
@@ -111,7 +111,7 @@ func TestExportFails(t *testing.T) {
 	}
 	h := newFake()
 	c := newApp(t, h, Options{})
-	c.press("ctrl+k", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
+	c.press("ctrl+g", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
 	h.err = errors.New("permission denied")
 	c.press("enter")
 	if c.form == nil || c.form.saving || c.form.err != "Not exported: permission denied." {
@@ -119,7 +119,7 @@ func TestExportFails(t *testing.T) {
 	}
 	g := newFake()
 	b := newApp(t, g, Options{})
-	b.press("ctrl+k", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
+	b.press("ctrl+g", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
 	_, write := b.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	b.press("ctrl+c")
 	if b.quit || !strings.Contains(b.screen(), "Quitting once the export is written") {
@@ -138,7 +138,7 @@ func TestExportFails(t *testing.T) {
 	// One that fails says so after.
 	k := newFake()
 	q := newApp(t, k, Options{})
-	q.press("ctrl+k", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
+	q.press("ctrl+g", "i", "e", "~/b.enc", "tab", "export-pass-1", "tab", "export-pass-1")
 	k.err = errors.New("disk full")
 	_, write = q.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	q.press("ctrl+c")

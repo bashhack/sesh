@@ -59,7 +59,7 @@ func backupsApp(t *testing.T, restoreErr error) (*app, *[]string) {
 // Ctrl-K b lists the backups newest first, another vault's marked; n backs up now and the list grows.
 func TestBackupsList(t *testing.T) {
 	a, asked := backupsApp(t, nil)
-	a.press("ctrl+k", "b")
+	a.press("ctrl+g", "b")
 	s := a.screen()
 	if !strings.Contains(s, "Backups in ~/b") || !strings.Contains(s, "2026-10-14") || !strings.Contains(s, "(another vault)") {
 		t.Fatalf("the panel:\n%s", s)
@@ -73,7 +73,7 @@ func TestBackupsList(t *testing.T) {
 // f backs up to a file, asking before replacing one there.
 func TestBackupsToFile(t *testing.T) {
 	a, asked := backupsApp(t, nil)
-	a.press("ctrl+k", "b", "f", "~/copy.db", "enter")
+	a.press("ctrl+g", "b", "f", "~/copy.db", "enter")
 	a.press("f", "~/copy.db", "enter")
 	if a.ov == nil || a.ov.kind != panelConfirm || !strings.Contains(a.ov.question, "~/copy.db already exists. Replace it") {
 		t.Fatalf("asked %q, panel %+v", *asked, a.ov)
@@ -87,7 +87,7 @@ func TestBackupsToFile(t *testing.T) {
 // x deletes the selected backup after asking, saying when it's another vault's; a deletes this vault's and makes a fresh one.
 func TestBackupsDelete(t *testing.T) {
 	a, asked := backupsApp(t, nil)
-	a.press("ctrl+k", "b", "down", "x")
+	a.press("ctrl+g", "b", "down", "x")
 	if a.ov == nil || a.ov.kind != panelConfirm || !a.ov.danger || !strings.Contains(a.ov.question, "It's another vault's.") {
 		t.Fatalf("panel %+v", a.ov)
 	}
@@ -105,7 +105,7 @@ func TestBackupsDelete(t *testing.T) {
 func TestBackupsRestore(t *testing.T) {
 	a, asked := backupsApp(t, nil)
 	f := a.v.v.(*fakeVault)
-	a.press("ctrl+k", "b", "enter")
+	a.press("ctrl+g", "b", "enter")
 	if a.ov == nil || a.ov.kind != panelConfirm || !a.ov.danger || !strings.Contains(a.ov.question, "Restore the vault from /b/new.db") || !strings.Contains(a.ov.question, "sesh ui locks after") {
 		t.Fatalf("asked %q, panel %+v", *asked, a.ov)
 	}
@@ -129,12 +129,12 @@ func TestBackupsRestore(t *testing.T) {
 // A restore that fails says why, and the app goes on; Ctrl-C during one quits once it's done.
 func TestBackupsRestoreFails(t *testing.T) {
 	a, _ := backupsApp(t, errors.New("the backup is damaged"))
-	a.press("ctrl+k", "b", "enter", "wait", "y")
+	a.press("ctrl+g", "b", "enter", "wait", "y")
 	if a.v == nil || a.ov == nil || a.ov.kind != panelBackups || !strings.Contains(a.ov.err, "Not restored: the backup is damaged") {
 		t.Fatalf("locked %v, panel %+v", a.v == nil, a.ov)
 	}
 	b, _ := backupsApp(t, nil)
-	b.press("ctrl+k", "b", "enter")
+	b.press("ctrl+g", "b", "enter")
 	b.now = b.now.Add(time.Second)
 	_, restore := b.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	b.press("ctrl+c")
@@ -152,7 +152,7 @@ func TestBackupsEmpty(t *testing.T) {
 	a, _ := backupsApp(t, nil)
 	a.opts.Backups = func() (Backups, error) { return Backups{Dir: "~/b"}, nil }
 	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
-	a.press("ctrl+k", "b")
+	a.press("ctrl+g", "b")
 	s := a.screen()
 	hint := false
 	for l := range strings.SplitSeq(s, "\n") {
@@ -169,7 +169,7 @@ func TestBackupsFits(t *testing.T) {
 		for h := minHeight; h <= 30; h += 3 {
 			a, _ := backupsApp(t, nil)
 			a.Update(tea.WindowSizeMsg{Width: w, Height: h})
-			a.press("ctrl+k", "b")
+			a.press("ctrl+g", "b")
 			s := a.screen()
 			hint := false
 			for l := range strings.SplitSeq(s, "\n") {
@@ -185,7 +185,7 @@ func TestBackupsFits(t *testing.T) {
 // A file to back up to is asked for; none typed, the form says so.
 func TestBackupsToNothing(t *testing.T) {
 	a, asked := backupsApp(t, nil)
-	a.press("ctrl+k", "b", "f", "enter")
+	a.press("ctrl+g", "b", "f", "enter")
 	if a.form == nil || a.form.err != "Type where to put it." || len(*asked) != 0 {
 		t.Errorf("asked %q, form %+v", *asked, a.form)
 	}
@@ -198,7 +198,7 @@ func TestBackupsRestoreFailsReads(t *testing.T) {
 	reads := 0
 	list := a.opts.Backups
 	a.opts.Backups = func() (Backups, error) { reads++; return list() }
-	a.press("ctrl+k", "b")
+	a.press("ctrl+g", "b")
 	searched, read := f.searched, reads
 	a.press("enter", "wait", "y")
 	if f.searched == searched || reads == read {
@@ -209,11 +209,11 @@ func TestBackupsRestoreFailsReads(t *testing.T) {
 // A restore's question that comes back after the app locked and unlocked isn't asked.
 func TestBackupsPlanAcrossLock(t *testing.T) {
 	a, _ := backupsApp(t, nil)
-	a.press("ctrl+k", "b")
+	a.press("ctrl+g", "b")
 	_, plan := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.run(a.lock("You locked it."))
 	a.run(func() tea.Msg { return unlockedMsg{v: newFake()} })
-	a.press("ctrl+k", "b")
+	a.press("ctrl+g", "b")
 	a.run(plan)
 	if a.ov == nil || a.ov.kind != panelBackups {
 		t.Errorf("panel %+v", a.ov)
@@ -228,7 +228,7 @@ func TestBackupsQuestionFits(t *testing.T) {
 			a, _ := backupsApp(t, nil)
 			a.opts.PlanRestore = func(string) (string, error) { return long, nil }
 			a.Update(tea.WindowSizeMsg{Width: w, Height: h})
-			a.press("ctrl+k", "b", "enter")
+			a.press("ctrl+g", "b", "enter")
 			s := a.screen()
 			if strings.Count(s, "\n")+1 > h || !strings.Contains(s, "yes") || (w >= 96 && h >= 24 && !strings.Contains(s, "is backed up first")) {
 				t.Fatalf("at %dx%d, whole when it fits:\n%s", w, h, s)
@@ -240,7 +240,7 @@ func TestBackupsQuestionFits(t *testing.T) {
 // After a refresh, the selection stays on the backup it was on.
 func TestBackupsSelectionStays(t *testing.T) {
 	a, asked := backupsApp(t, nil)
-	a.press("ctrl+k", "b", "down", "n", "x")
+	a.press("ctrl+g", "b", "down", "n", "x")
 	if a.ov == nil || !strings.Contains(a.ov.question, "77aa0000") {
 		t.Errorf("asked %q, panel %+v", *asked, a.ov)
 	}
@@ -249,7 +249,7 @@ func TestBackupsSelectionStays(t *testing.T) {
 // A list read that comes back while the vault is restored leaves the panel saying so.
 func TestBackupsListDuringRestore(t *testing.T) {
 	a, _ := backupsApp(t, nil)
-	a.press("ctrl+k", "b")
+	a.press("ctrl+g", "b")
 	read := a.readBackups()
 	a.press("enter")
 	a.now = a.now.Add(time.Second)

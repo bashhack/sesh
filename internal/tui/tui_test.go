@@ -440,6 +440,8 @@ func (a *app) press(keys ...string) {
 			msg = tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}
 		case "ctrl+k":
 			msg = tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl}
+		case "ctrl+g":
+			msg = tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl}
 		case "ctrl+e":
 			msg = tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl}
 		case "ctrl+r":
@@ -1105,10 +1107,13 @@ func TestActionMenu(t *testing.T) {
 	a := newApp(t, f, Options{})
 	a.press("ctrl+k")
 	s := a.screen()
-	for _, w := range []string{"github (alice)", "copy a value…", "copy the username", "open the URL", "earlier secrets…", "move to the trash", "the trash…", "lock sesh"} {
+	for _, w := range []string{"github (alice)", "copy a value…", "copy the username", "open the URL", "earlier secrets…", "move to the trash"} {
 		if !strings.Contains(s, w) {
 			t.Errorf("menu missing %q:\n%s", w, s)
 		}
+	}
+	if strings.Contains(s, "the trash…") || strings.Contains(s, "lock sesh") {
+		t.Errorf("sesh's own actions on the entry's menu:\n%s", s)
 	}
 	a.press("esc")
 	if a.ov != nil {
@@ -1131,6 +1136,40 @@ func TestActionMenu(t *testing.T) {
 	if len(a.copied) != 3 || a.copied[2] != "alice" {
 		t.Errorf("copied %q", a.copied)
 	}
+}
+
+// Ctrl-G opens sesh's own actions from the search, the list or the sidebar; Ctrl-K with no entry to act on does too.
+func TestSeshMenu(t *testing.T) {
+	a := wideApp(t, newFake())
+	want := []string{"add an entry…", "the trash…", "backups…", "import and export…", "health report…", "settings and safety…", "lock sesh"}
+	menu := func(how string) {
+		t.Helper()
+		s := a.screen()
+		if a.ov == nil || a.ov.title != "sesh" {
+			t.Fatalf("%s: panel %+v", how, a.ov)
+		}
+		for _, w := range want {
+			if !strings.Contains(s, w) {
+				t.Errorf("%s: missing %q:\n%s", how, w, s)
+			}
+		}
+		a.press("esc")
+	}
+	if !strings.Contains(a.screen(), "ctrl+g  sesh") {
+		t.Errorf("the footer doesn't say ctrl+g:\n%s", a.screen())
+	}
+	a.press("ctrl+g")
+	menu("from the search")
+	a.press("down", "ctrl+g")
+	menu("from the list")
+	a.press("←")
+	if a.focus != focusSide {
+		t.Fatal("not in the sidebar")
+	}
+	a.press("ctrl+g")
+	menu("from the sidebar")
+	a.press("esc", "zzz", "ctrl+k")
+	menu("with nothing matching")
 }
 
 // The entry's earlier secrets are listed, copied, and restored after a yes.
@@ -1177,7 +1216,7 @@ func TestActionDeleteAndTrash(t *testing.T) {
 	if s := a.screen(); len(f.entries) != 2 || !strings.Contains(s, "2 entries") || !strings.Contains(s, "Moved password github (alice) to the trash") {
 		t.Fatalf("after delete:\n%s", s)
 	}
-	a.press("ctrl+k", "t")
+	a.press("ctrl+g", "t")
 	if s := a.screen(); !strings.Contains(s, "github (alice)  password · deleted") {
 		t.Fatalf("trash:\n%s", s)
 	}
@@ -1186,7 +1225,7 @@ func TestActionDeleteAndTrash(t *testing.T) {
 		t.Fatalf("put back:\n%s", s)
 	}
 	// The selection moved on to the TOTP entry when github left the list.
-	a.press("ctrl+k", "d", "wait", "y", "ctrl+k", "t", "x")
+	a.press("ctrl+k", "d", "wait", "y", "ctrl+g", "t", "x")
 	if s := a.screen(); !strings.Contains(s, "Delete TOTP github (alice) for good?") {
 		t.Fatalf("confirm for good:\n%s", s)
 	}
@@ -1201,7 +1240,7 @@ func TestActionLockNow(t *testing.T) {
 	f := newFake()
 	agentLocked := false
 	a := newApp(t, f, Options{LockAgent: func() error { agentLocked = true; return nil }})
-	a.press("ctrl+k")
+	a.press("ctrl+g")
 	if !strings.Contains(a.screen(), "lock sesh") {
 		t.Fatalf("menu:\n%s", a.screen())
 	}
@@ -1217,9 +1256,9 @@ func TestActionLockNow(t *testing.T) {
 func TestConfirmNeedsADeliberateYes(t *testing.T) {
 	f := newFake()
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "r", "e", "a", "d", "y")
-	if len(f.entries) != 3 {
-		t.Fatal("typing a word after Ctrl-K deleted an entry")
+	a.press("ctrl+k", "d", "r", "y")
+	if len(f.entries) != 3 || a.ov == nil || a.ov.kind != panelConfirm {
+		t.Fatalf("typing a word after Ctrl-K deleted an entry, or asked nothing: %+v", a.ov)
 	}
 	a.press("esc", "esc", "ctrl+k", "d", "wait", "enter")
 	if len(f.entries) != 3 || a.ov == nil {
@@ -1319,7 +1358,7 @@ func TestActionFailuresAndLongPanels(t *testing.T) {
 	for i := range 40 {
 		f.trash = append(f.trash, Trashed{ID: int64(i + 1), Key: vault.Key{Kind: vault.KindPassword, Service: fmt.Sprintf("old-%02d", i)}})
 	}
-	a.press("ctrl+k", "t")
+	a.press("ctrl+g", "t")
 	for range 30 {
 		a.press("down")
 	}
@@ -1327,7 +1366,7 @@ func TestActionFailuresAndLongPanels(t *testing.T) {
 	if !strings.Contains(s, "old-30") || !strings.Contains(s, "deleted") || !strings.Contains(s, "put back") || strings.Count(s, "\n") != a.height-1 {
 		t.Errorf("a long trash:\n%s", s)
 	}
-	a.press("esc", "esc", "ctrl+k", "l")
+	a.press("esc", "esc", "ctrl+g", "l")
 	// The card wraps the sentence, so it's checked as the app holds it.
 	if s := a.screen(); a.v != nil || !strings.Contains(a.lockedWhy, "sesh's agent couldn't be locked (broken pipe)") || !strings.Contains(s, "sesh agent lock") {
 		t.Errorf("lock now with the agent unreachable (%q):\n%s", a.lockedWhy, s)
@@ -1351,7 +1390,7 @@ func TestPanelEdges(t *testing.T) {
 	a.press("esc", "esc")
 	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	f.trash = []Trashed{{ID: 7, Key: github}}
-	a.press("ctrl+k", "t")
+	a.press("ctrl+g", "t")
 	a.Update(tea.PasteMsg{Content: "zzz"})
 	if a.input.Value() != "" {
 		t.Errorf("a paste reached the search behind the panel: %q", a.input.Value())
@@ -1462,7 +1501,7 @@ func TestEditGenerateAndNameTaken(t *testing.T) {
 		t.Fatalf("saved onto a free name? saves %+v", f.saves[len(f.saves)-1])
 	}
 	f.entries = append(f.entries, vault.Entry{Kind: vault.KindPassword, Service: "taken"})
-	a.press("esc", "ctrl+k", "a")
+	a.press("esc", "ctrl+g", "a")
 	a.press("tab", "taken")
 	a.tabs(2)
 	a.press("→") // type → generate
@@ -1477,7 +1516,7 @@ func TestEditGenerateAndNameTaken(t *testing.T) {
 func TestAddForm(t *testing.T) {
 	f := newFake()
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "a")
+	a.press("ctrl+g", "a")
 	if s := a.screen(); !strings.Contains(s, "Add an entry") || !strings.Contains(s, "● password") {
 		t.Fatalf("the form:\n%s", s)
 	}
@@ -1496,7 +1535,7 @@ func TestAddForm(t *testing.T) {
 	if !strings.Contains(a.screen(), "Added secure note wifi") {
 		t.Errorf("after adding:\n%s", a.screen())
 	}
-	a.press("ctrl+k", "a", "→", "→", "→") // TOTP
+	a.press("ctrl+g", "a", "→", "→", "→") // TOTP
 	a.press("tab", "site", "ctrl+s")
 	if s := a.screen(); a.form == nil || !strings.Contains(s, "Paste the TOTP key") {
 		t.Errorf("a TOTP entry with no key:\n%s", s)
@@ -1556,11 +1595,11 @@ func TestFormFieldsNotesAndLock(t *testing.T) {
 // password; a password typed that's easy to guess is said to be.
 func TestFormLabelsAndStrength(t *testing.T) {
 	a := newApp(t, newFake(), Options{IsWeak: func([]byte) bool { return true }})
-	a.press("ctrl+k", "a", "→", "→", "→", "tab", "x", "tab", "me", "tab", "JBSWY3DP")
+	a.press("ctrl+g", "a", "→", "→", "→", "tab", "x", "tab", "me", "tab", "JBSWY3DP")
 	if s := a.screen(); !strings.Contains(s, " account ") || strings.Contains(s, " username ") || strings.Contains(s, "easy to guess") {
 		t.Errorf("a TOTP entry's form:\n%s", s)
 	}
-	a.press("esc", "esc", "ctrl+k", "a")
+	a.press("esc", "esc", "ctrl+g", "a")
 	a.tabs(3) // kind, name, username → the secret's choice (type a new one)
 	a.press("tab", "abc")
 	if s := a.screen(); !strings.Contains(s, "easy to guess") {
@@ -1574,7 +1613,7 @@ func TestFormOffersFoldersAndTags(t *testing.T) {
 	f.entries[0].Tags = []string{"prod", "personal"}
 	f.entries[2].Folder = "home/network"
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "a", "tab", "x")
+	a.press("ctrl+g", "a", "tab", "x")
 	a.tabs(3) // username, the secret's choice → the secret
 	a.press("pw")
 	a.tabs(2) // URL → folder
@@ -1598,7 +1637,7 @@ func TestFormOffersFoldersAndTags(t *testing.T) {
 // Ctrl-R shows a secret being typed into a form, until the focus moves on.
 func TestFormShowsATypedSecret(t *testing.T) {
 	a := newApp(t, newFake(), Options{})
-	a.press("ctrl+k", "a")
+	a.press("ctrl+g", "a")
 	a.tabs(4) // name, username, the secret's choice → the secret
 	a.press("hunter2")
 	if s := a.screen(); strings.Contains(s, "hunter2") || !strings.Contains(s, "show what you typed") {
@@ -1711,7 +1750,7 @@ func TestFormNotesKeptAsTheyAre(t *testing.T) {
 	if len(f.saves) != 1 || f.saves[0].SetNotes {
 		t.Errorf("notes nobody changed were saved: %+v", f.saves)
 	}
-	a.press("ctrl+k", "a", "→", "→", "tab", "a note", "ctrl+s")
+	a.press("ctrl+g", "a", "→", "→", "tab", "a note", "ctrl+s")
 	if s := a.screen(); len(f.saves) != 1 || !strings.Contains(s, "Write the note") {
 		t.Errorf("an empty secure note: %d saves\n%s", len(f.saves), s)
 	}
@@ -2165,7 +2204,7 @@ func healthFake() *fakeVault {
 func TestHealthReport(t *testing.T) {
 	f := healthFake()
 	a := newApp(t, f, Options{OldAfter: 365 * 24 * time.Hour})
-	a.press("git", "ctrl+k", "r")
+	a.press("git", "ctrl+g", "r")
 	s := a.screen()
 	for _, want := range []string{"4 problems in 3 passwords and API keys", "github (alice) · weak", "github (alice) · reused: same as gitlab", "gitlab · reused: same as github (alice)", "bank · old: changed"} {
 		if !strings.Contains(s, want) {
@@ -2188,14 +2227,14 @@ func TestHealthReport(t *testing.T) {
 func TestHealthReportGoneAndKeys(t *testing.T) {
 	f := healthFake()
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "r")
+	a.press("ctrl+g", "r")
 	f.entries = slices.DeleteFunc(f.entries, func(e vault.Entry) bool { return e.Key == github })
 	a.press("enter")
 	if s := a.screen(); a.form != nil || !strings.Contains(s, "github (alice) isn't in the vault any more") {
 		t.Errorf("choosing an entry that's gone:\n%s", s)
 	}
 	a = newApp(t, healthFake(), Options{})
-	a.press("ctrl+k", "r", "down", "enter") // gitlab, the first reused row
+	a.press("ctrl+g", "r", "down", "enter") // gitlab, the first reused row
 	if s := a.screen(); a.form == nil || !strings.Contains(s, "Edit gitlab") || !strings.Contains(s, "● keep") {
 		t.Errorf("an API key's form:\n%s", s)
 	}
@@ -2207,7 +2246,7 @@ func TestHealthReportClean(t *testing.T) {
 	f.entries = f.entries[:1]
 	f.secrets[github] = "Wq7#vPz!2kLm9$Xr-Tb4"
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "r")
+	a.press("ctrl+g", "r")
 	if s := a.screen(); !strings.Contains(s, "no problems in 1 password or API key") || !strings.Contains(s, "Nothing is weak, used twice, or old.") {
 		t.Errorf("a clean report:\n%s", s)
 	}
@@ -2219,7 +2258,7 @@ func TestHealthReportWaitsForNotes(t *testing.T) {
 	f.entries[2].HasNotes = true // gitlab: not selected, so its notes aren't read yet
 	f.notes = map[vault.Key]string{gitlab: "the note"}
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "r", "down", "enter")
+	a.press("ctrl+g", "r", "down", "enter")
 	if a.form == nil {
 		t.Fatalf("no form once its notes were read:\n%s", a.screen())
 	}
@@ -2237,7 +2276,7 @@ func enterHeld(a *app) tea.Cmd {
 // A form waited for isn't opened once the user does something else, or the app locks.
 func TestHealthReportPendingEdit(t *testing.T) {
 	a := newApp(t, healthFake(), Options{})
-	a.press("ctrl+k", "r")
+	a.press("ctrl+g", "r")
 	held := enterHeld(a)
 	a.press("x")
 	if a.editing != (vault.Key{}) {
@@ -2249,9 +2288,9 @@ func TestHealthReportPendingEdit(t *testing.T) {
 	}
 
 	a = newApp(t, healthFake(), Options{})
-	a.press("ctrl+k", "r")
+	a.press("ctrl+g", "r")
 	held = enterHeld(a)
-	a.press("ctrl+k", "a", "my new entry")
+	a.press("ctrl+g", "a", "my new entry")
 	a.editing = github // as if nothing the user did had dropped it
 	a.run(held)
 	if a.form == nil || a.form.title != "Add an entry" {
@@ -2259,7 +2298,7 @@ func TestHealthReportPendingEdit(t *testing.T) {
 	}
 
 	a = newApp(t, healthFake(), Options{})
-	a.press("ctrl+k", "r")
+	a.press("ctrl+g", "r")
 	enterHeld(a)
 	a.lock("test")
 	if a.editing != (vault.Key{}) {
@@ -2272,7 +2311,7 @@ func TestHealthReportPanel(t *testing.T) {
 	f := healthFake()
 	f.healthErr = errors.New("database disk image is malformed")
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "r", "down")
+	a.press("ctrl+g", "r", "down")
 	if s := a.screen(); !strings.Contains(s, "malformed") || strings.Contains(s, "Nothing is weak") {
 		t.Errorf("an error, then a key:\n%s", s)
 	}
@@ -2280,7 +2319,7 @@ func TestHealthReportPanel(t *testing.T) {
 	f = healthFake()
 	f.unreadable = []vault.Key{gitlab}
 	a = newApp(t, f, Options{})
-	a.press("ctrl+k", "r")
+	a.press("ctrl+g", "r")
 	for range 3 {
 		a.press("down")
 	}
@@ -2290,7 +2329,7 @@ func TestHealthReportPanel(t *testing.T) {
 	}
 
 	a = newApp(t, healthFake(), Options{})
-	a.press("ctrl+k")
+	a.press("ctrl+g")
 	_, first := a.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	a.press("esc")
 	_, second := a.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
@@ -2311,7 +2350,7 @@ func TestHealthReportFits(t *testing.T) {
 		f.unreadable = append(f.unreadable, k)
 	}
 	a := newApp(t, f, Options{OldAfter: time.Hour})
-	a.press("ctrl+k", "r") // the top of it, where the groups and the lines between them are
+	a.press("ctrl+g", "r") // the top of it, where the groups and the lines between them are
 	if lines := strings.Count(a.View().Content, "\n") + 1; lines > a.height {
 		t.Errorf("the report drew %d lines in %d:\n%s", lines, a.height, a.screen())
 	}
@@ -2323,7 +2362,7 @@ func TestHealthReportDoubleEnter(t *testing.T) {
 	f.entries[2].HasNotes = true // gitlab: its notes read after it's listed
 	f.notes = map[vault.Key]string{gitlab: "n"}
 	a := newApp(t, f, Options{})
-	a.press("ctrl+k", "r", "down")
+	a.press("ctrl+g", "r", "down")
 	held := enterHeld(a)
 	a.press("enter")
 	a.run(held)
@@ -2369,7 +2408,7 @@ func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
 // A setting is changed through a one-line form; the panel stays, shows it, and the app takes up what it uses.
 func TestSettingsChange(t *testing.T) {
 	a, asked := settingsApp(t)
-	a.press("ctrl+k", ",", "down", "down", "enter", "ctrl+u", "90", "enter")
+	a.press("ctrl+g", ",", "down", "down", "enter", "ctrl+u", "90", "enter")
 	if !slices.Equal(*asked, []string{"health.old_after_days=90"}) || a.opts.OldAfter != 90*24*time.Hour {
 		t.Fatalf("asked %q, old after %v", *asked, a.opts.OldAfter)
 	}
@@ -2389,7 +2428,7 @@ func TestSettingsChange(t *testing.T) {
 // One set by the environment, or the vault's place, isn't changed from the app, and says why.
 func TestSettingsNotChanged(t *testing.T) {
 	a, asked := settingsApp(t)
-	a.press("ctrl+k", ",", "down", "down", "down", "enter")
+	a.press("ctrl+g", ",", "down", "down", "down", "enter")
 	if s := a.screen(); a.form != nil || !strings.Contains(s, "set by SESH_TRASH_KEEP_DAYS") {
 		t.Errorf("one set by the environment:\n%s", s)
 	}
@@ -2402,7 +2441,7 @@ func TestSettingsNotChanged(t *testing.T) {
 // An unchanged value writes nothing; lowering one that deletes asks first, and emptying one compares its default.
 func TestSettingsLoss(t *testing.T) {
 	a, asked := settingsApp(t)
-	a.press("ctrl+k", ",", "down", "enter", "enter")
+	a.press("ctrl+g", ",", "down", "enter", "enter")
 	if len(*asked) != 0 || !strings.Contains(a.screen(), "Nothing changed.") {
 		t.Fatalf("unchanged: asked %q\n%s", *asked, a.screen())
 	}
@@ -2438,7 +2477,7 @@ func TestSettingsSmallWindow(t *testing.T) {
 			Applies: "for sesh's agent when it next starts, and in sesh ui from its next start"}}, nil
 	}})
 	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: minHeight})
-	a.press("ctrl+k", ",")
+	a.press("ctrl+g", ",")
 	if s := a.screen(); strings.Count(s, "\n")+1 > minHeight || !strings.Contains(s, "backup.dir") {
 		t.Errorf("the panel at %dx%d:\n%s", minWidth, minHeight, s)
 	}
@@ -2447,7 +2486,7 @@ func TestSettingsSmallWindow(t *testing.T) {
 // A loss is judged against the file as it is when saving, not as the panel last read it.
 func TestSettingsLossAgainstNow(t *testing.T) {
 	a, asked, values := settingsAppValues(t)
-	a.press("ctrl+k", ",")
+	a.press("ctrl+g", ",")
 	values["history.keep"] = "20" // another command raises it
 	a.press("down", "enter", "ctrl+u", "15", "enter")
 	if a.ov == nil || !strings.Contains(a.ov.question, "beyond its newest 15") || len(*asked) != 0 {
@@ -2463,7 +2502,7 @@ func TestChecksPanel(t *testing.T) {
 		{Section: "Vault", Mark: "FAIL", Label: "Entries", Value: "1 of 3 entries can't be read", Details: []string{"password/c/u: times don't read"}},
 	}, ToDo: [][]string{{"Restore it from a backup, or delete it:", "sesh --service password --purge --delete password/c/u"}}}
 	a := newApp(t, f, Options{Settings: func() ([]Setting, error) { return nil, nil }})
-	a.press("ctrl+k", ",", "enter")
+	a.press("ctrl+g", ",", "enter")
 	s := a.screen()
 	for _, want := range []string{"Checks: FAIL: 1 problem", "Agent", "1 of 3 entries can't be read", "Restore it from a backup"} {
 		if !strings.Contains(s, want) {
@@ -2499,7 +2538,7 @@ func TestChecksPanelFits(t *testing.T) {
 		{Section: "Vault", Mark: "FAIL", Label: "Entries", Value: "60 of 60 entries can't be read", Details: details},
 	}}
 	a := newApp(t, f, Options{Settings: func() ([]Setting, error) { return nil, nil }})
-	a.press("ctrl+k", ",", "enter", "down")
+	a.press("ctrl+g", ",", "enter", "down")
 	s := a.screen()
 	if strings.Count(s, "\n")+1 > a.height || !strings.Contains(s, "more lines") || !strings.Contains(s, "password/e00") {
 		t.Errorf("long details:\n%s", s)
@@ -2514,7 +2553,7 @@ func TestChecksOnce(t *testing.T) {
 	f := newFake()
 	f.checks = Checks{Summary: "OK: no problems"}
 	a := newApp(t, f, Options{Settings: func() ([]Setting, error) { return nil, nil }})
-	a.press("ctrl+k", ",")
+	a.press("ctrl+g", ",")
 	_, run := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.press("esc")
 	_, again := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})

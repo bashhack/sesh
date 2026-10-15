@@ -180,7 +180,7 @@ func (m *Model) listLines(w, h int) []string {
 	if len(m.rows) == 0 {
 		msg := "Nothing matches."
 		if m.total == 0 {
-			msg = "The vault is empty. To add an entry: ctrl+k, then a."
+			msg = "The vault is empty. To add an entry: ctrl+g, then a."
 		}
 		out[h/2] = lipgloss.PlaceHorizontal(w, lipgloss.Center, m.th.dimmed().Render(msg))
 		return out
@@ -272,6 +272,7 @@ func (m *Model) helpLines(h int) []string {
 		{"↵", "copy the password, key or code"},
 		{"tab", "show the password and secret fields for 30s"},
 		{"ctrl+k", "actions on the entry, or on those marked"},
+		{"ctrl+g", "sesh: add, the trash, backups, import, settings…"},
 		{"ctrl+y", "copy the username"},
 		{"ctrl+o", "open the URL in the browser"},
 		{"shift ↑ ↓", "scroll the details on the right"},
@@ -294,7 +295,7 @@ func (m *Model) helpLines(h int) []string {
 // footer is the keys, and what was just done, or went wrong.
 func (m *Model) footer(w int) string {
 	th := m.th
-	keys := [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"↑↓", "move"}, {"esc", "clear"}}
+	keys := [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"ctrl+g", "sesh"}, {"esc", "clear"}, {"↑↓", "move"}}
 	switch {
 	case m.focus == focusSide && m.sideWidth() > 0:
 		keys = [][2]string{{"↑↓", "choose"}, {"↵", "open"}}
@@ -304,12 +305,13 @@ func (m *Model) footer(w int) string {
 	case len(m.marked) > 0:
 		keys = [][2]string{{"ctrl+k", "act on " + m.markedWords()}, {"space", "mark"}, {"esc", "unmark"}}
 	case m.focus == focusList:
-		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"space", "mark"}}
+		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"ctrl+g", "sesh"}, {"space", "mark"}}
 		if m.sideWidth() > 0 {
 			keys = append(keys, [2]string{"←", "folders"})
 		}
 	case m.input.Value() == "" && m.filter.kind == sideAll:
-		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"↑↓", "move"}, {"esc", "quit"}, {"?", "help"}}
+		// The arrows last, the first cut in a narrow window.
+		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"ctrl+g", "sesh"}, {"esc", "quit"}, {"?", "help"}, {"↑↓", "move"}}
 	}
 	now := m.opts.Now()
 	if (m.status != "" && now.Before(m.statusUntil)) || now.Before(m.clipUntil) {

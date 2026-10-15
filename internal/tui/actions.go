@@ -102,8 +102,8 @@ type (
 func (m *Model) openMenu() tea.Cmd {
 	e := m.selected()
 	if e == nil {
-		m.ov = &overlay{kind: panelMenu, title: "Actions", items: m.globalItems()}
-		return nil
+		// No entry to act on: what there is to do is sesh's.
+		return m.openSeshMenu()
 	}
 	// Each action is about the entry the menu was opened on, whatever is
 	// selected by the time it runs.
@@ -123,14 +123,18 @@ func (m *Model) openMenu() tea.Cmd {
 		item{key: "h", label: "earlier secrets…", run: func() tea.Cmd { return m.openHistory(&ek) }},
 		item{key: "d", label: "move to the trash", run: func() tea.Cmd { return m.confirmDelete(&ek) }},
 	)
-	g := m.globalItems()
-	g[0].rule = true
-	m.ov = &overlay{kind: panelMenu, title: entryName(e), k: e.Key, items: append(items, g...)}
+	m.ov = &overlay{kind: panelMenu, title: entryName(e), k: e.Key, items: items}
 	return nil
 }
 
-// globalItems are the menu's actions that aren't about one entry.
-func (m *Model) globalItems() []item {
+// openSeshMenu opens the menu of what isn't about one entry.
+func (m *Model) openSeshMenu() tea.Cmd {
+	m.ov = &overlay{kind: panelMenu, title: "sesh", items: m.seshItems()}
+	return nil
+}
+
+// seshItems are the actions that aren't about one entry.
+func (m *Model) seshItems() []item {
 	return []item{
 		{key: "a", label: "add an entry…", run: m.openAdd},
 		{key: "t", label: "the trash…", run: m.openTrash},
