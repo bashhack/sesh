@@ -21,6 +21,9 @@ type Item struct {
 	// Editable says whether sesh ui changes it: db_path, where the vault
 	// is, isn't changed under an open one.
 	Editable bool
+	// Switch says it's on or off (Raw true or false), turned over rather
+	// than typed.
+	Switch bool
 }
 
 // List is every setting, in the order sesh shows them, with its default.
@@ -66,6 +69,15 @@ func (c *Config) list() []Item {
 	dur("clipboard_timeout", &c.ClipboardTimeout, "for other commands now, and in sesh ui from its next start")
 	dur("agent.idle_timeout", &c.AgentIdleTimeout, agentNext)
 	dur("agent.max_lifetime", &c.AgentMaxLifetime, agentNext)
+	sw := func(key string, s *Setting[bool], applies string) {
+		it := Item{Key: key, Value: "off", Raw: "false", Source: s.Source, Origin: s.Origin, Applies: applies, Editable: true, Switch: true}
+		if s.Value {
+			it.Value, it.Raw = "on", "true"
+		}
+		out = append(out, it)
+	}
+	sw("agent.lock_on_sleep", &c.AgentLockOnSleep, "for sesh's agent when it next starts")
+	sw("agent.lock_on_screen_lock", &c.AgentLockOnScreenLock, "for sesh's agent when it next starts (macOS)")
 	days("audit.retention_days", &c.AuditRetentionDays, "0 (keep all)", "the next time a command unlocks the vault")
 	add("master_password.memory", Memory(c.KDFMemory.Value), Memory(c.KDFMemory.Value), c.KDFMemory.Source, c.KDFMemory.Origin, kdfNext)
 	add("master_password.time", strconv.FormatUint(uint64(c.KDFTime.Value), 10), strconv.FormatUint(uint64(c.KDFTime.Value), 10), c.KDFTime.Source, c.KDFTime.Origin, kdfNext)
@@ -75,6 +87,7 @@ func (c *Config) list() []Item {
 	days("trash.keep_days", &c.TrashKeepDays, "0 (no trash: deleting is for good)", "for other commands now, and in sesh ui from its next start")
 	add("history.keep", strconv.Itoa(c.HistoryKeep.Value), strconv.Itoa(c.HistoryKeep.Value), c.HistoryKeep.Source, c.HistoryKeep.Origin, "for other commands now, and in sesh ui from its next start")
 	days("health.old_after_days", &c.HealthOldAfterDays, "0 (not checked)", "at the next health check")
+	sw("ui.lock_on_quit", &c.UILockOnQuit, "when sesh ui next quits")
 	add("db_path", c.DBPath.Value, c.DBPath.Value, c.DBPath.Source, c.DBPath.Origin, "")
 	dir := Item{Key: "backup.dir", Value: c.BackupFolder(), Raw: underHome(c.BackupDir.Value), Source: c.BackupDir.Source, Origin: c.BackupDir.Origin, Applies: "at the next backup", Editable: true}
 	out = append(out, dir)

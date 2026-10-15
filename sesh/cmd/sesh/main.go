@@ -475,10 +475,15 @@ func keySourceFromAgent(dbPath string, cfg passwordPromptConfig) (oracle databas
 			secure.SecureZeroBytes(kept)
 			return agent.NewOracle(conn, id), nil, nil
 		}
-		var pe *agent.ProtocolError
-		if errors.As(uerr, &pe) && pe.Code == agent.ErrCodeWrongPassword {
+		retry, stop := afterAgentUnlock(uerr)
+		switch {
+		case retry:
 			secure.SecureZeroBytes(kept)
 			continue
+		case stop != nil:
+			secure.SecureZeroBytes(kept)
+			closeAgentConn(conn)
+			return nil, nil, stop
 		}
 		closeAgentConn(conn)
 		fmt.Fprintf(os.Stderr, "warning: sesh agent unlock failed: %v\n", uerr) //nolint:errcheck // best-effort warning
@@ -491,6 +496,24 @@ func keySourceFromAgent(dbPath string, cfg passwordPromptConfig) (oracle databas
 		return nil, nil, database.ErrWrongPassword
 	}
 	return nil, nil, fmt.Errorf("%w (after %d attempts)", database.ErrWrongPassword, attempts)
+}
+
+// afterAgentUnlock is what an unlock the agent refused leads to: asking
+// again (a wrong password), stopping with stop (the screen locked while it
+// was under way: not a key to make outside the agent), or neither, when
+// the agent can't do it and the key is derived here instead.
+func afterAgentUnlock(err error) (retry bool, stop error) {
+	var pe *agent.ProtocolError
+	if !errors.As(err, &pe) {
+		return false, nil
+	}
+	switch pe.Code {
+	case agent.ErrCodeWrongPassword:
+		return true, nil
+	case agent.ErrCodeScreenLocked:
+		return false, errors.New("the screen locked while sesh was unlocking: unlock it again")
+	}
+	return false, nil
 }
 
 func closeAgentConn(conn *agent.Conn) {

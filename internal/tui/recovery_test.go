@@ -54,7 +54,7 @@ func recoveryApp(t *testing.T, set bool) (*app, *[]string) {
 func TestRecoveryMake(t *testing.T) {
 	a, asked := recoveryApp(t, false)
 	a.press("ctrl+g", ",")
-	if s := a.screen(); !strings.Contains(s, "Recovery key             none") || !strings.Contains(s, "make one") {
+	if s := a.screen(); !strings.Contains(s, "Recovery key              none") || !strings.Contains(s, "make one") {
 		t.Fatalf("the row:\n%s", s)
 	}
 	a.press("enter")
@@ -69,7 +69,7 @@ func TestRecoveryMake(t *testing.T) {
 	if !slices.Equal(*asked, []string{"new", "save"}) || a.form != nil {
 		t.Fatalf("asked %q, form %+v", *asked, a.form)
 	}
-	if s := a.screen(); !strings.Contains(s, "The recovery key is set for this vault.") || !strings.Contains(s, "Recovery key             set, made 2026-10-05") {
+	if s := a.screen(); !strings.Contains(s, "The recovery key is set for this vault.") || !strings.Contains(s, "Recovery key              set, made 2026-10-05") {
 		t.Errorf("after:\n%s", s)
 	}
 }
@@ -124,7 +124,7 @@ func TestRecoveryRemove(t *testing.T) {
 		t.Errorf("the panel under it: %+v", s)
 	}
 	a.press("n")
-	if s := a.screen(); a.ov == nil || a.ov.kind != panelSettings || !strings.Contains(s, "Recovery key             none") {
+	if s := a.screen(); a.ov == nil || a.ov.kind != panelSettings || !strings.Contains(s, "Recovery key              none") {
 		t.Errorf("after:\n%s", s)
 	}
 }

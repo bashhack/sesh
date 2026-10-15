@@ -62,6 +62,11 @@ const (
 	ErrCodeTouchIDLockedOut        = "touchid_locked_out"
 	ErrCodeTouchIDFailed           = "touchid_failed"
 	ErrCodeTouchIDStale            = "touchid_stale"
+
+	// ErrCodeScreenLocked: the screen locked while the unlock was under
+	// way, so the key wasn't installed; it's asked for again, not derived
+	// outside the agent.
+	ErrCodeScreenLocked = "screen_locked"
 )
 
 // envelope is the shared shell every message wears. Used during

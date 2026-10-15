@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/testutil"
 )
 
@@ -192,5 +194,21 @@ func TestResolvePasswordPrompt_NonTTYIsTerminalPromptButNotInteractive(t *testin
 	}
 	if cfg.prompt == nil {
 		t.Fatal("prompt callback should be set even when not interactive")
+	}
+}
+
+// A refused unlock asks again for a wrong password, stops when the screen locked meanwhile, and otherwise leaves the
+// key to be made here.
+func TestAfterAgentUnlock(t *testing.T) {
+	if retry, stop := afterAgentUnlock(&agent.ProtocolError{Code: agent.ErrCodeWrongPassword}); !retry || stop != nil {
+		t.Errorf("wrong password: %v, %v", retry, stop)
+	}
+	if retry, stop := afterAgentUnlock(&agent.ProtocolError{Code: agent.ErrCodeScreenLocked}); retry || stop == nil || !strings.Contains(stop.Error(), "screen locked") {
+		t.Errorf("screen locked: %v, %v", retry, stop)
+	}
+	for _, err := range []error{&agent.ProtocolError{Code: agent.ErrCodeInternal}, errors.New("broken pipe")} {
+		if retry, stop := afterAgentUnlock(err); retry || stop != nil {
+			t.Errorf("%v: %v, %v", err, retry, stop)
+		}
 	}
 }

@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/touchid"
 )
 
@@ -462,4 +464,203 @@ func TestServer_ManualLockAfterLateLock(t *testing.T) {
 		t.Fatal("the agent stopped after a lock asked for")
 	case <-time.After(100 * time.Millisecond):
 	}
+}
+
+// With WithLockOnSleep, the first request after the computer slept finds
+// the agent locked, though no timeout has passed; a pause awake, or a
+// short step of the clock, doesn't lock it. Without it, a short sleep
+// leaves it unlocked.
+func TestLockOnSleep(t *testing.T) {
+	for _, c := range []struct {
+		pass   func(clk *fakeClock, check func())
+		name   string
+		opts   []Option
+		locked bool
+	}{
+		// Small steps of the clock, each seen, don't add up to a sleep.
+		{func(clk *fakeClock, check func()) {
+			clk.sleep(6 * time.Second)
+			check()
+			clk.sleep(6 * time.Second)
+		}, "the clock stepped 6s twice", []Option{WithLockOnSleep()}, false},
+		{func(clk *fakeClock, _ func()) { clk.sleep(30 * time.Second) }, "asleep 30s", []Option{WithLockOnSleep()}, true},
+		{func(clk *fakeClock, _ func()) { clk.sleep(2 * time.Second) }, "the clock stepped 2s", []Option{WithLockOnSleep()}, false},
+		{func(clk *fakeClock, _ func()) { clk.advance(30 * time.Second) }, "awake 30s", []Option{WithLockOnSleep()}, false},
+		{func(clk *fakeClock, _ func()) { clk.sleep(30 * time.Second) }, "asleep 30s, not asked to", nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clk := monoClock()
+			sockPath := tempSocketPath(t)
+			serve(t, sockPath, append(c.opts, withClock(clk), WithIdleTimeout(10*time.Minute))...)
+			conn, id := unlockClient(t, sockPath)
+			defer mustClose(t, conn)
+			c.pass(clk, func() {
+				if _, _, err := Encrypt(conn, []byte("x"), nil, id); err != nil {
+					t.Fatalf("between the steps: %v", err)
+				}
+			})
+			_, _, err := Encrypt(conn, []byte("x"), nil, id)
+			var pe *ProtocolError
+			if locked := errors.As(err, &pe) && pe.Code == ErrCodeNotUnlocked; locked != c.locked {
+				t.Errorf("locked = %v (%v), want %v", locked, err, c.locked)
+			}
+		})
+	}
+}
+
+// With WithScreenLock, the agent locks when the screen locks; unlocked
+// again while it stays locked (over SSH, to the same agent), it stays so,
+// until the screen locks again.
+func TestLockOnScreenLock(t *testing.T) {
+	var screen atomic.Bool
+	sockPath := tempSocketPath(t)
+	serve(t, sockPath, WithScreenLock(screen.Load), withQuickScreenChecks())
+	conn, id := unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+	locked := func() bool {
+		_, _, err := Encrypt(conn, []byte("x"), nil, id)
+		var pe *ProtocolError
+		return errors.As(err, &pe) && pe.Code == ErrCodeNotUnlocked
+	}
+	waitLocked := func(what string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !locked() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: the agent didn't lock", what)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if locked() {
+		t.Fatal("locked, the screen not")
+	}
+	screen.Store(true)
+	waitLocked("the screen locked")
+	conn, id = unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+	time.Sleep(50 * time.Millisecond)
+	if locked() {
+		t.Fatal("unlocked while the screen stays locked, it locked again")
+	}
+	screen.Store(false)
+	time.Sleep(50 * time.Millisecond)
+	screen.Store(true)
+	waitLocked("the screen locked again")
+}
+
+// A screen lock stops an agent that exits on auto locks, unless it's
+// unlocked again within the idle timeout.
+func TestScreenLockStops(t *testing.T) {
+	var screen atomic.Bool
+	clk := monoClock()
+	sockPath := tempSocketPath(t)
+	_, done := serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute), WithExitOnAutoLock(), WithScreenLock(screen.Load), withQuickScreenChecks())
+	conn, _ := unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+	time.Sleep(50 * time.Millisecond)
+	screen.Store(true)
+	time.Sleep(100 * time.Millisecond)
+	// Locked again by hand (sesh ui quitting, say): the stop still holds.
+	if err := Lock(conn); err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(11 * time.Minute)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the agent locked by the screen didn't stop")
+	}
+}
+
+// An unlock under way when the screen locks doesn't install its key.
+func TestScreenLockDuringUnlock(t *testing.T) {
+	var screen atomic.Bool
+	sockPath := tempSocketPath(t)
+	serve(t, sockPath, WithScreenLock(screen.Load), withQuickScreenChecks())
+	time.Sleep(50 * time.Millisecond)
+	orig := deriveKey
+	t.Cleanup(func() { deriveKey = orig })
+	deriveKey = func(password, salt []byte, p database.Argon2idParams) []byte {
+		key := orig(password, salt, p)
+		lockScreenNow(&screen)
+		return key
+	}
+	params := lightParams()
+	salt, verify := sealVerify(t, "correct-horse", params)
+	conn := dialClient(t, sockPath)
+	defer mustClose(t, conn)
+	var pe *ProtocolError
+	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); !errors.As(err, &pe) || pe.Code != ErrCodeScreenLocked {
+		t.Errorf("Unlock = %v, want refused: the screen locked meanwhile", err)
+	}
+	// Two at once: the one waiting on the first is dropped too.
+	screen.Store(false)
+	time.Sleep(50 * time.Millisecond)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			c := dialClient(t, sockPath)
+			defer mustClose(t, c)
+			errs <- Unlock(c, []byte("correct-horse"), salt, verify, params)
+		}()
+	}
+	for range 2 {
+		if err := <-errs; !errors.As(err, &pe) || pe.Code != ErrCodeScreenLocked {
+			t.Errorf("queued Unlock = %v, want refused", err)
+		}
+	}
+}
+
+// An unlock with a fingerprint under way when the screen locks doesn't
+// install its key either.
+func TestScreenLockDuringTouchIDUnlock(t *testing.T) {
+	var screen atomic.Bool
+	sockPath := tempSocketPath(t)
+	serve(t, sockPath, WithScreenLock(screen.Load), withQuickScreenChecks())
+	pub, _ := softwareChip(t, nil)
+	conn, verify, id := unlockForTouchID(t, sockPath)
+	defer mustClose(t, conn)
+	w, err := WrapKey(conn, id, WrapForTouchID, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Lock(conn); err != nil {
+		t.Fatal(err)
+	}
+	unwrap := TouchIDUnwrap
+	TouchIDUnwrap = func(blob []byte, w touchid.Wrapped, aad []byte) ([]byte, error) {
+		key, err := unwrap(blob, w, aad)
+		lockScreenNow(&screen) // as the fingerprint is read
+		return key, err
+	}
+	f := touchid.NewFile(id, []byte("chip blob"), pub, w)
+	var pe *ProtocolError
+	if err := UnlockTouchID(conn, f, verify); !errors.As(err, &pe) || pe.Code != ErrCodeScreenLocked {
+		t.Errorf("UnlockTouchID = %v, want refused: the screen locked meanwhile", err)
+	}
+	screen.Store(false)
+	time.Sleep(50 * time.Millisecond)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			c := dialClient(t, sockPath)
+			defer mustClose(t, c)
+			errs <- UnlockTouchID(c, f, verify)
+		}()
+	}
+	for range 2 {
+		if err := <-errs; !errors.As(err, &pe) || pe.Code != ErrCodeScreenLocked {
+			t.Errorf("queued UnlockTouchID = %v, want refused", err)
+		}
+	}
+}
+
+// lockScreenNow locks the screen during an unlock: after a pause in which
+// a second request queues behind it, and long enough for the agent to see.
+func lockScreenNow(screen *atomic.Bool) {
+	time.Sleep(50 * time.Millisecond)
+	screen.Store(true)
+	time.Sleep(100 * time.Millisecond)
 }

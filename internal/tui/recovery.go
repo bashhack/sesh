@@ -245,7 +245,7 @@ func (m *Model) recoveryRow(r Recovery) item {
 		detail = "If you forget the master password, sesh recover sets a new one with it. Enter makes a new one, replacing it, or removes it."
 	}
 	return item{
-		label:  fmt.Sprintf("%-24s %s", "Recovery key", r.Said),
+		label:  fmt.Sprintf("%-25s %s", "Recovery key", r.Said),
 		detail: detail,
 		does:   does,
 		run:    func() tea.Cmd { return m.openRecovery(&r) },

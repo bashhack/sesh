@@ -94,6 +94,10 @@ type Config struct {
 	ClipboardTimeout Setting[time.Duration]
 	AgentIdleTimeout Setting[time.Duration]
 	AgentMaxLifetime Setting[time.Duration]
+	// AgentLockOnSleep and AgentLockOnScreenLock say whether sesh's agent
+	// locks when the computer sleeps, and when its screen locks (macOS).
+	AgentLockOnSleep      Setting[bool]
+	AgentLockOnScreenLock Setting[bool]
 	// AuditRetentionDays is how many days of audit log events the vault
 	// keeps; 0 keeps everything.
 	AuditRetentionDays Setting[int]
@@ -119,7 +123,9 @@ type Config struct {
 	KDFMemory  Setting[uint32]
 	KDFTime    Setting[uint32]
 	KDFThreads Setting[uint8]
-	FileFound  bool
+	// UILockOnQuit says whether quitting sesh ui locks sesh's agent.
+	UILockOnQuit Setting[bool]
+	FileFound    bool
 }
 
 // BackupFolder is where backups go: BackupDir, or a backups folder next to
@@ -157,6 +163,9 @@ const (
 	EnvTrashKeepDays      = "SESH_TRASH_KEEP_DAYS"
 	EnvHistoryKeep        = "SESH_HISTORY_KEEP"
 	EnvHealthOldAfterDays = "SESH_HEALTH_OLD_AFTER_DAYS"
+	EnvUILockOnQuit       = "SESH_UI_LOCK_ON_QUIT"
+	EnvAgentLockOnSleep   = "SESH_AGENT_LOCK_ON_SLEEP"
+	EnvAgentLockOnScreen  = "SESH_AGENT_LOCK_ON_SCREEN_LOCK"
 )
 
 // fileConfig is the config file's shape. Durations are strings such as
@@ -170,8 +179,10 @@ type fileConfig struct {
 	DBPath           string `toml:"db_path"`
 	ClipboardTimeout string `toml:"clipboard_timeout"`
 	Agent            struct {
-		IdleTimeout string `toml:"idle_timeout"`
-		MaxLifetime string `toml:"max_lifetime"`
+		IdleTimeout      string `toml:"idle_timeout"`
+		MaxLifetime      string `toml:"max_lifetime"`
+		LockOnSleep      bool   `toml:"lock_on_sleep"`
+		LockOnScreenLock bool   `toml:"lock_on_screen_lock"`
 	} `toml:"agent"`
 	MasterPassword struct {
 		Memory  string `toml:"memory"`
@@ -190,6 +201,9 @@ type fileConfig struct {
 	Health struct {
 		OldAfterDays int64 `toml:"old_after_days"`
 	} `toml:"health"`
+	UI struct {
+		LockOnQuit bool `toml:"lock_on_quit"`
+	} `toml:"ui"`
 }
 
 // Path returns the config file's location: $XDG_CONFIG_HOME/sesh/config.toml
@@ -238,17 +252,20 @@ func defaults(path string) (*Config, error) {
 		return nil, fmt.Errorf("resolve default database path: %w", err)
 	}
 	c := &Config{
-		Path:               path,
-		DBPath:             Setting[string]{Value: dbDefault},
-		ClipboardTimeout:   Setting[time.Duration]{Value: DefaultClipboardTimeout},
-		AgentIdleTimeout:   Setting[time.Duration]{Value: agent.DefaultIdleTimeout},
-		AgentMaxLifetime:   Setting[time.Duration]{Value: agent.DefaultMaxLifetime},
-		AuditRetentionDays: Setting[int]{Value: DefaultAuditRetentionDays},
-		BackupEveryDays:    Setting[int]{Value: DefaultBackupEveryDays},
-		BackupKeep:         Setting[int]{Value: DefaultBackupKeep},
-		TrashKeepDays:      Setting[int]{Value: DefaultTrashKeepDays},
-		HistoryKeep:        Setting[int]{Value: DefaultHistoryKeep},
-		HealthOldAfterDays: Setting[int]{Value: DefaultHealthOldAfterDays},
+		Path:                  path,
+		DBPath:                Setting[string]{Value: dbDefault},
+		ClipboardTimeout:      Setting[time.Duration]{Value: DefaultClipboardTimeout},
+		AgentIdleTimeout:      Setting[time.Duration]{Value: agent.DefaultIdleTimeout},
+		AgentMaxLifetime:      Setting[time.Duration]{Value: agent.DefaultMaxLifetime},
+		AuditRetentionDays:    Setting[int]{Value: DefaultAuditRetentionDays},
+		BackupEveryDays:       Setting[int]{Value: DefaultBackupEveryDays},
+		BackupKeep:            Setting[int]{Value: DefaultBackupKeep},
+		TrashKeepDays:         Setting[int]{Value: DefaultTrashKeepDays},
+		HistoryKeep:           Setting[int]{Value: DefaultHistoryKeep},
+		HealthOldAfterDays:    Setting[int]{Value: DefaultHealthOldAfterDays},
+		UILockOnQuit:          Setting[bool]{Value: true},
+		AgentLockOnSleep:      Setting[bool]{Value: true},
+		AgentLockOnScreenLock: Setting[bool]{Value: true},
 	}
 	c.defaultKDF()
 	return c, nil
@@ -335,6 +352,15 @@ func (c *Config) applyFile() error {
 			return err
 		}
 	}
+	if in("ui.lock_on_quit") {
+		c.UILockOnQuit = Setting[bool]{Value: f.UI.LockOnQuit, Source: FromFile, Origin: from("ui.lock_on_quit")}
+	}
+	if in("agent.lock_on_sleep") {
+		c.AgentLockOnSleep = Setting[bool]{Value: f.Agent.LockOnSleep, Source: FromFile, Origin: from("agent.lock_on_sleep")}
+	}
+	if in("agent.lock_on_screen_lock") {
+		c.AgentLockOnScreenLock = Setting[bool]{Value: f.Agent.LockOnScreenLock, Source: FromFile, Origin: from("agent.lock_on_screen_lock")}
+	}
 	if in("master_password.memory") {
 		if err := setKDFMemory(&c.KDFMemory, f.MasterPassword.Memory, FromFile, from("master_password.memory")); err != nil {
 			return err
@@ -408,7 +434,32 @@ func (c *Config) applyEnv() error {
 			}
 		}
 	}
+	for _, sw := range []struct {
+		dst *Setting[bool]
+		env string
+	}{
+		{&c.UILockOnQuit, EnvUILockOnQuit},
+		{&c.AgentLockOnSleep, EnvAgentLockOnSleep},
+		{&c.AgentLockOnScreenLock, EnvAgentLockOnScreen},
+	} {
+		if v, ok := os.LookupEnv(sw.env); ok && v != "" {
+			if err := setSwitch(sw.dst, v, FromEnv, sw.env); err != nil {
+				return err
+			}
+		}
+	}
 	return c.applyKDFEnv()
+}
+
+// setSwitch sets an on-or-off setting from raw: true or false, as the
+// config file has it.
+func setSwitch(dst *Setting[bool], raw string, src Source, origin string) error {
+	on, ok := map[string]bool{"true": true, "false": false}[raw]
+	if !ok {
+		return fmt.Errorf("%s = %q: want true or false", origin, raw)
+	}
+	*dst = Setting[bool]{Value: on, Source: src, Origin: origin}
+	return nil
 }
 
 // KDFFromEnv resolves the Argon2id settings from the environment and the

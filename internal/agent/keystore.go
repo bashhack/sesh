@@ -30,6 +30,9 @@ var (
 	// errTouchIDStale: the Touch ID file's key no longer opens the vault,
 	// e.g. the master password changed without re-wrapping.
 	errTouchIDStale = errors.New("the Touch ID unlock is out of date for this vault")
+	// errScreenLockedMeanwhile: the screen locked while an unlock was
+	// under way, so its key isn't installed.
+	errScreenLockedMeanwhile = errors.New("the screen locked while sesh was unlocking; unlock again")
 )
 
 // clock is the time source the keystore schedules auto-locks with.
@@ -56,6 +59,10 @@ func (realClock) AfterFunc(d time.Duration, f func()) stopper { return time.Afte
 type keystore struct {
 	lastActivity time.Time
 	unlockedAt   time.Time
+	// lastSeen is when the keystore last checked its deadlines while
+	// unlocked, by both clocks: one that stops while the computer sleeps,
+	// and the wall clock, which doesn't.
+	lastSeen time.Time
 	// lastUnlock survives lock so status can report when the key was
 	// last installed.
 	lastUnlock time.Time
@@ -86,6 +93,11 @@ type keystore struct {
 	// shutDown is set by shutdown and guarded by mu. Once set, no key is
 	// ever installed again.
 	shutDown bool
+	// lockOnSleep locks the keystore once the computer has slept.
+	lockOnSleep bool
+	// screenLocks counts the times the screen has locked: an unlock that
+	// began before one doesn't install its key.
+	screenLocks uint64
 	// unlockMu is held across derive and install so two unlocks cannot
 	// run Argon2id at once or overwrite each other's key.
 	unlockMu sync.Mutex
@@ -109,6 +121,9 @@ type keyState struct {
 // opens. password is zeroed before return. A cached key is zeroed first
 // so a re-unlock replaces it completely.
 func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2idParams) error {
+	// Counted as the request arrives, before it waits on another unlock:
+	// a screen lock while it waits drops it too.
+	locks := k.screenLockCount()
 	k.unlockMu.Lock()
 	defer k.unlockMu.Unlock()
 	defer secure.SecureZeroBytes(password)
@@ -126,7 +141,7 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 
 	derived := deriveKey(password, salt, params)
 	defer secure.SecureZeroBytes(derived)
-	if err := k.installVerified(derived, verify, "unlocked"); err != nil {
+	if err := k.installVerified(derived, verify, "unlocked", locks); err != nil {
 		if errors.Is(err, errKeyMismatch) {
 			return errWrongPassword
 		}
@@ -141,6 +156,7 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 // doesn't prompt again, unless fresh asks that it does. Like Unlock, it
 // runs one at a time.
 func (k *keystore) UnlockTouchID(verify []byte, fresh bool, unwrap func() ([]byte, error)) error {
+	locks := k.screenLockCount() // as for Unlock
 	k.unlockMu.Lock()
 	defer k.unlockMu.Unlock()
 
@@ -157,7 +173,7 @@ func (k *keystore) UnlockTouchID(verify []byte, fresh bool, unwrap func() ([]byt
 		return err
 	}
 	defer secure.SecureZeroBytes(key)
-	if err := k.installVerified(key, verify, "unlocked (Touch ID)"); err != nil {
+	if err := k.installVerified(key, verify, "unlocked (Touch ID)", locks); err != nil {
 		if errors.Is(err, errKeyMismatch) {
 			return errTouchIDStale
 		}
@@ -167,9 +183,10 @@ func (k *keystore) UnlockTouchID(verify []byte, fresh bool, unwrap func() ([]byt
 }
 
 // installVerified installs key if it opens the verify blob, and logs
-// event. It returns errKeyMismatch when the blob doesn't open. Caller
-// holds unlockMu.
-func (k *keystore) installVerified(key, verify []byte, event string) error {
+// event. It returns errKeyMismatch when the blob doesn't open, and
+// errScreenLockedMeanwhile when the screen has locked since the unlock
+// began (screenLocks was locks). Caller holds unlockMu.
+func (k *keystore) installVerified(key, verify []byte, event string, locks uint64) error {
 	opened, err := database.Decrypt(key, verify)
 	if err != nil || !bytes.Equal(opened, []byte(database.VerifyPlaintext)) {
 		secure.SecureZeroBytes(opened)
@@ -182,10 +199,13 @@ func (k *keystore) installVerified(key, verify []byte, event string) error {
 	if k.shutDown {
 		return errShutDown
 	}
+	if k.screenLocks != locks {
+		return errScreenLockedMeanwhile
+	}
 	k.installLocked(key)
 	k.unlockID = UnlockID(verify)
 	now := k.clock().Now()
-	k.unlockedAt, k.lastActivity, k.lastUnlock = now, now, now
+	k.unlockedAt, k.lastActivity, k.lastUnlock, k.lastSeen = now, now, now, now
 	k.generation++
 	k.scheduleLocked()
 	// Logged under mu, like every lock, so the log's order is the order
@@ -248,6 +268,11 @@ func (k *keystore) Encrypt(plaintext, aad []byte, unlockID string) (ciphertext, 
 func (k *keystore) lock(reason string) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if k.derivedKey == nil {
+		// Locked already: nothing changes, so a stop planned since (after
+		// a late or screen lock) still holds.
+		return
+	}
 	k.clearLocked()
 	k.log.printf("locked (%s)", reason)
 }
@@ -441,8 +466,12 @@ func (k *keystore) lockIfExpiredFor(sweep bool) {
 		return
 	}
 	now := k.clock().Now()
+	last := k.lastSeen
+	k.lastSeen = now
 	var reason string
 	switch {
+	case k.lockOnSleep && !last.IsZero() && asleep(last, now) >= sleepGap:
+		reason = "sleep"
 	case k.idleTimeout > 0 && since(now, k.lastActivity) >= k.idleTimeout:
 		reason = "idle timeout"
 	case k.maxLifetime > 0 && since(now, k.unlockedAt) >= k.maxLifetime:
@@ -469,6 +498,39 @@ func (k *keystore) lockedSince(gen uint64) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.generation == gen && k.derivedKey == nil
+}
+
+// sleepGap is how far the wall clock must run ahead of the one that stops
+// in sleep for the keystore to take it as the computer having slept, not
+// a small correction to the clock.
+const sleepGap = 10 * time.Second
+
+// asleep is how much further the wall clock moved than the monotonic one
+// from last to now: the time the computer slept. 0 when either time has
+// no monotonic reading, as then both are the wall clock.
+func asleep(last, now time.Time) time.Duration {
+	return now.Round(0).Sub(last.Round(0)) - now.Sub(last)
+}
+
+// screenLockCount is how many times the screen has locked so far.
+func (k *keystore) screenLockCount() uint64 {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.screenLocks
+}
+
+// screenLocked counts the screen locking, and locks the keystore when it
+// holds a key, saying whether it did and the generation it locked at.
+func (k *keystore) screenLocked() (gen uint64, locked bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.screenLocks++
+	if k.derivedKey == nil {
+		return 0, false
+	}
+	k.clearLocked()
+	k.log.printf("locked (screen locked)")
+	return k.generation, true
 }
 
 // since is how long ago t was at now, by whichever clock says longer: the

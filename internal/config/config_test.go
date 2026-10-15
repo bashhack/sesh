@@ -18,7 +18,7 @@ func isolate(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
-	for _, k := range []string{EnvDBPath, EnvClipboardTimeout, EnvAgentIdleTimeout, EnvAgentMaxLifetime, EnvAuditRetentionDays, EnvKDFMemory, EnvKDFTime, EnvKDFThreads, EnvBackupDir, EnvBackupEveryDays, EnvBackupKeep, EnvTrashKeepDays, EnvHistoryKeep, EnvHealthOldAfterDays} {
+	for _, k := range []string{EnvDBPath, EnvClipboardTimeout, EnvAgentIdleTimeout, EnvAgentMaxLifetime, EnvAuditRetentionDays, EnvKDFMemory, EnvKDFTime, EnvKDFThreads, EnvBackupDir, EnvBackupEveryDays, EnvBackupKeep, EnvTrashKeepDays, EnvHistoryKeep, EnvHealthOldAfterDays, EnvUILockOnQuit, EnvAgentLockOnSleep, EnvAgentLockOnScreen} {
 		t.Setenv(k, "")
 	}
 	return filepath.Join(home, "xdg", "sesh", "config.toml")

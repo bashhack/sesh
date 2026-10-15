@@ -2982,7 +2982,7 @@ func settingsApp(t *testing.T) (*app, *[]string) {
 // settingsAppValues is settingsApp, with the fake config's values, to change as another command would.
 func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
 	t.Helper()
-	values := map[string]string{"history.keep": "10", "health.old_after_days": "365"}
+	values := map[string]string{"history.keep": "10", "health.old_after_days": "365", "ui.lock_on_quit": "false"}
 	inFile := map[string]bool{}
 	said := func(key string) string {
 		if inFile[key] {
@@ -2998,6 +2998,7 @@ func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
 				{Key: "health.old_after_days", Value: values["health.old_after_days"], Raw: values["health.old_after_days"], Default: "365", Said: said("health.old_after_days"), Applies: "at the next health check", Editable: true},
 				{Key: "trash.keep_days", Value: "0", Raw: "0", Said: "environment: SESH_TRASH_KEEP_DAYS", Env: "SESH_TRASH_KEEP_DAYS", Editable: true},
 				{Key: "db_path", Value: "/v.db", Said: "default"},
+				{Key: "ui.lock_on_quit", Value: map[string]string{"true": "on", "false": "off"}[values["ui.lock_on_quit"]], Raw: values["ui.lock_on_quit"], Default: "true", Said: "default", Applies: "when sesh ui next quits", Editable: true, Switch: true},
 			}, nil
 		},
 		SetSetting: func(key, value string) (Live, error) {
@@ -3020,7 +3021,7 @@ func TestSettingsChange(t *testing.T) {
 	if !slices.Equal(*asked, []string{"health.old_after_days=90"}) || a.opts.OldAfter != 90*24*time.Hour {
 		t.Fatalf("asked %q, old after %v", *asked, a.opts.OldAfter)
 	}
-	if s := a.screen(); a.ov == nil || a.ov.kind != panelSettings || !strings.Contains(s, "health.old_after_days    90") || !strings.Contains(s, "Saved health.old_after_days") {
+	if s := a.screen(); a.ov == nil || a.ov.kind != panelSettings || !strings.Contains(s, "health.old_after_days     90") || !strings.Contains(s, "Saved health.old_after_days") {
 		t.Errorf("after saving:\n%s", s)
 	}
 	a.press("up", "enter", "ctrl+u", "-1", "enter")
@@ -3044,6 +3045,19 @@ func TestSettingsChange(t *testing.T) {
 	a.press("down", "enter", "ctrl+u", "enter")
 	if (*asked)[len(*asked)-1] != "health.old_after_days=" || !strings.Contains(a.screen(), "Took health.old_after_days out of the config file") {
 		t.Errorf("emptied: asked %q\n%s", *asked, a.screen())
+	}
+}
+
+// Enter turns a switch over at once, with nothing to type.
+func TestSettingsSwitch(t *testing.T) {
+	a, asked := settingsApp(t)
+	a.press("ctrl+g", ",", "down", "down", "down", "down", "down", "down", "enter")
+	if s := a.screen(); a.form != nil || !slices.Equal(*asked, []string{"ui.lock_on_quit=true"}) || !strings.Contains(s, "Turned ui.lock_on_quit on") || !strings.Contains(s, "ui.lock_on_quit           on") || !strings.Contains(s, "turn it off") {
+		t.Fatalf("asked %q, form %v\n%s", *asked, a.form != nil, s)
+	}
+	a.press("enter")
+	if s := a.screen(); (*asked)[1] != "ui.lock_on_quit=false" || !strings.Contains(s, "Turned ui.lock_on_quit off") {
+		t.Errorf("asked %q\n%s", *asked, s)
 	}
 }
 

@@ -196,6 +196,8 @@ clipboard_timeout = "30s"               # how long a copied secret stays on the 
 [agent]
 idle_timeout = "10m"                    # 0 disables
 max_lifetime = "8h"                     # 0 disables
+lock_on_sleep = true                    # lock when the computer sleeps
+lock_on_screen_lock = true              # lock when the screen locks (macOS)
 
 [audit]
 retention_days = 90                     # days of audit log events to keep; 0 keeps everything
@@ -207,6 +209,9 @@ dir = "~/Backups/sesh"                  # where they go (default: a backups fold
 
 [health]                                # what sesh health checks
 old_after_days = 365                    # a password or API key unchanged this long is old; 0 doesn't check
+
+[ui]
+lock_on_quit = false                    # quitting sesh ui leaves sesh unlocked (default: true, it locks)
 
 [master_password]                       # how hard your master password is to guess-check (Argon2id)
 memory = "256MiB"                       # memory each check takes: 19MiB to 1GiB
@@ -243,22 +248,25 @@ Ready. Run `sesh config` to see your settings.
 ```
 config file: /Users/me/.config/sesh/config.toml
 
-clipboard_timeout        30s           (default)
-agent.idle_timeout       25m           (config file)
-agent.max_lifetime       8h            (default)
-audit.retention_days     90 days       (default)
-master_password.memory   256MiB        (default)
-master_password.time     3             (default)
-master_password.threads  4             (default)
-backup.every_days        1 day         (default)
-backup.keep              7             (default)
-trash.keep_days          30 days       (default)
-history.keep             10            (default)
-health.old_after_days    365 days      (default)
-db_path                  /Users/me/vaults/sesh.db
-                         (config file)
-backup.dir               /Users/me/vaults/backups
-                         (default: next to the vault)
+clipboard_timeout          30s           (default)
+agent.idle_timeout         25m           (config file)
+agent.max_lifetime         8h            (default)
+agent.lock_on_sleep        on            (default)
+agent.lock_on_screen_lock  on            (default)
+audit.retention_days       90 days       (default)
+master_password.memory     256MiB        (default)
+master_password.time       3             (default)
+master_password.threads    4             (default)
+backup.every_days          1 day         (default)
+backup.keep                7             (default)
+trash.keep_days            30 days       (default)
+history.keep               10            (default)
+health.old_after_days      365 days      (default)
+ui.lock_on_quit            on            (default)
+db_path                    /Users/me/vaults/sesh.db
+                           (config file)
+backup.dir                 /Users/me/vaults/backups
+                           (default: next to the vault)
 ```
 
 `sesh config set <key> <value>` changes one in the config file, as `sesh ui`'s settings panel does: the value is checked as sesh checks it when it loads, and the file keeps its comments and order (a linked one, from a dotfile manager, is changed where it lives). An empty value (`sesh config set history.keep ""`) takes the setting out of the file, back to its default. It says when the change takes effect. Lowering a setting that deletes as it goes (`history.keep`, `trash.keep_days`, `audit.retention_days`, `backup.keep`) asks first, saying what will go; `--force` changes it without asking, and is needed without a terminal. A setting an environment variable or a flag gives wins over the file, so it's refused here: change it there. `db_path` is moved with `sesh init`.
@@ -337,6 +345,8 @@ $ sesh config set clipboard_timeout 15s
 | `SESH_AUTH_SOCK`       | Socket path for the sesh agent | `<user-cache-dir>/sesh/agent.sock` |
 | `SESH_AGENT_IDLE_TIMEOUT` | Agent locks after this long without use; `0` disables (config: `agent.idle_timeout`). Same as `sesh agent --idle-timeout` | `10m` |
 | `SESH_AGENT_MAX_LIFETIME` | Agent locks this long after each unlock; `0` disables (config: `agent.max_lifetime`). Same as `sesh agent --max-lifetime` | `8h` |
+| `SESH_AGENT_LOCK_ON_SLEEP` | `false`: the agent doesn't lock when the computer sleeps (config: `agent.lock_on_sleep`); read by the command that starts the agent | `true` |
+| `SESH_AGENT_LOCK_ON_SCREEN_LOCK` | `false`: the agent doesn't lock when the screen locks, on macOS (config: `agent.lock_on_screen_lock`); read by the command that starts the agent | `true` |
 | `SESH_AUDIT_RETENTION_DAYS` | Days of audit log events the vault keeps; `0` keeps everything (config: `audit.retention_days`) | `90` |
 | `SESH_BACKUP_EVERY_DAYS` | Back up when the newest backup is this many days old; `0` turns automatic backups off (config: `backup.every_days`) | `1` |
 | `SESH_BACKUP_KEEP` | How many backups to keep, 1 to 1000 (config: `backup.keep`) | `7` |
@@ -344,6 +354,7 @@ $ sesh config set clipboard_timeout 15s
 | `SESH_TRASH_KEEP_DAYS` | Days a deleted entry stays in the trash; `0` keeps none, so deleting is for good (config: `trash.keep_days`) | `30` |
 | `SESH_HISTORY_KEEP` | How many earlier secrets each entry keeps, 0 to 1000; `0` keeps no new ones (config: `history.keep`) | `10` |
 | `SESH_HEALTH_OLD_AFTER_DAYS` | Days a password or API key can go unchanged before `sesh health` calls it old; `0` doesn't check (config: `health.old_after_days`) | `365` |
+| `SESH_UI_LOCK_ON_QUIT` | `false`: quitting `sesh ui` leaves sesh unlocked; `true` locks it, as `sesh agent lock` does (config: `ui.lock_on_quit`) | `true` |
 | `SESH_KDF_MEMORY` | Memory for each master password check, such as `256MiB` (config: `master_password.memory`) | `256MiB` |
 | `SESH_KDF_TIME` | Passes over that memory (config: `master_password.time`) | `3` |
 | `SESH_KDF_THREADS` | Threads (config: `master_password.threads`) | `4` |
@@ -525,7 +536,7 @@ max lifetime:   7h 22m remaining
 
 **Timeouts**
 
-The idle timeout counts from the last use: an unlock, a secret read or stored, or a key pressed in [`sesh ui`](#searching-and-copying-at-a-terminal-sesh-ui). `sesh agent status` isn't a use. Time the computer spends asleep counts toward the idle timeout and the max lifetime: after a night with the lid closed, the agent is locked when you next use sesh (which asks for the master password, or Touch ID, as after any lock), or within 15 seconds of waking, whichever comes first. Set `agent.idle_timeout` and `agent.max_lifetime` in the [config file](#configuration-file) to durations such as `30m` or `2h`; `0` disables either. The agent reads them once, when it starts. It reads the config file itself, so the values apply whichever program starts it, including an editor that doesn't load your shell profile. `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` override the file, but only when they're in the environment of the command that starts the agent.
+The idle timeout counts from the last use: an unlock, a secret read or stored, or a key pressed in [`sesh ui`](#searching-and-copying-at-a-terminal-sesh-ui). `sesh agent status` isn't a use. Ending a command doesn't lock the agent: the next command within the timeout doesn't ask again. Quitting `sesh ui` does lock it, unless `ui.lock_on_quit` is `false`. To lock sooner, run `sesh lock`. The agent also locks when the computer sleeps (`agent.lock_on_sleep`), as it wakes: before it answers the first command after, or within 15 seconds, whichever comes first. On macOS it locks when the screen locks (`agent.lock_on_screen_lock`), within 2 seconds. It locks as the screen locks, not while it stays locked, so sesh unlocked over SSH, to the same agent, while the screen stays locked keeps working; an unlock under way as the screen locks is dropped, and asked for again. An agent started over SSH, with no screen to ask about, doesn't watch until it's next started at the Mac (`sesh agent stop` ends it). Turned off, time asleep still counts toward the idle timeout and the max lifetime, so after a night with the lid closed the agent is locked anyway. Set `agent.idle_timeout` and `agent.max_lifetime` in the [config file](#configuration-file) to durations such as `30m` or `2h`; `0` disables either. The agent reads them once, when it starts. It reads the config file itself, so the values apply whichever program starts it, including an editor that doesn't load your shell profile. `SESH_AGENT_IDLE_TIMEOUT` and `SESH_AGENT_MAX_LIFETIME` override the file, but only when they're in the environment of the command that starts the agent.
 
 - After changing them, run `sesh agent stop`; the next command starts an agent with the new values.
 
@@ -550,7 +561,7 @@ Run that `kill`; the next command starts the new version.
 **Troubleshooting**
 
 - `warning: sesh agent unavailable: ...` means sesh couldn't start or reach the agent, so it prompts on every run instead. The message says why; if the agent itself refused to start (for example because the process hardening described in [Sesh agent](SECURITY_MODEL.md#sesh-agent) couldn't be applied), it includes the agent's own log line.
-- The agent's log is `~/Library/Caches/sesh/logs/agent.log` on macOS and `~/.cache/sesh/logs/agent.log` on Linux (`$XDG_CACHE_HOME/sesh/logs/agent.log` if set). Each line starts with a timestamp. It records start and stop (and why), unlocks and wrong-password attempts, locks (automatic, `sesh agent lock`, or SIGUSR1), refused connections, and errors. It never records passwords, keys, or secrets. Once it passes 1 MiB, the next agent start moves it to `agent.log.1` and begins a new one.
+- The agent's log is `~/Library/Caches/sesh/logs/agent.log` on macOS and `~/.cache/sesh/logs/agent.log` on Linux (`$XDG_CACHE_HOME/sesh/logs/agent.log` if set). Each line starts with a timestamp. It records start and stop (and why), unlocks and wrong-password attempts, locks (automatic, sleep, screen locked, `sesh agent lock`, or SIGUSR1), refused connections, and errors. It never records passwords, keys, or secrets. Once it passes 1 MiB, the next agent start moves it to `agent.log.1` and begins a new one.
 - To see errors directly, run the agent in the foreground: `sesh agent stop`, then `sesh agent` (Ctrl-C to stop). It accepts `--idle-timeout`, `--max-lifetime`, and `--socket`.
 - The socket is `~/Library/Caches/sesh/agent.sock` on macOS and `~/.cache/sesh/agent.sock` on Linux. `SESH_AUTH_SOCK` overrides the path; if you set it, set it for every sesh command. A socket's path can be at most 103 characters on macOS and 107 on Linux. If yours is longer, for example because the cache folder is nested deep, sesh says so and works without the agent; set `SESH_AUTH_SOCK` to a shorter path, in a folder only you can write to.
 - For a bug report, check that the agent answers on its socket. Each request gets one JSON line back, `hello_ack` then `pong`:
@@ -1108,11 +1119,11 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
   - **backups…** (`b`): the vault's [backups](#backups) newest first, with when each was made and its size; another vault's with the same file name is marked. Enter restores the vault from the selected one, asking first with what `sesh restore` says: the vault as it is is backed up first, and the app then locks, since the backup opens with the master password it had then. A vault that's missing or damaged is restored from the command line. `n` backs up now (pruned to `backup.keep`), `f` to a file or folder you type, as a full path or one starting with `~/` (asking before replacing a file, and refusing the vault's own files), `x` deletes the selected backup, and `a` deletes this vault's backups and makes a fresh one, for when an old master password or recovery key may have leaked; each delete asks first.
   - **import and export…** (`i`): **export, encrypted** (`e`) asks for a file (a full path, or one starting with `~/`), which entries (every one, or those of a kind, in a folder, with tags, as `sesh export` narrows them; one that matches nothing is said before the file is touched), and a password for the export, twice, and writes [sesh's encrypted export](#encrypted-exports) there, as `sesh export --file` does: the password has the master password's rules (an easy one is asked about once), a file there already is replaced only after Enter again, and the file is written whole, readable only by you. Each entry read is recorded in the audit log. A device or pipe isn't written to, since the app has the terminal, nor the vault's own files. **Import from** sesh's own encrypted export (`s`), Bitwarden (`b`), KeePass (`p`), Chrome (`c`), Firefox (`f`), Safari (`a`) or Google Authenticator (`g`, its transfer codes' screenshots, separated by commas) does what [`sesh import`](#importing-from-other-apps-sesh-import) does: a file (a full path, or one starting with `~/`) is read, and the password of an export protected by one is asked for when it is; then the app shows sesh import's summary. When some entries are in the vault already, `s` leaves them as they are and `o` replaces them, with their details merged; `y` imports. Esc lets the import go, except once it's being written, which carries on to the end: Ctrl-C then quits once it's written, saying what it did.
   - **health report…** (`r`): what [`sesh health`](#password-health-sesh-health) finds, one row per problem: weak, reused, old, or unreadable. Enter on a row goes to its entry and opens its form; for a password, set to generate a new one. Reading the secrets is one audit event;
-  - **settings and safety…** (`,`): first, **Master password**: Enter asks for the current one and a new one, twice, and changes it as `sesh passwd` does: every entry is re-encrypted, Touch ID unlock and the recovery key go on working, and the change is recorded in the audit log. The app then goes on with the new one. A new password that's easy to guess is asked about once more. When there are backups from before, it offers to delete them and make a fresh one, since they still open with the old password. Then **Recovery key**, with its state. With none, Enter makes one. With one, it offers to make a new one (asking first, since the old one stops working) or to remove it. A new key is shown in the app and saved once you type its last group back, as `sesh recovery new` asks; Esc, three wrong tries, or the app locking leave it unsaved, so it opens nothing, and the app says so. A save that fails for a passing reason (the vault busy, say) can be tried again. Replacing or removing one offers to delete the backups made before, which it still opens. A key is made through sesh's agent, so not while `SESH_MASTER_PASSWORD` is set. Then, on macOS, **Touch ID unlock**, with its state: on, off, out of date (your fingerprints changed), set up for another vault or an earlier master password, or its file can't be read, and whether Touch ID is usable here (it isn't over SSH). Enter turns it off when it's on, and on otherwise, as `sesh touchid enable` and `disable` do; taking it from another vault's file in the same folder asks first. It's turned on through sesh's agent, so not while `SESH_MASTER_PASSWORD` is set. Once it's on, the app's locked screen offers your fingerprint (Enter with nothing typed), without starting the app again. Then **Checks (sesh doctor)**: Enter runs `sesh doctor`'s checks on the vault as the app has it open, without asking for the master password again, and lists each result (with its details below while it's selected) and what to do; the run is recorded in the audit log, as `sesh doctor`'s is. Then **Audit log (sesh audit)**: Enter lists [its](#the-audit-log) newest 500 events, as `sesh audit` says them, with the whole of the selected one below; `p` prunes it, as `sesh audit prune` does, after a yes. Then each [setting](#configuration-file), its value, and where it comes from. Enter changes one: the value is checked as sesh checks it when it loads, and written to the config file, keeping its comments and order; an empty value takes it out, back to its default. The line below the list says when a change takes effect. Lowering one that deletes as it goes (`history.keep`, `trash.keep_days`, `audit.retention_days`, `backup.keep`) asks first, saying what will go. A linked config file (a dotfile manager's) is changed where it lives. A setting made by an environment variable is changed there, and `db_path` with `sesh init`;
+  - **settings and safety…** (`,`): first, **Master password**: Enter asks for the current one and a new one, twice, and changes it as `sesh passwd` does: every entry is re-encrypted, Touch ID unlock and the recovery key go on working, and the change is recorded in the audit log. The app then goes on with the new one. A new password that's easy to guess is asked about once more. When there are backups from before, it offers to delete them and make a fresh one, since they still open with the old password. Then **Recovery key**, with its state. With none, Enter makes one. With one, it offers to make a new one (asking first, since the old one stops working) or to remove it. A new key is shown in the app and saved once you type its last group back, as `sesh recovery new` asks; Esc, three wrong tries, or the app locking leave it unsaved, so it opens nothing, and the app says so. A save that fails for a passing reason (the vault busy, say) can be tried again. Replacing or removing one offers to delete the backups made before, which it still opens. A key is made through sesh's agent, so not while `SESH_MASTER_PASSWORD` is set. Then, on macOS, **Touch ID unlock**, with its state: on, off, out of date (your fingerprints changed), set up for another vault or an earlier master password, or its file can't be read, and whether Touch ID is usable here (it isn't over SSH). Enter turns it off when it's on, and on otherwise, as `sesh touchid enable` and `disable` do; taking it from another vault's file in the same folder asks first. It's turned on through sesh's agent, so not while `SESH_MASTER_PASSWORD` is set. Once it's on, the app's locked screen offers your fingerprint (Enter with nothing typed), without starting the app again. Then **Checks (sesh doctor)**: Enter runs `sesh doctor`'s checks on the vault as the app has it open, without asking for the master password again, and lists each result (with its details below while it's selected) and what to do; the run is recorded in the audit log, as `sesh doctor`'s is. Then **Audit log (sesh audit)**: Enter lists [its](#the-audit-log) newest 500 events, as `sesh audit` says them, with the whole of the selected one below; `p` prunes it, as `sesh audit prune` does, after a yes. Then each [setting](#configuration-file), its value, and where it comes from. Enter changes one: an on-or-off one (`ui.lock_on_quit`, `agent.lock_on_sleep`, `agent.lock_on_screen_lock`) turns over at once; another is typed, checked as sesh checks it when it loads, and written to the config file, keeping its comments and order; an empty value takes it out, back to its default. The line below the list says when a change takes effect. Lowering one that deletes as it goes (`history.keep`, `trash.keep_days`, `audit.retention_days`, `backup.keep`) asks first, saying what will go. A linked config file (a dotfile manager's) is changed where it lives. A setting made by an environment variable is changed there, and `db_path` with `sesh init`;
   - **lock sesh** (`l`): locks the app, and sesh's agent, so commands ask for the master password again (those given it in `SESH_MASTER_PASSWORD` never used the agent); if the agent can't be locked, the locked screen says so.
 - **Ctrl-O opens the entry's URL** in the browser: a web address only (`http` or `https`; a bare host gets `https://`), so a stored URL can't open a file or another program.
 - **The mouse:** click an entry to select it; the wheel moves the selection, or scrolls the details when over them. While the app has the mouse, most terminals still select text with a key held: Option in iTerm2, Shift in many others.
-- **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; Tab reveals; Ctrl-Y copies the username; Ctrl-O opens the URL; Shift-↑ and Shift-↓ scroll the details; the search box edits as a line does (← →, Ctrl-A, Ctrl-E, Ctrl-W a word, Ctrl-U all); Esc clears the search, or quits when it's empty; Ctrl-C quits; `?`, with nothing searched, lists the keys.
+- **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; Tab reveals; Ctrl-Y copies the username; Ctrl-O opens the URL; Shift-↑ and Shift-↓ scroll the details; the search box edits as a line does (← →, Ctrl-A, Ctrl-E, Ctrl-W a word, Ctrl-U all); Esc clears the search, or quits when it's empty; Ctrl-C quits, and locks sesh, saying so (with `ui.lock_on_quit` off, sesh stays unlocked until the agent's idle timeout); `?`, with nothing searched, lists the keys.
 - **Colours** follow the terminal: dark or light, and fewer colours where the terminal shows fewer, or none with `NO_COLOR=1`.
 - **Using it keeps the agent unlocked:** while you press keys, it tells the agent the vault is in use, as a read would, so the agent's idle timer doesn't run out under you.
 - **It locks itself** after the agent's idle timeout (`agent.idle_timeout`) without a key pressed, after the agent's longest unlock (`agent.max_lifetime`) since the app unlocked, and, within a second, when the agent locks or stops (`sesh agent lock`, say) or another command changes the master password or restores the vault. It then shows nothing of the vault, and asks for the master password again, which it checks even when the agent is still unlocked; with Touch ID unlock on, Enter with nothing typed asks for a fingerprint instead, also when the agent is still unlocked. Three wrong passwords in a row close it.

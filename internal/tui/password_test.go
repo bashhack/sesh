@@ -36,7 +36,7 @@ func passwordApp(t *testing.T, f *fakeVault, ch Changed, err error) (*app, *[]st
 func TestChangePasswordChecks(t *testing.T) {
 	a, asked := passwordApp(t, newFake(), Changed{}, errors.New("unused"))
 	a.press("ctrl+g", ",")
-	if s := a.screen(); !strings.Contains(s, "Master password          change…") {
+	if s := a.screen(); !strings.Contains(s, "Master password           change…") {
 		t.Fatalf("the panel:\n%s", s)
 	}
 	a.press("enter")

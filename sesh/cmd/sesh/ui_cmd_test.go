@@ -130,9 +130,20 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 // The app runs: typing searches, Enter copies, Ctrl-C quits, and the copy
-// is in the audit log.
+// is in the audit log. With ui.lock_on_quit on, quitting locks the agent.
 func TestUI_Run(t *testing.T) {
 	filingVault(t)
+	startTestAgent(t)
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks, _, err := keySourceFromAgent(cfg.DBPath.Value, fixedPrompt("filing-password-1234"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeKeySource(t, ks)
+	t.Setenv(config.EnvUILockOnQuit, "true")
 	oldTerm, oldOpts := uiStdoutIsTerminal, uiProgramOptions
 	t.Cleanup(func() { uiStdoutIsTerminal, uiProgramOptions = oldTerm, oldOpts })
 	uiStdoutIsTerminal = func(io.Writer) bool { return true }
@@ -190,6 +201,14 @@ func TestUI_Run(t *testing.T) {
 	}
 	if log := mustRun(t, runAudit); !strings.Contains(log, "read in sesh ui, to copy it") {
 		t.Errorf("audit:\n%s", log)
+	}
+	conn, err := agent.DialExisting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAgentConn(conn)
+	if st, err := agent.Status(conn); err != nil || st.Unlocked || !strings.Contains(app.Stderr.(*bytes.Buffer).String(), "Locked sesh (ui.lock_on_quit).") {
+		t.Errorf("after quitting, unlocked %v (%v); said %q", st.Unlocked, err, app.Stderr)
 	}
 }
 
@@ -1033,5 +1052,48 @@ func TestUI_PurgeAndPruneAudit(t *testing.T) {
 	}
 	if _, err := u.PruneAudit(-1); err == nil {
 		t.Error("a negative number of days was taken")
+	}
+}
+
+// Quitting the app locks sesh's agent when ui.lock_on_quit is on, and says so; off, or with no agent, it says nothing.
+func TestLockOnQuit(t *testing.T) {
+	useConfigFile(t, "")
+	dir := t.TempDir()
+	writeLightVault(t, dir, "correct-horse")
+	t.Setenv("SESH_AUTH_SOCK", tempAgentSocket(t))
+	t.Setenv(config.EnvUILockOnQuit, "true")
+	if said := lockOnQuit(); said != "" {
+		t.Errorf("no agent: %q", said)
+	}
+	startTestAgent(t)
+	ks, _, err := keySourceFromAgent(vaultIn(dir), fixedPrompt("correct-horse"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeKeySource(t, ks)
+	unlocked := func() bool {
+		t.Helper()
+		conn, err := agent.DialExisting()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeAgentConn(conn)
+		st, err := agent.Status(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Unlocked
+	}
+	t.Setenv(config.EnvUILockOnQuit, "false")
+	if said := lockOnQuit(); said != "" || !unlocked() {
+		t.Fatalf("off: %q, unlocked %v", said, unlocked())
+	}
+	t.Setenv(config.EnvUILockOnQuit, "true")
+	if said := lockOnQuit(); said != "Locked sesh (ui.lock_on_quit)." || unlocked() {
+		t.Errorf("on: %q, unlocked %v", said, unlocked())
+	}
+	t.Setenv(config.EnvUILockOnQuit, "yes")
+	if said := lockOnQuit(); !strings.HasPrefix(said, "sesh may still be unlocked") {
+		t.Errorf("unreadable: %q", said)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/screenlock"
 )
 
 // hardenProcess applies agent.Harden. Tests replace it: the daemon path runs
@@ -96,12 +97,21 @@ func runAgentDaemon(app *App, args []string) error {
 		return fmt.Errorf("harden agent: %w", err)
 	}
 
-	srv, err := agent.Listen(sockPath,
+	opts := []agent.Option{
 		agent.WithIdleTimeout(*idle),
 		agent.WithMaxLifetime(*maxLife),
 		agent.WithLockedKeyMemory(),
 		agent.WithExitOnAutoLock(),
-	)
+	}
+	if st.AgentLockOnSleep.Value {
+		opts = append(opts, agent.WithLockOnSleep())
+	}
+	if st.AgentLockOnScreenLock.Value {
+		if _, known := screenlock.Locked(); known {
+			opts = append(opts, agent.WithScreenLock(func() bool { locked, _ := screenlock.Locked(); return locked }))
+		}
+	}
+	srv, err := agent.Listen(sockPath, opts...)
 	if err != nil {
 		return fmt.Errorf("start agent: %w", err)
 	}

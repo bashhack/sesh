@@ -267,6 +267,8 @@ func complete(words []string) (cands []candidate, files bool) {
 			return matching([]candidate{{"set", "Change a setting in the config file"}}, cur), false
 		case len(words) == 2 && words[1] == "set" && !strings.HasPrefix(cur, "-"):
 			return matching(settingKeys(), cur), false
+		case len(words) == 3 && words[1] == "set" && config.IsSwitch(words[2]) && !strings.HasPrefix(cur, "-"):
+			return matching([]candidate{{"true", "On"}, {"false", "Off"}}, cur), false
 		case len(words) > 1 && words[1] == "set":
 			specs = flagSpecs(func(fs *flag.FlagSet) { addConfigSetFlags(fs) })
 		case !strings.HasPrefix(cur, "-"):
