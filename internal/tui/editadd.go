@@ -321,6 +321,7 @@ type scannedMsg struct {
 // ends, which Esc on its crosshair does, saving nothing.
 func (m *Model) scanThenSave(f *form, c *Change, fill func(service, username string)) tea.Cmd {
 	f.saving, f.err, f.working = true, "", "Select the area of the screen with the QR code (Esc there cancels)…"
+	m.scanning = true
 	f.quitting = "Quitting once the screen capture ends: Esc on its crosshair cancels it."
 	scan, epoch := m.opts.ScanQR, m.epoch
 	return func() tea.Msg {
@@ -334,6 +335,7 @@ func (m *Model) scanThenSave(f *form, c *Change, fill func(service, username str
 // or says why the code couldn't be used.
 func (m *Model) scanned(msg *scannedMsg) tea.Cmd {
 	c := msg.c
+	m.scanning = false
 	switch {
 	case m.quitAfter:
 		secure.SecureZeroBytes(msg.qr.Link)

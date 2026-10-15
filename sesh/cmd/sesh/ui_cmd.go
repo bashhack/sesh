@@ -446,14 +446,14 @@ func (u *uiVault) Field(k vault.Key, name string) ([]byte, error) {
 }
 
 // History is when each of k's earlier secrets was replaced.
-func (u *uiVault) History(k vault.Key) ([]time.Time, error) {
+func (u *uiVault) History(k vault.Key) ([]tui.Version, error) {
 	versions, err := u.store.History(k)
 	if err != nil {
 		return nil, uiLocked(err)
 	}
-	out := make([]time.Time, len(versions))
+	out := make([]tui.Version, len(versions))
 	for i, v := range versions {
-		out[i] = v.ReplacedAt
+		out[i] = tui.Version{ID: v.ID, ReplacedAt: v.ReplacedAt}
 	}
 	return out, nil
 }
@@ -463,26 +463,12 @@ func (u *uiVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
 	return secret, uiLocked(err)
 }
 
-func (u *uiVault) RestoreVersion(k vault.Key, n int, replaced time.Time) error {
-	if err := u.sameVersion(k, n, replaced); err != nil {
-		return err
-	}
-	_, err := u.store.RestoreVersion(k, n)
-	return u.wrote(err)
-}
-
-// sameVersion is ErrHistoryChanged when k's version n wasn't replaced at
-// replaced: the history the app listed has changed since, and n may be
-// another version now.
-func (u *uiVault) sameVersion(k vault.Key, n int, replaced time.Time) error {
-	versions, err := u.store.History(k)
-	if err != nil {
-		return uiLocked(err)
-	}
-	if n < 2 || n-2 >= len(versions) || !versions[n-2].ReplacedAt.Equal(replaced) {
+func (u *uiVault) RestoreVersion(k vault.Key, v tui.Version) error {
+	_, err := u.store.RestoreVersionID(k, v.ID)
+	if errors.Is(err, database.ErrVersionGone) {
 		return tui.ErrHistoryChanged
 	}
-	return nil
+	return u.wrote(err)
 }
 
 func (u *uiVault) Delete(k vault.Key) error { return u.wrote(u.store.Delete(k)) }
@@ -575,11 +561,12 @@ func (u *uiVault) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
 	return r.Key, u.wrote(err)
 }
 
-func (u *uiVault) ForgetVersion(k vault.Key, n int, replaced time.Time) error {
-	if err := u.sameVersion(k, n, replaced); err != nil {
-		return err
+func (u *uiVault) ForgetVersion(k vault.Key, v tui.Version) error {
+	err := u.store.ForgetVersionID(k, v.ID)
+	if errors.Is(err, database.ErrVersionGone) {
+		return tui.ErrHistoryChanged
 	}
-	return u.wrote(u.store.ForgetVersions(k, n))
+	return u.wrote(err)
 }
 
 // AuditLog is the audit log's newest limit events, said as sesh audit
@@ -613,7 +600,7 @@ func (u *uiVault) AuditLog(limit int) (tui.AuditLog, error) {
 func (u *uiVault) RemoveFromTrash(ids ...int64) (int, error) {
 	gone, err := u.store.RemoveFromTrash(ids...)
 	if errors.Is(err, database.ErrNotInTrash) {
-		return 0, errors.New("one of them isn't in the trash any more, so nothing was deleted: look again")
+		return 0, errors.New("the trash changed meanwhile, so nothing was deleted: look again")
 	}
 	return len(gone), u.wrote(err)
 }

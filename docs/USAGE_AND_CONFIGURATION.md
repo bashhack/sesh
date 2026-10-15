@@ -1096,7 +1096,7 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
     - **Folder and tags** list the ones you already have under the input as you type, matched anywhere in their names; ↓ picks one and Enter takes it. Anything else you type is a new folder or tag.
     - A name another entry has is refused, and said in the form; so are notes another command changed while you were editing them.
   - **copy a value…** (`f`): any one of the entry's values, its secret, username, URL or a field, picked by its number;
-  - **earlier secrets…** (`h`): its [password history](#password-history); Enter copies a version, `r` makes it the secret again, and `x` deletes it for good, each after a yes, and only while it's the version listed: if another command changed the entry's secret meanwhile, the app says so and lists them again;
+  - **earlier secrets…** (`h`): its [password history](#password-history); Enter copies a version, `r` makes it the secret again, and `x` deletes it for good, each after a yes. Each acts on the version you chose, even if another command has changed the entry's secret since and its number with it; one that's no longer there is said, and the list shown as it is;
   - **move to the trash** (`d`): see [the trash](#the-trash); after a yes;
   - also **copy the username** (`u`) and **open the URL** (`o`).
 - **Ctrl-G opens sesh's own actions,** from the search, the list or the sidebar, each run by its letter as Ctrl-K's are. Ctrl-K opens them too when no entry is selected, and its **sesh's actions…** (`g`) opens them from an entry or those marked, for a terminal that keeps Ctrl-G for itself (zellij does):

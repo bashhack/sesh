@@ -165,7 +165,7 @@ func (m *Model) afterChange(back *overlay, title, said, old, ask string) {
 	m.ov = &overlay{kind: panelNotice, back: back, title: title, question: said}
 }
 
-// renewBackups deletes the vault's backups and makes a fresh one.
+// renewBackups makes a fresh backup of the vault, then deletes the rest.
 func (m *Model) renewBackups() tea.Cmd {
 	renew, epoch := m.opts.RenewBackups, m.epoch
 	return func() tea.Msg {

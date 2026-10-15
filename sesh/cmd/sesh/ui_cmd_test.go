@@ -464,14 +464,11 @@ func TestUI_Actions(t *testing.T) {
 	if v, err := u.ReadVersion(gh, 2); err != nil || string(v) != "a" {
 		t.Errorf("ReadVersion = %q, %v", v, err)
 	}
-	// A version is acted on only while it's the one listed.
-	if err := u.RestoreVersion(gh, 2, h[0].Add(time.Second)); !errors.Is(err, tui.ErrHistoryChanged) {
-		t.Errorf("restore of a version not as listed: %v", err)
-	}
-	if err := u.RestoreVersion(gh, 3, h[0]); !errors.Is(err, tui.ErrHistoryChanged) {
+	// A version is named by its row: one no longer in the history isn't restored.
+	if err := u.RestoreVersion(gh, tui.Version{ID: h[0].ID + 1000}); !errors.Is(err, tui.ErrHistoryChanged) {
 		t.Errorf("restore of a version not there: %v", err)
 	}
-	if err := u.RestoreVersion(gh, 2, h[0]); err != nil {
+	if err := u.RestoreVersion(gh, h[0]); err != nil {
 		t.Fatal(err)
 	}
 	if v, err := u.Secret(gh, "test"); err != nil || string(v) != "a" {
@@ -500,13 +497,17 @@ func TestUI_Actions(t *testing.T) {
 	if err != nil || len(oh) != 2 {
 		t.Fatalf("History = %v, %v", oh, err)
 	}
-	if err := u.ForgetVersion(old, 2, oh[1]); !errors.Is(err, tui.ErrHistoryChanged) {
-		t.Errorf("forget of a version not as listed: %v", err)
-	}
-	if err := u.ForgetVersion(old, 2, oh[0]); err != nil {
+	// Another command forgets version 2: the one listed as 3 is still the one forgotten, and 2 is gone.
+	if err := store.ForgetVersions(old, 2); err != nil {
 		t.Fatal(err)
 	}
-	if h, err := u.History(old); err != nil || len(h) != 1 {
+	if err := u.ForgetVersion(old, oh[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.ForgetVersion(old, oh[0]); !errors.Is(err, tui.ErrHistoryChanged) {
+		t.Errorf("forget of a version gone: %v", err)
+	}
+	if h, err := u.History(old); err != nil || len(h) != 0 {
 		t.Errorf("History after forgetting = %v, %v", h, err)
 	}
 	for _, k := range []vault.Key{old, {Kind: vault.KindPassword, Service: "gitlab"}} {

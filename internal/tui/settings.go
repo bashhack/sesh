@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -113,10 +115,10 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 	case m.opts.SetSetting == nil:
 		return nil
 	}
-	key, raw, def, applies, set := s.Key, s.Raw, s.Default, s.Applies, m.opts.SetSetting
+	key, raw, def, applies, said, set := s.Key, s.Raw, s.Default, s.Applies, s.Said, m.opts.SetSetting
 	return m.askOver(true, "Change "+key, key, s.Raw, "empty: back to the default; it takes effect "+applies, nil, func(value string) (string, tea.Cmd) {
-		if value == raw {
-			m.say("Nothing changed.")
+		if value == raw || value == "" && strings.HasPrefix(said, "default") {
+			m.say("Nothing changed: " + key + " is " + cmp.Or(value, "at its default") + " already.")
 			return "", nil
 		}
 		save := func() tea.Cmd {

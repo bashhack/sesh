@@ -44,7 +44,7 @@ type overlay struct {
 	err      string
 	busy     string // said instead of "Loading…" while it waits
 	items    []item
-	versions []time.Time
+	versions []Version
 	trash    []Trashed
 	backups  []Backup // the backups panel's, as its rows list them
 	kind     panel
@@ -73,7 +73,7 @@ type (
 		err      error
 		k        vault.Key
 		said     string // what a change to them did, to say
-		versions []time.Time
+		versions []Version
 		epoch    int
 	}
 	trashMsg struct {
@@ -274,15 +274,15 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 	ov := m.ov
 	switch {
 	case ov.kind == panelHistory && k == "r" && ov.sel < len(ov.versions):
-		n, key, at := ov.sel+2, ov.k, ov.versions[ov.sel]
+		n, key, v := ov.sel+2, ov.k, ov.versions[ov.sel]
 		m.ov = m.confirm(ov, "Restore",
 			fmt.Sprintf("Make version %d the secret for %s again? The current one is kept as an earlier secret.", n, short(keyName(key))),
-			func() tea.Cmd { return m.restoreVersion(key, n, at) })
+			func() tea.Cmd { m.ov = ov; return m.restoreVersion(key, v) })
 	case ov.kind == panelHistory && (k == "x" || k == "delete") && ov.sel < len(ov.versions):
-		n, key, at := ov.sel+2, ov.k, ov.versions[ov.sel]
+		n, key, v := ov.sel+2, ov.k, ov.versions[ov.sel]
 		m.ov = m.confirm(ov, "Delete for good",
 			fmt.Sprintf("Delete version %d of %s for good? It can't be brought back; the versions after it move up a number.", n, short(keyName(key))),
-			func() tea.Cmd { m.ov = ov; return m.forgetVersion(key, n, at) })
+			func() tea.Cmd { m.ov = ov; return m.forgetVersion(key, n, v) })
 		m.ov.danger = true
 	case ov.kind == panelTrash && k == "a" && ov.sel < len(ov.trash):
 		return m.askRestoreAs(&ov.trash[ov.sel])
@@ -420,14 +420,20 @@ func (m *Model) copyVersion(k vault.Key, n int) tea.Cmd {
 	})
 }
 
-// restoreVersion makes k's version n, replaced at replaced, its secret
-// again.
-func (m *Model) restoreVersion(k vault.Key, n int, replaced time.Time) tea.Cmd {
+// restoreVersion makes k's earlier secret ver its secret again, closing
+// the history; if it's no longer there, the history stays, listed as it
+// is now.
+func (m *Model) restoreVersion(k vault.Key, ver Version) tea.Cmd {
 	epoch := m.epoch
 	m.forget(k)
+	m.ov.loading = true
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		err := v.RestoreVersion(k, n, replaced)
-		return doneMsg{what: fmt.Sprintf("Restored an earlier secret for %s; the one it replaced is kept", keyName(k)), err: err, epoch: epoch, reread: true, forget: k}
+		err := v.RestoreVersion(k, ver)
+		if errors.Is(err, ErrHistoryChanged) {
+			versions, _ := v.History(k) //nolint:errcheck // the list as it is, under the error said
+			return historyMsg{k: k, versions: versions, err: err, epoch: epoch}
+		}
+		return doneMsg{what: fmt.Sprintf("Restored an earlier secret for %s; the one it replaced is kept", keyName(k)), err: err, epoch: epoch, reread: true, forget: k, closes: panelHistory}
 	})
 }
 
@@ -524,13 +530,13 @@ func (m *Model) emptyTrash(ids []int64) tea.Cmd {
 	})
 }
 
-// forgetVersion deletes k's version n, replaced at replaced, for good,
-// and lists those left.
-func (m *Model) forgetVersion(k vault.Key, n int, replaced time.Time) tea.Cmd {
+// forgetVersion deletes k's earlier secret ver, listed as version n, for
+// good, and lists those left.
+func (m *Model) forgetVersion(k vault.Key, n int, ver Version) tea.Cmd {
 	epoch := m.epoch
 	m.ov.loading = true
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		if err := v.ForgetVersion(k, n, replaced); err != nil {
+		if err := v.ForgetVersion(k, ver); err != nil {
 			versions, _ := v.History(k) //nolint:errcheck // the list as it is, under the error said
 			return historyMsg{k: k, versions: versions, err: err, epoch: epoch}
 		}
@@ -726,7 +732,7 @@ func (m *Model) drawOverlay(base string) string {
 		first, last := window(ov.sel, len(ov.versions), room)
 		for i := first; i < last; i++ {
 			when := "replaced at an unknown time"
-			if at := ov.versions[i]; !at.IsZero() {
+			if at := ov.versions[i].ReplacedAt; !at.IsZero() {
 				when = "replaced " + ago(now, at)
 			}
 			lines = append(lines, row(i, "", fmt.Sprintf("version %d  %s", i+2, when)))

@@ -138,8 +138,16 @@ type Tag struct {
 // ErrNameTaken is a trash entry restored onto a name another entry has.
 var ErrNameTaken = errors.New("another entry has that name")
 
+// Version is one of an entry's earlier secrets, as History lists it: the
+// row that names it, whatever number it has as others come and go, and
+// when it was replaced (zero when that isn't known).
+type Version struct {
+	ReplacedAt time.Time
+	ID         int64
+}
+
 // ErrHistoryChanged is an earlier secret chosen from a list that another
-// command has changed since: its number may be another's now.
+// command has changed since: it's no longer in the history.
 var ErrHistoryChanged = errors.New("its earlier secrets changed meanwhile, so nothing was done: look again, then choose")
 
 // ErrWrongPassword is a password Unlock refused.
@@ -179,16 +187,16 @@ type Vault interface {
 	// Field is k's secret field name's value, to copy or show; the audit log
 	// records the read. The caller wipes it.
 	Field(k vault.Key, name string) ([]byte, error)
-	// History is when each of k's earlier secrets was replaced, the
-	// newest first: version 2 is the first.
-	History(k vault.Key) ([]time.Time, error)
+	// History is k's earlier secrets, the newest first: version 2 is the
+	// first.
+	History(k vault.Key) ([]Version, error)
 	// ReadVersion is k's version n (2 and up), to copy; the audit log
 	// records the read. The caller wipes it.
 	ReadVersion(k vault.Key, n int) ([]byte, error)
-	// RestoreVersion makes k's version n its secret again; the one it
-	// replaces is kept. ErrHistoryChanged when version n isn't the one
-	// replaced at replaced, as History listed it, any more.
-	RestoreVersion(k vault.Key, n int, replaced time.Time) error
+	// RestoreVersion makes k's earlier secret v its secret again; the one
+	// it replaces is kept. ErrHistoryChanged when v is no longer in the
+	// history.
+	RestoreVersion(k vault.Key, v Version) error
 	// Delete moves k to the trash.
 	Delete(k vault.Key) error
 	// Trash is the trash's entries, the newest first.
@@ -200,10 +208,9 @@ type Vault interface {
 	// RemoveFromTrash deletes the trash's entries ids for good, all or
 	// none, and says how many.
 	RemoveFromTrash(ids ...int64) (int, error)
-	// ForgetVersion deletes k's version n (2 and up) for good; the
-	// versions after it move up a number. ErrHistoryChanged as for
-	// RestoreVersion.
-	ForgetVersion(k vault.Key, n int, replaced time.Time) error
+	// ForgetVersion deletes k's earlier secret v for good; the versions
+	// after it move up a number. ErrHistoryChanged as for RestoreVersion.
+	ForgetVersion(k vault.Key, v Version) error
 	// AuditLog is the newest limit events of the vault's audit log.
 	AuditLog(limit int) (AuditLog, error)
 	// Health checks the passwords and API keys, as sesh health does: weak,
@@ -448,6 +455,10 @@ type Model struct {
 	// opening once it commits, so it isn't read meanwhile.
 	changing  bool
 	quitAfter bool // Ctrl-C was pressed while changing: it quits once that's done
+	// scanning says a QR code is being captured from the screen: quitting
+	// waits for it to end, so the capture, and its picture of the code,
+	// don't outlast the app.
+	scanning bool
 	// touchOn is Touch ID unlock on, as last read: at the lock, after a
 	// fingerprint fails, on Enter with nothing typed while it was off, and
 	// when turning it on or off ends while locked.
@@ -1030,8 +1041,12 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.lockedWhy = why
 	m.touchOn = m.touchIDOn()
 	if m.quitAfter {
-		// Ctrl-C waited for what the lock cut off: it quits now, saying why.
+		// Ctrl-C waited for what the lock cut off: it quits now, saying
+		// why, or, during a scan, once the capture ends (see scanned).
 		m.afterword = why
+		if m.scanning {
+			return tea.Batch(closing, ended)
+		}
 		return tea.Batch(closing, ended, tea.Quit)
 	}
 	return tea.Batch(closing, ended)

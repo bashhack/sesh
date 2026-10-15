@@ -2,8 +2,10 @@ package tui
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"image/color"
 	"regexp"
 	"slices"
@@ -108,15 +110,45 @@ func (f *fakeVault) Field(k vault.Key, name string) ([]byte, error) {
 	return nil, errors.New("no such field")
 }
 
-func (f *fakeVault) History(k vault.Key) ([]time.Time, error) {
-	out := make([]time.Time, len(f.history[k]))
+func (f *fakeVault) History(k vault.Key) ([]Version, error) {
+	out := make([]Version, len(f.history[k]))
 	for i, s := range f.history[k] {
-		out[i] = time.Unix(1_700_000_000-int64(i)*86400, 0)
+		out[i] = Version{ID: versionID(s), ReplacedAt: time.Unix(1_700_000_000-int64(i)*86400, 0)}
 		if at, ok := f.replacedAt[s]; ok {
-			out[i] = at
+			out[i].ReplacedAt = at
 		}
 	}
 	return out, nil
+}
+
+// quits says whether cmd, or one it batches, quits the app.
+func quits(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	switch msg := cmd().(type) {
+	case tea.QuitMsg:
+		return true
+	case tea.BatchMsg:
+		return slices.ContainsFunc(msg, quits)
+	}
+	return false
+}
+
+// versionID is the fake's row for an earlier secret: its own, whatever its place.
+func versionID(secret string) int64 {
+	h := fnv.New64a()
+	h.Write([]byte(secret)) //nolint:errcheck // a hash never fails
+	return int64(h.Sum64() >> 1)
+}
+
+// numbered is the place (version number) the earlier secret v has in k's history now; ErrHistoryChanged when none.
+func (f *fakeVault) numbered(k vault.Key, v Version) (int, error) {
+	i := slices.IndexFunc(f.history[k], func(s string) bool { return versionID(s) == v.ID })
+	if i < 0 {
+		return 0, ErrHistoryChanged
+	}
+	return i + 2, nil
 }
 
 func (f *fakeVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
@@ -124,17 +156,9 @@ func (f *fakeVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
 	return []byte(f.history[k][n-2]), nil
 }
 
-// sameVersion is ErrHistoryChanged when k's version n wasn't replaced at replaced, as History lists it now.
-func (f *fakeVault) sameVersion(k vault.Key, n int, replaced time.Time) error {
-	versions, _ := f.History(k) //nolint:errcheck // the fake's never fails
-	if n-2 >= len(versions) || !versions[n-2].Equal(replaced) {
-		return ErrHistoryChanged
-	}
-	return nil
-}
-
-func (f *fakeVault) RestoreVersion(k vault.Key, n int, replaced time.Time) error {
-	if err := f.sameVersion(k, n, replaced); err != nil {
+func (f *fakeVault) RestoreVersion(k vault.Key, v Version) error {
+	n, err := f.numbered(k, v)
+	if err != nil {
 		return err
 	}
 	h := f.history[k]
@@ -309,8 +333,9 @@ func (f *fakeVault) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) 
 	return e.Key, nil
 }
 
-func (f *fakeVault) ForgetVersion(k vault.Key, n int, replaced time.Time) error {
-	if err := f.sameVersion(k, n, replaced); err != nil {
+func (f *fakeVault) ForgetVersion(k vault.Key, v Version) error {
+	n, err := f.numbered(k, v)
+	if err != nil {
 		return err
 	}
 	h := f.history[k]
@@ -1369,25 +1394,23 @@ func TestHistoryDeleteVersion(t *testing.T) {
 	}
 }
 
-// A version chosen from a list another command has changed since isn't deleted: the panel says so, and lists them
-// as they are.
+// A version chosen from a list another command has changed since is the one acted on, whatever its number now;
+// one that's gone isn't, and the panel says so, listing them as they are.
 func TestHistoryChangedMeanwhile(t *testing.T) {
 	f := newFake()
 	f.history = map[vault.Key][]string{github: {"old-1", "old-2"}}
-	f.replacedAt = map[string]time.Time{"old-0": time.Unix(1_700_100_000, 0), "old-1": time.Unix(1_700_000_000, 0), "old-2": time.Unix(1_699_900_000, 0)}
 	a := newApp(t, f, Options{})
 	a.press("ctrl+k", "h", "down") // version 3: old-2
 	f.history[github] = []string{"old-0", "old-1", "old-2"}
 	a.press("x", "wait", "y")
-	if s := a.screen(); len(f.history[github]) != 3 || !strings.Contains(s, "changed meanwhile") || !strings.Contains(s, "version 4") {
-		t.Errorf("deleted from a changed list: history %q:\n%s", f.history[github], s)
+	if !slices.Equal(f.history[github], []string{"old-0", "old-1"}) || a.ov == nil || a.ov.kind != panelHistory {
+		t.Fatalf("deleted from a renumbered list: history %q", f.history[github])
 	}
-	// The list shown now is the one acted on; changed again, a restore is refused too.
-	f.replacedAt["old-x"] = time.Unix(1_700_200_000, 0)
-	f.history[github] = []string{"old-x", "old-0", "old-1", "old-2"}
+	// The one selected (old-1) is forgotten elsewhere: neither restored nor deleted.
+	f.history[github] = []string{"old-0"}
 	a.press("r", "wait", "y")
-	if f.secrets[github] != "gh-pass" || !strings.Contains(a.screen(), "changed meanwhile") {
-		t.Errorf("restored from a changed list: secret %q:\n%s", f.secrets[github], a.screen())
+	if s := a.screen(); f.secrets[github] != "gh-pass" || a.ov == nil || a.ov.kind != panelHistory || !strings.Contains(s, "changed meanwhile") || strings.Contains(s, "version 3  replaced") {
+		t.Errorf("restored a version gone: secret %q:\n%s", f.secrets[github], s)
 	}
 }
 
@@ -1473,9 +1496,12 @@ func TestAddScanQR(t *testing.T) {
 		}
 	}
 	f.err = nil
-	// Ctrl-C while the screen is captured quits once it ends, saving nothing.
+	// Ctrl-C while the screen is captured quits once it ends, saving nothing, even when the app locks meanwhile.
 	saves := len(f.saves)
-	a.quitAfter = true
+	a.quitAfter, a.scanning = true, true
+	if quits(a.lock("You locked it.")) {
+		t.Error("a lock during a scan quit before the capture ended")
+	}
 	cmd := a.scanned(&scannedMsg{qr: ScannedQR{Link: []byte(link)}, c: &Change{To: vault.Key{Kind: vault.KindTOTP, Service: "x"}}, epoch: a.epoch})
 	if cmd == nil {
 		t.Fatal("quitting mid-scan: nothing done")
@@ -2656,12 +2682,19 @@ func settingsApp(t *testing.T) (*app, *[]string) {
 func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
 	t.Helper()
 	values := map[string]string{"history.keep": "10", "health.old_after_days": "365"}
+	inFile := map[string]bool{}
+	said := func(key string) string {
+		if inFile[key] {
+			return "config file"
+		}
+		return "default"
+	}
 	var asked []string
 	a := newApp(t, newFake(), Options{
 		Settings: func() ([]Setting, error) {
 			return []Setting{
-				{Key: "history.keep", Value: values["history.keep"], Raw: values["history.keep"], Default: "10", Said: "default", Applies: "for other commands now, and in sesh ui from its next start", Editable: true},
-				{Key: "health.old_after_days", Value: values["health.old_after_days"], Raw: values["health.old_after_days"], Said: "default", Applies: "at the next health check", Editable: true},
+				{Key: "history.keep", Value: values["history.keep"], Raw: values["history.keep"], Default: "10", Said: said("history.keep"), Applies: "for other commands now, and in sesh ui from its next start", Editable: true},
+				{Key: "health.old_after_days", Value: values["health.old_after_days"], Raw: values["health.old_after_days"], Default: "365", Said: said("health.old_after_days"), Applies: "at the next health check", Editable: true},
 				{Key: "trash.keep_days", Value: "0", Raw: "0", Said: "environment: SESH_TRASH_KEEP_DAYS", Env: "SESH_TRASH_KEEP_DAYS", Editable: true},
 				{Key: "db_path", Value: "/v.db", Said: "default"},
 			}, nil
@@ -2671,7 +2704,7 @@ func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
 			if value == "-1" {
 				return Live{}, errors.New(key + ` = "-1": want a whole number`)
 			}
-			values[key] = value
+			values[key], inFile[key] = cmp.Or(value, map[string]string{"history.keep": "10", "health.old_after_days": "365"}[key]), value != ""
 			days, _ := strconv.Atoi(values["health.old_after_days"]) //nolint:errcheck // test
 			return Live{OldAfter: time.Duration(days) * 24 * time.Hour}, nil
 		},
@@ -2693,8 +2726,13 @@ func TestSettingsChange(t *testing.T) {
 	if s := a.screen(); a.form == nil || !strings.Contains(s, "want a whole number") {
 		t.Errorf("a value refused:\n%s", s)
 	}
+	// Emptied at its default: nothing to take out. Emptied once set: taken out.
 	a.press("ctrl+u", "enter")
-	if (*asked)[len(*asked)-1] != "history.keep=" || !strings.Contains(a.screen(), "Took history.keep out of the config file") {
+	if len(*asked) != 2 || !strings.Contains(a.screen(), "history.keep is at its default already") {
+		t.Errorf("emptied at its default: asked %q\n%s", *asked, a.screen())
+	}
+	a.press("down", "enter", "ctrl+u", "enter")
+	if (*asked)[len(*asked)-1] != "health.old_after_days=" || !strings.Contains(a.screen(), "Took health.old_after_days out of the config file") {
 		t.Errorf("emptied: asked %q\n%s", *asked, a.screen())
 	}
 }
@@ -2716,7 +2754,7 @@ func TestSettingsNotChanged(t *testing.T) {
 func TestSettingsLoss(t *testing.T) {
 	a, asked := settingsApp(t)
 	a.press("ctrl+g", ",", "down", "down", "enter", "enter")
-	if len(*asked) != 0 || !strings.Contains(a.screen(), "Nothing changed.") {
+	if len(*asked) != 0 || !strings.Contains(a.screen(), "Nothing changed: history.keep is 10 already") {
 		t.Fatalf("unchanged: asked %q\n%s", *asked, a.screen())
 	}
 	a.press("enter", "ctrl+u", "4", "enter")

@@ -166,6 +166,7 @@ func TestBackupListAndDelete(t *testing.T) {
 		"delete --force " + name(0) + " nope.db": "no backup named nope.db",
 		"list extra":                             "takes nothing more",
 		"--force list":                           "write ./list",
+		"--force delete --all":                   "sesh backup delete --force",
 	} {
 		if _, err := runBackupOut(t, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
 			t.Errorf("%s: %v, want %q", args, err, wantSub)
@@ -203,9 +204,13 @@ func TestBackupListAndDelete(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	clock = clock.Add(time.Hour)
+	// In the same second as the newest: the fresh one is new, and the one before is deleted with the rest.
+	newest := backups(t, env)[0].Path
 	if out, err := runBackupOut(t, "delete", "--all", "--force"); err != nil || !strings.Contains(out, "Deleted 2 backups; made a fresh one") || len(backups(t, env)) != 1 {
 		t.Errorf("--all: %q, %v", out, err)
+	}
+	if left := backups(t, env); len(left) != 1 || left[0].Path == newest {
+		t.Errorf("--all left %v, the one before was %s", left, newest)
 	}
 }
 

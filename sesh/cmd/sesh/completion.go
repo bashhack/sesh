@@ -136,8 +136,10 @@ func complete(words []string) (cands []candidate, files bool) {
 				return c, false
 			}
 			return nil, true
-		case len(words) == 1 && cur == "":
+		case len(words) == 1 && cur == "" && len(before) == 1:
 			return backupCommands, false
+		case len(words) == 1 && cur == "":
+			return nil, true // after a flag: the file to write
 		case len(words) == 1:
 			specs = flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) })
 		case words[1] == "delete":

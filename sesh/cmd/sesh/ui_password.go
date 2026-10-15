@@ -116,8 +116,8 @@ func uiOldBackups(dbPath, what string) (said, ask string) {
 	return oldBackupsSaid(len(all), what, s.Dir) + " If the old " + what + " may have leaked, delete " + them + ".", "Delete " + them + " and make a fresh backup?"
 }
 
-// uiRenewBackups deletes the backups of the vault the app has open, and
-// makes a fresh one.
+// uiRenewBackups makes a fresh backup of the vault the app has open, then
+// deletes the rest.
 func uiRenewBackups(dbPath string) (string, error) {
 	st, err := settingsOf(dbPath)
 	if err != nil {

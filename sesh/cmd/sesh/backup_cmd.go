@@ -100,11 +100,12 @@ func runBackup(app *App, args []string) error {
 		}
 		return err
 	}
+	if a := fs.Arg(0); a == "list" || a == "delete" {
+		// A flag came before the word: sesh backup's own, read as a file.
+		return fmt.Errorf("put sesh backup %s's flags after the word (sesh backup %s --force); to back up to a file named %s, write ./%s", a, a, a, a)
+	}
 	if fs.NArg() > 1 {
 		return fmt.Errorf("sesh backup takes at most one file, got %q", strings.Join(fs.Args(), " "))
-	}
-	if a := fs.Arg(0); a == "list" || a == "delete" {
-		return fmt.Errorf("sesh backup %s takes no --force; to back up to a file named %s, write ./%s", a, a, a)
 	}
 	cfg, err := settings()
 	if err != nil {
@@ -300,20 +301,18 @@ func oldBackupsSaid(n int, what, dir string) string {
 
 // renewBackups makes a fresh backup of the vault at vaultPath, then
 // deletes the others in s, and says so: one that can't be made leaves
-// them all.
+// them all. The fresh one is the vault as it is now, never one made in the
+// same second before it, which it would delete.
 func renewBackups(s backup.Series, vaultPath string) (string, error) {
 	old, err := s.List()
 	if err != nil {
 		return "", err
 	}
-	b, err := s.Make(vaultPath, now())
+	b, err := s.MakeNew(vaultPath, now())
 	if err != nil {
 		return "", fmt.Errorf("%w; the backups there are left as they were", err)
 	}
 	for i, o := range old {
-		if o.Path == b.Path {
-			continue
-		}
 		if err := os.Remove(o.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("made a fresh backup, %s, but deleted only %d of the %d before it: %w", tildePath(b.Path), i, len(old), err)
 		}
