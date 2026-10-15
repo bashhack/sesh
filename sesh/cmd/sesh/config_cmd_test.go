@@ -89,7 +89,7 @@ func TestRunConfig_NoFile(t *testing.T) {
 	if err := runConfig(app, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(got, "config file: "+path+" (not found; using defaults)") {
+	if got := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(got, "config file: "+path+" (not found; using defaults: changing a setting makes it)") {
 		t.Errorf("output = %q", got)
 	}
 }
@@ -141,8 +141,8 @@ func TestRunConfig_Set(t *testing.T) {
 		t.Errorf("the default again: %q, %v", out, err)
 	}
 	app, _ = cliApp("", false)
-	if out, _, err := runCLI(app, runConfig, "set", "agent.lock_on_sleep", "off"); err != nil || !strings.Contains(read(), "lock_on_sleep = false") {
-		t.Errorf("off: %q, %v\n%s", out, err, read())
+	if out, _, err := runCLI(app, runConfig, "set", "agent.lock_on_sleep", "OFF"); err != nil || !strings.Contains(out, "Set agent.lock_on_sleep to off in") || !strings.Contains(read(), "lock_on_sleep = false") {
+		t.Errorf("OFF: %q, %v\n%s", out, err, read())
 	}
 	app, _ = cliApp("", false)
 	if out, _, err := runCLI(app, runConfig, "set", "history.keep", "+12"); err != nil || !strings.Contains(out, "Set history.keep to 12") || !strings.Contains(read(), "keep = 12\n") {

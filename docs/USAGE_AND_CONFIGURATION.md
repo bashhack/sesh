@@ -605,7 +605,7 @@ Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but
 
 `sesh doctor` checks sesh's setup, then unlocks the vault and checks that all of it can be read. The setup part needs no password, and is shown first:
 
-- **Config:** the config file loads (or there's none, and the defaults apply).
+- **Config:** the config file loads (or there's none, and the defaults apply: it says where changing a setting makes it).
 - **Vault file:** the vault exists, only you can read it, and no one else can replace or delete it through its folder. A symlink is followed to the real file. For a folder that's yours, sesh gives the `chmod` to run; for a shared one, such as `/tmp`, it says to move the vault with `sesh init`.
 - **Agent:** whether it's running and unlocked. The setup checks never start it; unlocking the vault, below, does, as any command would. One running an older sesh build is replaced by the next command.
 - **Key settings:** the vault's key wasn't made with weaker Argon2id settings than the configured ones (`[master_password]`): none higher, one lower. Raising them applies only when the key is made again, with `sesh passwd`. Settings higher in one way and lower in another are fine, and noted, since making the key again would lower one.

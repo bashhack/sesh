@@ -24,12 +24,12 @@ type Setting struct {
 	// Env is the environment variable (or flag) that sets it, when one
 	// does: it can't be changed from the app then.
 	Env string
-	// File is the config file a change is saved in; NoFile, that it isn't
-	// there yet, and the first change makes it.
+	// File is the config file a change is saved in.
 	File     string
 	Editable bool
 	// Switch says it's on or off (Raw true or false): Enter turns it over.
 	Switch bool
+	// NoFile says File isn't there yet: the first change makes it.
 	NoFile bool
 }
 

@@ -887,11 +887,9 @@ var captureQRText = qrcode.CaptureText
 
 // uiSettings are cfg's settings as the app's settings panel lists them.
 func uiSettings(cfg *config.Config) []tui.Setting {
-	_, err := os.Stat(cfg.Path)
-	noFile := errors.Is(err, os.ErrNotExist)
 	var out []tui.Setting
 	for _, it := range cfg.List() {
-		s := tui.Setting{Key: it.Key, Value: it.Value, Raw: it.Raw, Default: it.Default, Said: it.Said(), Applies: it.Applies, Editable: it.Editable, Switch: it.Switch, File: tildePath(cfg.Path), NoFile: noFile}
+		s := tui.Setting{Key: it.Key, Value: it.Value, Raw: it.Raw, Default: it.Default, Said: it.Said(), Applies: it.Applies, Editable: it.Editable, Switch: it.Switch, File: tildePath(cfg.Path), NoFile: !cfg.FileFound}
 		if it.Source == config.FromEnv || it.Source == config.FromFlag {
 			s.Env = it.Origin
 		}

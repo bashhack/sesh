@@ -90,17 +90,16 @@ func checkSetup(c *doctorChecks, app *App) func(io.Writer) error {
 // checkSetupOf is checkSetup for the vault at dbPath; "" is the one the
 // config names.
 func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) error {
-	cfgPath, _ := config.Path() //nolint:errcheck // shown only when known
 	cfg, err := settingsOf(dbPath)
 	if err != nil {
 		c.row(markFail, "Config", "doesn't load", err.Error())
 		c.todo("Fix the config file, or the setting the error names:", "sesh config")
 		return skipVault(c, "", "the config doesn't load")
 	}
-	if _, serr := os.Stat(cfgPath); serr == nil {
-		c.row(markOK, "Config", tildePath(cfgPath))
+	if cfg.FileFound {
+		c.row(markOK, "Config", tildePath(cfg.Path))
 	} else {
-		c.row(markNone, "Config", "no file yet, so the defaults", "changing a setting makes "+tildePath(cfgPath))
+		c.row(markNone, "Config", "no file yet, so the defaults", "changing a setting makes "+tildePath(cfg.Path))
 	}
 
 	dbPath = cfg.DBPath.Value
