@@ -802,7 +802,14 @@ func (m *Model) drawForm(base string) string {
 					word = "show it"
 				}
 				line := "   " + th.hints([2]string{"ctrl+r", word})
+				if len(in.secret) == 0 && in.load == nil {
+					// Nothing typed: nothing to show. The line stays, so
+					// the form doesn't move as typing starts.
+					line = ""
+				}
 				switch hint := th.dimmed().Render(in.hint); {
+				case line == "":
+					lines = append(lines, "   "+hint)
 				case in.hint == "":
 					lines = append(lines, line)
 				case lipgloss.Width(line)+3+lipgloss.Width(hint) <= inner:

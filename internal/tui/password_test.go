@@ -305,3 +305,25 @@ func TestChangePasswordKeyInFlight(t *testing.T) {
 		t.Errorf("the key after the change failed: pending %v", a.pending[totp])
 	}
 }
+
+// Ctrl-R's hint shows once something is typed to show, not over an empty input, and the form doesn't move when it does.
+func TestRevealHintOnceTyped(t *testing.T) {
+	a, _ := passwordApp(t, newFake(), Changed{}, nil)
+	a.press("ctrl+k", ",", "enter")
+	row := func() int {
+		for i, l := range strings.Split(a.screen(), "\n") {
+			if strings.Contains(l, "new master password") && !strings.Contains(l, "again") {
+				return i
+			}
+		}
+		return -1
+	}
+	before, at := a.screen(), row()
+	if strings.Contains(before, "ctrl+r") {
+		t.Errorf("a hint to show nothing:\n%s", before)
+	}
+	a.press("x")
+	if s := a.screen(); !strings.Contains(s, "ctrl+r  show what you typed") || row() != at {
+		t.Errorf("typed: the new password's label at %d, was %d\n%s", row(), at, s)
+	}
+}
