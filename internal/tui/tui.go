@@ -146,6 +146,10 @@ type Version struct {
 	ID         int64
 }
 
+// ErrTrashChanged is an entry chosen from the trash as listed that isn't
+// there as it was: put back, deleted, or its id another's now.
+var ErrTrashChanged = errors.New("the trash changed meanwhile, so nothing was done: look again")
+
 // ErrHistoryChanged is an earlier secret chosen from a list that another
 // command has changed since: it's no longer in the history.
 var ErrHistoryChanged = errors.New("its earlier secrets changed meanwhile, so nothing was done: look again, then choose")
@@ -190,9 +194,10 @@ type Vault interface {
 	// History is k's earlier secrets, the newest first: version 2 is the
 	// first.
 	History(k vault.Key) ([]Version, error)
-	// ReadVersion is k's version n (2 and up), to copy; the audit log
+	// ReadVersion is k's earlier secret v, to copy (ErrHistoryChanged when
+	// it's no longer in the history); the audit log
 	// records the read. The caller wipes it.
-	ReadVersion(k vault.Key, n int) ([]byte, error)
+	ReadVersion(k vault.Key, v Version) ([]byte, error)
 	// RestoreVersion makes k's earlier secret v its secret again; the one
 	// it replaces is kept. ErrHistoryChanged when v is no longer in the
 	// history.
@@ -201,13 +206,15 @@ type Vault interface {
 	Delete(k vault.Key) error
 	// Trash is the trash's entries, the newest first.
 	Trash() ([]Trashed, error)
-	// RestoreFromTrash puts the trash's entry id back, under its own name,
-	// or as the entry as names when it isn't zero, and says the name it
-	// has. ErrNameTaken when another entry has that name.
-	RestoreFromTrash(id int64, as vault.Key) (vault.Key, error)
-	// RemoveFromTrash deletes the trash's entries ids for good, all or
-	// none, and says how many.
-	RemoveFromTrash(ids ...int64) (int, error)
+	// RestoreFromTrash puts the trash's entry t, as Trash listed it, back,
+	// under its own name, or as the entry as names when it isn't zero, and
+	// says the name it has. ErrNameTaken when another entry has that name;
+	// ErrTrashChanged when t isn't in the trash as it was listed.
+	RestoreFromTrash(t *Trashed, as vault.Key) (vault.Key, error)
+	// RemoveFromTrash deletes the trash's entries listed for good, all or
+	// none, and says how many; ErrTrashChanged when one isn't in the trash
+	// as it was listed.
+	RemoveFromTrash(listed ...Trashed) (int, error)
 	// ForgetVersion deletes k's earlier secret v for good; the versions
 	// after it move up a number. ErrHistoryChanged as for RestoreVersion.
 	ForgetVersion(k vault.Key, v Version) error

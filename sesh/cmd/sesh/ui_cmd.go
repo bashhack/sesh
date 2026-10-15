@@ -458,13 +458,16 @@ func (u *uiVault) History(k vault.Key) ([]tui.Version, error) {
 	return out, nil
 }
 
-func (u *uiVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
-	secret, err := u.store.ReadVersion(k, n, "in sesh ui, to copy it")
+func (u *uiVault) ReadVersion(k vault.Key, v tui.Version) ([]byte, error) {
+	secret, err := u.store.ReadVersionOf(k, database.Version{ID: v.ID, ReplacedAt: v.ReplacedAt}, "in sesh ui, to copy it")
+	if errors.Is(err, database.ErrVersionGone) {
+		return nil, tui.ErrHistoryChanged
+	}
 	return secret, uiLocked(err)
 }
 
 func (u *uiVault) RestoreVersion(k vault.Key, v tui.Version) error {
-	_, err := u.store.RestoreVersionID(k, v.ID)
+	_, err := u.store.RestoreVersionOf(k, database.Version{ID: v.ID, ReplacedAt: v.ReplacedAt})
 	if errors.Is(err, database.ErrVersionGone) {
 		return tui.ErrHistoryChanged
 	}
@@ -553,8 +556,14 @@ func (u *uiVault) Trash() ([]tui.Trashed, error) {
 	return out, nil
 }
 
-func (u *uiVault) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
-	r, err := u.store.RestoreFromTrash(id, as)
+func (u *uiVault) RestoreFromTrash(t *tui.Trashed, as vault.Key) (vault.Key, error) {
+	if err := u.asListed(*t); err != nil {
+		return vault.Key{}, err
+	}
+	r, err := u.store.RestoreFromTrash(t.ID, as)
+	if errors.Is(err, database.ErrNotInTrash) {
+		return vault.Key{}, tui.ErrTrashChanged
+	}
 	if errors.Is(err, database.ErrNameTaken) {
 		return vault.Key{}, tui.ErrNameTaken
 	}
@@ -562,7 +571,7 @@ func (u *uiVault) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
 }
 
 func (u *uiVault) ForgetVersion(k vault.Key, v tui.Version) error {
-	err := u.store.ForgetVersionID(k, v.ID)
+	err := u.store.ForgetVersionOf(k, database.Version{ID: v.ID, ReplacedAt: v.ReplacedAt})
 	if errors.Is(err, database.ErrVersionGone) {
 		return tui.ErrHistoryChanged
 	}
@@ -597,12 +606,38 @@ func (u *uiVault) AuditLog(limit int) (tui.AuditLog, error) {
 	return log, nil
 }
 
-func (u *uiVault) RemoveFromTrash(ids ...int64) (int, error) {
+func (u *uiVault) RemoveFromTrash(listed ...tui.Trashed) (int, error) {
+	if err := u.asListed(listed...); err != nil {
+		return 0, err
+	}
+	ids := make([]int64, len(listed))
+	for i, t := range listed {
+		ids[i] = t.ID
+	}
 	gone, err := u.store.RemoveFromTrash(ids...)
 	if errors.Is(err, database.ErrNotInTrash) {
-		return 0, errors.New("the trash changed meanwhile, so nothing was deleted: look again")
+		return 0, tui.ErrTrashChanged
 	}
 	return len(gone), u.wrote(err)
+}
+
+// asListed is ErrTrashChanged unless each of listed is in the trash as
+// the app listed it: by its id, name and when it was deleted, since a
+// vault made before trash ids stopped being reused can give a deleted
+// one's id to another.
+func (u *uiVault) asListed(listed ...tui.Trashed) error {
+	now, err := u.store.Trash()
+	if err != nil {
+		return uiLocked(err)
+	}
+	for _, t := range listed {
+		if !slices.ContainsFunc(now, func(e database.TrashedEntry) bool {
+			return e.ID == t.ID && e.Key == t.Key && e.DeletedAt.Equal(t.DeletedAt)
+		}) {
+			return tui.ErrTrashChanged
+		}
+	}
+	return nil
 }
 
 // wrote is err, after the app's own write: the fingerprint is taken

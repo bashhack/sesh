@@ -52,8 +52,9 @@ func migrateV1(tx *sql.Tx) error {
 		// Deleted entries, kept a while to be restored: an entry's row as
 		// it was, its tags as a JSON array, and when it was deleted. The
 		// secret and details stay sealed for its name; see trash.go.
+		// Their ids aren't reused, so one listed names only that entry.
 		`CREATE TABLE trash (
-			id             INTEGER PRIMARY KEY,
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
 			kind           TEXT NOT NULL,
 			service        TEXT NOT NULL,
 			username       TEXT NOT NULL DEFAULT '',
@@ -74,8 +75,9 @@ func migrateV1(tx *sql.Tx) error {
 		// Entries' earlier secrets, each sealed for its entry's name, and
 		// when it was replaced. While its entry is in the trash, trash_id
 		// is that entry's, and it goes with it; see history.go.
+		// Their ids aren't reused, so one listed names only that secret.
 		`CREATE TABLE history (
-			id             INTEGER PRIMARY KEY,
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
 			kind           TEXT NOT NULL,
 			service        TEXT NOT NULL,
 			username       TEXT NOT NULL DEFAULT '',

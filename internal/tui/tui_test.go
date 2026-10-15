@@ -151,7 +151,11 @@ func (f *fakeVault) numbered(k vault.Key, v Version) (int, error) {
 	return i + 2, nil
 }
 
-func (f *fakeVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
+func (f *fakeVault) ReadVersion(k vault.Key, v Version) ([]byte, error) {
+	n, err := f.numbered(k, v)
+	if err != nil {
+		return nil, err
+	}
 	f.reads = append(f.reads, fmt.Sprintf("version %s %d", k, n))
 	return []byte(f.history[k][n-2]), nil
 }
@@ -320,7 +324,21 @@ func (f *fakeVault) RenameTag(from, to string) (int, bool, error) {
 
 func (f *fakeVault) Trash() ([]Trashed, error) { return slices.Clone(f.trash), nil }
 
-func (f *fakeVault) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
+// listed is ErrTrashChanged unless each of ts is in the trash as listed.
+func (f *fakeVault) listed(ts ...Trashed) error {
+	for _, t := range ts {
+		if !slices.Contains(f.trash, t) {
+			return ErrTrashChanged
+		}
+	}
+	return nil
+}
+
+func (f *fakeVault) RestoreFromTrash(t *Trashed, as vault.Key) (vault.Key, error) {
+	if err := f.listed(*t); err != nil {
+		return vault.Key{}, err
+	}
+	id := t.ID
 	e := f.trashed[id]
 	if as != (vault.Key{}) {
 		e.Key = as
@@ -349,9 +367,12 @@ func (f *fakeVault) AuditLog(limit int) (AuditLog, error) {
 	return log, f.err
 }
 
-func (f *fakeVault) RemoveFromTrash(ids ...int64) (int, error) {
+func (f *fakeVault) RemoveFromTrash(listed ...Trashed) (int, error) {
+	if err := f.listed(listed...); err != nil {
+		return 0, err
+	}
 	n := len(f.trash)
-	f.trash = slices.DeleteFunc(f.trash, func(t Trashed) bool { return slices.Contains(ids, t.ID) })
+	f.trash = slices.DeleteFunc(f.trash, func(t Trashed) bool { return slices.Contains(listed, t) })
 	return n - len(f.trash), nil
 }
 
@@ -1502,6 +1523,13 @@ func TestAddScanQR(t *testing.T) {
 	if quits(a.lock("You locked it.")) {
 		t.Error("a lock during a scan quit before the capture ended")
 	}
+	// On the locked screen, Ctrl-C and Esc wait for it too, and say so.
+	for _, key := range []tea.KeyPressMsg{{Code: 'c', Mod: tea.ModCtrl}, {Code: tea.KeyEscape}} {
+		a.quitAfter = false
+		if quits(a.lockedKey(key)) || !a.quitAfter || !strings.Contains(a.screen(), "Quitting once the screen capture ends") {
+			t.Errorf("%s while locked during a scan:\n%s", key.String(), a.screen())
+		}
+	}
 	cmd := a.scanned(&scannedMsg{qr: ScannedQR{Link: []byte(link)}, c: &Change{To: vault.Key{Kind: vault.KindTOTP, Service: "x"}}, epoch: a.epoch})
 	if cmd == nil {
 		t.Fatal("quitting mid-scan: nothing done")
@@ -1671,7 +1699,7 @@ func TestPanelEdges(t *testing.T) {
 	if a.input.Value() != "" {
 		t.Errorf("a paste reached the search behind the panel: %q", a.input.Value())
 	}
-	first := a.restoreFromTrash(7, vault.Key{})
+	first := a.restoreFromTrash(&f.trash[0], vault.Key{})
 	if !a.ov.loading {
 		t.Fatal("the panel takes keys while an entry is put back")
 	}
@@ -2726,9 +2754,18 @@ func TestSettingsChange(t *testing.T) {
 	if s := a.screen(); a.form == nil || !strings.Contains(s, "want a whole number") {
 		t.Errorf("a value refused:\n%s", s)
 	}
-	// Emptied at its default: nothing to take out. Emptied once set: taken out.
+	// Set by another command since the panel was read: emptying it takes it out.
+	if _, err := a.opts.SetSetting("history.keep", "7"); err != nil {
+		t.Fatal(err)
+	}
 	a.press("ctrl+u", "enter")
-	if len(*asked) != 2 || !strings.Contains(a.screen(), "history.keep is at its default already") {
+	if (*asked)[len(*asked)-1] != "history.keep=" {
+		t.Fatalf("set elsewhere, then emptied: asked %q\n%s", *asked, a.screen())
+	}
+	// Emptied at its default: nothing to take out. Emptied once set: taken out.
+	a.press("enter")
+	a.press("ctrl+u", "enter")
+	if len(*asked) != 4 || !strings.Contains(a.screen(), "history.keep is at its default already") {
 		t.Errorf("emptied at its default: asked %q\n%s", *asked, a.screen())
 	}
 	a.press("down", "enter", "ctrl+u", "enter")

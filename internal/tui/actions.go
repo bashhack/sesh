@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -252,9 +253,10 @@ func (m *Model) choose(i int) tea.Cmd {
 	}
 	switch ov.kind {
 	case panelHistory:
-		return m.copyVersion(ov.k, i+2)
+		return m.copyVersion(ov.k, i+2, ov.versions[i])
 	case panelTrash:
-		return m.restoreFromTrash(ov.trash[i].ID, vault.Key{})
+		t := ov.trash[i]
+		return m.restoreFromTrash(&t, vault.Key{})
 	case panelImport:
 		return nil // the summary's lines, to read
 	}
@@ -288,23 +290,20 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 		return m.askRestoreAs(&ov.trash[ov.sel])
 	case ov.kind == panelTrash && k == "e" && len(ov.trash) > 0:
 		// What's listed, and only that: an entry trashed since is left.
-		ids := make([]int64, len(ov.trash))
-		for i, t := range ov.trash {
-			ids[i] = t.ID
-		}
+		listed := slices.Clone(ov.trash)
 		m.ov = m.confirm(ov, "Empty the trash",
-			fmt.Sprintf("Delete %s in the trash for good? They can't be brought back.", plural(len(ids), "the 1 entry", fmt.Sprintf("all %d entries", len(ids)))),
-			func() tea.Cmd { m.ov = ov; return m.emptyTrash(ids) })
+			fmt.Sprintf("Delete %s in the trash for good? They can't be brought back.", plural(len(listed), "the 1 entry", fmt.Sprintf("all %d entries", len(listed)))),
+			func() tea.Cmd { m.ov = ov; return m.emptyTrash(listed) })
 		m.ov.danger = true
 	case ov.kind == panelBackups:
 		return m.backupsLetter(k)
 	case ov.kind == panelImport:
 		return m.importLetter(k)
 	case ov.kind == panelTrash && (k == "x" || k == "delete") && ov.sel < len(ov.trash):
-		id, k := ov.trash[ov.sel].ID, ov.trash[ov.sel].Key
+		t := ov.trash[ov.sel]
 		m.ov = m.confirm(ov, "Delete for good",
-			fmt.Sprintf("Delete %s for good? It can't be brought back.", short(kindName(k))),
-			func() tea.Cmd { return m.removeFromTrash(id, k) })
+			fmt.Sprintf("Delete %s for good? It can't be brought back.", short(kindName(t.Key))),
+			func() tea.Cmd { return m.removeFromTrash(&t) })
 		m.ov.danger = true
 	}
 	return nil
@@ -404,11 +403,12 @@ func (m *Model) openHistory(e *vault.Entry) tea.Cmd {
 	})
 }
 
-// copyVersion copies k's version n: a read the audit log records.
-func (m *Model) copyVersion(k vault.Key, n int) tea.Cmd {
+// copyVersion copies k's earlier secret ver, listed as version n: a read
+// the audit log records.
+func (m *Model) copyVersion(k vault.Key, n int, ver Version) tea.Cmd {
 	opts, epoch := m.opts, m.epoch
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		secret, err := v.ReadVersion(k, n)
+		secret, err := v.ReadVersion(k, ver)
 		if err != nil {
 			return copiedMsg{err: err, epoch: epoch}
 		}
@@ -479,13 +479,17 @@ func (m *Model) openTrash() tea.Cmd {
 	})
 }
 
-// restoreFromTrash puts the trash's entry id back: under its own name,
-// or as the entry as names when it isn't zero.
-func (m *Model) restoreFromTrash(id int64, as vault.Key) tea.Cmd {
+// restoreFromTrash puts the trash's entry t back: under its own name, or
+// as the entry as names when it isn't zero.
+func (m *Model) restoreFromTrash(t *Trashed, as vault.Key) tea.Cmd {
 	epoch := m.epoch
 	m.ov.loading = true // no second Enter while this one is put back
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		k, err := v.RestoreFromTrash(id, as)
+		k, err := v.RestoreFromTrash(t, as)
+		if errors.Is(err, ErrTrashChanged) {
+			trash, _ := v.Trash() //nolint:errcheck // the list as it is, under the error said
+			return trashMsg{trash: trash, err: err, epoch: epoch}
+		}
 		if errors.Is(err, ErrNameTaken) {
 			if as == (vault.Key{}) {
 				err = errors.New("another entry has its name: a puts it back under another")
@@ -500,7 +504,7 @@ func (m *Model) restoreFromTrash(id int64, as vault.Key) tea.Cmd {
 // askRestoreAs asks for the name to put t back from the trash under: its
 // ID, as sesh trash restore --as takes it.
 func (m *Model) askRestoreAs(t *Trashed) tea.Cmd {
-	id, own := t.ID, t.Key
+	listed, own := *t, t.Key
 	return m.askOver(true, "Put back as", "entry ID", own.String(), "kind/name or kind/name/username, as sesh list's ID column has it: "+string(own.Kind)+"/…", nil, func(typed string) (string, tea.Cmd) {
 		as, err := vault.ParseKey(strings.TrimSpace(typed))
 		switch {
@@ -511,16 +515,16 @@ func (m *Model) askRestoreAs(t *Trashed) tea.Cmd {
 		case as.Kind != own.Kind:
 			return "It comes back as the kind it is: " + string(own.Kind) + "/…", nil
 		}
-		return "", m.restoreFromTrash(id, as)
+		return "", m.restoreFromTrash(&listed, as)
 	})
 }
 
-// emptyTrash deletes the trash's entries ids, those it listed, for good.
-func (m *Model) emptyTrash(ids []int64) tea.Cmd {
+// emptyTrash deletes the trash's entries listed, and only those, for good.
+func (m *Model) emptyTrash(listed []Trashed) tea.Cmd {
 	epoch := m.epoch
 	m.ov.loading = true
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		n, err := v.RemoveFromTrash(ids...)
+		n, err := v.RemoveFromTrash(listed...)
 		if err != nil {
 			trash, _ := v.Trash() //nolint:errcheck // the list as it is, under the error said
 			return trashMsg{trash: trash, err: err, epoch: epoch}
@@ -545,12 +549,12 @@ func (m *Model) forgetVersion(k vault.Key, n int, ver Version) tea.Cmd {
 	})
 }
 
-// removeFromTrash deletes the trash's entry id, k, for good.
-func (m *Model) removeFromTrash(id int64, k vault.Key) tea.Cmd {
+// removeFromTrash deletes the trash's entry t, as listed, for good.
+func (m *Model) removeFromTrash(t *Trashed) tea.Cmd {
 	epoch := m.epoch
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		_, err := v.RemoveFromTrash(id)
-		return doneMsg{what: "Deleted " + kindName(k) + " for good", err: err, epoch: epoch, reread: true}
+		_, err := v.RemoveFromTrash(*t)
+		return doneMsg{what: "Deleted " + kindName(t.Key) + " for good", err: err, epoch: epoch, reread: true}
 	})
 }
 

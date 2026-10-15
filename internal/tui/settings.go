@@ -117,7 +117,17 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 	}
 	key, raw, def, applies, said, set := s.Key, s.Raw, s.Default, s.Applies, s.Said, m.opts.SetSetting
 	return m.askOver(true, "Change "+key, key, s.Raw, "empty: back to the default; it takes effect "+applies, nil, func(value string) (string, tea.Cmd) {
-		if value == raw || value == "" && strings.HasPrefix(said, "default") {
+		// Against the file as it is now, which another command may have
+		// changed since the panel was read.
+		from, fromSaid := raw, said
+		if now, err := m.opts.Settings(); err == nil {
+			for _, x := range now {
+				if x.Key == key {
+					from, fromSaid = x.Raw, x.Said
+				}
+			}
+		}
+		if value == from || value == "" && strings.HasPrefix(fromSaid, "default") {
 			m.say("Nothing changed: " + key + " is " + cmp.Or(value, "at its default") + " already.")
 			return "", nil
 		}
@@ -140,16 +150,6 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		to := value
 		if to == "" {
 			to = def
-		}
-		// Against the file as it is now, which another command may have
-		// changed since the panel was read.
-		from := raw
-		if now, err := m.opts.Settings(); err == nil {
-			for _, x := range now {
-				if x.Key == key {
-					from = x.Raw
-				}
-			}
 		}
 		if loss := config.Loss(key, from, to); loss != "" {
 			// What's deleted for good is asked about first.

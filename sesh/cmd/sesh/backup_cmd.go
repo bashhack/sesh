@@ -100,9 +100,12 @@ func runBackup(app *App, args []string) error {
 		}
 		return err
 	}
-	if a := fs.Arg(0); a == "list" || a == "delete" {
-		// A flag came before the word: sesh backup's own, read as a file.
-		return fmt.Errorf("put sesh backup %s's flags after the word (sesh backup %s --force); to back up to a file named %s, write ./%s", a, a, a, a)
+	switch a := fs.Arg(0); a {
+	case "list":
+		// A flag came before the word, which made it a file.
+		return errors.New("sesh backup list takes no flags; to back up to a file named list, write ./list")
+	case "delete":
+		return errors.New("put sesh backup delete's flags after the word (sesh backup delete --force); to back up to a file named delete, write ./delete")
 	}
 	if fs.NArg() > 1 {
 		return fmt.Errorf("sesh backup takes at most one file, got %q", strings.Join(fs.Args(), " "))

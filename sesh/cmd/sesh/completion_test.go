@@ -96,6 +96,7 @@ func TestComplete(t *testing.T) {
 		{name: "backup list takes only settings", words: all("backup", "list", "-"), want: all("--db-path")},
 		{name: "backup's file after a flag", words: all("backup", "--force", "my"), files: true},
 		{name: "backup's file after its flag", words: all("backup", "--force", ""), files: true},
+		{name: "backup commands after a setting", words: all("backup", "--db-path", "x.db", ""), want: all("list", "delete")},
 		{name: "config set's setting after a flag", words: all("config", "set", "--force", "hi"), want: all("history.keep")},
 		{name: "no words", words: nil, want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "aws", "completion")},
 	} {

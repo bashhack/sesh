@@ -461,7 +461,7 @@ func TestUI_Actions(t *testing.T) {
 	if err != nil || len(h) != 1 {
 		t.Fatalf("History = %v, %v", h, err)
 	}
-	if v, err := u.ReadVersion(gh, 2); err != nil || string(v) != "a" {
+	if v, err := u.ReadVersion(gh, h[0]); err != nil || string(v) != "a" {
 		t.Errorf("ReadVersion = %q, %v", v, err)
 	}
 	// A version is named by its row: one no longer in the history isn't restored.
@@ -485,11 +485,11 @@ func TestUI_Actions(t *testing.T) {
 		t.Errorf("Check after the app's own writes = %v, %v; want no change", changed, err)
 	}
 	putSecrets(t, gh, "someone else's")
-	if _, err := u.RestoreFromTrash(trash[0].ID, vault.Key{}); !errors.Is(err, tui.ErrNameTaken) {
+	if _, err := u.RestoreFromTrash(&trash[0], vault.Key{}); !errors.Is(err, tui.ErrNameTaken) {
 		t.Errorf("restore onto a name in use: %v", err)
 	}
 	old := vault.Key{Kind: vault.KindPassword, Service: "github-old", Username: "alice"}
-	if k, err := u.RestoreFromTrash(trash[0].ID, old); err != nil || k != old {
+	if k, err := u.RestoreFromTrash(&trash[0], old); err != nil || k != old {
 		t.Errorf("restore as another = %v, %v", k, err)
 	}
 	// An earlier secret deleted for good; the trash emptied.
@@ -519,10 +519,16 @@ func TestUI_Actions(t *testing.T) {
 	if err != nil || len(trash) != 2 {
 		t.Fatalf("Trash = %+v, %v", trash, err)
 	}
-	if _, err := u.RemoveFromTrash(trash[0].ID, 12345); err == nil || !strings.Contains(err.Error(), "nothing was deleted") {
-		t.Errorf("one not in the trash: %v", err)
+	// Each must be in the trash as listed: its id, name, and when it was deleted.
+	gone := trash[1]
+	gone.DeletedAt = gone.DeletedAt.Add(time.Second)
+	if _, err := u.RemoveFromTrash(trash[0], gone); !errors.Is(err, tui.ErrTrashChanged) {
+		t.Errorf("one not in the trash as listed: %v", err)
 	}
-	if n, err := u.RemoveFromTrash(trash[0].ID, trash[1].ID); err != nil || n != 2 {
+	if _, err := u.RestoreFromTrash(&gone, vault.Key{}); !errors.Is(err, tui.ErrTrashChanged) {
+		t.Errorf("restore of one not as listed: %v", err)
+	}
+	if n, err := u.RemoveFromTrash(trash[0], trash[1]); err != nil || n != 2 {
 		t.Errorf("RemoveFromTrash = %d, %v", n, err)
 	}
 	if trash, err := u.Trash(); err != nil || len(trash) != 0 {
