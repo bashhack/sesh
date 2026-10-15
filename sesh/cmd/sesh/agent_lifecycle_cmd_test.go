@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -21,6 +22,12 @@ import (
 // process-wide.
 func TestMain(m *testing.M) {
 	hardenProcess = func() error { return nil }
+	// No test starts an agent in the background: that would run this test
+	// binary as one, writing its output to the developer's own agent log.
+	// Tests that need one start it in-process (startTestAgent).
+	agent.AgentSpawnCommand = func(string) (*exec.Cmd, error) {
+		return nil, errors.New("tests don't start an agent in the background")
+	}
 	// Doctor's Clipboard row is Linux only: every test sees the macOS
 	// report, on any system.
 	clipboardOS = "darwin"
