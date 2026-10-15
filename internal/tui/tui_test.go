@@ -1717,6 +1717,30 @@ func TestFormShowsAFieldsValue(t *testing.T) {
 	}
 }
 
+// Ctrl-R hides a value shown, even once it's been emptied, rather than reading it again.
+func TestFormHidesAnEmptiedValue(t *testing.T) {
+	f := newFake()
+	f.entries[0].Fields = []vault.Field{{Name: "pin", Secret: true}}
+	f.fields = map[vault.Key][]vault.Field{github: {{Name: "pin", Secret: true, Value: []byte("4711")}}}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "e")
+	a.tabs(8)
+	a.press("enter", "tab", "tab", "ctrl+r", "backspace", "backspace", "backspace", "backspace")
+	if s := a.screen(); !strings.Contains(s, "ctrl+r  hide it") {
+		t.Fatalf("emptied, shown:\n%s", s)
+	}
+	a.press("ctrl+r", "1")
+	field := 0
+	for _, r := range f.reads {
+		if strings.HasPrefix(r, "field ") {
+			field++
+		}
+	}
+	if s := a.screen(); strings.Contains(s, "4711") || strings.Contains(s, " 1▌") || field != 1 {
+		t.Errorf("Ctrl-R read it again (%q), or didn't hide what's typed:\n%s", f.reads, s)
+	}
+}
+
 // fieldsApp is the app with github's form open on its fields: email (plain)
 // and pin (secret, not read).
 func fieldsApp(t *testing.T) (*app, *fakeVault) {

@@ -305,3 +305,69 @@ func TestChangePasswordKeyInFlight(t *testing.T) {
 		t.Errorf("the key after the change failed: pending %v", a.pending[totp])
 	}
 }
+
+// Ctrl-R's hint shows once something is typed to show, not over an empty input, which says to type it; the form doesn't
+// move when it does.
+func TestRevealHintOnceTyped(t *testing.T) {
+	a, _ := passwordApp(t, newFake(), Changed{}, nil)
+	a.press("ctrl+g", ",", "enter")
+	row := func() int {
+		for i, l := range strings.Split(a.screen(), "\n") {
+			if strings.Contains(l, "new master password") && !strings.Contains(l, "again") {
+				return i
+			}
+		}
+		return -1
+	}
+	before, at := a.screen(), row()
+	if strings.Contains(before, "ctrl+r") || !strings.Contains(before, "type it: sesh keeps no copy") {
+		t.Errorf("empty, the current password's hints:\n%s", before)
+	}
+	a.press("x")
+	if s := a.screen(); !strings.Contains(s, "ctrl+r  show what you typed") || row() != at {
+		t.Errorf("typed: the new password's label at %d, was %d\n%s", row(), at, s)
+	}
+	// At the narrowest window the prompt still fits one line, so the form doesn't move there either.
+	a.press("backspace")
+	a.Update(tea.WindowSizeMsg{Width: minWidth, Height: 30})
+	narrow := row()
+	a.press("x")
+	if row() != narrow {
+		t.Errorf("at %d columns: the new password's label at %d, was %d\n%s", minWidth, row(), narrow, a.screen())
+	}
+	a.press("backspace")
+	a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a.press("x")
+	// Shown, then emptied, or shown with nothing typed: the hint says it's shown, before what's typed next is.
+	a.press("ctrl+r", "backspace")
+	if s := a.screen(); !strings.Contains(s, "ctrl+r  hide it") {
+		t.Errorf("shown, then emptied:\n%s", s)
+	}
+	a.press("tab", "ctrl+r")
+	if s := a.screen(); !strings.Contains(s, "ctrl+r  hide it") {
+		t.Errorf("shown with nothing typed:\n%s", s)
+	}
+}
+
+// The export password's line, its own hint beside or below Ctrl-R's, is kept while it's empty: the form doesn't move.
+func TestRevealHintKeepsLines(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.press("ctrl+g", "i", "e", "tab")
+	row := func() int {
+		for i, l := range strings.Split(a.screen(), "\n") {
+			if strings.Contains(l, "export password again") {
+				return i
+			}
+		}
+		return -1
+	}
+	for _, w := range []int{80, 60} {
+		a.Update(tea.WindowSizeMsg{Width: w, Height: 30})
+		at := row()
+		a.press("x")
+		if row() != at || at < 0 {
+			t.Errorf("at %d columns: the next label at %d, was %d\n%s", w, row(), at, a.screen())
+		}
+		a.press("backspace")
+	}
+}

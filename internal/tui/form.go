@@ -39,6 +39,7 @@ type input struct {
 	named    func() string  // its label, when that depends on other inputs
 	label    string
 	hint     string
+	prompt   string // a secret input's line while nothing is typed
 	choices  []string
 	secret   []byte
 	loaded   []byte // the secret load read, to tell whether it was changed
@@ -440,12 +441,14 @@ func (m *Model) formKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+r":
 		switch {
 		case in.kind != inputSecret || in.loading:
+		case in.reveal:
+			in.reveal = false
 		case len(in.secret) == 0 && in.load != nil:
 			// The value it has isn't held until it's asked for.
 			in.loading = true
 			return in.load()
 		default:
-			in.reveal = !in.reveal
+			in.reveal = true
 		}
 		return nil
 	case "up", "down":
@@ -802,10 +805,22 @@ func (m *Model) drawForm(base string) string {
 					word = "show it"
 				}
 				line := "   " + th.hints([2]string{"ctrl+r", word})
-				switch hint := th.dimmed().Render(in.hint); {
+				hint := th.dimmed().Render(in.hint)
+				oneLine := in.hint == "" || lipgloss.Width(line)+3+lipgloss.Width(hint) <= inner
+				if len(in.secret) == 0 && in.load == nil && !in.reveal {
+					// Nothing typed: nothing to show. Its line stays, so
+					// the form doesn't move as typing starts.
+					line = ""
+					if in.prompt != "" {
+						line = "   " + th.dimmed().Render(in.prompt)
+					}
+				}
+				switch {
 				case in.hint == "":
 					lines = append(lines, line)
-				case lipgloss.Width(line)+3+lipgloss.Width(hint) <= inner:
+				case strings.TrimSpace(line) == "" && oneLine:
+					lines = append(lines, "   "+hint)
+				case oneLine:
 					lines = append(lines, line+"   "+hint)
 				default:
 					lines = append(lines, line, "   "+hint)
