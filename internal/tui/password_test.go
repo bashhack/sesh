@@ -310,7 +310,7 @@ func TestChangePasswordKeyInFlight(t *testing.T) {
 // move when it does.
 func TestRevealHintOnceTyped(t *testing.T) {
 	a, _ := passwordApp(t, newFake(), Changed{}, nil)
-	a.press("ctrl+k", ",", "enter")
+	a.press("ctrl+g", ",", "enter")
 	row := func() int {
 		for i, l := range strings.Split(a.screen(), "\n") {
 			if strings.Contains(l, "new master password") && !strings.Contains(l, "again") {
@@ -352,7 +352,7 @@ func TestRevealHintOnceTyped(t *testing.T) {
 // The export password's line, its own hint beside or below Ctrl-R's, is kept while it's empty: the form doesn't move.
 func TestRevealHintKeepsLines(t *testing.T) {
 	a := newApp(t, newFake(), Options{})
-	a.press("ctrl+k", "i", "e", "tab")
+	a.press("ctrl+g", "i", "e", "tab")
 	row := func() int {
 		for i, l := range strings.Split(a.screen(), "\n") {
 			if strings.Contains(l, "export password again") {
