@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -378,6 +379,7 @@ func (m *Model) openMarkedMenu() tea.Cmd {
 		{key: "+", label: "add a tag…", run: func() tea.Cmd { return m.askTag(keys, true) }},
 		{key: "-", label: "remove a tag…", run: func() tea.Cmd { return m.askTag(keys, false) }},
 		{key: "d", label: "move to the trash", run: func() tea.Cmd { return m.confirmDeleteMany(keys) }},
+		{key: "x", label: "delete for good", run: func() tea.Cmd { return m.confirmPurge(keys) }},
 		{key: "c", label: "clear the marks", run: func() tea.Cmd {
 			clear(m.marked)
 			m.ov = nil
@@ -508,6 +510,27 @@ func (m *Model) confirmDeleteMany(keys []vault.Key) tea.Cmd {
 			func(n int) string { return "Moved " + countOf(n) + " to the trash" })
 	})
 	m.ov.danger = true
+	return nil
+}
+
+// openFiling lists the folders and tags as the sidebar does, for a window
+// too narrow for it (or a choice from the keyboard): Enter shows a row's
+// entries, and r renames a folder or tag.
+func (m *Model) openFiling() tea.Cmd {
+	ov := &overlay{kind: panelFiling, back: m.ov, title: "Folders and tags"}
+	for i, r := range m.side {
+		label := strings.Repeat("  ", r.depth) + r.label
+		if r.kind != sideAll {
+			label += "  " + m.th.dimmed().Render(strconv.Itoa(r.count))
+		}
+		if r.kind == m.filter.kind && r.name == m.filter.name {
+			ov.sel = i
+		}
+		ov.items = append(ov.items, item{label: label, rule: r.kind == sideTag && (i == 0 || m.side[i-1].kind != sideTag), run: func() tea.Cmd {
+			return m.pick(i)
+		}})
+	}
+	m.ov = ov
 	return nil
 }
 

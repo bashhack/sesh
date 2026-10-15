@@ -11,6 +11,7 @@ import (
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/tui"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // The app's export is sesh's encrypted export of every entry, written to a file it asks before replacing; a device,
@@ -24,7 +25,7 @@ func TestUI_Export(t *testing.T) {
 	u := newUIVault(store)
 	defer u.Close() //nolint:errcheck // test cleanup
 	file := filepath.Join(t.TempDir(), "backup.enc")
-	said, err := u.Export(file, []byte("export-pass-1234"), false)
+	said, err := u.Export(file, []byte("export-pass-1234"), false, tui.ExportOnly{})
 	if err != nil || !strings.HasPrefix(said, "Exported 4 entries to ") {
 		t.Fatalf("%q, %v", said, err)
 	}
@@ -42,13 +43,25 @@ func TestUI_Export(t *testing.T) {
 	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 {
 		t.Errorf("its mode: %v, %v", info, err)
 	}
-	if _, err := u.Export(file, []byte("export-pass-1234"), false); !errors.Is(err, tui.ErrExists) {
+	// Narrowed to a kind: only those; to a folder no entry is in: refused before a file is made.
+	notes := filepath.Join(t.TempDir(), "keys.enc")
+	if said, err := u.Export(notes, []byte("export-pass-1234"), false, tui.ExportOnly{Kind: vault.KindAPIKey}); err != nil || !strings.HasPrefix(said, "Exported 1 entry to ") {
+		t.Errorf("API keys only: %q, %v", said, err)
+	}
+	none := filepath.Join(t.TempDir(), "none.enc")
+	if _, err := u.Export(none, []byte("export-pass-1234"), false, tui.ExportOnly{Folder: "nowhere"}); err == nil || !strings.Contains(err.Error(), "so nothing was exported") {
+		t.Errorf("a folder with nothing: %v", err)
+	}
+	if _, err := os.Stat(none); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refused export left a file: %v", err)
+	}
+	if _, err := u.Export(file, []byte("export-pass-1234"), false, tui.ExportOnly{}); !errors.Is(err, tui.ErrExists) {
 		t.Errorf("a file there: %v", err)
 	}
-	if _, err := u.Export(file, []byte("export-pass-1234"), true); err != nil {
+	if _, err := u.Export(file, []byte("export-pass-1234"), true, tui.ExportOnly{}); err != nil {
 		t.Errorf("replacing it: %v", err)
 	}
-	if _, err := u.Export("/dev/null", []byte("export-pass-1234"), false); err == nil || !strings.Contains(err.Error(), "device or pipe") {
+	if _, err := u.Export("/dev/null", []byte("export-pass-1234"), false, tui.ExportOnly{}); err == nil || !strings.Contains(err.Error(), "device or pipe") {
 		t.Errorf("a device: %v", err)
 	}
 	// A device through a link is one too.
@@ -56,13 +69,13 @@ func TestUI_Export(t *testing.T) {
 	if err := os.Symlink("/dev/null", link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := u.Export(link, []byte("export-pass-1234"), false); err == nil || !strings.Contains(err.Error(), "device or pipe") {
+	if _, err := u.Export(link, []byte("export-pass-1234"), false, tui.ExportOnly{}); err == nil || !strings.Contains(err.Error(), "device or pipe") {
 		t.Errorf("a device through a link: %v", err)
 	}
 	// The vault's own files aren't written over, asked or not.
 	for _, f := range []string{store.Path(), store.Path() + "-wal"} {
 		for _, replace := range []bool{false, true} {
-			if _, err := u.Export(f, []byte("export-pass-1234"), replace); err == nil || !strings.Contains(err.Error(), "is the vault itself") {
+			if _, err := u.Export(f, []byte("export-pass-1234"), replace, tui.ExportOnly{}); err == nil || !strings.Contains(err.Error(), "is the vault itself") {
 				t.Errorf("%s, replace %v: %v", f, replace, err)
 			}
 		}
@@ -72,14 +85,14 @@ func TestUI_Export(t *testing.T) {
 	}
 	// The password given is wiped.
 	pw := []byte("export-pass-1234")
-	if _, err := u.Export(filepath.Join(t.TempDir(), "x.enc"), pw, false); err != nil || string(pw) == "export-pass-1234" {
+	if _, err := u.Export(filepath.Join(t.TempDir(), "x.enc"), pw, false, tui.ExportOnly{}); err != nil || string(pw) == "export-pass-1234" {
 		t.Errorf("the password after: %q, %v", pw, err)
 	}
-	if _, err := u.Export("backup.enc", []byte("export-pass-1234"), false); err == nil || !strings.Contains(err.Error(), "isn't a full path") {
+	if _, err := u.Export("backup.enc", []byte("export-pass-1234"), false, tui.ExportOnly{}); err == nil || !strings.Contains(err.Error(), "isn't a full path") {
 		t.Errorf("a relative path: %v", err)
 	}
-	// Each export read every entry, and the audit log says so: three exports of four.
-	if log := mustRun(t, runAudit); strings.Count(log, "  access  ") != 12 {
+	// Each export read the entries it holds, and the audit log says so: three of all four, and one of the API key.
+	if log := mustRun(t, runAudit); strings.Count(log, "  access  ") != 13 {
 		t.Errorf("the audit log doesn't record the reads:\n%s", log)
 	}
 }
@@ -99,7 +112,7 @@ func TestUI_ExportKeyChanged(t *testing.T) {
 		t.Fatalf("rotate: %v\n%s", err, stderr)
 	}
 	file := filepath.Join(t.TempDir(), "x.enc")
-	if _, err := u.Export(file, []byte("export-pass-1234"), false); !errors.Is(err, tui.ErrLocked) {
+	if _, err := u.Export(file, []byte("export-pass-1234"), false, tui.ExportOnly{}); !errors.Is(err, tui.ErrLocked) {
 		t.Errorf("%v", err)
 	}
 	if _, err := os.Stat(file); !os.IsNotExist(err) {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -10,9 +11,10 @@ import (
 // lists; sesh audit --limit 0 lists them all.
 const auditShown = 500
 
-// auditMsg is the audit log, read for its panel.
+// auditMsg is the audit log, read for its panel, and what a prune did.
 type auditMsg struct {
 	err   error
+	said  string
 	log   AuditLog
 	epoch int
 }
@@ -61,5 +63,41 @@ func (m *Model) gotAudit(msg *auditMsg) tea.Cmd {
 	if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelAudit {
 		return nil
 	}
-	return m.loaded(msg.err, func() { m.showAudit(&msg.log) })
+	return m.loaded(msg.err, func() {
+		m.showAudit(&msg.log)
+		if msg.said != "" {
+			m.say(msg.said)
+		}
+	})
+}
+
+// askPrune asks how old the events to delete are, then, after a yes,
+// deletes them and lists what's left.
+func (m *Model) askPrune() tea.Cmd {
+	panel := m.ov
+	return m.askOver(true, "Prune the audit log", "older than, in days", "", "0 deletes every event; audit.retention_days does this on its own", nil, func(typed string) (string, tea.Cmd) {
+		days, err := strconv.Atoi(typed)
+		if err != nil || days < 0 {
+			return "A whole number of days: 0 or more.", nil
+		}
+		what := fmt.Sprintf("the audit log's events older than %s", plural(days, "1 day", fmt.Sprintf("%d days", days)))
+		if days == 0 {
+			what = "every event in the audit log"
+		}
+		m.ov = m.confirm(panel, "Prune the audit log", "Delete "+what+"? They can't be brought back.", func() tea.Cmd {
+			m.ov = panel
+			panel.loading = true
+			epoch := m.epoch
+			return m.read(func(v Vault, _ func() bool) tea.Msg {
+				said, err := v.PruneAudit(days)
+				if err != nil {
+					return auditMsg{err: err, epoch: epoch}
+				}
+				log, err := v.AuditLog(auditShown)
+				return auditMsg{log: log, err: err, said: said, epoch: epoch}
+			})
+		})
+		m.ov.danger = true
+		return "", nil
+	})
 }

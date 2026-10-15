@@ -8,16 +8,21 @@ import (
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/tui"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // Export writes an encrypted export of every entry to the file to names,
 // as sesh export does, with pw, which it
 // wipes; a file there is replaced only when replace.
-func (u *uiVault) Export(to string, pw []byte, replace bool) (string, error) {
+func (u *uiVault) Export(to string, pw []byte, replace bool, only tui.ExportOnly) (string, error) {
 	defer secure.SecureZeroBytes(pw)
 	dest, err := uiPath(to)
 	if err != nil {
 		return "", err
+	}
+	f := vault.Filter{Folder: only.Folder, FolderSet: only.Folder != "", Tags: only.Tags}
+	if err := checkExportMatches(u.store, only.Kind, &f); err != nil {
+		return "", uiLocked(err)
 	}
 	out, err := exportfile.Open(dest, replace, u.store.Path())
 	if exists := (*exportfile.ExistsError)(nil); errors.As(err, &exists) {
@@ -45,7 +50,8 @@ func (u *uiVault) Export(to string, pw []byte, replace bool) (string, error) {
 		return "", uiLocked(err)
 	}
 	defer r.Close() //nolint:errcheck // read only, but for the audit events
-	n, err := password.NewManager(r).ExportEncrypted(out, &password.ExportOptions{KDF: st.KDF()}, pw)
+	opts := &password.ExportOptions{KDF: st.KDF(), EntryType: only.Kind, Folder: f.Folder, FolderSet: f.FolderSet, Tags: f.Tags}
+	n, err := password.NewManager(r).ExportEncrypted(out, opts, pw)
 	if err != nil {
 		return "", uiLocked(err)
 	}

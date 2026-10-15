@@ -58,6 +58,8 @@ const editUsage = `Usage: sesh edit <entry> [flags]
   sesh edit github --field recovery-email=alice@example.com
   sesh edit github --secret-field pin    (asks, hidden)
   sesh edit github --remove-field pin
+  sesh edit github --rename-field pin=card-pin   (keeps its value)
+  sesh edit github --plain-field account-no      (a secret field made plain, keeping its value)
   sesh edit github --notes [--editor]    (stdin, or $EDITOR; empty removes them)
 
 ` + entryWordsHelp
@@ -97,7 +99,7 @@ func runEdit(app *App, args []string) error {
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
 	asked := len(set) == 0 || (len(set) == 1 && set["force"])
 	if asked && !terminal {
-		return errors.New("nothing to change: give --rename, --username, --type, --secret, --generate, --url, --notes, --field, --secret-field, or --remove-field (or run it at a terminal to be asked)")
+		return errors.New("nothing to change: give --rename, --username, --type, --secret, --generate, --url, --notes, --field, --secret-field, --remove-field, --rename-field, or --plain-field (or run it at a terminal to be asked)")
 	}
 
 	// An entry named by its ID has its kind known: what the flags get wrong
@@ -137,6 +139,9 @@ func runEdit(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
+	if change != nil {
+		defer provider.ZeroChange(change)
+	}
 	if !terminal {
 		fromStdin := f.details.FromStdin()
 		if f.secret && !f.generate {
@@ -158,6 +163,24 @@ func runEdit(app *App, args []string) error {
 			return err
 		}
 		if err := provider.CheckAgainst(&current, change); err != nil {
+			return err
+		}
+		// A field renamed, or made plain, keeps its value: a secret one's
+		// is read for it.
+		read := func(field, why string) ([]byte, error) {
+			d, err := store.Details(from, "field "+field+", "+why)
+			if err != nil {
+				return nil, err
+			}
+			defer d.Zero()
+			for _, fl := range d.Fields {
+				if fl.Name == field {
+					return bytes.Clone(fl.Value), nil
+				}
+			}
+			return nil, fmt.Errorf("the field %s can't be read", field)
+		}
+		if err := f.details.Move(&current, change, read); err != nil {
 			return err
 		}
 	}
@@ -223,7 +246,6 @@ func runEdit(app *App, args []string) error {
 		e.Secret, weak = secret, w
 	}
 	if change != nil {
-		defer provider.ZeroChange(change)
 		in := &provider.DetailsInput{
 			Stdin: app.Stdin, Stderr: app.Stderr, ReadSecret: readSecret, Name: to.String(), Terminal: terminal,
 			Notes: func() ([]byte, error) {

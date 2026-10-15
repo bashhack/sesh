@@ -1008,3 +1008,30 @@ func TestUIScanQR(t *testing.T) {
 		t.Errorf("not a TOTP code: %v", err)
 	}
 }
+
+// The app deletes for good past the trash, and prunes the audit log as sesh audit prune does.
+func TestUI_PurgeAndPruneAudit(t *testing.T) {
+	filingVault(t)
+	store, err := openSQLiteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	gitlab := vault.Key{Kind: vault.KindPassword, Service: "gitlab"}
+	if err := u.Purge([]vault.Key{gitlab}); err != nil {
+		t.Fatal(err)
+	}
+	if trash, err := u.Trash(); err != nil || len(trash) != 0 {
+		t.Errorf("purged into the trash: %+v, %v", trash, err)
+	}
+	if err := store.Exists(gitlab); !errors.Is(err, vault.ErrNotFound) {
+		t.Errorf("still there: %v", err)
+	}
+	if said, err := u.PruneAudit(0); err != nil || !strings.HasPrefix(said, "Removed all ") {
+		t.Errorf("PruneAudit(0) = %q, %v", said, err)
+	}
+	if _, err := u.PruneAudit(-1); err == nil {
+		t.Error("a negative number of days was taken")
+	}
+}

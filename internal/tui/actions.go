@@ -32,6 +32,7 @@ const (
 	panelBackups                   // the vault's backups
 	panelImport                    // what an import would do
 	panelAudit                     // the audit log
+	panelFiling                    // the folders and tags, as the sidebar lists them
 )
 
 // overlay is a panel over the app, about the entry k.
@@ -47,7 +48,8 @@ type overlay struct {
 	items    []item
 	versions []Version
 	trash    []Trashed
-	backups  []Backup // the backups panel's, as its rows list them
+	marked   map[int64]bool // the trash's entries marked, by trash id
+	backups  []Backup       // the backups panel's, as its rows list them
 	kind     panel
 	sel      int
 	loading  bool
@@ -126,6 +128,7 @@ func (m *Model) openMenu() tea.Cmd {
 	items = append(items,
 		item{key: "h", label: "earlier secrets…", run: func() tea.Cmd { return m.openHistory(&ek) }},
 		item{key: "d", label: "move to the trash", run: func() tea.Cmd { return m.confirmDelete(&ek) }},
+		item{key: "x", label: "delete for good", run: func() tea.Cmd { return m.confirmPurge([]vault.Key{ek.Key}) }},
 		// Ctrl-G's menu, where a terminal (zellij's) takes Ctrl-G.
 		item{key: "g", label: "sesh's actions…", rule: true, run: m.openSeshMenu},
 	)
@@ -148,6 +151,8 @@ func (m *Model) openSeshMenu() tea.Cmd {
 func (m *Model) seshItems() []item {
 	return []item{
 		{key: "a", label: "add an entry…", run: m.openAdd},
+		{key: "p", label: "generate a password…", run: m.openGenerator},
+		{key: "f", label: "folders and tags…", run: m.openFiling},
 		{key: "t", label: "the trash…", run: m.openTrash},
 		{key: "b", label: "backups…", run: m.openBackups},
 		{key: "i", label: "import and export…", run: m.openTransfer},
@@ -286,6 +291,28 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 			fmt.Sprintf("Delete version %d of %s for good? It can't be brought back; the versions after it move up a number.", n, short(keyName(key))),
 			func() tea.Cmd { m.ov = ov; return m.forgetVersion(key, n, v) })
 		m.ov.danger = true
+	case ov.kind == panelTrash && k == "space" && ov.sel < len(ov.trash):
+		if ov.marked == nil {
+			ov.marked = map[int64]bool{}
+		}
+		id := ov.trash[ov.sel].ID
+		if ov.marked[id] {
+			delete(ov.marked, id)
+		} else {
+			ov.marked[id] = true
+		}
+		ov.sel = min(ov.sel+1, len(ov.trash)-1)
+	case ov.kind == panelTrash && (k == "x" || k == "delete") && len(ov.marked) > 0:
+		var marked []Trashed
+		for _, t := range ov.trash {
+			if ov.marked[t.ID] {
+				marked = append(marked, t)
+			}
+		}
+		m.ov = m.confirm(ov, "Delete for good",
+			fmt.Sprintf("Delete the %d entries marked for good? They can't be brought back.", len(marked)),
+			func() tea.Cmd { m.ov = ov; return m.removeMarked(marked) })
+		m.ov.danger = true
 	case ov.kind == panelTrash && k == "a" && ov.sel < len(ov.trash):
 		return m.askRestoreAs(&ov.trash[ov.sel])
 	case ov.kind == panelTrash && k == "e" && len(ov.trash) > 0:
@@ -297,6 +324,14 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 		m.ov.danger = true
 	case ov.kind == panelBackups:
 		return m.backupsLetter(k)
+	case ov.kind == panelAudit && k == "p" && !ov.loading:
+		return m.askPrune()
+	case ov.kind == panelFiling && k == "r" && ov.sel < len(m.side) && m.side[ov.sel].name != "":
+		r := m.side[ov.sel]
+		if r.kind == sideTag {
+			return m.askRenameTag(r.name)
+		}
+		return m.askRenameFolder(r.name)
 	case ov.kind == panelImport:
 		return m.importLetter(k)
 	case ov.kind == panelTrash && (k == "x" || k == "delete") && ov.sel < len(ov.trash):
@@ -335,6 +370,10 @@ func (m *Model) openFields(e *vault.Entry) tea.Cmd {
 	}
 	// Its secret first: the password, key or code, or a secure note's text.
 	add(secretWord(ek.Kind), func() tea.Cmd { return m.copySecret(&ek) })
+	if ek.Kind == vault.KindTOTP {
+		// The key the codes are made from, to move it to another app.
+		add("TOTP key", func() tea.Cmd { return m.copyTOTPKey(&ek) })
+	}
 	if notes := m.notes[ek.Key]; ek.Kind != vault.KindNote && len(notes) > 0 {
 		// The notes as shown beside the list, which the app holds.
 		add("notes", func() tea.Cmd { return m.copyPlain(&ek, "notes", string(m.notes[ek.Key])) })
@@ -382,6 +421,22 @@ func (m *Model) copyField(e *vault.Entry, field string) tea.Cmd {
 			return copiedMsg{what: "Couldn't copy: " + err.Error(), epoch: epoch, bad: true}
 		}
 		return copiedMsg{what: copied("the "+field+" for "+name, opts.ClearAfter), epoch: epoch}
+	})
+}
+
+// copyTOTPKey copies the TOTP entry e's key: a read the audit log records.
+func (m *Model) copyTOTPKey(e *vault.Entry) tea.Cmd {
+	k, name, opts, epoch := e.Key, entryName(e), m.opts, m.epoch
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
+		key, err := v.Secret(k, "in sesh ui, to copy its key")
+		if err != nil {
+			return copiedMsg{err: err, epoch: epoch}
+		}
+		defer secure.SecureZeroBytes(key)
+		if err := opts.Copy(string(key)); err != nil {
+			return copiedMsg{what: "Couldn't copy: " + err.Error(), epoch: epoch, bad: true}
+		}
+		return copiedMsg{what: copied("the TOTP key for "+name, opts.ClearAfter), epoch: epoch}
 	})
 }
 
@@ -523,6 +578,45 @@ func (m *Model) askRestoreAs(t *Trashed) tea.Cmd {
 	})
 }
 
+// removeMarked deletes the trash's entries marked, as listed, for good,
+// and lists what's left.
+func (m *Model) removeMarked(listed []Trashed) tea.Cmd {
+	epoch := m.epoch
+	m.ov.loading = true
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
+		n, err := v.RemoveFromTrash(listed...)
+		trash, terr := v.Trash()
+		if err == nil {
+			err = terr
+		}
+		return trashMsg{trash: trash, err: err, said: "Deleted " + countOf(n) + " in the trash for good", epoch: epoch}
+	})
+}
+
+// confirmPurge asks before deleting the entries keys for good, skipping
+// the trash.
+func (m *Model) confirmPurge(keys []vault.Key) tea.Cmd {
+	what := countOf(len(keys))
+	if len(keys) == 1 {
+		what = short(kindName(keys[0]))
+	}
+	m.ov = m.confirm(m.ov, "Delete for good",
+		"Delete "+what+" for good? It skips the trash, so it can't be brought back, nor its earlier secrets.",
+		func() tea.Cmd {
+			epoch := m.epoch
+			return m.read(func(v Vault, _ func() bool) tea.Msg {
+				err := v.Purge(keys)
+				msg := doneMsg{what: "Deleted " + what + " for good", err: err, epoch: epoch, reread: true, unmark: keys}
+				if len(keys) == 1 {
+					msg.forget = keys[0]
+				}
+				return msg
+			})
+		})
+	m.ov.danger = true
+	return nil
+}
+
 // emptyTrash deletes the trash's entries listed, and only those, for good.
 func (m *Model) emptyTrash(listed []Trashed) tea.Cmd {
 	epoch := m.epoch
@@ -602,7 +696,7 @@ func (m *Model) actionResult(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		return m.loaded(msg.err, func() {
-			m.ov.trash = msg.trash
+			m.ov.trash, m.ov.marked = msg.trash, nil
 			m.ov.sel = max(min(m.ov.sel, len(msg.trash)-1), 0)
 			if msg.said != "" {
 				m.say(msg.said)
@@ -753,7 +847,11 @@ func (m *Model) drawOverlay(base string) string {
 		first, last := window(ov.sel, len(ov.trash), room)
 		for i := first; i < last; i++ {
 			t := ov.trash[i]
-			lines = append(lines, row(i, "", fmt.Sprintf("%s  %s", keyName(t.Key), th.dimmed().Render(fmt.Sprintf("%s · deleted %s · id %d", kindLabel(t.Key.Kind), ago(now, t.DeletedAt), t.ID)))))
+			mark := "  "
+			if ov.marked[t.ID] {
+				mark = th.accented().Render("✓ ")
+			}
+			lines = append(lines, row(i, "", mark+fmt.Sprintf("%s  %s", keyName(t.Key), th.dimmed().Render(fmt.Sprintf("%s · deleted %s · id %d", kindLabel(t.Key.Kind), ago(now, t.DeletedAt), t.ID)))))
 		}
 	default:
 		first, last := window(ov.sel, len(ov.items), itemRoom)
@@ -796,9 +894,12 @@ func (m *Model) drawOverlay(base string) string {
 			hint = th.hints([2]string{"esc", "back"})
 		}
 	case panelTrash:
-		hint = th.hints([2]string{"↵", "put back"}, [2]string{"a", "as…"}, [2]string{"x", "delete"}, [2]string{"e", "empty"}, [2]string{"esc", "back"})
+		hint = th.hints([2]string{"↵", "put back"}, [2]string{"a", "as…"}, [2]string{"space", "mark"}, [2]string{"x", "delete"}, [2]string{"e", "empty"}, [2]string{"esc", "back"})
+		if len(ov.marked) > 0 {
+			hint = th.hints([2]string{"x", fmt.Sprintf("delete the %d marked", len(ov.marked))}, [2]string{"space", "mark"}, [2]string{"esc", "back"})
+		}
 		// Narrower, the letters alone; then only Enter's.
-		for _, h := range []string{th.hints([2]string{"↵", "put back"}, [2]string{"a x e", ""}, [2]string{"esc", "back"}), th.hints([2]string{"↵", "put back"}, [2]string{"esc", "back"})} {
+		for _, h := range []string{th.hints([2]string{"↵", "put back"}, [2]string{"a space x e", ""}, [2]string{"esc", "back"}), th.hints([2]string{"↵", "put back"}, [2]string{"esc", "back"})} {
 			if lipgloss.Width(hint) > w-6 {
 				hint = h
 			}
@@ -812,8 +913,15 @@ func (m *Model) drawOverlay(base string) string {
 			does = ov.items[ov.sel].does
 		}
 		hint = th.hints([2]string{"↵", does}, [2]string{"esc", "back"})
-	case panelChecks, panelAudit:
+	case panelChecks:
 		hint = th.hints([2]string{"↑↓", "read"}, [2]string{"esc", "back"})
+	case panelAudit:
+		hint = th.hints([2]string{"↑↓", "read"}, [2]string{"p", "prune"}, [2]string{"esc", "back"})
+	case panelFiling:
+		hint = th.hints([2]string{"↵", "show its entries"}, [2]string{"r", "rename"}, [2]string{"esc", "back"})
+		if ov.sel < len(m.side) && m.side[ov.sel].name == "" {
+			hint = th.hints([2]string{"↵", "show its entries"}, [2]string{"esc", "back"})
+		}
 	case panelHealth:
 		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})
 		switch {

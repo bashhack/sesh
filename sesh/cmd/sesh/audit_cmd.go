@@ -129,23 +129,37 @@ func runAuditPrune(app *App, args []string) error {
 		return err
 	}
 	defer closeAuditStore(store)
-
-	// 0 means every event, including any stamped by a clock that was ahead.
-	var n int64
-	if *olderThan == 0 {
-		n, err = store.ClearAudit()
-	} else {
-		n, err = store.PruneAudit(time.Now().AddDate(0, 0, -*olderThan))
-	}
+	said, err := pruneAudit(store, *olderThan)
 	if err != nil {
 		return err
 	}
-	if n == 0 {
-		_, err = fmt.Fprintf(app.Stdout, "No events older than %s.\n", dayCount(int64(*olderThan)))
-		return err
+	_, err = fmt.Fprintln(app.Stdout, said)
+	return err
+}
+
+// pruneAudit removes store's audit events older than days (0: every
+// one), then compacts the vault, and says what it did, as sesh audit prune
+// and sesh ui do.
+func pruneAudit(store *database.Store, days int) (string, error) {
+	if days < 0 || days > config.MaxAuditRetentionDays {
+		return "", fmt.Errorf("prune events older than a whole number of days from 0 (everything) to %d, not %d", config.MaxAuditRetentionDays, days)
 	}
-	removed := fmt.Sprintf("Removed %s older than %s", countOf(n, "event"), dayCount(int64(*olderThan)))
-	if *olderThan == 0 {
+	// 0 means every event, including any stamped by a clock that was ahead.
+	var n int64
+	var err error
+	if days == 0 {
+		n, err = store.ClearAudit()
+	} else {
+		n, err = store.PruneAudit(time.Now().AddDate(0, 0, -days))
+	}
+	if err != nil {
+		return "", err
+	}
+	if n == 0 {
+		return fmt.Sprintf("No events older than %s.", dayCount(int64(days))), nil
+	}
+	removed := fmt.Sprintf("Removed %s older than %s", countOf(n, "event"), dayCount(int64(days)))
+	if days == 0 {
 		removed = fmt.Sprintf("Removed all %s", countOf(n, "event"))
 	}
 	// SQLite keeps the space deleted rows leave for reuse; compacting is
@@ -155,18 +169,16 @@ func runAuditPrune(app *App, args []string) error {
 		err = store.Compact()
 	}
 	if errors.Is(err, database.ErrVaultBusy) {
-		_, err = fmt.Fprintf(app.Stdout, "%s. The vault wasn't compacted, because another sesh command was using it; new events will reuse the freed space.\n", removed)
-		return err
+		return removed + ". The vault wasn't compacted, because another sesh command was using it; new events will reuse the freed space.", nil
 	}
 	if err != nil {
-		return fmt.Errorf("%s, but compacting the vault failed: %w", removed, err)
+		return "", fmt.Errorf("%s, but compacting the vault failed: %w", removed, err)
 	}
 	after, err := store.Size()
 	if err != nil {
-		return fmt.Errorf("%s and compacted the vault, but couldn't read its size: %w", removed, err)
+		return "", fmt.Errorf("%s and compacted the vault, but couldn't read its size: %w", removed, err)
 	}
-	_, err = fmt.Fprintf(app.Stdout, "%s, and compacted the vault from %s to %s.\n", removed, vaultSize(before), vaultSize(after))
-	return err
+	return fmt.Sprintf("%s, and compacted the vault from %s to %s.", removed, vaultSize(before), vaultSize(after)), nil
 }
 
 // vaultSize prints a file size in KB below a megabyte, else in MB.

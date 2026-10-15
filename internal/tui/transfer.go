@@ -3,11 +3,13 @@ package tui
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // exportedMsg is an export written, or why not.
@@ -21,19 +23,29 @@ type exportedMsg struct {
 // openTransfer opens the import and export panel.
 func (m *Model) openTransfer() tea.Cmd {
 	m.ov = &overlay{kind: panelMenu, back: m.ov, title: "Import and export", items: append([]item{
-		{key: "e", label: "export the vault, encrypted…", stay: true, run: m.exportForm},
+		{key: "e", label: "export, encrypted…", stay: true, run: m.exportForm},
 	}, m.importRows()...)}
 	return nil
 }
 
-// exportForm asks where to export the vault, and a password for the
-// export, twice, and writes it.
+// exportKinds are the kinds an export can be narrowed to, in the order
+// its form offers them after every entry.
+var exportKinds = []vault.Kind{"", vault.KindPassword, vault.KindAPIKey, vault.KindNote, vault.KindTOTP}
+
+// exportForm asks where to export, which entries (every one, or those of
+// a kind, folder or tags), and a password for the export, twice, and
+// writes it.
 func (m *Model) exportForm() tea.Cmd {
 	file := m.textInput("file", "")
 	file.hint = "a full path, or one starting with ~/"
+	kind := &input{kind: inputChoice, label: "entries", choices: []string{"every entry", "passwords", "API keys", "notes", "TOTP"}}
+	folder := m.textInput("in folder", "")
+	folder.hint, folder.offers = "empty: any; a folder takes in those under it", m.folderNames()
+	tags := m.textInput("with tags", "")
+	tags.hint, tags.many, tags.offers = "empty: any; separated by commas, an entry having each", true, m.tagNames()
 	pw := &input{kind: inputSecret, label: "export password", rated: true, hint: "at least 8 characters: it opens the export anywhere"}
 	again := &input{kind: inputSecret, label: "export password again"}
-	f := &form{title: "Export the vault", inputs: []*input{file, pw, again}, row: -1, enterDone: "export",
+	f := &form{title: "Export, encrypted", inputs: []*input{file, kind, folder, tags, pw, again}, row: -1, enterDone: "export",
 		working: "Exporting…", quitting: "Quitting once the export is written…"}
 	replaceOf := ""
 	f.lost = func() string {
@@ -44,9 +56,28 @@ func (m *Model) exportForm() tea.Cmd {
 	}
 	f.submit = func() tea.Cmd {
 		to := file.value()
+		only := ExportOnly{Kind: exportKinds[kind.choice], Folder: folder.value()}
+		for t := range strings.SplitSeq(tags.value(), ",") {
+			if t = strings.TrimSpace(t); t != "" && !slices.Contains(only.Tags, t) {
+				only.Tags = append(only.Tags, t)
+			}
+		}
+		badFiling := ""
+		if only.Folder != "" {
+			if err := vault.CheckFolder(only.Folder); err != nil {
+				badFiling = err.Error()
+			}
+		}
+		for _, t := range only.Tags {
+			if err := vault.CheckTag(t); err != nil && badFiling == "" {
+				badFiling = err.Error()
+			}
+		}
 		switch {
 		case to == "":
 			f.err = "Type where to put it."
+		case badFiling != "":
+			f.err = badFiling
 		case len(pw.secret) < 8:
 			f.err = "The export password must be at least 8 characters."
 		case !bytes.Equal(pw.secret, again.secret):
@@ -61,7 +92,7 @@ func (m *Model) exportForm() tea.Cmd {
 			secret, replace := pw.secret, to == replaceOf
 			pw.secret = bytes.Clone(secret)
 			return wipeUnread(secret, m.read(func(v Vault, _ func() bool) tea.Msg {
-				said, err := v.Export(to, secret, replace)
+				said, err := v.Export(to, secret, replace, only)
 				return exportedMsg{f: f, said: said, err: err, to: to, replaceOf: &replaceOf}
 			}))
 		}

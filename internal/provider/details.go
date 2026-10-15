@@ -19,11 +19,13 @@ import (
 )
 
 // DetailsFlags are the flags that change an entry's details: --url,
-// --notes (with --editor), --field, --secret-field, and --remove-field.
-// sesh edit and the password manager's store share them.
+// --notes (with --editor), --field, --secret-field, --remove-field, and,
+// for an entry there already, --rename-field and --plain-field. sesh add
+// and sesh edit share them.
 type DetailsFlags struct {
 	url                          urlFlag
 	fields, secretFields, remove listFlag
+	renames, plains              listFlag
 	notes, editor                bool
 }
 
@@ -58,6 +60,8 @@ func (f *DetailsFlags) Register(fs FlagSet) {
 	fs.Var(&f.fields, "field", "Set a field: name=value (repeat for more)")
 	fs.Var(&f.secretFields, "secret-field", "Set a secret field, typed hidden or from stdin (repeat for more)")
 	fs.Var(&f.remove, "remove-field", "Remove a field (repeat for more)")
+	fs.Var(&f.renames, "rename-field", "Rename a field, keeping its value: old=new (repeat for more)")
+	fs.Var(&f.plains, "plain-field", "Make a secret field plain, keeping its value (repeat for more)")
 }
 
 // FlagInfo describes the flags, for help and shell completion.
@@ -69,13 +73,19 @@ func (f *DetailsFlags) FlagInfo() []FlagInfo {
 		{Name: "field", Type: "string", Description: "Set a field: name=value (repeat for more)"},
 		{Name: "secret-field", Type: "string", Description: "Set a secret field, typed hidden or from stdin (repeat for more)"},
 		{Name: "remove-field", Type: "string", Description: "Remove a field (repeat for more)"},
+		{Name: "rename-field", Type: "string", Description: "Rename a field, keeping its value: old=new (repeat for more)"},
+		{Name: "plain-field", Type: "string", Description: "Make a secret field plain, keeping its value (repeat for more)"},
 	}
 }
 
 // Given reports whether any of the flags was given.
 func (f *DetailsFlags) Given() bool {
-	return f.url.given || f.notes || f.editor || len(f.fields)+len(f.secretFields)+len(f.remove) > 0
+	return f.url.given || f.notes || f.editor || len(f.fields)+len(f.secretFields)+len(f.remove)+len(f.renames)+len(f.plains) > 0
 }
+
+// Moves reports whether --rename-field or --plain-field was given: they
+// change fields an entry has, so only sesh edit takes them.
+func (f *DetailsFlags) Moves() bool { return len(f.renames)+len(f.plains) > 0 }
 
 // Fields are the --field values as given, for a command that reads
 // --field another way, as get takes a field's name.
@@ -84,12 +94,12 @@ func (f *DetailsFlags) Fields() []string { return f.fields }
 // GivenBesidesField reports whether any of the flags other than --field
 // was given.
 func (f *DetailsFlags) GivenBesidesField() bool {
-	return f.url.given || f.notes || f.editor || len(f.secretFields)+len(f.remove) > 0
+	return f.url.given || f.notes || f.editor || len(f.secretFields)+len(f.remove)+len(f.renames)+len(f.plains) > 0
 }
 
 // OnlyURL reports whether --url is the only one given.
 func (f *DetailsFlags) OnlyURL() bool {
-	return f.url.given && !f.notes && len(f.fields)+len(f.secretFields)+len(f.remove) == 0
+	return f.url.given && !f.notes && len(f.fields)+len(f.secretFields)+len(f.remove)+len(f.renames)+len(f.plains) == 0
 }
 
 // Editor reports whether the notes are to be written in an editor.
@@ -135,7 +145,7 @@ func (f *DetailsFlags) Change(fromKind, kind vault.Kind, terminal bool) (*vault.
 		if was, ok := named[strings.ToLower(n)]; ok {
 			switch {
 			case was.how != how:
-				return fmt.Errorf("the field %q is both set and removed", was.name)
+				return fmt.Errorf("the field %q is both %s and %s", was.name, was.how, how)
 			case was.name != n:
 				return fmt.Errorf("the field %q is %s twice (as %q)", was.name, how, n)
 			}
@@ -166,7 +176,103 @@ func (f *DetailsFlags) Change(fromKind, kind vault.Kind, terminal bool) (*vault.
 		}
 		c.Remove = append(c.Remove, n)
 	}
+	// A field renamed or made plain is moved once the entry's fields are
+	// known (see Move); here its names are checked.
+	for _, kv := range f.renames {
+		from, to, ok := strings.Cut(kv, "=")
+		if !ok {
+			return nil, fmt.Errorf("--rename-field wants old=new, not %q", kv)
+		}
+		if from == to {
+			return nil, fmt.Errorf("the field %q is named that already", from)
+		}
+		if err := name(from, "renamed"); err != nil {
+			return nil, err
+		}
+		if strings.EqualFold(from, to) {
+			// Only its case changes: the one name.
+			if err := vault.CheckFieldName(to); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := name(to, "set"); err != nil {
+			return nil, err
+		}
+	}
+	for _, n := range f.plains {
+		if err := name(n, "made plain"); err != nil {
+			return nil, err
+		}
+	}
 	return c, nil
+}
+
+// Move adds to c the fields --rename-field and --plain-field move on the
+// entry e: each taken out, then set again under its new name, or plain,
+// with its value, which a secret field has read with read (the audit log
+// records it). The caller zeroes c.
+func (f *DetailsFlags) Move(e *vault.Entry, c *vault.DetailsChange, read func(field, why string) ([]byte, error)) error {
+	find := func(name string) int {
+		return slices.IndexFunc(e.Fields, func(fl vault.Field) bool { return strings.EqualFold(fl.Name, name) })
+	}
+	names := make([]string, len(e.Fields))
+	for i, fl := range e.Fields {
+		names[i] = fl.Name
+	}
+	value := func(fl *vault.Field, why string) ([]byte, error) {
+		if !fl.Secret {
+			return bytes.Clone(fl.Value), nil
+		}
+		return read(fl.Name, why)
+	}
+	move := func(fl *vault.Field, to string, secret bool, why string) error {
+		v, err := value(fl, why)
+		if err != nil {
+			return err
+		}
+		c.Remove = append(c.Remove, fl.Name)
+		c.Set = append(c.Set, vault.Field{Name: to, Value: v, Secret: secret})
+		c.RemoveFirst = true
+		return nil
+	}
+	for _, kv := range f.renames {
+		from, to, _ := strings.Cut(kv, "=")
+		i := find(from)
+		switch {
+		case i < 0:
+			return noField(from, "rename", names)
+		case e.Fields[i].Name == to:
+			return fmt.Errorf("the field %s is named that already", to)
+		case find(to) >= 0 && find(to) != i:
+			return fmt.Errorf("the entry has a field %s already; remove it first, or choose another name", e.Fields[find(to)].Name)
+		}
+		if err := move(&e.Fields[i], to, e.Fields[i].Secret, "to rename it"); err != nil {
+			return err
+		}
+	}
+	for _, n := range f.plains {
+		i := find(n)
+		switch {
+		case i < 0:
+			return noField(n, "make plain", names)
+		case !e.Fields[i].Secret:
+			return fmt.Errorf("the field %s is plain already", e.Fields[i].Name)
+		}
+		if err := move(&e.Fields[i], e.Fields[i].Name, false, "to make it plain"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// noField is there being no field name to do something to, with the
+// fields there are.
+func noField(name, do string, names []string) error {
+	if len(names) == 0 {
+		return fmt.Errorf("there's no field %q to %s; it has no fields", name, do)
+	}
+	return fmt.Errorf("there's no field %q to %s; its fields: %s", name, do, strings.Join(names, ", "))
 }
 
 // DetailsInput is where Read reads values from.
@@ -192,7 +298,8 @@ type DetailsInput struct {
 func (f *DetailsFlags) Read(c *vault.DetailsChange, in *DetailsInput) error {
 	for i := range c.Set {
 		fl := &c.Set[i]
-		if !fl.Secret {
+		if !fl.Secret || fl.Value != nil {
+			// Plain, or moved with the value it has (see Move).
 			continue
 		}
 		var v []byte
