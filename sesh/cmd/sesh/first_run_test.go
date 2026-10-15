@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -33,19 +34,36 @@ func interactivePrompt(t *testing.T, passwords ...string) passwordPromptConfig {
 	}
 }
 
+// Plain sesh lists every option and command, as --help does; with no vault yet, the first steps come first.
 func TestPlainSeshPrintsGettingStarted(t *testing.T) {
-	h := newTestHarness()
-	exited := false
-	h.app.Exit = func(int) { exited = true }
-	run(h.app, []string{"sesh"})
-	if exited {
-		t.Error("plain sesh exited with an error")
-	}
-	out := h.stdout.String()
-	for _, want := range []string{"sesh keeps your TOTP secrets and passwords in an encrypted vault.", "Get started:", "sesh -service totp -setup", "Available service providers:"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output missing %q:\n%s", want, out)
+	plain := func() string {
+		t.Helper()
+		h := newTestHarness()
+		exited := false
+		h.app.Exit = func(int) { exited = true }
+		run(h.app, []string{"sesh"})
+		if exited {
+			t.Error("plain sesh exited with an error")
 		}
+		return h.stdout.String()
+	}
+	help := new(bytes.Buffer)
+	if err := (&App{Stdout: help}).PrintUsage(); err != nil {
+		t.Fatal(err)
+	}
+	healthVault(t)
+	out := plain()
+	if !strings.Contains(out, help.String()) || strings.Contains(out, "Get started:") {
+		t.Errorf("with a vault, plain sesh should be the full help, without the first steps:\n%s", out)
+	}
+	for _, want := range []string{"sesh ui ", "sesh show ", "sesh edit ", "sesh import ", "sesh health ", "sesh trash ", "sesh backup "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	t.Setenv("SESH_DB_PATH", filepath.Join(t.TempDir(), "none.db"))
+	if out := plain(); !strings.Contains(out, "Get started:") || !strings.Contains(out, "sesh -service totp -setup") || !strings.Contains(out, help.String()) {
+		t.Errorf("with no vault, the first steps then the help:\n%s", out)
 	}
 }
 

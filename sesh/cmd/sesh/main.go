@@ -1173,25 +1173,26 @@ func extractServiceName(args []string) string {
 }
 
 // PrintGettingStarted prints what plain `sesh` shows: what sesh is for,
-// the first commands to run, and the providers.
+// the first commands to run when there's no vault yet, then every option
+// and command, as --help does.
 func (a *App) PrintGettingStarted() error {
-	intro := []string{
-		"sesh keeps your TOTP secrets and passwords in an encrypted vault.",
-		"",
-		"Get started:",
-		"  sesh -service totp -setup       add a TOTP account",
-		"  sesh -service aws -setup        set up AWS MFA",
-		"  sesh -service password -help    store passwords, API keys, and notes",
-		"  sesh init                       choose where and how sesh stores secrets (optional)",
-		"  sesh --help                     all options",
-		"",
+	intro := []string{"sesh keeps your TOTP secrets and passwords in an encrypted vault.", ""}
+	if cfg, err := settings(); err != nil || vaultMissing(cfg.DBPath.Value) {
+		intro = append(intro,
+			"Get started:",
+			"  sesh -service totp -setup       add a TOTP account",
+			"  sesh -service aws -setup        set up AWS MFA",
+			"  sesh -service password -help    store passwords, API keys, and notes",
+			"  sesh init                       choose where and how sesh stores secrets (optional)",
+			"",
+		)
 	}
 	for _, line := range intro {
 		if _, err := fmt.Fprintln(a.Stdout, line); err != nil {
 			return err
 		}
 	}
-	return a.ListProviders()
+	return a.PrintUsage()
 }
 
 // PrintUsage displays general usage information
@@ -1212,6 +1213,7 @@ func (a *App) PrintUsage() error {
 		"\nSetting overrides (for this command only; see `sesh config`):",
 		"  --db-path path                Vault location",
 		"\nCommands:",
+		"  sesh ui                       Search every entry, and copy its secret or TOTP code",
 		"  sesh init                     Set up the vault: where it lives",
 		"  sesh config                   Show settings and where each comes from",
 		"  sesh --rekey                  Change your master password",
@@ -1233,7 +1235,6 @@ func (a *App) PrintUsage() error {
 		"  sesh tag add|remove|rename|list  Tag entries",
 		"  sesh trash [restore|remove|empty]  List deleted entries, put one back, or delete them for good",
 		"  sesh history <id> [--show|--clip|--restore|--forget N]  An entry's earlier secrets",
-		"  sesh ui                          Search every entry, and copy its secret or TOTP code",
 		"  sesh completion bash|zsh|fish  Print a shell completion script",
 		"\nExamples:",
 		"  sesh --service aws                     Generate AWS credentials",
