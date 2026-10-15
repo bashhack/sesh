@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -461,5 +462,74 @@ func TestServer_ManualLockAfterLateLock(t *testing.T) {
 	case <-done:
 		t.Fatal("the agent stopped after a lock asked for")
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// With WithLockOnSleep, the first request after the computer slept finds
+// the agent locked, though no timeout has passed; a pause awake, or a
+// short step of the clock, doesn't lock it. Without it, a short sleep
+// leaves it unlocked.
+func TestLockOnSleep(t *testing.T) {
+	for _, c := range []struct {
+		pass   func(clk *fakeClock, check func())
+		name   string
+		opts   []Option
+		locked bool
+	}{
+		// Small steps of the clock, each seen, don't add up to a sleep.
+		{func(clk *fakeClock, check func()) {
+			clk.sleep(6 * time.Second)
+			check()
+			clk.sleep(6 * time.Second)
+		}, "the clock stepped 6s twice", []Option{WithLockOnSleep()}, false},
+		{func(clk *fakeClock, _ func()) { clk.sleep(30 * time.Second) }, "asleep 30s", []Option{WithLockOnSleep()}, true},
+		{func(clk *fakeClock, _ func()) { clk.sleep(2 * time.Second) }, "the clock stepped 2s", []Option{WithLockOnSleep()}, false},
+		{func(clk *fakeClock, _ func()) { clk.advance(30 * time.Second) }, "awake 30s", []Option{WithLockOnSleep()}, false},
+		{func(clk *fakeClock, _ func()) { clk.sleep(30 * time.Second) }, "asleep 30s, not asked to", nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			clk := monoClock()
+			sockPath := tempSocketPath(t)
+			serve(t, sockPath, append(c.opts, withClock(clk), WithIdleTimeout(10*time.Minute))...)
+			conn, id := unlockClient(t, sockPath)
+			defer mustClose(t, conn)
+			c.pass(clk, func() {
+				if _, _, err := Encrypt(conn, []byte("x"), nil, id); err != nil {
+					t.Fatalf("between the steps: %v", err)
+				}
+			})
+			_, _, err := Encrypt(conn, []byte("x"), nil, id)
+			var pe *ProtocolError
+			if locked := errors.As(err, &pe) && pe.Code == ErrCodeNotUnlocked; locked != c.locked {
+				t.Errorf("locked = %v (%v), want %v", locked, err, c.locked)
+			}
+		})
+	}
+}
+
+// With WithScreenLock, the agent locks while the screen is locked, and
+// stays unlocked while it isn't.
+func TestLockOnScreenLock(t *testing.T) {
+	var screen atomic.Bool
+	sockPath := tempSocketPath(t)
+	serve(t, sockPath, WithScreenLock(screen.Load), withScreenEvery(10*time.Millisecond))
+	conn, id := unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+	time.Sleep(50 * time.Millisecond)
+	if _, _, err := Encrypt(conn, []byte("x"), nil, id); err != nil {
+		t.Fatalf("unlocked, screen not locked: %v", err)
+	}
+	screen.Store(true)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, _, err := Encrypt(conn, []byte("x"), nil, id)
+		var pe *ProtocolError
+		if errors.As(err, &pe) && pe.Code == ErrCodeNotUnlocked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the screen locked, the agent didn't: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

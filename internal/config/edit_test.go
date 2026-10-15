@@ -169,3 +169,68 @@ func TestListRawAndDefaults(t *testing.T) {
 		t.Errorf("history.keep = %+v", h)
 	}
 }
+
+// ui.lock_on_quit is on unless turned off; true or false, read from the file or the environment, and written bare.
+func TestLockOnQuit(t *testing.T) {
+	path := isolate(t)
+	if c, err := Load(Overrides{}); err != nil || !c.UILockOnQuit.Value || c.UILockOnQuit.Source != FromDefault {
+		t.Fatalf("default: %+v, %v", c.UILockOnQuit, err)
+	}
+	if err := Set(path, "ui.lock_on_quit", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "[ui]\nlock_on_quit = false\n") { //nolint:errcheck // compared
+		t.Errorf("written:\n%s", b)
+	}
+	c, err := Load(Overrides{})
+	if err != nil || c.UILockOnQuit.Value || c.UILockOnQuit.Source != FromFile {
+		t.Fatalf("from the file: %+v, %v", c.UILockOnQuit, err)
+	}
+	var it Item
+	for _, x := range c.List() {
+		if x.Key == "ui.lock_on_quit" {
+			it = x
+		}
+	}
+	if !it.Switch || it.Raw != "false" || it.Default != "true" || it.Value != "off" {
+		t.Errorf("listed: %+v", it)
+	}
+	if err := Set(path, "ui.lock_on_quit", "yes"); err == nil || !strings.Contains(err.Error(), "want true or false") {
+		t.Errorf("yes: %v", err)
+	}
+	t.Setenv(EnvUILockOnQuit, "true")
+	if c, err := Load(Overrides{}); err != nil || !c.UILockOnQuit.Value || c.UILockOnQuit.Source != FromEnv {
+		t.Errorf("from the environment: %+v, %v", c.UILockOnQuit, err)
+	}
+	t.Setenv(EnvUILockOnQuit, "1")
+	if _, err := Load(Overrides{}); err == nil || !strings.Contains(err.Error(), "want true or false") {
+		t.Errorf("1 from the environment: %v", err)
+	}
+}
+
+// The agent's lock-on-sleep and lock-on-screen-lock switches are on unless turned off, in the file's [agent]
+// table or the environment.
+func TestAgentLockSwitches(t *testing.T) {
+	path := isolate(t)
+	c, err := Load(Overrides{})
+	if err != nil || !c.AgentLockOnSleep.Value || !c.AgentLockOnScreenLock.Value {
+		t.Fatalf("defaults: %+v %+v, %v", c.AgentLockOnSleep, c.AgentLockOnScreenLock, err)
+	}
+	for _, key := range []string{"agent.lock_on_sleep", "agent.lock_on_screen_lock"} {
+		if err := Set(path, key, "false"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "[agent]\nlock_on_sleep = false\nlock_on_screen_lock = false\n") { //nolint:errcheck // compared
+		t.Errorf("written:\n%s", b)
+	}
+	c, err = Load(Overrides{})
+	if err != nil || c.AgentLockOnSleep.Value || c.AgentLockOnScreenLock.Value || c.AgentLockOnSleep.Source != FromFile {
+		t.Fatalf("from the file: %+v %+v, %v", c.AgentLockOnSleep, c.AgentLockOnScreenLock, err)
+	}
+	t.Setenv(EnvAgentLockOnSleep, "true")
+	t.Setenv(EnvAgentLockOnScreen, "true")
+	if c, err := Load(Overrides{}); err != nil || !c.AgentLockOnSleep.Value || !c.AgentLockOnScreenLock.Value || c.AgentLockOnScreenLock.Source != FromEnv {
+		t.Errorf("from the environment: %+v %+v, %v", c.AgentLockOnSleep, c.AgentLockOnScreenLock, err)
+	}
+}

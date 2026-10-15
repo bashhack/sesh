@@ -45,7 +45,8 @@ the clipboard clears after clipboard_timeout; Esc clears the search, or
 quits. TOTP entries show their code and the seconds it has left.
 
 It locks after the agent's idle timeout (agent.idle_timeout) without a key
-pressed, or when the agent locks, and asks for the master password again.`
+pressed, or when the agent locks, and asks for the master password again.
+Quitting locks sesh too, unless ui.lock_on_quit is false.`
 
 // runUI is sesh ui: the search screen.
 func runUI(app *App, args []string) error {
@@ -73,6 +74,14 @@ func runUI(app *App, args []string) error {
 	}
 	opts := uiOptions(app, cfg, newUIVault(store))
 	m := tui.New(&opts)
+	// Last, once the app has let the vault go and what it held back is
+	// written: ui.lock_on_quit, as the settings are when it ends, so a
+	// change made in the app counts.
+	defer func() {
+		if said := lockOnQuit(); said != "" {
+			fmt.Fprintln(app.Stderr, said) //nolint:errcheck // best effort, on the way out
+		}
+	}()
 	// What's written to stderr while the app draws (a warning while it
 	// unlocks again, say) would land on its screen: it's held, and
 	// written once the app has ended.
@@ -107,6 +116,31 @@ func runUI(app *App, args []string) error {
 		}
 	}
 	return m.Err()
+}
+
+// lockOnQuit locks sesh's agent when ui.lock_on_quit is on, and says so,
+// or why it couldn't; "" when it's off.
+func lockOnQuit() string {
+	cfg, err := settings()
+	switch {
+	case err != nil:
+		return "sesh may still be unlocked: ui.lock_on_quit couldn't be read (" + err.Error() + "); run sesh agent lock"
+	case !cfg.UILockOnQuit.Value:
+		return ""
+	}
+	conn, err := agent.DialExisting()
+	if agent.IsNotRunning(err) {
+		// Nothing holds the vault unlocked.
+		return ""
+	}
+	if err == nil {
+		defer closeAgentConn(conn)
+		err = agent.Lock(conn)
+	}
+	if err != nil {
+		return "sesh is still unlocked: its agent couldn't be locked (" + err.Error() + "); run sesh agent lock"
+	}
+	return "Locked sesh (ui.lock_on_quit)."
 }
 
 // touchIDPlatform is a system with Touch ID: macOS. Tests set it.
@@ -855,7 +889,7 @@ var captureQRText = qrcode.CaptureText
 func uiSettings(cfg *config.Config) []tui.Setting {
 	var out []tui.Setting
 	for _, it := range cfg.List() {
-		s := tui.Setting{Key: it.Key, Value: it.Value, Raw: it.Raw, Default: it.Default, Said: it.Said(), Applies: it.Applies, Editable: it.Editable}
+		s := tui.Setting{Key: it.Key, Value: it.Value, Raw: it.Raw, Default: it.Default, Said: it.Said(), Applies: it.Applies, Editable: it.Editable, Switch: it.Switch}
 		if it.Source == config.FromEnv || it.Source == config.FromFlag {
 			s.Env = it.Origin
 		}

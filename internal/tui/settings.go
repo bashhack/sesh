@@ -25,6 +25,8 @@ type Setting struct {
 	// does: it can't be changed from the app then.
 	Env      string
 	Editable bool
+	// Switch says it's on or off (Raw true or false): Enter turns it over.
+	Switch bool
 }
 
 // Live is what of the settings the app takes up as it runs: the rest it
@@ -58,7 +60,7 @@ func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *Touc
 	ov.items = nil
 	if m.opts.ChangePassword != nil {
 		ov.items = append(ov.items, item{
-			label:  fmt.Sprintf("%-24s %s", "Master password", "change…"),
+			label:  fmt.Sprintf("%-25s %s", "Master password", "change…"),
 			detail: "Every entry is re-encrypted under the new one; Touch ID unlock and the recovery key go on working with it. The current one is asked first.",
 			run:    m.changePassword,
 			stay:   true,
@@ -71,13 +73,13 @@ func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *Touc
 		ov.items = append(ov.items, m.touchIDRow(*touch))
 	}
 	ov.items = append(ov.items, item{
-		label:  fmt.Sprintf("%-24s %s", "Checks (sesh doctor)", "run…"),
+		label:  fmt.Sprintf("%-25s %s", "Checks (sesh doctor)", "run…"),
 		detail: "Checks sesh's setup, then that the vault's file, every entry, the trash, the history, the recovery key and Touch ID all read, as sesh doctor does. Reading the vault is recorded in the audit log.",
 		run:    m.openChecks,
 		does:   "run them",
 		stay:   true,
 	}, item{
-		label:  fmt.Sprintf("%-24s %s", "Audit log (sesh audit)", "read…"),
+		label:  fmt.Sprintf("%-25s %s", "Audit log (sesh audit)", "read…"),
 		detail: "Each secret read, each change, delete and restore, and each master password change, the newest first: names and what was done, never a secret. audit.retention_days below sets how long events are kept.",
 		run:    m.openAudit,
 		does:   "read it",
@@ -92,7 +94,7 @@ func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *Touc
 			from = "  (config file)"
 		}
 		ov.items = append(ov.items, item{
-			label:  fmt.Sprintf("%-24s %s%s", s.Key, s.Value, from),
+			label:  fmt.Sprintf("%-25s %s%s", s.Key, s.Value, from),
 			detail: settingDetail(&s),
 			run:    func() tea.Cmd { return m.changeSetting(&s) },
 			stay:   true,
@@ -116,6 +118,22 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		return nil
 	}
 	key, raw, def, applies, said, set := s.Key, s.Raw, s.Default, s.Applies, s.Said, m.opts.SetSetting
+	if s.Switch {
+		to, word := "true", "on"
+		if raw == "true" {
+			to, word = "false", "off"
+		}
+		live, err := set(key, to)
+		if err != nil {
+			if m.ov != nil {
+				m.ov.err = "Not saved: " + err.Error()
+			}
+			return m.refreshSettings()
+		}
+		m.opts.OldAfter = live.OldAfter
+		m.say("Turned " + key + " " + word + ": it takes effect " + applies)
+		return m.refreshSettings()
+	}
 	return m.askOver(true, "Change "+key, key, s.Raw, "empty: back to the default; it takes effect "+applies, nil, func(value string) (string, tea.Cmd) {
 		// Against the file as it is now, which another command may have
 		// changed since the panel was read.

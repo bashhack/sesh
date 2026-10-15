@@ -56,6 +56,10 @@ func (realClock) AfterFunc(d time.Duration, f func()) stopper { return time.Afte
 type keystore struct {
 	lastActivity time.Time
 	unlockedAt   time.Time
+	// lastSeen is when the keystore last checked its deadlines while
+	// unlocked, by both clocks: one that stops while the computer sleeps,
+	// and the wall clock, which doesn't.
+	lastSeen time.Time
 	// lastUnlock survives lock so status can report when the key was
 	// last installed.
 	lastUnlock time.Time
@@ -86,6 +90,8 @@ type keystore struct {
 	// shutDown is set by shutdown and guarded by mu. Once set, no key is
 	// ever installed again.
 	shutDown bool
+	// lockOnSleep locks the keystore once the computer has slept.
+	lockOnSleep bool
 	// unlockMu is held across derive and install so two unlocks cannot
 	// run Argon2id at once or overwrite each other's key.
 	unlockMu sync.Mutex
@@ -185,7 +191,7 @@ func (k *keystore) installVerified(key, verify []byte, event string) error {
 	k.installLocked(key)
 	k.unlockID = UnlockID(verify)
 	now := k.clock().Now()
-	k.unlockedAt, k.lastActivity, k.lastUnlock = now, now, now
+	k.unlockedAt, k.lastActivity, k.lastUnlock, k.lastSeen = now, now, now, now
 	k.generation++
 	k.scheduleLocked()
 	// Logged under mu, like every lock, so the log's order is the order
@@ -441,8 +447,12 @@ func (k *keystore) lockIfExpiredFor(sweep bool) {
 		return
 	}
 	now := k.clock().Now()
+	last := k.lastSeen
+	k.lastSeen = now
 	var reason string
 	switch {
+	case k.lockOnSleep && !last.IsZero() && asleep(last, now) >= sleepGap:
+		reason = "sleep"
 	case k.idleTimeout > 0 && since(now, k.lastActivity) >= k.idleTimeout:
 		reason = "idle timeout"
 	case k.maxLifetime > 0 && since(now, k.unlockedAt) >= k.maxLifetime:
@@ -469,6 +479,31 @@ func (k *keystore) lockedSince(gen uint64) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	return k.generation == gen && k.derivedKey == nil
+}
+
+// sleepGap is how far the wall clock must run ahead of the one that stops
+// in sleep for the keystore to take it as the computer having slept, not
+// a small correction to the clock.
+const sleepGap = 10 * time.Second
+
+// asleep is how much further the wall clock moved than the monotonic one
+// from last to now: the time the computer slept. 0 when either time has
+// no monotonic reading, as then both are the wall clock.
+func asleep(last, now time.Time) time.Duration {
+	return now.Round(0).Sub(last.Round(0)) - now.Sub(last)
+}
+
+// lockIfUnlocked locks the keystore when it holds a key, logging reason,
+// and says whether it did.
+func (k *keystore) lockIfUnlocked(reason string) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.derivedKey == nil {
+		return false
+	}
+	k.clearLocked()
+	k.log.printf("locked (%s)", reason)
+	return true
 }
 
 // since is how long ago t was at now, by whichever clock says longer: the

@@ -133,13 +133,18 @@ func writeConfig(w io.Writer, cfg *config.Config) error {
 	}
 	fmt.Fprintf(&b, "config file: %s\n\n", file)
 
-	for _, it := range cfg.List() {
+	items := cfg.List()
+	col := 0 // the keys' column: the longest, and two spaces
+	for _, it := range items {
+		col = max(col, len(it.Key)+2)
+	}
+	for _, it := range items {
 		if it.Key == "db_path" || it.Key == "backup.dir" {
 			// Paths are usually longer than the value column.
-			fmt.Fprintf(&b, "%-25s%s\n%-25s(%s)\n", it.Key, it.Value, "", it.Said())
+			fmt.Fprintf(&b, "%-*s%s\n%-*s(%s)\n", col, it.Key, it.Value, col, "", it.Said())
 			continue
 		}
-		fmt.Fprintf(&b, "%-25s%-14s(%s)\n", it.Key, it.Value, it.Said())
+		fmt.Fprintf(&b, "%-*s%-14s(%s)\n", col, it.Key, it.Value, it.Said())
 	}
 
 	_, err := io.WriteString(w, b.String())

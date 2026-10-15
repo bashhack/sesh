@@ -34,7 +34,10 @@ type Server struct {
 	// build is Build, read once at Listen, before an upgrade can replace
 	// the executable.
 	build string
-	keys  keystore
+	// screenLocked, set by WithScreenLock, says whether the screen is
+	// locked.
+	screenLocked func() bool
+	keys         keystore
 	// shutdownOnce guards Close so concurrent SIGTERM + accept-loop-exit
 	// don't try to remove the socket twice.
 	shutdownOnce sync.Once
@@ -45,6 +48,8 @@ type Server struct {
 	// sweepEvery is how often Run checks the key's deadlines by the wall
 	// clock (expirySweep; tests shorten it).
 	sweepEvery time.Duration
+	// screenEvery is how often Run asks screenLocked (screenCheck).
+	screenEvery time.Duration
 }
 
 // Listen creates the socket at sockPath, sets perm 0600, and returns a
@@ -57,6 +62,7 @@ func Listen(sockPath string, opts ...Option) (*Server, error) {
 	srv.keys.idleTimeout = DefaultIdleTimeout
 	srv.keys.maxLifetime = DefaultMaxLifetime
 	srv.sweepEvery = expirySweep
+	srv.screenEvery = screenCheck
 	for _, opt := range opts {
 		opt(srv)
 	}
@@ -128,6 +134,26 @@ func (s *Server) SocketPath() string {
 // its key is past its idle timeout or max lifetime.
 const expirySweep = 15 * time.Second
 
+// screenCheck is how often the agent asks whether the screen is locked:
+// a lock undone sooner than this is one you're there for.
+const screenCheck = 2 * time.Second
+
+// watchScreen locks the key whenever the screen is locked, until ctx ends.
+func (s *Server) watchScreen(ctx context.Context) {
+	t := time.NewTicker(s.screenEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if s.screenLocked() {
+				s.keys.lockIfUnlocked("screen locked")
+			}
+		}
+	}
+}
+
 // Run blocks until ctx is cancelled or SIGTERM/SIGINT arrives, accepting
 // connections and dispatching them on per-connection goroutines. SIGUSR1
 // locks the agent without stopping it. Run returns only after shutdown has
@@ -147,6 +173,9 @@ func (s *Server) Run(ctx context.Context) error {
 	s.log.printf("listening at %s (pid %d, build %s)", s.sockPath, os.Getpid(), shortBuild(s.build))
 	if s.exitOnAutoLock && s.keys.idleTimeout > 0 {
 		s.exitIfNeverUnlocked()
+	}
+	if s.screenLocked != nil {
+		go s.watchScreen(runCtx)
 	}
 	// The lock timers stop while the computer sleeps; the sweep checks the
 	// wall clock, so a key is dropped soon after waking, not hours later.

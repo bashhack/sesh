@@ -13,11 +13,14 @@ import (
 )
 
 // quoted are the settings the config file has as strings; the rest are
-// whole numbers.
+// whole numbers, or switches.
 var quoted = map[string]bool{
 	"db_path": true, "clipboard_timeout": true, "agent.idle_timeout": true, "agent.max_lifetime": true,
 	"master_password.memory": true, "backup.dir": true,
 }
+
+// switches are the settings that are on or off: true or false.
+var switches = map[string]bool{"ui.lock_on_quit": true, "agent.lock_on_sleep": true, "agent.lock_on_screen_lock": true}
 
 // header is a table's header line: [name], perhaps with a comment.
 var header = regexp.MustCompile(`^\s*\[\s*([A-Za-z0-9_.-]+)\s*\]\s*(#.*)?$`)
@@ -28,7 +31,7 @@ var header = regexp.MustCompile(`^\s*\[\s*([A-Za-z0-9_.-]+)\s*\]\s*(#.*)?$`)
 // key read from it: otherwise it's an error, and the file is left as it
 // was. A file that isn't there yet is made.
 func Set(path, key, value string) error {
-	if _, ok := quoted[key]; !ok && !isNumberKey(key) {
+	if _, ok := quoted[key]; !ok && !isNumberKey(key) && !switches[key] {
 		return fmt.Errorf("%s isn't a setting sesh changes", key)
 	}
 	// The file a link (a dotfile manager's) points at is the one changed.
@@ -45,6 +48,11 @@ func Set(path, key, value string) error {
 	case value == "":
 	case quoted[key]:
 		line = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
+	case switches[key]:
+		if value != "true" && value != "false" {
+			return fmt.Errorf("%s = %q: want true or false", key, value)
+		}
+		line = value
 	default:
 		n, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {

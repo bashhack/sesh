@@ -26,6 +26,24 @@ func WithMaxLifetime(d time.Duration) Option {
 	return func(s *Server) { s.keys.maxLifetime = d }
 }
 
+// WithLockOnSleep locks the agent once the computer has slept, as soon as
+// it wakes: on its next request, or its sweep.
+func WithLockOnSleep() Option {
+	return func(s *Server) { s.keys.lockOnSleep = true }
+}
+
+// WithScreenLock locks the agent whenever locked says the computer's
+// screen is locked, which it asks every couple of seconds.
+func WithScreenLock(locked func() bool) Option {
+	return func(s *Server) { s.screenLocked = locked }
+}
+
+// withScreenEvery sets how often the server asks whether the screen is
+// locked. Tests only.
+func withScreenEvery(d time.Duration) Option {
+	return func(s *Server) { s.screenEvery = d }
+}
+
 // WithExitOnAutoLock makes the agent shut down instead of staying locked
 // when the idle timeout or max lifetime locks it, and when no unlock
 // arrives within the idle timeout of starting. A locked agent has nothing

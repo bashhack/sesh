@@ -40,15 +40,15 @@ func touchApp(t *testing.T, state TouchID, fail error) (*app, *[]string) {
 func TestTouchIDToggle(t *testing.T) {
 	a, asked := touchApp(t, TouchID{Said: "on", On: true, Here: true}, nil)
 	a.press("ctrl+g", ",")
-	if s := a.screen(); !strings.Contains(s, "Touch ID unlock          on") || !strings.Contains(s, "turn it off") {
+	if s := a.screen(); !strings.Contains(s, "Touch ID unlock           on") || !strings.Contains(s, "turn it off") {
 		t.Fatalf("the row:\n%s", s)
 	}
 	a.press("enter")
-	if s := a.screen(); !slices.Equal(*asked, []string{"off"}) || !strings.Contains(s, "Touch ID unlock          off") || !strings.Contains(s, "Touch ID unlock is off.") {
+	if s := a.screen(); !slices.Equal(*asked, []string{"off"}) || !strings.Contains(s, "Touch ID unlock           off") || !strings.Contains(s, "Touch ID unlock is off.") {
 		t.Fatalf("asked %q\n%s", *asked, s)
 	}
 	a.press("enter")
-	if !slices.Equal(*asked, []string{"off", "on"}) || !strings.Contains(a.screen(), "Touch ID unlock          on") {
+	if !slices.Equal(*asked, []string{"off", "on"}) || !strings.Contains(a.screen(), "Touch ID unlock           on") {
 		t.Errorf("asked %q\n%s", *asked, a.screen())
 	}
 }

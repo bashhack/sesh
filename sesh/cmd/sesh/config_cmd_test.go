@@ -20,7 +20,7 @@ func useConfigFile(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	for _, k := range []string{config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays, config.EnvBackupEveryDays, config.EnvBackupKeep, config.EnvBackupDir, config.EnvTrashKeepDays, config.EnvHistoryKeep, config.EnvHealthOldAfterDays} {
+	for _, k := range []string{config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays, config.EnvBackupEveryDays, config.EnvBackupKeep, config.EnvBackupDir, config.EnvTrashKeepDays, config.EnvHistoryKeep, config.EnvHealthOldAfterDays, config.EnvUILockOnQuit, config.EnvAgentLockOnSleep, config.EnvAgentLockOnScreen} {
 		t.Setenv(k, "")
 	}
 	path := filepath.Join(dir, "sesh", "config.toml")
@@ -68,14 +68,14 @@ func TestRunConfig_ShowsValuesAndSources(t *testing.T) {
 	got := app.Stdout.(*bytes.Buffer).String()
 	for _, want := range []string{
 		"config file: " + path + "\n",
-		"clipboard_timeout        45s           (config file)\n",
-		"agent.idle_timeout       10m           (default)\n",
-		"agent.max_lifetime       2h            (config file)\n",
-		"audit.retention_days     0 (keep all)  (config file)\n",
-		"master_password.memory   512MiB        (config file)\n",
-		"master_password.time     4             (environment: SESH_KDF_TIME)\n",
-		"master_password.threads  4             (default)\n",
-		"db_path                  /tmp/sesh-test/vault.db\n                         (environment: SESH_DB_PATH)\n",
+		"clipboard_timeout          45s           (config file)\n",
+		"agent.idle_timeout         10m           (default)\n",
+		"agent.max_lifetime         2h            (config file)\n",
+		"audit.retention_days       0 (keep all)  (config file)\n",
+		"master_password.memory     512MiB        (config file)\n",
+		"master_password.time       4             (environment: SESH_KDF_TIME)\n",
+		"master_password.threads    4             (default)\n",
+		"db_path                    /tmp/sesh-test/vault.db\n                           (environment: SESH_DB_PATH)\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)

@@ -32,7 +32,7 @@ type touchIDMsg struct {
 // touchIDRow is the settings panel's row for Touch ID unlock, in state t.
 func (m *Model) touchIDRow(t TouchID) item {
 	it := item{
-		label: fmt.Sprintf("%-24s %s", "Touch ID unlock", t.Said),
+		label: fmt.Sprintf("%-25s %s", "Touch ID unlock", t.Said),
 		run:   func() tea.Cmd { return m.toggleTouchID(&t) },
 		stay:  true,
 	}
