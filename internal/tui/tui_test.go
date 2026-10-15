@@ -51,6 +51,7 @@ type fakeVault struct {
 	exports        []string // "to password replace", each Export asked for
 	starts         []string // "source files password", each StartImport asked for
 	pruned         []int    // the days each PruneAudit was given
+	pruneErr       error    // what PruneAudit says went wrong, after it pruned
 	audit          AuditLog // what AuditLog gives
 	kept           int      // keep-alives
 	closed         bool
@@ -376,6 +377,9 @@ func (f *fakeVault) PruneAudit(days int) (string, error) {
 	f.pruned = append(f.pruned, days)
 	n := len(f.audit.Events)
 	f.audit = AuditLog{}
+	if f.pruneErr != nil {
+		return "", f.pruneErr
+	}
 	return fmt.Sprintf("Removed all %d events.", n), nil
 }
 
@@ -1506,6 +1510,13 @@ func TestAuditPanel(t *testing.T) {
 	if s := a.screen(); !slices.Equal(f.pruned, []int{0}) || a.ov == nil || a.ov.kind != panelAudit || !strings.Contains(s, "No events yet") || !strings.Contains(s, "Removed all 1 events") {
 		t.Errorf("pruned %v:\n%s", f.pruned, s)
 	}
+	// A prune that went through, then failed (compacting, say): the log as it is now, under why.
+	f.audit = AuditLog{Count: 1, Oldest: when, Events: []AuditEvent{{When: when, Event: "read", What: "password github (alice)"}}}
+	f.pruneErr = errors.New("removed all 1 event, but compacting the vault failed")
+	a.press("esc", "enter", "p", "0", "enter", "wait", "y")
+	if s := a.screen(); strings.Contains(s, "2026-10-14 09:30") || !strings.Contains(s, "compacting the vault failed") {
+		t.Errorf("a failed prune:\n%s", s)
+	}
 }
 
 // A TOTP entry's key can come from a QR code on screen, whose issuer and account name it when left empty; a code
@@ -1600,6 +1611,24 @@ func TestPurge(t *testing.T) {
 	a.press("wait", "y")
 	if s := a.screen(); len(f.entries) != 0 || len(f.trash) != 0 || len(a.marked) != 0 || len(a.keys[code]) != 0 || !strings.Contains(s, "1 marked was gone") {
 		t.Errorf("entries %d, trash %d, marked %d, key held %v:\n%s", len(f.entries), len(f.trash), len(a.marked), len(a.keys[code]) != 0, s)
+	}
+}
+
+// An entry deleted from its own menu, while marked, is unmarked, to the trash or for good.
+func TestDeleteUnmarks(t *testing.T) {
+	for _, key := range []string{"d", "x"} {
+		f := newFake()
+		a := newApp(t, f, Options{})
+		// With a search typed, the list read again doesn't show every entry, so marks aren't tidied there.
+		a.press("g", "i", "t", "h", "u", "b", "down", "up", "space", "up")
+		marked := a.selected().Key
+		if !a.marked[marked] {
+			t.Fatalf("%s: the selected entry isn't the one marked: %v", key, a.marked)
+		}
+		a.press("ctrl+k", "s", key, "wait", "y")
+		if len(a.marked) != 0 || slices.ContainsFunc(f.entries, func(e vault.Entry) bool { return e.Key == marked }) {
+			t.Errorf("%s: marked %v, entries %v", key, a.marked, f.entries)
+		}
 	}
 }
 
@@ -1948,7 +1977,7 @@ func TestGenerator(t *testing.T) {
 	if a.form != nil || !slices.Equal(a.copied, []string{"made-pw"}) || asked[len(asked)-1] != (generating{12, false}) || len(f.saves) != 0 {
 		t.Errorf("generated: copied %q, asked %v, saves %d:\n%s", a.copied, asked, len(f.saves), a.screen())
 	}
-	if s := a.screen(); !strings.Contains(s, "Copied a new password, 12 characters,") || a.clipUntil.IsZero() {
+	if s := a.screen(); !strings.Contains(s, "Copied a new password of 12 characters") || a.clipUntil.IsZero() {
 		t.Errorf("what's said:\n%s", s)
 	}
 	a.press("ctrl+g", "p", "ctrl+u", "6", "enter", "enter")

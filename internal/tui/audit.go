@@ -12,12 +12,14 @@ import (
 // lists; sesh audit --limit 0 lists them all.
 const auditShown = 500
 
-// auditMsg is the audit log, read for its panel, and what a prune did.
+// auditMsg is the audit log, read for its panel, and what a prune did;
+// listed says the log was read after a prune that failed.
 type auditMsg struct {
-	err   error
-	said  string
-	log   AuditLog
-	epoch int
+	err    error
+	said   string
+	log    AuditLog
+	epoch  int
+	listed bool
 }
 
 // openAudit shows the audit log's newest events in a panel over the
@@ -64,7 +66,7 @@ func (m *Model) gotAudit(msg *auditMsg) tea.Cmd {
 	if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelAudit {
 		return nil
 	}
-	if msg.err != nil && !errors.Is(msg.err, ErrLocked) && msg.log.Count > 0 {
+	if msg.err != nil && !errors.Is(msg.err, ErrLocked) && msg.listed {
 		m.ov.loading, m.ov.err = false, msg.err.Error()
 		m.showAudit(&msg.log)
 		return nil
@@ -103,7 +105,7 @@ func (m *Model) askPrune() tea.Cmd {
 					if lerr != nil {
 						return auditMsg{err: err, epoch: epoch}
 					}
-					return auditMsg{log: log, err: err, epoch: epoch}
+					return auditMsg{log: log, err: err, epoch: epoch, listed: true}
 				}
 				log, err := v.AuditLog(auditShown)
 				return auditMsg{log: log, err: err, said: said, epoch: epoch}

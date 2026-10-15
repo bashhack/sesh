@@ -73,9 +73,9 @@ func (m *Model) openGenerator() tea.Cmd {
 			if err := opts.Copy(string(pw)); err != nil {
 				return generatedMsg{err: err, epoch: epoch}
 			}
-			what := "a new password, " + strconv.Itoa(g.length) + " characters,"
+			what := "a new password of " + strconv.Itoa(g.length) + " characters"
 			if opts.IsWeak != nil && opts.IsWeak(pw) {
-				what = "a new password, " + strconv.Itoa(g.length) + " characters: easy to guess, 12 or more is safer;"
+				what += " (easy to guess: 12 or more is safer)"
 			}
 			what = copied(what, opts.ClearAfter)
 			return generatedMsg{what: what, epoch: epoch}

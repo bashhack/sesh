@@ -516,7 +516,7 @@ func (m *Model) confirmDelete(e *vault.Entry) tea.Cmd {
 		func() tea.Cmd {
 			epoch := m.epoch
 			return m.read(func(v Vault, _ func() bool) tea.Msg {
-				return doneMsg{what: "Moved " + kindName(k) + " to the trash", err: v.Delete(k), epoch: epoch, reread: true, forget: k}
+				return doneMsg{what: "Moved " + kindName(k) + " to the trash", err: v.Delete(k), epoch: epoch, reread: true, forget: k, unmark: []vault.Key{k}}
 			})
 		})
 	return nil
@@ -628,7 +628,7 @@ func (m *Model) confirmPurge(keys []vault.Key, marked bool) tea.Cmd {
 		if !marked {
 			epoch := m.epoch
 			return m.read(func(v Vault, _ func() bool) tea.Msg {
-				return doneMsg{what: "Deleted " + what + " for good", err: v.Purge(keys), epoch: epoch, reread: true}
+				return doneMsg{what: "Deleted " + what + " for good", err: v.Purge(keys), epoch: epoch, reread: true, unmark: keys}
 			})
 		}
 		return m.change(keys, func(v Vault, keys []vault.Key) (int, error) { return len(keys), v.Purge(keys) },
