@@ -164,6 +164,7 @@ func TestBackupListAndDelete(t *testing.T) {
 		"delete --force nope.db":                 "no backup named nope.db",
 		"delete --force " + name(0) + " nope.db": "no backup named nope.db",
 		"list extra":                             "takes nothing more",
+		"--force list":                           "write ./list",
 	} {
 		if _, err := runBackupOut(t, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
 			t.Errorf("%s: %v, want %q", args, err, wantSub)

@@ -247,7 +247,13 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			}
 		}
 		if scanning() {
-			return m.scanThenSave(f, c)
+			// What the code names goes into the form, so a save refused
+			// (a name taken) shows which.
+			fill := func(service, username string) {
+				name.text.SetValue(service)
+				user.text.SetValue(username)
+			}
+			return m.scanThenSave(f, c, fill)
 		}
 		return m.save(f, c, generate)
 	}
@@ -305,18 +311,21 @@ func (m *Model) save(f *form, c *Change, generate bool) tea.Cmd {
 type scannedMsg struct {
 	err   error
 	c     *Change
+	fill  func(service, username string) // puts the names used in the form
 	qr    ScannedQR
 	epoch int
 }
 
 // scanThenSave reads the TOTP key for c from a QR code on screen, then
-// saves it as save does.
-func (m *Model) scanThenSave(f *form, c *Change) tea.Cmd {
-	f.saving, f.err, f.working = true, "", "Select the area of the screen with the QR code…"
+// saves it as save does. Ctrl-C meanwhile quits once the screen capture
+// ends, which Esc on its crosshair does, saving nothing.
+func (m *Model) scanThenSave(f *form, c *Change, fill func(service, username string)) tea.Cmd {
+	f.saving, f.err, f.working = true, "", "Select the area of the screen with the QR code (Esc there cancels)…"
+	f.quitting = "Quitting once the screen capture ends: Esc on its crosshair cancels it."
 	scan, epoch := m.opts.ScanQR, m.epoch
 	return func() tea.Msg {
 		qr, err := scan()
-		return scannedMsg{qr: qr, err: err, c: c, epoch: epoch}
+		return scannedMsg{qr: qr, err: err, c: c, fill: fill, epoch: epoch}
 	}
 }
 
@@ -325,16 +334,22 @@ func (m *Model) scanThenSave(f *form, c *Change) tea.Cmd {
 // or says why the code couldn't be used.
 func (m *Model) scanned(msg *scannedMsg) tea.Cmd {
 	c := msg.c
-	if msg.epoch != m.epoch || m.v == nil || m.form == nil {
+	switch {
+	case m.quitAfter:
+		secure.SecureZeroBytes(msg.qr.Link)
+		c.Wipe()
+		return tea.Quit
+	case msg.epoch != m.epoch || m.v == nil || m.form == nil:
 		secure.SecureZeroBytes(msg.qr.Link)
 		c.Wipe()
 		return nil
 	}
 	f := m.form
-	f.saving, f.working = false, ""
+	f.saving, f.working, f.quitting = false, "", ""
 	switch {
 	case msg.err != nil:
 		f.err = "No QR code read: " + msg.err.Error()
+		secure.SecureZeroBytes(msg.qr.Link)
 		c.Wipe()
 		return nil
 	case c.To.Service == "" && msg.qr.Issuer == "":
@@ -348,6 +363,9 @@ func (m *Model) scanned(msg *scannedMsg) tea.Cmd {
 	}
 	if c.To.Username == "" {
 		c.To.Username = msg.qr.Account
+	}
+	if msg.fill != nil {
+		msg.fill(c.To.Service, c.To.Username)
 	}
 	c.Secret = msg.qr.Link
 	return m.save(f, c, false)

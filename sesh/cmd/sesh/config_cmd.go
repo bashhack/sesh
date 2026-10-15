@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/bashhack/sesh/internal/config"
@@ -69,6 +70,9 @@ func setConfig(app *App, args []string) error {
 		return errors.New(`name the setting and its value: sesh config set <key> <value> ("" puts its default back)`)
 	}
 	key, value := words[0], strings.TrimSpace(words[1])
+	if n, err := strconv.Atoi(value); err == nil && config.IsNumber(key) {
+		value = strconv.Itoa(n) // as it's written: 03 and +3 are 3
+	}
 	cfg, err := settings()
 	if err != nil {
 		return err
@@ -86,6 +90,9 @@ func setConfig(app *App, args []string) error {
 		return fmt.Errorf("%s is set by %s, which wins over the config file: change it there", key, it.Origin)
 	case value == it.Raw:
 		_, err := fmt.Fprintf(app.Stdout, "%s is %s already; nothing changed\n", key, it.Value)
+		return err
+	case value == "" && it.Source == config.FromDefault:
+		_, err := fmt.Fprintf(app.Stdout, "%s isn't in the config file: it's at its default, %s, already; nothing changed\n", key, it.Value)
 		return err
 	}
 	to := value

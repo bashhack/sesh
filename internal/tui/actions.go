@@ -274,22 +274,27 @@ func (m *Model) panelLetter(k string) tea.Cmd {
 	ov := m.ov
 	switch {
 	case ov.kind == panelHistory && k == "r" && ov.sel < len(ov.versions):
-		n, key := ov.sel+2, ov.k
+		n, key, at := ov.sel+2, ov.k, ov.versions[ov.sel]
 		m.ov = m.confirm(ov, "Restore",
 			fmt.Sprintf("Make version %d the secret for %s again? The current one is kept as an earlier secret.", n, short(keyName(key))),
-			func() tea.Cmd { return m.restoreVersion(key, n) })
+			func() tea.Cmd { return m.restoreVersion(key, n, at) })
 	case ov.kind == panelHistory && (k == "x" || k == "delete") && ov.sel < len(ov.versions):
-		n, key := ov.sel+2, ov.k
+		n, key, at := ov.sel+2, ov.k, ov.versions[ov.sel]
 		m.ov = m.confirm(ov, "Delete for good",
 			fmt.Sprintf("Delete version %d of %s for good? It can't be brought back; the versions after it move up a number.", n, short(keyName(key))),
-			func() tea.Cmd { m.ov = ov; return m.forgetVersion(key, n) })
+			func() tea.Cmd { m.ov = ov; return m.forgetVersion(key, n, at) })
 		m.ov.danger = true
 	case ov.kind == panelTrash && k == "a" && ov.sel < len(ov.trash):
 		return m.askRestoreAs(&ov.trash[ov.sel])
 	case ov.kind == panelTrash && k == "e" && len(ov.trash) > 0:
+		// What's listed, and only that: an entry trashed since is left.
+		ids := make([]int64, len(ov.trash))
+		for i, t := range ov.trash {
+			ids[i] = t.ID
+		}
 		m.ov = m.confirm(ov, "Empty the trash",
-			fmt.Sprintf("Delete %s in the trash for good? They can't be brought back.", plural(len(ov.trash), "the 1 entry", fmt.Sprintf("all %d entries", len(ov.trash)))),
-			func() tea.Cmd { m.ov = ov; return m.emptyTrash() })
+			fmt.Sprintf("Delete %s in the trash for good? They can't be brought back.", plural(len(ids), "the 1 entry", fmt.Sprintf("all %d entries", len(ids)))),
+			func() tea.Cmd { m.ov = ov; return m.emptyTrash(ids) })
 		m.ov.danger = true
 	case ov.kind == panelBackups:
 		return m.backupsLetter(k)
@@ -415,12 +420,13 @@ func (m *Model) copyVersion(k vault.Key, n int) tea.Cmd {
 	})
 }
 
-// restoreVersion makes k's version n its secret again.
-func (m *Model) restoreVersion(k vault.Key, n int) tea.Cmd {
+// restoreVersion makes k's version n, replaced at replaced, its secret
+// again.
+func (m *Model) restoreVersion(k vault.Key, n int, replaced time.Time) tea.Cmd {
 	epoch := m.epoch
 	m.forget(k)
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		err := v.RestoreVersion(k, n)
+		err := v.RestoreVersion(k, n, replaced)
 		return doneMsg{what: fmt.Sprintf("Restored an earlier secret for %s; the one it replaced is kept", keyName(k)), err: err, epoch: epoch, reread: true, forget: k}
 	})
 }
@@ -496,32 +502,37 @@ func (m *Model) askRestoreAs(t *Trashed) tea.Cmd {
 			return err.Error(), nil
 		case as == own:
 			return "That's its own name: Enter in the trash puts it back under it.", nil
+		case as.Kind != own.Kind:
+			return "It comes back as the kind it is: " + string(own.Kind) + "/…", nil
 		}
 		return "", m.restoreFromTrash(id, as)
 	})
 }
 
-// emptyTrash deletes everything in the trash for good.
-func (m *Model) emptyTrash() tea.Cmd {
+// emptyTrash deletes the trash's entries ids, those it listed, for good.
+func (m *Model) emptyTrash(ids []int64) tea.Cmd {
 	epoch := m.epoch
 	m.ov.loading = true
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		n, err := v.EmptyTrash()
+		n, err := v.RemoveFromTrash(ids...)
 		if err != nil {
-			return trashMsg{err: err, epoch: epoch}
+			trash, _ := v.Trash() //nolint:errcheck // the list as it is, under the error said
+			return trashMsg{trash: trash, err: err, epoch: epoch}
 		}
 		trash, err := v.Trash()
 		return trashMsg{trash: trash, err: err, said: "Deleted " + countOf(n) + " in the trash for good", epoch: epoch}
 	})
 }
 
-// forgetVersion deletes k's version n for good, and lists those left.
-func (m *Model) forgetVersion(k vault.Key, n int) tea.Cmd {
+// forgetVersion deletes k's version n, replaced at replaced, for good,
+// and lists those left.
+func (m *Model) forgetVersion(k vault.Key, n int, replaced time.Time) tea.Cmd {
 	epoch := m.epoch
 	m.ov.loading = true
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		if err := v.ForgetVersion(k, n); err != nil {
-			return historyMsg{k: k, err: err, epoch: epoch}
+		if err := v.ForgetVersion(k, n, replaced); err != nil {
+			versions, _ := v.History(k) //nolint:errcheck // the list as it is, under the error said
+			return historyMsg{k: k, versions: versions, err: err, epoch: epoch}
 		}
 		versions, err := v.History(k)
 		return historyMsg{k: k, versions: versions, err: err, said: fmt.Sprintf("Deleted version %d of %s for good", n, keyName(k)), epoch: epoch}
@@ -532,7 +543,8 @@ func (m *Model) forgetVersion(k vault.Key, n int) tea.Cmd {
 func (m *Model) removeFromTrash(id int64, k vault.Key) tea.Cmd {
 	epoch := m.epoch
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		return doneMsg{what: "Deleted " + kindName(k) + " for good", err: v.RemoveFromTrash(id), epoch: epoch, reread: true}
+		_, err := v.RemoveFromTrash(id)
+		return doneMsg{what: "Deleted " + kindName(k) + " for good", err: err, epoch: epoch, reread: true}
 	})
 }
 
@@ -553,6 +565,12 @@ func (m *Model) actionResult(msg tea.Msg) tea.Cmd {
 		if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelHistory || m.ov.k != msg.k {
 			return nil
 		}
+		if msg.err != nil && !errors.Is(msg.err, ErrLocked) && msg.versions != nil {
+			// A change refused: the list as it is now, and why.
+			m.ov.versions, m.ov.loading, m.ov.err = msg.versions, false, msg.err.Error()
+			m.ov.sel = max(min(m.ov.sel, len(msg.versions)-1), 0)
+			return nil
+		}
 		return m.loaded(msg.err, func() {
 			m.ov.versions = msg.versions
 			m.ov.sel = max(min(m.ov.sel, len(msg.versions)-1), 0)
@@ -562,6 +580,11 @@ func (m *Model) actionResult(msg tea.Msg) tea.Cmd {
 		})
 	case trashMsg:
 		if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelTrash {
+			return nil
+		}
+		if msg.err != nil && !errors.Is(msg.err, ErrLocked) && msg.trash != nil {
+			m.ov.trash, m.ov.loading, m.ov.err = msg.trash, false, msg.err.Error()
+			m.ov.sel = max(min(m.ov.sel, len(msg.trash)-1), 0)
 			return nil
 		}
 		return m.loaded(msg.err, func() {

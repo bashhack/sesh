@@ -463,9 +463,26 @@ func (u *uiVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
 	return secret, uiLocked(err)
 }
 
-func (u *uiVault) RestoreVersion(k vault.Key, n int) error {
+func (u *uiVault) RestoreVersion(k vault.Key, n int, replaced time.Time) error {
+	if err := u.sameVersion(k, n, replaced); err != nil {
+		return err
+	}
 	_, err := u.store.RestoreVersion(k, n)
 	return u.wrote(err)
+}
+
+// sameVersion is ErrHistoryChanged when k's version n wasn't replaced at
+// replaced: the history the app listed has changed since, and n may be
+// another version now.
+func (u *uiVault) sameVersion(k vault.Key, n int, replaced time.Time) error {
+	versions, err := u.store.History(k)
+	if err != nil {
+		return uiLocked(err)
+	}
+	if n < 2 || n-2 >= len(versions) || !versions[n-2].ReplacedAt.Equal(replaced) {
+		return tui.ErrHistoryChanged
+	}
+	return nil
 }
 
 func (u *uiVault) Delete(k vault.Key) error { return u.wrote(u.store.Delete(k)) }
@@ -558,12 +575,10 @@ func (u *uiVault) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) {
 	return r.Key, u.wrote(err)
 }
 
-func (u *uiVault) EmptyTrash() (int, error) {
-	n, err := u.store.EmptyTrash()
-	return n, u.wrote(err)
-}
-
-func (u *uiVault) ForgetVersion(k vault.Key, n int) error {
+func (u *uiVault) ForgetVersion(k vault.Key, n int, replaced time.Time) error {
+	if err := u.sameVersion(k, n, replaced); err != nil {
+		return err
+	}
 	return u.wrote(u.store.ForgetVersions(k, n))
 }
 
@@ -595,9 +610,12 @@ func (u *uiVault) AuditLog(limit int) (tui.AuditLog, error) {
 	return log, nil
 }
 
-func (u *uiVault) RemoveFromTrash(id int64) error {
-	_, err := u.store.RemoveFromTrash(id)
-	return u.wrote(err)
+func (u *uiVault) RemoveFromTrash(ids ...int64) (int, error) {
+	gone, err := u.store.RemoveFromTrash(ids...)
+	if errors.Is(err, database.ErrNotInTrash) {
+		return 0, errors.New("one of them isn't in the trash any more, so nothing was deleted: look again")
+	}
+	return len(gone), u.wrote(err)
 }
 
 // wrote is err, after the app's own write: the fingerprint is taken
@@ -779,9 +797,10 @@ func uiLocked(err error) error {
 // uiSettings are cfg's settings as the app's settings panel lists them.
 // uiScanQR reads a TOTP entry's link from a QR code on screen, for the
 // add form; nil where the screen can't be captured (macOS's screencapture
-// does it). The link is checked as sesh add totp --qr checks it.
+// does it), or isn't this terminal's: over SSH it would ask on the Mac's
+// own screen. The link is checked as sesh add totp --qr checks it.
 func uiScanQR() func() (tui.ScannedQR, error) {
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != "darwin" || overSSH() {
 		return nil
 	}
 	return func() (tui.ScannedQR, error) {

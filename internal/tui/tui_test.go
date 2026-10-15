@@ -36,6 +36,7 @@ type fakeVault struct {
 	notes      map[vault.Key]string
 	fields     map[vault.Key][]vault.Field // secret fields, with values
 	history    map[vault.Key][]string      // earlier secrets, the newest first
+	replacedAt map[string]time.Time        // when each earlier secret was replaced; by its place when not here
 	trash      []Trashed
 	trashed    map[int64]vault.Entry
 	exported   map[string]bool // files there already, which an export doesn't replace without asking
@@ -109,8 +110,11 @@ func (f *fakeVault) Field(k vault.Key, name string) ([]byte, error) {
 
 func (f *fakeVault) History(k vault.Key) ([]time.Time, error) {
 	out := make([]time.Time, len(f.history[k]))
-	for i := range out {
+	for i, s := range f.history[k] {
 		out[i] = time.Unix(1_700_000_000-int64(i)*86400, 0)
+		if at, ok := f.replacedAt[s]; ok {
+			out[i] = at
+		}
 	}
 	return out, nil
 }
@@ -120,7 +124,19 @@ func (f *fakeVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
 	return []byte(f.history[k][n-2]), nil
 }
 
-func (f *fakeVault) RestoreVersion(k vault.Key, n int) error {
+// sameVersion is ErrHistoryChanged when k's version n wasn't replaced at replaced, as History lists it now.
+func (f *fakeVault) sameVersion(k vault.Key, n int, replaced time.Time) error {
+	versions, _ := f.History(k) //nolint:errcheck // the fake's never fails
+	if n-2 >= len(versions) || !versions[n-2].Equal(replaced) {
+		return ErrHistoryChanged
+	}
+	return nil
+}
+
+func (f *fakeVault) RestoreVersion(k vault.Key, n int, replaced time.Time) error {
+	if err := f.sameVersion(k, n, replaced); err != nil {
+		return err
+	}
 	h := f.history[k]
 	now := f.secrets[k]
 	f.secrets[k] = h[n-2]
@@ -293,13 +309,10 @@ func (f *fakeVault) RestoreFromTrash(id int64, as vault.Key) (vault.Key, error) 
 	return e.Key, nil
 }
 
-func (f *fakeVault) EmptyTrash() (int, error) {
-	n := len(f.trash)
-	f.trash = nil
-	return n, nil
-}
-
-func (f *fakeVault) ForgetVersion(k vault.Key, n int) error {
+func (f *fakeVault) ForgetVersion(k vault.Key, n int, replaced time.Time) error {
+	if err := f.sameVersion(k, n, replaced); err != nil {
+		return err
+	}
 	h := f.history[k]
 	f.history[k] = append(slices.Clone(h[:n-2]), h[n-1:]...)
 	return nil
@@ -311,9 +324,10 @@ func (f *fakeVault) AuditLog(limit int) (AuditLog, error) {
 	return log, f.err
 }
 
-func (f *fakeVault) RemoveFromTrash(id int64) error {
-	f.trash = slices.DeleteFunc(f.trash, func(t Trashed) bool { return t.ID == id })
-	return nil
+func (f *fakeVault) RemoveFromTrash(ids ...int64) (int, error) {
+	n := len(f.trash)
+	f.trash = slices.DeleteFunc(f.trash, func(t Trashed) bool { return slices.Contains(ids, t.ID) })
+	return n - len(f.trash), nil
 }
 
 func (f *fakeVault) Save(c *Change) (vault.Key, error) {
@@ -1317,6 +1331,10 @@ func TestTrashRestoreAsAndEmpty(t *testing.T) {
 	if a.form == nil || !strings.Contains(a.screen(), "That's its own name") {
 		t.Fatalf("its own name again:\n%s", a.screen())
 	}
+	a.press("ctrl+u", "api_key/github-old", "enter")
+	if a.form == nil || !strings.Contains(a.screen(), "It comes back as the kind it is: password/…") {
+		t.Fatalf("another kind:\n%s", a.screen())
+	}
 	a.press("ctrl+u", "password/github-old/alice", "enter")
 	old := vault.Key{Kind: vault.KindPassword, Service: "github-old", Username: "alice"}
 	if !slices.ContainsFunc(f.entries, func(e vault.Entry) bool { return e.Key == old }) || len(f.trash) != 0 || !strings.Contains(a.screen(), "Restored password github-old (alice)") {
@@ -1348,6 +1366,44 @@ func TestHistoryDeleteVersion(t *testing.T) {
 	a.press("x", "wait", "y")
 	if s := a.screen(); !slices.Equal(f.history[github], []string{"old-1"}) || a.ov == nil || a.ov.kind != panelHistory || strings.Contains(s, "version 3  replaced") || !strings.Contains(s, "Deleted version 3 of github (alice) for good") {
 		t.Errorf("deleted: history %q:\n%s", f.history[github], s)
+	}
+}
+
+// A version chosen from a list another command has changed since isn't deleted: the panel says so, and lists them
+// as they are.
+func TestHistoryChangedMeanwhile(t *testing.T) {
+	f := newFake()
+	f.history = map[vault.Key][]string{github: {"old-1", "old-2"}}
+	f.replacedAt = map[string]time.Time{"old-0": time.Unix(1_700_100_000, 0), "old-1": time.Unix(1_700_000_000, 0), "old-2": time.Unix(1_699_900_000, 0)}
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "h", "down") // version 3: old-2
+	f.history[github] = []string{"old-0", "old-1", "old-2"}
+	a.press("x", "wait", "y")
+	if s := a.screen(); len(f.history[github]) != 3 || !strings.Contains(s, "changed meanwhile") || !strings.Contains(s, "version 4") {
+		t.Errorf("deleted from a changed list: history %q:\n%s", f.history[github], s)
+	}
+	// The list shown now is the one acted on; changed again, a restore is refused too.
+	f.replacedAt["old-x"] = time.Unix(1_700_200_000, 0)
+	f.history[github] = []string{"old-x", "old-0", "old-1", "old-2"}
+	a.press("r", "wait", "y")
+	if f.secrets[github] != "gh-pass" || !strings.Contains(a.screen(), "changed meanwhile") {
+		t.Errorf("restored from a changed list: secret %q:\n%s", f.secrets[github], a.screen())
+	}
+}
+
+// Emptying the trash deletes what it listed, not an entry trashed since.
+func TestEmptyTrashOnlyWhatWasListed(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.press("ctrl+k", "d", "wait", "y", "ctrl+g", "t")
+	f.trash = append(f.trash, Trashed{ID: 99, Key: vault.Key{Kind: vault.KindPassword, Service: "late"}})
+	a.press("e")
+	if s := a.screen(); !strings.Contains(s, "Delete the 1 entry in the trash for good?") {
+		t.Fatalf("confirm:\n%s", s)
+	}
+	a.press("wait", "y")
+	if len(f.trash) != 1 || f.trash[0].ID != 99 || !strings.Contains(a.screen(), "Deleted 1 entry in the trash for good") {
+		t.Errorf("trash after = %+v:\n%s", f.trash, a.screen())
 	}
 }
 
@@ -1400,6 +1456,32 @@ func TestAddScanQR(t *testing.T) {
 	}
 	if c := f.saves[0]; c.To != (vault.Key{Kind: vault.KindTOTP, Service: "Acme", Username: "jo@acme.io"}) || string(c.Secret) != link {
 		t.Errorf("change = %+v", c)
+	}
+	// A name the code gives that's taken is shown in the form, which says so.
+	acme := vault.Key{Kind: vault.KindTOTP, Service: "Acme", Username: "jo@acme.io"}
+	f.entries = append(f.entries, vault.Entry{Key: acme})
+	f.err = ErrNameTaken
+	a.press("ctrl+g", "a", "→", "→", "→")
+	a.tabs(3)
+	a.press("→", "ctrl+s")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "Another entry has that name") {
+		t.Fatalf("a name taken:\n%s", s)
+	}
+	for _, in := range a.form.inputs {
+		if want := map[string]string{"name": "Acme", "username": "jo@acme.io"}[in.label]; want != "" && in.value() != want {
+			t.Errorf("the form's %s = %q, want %q", in.label, in.value(), want)
+		}
+	}
+	f.err = nil
+	// Ctrl-C while the screen is captured quits once it ends, saving nothing.
+	saves := len(f.saves)
+	a.quitAfter = true
+	cmd := a.scanned(&scannedMsg{qr: ScannedQR{Link: []byte(link)}, c: &Change{To: vault.Key{Kind: vault.KindTOTP, Service: "x"}}, epoch: a.epoch})
+	if cmd == nil {
+		t.Fatal("quitting mid-scan: nothing done")
+	}
+	if _, quits := cmd().(tea.QuitMsg); !quits || len(f.saves) != saves {
+		t.Errorf("quitting mid-scan: quits %v, saves %d", quits, len(f.saves))
 	}
 }
 

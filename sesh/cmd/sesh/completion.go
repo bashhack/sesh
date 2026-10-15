@@ -128,20 +128,23 @@ func complete(words []string) (cands []candidate, files bool) {
 	case "init":
 		specs = append(flagSpecs(func(fs *flag.FlagSet) { addInitFlags(fs) }), settingSpecs()...)
 	case "backup":
+		words := positional(before, append(flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) }), flagSpecs(func(fs *flag.FlagSet) { addBackupDeleteFlags(fs) })...))
 		switch {
-		case len(before) == 1 && cur != "" && !strings.HasPrefix(cur, "-"):
+		case len(words) == 1 && cur != "" && !strings.HasPrefix(cur, "-"):
 			// list, delete, or the file to write.
 			if c := matching(backupCommands, cur); len(c) > 0 {
 				return c, false
 			}
 			return nil, true
-		case len(before) == 1 && cur == "":
+		case len(words) == 1 && cur == "":
 			return backupCommands, false
-		case len(before) > 1 && before[1] == "delete":
+		case len(words) == 1:
+			specs = flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) })
+		case words[1] == "delete":
 			// The backups' names aren't completed: that would list the
 			// folder on a Tab press.
 			specs = flagSpecs(func(fs *flag.FlagSet) { addBackupDeleteFlags(fs) })
-		case len(before) > 1 && before[1] == "list":
+		case words[1] == "list":
 		default:
 			specs = flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) })
 		}
@@ -253,12 +256,13 @@ func complete(words []string) (cands []candidate, files bool) {
 	case "completion":
 		verbs = completionShells
 	case "config":
+		words := positional(before, flagSpecs(func(fs *flag.FlagSet) { addConfigSetFlags(fs) }))
 		switch {
-		case len(before) == 1 && !strings.HasPrefix(cur, "-"):
+		case len(words) == 1 && !strings.HasPrefix(cur, "-"):
 			return matching([]candidate{{"set", "Change a setting in the config file"}}, cur), false
-		case len(before) == 2 && before[1] == "set" && !strings.HasPrefix(cur, "-"):
+		case len(words) == 2 && words[1] == "set" && !strings.HasPrefix(cur, "-"):
 			return matching(settingKeys(), cur), false
-		case len(before) > 1 && before[1] == "set":
+		case len(words) > 1 && words[1] == "set":
 			specs = flagSpecs(func(fs *flag.FlagSet) { addConfigSetFlags(fs) })
 		case !strings.HasPrefix(cur, "-"):
 			return nil, false
@@ -331,6 +335,25 @@ func complete(words []string) (cands []candidate, files bool) {
 		}
 	}
 	return matching(all, cur), false
+}
+
+// positional is the words of before that aren't flags, nor a flag's value
+// (specs, with the settings', say which take one): the command and its
+// words, wherever the flags are among them.
+func positional(before []string, specs []flagSpec) []string {
+	specs = append(slices.Clone(specs), settingSpecs()...)
+	var out []string
+	for i := 0; i < len(before); i++ {
+		w := before[i]
+		if !strings.HasPrefix(w, "-") || w == "-" {
+			out = append(out, w)
+			continue
+		}
+		if s, ok := findSpec(specs, w); ok && s.takesValue && !strings.Contains(w, "=") {
+			i++ // its value
+		}
+	}
+	return out
 }
 
 // backupCommands are what sesh backup takes besides a file.

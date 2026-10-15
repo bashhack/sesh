@@ -457,13 +457,21 @@ func TestUI_Actions(t *testing.T) {
 	if v, err := u.Field(gh, "pin"); err != nil || string(v) != "4321" {
 		t.Errorf("Field = %q, %v", v, err)
 	}
-	if h, err := u.History(gh); err != nil || len(h) != 1 {
+	h, err := u.History(gh)
+	if err != nil || len(h) != 1 {
 		t.Fatalf("History = %v, %v", h, err)
 	}
 	if v, err := u.ReadVersion(gh, 2); err != nil || string(v) != "a" {
 		t.Errorf("ReadVersion = %q, %v", v, err)
 	}
-	if err := u.RestoreVersion(gh, 2); err != nil {
+	// A version is acted on only while it's the one listed.
+	if err := u.RestoreVersion(gh, 2, h[0].Add(time.Second)); !errors.Is(err, tui.ErrHistoryChanged) {
+		t.Errorf("restore of a version not as listed: %v", err)
+	}
+	if err := u.RestoreVersion(gh, 3, h[0]); !errors.Is(err, tui.ErrHistoryChanged) {
+		t.Errorf("restore of a version not there: %v", err)
+	}
+	if err := u.RestoreVersion(gh, 2, h[0]); err != nil {
 		t.Fatal(err)
 	}
 	if v, err := u.Secret(gh, "test"); err != nil || string(v) != "a" {
@@ -488,7 +496,14 @@ func TestUI_Actions(t *testing.T) {
 		t.Errorf("restore as another = %v, %v", k, err)
 	}
 	// An earlier secret deleted for good; the trash emptied.
-	if err := u.ForgetVersion(old, 2); err != nil {
+	oh, err := u.History(old)
+	if err != nil || len(oh) != 2 {
+		t.Fatalf("History = %v, %v", oh, err)
+	}
+	if err := u.ForgetVersion(old, 2, oh[1]); !errors.Is(err, tui.ErrHistoryChanged) {
+		t.Errorf("forget of a version not as listed: %v", err)
+	}
+	if err := u.ForgetVersion(old, 2, oh[0]); err != nil {
 		t.Fatal(err)
 	}
 	if h, err := u.History(old); err != nil || len(h) != 1 {
@@ -499,8 +514,15 @@ func TestUI_Actions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if n, err := u.EmptyTrash(); err != nil || n != 2 {
-		t.Errorf("EmptyTrash = %d, %v", n, err)
+	trash, err = u.Trash()
+	if err != nil || len(trash) != 2 {
+		t.Fatalf("Trash = %+v, %v", trash, err)
+	}
+	if _, err := u.RemoveFromTrash(trash[0].ID, 12345); err == nil || !strings.Contains(err.Error(), "nothing was deleted") {
+		t.Errorf("one not in the trash: %v", err)
+	}
+	if n, err := u.RemoveFromTrash(trash[0].ID, trash[1].ID); err != nil || n != 2 {
+		t.Errorf("RemoveFromTrash = %d, %v", n, err)
 	}
 	if trash, err := u.Trash(); err != nil || len(trash) != 0 {
 		t.Errorf("trash after emptying = %+v, %v", trash, err)
@@ -951,8 +973,14 @@ func TestUI_ChecksKeyChanged(t *testing.T) {
 }
 
 // The app's QR scan gives the link a code holds, with its issuer and account; a code that isn't one is refused
-// without being quoted. Only macOS can capture the screen.
+// without being quoted. Only macOS can capture the screen, and not over SSH, where it's another screen.
 func TestUIScanQR(t *testing.T) {
+	t.Setenv("SSH_CONNECTION", "10.0.0.2 51234 10.0.0.1 22")
+	if uiScanQR() != nil {
+		t.Error("offered over SSH")
+	}
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_CLIENT", "")
 	scan := uiScanQR()
 	if runtime.GOOS != "darwin" {
 		if scan != nil {

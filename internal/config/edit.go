@@ -41,14 +41,17 @@ func Set(path, key, value string) error {
 		return fmt.Errorf("read %s: %w", path, err)
 	}
 	line := ""
-	if value != "" {
-		v := value
-		if quoted[key] {
-			v = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
-		} else if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+	switch {
+	case value == "":
+	case quoted[key]:
+		line = `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
+	default:
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
 			return fmt.Errorf("%s = %q: want a whole number", key, value)
 		}
-		line = v
+		// As a number is written: 03 and +3 are 3.
+		line = strconv.FormatInt(n, 10)
 	}
 	updated := setLine(string(old), key, line)
 	if updated == string(old) {
@@ -66,6 +69,9 @@ func Set(path, key, value string) error {
 	}
 	return atomicfile.Write(path, []byte(updated), mode)
 }
+
+// IsNumber reports whether key is a setting whose value is a whole number.
+func IsNumber(key string) bool { return isNumberKey(key) }
 
 func isNumberKey(key string) bool {
 	switch key {

@@ -136,6 +136,14 @@ func TestRunConfig_Set(t *testing.T) {
 	if out, _, err := runCLI(app, runConfig, "set", "history.keep", "", "--force"); err != nil || !strings.Contains(out, "Took history.keep out of") || strings.Contains(read(), "keep =") {
 		t.Errorf("back to the default: %q, %v\n%s", out, err, read())
 	}
+	app, _ = cliApp("", false)
+	if out, _, err := runCLI(app, runConfig, "set", "history.keep", ""); err != nil || !strings.Contains(out, "isn't in the config file: it's at its default, 10, already") {
+		t.Errorf("the default again: %q, %v", out, err)
+	}
+	app, _ = cliApp("", false)
+	if out, _, err := runCLI(app, runConfig, "set", "history.keep", "+12"); err != nil || !strings.Contains(out, "Set history.keep to 12") || !strings.Contains(read(), "keep = 12\n") {
+		t.Errorf("+12: %q, %v\n%s", out, err, read())
+	}
 	t.Setenv(config.EnvTrashKeepDays, "7")
 	for args, wantSub := range map[string]string{
 		"set nope 1":                 "nope isn't a setting; sesh config lists them",

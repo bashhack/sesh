@@ -278,22 +278,6 @@ func (s Series) Prune(keep int) ([]Info, error) {
 	return removed, nil
 }
 
-// RemoveAll removes every backup of the series, returning those removed.
-func (s Series) RemoveAll() ([]Info, error) {
-	all, err := s.List()
-	if err != nil {
-		return nil, err
-	}
-	var removed []Info
-	for _, b := range all {
-		if err := os.Remove(b.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return removed, fmt.Errorf("remove a backup: %w", err)
-		}
-		removed = append(removed, b)
-	}
-	return removed, nil
-}
-
 // ListAny returns the backups in dir of any vault named as the one at
 // vaultPath, newest first, with the id each was made from: for listing
 // when the vault itself can't be read, to say whose each backup is.

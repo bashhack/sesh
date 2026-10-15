@@ -138,6 +138,10 @@ type Tag struct {
 // ErrNameTaken is a trash entry restored onto a name another entry has.
 var ErrNameTaken = errors.New("another entry has that name")
 
+// ErrHistoryChanged is an earlier secret chosen from a list that another
+// command has changed since: its number may be another's now.
+var ErrHistoryChanged = errors.New("its earlier secrets changed meanwhile, so nothing was done: look again, then choose")
+
 // ErrWrongPassword is a password Unlock refused.
 var ErrWrongPassword = errors.New("wrong password")
 
@@ -182,8 +186,9 @@ type Vault interface {
 	// records the read. The caller wipes it.
 	ReadVersion(k vault.Key, n int) ([]byte, error)
 	// RestoreVersion makes k's version n its secret again; the one it
-	// replaces is kept.
-	RestoreVersion(k vault.Key, n int) error
+	// replaces is kept. ErrHistoryChanged when version n isn't the one
+	// replaced at replaced, as History listed it, any more.
+	RestoreVersion(k vault.Key, n int, replaced time.Time) error
 	// Delete moves k to the trash.
 	Delete(k vault.Key) error
 	// Trash is the trash's entries, the newest first.
@@ -192,14 +197,13 @@ type Vault interface {
 	// or as the entry as names when it isn't zero, and says the name it
 	// has. ErrNameTaken when another entry has that name.
 	RestoreFromTrash(id int64, as vault.Key) (vault.Key, error)
-	// RemoveFromTrash deletes the trash's entry id for good.
-	RemoveFromTrash(id int64) error
-	// EmptyTrash deletes everything in the trash for good, and says how
-	// many entries that was.
-	EmptyTrash() (int, error)
+	// RemoveFromTrash deletes the trash's entries ids for good, all or
+	// none, and says how many.
+	RemoveFromTrash(ids ...int64) (int, error)
 	// ForgetVersion deletes k's version n (2 and up) for good; the
-	// versions after it move up a number.
-	ForgetVersion(k vault.Key, n int) error
+	// versions after it move up a number. ErrHistoryChanged as for
+	// RestoreVersion.
+	ForgetVersion(k vault.Key, n int, replaced time.Time) error
 	// AuditLog is the newest limit events of the vault's audit log.
 	AuditLog(limit int) (AuditLog, error)
 	// Health checks the passwords and API keys, as sesh health does: weak,
