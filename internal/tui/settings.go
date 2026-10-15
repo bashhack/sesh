@@ -129,6 +129,9 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		}
 		if value == from || value == "" && strings.HasPrefix(fromSaid, "default") {
 			m.say("Nothing changed: " + key + " is " + cmp.Or(value, "at its default") + " already.")
+			if from != raw || fromSaid != said {
+				return "", m.refreshSettings() // the panel shows it as it was
+			}
 			return "", nil
 		}
 		save := func() tea.Cmd {

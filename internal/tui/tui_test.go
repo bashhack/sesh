@@ -1433,6 +1433,12 @@ func TestHistoryChangedMeanwhile(t *testing.T) {
 	if s := a.screen(); f.secrets[github] != "gh-pass" || a.ov == nil || a.ov.kind != panelHistory || !strings.Contains(s, "changed meanwhile") || strings.Contains(s, "version 3  replaced") {
 		t.Errorf("restored a version gone: secret %q:\n%s", f.secrets[github], s)
 	}
+	// Copying one that's gone: nothing copied, and the list as it is now.
+	f.history[github] = []string{"old-y"}
+	a.press("enter")
+	if s := a.screen(); len(a.copied) != 0 || a.ov == nil || a.ov.kind != panelHistory || len(a.ov.versions) != 1 || a.ov.versions[0].ID != versionID("old-y") {
+		t.Errorf("copied a version gone: %q:\n%s", a.copied, s)
+	}
 }
 
 // Emptying the trash deletes what it listed, not an entry trashed since.

@@ -103,7 +103,7 @@ func runBackup(app *App, args []string) error {
 	switch a := fs.Arg(0); a {
 	case "list":
 		// A flag came before the word, which made it a file.
-		return errors.New("sesh backup list takes no flags; to back up to a file named list, write ./list")
+		return errors.New("sesh backup list doesn't take --force; to back up to a file named list, write ./list")
 	case "delete":
 		return errors.New("put sesh backup delete's flags after the word (sesh backup delete --force); to back up to a file named delete, write ./delete")
 	}

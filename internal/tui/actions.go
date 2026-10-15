@@ -409,6 +409,10 @@ func (m *Model) copyVersion(k vault.Key, n int, ver Version) tea.Cmd {
 	opts, epoch := m.opts, m.epoch
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
 		secret, err := v.ReadVersion(k, ver)
+		if errors.Is(err, ErrHistoryChanged) {
+			versions, _ := v.History(k) //nolint:errcheck // the list as it is, under the error said
+			return historyMsg{k: k, versions: versions, err: err, epoch: epoch}
+		}
 		if err != nil {
 			return copiedMsg{err: err, epoch: epoch}
 		}

@@ -136,7 +136,7 @@ func complete(words []string) (cands []candidate, files bool) {
 				return c, false
 			}
 			return nil, true
-		case len(words) == 1 && cur == "" && !slices.Contains(before, "--force") && !slices.Contains(before, "-force"):
+		case len(words) == 1 && cur == "" && !slices.ContainsFunc(before, isForce):
 			return backupCommands, false
 		case len(words) == 1 && cur == "":
 			return nil, true // after --force: the file to write
@@ -356,6 +356,12 @@ func positional(before []string, specs []flagSpec) []string {
 		}
 	}
 	return out
+}
+
+// isForce says whether w is --force, in any of the forms flag parses.
+func isForce(w string) bool {
+	name, _, _ := strings.Cut(strings.TrimLeft(w, "-"), "=")
+	return strings.HasPrefix(w, "-") && name == "force"
 }
 
 // backupCommands are what sesh backup takes besides a file.
