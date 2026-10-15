@@ -14,8 +14,9 @@ import (
 
 // key handles a key while unlocked: typing searches, the arrows move
 // into the list (where Space marks, and ← goes to the sidebar), Enter
-// copies, Esc unmarks, clears the search and the filter, then quits, ?
-// shows the keys.
+// copies, Ctrl-K opens what can be done to the entry or those marked,
+// Ctrl-G what can be done in sesh, Esc unmarks, clears the search and
+// the filter, then quits, ? shows the keys.
 func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 	m.lastKey = m.opts.Now()
 	if m.focus == focusSide {
@@ -43,6 +44,8 @@ func (m *Model) key(msg tea.KeyPressMsg) tea.Cmd {
 			return m.pick(0)
 		}
 		return tea.Quit
+	case "ctrl+g":
+		return m.openSeshMenu()
 	case "space":
 		if m.focus != focusList || !m.listShown() {
 			return m.typed(msg)

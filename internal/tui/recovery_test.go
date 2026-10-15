@@ -53,7 +53,7 @@ func recoveryApp(t *testing.T, set bool) (*app, *[]string) {
 // With none, Enter shows a new key; it's saved once its last group is typed back, and the row says so.
 func TestRecoveryMake(t *testing.T) {
 	a, asked := recoveryApp(t, false)
-	a.press("ctrl+k", ",")
+	a.press("ctrl+g", ",")
 	if s := a.screen(); !strings.Contains(s, "Recovery key             none") || !strings.Contains(s, "make one") {
 		t.Fatalf("the row:\n%s", s)
 	}
@@ -77,7 +77,7 @@ func TestRecoveryMake(t *testing.T) {
 // Not confirmed, by three wrong groups or Esc, it isn't saved, and that's said.
 func TestRecoveryNotConfirmed(t *testing.T) {
 	a, asked := recoveryApp(t, false)
-	a.press("ctrl+k", ",", "enter", "1111", "enter", "ctrl+u", "2222", "enter", "ctrl+u", "3333", "enter")
+	a.press("ctrl+g", ",", "enter", "1111", "enter", "ctrl+u", "2222", "enter", "ctrl+u", "3333", "enter")
 	if a.form != nil || slices.Contains(*asked, "save") || !strings.Contains(a.screen(), "No recovery key was set, since it wasn't confirmed.") {
 		t.Errorf("three wrong: asked %q\n%s", *asked, a.screen())
 	}
@@ -90,7 +90,7 @@ func TestRecoveryNotConfirmed(t *testing.T) {
 // One there already is replaced only after asking, and the backups that still open with it are offered.
 func TestRecoveryReplace(t *testing.T) {
 	a, asked := recoveryApp(t, true)
-	a.press("ctrl+k", ",", "enter")
+	a.press("ctrl+g", ",", "enter")
 	if a.ov == nil || a.ov.kind != panelMenu || a.ov.title != "Recovery key" {
 		t.Fatalf("panel %+v", a.ov)
 	}
@@ -111,7 +111,7 @@ func TestRecoveryReplace(t *testing.T) {
 // Removing asks first, then offers the backups; the row says none after.
 func TestRecoveryRemove(t *testing.T) {
 	a, asked := recoveryApp(t, true)
-	a.press("ctrl+k", ",", "enter", "x")
+	a.press("ctrl+g", ",", "enter", "x")
 	if a.ov == nil || a.ov.kind != panelConfirm || !a.ov.danger || len(*asked) != 0 {
 		t.Fatalf("asked %q, panel %+v", *asked, a.ov)
 	}
@@ -140,7 +140,7 @@ func TestRecoveryNotMade(t *testing.T) {
 			Recovery:    func() (Recovery, error) { return Recovery{Said: "none"}, nil },
 			NewRecovery: func() (*NewRecovery, error) { return nil, c.err },
 		})
-		a.press("ctrl+k", ",", "enter")
+		a.press("ctrl+g", ",", "enter")
 		switch {
 		case c.locked && a.v != nil:
 			t.Errorf("%v: not locked", c.err)
@@ -160,7 +160,7 @@ func TestRecoveryBackupsWarning(t *testing.T) {
 		},
 		RenewBackups: func() (string, error) { return "", nil },
 	})
-	a.press("ctrl+k", ",", "enter", "x", "wait", "y")
+	a.press("ctrl+g", ",", "enter", "x", "wait", "y")
 	if a.ov == nil || a.ov.kind != panelNotice || !strings.Contains(a.ov.question, "Removed.\n\nwarning: old backups: permission denied") {
 		t.Fatalf("panel %+v", a.ov)
 	}
@@ -200,7 +200,7 @@ func keyApp(t *testing.T, replacing bool, fails ...error) (*app, *[]string) {
 // One another command made since the panel was read is replaced only after asking.
 func TestRecoveryMadeMeanwhile(t *testing.T) {
 	a, asked := keyApp(t, true)
-	a.press("ctrl+k", ",", "enter")
+	a.press("ctrl+g", ",", "enter")
 	if a.form != nil || a.ov == nil || a.ov.kind != panelConfirm || !strings.Contains(a.ov.question, "already has a recovery key (made 2026-10-01)") {
 		t.Fatalf("form %v, panel %+v", a.form != nil, a.ov)
 	}
@@ -217,7 +217,7 @@ func TestRecoveryMadeMeanwhile(t *testing.T) {
 // No to replacing one, or Esc from the menu, makes nothing.
 func TestRecoveryKept(t *testing.T) {
 	a, asked := recoveryApp(t, true)
-	a.press("ctrl+k", ",", "enter", "esc")
+	a.press("ctrl+g", ",", "enter", "esc")
 	if a.ov == nil || a.ov.kind != panelSettings || len(*asked) != 0 {
 		t.Errorf("Esc from the menu: asked %q, panel %+v", *asked, a.ov)
 	}
@@ -234,13 +234,13 @@ func TestRecoveryKept(t *testing.T) {
 // A lock while the key is shown says it wasn't set; one while it's saving says it may not have been.
 func TestRecoveryLocked(t *testing.T) {
 	a, _ := keyApp(t, false)
-	a.press("ctrl+k", ",", "enter")
+	a.press("ctrl+g", ",", "enter")
 	a.run(a.lock("No use for 5 minutes."))
 	if !strings.Contains(a.lockedWhy, "No use for 5 minutes. No recovery key was set, since it wasn't confirmed: throw away the one shown") {
 		t.Errorf("shown: %q", a.lockedWhy)
 	}
 	b, _ := keyApp(t, false)
-	b.press("ctrl+k", ",", "enter", "2345")
+	b.press("ctrl+g", ",", "enter", "2345")
 	_, save := b.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	b.run(b.lock("No use for 5 minutes."))
 	b.run(save)
@@ -252,7 +252,7 @@ func TestRecoveryLocked(t *testing.T) {
 // Ctrl-C while it's saving quits once it's saved, and says so after.
 func TestRecoveryQuit(t *testing.T) {
 	a, _ := keyApp(t, false)
-	a.press("ctrl+k", ",", "enter", "2345")
+	a.press("ctrl+g", ",", "enter", "2345")
 	_, save := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.press("ctrl+c")
 	if a.quit || !strings.Contains(a.screen(), "Quitting once the recovery key is saved") {
@@ -267,7 +267,7 @@ func TestRecoveryQuit(t *testing.T) {
 // A save that fails keeps the key shown, to try again.
 func TestRecoverySaveRetried(t *testing.T) {
 	a, asked := keyApp(t, false, errors.New("database is locked"))
-	a.press("ctrl+k", ",", "enter", "2345", "enter")
+	a.press("ctrl+g", ",", "enter", "2345", "enter")
 	if a.form == nil || a.form.saving || !strings.Contains(a.form.err, "Not saved: database is locked") {
 		t.Fatalf("form %+v", a.form)
 	}
@@ -284,7 +284,7 @@ func TestRecoveryFormFits(t *testing.T) {
 			for _, wrong := range []bool{false, true} {
 				a, _ := keyApp(t, false)
 				a.Update(tea.WindowSizeMsg{Width: w, Height: h})
-				a.press("ctrl+k", ",", "enter")
+				a.press("ctrl+g", ",", "enter")
 				// Typing clears the error, so the wrong group is what's seen with it.
 				a.press("9Z")
 				if wrong {
@@ -303,7 +303,7 @@ func TestRecoveryFormFits(t *testing.T) {
 // What was under way when the app locked doesn't reach what's open after it unlocks again.
 func TestRecoveryAcrossLock(t *testing.T) {
 	a, _ := keyApp(t, false)
-	a.press("ctrl+k", ",")
+	a.press("ctrl+g", ",")
 	_, made := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.run(a.lock("You locked it."))
 	a.run(func() tea.Msg { return unlockedMsg{v: newFake()} })
@@ -311,11 +311,11 @@ func TestRecoveryAcrossLock(t *testing.T) {
 	if a.form != nil {
 		t.Fatal("a key made before the lock was shown after it")
 	}
-	a.press("ctrl+k", ",", "enter", "2345")
+	a.press("ctrl+g", ",", "enter", "2345")
 	_, save := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.run(a.lock("You locked it."))
 	a.run(func() tea.Msg { return unlockedMsg{v: newFake()} })
-	a.press("ctrl+k", ",", "enter")
+	a.press("ctrl+g", ",", "enter")
 	open := a.form
 	a.run(save)
 	if a.form == nil || a.form != open || strings.Contains(a.screen(), "The recovery key is set") {
@@ -345,7 +345,7 @@ func TestFormNoteFits(t *testing.T) {
 // Ctrl-C while it's saving, then a lock, quits at the lock, saying why, rather than at some later save.
 func TestRecoveryQuitThenLock(t *testing.T) {
 	a, _ := keyApp(t, false)
-	a.press("ctrl+k", ",", "enter", "2345")
+	a.press("ctrl+g", ",", "enter", "2345")
 	_, save := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	a.press("ctrl+c")
 	a.run(a.lock("No use for 5 minutes."))
@@ -358,7 +358,7 @@ func TestRecoveryQuitThenLock(t *testing.T) {
 // A save refused for good closes the form, saying why; Esc after a save that failed says so.
 func TestRecoverySaveRefused(t *testing.T) {
 	a, asked := keyApp(t, false, Refused("the master password was changed: throw away the key."))
-	a.press("ctrl+k", ",", "enter", "2345", "enter")
+	a.press("ctrl+g", ",", "enter", "2345", "enter")
 	if a.form != nil || a.ov == nil || !strings.Contains(a.ov.err, "Not changed: the master password was changed: throw away the key.") {
 		t.Fatalf("form %v, panel %+v", a.form != nil, a.ov)
 	}
@@ -367,13 +367,13 @@ func TestRecoverySaveRefused(t *testing.T) {
 		t.Errorf("asked %q", *asked)
 	}
 	b, _ := keyApp(t, false, errors.New("database is locked"))
-	b.press("ctrl+k", ",", "enter", "2345", "enter", "esc", "esc")
+	b.press("ctrl+g", ",", "enter", "2345", "enter", "esc", "esc")
 	if b.form != nil || b.ov == nil || b.ov.err != "No recovery key was set, since it couldn't be saved." {
 		t.Errorf("Esc after a failed save: form %v, panel %+v", b.form != nil, b.ov)
 	}
 	// A failed save, then three wrong groups: it wasn't confirmed.
 	c, _ := keyApp(t, false, errors.New("database is locked"))
-	c.press("ctrl+k", ",", "enter", "2345", "enter", "ctrl+u", "1", "enter", "ctrl+u", "2", "enter", "ctrl+u", "3", "enter")
+	c.press("ctrl+g", ",", "enter", "2345", "enter", "ctrl+u", "1", "enter", "ctrl+u", "2", "enter", "ctrl+u", "3", "enter")
 	if c.form != nil || c.ov == nil || c.ov.err != "No recovery key was set, since it wasn't confirmed." {
 		t.Errorf("wrong groups after a failed save: form %v, panel %+v", c.form != nil, c.ov)
 	}
