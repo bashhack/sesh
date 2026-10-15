@@ -73,8 +73,8 @@ func setConfig(app *App, args []string) error {
 	if n, err := strconv.Atoi(value); err == nil && config.IsNumber(key) {
 		value = strconv.Itoa(n) // as it's written: 03 and +3 are 3
 	}
-	if v, ok := map[string]string{"on": "true", "off": "false"}[value]; ok && config.IsSwitch(key) {
-		value = v // as sesh config shows it
+	if v, ok := map[string]string{"on": "true", "off": "false", "true": "true", "false": "false"}[strings.ToLower(value)]; ok && config.IsSwitch(key) {
+		value = v // on or off, as sesh config shows it
 	}
 	cfg, err := settings()
 	if err != nil {
@@ -118,7 +118,11 @@ func setConfig(app *App, args []string) error {
 	if err := config.Set(cfg.Path, key, value); err != nil {
 		return err
 	}
-	said := fmt.Sprintf("✅ Set %s to %s in %s; it takes effect %s", key, value, tildePath(cfg.Path), it.Applies)
+	shown := value
+	if it.Switch {
+		shown = map[string]string{"true": "on", "false": "off"}[value]
+	}
+	said := fmt.Sprintf("✅ Set %s to %s in %s; it takes effect %s", key, shown, tildePath(cfg.Path), it.Applies)
 	if value == "" {
 		said = fmt.Sprintf("✅ Took %s out of %s: its default, %s, takes effect %s", key, tildePath(cfg.Path), it.Default, it.Applies)
 	}
@@ -132,7 +136,7 @@ func writeConfig(w io.Writer, cfg *config.Config) error {
 	var b strings.Builder
 	file := cfg.Path
 	if !cfg.FileFound {
-		file += " (not found; using defaults)"
+		file += " (not found; using defaults: changing a setting makes it)"
 	}
 	fmt.Fprintf(&b, "config file: %s\n\n", file)
 

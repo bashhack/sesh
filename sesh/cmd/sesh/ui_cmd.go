@@ -861,7 +861,6 @@ func uiLocked(err error) error {
 	return err
 }
 
-// uiSettings are cfg's settings as the app's settings panel lists them.
 // uiScanQR reads a TOTP entry's link from a QR code on screen, for the
 // add form; nil where the screen can't be captured (macOS's screencapture
 // does it), or isn't this terminal's: over SSH it would ask on the Mac's
@@ -886,10 +885,11 @@ func uiScanQR() func() (tui.ScannedQR, error) {
 // captureQRText is the text of a QR code on screen; tests replace it.
 var captureQRText = qrcode.CaptureText
 
+// uiSettings are cfg's settings as the app's settings panel lists them.
 func uiSettings(cfg *config.Config) []tui.Setting {
 	var out []tui.Setting
 	for _, it := range cfg.List() {
-		s := tui.Setting{Key: it.Key, Value: it.Value, Raw: it.Raw, Default: it.Default, Said: it.Said(), Applies: it.Applies, Editable: it.Editable, Switch: it.Switch}
+		s := tui.Setting{Key: it.Key, Value: it.Value, Raw: it.Raw, Default: it.Default, Said: it.Said(), Applies: it.Applies, Editable: it.Editable, Switch: it.Switch, File: tildePath(cfg.Path), NoFile: !cfg.FileFound}
 		if it.Source == config.FromEnv || it.Source == config.FromFlag {
 			s.Env = it.Origin
 		}

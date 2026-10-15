@@ -89,7 +89,7 @@ func TestRunConfig_NoFile(t *testing.T) {
 	if err := runConfig(app, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(got, "config file: "+path+" (not found; using defaults)") {
+	if got := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(got, "config file: "+path+" (not found; using defaults: changing a setting makes it)") {
 		t.Errorf("output = %q", got)
 	}
 }
@@ -141,8 +141,8 @@ func TestRunConfig_Set(t *testing.T) {
 		t.Errorf("the default again: %q, %v", out, err)
 	}
 	app, _ = cliApp("", false)
-	if out, _, err := runCLI(app, runConfig, "set", "agent.lock_on_sleep", "off"); err != nil || !strings.Contains(read(), "lock_on_sleep = false") {
-		t.Errorf("off: %q, %v\n%s", out, err, read())
+	if out, _, err := runCLI(app, runConfig, "set", "agent.lock_on_sleep", "OFF"); err != nil || !strings.Contains(out, "Set agent.lock_on_sleep to off in") || !strings.Contains(read(), "lock_on_sleep = false") {
+		t.Errorf("OFF: %q, %v\n%s", out, err, read())
 	}
 	app, _ = cliApp("", false)
 	if out, _, err := runCLI(app, runConfig, "set", "history.keep", "+12"); err != nil || !strings.Contains(out, "Set history.keep to 12") || !strings.Contains(read(), "keep = 12\n") {
@@ -231,5 +231,27 @@ func TestAppSettings_EncryptedExportsUseTheConfiguredKDF(t *testing.T) {
 	}
 	if got := appSettingsFrom(cfg).KDF; got != cfg.KDF() || got.Memory != 20*1024 {
 		t.Errorf("app settings KDF = %+v, want the configured %+v", got, cfg.KDF())
+	}
+}
+
+// The app's settings name the config file, and whether a change makes it.
+func TestUISettings_File(t *testing.T) {
+	path := useConfigFile(t, "")
+	t.Setenv("HOME", filepath.Dir(filepath.Dir(path))) // said from ~
+	for _, made := range []bool{false, true} {
+		if made {
+			if err := config.Set(path, "history.keep", "7"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg, err := settings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range uiSettings(cfg) {
+			if s.File != "~/sesh/config.toml" || s.NoFile == made {
+				t.Errorf("file made %v: %s has File %q, NoFile %v", made, s.Key, s.File, s.NoFile)
+			}
+		}
 	}
 }
