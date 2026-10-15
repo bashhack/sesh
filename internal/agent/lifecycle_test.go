@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/touchid"
 )
 
@@ -507,29 +508,87 @@ func TestLockOnSleep(t *testing.T) {
 	}
 }
 
-// With WithScreenLock, the agent locks while the screen is locked, and
-// stays unlocked while it isn't.
+// With WithScreenLock, the agent locks when the screen locks; unlocked
+// again while it stays locked (over SSH, to the same agent), it stays so,
+// until the screen locks again.
 func TestLockOnScreenLock(t *testing.T) {
 	var screen atomic.Bool
 	sockPath := tempSocketPath(t)
 	serve(t, sockPath, WithScreenLock(screen.Load), withScreenEvery(10*time.Millisecond))
 	conn, id := unlockClient(t, sockPath)
 	defer mustClose(t, conn)
-	time.Sleep(50 * time.Millisecond)
-	if _, _, err := Encrypt(conn, []byte("x"), nil, id); err != nil {
-		t.Fatalf("unlocked, screen not locked: %v", err)
-	}
-	screen.Store(true)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	locked := func() bool {
 		_, _, err := Encrypt(conn, []byte("x"), nil, id)
 		var pe *ProtocolError
-		if errors.As(err, &pe) && pe.Code == ErrCodeNotUnlocked {
-			break
+		return errors.As(err, &pe) && pe.Code == ErrCodeNotUnlocked
+	}
+	waitLocked := func(what string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !locked() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: the agent didn't lock", what)
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the screen locked, the agent didn't: %v", err)
-		}
-		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if locked() {
+		t.Fatal("locked, the screen not")
+	}
+	screen.Store(true)
+	waitLocked("the screen locked")
+	conn, id = unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+	time.Sleep(50 * time.Millisecond)
+	if locked() {
+		t.Fatal("unlocked while the screen stays locked, it locked again")
+	}
+	screen.Store(false)
+	time.Sleep(50 * time.Millisecond)
+	screen.Store(true)
+	waitLocked("the screen locked again")
+}
+
+// A screen lock stops an agent that exits on auto locks, unless it's
+// unlocked again within the idle timeout.
+func TestScreenLockStops(t *testing.T) {
+	var screen atomic.Bool
+	clk := monoClock()
+	sockPath := tempSocketPath(t)
+	_, done := serve(t, sockPath, withClock(clk), WithIdleTimeout(10*time.Minute), WithExitOnAutoLock(), WithScreenLock(screen.Load), withScreenEvery(10*time.Millisecond))
+	conn, _ := unlockClient(t, sockPath)
+	defer mustClose(t, conn)
+	time.Sleep(50 * time.Millisecond)
+	screen.Store(true)
+	time.Sleep(100 * time.Millisecond)
+	clk.advance(11 * time.Minute)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the agent locked by the screen didn't stop")
+	}
+}
+
+// An unlock under way when the screen locks doesn't install its key.
+func TestScreenLockDuringUnlock(t *testing.T) {
+	var screen atomic.Bool
+	sockPath := tempSocketPath(t)
+	serve(t, sockPath, WithScreenLock(screen.Load), withScreenEvery(10*time.Millisecond))
+	time.Sleep(50 * time.Millisecond)
+	orig := deriveKey
+	t.Cleanup(func() { deriveKey = orig })
+	deriveKey = func(password, salt []byte, p database.Argon2idParams) []byte {
+		key := orig(password, salt, p)
+		screen.Store(true) // the screen locks while the key is derived
+		time.Sleep(100 * time.Millisecond)
+		return key
+	}
+	params := lightParams()
+	salt, verify := sealVerify(t, "correct-horse", params)
+	conn := dialClient(t, sockPath)
+	defer mustClose(t, conn)
+	if err := Unlock(conn, []byte("correct-horse"), salt, verify, params); err == nil || !strings.Contains(err.Error(), "screen locked") {
+		t.Errorf("Unlock = %v, want refused: the screen locked meanwhile", err)
 	}
 }

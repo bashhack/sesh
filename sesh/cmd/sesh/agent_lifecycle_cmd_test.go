@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/config"
 )
 
 // TestMain keeps agent hardening out of the test binary: the daemon path
@@ -39,6 +40,13 @@ func TestMain(m *testing.M) {
 	}
 	if err := os.Setenv("XDG_CONFIG_HOME", dir); err != nil {
 		panic(err)
+	}
+	// Agents the tests run don't watch the developer's screen, or their
+	// computer's sleep: a screen locked during a long run would drop keys.
+	for _, k := range []string{config.EnvAgentLockOnScreen, config.EnvAgentLockOnSleep} {
+		if err := os.Setenv(k, "false"); err != nil {
+			panic(err)
+		}
 	}
 	// And their agent: a test that reached it would replace it (its build
 	// differs), locking their session. Under /tmp, as a socket's path is

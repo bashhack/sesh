@@ -78,6 +78,9 @@ func Set(path, key, value string) error {
 	return atomicfile.Write(path, []byte(updated), mode)
 }
 
+// IsSwitch reports whether key is a setting that's on or off.
+func IsSwitch(key string) bool { return switches[key] }
+
 // IsNumber reports whether key is a setting whose value is a whole number.
 func IsNumber(key string) bool { return isNumberKey(key) }
 

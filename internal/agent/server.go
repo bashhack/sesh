@@ -138,18 +138,26 @@ const expirySweep = 15 * time.Second
 // a lock undone sooner than this is one you're there for.
 const screenCheck = 2 * time.Second
 
-// watchScreen locks the key whenever the screen is locked, until ctx ends.
+// watchScreen locks the key when the screen locks, until ctx ends: when
+// it goes from unlocked to locked, so an unlock while it stays locked
+// (over SSH, to the same agent) holds. Locked so, an agent that exits on
+// an auto lock stops unless it's unlocked again within the idle timeout.
 func (s *Server) watchScreen(ctx context.Context) {
 	t := time.NewTicker(s.screenEvery)
 	defer t.Stop()
+	was := s.screenLocked()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if s.screenLocked() {
-				s.keys.lockIfUnlocked("screen locked")
+			now := s.screenLocked()
+			if now && !was {
+				if gen, locked := s.keys.screenLocked(); locked && s.exitOnAutoLock {
+					s.exitIfNotUnlockedAgain(gen)
+				}
 			}
+			was = now
 		}
 	}
 }

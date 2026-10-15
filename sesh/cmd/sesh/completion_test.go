@@ -89,6 +89,7 @@ func TestComplete(t *testing.T) {
 		{name: "config takes set", words: all("config", ""), want: all("set")},
 		{name: "config set takes a setting", words: all("config", "set", ""), has: all("clipboard_timeout", "history.keep", "backup.dir"), lacks: all("db_path")},
 		{name: "config set flags", words: all("config", "set", "history.keep", "3", "-"), want: all("--force", "--db-path")},
+		{name: "config set a switch", words: all("config", "set", "ui.lock_on_quit", ""), want: all("true", "false")},
 		{name: "backup takes list, delete or a file", words: all("backup", ""), want: all("list", "delete")},
 		{name: "backup de", words: all("backup", "de"), want: all("delete")},
 		{name: "backup's file", words: all("backup", "my.db"), files: true},

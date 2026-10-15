@@ -93,10 +93,18 @@ func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *Touc
 		case s.Said == "config file":
 			from = "  (config file)"
 		}
+		does := ""
+		if s.Switch {
+			does = "turn it on"
+			if s.Raw == "true" {
+				does = "turn it off"
+			}
+		}
 		ov.items = append(ov.items, item{
 			label:  fmt.Sprintf("%-25s %s%s", s.Key, s.Value, from),
 			detail: settingDetail(&s),
 			run:    func() tea.Cmd { return m.changeSetting(&s) },
+			does:   does,
 			stay:   true,
 			rule:   i == 0,
 		})

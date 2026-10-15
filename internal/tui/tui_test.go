@@ -2998,7 +2998,7 @@ func settingsAppValues(t *testing.T) (*app, *[]string, map[string]string) {
 				{Key: "health.old_after_days", Value: values["health.old_after_days"], Raw: values["health.old_after_days"], Default: "365", Said: said("health.old_after_days"), Applies: "at the next health check", Editable: true},
 				{Key: "trash.keep_days", Value: "0", Raw: "0", Said: "environment: SESH_TRASH_KEEP_DAYS", Env: "SESH_TRASH_KEEP_DAYS", Editable: true},
 				{Key: "db_path", Value: "/v.db", Said: "default"},
-				{Key: "ui.lock_on_quit", Value: map[string]string{"true": "on", "false": "off"}[values["ui.lock_on_quit"]], Raw: values["ui.lock_on_quit"], Default: "false", Said: "default", Applies: "when sesh ui next quits", Editable: true, Switch: true},
+				{Key: "ui.lock_on_quit", Value: map[string]string{"true": "on", "false": "off"}[values["ui.lock_on_quit"]], Raw: values["ui.lock_on_quit"], Default: "true", Said: "default", Applies: "when sesh ui next quits", Editable: true, Switch: true},
 			}, nil
 		},
 		SetSetting: func(key, value string) (Live, error) {
@@ -3052,7 +3052,7 @@ func TestSettingsChange(t *testing.T) {
 func TestSettingsSwitch(t *testing.T) {
 	a, asked := settingsApp(t)
 	a.press("ctrl+g", ",", "down", "down", "down", "down", "down", "down", "enter")
-	if s := a.screen(); a.form != nil || !slices.Equal(*asked, []string{"ui.lock_on_quit=true"}) || !strings.Contains(s, "Turned ui.lock_on_quit on") || !strings.Contains(s, "ui.lock_on_quit           on") {
+	if s := a.screen(); a.form != nil || !slices.Equal(*asked, []string{"ui.lock_on_quit=true"}) || !strings.Contains(s, "Turned ui.lock_on_quit on") || !strings.Contains(s, "ui.lock_on_quit           on") || !strings.Contains(s, "turn it off") {
 		t.Fatalf("asked %q, form %v\n%s", *asked, a.form != nil, s)
 	}
 	a.press("enter")

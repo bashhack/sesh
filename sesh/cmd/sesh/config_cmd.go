@@ -73,6 +73,9 @@ func setConfig(app *App, args []string) error {
 	if n, err := strconv.Atoi(value); err == nil && config.IsNumber(key) {
 		value = strconv.Itoa(n) // as it's written: 03 and +3 are 3
 	}
+	if v, ok := map[string]string{"on": "true", "off": "false"}[value]; ok && config.IsSwitch(key) {
+		value = v // as sesh config shows it
+	}
 	cfg, err := settings()
 	if err != nil {
 		return err

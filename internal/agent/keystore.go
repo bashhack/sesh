@@ -30,6 +30,9 @@ var (
 	// errTouchIDStale: the Touch ID file's key no longer opens the vault,
 	// e.g. the master password changed without re-wrapping.
 	errTouchIDStale = errors.New("the Touch ID unlock is out of date for this vault")
+	// errScreenLockedMeanwhile: the screen locked while an unlock was
+	// under way, so its key isn't installed.
+	errScreenLockedMeanwhile = errors.New("the screen locked while sesh was unlocking; unlock again")
 )
 
 // clock is the time source the keystore schedules auto-locks with.
@@ -92,6 +95,9 @@ type keystore struct {
 	shutDown bool
 	// lockOnSleep locks the keystore once the computer has slept.
 	lockOnSleep bool
+	// screenLocks counts the times the screen has locked: an unlock that
+	// began before one doesn't install its key.
+	screenLocks uint64
 	// unlockMu is held across derive and install so two unlocks cannot
 	// run Argon2id at once or overwrite each other's key.
 	unlockMu sync.Mutex
@@ -130,9 +136,10 @@ func (k *keystore) Unlock(password, salt, verify []byte, params database.Argon2i
 		return fmt.Errorf("%w: %v", errBadRequest, err)
 	}
 
+	locks := k.screenLockCount()
 	derived := deriveKey(password, salt, params)
 	defer secure.SecureZeroBytes(derived)
-	if err := k.installVerified(derived, verify, "unlocked"); err != nil {
+	if err := k.installVerified(derived, verify, "unlocked", locks); err != nil {
 		if errors.Is(err, errKeyMismatch) {
 			return errWrongPassword
 		}
@@ -158,12 +165,13 @@ func (k *keystore) UnlockTouchID(verify []byte, fresh bool, unwrap func() ([]byt
 	if st := k.snapshot(); !fresh && st.unlocked && st.unlockID == UnlockID(verify) {
 		return nil
 	}
+	locks := k.screenLockCount()
 	key, err := unwrap()
 	if err != nil {
 		return err
 	}
 	defer secure.SecureZeroBytes(key)
-	if err := k.installVerified(key, verify, "unlocked (Touch ID)"); err != nil {
+	if err := k.installVerified(key, verify, "unlocked (Touch ID)", locks); err != nil {
 		if errors.Is(err, errKeyMismatch) {
 			return errTouchIDStale
 		}
@@ -173,9 +181,10 @@ func (k *keystore) UnlockTouchID(verify []byte, fresh bool, unwrap func() ([]byt
 }
 
 // installVerified installs key if it opens the verify blob, and logs
-// event. It returns errKeyMismatch when the blob doesn't open. Caller
-// holds unlockMu.
-func (k *keystore) installVerified(key, verify []byte, event string) error {
+// event. It returns errKeyMismatch when the blob doesn't open, and
+// errScreenLockedMeanwhile when the screen has locked since the unlock
+// began (screenLocks was locks). Caller holds unlockMu.
+func (k *keystore) installVerified(key, verify []byte, event string, locks uint64) error {
 	opened, err := database.Decrypt(key, verify)
 	if err != nil || !bytes.Equal(opened, []byte(database.VerifyPlaintext)) {
 		secure.SecureZeroBytes(opened)
@@ -187,6 +196,10 @@ func (k *keystore) installVerified(key, verify []byte, event string) error {
 	defer k.mu.Unlock()
 	if k.shutDown {
 		return errShutDown
+	}
+	if k.screenLocks != locks {
+		k.log.printf("unlock dropped: the screen locked meanwhile")
+		return errScreenLockedMeanwhile
 	}
 	k.installLocked(key)
 	k.unlockID = UnlockID(verify)
@@ -493,17 +506,25 @@ func asleep(last, now time.Time) time.Duration {
 	return now.Round(0).Sub(last.Round(0)) - now.Sub(last)
 }
 
-// lockIfUnlocked locks the keystore when it holds a key, logging reason,
-// and says whether it did.
-func (k *keystore) lockIfUnlocked(reason string) bool {
+// screenLockCount is how many times the screen has locked so far.
+func (k *keystore) screenLockCount() uint64 {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	return k.screenLocks
+}
+
+// screenLocked counts the screen locking, and locks the keystore when it
+// holds a key, saying whether it did and the generation it locked at.
+func (k *keystore) screenLocked() (gen uint64, locked bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.screenLocks++
 	if k.derivedKey == nil {
-		return false
+		return 0, false
 	}
 	k.clearLocked()
-	k.log.printf("locked (%s)", reason)
-	return true
+	k.log.printf("locked (screen locked)")
+	return k.generation, true
 }
 
 // since is how long ago t was at now, by whichever clock says longer: the

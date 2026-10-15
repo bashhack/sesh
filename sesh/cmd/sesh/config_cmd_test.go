@@ -141,6 +141,10 @@ func TestRunConfig_Set(t *testing.T) {
 		t.Errorf("the default again: %q, %v", out, err)
 	}
 	app, _ = cliApp("", false)
+	if out, _, err := runCLI(app, runConfig, "set", "agent.lock_on_sleep", "off"); err != nil || !strings.Contains(read(), "lock_on_sleep = false") {
+		t.Errorf("off: %q, %v\n%s", out, err, read())
+	}
+	app, _ = cliApp("", false)
 	if out, _, err := runCLI(app, runConfig, "set", "history.keep", "+12"); err != nil || !strings.Contains(out, "Set history.keep to 12") || !strings.Contains(read(), "keep = 12\n") {
 		t.Errorf("+12: %q, %v\n%s", out, err, read())
 	}
