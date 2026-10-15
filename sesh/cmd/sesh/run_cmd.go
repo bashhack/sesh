@@ -72,7 +72,9 @@ func runRun(app *App, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	f := addRunFlags(fs)
-	fs.Usage = func() { fmt.Fprintln(app.Stderr, runUsage) } //nolint:errcheck // usage text
+	// Asked for, as --help among the flags, the usage goes to stdout, as
+	// every command's does.
+	fs.Usage = func() { fmt.Fprintln(app.Stdout, runUsage) } //nolint:errcheck // usage text
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

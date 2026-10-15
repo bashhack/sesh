@@ -52,6 +52,7 @@ func TestComplete(t *testing.T) {
 		{name: "trash restore flags", words: all("trash", "restore", "1", "-"), want: all("--as", "--db-path")},
 		{name: "trash remove flags", words: all("trash", "remove", "1", "-"), want: all("--force", "--db-path")},
 		{name: "trash list takes only settings", words: all("trash", "list", "-"), want: all("--db-path")},
+		{name: "help takes a command", words: all("help", "co"), has: all("code", "copy", "completion")},
 		{name: "open takes only settings", words: all("open", "github", "-"), want: all("--db-path")},
 		{name: "config takes only settings", words: all("config", "-"), want: all("--db-path")},
 		{name: "folder move takes settings", words: all("folder", "move", "work", "bank", "-"), want: all("--db-path")},

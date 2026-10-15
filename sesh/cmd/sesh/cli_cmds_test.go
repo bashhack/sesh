@@ -351,7 +351,7 @@ func TestTrashEntries(t *testing.T) {
 // Folder and tag changes name what a search found; IDs that, joined, are another entry's ID are refused.
 func TestChangeEntriesNamesWhatWasFound(t *testing.T) {
 	filingVault(t)
-	for _, args := range [][]string{{"password", "a password", "--username", "b"}, {"password", "a"}, {"password", "b"}} {
+	for _, args := range [][]string{{"password", "a password", "--username", "b"}, {"password", "a"}, {"password", "b"}, {"password", "a password", "--username", "a"}} {
 		app, _ := cliApp("x-Strong-pass-81\n", false)
 		if _, _, err := runCLI(app, runAdd, args...); err != nil {
 			t.Fatalf("add %q: %v", args, err)
@@ -364,8 +364,11 @@ func TestChangeEntriesNamesWhatWasFound(t *testing.T) {
 		t.Errorf("an ID: %q", out)
 	}
 	// password/a and password/b are entries too: either reading could be meant.
-	if _, err := runFiling(t, runTag, "add", "v", "password/a", "password/b"); err == nil || !strings.Contains(err.Error(), "for the one, quote it ('password/a password/b')") {
+	if _, err := runFiling(t, runTag, "add", "v", "password/a", "password/b"); err == nil || !strings.Contains(err.Error(), "and 2 others' too: for the one, quote it ('password/a password/b')") {
 		t.Errorf("both readings: %v", err)
+	}
+	if _, err := runFiling(t, runTag, "add", "v", "password/a", "password/a"); err == nil || !strings.Contains(err.Error(), "and another's too") {
+		t.Errorf("an ID twice: %v", err)
 	}
 	mustRun(t, runTag, "add", "v", "password/a password/b")
 	app, _ := cliApp("", false)

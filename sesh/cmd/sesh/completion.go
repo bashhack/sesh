@@ -100,7 +100,7 @@ func complete(words []string) (cands []candidate, files bool) {
 			return nil, spec.path
 		}
 	}
-	if len(before) == 0 && !strings.HasPrefix(cur, "-") {
+	if (len(before) == 0 || len(before) == 1 && before[0] == "help") && !strings.HasPrefix(cur, "-") {
 		return matching(subcommands, cur), false
 	}
 

@@ -140,7 +140,7 @@ func TestRun_RunKeepsTheCommandsHelp(t *testing.T) {
 	}
 	h = newTestHarness()
 	run(h.app, []string{"sesh", "run", "--env", "K=v", "--help"})
-	if !strings.Contains(h.stderr.String()+h.stdout.String(), "Usage: sesh run") {
+	if !strings.Contains(h.stdout.String(), "Usage: sesh run") {
 		t.Errorf("--help: %q, %q", h.stdout.String(), h.stderr.String())
 	}
 }

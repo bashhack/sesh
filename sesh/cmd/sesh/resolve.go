@@ -134,8 +134,12 @@ func writeChoices(w io.Writer, query string, found []password.Entry) error {
 // search, so what was found should be said.
 func resolveEach(app *App, store vault.Store, args []string) ([]vault.Key, bool, error) {
 	if k, err := vault.ParseKey(strings.Join(args, " ")); err == nil && store.Exists(k) == nil {
-		if len(args) > 1 && allEntryIDs(store, args) {
-			return nil, false, fmt.Errorf("%s is one entry's ID, and %d others' too: for the one, quote it (%s); for the others, name them one at a time", quoteArgs(args), len(args), shell.Quote(k.String()))
+		if n := entryIDs(store, args); len(args) > 1 && n > 0 {
+			others := fmt.Sprintf("%d others'", n)
+			if n == 1 {
+				others = "another's"
+			}
+			return nil, false, fmt.Errorf("%s is one entry's ID, and %s too: for the one, quote it (%s); for the others, name them one at a time", quoteArgs(args), others, shell.Quote(k.String()))
 		}
 		return []vault.Key{k}, false, nil
 	}
@@ -163,15 +167,18 @@ func resolveEach(app *App, store vault.Store, args []string) ([]vault.Key, bool,
 	return keys, false, nil
 }
 
-// allEntryIDs says whether each of args is an entry's ID.
-func allEntryIDs(store vault.Store, args []string) bool {
+// entryIDs is how many entries args name when each is an entry's ID, and
+// 0 when one isn't.
+func entryIDs(store vault.Store, args []string) int {
+	seen := map[vault.Key]bool{}
 	for _, a := range args {
 		k, err := vault.ParseKey(a)
 		if err != nil || store.Exists(k) != nil {
-			return false
+			return 0
 		}
+		seen[k] = true
 	}
-	return true
+	return len(seen)
 }
 
 // quoteArgs is args as typed, each quoted for the shell where it must be.
