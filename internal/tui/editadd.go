@@ -75,12 +75,23 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		e = &vault.Entry{}
 	}
 	kindIn := &input{kind: inputChoice, label: "kind", choices: []string{"password", "API key", "secure note", "TOTP"}}
+	// An entry edited can become another of the first three kinds, keeping
+	// its secret, as sesh edit --type does; a TOTP entry stays one.
+	changesKind := !adding && e.Kind != vault.KindTOTP
+	if changesKind {
+		kindIn.choices = kindIn.choices[:3]
+		kindIn.choice = max(slices.Index(addKinds, e.Kind), 0)
+		kindIn.hint = "the secret stays as it is: a note's text becomes the password or key, and theirs the note's"
+	}
 	kind := func() vault.Kind {
-		if adding {
+		if adding || changesKind {
 			return addKinds[kindIn.choice]
 		}
 		return e.Kind
 	}
+	// Into or out of a secure note, the notes input would be the note's
+	// text, or the other way round: it's left out, the notes as they are.
+	crossesNote := func() bool { return !adding && (kind() == vault.KindNote) != (e.Kind == vault.KindNote) }
 	name := m.textInput("name", e.Service)
 	user := m.textInput("username", e.Username)
 	user.shown = func() bool { return kind() != vault.KindNote }
@@ -97,6 +108,11 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	}
 	secretChoice := &input{kind: inputChoice, label: "secret", choices: choices}
 	secretChoice.shown = func() bool { k := kind(); return k == vault.KindPassword || k == vault.KindAPIKey }
+	gen := m.generateInputs()
+	gen.length.shown = func() bool {
+		return secretChoice.visible() && secretChoice.choices[secretChoice.choice] == secretGenerate
+	}
+	gen.chars.shown = gen.length.shown
 	typed := &input{kind: inputSecret, label: "new secret", rated: true}
 	typed.named = func() string { return "new " + secretWord(kind()) }
 	typed.shown = func() bool { return secretChoice.visible() && secretChoice.choices[secretChoice.choice] == secretType }
@@ -136,6 +152,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	folder.hint = "a new name makes a new folder; / puts one inside another (work/aws)"
 	tags.hint, tags.many = "separated by commas", true
 	text := m.notesInput("notes", notes)
+	text.shown = func() bool { return !crossesNote() }
 	// The input may show the notes a little differently (a tab as spaces):
 	// they're saved only when what it shows was changed.
 	shownNotes := text.area.Value()
@@ -151,17 +168,22 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	}
 
 	title := "Edit " + entryName(e)
-	inputs := []*input{name, user, secretChoice, current, typed, totpFrom, totpKey, url, folder, tags, text, fields}
-	if adding {
+	inputs := []*input{name, user, secretChoice, current, typed, gen.length, gen.chars, totpFrom, totpKey, url, folder, tags, text, fields}
+	switch {
+	case adding:
 		title = "Add an entry"
 		inputs = append([]*input{kindIn}, inputs...)
+	case changesKind:
+		inputs = slices.Insert(inputs, 2, kindIn) // after the name and username
 	}
 	f := &form{title: title, inputs: inputs, row: -1}
 	orig := *e
 	f.submit = func() tea.Cmd {
 		k := kind()
 		c := &Change{To: vault.Key{Kind: k, Service: name.value(), Username: user.value()}}
-		if k == vault.KindNote {
+		if k == vault.KindNote && adding {
+			// Edited, a note keeps the username it has, as sesh edit
+			// --type does; added, it has none.
 			c.To.Username = ""
 		}
 		if c.To.Service == "" && !scanning() {
@@ -188,8 +210,18 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		}
 
 		// The secret: typed, generated, a TOTP key, or a secure note's text.
-		generate := false
+		var generate *generating
 		noteText := []byte(text.area.Value())
+		if crossesNote() {
+			if string(noteText) != shownNotes {
+				f.err = "Changing the kind keeps the text as it was: undo your change to it, or save that first, then change the kind."
+				return nil
+			}
+			if k == vault.KindNote && hasNotes(&orig) {
+				f.err = "A secure note can't have notes: its text is its secret. Remove the notes first, then make it a note."
+				return nil
+			}
+		}
 		switch {
 		case k == vault.KindNote:
 			if !adding && string(noteText) == shownNotes {
@@ -216,7 +248,12 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			}
 			c.Secret = bytes.Clone(typed.secret)
 		case secretChoice.choices[secretChoice.choice] == secretGenerate:
-			generate = true
+			g, bad := gen.read()
+			if bad != "" {
+				f.err = bad
+				return nil
+			}
+			generate = &g
 		}
 		if k != vault.KindNote {
 			if adding && len(noteText) > 0 || !adding && string(noteText) != shownNotes {
@@ -263,18 +300,18 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	return nil
 }
 
-// save saves c, generating its password first when asked to, which is
-// then copied, since nobody has seen it.
-func (m *Model) save(f *form, c *Change, generate bool) tea.Cmd {
+// save saves c, generating its password first when generate says how,
+// which is then copied, since nobody has seen it.
+func (m *Model) save(f *form, c *Change, generate *generating) tea.Cmd {
 	f.saving, f.err = true, ""
 	opts, epoch, of := m.opts, m.epoch, c.Key
 	read := m.read(func(v Vault, _ func() bool) tea.Msg {
 		defer c.Wipe()
-		if generate {
+		if generate != nil {
 			if opts.Generate == nil {
 				return savedMsg{err: errors.New("sesh ui can't generate a password here"), epoch: epoch}
 			}
-			pw, err := opts.Generate()
+			pw, err := opts.Generate(generate.length, generate.symbols)
 			if err != nil {
 				return savedMsg{err: err, epoch: epoch}
 			}
@@ -288,7 +325,7 @@ func (m *Model) save(f *form, c *Change, generate bool) tea.Cmd {
 		if of == (vault.Key{}) {
 			what = "Added " + kindName(k)
 		}
-		if generate {
+		if generate != nil {
 			if err := opts.Copy(string(c.Secret)); err != nil {
 				what += "; the new " + secretWord(k.Kind) + " couldn't be copied: " + err.Error()
 			} else {
@@ -370,7 +407,7 @@ func (m *Model) scanned(msg *scannedMsg) tea.Cmd {
 		msg.fill(c.To.Service, c.To.Username)
 	}
 	c.Secret = msg.qr.Link
-	return m.save(f, c, false)
+	return m.save(f, c, nil)
 }
 
 // saved closes the form for an entry saved, or says why it wasn't.

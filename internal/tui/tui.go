@@ -83,6 +83,15 @@ type AuditEvent struct {
 	What  string // the entry, or the vault, and what of it
 }
 
+// ExportOnly narrows an export to a kind, to the entries in a folder (with
+// the folders under it), and to those with every one of Tags; each left
+// zero narrows nothing.
+type ExportOnly struct {
+	Kind   vault.Kind
+	Folder string
+	Tags   []string
+}
+
 // ScannedQR is a TOTP entry's otpauth:// link read from a QR code on
 // screen, with the issuer and account it names.
 type ScannedQR struct {
@@ -220,6 +229,9 @@ type Vault interface {
 	ForgetVersion(k vault.Key, v Version) error
 	// AuditLog is the newest limit events of the vault's audit log.
 	AuditLog(limit int) (AuditLog, error)
+	// PruneAudit deletes the audit log's events older than days (0: every
+	// one), as sesh audit prune does, and says what it did.
+	PruneAudit(days int) (string, error)
 	// Health checks the passwords and API keys, as sesh health does: weak,
 	// reused, and not changed in oldAfter (0 doesn't check). Reading them
 	// is one audit event.
@@ -238,6 +250,9 @@ type Vault interface {
 	RemoveTag(keys []vault.Key, tag string) (int, error)
 	// DeleteMany moves the entries keys name to the trash, together.
 	DeleteMany(keys []vault.Key) error
+	// Purge deletes the entries keys name for good, together, skipping
+	// the trash.
+	Purge(keys []vault.Key) error
 	// RenameFolder and RenameTag rename a folder (with the folders under
 	// it) or a tag on every entry, and say how many entries changed, and
 	// whether the new name was in use already, so the two merged.
@@ -246,10 +261,12 @@ type Vault interface {
 	// Save adds an entry (c.Key zero) or changes one, and says the name
 	// it has after. ErrNameTaken when the name is another entry's.
 	Save(c *Change) (vault.Key, error)
-	// Export writes an encrypted export of every entry to the file to
-	// names, with password, which it wipes; a file there is replaced only
-	// when replace (ErrExists otherwise). It says what it wrote.
-	Export(to string, password []byte, replace bool) (string, error)
+	// Export writes an encrypted export of the entries only allows (every
+	// one, when it's zero) to the file to names, with password, which it
+	// wipes; a file there is replaced only when replace (ErrExists
+	// otherwise). It says what it wrote; none matching is an error, said
+	// before the file is touched.
+	Export(to string, password []byte, replace bool, only ExportOnly) (string, error)
 	// StartImport reads files from source ("bitwarden", "sesh", …) for an
 	// import, as sesh import does; password is an export's own, nil until
 	// one is asked for with NeedsPassword. The caller closes what it gives.
@@ -313,8 +330,9 @@ type Options struct {
 	EditNotes func([]byte) ([]byte, error)
 	// IsWeak says whether a secret typed is easy to guess.
 	IsWeak func([]byte) bool
-	// Generate makes a new password.
-	Generate func() ([]byte, error)
+	// Generate makes a new password of length characters: with symbols,
+	// or letters and digits only. It refuses a length sesh doesn't make.
+	Generate func(length int, symbols bool) ([]byte, error)
 	// ScanQR reads a TOTP entry's link from a QR code on screen, where
 	// the area with it is selected; nil when it can't be done here. The
 	// caller wipes the link.
@@ -736,6 +754,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.gotAudit(&msg)
 	case scannedMsg:
 		return m.scanned(&msg)
+	case generatedMsg:
+		return m.generated(&msg)
 	case changedMsg:
 		return m.changed(&msg)
 	case newRecoveryMsg:

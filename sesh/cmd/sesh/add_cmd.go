@@ -107,6 +107,8 @@ func runAdd(app *App, args []string) error {
 		return fmt.Errorf("--generate makes a password; %s comes from wherever it was issued", map[vault.Kind]string{vault.KindAPIKey: "an API key", vault.KindNote: "a note", vault.KindTOTP: "a TOTP key"}[kind])
 	case f.qr && kind != vault.KindTOTP:
 		return errors.New("--qr reads a TOTP entry's key: sesh add totp <name> --qr")
+	case f.details.Moves():
+		return errors.New("--rename-field and --plain-field change the fields an entry has: sesh edit <entry> --rename-field old=new")
 	}
 	opts := password.DefaultGenerateOptions()
 	opts.Length = f.length

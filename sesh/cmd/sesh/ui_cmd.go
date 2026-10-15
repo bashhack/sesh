@@ -150,13 +150,17 @@ func holdStderr() (restore func()) {
 func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 	dbPath := cfg.DBPath.Value
 	opts := tui.Options{
-		Vault:       v,
-		Copy:        app.ClipboardCopy,
-		OpenURL:     openURL,
-		LockAgent:   lockAgent,
-		EditNotes:   provider.EditNotes,
-		IsWeak:      func(pw []byte) bool { return password.IsWeak(pw) },
-		Generate:    func() ([]byte, error) { return password.GeneratePassword(password.DefaultGenerateOptions()) },
+		Vault:     v,
+		Copy:      app.ClipboardCopy,
+		OpenURL:   openURL,
+		LockAgent: lockAgent,
+		EditNotes: provider.EditNotes,
+		IsWeak:    func(pw []byte) bool { return password.IsWeak(pw) },
+		Generate: func(length int, symbols bool) ([]byte, error) {
+			opts := password.DefaultGenerateOptions()
+			opts.Length, opts.Symbols = length, symbols
+			return password.GeneratePassword(opts)
+		},
 		ScanQR:      uiScanQR(),
 		ClearAfter:  cfg.ClipboardTimeout.Value,
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
@@ -533,6 +537,8 @@ func (u *uiVault) RemoveTag(keys []vault.Key, tag string) (int, error) {
 
 func (u *uiVault) DeleteMany(keys []vault.Key) error { return u.wrote(u.store.DeleteMany(keys)) }
 
+func (u *uiVault) Purge(keys []vault.Key) error { return u.wrote(u.store.PurgeMany(keys)) }
+
 func (u *uiVault) RenameFolder(from, to string) (int, bool, error) {
 	n, merged, err := u.store.RenameFolder(from, to)
 	return n, merged, u.wrote(err)
@@ -576,6 +582,11 @@ func (u *uiVault) ForgetVersion(k vault.Key, v tui.Version) error {
 		return tui.ErrHistoryChanged
 	}
 	return u.wrote(err)
+}
+
+func (u *uiVault) PruneAudit(days int) (string, error) {
+	said, err := pruneAudit(u.store, days)
+	return said, u.wrote(err)
 }
 
 // AuditLog is the audit log's newest limit events, said as sesh audit

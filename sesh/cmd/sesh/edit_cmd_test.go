@@ -248,3 +248,59 @@ func TestEdit_SameSecret(t *testing.T) {
 		t.Errorf("the same secret: out %q, err out %q, %v", out, errOut, err)
 	}
 }
+
+// --rename-field keeps a field's value and secrecy; --plain-field makes a secret field plain with its value. Names
+// that clash, or fields not there, are refused before anything changes.
+func TestEdit_RenameAndPlainField(t *testing.T) {
+	env := editVault(t)
+	gh := "password/github/alice"
+	if _, _, err := runEditOut(t, "", false, gh, "--field", "email=a@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runEditOut(t, "4321\n", false, gh, "--secret-field", "pin"); err != nil {
+		t.Fatal(err)
+	}
+	for args, wantSub := range map[string]string{
+		gh + " --rename-field nope=x":                   `no field "nope" to rename; its fields: email, pin`,
+		gh + " --rename-field email=PIN":                "has a field pin already; remove it first",
+		gh + " --rename-field email=email":              "named that already",
+		gh + " --rename-field email":                    "wants old=new",
+		gh + " --plain-field email":                     "plain already",
+		gh + " --plain-field nope":                      `no field "nope" to make plain`,
+		gh + " --rename-field pin=x --remove-field pin": "both removed and renamed",
+	} {
+		if _, _, err := runEditOut(t, "", false, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("%s: %v, want %q", args, err, wantSub)
+		}
+	}
+	app, _ := cliApp("", false)
+	if _, _, err := runCLI(app, runAdd, "password", "x", "--rename-field", "a=b"); err == nil || !strings.Contains(err.Error(), "sesh edit <entry> --rename-field") {
+		t.Errorf("add: %v", err)
+	}
+	if _, _, err := runEditOut(t, "", false, gh, "--rename-field", "pin=card-pin", "--rename-field", "email=Email"); err != nil {
+		t.Fatal(err)
+	}
+	fields := func() []vault.Field {
+		store := openDoctorVault(t, env)
+		defer store.Close() //nolint:errcheck // test cleanup
+		d, err := store.Details(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}, "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.Fields
+	}
+	got := fields()
+	if len(got) != 2 || !slices.ContainsFunc(got, func(f vault.Field) bool { return f.Name == "card-pin" && f.Secret && string(f.Value) == "4321" }) ||
+		!slices.ContainsFunc(got, func(f vault.Field) bool { return f.Name == "Email" && !f.Secret && string(f.Value) == "a@example.com" }) {
+		t.Errorf("renamed = %+v", got)
+	}
+	if _, _, err := runEditOut(t, "", false, gh, "--plain-field", "card-pin"); err != nil {
+		t.Fatal(err)
+	}
+	if got := fields(); !slices.ContainsFunc(got, func(f vault.Field) bool { return f.Name == "card-pin" && !f.Secret && string(f.Value) == "4321" }) {
+		t.Errorf("made plain = %+v", got)
+	}
+	if log := mustRun(t, runAudit); !strings.Contains(log, "field pin renamed to card-pin") || !strings.Contains(log, "field card-pin made plain") {
+		t.Errorf("the changes aren't in the audit log:\n%s", log)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/exportfile"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/provider"
@@ -84,28 +85,8 @@ func runExport(app *App, args []string) error {
 	defer closeAuditStore(store)
 	mgr := password.NewManager(store)
 	f := filing.Filter()
-	// A filter that matches nothing is likely a typo (folders and tags are
-	// case-sensitive): it fails before a file is touched or a password
-	// asked for.
-	if kind != "" || f.FolderSet || len(f.Tags) > 0 {
-		found, err := mgr.ListEntriesFiltered(&password.ListFilter{EntryType: kind, Folder: f.Folder, FolderSet: f.FolderSet, Tags: f.Tags, Limit: 1})
-		if err != nil {
-			return err
-		}
-		if len(found) == 0 {
-			what := "entries"
-			if kind != "" {
-				what = kindName(kind) + " entries"
-			}
-			msg := "no " + what
-			if s := provider.Scope(&f); s != "" {
-				msg += " " + s
-			}
-			if h := provider.NoMatchHint(store, &f, ""); h != "" {
-				msg += ": " + h
-			}
-			return errors.New(msg + ", so nothing was exported")
-		}
+	if err := checkExportMatches(store, kind, &f); err != nil {
+		return err
 	}
 	opts := &password.ExportOptions{EntryType: kind, Folder: f.Folder, FolderSet: f.FolderSet, Tags: f.Tags}
 
@@ -183,6 +164,31 @@ func runExport(app *App, args []string) error {
 }
 
 var errExportNeedsTerminal = errors.New("an encrypted export asks for its password at a terminal; --format json or csv writes one without")
+
+// checkExportMatches refuses an export of a kind, folder or tag (f) that
+// no entry has: likely a typo, since folders and tags are case-sensitive.
+// It's said before a file is touched or a password asked for.
+func checkExportMatches(store *database.Store, kind vault.Kind, f *vault.Filter) error {
+	if kind == "" && !f.FolderSet && len(f.Tags) == 0 {
+		return nil
+	}
+	found, err := password.NewManager(store).ListEntriesFiltered(&password.ListFilter{EntryType: kind, Folder: f.Folder, FolderSet: f.FolderSet, Tags: f.Tags, Limit: 1})
+	if err != nil || len(found) > 0 {
+		return err
+	}
+	what := "entries"
+	if kind != "" {
+		what = kindName(kind) + " entries"
+	}
+	msg := "no " + what
+	if s := provider.Scope(f); s != "" {
+		msg += " " + s
+	}
+	if h := provider.NoMatchHint(store, f, ""); h != "" {
+		msg += ": " + h
+	}
+	return errors.New(msg + ", so nothing was exported")
+}
 
 // readExportPassword asks for a new export's password, twice, at the
 // terminal: at least 8 characters, and one that's easy to guess is asked

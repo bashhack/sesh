@@ -146,15 +146,20 @@ func (m *Model) toggleReveal() tea.Cmd {
 	for _, f := range e.Fields {
 		secretFields = secretFields || f.Secret
 	}
-	if (kind == vault.KindNote || kind == vault.KindTOTP) && !secretFields {
-		m.say("Nothing more to reveal: " + whatsHidden(kind))
+	if kind == vault.KindNote && !secretFields {
+		m.say("Nothing more to reveal: the note is already shown")
 		return nil
 	}
 	epoch := m.epoch
 	m.revealing = true
 	return m.read(func(v Vault, closed func() bool) tea.Msg {
 		msg := revealMsg{k: k, epoch: epoch}
-		if kind != vault.KindNote && kind != vault.KindTOTP {
+		switch kind {
+		case vault.KindNote:
+		case vault.KindTOTP:
+			// The key its codes are made from, to move it elsewhere.
+			msg.secret, msg.err = v.Secret(k, "in sesh ui, to reveal its key")
+		default:
 			msg.secret, msg.err = v.Secret(k, "in sesh ui, to reveal it")
 		}
 		if msg.err == nil && secretFields {
@@ -166,14 +171,6 @@ func (m *Model) toggleReveal() tea.Cmd {
 		}
 		return msg
 	})
-}
-
-// whatsHidden says why Tab has nothing to show for a kind of entry.
-func whatsHidden(k vault.Kind) string {
-	if k == vault.KindTOTP {
-		return "a TOTP entry shows its code, not its key"
-	}
-	return "the note is already shown"
 }
 
 // gotReveal shows what was revealed, while the entry stays selected.
@@ -296,10 +293,13 @@ func (m *Model) previewLines(w, h int) []string {
 	plain := th.style()
 	shown := m.shown != nil && m.shown.k == e.Key
 	hidden := th.dimmed().Render("••••••••")
-	if e.Kind != vault.KindTOTP && e.Kind != vault.KindNote {
+	if e.Kind != vault.KindNote {
 		name := "password"
-		if e.Kind == vault.KindAPIKey {
+		switch e.Kind {
+		case vault.KindAPIKey:
 			name = "key"
+		case vault.KindTOTP:
+			name = "TOTP key"
 		}
 		if shown {
 			secretField(name, m.wrap("reveal "+name, m.shown.secret, valueWidth), th.accented())
