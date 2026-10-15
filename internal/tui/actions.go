@@ -122,6 +122,8 @@ func (m *Model) openMenu() tea.Cmd {
 	items = append(items,
 		item{key: "h", label: "earlier secrets…", run: func() tea.Cmd { return m.openHistory(&ek) }},
 		item{key: "d", label: "move to the trash", run: func() tea.Cmd { return m.confirmDelete(&ek) }},
+		// Ctrl-G's menu, where a terminal (zellij's) takes Ctrl-G.
+		item{key: "g", label: "sesh's actions…", rule: true, run: m.openSeshMenu},
 	)
 	m.ov = &overlay{kind: panelMenu, title: entryName(e), k: e.Key, items: items}
 	return nil
@@ -129,6 +131,10 @@ func (m *Model) openMenu() tea.Cmd {
 
 // openSeshMenu opens the menu of what isn't about one entry.
 func (m *Model) openSeshMenu() tea.Cmd {
+	if m.width < minWidth || m.height < minHeight {
+		// It wouldn't be on screen.
+		return nil
+	}
 	m.ov = &overlay{kind: panelMenu, title: "sesh", items: m.seshItems()}
 	return nil
 }

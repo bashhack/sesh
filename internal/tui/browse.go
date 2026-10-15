@@ -383,6 +383,7 @@ func (m *Model) openMarkedMenu() tea.Cmd {
 			m.ov = nil
 			return nil
 		}},
+		{key: "g", label: "sesh's actions…", rule: true, run: m.openSeshMenu},
 	}...)
 	m.ov = &overlay{kind: panelMenu, title: m.markedWords(), items: items}
 	return nil

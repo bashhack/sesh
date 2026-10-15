@@ -1170,6 +1170,37 @@ func TestSeshMenu(t *testing.T) {
 	menu("from the sidebar")
 	a.press("esc", "zzz", "ctrl+k")
 	menu("with nothing matching")
+	// Where a terminal keeps Ctrl-G, Ctrl-K's g opens it from an entry, or those marked.
+	a.press("ctrl+u", "ctrl+k", "g")
+	menu("from the entry's menu")
+	a.press("down", "space", "ctrl+k", "g")
+	menu("from the marked entries' menu")
+	if !strings.Contains(a.screen(), "ctrl+g  sesh") {
+		t.Errorf("the marked entries' footer doesn't say ctrl+g:\n%s", a.screen())
+	}
+	// Not opened unseen, in a window too small to show it.
+	a.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+	a.press("ctrl+g")
+	if a.ov != nil {
+		t.Errorf("opened in a window too small: %+v", a.ov)
+	}
+}
+
+// The footer keeps whole hints, leaving out those that don't fit; an empty vault says how to add an entry.
+func TestFooterFits(t *testing.T) {
+	a := newApp(t, newFake(), Options{})
+	a.Update(tea.WindowSizeMsg{Width: 44, Height: 20})
+	lines := strings.Split(a.screen(), "\n")
+	foot := lines[len(lines)-2]
+	if strings.Contains(foot, "…") || !strings.Contains(foot, "ctrl+g  sesh") {
+		t.Errorf("the footer at 44: %q", foot)
+	}
+	f := newFake()
+	f.entries = nil
+	b := newApp(t, f, Options{})
+	if s := b.screen(); !strings.Contains(s, "The vault is empty.") || !strings.Contains(s, "ctrl+g, then a.") || strings.Contains(s, "entr…") {
+		t.Errorf("an empty vault:\n%s", b.screen())
+	}
 }
 
 // The entry's earlier secrets are listed, copied, and restored after a yes.

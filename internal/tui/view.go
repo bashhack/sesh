@@ -182,7 +182,13 @@ func (m *Model) listLines(w, h int) []string {
 		if m.total == 0 {
 			msg = "The vault is empty. To add an entry: ctrl+g, then a."
 		}
-		out[h/2] = lipgloss.PlaceHorizontal(w, lipgloss.Center, m.th.dimmed().Render(msg))
+		// Wrapped to the list, so none of it is cut.
+		lines := strings.Split(wrapText(msg, max(w-2, 10)), "\n")
+		for i, l := range lines {
+			if row := h/2 - len(lines)/2 + i; row >= 0 && row < h {
+				out[row] = lipgloss.PlaceHorizontal(w, lipgloss.Center, m.th.dimmed().Render(l))
+			}
+		}
 		return out
 	}
 	words := strings.Fields(strings.ToLower(m.input.Value()))
@@ -303,20 +309,24 @@ func (m *Model) footer(w int) string {
 			keys = append(keys, [2]string{"ctrl+k", "rename"})
 		}
 	case len(m.marked) > 0:
-		keys = [][2]string{{"ctrl+k", "act on " + m.markedWords()}, {"space", "mark"}, {"esc", "unmark"}}
+		keys = [][2]string{{"ctrl+k", "act on " + m.markedWords()}, {"ctrl+g", "sesh"}, {"space", "mark"}, {"esc", "unmark"}}
 	case m.focus == focusList:
 		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"ctrl+g", "sesh"}, {"space", "mark"}}
 		if m.sideWidth() > 0 {
 			keys = append(keys, [2]string{"←", "folders"})
 		}
 	case m.input.Value() == "" && m.filter.kind == sideAll:
-		// The arrows last, the first cut in a narrow window.
+		// The arrows last, the first left out in a narrow window.
 		keys = [][2]string{{"↵", "copy"}, {"ctrl+k", "actions"}, {"ctrl+g", "sesh"}, {"esc", "quit"}, {"?", "help"}, {"↑↓", "move"}}
 	}
 	now := m.opts.Now()
 	if (m.status != "" && now.Before(m.statusUntil)) || now.Before(m.clipUntil) {
 		// Room for what's said on the right: the keys used most.
 		keys = keys[:2]
+	}
+	// Whole hints, as many as fit: one cut short says less than none.
+	for len(keys) > 1 && lipgloss.Width(" "+th.hints(keys...)) > w {
+		keys = keys[:len(keys)-1]
 	}
 	left := " " + th.hints(keys...)
 	if m.status == "" || !now.Before(m.statusUntil) {
