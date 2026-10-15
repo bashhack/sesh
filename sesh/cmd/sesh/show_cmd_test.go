@@ -118,7 +118,7 @@ func TestShow_JSON(t *testing.T) {
 		Fields   []field  `json:"fields"`
 		HasNotes bool     `json:"has_notes"`
 	}
-	out, err := runShowOut(t, "password/github/alice", "--format", "json")
+	out, err := runShowOut(t, "password/github/alice", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestShow_JSON(t *testing.T) {
 		t.Errorf("hidden JSON shows a secret: %s", out)
 	}
 	got.Fields = nil
-	out, err = runShowOut(t, "password/github/alice", "--format", "json", "--reveal")
+	out, err = runShowOut(t, "github", "--reveal", "--json", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,17 +145,18 @@ func TestShow_JSON(t *testing.T) {
 	}
 }
 
+// Flags go anywhere among the words, which a search matches; an ID is matched exactly.
 func TestShow_Refusals(t *testing.T) {
 	showVault(t)
 	for _, tc := range []struct {
 		wantSub string
 		args    []string
 	}{
-		{"name the entry first", []string{"--reveal", "password/github/alice"}},
-		{"sesh show shows one entry", []string{"password/github/alice", "extra"}},
+		{"name the entry: sesh show <entry>", []string{"--reveal"}},
+		{"entry not found: password/github/alice extra", []string{"password/github/alice", "extra"}},
 		{"entry not found: password/GitHub/alice; did you mean password/github/alice?", []string{"password/GitHub/alice"}},
-		{"--format is text or json", []string{"password/github/alice", "--format", "yaml"}},
-		{"want kind/service or kind/service/username", []string{"github"}},
+		{"flag provided but not defined: -format", []string{"github", "--format", "json"}},
+		{`no entry matches "nope"`, []string{"nope"}},
 	} {
 		if _, err := runShowOut(t, tc.args...); err == nil || !strings.Contains(err.Error(), tc.wantSub) {
 			t.Errorf("show %q = %v, want an error containing %q", tc.args, err, tc.wantSub)

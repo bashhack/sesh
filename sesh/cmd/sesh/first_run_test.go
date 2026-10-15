@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -61,18 +62,19 @@ func TestPlainSeshPrintsGettingStarted(t *testing.T) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	commands := out[strings.Index(out, "Commands:\n")+len("Commands:\n"):]
+	commands := out[strings.Index(out, "Everyday:\n")+len("Everyday:\n"):]
 	if !strings.HasPrefix(out, "sesh keeps your TOTP secrets") || !strings.HasPrefix(commands, "  sesh ui ") {
 		t.Errorf("the intro first, and sesh ui first among the commands:\n%s", out)
 	}
 	for _, c := range subcommands {
-		if !strings.Contains(out, "  sesh "+c.value) {
+		// The command's own line: "sesh recover" isn't "sesh recovery".
+		if !regexp.MustCompile(`(?m)^  sesh ` + regexp.QuoteMeta(c.value) + `( |$)`).MatchString(out) {
 			t.Errorf("missing sesh %s", c.value)
 		}
 	}
 	t.Setenv("SESH_DB_PATH", filepath.Join(t.TempDir(), "none.db"))
 	out = plain()
-	if i := strings.Index(out, "Get started:"); i < 0 || i > strings.Index(out, "Usage: sesh") || !strings.Contains(out, "sesh -service totp -setup") || !strings.Contains(out, help.String()) {
+	if i := strings.Index(out, "Get started:"); i < 0 || i > strings.Index(out, "Usage: sesh") || !strings.Contains(out, "sesh add password <name>") || !strings.Contains(out, help.String()) {
 		t.Errorf("with no vault, the first steps then the help:\n%s", out)
 	}
 	// A config file that doesn't load isn't "no vault": it's said, without the first steps.
@@ -83,12 +85,13 @@ func TestPlainSeshPrintsGettingStarted(t *testing.T) {
 	}
 }
 
-func TestOptionsWithoutAServiceStillFail(t *testing.T) {
+// An old option without a command fails, saying the command it became.
+func TestOldFlagsSayTheirCommand(t *testing.T) {
 	h := newTestHarness()
 	exited := false
 	h.app.Exit = func(int) { exited = true }
 	run(h.app, []string{"sesh", "-list"})
-	if !exited || !strings.Contains(h.stderr.String(), "no service provider specified") {
+	if !exited || !strings.Contains(h.stderr.String(), "sesh has no --list: sesh list") {
 		t.Errorf("exited = %v, stderr = %q; want the no-provider error", exited, h.stderr.String())
 	}
 }

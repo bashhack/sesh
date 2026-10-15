@@ -165,8 +165,17 @@ var touchIDCommands = []candidate{
 	{"status", "Show whether Touch ID unlock is on and usable here"},
 }
 
+const touchIDUsage = `Usage:
+  sesh touchid enable    Unlock with your fingerprint instead of the master password (macOS)
+  sesh touchid disable   Unlock with the master password only
+  sesh touchid status    Whether it's on, and whether Touch ID is available here`
+
 // runTouchID is `sesh touchid enable|disable|status`.
 func runTouchID(app *App, args []string) error {
+	if len(args) > 0 && isHelp(args[0]) {
+		_, err := fmt.Fprintln(app.Stdout, touchIDUsage)
+		return err
+	}
 	if len(args) != 1 {
 		return errors.New("usage: sesh touchid enable|disable|status")
 	}
@@ -211,7 +220,7 @@ func runTouchID(app *App, args []string) error {
 		if !touchIDAvailable() {
 			return errors.New("touch ID isn't available here: this Mac needs a Touch ID sensor with an enrolled fingerprint, and sesh must run in your desktop session (not over SSH)")
 		}
-		if err := requireVault(cfg.DBPath.Value, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
+		if err := requireVault(cfg.DBPath.Value, "there's no vault yet: sesh add creates it with your first entry (sesh init first chooses where it lives)"); err != nil {
 			return err
 		}
 		p := resolvePasswordPrompt()

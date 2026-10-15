@@ -3,12 +3,9 @@ package main
 import (
 	"bytes"
 	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 
@@ -19,9 +16,7 @@ import (
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/kdf"
 	"github.com/bashhack/sesh/internal/password"
-	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
-	"github.com/bashhack/sesh/internal/vault"
 )
 
 // Version information (set by ldflags during build)
@@ -42,18 +37,12 @@ func main() {
 	// Shell completion runs on every Tab, so it answers before the setting
 	// flags, the config, or the store are looked at.
 	if len(os.Args) > 1 && os.Args[1] == completeCmd {
-		app := NewDefaultApp(versionInfo, unavailableStore{err: errNoStore}, AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout})
-		if err := writeCompletions(app.Stdout, app.Registry, os.Args[2:]); err != nil {
+		if err := writeCompletions(os.Stdout, os.Args[2:]); err != nil {
 			os.Exit(1)
 		}
 		return
 	}
 
-	// Only open the credential store if the command will actually use it.
-	// --version, --help, --list-services, and --rekey either just print
-	// information or open their own store internally. Skipping buildProvider
-	// here means sesh doesn't pointlessly open the vault for those
-	// commands.
 	args, overrides, err := takeSettingFlags(os.Args)
 	if err == nil {
 		err = overrides.Validate()
@@ -68,215 +57,96 @@ func main() {
 		os.Exit(2)
 	}
 
-	// A broken config only stops commands that use the store; the rest,
-	// including `sesh config`, which reports the problem, still run.
-	cfg, cfgErr := settings()
+	// A broken config only stops commands that use the vault, which each
+	// open it themselves; the rest, including `sesh config`, which reports
+	// the problem, still run.
 	appSettings := AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout}
-	if cfgErr == nil {
+	if cfg, err := settings(); err == nil {
 		appSettings = appSettingsFrom(cfg)
 	}
-
-	var (
-		kc     vault.Store
-		closer io.Closer
-	)
-	// A command that doesn't parse (an unknown flag, no or an unknown
-	// provider, --help) never opens the vault: run reports the mistake, and a
-	// typo can't create a vault on the way.
-	if needsCredentialStore(args) && argsParse(args) {
-		if cfgErr != nil {
-			fmt.Fprintf(os.Stderr, "❌ %v\n", cfgErr)
-			os.Exit(1)
-		}
-		var err error
-		kc, closer, err = buildProvider(cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-			os.Exit(1)
-		}
-		if closer != nil {
-			defer func() {
-				if err := closer.Close(); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to close provider: %v\n", err)
-				}
-			}()
-		}
-	} else {
-		kc = unavailableStore{err: errNoStore}
-	}
-
-	app := NewDefaultApp(versionInfo, kc, appSettings)
-	run(app, args)
+	run(NewDefaultApp(versionInfo, appSettings), args)
 }
 
-// serviceFlags is the flag set for a command using provider p: the common
-// flags, then p's own, with p's usage on -help.
-func serviceFlags(app *App, cmd, serviceName string, p provider.ServiceProvider) (*flag.FlagSet, commonFlags, error) {
-	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
-	fs.SetOutput(app.Stderr)
-	fs.Usage = func() {
-		if err := app.PrintProviderUsage(serviceName, p); err != nil {
-			fatal(app, err)
-		}
-	}
-	common := addCommonFlags(fs, serviceName)
-	if err := p.SetupFlags(fs); err != nil {
-		return nil, common, fmt.Errorf("error setting up provider flags: %w", err)
-	}
-	return fs, common, nil
-}
-
-// argsParse reports whether args name a provider and parse cleanly with
-// its flags. It's checked before the vault is opened, with a store that
-// can't open anything, so a mistyped command can't open or create the
-// vault. -help, -version and -list-services don't count, since they only
-// print, and neither does a second -service naming another provider, or
-// arguments the provider refuses.
-func argsParse(args []string) bool {
-	serviceName := extractServiceName(args)
-	if serviceName == "" {
-		return false
-	}
-	app := NewDefaultApp(VersionInfo{}, unavailableStore{err: errNoStore}, AppSettings{ClipboardTimeout: config.DefaultClipboardTimeout})
-	app.Stdout, app.Stderr = io.Discard, io.Discard
-	p, err := app.Registry.GetProvider(serviceName)
-	if err != nil {
-		return false
-	}
-	fs, common, err := serviceFlags(app, args[0], serviceName, p)
-	if err != nil {
-		return false
-	}
-	fs.Usage = func() {}
-	if fs.Parse(args[1:]) != nil || *common.service != serviceName ||
-		*common.help || *common.version || *common.listServices {
-		return false
-	}
-	// Arguments that are wrong without the vault are refused before the
-	// master password is asked for; run reports why.
-	return earlyCheck(p, common, fs.Args(), app.StdinIsTerminal) == nil
-}
-
-// earlyCheck refuses arguments that are wrong without looking at the vault,
-// for what the flags select: a --delete ID no entry can have (the first
-// follows --delete, the rest are the arguments after the flags); for --list
-// and --delete, the provider's paging flags; for any other command but
-// --setup (whose wizard asks for its own names), all the provider's
-// arguments. argsParse runs it before the vault opens, and run reports it
-// before any path that would use the vault.
-func earlyCheck(p provider.ServiceProvider, common commonFlags, args []string, stdinIsTerminal func() bool) error {
-	if *common.purge && *common.delete == "" {
-		return errors.New("--purge goes with --delete: sesh --service " + p.Name() + " --purge --delete <id>")
-	}
-	if ids := deleteIDs(common, args); len(ids) > 0 {
-		var bad []string
-		for _, id := range ids {
-			switch _, err := vault.ParseKey(id); {
-			case strings.HasPrefix(id, "-"):
-				// Flags stop at the first ID, so one after the IDs
-				// arrives as an ID.
-				bad = append(bad, fmt.Sprintf("%q looks like a flag: put flags before the entry IDs, as in: sesh --service %s --force --delete <id> <id>", id, p.Name()))
-			case err != nil:
-				bad = append(bad, err.Error())
-			}
-		}
-		switch len(bad) {
-		case 0:
-		case 1:
-			return errors.New(bad[0])
-		default:
-			return fmt.Errorf("nothing was deleted:\n  %s", strings.Join(bad, "\n  "))
-		}
-		// Asking needs a terminal; without one, say so before the vault is
-		// unlocked for nothing.
-		if f, ok := p.(interface{ DeleteForced() bool }); ok && !f.DeleteForced() && (stdinIsTerminal == nil || !stdinIsTerminal()) {
-			return errDeleteNeedsForce
-		}
-	}
-	if f, ok := p.(provider.Filer); ok {
-		if filing := f.Filing(); !filing.IsZero() {
-			uses, where := f.UsesFiling()
-			switch {
-			case *common.delete != "":
-				return errors.New("--folder and --tag don't go with --delete: name the entries to delete by ID")
-			case *common.list || *common.setup:
-			case !uses:
-				return fmt.Errorf("--folder and --tag file an entry as it's stored, or narrow a list: use them with %s", where)
-			}
-			if err := filing.Check(); err != nil {
-				return err
-			}
-		}
-	}
-	switch {
-	case *common.setup:
-		return nil
-	case *common.list || *common.delete != "":
-		if c, ok := p.(interface{ CheckListArgs() error }); ok {
-			return c.CheckListArgs()
-		}
-		return nil
-	}
-	if c, ok := p.(interface{ CheckArgs() error }); ok {
-		return c.CheckArgs()
-	}
-	return nil
-}
-
-// needsCredentialStore reports whether the given command-line invocation
-// will touch the credential store. Commands that just print information
-// (--help/--version/--list-services) or open their own store internally
-// (--rekey) return false.
-func needsCredentialStore(args []string) bool {
-	if name, _ := subcommand(args); len(args) <= 1 || name != "" {
-		return false
-	}
-	for _, a := range args[1:] {
-		switch a {
-		case "--help", "-help", "-h",
-			"--version", "-version",
-			"--list-services", "-list-services",
-			"--rekey", "-rekey":
-			return false
-		}
-	}
-	return true
-}
-
-// subcommands are the commands named by sesh's first argument.
+// subcommands are the commands named by sesh's first argument, in the
+// order completion offers them.
 var subcommands = []candidate{
-	{"agent", "Control the sesh agent"},
-	{"audit", "Show the vault's audit log, or prune it"},
-	{"backup", "Copy the vault now, into the backups folder or a file"},
-	{"completion", "Print a shell completion script (bash, zsh, fish)"},
-	{"config", "Show settings and where each comes from"},
-	{"doctor", "Check sesh's setup, and that the vault can all be read"},
-	{"edit", "Rename an entry, or change its username, kind, or secret"},
-	{"folder", "Move entries between folders, rename folders, list them"},
-	{"health", "Find weak, reused and old passwords"},
-	{"history", "An entry's earlier secrets: list, show, copy, restore, forget"},
-	{"import", "Bring entries over from another app, such as Google Authenticator"},
-	{"init", "Choose where sesh keeps the vault"},
-	{"inject", "Fill a template's sesh:// references into a file"},
-	{"recover", "Set a new master password with the vault's recovery key"},
-	{"recovery", "Make, remove, or check this vault's recovery key"},
-	{"restore", "List the backups, or replace the vault with one"},
-	{"run", "Run a command with secrets from the vault in its environment"},
+	{"list", "List the entries, or those of a kind"},
+	{"search", "Find entries by any part of their name or username"},
+	{"copy", "Copy an entry's secret, or its TOTP code"},
+	{"get", "Print an entry's secret, or its TOTP code"},
+	{"code", "Print a TOTP entry's code, and how long it has"},
 	{"show", "Show an entry: its URL, notes, fields, folder and tags"},
+	{"open", "Open an entry's URL in the browser"},
+	{"add", "Add a password, API key, note, or TOTP entry"},
+	{"edit", "Rename an entry, or change its username, kind, secret, or details"},
+	{"generate", "Print a new random password, stored nowhere"},
+	{"trash", "Move entries to the trash; list it, put one back, or empty it"},
+	{"history", "An entry's earlier secrets: list, show, copy, restore, forget"},
+	{"folder", "Move entries between folders, rename folders, list them"},
 	{"tag", "Tag entries, take tags off, rename tags, list them"},
-	{"touchid", "Unlock with Touch ID (macOS)"},
-	{"trash", "List deleted entries, put one back, or delete them for good"},
 	{"ui", "Search every entry, and copy its secret or TOTP code"},
+	{"import", "Bring entries over from another app, or a sesh export"},
+	{"export", "Write the entries to an export: encrypted, or plain"},
+	{"backup", "Copy the vault now, into the backups folder or a file"},
+	{"restore", "List the backups, or replace the vault with one"},
+	{"health", "Find weak, reused and old passwords"},
+	{"doctor", "Check sesh's setup, and that the vault can all be read"},
+	{"audit", "Show the vault's audit log, or prune it"},
+	{"lock", "Lock sesh: the next command asks for the master password"},
+	{"passwd", "Change the master password"},
+	{"recovery", "Make, remove, or check this vault's recovery key"},
+	{"recover", "Set a new master password with the vault's recovery key"},
+	{"touchid", "Unlock with Touch ID (macOS)"},
+	{"config", "Show settings and where each comes from"},
+	{"init", "Choose where sesh keeps the vault"},
+	{"agent", "Control the sesh agent"},
+	{"run", "Run a command with secrets from the vault in its environment"},
+	{"inject", "Fill a template's sesh:// references into a file"},
+	{"aws", "Sign in to AWS with your MFA code"},
+	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 }
 
-// checkCommandWord refuses a first word that's neither a flag nor a
-// command, which nothing sesh does takes (entry IDs come after flags), and
-// names the command it's closest to.
+// commands run what sesh's first argument names.
+var commands = map[string]func(*App, []string) error{
+	"list": runList, "search": runSearch, "copy": runCopy, "get": runGet, "code": runCode,
+	"show": runShow, "open": runOpen, "add": runAdd, "edit": runEdit, "generate": runGenerate,
+	"trash": runTrash, "history": runHistory, "folder": runFolder, "tag": runTag, "ui": runUI,
+	"import": runImport, "export": runExport, "backup": runBackup, "restore": runRestore,
+	"health": runHealth, "doctor": runDoctor, "audit": runAudit, "lock": runLock, "passwd": runPasswd,
+	"recovery": runRecovery, "recover": runRecover, "touchid": runTouchID, "config": runConfig,
+	"init": runInit, "agent": runAgent, "run": runRun, "inject": runInject, "aws": runAWS,
+	"completion": runCompletion,
+}
+
+// movedFlags say, for a flag that named a command before sesh's commands
+// were words, the command it's become.
+var movedFlags = map[string]string{
+	"service":       "every kind of entry is in the same commands: sesh list, sesh copy, sesh add …",
+	"list":          "sesh list",
+	"delete":        "sesh trash <entry>",
+	"setup":         "sesh add totp, or sesh aws setup",
+	"clip":          "sesh copy <entry>",
+	"rekey":         "sesh passwd",
+	"list-services": "every kind of entry is in the same commands: sesh --help lists them",
+}
+
+// checkCommandWord refuses a first word that isn't a command, or --help
+// or --version, naming the command it's closest to, or the one an old flag
+// became.
 func checkCommandWord(args []string) error {
-	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
+	if len(args) < 2 {
 		return nil
 	}
-	if name, _ := subcommand(args); name != "" {
+	if strings.HasPrefix(args[1], "-") {
+		switch name := strings.TrimLeft(args[1], "-"); {
+		case isHelp(args[1]), name == "version":
+			return nil
+		case movedFlags[name] != "":
+			return fmt.Errorf("sesh has no --%s: %s", name, movedFlags[name])
+		}
+		return fmt.Errorf("sesh takes a command first, not %q; the commands are listed by: sesh --help", args[1])
+	}
+	if name, _ := subcommand(args); name != "" || args[1] == "help" {
 		return nil
 	}
 	word := args[1]
@@ -297,7 +167,7 @@ func checkCommandWord(args []string) error {
 
 // subcommand returns the subcommand args name (one of subcommands) and the
 // arguments after it, or "" and nil. Only the first argument counts, so an
-// entry that happens to be named "agent" (-service-name agent) is never
+// entry that happens to be named "agent" (sesh copy agent) is never
 // mistaken for one.
 func subcommand(args []string) (name string, rest []string) {
 	if len(args) < 2 {
@@ -309,31 +179,6 @@ func subcommand(args []string) (name string, rest []string) {
 		}
 	}
 	return "", nil
-}
-
-// unavailableStore is a credential store whose every call fails with err.
-// It stands in for the store in commands that don't open one, so a routing
-// bug (a command that needs the store classified as one that doesn't)
-// fails loudly instead of silently succeeding.
-type unavailableStore struct{ err error }
-
-var errNoStore = fmt.Errorf("no credential store opened for this command")
-
-func (u unavailableStore) Get(vault.Key) ([]byte, error)               { return nil, u.err }
-func (u unavailableStore) Put(vault.Key, []byte) error                 { return u.err }
-func (u unavailableStore) Save(*vault.Entry, []byte) error             { return u.err }
-func (u unavailableStore) SetSettings(vault.Key, vault.Settings) error { return u.err }
-func (u unavailableStore) Lookup(vault.Key) (vault.Entry, error)       { return vault.Entry{}, u.err }
-func (u unavailableStore) Exists(vault.Key) error                      { return u.err }
-func (u unavailableStore) List(*vault.Filter) ([]vault.Entry, error)   { return nil, u.err }
-func (u unavailableStore) Delete(vault.Key) error                      { return u.err }
-func (u unavailableStore) DeleteMany([]vault.Key) error                { return u.err }
-func (u unavailableStore) Details(vault.Key, string) (vault.Details, error) {
-	return vault.Details{}, u.err
-}
-func (u unavailableStore) SetDetails(vault.Key, *vault.Details) error { return u.err }
-func (u unavailableStore) SaveWithDetails(*vault.Entry, []byte, *vault.Details) error {
-	return u.err
 }
 
 // appSettingsFrom is the settings the app's commands use, from cfg.
@@ -361,15 +206,6 @@ func settingsOf(dbPath string) (*config.Config, error) {
 	moved := *cfg
 	moved.DBPath.Value = dbPath
 	return &moved, nil
-}
-
-// buildProvider opens the vault with cfg's settings; the caller closes it.
-func buildProvider(cfg *config.Config) (vault.Store, io.Closer, error) {
-	store, err := openSQLiteStoreWith(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	return store, store, nil
 }
 
 // openSQLiteStore opens the SQLite store with this run's settings.
@@ -463,7 +299,7 @@ func vaultCreationNotice(dbPath string) string {
 		"  reset it: if you forget it, only a recovery key opens the vault\n" +
 		"  (sesh recovery new). Store the password somewhere safe, and back the\n" +
 		"  vault up with an encrypted export\n" +
-		"  (sesh -service password -action export --format encrypted --file <file>).\n"
+		"  (sesh export --file <file>).\n"
 }
 
 // tildePath shows a path under the home directory as ~/...
@@ -553,7 +389,7 @@ func buildKeySourceWith(dbPath string, cfg passwordPromptConfig) (database.Crypt
 
 	mps := cfg.newSource(dbPath)
 	// Eagerly unlock so every operation — including metadata-only reads
-	// like --list and --delete — requires the master password. Without
+	// like sesh list and sesh trash — requires the master password. Without
 	// this, the store would only prompt on decryption, letting an
 	// attacker with filesystem access list and delete entries without
 	// the password.
@@ -810,6 +646,9 @@ func (c passwordPromptConfig) withTypedPassword(pw []byte) passwordPromptConfig 
 // echo. Does not consult SESH_MASTER_PASSWORD — that decision belongs to
 // resolvePasswordPrompt so the env-var policy lives in exactly one place.
 func terminalPrompt(prompt string) ([]byte, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil, noTerminalFor(prompt)
+	}
 	if _, err := fmt.Fprint(os.Stderr, prompt); err != nil {
 		return nil, err
 	}
@@ -824,6 +663,19 @@ func terminalPrompt(prompt string) ([]byte, error) {
 		return nil, err
 	}
 	return pw, nil
+}
+
+// noTerminalFor is the error for a password prompt with no terminal to
+// type at: it says what was asked for, and for the master password, the
+// ways that need none.
+func noTerminalFor(prompt string) error {
+	switch p := strings.ToLower(prompt); {
+	case strings.Contains(p, "recovery key"):
+		return errors.New("there's no terminal here to type the recovery key at")
+	case strings.Contains(p, "create"), strings.Contains(p, "confirm"):
+		return errors.New("there's no terminal here to choose the new vault's master password at: run sesh at one, or give the password in SESH_MASTER_PASSWORD")
+	}
+	return errors.New("there's no terminal here to type the master password at: run sesh at one first, after which its agent keeps the vault unlocked for a while, or give the password in SESH_MASTER_PASSWORD")
 }
 
 // errReported is a failure the command has already reported in full; fatal
@@ -853,328 +705,82 @@ func fatal(app *App, err error) {
 
 // run is the testable entrypoint for the application
 func run(app *App, args []string) {
-	switch name, rest := subcommand(args); name {
-	case "agent":
-		if err := runAgent(app, rest); err != nil {
-			fatal(app, err)
+	// sesh help <command> is sesh <command> --help.
+	if len(args) > 2 && args[1] == "help" {
+		if _, ok := commands[args[2]]; ok {
+			args = []string{args[0], args[2], "--help"}
 		}
-		return
-	case "config":
-		if err := runConfig(app, rest); err != nil {
-			fatal(app, err)
+	}
+	if name, rest := subcommand(args); name != "" {
+		// sesh run's command, after its flags, can take -h of its own.
+		if name != "run" && askedForHelp(rest) {
+			rest = []string{"--help"}
 		}
-		return
-	case "init":
-		if err := runInit(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "touchid":
-		if err := runTouchID(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "audit":
-		if err := runAudit(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "backup":
-		if err := runBackup(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "edit":
-		if err := runEdit(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "import":
-		if err := runImport(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "show":
-		if err := runShow(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "run":
-		if err := runRun(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "inject":
-		if err := runInject(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "restore":
-		if err := runRestore(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "doctor":
-		if err := runDoctor(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "folder":
-		if err := runFolder(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "trash":
-		if err := runTrash(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "health":
-		if err := runHealth(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "history":
-		if err := runHistory(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "ui":
-		if err := runUI(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "tag":
-		if err := runTag(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "recover":
-		if err := runRecover(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "recovery":
-		if err := runRecovery(app, rest); err != nil {
-			fatal(app, err)
-		}
-		return
-	case "completion":
-		if err := runCompletion(app, rest); err != nil {
+		if err := commands[name](app, rest); err != nil {
 			fatal(app, err)
 		}
 		return
 	}
-
-	// Early exit for version/list-services that don't need service
-	for i, arg := range args[1:] {
-		switch arg {
-		case "--version", "-version":
-			if err := app.ShowVersion(); err != nil {
-				fatal(app, err)
-			}
-			return
-		case "--list-services", "-list-services":
-			if err := app.ListProviders(); err != nil {
-				fatal(app, err)
-			}
-			return
-		case "--rekey", "-rekey":
-			others := append(slices.Clone(args[1:i+1]), args[i+2:]...)
-			if err := runRekey(app, others, resolvePasswordPrompt()); err != nil {
-				fatal(app, err)
-			}
-			return
-		}
-	}
-
-	// Check if help is requested without a service
-	hasHelp := false
-	for _, arg := range args[1:] {
-		if arg == "--help" || arg == "-help" || arg == "-h" {
-			hasHelp = true
-			break
-		}
-	}
-
-	// Extract service name from args
-	serviceName := extractServiceName(args)
-	if serviceName == "" {
-		if hasHelp {
-			if err := app.PrintUsage(); err != nil {
-				fatal(app, err)
-			}
-			return
-		}
-		// Plain `sesh` asks what it can do; options without -service are a
-		// mistake.
-		if len(args) == 1 {
-			if err := app.PrintGettingStarted(); err != nil {
-				fatal(app, err)
-			}
-			return
-		}
-		if err := app.ListProviders(); err != nil {
+	if len(args) < 2 {
+		if err := app.PrintGettingStarted(); err != nil {
 			fatal(app, err)
-			return
 		}
-		fatal(app, fmt.Errorf("no service provider specified. Use -service to select a provider"))
 		return
 	}
-
-	// Validate service exists
-	svcProvider, err := app.Registry.GetProvider(serviceName)
-	if err != nil {
-		if listErr := app.ListProviders(); listErr != nil {
-			fatal(app, listErr)
-			return
+	switch {
+	case isHelp(args[1]):
+		if err := app.PrintUsage(); err != nil {
+			fatal(app, err)
 		}
-		fatal(app, err)
 		return
-	}
-
-	fs, common, err := serviceFlags(app, args[0], serviceName, svcProvider)
-	if err != nil {
-		fatal(app, err)
-		return
-	}
-
-	// Parse all flags
-	if err := fs.Parse(args[1:]); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return
-		}
-		fatal(app, fmt.Errorf("error parsing arguments: %w", err))
-		return
-	}
-
-	// Verify service wasn't changed
-	if *common.service != serviceName {
-		fatal(app, fmt.Errorf("service provider cannot be changed after initial selection"))
-		return
-	}
-
-	// Handle commands that were re-parsed
-	if *common.version {
+	case args[1] == "--version" || args[1] == "-version":
 		if err := app.ShowVersion(); err != nil {
 			fatal(app, err)
 		}
 		return
 	}
-	if *common.help {
-		if err := app.PrintProviderUsage(serviceName, svcProvider); err != nil {
-			fatal(app, err)
-		}
-		return
-	}
-	if *common.listServices {
-		if err := app.ListProviders(); err != nil {
-			fatal(app, err)
-		}
-		return
-	}
-
-	// What argsParse refused before opening the vault is reported here,
-	// before any path that would use the vault it didn't open.
-	if err := earlyCheck(svcProvider, common, fs.Args(), app.StdinIsTerminal); err != nil {
+	if err := checkCommandWord(args); err != nil {
 		fatal(app, err)
-		return
-	}
-
-	// Provider-specific operations
-	if *common.list {
-		if err := app.ListEntries(serviceName); err != nil {
-			fatal(app, err)
-		}
-		return
-	}
-	if ids := deleteIDs(common, fs.Args()); len(ids) > 0 {
-		if err := app.DeleteEntries(serviceName, ids, *common.purge); err != nil {
-			fatal(app, err)
-		}
-		return
-	}
-	if *common.setup {
-		if err := app.RunSetup(serviceName); err != nil {
-			fatal(app, fmt.Errorf("setup failed: %w", err))
-		}
-		return
-	}
-
-	// Main operation - generate credentials
-	if *common.clip {
-		if err := app.CopyToClipboard(serviceName); err != nil {
-			fatal(app, err)
-		}
-	} else if sd, ok := svcProvider.(provider.SubshellDecider); ok && sd.ShouldUseSubshell() {
-		if err := app.LaunchSubshell(serviceName); err != nil {
-			fatal(app, err)
-		}
-	} else {
-		if err := app.GenerateCredentials(serviceName); err != nil {
-			fatal(app, err)
-		}
 	}
 }
 
-// deleteIDs are the entry IDs a --delete names: its value, then the
-// arguments after the flags. Nil without --delete.
-func deleteIDs(common commonFlags, args []string) []string {
-	if *common.delete == "" {
-		return nil
-	}
-	ids := []string{*common.delete}
-	for _, a := range args {
-		if a != "--" { // the end of the flags, not an ID
-			ids = append(ids, a)
+// askedForHelp says whether -h or --help is among a command's words,
+// before any "--" (after it, the words are another program's, as with sesh
+// run): it shows the command's usage, wherever it's typed, and does nothing
+// else. The word help alone can name an entry, so it counts only first.
+func askedForHelp(args []string) bool {
+	for i, a := range args {
+		switch {
+		case a == "--":
+			return false
+		case a == "-h" || a == "-help" || a == "--help", i == 0 && a == "help":
+			return true
 		}
 	}
-	return ids
+	return false
 }
 
-// commonFlags are the flags every provider accepts.
-type commonFlags struct {
-	service, delete                                       *string
-	version, help, listServices, list, setup, clip, purge *bool
-}
-
-func addCommonFlags(fs *flag.FlagSet, serviceName string) commonFlags {
-	return commonFlags{
-		service:      fs.String("service", serviceName, "Service provider to use"),
-		version:      fs.Bool("version", false, "Show version information"),
-		help:         fs.Bool("help", false, "Show usage"),
-		listServices: fs.Bool("list-services", false, "List available service providers"),
-		list:         fs.Bool("list", false, "List entries for selected service"),
-		delete:       fs.String("delete", "", "Delete entries by ID: --delete <id> [<id> ...], all or none, into the trash; asks first unless --force"),
-		purge:        fs.Bool("purge", false, "With --delete: delete for good, not into the trash"),
-		setup:        fs.Bool("setup", false, "Run setup wizard for selected service"),
-		clip:         fs.Bool("clip", false, "Copy code to clipboard"),
+// runLock is sesh lock: sesh's agent forgets the key.
+func runLock(app *App, args []string) error {
+	if len(args) > 0 {
+		if isHelp(args[0]) {
+			_, err := fmt.Fprintln(app.Stdout, "Usage: sesh lock\n  Lock sesh: its agent forgets the vault's key, and the next command asks\n  for the master password (or Touch ID).")
+			return err
+		}
+		return fmt.Errorf("sesh lock takes nothing more, not %q", args[0])
 	}
+	return runAgent(app, []string{"lock"})
 }
 
-// extractServiceName manually parses args to find --service value
-func extractServiceName(args []string) string {
-	for i := 1; i < len(args); i++ {
-		// Handle --service <value>
-		if args[i] == "--service" || args[i] == "-service" {
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				return args[i+1]
-			}
-		}
-		// Handle --service=<value>
-		if v, ok := strings.CutPrefix(args[i], "--service="); ok {
-			return v
-		}
-		if v, ok := strings.CutPrefix(args[i], "-service="); ok {
-			return v
-		}
-	}
-	return ""
+// runPasswd is sesh passwd: a new master password.
+func runPasswd(app *App, args []string) error {
+	return runRekey(app, args, resolvePasswordPrompt())
 }
 
-// PrintGettingStarted prints what plain `sesh` shows: what sesh is for,
-// the first commands to run when there's no vault yet, then every option
-// and command, as --help does.
+// PrintGettingStarted prints what plain `sesh` shows: what sesh is for;
+// the first commands to run when there's no vault yet, or what's wrong
+// when the settings don't load; then every option and command, as --help
+// does.
 func (a *App) PrintGettingStarted() error {
 	intro := []string{"sesh keeps your TOTP secrets and passwords in an encrypted vault.", ""}
 	switch cfg, err := settings(); {
@@ -1185,10 +791,9 @@ func (a *App) PrintGettingStarted() error {
 	case vaultMissing(cfg.DBPath.Value):
 		intro = append(intro,
 			"Get started:",
-			"  sesh -service totp -setup       add a TOTP account",
-			"  sesh -service aws -setup        set up AWS MFA",
-			"  sesh -service password -help    store passwords, API keys, and notes",
-			"  sesh init                       choose where and how sesh stores secrets (optional)",
+			"  sesh add password <name>          store a password (or a key, note, or totp)",
+			"  sesh import --from <app> <file>   bring entries over from another app",
+			"  sesh init                         choose where the vault lives (optional)",
 			"",
 		)
 	}
@@ -1200,141 +805,64 @@ func (a *App) PrintGettingStarted() error {
 	return a.PrintUsage()
 }
 
-// PrintUsage displays general usage information
+// usage is sesh --help: what sesh does, and every command, grouped.
+const usage = `Usage: sesh <command> [arguments]
+
+An <entry> is a few words of its name or username, as sesh ui's search takes
+them ("github alice"; a kind word such as totp or note narrows), or its ID.
+
+Everyday:
+  sesh ui                         Search every entry: Enter copies its secret or code
+  sesh list [passwords|keys|notes|totp]   List the entries (--folder F, --tag T)
+  sesh search <words>             Find entries by name, username, or site
+  sesh copy <entry>               Copy its password, key or note, or its TOTP code
+  sesh get <entry>                Print it, for a pipe
+  sesh code <entry>               Print a TOTP code, and how long it has
+  sesh show <entry> [--reveal]    Show its URL, notes, fields, folder and tags
+  sesh open <entry>               Open its URL in the browser
+
+Changing entries:
+  sesh add password|key|note|totp <name>  Add an entry (--generate; --qr for TOTP)
+  sesh edit <entry>               Rename it, or change its secret, URL, notes, or fields
+  sesh generate                   Print a new random password, stored nowhere
+  sesh trash <entry>…             Move entries to the trash (sesh trash lists it)
+  sesh history <entry>            Its earlier secrets: show, copy, restore, forget
+  sesh folder move|rename|list    File entries in folders
+  sesh tag add|remove|rename|list Tag entries
+
+The vault:
+  sesh import --from <app> <file> Bring entries over from another app, or a sesh export
+  sesh export [--file F]          Write an encrypted export (or --format json|csv)
+  sesh backup [file]              Copy the vault now (sesh also does this automatically)
+  sesh restore [backup]           List the backups, or replace the vault with one
+  sesh health                     Find weak, reused and old passwords
+  sesh doctor                     Check the setup, and that the vault can all be read
+  sesh audit [prune]              Show the vault's audit log, or prune it
+
+Locking and keys:
+  sesh lock                       Lock sesh: the next command asks for the master password
+  sesh passwd                     Change the master password
+  sesh recovery new|remove|status A recovery key, in case you forget the master password
+  sesh recover                    Forgot the master password? Set a new one with the recovery key
+  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)
+  sesh agent [lock|status|stop]   Control the sesh agent
+
+Setup and more:
+  sesh init                       Choose where the vault lives
+  sesh config                     Show settings and where each comes from
+  sesh run [--env N=<ref>] -- <cmd>   Run a command with secrets in its environment
+  sesh inject -i <tpl> -o <file>  Fill a template's sesh:// references
+  sesh aws [setup]                Sign in to AWS with your MFA code
+  sesh completion bash|zsh|fish   Print a shell completion script
+
+Options:
+  --db-path path                  The vault's location, for this command (see sesh config)
+  --help, --version
+
+Each command's own help: sesh <command> --help`
+
+// PrintUsage prints sesh --help.
 func (a *App) PrintUsage() error {
-	w := a.Stdout
-	lines := []string{
-		"Usage: sesh [options]",
-		"\nCommon options:",
-		"  --service, -service           Service provider to use (aws, totp, password) [REQUIRED]",
-		"  --list, -list                 List entries for selected service",
-		"  --delete, -delete <id> ...    Delete entries by ID, all or none, into the trash; asks first unless --force",
-		"  --purge, -purge               With --delete: delete for good, not into the trash",
-		"  --setup, -setup               Run setup wizard for selected service",
-		"  --clip, -clip                 Copy code to clipboard",
-		"  --list-services, -list-services  List available service providers",
-		"  --version, -version           Show version information",
-		"  --help, -help                 Show usage",
-		"\nSetting overrides (for this command only; see `sesh config`):",
-		"  --db-path path                Vault location",
-		"\nCommands:",
-		"  sesh ui                       Search every entry, and copy its secret or TOTP code",
-		"  sesh init                     Set up the vault: where it lives",
-		"  sesh config                   Show settings and where each comes from",
-		"  sesh --rekey                  Change your master password",
-		"  sesh recovery new|remove|status    A recovery key, in case you forget your master password",
-		"  sesh recover                  Forgot the master password? Set a new one with the recovery key",
-		"  sesh touchid enable|disable|status  Unlock with Touch ID (macOS)",
-		"  sesh agent [lock|status|stop] Control the sesh agent",
-		"  sesh audit [prune]            Show the vault's audit log, or prune it",
-		"  sesh doctor                   Check the setup, and that the vault can all be read",
-		"  sesh health                   Find weak, reused and old passwords",
-		"  sesh backup [file]            Copy the vault now (sesh also does this automatically)",
-		"  sesh restore [backup]         List the backups, or replace the vault with one",
-		"  sesh show <id> [--reveal]     Show an entry: its URL, notes, fields, folder and tags",
-		"  sesh run [--env N=<ref>] -- <cmd>  Run a command with secrets in its environment",
-		"  sesh inject -i <tpl> -o <file>  Fill a template's sesh:// references",
-		"  sesh import --from <source> <file>  Bring entries over from another app (Bitwarden, KeePass, a browser, Google Authenticator)",
-		"  sesh edit <id>                Rename an entry, or change its username, kind, or secret",
-		"  sesh folder move|rename|list  File entries in folders",
-		"  sesh tag add|remove|rename|list  Tag entries",
-		"  sesh trash [restore|remove|empty]  List deleted entries, put one back, or delete them for good",
-		"  sesh history <id> [--show|--clip|--restore|--forget N]  An entry's earlier secrets",
-		"  sesh completion bash|zsh|fish  Print a shell completion script",
-		"\nExamples:",
-		"  sesh --service aws                     Generate AWS credentials",
-		"  sesh --service totp --service-name github   Generate TOTP code for GitHub",
-		"  sesh --list-services                   List available providers",
-		"\nFor provider-specific help:",
-		"  sesh --service <provider> --help",
-	}
-	for _, line := range lines {
-		if _, err := fmt.Fprintln(w, line); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// PrintProviderUsage prints usage for a specific provider
-func (a *App) PrintProviderUsage(serviceName string, p provider.ServiceProvider) error {
-	w := a.Stdout
-	if _, err := fmt.Fprintf(w, "Usage: sesh --service %s [options]\n\n", serviceName); err != nil {
-		return err
-	}
-
-	commonLines := []string{
-		"Common options:",
-		"  --service string              Service provider to use",
-		"  --list                        List entries for selected service",
-		"  --delete <id> ...             Delete entries by ID, all or none, into the trash; asks first unless --force",
-		"  --purge                       With --delete: delete for good, not into the trash",
-		"  --setup                       Run setup wizard for selected service",
-		"  --clip                        Copy code to clipboard",
-		"  --help                        Show this help",
-		"  --version                     Show version information",
-	}
-	for _, line := range commonLines {
-		if _, err := fmt.Fprintln(w, line); err != nil {
-			return err
-		}
-	}
-
-	// Provider-specific flags
-	flagInfo := p.GetFlagInfo()
-	if len(flagInfo) > 0 {
-		if _, err := fmt.Fprintf(w, "\n%s provider options:\n", strings.ToUpper(serviceName[:1])+serviceName[1:]); err != nil {
-			return err
-		}
-		for _, f := range flagInfo {
-			required := ""
-			if f.Required {
-				required = " [REQUIRED]"
-			}
-			if _, err := fmt.Fprintf(w, "  --%s %s%s\n    %s\n", f.Name, f.Type, required, f.Description); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Examples
-	if _, err := fmt.Fprintln(w, "\nExamples:"); err != nil {
-		return err
-	}
-	var examples []string
-	switch serviceName {
-	case "aws":
-		examples = []string{
-			"  sesh --service aws                     Generate AWS credentials (subshell)",
-			"  sesh --service aws --no-subshell       Print AWS credentials",
-			"  sesh --service aws --profile dev       Use 'dev' AWS profile",
-			"  sesh --service aws --setup             Set up AWS credentials",
-		}
-	case "totp":
-		examples = []string{
-			"  sesh --service totp --service-name github     Generate TOTP for GitHub",
-			"  sesh --service totp --service-name github --clip   Copy TOTP to clipboard",
-			"  sesh --service totp --setup            Set up new TOTP service",
-			"  sesh --service totp --list             List all TOTP services",
-		}
-	case "password":
-		examples = []string{
-			"  sesh --service password --action generate --service-name github --username user1 --clip",
-			"  sesh --service password --action generate --service-name stripe --no-symbols --length 32",
-			"  sesh --service password --action store --service-name github --username user1",
-			"  sesh --service password --action get --service-name github --username user1 --show",
-			"  sesh --service password --action get --service-name github --clip",
-			"  sesh --service password --action search --query github",
-			"  sesh --service password --action export --file backup.json",
-			"  sesh --service password --action import --file backup.json --on-conflict skip",
-			"  sesh --service password --list",
-			"  sesh --service password --delete <entry-id>",
-		}
-	}
-	for _, line := range examples {
-		if _, err := fmt.Fprintln(w, line); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := fmt.Fprintln(a.Stdout, usage)
+	return err
 }

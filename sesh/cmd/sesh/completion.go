@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -42,6 +41,10 @@ var completionShells = []candidate{
 // runCompletion is `sesh completion bash|zsh|fish`: it prints the shell's
 // completion script.
 func runCompletion(app *App, args []string) error {
+	if len(args) > 0 && isHelp(args[0]) {
+		_, err := fmt.Fprintln(app.Stdout, "Usage: sesh completion bash|zsh|fish\n  Print the shell's completion script. In zsh, for one: eval \"$(sesh completion zsh)\"")
+		return err
+	}
 	if len(args) != 1 || !slices.ContainsFunc(completionShells, func(c candidate) bool { return c.value == args[0] }) {
 		return errors.New("usage: sesh completion bash|zsh|fish")
 	}
@@ -54,8 +57,8 @@ func runCompletion(app *App, args []string) error {
 }
 
 // writeCompletions answers `sesh __complete`.
-func writeCompletions(w io.Writer, reg *provider.Registry, words []string) error {
-	cands, files := complete(reg, words)
+func writeCompletions(w io.Writer, words []string) error {
+	cands, files := complete(words)
 	if files {
 		_, err := fmt.Fprintln(w, filesDirective)
 		return err
@@ -82,7 +85,7 @@ type flagSpec struct {
 
 // complete returns the candidates for the last of words, matching what's
 // typed so far, or files=true for a file path.
-func complete(reg *provider.Registry, words []string) (cands []candidate, files bool) {
+func complete(words []string) (cands []candidate, files bool) {
 	if len(words) == 0 {
 		words = []string{""}
 	}
@@ -91,7 +94,13 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		// After sesh run's --, the command and its arguments.
 		return nil, firstWord(before) == "run"
 	}
-	if len(before) == 0 && !strings.HasPrefix(cur, "-") {
+	// A setting flag's value, with any command: --db-path takes a path.
+	if prev := lastWord(before); strings.HasPrefix(prev, "-") && !strings.Contains(prev, "=") {
+		if spec, ok := findSpec(settingSpecs(), prev); ok {
+			return nil, spec.path
+		}
+	}
+	if (len(before) == 0 || len(before) == 1 && before[0] == "help") && !strings.HasPrefix(cur, "-") {
 		return matching(subcommands, cur), false
 	}
 
@@ -105,55 +114,104 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		if len(before) > 1 && slices.ContainsFunc(agentControls, func(c candidate) bool { return c.value == before[1] }) {
 			return nil, false // lock, status, and stop take no arguments
 		}
-		specs = flagSpecs(func(fs *flag.FlagSet) { addAgentFlags(fs, 0, 0) }, nil)
+		specs = flagSpecs(func(fs *flag.FlagSet) { addAgentFlags(fs, 0, 0) })
 	case "audit":
 		if len(before) == 1 && !strings.HasPrefix(cur, "-") {
 			return matching(auditCommands, cur), false
 		}
 		if len(before) > 1 && before[1] == "prune" {
-			specs = flagSpecs(func(fs *flag.FlagSet) { addAuditPruneFlags(fs) }, nil)
+			specs = flagSpecs(func(fs *flag.FlagSet) { addAuditPruneFlags(fs) })
 		} else {
-			specs = flagSpecs(func(fs *flag.FlagSet) { addAuditFlags(fs) }, nil)
+			specs = flagSpecs(func(fs *flag.FlagSet) { addAuditFlags(fs) })
 		}
 	case "init":
-		specs = append(flagSpecs(func(fs *flag.FlagSet) { addInitFlags(fs) }, nil), settingSpecs()...)
+		specs = append(flagSpecs(func(fs *flag.FlagSet) { addInitFlags(fs) }), settingSpecs()...)
 	case "backup":
-		specs = flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) }, nil)
+		specs = flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) })
 		if cur != "" && !strings.HasPrefix(cur, "-") {
 			return nil, true // the file to write
 		}
 	case "edit":
-		if len(before) == 1 {
-			return nil, false // the entry's ID comes first
-		}
-		specs = flagSpecs(func(fs *flag.FlagSet) { addEditFlags(fs) }, nil)
+		specs = flagSpecs(func(fs *flag.FlagSet) { addEditFlags(fs) })
 		for i := range specs {
 			if specs[i].name == "type" {
 				specs[i].values = []string{string(vault.KindPassword), string(vault.KindAPIKey), string(vault.KindNote)}
 			}
 		}
 	case "show":
-		if len(before) == 1 {
-			return nil, false // the entry's ID comes first
+		specs = flagSpecs(func(fs *flag.FlagSet) { addShowFlags(fs) })
+	case "history":
+		specs = flagSpecs(addHistoryFlags)
+	case "list":
+		if !strings.HasPrefix(cur, "-") && !takesValueAfter(before, "folder", "tag", "sort") {
+			return matching(kindWords, cur), false
 		}
-		specs = flagSpecs(func(fs *flag.FlagSet) { addShowFlags(fs) }, nil)
+		specs = flagSpecs(func(fs *flag.FlagSet) { addListFlags(fs) })
 		for i := range specs {
-			if specs[i].name == "format" {
-				specs[i].values = []string{"text", "json"}
+			if specs[i].name == "sort" {
+				specs[i].values = []string{"name", "created", "updated", "folder"}
 			}
 		}
+	case "search":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addSearchFlags(fs) })
+	case "copy":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addCopyFlags(fs) })
+	case "get":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addGetFlags(fs) })
+	case "code":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addCodeFlags(fs) })
+	case "generate":
+		specs = flagSpecs(func(fs *flag.FlagSet) { addGenerateFlags(fs) })
+	case "add":
+		if len(before) == 1 && !strings.HasPrefix(cur, "-") {
+			return matching(addKindWords, cur), false
+		}
+		specs = flagSpecs(func(fs *flag.FlagSet) { addAddFlags(fs) })
+	case "export":
+		if !strings.HasPrefix(cur, "-") && !takesValueAfter(before, "file", "format", "folder", "tag") {
+			return matching(kindWords, cur), false
+		}
+		specs = flagSpecs(func(fs *flag.FlagSet) { addExportFlags(fs) })
+		for i := range specs {
+			switch specs[i].name {
+			case "format":
+				specs[i].values = []string{"encrypted", "json", "csv"}
+			case "file":
+				specs[i].path = true
+			}
+		}
+	case "aws":
+		if len(before) == 1 && !strings.HasPrefix(cur, "-") {
+			return matching([]candidate{{"setup", "Store a profile's MFA key"}}, cur), false
+		}
+		specs = flagSpecs(func(fs *flag.FlagSet) { _, _, _ = addAWSFlags(fs) }) //nolint:errcheck // flags that fail add none
+	case "passwd":
+		specs = settingSpecs()
+	case "trash":
+		if len(before) == 1 && !strings.HasPrefix(cur, "-") {
+			return matching(trashCommands, cur), false
+		}
+		switch {
+		case len(before) < 2 || !slices.ContainsFunc(trashCommands, func(c candidate) bool { return c.value == before[1] }):
+			specs = flagSpecs(func(fs *flag.FlagSet) { addTrashFlags(fs) })
+		case before[1] == "restore":
+			specs = flagSpecs(func(fs *flag.FlagSet) { addTrashRestoreFlags(fs) })
+		case before[1] == "remove", before[1] == "empty":
+			specs = flagSpecs(func(fs *flag.FlagSet) { addForceFlag(fs) })
+		}
+		// sesh trash list takes only the settings' flags.
 	case "run":
-		specs = flagSpecs(func(fs *flag.FlagSet) { addRunFlags(fs) }, nil)
+		specs = flagSpecs(func(fs *flag.FlagSet) { addRunFlags(fs) })
 		for i := range specs {
 			specs[i].path = specs[i].name == "env-file"
 		}
 	case "inject":
-		specs = flagSpecs(func(fs *flag.FlagSet) { addInjectFlags(fs) }, nil)
+		specs = flagSpecs(func(fs *flag.FlagSet) { addInjectFlags(fs) })
 		for i := range specs {
 			specs[i].path = true
 		}
 	case "import":
-		specs = flagSpecs(func(fs *flag.FlagSet) { addImportFlags(fs) }, nil)
+		specs = flagSpecs(func(fs *flag.FlagSet) { addImportFlags(fs) })
 		for i := range specs {
 			switch specs[i].name {
 			case "from":
@@ -166,7 +224,7 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 			return nil, true // the files to import
 		}
 	case "restore":
-		specs = flagSpecs(func(fs *flag.FlagSet) { addRestoreFlags(fs) }, nil)
+		specs = flagSpecs(func(fs *flag.FlagSet) { addRestoreFlags(fs) })
 		if cur != "" && !strings.HasPrefix(cur, "-") {
 			return nil, true // the backup file
 		}
@@ -178,16 +236,24 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		verbs = folderCommands
 	case "tag":
 		verbs = tagCommands
-	case "trash":
-		verbs = trashCommands
 	case "completion":
 		verbs = completionShells
-	case "config", "recover":
-		return nil, false
+	case "config", "recover", "lock", "open":
+		// Only the settings' flags, once a dash is typed.
+		if !strings.HasPrefix(cur, "-") {
+			return nil, false
+		}
 	default:
-		specs = mainSpecs(reg, before)
+		// Before a command, the options plain sesh takes.
+		specs = append([]flagSpec{{name: "help", usage: "Show the commands"}, {name: "version", usage: "Show the version"}}, settingSpecs()...)
 	}
-	if verbs != nil {
+	// The settings' flags go with any command.
+	for _, s := range settingSpecs() {
+		if _, ok := findSpec(specs, "--"+s.name); !ok {
+			specs = append(specs, s)
+		}
+	}
+	if verbs != nil && !strings.HasPrefix(cur, "-") {
 		if len(before) == 1 {
 			return matching(verbs, cur), false
 		}
@@ -221,7 +287,7 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 		return nil, false
 	}
 
-	// One dash as typed (the docs' -service style), otherwise two.
+	// One dash as typed, otherwise two.
 	dashes := "--"
 	if strings.HasPrefix(cur, "-") && !strings.HasPrefix(cur, "--") && cur != "-" {
 		dashes = "-"
@@ -242,56 +308,32 @@ func complete(reg *provider.Registry, words []string) (cands []candidate, files 
 	return matching(all, cur), false
 }
 
-// mainSpecs are the flags of a sesh command that isn't a subcommand: the
-// common flags, the setting flags, --rekey, and the selected
-// provider's own flags; after --rekey, only the setting flags.
-func mainSpecs(reg *provider.Registry, before []string) []flagSpec {
-	if slices.ContainsFunc(before, func(w string) bool { return w == "--rekey" || w == "-rekey" }) {
-		return settingSpecs()
-	}
-	var p provider.ServiceProvider
-	if name := extractServiceName(append([]string{"sesh"}, before...)); name != "" {
-		p, _ = reg.GetProvider(name) //nolint:errcheck // an unknown provider just adds no flags
-	}
-	specs := flagSpecs(func(fs *flag.FlagSet) {
-		addCommonFlags(fs, "")
-		if p != nil {
-			_ = p.SetupFlags(fs) //nolint:errcheck // a provider that fails here just adds no flags
-		}
-	}, p)
-	for i := range specs {
-		if specs[i].name == "service" {
-			for _, rp := range reg.ListProviders() {
-				specs[i].values = append(specs[i].values, rp.Name())
-			}
-		}
-	}
-	specs = append(specs,
-		flagSpec{name: "rekey", usage: "Change the master password"},
-	)
-	return append(specs, settingSpecs()...)
+// kindWords are the kinds sesh list and export take.
+var kindWords = []candidate{
+	{"passwords", "Passwords"}, {"keys", "API keys"}, {"notes", "Notes"}, {"totp", "TOTP entries"},
 }
 
-// flagSpecs registers flags with register and describes them, taking
-// values and paths from p's flag info when p isn't nil.
-func flagSpecs(register func(*flag.FlagSet), p provider.ServiceProvider) []flagSpec {
+// addKindWords are the kinds sesh add takes.
+var addKindWords = []candidate{
+	{"password", "A password"}, {"key", "An API key"}, {"note", "A note"}, {"totp", "A TOTP entry"},
+}
+
+// takesValueAfter says whether the word before the cursor is one of the
+// named flags, without its value: the cursor is at that value.
+func takesValueAfter(before []string, names ...string) bool {
+	prev := lastWord(before)
+	return strings.HasPrefix(prev, "-") && !strings.Contains(prev, "=") && slices.Contains(names, strings.TrimLeft(prev, "-"))
+}
+
+// flagSpecs registers flags with register and describes them.
+func flagSpecs(register func(*flag.FlagSet)) []flagSpec {
 	fs := flag.NewFlagSet("sesh", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	register(fs)
-	info := map[string]provider.FlagInfo{}
-	if p != nil {
-		for _, fi := range p.GetFlagInfo() {
-			info[fi.Name] = fi
-		}
-	}
 	var specs []flagSpec
 	fs.VisitAll(func(f *flag.Flag) {
 		bf, isBool := f.Value.(interface{ IsBoolFlag() bool })
-		s := flagSpec{name: f.Name, usage: f.Usage, takesValue: !isBool || !bf.IsBoolFlag()}
-		if fi, ok := info[f.Name]; ok {
-			s.values, s.path = fi.Values, fi.Path
-		}
-		specs = append(specs, s)
+		specs = append(specs, flagSpec{name: f.Name, usage: f.Usage, takesValue: !isBool || !bf.IsBoolFlag()})
 	})
 	return specs
 }

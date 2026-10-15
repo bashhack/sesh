@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -39,6 +40,16 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv("XDG_CONFIG_HOME", dir); err != nil {
 		panic(err)
 	}
+	// And their agent: a test that reached it would replace it (its build
+	// differs), locking their session. Under /tmp, as a socket's path is
+	// short.
+	sockDir, err := os.MkdirTemp("/tmp", "sesh-test-agent")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("SESH_AUTH_SOCK", filepath.Join(sockDir, "s")); err != nil {
+		panic(err)
+	}
 	// A developer's own backup settings never reach a test: a test vault
 	// backed up into their backups folder could prune their real backups.
 	for _, k := range []string{"SESH_BACKUP_DIR", "SESH_BACKUP_EVERY_DAYS", "SESH_BACKUP_KEEP"} {
@@ -54,8 +65,10 @@ func TestMain(m *testing.M) {
 		}
 	}
 	code := m.Run()
-	if err := os.RemoveAll(dir); err != nil {
-		fmt.Fprintf(os.Stderr, "remove test config dir: %v\n", err)
+	for _, d := range []string{dir, sockDir} {
+		if err := os.RemoveAll(d); err != nil {
+			fmt.Fprintf(os.Stderr, "remove test dir: %v\n", err)
+		}
 	}
 	os.Exit(code)
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/password"
-	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/touchid"
@@ -126,7 +125,7 @@ func TestDoctor_UnreadableEntries(t *testing.T) {
 			"                        password/git hub/alice: secret doesn't decrypt\n" +
 			"                        (damaged, or encrypted with another key)\n",
 		"  1. Restore these entries from a backup (an encrypted export), or delete them:\n" +
-			"       sesh --service password --purge --delete api_key/openai 'password/git hub/alice'\n",
+			"       sesh trash --purge --force api_key/openai 'password/git hub/alice'\n",
 		"\nFAIL: 2 problems, 1 warning\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -185,11 +184,11 @@ func damageThree(t *testing.T) *rekeyTestEnv {
 func TestDoctor_PrintedDeleteWorks(t *testing.T) {
 	env := damageThree(t)
 	out, err := runDoctorOut(t)
-	if !errors.Is(err, errReported) || !strings.Contains(out, "       sesh --service password --purge --delete password/a/u password/b/u password/c/u\n") {
+	if !errors.Is(err, errReported) || !strings.Contains(out, "       sesh trash --purge --force password/a/u password/b/u password/c/u\n") {
 		t.Fatalf("err = %v, output:\n%s", err, out)
 	}
-	store := openDoctorVault(t, env)
-	if _, err := provider.DeleteEntries(store, []string{"password/a/u", "password/b/u", "password/c/u"}, nil, nil, true, nil); err != nil {
+	_ = env
+	if _, err := runFiling(t, runTrash, "--purge", "--force", "password/a/u", "password/b/u", "password/c/u"); err != nil {
 		t.Fatalf("the printed delete: %v", err)
 	}
 	if out, err := runDoctorOut(t); err != nil {
@@ -308,7 +307,7 @@ func TestDoctor_DamagedFile(t *testing.T) {
 		"  FAIL  File            damaged; SQLite reports:\n                        ",
 		"  ok    Entries         2 entries, all readable\n",
 		"  1. Your entries all read, so save them now, then start a new vault and import them:\n" +
-			"       sesh --service password --action export --format encrypted --file backup.enc\n",
+			"       sesh export --file backup.enc\n",
 		"\nFAIL: 1 problem, 1 warning\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -332,7 +331,7 @@ func TestDoctor_OneUnreadableEntry(t *testing.T) {
 	sqlExec(t, env.dbPath, `UPDATE entries SET encrypted_data = x'00112233445566778899aabbccddeeff00112233445566778899' WHERE service = 'github'`)
 	out, err := runDoctorOut(t)
 	want := "  1. Restore password/github/alice from a backup (an encrypted export), or delete it:\n" +
-		"       sesh --service password --purge --delete password/github/alice\n"
+		"       sesh trash --purge --force password/github/alice\n"
 	if !errors.Is(err, errReported) || !strings.Contains(out, want) {
 		t.Errorf("err = %v, output:\n%s", err, out)
 	}
@@ -487,12 +486,12 @@ func TestAgentUnlocks(t *testing.T) {
 	}
 }
 
-// A key made with weaker settings than configured warns, naming --rekey.
+// A key made with weaker settings than configured warns, naming sesh passwd.
 func TestDoctor_WeakerKeySettings(t *testing.T) {
 	doctorVault(t)
 	t.Setenv("SESH_KDF_MEMORY", "32MiB")
 	out, err := runDoctorOut(t)
-	if err != nil || !strings.Contains(out, "  warn  Key settings    19 MiB, 2 passes, 1 thread: weaker than configured\n                        configured: 32 MiB, 2 passes, 1 thread\n") || !strings.Contains(out, "       sesh --rekey\n") {
+	if err != nil || !strings.Contains(out, "  warn  Key settings    19 MiB, 2 passes, 1 thread: weaker than configured\n                        configured: 32 MiB, 2 passes, 1 thread\n") || !strings.Contains(out, "       sesh passwd\n") {
 		t.Errorf("err = %v\n%s", err, out)
 	}
 }

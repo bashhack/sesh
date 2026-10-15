@@ -15,7 +15,7 @@ import (
 )
 
 // uiChangePassword changes the master password of the vault the app has
-// open from current to next, as sesh --rekey does, and opens the vault
+// open from current to next, as sesh passwd does, and opens the vault
 // again with next. It wipes both. An error means nothing changed.
 func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, error) {
 	defer secure.SecureZeroBytes(current)

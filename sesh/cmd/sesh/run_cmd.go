@@ -54,7 +54,7 @@ func addRunFlags(fs *flag.FlagSet) *runFlags {
 
 const runUsage = `Usage: sesh run [--env NAME=<ref>]... [--env-file <file>]... [--no-masking] -- <command> [args...]
   Run a command with secrets from the vault in its environment. A reference
-  is sesh://<id>[#field], with the entry ID as --list shows it.
+  is sesh://<id>[#field], with the entry ID as sesh list shows it.
   Secrets the command prints are shown as <concealed by sesh>, unless
   --no-masking gives it the terminal directly.
 
@@ -72,7 +72,9 @@ func runRun(app *App, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	f := addRunFlags(fs)
-	fs.Usage = func() { fmt.Fprintln(app.Stderr, runUsage) } //nolint:errcheck // usage text
+	// Asked for, as --help among the flags, the usage goes to stdout, as
+	// every command's does.
+	fs.Usage = func() { fmt.Fprintln(app.Stdout, runUsage) } //nolint:errcheck // usage text
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil

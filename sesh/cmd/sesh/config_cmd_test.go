@@ -37,23 +37,19 @@ func useConfigFile(t *testing.T, body string) string {
 }
 
 func TestSubcommand_OnlyTheFirstArgument(t *testing.T) {
-	tests := map[string]struct {
-		want      string
-		args      []string
-		needStore bool
+	for name, tt := range map[string]struct {
+		want string
+		args []string
 	}{
-		"agent subcommand":         {"agent", []string{"sesh", "agent", "status"}, false},
-		"config subcommand":        {"config", []string{"sesh", "config"}, false},
-		"entry named agent":        {"", []string{"sesh", "-service", "password", "-action", "get", "-service-name", "agent"}, true},
-		"entry named config, last": {"", []string{"sesh", "-service", "totp", "-service-name", "config"}, true},
-	}
-	for name, tt := range tests {
+		"agent subcommand":         {"agent", []string{"sesh", "agent", "status"}},
+		"config subcommand":        {"config", []string{"sesh", "config"}},
+		"entry named agent":        {"copy", []string{"sesh", "copy", "agent"}},
+		"entry named config, last": {"show", []string{"sesh", "show", "--reveal", "config"}},
+		"no command":               {"", []string{"sesh", "--help"}},
+	} {
 		t.Run(name, func(t *testing.T) {
 			if got, _ := subcommand(tt.args); got != tt.want {
 				t.Errorf("subcommand = %q, want %q", got, tt.want)
-			}
-			if got := needsCredentialStore(tt.args); got != tt.needStore {
-				t.Errorf("needsCredentialStore = %v, want %v", got, tt.needStore)
 			}
 		})
 	}
@@ -119,17 +115,14 @@ func TestOpenSQLiteStore_ConfigFileAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kc, closer, err := buildProvider(cfg)
+	store, err := openSQLiteStoreWith(cfg)
 	if err != nil {
-		t.Fatalf("buildProvider: %v", err)
+		t.Fatalf("open the vault the config file names: %v", err)
 	}
-	if closer == nil {
-		t.Fatal("buildProvider returned no closer for the vault the config file names")
-	}
-	if err := kc.Put(vault.Key{Kind: vault.KindPassword, Service: "x"}, []byte("v")); err != nil {
+	if err := store.Put(vault.Key{Kind: vault.KindPassword, Service: "x"}, []byte("v")); err != nil {
 		t.Fatal(err)
 	}
-	if err := closer.Close(); err != nil {
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.ReadUnlockMaterial(vaultPath); err != nil {

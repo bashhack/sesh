@@ -46,16 +46,13 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
                           (in KeePassXC: Database > Export > XML File).
     safari                Safari's password export (CSV), from Apple's
                           Passwords app (File > Export All Passwords to File).
-    sesh                  sesh's own encrypted export (--action export
-                          --format encrypted); sesh asks for its password.
+    sesh                  sesh's own export (sesh export): encrypted, when
+                          sesh asks for its password, or plain JSON or CSV.
 
   sesh import --from google-authenticator IMG_1234.png IMG_1235.png
   sesh import --from bitwarden bitwarden_export.json
   sesh import --from keepass Passwords.xml
-  sesh import --from chrome "Chrome Passwords.csv"
-
-sesh's own plain exports (JSON, CSV) are imported with --service password
---action import.`
+  sesh import --from chrome "Chrome Passwords.csv"`
 
 // importSources are the apps sesh import reads.
 var importSources = []string{"bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "safari", "sesh"}
@@ -79,29 +76,25 @@ func runImport(app *App, args []string) error {
 	fs.SetOutput(app.Stderr)
 	from, onConflict, dryRun, yes := addImportFlags(fs)
 	fs.Usage = func() { fmt.Fprintln(app.Stderr, importUsage) } //nolint:errcheck // usage text
-	if err := fs.Parse(args); err != nil {
+	files, err := parseAnywhere(fs, args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if fs.NArg() == 0 {
+	if len(files) == 0 {
 		return errors.New("name the files to import: sesh import --from <source> <files>")
 	}
 	if *onConflict != "" && *onConflict != "skip" && *onConflict != "overwrite" {
 		return fmt.Errorf("--on-conflict is skip or overwrite, not %q", *onConflict)
 	}
-	for _, a := range fs.Args()[1:] {
-		if strings.HasPrefix(a, "-") && a != "-" {
-			return fmt.Errorf("put %s before the files: sesh import [flags] <files>", a)
-		}
-	}
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
 	source := *from
 	if source == "" {
-		source = detectSource(fs.Args())
+		source = detectSource(files)
 	}
-	f, err := readImport(source, fs.Args(), app.Stdin, terminal, func(prompt string) ([]byte, error) {
+	f, err := readImport(source, files, app.Stdin, terminal, func(prompt string) ([]byte, error) {
 		if !terminal {
 			return nil, fmt.Errorf("this %s is protected by a password: run sesh import at a terminal to type it", prompt)
 		}
@@ -344,10 +337,7 @@ func (p *importPlan) apply(store *database.Store) (string, error) {
 	}
 	if i := slices.IndexFunc(write, func(e *importer.Entry) bool { return e.Key.Kind == vault.KindTOTP }); i >= 0 && p.f.source == "Google Authenticator" {
 		k := write[i].Key
-		check := "sesh --service totp --service-name " + shell.Quote(k.Service)
-		if k.Username != "" {
-			check += " --profile " + shell.Quote(k.Username)
-		}
+		check := "sesh code " + shell.Quote(k.String())
 		fmt.Fprintf(&b, "Before removing an account from your phone, check that its code matches, as with: %s\n", check)
 	}
 	if p.f.after != "" {
@@ -649,7 +639,7 @@ func readBitwarden(args []string, ask func(what string) ([]byte, error)) (found,
 	if len(args) != 1 {
 		return found{}, errors.New("give one Bitwarden export: sesh import --from bitwarden <export.json>")
 	}
-	b, err := os.ReadFile(args[0])
+	b, err := os.ReadFile(args[0]) //nolint:gosec // the file the user named
 	if err != nil {
 		return found{}, err
 	}
@@ -679,12 +669,24 @@ func readSeshExport(args []string, ask func(what string) ([]byte, error)) (found
 	if len(args) != 1 {
 		return found{}, errors.New("give one sesh export: sesh import --from sesh <export.enc>")
 	}
-	b, err := os.ReadFile(args[0])
+	b, err := os.ReadFile(args[0]) //nolint:gosec // the file the user named
 	if err != nil {
 		return found{}, err
 	}
 	if !password.IsEncryptedExport(b) {
-		return found{}, errors.New("this isn't one of sesh's encrypted exports: a plain one (JSON or CSV) is imported with sesh --service password --action import")
+		if !password.IsPlainExport(b) {
+			return found{}, errors.New("this isn't one of sesh's exports: give a file sesh export wrote")
+		}
+		list, err := password.ReadPlainExport(b)
+		if err != nil {
+			return found{}, err
+		}
+		return found{
+			source:  "a sesh export",
+			header:  fmt.Sprintf("Found %s in the sesh export.", nouns(len(list), "entry", "entries")),
+			entries: seshexport.Entries(list),
+			after:   "This export holds your secrets unencrypted: delete " + args[0] + " now, and empty the trash.",
+		}, nil
 	}
 	// Its settings are checked before its password is asked for.
 	sealed, err := password.ReadSealed(bytes.NewReader(b))
@@ -712,7 +714,7 @@ func readKeePass(args []string) (found, error) {
 	if len(args) != 1 {
 		return found{}, errors.New("give one KeePass XML export: sesh import --from keepass <export.xml>")
 	}
-	b, err := os.ReadFile(args[0])
+	b, err := os.ReadFile(args[0]) //nolint:gosec // the file the user named
 	if err != nil {
 		return found{}, err
 	}
@@ -736,7 +738,7 @@ func readBrowser(from string, args []string) (found, error) {
 	if len(args) != 1 {
 		return found{}, fmt.Errorf("give one password export: sesh import --from %s <passwords.csv>", from)
 	}
-	b, err := os.ReadFile(args[0])
+	b, err := os.ReadFile(args[0]) //nolint:gosec // the file the user named
 	if err != nil {
 		return found{}, err
 	}
@@ -795,7 +797,7 @@ func readTransferCodes(args []string, stdin io.Reader, stdinTerminal bool) (payl
 		case strings.Contains(arg, "data="):
 			return nil, nil, fmt.Errorf("argument %d looks like a transfer code, but doesn't start with %s; copy the whole code", n+1, gauth.Prefix)
 		case strings.Contains(arg, "://"):
-			return nil, nil, fmt.Errorf("argument %d isn't a Google Authenticator transfer code (otpauth-migration://) or a file; a single account's otpauth:// code is added with: sesh --service totp --setup", n+1)
+			return nil, nil, fmt.Errorf("argument %d isn't a Google Authenticator transfer code (otpauth-migration://) or a file; a single account's otpauth:// code is added with: sesh add totp <name>", n+1)
 		default:
 			var b []byte
 			if arg == "-" {

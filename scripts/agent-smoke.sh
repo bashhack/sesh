@@ -39,20 +39,18 @@ expect_contains() { # <label> <haystack> <needle>
 }
 
 # 1. The run that creates the vault must not start an agent.
-out=$(echo "smoke-secret" | run SESH_MASTER_PASSWORD=$PASSWORD "$SESH" -service password \
-	-action store -service-name smoke -entry-type secure_note 2>&1) ||
+out=$(echo "smoke-secret" | run SESH_MASTER_PASSWORD=$PASSWORD "$SESH" add note smoke 2>&1) ||
 	fail "vault creation: $out"
-expect_contains "vault created" "$out" "Stored secure_note"
+expect_contains "vault created" "$out" "Added smoke"
 expect_contains "no agent after vault creation" "$(run "$SESH" agent status)" "agent: not running"
 
 # 2. The next interactive run prompts once, starts the agent, and decrypts.
-out=$(run SMOKE_PASSWORD=$PASSWORD python3 "$HERE/pty-run.py" "$SESH" -service password -action get \
-	-service-name smoke -entry-type secure_note -show 2>&1) || fail "interactive get: $out"
+out=$(run SMOKE_PASSWORD=$PASSWORD python3 "$HERE/pty-run.py" "$SESH" get smoke 2>&1) || fail "interactive get: $out"
 expect_contains "unlock through a terminal" "$out" "smoke-secret"
 expect_contains "agent unlocked" "$(run "$SESH" agent status)" "state: unlocked"
 
 # 3. Later runs need no password and no terminal: the agent serves them.
-out=$(run "$SESH" -service password -action get -service-name smoke -entry-type secure_note -show </dev/null 2>&1) ||
+out=$(run "$SESH" get smoke </dev/null 2>&1) ||
 	fail "passwordless read: $out"
 expect_contains "agent serves a read without a password" "$out" "smoke-secret"
 

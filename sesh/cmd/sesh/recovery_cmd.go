@@ -167,8 +167,20 @@ func offerRecovery(cfg passwordPromptConfig, dbPath string) {
 	}
 }
 
+const recoveryUsage = `Usage:
+  sesh recovery new      Make a recovery key (replacing an earlier one)
+  sesh recovery status   Whether this vault has one, and since when
+  sesh recovery remove   Stop it opening the vault
+
+A recovery key is a code you write down. If you forget the master password,
+sesh recover uses it to set a new one; sesh keeps no copy of it.`
+
 // runRecovery is `sesh recovery new|remove|status`.
 func runRecovery(app *App, args []string) error {
+	if len(args) > 0 && isHelp(args[0]) {
+		_, err := fmt.Fprintln(app.Stdout, recoveryUsage)
+		return err
+	}
 	if len(args) != 1 {
 		return errors.New("usage: sesh recovery new|remove|status")
 	}
@@ -214,7 +226,7 @@ func runRecovery(app *App, args []string) error {
 		offerToRemoveOldBackups(app, cfg, "recovery key")
 		return nil
 	case "new":
-		if err := requireVault(dbPath, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
+		if err := requireVault(dbPath, "there's no vault yet: sesh add creates it with your first entry (sesh init first chooses where it lives)"); err != nil {
 			return err
 		}
 		p := recoveryPrompt()
@@ -319,11 +331,19 @@ func readAnswer(in io.Reader) (string, error) {
 // recover gives up.
 const keyTries = 3
 
+const recoverUsage = `Usage: sesh recover
+  Forgot the master password? Type the vault's recovery key (sesh recovery
+  new made it), then a new master password.`
+
 // runRecover is `sesh recover`: it opens the vault with its recovery key,
 // sets a new master password (the same re-encryption as a password change),
 // and replaces the recovery key, since the used one has been taken out and
 // typed in.
 func runRecover(app *App, args []string) error {
+	if len(args) > 0 && isHelp(args[0]) {
+		_, err := fmt.Fprintln(app.Stdout, recoverUsage)
+		return err
+	}
 	if len(args) > 0 {
 		return fmt.Errorf("sesh recover takes no arguments, got %q", strings.Join(args, " "))
 	}

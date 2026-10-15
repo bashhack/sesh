@@ -122,19 +122,33 @@ func ScanQRCodeFull() (TOTPInfo, error) {
 	return DecodeQRCodeFromImageFull(img)
 }
 
+// parseOTPAuth parses an otpauth://totp/ URI, in any case. The URI
+// holds the secret, or is whatever else a QR code held, so no error quotes
+// it, not even url.Parse's.
+func parseOTPAuth(otpauthURL string) (*url.URL, error) {
+	if !strings.HasPrefix(strings.ToLower(otpauthURL), "otpauth://") {
+		return nil, errors.New("not a valid otpauth URL")
+	}
+	// url.Parse's errors, even unwrapped, can repeat part of the URI.
+	parsedURL, err := url.Parse(otpauthURL)
+	if err != nil {
+		return nil, errors.New("failed to parse otpauth URL: it isn't a well-formed URL")
+	}
+	if !strings.EqualFold(parsedURL.Host, "totp") {
+		if strings.EqualFold(parsedURL.Host, "hotp") {
+			return nil, errors.New("unsupported OTP type HOTP (only TOTP is supported)")
+		}
+		return nil, errors.New("unsupported OTP type (only TOTP is supported)")
+	}
+	return parsedURL, nil
+}
+
 // ExtractSecretFromOTPAuthURL extracts just the secret from an otpauth
 // URL. Only otpauth://totp/ URIs are accepted.
 func ExtractSecretFromOTPAuthURL(otpauthURL string) (string, error) {
-	if !strings.HasPrefix(otpauthURL, "otpauth://") {
-		return "", fmt.Errorf("not a valid otpauth URL: %s", otpauthURL)
-	}
-
-	parsedURL, err := url.Parse(otpauthURL)
+	parsedURL, err := parseOTPAuth(otpauthURL)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse otpauth URL: %w", err)
-	}
-	if parsedURL.Host != "totp" {
-		return "", fmt.Errorf("unsupported OTP type %q (only TOTP is supported)", parsedURL.Host)
+		return "", err
 	}
 
 	query := parsedURL.Query()
@@ -161,16 +175,9 @@ type TOTPInfo struct {
 // Only otpauth://totp/ URIs are accepted; HOTP and other types are
 // rejected because sesh does not support counter-based OTP.
 func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
-	if !strings.HasPrefix(otpauthURL, "otpauth://") {
-		return TOTPInfo{}, fmt.Errorf("not a valid otpauth URL: %s", otpauthURL)
-	}
-
-	parsedURL, err := url.Parse(otpauthURL)
+	parsedURL, err := parseOTPAuth(otpauthURL)
 	if err != nil {
-		return TOTPInfo{}, fmt.Errorf("failed to parse otpauth URL: %w", err)
-	}
-	if parsedURL.Host != "totp" {
-		return TOTPInfo{}, fmt.Errorf("unsupported OTP type %q (only TOTP is supported)", parsedURL.Host)
+		return TOTPInfo{}, err
 	}
 
 	query := parsedURL.Query()
@@ -183,7 +190,7 @@ func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
 	if d := query.Get("digits"); d != "" {
 		n, err := strconv.Atoi(d)
 		if err != nil || n < 6 || n > 8 {
-			return TOTPInfo{}, fmt.Errorf("invalid digits value %q: must be 6, 7, or 8", d)
+			return TOTPInfo{}, errors.New("invalid digits value: must be 6, 7, or 8")
 		}
 		info.Digits = n
 	}
@@ -193,7 +200,7 @@ func ExtractTOTPFullInfo(otpauthURL string) (TOTPInfo, error) {
 		// params.Period * time.Second safely inside int64 nanoseconds.
 		// Hardcoded here to avoid a circular import from the qrcode package.
 		if err != nil || n <= 0 || n > 86400 {
-			return TOTPInfo{}, fmt.Errorf("invalid period value %q: must be a positive integer ≤ 86400", p)
+			return TOTPInfo{}, errors.New("invalid period value: must be a positive integer ≤ 86400")
 		}
 		info.Period = n
 	}

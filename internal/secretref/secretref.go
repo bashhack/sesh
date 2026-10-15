@@ -34,7 +34,7 @@ func (r Ref) String() string {
 	return Prefix + r.Key.String() + "#" + r.Field
 }
 
-// Parse reads a reference: sesh://, an entry ID as --list shows it, and
+// Parse reads a reference: sesh://, an entry ID as sesh list shows it, and
 // optionally # and a field name.
 func Parse(s string) (Ref, error) {
 	rest, ok := strings.CutPrefix(s, Prefix)

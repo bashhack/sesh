@@ -181,6 +181,29 @@ func TestExtractTOTPFullInfo(t *testing.T) {
 	}
 }
 
+// A link's scheme and type are read in any case; no error quotes the link, which holds the secret.
+func TestExtractTOTPFullInfo_ErrorsDontQuoteTheLink(t *testing.T) {
+	if info, err := ExtractTOTPFullInfo("OTPAUTH://TOTP/Ex:bob?secret=JBSWY3DPEHPK3PXP&issuer=Ex"); err != nil || info.Secret != "JBSWY3DPEHPK3PXP" || info.Account != "bob" {
+		t.Errorf("upper case: %+v, %v", info, err)
+	}
+	for _, uri := range []string{
+		"otpauth://totp/Ex%zz:bob?secret=SECRETKEYXYZ&issuer=Ex",
+		"WIFI:T:WPA;S:net;P:SECRETKEYXYZ;;",
+		"otpauth://SECRETKEYXYZ",
+		"otpauth://totp:SECRETKEYXYZ/Ex:bob",
+		"otpauth://totp/Ex:bob?secret=JBSWY3DPEHPK3PXP&digits=SECRETKEYXYZ",
+		"otpauth://totp/Ex:bob?secret=JBSWY3DPEHPK3PXP&period=SECRETKEYXYZ",
+	} {
+		_, err := ExtractTOTPFullInfo(uri)
+		if err == nil || strings.Contains(err.Error(), "SECRETKEYXYZ") {
+			t.Errorf("%s: %v", uri, err)
+		}
+		if _, err := ExtractSecretFromOTPAuthURL(uri); err != nil && strings.Contains(err.Error(), "SECRETKEYXYZ") {
+			t.Errorf("%s, the secret alone: %v", uri, err)
+		}
+	}
+}
+
 func TestExtractSecretFromOTPAuthURL(t *testing.T) {
 	tests := map[string]struct {
 		url        string

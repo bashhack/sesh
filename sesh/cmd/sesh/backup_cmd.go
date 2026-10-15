@@ -77,7 +77,7 @@ func runBackup(app *App, args []string) error {
 		return err
 	}
 	vaultPath := cfg.DBPath.Value
-	if err := requireVault(vaultPath, "there's no vault yet: create it first, by running any sesh command or sesh init"); err != nil {
+	if err := requireVault(vaultPath, "there's no vault yet: sesh add creates it with your first entry (sesh init first chooses where it lives)"); err != nil {
 		return err
 	}
 	var b backup.Info

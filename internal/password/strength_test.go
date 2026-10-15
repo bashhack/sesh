@@ -51,10 +51,14 @@ func TestGeneratedPasswordsArentWeak(t *testing.T) {
 // pasted, must still be rated at once.
 func TestIsWeak_LongPasswordsAreQuick(t *testing.T) {
 	opts := DefaultGenerateOptions()
-	opts.Length = 2048
-	pw, err := GeneratePassword(opts)
-	if err != nil {
-		t.Fatal(err)
+	opts.Length = MaxGenerateLength
+	var pw []byte
+	for len(pw) < 2048 {
+		half, err := GeneratePassword(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pw = append(pw, half...)
 	}
 	done := make(chan bool, 1)
 	go func() { done <- IsWeak(pw) }()

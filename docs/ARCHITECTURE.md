@@ -18,14 +18,13 @@ This document describes the system architecture for sesh, a command-line credent
 
 The sesh architecture is based on four core design principles:
 
-### 1. Plugin-Based Extensibility
+### 1. One Vault, One Command Line
 
-Authentication providers are pluggable. The `ServiceProvider` interface defines a contract that all providers must fulfill. Providers are instantiated and registered with a central Registry at startup; only the selected provider performs work at runtime.
+Every kind of secret (passwords, API keys, notes, TOTP keys) lives in one encrypted vault, and every command works on all of them. Commands are verbs: `sesh list`, `sesh copy`, `sesh add`. A command names an entry by a few words, matched as the terminal app's search matches them, or by its ID. AWS sign-in is the one integration with a flow of its own (`sesh aws`), kept behind a small provider interface.
 
-- New providers integrate without core system modifications
-- Each provider can evolve independently
-- Users only interact with providers they need
-- Testing stays focused and isolated per provider
+- Users learn one way to name an entry, the same in the app and on the command line
+- A kind of entry is a filter (`sesh list notes`), not a separate mode
+- Each command is one function, `runX(app, args)`, with its flags, help and completion beside it
 
 ### 2. Component Isolation
 
@@ -33,7 +32,7 @@ Each component accesses only what it needs — nothing more. Secrets flow throug
 
 - Secrets are passed via stdin pipes, never as command arguments
 - Subshell init files are written to temp files and cleaned up on exit
-- Each provider manages its own secret storage namespace
+- Each entry's secret is encrypted bound to its own name, so secrets can't be swapped between entries
 - Secrets spend minimal time in memory
 
 ### 3. Terminal-Native Workflow
@@ -57,46 +56,44 @@ External dependencies are abstracted for testability. The vault, the AWS CLI, an
 The architecture follows a strict layering model where dependencies flow downward:
 
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   CLI Layer     │────▶│   Core Layer     │────▶│ Provider Layer  │
-│ sesh/cmd/sesh/  │     │ internal/        │     │ internal/       │
-│                 │     │                  │     │   provider/     │
-│ • Flag parsing  │     │ • Registry       │     │ • AWS Provider  │
-│ • User I/O      │     │ • Setup Service  │     │ • TOTP Provider │
-│ • Subshell mgmt │     │                  │     │ • Future...     │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-         │                       │                         │
-         └───────────────────────┴─────────────────────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │   Infrastructure Layer  │
-                    │      internal/          │
-                    │                         │
-                    │ • Vault (SQLite,        │
-                    │   encrypted)            │
-                    │ • TOTP generation       │
-                    │ • Secure memory         │
-                    │ • Clipboard             │
-                    │ • QR code scanning      │
-                    │ • AWS CLI integration   │
-                    └─────────────────────────┘
+┌──────────────────────┐     ┌─────────────────────────────┐
+│   Command Layer      │────▶│   Core Layer                │
+│   sesh/cmd/sesh/     │     │   internal/                 │
+│                      │     │                             │
+│ • Commands (verbs)   │     │ • password: entries, search,│
+│ • Words → one entry  │     │   import and export         │
+│ • Flags, help,       │     │ • tui: sesh ui              │
+│   completion         │     │ • provider/aws, setup:      │
+│ • Subshell           │     │   AWS sign-in               │
+└──────────────────────┘     └─────────────────────────────┘
+           │                                │
+           └────────────────┬───────────────┘
+                            │
+               ┌────────────▼────────────┐
+               │   Infrastructure Layer  │
+               │      internal/          │
+               │                         │
+               │ • Vault (SQLite,        │
+               │   encrypted), agent     │
+               │ • TOTP generation       │
+               │ • Secure memory         │
+               │ • Clipboard             │
+               │ • QR code scanning      │
+               │ • AWS CLI integration   │
+               └─────────────────────────┘
 ```
 
 ### Layer Responsibilities
 
-**CLI Layer**: User interaction handling
-- Separates business logic from presentation
-- Enables workflow-focused testing
+**Command Layer**: what the user types
+- One function per command, dispatched from the first word
+- Turns words into one entry (`resolve.go`), asking which at a terminal when several match
+- Keeps the vault's meaning out of flag parsing
 
-**Core Layer**: Provider orchestration
-- Isolates provider-specific logic
-- Ensures consistent provider behavior
-- Shared infrastructure (the vault, TOTP, secure memory) available to all providers
-
-**Provider Layer**: Authentication modules
-- Contains provider dependencies
-- Implements provider-specific strategies
-- Enables independent development
+**Core Layer**: what sesh does with entries
+- The password manager core: storing, reading, ranked search, import and export
+- The terminal app
+- AWS sign-in: exchanging an MFA code for temporary credentials
 
 **Infrastructure Layer**: Shared utilities
 - Eliminates code duplication
@@ -105,69 +102,42 @@ The architecture follows a strict layering model where dependencies flow downwar
 
 ## Component Deep Dive
 
-### CLI Layer
+### Command Layer
 
 **Design Decisions:**
 
 1. **Separation of Concerns**:
-   - `main.go` extracts the service name, delegates flag parsing, and dispatches to app methods
-   - `app.go` manages application lifecycle and dependencies
+   - `main.go` takes the setting flags (`--db-path`), then runs the command the first word names, from its `commands` table; plain `sesh` prints the overview
+   - Each command parses its own flags, wherever they are among its words (`parseAnywhere`), and opens the vault itself, so a mistyped command never unlocks or creates one
+   - `resolve.go` turns words into an entry: an exact ID, or the search's matches, with a numbered question at a terminal when there are several
    - `app_subshell.go` isolates subshell complexity
 
 2. **Dependency Injection**:
    ```go
-   func NewDefaultApp(versionInfo VersionInfo, store vault.Store, clipboardTimeout time.Duration) *App
+   func NewDefaultApp(versionInfo VersionInfo, settings AppSettings) *App
    ```
-   The constructor accepts a `vault.Store` (the vault) and wires all other dependencies internally. `main.go` resolves settings through `internal/config` (flag > env > `~/.config/sesh/config.toml` > default) and opens the vault via `buildProvider(cfg)`. Tests can substitute any dependency.
+   The app holds the streams, the clipboard, and the settings commands use; it doesn't hold the vault. A command opens the vault with the settings resolved through `internal/config` (flag > env > `~/.config/sesh/config.toml` > default). Tests substitute the streams, the clipboard, and the terminal check.
 
-3. **Provider Registration**:
-   ```go
-   registry := provider.NewRegistry()
-   registry.RegisterProvider(awsProvider.NewProvider(awsSvc, kc, totpSvc))
-   registry.RegisterProvider(totpProvider.NewProvider(kc, totpSvc))
-   registry.RegisterProvider(passwordProvider.NewProvider(kc))
-   ```
-   Centralized registration in `NewDefaultApp` makes provider discovery explicit and debuggable.
+3. **Words, not IDs**: every command that takes an entry shares one rule. The words are matched as `sesh ui`'s search matches them (name, username, and URL host, anywhere in them; a kind word such as `totp` narrows). One match is used; several are asked about at a terminal, and listed by ID otherwise. A full ID, spaces and all, matches only that entry. Commands that act on several entries (`sesh trash`, `sesh folder move`, `sesh tag add`) take several IDs, or words naming one.
 
-### Provider Interface Design
+### The AWS Provider
 
-The `ServiceProvider` interface provides the extensibility mechanism:
+AWS sign-in is the one flow with steps of its own: an MFA code exchanged with AWS STS for temporary credentials, opened in a subshell. `sesh aws` builds the provider, parses its flags, then hands it the vault:
 
 ```go
 type ServiceProvider interface {
-    // Identity - Who are you?
     Name() string
-    Description() string
-    
-    // Configuration - What do you need?
     SetupFlags(fs FlagSet) error
-    GetSetupHandler() interface{}
-    
-    // Operations - What can you do?
     GetCredentials() (Credentials, error)
     GetClipboardValue() (Credentials, error)
-    ListEntries() ([]ProviderEntry, error)
-    DeleteEntries(ids []string, confirm ConfirmDelete) (int, error)
-    
-    // Validation - Are we ready?
     ValidateRequest() error
-    
-    // Help - How do you work?
     GetFlagInfo() []FlagInfo
 }
 ```
 
-**Interface Design Rationale**
+1. **Lifecycle**: setup flags → validate the request → get credentials (or, with `--clip`, only the code).
 
-1. **Minimal Surface Area**: Each method has a single, defined purpose.
-
-2. **Lifecycle Management**: Credential retrieval follows a defined flow:
-   - Setup flags → Validate request → Get credentials (or clipboard value)
-   - List and delete operations skip validation and call providers directly
-
-3. **Output Mode Abstraction**: Separate methods for `GetCredentials()` and `GetClipboardValue()` eliminate conditional logic within providers.
-
-4. **Self-Documenting**: `GetFlagInfo()` makes providers introspectable, enabling dynamic help generation.
+2. **Output Mode Abstraction**: Separate methods for `GetCredentials()` and `GetClipboardValue()` keep clipboard mode from ever calling STS, which would use up the one-time code.
 
 **Optional Interface Pattern**
 
@@ -207,7 +177,7 @@ Every entry lives in one encrypted vault, a SQLite file:
 
 **Encrypted export.** The password manager's `ExportEncrypted`/`ImportEncrypted` use the same primitives (Argon2id + AES-256-GCM) but with an independent per-export salt. The envelope is self-contained — the salt and parameters are embedded alongside the ciphertext — so encrypted exports are portable across machines and master passwords.
 
-**Entries.** Every provider stores through `vault.Store` (`internal/vault`). An entry is keyed by its kind (`password`, `api_key`, `totp`, `secure_note`), service name, and an optional username, unique together; its text form, `kind/service[/username]`, is the ID `--list` shows, `--delete` takes, and the audit log records. Non-secret options are its settings: a TOTP entry's code settings (algorithm, digits, period, issuer), and for AWS the MFA device. `--service totp` and the password manager share the TOTP entries (`--profile` is the username); an AWS profile's MFA secret is the TOTP entry `aws` with the profile as username.
+**Entries.** Everything stores through `vault.Store` (`internal/vault`). An entry is keyed by its kind (`password`, `api_key`, `totp`, `secure_note`), name, and an optional username, unique together; its text form, `kind/name[/username]`, is the ID `sesh list` shows, every command that names an entry takes, and the audit log records. Non-secret options are its settings: a TOTP entry's code settings (algorithm, digits, period, issuer), and for AWS the MFA device. An AWS profile's MFA secret is the TOTP entry `aws` with the profile as username, so `sesh list totp` shows it.
 
 **SQLite Data Model**
 
@@ -258,7 +228,7 @@ currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secret)
 // Non-standard generation (respects stored algorithm, digits, period)
 currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
 ```
-Generates both current and next codes to handle the transition between TOTP windows. When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored in the entry's settings. Providers read these params before generating codes, falling back to defaults (SHA1, 6 digits, 30 seconds) when no params are stored.
+Generates both current and next codes to handle the transition between TOTP windows. When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored in the entry's settings. sesh reads these params before generating codes, falling back to defaults (SHA1, 6 digits, 30 seconds) when no params are stored.
 
 #### Memory Management
 
@@ -283,40 +253,9 @@ Go's garbage collector prevents true secure erasure, but we reduce the exposure 
 - Provides clear entry/exit points for audit logging
 - Visual indicators reduce operational security errors
 
-### Setup System
+### AWS Setup
 
-**Design Principles:**
-
-1. **Progressive Disclosure**: QR scanning with manual entry fallback
-2. **Immediate Validation**: Verify secrets before storing
-3. **Test Before Trust**: Generate test codes for verification
-
-```go
-type SetupHandler interface {
-    ServiceName() string
-    Setup(filing vault.Filing) error // filing: where --folder and --tag say to file the entry
-}
-```
-
-**Handler Responsibilities**:
-- Service-specific secret formats
-- Validation rules
-- Test code generation
-- User guidance
-
-**The Service Registry Pattern**:
-```go
-type SetupService interface {
-    RegisterHandler(handler SetupHandler)
-    SetupService(serviceName string, filing vault.Filing) error
-    GetAvailableServices() []string
-}
-```
-
-This gives you:
-- Handler discovery at runtime
-- Consistent setup experience across providers
-- Easy addition of new setup workflows
+`sesh aws setup` (`internal/setup`) stores a profile's MFA key: read from a QR code on screen, with typed entry as the fallback. It checks the key, finds the profile's MFA device through the AWS CLI, shows codes to finish enrolling with, and files the entry where `--folder` and `--tag` say, or asks. A TOTP entry for anything else is added with `sesh add totp`, which takes the key typed, an `otpauth://` link, or a QR code (`--qr`).
 
 ## Data Flow Architecture
 
@@ -324,7 +263,7 @@ AWS and TOTP follow different flows because AWS requires a network round-trip to
 
 ### AWS Authentication Flow
 
-The mode decision happens in main.go *before* credential generation. Subshell and clipboard modes follow different code paths:
+The mode decision happens in `sesh aws` *before* credential generation. Subshell and clipboard modes follow different code paths:
 
 ```
 User ──► CLI ──► ValidateRequest
@@ -334,7 +273,7 @@ User ──► CLI ──► ValidateRequest
                       │
                 ┌─────┴──────┐
                 ▼            ▼
-         -clip mode     default mode
+          --clip         default
                 │            │
                 ▼            ▼
         GetClipboardValue  GetCredentials
@@ -362,40 +301,27 @@ User ──► CLI ──► ValidateRequest
 
 ### TOTP Data Flow
 
-TOTP is simpler — no network calls, no subshell. The `-clip` and default paths share the same generation logic:
+TOTP is simpler: no network calls, no subshell. `sesh code`, `sesh copy` and `sesh get` share the same steps:
 
 ```
-User ──► CLI ──► ValidateRequest
-                      │
-                      └── Vault: look up the entry
-                      │
-                ┌─────┴──────┐
-                ▼            ▼
-         -clip mode     default mode
-                │            │
-                ▼            ▼
-        GetClipboardValue  GetCredentials
-                │            │
-         (both call generateTOTP internally)
-                │
-                ├── Vault (get TOTP secret)
-                ├── Defensive copy, zero original
-                ├── TOTP Engine (RFC 6238)
-                │   └── Generate current + next codes
-                ├── Calculate seconds remaining in window
-                ▼
-         Return credentials
-                │
-         -clip: copy current code to clipboard via CopyWithAutoClear
-                (auto-clears after 30 seconds if clipboard unchanged)
-         default: print codes, suggest using -clip
+User ──► sesh code github ──► words → one TOTP entry (asks which, when several)
+                                     │
+                                     ├── Vault: its code settings
+                                     ├── Vault: its key (recorded in the audit log)
+                                     ├── TOTP Engine (RFC 6238)
+                                     │   └── current + next codes
+                                     ├── seconds left in the window
+                                     ▼
+                     code: print it, the time left, and near the end the next
+                     copy: to the clipboard, cleared after clipboard_timeout
+                     get:  print it, for a pipe
 ```
 
 **TOTP implementation details:**
 
 1. **Stateless**: Only needs the secret and current timestamp — no network, no session state
-2. **Dual codes**: Generates both current and next 30-second window codes
-3. **Defensive memory**: Secret bytes are copied, original zeroed immediately, copy zeroed on return
+2. **Dual codes**: Generates both current and next window codes
+3. **Defensive memory**: the key is zeroed once the codes are made
 
 ## Security Architecture
 
@@ -453,39 +379,30 @@ Each boundary represents:
 
 ## Extensibility Model
 
-### The Provider Contract
+### Adding a Command
 
-Adding a new provider looks like this:
+A command is a function over the app and its arguments, with its help and flags beside it:
 
 ```go
-// 1. Define your provider
-type YourProvider struct {
-    store vault.Store
-    // your fields
+// runX is sesh x: what it does.
+func runX(app *App, args []string) error {
+    fs := flag.NewFlagSet("x", flag.ContinueOnError)
+    // its flags, through an addXFlags(fs) that completion also uses
+    words, err := parseAnywhere(fs, args)
+    // ...
+    store, err := openFilingStore()             // the vault, only once the arguments are right
+    k, err := resolveEntry(app, store, words, "") // words → one entry
+    // ...
 }
-
-// 2. Implement ServiceProvider
-func (p *YourProvider) GetCredentials() (Credentials, error) {
-    // Provider-specific authentication logic
-}
-
-// 3. Register in NewDefaultApp (pass whatever dependencies your provider needs)
-registry := provider.NewRegistry()
-registry.RegisterProvider(yourprovider.NewProvider(kc))
 ```
 
-Why this works:
-- Clear contract (ServiceProvider interface)
-- Dependencies are injected, not discovered
-- Registration is explicit and centralized
-- No global state for provider management
+It's listed in `subcommands` (the overview and completion read that), run from `commands`, and documented in `usage` and the usage guide in the same change.
 
 ### Capability Evolution
 
-The optional interface pattern is already in use — `SubshellDecider` and `SubshellProvider` are opt-in capabilities that providers implement only if needed:
+The optional interface pattern is already in use: `SubshellDecider` and `SubshellProvider` are opt-in capabilities that a provider implements only if needed:
 
 ```go
-// Exists today: opt-in subshell support
 type SubshellDecider interface {
     ShouldUseSubshell() bool
 }
@@ -493,27 +410,6 @@ type SubshellProvider interface {
     NewSubshellConfig(creds *Credentials) interface{}
 }
 ```
-
-The pattern enables future capabilities without breaking existing providers:
-
-```go
-// Under consideration: audit logging for security-sensitive environments
-type AuditableProvider interface {
-    GetAuditEvents() []AuditEvent
-}
-
-// Under consideration: hardware security key support
-type HardwareKeyProvider interface {
-    RequiresHardwareKey() bool
-    WaitForKeyTouch() error
-}
-```
-
-The approach means:
-- Existing providers keep working unchanged
-- New capabilities are opt-in via interface composition
-- Type assertions discover capabilities at runtime
-- No versioning or migration burden
 
 ## Error Handling
 
@@ -539,7 +435,7 @@ return fmt.Errorf("failed to get AWS credentials for profile %s: %w", profile, e
 if err != nil {
     fmt.Fprintf(app.Stderr, "❌ %v\n", err)
     // Provider errors already include actionable hints, e.g.:
-    // "no AWS entry found for profile 'prod'. Run 'sesh -service aws -setup' first"
+    // "no AWS entry found for profile (prod). Run 'sesh aws setup' first"
 }
 ```
 
@@ -547,7 +443,7 @@ if err != nil {
 
 - Cryptic: `error: -25300`  
 - Improved: `entry not found: totp/aws/prod`  
-- Optimal: `No AWS credentials found for profile 'prod'. Run: sesh -service aws -setup`
+- Optimal: `no AWS entry found for profile (prod). Run 'sesh aws setup' first`
 
 Errors become progressively more actionable as they flow up through layers.
 
@@ -585,10 +481,10 @@ The pattern uses the test binary itself as a mock process, eliminating:
 
 sesh is a CLI tool — every invocation should feel instant. The design avoids unnecessary work:
 
-- **Selective execution**: All providers are registered at startup, but only the selected provider's `SetupFlags` → `ValidateRequest` → `GetCredentials` chain runs. No eager initialization.
+- **Selective execution**: only the command the first word names runs, and it opens the vault only once its arguments are right. Plain `sesh`, `--help` and completion never unlock it.
 - **No framework overhead**: Go's standard `flag` package for parsing, no logging framework in the hot path.
 
-The dominant cost in any sesh invocation is unlocking the vault (deriving the key from the master password, unless the agent already holds it) and, for the AWS provider, the network round-trip to AWS STS.
+The dominant cost in any sesh invocation is unlocking the vault (deriving the key from the master password, unless the agent already holds it) and, for `sesh aws`, the network round-trip to AWS STS.
 
 ## Implementation Details
 
@@ -596,17 +492,17 @@ The dominant cost in any sesh invocation is unlocking the vault (deriving the ke
 
 ```
 sesh/
-├── sesh/cmd/sesh/         # CLI layer
+├── sesh/cmd/sesh/         # Command layer: one file per command or group
 ├── internal/              # Core implementation
-│   ├── provider/          # Plugin system
-│   │   ├── interfaces.go  # Provider contract
-│   │   ├── registry.go    # Provider discovery
-│   │   ├── aws/           # AWS provider
-│   │   ├── totp/          # TOTP provider
-│   │   └── password/      # Password manager provider
+│   ├── password/          # Password manager core (store, search, import, export)
+│   ├── tui/               # sesh ui
+│   ├── provider/          # Flags shared by commands; the AWS provider
+│   │   └── aws/
+│   ├── setup/             # sesh aws setup
 │   ├── database/          # SQLite store, encryption, migrations
-│   ├── password/          # Password manager core (CRUD, search, filter)
+│   ├── agent/             # The background agent that holds the key
 │   ├── vault/             # Entries and the Store interface
+│   ├── importer/          # Other apps' exports
 │   ├── secure/            # Memory security
 │   └── */                 # Focused packages
 └── docs/                  # Documentation
@@ -616,29 +512,28 @@ sesh/
 
 **Security Engineers:**
 - Defined trust boundaries
-- Explicit secret flow paths (vault → provider → subshell/clipboard) — no implicit or hidden data paths
+- Explicit secret flow paths (vault → command → output, clipboard, or subshell) — no implicit or hidden data paths
 - Layered security implementation
-- Transparent security model (no audit logging yet — see Capability Evolution)
+- An audit log of every secret read, change, and delete (`sesh audit`)
 
 **Developers:**
-- Modular provider development
+- One function per command
 - Isolated testing capabilities
 - Established patterns
 - Explicit interface contracts
 
 **Users:**
-- Consistent cross-provider experience
+- One way to name an entry, in the app and on the command line
 - Predictable performance
 - Default security configurations
-- Extensibility support
 
 ## Summary
 
 The architecture provides:
 
-- **Extensibility** through the provider interface system
+- **One model** for every kind of secret, and one way to name an entry
 - **Security** via layered defense mechanisms
 - **Simplicity** through clear separation of concerns
 - **Performance** via efficient design patterns
 
-The architecture scales linearly with provider count, supports addition of new authentication methods without breaking changes, and maintains security invariants as system complexity grows.
+New commands add to the command layer without touching the vault, and the vault's security invariants hold for every one of them.

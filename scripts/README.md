@@ -25,7 +25,7 @@ go run mock-totp-service.go Datadog ops@company.com
 - Shows the secret key for manual entry
 - Provides setup/test commands for `sesh`
 
-**When to use**: When testing `sesh --service totp --setup` flow without setting up a real TOTP service.
+**When to use**: When testing `sesh add totp <name> --qr` flow without setting up a real TOTP service.
 
 ### 🌐 `mock-aws-cli.go`
 **Purpose**: Simulates the AWS CLI for testing AWS MFA setup without real AWS credentials.
@@ -39,7 +39,7 @@ go build -o mock-bin/aws mock-aws-cli.go
 export PATH="$(pwd)/mock-bin:$PATH"
 
 # Now sesh will use the mock AWS CLI
-sesh --service aws --setup
+sesh aws setup
 ```
 
 **What it does**:
@@ -78,13 +78,13 @@ sesh --service aws --setup
 export PATH="$(pwd)/mock-bin:$PATH"
 
 # 2. Run AWS setup
-sesh --service aws --setup
+sesh aws setup
 
 # 3. When prompted for QR code, in another terminal:
 go run mock-totp-service.go AWS
 
 # 4. Test credential generation
-sesh --service aws
+sesh aws
 ```
 
 ### Testing TOTP Setup
@@ -93,23 +93,23 @@ sesh --service aws
 go run mock-totp-service.go GitHub
 
 # 2. In another terminal, setup TOTP
-sesh --service totp --setup
+sesh add totp <name> --qr
 # Enter "GitHub" as service name
 # Choose QR scan or manual entry
 
 # 3. Test TOTP generation
-sesh --service totp --service-name GitHub
+sesh code GitHub
 ```
 
 ### Testing Error Scenarios
 ```bash
 # Simulate AWS authentication failure
 export MOCK_AWS_FAIL=true
-sesh --service aws
+sesh aws
 
 # Simulate no MFA devices
 export MOCK_AWS_NO_MFA=true
-sesh --service aws --setup
+sesh aws setup
 
 # Reset to normal
 unset MOCK_AWS_FAIL MOCK_AWS_NO_MFA

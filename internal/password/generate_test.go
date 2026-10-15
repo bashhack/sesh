@@ -47,6 +47,14 @@ func TestGeneratePassword(t *testing.T) {
 			opts:    GenerateOptions{Length: 16},
 			wantErr: true,
 		},
+		"longest": {
+			opts:    GenerateOptions{Length: MaxGenerateLength, Lowercase: true},
+			wantLen: MaxGenerateLength,
+		},
+		"too long": {
+			opts:    GenerateOptions{Length: MaxGenerateLength + 1, Lowercase: true},
+			wantErr: true,
+		},
 	}
 
 	for name, tc := range tests {

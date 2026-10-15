@@ -35,23 +35,35 @@ func DefaultGenerateOptions() GenerateOptions {
 	}
 }
 
+// MaxGenerateLength is the longest password GeneratePassword makes.
+const MaxGenerateLength = 1024
+
+// Check reports why GeneratePassword would refuse these options, if it
+// would.
+func (o GenerateOptions) Check() error {
+	switch {
+	case o.Length < 1:
+		return fmt.Errorf("password length must be at least 1")
+	case o.Length > MaxGenerateLength:
+		return fmt.Errorf("password length %d is more than the %d sesh makes", o.Length, MaxGenerateLength)
+	case buildCharset(o) == "":
+		return fmt.Errorf("at least one character set must be enabled")
+	}
+	if required := requiredChars(o); o.Length < len(required) {
+		return fmt.Errorf("password length %d is too short for %d required character sets", o.Length, len(required))
+	}
+	return nil
+}
+
 // GeneratePassword creates a cryptographically random password with the given
 // options. The returned slice holds plaintext secret material; the caller is
 // responsible for zeroing it (e.g. secure.SecureZeroBytes) once done.
 func GeneratePassword(opts GenerateOptions) ([]byte, error) {
-	if opts.Length < 1 {
-		return nil, fmt.Errorf("password length must be at least 1")
+	if err := opts.Check(); err != nil {
+		return nil, err
 	}
-
 	charset := buildCharset(opts)
-	if charset == "" {
-		return nil, fmt.Errorf("at least one character set must be enabled")
-	}
-
 	required := requiredChars(opts)
-	if opts.Length < len(required) {
-		return nil, fmt.Errorf("password length %d is too short for %d required character sets", opts.Length, len(required))
-	}
 
 	pw := make([]byte, opts.Length)
 

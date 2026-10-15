@@ -331,7 +331,7 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 		otp = ""
 	}
 	if oldTOTP && otp == "" {
-		base.Changes = append(base.Changes, "its TOTP is in an older layout sesh doesn't read: add it with sesh --service totp --setup")
+		base.Changes = append(base.Changes, "its TOTP is in an older layout sesh doesn't read: add it with sesh add totp <name>")
 	}
 	if hotp {
 		base.Changes = append(base.Changes, "its counter-based (HOTP) key isn't kept: sesh doesn't make counter-based codes")

@@ -20,27 +20,32 @@ type FilingFlags struct {
 	tags   tagsFlag
 }
 
-// Register adds --folder and --tag to fs. narrows names what they narrow,
-// such as "--list".
-func (f *FilingFlags) Register(fs FlagSet, narrows string) {
-	fs.Var(&f.folder, "folder", folderUsage(narrows))
-	fs.Var(&f.tags, "tag", tagUsage(narrows))
+// Register adds --folder and --tag to fs, filing the entry a command
+// stores.
+func (f *FilingFlags) Register(fs FlagSet) {
+	fs.Var(&f.folder, "folder", fileUsage[0])
+	fs.Var(&f.tags, "tag", fileUsage[1])
+}
+
+// RegisterFilter adds --folder and --tag to fs, narrowing the entries a
+// command reads.
+func (f *FilingFlags) RegisterFilter(fs FlagSet) {
+	fs.Var(&f.folder, "folder", `Only the entries in this folder, such as work/aws, and the folders under it ("" for no folder)`)
+	fs.Var(&f.tags, "tag", "Only the entries with this tag; repeat it for more, which all must have")
 }
 
 // FlagInfo describes --folder and --tag, as Register does.
-func (f *FilingFlags) FlagInfo(narrows string) []FlagInfo {
+func (f *FilingFlags) FlagInfo() []FlagInfo {
 	return []FlagInfo{
-		{Name: "folder", Type: "string", Description: folderUsage(narrows)},
-		{Name: "tag", Type: "string", Description: tagUsage(narrows)},
+		{Name: "folder", Type: "string", Description: fileUsage[0]},
+		{Name: "tag", Type: "string", Description: fileUsage[1]},
 	}
 }
 
-func folderUsage(narrows string) string {
-	return `Folder, such as work/aws: to file an entry in as it's stored, or with ` + narrows + `, only the entries in it and the folders under it ("" for no folder)`
-}
-
-func tagUsage(narrows string) string {
-	return "Tag: to add to an entry as it's stored, or with " + narrows + ", only the entries with it; repeat for more"
+// fileUsage are --folder's and --tag's usage, filing an entry.
+var fileUsage = [2]string{
+	`The folder to file it in, such as work/aws ("" for none)`,
+	"A tag to give it; repeat it for more",
 }
 
 // Filing is what the flags say, for storing an entry.
@@ -51,17 +56,6 @@ func (f *FilingFlags) Filing() vault.Filing {
 // Filter is what the flags say, for listing entries.
 func (f *FilingFlags) Filter() vault.Filter {
 	return vault.Filter{Folder: f.folder.value, FolderSet: f.folder.given, Tags: f.tags}
-}
-
-// Filer is a provider whose --folder and --tag file the entries it stores
-// and narrow the ones it lists.
-type Filer interface {
-	// Filing is what --folder and --tag say.
-	Filing() vault.Filing
-	// UsesFiling reports whether the command, other than --setup or
-	// --list, uses --folder and --tag; when it doesn't, where says what
-	// they go with.
-	UsesFiling() (ok bool, where string)
 }
 
 // NoMatchHint says why f found nothing when its folder or a tag isn't on

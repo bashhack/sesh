@@ -26,7 +26,7 @@ sesh is NOT designed to protect against:
 - **Root/Admin Access**: System-level compromise bypasses all application-level protections
 - **Physical Access**: Direct hardware access can bypass software protections
 - **Memory Dump Attacks**: Go's immutable strings mean TOTP codes and some intermediate values persist in memory until GC. Byte slices are zeroed, but string copies from the TOTP library cannot be, nor can the copies of a typed password, or a new master password, that the strength check (zxcvbn) makes; those last as long as that `sesh` command runs.
-- **Clipboard Managers**: In `-clip` mode, the copied value is auto-cleared after 30 seconds (if unchanged). However, clipboard managers (Raycast, Alfred and Paste on macOS; Klipper, GPaste and CopyQ on Linux) may capture the value before it's cleared. Consider disabling clipboard history for sensitive workflows.
+- **Clipboard Managers**: When sesh copies a secret (`sesh copy`, Enter in `sesh ui`, `sesh aws --clip`), the copied value is auto-cleared after 30 seconds (if unchanged). However, clipboard managers (Raycast, Alfred and Paste on macOS; Klipper, GPaste and CopyQ on Linux) may capture the value before it's cleared. Consider disabling clipboard history for sensitive workflows.
 - **Terminal Recording**: Session recording tools (asciinema, iTerm2 logging, tmux capture) and shell history files can capture commands and output. Consider `export HISTFILE=/dev/null` in sensitive contexts.
 - **Child Process Visibility**: Once credentials are output (clipboard, stdout, or subshell environment variables), any child process spawned from the shell can access them. This is inherent to how Unix environments work.
 
@@ -76,16 +76,16 @@ sesh derives the master key from your master password via Argon2id, the same way
 - **Plain exports and screenshots of transfer codes** hold every secret unencrypted. sesh reminds you to delete them, and never writes them anywhere itself.
 
 **sesh ui.** It stays open, so it keeps less than a command would leave behind, and locks itself.
-- **What it holds:** while unlocked, the key of each TOTP entry it has drawn a code for, in its own memory, to draw the next code without asking the agent each time, and the notes of each entry it has shown. Those are wiped when it locks, when another command changes the vault, and when it ends. Making a code copies the key where Go can't wipe it, as with every command that makes one, so the app makes each code once a period rather than each time it draws. A password or other secret is read only to copy or reveal it: the bytes read are wiped after, though the text handed to the clipboard tool, as with `--clip`, and the text drawn on screen are copies Go can't wipe.
+- **What it holds:** while unlocked, the key of each TOTP entry it has drawn a code for, in its own memory, to draw the next code without asking the agent each time, and the notes of each entry it has shown. Those are wiped when it locks, when another command changes the vault, and when it ends. Making a code copies the key where Go can't wipe it, as with every command that makes one, so the app makes each code once a period rather than each time it draws. A password or other secret is read only to copy or reveal it: the bytes read are wiped after, though the text handed to the clipboard tool, as with `sesh copy`, and the text drawn on screen are copies Go can't wipe.
 - **What it shows:** names, usernames, folders, plain fields, TOTP codes, and the selected entry's notes (a secure note's text is its secret: selecting it shows it). Passwords and secret fields only when revealed with Tab, for 30 seconds or until another entry is selected, then wiped. Control characters in notes and secrets are drawn as symbols, so stored text can't send the terminal escape codes. All of it is drawn on the terminal's alternate screen, which the terminal drops on exit, so none of it stays in the scrollback. It needs a terminal on both its input and its output, so it never draws into a file or a pipe. Nothing is put in the window title. What other code writes to stderr while it draws is held and written after it ends.
 - **When it locks:** after the agent's idle timeout without a key pressed, and the agent's longest unlock after the app unlocked; and within a second when the agent locks or stops, or the vault's master password changes or the vault is restored. Locked, it shows nothing of the vault until the master password or a fingerprint unlocks it again; either is asked for and checked even when the agent is still unlocked. While keys are pressed it tells the agent the vault is in use, so the agent's idle timer starts again, as a read would; nothing is read for it.
 - **Forms** (editing and adding): a secret typed (a new password, a TOTP key, a secret field's value) goes into memory the app wipes when the form (or a field's form) is saved, cancelled, or the app locks. It's drawn as a dot for each character, unless you press Ctrl-R to see it; it's hidden again when you move to another input. The entry's current password or key, and a secret field it already has, aren't read into the form until Ctrl-R asks for them (or, for a field, it's renamed), a read the audit log records. A save is one change to the vault: a part refused (a tag or folder name it can't have, say) leaves the entry as it was. Notes and other text typed are held as ordinary text until then, as what's shown on screen is. Opening notes in your editor writes them to a file only you can read, in memory where the system has such a place, overwritten and removed after, as `sesh edit --editor` does; the editor may keep copies of its own, such as swap files. While the editor is open the app tells the agent it's in use, so it doesn't lock for being idle under you; it still locks at its maximum lifetime. A generated password is copied to the clipboard as it's saved, and cleared from it like any copy.
 - **Opening a URL** (Ctrl-O) hands only an `http` or `https` address to the system's opener (`open` on macOS, `xdg-open` on Linux), run directly, not through a shell; a stored `file://` or other scheme is refused.
-- **Changing the master password** (in settings and safety) asks for the current one and checks it, as `sesh --rekey` does, though the app is unlocked. The passwords typed are held as a form's secrets are, and wiped once the change is done; rating the new one's strength as it's typed makes copies Go can't wipe, as it does in the other forms. While the vault is re-encrypted the app reads nothing from it, and quitting waits for the change to finish. Then it opens the vault with the new password, unlocking the agent with the new key when the app uses the agent; `sesh --rekey` leaves the agent locked instead, as it ends.
+- **Changing the master password** (in settings and safety) asks for the current one and checks it, as `sesh passwd` does, though the app is unlocked. The passwords typed are held as a form's secrets are, and wiped once the change is done; rating the new one's strength as it's typed makes copies Go can't wipe, as it does in the other forms. While the vault is re-encrypted the app reads nothing from it, and quitting waits for the change to finish. Then it opens the vault with the new password, unlocking the agent with the new key when the app uses the agent; `sesh passwd` leaves the agent locked instead, as it ends.
 - **A recovery key made in the app** is made through the agent, so the vault key never leaves it, and saved only once its last group is typed back; quitting while it's saved waits for the save. It's drawn on the app's alternate screen, which the terminal drops on exit, so it doesn't stay in the scrollback as `sesh recovery new`'s does; the text drawn is a copy Go can't wipe, as the command's is.
 - **Touch ID unlock turned on in the app** is set up as `sesh touchid enable` sets it up: through the agent, so the vault key never leaves it. The locked screen offers a fingerprint while it's on for this vault, as read when the app locks and again after a fingerprint fails (which may turn it off); over SSH it's refused, as sesh refuses it.
 - **Restoring from a backup in the app** is `sesh restore`'s, in place: the vault as it is is backed up first, nothing is read from the vault while it's restored, and the app locks after, to be unlocked with the master password the backup had. Deleting backups asks first; deleted, they can't be brought back.
-- **Exporting from the app** writes the same encrypted export as `--action export --format encrypted`, through the same file handling (a private temporary file, renamed into place once whole; an existing file replaced only when asked), on a connection of its own, used only to read the entries (and record each read). The export password is held as a form's secrets are, and wiped once the export is written.
+- **Exporting from the app** writes the same encrypted export as `sesh export`, through the same file handling (a private temporary file, renamed into place once whole; an existing file replaced only when asked), on a connection of its own, used only to read the entries (and record each read). The export password is held as a form's secrets are, and wiped once the export is written.
 - **Importing in the app** reads the files in memory, as `sesh import` does, and wipes what it read when the import is done, cancelled, read again (its preview changing between leaving and replacing entries you have), the preview is closed by another command's change, or the app locks or quits; an import being written finishes first, so nothing half-wiped is stored. An export's password is held as a form's secrets are, until then. Only `y` imports, not within a moment of the preview changing, and not after a preview that couldn't be read. Each time `o` plans, the details read to merge are recorded in the audit log, as `sesh import --on-conflict overwrite` records them.
 - **Lock now** (in sesh's actions, Ctrl-G) locks the app and sesh's agent, as `sesh agent lock` does; if the agent can't be reached to lock it, the locked screen says so.
 - **Actions that change the vault** (delete, restore an earlier secret, delete for good) ask first; only `y` confirms, not Enter, and not within a moment of the question appearing, so keys typed by habit can't confirm one. Each acts on the entry its panel names, whatever is selected by then, and a panel is closed when another command changes the vault under it.
@@ -119,7 +119,7 @@ A recovery key lets someone who forgot the master password set a new one. There'
 - **Using it.** `sesh recover` unwraps the vault key with the typed key, checks it against the vault's verify blob, and re-encrypts the vault under a new master password, as a password change does. The used key then stops working (the change removes its record), and a new one is offered at once.
 - **What changes.** The vault opens with the master password, an enrolled fingerprint on that Mac (Touch ID), **or** the recovery key together with the vault file. The paper key can't be guessed but can be found; keep it away from the computer.
 - **The record alone** reveals nothing: a public key and a wrap only the paper key opens.
-- **Removing it.** `sesh recovery remove` deletes the record, and the vault is written so that deleted rows leave nothing behind in the file (SQLite's `secure_delete`). A backup made while the key was set still holds a wrap of the same vault key, though, and sesh makes backups automatically (see Backups, below). If the paper key may have been seen, remove it, then change the master password (`sesh --rekey`), which gives the vault a new key that no old wrap opens, and delete the backups made before: `recovery remove`, `recovery new` (replacing a key) and `--rekey` each offer to, at a terminal.
+- **Removing it.** `sesh recovery remove` deletes the record, and the vault is written so that deleted rows leave nothing behind in the file (SQLite's `secure_delete`). A backup made while the key was set still holds a wrap of the same vault key, though, and sesh makes backups automatically (see Backups, below). If the paper key may have been seen, remove it, then change the master password (`sesh passwd`), which gives the vault a new key that no old wrap opens, and delete the backups made before: `recovery remove`, `recovery new` (replacing a key) and `sesh passwd` each offer to, at a terminal.
 - **Tampering.** A process running as the user could replace the public key in the vault's `recovery` record, so that the next password change wraps the vault key to its own key. The same is true of `touchid.key`. It's accepted for the same reason: code running as the user can already ask an unlocked agent to decrypt everything, or replace the sesh binary.
 
 ##### Sesh agent
@@ -140,7 +140,7 @@ Where the derived key is, by state:
 | Agent locked | Nowhere: zeroed in place. After an automatic lock the agent also exits; after `sesh agent lock` or SIGUSR1 it keeps running |
 | Agent stopped | Nowhere; the next command starts a fresh agent |
 
-What this changes: while the agent is unlocked, **any process running as your user can ask it to decrypt entries**, and `--list` / `--delete` no longer require the password. This is the same trade-off `ssh-agent` makes. The window is bounded:
+What this changes: while the agent is unlocked, **any process running as your user can ask it to decrypt entries**, and listing or deleting entries (`sesh list`, `sesh trash`) no longer asks for the password. This is the same trade-off `ssh-agent` makes. The window is bounded:
 
 - **Idle timeout** (default 10 minutes): the agent locks after this long without an unlock, encrypt, or decrypt, or `sesh ui` saying it's in use. Status checks don't count.
 - **Max lifetime** (default 8 hours): the agent locks this long after each unlock, however busy it is.
@@ -166,18 +166,18 @@ Not protected against: root (it can read the agent's memory), physical-memory at
 
 ### Encrypted Export
 
-Exports produced with `--format encrypted` are wrapped in a portable envelope that anyone with the password can decrypt on any machine:
+Encrypted exports (`sesh export`, its default) are wrapped in a portable envelope that anyone with the password can decrypt on any machine:
 
 - **Argon2id** key derivation with the configured master password settings (by default `t=3, m=256 MiB, p=4`); the file records them, so it opens anywhere whatever is configured there
 - **AES-256-GCM** encryption of the JSON payload using the derived key
 - **Random 32-byte salt** per export — the same password produces different ciphertext each time
 - **Envelope format** (JSON): `{version, algorithm, salt, params, ciphertext}` — salt and params are public, as in the vault's key record
 
-Unencrypted exports (`--format json`, `--format csv`) write secrets in plaintext and are intended for local scripting. Encrypted exports are the right choice for backups, transferring between machines, or storing in any medium the user doesn't fully trust. The same brute-force threat model applies as with the master password, so the export password has its rules: at least 8 characters, and an easy one is warned about and asked about. An export to a file is written to a private temporary file beside it, made once the password has been asked and renamed into place once the export is whole (removed if it's interrupted by Ctrl-C or an interrupt, quit, hang-up or termination signal, though not one that can't be caught), and an existing one is replaced only with `--force`. A device or pipe named instead (`/dev/stdout`, a shell's `>(…)`) is written to as it is. An encrypted export's JSON is built in memory before it's encrypted; the buffer it ends in is wiped however the export ends, though copies left behind as it grew aren't, nor the strings each secret passes through on its way into JSON or CSV.
+Plain exports (`sesh export --format json` or `--format csv`) write secrets in plaintext and are intended for local scripting. Encrypted exports are the right choice for backups, transferring between machines, or storing in any medium the user doesn't fully trust. The same brute-force threat model applies as with the master password, so the export password has its rules: at least 8 characters, and an easy one is warned about and asked about. An export to a file is written to a private temporary file beside it, made once the password has been asked and renamed into place once the export is whole (removed if it's interrupted by Ctrl-C or an interrupt, quit, hang-up or termination signal, though not one that can't be caught), and an existing one is replaced only with `--force`. A device or pipe named instead (`/dev/stdout`, a shell's `>(…)`) is written to as it is. An encrypted export's JSON is built in memory before it's encrypted; the buffer it ends in is wiped however the export ends, though copies left behind as it grew aren't, nor the strings each secret passes through on its way into JSON or CSV.
 
-### Changing the master password (`sesh --rekey`)
+### Changing the master password (`sesh passwd`)
 
-`sesh --rekey` re-encrypts every entry, in place, under the key a new master password gives, in one SQLite transaction. The cryptographic posture during and after the change:
+`sesh passwd` re-encrypts every entry, in place, under the key a new master password gives, in one SQLite transaction. The cryptographic posture during and after the change:
 
 - **No plaintext-on-disk window.** Unlike the export-then-import workaround, the change never writes a plaintext-equivalent file (an encrypted export still sits on disk encrypted only with the export password). All re-encryption happens in-process; only encrypted-at-rest databases ever touch the filesystem.
 - **Per-row salt regeneration.** Every entry gets a fresh per-row salt under the new key. Encrypted ciphertext changes for every row even when the plaintext is identical.
@@ -266,7 +266,7 @@ $ env | grep AWS
 (nothing)
 
 # sesh subshell - credentials isolated here
-$ sesh -service aws
+$ sesh aws
 🔐 Secure shell with aws credentials activated. Type 'sesh_help' for more information.
 (sesh:aws) $ env | grep AWS
 AWS_ACCESS_KEY_ID=ASIA...
@@ -288,24 +288,13 @@ $ env | grep AWS
 4. **Session Tracking**: Built-in commands to verify credential status
 5. **Minimal Persistence**: Subshell init files are written to temp files and cleaned up on exit
 
-## Plugin Architecture Security
+## One Vault, One Set of Commands
 
-The extensible design maintains security through:
+Every command reads and writes the one vault, through the same store, under its master password (or the agent's key). There are no separate stores per kind of entry, and no code loaded at run time.
 
-### Interface Boundaries
-```go
-type ServiceProvider interface {
-    // ... (security-relevant methods shown)
-    ValidateRequest() error                        // Early validation
-    GetCredentials() (Credentials, error)          // Type-safe credential generation
-    GetClipboardValue() (Credentials, error)       // Clipboard-optimized output
-}
-```
-
-### Provider Isolation
-- Every provider stores in the one vault, under its master password
-- TOTP entries are shared: `--service totp`, the password manager, and AWS (each profile's MFA secret) read the same ones
-- `--service totp` and `--service aws` list and delete only their own entries
+- A command names an entry by words or its ID, and acts on what it found. Commands that change or delete say which entry they're about to act on before they ask, so a word that matched something unexpected is seen first.
+- Reading a secret, its notes, or a secret field is recorded in the audit log, with what it was read for (copying, printing, a code).
+- `sesh aws` reads only its profile's MFA entry (the TOTP entry `aws`, with the profile as username), and asks AWS for the session through the AWS CLI.
 
 ## Privacy by Design
 
@@ -330,7 +319,7 @@ type ServiceProvider interface {
 sesh backs up the vault automatically: once a day by default, the first time a command unlocks it, keeping the newest 7 in a `backups` folder next to the vault (`backup.dir`, `backup.every_days`, `backup.keep`).
 
 - **What a backup is.** A consistent copy of the vault file (SQLite's `VACUUM INTO`). The secrets in it are encrypted with the vault key, as in the vault, so making one needs no password, and nothing is decrypted. The backup is as protected as the vault: names, usernames, folders, tags and the audit log are readable in it, as in the vault, and it's readable only by you (0600).
-- **It opens with the credentials it was made with.** That means the master password at the time, or the recovery key at the time, since the backup holds the recovery record from then. A later password change or a new recovery key doesn't reach old backups. If the old password or recovery key may have leaked, change it and delete the backups made before: `--rekey`, `recovery new` (replacing a key) and `recovery remove` each say how many there are and offer to delete them and make a fresh one. Without a terminal they only say so.
+- **It opens with the credentials it was made with.** That means the master password at the time, or the recovery key at the time, since the backup holds the recovery record from then. A later password change or a new recovery key doesn't reach old backups. If the old password or recovery key may have leaked, change it and delete the backups made before: `sesh passwd`, `recovery new` (replacing a key) and `recovery remove` each say how many there are and offer to delete them and make a fresh one. Without a terminal they only say so.
 - **A damaged vault isn't copied.** Each backup runs SQLite's integrity check first, so damage doesn't replace the good backups day by day.
 - **Restoring** (`sesh restore`) checks the backup without writing to it. A sound vault is saved as a backup, then replaced in place in one transaction, as a password change does, keeping its audit log; a command that unlocked the vault before is refused its next write if the key changed. A damaged vault is moved aside, never deleted, with its `-wal` and `-shm` files, and the backup's copy takes its place; no other sesh command should be running then. It doesn't ask for the current master password: the vault may be damaged, or its password forgotten, and anyone who can run it can already replace the file. The restored vault then asks for the password the backup was made with.
 - **Where they go matters.** A backups folder in a synced folder sends copies of the encrypted vault wherever that folder syncs: the same protection as syncing the vault itself.
@@ -371,7 +360,7 @@ sesh backs up the vault automatically: once a day by default, the first time a c
 
 1. **Protect Your macOS Account**: sesh's security depends on your account security
 2. **Use Unique Profiles**: Separate work/personal accounts with profiles
-3. **Regular Cleanup**: Periodically review stored entries with `-list`
+3. **Regular Cleanup**: Periodically review stored entries with `sesh list`
 4. **Install in a Protected Location**: Install sesh where other users can't replace it, not a shared writable location like `/tmp`: a replaced binary would see your master password and your secrets
 5. **Understand Mode Tradeoffs**: Subshell mode avoids clipboard exposure but places credentials in environment variables and temp init files. Clipboard mode avoids env var exposure but is visible to clipboard managers. Choose based on your threat model.
 

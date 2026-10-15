@@ -46,7 +46,7 @@ type Key struct {
 }
 
 // String is the key's text form, kind/service or kind/service/username:
-// the ID that --list shows and --delete takes, and what the audit log
+// the ID that sesh list shows and commands that name an entry take, and what the audit log
 // records.
 func (k Key) String() string {
 	s := string(k.Kind) + "/" + k.Service

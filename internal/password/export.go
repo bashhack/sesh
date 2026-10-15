@@ -1,6 +1,7 @@
 package password
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -371,6 +372,20 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 	}
 
 	return result, nil
+}
+
+// ReadPlainExport is the entries of one of sesh's plain exports, JSON or
+// CSV, importing nothing. Their secrets are in Go strings, which can't be
+// wiped.
+func ReadPlainExport(b []byte) ([]ExportEntry, error) {
+	if bytes.HasPrefix(b, []byte(strings.Join(csvHeader, ",")+"\n")) {
+		return readCSV(bytes.NewReader(b))
+	}
+	entries, err := readJSON(bytes.NewReader(b))
+	if err != nil {
+		return nil, fmt.Errorf("read the export: %w", err)
+	}
+	return entries, nil
 }
 
 func readJSON(r io.Reader) ([]ExportEntry, error) {

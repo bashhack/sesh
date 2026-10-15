@@ -273,7 +273,7 @@ func checkKeySettings(c *doctorChecks, have, want kdf.Params) {
 	weaker := have.Memory <= want.Memory && have.Time <= want.Time && (have.Memory < want.Memory || have.Time < want.Time)
 	if weaker {
 		c.row(markWarn, "Key settings", desc+": weaker than configured", "configured: "+describeKDF(want))
-		c.todo("Apply the configured settings by changing the master password (it can be the same one):", "sesh --rekey")
+		c.todo("Apply the configured settings by changing the master password (it can be the same one):", "sesh passwd")
 		return
 	}
 	if have.Memory != want.Memory || have.Time != want.Time {
@@ -446,7 +446,7 @@ func verifyVault(c *doctorChecks, store *database.Store, mat *database.UnlockMat
 		}
 		c.row(markFail, "File", "damaged; SQLite reports:", lines...)
 		if len(report.Problems) == 0 {
-			c.todo("Your entries all read, so save them now, then start a new vault and import them:", "sesh --service password --action export --format encrypted --file backup.enc")
+			c.todo("Your entries all read, so save them now, then start a new vault and import them:", "sesh export --file backup.enc")
 		} else {
 			c.todo("Restore the vault from a backup, such as an encrypted export.")
 		}
@@ -486,13 +486,13 @@ func verifyVault(c *doctorChecks, store *database.Store, mat *database.UnlockMat
 			switch len(named) {
 			case 0:
 			case 1:
-				c.todo(fmt.Sprintf("Restore %s from a backup (an encrypted export), or delete it:", named[0]), "sesh --service password --purge --delete "+ids[0])
+				c.todo(fmt.Sprintf("Restore %s from a backup (an encrypted export), or delete it:", named[0]), "sesh trash --purge --force "+ids[0])
 			default:
 				what := "Restore these entries from a backup (an encrypted export), or delete them:"
 				if unnamed {
 					what = "Restore the entries named above from a backup (an encrypted export), or delete them:"
 				}
-				c.todo(what, "sesh --service password --purge --delete "+strings.Join(ids, " "))
+				c.todo(what, "sesh trash --purge --force "+strings.Join(ids, " "))
 			}
 			if unnamed {
 				c.todo("Restore the vault from a backup, such as an encrypted export: an entry's name is damaged, so sesh can't name it to delete it.")
