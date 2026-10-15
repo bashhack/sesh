@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ const (
 	panelNotice                    // what a change did, to read
 	panelBackups                   // the vault's backups
 	panelImport                    // what an import would do
+	panelAudit                     // the audit log
 )
 
 // overlay is a panel over the app, about the entry k.
@@ -43,7 +45,7 @@ type overlay struct {
 	err      string
 	busy     string // said instead of "Loading…" while it waits
 	items    []item
-	versions []time.Time
+	versions []Version
 	trash    []Trashed
 	backups  []Backup // the backups panel's, as its rows list them
 	kind     panel
@@ -71,11 +73,13 @@ type (
 	historyMsg struct {
 		err      error
 		k        vault.Key
-		versions []time.Time
+		said     string // what a change to them did, to say
+		versions []Version
 		epoch    int
 	}
 	trashMsg struct {
 		err   error
+		said  string // what a change to it did, to say
 		trash []Trashed
 		epoch int
 	}
@@ -249,9 +253,10 @@ func (m *Model) choose(i int) tea.Cmd {
 	}
 	switch ov.kind {
 	case panelHistory:
-		return m.copyVersion(ov.k, i+2)
+		return m.copyVersion(ov.k, i+2, ov.versions[i])
 	case panelTrash:
-		return m.restoreFromTrash(ov.trash[i].ID)
+		t := ov.trash[i]
+		return m.restoreFromTrash(&t, vault.Key{})
 	case panelImport:
 		return nil // the summary's lines, to read
 	}
@@ -265,24 +270,40 @@ func (m *Model) choose(i int) tea.Cmd {
 }
 
 // panelLetter is what a panel's own letters do: restoring an earlier
-// secret, or deleting from the trash for good.
+// secret, or deleting one for good; putting an entry back from the trash
+// under another name, deleting one for good, or emptying it.
 func (m *Model) panelLetter(k string) tea.Cmd {
 	ov := m.ov
 	switch {
 	case ov.kind == panelHistory && k == "r" && ov.sel < len(ov.versions):
-		n, key := ov.sel+2, ov.k
+		n, key, v := ov.sel+2, ov.k, ov.versions[ov.sel]
 		m.ov = m.confirm(ov, "Restore",
 			fmt.Sprintf("Make version %d the secret for %s again? The current one is kept as an earlier secret.", n, short(keyName(key))),
-			func() tea.Cmd { return m.restoreVersion(key, n) })
+			func() tea.Cmd { m.ov = ov; return m.restoreVersion(key, v) })
+	case ov.kind == panelHistory && (k == "x" || k == "delete") && ov.sel < len(ov.versions):
+		n, key, v := ov.sel+2, ov.k, ov.versions[ov.sel]
+		m.ov = m.confirm(ov, "Delete for good",
+			fmt.Sprintf("Delete version %d of %s for good? It can't be brought back; the versions after it move up a number.", n, short(keyName(key))),
+			func() tea.Cmd { m.ov = ov; return m.forgetVersion(key, n, v) })
+		m.ov.danger = true
+	case ov.kind == panelTrash && k == "a" && ov.sel < len(ov.trash):
+		return m.askRestoreAs(&ov.trash[ov.sel])
+	case ov.kind == panelTrash && k == "e" && len(ov.trash) > 0:
+		// What's listed, and only that: an entry trashed since is left.
+		listed := slices.Clone(ov.trash)
+		m.ov = m.confirm(ov, "Empty the trash",
+			fmt.Sprintf("Delete %s in the trash for good? They can't be brought back.", plural(len(listed), "the 1 entry", fmt.Sprintf("all %d entries", len(listed)))),
+			func() tea.Cmd { m.ov = ov; return m.emptyTrash(listed) })
+		m.ov.danger = true
 	case ov.kind == panelBackups:
 		return m.backupsLetter(k)
 	case ov.kind == panelImport:
 		return m.importLetter(k)
 	case ov.kind == panelTrash && (k == "x" || k == "delete") && ov.sel < len(ov.trash):
-		id, k := ov.trash[ov.sel].ID, ov.trash[ov.sel].Key
+		t := ov.trash[ov.sel]
 		m.ov = m.confirm(ov, "Delete for good",
-			fmt.Sprintf("Delete %s for good? It can't be brought back.", short(kindName(k))),
-			func() tea.Cmd { return m.removeFromTrash(id, k) })
+			fmt.Sprintf("Delete %s for good? It can't be brought back.", short(kindName(t.Key))),
+			func() tea.Cmd { return m.removeFromTrash(&t) })
 		m.ov.danger = true
 	}
 	return nil
@@ -382,11 +403,16 @@ func (m *Model) openHistory(e *vault.Entry) tea.Cmd {
 	})
 }
 
-// copyVersion copies k's version n: a read the audit log records.
-func (m *Model) copyVersion(k vault.Key, n int) tea.Cmd {
+// copyVersion copies k's earlier secret ver, listed as version n: a read
+// the audit log records.
+func (m *Model) copyVersion(k vault.Key, n int, ver Version) tea.Cmd {
 	opts, epoch := m.opts, m.epoch
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		secret, err := v.ReadVersion(k, n)
+		secret, err := v.ReadVersion(k, ver)
+		if errors.Is(err, ErrHistoryChanged) {
+			versions, _ := v.History(k) //nolint:errcheck // the list as it is, under the error said
+			return historyMsg{k: k, versions: versions, err: err, epoch: epoch}
+		}
 		if err != nil {
 			return copiedMsg{err: err, epoch: epoch}
 		}
@@ -398,13 +424,20 @@ func (m *Model) copyVersion(k vault.Key, n int) tea.Cmd {
 	})
 }
 
-// restoreVersion makes k's version n its secret again.
-func (m *Model) restoreVersion(k vault.Key, n int) tea.Cmd {
+// restoreVersion makes k's earlier secret ver its secret again, closing
+// the history; if it's no longer there, the history stays, listed as it
+// is now.
+func (m *Model) restoreVersion(k vault.Key, ver Version) tea.Cmd {
 	epoch := m.epoch
 	m.forget(k)
+	m.ov.loading = true
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		err := v.RestoreVersion(k, n)
-		return doneMsg{what: fmt.Sprintf("Restored an earlier secret for %s; the one it replaced is kept", keyName(k)), err: err, epoch: epoch, reread: true, forget: k}
+		err := v.RestoreVersion(k, ver)
+		if errors.Is(err, ErrHistoryChanged) {
+			versions, _ := v.History(k) //nolint:errcheck // the list as it is, under the error said
+			return historyMsg{k: k, versions: versions, err: err, epoch: epoch}
+		}
+		return doneMsg{what: fmt.Sprintf("Restored an earlier secret for %s; the one it replaced is kept", keyName(k)), err: err, epoch: epoch, reread: true, forget: k, closes: panelHistory}
 	})
 }
 
@@ -450,21 +483,82 @@ func (m *Model) openTrash() tea.Cmd {
 	})
 }
 
-// restoreFromTrash puts the trash's entry id back.
-func (m *Model) restoreFromTrash(id int64) tea.Cmd {
+// restoreFromTrash puts the trash's entry t back: under its own name, or
+// as the entry as names when it isn't zero.
+func (m *Model) restoreFromTrash(t *Trashed, as vault.Key) tea.Cmd {
 	epoch := m.epoch
 	m.ov.loading = true // no second Enter while this one is put back
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		k, err := v.RestoreFromTrash(id)
+		k, err := v.RestoreFromTrash(t, as)
+		if errors.Is(err, ErrTrashChanged) {
+			trash, _ := v.Trash() //nolint:errcheck // the list as it is, under the error said
+			return trashMsg{trash: trash, err: err, epoch: epoch}
+		}
+		if errors.Is(err, ErrNameTaken) {
+			if as == (vault.Key{}) {
+				err = errors.New("another entry has its name: a puts it back under another")
+			} else {
+				err = errors.New("another entry has that name too: a, to choose another")
+			}
+		}
 		return doneMsg{what: "Restored " + kindName(k) + " from the trash", err: err, epoch: epoch, reread: true, closes: panelTrash}
 	})
 }
 
-// removeFromTrash deletes the trash's entry id, k, for good.
-func (m *Model) removeFromTrash(id int64, k vault.Key) tea.Cmd {
+// askRestoreAs asks for the name to put t back from the trash under: its
+// ID, as sesh trash restore --as takes it.
+func (m *Model) askRestoreAs(t *Trashed) tea.Cmd {
+	listed, own := *t, t.Key
+	return m.askOver(true, "Put back as", "entry ID", own.String(), "kind/name or kind/name/username, as sesh list's ID column has it: "+string(own.Kind)+"/…", nil, func(typed string) (string, tea.Cmd) {
+		as, err := vault.ParseKey(strings.TrimSpace(typed))
+		switch {
+		case err != nil:
+			return err.Error(), nil
+		case as == own:
+			return "That's its own name: Enter in the trash puts it back under it.", nil
+		case as.Kind != own.Kind:
+			return "It comes back as the kind it is: " + string(own.Kind) + "/…", nil
+		}
+		return "", m.restoreFromTrash(&listed, as)
+	})
+}
+
+// emptyTrash deletes the trash's entries listed, and only those, for good.
+func (m *Model) emptyTrash(listed []Trashed) tea.Cmd {
+	epoch := m.epoch
+	m.ov.loading = true
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
+		n, err := v.RemoveFromTrash(listed...)
+		if err != nil {
+			trash, _ := v.Trash() //nolint:errcheck // the list as it is, under the error said
+			return trashMsg{trash: trash, err: err, epoch: epoch}
+		}
+		trash, err := v.Trash()
+		return trashMsg{trash: trash, err: err, said: "Deleted " + countOf(n) + " in the trash for good", epoch: epoch}
+	})
+}
+
+// forgetVersion deletes k's earlier secret ver, listed as version n, for
+// good, and lists those left.
+func (m *Model) forgetVersion(k vault.Key, n int, ver Version) tea.Cmd {
+	epoch := m.epoch
+	m.ov.loading = true
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
+		if err := v.ForgetVersion(k, ver); err != nil {
+			versions, _ := v.History(k) //nolint:errcheck // the list as it is, under the error said
+			return historyMsg{k: k, versions: versions, err: err, epoch: epoch}
+		}
+		versions, err := v.History(k)
+		return historyMsg{k: k, versions: versions, err: err, said: fmt.Sprintf("Deleted version %d of %s for good", n, keyName(k)), epoch: epoch}
+	})
+}
+
+// removeFromTrash deletes the trash's entry t, as listed, for good.
+func (m *Model) removeFromTrash(t *Trashed) tea.Cmd {
 	epoch := m.epoch
 	return m.read(func(v Vault, _ func() bool) tea.Msg {
-		return doneMsg{what: "Deleted " + kindName(k) + " for good", err: v.RemoveFromTrash(id), epoch: epoch, reread: true}
+		_, err := v.RemoveFromTrash(*t)
+		return doneMsg{what: "Deleted " + kindName(t.Key) + " for good", err: err, epoch: epoch, reread: true}
 	})
 }
 
@@ -485,12 +579,35 @@ func (m *Model) actionResult(msg tea.Msg) tea.Cmd {
 		if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelHistory || m.ov.k != msg.k {
 			return nil
 		}
-		return m.loaded(msg.err, func() { m.ov.versions = msg.versions })
+		if msg.err != nil && !errors.Is(msg.err, ErrLocked) && msg.versions != nil {
+			// A change refused: the list as it is now, and why.
+			m.ov.versions, m.ov.loading, m.ov.err = msg.versions, false, msg.err.Error()
+			m.ov.sel = max(min(m.ov.sel, len(msg.versions)-1), 0)
+			return nil
+		}
+		return m.loaded(msg.err, func() {
+			m.ov.versions = msg.versions
+			m.ov.sel = max(min(m.ov.sel, len(msg.versions)-1), 0)
+			if msg.said != "" {
+				m.say(msg.said)
+			}
+		})
 	case trashMsg:
 		if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelTrash {
 			return nil
 		}
-		return m.loaded(msg.err, func() { m.ov.trash = msg.trash })
+		if msg.err != nil && !errors.Is(msg.err, ErrLocked) && msg.trash != nil {
+			m.ov.trash, m.ov.loading, m.ov.err = msg.trash, false, msg.err.Error()
+			m.ov.sel = max(min(m.ov.sel, len(msg.trash)-1), 0)
+			return nil
+		}
+		return m.loaded(msg.err, func() {
+			m.ov.trash = msg.trash
+			m.ov.sel = max(min(m.ov.sel, len(msg.trash)-1), 0)
+			if msg.said != "" {
+				m.say(msg.said)
+			}
+		})
 	case healthMsg:
 		if msg.epoch != m.epoch || m.ov == nil || m.ov.kind != panelHealth {
 			return nil
@@ -564,7 +681,7 @@ func (m *Model) drawOverlay(base string) string {
 	th := m.th
 	ov := m.ov
 	w := min(64, m.width-6)
-	if ov.kind == panelSettings || ov.kind == panelChecks || ov.kind == panelBackups || ov.kind == panelImport || ov.wide {
+	if ov.kind == panelSettings || ov.kind == panelChecks || ov.kind == panelBackups || ov.kind == panelImport || ov.kind == panelAudit || ov.wide {
 		w = min(96, m.width-6)
 	}
 	// The rows that fit: the screen less the card's border, title, hint
@@ -611,6 +728,8 @@ func (m *Model) drawOverlay(base string) string {
 		lines = append(lines, "", lipgloss.NewStyle().Foreground(th.bad).Width(w-6).Render(ov.err))
 	case ov.kind == panelBackups && ov.filled && len(ov.items) == 0:
 		lines = append(lines, "", th.dimmed().Width(w-6).Render("No backups yet: n backs the vault up now."))
+	case ov.kind == panelAudit && ov.filled && len(ov.items) == 0:
+		lines = append(lines, "", th.dimmed().Width(w-6).Render("No events yet: reading a secret, and each change, is recorded here."))
 	case ov.kind == panelHealth && ov.filled && len(ov.items) == 0:
 		lines = append(lines, "", th.dimmed().Width(w-6).Render("Nothing is weak, used twice, or old."))
 	case ov.kind == panelHistory:
@@ -621,7 +740,7 @@ func (m *Model) drawOverlay(base string) string {
 		first, last := window(ov.sel, len(ov.versions), room)
 		for i := first; i < last; i++ {
 			when := "replaced at an unknown time"
-			if at := ov.versions[i]; !at.IsZero() {
+			if at := ov.versions[i].ReplacedAt; !at.IsZero() {
 				when = "replaced " + ago(now, at)
 			}
 			lines = append(lines, row(i, "", fmt.Sprintf("version %d  %s", i+2, when)))
@@ -672,9 +791,18 @@ func (m *Model) drawOverlay(base string) string {
 	edge, titleStyle := th.accent, th.accented().Bold(true)
 	switch ov.kind {
 	case panelHistory:
-		hint = th.hints([2]string{"↵", "copy"}, [2]string{"r", "restore"}, [2]string{"esc", "back"})
+		hint = th.hints([2]string{"↵", "copy"}, [2]string{"r", "restore"}, [2]string{"x", "delete"}, [2]string{"esc", "back"})
+		if len(ov.versions) == 0 {
+			hint = th.hints([2]string{"esc", "back"})
+		}
 	case panelTrash:
-		hint = th.hints([2]string{"↵", "put back"}, [2]string{"x", "delete for good"}, [2]string{"esc", "back"})
+		hint = th.hints([2]string{"↵", "put back"}, [2]string{"a", "as…"}, [2]string{"x", "delete"}, [2]string{"e", "empty"}, [2]string{"esc", "back"})
+		// Narrower, the letters alone; then only Enter's.
+		for _, h := range []string{th.hints([2]string{"↵", "put back"}, [2]string{"a x e", ""}, [2]string{"esc", "back"}), th.hints([2]string{"↵", "put back"}, [2]string{"esc", "back"})} {
+			if lipgloss.Width(hint) > w-6 {
+				hint = h
+			}
+		}
 		if len(ov.trash) == 0 {
 			hint = th.hints([2]string{"esc", "back"})
 		}
@@ -684,7 +812,7 @@ func (m *Model) drawOverlay(base string) string {
 			does = ov.items[ov.sel].does
 		}
 		hint = th.hints([2]string{"↵", does}, [2]string{"esc", "back"})
-	case panelChecks:
+	case panelChecks, panelAudit:
 		hint = th.hints([2]string{"↑↓", "read"}, [2]string{"esc", "back"})
 	case panelHealth:
 		hint = th.hints([2]string{"↵", "change it"}, [2]string{"esc", "back"})

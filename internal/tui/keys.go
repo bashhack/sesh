@@ -137,6 +137,12 @@ func (m *Model) typed(msg tea.KeyPressMsg) tea.Cmd {
 func (m *Model) lockedKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "ctrl+c", "esc":
+		if m.scanning {
+			// A screen capture is still open: quitting waits for it.
+			m.quitAfter = true
+			m.lockedWhy = "Quitting once the screen capture ends: Esc on its crosshair cancels it."
+			return nil
+		}
 		return tea.Quit
 	}
 	if m.unlocking {

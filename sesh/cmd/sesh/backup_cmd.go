@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -53,21 +54,58 @@ func addBackupFlags(fs *flag.FlagSet) *bool {
 	return fs.Bool("force", false, "Replace the file if it exists")
 }
 
+const backupUsage = `Usage:
+  sesh backup [--force] [file]                 Copy the vault now: into the backups folder (backup.dir),
+                                               or to file (or into a folder); --force replaces a file there
+  sesh backup list                             List the backups, newest first (as sesh restore does)
+  sesh backup delete <backup>… [--force]       Delete backups for good, named as the list names them
+  sesh backup delete --all [--force]           Delete all of this vault's backups, and make a fresh one
+
+No password is needed: the secrets in a backup stay encrypted, as in the
+vault. A backup still opens with the master password (and recovery key) it
+was made under, so after changing one that may have leaked, delete the
+old backups. Deleting asks first; --force deletes without asking. (To back
+up to a file named list or delete, write ./list.)`
+
 // runBackup is `sesh backup [file]`: a copy of the vault now, in the
 // backups folder (pruned to backup.keep) or at file. It needs no password:
-// the secrets in the copy are encrypted, as in the vault.
+// the secrets in the copy are encrypted, as in the vault. sesh backup list
+// and delete see to the backups made.
 func runBackup(app *App, args []string) error {
+	if len(args) > 0 {
+		switch {
+		case isHelp(args[0]):
+			_, err := fmt.Fprintln(app.Stdout, backupUsage)
+			return err
+		case args[0] == "list":
+			if len(args) > 1 {
+				return fmt.Errorf("sesh backup list takes nothing more, not %q", strings.Join(args[1:], " "))
+			}
+			cfg, err := settings()
+			if err != nil {
+				return err
+			}
+			return listBackups(app, cfg)
+		case args[0] == "delete":
+			return deleteBackups(app, args[1:])
+		}
+	}
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
 	force := addBackupFlags(fs)
-	fs.Usage = func() {
-		fmt.Fprintln(app.Stderr, "Usage: sesh backup [--force] [file]\n  Copy the vault now: into the backups folder (backup.dir), or to file (or into a folder).\n  No password is needed; the secrets in the copy stay encrypted.") //nolint:errcheck // usage text
-	}
+	fs.Usage = func() { fmt.Fprintln(app.Stderr, backupUsage) } //nolint:errcheck // usage text
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
+	}
+	switch a := fs.Arg(0); a {
+	case "list":
+		// A flag came before the word, which made it a file.
+		return errors.New("sesh backup list doesn't take --force; to back up to a file named list, write ./list")
+	case "delete":
+		return errors.New("put sesh backup delete's flags after the word (sesh backup delete --force); to back up to a file named delete, write ./delete")
 	}
 	if fs.NArg() > 1 {
 		return fmt.Errorf("sesh backup takes at most one file, got %q", strings.Join(fs.Args(), " "))
@@ -108,6 +146,104 @@ func runBackup(app *App, args []string) error {
 		}
 	}
 	_, err = fmt.Fprintf(app.Stdout, "✅ Backed up the vault to %s (%s)\n", tildePath(b.Path), vaultSize(b.Size))
+	return err
+}
+
+// addBackupDeleteFlags defines sesh backup delete's flags on fs.
+func addBackupDeleteFlags(fs *flag.FlagSet) (all, force *bool) {
+	return fs.Bool("all", false, "Delete all of this vault's backups, and make a fresh one"), fs.Bool("force", false, "Delete without asking")
+}
+
+// deleteBackups is sesh backup delete: backups the list names deleted for
+// good, or all of the vault's, with a fresh one made, as sesh ui's backups
+// panel does. Every backup named is found before any is deleted.
+func deleteBackups(app *App, args []string) error {
+	fs := flag.NewFlagSet("backup delete", flag.ContinueOnError)
+	fs.SetOutput(app.Stderr)
+	all, force := addBackupDeleteFlags(fs)
+	names, err := parseAnywhere(fs, args)
+	if err != nil {
+		return err
+	}
+	switch {
+	case *all && len(names) > 0:
+		return errors.New("--all deletes every backup of the vault; name backups, or give --all, not both")
+	case !*all && len(names) == 0:
+		return errors.New("name the backups to delete (sesh backup list shows them), or give --all")
+	}
+	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
+	if !*force && !terminal {
+		return errors.New("deleting backups asks first, and there's no terminal to ask at; add --force to delete without asking")
+	}
+	cfg, err := settings()
+	if err != nil {
+		return err
+	}
+	dir, vaultPath := cfg.BackupFolder(), cfg.DBPath.Value
+	if *all {
+		if err := requireVault(vaultPath, "there's no vault to back up afresh; delete the backups by name instead"); err != nil {
+			return err
+		}
+		s, err := backup.SeriesOf(vaultPath, dir)
+		if err != nil {
+			return err
+		}
+		if !*force {
+			yes, err := promptYesNo(app.Stdin, app.Stderr, "Delete this vault's backups in "+tildePath(dir)+" for good, and make a fresh one? [y/N]: ")
+			if err != nil || !yes {
+				return nothingDeleted(app, err)
+			}
+		}
+		said, err := renewBackups(s, vaultPath)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(app.Stdout, "✅ "+said)
+		return err
+	}
+	listed, _, err := backup.ListAny(dir, vaultPath)
+	if err != nil {
+		return err
+	}
+	var paths []string
+	for _, name := range names {
+		i := slices.IndexFunc(listed, func(b backup.Info) bool { return filepath.Base(b.Path) == name || b.Path == name })
+		if i < 0 {
+			return fmt.Errorf("no backup named %s in %s; sesh backup list shows them", name, tildePath(dir))
+		}
+		if !slices.Contains(paths, listed[i].Path) {
+			paths = append(paths, listed[i].Path)
+		}
+	}
+	if !*force {
+		what := "the backup " + filepath.Base(paths[0])
+		if len(paths) > 1 {
+			what = countOf(int64(len(paths)), "backup")
+		}
+		yes, err := promptYesNo(app.Stdin, app.Stderr, "Delete "+what+" for good? [y/N]: ")
+		if err != nil || !yes {
+			return nothingDeleted(app, err)
+		}
+	}
+	for i, path := range paths {
+		if err := backup.Remove(dir, vaultPath, path); err != nil {
+			return fmt.Errorf("%w (deleted %d of %d)", err, i, len(paths))
+		}
+	}
+	said := "✅ Deleted the backup " + filepath.Base(paths[0])
+	if len(paths) > 1 {
+		said = "✅ Deleted " + countOf(int64(len(paths)), "backup")
+	}
+	_, err = fmt.Fprintln(app.Stdout, said)
+	return err
+}
+
+// nothingDeleted is err, or, for a no, saying nothing was deleted.
+func nothingDeleted(app *App, err error) error {
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(app.Stderr, "Nothing deleted.")
 	return err
 }
 
@@ -166,16 +302,23 @@ func oldBackupsSaid(n int, what, dir string) string {
 	return fmt.Sprintf("%s made before this change still %s with the old %s, in %s.", countOf(int64(n), "backup"), opens, what, tildePath(dir))
 }
 
-// renewBackups deletes the backups in s and makes a fresh one of the vault
-// at vaultPath, and says so.
+// renewBackups makes a fresh backup of the vault at vaultPath, then
+// deletes the others in s, and says so: one that can't be made leaves
+// them all. The fresh one is the vault as it is now, never one made in the
+// same second before it, which it would delete.
 func renewBackups(s backup.Series, vaultPath string) (string, error) {
-	removed, err := s.RemoveAll()
+	old, err := s.List()
 	if err != nil {
 		return "", err
 	}
-	b, err := s.Make(vaultPath, now())
+	b, err := s.MakeNew(vaultPath, now())
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w; the backups there are left as they were", err)
 	}
-	return fmt.Sprintf("Deleted %s; made a fresh one: %s", countOf(int64(len(removed)), "backup"), tildePath(b.Path)), nil
+	for i, o := range old {
+		if err := os.Remove(o.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("made a fresh backup, %s, but deleted only %d of the %d before it: %w", tildePath(b.Path), i, len(old), err)
+		}
+	}
+	return fmt.Sprintf("Deleted %s; made a fresh one: %s", countOf(int64(len(old)), "backup"), tildePath(b.Path)), nil
 }

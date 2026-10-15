@@ -87,7 +87,7 @@ var subcommands = []candidate{
 	{"ui", "Search every entry, and copy its secret or TOTP code"},
 	{"import", "Bring entries over from another app, or a sesh export"},
 	{"export", "Write the entries to an export: encrypted, or plain"},
-	{"backup", "Copy the vault now, into the backups folder or a file"},
+	{"backup", "Copy the vault now, into the backups folder or a file; list or delete backups"},
 	{"restore", "List the backups, or replace the vault with one"},
 	{"health", "Find weak, reused and old passwords"},
 	{"doctor", "Check sesh's setup, and that the vault can all be read"},
@@ -97,7 +97,7 @@ var subcommands = []candidate{
 	{"recovery", "Make, remove, or check this vault's recovery key"},
 	{"recover", "Set a new master password with the vault's recovery key"},
 	{"touchid", "Unlock with Touch ID (macOS)"},
-	{"config", "Show settings and where each comes from"},
+	{"config", "Show settings and where each comes from, or change one"},
 	{"init", "Choose where sesh keeps the vault"},
 	{"agent", "Control the sesh agent"},
 	{"run", "Run a command with secrets from the vault in its environment"},
@@ -833,7 +833,7 @@ Changing entries:
 The vault:
   sesh import --from <app> <file> Bring entries over from another app, or a sesh export
   sesh export [--file F]          Write an encrypted export (or --format json|csv)
-  sesh backup [file]              Copy the vault now (sesh also does this automatically)
+  sesh backup [file|list|delete]  Copy the vault now (sesh also does this automatically), list or delete backups
   sesh restore [backup]           List the backups, or replace the vault with one
   sesh health                     Find weak, reused and old passwords
   sesh doctor                     Check the setup, and that the vault can all be read
@@ -849,7 +849,7 @@ Locking and keys:
 
 Setup and more:
   sesh init                       Choose where the vault lives
-  sesh config                     Show settings and where each comes from
+  sesh config [set <key> <value>] Show settings and where each comes from, or change one
   sesh run [--env N=<ref>] -- <cmd>   Run a command with secrets in its environment
   sesh inject -i <tpl> -o <file>  Fill a template's sesh:// references
   sesh aws [setup]                Sign in to AWS with your MFA code

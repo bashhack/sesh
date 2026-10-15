@@ -36,7 +36,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Master-Password Agent** — A per-user background agent holds the key so you type the password once; it locks itself when idle and is hardened against memory inspection ([Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent))
 - **Recovery Key** — Optional: a code you write down when the vault is created; if you forget the master password, `sesh recover` uses it to set a new one. No server involved, and sesh keeps no copy
 - **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key (nothing in the Keychain); the password always works as a fallback
-- **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from
+- **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from, and `sesh config set` changes one
 - **Encrypted Export** — Portable backups protected by a password of their own, safe to move between machines (`sesh export`)
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes, each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
 - **Secrets for commands** — `sesh run` puts vault values in a command's environment and hides them in its output; `sesh inject` fills a config template
@@ -172,12 +172,14 @@ sesh aws --clip                    # copy the MFA code, for the AWS console
 
 ```bash
 sesh config                        # every setting, and where it comes from
+sesh config set clipboard_timeout 15s  # change one in the config file
 sesh init                          # choose where the vault lives (optional)
 sesh lock                          # lock now: the next command asks for the master password
 sesh passwd                        # change the master password (every entry is re-encrypted)
 sesh recovery new                  # a recovery key, in case you forget it
 sesh touchid enable                # unlock with your fingerprint (macOS)
 sesh backup                        # sesh also backs up on its own (backup.every_days)
+sesh backup list                   # the backups; sesh backup delete <name> deletes one
 sesh health                        # weak, reused and old passwords
 sesh doctor                        # check the setup, and that everything reads
 ```

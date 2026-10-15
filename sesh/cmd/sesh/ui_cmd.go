@@ -157,6 +157,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		EditNotes:   provider.EditNotes,
 		IsWeak:      func(pw []byte) bool { return password.IsWeak(pw) },
 		Generate:    func() ([]byte, error) { return password.GeneratePassword(password.DefaultGenerateOptions()) },
+		ScanQR:      uiScanQR(),
 		ClearAfter:  cfg.ClipboardTimeout.Value,
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
 		MaxLifetime: cfg.AgentMaxLifetime.Value,
@@ -445,25 +446,31 @@ func (u *uiVault) Field(k vault.Key, name string) ([]byte, error) {
 }
 
 // History is when each of k's earlier secrets was replaced.
-func (u *uiVault) History(k vault.Key) ([]time.Time, error) {
+func (u *uiVault) History(k vault.Key) ([]tui.Version, error) {
 	versions, err := u.store.History(k)
 	if err != nil {
 		return nil, uiLocked(err)
 	}
-	out := make([]time.Time, len(versions))
+	out := make([]tui.Version, len(versions))
 	for i, v := range versions {
-		out[i] = v.ReplacedAt
+		out[i] = tui.Version{ID: v.ID, ReplacedAt: v.ReplacedAt}
 	}
 	return out, nil
 }
 
-func (u *uiVault) ReadVersion(k vault.Key, n int) ([]byte, error) {
-	secret, err := u.store.ReadVersion(k, n, "in sesh ui, to copy it")
+func (u *uiVault) ReadVersion(k vault.Key, v tui.Version) ([]byte, error) {
+	secret, err := u.store.ReadVersionOf(k, database.Version{ID: v.ID, ReplacedAt: v.ReplacedAt}, "in sesh ui, to copy it")
+	if errors.Is(err, database.ErrVersionGone) {
+		return nil, tui.ErrHistoryChanged
+	}
 	return secret, uiLocked(err)
 }
 
-func (u *uiVault) RestoreVersion(k vault.Key, n int) error {
-	_, err := u.store.RestoreVersion(k, n)
+func (u *uiVault) RestoreVersion(k vault.Key, v tui.Version) error {
+	_, err := u.store.RestoreVersionOf(k, database.Version{ID: v.ID, ReplacedAt: v.ReplacedAt})
+	if errors.Is(err, database.ErrVersionGone) {
+		return tui.ErrHistoryChanged
+	}
 	return u.wrote(err)
 }
 
@@ -549,17 +556,88 @@ func (u *uiVault) Trash() ([]tui.Trashed, error) {
 	return out, nil
 }
 
-func (u *uiVault) RestoreFromTrash(id int64) (vault.Key, error) {
-	r, err := u.store.RestoreFromTrash(id, vault.Key{})
+func (u *uiVault) RestoreFromTrash(t *tui.Trashed, as vault.Key) (vault.Key, error) {
+	if err := u.asListed(*t); err != nil {
+		return vault.Key{}, err
+	}
+	r, err := u.store.RestoreFromTrash(t.ID, as)
+	if errors.Is(err, database.ErrNotInTrash) {
+		return vault.Key{}, tui.ErrTrashChanged
+	}
 	if errors.Is(err, database.ErrNameTaken) {
-		return vault.Key{}, fmt.Errorf("%w: restore it under another name with: sesh trash restore %d --as <new name>", tui.ErrNameTaken, id)
+		return vault.Key{}, tui.ErrNameTaken
 	}
 	return r.Key, u.wrote(err)
 }
 
-func (u *uiVault) RemoveFromTrash(id int64) error {
-	_, err := u.store.RemoveFromTrash(id)
+func (u *uiVault) ForgetVersion(k vault.Key, v tui.Version) error {
+	err := u.store.ForgetVersionOf(k, database.Version{ID: v.ID, ReplacedAt: v.ReplacedAt})
+	if errors.Is(err, database.ErrVersionGone) {
+		return tui.ErrHistoryChanged
+	}
 	return u.wrote(err)
+}
+
+// AuditLog is the audit log's newest limit events, said as sesh audit
+// says them.
+func (u *uiVault) AuditLog(limit int) (tui.AuditLog, error) {
+	count, oldest, err := u.store.AuditSummary()
+	if err != nil {
+		return tui.AuditLog{}, uiLocked(err)
+	}
+	events, err := u.store.AuditEvents(limit)
+	if err != nil {
+		return tui.AuditLog{}, uiLocked(err)
+	}
+	log := tui.AuditLog{Count: count, Oldest: oldest}
+	if cfg, err := settings(); err == nil {
+		log.Keep = "Nothing is removed automatically (audit.retention_days is 0)."
+		if days := cfg.AuditRetentionDays.Value; days > 0 {
+			log.Keep = fmt.Sprintf("Events older than %s are removed automatically (audit.retention_days).", dayCount(int64(days)))
+		}
+	}
+	for i := range events {
+		kind, what := auditWhat(&events[i])
+		if kind != "" {
+			what = kind + " " + what
+		}
+		log.Events = append(log.Events, tui.AuditEvent{When: events[i].CreatedAt, Event: events[i].EventType, What: what})
+	}
+	return log, nil
+}
+
+func (u *uiVault) RemoveFromTrash(listed ...tui.Trashed) (int, error) {
+	if err := u.asListed(listed...); err != nil {
+		return 0, err
+	}
+	ids := make([]int64, len(listed))
+	for i, t := range listed {
+		ids[i] = t.ID
+	}
+	gone, err := u.store.RemoveFromTrash(ids...)
+	if errors.Is(err, database.ErrNotInTrash) {
+		return 0, tui.ErrTrashChanged
+	}
+	return len(gone), u.wrote(err)
+}
+
+// asListed is ErrTrashChanged unless each of listed is in the trash as
+// the app listed it: by its id, name and when it was deleted, since a
+// vault made before trash ids stopped being reused can give a deleted
+// one's id to another.
+func (u *uiVault) asListed(listed ...tui.Trashed) error {
+	now, err := u.store.Trash()
+	if err != nil {
+		return uiLocked(err)
+	}
+	for _, t := range listed {
+		if !slices.ContainsFunc(now, func(e database.TrashedEntry) bool {
+			return e.ID == t.ID && e.Key == t.Key && e.DeletedAt.Equal(t.DeletedAt)
+		}) {
+			return tui.ErrTrashChanged
+		}
+	}
+	return nil
 }
 
 // wrote is err, after the app's own write: the fingerprint is taken
@@ -739,6 +817,30 @@ func uiLocked(err error) error {
 }
 
 // uiSettings are cfg's settings as the app's settings panel lists them.
+// uiScanQR reads a TOTP entry's link from a QR code on screen, for the
+// add form; nil where the screen can't be captured (macOS's screencapture
+// does it), or isn't this terminal's: over SSH it would ask on the Mac's
+// own screen. The link is checked as sesh add totp --qr checks it.
+func uiScanQR() func() (tui.ScannedQR, error) {
+	if runtime.GOOS != "darwin" || overSSH() {
+		return nil
+	}
+	return func() (tui.ScannedQR, error) {
+		text, err := captureQRText()
+		if err != nil {
+			return tui.ScannedQR{}, err
+		}
+		info, err := qrcode.ExtractTOTPFullInfo(text)
+		if err != nil {
+			return tui.ScannedQR{}, err
+		}
+		return tui.ScannedQR{Link: []byte(text), Issuer: info.Issuer, Account: info.Account}, nil
+	}
+}
+
+// captureQRText is the text of a QR code on screen; tests replace it.
+var captureQRText = qrcode.CaptureText
+
 func uiSettings(cfg *config.Config) []tui.Setting {
 	var out []tui.Setting
 	for _, it := range cfg.List() {

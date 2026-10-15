@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -456,13 +457,18 @@ func TestUI_Actions(t *testing.T) {
 	if v, err := u.Field(gh, "pin"); err != nil || string(v) != "4321" {
 		t.Errorf("Field = %q, %v", v, err)
 	}
-	if h, err := u.History(gh); err != nil || len(h) != 1 {
+	h, err := u.History(gh)
+	if err != nil || len(h) != 1 {
 		t.Fatalf("History = %v, %v", h, err)
 	}
-	if v, err := u.ReadVersion(gh, 2); err != nil || string(v) != "a" {
+	if v, err := u.ReadVersion(gh, h[0]); err != nil || string(v) != "a" {
 		t.Errorf("ReadVersion = %q, %v", v, err)
 	}
-	if err := u.RestoreVersion(gh, 2); err != nil {
+	// A version is named by its row: one no longer in the history isn't restored.
+	if err := u.RestoreVersion(gh, tui.Version{ID: h[0].ID + 1000}); !errors.Is(err, tui.ErrHistoryChanged) {
+		t.Errorf("restore of a version not there: %v", err)
+	}
+	if err := u.RestoreVersion(gh, h[0]); err != nil {
 		t.Fatal(err)
 	}
 	if v, err := u.Secret(gh, "test"); err != nil || string(v) != "a" {
@@ -479,20 +485,68 @@ func TestUI_Actions(t *testing.T) {
 		t.Errorf("Check after the app's own writes = %v, %v; want no change", changed, err)
 	}
 	putSecrets(t, gh, "someone else's")
-	if _, err := u.RestoreFromTrash(trash[0].ID); !errors.Is(err, tui.ErrNameTaken) || !strings.Contains(err.Error(), "--as <new name>") {
+	if _, err := u.RestoreFromTrash(&trash[0], vault.Key{}); !errors.Is(err, tui.ErrNameTaken) {
 		t.Errorf("restore onto a name in use: %v", err)
 	}
-	if err := u.RemoveFromTrash(trash[0].ID); err != nil {
+	old := vault.Key{Kind: vault.KindPassword, Service: "github-old", Username: "alice"}
+	if k, err := u.RestoreFromTrash(&trash[0], old); err != nil || k != old {
+		t.Errorf("restore as another = %v, %v", k, err)
+	}
+	// An earlier secret deleted for good; the trash emptied.
+	oh, err := u.History(old)
+	if err != nil || len(oh) != 2 {
+		t.Fatalf("History = %v, %v", oh, err)
+	}
+	// Another command forgets version 2: the one listed as 3 is still the one forgotten, and 2 is gone.
+	if err := store.ForgetVersions(old, 2); err != nil {
 		t.Fatal(err)
 	}
+	if err := u.ForgetVersion(old, oh[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.ForgetVersion(old, oh[0]); !errors.Is(err, tui.ErrHistoryChanged) {
+		t.Errorf("forget of a version gone: %v", err)
+	}
+	if h, err := u.History(old); err != nil || len(h) != 0 {
+		t.Errorf("History after forgetting = %v, %v", h, err)
+	}
+	for _, k := range []vault.Key{old, {Kind: vault.KindPassword, Service: "gitlab"}} {
+		if err := u.Delete(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	trash, err = u.Trash()
+	if err != nil || len(trash) != 2 {
+		t.Fatalf("Trash = %+v, %v", trash, err)
+	}
+	// Each must be in the trash as listed: its id, name, and when it was deleted.
+	gone := trash[1]
+	gone.DeletedAt = gone.DeletedAt.Add(time.Second)
+	if _, err := u.RemoveFromTrash(trash[0], gone); !errors.Is(err, tui.ErrTrashChanged) {
+		t.Errorf("one not in the trash as listed: %v", err)
+	}
+	if _, err := u.RestoreFromTrash(&gone, vault.Key{}); !errors.Is(err, tui.ErrTrashChanged) {
+		t.Errorf("restore of one not as listed: %v", err)
+	}
+	if n, err := u.RemoveFromTrash(trash[0], trash[1]); err != nil || n != 2 {
+		t.Errorf("RemoveFromTrash = %d, %v", n, err)
+	}
 	if trash, err := u.Trash(); err != nil || len(trash) != 0 {
-		t.Errorf("trash after removing = %+v, %v", trash, err)
+		t.Errorf("trash after emptying = %+v, %v", trash, err)
 	}
 	log := mustRun(t, runAudit)
 	for _, want := range []string{"in sesh ui, to copy or show its field pin", "in sesh ui, to copy it"} {
 		if !strings.Contains(log, want) {
 			t.Errorf("audit missing %q:\n%s", want, log)
 		}
+	}
+	// The app's audit log says each event as sesh audit does, the newest first.
+	got, err := u.AuditLog(3)
+	if err != nil || got.Count < 3 || len(got.Events) != 3 || got.Oldest.IsZero() || !strings.Contains(got.Keep, "audit.retention_days") {
+		t.Fatalf("AuditLog = %+v, %v", got, err)
+	}
+	if e := got.Events[0]; e.Event != "purge" || e.What != "password gitlab" {
+		t.Errorf("the newest event = %+v", e)
 	}
 }
 
@@ -922,5 +976,35 @@ func TestUI_ChecksKeyChanged(t *testing.T) {
 	}
 	if (keyChangedError{}).Error() != "the master password was changed by another sesh command while this one was checking; run sesh doctor again" {
 		t.Error("sesh doctor's words changed")
+	}
+}
+
+// The app's QR scan gives the link a code holds, with its issuer and account; a code that isn't one is refused
+// without being quoted. Only macOS can capture the screen, and not over SSH, where it's another screen.
+func TestUIScanQR(t *testing.T) {
+	t.Setenv("SSH_CONNECTION", "10.0.0.2 51234 10.0.0.1 22")
+	if uiScanQR() != nil {
+		t.Error("offered over SSH")
+	}
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_CLIENT", "")
+	scan := uiScanQR()
+	if runtime.GOOS != "darwin" {
+		if scan != nil {
+			t.Error("offered where the screen can't be captured")
+		}
+		return
+	}
+	orig := captureQRText
+	t.Cleanup(func() { captureQRText = orig })
+	captureQRText = func() (string, error) {
+		return "otpauth://totp/Acme:jo@acme.io?secret=JBSWY3DPEHPK3PXP&issuer=Acme", nil
+	}
+	if qr, err := scan(); err != nil || qr.Issuer != "Acme" || qr.Account != "jo@acme.io" || !strings.HasPrefix(string(qr.Link), "otpauth://") {
+		t.Errorf("scan = %+v, %v", qr, err)
+	}
+	captureQRText = func() (string, error) { return "WIFI:T:WPA;S:net;P:SECRETWIFI;;", nil }
+	if _, err := scan(); err == nil || strings.Contains(err.Error(), "SECRETWIFI") {
+		t.Errorf("not a TOTP code: %v", err)
 	}
 }

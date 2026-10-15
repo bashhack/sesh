@@ -57,8 +57,12 @@ func TestSet(t *testing.T) {
 	if err := Set(path, "agent.idle_timeout", "25m"); err != nil {
 		t.Fatal(err)
 	}
-	if err := Set(path, "history.keep", "4"); err != nil {
+	// A number is written as one: +04 is 4.
+	if err := Set(path, "history.keep", "+04"); err != nil {
 		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "keep = 4\n") { //nolint:errcheck // checked
+		t.Errorf("+04 written as:\n%s", b)
 	}
 	c, err := Load(Overrides{})
 	if err != nil || c.AgentIdleTimeout.Value != 25*time.Minute || c.HistoryKeep.Value != 4 {

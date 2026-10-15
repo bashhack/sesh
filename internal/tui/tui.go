@@ -65,6 +65,31 @@ type Trashed struct {
 	ID        int64
 }
 
+// AuditLog is the newest events of the vault's audit log, the newest
+// first, with how many there are in all.
+type AuditLog struct {
+	Oldest time.Time // when the oldest event of all was
+	// Keep says what's removed on its own: "Events older than 365 days
+	// are removed automatically (audit.retention_days)."
+	Keep   string
+	Events []AuditEvent
+	Count  int64
+}
+
+// AuditEvent is one event of the audit log, as sesh audit says it.
+type AuditEvent struct {
+	When  time.Time
+	Event string // "read", "edit", "delete", …
+	What  string // the entry, or the vault, and what of it
+}
+
+// ScannedQR is a TOTP entry's otpauth:// link read from a QR code on
+// screen, with the issuer and account it names.
+type ScannedQR struct {
+	Issuer, Account string
+	Link            []byte
+}
+
 // Change is an entry added (Key zero) or changed: To is its name after;
 // nil and empty fields leave what the entry has. Secret is the new secret
 // (a TOTP entry's key, or an otpauth:// link to read it from); Notes are
@@ -113,6 +138,22 @@ type Tag struct {
 // ErrNameTaken is a trash entry restored onto a name another entry has.
 var ErrNameTaken = errors.New("another entry has that name")
 
+// Version is one of an entry's earlier secrets, as History lists it: the
+// row that names it, whatever number it has as others come and go, and
+// when it was replaced (zero when that isn't known).
+type Version struct {
+	ReplacedAt time.Time
+	ID         int64
+}
+
+// ErrTrashChanged is an entry chosen from the trash as listed that isn't
+// there as it was: put back, deleted, or its id another's now.
+var ErrTrashChanged = errors.New("the trash changed meanwhile, so nothing was done: look again")
+
+// ErrHistoryChanged is an earlier secret chosen from a list that another
+// command has changed since: it's no longer in the history.
+var ErrHistoryChanged = errors.New("its earlier secrets changed meanwhile, so nothing was done: look again, then choose")
+
 // ErrWrongPassword is a password Unlock refused.
 var ErrWrongPassword = errors.New("wrong password")
 
@@ -150,23 +191,35 @@ type Vault interface {
 	// Field is k's secret field name's value, to copy or show; the audit log
 	// records the read. The caller wipes it.
 	Field(k vault.Key, name string) ([]byte, error)
-	// History is when each of k's earlier secrets was replaced, the
-	// newest first: version 2 is the first.
-	History(k vault.Key) ([]time.Time, error)
-	// ReadVersion is k's version n (2 and up), to copy; the audit log
+	// History is k's earlier secrets, the newest first: version 2 is the
+	// first.
+	History(k vault.Key) ([]Version, error)
+	// ReadVersion is k's earlier secret v, to copy (ErrHistoryChanged when
+	// it's no longer in the history); the audit log
 	// records the read. The caller wipes it.
-	ReadVersion(k vault.Key, n int) ([]byte, error)
-	// RestoreVersion makes k's version n its secret again; the one it
-	// replaces is kept.
-	RestoreVersion(k vault.Key, n int) error
+	ReadVersion(k vault.Key, v Version) ([]byte, error)
+	// RestoreVersion makes k's earlier secret v its secret again; the one
+	// it replaces is kept. ErrHistoryChanged when v is no longer in the
+	// history.
+	RestoreVersion(k vault.Key, v Version) error
 	// Delete moves k to the trash.
 	Delete(k vault.Key) error
 	// Trash is the trash's entries, the newest first.
 	Trash() ([]Trashed, error)
-	// RestoreFromTrash puts the trash's entry id back, and says its name.
-	RestoreFromTrash(id int64) (vault.Key, error)
-	// RemoveFromTrash deletes the trash's entry id for good.
-	RemoveFromTrash(id int64) error
+	// RestoreFromTrash puts the trash's entry t, as Trash listed it, back,
+	// under its own name, or as the entry as names when it isn't zero, and
+	// says the name it has. ErrNameTaken when another entry has that name;
+	// ErrTrashChanged when t isn't in the trash as it was listed.
+	RestoreFromTrash(t *Trashed, as vault.Key) (vault.Key, error)
+	// RemoveFromTrash deletes the trash's entries listed for good, all or
+	// none, and says how many; ErrTrashChanged when one isn't in the trash
+	// as it was listed.
+	RemoveFromTrash(listed ...Trashed) (int, error)
+	// ForgetVersion deletes k's earlier secret v for good; the versions
+	// after it move up a number. ErrHistoryChanged as for RestoreVersion.
+	ForgetVersion(k vault.Key, v Version) error
+	// AuditLog is the newest limit events of the vault's audit log.
+	AuditLog(limit int) (AuditLog, error)
 	// Health checks the passwords and API keys, as sesh health does: weak,
 	// reused, and not changed in oldAfter (0 doesn't check). Reading them
 	// is one audit event.
@@ -262,7 +315,11 @@ type Options struct {
 	IsWeak func([]byte) bool
 	// Generate makes a new password.
 	Generate func() ([]byte, error)
-	Now      func() time.Time
+	// ScanQR reads a TOTP entry's link from a QR code on screen, where
+	// the area with it is selected; nil when it can't be done here. The
+	// caller wipes the link.
+	ScanQR func() (ScannedQR, error)
+	Now    func() time.Time
 	// Settings are the config settings, for the settings panel; nil when
 	// there's none to show. SetSetting writes one to the config file (""
 	// takes it out) and says what the app now uses.
@@ -405,6 +462,10 @@ type Model struct {
 	// opening once it commits, so it isn't read meanwhile.
 	changing  bool
 	quitAfter bool // Ctrl-C was pressed while changing: it quits once that's done
+	// scanning says a QR code is being captured from the screen: quitting
+	// waits for it to end, so the capture, and its picture of the code,
+	// don't outlast the app.
+	scanning bool
 	// touchOn is Touch ID unlock on, as last read: at the lock, after a
 	// fingerprint fails, on Enter with nothing typed while it was off, and
 	// when turning it on or off ends while locked.
@@ -671,6 +732,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.gotSettings(&msg)
 	case checksMsg:
 		return m.gotChecks(&msg)
+	case auditMsg:
+		return m.gotAudit(&msg)
+	case scannedMsg:
+		return m.scanned(&msg)
 	case changedMsg:
 		return m.changed(&msg)
 	case newRecoveryMsg:
@@ -983,8 +1048,12 @@ func (m *Model) lock(why string) tea.Cmd {
 	m.lockedWhy = why
 	m.touchOn = m.touchIDOn()
 	if m.quitAfter {
-		// Ctrl-C waited for what the lock cut off: it quits now, saying why.
+		// Ctrl-C waited for what the lock cut off: it quits now, saying
+		// why, or, during a scan, once the capture ends (see scanned).
 		m.afterword = why
+		if m.scanning {
+			return tea.Batch(closing, ended)
+		}
 		return tea.Batch(closing, ended, tea.Quit)
 	}
 	return tea.Batch(closing, ended)

@@ -2,6 +2,7 @@ package database
 
 import (
 	"bytes"
+	"cmp"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -29,6 +30,11 @@ type Version struct {
 
 // ErrNoVersion is a version number an entry's history doesn't have.
 var ErrNoVersion = errors.New("no such version")
+
+// ErrVersionGone is a version, named by its row, that's no longer in the
+// entry's history: another command forgot it, or dropped it to
+// history.keep.
+var ErrVersionGone = errors.New("that earlier secret isn't in the history any more")
 
 // SetHistoryKeep sets how many earlier secrets each entry keeps; 0 keeps
 // none. A new Store keeps none.
@@ -398,6 +404,33 @@ func (s *Store) version(k vault.Key, n int) (Version, error) {
 	return versions[n-2], nil
 }
 
+// numbered is k's version want, by its row and when it was replaced, and
+// its number now (2 and up); ErrVersionGone when the history no longer
+// has it. Both are matched: a vault made before its ids stopped being
+// reused can give a forgotten one's id to a secret replaced later.
+func (s *Store) numbered(k vault.Key, want Version) (Version, int, error) {
+	versions, err := s.History(k)
+	if err != nil {
+		return Version{}, 0, err
+	}
+	i := slices.IndexFunc(versions, func(v Version) bool { return v.ID == want.ID && v.ReplacedAt.Equal(want.ReplacedAt) })
+	if i < 0 {
+		return Version{}, 0, ErrVersionGone
+	}
+	return versions[i], i + 2, nil
+}
+
+// ReadVersionOf is the secret of k's version v, as History listed it,
+// for reading, which the audit log records: ErrVersionGone when it's no
+// longer in the history.
+func (s *Store) ReadVersionOf(k vault.Key, v Version, reading string) ([]byte, error) {
+	v, n, err := s.numbered(k, v)
+	if err != nil {
+		return nil, err
+	}
+	return s.readVersion(k, v, n, reading)
+}
+
 // ReadVersion is the secret of k's version n (2 and up), for reading,
 // which the audit log records.
 func (s *Store) ReadVersion(k vault.Key, n int, reading string) ([]byte, error) {
@@ -405,8 +438,18 @@ func (s *Store) ReadVersion(k vault.Key, n int, reading string) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
+	return s.readVersion(k, v, n, reading)
+}
+
+// readVersion is the secret of k's version v, numbered n, for reading.
+func (s *Store) readVersion(k vault.Key, v Version, n int, reading string) ([]byte, error) {
 	var data, salt []byte
-	if err := s.db.QueryRow(`SELECT encrypted_data, salt FROM history WHERE id = ?`, v.ID).Scan(&data, &salt); err != nil {
+	err := s.db.QueryRow(`SELECT encrypted_data, salt FROM history WHERE id = ? AND kind = ? AND service = ? AND username = ? AND trash_id IS NULL`,
+		v.ID, string(k.Kind), k.Service, k.Username).Scan(&data, &salt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrVersionGone // forgotten meanwhile
+	}
+	if err != nil {
 		return nil, fmt.Errorf("read %s's version %d: %w", k, n, err)
 	}
 	secret, err := s.oracle.DecryptEntry(data, salt, historyAAD(k))
@@ -425,7 +468,26 @@ func (s *Store) ReadVersion(k vault.Key, n int, reading string) ([]byte, error) 
 // It reports whether that one was kept: not when none are, or when it's
 // the same secret.
 func (s *Store) RestoreVersion(k vault.Key, n int) (kept bool, err error) {
-	secret, err := s.ReadVersion(k, n, "to restore it")
+	v, err := s.version(k, n)
+	if err != nil {
+		return false, err
+	}
+	return s.restoreVersion(k, v, n)
+}
+
+// RestoreVersionOf is RestoreVersion of the version v, as History listed
+// it, wherever it's numbered now: ErrVersionGone when it's no longer in
+// the history.
+func (s *Store) RestoreVersionOf(k vault.Key, v Version) (kept bool, err error) {
+	v, n, err := s.numbered(k, v)
+	if err != nil {
+		return false, err
+	}
+	return s.restoreVersion(k, v, n)
+}
+
+func (s *Store) restoreVersion(k vault.Key, v Version, n int) (kept bool, err error) {
+	secret, err := s.readVersion(k, v, n, "to restore it")
 	if err != nil {
 		return false, err
 	}
@@ -477,6 +539,36 @@ func (s *Store) ForgetVersions(k vault.Key, ns ...int) error {
 	for _, n := range ns {
 		s.audit("purge", k.String(), fmt.Sprintf("History: forgot version %d", n))
 	}
+	return nil
+}
+
+// ForgetVersionOf deletes k's version v, as History listed it, for good,
+// wherever it's numbered now: ErrVersionGone when it's no longer in the
+// history, even if another command forgets it meanwhile.
+func (s *Store) ForgetVersionOf(k vault.Key, v Version) error {
+	v, n, err := s.numbered(k, v)
+	if err != nil {
+		return err
+	}
+	id := v.ID
+	err = s.inTx(func(tx *sql.Tx) error {
+		res, err := tx.Exec(`DELETE FROM history WHERE id = ? AND kind = ? AND service = ? AND username = ? AND trash_id IS NULL`,
+			id, string(k.Kind), k.Service, k.Username)
+		if err != nil {
+			return err
+		}
+		if gone, err := res.RowsAffected(); err != nil || gone == 0 {
+			return cmp.Or(err, ErrVersionGone)
+		}
+		return nil
+	})
+	if errors.Is(err, ErrVersionGone) {
+		return err
+	}
+	if err != nil {
+		return fmt.Errorf("forget %s's version %d: %w", k, n, err)
+	}
+	s.audit("purge", k.String(), fmt.Sprintf("History: forgot version %d", n))
 	return nil
 }
 

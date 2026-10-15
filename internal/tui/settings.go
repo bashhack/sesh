@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
-	"strconv"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/bashhack/sesh/internal/config"
 )
 
 // Setting is a config setting as the settings panel lists it.
@@ -73,6 +76,12 @@ func (m *Model) showSettings(settings []Setting, recovery *Recovery, touch *Touc
 		run:    m.openChecks,
 		does:   "run them",
 		stay:   true,
+	}, item{
+		label:  fmt.Sprintf("%-24s %s", "Audit log (sesh audit)", "read…"),
+		detail: "Each secret read, each change, delete and restore, and each master password change, the newest first: names and what was done, never a secret. audit.retention_days below sets how long events are kept.",
+		run:    m.openAudit,
+		does:   "read it",
+		stay:   true,
 	})
 	for i, s := range settings {
 		from := ""
@@ -106,10 +115,23 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 	case m.opts.SetSetting == nil:
 		return nil
 	}
-	key, raw, def, applies, set := s.Key, s.Raw, s.Default, s.Applies, m.opts.SetSetting
+	key, raw, def, applies, said, set := s.Key, s.Raw, s.Default, s.Applies, s.Said, m.opts.SetSetting
 	return m.askOver(true, "Change "+key, key, s.Raw, "empty: back to the default; it takes effect "+applies, nil, func(value string) (string, tea.Cmd) {
-		if value == raw {
-			m.say("Nothing changed.")
+		// Against the file as it is now, which another command may have
+		// changed since the panel was read.
+		from, fromSaid := raw, said
+		if now, err := m.opts.Settings(); err == nil {
+			for _, x := range now {
+				if x.Key == key {
+					from, fromSaid = x.Raw, x.Said
+				}
+			}
+		}
+		if value == from || value == "" && strings.HasPrefix(fromSaid, "default") {
+			m.say("Nothing changed: " + key + " is " + cmp.Or(value, "at its default") + " already.")
+			if from != raw || fromSaid != said {
+				return "", m.refreshSettings() // the panel shows it as it was
+			}
 			return "", nil
 		}
 		save := func() tea.Cmd {
@@ -132,17 +154,7 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		if to == "" {
 			to = def
 		}
-		// Against the file as it is now, which another command may have
-		// changed since the panel was read.
-		from := raw
-		if now, err := m.opts.Settings(); err == nil {
-			for _, x := range now {
-				if x.Key == key {
-					from = x.Raw
-				}
-			}
-		}
-		if loss := settingLoss(key, from, to); loss != "" {
+		if loss := config.Loss(key, from, to); loss != "" {
 			// What's deleted for good is asked about first.
 			panel := m.ov
 			m.ov = m.confirm(panel, "Change "+key, loss+" Change it?", func() tea.Cmd {
@@ -165,28 +177,6 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		m.say(said)
 		return "", m.refreshSettings()
 	})
-}
-
-// settingLoss is what changing key from from to to deletes for good, in
-// words; "" when nothing. Each of these keeps everything at 0, so only a
-// smaller number deletes.
-func settingLoss(key, from, to string) string {
-	f, ferr := strconv.Atoi(from)
-	t, terr := strconv.Atoi(to)
-	if ferr != nil || terr != nil || t <= 0 || (f > 0 && t >= f) {
-		return ""
-	}
-	switch key {
-	case "history.keep":
-		return fmt.Sprintf("Each entry's earlier secrets beyond its newest %d will be deleted for good, the next time a command unlocks the vault.", t)
-	case "trash.keep_days":
-		return fmt.Sprintf("Entries in the trash for more than %s will be deleted for good, the next time a command unlocks the vault.", plural(t, "1 day", fmt.Sprintf("%d days", t)))
-	case "audit.retention_days":
-		return fmt.Sprintf("Audit log events older than %s will be deleted, the next time a command unlocks the vault.", plural(t, "1 day", fmt.Sprintf("%d days", t)))
-	case "backup.keep":
-		return fmt.Sprintf("Backups beyond the newest %d will be deleted at the next backup.", t)
-	}
-	return ""
 }
 
 // refreshSettings reads the settings again into the open panel.

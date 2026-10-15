@@ -77,49 +77,55 @@ func DecodeQRCodeFromImageFull(img image.Image) (TOTPInfo, error) {
 
 // ScanQRCodeFull captures a QR code from screen and returns full TOTP info.
 func ScanQRCodeFull() (TOTPInfo, error) {
+	fmt.Println("📸 Please select the area containing the QR code...")
+	text, err := CaptureText()
+	if err != nil {
+		return TOTPInfo{}, err
+	}
+	return ExtractTOTPFullInfo(text)
+}
+
+// CaptureText has the area of the screen with a QR code selected, as
+// macOS's screencapture asks, and is the code's text. It prints nothing,
+// so it can run under a full-screen app.
+func CaptureText() (string, error) {
 	tmp, err := os.CreateTemp("", "sesh-qr-*.png")
 	if err != nil {
-		return TOTPInfo{}, fmt.Errorf("failed to create temp file: %w", err)
+		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tempFile := tmp.Name()
 	if err := tmp.Close(); err != nil {
-		return TOTPInfo{}, fmt.Errorf("close temp file: %w", err)
+		return "", fmt.Errorf("close temp file: %w", err)
 	}
-	defer func() {
-		if err := os.Remove(tempFile); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "warning: failed to remove temp file %s: %v\n", tempFile, err)
-		}
-	}()
+	defer os.Remove(tempFile) //nolint:errcheck // a temporary file, gone at the next reboot if not now
 
-	fmt.Println("📸 Please select the area containing the QR code...")
 	cmd := execCommand("screencapture", "-i", tempFile)
 	if err := cmd.Run(); err != nil {
-		return TOTPInfo{}, fmt.Errorf("failed to capture screenshot: %w", err)
+		return "", fmt.Errorf("failed to capture screenshot: %w", err)
 	}
-
 	fileInfo, err := osStat(tempFile)
 	if err != nil || fileInfo.Size() < 100 {
-		return TOTPInfo{}, fmt.Errorf("screenshot capture was canceled or failed")
+		return "", errors.New("screenshot capture was canceled or failed")
 	}
-
-	fmt.Println("✅ Screenshot captured, processing QR code...")
 
 	file, err := os.Open(filepath.Clean(tempFile))
 	if err != nil {
-		return TOTPInfo{}, fmt.Errorf("failed to open screenshot: %w", err)
+		return "", fmt.Errorf("failed to open screenshot: %w", err)
 	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to close screenshot file: %v\n", err)
-		}
-	}()
-
+	defer file.Close() //nolint:errcheck // read only
 	img, err := png.Decode(file)
 	if err != nil {
-		return TOTPInfo{}, fmt.Errorf("failed to decode screenshot: %w", err)
+		return "", fmt.Errorf("failed to decode screenshot: %w", err)
 	}
-
-	return DecodeQRCodeFromImageFull(img)
+	bmp, err := gozxing.NewBinaryBitmapFromImage(img)
+	if err != nil {
+		return "", fmt.Errorf("failed to process image for QR reading: %w", err)
+	}
+	result, err := qrcode.NewQRCodeReader().Decode(bmp, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode QR code: %w\nMake sure the QR code is clearly visible in the screenshot", err)
+	}
+	return result.GetText(), nil
 }
 
 // parseOTPAuth parses an otpauth://totp/ URI, in any case. The URI

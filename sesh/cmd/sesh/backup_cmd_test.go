@@ -137,6 +137,83 @@ func TestBackupCommand(t *testing.T) {
 	}
 }
 
+// sesh backup list lists the backups; delete deletes those named, every one found first, or --all with a fresh one
+// made; without a terminal, only with --force.
+func TestBackupListAndDelete(t *testing.T) {
+	clock := time.Date(2026, 10, 7, 9, 12, 0, 0, time.UTC)
+	env := backupVault(t, &clock)
+	t.Chdir(t.TempDir()) // a backup to a file named as a word lands there, not in the repo
+	populatePasswordStore(t, env, map[string]string{"password/github": "pw"})
+	for range 3 {
+		if _, err := runBackupOut(t); err != nil {
+			t.Fatal(err)
+		}
+		clock = clock.Add(time.Hour)
+	}
+	made := backups(t, env)
+	if len(made) != 3 {
+		t.Fatalf("made %d backups", len(made))
+	}
+	name := func(i int) string { return filepath.Base(made[i].Path) }
+	if out, err := runBackupOut(t, "list"); err != nil || !strings.Contains(out, name(0)) || !strings.Contains(out, name(2)) {
+		t.Errorf("list: %q, %v", out, err)
+	}
+	for args, wantSub := range map[string]string{
+		"delete":                                 "name the backups to delete",
+		"delete --all " + name(0):                "not both",
+		"delete " + name(0):                      "add --force to delete without asking",
+		"delete --force nope.db":                 "no backup named nope.db",
+		"delete --force " + name(0) + " nope.db": "no backup named nope.db",
+		"list extra":                             "takes nothing more",
+		"--force list":                           "write ./list",
+		"--force delete --all":                   "sesh backup delete --force",
+	} {
+		if _, err := runBackupOut(t, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("%s: %v, want %q", args, err, wantSub)
+		}
+	}
+	if got := backups(t, env); len(got) != 3 {
+		t.Fatalf("a refused delete deleted: %d left", len(got))
+	}
+	app, _ := cliApp("n\n", true)
+	if _, errOut, err := runCLI(app, runBackup, "delete", name(0)); err != nil || !strings.Contains(errOut, "Nothing deleted.") || len(backups(t, env)) != 3 {
+		t.Errorf("answered no: %q, %v", errOut, err)
+	}
+	app, _ = cliApp("y\n", true)
+	if out, _, err := runCLI(app, runBackup, "delete", name(0)); err != nil || !strings.Contains(out, "Deleted the backup "+name(0)) || len(backups(t, env)) != 2 {
+		t.Errorf("answered yes: %q, %v", out, err)
+	}
+	// A delete that fails says how far it got.
+	dir := filepath.Dir(made[1].Path)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runBackupOut(t, "delete", "--force", name(1), name(2))
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "(deleted 0 of 2)") {
+		t.Errorf("a delete that fails: %v", err)
+	}
+	if out, err := runBackupOut(t, "delete", "--force", name(1), name(2)); err != nil || !strings.Contains(out, "Deleted 2 backups") || len(backups(t, env)) != 0 {
+		t.Errorf("two, --force: %q, %v", out, err)
+	}
+	for range 2 {
+		clock = clock.Add(time.Hour)
+		if _, err := runBackupOut(t); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// In the same second as the newest: the fresh one is new, and the one before is deleted with the rest.
+	newest := backups(t, env)[0].Path
+	if out, err := runBackupOut(t, "delete", "--all", "--force"); err != nil || !strings.Contains(out, "Deleted 2 backups; made a fresh one") || len(backups(t, env)) != 1 {
+		t.Errorf("--all: %q, %v", out, err)
+	}
+	if left := backups(t, env); len(left) != 1 || left[0].Path == newest {
+		t.Errorf("--all left %v, the one before was %s", left, newest)
+	}
+}
+
 // Doctor's Backups row: none, recent, too old, off.
 func TestDoctor_Backups(t *testing.T) {
 	clock := time.Date(2026, 10, 7, 9, 12, 0, 0, time.Local)

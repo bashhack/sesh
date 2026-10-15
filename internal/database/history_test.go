@@ -518,3 +518,60 @@ func TestHistory_SaveImportedRoom(t *testing.T) {
 		t.Fatalf("SaveImported with a large one = %+v, %v", got, err)
 	}
 }
+
+// A version named as History listed it is found whatever its number now; one forgotten stays gone, its id not
+// given to a later one; another entry's version isn't this one's.
+func TestHistory_VersionOf(t *testing.T) {
+	s := historyStore(t, 10)
+	k := vault.Key{Kind: vault.KindAPIKey, Service: "openai"}
+	other := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	// k's last, so its newest earlier secret has the highest id, the one SQLite would give again.
+	for _, pw := range []string{"one", "two", "three"} {
+		if err := s.Put(other, []byte("bank-"+pw)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Put(k, []byte(pw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h, err := s.History(k)
+	if err != nil || len(h) != 2 {
+		t.Fatalf("History = %v, %v", h, err)
+	}
+	oh, err := s.History(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReadVersionOf(k, oh[0], "test"); !errors.Is(err, ErrVersionGone) {
+		t.Errorf("another entry's version read: %v", err)
+	}
+	if err := s.ForgetVersionOf(k, oh[0]); !errors.Is(err, ErrVersionGone) {
+		t.Errorf("another entry's version forgotten: %v", err)
+	}
+	// Another command forgets "two", the newest, then a new secret is stored.
+	if err := s.ForgetVersions(k, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put(k, []byte("four")); err != nil {
+		t.Fatal(err)
+	}
+	if now, err := s.History(k); err != nil || now[0].ID == h[0].ID {
+		t.Errorf("a forgotten version's id was given again: %v, %v", now, err)
+	}
+	if _, err := s.RestoreVersionOf(k, h[0]); !errors.Is(err, ErrVersionGone) {
+		t.Errorf("a forgotten version restored: %v", err)
+	}
+	if err := s.ForgetVersionOf(k, h[0]); !errors.Is(err, ErrVersionGone) {
+		t.Errorf("a forgotten version forgotten again: %v", err)
+	}
+	// "one", version 3 when listed, is version 3 now too, after "three": still the one found.
+	if secret, err := s.ReadVersionOf(k, h[1], "test"); err != nil || string(secret) != "one" {
+		t.Errorf("ReadVersionOf = %q, %v", secret, err)
+	}
+	if err := s.ForgetVersionOf(k, h[1]); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(versions(t, s, k), " "); got != "three" {
+		t.Errorf("history = %q", got)
+	}
+}
