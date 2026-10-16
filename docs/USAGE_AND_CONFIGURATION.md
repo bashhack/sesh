@@ -149,7 +149,9 @@ Commands that change or delete say which entry they're about to act on before th
 
 sesh can complete its commands, flags, and their values when you press Tab, in bash, zsh, and fish. `sesh completion bash`, `sesh completion zsh`, or `sesh completion fish` prints the script for that shell; your shell needs to load it. Shell setups vary a lot (dotfiles managers, `ZDOTDIR`, plugin managers, frameworks), so below is what each shell needs, with the usual places as examples. Put it wherever your setup keeps such things.
 
-There are two ways, for every shell:
+**Installed with Homebrew,** the scripts are already in Homebrew's completion folders, kept in step with each upgrade: turn on Homebrew's completion for your shell ([Homebrew's guide](https://docs.brew.sh/Shell-Completion)) and skip the rest of this section. A copy saved by hand as below would take the place of Homebrew's, and go stale on upgrade.
+
+Otherwise there are two ways, for every shell:
 
 - **Load it at startup**, with a line in a file your interactive shell reads. It's always in step with the installed sesh, at the cost of running sesh once per new shell.
 - **Save it as a file** where your shell looks for completions. Nothing runs at startup. If a sesh upgrade ever changes the script, save it again. (The candidates themselves always come from the installed sesh, so new flags and values show up without that.)

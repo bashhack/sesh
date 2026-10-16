@@ -48,17 +48,16 @@ archives:
       - README.md
       - LICENSE
       - docs/*.md
-      - docs/assets/*.mermaid
 brews:
   - repository:
       owner: bashhack
       name: homebrew-sesh
     directory: Formula
     homepage: https://github.com/bashhack/sesh
-    description: An extensible terminal-first authentication toolkit for secure credential workflows
+    description: Terminal-first toolkit for secure credential workflows
     license: MIT
     test: |
-      system "#{bin}/sesh --version"
+      assert_match version.to_s, shell_output("#{bin}/sesh --version")
     install: |
       bin.install "sesh"
       # sesh completion bash|zsh|fish, into Homebrew's completion folders.

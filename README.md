@@ -55,9 +55,10 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 > **Platform:** macOS and Linux. The vault, encrypted and unlocked with your master password, works the same on both and needs no setup. Touch ID unlock is macOS-only.
 
 ```bash
-# Option 1: Install with Homebrew (macOS)
+# Option 1: Install with Homebrew (macOS and Linux)
 brew install bashhack/sesh/sesh
-# Note: Homebrew automatically adds sesh to your PATH, so it's ready to use immediately
+# Note: Homebrew adds sesh to your PATH, and installs its shell completion
+# for bash, zsh and fish (turn on Homebrew's completion to use it)
 
 # Option 2: Install using Go (requires Go 1.27+)
 go install github.com/bashhack/sesh/sesh/cmd/sesh@latest
@@ -65,7 +66,8 @@ go install github.com/bashhack/sesh/sesh/cmd/sesh@latest
 # You can add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):
 # export PATH=$PATH:$HOME/go/bin
 
-# Option 3: Download pre-built binary
+# Option 3: Download a pre-built binary: macOS (zip) or Linux (tar.gz),
+# for x86_64 or arm64
 # Visit: https://github.com/bashhack/sesh/releases
 ```
 
