@@ -1147,7 +1147,7 @@ For a very long list, `xargs` runs sesh more than once, and each run is all or n
 ╰─────────────────────────────────────────────────────────────────╯
 ```
 
-- **Type to search,** matched and ranked as `sesh search` does, with the letters matched picked out; with nothing typed, every entry is listed, the ones read most recently first (as the audit log records reads; showing an entry in the app isn't one, nor is revealing it with Tab or Ctrl-R, or showing its key as a QR code).
+- **Type to search,** matched and ranked as `sesh search` does, with the letters matched picked out; with nothing typed, every entry is listed, the ones read most recently first (as the audit log records reads; showing an entry in the app isn't one, nor is revealing its secret with Tab or Ctrl-R, or showing its key as a QR code).
 - **The selected entry is shown beside the list** when the window is wide enough: its kind, folder, username, URL, fields, tags, when it last changed, and its notes (a secure note's text); Shift-↑ and Shift-↓ scroll it when it's long. A TOTP entry's code is shown large, with a bar counting down the seconds it has left.
 - **Passwords and secret fields stay hidden** (`••••••••`) until **Tab** reveals them, for 30 seconds, until you move to another entry, or until Tab again. A TOTP entry's key is too: Tab shows it (the audit log records it), to move it to another app.
 - **Folders and tags are in a sidebar** on the left when the window is at least 110 columns wide (in any window, Ctrl-G's **folders and tags…** lists the same): every entry, each folder (with those inside it, and how many entries each holds, counting its subfolders), entries in no folder, and each tag. Picking one shows only its entries, and the search line says which (`1 of 41 in work/aws`); searching then looks within it. Esc clears it, after the search.
@@ -1377,7 +1377,7 @@ sesh list files
 - **Exports:** a JSON export (and an encrypted one) holds a file's content in base64, with `"encoding": "base64"`, which `sesh import --from sesh` reads back. A CSV export leaves file entries out, since CSV holds text, and says how many.
 - **`sesh run`** gives a command a file as a path: see below.
 - **In `sesh ui`:** adding a **file** entry takes the file's path (a full path, or from `~/`); editing one can give it a new file, or keep the one it has. The preview shows the file's name and size; Tab reveals a text file's content. Enter copies a text file. Ctrl-K's **save to a file…** (`s`) writes it out, readable only by you, refusing to replace a file that's there.
-- **The file's name** is a name alone, up to 255 bytes, with no `/` or `\`, and no control or text-direction characters: an import with any other is skipped, saying why.
+- **The file's name** is a name alone, up to 255 bytes, not `.` or `..`, with no `/` or `\`, and no control or text-direction characters. `sesh add file` refuses any other, and an import skips the entry, saying why.
 
 ### Running commands with secrets (`sesh run`, `sesh inject`)
 
@@ -1729,10 +1729,12 @@ If QR scanning fails (e.g., QR code too blurry, wrong format, or you press Escap
 | "wrong master password" (at a terminal, "after 3 attempts", with a hint) | The password typed, or `SESH_MASTER_PASSWORD`, doesn't open this vault | Check `SESH_MASTER_PASSWORD` and Caps Lock. Forgotten: `sesh recover` with your recovery key; see [Forgotten master password](#forgotten-master-password) |
 | "there's no terminal here to type the master password at" | A script, a pipe or cron ran sesh while the vault was locked, so nobody can type the password | Run any sesh command at a terminal first: the agent then keeps the vault unlocked for the idle timeout. For a job with no terminal, give the password in `SESH_MASTER_PASSWORD` |
 | "there's no vault yet" | sesh found no vault where the config says it lives | `sesh add` creates one with your first entry; `sesh init` chooses where it lives first. With a vault elsewhere, check `db_path` with `sesh config` |
-| "… isn't a sesh vault, or is damaged" | The file at `db_path` doesn't read as a sesh vault | Check `db_path` (`sesh config`); if it's the vault and damaged, `sesh restore` lists the backups to put back |
+| "open database: file is not a database …" | The file at `db_path` is damaged, or isn't a database | Check `db_path` (`sesh config`); if it's the vault, `sesh restore` lists the backups to put back |
+| "… isn't a sesh vault: it holds another program's data …" | `db_path` names another program's file | Point `db_path` at the vault, or choose a new place for one with `sesh init` |
 | "… holds entries but not the record its key is made from" | The vault's key record is missing, so nothing in it can be opened | `sesh restore` from a backup |
-| "… was made by a sesh with vault format N; this one reads M" | The vault was made by a newer or older sesh | Use the sesh that made it, or upgrade |
-| "another sesh command was using the vault" (from `sesh audit prune`) | Another sesh command was reading the vault while the prune compacted it | Run it again when no other sesh command is running |
+| "database schema version N is newer than this binary supports …" | The vault was made by a newer sesh | Upgrade sesh |
+| "… isn't a sesh vault, or is damaged", or "… was made by a sesh with vault format N; this one reads M" (from `sesh restore`) | The backup chosen is damaged, or from a sesh with another vault format | Choose another backup from the list `sesh restore` gives |
+| "The vault wasn't compacted, because another sesh command was using it; …" (from `sesh audit prune`) | The old events were removed, but another sesh command had the vault open, so the file wasn't shrunk | Nothing is wrong. To shrink the file, run it again when no other sesh command is running |
 | "the vault's master password was changed by another sesh command while this one ran" | `sesh passwd` (or a restore) ran meanwhile | Run it again, with the new password |
 | "warning: automatic backup: …" | The automatic backup couldn't be made; the command itself went ahead | `sesh doctor`'s Backups row says why; check `backup.dir` with `sesh config` |
 
@@ -1741,10 +1743,10 @@ If QR scanning fails (e.g., QR code too blurry, wrong format, or you press Escap
 | Message | What it means | What to do |
 |---|---|---|
 | "warning: sesh agent unavailable: …" | The agent couldn't start or be reached, so each command asks for the master password itself | `sesh doctor`'s Agent row, and the agent's log (below). The agent refuses to start when it can't keep its key out of swap, as with a memory-locking limit of 0 (`ulimit -l`) |
-| "… from another sesh build …; stop it with: kill PID" | An agent started by an earlier sesh is still running after an upgrade | Run the `kill` command it gives; the next command starts a new agent |
+| "stop the sesh agent from another build (pid N, …); stop it with: kill N", or "… uses protocol version N, this sesh uses M; stop it with: kill N" | An agent from another sesh build is running, and sesh couldn't stop it. (Usually it replaces it itself, saying "Restarted the sesh agent…") | Run the `kill` command it gives; the next command starts a new agent |
 | "SESH_AUTH_SOCK is N characters …" or "the agent's socket path is N characters …" | The agent's socket path is too long for the system | Set `SESH_AUTH_SOCK` to a shorter path, in a folder only you can write to |
 | "the screen locked while sesh was unlocking: unlock it again" | The Mac's screen locked during the unlock, which `agent.lock_on_screen_lock` treats as a lock | Run the command again |
-| Asked for the master password more often than expected | The agent locks after `agent.idle_timeout` (10 minutes) without use, at `agent.max_lifetime` (8 hours), when the computer sleeps, and when the Mac's screen locks | Change those in `sesh config`; see [Using the sesh agent](#using-the-sesh-agent) |
+| Asked for the master password more often than expected | The agent locks after `agent.idle_timeout` (10 minutes) without use, at `agent.max_lifetime` (8 hours), when the computer sleeps, and when the Mac's screen locks | Change them with `sesh config set`, then `sesh agent stop`, so the next command starts an agent with them; see [Using the sesh agent](#using-the-sesh-agent) |
 
 The agent writes a log, for diagnosing recent runs: `~/Library/Caches/sesh/logs/agent.log` on macOS, `$XDG_CACHE_HOME/sesh/logs/agent.log` (or `~/.cache/sesh/logs/agent.log`) on Linux. It records unlocks, locks and errors, never a secret.
 
@@ -1752,9 +1754,10 @@ The agent writes a log, for diagnosing recent runs: `~/Library/Caches/sesh/logs/
 
 | Message | What it means | What to do |
 |---|---|---|
-| "touch ID isn't available here …" | No sensor with an enrolled fingerprint, or sesh isn't in your desktop session (over SSH, Touch ID isn't tried) | Type the master password; it always works |
-| "the Touch ID unlock is out of date for this vault" | The master password changed, or your fingerprints changed, since Touch ID unlock was turned on | `sesh touchid enable` again |
-| "touch ID is locked out" | Too many failed fingerprints | Unlock the Mac with its password once, then try again |
+| "Touch ID isn't available here, so enter your master password." or "Touch ID isn't used over SSH, …" | No sensor with an enrolled fingerprint, or sesh is running over SSH | Type the master password; it always works |
+| "Your fingerprints changed since Touch ID unlock was turned on, so it no longer works and is now off. …" | Adding or removing a fingerprint retires the key Touch ID unlock used, so sesh turned it off | Enter the master password, then `sesh touchid enable` again |
+| "Touch ID unlock was out of date for this vault and is now off. …" | The Touch ID file no longer opens this vault: the vault's key changed and the file didn't follow, so sesh turned it off | Enter the master password, then `sesh touchid enable` again |
+| "Touch ID is locked after too many attempts, so enter your master password." | Too many failed fingerprints | Enter the master password; unlocking the Mac with its password once lets Touch ID work again |
 
 **Everyday commands, AWS and TOTP**
 
@@ -1768,7 +1771,7 @@ sesh add --help
 |---|---|---|
 | "\"X\" matches N entries; name one by its ID" | Your words matched several entries, and there's no terminal to choose one at | Use one of the IDs it lists, or add words: `sesh copy github alice` |
 | "X already exists; add --force to replace it, …" | An entry with that name and username is there already | `--force` replaces its secret (the old one goes into its [history](#password-history)), or change it with `sesh edit` |
-| "… asks first, and there's no terminal to ask at; add --force …" | A delete or restore ran from a script | Check what it acts on, then add `--force` |
+| "… asks first, and there's no terminal to ask at; add --force …" | Something that asks first (a delete, a restore, deleting backups, or `sesh config set` lowering a setting that deletes) ran without a terminal | Check what it acts on, then add `--force` |
 | "there's no desktop session to copy to here …" | Linux with no desktop session, as over SSH | `sesh get` prints the value instead |
 | "no clipboard tool found: install …" | Linux with no clipboard tool | Install the one it names: `wl-clipboard` under Wayland, or `xclip` or `xsel` under X11 |
 | "no AWS entry found for profile (X)" | No credentials stored for this profile | Run `sesh aws setup` |
@@ -1812,7 +1815,7 @@ The AWS subshell provides:
 - **On exit**: the credentials leave with the shell; AWS still accepts them until they expire
 - **Built-in Commands**: `sesh_status`, `verify_aws`, `sesh_help`
 - **Expiry Tracking**: Check remaining time with `sesh_status` (includes countdown and progress bar)
-- **Shells**: zsh and bash get the prompt and helper commands; another shell gets the credentials, and the prompt and helpers only if it reads `$ENV` when it starts, as `sh` does
+- **Shells**: zsh and bash get the prompt and helper commands; another shell gets the credentials, the prompt if it uses `PS1`, and the helper commands only if it reads `$ENV` when it starts, as `sh` does
 
 ## Getting Help
 

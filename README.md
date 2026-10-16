@@ -40,7 +40,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Encrypted Export** — Entries protected by a password of their own, to move them to another machine (`sesh export`; `sesh import --from sesh` reads it)
 - **Import** — From Bitwarden, KeePass, Chrome, Firefox, Safari and Google Authenticator (`sesh import`)
 - **Trash and History** — A deleted entry stays in the trash for 30 days, and each entry keeps its earlier secrets, so either can be brought back
-- **Folders and Tags** — File entries, and narrow lists and searches by them
+- **Folders and Tags** — Put entries in folders and tag them, and narrow lists and searches by them
 - **Health and Checks** — `sesh health` finds weak, reused and old passwords; `sesh doctor` checks the setup and that every entry can be read
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, secure notes, and files kept whole (a kubeconfig, a TLS key), each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
 - **Secrets for commands** — `sesh run` puts vault values in a command's environment and hides them in its output; `sesh inject` fills a config template; `sesh git-credential` gives git a site's password as its credential helper
@@ -52,7 +52,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **QR Codes** — Set up TOTP by selecting the QR code on screen (macOS) or from a screenshot or photo (`--qr-image`); move a key to your phone with `sesh show --qr`
 - **Passphrases** — `sesh generate --words 6` makes a passphrase from the [EFF's long word list](https://www.eff.org/dice) (CC BY 4.0), as `--generate` does when storing a password
 - **AWS Profiles and Several Accounts** — `sesh aws --profile production`; several accounts on one site, told apart by username
-- **Audit Logging** — Every secret read, change and deletion is logged; review it with `sesh audit`. Events are kept 90 days by default (`audit.retention_days`)
+- **Audit Logging** — Every secret read (except the TOTP codes `sesh ui` draws), change and deletion is logged; review it with `sesh audit`. Events are kept 90 days by default (`audit.retention_days`)
 
 ## Installation
 
@@ -82,7 +82,7 @@ Type `sesh` for every command, or `sesh <command> --help` for one.
 sesh add password github --username alice   # type it (hidden), or pipe it in
 sesh add password shop --generate           # a strong one, copied as it's saved
 sesh add totp github --qr                   # select the QR code on screen
-sesh copy github alice                      # its password
+sesh copy github password                   # its password
 sesh copy github totp                       # its TOTP code
 sesh ui                                     # search everything; Enter copies
 ```
@@ -112,7 +112,7 @@ sesh list                          # every entry
 sesh list notes                    # or of a kind: passwords, keys, notes, totp, files
 sesh list --folder work --tag dev  # narrowed by folder and tag
 sesh search github                 # by any part of a name, username, or site
-sesh copy github alice             # copy the password (the clipboard clears after 30s)
+sesh copy github password          # copy the password (the clipboard clears after 30s)
 sesh copy github --username        # or --url, or --field pin
 sesh get openai                    # print it, for a pipe
 sesh code github                   # a TOTP code, and how long it has left
@@ -213,7 +213,7 @@ how the agent starts, locks, and stops.
 - Go 1.27+
 - macOS or Linux (Touch ID unlock is macOS-only)
 - Make (optional — provides convenience targets, but `go build ./sesh/cmd/sesh` works directly)
-- On macOS, Xcode's command line tools: Touch ID unlock is built with cgo, and a build without a C compiler has none. Linux builds are pure Go
+- On macOS, Xcode's command line tools: Touch ID unlock and locking when the screen locks are built with cgo, and a build without a C compiler quietly has neither. Linux builds are pure Go
 
 ### Building
 ```bash

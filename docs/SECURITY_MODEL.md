@@ -6,7 +6,7 @@ This document describes the security architecture and privacy principles that gu
 
 sesh is built on three fundamental principles:
 
-1. **Privacy First**: sesh stores your secrets locally and makes no network connections itself. A secret leaves the vault only when you hand it to something: the clipboard, a command (`sesh run`), a file (`sesh inject`, `sesh get -o`), or git (`sesh git-credential`), which sends it to the site. For AWS, only the MFA code goes out, through the AWS CLI
+1. **Privacy First**: sesh stores your secrets locally and makes no network connections itself. A secret leaves the vault only when you hand it to something: the clipboard, the terminal (`sesh get`, `sesh show --reveal`), a command (`sesh run`), a file (`sesh inject`, `sesh get -o`, a plain export), or git (`sesh git-credential`), which sends it to the site. For AWS, only the MFA code goes out, through the AWS CLI
 2. **Encryption at Rest**: every secret is encrypted with AES-256-GCM, under a key made from your master password with Argon2id, and each entry under a key of its own made from that one
 3. **Transparent Security**: Be honest about what we can and cannot protect against
 
@@ -17,7 +17,7 @@ sesh is designed to reduce exposure to:
 - **Corporate Data Harvesting**: Unlike browser extensions or corporate MFA apps, sesh never phones home
 - **Credential Theft**: Every secret is encrypted in the vault, with a key derived from your master password. The key itself is stored only wrapped, in the vault's optional recovery key record and the optional Touch ID file, and in the agent's memory while it's unlocked
 - **Memory Scraping**: Best-effort memory zeroing reduces exposure windows
-- **Accidental Exposure**: `sesh aws` puts AWS credentials only in the shell it starts, not in your own
+- **Accidental Exposure**: `sesh aws` puts AWS credentials only in the shell it starts, not in your own, unless `--no-subshell` asks it to print them for your own shell
 - **Supply Chain Attacks**: a small set of dependencies, each pinned by its checksum (`go.sum`), and no code loaded at run time
 
 sesh is NOT designed to protect against:
@@ -59,7 +59,7 @@ sesh derives the master key from your master password via Argon2id, the same way
 - **KDF**: Argon2id, by default `t=3, m=256 MiB, p=4, keyLen=32`. The settings are configurable (`master_password` in the config file, or `SESH_KDF_MEMORY`/`_TIME`/`_THREADS`) from OWASP's minimum (`m=19 MiB, t=2, p=1`) up to the most an unlock accepts (`m=1 GiB, t=10, p=16`), so whatever sesh makes it can open. They're stored in the key record: a vault keeps the ones it was created or last re-keyed with
 - **Key record**: one row in the vault file (`vault_key`; sesh creates the file with 0600 permissions) holds the KDF salt (32 random bytes), the Argon2id settings, and a verification blob. **No secrets.** Same public-info model as bcrypt/scrypt — salt and params are safe to expose
 - **Verification blob**: AES-256-GCM encryption of the constant string `"sesh-verify"` using the derived key. On unlock, sesh re-derives the key from the supplied password and tries to decrypt this blob. GCM's authentication tag rejects wrong passwords immediately, without touching any real entries
-- **First run**: needs no setup. Before the first prompt, sesh says it's creating a vault, where, and that a forgotten password can't be reset, only worked around with a recovery key. It then asks for the master password twice, generates the salt, derives the key, records them in the new vault, and starts the agent and unlocks it with the new password, so the next command doesn't prompt. It then offers to make a recovery key and, on a Mac with Touch ID, to turn on Touch ID unlock
+- **First run**: needs no setup. Before the first prompt, sesh says it's creating a vault, where, and that a forgotten password can't be reset, only worked around with a recovery key. It then asks for the master password twice, generates the salt, derives the key, records them in the new vault, and starts the agent and unlocks it with the new password, so the next command doesn't prompt (a run given `SESH_MASTER_PASSWORD` creates the vault from it, and doesn't use the agent). It then offers to make a recovery key and, on a Mac with Touch ID, to turn on Touch ID unlock
 - **Subsequent runs**: the password is checked by the sesh agent (below). The first command after the agent starts prompts; later commands reuse the agent's key without prompting. If the agent is unavailable, sesh prompts on every run and verifies the password itself
 - **Minimum password length**: 8 characters. This is a **floor**, not a recommendation — it exists to reject obvious mistakes (empty input, fat-fingered short strings). Argon2id makes each guess expensive, but a short password has few enough possibilities that an attacker with the vault file can still try them offline. **Choose a passphrase**: four or more random words from a large wordlist (40+ bits of entropy) gives meaningful resistance; longer is better
 - **Strength check**: a new master password (first run, password change, recovery) is also rated with zxcvbn, as stored passwords are. One it estimates fewer than about 10^8 guesses would find gets a warning, and at a terminal sesh asks whether to use it anyway (the default is no, which asks for another). It's advice, not a guarantee: zxcvbn knows common passwords and English words, not every pattern an attacker might try
@@ -67,7 +67,7 @@ sesh derives the master key from your master password via Argon2id, the same way
 
 **Threat model.** An attacker with the vault file can attempt offline brute-force using the public salt and params, each guess costing one Argon2id derivation at the vault's settings. A strong passphrase (four random words from a large wordlist, 40+ bits of entropy) is resistant; a weak password is not. This is the same threat model as any password manager — the strength of the master password bounds the security of everything under it.
 
-**Metadata exposure.** Even without the master password, an attacker with the DB file can read service names, account names, folders, tags, timestamps, audit log entries, and each entry's kind, its settings (TOTP code settings, the AWS MFA device, a file entry's file name and size, and earlier file names in its history), URL, custom field names and plain field values. Only the secrets, notes and secret field values are encrypted. Someone who can write to the file could also change what's readable, such as a URL, without the master password. Full-database encryption (SQLCipher-style) would require a CGo dependency and is not implemented.
+**Metadata exposure.** Even without the master password, an attacker with the DB file can read service names, account names, folders, tags, timestamps, audit log entries, and each entry's kind, its settings (TOTP code settings, the AWS MFA device, a file entry's file name, and earlier file names in its history), URL, custom field names and plain field values. Nothing is padded, so the length of each encrypted value can be read too: a password's length, or a file's size. Only the secrets, notes and secret field values are encrypted. Someone who can write to the file could also change what's readable, such as a URL, without the master password. Full-database encryption (SQLCipher-style) would require a CGo dependency and is not implemented.
 
 **Notes and secret fields.** An entry's notes and secret field values are encrypted together, as one value, with AES-256-GCM under the vault key. Its associated data is the entry's kind, service name and username, under a tag of its own (`sesh-details-v1`, where the secret's is `sesh-entry-v1`). So they open only on their own entry, and can't be swapped with its secret. A rename or a password change re-encrypts them with the secret, in the same step, and `sesh doctor` decrypts and checks them. Notes and secret values can't hold control characters other than tabs and line breaks, and `sesh show` escapes control and text-direction characters in every value it prints, the secret included, so what it shows can't send the terminal commands or make one line look like another. `get --show` prints a value exactly as stored, for scripts and pipes. With `--editor`, the notes are written to a file for the editor, in a folder only the user can read: in memory (`/dev/shm`) where Linux has it, otherwise in `$TMPDIR`, which is on disk on macOS. The editor runs without `SESH_MASTER_PASSWORD` in its environment. Afterwards sesh writes zeros over the file in place and removes it, also on SIGHUP or SIGTERM while the editor is open; a copy-on-write file system such as APFS can keep the old bytes until the space is reused. The editor itself may keep copies, which sesh can't control.
 
@@ -130,7 +130,7 @@ A recovery key lets someone who forgot the master password set a new one. There'
 
 ##### Sesh agent
 
-The agent is a per-user background process (`sesh agent`). The run that creates the vault starts it and unlocks it with the new password; after that, the first command that needs the key starts it if it isn't running. The agent holds the derived key in memory and performs entry encryption and decryption on the CLI's behalf; the key itself never crosses the socket.
+The agent is a per-user background process (`sesh agent`). A run at a terminal that creates the vault starts it and unlocks it with the new password; after that, the first command that needs the key starts it if it isn't running. The agent holds the derived key in memory and performs entry encryption and decryption on the CLI's behalf; the key itself never crosses the socket.
 
 - **Socket**: `<user-cache-dir>/sesh/agent.sock` (override with `SESH_AUTH_SOCK`), mode 0600 in a 0700 directory. Both ends check the other's UID (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on macOS): the agent rejects clients run by other users, and the CLI refuses an agent socket owned by another user before sending it anything
 - **Unlock**: the CLI prompts, then sends the password and the vault's public salt, Argon2id settings, and verify blob to the agent, which derives and checks the key. Unlocks run one at a time
@@ -143,7 +143,7 @@ Where the derived key is, by state:
 |-------|---------------------|
 | No agent (`SESH_MASTER_PASSWORD` runs, or agent unavailable) | In the sesh process, for one command |
 | Agent unlocked | In the agent's locked memory page |
-| Agent locked | Nowhere: zeroed in place. After the idle timeout or max lifetime locks it, the agent also exits; after a lock on sleep or screen lock it exits if nothing unlocks it within the idle timeout; after `sesh agent lock` or SIGUSR1 it keeps running |
+| Agent locked | Nowhere: zeroed in place. A lock the agent's own check finds (idle timeout, max lifetime or sleep, checked every 15 seconds) also stops it at once; a lock found as a command arrives, or a screen lock, stops it if nothing unlocks it within the idle timeout; after `sesh agent lock` or SIGUSR1 it keeps running |
 | Agent stopped | Nowhere; the next command starts a fresh agent |
 
 What this changes: while the agent is unlocked, **any process running as your user can ask it to decrypt entries**, and listing or deleting entries (`sesh list`, `sesh trash`) no longer asks for the password. This is the same trade-off `ssh-agent` makes. The window is bounded:
@@ -157,7 +157,7 @@ What this changes: while the agent is unlocked, **any process running as your us
 
 **Sleep.** With `agent.lock_on_sleep`, the agent takes the wall clock running more than 10 seconds ahead of its monotonic clock, between two of its checks, as the computer having slept, and locks; a small correction to the clock doesn't. Without it, time the computer spends asleep still counts toward both timers, as it does on the clock: a laptop closed overnight wakes with the agent past its timeouts. The agent locks at the first request after waking, before answering it: one for the key (to read or store a secret) is refused, and a status says it's locked. An unlock that follows, from the same command, unlocks it again; if nothing does within the idle timeout, it stops, as it does after its timers lock it. With no request, it locks and stops within 15 seconds of waking; on a Mac whose screen locked first, it's locked as the screen locked, and stops if nothing unlocks it within the idle timeout. (Go's timers run on a clock that stops during sleep, `mach_absolute_time` on macOS and `CLOCK_MONOTONIC` on Linux, so the agent also checks the wall clock, before each request and every 15 seconds. Setting the clock forward locks it early; setting it back doesn't keep it unlocked longer than its timers allow.)
 
-Locking zeroes the key. An automatic lock (idle timeout or max lifetime) also shuts the agent down, and so does an agent that nobody unlocks within the idle timeout. A lock you ask for leaves it running. Either way, the next command prompts again.
+Locking zeroes the key. A lock the agent's own check finds also shuts it down at once; one found as a command arrives, or a screen lock, shuts it down if nobody unlocks it within the idle timeout. A lock you ask for leaves it running. Either way, the next command prompts again.
 
 **Upgrades**: the agent reports a hash of its executable. A `sesh` from any other build stops it and starts its own, so a fix in a new release reaches the agent on the first command after upgrading. Without this, the old agent would keep serving until it stopped.
 
@@ -309,7 +309,7 @@ Every command reads and writes the one vault, through the same store, under its 
 ### What sesh DOES Do
 
 - **Local-Only Storage**: All data in a local encrypted vault
-- **Audit Trail**: Every secret read, change, and deletion is logged
+- **Audit Trail**: Every secret read (except the TOTP codes `sesh ui` draws), change, and deletion is logged
 - **Explicit User Control**: Nothing runs on its own except upkeep when a command unlocks the vault: the daily backup, and removing audit events, trash and earlier secrets past their settings
 - **Open Source**: Complete transparency in implementation
 - **Few Dependencies**: each pinned by its checksum (`go.sum`)
@@ -362,7 +362,7 @@ sesh backs up the vault automatically: once a day by default, the first time a c
 2. **Use Unique Profiles**: Separate work/personal accounts with profiles
 3. **Regular Cleanup**: Periodically review stored entries with `sesh list`
 4. **Install in a Protected Location**: Install sesh where other users can't replace it, not a shared writable location like `/tmp`: a replaced binary would see your master password and your secrets
-5. **Know Where AWS Credentials Go**: `sesh aws` puts the session's credentials in the shell's environment variables, where every program run in it can read them; `sesh aws --clip` puts only the MFA code on the clipboard, where clipboard managers may record it.
+5. **Know Where AWS Credentials Go**: `sesh aws` puts the session's credentials in the shell's environment variables, where every program run in it can read them; `--no-subshell` prints them for your own shell, where they stay until you unset them or it exits; `sesh aws --clip` puts only the MFA code on the clipboard, where clipboard managers may record it.
 
 ### For Developers
 

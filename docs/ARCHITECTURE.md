@@ -179,20 +179,20 @@ Every entry lives in one encrypted vault, a SQLite file:
 
 **Unlocking.** Every command that opens the vault gets its key source from `main.go`'s `buildKeySource(cfg)`:
 
-1. It reads the vault's key record, which needs no key. With no record yet (the first run), it asks for a new master password twice, makes the record, and unlocks the agent with that password; at a terminal it also offers a recovery key and Touch ID.
+1. It reads the vault's key record, which needs no key. With no record yet (the first run), it makes one: from `SESH_MASTER_PASSWORD` when that's set, otherwise from a new master password asked for twice, which then also unlocks the agent; at a terminal it also offers a recovery key and Touch ID.
 2. With `SESH_MASTER_PASSWORD` set, the agent is never used: the key is derived in this process on every run.
 3. Otherwise it connects to the agent, starting one if needed. If the agent already holds this vault's key (matched by the vault's unlock id, a SHA-256 of the verify blob), the store encrypts through it (`agent.Oracle`).
 4. If not, at a terminal it tries Touch ID first when it's on, then asks for the master password, up to 3 tries. The agent is sent the password with the vault's salt, Argon2id settings and verify blob, and derives and checks the key itself.
-5. If the agent can't be reached, or fails, the key is derived in this process from the password already typed (`MasterPasswordSource`, wrapped as an oracle).
+5. If the agent can't be reached, or fails, the key is derived in this process from the master password, asked for if it hasn't been (`MasterPasswordSource`, wrapped as an oracle).
 
 The store only sees a `database.CryptoOracle`, so it doesn't know whether the agent or this process holds the key. After opening, it checks the file's key record is still the one the key was checked against, so a password changed by another command meanwhile is noticed.
 
 **The agent** (`internal/agent`, `sesh agent`) holds the derived key between commands:
 
 - A per-user Unix socket, `<user cache dir>/sesh/agent.sock` (`SESH_AUTH_SOCK` overrides), mode 0600 in a private folder. Each end checks the other is the same user.
-- Newline-delimited JSON, protocol version 2, a `hello` first; messages are capped at 4 MiB. Requests: `ping`, `status`, `unlock`, `unlock_touchid`, `encrypt`, `decrypt`, `wrap_key` (for Touch ID and the recovery key), `lock`, `stop`. Every `encrypt` and `decrypt` names the vault's unlock id, so one vault's key never serves another.
+- Newline-delimited JSON, protocol version 2, a `hello` first; messages are capped at 4 MiB. Requests: `ping`, `status`, `unlock`, `unlock_touchid`, `encrypt`, `decrypt`, `wrap_key` (for Touch ID and the recovery key), `touch` (from `sesh ui`, so the idle timer doesn't run out while it's used), `lock`, `stop`. Every `encrypt` and `decrypt` names the vault's unlock id, so one vault's key never serves another.
 - It refuses to start unless it can turn off core dumps, refuse debuggers (`PT_DENY_ATTACH` on macOS, `PR_SET_DUMPABLE=0` on Linux), and keep the key in a memory page locked into RAM.
-- It locks after `agent.idle_timeout` (10 minutes) without use, at `agent.max_lifetime` (8 hours), when the computer sleeps, and when the Mac's screen locks; started by a command, it exits once it has locked by itself. Commands start it as needed, and one from another sesh build is replaced.
+- It locks after `agent.idle_timeout` (10 minutes) without use, at `agent.max_lifetime` (8 hours), when the computer sleeps, and when the Mac's screen locks; once it has locked by itself it exits: at once when its own 15-second check finds the lock, otherwise (a lock found as a command arrives, or a screen lock) if nothing unlocks it within the idle timeout. Commands start it as needed, and one from another sesh build is replaced.
 
 See [SECURITY_MODEL.md](SECURITY_MODEL.md#sesh-agent) for what it protects against, and what it doesn't.
 
@@ -247,7 +247,16 @@ erDiagram
         TEXT service
         TEXT username
         BLOB encrypted_data
+        BLOB salt
+        TEXT settings
+        TEXT folder
+        TEXT url
+        TEXT details
+        BLOB sealed_details
+        BLOB details_salt
         TEXT tags "JSON"
+        DATETIME created_at
+        DATETIME updated_at
         DATETIME deleted_at
     }
 
@@ -258,6 +267,7 @@ erDiagram
         TEXT username
         INTEGER trash_id FK "set while its entry is in the trash"
         BLOB encrypted_data "an earlier secret"
+        BLOB salt
         DATETIME replaced_at
         TEXT file_name "a file entry's, then"
     }
@@ -266,7 +276,9 @@ erDiagram
         INTEGER id PK "always 1"
         TEXT unlock_id
         BLOB public_key
+        BLOB ephemeral_pub
         BLOB ciphertext "the vault key, wrapped"
+        DATETIME created_at
     }
 
     vault_info {
@@ -318,7 +330,7 @@ Go's garbage collector prevents true secure erasure, but we reduce the exposure 
 **Design**:
 1. Custom prompt for visual indication
 2. `SESH_ACTIVE` check prevents nesting
-3. Automatic cleanup on exit
+3. The credentials leave with the shell on exit (AWS still accepts them until they expire)
 4. Built-in helper functions
 
 **Subshell Advantages**
@@ -420,7 +432,7 @@ Each layer provides independent security measures:
 
 4. **Session Security**
    - **Threat**: Credential leakage between sessions
-   - **Defense**: Isolated subshells with automatic cleanup
+   - **Defense**: Credentials only in the shell `sesh aws` starts, gone from it when it exits
    - **User Benefit**: Clear security boundaries
 
 5. **Access Security**
@@ -480,7 +492,7 @@ It's listed in `subcommands` (completion and the dispatcher read that), run from
 
 ### Capability Evolution
 
-The optional interface pattern is in use once: `SubshellProvider` is the capability `LaunchSubshell` discovers at run time, by type assertion. (`sesh aws` asks its provider `ShouldUseSubshell()` directly.)
+Optional interfaces, discovered at run time by type assertion: `SubshellProvider`, which `LaunchSubshell` looks for, and `QuietProvider` and `ClipChecker`, which `app.go` looks for. (`sesh aws` asks its provider `ShouldUseSubshell()` directly.)
 
 ```go
 type SubshellProvider interface {
@@ -561,7 +573,7 @@ sesh is a CLI tool — every invocation should feel instant. The design avoids u
 - **Selective execution**: only the command the first word names runs, and it opens the vault only once its arguments are right. Plain `sesh`, `--help` and completion never unlock it.
 - **No framework overhead**: Go's standard `flag` package for parsing, no logging framework in the hot path.
 
-The dominant cost in any sesh invocation is unlocking the vault (deriving the key from the master password, unless the agent already holds it) and, for `sesh aws`, the network round-trip to AWS STS. The first unlock of a day also makes the automatic backup: an integrity check and a copy of the vault file.
+The dominant cost in any sesh invocation is unlocking the vault (deriving the key from the master password, unless the agent already holds it) and, for `sesh aws`, the network round-trip to AWS STS. The first command that opens the vault once the newest backup is `backup.every_days` old also makes the automatic backup: an integrity check and a copy of the vault file (a vault with no entries isn't backed up).
 
 ## Implementation Details
 

@@ -6,7 +6,10 @@ This directory contains utility scripts to help with local development and testi
 
 ```bash
 export SESH_DB_PATH=/tmp/sesh-dev/passwords.db
+export SESH_AUTH_SOCK=/tmp/sesh-dev/agent.sock   # an agent of its own: the agent holds one vault's key at a time
 ```
+
+Your config file (`~/.config/sesh/config.toml`) still applies.
 
 **QR codes on screen** are read only on macOS (`--qr`). On Linux, save a screenshot of the code and give it with `--qr-image shot.png`.
 
