@@ -12,10 +12,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/bashhack/sesh/internal/importer"
 )
 
 // The fixtures in testdata are genuine exports of one throwaway vault, made
@@ -141,12 +146,9 @@ func seal(t *testing.T, pw string, plain []byte) []byte {
 	return out
 }
 
-// An organization's export is refused, plain or protected, as is the CSV
-// export; a protected export whose data was changed is damaged.
+// An organization's export is refused, plain or protected; a protected
+// export whose data was changed is damaged.
 func TestParse_Refused(t *testing.T) {
-	if _, err := Parse(read(t, "vault.csv"), noPassword); err == nil || !strings.Contains(err.Error(), "CSV export") {
-		t.Errorf("CSV: %v", err)
-	}
 	org := []byte(`{"encrypted":false,"collections":[{"id":"c1","organizationId":"o1","name":"Team"}],"items":[]}`)
 	if _, err := Parse(org, noPassword); !errors.Is(err, errOrganization) {
 		t.Errorf("organization, plain: %v", err)
@@ -192,5 +194,119 @@ func TestParse_KDFBounds(t *testing.T) {
 	}
 	if !IsExport(read(t, "plain.json")) || !IsExport(read(t, "password.json")) || IsExport([]byte(`{"a":1}`)) {
 		t.Error("IsExport")
+	}
+}
+
+// The CSV export of plain.json's vault gives the same entries, less what CSV
+// doesn't carry: dates, old passwords, cards, which fields were hidden.
+func TestParseCSV(t *testing.T) {
+	csvExp, err := Parse(read(t, "vault.csv"), noPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonExp, err := Parse(read(t, "plain.json"), noPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromCSV, fromJSON := map[string]*importer.Entry{}, map[string]*importer.Entry{}
+	for _, e := range Entries(&csvExp) {
+		if e.Skip == "" {
+			fromCSV[e.Key.String()] = e
+		}
+	}
+	for _, e := range Entries(&jsonExp) {
+		if e.Skip == "" {
+			fromJSON[e.Key.String()] = e
+		}
+	}
+	if len(fromCSV) == 0 {
+		t.Fatal("nothing read from the CSV")
+	}
+	for k, c := range fromCSV {
+		j, ok := fromJSON[k]
+		if !ok {
+			t.Errorf("%s: from the CSV, not the JSON", k)
+			continue
+		}
+		if string(c.Secret) != string(j.Secret) || c.Folder != j.Folder || c.Details.URL != j.Details.URL || string(c.Details.Notes) != string(j.Details.Notes) || !slices.Equal(c.Tags, j.Tags) || c.Lost[lostReprompt] != j.Lost[lostReprompt] {
+			t.Errorf("%s: CSV %+v\nJSON %+v", k, c, j)
+		}
+		if len(c.Earlier) != 0 || !c.Created.IsZero() {
+			t.Errorf("%s: a CSV has no history or dates: %+v", k, c)
+		}
+		if len(c.Details.Fields) != len(j.Details.Fields) {
+			t.Errorf("%s: fields %+v, want %+v", k, c.Details.Fields, j.Details.Fields)
+			continue
+		}
+		for i, f := range c.Details.Fields {
+			// A further URL is a plain field, as from JSON; a custom one is secret.
+			custom := !strings.HasPrefix(f.Name, "url-")
+			if f.Name != j.Details.Fields[i].Name || string(f.Value) != string(j.Details.Fields[i].Value) || f.Secret != custom {
+				t.Errorf("%s: field %+v, want %+v, secret %v", k, f, j.Details.Fields[i], custom)
+			}
+		}
+	}
+	// Each of the CSV's rows: logins (with their TOTP keys) and the note.
+	for _, k := range []string{"password/a-b site/u", "password/AWS console/root", "totp/AWS console/root", "password/GitHub/alice", "totp/GitHub/alice", "password/Router", "password/Steam/gamer", "secure_note/Wifi"} {
+		if _, ok := fromCSV[k]; !ok {
+			t.Errorf("%s not read from the CSV; read: %v", k, slices.Collect(maps.Keys(fromCSV)))
+		}
+	}
+}
+
+// A row's type decides what it is: a note stays one; a type Bitwarden
+// doesn't know is a login, as Bitwarden reads it.
+func TestParseCSVTypes(t *testing.T) {
+	exp, err := Parse([]byte("folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n,,note,Door,code 1234,,0,,,stray,\n,,login,Shop,,,0,,me,shop-pw,\n,,widget,Odd,,,0,,me,odd-pw,\n"), noPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, e := range Entries(&exp) {
+		keys = append(keys, e.Key.String())
+	}
+	if want := []string{"secure_note/Door", "password/Shop/me", "password/Odd/me"}; !slices.Equal(keys, want) {
+		t.Errorf("keys %q, want %q", keys, want)
+	}
+}
+
+// Cells as Bitwarden writes them: URIs joined by commas unquoted (one with
+// a quote in it too), fields with no value as undefined or null, a ": " in
+// a value, a value's second line, and an archived item.
+func TestParseCSVCells(t *testing.T) {
+	csvText := "folder,favorite,type,name,notes,fields,reprompt,archivedDate,login_uri,login_username,login_password,login_totp\r\n" +
+		",,login,Q,,\"api: token: s3cr3t\nlinked: undefined\nold: null\nkey: line1\nline2\",0,2026-10-09T22:50:30.730Z,\"https://ex.com/?q=\"\"a\"\",b.com\",u,p,\r\n"
+	exp, err := Parse([]byte(csvText), noPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := exp.Items[0]
+	if it.Login == nil || len(it.Login.URIs) != 2 || it.Login.URIs[0].URI != `https://ex.com/?q="a"` || it.Login.URIs[1].URI != "b.com" {
+		t.Errorf("URIs %+v", it.Login)
+	}
+	want := []Field{{Name: "api", Value: "token: s3cr3t", Type: FieldHidden}, {Name: "linked", Type: FieldHidden}, {Name: "old", Type: FieldHidden}, {Name: "key", Value: "line1\nline2", Type: FieldHidden}}
+	if !slices.Equal(it.Fields, want) {
+		t.Errorf("fields %+v\nwant %+v", it.Fields, want)
+	}
+	if it.ArchivedDate == nil || !it.ArchivedDate.Equal(time.Date(2026, 10, 9, 22, 50, 30, 730e6, time.UTC)) {
+		t.Errorf("archived %v", it.ArchivedDate)
+	}
+	e := Entries(&exp)[0]
+	changes := strings.Join(e.Changes, "\n")
+	if !strings.Contains(changes, `field "linked" not kept: it has no value`) || !strings.Contains(changes, `field "old" not kept: it has no value`) {
+		t.Errorf("changes %q", e.Changes)
+	}
+	if _, err := Parse([]byte("  \n"), noPassword); err == nil || !strings.Contains(err.Error(), "this file is empty") {
+		t.Errorf("an empty file: %v", err)
+	}
+}
+
+// An organization's CSV is refused, saying how to export one's own vault; a damaged one says so.
+func TestParseCSVRefused(t *testing.T) {
+	if _, err := Parse([]byte("collections,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n"), noPassword); !errors.Is(err, errOrganization) {
+		t.Errorf("an organization's CSV: %v", err)
+	}
+	if _, err := Parse([]byte("folder,favorite,type,name,notes\n,,login,\"unclosed\n"), noPassword); err == nil || !strings.Contains(err.Error(), "can't be read") {
+		t.Errorf("a damaged CSV: %v", err)
 	}
 }

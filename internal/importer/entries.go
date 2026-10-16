@@ -161,6 +161,8 @@ type FieldSet struct {
 	Fields  []vault.Field
 	Changes []string
 	dropped int
+	// countAt is where in Changes the count of fields dropped is said.
+	countAt int
 }
 
 // Add adds a field sesh names, unless its value is empty.
@@ -195,14 +197,10 @@ func (s *FieldSet) put(name, value string, secret bool, from string) {
 	if len(s.Fields) == vault.MaxFields {
 		s.dropped++
 		if s.dropped == 1 {
-			s.Changes = append(s.Changes, "") // the count goes here
+			s.countAt = len(s.Changes)
+			s.Changes = append(s.Changes, "")
 		}
-		for i := len(s.Changes) - 1; i >= 0; i-- {
-			if s.Changes[i] == "" || strings.HasSuffix(s.Changes[i], fmt.Sprintf("sesh holds %d", vault.MaxFields)) {
-				s.Changes[i] = fmt.Sprintf("%d fields not kept: sesh holds %d", s.dropped, vault.MaxFields)
-				break
-			}
-		}
+		s.Changes[s.countAt] = fmt.Sprintf("%d fields not kept: sesh holds %d", s.dropped, vault.MaxFields)
 		return
 	}
 	base := name

@@ -51,7 +51,7 @@ type (
 // move through the panel's rows.
 var importSources = []struct{ key, source, name, files string }{
 	{"s", "sesh", "sesh's own encrypted export", "file"},
-	{"b", "bitwarden", "Bitwarden", "file (its JSON export)"},
+	{"b", "bitwarden", "Bitwarden", "file (its JSON or CSV export)"},
 	{"p", "keepass", "KeePass", "file (its XML export)"},
 	{"c", "chrome", "Chrome", "file (its CSV export)"},
 	{"f", "firefox", "Firefox", "file (its CSV export)"},

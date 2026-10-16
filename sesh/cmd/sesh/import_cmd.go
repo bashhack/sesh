@@ -33,8 +33,9 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
   clashes with entries you have, and what it will skip, then asks.
 
   Sources:
-    bitwarden             A Bitwarden JSON export: plain, or protected by a
-                          password of its own (sesh asks for it).
+    bitwarden             A Bitwarden export: JSON, plain or protected by a
+                          password of its own (sesh asks for it), or CSV
+                          (logins and notes, with no old passwords or dates).
     chrome                Chrome's password export (CSV), or that of another
                           browser built on Chromium that writes the same.
     firefox               Firefox's password export (CSV).
@@ -374,7 +375,7 @@ func detectSource(args []string) string {
 		b, err := os.ReadFile(a) //nolint:gosec // the file the user named
 		switch {
 		case err != nil:
-		case bitwarden.IsExport(b) || bitwarden.IsCSV(b):
+		case bitwarden.IsExport(b) || bitwarden.IsCSV(b) || bitwarden.IsOrganizationCSV(b):
 			return "bitwarden"
 		case keepass.IsExport(b):
 			return "keepass"
@@ -635,11 +636,11 @@ func kindPlural(k vault.Kind) string {
 	return string(k)
 }
 
-// readBitwarden reads one Bitwarden JSON export, with ask asking for the
-// password of one protected by a password.
+// readBitwarden reads one Bitwarden export, JSON or CSV, with ask asking
+// for the password of one protected by a password.
 func readBitwarden(args []string, ask func(what string) ([]byte, error)) (found, error) {
 	if len(args) != 1 {
-		return found{}, errors.New("give one Bitwarden export: sesh import --from bitwarden <export.json>")
+		return found{}, errors.New("give one Bitwarden export: sesh import --from bitwarden <export.json or .csv>")
 	}
 	b, err := os.ReadFile(args[0]) //nolint:gosec // the file the user named
 	if err != nil {
