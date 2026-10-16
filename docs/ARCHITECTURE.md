@@ -341,7 +341,7 @@ Go's garbage collector prevents true secure erasure, but we reduce the exposure 
 
 ### AWS Setup
 
-`sesh aws setup` (`internal/setup`) stores a profile's MFA key: read from a QR code on screen, with typed entry as the fallback. It checks the key, finds the profile's MFA device through the AWS CLI, shows codes to finish enrolling with, and files the entry where `--folder` and `--tag` say, or asks. A TOTP entry for anything else is added with `sesh add totp`, which takes the key typed, an `otpauth://` link, or a QR code (`--qr`).
+`sesh aws setup` (`internal/setup`) stores a profile's MFA key. It checks who the profile signs in as, reads the key (typed, or from a QR code in an image file or on screen), and saves it before giving the codes that finish enrolling it in AWS, so nothing after can lose a key AWS uses. It then finds the profile's MFA device through the AWS CLI (`internal/aws`: authenticator apps only), and saves it with the key, filed where `--folder` and `--tag` say, or asks. A TOTP entry for anything else is added with `sesh add totp`, which takes the key typed, an `otpauth://` link, or a QR code (`--qr`).
 
 ## Data Flow Architecture
 
@@ -366,9 +366,9 @@ User ──► CLI ──► ValidateRequest
                 │            │
                 ▼            ├── Vault (MFA device, fallback to aws iam)
            Vault             ├── Vault (get TOTP secret)
-          (get TOTP          ├── TOTP Engine → generate current + next codes
+          (get TOTP          ├── TOTP Engine → generate the current code
            secret)           ├── AWS CLI (sts get-session-token)
-                │            │   └── retries with next/future code on failure
+                │            │   └── refused: wait for the next code, try once
            TOTP Engine       ├── Parse expiry, build env vars
                 │            ▼
                 ▼       NewSubshellConfig ─── or, with --no-subshell,
@@ -383,7 +383,7 @@ User ──► CLI ──► ValidateRequest
 
 2. **AWS CLI delegation**: STS calls go through the `aws` CLI binary, inheriting region selection, profile configuration, and security updates without sesh needing the AWS SDK.
 
-3. **Retry logic**: If AWS rejects a TOTP code (recently used, or near a time window boundary), GetCredentials automatically retries with the next code, then with a future window code.
+3. **Retry logic**: AWS takes each code once. If it refuses the current one (used in the last 30 seconds), GetCredentials waits for the next 30-second window and tries once with that window's code.
 
 ### TOTP Data Flow
 

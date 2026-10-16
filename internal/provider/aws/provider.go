@@ -24,6 +24,9 @@ type Provider struct {
 
 	provider.Clock
 
+	// Sleep waits between tries; nil is time.Sleep. Tests replace it.
+	Sleep func(time.Duration)
+
 	profile    string
 	filing     provider.FilingFlags
 	noSubshell bool
@@ -50,41 +53,34 @@ func (p *Provider) Name() string {
 
 // SetupFlags adds provider-specific flags to the given FlagSet
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
-	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
+	fs.StringVar(&p.profile, "profile", envProfile(), "AWS CLI profile to use")
 	fs.BoolVar(&p.noSubshell, "no-subshell", false, "Print environment variables instead of launching subshell")
 	p.filing.Register(fs)
 	return nil
 }
 
+// readSecret is the profile's MFA key, from the vault; the caller zeroes it.
+func (p *Provider) readSecret() ([]byte, error) {
+	secret, err := p.store.Get(vault.AWSKey(p.profile))
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), err)
+	}
+	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from the vault\n")
+	return secret, nil
+}
+
 // GetTOTPCodes retrieves TOTP codes without performing AWS authentication
 func (p *Provider) GetTOTPCodes() (currentCode, nextCode string, secondsLeft int64, err error) {
-	secretBytes, err := p.store.Get(vault.AWSKey(p.profile))
+	secret, err := p.readSecret()
 	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), err)
+		return "", "", 0, err
 	}
-
-	secretCopy := make([]byte, len(secretBytes))
-	copy(secretCopy, secretBytes)
-	defer secure.SecureZeroBytes(secretCopy)
-
-	secure.SecureZeroBytes(secretBytes)
-
-	fmt.Fprintf(os.Stderr, "🔑 Retrieved secret from the vault\n")
-
-	// Check if secret looks valid (base32 encoded)
-	secretLen := len(secretCopy)
-	if secretLen < 16 || secretLen > 64 {
-		fmt.Fprintf(os.Stderr, "⚠️ Warning: TOTP secret has unusual length: %d characters\n", secretLen)
-	}
-
-	currentCode, nextCode, err = p.totp.GenerateConsecutiveCodesBytes(secretCopy)
+	defer secure.SecureZeroBytes(secret)
+	currentCode, nextCode, err = p.totp.GenerateConsecutiveCodesBytes(secret)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("could not generate TOTP codes: %w", err)
 	}
-
-	secondsLeft = p.SecondsLeftInWindow()
-
-	return currentCode, nextCode, secondsLeft, nil
+	return currentCode, nextCode, p.SecondsLeftInWindow(), nil
 }
 
 // GetClipboardValue implements the ServiceProvider interface for clipboard mode
@@ -103,7 +99,22 @@ func (p *Provider) GetClipboardValue() (provider.Credentials, error) {
 		"AWS MFA code", profileStr), nil
 }
 
-// GetCredentials retrieves AWS credentials using TOTP
+// sessionToken asks AWS for a session with the current code made from
+// secret.
+func (p *Provider) sessionToken(serial string, secret []byte) (awsInternal.Credentials, error) {
+	code, err := p.totp.GenerateForTimeBytes(secret, p.TimeNow())
+	if err != nil {
+		return awsInternal.Credentials{}, fmt.Errorf("could not generate a TOTP code: %w", err)
+	}
+	codeBytes := []byte(code)
+	defer secure.SecureZeroBytes(codeBytes)
+	return p.aws.GetSessionToken(p.profile, serial, codeBytes)
+}
+
+// GetCredentials asks AWS for a session with the current MFA code. AWS
+// refuses a code it has already accepted (sesh aws run twice within its 30
+// seconds, say), so when it refuses one, sesh waits for the next code and
+// tries once more with it.
 func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	serialBytes, err := p.GetMFASerialBytes()
 	if err != nil {
@@ -115,85 +126,34 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 
 	fmt.Fprintf(os.Stderr, "🔍 Using MFA serial: %s\n", serial)
 
-	currentCode, nextCode, secondsLeft, err := p.GetTOTPCodes()
+	secret, err := p.readSecret()
 	if err != nil {
 		return provider.Credentials{}, err
 	}
+	defer secure.SecureZeroBytes(secret)
 
-	code := currentCode
-
-	codeBytes := []byte(code)
-	awsCreds, err := p.aws.GetSessionToken(p.profile, serial, codeBytes)
-	secure.SecureZeroBytes(codeBytes)
-
-	// Check if this is an "invalid MFA one time pass code" error, which could indicate a recently used code
-	if err != nil {
-		errStr := err.Error()
-		isInvalidMFA := strings.Contains(errStr, awsInternal.InvalidMFAMessage)
-
-		// If it's an invalid MFA code or if we're close to time boundary, try the next code
-		if isInvalidMFA || secondsLeft < 5 {
-			if isInvalidMFA {
-				fmt.Fprintf(os.Stderr, "⚠️ AWS rejected the current time window's code (it may have been used recently)\n")
-			} else {
-				fmt.Fprintf(os.Stderr, "⚠️ Current code failed - time window nearly expired\n")
-			}
-
-			// Try with the next time window's code
-			fmt.Fprintf(os.Stderr, "🔑 Trying with next time window's code\n")
-			code = nextCode
-			codeBytes = []byte(code)
-			awsCreds, err = p.aws.GetSessionToken(p.profile, serial, codeBytes)
-			secure.SecureZeroBytes(codeBytes)
-
-			// Re-evaluate whether the second attempt also failed with an invalid MFA error
-			secondInvalidMFA := err != nil &&
-				strings.Contains(err.Error(), awsInternal.InvalidMFAMessage)
-
-			// If STILL failing with invalid MFA and we're not close to boundary,
-			// we may need to wait for the next time window
-			freshSecondsLeft := p.SecondsLeftInWindow()
-			if secondInvalidMFA && freshSecondsLeft > 10 {
-				fmt.Fprintf(os.Stderr, "⚠️ Both current and next codes were rejected - may need to wait for next time window\n")
-
-				secretBytes, fetchErr := p.store.Get(vault.AWSKey(p.profile))
-				if fetchErr != nil {
-					return provider.Credentials{}, fmt.Errorf("failed to retrieve TOTP secret for AWS %s: %w", formatProfile(p.profile), fetchErr)
-				}
-
-				secretCopy := make([]byte, len(secretBytes))
-				copy(secretCopy, secretBytes)
-				defer secure.SecureZeroBytes(secretCopy)
-
-				secure.SecureZeroBytes(secretBytes)
-
-				// Generate a code for the window after next, in case AWS is far ahead of our clock
-				futureCode, gErr := p.totp.GenerateForTimeBytes(secretCopy, p.TimeNow().Add(60*time.Second))
-				if gErr == nil {
-					fmt.Fprintf(os.Stderr, "🔑 Trying with future time window's code\n")
-					code = futureCode
-					codeBytes = []byte(code)
-					awsCreds, err = p.aws.GetSessionToken(p.profile, serial, codeBytes)
-					secure.SecureZeroBytes(codeBytes)
-				}
-			}
+	awsCreds, err := p.sessionToken(serial, secret)
+	if err != nil && strings.Contains(err.Error(), awsInternal.SessionCredentialsMessage) {
+		return provider.Credentials{}, fmt.Errorf("%s signs in with temporary credentials (aws login, SSO or a role), and AWS gives MFA sessions only to an IAM user's own access keys: use a profile with those for sesh aws: %w", formatProfile(p.profile), err)
+	}
+	if err != nil && strings.Contains(err.Error(), awsInternal.InvalidMFAMessage) {
+		wait := time.Duration(p.SecondsLeftInWindow()+1) * time.Second
+		fmt.Fprintf(os.Stderr, "⚠️  AWS refused the code; it may have been used in the last 30 seconds. Waiting %s for the next one...\n", wait)
+		p.sleep(wait)
+		awsCreds, err = p.sessionToken(serial, secret)
+		if err != nil && strings.Contains(err.Error(), awsInternal.InvalidMFAMessage) {
+			return provider.Credentials{}, fmt.Errorf("AWS refused the next code too. Just after sesh aws setup, AWS has used that code too: wait 30 seconds and try again. Otherwise check this computer's clock is right, and that %s's MFA device is the one this key was set up for (sesh aws setup sets it up again): %w", formatProfile(p.profile), err)
 		}
 	}
-
 	if err != nil {
-		// Check if this looks like a "code already used" error
-		if strings.Contains(err.Error(), awsInternal.InvalidMFAMessage) {
-			// Add more context to the error message
-			return provider.Credentials{}, fmt.Errorf("failed to get session token (this may be because the TOTP code was recently used; try waiting for the next time window): %w", err)
-		}
 		return provider.Credentials{}, fmt.Errorf("failed to get session token: %w", err)
 	}
 
-	defer awsCreds.ZeroSecrets()
+	defer awsCreds.Clear()
 
 	expiryTime, err := time.Parse(time.RFC3339, awsCreds.Expiration)
 	if err != nil {
-		expiryTime = p.TimeNow().Add(12 * time.Hour) // Default to 12h if we can't parse
+		expiryTime = p.TimeNow().Add(12 * time.Hour) // AWS's default session length for an IAM user
 	}
 
 	envVars := map[string]string{
@@ -211,6 +171,15 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 		DisplayInfo:      provider.FormatRegularDisplayInfo("AWS credentials", profileStr),
 		MFAAuthenticated: true, // If we got this far, AWS STS accepted our MFA code
 	}, nil
+}
+
+// sleep waits d; tests replace it.
+func (p *Provider) sleep(d time.Duration) {
+	if p.Sleep != nil {
+		p.Sleep(d)
+		return
+	}
+	time.Sleep(d)
 }
 
 // GetProfile returns the current AWS profile
@@ -309,6 +278,15 @@ func (p *Provider) Filing() vault.Filing { return p.filing.Filing() }
 // ShouldUseSubshell returns whether to use subshell mode
 func (p *Provider) ShouldUseSubshell() bool {
 	return !p.noSubshell
+}
+
+// envProfile is the profile the environment names, as the AWS CLI reads
+// it: AWS_PROFILE, or else AWS_DEFAULT_PROFILE.
+func envProfile() string {
+	if p := os.Getenv("AWS_PROFILE"); p != "" {
+		return p
+	}
+	return os.Getenv("AWS_DEFAULT_PROFILE")
 }
 
 // formatProfile returns a formatted profile description

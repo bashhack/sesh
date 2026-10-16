@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -446,221 +447,153 @@ func TestProvider_GetMFASerialBytes(t *testing.T) {
 	}
 }
 
-func TestProvider_GetCredentials(t *testing.T) {
-	tests := map[string]struct {
-		now         func() time.Time
-		setupTOTP   func(*totpMocks.MockProvider)
-		setupAWS    func(*awsMocks.MockProvider)
-		checkResult func(*testing.T, provider.Credentials)
-		profile     string
-		device      string // the MFA device stored with the entry; "" for none
-		wantErr     bool
-	}{
-		"successful credential generation": {
-			profile: "",
-			device:  testDevice,
-			setupTOTP: func(m *totpMocks.MockProvider) {
-				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
-					return "123456", "654321", nil
-				}
-			},
-			setupAWS: func(m *awsMocks.MockProvider) {
-				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
-					if profile == "" && serial == "arn:aws:iam::123456789012:mfa/user" && string(code) == "123456" {
-						return aws.Credentials{
-							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
-							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-							SessionToken:    "AQoDYXdzEJr...",
-							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
-						}, nil
-					}
-					return aws.Credentials{}, fmt.Errorf("unexpected call")
-				}
-			},
-			wantErr: false,
-			checkResult: func(t *testing.T, creds provider.Credentials) {
-				if creds.Provider != "aws" {
-					t.Errorf("Provider = %v, want 'aws'", creds.Provider)
-				}
-				if !creds.MFAAuthenticated {
-					t.Error("MFAAuthenticated should be true")
-				}
-				if len(creds.Variables) != 3 {
-					t.Errorf("Variables count = %d, want 3", len(creds.Variables))
-				}
-				if _, ok := creds.Variables["AWS_ACCESS_KEY_ID"]; !ok {
-					t.Error("Missing AWS_ACCESS_KEY_ID")
-				}
-				if _, ok := creds.Variables["AWS_SECRET_ACCESS_KEY"]; !ok {
-					t.Error("Missing AWS_SECRET_ACCESS_KEY")
-				}
-				if _, ok := creds.Variables["AWS_SESSION_TOKEN"]; !ok {
-					t.Error("Missing AWS_SESSION_TOKEN")
-				}
-			},
-		},
-		"no MFA device stored - auto-detect": {
-			profile: "",
-			setupTOTP: func(m *totpMocks.MockProvider) {
-				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
-					return "123456", "654321", nil
-				}
-			},
-			setupAWS: func(m *awsMocks.MockProvider) {
-				m.GetFirstMFADeviceFunc = func(profile string) (string, error) {
-					return "arn:aws:iam::123456789012:mfa/autodetected", nil
-				}
-				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
-					if profile == "" && serial == "arn:aws:iam::123456789012:mfa/autodetected" && string(code) == "123456" {
-						return aws.Credentials{
-							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
-							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-							SessionToken:    "AQoDYXdzEJr...",
-							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
-						}, nil
-					}
-					return aws.Credentials{}, fmt.Errorf("unexpected call")
-				}
-			},
-			wantErr: false,
-		},
-		"retry with next code on invalid MFA": {
-			profile: "",
-			device:  testDevice,
-			setupTOTP: func(m *totpMocks.MockProvider) {
-				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
-					return "123456", "654321", nil
-				}
-			},
-			setupAWS: func(m *awsMocks.MockProvider) {
-				callCount := 0
-				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
-					callCount++
-					if callCount == 1 && string(code) == "123456" {
-						return aws.Credentials{}, fmt.Errorf("An error occurred (AccessDenied): %s.", aws.InvalidMFAMessage)
-					}
-					if callCount == 2 && string(code) == "654321" {
-						return aws.Credentials{
-							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
-							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-							SessionToken:    "AQoDYXdzEJr...",
-							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
-						}, nil
-					}
-					return aws.Credentials{}, fmt.Errorf("unexpected call")
-				}
-			},
-			wantErr: false,
-		},
-		"second attempt non-MFA error skips future-window retry": {
-			profile: "",
-			device:  testDevice,
-			setupTOTP: func(m *totpMocks.MockProvider) {
-				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
-					return "123456", "654321", nil
-				}
-				m.GenerateForTimeBytesFunc = func(secret []byte, _ time.Time) (string, error) {
-					return "", fmt.Errorf("GenerateForTimeBytes should not be called when second error is not invalid MFA")
-				}
-			},
-			setupAWS: func(m *awsMocks.MockProvider) {
-				callCount := 0
-				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
-					callCount++
-					if callCount == 1 {
-						return aws.Credentials{}, fmt.Errorf("An error occurred (AccessDenied): %s.", aws.InvalidMFAMessage)
-					}
-					// Second attempt fails with a different error
-					return aws.Credentials{}, fmt.Errorf("network timeout")
-				}
-			},
-			wantErr: true,
-		},
-		"both MFA codes rejected triggers future-window retry": {
-			profile: "",
-			now: func() time.Time {
-				// Second 5 of a 30s window → freshSecondsLeft = 25
-				return time.Unix(5, 0)
-			},
-			device: testDevice,
-			setupTOTP: func(m *totpMocks.MockProvider) {
-				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
-					return "123456", "654321", nil
-				}
-				m.GenerateForTimeBytesFunc = func(secret []byte, _ time.Time) (string, error) {
-					return "999999", nil
-				}
-			},
-			setupAWS: func(m *awsMocks.MockProvider) {
-				callCount := 0
-				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
-					callCount++
-					if callCount <= 2 {
-						return aws.Credentials{}, fmt.Errorf("An error occurred (AccessDenied): %s.", aws.InvalidMFAMessage)
-					}
-					if string(code) == "999999" {
-						return aws.Credentials{
-							AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
-							SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-							SessionToken:    "AQoDYXdzEJr...",
-							Expiration:      time.Now().Add(time.Hour).Format(time.RFC3339),
-						}, nil
-					}
-					return aws.Credentials{}, fmt.Errorf("unexpected call")
-				}
-			},
-			wantErr: false,
-			checkResult: func(t *testing.T, creds provider.Credentials) {
-				if !creds.MFAAuthenticated {
-					t.Error("MFAAuthenticated should be true after future-window retry")
-				}
-			},
-		},
-		"both codes fail": {
-			profile: "",
-			device:  testDevice,
-			setupTOTP: func(m *totpMocks.MockProvider) {
-				m.GenerateConsecutiveCodesBytesFunc = func(secret []byte) (string, string, error) {
-					return "123456", "654321", nil
-				}
-			},
-			setupAWS: func(m *awsMocks.MockProvider) {
-				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
-					return aws.Credentials{}, errors.New("access denied")
-				}
-			},
-			wantErr: true,
-		},
-	}
+// testClock is a clock that sleeping moves on, and codes that name their
+// 30-second window, so a test can tell which window's code AWS was given.
+type testClock struct {
+	now   time.Time
+	slept []time.Duration
+}
 
+func (c *testClock) Now() time.Time { return c.now }
+
+func (c *testClock) Sleep(d time.Duration) {
+	c.slept = append(c.slept, d)
+	c.now = c.now.Add(d)
+}
+
+func windowCode(t time.Time) string { return fmt.Sprintf("w%d", t.Unix()/30) }
+
+// GetCredentials asks AWS with the current code; when AWS refuses it, it
+// waits for the next window and tries once with that window's code.
+func TestProvider_GetCredentials(t *testing.T) {
+	session := aws.Credentials{
+		AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+		SecretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		SessionToken:    "AQoDYXdzEJr...",
+		Expiration:      "2026-10-16T13:00:00Z",
+	}
+	refused := fmt.Errorf("aws sts get-session-token: An error occurred (AccessDenied) when calling the GetSessionToken operation: %s", aws.InvalidMFAMessage)
+	start := time.Date(2026, 10, 16, 12, 0, 20, 0, time.UTC) // 10s left in its window
+	first, next := windowCode(start), windowCode(start.Add(30*time.Second))
+
+	tests := map[string]struct {
+		device    string  // the MFA device stored with the entry; "" for none
+		wantSub   string  // in the error; "" for none
+		answers   []error // AWS's answer to each try; nil is a session
+		wantCodes []string
+		wantSlept []time.Duration
+	}{
+		"accepted":               {answers: []error{nil}, device: testDevice, wantCodes: []string{first}},
+		"device asked of AWS":    {answers: []error{nil}, wantCodes: []string{first}},
+		"refused, then the next": {answers: []error{refused, nil}, device: testDevice, wantCodes: []string{first, next}, wantSlept: []time.Duration{11 * time.Second}},
+		"refused twice": {answers: []error{refused, refused}, device: testDevice, wantCodes: []string{first, next}, wantSlept: []time.Duration{11 * time.Second},
+			wantSub: "AWS refused the next code too. Just after sesh aws setup"},
+		"temporary credentials": {answers: []error{fmt.Errorf("aws sts get-session-token: An error occurred (AccessDenied) when calling the GetSessionToken operation: %s", aws.SessionCredentialsMessage)},
+			device: testDevice, wantCodes: []string{first}, wantSub: "signs in with temporary credentials (aws login, SSO or a role)"},
+		"refused, then another error": {answers: []error{refused, errors.New("network timeout")}, device: testDevice, wantCodes: []string{first, next}, wantSlept: []time.Duration{11 * time.Second},
+			wantSub: "failed to get session token: network timeout"},
+		"another error isn't tried again": {answers: []error{errors.New("ExpiredToken: the security token included in the request is expired")}, device: testDevice, wantCodes: []string{first},
+			wantSub: "ExpiredToken"},
+	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			defer testutil.DiscardStderr(t)()
-
-			mockTOTP := &totpMocks.MockProvider{}
-			mockAWS := &awsMocks.MockProvider{}
-			tc.setupTOTP(mockTOTP)
-			tc.setupAWS(mockAWS)
-
-			p := &Provider{
-				aws:     mockAWS,
-				store:   awsStore(t, tc.profile, "MYSECRET", tc.device),
-				totp:    mockTOTP,
-				profile: tc.profile,
-				Now:     tc.now,
+			clock := &testClock{now: start}
+			var codes []string
+			mockAWS := &awsMocks.MockProvider{
+				GetFirstMFADeviceFunc: func(string) (string, error) { return testDevice, nil },
+				GetSessionTokenFunc: func(profile, serial string, code []byte) (aws.Credentials, error) {
+					if serial != testDevice {
+						t.Errorf("serial = %q", serial)
+					}
+					codes = append(codes, string(code))
+					if err := tc.answers[len(codes)-1]; err != nil {
+						return aws.Credentials{}, err
+					}
+					return session, nil
+				},
 			}
+			mockTOTP := &totpMocks.MockProvider{
+				GenerateForTimeBytesFunc: func(secret []byte, at time.Time) (string, error) {
+					if string(secret) != "MYSECRET" {
+						return "", fmt.Errorf("secret = %q", secret)
+					}
+					return windowCode(at), nil
+				},
+			}
+			p := &Provider{aws: mockAWS, store: awsStore(t, "", "MYSECRET", tc.device), totp: mockTOTP, Sleep: clock.Sleep}
+			p.Now = clock.Now
 
 			creds, err := p.GetCredentials()
-			if tc.wantErr && err == nil {
-				t.Error("GetCredentials() expected error but got nil")
+			if tc.wantSub == "" && err != nil || tc.wantSub != "" && (err == nil || !strings.Contains(err.Error(), tc.wantSub)) {
+				t.Fatalf("GetCredentials() = %v, want an error containing %q", err, tc.wantSub)
 			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("GetCredentials() unexpected error: %v", err)
+			if !slices.Equal(codes, tc.wantCodes) || !slices.Equal(clock.slept, tc.wantSlept) {
+				t.Errorf("codes tried %q after sleeping %v; want %q after %v", codes, clock.slept, tc.wantCodes, tc.wantSlept)
 			}
-			if !tc.wantErr && tc.checkResult != nil {
-				tc.checkResult(t, creds)
+			if err == nil && (!creds.MFAAuthenticated || creds.Variables["AWS_SESSION_TOKEN"] != session.SessionToken || !creds.Expiry.Equal(time.Date(2026, 10, 16, 13, 0, 0, 0, time.UTC))) {
+				t.Errorf("creds = %+v", creds)
 			}
 		})
+	}
+}
+
+// The wait after a refused code ends in the next window, from either end
+// of the window it was refused in.
+func TestProvider_GetCredentials_WaitAtWindowEdges(t *testing.T) {
+	defer testutil.DiscardStderr(t)()
+	for _, tc := range []struct {
+		at   time.Time
+		want time.Duration
+	}{
+		{time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC), 31 * time.Second},
+		{time.Date(2026, 10, 16, 12, 0, 29, 999_000_000, time.UTC), 2 * time.Second},
+	} {
+		clock := &testClock{now: tc.at}
+		var codes []string
+		mockAWS := &awsMocks.MockProvider{
+			GetSessionTokenFunc: func(_, _ string, code []byte) (aws.Credentials, error) {
+				codes = append(codes, string(code))
+				if len(codes) == 1 {
+					return aws.Credentials{}, fmt.Errorf("aws sts get-session-token: %s", aws.InvalidMFAMessage)
+				}
+				return aws.Credentials{SessionToken: "t", Expiration: "2026-10-16T13:00:00Z"}, nil
+			},
+		}
+		mockTOTP := &totpMocks.MockProvider{GenerateForTimeBytesFunc: func(_ []byte, at time.Time) (string, error) { return windowCode(at), nil }}
+		p := &Provider{aws: mockAWS, store: awsStore(t, "", "MYSECRET", testDevice), totp: mockTOTP, Sleep: clock.Sleep}
+		p.Now = clock.Now
+		if _, err := p.GetCredentials(); err != nil {
+			t.Fatalf("at %s: %v", tc.at.Format("05.000"), err)
+		}
+		next := windowCode(tc.at.Truncate(30 * time.Second).Add(30 * time.Second))
+		if !slices.Equal(clock.slept, []time.Duration{tc.want}) || codes[1] != next {
+			t.Errorf("at %s: slept %v and sent %q; want %v and the next window's %q", tc.at.Format("05.000"), clock.slept, codes[1], tc.want, next)
+		}
+	}
+}
+
+// The profile is --profile, else AWS_PROFILE, else AWS_DEFAULT_PROFILE, as
+// the AWS CLI reads them.
+func TestProvider_ProfileFromEnvironment(t *testing.T) {
+	for _, tc := range []struct{ profile, defaultProfile, want string }{
+		{"work", "old", "work"},
+		{"", "old", "old"},
+		{"", "", ""},
+	} {
+		t.Setenv("AWS_PROFILE", tc.profile)
+		t.Setenv("AWS_DEFAULT_PROFILE", tc.defaultProfile)
+		p := NewProvider(nil, nil, nil)
+		fs := flag.NewFlagSet("aws", flag.ContinueOnError)
+		if err := p.SetupFlags(fs); err != nil {
+			t.Fatal(err)
+		}
+		if err := fs.Parse(nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := p.GetProfile(); got != tc.want {
+			t.Errorf("AWS_PROFILE=%q AWS_DEFAULT_PROFILE=%q: profile %q, want %q", tc.profile, tc.defaultProfile, got, tc.want)
+		}
 	}
 }
 

@@ -54,7 +54,9 @@ sesh aws setup
 ```
 
 **What it does**:
-- Responds to AWS CLI commands (`sts get-caller-identity`, `iam list-mfa-devices`, etc.)
+- Responds to AWS CLI commands (`sts get-caller-identity`, `iam list-mfa-devices`, etc.), with `--profile`, `--output` and `--query` anywhere, as the real CLI takes them
+- Knows the profiles `default` and `work` (or those in `MOCK_AWS_PROFILES`, comma-separated); another fails as the real CLI does
+- Lists a security key beside the authenticator app, which sesh leaves out
 - Returns realistic JSON responses
 - Validates MFA token format
 - Supports error testing via environment variables
@@ -135,8 +137,16 @@ sesh aws setup
 export MOCK_AWS_NO_MFA=true
 sesh aws setup
 
+# Simulate AWS refusing every code, as it refuses one used already:
+# sesh aws waits for the next code, tries once more, and says so
+export MOCK_AWS_REFUSE_CODE=true
+sesh aws --no-subshell
+
+# A profile the mock doesn't know
+sesh aws setup --profile nosuch
+
 # Reset to normal
-unset MOCK_AWS_FAIL MOCK_AWS_NO_MFA
+unset MOCK_AWS_FAIL MOCK_AWS_NO_MFA MOCK_AWS_REFUSE_CODE
 ```
 
 ## Notes

@@ -225,8 +225,8 @@ func TestGetFirstMFADevice_NoDevices(t *testing.T) {
 
 	_, err = GetFirstMFADevice("test-profile")
 
-	if err == nil {
-		t.Error("Expected 'no MFA devices found' error, got nil")
+	if wantSub := "no authenticator app"; err == nil || !strings.Contains(err.Error(), wantSub) {
+		t.Errorf("GetFirstMFADevice() = %v, want an error containing %q", err, wantSub)
 	}
 }
 
@@ -281,7 +281,7 @@ func TestGetFirstMFADevice_Integration(t *testing.T) {
 	}
 }
 
-func TestCredentials_ZeroSecrets(t *testing.T) {
+func TestCredentials_Clear(t *testing.T) {
 	tests := map[string]struct {
 		creds          *Credentials
 		expectNonEmpty bool // Expiration should remain non-empty
@@ -305,7 +305,7 @@ func TestCredentials_ZeroSecrets(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			tc.creds.ZeroSecrets()
+			tc.creds.Clear()
 
 			if tc.creds == nil {
 				return

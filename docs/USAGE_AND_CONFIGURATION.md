@@ -353,13 +353,13 @@ $ sesh config set clipboard_timeout 15s
 | `--clip`           | n/a                  | Copy the MFA code for the AWS console   | false            |
 | `--folder`, `--tag` | n/a                 | With `sesh aws setup`: the folder to file the entry in, and a tag to add; repeat `--tag` for more | none |
 
-**Profile precedence:** `--profile` flag > `$AWS_PROFILE` environment variable > `"default"`. If neither flag nor env var is set, sesh uses the profile named `"default"`.
+**Profile precedence:** `--profile` flag > `$AWS_PROFILE` > `$AWS_DEFAULT_PROFILE` (as the AWS CLI reads them) > `"default"`. If none is set, sesh uses the profile named `"default"`.
 
 ### Environment Variables
 
 | Variable                | Description                                        | Default          |
 |-------------------------|----------------------------------------------------|------------------|
-| `AWS_PROFILE`          | Default AWS profile                                | `default`        |
+| `AWS_PROFILE`          | Default AWS profile (`AWS_DEFAULT_PROFILE` when it's unset) | `default`        |
 | `SESH_DB_PATH`         | Vault location (config: `db_path`) | `~/Library/Application Support/sesh/passwords.db` (macOS), `$XDG_DATA_HOME/sesh/passwords.db`, or `~/.local/share/sesh/passwords.db` when that's unset (Linux) |
 | `SESH_CLIPBOARD_TIMEOUT` | How long a copied secret stays on the clipboard (config: `clipboard_timeout`) | `30s` |
 | `SESH_MASTER_PASSWORD` | Non-interactive master password (skips prompt). Intended for CI/scripting only — exposes the password via process environment | unset            |
@@ -1675,12 +1675,13 @@ In CSV, spaces around a tag and empty tags (`a; b;;`) are ignored on import. If 
 `sesh add totp` and `sesh aws setup` capture a TOTP secret:
 
 ```bash
-# AWS Setup
+# AWS setup, for --profile P or AWS_PROFILE (without either, it asks)
 sesh aws setup
-# - Prompts for MFA device setup in AWS Console
-# - Handles QR code scanning or manual secret entry
-# - Validates and stores secret securely
-# - Provides test codes for AWS activation
+# - Checks who the profile signs in as
+# - Reads the key AWS shows for a new authenticator app: typed, from a QR code
+#   in an image file, or (macOS) from one selected on screen
+# - Saves the key, then gives the two codes the AWS console asks for
+# - Finds the device AWS made (or takes its ARN typed), and saves it with the key
 
 # TOTP entry for any other site
 sesh add totp github --qr
@@ -1702,19 +1703,25 @@ $ echo 'otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub' | ses
 
 A key typed or piped in alone makes the usual codes (6 digits every 30 seconds), and needs a name: `sesh add totp <name>`, or, at a terminal, sesh asks for one.
 
+**`sesh aws setup` in more detail:**
+- **The profile** is `--profile`, or `AWS_PROFILE` (or `AWS_DEFAULT_PROFILE`); without any, setup asks, and Enter takes the default profile. It needs an IAM user's own access keys: a profile that signs in with `aws login`, SSO or a role gets temporary credentials, which AWS gives no MFA session to, so setup refuses it, saying which it is.
+- **The key is saved before the AWS console step.** Once AWS has taken the codes, the device is live, so a key lost after that would leave you unable to make its codes. If anything stops the setup from then on (Ctrl-C, Ctrl-D, the agent locking while you're in the browser), the key stays in the vault; except after Ctrl-C, setup says so. `sesh aws` then asks AWS for the device, when the user has one authenticator app; otherwise run `sesh aws setup` again to choose it. Replacing a profile's key keeps the old one in the entry's [history](#password-history), unless `history.keep` is 0, which setup warns of before replacing it.
+- **After setup,** wait for the next code (up to 30 seconds) before the first `sesh aws`: AWS has just used the codes setup gave.
+- **The device** is chosen from the authenticator apps AWS lists for the user (security keys and hardware tokens are left out: sesh can't make their codes), or typed as its ARN, which has to be in the profile's account. If AWS says the codes are wrong (they were made too long before), `n` at that step makes new ones.
+
 ### QR Code Setup Flow
 
-`sesh add totp --qr` and `sesh aws setup` can read the TOTP secret from a QR code on your screen:
+`sesh add totp --qr` and `sesh aws setup` can read the TOTP secret from a QR code on your screen, on macOS:
 
 1. **Display the QR code** on your screen (e.g., from AWS IAM, GitHub Settings, Google Account, etc.)
-2. **Run the command** (`sesh add totp <name> --qr`, or `sesh aws setup`)
+2. **Run the command** (`sesh add totp <name> --qr`; or `sesh aws setup`, choosing "Select the QR code on screen")
 3. **Select the QR code region** — macOS `screencapture -i` launches, turning your cursor into a crosshair. Click and drag to select the area containing the QR code.
 4. **sesh decodes the QR code** automatically, extracting the TOTP secret from the `otpauth://` URL
 5. **Validation** — sesh checks the secret before storing it
 
-**From an image file** (any system, including Linux and over SSH): `sesh add totp <name> --qr-image shot.png` reads the QR code from a screenshot or a photo of one, PNG or JPEG. The image must hold one TOTP code; Google Authenticator's transfer code holds several accounts, and `sesh import --from google-authenticator` reads that.
+**From an image file** (any system, including Linux and over SSH): `sesh add totp <name> --qr-image shot.png` reads the QR code from a screenshot or a photo of one, PNG or JPEG; `sesh aws setup` offers the same. The image must hold one TOTP code; Google Authenticator's transfer code holds several accounts, and `sesh import --from google-authenticator` reads that.
 
-If QR scanning fails (e.g., QR code too blurry, wrong format, or you press Escape to cancel), `sesh aws setup` offers to try again or to fall back to manual entry, where you paste the base32 secret directly. `sesh add totp --qr` stops with the reason; run `sesh add totp <name>` without `--qr` to type the key instead.
+If reading a QR code fails (it's blurry, not a TOTP code, or you press Escape), `sesh aws setup` says why and asks again how to read the key, typed among the ways. `sesh add totp --qr` stops with the reason; run `sesh add totp <name>` without `--qr` to type the key instead.
 
 > **Supported QR codes:** Only `otpauth://totp/...` links (Google Authenticator's Key Uri Format; the codes are RFC 6238 TOTP). This is the format used by Google Authenticator, Authy, 1Password, and most TOTP-compatible services. Non-standard parameters (SHA-256/SHA-512 algorithm, 8 digits, custom period) are automatically extracted from the QR code and stored alongside the secret, so sesh generates correct codes for services with non-default configurations.
 
@@ -1776,10 +1783,15 @@ sesh add --help
 | "no clipboard tool found: install …" | Linux with no clipboard tool | Install the one it names: `wl-clipboard` under Wayland, or `xclip` or `xsel` under X11 |
 | "no AWS entry found for profile (X)" | No credentials stored for this profile | Run `sesh aws setup` |
 | "no TOTP entry matches "X"" | No TOTP entry matches those words | Check with `sesh search X`, or add it with `sesh add totp` |
-| "MultiFactorAuthentication failed" | TOTP code was recently used or expired | Wait for the next 30-second window and try again. sesh automatically retries with the next code. |
-| "failed to capture screenshot" | QR scanning cancelled or failed | In `sesh aws setup`, press Enter to try again, or `m` for manual secret entry; for `sesh add totp`, leave out `--qr` and type the key |
-| "failed to decode QR code" | QR code blurry, too small, or not `otpauth://` format | Try manual entry instead, or retake a clearer screenshot |
-| "failed to detect MFA device" | AWS CLI can't find an MFA device for the profile | Ensure an MFA device is configured in AWS IAM for this profile |
+| "AWS refused the code; … Waiting Ns for the next one" | AWS takes each code once; this one was used in the last 30 seconds (`sesh aws` run twice, say) | Nothing: sesh tries the next code itself |
+| "AWS refused the next code too: check this computer's clock …" | AWS refused two codes in a row | Make sure the computer sets its clock automatically, and that the profile's MFA device in AWS is the one this key was set up for; if not, run `sesh aws setup` again |
+| "failed to detect MFA device: AWS lists no authenticator app …" | The entry has no MFA device saved, and AWS lists no authenticator app for the profile's user | Run `sesh aws setup`, adding the device in the AWS console as it says |
+| "failed to detect MFA device: AWS lists N authenticator apps …" | The entry has no MFA device saved, and the user has several, so sesh can't tell which the key is for | Run `sesh aws setup` again and choose the device |
+| "AWS couldn't say who profile X signs in as …" (from `sesh aws setup`) | The AWS CLI can't use the profile; its own message follows | Run the `aws sts get-caller-identity` command it gives, and fix the profile (`aws configure`, or sign in again) |
+| "… signs in with aws login (or SSO, or a role) …", "… signs in as …, a temporary session …", or "… signs in with temporary credentials …" | The profile gets temporary credentials, and AWS gives MFA sessions only to an IAM user's own access keys | Use a profile with an IAM user's access keys for `sesh aws` |
+| "The MFA key is saved, as totp/aws/X, but not which MFA device it's for …" | `sesh aws setup` stopped after saving the key | If the user has one authenticator app in AWS, `sesh aws` works, asking AWS for it; otherwise run `sesh aws setup` again to choose it |
+| "failed to capture screenshot" | Reading the QR code on screen was cancelled or failed | In `sesh aws setup`, choose another way to read the key; for `sesh add totp`, leave out `--qr` and type the key, or use `--qr-image` |
+| "failed to decode QR code" | QR code blurry, too small, or not `otpauth://` format | Type the key instead, or retake a clearer screenshot |
 | "already in a sesh environment" | Tried to nest sesh sessions | Exit the current subshell first with `exit` or Ctrl+D |
 
 ## The AWS profile and the subshell's environment
