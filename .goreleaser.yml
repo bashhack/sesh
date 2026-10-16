@@ -6,7 +6,8 @@ before:
     - go mod tidy
 
 builds:
-  - env:
+  - id: darwin
+    env:
       # cgo is on for macOS: Touch ID unlock calls the Secure Enclave through
       # a small cgo shim (internal/touchid). The release job runs on macOS,
       # whose clang builds both architectures.
@@ -19,8 +20,19 @@ builds:
     main: ./sesh/cmd/sesh
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
-    ignore:
-      - goos: windows
+  - id: linux
+    env:
+      # Pure Go on Linux: no Touch ID, and SQLite is modernc's, so the macOS
+      # release job cross-builds it.
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    main: ./sesh/cmd/sesh
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 
 archives:
   - name_template: >-
@@ -31,26 +43,29 @@ archives:
       {{- else }}{{ .Arch }}{{ end }}
     format_overrides:
       - goos: darwin
-        format: zip
+        formats: [zip]
     files:
       - README.md
       - LICENSE
       - docs/*.md
-      - docs/assets/*.mermaid
 brews:
   - repository:
       owner: bashhack
       name: homebrew-sesh
     directory: Formula
     homepage: https://github.com/bashhack/sesh
-    description: An extensible terminal-first authentication toolkit for secure credential workflows
+    description: Terminal-first toolkit for secure credential workflows
     license: MIT
     test: |
-      system "#{bin}/sesh --version"
+      assert_match version.to_s, shell_output("#{bin}/sesh --version")
     install: |
       bin.install "sesh"
-    post_install: |
-      opoo "AWS CLI not found. sesh requires it for credential workflows. Install with: brew install awscli" unless which("aws")
+      # sesh completion bash|zsh|fish, into Homebrew's completion folders.
+      generate_completions_from_executable(bin/"sesh", "completion")
+    caveats: |
+      sesh aws needs the AWS CLI (brew install awscli); nothing else does.
+      Shell completion is installed for bash, zsh and fish; your shell's
+      completion has to be turned on to use it: https://docs.brew.sh/Shell-Completion
 checksum:
   name_template: 'checksums.txt'
 
