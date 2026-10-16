@@ -183,7 +183,8 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: latest
+          # v2 keeps the brews section, deprecated since 2.10.
+          version: "~> v2"
           args: release --clean
           workdir: .
         env:
