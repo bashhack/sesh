@@ -1467,7 +1467,10 @@ sesh import --from sesh backup.enc
 **Bitwarden.** Export your vault from Bitwarden as JSON, from the web vault, an app, or `bw export --format json`. Choose "Password protected" to keep it encrypted on disk; sesh asks for that password.
 - **An "Account restricted" export** can only be opened by Bitwarden itself, so sesh refuses it.
 - **Your own vault only:** export with "Export from" set to "My vault". An organization's export is refused, and a personal export leaves out the organization items you can see.
-- **The CSV export** isn't read yet: export as JSON.
+- **The CSV export** (`bw export --format csv`) is read too, but holds less, so JSON is better when you can:
+  - logins and secure notes only (no cards, identities or other items);
+  - no old passwords and no dates, so each entry is dated when it's imported, and [`sesh health`](#password-health-sesh-health) can't tell how old a password is;
+  - it doesn't say which custom fields were hidden, so every custom field becomes a secret one, kept encrypted (a further URL stays a plain `url-2` field). A linked field is written as `undefined` in it, and left out, as from JSON.
 
 ```
 sesh import --from bitwarden bitwarden_export.json

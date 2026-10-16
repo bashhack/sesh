@@ -1,5 +1,5 @@
-// Package bitwarden reads Bitwarden's JSON exports: the plain one, and the
-// one protected by a password of its own. The format follows Bitwarden's
+// Package bitwarden reads Bitwarden's exports: the plain JSON one, the one
+// protected by a password of its own, and the CSV one. The format follows Bitwarden's
 // own code (github.com/bitwarden/clients, libs/tools/export-vault-core and
 // libs/common/src/models/export), and is tested against exports made by
 // Bitwarden's CLI.
@@ -167,12 +167,15 @@ func IsExport(b []byte) bool {
 	return json.Unmarshal(b, &e) == nil && (e.Items != nil || (e.PP != nil && e.Data != ""))
 }
 
-// Parse reads a Bitwarden JSON export. A password-protected one is opened
+// Parse reads a Bitwarden export: JSON, or CSV. A password-protected one is opened
 // with the password password returns, asked only once the file's own
 // settings are known to be ones sesh accepts.
 func Parse(b []byte, password func() ([]byte, error)) (Export, error) {
-	if IsCSV(b) {
-		return Export{}, errors.New("this is Bitwarden's CSV export, which sesh doesn't read yet: export again as JSON (plain, or password protected)")
+	switch {
+	case IsCSV(b):
+		return parseCSV(b)
+	case IsOrganizationCSV(b):
+		return Export{}, errOrganization
 	}
 	var env envelope
 	if err := json.Unmarshal(b, &env); err != nil {

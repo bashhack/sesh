@@ -12,10 +12,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/bashhack/sesh/internal/importer"
 )
 
 // The fixtures in testdata are genuine exports of one throwaway vault, made
@@ -141,12 +145,9 @@ func seal(t *testing.T, pw string, plain []byte) []byte {
 	return out
 }
 
-// An organization's export is refused, plain or protected, as is the CSV
-// export; a protected export whose data was changed is damaged.
+// An organization's export is refused, plain or protected; a protected
+// export whose data was changed is damaged.
 func TestParse_Refused(t *testing.T) {
-	if _, err := Parse(read(t, "vault.csv"), noPassword); err == nil || !strings.Contains(err.Error(), "CSV export") {
-		t.Errorf("CSV: %v", err)
-	}
 	org := []byte(`{"encrypted":false,"collections":[{"id":"c1","organizationId":"o1","name":"Team"}],"items":[]}`)
 	if _, err := Parse(org, noPassword); !errors.Is(err, errOrganization) {
 		t.Errorf("organization, plain: %v", err)
@@ -192,5 +193,86 @@ func TestParse_KDFBounds(t *testing.T) {
 	}
 	if !IsExport(read(t, "plain.json")) || !IsExport(read(t, "password.json")) || IsExport([]byte(`{"a":1}`)) {
 		t.Error("IsExport")
+	}
+}
+
+// The CSV export of the vault plain.json holds gives the same entries, less what a CSV doesn't carry: dates, old passwords, cards and the like, and which fields were hidden (all are kept secret).
+func TestParseCSV(t *testing.T) {
+	csvExp, err := Parse(read(t, "vault.csv"), noPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonExp, err := Parse(read(t, "plain.json"), noPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromCSV, fromJSON := map[string]*importer.Entry{}, map[string]*importer.Entry{}
+	for _, e := range Entries(&csvExp) {
+		if e.Skip == "" {
+			fromCSV[e.Key.String()] = e
+		}
+	}
+	for _, e := range Entries(&jsonExp) {
+		if e.Skip == "" {
+			fromJSON[e.Key.String()] = e
+		}
+	}
+	if len(fromCSV) == 0 {
+		t.Fatal("nothing read from the CSV")
+	}
+	for k, c := range fromCSV {
+		j, ok := fromJSON[k]
+		if !ok {
+			t.Errorf("%s: from the CSV, not the JSON", k)
+			continue
+		}
+		if string(c.Secret) != string(j.Secret) || c.Folder != j.Folder || c.Details.URL != j.Details.URL || string(c.Details.Notes) != string(j.Details.Notes) || !slices.Equal(c.Tags, j.Tags) {
+			t.Errorf("%s: CSV %+v\nJSON %+v", k, c, j)
+		}
+		if len(c.Earlier) != 0 || !c.Created.IsZero() {
+			t.Errorf("%s: a CSV has no history or dates: %+v", k, c)
+		}
+		if len(c.Details.Fields) != len(j.Details.Fields) {
+			t.Errorf("%s: fields %+v, want %+v", k, c.Details.Fields, j.Details.Fields)
+			continue
+		}
+		for i, f := range c.Details.Fields {
+			// A further URL is a plain field, as from JSON; a custom one is secret.
+			custom := !strings.HasPrefix(f.Name, "url-")
+			if f.Name != j.Details.Fields[i].Name || string(f.Value) != string(j.Details.Fields[i].Value) || f.Secret != custom {
+				t.Errorf("%s: field %+v, want %+v, secret %v", k, f, j.Details.Fields[i], custom)
+			}
+		}
+	}
+	// Each of the CSV's rows: logins (with their TOTP keys) and the note.
+	for _, k := range []string{"password/a-b site/u", "password/AWS console/root", "totp/AWS console/root", "password/GitHub/alice", "totp/GitHub/alice", "password/Router", "password/Steam/gamer", "secure_note/Wifi"} {
+		if _, ok := fromCSV[k]; !ok {
+			t.Errorf("%s not read from the CSV; read: %v", k, slices.Collect(maps.Keys(fromCSV)))
+		}
+	}
+}
+
+// A row's type decides what it is: a note stays one, whatever else the row has.
+func TestParseCSVTypes(t *testing.T) {
+	exp, err := Parse([]byte("folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n,,note,Door,code 1234,,0,,,stray,\n,,login,Shop,,,0,,me,shop-pw,\n"), noPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, e := range Entries(&exp) {
+		keys = append(keys, e.Key.String())
+	}
+	if want := []string{"secure_note/Door", "password/Shop/me"}; !slices.Equal(keys, want) {
+		t.Errorf("keys %q, want %q", keys, want)
+	}
+}
+
+// An organization's CSV is refused, saying how to export one's own vault; a damaged one says so.
+func TestParseCSVRefused(t *testing.T) {
+	if _, err := Parse([]byte("collections,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n"), noPassword); !errors.Is(err, errOrganization) {
+		t.Errorf("an organization's CSV: %v", err)
+	}
+	if _, err := Parse([]byte("folder,favorite,type,name,notes\n,,login,\"unclosed\n"), noPassword); err == nil || !strings.Contains(err.Error(), "can't be read") {
+		t.Errorf("a damaged CSV: %v", err)
 	}
 }
