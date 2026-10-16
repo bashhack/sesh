@@ -8,11 +8,10 @@
 [![Coverage](https://codecov.io/gh/bashhack/sesh/graph/badge.svg?token=Y3K7R3MHXH)](https://codecov.io/gh/bashhack/sesh)
 [![Go Reference](https://pkg.go.dev/badge/github.com/bashhack/sesh)](https://pkg.go.dev/github.com/bashhack/sesh)
 [![Go Report Card](https://goreportcard.com/badge/github.com/bashhack/sesh)](https://goreportcard.com/report/github.com/bashhack/sesh)
-![CodeRabbit Reviews](https://img.shields.io/coderabbit/prs/github/bashhack/sesh?utm_source=oss&utm_medium=github&utm_campaign=bashhack%2Fsesh&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 
 </div>
 
-# sesh — An extensible terminal-first authentication toolkit for secure credential workflows
+# sesh — A terminal-first authentication toolkit for secure credential workflows
 
 > A developer-friendly CLI that brings AWS MFA, TOTP authentication, and secure password management to your terminal, backed by an encrypted vault.
 
@@ -25,30 +24,35 @@ In particular, I wanted fast, secure MFA support directly in the terminal—both
 **sesh fills that gap.** It's simple, scriptable, and works well for:
 - AWS CLI + console MFA workflows
 - Web-based MFA flows where a TOTP secret is available
-- Secure storage for passwords, API keys, and notes
+- Secure storage for passwords, API keys, notes and files
 
 While sesh overlaps a bit with tools like aws-vault, it goes further by offering a general-purpose CLI-based authentication and credential management experience—no mobile device, no browser, no bloat. Your security, your control, your terminal.
 
 ## Features
 
 - **Terminal App** — `sesh ui`: search every entry as you type, copy with Enter, and edit, file, and look after the vault, in one screen
-- **Encrypted Vault by Default** — Secrets live in an encrypted SQLite vault (AES-256-GCM, Argon2id) unlocked with your master password, on macOS and Linux alike. No setup: the first command creates it
-- **Master-Password Agent** — A per-user background agent holds the key so you type the password once; it locks itself when idle and is hardened against memory inspection ([Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent))
+- **Encrypted Vault** — Secrets live in an encrypted SQLite vault (AES-256-GCM, Argon2id) unlocked with your master password, on macOS and Linux alike. No setup: the first command creates it
+- **Master-Password Agent** — A per-user background agent holds the key so you type the password once; it locks itself when idle, after 8 hours, when the computer sleeps or (on macOS) its screen locks, and when you quit `sesh ui`, and is hardened against memory inspection ([Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent))
 - **Recovery Key** — Optional: a code you write down when the vault is created; if you forget the master password, `sesh recover` uses it to set a new one. No server involved, and sesh keeps no copy
 - **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key (nothing in the Keychain); the password always works as a fallback
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from, and `sesh config set` changes one
-- **Encrypted Export** — Portable backups protected by a password of their own, safe to move between machines (`sesh export`)
+- **Automatic Backups** — A copy of the encrypted vault each day, the newest 7 kept (`sesh backup`, `sesh restore`)
+- **Encrypted Export** — Entries protected by a password of their own, to move them to another machine (`sesh export`; `sesh import --from sesh` reads it)
+- **Import** — From Bitwarden, KeePass, Chrome, Firefox, Safari and Google Authenticator (`sesh import`)
+- **Trash and History** — A deleted entry stays in the trash for 30 days, and each entry keeps its earlier secrets, so either can be brought back
+- **Folders and Tags** — File entries, and narrow lists and searches by them
+- **Health and Checks** — `sesh health` finds weak, reused and old passwords; `sesh doctor` checks the setup and that every entry can be read
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, secure notes, and files kept whole (a kubeconfig, a TLS key), each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
 - **Secrets for commands** — `sesh run` puts vault values in a command's environment and hides them in its output; `sesh inject` fills a config template; `sesh git-credential` gives git a site's password as its credential helper
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
 - **Shell Completion** — Tab completion for commands, flags, and their values in bash, zsh, and fish (`sesh completion zsh`)
 - **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically. Supports non-standard configs (SHA-256/SHA-512, 8 digits, custom periods) extracted from QR codes
 - **Clipboard Auto-Clear** — Clipboard is automatically cleared 30 seconds after copying secrets (configurable: `clipboard_timeout`)
-- **Intelligent Subshell** — Isolate credentials in secure environments with built-in helper commands
+- **AWS Sign-in Shell** — `sesh aws` opens a shell with the session's credentials and helper commands; they leave with the shell when it exits
 - **QR Codes** — Set up TOTP by selecting the QR code on screen (macOS) or from a screenshot or photo (`--qr-image`); move a key to your phone with `sesh show --qr`
 - **Passphrases** — `sesh generate --words 6` makes a passphrase from the [EFF's long word list](https://www.eff.org/dice) (CC BY 4.0), as `--generate` does when storing a password
-- **Multiple Profile Support** — Manage dev/prod environments and multiple accounts per service
-- **Audit Logging** — Every access, modification, and deletion is logged; review it with `sesh audit`. Events are kept 90 days by default (`audit.retention_days`)
+- **AWS Profiles and Several Accounts** — `sesh aws --profile production`; several accounts on one site, told apart by username
+- **Audit Logging** — Every secret read, change and deletion is logged; review it with `sesh audit`. Events are kept 90 days by default (`audit.retention_days`)
 
 ## Installation
 
@@ -60,15 +64,14 @@ brew install bashhack/sesh/sesh
 # Note: Homebrew adds sesh to your PATH, and installs its shell completion
 # for bash, zsh and fish (turn on Homebrew's completion to use it)
 
-# Option 2: Install using Go (requires Go 1.27+)
-go install github.com/bashhack/sesh/sesh/cmd/sesh@latest
-# Note: Ensure your Go bin directory (typically $HOME/go/bin) is in your PATH
-# You can add this to your shell profile (~/.bashrc, ~/.zshrc, etc.):
-# export PATH=$PATH:$HOME/go/bin
-
-# Option 3: Download a pre-built binary: macOS (zip) or Linux (tar.gz),
+# Option 2: Download a pre-built binary: macOS (zip) or Linux (tar.gz),
 # for x86_64 or arm64
 # Visit: https://github.com/bashhack/sesh/releases
+
+# Option 3: Build from source (requires Go 1.27+). `go install …@latest`
+# doesn't work: sesh's go.mod replaces two modules with forks.
+git clone https://github.com/bashhack/sesh && cd sesh
+go build -o ~/go/bin/sesh ./sesh/cmd/sesh   # ~/go/bin needs to be in your PATH
 ```
 
 ## Quick Start
@@ -79,7 +82,8 @@ Type `sesh` for every command, or `sesh <command> --help` for one.
 sesh add password github --username alice   # type it (hidden), or pipe it in
 sesh add password shop --generate           # a strong one, copied as it's saved
 sesh add totp github --qr                   # select the QR code on screen
-sesh copy github                            # its password, or a TOTP entry's code
+sesh copy github alice                      # its password
+sesh copy github totp                       # its TOTP code
 sesh ui                                     # search everything; Enter copies
 ```
 
@@ -95,8 +99,8 @@ later commands don't ask again until it locks itself.
 
 ## Usage
 
-Every command works on the whole vault: passwords, API keys, notes and TOTP
-entries. An `<entry>` is a few words of its name or username, as `sesh ui`'s
+Every command works on the whole vault: passwords, API keys, notes, files and
+TOTP entries. An `<entry>` is a few words of its name or username, as `sesh ui`'s
 search takes them (`github alice`; a kind word such as `totp` or `note`
 narrows), or its ID, such as `password/github/alice`. When several entries
 match, sesh asks which at a terminal, and lists them otherwise.
@@ -105,7 +109,7 @@ match, sesh asks which at a terminal, and lists them otherwise.
 
 ```bash
 sesh list                          # every entry
-sesh list notes                    # or of a kind: passwords, keys, notes, totp
+sesh list notes                    # or of a kind: passwords, keys, notes, totp, files
 sesh list --folder work --tag dev  # narrowed by folder and tag
 sesh search github                 # by any part of a name, username, or site
 sesh copy github alice             # copy the password (the clipboard clears after 30s)
@@ -116,7 +120,7 @@ sesh show github --reveal          # URL, notes, fields, folder and tags
 sesh open github                   # its URL, in the browser
 ```
 
-Add `--json` to `list`, `search`, `get`, `code` or `show` for output a program reads.
+Add `--json` to `list`, `search`, `get`, `code`, `show` or `health` for output a program reads.
 
 ### Adding and changing entries
 
@@ -209,6 +213,7 @@ how the agent starts, locks, and stops.
 - Go 1.27+
 - macOS or Linux (Touch ID unlock is macOS-only)
 - Make (optional — provides convenience targets, but `go build ./sesh/cmd/sesh` works directly)
+- On macOS, Xcode's command line tools: Touch ID unlock is built with cgo, and a build without a C compiler has none. Linux builds are pure Go
 
 ### Building
 ```bash
@@ -225,7 +230,7 @@ make test
 # Generate coverage
 make coverage
 
-# Run all checks
+# Tidy, format, vet, lint and test (rewrites files)
 make audit
 ```
 

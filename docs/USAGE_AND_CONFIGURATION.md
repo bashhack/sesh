@@ -59,7 +59,7 @@ Have the QR code or TOTP secret ready **before** running setup:
 - **For GitHub 2FA:** Go to GitHub Settings → Password and Authentication → Enable Two-Factor Authentication → Choose "Set up using an app." GitHub will display a QR code.
 - **For any TOTP service:** Navigate to the service's security/2FA settings and start the authenticator app setup flow. Look for a QR code or a base32 secret key.
 
-Once you can see the QR code on screen, run `sesh add totp <name> --qr` (for AWS, `sesh aws setup`).
+Once you can see the QR code on screen, run `sesh add totp <name> --qr` (on macOS; elsewhere, save a screenshot and use `--qr-image FILE`, or type the key). For AWS, run `sesh aws setup`.
 
 ## Basic Usage
 
@@ -145,6 +145,18 @@ Every command that takes an `<entry>` (`copy`, `get`, `code`, `show`, `open`, `e
 
 Commands that change or delete say which entry they're about to act on before they ask, so words that matched something unexpected are seen first. `sesh trash`, `sesh folder move` and `sesh tag add|remove` can act on several entries at once: give their IDs, one each. Words name one entry.
 
+**Names.** An entry is named by its name and, optionally, a username (for an AWS MFA entry, the profile). Spaces inside a name are fine (`My Bank`). sesh refuses a name with:
+
+- a `/`, which separates the parts of an entry's ID (`password/github/alice`), or a control character such as a tab or newline;
+- a space at the start or end (`"github "`), which would make an entry that `github` doesn't find;
+- an invisible character (such as a zero-width space or soft hyphen, which text copied from web pages can carry) anywhere in it, for the same reason. The characters emoji are built from (zero-width joiners, the tags in flags like Scotland's) are fine inside a name;
+- a character that changes text direction, which can make one name display as another;
+- more than 256 characters.
+
+`sesh add` checks the name and username before the vault is opened, as does `sesh edit --rename` on an entry named by its ID, so a bad name is reported before the master password is asked for. A name read from a QR code or an `otpauth://` link is checked once it's read, the AWS setup checks the profile as soon as you enter it, and an import reports each entry it refuses and imports the rest.
+
+Names are case-sensitive: `GitHub` and `github` are two entries. Words find either, since search ignores case; an ID that misses only by case is an error that says which entry you may have meant (`entry not found: password/github/Alice; did you mean password/github/alice? Names are case-sensitive`). Creating an entry whose name differs from an existing one only in case asks first, like an overwrite, with `sesh add` (`--force` skips the question). AWS profiles are named by your AWS configuration, so the AWS setup doesn't ask.
+
 ## Shell Completion
 
 sesh can complete its commands, flags, and their values when you press Tab, in bash, zsh, and fish. `sesh completion bash`, `sesh completion zsh`, or `sesh completion fish` prints the script for that shell; your shell needs to load it. Shell setups vary a lot (dotfiles managers, `ZDOTDIR`, plugin managers, frameworks), so below is what each shell needs, with the usual places as examples. Put it wherever your setup keeps such things.
@@ -170,10 +182,11 @@ Otherwise there are two ways, for every shell:
 
 What completes:
 - the commands (`list`, `copy`, `add`, `trash`, `agent`, ...) and theirs (`sesh agent st<Tab>` → `status`, `stop`; `sesh trash <Tab>` → `list`, `restore`, `remove`, `empty`; `sesh aws <Tab>` → `setup`);
-- kinds: `sesh add <Tab>` → `password`, `key`, `note`, `totp`; `sesh list <Tab>` and `sesh export <Tab>` → `passwords`, `keys`, `notes`, `totp`;
+- kinds: `sesh add <Tab>` → `password`, `key`, `note`, `totp`, `file`; `sesh list <Tab>` and `sesh export <Tab>` → `passwords`, `keys`, `notes`, `totp`, `files`;
+- settings: `sesh config set <Tab>` → the setting names;
 - each command's flags (`sesh copy --<Tab>` → `--field`, `--url`, `--username`);
 - values from a fixed set: `--sort`, `--format`, `--from`, `--on-conflict`, and `sesh edit`'s `--type`;
-- file paths for `--file`, `--db-path`, `--env-file`, `sesh inject`'s `-i` and `-o`, and the files `sesh import`, `sesh backup` and `sesh restore` take.
+- file paths for `--file`, `--db-path`, `--env-file`, `--qr-image`, `--from`, `-o` (`sesh get`, `sesh inject`), `sesh inject`'s `-i`, and the files `sesh import`, `sesh backup` and `sesh restore` take.
 
 Entry names don't complete: that would mean opening the vault on a Tab press. Completion never reads the vault, the agent, or the config file.
 
@@ -203,6 +216,12 @@ lock_on_screen_lock = true              # lock when the screen locks (macOS)
 
 [audit]
 retention_days = 90                     # days of audit log events to keep; 0 keeps everything
+
+[trash]
+keep_days = 30                          # days a deleted entry stays in the trash; 0 deletes for good
+
+[history]
+keep = 10                               # earlier secrets kept for each entry: 0 to 1000
 
 [backup]
 every_days = 1                          # back up when the newest backup is this many days old; 0 turns it off
@@ -294,7 +313,7 @@ $ sesh config set clipboard_timeout 15s
 
 | Command | What it does | Flags |
 |---------|--------------|-------|
-| `sesh list [passwords\|keys\|notes\|totp\|files]` | Every entry, or those of the kinds named | `--folder F`, `--tag T` (only those in the folder and its subfolders, `""` for none; only those with the tag, repeat for more), `--sort name\|created\|updated\|folder`, `--json` |
+| `sesh list [passwords\|keys\|notes\|totp\|files]` | Every entry, or those of the kinds named | `--folder F`, `--tag T` (only those in the folder and its subfolders, `""` for none; only those with the tag; repeat it to need all of them), `--sort name\|created\|updated\|folder`, `--json` |
 | `sesh search <words>` | The entries matching the words, best first | `--folder F`, `--tag T`, `--json` |
 | `sesh copy <entry>` | Copies its password, API key or note, a TOTP entry's current code, or a file entry's text; the clipboard clears after `clipboard_timeout` | `--username`, `--url`, or `--field NAME` (a custom field, or `notes`) copies that instead |
 | `sesh get <entry>` | Prints the same, for a pipe or a script; a file entry's file exactly as kept | `--username`, `--url`, `--field NAME`, as for copy; `--json`; `-o FILE` writes it to a file readable only by you |
@@ -318,12 +337,12 @@ $ sesh config set clipboard_timeout 15s
 
 | Command | What it does | Flags |
 |---------|--------------|-------|
-| `sesh export [passwords\|keys\|notes\|totp]` | Writes the entries to an export: see [Encrypted exports](#encrypted-exports) | `--file F` (default: the output), `--format encrypted\|json\|csv` (default encrypted), `--folder F`, `--tag T`, `--force` replaces a file |
+| `sesh export [passwords\|keys\|notes\|totp\|files]` | Writes the entries to an export: see [Encrypted exports](#encrypted-exports) | `--file F` (default: the output), `--format encrypted\|json\|csv` (default encrypted), `--folder F`, `--tag T`, `--force` replaces a file |
 | `sesh import --from <source> <file>...` | Brings entries over from another app, or a sesh export | `--dry-run`, `--yes`, `--on-conflict skip\|overwrite` |
 | `sesh lock` | Locks sesh: the next command asks for the master password | |
 | `sesh passwd` | Changes the master password | |
 
-`sesh backup`, `sesh restore`, `sesh health`, `sesh doctor`, `sesh audit`, `sesh recovery`, `sesh recover`, `sesh touchid`, `sesh config`, `sesh init`, `sesh agent`, `sesh run`, `sesh inject`, `sesh git-credential` and `sesh ui` each have their own section below.
+`sesh backup`, `sesh restore`, `sesh health`, `sesh doctor`, `sesh audit`, `sesh recovery`, `sesh recover`, `sesh touchid`, `sesh agent`, `sesh run`, `sesh inject`, `sesh git-credential` and `sesh ui` each have their own section below; `sesh config` and `sesh init` are in [Configuration file](#configuration-file).
 
 ### AWS Options (`sesh aws`)
 
@@ -341,7 +360,7 @@ $ sesh config set clipboard_timeout 15s
 | Variable                | Description                                        | Default          |
 |-------------------------|----------------------------------------------------|------------------|
 | `AWS_PROFILE`          | Default AWS profile                                | `default`        |
-| `SESH_DB_PATH`         | Vault location (config: `db_path`) | `~/Library/Application Support/sesh/passwords.db` (macOS), `$XDG_DATA_HOME/sesh/passwords.db` (Linux) |
+| `SESH_DB_PATH`         | Vault location (config: `db_path`) | `~/Library/Application Support/sesh/passwords.db` (macOS), `$XDG_DATA_HOME/sesh/passwords.db`, or `~/.local/share/sesh/passwords.db` when that's unset (Linux) |
 | `SESH_CLIPBOARD_TIMEOUT` | How long a copied secret stays on the clipboard (config: `clipboard_timeout`) | `30s` |
 | `SESH_MASTER_PASSWORD` | Non-interactive master password (skips prompt). Intended for CI/scripting only — exposes the password via process environment | unset            |
 | `SESH_AUTH_SOCK`       | Socket path for the sesh agent | `<user-cache-dir>/sesh/agent.sock` |
@@ -520,7 +539,7 @@ None of these are needed in normal use:
 | Command | When you'd use it |
 |---------|-------------------|
 | `sesh agent status` | See whether it's running and unlocked, and when it will lock itself |
-| `sesh agent lock` | Drop the key now, for example when stepping away; the agent keeps running until the next unlock |
+| `sesh agent lock` | Drop the key now, for example when stepping away; the agent keeps running, and the next command asks for the password to unlock it again |
 | `kill -USR1 <pid>` | Lock it from a script, such as a screen-lock hook (the pid is in `sesh agent status`) |
 | `sesh agent stop` | Shut it down: after changing the timeouts, or while troubleshooting |
 
@@ -578,7 +597,7 @@ There is nothing installed to remove. `sesh agent stop` shuts it down, and the n
 
 ### The audit log
 
-The vault records every read, store, and delete of an entry: when it happened, what kind of event it was, and which entry, by its kind and name (`password  github (alice)`). For an entry: `access` (read), `modify` (stored or changed), `trash` (moved to the trash), `restore` (put back from the trash), `purge` (deleted for good from the trash, by hand or after its days, or an earlier secret forgotten), and `delete` (deleted for good straight away, with `--purge` or when there's no trash). A few events are about the vault rather than an entry: `rekey` (the master password changed), `restore` (the whole vault restored from a backup), `import` (an import, with how many came from where), and `doctor` (a `sesh doctor` check, with its result). It never records the secret itself.
+The vault records every read, store, and delete of an entry: when it happened, what kind of event it was, and which entry, by its kind and name (`password  github (alice)`). For an entry: `access` (read), `modify` (stored or changed), `trash` (moved to the trash), `restore` (put back from the trash), `purge` (deleted for good from the trash, by hand or after its days, or an earlier secret forgotten), and `delete` (deleted for good straight away, with `--purge` or when there's no trash). A few events are about the vault rather than an entry: `rekey` (the master password changed), `restore` (the whole vault restored from a backup), `import` (an import, with how many came from where), `doctor` (a `sesh doctor` check, with its result), `access` (a health check, with how many secrets it read), and `purge` (earlier secrets beyond `history.keep` dropped). It never records the secret itself.
 
 `sesh audit` shows the newest 50 events, newest first; `--limit 100` shows more, and `--limit 0` shows them all:
 
@@ -586,9 +605,9 @@ The vault records every read, store, and delete of an entry: when it happened, w
 $ sesh audit
 Audit log: 1,204 events since 2026-07-05 09:12. Events older than 90 days are removed automatically (audit.retention_days).
 
-2026-10-03 14:39:32  access  totp         github (work)
-2026-10-03 14:38:10  access  aws          default
-2026-10-03 14:37:18  access  password     github (alice)
+2026-10-03 14:39:32  access  totp         github (work) (read TOTP key, to copy it)
+2026-10-03 14:38:10  access  totp         aws (default)
+2026-10-03 14:37:18  access  password     github (alice) (read secret, to copy it)
 2026-10-03 14:37:18  modify  password     github (alice)
 ...
 ```
@@ -599,7 +618,7 @@ In `sesh ui`, copying, showing an entry's notes (once each time it's unlocked, a
 
 **How long events are kept.** Each command that opens the vault removes events older than `audit.retention_days` (default `90`). Set it to `0` to keep everything. Either way, `sesh audit prune --older-than <days>` removes older events when you choose; `--older-than 0` removes them all.
 
-Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but every command writes an event, so a large vault is copied again by backup tools each time it changes. Removing events doesn't make the file smaller by itself: SQLite keeps the freed space for reuse. So `sesh audit prune` also compacts the vault and reports its size before and after. The automatic cleanup doesn't need to: it frees a little space each day, which new events reuse.
+Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but every read and change writes an event, so a large vault is copied again by backup tools each time it changes. Removing events doesn't make the file smaller by itself: SQLite keeps the freed space for reuse. So `sesh audit prune` also compacts the vault and reports its size before and after. The automatic cleanup doesn't need to: it frees a little space each day, which new events reuse.
 
 **When it grows large.** If the log passes 100,000 events (about 10 MB), whatever the retention setting, sesh prints a warning with the vault's size and how to shrink it. It shows at most once a day, and only when you're at a terminal, so scripts never see it. Typical personal use stays far below this at the default 90 days; it's meant for, say, a script that reads a secret every minute.
 
@@ -609,8 +628,8 @@ Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but
 
 - **Config:** the config file loads (or there's none, and the defaults apply: it says where changing a setting makes it).
 - **Vault file:** the vault exists, only you can read it, and no one else can replace or delete it through its folder. A symlink is followed to the real file. For a folder that's yours, sesh gives the `chmod` to run; for a shared one, such as `/tmp`, it says to move the vault with `sesh init`.
-- **Agent:** whether it's running and unlocked. The setup checks never start it; unlocking the vault, below, does, as any command would. One running an older sesh build is replaced by the next command.
-- **Key settings:** the vault's key wasn't made with weaker Argon2id settings than the configured ones (`[master_password]`): none higher, one lower. Raising them applies only when the key is made again, with `sesh passwd`. Settings higher in one way and lower in another are fine, and noted, since making the key again would lower one.
+- **Agent:** whether it's running and unlocked. The setup checks never start it; unlocking the vault, below, does, as any command would. One running another sesh build is replaced by the next command.
+- **Key settings:** the vault's key wasn't made with weaker Argon2id settings than the configured ones (`[master_password]`). Weaker means neither its memory nor its passes is higher than configured, and at least one is lower; threads don't count. Raising them applies only when the key is made again, with `sesh passwd`. Settings higher in one way and lower in another are fine, and noted, since making the key again would lower one.
 - **Backups:** when the newest was made, how many are kept, and where. None, or a newest older than twice `backup.every_days`, is a warning.
 - **Clipboard** (Linux only): the tool `sesh copy` copies with: `wl-copy`, `xclip` or `xsel`. None installed is a warning; no desktop session, as over SSH, is only noted.
 
@@ -618,6 +637,8 @@ Then the vault:
 
 - **The file:** SQLite's own integrity check.
 - **Every entry:** its secret decrypts, and its settings (TOTP code settings, the AWS MFA device) read back. A damaged secret is otherwise found only when you read that entry, perhaps when you need it most: one flipped bit in one entry leaves the file looking fine.
+- **The trash**, if anything is in it: every entry there can be read, and so put back.
+- **History**, if entries have earlier secrets: each can be read.
 - **The recovery key:** its record is complete, well-formed, and made for the vault's current key. (Whether the wrapped key inside it is intact can only be checked with the recovery key itself.) Having none is a warning: without one, a forgotten master password loses the vault.
 - **Touch ID unlock**, if it's on: it was set up for this vault and its key, and your fingerprints haven't changed since.
 - **AWS CLI:** if you have AWS entries, `aws` is on your PATH.
@@ -682,7 +703,7 @@ What to do
 FAIL: 2 problems, 2 warnings
 ```
 
-It names every entry it can't read, and never shows a secret. It exits 1 when the config doesn't load, there's no vault, the vault file can't be read, the vault can't be unlocked (a wrong master password, say), or the file, an entry, or the recovery key has a problem; warnings exit 0. Whatever stops the vault part, the setup's steps and the tally still show. If the file is damaged but every entry still reads, it says to export them now and start a new vault from that. If nothing can unlock the vault without asking (no `SESH_MASTER_PASSWORD`, no unlocked agent) and there's no terminal to ask at, as in a script, the setup is still checked, the last line says the vault wasn't, and it exits 0 unless the setup has a problem. If the agent locks or another command changes the master password while it checks, it says to run it again rather than blaming any entry. Run it when something seems off, after moving or restoring the vault, after a crash, or now and then if the vault is in a synced folder. It writes nothing while it checks, then one `doctor` event to the audit log (not when the file itself is damaged).
+It names every entry it can't read, and never shows a secret. It exits 1 when the config doesn't load, there's no vault, the vault file can't be read, the vault can't be unlocked (a wrong master password, say), or the file, an entry, the trash, an earlier secret, or the recovery key has a problem; warnings exit 0. Whatever stops the vault part, the setup's steps and the tally still show. If the file is damaged but every entry still reads, it says to export them now and start a new vault from that. If nothing can unlock the vault without asking (no `SESH_MASTER_PASSWORD`, no unlocked agent) and there's no terminal to ask at, as in a script, the setup is still checked, the last line says the vault wasn't, and it exits 0 unless the setup has a problem. If the agent locks or another command changes the master password while it checks, it says to run it again rather than blaming any entry. Run it when something seems off, after moving or restoring the vault, after a crash, or now and then if the vault is in a synced folder. It writes nothing while it checks, then one `doctor` event to the audit log (not when the file itself is damaged).
 
 ### Backups
 
@@ -761,11 +782,11 @@ An export to a file, in any format, doesn't replace an existing one without `--f
 
 Encrypted exports use the same Argon2id + AES-256-GCM primitives as the vault. The export is self-contained (envelope includes the salt and KDF params) and works across machines and master passwords.
 
-Every export, encrypted or not, holds everything about each entry: its kind, service name, username, secret, times, settings, URL, notes, and custom fields (secret ones included). A TOTP entry's settings (algorithm, digits, period, issuer) decide which codes are right, so they come back with it on import. In JSON they're the `settings` field; in CSV, a `settings` column holding the same JSON.
+Every export, encrypted or not, holds everything about each entry: its kind, service name, username, secret, times, settings, folder, tags, URL, notes, and custom fields (secret ones included). A TOTP entry's settings (algorithm, digits, period, issuer) decide which codes are right, so they come back with it on import. In JSON they're the `settings` field; in CSV, a `settings` column holding the same JSON.
 
 ### Changing your master password (`sesh passwd`)
 
-`sesh passwd` changes your master password: every entry is re-encrypted, in place, under a freshly-derived key from a new password you choose. The new password is always typed at a terminal: `SESH_MASTER_PASSWORD`, if set, gives only the current one, and without a terminal the change is refused.
+`sesh passwd` changes your master password: every entry is re-encrypted, in place, under a freshly-derived key from a new password you choose. The new password is always typed at a terminal: `SESH_MASTER_PASSWORD`, if set, gives only the current one, and without a terminal the change is refused. With `SESH_MASTER_PASSWORD` set, sesh ends by reminding you to update it: it still holds the old password.
 
 ```bash
 sesh passwd
@@ -808,7 +829,7 @@ sesh aws setup
 
 ### AWS Development Workflow
 
-The most efficient AWS development workflow uses sesh's subshell mode, which provides an isolated environment with automatic credential management:
+`sesh aws` starts a new shell with the session's credentials in its environment:
 
 ```bash
 $ sesh aws
@@ -818,23 +839,25 @@ Starting secure shell with aws credentials
 🔐 Secure shell with aws credentials activated. Type 'sesh_help' for more information.
 (sesh:aws) $
 
-# You're now in an isolated subshell with AWS credentials set.
+# You're now in a new shell, with the session's credentials in its environment.
 # Your prompt shows (sesh:aws) to indicate the active session.
 
 (sesh:aws) $ sesh_status
 🔒 Active sesh session for service: aws
 ⏳ Credentials expire in: 11h 58m 12s
-   Session progress: [████████████████████] 99%
+   Session progress: [███████████████████░] 99%
 
 (sesh:aws) $ aws s3 ls
 2024-01-15 12:00:00 my-bucket
 
-# Exit when done — credentials are automatically cleared
+# Exit when done: the credentials leave with the shell (AWS still accepts them until they expire)
 (sesh:aws) $ exit
 Exited secure shell
 $
-# Back to normal shell. AWS credentials are gone.
+# Back in your own shell, without them.
 ```
+
+`sesh_status` also lists the AWS variables that are set, without their values, and checks the credentials with `aws sts get-caller-identity`.
 
 ### AWS Console Access Workflow
 
@@ -864,7 +887,7 @@ For every other TOTP site, sesh works the same whatever the site is called:
 ```bash
 # Copy the current code to the clipboard
 sesh copy github totp
-# ✅ Copied github (alice)'s code; the clipboard clears in 30s
+# ✅ Copied github (alice)'s code (for 14s more); the clipboard clears in 30s
 
 # Print the code: alone on stdout (the time it has left goes to stderr), so it can be captured
 sesh code github
@@ -938,8 +961,8 @@ sesh search github
 # Output:
 #   Found 2 entries matching "github":
 #     NAME    USERNAME  KIND      ID
-#     github  alice     TOTP      totp/github/alice
 #     github  alice     password  password/github/alice
+#     github  alice     TOTP      totp/github/alice
 
 # List with filters
 sesh list keys --sort updated
@@ -971,14 +994,16 @@ sesh get github password --json | jq -r .value
 
 `sesh list --sort` takes `name` (the default), `created` and `updated` (oldest first), or `folder`.
 
+**Weak passwords.** When you type a password to store (`sesh add password`, or a new secret with `sesh edit`), sesh rates it with [zxcvbn](https://github.com/dropbox/zxcvbn), which knows common passwords, words, names, dates, and keyboard patterns, and counts the entry's own service name and username as easy guesses. If zxcvbn estimates fewer than about 100 million guesses would find it (a score of 2 or less out of 4), sesh stores it and warns, with the command to generate a strong one instead. Generated secrets (`--generate`) get the same check: at the default length (24) they always pass, but `--length 9` or shorter can fail it, and then the warning suggests `--length 12` or more; a short passphrase can too, and then it suggests `--words 5` or more. API keys and notes you type aren't rated. zxcvbn's word lists are English: for passwords in other languages or scripts, it judges mostly by length and the mix of characters. Only a password's first 64 characters are rated.
+
 #### Searching
 
 `sesh search <words>` looks at the two things you name an entry by, its name and its username, and at the host of its URL (`github.com` in `https://github.com/login`). It never looks at secrets, notes or fields. Commands that take an `<entry>` match their words the same way (see [Naming an Entry](#naming-an-entry)).
 
 - **Any part of a name.** `hub` finds `github`. Case doesn't matter.
 - **Punctuation optional.** `mybank` finds `my-bank`, `awsconsole` finds `aws-console`.
-- **Several words narrow it.** Every word has to match the name, the username, or the kind: `github alice` is GitHub as alice; `github totp` is GitHub's TOTP entry.
-- **Kind words.** `password`; `totp`, `otp`, `2fa`, `mfa`; `key`, `api`, `token` (API keys); `note` (secure notes). Only the whole word counts: `pass` searches names.
+- **Several words narrow it.** Every word has to match the name, the username, the URL's host, or the kind: `github alice` is GitHub as alice; `github totp` is GitHub's TOTP entry.
+- **Kind words.** `password`; `totp`, `otp`, `2fa`, `mfa`; `key`, `api`, `token` (API keys); `note` (secure notes); `file` (files). Only the whole word counts: `pass` searches names.
 - **Best matches first.** The whole name, then names starting with the word, then a later word in the name (`bank` in `my-bank`), then anywhere (`bank` in `snowbank`); then the same for usernames, then the URL's host, then kind. Among equals, the most recently updated comes first.
 
 | Search | Finds |
@@ -1075,7 +1100,7 @@ Found 2 entries matching "aws":
 # Delete an entry, named by words or by its ID
 $ sesh trash aws prod
 Delete "totp/aws/prod"? [y/N]: y
-✅ Moved 1 entry to the trash, kept 30 days: sesh trash lists them, and sesh trash restore <id> puts one back
+✅ Moved totp/aws/prod to the trash, kept 30 days: sesh trash lists them, and sesh trash restore <id> puts one back
 
 # Delete several at once, by their IDs: every ID is checked first, and if
 # any is wrong nothing is deleted; then sesh lists them and asks once
@@ -1091,6 +1116,16 @@ A delete asks first, naming what it will delete: `y` or `yes` goes ahead. `--for
 
 Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) before they're deleted for good; `--purge` deletes for good straight away (`sesh trash <entry> --purge`), and asks "for good". See [The trash](#the-trash).
 
+To delete entries chosen by a filter, search for them as JSON (it shows each entry's `id`, never a secret), pick the IDs with `jq`, check them, then hand them to `sesh trash` with `xargs`. Separate the IDs with NUL characters (`jq -j … + "\u0000"` and `xargs -0`): names can contain spaces and quotes, which plain `xargs` would split on, turning one ID into others.
+
+```bash
+# every API key for old-service: check the list first, then delete it
+sesh search old-service key --json | jq -r '.[] | select(.service == "old-service") | .id'
+sesh search old-service key --json | jq -j '.[] | select(.service == "old-service") | .id + "\u0000"' | xargs -0 sesh trash --force
+```
+
+For a very long list, `xargs` runs sesh more than once, and each run is all or none on its own; check the count sesh reports.
+
 ### Searching and copying at a terminal (`sesh ui`)
 
 `sesh ui` opens a search over every entry, on the terminal's alternate screen, so nothing it shows stays in the scrollback. It unlocks as any command does, before it draws.
@@ -1101,51 +1136,52 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
 ├──────────────────────────────┬──────────────────────────────────┤
 │▌● GitHub               alice │ GitHub                           │
 │ ◷ GitHub           492 113   │ PASSWORD  ▸ Work                 │
-│ ● GitLab                     │ password  ••••••••               │
+│ ● GitLab                     │                                  │
+│                              │ password  ••••••••               │
 │                              │ user      alice                  │
 │                              │ url       https://github.com     │
 │                              │ changed   3 days ago             │
-│                              │ ↵ copy  ·  tab reveal            │
+│                              │ ↵ copy  tab reveal               │
 ├──────────────────────────────┴──────────────────────────────────┤
-│ ↵ copy  ·  ↑↓ move  ·  esc clear   ✓ Copied the password for G… │
+│ ↵ copy  ctrl+k actions             ✓ Copied the password for G… │
 ╰─────────────────────────────────────────────────────────────────╯
 ```
 
-- **Type to search,** matched and ranked as `sesh search` does, with the letters matched picked out; with nothing typed, every entry is listed, the ones read most recently first (as the audit log records reads; showing an entry in the app isn't one).
+- **Type to search,** matched and ranked as `sesh search` does, with the letters matched picked out; with nothing typed, every entry is listed, the ones read most recently first (as the audit log records reads; showing an entry in the app isn't one, nor is revealing it with Tab or Ctrl-R, or showing its key as a QR code).
 - **The selected entry is shown beside the list** when the window is wide enough: its kind, folder, username, URL, fields, tags, when it last changed, and its notes (a secure note's text); Shift-↑ and Shift-↓ scroll it when it's long. A TOTP entry's code is shown large, with a bar counting down the seconds it has left.
 - **Passwords and secret fields stay hidden** (`••••••••`) until **Tab** reveals them, for 30 seconds, until you move to another entry, or until Tab again. A TOTP entry's key is too: Tab shows it (the audit log records it), to move it to another app.
 - **Folders and tags are in a sidebar** on the left when the window is at least 110 columns wide (in any window, Ctrl-G's **folders and tags…** lists the same): every entry, each folder (with those inside it, and how many entries each holds, counting its subfolders), entries in no folder, and each tag. Picking one shows only its entries, and the search line says which (`1 of 41 in work/aws`); searching then looks within it. Esc clears it, after the search.
-- **Where keys go follows what you do:** typing goes to the search, where Space types a space. ↑ and ↓ move into the list; there, **Space marks** the entry (✓) and moves to the next, ← moves into the sidebar, and typing goes back to the search. In the sidebar ↑↓ pick a folder or tag, Enter or → opens it (into the list, showing its entries), Esc goes back to the list too, and Ctrl-K renames the folder (with those inside it) or tag picked. A click picks a row in either.
-- **With entries marked, Ctrl-K acts on all of them:** move to a folder… (`m`; empty takes them out of their folders), add a tag… (`+`), remove a tag… (`-`), move to the trash (`d`, after a yes), delete for good (`x`, skipping the trash, after a yes), or clear the marks (`c`). Esc unmarks them first, before it clears the search.
+- **Where keys go follows what you do:** typing goes to the search, where Space types a space. ↑ and ↓ move into the list; there, **Space marks** the entry (✓) and moves to the next, ← moves into the sidebar, and typing goes back to the search. In the sidebar ↑↓ pick a folder or tag, Enter or → opens it (into the list, showing its entries), Esc goes back to the list too, and Ctrl-K offers **rename…** (`r`) for the folder (with those inside it) or tag picked. A click picks a row in either.
+- **With entries marked, Ctrl-K acts on all of them:** the selected entry's actions… (`s`), move to a folder… (`m`; empty takes them out of their folders), add a tag… (`+`), remove a tag… (`-`), move to the trash (`d`, after a yes), delete for good (`x`, skipping the trash, after a yes), or clear the marks (`c`). Esc unmarks them first, before it clears the search.
 - **Enter copies** the selected entry's secret, or a TOTP entry's current code; **Ctrl-Y** copies its username. The clipboard clears after `clipboard_timeout`, as with `sesh copy`, and the footer counts down until it does.
 - **Ctrl-K opens the actions** on the selected entry, each run by its letter (or ↑↓ and Enter); Esc goes back, and closes them. (With text after the cursor in the search, Ctrl-K deletes it instead, as in a shell.) A change asks first, and only `y` is a yes, not Enter, and not one typed in the same breath as the key that asked:
   - **edit…** (`e`), and **add an entry…** (`a`, under Ctrl-G): a form. Tab and Shift-Tab move between its inputs, Ctrl-S saves, and Esc cancels (twice, once something's been typed).
     - **Editing** changes the name, username, URL, folder, tags, notes and fields, and the secret if you choose to: typed, unseen, or generated: random characters, to the length you give (24 unless you say), with symbols or letters and digits only, or a passphrase of words (6 unless you say), with what goes between them and whether each starts with a capital; a generated password is copied when it's saved, since you haven't seen it. A password, API key or secure note can become another of the three, keeping its secret and username, as `sesh edit --type` does: a note's text becomes the password or key, and theirs the note's; one with notes is made a note only once they're removed, and notes or a note's text changed in the form must be saved before the kind is changed: the form refuses both at once. A TOTP entry stays one. While you keep it, the current password or key is shown as dots, and Ctrl-R reads it and shows it (the audit log records the read). A TOTP entry takes a new key, or an `otpauth://` link, or keeps the one it has; a key alone makes the usual codes (6 digits every 30 seconds), and a link sets its own. A save is all or nothing: if any part is refused, nothing changes.
-    - **Adding** makes a password, an API key, a secure note (which needs its text), or a TOTP entry: its key pasted, or an `otpauth://` link, which also sets the code's digits, period and algorithm; or read from a QR code. On macOS (not over SSH, where the screen is another's), **scan a QR code on screen** reads one as `sesh add totp --qr` does: save, then select the area of the screen with the code (Esc there cancels); Ctrl-C meanwhile quits once the capture ends, saving nothing. Anywhere, **read a QR code from an image file** reads one from a screenshot or photo, as `sesh add totp --qr-image` does: give its full path, or one from `~/`. The code's issuer and account fill a name and username left empty, and show in the form.
-    - **Notes** are typed in the form; Ctrl-E opens them in your editor (`$VISUAL`, then `$EDITOR`), as `sesh edit --notes --editor` does. They're saved only if changed. An entry whose notes couldn't be read can't be edited in the app; the message says why.
+    - **Adding** makes a password, an API key, a secure note (which needs its text), a file entry (see [Files](#files)), or a TOTP entry: its key pasted, or an `otpauth://` link, which also sets the code's digits, period and algorithm; or read from a QR code. On macOS (not over SSH, where the screen is another's), **scan a QR code on screen** reads one as `sesh add totp --qr` does: save, then select the area of the screen with the code (Esc there cancels); Ctrl-C meanwhile quits once the capture ends, saving nothing. Anywhere, **read a QR code from an image file** reads one from a screenshot or photo, as `sesh add totp --qr-image` does: give its full path, or one from `~/`. The code's issuer and account fill a name and username left empty, and show in the form.
+    - **Notes** are typed in the form; Ctrl-E opens them in your editor (`$VISUAL`, then `$EDITOR`, then `vi`), as `sesh edit --notes --editor` does. They're saved only if changed. An entry whose notes couldn't be read can't be edited in the app; the message says why.
     - **Fields:** `a` adds one, Enter edits it (its name, whether it's secret, its value), `x` removes it. Two fields can't have names that differ only in case. A secret field made plain needs its value typed.
     - **Secrets typed** (a new secret, a TOTP key, a secret field's value) show as dots; Ctrl-R shows what you've typed, and hides it again, as does moving to another input. A secret field an entry already has isn't read until it's needed: its input shows dots; Ctrl-R there reads its value and shows it, as renaming it reads it to keep it (the audit log records either read); typing replaces it.
     - **Folder and tags** list the ones you already have under the input as you type, matched anywhere in their names; ↓ picks one and Enter takes it. Anything else you type is a new folder or tag.
     - A name another entry has is refused, and said in the form; so are notes another command changed while you were editing them.
-  - **copy a value…** (`f`): any one of the entry's values, its secret, username, URL or a field, picked by its number; a TOTP entry's code, or its key (recorded in the audit log);
-  - **earlier secrets…** (`h`): its [password history](#password-history); Enter copies a version, `r` makes it the secret again, and `x` deletes it for good, each after a yes. Each acts on the version you chose, even if another command has changed the entry's secret since and its number with it; one that's no longer there is said, and the list shown as it is;
+  - **copy a value…** (`f`): any one of the entry's values, its secret, username, URL, notes or a field, picked by its number (1 to 9) or with ↑↓ and Enter; a TOTP entry's code, or its key (recorded in the audit log);
+  - **earlier secrets…** (`h`): its [password history](#password-history); Enter copies a version; `r` makes it the secret again, and `x` deletes it for good, each after a yes. Each acts on the version you chose, even if another command has changed the entry's secret since and its number with it; one that's no longer there is said, and the list shown as it is;
   - **move to the trash** (`d`): see [the trash](#the-trash); after a yes;
   - **delete for good** (`x`): skips the trash, so it can't be put back, nor its earlier secrets; after a yes;
   - also **copy the username** (`u`) and **open the URL** (`o`);
   - for a TOTP entry, **show the key as a QR code…** (`q`): the key drawn for an authenticator app on a phone to scan, as `sesh show --qr` does (the audit log records the read); `c` copies its `otpauth://` link instead, and Esc closes it; it closes itself after 30 seconds, as a secret revealed hides. The panel widens to fit the code; a window too small for it says how big it needs to be.
 - **Ctrl-G opens sesh's own actions,** from the search, the list or the sidebar, each run by its letter as Ctrl-K's are. Ctrl-K opens them too when no entry is selected, and its **sesh's actions…** (`g`) opens them from an entry or those marked, for a terminal that keeps Ctrl-G for itself (zellij does):
   - **add an entry…** (`a`): the form above;
-  - **generate a password…** (`p`): random characters (the length, and symbols or letters and digits only) or a passphrase (how many words, what goes between them, and capitals); Enter makes one and copies it, as `sesh generate --copy` does, storing it nowhere;
+  - **generate a password…** (`p`): random characters (the length, and symbols or letters and digits only) or a passphrase (how many words, what goes between them, and capitals); Enter on the last input, or Ctrl-S, makes one and copies it, as `sesh generate --copy` does, storing it nowhere;
   - **folders and tags…** (`f`): the sidebar's rows, in any window: Enter shows a row's entries, and `r` renames the folder (with those inside it) or tag;
   - **the trash…** (`t`): each entry with its kind, when it was deleted, and its trash id; Enter puts one back; Space marks entries, and `x` then deletes those marked for good; `a` puts it back under another name, typed as its ID (as `sesh trash restore --as` takes it), for one whose name is taken now; `x` deletes it for good, and `e` empties the trash of what it lists (an entry trashed meanwhile stays), each after a yes;
   - **backups…** (`b`): the vault's [backups](#backups) newest first, with when each was made and its size; another vault's with the same file name is marked. Enter restores the vault from the selected one, asking first with what `sesh restore` says: the vault as it is is backed up first, and the app then locks, since the backup opens with the master password it had then. A vault that's missing or damaged is restored from the command line. `n` backs up now (pruned to `backup.keep`), `f` to a file or folder you type, as a full path or one starting with `~/` (asking before replacing a file, and refusing the vault's own files), `x` deletes the selected backup, and `a` deletes this vault's backups and makes a fresh one, for when an old master password or recovery key may have leaked; each delete asks first.
   - **import and export…** (`i`): **export, encrypted** (`e`) asks for a file (a full path, or one starting with `~/`), which entries (every one, or those of a kind, in a folder, with tags, as `sesh export` narrows them; one that matches nothing is said before the file is touched), and a password for the export, twice, and writes [sesh's encrypted export](#encrypted-exports) there, as `sesh export --file` does: the password has the master password's rules (an easy one is asked about once), a file there already is replaced only after Enter again, and the file is written whole, readable only by you. Each entry read is recorded in the audit log. A device or pipe isn't written to, since the app has the terminal, nor the vault's own files. **Import from** sesh's own encrypted export (`s`), Bitwarden (`b`), KeePass (`p`), Chrome (`c`), Firefox (`f`), Safari (`a`) or Google Authenticator (`g`, its transfer codes' screenshots, separated by commas) does what [`sesh import`](#importing-from-other-apps-sesh-import) does: a file (a full path, or one starting with `~/`) is read, and the password of an export protected by one is asked for when it is; then the app shows sesh import's summary. When some entries are in the vault already, `s` leaves them as they are and `o` replaces them, with their details merged; `y` imports. Esc lets the import go, except once it's being written, which carries on to the end: Ctrl-C then quits once it's written, saying what it did.
-  - **health report…** (`r`): what [`sesh health`](#password-health-sesh-health) finds, one row per problem: weak, reused, old, or unreadable. Enter on a row goes to its entry and opens its form; for a password, set to generate a new one. Reading the secrets is one audit event;
-  - **settings and safety…** (`,`): first, **Master password**: Enter asks for the current one and a new one, twice, and changes it as `sesh passwd` does: every entry is re-encrypted, Touch ID unlock and the recovery key go on working, and the change is recorded in the audit log. The app then goes on with the new one. A new password that's easy to guess is asked about once more. When there are backups from before, it offers to delete them and make a fresh one, since they still open with the old password. Then **Recovery key**, with its state. With none, Enter makes one. With one, it offers to make a new one (asking first, since the old one stops working) or to remove it. A new key is shown in the app and saved once you type its last group back, as `sesh recovery new` asks; Esc, three wrong tries, or the app locking leave it unsaved, so it opens nothing, and the app says so. A save that fails for a passing reason (the vault busy, say) can be tried again. Replacing or removing one offers to delete the backups made before, which it still opens. A key is made through sesh's agent, so not while `SESH_MASTER_PASSWORD` is set. Then, on macOS, **Touch ID unlock**, with its state: on, off, out of date (your fingerprints changed), set up for another vault or an earlier master password, or its file can't be read, and whether Touch ID is usable here (it isn't over SSH). Enter turns it off when it's on, and on otherwise, as `sesh touchid enable` and `disable` do; taking it from another vault's file in the same folder asks first. It's turned on through sesh's agent, so not while `SESH_MASTER_PASSWORD` is set. Once it's on, the app's locked screen offers your fingerprint (Enter with nothing typed), without starting the app again. Then **Checks (sesh doctor)**: Enter runs `sesh doctor`'s checks on the vault as the app has it open, without asking for the master password again, and lists each result (with its details below while it's selected) and what to do; the run is recorded in the audit log, as `sesh doctor`'s is. Then **Audit log (sesh audit)**: Enter lists [its](#the-audit-log) newest 500 events, as `sesh audit` says them, with the whole of the selected one below; `p` prunes it, as `sesh audit prune` does, after a yes. Then each [setting](#configuration-file), its value, and where it comes from. Enter changes one: an on-or-off one (`ui.lock_on_quit`, `agent.lock_on_sleep`, `agent.lock_on_screen_lock`) turns over at once; another is typed, checked as sesh checks it when it loads, and written to the config file, keeping its comments and order; an empty value takes it out, back to its default. The line below the list says when a change takes effect and the file it's saved in, which the first change makes if there isn't one yet. Lowering one that deletes as it goes (`history.keep`, `trash.keep_days`, `audit.retention_days`, `backup.keep`) asks first, saying what will go. A linked config file (a dotfile manager's) is changed where it lives. A setting made by an environment variable is changed there, and `db_path` with `sesh init`;
+  - **health report…** (`r`): what [`sesh health`](#password-health-sesh-health) finds, one row per problem: weak, reused, old, or unreadable. Enter on a row goes to its entry and opens its form; for a password, set to generate a new one. An unreadable one points to `sesh doctor`. Reading the secrets is one audit event;
+  - **settings and safety…** (`,`): first, **Master password**: Enter asks for the current one and a new one, twice, and changes it as `sesh passwd` does: every entry is re-encrypted, Touch ID unlock and the recovery key go on working, and the change is recorded in the audit log. The app then goes on with the new one. A new password that's easy to guess is asked about once more. When there are backups from before, it offers to delete them and make a fresh one, since they still open with the old password. Then **Recovery key**, with its state. With none, Enter makes one. With one, it offers to make a new one (asking first, since the old one stops working) or to remove it. A new key is shown in the app and saved once you type its last group back, as `sesh recovery new` asks; Esc, three wrong tries, or the app locking leave it unsaved, so it opens nothing, and the app says so. A save that fails for a passing reason (the vault busy, say) can be tried again. Replacing or removing one offers to delete the backups made before, which it still opens. A key is made through sesh's agent, so not while `SESH_MASTER_PASSWORD` is set. Then, on macOS, **Touch ID unlock**, with its state: on, off, out of date (your fingerprints changed), set up for another vault or an earlier master password, or its file can't be read, and whether Touch ID is usable here (it isn't over SSH). Enter turns it off when it's on, and on otherwise, as `sesh touchid enable` and `disable` do; taking it from another vault's file in the same folder asks first. It's turned on through sesh's agent, so not while `SESH_MASTER_PASSWORD` is set. Once it's on, the app's locked screen offers your fingerprint (Enter with nothing typed), without starting the app again. Then **Checks (sesh doctor)**: Enter runs `sesh doctor`'s checks on the vault as the app has it open, without asking for the master password again, and lists each result (with its details below while it's selected) and what to do; the run is recorded in the audit log, as `sesh doctor`'s is. Then **Audit log (sesh audit)**: Enter lists [its](#the-audit-log) newest 500 events, as `sesh audit` says them, with the whole of the selected one below; `p` prunes it, as `sesh audit prune` does: it asks how many days of events to keep (0 deletes them all), then for a yes. Then each [setting](#configuration-file), its value, and where it comes from. Enter changes one: an on-or-off one (`ui.lock_on_quit`, `agent.lock_on_sleep`, `agent.lock_on_screen_lock`) turns over at once; another is typed, checked as sesh checks it when it loads, and written to the config file, keeping its comments and order; an empty value takes it out, back to its default. The line below the list says when a change takes effect and the file it's saved in, which the first change makes if there isn't one yet. Lowering one that deletes as it goes (`history.keep`, `trash.keep_days`, `audit.retention_days`, `backup.keep`) asks first, saying what will go. A linked config file (a dotfile manager's) is changed where it lives. A setting made by an environment variable is changed there, and `db_path` with `sesh init`;
   - **lock sesh** (`l`): locks the app, and sesh's agent, so commands ask for the master password again (those given it in `SESH_MASTER_PASSWORD` never used the agent); if the agent can't be locked, the locked screen says so.
 - **Ctrl-O opens the entry's URL** in the browser: a web address only (`http` or `https`; a bare host gets `https://`), so a stored URL can't open a file or another program.
 - **The mouse:** click an entry to select it; the wheel moves the selection, or scrolls the details when over them. While the app has the mouse, most terminals still select text with a key held: Option in iTerm2, Shift in many others.
-- **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; Tab reveals; Ctrl-Y copies the username; Ctrl-O opens the URL; Shift-↑ and Shift-↓ scroll the details; the search box edits as a line does (← →, Ctrl-A, Ctrl-E, Ctrl-W a word, Ctrl-U all); Esc clears the search, or quits when it's empty; Ctrl-C quits, and locks sesh, saying so (with `ui.lock_on_quit` off, sesh stays unlocked until the agent's idle timeout); `?`, with nothing searched, lists the keys.
+- **Keys:** ↑ and ↓ (or Ctrl-P and Ctrl-N), Page Up and Page Down move; Tab reveals; Ctrl-Y copies the username; Ctrl-O opens the URL; Shift-↑ and Shift-↓ scroll the details; the search box edits as a line does (← →, Ctrl-A, Ctrl-E, Ctrl-W a word, Ctrl-U all before the cursor); Esc closes the key list, unmarks entries, clears the search, then the folder or tag picked, in that order, and quits when there's nothing left to clear; Ctrl-C quits. Quitting locks sesh, saying so (with `ui.lock_on_quit` off, sesh stays unlocked until the agent's idle timeout); `?`, with nothing searched, lists the keys.
 - **Colours** follow the terminal: dark or light, and fewer colours where the terminal shows fewer, or none with `NO_COLOR=1`.
 - **Using it keeps the agent unlocked:** while you press keys, it tells the agent the vault is in use, as a read would, so the agent's idle timer doesn't run out under you.
 - **It locks itself** after the agent's idle timeout (`agent.idle_timeout`) without a key pressed, after the agent's longest unlock (`agent.max_lifetime`) since the app unlocked, and, within a second, when the agent locks or stops (`sesh agent lock`, say) or another command changes the master password or restores the vault. It then shows nothing of the vault, and asks for the master password again, which it checks even when the agent is still unlocked; with Touch ID unlock on, Enter with nothing typed asks for a fingerprint instead, also when the agent is still unlocked. Three wrong passwords in a row close it.
@@ -1195,30 +1231,6 @@ $ sesh history password/github/alice --restore 3
 - **The history follows its entry:** renamed (`sesh edit`), into the trash and back, and for good when the entry is. A new entry with a deleted one's name starts with no history.
 - **A new master password** re-encrypts the history too. `sesh doctor` checks every earlier secret, and names one that can't be read with the `--forget` that deletes it.
 
-To delete entries chosen by a filter, search for them as JSON (it shows each entry's `id`, never a secret), pick the IDs with `jq`, check them, then hand them to `sesh trash` with `xargs`. Separate the IDs with NUL characters (`jq -j … + "\u0000"` and `xargs -0`): names can contain spaces and quotes, which plain `xargs` would split on, turning one ID into others.
-
-```bash
-# every API key for old-service: check the list first, then delete it
-sesh search old-service key --json | jq -r '.[] | select(.service == "old-service") | .id'
-sesh search old-service key --json | jq -j '.[] | select(.service == "old-service") | .id + "\u0000"' | xargs -0 sesh trash --force
-```
-
-For a very long list, `xargs` runs sesh more than once, and each run is all or none on its own; check the count sesh reports.
-
-**Names.** An entry is named by its name and, optionally, a username (for an AWS MFA entry, the profile). Spaces inside a name are fine (`My Bank`). sesh refuses a name with:
-
-- a `/`, which separates the parts of an entry's ID (`password/github/alice`), or a control character such as a tab or newline;
-- a space at the start or end (`"github "`), which would make an entry that `github` doesn't find;
-- an invisible character (such as a zero-width space or soft hyphen, which text copied from web pages can carry) anywhere in it, for the same reason. The characters emoji are built from (zero-width joiners, the tags in flags like Scotland's) are fine inside a name;
-- a character that changes text direction, which can make one name display as another;
-- more than 256 characters.
-
-`sesh add` checks the name and username before the vault is opened, as does `sesh edit --rename` on an entry named by its ID, so a bad name is reported before the master password is asked for. A name read from a QR code or an `otpauth://` link is checked once it's read, the AWS setup checks the profile as soon as you enter it, and an import reports each entry it refuses and imports the rest.
-
-Names are case-sensitive: `GitHub` and `github` are two entries. Words find either, since search ignores case; an ID that misses only by case is an error that says which entry you may have meant (`entry not found: password/github/Alice; did you mean password/github/alice? Names are case-sensitive`). Creating an entry whose name differs from an existing one only in case asks first, like an overwrite, with `sesh add` (`--force` skips the question). AWS profiles are named by your AWS configuration, so the AWS setup doesn't ask.
-
-**Weak passwords.** When you type a password to store (`sesh add password`, or a new secret with `sesh edit`), sesh rates it with [zxcvbn](https://github.com/dropbox/zxcvbn), which knows common passwords, words, names, dates, and keyboard patterns, and counts the entry's own service name and username as easy guesses. If zxcvbn estimates fewer than about 100 million guesses would find it (a score of 2 or less out of 4), sesh stores it and warns, with the command to generate a strong one instead. Generated secrets (`--generate`) get the same check: at the default length (24) they always pass, but `--length 9` or shorter can fail it, and then the warning suggests `--length 12` or more. API keys and notes you type aren't rated. zxcvbn's word lists are English: for passwords in other languages or scripts, it judges mostly by length and the mix of characters. Only a password's first 64 characters are rated.
-
 ### Password health (`sesh health`)
 
 `sesh health` reads every password and API key in the vault and lists what's wrong with them:
@@ -1240,11 +1252,11 @@ Old (1): not changed in 365 days or more
 To replace a password: sesh edit <id> --generate (or --secret to type one)
 ```
 
-- **Weak:** passwords that are easy to guess, rated as `sesh` rates a new one (zxcvbn, with the entry's name and username counted against it). API keys and TOTP keys aren't rated, since people don't choose them.
+- **Weak:** passwords that are easy to guess, rated as `sesh add` rates a password you type (zxcvbn, with the entry's name and username counted against it). API keys and TOTP keys aren't rated, since people don't choose them.
 - **Reused:** a password or API key that's the same on more than one entry, so one leak opens them all.
 - **Old:** a password or API key whose secret hasn't changed in `health.old_after_days` (365 by default; `0` doesn't check). Editing anything else about an entry doesn't count as a change, and nor does storing or importing the secret it already has.
 - **Couldn't check:** an entry whose secret doesn't decrypt is listed, not checked; `sesh doctor` says more about it.
-- **Reading the secrets** is one event in the audit log ("Health check: read 41 secrets"), not one per entry. Secure notes and TOTP keys aren't read.
+- **Reading the secrets** is one event in the audit log ("Health check: read 41 secrets"), not one per entry. Secure notes, TOTP keys and files aren't read.
 - **Breached passwords aren't checked.** The ways to check would be Have I Been Pwned's file of every breached password's hash, about 100 GB to download, or its online lookup, which sends the start of each password's hash; sesh does neither.
 - `--json` prints the report for scripts. `sesh health` exits 0 whatever it finds, as `sesh doctor`'s warnings do.
 
@@ -1261,7 +1273,7 @@ $ sesh edit password/github/alice --username ""    # "" removes the username
 ✅ password/github: renamed from password/github/alice
 ```
 
-At a terminal with no flags, it asks, with the current values as defaults. Enter keeps each one, an answer that can't be is asked again, and Ctrl-D changes nothing:
+At a terminal with no flags, it asks, with the current values as defaults. Enter keeps each one, an answer sesh can't use is asked again, and Ctrl-D changes nothing:
 
 ```
 $ sesh edit password/github/alice
@@ -1349,10 +1361,10 @@ sesh get github password --url
 
 ### Files
 
-A file entry keeps a file whole, up to 1 MiB (1,048,576 bytes): a kubeconfig, a TLS key, a cloud credentials file, an `.env` file. Its content is encrypted, as any secret is; its file's name and size aren't, so they're listed without unlocking anything.
+A file entry keeps a file whole, up to 1 MiB (1,048,576 bytes): a kubeconfig, a TLS key, a cloud credentials file, an `.env` file. Its content is encrypted, as any secret is; its file's name and size aren't, so `sesh show` and `sesh list --json` give them without decrypting the file.
 
 ```bash
-sesh add file kubeconfig --from ~/.kube/config   # named after the file without a name
+sesh add file kubeconfig --from ~/.kube/config   # with no name given, it's named after the file
 cat server.key | sesh add file server-key       # or piped in
 sesh get kubeconfig -o ~/.kube/config           # written back, readable only by you
 sesh run --env KUBECONFIG=sesh://file/kubeconfig -- kubectl get pods
@@ -1361,21 +1373,22 @@ sesh list files
 ```
 
 - **Reading it:** `sesh get` prints the file exactly as kept, with nothing added; `-o FILE` writes it to a file only you can read: written whole beside it, then renamed into place, so a file there is replaced, and so is a symlink there (not the file it points to); a folder is refused. A binary file isn't printed at a terminal, where it would garble the screen: `-o` or a pipe takes it. `sesh copy` copies a text file; a binary one can't go on the clipboard. `sesh show` gives the file's name and size, and with `--reveal` a text file's content.
-- **Everything else** works as for any entry: a URL, notes and fields, folders and tags, the trash, and [earlier versions](#password-history) (`sesh history kubeconfig --show 2` prints one; restoring one brings back its file's name too). Replaced from a pipe, a file entry keeps its file's name. A file entry stays one: `sesh edit --type` doesn't turn it into another kind, nor another kind into one.
+- **Everything else** works as for any entry: a URL, notes and fields, folders and tags, the trash, and [earlier versions](#password-history) (`sesh history kubeconfig --show 2` prints one; restoring one brings back its file's name too). Replaced from a pipe (`… | sesh add file <name> --force`), a file entry keeps its file's name. A file entry stays one: `sesh edit --type` doesn't turn it into another kind, nor another kind into one.
 - **Exports:** a JSON export (and an encrypted one) holds a file's content in base64, with `"encoding": "base64"`, which `sesh import --from sesh` reads back. A CSV export leaves file entries out, since CSV holds text, and says how many.
 - **`sesh run`** gives a command a file as a path: see below.
-- **In `sesh ui`:** adding a **file** entry takes the file's path (a full path, or from `~/`); editing one can give it a new file, or keep the one it has. The preview shows the file's name and size; Tab reveals a text file's content. Enter copies a text file. Ctrl-K's **save to a file…** (`s`) writes it out, readable only by you, refusing to replace a file that's there. The file's name is a name alone, with no folder or control characters: an import with any other is skipped, saying why.
+- **In `sesh ui`:** adding a **file** entry takes the file's path (a full path, or from `~/`); editing one can give it a new file, or keep the one it has. The preview shows the file's name and size; Tab reveals a text file's content. Enter copies a text file. Ctrl-K's **save to a file…** (`s`) writes it out, readable only by you, refusing to replace a file that's there.
+- **The file's name** is a name alone, up to 255 bytes, with no `/` or `\`, and no control or text-direction characters: an import with any other is skipped, saying why.
 
 ### Running commands with secrets (`sesh run`, `sesh inject`)
 
-`sesh run` runs a command with values from the vault in its environment, so they never sit in a file or your shell history:
+`sesh run` runs a command with values from the vault in its environment, so they never sit in a file (except a file entry's short-lived copy, below) or your shell history:
 
 ```
 sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
 sesh run --env-file .env -- npm start
 ```
 
-**References.** `sesh://<id>` names an entry's secret, with the ID as `sesh list` shows it (a reference takes an ID, not search words). `#name` picks one of its fields instead (in any case), and `#url` or `#notes` those parts. A TOTP entry gives its current code. A file entry, in `sesh run`, gives the path of a copy of its file, made for the command in a folder only you can open and deleted when the command ends, for a variable that names a file (`KUBECONFIG`, `GOOGLE_APPLICATION_CREDENTIALS`); in `sesh inject`, its content. A file's content isn't masked in the command's output, as other secrets are.
+**References.** `sesh://<id>` names an entry's secret, with the ID as `sesh list` shows it (a reference takes an ID, not search words). `#name` picks one of its fields instead (in any case), and `#url` or `#notes` those parts. A TOTP entry gives its current code. A file entry, in `sesh run`, gives the path of a copy of its file, made for the command in a new folder only you can open, under `$TMPDIR`, and deleted when the command ends (not if sesh itself is killed with `kill -9`), for a variable that names a file (`KUBECONFIG`, `GOOGLE_APPLICATION_CREDENTIALS`); in `sesh inject`, its content. A file's content isn't masked in the command's output, as other secrets are.
 
 ```
 sesh://api_key/openai
@@ -1428,7 +1441,7 @@ sesh inject -i config.yml.tpl -o config.yml
 - **Input and output:** it reads the template from `-i` or stdin, and writes to `-o` or stdout.
 - **The file** is readable only by you (0600). It's written whole to a new file next to the target, then renamed into place, so nothing reads half of it. A file already there is replaced; a symlink there is replaced by the file, not followed. `-o` can't be the template itself.
 - **Failures:** if a reference doesn't resolve, nothing is written. A template can be up to 16 MiB.
-- **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
+- **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk, except a file entry's short-lived copy.
 
 ### Git credentials (`sesh git-credential`)
 
@@ -1438,7 +1451,7 @@ sesh inject -i config.yml.tpl -o config.yml
 git config --global credential.helper '!sesh git-credential'
 ```
 
-- **Which entry:** for `https://github.com/...`, the password or API key entry whose URL is on `github.com`, over https too (`sesh add key github-token --username alice --url https://github.com`). A URL without `https://` counts as https; a port must match, except https's own 443 (or http's 80). When git names a username (in the remote's URL, or `credential.username`), the entry with that username is given; failing that, one with no username, such as a token's. Otherwise the entry's username is given to git with the password; an entry with none leaves git to ask for one, so give a token's entry the username it goes with.
+- **Which entry:** for `https://github.com/...`, the password or API key entry whose URL is on `github.com`, over https too (`sesh add key github-token --username alice --url https://github.com`). A URL with no scheme (`github.com`) counts as https; a port must match, except https's own 443 (or http's 80). When git names a username (in the remote's URL, or `credential.username`), the entry with that username is given; failing that, one with no username, such as a token's. Otherwise the entry's username is given to git with the password; an entry with none leaves git to ask for one, so give a token's entry the username it goes with.
 - **None, or several:** sesh gives nothing, and git asks as it would without it. With several, sesh says which, and how to tell them apart: give each a different URL, or name the username for git (`git config --global credential.https://github.com.username alice`).
 - **Store and erase:** git also asks a helper to store a password that worked, and to erase one a site refused. sesh does neither: it gives only what you added, and a password refused once (a typo in a username, say) stays in the vault. Change it with `sesh edit`.
 - **Unlocking:** reading the password is recorded in the audit log, as `sesh get` is. When sesh needs the master password, it asks at the terminal, as git's own questions are; Touch ID unlock and a running agent work as for any command.
@@ -1487,7 +1500,7 @@ sesh import --from bitwarden bitwarden_export.json
   - **New entries only:** this date goes on an entry the import adds. One that replaces an entry already in sesh (`--on-conflict overwrite`) is dated as any change in sesh is.
 - **Secure notes** become secure notes.
 - **Cards, identities, and SSH keys** become secure notes with fields: numbers, codes, and private keys as secret fields, the rest plain. The note is the item's notes, or a line saying what it is ("Visa card ending 4242").
-- **Custom fields:** hidden ones are secret, text and boolean ones plain, and a text one of several lines secret too. Linked fields, which only point at another value, aren't kept.
+- **Custom fields:** hidden ones are secret, text and boolean ones plain, and a text one with a line break or tab secret too. Linked fields, which only point at another value, aren't kept.
 - **Names:**
   - folder names and field names are fitted to sesh's rules, any other character becoming `-` ("Work Accounts" becomes `Work-Accounts`), and the summary lists each one;
   - a `/` in an item's name becomes `-`;
@@ -1509,7 +1522,7 @@ sesh import --from bitwarden bitwarden_export.json
 sesh import --from keepass Passwords.xml
 ```
 
-- **Entries with a password** become password entries, with the URL, notes, and custom fields: protected ones secret, the rest plain (a value of several lines secret too). A TOTP key set up in KeePassXC becomes a TOTP entry beside the password entry, with its settings.
+- **Entries with a password** become password entries, with the URL, notes, and custom fields: protected ones secret, the rest plain (a value with a line break or tab secret too). Field names are fitted to sesh's rules, as for Bitwarden, and a field with no value isn't kept. A TOTP key set up in KeePassXC becomes a TOTP entry beside the password entry, with its settings; an entry with a TOTP key but no password becomes the TOTP entry alone, with the URL, notes and fields.
 - **Old passwords:** KeePass keeps a copy of an entry before each edit of any kind. Each time the password changed, the one before goes into the entry's [history](#password-history), replaced when the next copy was made. Copies that changed only something else aren't kept, as sesh's history holds only secrets; nor is an old password that refers to another entry, since the export doesn't say what it was. The summary counts both.
 - **A password is dated** when it was set, which [`sesh health`](#password-health-sesh-health) uses to say it's old. An entry's own date moves with any edit, so sesh works it out from those same copies, in the order they were made: the password dates from the first copy after the last one with another password. If every copy has the same password, it dates from the oldest, the earliest it's known to have been set. If the password changed in the entry's last edit, or the entry has no copies, it dates from that edit, and never later. A password that refers to another entry also dates from the entry's last edit, since the reference stays the same when the password it stands for changes. As with Bitwarden, only new entries get these dates; one imported with `--on-conflict overwrite` is dated as any change in sesh is.
 - **Entries with neither a password nor TOTP** become secure notes.
@@ -1520,7 +1533,8 @@ sesh import --from keepass Passwords.xml
 - **An entry that expires** is imported, with the date said in the summary; sesh has no expiry dates.
 - **What doesn't come across,** said in the summary:
   - earlier versions that changed only something other than the password (see above);
-  - attachments (sesh doesn't hold files; an export from a KDBX 4 database leaves their contents out anyway);
+  - old passwords of an entry that has no password now;
+  - attachments (an export from a KDBX 4 database leaves their contents out anyway): add each with `sesh add file`;
   - TOTP set up in an older layout (KeePassXC's old "TOTP Seed" and "TOTP Settings", the KeeOtp plugin's, or KeePass 2's own): the password still comes across; add the TOTP with `sesh add totp <name> --qr`;
   - Steam codes, counter-based (HOTP) codes (including KeePass 2's `HmacOtp-*` fields), and algorithms other than SHA-1, SHA-256 and SHA-512.
 - **The times** each entry was made and last changed come across.
@@ -1558,7 +1572,7 @@ sesh import --from safari Passwords.csv
 **Google Authenticator.** Its "Transfer accounts" moves your codes off the phone:
 1. In the app, choose Transfer accounts, then Export accounts. It shows one or more QR codes.
 2. Take a screenshot of each. If the phone won't allow one, photograph the code with another device. Copy the pictures to the computer, for example with AirDrop.
-3. Import them all in one command, as above.
+3. Import them all in one command: `sesh import --from google-authenticator IMG_1234.png IMG_1235.png`.
 
 - **Images:** PNG and JPEG are read, whatever the file is called. A picture can hold several codes; sesh reads them all, light on dark too, and a full-size photo. An iPhone photo (HEIC) needs converting first: `sips -s format png IMG_1234.HEIC --out IMG_1234.png`.
 - **The code's text** (`otpauth-migration://...`) works too, in a text file one per line, or piped in with `-` as the file: `pbpaste | sesh import -`. A terminal can't take a line as long as a code, so pasting one at `sesh import -` is refused. Typed on the command line it also works, but then every secret in it is in your shell history.
@@ -1620,7 +1634,7 @@ sesh export --folder personal --file personal.enc
 
 When nothing matches because the folder or a tag isn't on any of the entries looked at, sesh says so, and suggests one that differs only by case (`there's no folder "Work" (did you mean "work"?). Folders and tags are case-sensitive`). An export whose kind, `--folder`, or `--tag` matches nothing fails instead, before `--file` is touched or a password asked for, so a typo can't empty an existing backup. Other commands, such as `sesh copy` or `sesh trash`, don't take `--folder` and `--tag`, and refuse them rather than ignore them.
 
-`--sort folder` puts a folder's entries together: entries in no folder first, then each folder followed by its subfolders (`work`, `work/dev`, then `work-old`). Search results show FOLDER and TAGS columns too, when an entry has one. `sesh show --json`, and `--json` from `sesh list` and `sesh search`, include `folder` and `tags`. Exports carry them too: JSON as `folder` and `tags` (a list), CSV as `folder` and `tags` columns (tags joined with `;`), and encrypted exports with the JSON. Importing restores them, and `--on-conflict overwrite` replaces an existing entry's folder and tags with the file's.
+`--sort folder` puts a folder's entries together: entries in no folder first, then each folder followed by its subfolders (`work`, `work/dev`, then `work-old`). Search results show FOLDER and TAGS columns too, when an entry has one. `sesh show --json`, and `--json` from `sesh list` and `sesh search`, include `folder` and `tags`. Exports carry them too: JSON as `folder` and `tags` (a list), CSV as `folder` and `tags` columns (tags joined with `;`), and encrypted exports with the JSON. Importing restores them, and `--on-conflict overwrite` moves an existing entry into the file's folder when it names one, and adds the file's tags to its own.
 
 **Changing them later.** `sesh folder` and `sesh tag` work on entries already stored, of any kind: one named by words (`sesh folder move work openai`), or several by their IDs (what `sesh list` shows). Every ID is checked first: if any is wrong, nothing changes.
 
@@ -1702,9 +1716,47 @@ A key typed or piped in alone makes the usual codes (6 digits every 30 seconds),
 
 If QR scanning fails (e.g., QR code too blurry, wrong format, or you press Escape to cancel), `sesh aws setup` offers to try again or to fall back to manual entry, where you paste the base32 secret directly. `sesh add totp --qr` stops with the reason; run `sesh add totp <name>` without `--qr` to type the key instead.
 
-> **Supported QR codes:** Only `otpauth://totp/...` URLs (RFC 6238). This is the format used by Google Authenticator, Authy, 1Password, and most TOTP-compatible services. Non-standard parameters (SHA-256/SHA-512 algorithm, 8 digits, custom period) are automatically extracted from the QR code and stored alongside the secret, so sesh generates correct codes for services with non-default configurations.
+> **Supported QR codes:** Only `otpauth://totp/...` links (Google Authenticator's Key Uri Format; the codes are RFC 6238 TOTP). This is the format used by Google Authenticator, Authy, 1Password, and most TOTP-compatible services. Non-standard parameters (SHA-256/SHA-512 algorithm, 8 digits, custom period) are automatically extracted from the QR code and stored alongside the secret, so sesh generates correct codes for services with non-default configurations.
 
 ### Troubleshooting
+
+**Start with `sesh doctor`.** It checks the setup (config, vault file, agent, key settings, backups) and that every entry reads, and says what to do about each problem it finds, with the commands to run. See [Checking your setup and vault](#checking-your-setup-and-vault-sesh-doctor).
+
+**The vault and the master password**
+
+| Message | What it means | What to do |
+|---|---|---|
+| "wrong master password" (at a terminal, "after 3 attempts", with a hint) | The password typed, or `SESH_MASTER_PASSWORD`, doesn't open this vault | Check `SESH_MASTER_PASSWORD` and Caps Lock. Forgotten: `sesh recover` with your recovery key; see [Forgotten master password](#forgotten-master-password) |
+| "there's no terminal here to type the master password at" | A script, a pipe or cron ran sesh while the vault was locked, so nobody can type the password | Run any sesh command at a terminal first: the agent then keeps the vault unlocked for the idle timeout. For a job with no terminal, give the password in `SESH_MASTER_PASSWORD` |
+| "there's no vault yet" | sesh found no vault where the config says it lives | `sesh add` creates one with your first entry; `sesh init` chooses where it lives first. With a vault elsewhere, check `db_path` with `sesh config` |
+| "… isn't a sesh vault, or is damaged" | The file at `db_path` doesn't read as a sesh vault | Check `db_path` (`sesh config`); if it's the vault and damaged, `sesh restore` lists the backups to put back |
+| "… holds entries but not the record its key is made from" | The vault's key record is missing, so nothing in it can be opened | `sesh restore` from a backup |
+| "… was made by a sesh with vault format N; this one reads M" | The vault was made by a newer or older sesh | Use the sesh that made it, or upgrade |
+| "another sesh command was using the vault" (from `sesh audit prune`) | Another sesh command was reading the vault while the prune compacted it | Run it again when no other sesh command is running |
+| "the vault's master password was changed by another sesh command while this one ran" | `sesh passwd` (or a restore) ran meanwhile | Run it again, with the new password |
+| "warning: automatic backup: …" | The automatic backup couldn't be made; the command itself went ahead | `sesh doctor`'s Backups row says why; check `backup.dir` with `sesh config` |
+
+**The agent**
+
+| Message | What it means | What to do |
+|---|---|---|
+| "warning: sesh agent unavailable: …" | The agent couldn't start or be reached, so each command asks for the master password itself | `sesh doctor`'s Agent row, and the agent's log (below). The agent refuses to start when it can't keep its key out of swap, as with a memory-locking limit of 0 (`ulimit -l`) |
+| "… from another sesh build …; stop it with: kill PID" | An agent started by an earlier sesh is still running after an upgrade | Run the `kill` command it gives; the next command starts a new agent |
+| "SESH_AUTH_SOCK is N characters …" or "the agent's socket path is N characters …" | The agent's socket path is too long for the system | Set `SESH_AUTH_SOCK` to a shorter path, in a folder only you can write to |
+| "the screen locked while sesh was unlocking: unlock it again" | The Mac's screen locked during the unlock, which `agent.lock_on_screen_lock` treats as a lock | Run the command again |
+| Asked for the master password more often than expected | The agent locks after `agent.idle_timeout` (10 minutes) without use, at `agent.max_lifetime` (8 hours), when the computer sleeps, and when the Mac's screen locks | Change those in `sesh config`; see [Using the sesh agent](#using-the-sesh-agent) |
+
+The agent writes a log, for diagnosing recent runs: `~/Library/Caches/sesh/logs/agent.log` on macOS, `$XDG_CACHE_HOME/sesh/logs/agent.log` (or `~/.cache/sesh/logs/agent.log`) on Linux. It records unlocks, locks and errors, never a secret.
+
+**Touch ID**
+
+| Message | What it means | What to do |
+|---|---|---|
+| "touch ID isn't available here …" | No sensor with an enrolled fingerprint, or sesh isn't in your desktop session (over SSH, Touch ID isn't tried) | Type the master password; it always works |
+| "the Touch ID unlock is out of date for this vault" | The master password changed, or your fingerprints changed, since Touch ID unlock was turned on | `sesh touchid enable` again |
+| "touch ID is locked out" | Too many failed fingerprints | Unlock the Mac with its password once, then try again |
+
+**Everyday commands, AWS and TOTP**
 
 ```bash
 # Get detailed help for a command
@@ -1712,10 +1764,13 @@ sesh aws --help
 sesh add --help
 ```
 
-**Common issues and solutions:**
-
-| Error | Cause | Fix |
-|-------|-------|-----|
+| Message | What it means | What to do |
+|---|---|---|
+| "\"X\" matches N entries; name one by its ID" | Your words matched several entries, and there's no terminal to choose one at | Use one of the IDs it lists, or add words: `sesh copy github alice` |
+| "X already exists; add --force to replace it, …" | An entry with that name and username is there already | `--force` replaces its secret (the old one goes into its [history](#password-history)), or change it with `sesh edit` |
+| "… asks first, and there's no terminal to ask at; add --force …" | A delete or restore ran from a script | Check what it acts on, then add `--force` |
+| "there's no desktop session to copy to here …" | Linux with no desktop session, as over SSH | `sesh get` prints the value instead |
+| "no clipboard tool found: install …" | Linux with no clipboard tool | Install the one it names: `wl-clipboard` under Wayland, or `xclip` or `xsel` under X11 |
 | "no AWS entry found for profile (X)" | No credentials stored for this profile | Run `sesh aws setup` |
 | "no TOTP entry matches "X"" | No TOTP entry matches those words | Check with `sesh search X`, or add it with `sesh add totp` |
 | "MultiFactorAuthentication failed" | TOTP code was recently used or expired | Wait for the next 30-second window and try again. sesh automatically retries with the next code. |
@@ -1724,7 +1779,7 @@ sesh add --help
 | "failed to detect MFA device" | AWS CLI can't find an MFA device for the profile | Ensure an MFA device is configured in AWS IAM for this profile |
 | "already in a sesh environment" | Tried to nest sesh sessions | Exit the current subshell first with `exit` or Ctrl+D |
 
-## Environment Variables
+## The AWS profile and the subshell's environment
 
 ```bash
 # Set default AWS profile
@@ -1735,6 +1790,7 @@ sesh aws  # Uses production profile
 # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN
 # SESH_ACTIVE=1      (useful in scripts to detect a sesh session)
 # SESH_SERVICE=aws    (what the session is for)
+# SESH_EXPIRY, SESH_TOTAL_DURATION  (when the credentials expire, as Unix time, and how long they last, in seconds; sesh_status reads them)
 ```
 
 ## Default Behavior
@@ -1746,17 +1802,17 @@ When run without additional flags, sesh will:
 3. **Setup Required**: First-time users add each TOTP secret with `sesh add totp`, and each AWS profile's with `sesh aws setup`
 4. **Profile Selection**: `sesh aws` uses the default AWS profile unless `--profile` or `AWS_PROFILE` says otherwise; other entries are named by words or their ID
 5. **Security**: Secrets are stored in one vault file, each encrypted at rest with AES-256-GCM under a key derived from your master password
-6. **Clipboard**: A value copied with `sesh copy` (or `sesh aws --clip`) is cleared from the clipboard after 30 seconds (`clipboard_timeout`), if the clipboard still holds it. macOS has a clipboard tool built in. On Linux, sesh uses `wl-copy` under Wayland (from wl-clipboard), or `xclip` or `xsel` under X11, so install one. Over SSH, with no desktop session, `sesh copy` can't copy: `sesh get` prints the value instead, a password or a TOTP code alike. `sesh doctor` shows which tool it found
+6. **Clipboard**: A value copied with `sesh copy` (or `sesh aws --clip`) is cleared from the clipboard after 30 seconds (`clipboard_timeout`), if the clipboard still holds it. macOS has a clipboard tool built in. On Linux, sesh uses `wl-copy` under Wayland (from wl-clipboard), or `xclip` or `xsel` under X11, so install one. On Linux over SSH, with no desktop session, `sesh copy` can't copy: `sesh get` prints the value instead, a password or a TOTP code alike. `sesh doctor` shows which tool it found
 
 ## Subshell Behavior
 
 The AWS subshell provides:
 
 - **Visual Indicators**: Custom prompt showing active sesh session
-- **Auto-cleanup**: Credentials cleared on exit
+- **On exit**: the credentials leave with the shell; AWS still accepts them until they expire
 - **Built-in Commands**: `sesh_status`, `verify_aws`, `sesh_help`
 - **Expiry Tracking**: Check remaining time with `sesh_status` (includes countdown and progress bar)
-- **Shell Support**: Full support for bash/zsh, basic support for other shells
+- **Shells**: zsh and bash get the prompt and helper commands; another shell gets the credentials, and the prompt and helpers only if it reads `$ENV` when it starts, as `sh` does
 
 ## Getting Help
 
@@ -1784,11 +1840,11 @@ sesh copy --help
 
 1. **Check existing issues**: https://github.com/bashhack/sesh/issues
 2. **Open a new issue** with:
-   - Your macOS version
-   - Installation method (Homebrew, go install, etc.)
+   - Your OS and version (macOS or Linux)
+   - Installation method (Homebrew, a release archive, or built from source)
    - Command that failed
    - Error message
-   - Output of `sesh --version`
+   - Output of `sesh --version` and `sesh doctor`
 
 ### Security Note
 
