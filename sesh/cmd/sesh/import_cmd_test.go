@@ -354,6 +354,14 @@ func TestImport_Bitwarden(t *testing.T) {
 	if out, said, err := runImportOut(t, "", false, "--yes", "--on-conflict", "skip", bitwardenFixture("vault.csv")); err != nil || !strings.Contains(out+said, "Found 7 items and 5 folders in the Bitwarden export") {
 		t.Errorf("CSV without --from: %q, %q, %v", out, said, err)
 	}
+	// An organization's CSV is found as Bitwarden's, and refused.
+	org := filepath.Join(t.TempDir(), "org.csv")
+	if err := os.WriteFile(org, []byte("collections,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runImportOut(t, "", false, org); err == nil || !strings.Contains(err.Error(), "organization's Bitwarden export") {
+		t.Errorf("an organization's CSV without --from: %v", err)
+	}
 	if _, _, err := runImportOut(t, "", false, "--from", "bitwarden", bitwardenFixture("password.json")); err == nil || !strings.Contains(err.Error(), "run sesh import at a terminal") {
 		t.Errorf("protected, no terminal: %v", err)
 	}

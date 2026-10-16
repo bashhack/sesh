@@ -1,5 +1,5 @@
-// Package bitwarden reads Bitwarden's exports: the plain JSON one, the one
-// protected by a password of its own, and the CSV one. The format follows Bitwarden's
+// Package bitwarden reads Bitwarden's exports: the plain JSON one, the
+// one protected by a password of its own, and the CSV one. The format follows Bitwarden's
 // own code (github.com/bitwarden/clients, libs/tools/export-vault-core and
 // libs/common/src/models/export), and is tested against exports made by
 // Bitwarden's CLI.
@@ -176,6 +176,8 @@ func Parse(b []byte, password func() ([]byte, error)) (Export, error) {
 		return parseCSV(b)
 	case IsOrganizationCSV(b):
 		return Export{}, errOrganization
+	case len(bytes.TrimSpace(b)) == 0:
+		return Export{}, errors.New("this file is empty: a Bitwarden CSV export of a vault with only cards and identities has nothing in it, as CSV holds logins and notes; export as JSON")
 	}
 	var env envelope
 	if err := json.Unmarshal(b, &env); err != nil {

@@ -21,10 +21,8 @@ func IsOrganizationCSV(b []byte) bool {
 // writes it (libs/tools/export-vault-core, buildCsvExport and
 // buildCommonCipher) and reads it back (libs/importer, BitwardenCsvImporter):
 // logins and secure notes only, with no dates or password history. Its
-// custom fields are "name: value" lines, split at the last ": ", and
-// don't say which were hidden: each is kept as a hidden one, so nothing
-// private ends up stored readable. A linked one is written as the word
-// "undefined". Its URIs are one CSV row of their own.
+// custom fields are "name: value" lines (see csvFields). Its URIs are
+// joined by commas, unquoted (JavaScript's Array.toString).
 func parseCSV(b []byte) (Export, error) {
 	r := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(b, []byte("\ufeff"))))
 	r.FieldsPerRecord = -1
@@ -43,7 +41,7 @@ func parseCSV(b []byte) (Export, error) {
 	}
 	exp := Export{Items: []Item{}}
 	folderIDs := map[string]string{}
-	for line := 2; ; line++ {
+	for {
 		row, err := r.Read()
 		if errors.Is(err, io.EOF) {
 			break
@@ -81,11 +79,7 @@ func parseCSV(b []byte) (Export, error) {
 			it.Type = TypeSecureNote
 		} else {
 			it.Type = TypeLogin
-			uris, err := csvURIs(get("login_uri"))
-			if err != nil {
-				return Export{}, fmt.Errorf("line %d of this Bitwarden CSV export: its URIs can't be read: %w", line, err)
-			}
-			it.Login = &Login{Username: get("login_username"), Password: get("login_password"), TOTP: get("login_totp"), URIs: uris}
+			it.Login = &Login{Username: get("login_username"), Password: get("login_password"), TOTP: get("login_totp"), URIs: csvURIs(get("login_uri"))}
 		}
 		exp.Items = append(exp.Items, it)
 	}
@@ -93,37 +87,44 @@ func parseCSV(b []byte) (Export, error) {
 }
 
 // csvFields reads a CSV export's custom fields: "name: value" lines.
+//   - The CSV doesn't say which were hidden: each is kept as a hidden
+//     one, so nothing private ends up stored readable.
+//   - A line is split at its first ": " (Bitwarden's reader takes the
+//     last): field names are stored readable, so a ": " in a value stays
+//     in the value, kept secret; one in a name moves the rest of the name
+//     there.
+//   - A field with no value (a linked one, or an empty one) is written
+//     "undefined", or "null" by older clients: it comes in empty, which
+//     the summary says isn't kept.
+//   - A line with no ": " goes on the value before it, as Bitwarden
+//     writes each field on one line and a value's line break as it is.
 func csvFields(s string) []Field {
 	var out []Field
 	for line := range strings.SplitSeq(strings.ReplaceAll(s, "\r\n", "\n"), "\n") {
-		name, value, ok := strings.CutLast(line, ": ")
-		if strings.TrimSpace(line) == "" || !ok {
+		name, value, ok := strings.Cut(line, ": ")
+		switch {
+		case !ok && len(out) > 0:
+			out[len(out)-1].Value += "\n" + line
+			continue
+		case !ok:
 			continue
 		}
-		f := Field{Name: name, Value: value, Type: FieldHidden}
-		if f.Value == "undefined" {
-			// A linked field: it has no value of its own.
-			f.Type, f.Value = FieldLinked, ""
+		if value == "undefined" || value == "null" {
+			value = ""
 		}
-		out = append(out, f)
+		out = append(out, Field{Name: name, Value: value, Type: FieldHidden})
 	}
 	return out
 }
 
-// csvURIs reads a CSV export's URIs: one CSV row, a URI a cell.
-func csvURIs(s string) ([]URI, error) {
-	if strings.TrimSpace(s) == "" {
-		return nil, nil
-	}
-	cells, err := csv.NewReader(strings.NewReader(s)).Read()
-	if err != nil {
-		return nil, err
-	}
+// csvURIs reads a CSV export's URIs, joined by commas: a URI with a
+// comma in it comes in as two.
+func csvURIs(s string) []URI {
 	var out []URI
-	for _, c := range cells {
+	for c := range strings.SplitSeq(s, ",") {
 		if c = strings.TrimSpace(c); c != "" {
 			out = append(out, URI{URI: c})
 		}
 	}
-	return out, nil
+	return out
 }

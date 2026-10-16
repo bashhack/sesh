@@ -375,7 +375,7 @@ func detectSource(args []string) string {
 		b, err := os.ReadFile(a) //nolint:gosec // the file the user named
 		switch {
 		case err != nil:
-		case bitwarden.IsExport(b) || bitwarden.IsCSV(b):
+		case bitwarden.IsExport(b) || bitwarden.IsCSV(b) || bitwarden.IsOrganizationCSV(b):
 			return "bitwarden"
 		case keepass.IsExport(b):
 			return "keepass"
@@ -640,7 +640,7 @@ func kindPlural(k vault.Kind) string {
 // for the password of one protected by a password.
 func readBitwarden(args []string, ask func(what string) ([]byte, error)) (found, error) {
 	if len(args) != 1 {
-		return found{}, errors.New("give one Bitwarden export: sesh import --from bitwarden <export.json>")
+		return found{}, errors.New("give one Bitwarden export: sesh import --from bitwarden <export.json or .csv>")
 	}
 	b, err := os.ReadFile(args[0]) //nolint:gosec // the file the user named
 	if err != nil {
