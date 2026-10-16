@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/testutil"
@@ -74,6 +75,28 @@ func TestGetSessionToken_CommandError(t *testing.T) {
 
 	if err == nil {
 		t.Error("Expected error, got nil")
+	}
+}
+
+// The AWS CLI's message reaches the caller, which retries on it; the code doesn't.
+func TestGetSessionToken_CommandErrorMessage(t *testing.T) {
+	origExecCommand := execCommand
+	defer func() { execCommand = origExecCommand }()
+
+	const awsSays = "MultiFactorAuthentication failed with invalid MFA one time pass code"
+	execCommand = func(_ string, _ ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "echo 'An error occurred (AccessDenied): "+awsSays+". ' >&2; exit 254")
+	}
+
+	_, err := GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test", []byte("654321"))
+	if err == nil {
+		t.Fatal("Expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), awsSays) {
+		t.Errorf("error %q doesn't hold the AWS CLI's message %q", err, awsSays)
+	}
+	if strings.Contains(err.Error(), "654321") {
+		t.Errorf("error %q holds the MFA code", err)
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 	"github.com/bashhack/sesh/internal/vault"
 )
 
-const exportUsage = `Usage: sesh export [passwords|keys|notes|totp] [--file F] [--format encrypted|json|csv] [--folder F] [--tag T] [--force]
+const exportUsage = `Usage: sesh export [passwords|keys|notes|totp|files] [--file F] [--format encrypted|json|csv] [--folder F] [--tag T] [--force]
   Write every entry, or those of a kind, folder or tag, to a file (or to
   the output). The default, encrypted, asks for a password that opens it
   anywhere sesh runs (sesh import --from sesh reads it back); json and csv
@@ -61,7 +61,7 @@ func runExport(app *App, args []string) error {
 		k, ok := listKinds[strings.ToLower(w)]
 		switch {
 		case !ok:
-			return fmt.Errorf("sesh export takes a kind (passwords, keys, notes, totp), not %q", w)
+			return fmt.Errorf("sesh export takes a kind (passwords, keys, notes, totp, files), not %q", w)
 		case kind != "" && k != kind:
 			return errors.New("sesh export takes one kind at a time")
 		}

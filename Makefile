@@ -40,13 +40,6 @@ run:
 	@echo "ℹ️  For system-wide use, run 'make install' first."
 	@go run $(LDFLAGS) ./sesh/cmd/sesh/
 
-## run/setup: Run the sesh setup wizard (development mode)
-.PHONY: run/setup
-run/setup:
-	@echo "🚀 Running sesh setup wizard in development mode..."
-	@echo "ℹ️  For system-wide use, run 'make install' first."
-	@go run $(LDFLAGS) ./sesh/cmd/sesh/ --setup
-
 
 # ============================================================================= #
 # QUALITY CONTROL
@@ -262,9 +255,11 @@ build/optimize:
 .PHONY: build/all
 build/all:
 	@echo "Building for all platforms..."
-	@mkdir -p bin/
+	@mkdir -p build/bin/
 	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o build/bin/sesh-darwin-amd64 ./sesh/cmd/sesh
 	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o build/bin/sesh-darwin-arm64 ./sesh/cmd/sesh
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o build/bin/sesh-linux-amd64 ./sesh/cmd/sesh
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o build/bin/sesh-linux-arm64 ./sesh/cmd/sesh
 
 ## install: Install the application
 .PHONY: install
@@ -282,8 +277,7 @@ install: clean build
 
 	@echo ""
 	@echo "🚀 To get started:"
-	@echo "   1. Run 'sesh --setup' to configure your MFA secret"
-	@echo "   2. Then run 'sesh --service aws' to generate AWS temporary credentials"
+	@echo "   Run 'sesh' to see every command; the first 'sesh add' creates your vault"
 
 # ============================================================================= #
 # RELEASE
@@ -298,14 +292,6 @@ release: confirm
 	else \
 		echo "goreleaser not found, skipping"; \
 	fi
-
-## release/homebrew: Prepare Homebrew formula
-.PHONY: release/homebrew
-release/homebrew:
-	@echo "Preparing Homebrew formula..."
-	@VERSION=$(VERSION) SHA256=$(shell shasum -a 256 bin/sesh-darwin-amd64 | cut -d ' ' -f 1) \
-		envsubst < homebrew/sesh.rb.template > homebrew/sesh.rb
-	@echo "Homebrew formula generated at homebrew/sesh.rb"
 
 # ============================================================================= #
 # VERSION INFO

@@ -77,9 +77,9 @@ var subcommands = []candidate{
 	{"code", "Print a TOTP entry's code, and how long it has"},
 	{"show", "Show an entry: its URL, notes, fields, folder and tags"},
 	{"open", "Open an entry's URL in the browser"},
-	{"add", "Add a password, API key, note, or TOTP entry"},
+	{"add", "Add a password, API key, note, TOTP entry, or file"},
 	{"edit", "Rename an entry, or change its username, kind, secret, or details"},
-	{"generate", "Print a new random password, stored nowhere"},
+	{"generate", "Print a new random password or passphrase, stored nowhere"},
 	{"trash", "Move entries to the trash; list it, put one back, or empty it"},
 	{"history", "An entry's earlier secrets: list, show, copy, restore, forget"},
 	{"folder", "Move entries between folders, rename folders, list them"},
@@ -844,7 +844,7 @@ them ("github alice"; a kind word such as totp or note narrows), or its ID.
 
 Everyday:
   sesh ui                         Search every entry: Enter copies its secret or code
-  sesh list [passwords|keys|notes|totp]   List the entries (--folder F, --tag T)
+  sesh list [passwords|keys|notes|totp|files]  List the entries (--folder F, --tag T)
   sesh search <words>             Find entries by name, username, or site
   sesh copy <entry>               Copy its password, key or note, or its TOTP code
   sesh get <entry>                Print it, for a pipe
@@ -853,9 +853,9 @@ Everyday:
   sesh open <entry>               Open its URL in the browser
 
 Changing entries:
-  sesh add password|key|note|totp <name>  Add an entry (--generate; --qr for TOTP)
+  sesh add password|key|note|totp|file <name>  Add an entry (--generate; --qr for TOTP; --from for a file)
   sesh edit <entry>               Rename it, or change its secret, URL, notes, or fields
-  sesh generate                   Print a new random password, stored nowhere
+  sesh generate                   Print a new random password (--words N: a passphrase), stored nowhere
   sesh trash <entry>…             Move entries to the trash (sesh trash lists it)
   sesh history <entry>            Its earlier secrets: show, copy, restore, forget
   sesh folder move|rename|list    File entries in folders

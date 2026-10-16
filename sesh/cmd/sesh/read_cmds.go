@@ -84,7 +84,8 @@ const openUsage = `Usage: sesh open <entry>
 
 const generateUsage = `Usage: sesh generate [--length N] [--no-symbols] [--copy]
        sesh generate --words N [--separator S] [--capitalize] [--copy]
-  Print a new random password, stored nowhere; --copy copies it instead.
+  Print a new random password or passphrase, stored nowhere; --copy copies
+  it instead.
   --words makes a passphrase of N words (3 to 20) from the EFF's long word
   list, each about 12.9 bits: 6 words are about 77 bits. --separator goes
   between them ("-" unless given); --capitalize starts each with a capital.

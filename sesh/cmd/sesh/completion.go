@@ -153,8 +153,11 @@ func complete(words []string) (cands []candidate, files bool) {
 	case "edit":
 		specs = flagSpecs(func(fs *flag.FlagSet) { addEditFlags(fs) })
 		for i := range specs {
-			if specs[i].name == "type" {
+			switch specs[i].name {
+			case "type":
 				specs[i].values = []string{string(vault.KindPassword), string(vault.KindAPIKey), string(vault.KindNote)}
+			case "from":
+				specs[i].path = true
 			}
 		}
 	case "show":

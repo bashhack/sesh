@@ -85,7 +85,7 @@ func TestTrash_RestoreClashAndAs(t *testing.T) {
 	if _, err := s.RestoreFromTrash(id, vault.Key{}); !errors.Is(err, ErrNameTaken) || err.Error() != "password/github/alice already exists: rename or delete it first, or restore with --as <new name>" {
 		t.Errorf("onto a name in use: %v", err)
 	}
-	if _, err := s.RestoreFromTrash(id, vault.Key{Kind: vault.KindNote, Service: "github"}); err == nil || !strings.Contains(err.Error(), "is a password entry") {
+	if _, err := s.RestoreFromTrash(id, vault.Key{Kind: vault.KindNote, Service: "github"}); err == nil || !strings.Contains(err.Error(), "only under an ID that starts password/") {
 		t.Errorf("as another kind: %v", err)
 	}
 	if _, err := s.RestoreFromTrash(id, k); !errors.Is(err, ErrNameTaken) || err.Error() != "password/github/alice already exists: rename or delete it first, or restore under another name" {

@@ -19,7 +19,7 @@ import (
 // What a KeePass entry can have that sesh doesn't keep, as the summary
 // adds it up.
 const (
-	lostAttachment = "attachments (sesh doesn't hold files)"
+	lostAttachment = "attachments (add each with sesh add file)"
 	lostVersions   = "earlier versions with no other password to keep (sesh's history keeps old passwords only)"
 	lostRefHistory = "old passwords that refer to another entry (what they were isn't in the export)"
 	lostNoPassword = "old passwords of an entry with no password now"
