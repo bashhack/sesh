@@ -13,6 +13,8 @@ This document describes the system architecture for sesh, a command-line credent
 7. [Error Handling](#error-handling)
 8. [Testing Strategy](#testing-strategy)
 9. [Performance Design](#performance-design)
+10. [Implementation Details](#implementation-details)
+11. [Summary](#summary)
 
 ## Architectural Principles
 
@@ -20,7 +22,7 @@ The sesh architecture is based on four core design principles:
 
 ### 1. One Vault, One Command Line
 
-Every kind of secret (passwords, API keys, notes, TOTP keys) lives in one encrypted vault, and every command works on all of them. Commands are verbs: `sesh list`, `sesh copy`, `sesh add`. A command names an entry by a few words, matched as the terminal app's search matches them, or by its ID. AWS sign-in is the one integration with a flow of its own (`sesh aws`), kept behind a small provider interface.
+Every kind of secret (passwords, API keys, notes, TOTP keys, files) lives in one encrypted vault, and every command works on all of them. Commands are verbs: `sesh list`, `sesh copy`, `sesh add`. A command names an entry by a few words, matched as the terminal app's search matches them, or by its ID. AWS sign-in is the one integration with a flow of its own (`sesh aws`), kept behind a small provider interface.
 
 - Users learn one way to name an entry, the same in the app and on the command line
 - A kind of entry is a filter (`sesh list notes`), not a separate mode
@@ -28,11 +30,11 @@ Every kind of secret (passwords, API keys, notes, TOTP keys) lives in one encryp
 
 ### 2. Component Isolation
 
-Each component accesses only what it needs — nothing more. Secrets flow through stdin pipes, and memory is zeroed after use.
+Each component accesses only what it needs — nothing more. Secrets reach other programs on stdin or in the environment, and memory is zeroed after use.
 
-- Secrets are passed via stdin pipes, never as command arguments
+- Secrets are passed to other programs on stdin (the clipboard tools) or in the environment (`sesh run`, the AWS subshell), not as arguments. The one exception is the AWS one-time MFA code, which the AWS CLI takes only as `--token-code`
 - Subshell init files are written to temp files and cleaned up on exit
-- Each entry's secret is encrypted bound to its own name, so secrets can't be swapped between entries
+- Each entry's secret is encrypted bound to its entry's ID (kind, name, username), so secrets can't be swapped between entries
 - Secrets spend minimal time in memory
 
 ### 3. Terminal-Native Workflow
@@ -61,7 +63,7 @@ The architecture follows a strict layering model where dependencies flow downwar
 │   sesh/cmd/sesh/     │     │   internal/                 │
 │                      │     │                             │
 │ • Commands (verbs)   │     │ • password: entries, search,│
-│ • Words → one entry  │     │   import and export         │
+│ • Words → one entry  │     │   sesh's export and import  │
 │ • Flags, help,       │     │ • tui: sesh ui              │
 │   completion         │     │ • provider/aws, setup:      │
 │ • Subshell           │     │   AWS sign-in               │
@@ -75,10 +77,12 @@ The architecture follows a strict layering model where dependencies flow downwar
                │                         │
                │ • Vault (SQLite,        │
                │   encrypted), agent     │
+               │ • Key settings, Touch ID│
+               │   recovery key          │
+               │ • Backups, imports      │
                │ • TOTP generation       │
                │ • Secure memory         │
-               │ • Clipboard             │
-               │ • QR code scanning      │
+               │ • Clipboard, QR codes   │
                │ • AWS CLI integration   │
                └─────────────────────────┘
 ```
@@ -91,7 +95,7 @@ The architecture follows a strict layering model where dependencies flow downwar
 - Keeps the vault's meaning out of flag parsing
 
 **Core Layer**: what sesh does with entries
-- The password manager core: storing, reading, ranked search, import and export
+- The password manager core: listing, ranked search, sesh's own export and import, password generation and strength
 - The terminal app
 - AWS sign-in: exchanging an MFA code for temporary credentials
 
@@ -141,7 +145,7 @@ type ServiceProvider interface {
 
 **Optional Interface Pattern**
 
-Since subshell functionality is optional, we use interface composition:
+The subshell is a capability a provider may have; `LaunchSubshell` discovers it at run time:
 
 ```go
 type SubshellProvider interface {
@@ -162,10 +166,10 @@ Infrastructure components implement the following security controls:
 
 Every entry lives in one encrypted vault, a SQLite file:
 
-- Pure-Go SQLite via `modernc.org/sqlite` — zero C dependencies
+- Pure-Go SQLite via `modernc.org/sqlite`: the vault needs no C library. Only the macOS build uses cgo, for Touch ID and the screen-lock check
 - AES-256-GCM encryption with per-entry salts
-- Argon2id key derivation for per-entry keys
-- Search by service name or username, matching any part and ignoring case
+- Argon2id key derivation for per-entry keys (from the master key and the entry's salt: 1 pass, 16 MiB)
+- Search by name, username, or the URL's host, matching any part and ignoring case
 - Audit log table tracking all access, modifications, and deletions
 - A master key derived from the master password (see below)
 - WAL mode for concurrent read safety
@@ -173,31 +177,101 @@ Every entry lives in one encrypted vault, a SQLite file:
 
 **The master key.** `database.MasterPasswordSource` derives the 256-bit master encryption key from the master password via Argon2id. The KDF salt, Argon2id parameters, and a verification blob are the vault's key record, one row in the database's `vault_key` table, so the vault is one file. The verification blob is AES-256-GCM ciphertext of a known constant; on unlock, GCM's authentication tag rejects wrong passwords immediately. It works the same on macOS and Linux. In normal use the sesh agent holds the derived key and the store encrypts through it (`agent.Oracle`).
 
-`main.go`'s `buildKeySource(dbPath)` returns the agent's oracle when it can, and otherwise a `MasterPasswordSource` wrapped as one. The store only sees a `database.CryptoOracle`, so it doesn't know whether the agent or this process holds the key.
+**Unlocking.** Every command that opens the vault gets its key source from `main.go`'s `buildKeySource(cfg)`:
+
+1. It reads the vault's key record, which needs no key. With no record yet (the first run), it asks for a new master password twice, makes the record, and unlocks the agent with that password; at a terminal it also offers a recovery key and Touch ID.
+2. With `SESH_MASTER_PASSWORD` set, the agent is never used: the key is derived in this process on every run.
+3. Otherwise it connects to the agent, starting one if needed. If the agent already holds this vault's key (matched by the vault's unlock id, a SHA-256 of the verify blob), the store encrypts through it (`agent.Oracle`).
+4. If not, at a terminal it tries Touch ID first when it's on, then asks for the master password, up to 3 tries. The agent is sent the password with the vault's salt, Argon2id settings and verify blob, and derives and checks the key itself.
+5. If the agent can't be reached, or fails, the key is derived in this process from the password already typed (`MasterPasswordSource`, wrapped as an oracle).
+
+The store only sees a `database.CryptoOracle`, so it doesn't know whether the agent or this process holds the key. After opening, it checks the file's key record is still the one the key was checked against, so a password changed by another command meanwhile is noticed.
+
+**The agent** (`internal/agent`, `sesh agent`) holds the derived key between commands:
+
+- A per-user Unix socket, `<user cache dir>/sesh/agent.sock` (`SESH_AUTH_SOCK` overrides), mode 0600 in a private folder. Each end checks the other is the same user.
+- Newline-delimited JSON, protocol version 2, a `hello` first; messages are capped at 4 MiB. Requests: `ping`, `status`, `unlock`, `unlock_touchid`, `encrypt`, `decrypt`, `wrap_key` (for Touch ID and the recovery key), `lock`, `stop`. Every `encrypt` and `decrypt` names the vault's unlock id, so one vault's key never serves another.
+- It refuses to start unless it can turn off core dumps, refuse debuggers (`PT_DENY_ATTACH` on macOS, `PR_SET_DUMPABLE=0` on Linux), and keep the key in a memory page locked into RAM.
+- It locks after `agent.idle_timeout` (10 minutes) without use, at `agent.max_lifetime` (8 hours), when the computer sleeps, and when the Mac's screen locks; started by a command, it exits once it has locked by itself. Commands start it as needed, and one from another sesh build is replaced.
+
+See [SECURITY_MODEL.md](SECURITY_MODEL.md#sesh-agent) for what it protects against, and what it doesn't.
 
 **Encrypted export.** The password manager's `ExportEncrypted`/`ImportEncrypted` use the same primitives (Argon2id + AES-256-GCM) but with an independent per-export salt. The envelope is self-contained — the salt and parameters are embedded alongside the ciphertext — so encrypted exports are portable across machines and master passwords.
 
-**Entries.** Everything stores through `vault.Store` (`internal/vault`). An entry is keyed by its kind (`password`, `api_key`, `totp`, `secure_note`), name, and an optional username, unique together; its text form, `kind/name[/username]`, is the ID `sesh list` shows, every command that names an entry takes, and the audit log records. Non-secret options are its settings: a TOTP entry's code settings (algorithm, digits, period, issuer), and for AWS the MFA device. An AWS profile's MFA secret is the TOTP entry `aws` with the profile as username, so `sesh list totp` shows it.
+**Entries.** Everything stores through `vault.Store` (`internal/vault`). An entry is keyed by its kind (`password`, `api_key`, `totp`, `secure_note`, `file`), name, and an optional username, unique together; its text form, `kind/name[/username]`, is the ID `sesh list` shows, every command that names an entry takes, and the audit log records. Non-secret options are its settings: a TOTP entry's code settings (algorithm, digits, period, issuer), for AWS the MFA device, and a file entry's file name. An entry also has a folder, tags, a URL, and notes and custom fields. Notes and secret field values are encrypted together, bound to the entry under their own tag (`sesh-details-v1`, where the secret uses `sesh-entry-v1` and an earlier secret `sesh-history-v1`), so they can't be swapped with its secret. Names, usernames, URLs, folders, tags, field names and plain field values are stored unencrypted, so they can be listed and searched. An AWS profile's MFA secret is the TOTP entry `aws` with the profile as username, so `sesh list totp` shows it.
 
 **SQLite Data Model**
 
-The vault stores credentials in `<dataDir>/sesh/passwords.db` (or the `db_path` setting) using the schema in `internal/database/schema.go`. `audit_log` names entries by their key's text form (no foreign key, so audit history survives deleting an entry); `vault_key` is the one row an unlock reads before any entry.
+The vault is one SQLite file: `~/Library/Application Support/sesh/passwords.db` on macOS, `$XDG_DATA_HOME/sesh/passwords.db` (or `~/.local/share/sesh/passwords.db`) on Linux, or wherever the `db_path` setting says. Its schema is in `internal/database/schema.go`:
+
+- `entries`, and `entry_tags` for their tags;
+- `trash` (deleted entries, with their tags, kept for `trash.keep_days`) and `history` (earlier secrets, kept for `history.keep`; those of an entry in the trash go with it);
+- `vault_key`, the one row an unlock reads before any entry;
+- `recovery`, the vault's key wrapped for the recovery key, and `vault_info`, a random id that names its backups;
+- `audit_log`, which names entries by their ID's text, with no foreign key, so the log survives an entry's deletion;
+- `schema_migrations`.
 
 ```mermaid
 %%{init: {'theme': 'neutral'}}%%
 erDiagram
     entries ||..o{ audit_log : "entry_id = kind/service[/username]"
+    entries ||--o{ entry_tags : "entry_id"
+    entries ||..o{ history : "kind, service, username"
+    trash ||--o{ history : "trash_id"
 
     entries {
         INTEGER id PK
-        TEXT kind "password / api_key / totp / secure_note"
+        TEXT kind "password / api_key / totp / secure_note / file"
         TEXT service
         TEXT username "unique with kind and service"
         BLOB encrypted_data "AES-256-GCM ciphertext"
         BLOB salt "per-entry, 16 bytes"
-        TEXT settings "JSON: TOTP params, AWS MFA device"
+        TEXT settings "JSON: TOTP params, AWS MFA device, file name"
+        TEXT folder
+        TEXT url
+        TEXT details "JSON: field names, plain values"
+        BLOB sealed_details "notes and secret values, encrypted"
+        BLOB details_salt
         DATETIME created_at
         DATETIME updated_at
+    }
+
+    entry_tags {
+        INTEGER entry_id FK
+        TEXT tag
+    }
+
+    trash {
+        INTEGER id PK
+        TEXT kind
+        TEXT service
+        TEXT username
+        BLOB encrypted_data
+        TEXT tags "JSON"
+        DATETIME deleted_at
+    }
+
+    history {
+        INTEGER id PK
+        TEXT kind
+        TEXT service
+        TEXT username
+        INTEGER trash_id FK "set while its entry is in the trash"
+        BLOB encrypted_data "an earlier secret"
+        DATETIME replaced_at
+        TEXT file_name "a file entry's, then"
+    }
+
+    recovery {
+        INTEGER id PK "always 1"
+        TEXT unlock_id
+        BLOB public_key
+        BLOB ciphertext "the vault key, wrapped"
+    }
+
+    vault_info {
+        INTEGER id PK "always 1"
+        TEXT vault_id "names its backups"
     }
 
     vault_key {
@@ -211,8 +285,8 @@ erDiagram
 
     audit_log {
         INTEGER id PK
-        TEXT event_type "store/retrieve/delete/..."
-        TEXT entry_id "an entry's key text, nullable for auth events"
+        TEXT event_type "access / modify / delete / trash / restore / purge / import / doctor / rekey"
+        TEXT entry_id "an entry's ID text; empty for whole-vault events"
         TEXT detail
         DATETIME created_at
     }
@@ -228,7 +302,7 @@ currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytes(secret)
 // Non-standard generation (respects stored algorithm, digits, period)
 currentCode, nextCode, err := p.totp.GenerateConsecutiveCodesBytesWithParams(secret, params)
 ```
-Generates both current and next codes to handle the transition between TOTP windows. When a QR code is scanned during setup, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored in the entry's settings. sesh reads these params before generating codes, falling back to defaults (SHA1, 6 digits, 30 seconds) when no params are stored.
+Generates both current and next codes to handle the transition between TOTP windows. When a TOTP entry is added from an `otpauth://` link or QR code, `totp.Params` (algorithm, digits, period, issuer) are extracted from the `otpauth://` URI and stored in the entry's settings. sesh reads these params before generating codes, falling back to defaults (SHA1, 6 digits, 30 seconds) when no params are stored.
 
 #### Memory Management
 
@@ -237,7 +311,7 @@ Go's garbage collector prevents true secure erasure, but we reduce the exposure 
 1. Use `[]byte` over `string` for mutability
 2. Zero immediately after use
 3. Use `runtime.KeepAlive()` to prevent the compiler from optimizing away the zeroing
-4. Pass secrets via stdin, not command arguments
+4. Pass secrets to other programs on stdin or in the environment, not as arguments (the AWS MFA code is the one exception)
 
 #### Subshell Implementation
 
@@ -250,7 +324,7 @@ Go's garbage collector prevents true secure erasure, but we reduce the exposure 
 **Subshell Advantages**
 - Provides explicit credential lifecycle management
 - Prevents pollution of main shell environment
-- Provides clear entry/exit points for audit logging
+- The MFA key read that starts it is recorded in the audit log (the subshell itself isn't)
 - Visual indicators reduce operational security errors
 
 ### AWS Setup
@@ -259,7 +333,7 @@ Go's garbage collector prevents true secure erasure, but we reduce the exposure 
 
 ## Data Flow Architecture
 
-AWS and TOTP follow different flows because AWS requires a network round-trip to STS to exchange a TOTP code for temporary credentials, while TOTP is purely local computation. Both flows read secrets from the vault and route output through the same secured channels (subshell or clipboard).
+AWS and TOTP follow different flows because AWS requires a network round-trip to STS to exchange a TOTP code for temporary credentials, while TOTP is purely local computation. Both flows read secrets from the vault and route output through the same channels (stdout, clipboard, or subshell).
 
 ### AWS Authentication Flow
 
@@ -273,7 +347,7 @@ User ──► CLI ──► ValidateRequest
                       │
                 ┌─────┴──────┐
                 ▼            ▼
-          --clip         default
+          --clip         default, or --no-subshell
                 │            │
                 ▼            ▼
         GetClipboardValue  GetCredentials
@@ -285,8 +359,8 @@ User ──► CLI ──► ValidateRequest
                 │            │   └── retries with next/future code on failure
            TOTP Engine       ├── Parse expiry, build env vars
                 │            ▼
-                ▼       NewSubshellConfig
-          Copy code          │
+                ▼       NewSubshellConfig ─── or, with --no-subshell,
+          Copy code          │                print the exports (to eval)
          to clipboard   Launch subshell
                         (isolated env)
 ```
@@ -330,18 +404,18 @@ User ──► sesh code github ──► words → one TOTP entry (asks which, 
 Each layer provides independent security measures:
 
 1. **Storage Security**
-   - **Threat**: Other processes reading secrets
-   - **Defense**: Every entry encrypted (AES-256-GCM) under a key derived from the master password
-   - **Enforcement**: Argon2id, and the verify blob in the vault's key record
+   - **Threat**: Someone with the vault file reading or swapping its secrets
+   - **Defense**: Every secret encrypted (AES-256-GCM) under a key derived from the master password with Argon2id, and bound to its entry's ID, so it can't be moved to another entry unnoticed
+   - **Not encrypted**: names, usernames, URLs, folders, tags, field names and plain field values
 
 2. **Memory Security**
-   - **Threat**: Memory dumps, swap files, cold boot attacks
-   - **Defense**: Immediate zeroing, byte slice preference
-   - **Limitation**: Go's GC constraints require mitigation strategies
+   - **Threat**: Core dumps, swap, another process of yours reading the agent's memory
+   - **Defense**: Zeroing byte slices after use; the agent refuses to start without turning off core dumps, refusing debuggers, and a locked page for the key
+   - **Not covered**: root, and cold-boot or DMA attacks (see SECURITY_MODEL.md)
 
 3. **Process Security**
    - **Threat**: Secrets visible in `ps`, shell history, or logs
-   - **Defense**: Stdin pipes for all secret transmission
+   - **Defense**: Secrets go to other programs on stdin or in the environment, not as arguments; the AWS MFA code, a one-time code, is the exception
    - **Security Principle**: Process arguments are public, stdin is private
 
 4. **Session Security**
@@ -368,8 +442,14 @@ User Input → [TRUST BOUNDARY] → sesh
 AWS CLI → [TRUST BOUNDARY] → AWS APIs
 
 Additional trust boundaries:
-   sesh → [TRUST BOUNDARY] → Filesystem (temp shell init files, QR screenshot captures)
-   sesh → [TRUST BOUNDARY] → Clipboard (pbcopy; wl-copy, xclip or xsel on Linux — visible to clipboard managers; auto-cleared after 30s)
+   sesh → [TRUST BOUNDARY] → Agent socket (any process of yours can ask an unlocked agent to decrypt)
+   agent → [TRUST BOUNDARY] → Secure Enclave (Touch ID unlock)
+   sesh → [TRUST BOUNDARY] → Filesystem (temp shell init files, QR screenshot captures, backups,
+                             sesh inject's output, --editor temp files, sesh run's file copies)
+   sesh → [TRUST BOUNDARY] → Child processes (sesh run's environment; git, through the credential helper)
+   sesh → [TRUST BOUNDARY] → Browser (sesh open, http and https only)
+   sesh → [TRUST BOUNDARY] → Clipboard (pbcopy; wl-copy, xclip or xsel on Linux — visible to clipboard
+                             managers; cleared after clipboard_timeout, 30s by default)
 ```
 
 Each boundary represents:
@@ -396,16 +476,13 @@ func runX(app *App, args []string) error {
 }
 ```
 
-It's listed in `subcommands` (the overview and completion read that), run from `commands`, and documented in `usage` and the usage guide in the same change.
+It's listed in `subcommands` (completion and the dispatcher read that), run from `commands`, and documented in `usage` (the overview) and the usage guide in the same change.
 
 ### Capability Evolution
 
-The optional interface pattern is already in use: `SubshellDecider` and `SubshellProvider` are opt-in capabilities that a provider implements only if needed:
+The optional interface pattern is in use once: `SubshellProvider` is the capability `LaunchSubshell` discovers at run time, by type assertion. (`sesh aws` asks its provider `ShouldUseSubshell()` directly.)
 
 ```go
-type SubshellDecider interface {
-    ShouldUseSubshell() bool
-}
 type SubshellProvider interface {
     NewSubshellConfig(creds *Credentials) interface{}
 }
@@ -426,9 +503,9 @@ type SubshellProvider interface {
 return fmt.Errorf("decrypt %s: %w", key, err)
 // Preserves full error context for debugging
 
-// Layer 2: Provider (Contextual)  
-return fmt.Errorf("failed to get AWS credentials for profile %s: %w", profile, err)
-// Adds domain-specific context
+// Layer 2: Provider (Contextual)
+return fmt.Errorf("failed to get session token: %w", err)
+// Adds domain-specific context; the app adds "failed to generate credentials: "
 
 // Layer 3: CLI (Actionable)
 // Errors bubble up with full context; the CLI prints them directly
@@ -441,7 +518,7 @@ if err != nil {
 
 ### Error Message Examples
 
-- Cryptic: `error: -25300`  
+- Cryptic: `sql: no rows in result set`
 - Improved: `entry not found: totp/aws/prod`  
 - Optimal: `no AWS entry found for profile (prod). Run 'sesh aws setup' first`
 
@@ -451,7 +528,7 @@ Errors become progressively more actionable as they flow up through layers.
 
 ### Interface-Based Testing
 
-Interface-based testing enables:
+Interface-based testing enables, for example with the AWS CLI's interface (`internal/aws`):
 ```go
 type Provider interface {
     GetSessionToken(profile, serial string, code []byte) (Credentials, error)
@@ -466,7 +543,7 @@ type Provider interface {
 
 ### The Test Helper Pattern
 
-`MockExecCommand` uses Go's test binary as a mock process:
+Commands sesh runs (the AWS CLI, clipboard tools) are replaced in tests. An in-process mock (`internal/testutil/exec_mock.go`) is preferred; where a real process is needed, `MockExecCommand` uses Go's test binary as one:
 
 ```go
 func MockExecCommand(output string, err error) func(string, ...string) *exec.Cmd
@@ -484,7 +561,7 @@ sesh is a CLI tool — every invocation should feel instant. The design avoids u
 - **Selective execution**: only the command the first word names runs, and it opens the vault only once its arguments are right. Plain `sesh`, `--help` and completion never unlock it.
 - **No framework overhead**: Go's standard `flag` package for parsing, no logging framework in the hot path.
 
-The dominant cost in any sesh invocation is unlocking the vault (deriving the key from the master password, unless the agent already holds it) and, for `sesh aws`, the network round-trip to AWS STS.
+The dominant cost in any sesh invocation is unlocking the vault (deriving the key from the master password, unless the agent already holds it) and, for `sesh aws`, the network round-trip to AWS STS. The first unlock of a day also makes the automatic backup: an integrity check and a copy of the vault file.
 
 ## Implementation Details
 
@@ -494,17 +571,34 @@ The dominant cost in any sesh invocation is unlocking the vault (deriving the ke
 sesh/
 ├── sesh/cmd/sesh/         # Command layer: one file per command or group
 ├── internal/              # Core implementation
-│   ├── password/          # Password manager core (store, search, import, export)
+│   ├── password/          # Listing, search, sesh's export and import, generation, strength
 │   ├── tui/               # sesh ui
 │   ├── provider/          # Flags shared by commands; the AWS provider
 │   │   └── aws/
 │   ├── setup/             # sesh aws setup
-│   ├── database/          # SQLite store, encryption, migrations
+│   ├── aws/               # The AWS CLI: STS and the MFA device
+│   ├── database/          # SQLite store, encryption, history, trash, audit log
 │   ├── agent/             # The background agent that holds the key
 │   ├── vault/             # Entries and the Store interface
-│   ├── importer/          # Other apps' exports
-│   ├── secure/            # Memory security
-│   └── */                 # Focused packages
+│   ├── config/            # Settings: flags > environment > config file > defaults
+│   ├── kdf/               # Argon2id settings and their bounds
+│   ├── keywrap/           # Wrapping the vault key to a public key (P-256 ECDH, HKDF, AES-GCM)
+│   ├── touchid/           # Touch ID unlock: a Secure Enclave key, touchid.key beside the vault
+│   ├── recovery/          # The recovery key
+│   ├── backup/            # Automatic and manual backups, next to the vault
+│   ├── screenlock/        # Whether the Mac's screen is locked
+│   ├── importer/          # Other apps' exports: bitwarden, browser, gauth, keepass, seshexport
+│   ├── secretref/         # sesh://<id>[#field] references, for run and inject
+│   ├── mask/              # Hiding secrets in sesh run's output
+│   ├── health/            # The password health report
+│   ├── totp/              # TOTP codes and otpauth:// links
+│   ├── qrcode/            # Reading and drawing QR codes
+│   ├── clipboard/         # The clipboard, cleared after a while
+│   ├── exportfile/        # Writing an export whole
+│   ├── atomicfile/        # Replacing a file safely
+│   ├── subshell/          # The AWS subshell
+│   ├── shell/, env/       # Shell quoting and environment helpers
+│   └── secure/            # Memory security
 └── docs/                  # Documentation
 ```
 
@@ -514,7 +608,7 @@ sesh/
 - Defined trust boundaries
 - Explicit secret flow paths (vault → command → output, clipboard, or subshell) — no implicit or hidden data paths
 - Layered security implementation
-- An audit log of every secret read, change, and delete (`sesh audit`)
+- An audit log of every secret copied, printed or revealed, every change and delete (`sesh audit`); codes drawn in `sesh ui`'s list aren't recorded
 
 **Developers:**
 - One function per command
