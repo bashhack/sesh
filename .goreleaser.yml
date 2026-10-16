@@ -43,7 +43,7 @@ archives:
       {{- else }}{{ .Arch }}{{ end }}
     format_overrides:
       - goos: darwin
-        format: zip
+        formats: [zip]
     files:
       - README.md
       - LICENSE
