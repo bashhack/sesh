@@ -163,3 +163,39 @@ func TestShow_Refusals(t *testing.T) {
 		}
 	}
 }
+
+// A TOTP entry's key moves to a phone as a QR code or an otpauth:// link; either is recorded as reading it.
+func TestShow_TOTPKey(t *testing.T) {
+	env := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_MASTER_PASSWORD", "edit-password-1234")
+	populatePasswordStore(t, env, map[string]string{"totp/github/alice": "JBSWY3DPEHPK3PXP", "totp/google": "JBSWY3DPEHPK3PXP", "password/github/alice": "pw"})
+	before := auditEvents(t, env.dbPath)
+	out, err := runShowOut(t, "totp/github/alice", "--uri")
+	if err != nil || out != "otpauth://totp/github:alice?secret=JBSWY3DPEHPK3PXP&issuer=github\n" {
+		t.Errorf("--uri: %q, %v", out, err)
+	}
+	// With no username, its name stands for the account too.
+	if out, err := runShowOut(t, "totp/google", "--uri"); err != nil || out != "otpauth://totp/google:google?secret=JBSWY3DPEHPK3PXP&issuer=google\n" {
+		t.Errorf("no username: %q, %v", out, err)
+	}
+	app := agentTestApp()
+	if err := runShow(app, []string{"totp/github/alice", "--qr"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, said := app.Stdout.(*bytes.Buffer).String(), app.Stderr.(*bytes.Buffer).String(); !strings.Contains(out, "▀") || !strings.Contains(said, "it adds github (alice)") {
+		t.Errorf("--qr: %q\n%s", said, out)
+	}
+	if after := auditEvents(t, env.dbPath); after["access"] != before["access"]+3 {
+		t.Errorf("access events before %d, after %d; want the key read three times", before["access"], after["access"])
+	}
+	for args, wantSub := range map[string]string{
+		"password/github/alice --qr":     "isn't a TOTP entry",
+		"totp/github/alice --qr --uri":   "choose one",
+		"totp/github/alice --uri --json": "leave out --reveal and --json",
+	} {
+		if _, err := runShowOut(t, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("%s: %v, want %q", args, err, wantSub)
+		}
+	}
+}

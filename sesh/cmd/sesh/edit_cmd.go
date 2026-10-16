@@ -25,9 +25,8 @@ var readSecret = func() ([]byte, error) { return term.ReadPassword(int(os.Stdin.
 type editFlags struct {
 	service, username, kind string
 	details                 provider.DetailsFlags
-	length                  int
-	secret, generate        bool
-	noSymbols, force        bool
+	gen                     genFlags
+	secret, generate, force bool
 }
 
 // addEditFlags defines sesh edit's flags on fs.
@@ -38,8 +37,7 @@ func addEditFlags(fs *flag.FlagSet) *editFlags {
 	fs.StringVar(&f.kind, "type", "", "New kind: password, api_key, or secure_note")
 	fs.BoolVar(&f.secret, "secret", false, "Type a new secret (a note reads stdin)")
 	fs.BoolVar(&f.generate, "generate", false, "Generate a new password")
-	fs.IntVar(&f.length, "length", 24, "Generated password length")
-	fs.BoolVar(&f.noSymbols, "no-symbols", false, "Generate without symbols")
+	f.gen.register(fs)
 	fs.BoolVar(&f.force, "force", false, "Don't ask before renaming an AWS profile's MFA entry, which sesh aws then won't find")
 	f.details.Register(fs)
 	return f
@@ -53,6 +51,7 @@ const editUsage = `Usage: sesh edit <entry> [flags]
   sesh edit github --rename github-work
   sesh edit github --username alicia     ("" removes it)
   sesh edit github --secret              (or --generate [--length N] [--no-symbols])
+  sesh edit github --generate --words 6  (a passphrase [--separator S] [--capitalize])
   sesh edit openai --type password       (password, api_key, secure_note)
   sesh edit github --url https://github.com/login   ("" removes it)
   sesh edit github --field recovery-email=alice@example.com
@@ -92,8 +91,8 @@ func runEdit(app *App, args []string) error {
 	}
 	set := map[string]bool{}
 	fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
-	if (set["length"] || set["no-symbols"]) && !f.generate {
-		return errors.New("--length and --no-symbols shape a generated password: add --generate")
+	if err := f.gen.parsed(set, f.generate); err != nil {
+		return err
 	}
 
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
@@ -278,7 +277,7 @@ func runEdit(app *App, args []string) error {
 	}
 	if weak {
 		if f.generate {
-			fmt.Fprintln(app.Stderr, "⚠️  A password this short is easy to guess; use --length 12 or more.") //nolint:errcheck // best-effort warning
+			fmt.Fprintf(app.Stderr, "⚠️  A %s this short is easy to guess; %s.\n", f.gen.noun(), f.gen.stronger()) //nolint:errcheck // best-effort warning
 		} else {
 			fmt.Fprintln(app.Stderr, "⚠️  This password is easy to guess: a cracking program would likely find it in under 100 million tries. It's stored; for a strong one, use --generate.") //nolint:errcheck // best-effort warning
 		}
@@ -339,12 +338,7 @@ func checkEditSecret(from, to vault.Key, f *editFlags) error {
 	case f.generate && to.Kind == vault.KindNote:
 		return errors.New("a note isn't generated: give it with --secret")
 	case f.generate:
-		opts := password.DefaultGenerateOptions()
-		opts.Length = f.length
-		opts.Symbols = !f.noSymbols
-		if err := opts.Check(); err != nil {
-			return fmt.Errorf("--length: %w", err)
-		}
+		return f.gen.check()
 	}
 	return nil
 }
@@ -414,10 +408,7 @@ func askNames(app *App, from vault.Key) (vault.Key, error) {
 // terminal, read from stdin, up to the size an entry can hold).
 func newSecret(app *App, to vault.Key, f *editFlags, terminal bool) ([]byte, bool, error) {
 	if f.generate {
-		opts := password.DefaultGenerateOptions()
-		opts.Length = f.length
-		opts.Symbols = !f.noSymbols
-		secret, err := password.GeneratePassword(opts)
+		secret, err := f.gen.generate()
 		if err != nil {
 			return nil, false, err
 		}

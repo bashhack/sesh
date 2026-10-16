@@ -1097,3 +1097,20 @@ func TestLockOnQuit(t *testing.T) {
 		t.Errorf("unreadable: %q", said)
 	}
 }
+
+// The app reads a QR code from an image file typed as a full path or from ~/, giving its link.
+func TestUIReadQRImage(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	link := "otpauth://totp/Shop:dee?secret=JBSWY3DPEHPK3PXP&issuer=Shop"
+	writeQR(t, filepath.Join(home, "shot.png"), link)
+	for _, typed := range []string{"~/shot.png", filepath.Join(home, "shot.png")} {
+		qr, err := uiReadQRImage(typed)
+		if err != nil || string(qr.Link) != link || qr.Issuer != "Shop" || qr.Account != "dee" {
+			t.Errorf("%s: %+v, %v", typed, qr, err)
+		}
+	}
+	if _, err := uiReadQRImage("shot.png"); err == nil || !strings.Contains(err.Error(), "isn't a full path") {
+		t.Errorf("a relative path: %v", err)
+	}
+}

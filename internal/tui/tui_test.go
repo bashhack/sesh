@@ -1911,13 +1911,13 @@ func TestEditGenerateAndNameTaken(t *testing.T) {
 	f := newFake()
 	var asked []generating
 	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, Generate: func(length int, symbols bool) ([]byte, error) {
-		asked = append(asked, generating{length, symbols})
+		asked = append(asked, generating{length: length, symbols: symbols})
 		return []byte("generated-pw"), nil
 	}})
 	a.press("ctrl+k", "e")
 	a.tabs(3)
 	a.press("→", "→", "ctrl+s")
-	if len(f.saves) != 1 || string(f.saves[0].Secret) != "generated-pw" || len(a.copied) != 1 || a.copied[0] != "generated-pw" || !slices.Equal(asked, []generating{{24, true}}) {
+	if len(f.saves) != 1 || string(f.saves[0].Secret) != "generated-pw" || len(a.copied) != 1 || a.copied[0] != "generated-pw" || !slices.Equal(asked, []generating{{length: 24, symbols: true}}) {
 		t.Fatalf("saves %+v, copied %q, asked %v", f.saves, a.copied, asked)
 	}
 	// Its length, and letters and digits only.
@@ -1928,7 +1928,7 @@ func TestEditGenerateAndNameTaken(t *testing.T) {
 		t.Fatalf("a length that isn't one:\n%s", a.screen())
 	}
 	a.press("backspace", "16", "tab", "→", "ctrl+s")
-	if !slices.Equal(asked, []generating{{24, true}, {16, false}}) {
+	if !slices.Equal(asked, []generating{{length: 24, symbols: true}, {length: 16}}) {
 		t.Fatalf("asked %v:\n%s", asked, a.screen())
 	}
 	if s := a.screen(); !strings.Contains(s, "new password") || !strings.Contains(s, "clears in 30 seconds") {
@@ -1959,7 +1959,7 @@ func TestGenerator(t *testing.T) {
 	f := newFake()
 	var asked []generating
 	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, IsWeak: func(pw []byte) bool { return len(asked) > 0 && asked[len(asked)-1].length < 12 }, Generate: func(length int, symbols bool) ([]byte, error) {
-		asked = append(asked, generating{length, symbols})
+		asked = append(asked, generating{length: length, symbols: symbols})
 		if length > 1024 {
 			return nil, errors.New("password length 2000 is more than the 1024 sesh makes")
 		}
@@ -1974,7 +1974,7 @@ func TestGenerator(t *testing.T) {
 		t.Fatalf("too long:\n%s", s)
 	}
 	a.press("shift+tab", "ctrl+u", "12", "tab", "→", "enter")
-	if a.form != nil || !slices.Equal(a.copied, []string{"made-pw"}) || asked[len(asked)-1] != (generating{12, false}) || len(f.saves) != 0 {
+	if a.form != nil || !slices.Equal(a.copied, []string{"made-pw"}) || asked[len(asked)-1] != (generating{length: 12}) || len(f.saves) != 0 {
 		t.Errorf("generated: copied %q, asked %v, saves %d:\n%s", a.copied, asked, len(f.saves), a.screen())
 	}
 	if s := a.screen(); !strings.Contains(s, "Copied a new password of 12 characters") || a.clipUntil.IsZero() {
@@ -1983,6 +1983,66 @@ func TestGenerator(t *testing.T) {
 	a.press("ctrl+g", "p", "ctrl+u", "6", "enter", "enter")
 	if s := a.screen(); !strings.Contains(s, "easy to guess") {
 		t.Errorf("a short one:\n%s", s)
+	}
+}
+
+// The generator makes a passphrase where the app can: words, what goes between them, and capitals; characters otherwise.
+func TestGeneratorPassphrase(t *testing.T) {
+	f := newFake()
+	var asked []generating
+	a := newApp(t, f, Options{ClearAfter: 30 * time.Second,
+		Generate: func(length int, symbols bool) ([]byte, error) {
+			asked = append(asked, generating{length: length, symbols: symbols})
+			return []byte("made-pw"), nil
+		},
+		Passphrase: func(words int, separator string, capitalize bool) ([]byte, error) {
+			asked = append(asked, generating{words: words, separator: separator, capitalize: capitalize})
+			if words > 20 {
+				return nil, errors.New("a passphrase has 3 to 20 words, not 30")
+			}
+			return []byte("made-words"), nil
+		},
+	})
+	a.press("ctrl+g", "p")
+	if s := a.screen(); !strings.Contains(s, "random characters") || strings.Contains(s, "between words") {
+		t.Fatalf("the generator, as characters:\n%s", s)
+	}
+	a.press("→")
+	if s := a.screen(); !strings.Contains(s, "between words") || strings.Contains(s, "letters, digits and symbols") {
+		t.Fatalf("the generator, as words:\n%s", s)
+	}
+	a.press("ctrl+s")
+	if want := (generating{words: 6, separator: "-"}); len(asked) != 1 || asked[0] != want || !slices.Equal(a.copied, []string{"made-words"}) {
+		t.Fatalf("asked %+v, copied %q", asked, a.copied)
+	}
+	if s := a.screen(); !strings.Contains(s, "Copied a new passphrase of 6 words") {
+		t.Errorf("what's said:\n%s", s)
+	}
+	// A space between them is kept; capitals; a number refused is said.
+	a.press("ctrl+g", "p", "→", "tab", "ctrl+u", "30", "tab", "ctrl+u", "space", "tab", "→", "enter")
+	if want := (generating{words: 30, separator: " ", capitalize: true}); asked[len(asked)-1] != want || !strings.Contains(a.screen(), "Not generated: a passphrase has 3 to 20 words") {
+		t.Fatalf("asked %+v:\n%s", asked, a.screen())
+	}
+	a.press("shift+tab", "shift+tab", "ctrl+u", "x", "ctrl+s")
+	if s := a.screen(); !strings.Contains(s, "The words are a whole number") {
+		t.Errorf("words that aren't a number:\n%s", s)
+	}
+}
+
+// Generating in the add form can make a passphrase too.
+func TestAddGeneratesPassphrase(t *testing.T) {
+	f := newFake()
+	var asked []generating
+	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, Passphrase: func(words int, separator string, capitalize bool) ([]byte, error) {
+		asked = append(asked, generating{words: words, separator: separator, capitalize: capitalize})
+		return []byte("made-words"), nil
+	}})
+	a.press("ctrl+g", "a")
+	a.press("tab", "bank")
+	a.tabs(2)
+	a.press("→", "tab", "→", "ctrl+s")
+	if len(f.saves) != 1 || string(f.saves[0].Secret) != "made-words" || len(asked) != 1 || asked[0].words != 6 {
+		t.Fatalf("saves %+v, asked %+v:\n%s", f.saves, asked, a.screen())
 	}
 }
 
@@ -3251,4 +3311,126 @@ func (f *fakeVault) StartImport(source string, files []string, password []byte) 
 		return nil, NeedsPassword("Bitwarden export")
 	}
 	return f.importing, nil
+}
+
+// A TOTP entry's menu shows its key as a QR code, read as the audit log records; c copies the link; a small window says what it needs.
+func TestShowQR(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{ClearAfter: 30 * time.Second})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
+	for i := 0; a.selected() == nil || a.selected().Key != code; i++ {
+		if i > 5 {
+			t.Fatal("the TOTP entry isn't listed")
+		}
+		a.press("down")
+	}
+	a.press("ctrl+k", "q")
+	if s := a.screen(); a.ov == nil || a.ov.kind != panelQR || !strings.Contains(s, "▀") || !strings.Contains(s, "it adds github") {
+		t.Fatalf("the QR panel:\n%s", s)
+	}
+	if !slices.Contains(f.reads, "secret "+code.String()+" in sesh ui, to show its key as a QR code") {
+		t.Errorf("reads %q", f.reads)
+	}
+	a.press("c")
+	if len(a.copied) != 1 || !strings.HasPrefix(a.copied[0], "otpauth://totp/github:alice?secret=") {
+		t.Errorf("copied %q", a.copied)
+	}
+	if s := a.screen(); !strings.Contains(s, "close (30s)") {
+		t.Errorf("no countdown:\n%s", s)
+	}
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	if s := a.screen(); strings.Contains(s, "▀") || !strings.Contains(s, "too small for the QR code") {
+		t.Errorf("a small window:\n%s", s)
+	}
+	// It says how wide a window it needs, and draws there.
+	width := lipgloss.Width(a.ov.qr[0]) + 12
+	a.Update(tea.WindowSizeMsg{Width: width - 1, Height: 50})
+	if s := a.screen(); strings.Contains(s, "▀") || !strings.Contains(s, "needs about "+strconv.Itoa(width)+" columns") {
+		t.Errorf("a column short:\n%s", s)
+	}
+	a.Update(tea.WindowSizeMsg{Width: width, Height: 50})
+	if s := a.screen(); !strings.Contains(s, "▀") {
+		t.Errorf("wide enough:\n%s", s)
+	}
+	a.press("esc")
+	if a.ov == nil || a.ov.kind != panelMenu {
+		t.Fatal("esc didn't go back to the menu")
+	}
+	// A password's menu doesn't offer it.
+	a.press("esc", "up")
+	if a.ov != nil || a.selected().Kind != vault.KindPassword {
+		t.Fatalf("not back on the password: %+v", a.selected())
+	}
+	a.press("ctrl+k")
+	if strings.Contains(a.screen(), "QR code") {
+		t.Errorf("offered for a password:\n%s", a.screen())
+	}
+}
+
+// Adding a TOTP entry can read its QR code from an image file, the path as typed; one that can't be read is said in the form.
+func TestAddQRImage(t *testing.T) {
+	f := newFake()
+	link := "otpauth://totp/Shop:dee?secret=JBSWY3DPEHPK3PXP&issuer=Shop"
+	var paths []string
+	a := newApp(t, f, Options{ReadQRImage: func(path string) (ScannedQR, error) {
+		paths = append(paths, path)
+		if path != "~/shot.png" {
+			return ScannedQR{}, errors.New("no QR code found in " + path)
+		}
+		return ScannedQR{Link: []byte(link), Issuer: "Shop", Account: "dee"}, nil
+	}})
+	a.press("ctrl+g", "a", "→", "→", "→") // TOTP
+	a.tabs(3)                             // name, account, then the key's choice
+	a.press("→")
+	if s := a.screen(); a.form.inputs[a.form.focus].choices[1] != totpImage || len(a.form.inputs[a.form.focus].choices) != 2 || !strings.Contains(s, "image file") || strings.Contains(s, "scanning") {
+		t.Fatalf("the choice:\n%s", s)
+	}
+	a.press("ctrl+s")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "Give the image file") || len(paths) != 0 {
+		t.Fatalf("no file:\n%s", s)
+	}
+	a.press("tab", "~/other.png", "ctrl+s")
+	if s := a.screen(); len(f.saves) != 0 || a.form == nil || !strings.Contains(s, "No QR code read: no QR code found in ~/other.png") {
+		t.Fatalf("a file without a code:\n%s", s)
+	}
+	a.press("ctrl+u", "~/shot.png", "ctrl+s")
+	if len(f.saves) != 1 || f.saves[0].To != (vault.Key{Kind: vault.KindTOTP, Service: "Shop", Username: "dee"}) || string(f.saves[0].Secret) != link {
+		t.Fatalf("saves %+v:\n%s", f.saves, a.screen())
+	}
+}
+
+// A long link's QR code, wider than a panel usually is, widens its panel to fit.
+func TestShowQRWide(t *testing.T) {
+	f := newFake()
+	long := vault.Key{Kind: vault.KindTOTP, Service: "Example Company VPN", Username: "alice.longname@example-company.com"}
+	f.entries = append(f.entries, vault.Entry{Key: long, Settings: vault.Settings{TOTP: totp.Params{Algorithm: "SHA512", Digits: 8, Period: 60}}})
+	f.secrets[long] = strings.Repeat("JBSWY3DPEHPK3PXP", 4)
+	a := newApp(t, f, Options{})
+	a.Update(tea.WindowSizeMsg{Width: 160, Height: 60})
+	a.press("example", "ctrl+k", "q")
+	if a.ov == nil || a.ov.kind != panelQR || len(a.ov.qr) == 0 || lipgloss.Width(a.ov.qr[0]) <= 58 {
+		t.Fatalf("not a wide code:\n%s", a.screen())
+	}
+	if s := a.screen(); !strings.Contains(s, "▀") {
+		t.Errorf("not drawn:\n%s", s)
+	}
+}
+
+// The QR code closes after as long as a secret revealed shows, back to the menu.
+func TestShowQRCloses(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
+	for a.selected() == nil || a.selected().Key != code {
+		a.press("down")
+	}
+	a.press("ctrl+k", "q")
+	a.tick(revealFor - time.Second)
+	if a.ov == nil || a.ov.kind != panelQR {
+		t.Fatal("closed early")
+	}
+	a.tick(time.Second)
+	if s := a.screen(); a.ov == nil || a.ov.kind != panelMenu || !strings.Contains(s, "The QR code closed after 30 seconds") {
+		t.Errorf("still open, or not said:\n%s", s)
+	}
 }

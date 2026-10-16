@@ -297,16 +297,16 @@ $ sesh config set clipboard_timeout 15s
 | `sesh copy <entry>` | Copies its password, API key or note, or a TOTP entry's current code; the clipboard clears after `clipboard_timeout` | `--username`, `--url`, or `--field NAME` (a custom field, or `notes`) copies that instead |
 | `sesh get <entry>` | Prints the same, for a pipe or a script | `--username`, `--url`, `--field NAME`, as for copy; `--json` |
 | `sesh code <entry>` | Prints a TOTP entry's current code, and how long it has left | `--json` |
-| `sesh show <entry>` | Shows the entry: its URL, folder, tags, notes and fields, with secrets hidden | `--reveal` shows them; `--json` |
+| `sesh show <entry>` | Shows the entry: its URL, folder, tags, notes and fields, with secrets hidden | `--reveal` shows them; `--json`; for a TOTP entry, `--qr` draws its key as a QR code for a phone, `--uri` prints its `otpauth://` link |
 | `sesh open <entry>` | Opens its URL in the browser (http and https only) | |
 
 **Changing entries.**
 
 | Command | What it does | Flags |
 |---------|--------------|-------|
-| `sesh add password\|key\|note\|totp [<name>]` | Adds an entry. The secret is typed hidden, or piped in; a TOTP entry's key can be an `otpauth://` link | `--username U`; `--generate [--length N] [--no-symbols]` (a password, copied as it's saved); `--qr` (a TOTP key from a QR code on screen); `--folder F`, `--tag T`; `--url U`, `--notes [--editor]`, `--field name=value`, `--secret-field name`; `--force` replaces an entry of that name without asking |
-| `sesh edit <entry>` | Renames it, or changes its username, kind, secret, URL, notes or fields | `--rename N`, `--username U`, `--type password\|api_key\|secure_note`, `--secret`, `--generate [--length N] [--no-symbols]`, `--url`, `--notes [--editor]`, `--field`, `--secret-field`, `--remove-field`, `--rename-field old=new`, `--plain-field name`, `--force` |
-| `sesh generate` | Prints a new random password, stored nowhere | `--length N` (default 24), `--no-symbols`, `--copy` copies it instead |
+| `sesh add password\|key\|note\|totp [<name>]` | Adds an entry. The secret is typed hidden, or piped in; a TOTP entry's key can be an `otpauth://` link | `--username U`; `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]` (a password or passphrase, copied as it's saved); `--qr` (a TOTP key from a QR code on screen) or `--qr-image FILE` (from one in a PNG or JPEG); `--folder F`, `--tag T`; `--url U`, `--notes [--editor]`, `--field name=value`, `--secret-field name`; `--force` replaces an entry of that name without asking |
+| `sesh edit <entry>` | Renames it, or changes its username, kind, secret, URL, notes or fields | `--rename N`, `--username U`, `--type password\|api_key\|secure_note`, `--secret`, `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]`, `--url`, `--notes [--editor]`, `--field`, `--secret-field`, `--remove-field`, `--rename-field old=new`, `--plain-field name`, `--force` |
+| `sesh generate` | Prints a new random password, stored nowhere | `--length N` (default 24), `--no-symbols`; or a passphrase: `--words N` (3 to 20), `--separator S` (default `-`), `--capitalize`; `--copy` copies it instead |
 | `sesh trash <entry>…` | Moves entries to the trash; asks first | `--purge` deletes for good; `--force` doesn't ask |
 | `sesh trash list\|restore\|remove\|empty` | The trash: see [The trash](#the-trash) | |
 | `sesh history <entry>` | Its earlier secrets: see [Password history](#password-history) | `--show N`, `--clip N`, `--restore N`, `--forget N,...` |
@@ -321,7 +321,7 @@ $ sesh config set clipboard_timeout 15s
 | `sesh lock` | Locks sesh: the next command asks for the master password | |
 | `sesh passwd` | Changes the master password | |
 
-`sesh backup`, `sesh restore`, `sesh health`, `sesh doctor`, `sesh audit`, `sesh recovery`, `sesh recover`, `sesh touchid`, `sesh config`, `sesh init`, `sesh agent`, `sesh run`, `sesh inject` and `sesh ui` each have their own section below.
+`sesh backup`, `sesh restore`, `sesh health`, `sesh doctor`, `sesh audit`, `sesh recovery`, `sesh recover`, `sesh touchid`, `sesh config`, `sesh init`, `sesh agent`, `sesh run`, `sesh inject`, `sesh git-credential` and `sesh ui` each have their own section below.
 
 ### AWS Options (`sesh aws`)
 
@@ -885,6 +885,14 @@ sesh list totp
 #     google            TOTP  totp/google
 ```
 
+**Moving a key to your phone.** `sesh show <entry> --qr` draws a TOTP entry's key as a QR code in the terminal, for an authenticator app to scan; `--uri` prints its `otpauth://` link instead, for an app that takes one pasted. Both show the key, so the audit log records them as reading it; clear the screen once it's scanned. In `sesh ui`, a TOTP entry's actions (Ctrl-K) offer the same as **show the key as a QR code…**, where `c` copies the link; it closes after 30 seconds.
+
+```bash
+sesh show totp github --qr
+sesh show totp github --uri
+# otpauth://totp/github:alice?secret=JBSWY3DPEHPK3PXP&issuer=github
+```
+
 `sesh code` takes only TOTP entries, so `sesh code github` doesn't need `totp`. Near the end of a code's time (5 seconds or less), it prints the next code too. `sesh copy` and `sesh get` give a TOTP entry's current code, as they give another entry's secret.
 
 TOTP entries are entries like any other: they're in `sesh list`, `sesh search`, `sesh ui`, and exports. `sesh aws`'s MFA secret for a profile is the TOTP entry `aws` with the profile as its username (`totp/aws/default`), and it remembers the MFA device with it.
@@ -899,6 +907,9 @@ sesh add password github --username alice --generate
 
 # Generate without symbols, custom length
 sesh add password stripe --username alice --generate --no-symbols --length 32
+
+# Generate a passphrase: six words, easier to type and remember
+sesh add password laptop --generate --words 6
 
 # Store a password typed in (asked for, hidden). An easy-to-guess
 # password is stored with a warning and the command to replace it.
@@ -915,6 +926,10 @@ sesh add key stripe --username admin
 
 # A new password, stored nowhere
 sesh generate
+
+# A new passphrase, stored nowhere
+sesh generate --words 6
+# crispy-velvet-onion-tumble-harbor-plank
 
 # Search across all entries: see "Searching" below
 sesh search github
@@ -941,6 +956,8 @@ sesh import --from sesh backup.csv --on-conflict skip
 # JSON output for scripting
 sesh search stripe --json
 ```
+
+**Passphrases.** `--words N` makes a passphrase instead of random characters, with `sesh generate`, and with `--generate` on `sesh add password` and `sesh edit`: N words (3 to 20) chosen at random from the [EFF's long word list](https://www.eff.org/dice) (7,776 words, by the Electronic Frontier Foundation, under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Each word adds about 12.9 bits, so 6 words are about 77 bits, as strong as 12 random characters of letters, digits and symbols, and easier to type and remember. `--separator` goes between them (`-` unless given; a space, or `""` for none), and `--capitalize` starts each with a capital, for a site that asks for one.
 
 Values you ask for (`sesh get`, `sesh code`, and `--json` output) go to stdout, and status messages go to stderr, so they can be captured or piped:
 
@@ -1101,8 +1118,8 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
 - **Enter copies** the selected entry's secret, or a TOTP entry's current code; **Ctrl-Y** copies its username. The clipboard clears after `clipboard_timeout`, as with `sesh copy`, and the footer counts down until it does.
 - **Ctrl-K opens the actions** on the selected entry, each run by its letter (or ↑↓ and Enter); Esc goes back, and closes them. (With text after the cursor in the search, Ctrl-K deletes it instead, as in a shell.) A change asks first, and only `y` is a yes, not Enter, and not one typed in the same breath as the key that asked:
   - **edit…** (`e`), and **add an entry…** (`a`, under Ctrl-G): a form. Tab and Shift-Tab move between its inputs, Ctrl-S saves, and Esc cancels (twice, once something's been typed).
-    - **Editing** changes the name, username, URL, folder, tags, notes and fields, and the secret if you choose to: typed, unseen, or generated, to the length you give (24 unless you say), with symbols or letters and digits only; a generated password is copied when it's saved, since you haven't seen it. A password, API key or secure note can become another of the three, keeping its secret and username, as `sesh edit --type` does: a note's text becomes the password or key, and theirs the note's; one with notes is made a note only once they're removed, and notes or a note's text changed in the form must be saved before the kind is changed: the form refuses both at once. A TOTP entry stays one. While you keep it, the current password or key is shown as dots, and Ctrl-R reads it and shows it (the audit log records the read). A TOTP entry takes a new key, or an `otpauth://` link, or keeps the one it has; a key alone makes the usual codes (6 digits every 30 seconds), and a link sets its own. A save is all or nothing: if any part is refused, nothing changes.
-    - **Adding** makes a password, an API key, a secure note (which needs its text), or a TOTP entry: its key pasted, or an `otpauth://` link, which also sets the code's digits, period and algorithm; or, on macOS (not over SSH, where the screen is another's), read from a QR code on screen, as `sesh add totp --qr` does: choose **scan a QR code on screen**, save, then select the area of the screen with the code (Esc there cancels). The code's issuer and account fill a name and username left empty, and show in the form. Ctrl-C meanwhile quits once the capture ends, saving nothing.
+    - **Editing** changes the name, username, URL, folder, tags, notes and fields, and the secret if you choose to: typed, unseen, or generated: random characters, to the length you give (24 unless you say), with symbols or letters and digits only, or a passphrase of words (6 unless you say), with what goes between them and whether each starts with a capital; a generated password is copied when it's saved, since you haven't seen it. A password, API key or secure note can become another of the three, keeping its secret and username, as `sesh edit --type` does: a note's text becomes the password or key, and theirs the note's; one with notes is made a note only once they're removed, and notes or a note's text changed in the form must be saved before the kind is changed: the form refuses both at once. A TOTP entry stays one. While you keep it, the current password or key is shown as dots, and Ctrl-R reads it and shows it (the audit log records the read). A TOTP entry takes a new key, or an `otpauth://` link, or keeps the one it has; a key alone makes the usual codes (6 digits every 30 seconds), and a link sets its own. A save is all or nothing: if any part is refused, nothing changes.
+    - **Adding** makes a password, an API key, a secure note (which needs its text), or a TOTP entry: its key pasted, or an `otpauth://` link, which also sets the code's digits, period and algorithm; or read from a QR code. On macOS (not over SSH, where the screen is another's), **scan a QR code on screen** reads one as `sesh add totp --qr` does: save, then select the area of the screen with the code (Esc there cancels); Ctrl-C meanwhile quits once the capture ends, saving nothing. Anywhere, **read a QR code from an image file** reads one from a screenshot or photo, as `sesh add totp --qr-image` does: give its full path, or one from `~/`. The code's issuer and account fill a name and username left empty, and show in the form.
     - **Notes** are typed in the form; Ctrl-E opens them in your editor (`$VISUAL`, then `$EDITOR`), as `sesh edit --notes --editor` does. They're saved only if changed. An entry whose notes couldn't be read can't be edited in the app; the message says why.
     - **Fields:** `a` adds one, Enter edits it (its name, whether it's secret, its value), `x` removes it. Two fields can't have names that differ only in case. A secret field made plain needs its value typed.
     - **Secrets typed** (a new secret, a TOTP key, a secret field's value) show as dots; Ctrl-R shows what you've typed, and hides it again, as does moving to another input. A secret field an entry already has isn't read until it's needed: its input shows dots; Ctrl-R there reads its value and shows it, as renaming it reads it to keep it (the audit log records either read); typing replaces it.
@@ -1112,10 +1129,11 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
   - **earlier secrets…** (`h`): its [password history](#password-history); Enter copies a version, `r` makes it the secret again, and `x` deletes it for good, each after a yes. Each acts on the version you chose, even if another command has changed the entry's secret since and its number with it; one that's no longer there is said, and the list shown as it is;
   - **move to the trash** (`d`): see [the trash](#the-trash); after a yes;
   - **delete for good** (`x`): skips the trash, so it can't be put back, nor its earlier secrets; after a yes;
-  - also **copy the username** (`u`) and **open the URL** (`o`).
+  - also **copy the username** (`u`) and **open the URL** (`o`);
+  - for a TOTP entry, **show the key as a QR code…** (`q`): the key drawn for an authenticator app on a phone to scan, as `sesh show --qr` does (the audit log records the read); `c` copies its `otpauth://` link instead, and Esc closes it; it closes itself after 30 seconds, as a secret revealed hides. The panel widens to fit the code; a window too small for it says how big it needs to be.
 - **Ctrl-G opens sesh's own actions,** from the search, the list or the sidebar, each run by its letter as Ctrl-K's are. Ctrl-K opens them too when no entry is selected, and its **sesh's actions…** (`g`) opens them from an entry or those marked, for a terminal that keeps Ctrl-G for itself (zellij does):
   - **add an entry…** (`a`): the form above;
-  - **generate a password…** (`p`): the length, and symbols or letters and digits only; Enter makes one and copies it, as `sesh generate --copy` does, storing it nowhere;
+  - **generate a password…** (`p`): random characters (the length, and symbols or letters and digits only) or a passphrase (how many words, what goes between them, and capitals); Enter makes one and copies it, as `sesh generate --copy` does, storing it nowhere;
   - **folders and tags…** (`f`): the sidebar's rows, in any window: Enter shows a row's entries, and `r` renames the folder (with those inside it) or tag;
   - **the trash…** (`t`): each entry with its kind, when it was deleted, and its trash id; Enter puts one back; Space marks entries, and `x` then deletes those marked for good; `a` puts it back under another name, typed as its ID (as `sesh trash restore --as` takes it), for one whose name is taken now; `x` deletes it for good, and `e` empties the trash of what it lists (an entry trashed meanwhile stays), each after a yes;
   - **backups…** (`b`): the vault's [backups](#backups) newest first, with when each was made and its size; another vault's with the same file name is marked. Enter restores the vault from the selected one, asking first with what `sesh restore` says: the vault as it is is backed up first, and the app then locks, since the backup opens with the master password it had then. A vault that's missing or damaged is restored from the command line. `n` backs up now (pruned to `backup.keep`), `f` to a file or folder you type, as a full path or one starting with `~/` (asking before replacing a file, and refusing the vault's own files), `x` deletes the selected backup, and `a` deletes this vault's backups and makes a fresh one, for when an old master password or recovery key may have leaked; each delete asks first.
@@ -1390,6 +1408,20 @@ sesh inject -i config.yml.tpl -o config.yml
 - **The file** is readable only by you (0600). It's written whole to a new file next to the target, then renamed into place, so nothing reads half of it. A file already there is replaced; a symlink there is replaced by the file, not followed. `-o` can't be the template itself.
 - **Failures:** if a reference doesn't resolve, nothing is written. A template can be up to 16 MiB.
 - **Plaintext on disk:** the filled file holds the secrets, so delete it when you're done. `sesh run` keeps them off disk.
+
+### Git credentials (`sesh git-credential`)
+
+`sesh git-credential` is a [git credential helper](https://git-scm.com/docs/gitcredentials): when git needs a password or token for an HTTPS remote, it asks sesh, and gets the one you stored. Set it up once:
+
+```bash
+git config --global credential.helper '!sesh git-credential'
+```
+
+- **Which entry:** for `https://github.com/...`, the password or API key entry whose URL is on `github.com`, over https too (`sesh add key github-token --username alice --url https://github.com`). A URL without `https://` counts as https; a port must match, except https's own 443 (or http's 80). When git names a username (in the remote's URL, or `credential.username`), the entry with that username is given; failing that, one with no username, such as a token's. Otherwise the entry's username is given to git with the password; an entry with none leaves git to ask for one, so give a token's entry the username it goes with.
+- **None, or several:** sesh gives nothing, and git asks as it would without it. With several, sesh says which, and how to tell them apart: give each a different URL, or name the username for git (`git config --global credential.https://github.com.username alice`).
+- **Store and erase:** git also asks a helper to store a password that worked, and to erase one a site refused. sesh does neither: it gives only what you added, and a password refused once (a typo in a username, say) stays in the vault. Change it with `sesh edit`.
+- **Unlocking:** reading the password is recorded in the audit log, as `sesh get` is. When sesh needs the master password, it asks at the terminal, as git's own questions are; Touch ID unlock and a running agent work as for any command.
+
 ### Importing from other apps (`sesh import`)
 
 `sesh import` brings entries over from another app: Bitwarden, KeePass (KeePassXC or KeePass 2), Chrome, Firefox, Safari, or Google Authenticator; or from sesh's own export, encrypted or plain. It reads everything first, shows what it found, then asks:
@@ -1639,6 +1671,8 @@ A key typed or piped in alone makes the usual codes (6 digits every 30 seconds),
 3. **Select the QR code region** — macOS `screencapture -i` launches, turning your cursor into a crosshair. Click and drag to select the area containing the QR code.
 4. **sesh decodes the QR code** automatically, extracting the TOTP secret from the `otpauth://` URL
 5. **Validation** — sesh checks the secret before storing it
+
+**From an image file** (any system, including Linux and over SSH): `sesh add totp <name> --qr-image shot.png` reads the QR code from a screenshot or a photo of one, PNG or JPEG. The image must hold one TOTP code; Google Authenticator's transfer code holds several accounts, and `sesh import --from google-authenticator` reads that.
 
 If QR scanning fails (e.g., QR code too blurry, wrong format, or you press Escape to cancel), `sesh aws setup` offers to try again or to fall back to manual entry, where you paste the base32 secret directly. `sesh add totp --qr` stops with the reason; run `sesh add totp <name>` without `--qr` to type the key instead.
 

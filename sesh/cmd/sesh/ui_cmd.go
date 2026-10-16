@@ -195,7 +195,11 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			opts.Length, opts.Symbols = length, symbols
 			return password.GeneratePassword(opts)
 		},
+		Passphrase: func(words int, separator string, capitalize bool) ([]byte, error) {
+			return password.GeneratePassphrase(password.PassphraseOptions{Words: words, Separator: separator, Capitalize: capitalize})
+		},
 		ScanQR:      uiScanQR(),
+		ReadQRImage: uiReadQRImage,
 		ClearAfter:  cfg.ClipboardTimeout.Value,
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
 		MaxLifetime: cfg.AgentMaxLifetime.Value,
@@ -880,6 +884,21 @@ func uiScanQR() func() (tui.ScannedQR, error) {
 		}
 		return tui.ScannedQR{Link: []byte(text), Issuer: info.Issuer, Account: info.Account}, nil
 	}
+}
+
+// uiReadQRImage reads a TOTP entry's link from the QR code in an image
+// file, its path typed in the app; the link is checked as sesh add totp
+// --qr-image checks it.
+func uiReadQRImage(typed string) (tui.ScannedQR, error) {
+	path, err := uiPath(typed)
+	if err != nil {
+		return tui.ScannedQR{}, err
+	}
+	link, info, err := qrcode.ReadTOTPFromFile(path)
+	if err != nil {
+		return tui.ScannedQR{}, err
+	}
+	return tui.ScannedQR{Link: []byte(link), Issuer: info.Issuer, Account: info.Account}, nil
 }
 
 // captureQRText is the text of a QR code on screen; tests replace it.

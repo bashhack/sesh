@@ -246,6 +246,14 @@ func TestAdd(t *testing.T) {
 	if _, errOut, err := runCLI(app, runAdd, "password", "shop", "--generate", "--length", "30"); err != nil || len(*copied) != 1 || len((*copied)[0]) != 30 || !strings.Contains(errOut, "and copied its password") {
 		t.Errorf("generated: %q, %q, %v", *copied, errOut, err)
 	}
+	app, copied = cliApp("", false)
+	if _, _, err := runCLI(app, runAdd, "password", "shop2", "--generate", "--words", "5", "--separator", "_"); err != nil || len(*copied) != 1 || strings.Count((*copied)[0], "_") != 4 {
+		t.Errorf("a passphrase: %q, %v", *copied, err)
+	}
+	app, _ = cliApp("", false)
+	if _, _, err := runCLI(app, runAdd, "password", "shop3", "--words", "5"); err == nil || !strings.Contains(err.Error(), "add --generate") {
+		t.Errorf("--words without --generate: %v", err)
+	}
 	app, _ = cliApp("line one\nline two\n", false)
 	if _, _, err := runCLI(app, runAdd, "note", "house"); err != nil {
 		t.Fatal(err)
@@ -270,13 +278,35 @@ func TestAdd(t *testing.T) {
 	if out := mustRun(t, runList, "totp", "--folder", "work"); !strings.Contains(out, "totp/Corp/carol") {
 		t.Errorf("--qr's folder:\n%s", out)
 	}
+	// From an image file: the one TOTP code in it; a transfer code is pointed to the import.
+	dir := t.TempDir()
+	writeQR(t, filepath.Join(dir, "shot.png"), "otpauth://totp/Shop:dee?secret=JBSWY3DPEHPK3PXP&issuer=Shop&period=60")
+	app, _ = cliApp("", false)
+	if _, errOut, err := runCLI(app, runAdd, "totp", "--qr-image", filepath.Join(dir, "shot.png")); err != nil || !strings.Contains(errOut, "✅ Added Shop (dee) (codes: SHA1, 6 digits, every 60s)") {
+		t.Errorf("--qr-image: %q, %v", errOut, err)
+	}
+	writeQR(t, filepath.Join(dir, "ga.png"), "otpauth-migration://offline?data=CjEKCkhlbGxvId6tvu8SBXRlc3QxGgVJc3N1ZSABKAEwAhABGAEgAA%3D%3D")
+	writeQR(t, filepath.Join(dir, "site.png"), "https://example.com")
+	for file, wantSub := range map[string]string{
+		"ga.png":      "sesh import --from google-authenticator",
+		"site.png":    "isn't a TOTP key",
+		"missing.png": "no such file",
+	} {
+		app, _ = cliApp("", false)
+		if _, _, err := runCLI(app, runAdd, "totp", "x", "--qr-image", filepath.Join(dir, file)); err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("--qr-image %s: %v, want %q", file, err, wantSub)
+		}
+	}
 	for args, wantSub := range map[string]string{
 		"password github --username alice": "github (alice) already exists; add --force to replace it",
 		"password GitHub --username alice": "github (alice) already exists, and names are case-sensitive",
 		"widget x":                         `takes a kind first (password, key, note, or totp), not "widget"`,
 		"key x --generate":                 "--generate makes a password; an API key comes from wherever it was issued",
 		"password x --length 8":            "add --generate",
-		"note x --qr":                      "--qr reads a TOTP entry's key",
+		"note x --qr":                      "--qr and --qr-image read a TOTP entry's key",
+		"note x --qr-image a.png":          "--qr and --qr-image read a TOTP entry's key",
+		"totp x --qr --qr-image a.png":     "choose one",
+		"totp x --qr-image=":               "--qr-image takes the image file",
 		"password":                         "name the entry: sesh add password <name>",
 		"totp":                             "name the entry: sesh add totp <name>",
 	} {
@@ -314,6 +344,27 @@ func TestGenerate(t *testing.T) {
 	app, _ = cliApp("", false)
 	if _, _, err := runCLI(app, runGenerate, "github"); err == nil || !strings.Contains(err.Error(), "sesh add password <name> --generate") {
 		t.Errorf("a name: %v", err)
+	}
+	app, _ = cliApp("", false)
+	if phrase, _, err := runCLI(app, runGenerate, "--words", "4", "--separator", " ", "--capitalize"); err != nil || len(strings.Fields(phrase)) != 4 || strings.ToUpper(phrase[:1]) != phrase[:1] {
+		t.Errorf("--words: %q, %v", phrase, err)
+	}
+	app, copied = cliApp("", false)
+	if _, errOut, err := runCLI(app, runGenerate, "--words", "6", "--copy"); err != nil || len(*copied) != 1 || !strings.Contains(errOut, "Copied a new passphrase") {
+		t.Errorf("--words --copy: %q, %q, %v", *copied, errOut, err)
+	}
+	for args, wantSub := range map[string]string{
+		"--words 6 --length 9":            "choose one",
+		"--words 6 --no-symbols":          "choose one",
+		"--separator .":                   "add --words N",
+		"--capitalize":                    "add --words N",
+		"--words 2":                       "--words: a passphrase has 3 to 20 words, not 2",
+		"--words 6 --separator nine-long": "longer than 8",
+	} {
+		app, _ = cliApp("", false)
+		if _, _, err := runCLI(app, runGenerate, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("%s: %v, want %q", args, err, wantSub)
+		}
 	}
 }
 
@@ -461,5 +512,33 @@ func TestAWSCommand(t *testing.T) {
 		if _, _, err := runCLI(app, runAWS, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
 			t.Errorf("%s: %v, want %q", args, err, wantSub)
 		}
+	}
+}
+
+// What's generated is named, and how to make a stronger one, by whether it's words.
+func TestGenFlagsSaid(t *testing.T) {
+	var chars, words genFlags
+	if err := chars.parsed(map[string]bool{"length": true}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := words.parsed(map[string]bool{"words": true}, true); err != nil {
+		t.Fatal(err)
+	}
+	if chars.noun() != "password" || chars.stronger() != "use --length 12 or more" || words.noun() != "passphrase" || words.stronger() != "use --words 5 or more" {
+		t.Errorf("chars: %s, %s; words: %s, %s", chars.noun(), chars.stronger(), words.noun(), words.stronger())
+	}
+}
+
+// An image that can't be read is said before a vault is made, or unlocked.
+func TestAdd_QRImageReadFirst(t *testing.T) {
+	env := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := cliApp("", false)
+	if _, _, err := runCLI(app, runAdd, "totp", "x", "--qr-image", filepath.Join(t.TempDir(), "missing.png")); err == nil || !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("a missing image: %v", err)
+	}
+	if _, err := os.Stat(env.dbPath); !os.IsNotExist(err) {
+		t.Errorf("a vault was made: %v", err)
 	}
 }

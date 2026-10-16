@@ -35,6 +35,7 @@ const (
 const (
 	totpPaste = "paste it, or its otpauth:// link"
 	totpScan  = "scan a QR code on screen"
+	totpImage = "read a QR code from an image file"
 )
 
 // openEdit opens the form that edits e.
@@ -109,10 +110,9 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	secretChoice := &input{kind: inputChoice, label: "secret", choices: choices}
 	secretChoice.shown = func() bool { k := kind(); return k == vault.KindPassword || k == vault.KindAPIKey }
 	gen := m.generateInputs()
-	gen.length.shown = func() bool {
+	gen.shownWhen(func() bool {
 		return secretChoice.visible() && secretChoice.choices[secretChoice.choice] == secretGenerate
-	}
-	gen.chars.shown = gen.length.shown
+	})
 	typed := &input{kind: inputSecret, label: "new secret", rated: true}
 	typed.named = func() string { return "new " + secretWord(kind()) }
 	typed.shown = func() bool { return secretChoice.visible() && secretChoice.choices[secretChoice.choice] == secretType }
@@ -135,13 +135,28 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			})
 		}
 	}
-	// A QR code on screen gives the key, when it can be read here.
-	totpFrom := &input{kind: inputChoice, label: "TOTP key", choices: []string{totpPaste, totpScan},
-		hint: "scanning, you select the area of the screen with the QR code once the form is saved; its issuer and account fill a name and username left empty"}
-	totpFrom.shown = func() bool { return adding && kind() == vault.KindTOTP && m.opts.ScanQR != nil }
+	// A QR code gives the key: on screen, or in an image file, where the
+	// app can read them.
+	from := []string{totpPaste}
+	if m.opts.ScanQR != nil {
+		from = append(from, totpScan)
+	}
+	if m.opts.ReadQRImage != nil {
+		from = append(from, totpImage)
+	}
+	totpFrom := &input{kind: inputChoice, label: "TOTP key", choices: from,
+		hint: "a QR code's issuer and account fill a name and username left empty"}
+	if m.opts.ScanQR != nil {
+		totpFrom.hint += "; scanning, you select the area of the screen with it once the form is saved"
+	}
+	totpFrom.shown = func() bool { return adding && kind() == vault.KindTOTP && len(from) > 1 }
 	scanning := func() bool { return totpFrom.visible() && totpFrom.choices[totpFrom.choice] == totpScan }
+	fromImage := func() bool { return totpFrom.visible() && totpFrom.choices[totpFrom.choice] == totpImage }
+	imageFile := m.textInput("image file", "")
+	imageFile.hint = "a screenshot or a photo of the QR code, PNG or JPEG: its full path, or from ~/"
+	imageFile.shown = fromImage
 	totpKey := &input{kind: inputSecret, label: "TOTP key, or otpauth:// link", hint: "a link brings its own code settings; a key alone gives 6-digit codes every 30s"}
-	totpKey.shown = func() bool { return kind() == vault.KindTOTP && !scanning() }
+	totpKey.shown = func() bool { return kind() == vault.KindTOTP && !scanning() && !fromImage() }
 	if !adding {
 		totpKey.label, totpKey.hint = "new TOTP key, or otpauth:// link", "leave it empty to keep the current key; a key alone gives 6-digit codes every 30s"
 	}
@@ -168,7 +183,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	}
 
 	title := "Edit " + entryName(e)
-	inputs := []*input{name, user, secretChoice, current, typed, gen.length, gen.chars, totpFrom, totpKey, url, folder, tags, text, fields}
+	inputs := slices.Concat([]*input{name, user, secretChoice, current, typed}, gen.inputs(), []*input{totpFrom, imageFile, totpKey, url, folder, tags, text, fields})
 	switch {
 	case adding:
 		title = "Add an entry"
@@ -186,7 +201,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			// --type does; added, it has none.
 			c.To.Username = ""
 		}
-		if c.To.Service == "" && !scanning() {
+		if c.To.Service == "" && !scanning() && !fromImage() {
 			f.err = "Give it a name."
 			return nil
 		}
@@ -234,6 +249,11 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			c.Secret = noteText
 		case k == vault.KindTOTP && scanning():
 			// Read once the rest is checked, below.
+		case k == vault.KindTOTP && fromImage():
+			if imageFile.value() == "" {
+				f.err = "Give the image file with the QR code."
+				return nil
+			}
 		case k == vault.KindTOTP:
 			if len(totpKey.secret) > 0 {
 				c.Secret = bytes.Clone(totpKey.secret)
@@ -292,6 +312,13 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			}
 			return m.scanThenSave(f, c, fill)
 		}
+		if fromImage() {
+			fill := func(service, username string) {
+				name.text.SetValue(service)
+				user.text.SetValue(username)
+			}
+			return m.readImageThenSave(f, c, fill, imageFile.value())
+		}
 		return m.save(f, c, generate)
 	}
 	folder.offers, tags.offers = m.folderNames(), m.tagNames()
@@ -308,10 +335,7 @@ func (m *Model) save(f *form, c *Change, generate *generating) tea.Cmd {
 	read := m.read(func(v Vault, _ func() bool) tea.Msg {
 		defer c.Wipe()
 		if generate != nil {
-			if opts.Generate == nil {
-				return savedMsg{err: errors.New("sesh ui can't generate a password here"), epoch: epoch}
-			}
-			pw, err := opts.Generate(generate.length, generate.symbols)
+			pw, err := generate.make(&opts)
 			if err != nil {
 				return savedMsg{err: err, epoch: epoch}
 			}
@@ -367,6 +391,17 @@ func (m *Model) scanThenSave(f *form, c *Change, fill func(service, username str
 	}
 }
 
+// readImageThenSave reads the TOTP key for c from a QR code in the image
+// file at path, then saves it as save does.
+func (m *Model) readImageThenSave(f *form, c *Change, fill func(service, username string), path string) tea.Cmd {
+	f.saving, f.err, f.working = true, "", "Reading the QR code…"
+	read, epoch := m.opts.ReadQRImage, m.epoch
+	return func() tea.Msg {
+		qr, err := read(path)
+		return scannedMsg{qr: qr, err: err, c: c, fill: fill, epoch: epoch}
+	}
+}
+
 // scanned saves the entry the add form describes with the key a QR code
 // gave, its issuer and account naming it where the form left that empty;
 // or says why the code couldn't be used.
@@ -392,7 +427,7 @@ func (m *Model) scanned(msg *scannedMsg) tea.Cmd {
 		c.Wipe()
 		return nil
 	case c.To.Service == "" && msg.qr.Issuer == "":
-		f.err = "The QR code doesn't name its issuer: give the entry a name, and scan it again."
+		f.err = "The QR code doesn't name its issuer: give the entry a name, and save it again."
 		secure.SecureZeroBytes(msg.qr.Link)
 		c.Wipe()
 		return nil

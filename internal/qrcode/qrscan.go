@@ -349,3 +349,30 @@ func IsHEIC(path string, b []byte) bool {
 func IsImage(path string, b []byte) bool {
 	return bytes.HasPrefix(b, []byte("\x89PNG\r\n\x1a\n")) || bytes.HasPrefix(b, []byte{0xff, 0xd8, 0xff}) || IsHEIC(path, b)
 }
+
+// ReadTOTPFromFile reads the one TOTP QR code in the image file at path, a
+// PNG or a JPEG (a screenshot, or a photo of a screen): its otpauth://
+// link, and what that says.
+func ReadTOTPFromFile(path string) (link string, info TOTPInfo, err error) {
+	texts, err := ReadTextsFromFile(path)
+	if err != nil {
+		return "", TOTPInfo{}, err
+	}
+	var links []string
+	for _, t := range texts {
+		switch lower := strings.ToLower(t); {
+		case strings.HasPrefix(lower, "otpauth://totp/"):
+			links = append(links, t)
+		case strings.HasPrefix(lower, "otpauth-migration://"):
+			return "", TOTPInfo{}, fmt.Errorf("%s is Google Authenticator's transfer code, which holds several accounts: sesh import --from google-authenticator %s reads it", path, shell.Quote(path))
+		}
+	}
+	switch len(links) {
+	case 0:
+		return "", TOTPInfo{}, fmt.Errorf("the QR code in %s isn't a TOTP key (an otpauth://totp/ link)", path)
+	case 1:
+		info, err := ExtractTOTPFullInfo(links[0])
+		return links[0], info, err
+	}
+	return "", TOTPInfo{}, fmt.Errorf("%s has %d TOTP QR codes: crop it to the one to add", path, len(links))
+}

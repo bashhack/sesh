@@ -39,13 +39,14 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from, and `sesh config set` changes one
 - **Encrypted Export** — Portable backups protected by a password of their own, safe to move between machines (`sesh export`)
 - **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes, each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
-- **Secrets for commands** — `sesh run` puts vault values in a command's environment and hides them in its output; `sesh inject` fills a config template
+- **Secrets for commands** — `sesh run` puts vault values in a command's environment and hides them in its output; `sesh inject` fills a config template; `sesh git-credential` gives git a site's password as its credential helper
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
 - **Shell Completion** — Tab completion for commands, flags, and their values in bash, zsh, and fish (`sesh completion zsh`)
 - **Smart TOTP Handling** — Generate current and next codes, handle time window edge cases automatically. Supports non-standard configs (SHA-256/SHA-512, 8 digits, custom periods) extracted from QR codes
 - **Clipboard Auto-Clear** — Clipboard is automatically cleared 30 seconds after copying secrets (configurable: `clipboard_timeout`)
 - **Intelligent Subshell** — Isolate credentials in secure environments with built-in helper commands
-- **QR Code Scanning** — Set up TOTP by selecting the QR code region on screen
+- **QR Codes** — Set up TOTP by selecting the QR code on screen (macOS) or from a screenshot or photo (`--qr-image`); move a key to your phone with `sesh show --qr`
+- **Passphrases** — `sesh generate --words 6` makes a passphrase from the [EFF's long word list](https://www.eff.org/dice) (CC BY 4.0), as `--generate` does when storing a password
 - **Multiple Profile Support** — Manage dev/prod environments and multiple accounts per service
 - **Audit Logging** — Every access, modification, and deletion is logged; review it with `sesh audit`. Events are kept 90 days by default (`audit.retention_days`)
 
@@ -121,11 +122,13 @@ Add `--json` to `list`, `search`, `get`, `code` or `show` for output a program r
 sesh add password github --username alice --url https://github.com/login
 sesh add key openai                # an API key
 echo "door code 4711" | sesh add note house
-sesh add totp github --qr          # or type the key, or paste an otpauth:// link
+sesh add totp github --qr          # or --qr-image shot.png, or type the key, or paste an otpauth:// link
+sesh show totp github --qr         # its key as a QR code, to scan with a phone
 sesh edit github --rename github-work
 sesh edit github --field recovery-email=alice@example.com --secret-field pin
 sesh edit github --notes --editor
 sesh generate --length 32          # a new password, stored nowhere
+sesh generate --words 6            # or a passphrase
 sesh trash github                  # into the trash; sesh trash lists and restores
 sesh history github                # earlier secrets: --show N, --clip N, --restore N
 sesh folder move work github       # and sesh tag add urgent github
@@ -137,6 +140,7 @@ sesh folder move work github       # and sesh tag add urgent github
 sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
 sesh run --env-file .env -- npm start      # .env holds NAME=sesh://... references, no secrets
 sesh inject -i config.yml.tpl -o config.yml
+git config --global credential.helper '!sesh git-credential'   # git's HTTPS passwords from sesh
 ```
 
 ### Bringing entries over, and taking them out

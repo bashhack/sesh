@@ -33,11 +33,13 @@ const (
 	panelImport                    // what an import would do
 	panelAudit                     // the audit log
 	panelFiling                    // the folders and tags, as the sidebar lists them
+	panelQR                        // a TOTP key as a QR code, for a phone
 )
 
 // overlay is a panel over the app, about the entry k.
 type overlay struct {
 	opened   time.Time      // when a confirmation was asked
+	until    time.Time      // when a QR code shown closes
 	yes      func() tea.Cmd // what a confirmation's yes does
 	back     *overlay       // what Esc goes back to
 	k        vault.Key
@@ -50,6 +52,8 @@ type overlay struct {
 	trash    []Trashed
 	marked   map[int64]bool // the trash's entries marked, by trash id
 	backups  []Backup       // the backups panel's, as its rows list them
+	link     string         // the otpauth:// link the QR code draws
+	qr       []string       // a TOTP key's QR code, a line each
 	kind     panel
 	sel      int
 	loading  bool
@@ -124,6 +128,9 @@ func (m *Model) openMenu() tea.Cmd {
 	}
 	if e.URL != "" {
 		items = append(items, item{key: "o", label: "open the URL", run: func() tea.Cmd { return m.openURL(&ek) }})
+	}
+	if e.Kind == vault.KindTOTP {
+		items = append(items, item{key: "q", label: "show the key as a QR code…", run: func() tea.Cmd { return m.openQR(&ek) }})
 	}
 	items = append(items,
 		item{key: "h", label: "earlier secrets…", run: func() tea.Cmd { return m.openHistory(&ek) }},
@@ -292,6 +299,8 @@ func (m *Model) choose(i int) tea.Cmd {
 func (m *Model) panelLetter(k string) tea.Cmd {
 	ov := m.ov
 	switch {
+	case ov.kind == panelQR && k == "c" && ov.link != "":
+		return m.copyLink(ov)
 	case ov.kind == panelHistory && k == "r" && ov.sel < len(ov.versions):
 		n, key, v := ov.sel+2, ov.k, ov.versions[ov.sel]
 		m.ov = m.confirm(ov, "Restore",
@@ -803,6 +812,10 @@ func (m *Model) drawOverlay(base string) string {
 	if ov.kind == panelSettings || ov.kind == panelChecks || ov.kind == panelBackups || ov.kind == panelImport || ov.kind == panelAudit || ov.wide {
 		w = min(96, m.width-6)
 	}
+	if ov.kind == panelQR && len(ov.qr) > 0 {
+		// As wide as its code needs, where the window has room.
+		w = min(max(w, lipgloss.Width(ov.qr[0])+qrMargin), m.width-6)
+	}
 	// The rows that fit: the screen less the card's border, title, hint
 	// and the blank lines between.
 	room := max(m.height-8, 1)
@@ -839,6 +852,8 @@ func (m *Model) drawOverlay(base string) string {
 		}
 		lines = append(lines, "")
 		lines = append(lines, said...)
+	case ov.kind == panelQR && !ov.loading && len(ov.qr) > 0:
+		lines = append(lines, m.qrLines(ov, w, room)...)
 	case ov.loading && ov.busy != "":
 		lines = append(lines, "", th.dimmed().Render(ov.busy))
 	case ov.loading:
@@ -962,6 +977,11 @@ func (m *Model) drawOverlay(base string) string {
 		}
 	case panelNotice:
 		hint = th.hints([2]string{"↵", "ok"})
+	case panelQR:
+		hint = th.hints([2]string{"c", "copy the link"}, [2]string{"esc", "close"})
+		if !ov.until.IsZero() {
+			hint = th.hints([2]string{"c", "copy the link"}, [2]string{"esc", fmt.Sprintf("close (%ds)", max(int(ov.until.Sub(m.opts.Now()).Seconds()), 0))})
+		}
 	case panelImport:
 		hint = m.importHint(w - 6)
 	case panelBackups:

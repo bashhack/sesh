@@ -21,20 +21,24 @@ import (
 const addUsage = `Usage: sesh add password|key|note|totp [<name>] [flags]
   Add an entry. A password or API key is typed hidden, or read from a pipe;
   a note is read until Ctrl-D, or from a pipe. A TOTP entry takes its key
-  typed (or an otpauth:// link pasted), or read from a QR code on screen with
-  --qr. With no name at a terminal, sesh asks for one.
+  typed (or an otpauth:// link pasted), or read from a QR code: on screen
+  with --qr (macOS), or in an image file with --qr-image (a screenshot or a
+  photo, PNG or JPEG). With no name at a terminal, sesh asks for one.
 
   sesh add password github --username alice
   sesh add password github --generate             (copies it as it's saved)
   sesh add key openai
   echo "door code 4711" | sesh add note house
   sesh add totp github --qr
+  sesh add totp github --qr-image ~/Downloads/github-2fa.png
   sesh add password bank --folder money --tag important --url https://bank.example
 
 Flags:
   --username U          Its username
-  --generate            A password: generate one ([--length N] [--no-symbols])
+  --generate            A password: generate one ([--length N] [--no-symbols],
+                        or a passphrase: --words N [--separator S] [--capitalize])
   --qr                  A TOTP entry: read its key from a QR code on screen
+  --qr-image FILE       A TOTP entry: read its key from a QR code in an image
   --folder F, --tag T   File it (--tag repeats)
   --url U, --notes [--editor], --field n=v, --secret-field n
                         Its URL, notes (stdin, or $EDITOR), and fields
@@ -51,11 +55,11 @@ var addKinds = map[string]vault.Kind{
 // addFlags are sesh add's flags.
 type addFlags struct {
 	username string
+	qrImage  string
 	filing   provider.FilingFlags
 	details  provider.DetailsFlags
-	length   int
+	gen      genFlags
 	generate bool
-	noSymbol bool
 	qr       bool
 	force    bool
 }
@@ -65,9 +69,9 @@ func addAddFlags(fs *flag.FlagSet) *addFlags {
 	f := &addFlags{}
 	fs.StringVar(&f.username, "username", "", "Its username")
 	fs.BoolVar(&f.generate, "generate", false, "Generate the password")
-	fs.IntVar(&f.length, "length", 24, "Generated password length")
-	fs.BoolVar(&f.noSymbol, "no-symbols", false, "Generate without symbols")
+	f.gen.register(fs)
 	fs.BoolVar(&f.qr, "qr", false, "Read a TOTP key from a QR code on screen")
+	fs.StringVar(&f.qrImage, "qr-image", "", "Read a TOTP key from a QR code in an image file (PNG or JPEG)")
 	fs.BoolVar(&f.force, "force", false, "Replace an entry of that name without asking")
 	f.filing.Register(fs)
 	f.details.Register(fs)
@@ -100,22 +104,24 @@ func runAdd(app *App, args []string) error {
 	}
 	set := map[string]bool{}
 	fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
+	if err := f.gen.parsed(set, f.generate); err != nil {
+		return err
+	}
 	switch {
-	case (set["length"] || set["no-symbols"]) && !f.generate:
-		return errors.New("--length and --no-symbols shape a generated password: add --generate")
 	case f.generate && kind != vault.KindPassword:
 		return fmt.Errorf("--generate makes a password; %s comes from wherever it was issued", map[vault.Kind]string{vault.KindAPIKey: "an API key", vault.KindNote: "a note", vault.KindTOTP: "a TOTP key"}[kind])
-	case f.qr && kind != vault.KindTOTP:
-		return errors.New("--qr reads a TOTP entry's key: sesh add totp <name> --qr")
+	case (f.qr || f.qrImage != "") && kind != vault.KindTOTP:
+		return errors.New("--qr and --qr-image read a TOTP entry's key: sesh add totp <name> --qr")
+	case f.qr && f.qrImage != "":
+		return errors.New("--qr reads a code on screen, --qr-image one in a file: choose one")
+	case set["qr-image"] && f.qrImage == "":
+		return errors.New("--qr-image takes the image file with the QR code")
 	case f.details.Moves():
 		return errors.New("--rename-field and --plain-field change the fields an entry has: sesh edit <entry> --rename-field old=new")
 	}
-	opts := password.DefaultGenerateOptions()
-	opts.Length = f.length
-	opts.Symbols = !f.noSymbol
 	if f.generate {
-		if err := opts.Check(); err != nil {
-			return fmt.Errorf("--length: %w", err)
+		if err := f.gen.check(); err != nil {
+			return err
 		}
 	}
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
@@ -140,12 +146,22 @@ func runAdd(app *App, args []string) error {
 	}
 	if !terminal && change != nil {
 		fromStdin := f.details.FromStdin()
-		if !f.generate && !f.qr {
+		if !f.generate && !f.qr && f.qrImage == "" {
 			fromStdin++
 		}
 		if fromStdin > 1 {
 			return errors.New("without a terminal, only one value can come from stdin: add the entry, then the rest with sesh edit")
 		}
+	}
+
+	// An image is read before anything is unlocked, or made.
+	var fromImage *qrcode.TOTPInfo
+	if f.qrImage != "" {
+		_, info, err := readQRImage(f.qrImage)
+		if err != nil {
+			return err
+		}
+		fromImage = &info
 	}
 
 	cfg, err := settings()
@@ -159,7 +175,7 @@ func runAdd(app *App, args []string) error {
 	}
 	defer closeAuditStore(store)
 	if kind == vault.KindTOTP {
-		return addTOTP(app, store, name, f, change, terminal)
+		return addTOTP(app, store, name, f, change, terminal, fromImage)
 	}
 	k := vault.Key{Kind: kind, Service: name, Username: f.username}
 	if err := checkAddChange(store, k, change); err != nil {
@@ -171,7 +187,7 @@ func runAdd(app *App, args []string) error {
 	replacing := store.Exists(k) == nil
 	var secret []byte
 	if f.generate {
-		if secret, err = password.GeneratePassword(opts); err != nil {
+		if secret, err = f.gen.generate(); err != nil {
 			return err
 		}
 	} else if secret, err = readEntrySecret(app, k, terminal); err != nil {
@@ -208,7 +224,7 @@ func runAdd(app *App, args []string) error {
 	if kind == vault.KindPassword && password.IsWeak(secret, k.Service, k.Username) {
 		fix := "sesh edit " + quoteName(k) + " --generate"
 		if f.generate {
-			fix = "use --length 12 or more"
+			fix = f.gen.stronger()
 		}
 		_, err := fmt.Fprintf(app.Stderr, "⚠️  This password is easy to guess: a cracking program would likely find it in under 100 million tries. For a strong one: %s\n", fix)
 		return err
@@ -350,18 +366,27 @@ func readDetails(app *App, mgr *password.Manager, k vault.Key, flags *provider.D
 // scanQR reads a TOTP key from a QR code on screen; tests replace it.
 var scanQR = qrcode.ScanQRCodeFull
 
+// readQRImage reads a TOTP key from a QR code in an image file.
+var readQRImage = qrcode.ReadTOTPFromFile
+
 // addTOTP adds a TOTP entry, its key typed, pasted as an otpauth:// link,
-// or read from a QR code on screen. A link or code names the account,
-// which is its username unless --username says otherwise, and the issuer,
-// which names the entry when no name is given.
-func addTOTP(app *App, store *database.Store, name string, f *addFlags, change *vault.DetailsChange, terminal bool) error {
+// or read from a QR code on screen or in an image file (fromImage, read
+// already). A link or code names the account, which is its username
+// unless --username says otherwise, and the issuer, which names the entry
+// when no name is given.
+func addTOTP(app *App, store *database.Store, name string, f *addFlags, change *vault.DetailsChange, terminal bool, fromImage *qrcode.TOTPInfo) error {
 	username := f.username
 	var key []byte
 	var params totp.Params
-	if f.qr {
-		info, err := scanQR()
-		if err != nil {
-			return fmt.Errorf("read the QR code: %w", err)
+	if f.qr || f.qrImage != "" {
+		var info qrcode.TOTPInfo
+		var err error
+		if f.qr {
+			if info, err = scanQR(); err != nil {
+				return fmt.Errorf("read the QR code: %w", err)
+			}
+		} else {
+			info = *fromImage
 		}
 		normalized, err := totp.ValidateAndNormalizeSecret(info.Secret)
 		if err != nil {
@@ -376,7 +401,7 @@ func addTOTP(app *App, store *database.Store, name string, f *addFlags, change *
 			name = info.Issuer
 		}
 		if name == "" {
-			return errors.New("the QR code doesn't name its service: give a name, sesh add totp <name> --qr")
+			return errors.New("the QR code doesn't name its service: give a name, sesh add totp <name>")
 		}
 	} else {
 		var typed []byte

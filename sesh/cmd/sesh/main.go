@@ -102,6 +102,7 @@ var subcommands = []candidate{
 	{"agent", "Control the sesh agent"},
 	{"run", "Run a command with secrets from the vault in its environment"},
 	{"inject", "Fill a template's sesh:// references into a file"},
+	{"git-credential", "Give git a site's password from sesh, as its credential helper"},
 	{"aws", "Sign in to AWS with your MFA code"},
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 }
@@ -115,7 +116,7 @@ var commands = map[string]func(*App, []string) error{
 	"health": runHealth, "doctor": runDoctor, "audit": runAudit, "lock": runLock, "passwd": runPasswd,
 	"recovery": runRecovery, "recover": runRecover, "touchid": runTouchID, "config": runConfig,
 	"init": runInit, "agent": runAgent, "run": runRun, "inject": runInject, "aws": runAWS,
-	"completion": runCompletion,
+	"git-credential": runGitCredential, "completion": runCompletion,
 }
 
 // movedFlags say, for a flag that named a command before sesh's commands
@@ -582,15 +583,21 @@ func resolvePasswordPrompt() passwordPromptConfig {
 	return terminalPasswordPrompt()
 }
 
+// terminalIn is where passwords and answers are typed: stdin, or the
+// terminal itself (/dev/tty) for a command whose stdin carries data, as a
+// git credential helper's does.
+var terminalIn = os.Stdin
+
 // terminalPasswordPrompt reads passwords at the terminal, ignoring
-// SESH_MASTER_PASSWORD; interactive says whether stdin is one. Tests
+// SESH_MASTER_PASSWORD; interactive says whether terminalIn is one. Tests
 // replace it.
 var terminalPasswordPrompt = func() passwordPromptConfig {
+	in := terminalIn
 	return passwordPromptConfig{
 		prompt:      terminalPrompt,
-		interactive: term.IsTerminal(int(os.Stdin.Fd())),
-		confirm:     func(p string) (bool, error) { return askYes(os.Stdin, os.Stderr, p) },
-		readLine:    func(p string) (string, error) { return readLine(os.Stdin, os.Stderr, p) },
+		interactive: term.IsTerminal(int(in.Fd())),
+		confirm:     func(p string) (bool, error) { return askYes(in, os.Stderr, p) },
+		readLine:    func(p string) (string, error) { return readLine(in, os.Stderr, p) },
 	}
 }
 
@@ -665,17 +672,18 @@ func (c passwordPromptConfig) withTypedPassword(pw []byte) passwordPromptConfig 
 	return c
 }
 
-// terminalPrompt reads a password from the controlling terminal without
+// terminalPrompt reads a password from terminalIn without
 // echo. Does not consult SESH_MASTER_PASSWORD — that decision belongs to
 // resolvePasswordPrompt so the env-var policy lives in exactly one place.
 func terminalPrompt(prompt string) ([]byte, error) {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	in := terminalIn
+	if !term.IsTerminal(int(in.Fd())) {
 		return nil, noTerminalFor(prompt)
 	}
 	if _, err := fmt.Fprint(os.Stderr, prompt); err != nil {
 		return nil, err
 	}
-	pw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	pw, err := term.ReadPassword(int(in.Fd()))
 	// Best-effort newline after the hidden input. Don't let a stderr write
 	// error mask a real read error.
 	fmt.Fprintln(os.Stderr) //nolint:errcheck // see comment above
@@ -875,6 +883,7 @@ Setup and more:
   sesh config [set <key> <value>] Show settings and where each comes from, or change one
   sesh run [--env N=<ref>] -- <cmd>   Run a command with secrets in its environment
   sesh inject -i <tpl> -o <file>  Fill a template's sesh:// references
+  sesh git-credential             Git's credential helper: a site's password from sesh
   sesh aws [setup]                Sign in to AWS with your MFA code
   sesh completion bash|zsh|fish   Print a shell completion script
 
