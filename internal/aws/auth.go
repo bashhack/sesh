@@ -100,15 +100,19 @@ func GetSessionToken(profile, serial string, code []byte) (Credentials, error) {
 	return parsed.Credentials, nil
 }
 
-// GetFirstMFADevice returns the first virtual MFA device (authenticator
-// app) of the IAM user profile signs in as.
+// GetFirstMFADevice returns the virtual MFA device (authenticator app) of
+// the IAM user profile signs in as, when AWS lists one; with several, the
+// key's can't be told apart.
 func GetFirstMFADevice(profile string) (string, error) {
 	devices, err := ListMFADevices(profile)
 	if err != nil {
 		return "", err
 	}
-	if len(devices) == 0 {
+	switch len(devices) {
+	case 0:
 		return "", errors.New("AWS lists no authenticator app as an MFA device for this profile's user: set one up with sesh aws setup")
+	case 1:
+		return devices[0], nil
 	}
-	return devices[0], nil
+	return "", fmt.Errorf("AWS lists %d authenticator apps for this profile's user, and sesh can't tell which this key is for: run sesh aws setup to choose one", len(devices))
 }

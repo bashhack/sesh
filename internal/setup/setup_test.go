@@ -22,6 +22,7 @@ const (
 // fakeAWS is the AWS CLI as the setup sees it: who a profile signs in as,
 // and the devices it lists, each call taking the next answer.
 type fakeAWS struct {
+	kind        string // how the profile signs in, when not with access keys
 	identity    string
 	identityErr error
 	listings    [][]string // one per list-mfa-devices call; the last repeats
@@ -37,7 +38,7 @@ func stub(t *testing.T, aws *fakeAWS, typed string, screen bool) {
 	origs := []func(){
 		restore(&awsInstalled), restore(&callerIdentity), restore(&listMFADevices), restore(&readPassword),
 		restore(&scanQRCode), restore(&readQRImage), restore(&stdinIsTerminal), restore(&timeNow),
-		restore(&screenCapture), restore(&homeDir),
+		restore(&screenCapture), restore(&homeDir), restore(&profileKind),
 	}
 	t.Cleanup(func() {
 		for _, o := range origs {
@@ -49,6 +50,7 @@ func stub(t *testing.T, aws *fakeAWS, typed string, screen bool) {
 	timeNow = func() time.Time { return time.Date(2026, 10, 16, 12, 0, 5, 0, time.UTC) }
 	screenCapture = screen
 	homeDir = func() (string, error) { return "/home/alice", nil }
+	profileKind = func(string) string { return aws.kind }
 	callerIdentity = func(profile string) (string, error) {
 		aws.profiles = append(aws.profiles, profile)
 		if aws.identityErr != nil {
@@ -99,11 +101,14 @@ func run(store vault.Store, profile, input string, filing vault.Filing) (string,
 	return out, err
 }
 
-// countingSave is a store whose Save fails from the call numbered failAt.
+// countingSave is a store whose Save fails from the call numbered failAt,
+// and which keeps keep earlier secrets.
 type countingSave struct {
 	*vault.MemStore
-	calls, failAt int
+	calls, failAt, keep int
 }
+
+func (s *countingSave) HistoryKeep() int { return s.keep }
 
 func (s *countingSave) Save(e *vault.Entry, secret []byte) error {
 	s.calls++
@@ -184,6 +189,8 @@ func TestSetup_RefusesEarly(t *testing.T) {
 		"session login": {func(a *fakeAWS) {
 			a.identity = "arn:aws:sts::123456789012:assumed-role/Admin/alice"
 		}, "", "a temporary session"},
+		"aws login profile": {func(a *fakeAWS) { a.kind = "aws login" }, "work", "profile work signs in with aws login"},
+		"SSO profile":       {func(a *fakeAWS) { a.kind = "SSO" }, "", "the default profile signs in with SSO"},
 		"identity fails": {func(a *fakeAWS) {
 			a.identityErr = errors.New("aws sts get-caller-identity: The config profile (work) could not be found")
 		}, "work", "aws sts get-caller-identity --profile work"},
@@ -271,17 +278,24 @@ func TestSetup_KeySavedBeforeTheConsole(t *testing.T) {
 }
 
 // A key that replaced another points to the entry's history, where the
-// one replaced is, when the device can't be saved.
+// one replaced is, when the device can't be saved; with history.keep 0
+// there's none, and replacing says so before it's done.
 func TestSetup_ReplacedKeyPointsToHistory(t *testing.T) {
-	stub(t, defaultAWS(), testSecret, false)
-	store := &countingSave{MemStore: vault.NewMemStore(), failAt: 3}
-	if err := store.Save(&vault.Entry{Key: vault.AWSKey("")}, []byte("OLDSECRETOLDSECR")); err != nil {
-		t.Fatal(err)
-	}
-	_, err := run(store, "", "\ny\n1\n\n1\n\n\n", vault.Filing{})
-	for _, want := range []string{"failed to store the MFA device", "disk full", "sesh history totp/aws/default"} {
-		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("Setup() = %v, want %q", err, want)
+	for _, keep := range []int{10, 0} {
+		stub(t, defaultAWS(), testSecret, false)
+		store := &countingSave{MemStore: vault.NewMemStore(), failAt: 3, keep: keep}
+		if err := store.Save(&vault.Entry{Key: vault.AWSKey("")}, []byte("OLDSECRETOLDSECR")); err != nil {
+			t.Fatal(err)
+		}
+		out, err := run(store, "", "\ny\n1\n\n1\n\n\n", vault.Filing{})
+		if err == nil || !strings.Contains(err.Error(), "failed to store the MFA device: disk full") {
+			t.Fatalf("keep %d: Setup() = %v", keep, err)
+		}
+		if pointed := strings.Contains(err.Error(), "sesh history totp/aws/default"); pointed != (keep > 0) {
+			t.Errorf("keep %d: points to history %v: %v", keep, pointed, err)
+		}
+		if warned := strings.Contains(out, "history.keep is 0, so the key it has now won't be kept"); warned != (keep == 0) {
+			t.Errorf("keep %d: warned %v:\n%s", keep, warned, out)
 		}
 	}
 }

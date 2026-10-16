@@ -88,12 +88,34 @@ func ListMFADevices(profile string) ([]string, error) {
 
 // mfaARN is a virtual MFA device's ARN, in any partition (aws, aws-cn,
 // aws-us-gov): arn:aws:iam::123456789012:mfa/name, the name in IAM's
-// characters, perhaps under a path.
-var mfaARN = regexp.MustCompile(`^arn:aws(-[a-z]+)*:iam::(\d{12}):mfa/[A-Za-z0-9+=,.@_/-]+$`)
+// characters, perhaps under a path, which IAM lets hold any printable
+// ASCII character.
+var mfaARN = regexp.MustCompile(`^arn:aws(-[a-z]+)*:iam::(\d{12}):mfa(/[\x21-\x7f]+)?/[A-Za-z0-9+=,.@_-]+$`)
 
 // IsVirtualMFADevice says whether serial is a virtual MFA device's ARN.
 func IsVirtualMFADevice(serial string) bool {
 	return mfaARN.MatchString(serial)
+}
+
+// SessionCredentialsMessage is what AWS says when get-session-token is
+// asked with temporary credentials (aws login, SSO, a role), which it
+// gives no MFA session to.
+const SessionCredentialsMessage = "Cannot call GetSessionToken with session credentials"
+
+// ProfileKind says how profile signs in, when it isn't with an IAM user's
+// access keys: "aws login" (a login_session), "SSO" (an sso_session or
+// sso_start_url), or "a role" (a role_arn); "" otherwise. Those give
+// temporary credentials, which AWS gives no MFA session to.
+func ProfileKind(profile string) string {
+	for _, k := range []struct{ setting, kind string }{
+		{"login_session", "aws login"}, {"sso_session", "SSO"}, {"sso_start_url", "SSO"}, {"role_arn", "a role"},
+	} {
+		// configure get fails, saying nothing, for a setting that isn't there.
+		if out, err := RunCLI(profile, "configure", "get", k.setting); err == nil && strings.TrimSpace(string(out)) != "" {
+			return k.kind
+		}
+	}
+	return ""
 }
 
 // AccountOf is the account number in an IAM or STS ARN, or "".

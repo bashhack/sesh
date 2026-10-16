@@ -17,7 +17,8 @@ const awsUsage = `Usage:
   sesh aws [--profile P] [--no-subshell]   Sign in with your MFA code, in a shell with the session's credentials
                                            (--no-subshell prints them, to eval)
   sesh aws --clip [--profile P]            Copy the MFA code for the AWS console
-  sesh aws setup [--profile P]             Store a profile's MFA key: from a QR code on screen, or typed
+  sesh aws setup [--profile P]             Store a profile's MFA key: typed, or from a QR code in an
+                                           image file or (macOS) on screen
 
 The profile's MFA entry is a TOTP entry named aws, with the profile as its
 username: sesh list totp shows it.`
@@ -77,6 +78,12 @@ func runAWS(app *App, args []string) error {
 		}
 	}
 
+	// Setup's checks come before the vault is opened, or made.
+	if setupAsked {
+		if err := setup.Preflight(); err != nil {
+			return err
+		}
+	}
 	cfg, err := settings()
 	if err != nil {
 		return err

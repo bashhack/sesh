@@ -31,6 +31,7 @@ var (
 		return err
 	}
 	callerIdentity             = awsCLI.CallerIdentity
+	profileKind                = awsCLI.ProfileKind
 	listMFADevices             = awsCLI.ListMFADevices
 	readPassword               = term.ReadPassword
 	scanQRCode                 = qrcode.ScanQRCodeFull
@@ -160,6 +161,30 @@ func profileName(profile string) string {
 	return "profile " + profile
 }
 
+// Preflight checks what setup needs before anything else, so the vault
+// isn't opened (or made) for a setup that can't run: a terminal, and the
+// AWS CLI.
+func Preflight() error {
+	if !stdinIsTerminal() {
+		return errors.New("sesh aws setup asks questions and reads the MFA key at a terminal: run it in one")
+	}
+	if err := awsInstalled(); err != nil {
+		return errors.New("the AWS CLI isn't installed, and sesh aws uses it: https://aws.amazon.com/cli/")
+	}
+	return nil
+}
+
+// historyKeeper is a store that keeps entries' earlier secrets, as many as
+// HistoryKeep says.
+type historyKeeper interface{ HistoryKeep() int }
+
+// keepsHistory says whether store keeps a replaced key in the entry's
+// history.
+func keepsHistory(store vault.Store) bool {
+	h, ok := store.(historyKeeper)
+	return ok && h.HistoryKeep() > 0
+}
+
 // Setup stores an AWS profile's MFA key, and the MFA device it's for:
 //  1. it checks the AWS CLI is there, and who the profile signs in as;
 //  2. it reads the key AWS shows for a new authenticator app: typed, or
@@ -173,11 +198,8 @@ func profileName(profile string) string {
 //
 // profile is --profile or AWS_PROFILE; "" asks, Enter taking the default.
 func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
-	if !stdinIsTerminal() {
-		return errors.New("sesh aws setup asks questions and reads the MFA key at a terminal: run it in one")
-	}
-	if err := awsInstalled(); err != nil {
-		return errors.New("the AWS CLI isn't installed, and sesh aws uses it: https://aws.amazon.com/cli/")
+	if err := Preflight(); err != nil {
+		return err
 	}
 	fmt.Println("🔐 Setting up AWS MFA for sesh")
 
@@ -197,12 +219,20 @@ func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
 	if err := k.Validate(); err != nil {
 		return err
 	}
+	if kind := profileKind(profile); kind != "" {
+		return fmt.Errorf("%s signs in with %s, which gives temporary credentials, and AWS gives MFA sessions only to an IAM user's own access keys: sesh aws setup is for a profile with those", profileName(profile), kind)
+	}
 	existing, err := existingEntry(h.store, k)
 	if err != nil {
 		return err
 	}
+	keeps := keepsHistory(h.store)
 	if existing != nil {
-		fmt.Printf("\n⚠️  sesh already has an MFA key for %s.\nReplace it? (y/N): ", profileName(profile))
+		fmt.Printf("\n⚠️  sesh already has an MFA key for %s.\n", profileName(profile))
+		if !keeps {
+			fmt.Println("history.keep is 0, so the key it has now won't be kept: if AWS doesn't finish adding the new device, the old key is gone.")
+		}
+		fmt.Print("Replace it? (y/N): ")
 		response, err := readLine(h.reader)
 		if err != nil {
 			return err
@@ -240,20 +270,21 @@ func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
 	}
 	fmt.Printf("🔒 Saved the MFA key in the vault, as %s\n", k)
 
+	inHistory := existing != nil && keeps
 	if err := h.setupMFAConsole(secret); err != nil {
-		return h.keyOnly(k, existing != nil, err)
+		return h.keyOnly(k, inHistory, err)
 	}
 	device, err := h.selectMFADevice(profile, awsCLI.AccountOf(identity))
 	if err != nil {
-		return h.keyOnly(k, existing != nil, err)
+		return h.keyOnly(k, inHistory, err)
 	}
 	if filing, err = askFiling(h.reader, filing, existing); err != nil {
-		return h.keyOnly(k, existing != nil, err)
+		return h.keyOnly(k, inHistory, err)
 	}
 	entry.Settings = vault.Settings{AWSMFADevice: device}
 	filing.Apply(&entry)
 	if err := h.store.Save(&entry, secret); err != nil {
-		return h.keyOnly(k, existing != nil, fmt.Errorf("failed to store the MFA device: %w", err))
+		return h.keyOnly(k, inHistory, fmt.Errorf("failed to store the MFA device: %w", err))
 	}
 
 	h.showSetupCompletionMessage(profile)
@@ -261,10 +292,11 @@ func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
 }
 
 // keyOnly is err from a setup that saved the key but not its device:
-// what's kept, and what to do.
-func (h *AWSSetupHandler) keyOnly(k vault.Key, replaced bool, err error) error {
-	msg := fmt.Sprintf("%v\nThe MFA key is saved, as %s, but not which MFA device it's for: sesh aws asks AWS for it, or run sesh aws setup again to choose it.", err, k)
-	if replaced {
+// what's kept, and what to do. inHistory says the key replaced is in the
+// entry's history.
+func (h *AWSSetupHandler) keyOnly(k vault.Key, inHistory bool, err error) error {
+	msg := fmt.Sprintf("%v\nThe MFA key is saved, as %s, but not which MFA device it's for: sesh aws asks AWS for it when the user has one authenticator app; otherwise run sesh aws setup again to choose it.", err, k)
+	if inHistory {
 		msg += fmt.Sprintf("\nIf AWS didn't finish adding the device, the key this one replaced is in the entry's history: sesh history %s", shell.Quote(k.String()))
 	}
 	return errors.New(msg)
@@ -483,7 +515,7 @@ func (h *AWSSetupHandler) promptForMFAARN(account string) (string, error) {
 // showSetupCompletionMessage says the setup is done, and how to use it.
 func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
 	shellCmd, clipCmd := "sesh aws"+profileFlag(profile), "sesh aws"+profileFlag(profile)+" --clip"
-	fmt.Printf("\n✅ AWS MFA is set up for %s.\n   %-*s  opens a shell with a session's credentials\n   %-*s  copies a code, for signing in to the AWS console\n",
+	fmt.Printf("\n✅ AWS MFA is set up for %s.\n   %-*s  opens a shell with a session's credentials\n   %-*s  copies a code, for signing in to the AWS console\nAWS has just used the codes it was given: wait for the next one (up to 30 seconds) before the first sesh aws.\n",
 		profileName(profile), len(clipCmd), shellCmd, len(clipCmd), clipCmd)
 }
 

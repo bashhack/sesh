@@ -53,7 +53,7 @@ func (p *Provider) Name() string {
 
 // SetupFlags adds provider-specific flags to the given FlagSet
 func (p *Provider) SetupFlags(fs provider.FlagSet) error {
-	fs.StringVar(&p.profile, "profile", os.Getenv("AWS_PROFILE"), "AWS CLI profile to use")
+	fs.StringVar(&p.profile, "profile", envProfile(), "AWS CLI profile to use")
 	fs.BoolVar(&p.noSubshell, "no-subshell", false, "Print environment variables instead of launching subshell")
 	p.filing.Register(fs)
 	return nil
@@ -133,13 +133,16 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	defer secure.SecureZeroBytes(secret)
 
 	awsCreds, err := p.sessionToken(serial, secret)
+	if err != nil && strings.Contains(err.Error(), awsInternal.SessionCredentialsMessage) {
+		return provider.Credentials{}, fmt.Errorf("%s signs in with temporary credentials (aws login, SSO or a role), and AWS gives MFA sessions only to an IAM user's own access keys: use a profile with those for sesh aws: %w", formatProfile(p.profile), err)
+	}
 	if err != nil && strings.Contains(err.Error(), awsInternal.InvalidMFAMessage) {
 		wait := time.Duration(p.SecondsLeftInWindow()+1) * time.Second
 		fmt.Fprintf(os.Stderr, "⚠️  AWS refused the code; it may have been used in the last 30 seconds. Waiting %s for the next one...\n", wait)
 		p.sleep(wait)
 		awsCreds, err = p.sessionToken(serial, secret)
 		if err != nil && strings.Contains(err.Error(), awsInternal.InvalidMFAMessage) {
-			return provider.Credentials{}, fmt.Errorf("AWS refused the next code too: check this computer's clock is right, and that %s's MFA device is the one this key was set up for (sesh aws setup sets it up again): %w", formatProfile(p.profile), err)
+			return provider.Credentials{}, fmt.Errorf("AWS refused the next code too. Just after sesh aws setup, AWS has used that code too: wait 30 seconds and try again. Otherwise check this computer's clock is right, and that %s's MFA device is the one this key was set up for (sesh aws setup sets it up again): %w", formatProfile(p.profile), err)
 		}
 	}
 	if err != nil {
@@ -275,6 +278,15 @@ func (p *Provider) Filing() vault.Filing { return p.filing.Filing() }
 // ShouldUseSubshell returns whether to use subshell mode
 func (p *Provider) ShouldUseSubshell() bool {
 	return !p.noSubshell
+}
+
+// envProfile is the profile the environment names, as the AWS CLI reads
+// it: AWS_PROFILE, or else AWS_DEFAULT_PROFILE.
+func envProfile() string {
+	if p := os.Getenv("AWS_PROFILE"); p != "" {
+		return p
+	}
+	return os.Getenv("AWS_DEFAULT_PROFILE")
 }
 
 // formatProfile returns a formatted profile description

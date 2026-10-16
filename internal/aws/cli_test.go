@@ -7,12 +7,15 @@ import (
 	"testing"
 )
 
-// fakeCLI makes execCommand run script in sh in place of the AWS CLI.
+// fakeCLI makes execCommand run script in sh in place of the AWS CLI, with
+// the CLI's arguments as its own.
 func fakeCLI(t *testing.T, script string) {
 	t.Helper()
 	orig := execCommand
 	t.Cleanup(func() { execCommand = orig })
-	execCommand = func(string, ...string) *exec.Cmd { return exec.Command("sh", "-c", script) }
+	execCommand = func(_ string, args ...string) *exec.Cmd {
+		return exec.Command("sh", append([]string{"-c", script, "aws"}, args...)...)
+	}
 }
 
 // The AWS CLI's own message comes with its failure.
@@ -100,6 +103,7 @@ func TestIsVirtualMFADevice(t *testing.T) {
 	for arn, want := range map[string]bool{
 		"arn:aws:iam::123456789012:mfa/alice":               true,
 		"arn:aws:iam::123456789012:mfa/path/to/alice.phone": true,
+		"arn:aws:iam::123456789012:mfa/team~a!/alice":       true,
 		"arn:aws-us-gov:iam::123456789012:mfa/alice":        true,
 		"arn:aws-cn:iam::123456789012:mfa/alice":            true,
 		"arn:aws:iam::123456789012:mfa/ has spaces":         false,
@@ -114,6 +118,27 @@ func TestIsVirtualMFADevice(t *testing.T) {
 		if got := IsVirtualMFADevice(arn); got != want {
 			t.Errorf("IsVirtualMFADevice(%q) = %v, want %v", arn, got, want)
 		}
+	}
+}
+
+// How a profile signs in is read from its settings: the first one set.
+func TestProfileKind(t *testing.T) {
+	for setting, want := range map[string]string{"login_session": "aws login", "sso_session": "SSO", "sso_start_url": "SSO", "role_arn": "a role", "": ""} {
+		// The fake prints a value for the one setting given, and fails, as
+		// configure get does, for the rest.
+		fakeCLI(t, `case " $* " in *" `+setting+` "*) [ -n "`+setting+`" ] && echo value && exit 0;; esac; exit 1`)
+		if got := ProfileKind("work"); got != want {
+			t.Errorf("with %q set: ProfileKind() = %q, want %q", setting, got, want)
+		}
+	}
+}
+
+// One authenticator app is the profile's device; with several, the key's
+// can't be told apart, so none is chosen.
+func TestGetFirstMFADevice_SeveralRefused(t *testing.T) {
+	fakeCLI(t, `echo '{"MFADevices": [{"SerialNumber": "arn:aws:iam::123456789012:mfa/old"}, {"SerialNumber": "arn:aws:iam::123456789012:mfa/new"}]}'`)
+	if _, err := GetFirstMFADevice(""); err == nil || !strings.Contains(err.Error(), "AWS lists 2 authenticator apps") {
+		t.Errorf("GetFirstMFADevice() = %v", err)
 	}
 }
 

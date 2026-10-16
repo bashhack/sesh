@@ -487,7 +487,9 @@ func TestProvider_GetCredentials(t *testing.T) {
 		"device asked of AWS":    {answers: []error{nil}, wantCodes: []string{first}},
 		"refused, then the next": {answers: []error{refused, nil}, device: testDevice, wantCodes: []string{first, next}, wantSlept: []time.Duration{11 * time.Second}},
 		"refused twice": {answers: []error{refused, refused}, device: testDevice, wantCodes: []string{first, next}, wantSlept: []time.Duration{11 * time.Second},
-			wantSub: "AWS refused the next code too: check this computer's clock"},
+			wantSub: "AWS refused the next code too. Just after sesh aws setup"},
+		"temporary credentials": {answers: []error{fmt.Errorf("aws sts get-session-token: An error occurred (AccessDenied) when calling the GetSessionToken operation: %s", aws.SessionCredentialsMessage)},
+			device: testDevice, wantCodes: []string{first}, wantSub: "signs in with temporary credentials (aws login, SSO or a role)"},
 		"refused, then another error": {answers: []error{refused, errors.New("network timeout")}, device: testDevice, wantCodes: []string{first, next}, wantSlept: []time.Duration{11 * time.Second},
 			wantSub: "failed to get session token: network timeout"},
 		"another error isn't tried again": {answers: []error{errors.New("ExpiredToken: the security token included in the request is expired")}, device: testDevice, wantCodes: []string{first},
@@ -533,6 +535,65 @@ func TestProvider_GetCredentials(t *testing.T) {
 				t.Errorf("creds = %+v", creds)
 			}
 		})
+	}
+}
+
+// The wait after a refused code ends in the next window, from either end
+// of the window it was refused in.
+func TestProvider_GetCredentials_WaitAtWindowEdges(t *testing.T) {
+	defer testutil.DiscardStderr(t)()
+	for _, tc := range []struct {
+		at   time.Time
+		want time.Duration
+	}{
+		{time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC), 31 * time.Second},
+		{time.Date(2026, 10, 16, 12, 0, 29, 999_000_000, time.UTC), 2 * time.Second},
+	} {
+		clock := &testClock{now: tc.at}
+		var codes []string
+		mockAWS := &awsMocks.MockProvider{
+			GetSessionTokenFunc: func(_, _ string, code []byte) (aws.Credentials, error) {
+				codes = append(codes, string(code))
+				if len(codes) == 1 {
+					return aws.Credentials{}, fmt.Errorf("aws sts get-session-token: %s", aws.InvalidMFAMessage)
+				}
+				return aws.Credentials{SessionToken: "t", Expiration: "2026-10-16T13:00:00Z"}, nil
+			},
+		}
+		mockTOTP := &totpMocks.MockProvider{GenerateForTimeBytesFunc: func(_ []byte, at time.Time) (string, error) { return windowCode(at), nil }}
+		p := &Provider{aws: mockAWS, store: awsStore(t, "", "MYSECRET", testDevice), totp: mockTOTP, Sleep: clock.Sleep}
+		p.Now = clock.Now
+		if _, err := p.GetCredentials(); err != nil {
+			t.Fatalf("at %s: %v", tc.at.Format("05.000"), err)
+		}
+		next := windowCode(tc.at.Truncate(30 * time.Second).Add(30 * time.Second))
+		if !slices.Equal(clock.slept, []time.Duration{tc.want}) || codes[1] != next {
+			t.Errorf("at %s: slept %v and sent %q; want %v and the next window's %q", tc.at.Format("05.000"), clock.slept, codes[1], tc.want, next)
+		}
+	}
+}
+
+// The profile is --profile, else AWS_PROFILE, else AWS_DEFAULT_PROFILE, as
+// the AWS CLI reads them.
+func TestProvider_ProfileFromEnvironment(t *testing.T) {
+	for _, tc := range []struct{ profile, defaultProfile, want string }{
+		{"work", "old", "work"},
+		{"", "old", "old"},
+		{"", "", ""},
+	} {
+		t.Setenv("AWS_PROFILE", tc.profile)
+		t.Setenv("AWS_DEFAULT_PROFILE", tc.defaultProfile)
+		p := NewProvider(nil, nil, nil)
+		fs := flag.NewFlagSet("aws", flag.ContinueOnError)
+		if err := p.SetupFlags(fs); err != nil {
+			t.Fatal(err)
+		}
+		if err := fs.Parse(nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := p.GetProfile(); got != tc.want {
+			t.Errorf("AWS_PROFILE=%q AWS_DEFAULT_PROFILE=%q: profile %q, want %q", tc.profile, tc.defaultProfile, got, tc.want)
+		}
 	}
 }
 

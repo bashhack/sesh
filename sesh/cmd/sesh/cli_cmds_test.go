@@ -515,6 +515,20 @@ func TestAWSCommand(t *testing.T) {
 	}
 }
 
+// sesh aws setup stops without a terminal before the vault is opened, so
+// it doesn't make one for a setup that can't run.
+func TestAWSSetup_NoTerminalOpensNoVault(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "passwords.db")
+	t.Setenv("SESH_DB_PATH", db)
+	app, _ := cliApp("", false)
+	if _, _, err := runCLI(app, runAWS, "setup"); err == nil || !strings.Contains(err.Error(), "at a terminal") {
+		t.Fatalf("sesh aws setup = %v", err)
+	}
+	if _, err := os.Stat(db); !os.IsNotExist(err) {
+		t.Errorf("a vault was made: %v", err)
+	}
+}
+
 // What's generated is named, and how to make a stronger one, by whether it's words.
 func TestGenFlagsSaid(t *testing.T) {
 	var chars, words genFlags
