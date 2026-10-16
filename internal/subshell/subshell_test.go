@@ -2,479 +2,171 @@ package subshell
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-// Mock shell customizer for testing
-type mockShellCustomizer struct {
-	zshScript      string
-	bashScript     string
-	fallbackScript string
-	promptPrefix   string
+// testCustomizer adds a helper command and a prefix, as AWS's does.
+type testCustomizer struct{}
+
+func (testCustomizer) Functions() string    { return "sesh_status() { echo status-ok; }\n" }
+func (testCustomizer) PromptPrefix() string { return "(sesh:test) " }
+
+// write writes body to path, making its folder.
+func write(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
-func (m *mockShellCustomizer) GetZshInitScript() string      { return m.zshScript }
-func (m *mockShellCustomizer) GetBashInitScript() string     { return m.bashScript }
-func (m *mockShellCustomizer) GetFallbackInitScript() string { return m.fallbackScript }
-func (m *mockShellCustomizer) GetPromptPrefix() string       { return m.promptPrefix }
+// inShell starts the shell GetShellConfig builds for $SHELL = sh,
+// interactive (so it reads its startup files, as at a terminal), runs cmd
+// in it, and returns what it printed. The config's files are removed after.
+func inShell(t *testing.T, sh, cmd string) string {
+	t.Helper()
+	path, err := exec.LookPath(sh)
+	if err != nil {
+		t.Skipf("no %s here", sh)
+	}
+	t.Setenv("SHELL", path)
+	sc, err := GetShellConfig(Config{
+		ServiceName:     "test",
+		Variables:       map[string]string{"AWS_SESSION_TOKEN": "token"},
+		Expiry:          time.Now().Add(time.Hour),
+		ShellCustomizer: testCustomizer{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Cleanup()
+	c := exec.Command(sc.Shell, append(sc.Args, "-i", "-c", cmd)...) //nolint:gosec // a shell found on PATH, for the test
+	c.Env = sc.Env
+	out, err := c.Output()
+	if err != nil {
+		t.Fatalf("%s: %v\n%s", sh, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// A clean home for the shell, with SESH_MASTER_PASSWORD set to show it
+// doesn't reach the shell.
+func home(t *testing.T) string {
+	t.Helper()
+	h := t.TempDir()
+	t.Setenv("HOME", h)
+	t.Setenv("ZDOTDIR", "")
+	t.Setenv("ENV", "")
+	t.Setenv("SESH_MASTER_PASSWORD", "hunter2-hunter2")
+	t.Setenv("PROMPT_COMMAND", "")
+	return h
+}
+
+// zsh runs the user's .zshenv and .zshrc from their ZDOTDIR, which is
+// theirs again inside, with history theirs; then sesh's prefix and helpers.
+func TestZsh_UserStartupFilesFirst(t *testing.T) {
+	h := home(t)
+	zdot := filepath.Join(h, ".config", "zsh")
+	t.Setenv("ZDOTDIR", zdot)
+	write(t, filepath.Join(zdot, ".zshenv"), "export ENV_LOADED=1\n")
+	write(t, filepath.Join(zdot, ".zshrc"), "alias marker=true\nPROMPT='mine> '\n")
+	out := inShell(t, "zsh", `print -r -- "$ENV_LOADED|$(alias marker)|$ZDOTDIR|$HISTFILE|$PROMPT|$SESH_ACTIVE|$AWS_SESSION_TOKEN|${SESH_MASTER_PASSWORD-unset}"; sesh_status`)
+	want := strings.Join([]string{"1", "marker=true", zdot, zdot + "/.zsh_history", "(sesh:test) mine> ", "1", "token", "unset"}, "|") + "\nstatus-ok"
+	if out != want {
+		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+}
+
+// A ~/.zshenv that moves ZDOTDIR, as many setups do, is followed.
+func TestZsh_ZshenvMovesZdotdir(t *testing.T) {
+	h := home(t)
+	zdot := filepath.Join(h, "cfg")
+	write(t, filepath.Join(h, ".zshenv"), "ZDOTDIR=$HOME/cfg\n")
+	write(t, filepath.Join(zdot, ".zshrc"), "alias marker=true\n")
+	if out := inShell(t, "zsh", `print -r -- "$(alias marker)|$ZDOTDIR"`); out != "marker=true|"+zdot {
+		t.Errorf("got %q", out)
+	}
+}
+
+// The prefix goes back on when a prompt theme redraws the prompt, once.
+func TestZsh_PrefixSurvivesThemes(t *testing.T) {
+	home(t)
+	out := inShell(t, "zsh", `PROMPT='theme> '; __sesh_prompt; __sesh_prompt; print -r -- "$PROMPT|${precmd_functions[-1]}"`)
+	if out != "(sesh:test) theme> |__sesh_prompt" {
+		t.Errorf("got %q", out)
+	}
+}
+
+// bash runs ~/.bashrc, then sesh's; its prompt command keeps the prefix,
+// after the user's own.
+func TestBash_UserBashrcFirst(t *testing.T) {
+	h := home(t)
+	write(t, filepath.Join(h, ".bashrc"), "alias marker=true\nPS1='mine> '\nPROMPT_COMMAND='PS1=\"theme> \"'\n")
+	out := inShell(t, "bash", `alias marker; eval "$PROMPT_COMMAND"; printf '%s|%s|%s\n' "$PS1" "$SESH_ACTIVE" "${SESH_MASTER_PASSWORD-unset}"; sesh_status`)
+	want := "alias marker='true'\n(sesh:test) theme> |1|unset\nstatus-ok"
+	if out != want {
+		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+}
+
+// sh runs the user's own ENV file, then sesh's.
+func TestSh_UserEnvFileFirst(t *testing.T) {
+	h := home(t)
+	own := filepath.Join(h, ".shrc")
+	write(t, own, "OWN_LOADED=1\nPS1='mine> '\n")
+	t.Setenv("ENV", own)
+	out := inShell(t, "sh", `printf '%s|%s|%s\n' "$OWN_LOADED" "$PS1" "${SESH_MASTER_PASSWORD-unset}"; sesh_status`)
+	if want := "1|(sesh:test) mine> |unset\nstatus-ok"; out != want {
+		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+}
+
+// The files sesh writes are removed by Cleanup, and readable only by the
+// user until then.
+func TestGetShellConfig_Cleanup(t *testing.T) {
+	for _, sh := range []string{"/bin/zsh", "/bin/bash", "/bin/sh"} {
+		home(t)
+		t.Setenv("SHELL", sh)
+		sc, err := GetShellConfig(Config{ServiceName: "test", ShellCustomizer: testCustomizer{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var path string
+		switch filepath.Base(sh) {
+		case "zsh":
+			path = envValue(sc.Env, "ZDOTDIR")
+		case "bash":
+			path = sc.Args[len(sc.Args)-1]
+		default:
+			path = envValue(sc.Env, "ENV")
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm()&0o077 != 0 {
+			t.Errorf("%s: %s is %v, %v", sh, path, info.Mode(), err)
+		}
+		sc.Cleanup()
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s: %s is still there: %v", sh, path, err)
+		}
+	}
+}
+
+func TestGetShellConfig_NeedsACustomizer(t *testing.T) {
+	if _, err := GetShellConfig(Config{ServiceName: "test"}); err == nil {
+		t.Error("GetShellConfig() took no customizer")
+	}
+}
 
 func TestFilterEnv(t *testing.T) {
-	tests := map[string]struct {
-		env  []string
-		key  string
-		want []string
-	}{
-		"remove single occurrence": {
-			env:  []string{"PATH=/usr/bin", "HOME=/home/user", "TERM=xterm"},
-			key:  "HOME",
-			want: []string{"PATH=/usr/bin", "TERM=xterm"},
-		},
-		"remove multiple occurrences": {
-			env:  []string{"PATH=/usr/bin", "AWS_KEY=old", "HOME=/home/user", "AWS_KEY=newer"},
-			key:  "AWS_KEY",
-			want: []string{"PATH=/usr/bin", "HOME=/home/user"},
-		},
-		"key not present": {
-			env:  []string{"PATH=/usr/bin", "HOME=/home/user"},
-			key:  "NONEXISTENT",
-			want: []string{"PATH=/usr/bin", "HOME=/home/user"},
-		},
-		"empty env": {
-			env:  []string{},
-			key:  "ANY",
-			want: []string{},
-		},
-		"key is prefix of another": {
-			env:  []string{"PATH=/usr/bin", "PATH_EXT=/usr/local/bin", "HOME=/home/user"},
-			key:  "PATH",
-			want: []string{"PATH_EXT=/usr/local/bin", "HOME=/home/user"},
-		},
-		"empty values": {
-			env:  []string{"PATH=/usr/bin", "EMPTY=", "HOME=/home/user"},
-			key:  "EMPTY",
-			want: []string{"PATH=/usr/bin", "HOME=/home/user"},
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			got := FilterEnv(tc.env, tc.key)
-
-			if len(got) != len(tc.want) {
-				t.Errorf("FilterEnv() returned %d items, want %d", len(got), len(tc.want))
-				return
-			}
-
-			for i, item := range got {
-				if item != tc.want[i] {
-					t.Errorf("FilterEnv()[%d] = %v, want %v", i, item, tc.want[i])
-				}
-			}
-		})
-	}
-}
-
-func TestGetShellConfig(t *testing.T) {
-	// Save original env
-	originalShell, shellWasSet := os.LookupEnv("SHELL")
-	defer func() {
-		if shellWasSet {
-			if err := os.Setenv("SHELL", originalShell); err != nil {
-				t.Errorf("failed to restore SHELL env: %v", err)
-			}
-		} else {
-			if err := os.Unsetenv("SHELL"); err != nil {
-				t.Errorf("failed to unset SHELL env: %v", err)
-			}
-		}
-	}()
-
-	mockCustomizer := &mockShellCustomizer{
-		zshScript:      "# Zsh init script",
-		bashScript:     "# Bash init script",
-		fallbackScript: "# Fallback init script",
-		promptPrefix:   "sesh",
-	}
-
-	tests := map[string]struct {
-		config      Config
-		checkResult func(t *testing.T, cfg *ShellConfig)
-		shell       string
-		wantErr     bool
-	}{
-		"zsh shell": {
-			config: Config{
-				ServiceName:     "test-service",
-				Variables:       map[string]string{"VAR1": "value1", "VAR2": "value2"},
-				Expiry:          time.Now().Add(1 * time.Hour),
-				ShellCustomizer: mockCustomizer,
-			},
-			shell:   "/bin/zsh",
-			wantErr: false,
-			checkResult: func(t *testing.T, cfg *ShellConfig) {
-				if cfg.Shell != "/bin/zsh" {
-					t.Errorf("Expected shell /bin/zsh, got %s", cfg.Shell)
-				}
-				if len(cfg.Args) != 0 {
-					t.Errorf("Expected no args for zsh, got %v", cfg.Args)
-				}
-				// Check for ZDOTDIR in env
-				hasZDOTDIR := false
-				for _, e := range cfg.Env {
-					if strings.HasPrefix(e, "ZDOTDIR=") {
-						hasZDOTDIR = true
-						break
-					}
-				}
-				if !hasZDOTDIR {
-					t.Error("Expected ZDOTDIR in environment")
-				}
-			},
-		},
-		"bash shell": {
-			config: Config{
-				ServiceName:     "test-service",
-				Variables:       map[string]string{"VAR1": "value1"},
-				Expiry:          time.Time{}, // Zero time
-				ShellCustomizer: mockCustomizer,
-			},
-			shell:   "/bin/bash",
-			wantErr: false,
-			checkResult: func(t *testing.T, cfg *ShellConfig) {
-				if cfg.Shell != "/bin/bash" {
-					t.Errorf("Expected shell /bin/bash, got %s", cfg.Shell)
-				}
-				if len(cfg.Args) != 2 || cfg.Args[0] != "--rcfile" {
-					t.Errorf("Expected --rcfile args for bash, got %v", cfg.Args)
-				}
-			},
-		},
-		"fallback shell": {
-			config: Config{
-				ServiceName:     "test-service",
-				Variables:       map[string]string{},
-				ShellCustomizer: mockCustomizer,
-			},
-			shell:   "/bin/sh",
-			wantErr: false,
-			checkResult: func(t *testing.T, cfg *ShellConfig) {
-				if cfg.Shell != "/bin/sh" {
-					t.Errorf("Expected shell /bin/sh, got %s", cfg.Shell)
-				}
-				// Check for PS1 and ENV in env
-				hasPS1 := false
-				hasENV := false
-				for _, e := range cfg.Env {
-					if strings.HasPrefix(e, "PS1=") {
-						hasPS1 = true
-					}
-					if strings.HasPrefix(e, "ENV=") {
-						hasENV = true
-					}
-				}
-				if !hasPS1 {
-					t.Error("Expected PS1 in environment")
-				}
-				if !hasENV {
-					t.Error("Expected ENV in environment")
-				}
-			},
-		},
-		"no shell env var": {
-			config: Config{
-				ServiceName:     "test-service",
-				Variables:       map[string]string{},
-				ShellCustomizer: mockCustomizer,
-			},
-			shell:   "",
-			wantErr: false,
-			checkResult: func(t *testing.T, cfg *ShellConfig) {
-				if cfg.Shell != "/bin/sh" {
-					t.Errorf("Expected default shell /bin/sh, got %s", cfg.Shell)
-				}
-			},
-		},
-		"zsh by basename": {
-			config: Config{
-				ServiceName:     "test-service",
-				Variables:       map[string]string{},
-				ShellCustomizer: mockCustomizer,
-			},
-			shell:   "/usr/local/bin/zsh",
-			wantErr: false,
-			checkResult: func(t *testing.T, cfg *ShellConfig) {
-				if cfg.Shell != "/usr/local/bin/zsh" {
-					t.Errorf("Expected shell /usr/local/bin/zsh, got %s", cfg.Shell)
-				}
-				// Should still be treated as zsh
-				hasZDOTDIR := false
-				for _, e := range cfg.Env {
-					if strings.HasPrefix(e, "ZDOTDIR=") {
-						hasZDOTDIR = true
-						break
-					}
-				}
-				if !hasZDOTDIR {
-					t.Error("Expected ZDOTDIR in environment for zsh")
-				}
-			},
-		},
-		"nil shell customizer": {
-			config: Config{
-				ServiceName: "test-service",
-			},
-			shell:   "/bin/zsh",
-			wantErr: true,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Setenv("SHELL", tc.shell)
-
-			cfg, err := GetShellConfig(tc.config)
-
-			if (err != nil) != tc.wantErr {
-				t.Errorf("GetShellConfig() error = %v, wantErr %v", err, tc.wantErr)
-				return
-			}
-
-			if !tc.wantErr {
-				// Check common env vars
-				hasSeshActive := false
-				hasSeshService := false
-				hasVariable := false
-
-				for _, e := range cfg.Env {
-					if e == "SESH_ACTIVE=1" {
-						hasSeshActive = true
-					}
-					if e == "SESH_SERVICE=test-service" {
-						hasSeshService = true
-					}
-					if strings.HasPrefix(e, "VAR1=") {
-						hasVariable = true
-					}
-				}
-
-				if !hasSeshActive {
-					t.Error("Expected SESH_ACTIVE=1 in environment")
-				}
-				if !hasSeshService {
-					t.Error("Expected SESH_SERVICE in environment")
-				}
-				if len(tc.config.Variables) > 0 && !hasVariable {
-					t.Error("Expected custom variables in environment")
-				}
-
-				if tc.checkResult != nil {
-					tc.checkResult(t, cfg)
-				}
-			}
-		})
-	}
-}
-
-func TestSetupZshShell(t *testing.T) {
-	mockCustomizer := &mockShellCustomizer{
-		zshScript: "# Test zsh script\necho 'Hello from zsh'",
-	}
-
-	config := Config{
-		ServiceName:     "test",
-		ShellCustomizer: mockCustomizer,
-	}
-
-	env := []string{"PATH=/usr/bin", "HOME=/home/user"}
-
-	newEnv, tmpDir, err := SetupZshShell(config, env)
-	if err != nil {
-		t.Fatalf("SetupZshShell() error = %v", err)
-	}
-	defer func() {
-		if err := os.RemoveAll(tmpDir); err != nil {
-			t.Errorf("failed to clean up tmpDir: %v", err)
-		}
-	}()
-
-	// Check that ZDOTDIR was added
-	zdotdirFound := false
-	var zdotdir string
-	for _, e := range newEnv {
-		if strings.HasPrefix(e, "ZDOTDIR=") {
-			zdotdirFound = true
-			zdotdir = strings.TrimPrefix(e, "ZDOTDIR=")
-			break
-		}
-	}
-
-	if !zdotdirFound {
-		t.Fatal("Expected ZDOTDIR in environment")
-	}
-
-	// Assert the returned path matches the one placed in ZDOTDIR
-	if tmpDir != zdotdir {
-		t.Errorf("returned tmpDir = %q, but ZDOTDIR = %q", tmpDir, zdotdir)
-	}
-
-	// Check that the zshrc file was created
-	zshrcPath := filepath.Join(zdotdir, ".zshrc")
-	content, err := os.ReadFile(zshrcPath)
-	if err != nil {
-		t.Errorf("Failed to read created zshrc: %v", err)
-	}
-
-	if string(content) != mockCustomizer.zshScript {
-		t.Errorf("zshrc content = %q, want %q", string(content), mockCustomizer.zshScript)
-	}
-
-	// Clean up
-	if err := os.RemoveAll(zdotdir); err != nil {
-		t.Errorf("failed to clean up zdotdir: %v", err)
-	}
-}
-
-func TestSetupBashShell(t *testing.T) {
-	mockCustomizer := &mockShellCustomizer{
-		bashScript: "# Test bash script\necho 'Hello from bash'",
-	}
-
-	config := Config{
-		ServiceName:     "test",
-		ShellCustomizer: mockCustomizer,
-	}
-
-	tmpFile, err := SetupBashShell(config)
-	if err != nil {
-		t.Fatalf("SetupBashShell() error = %v", err)
-	}
-	defer func() {
-		if err := os.Remove(tmpFile.Name()); err != nil {
-			t.Errorf("failed to clean up temp file: %v", err)
-		}
-	}()
-
-	// Check that the file exists
-	if _, err := os.Stat(tmpFile.Name()); os.IsNotExist(err) {
-		t.Error("Expected temp file to exist")
-	}
-
-	// Read the content
-	content, err := os.ReadFile(tmpFile.Name())
-	if err != nil {
-		t.Errorf("Failed to read created bashrc: %v", err)
-	}
-
-	if string(content) != mockCustomizer.bashScript {
-		t.Errorf("bashrc content = %q, want %q", string(content), mockCustomizer.bashScript)
-	}
-}
-
-func TestSetupFallbackShell(t *testing.T) {
-	mockCustomizer := &mockShellCustomizer{
-		fallbackScript: "# Test fallback script\necho 'Hello from sh'",
-	}
-
-	config := Config{
-		ServiceName:     "test-service",
-		ShellCustomizer: mockCustomizer,
-	}
-
-	env := []string{"PATH=/usr/bin", "HOME=/home/user"}
-
-	newEnv, tmpName, err := SetupFallbackShell(config, env)
-	if err != nil {
-		t.Fatalf("SetupFallbackShell() error = %v", err)
-	}
-	defer func() {
-		if err := os.Remove(tmpName); err != nil {
-			t.Errorf("failed to clean up temp file: %v", err)
-		}
-	}()
-
-	// Check that PS1 and ENV were added
-	ps1Found := false
-	envFound := false
-	var envFile string
-
-	for _, e := range newEnv {
-		if e == "PS1=(sesh:test-service) $ " {
-			ps1Found = true
-		}
-		if strings.HasPrefix(e, "ENV=") {
-			envFound = true
-			envFile = strings.TrimPrefix(e, "ENV=")
-		}
-	}
-
-	if !ps1Found {
-		t.Error("Expected PS1 in environment")
-	}
-	if !envFound {
-		t.Fatal("Expected ENV in environment")
-	}
-
-	// Assert the returned path matches the one placed in ENV
-	if tmpName != envFile {
-		t.Errorf("returned tmpName = %q, but ENV = %q", tmpName, envFile)
-	}
-
-	// Check that the file was created with correct content
-	content, err := os.ReadFile(envFile)
-	if err != nil {
-		t.Fatalf("Failed to read created shellrc: %v", err)
-	}
-
-	if string(content) != mockCustomizer.fallbackScript {
-		t.Errorf("shellrc content = %q, want %q", string(content), mockCustomizer.fallbackScript)
-	}
-}
-
-func TestSetupFallbackShellCustomPrefix(t *testing.T) {
-	mockCustomizer := &mockShellCustomizer{
-		fallbackScript: "# custom prefix test",
-		promptPrefix:   "myapp",
-	}
-
-	config := Config{
-		ServiceName:     "test-service",
-		ShellCustomizer: mockCustomizer,
-	}
-
-	env := []string{"PATH=/usr/bin"}
-
-	newEnv, tmpName, err := SetupFallbackShell(config, env)
-	if err != nil {
-		t.Fatalf("SetupFallbackShell() error = %v", err)
-	}
-	defer func() {
-		if err := os.Remove(tmpName); err != nil {
-			t.Errorf("failed to clean up temp file: %v", err)
-		}
-	}()
-
-	// Assert ENV is set and matches the returned path
-	var envFile string
-	var ps1Found bool
-	for _, e := range newEnv {
-		if v, ok := strings.CutPrefix(e, "ENV="); ok {
-			envFile = v
-		}
-		if e == "PS1=(myapp:test-service) $ " {
-			ps1Found = true
-		}
-	}
-
-	if envFile == "" {
-		t.Fatal("Expected ENV in environment")
-	}
-	if tmpName != envFile {
-		t.Errorf("returned tmpName = %q, but ENV = %q", tmpName, envFile)
-	}
-	if !ps1Found {
-		t.Error("Expected PS1 with custom prompt prefix 'myapp'")
+	env := []string{"A=1", "AB=2", "A=3", "B=A=4"}
+	if got := FilterEnv(env, "A"); !slices.Equal(got, []string{"AB=2", "B=A=4"}) {
+		t.Errorf("FilterEnv() = %q", got)
 	}
 }

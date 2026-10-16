@@ -1,10 +1,6 @@
 package aws
 
-import (
-	"fmt"
-
-	"github.com/bashhack/sesh/internal/subshell"
-)
+import "github.com/bashhack/sesh/internal/subshell"
 
 var _ subshell.ShellCustomizer = (*AWSShellCustomizer)(nil)
 
@@ -71,28 +67,18 @@ sesh_status() {
   fi
 }
 
-# Shortcut to verify AWS credentials
+# verify_aws checks the session's credentials with AWS, and says who
+# they sign in as. sesh got the session with an MFA code, so it's an MFA
+# session for as long as it lasts.
 verify_aws() {
   if [ "$SESH_SERVICE" != "aws" ]; then
     echo "❌ Not in an AWS sesh environment"
     return 1
   fi
-
-  echo "Testing AWS MFA authentication..."
-
-  # Try to access IAM information (typically requires MFA)
-  if aws iam list-account-aliases >/dev/null 2>&1; then
-    echo "✅ AWS MFA authentication VERIFIED"
-    echo "Successfully accessed IAM data that requires MFA"
-    return 0
+  if identity=$(aws sts get-caller-identity --query Arn --output text 2>&1); then
+    echo "✅ The credentials work: signed in as $identity, with the MFA session sesh started"
   else
-    echo "❓ AWS MFA status uncertain"
-    echo "Could not access IAM data - this could be due to IAM permissions rather than MFA status"
-
-    # Show the caller identity anyway
-    echo ""
-    echo "Current identity:"
-    aws sts get-caller-identity --query "Arn" --output text
+    echo "❌ AWS didn't accept the credentials: $identity"
     return 1
   fi
 }
@@ -100,73 +86,40 @@ verify_aws() {
 # Help command
 sesh_help() {
   cat <<EOF
-🔒 sesh Secure Subshell
+🔒 sesh: a shell with an AWS session
 
-You are in a secure environment with isolated AWS credentials.
-These credentials will be automatically removed when you exit.
+This shell has the session's credentials in its environment, on top of
+your own shell setup. They leave with the shell when it exits; AWS still
+accepts them until they expire.
 
 Commands:
-  sesh_status    Show status and verify credentials
-  verify_aws     Test if AWS MFA authentication is working
+  sesh_status    How long the credentials have, and who they sign in as
+  verify_aws     Check the credentials work, and who they sign in as
 
-Exit Options:
-  exit           Type 'exit' to leave the secure subshell
-  Ctrl+D         Press Ctrl+D to send EOF and exit
+Leave with exit, or Ctrl-D.
 
-Environment Variables:
-  AWS_ACCESS_KEY_ID     - Your temporary AWS access key
-  AWS_SECRET_ACCESS_KEY - Your temporary AWS secret key
-  AWS_SESSION_TOKEN     - Your temporary AWS session token
+Environment variables:
+  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN   the session's credentials
+  SESH_ACTIVE, SESH_SERVICE, SESH_EXPIRY, SESH_TOTAL_DURATION    what this shell is, and until when
 EOF
 }
 
 # Welcome message
 echo "🔐 Secure shell with aws credentials activated. Type 'sesh_help' for more information."
 `
-
-	// ZshPrompt handles injection of the sesh:aws prompt and subshell function helpers for zsh
-	// SESH_ACTIVE and SESH_SERVICE are already set by subshell.GetShellConfig in the process env.
-	ZshPrompt = fmt.Sprintf(`
-PROMPT="(sesh:aws) ${PROMPT}"
-
-%s
-`, SubshellFunctions)
-
-	// BashPrompt handles injection of the sesh:aws prompt and subshell function helpers for bash
-	BashPrompt = fmt.Sprintf(`
-PS1="(sesh:aws) $PS1"
-
-%s
-`, SubshellFunctions)
-
-	// FallbackPrompt reuses SubshellFunctions so all shells get the same
-	// sesh_status, sesh_help, and verify_aws implementations.
-	FallbackPrompt = fmt.Sprintf(`
-%s
-`, SubshellFunctions)
 )
 
-// AWSShellCustomizer implements subshell.ShellCustomizer for AWS
+// AWSShellCustomizer is what sesh aws adds to the shell it opens.
 type AWSShellCustomizer struct{}
 
-// GetZshInitScript returns the zsh init script for the AWS subshell prompt.
-func (c *AWSShellCustomizer) GetZshInitScript() string {
-	return ZshPrompt
+// Functions is the helper commands, and the line saying the shell is ready.
+func (c *AWSShellCustomizer) Functions() string {
+	return SubshellFunctions
 }
 
-// GetBashInitScript returns the bash init script for the AWS subshell prompt.
-func (c *AWSShellCustomizer) GetBashInitScript() string {
-	return BashPrompt
-}
-
-// GetFallbackInitScript returns the init script for non-zsh/bash shells.
-func (c *AWSShellCustomizer) GetFallbackInitScript() string {
-	return FallbackPrompt
-}
-
-// GetPromptPrefix returns the prompt prefix displayed in the AWS subshell.
-func (c *AWSShellCustomizer) GetPromptPrefix() string {
-	return "sesh"
+// PromptPrefix is (sesh:aws), before the user's own prompt.
+func (c *AWSShellCustomizer) PromptPrefix() string {
+	return "(sesh:aws) "
 }
 
 // NewCustomizer creates a new AWS shell customizer

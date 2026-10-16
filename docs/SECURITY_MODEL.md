@@ -286,7 +286,8 @@ $ env | grep AWS
 2. **Visual Indicators**: Clear prompt showing you're in a secure environment
 3. **On Exit**: the credentials leave with the shell; AWS still accepts them until they expire
 4. **Session Tracking**: Built-in commands to verify credential status
-5. **Minimal Persistence**: the shell's startup files (its prompt and helper commands, never the credentials) are written to temporary files and removed on exit
+5. **Minimal Persistence**: the shell's startup files (its prompt and helper commands, never the credentials) are written to temporary files, readable only by you, and removed when the shell ends, also when the terminal is closed
+6. **Nothing more than it needs**: `SESH_MASTER_PASSWORD` isn't passed to the shell, and sesh closes the vault before the shell starts, so a shell open for hours doesn't keep the vault open, or its key in sesh's memory when sesh isn't using the agent
 
 ## One Vault, One Set of Commands
 

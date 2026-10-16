@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,8 +9,15 @@ import (
 	"github.com/bashhack/sesh/internal/subshell"
 )
 
-// LaunchSubshell launches a new shell with credentials loaded
-func (a *App) LaunchSubshell(p provider.ServiceProvider) error {
+// LaunchSubshell opens a shell with p's credentials and waits for it to
+// end. release is called once the credentials are in hand, before the
+// shell starts, to let go of the vault (and, without the agent, its key),
+// which the shell, open for hours perhaps, doesn't need.
+//
+// The shell's exit status is sesh's. A hangup (the terminal closing) or a
+// request to stop is passed on to the shell, and the startup files sesh
+// wrote are removed once it has ended.
+func (a *App) LaunchSubshell(p provider.ServiceProvider, release func()) error {
 	if os.Getenv("SESH_ACTIVE") == "1" {
 		return fmt.Errorf("already in a sesh environment, nested sessions are not supported.\nPlease exit the current sesh shell first with 'exit' or Ctrl+D")
 	}
@@ -26,18 +32,18 @@ func (a *App) LaunchSubshell(p provider.ServiceProvider) error {
 	if err != nil {
 		return fmt.Errorf("failed to generate credentials: %w", err)
 	}
+	if release != nil {
+		release()
+	}
 
 	subshellP, ok := p.(provider.SubshellProvider)
 	if !ok {
 		return fmt.Errorf("provider %s does not support subshell customization", serviceName)
 	}
-
-	configInterface := subshellP.NewSubshellConfig(&creds)
-	config, ok := configInterface.(subshell.Config)
+	config, ok := subshellP.NewSubshellConfig(&creds).(subshell.Config)
 	if !ok {
 		return fmt.Errorf("provider %s returned invalid subshell configuration", serviceName)
 	}
-
 	shellConfig, err := subshell.GetShellConfig(config)
 	if err != nil {
 		return err
@@ -46,45 +52,16 @@ func (a *App) LaunchSubshell(p provider.ServiceProvider) error {
 		defer shellConfig.Cleanup()
 	}
 
-	var cmd *exec.Cmd
-
-	if len(shellConfig.Args) > 0 {
-		cmd = exec.Command(shellConfig.Shell, shellConfig.Args...) //nolint:gosec // shell path comes from $SHELL env var — launching the user's shell is intentional
-	} else {
-		cmd = exec.Command(shellConfig.Shell) //nolint:gosec // shell path comes from $SHELL env var — launching the user's shell is intentional
-	}
-
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := exec.Command(shellConfig.Shell, shellConfig.Args...) //nolint:gosec // the shell is $SHELL: starting the user's shell is the point
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = shellConfig.Env
 
 	if _, err := fmt.Fprintf(a.Stdout, "Starting secure shell with %s credentials\n", serviceName); err != nil {
 		return fmt.Errorf("failed to write to stdout: %w", err)
 	}
-	err = cmd.Run()
-
-	if err != nil {
-		// ExitError is the standard error type when a shell exits, whether by
-		// normal means (exit command, Ctrl+D) or signals. This is expected behavior
-		// for subshell implementations and shouldn't be reported as an error.
-		// In my testing, tools like Python's virtualenv have similar behavior -
-		// swallowing events like Ctrl+C, for example.
-		var exitError *exec.ExitError
-		if errors.As(err, &exitError) { //nolint:modernize // errors.AsType would leave a blank error value, which errcheck's check-blank rejects
-			if _, printErr := fmt.Fprintf(a.Stdout, "Exited secure shell\n"); printErr != nil {
-				return fmt.Errorf("failed to write to stdout: %w", printErr)
-			}
-			return nil
-		}
-
-		// Only return truly unexpected errors...
-		return fmt.Errorf("subshell encountered an unexpected error: %w", err)
+	err = runChild(cmd, nil)
+	if _, printErr := fmt.Fprintf(a.Stdout, "Exited secure shell\n"); printErr != nil && err == nil {
+		err = fmt.Errorf("failed to write to stdout: %w", printErr)
 	}
-
-	if _, printErr := fmt.Fprintf(a.Stdout, "Exited secure shell\n"); printErr != nil {
-		return fmt.Errorf("failed to write to stdout: %w", printErr)
-	}
-
-	return nil
+	return err
 }
