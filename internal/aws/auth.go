@@ -15,6 +15,10 @@ import (
 // execCommand wraps exec.Command to allow for mocking
 var execCommand = exec.Command
 
+// InvalidMFAMessage is what the AWS CLI says when it refuses an MFA code
+// that's wrong or already used, which a caller can retry with the next.
+const InvalidMFAMessage = "MultiFactorAuthentication failed with invalid MFA one time pass code"
+
 // Credentials holds the temporary AWS session credentials returned by STS.
 type Credentials struct {
 	AccessKeyID     string `json:"AccessKeyId"`
@@ -90,10 +94,13 @@ func GetSessionToken(profile, serial string, code []byte) (Credentials, error) {
 
 	err := cmd.Run()
 	if err != nil {
+		// The AWS CLI's message is read before the buffers are zeroed:
+		// callers match it to retry with the next code. The arguments,
+		// which hold the code, are left out.
+		msg := strings.TrimSpace(stderr.String())
 		secure.SecureZeroBytes(stdout.Bytes())
 		secure.SecureZeroBytes(stderr.Bytes())
-		return Credentials{}, fmt.Errorf("failed to run aws sts get-session-token: %w\nArgs: %v\nStderr: %s",
-			err, args, stderr.String())
+		return Credentials{}, fmt.Errorf("failed to run aws sts get-session-token: %w\nStderr: %s", err, msg)
 	}
 
 	// Note: out shares the same backing array as stdout.Bytes(), so the

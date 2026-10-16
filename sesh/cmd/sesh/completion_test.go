@@ -42,6 +42,7 @@ func TestComplete(t *testing.T) {
 		{name: "edit's field flags", words: all("edit", "github", "--"), has: all("--rename-field", "--plain-field")},
 		{name: "edit flags", words: all("edit", "github", "--"), has: all("--rename", "--username", "--type", "--generate")},
 		{name: "edit types", words: all("edit", "github", "--type", ""), want: all("password", "api_key", "secure_note")},
+		{name: "edit's file", words: all("edit", "kubeconfig", "--from", ""), files: true},
 		{name: "generate flags", words: all("generate", "-"), want: all("--capitalize", "--copy", "--length", "--no-symbols", "--separator", "--words", "--db-path")},
 		{name: "export kinds", words: all("export", ""), want: all("passwords", "keys", "notes", "totp", "files")},
 		{name: "export formats", words: all("export", "--format", ""), want: all("encrypted", "json", "csv")},

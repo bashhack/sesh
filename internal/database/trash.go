@@ -141,7 +141,7 @@ func (s *Store) RestoreFromTrash(id int64, as vault.Key) (Restored, error) {
 	to := e.Key
 	if as != (vault.Key{}) {
 		if as.Kind != e.Kind {
-			return Restored{}, fmt.Errorf("%s is a %s entry; restore it under another %s name", e.Key, e.Kind, e.Kind)
+			return Restored{}, fmt.Errorf("%s can be restored only under an ID that starts %s/", e.Key, e.Kind)
 		}
 		if err := as.Validate(); err != nil {
 			return Restored{}, err

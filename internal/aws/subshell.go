@@ -35,12 +35,14 @@ sesh_status() {
       if [ -n "$SESH_TOTAL_DURATION" ] && [ $SESH_TOTAL_DURATION -gt 0 ]; then
         percent_remaining=$(( (remaining * 100) / SESH_TOTAL_DURATION ))
         progress_bar="["
-        for i in {1..20}; do
+        i=1
+        while [ $i -le 20 ]; do
           if [ $i -le $((percent_remaining / 5)) ]; then
             progress_bar="${progress_bar}█"
           else
             progress_bar="${progress_bar}░"
           fi
+          i=$((i + 1))
         done
         progress_bar="${progress_bar}] ${percent_remaining}%"
         echo "   Session progress: $progress_bar"

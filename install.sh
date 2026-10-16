@@ -5,11 +5,16 @@ set -e
 # Variables
 VERSION=${1:-latest}
 ARCH=$(uname -m)
+[ "$ARCH" = "aarch64" ] && ARCH=arm64
 
-if [ "$(uname -s)" != "Darwin" ]; then
-  echo "❌ Sorry, only macOS is currently supported"
-  exit 1
-fi
+case "$(uname -s)" in
+  Darwin) ARCHIVE="sesh_Darwin_${ARCH}.zip" ;;
+  Linux) ARCHIVE="sesh_Linux_${ARCH}.tar.gz" ;;
+  *)
+    echo "❌ Sorry, only macOS and Linux are supported"
+    exit 1
+    ;;
+esac
 
 if [ "$ARCH" != "x86_64" ] && [ "$ARCH" != "arm64" ]; then
   echo "❌ Unsupported architecture: $ARCH"
@@ -58,7 +63,7 @@ if [ "$VERSION" = "latest" ]; then
 else
   BASE_URL="https://github.com/bashhack/sesh/releases/download/${VERSION}"
 fi
-DOWNLOAD_URL="${BASE_URL}/sesh_Darwin_${ARCH}.zip"
+DOWNLOAD_URL="${BASE_URL}/${ARCHIVE}"
 CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 
 echo "⬇️ Downloading sesh from $DOWNLOAD_URL..."
@@ -66,7 +71,7 @@ TMP_DIR=$(mktemp -d)
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 
-if ! curl -sfL -o "$TMP_DIR/sesh.zip" "$DOWNLOAD_URL"; then
+if ! curl -sfL -o "$TMP_DIR/$ARCHIVE" "$DOWNLOAD_URL"; then
   echo "❌ Download failed. Check that the version exists at:"
   echo "   https://github.com/bashhack/sesh/releases"
   exit 1
@@ -74,12 +79,16 @@ fi
 
 # Verify checksum if checksums.txt is available
 if curl -sfL -o "$TMP_DIR/checksums.txt" "$CHECKSUMS_URL"; then
-  EXPECTED=$(grep "sesh_Darwin_${ARCH}.zip" "$TMP_DIR/checksums.txt" | awk '{print $1}')
+  EXPECTED=$(grep " ${ARCHIVE}\$" "$TMP_DIR/checksums.txt" | awk '{print $1}')
   if [ -z "$EXPECTED" ]; then
-    echo "❌ Checksum entry for sesh_Darwin_${ARCH}.zip not found in checksums.txt"
+    echo "❌ Checksum entry for ${ARCHIVE} not found in checksums.txt"
     exit 1
   fi
-  ACTUAL=$(shasum -a 256 "$TMP_DIR/sesh.zip" | awk '{print $1}')
+  if command -v sha256sum &>/dev/null; then
+    ACTUAL=$(sha256sum "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
+  else
+    ACTUAL=$(shasum -a 256 "$TMP_DIR/$ARCHIVE" | awk '{print $1}')
+  fi
   if [ "$EXPECTED" != "$ACTUAL" ]; then
     echo "❌ Checksum verification failed (expected $EXPECTED, got $ACTUAL)"
     exit 1
@@ -87,10 +96,13 @@ if curl -sfL -o "$TMP_DIR/checksums.txt" "$CHECKSUMS_URL"; then
   echo "✅ Checksum verified"
 fi
 
-if ! unzip -q "$TMP_DIR/sesh.zip" -d "$TMP_DIR"; then
+case "$ARCHIVE" in
+  *.zip) unzip -q "$TMP_DIR/$ARCHIVE" -d "$TMP_DIR" ;;
+  *) tar -xzf "$TMP_DIR/$ARCHIVE" -C "$TMP_DIR" ;;
+esac || {
   echo "❌ Failed to extract archive. The download may be corrupted — please try again."
   exit 1
-fi
+}
 chmod +x "$TMP_DIR/sesh"
 mv "$TMP_DIR/sesh" "$INSTALL_DIR/sesh"
 
@@ -100,11 +112,9 @@ echo "✅ Installation completed!"
 
 # Check for AWS CLI
 if ! command -v aws &>/dev/null; then
-  echo "⚠️ Warning: AWS CLI not found"
-  echo "sesh requires the AWS CLI to function properly."
-  echo "Please install it: https://aws.amazon.com/cli/"
+  echo "ℹ️ The AWS CLI isn't installed. Only sesh aws needs it: https://aws.amazon.com/cli/"
 fi
 
 echo ""
 echo "🚀 To get started, run:"
-echo "   sesh --help     # Show available commands and options"
+echo "   sesh            # every command; the first sesh add creates your vault"

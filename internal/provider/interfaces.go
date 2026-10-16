@@ -66,12 +66,6 @@ type FlagInfo struct {
 	Required bool
 }
 
-// SubshellDecider is an optional interface that providers can implement
-// to indicate whether they prefer subshell mode over printing credentials.
-type SubshellDecider interface {
-	ShouldUseSubshell() bool
-}
-
 // QuietProvider is an optional interface for providers that should not
 // print the app's generic "Generating credentials… / Credentials acquired
 // in Xs" framing. Useful for providers whose actions aren't a single

@@ -507,7 +507,7 @@ func TestImport_KeePass(t *testing.T) {
 		`"Steam": its TOTP key: a Steam code, which sesh doesn't make`,
 		"Old passwords, for the entries' history: up to 1 (any an entry has already aren't added again)\n",
 		"earlier versions with no other password to keep (sesh's history keeps old passwords only): 11\n",
-		"attachments (sesh doesn't hold files): 2\n",
+		"attachments (add each with sesh add file): 2\n",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("summary missing %q:\n%s", want, stderr)
