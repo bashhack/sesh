@@ -581,3 +581,46 @@ func TestDecodeQRCodeFromFile_Integration(t *testing.T) {
 		t.Error("Expected error for non-existent file")
 	}
 }
+
+// An image file gives its one TOTP code's link; two codes, or none, are refused, saying why.
+func TestReadTOTPFromFile(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, texts ...string) string {
+		img := image.NewGray(image.Rect(0, 0, 300*len(texts), 300))
+		for i, text := range texts {
+			m, err := qrcode.NewQRCodeWriter().Encode(text, gozxing.BarcodeFormat_QR_CODE, 300, 300, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for y := range 300 {
+				for x := range 300 {
+					c := color.White
+					if m.Get(x, y) {
+						c = color.Black
+					}
+					img.Set(i*300+x, y, c)
+				}
+			}
+		}
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, img); err != nil {
+			t.Fatal(err)
+		}
+		path := dir + "/" + name
+		if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	one := "otpauth://totp/Shop:dee?secret=JBSWY3DPEHPK3PXP&issuer=Shop"
+	link, info, err := ReadTOTPFromFile(write("one.png", one))
+	if err != nil || link != one || info.Issuer != "Shop" || info.Account != "dee" {
+		t.Errorf("one: %q, %+v, %v", link, info, err)
+	}
+	if _, _, err := ReadTOTPFromFile(write("two.png", one, "otpauth://totp/Bank:me?secret=GEZDGNBVGY3TQOJQ&issuer=Bank")); err == nil || !strings.Contains(err.Error(), "has 2 TOTP QR codes: crop it") {
+		t.Errorf("two: %v", err)
+	}
+	if _, _, err := ReadTOTPFromFile(write("site.png", "https://example.com")); err == nil || !strings.Contains(err.Error(), "isn't a TOTP key") {
+		t.Errorf("a site: %v", err)
+	}
+}

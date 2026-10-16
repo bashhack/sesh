@@ -61,9 +61,15 @@ func TestEdit_SecretKindAndGenerate(t *testing.T) {
 	if out, _, err := runEditOut(t, "", false, "password/openai", "--generate", "--length", "32"); err != nil || !strings.Contains(out, "secret changed") {
 		t.Errorf("--generate: %q, %v", out, err)
 	}
+	if out, _, err := runEditOut(t, "", false, "password/gitlab", "--generate", "--words", "4", "--separator", "."); err != nil || !strings.Contains(out, "secret changed") {
+		t.Errorf("--generate --words: %q, %v", out, err)
+	}
+	if _, _, err := runEditOut(t, "", false, "password/gitlab", "--words", "4"); err == nil || !strings.Contains(err.Error(), "add --generate") {
+		t.Errorf("--words without --generate: %v", err)
+	}
 	store := openDoctorVault(t, env)
 	defer store.Close() //nolint:errcheck // test cleanup
-	if got, err := store.Get(vault.Key{Kind: vault.KindPassword, Service: "gitlab"}); err != nil || string(got) != "new-pw-Strong-91x" {
+	if got, err := store.Get(vault.Key{Kind: vault.KindPassword, Service: "gitlab"}); err != nil || strings.Count(string(got), ".") != 3 {
 		t.Errorf("gitlab = %q, %v", got, err)
 	}
 	if got, err := store.Get(vault.Key{Kind: vault.KindPassword, Service: "openai"}); err != nil || len(got) != 32 {

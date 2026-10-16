@@ -189,6 +189,11 @@ func complete(words []string) (cands []candidate, files bool) {
 		specs = slices.DeleteFunc(flagSpecs(func(fs *flag.FlagSet) { addAddFlags(fs) }), func(s flagSpec) bool {
 			return s.name == "rename-field" || s.name == "plain-field"
 		})
+		for i := range specs {
+			if specs[i].name == "qr-image" {
+				specs[i].path = true
+			}
+		}
 	case "export":
 		if !strings.HasPrefix(cur, "-") && !takesValueAfter(before, "file", "format", "folder", "tag") {
 			return matching(kindWords, cur), false

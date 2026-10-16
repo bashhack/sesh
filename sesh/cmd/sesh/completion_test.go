@@ -21,7 +21,7 @@ func TestComplete(t *testing.T) {
 		lacks []string // none of these
 		files bool
 	}{
-		{name: "commands", words: all(""), want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "aws", "completion")},
+		{name: "commands", words: all(""), want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "git-credential", "aws", "completion")},
 		{name: "command prefix", words: all("co"), want: all("copy", "code", "config", "completion")},
 		{name: "run flags", words: all("run", "-"), has: all("--env", "--env-file", "--no-masking")},
 		{name: "run's command", words: all("run", "--env", "K=sesh://api_key/x", "--", ""), files: true},
@@ -29,7 +29,7 @@ func TestComplete(t *testing.T) {
 		{name: "inject flags", words: all("inject", "-"), has: all("--i", "--o")},
 		{name: "import sources", words: all("import", "--from", ""), want: all("bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "safari", "sesh")},
 		{name: "show flags", words: all("show", "github", "-"), has: all("--reveal", "--json")},
-		{name: "entry words aren't completed, flags are", words: all("show", ""), want: all("--json", "--reveal", "--db-path")},
+		{name: "entry words aren't completed, flags are", words: all("show", ""), want: all("--json", "--qr", "--reveal", "--uri", "--db-path")},
 		{name: "list kinds", words: all("list", ""), want: all("passwords", "keys", "notes", "totp")},
 		{name: "list flags", words: all("list", "notes", "-"), has: all("--folder", "--tag", "--sort", "--json")},
 		{name: "list sorts", words: all("list", "--sort", ""), want: all("name", "created", "updated", "folder")},
@@ -42,10 +42,11 @@ func TestComplete(t *testing.T) {
 		{name: "edit's field flags", words: all("edit", "github", "--"), has: all("--rename-field", "--plain-field")},
 		{name: "edit flags", words: all("edit", "github", "--"), has: all("--rename", "--username", "--type", "--generate")},
 		{name: "edit types", words: all("edit", "github", "--type", ""), want: all("password", "api_key", "secure_note")},
-		{name: "generate flags", words: all("generate", "-"), want: all("--copy", "--length", "--no-symbols", "--db-path")},
+		{name: "generate flags", words: all("generate", "-"), want: all("--capitalize", "--copy", "--length", "--no-symbols", "--separator", "--words", "--db-path")},
 		{name: "export kinds", words: all("export", ""), want: all("passwords", "keys", "notes", "totp")},
 		{name: "export formats", words: all("export", "--format", ""), want: all("encrypted", "json", "csv")},
 		{name: "export file", words: all("export", "--file", ""), files: true},
+		{name: "add's QR image", words: all("add", "totp", "--qr-image", ""), files: true},
 		{name: "aws setup", words: all("aws", ""), want: all("setup")},
 		{name: "aws flags", words: all("aws", "-"), has: all("--clip", "--profile", "--no-subshell")},
 		{name: "trash commands", words: all("trash", ""), want: all("list", "restore", "remove", "empty")},
@@ -101,7 +102,7 @@ func TestComplete(t *testing.T) {
 		{name: "backup's file after its flag with a value", words: all("backup", "--force=true", ""), files: true},
 		{name: "backup commands after a setting", words: all("backup", "--db-path", "x.db", ""), want: all("list", "delete")},
 		{name: "config set's setting after a flag", words: all("config", "set", "--force", "hi"), want: all("history.keep")},
-		{name: "no words", words: nil, want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "aws", "completion")},
+		{name: "no words", words: nil, want: all("list", "search", "copy", "get", "code", "show", "open", "add", "edit", "generate", "trash", "history", "folder", "tag", "ui", "import", "export", "backup", "restore", "health", "doctor", "audit", "lock", "passwd", "recovery", "recover", "touchid", "config", "init", "agent", "run", "inject", "git-credential", "aws", "completion")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cands, files := complete(tt.words)

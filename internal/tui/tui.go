@@ -92,8 +92,8 @@ type ExportOnly struct {
 	Tags   []string
 }
 
-// ScannedQR is a TOTP entry's otpauth:// link read from a QR code on
-// screen, with the issuer and account it names.
+// ScannedQR is a TOTP entry's otpauth:// link read from a QR code, on
+// screen or in an image, with the issuer and account it names.
 type ScannedQR struct {
 	Issuer, Account string
 	Link            []byte
@@ -333,11 +333,19 @@ type Options struct {
 	// Generate makes a new password of length characters: with symbols,
 	// or letters and digits only. It refuses a length sesh doesn't make.
 	Generate func(length int, symbols bool) ([]byte, error)
+	// Passphrase makes a new passphrase of words from the EFF's long
+	// list, joined by separator, each capitalized or not; nil where the
+	// app makes only random characters. It refuses what sesh doesn't make.
+	Passphrase func(words int, separator string, capitalize bool) ([]byte, error)
 	// ScanQR reads a TOTP entry's link from a QR code on screen, where
 	// the area with it is selected; nil when it can't be done here. The
 	// caller wipes the link.
 	ScanQR func() (ScannedQR, error)
-	Now    func() time.Time
+	// ReadQRImage reads a TOTP entry's link from the QR code in the image
+	// file at path (a full path, or from ~/); nil when it can't be done
+	// here. The caller wipes the link.
+	ReadQRImage func(path string) (ScannedQR, error)
+	Now         func() time.Time
 	// Settings are the config settings, for the settings panel; nil when
 	// there's none to show. SetSetting writes one to the config file (""
 	// takes it out) and says what the app now uses.
@@ -746,6 +754,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case historyMsg, trashMsg, doneMsg, healthMsg:
 		return m.actionResult(msg)
+	case qrMsg:
+		return m.shownQR(&msg)
 	case settingsMsg:
 		return m.gotSettings(&msg)
 	case checksMsg:

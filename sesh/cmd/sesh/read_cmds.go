@@ -78,8 +78,16 @@ const openUsage = `Usage: sesh open <entry>
 ` + entryWordsHelp
 
 const generateUsage = `Usage: sesh generate [--length N] [--no-symbols] [--copy]
+       sesh generate --words N [--separator S] [--capitalize] [--copy]
   Print a new random password, stored nowhere; --copy copies it instead.
-  To store one, use sesh add password <name> --generate.`
+  --words makes a passphrase of N words (3 to 20) from the EFF's long word
+  list, each about 12.9 bits: 6 words are about 77 bits. --separator goes
+  between them ("-" unless given); --capitalize starts each with a capital.
+  To store one, use sesh add password <name> --generate.
+
+  sesh generate --length 32
+  sesh generate --words 6                  crispy-velvet-onion-tumble-harbor-plank
+  sesh generate --words 5 --separator " " --capitalize --copy`
 
 // listKinds are the words sesh list takes as kinds.
 var listKinds = map[string]vault.Kind{
@@ -126,8 +134,10 @@ func addCodeFlags(fs *flag.FlagSet) *bool {
 }
 
 // addGenerateFlags defines sesh generate's flags on fs.
-func addGenerateFlags(fs *flag.FlagSet) (length *int, noSymbols, toClipboard *bool) {
-	return fs.Int("length", 24, "How many characters"), fs.Bool("no-symbols", false, "Letters and digits only"), fs.Bool("copy", false, "Copy it instead of printing it")
+func addGenerateFlags(fs *flag.FlagSet) (gen *genFlags, toClipboard *bool) {
+	gen = &genFlags{}
+	gen.register(fs)
+	return gen, fs.Bool("copy", false, "Copy it instead of printing it")
 }
 
 // runList is sesh list: every entry, or those of the kinds named.
@@ -790,7 +800,7 @@ func runGenerate(app *App, args []string) error {
 	}
 	fs := flag.NewFlagSet("generate", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	length, noSymbols, toClipboard := addGenerateFlags(fs)
+	gen, toClipboard := addGenerateFlags(fs)
 	fs.Usage = func() { fmt.Fprintln(app.Stderr, generateUsage) } //nolint:errcheck // usage text
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -801,10 +811,15 @@ func runGenerate(app *App, args []string) error {
 	if fs.NArg() > 0 {
 		return fmt.Errorf("sesh generate takes no words, got %q; to store one: sesh add password <name> --generate", strings.Join(fs.Args(), " "))
 	}
-	opts := password.DefaultGenerateOptions()
-	opts.Length = *length
-	opts.Symbols = !*noSymbols
-	pw, err := password.GeneratePassword(opts)
+	set := map[string]bool{}
+	fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
+	if err := gen.parsed(set, true); err != nil {
+		return err
+	}
+	if err := gen.check(); err != nil {
+		return err
+	}
+	pw, err := gen.generate()
 	if err != nil {
 		return err
 	}
@@ -815,7 +830,7 @@ func runGenerate(app *App, args []string) error {
 	if err := app.ClipboardCopy(string(pw)); err != nil {
 		return fmt.Errorf("copy to the clipboard: %w", err)
 	}
-	msg := "✅ Copied a new password"
+	msg := "✅ Copied a new " + gen.noun()
 	if t := app.settings.ClipboardTimeout; t > 0 {
 		msg += "; the clipboard clears in " + t.String()
 	}

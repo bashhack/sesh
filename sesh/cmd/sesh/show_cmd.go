@@ -10,23 +10,40 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
 const showUsage = `Usage: sesh show <entry> [--reveal] [--json]
+       sesh show <totp entry> --qr | --uri
   Show an entry: its URL, folder, tags, notes and custom fields. Its secret,
   notes and secret fields stay hidden, and aren't read, unless --reveal.
 
+  A TOTP entry's key can be moved to a phone: --qr draws a QR code that an
+  authenticator app scans, and --uri prints its otpauth:// link. Both show
+  the key, so the audit log records them as reading it.
+
   sesh show github
   sesh show github alice --reveal
+  sesh show totp github --qr
 
 ` + entryWordsHelp
 
+// showFlags are sesh show's flags.
+type showFlags struct {
+	reveal, asJSON, qr, uri bool
+}
+
 // addShowFlags defines sesh show's flags on fs.
-func addShowFlags(fs *flag.FlagSet) (reveal, asJSON *bool) {
-	return fs.Bool("reveal", false, "Show the secret, notes and secret fields"),
-		fs.Bool("json", false, "Print it as JSON")
+func addShowFlags(fs *flag.FlagSet) *showFlags {
+	f := &showFlags{}
+	fs.BoolVar(&f.reveal, "reveal", false, "Show the secret, notes and secret fields")
+	fs.BoolVar(&f.asJSON, "json", false, "Print it as JSON")
+	fs.BoolVar(&f.qr, "qr", false, "A TOTP entry: draw its key as a QR code, for a phone")
+	fs.BoolVar(&f.uri, "uri", false, "A TOTP entry: print its key as an otpauth:// link")
+	return f
 }
 
 // hidden stands in for a value show doesn't reveal.
@@ -55,7 +72,7 @@ func runShow(app *App, args []string) error {
 	}
 	fs := flag.NewFlagSet("show", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	reveal, asJSON := addShowFlags(fs)
+	f := addShowFlags(fs)
 	fs.Usage = func() { fmt.Fprintln(app.Stderr, showUsage) } //nolint:errcheck // usage text
 	words, err := parseAnywhere(fs, args)
 	if err != nil {
@@ -64,8 +81,13 @@ func runShow(app *App, args []string) error {
 		}
 		return err
 	}
-	if len(words) == 0 {
+	switch {
+	case len(words) == 0:
 		return errors.New("name the entry: sesh show <entry> [--reveal] [--json]")
+	case f.qr && f.uri:
+		return errors.New("--qr draws the key, --uri prints it: choose one")
+	case (f.qr || f.uri) && (f.reveal || f.asJSON):
+		return errors.New("--qr and --uri show the TOTP key alone: leave out --reveal and --json")
 	}
 
 	store, err := openFilingStore()
@@ -81,8 +103,11 @@ func runShow(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
+	if f.qr || f.uri {
+		return showTOTPKey(app, store, &e, f.qr)
+	}
 	shown := shownEntry{e: &e, d: vault.Details{URL: e.URL, Fields: e.Fields}}
-	if *reveal {
+	if f.reveal {
 		if shown.secret, err = store.Get(k); err != nil {
 			return err
 		}
@@ -92,10 +117,38 @@ func runShow(app *App, args []string) error {
 		}
 		defer shown.d.Zero()
 	}
-	if *asJSON {
-		return shown.writeJSON(app, *reveal)
+	if f.asJSON {
+		return shown.writeJSON(app, f.reveal)
 	}
-	_, err = fmt.Fprint(app.Stdout, shown.text(*reveal))
+	_, err = fmt.Fprint(app.Stdout, shown.text(f.reveal))
+	return err
+}
+
+// showTOTPKey shows TOTP entry e's key for an authenticator app: as a QR
+// code (qr), or as its otpauth:// link.
+func showTOTPKey(app *App, store vault.Store, e *vault.Entry, qr bool) error {
+	if e.Kind != vault.KindTOTP {
+		return fmt.Errorf("%s isn't a TOTP entry: --qr and --uri show a TOTP key", e.Key)
+	}
+	secret, err := store.Get(e.Key)
+	if err != nil {
+		return err
+	}
+	defer secure.SecureZeroBytes(secret)
+	issuer, account := totp.Label(e.Service, e.Username, e.Settings.TOTP)
+	link := totp.URI(secret, issuer, account, e.Settings.TOTP)
+	if !qr {
+		_, err := fmt.Fprintln(app.Stdout, link)
+		return err
+	}
+	drawn, err := qrcode.Terminal(link)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(app.Stdout, drawn); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(app.Stderr, "Scan it with the authenticator app: it adds %s. The code holds the key; clear the screen once it's scanned.\n", totp.LabelName(issuer, account))
 	return err
 }
 
