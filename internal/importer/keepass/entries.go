@@ -358,6 +358,9 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 		p.Key = vault.Key{Kind: vault.KindPassword, Service: service, Username: user}
 		p.Secret = []byte(password)
 		p.Earlier = earlier
+		// Dated by its password, as sesh dates a secret: not the entry's
+		// last edit of any kind.
+		p.Updated = passwordSince(e)
 		p.Details = details
 		out = append(out, importer.Checked(&p))
 	}
@@ -512,10 +515,10 @@ func oldPasswords(e *Entry, lost map[string]int) []vault.Earlier {
 	h := e.History.Entries
 	var out []vault.Earlier
 	for i := len(h) - 1; i >= 0; i-- {
-		pw := fieldText(&h[i], "Password")
-		next, at := fieldText(e, "Password"), e.Times.LastModificationTime.Time
+		pw := passwordText(&h[i])
+		next, at := passwordText(e), e.Times.LastModificationTime.Time
 		if i+1 < len(h) {
-			next, at = fieldText(&h[i+1], "Password"), h[i+1].Times.LastModificationTime.Time
+			next, at = passwordText(&h[i+1]), h[i+1].Times.LastModificationTime.Time
 		}
 		switch {
 		case pw == "" || pw == next:
@@ -529,10 +532,28 @@ func oldPasswords(e *Entry, lost map[string]int) []vault.Earlier {
 	return out
 }
 
-// fieldText is e's field key as written, "" when it has none.
-func fieldText(e *Entry, key string) string {
+// passwordSince is when e's password, as it is now, was set, as its
+// history shows: when the first version with it was made, after the last
+// one with another. A history with no other password gives the oldest
+// version's time, the earliest it's known to have been; no history, the
+// entry's own last edit.
+func passwordSince(e *Entry) time.Time {
+	h := e.History.Entries
+	now := passwordText(e)
+	since := e.Times.LastModificationTime.Time
+	for i := len(h) - 1; i >= 0; i-- {
+		if passwordText(&h[i]) != now {
+			return since
+		}
+		since = h[i].Times.LastModificationTime.Time
+	}
+	return since
+}
+
+// passwordText is e's password as written, "" when it has none.
+func passwordText(e *Entry) string {
 	for _, str := range e.Strings {
-		if str.Key == key {
+		if str.Key == "Password" {
 			return str.Value.Text
 		}
 	}
