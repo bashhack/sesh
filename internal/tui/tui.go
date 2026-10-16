@@ -983,6 +983,10 @@ func (m *Model) tick() tea.Cmd {
 	if m.shown != nil && !now.Before(m.shown.until) {
 		m.hide()
 	}
+	if ov := m.ov; ov != nil && ov.kind == panelQR && !ov.until.IsZero() && !now.Before(ov.until) {
+		m.ov = ov.back
+		m.say("The QR code closed after " + spoken(revealFor) + ": q shows it again")
+	}
 	if m.changing {
 		return m.every()
 	}

@@ -13,9 +13,12 @@ import (
 // key URI format asks. The link holds the secret: it's shown only when
 // asked for.
 func URI(secret []byte, issuer, account string, p Params) string {
-	label := url.PathEscape(account)
+	// A colon in either is escaped: the one between them is where an app
+	// splits the label.
+	part := func(s string) string { return strings.ReplaceAll(url.PathEscape(s), ":", "%3A") }
+	label := part(account)
 	if issuer != "" {
-		label = url.PathEscape(issuer) + ":" + label
+		label = part(issuer) + ":" + label
 	}
 	key := strings.TrimRight(strings.ToUpper(strings.Join(strings.Fields(string(secret)), "")), "=")
 	// Built by hand, in this order, as authenticators expect; base32 and

@@ -885,7 +885,7 @@ sesh list totp
 #     google            TOTP  totp/google
 ```
 
-**Moving a key to your phone.** `sesh show <entry> --qr` draws a TOTP entry's key as a QR code in the terminal, for an authenticator app to scan; `--uri` prints its `otpauth://` link instead, for an app that takes one pasted. Both show the key, so the audit log records them as reading it; clear the screen once it's scanned. In `sesh ui`, a TOTP entry's actions (Ctrl-K) offer the same as **show the key as a QR code…**, where `c` copies the link.
+**Moving a key to your phone.** `sesh show <entry> --qr` draws a TOTP entry's key as a QR code in the terminal, for an authenticator app to scan; `--uri` prints its `otpauth://` link instead, for an app that takes one pasted. Both show the key, so the audit log records them as reading it; clear the screen once it's scanned. In `sesh ui`, a TOTP entry's actions (Ctrl-K) offer the same as **show the key as a QR code…**, where `c` copies the link; it closes after 30 seconds.
 
 ```bash
 sesh show totp github --qr
@@ -1130,7 +1130,7 @@ Deleted entries go to the trash, and stay there 30 days (`trash.keep_days`) befo
   - **move to the trash** (`d`): see [the trash](#the-trash); after a yes;
   - **delete for good** (`x`): skips the trash, so it can't be put back, nor its earlier secrets; after a yes;
   - also **copy the username** (`u`) and **open the URL** (`o`);
-  - for a TOTP entry, **show the key as a QR code…** (`q`): the key drawn for an authenticator app on a phone to scan, as `sesh show --qr` does (the audit log records the read); `c` copies its `otpauth://` link instead, and Esc closes it. A window too small for the code says how big it needs to be.
+  - for a TOTP entry, **show the key as a QR code…** (`q`): the key drawn for an authenticator app on a phone to scan, as `sesh show --qr` does (the audit log records the read); `c` copies its `otpauth://` link instead, and Esc closes it; it closes itself after 30 seconds, as a secret revealed hides. The panel widens to fit the code; a window too small for it says how big it needs to be.
 - **Ctrl-G opens sesh's own actions,** from the search, the list or the sidebar, each run by its letter as Ctrl-K's are. Ctrl-K opens them too when no entry is selected, and its **sesh's actions…** (`g`) opens them from an entry or those marked, for a terminal that keeps Ctrl-G for itself (zellij does):
   - **add an entry…** (`a`): the form above;
   - **generate a password…** (`p`): random characters (the length, and symbols or letters and digits only) or a passphrase (how many words, what goes between them, and capitals); Enter makes one and copies it, as `sesh generate --copy` does, storing it nowhere;
@@ -1417,10 +1417,11 @@ sesh inject -i config.yml.tpl -o config.yml
 git config --global credential.helper '!sesh git-credential'
 ```
 
-- **Which entry:** for `https://github.com/...`, the password or API key entry whose URL is on `github.com`, over https too (`sesh add key github-token --url https://github.com`). A URL without `https://` counts as https; a port must match, except https's own 443 (or http's 80). When git names a username (in the remote's URL, or `credential.username`), the entry must have it; otherwise the entry's username is given to git with the password.
+- **Which entry:** for `https://github.com/...`, the password or API key entry whose URL is on `github.com`, over https too (`sesh add key github-token --username alice --url https://github.com`). A URL without `https://` counts as https; a port must match, except https's own 443 (or http's 80). When git names a username (in the remote's URL, or `credential.username`), the entry with that username is given; failing that, one with no username, such as a token's. Otherwise the entry's username is given to git with the password; an entry with none leaves git to ask for one, so give a token's entry the username it goes with.
 - **None, or several:** sesh gives nothing, and git asks as it would without it. With several, sesh says which, and how to tell them apart: give each a different URL, or name the username for git (`git config --global credential.https://github.com.username alice`).
 - **Store and erase:** git also asks a helper to store a password that worked, and to erase one a site refused. sesh does neither: it gives only what you added, and a password refused once (a typo in a username, say) stays in the vault. Change it with `sesh edit`.
 - **Unlocking:** reading the password is recorded in the audit log, as `sesh get` is. When sesh needs the master password, it asks at the terminal, as git's own questions are; Touch ID unlock and a running agent work as for any command.
+
 ### Importing from other apps (`sesh import`)
 
 `sesh import` brings entries over from another app: Bitwarden, KeePass (KeePassXC or KeePass 2), Chrome, Firefox, Safari, or Google Authenticator; or from sesh's own export, encrypted or plain. It reads everything first, shows what it found, then asks:

@@ -306,6 +306,7 @@ func TestAdd(t *testing.T) {
 		"note x --qr":                      "--qr and --qr-image read a TOTP entry's key",
 		"note x --qr-image a.png":          "--qr and --qr-image read a TOTP entry's key",
 		"totp x --qr --qr-image a.png":     "choose one",
+		"totp x --qr-image=":               "--qr-image takes the image file",
 		"password":                         "name the entry: sesh add password <name>",
 		"totp":                             "name the entry: sesh add totp <name>",
 	} {
@@ -525,5 +526,19 @@ func TestGenFlagsSaid(t *testing.T) {
 	}
 	if chars.noun() != "password" || chars.stronger() != "use --length 12 or more" || words.noun() != "passphrase" || words.stronger() != "use --words 5 or more" {
 		t.Errorf("chars: %s, %s; words: %s, %s", chars.noun(), chars.stronger(), words.noun(), words.stronger())
+	}
+}
+
+// An image that can't be read is said before a vault is made, or unlocked.
+func TestAdd_QRImageReadFirst(t *testing.T) {
+	env := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, _ := cliApp("", false)
+	if _, _, err := runCLI(app, runAdd, "totp", "x", "--qr-image", filepath.Join(t.TempDir(), "missing.png")); err == nil || !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("a missing image: %v", err)
+	}
+	if _, err := os.Stat(env.dbPath); !os.IsNotExist(err) {
+		t.Errorf("a vault was made: %v", err)
 	}
 }

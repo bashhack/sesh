@@ -13,6 +13,10 @@ import (
 	"github.com/bashhack/sesh/internal/vault"
 )
 
+// qrMargin is what a panel adds around its contents' width: its border
+// and padding.
+const qrMargin = 6
+
 // qrMsg is a TOTP key drawn as a QR code, or why it wasn't.
 type qrMsg struct {
 	err   error
@@ -54,6 +58,8 @@ func (m *Model) shownQR(msg *qrMsg) tea.Cmd {
 		return nil
 	}
 	ov.qr, ov.link = strings.Split(strings.TrimSuffix(msg.qr, "\n"), "\n"), msg.link
+	// Shown as long as a secret revealed is.
+	ov.until = m.opts.Now().Add(revealFor)
 	return nil
 }
 
@@ -66,7 +72,7 @@ func (m *Model) qrLines(ov *overlay, w, room int) []string {
 	codeWidth := lipgloss.Width(ov.qr[0])
 	if codeWidth > w-6 || len(ov.qr)+len(said)+1 > room {
 		return append([]string{""}, strings.Split(th.dimmed().Width(w-6).Render(
-			"The window is too small for the QR code: it needs about "+strconv.Itoa(codeWidth+8)+" columns and "+strconv.Itoa(len(ov.qr)+len(said)+9)+" rows. c copies the otpauth:// link instead."), "\n")...)
+			"The window is too small for the QR code: it needs about "+strconv.Itoa(codeWidth+qrMargin+6)+" columns and "+strconv.Itoa(len(ov.qr)+len(said)+9)+" rows. c copies the otpauth:// link instead."), "\n")...)
 	}
 	lines := append([]string{""}, ov.qr...)
 	return append(append(lines, ""), said...)

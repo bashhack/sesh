@@ -56,4 +56,9 @@ func TestURIReadsBack(t *testing.T) {
 	if err != nil || info != want {
 		t.Errorf("%s read back as %+v, %v", link, info, err)
 	}
+	// A colon in a name doesn't move where the account starts.
+	link = totp.URI([]byte("JBSWY3DPEHPK3PXP"), "Corp:VPN", "bob:ops", totp.Params{})
+	if info, err := ExtractTOTPFullInfo(link); err != nil || info.Issuer != "Corp:VPN" || info.Account != "bob:ops" {
+		t.Errorf("%s read back as %+v, %v", link, info, err)
+	}
 }

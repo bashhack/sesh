@@ -114,6 +114,8 @@ func runAdd(app *App, args []string) error {
 		return errors.New("--qr and --qr-image read a TOTP entry's key: sesh add totp <name> --qr")
 	case f.qr && f.qrImage != "":
 		return errors.New("--qr reads a code on screen, --qr-image one in a file: choose one")
+	case set["qr-image"] && f.qrImage == "":
+		return errors.New("--qr-image takes the image file with the QR code")
 	case f.details.Moves():
 		return errors.New("--rename-field and --plain-field change the fields an entry has: sesh edit <entry> --rename-field old=new")
 	}
@@ -152,6 +154,16 @@ func runAdd(app *App, args []string) error {
 		}
 	}
 
+	// An image is read before anything is unlocked, or made.
+	var fromImage *qrcode.TOTPInfo
+	if f.qrImage != "" {
+		_, info, err := readQRImage(f.qrImage)
+		if err != nil {
+			return err
+		}
+		fromImage = &info
+	}
+
 	cfg, err := settings()
 	if err != nil {
 		return err
@@ -163,7 +175,7 @@ func runAdd(app *App, args []string) error {
 	}
 	defer closeAuditStore(store)
 	if kind == vault.KindTOTP {
-		return addTOTP(app, store, name, f, change, terminal)
+		return addTOTP(app, store, name, f, change, terminal, fromImage)
 	}
 	k := vault.Key{Kind: kind, Service: name, Username: f.username}
 	if err := checkAddChange(store, k, change); err != nil {
@@ -358,10 +370,11 @@ var scanQR = qrcode.ScanQRCodeFull
 var readQRImage = qrcode.ReadTOTPFromFile
 
 // addTOTP adds a TOTP entry, its key typed, pasted as an otpauth:// link,
-// or read from a QR code on screen or in an image file. A link or code
-// names the account, which is its username unless --username says
-// otherwise, and the issuer, which names the entry when no name is given.
-func addTOTP(app *App, store *database.Store, name string, f *addFlags, change *vault.DetailsChange, terminal bool) error {
+// or read from a QR code on screen or in an image file (fromImage, read
+// already). A link or code names the account, which is its username
+// unless --username says otherwise, and the issuer, which names the entry
+// when no name is given.
+func addTOTP(app *App, store *database.Store, name string, f *addFlags, change *vault.DetailsChange, terminal bool, fromImage *qrcode.TOTPInfo) error {
 	username := f.username
 	var key []byte
 	var params totp.Params
@@ -372,8 +385,8 @@ func addTOTP(app *App, store *database.Store, name string, f *addFlags, change *
 			if info, err = scanQR(); err != nil {
 				return fmt.Errorf("read the QR code: %w", err)
 			}
-		} else if _, info, err = readQRImage(f.qrImage); err != nil {
-			return err
+		} else {
+			info = *fromImage
 		}
 		normalized, err := totp.ValidateAndNormalizeSecret(info.Secret)
 		if err != nil {

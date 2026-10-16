@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/bashhack/sesh/internal/secure"
 )
@@ -63,7 +64,7 @@ func (o PassphraseOptions) Check() error {
 	switch {
 	case o.Words < MinPassphraseWords || o.Words > MaxPassphraseWords:
 		return fmt.Errorf("a passphrase has %d to %d words, not %d", MinPassphraseWords, MaxPassphraseWords, o.Words)
-	case len(o.Separator) > MaxSeparatorLength:
+	case utf8.RuneCountInString(o.Separator) > MaxSeparatorLength:
 		return fmt.Errorf("the separator %q is longer than %d characters", o.Separator, MaxSeparatorLength)
 	case strings.IndexFunc(o.Separator, unicode.IsControl) >= 0:
 		return fmt.Errorf("the separator %q has a control character", o.Separator)

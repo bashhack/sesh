@@ -39,6 +39,7 @@ const (
 // overlay is a panel over the app, about the entry k.
 type overlay struct {
 	opened   time.Time      // when a confirmation was asked
+	until    time.Time      // when a QR code shown closes
 	yes      func() tea.Cmd // what a confirmation's yes does
 	back     *overlay       // what Esc goes back to
 	k        vault.Key
@@ -811,6 +812,10 @@ func (m *Model) drawOverlay(base string) string {
 	if ov.kind == panelSettings || ov.kind == panelChecks || ov.kind == panelBackups || ov.kind == panelImport || ov.kind == panelAudit || ov.wide {
 		w = min(96, m.width-6)
 	}
+	if ov.kind == panelQR && len(ov.qr) > 0 {
+		// As wide as its code needs, where the window has room.
+		w = min(max(w, lipgloss.Width(ov.qr[0])+qrMargin), m.width-6)
+	}
 	// The rows that fit: the screen less the card's border, title, hint
 	// and the blank lines between.
 	room := max(m.height-8, 1)
@@ -974,6 +979,9 @@ func (m *Model) drawOverlay(base string) string {
 		hint = th.hints([2]string{"↵", "ok"})
 	case panelQR:
 		hint = th.hints([2]string{"c", "copy the link"}, [2]string{"esc", "close"})
+		if !ov.until.IsZero() {
+			hint = th.hints([2]string{"c", "copy the link"}, [2]string{"esc", fmt.Sprintf("close (%ds)", max(int(ov.until.Sub(m.opts.Now()).Seconds()), 0))})
+		}
 	case panelImport:
 		hint = m.importHint(w - 6)
 	case panelBackups:

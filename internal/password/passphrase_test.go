@@ -32,7 +32,7 @@ func TestGeneratePassphrase(t *testing.T) {
 		inList[w] = true
 	}
 	// Separators no word has, so the words split back out.
-	for _, o := range []PassphraseOptions{{Words: 6, Separator: " "}, {Words: 3, Separator: "."}, {Words: 20, Separator: "_", Capitalize: true}} {
+	for _, o := range []PassphraseOptions{{Words: 6, Separator: " "}, {Words: 3, Separator: "."}, {Words: 20, Separator: "_", Capitalize: true}, {Words: 4, Separator: "éééééééé"}} {
 		pw, err := GeneratePassphrase(o)
 		if err != nil {
 			t.Fatal(err)
@@ -72,6 +72,7 @@ func TestGeneratePassphrase_Refused(t *testing.T) {
 		{Words: 21, Separator: "-"}:        "not 21",
 		{Words: 6, Separator: "123456789"}: "longer than 8",
 		{Words: 6, Separator: "\t"}:        "control character",
+		{Words: 6, Separator: "ééééééééé"}: "longer than 8",
 	} {
 		if _, err := GeneratePassphrase(o); err == nil || !strings.Contains(err.Error(), wantSub) {
 			t.Errorf("%+v: %v, want %q", o, err, wantSub)

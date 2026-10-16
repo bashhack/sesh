@@ -3335,9 +3335,22 @@ func TestShowQR(t *testing.T) {
 	if len(a.copied) != 1 || !strings.HasPrefix(a.copied[0], "otpauth://totp/github:alice?secret=") {
 		t.Errorf("copied %q", a.copied)
 	}
+	if s := a.screen(); !strings.Contains(s, "close (30s)") {
+		t.Errorf("no countdown:\n%s", s)
+	}
 	a.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	if s := a.screen(); strings.Contains(s, "▀") || !strings.Contains(s, "too small for the QR code") {
 		t.Errorf("a small window:\n%s", s)
+	}
+	// It says how wide a window it needs, and draws there.
+	width := lipgloss.Width(a.ov.qr[0]) + 12
+	a.Update(tea.WindowSizeMsg{Width: width - 1, Height: 50})
+	if s := a.screen(); strings.Contains(s, "▀") || !strings.Contains(s, "needs about "+strconv.Itoa(width)+" columns") {
+		t.Errorf("a column short:\n%s", s)
+	}
+	a.Update(tea.WindowSizeMsg{Width: width, Height: 50})
+	if s := a.screen(); !strings.Contains(s, "▀") {
+		t.Errorf("wide enough:\n%s", s)
 	}
 	a.press("esc")
 	if a.ov == nil || a.ov.kind != panelMenu {
@@ -3383,5 +3396,41 @@ func TestAddQRImage(t *testing.T) {
 	a.press("ctrl+u", "~/shot.png", "ctrl+s")
 	if len(f.saves) != 1 || f.saves[0].To != (vault.Key{Kind: vault.KindTOTP, Service: "Shop", Username: "dee"}) || string(f.saves[0].Secret) != link {
 		t.Fatalf("saves %+v:\n%s", f.saves, a.screen())
+	}
+}
+
+// A long link's QR code, wider than a panel usually is, widens its panel to fit.
+func TestShowQRWide(t *testing.T) {
+	f := newFake()
+	long := vault.Key{Kind: vault.KindTOTP, Service: "Example Company VPN", Username: "alice.longname@example-company.com"}
+	f.entries = append(f.entries, vault.Entry{Key: long, Settings: vault.Settings{TOTP: totp.Params{Algorithm: "SHA512", Digits: 8, Period: 60}}})
+	f.secrets[long] = strings.Repeat("JBSWY3DPEHPK3PXP", 4)
+	a := newApp(t, f, Options{})
+	a.Update(tea.WindowSizeMsg{Width: 160, Height: 60})
+	a.press("example", "ctrl+k", "q")
+	if a.ov == nil || a.ov.kind != panelQR || len(a.ov.qr) == 0 || lipgloss.Width(a.ov.qr[0]) <= 58 {
+		t.Fatalf("not a wide code:\n%s", a.screen())
+	}
+	if s := a.screen(); !strings.Contains(s, "▀") {
+		t.Errorf("not drawn:\n%s", s)
+	}
+}
+
+// The QR code closes after as long as a secret revealed shows, back to the menu.
+func TestShowQRCloses(t *testing.T) {
+	f := newFake()
+	a := newApp(t, f, Options{})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
+	for a.selected() == nil || a.selected().Key != code {
+		a.press("down")
+	}
+	a.press("ctrl+k", "q")
+	a.tick(revealFor - time.Second)
+	if a.ov == nil || a.ov.kind != panelQR {
+		t.Fatal("closed early")
+	}
+	a.tick(time.Second)
+	if s := a.screen(); a.ov == nil || a.ov.kind != panelMenu || !strings.Contains(s, "The QR code closed after 30 seconds") {
+		t.Errorf("still open, or not said:\n%s", s)
 	}
 }

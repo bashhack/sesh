@@ -22,8 +22,10 @@ const gitCredentialUsage = `Usage: sesh git-credential get
 
   For https://github.com, it gives the password or API key entry whose URL
   is on github.com (https too), with the username git names, if it names
-  one. With no such entry, or several, it gives nothing and git asks as
-  usual; with several, it says which. Git also asks it to store a password
+  one (an entry with none, such as a token's, will do when none has it).
+  With no such entry, or several, it gives nothing and git asks as usual;
+  with several, it says which. Give a token's entry the username to go
+  with it, or git asks for one. Git also asks it to store a password
   that worked and to erase one that didn't: it does neither, so sesh gives
   only what you added, and a password a site refused once stays.
 
@@ -74,6 +76,14 @@ func runGitCredential(app *App, args []string) error {
 // giveCredential writes the username and password of the one entry that
 // matches ask, if one does.
 func giveCredential(app *App, ask credentialAsk) error {
+	// Opening the vault unlocks it: the master password, if it's asked
+	// for, is typed at the terminal, since stdin is git's.
+	if tty, err := openTerminal(); err == nil {
+		defer tty.Close() //nolint:errcheck // read only
+		was := terminalIn
+		terminalIn = tty
+		defer func() { terminalIn = was }()
+	}
 	store, err := openFilingStore()
 	if err != nil {
 		return err
@@ -83,11 +93,18 @@ func giveCredential(app *App, ask credentialAsk) error {
 	if err != nil {
 		return err
 	}
-	var matches []vault.Key
+	var matches, named []vault.Key
 	for i := range entries {
 		if credentialMatches(&entries[i], ask) {
 			matches = append(matches, entries[i].Key)
+			if ask.username != "" && entries[i].Username == ask.username {
+				named = append(named, entries[i].Key)
+			}
 		}
+	}
+	// The username git names picks out its own entry from those with none.
+	if len(named) > 0 {
+		matches = named
 	}
 	switch len(matches) {
 	case 0:
@@ -102,14 +119,6 @@ func giveCredential(app *App, ask credentialAsk) error {
 			len(matches), ask.protocol, ask.host, strings.Join(names, ", "), ask.protocol, ask.host)
 	}
 	k := matches[0]
-	// The master password, if it's asked for, is typed at the terminal:
-	// stdin is git's.
-	if tty, err := os.Open("/dev/tty"); err == nil {
-		defer tty.Close() //nolint:errcheck // read only
-		was := terminalIn
-		terminalIn = tty
-		defer func() { terminalIn = was }()
-	}
 	secret, err := store.Get(k)
 	if err != nil {
 		return err
@@ -171,10 +180,14 @@ func readCredentialAsk(r io.Reader) (credentialAsk, error) {
 	return ask, nil
 }
 
-// credentialMatches says whether e holds the password git asks for: a
+// openTerminal opens the terminal the master password is typed at; tests
+// replace it.
+var openTerminal = func() (*os.File, error) { return os.Open("/dev/tty") }
+
+// credentialMatches says whether e may hold the password git asks for: a
 // password or API key whose URL has the protocol and host asked (a port
 // that's the protocol's own left out of both), with the username asked,
-// if one is.
+// if one is, or none (a token, say, whatever the account).
 func credentialMatches(e *vault.Entry, ask credentialAsk) bool {
 	if e.Kind != vault.KindPassword && e.Kind != vault.KindAPIKey || e.URL == "" {
 		return false
@@ -190,7 +203,7 @@ func credentialMatches(e *vault.Entry, ask credentialAsk) bool {
 	if !strings.EqualFold(hostWithoutDefaultPort(u.Host, u.Scheme), hostWithoutDefaultPort(ask.host, ask.protocol)) {
 		return false
 	}
-	return ask.username == "" || e.Username == ask.username
+	return ask.username == "" || e.Username == ask.username || e.Username == ""
 }
 
 // hostWithoutDefaultPort is host without :443 for https, or :80 for http.

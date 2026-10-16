@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -40,6 +41,7 @@ func TestCredentialMatches(t *testing.T) {
 		{credentialAsk{protocol: "https", host: "git.corp:8443", username: "bob"}, vault.Entry{Kind: vault.KindPassword, Service: "corp", Username: "bob", URL: "https://git.corp:8443"}, true},
 		{credentialAsk{protocol: "https", host: "git.corp:8443"}, vault.Entry{Kind: vault.KindPassword, Service: "corp", Username: "bob", URL: "https://git.corp"}, false},
 		{credentialAsk{protocol: "https", host: "github.com", username: "bob"}, vault.Entry{Kind: vault.KindPassword, Service: "github", Username: "alice", URL: "https://github.com"}, false},
+		{credentialAsk{protocol: "https", host: "github.com", username: "bob"}, vault.Entry{Kind: vault.KindAPIKey, Service: "token", URL: "https://github.com"}, true},
 	} {
 		if got := credentialMatches(&tt.e, tt.ask); got != tt.want {
 			t.Errorf("%s at %q for %+v = %v", tt.e.Key, tt.e.URL, tt.ask, got)
@@ -114,5 +116,60 @@ func TestGitCredential(t *testing.T) {
 		if _, _, err := runGitCredentialOut(t, "", strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
 			t.Errorf("%s: %v, want %q", args, err, wantSub)
 		}
+	}
+}
+
+// The master password is asked at the terminal, not on stdin, which is git's: the terminal is there before the vault unlocks.
+func TestGitCredential_AsksAtTheTerminal(t *testing.T) {
+	env := editVault(t)
+	store := openDoctorVault(t, env)
+	if err := store.SetDetails(vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}, &vault.Details{URL: "https://github.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	tty, err := os.CreateTemp(t.TempDir(), "tty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldOpen, oldPrompt := openTerminal, terminalPasswordPrompt
+	t.Cleanup(func() { openTerminal, terminalPasswordPrompt = oldOpen, oldPrompt })
+	openTerminal = func() (*os.File, error) { return tty, nil }
+	var askedAt *os.File
+	terminalPasswordPrompt = func() passwordPromptConfig {
+		askedAt = terminalIn
+		return interactivePrompt(t, "edit-password-1234")
+	}
+	out, said, err := runGitCredentialOut(t, "protocol=https\nhost=github.com\n", "get")
+	if err != nil || out != "username=alice\npassword=old-pw\n" {
+		t.Fatalf("get: %q, %q, %v", out, said, err)
+	}
+	if askedAt != tty || terminalIn != os.Stdin {
+		t.Errorf("asked at %v (the terminal is %v); after, terminalIn is %v", askedAt, tty, terminalIn)
+	}
+}
+
+// The username git names picks its entry; one with no username, a token's, does when none has it.
+func TestGitCredential_Usernames(t *testing.T) {
+	env := editVault(t)
+	populatePasswordStore(t, env, map[string]string{"api_key/gh-token": "ghp_x", "password/github/bob": "bob-pw"})
+	store := openDoctorVault(t, env)
+	for _, k := range []vault.Key{{Kind: vault.KindPassword, Service: "github", Username: "alice"}, {Kind: vault.KindAPIKey, Service: "gh-token"}, {Kind: vault.KindPassword, Service: "github", Username: "bob"}} {
+		if err := store.SetDetails(k, &vault.Details{URL: "https://github.com"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for user, want := range map[string]string{"alice": "password=old-pw\n", "bob": "password=bob-pw\n", "carol": "password=ghp_x\n"} {
+		if out, said, err := runGitCredentialOut(t, "protocol=https\nhost=github.com\nusername="+user+"\n", "get"); err != nil || out != want {
+			t.Errorf("%s: %q, %q, %v", user, out, said, err)
+		}
+	}
+	if out, said, err := runGitCredentialOut(t, "protocol=https\nhost=github.com\n", "get"); err != nil || out != "" || !strings.Contains(said, "3 entries are for https://github.com") {
+		t.Errorf("no username: %q, %q, %v", out, said, err)
 	}
 }
