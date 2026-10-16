@@ -59,7 +59,7 @@ func notFound(k vault.Key) error {
 	return fmt.Errorf("%w: %s", vault.ErrNotFound, k)
 }
 
-func encodeSettings(s vault.Settings) (sql.NullString, error) {
+func encodeSettings(s *vault.Settings) (sql.NullString, error) {
 	if s.IsZero() {
 		return sql.NullString{}, nil
 	}
@@ -165,7 +165,10 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if len(secret) > MaxSecretSize {
 		return fmt.Errorf("%w: %d bytes (max %d)", ErrSecretTooLarge, len(secret), MaxSecretSize)
 	}
-	settings, err := encodeSettings(e.Settings)
+	if err := vault.CheckFileName(e.Settings.FileName); err != nil {
+		return err
+	}
+	settings, err := encodeSettings(&e.Settings)
 	if err != nil {
 		return err
 	}
@@ -178,8 +181,9 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	// its secret is still the one compared.
 	var old *oldSecret
 	var data, oldSalt []byte
+	var oldSettings sql.NullString
 	keeping, existed, same := s.historyKeep > 0, false, false
-	switch err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt); {
+	switch err := s.db.QueryRow(`SELECT encrypted_data, salt, settings FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt, &oldSettings); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return fmt.Errorf("read %s: %w", e.Key, err)
@@ -192,6 +196,10 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 			old = &oldSecret{from: data}
 		}
 		same = old.same
+		// A file's name goes into the history with it.
+		if had, err := decodeSettings(e.Key, oldSettings); err == nil {
+			old.fileName = had.FileName
+		}
 	default:
 		existed = true
 		if same, err = s.sameSecret(e.Key, data, oldSalt, secret); err != nil {
@@ -257,6 +265,10 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	case mend:
 		onConflict += `, created_at = excluded.created_at`
 	}
+	if !whole && e.Kind == vault.KindFile && e.Settings.FileName != "" {
+		// A file entry's settings are its file's name alone.
+		onConflict += `, settings = excluded.settings`
+	}
 	if d != nil {
 		onConflict += `, url = excluded.url, details = excluded.details, sealed_details = excluded.sealed_details, details_salt = excluded.details_salt`
 	}
@@ -320,7 +332,7 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 }
 
 // SetSettings implements vault.Store.
-func (s *Store) SetSettings(k vault.Key, settings vault.Settings) error {
+func (s *Store) SetSettings(k vault.Key, settings *vault.Settings) error {
 	col, err := encodeSettings(settings)
 	if err != nil {
 		return err
@@ -347,8 +359,9 @@ func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
 	var col, tags sql.NullString
 	var url, details string
 	e := vault.Entry{Key: k}
-	err := s.db.QueryRow(`SELECT settings, folder, `+tagsColumn+`, url, details, created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`,
-		string(k.Kind), k.Service, k.Username).Scan(&col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt)
+	var sealedSize int64
+	err := s.db.QueryRow(`SELECT settings, folder, `+tagsColumn+`, url, details, created_at, updated_at, length(encrypted_data) FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt, &sealedSize)
 	if errors.Is(err, sql.ErrNoRows) {
 		return vault.Entry{}, notFound(k)
 	}
@@ -358,6 +371,7 @@ func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
 	if e.Settings, err = decodeSettings(k, col); err != nil {
 		return vault.Entry{}, err
 	}
+	e.Size = plainSize(sealedSize)
 	e.Tags = splitTags(tags)
 	if err := vault.DecodeEntryDetails(&e, url, details); err != nil {
 		return vault.Entry{}, err
@@ -382,7 +396,7 @@ func (s *Store) Exists(k vault.Key) error {
 // List implements vault.Store.
 func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 	var q strings.Builder
-	q.WriteString(`SELECT kind, service, username, settings, folder, ` + tagsColumn + `, url, details, created_at, updated_at FROM entries WHERE 1 = 1`)
+	q.WriteString(`SELECT kind, service, username, settings, folder, ` + tagsColumn + `, url, details, created_at, updated_at, length(encrypted_data) FROM entries WHERE 1 = 1`)
 	var args []any
 	if f.Kind != "" {
 		q.WriteString(` AND kind = ?`)
@@ -421,10 +435,12 @@ func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 		var kind string
 		var col, tags sql.NullString
 		var url, details string
-		if err := rows.Scan(&kind, &e.Service, &e.Username, &col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		var sealedSize int64
+		if err := rows.Scan(&kind, &e.Service, &e.Username, &col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt, &sealedSize); err != nil {
 			return nil, fmt.Errorf("list entries: %w", err)
 		}
 		e.Kind = vault.Kind(kind)
+		e.Size = plainSize(sealedSize)
 		if e.Settings, err = decodeSettings(e.Key, col); err != nil {
 			return nil, err
 		}

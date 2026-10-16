@@ -64,8 +64,13 @@ func Parse(s string) (Ref, error) {
 // (a secret, notes, a secret field, or a TOTP code) or not (a URL or a
 // plain field). The caller zeroes Value.
 type Value struct {
-	Value  []byte
-	Secret bool
+	// FileName is a file entry's file's name, when File.
+	FileName string
+	Value    []byte
+	Secret   bool
+	// File says Value is a file entry's content, which sesh run gives a
+	// command as a file.
+	File bool
 }
 
 // Resolve reads r's value from store. reading says what for, for the
@@ -97,7 +102,7 @@ func resolve(store vault.Store, r Ref, reading string) (Value, error) {
 		}
 		secret, err := get(store, k, what+", to "+reading)
 		if err != nil || k.Kind != vault.KindTOTP {
-			return Value{Value: secret, Secret: true}, err
+			return Value{Value: secret, Secret: true, File: k.Kind == vault.KindFile, FileName: e.Settings.FileName}, err
 		}
 		defer secure.SecureZeroBytes(secret)
 		code, _, err := totp.GenerateConsecutiveCodesBytesWithParams(secret, e.Settings.TOTP)

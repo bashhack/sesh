@@ -54,11 +54,13 @@ func addRunFlags(fs *flag.FlagSet) *runFlags {
 
 const runUsage = `Usage: sesh run [--env NAME=<ref>]... [--env-file <file>]... [--no-masking] -- <command> [args...]
   Run a command with secrets from the vault in its environment. A reference
-  is sesh://<id>[#field], with the entry ID as sesh list shows it.
-  Secrets the command prints are shown as <concealed by sesh>, unless
-  --no-masking gives it the terminal directly.
+  is sesh://<id>[#field], with the entry ID as sesh list shows it; a file
+  entry's gives the path of a copy only you can read, deleted when the
+  command ends. Secrets the command prints are shown as <concealed by
+  sesh>, unless --no-masking gives it the terminal directly.
 
   sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
+  sesh run --env KUBECONFIG=sesh://file/kubeconfig -- kubectl get pods
   sesh run --env-file .env -- npm start`
 
 // runRun is `sesh run`: every reference is resolved first, with one
@@ -102,6 +104,15 @@ func runRun(app *App, args []string) error {
 		return err
 	}
 	defer zeroValues(values)
+	// A file entry's content goes in a file, in a folder of sesh's own,
+	// gone when the command ends.
+	files, err := writeRunFiles(values)
+	if files != "" {
+		defer os.RemoveAll(files) //nolint:errcheck // best effort; it's private
+	}
+	if err != nil {
+		return err
+	}
 	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
 		name, _, _ := strings.Cut(kv, "=")
 		return name == "SESH_MASTER_PASSWORD" || slices.ContainsFunc(vars, func(v secretref.EnvVar) bool { return v.Name == name })
@@ -113,6 +124,10 @@ func runRun(app *App, args []string) error {
 			continue
 		}
 		val := values[v.Ref.String()]
+		if val.File {
+			env = append(env, v.Name+"="+val.FileName)
+			continue
+		}
 		env = append(env, v.Name+"="+string(val.Value))
 		if val.Secret {
 			secrets = append(secrets, val.Value)
@@ -523,4 +538,43 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// writeRunFiles writes each file entry's content in values to a new
+// folder only its owner can open, each file only its owner can read, named
+// as the entry's file was, and makes the value's FileName that file's
+// path. It returns the folder, "" when there are no files; the caller
+// removes it.
+func writeRunFiles(values map[string]secretref.Value) (string, error) {
+	dir := ""
+	names := map[string]bool{}
+	for ref, v := range values {
+		if !v.File {
+			continue
+		}
+		if dir == "" {
+			var err error
+			if dir, err = os.MkdirTemp("", "sesh-run-*"); err != nil {
+				return "", fmt.Errorf("make a folder for the files: %w", err)
+			}
+		}
+		// Named as it was (a tool may go by the extension), and kept
+		// apart from another of the same name.
+		base := filepath.Base(v.FileName)
+		if v.FileName == "" || base == "." || base == ".." || base == "/" {
+			base = "file"
+		}
+		name := base
+		for i := 2; names[name]; i++ {
+			name = fmt.Sprintf("%d-%s", i, base)
+		}
+		names[name] = true
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, v.Value, 0o600); err != nil {
+			return dir, fmt.Errorf("write %s for the command: %w", ref, err)
+		}
+		v.FileName = path
+		values[ref] = v
+	}
+	return dir, nil
 }

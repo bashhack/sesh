@@ -30,7 +30,7 @@ func (m *Model) openTransfer() tea.Cmd {
 
 // exportKinds are the kinds an export can be narrowed to, in the order
 // its form offers them after every entry.
-var exportKinds = []vault.Kind{"", vault.KindPassword, vault.KindAPIKey, vault.KindNote, vault.KindTOTP}
+var exportKinds = []vault.Kind{"", vault.KindPassword, vault.KindAPIKey, vault.KindNote, vault.KindTOTP, vault.KindFile}
 
 // exportForm asks where to export, which entries (every one, or those of
 // a kind, folder or tags), and a password for the export, twice, and
@@ -38,7 +38,7 @@ var exportKinds = []vault.Kind{"", vault.KindPassword, vault.KindAPIKey, vault.K
 func (m *Model) exportForm() tea.Cmd {
 	file := m.textInput("file", "")
 	file.hint = "a full path, or one starting with ~/"
-	kind := &input{kind: inputChoice, label: "entries", choices: []string{"every entry", "passwords", "API keys", "notes", "TOTP"}}
+	kind := &input{kind: inputChoice, label: "entries", choices: []string{"every entry", "passwords", "API keys", "notes", "TOTP", "files"}}
 	folder := m.textInput("in folder", "")
 	folder.hint, folder.offers = "empty: any; a folder takes in those under it", m.folderNames()
 	tags := m.textInput("with tags", "")

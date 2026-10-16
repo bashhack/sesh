@@ -163,3 +163,12 @@ func DecryptEntry(masterKey, encryptedData, salt, aad []byte) ([]byte, error) {
 
 	return open(entryKey, encryptedData, aad)
 }
+
+// sealOverhead is what sealing adds to a secret: the nonce before it and
+// GCM's tag after it.
+const sealOverhead = 12 + 16
+
+// plainSize is the size of the secret sealed into sealed bytes.
+func plainSize(sealed int64) int64 {
+	return max(sealed-sealOverhead, 0)
+}

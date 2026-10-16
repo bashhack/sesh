@@ -35,7 +35,9 @@ type EntryEdit struct {
 	Folder  *string
 	Tags    *[]string
 	TOTP    *totp.Params
-	Secret  []byte
+	// FileName is a file entry's new file name, with its new content.
+	FileName *string
+	Secret   []byte
 }
 
 // Edit changes the entry at k as e says, in one transaction. Its secret and
@@ -54,7 +56,7 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	if e.Details != nil && e.Details.IsZero() {
 		e.Details = nil
 	}
-	filing := e.Folder != nil || e.Tags != nil || e.TOTP != nil
+	filing := e.Folder != nil || e.Tags != nil || e.TOTP != nil || e.FileName != nil
 	if e.To == nil && e.Secret == nil && e.Details == nil && !filing {
 		return "", ErrNothingToChange
 	}
@@ -68,6 +70,11 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 			if err := vault.CheckTag(t); err != nil {
 				return "", err
 			}
+		}
+	}
+	if e.FileName != nil {
+		if err := vault.CheckFileName(*e.FileName); err != nil {
+			return "", err
 		}
 	}
 	if e.Secret != nil && len(e.Secret) == 0 {
@@ -87,8 +94,9 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	var id int64
 	var data, salt, sealed, sealedSalt []byte
 	var url, details string
-	err := s.db.QueryRow(`SELECT id, encrypted_data, salt, url, details, sealed_details, details_salt FROM entries WHERE kind = ? AND service = ? AND username = ?`,
-		string(k.Kind), k.Service, k.Username).Scan(&id, &data, &salt, &url, &details, &sealed, &sealedSalt)
+	var settingsCol sql.NullString
+	err := s.db.QueryRow(`SELECT id, encrypted_data, salt, url, details, sealed_details, details_salt, settings FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&id, &data, &salt, &url, &details, &sealed, &sealedSalt, &settingsCol)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", notFound(k)
 	}
@@ -112,6 +120,10 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 			return "", err
 		}
 		changed = old == nil || !old.same
+		// A file's name goes into the history with it.
+		if had, err := decodeSettings(k, settingsCol); err == nil && old != nil {
+			old.fileName = had.FileName
+		}
 	case changed:
 		same, err := s.sameSecret(k, data, salt, e.Secret)
 		if err != nil {
@@ -221,8 +233,8 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	return detail, nil
 }
 
-// fileInTx sets the folder, tags and code settings e names on row id, the
-// entry k, and says what changed.
+// fileInTx sets the folder, tags, code settings and file name e names on
+// row id, the entry k, and says what changed.
 func fileInTx(tx *sql.Tx, id int64, k vault.Key, e *EntryEdit) (what []string, err error) {
 	if e.Folder != nil {
 		moved, err := rowsChanged(tx.Exec(`UPDATE entries SET folder = ? WHERE id = ? AND folder <> ?`, *e.Folder, id, *e.Folder))
@@ -270,7 +282,7 @@ func fileInTx(tx *sql.Tx, id int64, k vault.Key, e *EntryEdit) (what []string, e
 		}
 		if settings.TOTP != *e.TOTP {
 			settings.TOTP = *e.TOTP
-			enc, err := encodeSettings(settings)
+			enc, err := encodeSettings(&settings)
 			if err != nil {
 				return nil, err
 			}
@@ -278,6 +290,27 @@ func fileInTx(tx *sql.Tx, id int64, k vault.Key, e *EntryEdit) (what []string, e
 				return nil, err
 			}
 			what = append(what, "code settings changed")
+		}
+	}
+	if e.FileName != nil {
+		var col sql.NullString
+		if err := tx.QueryRow(`SELECT settings FROM entries WHERE id = ?`, id).Scan(&col); err != nil {
+			return nil, err
+		}
+		settings, err := decodeSettings(k, col)
+		if err != nil {
+			return nil, err
+		}
+		if settings.FileName != *e.FileName {
+			settings.FileName = *e.FileName
+			enc, err := encodeSettings(&settings)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := tx.Exec(`UPDATE entries SET settings = ? WHERE id = ?`, enc, id); err != nil {
+				return nil, err
+			}
+			what = append(what, "file name changed")
 		}
 	}
 	return what, nil

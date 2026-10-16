@@ -228,6 +228,9 @@ func (m *Model) copySecret(sel *vault.Entry) tea.Cmd {
 		}
 		defer secure.SecureZeroBytes(secret)
 		text, what := string(secret), "the "+secretWord(e.Kind)+" for "+entryName(&e)
+		if e.Kind == vault.KindFile && !vault.IsText(secret) {
+			return copiedMsg{what: entryName(&e) + " is a binary file, which the clipboard can't hold: Ctrl-K, save to a file…, writes it", epoch: epoch, bad: true}
+		}
 		if e.Kind == vault.KindTOTP {
 			if text, err = totp.CodeAt(secret, e.Settings.TOTP, opts.Now()); err != nil {
 				return copiedMsg{what: fmt.Sprintf("Couldn't make the code for %s: %v", entryName(&e), err), epoch: epoch, bad: true}
@@ -316,7 +319,7 @@ func kindName(k vault.Key) string { return kindLabel(k.Kind) + " " + keyName(k) 
 
 // kindLabel names a kind of entry in a sentence: "TOTP", "API key".
 func kindLabel(k vault.Kind) string {
-	if label, ok := map[vault.Kind]string{vault.KindPassword: "password", vault.KindAPIKey: "API key", vault.KindNote: "secure note", vault.KindTOTP: "TOTP"}[k]; ok {
+	if label, ok := map[vault.Kind]string{vault.KindPassword: "password", vault.KindAPIKey: "API key", vault.KindNote: "secure note", vault.KindTOTP: "TOTP", vault.KindFile: "file"}[k]; ok {
 		return label
 	}
 	return string(k)
@@ -331,6 +334,8 @@ func secretWord(k vault.Kind) string {
 		return "key"
 	case vault.KindNote:
 		return "note"
+	case vault.KindFile:
+		return "file"
 	}
 	return "password"
 }

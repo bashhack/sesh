@@ -18,12 +18,14 @@ import (
 	"github.com/bashhack/sesh/internal/vault"
 )
 
-const addUsage = `Usage: sesh add password|key|note|totp [<name>] [flags]
+const addUsage = `Usage: sesh add password|key|note|totp|file [<name>] [flags]
   Add an entry. A password or API key is typed hidden, or read from a pipe;
   a note is read until Ctrl-D, or from a pipe. A TOTP entry takes its key
   typed (or an otpauth:// link pasted), or read from a QR code: on screen
   with --qr (macOS), or in an image file with --qr-image (a screenshot or a
-  photo, PNG or JPEG). With no name at a terminal, sesh asks for one.
+  photo, PNG or JPEG). A file entry keeps a file whole (up to 1 MiB), from
+  --from or a pipe; it's named after the file unless a name is given. With
+  no name at a terminal, sesh asks for one.
 
   sesh add password github --username alice
   sesh add password github --generate             (copies it as it's saved)
@@ -31,6 +33,7 @@ const addUsage = `Usage: sesh add password|key|note|totp [<name>] [flags]
   echo "door code 4711" | sesh add note house
   sesh add totp github --qr
   sesh add totp github --qr-image ~/Downloads/github-2fa.png
+  sesh add file kubeconfig --from ~/.kube/config
   sesh add password bank --folder money --tag important --url https://bank.example
 
 Flags:
@@ -39,6 +42,7 @@ Flags:
                         or a passphrase: --words N [--separator S] [--capitalize])
   --qr                  A TOTP entry: read its key from a QR code on screen
   --qr-image FILE       A TOTP entry: read its key from a QR code in an image
+  --from FILE           A file entry: the file to keep
   --folder F, --tag T   File it (--tag repeats)
   --url U, --notes [--editor], --field n=v, --secret-field n
                         Its URL, notes (stdin, or $EDITOR), and fields
@@ -50,12 +54,14 @@ var addKinds = map[string]vault.Kind{
 	"key":      vault.KindAPIKey, "api_key": vault.KindAPIKey, "api-key": vault.KindAPIKey, "apikey": vault.KindAPIKey,
 	"note": vault.KindNote, "secure_note": vault.KindNote,
 	"totp": vault.KindTOTP,
+	"file": vault.KindFile,
 }
 
 // addFlags are sesh add's flags.
 type addFlags struct {
 	username string
 	qrImage  string
+	from     string
 	filing   provider.FilingFlags
 	details  provider.DetailsFlags
 	gen      genFlags
@@ -72,6 +78,7 @@ func addAddFlags(fs *flag.FlagSet) *addFlags {
 	f.gen.register(fs)
 	fs.BoolVar(&f.qr, "qr", false, "Read a TOTP key from a QR code on screen")
 	fs.StringVar(&f.qrImage, "qr-image", "", "Read a TOTP key from a QR code in an image file (PNG or JPEG)")
+	fs.StringVar(&f.from, "from", "", "A file entry: the file to keep")
 	fs.BoolVar(&f.force, "force", false, "Replace an entry of that name without asking")
 	f.filing.Register(fs)
 	f.details.Register(fs)
@@ -96,11 +103,11 @@ func runAdd(app *App, args []string) error {
 		return err
 	}
 	if len(words) == 0 {
-		return errors.New("say what to add: sesh add password|key|note|totp <name>")
+		return errors.New("say what to add: sesh add password|key|note|totp|file <name>")
 	}
 	kind, ok := addKinds[strings.ToLower(words[0])]
 	if !ok {
-		return fmt.Errorf("sesh add takes a kind first (password, key, note, or totp), not %q", words[0])
+		return fmt.Errorf("sesh add takes a kind first (password, key, note, totp, or file), not %q", words[0])
 	}
 	set := map[string]bool{}
 	fs.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
@@ -109,7 +116,9 @@ func runAdd(app *App, args []string) error {
 	}
 	switch {
 	case f.generate && kind != vault.KindPassword:
-		return fmt.Errorf("--generate makes a password; %s comes from wherever it was issued", map[vault.Kind]string{vault.KindAPIKey: "an API key", vault.KindNote: "a note", vault.KindTOTP: "a TOTP key"}[kind])
+		return fmt.Errorf("--generate makes a password; %s comes from wherever it was issued", map[vault.Kind]string{vault.KindAPIKey: "an API key", vault.KindNote: "a note", vault.KindTOTP: "a TOTP key", vault.KindFile: "a file"}[kind])
+	case f.from != "" && kind != vault.KindFile:
+		return errors.New("--from reads a file entry's file: sesh add file <name> --from FILE")
 	case (f.qr || f.qrImage != "") && kind != vault.KindTOTP:
 		return errors.New("--qr and --qr-image read a TOTP entry's key: sesh add totp <name> --qr")
 	case f.qr && f.qrImage != "":
@@ -126,6 +135,24 @@ func runAdd(app *App, args []string) error {
 	}
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
 	name := strings.Join(words[1:], " ")
+	// A file is read before anything is unlocked, and names a file entry
+	// given none.
+	var content []byte
+	var fileName string
+	if kind == vault.KindFile {
+		switch {
+		case f.from != "":
+			if content, fileName, err = readFileToAdd(f.from); err != nil {
+				return err
+			}
+			if name == "" {
+				name = fileName
+			}
+		case terminal:
+			return errors.New("give the file: sesh add file <name> --from FILE, or pipe it in")
+		}
+		defer func() { secure.SecureZeroBytes(content) }()
+	}
 	// A TOTP entry's name can come from its QR code or otpauth:// link.
 	if name == "" && kind != vault.KindTOTP {
 		if !terminal {
@@ -146,7 +173,7 @@ func runAdd(app *App, args []string) error {
 	}
 	if !terminal && change != nil {
 		fromStdin := f.details.FromStdin()
-		if !f.generate && !f.qr && f.qrImage == "" {
+		if !f.generate && !f.qr && f.qrImage == "" && f.from == "" {
 			fromStdin++
 		}
 		if fromStdin > 1 {
@@ -154,7 +181,13 @@ func runAdd(app *App, args []string) error {
 		}
 	}
 
-	// An image is read before anything is unlocked, or made.
+	// A file piped in, and an image, are read before anything is
+	// unlocked, or made.
+	if kind == vault.KindFile && content == nil {
+		if content, err = readAtMost(app.Stdin, "the file piped in", 0); err != nil {
+			return err
+		}
+	}
 	var fromImage *qrcode.TOTPInfo
 	if f.qrImage != "" {
 		_, info, err := readQRImage(f.qrImage)
@@ -178,6 +211,9 @@ func runAdd(app *App, args []string) error {
 		return addTOTP(app, store, name, f, change, terminal, fromImage)
 	}
 	k := vault.Key{Kind: kind, Service: name, Username: f.username}
+	if kind == vault.KindFile {
+		return addFile(app, store, k, content, fileName, f, change, terminal)
+	}
 	if err := checkAddChange(store, k, change); err != nil {
 		return err
 	}
@@ -526,4 +562,41 @@ func saveTOTP(store *database.Store, k vault.Key, key []byte, params totp.Params
 		d.Notes, d.Fields = change.Notes, change.Set
 	}
 	return store.SaveWithDetails(&ent, key, &d)
+}
+
+// addFile adds file entry k, with content, the file called fileName (""
+// when piped in), and the details change makes.
+func addFile(app *App, store *database.Store, k vault.Key, content []byte, fileName string, f *addFlags, change *vault.DetailsChange, terminal bool) error {
+	if err := checkAddChange(store, k, change); err != nil {
+		return err
+	}
+	if err := confirmReplace(app, store, k, f.force, terminal); err != nil {
+		return err
+	}
+	replacing := store.Exists(k) == nil
+	mgr := password.NewManager(store)
+	if err := readDetails(app, mgr, k, &f.details, change, terminal); err != nil {
+		return err
+	}
+	if change != nil {
+		defer provider.ZeroChange(change)
+	}
+	if err := mgr.StoreFile(k, content, fileName, f.filing.Filing(), change); err != nil {
+		return err
+	}
+	said := "✅ Added "
+	if replacing {
+		said = "✅ Replaced "
+	}
+	said += "file " + password.EntryName(k) + ": " + fileSaid(fileName, int64(len(content)))
+	_, err := fmt.Fprintln(app.Stderr, said)
+	return err
+}
+
+// fileSaid says a file entry's file: "config, 2 KB".
+func fileSaid(name string, size int64) string {
+	if name == "" {
+		return vault.SizeSaid(size)
+	}
+	return name + ", " + vault.SizeSaid(size)
 }

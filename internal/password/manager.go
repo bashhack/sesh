@@ -25,6 +25,7 @@ const (
 	EntryTypeAPIKey   = vault.KindAPIKey
 	EntryTypeTOTP     = vault.KindTOTP
 	EntryTypeNote     = vault.KindNote
+	EntryTypeFile     = vault.KindFile
 )
 
 // Entry is a listed entry, without its secret.
@@ -39,11 +40,14 @@ type Entry struct {
 	Type     EntryType `json:"type"`
 	Folder   string    `json:"folder,omitempty"`
 	URL      string    `json:"url,omitempty"`
-	Tags     []string  `json:"tags,omitempty"`
+	// FileName and Size are a file entry's file's name and size in bytes.
+	FileName string   `json:"file_name,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+	Size     int64    `json:"size,omitempty"`
 }
 
 func entryFrom(e *vault.Entry) Entry {
-	return Entry{
+	out := Entry{
 		ID:        e.Key.String(),
 		Service:   e.Service,
 		Username:  e.Username,
@@ -54,6 +58,10 @@ func entryFrom(e *vault.Entry) Entry {
 		CreatedAt: e.CreatedAt,
 		UpdatedAt: e.UpdatedAt,
 	}
+	if e.Kind == vault.KindFile {
+		out.FileName, out.Size = e.Settings.FileName, e.Size
+	}
+	return out
 }
 
 // Manager provides the password manager's operations on a vault.
@@ -138,6 +146,39 @@ func (m *Manager) Notes(k vault.Key) ([]byte, error) {
 	d.Notes = nil
 	d.Zero()
 	return notes, nil
+}
+
+// StoreFile creates the file entry k, or replaces its content, with the
+// file's name, filing it as filing says and making change to its details,
+// all in one write.
+func (m *Manager) StoreFile(k vault.Key, content []byte, fileName string, filing vault.Filing, change *vault.DetailsChange) error {
+	secret := bytes.Clone(content)
+	defer secure.SecureZeroBytes(secret)
+	e, err := m.existingOrNew(k)
+	if err != nil {
+		return err
+	}
+	filing.Apply(&e)
+	if fileName != "" {
+		// Piped in, a file keeps the name it had.
+		e.Settings.FileName = fileName
+	}
+	var d vault.Details
+	if !e.CreatedAt.IsZero() {
+		if d, err = m.store.Details(k, "all, to change them"); err != nil {
+			return fmt.Errorf("failed to read the entry's details: %w", err)
+		}
+	}
+	defer d.Zero()
+	if change != nil {
+		if _, err := change.Apply(&d); err != nil {
+			return err
+		}
+	}
+	if err := m.store.SaveWithDetails(&e, secret, &d); err != nil {
+		return fmt.Errorf("failed to store the file: %w", err)
+	}
+	return nil
 }
 
 // existingOrNew is the entry at k, to be saved again with its settings,

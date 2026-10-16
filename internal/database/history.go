@@ -48,6 +48,7 @@ func (s *Store) HistoryKeep() int { return s.historyKeep }
 // read from, so the write can check it hasn't changed since.
 type oldSecret struct {
 	at         time.Time // replaced, for an imported one
+	fileName   string    // a file entry's file's name with it
 	data, salt []byte    // sealed for history
 	from       []byte    // the entry's encrypted_data it was read from
 	same       bool      // next is the secret it has: nothing changes
@@ -109,8 +110,8 @@ func (s *Store) keepOld(tx *sql.Tx, k vault.Key, old *oldSecret, at time.Time) e
 	if old.data == nil {
 		return nil
 	}
-	if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		string(k.Kind), k.Service, k.Username, old.data, old.salt, at); err != nil {
+	if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at, file_name) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		string(k.Kind), k.Service, k.Username, old.data, old.salt, at, old.fileName); err != nil {
 		return fmt.Errorf("keep %s's earlier secret: %w", k, err)
 	}
 	return s.trimHistory(tx, k)
@@ -266,8 +267,8 @@ func (s *Store) keepImported(tx *sql.Tx, k vault.Key, h *importedHistory) error 
 		}
 	}
 	for _, id := range slices.Backward(h.had) {
-		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at)
-			SELECT kind, service, username, encrypted_data, salt, replaced_at FROM history WHERE id = ?`, id); err != nil {
+		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at, file_name)
+			SELECT kind, service, username, encrypted_data, salt, replaced_at, file_name FROM history WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("keep %s's history above what's imported: %w", k, err)
 		}
 		if _, err := tx.Exec(`DELETE FROM history WHERE id = ?`, id); err != nil {
@@ -496,7 +497,14 @@ func (s *Store) restoreVersion(k vault.Key, v Version, n int) (kept bool, err er
 	if err != nil {
 		return false, err
 	}
-	if err := s.write(&vault.Entry{Key: k}, secret, false, nil, nil, nil); err != nil {
+	// A file entry gets the file's name back with its content.
+	restored := vault.Entry{Key: k}
+	if k.Kind == vault.KindFile {
+		if err := s.db.QueryRow(`SELECT file_name FROM history WHERE id = ?`, v.ID).Scan(&restored.Settings.FileName); err != nil {
+			return false, fmt.Errorf("read version %d of %s: %w", n, k, err)
+		}
+	}
+	if err := s.write(&restored, secret, false, nil, nil, nil); err != nil {
 		return false, err
 	}
 	after, err := s.History(k)

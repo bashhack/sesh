@@ -132,6 +132,9 @@ func (m *Model) openMenu() tea.Cmd {
 	if e.Kind == vault.KindTOTP {
 		items = append(items, item{key: "q", label: "show the key as a QR code…", run: func() tea.Cmd { return m.openQR(&ek) }})
 	}
+	if e.Kind == vault.KindFile {
+		items = append(items, item{key: "s", label: "save to a file…", run: func() tea.Cmd { return m.askSaveFile(&ek) }})
+	}
 	items = append(items,
 		item{key: "h", label: "earlier secrets…", run: func() tea.Cmd { return m.openHistory(&ek) }},
 		item{key: "d", label: "move to the trash", run: func() tea.Cmd { return m.confirmDelete(&ek) }},
@@ -493,6 +496,9 @@ func (m *Model) copyVersion(k vault.Key, n int, ver Version) tea.Cmd {
 			return copiedMsg{err: err, epoch: epoch}
 		}
 		defer secure.SecureZeroBytes(secret)
+		if k.Kind == vault.KindFile && !vault.IsText(secret) {
+			return copiedMsg{what: fmt.Sprintf("Version %d of %s is a binary file, which the clipboard can't hold", n, short(keyName(k))), epoch: epoch, bad: true}
+		}
 		if err := opts.Copy(string(secret)); err != nil {
 			return copiedMsg{what: "Couldn't copy: " + err.Error(), epoch: epoch, bad: true}
 		}

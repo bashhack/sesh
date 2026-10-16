@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
@@ -58,6 +60,8 @@ func secretLabel(k vault.Kind) string {
 		return "TOTP secret"
 	case vault.KindNote:
 		return "Note"
+	case vault.KindFile:
+		return "File"
 	}
 	return "Password"
 }
@@ -177,13 +181,23 @@ func (s *shownEntry) text(reveal bool) string {
 	case tags != "":
 		rows = append(rows, row{"Tags", tags})
 	}
+	// A file entry's file is named, and its content is the secret.
+	label := secretLabel(s.e.Kind)
+	if s.e.Kind == vault.KindFile {
+		rows = append(rows, row{"File", shownText(fileSaid(s.e.Settings.FileName, s.e.Size))})
+		label = "Content"
+	}
 	if reveal {
-		rows = append(rows, row{secretLabel(s.e.Kind), shownText(string(s.secret))})
+		shown := shownText(string(s.secret))
+		if s.e.Kind == vault.KindFile && !vault.IsText(s.secret) {
+			shown = "(binary: sesh get " + shell.Quote(s.e.Key.String()) + " -o FILE writes it)"
+		}
+		rows = append(rows, row{label, shown})
 		if len(s.d.Notes) > 0 {
 			rows = append(rows, row{"Notes", shownText(string(s.d.Notes))})
 		}
 	} else {
-		rows = append(rows, row{secretLabel(s.e.Kind), hidden + "   (get, or --reveal)"})
+		rows = append(rows, row{label, hidden + "   (get, or --reveal)"})
 		if s.e.HasNotes {
 			rows = append(rows, row{"Notes", hidden + "   (--reveal)"})
 		}
@@ -264,6 +278,8 @@ func (s *shownEntry) writeJSON(app *App, reveal bool) error {
 		UpdatedAt time.Time `json:"updated_at"`
 		Secret    *string   `json:"secret,omitempty"`
 		Notes     *string   `json:"notes,omitempty"`
+		Encoding  string    `json:"encoding,omitempty"`
+		FileName  string    `json:"file_name,omitempty"`
 		ID        string    `json:"id"`
 		Kind      string    `json:"kind"`
 		Service   string    `json:"service"`
@@ -272,14 +288,22 @@ func (s *shownEntry) writeJSON(app *App, reveal bool) error {
 		Folder    string    `json:"folder,omitempty"`
 		Tags      []string  `json:"tags,omitempty"`
 		Fields    []field   `json:"fields,omitempty"`
+		Size      int64     `json:"size,omitempty"`
 		HasNotes  bool      `json:"has_notes,omitempty"`
 	}{
 		ID: s.e.Key.String(), Kind: string(s.e.Kind), Service: s.e.Service, Username: s.e.Username,
 		URL: s.e.URL, Folder: s.e.Folder, Tags: s.e.Tags, HasNotes: s.e.HasNotes,
 		CreatedAt: s.e.CreatedAt, UpdatedAt: s.e.UpdatedAt,
 	}
+	if s.e.Kind == vault.KindFile {
+		out.FileName, out.Size = s.e.Settings.FileName, s.e.Size
+	}
 	if reveal {
 		secret := string(s.secret)
+		if s.e.Kind == vault.KindFile {
+			// A file's content in base64, which any bytes go into.
+			secret, out.Encoding = base64.StdEncoding.EncodeToString(s.secret), "base64"
+		}
 		out.Secret = &secret
 		if len(s.d.Notes) > 0 {
 			notes := string(s.d.Notes)

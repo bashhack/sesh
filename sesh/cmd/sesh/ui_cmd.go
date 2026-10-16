@@ -200,6 +200,8 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		},
 		ScanQR:      uiScanQR(),
 		ReadQRImage: uiReadQRImage,
+		ReadFile:    uiReadFile,
+		SaveFile:    uiSaveFile,
 		ClearAfter:  cfg.ClipboardTimeout.Value,
 		IdleTimeout: cfg.AgentIdleTimeout.Value,
 		MaxLifetime: cfg.AgentMaxLifetime.Value,
@@ -733,7 +735,7 @@ func (u *uiVault) Save(c *tui.Change) (vault.Key, error) {
 		}
 		params = &totp.Params{Issuer: cur.Settings.TOTP.Issuer}
 	}
-	edit := database.EntryEdit{Secret: secret, Folder: c.Folder, TOTP: params}
+	edit := database.EntryEdit{Secret: secret, Folder: c.Folder, TOTP: params, FileName: c.FileName}
 	if to != c.Key {
 		edit.To = &to
 	}
@@ -775,6 +777,9 @@ func (u *uiVault) add(c *tui.Change, secret []byte, params *totp.Params) error {
 	}
 	if params != nil {
 		ent.Settings.TOTP = *params
+	}
+	if c.FileName != nil {
+		ent.Settings.FileName = *c.FileName
 	}
 	d := vault.Details{Notes: c.Notes, Fields: c.SetFields}
 	if c.URL != nil {

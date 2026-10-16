@@ -32,7 +32,12 @@ func Entries(list []password.ExportEntry) []*importer.Entry {
 		case !ee.Type.Valid():
 			e.Skip = fmt.Sprintf("its kind, %q, isn't one sesh has", ee.Type)
 		default:
-			e.Secret = []byte(ee.Secret)
+			secret, err := ee.SecretBytes()
+			if err != nil {
+				e.Skip = err.Error()
+				break
+			}
+			e.Secret = secret
 			e.Details = ee.Details()
 		}
 		out = append(out, importer.Checked(e))

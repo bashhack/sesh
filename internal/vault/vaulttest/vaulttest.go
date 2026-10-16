@@ -81,13 +81,13 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			t.Fatal(err)
 		}
 		want := vault.Settings{TOTP: totp.Params{Digits: 8}}
-		if err := s.SetSettings(ghTOTP, want); err != nil {
+		if err := s.SetSettings(ghTOTP, &want); err != nil {
 			t.Fatal(err)
 		}
 		if e, err := s.Lookup(ghTOTP); err != nil || e.Settings != want {
 			t.Errorf("Lookup = %+v, %v; want settings %+v", e, err, want)
 		}
-		if err := s.SetSettings(openai, want); !errors.Is(err, vault.ErrNotFound) {
+		if err := s.SetSettings(openai, &want); !errors.Is(err, vault.ErrNotFound) {
 			t.Errorf("SetSettings on a missing entry = %v, want ErrNotFound", err)
 		}
 	})
@@ -309,7 +309,7 @@ func Run(t *testing.T, newStore func(t *testing.T) vault.Store) {
 			if _, err := s.Lookup(k); !errors.Is(err, vault.ErrNotFound) {
 				t.Errorf("Lookup(%+v) = %v, want ErrNotFound", k, err)
 			}
-			if err := s.SetSettings(k, vault.Settings{}); !errors.Is(err, vault.ErrNotFound) {
+			if err := s.SetSettings(k, &vault.Settings{}); !errors.Is(err, vault.ErrNotFound) {
 				t.Errorf("SetSettings(%+v) = %v, want ErrNotFound", k, err)
 			}
 			if err := s.Delete(k); !errors.Is(err, vault.ErrNotFound) {

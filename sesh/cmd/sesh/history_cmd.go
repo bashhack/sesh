@@ -138,9 +138,19 @@ func runHistory(app *App, args []string) error {
 		return err
 	}
 	defer secure.SecureZeroBytes(secret)
-	if action == "show" {
+	binary := k.Kind == vault.KindFile && !vault.IsText(secret)
+	switch {
+	case action == "show" && k.Kind == vault.KindFile && binary && uiStdoutIsTerminal(app.Stdout):
+		return fmt.Errorf("version %d of %s is a binary file, which isn't printed at a terminal: pipe it into a file", n, k)
+	case action == "show" && k.Kind == vault.KindFile:
+		// A file as it was kept: nothing added.
+		_, err := app.Stdout.Write(secret)
+		return err
+	case action == "show":
 		_, err := fmt.Fprintf(app.Stdout, "%s\n", secret)
 		return err
+	case binary:
+		return fmt.Errorf("version %d of %s is a binary file, which the clipboard can't hold: --show into a file instead", n, k)
 	}
 	if app.ClipboardCopy == nil {
 		return errors.New("there's no clipboard to copy to here; use --show")

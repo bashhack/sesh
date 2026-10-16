@@ -206,10 +206,12 @@ func (m *Model) hide() {
 	}
 }
 
-// wrapped is text wrapped to a width.
+// wrapped is text wrapped to a width, and its lines as the preview draws
+// them, labelled and styled, once they've been drawn.
 type wrapped struct {
-	lines []string
-	width int
+	lines  []string
+	styled []string
+	width  int
 }
 
 // wrap is s wrapped to w, wrapped once for id at each width: s is made a
@@ -281,18 +283,31 @@ func (m *Model) previewLines(w, h int) []string {
 			add(label(lab) + style.Render(l))
 		}
 	}
-	secretField := func(name string, lines []string, style lipgloss.Style) {
-		for i, l := range lines {
-			lab := ""
-			if i == 0 {
-				lab = name
+	// A secret revealed is styled once, not at each draw: a file's may be
+	// thousands of lines.
+	secretField := func(name, id string, value []byte, style lipgloss.Style) {
+		lines := m.wrap(id, value, valueWidth)
+		c := m.wraps[id]
+		if c.styled == nil {
+			for i, l := range lines {
+				lab := ""
+				if i == 0 {
+					lab = name
+				}
+				c.styled = append(c.styled, label(lab)+style.Render(l))
 			}
-			add(label(lab) + style.Render(l))
+			m.wraps[id] = c
+		}
+		for _, s := range c.styled {
+			add(s)
 		}
 	}
 	plain := th.style()
 	shown := m.shown != nil && m.shown.k == e.Key
 	hidden := th.dimmed().Render("••••••••")
+	if e.Kind == vault.KindFile {
+		field("file", fileSaid(e.Settings.FileName, e.Size), plain)
+	}
 	if e.Kind != vault.KindNote {
 		name := "password"
 		switch e.Kind {
@@ -300,10 +315,15 @@ func (m *Model) previewLines(w, h int) []string {
 			name = "key"
 		case vault.KindTOTP:
 			name = "TOTP key"
+		case vault.KindFile:
+			name = "content"
 		}
-		if shown {
-			secretField(name, m.wrap("reveal "+name, m.shown.secret, valueWidth), th.accented())
-		} else {
+		switch {
+		case shown && e.Kind == vault.KindFile && !vault.IsText(m.shown.secret):
+			add(label(name) + th.dimmed().Render("binary: Ctrl-K, save to a file…, writes it"))
+		case shown:
+			secretField(name, "reveal "+name, m.shown.secret, th.accented())
+		default:
 			add(label(name) + hidden)
 		}
 	}
@@ -314,7 +334,7 @@ func (m *Model) previewLines(w, h int) []string {
 		case !f.Secret:
 			field(f.Name, string(f.Value), plain)
 		case shown:
-			secretField(f.Name, m.wrap("reveal field "+f.Name, revealedField(m.shown, f.Name), valueWidth), th.accented())
+			secretField(f.Name, "reveal field "+f.Name, revealedField(m.shown, f.Name), th.accented())
 		default:
 			add(label(f.Name) + hidden)
 		}
@@ -409,4 +429,12 @@ func wrapText(s string, w int) string {
 		return r
 	}, s)
 	return ansi.Wrap(s, max(w, 4), "")
+}
+
+// fileSaid says a file entry's file: "config · 2 KB".
+func fileSaid(name string, size int64) string {
+	if name == "" {
+		return vault.SizeSaid(size)
+	}
+	return name + " · " + vault.SizeSaid(size)
 }

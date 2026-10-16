@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"image/color"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -3432,5 +3433,143 @@ func TestShowQRCloses(t *testing.T) {
 	a.tick(time.Second)
 	if s := a.screen(); a.ov == nil || a.ov.kind != panelMenu || !strings.Contains(s, "The QR code closed after 30 seconds") {
 		t.Errorf("still open, or not said:\n%s", s)
+	}
+}
+
+// fileFake is the fake vault with a text file entry and a binary one.
+func fileFake() (f *fakeVault, text, binary vault.Key) {
+	f = newFake()
+	text = vault.Key{Kind: vault.KindFile, Service: "kubeconfig"}
+	binary = vault.Key{Kind: vault.KindFile, Service: "cert"}
+	f.entries = append(f.entries,
+		vault.Entry{Key: text, Settings: vault.Settings{FileName: "config"}, Size: 28},
+		vault.Entry{Key: binary, Settings: vault.Settings{FileName: "cert.der"}, Size: 9})
+	f.secrets[text], f.secrets[binary] = "apiVersion: v1\nclusters: []\n", "\x00\x01binary\xff"
+	return f, text, binary
+}
+
+// A file entry shows its file's name and size; Enter copies a text one, not a binary one; Ctrl-K saves it to a file.
+func TestFileEntryInApp(t *testing.T) {
+	f, text, binary := fileFake()
+	var saved []string
+	a := newApp(t, f, Options{ClearAfter: 30 * time.Second, SaveFile: func(typed string, content []byte) (string, error) {
+		saved = append(saved, typed+"="+string(content))
+		return typed, nil
+	}})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	a.press("kubeconfig")
+	if s := a.screen(); a.selected() == nil || a.selected().Key != text || !strings.Contains(s, "config · 28 bytes") {
+		t.Fatalf("the preview:\n%s", s)
+	}
+	a.press("enter")
+	if len(a.copied) != 1 || a.copied[0] != "apiVersion: v1\nclusters: []\n" {
+		t.Errorf("copied %q", a.copied)
+	}
+	a.press("ctrl+k", "s")
+	if s := a.screen(); a.form == nil || !strings.Contains(s, "~/config") {
+		t.Fatalf("the save form:\n%s", s)
+	}
+	a.press("enter")
+	if !slices.Equal(saved, []string{"~/config=apiVersion: v1\nclusters: []\n"}) || !strings.Contains(a.screen(), "Saved kubeconfig to ~/config") {
+		t.Errorf("saved %q:\n%s", saved, a.screen())
+	}
+	if !slices.Contains(f.reads, "secret "+text.String()+" in sesh ui, to save it to a file") {
+		t.Errorf("reads %q", f.reads)
+	}
+	// A binary one isn't copied, nor its content shown.
+	for range len("kubeconfig") {
+		a.press("backspace")
+	}
+	a.press("cert")
+	if a.selected() == nil || a.selected().Key != binary {
+		t.Fatalf("selected %+v", a.selected())
+	}
+	a.press("enter")
+	if len(a.copied) != 1 || !strings.Contains(a.screen(), "binary file, which the clipboard can't hold") {
+		t.Errorf("copied %q:\n%s", a.copied, a.screen())
+	}
+	a.press("tab")
+	if s := a.screen(); strings.Contains(s, "binary\xff") || !strings.Contains(s, "binary: Ctrl-K, save to a file") {
+		t.Errorf("revealed:\n%s", s)
+	}
+	// A password's menu has nothing to save.
+	for range len("cert") {
+		a.press("backspace")
+	}
+	for a.selected().Kind != vault.KindPassword {
+		a.press("down")
+	}
+	a.press("ctrl+k")
+	if a.ov == nil || a.ov.kind != panelMenu || slices.ContainsFunc(a.ov.items, func(it item) bool { return it.key == "s" }) {
+		t.Errorf("a password's menu:\n%s", a.screen())
+	}
+}
+
+// Adding a file entry reads the file from the path typed, naming the entry after it given no name; editing can give it a new one.
+func TestFileEntryForm(t *testing.T) {
+	f, text, _ := fileFake()
+	var read []string
+	a := newApp(t, f, Options{ReadFile: func(typed string) ([]byte, string, error) {
+		read = append(read, typed)
+		if typed == "~/nope" {
+			return nil, "", errors.New("no such file")
+		}
+		return []byte("content of " + typed), filepath.Base(typed), nil
+	}})
+	a.press("ctrl+g", "a", "→", "→", "→", "→") // file
+	if !slices.ContainsFunc(a.form.inputs, func(in *input) bool { return in.label == "file" && in.visible() }) {
+		t.Fatalf("no file input:\n%s", a.screen())
+	}
+	a.press("ctrl+s")
+	if s := a.screen(); !strings.Contains(s, "Give the file to keep") || len(read) != 0 {
+		t.Fatalf("no file:\n%s", s)
+	}
+	a.tabs(3) // name, username, then the file
+	a.press("~/nope", "ctrl+s")
+	if s := a.screen(); a.form == nil || len(f.saves) != 0 || !strings.Contains(s, "no such file") {
+		t.Fatalf("a missing file:\n%s", s)
+	}
+	a.press("ctrl+u", "~/.kube/config.yml", "ctrl+s")
+	if len(f.saves) != 1 {
+		t.Fatalf("saves %d:\n%s", len(f.saves), a.screen())
+	}
+	c := f.saves[0]
+	if c.To != (vault.Key{Kind: vault.KindFile, Service: "config.yml"}) || string(c.Secret) != "content of ~/.kube/config.yml" || c.FileName == nil || *c.FileName != "config.yml" {
+		t.Errorf("added %+v (file name %v)", c, c.FileName)
+	}
+	// Editing: the file kept unless one is given; it stays a file entry.
+	a.press("kubeconfig")
+	if a.selected() == nil || a.selected().Key != text {
+		t.Fatalf("selected %+v", a.selected())
+	}
+	a.press("ctrl+k", "e")
+	if s := a.screen(); !strings.Contains(s, "new file") || strings.Contains(s, "secure note") {
+		t.Fatalf("the edit form:\n%s", s)
+	}
+	a.press("ctrl+s")
+	if c := f.saves[len(f.saves)-1]; len(f.saves) != 2 || c.Secret != nil || c.FileName != nil {
+		t.Errorf("kept: %+v", c)
+	}
+	a.press("ctrl+k", "e")
+	a.form.focusInput(slices.IndexFunc(a.form.inputs, func(in *input) bool { return in.label == "new file" }))
+	a.press("~/new.yml", "ctrl+s")
+	if c := f.saves[len(f.saves)-1]; len(f.saves) != 3 || c.To != text || string(c.Secret) != "content of ~/new.yml" || c.FileName == nil || *c.FileName != "new.yml" {
+		t.Errorf("a new file: %+v", c)
+	}
+}
+
+// A binary file's earlier version isn't copied from its history either.
+func TestFileVersionNotCopied(t *testing.T) {
+	f, _, binary := fileFake()
+	f.history = map[vault.Key][]string{binary: {"\x00old\xff"}}
+	a := newApp(t, f, Options{})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	a.press("cert", "ctrl+k", "h")
+	if a.ov == nil || a.ov.kind != panelHistory {
+		t.Fatalf("no history:\n%s", a.screen())
+	}
+	a.press("enter")
+	if s := a.screen(); len(a.copied) != 0 || !strings.Contains(s, "Version 2 of cert is a binary file") {
+		t.Errorf("copied %q:\n%s", a.copied, s)
 	}
 }

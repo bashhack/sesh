@@ -549,7 +549,7 @@ func TestIntegration_SetSettingsExistingEntry(t *testing.T) {
 		{TOTP: totp.Params{Algorithm: "SHA512", Period: 60}},
 		{},
 	} {
-		if err := store.SetSettings(k, want); err != nil {
+		if err := store.SetSettings(k, &want); err != nil {
 			t.Fatal(err)
 		}
 		if e, err := store.Lookup(k); err != nil || e.Settings != want {

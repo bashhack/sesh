@@ -327,3 +327,33 @@ func TestDetailsChangeMoves(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckFileName(t *testing.T) {
+	for _, ok := range []string{"", "config", ".env", "server key.pem", "naïve.txt", strings.Repeat("a", vault.MaxFileNameLength)} {
+		if err := vault.CheckFileName(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for name, wantSub := range map[string]string{
+		".":                    "isn't a file's name alone",
+		"..":                   "isn't a file's name alone",
+		".ssh/authorized_keys": "isn't a file's name alone",
+		`a\\b`:                 "isn't a file's name alone",
+		"\x1b[31mRED":          "control character",
+		"line\nbreak":          "control character",
+		"evil\u202etxt.exe":    "control character",
+		strings.Repeat("a", vault.MaxFileNameLength+1): "the most is 255",
+	} {
+		if err := vault.CheckFileName(name); err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("%q: %v, want %q", name, err, wantSub)
+		}
+	}
+}
+
+func TestSizeSaid(t *testing.T) {
+	for n, want := range map[int64]string{1: "1 byte", 28: "28 bytes", 999: "999 bytes", 1000: "1 KB", 1499: "1 KB", 999_499: "999 KB", 999_500: "1.0 MB", 1_048_576: "1.0 MB"} {
+		if got := vault.SizeSaid(n); got != want {
+			t.Errorf("vault.SizeSaid(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
