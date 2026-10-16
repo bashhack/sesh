@@ -188,7 +188,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 
 	// A file entry's file, read from the path typed once the form is saved.
 	fileIn := m.textInput("file", "")
-	fileIn.hint = "the file to keep, up to 1 MB: a full path, or from ~/; it names an entry given no name"
+	fileIn.hint = "the file to keep, up to 1 MiB: a full path, or from ~/; it names an entry given no name"
 	if !adding {
 		fileIn.label, fileIn.hint = "new file", "leave it empty to keep the file it has; a full path, or from ~/"
 	}

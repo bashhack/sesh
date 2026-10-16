@@ -496,6 +496,9 @@ func (m *Model) copyVersion(k vault.Key, n int, ver Version) tea.Cmd {
 			return copiedMsg{err: err, epoch: epoch}
 		}
 		defer secure.SecureZeroBytes(secret)
+		if k.Kind == vault.KindFile && !vault.IsText(secret) {
+			return copiedMsg{what: fmt.Sprintf("Version %d of %s is a binary file, which the clipboard can't hold", n, short(keyName(k))), epoch: epoch, bad: true}
+		}
 		if err := opts.Copy(string(secret)); err != nil {
 			return copiedMsg{what: "Couldn't copy: " + err.Error(), epoch: epoch, bad: true}
 		}

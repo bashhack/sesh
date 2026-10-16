@@ -649,6 +649,11 @@ func runGet(app *App, args []string) error {
 	case *asJSON && *out != "":
 		return errors.New("--json prints it, -o writes it to a file: choose one")
 	}
+	if *out != "" {
+		if err := checkOutFile(*out); err != nil {
+			return err
+		}
+	}
 	store, err := openFilingStore()
 	if err != nil {
 		return err
@@ -879,4 +884,22 @@ func runGenerate(app *App, args []string) error {
 	}
 	_, err = fmt.Fprintln(app.Stderr, msg)
 	return err
+}
+
+// checkOutFile says what's wrong with writing a file at path, which is
+// written whole beside it and renamed into place: a folder, or anything
+// else but a file or a symlink (which the file replaces), is refused.
+func checkOutFile(path string) error {
+	info, err := os.Lstat(path) //nolint:gosec // the file the user named
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case info.IsDir():
+		return fmt.Errorf("%s is a folder: give the file to write in it", path)
+	case !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0:
+		return fmt.Errorf("%s isn't a file sesh can replace: a pipe takes it instead (sesh get <entry> > %s)", path, path)
+	}
+	return nil
 }

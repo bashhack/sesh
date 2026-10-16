@@ -165,6 +165,9 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if len(secret) > MaxSecretSize {
 		return fmt.Errorf("%w: %d bytes (max %d)", ErrSecretTooLarge, len(secret), MaxSecretSize)
 	}
+	if err := vault.CheckFileName(e.Settings.FileName); err != nil {
+		return err
+	}
 	settings, err := encodeSettings(&e.Settings)
 	if err != nil {
 		return err
@@ -178,8 +181,9 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	// its secret is still the one compared.
 	var old *oldSecret
 	var data, oldSalt []byte
+	var oldSettings sql.NullString
 	keeping, existed, same := s.historyKeep > 0, false, false
-	switch err := s.db.QueryRow(`SELECT encrypted_data, salt FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt); {
+	switch err := s.db.QueryRow(`SELECT encrypted_data, salt, settings FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt, &oldSettings); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return fmt.Errorf("read %s: %w", e.Key, err)
@@ -192,6 +196,10 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 			old = &oldSecret{from: data}
 		}
 		same = old.same
+		// A file's name goes into the history with it.
+		if had, err := decodeSettings(e.Key, oldSettings); err == nil {
+			old.fileName = had.FileName
+		}
 	default:
 		existed = true
 		if same, err = s.sameSecret(e.Key, data, oldSalt, secret); err != nil {
@@ -256,6 +264,10 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 		onConflict += `, settings = excluded.settings, folder = excluded.folder, created_at = excluded.created_at`
 	case mend:
 		onConflict += `, created_at = excluded.created_at`
+	}
+	if !whole && e.Kind == vault.KindFile && e.Settings.FileName != "" {
+		// A file entry's settings are its file's name alone.
+		onConflict += `, settings = excluded.settings`
 	}
 	if d != nil {
 		onConflict += `, url = excluded.url, details = excluded.details, sealed_details = excluded.sealed_details, details_salt = excluded.details_salt`

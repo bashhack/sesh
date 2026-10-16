@@ -1347,7 +1347,7 @@ sesh get github password --url
 
 ### Files
 
-A file entry keeps a file whole, up to 1 MB: a kubeconfig, a TLS key, a cloud credentials file, an `.env` file. Its content is encrypted, as any secret is; its file's name and size aren't, so they're listed without unlocking anything.
+A file entry keeps a file whole, up to 1 MiB (1,048,576 bytes): a kubeconfig, a TLS key, a cloud credentials file, an `.env` file. Its content is encrypted, as any secret is; its file's name and size aren't, so they're listed without unlocking anything.
 
 ```bash
 sesh add file kubeconfig --from ~/.kube/config   # named after the file without a name
@@ -1358,11 +1358,11 @@ sesh edit kubeconfig --from ~/.kube/config      # a new version; the one before 
 sesh list files
 ```
 
-- **Reading it:** `sesh get` prints the file exactly as kept, with nothing added; `-o FILE` writes it to a file only you can read (a file there is replaced). A binary file isn't printed at a terminal, where it would garble the screen: `-o` or a pipe takes it. `sesh copy` copies a text file; a binary one can't go on the clipboard. `sesh show` gives the file's name and size, and with `--reveal` a text file's content.
-- **Everything else** works as for any entry: a URL, notes and fields, folders and tags, the trash, and [earlier versions](#password-history) (`sesh history kubeconfig --show 2` prints one). A file entry stays one: `sesh edit --type` doesn't turn it into another kind, nor another kind into one.
+- **Reading it:** `sesh get` prints the file exactly as kept, with nothing added; `-o FILE` writes it to a file only you can read: written whole beside it, then renamed into place, so a file there is replaced, and so is a symlink there (not the file it points to); a folder is refused. A binary file isn't printed at a terminal, where it would garble the screen: `-o` or a pipe takes it. `sesh copy` copies a text file; a binary one can't go on the clipboard. `sesh show` gives the file's name and size, and with `--reveal` a text file's content.
+- **Everything else** works as for any entry: a URL, notes and fields, folders and tags, the trash, and [earlier versions](#password-history) (`sesh history kubeconfig --show 2` prints one; restoring one brings back its file's name too). Replaced from a pipe, a file entry keeps its file's name. A file entry stays one: `sesh edit --type` doesn't turn it into another kind, nor another kind into one.
 - **Exports:** a JSON export (and an encrypted one) holds a file's content in base64, with `"encoding": "base64"`, which `sesh import --from sesh` reads back. A CSV export leaves file entries out, since CSV holds text, and says how many.
 - **`sesh run`** gives a command a file as a path: see below.
-- **In `sesh ui`:** adding a **file** entry takes the file's path (a full path, or from `~/`); editing one can give it a new file, or keep the one it has. The preview shows the file's name and size; Tab reveals a text file's content. Enter copies a text file. Ctrl-K's **save to a file…** (`s`) writes it out, readable only by you, refusing to replace a file that's there.
+- **In `sesh ui`:** adding a **file** entry takes the file's path (a full path, or from `~/`); editing one can give it a new file, or keep the one it has. The preview shows the file's name and size; Tab reveals a text file's content. Enter copies a text file. Ctrl-K's **save to a file…** (`s`) writes it out, readable only by you, refusing to replace a file that's there. The file's name is a name alone, with no folder or control characters: an import with any other is skipped, saying why.
 
 ### Running commands with secrets (`sesh run`, `sesh inject`)
 

@@ -72,6 +72,11 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 			}
 		}
 	}
+	if e.FileName != nil {
+		if err := vault.CheckFileName(*e.FileName); err != nil {
+			return "", err
+		}
+	}
 	if e.Secret != nil && len(e.Secret) == 0 {
 		return "", errors.New("the new secret is empty")
 	}
@@ -89,8 +94,9 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	var id int64
 	var data, salt, sealed, sealedSalt []byte
 	var url, details string
-	err := s.db.QueryRow(`SELECT id, encrypted_data, salt, url, details, sealed_details, details_salt FROM entries WHERE kind = ? AND service = ? AND username = ?`,
-		string(k.Kind), k.Service, k.Username).Scan(&id, &data, &salt, &url, &details, &sealed, &sealedSalt)
+	var settingsCol sql.NullString
+	err := s.db.QueryRow(`SELECT id, encrypted_data, salt, url, details, sealed_details, details_salt, settings FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&id, &data, &salt, &url, &details, &sealed, &sealedSalt, &settingsCol)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", notFound(k)
 	}
@@ -114,6 +120,10 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 			return "", err
 		}
 		changed = old == nil || !old.same
+		// A file's name goes into the history with it.
+		if had, err := decodeSettings(k, settingsCol); err == nil && old != nil {
+			old.fileName = had.FileName
+		}
 	case changed:
 		same, err := s.sameSecret(k, data, salt, e.Secret)
 		if err != nil {

@@ -108,6 +108,9 @@ func Checked(e *Entry) *Entry {
 	if err == nil {
 		err = e.Details.Check(e.Key.Kind)
 	}
+	if err == nil {
+		err = vault.CheckFileName(e.Settings.FileName)
+	}
 	if err != nil {
 		e.Skip = err.Error()
 	}

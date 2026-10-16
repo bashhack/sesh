@@ -3557,3 +3557,19 @@ func TestFileEntryForm(t *testing.T) {
 		t.Errorf("a new file: %+v", c)
 	}
 }
+
+// A binary file's earlier version isn't copied from its history either.
+func TestFileVersionNotCopied(t *testing.T) {
+	f, _, binary := fileFake()
+	f.history = map[vault.Key][]string{binary: {"\x00old\xff"}}
+	a := newApp(t, f, Options{})
+	a.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	a.press("cert", "ctrl+k", "h")
+	if a.ov == nil || a.ov.kind != panelHistory {
+		t.Fatalf("no history:\n%s", a.screen())
+	}
+	a.press("enter")
+	if s := a.screen(); len(a.copied) != 0 || !strings.Contains(s, "Version 2 of cert is a binary file") {
+		t.Errorf("copied %q:\n%s", a.copied, s)
+	}
+}

@@ -484,8 +484,8 @@ func SizeSaid(n int64) string {
 		return "1 byte"
 	case n < 1000:
 		return strconv.FormatInt(n, 10) + " bytes"
-	case n < 1_000_000:
-		return strconv.FormatInt((n+999)/1000, 10) + " KB"
+	case n < 999_500:
+		return strconv.FormatInt((n+500)/1000, 10) + " KB"
 	}
 	return strconv.FormatFloat(float64(n)/1e6, 'f', 1, 64) + " MB"
 }
@@ -494,4 +494,26 @@ func SizeSaid(n int64) string {
 // it is: UTF-8, with no NUL in it.
 func IsText(b []byte) bool {
 	return utf8.Valid(b) && !bytes.Contains(b, []byte{0})
+}
+
+// MaxFileNameLength is the longest name a file entry's file can have, in
+// bytes, as most file systems allow.
+const MaxFileNameLength = 255
+
+// CheckFileName says what's wrong with a file entry's file's name, if
+// anything: it's a name alone, with no folder, as a file is written under
+// it; and it has nothing that would work a terminal it's shown on, or hide
+// what it says. "" is no name.
+func CheckFileName(name string) error {
+	switch {
+	case name == "":
+		return nil
+	case len(name) > MaxFileNameLength:
+		return fmt.Errorf("the file's name is %d bytes; the most is %d", len(name), MaxFileNameLength)
+	case name == "." || name == "..", strings.ContainsAny(name, `/\`):
+		return fmt.Errorf("the file's name, %q, isn't a file's name alone", name)
+	case strings.IndexFunc(name, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) }) >= 0:
+		return fmt.Errorf("the file's name, %q, has a control character", name)
+	}
+	return nil
 }

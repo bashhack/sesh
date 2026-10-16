@@ -184,7 +184,7 @@ func (s *shownEntry) text(reveal bool) string {
 	// A file entry's file is named, and its content is the secret.
 	label := secretLabel(s.e.Kind)
 	if s.e.Kind == vault.KindFile {
-		rows = append(rows, row{"File", fileSaid(s.e.Settings.FileName, s.e.Size)})
+		rows = append(rows, row{"File", shownText(fileSaid(s.e.Settings.FileName, s.e.Size))})
 		label = "Content"
 	}
 	if reveal {

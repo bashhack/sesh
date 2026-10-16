@@ -159,7 +159,10 @@ func (m *Manager) StoreFile(k vault.Key, content []byte, fileName string, filing
 		return err
 	}
 	filing.Apply(&e)
-	e.Settings.FileName = fileName
+	if fileName != "" {
+		// Piped in, a file keeps the name it had.
+		e.Settings.FileName = fileName
+	}
 	var d vault.Details
 	if !e.CreatedAt.IsZero() {
 		if d, err = m.store.Details(k, "all, to change them"); err != nil {

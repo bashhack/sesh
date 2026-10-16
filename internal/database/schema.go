@@ -84,7 +84,9 @@ func migrateV1(tx *sql.Tx) error {
 			trash_id       INTEGER REFERENCES trash(id) ON DELETE CASCADE,
 			encrypted_data BLOB NOT NULL,
 			salt           BLOB NOT NULL,
-			replaced_at    DATETIME NOT NULL
+			replaced_at    DATETIME NOT NULL,
+			-- A file entry's file's name, as it was then.
+			file_name      TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX idx_history_entry ON history(kind, service, username, trash_id)`,
 		`CREATE INDEX idx_history_trash ON history(trash_id)`,

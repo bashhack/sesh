@@ -23,7 +23,7 @@ const addUsage = `Usage: sesh add password|key|note|totp|file [<name>] [flags]
   a note is read until Ctrl-D, or from a pipe. A TOTP entry takes its key
   typed (or an otpauth:// link pasted), or read from a QR code: on screen
   with --qr (macOS), or in an image file with --qr-image (a screenshot or a
-  photo, PNG or JPEG). A file entry keeps a file whole (up to 1 MB), from
+  photo, PNG or JPEG). A file entry keeps a file whole (up to 1 MiB), from
   --from or a pipe; it's named after the file unless a name is given. With
   no name at a terminal, sesh asks for one.
 
@@ -181,7 +181,13 @@ func runAdd(app *App, args []string) error {
 		}
 	}
 
-	// An image is read before anything is unlocked, or made.
+	// A file piped in, and an image, are read before anything is
+	// unlocked, or made.
+	if kind == vault.KindFile && content == nil {
+		if content, err = readAtMost(app.Stdin, "the file piped in", 0); err != nil {
+			return err
+		}
+	}
 	var fromImage *qrcode.TOTPInfo
 	if f.qrImage != "" {
 		_, info, err := readQRImage(f.qrImage)
@@ -206,12 +212,6 @@ func runAdd(app *App, args []string) error {
 	}
 	k := vault.Key{Kind: kind, Service: name, Username: f.username}
 	if kind == vault.KindFile {
-		if content == nil {
-			// Piped in, then.
-			if content, err = readAtMost(app.Stdin, "the file piped in"); err != nil {
-				return err
-			}
-		}
 		return addFile(app, store, k, content, fileName, f, change, terminal)
 	}
 	if err := checkAddChange(store, k, change); err != nil {

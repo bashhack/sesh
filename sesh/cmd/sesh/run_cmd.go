@@ -561,7 +561,7 @@ func writeRunFiles(values map[string]secretref.Value) (string, error) {
 		// Named as it was (a tool may go by the extension), and kept
 		// apart from another of the same name.
 		base := filepath.Base(v.FileName)
-		if v.FileName == "" || base == "." || base == "/" {
+		if v.FileName == "" || base == "." || base == ".." || base == "/" {
 			base = "file"
 		}
 		name := base

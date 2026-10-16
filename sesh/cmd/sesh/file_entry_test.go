@@ -75,6 +75,10 @@ func TestFileEntry_AddAndGet(t *testing.T) {
 	if _, _, err := runCLI(app, runGet, "cert", "--json", "-o", to); err == nil || !strings.Contains(err.Error(), "choose one") {
 		t.Errorf("--json and -o: %v", err)
 	}
+	app, _ = cliApp("", false)
+	if _, _, err := runCLI(app, runGet, "cert", "-o", dir); err == nil || !strings.Contains(err.Error(), "is a folder") {
+		t.Errorf("-o a folder: %v", err)
+	}
 	// A text file is copied; a binary one isn't.
 	app, copied := cliApp("", false)
 	if _, _, err := runCLI(app, runCopy, "kubeconfig"); err != nil || len(*copied) != 1 || (*copied)[0] != "apiVersion: v1\nclusters: []\n" {
@@ -83,10 +87,17 @@ func TestFileEntry_AddAndGet(t *testing.T) {
 	app, copied = cliApp("", false)
 	if _, _, err := runCLI(app, runCopy, "cert"); err == nil || len(*copied) != 0 || !strings.Contains(err.Error(), "binary file, which the clipboard can't hold") {
 		t.Errorf("copy binary: %q, %v", *copied, err)
+	} // Replaced from a pipe, a file keeps its name.
+	app, _ = cliApp("apiVersion: v3\n", false)
+	if _, _, err := runCLI(app, runAdd, "file", "kubeconfig", "--force"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runShowOut(t, "file/kubeconfig"); err != nil || !strings.Contains(out, "File     config, 15 bytes") {
+		t.Errorf("replaced from a pipe: %q, %v", out, err)
 	}
 }
 
-// A file that can't be kept is refused before anything is unlocked, saying why.
+// A file that can't be kept is refused, saying why; one piped in before a vault is made.
 func TestFileEntry_AddRefused(t *testing.T) {
 	_, dir := fileVault(t)
 	big := filepath.Join(dir, "big")
@@ -98,7 +109,7 @@ func TestFileEntry_AddRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	for args, wantSub := range map[string]string{
-		"file x --from " + big:           "a file entry holds up to 1.0 MB",
+		"file x --from " + big:           "is 1,048,577 bytes; a file entry holds up to 1 MiB (1,048,576 bytes)",
 		"file x --from " + empty:         "is empty",
 		"file x --from " + dir:           "is a folder",
 		"file x --from " + dir + "/none": "no such file",
@@ -117,6 +128,18 @@ func TestFileEntry_AddRefused(t *testing.T) {
 	app, _ := cliApp("", false)
 	if _, said, err := runCLI(app, runAdd, "file", "--from", filepath.Join(dir, "server.key")); err != nil || !strings.Contains(said, "Added file server.key: server.key, 3 bytes") {
 		t.Errorf("no name: %q, %v", said, err)
+	}
+	// A pipe is read, and checked, before a vault is made.
+	fresh := setupRekeyEnv(t)
+	useConfigFile(t, "")
+	for in, wantSub := range map[string]string{"": "the file piped in is empty", strings.Repeat("x", 1<<20+1): "is over 1 MiB"} {
+		app, _ = cliApp(in, false)
+		if _, _, err := runCLI(app, runAdd, "file", "x"); err == nil || !strings.Contains(err.Error(), wantSub) {
+			t.Errorf("piped %d bytes: %v, want %q", len(in), err, wantSub)
+		}
+	}
+	if _, err := os.Stat(fresh.dbPath); !os.IsNotExist(err) {
+		t.Errorf("a vault was made: %v", err)
 	}
 	app, _ = cliApp("", true)
 	if _, _, err := runCLI(app, runAdd, "file", "x"); err == nil || !strings.Contains(err.Error(), "give the file: sesh add file <name> --from FILE, or pipe it in") {
@@ -174,6 +197,15 @@ func TestFileEntry_Edit(t *testing.T) {
 	}
 	if out := mustRun(t, runHistory, "file/kubeconfig", "--show", "2"); out != "apiVersion: v1\nclusters: []\n" {
 		t.Errorf("history --show 2: %q", out)
+	}
+	// Brought back, a version has its own file's name again.
+	mustRun(t, runHistory, "file/kubeconfig", "--restore", "2")
+	if out, err := runShowOut(t, "file/kubeconfig"); err != nil || !strings.Contains(out, "File     config, 28 bytes") {
+		t.Errorf("after restoring version 2: %q, %v", out, err)
+	}
+	mustRun(t, runHistory, "file/kubeconfig", "--restore", "2")
+	if out, err := runShowOut(t, "file/kubeconfig"); err != nil || !strings.Contains(out, "File     config.yml, 15 bytes") {
+		t.Errorf("after restoring version 2 again: %q, %v", out, err)
 	}
 	if _, said, err := runEditOut(t, "", false, "file/kubeconfig", "--from", next); err != nil || !strings.Contains(said, "Nothing changed: the entry already has that file") {
 		t.Errorf("the same file again: %q, %v", said, err)
@@ -278,5 +310,80 @@ func TestUIFiles(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(home, "config")); string(b) != "kube" { //nolint:errcheck // checked by content
 		t.Errorf("the file there was changed: %q", b)
+	}
+}
+
+// A sesh export's file name that isn't a name alone, or has control characters, is skipped on import, saying why.
+func TestFileEntry_ImportChecksNames(t *testing.T) {
+	fileVault(t)
+	dir := t.TempDir()
+	export := `[
+  {"service": "evil", "type": "file", "secret": "aGk=", "encoding": "base64", "settings": {"file_name": ".ssh/authorized_keys"}},
+  {"service": "loud", "type": "file", "secret": "aGk=", "encoding": "base64", "settings": {"file_name": "\u001b[31mRED"}},
+  {"service": "fine", "type": "file", "secret": "aGk=", "encoding": "base64", "settings": {"file_name": "fine.txt"}}
+]`
+	path := filepath.Join(dir, "crafted.json")
+	if err := os.WriteFile(path, []byte(export), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app, _ := cliApp("", false)
+	out, said, err := runCLI(app, runImport, "--from", "sesh", "--yes", path)
+	if err != nil || !strings.Contains(out+said, "isn't a file's name alone") || !strings.Contains(out+said, "has a control character") {
+		t.Errorf("import: %q, %q, %v", out, said, err)
+	}
+	app, _ = cliApp("", false)
+	if got, _, err := runCLI(app, runGet, "fine"); err != nil || got != "hi" {
+		t.Errorf("the fine one: %q, %v", got, err)
+	}
+	for _, name := range []string{"evil", "loud"} {
+		app, _ = cliApp("", false)
+		if _, _, err := runCLI(app, runGet, name); err == nil {
+			t.Errorf("%s was imported", name)
+		}
+	}
+}
+
+// recordingReader gives n bytes of x, a little at a time, keeping each
+// buffer it was handed.
+type recordingReader struct {
+	seen [][]byte
+	n    int
+}
+
+func (r *recordingReader) Read(p []byte) (int, error) {
+	if r.n == 0 {
+		return 0, io.EOF
+	}
+	r.seen = append(r.seen, p[:cap(p)])
+	k := min(len(p), r.n, 1000)
+	for i := range k {
+		p[i] = 'x'
+	}
+	r.n -= k
+	return k, nil
+}
+
+// Reading a file of unknown size leaves no copy of it in a buffer it outgrew.
+func TestReadAtMostZeroes(t *testing.T) {
+	r := &recordingReader{n: 20000}
+	got, err := readAtMost(r, "a pipe", 0)
+	if err != nil || len(got) != 20000 {
+		t.Fatalf("read %d, %v", len(got), err)
+	}
+	final := &got[:cap(got)][cap(got)-1]
+	outgrown := 0
+	for _, b := range r.seen {
+		if &b[len(b)-1] == final {
+			continue
+		}
+		outgrown++
+		for _, c := range b {
+			if c != 0 {
+				t.Fatalf("a buffer outgrown still holds %q", c)
+			}
+		}
+	}
+	if outgrown == 0 {
+		t.Fatal("no buffer was outgrown: the test proves nothing")
 	}
 }
