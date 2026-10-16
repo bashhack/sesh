@@ -36,11 +36,12 @@ builds:
 
 # The macOS binaries are signed with a Developer ID certificate and
 # notarized by Apple, so Gatekeeper lets a downloaded one run. It's on once
-# the certificate is given: GitHub passes a secret that isn't set as "",
-# which counts as off.
+# the certificate is given (isEnvSet counts "" as unset, which is what
+# GitHub passes for a secret that isn't); the release job refuses some of
+# the five secrets without the rest.
 notarize:
   macos:
-    - enabled: '{{ if index .Env "MACOS_SIGN_P12" }}true{{ else }}false{{ end }}'
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
       ids:
         - darwin
       sign:
@@ -51,8 +52,10 @@ notarize:
         key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
         key: "{{ .Env.MACOS_NOTARY_KEY }}"
         # A release waits for Apple's answer, so one that fails stops it.
+        # quill asks for a token that lasts this plus 2 minutes; Apple
+        # takes one of up to 20.
         wait: true
-        timeout: 20m
+        timeout: 18m
 
 archives:
   - name_template: >-

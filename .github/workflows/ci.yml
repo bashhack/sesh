@@ -179,6 +179,25 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      # Signing is all or nothing: GoReleaser signs without notarizing when
+      # a notary secret is missing, which Gatekeeper still blocks.
+      - name: Check the macOS signing secrets
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          set=0
+          for v in MACOS_SIGN_P12 MACOS_SIGN_PASSWORD MACOS_NOTARY_ISSUER_ID MACOS_NOTARY_KEY_ID MACOS_NOTARY_KEY; do
+            if [ -n "${!v}" ]; then set=$((set + 1)); else echo "not set: $v"; fi
+          done
+          if [ "$set" != 0 ] && [ "$set" != 5 ]; then
+            echo "::error::$set of the 5 macOS signing secrets are set: set all five to sign and notarize, or none"
+            exit 1
+          fi
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
