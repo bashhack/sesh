@@ -90,7 +90,20 @@ func TestEntries_GenuineExport(t *testing.T) {
 	if b := entries[byKey["totp/Bank/bob"]]; b.Settings.TOTP != (totp.Params{Issuer: "Bank"}) {
 		t.Errorf("Bank TOTP = %+v", b.Settings)
 	}
+	// Dated when its password was set: GitHub's when it changed to
+	// gh-pass-2; Router's from its one earlier version.
+	if want := time.Date(2026, 10, 11, 1, 38, 12, 0, time.UTC); !gh.Updated.Equal(want) {
+		t.Errorf("GitHub dated %v, want %v", gh.Updated, want)
+	}
+	if r := entries[byKey["password/Router"]]; !r.Updated.Equal(time.Date(2026, 10, 11, 1, 37, 55, 0, time.UTC)) {
+		t.Errorf("Router dated %v", r.Updated)
+	}
 	clone := entries[byKey["password/GitHub - Clone/alice"]]
+	// Its password refers to GitHub's: dated by its own edit, not its
+	// copies, which keep the original's times.
+	if clone.Updated.Before(clone.Created) {
+		t.Errorf("the clone dated %v, before it was made, %v", clone.Updated, clone.Created)
+	}
 	// Its four earlier versions each refer to GitHub's password, as it does.
 	if len(clone.Earlier) != 0 || clone.Lost[lostVersions] != 4 || clone.Lost[lostRefHistory] != 0 {
 		t.Errorf("clone's old passwords = %+v, lost %v", clone.Earlier, clone.Lost)
@@ -373,6 +386,12 @@ func TestEntries_PasswordDate(t *testing.T) {
 	version := func(pw, title string, h int) Entry {
 		return Entry{Times: Times{LastModificationTime: Time{time.Date(2026, 1, 1, h, 0, 0, 0, time.UTC)}}, Strings: []String{str("Title", title), str("Password", pw)}}
 	}
+	// A password referring to another entry: by the entry's last edit, as the reference's text never changes.
+	ref := version("{REF:P@I:0123456789ABCDEF0123456789ABCDEF}", "clone", 9)
+	ref.History.Entries = []Entry{version("{REF:P@I:0123456789ABCDEF0123456789ABCDEF}", "clone", 2)}
+	if got := passwordSince(&ref); got.Hour() != 9 {
+		t.Errorf("a reference: dated %d, want 9", got.Hour())
+	}
 	for _, tt := range []struct {
 		name    string
 		history []Entry
@@ -381,6 +400,9 @@ func TestEntries_PasswordDate(t *testing.T) {
 		{"no history: its last edit", nil, 9},
 		{"retitled since: when b came in", []Entry{version("a", "site", 1), version("b", "site", 3), version("b", "renamed", 5)}, 3},
 		{"never changed: its oldest version", []Entry{version("b", "site", 2), version("b", "x", 4)}, 2},
+		{"changed back: when it last came in", []Entry{version("b", "site", 1), version("a", "site", 3), version("b", "site", 5)}, 5},
+		{"history out of order: by its times", []Entry{version("b", "site", 5), version("a", "site", 1)}, 5},
+		{"a version after the entry's edit: never later than that", []Entry{version("b", "site", 12)}, 9},
 	} {
 		e := version("b", "site", 9)
 		e.History.Entries = tt.history
