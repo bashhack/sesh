@@ -4,9 +4,11 @@
 package vault
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -24,10 +26,13 @@ const (
 	KindAPIKey   Kind = "api_key"
 	KindTOTP     Kind = "totp"
 	KindNote     Kind = "secure_note"
+	// KindFile is a file kept whole (a kubeconfig, a TLS key, an .env
+	// file): its content is the secret, and its settings name it.
+	KindFile Kind = "file"
 )
 
 // Kinds are all the kinds, in the order they're listed to users.
-var Kinds = []Kind{KindPassword, KindAPIKey, KindTOTP, KindNote}
+var Kinds = []Kind{KindPassword, KindAPIKey, KindTOTP, KindNote, KindFile}
 
 // Valid reports whether k is one of the kinds.
 func (k Kind) Valid() bool {
@@ -357,14 +362,17 @@ type Settings struct {
 	// AWSMFADevice is the MFA device (its ARN) the AWS provider sends
 	// codes from this entry for.
 	AWSMFADevice string `json:"aws_mfa_device,omitempty"`
+	// FileName is a file entry's file's name, as it was added ("config",
+	// "server.key").
+	FileName string `json:"file_name,omitempty"`
 	// TOTP is a TOTP entry's code settings; zero means the usual ones
 	// (SHA1, 6 digits, 30 seconds).
 	TOTP totp.Params `json:"totp,omitzero"`
 }
 
 // IsZero reports whether s sets nothing.
-func (s Settings) IsZero() bool {
-	return s == Settings{}
+func (s *Settings) IsZero() bool {
+	return *s == Settings{}
 }
 
 // Entry is an entry without its secret.
@@ -383,6 +391,9 @@ type Entry struct {
 	// value is left out (see Store.Details).
 	Fields   []Field
 	Settings Settings
+	// Size is the secret's size in bytes, known without decrypting it
+	// (a file entry's is shown); 0 where the store doesn't say.
+	Size int64
 	// HasNotes reports whether the entry has notes (see Store.Details).
 	HasNotes bool
 }
@@ -448,7 +459,7 @@ type Store interface {
 	// Details.Check.
 	SetDetails(k Key, d *Details) error
 	// SetSettings replaces the entry's settings.
-	SetSettings(k Key, s Settings) error
+	SetSettings(k Key, s *Settings) error
 	// Lookup returns the entry without its secret.
 	Lookup(k Key) (Entry, error)
 	// Exists returns nil when the store holds the entry. It reads nothing
@@ -463,4 +474,24 @@ type Store interface {
 	// missing it returns an error wrapping ErrNotFound and removes nothing.
 	// A key named twice is removed once.
 	DeleteMany(keys []Key) error
+}
+
+// SizeSaid says a size in bytes as people read it: "812 bytes", "3 KB",
+// "1.2 MB".
+func SizeSaid(n int64) string {
+	switch {
+	case n == 1:
+		return "1 byte"
+	case n < 1000:
+		return strconv.FormatInt(n, 10) + " bytes"
+	case n < 1_000_000:
+		return strconv.FormatInt((n+999)/1000, 10) + " KB"
+	}
+	return strconv.FormatFloat(float64(n)/1e6, 'f', 1, 64) + " MB"
+}
+
+// IsText reports whether b is text a terminal or the clipboard takes as
+// it is: UTF-8, with no NUL in it.
+func IsText(b []byte) bool {
+	return utf8.Valid(b) && !bytes.Contains(b, []byte{0})
 }

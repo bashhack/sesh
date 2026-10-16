@@ -59,7 +59,7 @@ func notFound(k vault.Key) error {
 	return fmt.Errorf("%w: %s", vault.ErrNotFound, k)
 }
 
-func encodeSettings(s vault.Settings) (sql.NullString, error) {
+func encodeSettings(s *vault.Settings) (sql.NullString, error) {
 	if s.IsZero() {
 		return sql.NullString{}, nil
 	}
@@ -165,7 +165,7 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	if len(secret) > MaxSecretSize {
 		return fmt.Errorf("%w: %d bytes (max %d)", ErrSecretTooLarge, len(secret), MaxSecretSize)
 	}
-	settings, err := encodeSettings(e.Settings)
+	settings, err := encodeSettings(&e.Settings)
 	if err != nil {
 		return err
 	}
@@ -320,7 +320,7 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 }
 
 // SetSettings implements vault.Store.
-func (s *Store) SetSettings(k vault.Key, settings vault.Settings) error {
+func (s *Store) SetSettings(k vault.Key, settings *vault.Settings) error {
 	col, err := encodeSettings(settings)
 	if err != nil {
 		return err
@@ -347,8 +347,9 @@ func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
 	var col, tags sql.NullString
 	var url, details string
 	e := vault.Entry{Key: k}
-	err := s.db.QueryRow(`SELECT settings, folder, `+tagsColumn+`, url, details, created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`,
-		string(k.Kind), k.Service, k.Username).Scan(&col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt)
+	var sealedSize int64
+	err := s.db.QueryRow(`SELECT settings, folder, `+tagsColumn+`, url, details, created_at, updated_at, length(encrypted_data) FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt, &sealedSize)
 	if errors.Is(err, sql.ErrNoRows) {
 		return vault.Entry{}, notFound(k)
 	}
@@ -358,6 +359,7 @@ func (s *Store) Lookup(k vault.Key) (vault.Entry, error) {
 	if e.Settings, err = decodeSettings(k, col); err != nil {
 		return vault.Entry{}, err
 	}
+	e.Size = plainSize(sealedSize)
 	e.Tags = splitTags(tags)
 	if err := vault.DecodeEntryDetails(&e, url, details); err != nil {
 		return vault.Entry{}, err
@@ -382,7 +384,7 @@ func (s *Store) Exists(k vault.Key) error {
 // List implements vault.Store.
 func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 	var q strings.Builder
-	q.WriteString(`SELECT kind, service, username, settings, folder, ` + tagsColumn + `, url, details, created_at, updated_at FROM entries WHERE 1 = 1`)
+	q.WriteString(`SELECT kind, service, username, settings, folder, ` + tagsColumn + `, url, details, created_at, updated_at, length(encrypted_data) FROM entries WHERE 1 = 1`)
 	var args []any
 	if f.Kind != "" {
 		q.WriteString(` AND kind = ?`)
@@ -421,10 +423,12 @@ func (s *Store) List(f *vault.Filter) (_ []vault.Entry, err error) {
 		var kind string
 		var col, tags sql.NullString
 		var url, details string
-		if err := rows.Scan(&kind, &e.Service, &e.Username, &col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		var sealedSize int64
+		if err := rows.Scan(&kind, &e.Service, &e.Username, &col, &e.Folder, &tags, &url, &details, &e.CreatedAt, &e.UpdatedAt, &sealedSize); err != nil {
 			return nil, fmt.Errorf("list entries: %w", err)
 		}
 		e.Kind = vault.Kind(kind)
+		e.Size = plainSize(sealedSize)
 		if e.Settings, err = decodeSettings(e.Key, col); err != nil {
 			return nil, err
 		}

@@ -24,6 +24,7 @@ var readSecret = func() ([]byte, error) { return term.ReadPassword(int(os.Stdin.
 // editFlags are sesh edit's flags.
 type editFlags struct {
 	service, username, kind string
+	from                    string
 	details                 provider.DetailsFlags
 	gen                     genFlags
 	secret, generate, force bool
@@ -37,6 +38,7 @@ func addEditFlags(fs *flag.FlagSet) *editFlags {
 	fs.StringVar(&f.kind, "type", "", "New kind: password, api_key, or secure_note")
 	fs.BoolVar(&f.secret, "secret", false, "Type a new secret (a note reads stdin)")
 	fs.BoolVar(&f.generate, "generate", false, "Generate a new password")
+	fs.StringVar(&f.from, "from", "", "A file entry: the file to keep instead")
 	f.gen.register(fs)
 	fs.BoolVar(&f.force, "force", false, "Don't ask before renaming an AWS profile's MFA entry, which sesh aws then won't find")
 	f.details.Register(fs)
@@ -52,6 +54,7 @@ const editUsage = `Usage: sesh edit <entry> [flags]
   sesh edit github --username alicia     ("" removes it)
   sesh edit github --secret              (or --generate [--length N] [--no-symbols])
   sesh edit github --generate --words 6  (a passphrase [--separator S] [--capitalize])
+  sesh edit kubeconfig --from ~/.kube/config   (a file entry's new content)
   sesh edit openai --type password       (password, api_key, secure_note)
   sesh edit github --url https://github.com/login   ("" removes it)
   sesh edit github --field recovery-email=alice@example.com
@@ -98,7 +101,17 @@ func runEdit(app *App, args []string) error {
 	terminal := app.StdinIsTerminal != nil && app.StdinIsTerminal()
 	asked := len(set) == 0 || (len(set) == 1 && set["force"])
 	if asked && !terminal {
-		return errors.New("nothing to change: give --rename, --username, --type, --secret, --generate, --url, --notes, --field, --secret-field, --remove-field, --rename-field, or --plain-field (or run it at a terminal to be asked)")
+		return errors.New("nothing to change: give --rename, --username, --type, --secret, --generate, --from, --url, --notes, --field, --secret-field, --remove-field, --rename-field, or --plain-field (or run it at a terminal to be asked)")
+	}
+
+	// A new file is read before anything is unlocked.
+	var newFile []byte
+	var newFileName string
+	if f.from != "" {
+		if newFile, newFileName, err = readFileToAdd(f.from); err != nil {
+			return err
+		}
+		defer secure.SecureZeroBytes(newFile)
 	}
 
 	// An entry named by its ID has its kind known: what the flags get wrong
@@ -150,7 +163,7 @@ func runEdit(app *App, args []string) error {
 			return errors.New("without a terminal, only one value can come from stdin: give the new secret, the notes, and each secret field in separate edits")
 		}
 	}
-	if !asked && to == from && !f.secret && !f.generate && change == nil {
+	if !asked && to == from && !f.secret && !f.generate && f.from == "" && change == nil {
 		return errors.New("nothing to change: the entry already has that name and kind")
 	}
 
@@ -183,7 +196,7 @@ func runEdit(app *App, args []string) error {
 			return fmt.Errorf("another entry has that name: %s; delete or rename that one first", to)
 		}
 	}
-	if asked && from.Kind != vault.KindTOTP {
+	if asked && from.Kind != vault.KindTOTP && from.Kind != vault.KindFile {
 		answer, err := readLine(app.Stdin, app.Stderr, "Change the secret? [y/N]: ")
 		if errors.Is(err, io.EOF) {
 			_, err := fmt.Fprintln(app.Stderr, "Nothing changed.")
@@ -218,6 +231,9 @@ func runEdit(app *App, args []string) error {
 		e.To = &to
 	}
 	weak := false
+	if f.from != "" {
+		e.Secret, e.FileName = newFile, &newFileName
+	}
 	if f.secret || f.generate {
 		secret, w, err := newSecret(app, to, f, terminal)
 		if err != nil {
@@ -254,7 +270,11 @@ func runEdit(app *App, args []string) error {
 		if errors.Is(err, database.ErrNothingToChange) {
 			if e.Secret != nil {
 				// As storing it again is: not an error, only nothing done.
-				_, err := fmt.Fprintln(app.Stderr, "Nothing changed: the entry already has that secret.")
+				what := "secret"
+				if f.from != "" {
+					what = "file"
+				}
+				_, err := fmt.Fprintln(app.Stderr, "Nothing changed: the entry already has that "+what+".")
 				return err
 			}
 			if f.details.Editor() {
@@ -322,6 +342,9 @@ func checkKindChange(from, to vault.Kind) error {
 	if !to.Valid() {
 		return fmt.Errorf("unknown type %q: use password, api_key, or secure_note", to)
 	}
+	if from == vault.KindFile || to == vault.KindFile {
+		return errors.New("a file entry stays one, and other kinds don't become one: add the file with sesh add file --from FILE")
+	}
 	if from == vault.KindTOTP || to == vault.KindTOTP {
 		return errors.New("a TOTP entry's kind can't change, nor can another become one: add a TOTP entry with sesh add totp")
 	}
@@ -333,6 +356,10 @@ func checkEditSecret(from, to vault.Key, f *editFlags) error {
 	switch {
 	case f.secret && f.generate:
 		return errors.New("--secret and --generate both give a new secret; choose one")
+	case f.from != "" && from.Kind != vault.KindFile:
+		return fmt.Errorf("--from gives a file entry its file, and %s is a %s: give it a new secret with --secret", from, kindName(from.Kind))
+	case (f.secret || f.generate) && from.Kind == vault.KindFile:
+		return errors.New("a file entry's content is a file: --from FILE gives it a new one")
 	case (f.secret || f.generate) && from.Kind == vault.KindTOTP:
 		return errors.New("a TOTP entry's secret comes with its code settings: add it again with sesh add totp --force")
 	case f.generate && to.Kind == vault.KindNote:

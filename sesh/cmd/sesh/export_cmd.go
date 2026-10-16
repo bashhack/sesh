@@ -156,6 +156,9 @@ func runExport(app *App, args []string) error {
 		}
 	}
 	msg := fmt.Sprintf("Exported %s to %s", entryCount(count), dest)
+	if opts.LeftOut > 0 {
+		msg += fmt.Sprintf(" (%d file %s left out: CSV holds text, and --format json or the encrypted export takes files)", opts.LeftOut, plural(opts.LeftOut, "entry", "entries"))
+	}
 	if *format != "encrypted" {
 		msg += ". It holds every secret unencrypted: delete it when you're done"
 	}

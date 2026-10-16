@@ -177,6 +177,11 @@ func complete(words []string) (cands []candidate, files bool) {
 		specs = flagSpecs(func(fs *flag.FlagSet) { addCopyFlags(fs) })
 	case "get":
 		specs = flagSpecs(func(fs *flag.FlagSet) { addGetFlags(fs) })
+		for i := range specs {
+			if specs[i].name == "o" {
+				specs[i].path = true
+			}
+		}
 	case "code":
 		specs = flagSpecs(func(fs *flag.FlagSet) { addCodeFlags(fs) })
 	case "generate":
@@ -190,7 +195,7 @@ func complete(words []string) (cands []candidate, files bool) {
 			return s.name == "rename-field" || s.name == "plain-field"
 		})
 		for i := range specs {
-			if specs[i].name == "qr-image" {
+			if specs[i].name == "qr-image" || specs[i].name == "from" {
 				specs[i].path = true
 			}
 		}
@@ -392,12 +397,12 @@ func settingKeys() []candidate {
 
 // kindWords are the kinds sesh list and export take.
 var kindWords = []candidate{
-	{"passwords", "Passwords"}, {"keys", "API keys"}, {"notes", "Notes"}, {"totp", "TOTP entries"},
+	{"passwords", "Passwords"}, {"keys", "API keys"}, {"notes", "Notes"}, {"totp", "TOTP entries"}, {"files", "Files"},
 }
 
 // addKindWords are the kinds sesh add takes.
 var addKindWords = []candidate{
-	{"password", "A password"}, {"key", "An API key"}, {"note", "A note"}, {"totp", "A TOTP entry"},
+	{"password", "A password"}, {"key", "An API key"}, {"note", "A note"}, {"totp", "A TOTP entry"}, {"file", "A file, kept whole"},
 }
 
 // takesValueAfter says whether the word before the cursor is one of the

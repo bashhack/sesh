@@ -292,10 +292,10 @@ $ sesh config set clipboard_timeout 15s
 
 | Command | What it does | Flags |
 |---------|--------------|-------|
-| `sesh list [passwords\|keys\|notes\|totp]` | Every entry, or those of the kinds named | `--folder F`, `--tag T` (only those in the folder and its subfolders, `""` for none; only those with the tag, repeat for more), `--sort name\|created\|updated\|folder`, `--json` |
+| `sesh list [passwords\|keys\|notes\|totp\|files]` | Every entry, or those of the kinds named | `--folder F`, `--tag T` (only those in the folder and its subfolders, `""` for none; only those with the tag, repeat for more), `--sort name\|created\|updated\|folder`, `--json` |
 | `sesh search <words>` | The entries matching the words, best first | `--folder F`, `--tag T`, `--json` |
-| `sesh copy <entry>` | Copies its password, API key or note, or a TOTP entry's current code; the clipboard clears after `clipboard_timeout` | `--username`, `--url`, or `--field NAME` (a custom field, or `notes`) copies that instead |
-| `sesh get <entry>` | Prints the same, for a pipe or a script | `--username`, `--url`, `--field NAME`, as for copy; `--json` |
+| `sesh copy <entry>` | Copies its password, API key or note, a TOTP entry's current code, or a file entry's text; the clipboard clears after `clipboard_timeout` | `--username`, `--url`, or `--field NAME` (a custom field, or `notes`) copies that instead |
+| `sesh get <entry>` | Prints the same, for a pipe or a script; a file entry's file exactly as kept | `--username`, `--url`, `--field NAME`, as for copy; `--json`; `-o FILE` writes it to a file readable only by you |
 | `sesh code <entry>` | Prints a TOTP entry's current code, and how long it has left | `--json` |
 | `sesh show <entry>` | Shows the entry: its URL, folder, tags, notes and fields, with secrets hidden | `--reveal` shows them; `--json`; for a TOTP entry, `--qr` draws its key as a QR code for a phone, `--uri` prints its `otpauth://` link |
 | `sesh open <entry>` | Opens its URL in the browser (http and https only) | |
@@ -304,8 +304,8 @@ $ sesh config set clipboard_timeout 15s
 
 | Command | What it does | Flags |
 |---------|--------------|-------|
-| `sesh add password\|key\|note\|totp [<name>]` | Adds an entry. The secret is typed hidden, or piped in; a TOTP entry's key can be an `otpauth://` link | `--username U`; `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]` (a password or passphrase, copied as it's saved); `--qr` (a TOTP key from a QR code on screen) or `--qr-image FILE` (from one in a PNG or JPEG); `--folder F`, `--tag T`; `--url U`, `--notes [--editor]`, `--field name=value`, `--secret-field name`; `--force` replaces an entry of that name without asking |
-| `sesh edit <entry>` | Renames it, or changes its username, kind, secret, URL, notes or fields | `--rename N`, `--username U`, `--type password\|api_key\|secure_note`, `--secret`, `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]`, `--url`, `--notes [--editor]`, `--field`, `--secret-field`, `--remove-field`, `--rename-field old=new`, `--plain-field name`, `--force` |
+| `sesh add password\|key\|note\|totp\|file [<name>]` | Adds an entry. The secret is typed hidden, or piped in; a TOTP entry's key can be an `otpauth://` link; a file entry keeps a file whole | `--from FILE` (a file entry's file, which names it unless a name is given); `--username U`; `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]` (a password or passphrase, copied as it's saved); `--qr` (a TOTP key from a QR code on screen) or `--qr-image FILE` (from one in a PNG or JPEG); `--folder F`, `--tag T`; `--url U`, `--notes [--editor]`, `--field name=value`, `--secret-field name`; `--force` replaces an entry of that name without asking |
+| `sesh edit <entry>` | Renames it, or changes its username, kind, secret, URL, notes or fields | `--from FILE` (a file entry's new file); `--rename N`, `--username U`, `--type password\|api_key\|secure_note`, `--secret`, `--generate [--length N] [--no-symbols]` or `--generate --words N [--separator S] [--capitalize]`, `--url`, `--notes [--editor]`, `--field`, `--secret-field`, `--remove-field`, `--rename-field old=new`, `--plain-field name`, `--force` |
 | `sesh generate` | Prints a new random password, stored nowhere | `--length N` (default 24), `--no-symbols`; or a passphrase: `--words N` (3 to 20), `--separator S` (default `-`), `--capitalize`; `--copy` copies it instead |
 | `sesh trash <entry>…` | Moves entries to the trash; asks first | `--purge` deletes for good; `--force` doesn't ask |
 | `sesh trash list\|restore\|remove\|empty` | The trash: see [The trash](#the-trash) | |
@@ -1345,6 +1345,25 @@ sesh get github password --url
 
 **What's encrypted.** The secret, the notes and secret fields' values are encrypted. The URL, field names, and plain values aren't, so the URL can be searched and `sesh show` can list fields without decrypting anything. Folders and tags are the same. Keep anything private in a secret field or the notes.
 
+### Files
+
+A file entry keeps a file whole, up to 1 MB: a kubeconfig, a TLS key, a cloud credentials file, an `.env` file. Its content is encrypted, as any secret is; its file's name and size aren't, so they're listed without unlocking anything.
+
+```bash
+sesh add file kubeconfig --from ~/.kube/config   # named after the file without a name
+cat server.key | sesh add file server-key       # or piped in
+sesh get kubeconfig -o ~/.kube/config           # written back, readable only by you
+sesh run --env KUBECONFIG=sesh://file/kubeconfig -- kubectl get pods
+sesh edit kubeconfig --from ~/.kube/config      # a new version; the one before is kept in its history
+sesh list files
+```
+
+- **Reading it:** `sesh get` prints the file exactly as kept, with nothing added; `-o FILE` writes it to a file only you can read (a file there is replaced). A binary file isn't printed at a terminal, where it would garble the screen: `-o` or a pipe takes it. `sesh copy` copies a text file; a binary one can't go on the clipboard. `sesh show` gives the file's name and size, and with `--reveal` a text file's content.
+- **Everything else** works as for any entry: a URL, notes and fields, folders and tags, the trash, and [earlier versions](#password-history) (`sesh history kubeconfig --show 2` prints one). A file entry stays one: `sesh edit --type` doesn't turn it into another kind, nor another kind into one.
+- **Exports:** a JSON export (and an encrypted one) holds a file's content in base64, with `"encoding": "base64"`, which `sesh import --from sesh` reads back. A CSV export leaves file entries out, since CSV holds text, and says how many.
+- **`sesh run`** gives a command a file as a path: see below.
+- **In `sesh ui`:** adding a **file** entry takes the file's path (a full path, or from `~/`); editing one can give it a new file, or keep the one it has. The preview shows the file's name and size; Tab reveals a text file's content. Enter copies a text file. Ctrl-K's **save to a file…** (`s`) writes it out, readable only by you, refusing to replace a file that's there.
+
 ### Running commands with secrets (`sesh run`, `sesh inject`)
 
 `sesh run` runs a command with values from the vault in its environment, so they never sit in a file or your shell history:
@@ -1354,7 +1373,7 @@ sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
 sesh run --env-file .env -- npm start
 ```
 
-**References.** `sesh://<id>` names an entry's secret, with the ID as `sesh list` shows it (a reference takes an ID, not search words). `#name` picks one of its fields instead (in any case), and `#url` or `#notes` those parts. A TOTP entry gives its current code.
+**References.** `sesh://<id>` names an entry's secret, with the ID as `sesh list` shows it (a reference takes an ID, not search words). `#name` picks one of its fields instead (in any case), and `#url` or `#notes` those parts. A TOTP entry gives its current code. A file entry, in `sesh run`, gives the path of a copy of its file, made for the command in a folder only you can open and deleted when the command ends, for a variable that names a file (`KUBECONFIG`, `GOOGLE_APPLICATION_CREDENTIALS`); in `sesh inject`, its content. A file's content isn't masked in the command's output, as other secrets are.
 
 ```
 sesh://api_key/openai

@@ -22,6 +22,7 @@ var kindWords = map[string]EntryType{
 	"api_key": EntryTypeAPIKey, "api-key": EntryTypeAPIKey, "apikey": EntryTypeAPIKey, "api": EntryTypeAPIKey,
 	"key": EntryTypeAPIKey, "keys": EntryTypeAPIKey, "token": EntryTypeAPIKey, "tokens": EntryTypeAPIKey,
 	"secure_note": EntryTypeNote, "secure-note": EntryTypeNote, "note": EntryTypeNote, "notes": EntryTypeNote,
+	"file": EntryTypeFile, "files": EntryTypeFile,
 }
 
 // Ranks of a word's match, lower being better. A field match is one of

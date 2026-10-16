@@ -607,7 +607,7 @@ func groupByKindAndFolder(entries []*importer.Entry) []entryGroup {
 		}
 		groups[i].entries = append(groups[i].entries, e)
 	}
-	order := []vault.Kind{vault.KindPassword, vault.KindTOTP, vault.KindAPIKey, vault.KindNote}
+	order := []vault.Kind{vault.KindPassword, vault.KindTOTP, vault.KindAPIKey, vault.KindNote, vault.KindFile}
 	slices.SortStableFunc(groups, func(a, b entryGroup) int {
 		ka, kb := a.entries[0].Key.Kind, b.entries[0].Key.Kind
 		if c := cmp.Compare(slices.Index(order, ka), slices.Index(order, kb)); c != 0 {
@@ -629,6 +629,8 @@ func kindPlural(k vault.Kind) string {
 		return "API keys"
 	case vault.KindNote:
 		return "Secure notes"
+	case vault.KindFile:
+		return "Files"
 	}
 	return string(k)
 }

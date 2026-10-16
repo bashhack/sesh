@@ -432,6 +432,8 @@ func kindMark(k vault.Kind) string {
 		return "◆"
 	case vault.KindNote:
 		return "≡"
+	case vault.KindFile:
+		return "▤"
 	}
 	return "●"
 }

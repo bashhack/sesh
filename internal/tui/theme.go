@@ -78,7 +78,7 @@ func (t *theme) kindColor(k vault.Kind) color.Color {
 		return t.ok
 	case vault.KindAPIKey:
 		return t.warn
-	case vault.KindNote:
+	case vault.KindNote, vault.KindFile:
 		return t.dim
 	}
 	return t.accent

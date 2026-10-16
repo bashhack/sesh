@@ -208,6 +208,8 @@ func kindName(k vault.Kind) string {
 		return "TOTP"
 	case vault.KindNote:
 		return "note"
+	case vault.KindFile:
+		return "file"
 	}
 	return "password"
 }

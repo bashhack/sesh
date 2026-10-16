@@ -293,6 +293,9 @@ func (m *Model) previewLines(w, h int) []string {
 	plain := th.style()
 	shown := m.shown != nil && m.shown.k == e.Key
 	hidden := th.dimmed().Render("••••••••")
+	if e.Kind == vault.KindFile {
+		field("file", fileSaid(e.Settings.FileName, e.Size), plain)
+	}
 	if e.Kind != vault.KindNote {
 		name := "password"
 		switch e.Kind {
@@ -300,10 +303,15 @@ func (m *Model) previewLines(w, h int) []string {
 			name = "key"
 		case vault.KindTOTP:
 			name = "TOTP key"
+		case vault.KindFile:
+			name = "content"
 		}
-		if shown {
+		switch {
+		case shown && e.Kind == vault.KindFile && !vault.IsText(m.shown.secret):
+			add(label(name) + th.dimmed().Render("binary: Ctrl-K, save to a file…, writes it"))
+		case shown:
 			secretField(name, m.wrap("reveal "+name, m.shown.secret, valueWidth), th.accented())
-		} else {
+		default:
 			add(label(name) + hidden)
 		}
 	}
@@ -409,4 +417,12 @@ func wrapText(s string, w int) string {
 		return r
 	}, s)
 	return ansi.Wrap(s, max(w, 4), "")
+}
+
+// fileSaid says a file entry's file: "config · 2 KB".
+func fileSaid(name string, size int64) string {
+	if name == "" {
+		return vault.SizeSaid(size)
+	}
+	return name + " · " + vault.SizeSaid(size)
 }

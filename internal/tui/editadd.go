@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -21,7 +22,7 @@ type savedMsg struct {
 }
 
 // The kinds an entry added can be, in the order the form offers them.
-var addKinds = []vault.Kind{vault.KindPassword, vault.KindAPIKey, vault.KindNote, vault.KindTOTP}
+var addKinds = []vault.Kind{vault.KindPassword, vault.KindAPIKey, vault.KindNote, vault.KindTOTP, vault.KindFile}
 
 // secretChoices are what can be done to a secret in a form.
 const (
@@ -75,10 +76,13 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	if adding {
 		e = &vault.Entry{}
 	}
-	kindIn := &input{kind: inputChoice, label: "kind", choices: []string{"password", "API key", "secure note", "TOTP"}}
+	kindIn := &input{kind: inputChoice, label: "kind", choices: []string{"password", "API key", "secure note", "TOTP", "file"}}
+	if m.opts.ReadFile == nil {
+		kindIn.choices = kindIn.choices[:4] // a file can't be read here
+	}
 	// An entry edited can become another of the first three kinds, keeping
-	// its secret, as sesh edit --type does; a TOTP entry stays one.
-	changesKind := !adding && e.Kind != vault.KindTOTP
+	// its secret, as sesh edit --type does; a TOTP or file entry stays one.
+	changesKind := !adding && e.Kind != vault.KindTOTP && e.Kind != vault.KindFile
 	if changesKind {
 		kindIn.choices = kindIn.choices[:3]
 		kindIn.choice = max(slices.Index(addKinds, e.Kind), 0)
@@ -182,8 +186,16 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 		fields.rows = append(fields.rows, fieldRow{name: f.Name, orig: f.Name, secret: f.Secret, value: bytes.Clone(f.Value)})
 	}
 
+	// A file entry's file, read from the path typed once the form is saved.
+	fileIn := m.textInput("file", "")
+	fileIn.hint = "the file to keep, up to 1 MB: a full path, or from ~/; it names an entry given no name"
+	if !adding {
+		fileIn.label, fileIn.hint = "new file", "leave it empty to keep the file it has; a full path, or from ~/"
+	}
+	fileIn.shown = func() bool { return kind() == vault.KindFile && m.opts.ReadFile != nil }
+
 	title := "Edit " + entryName(e)
-	inputs := slices.Concat([]*input{name, user, secretChoice, current, typed}, gen.inputs(), []*input{totpFrom, imageFile, totpKey, url, folder, tags, text, fields})
+	inputs := slices.Concat([]*input{name, user, secretChoice, current, typed}, gen.inputs(), []*input{totpFrom, imageFile, totpKey, fileIn, url, folder, tags, text, fields})
 	switch {
 	case adding:
 		title = "Add an entry"
@@ -196,6 +208,19 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 	f.submit = func() tea.Cmd {
 		k := kind()
 		c := &Change{To: vault.Key{Kind: k, Service: name.value(), Username: user.value()}}
+		fromFile := ""
+		if k == vault.KindFile {
+			fromFile = fileIn.value()
+			switch {
+			case adding && fromFile == "":
+				f.err = "Give the file to keep."
+				return nil
+			case adding && c.To.Service == "":
+				// Named after the file, as sesh add file is: worked out
+				// again at each save, so a path typed again names it.
+				c.To.Service = filepath.Base(fromFile)
+			}
+		}
 		if k == vault.KindNote && adding {
 			// Edited, a note keeps the username it has, as sesh edit
 			// --type does; added, it has none.
@@ -249,6 +274,8 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			c.Secret = noteText
 		case k == vault.KindTOTP && scanning():
 			// Read once the rest is checked, below.
+		case k == vault.KindFile:
+			// Its content is read from fromFile as it saves.
 		case k == vault.KindTOTP && fromImage():
 			if imageFile.value() == "" {
 				f.err = "Give the image file with the QR code."
@@ -319,7 +346,7 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 			}
 			return m.readImageThenSave(f, c, fill, imageFile.value())
 		}
-		return m.save(f, c, generate)
+		return m.save(f, c, generate, fromFile)
 	}
 	folder.offers, tags.offers = m.folderNames(), m.tagNames()
 	f.focusInput(0)
@@ -328,12 +355,23 @@ func (m *Model) openForm(e *vault.Entry, notes string) tea.Cmd {
 }
 
 // save saves c, generating its password first when generate says how,
-// which is then copied, since nobody has seen it.
-func (m *Model) save(f *form, c *Change, generate *generating) tea.Cmd {
+// which is then copied, since nobody has seen it; or, for a file entry,
+// reading its file from the path typed, fromFile, when one is.
+func (m *Model) save(f *form, c *Change, generate *generating, fromFile string) tea.Cmd {
 	f.saving, f.err = true, ""
 	opts, epoch, of := m.opts, m.epoch, c.Key
 	read := m.read(func(v Vault, _ func() bool) tea.Msg {
 		defer c.Wipe()
+		if fromFile != "" {
+			if opts.ReadFile == nil {
+				return savedMsg{err: errors.New("sesh ui can't read files here"), epoch: epoch}
+			}
+			content, fileName, err := opts.ReadFile(fromFile)
+			if err != nil {
+				return savedMsg{err: err, epoch: epoch}
+			}
+			c.Secret, c.FileName = content, &fileName
+		}
 		if generate != nil {
 			pw, err := generate.make(&opts)
 			if err != nil {
@@ -442,7 +480,7 @@ func (m *Model) scanned(msg *scannedMsg) tea.Cmd {
 		msg.fill(c.To.Service, c.To.Username)
 	}
 	c.Secret = msg.qr.Link
-	return m.save(f, c, nil)
+	return m.save(f, c, nil, "")
 }
 
 // saved closes the form for an entry saved, or says why it wasn't.

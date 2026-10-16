@@ -112,7 +112,7 @@ func TestList(t *testing.T) {
 		t.Errorf("none of a kind: %q, %v", errOut, err)
 	}
 	for args, wantSub := range map[string]string{
-		"frobs":         `sesh list takes kinds (passwords, keys, notes, totp), not "frobs"`,
+		"frobs":         `sesh list takes kinds (passwords, keys, notes, totp, files), not "frobs"`,
 		"--sort colour": `--sort is name, created, updated, or folder, not "colour"`,
 	} {
 		if _, err := runFiling(t, runList, strings.Fields(args)...); err == nil || !strings.Contains(err.Error(), wantSub) {
@@ -300,7 +300,7 @@ func TestAdd(t *testing.T) {
 	for args, wantSub := range map[string]string{
 		"password github --username alice": "github (alice) already exists; add --force to replace it",
 		"password GitHub --username alice": "github (alice) already exists, and names are case-sensitive",
-		"widget x":                         `takes a kind first (password, key, note, or totp), not "widget"`,
+		"widget x":                         `takes a kind first (password, key, note, totp, or file), not "widget"`,
 		"key x --generate":                 "--generate makes a password; an API key comes from wherever it was issued",
 		"password x --length 8":            "add --generate",
 		"note x --qr":                      "--qr and --qr-image read a TOTP entry's key",

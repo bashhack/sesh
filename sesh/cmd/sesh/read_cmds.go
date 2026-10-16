@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -24,7 +25,7 @@ import (
 	"github.com/bashhack/sesh/internal/vault"
 )
 
-const listUsage = `Usage: sesh list [passwords|keys|notes|totp …] [--folder F] [--tag T] [--sort S] [--json]
+const listUsage = `Usage: sesh list [passwords|keys|notes|totp|files …] [--folder F] [--tag T] [--sort S] [--json]
   List the entries, or those of the kinds named. --folder keeps the entries
   in a folder and the folders under it ("" for no folder); --tag keeps those
   with a tag (repeat it: all must match). --sort is name, created, updated,
@@ -43,10 +44,10 @@ const searchUsage = `Usage: sesh search <words> [--folder F] [--tag T] [--json]
   sesh search bank note`
 
 const copyUsage = `Usage: sesh copy <entry> [--username | --url | --field NAME]
-  Copy an entry's password, API key or note, or a TOTP entry's current code,
-  to the clipboard, which clears after clipboard_timeout. --username,
-  --url and --field copy that instead (--field secret copies a TOTP entry's
-  key).
+  Copy an entry's password, API key or note, a TOTP entry's current code,
+  or a file entry's text, to the clipboard, which clears after
+  clipboard_timeout. --username, --url and --field copy that instead
+  (--field secret copies a TOTP entry's key).
 
   sesh copy github
   sesh copy aws totp
@@ -54,13 +55,17 @@ const copyUsage = `Usage: sesh copy <entry> [--username | --url | --field NAME]
 
 ` + entryWordsHelp
 
-const getUsage = `Usage: sesh get <entry> [--username | --url | --field NAME] [--json]
-  Print an entry's password, API key or note, or a TOTP entry's current
-  code, for a pipe or a script; --username, --url and --field print that
-  instead (--field secret prints a TOTP entry's key).
+const getUsage = `Usage: sesh get <entry> [--username | --url | --field NAME] [--json | -o FILE]
+  Print an entry's password, API key or note, a TOTP entry's current code,
+  or a file entry's file, exactly as kept, for a pipe or a script;
+  --username, --url and --field print that instead (--field secret prints
+  a TOTP entry's key). -o writes it to a file readable only by you, as
+  it's kept, with no newline added. A binary file isn't printed at a
+  terminal: -o or a pipe takes it. --json gives a file's content in base64.
 
   sesh get github
   sesh get stripe key | pbcopy
+  sesh get kubeconfig -o ~/.kube/config
 
 ` + entryWordsHelp
 
@@ -95,6 +100,7 @@ var listKinds = map[string]vault.Kind{
 	"key": vault.KindAPIKey, "keys": vault.KindAPIKey, "api_key": vault.KindAPIKey, "api-key": vault.KindAPIKey, "apikey": vault.KindAPIKey,
 	"note": vault.KindNote, "notes": vault.KindNote, "secure_note": vault.KindNote,
 	"totp": vault.KindTOTP, "code": vault.KindTOTP, "codes": vault.KindTOTP, "2fa": vault.KindTOTP, "mfa": vault.KindTOTP, "otp": vault.KindTOTP,
+	"file": vault.KindFile, "files": vault.KindFile,
 }
 
 // listSorts are what sesh list's --sort takes, and the order each is.
@@ -124,8 +130,9 @@ func addCopyFlags(fs *flag.FlagSet) *valueFlags {
 }
 
 // addGetFlags defines sesh get's flags on fs.
-func addGetFlags(fs *flag.FlagSet) (*valueFlags, *bool) {
-	return addCopyFlags(fs), fs.Bool("json", false, "Print it as JSON, with the entry's name")
+func addGetFlags(fs *flag.FlagSet) (v *valueFlags, asJSON *bool, out *string) {
+	return addCopyFlags(fs), fs.Bool("json", false, "Print it as JSON, with the entry's name"),
+		fs.String("o", "", "Write it to a file, readable only by you")
 }
 
 // addCodeFlags defines sesh code's flags on fs.
@@ -161,7 +168,7 @@ func runList(app *App, args []string) error {
 	for _, w := range words {
 		k, ok := listKinds[strings.ToLower(w)]
 		if !ok {
-			return fmt.Errorf("sesh list takes kinds (passwords, keys, notes, totp), not %q; to find entries by name: sesh search %s", w, w)
+			return fmt.Errorf("sesh list takes kinds (passwords, keys, notes, totp, files), not %q; to find entries by name: sesh search %s", w, w)
 		}
 		kinds[k] = true
 	}
@@ -190,7 +197,7 @@ func runList(app *App, args []string) error {
 		msg := "No entries"
 		if len(kinds) > 0 {
 			var named []string
-			for _, k := range []vault.Kind{vault.KindPassword, vault.KindAPIKey, vault.KindNote, vault.KindTOTP} {
+			for _, k := range vault.Kinds {
 				if kinds[k] {
 					named = append(named, kindName(k))
 				}
@@ -601,6 +608,9 @@ func runCopy(app *App, args []string) error {
 		return err
 	}
 	defer secure.SecureZeroBytes(value)
+	if isFileContent(k, picked) && !vault.IsText(value) {
+		return fmt.Errorf("%s is a binary file, which the clipboard can't hold: sesh get %s -o FILE writes it", password.EntryName(k), shell.Quote(k.String()))
+	}
 	if err := app.ClipboardCopy(string(value)); err != nil {
 		return fmt.Errorf("copy to the clipboard: %w", err)
 	}
@@ -620,7 +630,7 @@ func runGet(app *App, args []string) error {
 	}
 	fs := flag.NewFlagSet("get", flag.ContinueOnError)
 	fs.SetOutput(app.Stderr)
-	v, asJSON := addGetFlags(fs)
+	v, asJSON, out := addGetFlags(fs)
 	fs.Usage = func() { fmt.Fprintln(app.Stderr, getUsage) } //nolint:errcheck // usage text
 	words, err := parseAnywhere(fs, args)
 	if err != nil {
@@ -633,8 +643,11 @@ func runGet(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(words) == 0 {
+	switch {
+	case len(words) == 0:
 		return errors.New("name the entry: sesh get <entry>")
+	case *asJSON && *out != "":
+		return errors.New("--json prints it, -o writes it to a file: choose one")
 	}
 	store, err := openFilingStore()
 	if err != nil {
@@ -645,23 +658,53 @@ func runGet(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	value, _, err := entryValue(store, k, picked, "to print it")
+	value, said, err := entryValue(store, k, picked, "to print it")
 	if err != nil {
 		return err
 	}
 	defer secure.SecureZeroBytes(value)
-	if *asJSON {
-		out := struct {
+	file := isFileContent(k, picked)
+	switch {
+	case *out != "":
+		if err := writePrivate(*out, value); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(app.Stderr, "✅ Wrote %s to %s, readable only by you\n", said, *out)
+		return err
+	case *asJSON:
+		got := struct {
 			ID       string `json:"id"`
 			Name     string `json:"name"`
 			Username string `json:"username,omitempty"`
 			Kind     string `json:"kind"`
 			Part     string `json:"part"`
 			Value    string `json:"value"`
-		}{k.String(), k.Service, k.Username, string(k.Kind), partName(k, picked), string(value)}
-		return writeJSON(app.Stdout, out) //nolint:gosec // --json prints the value asked for by design
+			Encoding string `json:"encoding,omitempty"`
+		}{ID: k.String(), Name: k.Service, Username: k.Username, Kind: string(k.Kind), Part: partName(k, picked), Value: string(value)}
+		if file {
+			got.Value, got.Encoding = base64.StdEncoding.EncodeToString(value), "base64"
+		}
+		return writeJSON(app.Stdout, got) //nolint:gosec // --json prints the value asked for by design
+	case file && !vault.IsText(value) && uiStdoutIsTerminal(app.Stdout):
+		return fmt.Errorf("%s is a binary file (%s), which isn't printed at a terminal: add -o FILE, or pipe it", password.EntryName(k), vault.SizeSaid(int64(len(value))))
+	case file:
+		// As kept: nothing added.
+		_, err := app.Stdout.Write(value)
+		return err
 	}
 	return printValue(app.Stdout, value)
+}
+
+// isFileContent says whether p, for entry k, is a file entry's content.
+func isFileContent(k vault.Key, p part) bool {
+	if k.Kind != vault.KindFile {
+		return false
+	}
+	switch strings.ToLower(p.field) {
+	case "", "password", "secret":
+		return !p.username && !p.url
+	}
+	return false
 }
 
 // partName is the part of k's entry that p gives, as --json says it: a

@@ -176,14 +176,14 @@ func (m *MemStore) SetDetails(k Key, d *Details) error {
 }
 
 // SetSettings implements Store.
-func (m *MemStore) SetSettings(k Key, s Settings) error {
+func (m *MemStore) SetSettings(k Key, s *Settings) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	e, ok := m.entries[k]
 	if !ok {
 		return notFound(k)
 	}
-	e.entry.Settings = s
+	e.entry.Settings = *s
 	e.entry.UpdatedAt = m.Now()
 	m.entries[k] = e
 	return nil

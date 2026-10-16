@@ -288,3 +288,17 @@ func TestEncryptEntry_BindsTheAssociatedData(t *testing.T) {
 		}
 	}
 }
+
+// A sealed secret is its size and the overhead, so its size is known without opening it.
+func TestSealOverhead(t *testing.T) {
+	key := make([]byte, 32)
+	for _, n := range []int{1, 100, 4096} {
+		data, _, err := EncryptEntry(key, make([]byte, n), []byte("aad"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := plainSize(int64(len(data))); got != int64(n) {
+			t.Errorf("%d bytes sealed into %d: size %d", n, len(data), got)
+		}
+	}
+}

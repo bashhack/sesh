@@ -2,6 +2,7 @@ package password
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -20,22 +21,41 @@ import (
 // import. Everything about the entry round-trips: its settings (a TOTP
 // entry's code settings decide which codes are right) and its times.
 type ExportEntry struct {
-	CreatedAt time.Time      `json:"created_at,omitzero"`
-	UpdatedAt time.Time      `json:"updated_at,omitzero"`
-	Service   string         `json:"service"`
-	Username  string         `json:"username,omitempty"`
-	Type      EntryType      `json:"type"`
-	Secret    string         `json:"secret"`
-	Folder    string         `json:"folder,omitempty"`
-	URL       string         `json:"url,omitempty"`
-	Notes     string         `json:"notes,omitempty"`
-	Tags      []string       `json:"tags,omitempty"`
-	Fields    []ExportField  `json:"fields,omitempty"`
-	Settings  vault.Settings `json:"settings,omitzero"`
+	CreatedAt time.Time `json:"created_at,omitzero"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
+	Service   string    `json:"service"`
+	Username  string    `json:"username,omitempty"`
+	Type      EntryType `json:"type"`
+	Secret    string    `json:"secret"`
+	// Encoding is "base64" for a file entry's content, which can be any
+	// bytes; "" means the secret is as it is.
+	Encoding string         `json:"encoding,omitempty"`
+	Folder   string         `json:"folder,omitempty"`
+	URL      string         `json:"url,omitempty"`
+	Notes    string         `json:"notes,omitempty"`
+	Tags     []string       `json:"tags,omitempty"`
+	Fields   []ExportField  `json:"fields,omitempty"`
+	Settings vault.Settings `json:"settings,omitzero"`
 }
 
 // Key is the entry's key.
 func (e *ExportEntry) Key() vault.Key { return key(e.Service, e.Username, e.Type) }
+
+// SecretBytes is the entry's secret, decoded as its Encoding says, for
+// the caller to zero.
+func (e *ExportEntry) SecretBytes() ([]byte, error) {
+	switch e.Encoding {
+	case "":
+		return []byte(e.Secret), nil
+	case "base64":
+		b, err := base64.StdEncoding.DecodeString(e.Secret)
+		if err != nil {
+			return nil, fmt.Errorf("its secret isn't base64, as its encoding says: %w", err)
+		}
+		return b, nil
+	}
+	return nil, fmt.Errorf("its secret's encoding, %q, isn't one sesh writes", e.Encoding)
+}
 
 // Details is the entry's details, which the caller zeroes.
 func (e *ExportEntry) Details() vault.Details { return importDetails(e) }
@@ -96,6 +116,9 @@ type ExportOptions struct {
 	Folder    string
 	Tags      []string
 	FolderSet bool
+	// LeftOut is set by Export: the file entries a CSV export left out,
+	// since CSV holds text.
+	LeftOut int
 	// KDF is the Argon2id settings an encrypted export's password is
 	// stretched with; zero means kdf.Default().
 	KDF kdf.Params
@@ -115,7 +138,9 @@ func (m *Manager) Export(w io.Writer, opts *ExportOptions) (int, error) {
 	case "", FormatJSON:
 		return m.exportJSON(w, entries)
 	case FormatCSV:
-		return m.exportCSV(w, entries)
+		kept := slices.DeleteFunc(entries, func(e vault.Entry) bool { return e.Kind == vault.KindFile })
+		opts.LeftOut = len(entries) - len(kept)
+		return m.exportCSV(w, kept)
 	default:
 		return 0, fmt.Errorf("unsupported export format %q (want json or csv)", opts.Format)
 	}
@@ -146,11 +171,17 @@ func (m *Manager) exportJSON(w io.Writer, entries []vault.Entry) (int, error) {
 			return count, err
 		}
 
+		secret := string(secretBytes)
+		encoding := ""
+		if e.Kind == vault.KindFile {
+			secret, encoding = base64.StdEncoding.EncodeToString(secretBytes), "base64"
+		}
 		ee := ExportEntry{
 			Service:   e.Service,
 			Username:  e.Username,
 			Type:      e.Kind,
-			Secret:    string(secretBytes),
+			Secret:    secret,
+			Encoding:  encoding,
 			Folder:    e.Folder,
 			Tags:      e.Tags,
 			Settings:  e.Settings,
@@ -360,7 +391,12 @@ func (m *Manager) Import(r io.Reader, opts ImportOptions) (ImportResult, error) 
 		// The entry keeps its settings, folder, tags, times, and details,
 		// written together; a zero time means now. An entry it replaces
 		// gets the file's details, none included.
-		secret := []byte(e.Secret)
+		secret, err := e.SecretBytes()
+		if err != nil {
+			details.Zero()
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", importName(e), err))
+			continue
+		}
 		err = m.store.SaveWithDetails(&vault.Entry{Key: k, Settings: e.Settings, Folder: e.Folder, Tags: e.Tags, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt}, secret, &details)
 		secure.SecureZeroBytes(secret)
 		details.Zero()

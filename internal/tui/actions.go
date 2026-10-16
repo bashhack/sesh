@@ -132,6 +132,9 @@ func (m *Model) openMenu() tea.Cmd {
 	if e.Kind == vault.KindTOTP {
 		items = append(items, item{key: "q", label: "show the key as a QR code…", run: func() tea.Cmd { return m.openQR(&ek) }})
 	}
+	if e.Kind == vault.KindFile {
+		items = append(items, item{key: "s", label: "save to a file…", run: func() tea.Cmd { return m.askSaveFile(&ek) }})
+	}
 	items = append(items,
 		item{key: "h", label: "earlier secrets…", run: func() tea.Cmd { return m.openHistory(&ek) }},
 		item{key: "d", label: "move to the trash", run: func() tea.Cmd { return m.confirmDelete(&ek) }},

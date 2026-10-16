@@ -38,7 +38,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key (nothing in the Keychain); the password always works as a fallback
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from, and `sesh config set` changes one
 - **Encrypted Export** — Portable backups protected by a password of their own, safe to move between machines (`sesh export`)
-- **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, and secure notes, each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
+- **Password Manager** — Store and retrieve passwords, API keys, TOTP secrets, secure notes, and files kept whole (a kubeconfig, a TLS key), each with a URL, encrypted notes, and custom fields, and find them by any part of a service or user name or the URL's host
 - **Secrets for commands** — `sesh run` puts vault values in a command's environment and hides them in its output; `sesh inject` fills a config template; `sesh git-credential` gives git a site's password as its credential helper
 - **Terminal-First Workflow** — Authenticate without leaving the terminal
 - **Shell Completion** — Tab completion for commands, flags, and their values in bash, zsh, and fish (`sesh completion zsh`)
@@ -121,6 +121,7 @@ Add `--json` to `list`, `search`, `get`, `code` or `show` for output a program r
 ```bash
 sesh add password github --username alice --url https://github.com/login
 sesh add key openai                # an API key
+sesh add file kubeconfig --from ~/.kube/config   # a file, kept whole
 echo "door code 4711" | sesh add note house
 sesh add totp github --qr          # or --qr-image shot.png, or type the key, or paste an otpauth:// link
 sesh show totp github --qr         # its key as a QR code, to scan with a phone
@@ -139,6 +140,7 @@ sesh folder move work github       # and sesh tag add urgent github
 ```bash
 sesh run --env OPENAI_API_KEY=sesh://api_key/openai -- python app.py
 sesh run --env-file .env -- npm start      # .env holds NAME=sesh://... references, no secrets
+sesh run --env KUBECONFIG=sesh://file/kubeconfig -- kubectl get pods   # a file entry, as a file
 sesh inject -i config.yml.tpl -o config.yml
 git config --global credential.helper '!sesh git-credential'   # git's HTTPS passwords from sesh
 ```

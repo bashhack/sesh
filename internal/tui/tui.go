@@ -106,8 +106,10 @@ type ScannedQR struct {
 // replace, so a change by another command meanwhile is refused. The
 // caller wipes Secret, Notes, NotesBase, and secret fields' values.
 type Change struct {
-	URL          *string
-	Folder       *string
+	URL    *string
+	Folder *string
+	// FileName is a file entry's file's name, given with new content.
+	FileName     *string
 	Key, To      vault.Key
 	Secret       []byte
 	Notes        []byte
@@ -345,7 +347,14 @@ type Options struct {
 	// file at path (a full path, or from ~/); nil when it can't be done
 	// here. The caller wipes the link.
 	ReadQRImage func(path string) (ScannedQR, error)
-	Now         func() time.Time
+	// ReadFile reads the file at the path typed (a full path, or from ~/)
+	// for a file entry: its content, which the caller wipes, and its name;
+	// nil where files can't be read here.
+	ReadFile func(typed string) (content []byte, name string, err error)
+	// SaveFile writes a file entry's content to the path typed, readable
+	// only by its owner, refusing a file already there; it says where.
+	SaveFile func(typed string, content []byte) (string, error)
+	Now      func() time.Time
 	// Settings are the config settings, for the settings panel; nil when
 	// there's none to show. SetSetting writes one to the config file (""
 	// takes it out) and says what the app now uses.
@@ -756,6 +765,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.actionResult(msg)
 	case qrMsg:
 		return m.shownQR(&msg)
+	case savedFileMsg:
+		return m.savedFile(&msg)
 	case settingsMsg:
 		return m.gotSettings(&msg)
 	case checksMsg:

@@ -118,7 +118,7 @@ func TestStoreTOTPSecret(t *testing.T) {
 
 	// Storing again with the usual settings clears them, but keeps the
 	// entry's other settings.
-	if err := store.SetSettings(k, vault.Settings{TOTP: params, AWSMFADevice: "arn:aws:iam::1:mfa/me"}); err != nil {
+	if err := store.SetSettings(k, &vault.Settings{TOTP: params, AWSMFADevice: "arn:aws:iam::1:mfa/me"}); err != nil {
 		t.Fatal(err)
 	}
 	before, err := store.Lookup(k)
