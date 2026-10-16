@@ -90,7 +90,20 @@ func TestEntries_GenuineExport(t *testing.T) {
 	if b := entries[byKey["totp/Bank/bob"]]; b.Settings.TOTP != (totp.Params{Issuer: "Bank"}) {
 		t.Errorf("Bank TOTP = %+v", b.Settings)
 	}
+	// Dated when its password was set: GitHub's when it changed to
+	// gh-pass-2; Router's from its one earlier version.
+	if want := time.Date(2026, 10, 11, 1, 38, 12, 0, time.UTC); !gh.Updated.Equal(want) {
+		t.Errorf("GitHub dated %v, want %v", gh.Updated, want)
+	}
+	if r := entries[byKey["password/Router"]]; !r.Updated.Equal(time.Date(2026, 10, 11, 1, 37, 55, 0, time.UTC)) {
+		t.Errorf("Router dated %v", r.Updated)
+	}
 	clone := entries[byKey["password/GitHub - Clone/alice"]]
+	// Its password refers to GitHub's: dated by its own edit, not its
+	// copies, which keep the original's times.
+	if clone.Updated.Before(clone.Created) {
+		t.Errorf("the clone dated %v, before it was made, %v", clone.Updated, clone.Created)
+	}
 	// Its four earlier versions each refer to GitHub's password, as it does.
 	if len(clone.Earlier) != 0 || clone.Lost[lostVersions] != 4 || clone.Lost[lostRefHistory] != 0 {
 		t.Errorf("clone's old passwords = %+v, lost %v", clone.Earlier, clone.Lost)
@@ -350,11 +363,53 @@ func TestEntries_OldPasswords(t *testing.T) {
 	if l := got[0].Lost; l[lostRefHistory] != 1 || l[lostVersions] != 2 {
 		t.Errorf("lost %v", l)
 	}
+	// Dated by when its password became d, not by its last edit.
+	if got[0].Updated.Hour() != 9 {
+		t.Errorf("updated at %d, want 9: d came in with the entry's own version", got[0].Updated.Hour())
+	}
 
 	note := Entry{Times: at(9), Strings: []String{str("Title", "wifi"), str("Notes", "n")}}
 	note.History.Entries = []Entry{version("gone", 1)}
 	exp.Root.Group.Entries = []Entry{note}
 	if got := Entries(&exp); len(got[0].Earlier) != 0 || got[0].Lost[lostNoPassword] != 1 {
 		t.Errorf("no password now: %+v", got[0])
+	}
+}
+
+// A password entry is dated by when its password was set, as the history shows, not by the entry's last edit.
+func TestEntries_PasswordDate(t *testing.T) {
+	str := func(k, v string) String {
+		var s String
+		s.Key, s.Value.Text = k, v
+		return s
+	}
+	version := func(pw, title string, h int) Entry {
+		return Entry{Times: Times{LastModificationTime: Time{time.Date(2026, 1, 1, h, 0, 0, 0, time.UTC)}}, Strings: []String{str("Title", title), str("Password", pw)}}
+	}
+	// A password referring to another entry: by the entry's last edit, as the reference's text never changes.
+	ref := version("{REF:P@I:0123456789ABCDEF0123456789ABCDEF}", "clone", 9)
+	ref.History.Entries = []Entry{version("{REF:P@I:0123456789ABCDEF0123456789ABCDEF}", "clone", 2)}
+	if got := passwordSince(&ref); got.Hour() != 9 {
+		t.Errorf("a reference: dated %d, want 9", got.Hour())
+	}
+	for _, tt := range []struct {
+		name    string
+		history []Entry
+		want    int
+	}{
+		{"no history: its last edit", nil, 9},
+		{"retitled since: when b came in", []Entry{version("a", "site", 1), version("b", "site", 3), version("b", "renamed", 5)}, 3},
+		{"never changed: its oldest version", []Entry{version("b", "site", 2), version("b", "x", 4)}, 2},
+		{"changed back: when it last came in", []Entry{version("b", "site", 1), version("a", "site", 3), version("b", "site", 5)}, 5},
+		{"history out of order: by its times", []Entry{version("b", "site", 5), version("a", "site", 1)}, 5},
+		{"a version after the entry's edit: never later than that", []Entry{version("b", "site", 12)}, 9},
+	} {
+		e := version("b", "site", 9)
+		e.History.Entries = tt.history
+		exp := Export{}
+		exp.Root.Group.Entries = []Entry{e}
+		if got := Entries(&exp); got[0].Updated.Hour() != tt.want {
+			t.Errorf("%s: updated at %d, want %d", tt.name, got[0].Updated.Hour(), tt.want)
+		}
 	}
 }

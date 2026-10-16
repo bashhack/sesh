@@ -358,6 +358,9 @@ func (w *walker) entry(e *Entry, base *importer.Entry) []*importer.Entry {
 		p.Key = vault.Key{Kind: vault.KindPassword, Service: service, Username: user}
 		p.Secret = []byte(password)
 		p.Earlier = earlier
+		// Dated by its password, as sesh dates a secret: not the entry's
+		// last edit of any kind.
+		p.Updated = passwordSince(e)
 		p.Details = details
 		out = append(out, importer.Checked(&p))
 	}
@@ -509,13 +512,13 @@ func totpKey(s string) (secret string, params totp.Params, why string) {
 // password that refers to another entry is left out, and each version
 // that didn't end in a password kept, counted in lost.
 func oldPasswords(e *Entry, lost map[string]int) []vault.Earlier {
-	h := e.History.Entries
+	h := historyInOrder(e)
 	var out []vault.Earlier
 	for i := len(h) - 1; i >= 0; i-- {
-		pw := fieldText(&h[i], "Password")
-		next, at := fieldText(e, "Password"), e.Times.LastModificationTime.Time
+		pw := passwordText(&h[i])
+		next, at := passwordText(e), e.Times.LastModificationTime.Time
 		if i+1 < len(h) {
-			next, at = fieldText(&h[i+1], "Password"), h[i+1].Times.LastModificationTime.Time
+			next, at = passwordText(&h[i+1]), h[i+1].Times.LastModificationTime.Time
 		}
 		switch {
 		case pw == "" || pw == next:
@@ -529,10 +532,49 @@ func oldPasswords(e *Entry, lost map[string]int) []vault.Earlier {
 	return out
 }
 
-// fieldText is e's field key as written, "" when it has none.
-func fieldText(e *Entry, key string) string {
+// passwordSince is when e's password, as it is now, was set, as its
+// history shows (KeePass 2's GetLastPasswordModTime walks it the same
+// way): when the first version with it was made, after the last one with
+// another. A history with no other password gives the oldest version's
+// time, the earliest it's known to have been; no history, the entry's own
+// last edit, which it's never later than. A password that refers to
+// another entry is dated by that edit too: its text stays the same while
+// the password it stands for changes.
+func passwordSince(e *Entry) time.Time {
+	edited := e.Times.LastModificationTime.Time
+	now := passwordText(e)
+	if reference.MatchString(now) {
+		return edited
+	}
+	h := historyInOrder(e)
+	since := edited
+	for i := len(h) - 1; i >= 0; i-- {
+		if passwordText(&h[i]) != now {
+			break
+		}
+		since = h[i].Times.LastModificationTime.Time
+	}
+	if since.After(edited) {
+		return edited
+	}
+	return since
+}
+
+// historyInOrder is e's history, the oldest version first, by when each
+// was made: KeePassXC writes it in that order, but an export from
+// elsewhere, or with clocks out of step, needn't.
+func historyInOrder(e *Entry) []Entry {
+	h := slices.Clone(e.History.Entries)
+	slices.SortStableFunc(h, func(a, b Entry) int {
+		return a.Times.LastModificationTime.Compare(b.Times.LastModificationTime.Time)
+	})
+	return h
+}
+
+// passwordText is e's password as written, "" when it has none.
+func passwordText(e *Entry) string {
 	for _, str := range e.Strings {
-		if str.Key == key {
+		if str.Key == "Password" {
 			return str.Value.Text
 		}
 	}
