@@ -243,6 +243,14 @@ func TestFileEntry_ExportImport(t *testing.T) {
 	if b, err := os.ReadFile(csvTo); err != nil || strings.Contains(string(b), "kubeconfig") {
 		t.Errorf("the CSV export:\n%s", b)
 	}
+	// Files alone in CSV would be an empty export, so it's refused, and the file there kept.
+	app, _ = cliApp("", false)
+	if _, _, err := runCLI(app, runExport, "files", "--format", "csv", "--force", "--file", csvTo); err == nil || !strings.Contains(err.Error(), "leaves files out") {
+		t.Errorf("export files as csv: %v", err)
+	}
+	if b, err := os.ReadFile(csvTo); err != nil || !strings.Contains(string(b), "\n") || strings.Count(string(b), "\n") < 2 {
+		t.Errorf("the CSV export there was replaced:\n%s", b)
+	}
 	// Into a fresh vault, the files come back whole.
 	env := setupRekeyEnv(t)
 	useConfigFile(t, "")

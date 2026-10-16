@@ -15,6 +15,10 @@ import (
 // execCommand wraps exec.Command to allow for mocking
 var execCommand = exec.Command
 
+// InvalidMFAMessage is what the AWS CLI says when it refuses an MFA code
+// that's wrong or already used, which a caller can retry with the next.
+const InvalidMFAMessage = "MultiFactorAuthentication failed with invalid MFA one time pass code"
+
 // Credentials holds the temporary AWS session credentials returned by STS.
 type Credentials struct {
 	AccessKeyID     string `json:"AccessKeyId"`

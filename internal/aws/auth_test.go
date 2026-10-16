@@ -83,7 +83,7 @@ func TestGetSessionToken_CommandErrorMessage(t *testing.T) {
 	origExecCommand := execCommand
 	defer func() { execCommand = origExecCommand }()
 
-	const awsSays = "MultiFactorAuthentication failed with invalid MFA one time pass code"
+	const awsSays = InvalidMFAMessage
 	execCommand = func(_ string, _ ...string) *exec.Cmd {
 		return exec.Command("sh", "-c", "echo 'An error occurred (AccessDenied): "+awsSays+". ' >&2; exit 254")
 	}

@@ -70,6 +70,9 @@ func runExport(app *App, args []string) error {
 	if *format != "encrypted" && *format != "json" && *format != "csv" {
 		return fmt.Errorf("--format is encrypted, json, or csv, not %q", *format)
 	}
+	if kind == vault.KindFile && *format == "csv" {
+		return errors.New("a CSV export holds text, so it leaves files out: use --format json, or the encrypted export")
+	}
 	if *format == "encrypted" && (app.StdinIsTerminal == nil || !app.StdinIsTerminal()) {
 		return errExportNeedsTerminal
 	}

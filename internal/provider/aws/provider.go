@@ -129,7 +129,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 	// Check if this is an "invalid MFA one time pass code" error, which could indicate a recently used code
 	if err != nil {
 		errStr := err.Error()
-		isInvalidMFA := strings.Contains(errStr, "MultiFactorAuthentication failed with invalid MFA one time pass code")
+		isInvalidMFA := strings.Contains(errStr, awsInternal.InvalidMFAMessage)
 
 		// If it's an invalid MFA code or if we're close to time boundary, try the next code
 		if isInvalidMFA || secondsLeft < 5 {
@@ -148,7 +148,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 
 			// Re-evaluate whether the second attempt also failed with an invalid MFA error
 			secondInvalidMFA := err != nil &&
-				strings.Contains(err.Error(), "MultiFactorAuthentication failed with invalid MFA one time pass code")
+				strings.Contains(err.Error(), awsInternal.InvalidMFAMessage)
 
 			// If STILL failing with invalid MFA and we're not close to boundary,
 			// we may need to wait for the next time window
@@ -182,7 +182,7 @@ func (p *Provider) GetCredentials() (provider.Credentials, error) {
 
 	if err != nil {
 		// Check if this looks like a "code already used" error
-		if strings.Contains(err.Error(), "MultiFactorAuthentication failed with invalid MFA one time pass code") {
+		if strings.Contains(err.Error(), awsInternal.InvalidMFAMessage) {
 			// Add more context to the error message
 			return provider.Credentials{}, fmt.Errorf("failed to get session token (this may be because the TOTP code was recently used; try waiting for the next time window): %w", err)
 		}

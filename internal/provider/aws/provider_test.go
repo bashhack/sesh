@@ -537,7 +537,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
 					callCount++
 					if callCount == 1 && string(code) == "123456" {
-						return aws.Credentials{}, fmt.Errorf("MultiFactorAuthentication failed with invalid MFA one time pass code")
+						return aws.Credentials{}, fmt.Errorf("An error occurred (AccessDenied): %s.", aws.InvalidMFAMessage)
 					}
 					if callCount == 2 && string(code) == "654321" {
 						return aws.Credentials{
@@ -568,7 +568,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
 					callCount++
 					if callCount == 1 {
-						return aws.Credentials{}, fmt.Errorf("MultiFactorAuthentication failed with invalid MFA one time pass code")
+						return aws.Credentials{}, fmt.Errorf("An error occurred (AccessDenied): %s.", aws.InvalidMFAMessage)
 					}
 					// Second attempt fails with a different error
 					return aws.Credentials{}, fmt.Errorf("network timeout")
@@ -596,7 +596,7 @@ func TestProvider_GetCredentials(t *testing.T) {
 				m.GetSessionTokenFunc = func(profile, serial string, code []byte) (aws.Credentials, error) {
 					callCount++
 					if callCount <= 2 {
-						return aws.Credentials{}, fmt.Errorf("MultiFactorAuthentication failed with invalid MFA one time pass code")
+						return aws.Credentials{}, fmt.Errorf("An error occurred (AccessDenied): %s.", aws.InvalidMFAMessage)
 					}
 					if string(code) == "999999" {
 						return aws.Credentials{
