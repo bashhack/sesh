@@ -34,6 +34,26 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 
+# The macOS binaries are signed with a Developer ID certificate and
+# notarized by Apple, so Gatekeeper lets a downloaded one run. It's on once
+# the certificate is given: GitHub passes a secret that isn't set as "",
+# which counts as off.
+notarize:
+  macos:
+    - enabled: '{{ if index .Env "MACOS_SIGN_P12" }}true{{ else }}false{{ end }}'
+      ids:
+        - darwin
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        # A release waits for Apple's answer, so one that fails stops it.
+        wait: true
+        timeout: 20m
+
 archives:
   - name_template: >-
       {{ .ProjectName }}_
