@@ -72,14 +72,41 @@ type SessionCredentials struct {
 	Credentials Credentials `json:"Credentials"`
 }
 
+// positional is the command line without the global options the real
+// CLI takes anywhere (--profile, --output, --query, --region), which come
+// before or after the command.
+var positional []string
+
 // main dispatches mock AWS CLI commands based on the first argument.
 func main() {
-	if len(os.Args) < 2 {
+	profile := os.Getenv("AWS_PROFILE")
+	for i := 1; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--profile", "--output", "--query", "--region":
+			if os.Args[i] == "--profile" && i+1 < len(os.Args) {
+				profile = os.Args[i+1]
+			}
+			i++
+		default:
+			positional = append(positional, os.Args[i])
+		}
+	}
+	if len(positional) < 1 {
 		fmt.Fprintf(os.Stderr, "%sError: aws requires at least one argument%s\n", colorRed, colorReset)
 		os.Exit(1)
 	}
+	// Profiles the mock knows: MOCK_AWS_PROFILES, comma-separated, or
+	// default and work. Another fails as the real CLI does.
+	known := os.Getenv("MOCK_AWS_PROFILES")
+	if known == "" {
+		known = "default,work"
+	}
+	if profile != "" && !strings.Contains(","+known+",", ","+profile+",") {
+		fmt.Fprintf(os.Stderr, "\nThe config profile (%s) could not be found\n", profile)
+		os.Exit(255)
+	}
 
-	command := os.Args[1]
+	command := positional[0]
 
 	switch command {
 	case "sts":
@@ -103,12 +130,12 @@ func main() {
 
 // handleSTS routes STS subcommands (get-caller-identity, get-session-token).
 func handleSTS() {
-	if len(os.Args) < 3 {
+	if len(positional) < 2 {
 		fmt.Fprintf(os.Stderr, "%sError: sts requires a subcommand%s\n", colorRed, colorReset)
 		os.Exit(1)
 	}
 
-	subcommand := os.Args[2]
+	subcommand := positional[1]
 
 	switch subcommand {
 	case "get-caller-identity":
@@ -123,12 +150,12 @@ func handleSTS() {
 
 // handleIAM routes IAM subcommands (list-mfa-devices).
 func handleIAM() {
-	if len(os.Args) < 3 {
+	if len(positional) < 2 {
 		fmt.Fprintf(os.Stderr, "%sError: iam requires a subcommand%s\n", colorRed, colorReset)
 		os.Exit(1)
 	}
 
-	subcommand := os.Args[2]
+	subcommand := positional[1]
 
 	switch subcommand {
 	case "list-mfa-devices":
@@ -141,20 +168,20 @@ func handleIAM() {
 
 // handleConfigure routes configure subcommands (get).
 func handleConfigure() {
-	if len(os.Args) < 3 {
+	if len(positional) < 2 {
 		fmt.Fprintf(os.Stderr, "%sError: configure requires a subcommand%s\n", colorRed, colorReset)
 		os.Exit(1)
 	}
 
-	subcommand := os.Args[2]
+	subcommand := positional[1]
 
 	switch subcommand {
 	case "get":
-		if len(os.Args) < 4 {
+		if len(positional) < 3 {
 			fmt.Fprintf(os.Stderr, "%sError: configure get requires a key%s\n", colorRed, colorReset)
 			os.Exit(1)
 		}
-		key := os.Args[3]
+		key := positional[2]
 		if key == "region" {
 			fmt.Println(mockRegion)
 		} else {
@@ -184,8 +211,22 @@ func getCallerIdentity() {
 		Arn:     fmt.Sprintf("arn:aws:iam::%s:user/%s", mockAccountID, mockUsername),
 	}
 
+	if flagValue("--query") == "Arn" && flagValue("--output") == "text" {
+		fmt.Println(identity.Arn)
+		return
+	}
 	output, _ := json.MarshalIndent(identity, "", "    ")
 	fmt.Println(string(output))
+}
+
+// flagValue is the value given after flag on the command line, or "".
+func flagValue(flag string) string {
+	for i, arg := range os.Args {
+		if arg == flag && i+1 < len(os.Args) {
+			return os.Args[i+1]
+		}
+	}
+	return ""
 }
 
 // listMFADevices returns a mock IAM list-mfa-devices response.
@@ -216,6 +257,11 @@ func listMFADevices() {
 
 	devices := MFADeviceList{
 		MFADevices: []MFADevice{
+			{
+				UserName:     username,
+				SerialNumber: "arn:aws:iam::" + mockAccountID + ":u2f/user/" + username + "/securitykey-MOCKEXAMPLE",
+				EnableDate:   "2024-01-10T10:00:00Z",
+			},
 			{
 				UserName:     username,
 				SerialNumber: mockMFASerial,
@@ -269,6 +315,13 @@ func getSessionToken() {
 	if serialNumber != "" && tokenCode == "" {
 		fmt.Fprintf(os.Stderr, "\nAn error occurred (MissingParameter) when calling the GetSessionToken operation: Missing required parameter TokenCode\n")
 		os.Exit(1)
+	}
+
+	// MOCK_AWS_REFUSE_CODE refuses every code, as AWS refuses one used
+	// already, with AWS's own words.
+	if os.Getenv("MOCK_AWS_REFUSE_CODE") == "true" {
+		fmt.Fprintf(os.Stderr, "\nAn error occurred (AccessDenied) when calling the GetSessionToken operation: MultiFactorAuthentication failed with invalid MFA one time pass code.\n")
+		os.Exit(254)
 	}
 
 	// Simulate invalid token code

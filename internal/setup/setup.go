@@ -1,4 +1,4 @@
-// Package setup provides interactive setup flows for configuring TOTP and AWS MFA credentials.
+// Package setup provides sesh aws setup: storing an AWS profile's MFA key.
 package setup
 
 import (
@@ -8,12 +8,15 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"golang.org/x/term"
 
+	awsCLI "github.com/bashhack/sesh/internal/aws"
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/shell"
@@ -21,26 +24,32 @@ import (
 	"github.com/bashhack/sesh/internal/vault"
 )
 
-// runCommand executes a command and returns its output.
-// It is a variable so we can swap it out in tests.
-var runCommand = func(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output() //nolint:gosec // callers pass the fixed command "aws"; a variable only so tests can swap it
+// The setup's contact with the world, variables so tests can replace them.
+var (
+	awsInstalled = func() error {
+		_, err := exec.LookPath("aws")
+		return err
+	}
+	callerIdentity             = awsCLI.CallerIdentity
+	listMFADevices             = awsCLI.ListMFADevices
+	readPassword               = term.ReadPassword
+	scanQRCode                 = qrcode.ScanQRCodeFull
+	readQRImage                = readTOTPImage
+	validateAndNormalizeSecret = totp.ValidateAndNormalizeSecret
+	stdinIsTerminal            = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+	timeNow                    = time.Now
+	// screenCapture says whether a QR code can be read off the screen:
+	// macOS's screencapture does it.
+	screenCapture = runtime.GOOS == "darwin"
+	// homeDir is where a path typed from ~/ starts.
+	homeDir = os.UserHomeDir
+)
+
+// readTOTPImage reads the TOTP QR code in the image file at path.
+func readTOTPImage(path string) (qrcode.TOTPInfo, error) {
+	_, info, err := qrcode.ReadTOTPFromFile(path)
+	return info, err
 }
-
-// readPassword is a variable so we can swap it out in tests
-var readPassword = term.ReadPassword
-
-// scanQRCodeFull returns full TOTP info (including algorithm, digits, period)
-var scanQRCodeFull = qrcode.ScanQRCodeFull
-
-// timeSleep is a variable so we can swap it out in tests
-var timeSleep = time.Sleep
-
-// validateAndNormalizeSecret is a variable so we can swap it out in tests
-var validateAndNormalizeSecret = totp.ValidateAndNormalizeSecret
-
-// execLookPath is a variable so we can swap it out in tests
-var execLookPath = exec.LookPath
 
 // readLine reads a line of input, returning the trimmed string or an error.
 func readLine(r *bufio.Reader) (string, error) {
@@ -129,18 +138,7 @@ func readOptional(r *bufio.Reader) (answer string, end bool, err error) {
 	return strings.TrimSpace(line), false, nil
 }
 
-// waitForEnter blocks until the user presses Enter.
-func waitForEnter(r *bufio.Reader) error {
-	_, err := r.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("failed to read input: %w", err)
-	}
-	return nil
-}
-
-// AWS Setup Handler
-
-// AWSSetupHandler implements SetupHandler for AWS
+// AWSSetupHandler is sesh aws setup.
 type AWSSetupHandler struct {
 	store  vault.Store
 	reader *bufio.Reader
@@ -154,399 +152,42 @@ func NewAWSSetupHandler(store vault.Store) *AWSSetupHandler {
 	}
 }
 
-// ServiceName returns the name of the service
-func (h *AWSSetupHandler) ServiceName() string {
-	return "aws"
+// profileName is how a profile is named in what the setup says.
+func profileName(profile string) string {
+	if profile == "" {
+		return "the default profile"
+	}
+	return "profile " + profile
 }
 
-// runAWSCommand executes an AWS CLI command with the given profile and args,
-// returning its output. It automatically adds the profile flag if provided.
-func (h *AWSSetupHandler) runAWSCommand(profile string, args ...string) ([]byte, error) {
-	if len(args) == 0 {
-		return nil, fmt.Errorf("runAWSCommand requires at least one argument")
+// Setup stores an AWS profile's MFA key, and the MFA device it's for:
+//  1. it checks the AWS CLI is there, and who the profile signs in as;
+//  2. it reads the key AWS shows for a new authenticator app: typed, or
+//     from a QR code in an image file or on screen (macOS);
+//  3. it saves the key, before AWS is told of it, so nothing that goes
+//     wrong after (the agent locking while you're at the AWS console,
+//     input ending) can lose a key AWS has started using;
+//  4. it gives the two codes the AWS console asks for;
+//  5. it finds the device AWS made, and saves it with the key, with the
+//     entry's folder and tags.
+//
+// profile is --profile or AWS_PROFILE; "" asks, Enter taking the default.
+func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
+	if !stdinIsTerminal() {
+		return errors.New("sesh aws setup asks questions and reads the MFA key at a terminal: run it in one")
 	}
-	if profile != "" {
-		profArgs := append([]string{args[0], "--profile", profile}, args[1:]...)
-		return runCommand("aws", profArgs...)
+	if err := awsInstalled(); err != nil {
+		return errors.New("the AWS CLI isn't installed, and sesh aws uses it: https://aws.amazon.com/cli/")
 	}
-	return runCommand("aws", args...)
-}
-
-// verifyAWSCredentials checks if AWS credentials are properly configured
-// It tries to get the caller identity and returns the user ARN if successful
-// Returns the user ARN and any error that occurred
-func (h *AWSSetupHandler) verifyAWSCredentials(profile string) (string, error) {
-	output, err := h.runAWSCommand(profile, "sts", "get-caller-identity", "--query", "Arn", "--output", "text")
-	if err != nil {
-		return "", fmt.Errorf("failed to get AWS identity (make sure your AWS credentials are configured with 'aws configure'): %w", err)
-	}
-
-	userArn := strings.TrimSpace(string(output))
-
-	fmt.Printf("✅ Found AWS identity: %s\n", userArn)
-
-	return userArn, nil
-}
-
-// captureMFASecret guides the user through capturing the MFA secret
-// Options include manual entry or QR code scanning
-// Returns the captured secret string and any error that occurred
-func (h *AWSSetupHandler) captureMFASecret(choice string) (string, error) {
-	var secretStr string
-
-	switch choice {
-	case "1": // Manual entry
-		fmt.Println(`
-5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code
-6. Click 'Show secret key' and copy the secret key
-		
-❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together`)
-
-		fmt.Print("\n📋 Paste the secret key below and press Enter:\n→ ")
-		secret, err := readPassword(syscall.Stdin)
-		if err != nil {
-			return "", fmt.Errorf("failed to read secret: %w", err)
-		}
-		fmt.Println("✓") // Visual confirmation that input was received
-
-		defer secure.SecureZeroBytes(secret)
-		secretStr = strings.TrimSpace(string(secret))
-
-	case "2": // QR code capture flow with retry
-		fmt.Println(`
-5. Keep the QR code visible on your screen
-
-❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together`)
-
-		var err error
-		secretStr, err = h.captureAWSQRCodeWithFallback()
-		if err != nil {
-			return "", err
-		}
-
-	default:
-		return "", fmt.Errorf("invalid choice, please select 1 or 2")
-	}
-
-	// Validate secret key format (basic check)
-	if len(secretStr) < 16 {
-		return "", fmt.Errorf("secret key seems too short (got %d chars). Please double-check and try again", len(secretStr))
-	}
-
-	return secretStr, nil
-}
-
-// captureAWSQRCodeWithFallback attempts AWS QR capture with retry and manual fallback
-func (h *AWSSetupHandler) captureAWSQRCodeWithFallback() (string, error) {
-	return captureQRWithRetry(h.reader, h.captureAWSManualEntry)
-}
-
-// captureAWSManualEntry handles manual AWS MFA secret entry
-func (h *AWSSetupHandler) captureAWSManualEntry() (string, error) {
-	fmt.Println(`
-5. On the 'Set up virtual MFA device' screen, DO NOT scan the QR code
-6. Click 'Show secret key' and copy the secret key
-		
-❗ DO NOT COMPLETE THE AWS SETUP YET - we'll do that together`)
-
-	fmt.Print("\n📋 Paste the secret key below and press Enter:\n→ ")
-	secret, err := readPassword(syscall.Stdin)
-	if err != nil {
-		return "", fmt.Errorf("failed to read secret: %w", err)
-	}
-	fmt.Println("✓") // Visual confirmation that input was received
-
-	defer secure.SecureZeroBytes(secret)
-	return strings.TrimSpace(string(secret)), nil
-}
-
-// setupMFAConsole generates TOTP codes and guides the user through AWS console setup
-// It displays the codes and instructions for completing setup in the AWS console
-// Returns any error that occurred during code generation
-func (h *AWSSetupHandler) setupMFAConsole(secretStr string) error {
-	// At the time of writing, AWS requires two codes during setup
-	firstCode, secondCode, err := totp.GenerateConsecutiveCodes(secretStr)
-	if err != nil {
-		return fmt.Errorf("failed to generate TOTP codes: %w", err)
-	}
-
-	fmt.Printf(`✅ Generated TOTP codes for AWS setup
-First code: %s
-Second code: %s
-
-IMPORTANT - FOLLOW THESE STEPS:
-1. Enter these codes in the AWS Console
-2. Click the "Add MFA" button to complete setup
-3. Wait for confirmation in the AWS console that setup is complete
-
-Press Enter ONLY AFTER you see "MFA device was successfully assigned" in AWS console...`, firstCode, secondCode)
-	if err := waitForEnter(h.reader); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// selectMFADevice handles listing and selecting an MFA device for the user
-// It queries the AWS API for MFA devices and guides the user through selecting one
-// If no devices are found, it provides retry and manual entry options
-// Returns the MFA device ARN and any error that occurred
-func (h *AWSSetupHandler) selectMFADevice(profile string) (string, error) {
-
-	mfaOutput, err := h.runAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-	var mfaArn string
-
-	// Try to fetch MFA devices, with retries if none are found
-	maxRetries := 2
-	retryCount := 0
-
-mfaDeviceLoop:
-	for {
-		if err == nil && strings.TrimSpace(string(mfaOutput)) != "" {
-			// MFA devices were found, process them
-			mfaDevices := strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
-
-			// Always show the list of devices and let the user choose, even if there's only one.
-			// This handles cases where they already had an MFA device and the new one isn't
-			// showing up yet, or they had a single existing device that isn't the one they just created.
-			fmt.Println("\nFound MFA device(s):")
-			for i, device := range mfaDevices {
-				fmt.Printf("%d: %s\n", i+1, device)
-			}
-
-		selectionPrompt:
-			fmt.Print("\nChoose the MFA device you just created (1-" + fmt.Sprintf("%d", len(mfaDevices)) +
-				"), 'r' to refresh the list, or 'm' to enter manually: ")
-			choice, err := readLine(h.reader)
-			if err != nil {
-				return "", err
-			}
-
-			switch choice {
-			case "r", "R":
-				// Refresh MFA devices list
-				fmt.Println("\n🔄 Refreshing MFA device list...")
-				mfaOutput, err = h.runAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-				if err != nil || strings.TrimSpace(string(mfaOutput)) == "" {
-					fmt.Println("❗ No MFA devices found after refresh.")
-					// Continue to the retry options below
-					break
-				}
-
-				// Show updated list of devices and go back to selection prompt
-				mfaDevices = strings.Split(strings.TrimSpace(string(mfaOutput)), "\t")
-				fmt.Println("\nFound MFA device(s) after refresh:")
-				for i, device := range mfaDevices {
-					fmt.Printf("%d: %s\n", i+1, device)
-				}
-				goto selectionPrompt
-
-			case "m", "M":
-				// Manual entry with validation
-				var err error
-				mfaArn, err = h.promptForMFAARN()
-				if err != nil {
-					return "", err
-				}
-				break mfaDeviceLoop // Exit the entire loop when we've manually entered ARN
-
-			default:
-				// Try to parse as number
-				var index int
-				_, err := fmt.Sscanf(choice, "%d", &index)
-				if err != nil || index < 1 || index > len(mfaDevices) {
-					fmt.Println("\n❌ Invalid choice. Please select a number from the list, 'r' to refresh, or 'm' for manual entry.")
-					goto selectionPrompt
-				}
-
-				mfaArn = mfaDevices[index-1]
-				fmt.Printf("✅ Selected MFA device: %s\n", mfaArn)
-				// MFA device successfully selected
-				break mfaDeviceLoop // Exit the entire for loop with our selected device
-			}
-		}
-
-		// No MFA devices found or error occurred
-		if retryCount >= maxRetries {
-			// We've exhausted our retries, fall back to manual entry with validation
-			fmt.Println("\n❗ No MFA devices found after multiple attempts. You'll need to provide your MFA ARN manually.")
-
-			var err error
-			mfaArn, err = h.promptForMFAARN()
-			if err != nil {
-				return "", err
-			}
-			break mfaDeviceLoop
-		}
-
-		// Offer retry options
-		fmt.Println(`
-❓ No MFA devices were found. This is likely because:
-   • AWS hasn't finished registering your MFA device yet (can take a few seconds)
-   • You may have skipped clicking "Add MFA" in the AWS console
-
-What would you like to do?
-1: Wait 5 seconds and try again (recommended)
-2: Return to AWS Console to complete setup, then try again
-3: Enter your MFA ARN manually
-Enter your choice (1-3): `)
-
-		var retryChoice string
-		retryChoice, err = readLine(h.reader)
-		if err != nil {
-			return "", err
-		}
-
-		switch retryChoice {
-		case "1": // Wait and retry
-			fmt.Println("\n⏳ Waiting 5 seconds for AWS to register your MFA device...")
-			timeSleep(5 * time.Second)
-
-			// Try fetching the MFA device again
-			mfaOutput, err = h.runAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-			retryCount++
-
-		case "2": // Return to console
-			fmt.Println(`
-Please complete these steps in the AWS Console:
-1. Make sure you've clicked "Add MFA" after entering the TOTP codes
-2. Confirm you see "MFA device was successfully assigned" message
-3. Press Enter when complete...`)
-			if waitErr := waitForEnter(h.reader); waitErr != nil {
-				return "", waitErr
-			}
-
-			// Try fetching again
-			mfaOutput, err = h.runAWSCommand(profile, "iam", "list-mfa-devices", "--query", "MFADevices[].SerialNumber", "--output", "text")
-			retryCount++
-
-		case "3": // Manual entry with validation
-			mfaArn, err = h.promptForMFAARN()
-			if err != nil {
-				return "", err
-			}
-			break mfaDeviceLoop // Exit the loop completely
-
-		default: // Invalid input
-			fmt.Println("\n❌ Invalid choice. Please select 1, 2, or 3.")
-			// Stay in the loop and show the options again
-		}
-	}
-
-	return mfaArn, nil
-}
-
-// promptForMFAARN prompts the user to enter an MFA ARN manually
-// It validates the ARN format and ensures it's not empty
-// Returns the validated MFA ARN string and any error that occurred
-func (h *AWSSetupHandler) promptForMFAARN() (string, error) {
-
-	for {
-		fmt.Print("Enter your MFA ARN (format: arn:aws:iam::ACCOUNT_ID:mfa/USERNAME): ")
-		mfaArn, err := h.reader.ReadString('\n')
-		if err != nil {
-			return "", fmt.Errorf("failed to read MFA ARN: %w", err)
-		}
-		mfaArn = strings.TrimSpace(mfaArn)
-
-		if mfaArn == "" {
-			fmt.Println("\u274c MFA ARN cannot be empty. Please enter a valid ARN.")
-			continue
-		}
-
-		// Basic validation could be added here
-		if !strings.HasPrefix(mfaArn, "arn:aws:iam::") || !strings.Contains(mfaArn, ":mfa/") {
-			fmt.Println("\u274c Invalid ARN format. Please enter a valid MFA ARN.")
-			continue
-		}
-
-		return mfaArn, nil
-	}
-}
-
-// promptForMFASetupMethod displays instructions for AWS MFA setup and prompts
-// the user to choose a method for capturing the secret
-// Returns the user's choice as a string
-func (h *AWSSetupHandler) promptForMFASetupMethod() (string, error) {
-	fmt.Println(`
-📱 Let's set up a virtual MFA device for your AWS account
-
-1. Log in to the AWS Console at https://console.aws.amazon.com
-2. Navigate to IAM → Users → Your Username → Security credentials
-3. Under 'Multi-factor authentication (MFA)', click 'Assign MFA device'
-4. Choose 'Virtual MFA device' and click 'Continue'
-
-How would you like to capture the MFA secret?
-1: Enter the secret key manually (click 'Show secret key' in AWS)
-2: Capture QR code from screen (take a screenshot of the QR code)
-Enter your choice (1-2): `)
-
-	choice, err := readLine(h.reader)
-	if err != nil {
-		return "", err
-	}
-
-	if choice != "1" && choice != "2" {
-		return "", fmt.Errorf("invalid choice, please select 1 or 2")
-	}
-
-	return choice, nil
-}
-
-// showSetupCompletionMessage displays the final success message with usage instructions
-func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
-	fmt.Println(`
-✅ Setup complete! You can now use 'sesh' to generate AWS temporary credentials.
-
-🚀 Next steps:
-1. Run 'sesh aws' to generate a temporary session token
-2. The credentials will be automatically exported to your shell
-3. You can now use AWS CLI commands with MFA security`)
+	fmt.Println("🔐 Setting up AWS MFA for sesh")
 
 	if profile == "" {
-		fmt.Println(`
-To use this setup, run without the --profile flag
-(The default AWS profile will be used)`)
-	} else {
-		fmt.Printf("\nTo use this setup, run: sesh aws --profile %s\n", shell.Quote(profile))
+		fmt.Print("AWS CLI profile (Enter for the default profile): ")
+		var err error
+		if profile, err = readLine(h.reader); err != nil {
+			return err
+		}
 	}
-}
-
-// Setup performs the AWS MFA setup process through an interactive CLI flow.
-// The method guides users through the following steps:
-//  1. Verifies AWS CLI is installed
-//  2. Collects the AWS profile name (or uses default)
-//  3. Verifies AWS credentials by checking caller identity
-//  4. Guides the user through setting up a virtual MFA device in AWS Console
-//  5. Captures the MFA secret (either manually or via QR code)
-//  6. Generates TOTP codes and helps with AWS Console MFA setup
-//  7. Helps identify and select the newly created MFA device, with retry and refresh options
-//  8. Stores the MFA secret and its device together in the vault
-//  9. Provides instructions for using the setup with the sesh command
-//
-// The flow includes multiple validation steps, error handling, and user guidance
-// for common issues that might occur during setup, such as delayed MFA device
-// registration in the AWS API.
-//
-// Returns an error if any step in the setup process fails. If successful,
-// the user will be able to generate temporary AWS credentials with MFA protection
-// using the 'sesh' command.
-func (h *AWSSetupHandler) Setup(filing vault.Filing) error {
-	fmt.Println("🔐 Setting up AWS credentials...")
-
-	_, err := execLookPath("aws")
-	if err != nil {
-		return fmt.Errorf("AWS CLI not found. Please install it first: https://aws.amazon.com/cli/")
-	}
-
-	fmt.Println("✅ AWS CLI is installed")
-
-	fmt.Print("Enter AWS CLI profile name (leave empty for default): ")
-	profile, err := readLine(h.reader)
-	if err != nil {
-		return err
-	}
-
 	// Checked before anything else is asked, so a bad name doesn't cost
 	// the whole setup.
 	if err := vault.CheckName("AWS profile", profile); err != nil {
@@ -561,81 +202,289 @@ func (h *AWSSetupHandler) Setup(filing vault.Filing) error {
 		return err
 	}
 	if existing != nil {
-		// Entry exists, prompt for overwrite
-		profileDisplay := profile
-		if profileDisplay == "" {
-			profileDisplay = "default"
+		fmt.Printf("\n⚠️  sesh already has an MFA key for %s.\nReplace it? (y/N): ", profileName(profile))
+		response, err := readLine(h.reader)
+		if err != nil {
+			return err
 		}
-
-		fmt.Printf("\n⚠️  An entry already exists for AWS profile '%s'\n", profileDisplay)
-		fmt.Print("\nOverwrite existing configuration? (y/N): ")
-
-		response, readErr := readLine(h.reader)
-		if readErr != nil {
-			return readErr
+		if r := strings.ToLower(response); r != "y" && r != "yes" {
+			fmt.Printf("Nothing changed: the MFA key for %s is as it was.\n", profileName(profile))
+			return nil
 		}
-		response = strings.ToLower(response)
-
-		if response != "y" && response != "yes" {
-			fmt.Println("\n❌ Setup cancelled")
-			return fmt.Errorf("setup cancelled by user")
-		}
-		fmt.Println() // Add spacing before continuing
 	}
 
-	_, err = h.verifyAWSCredentials(profile)
+	identity, err := callerIdentity(profile)
+	if err != nil {
+		return fmt.Errorf("AWS couldn't say who %s signs in as, so sesh can't set it up: %w\nCheck the profile works with: aws sts get-caller-identity%s", profileName(profile), err, profileFlag(profile))
+	}
+	if strings.Contains(identity, ":assumed-role/") || strings.Contains(identity, ":federated-user/") {
+		return fmt.Errorf("%s signs in as %s, a temporary session (such as SSO or a role); sesh aws needs a profile with an IAM user's own access keys, which AWS gives MFA sessions to", profileName(profile), identity)
+	}
+	fmt.Printf("✅ %s signs in as %s\n", strings.ToUpper(profileName(profile)[:1])+profileName(profile)[1:], identity)
+
+	secret, err := h.captureSecret()
 	if err != nil {
 		return err
 	}
+	defer secure.SecureZeroBytes(secret)
 
-	choice, err := h.promptForMFASetupMethod()
-	if err != nil {
-		return err
-	}
-
-	secretStr, err := h.captureMFASecret(choice)
-	if err != nil {
-		return err
-	}
-
-	// Validate and normalize the TOTP secret
-	normalizedSecret, err := validateAndNormalizeSecret(secretStr)
-	if err != nil {
-		return fmt.Errorf("invalid TOTP secret: %w", err)
-	}
-	secretStr = normalizedSecret
-
-	err = h.setupMFAConsole(secretStr)
-	if err != nil {
-		return err
-	}
-
-	mfaArn, err := h.selectMFADevice(profile)
-	if err != nil {
-		return fmt.Errorf("failed to select MFA device: %w", err)
-	}
-
-	if filing, err = askFiling(h.reader, filing, existing); err != nil {
-		return err
-	}
-
-	// The secret and its device in one write, so a failure leaves no half
-	// setup behind. An entry being replaced keeps its folder, tags (unless
-	// filing changes them), and creation time.
 	entry := vault.Entry{Key: k}
 	if existing != nil {
 		entry = *existing
 		entry.UpdatedAt = time.Time{}
 	}
-	entry.Settings = vault.Settings{AWSMFADevice: mfaArn}
+	entry.Settings = vault.Settings{} // the device is found below
 	filing.Apply(&entry)
-	if err := h.store.Save(&entry, []byte(secretStr)); err != nil {
-		return fmt.Errorf("failed to store the MFA secret: %w", err)
+	if err := h.store.Save(&entry, secret); err != nil {
+		return fmt.Errorf("failed to store the MFA key: %w", err)
+	}
+	fmt.Printf("🔒 Saved the MFA key in the vault, as %s\n", k)
+
+	if err := h.setupMFAConsole(secret); err != nil {
+		return h.keyOnly(k, existing != nil, err)
+	}
+	device, err := h.selectMFADevice(profile, awsCLI.AccountOf(identity))
+	if err != nil {
+		return h.keyOnly(k, existing != nil, err)
+	}
+	if filing, err = askFiling(h.reader, filing, existing); err != nil {
+		return h.keyOnly(k, existing != nil, err)
+	}
+	entry.Settings = vault.Settings{AWSMFADevice: device}
+	filing.Apply(&entry)
+	if err := h.store.Save(&entry, secret); err != nil {
+		return h.keyOnly(k, existing != nil, fmt.Errorf("failed to store the MFA device: %w", err))
 	}
 
 	h.showSetupCompletionMessage(profile)
-
 	return nil
+}
+
+// keyOnly is err from a setup that saved the key but not its device:
+// what's kept, and what to do.
+func (h *AWSSetupHandler) keyOnly(k vault.Key, replaced bool, err error) error {
+	msg := fmt.Sprintf("%v\nThe MFA key is saved, as %s, but not which MFA device it's for: sesh aws asks AWS for it, or run sesh aws setup again to choose it.", err, k)
+	if replaced {
+		msg += fmt.Sprintf("\nIf AWS didn't finish adding the device, the key this one replaced is in the entry's history: sesh history %s", shell.Quote(k.String()))
+	}
+	return errors.New(msg)
+}
+
+// profileFlag is --profile P for a named profile, to add to a command.
+func profileFlag(profile string) string {
+	if profile == "" {
+		return ""
+	}
+	return " --profile " + shell.Quote(profile)
+}
+
+// captureSecret reads the MFA key AWS shows for a new authenticator app,
+// asking again until it's one: typed, or from a QR code. The caller zeroes
+// the key.
+func (h *AWSSetupHandler) captureSecret() ([]byte, error) {
+	fmt.Println(`
+In the AWS console (https://console.aws.amazon.com):
+  1. Go to IAM, then Users, your user, and Security credentials.
+  2. Under "Multi-factor authentication (MFA)", choose "Assign MFA device".
+  3. Name it, choose "Authenticator app", and choose Next.
+  4. Leave that page open: sesh reads its key, then gives you the two
+     codes it asks for. Don't choose "Add MFA" yet.`)
+	choices := "1-2"
+	if screenCapture {
+		choices = "1-3"
+	}
+	for {
+		fmt.Println(`
+How should sesh read the key?
+  1: Type or paste it (on that page, choose "Show secret key")
+  2: Read the QR code from an image file (a screenshot of it)`)
+		if screenCapture {
+			fmt.Println("  3: Select the QR code on screen")
+		}
+		fmt.Printf("Choice (%s): ", choices)
+		choice, err := readLine(h.reader)
+		if err != nil {
+			return nil, err
+		}
+		var raw []byte
+		switch {
+		case choice == "1":
+			fmt.Print("Secret key (hidden as you type or paste it): ")
+			raw, err = readPassword(syscall.Stdin)
+			fmt.Println()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read the secret key: %w", err)
+			}
+		case choice == "2":
+			fmt.Print("Image file (a full path, or one starting with ~/): ")
+			path, err := readLine(h.reader)
+			if err != nil {
+				return nil, err
+			}
+			if path, err = expandHome(path); err != nil {
+				fmt.Printf("❌ %v\n", err)
+				continue
+			}
+			info, err := readQRImage(path)
+			if err != nil {
+				fmt.Printf("❌ %v\n", err)
+				continue
+			}
+			raw = []byte(info.Secret)
+		case choice == "3" && screenCapture:
+			fmt.Print("Press Enter, then drag across the QR code (Esc cancels)...")
+			if _, err := readLine(h.reader); err != nil {
+				return nil, err
+			}
+			info, err := scanQRCode()
+			if err != nil {
+				fmt.Printf("❌ %v\n", err)
+				continue
+			}
+			raw = []byte(info.Secret)
+		default:
+			fmt.Printf("❌ Choose %s.\n", strings.Replace(choices, "-", " to ", 1))
+			continue
+		}
+		normalized, err := validateAndNormalizeSecret(strings.TrimSpace(string(raw)))
+		secure.SecureZeroBytes(raw)
+		if err != nil {
+			fmt.Printf("❌ That isn't a key sesh can make codes from: %v\n", err)
+			continue
+		}
+		fmt.Println("✅ Read the key")
+		return []byte(normalized), nil
+	}
+}
+
+// expandHome is path with a leading ~/ made the home folder; another
+// relative path is refused, since where it starts isn't clear.
+func expandHome(path string) (string, error) {
+	switch {
+	case path == "":
+		return "", errors.New("no file given")
+	case strings.HasPrefix(path, "~/"):
+		home, err := homeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, path[2:]), nil
+	case !filepath.IsAbs(path):
+		return "", fmt.Errorf("give a full path, or one starting with ~/, not %q", path)
+	}
+	return path, nil
+}
+
+// setupMFAConsole gives the two codes the AWS console asks for, and waits
+// until AWS has the device; n makes new codes, for when AWS says the first
+// ones are wrong (they were made too long before).
+func (h *AWSSetupHandler) setupMFAConsole(secret []byte) error {
+	for {
+		first, second, err := totp.GenerateConsecutiveCodesForTimeBytes(secret, timeNow())
+		if err != nil {
+			return fmt.Errorf("failed to make the codes: %w", err)
+		}
+		fmt.Printf(`
+The two codes AWS asks for:
+  MFA code 1: %s
+  MFA code 2: %s
+Enter them, choose "Add MFA", and wait for AWS to say the device was added.
+Then press Enter here (or n, and Enter, for new codes if AWS says these are wrong): `, first, second)
+		answer, err := readLine(h.reader)
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(answer, "n") {
+			return nil
+		}
+	}
+}
+
+// selectMFADevice finds the device AWS made for the key: chosen from the
+// authenticator apps AWS lists for the user, or typed. account is the
+// profile's account, which a typed device has to be in.
+func (h *AWSSetupHandler) selectMFADevice(profile, account string) (string, error) {
+	for {
+		devices, err := listMFADevices(profile)
+		if err != nil {
+			fmt.Printf("\n❌ sesh couldn't list the user's MFA devices: %v\n", err)
+			return h.promptForMFAARN(account)
+		}
+		if len(devices) == 0 {
+			fmt.Print("\nAWS lists no authenticator app for this user yet; it can take a few seconds after \"Add MFA\".\nPress Enter to look again, or m and Enter to type the device's ARN: ")
+			answer, err := readLine(h.reader)
+			if err != nil {
+				return "", err
+			}
+			if strings.EqualFold(answer, "m") {
+				return h.promptForMFAARN(account)
+			}
+			continue
+		}
+		fmt.Println("\nThe user's authenticator apps in AWS:")
+		for i, d := range devices {
+			fmt.Printf("  %d: %s\n", i+1, d)
+		}
+		for {
+			fmt.Printf("Choose the one you just added (%s), r to look again, or m to type its ARN: ", numbers(len(devices)))
+			answer, err := readLine(h.reader)
+			if err != nil {
+				return "", err
+			}
+			var n int
+			switch _, scanErr := fmt.Sscanf(answer, "%d", &n); {
+			case strings.EqualFold(answer, "r"):
+			case strings.EqualFold(answer, "m"):
+				return h.promptForMFAARN(account)
+			case scanErr == nil && fmt.Sprint(n) == answer && n >= 1 && n <= len(devices):
+				fmt.Printf("✅ MFA device: %s\n", devices[n-1])
+				return devices[n-1], nil
+			default:
+				fmt.Printf("❌ Choose %s, r or m.\n", strings.Replace(numbers(len(devices)), "-", " to ", 1))
+				continue
+			}
+			break // r: look again
+		}
+	}
+}
+
+// numbers is 1-n, or 1 when n is 1.
+func numbers(n int) string {
+	if n == 1 {
+		return "1"
+	}
+	return fmt.Sprintf("1-%d", n)
+}
+
+// promptForMFAARN asks for the device's ARN until it's an authenticator
+// app's, in account (when it's known).
+func (h *AWSSetupHandler) promptForMFAARN(account string) (string, error) {
+	example := "arn:aws:iam::ACCOUNT:mfa/NAME"
+	if account != "" {
+		example = "arn:aws:iam::" + account + ":mfa/NAME"
+	}
+	for {
+		fmt.Printf("MFA device ARN (%s): ", example)
+		arn, err := readLine(h.reader)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case !awsCLI.IsVirtualMFADevice(arn):
+			fmt.Println("❌ That isn't an authenticator app's ARN: it's shown on the user's Security credentials page, under MFA.")
+		case account != "" && awsCLI.AccountOf(arn) != account:
+			fmt.Printf("❌ That device is in account %s, but the profile signs in to account %s.\n", awsCLI.AccountOf(arn), account)
+		default:
+			return arn, nil
+		}
+	}
+}
+
+// showSetupCompletionMessage says the setup is done, and how to use it.
+func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
+	shellCmd, clipCmd := "sesh aws"+profileFlag(profile), "sesh aws"+profileFlag(profile)+" --clip"
+	fmt.Printf("\n✅ AWS MFA is set up for %s.\n   %-*s  opens a shell with a session's credentials\n   %-*s  copies a code, for signing in to the AWS console\n",
+		profileName(profile), len(clipCmd), shellCmd, len(clipCmd), clipCmd)
 }
 
 // existingEntry returns the entry store holds at k, or nil when there's none.
@@ -650,71 +499,3 @@ func existingEntry(store vault.Store, k vault.Key) (*vault.Entry, error) {
 		return nil, fmt.Errorf("failed to check for an existing entry: %w", err)
 	}
 }
-
-// captureQRWithRetry is a shared helper for QR code capture with retry logic.
-// Returns just the secret string (for backward compatibility).
-func captureQRWithRetry(reader *bufio.Reader, manualEntryFunc func() (string, error)) (string, error) {
-	info, err := captureQRWithRetryFull(reader, manualEntryFunc)
-	if err != nil {
-		return "", err
-	}
-	return info.Secret, nil
-}
-
-// captureQRWithRetryFull captures a QR code with retry logic and returns full TOTP info
-// (including algorithm, digits, period). Falls back to manual entry with default params.
-func captureQRWithRetryFull(reader *bufio.Reader, manualEntryFunc func() (string, error)) (qrcode.TOTPInfo, error) {
-	maxRetries := 2
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		fmt.Printf("📸 QR capture attempt %d/%d\n", attempt, maxRetries)
-		fmt.Println("Position your cursor at the top-left of the QR code, then click and drag to the bottom-right")
-		fmt.Print("Press Enter to activate screenshot mode...")
-		if err := waitForEnter(reader); err != nil {
-			return qrcode.TOTPInfo{}, err
-		}
-
-		info, err := scanQRCodeFull()
-		if err == nil {
-			fmt.Println("✅ QR code successfully captured and decoded!")
-			if info.Issuer != "" {
-				fmt.Printf("   Issuer: %s\n", info.Issuer)
-			}
-			return info, nil
-		}
-
-		fmt.Printf("❌ QR capture failed: %v\n", err)
-
-		if attempt < maxRetries {
-			fmt.Println("💡 Tips: Check screen brightness, QR code size, and cursor positioning")
-			fmt.Print("Press Enter to try again, or 'm' to switch to manual entry: ")
-			choice, readErr := readLine(reader)
-			if readErr != nil {
-				return qrcode.TOTPInfo{}, readErr
-			}
-			if strings.EqualFold(choice, "m") {
-				fmt.Println("Switching to manual entry...")
-				secret, err := manualEntryFunc()
-				return qrcode.TOTPInfo{Secret: secret}, err
-			}
-		}
-	}
-
-	// Final fallback after all retries
-	fmt.Println("\n❓ QR capture failed after multiple attempts.")
-	fmt.Print("Would you like to enter the secret manually instead? (y/n): ")
-	fallback, err := readLine(reader)
-	if err != nil {
-		return qrcode.TOTPInfo{}, err
-	}
-
-	if strings.EqualFold(fallback, "y") {
-		secret, err := manualEntryFunc()
-		return qrcode.TOTPInfo{Secret: secret}, err
-	}
-
-	return qrcode.TOTPInfo{}, fmt.Errorf("QR capture failed after %d attempts and user declined manual entry", maxRetries)
-}
-
-// confirmCaseTwin asks before the setup makes k when an entry's name
-// differs from it only in case: names are case-sensitive, so it would be a

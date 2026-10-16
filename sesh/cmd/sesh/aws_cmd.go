@@ -89,10 +89,7 @@ func runAWS(app *App, args []string) error {
 	defer closeAuditStore(store)
 	p = flags.WithStore(store)
 	if setupAsked {
-		if err := setup.NewAWSSetupHandler(store).Setup(p.Filing()); err != nil {
-			return fmt.Errorf("setup failed: %w", err)
-		}
-		return nil
+		return setup.NewAWSSetupHandler(store).Setup(p.GetProfile(), p.Filing())
 	}
 	switch {
 	case *clip:

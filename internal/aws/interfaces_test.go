@@ -42,7 +42,7 @@ func TestDefaultProviderGetSessionToken(t *testing.T) {
 	}
 
 	provider := NewDefaultProvider()
-	creds, err := provider.GetSessionToken("test-profile", "test-serial", []byte("123456"))
+	creds, err := provider.GetSessionToken("test-profile", "arn:aws:iam::123456789012:mfa/test-serial", []byte("123456"))
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
@@ -61,7 +61,7 @@ func TestDefaultProviderGetFirstMFADevice(t *testing.T) {
 		mockResp := ListDevicesResponse{
 			MFADevices: []MFADevice{
 				{
-					SerialNumber: "test-serial",
+					SerialNumber: "arn:aws:iam::123456789012:mfa/test-serial",
 				},
 			},
 		}
@@ -80,7 +80,7 @@ func TestDefaultProviderGetFirstMFADevice(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
-	if serial != "test-serial" {
-		t.Errorf("Expected serial 'test-serial', got '%s'", serial)
+	if serial != "arn:aws:iam::123456789012:mfa/test-serial" {
+		t.Errorf("Expected serial 'arn:aws:iam::123456789012:mfa/test-serial', got '%s'", serial)
 	}
 }

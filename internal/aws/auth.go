@@ -4,8 +4,8 @@ package aws
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 
@@ -27,12 +27,13 @@ type Credentials struct {
 	Expiration      string `json:"Expiration"`
 }
 
-// ZeroSecrets zeroes out the sensitive fields in the credentials
-func (c *Credentials) ZeroSecrets() {
+// Clear drops the credentials' values. Go can't overwrite a string's
+// bytes, so this only stops c holding them; the strings stay in memory
+// until the garbage collector reuses it.
+func (c *Credentials) Clear() {
 	if c == nil {
 		return
 	}
-	secure.ZeroStrings(c.AccessKeyID, c.SecretAccessKey, c.SessionToken)
 	c.AccessKeyID = ""
 	c.SecretAccessKey = ""
 	c.SessionToken = ""
@@ -54,39 +55,15 @@ type ListDevicesResponse struct {
 }
 
 // GetSessionToken calls aws sts get-session-token with the given MFA serial and TOTP code,
-// returning temporary credentials. The code byte slice is zeroed after use.
+// returning temporary credentials. The code goes on the AWS CLI's command
+// line, where ps can see it while the CLI runs; it's a one-time code.
 func GetSessionToken(profile, serial string, code []byte) (Credentials, error) {
-	// Convert code to string for command execution but ensure it's zeroed
-	codeStr := string(code)
-	defer secure.SecureZeroString(codeStr)
-
-	args := []string{"sts", "get-session-token",
+	cmd := execCommand("aws", CLIArgs(profile, "sts", "get-session-token",
 		"--serial-number", serial,
-		"--token-code", codeStr,
+		"--token-code", string(code),
 		"--output", "json",
-	}
-	if profile != "" {
-		args = append(args, "--profile", profile)
-	}
-
-	cmd := execCommand("aws", args...)
-
-	// Create a clean environment without any AWS credential variables
-	// to avoid interference with the command execution,
-	// ensuring consistent behavior regardless of the user's
-	// current environment state
-	env := os.Environ()
-	cleanEnv := make([]string, 0, len(env))
-	for _, e := range env {
-		// Filter out all AWS credential variables that might interfere
-		if !strings.HasPrefix(e, "AWS_SESSION_TOKEN=") &&
-			!strings.HasPrefix(e, "AWS_SECURITY_TOKEN=") &&
-			!strings.HasPrefix(e, "AWS_ACCESS_KEY_ID=") &&
-			!strings.HasPrefix(e, "AWS_SECRET_ACCESS_KEY=") {
-			cleanEnv = append(cleanEnv, e)
-		}
-	}
-	cmd.Env = cleanEnv
+	)...)
+	cmd.Env = CLIEnv(profile)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -100,7 +77,10 @@ func GetSessionToken(profile, serial string, code []byte) (Credentials, error) {
 		msg := strings.TrimSpace(stderr.String())
 		secure.SecureZeroBytes(stdout.Bytes())
 		secure.SecureZeroBytes(stderr.Bytes())
-		return Credentials{}, fmt.Errorf("failed to run aws sts get-session-token: %w\nStderr: %s", err, msg)
+		if msg == "" {
+			return Credentials{}, fmt.Errorf("aws sts get-session-token: %w", err)
+		}
+		return Credentials{}, fmt.Errorf("aws sts get-session-token: %s", msg)
 	}
 
 	// Note: out shares the same backing array as stdout.Bytes(), so the
@@ -120,27 +100,15 @@ func GetSessionToken(profile, serial string, code []byte) (Credentials, error) {
 	return parsed.Credentials, nil
 }
 
-// GetFirstMFADevice returns the serial number of the first MFA device associated
-// with the IAM user for the given AWS CLI profile.
+// GetFirstMFADevice returns the first virtual MFA device (authenticator
+// app) of the IAM user profile signs in as.
 func GetFirstMFADevice(profile string) (string, error) {
-	args := []string{"iam", "list-mfa-devices", "--output", "json"}
-	if profile != "" {
-		args = append(args, "--profile", profile)
-	}
-
-	out, err := execCommand("aws", args...).Output()
+	devices, err := ListMFADevices(profile)
 	if err != nil {
-		return "", fmt.Errorf("failed to list MFA devices: %w", err)
+		return "", err
 	}
-
-	var parsed ListDevicesResponse
-	if err := json.Unmarshal(out, &parsed); err != nil {
-		return "", fmt.Errorf("failed to parse device list: %w", err)
+	if len(devices) == 0 {
+		return "", errors.New("AWS lists no authenticator app as an MFA device for this profile's user: set one up with sesh aws setup")
 	}
-
-	if len(parsed.MFADevices) == 0 {
-		return "", &MFADeviceNotFoundError{Message: "no MFA devices found"}
-	}
-
-	return parsed.MFADevices[0].SerialNumber, nil
+	return devices[0], nil
 }
