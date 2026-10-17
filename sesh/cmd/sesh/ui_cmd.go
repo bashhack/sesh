@@ -223,7 +223,8 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 			}
 			return tui.Live{OldAfter: time.Duration(now.HealthOldAfterDays.Value) * 24 * time.Hour}, nil
 		},
-		Now: time.Now,
+		Now:                time.Now,
+		PasswordChangeNote: func() string { return syncKeyChangeWarning(cfg) },
 		ChangePassword: func(current, next []byte) (tui.Changed, error) {
 			return uiChangePassword(cfg, current, next)
 		},

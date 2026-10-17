@@ -340,3 +340,29 @@ func TestWriteSyncSummary_Warnings(t *testing.T) {
 		t.Errorf("warnings only: %q, %v", out, err)
 	}
 }
+
+// A syncing vault with weaker key settings isn't told to change its master
+// password, which would cut it off its sync folder; sesh passwd warns.
+func TestSync_KeyChangeWarnings(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	t.Setenv("SESH_BACKUP_EVERY_DAYS", "0")
+	dir := t.TempDir()
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	if _, err := runSyncOut(t, "", false, "init", filepath.Join(dir, "sync")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESH_KDF_MEMORY", "32MiB")
+	out, _ := runDoctorOut(t) //nolint:errcheck // checked by the output
+	if !strings.Contains(out, "weaker than configured") || strings.Contains(out, "       sesh passwd\n") || !strings.Contains(out, "would cut this vault off its sync folder") {
+		t.Errorf("doctor, syncing with weaker settings:\n%s", out)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, stderr := rekeyTestApp("n\n")
+	if err := runRekey(app, nil, rotateTestCfg("sync-password-1234")); err != nil {
+		t.Fatalf("passwd: %v\n%s", err, stderr)
+	}
+	if !strings.Contains(stderr.String(), "⚠️  This vault syncs with") || !strings.Contains(stderr.String(), "Rotation cancelled") {
+		t.Errorf("passwd's warning:\n%s", stderr)
+	}
+}

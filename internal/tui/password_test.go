@@ -371,3 +371,16 @@ func TestRevealHintKeepsLines(t *testing.T) {
 		a.press("backspace")
 	}
 }
+
+// The form says what a change does to syncing, when the vault syncs.
+func TestChangePasswordSyncNote(t *testing.T) {
+	a := newApp(t, newFake(), Options{
+		Settings:           func() ([]Setting, error) { return nil, nil },
+		ChangePassword:     func([]byte, []byte) (Changed, error) { return Changed{}, nil },
+		PasswordChangeNote: func() string { return "This vault syncs with ~/sync: after the change it can't sync." },
+	})
+	a.press("ctrl+g", ",", "enter")
+	if a.form == nil || !strings.Contains(a.screen(), "This vault syncs with ~/sync") {
+		t.Errorf("the form:\n%s", a.screen())
+	}
+}

@@ -119,7 +119,7 @@ func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) erro
 
 	agentUnlocked := checkAgent(c, mat, matErr)
 	if matErr == nil {
-		checkKeySettings(c, mat.Params, cfg.KDF())
+		checkKeySettings(c, mat.Params, cfg.KDF(), syncKeyChangeWarning(cfg) != "")
 	} else {
 		c.row(markNone, "Key settings", "unknown: the key record is damaged")
 	}
@@ -267,7 +267,7 @@ func agentUnlocks(st *agent.StatusResponse, known bool, id string) bool {
 
 // checkKeySettings warns when the vault's key was made with weaker
 // Argon2id settings than the ones configured now.
-func checkKeySettings(c *doctorChecks, have, want kdf.Params) {
+func checkKeySettings(c *doctorChecks, have, want kdf.Params, syncs bool) {
 	desc := describeKDF(have)
 	// Weaker means no setting higher and one lower; threads don't change
 	// what guessing costs. A mix (more memory, fewer passes) isn't weaker,
@@ -275,6 +275,11 @@ func checkKeySettings(c *doctorChecks, have, want kdf.Params) {
 	weaker := have.Memory <= want.Memory && have.Time <= want.Time && (have.Memory < want.Memory || have.Time < want.Time)
 	if weaker {
 		c.row(markWarn, "Key settings", desc+": weaker than configured", "configured: "+describeKDF(want))
+		if syncs {
+			// Applying them makes a new key, which syncing can't follow.
+			c.todo("The configured settings apply with a master password change, which would cut this vault off its sync folder: a change doesn't sync between computers yet. Keep these until it does.")
+			return
+		}
 		c.todo("Apply the configured settings by changing the master password (it can be the same one):", "sesh passwd")
 		return
 	}

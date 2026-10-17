@@ -364,6 +364,9 @@ type Options struct {
 	// which it wipes, and opens the vault again with next; an error means
 	// nothing changed. nil: it isn't offered.
 	ChangePassword func(current, next []byte) (Changed, error)
+	// PasswordChangeNote, when set, is said under the form changing the
+	// master password: what the change does to syncing, or "".
+	PasswordChangeNote func() string
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)

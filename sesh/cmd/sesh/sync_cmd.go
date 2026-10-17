@@ -118,6 +118,19 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 	return f, nil
 }
 
+// syncKeyChangeWarning says what a master password change does to syncing,
+// for a vault that syncs, or synced and could join its folder again; ""
+// for one that never did. A change doesn't sync between computers yet.
+func syncKeyChangeWarning(cfg *config.Config) string {
+	if cfg.SyncDir.Value != "" {
+		return fmt.Sprintf("This vault syncs with %s: after the change it can't sync with the other computers, as a master password change doesn't sync between them yet. To sync again, it would have to join the folder as a new vault (sesh sync join says how).", tildePath(cfg.SyncDir.Value))
+	}
+	if id, err := database.VaultSyncFolder(cfg.DBPath.Value); err == nil && id != "" {
+		return "This vault synced with a sync folder before: after the change it can't join that folder again where it stopped, as a master password change doesn't sync between computers yet."
+	}
+	return ""
+}
+
 // errInfoLost is a sync folder that lost its InfoFile, which a sync from
 // this vault writes again.
 var errInfoLost = errors.New("sesh sync writes it again from this vault, which synced with it")
