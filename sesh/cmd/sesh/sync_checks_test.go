@@ -370,7 +370,7 @@ func TestSync_KeyChangeWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w := syncKeyChangeWarning(cfg, true); !strings.Contains(w, "Joining the folder again takes the master password they have") || !strings.Contains(w, "sesh sync init <folder>") {
+	if w := syncKeyChangeWarning(cfg, true); !strings.Contains(w, "Joining the folder again takes the master password they have") || !strings.Contains(w, "sesh sync init <folder>") || !strings.Contains(w, "entries deleted there come back") {
 		t.Errorf("recover's warning: %q", w)
 	}
 

@@ -262,7 +262,7 @@ func TestSync_JoinCases(t *testing.T) {
 		t.Errorf("join with no terminal: %q, %v", out, err)
 	}
 	err := joinRefused(database.ErrRejoinOtherKey, folder)
-	if !errors.Is(err, database.ErrRejoinOtherKey) || !strings.Contains(err.Error(), "doesn't sync between computers yet") || strings.Contains(err.Error(), "Joining takes") {
+	if !errors.Is(err, database.ErrRejoinOtherKey) || !strings.Contains(err.Error(), "doesn't sync between computers yet") || strings.Contains(err.Error(), "Joining takes") || strings.Contains(err.Error(), "sesh sync leave") {
 		t.Errorf("a master password changed since: %v", err)
 	}
 }
@@ -303,7 +303,7 @@ func TestSync_JoinRefuses(t *testing.T) {
 	if out, err := runSyncOut(t, "", false, "init", folder); err == nil || !strings.Contains(err.Error(), "is a sync folder already") {
 		t.Errorf("init on another's folder: %q, %v", out, err)
 	}
-	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || !strings.Contains(err.Error(), "already has entries") || !strings.Contains(err.Error(), "sesh export") {
+	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || !strings.Contains(err.Error(), "already has entries") || !strings.Contains(err.Error(), "sesh export") || !strings.Contains(err.Error(), "come back, as new ones") {
 		t.Errorf("join with entries: %q, %v", out, err)
 	}
 

@@ -111,7 +111,7 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 	}
 	if database.UnlockID(info.Key.Verify) != database.UnlockID(m.Verify) {
 		if id, err := database.VaultSyncFolder(cfg.DBPath.Value); err == nil && id == info.FolderID {
-			return f, rejoinOtherKey(f.Dir())
+			return f, rejoinOtherKey(f.Dir(), true)
 		}
 		return f, fmt.Errorf("the sync folder %s is for another master password than this vault's: a folder for other vaults", tildePath(f.Dir()))
 	}
@@ -127,7 +127,7 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 func syncKeyChangeWarning(cfg *config.Config, recovering bool) string {
 	if cfg.SyncDir.Value != "" {
 		if recovering {
-			return fmt.Sprintf("This vault syncs with %s: after the change it can't sync with the other computers, as a master password change doesn't sync between them yet. Joining the folder again takes the master password they have; without it, stop syncing (sesh sync leave) and make a new sync folder from this vault (sesh sync init <folder>), for the other computers to join.", tildePath(cfg.SyncDir.Value))
+			return fmt.Sprintf("This vault syncs with %s: after the change it can't sync with the other computers, as a master password change doesn't sync between them yet. Joining the folder again takes the master password they have; without it, stop syncing (sesh sync leave) and make a new sync folder from this vault (sesh sync init <folder>), for the other computers to join; what they changed or deleted since this vault last synced isn't in it (entries deleted there come back).", tildePath(cfg.SyncDir.Value))
 		}
 		return fmt.Sprintf("This vault syncs with %s: after the change it can't sync with the other computers, as a master password change doesn't sync between them yet. To sync again, it would have to join the folder as a new vault (sesh sync join says how).", tildePath(cfg.SyncDir.Value))
 	}
@@ -729,18 +729,22 @@ func syncJoin(app *App, arg string) error {
 // when it has entries.
 func joinRefused(err error, dir string) error {
 	if errors.Is(err, database.ErrRejoinOtherKey) {
-		return rejoinOtherKey(dir)
+		return rejoinOtherKey(dir, false)
 	}
 	if errors.Is(err, database.ErrVaultNotEmpty) {
-		return fmt.Errorf("%w. Joining takes a new or empty vault, or one joining again the folder it left. To bring its entries along: sesh export --file F, move the vault's files aside (the vault, any -wal and -shm files beside it, and touchid.key), sesh sync join %s, then sesh import --from sesh F", err, shellPath(dir))
+		return fmt.Errorf("%w. Joining takes a new or empty vault, or one joining again the folder it left. To bring its entries along: sesh export --file F, move the vault's files aside (the vault, any -wal and -shm files beside it, and touchid.key), sesh sync join %s, then sesh import --from sesh F (entries deleted elsewhere since this vault last synced come back, as new ones)", err, shellPath(dir))
 	}
 	return err
 }
 
 // rejoinOtherKey is a vault that synced with the folder at dir, its master
 // password, or the folder's, changed since, and what it can do.
-func rejoinOtherKey(dir string) error {
-	return fmt.Errorf("%w, so it can't go on where it stopped: a master password change doesn't sync between computers yet. To sync it anyway: sesh sync leave, sesh export --file F, move the vault's files aside (the vault, any -wal and -shm files beside it, and touchid.key), sesh sync join %s, then sesh import --from sesh F (entries deleted elsewhere since it left come back, as new ones). Joining needs the master password the other computers have; without it, make a new sync folder from this vault (sesh sync init <folder>) for them to join", database.ErrRejoinOtherKey, shellPath(dir))
+func rejoinOtherKey(dir string, syncing bool) error {
+	leave := ""
+	if syncing {
+		leave = "sesh sync leave, "
+	}
+	return fmt.Errorf("%w, so it can't go on where it stopped: a master password change doesn't sync between computers yet. To sync it anyway: %ssesh export --file F, move the vault's files aside (the vault, any -wal and -shm files beside it, and touchid.key), sesh sync join %s, then sesh import --from sesh F (entries deleted elsewhere since it left come back, as new ones). Joining needs the master password the other computers have; without it, make a new sync folder from this vault (sesh sync init <folder>) for them to join", database.ErrRejoinOtherKey, leave, shellPath(dir))
 }
 
 // joinPassword asks for the master password of the vaults syncing through
