@@ -378,9 +378,14 @@ How should sesh read the key?
 		fromEntry = false
 		switch {
 		case strings.EqualFold(choice, "e"):
-			key, keyErr := h.entryKey(k)
+			src, srcErr := h.entrySource(k)
+			if srcErr != nil {
+				fmt.Printf("❌ %v\n", srcErr)
+				continue
+			}
+			key, keyErr := h.store.Get(src)
 			if keyErr != nil {
-				fmt.Printf("❌ %v\n", keyErr)
+				fmt.Println("❌ That entry's key can't be read: sesh doctor says why")
 				continue
 			}
 			raw, fromEntry = key, true
@@ -434,30 +439,30 @@ How should sesh read the key?
 	}
 }
 
-// entryKey asks for a TOTP entry's ID and returns its key, which must make
+// entrySource asks for a TOTP entry's ID and returns it; the entry must make
 // AWS's codes (6 digits every 30 seconds, SHA-1); k is the entry being set
 // up, which can't be its own source.
-func (h *AWSSetupHandler) entryKey(k vault.Key) ([]byte, error) {
+func (h *AWSSetupHandler) entrySource(k vault.Key) (vault.Key, error) {
 	fmt.Print("The entry's ID (sesh list totp shows them): ")
 	id, err := readLine(h.reader)
 	if err != nil {
-		return nil, err
+		return vault.Key{}, err
 	}
 	src, err := vault.ParseKey(id)
 	switch {
 	case err != nil || src.Kind != vault.KindTOTP:
-		return nil, fmt.Errorf("%q isn't a TOTP entry's ID, such as totp/github/alice", id)
+		return vault.Key{}, fmt.Errorf("%q isn't a TOTP entry's ID, such as totp/github/alice", id)
 	case src == k:
-		return nil, fmt.Errorf("%s is the entry being set up", k)
+		return vault.Key{}, fmt.Errorf("%s is the entry being set up", k)
 	}
 	e, err := h.store.Lookup(src)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", src, err)
+		return vault.Key{}, fmt.Errorf("%s: %w", src, err)
 	}
 	if !awsCodes(e.Settings.TOTP) {
-		return nil, fmt.Errorf("%s makes codes AWS doesn't use (AWS's are 6 digits every 30 seconds, with SHA-1)", src)
+		return vault.Key{}, fmt.Errorf("%s makes codes AWS doesn't use (AWS's are 6 digits every 30 seconds, with SHA-1)", src)
 	}
-	return h.store.Get(src)
+	return src, nil
 }
 
 // awsCodes says whether p makes AWS's codes: SHA-1, 6 digits, every 30
