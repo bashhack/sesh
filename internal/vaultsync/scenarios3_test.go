@@ -293,8 +293,9 @@ func TestSync_RestoredValuesWin(t *testing.T) {
 			settleN(t, f, 6, laptop, desktop)
 			d, _ := laptop.store.Details(gh, "") //nolint:errcheck // test
 			t.Logf("%s: laptop %q desktop %q; notes %q", how, laptop.secret(gh), desktop.secret(gh), d.Notes)
-			if string(d.Notes) != "restored-notes" {
-				t.Errorf("%s: restored notes didn't win", how)
+			// The restored notes win, the folder's kept below them.
+			if !strings.HasPrefix(string(d.Notes), "restored-notes") || !strings.Contains(string(d.Notes), "folder-notes") {
+				t.Errorf("%s: notes %q", how, d.Notes)
 			}
 			if laptop.secret(gh) != "restored-pw" || desktop.secret(gh) != "restored-pw" {
 				t.Errorf("%s: the restored value didn't win (laptop %q, desktop %q)", how, laptop.secret(gh), desktop.secret(gh))

@@ -630,11 +630,16 @@ type forgetMark struct {
 func markForgotten(tx *sql.Tx, k vault.Key, marks []forgetMark) error {
 	now := time.Now().UTC()
 	for _, m := range marks {
-		// No earlier than it was replaced, by whichever computer's clock:
-		// so it's forgotten wherever that's ahead of this one's.
+		// No earlier than it was replaced, by whichever computer's clock,
+		// so it's forgotten wherever that's ahead of this one's; but no
+		// more than a day ahead of this one's, so a clock set far wrong
+		// can't keep the same secret, used again later, forgotten.
 		at := now
 		if m.replaced.After(at) {
 			at = m.replaced.UTC()
+		}
+		if limit := now.Add(24 * time.Hour); at.After(limit) {
+			at = limit
 		}
 		if _, err := tx.Exec(`INSERT INTO history_forgotten (uid, hash, at) SELECT uid, ?, ? FROM entries WHERE kind = ? AND service = ? AND username = ?
 			ON CONFLICT (uid, hash) DO UPDATE SET at = excluded.at`,

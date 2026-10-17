@@ -99,7 +99,7 @@ func inspect(path, what string) (_ BackupSummary, err error) {
 // the same, quiet_writes, which is empty outside a write, and what sync
 // keeps: sync_state (what this computer last agreed with the sync folder
 // doesn't go back with the entries, so the restored ones, their revs
-// raised, are changes to sync; it's cleared, below), sync_info (this
+// raised, are changes to sync; restoredForSync readies it), sync_info (this
 // computer's sync ID is its own) and history_forgotten (what was forgotten
 // on purpose stays forgotten).
 var restoredTables = []string{"vault_info", "vault_key", "recovery", "entries", "entry_tags", "trash", "history"}

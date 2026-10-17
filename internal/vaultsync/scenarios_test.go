@@ -269,9 +269,10 @@ func writeOnly(t *testing.T, c *computer, f syncfolder.Folder, uid string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A damaged agreed version (an earlier step's) is as none.
 	base, err := c.store.SyncBase(uid)
 	if err != nil {
-		t.Fatal(err)
+		base = nil
 	}
 	if base != nil {
 		local.Versions = base.Versions

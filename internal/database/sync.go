@@ -48,9 +48,10 @@ type SyncItem struct {
 	Place SyncPlace
 	// Rev is 0 when gone.
 	Rev int64
-	// Restored says it was restored from a backup, and hasn't changed or
-	// synced since.
-	Restored bool
+	// Restored says it was restored from a backup and hasn't synced since;
+	// RestoredRev is its rev then (another now: changed since).
+	Restored    bool
+	RestoredRev int64
 }
 
 // Changed says whether the entry changed here since it was last agreed:
@@ -119,8 +120,8 @@ func (s *Store) SyncItems() (_ []SyncItem, err error) {
 			_ = rows.Close() //nolint:errcheck // already failing
 			return nil, err
 		}
-		if it, ok := byUID[uid]; ok && it.Rev == rev && it.Place != SyncGone {
-			it.Restored = true
+		if it, ok := byUID[uid]; ok && it.Place != SyncGone {
+			it.Restored, it.RestoredRev = true, rev
 		}
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {

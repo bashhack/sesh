@@ -211,11 +211,14 @@ type remote struct {
 }
 
 // own says whether f is the entry's own file, not a sync tool's copy.
-func own(f *syncfolder.File) bool { return filepath.Base(f.Path) == f.UIDString()+syncfolder.Ext }
+func ownFile(f *syncfolder.File) bool { return filepath.Base(f.Path) == f.UIDString()+syncfolder.Ext }
 
 // entry syncs the entry uid, whose files in the folder are files.
 func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	it := y.item(uid)
+	if it.Restored {
+		return y.restored(uid, it, files)
+	}
 	var base *syncfolder.Record
 	if it.Agreed != nil {
 		var err error
@@ -243,11 +246,11 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	var copies []string
 	for i := range files {
 		f := &files[i]
-		if !own(f) {
+		if !ownFile(f) {
 			copies = append(copies, f.Path)
 		}
 		if it.Agreed != nil && f.Hash == it.Agreed.Hash {
-			agreedHere = agreedHere || own(f)
+			agreedHere = agreedHere || ownFile(f)
 			continue
 		}
 		b, err := y.folder.Read(f)
@@ -262,7 +265,7 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		if base != nil && base.Versions.Covers(rec.Versions) {
 			rec.Wipe()
 			y.sum.Ignored++
-			ownStale = ownStale || own(f)
+			ownStale = ownStale || ownFile(f)
 			continue
 		}
 		fresh = append(fresh, remote{rec: rec, file: *f})
@@ -270,9 +273,7 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	// The entry's own file missing, or older than what was agreed: it's
 	// written again, as a sync tool or someone lost it.
 	changedHere := it.Changed() || (it.Agreed != nil && !agreedHere && len(fresh) == 0) || ownStale
-	if it.Restored {
-		return y.restored(uid, base, fresh, copies)
-	}
+
 	if len(fresh) == 0 {
 		if changedHere {
 			local, rev, err := y.store.SyncRecord(uid, y.computer)
@@ -339,7 +340,7 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	defer m.Wipe()
 	conflicts = append(conflicts, m.Conflicts...)
 	switch {
-	case !changedHere && from == base && len(fresh) == 1 && own(&fresh[0].file) && onlyOlderHistory(m.Record, theirs):
+	case !changedHere && from == base && len(fresh) == 1 && ownFile(&fresh[0].file) && onlyOlderHistory(m.Record, theirs):
 		// Just the folder's version, with what's here it doesn't have (the
 		// earlier secrets of a longer history.keep): taken, and nothing
 		// written back.
@@ -357,32 +358,62 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	return y.removeCopies(copies)
 }
 
-// restored syncs the entry uid, restored from a backup and not changed
-// since (decided with the user 2026-10-17): its values are taken over the
-// folder's, the folder's secrets kept in its history, unless the folder
-// has it deleted, to the trash or for good, which stays. fresh are the
-// folder's versions this computer hasn't agreed; base is the one it had,
-// if any.
-func (y *syncer) restored(uid string, base *syncfolder.Record, fresh []remote, copies []string) error {
-	theirs := base
-	var merged []syncfolder.Merged
+// restored syncs the entry uid, restored from a backup and not synced
+// since (decided with the user 2026-10-17). It's merged with the folder's
+// version, all of it read, as a change made after it: the restored values
+// win where they differ, and nothing secret of the folder's is lost (its
+// secret into the history, its notes and secret fields kept beside). One
+// the folder has deleted (to the trash, or for good) stays deleted,
+// unless it was changed here after the restore: then, as any change, it
+// wins over the deletion.
+func (y *syncer) restored(uid string, it *database.SyncItem, files []syncfolder.File) error {
+	var base *syncfolder.Record
+	if it.Agreed != nil {
+		if b, err := y.store.SyncBase(uid); err == nil {
+			base = b
+			defer base.Wipe()
+		}
+	}
+	var folder *syncfolder.Record
+	var own *syncfolder.File
+	var copies []string
+	var held []syncfolder.Merged
+	var opened []*syncfolder.Record
 	defer func() {
-		for _, m := range merged {
+		for _, m := range held {
 			m.Wipe()
 		}
+		for _, r := range opened {
+			r.Wipe()
+		}
 	}()
-	for _, r := range fresh {
+	for i := range files {
+		f := &files[i]
+		if ownFile(f) {
+			own = f
+		} else {
+			copies = append(copies, f.Path)
+		}
+		b, err := y.folder.Read(f)
+		if err != nil {
+			return err
+		}
+		_, rec, err := syncfolder.Open(y.sealer, b)
+		if err != nil {
+			return fmt.Errorf("%s: %w", filepath.Base(f.Path), err)
+		}
+		opened = append(opened, rec)
 		switch {
-		case theirs == nil, r.rec.Versions.Covers(theirs.Versions):
-			theirs = r.rec
-		case theirs.Versions.Covers(r.rec.Versions):
+		case folder == nil, rec.Versions.Covers(folder.Versions):
+			folder = rec
+		case folder.Versions.Covers(rec.Versions):
 		default:
-			m, err := y.merge(uid, nil, theirs, r.rec)
+			m, err := y.merge(uid, nil, folder, rec)
 			if err != nil {
 				return err
 			}
-			merged = append(merged, m)
-			theirs = m.Record
+			held = append(held, m)
+			folder = m.Record
 		}
 	}
 	local, rev, err := y.store.SyncRecord(uid, y.computer)
@@ -390,51 +421,73 @@ func (y *syncer) restored(uid string, base *syncfolder.Record, fresh []remote, c
 		return err
 	}
 	defer local.Wipe()
-	switch {
-	case theirs == nil:
+	if base != nil {
+		local.Versions = base.Versions
+	}
+	if folder == nil {
 		// The folder never had it.
-		if base != nil {
-			local.Versions = base.Versions
-		}
 		if err := y.push(uid, rev, local, false); err != nil {
 			return err
 		}
 		y.sum.Sent = append(y.sum.Sent, recordName(uid, local))
 		return y.removeCopies(copies)
-	case !theirs.Purged.IsZero():
-		gone := &syncfolder.Record{Purged: theirs.Purged, Changed: y.now(), Versions: theirs.Versions}
+	}
+	changedSince := rev != it.RestoredRev
+	if !folder.Purged.IsZero() && !changedSince {
+		gone := &syncfolder.Record{Purged: folder.Purged, Changed: y.now(), Versions: folder.Versions}
 		if err := y.pushApplied(uid, rev, gone); err != nil {
 			return err
 		}
 		y.sum.Received = append(y.sum.Received, recordName(uid, gone))
 		return y.removeCopies(copies)
 	}
-	r := *local
-	r.Versions = theirs.Versions
-	if base != nil {
-		r.Versions = r.Versions.Join(base.Versions)
+	// The restored version, as a change made now: the newer, its secret
+	// replacing the folder's, which goes into its history (so it's a
+	// conflict the newer wins, not one the folder settled before).
+	now := y.now()
+	l := *local
+	l.Changed = latest(now, folder.Changed.Add(time.Nanosecond))
+	if len(folder.Secret) > 0 && !bytes.Equal(folder.Secret, local.Secret) {
+		l.History = append(slices.Clone(local.History), syncfolder.Earlier{ReplacedAt: now, Computer: y.computer, FileName: folder.Settings.FileName, Secret: folder.Secret})
+		l.Updated = now
 	}
-	r.Forgotten = slices.Concat(local.Forgotten, theirs.Forgotten)
-	r.History = slices.Concat(local.History, theirs.History)
-	if !bytes.Equal(theirs.Secret, local.Secret) && len(theirs.Secret) > 0 {
-		r.History = append(r.History, syncfolder.Earlier{ReplacedAt: y.now(), Computer: y.computer, FileName: theirs.Settings.FileName, Secret: theirs.Secret})
+	m, err := y.merge(uid, nil, &l, folder)
+	if err != nil {
+		return err
 	}
-	// Merged with itself, for history each secret once, less the forgotten.
-	m := syncfolder.Merge(nil, &r, &r)
 	defer m.Wipe()
-	m.Versions = r.Versions
-	if !theirs.Deleted.IsZero() {
-		m.Deleted = theirs.Deleted
+	switch {
+	case changedSince:
+		m.Deleted = local.Deleted
+	case !folder.Deleted.IsZero():
+		m.Deleted = folder.Deleted
+	default:
+		m.Deleted = local.Deleted
 	}
-	m.Changed = y.now()
-	if err := y.store.SyncCheck(m.Record); err != nil {
-		return fmt.Errorf("restored, but it doesn't fit with the folder's history: %w", err)
+	m.Versions = folder.Versions
+	if base != nil {
+		m.Versions = m.Versions.Join(base.Versions)
 	}
+	// Nothing the folder's own file doesn't have: taken, nothing written.
+	if own != nil && len(copies) == 0 && sameEntry(m.Record, folder) {
+		if err := y.apply(uid, rev, m.Record, own.Hash); err != nil {
+			return err
+		}
+		return nil
+	}
+	m.Changed = now
 	if err := y.pushApplied(uid, rev, m.Record); err != nil {
 		return err
 	}
-	y.sum.Merged = append(y.sum.Merged, Merged{Name: recordName(uid, m.Record), Conflicts: []string{"restored"}})
+	y.sum.Merged = append(y.sum.Merged, Merged{Name: recordName(uid, m.Record), Conflicts: append([]string{"restored"}, m.Conflicts...)})
 	return y.removeCopies(copies)
+}
+
+func latest(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // mendBase is the version the entry uid was last agreed at, read from its

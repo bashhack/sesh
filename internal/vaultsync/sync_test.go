@@ -152,11 +152,20 @@ func sameVaults(t *testing.T, a, b *computer) {
 	}
 }
 
-// sameHistory says whether a and b, earlier secrets newest first, are the
-// same as far as the shorter goes: each computer keeps its own number.
+// sameHistory says whether a and b, earlier secrets, agree: each computer
+// keeps its own number, so the shorter's are among the longer's (when
+// each was replaced can differ, one having trimmed its first record of
+// it).
 func sameHistory(a, b []string) bool {
-	n := min(len(a), len(b))
-	return slices.Equal(a[:n], b[:n])
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	for _, x := range a {
+		if !slices.Contains(b, x) {
+			return false
+		}
+	}
+	return true
 }
 
 func secrets(hs []syncfolder.Earlier) (out []string) {
