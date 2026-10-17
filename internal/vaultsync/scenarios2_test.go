@@ -39,6 +39,7 @@ func entryFiles(f syncfolder.Folder) []string {
 // Fields added on both computers, more together than an entry can have:
 // nothing is written that can't be kept, and each keeps its own.
 func TestSync_FieldsUnionTooMany(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-1")
@@ -88,6 +89,7 @@ func TestSync_FieldsUnionTooMany(t *testing.T) {
 // Entries deleted for good, or to the trash, on another computer after this
 // one's backup stay deleted when it's restored.
 func TestSync_RestoreKeepsDeletionsSince(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	laptop.put("keep", "k-1")
@@ -122,6 +124,7 @@ func TestSync_RestoreKeepsDeletionsSince(t *testing.T) {
 // Names swapped on one computer (a->tmp, b->a, tmp->b) settle alike on
 // both, with both passwords.
 func TestSync_NameSwap(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	ka := laptop.put("a", "sa")
@@ -156,6 +159,7 @@ func TestSync_NameSwap(t *testing.T) {
 // An entry freeing a name whose file isn't downloaded yet waits: nothing is
 // written over it.
 func TestSync_FreedNameWaits(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	ka := laptop.put("a", "secret-1")
@@ -200,6 +204,7 @@ func TestSync_FreedNameWaits(t *testing.T) {
 // A password changed on one computer is written once: the other writes
 // nothing back for history it keeps more of.
 func TestSync_OneWritePerChange(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	for _, c := range cs {
@@ -233,6 +238,7 @@ func TestSync_OneWritePerChange(t *testing.T) {
 // A password both computers replaced, forgotten on one, is forgotten on
 // both.
 func TestSync_ForgetAfterConcurrentChange(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-old")
@@ -256,6 +262,7 @@ func TestSync_ForgetAfterConcurrentChange(t *testing.T) {
 // A large file entry with a long history still syncs: the oldest earlier
 // files aren't sent once it would be over MaxFileSize.
 func TestSync_FileHistorySize(t *testing.T) {
+	t.Parallel()
 	if raceDetector {
 		t.Skip("too slow with -race; run without it")
 	}
@@ -301,6 +308,7 @@ func TestSync_FileHistorySize(t *testing.T) {
 // A secret field changed on both computers, the entry's details full: the
 // newer's is kept on both, said in the summary.
 func TestSync_SecretFieldDroppedWhenFull(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-1")
@@ -331,6 +339,7 @@ func TestSync_SecretFieldDroppedWhenFull(t *testing.T) {
 // A damaged agreed version, nothing changed: mended from the folder, and
 // the syncs settle.
 func TestSync_DamagedBaseQuiet(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	laptop.put("github", "pw-1")
@@ -348,6 +357,7 @@ func TestSync_DamagedBaseQuiet(t *testing.T) {
 // A vault replaced from its own older backup syncs its next changes: it
 // gets a new sync ID, not its old counts.
 func TestSync_ReplaceVaultCounter(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-1")
@@ -389,6 +399,7 @@ func TestSync_ReplaceVaultCounter(t *testing.T) {
 
 // A computer set up from another's backup doesn't share its sync ID.
 func TestSync_ReplaceVaultSharedID(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-1")
@@ -432,6 +443,7 @@ func TestSync_ReplaceVaultSharedID(t *testing.T) {
 
 // A file entry changed on one computer is written once, not back again.
 func TestSync_FileOneWritePerChange(t *testing.T) {
+	t.Parallel()
 	if raceDetector {
 		t.Skip("too slow with -race; run without it")
 	}
