@@ -48,6 +48,9 @@ type SyncItem struct {
 	Place SyncPlace
 	// Rev is 0 when gone.
 	Rev int64
+	// Restored says it was restored from a backup, and hasn't synced
+	// since.
+	Restored bool
 }
 
 // Changed says whether the entry changed here since it was last agreed:
@@ -104,6 +107,23 @@ func (s *Store) SyncItems() (_ []SyncItem, err error) {
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, fmt.Errorf("read what was synced: %w", err)
+	}
+	rows, err = s.db.Query(`SELECT uid FROM sync_restored`)
+	if err != nil {
+		return nil, fmt.Errorf("read what was restored: %w", err)
+	}
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			_ = rows.Close() //nolint:errcheck // already failing
+			return nil, err
+		}
+		if it, ok := byUID[uid]; ok {
+			it.Restored = true
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, fmt.Errorf("read what was restored: %w", err)
 	}
 	out := make([]SyncItem, 0, len(byUID))
 	for _, it := range byUID {
@@ -241,14 +261,14 @@ func (s *Store) SyncRecord(uid, computer string) (_ *syncfolder.Record, rev int6
 
 // forgotten are the marks of the entry uid's earlier secrets forgotten on
 // purpose, in order.
-func forgotten(db *sql.DB, uid string) (marks []string, err error) {
-	rows, err := db.Query(`SELECT hash FROM history_forgotten WHERE uid = ? ORDER BY hash`, uid)
+func forgotten(db *sql.DB, uid string) (marks []syncfolder.Forgotten, err error) {
+	rows, err := db.Query(`SELECT hash, at FROM history_forgotten WHERE uid = ? ORDER BY hash`, uid)
 	if err != nil {
 		return nil, fmt.Errorf("read what %s forgot: %w", uid, err)
 	}
 	for rows.Next() {
-		var m string
-		if err := rows.Scan(&m); err != nil {
+		var m syncfolder.Forgotten
+		if err := rows.Scan(&m.Hash, &m.At); err != nil {
 			_ = rows.Close() //nolint:errcheck // already failing
 			return nil, err
 		}
@@ -371,9 +391,12 @@ func syncRev(q querier, uid string) (int64, error) {
 // agree records, in tx, that uid at rev here and the folder's file of hash
 // agree on the version sealed as base.
 func agree(tx *sql.Tx, uid string, rev int64, hash syncfolder.Hash, base []byte) error {
-	_, err := tx.Exec(`INSERT INTO sync_state (uid, rev, file_hash, base) VALUES (?, ?, ?, ?)
+	if _, err := tx.Exec(`INSERT INTO sync_state (uid, rev, file_hash, base) VALUES (?, ?, ?, ?)
 		ON CONFLICT (uid) DO UPDATE SET rev = excluded.rev, file_hash = excluded.file_hash, base = excluded.base`,
-		uid, rev, hash[:], base)
+		uid, rev, hash[:], base); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`DELETE FROM sync_restored WHERE uid = ?`, uid)
 	return err
 }
 
@@ -399,16 +422,17 @@ func (s *Store) SyncComputerID() (string, error) {
 }
 
 // SyncNextChange is the count of this computer's next change written to
-// the sync folder: one more than any it gave before, counted in the vault
-// before the change is written, so no two changes it writes, even one
-// written and then lost to a crash, share a count.
-func (s *Store) SyncNextChange() (uint64, error) {
+// the sync folder: one more than any it gave before, and than seen (any
+// of its counts in what it's writing over), counted in the vault before
+// the change is written, so no two changes it writes, even one written
+// and then lost to a crash, share a count.
+func (s *Store) SyncNextChange(seen uint64) (uint64, error) {
 	if _, err := s.SyncComputerID(); err != nil {
 		return 0, err
 	}
 	var n uint64
 	err := s.inTx(func(tx *sql.Tx) error {
-		return tx.QueryRow(`UPDATE sync_info SET changes = changes + 1 WHERE id = 1 RETURNING changes`).Scan(&n)
+		return tx.QueryRow(`UPDATE sync_info SET changes = MAX(changes, ?) + 1 WHERE id = 1 RETURNING changes`, seen).Scan(&n)
 	})
 	return n, err
 }
@@ -445,6 +469,19 @@ func (s *Store) SyncAgree(uid string, rev int64, rec *syncfolder.Record, hash sy
 			return ErrEntryChanged
 		}
 		return agree(tx, uid, rev, hash, base)
+	})
+}
+
+// SyncMendBase keeps rec again as the version the entry uid was last
+// agreed at, in place of one that doesn't open (damaged).
+func (s *Store) SyncMendBase(uid string, rec *syncfolder.Record) error {
+	base, err := s.sealBase(uid, rec)
+	if err != nil {
+		return err
+	}
+	return s.inTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE sync_state SET base = ? WHERE uid = ?`, base, uid)
+		return err
 	})
 }
 
@@ -642,7 +679,16 @@ func (s *Store) insertRecord(tx *sql.Tx, uid string, rev int64, rec *syncfolder.
 		trashID = id
 	}
 	for _, m := range rec.Forgotten {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO history_forgotten (uid, hash) VALUES (?, ?)`, uid, m); err != nil {
+		var at time.Time
+		err := tx.QueryRow(`SELECT at FROM history_forgotten WHERE uid = ? AND hash = ?`, uid, m.Hash).Scan(&at)
+		switch {
+		case err == nil && !m.At.After(at):
+			continue
+		case err != nil && !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO history_forgotten (uid, hash, at) VALUES (?, ?, ?)
+			ON CONFLICT (uid, hash) DO UPDATE SET at = excluded.at`, uid, m.Hash, m.At); err != nil {
 			return err
 		}
 	}

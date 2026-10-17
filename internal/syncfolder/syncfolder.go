@@ -75,6 +75,9 @@ const (
 	pieceOverhead = saltLen + 4 + 12 + 16
 )
 
+// ErrTooLarge is a record that would make a file over MaxFileSize.
+var ErrTooLarge = fmt.Errorf("over the %d bytes a sync file may be", MaxFileSize)
+
 // ErrNewerFormat is a file written by a newer sesh, in a format this one
 // doesn't read, or with more in its record than this one knows.
 var ErrNewerFormat = errors.New("written by a newer sesh: update sesh to read it")
@@ -175,9 +178,9 @@ type Record struct {
 	Fields   []Field   `json:"fields,omitempty"`
 	Tags     []string  `json:"tags,omitempty"`
 	History  []Earlier `json:"history,omitempty"`
-	// Forgotten names the earlier secrets forgotten on purpose (Forget),
-	// so every computer forgets them; kept for good.
-	Forgotten []string `json:"forgotten,omitempty"`
+	// Forgotten are the earlier secrets forgotten on purpose, so every
+	// computer forgets them; kept for good.
+	Forgotten []Forgotten `json:"forgotten,omitempty"`
 	// Versions counts the changes this version has seen, each computer's:
 	// which of two versions has seen the other, or whether each has
 	// changes the other hasn't.
@@ -227,6 +230,15 @@ func (v Versions) total() (n uint64) {
 	return n
 }
 
+// Forgotten is an earlier secret forgotten on purpose: named by its hash
+// (Forget), and when. That secret replaced at or before then is
+// forgotten, wherever it was replaced; the same secret used again and
+// replaced later isn't.
+type Forgotten struct {
+	At   time.Time `json:"at"`
+	Hash string    `json:"hash"`
+}
+
 // Field is one of an entry's custom fields, its value whether secret or
 // not.
 type Field struct {
@@ -268,7 +280,7 @@ func Seal(s Sealer, h Header, r *Record) ([]byte, error) {
 	}
 	defer secure.SecureZeroBytes(plain)
 	tooLarge := func(n int) error {
-		return fmt.Errorf("seal %s: about %d bytes, over the %d a sync file may be", h.UIDString(), n, MaxFileSize)
+		return fmt.Errorf("seal %s: about %d bytes: %w", h.UIDString(), n, ErrTooLarge)
 	}
 	// Checked first, so the sizes worked out from it are small.
 	if len(plain) > MaxFileSize {

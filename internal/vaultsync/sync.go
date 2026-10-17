@@ -74,7 +74,10 @@ type syncer struct {
 	// first.
 	busy map[string]bool
 	// files are each entry's files in the folder, by uid.
-	files    map[string][]syncfolder.File
+	files map[string][]syncfolder.File
+	// waiting are the entries waiting for a file to be readable, by uid:
+	// nothing is written over it.
+	waiting  map[string]bool
 	sum      *Summary
 	now      func() time.Time
 	folder   syncfolder.Folder
@@ -88,7 +91,7 @@ type syncer struct {
 // be read, say); one entry's problems are in the summary, and the rest
 // still sync.
 func Sync(store *database.Store, folder syncfolder.Folder, computer string) (*Summary, error) {
-	y := &syncer{store: store, sealer: store.SyncSealer(), folder: folder, computer: computer, sum: &Summary{}, done: map[string]bool{}, busy: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
+	y := &syncer{store: store, sealer: store.SyncSealer(), folder: folder, computer: computer, sum: &Summary{}, done: map[string]bool{}, busy: map[string]bool{}, waiting: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
 	var err error
 	if y.keyID, err = store.SyncKeyID(); err != nil {
 		return nil, err
@@ -108,7 +111,7 @@ func Sync(store *database.Store, folder syncfolder.Folder, computer string) (*Su
 	for _, f := range contents.Files {
 		files[f.UIDString()] = append(files[f.UIDString()], f)
 	}
-	waiting := map[string]bool{}
+	waiting := y.waiting
 	for _, p := range contents.NotDownloaded {
 		if uid := uidOf(p); uid != "" {
 			waiting[uid] = true
@@ -216,10 +219,13 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	var base *syncfolder.Record
 	if it.Agreed != nil {
 		var err error
-		// One that doesn't open (damaged) is merged as never synced.
+		// One that doesn't open (damaged) is mended from the folder's file
+		// of it, when that's still the one agreed; else it's merged as
+		// never synced.
 		if base, err = y.store.SyncBase(uid); err != nil {
-			y.sum.Problems = append(y.sum.Problems, fmt.Sprintf("%s: what it was last synced at doesn't open, so it's merged as never synced: %v", y.name(uid), err))
-			base = nil
+			if base = y.mendBase(uid, it, files); base == nil {
+				y.sum.Problems = append(y.sum.Problems, fmt.Sprintf("%s: what it was last synced at doesn't open, so it's merged as never synced: %v", y.name(uid), err))
+			}
 		}
 		defer func() {
 			if base != nil {
@@ -304,7 +310,10 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		case r.rec.Versions.Covers(theirs.Versions):
 			theirs = r.rec
 		default:
-			m := y.merge(uid, from, theirs, r.rec)
+			m, err := y.merge(uid, from, theirs, r.rec)
+			if err != nil {
+				return err
+			}
 			conflicts = append(conflicts, m.Conflicts...)
 			theirs = m.Record
 			merged = append(merged, theirs)
@@ -320,13 +329,29 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	if base != nil {
 		local.Versions = base.Versions
 	}
-	m := y.merge(uid, from, local, theirs)
+	m, err := y.merge(uid, from, local, theirs)
+	if err != nil {
+		return err
+	}
 	defer m.Wipe()
 	conflicts = append(conflicts, m.Conflicts...)
+	// Restored from a backup, and deleted in the folder since (to the
+	// trash, or for good): it stays deleted.
+	if it.Restored && base == nil {
+		switch {
+		case !theirs.Purged.IsZero():
+			m.Wipe()
+			m = syncfolder.Merged{Record: &syncfolder.Record{Purged: theirs.Purged, Versions: theirs.Versions}}
+		case !theirs.Deleted.IsZero():
+			m.Deleted = theirs.Deleted
+		}
+	}
 	switch {
-	case !changedHere && from == base && len(fresh) == 1 && own(&fresh[0].file) && sameEntry(m.Record, theirs):
-		// Just the folder's version: taken as it is.
-		if err := y.apply(uid, it.Rev, theirs, fresh[0].file.Hash); err != nil {
+	case !changedHere && from == base && len(fresh) == 1 && own(&fresh[0].file) && onlyOlderHistory(m.Record, theirs):
+		// Just the folder's version, with what's here it doesn't have (the
+		// earlier secrets of a longer history.keep): taken, and nothing
+		// written back.
+		if err := y.apply(uid, it.Rev, m.Record, fresh[0].file.Hash); err != nil {
 			return err
 		}
 		y.sum.Received = append(y.sum.Received, recordName(uid, theirs))
@@ -335,13 +360,35 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		if err := y.pushApplied(uid, rev, m.Record); err != nil {
 			return err
 		}
-		if changedHere || from != base || len(conflicts) > 0 {
-			y.sum.Merged = append(y.sum.Merged, Merged{Name: recordName(uid, m.Record), Conflicts: conflicts})
-		} else {
-			y.sum.Received = append(y.sum.Received, recordName(uid, m.Record))
-		}
+		y.sum.Merged = append(y.sum.Merged, Merged{Name: recordName(uid, m.Record), Conflicts: conflicts})
 	}
 	return y.removeCopies(copies)
+}
+
+// mendBase is the version the entry uid was last agreed at, read from its
+// file in the folder when that's still the one agreed, and kept again in
+// the vault; nil when there's none to read.
+func (y *syncer) mendBase(uid string, it *database.SyncItem, files []syncfolder.File) *syncfolder.Record {
+	for i := range files {
+		f := &files[i]
+		if f.Hash != it.Agreed.Hash || f.KeyIDString() != y.keyID {
+			continue
+		}
+		b, err := y.folder.Read(f)
+		if err != nil {
+			continue
+		}
+		_, rec, err := syncfolder.Open(y.sealer, b)
+		if err != nil {
+			continue
+		}
+		if err := y.store.SyncMendBase(uid, rec); err != nil {
+			rec.Wipe()
+			return nil
+		}
+		return rec
+	}
+	return nil
 }
 
 // removeCopies removes a sync tool's copies of an entry's file, merged
@@ -353,6 +400,24 @@ func (y *syncer) removeCopies(copies []string) error {
 		}
 	}
 	return nil
+}
+
+// onlyOlderHistory says whether merged holds what theirs does, and only
+// earlier secrets older than all of theirs besides (those a computer
+// keeping fewer trimmed): nothing the folder needs.
+func onlyOlderHistory(merged, theirs *syncfolder.Record) bool {
+	m, t := *merged, *theirs
+	if len(m.History) < len(t.History) {
+		return false
+	}
+	for i := range t.History {
+		a, b := &m.History[i], &t.History[i]
+		if !a.ReplacedAt.Equal(b.ReplacedAt) || a.Computer != b.Computer || a.FileName != b.FileName || !bytes.Equal(a.Secret, b.Secret) {
+			return false
+		}
+	}
+	m.History, t.History = nil, nil
+	return sameEntry(&m, &t)
 }
 
 // sameEntry says whether a and b hold the same entry, whoever made them
@@ -385,7 +450,11 @@ func recordName(uid string, rec *syncfolder.Record) string {
 // folder, as this computer's change, and records it agreed: rec is what
 // the entry holds here already.
 func (y *syncer) push(uid string, rev int64, rec *syncfolder.Record, apply bool) error {
-	n, err := y.store.SyncNextChange()
+	// Never over a file waiting to be read: the next sync.
+	if y.waiting[uid] {
+		return database.ErrEntryChanged
+	}
+	n, err := y.store.SyncNextChange(rec.Versions[y.id])
 	if err != nil {
 		return err
 	}
@@ -400,6 +469,12 @@ func (y *syncer) push(uid string, rev int64, rec *syncfolder.Record, apply bool)
 		return err
 	}
 	b, err := syncfolder.Seal(y.sealer, h, rec)
+	// Too large for a sync file (large files, a long history): the oldest
+	// earlier secrets aren't sent, until it fits; this computer keeps them.
+	for errors.Is(err, syncfolder.ErrTooLarge) && len(rec.History) > 0 {
+		rec.History = rec.History[:len(rec.History)/2]
+		b, err = syncfolder.Seal(y.sealer, h, rec)
+	}
 	if err != nil {
 		return err
 	}
@@ -434,7 +509,7 @@ func (y *syncer) apply(uid string, rev int64, rec *syncfolder.Record, hash syncf
 	}
 	k := vault.Key{Kind: rec.Kind, Service: rec.Service, Username: rec.Username}
 	for _, it := range y.items {
-		if it.UID == uid || it.Place != database.SyncLive || it.Key != k || y.done[it.UID] || y.busy[it.UID] || len(y.files[it.UID]) == 0 {
+		if it.UID == uid || it.Place != database.SyncLive || it.Key != k || y.done[it.UID] || y.busy[it.UID] || y.waiting[it.UID] || len(y.files[it.UID]) == 0 {
 			continue
 		}
 		y.busy[uid] = true
@@ -459,15 +534,19 @@ func (y *syncer) apply(uid string, rev int64, rec *syncfolder.Record, hash syncf
 // so they make an entry sesh can keep: when the older's notes or secret
 // fields kept beside the newer's don't fit, the newer's alone, said in
 // the summary.
-func (y *syncer) merge(uid string, base, ours, theirs *syncfolder.Record) syncfolder.Merged {
-	m := syncfolder.Merge(base, ours, theirs)
-	if err := y.store.SyncCheck(m.Record); err == nil {
-		return m
+func (y *syncer) merge(uid string, base, ours, theirs *syncfolder.Record) (syncfolder.Merged, error) {
+	var err error
+	for i, b := range []syncfolder.Beside{{Notes: true, Fields: true}, {Fields: true}, {Notes: true}, {}} {
+		m := syncfolder.MergeWith(base, ours, theirs, b)
+		if err = y.store.SyncCheck(m.Record); err == nil {
+			if i > 0 {
+				y.sum.Problems = append(y.sum.Problems, fmt.Sprintf("%s: changed on two computers, and the older's %s don't fit beside the newer's: the newer's were kept", recordName(uid, m.Record), map[int]string{1: "notes", 2: "secret fields", 3: "notes and secret fields"}[i]))
+			}
+			return m, nil
+		}
+		m.Wipe()
 	}
-	m.Wipe()
-	m = syncfolder.MergeNewer(base, ours, theirs)
-	y.sum.Problems = append(y.sum.Problems, fmt.Sprintf("%s: changed on two computers, and the older's notes or secret fields don't fit beside the newer's: the newer's were kept", recordName(uid, m.Record)))
-	return m
+	return syncfolder.Merged{}, fmt.Errorf("its versions can't be merged into an entry sesh can keep (%w): each computer keeps its own until one is changed to fit", err)
 }
 
 // sameName settles the entry uid (at rev here), as rec has it, taking a
@@ -504,7 +583,10 @@ func (y *syncer) sameName(uid string, rev int64, rec *syncfolder.Record) error {
 		keep, keepRev, keepRec, drop, dropRev, dropRec = other.UID, theirRev, theirs, uid, rev, rec
 	}
 	if bytes.Equal(rec.Secret, theirs.Secret) {
-		m := y.merge(keep, nil, keepRec, dropRec)
+		m, err := y.merge(keep, nil, keepRec, dropRec)
+		if err != nil {
+			return err
+		}
 		defer m.Wipe()
 		m.Changed = y.now()
 		gone := &syncfolder.Record{Purged: y.now(), Changed: y.now(), Versions: dropRec.Versions}

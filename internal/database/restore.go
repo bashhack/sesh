@@ -182,10 +182,7 @@ func restoreInPlace(dbPath, backupPath string) (err error) {
 			return fmt.Errorf("restore: %w", err)
 		}
 	}
-	// What this computer agreed with the sync folder was for the entries
-	// replaced: the restored ones are merged with the folder's as entries
-	// never synced, so nothing is deleted, and nothing secret is lost.
-	if _, err := tx.Exec(`DELETE FROM main.sync_state`); err != nil {
+	if err := restoredForSync(tx, "main."); err != nil {
 		_ = tx.Rollback() //nolint:errcheck // already failing
 		return fmt.Errorf("restore: %w", err)
 	}
@@ -250,6 +247,11 @@ func ReplaceVault(dbPath, backupPath string, now time.Time) (aside string, err e
 	if err := src.Close(); err != nil {
 		return "", err
 	}
+	// The backup's sync ID and change count may be another computer's, or
+	// this one's from before changes it has made since: it gets a new one.
+	if err := replacedForSync(tmpPath); err != nil {
+		return "", fmt.Errorf("restore: %w", err)
+	}
 	if _, err := os.Lstat(target); err == nil {
 		aside = target + ".before-restore-" + now.UTC().Format("2006-01-02T150405Z")
 		if err := os.Rename(target, aside); err != nil {
@@ -303,4 +305,50 @@ func removeStaleRestoreTemps(target string, now time.Time) {
 			_ = os.Remove(m) //nolint:errcheck // only clutter
 		}
 	}
+}
+
+// restoredForSync readies, in tx, a vault just restored from a backup for
+// syncing: what it agreed with the sync folder was for the entries
+// replaced, so it's forgotten, and the restored entries are marked
+// (sync_restored). The next sync merges them with the folder's as never
+// synced, so nothing made since is deleted and nothing secret lost; but
+// an entry the folder has deleted since (to the trash, or for good) stays
+// deleted. schema is "main." or "".
+func restoredForSync(tx *sql.Tx, schema string) error {
+	for _, q := range []string{
+		`DELETE FROM ` + schema + `sync_state`,
+		`DELETE FROM ` + schema + `sync_restored`,
+		`INSERT INTO ` + schema + `sync_restored (uid) SELECT uid FROM ` + schema + `entries UNION SELECT uid FROM ` + schema + `trash`,
+	} {
+		if _, err := tx.Exec(q); err != nil { //nolint:gosec // schema is "main." or ""
+			return err
+		}
+	}
+	return nil
+}
+
+// replacedForSync readies the vault file at path, a backup's copy about to
+// replace the vault, for syncing: as restoredForSync, and with no sync ID,
+// so it's given a new one.
+func replacedForSync(path string) error {
+	db, err := openDB(path)
+	if err != nil {
+		return err
+	}
+	err = func() error {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		if err := restoredForSync(tx, ""); err != nil {
+			_ = tx.Rollback() //nolint:errcheck // already failing
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM sync_info`); err != nil {
+			_ = tx.Rollback() //nolint:errcheck // already failing
+			return err
+		}
+		return tx.Commit()
+	}()
+	return errors.Join(err, db.Close())
 }

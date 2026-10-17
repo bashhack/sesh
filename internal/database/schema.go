@@ -135,15 +135,19 @@ func migrateV1(tx *sql.Tx) error {
 			computer_id TEXT NOT NULL,
 			changes     INTEGER NOT NULL DEFAULT 0
 		)`,
-		// Earlier secrets forgotten on purpose, by their entry's uid and a
-		// hash of the secret (syncfolder.Forget), so a sync forgets them
-		// on every computer. Kept for good, as the sync folder's records
+		// Earlier secrets forgotten on purpose, by their entry's uid, a
+		// hash of the secret (syncfolder.Forget) and when, so a sync
+		// forgets them on every computer. Kept for good, as the sync folder's records
 		// of entries deleted for good are.
 		`CREATE TABLE history_forgotten (
 			uid  TEXT NOT NULL,
 			hash TEXT NOT NULL,
+			at   DATETIME NOT NULL,
 			PRIMARY KEY (uid, hash)
 		)`,
+		// Entries restored from a backup, not yet synced since: one the
+		// sync folder has deleted since stays deleted (vaultsync).
+		`CREATE TABLE sync_restored (uid TEXT PRIMARY KEY)`,
 		`CREATE TABLE quiet_writes (id INTEGER PRIMARY KEY CHECK (id = 1))`,
 		// Any change to an entry, its tags, or (forgetting one) its
 		// earlier secrets raises its rev, however it's made; a write of

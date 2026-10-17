@@ -233,3 +233,18 @@ func syncItem(t *testing.T, s *Store, uid string) SyncItem {
 	}
 	return items[i]
 }
+
+// A change's count is past any seen for this computer, whatever the vault
+// had counted.
+func TestSyncNextChange(t *testing.T) {
+	s, _ := syncPair(t)
+	if n, err := s.SyncNextChange(0); err != nil || n != 1 {
+		t.Fatalf("first: %d, %v", n, err)
+	}
+	if n, err := s.SyncNextChange(10); err != nil || n != 11 {
+		t.Errorf("past 10 seen: %d, %v", n, err)
+	}
+	if n, err := s.SyncNextChange(3); err != nil || n != 12 {
+		t.Errorf("then: %d, %v", n, err)
+	}
+}

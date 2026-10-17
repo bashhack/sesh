@@ -276,7 +276,7 @@ func writeOnly(t *testing.T, c *computer, f syncfolder.Folder, uid string) {
 	if base != nil {
 		local.Versions = base.Versions
 	}
-	n, err := c.store.SyncNextChange()
+	n, err := c.store.SyncNextChange(local.Versions[id])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,14 +335,14 @@ func TestSync_CountNotReused(t *testing.T) {
 	}
 }
 
-func rawExec(t *testing.T, path, q string, args ...any) {
+func rawExec(t *testing.T, path, q string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close() //nolint:errcheck // test
-	if _, err := db.Exec(q, args...); err != nil {
+	if _, err := db.Exec(q); err != nil {
 		t.Fatal(err)
 	}
 }

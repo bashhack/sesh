@@ -243,7 +243,7 @@ func TestRestoredTablesCoverTheSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close() //nolint:errcheck // test cleanup
-	want := append([]string{"audit_log", "history_forgotten", "quiet_writes", "schema_migrations", "sync_info", "sync_state"}, restoredTables...)
+	want := append([]string{"audit_log", "history_forgotten", "quiet_writes", "schema_migrations", "sync_info", "sync_restored", "sync_state"}, restoredTables...)
 	var got []string
 	for rows.Next() {
 		var name string

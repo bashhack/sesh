@@ -266,6 +266,10 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	switch {
 	case whole && same && e.CreatedAt.IsZero():
 		onConflict += `, settings = excluded.settings, folder = excluded.folder` + keepTime("created_at")
+	case whole && e.CreatedAt.IsZero() && !mend:
+		// A new secret doesn't make it a new entry: it keeps when it was
+		// made.
+		onConflict += `, settings = excluded.settings, folder = excluded.folder`
 	case whole:
 		onConflict += `, settings = excluded.settings, folder = excluded.folder, created_at = excluded.created_at`
 	case mend:

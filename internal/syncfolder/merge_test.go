@@ -71,8 +71,8 @@ func TestMerge_OneSided(t *testing.T) {
 			return len(r.Fields) == 2 && string(r.Fields[0].Value) == "2222"
 		}},
 		"a field removed": {func(r *Record) { r.Fields = r.Fields[1:] }, func(r *Record) bool { return len(r.Fields) == 1 && r.Fields[0].Name == "team" }},
-		"an earlier secret forgotten": {func(r *Record) { r.History, r.Forgotten = nil, []string{Forget([]byte("pw-0"), t0.Add(-time.Hour))} }, func(r *Record) bool {
-			return len(r.History) == 0 && slices.Equal(r.Forgotten, []string{Forget([]byte("pw-0"), t0.Add(-time.Hour))})
+		"an earlier secret forgotten": {func(r *Record) { r.History, r.Forgotten = nil, []Forgotten{{Hash: Forget([]byte("pw-0")), At: t0}} }, func(r *Record) bool {
+			return len(r.History) == 0 && slices.Equal(r.Forgotten, []Forgotten{{Hash: Forget([]byte("pw-0")), At: t0}})
 		}},
 		// Trimmed to a shorter history.keep isn't forgotten: the other's
 		// stays.
@@ -206,7 +206,7 @@ func TestMerge_History(t *testing.T) {
 		r.History = append([]Earlier{{ReplacedAt: t0.Add(time.Hour), Computer: "laptop", Secret: []byte("pw-1")}}, r.History...)
 		r.Secret = []byte("pw-2")
 	})
-	b := changed("desktop", 2, func(r *Record) { r.History, r.Forgotten = nil, []string{Forget([]byte("pw-0"), t0.Add(-time.Hour))} })
+	b := changed("desktop", 2, func(r *Record) { r.History, r.Forgotten = nil, []Forgotten{{Hash: Forget([]byte("pw-0")), At: t0}} })
 	m := merge(t, baseRecord(), a, b)
 	if len(m.History) != 1 || string(m.History[0].Secret) != "pw-1" {
 		t.Errorf("history %+v", m.History)

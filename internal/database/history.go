@@ -597,8 +597,7 @@ func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]string, error) {
 	var marks []string
 	for _, id := range ids {
 		var data, salt []byte
-		var at time.Time
-		err := s.db.QueryRow(`SELECT encrypted_data, salt, replaced_at FROM history WHERE id = ?`, id).Scan(&data, &salt, &at)
+		err := s.db.QueryRow(`SELECT encrypted_data, salt FROM history WHERE id = ?`, id).Scan(&data, &salt)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -612,7 +611,7 @@ func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]string, error) {
 			}
 			continue
 		}
-		marks = append(marks, syncfolder.Forget(secret, at))
+		marks = append(marks, syncfolder.Forget(secret))
 		secure.SecureZeroBytes(secret)
 	}
 	return marks, nil
@@ -621,9 +620,11 @@ func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]string, error) {
 // markForgotten records, in tx, that k's earlier secrets with marks were
 // forgotten on purpose, so a sync forgets them everywhere.
 func markForgotten(tx *sql.Tx, k vault.Key, marks []string) error {
+	now := time.Now().UTC()
 	for _, m := range marks {
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO history_forgotten (uid, hash) SELECT uid, ? FROM entries WHERE kind = ? AND service = ? AND username = ?`,
-			m, string(k.Kind), k.Service, k.Username); err != nil {
+		if _, err := tx.Exec(`INSERT INTO history_forgotten (uid, hash, at) SELECT uid, ?, ? FROM entries WHERE kind = ? AND service = ? AND username = ?
+			ON CONFLICT (uid, hash) DO UPDATE SET at = excluded.at`,
+			m, now, string(k.Kind), k.Service, k.Username); err != nil {
 			return err
 		}
 	}
