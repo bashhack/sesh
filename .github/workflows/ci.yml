@@ -5,6 +5,10 @@ env:
   # One place for the toolchain versions. A minor version gets the latest patch.
   GO_VERSION: '1.27'
   GOLANGCI_LINT_VERSION: v2.14.0
+  # The -race runs leave x/crypto's argon2 uninstrumented: sealing or opening
+  # any entry derives a key with it over 16 MiB, which instrumented was most
+  # of their time. It is pure computation; sesh's own code stays instrumented.
+  RACE_GCFLAGS: golang.org/x/crypto/argon2=-race=false
 on:
   push:
     branches: [ main ]  # Only run on pushes to main
@@ -133,7 +137,7 @@ jobs:
         run: |
           CORES=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
           RACE_CORES=$([ $CORES -gt 4 ] && echo 4 || echo $CORES)
-          GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -vet=off $(go list ./... | grep -v /scripts)
+          GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -gcflags="$RACE_GCFLAGS" -vet=off $(go list ./... | grep -v /scripts)
 
   test-linux:
     name: Test (Linux)
@@ -154,7 +158,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y zsh fish
 
       - name: Run tests with race detection
-        run: go test -timeout 30m -race $(go list ./... | grep -v /scripts)
+        run: go test -timeout 30m -race -gcflags="$RACE_GCFLAGS" $(go list ./... | grep -v /scripts)
 
   agent-smoke:
     name: Agent smoke (${{ matrix.os }})
