@@ -10,6 +10,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/syncfolder"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -257,7 +258,7 @@ func TestSync_JoinCases(t *testing.T) {
 	}
 	syncComputer(t, filepath.Join(dir, "desktop"), "desktop")
 	t.Setenv("SESH_MASTER_PASSWORD", "")
-	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || !strings.Contains(err.Error(), "run sesh sync join at one, or give the password in SESH_MASTER_PASSWORD") {
+	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || !strings.Contains(err.Error(), "run sesh sync join at one, or give it in SESH_MASTER_PASSWORD") {
 		t.Errorf("join with no terminal: %q, %v", out, err)
 	}
 	err := joinRefused(database.ErrRejoinOtherKey, folder)
@@ -546,5 +547,123 @@ func TestMergedSaid(t *testing.T) {
 		if got := mergedSaid(cs); got != want {
 			t.Errorf("%q:\n got %q\nwant %q", conflicts, got, want)
 		}
+	}
+}
+
+// A sync folder that lost its sesh-sync.json can't be made a new one, which
+// would cut off every computer syncing through it; a sync from one of them
+// writes it again, and the others go on.
+func TestSync_LostInfoFile(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := filepath.Join(dir, "laptop"), filepath.Join(dir, "desktop")
+	syncComputer(t, laptop, "laptop")
+	putEntry(t, "password/a", "1")
+	if _, err := runSyncOut(t, "", false, "init", folder); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, desktop, "desktop")
+	if _, err := runSyncOut(t, "", false, "join", folder); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(folder, "sesh-sync.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	syncComputer(t, laptop, "laptop")
+	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runSyncOut(t, "", false, "init", folder); err == nil || !strings.Contains(err.Error(), "a sync folder that lost it") {
+		t.Errorf("init on a folder that lost its info file: %q, %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(folder, "sesh-sync.json")); !os.IsNotExist(err) {
+		t.Errorf("init wrote an info file: %v", err)
+	}
+
+	syncComputer(t, desktop, "desktop")
+	putEntry(t, "password/b", "2")
+	out, err := runSyncOut(t, "", false)
+	if err != nil || !strings.Contains(out, "written again from this vault") || !strings.Contains(out, "Changed here, sent: 1 entry") {
+		t.Fatalf("desktop sync: %q, %v", out, err)
+	}
+	syncComputer(t, laptop, "laptop")
+	if out, err := runSyncOut(t, "", false, "join", folder); err != nil || !strings.Contains(out, "again") {
+		t.Fatalf("laptop joins again: %q, %v", out, err)
+	}
+	if got := getEntry(t, "password/b"); got != "2" {
+		t.Errorf("the laptop has b = %q", got)
+	}
+}
+
+// A copy of a vault that never synced, with entries of its own, can't sync
+// with a folder holding files through sync.dir set by hand, as it can't
+// join it; nor can a vault that synced elsewhere, with a folder whose files
+// can't even be read.
+func TestSync_HandSetFolderRefused(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, copied := filepath.Join(dir, "laptop"), filepath.Join(dir, "copy")
+	db := syncComputer(t, laptop, "laptop")
+	putEntry(t, "password/a", "1")
+	putEntry(t, "password/b", "2")
+	copyDB := syncComputer(t, copied, "copy")
+	if err := os.MkdirAll(filepath.Dir(copyDB), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CopyTo(db, copyDB); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, laptop, "laptop")
+	if _, err := runSyncOut(t, "", false, "init", folder); err != nil {
+		t.Fatal(err)
+	}
+	purgeEntry(t, "password/a")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+
+	syncComputer(t, copied, "copy")
+	t.Setenv(config.EnvSyncDir, folder)
+	if out, err := runSyncOut(t, "", false); err == nil || !strings.Contains(err.Error(), "never synced with this folder") {
+		t.Errorf("a never-synced copy by hand: %q, %v", out, err)
+	}
+	t.Setenv(config.EnvSyncDir, "")
+
+	// The laptop, synced with folder, pointed at another holding only a
+	// file it can't read (a link).
+	syncComputer(t, laptop, "laptop")
+	odd := filepath.Join(dir, "odd")
+	if err := os.MkdirAll(filepath.Join(odd, "entries"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	info, err := syncfolder.NewInfo(syncfolder.KeyRecord{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := database.ReadUnlockMaterial(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Key = syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}
+	if err := syncfolder.New(odd).WriteInfo(info); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), filepath.Join(odd, "entries", strings.Repeat("ab", 16)+".sesh")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.EnvSyncDir, odd)
+	if out, err := runSyncOut(t, "", false); err == nil || !strings.Contains(err.Error(), "synced with another sync folder") {
+		t.Errorf("another folder with only an unreadable file: %q, %v", out, err)
+	}
+	t.Setenv(config.EnvSyncDir, "")
+	// Joining the folder it syncs with, named through a link, just syncs.
+	if err := os.Symlink(folder, filepath.Join(dir, "synclink")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runSyncOut(t, "", false, "join", filepath.Join(dir, "synclink")); err != nil || !strings.Contains(out, "already") {
+		t.Errorf("join the folder it syncs with, through a link: %q, %v", out, err)
 	}
 }

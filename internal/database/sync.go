@@ -727,7 +727,7 @@ func (s *Store) LogSync(detail string) {
 // ErrVaultNotEmpty is a vault that can't join a sync folder: it has
 // entries, sealed with its own key (its own salt, even with the same
 // master password).
-var ErrVaultNotEmpty = errors.New("this vault already has entries, sealed with its own key, not the sync folder's")
+var ErrVaultNotEmpty = errors.New("this vault already has entries of its own, never synced with this folder")
 
 // CanJoin says whether the vault at dbPath may join the sync folder
 // folderID, whose vaults' key record is m: none there yet, an empty one, or
@@ -752,6 +752,25 @@ func CanJoin(dbPath string, m UnlockMaterial, folderID string) (rejoin bool, err
 		return false, err
 	}
 	return joinable(db, have, m, folderID)
+}
+
+// VaultSyncFolder is the ID of the sync folder the vault at dbPath syncs
+// with, or did before it left; "" when none, or there's no vault. It
+// changes nothing.
+func VaultSyncFolder(dbPath string) (id string, err error) {
+	db, err := openExisting(dbPath)
+	if errors.Is(err, ErrNoVault) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer func() { err = closeVault(db, err) }()
+	err = db.QueryRow(`SELECT folder_id FROM sync_info WHERE id = 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
 }
 
 // ErrRejoinOtherKey is a vault joining again the sync folder it synced

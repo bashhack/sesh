@@ -284,6 +284,12 @@ func TestJoinVault(t *testing.T) {
 	if got := folderOf(t, fresh); got != "f1" {
 		t.Errorf("new vault's sync folder: %q", got)
 	}
+	if got, err := VaultSyncFolder(fresh); err != nil || got != "f1" {
+		t.Errorf("VaultSyncFolder = %q, %v", got, err)
+	}
+	if got, err := VaultSyncFolder(filepath.Join(t.TempDir(), "none.db")); err != nil || got != "" {
+		t.Errorf("VaultSyncFolder with no vault = %q, %v", got, err)
+	}
 	if rejoin, err := JoinVault(fresh, m, "f1"); err != nil || !rejoin {
 		t.Errorf("again: %v, %v; want it rejoining", rejoin, err)
 	}

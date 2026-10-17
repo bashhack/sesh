@@ -55,6 +55,13 @@ func NewInfo(key KeyRecord) (*Info, error) {
 	return &Info{Format: infoFormat, FolderID: hex.EncodeToString(id), Key: key}, nil
 }
 
+// InfoFor is the Info of the sync folder folderID, whose vaults' key
+// record is key: what a vault that synced with the folder writes again
+// when the folder lost its InfoFile.
+func InfoFor(folderID string, key KeyRecord) *Info {
+	return &Info{Format: infoFormat, FolderID: folderID, Key: key}
+}
+
 func (f Folder) infoPath() string { return filepath.Join(f.dir, InfoFile) }
 
 // ReadInfo reads the folder's InfoFile: ErrNoInfo when there's none.

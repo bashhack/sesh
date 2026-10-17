@@ -115,6 +115,15 @@ func syncNow(app *App) error {
 
 // syncWith syncs the vault cfg names with its folder, and says what it did.
 func syncWith(app *App, cfg *config.Config) error {
+	mended, err := mendInfo(cfg)
+	if err != nil {
+		return err
+	}
+	if mended {
+		if _, err := fmt.Fprintf(app.Stdout, "The sync folder had lost its %s: written again from this vault, which synced with it.\n", syncfolder.InfoFile); err != nil {
+			return err
+		}
+	}
 	f, err := syncFolderOf(cfg)
 	if err != nil {
 		return err
@@ -152,30 +161,75 @@ func syncStore(app *App, cfg *config.Config, f syncfolder.Folder, store *databas
 // folder, meeting one with files (sync.dir changed by hand).
 var errOtherFolder = errors.New("this vault synced with another sync folder, and has entries this one holds files of too: synced here afresh, entries deleted elsewhere would come back, as edits. Point sync.dir back at the folder it synced with, or join this one with an empty vault (sesh sync join explains)")
 
-// checkSwitch refuses to sync store with f, whose info is info, when the
-// vault synced with another folder and both hold entries: with nothing
-// agreed between them, deletions in either would be undone. A new folder,
-// or a vault never synced, starts afresh as a join would.
+// errNeverSynced is a vault with entries of its own, never synced, meeting
+// a folder with files: as join refuses it.
+var errNeverSynced = errors.New("this vault never synced with this folder and has entries of its own: synced here, any of them deleted elsewhere would come back, as edits. Join the folder with an empty vault instead (sesh sync join explains)")
+
+// checkSwitch refuses to sync store with f, whose info is info, where join
+// would refuse: the vault synced with another folder, or never synced, and
+// has entries of its own (all but those restored from a backup, whose
+// marks keep the folder's deletions), while the folder holds files, even
+// unreadable ones. With nothing agreed between them, deletions in either
+// would be undone. A new, empty folder starts afresh.
 func checkSwitch(store *database.Store, f syncfolder.Folder, info *syncfolder.Info) error {
 	have, err := store.SyncFolderID()
-	if err != nil || have == "" || have == info.FolderID {
+	if err != nil || have == info.FolderID {
 		return err
 	}
 	items, err := store.SyncItems()
 	if err != nil {
 		return err
 	}
-	if !slices.ContainsFunc(items, func(it database.SyncItem) bool { return it.Place != database.SyncGone }) {
+	if !slices.ContainsFunc(items, func(it database.SyncItem) bool {
+		return it.Place != database.SyncGone && (have != "" || !it.Restored)
+	}) {
 		return nil
 	}
 	c, err := f.Scan()
 	if err != nil {
 		return err
 	}
-	if len(c.Files) > 0 || len(c.NotDownloaded) > 0 {
-		return errOtherFolder
+	if len(c.Files)+len(c.NotDownloaded)+len(c.Problems) == 0 {
+		return nil
 	}
-	return nil
+	if have == "" {
+		return errNeverSynced
+	}
+	return errOtherFolder
+}
+
+// mendInfo writes the sync folder's InfoFile again when it's lost (a sync
+// tool, or someone, deleted it): the vault that synced with the folder
+// knows its ID, and its key record is the folder's, as the entry files
+// there, sealed with its key, show. It says whether it did.
+func mendInfo(cfg *config.Config) (bool, error) {
+	f := syncfolder.New(cfg.SyncDir.Value)
+	if _, err := f.ReadInfo(); !errors.Is(err, syncfolder.ErrNoInfo) {
+		return false, nil
+	}
+	if checkSyncDir(f.Dir(), cfg.DBPath.Value) != nil {
+		return false, nil
+	}
+	id, err := database.VaultSyncFolder(cfg.DBPath.Value)
+	if err != nil || id == "" {
+		return false, err
+	}
+	m, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
+	if err != nil {
+		return false, err
+	}
+	c, err := f.Scan()
+	if err != nil {
+		return false, nil //nolint:nilerr // syncFolderOf says why the folder can't be read
+	}
+	keyID := database.UnlockID(m.Verify)
+	if !slices.ContainsFunc(c.Files, func(file syncfolder.File) bool { return file.KeyIDString() == keyID }) {
+		return false, nil
+	}
+	if err := f.WriteInfo(syncfolder.InfoFor(id, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params})); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // writeSyncSummary says what a sync did; problems make it an error, after
@@ -393,6 +447,13 @@ func syncInit(app *App, args []string) error {
 	case !errors.Is(err, syncfolder.ErrNoInfo):
 		return err
 	}
+	// Entry files without the info file: a sync folder that lost it, which
+	// a new one would cut off from every computer syncing through it.
+	if c, err := f.Scan(); err != nil {
+		return err
+	} else if len(c.Files)+len(c.NotDownloaded)+len(c.Problems) > 0 {
+		return fmt.Errorf("%s holds entry files but no %s: a sync folder that lost it. On a computer that synced with it, sesh sync writes it again; or make a sync folder elsewhere", tildePath(dir), syncfolder.InfoFile)
+	}
 	// Unlocked first: a wrong master password leaves no folder made.
 	store, err := openSQLiteStoreWith(cfg)
 	if err != nil {
@@ -443,10 +504,11 @@ func syncJoin(app *App, arg string) error {
 	if err != nil {
 		return err
 	}
-	if cfg.SyncDir.Value != "" && cfg.SyncDir.Value != dir {
+	same := cfg.SyncDir.Value != "" && within(dir, cfg.SyncDir.Value) && within(cfg.SyncDir.Value, dir)
+	if cfg.SyncDir.Value != "" && !same {
 		return fmt.Errorf("this vault syncs with %s already (sesh sync leave stops that)", tildePath(cfg.SyncDir.Value))
 	}
-	if cfg.SyncDir.Value == dir {
+	if same {
 		if _, err := fmt.Fprintf(app.Stdout, "This vault syncs with %s already.\n", tildePath(dir)); err != nil {
 			return err
 		}
@@ -485,11 +547,20 @@ func syncJoin(app *App, arg string) error {
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath.Value), 0o700); err != nil { //nolint:gosec // the vault's folder, from the user's own settings
 		return fmt.Errorf("create vault directory: %w", err)
 	}
+	prior, err := database.VaultSyncFolder(cfg.DBPath.Value)
+	if err != nil {
+		return err
+	}
 	rejoin, err := database.JoinVault(cfg.DBPath.Value, m, info.FolderID)
 	if err != nil {
 		return joinRefused(err, dir)
 	}
 	var notes []string
+	if !rejoin && prior == info.FolderID {
+		// An empty vault that left, its master password changed since: what
+		// it agreed was sealed with the old key, so it starts afresh.
+		notes = append(notes, "This vault synced with the folder before, under another master password: what it deleted since it left wasn't kept, so the folder's copies of those come back.")
+	}
 	if rekeyed {
 		if note := lockAgentHoldingOldKey(); note != "" {
 			notes = append(notes, note)
@@ -510,9 +581,12 @@ func syncJoin(app *App, arg string) error {
 		return err
 	}
 	var said strings.Builder
-	if rejoin {
+	switch {
+	case rejoin && prior == info.FolderID:
 		fmt.Fprintf(&said, "Joined the sync folder %s again: what changed here and in the folder since this vault left is merged.\n", tildePath(dir))
-	} else {
+	case rejoin:
+		fmt.Fprintf(&said, "Joined the sync folder %s: the entries restored from a backup are merged with the folder's.\n", tildePath(dir))
+	default:
 		fmt.Fprintf(&said, "Joined the sync folder %s: the vault here opens with the same master password as the others.\n", tildePath(dir))
 	}
 	for _, n := range notes {
@@ -542,7 +616,7 @@ func joinRefused(err error, dir string) error {
 // otherwise. The caller zeroes it.
 func joinPassword(pc passwordPromptConfig, dir string, m database.UnlockMaterial) ([]byte, error) {
 	if !pc.fromEnv && !pc.interactive {
-		return nil, errors.New("there's no terminal here to type the master password of the vaults syncing through the folder at: run sesh sync join at one, or give the password in SESH_MASTER_PASSWORD")
+		return nil, errors.New("there's no terminal here to type the master password at (the one the vaults syncing through the folder share): run sesh sync join at one, or give it in SESH_MASTER_PASSWORD")
 	}
 	tries := 1
 	if pc.interactive {
