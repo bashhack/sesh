@@ -1,0 +1,250 @@
+package database
+
+import (
+	"bytes"
+	"errors"
+	"path/filepath"
+	"slices"
+	"testing"
+
+	"github.com/bashhack/sesh/internal/syncfolder"
+	"github.com/bashhack/sesh/internal/vault"
+)
+
+// syncPair is two vaults under one master password, as two computers
+// syncing have.
+func syncPair(t *testing.T) (a, b *Store) {
+	t.Helper()
+	p, a := rekeyVault(t)
+	q := filepath.Join(t.TempDir(), "passwords.db")
+	if err := CopyTo(p, q); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Open(q, NewKeySourceOracle(NewMasterPasswordSource(q, staticPrompt("old-password-1"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.Close() }) //nolint:errcheck // test cleanup
+	for _, s := range []*Store{a, b} {
+		s.SetTrashDays(30)
+		s.SetHistoryKeep(10)
+	}
+	return a, b
+}
+
+func uidOf(t *testing.T, s *Store, k vault.Key) string {
+	t.Helper()
+	uid, _ := idOf(t, s, k)
+	return uid
+}
+
+// An entry read as a record and written into another vault is the same
+// entry there: its name, secret, details, folder, tags, times, earlier
+// secrets (with the computers they were replaced on) and forgotten ones;
+// and reading it back gives the same record.
+func TestSyncRecordApply(t *testing.T) {
+	a, b := syncPair(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	for _, pw := range []string{"pw-1", "pw-2", "pw-3"} {
+		if err := a.Put(k, []byte(pw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := &vault.Details{URL: "https://github.com", Notes: []byte("notes"), Fields: []vault.Field{{Name: "pin", Value: []byte("1234"), Secret: true}, {Name: "team", Value: []byte("core")}}}
+	if err := a.SaveWithDetails(&vault.Entry{Key: k, Folder: "work/dev", Tags: []string{"b", "a"}}, []byte("pw-4"), d); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ForgetVersions(k, 4); err != nil { // pw-1
+		t.Fatal(err)
+	}
+	uid := uidOf(t, a, k)
+	rec, rev, err := a.SyncRecord(uid, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(rec.Secret) != "pw-4" || rec.Folder != "work/dev" || !slices.Equal(rec.Tags, []string{"a", "b"}) || string(rec.Notes) != "notes" ||
+		len(rec.Fields) != 2 || string(rec.Fields[0].Value) != "1234" || !slices.Equal(secrets(rec.History), []string{"pw-3", "pw-2"}) ||
+		rec.History[0].Computer != "laptop" || len(rec.Forgotten) != 1 || rec.Changed.IsZero() {
+		t.Fatalf("record %+v", rec)
+	}
+	_, idRev := idOf(t, a, k)
+	if rev != idRev {
+		t.Errorf("rev %d, want %d", rev, idRev)
+	}
+	rec.History[1].Computer = "desktop"
+	if _, err := b.SyncApply(uid, 0, rec, syncfolder.Hash{1}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := b.SyncRecord(uid, "elsewhere")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Secret) != "pw-4" || got.Folder != rec.Folder || !slices.Equal(got.Tags, rec.Tags) || !bytes.Equal(got.Notes, rec.Notes) ||
+		len(got.Fields) != 2 || !slices.Equal(secrets(got.History), secrets(rec.History)) || got.History[1].Computer != "desktop" ||
+		!slices.Equal(got.Forgotten, rec.Forgotten) || !got.Created.Equal(rec.Created) || !got.Updated.Equal(rec.Updated) {
+		t.Errorf("applied %+v\nwant %+v", got, rec)
+	}
+	// Agreed, and so not changed here since.
+	it := syncItem(t, b, uid)
+	if it.Changed() || it.Agreed.Hash != (syncfolder.Hash{1}) {
+		t.Errorf("item %+v", it)
+	}
+	if base, err := b.SyncBase(uid); err != nil || string(base.Secret) != "pw-4" {
+		t.Errorf("base %v, %v", base, err)
+	}
+	// In the trash, then deleted for good.
+	rec.Deleted = rec.Changed
+	newRev, err := b.SyncApply(uid, it.Rev, rec, syncfolder.Hash{2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr, err := b.Trash(); err != nil || len(tr) != 1 || tr[0].Key != k {
+		t.Errorf("trash %v, %v", tr, err)
+	}
+	if h, err := b.syncHistory(&syncRow{key: k, place: SyncTrashed, id: trashID(t, b)}, "x"); err != nil || len(h) != 2 {
+		t.Errorf("trash history %d, %v", len(h), err)
+	}
+	if _, err := b.SyncApply(uid, newRev, &syncfolder.Record{Purged: rec.Changed}, syncfolder.Hash{3}); err != nil {
+		t.Fatal(err)
+	}
+	it = syncItem(t, b, uid)
+	if tr, _ := b.Trash(); len(tr) != 0 || it.Place != SyncGone || it.Changed() { //nolint:errcheck // a count
+		t.Errorf("after deleting for good: trash %v, item %+v", tr, it)
+	}
+}
+
+func trashID(t *testing.T, s *Store) int64 {
+	t.Helper()
+	tr, err := s.Trash()
+	if err != nil || len(tr) != 1 {
+		t.Fatalf("trash %v, %v", tr, err)
+	}
+	return tr[0].ID
+}
+
+func secrets(hs []syncfolder.Earlier) (out []string) {
+	for _, h := range hs {
+		out = append(out, string(h.Secret))
+	}
+	return out
+}
+
+// Applying a record refuses an entry changed since its rev was read, and a
+// name another entry has, changing nothing.
+func TestSyncApply_Refuses(t *testing.T) {
+	a, b := syncPair(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github"}
+	if err := a.Put(k, []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := a.SyncRecord(uidOf(t, a, k), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Put(k, []byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.SyncApply(uidOf(t, a, k), 0, rec, syncfolder.Hash{}); !errors.Is(err, ErrNameTaken) {
+		t.Errorf("a name taken: %v", err)
+	}
+	own := uidOf(t, b, k)
+	if _, err := b.SyncApply(own, 0, rec, syncfolder.Hash{}); !errors.Is(err, ErrEntryChanged) {
+		t.Errorf("an old rev: %v", err)
+	}
+	if got, _ := b.Get(k); string(got) != "b" { //nolint:errcheck // compared
+		t.Errorf("b's entry is %q", got)
+	}
+	if err := b.SyncAgree(own, 99, rec, syncfolder.Hash{}); !errors.Is(err, ErrEntryChanged) {
+		t.Errorf("agree at an old rev: %v", err)
+	}
+	if it := syncItem(t, b, own); it.Agreed != nil {
+		t.Errorf("item %+v", it)
+	}
+}
+
+// A new master password seals what was agreed again, so it still opens.
+func TestSync_RekeyKeepsWhatWasAgreed(t *testing.T) {
+	p, s := rekeyVault(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	uid := uidOf(t, s, k)
+	rec, rev, err := s.SyncRecord(uid, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncAgree(uid, rev, rec, syncfolder.Hash{7}); err != nil {
+		t.Fatal(err)
+	}
+	key, kr := newKeyFor(t, "new-password-1")
+	if _, err := s.Rekey(key, kr, rewrapTo); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(p, NewKeySourceOracle(NewMasterPasswordSource(p, staticPrompt("new-password-1"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close() //nolint:errcheck // test cleanup
+	base, err := s2.SyncBase(uid)
+	if err != nil || string(base.Secret) != "bank-secret" {
+		t.Fatalf("after the new password: %v, %v", base, err)
+	}
+	id, err := s2.SyncKeyID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b []byte
+	if err := s2.db.QueryRow(`SELECT base FROM sync_state WHERE uid = ?`, uid).Scan(&b); err != nil {
+		t.Fatal(err)
+	}
+	if h, err := syncfolder.ParseHeader(b); err != nil || h.KeyIDString() != id {
+		t.Errorf("sealed for %s, want the new key record %s (%v)", h.KeyIDString(), id, err)
+	}
+	if it := syncItem(t, s2, uid); it.Changed() {
+		t.Errorf("a new password changed the entry: %+v", it)
+	}
+}
+
+// Each computer's sync ID is made once, and its own.
+func TestSyncComputerID(t *testing.T) {
+	a, b := syncPair(t)
+	ia, err := a.SyncComputerID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _ := a.SyncComputerID() //nolint:errcheck // compared
+	ib, _ := b.SyncComputerID()    //nolint:errcheck // compared
+	if len(ia) != 16 || again != ia || ib == ia {
+		t.Errorf("ids %q %q %q", ia, again, ib)
+	}
+}
+
+// syncItem is uid's item in s.
+func syncItem(t *testing.T, s *Store, uid string) SyncItem {
+	t.Helper()
+	items, err := s.SyncItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(items, func(it SyncItem) bool { return it.UID == uid })
+	if i < 0 {
+		t.Fatalf("no item %s in %+v", uid, items)
+	}
+	return items[i]
+}
+
+// A change's count is past any seen for this computer, whatever the vault
+// had counted.
+func TestSyncNextChange(t *testing.T) {
+	s, _ := syncPair(t)
+	if n, err := s.SyncNextChange(0); err != nil || n != 1 {
+		t.Fatalf("first: %d, %v", n, err)
+	}
+	if n, err := s.SyncNextChange(10); err != nil || n != 11 {
+		t.Errorf("past 10 seen: %d, %v", n, err)
+	}
+	if n, err := s.SyncNextChange(3); err != nil || n != 12 {
+		t.Errorf("then: %d, %v", n, err)
+	}
+}

@@ -444,7 +444,8 @@ type Store interface {
 	// folder, tags, details, and creation time.
 	Put(k Key, secret []byte) error
 	// Save creates or replaces the entry's secret, settings, folder, tags,
-	// and times (a zero time means now), keeping its details (see
+	// and times (a zero creation time keeps the entry's, or means now for a
+	// new one; a zero update time means now), keeping its details (see
 	// SetDetails). Import and key changes use it.
 	Save(e *Entry, secret []byte) error
 	// SaveWithDetails is Save, also replacing the entry's details with d

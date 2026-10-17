@@ -11,6 +11,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/shell"
+	"github.com/bashhack/sesh/internal/syncfolder"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -533,13 +534,17 @@ func (s *Store) ForgetVersions(k vault.Key, ns ...int) error {
 		}
 		ids = append(ids, versions[n-2].ID)
 	}
+	marks, err := s.forgetMarks(k, ids)
+	if err != nil {
+		return fmt.Errorf("forget %s's versions: %w", k, err)
+	}
 	err = s.inTx(func(tx *sql.Tx) error {
 		for _, id := range ids {
 			if _, err := tx.Exec(`DELETE FROM history WHERE id = ?`, id); err != nil {
 				return err
 			}
 		}
-		return nil
+		return markForgotten(tx, k, marks)
 	})
 	if err != nil {
 		return fmt.Errorf("forget %s's versions: %w", k, err)
@@ -559,6 +564,10 @@ func (s *Store) ForgetVersionOf(k vault.Key, v Version) error {
 		return err
 	}
 	id := v.ID
+	marks, err := s.forgetMarks(k, []int64{id})
+	if err != nil {
+		return fmt.Errorf("forget %s's version %d: %w", k, n, err)
+	}
 	err = s.inTx(func(tx *sql.Tx) error {
 		res, err := tx.Exec(`DELETE FROM history WHERE id = ? AND kind = ? AND service = ? AND username = ? AND trash_id IS NULL`,
 			id, string(k.Kind), k.Service, k.Username)
@@ -568,7 +577,7 @@ func (s *Store) ForgetVersionOf(k vault.Key, v Version) error {
 		if gone, err := res.RowsAffected(); err != nil || gone == 0 {
 			return cmp.Or(err, ErrVersionGone)
 		}
-		return nil
+		return markForgotten(tx, k, marks)
 	})
 	if errors.Is(err, ErrVersionGone) {
 		return err
@@ -577,6 +586,67 @@ func (s *Store) ForgetVersionOf(k vault.Key, v Version) error {
 		return fmt.Errorf("forget %s's version %d: %w", k, n, err)
 	}
 	s.audit("purge", k.String(), fmt.Sprintf("History: forgot version %d", n))
+	return nil
+}
+
+// forgetMarks are the marks (syncfolder.Forget) of k's earlier secrets in
+// the history rows ids, opened to make them. A row gone meanwhile has none,
+// nor has one that doesn't open (damaged): it's forgotten here only, and a
+// sound copy of it on another computer comes back with a sync.
+func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]forgetMark, error) {
+	var marks []forgetMark
+	for _, id := range ids {
+		var data, salt []byte
+		var at time.Time
+		err := s.db.QueryRow(`SELECT encrypted_data, salt, replaced_at FROM history WHERE id = ?`, id).Scan(&data, &salt, &at)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		secret, err := s.oracle.DecryptEntry(data, salt, historyAAD(k))
+		if err != nil {
+			if kerr := s.keyUnchanged(s.db); kerr != nil {
+				return nil, kerr
+			}
+			continue
+		}
+		marks = append(marks, forgetMark{hash: syncfolder.Forget(secret), replaced: at})
+		secure.SecureZeroBytes(secret)
+	}
+	return marks, nil
+}
+
+// forgetMark is an earlier secret being forgotten: its hash
+// (syncfolder.Forget), and when it was replaced.
+type forgetMark struct {
+	replaced time.Time
+	hash     string
+}
+
+// markForgotten records, in tx, that k's earlier secrets with marks were
+// forgotten on purpose, so a sync forgets them everywhere.
+func markForgotten(tx *sql.Tx, k vault.Key, marks []forgetMark) error {
+	now := time.Now().UTC()
+	for _, m := range marks {
+		// No earlier than it was replaced, by whichever computer's clock,
+		// so it's forgotten wherever that's ahead of this one's; but no
+		// more than a day ahead of this one's, so a clock set far wrong
+		// can't keep the same secret, used again later, forgotten.
+		at := now
+		if m.replaced.After(at) {
+			at = m.replaced.UTC()
+		}
+		if limit := now.Add(24 * time.Hour); at.After(limit) {
+			at = limit
+		}
+		if _, err := tx.Exec(`INSERT INTO history_forgotten (uid, hash, at) SELECT uid, ?, ? FROM entries WHERE kind = ? AND service = ? AND username = ?
+			ON CONFLICT (uid, hash) DO UPDATE SET at = excluded.at`,
+			m.hash, at, string(k.Kind), k.Service, k.Username); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

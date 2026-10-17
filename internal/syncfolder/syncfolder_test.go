@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -90,7 +91,7 @@ func record() *Record {
 		Settings: vault.Settings{TOTP: totp.Params{Issuer: "GitHub", Digits: 8}},
 		Tags:     []string{"code", "work"},
 		History:  []Earlier{{ReplacedAt: at, Computer: "desktop", Secret: []byte("OLDKEYOLDKEYOLD2")}},
-		Version:  7,
+		Versions: Versions{"x": 7},
 	}
 }
 
@@ -120,11 +121,11 @@ func TestSealOpen(t *testing.T) {
 		t.Errorf("opened %+v\nwant %+v", got, want)
 	}
 	// One deleted for good keeps only its version and computer.
-	purged := &Record{Purged: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC), Computer: "desktop", Version: 8}
+	purged := &Record{Purged: time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC), Computer: "desktop", Versions: Versions{"x": 8}}
 	if b, err = Seal(s, h, purged); err != nil {
 		t.Fatal(err)
 	}
-	if _, got, err = Open(s, b); err != nil || !got.Purged.Equal(purged.Purged) || got.Version != 8 || got.Service != "" || got.Secret != nil {
+	if _, got, err = Open(s, b); err != nil || !got.Purged.Equal(purged.Purged) || got.Versions["x"] != 8 || got.Service != "" || got.Secret != nil {
 		t.Errorf("purged: %+v, %v", got, err)
 	}
 }
@@ -136,7 +137,7 @@ func recordsEqual(a, b *Record) bool {
 		slices.EqualFunc(a.Fields, b.Fields, func(x, y Field) bool {
 			return x.Name == y.Name && bytes.Equal(x.Value, y.Value) && x.Secret == y.Secret
 		}) &&
-		a.Settings == b.Settings && slices.Equal(a.Tags, b.Tags) && a.Version == b.Version &&
+		a.Settings == b.Settings && slices.Equal(a.Tags, b.Tags) && maps.Equal(a.Versions, b.Versions) &&
 		slices.EqualFunc(a.History, b.History, func(x, y Earlier) bool {
 			return x.ReplacedAt.Equal(y.ReplacedAt) && x.Computer == y.Computer && x.FileName == y.FileName && bytes.Equal(x.Secret, y.Secret)
 		})
@@ -446,7 +447,7 @@ func TestOpen_UnknownFieldIsNewer(t *testing.T) {
 	s := newSealer(t)
 	h := header(t, uid1)
 	hb := h.bytes()
-	plain := []byte(`{"service":"x","computer":"new","version":3,"passkeys":[{"id":"p"}]}`)
+	plain := []byte(`{"service":"x","computer":"new","versions":{"x":3},"passkeys":[{"id":"p"}]}`)
 	sealed, salt, err := s.EncryptEntry(plain, pieceAAD(hb, 0, true))
 	if err != nil {
 		t.Fatal(err)
@@ -600,7 +601,7 @@ func TestOpen_PiecesBound(t *testing.T) {
 	s := newSealer(t)
 	h := header(t, uid1)
 	file := func(ps ...[]byte) []byte { return append(h.bytes(), slices.Concat(ps...)...) }
-	p := sealPieces(t, s, h, []string{`{"service":"`, `ab`, `ba`, `","version":1}`}, []bool{false, false, false, true})
+	p := sealPieces(t, s, h, []string{`{"service":"`, `ab`, `ba`, `","versions":{"x":1}}`}, []bool{false, false, false, true})
 	if _, r, err := Open(s, file(p...)); err != nil || r.Service != "abba" {
 		t.Fatalf("as sealed: %+v, %v", r, err)
 	}
@@ -608,7 +609,7 @@ func TestOpen_PiecesBound(t *testing.T) {
 		t.Errorf("two pieces swapped: opened, service %q", r.Service)
 	}
 	// A record whole in its first piece, with a last piece after.
-	q := sealPieces(t, s, h, []string{`{"service":"x","version":1}`, ` `}, []bool{false, true})
+	q := sealPieces(t, s, h, []string{`{"service":"x","versions":{"x":1}}`, ` `}, []bool{false, true})
 	if _, _, err := Open(s, file(q...)); err != nil {
 		t.Fatalf("as sealed: %v", err)
 	}

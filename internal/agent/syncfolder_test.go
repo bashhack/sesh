@@ -21,7 +21,7 @@ func TestOracle_SealsLargeSyncFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &syncfolder.Record{Service: "big", Secret: bytes.Repeat([]byte{1}, 1<<20), Version: 1}
+	r := &syncfolder.Record{Service: "big", Secret: bytes.Repeat([]byte{1}, 1<<20), Versions: syncfolder.Versions{"x": 1}}
 	for range 10 {
 		r.History = append(r.History, syncfolder.Earlier{ReplacedAt: time.Now(), Secret: bytes.Repeat([]byte{2}, 1<<20)})
 	}
