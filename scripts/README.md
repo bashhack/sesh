@@ -145,8 +145,15 @@ sesh aws --no-subshell
 # A profile the mock doesn't know
 sesh aws setup --profile nosuch
 
+# A profile that signs in with aws login: its session has ended until
+# "aws login" runs (the mock signs in at once, keeping the session in
+# MOCK_AWS_STATE, or the temp folder), and "aws logout" ends it
+export MOCK_AWS_LOGIN_PROFILES=work
+sesh aws setup --profile work      # keeps only the key
+sesh aws --profile work            # signs in, with the code, then the shell
+
 # Reset to normal
-unset MOCK_AWS_FAIL MOCK_AWS_NO_MFA MOCK_AWS_REFUSE_CODE
+unset MOCK_AWS_FAIL MOCK_AWS_NO_MFA MOCK_AWS_REFUSE_CODE MOCK_AWS_LOGIN_PROFILES
 ```
 
 ## Notes

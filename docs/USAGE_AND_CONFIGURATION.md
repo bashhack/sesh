@@ -859,6 +859,26 @@ $
 
 `sesh_status` also lists the AWS variables that are set, without their values, and checks the credentials with `aws sts get-caller-identity`.
 
+### Profiles that sign in with `aws login` or SSO
+
+AWS's newer ways in, [`aws login`](https://docs.aws.amazon.com/signin/latest/userguide/command-line-sign-in.html) (your console sign-in, in the browser) and `aws sso login` (IAM Identity Center), keep no access keys: the AWS CLI holds a session, and renews its credentials, which last 15 minutes at a time, for up to 12 hours with `aws login`. sesh tells such a profile by its configuration (`login_session`, or `sso_session` or `sso_start_url`), and works with it this way:
+
+```bash
+$ sesh aws --profile work
+🔐 Profile work's session has ended: signing in with aws login
+🔑 The MFA code is on the clipboard, kept current while you sign in: paste it when AWS asks
+...                                   (the AWS CLI opens the browser; sign in, paste the code)
+✅ Profile work signs in as arn:aws:iam::123456789012:user/alice, through aws login
+Starting secure shell with aws credentials
+(sesh:aws) $
+```
+
+- **When the session still works,** there's no sign-in, and the vault isn't opened.
+- **When it has ended,** sesh runs `aws login` (or `aws sso login`) for the profile. If sesh has the profile's MFA key, its code is on the clipboard for the sign-in page, a fresh one each time it changes, until the sign-in is done. Where nothing can be copied (over SSH), sesh prints the code instead. Over SSH, the sign-in is `aws login --remote` (or `aws sso login --no-browser`), which shows a link to open on another device.
+- **The shell** has `AWS_PROFILE` set to the profile, and no credentials in variables: the AWS CLI and SDKs read the profile and keep its credentials fresh, so the shell works as long as the session does. `sesh_status` says so. With `--no-subshell`, sesh prints the lines that do the same in your own shell (`unset` of any credential variables, and `export AWS_PROFILE=…`).
+- **The MFA key** is stored with `sesh aws setup --profile work`, as for any profile, but setup only keeps the key: it doesn't ask AWS who the profile is or for a device, since the browser sign-in asks for the code itself. Its `e` choice takes the key from a TOTP entry sesh already has, such as one imported from your phone's authenticator app (`sesh import`), for a device AWS already has.
+- **A profile that assumes a role** (`role_arn`) gets its credentials from the AWS CLI, which asks for the MFA code itself: `sesh aws --profile … --clip` copies the code for it.
+
 ### AWS Console Access Workflow
 
 For AWS Console (web) access, use clipboard mode to generate a TOTP code and copy it for pasting:
@@ -1704,9 +1724,10 @@ $ echo 'otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub' | ses
 A key typed or piped in alone makes the usual codes (6 digits every 30 seconds), and needs a name: `sesh add totp <name>`, or, at a terminal, sesh asks for one.
 
 **`sesh aws setup` in more detail:**
-- **The profile** is `--profile`, or `AWS_PROFILE` (or `AWS_DEFAULT_PROFILE`); without any, setup asks, and Enter takes the default profile. It needs an IAM user's own access keys: a profile that signs in with `aws login`, SSO or a role gets temporary credentials, which AWS gives no MFA session to, so setup refuses it, saying which it is.
+- **The profile** is `--profile`, or `AWS_PROFILE` (or `AWS_DEFAULT_PROFILE`); without any, setup asks, and Enter takes the default profile. For a profile with an IAM user's own access keys, setup checks who it signs in as, and finds the MFA device. A profile that signs in with `aws login`, SSO or a role only needs the code, so setup keeps just the key (see [Profiles that sign in with `aws login` or SSO](#profiles-that-sign-in-with-aws-login-or-sso)).
 - **The key is saved before the AWS console step.** Once AWS has taken the codes, the device is live, so a key lost after that would leave you unable to make its codes. If anything stops the setup from then on (Ctrl-C, Ctrl-D, the agent locking while you're in the browser), the key stays in the vault; except after Ctrl-C, setup says so. `sesh aws` then asks AWS for the device, when the user has one authenticator app; otherwise run `sesh aws setup` again to choose it. Replacing a profile's key keeps the old one in the entry's [history](#password-history), unless `history.keep` is 0, which setup warns of before replacing it.
 - **After setup,** wait for the next code (up to 30 seconds) before the first `sesh aws`: AWS has just used the codes setup gave.
+- **The key** is typed, read from a QR code (an image file, or on macOS the screen), or, with `e`, taken from a TOTP entry sesh already has, for a device AWS already has (one imported from your phone's authenticator app, say): that skips the AWS console step, since AWS has the device.
 - **The device** is chosen from the authenticator apps AWS lists for the user (security keys and hardware tokens are left out: sesh can't make their codes), or typed as its ARN, which has to be in the profile's account. If AWS says the codes are wrong (they were made too long before), `n` at that step makes new ones.
 
 ### QR Code Setup Flow
@@ -1788,7 +1809,9 @@ sesh add --help
 | "failed to detect MFA device: AWS lists no authenticator app …" | The entry has no MFA device saved, and AWS lists no authenticator app for the profile's user | Run `sesh aws setup`, adding the device in the AWS console as it says |
 | "failed to detect MFA device: AWS lists N authenticator apps …" | The entry has no MFA device saved, and the user has several, so sesh can't tell which the key is for | Run `sesh aws setup` again and choose the device |
 | "AWS couldn't say who profile X signs in as …" (from `sesh aws setup`) | The AWS CLI can't use the profile; its own message follows | Run the `aws sts get-caller-identity` command it gives, and fix the profile (`aws configure`, or sign in again) |
-| "… signs in with aws login (or SSO, or a role) …", "… signs in as …, a temporary session …", or "… signs in with temporary credentials …" | The profile gets temporary credentials, and AWS gives MFA sessions only to an IAM user's own access keys | Use a profile with an IAM user's access keys for `sesh aws` |
+| "… signs in as …, a temporary session …", or "… signs in with temporary credentials …" | sesh took the profile for one with access keys, but AWS gave temporary credentials | Check the profile's configuration: `aws configure list --profile …` |
+| "profile X assumes a role (role_arn): the AWS CLI asks for its MFA code itself …" | The profile's credentials come from assuming a role | Use the AWS CLI with the profile; `sesh aws --profile X --clip` copies the code it asks for |
+| "aws login didn't sign profile X in: …" | The browser sign-in was cancelled or failed | Run `sesh aws --profile X` again; or `aws login --profile X` to see the AWS CLI's own messages |
 | "The MFA key is saved, as totp/aws/X, but not which MFA device it's for …" | `sesh aws setup` stopped after saving the key | If the user has one authenticator app in AWS, `sesh aws` works, asking AWS for it; otherwise run `sesh aws setup` again to choose it |
 | "failed to capture screenshot" | Reading the QR code on screen was cancelled or failed | In `sesh aws setup`, choose another way to read the key; for `sesh add totp`, leave out `--qr` and type the key, or use `--qr-image` |
 | "failed to decode QR code" | QR code blurry, too small, or not `otpauth://` format | Type the key instead, or retake a clearer screenshot |

@@ -77,9 +77,29 @@ type SessionCredentials struct {
 // before or after the command.
 var positional []string
 
+// profile is the profile the command is for: --profile, AWS_PROFILE, or
+// default.
+var profile string
+
+// loginProfile says whether the profile signs in with aws login: those in
+// MOCK_AWS_LOGIN_PROFILES, comma-separated.
+func loginProfile() bool {
+	return strings.Contains(","+os.Getenv("MOCK_AWS_LOGIN_PROFILES")+",", ","+profile+",")
+}
+
+// sessionFile is where the mock keeps a login profile's session: present
+// after aws login, gone after aws logout. MOCK_AWS_STATE names the folder.
+func sessionFile() string {
+	dir := os.Getenv("MOCK_AWS_STATE")
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	return dir + "/mock-aws-login-" + profile
+}
+
 // main dispatches mock AWS CLI commands based on the first argument.
 func main() {
-	profile := os.Getenv("AWS_PROFILE")
+	profile = os.Getenv("AWS_PROFILE")
 	for i := 1; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--profile", "--output", "--query", "--region":
@@ -107,6 +127,9 @@ func main() {
 	}
 
 	command := positional[0]
+	if profile == "" {
+		profile = "default"
+	}
 
 	switch command {
 	case "sts":
@@ -115,6 +138,20 @@ func main() {
 		handleIAM()
 	case "configure":
 		handleConfigure()
+	case "login":
+		if !loginProfile() {
+			fmt.Fprintf(os.Stderr, "\nThe profile (%s) isn't set up for aws login in this mock: add it to MOCK_AWS_LOGIN_PROFILES\n", profile)
+			os.Exit(255)
+		}
+		fmt.Println("Attempting to open your default browser. (mock: signed in at once)")
+		if err := os.WriteFile(sessionFile(), nil, 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Updated profile %s to use arn:aws:iam::%s:user/%s credentials.\n", profile, mockAccountID, mockUsername)
+	case "logout":
+		_ = os.Remove(sessionFile())
+		fmt.Printf("Removed cached login credentials for profile '%s'.\n", profile)
 	case "--version":
 		fmt.Println("aws-cli/2.13.0 Python/3.11.4 Darwin/23.0.0 exe/x86_64 prompt/off")
 	default:
@@ -181,11 +218,13 @@ func handleConfigure() {
 			fmt.Fprintf(os.Stderr, "%sError: configure get requires a key%s\n", colorRed, colorReset)
 			os.Exit(1)
 		}
-		key := positional[2]
-		if key == "region" {
+		switch key := positional[2]; {
+		case key == "region":
 			fmt.Println(mockRegion)
-		} else {
-			fmt.Fprintf(os.Stderr, "%sError: Unknown configure key '%s'%s\n", colorRed, key, colorReset)
+		case key == "login_session" && loginProfile():
+			fmt.Printf("arn:aws:iam::%s:user/%s\n", mockAccountID, mockUsername)
+		default:
+			// The real CLI says nothing for a setting that isn't there.
 			os.Exit(1)
 		}
 	default:
@@ -198,6 +237,13 @@ func handleConfigure() {
 func getCallerIdentity() {
 	// Simulate a brief network delay
 	time.Sleep(100 * time.Millisecond)
+
+	if loginProfile() {
+		if _, err := os.Stat(sessionFile()); err != nil {
+			fmt.Fprintf(os.Stderr, "\naws: [ERROR]: Error loading login session token: Unable to load a existing login session for session arn:aws:iam::%s:user/%s, Please reauthenticate with 'aws login'.\n", mockAccountID, mockUsername)
+			os.Exit(255)
+		}
+	}
 
 	// Check if we're in a failed state (for testing error scenarios)
 	if os.Getenv("MOCK_AWS_FAIL") == "true" {

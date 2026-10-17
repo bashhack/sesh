@@ -46,7 +46,7 @@ func (a *App) LaunchSubshell(p provider.ServiceProvider, release func()) error {
 	if !ok {
 		return fmt.Errorf("provider %s returned invalid subshell configuration", serviceName)
 	}
-	shellConfig, err := subshell.GetShellConfig(config)
+	shellConfig, err := subshell.GetShellConfig(&config)
 	if err != nil {
 		return err
 	}

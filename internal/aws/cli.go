@@ -108,7 +108,7 @@ const SessionCredentialsMessage = "Cannot call GetSessionToken with session cred
 // temporary credentials, which AWS gives no MFA session to.
 func ProfileKind(profile string) string {
 	for _, k := range []struct{ setting, kind string }{
-		{"login_session", "aws login"}, {"sso_session", "SSO"}, {"sso_start_url", "SSO"}, {"role_arn", "a role"},
+		{"login_session", KindLogin}, {"sso_session", KindSSO}, {"sso_start_url", KindSSO}, {"role_arn", KindRole},
 	} {
 		// configure get fails, saying nothing, for a setting that isn't there.
 		if out, err := RunCLI(profile, "configure", "get", k.setting); err == nil && strings.TrimSpace(string(out)) != "" {

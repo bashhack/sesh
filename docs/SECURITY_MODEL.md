@@ -255,6 +255,10 @@ While we cannot achieve perfect security, our approach significantly reduces ris
 - **Without Protection**: Secrets persist as strings across multiple allocations with no cleanup
 - **With sesh**: Secrets are kept as `[]byte` and zeroed after use, reducing the exposure window for memory dump attacks
 
+## Profiles that sign in with `aws login` or SSO
+
+For these, sesh never handles AWS credentials: the AWS CLI keeps them, in its own cache, and renews them. sesh's part is the MFA code: while `aws login` (or `aws sso login`) runs, the code is on the clipboard, replaced by the next one as each runs out, and cleared as any copy is (`clipboard_timeout` after the last); the vault is opened only for that, and closed before the sign-in ends. The shell gets the profile's name, not credentials, so a program run in it reads the credentials the way the AWS CLI does, from its cache. The MFA key read for the code is recorded in the audit log.
+
 ## Subshell Security
 
 The AWS subshell provides an isolated credential environment:
