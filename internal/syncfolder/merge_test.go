@@ -221,6 +221,31 @@ func TestMerge_History(t *testing.T) {
 	}
 }
 
+// The secret both had, forgotten on one, stays forgotten though the other
+// replaced it after that, not having synced since.
+func TestMerge_ForgottenThenReplaced(t *testing.T) {
+	forgot := changed("laptop", 1, func(r *Record) {
+		r.Secret, r.Updated = []byte("pw-2"), t0.Add(time.Hour)
+		r.Forgotten = []Forgotten{{Hash: Forget([]byte("pw-1")), At: t0.Add(2 * time.Hour)}}
+	})
+	replaced := changed("desktop", 3, func(r *Record) {
+		r.Secret, r.Updated = []byte("pw-3"), t0.Add(3*time.Hour)
+		r.History = append([]Earlier{{ReplacedAt: t0.Add(3 * time.Hour), Computer: "desktop", Secret: []byte("pw-1")}}, r.History...)
+	})
+	m := merge(t, baseRecord(), forgot, replaced)
+	if string(m.Secret) != "pw-3" || hasEarlier(m.History, []byte("pw-1")) || !hasEarlier(m.History, []byte("pw-2")) {
+		t.Errorf("secret %s, history %+v", m.Secret, m.History)
+	}
+	if want := []Forgotten{{Hash: Forget([]byte("pw-1")), At: t0.Add(3 * time.Hour)}}; !slices.Equal(m.Forgotten, want) {
+		t.Errorf("forgotten %+v, want %+v", m.Forgotten, want)
+	}
+	// The desktop, synced at its own version, takes the merge: its pw-1 too
+	// is forgotten.
+	if again := merge(t, replaced, replaced, m.Record); hasEarlier(again.History, []byte("pw-1")) {
+		t.Errorf("desktop's history %+v", again.History)
+	}
+}
+
 // An entry deleted on one computer and left on the other is deleted; edited
 // on the other, it comes back with the edit; restored on one, it's back.
 func TestMerge_Trash(t *testing.T) {
