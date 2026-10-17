@@ -842,3 +842,42 @@ func TestImport_BitwardenNoTerminal(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 }
+
+// LastPass Authenticator's export is found without --from, and its
+// accounts imported as TOTP entries; one sesh has already is a clash.
+func TestImport_LastPassAuthenticator(t *testing.T) {
+	env := importVault(t)
+	file := filepath.Join(t.TempDir(), "accounts.json")
+	if err := os.WriteFile(file, []byte(`{"localDeviceId": null, "deviceName": "phone", "version": 1,
+  "folders": [{"id": 0, "name": "Other Accounts", "isOpened": true}],
+  "accounts": [
+    {"issuerName": "GitHub", "originalIssuerName": "GitHub", "userName": "alice", "originalUserName": "alice", "secret": "JBSWY3DPEHPK3PXP",
+     "algorithm": "SHA1", "digits": 6, "timeStep": 30, "creationTimestamp": 1715971083, "isFavorite": false, "folderData": {"folderId": 0, "position": 0}},
+    {"issuerName": "Amazon Web Services", "originalIssuerName": "Amazon Web Services", "userName": "alice@123456789012", "originalUserName": "alice@123456789012",
+     "secret": "JBSWY3DPEHPK3PXQ", "algorithm": "SHA1", "digits": 6, "timeStep": 30, "creationTimestamp": 1715971100, "isFavorite": true, "folderData": {"folderId": 0, "position": 1}}
+  ]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, err := runImportOut(t, "", false, "--dry-run", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Found 2 accounts in the LastPass Authenticator export.", "totp/Amazon Web Services/alice@123456789012", "totp/GitHub/alice"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("summary missing %q:\n%s", want, stderr)
+		}
+	}
+	out, _, err := runImportOut(t, "", false, "--from", "lastpass-authenticator", "--yes", "--on-conflict", "skip", file)
+	if err != nil || !strings.Contains(out, "✅ Imported 1 TOTP entry from LastPass Authenticator.") || !strings.Contains(out, "delete "+file+" now") {
+		t.Fatalf("%q, %v", out, err)
+	}
+	store := openDoctorVault(t, env)
+	defer store.Close() //nolint:errcheck // test cleanup
+	k := vault.Key{Kind: vault.KindTOTP, Service: "Amazon Web Services", Username: "alice@123456789012"}
+	if e, err := store.Lookup(k); err != nil || !slices.Equal(e.Tags, []string{"favorite"}) || e.CreatedAt.Unix() != 1715971100 {
+		t.Errorf("imported: %+v, %v", e, err)
+	}
+	if secret, err := store.Get(k); err != nil || string(secret) != "JBSWY3DPEHPK3PXQ" {
+		t.Errorf("secret %q, %v", secret, err)
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/bashhack/sesh/internal/importer/browser"
 	"github.com/bashhack/sesh/internal/importer/gauth"
 	"github.com/bashhack/sesh/internal/importer/keepass"
+	"github.com/bashhack/sesh/internal/importer/lpauth"
 	"github.com/bashhack/sesh/internal/importer/seshexport"
 	"github.com/bashhack/sesh/internal/password"
 	"github.com/bashhack/sesh/internal/qrcode"
@@ -33,30 +34,33 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
   clashes with entries you have, and what it will skip, then asks.
 
   Sources:
-    bitwarden             A Bitwarden export: JSON, plain or protected by a
-                          password of its own (sesh asks for it), or CSV
-                          (logins and notes, with no old passwords or dates).
-    chrome                Chrome's password export (CSV), or that of another
-                          browser built on Chromium that writes the same.
-    firefox               Firefox's password export (CSV).
-    google-authenticator  The "Transfer accounts" QR codes: screenshots or
-                          photos (PNG or JPEG), or their otpauth-migration://
-                          text in a file, or piped in with - as the file.
-                          Give every code of a large export.
-    keepass               A KeePass XML export, from KeePassXC or KeePass 2
-                          (in KeePassXC: Database > Export > XML File).
-    safari                Safari's password export (CSV), from Apple's
-                          Passwords app (File > Export All Passwords to File).
-    sesh                  sesh's own export (sesh export): encrypted, when
-                          sesh asks for its password, or plain JSON or CSV.
+    bitwarden               A Bitwarden export: JSON, plain or protected by a
+                            password of its own (sesh asks for it), or CSV
+                            (logins and notes, with no old passwords or dates).
+    chrome                  Chrome's password export (CSV), or that of another
+                            browser built on Chromium that writes the same.
+    firefox                 Firefox's password export (CSV).
+    google-authenticator    The "Transfer accounts" QR codes: screenshots or
+                            photos (PNG or JPEG), or their otpauth-migration://
+                            text in a file, or piped in with - as the file.
+                            Give every code of a large export.
+    keepass                 A KeePass XML export, from KeePassXC or KeePass 2
+                            (in KeePassXC: Database > Export > XML File).
+    lastpass-authenticator  LastPass Authenticator's export (JSON), made in the
+                            app's Settings, under Transfer accounts.
+    safari                  Safari's password export (CSV), from Apple's
+                            Passwords app (File > Export All Passwords to File).
+    sesh                    sesh's own export (sesh export): encrypted, when
+                            sesh asks for its password, or plain JSON or CSV.
 
   sesh import --from google-authenticator IMG_1234.png IMG_1235.png
   sesh import --from bitwarden bitwarden_export.json
   sesh import --from keepass Passwords.xml
+  sesh import --from lastpass-authenticator accounts.json
   sesh import --from chrome "Chrome Passwords.csv"`
 
 // importSources are the apps sesh import reads.
-var importSources = []string{"bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "safari", "sesh"}
+var importSources = []string{"bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "lastpass-authenticator", "safari", "sesh"}
 
 func addImportFlags(fs *flag.FlagSet) (from, onConflict *string, dryRun, yes *bool) {
 	from = fs.String("from", "", "Where the file comes from: "+strings.Join(importSources, ", "))
@@ -179,6 +183,8 @@ func readImport(source string, args []string, stdin io.Reader, terminal bool, as
 		return readBitwarden(args, ask)
 	case "keepass":
 		return readKeePass(args)
+	case "lastpass-authenticator":
+		return readLastPassAuthenticator(args)
 	case browser.Chrome, browser.Firefox, browser.Safari:
 		return readBrowser(source, args)
 	case "sesh":
@@ -379,6 +385,8 @@ func detectSource(args []string) string {
 			return "bitwarden"
 		case keepass.IsExport(b):
 			return "keepass"
+		case lpauth.IsExport(b):
+			return "lastpass-authenticator"
 		case password.IsEncryptedExport(b), password.IsPlainExport(b):
 			// A plain one is sent where it's imported from.
 			return "sesh"
@@ -732,6 +740,28 @@ func readKeePass(args []string) (found, error) {
 		header:  fmt.Sprintf("Found %s and %s in the KeePass export.", nouns(entries, "entry", "entries"), nouns(groups, "group", "groups")),
 		after:   "This export holds your passwords unencrypted: delete " + args[0] + " now, and empty the trash.",
 		entries: keepass.Entries(&exp),
+	}, nil
+}
+
+// readLastPassAuthenticator reads LastPass Authenticator's account export.
+func readLastPassAuthenticator(args []string) (found, error) {
+	if len(args) != 1 {
+		return found{}, errors.New("give one LastPass Authenticator export: sesh import --from lastpass-authenticator <accounts.json>")
+	}
+	b, err := os.ReadFile(args[0]) //nolint:gosec // the file the user named
+	if err != nil {
+		return found{}, err
+	}
+	defer secure.SecureZeroBytes(b)
+	exp, err := lpauth.Parse(b)
+	if err != nil {
+		return found{}, err
+	}
+	return found{
+		source:  "LastPass Authenticator",
+		header:  fmt.Sprintf("Found %s in the LastPass Authenticator export.", nouns(len(exp.Accounts), "account", "accounts")),
+		after:   "This export holds every TOTP key unencrypted: delete " + args[0] + " now, and empty the trash.",
+		entries: lpauth.Entries(&exp),
 	}, nil
 }
 

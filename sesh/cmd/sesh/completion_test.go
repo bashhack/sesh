@@ -27,7 +27,7 @@ func TestComplete(t *testing.T) {
 		{name: "run's command", words: all("run", "--env", "K=sesh://api_key/x", "--", ""), files: true},
 		{name: "run --env-file", words: all("run", "--env-file", ""), files: true},
 		{name: "inject flags", words: all("inject", "-"), has: all("--i", "--o")},
-		{name: "import sources", words: all("import", "--from", ""), want: all("bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "safari", "sesh")},
+		{name: "import sources", words: all("import", "--from", ""), want: all("bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "lastpass-authenticator", "safari", "sesh")},
 		{name: "show flags", words: all("show", "github", "-"), has: all("--reveal", "--json")},
 		{name: "entry words aren't completed, flags are", words: all("show", ""), want: all("--json", "--qr", "--reveal", "--uri", "--db-path")},
 		{name: "list kinds", words: all("list", ""), want: all("passwords", "keys", "notes", "totp", "files")},
