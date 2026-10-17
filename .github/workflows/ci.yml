@@ -12,6 +12,12 @@ on:
   pull_request:
     branches: [ main ]  # Run on PRs to main
 
+# A new push to a PR cancels that PR's run still going; pushes to main and
+# tags each run in full.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
@@ -57,7 +63,6 @@ jobs:
   test:
     name: Test
     runs-on: macos-latest  # macOS for sesh (Touch ID's native code)
-    needs: [lint]
     strategy:
       fail-fast: false
     steps:
@@ -80,12 +85,6 @@ jobs:
           grep -v "testutil\|mock\|provider/interfaces.go\|scripts/\|cmd/sesh/main.go" coverage.txt > coverage.filtered.txt || true
           go tool cover -html=coverage.filtered.txt -o coverage.html
           rm -f coverage.filtered.txt
-
-      - name: Run tests with race detection
-        run: |
-          CORES=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
-          RACE_CORES=$([ $CORES -gt 4 ] && echo 4 || echo $CORES)
-          GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -vet=off $(go list ./... | grep -v /scripts)
 
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
@@ -114,10 +113,31 @@ jobs:
           path: ./build/sesh
           if-no-files-found: error
 
+  # Its own job so it runs beside the coverage run, not after it.
+  race:
+    name: Test with -race
+    runs-on: macos-latest  # macOS for sesh (Touch ID's native code)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Run tests with race detection
+        run: |
+          CORES=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
+          RACE_CORES=$([ $CORES -gt 4 ] && echo 4 || echo $CORES)
+          GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -vet=off $(go list ./... | grep -v /scripts)
+
   test-linux:
     name: Test (Linux)
     runs-on: ubuntu-latest
-    needs: [lint]
     steps:
       - uses: actions/checkout@v4
 
@@ -139,7 +159,6 @@ jobs:
   agent-smoke:
     name: Agent smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    needs: [lint]
     strategy:
       fail-fast: false
       matrix:
@@ -159,7 +178,7 @@ jobs:
   release:
     name: Release
     runs-on: macos-latest  # macOS for sesh
-    needs: [test, test-linux, agent-smoke]
+    needs: [lint, test, race, test-linux, agent-smoke]
     if: github.ref_type == 'tag'
 
     # Requires a 'RELEASE_TOKEN' secret (personal access token with 'repo' permissions)

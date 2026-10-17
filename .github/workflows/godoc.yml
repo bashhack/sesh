@@ -20,12 +20,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.27'
-          cache: true
-
+      # No Go setup: this job only asks the module proxy, and setup-go here
+      # would save an empty Go cache under the key CI's Linux jobs restore.
       - name: Get latest version or commit
         id: get_version
         run: |
