@@ -97,6 +97,8 @@ func TestDoctor_ASoundVault(t *testing.T) {
 		"  -     Agent           not running; it starts when a command needs it\n" +
 		"  ok    Key settings    19 MiB, 2 passes, 1 thread\n" +
 		"  -     Backups         automatic backups are off (backup.every_days = 0)\n" +
+		"  -     Sync            off\n" +
+		"                        sesh sync init syncs this vault with your other computers\n" +
 		"\nVault: " + tildePath(env.dbPath) + "\n" +
 		"  ok    File            ok\n" +
 		"  ok    Entries         2 entries, all readable\n" +

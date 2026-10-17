@@ -198,6 +198,11 @@ func planRestore(cfg *config.Config, path string) (*restorePlan, error) {
 	default:
 		fmt.Fprintf(&plan, "  The vault now is damaged (%v).\n  It's moved aside, not deleted, and the backup is copied in. Make sure no other sesh command is running.\n", currentErr)
 	}
+	// Syncing, it says what the next sync does with what's restored
+	// (decided with the user 2026-10-17).
+	if cfg.SyncDir.Value != "" {
+		plan.WriteString(syncRestoreNote)
+	}
 	return &restorePlan{path: path, name: name, made: made, question: plan.String(), backup: b, whole: currentErr != nil}, nil
 }
 
@@ -252,3 +257,11 @@ func backupCount(b database.BackupSummary) string {
 	}
 	return n
 }
+
+// syncRestoreNote is what a restore says of the next sync, when the vault
+// syncs.
+const syncRestoreNote = `  This vault syncs: at the next sync, the restored entries win over the other
+  computers' versions (their passwords kept in each entry's history), but
+  anything deleted since, on any computer, stays deleted. To undo a deletion,
+  use sesh trash instead.
+`

@@ -631,10 +631,12 @@ Each event takes about 100 bytes, and the log's size doesn't slow sesh down, but
 `sesh doctor` checks sesh's setup, then unlocks the vault and checks that all of it can be read. The setup part needs no password, and is shown first:
 
 - **Config:** the config file loads (or there's none, and the defaults apply: it says where changing a setting makes it).
+- **Vault place:** a vault in a folder a sync tool copies to other computers (iCloud Drive, a folder under `~/Library/CloudStorage` for Dropbox, Google Drive, OneDrive or Box, `~/Dropbox`, `~/Google Drive`, `~/OneDrive`, `~/Nextcloud`) is a warning: a sync tool copying it while sesh writes it can damage it. Move it with `sesh init`, and sync with `sesh sync` instead.
 - **Vault file:** the vault exists, only you can read it, and no one else can replace or delete it through its folder. A symlink is followed to the real file. For a folder that's yours, sesh gives the `chmod` to run; for a shared one, such as `/tmp`, it says to move the vault with `sesh init`.
 - **Agent:** whether it's running and unlocked. The setup checks never start it; unlocking the vault, below, does, as any command would. One running another sesh build is replaced by the next command.
 - **Key settings:** the vault's key wasn't made with weaker Argon2id settings than the configured ones (`[master_password]`). Weaker means neither its memory nor its passes is higher than configured, and at least one is lower; threads don't count. Raising them applies only when the key is made again, with `sesh passwd`. Settings higher in one way and lower in another are fine, and noted, since making the key again would lower one.
 - **Backups:** when the newest was made, how many are kept, and where. None, or a newest older than twice `backup.every_days`, is a warning.
+- **Sync:** off, or the sync folder and when the vault last synced with it. A folder that can't be read, or is for another master password, fails; entries waiting for the sync tool to download their files, or files that can't be read, are a warning.
 - **Clipboard** (Linux only): the tool `sesh copy` copies with: `wl-copy`, `xclip` or `xsel`. None installed is a warning; no desktop session, as over SSH, is only noted.
 
 Then the vault:
@@ -751,6 +753,7 @@ The vault as it was is in ~/Library/Application Support/sesh/backups/passwords-9
 - **Any other trouble reading the vault,** such as its permissions, stops the restore before anything changes.
 - **A backup of another vault** can be restored, and sesh says so first.
 - **Afterwards,** the agent is locked, and the next command asks for the master password the backup was made with. If Touch ID unlock was set up for the vault before, sesh says to turn it on again (`sesh touchid enable`).
+- **A vault that syncs:** the question says what the next sync does. The restored entries win over the other computers' versions, their passwords kept in each entry's history; but anything deleted since, on any computer, stays deleted, so a restore can't undo a deletion: the trash can. An entry you change after the restore, before syncing, syncs as any change does.
 
 It asks first; without a terminal, add `--force`.
 

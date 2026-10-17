@@ -115,6 +115,7 @@ func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) erro
 		return skipVault(c, dbPath, "it can't be read")
 	}
 	checkPermissions(c, dbPath)
+	checkCloudFolder(c, dbPath)
 
 	agentUnlocked := checkAgent(c, mat, matErr)
 	if matErr == nil {
@@ -123,6 +124,7 @@ func checkSetupOf(c *doctorChecks, app *App, dbPath string) func(io.Writer) erro
 		c.row(markNone, "Key settings", "unknown: the key record is damaged")
 	}
 	checkBackups(c, cfg)
+	checkSync(c, cfg)
 	checkClipboard(c)
 	return func(w io.Writer) error {
 		c.section("\nVault: " + tildePath(dbPath))
@@ -845,4 +847,104 @@ func (c *doctorChecks) report() tui.Checks {
 		summary = "OK, with " + tally[0]
 	}
 	return tui.Checks{Summary: summary, Checks: c.checks, ToDo: c.todos}
+}
+
+// cloudFolders are the folders on this computer a sync tool keeps the same
+// as on others, by where they are under the home folder.
+var cloudFolders = []struct{ dir, tool string }{
+	{filepath.Join("Library", "Mobile Documents"), "iCloud Drive"},
+	{filepath.Join("Library", "CloudStorage"), "a cloud storage app (Dropbox, Google Drive, OneDrive, Box)"},
+	{"Dropbox", "Dropbox"},
+	{"Google Drive", "Google Drive"},
+	{"OneDrive", "OneDrive"},
+	{"Nextcloud", "Nextcloud"},
+}
+
+// cloudTool is the sync tool that keeps path the same on other computers,
+// by the folder it's in, or "".
+func cloudTool(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	// Each as given and with its links followed: a link to a synced folder
+	// is in it, and the home folder may be through a link itself.
+	paths := []string{path}
+	if resolved, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		paths = append(paths, filepath.Join(resolved, filepath.Base(path)))
+	}
+	homes := []string{home}
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		homes = append(homes, resolved)
+	}
+	for _, p := range paths {
+		for _, h := range homes {
+			for _, c := range cloudFolders {
+				if rel, err := filepath.Rel(filepath.Join(h, c.dir), p); err == nil && !strings.HasPrefix(rel, "..") {
+					return c.tool
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// checkCloudFolder warns of a vault kept in a folder a sync tool copies
+// between computers: copying a vault while sesh writes it can damage it,
+// and two computers writing it lose each other's changes.
+func checkCloudFolder(c *doctorChecks, dbPath string) {
+	tool := cloudTool(dbPath)
+	if tool == "" {
+		return
+	}
+	c.row(markWarn, "Vault place", "in a folder "+tool+" syncs", "a sync tool copying the vault while sesh writes it can damage it, and two computers writing it lose each other's changes")
+	c.todo("Move the vault out of "+tool+"'s folder, then sync it through a sync folder instead:", "sesh init --db-path ~/.local/share/sesh/passwords.db", "sesh sync init")
+}
+
+// checkSync is the sync row: off; the folder, when it's this vault's and
+// readable, with when it last synced; what's waiting for the sync tool.
+// Nothing is unlocked.
+func checkSync(c *doctorChecks, cfg *config.Config) {
+	if cfg.SyncDir.Value == "" {
+		c.row(markNone, "Sync", "off", "sesh sync init syncs this vault with your other computers")
+		return
+	}
+	f, err := syncFolderOf(cfg)
+	if err != nil {
+		c.row(markFail, "Sync", "with "+tildePath(cfg.SyncDir.Value), err.Error())
+		c.todo("Check the sync folder (sesh sync status); to stop syncing:", "sesh sync leave")
+		return
+	}
+	contents, err := f.Scan()
+	if err != nil {
+		c.row(markFail, "Sync", "with "+tildePath(f.Dir()), err.Error())
+		return
+	}
+	value := "with " + tildePath(f.Dir())
+	if store, err := database.Open(cfg.DBPath.Value, nil); err == nil {
+		if events, err := store.AuditEvents(0); err == nil {
+			value += ", never synced yet"
+			for _, e := range events {
+				if e.EventType == "sync" {
+					value = "with " + tildePath(f.Dir()) + ", last synced " + e.CreatedAt.Local().Format("2006-01-02 15:04")
+					break
+				}
+			}
+		}
+		closeAuditStore(store)
+	}
+	var details []string
+	for _, p := range contents.Problems {
+		details = append(details, filepath.Base(p.Path)+": "+p.Why)
+	}
+	switch {
+	case len(contents.NotDownloaded) > 0:
+		c.row(markWarn, "Sync", value, append([]string{nouns(len(contents.NotDownloaded), "entry waits", "entries wait") + " for the sync tool to download their files"}, details...)...)
+		c.todo("Keep the sync folder downloaded: in iCloud Drive, Control-click it in Finder and choose Keep Downloaded (macOS 15 or later).")
+	case len(details) > 0:
+		c.row(markWarn, "Sync", value, details...)
+		c.todo("Some of the sync folder's files can't be read; the next sync says more:", "sesh sync")
+	default:
+		c.row(markOK, "Sync", value)
+	}
 }
