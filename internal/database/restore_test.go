@@ -147,6 +147,33 @@ func TestReplaceVault_Missing(t *testing.T) {
 	}
 }
 
+// A vault replaced by a backup gets a new sync ID, and keeps the sync
+// folder the backup's vault synced with.
+func TestReplaceVault_SyncInfo(t *testing.T) {
+	p, s := rekeyVault(t)
+	if err := s.SyncStartFolder("f1"); err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.SyncComputerID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := backupOf(t, p)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	v := filepath.Join(t.TempDir(), "passwords.db")
+	if _, err := ReplaceVault(v, b, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got := computerOf(t, v); got == "" || got == id {
+		t.Errorf("sync ID %q, want a new one", got)
+	}
+	if got := folderOf(t, v); got != "f1" {
+		t.Errorf("sync folder %q, want f1", got)
+	}
+}
+
 // A damaged vault is moved aside, with its -wal, never deleted: what can
 // still be read of it, such as an entry newer than the backup, is kept.
 func TestReplaceVault_DamagedIsMovedAside(t *testing.T) {

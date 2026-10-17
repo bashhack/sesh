@@ -504,3 +504,21 @@ func TestSync_ForgetWhileHeldOffline(t *testing.T) {
 		}
 	}
 }
+
+// A computer first syncing after an entry was deleted for good has nothing
+// to say of it: it never had it.
+func TestSync_DeletedBeforeJoining(t *testing.T) {
+	t.Parallel()
+	cs, _, f := computers(t, 3)
+	gh := cs[0].put("github", "pw-1")
+	cs[0].put("bank", "pw-2")
+	settleN(t, f, 4, cs[0], cs[1])
+	if err := cs[0].store.PurgeMany([]vault.Key{gh}); err != nil {
+		t.Fatal(err)
+	}
+	settleN(t, f, 4, cs[0], cs[1])
+	s := cs[2].sync(f)
+	if len(s.Received) != 1 || s.Received[0] != "password/bank/alice" {
+		t.Errorf("first sync: %+v, want only bank taken", s)
+	}
+}

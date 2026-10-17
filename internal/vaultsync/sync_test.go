@@ -389,9 +389,16 @@ func TestSync_WhatSyncToolsDo(t *testing.T) {
 		t.Errorf("after the copy: %q, want both passwords kept", got)
 	}
 
-	// Lost: written again, the entry kept.
+	// Lost: written again, the entry kept; said as written again, not
+	// sent, and the other computer, taking it, has nothing to say.
 	if err := os.Remove(own); err != nil {
 		t.Fatal(err)
+	}
+	if s := laptop.sync(f); s.Rewritten != 1 || len(s.Sent) != 0 {
+		t.Errorf("a lost file: %+v, want written again, not sent", s)
+	}
+	if s := desktop.sync(f); !s.Nothing() {
+		t.Errorf("the file written again, as it was: %+v, want nothing said", s)
 	}
 	settle(t, f, laptop, desktop)
 	if _, err := os.Stat(own); err != nil {

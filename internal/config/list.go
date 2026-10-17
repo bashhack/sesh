@@ -91,6 +91,11 @@ func (c *Config) list() []Item {
 	add("db_path", c.DBPath.Value, c.DBPath.Value, c.DBPath.Source, c.DBPath.Origin, "")
 	dir := Item{Key: "backup.dir", Value: c.BackupFolder(), Raw: underHome(c.BackupDir.Value), Source: c.BackupDir.Source, Origin: c.BackupDir.Origin, Applies: "at the next backup", Editable: true}
 	out = append(out, dir)
+	syncDir := Item{Key: "sync.dir", Value: c.SyncDir.Value, Raw: underHome(c.SyncDir.Value), Source: c.SyncDir.Source, Origin: c.SyncDir.Origin, Applies: "at the next sync", Editable: true}
+	if syncDir.Value == "" {
+		syncDir.Value = "off"
+	}
+	out = append(out, syncDir, Item{Key: "sync.name", Value: c.SyncComputerName(), Raw: c.SyncName.Value, Source: c.SyncName.Source, Origin: c.SyncName.Origin, Applies: "at the next sync", Editable: true})
 	return out
 }
 
@@ -101,8 +106,11 @@ func (it *Item) Said() string {
 	case FromEnv, FromFlag:
 		return it.Source.String() + ": " + it.Origin
 	case FromDefault:
-		if it.Key == "backup.dir" {
+		switch it.Key {
+		case "backup.dir":
 			return "default: next to the vault"
+		case "sync.name":
+			return "default: this computer's name"
 		}
 	}
 	return it.Source.String()

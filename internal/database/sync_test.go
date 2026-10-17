@@ -248,3 +248,264 @@ func TestSyncNextChange(t *testing.T) {
 		t.Errorf("then: %d, %v", n, err)
 	}
 }
+
+// Joining makes a vault with the folder's key record; an empty one with
+// another is given it, its recovery record removed; one with entries joins
+// only the folder it synced with, under its key, keeping what it agreed.
+func TestJoinVault(t *testing.T) {
+	p, s := rekeyVault(t)
+	m, err := ReadUnlockMaterial(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncStartFolder("f1"); err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.SyncComputerID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckMasterPassword([]byte("old-password-1"), m); err != nil {
+		t.Errorf("the right password: %v", err)
+	}
+	if err := CheckMasterPassword([]byte("nope"), m); err == nil {
+		t.Error("a wrong password passed")
+	}
+	fresh := filepath.Join(t.TempDir(), "new.db")
+	if rejoin, err := JoinVault(fresh, m, "f1"); err != nil || rejoin {
+		t.Fatal(rejoin, err)
+	}
+	if got, err := ReadUnlockMaterial(fresh); err != nil || UnlockID(got.Verify) != UnlockID(m.Verify) {
+		t.Errorf("new vault's key record: %v", err)
+	}
+	if got := folderOf(t, fresh); got != "f1" {
+		t.Errorf("new vault's sync folder: %q", got)
+	}
+	if got, err := VaultSyncFolder(fresh); err != nil || got != "f1" {
+		t.Errorf("VaultSyncFolder = %q, %v", got, err)
+	}
+	if got, err := VaultSyncFolder(filepath.Join(t.TempDir(), "none.db")); err != nil || got != "" {
+		t.Errorf("VaultSyncFolder with no vault = %q, %v", got, err)
+	}
+	if rejoin, err := JoinVault(fresh, m, "f1"); err != nil || !rejoin {
+		t.Errorf("again: %v, %v; want it rejoining", rejoin, err)
+	}
+	if !opensWith(t, p, "old-password-1") {
+		t.Fatal("the vault doesn't open")
+	}
+	other := mustOtherKey(t)
+	for _, c := range []struct {
+		want   error
+		folder string
+		m      UnlockMaterial
+	}{
+		{ErrVaultNotEmpty, "f2", other},
+		{ErrVaultNotEmpty, "f2", m},
+		{ErrRejoinOtherKey, "f1", other},
+	} {
+		if _, err := CanJoin(p, c.m, c.folder); !errors.Is(err, c.want) {
+			t.Errorf("CanJoin with entries, folder %s: %v, want %v", c.folder, err, c.want)
+		}
+		if _, err := JoinVault(p, c.m, c.folder); !errors.Is(err, c.want) {
+			t.Errorf("JoinVault with entries, folder %s: %v, want %v", c.folder, err, c.want)
+		}
+	}
+	// Joining again the folder it synced with: what it agreed is kept.
+	if rejoin, err := CanJoin(p, m, "f1"); err != nil || !rejoin {
+		t.Errorf("CanJoin again: %v, %v", rejoin, err)
+	}
+	if rejoin, err := JoinVault(p, m, "f1"); err != nil || !rejoin {
+		t.Errorf("JoinVault again: %v, %v", rejoin, err)
+	}
+	if !opensWith(t, p, "old-password-1") || folderOf(t, p) != "f1" || computerOf(t, p) != id {
+		t.Error("joining again changed the vault")
+	}
+	for path, want := range map[string]error{fresh: nil, filepath.Join(t.TempDir(), "none.db"): nil} {
+		if _, err := CanJoin(path, m, "f1"); !errors.Is(err, want) {
+			t.Errorf("CanJoin(%s) = %v, want %v", filepath.Base(path), err, want)
+		}
+	}
+	// An empty vault with a key record and a recovery record of its own.
+	empty := filepath.Join(t.TempDir(), "empty.db")
+	es, err := Open(empty, NewKeySourceOracle(NewMasterPasswordSource(empty, staticPrompt("other-password-1", "other-password-1"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := vault.Key{Kind: vault.KindPassword, Service: "x"}
+	if err := es.Put(k, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	// It synced with another folder, under its own key, before.
+	uid := uidOf(t, es, k)
+	emptyID, err := es.SyncComputerID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, rev, err := es.SyncRecord(uid, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := es.SyncAgree(uid, rev, rec, syncfolder.Hash{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := es.PurgeMany([]vault.Key{k}); err != nil {
+		t.Fatal(err)
+	}
+	if err := es.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteRecovery(empty, &RecoveryRecord{UnlockID: vaultID(t, empty), PublicKey: []byte("p"), EphemeralPub: []byte("e"), Ciphertext: []byte("c")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := JoinVault(empty, m, "f1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadUnlockMaterial(empty); err != nil || UnlockID(got.Verify) != UnlockID(m.Verify) {
+		t.Errorf("empty vault's key record: %v", err)
+	}
+	if r, err := ReadRecovery(empty); err == nil && r != nil {
+		t.Errorf("recovery record kept: %+v", r)
+	}
+	db, err := openDB(empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test
+	for _, table := range []string{"sync_state", "sync_restored", "history_forgotten"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil || n != 0 { //nolint:gosec // table is one of the three
+			t.Errorf("%s: %d rows kept from the earlier sync (%v)", table, n, err)
+		}
+	}
+	if got := computerOf(t, empty); got == "" || got == emptyID {
+		t.Errorf("the sync ID kept from the earlier sync: %q", got)
+	}
+}
+
+func folderOf(t *testing.T, path string) string {
+	t.Helper()
+	return syncInfoOf(t, path, "folder_id")
+}
+
+func computerOf(t *testing.T, path string) string {
+	t.Helper()
+	return syncInfoOf(t, path, "computer_id")
+}
+
+func syncInfoOf(t *testing.T, path, column string) string {
+	t.Helper()
+	db, err := openDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test
+	var v string
+	if err := db.QueryRow(`SELECT ` + column + ` FROM sync_info WHERE id = 1`).Scan(&v); err != nil { //nolint:gosec // a column name the test gives
+		t.Fatalf("%s: %v", column, err)
+	}
+	return v
+}
+
+func mustOtherKey(t *testing.T) UnlockMaterial {
+	t.Helper()
+	_, m := newKeyFor(t, "another-password-1")
+	return m
+}
+
+// Starting on another sync folder forgets what was agreed with the one
+// before; the same folder keeps it, as do restored marks.
+func TestSyncStartFolder(t *testing.T) {
+	a, _ := syncPair(t)
+	if err := a.SyncStartFolder("f1"); err != nil {
+		t.Fatal(err)
+	}
+	uid := uidOf(t, a, vault.Key{Kind: vault.KindPassword, Service: "bank"})
+	rec, rev, err := a.SyncRecord(uid, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SyncAgree(uid, rev, rec, syncfolder.Hash{1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.db.Exec(`INSERT INTO sync_restored (uid, rev) VALUES (?, ?)`, uid, rev); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SyncStartFolder("f1"); err != nil {
+		t.Fatal(err)
+	}
+	if it := syncItem(t, a, uid); it.Agreed == nil {
+		t.Error("the same folder: what was agreed is forgotten")
+	}
+	if err := a.SyncStartFolder("f2"); err != nil {
+		t.Fatal(err)
+	}
+	if it := syncItem(t, a, uid); it.Agreed != nil || !it.Restored {
+		t.Errorf("another folder: %+v, want nothing agreed and still restored", it)
+	}
+	if got, err := a.SyncFolderID(); err != nil || got != "f2" {
+		t.Errorf("SyncFolderID = %q, %v", got, err)
+	}
+}
+
+// A vault with nothing left but what it agreed (every entry deleted for
+// good while it was away) rejoins its folder, keeping those deletions; one
+// restored from a backup made before it synced, every entry marked
+// restored, joins with its entries.
+func TestJoinVault_Rejoins(t *testing.T) {
+	a, _ := syncPair(t)
+	if err := a.SyncStartFolder("f1"); err != nil {
+		t.Fatal(err)
+	}
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	uid := uidOf(t, a, k)
+	rec, rev, err := a.SyncRecord(uid, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SyncAgree(uid, rev, rec, syncfolder.Hash{1}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := a.List(&vault.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []vault.Key
+	for _, e := range all {
+		keys = append(keys, e.Key)
+	}
+	if err := a.PurgeMany(keys); err != nil {
+		t.Fatal(err)
+	}
+	path := a.Path()
+	m, err := ReadUnlockMaterial(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejoin, err := JoinVault(path, m, "f1"); err != nil || !rejoin {
+		t.Fatalf("all deleted: %v, %v; want it rejoining", rejoin, err)
+	}
+	if it := syncItem(t, a, uid); it.Agreed == nil {
+		t.Error("the deletion it agreed was forgotten")
+	}
+
+	b, _ := syncPair(t)
+	if _, err := b.db.Exec(`INSERT INTO sync_restored (uid, rev) SELECT uid, rev FROM entries`); err != nil {
+		t.Fatal(err)
+	}
+	mb, err := ReadUnlockMaterial(b.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejoin, err := CanJoin(b.Path(), mb, "f1"); err != nil || !rejoin {
+		t.Errorf("restored before it synced: %v, %v; want it joining", rejoin, err)
+	}
+	if _, err := b.db.Exec(`DELETE FROM sync_restored`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CanJoin(b.Path(), mb, "f1"); !errors.Is(err, ErrVaultNotEmpty) {
+		t.Errorf("not restored, never synced: %v, want ErrVaultNotEmpty", err)
+	}
+}

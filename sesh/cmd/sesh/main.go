@@ -103,6 +103,7 @@ var subcommands = []candidate{
 	{"run", "Run a command with secrets from the vault in its environment"},
 	{"inject", "Fill a template's sesh:// references into a file"},
 	{"git-credential", "Give git a site's password from sesh, as its credential helper"},
+	{"sync", "Sync the vault with your other computers, through a folder"},
 	{"aws", "Sign in to AWS with your MFA code"},
 	{"completion", "Print a shell completion script (bash, zsh, fish)"},
 }
@@ -116,7 +117,7 @@ var commands = map[string]func(*App, []string) error{
 	"health": runHealth, "doctor": runDoctor, "audit": runAudit, "lock": runLock, "passwd": runPasswd,
 	"recovery": runRecovery, "recover": runRecover, "touchid": runTouchID, "config": runConfig,
 	"init": runInit, "agent": runAgent, "run": runRun, "inject": runInject, "aws": runAWS,
-	"git-credential": runGitCredential, "completion": runCompletion,
+	"git-credential": runGitCredential, "completion": runCompletion, "sync": runSync,
 }
 
 // movedFlags say, for a flag that named a command before sesh's commands
@@ -222,12 +223,18 @@ func openSQLiteStore() (*database.Store, error) {
 // on first run) and returns an opened, schema-initialized SQLite store at
 // cfg's vault location. The caller must Close it.
 func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
+	return openSQLiteStoreWithPrompt(cfg, resolvePasswordPrompt().withKDF(cfg.KDF()))
+}
+
+// openSQLiteStoreWithPrompt is openSQLiteStoreWith with the password prompt
+// given.
+func openSQLiteStoreWithPrompt(cfg *config.Config, pc passwordPromptConfig) (*database.Store, error) {
 	dbPath := cfg.DBPath.Value
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil { //nolint:gosec // vault dir from the user's own settings
 		return nil, fmt.Errorf("create vault directory: %w", err)
 	}
 
-	ks, err := buildKeySource(cfg)
+	ks, err := buildKeySourceWith(dbPath, pc)
 	if err != nil {
 		return nil, err
 	}
@@ -866,6 +873,7 @@ The vault:
   sesh export [--file F]          Write an encrypted export (or --format json|csv)
   sesh backup [file|list|delete]  Copy the vault now (sesh also does this automatically), list or delete backups
   sesh restore [backup]           List the backups, or replace the vault with one
+  sesh sync [init|join|status|leave]  Sync the vault with your other computers, through a folder
   sesh health                     Find weak, reused and old passwords
   sesh doctor                     Check the setup, and that the vault can all be read
   sesh audit [prune]              Show the vault's audit log, or prune it

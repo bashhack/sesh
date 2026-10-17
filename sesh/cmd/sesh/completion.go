@@ -127,6 +127,14 @@ func complete(words []string) (cands []candidate, files bool) {
 		}
 	case "init":
 		specs = append(flagSpecs(func(fs *flag.FlagSet) { addInitFlags(fs) }), settingSpecs()...)
+	case "sync":
+		switch {
+		case len(before) == 1 && !strings.HasPrefix(cur, "-"):
+			return matching(syncCommands, cur), false
+		case len(before) == 2 && (before[1] == "init" || before[1] == "join"):
+			return nil, true // the folder
+		}
+		return nil, false
 	case "backup":
 		words := positional(before, append(flagSpecs(func(fs *flag.FlagSet) { addBackupFlags(fs) }), flagSpecs(func(fs *flag.FlagSet) { addBackupDeleteFlags(fs) })...))
 		switch {
@@ -383,6 +391,13 @@ func isForce(w string) bool {
 }
 
 // backupCommands are what sesh backup takes besides a file.
+var syncCommands = []candidate{
+	{"init", "Make a sync folder from this vault"},
+	{"join", "Make this computer's vault from a sync folder"},
+	{"status", "Where the vault syncs, and what's waiting"},
+	{"leave", "Stop syncing this vault"},
+}
+
 var backupCommands = []candidate{
 	{"list", "List the backups, newest first"},
 	{"delete", "Delete backups for good"},

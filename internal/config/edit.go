@@ -16,7 +16,7 @@ import (
 // whole numbers, or switches.
 var quoted = map[string]bool{
 	"db_path": true, "clipboard_timeout": true, "agent.idle_timeout": true, "agent.max_lifetime": true,
-	"master_password.memory": true, "backup.dir": true,
+	"master_password.memory": true, "backup.dir": true, "sync.dir": true, "sync.name": true,
 }
 
 // switches are the settings that are on or off: true or false.

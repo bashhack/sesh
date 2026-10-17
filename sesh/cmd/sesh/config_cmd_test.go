@@ -20,7 +20,7 @@ func useConfigFile(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
-	for _, k := range []string{config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays, config.EnvBackupEveryDays, config.EnvBackupKeep, config.EnvBackupDir, config.EnvTrashKeepDays, config.EnvHistoryKeep, config.EnvHealthOldAfterDays, config.EnvUILockOnQuit, config.EnvAgentLockOnSleep, config.EnvAgentLockOnScreen} {
+	for _, k := range []string{config.EnvDBPath, config.EnvClipboardTimeout, config.EnvAgentIdleTimeout, config.EnvAgentMaxLifetime, config.EnvAuditRetentionDays, config.EnvBackupEveryDays, config.EnvBackupKeep, config.EnvBackupDir, config.EnvTrashKeepDays, config.EnvHistoryKeep, config.EnvHealthOldAfterDays, config.EnvUILockOnQuit, config.EnvAgentLockOnSleep, config.EnvAgentLockOnScreen, config.EnvSyncDir, config.EnvSyncName} {
 		t.Setenv(k, "")
 	}
 	path := filepath.Join(dir, "sesh", "config.toml")
@@ -139,6 +139,14 @@ func TestRunConfig_Set(t *testing.T) {
 	app, _ = cliApp("", false)
 	if out, _, err := runCLI(app, runConfig, "set", "history.keep", ""); err != nil || !strings.Contains(out, "isn't in the config file: it's at its default, 10, already") {
 		t.Errorf("the default again: %q, %v", out, err)
+	}
+	app, _ = cliApp("", false)
+	if _, _, err := runCLI(app, runConfig, "set", "sync.dir", "~/sync"); err != nil {
+		t.Fatal(err)
+	}
+	app, _ = cliApp("", false)
+	if out, _, err := runCLI(app, runConfig, "set", "sync.dir", ""); err != nil || !strings.Contains(out, "Took sync.dir out of") || strings.Contains(out, "default") {
+		t.Errorf("a setting with no default, taken out: %q, %v", out, err)
 	}
 	app, _ = cliApp("", false)
 	if out, _, err := runCLI(app, runConfig, "set", "agent.lock_on_sleep", "OFF"); err != nil || !strings.Contains(out, "Set agent.lock_on_sleep to off in") || !strings.Contains(read(), "lock_on_sleep = false") {

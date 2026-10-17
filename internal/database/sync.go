@@ -723,3 +723,200 @@ func (s *Store) insertRecord(tx *sql.Tx, uid string, rev int64, rec *syncfolder.
 func (s *Store) LogSync(detail string) {
 	s.audit("sync", "", detail)
 }
+
+// ErrVaultNotEmpty is a vault that can't join a sync folder: it has
+// entries, sealed with its own key (its own salt, even with the same
+// master password).
+var ErrVaultNotEmpty = errors.New("this vault already has entries of its own, never synced with this folder")
+
+// CanJoin says whether the vault at dbPath may join the sync folder
+// folderID, whose vaults' key record is m: none there yet, an empty one, or
+// one joining again the folder it synced with before, under its key
+// (rejoin); ErrRejoinOtherKey for one that synced with it under another;
+// ErrVaultNotEmpty for any other with entries, in the trash or in history. It changes nothing, so a command can check before asking
+// for the master password.
+func CanJoin(dbPath string, m UnlockMaterial, folderID string) (rejoin bool, err error) {
+	db, err := openExisting(dbPath)
+	if errors.Is(err, ErrNoVault) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { err = closeVault(db, err) }()
+	have, err := readKeyRecord(db, dbPath)
+	if errors.Is(err, ErrNoVault) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return joinable(db, have, m, folderID)
+}
+
+// VaultSyncFolder is the ID of the sync folder the vault at dbPath syncs
+// with, or did before it left; "" when none, or there's no vault. It
+// changes nothing.
+func VaultSyncFolder(dbPath string) (id string, err error) {
+	db, err := openExisting(dbPath)
+	if errors.Is(err, ErrNoVault) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer func() { err = closeVault(db, err) }()
+	err = db.QueryRow(`SELECT folder_id FROM sync_info WHERE id = 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// ErrRejoinOtherKey is a vault joining again the sync folder it synced
+// with, but under another master password than the folder's now: one of
+// them changed it since.
+var ErrRejoinOtherKey = errors.New("this vault synced with this folder before, but its master password, or the folder's, has changed since")
+
+// joinable is CanJoin for the open vault db, whose key record is have. A
+// vault that synced with folderID under its key rejoins, even with nothing
+// left in it: what it agreed holds its deletions. So does one restored
+// from a backup made before it synced, every entry marked restored (the
+// marks keep the folder's deletions).
+func joinable(db *sql.DB, have, m UnlockMaterial, folderID string) (rejoin bool, err error) {
+	var synced string
+	if err := db.QueryRow(`SELECT folder_id FROM sync_info WHERE id = 1`).Scan(&synced); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	sameKey := UnlockID(have.Verify) == UnlockID(m.Verify)
+	if synced == folderID && sameKey {
+		return true, nil
+	}
+	var used, restoredOnly bool
+	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM entries) OR EXISTS (SELECT 1 FROM trash) OR EXISTS (SELECT 1 FROM history),
+		NOT EXISTS (SELECT 1 FROM entries WHERE uid NOT IN (SELECT uid FROM sync_restored))
+		AND NOT EXISTS (SELECT 1 FROM trash WHERE uid NOT IN (SELECT uid FROM sync_restored))`).Scan(&used, &restoredOnly); err != nil {
+		return false, err
+	}
+	switch {
+	case !used:
+		return false, nil
+	case synced == folderID:
+		return false, ErrRejoinOtherKey
+	case synced == "" && sameKey && restoredOnly:
+		return true, nil
+	}
+	return false, ErrVaultNotEmpty
+}
+
+// JoinVault readies the vault at dbPath to join the sync folder folderID,
+// whose vaults' key record is m, the master password already checked
+// against it (CheckMasterPassword). A vault joining again the folder it
+// synced with, under its key, is left as it is (rejoin): what it agreed
+// with the folder before it left is kept, so what changed on both sides
+// since merges as any change does. Any other with entries is refused
+// (ErrVaultNotEmpty): with nothing agreed, it would bring back, as edits,
+// entries deleted elsewhere. A new or empty vault gets m as its key
+// record, so the same master password gives the same key; one that had
+// another loses its recovery record, made for that key. Whatever it kept
+// of an earlier sync (what it agreed, its sync ID, restored and forgotten
+// marks) goes: it starts afresh.
+func JoinVault(dbPath string, m UnlockMaterial, folderID string) (rejoin bool, err error) {
+	if err := ValidateUnlockMaterial(m.Salt, m.Verify, m.Params); err != nil {
+		return false, fmt.Errorf("the sync folder's key record: %w", err)
+	}
+	db, err := openDB(dbPath)
+	if err != nil {
+		return false, err
+	}
+	defer func() { err = closeVault(db, err) }()
+	if err := applyMigrations(db); err != nil {
+		return false, err
+	}
+	have, err := readKeyRecord(db, dbPath)
+	switch {
+	case errors.Is(err, ErrNoVault):
+		if _, err := writeKeyRecord(db, m); err != nil {
+			return false, err
+		}
+		have = m
+	case err != nil:
+		return false, err
+	default:
+		if rejoin, err := joinable(db, have, m, folderID); err != nil || rejoin {
+			return rejoin, err
+		}
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback() //nolint:errcheck // already failing
+		}
+	}()
+	stmts := []string{`DELETE FROM sync_state`, `DELETE FROM sync_info`, `DELETE FROM sync_restored`, `DELETE FROM history_forgotten`}
+	if UnlockID(have.Verify) != UnlockID(m.Verify) {
+		stmts = append(stmts, `DELETE FROM recovery`)
+		if _, err := tx.Exec(`UPDATE vault_key SET salt = ?, kdf = ?, kdf_params = ?, verify = ?, created_at = ? WHERE id = 1`,
+			m.Salt, kdfArgon2id, m.Params.MarshalParams(), m.Verify, time.Now().UTC()); err != nil {
+			return false, err
+		}
+	}
+	for _, q := range stmts {
+		if _, err := tx.Exec(q); err != nil {
+			return false, err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO sync_info (id, computer_id, folder_id) VALUES (1, lower(hex(randomblob(8))), ?)`, folderID); err != nil {
+		return false, err
+	}
+	return false, tx.Commit()
+}
+
+// CheckMasterPassword says whether pw is the master password of the key
+// record m, without a vault: an error when it isn't.
+func CheckMasterPassword(pw []byte, m UnlockMaterial) error {
+	key := DeriveKey(pw, m.Salt, m.Params)
+	defer secure.SecureZeroBytes(key)
+	if _, err := Decrypt(key, m.Verify); err != nil {
+		return errors.New("that isn't the master password of the vaults that sync through this folder")
+	}
+	return nil
+}
+
+// SyncStartFolder makes folderID the sync folder the vault syncs with. A
+// vault that synced with another forgets what it agreed with that one, so
+// every entry goes to the new folder as a change (entries restored from a
+// backup stay marked so); one syncing with folderID already keeps it.
+func (s *Store) SyncStartFolder(folderID string) error {
+	return s.inTx(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO sync_info (id, computer_id) VALUES (1, lower(hex(randomblob(8))))`); err != nil {
+			return err
+		}
+		var have string
+		if err := tx.QueryRow(`SELECT folder_id FROM sync_info WHERE id = 1`).Scan(&have); err != nil {
+			return err
+		}
+		if have == folderID {
+			return nil
+		}
+		if _, err := tx.Exec(`DELETE FROM sync_state`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE sync_info SET folder_id = ? WHERE id = 1`, folderID)
+		return err
+	})
+}
+
+// SyncFolderID is the ID of the sync folder the vault syncs with, or did
+// before it left; "" when none.
+func (s *Store) SyncFolderID() (string, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT folder_id FROM sync_info WHERE id = 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}

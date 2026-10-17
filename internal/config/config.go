@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 
@@ -125,7 +127,12 @@ type Config struct {
 	KDFThreads Setting[uint8]
 	// UILockOnQuit says whether quitting sesh ui locks sesh's agent.
 	UILockOnQuit Setting[bool]
-	FileFound    bool
+	// SyncDir is the sync folder the vault syncs with; "" for none.
+	SyncDir Setting[string]
+	// SyncName is this computer's name in what it syncs; "" for the
+	// computer's own (see SyncComputerName).
+	SyncName  Setting[string]
+	FileFound bool
 }
 
 // BackupFolder is where backups go: BackupDir, or a backups folder next to
@@ -135,6 +142,19 @@ func (c *Config) BackupFolder() string {
 		return c.BackupDir.Value
 	}
 	return filepath.Join(filepath.Dir(c.DBPath.Value), "backups")
+}
+
+// SyncComputerName is this computer's name in what it syncs: SyncName,
+// or the computer's own name without ".local".
+func (c *Config) SyncComputerName() string {
+	if c.SyncName.Value != "" {
+		return c.SyncName.Value
+	}
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "this computer"
+	}
+	return strings.TrimSuffix(h, ".local")
 }
 
 // KDF is the configured Argon2id settings.
@@ -166,6 +186,8 @@ const (
 	EnvUILockOnQuit       = "SESH_UI_LOCK_ON_QUIT"
 	EnvAgentLockOnSleep   = "SESH_AGENT_LOCK_ON_SLEEP"
 	EnvAgentLockOnScreen  = "SESH_AGENT_LOCK_ON_SCREEN_LOCK"
+	EnvSyncDir            = "SESH_SYNC_DIR"
+	EnvSyncName           = "SESH_SYNC_NAME"
 )
 
 // fileConfig is the config file's shape. Durations are strings such as
@@ -184,6 +206,10 @@ type fileConfig struct {
 		LockOnSleep      bool   `toml:"lock_on_sleep"`
 		LockOnScreenLock bool   `toml:"lock_on_screen_lock"`
 	} `toml:"agent"`
+	Sync struct {
+		Dir  string `toml:"dir"`
+		Name string `toml:"name"`
+	} `toml:"sync"`
 	MasterPassword struct {
 		Memory  string `toml:"memory"`
 		Time    int64  `toml:"time"`
@@ -327,6 +353,16 @@ func (c *Config) applyFile() error {
 			return err
 		}
 	}
+	if in("sync.dir") && f.Sync.Dir != "" {
+		if err := setPath(&c.SyncDir, f.Sync.Dir, FromFile, from("sync.dir")); err != nil {
+			return err
+		}
+	}
+	if in("sync.name") {
+		if err := setSyncName(&c.SyncName, f.Sync.Name, FromFile, from("sync.name")); err != nil {
+			return err
+		}
+	}
 	if in("backup.every_days") {
 		if err := setBackupEveryDays(&c.BackupEveryDays, f.Backup.EveryDays, strconv.FormatInt(f.Backup.EveryDays, 10), FromFile, from("backup.every_days")); err != nil {
 			return err
@@ -410,6 +446,16 @@ func (c *Config) applyEnv() error {
 	}
 	if v, ok := os.LookupEnv(EnvBackupDir); ok && v != "" {
 		if err := setPath(&c.BackupDir, v, FromEnv, EnvBackupDir); err != nil {
+			return err
+		}
+	}
+	if v, ok := os.LookupEnv(EnvSyncDir); ok && v != "" {
+		if err := setPath(&c.SyncDir, v, FromEnv, EnvSyncDir); err != nil {
+			return err
+		}
+	}
+	if v, ok := os.LookupEnv(EnvSyncName); ok && v != "" {
+		if err := setSyncName(&c.SyncName, v, FromEnv, EnvSyncName); err != nil {
 			return err
 		}
 	}
@@ -529,6 +575,23 @@ func setPath(dst *Setting[string], v string, src Source, origin string) error {
 		return fmt.Errorf("%s = %q: %w", origin, v, err)
 	}
 	*dst = Setting[string]{Value: p, Source: src, Origin: origin}
+	return nil
+}
+
+// MaxSyncNameLength is the most characters a computer's sync name can have.
+const MaxSyncNameLength = 64
+
+// setSyncName sets the computer's sync name: as given, without spaces
+// around it, no longer than MaxSyncNameLength, with no control characters.
+func setSyncName(dst *Setting[string], v string, src Source, origin string) error {
+	v = strings.TrimSpace(v)
+	switch {
+	case utf8.RuneCountInString(v) > MaxSyncNameLength:
+		return fmt.Errorf("%s = %q: want a name of at most %d characters", origin, v, MaxSyncNameLength)
+	case strings.ContainsFunc(v, unicode.IsControl):
+		return fmt.Errorf("%s = %q: want a name without control characters", origin, v)
+	}
+	*dst = Setting[string]{Value: v, Source: src, Origin: origin}
 	return nil
 }
 
