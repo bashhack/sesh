@@ -15,7 +15,7 @@ import (
 //     settings, Export passwords) and Firefox ESR 153.4.0 (about:logins,
 //     Export Passwords); in Chromium alice's GitHub login has a two-line
 //     note, in Firefox its password was changed after it was saved;
-//   - safari.csv, one throwaway entry titled "GitHub Test" with a
+//   - apple-passwords.csv, one throwaway entry titled "GitHub Test" with a
 //     two-line note and a verification code, exported from Apple's
 //     Passwords app on macOS (File > Export Selected Password to File).
 
@@ -51,7 +51,7 @@ func TestParse(t *testing.T) {
 	if j := ff.Logins[4]; j.Username != "jürgen" || j.Password != "pässwörd" {
 		t.Errorf("Firefox jürgen = %+v", j)
 	}
-	if _, err := Parse([]byte("a,b\n1,2\n")); err == nil || !strings.Contains(err.Error(), "isn't a Chrome, Firefox or Safari password export") {
+	if _, err := Parse([]byte("a,b\n1,2\n")); err == nil || !strings.Contains(err.Error(), "isn't a Chrome, Firefox or Apple Passwords export") {
 		t.Errorf("other CSV: %v", err)
 	}
 	if _, err := Parse([]byte("name,url,username,password,note\ngithub.com,https://github.com/,a\n")); err == nil || !strings.Contains(err.Error(), "login 1 has 3 columns") {
@@ -188,11 +188,11 @@ func TestEntries_Chrome(t *testing.T) {
 	}
 }
 
-// Safari's entry is named by its title, its verification code a TOTP
+// A Passwords app entry is named by its title, its verification code a TOTP
 // entry beside the password entry.
-func TestEntries_Safari(t *testing.T) {
-	exp, err := Parse(read(t, "safari.csv"))
-	if err != nil || exp.Browser != Safari || len(exp.Logins) != 1 {
+func TestEntries_ApplePasswords(t *testing.T) {
+	exp, err := Parse(read(t, "apple-passwords.csv"))
+	if err != nil || exp.Browser != ApplePasswords || len(exp.Logins) != 1 {
 		t.Fatalf("%+v, %v", exp, err)
 	}
 	got := Entries(&exp)
@@ -208,7 +208,7 @@ func TestEntries_Safari(t *testing.T) {
 		t.Errorf("TOTP entry = %v %q %+v %+v skip %q", o.Key, o.Secret, o.Settings, o.Details, o.Skip)
 	}
 
-	exp = Export{Browser: Safari, Logins: []Login{
+	exp = Export{Browser: ApplePasswords, Logins: []Login{
 		{Title: "Code only", URL: "https://x.example/", OTPAuth: "otpauth://totp?secret=GEZDGNBVGY3TQOJQ&digits=8", Note: "n"},
 		{Title: "\u200b", URL: "https://www.untitled.example/", Username: "u", Password: "p"},
 		{Title: "Counter", Password: "p", OTPAuth: "otpauth://hotp?secret=GEZDGNBVGY3TQOJQSECRET&counter=1"},

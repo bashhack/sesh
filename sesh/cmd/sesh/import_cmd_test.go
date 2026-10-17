@@ -567,7 +567,7 @@ func TestImport_Browsers(t *testing.T) {
 	if err != nil || !strings.Contains(stderr, "Found 5 entries in the Firefox export.") || !strings.Contains(stderr, "Already in the vault (5):") {
 		t.Errorf("Firefox: %s\n%v", stderr, err)
 	}
-	if _, _, err := runImportOut(t, "", false, "--from", "chrome", browserFixture("firefox.csv")); err == nil || !strings.Contains(err.Error(), "this is Firefox's password export: use --from firefox") {
+	if _, _, err := runImportOut(t, "", false, "--from", "chrome", browserFixture("firefox.csv")); err == nil || !strings.Contains(err.Error(), "this export is from Firefox: use --from firefox") {
 		t.Errorf("wrong --from: %v", err)
 	}
 	store := openDoctorVault(t, env)
@@ -596,12 +596,12 @@ func TestImport_FirefoxTimes(t *testing.T) {
 	}
 }
 
-// Safari's export is found without --from; its entry is stored by title,
+// The Passwords app's export is found without --from; its entry is stored by title,
 // with its verification code as a TOTP entry beside it.
-func TestImport_Safari(t *testing.T) {
+func TestImport_ApplePasswords(t *testing.T) {
 	env := importVault(t)
-	out, stderr, err := runImportOut(t, "", false, "--yes", browserFixture("safari.csv"))
-	if err != nil || !strings.Contains(stderr, "Found 1 entry in the Safari export.") || !strings.Contains(out, "✅ Imported 2 entries from Safari.") {
+	out, stderr, err := runImportOut(t, "", false, "--yes", browserFixture("apple-passwords.csv"))
+	if err != nil || !strings.Contains(stderr, "Found 1 entry in the Apple Passwords export.") || !strings.Contains(out, "✅ Imported 2 entries from Apple Passwords.") {
 		t.Fatalf("%q\n%s\n%v", out, stderr, err)
 	}
 	store := openDoctorVault(t, env)
@@ -615,10 +615,10 @@ func TestImport_Safari(t *testing.T) {
 	}
 }
 
-// A Safari entry whose verification code sesh can't make still imports its
-// password, the code listed as skipped; --from chrome on Safari's export
+// A Passwords app entry whose verification code sesh can't make still imports its
+// password, the code listed as skipped; --from chrome on its export
 // says which it is.
-func TestImport_SafariRefusedCode(t *testing.T) {
+func TestImport_ApplePasswordsRefusedCode(t *testing.T) {
 	importVault(t)
 	file := filepath.Join(t.TempDir(), "Passwords.csv")
 	csv := "Title,URL,Username,Password,Notes,OTPAuth\nCounter,https://c.example/,u,pw,,otpauth://hotp?secret=GEZDGNBVGY3TQOJQ&counter=1\n"
@@ -626,11 +626,11 @@ func TestImport_SafariRefusedCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, stderr, err := runImportOut(t, "", false, "--yes", file)
-	if err != nil || !strings.Contains(out, "✅ Imported 1 entry from Safari.") ||
+	if err != nil || !strings.Contains(out, "✅ Imported 1 entry from Apple Passwords.") ||
 		!strings.Contains(stderr, `"Counter": its verification code: a counter-based (HOTP) code, which sesh doesn't make`) {
 		t.Errorf("%q\n%s\n%v", out, stderr, err)
 	}
-	if _, _, err := runImportOut(t, "", false, "--from", "chrome", file); err == nil || !strings.Contains(err.Error(), "this is Safari's password export: use --from safari") {
+	if _, _, err := runImportOut(t, "", false, "--from", "chrome", file); err == nil || !strings.Contains(err.Error(), "this export is from Apple Passwords: use --from apple-passwords") {
 		t.Errorf("wrong --from: %v", err)
 	}
 }

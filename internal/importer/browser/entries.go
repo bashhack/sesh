@@ -21,9 +21,9 @@ import (
 const firefoxAccount = "chrome://FirefoxAccounts"
 
 // Entries is the entries an export's logins become, in order: a password
-// entry for each, and for Safari's a TOTP entry beside it for its
+// entry for each, and for the Passwords app's a TOTP entry beside it for its
 // verification code (alone, with the details, when there's no password).
-// Each is named for its site (see siteName), or Safari's by its title,
+// Each is named for its site (see siteName), or the Passwords app's by its title,
 // with the address as its URL. Two of one name and username get " (2)",
 // unless, in Chrome's export, the password is the same too: Chrome writes
 // a row for each address of one login, and the repeats are skipped. A
@@ -37,7 +37,7 @@ func Entries(exp *Export) []*importer.Entry {
 	for i := range exp.Logins {
 		l := &exp.Logins[i]
 		site := siteName(l, exp.Browser)
-		if exp.Browser == Safari && importer.FitName(l.Title) != "" {
+		if exp.Browser == ApplePasswords && importer.FitName(l.Title) != "" {
 			site = l.Title
 		}
 		e := &importer.Entry{Name: site, Created: l.Created, Updated: l.Updated}
@@ -78,7 +78,7 @@ func Entries(exp *Export) []*importer.Entry {
 			p.Secret = []byte(l.Password)
 			item = append(item, &p)
 		}
-		// Safari's verification code is a TOTP entry beside the password
+		// The Passwords app's verification code is a TOTP entry beside the password
 		// entry, with the details only where there's no password entry.
 		if l.OTPAuth != "" {
 			t := *e
@@ -101,7 +101,7 @@ func Entries(exp *Export) []*importer.Entry {
 	return out
 }
 
-// totpKey reads a verification code, an otpauth://totp address as Safari
+// totpKey reads a verification code, an otpauth://totp address as the Passwords app
 // writes it (otpauth://totp?secret=…&algorithm=SHA1&digits=6&period=30,
 // with or without a label). sesh refuses what it can't make codes for. A
 // reason never repeats the key.

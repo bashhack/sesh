@@ -1,11 +1,11 @@
-// Package browser reads web browsers' password exports: Chrome's, and
-// that of other browsers built on Chromium that write the same columns,
-// Firefox's, and Safari's (Apple's Passwords app). Chrome's and Firefox's
-// formats follow the browsers' own code (Chromium's
+// Package browser reads the password exports of web browsers and Apple's
+// Passwords app: Chrome's, and that of other browsers built on Chromium
+// that write the same columns, Firefox's, and the Passwords app's. Chrome's
+// and Firefox's formats follow the browsers' own code (Chromium's
 // components/password_manager/core/browser/export/password_csv_writer.cc,
 // Firefox's toolkit/components/passwordmgr/LoginExport.sys.mjs); Apple
-// publishes none for Safari's. All three are tested against exports made
-// by the browsers.
+// publishes none for the Passwords app's. All three are tested against
+// exports made by the apps.
 package browser
 
 import (
@@ -20,11 +20,11 @@ import (
 	"time"
 )
 
-// The browsers whose exports are read, as sesh import --from names them.
+// The apps whose exports are read, as sesh import --from names them.
 const (
-	Chrome  = "chrome"
-	Firefox = "firefox"
-	Safari  = "safari"
+	Chrome         = "chrome"
+	Firefox        = "firefox"
+	ApplePasswords = "apple-passwords"
 )
 
 // Login is one saved password.
@@ -33,7 +33,7 @@ type Login struct {
 	Updated time.Time
 	// Name is Chrome's name for the site or app; Firefox has none.
 	Name string
-	// Title is Safari's title for the entry; the others have none.
+	// Title is the Passwords app's title for the entry; the others have none.
 	Title    string
 	URL      string
 	Username string
@@ -42,7 +42,7 @@ type Login struct {
 	// Realm is a Firefox login's HTTP authentication realm, "" for a
 	// login form's.
 	Realm string
-	// OTPAuth is a Safari entry's verification code, an otpauth://
+	// OTPAuth is a Passwords app entry's verification code, an otpauth://
 	// address.
 	OTPAuth string
 }
@@ -59,7 +59,7 @@ type Export struct {
 var (
 	chromeColumns    = []string{"name", "url", "username", "password", "note"}
 	oldChromeColumns = chromeColumns[:4]
-	safariColumns    = []string{"Title", "URL", "Username", "Password", "Notes", "OTPAuth"}
+	passwordsColumns = []string{"Title", "URL", "Username", "Password", "Notes", "OTPAuth"}
 	firefoxColumns   = []string{"url", "username", "password", "httpRealm", "formActionOrigin", "guid", "timeCreated", "timeLastUsed", "timePasswordChanged"}
 )
 
@@ -73,18 +73,18 @@ func Detect(b []byte) string {
 		return Chrome
 	case slices.Equal(header, firefoxColumns):
 		return Firefox
-	case slices.Equal(header, safariColumns):
-		return Safari
+	case slices.Equal(header, passwordsColumns):
+		return ApplePasswords
 	}
 	return ""
 }
 
-// Parse reads a browser's password export. A line break inside a quoted
+// Parse reads a browser's or the Passwords app's export. A line break inside a quoted
 // value is read as "\n", whether the file has "\n" or "\r\n" there.
 func Parse(b []byte) (Export, error) {
 	which := Detect(b)
 	if which == "" {
-		return Export{}, errors.New("this isn't a Chrome, Firefox or Safari password export: its first line isn't one of their headers")
+		return Export{}, errors.New("this isn't a Chrome, Firefox or Apple Passwords export: its first line isn't one of their headers")
 	}
 	r := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(b, []byte("\ufeff"))))
 	r.FieldsPerRecord = -1
@@ -124,9 +124,9 @@ func Parse(b []byte) (Export, error) {
 			if err != nil {
 				return Export{}, fmt.Errorf("this Firefox export is damaged: login %d: %w", line-1, err)
 			}
-		case Safari:
-			if len(rec) != len(safariColumns) {
-				return Export{}, fmt.Errorf("this Safari export is damaged: login %d has %d columns, not %d", line-1, len(rec), len(safariColumns))
+		case ApplePasswords:
+			if len(rec) != len(passwordsColumns) {
+				return Export{}, fmt.Errorf("this Apple Passwords export is damaged: login %d has %d columns, not %d", line-1, len(rec), len(passwordsColumns))
 			}
 			l = Login{Title: rec[0], URL: rec[1], Username: rec[2], Password: rec[3], Note: rec[4], OTPAuth: rec[5]}
 		}
@@ -147,10 +147,13 @@ func millis(s string) (time.Time, error) {
 	return time.UnixMilli(n).UTC(), nil
 }
 
-// title is a browser's name as messages give it.
+// title is an app's name as messages give it.
 func title(which string) string {
+	if which == ApplePasswords {
+		return "Apple Passwords"
+	}
 	return strings.ToUpper(which[:1]) + which[1:]
 }
 
-// Title is the browser's name as messages give it.
+// Title is the app's name as messages give it.
 func (e *Export) Title() string { return title(e.Browser) }
