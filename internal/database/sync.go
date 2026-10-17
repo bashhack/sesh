@@ -802,12 +802,14 @@ var ErrRejoinOtherKey = errors.New("this vault synced with this folder before, b
 // from a backup made before it synced, every entry marked restored (the
 // marks keep the folder's deletions).
 func joinable(db *sql.DB, have, m UnlockMaterial, folderID string) (rejoin bool, err error) {
-	var synced string
-	if err := db.QueryRow(`SELECT folder_id FROM sync_info WHERE id = 1`).Scan(&synced); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	var synced, prev string
+	if err := db.QueryRow(`SELECT folder_id, prev_key_id FROM sync_info WHERE id = 1`).Scan(&synced, &prev); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, err
 	}
 	sameKey := UnlockID(have.Verify) == UnlockID(m.Verify)
-	if synced == folderID && sameKey {
+	// The folder's, or the one it had before a change made here that it
+	// left with, not sent: that's sent once it has joined again.
+	if synced == folderID && (sameKey || prev == UnlockID(m.Verify)) {
 		return true, nil
 	}
 	var used, restoredOnly bool
@@ -840,7 +842,9 @@ func joinable(db *sql.DB, have, m UnlockMaterial, folderID string) (rejoin bool,
 // another loses its recovery record, made for that key. Whatever it kept
 // of an earlier sync (what it agreed, its sync ID, restored and forgotten
 // marks) goes: it starts afresh.
-func JoinVault(dbPath string, m UnlockMaterial, folderID string) (rejoin bool, err error) {
+//
+// links are the folder's key links, which a new or emptied vault takes.
+func JoinVault(dbPath string, m UnlockMaterial, folderID string, links []syncfolder.KeyLink) (rejoin bool, err error) {
 	if err := ValidateUnlockMaterial(m.Salt, m.Verify, m.Params); err != nil {
 		return false, fmt.Errorf("the sync folder's key record: %w", err)
 	}
@@ -890,6 +894,14 @@ func JoinVault(dbPath string, m UnlockMaterial, folderID string) (rejoin bool, e
 	}
 	if _, err := tx.Exec(`INSERT INTO sync_info (id, computer_id, folder_id) VALUES (1, lower(hex(randomblob(8))), ?)`, folderID); err != nil {
 		return false, err
+	}
+	if _, err := tx.Exec(`DELETE FROM key_links`); err != nil {
+		return false, err
+	}
+	for i := range links {
+		if err := putKeyLink(tx, &links[i]); err != nil {
+			return false, err
+		}
 	}
 	return false, tx.Commit()
 }

@@ -185,7 +185,7 @@ func TestRekey_ReSealsDetails(t *testing.T) {
 			t.Fatal(err)
 		}
 		key, rec := newKeyFor(t, "new-password-1")
-		if _, err := s.Rekey(key, rec, rewrapTo, RekeyLocal); err != nil {
+		if _, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		if err := errors.Join(s.Close(), other.Close()); err != nil {

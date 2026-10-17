@@ -232,7 +232,7 @@ func TestEntryRev_QuietWrites(t *testing.T) {
 	}
 	_, rev = idOf(t, s, bank)
 	key, rec := newKeyFor(t, "new-password-1")
-	if _, err := s.Rekey(key, rec, rewrapTo, RekeyLocal); err != nil {
+	if _, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	unchanged("a new master password")

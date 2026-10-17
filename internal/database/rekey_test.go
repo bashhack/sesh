@@ -64,7 +64,7 @@ func TestStore_Rekey(t *testing.T) {
 		t.Fatal(err)
 	}
 	key, rec := newKeyFor(t, "new-password-1")
-	res, err := s.Rekey(key, rec, rewrapTo, RekeyLocal)
+	res, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestStore_RekeyRemovesTheRecoveryRecord(t *testing.T) {
 				rewrap = nil
 			}
 			key, rec := newKeyFor(t, "new-password-1")
-			res, err := s.Rekey(key, rec, rewrap, RekeyLocal)
+			res, err := s.Rekey(key, rec, rewrap, RekeyOptions{})
 			if err != nil || res.Recovery != tc.want {
 				t.Fatalf("Rekey = %+v, %v; want %v", res, err, tc.want)
 			}
@@ -130,7 +130,7 @@ func TestStore_RekeyRemovesTheRecoveryRecord(t *testing.T) {
 func TestStore_RekeyIsAllOrNothing(t *testing.T) {
 	p, s := rekeyVault(t)
 	key, rec := newKeyFor(t, "new-password-1")
-	_, err := s.Rekey(key, rec, func(*RecoveryRecord, string) (*RecoveryRecord, error) { return nil, errors.New("wrap failed") }, RekeyLocal)
+	_, err := s.Rekey(key, rec, func(*RecoveryRecord, string) (*RecoveryRecord, error) { return nil, errors.New("wrap failed") }, RekeyOptions{})
 	if err == nil {
 		t.Fatal("want the failure")
 	}
@@ -164,7 +164,7 @@ func TestStore_AfterAnotherRekey(t *testing.T) {
 		t.Fatal(err)
 	}
 	key, rec := newKeyFor(t, "new-password-1")
-	if _, err := s.Rekey(key, rec, rewrapTo, RekeyLocal); err != nil {
+	if _, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	for name, f := range map[string]func() error{
@@ -185,7 +185,7 @@ func TestStore_AfterAnotherRekey(t *testing.T) {
 		},
 		"rekey": func() error {
 			key, rec := newKeyFor(t, "third-password-1")
-			_, err := other.Rekey(key, rec, rewrapTo, RekeyLocal)
+			_, err := other.Rekey(key, rec, rewrapTo, RekeyOptions{})
 			return err
 		},
 	} {
@@ -244,7 +244,7 @@ func TestStore_RekeyKeepsSavesMadeWhileItWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 	key, rec := newKeyFor(t, "new-password-1")
-	if _, err := s.Rekey(key, rec, rewrapTo, RekeyLocal); err != nil {
+	if _, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -283,7 +283,7 @@ func TestStore_RekeyReportsWhenTheFileStillHoldsTheOldVault(t *testing.T) {
 			}
 		}
 		key, rec := newKeyFor(t, "new-password-1")
-		res, err := s.Rekey(key, rec, rewrapTo, RekeyLocal)
+		res, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}

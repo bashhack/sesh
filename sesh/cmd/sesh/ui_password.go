@@ -41,7 +41,7 @@ func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, er
 	if err != nil {
 		return tui.Changed{}, err
 	}
-	secure.SecureZeroBytes(key)
+	defer secure.SecureZeroBytes(key)
 	if err := store.CheckKey(); err != nil {
 		return tui.Changed{}, err
 	}
@@ -62,12 +62,11 @@ func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, er
 	}
 	defer secure.SecureZeroBytes(newKey)
 	oldID := database.UnlockID(mat.Verify)
-	mode := rekeyMode(st)
-	var send func() string
-	if mode == database.RekeySend {
-		send = func() string { return sendKeyChange(st, store, newKey, rec, oldID) }
+	opts, send, err := sendingChange(st, key, newKey, oldID, rec)
+	if err != nil {
+		return tui.Changed{}, err
 	}
-	res, notes, err := rekeyTo(store, dbPath, oldID, newKey, rec, true, mode, send)
+	res, notes, err := rekeyTo(store, dbPath, oldID, newKey, rec, true, opts, send)
 	if err != nil {
 		return tui.Changed{}, err
 	}

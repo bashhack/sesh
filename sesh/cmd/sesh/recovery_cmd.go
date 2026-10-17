@@ -12,6 +12,7 @@ import (
 	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/syncfolder"
 )
 
 // recoveryCommands are the commands of `sesh recovery`.
@@ -379,8 +380,21 @@ func runRecover(app *App, args []string) error {
 		return err
 	}
 	src := &recoveredKey{key: key, id: f.UnlockID}
-	note("The recovery key opens this vault. Choose a new master password.")
-	newKey, err := rotateMasterPassword(app, p, src)
+	var newKey []byte
+	if k, kerr := folderKeyNow(cfg); kerr == nil && k == keyChangedElsewhere {
+		// Changed on another computer: the recovery key opens this vault to
+		// take that one, rather than to make a password only it would know.
+		note("The recovery key opens this vault. Its master password was changed on another computer, so this vault takes that one.")
+		store, oerr := openStoreWith(dbPath, database.NewKeySourceOracle(src))
+		if oerr != nil {
+			return oerr
+		}
+		newKey, err = takeKeyChangeWith(app, cfg, syncfolder.New(cfg.SyncDir.Value), store, p, false)
+		closeAuditStore(store)
+	} else {
+		note("The recovery key opens this vault. Choose a new master password.")
+		newKey, err = rotateMasterPassword(app, p, src)
+	}
 	src.Close()
 	defer secure.SecureZeroBytes(newKey)
 	if newKey == nil {

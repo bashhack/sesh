@@ -113,6 +113,17 @@ const (
 	RekeyAdopt
 )
 
+// RekeyOptions are what a password change does beyond re-encrypting.
+type RekeyOptions struct {
+	// Link is the change as a key link (NewKeyLink), kept with the vault's
+	// others; nil when there's none to keep.
+	Link *syncfolder.KeyLink
+	// Links, with Sync RekeyAdopt, are the sync folder's links, which the
+	// vault takes in place of its own.
+	Links []syncfolder.KeyLink
+	Sync  RekeySync
+}
+
 // RekeyResult reports a password change.
 type RekeyResult struct {
 	// NewID is the id of the vault's new key record.
@@ -142,8 +153,8 @@ type RekeyResult struct {
 // store's key was checked against. Afterwards the store's key no longer
 // opens the vault, so the caller closes it.
 //
-// sync says what it means for syncing (RekeySync).
-func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *RecoveryRecord, newID string) (*RecoveryRecord, error), sync RekeySync) (RekeyResult, error) {
+// opts says what it means for syncing, and the key links kept.
+func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *RecoveryRecord, newID string) (*RecoveryRecord, error), opts RekeyOptions) (RekeyResult, error) {
 	res := RekeyResult{NewID: UnlockID(rec.Verify)}
 	oldID, err := s.unlockedID()
 	if err != nil {
@@ -217,7 +228,22 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 				rec.Salt, kdfArgon2id, rec.Params.MarshalParams(), rec.Verify); err != nil {
 				return fmt.Errorf("record the new key: %w", err)
 			}
-			switch sync {
+			if opts.Sync == RekeyAdopt {
+				if _, err := tx.Exec(`DELETE FROM key_links`); err != nil {
+					return err
+				}
+				for i := range opts.Links {
+					if err := putKeyLink(tx, &opts.Links[i]); err != nil {
+						return err
+					}
+				}
+			}
+			if opts.Link != nil {
+				if err := putKeyLink(tx, opts.Link); err != nil {
+					return err
+				}
+			}
+			switch opts.Sync {
 			case RekeySend:
 				// The first change not sent keeps the key the folder has.
 				if _, err := tx.Exec(`UPDATE sync_info SET prev_key_id = ? WHERE id = 1 AND prev_key_id = ''`, oldID); err != nil {
@@ -493,4 +519,188 @@ func (s *Store) resealBases(q interface {
 		}
 	}
 	return out, nil
+}
+
+// linkAAD and proofAAD bind a key link's two sealed values to both its key
+// records' IDs, and to which of the two each is.
+func linkAAD(from, to string) []byte  { return []byte("sesh-key-link-v1\x00" + from + "\x00" + to) }
+func proofAAD(from, to string) []byte { return []byte("sesh-key-proof-v1\x00" + from + "\x00" + to) }
+
+// NewKeyLink is the master password change from oldKey, whose key record's
+// ID is from, to newKey, whose is to.
+func NewKeyLink(oldKey, newKey []byte, from, to string) (*syncfolder.KeyLink, error) {
+	k, ks, err := EncryptEntry(newKey, oldKey, linkAAD(from, to))
+	if err != nil {
+		return nil, err
+	}
+	p, ps, err := EncryptEntry(oldKey, []byte(to), proofAAD(from, to))
+	if err != nil {
+		return nil, err
+	}
+	return &syncfolder.KeyLink{From: from, To: to, Key: k, KeySalt: ks, Proof: p, ProofSalt: ps}, nil
+}
+
+// LinkProofHolds says whether l's proof opens with old, the sealer of the
+// key l comes from: whether the change was made by a computer that had it.
+func LinkProofHolds(old syncfolder.Sealer, l *syncfolder.KeyLink) bool {
+	to, err := old.DecryptEntry(l.Proof, l.ProofSalt, proofAAD(l.From, l.To))
+	if err != nil {
+		return false
+	}
+	defer secure.SecureZeroBytes(to)
+	return string(to) == l.To
+}
+
+// OpenKeyLink is the old key l holds, opened with sealer, the new key's.
+// The caller zeroes it.
+func OpenKeyLink(sealer syncfolder.Sealer, l *syncfolder.KeyLink) ([]byte, error) {
+	return sealer.DecryptEntry(l.Key, l.KeySalt, linkAAD(l.From, l.To))
+}
+
+// KeySealer seals with key, held here.
+func KeySealer(key []byte) syncfolder.Sealer { return keySealer(key) }
+
+func putKeyLink(tx *sql.Tx, l *syncfolder.KeyLink) error {
+	_, err := tx.Exec(`INSERT OR REPLACE INTO key_links (to_id, from_id, key, key_salt, proof, proof_salt) VALUES (?, ?, ?, ?, ?, ?)`,
+		l.To, l.From, l.Key, l.KeySalt, l.Proof, l.ProofSalt)
+	if err != nil {
+		return fmt.Errorf("keep the master password change: %w", err)
+	}
+	return nil
+}
+
+// keyLinks reads the vault's key links through q, oldest first.
+func keyLinks(q interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}) (_ []syncfolder.KeyLink, err error) {
+	rows, err := q.Query(`SELECT from_id, to_id, key, key_salt, proof, proof_salt FROM key_links ORDER BY rowid`)
+	if err != nil {
+		return nil, fmt.Errorf("read the master password changes: %w", err)
+	}
+	defer func() { err = errors.Join(err, rows.Close()) }()
+	var out []syncfolder.KeyLink
+	for rows.Next() {
+		var l syncfolder.KeyLink
+		if err := rows.Scan(&l.From, &l.To, &l.Key, &l.KeySalt, &l.Proof, &l.ProofSalt); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// SyncKeyLinks are the vault's master password changes, oldest first.
+func (s *Store) SyncKeyLinks() ([]syncfolder.KeyLink, error) { return keyLinks(s.db) }
+
+// VaultKeyLinks are the master password changes of the vault at dbPath,
+// read without unlocking it; none when there's no vault.
+func VaultKeyLinks(dbPath string) (_ []syncfolder.KeyLink, err error) {
+	db, err := openExisting(dbPath)
+	if errors.Is(err, ErrNoVault) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = closeVault(db, err) }()
+	return keyLinks(db)
+}
+
+// OlderKeys are the keys a vault had before master password changes,
+// reached through key links from a key whose sealer it has: opened when
+// first asked for, and zeroed by Close.
+type OlderKeys struct {
+	start   syncfolder.Sealer
+	by      map[string]*syncfolder.KeyLink
+	keys    map[string][]byte
+	startID string
+	walked  bool
+}
+
+// NewOlderKeys are the keys reached back through links from the key record
+// whose ID is id, which sealer opens with.
+func NewOlderKeys(sealer syncfolder.Sealer, id string, links []syncfolder.KeyLink) *OlderKeys {
+	o := &OlderKeys{start: sealer, startID: id, by: map[string]*syncfolder.KeyLink{}, keys: map[string][]byte{}}
+	for i := range links {
+		o.by[links[i].To] = &links[i]
+	}
+	return o
+}
+
+func (o *OlderKeys) walk() {
+	if o.walked {
+		return
+	}
+	o.walked = true
+	sealer := o.start
+	for l := o.by[o.startID]; l != nil; l = o.by[l.From] {
+		if _, seen := o.keys[l.From]; seen || l.From == o.startID {
+			return
+		}
+		k, err := OpenKeyLink(sealer, l)
+		if err != nil {
+			return
+		}
+		o.keys[l.From] = k
+		sealer = keySealer(k)
+	}
+}
+
+// Key is the older key whose key record's ID is id, nil when it isn't
+// reached. It's zeroed by Close.
+func (o *OlderKeys) Key(id string) []byte {
+	if o == nil {
+		return nil
+	}
+	o.walk()
+	return o.keys[id]
+}
+
+// Sealer is a sealer for the older key whose key record's ID is id, nil
+// when it isn't reached.
+func (o *OlderKeys) Sealer(id string) syncfolder.Sealer {
+	if k := o.Key(id); k != nil {
+		return keySealer(k)
+	}
+	return nil
+}
+
+// Path is the links from the key record whose ID is from to the one this
+// walk starts at, oldest first; nil when from isn't reached.
+func (o *OlderKeys) Path(from string) []syncfolder.KeyLink {
+	var path []syncfolder.KeyLink
+	for l := o.by[o.startID]; l != nil; l = o.by[l.From] {
+		path = append([]syncfolder.KeyLink{*l}, path...)
+		if l.From == from {
+			return path
+		}
+		if len(path) > len(o.by) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// Close zeroes the keys opened.
+func (o *OlderKeys) Close() {
+	if o == nil {
+		return
+	}
+	for _, k := range o.keys {
+		secure.SecureZeroBytes(k)
+	}
+}
+
+// SyncOlderKeys are this vault's older keys, through its own links, from
+// its key now.
+func (s *Store) SyncOlderKeys() (*OlderKeys, error) {
+	links, err := s.SyncKeyLinks()
+	if err != nil {
+		return nil, err
+	}
+	id, err := s.SyncKeyID()
+	if err != nil {
+		return nil, err
+	}
+	return NewOlderKeys(s.oracle, id, links), nil
 }
