@@ -46,10 +46,10 @@ type ShellConfig struct {
 // SESH_ACTIVE, SESH_SERVICE, SESH_EXPIRY and SESH_TOTAL_DURATION, and
 // without SESH_MASTER_PASSWORD, which no program in the shell needs.
 //
-// The user's own startup files run first, then sesh's: zsh's .zshenv and
-// .zshrc from where they live (ZDOTDIR, or the home folder), bash's
-// ~/.bashrc, or the file sh's ENV names. History goes where the user's
-// files say.
+// sesh's helpers are defined first, then the user's own startup files run:
+// zsh's from where they live (ZDOTDIR, or the home folder) in zsh's usual
+// order, bash's ~/.bashrc, or the file sh's ENV names. History goes where
+// the user's files say.
 func GetShellConfig(config Config) (*ShellConfig, error) {
 	if config.ShellCustomizer == nil {
 		return nil, fmt.Errorf("shell customizer is required")
@@ -119,84 +119,106 @@ func envValue(env []string, name string) string {
 	return ""
 }
 
-// SetupZshShell writes a temporary ZDOTDIR whose .zshenv and .zshrc run
-// the user's own (from their ZDOTDIR, or the home folder; their .zshenv
-// may move it), then add sesh's prompt prefix and helpers. ZDOTDIR is the
-// user's again before their .zshrc runs, so everything after (history,
-// completion's cache, plugins) is where they keep it. It returns env with
-// ZDOTDIR pointing there, and the folder, to remove after.
+// SetupZshShell writes a temporary ZDOTDIR holding a .zshenv that zsh
+// reads first. It defines sesh's helpers (before the user's files, so
+// their aliases can't change them) and says the shell is ready; then it
+// gives ZDOTDIR back (the user's, or none), and runs the user's own
+// .zshenv. zsh then goes on as in any shell: the system's zshrc and the
+// user's .zshrc, from the user's ZDOTDIR, so history and everything else
+// are where they keep them. The prompt prefix is added by a hook that, at
+// the first prompt, moves itself after every hook the user's files added.
+// It returns env with ZDOTDIR pointing at the folder, and the folder, to
+// remove after.
 func SetupZshShell(config Config, env []string) ([]string, string, error) {
-	userDir := envValue(env, "ZDOTDIR")
-	if userDir == "" {
-		userDir = envValue(env, "HOME")
-	}
 	dir, err := os.MkdirTemp("", "sesh_zsh")
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create temp dir for zsh: %w", err)
 	}
-	zshenv := fmt.Sprintf(`# sesh: the user's own .zshenv first, from where it lives.
-__sesh_dir=%s
-ZDOTDIR=%s
-[[ -r $ZDOTDIR/.zshenv ]] && source $ZDOTDIR/.zshenv
-__sesh_user_zdotdir=$ZDOTDIR
-ZDOTDIR=$__sesh_dir
-`, shell.Quote(dir), shell.Quote(userDir))
-	prefix := config.ShellCustomizer.PromptPrefix()
-	zshrc := fmt.Sprintf(`# sesh: the user's own .zshrc first, with ZDOTDIR theirs again.
-ZDOTDIR=$__sesh_user_zdotdir
-[[ $HISTFILE == $__sesh_dir/* ]] && HISTFILE=$ZDOTDIR/.zsh_history
-unset __sesh_dir __sesh_user_zdotdir
-[[ -r $ZDOTDIR/.zshrc ]] && source $ZDOTDIR/.zshrc
-
+	restore := "unset ZDOTDIR"
+	if userDir := envValue(env, "ZDOTDIR"); userDir != "" {
+		restore = "ZDOTDIR=" + shell.Quote(userDir)
+	}
+	prefix := shell.Quote(config.ShellCustomizer.PromptPrefix())
+	zshenv := fmt.Sprintf(`# sesh: its helpers first, so the user's aliases don't change them.
 %s
-# The prefix goes back on whenever a prompt theme redraws the prompt.
+# The prefix goes back on whenever a prompt theme redraws the prompt: at
+# the first prompt, the hook moves itself after the user's own hooks, and,
+# since a theme may have redrawn that prompt after it, puts the prefix on
+# it once the line is ready (through zsh's hook list, so a line-init of
+# the user's own still runs).
 __sesh_prompt() { [[ $PROMPT == %s* ]] || PROMPT=%s$PROMPT }
-precmd_functions+=(__sesh_prompt)
-__sesh_prompt
-`, config.ShellCustomizer.Functions(), shell.Quote(prefix), shell.Quote(prefix))
-	for name, body := range map[string]string{".zshenv": zshenv, ".zshrc": zshrc} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
-			_ = os.RemoveAll(dir) //nolint:errcheck // the write's error is the one to report
-			return nil, "", fmt.Errorf("failed to write the zsh startup files: %w", err)
-		}
+__sesh_prompt_first() {
+  precmd_functions=(${precmd_functions:#__sesh_prompt_first} __sesh_prompt)
+  __sesh_prompt
+  autoload -Uz add-zle-hook-widget 2>/dev/null && add-zle-hook-widget line-init __sesh_prompt_line
+}
+precmd_functions+=(__sesh_prompt_first)
+__sesh_prompt_line() {
+  add-zle-hook-widget -d line-init __sesh_prompt_line
+  [[ $PROMPT == %s* ]] && return
+  __sesh_prompt
+  zle reset-prompt
+}
+
+# Then the user's own setup, from where it lives, in zsh's usual order.
+%s
+[[ -r ${ZDOTDIR:-$HOME}/.zshenv ]] && source ${ZDOTDIR:-$HOME}/.zshenv
+`, config.ShellCustomizer.Functions(), prefix, prefix, prefix, restore)
+	if err := os.WriteFile(filepath.Join(dir, ".zshenv"), []byte(zshenv), 0o600); err != nil {
+		_ = os.RemoveAll(dir) //nolint:errcheck // the write's error is the one to report
+		return nil, "", fmt.Errorf("failed to write the zsh startup file: %w", err)
 	}
 	return append(FilterEnv(env, "ZDOTDIR"), "ZDOTDIR="+dir), dir, nil
 }
 
 // SetupBashShell writes a temporary rcfile for bash --rcfile, which bash
-// reads in place of ~/.bashrc: it runs ~/.bashrc, then adds sesh's prompt
-// prefix and helpers. It returns the file's path, to remove after.
+// reads in place of ~/.bashrc: sesh's helpers first (so the user's aliases
+// can't change them), then ~/.bashrc, then the prompt prefix, kept by a
+// prompt command after the user's own. It returns the file's path, to
+// remove after.
 func SetupBashShell(config Config) (string, error) {
 	prefix := shell.Quote(config.ShellCustomizer.PromptPrefix())
-	rc := fmt.Sprintf(`# sesh: the user's own ~/.bashrc first.
+	rc := fmt.Sprintf(`# sesh: its helpers first, so the user's aliases don't change them.
+%s
+# Then the user's own ~/.bashrc.
 [ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"
 
-%s
-# The prefix goes back on whenever a prompt command redraws the prompt.
+# The prefix goes back on whenever a prompt command redraws the prompt,
+# after the user's own (an array in bash 5.1 and later, or a string).
 __sesh_prompt() { case "$PS1" in %s*) ;; *) PS1=%s"$PS1" ;; esac; }
-PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND
+if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == "declare -a"* ]]; then
+  PROMPT_COMMAND+=(__sesh_prompt)
+else
+  PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND
 }__sesh_prompt"
+fi
 __sesh_prompt
 `, config.ShellCustomizer.Functions(), prefix, prefix)
 	return writeTemp("sesh_bashrc", rc)
 }
 
 // SetupFallbackShell writes a temporary file for another shell to read at
-// start through ENV, as sh and dash do: it runs the user's own ENV file,
-// if they have one, then adds sesh's prompt prefix and helpers. A shell
-// that doesn't read ENV (fish) gets the credentials alone. It returns env
-// with ENV pointing at the file, and the file's path, to remove after.
+// start through ENV, as sh and dash do: sesh's helpers first, then the
+// user's own ENV file, if they have one (expanded, as sh expands ENV),
+// then the prompt prefix. A shell that doesn't read ENV (fish) gets the
+// credentials alone. It returns env with ENV pointing at the file, and the
+// file's path, to remove after.
 func SetupFallbackShell(config Config, env []string) ([]string, string, error) {
 	prefix := shell.Quote(config.ShellCustomizer.PromptPrefix())
 	var own string
 	if userEnv := envValue(env, "ENV"); userEnv != "" {
-		own = fmt.Sprintf("[ -r %s ] && . %s\n", shell.Quote(userEnv), shell.Quote(userEnv))
+		own = fmt.Sprintf(`__sesh_env=%s
+eval "__sesh_env=\"$__sesh_env\""
+[ -r "$__sesh_env" ] && . "$__sesh_env"
+unset __sesh_env
+`, shell.Quote(userEnv))
 	}
-	rc := fmt.Sprintf(`# sesh: the user's own ENV file first.
+	rc := fmt.Sprintf(`# sesh: its helpers first, so the user's aliases don't change them.
 %s
+# Then the user's own ENV file.
 %s
 case "$PS1" in %s*) ;; *) PS1=%s"${PS1:-$ }" ;; esac
-`, own, config.ShellCustomizer.Functions(), prefix, prefix)
+`, config.ShellCustomizer.Functions(), own, prefix, prefix)
 	name, err := writeTemp("sesh_shellrc", rc)
 	if err != nil {
 		return nil, "", err

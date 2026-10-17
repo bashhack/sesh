@@ -332,3 +332,25 @@ func TestRun_LeftoverProcesses(t *testing.T) {
 	}
 	_ = exec.Command("pkill", "-f", "while :; do echo tick").Run() //nolint:errcheck // cleanup
 }
+
+// A request to stop reaches the child as the signal given: the shell sesh
+// aws opens ignores SIGTERM, as an interactive shell does, but a hangup
+// ends it.
+func TestRunChildStoppedBy(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", `trap "" TERM; trap "exit 5" HUP; while :; do sleep 0.1; done`)
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		_ = syscall.Kill(os.Getpid(), syscall.SIGTERM) //nolint:errcheck // runChildStoppedBy is listening for it
+	}()
+	done := make(chan error, 1)
+	go func() { done <- runChildStoppedBy(cmd, nil, syscall.SIGHUP) }()
+	select {
+	case err := <-done:
+		if status, ok := errors.AsType[exitStatus](err); !ok || status != 5 {
+			t.Errorf("runChildStoppedBy() = %v, want exit status 5 (the hangup's)", err)
+		}
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill() //nolint:errcheck // the test has failed
+		t.Fatal("the request to stop didn't end the child")
+	}
+}

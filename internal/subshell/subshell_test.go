@@ -69,46 +69,82 @@ func home(t *testing.T) string {
 	return h
 }
 
+// prompts runs zsh's prompt hooks, as before a prompt (which a shell run
+// with -c never shows).
+const prompts = `for __f in $precmd_functions; do $__f; done 2>/dev/null; `
+
 // zsh runs the user's .zshenv and .zshrc from their ZDOTDIR, which is
-// theirs again inside, with history theirs; then sesh's prefix and helpers.
+// theirs inside; sesh's helpers are there, unchanged by the user's aliases,
+// and the prefix goes on at the first prompt. History is never in the
+// folder sesh writes.
 func TestZsh_UserStartupFilesFirst(t *testing.T) {
 	h := home(t)
 	zdot := filepath.Join(h, ".config", "zsh")
 	t.Setenv("ZDOTDIR", zdot)
 	write(t, filepath.Join(zdot, ".zshenv"), "export ENV_LOADED=1\n")
-	write(t, filepath.Join(zdot, ".zshrc"), "alias marker=true\nPROMPT='mine> '\n")
-	out := inShell(t, "zsh", `print -r -- "$ENV_LOADED|$(alias marker)|$ZDOTDIR|$HISTFILE|$PROMPT|$SESH_ACTIVE|$AWS_SESSION_TOKEN|${SESH_MASTER_PASSWORD-unset}"; sesh_status`)
-	want := strings.Join([]string{"1", "marker=true", zdot, zdot + "/.zsh_history", "(sesh:test) mine> ", "1", "token", "unset"}, "|") + "\nstatus-ok"
-	if out != want {
-		t.Errorf("got\n%s\nwant\n%s", out, want)
+	write(t, filepath.Join(zdot, ".zshrc"), "alias marker=true\nalias echo='print ALIASED'\nPROMPT='mine> '\n")
+	out := inShell(t, "zsh", prompts+`print -r -- "$ENV_LOADED|$(alias marker)|$ZDOTDIR|$PROMPT|$SESH_ACTIVE|$AWS_SESSION_TOKEN|${SESH_MASTER_PASSWORD-unset}|$HISTFILE"; sesh_status`)
+	lines := strings.Split(out, "\n")
+	fields := strings.Split(lines[0], "|")
+	want := []string{"1", "marker=true", zdot, "(sesh:test) mine> ", "1", "token", "unset"}
+	if len(fields) != 8 || !slices.Equal(fields[:7], want) || lines[len(lines)-1] != "status-ok" {
+		t.Fatalf("got\n%s\nwant %q, then status-ok", out, want)
+	}
+	// macOS's /etc/zshrc sets a history file, from ZDOTDIR; Linux's sets none.
+	if hist := fields[7]; hist != "" && hist != filepath.Join(zdot, ".zsh_history") {
+		t.Errorf("HISTFILE = %q", hist)
 	}
 }
 
-// A ~/.zshenv that moves ZDOTDIR, as many setups do, is followed.
-func TestZsh_ZshenvMovesZdotdir(t *testing.T) {
+// Terminal.app's per-session history (/etc/zshrc_Apple_Terminal) is kept
+// in the user's ZDOTDIR, not in the folder sesh writes and removes.
+func TestZsh_TerminalAppSessionsAreTheUsers(t *testing.T) {
+	if _, err := os.Stat("/etc/zshrc_Apple_Terminal"); err != nil {
+		t.Skip("no Terminal.app setup here")
+	}
 	h := home(t)
+	zdot := filepath.Join(h, "zdot")
+	t.Setenv("ZDOTDIR", zdot)
+	t.Setenv("TERM_PROGRAM", "Apple_Terminal")
+	t.Setenv("TERM_SESSION_ID", "X")
+	write(t, filepath.Join(zdot, ".zshrc"), "")
+	if out := inShell(t, "zsh", `print -r -- "$SHELL_SESSION_DIR"`); out != filepath.Join(zdot, ".zsh_sessions") {
+		t.Errorf("SHELL_SESSION_DIR = %q", out)
+	}
+}
+
+// A ~/.zshenv that moves ZDOTDIR, as many setups do, is followed; with no
+// ZDOTDIR of their own, the user's shell has none set.
+func TestZsh_ZdotdirAsTheUserHasIt(t *testing.T) {
+	h := home(t)
+	write(t, filepath.Join(h, ".zshrc"), "alias marker=true\n")
+	if out := inShell(t, "zsh", `print -r -- "$(alias marker)|${ZDOTDIR-unset}"`); out != "marker=true|unset" {
+		t.Errorf("no ZDOTDIR: got %q", out)
+	}
 	zdot := filepath.Join(h, "cfg")
 	write(t, filepath.Join(h, ".zshenv"), "ZDOTDIR=$HOME/cfg\n")
-	write(t, filepath.Join(zdot, ".zshrc"), "alias marker=true\n")
-	if out := inShell(t, "zsh", `print -r -- "$(alias marker)|$ZDOTDIR"`); out != "marker=true|"+zdot {
-		t.Errorf("got %q", out)
+	write(t, filepath.Join(zdot, ".zshrc"), "alias moved=true\n")
+	if out := inShell(t, "zsh", `print -r -- "$(alias moved)|$ZDOTDIR"`); out != "moved=true|"+zdot {
+		t.Errorf("moved by .zshenv: got %q", out)
 	}
 }
 
-// The prefix goes back on when a prompt theme redraws the prompt, once.
+// The prefix goes back on when a prompt theme redraws the prompt, once,
+// with sesh's hook after the theme's from the first prompt on.
 func TestZsh_PrefixSurvivesThemes(t *testing.T) {
-	home(t)
-	out := inShell(t, "zsh", `PROMPT='theme> '; __sesh_prompt; __sesh_prompt; print -r -- "$PROMPT|${precmd_functions[-1]}"`)
-	if out != "(sesh:test) theme> |__sesh_prompt" {
+	h := home(t)
+	write(t, filepath.Join(h, ".zshrc"), "theme_precmd() { PROMPT='theme> ' }\nprecmd_functions+=(theme_precmd)\n")
+	out := inShell(t, "zsh", prompts+prompts+`print -r -- "$PROMPT|$precmd_functions"`)
+	if out != "(sesh:test) theme> |theme_precmd __sesh_prompt" {
 		t.Errorf("got %q", out)
 	}
 }
 
-// bash runs ~/.bashrc, then sesh's; its prompt command keeps the prefix,
-// after the user's own.
+// bash runs ~/.bashrc, after sesh's helpers (so its aliases don't change
+// them); its prompt command keeps the prefix, after the user's own.
 func TestBash_UserBashrcFirst(t *testing.T) {
 	h := home(t)
-	write(t, filepath.Join(h, ".bashrc"), "alias marker=true\nPS1='mine> '\nPROMPT_COMMAND='PS1=\"theme> \"'\n")
+	write(t, filepath.Join(h, ".bashrc"), "alias marker=true\nalias echo='printf ALIASED'\nPS1='mine> '\nPROMPT_COMMAND='PS1=\"theme> \"'\n")
 	out := inShell(t, "bash", `alias marker; eval "$PROMPT_COMMAND"; printf '%s|%s|%s\n' "$PS1" "$SESH_ACTIVE" "${SESH_MASTER_PASSWORD-unset}"; sesh_status`)
 	want := "alias marker='true'\n(sesh:test) theme> |1|unset\nstatus-ok"
 	if out != want {
@@ -116,12 +152,26 @@ func TestBash_UserBashrcFirst(t *testing.T) {
 	}
 }
 
-// sh runs the user's own ENV file, then sesh's.
+// A PROMPT_COMMAND array (bash 5.1 and later) gets sesh's hook after the
+// user's own.
+func TestBash_PromptCommandArray(t *testing.T) {
+	h := home(t)
+	write(t, filepath.Join(h, ".bashrc"), "PROMPT_COMMAND=(:)\nPROMPT_COMMAND+=('PS1=\"theme> \"')\n")
+	out := inShell(t, "bash", `if (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1) )); then echo old; exit; fi; for c in "${PROMPT_COMMAND[@]}"; do eval "$c"; done; printf '%s|%s\n' "$PS1" "${PROMPT_COMMAND[-1]}"`)
+	if out == "old" {
+		t.Skip("bash before 5.1 runs a string PROMPT_COMMAND only")
+	}
+	if out != "(sesh:test) theme> |__sesh_prompt" {
+		t.Errorf("got %q", out)
+	}
+}
+
+// sh runs the user's own ENV file, expanded as sh expands ENV, after
+// sesh's helpers.
 func TestSh_UserEnvFileFirst(t *testing.T) {
 	h := home(t)
-	own := filepath.Join(h, ".shrc")
-	write(t, own, "OWN_LOADED=1\nPS1='mine> '\n")
-	t.Setenv("ENV", own)
+	write(t, filepath.Join(h, ".shrc"), "OWN_LOADED=1\nPS1='mine> '\n")
+	t.Setenv("ENV", "$HOME/.shrc")
 	out := inShell(t, "sh", `printf '%s|%s|%s\n' "$OWN_LOADED" "$PS1" "${SESH_MASTER_PASSWORD-unset}"; sesh_status`)
 	if want := "1|(sesh:test) mine> |unset\nstatus-ok"; out != want {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
