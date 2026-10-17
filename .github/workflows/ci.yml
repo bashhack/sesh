@@ -11,9 +11,11 @@ env:
   RACE_GCFLAGS: golang.org/x/crypto/argon2=-race=false
   # With it, the -race runs also turn off Go's size-specialized allocation.
   # The compiler uses it only in code it doesn't instrument (here, argon2),
-  # and it skips telling the race detector memory is new: two key derivations
-  # at once then reuse memory the detector still holds the other's accesses
-  # for, and it reports a race that isn't one.
+  # and those allocation functions (runtime/malloc_generated.go) skip telling
+  # the race detector memory is new: code touching argon2's small objects
+  # can then be reported as racing with whatever last used that memory.
+  # Drop it once Go no longer has the experiment (an unknown name fails the
+  # build) or allocates that way in uninstrumented code.
   RACE_GOEXPERIMENT: nosizespecializedmalloc
 on:
   push:
@@ -180,8 +182,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          # Off here: this short job would save the cache first, under the key the
-          # test jobs share, without the -race build they need.
+          # Off here: on Linux this short job would save the cache first, under
+          # the key Test (Linux) shares, without the -race build it needs.
           cache: false
 
       - name: Build sesh and run the agent end to end
