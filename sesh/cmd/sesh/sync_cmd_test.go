@@ -732,6 +732,9 @@ func TestSync_LostInfoChangedOrBehind(t *testing.T) {
 		t.Fatalf("passwd: %v\n%s", err, stderr)
 	}
 	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
+	if out, err := runSyncOut(t, "", false); err == nil || !strings.Contains(err.Error(), "doesn't sync between computers yet") || !strings.Contains(err.Error(), "sesh sync leave, sesh export") {
+		t.Errorf("sync after this computer's password change: %q, %v", out, err)
+	}
 	if err := os.Remove(info); err != nil {
 		t.Fatal(err)
 	}
