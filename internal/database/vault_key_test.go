@@ -182,7 +182,7 @@ func entriesWithoutKeyRecord(t *testing.T, table string) {
 	}
 	q := `INSERT INTO entries (kind, service, encrypted_data, salt, created_at, updated_at) VALUES ('password', 'github', x'00', x'00', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
 	if table == "trash" {
-		q = `INSERT INTO trash (uid, rev, kind, service, encrypted_data, salt, created_at, updated_at, deleted_at) VALUES ('ab', 1, 'password', 'github', x'00', x'00', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+		q = `INSERT INTO trash (uid, rev, kind, service, encrypted_data, salt, created_at, updated_at, deleted_at, changed_at) VALUES ('ab', 1, 'password', 'github', x'00', x'00', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
 	}
 	if _, err := db.Exec(q); err != nil {
 		t.Fatal(err)

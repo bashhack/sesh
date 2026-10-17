@@ -53,6 +53,9 @@ func migrateV1(tx *sql.Tx) error {
 			details_salt   BLOB,
 			created_at     DATETIME NOT NULL,
 			updated_at     DATETIME NOT NULL,
+			-- When anything of it last changed (updated_at follows the
+			-- secret alone): which of two changes is newer, for sync.
+			changed_at     DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
 			UNIQUE (kind, service, username)
 		)`,
 		`CREATE INDEX idx_entries_folder ON entries(folder)`,
@@ -78,7 +81,8 @@ func migrateV1(tx *sql.Tx) error {
 			tags           TEXT NOT NULL DEFAULT '[]',
 			created_at     DATETIME NOT NULL,
 			updated_at     DATETIME NOT NULL,
-			deleted_at     DATETIME NOT NULL
+			deleted_at     DATETIME NOT NULL,
+			changed_at     DATETIME NOT NULL
 		)`,
 		`CREATE INDEX idx_trash_deleted_at ON trash(deleted_at)`,
 		// Entries' earlier secrets, each sealed for its entry's name, and
@@ -95,7 +99,10 @@ func migrateV1(tx *sql.Tx) error {
 			salt           BLOB NOT NULL,
 			replaced_at    DATETIME NOT NULL,
 			-- A file entry's file's name, as it was then.
-			file_name      TEXT NOT NULL DEFAULT ''
+			file_name      TEXT NOT NULL DEFAULT '',
+			-- The computer whose change replaced it, when another synced
+			-- it here; "" for this one.
+			computer       TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX idx_history_entry ON history(kind, service, username, trash_id)`,
 		`CREATE INDEX idx_history_trash ON history(trash_id)`,
@@ -109,6 +116,32 @@ func migrateV1(tx *sql.Tx) error {
 		// While it has its one row, writes don't count as changes to an
 		// entry: re-encrypting for a new master password, trimming
 		// history to history.keep, a restore. See quietly.
+		// What this computer and the sync folder last agreed on, for each
+		// entry synced: its rev here then, the hash of the folder's file,
+		// and the version agreed, sealed as a sync file is (for merging
+		// what changes after). A row stays when its entry is
+		// deleted for good, so the deletion is synced.
+		`CREATE TABLE sync_state (
+			uid       TEXT PRIMARY KEY,
+			rev       INTEGER NOT NULL,
+			file_hash BLOB NOT NULL,
+			base      BLOB NOT NULL
+		)`,
+		// At most one row: this computer's sync ID, made when it first
+		// syncs, which counts its changes (syncfolder.Versions).
+		`CREATE TABLE sync_info (
+			id          INTEGER PRIMARY KEY CHECK (id = 1),
+			computer_id TEXT NOT NULL
+		)`,
+		// Earlier secrets forgotten on purpose, by their entry's uid and a
+		// hash of the secret (syncfolder.Forget), so a sync forgets them
+		// on every computer. Kept for good, as the sync folder's records
+		// of entries deleted for good are.
+		`CREATE TABLE history_forgotten (
+			uid  TEXT NOT NULL,
+			hash TEXT NOT NULL,
+			PRIMARY KEY (uid, hash)
+		)`,
 		`CREATE TABLE quiet_writes (id INTEGER PRIMARY KEY CHECK (id = 1))`,
 		// Any change to an entry, its tags, or (forgetting one) its
 		// earlier secrets raises its rev, however it's made; a write of
@@ -128,16 +161,16 @@ func migrateV1(tx *sql.Tx) error {
 				OR NEW.details_salt IS NOT OLD.details_salt
 				OR NEW.created_at IS NOT OLD.created_at
 				OR NEW.updated_at IS NOT OLD.updated_at)
-			BEGIN UPDATE entries SET rev = rev + 1 WHERE id = NEW.id; END`,
+			BEGIN UPDATE entries SET rev = rev + 1, changed_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.id; END`,
 		`CREATE TRIGGER entry_tag_added AFTER INSERT ON entry_tags
 			WHEN NOT EXISTS (SELECT 1 FROM quiet_writes)
-			BEGIN UPDATE entries SET rev = rev + 1 WHERE id = NEW.entry_id; END`,
+			BEGIN UPDATE entries SET rev = rev + 1, changed_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = NEW.entry_id; END`,
 		`CREATE TRIGGER entry_tag_removed AFTER DELETE ON entry_tags
 			WHEN NOT EXISTS (SELECT 1 FROM quiet_writes)
-			BEGIN UPDATE entries SET rev = rev + 1 WHERE id = OLD.entry_id; END`,
+			BEGIN UPDATE entries SET rev = rev + 1, changed_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE id = OLD.entry_id; END`,
 		`CREATE TRIGGER entry_history_removed AFTER DELETE ON history
 			WHEN OLD.trash_id IS NULL AND NOT EXISTS (SELECT 1 FROM quiet_writes)
-			BEGIN UPDATE entries SET rev = rev + 1 WHERE kind = OLD.kind AND service = OLD.service AND username = OLD.username; END`,
+			BEGIN UPDATE entries SET rev = rev + 1, changed_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE kind = OLD.kind AND service = OLD.service AND username = OLD.username; END`,
 		// One row: what turns the master password into the vault's key.
 		// None of it is secret; see vault_key.go.
 		`CREATE TABLE vault_key (

@@ -15,7 +15,7 @@ var t0 = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 // baseRecord is an entry as two computers last synced it.
 func baseRecord() *Record {
 	return &Record{
-		Created: t0, Updated: t0, Changed: t0, Computer: "laptop", Version: 3,
+		Created: t0, Updated: t0, Changed: t0, Computer: "laptop", Versions: Versions{"x": 3},
 		Kind: vault.KindPassword, Service: "github", Username: "alice",
 		URL: "https://github.com", Folder: "work", Secret: []byte("pw-1"), Notes: []byte("notes"),
 		Fields:  []Field{{Name: "pin", Value: []byte("1111"), Secret: true}, {Name: "team", Value: []byte("core")}},
@@ -27,7 +27,7 @@ func baseRecord() *Record {
 // changed is base as a computer changed it at hour h after t0.
 func changed(computer string, h int, edit func(r *Record)) *Record {
 	r := copyOf(baseRecord()).Record
-	r.Computer, r.Changed, r.Version = computer, t0.Add(time.Duration(h)*time.Hour), 4
+	r.Computer, r.Changed, r.Versions = computer, t0.Add(time.Duration(h)*time.Hour), Versions{"x": 3, computer: 1}
 	edit(r)
 	return r
 }
@@ -240,7 +240,7 @@ func TestMerge_Trash(t *testing.T) {
 // An entry deleted for good on one computer is gone, unless the other
 // edited or restored it: then it comes back as the other has it.
 func TestMerge_Purged(t *testing.T) {
-	purged := &Record{Purged: t0.Add(time.Hour), Computer: "laptop", Changed: t0.Add(time.Hour), Version: 4}
+	purged := &Record{Purged: t0.Add(time.Hour), Computer: "laptop", Changed: t0.Add(time.Hour), Versions: Versions{"x": 4}}
 	if m := merge(t, baseRecord(), purged, baseRecord()); !m.Purged.Equal(purged.Purged) || m.Service != "" {
 		t.Errorf("purged, left: %+v", m.Record)
 	}
@@ -254,7 +254,7 @@ func TestMerge_Purged(t *testing.T) {
 	if m := merge(t, inTrash, purged, restored); !m.Purged.IsZero() || m.Service != "github" || !m.Deleted.IsZero() {
 		t.Errorf("purged, restored: %+v", m.Record)
 	}
-	later := &Record{Purged: t0.Add(3 * time.Hour), Computer: "desktop", Changed: t0.Add(3 * time.Hour), Version: 4}
+	later := &Record{Purged: t0.Add(3 * time.Hour), Computer: "desktop", Changed: t0.Add(3 * time.Hour), Versions: Versions{"x": 4}}
 	if m := merge(t, baseRecord(), purged, later); !m.Purged.Equal(purged.Purged) {
 		t.Errorf("purged on both: %v, want the earlier", m.Purged)
 	}
@@ -284,7 +284,7 @@ func TestMerge_SharesNothing(t *testing.T) {
 	if string(m.Secret) != "pw-2" || string(m.Notes) != "n" || string(m.Fields[0].Value) != "1111" || string(m.History[0].Secret) != "pw-0" {
 		t.Errorf("after the versions were wiped: %+v", m.Record)
 	}
-	p := Merge(base, &Record{Purged: t0, Version: 9}, changed("desktop", 2, func(r *Record) { r.Secret = []byte("kept") }))
+	p := Merge(base, &Record{Purged: t0, Versions: Versions{"x": 9}}, changed("desktop", 2, func(r *Record) { r.Secret = []byte("kept") }))
 	b.Wipe()
 	if string(p.Secret) != "kept" {
 		t.Errorf("came back: %q", p.Secret)
@@ -295,7 +295,7 @@ func TestMerge_SharesNothing(t *testing.T) {
 // made them, when, and their versions.
 func sameContent(a, b *Record) bool {
 	x, y := *a, *b
-	x.Changed, y.Changed, x.Computer, y.Computer, x.Version, y.Version = time.Time{}, time.Time{}, "", "", 0, 0
+	x.Changed, y.Changed, x.Computer, y.Computer, x.Versions, y.Versions = time.Time{}, time.Time{}, "", "", nil, nil
 	return recordsEqual(&x, &y) && slices.Equal(x.Forgotten, y.Forgotten)
 }
 
@@ -327,7 +327,7 @@ func TestMerge_SettlesOnce(t *testing.T) {
 		laptop, desktop := changed("laptop", 1, tc.laptop), changed("desktop", 2, tc.desktop)
 		m := merge(t, baseRecord(), laptop, desktop)
 		// The desktop wrote it, later.
-		m.Computer, m.Changed, m.Version = "desktop", t0.Add(3*time.Hour), 5
+		m.Computer, m.Changed, m.Versions = "desktop", t0.Add(3*time.Hour), m.Versions.Next("desktop")
 		for side, mine := range map[string]*Record{"laptop": laptop, "desktop": desktop} {
 			again := merge(t, baseRecord(), mine, m.Record)
 			if !sameContent(again.Record, m.Record) || slices.Contains(again.Conflicts, "secret") || slices.Contains(again.Conflicts, "notes") || again.Lost != nil {
@@ -407,7 +407,7 @@ func TestMerge_FullTie(t *testing.T) {
 // Deleted for good on one, edited then moved to the trash on the other: it
 // comes back, in the trash, as the other has it.
 func TestMerge_PurgedAgainstEditedInTheTrash(t *testing.T) {
-	purged := &Record{Purged: t0.Add(time.Hour), Computer: "laptop", Changed: t0.Add(time.Hour), Version: 4}
+	purged := &Record{Purged: t0.Add(time.Hour), Computer: "laptop", Changed: t0.Add(time.Hour), Versions: Versions{"x": 4}}
 	trashed := changed("desktop", 2, func(r *Record) { r.Notes, r.Deleted = []byte("edited"), t0.Add(2*time.Hour) })
 	if m := merge(t, baseRecord(), purged, trashed); !m.Purged.IsZero() || !m.Deleted.Equal(t0.Add(2*time.Hour)) || string(m.Notes) != "edited" {
 		t.Errorf("merged %+v", m.Record)

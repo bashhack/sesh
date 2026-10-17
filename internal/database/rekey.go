@@ -9,6 +9,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/shell"
+	"github.com/bashhack/sesh/internal/syncfolder"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -154,8 +155,15 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 			sealed[row{table, e.id}] = *e
 		}
 	}
+	bases, err := s.resealBases(s.db, newKey, res.NewID, nil)
+	if err != nil {
+		return res, err
+	}
 	err = s.inTx(func(tx *sql.Tx) error {
 		return quietly(tx, func() error {
+			if _, err := s.resealBases(tx, newKey, res.NewID, bases); err != nil {
+				return err
+			}
 			for _, table := range sealedTables {
 				now, err := sealedEntries(tx, table)
 				if err != nil {
@@ -377,4 +385,77 @@ func rewrapRecoveryRecord(tx *sql.Tx, oldID, newID string, rewrap func(*Recovery
 		return outcome, err
 	}
 	return outcome, nil
+}
+
+// keySealer seals with a key held here: the new one, as the vault changes
+// to it.
+type keySealer []byte
+
+func (k keySealer) EncryptEntry(plaintext, aad []byte) ([]byte, []byte, error) {
+	return EncryptEntry(k, plaintext, aad)
+}
+
+func (k keySealer) DecryptEntry(data, salt, aad []byte) ([]byte, error) {
+	return DecryptEntry(k, data, salt, aad)
+}
+
+// resealedBase is an agreed sync version sealed again: its sealed bytes
+// before and after.
+type resealedBase struct{ from, to []byte }
+
+// resealBases seals each version this computer agreed with the sync folder
+// (sync_state) again for newKey, whose key record is newID, as sync files
+// are sealed. done, when not nil, are those sealed again before, taken as
+// they are if unchanged since; in a transaction (tx), the rows are
+// updated.
+func (s *Store) resealBases(q interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}, newKey []byte, newID string, done map[string]resealedBase) (map[string]resealedBase, error) {
+	rows, err := q.Query(`SELECT uid, base FROM sync_state`)
+	if err != nil {
+		return nil, fmt.Errorf("read what was synced: %w", err)
+	}
+	now := map[string][]byte{}
+	for rows.Next() {
+		var uid string
+		var base []byte
+		if err := rows.Scan(&uid, &base); err != nil {
+			_ = rows.Close() //nolint:errcheck // already failing
+			return nil, err
+		}
+		now[uid] = base
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, fmt.Errorf("read what was synced: %w", err)
+	}
+	out := map[string]resealedBase{}
+	for uid, base := range now {
+		if d, ok := done[uid]; ok && bytes.Equal(d.from, base) {
+			out[uid] = d
+			continue
+		}
+		h, rec, err := syncfolder.Open(s.oracle, base)
+		if err != nil {
+			return nil, fmt.Errorf("read what %s was synced at: %w", uid, err)
+		}
+		nh, err := syncfolder.NewHeader(h.UIDString(), newID)
+		if err != nil {
+			rec.Wipe()
+			return nil, err
+		}
+		to, err := syncfolder.Seal(keySealer(newKey), nh, rec)
+		rec.Wipe()
+		if err != nil {
+			return nil, fmt.Errorf("seal what %s was synced at: %w", uid, err)
+		}
+		out[uid] = resealedBase{from: base, to: to}
+	}
+	if tx, ok := q.(*sql.Tx); ok {
+		for uid, b := range out {
+			if _, err := tx.Exec(`UPDATE sync_state SET base = ? WHERE uid = ?`, b.to, uid); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return out, nil
 }

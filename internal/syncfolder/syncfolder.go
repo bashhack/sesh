@@ -33,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,7 +150,7 @@ func ParseHeader(b []byte) (Header, error) {
 
 // Record is an entry as it travels: everything a computer keeps of it,
 // but its uid, which the header has. A record for an entry deleted for
-// good (Purged) keeps nothing else but its version and computer.
+// good (Purged) keeps nothing else but its versions, computer and time.
 type Record struct {
 	Created time.Time `json:"created,omitzero"`
 	Updated time.Time `json:"updated,omitzero"`
@@ -176,11 +177,54 @@ type Record struct {
 	History  []Earlier `json:"history,omitempty"`
 	// Forgotten names the earlier secrets forgotten on purpose (Forget),
 	// so every computer forgets them; kept for good.
-	Forgotten []string       `json:"forgotten,omitempty"`
-	Settings  vault.Settings `json:"settings,omitzero"`
-	// Version only goes up: each version written is above every one the
-	// computer writing it has seen for the entry.
-	Version uint64 `json:"version"`
+	Forgotten []string `json:"forgotten,omitempty"`
+	// Versions counts the changes this version has seen, each computer's:
+	// which of two versions has seen the other, or whether each has
+	// changes the other hasn't.
+	Versions Versions       `json:"versions"`
+	Settings vault.Settings `json:"settings,omitzero"`
+}
+
+// Versions counts, by each computer's sync ID, the changes a version of
+// an entry has seen.
+type Versions map[string]uint64
+
+// Covers says whether v has seen every change w has: w is the same as v,
+// or older.
+func (v Versions) Covers(w Versions) bool {
+	for c, n := range w {
+		if v[c] < n {
+			return false
+		}
+	}
+	return true
+}
+
+// Join is the changes v and w have seen, together.
+func (v Versions) Join(w Versions) Versions {
+	out := maps.Clone(v)
+	if out == nil {
+		out = Versions{}
+	}
+	for c, n := range w {
+		out[c] = max(out[c], n)
+	}
+	return out
+}
+
+// Next is v with one more change, made on the computer id.
+func (v Versions) Next(id string) Versions {
+	out := v.Join(nil)
+	out[id]++
+	return out
+}
+
+// total is how many changes v has seen in all.
+func (v Versions) total() (n uint64) {
+	for _, c := range v {
+		n += c
+	}
+	return n
 }
 
 // Field is one of an entry's custom fields, its value whether secret or

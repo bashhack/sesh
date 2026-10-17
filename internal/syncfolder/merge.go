@@ -15,8 +15,9 @@ import (
 
 // Merged is what Merge makes of two versions of an entry.
 type Merged struct {
-	// Record is the merged entry. Its version, computer and change time
-	// are for the caller to set, as it writes it.
+	// Record is the merged entry, with the changes both had seen. Its
+	// computer and change time are for the caller to set, as it writes it,
+	// and its own change to count (Versions.Next).
 	*Record
 	// Conflicts names what both versions changed, each its own way: the
 	// newer change was kept ("secret", "notes", "field pin", ...).
@@ -47,7 +48,7 @@ type Merged struct {
 // It's the same whichever version is ours, so two computers merging the
 // same versions make the same entry. The versions aren't changed; the
 // merged one shares nothing with them.
-func Merge(base, ours, theirs *Record) Merged {
+func Merge(base, ours, theirs *Record) (m Merged) {
 	if base == nil {
 		base = &Record{}
 	}
@@ -55,7 +56,8 @@ func Merge(base, ours, theirs *Record) Merged {
 	if newerOf(theirs, ours) {
 		newer, older = theirs, ours
 	}
-	m := Merged{Record: &Record{}}
+	m = Merged{Record: &Record{}}
+	defer func() { m.Versions = ours.Versions.Join(theirs.Versions) }()
 	switch {
 	case !ours.Purged.IsZero() && !theirs.Purged.IsZero():
 		m.Purged = earliest(ours.Purged, theirs.Purged)
@@ -175,8 +177,8 @@ func newerOf(a, b *Record) bool {
 	if c := strings.Compare(a.Computer, b.Computer); c != 0 {
 		return c > 0
 	}
-	if a.Version != b.Version {
-		return a.Version > b.Version
+	if x, y := a.Versions.total(), b.Versions.total(); x != y {
+		return x > y
 	}
 	if c := bytes.Compare(a.Secret, b.Secret); c != 0 {
 		return c > 0

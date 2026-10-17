@@ -27,7 +27,7 @@ func TestSealOpen_VaultKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := syncfolder.Seal(key, h, &syncfolder.Record{Service: "bank", Secret: []byte("s3cret"), Version: 1})
+	b, err := syncfolder.Seal(key, h, &syncfolder.Record{Service: "bank", Secret: []byte("s3cret"), Versions: syncfolder.Versions{"x": 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
