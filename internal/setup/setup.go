@@ -378,18 +378,20 @@ How should sesh read the key?
 		fromEntry = false
 		switch {
 		case strings.EqualFold(choice, "e"):
-			if raw, err = h.entryKey(k); err != nil {
-				fmt.Printf("❌ %v\n", err)
+			key, keyErr := h.entryKey(k)
+			if keyErr != nil {
+				fmt.Printf("❌ %v\n", keyErr)
 				continue
 			}
-			fromEntry = true
+			raw, fromEntry = key, true
 		case choice == "1":
 			fmt.Print("Secret key (hidden as you type or paste it): ")
-			raw, err = readPassword(syscall.Stdin)
+			typed, readErr := readPassword(syscall.Stdin)
 			fmt.Println()
-			if err != nil {
-				return nil, false, fmt.Errorf("failed to read the secret key: %w", err)
+			if readErr != nil {
+				return nil, false, errors.New("failed to read the secret key")
 			}
+			raw = typed
 		case choice == "2":
 			fmt.Print("Image file (a full path, or one starting with ~/): ")
 			path, err := readLine(h.reader)
