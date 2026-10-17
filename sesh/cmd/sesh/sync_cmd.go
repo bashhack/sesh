@@ -91,6 +91,14 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 		return f, err
 	}
 	info, err := f.ReadInfo()
+	if errors.Is(err, syncfolder.ErrNoInfo) {
+		switch lost, waiting, _ := lostInfo(f.Dir(), cfg.DBPath.Value); { //nolint:errcheck // what can't be told is said as the folder's own error, below
+		case lost != nil:
+			return f, fmt.Errorf("the sync folder %s lost its %s: sesh sync writes it again from this vault, which synced with it", tildePath(f.Dir()), syncfolder.InfoFile)
+		case waiting:
+			return f, fmt.Errorf("the sync folder %s has no %s, and its entry files aren't downloaded yet: keep the folder downloaded (in iCloud Drive, Control-click it and choose Keep Downloaded), then sesh sync can tell whether it's this vault's and write it again", tildePath(f.Dir()), syncfolder.InfoFile)
+		}
+	}
 	if err != nil {
 		return f, fmt.Errorf("the sync folder %s: %w", tildePath(f.Dir()), err)
 	}
@@ -198,35 +206,64 @@ func checkSwitch(store *database.Store, f syncfolder.Folder, info *syncfolder.In
 	return errOtherFolder
 }
 
-// mendInfo writes the sync folder's InfoFile again when it's lost (a sync
-// tool, or someone, deleted it): the vault that synced with the folder
-// knows its ID, and its key record is the folder's, as the entry files
-// there, sealed with its key, show. It says whether it did.
-func mendInfo(cfg *config.Config) (bool, error) {
-	f := syncfolder.New(cfg.SyncDir.Value)
+// lostInfo is the InfoFile the sync folder at dir lost (a sync tool, or
+// someone, deleted it), as the vault at dbPath, which synced with it, can
+// write it again: the folder's ID it keeps, and its own key record. Only
+// when the folder holds a file this vault agreed, as it is (its hash): a
+// folder that merely shares the key, another vault made, isn't this one.
+// waiting says the folder's files aren't downloaded yet, so it can't tell.
+func lostInfo(dir, dbPath string) (info *syncfolder.Info, waiting bool, err error) {
+	f := syncfolder.New(dir)
 	if _, err := f.ReadInfo(); !errors.Is(err, syncfolder.ErrNoInfo) {
-		return false, nil
+		return nil, false, nil
 	}
-	if checkSyncDir(f.Dir(), cfg.DBPath.Value) != nil {
-		return false, nil
+	if checkSyncDir(dir, dbPath) != nil {
+		return nil, false, nil
 	}
-	id, err := database.VaultSyncFolder(cfg.DBPath.Value)
+	id, err := database.VaultSyncFolder(dbPath)
 	if err != nil || id == "" {
-		return false, err
-	}
-	m, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
-	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	c, err := f.Scan()
 	if err != nil {
-		return false, nil //nolint:nilerr // syncFolderOf says why the folder can't be read
+		return nil, false, nil //nolint:nilerr // the caller says why the folder can't be read
 	}
-	keyID := database.UnlockID(m.Verify)
-	if !slices.ContainsFunc(c.Files, func(file syncfolder.File) bool { return file.KeyIDString() == keyID }) {
-		return false, nil
+	store, err := database.Open(dbPath, nil)
+	if err != nil {
+		return nil, false, err
 	}
-	if err := f.WriteInfo(syncfolder.InfoFor(id, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params})); err != nil {
+	defer closeAuditStore(store)
+	items, err := store.SyncItems()
+	if err != nil {
+		return nil, false, err
+	}
+	agreed := map[string]syncfolder.Hash{}
+	for i := range items {
+		if items[i].Agreed != nil {
+			agreed[items[i].UID] = items[i].Agreed.Hash
+		}
+	}
+	if !slices.ContainsFunc(c.Files, func(file syncfolder.File) bool {
+		h, ok := agreed[file.UIDString()]
+		return ok && h == file.Hash
+	}) {
+		return nil, len(c.NotDownloaded) > 0, nil
+	}
+	m, err := database.ReadUnlockMaterial(dbPath)
+	if err != nil {
+		return nil, false, err
+	}
+	return syncfolder.InfoFor(id, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}), false, nil
+}
+
+// mendInfo writes the sync folder's InfoFile again when it's lost and this
+// vault can (lostInfo). It says whether it did.
+func mendInfo(cfg *config.Config) (bool, error) {
+	info, _, err := lostInfo(cfg.SyncDir.Value, cfg.DBPath.Value)
+	if err != nil || info == nil {
+		return false, err
+	}
+	if err := syncfolder.New(cfg.SyncDir.Value).WriteInfo(info); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -452,7 +489,7 @@ func syncInit(app *App, args []string) error {
 	if c, err := f.Scan(); err != nil {
 		return err
 	} else if len(c.Files)+len(c.NotDownloaded)+len(c.Problems) > 0 {
-		return fmt.Errorf("%s holds entry files but no %s: a sync folder that lost it. On a computer that synced with it, sesh sync writes it again; or make a sync folder elsewhere", tildePath(dir), syncfolder.InfoFile)
+		return fmt.Errorf("%s holds entry files but no %s: a sync folder that lost it. On a computer that synced with it, sesh sync (or sesh sync join, once it has left) writes it again; or make a sync folder elsewhere", tildePath(dir), syncfolder.InfoFile)
 	}
 	// Unlocked first: a wrong master password leaves no folder made.
 	store, err := openSQLiteStoreWith(cfg)
@@ -519,6 +556,14 @@ func syncJoin(app *App, arg string) error {
 	}
 	f := syncfolder.New(dir)
 	info, err := f.ReadInfo()
+	// The folder this vault left, which lost its InfoFile meanwhile: it's
+	// written again once the vault has joined.
+	var lost *syncfolder.Info
+	if errors.Is(err, syncfolder.ErrNoInfo) {
+		if lost, _, _ = lostInfo(dir, cfg.DBPath.Value); lost != nil { //nolint:errcheck // what can't be told is said as the folder's own error
+			info, err = lost, nil
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", tildePath(dir), err)
 	}
@@ -556,10 +601,16 @@ func syncJoin(app *App, arg string) error {
 		return joinRefused(err, dir)
 	}
 	var notes []string
+	if lost != nil {
+		if err := f.WriteInfo(lost); err != nil {
+			return err
+		}
+		notes = append(notes, "The sync folder had lost its "+syncfolder.InfoFile+": written again from this vault, which synced with it.")
+	}
 	if !rejoin && prior == info.FolderID {
 		// An empty vault that left, its master password changed since: what
 		// it agreed was sealed with the old key, so it starts afresh.
-		notes = append(notes, "This vault synced with the folder before, under another master password: what it deleted since it left wasn't kept, so the folder's copies of those come back.")
+		notes = append(notes, "This vault synced with the folder before, under another master password: what it deleted since it left wasn't kept, so any of those still in the folder come back.")
 	}
 	if rekeyed {
 		if note := lockAgentHoldingOldKey(); note != "" {

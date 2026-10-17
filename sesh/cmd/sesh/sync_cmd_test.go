@@ -583,6 +583,9 @@ func TestSync_LostInfoFile(t *testing.T) {
 	}
 
 	syncComputer(t, desktop, "desktop")
+	if out, err := runSyncOut(t, "", false, "status"); err != nil || !strings.Contains(out, "lost its sesh-sync.json: sesh sync writes it again") {
+		t.Errorf("status, the info file lost: %q, %v", out, err)
+	}
 	putEntry(t, "password/b", "2")
 	out, err := runSyncOut(t, "", false)
 	if err != nil || !strings.Contains(out, "written again from this vault") || !strings.Contains(out, "Changed here, sent: 1 entry") {
@@ -595,6 +598,38 @@ func TestSync_LostInfoFile(t *testing.T) {
 	if got := getEntry(t, "password/b"); got != "2" {
 		t.Errorf("the laptop has b = %q", got)
 	}
+
+	// Lost while the laptop is away: joining again writes it again.
+	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(folder, "sesh-sync.json")); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runSyncOut(t, "", false, "join", folder); err != nil || !strings.Contains(out, "again") || !strings.Contains(out, "written again from this vault") {
+		t.Fatalf("laptop joins again, the info file lost: %q, %v", out, err)
+	}
+
+	// A folder that only shares the key (another the laptop made since,
+	// with copies of its entries) isn't written as this one.
+	other := filepath.Join(dir, "other")
+	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSyncOut(t, "", false, "init", other); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(folder, "sesh-sync.json")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.EnvSyncDir, folder)
+	if out, err := runSyncOut(t, "", false); err == nil || strings.Contains(out, "written again") || !strings.Contains(err.Error(), "not a sesh sync folder") {
+		t.Errorf("a folder that only shares the key: %q, %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(folder, "sesh-sync.json")); !os.IsNotExist(err) {
+		t.Errorf("an info file written for a folder this vault doesn't sync with: %v", err)
+	}
+	t.Setenv(config.EnvSyncDir, "")
 }
 
 // A copy of a vault that never synced, with entries of its own, can't sync
