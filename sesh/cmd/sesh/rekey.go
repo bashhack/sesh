@@ -129,7 +129,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if _, perr := fmt.Fprintf(app.Stderr, "About to change the master password and re-encrypt %s in %s.\n", withTrash(len(entries), len(trashed)), dbPath); perr != nil {
 		return nil, perr
 	}
-	if w := syncKeyChangeWarning(st); w != "" {
+	if w := syncKeyChangeWarning(st, src != nil); w != "" {
 		if _, perr := fmt.Fprintln(app.Stderr, "⚠️  "+w); perr != nil {
 			return nil, perr
 		}

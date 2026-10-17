@@ -354,7 +354,7 @@ func TestSync_KeyChangeWarnings(t *testing.T) {
 	}
 	t.Setenv("SESH_KDF_MEMORY", "32MiB")
 	out, _ := runDoctorOut(t) //nolint:errcheck // checked by the output
-	if !strings.Contains(out, "weaker than configured") || strings.Contains(out, "       sesh passwd\n") || !strings.Contains(out, "would cut this vault off its sync folder") {
+	if !strings.Contains(out, "-     Key settings") || !strings.Contains(out, "weaker than configured") || strings.Contains(out, "       sesh passwd\n") || !strings.Contains(out, "would cut this vault off its sync folder") {
 		t.Errorf("doctor, syncing with weaker settings:\n%s", out)
 	}
 	t.Setenv("SESH_MASTER_PASSWORD", "")
@@ -364,5 +364,36 @@ func TestSync_KeyChangeWarnings(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "⚠️  This vault syncs with") || !strings.Contains(stderr.String(), "Rotation cancelled") {
 		t.Errorf("passwd's warning:\n%s", stderr)
+	}
+	// The recovery key's change: joining again needs the others' password.
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := syncKeyChangeWarning(cfg, true); !strings.Contains(w, "Joining the folder again takes the master password they have") || !strings.Contains(w, "sesh sync init <folder>") {
+		t.Errorf("recover's warning: %q", w)
+	}
+
+	// Left the folder: sesh passwd is offered, saying what it does to
+	// joining again.
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = runDoctorOut(t) //nolint:errcheck // checked by the output
+	if !strings.Contains(out, "warn  Key settings") || !strings.Contains(out, "       sesh passwd\n") || !strings.Contains(out, "synced with a sync folder before") {
+		t.Errorf("doctor, left the folder:\n%s", out)
+	}
+
+	// Never synced: no warning.
+	syncComputer(t, filepath.Join(dir, "other"), "other")
+	putEntry(t, "password/b", "2")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, stderr = rekeyTestApp("n\n")
+	if err := runRekey(app, nil, rotateTestCfg("sync-password-1234")); err != nil {
+		t.Fatalf("passwd, never synced: %v\n%s", err, stderr)
+	}
+	if strings.Contains(stderr.String(), "⚠️") {
+		t.Errorf("passwd warned a vault that never synced:\n%s", stderr)
 	}
 }
