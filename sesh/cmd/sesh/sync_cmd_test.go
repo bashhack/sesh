@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,6 +227,42 @@ func TestSync_LeaveAndRejoin(t *testing.T) {
 	}
 	if out, err := runSyncOut(t, "", false, "join", other); err == nil || !strings.Contains(err.Error(), "already has entries") {
 		t.Errorf("join another vault's folder with entries: %q, %v", out, err)
+	}
+	// Nor sync with it through sync.dir set by hand; status says so too.
+	t.Setenv(config.EnvSyncDir, other)
+	if out, err := runSyncOut(t, "", false); err == nil || !strings.Contains(err.Error(), "synced with another sync folder") {
+		t.Errorf("sync with another vault's folder by hand: %q, %v", out, err)
+	}
+	if out, err := runSyncOut(t, "", false, "status"); err != nil || !strings.Contains(out, "❌ this vault synced with another sync folder") {
+		t.Errorf("status with another vault's folder: %q, %v", out, err)
+	}
+	t.Setenv(config.EnvSyncDir, "")
+}
+
+// Joining the folder the vault syncs with already just syncs; without a
+// terminal or SESH_MASTER_PASSWORD, join says how to give the password; a
+// vault whose master password changed since it left is told why it can't
+// go on, and what it can do.
+func TestSync_JoinCases(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	if _, err := runSyncOut(t, "", false, "init", folder); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runSyncOut(t, "", false, "join", folder); err != nil || !strings.Contains(out, "syncs with "+folder+" already") || strings.Contains(out, "Joined") {
+		t.Errorf("join the folder it syncs with: %q, %v", out, err)
+	}
+	syncComputer(t, filepath.Join(dir, "desktop"), "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || !strings.Contains(err.Error(), "run sesh sync join at one, or give the password in SESH_MASTER_PASSWORD") {
+		t.Errorf("join with no terminal: %q, %v", out, err)
+	}
+	err := joinRefused(database.ErrRejoinOtherKey, folder)
+	if !errors.Is(err, database.ErrRejoinOtherKey) || !strings.Contains(err.Error(), "doesn't sync between computers yet") || strings.Contains(err.Error(), "Joining takes") {
+		t.Errorf("a master password changed since: %v", err)
 	}
 }
 
@@ -457,7 +494,10 @@ func TestSync_InitRefusesTheVaultsFolder(t *testing.T) {
 		t.Errorf("init the folder holding the linked vault: %q, %v", out, err)
 	}
 	t.Setenv(config.EnvDBPath, "")
-	// sync.dir set by hand is held to the same.
+	// sync.dir set by hand is held to the same, when set and when used.
+	if out, _, err := runCLI(agentTestApp(), runConfig, "set", "sync.dir", filepath.Join(link, "sync")); err == nil || !strings.Contains(err.Error(), "vault's own folder") {
+		t.Errorf("config set sync.dir in the vault's folder: %q, %v", out, err)
+	}
 	t.Setenv(config.EnvSyncDir, filepath.Join(link, "sync"))
 	if out, err := runSyncOut(t, "", false); err == nil || !strings.Contains(err.Error(), "vault's own folder") {
 		t.Errorf("sync with sync.dir in the vault's folder: %q, %v", out, err)

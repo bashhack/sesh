@@ -23,7 +23,8 @@ const syncUsage = `Usage:
   sesh sync init [folder]        Make a sync folder from this vault and sync with it; with no
                                  folder, sesh offers one in iCloud Drive
   sesh sync join <folder>        Make this computer's vault from a sync folder another
-                                 computer made (this vault must be new, or empty)
+                                 computer made (this vault must be new, or empty), or join
+                                 again the folder this vault left
   sesh sync status               Where the vault syncs, and what's waiting
   sesh sync leave                Stop syncing this vault (its entries and the folder stay;
                                  joining the folder again merges what changed meanwhile)
@@ -132,9 +133,11 @@ func syncStore(app *App, cfg *config.Config, f syncfolder.Folder, store *databas
 	if err != nil {
 		return fmt.Errorf("the sync folder %s: %w", tildePath(f.Dir()), err)
 	}
-	// A folder other than the one the vault synced with (sync.dir changed
-	// by hand) starts afresh: what was agreed with the other is no base
-	// for this one.
+	if err := checkSwitch(store, f, info); err != nil {
+		return err
+	}
+	// A folder other than the one the vault synced with starts afresh:
+	// what was agreed with the other is no base for this one.
 	if err := store.SyncStartFolder(info.FolderID); err != nil {
 		return err
 	}
@@ -143,6 +146,36 @@ func syncStore(app *App, cfg *config.Config, f syncfolder.Folder, store *databas
 		return err
 	}
 	return writeSyncSummary(app, tildePath(f.Dir()), sum)
+}
+
+// errOtherFolder is a vault with entries that synced with another sync
+// folder, meeting one with files (sync.dir changed by hand).
+var errOtherFolder = errors.New("this vault synced with another sync folder, and has entries this one holds files of too: synced here afresh, entries deleted elsewhere would come back, as edits. Point sync.dir back at the folder it synced with, or join this one with an empty vault (sesh sync join explains)")
+
+// checkSwitch refuses to sync store with f, whose info is info, when the
+// vault synced with another folder and both hold entries: with nothing
+// agreed between them, deletions in either would be undone. A new folder,
+// or a vault never synced, starts afresh as a join would.
+func checkSwitch(store *database.Store, f syncfolder.Folder, info *syncfolder.Info) error {
+	have, err := store.SyncFolderID()
+	if err != nil || have == "" || have == info.FolderID {
+		return err
+	}
+	items, err := store.SyncItems()
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(items, func(it database.SyncItem) bool { return it.Place != database.SyncGone }) {
+		return nil
+	}
+	c, err := f.Scan()
+	if err != nil {
+		return err
+	}
+	if len(c.Files) > 0 || len(c.NotDownloaded) > 0 {
+		return errOtherFolder
+	}
+	return nil
 }
 
 // writeSyncSummary says what a sync did; problems make it an error, after
@@ -413,6 +446,12 @@ func syncJoin(app *App, arg string) error {
 	if cfg.SyncDir.Value != "" && cfg.SyncDir.Value != dir {
 		return fmt.Errorf("this vault syncs with %s already (sesh sync leave stops that)", tildePath(cfg.SyncDir.Value))
 	}
+	if cfg.SyncDir.Value == dir {
+		if _, err := fmt.Fprintf(app.Stdout, "This vault syncs with %s already.\n", tildePath(dir)); err != nil {
+			return err
+		}
+		return syncWith(app, cfg)
+	}
 	if err := checkSyncDir(dir, cfg.DBPath.Value); err != nil {
 		return err
 	}
@@ -489,8 +528,11 @@ func syncJoin(app *App, arg string) error {
 // joinRefused is err from readying the vault to join dir, with what to do
 // when it has entries.
 func joinRefused(err error, dir string) error {
+	if errors.Is(err, database.ErrRejoinOtherKey) {
+		return fmt.Errorf("%w, so it can't go on where it stopped: a master password change doesn't sync between computers yet. To sync it anyway: sesh export --file F, move the vault's files aside (the vault, any -wal and -shm files beside it, and touchid.key), sesh sync join %s, then sesh import --from sesh F (entries deleted elsewhere since it left come back, as new ones)", err, shellPath(dir))
+	}
 	if errors.Is(err, database.ErrVaultNotEmpty) {
-		return fmt.Errorf("%w. Joining takes a new or empty vault, or one joining again the folder it left. To bring its entries along: sesh export --file F, move the vault aside (or sesh init --db-path elsewhere), sesh sync join %s, then sesh import --from sesh F", err, shellPath(dir))
+		return fmt.Errorf("%w. Joining takes a new or empty vault, or one joining again the folder it left. To bring its entries along: sesh export --file F, move the vault's files aside (the vault, any -wal and -shm files beside it, and touchid.key), sesh sync join %s, then sesh import --from sesh F", err, shellPath(dir))
 	}
 	return err
 }
@@ -499,6 +541,9 @@ func joinRefused(err error, dir string) error {
 // dir until it opens m, their key record: three tries at a terminal, one
 // otherwise. The caller zeroes it.
 func joinPassword(pc passwordPromptConfig, dir string, m database.UnlockMaterial) ([]byte, error) {
+	if !pc.fromEnv && !pc.interactive {
+		return nil, errors.New("there's no terminal here to type the master password of the vaults syncing through the folder at: run sesh sync join at one, or give the password in SESH_MASTER_PASSWORD")
+	}
 	tries := 1
 	if pc.interactive {
 		tries = interactivePasswordAttempts
@@ -592,6 +637,11 @@ func syncStatus(app *App) error {
 			}
 		}
 		fmt.Fprintf(&b, "Changed in the folder, to take: %d\n", fresh)
+		if info, err := f.ReadInfo(); err != nil {
+			fmt.Fprintf(&b, "❌ %v\n", err)
+		} else if err := checkSwitch(store, f, info); err != nil {
+			fmt.Fprintf(&b, "❌ %v\n", err)
+		}
 		if otherKey > 0 {
 			fmt.Fprintf(&b, "⚠️  %s sealed with another master password's key: sync leaves them for the computer that wrote them\n", nouns(otherKey, "entry's file is", "entries' files are"))
 		}

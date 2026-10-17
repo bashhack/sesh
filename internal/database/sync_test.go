@@ -5,7 +5,6 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/syncfolder"
@@ -285,27 +284,27 @@ func TestJoinVault(t *testing.T) {
 	if got := folderOf(t, fresh); got != "f1" {
 		t.Errorf("new vault's sync folder: %q", got)
 	}
-	if rejoin, err := JoinVault(fresh, m, "f1"); err != nil || rejoin {
-		t.Errorf("again: %v, %v", rejoin, err)
+	if rejoin, err := JoinVault(fresh, m, "f1"); err != nil || !rejoin {
+		t.Errorf("again: %v, %v; want it rejoining", rejoin, err)
 	}
 	if !opensWith(t, p, "old-password-1") {
 		t.Fatal("the vault doesn't open")
 	}
 	other := mustOtherKey(t)
 	for _, c := range []struct {
+		want   error
 		folder string
-		want   string
 		m      UnlockMaterial
 	}{
-		{"f2", "already has entries", other},
-		{"f2", "already has entries", m},
-		{"f1", "under another master password", other},
+		{ErrVaultNotEmpty, "f2", other},
+		{ErrVaultNotEmpty, "f2", m},
+		{ErrRejoinOtherKey, "f1", other},
 	} {
-		if _, err := CanJoin(p, c.m, c.folder); !errors.Is(err, ErrVaultNotEmpty) || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("CanJoin with entries, folder %s: %v, want %q", c.folder, err, c.want)
+		if _, err := CanJoin(p, c.m, c.folder); !errors.Is(err, c.want) {
+			t.Errorf("CanJoin with entries, folder %s: %v, want %v", c.folder, err, c.want)
 		}
-		if _, err := JoinVault(p, c.m, c.folder); !errors.Is(err, ErrVaultNotEmpty) || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("JoinVault with entries, folder %s: %v, want %q", c.folder, err, c.want)
+		if _, err := JoinVault(p, c.m, c.folder); !errors.Is(err, c.want) {
+			t.Errorf("JoinVault with entries, folder %s: %v, want %v", c.folder, err, c.want)
 		}
 	}
 	// Joining again the folder it synced with: what it agreed is kept.
@@ -442,5 +441,65 @@ func TestSyncStartFolder(t *testing.T) {
 	}
 	if got, err := a.SyncFolderID(); err != nil || got != "f2" {
 		t.Errorf("SyncFolderID = %q, %v", got, err)
+	}
+}
+
+// A vault with nothing left but what it agreed (every entry deleted for
+// good while it was away) rejoins its folder, keeping those deletions; one
+// restored from a backup made before it synced, every entry marked
+// restored, joins with its entries.
+func TestJoinVault_Rejoins(t *testing.T) {
+	a, _ := syncPair(t)
+	if err := a.SyncStartFolder("f1"); err != nil {
+		t.Fatal(err)
+	}
+	k := vault.Key{Kind: vault.KindPassword, Service: "bank"}
+	uid := uidOf(t, a, k)
+	rec, rev, err := a.SyncRecord(uid, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SyncAgree(uid, rev, rec, syncfolder.Hash{1}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := a.List(&vault.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []vault.Key
+	for _, e := range all {
+		keys = append(keys, e.Key)
+	}
+	if err := a.PurgeMany(keys); err != nil {
+		t.Fatal(err)
+	}
+	path := a.Path()
+	m, err := ReadUnlockMaterial(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejoin, err := JoinVault(path, m, "f1"); err != nil || !rejoin {
+		t.Fatalf("all deleted: %v, %v; want it rejoining", rejoin, err)
+	}
+	if it := syncItem(t, a, uid); it.Agreed == nil {
+		t.Error("the deletion it agreed was forgotten")
+	}
+
+	b, _ := syncPair(t)
+	if _, err := b.db.Exec(`INSERT INTO sync_restored (uid, rev) SELECT uid, rev FROM entries`); err != nil {
+		t.Fatal(err)
+	}
+	mb, err := ReadUnlockMaterial(b.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejoin, err := CanJoin(b.Path(), mb, "f1"); err != nil || !rejoin {
+		t.Errorf("restored before it synced: %v, %v; want it joining", rejoin, err)
+	}
+	if _, err := b.db.Exec(`DELETE FROM sync_restored`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CanJoin(b.Path(), mb, "f1"); !errors.Is(err, ErrVaultNotEmpty) {
+		t.Errorf("not restored, never synced: %v, want ErrVaultNotEmpty", err)
 	}
 }

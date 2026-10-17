@@ -115,6 +115,15 @@ func setConfig(app *App, args []string) error {
 			return err
 		}
 	}
+	if key == "sync.dir" && value != "" {
+		dir, err := syncDirArg(value)
+		if err != nil {
+			return err
+		}
+		if err := checkSyncDir(dir, cfg.DBPath.Value); err != nil {
+			return err
+		}
+	}
 	if err := config.Set(cfg.Path, key, value); err != nil {
 		return err
 	}
