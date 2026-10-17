@@ -299,6 +299,15 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	// password change, so it's written again with the vault's.
 	// olderCopy: an older copy put back, whatever key sealed it.
 	agreedHere, ownStale, oldKey, olderCopy := false, false, false, false
+	// same are versions holding just what was agreed, sealed or written
+	// again elsewhere (a password change, a lost file written back): no
+	// change from there, unless something else in the folder is.
+	var same []remote
+	defer func() {
+		for _, r := range same {
+			r.rec.Wipe()
+		}
+	}()
 	var copies []string
 	for i := range files {
 		f := &files[i]
@@ -326,8 +335,27 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 			ownStale = ownStale || ownFile(f)
 			continue
 		}
+		if base != nil && sameEntry(rec, base) {
+			same = append(same, remote{rec: rec, file: *f})
+			continue
+		}
 		fresh = append(fresh, remote{rec: rec, file: *f})
 	}
+	// A real change in the folder: the others are merged with it, as ever.
+	if len(fresh) > 0 {
+		fresh = append(fresh, same...)
+		same = nil
+	}
+	// Otherwise what was agreed takes their counts, so what's written from
+	// here covers them; the entry's own file among them stands for it.
+	var sameOwn *remote
+	for i := range same {
+		base.Versions = base.Versions.Join(same[i].rec.Versions)
+		if ownFile(&same[i].file) {
+			sameOwn = &same[i]
+		}
+	}
+	agreedHere = agreedHere || sameOwn != nil
 	// The entry's own file missing, or older than what was agreed: it's
 	// written again, as a sync tool or someone lost it.
 	changedHere := it.Changed() || (it.Agreed != nil && !agreedHere && len(fresh) == 0) || ownStale
@@ -353,6 +381,11 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 				y.sum.Resealed++
 			default:
 				y.sum.Rewritten++
+			}
+		} else if sameOwn != nil {
+			// Nothing to write: the file, as it is now, is what's agreed.
+			if err := y.store.SyncAgree(uid, it.Rev, sameOwn.rec, sameOwn.file.Hash); err != nil {
+				return err
 			}
 		}
 		return y.removeCopies(copies)

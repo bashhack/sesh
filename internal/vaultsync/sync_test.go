@@ -808,3 +808,46 @@ func scanFiles(t *testing.T, f syncfolder.Folder) []syncfolder.File {
 	}
 	return c.Files
 }
+
+// An entry changed on one computer while the other only sealed its file
+// again (a password change) or wrote it back (lost) is sent from the first,
+// not said to be changed on both: nothing in it changed there.
+func TestSync_EditOverSealedAgain(t *testing.T) {
+	t.Parallel()
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+
+	laptop, desktop, f := twoComputers(t)
+	laptop.put("github", "pw-1")
+	settle(t, f, laptop, desktop)
+	desktop.put("github", "desktop-pw")
+	laptopNew, rec := changeKey(t, laptop, "correct horse battery", "the new password 1")
+	syncOlder(t, laptopNew, f)
+	desktopNew := takeKey(t, desktop, laptopNew, rec, "the new password 1")
+	s := syncOlder(t, desktopNew, f)
+	if len(s.Merged) != 0 || len(s.Sent) != 1 || s.Sent[0] != "password/github/alice" {
+		t.Errorf("the desktop's edit over a file sealed again: %+v; want it sent, nothing merged", s)
+	}
+	settle(t, f, laptopNew, desktopNew)
+	if got := laptopNew.secret(gh); got != "desktop-pw" {
+		t.Errorf("the laptop has %q", got)
+	}
+
+	// The same with a file lost and written back by the laptop.
+	laptop, desktop, f = twoComputers(t)
+	laptop.put("github", "pw-1")
+	settle(t, f, laptop, desktop)
+	own := filepath.Join(f.Dir(), "entries", uidOfKey(t, laptop, gh)+".sesh")
+	if err := os.Remove(own); err != nil {
+		t.Fatal(err)
+	}
+	laptop.sync(f)
+	desktop.put("github", "desktop-pw")
+	s = desktop.sync(f)
+	if len(s.Merged) != 0 || len(s.Sent) != 1 {
+		t.Errorf("the desktop's edit over a file written back: %+v; want it sent, nothing merged", s)
+	}
+	settle(t, f, laptop, desktop)
+	if got := laptop.secret(gh); got != "desktop-pw" {
+		t.Errorf("the laptop has %q", got)
+	}
+}
