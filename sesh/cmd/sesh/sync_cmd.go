@@ -92,11 +92,11 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 	}
 	info, err := f.ReadInfo()
 	if errors.Is(err, syncfolder.ErrNoInfo) {
-		switch lost, waiting, _ := lostInfo(f.Dir(), cfg.DBPath.Value); { //nolint:errcheck // what can't be told is said as the folder's own error, below
+		switch lost, state, _ := lostInfo(f.Dir(), cfg.DBPath.Value); { //nolint:errcheck // what can't be told is said as the folder's own error, below
 		case lost != nil:
 			return f, fmt.Errorf("the sync folder %s lost its %s: sesh sync writes it again from this vault, which synced with it", tildePath(f.Dir()), syncfolder.InfoFile)
-		case waiting:
-			return f, fmt.Errorf("the sync folder %s has no %s, and its entry files aren't downloaded yet: keep the folder downloaded (in iCloud Drive, Control-click it and choose Keep Downloaded), then sesh sync can tell whether it's this vault's and write it again", tildePath(f.Dir()), syncfolder.InfoFile)
+		case lostSaid(f.Dir(), state) != "":
+			return f, errors.New(lostSaid(f.Dir(), state))
 		}
 	}
 	if err != nil {
@@ -206,36 +206,54 @@ func checkSwitch(store *database.Store, f syncfolder.Folder, info *syncfolder.In
 	return errOtherFolder
 }
 
+// infoState is why lostInfo can't say what a lost InfoFile was.
+type infoState int
+
+const (
+	infoUnknown infoState = iota
+	// infoWaiting: the folder's files aren't downloaded yet.
+	infoWaiting
+	// infoBehind: its files are sealed with this vault's key, but none is
+	// one this vault agreed as it is: other computers synced since.
+	infoBehind
+)
+
 // lostInfo is the InfoFile the sync folder at dir lost (a sync tool, or
 // someone, deleted it), as the vault at dbPath, which synced with it, can
 // write it again: the folder's ID it keeps, and its own key record. Only
-// when the folder holds a file this vault agreed, as it is (its hash): a
-// folder that merely shares the key, another vault made, isn't this one.
-// waiting says the folder's files aren't downloaded yet, so it can't tell.
-func lostInfo(dir, dbPath string) (info *syncfolder.Info, waiting bool, err error) {
+// when the folder holds a file this vault agreed, as it is (its hash), and
+// sealed with its key as it is now: a folder that merely shares the key
+// (another vault made it) isn't this one, and a vault whose master
+// password changed would lock the others out. When it can't, state says
+// why, if it can tell.
+func lostInfo(dir, dbPath string) (info *syncfolder.Info, state infoState, err error) {
 	f := syncfolder.New(dir)
 	if _, err := f.ReadInfo(); !errors.Is(err, syncfolder.ErrNoInfo) {
-		return nil, false, nil
+		return nil, infoUnknown, nil
 	}
 	if checkSyncDir(dir, dbPath) != nil {
-		return nil, false, nil
+		return nil, infoUnknown, nil
 	}
 	id, err := database.VaultSyncFolder(dbPath)
 	if err != nil || id == "" {
-		return nil, false, err
+		return nil, infoUnknown, err
 	}
 	c, err := f.Scan()
 	if err != nil {
-		return nil, false, nil //nolint:nilerr // the caller says why the folder can't be read
+		return nil, infoUnknown, nil //nolint:nilerr // the caller says why the folder can't be read
+	}
+	m, err := database.ReadUnlockMaterial(dbPath)
+	if err != nil {
+		return nil, infoUnknown, err
 	}
 	store, err := database.Open(dbPath, nil)
 	if err != nil {
-		return nil, false, err
+		return nil, infoUnknown, err
 	}
 	defer closeAuditStore(store)
 	items, err := store.SyncItems()
 	if err != nil {
-		return nil, false, err
+		return nil, infoUnknown, err
 	}
 	agreed := map[string]syncfolder.Hash{}
 	for i := range items {
@@ -243,17 +261,33 @@ func lostInfo(dir, dbPath string) (info *syncfolder.Info, waiting bool, err erro
 			agreed[items[i].UID] = items[i].Agreed.Hash
 		}
 	}
+	keyID := database.UnlockID(m.Verify)
+	ours := func(file syncfolder.File) bool { return file.KeyIDString() == keyID }
 	if !slices.ContainsFunc(c.Files, func(file syncfolder.File) bool {
 		h, ok := agreed[file.UIDString()]
-		return ok && h == file.Hash
+		return ok && h == file.Hash && ours(file)
 	}) {
-		return nil, len(c.NotDownloaded) > 0, nil
+		switch {
+		case slices.ContainsFunc(c.Files, ours):
+			return nil, infoBehind, nil
+		case len(c.NotDownloaded) > 0:
+			return nil, infoWaiting, nil
+		}
+		return nil, infoUnknown, nil
 	}
-	m, err := database.ReadUnlockMaterial(dbPath)
-	if err != nil {
-		return nil, false, err
+	return syncfolder.InfoFor(id, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}), infoUnknown, nil
+}
+
+// lostSaid says why a sync folder at dir with no InfoFile can't have it
+// written again here, for state; "" when it can't tell.
+func lostSaid(dir string, state infoState) string {
+	switch state {
+	case infoWaiting:
+		return fmt.Sprintf("the sync folder %s has no %s, and its entry files aren't downloaded yet: keep the folder downloaded (in iCloud Drive, Control-click it and choose Keep Downloaded), then sesh sync can tell whether it's this vault's and write it again", tildePath(dir), syncfolder.InfoFile)
+	case infoBehind:
+		return fmt.Sprintf("the sync folder %s has no %s, and holds no entry file this vault agreed as it is: if it's the folder this vault synced with, other computers synced since, and sesh sync on one of them writes it again", tildePath(dir), syncfolder.InfoFile)
 	}
-	return syncfolder.InfoFor(id, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}), false, nil
+	return ""
 }
 
 // mendInfo writes the sync folder's InfoFile again when it's lost and this
@@ -560,8 +594,13 @@ func syncJoin(app *App, arg string) error {
 	// written again once the vault has joined.
 	var lost *syncfolder.Info
 	if errors.Is(err, syncfolder.ErrNoInfo) {
-		if lost, _, _ = lostInfo(dir, cfg.DBPath.Value); lost != nil { //nolint:errcheck // what can't be told is said as the folder's own error
+		var state infoState
+		lost, state, _ = lostInfo(dir, cfg.DBPath.Value) //nolint:errcheck // what can't be told is said as the folder's own error
+		switch {
+		case lost != nil:
 			info, err = lost, nil
+		case lostSaid(dir, state) != "":
+			return errors.New(lostSaid(dir, state))
 		}
 	}
 	if err != nil {

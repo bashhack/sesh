@@ -623,7 +623,7 @@ func TestSync_LostInfoFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(config.EnvSyncDir, folder)
-	if out, err := runSyncOut(t, "", false); err == nil || strings.Contains(out, "written again") || !strings.Contains(err.Error(), "not a sesh sync folder") {
+	if out, err := runSyncOut(t, "", false); err == nil || strings.Contains(out, "written again") || !strings.Contains(err.Error(), "holds no entry file this vault agreed") {
 		t.Errorf("a folder that only shares the key: %q, %v", out, err)
 	}
 	if _, err := os.Stat(filepath.Join(folder, "sesh-sync.json")); !os.IsNotExist(err) {
@@ -700,5 +700,80 @@ func TestSync_HandSetFolderRefused(t *testing.T) {
 	}
 	if out, err := runSyncOut(t, "", false, "join", filepath.Join(dir, "synclink")); err != nil || !strings.Contains(out, "already") {
 		t.Errorf("join the folder it syncs with, through a link: %q, %v", out, err)
+	}
+}
+
+// A lost sesh-sync.json isn't written again by a vault whose master
+// password changed since (its key would lock the others out), nor by one
+// behind the folder, which says who can; one up to date writes it.
+func TestSync_LostInfoChangedOrBehind(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	info := filepath.Join(folder, "sesh-sync.json")
+	laptop, desktop, third := filepath.Join(dir, "laptop"), filepath.Join(dir, "desktop"), filepath.Join(dir, "third")
+	syncComputer(t, laptop, "laptop")
+	putEntry(t, "password/a", "1")
+	if _, err := runSyncOut(t, "", false, "init", folder); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{desktop, third} {
+		syncComputer(t, c, filepath.Base(c))
+		if _, err := runSyncOut(t, "", false, "join", folder); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The laptop's master password changed.
+	syncComputer(t, laptop, "laptop")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	app, stderr := rekeyTestApp("y\n")
+	if err := runRekey(app, nil, rotateTestCfg("sync-password-1234", "new-pw-5678", "new-pw-5678")); err != nil {
+		t.Fatalf("passwd: %v\n%s", err, stderr)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
+	if err := os.Remove(info); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runSyncOut(t, "", false); err == nil || strings.Contains(out, "written again") {
+		t.Errorf("sync after a password change: %q, %v", out, err)
+	}
+	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || strings.Contains(out, "Joined") {
+		t.Errorf("join after a password change: %q, %v", out, err)
+	}
+	if _, err := os.Stat(info); !os.IsNotExist(err) {
+		t.Fatalf("the info file written with another key: %v", err)
+	}
+
+	// The third computer is behind: the desktop changed the entry since.
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	syncComputer(t, desktop, "desktop")
+	putEntry(t, "password/a", "2")
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "written again") {
+		t.Fatalf("desktop sync: %q, %v", out, err)
+	}
+	if err := os.Remove(info); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, third, "third")
+	if out, err := runSyncOut(t, "", false, "status"); err != nil || !strings.Contains(out, "other computers synced since") {
+		t.Errorf("status, behind: %q, %v", out, err)
+	}
+	if out, err := runSyncOut(t, "", false); err == nil || !strings.Contains(err.Error(), "sesh sync on one of them writes it again") {
+		t.Errorf("sync, behind: %q, %v", out, err)
+	}
+	syncComputer(t, desktop, "desktop")
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "written again") {
+		t.Errorf("desktop writes it again: %q, %v", out, err)
+	}
+	syncComputer(t, third, "third")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Errorf("third after: %v", err)
+	}
+	if got := getEntry(t, "password/a"); got != "2" {
+		t.Errorf("third has a = %q", got)
 	}
 }
