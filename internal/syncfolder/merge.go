@@ -156,6 +156,11 @@ func MergeWith(base, ours, theirs *Record, beside Beside) (m Merged) {
 		replacedAt = secretFrom.Changed
 	}
 	for _, side := range []*Record{ours, theirs} {
+		// Not one forgotten on purpose after it was set: a computer that
+		// hadn't synced since still has it as its secret.
+		if forgottenOne(&Earlier{Secret: side.Secret, ReplacedAt: side.Updated}, r.Forgotten) {
+			continue
+		}
 		if len(side.Secret) > 0 && !bytes.Equal(side.Secret, r.Secret) {
 			history = append(history, Earlier{ReplacedAt: replacedAt, Computer: secretFrom.Computer, FileName: side.Settings.FileName, Secret: side.Secret})
 		}

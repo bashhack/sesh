@@ -226,7 +226,7 @@ func TestSync_Random2(t *testing.T) {
 			for _, c := range cs {
 				for _, s := range historySecrets(t, c) {
 					if forgottenSecrets[s] {
-						t.Logf("FORGOT-BACK %s: forgotten %s is back", c.name, s)
+						t.Errorf("%s: %s, forgotten on purpose, is back", c.name, s)
 						back = true
 					}
 				}

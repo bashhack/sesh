@@ -49,9 +49,11 @@ type SyncItem struct {
 	// Rev is 0 when gone.
 	Rev int64
 	// Restored says it was restored from a backup and hasn't synced since;
-	// RestoredRev is its rev then (another now: changed since).
-	Restored    bool
-	RestoredRev int64
+	// RestoredRev is its rev then (another now: changed since);
+	// RestoredChanged, that the backup had it changed and not synced.
+	Restored        bool
+	RestoredChanged bool
+	RestoredRev     int64
 }
 
 // Changed says whether the entry changed here since it was last agreed:
@@ -109,19 +111,20 @@ func (s *Store) SyncItems() (_ []SyncItem, err error) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, fmt.Errorf("read what was synced: %w", err)
 	}
-	rows, err = s.db.Query(`SELECT uid, rev FROM sync_restored`)
+	rows, err = s.db.Query(`SELECT uid, rev, changed FROM sync_restored`)
 	if err != nil {
 		return nil, fmt.Errorf("read what was restored: %w", err)
 	}
 	for rows.Next() {
 		var uid string
 		var rev int64
-		if err := rows.Scan(&uid, &rev); err != nil {
+		var changed bool
+		if err := rows.Scan(&uid, &rev, &changed); err != nil {
 			_ = rows.Close() //nolint:errcheck // already failing
 			return nil, err
 		}
 		if it, ok := byUID[uid]; ok && it.Place != SyncGone {
-			it.Restored, it.RestoredRev = true, rev
+			it.Restored, it.RestoredRev, it.RestoredChanged = true, rev, changed
 		}
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {

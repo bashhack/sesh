@@ -416,6 +416,22 @@ func (y *syncer) restored(uid string, it *database.SyncItem, files []syncfolder.
 			folder = m.Record
 		}
 	}
+	// The version last agreed, when the folder's files are older (a sync
+	// tool put one back, or lost it): the folder's as far as is known.
+	baseUsed := false
+	if base != nil {
+		switch {
+		case folder == nil, base.Versions.Covers(folder.Versions) && !folder.Versions.Covers(base.Versions):
+			folder, baseUsed = base, true
+		case !folder.Versions.Covers(base.Versions):
+			m, err := y.merge(uid, nil, folder, base)
+			if err != nil {
+				return err
+			}
+			held = append(held, m)
+			folder, baseUsed = m.Record, true
+		}
+	}
 	local, rev, err := y.store.SyncRecord(uid, y.computer)
 	if err != nil {
 		return err
@@ -432,7 +448,9 @@ func (y *syncer) restored(uid string, it *database.SyncItem, files []syncfolder.
 		y.sum.Sent = append(y.sum.Sent, recordName(uid, local))
 		return y.removeCopies(copies)
 	}
-	changedSince := rev != it.RestoredRev
+	// Changed after the restore, or in the backup and never synced: an
+	// edit, which wins over a deletion.
+	changedSince := rev != it.RestoredRev || it.RestoredChanged
 	if !folder.Purged.IsZero() && !changedSince {
 		gone := &syncfolder.Record{Purged: folder.Purged, Changed: y.now(), Versions: folder.Versions}
 		if err := y.pushApplied(uid, rev, gone); err != nil {
@@ -469,7 +487,7 @@ func (y *syncer) restored(uid string, it *database.SyncItem, files []syncfolder.
 		m.Versions = m.Versions.Join(base.Versions)
 	}
 	// Nothing the folder's own file doesn't have: taken, nothing written.
-	if own != nil && len(copies) == 0 && sameEntry(m.Record, folder) {
+	if own != nil && len(copies) == 0 && !baseUsed && sameEntry(m.Record, folder) {
 		if err := y.apply(uid, rev, m.Record, own.Hash); err != nil {
 			return err
 		}
