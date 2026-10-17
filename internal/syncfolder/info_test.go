@@ -38,12 +38,13 @@ func TestInfo_WriteRead(t *testing.T) {
 // master password change missing a part, or not JSON is refused.
 func TestInfo_ReadRefuses(t *testing.T) {
 	for name, tc := range map[string]struct{ body, wantSub string }{
-		"newer":      {`{"format": 2}`, "newer sesh"},
-		"no key":     {`{"format": 1, "folder_id": "ab", "key": {}}`, "missing what a sync folder has"},
-		"too much":   {`{"format": 1, "folder_id": "ab", "key": {"salt": "c2FsdA==", "verify": "dg==", "params": {"time": 2, "memory": 4294967295, "threads": 1, "key_len": 32}}}`, "memory"},
-		"garbage":    {`not json`, "doesn't read"},
-		"too little": {`{"format": 1, "folder_id": "ab", "key": {"salt": "c2FsdA==", "verify": "dg==", "params": {"time": 1, "memory": 1024, "threads": 1, "key_len": 32}}}`, "below the least"},
-		"half link":  {`{"format": 1, "folder_id": "ab", "key": {"salt": "c2FsdA==", "verify": "dg==", "params": {"time": 2, "memory": 19456, "threads": 1, "key_len": 32}}, "links": [{"from": "a", "to": "b"}]}`, "missing what one has"},
+		"newer":         {`{"format": 2}`, "newer sesh"},
+		"no key":        {`{"format": 1, "folder_id": "ab", "key": {}}`, "missing what a sync folder has"},
+		"too much":      {`{"format": 1, "folder_id": "ab", "key": {"salt": "c2FsdA==", "verify": "dg==", "params": {"time": 2, "memory": 4294967295, "threads": 1, "key_len": 32}}}`, "memory"},
+		"garbage":       {`not json`, "doesn't read"},
+		"too little":    {`{"format": 1, "folder_id": "ab", "key": {"salt": "c2FsdA==", "verify": "dg==", "params": {"time": 1, "memory": 1024, "threads": 1, "key_len": 32}}}`, "below the least"},
+		"half recovery": {`{"format": 1, "folder_id": "ab", "key": {"salt": "c2FsdA==", "verify": "dg==", "params": {"time": 2, "memory": 19456, "threads": 1, "key_len": 32}}, "recovery": {"key": "k"}}`, "recovery key record is missing"},
+		"half link":     {`{"format": 1, "folder_id": "ab", "key": {"salt": "c2FsdA==", "verify": "dg==", "params": {"time": 2, "memory": 19456, "threads": 1, "key_len": 32}}, "links": [{"from": "a", "to": "b"}]}`, "missing what one has"},
 	} {
 		f := New(t.TempDir())
 		if err := os.WriteFile(filepath.Join(f.Dir(), InfoFile), []byte(tc.body), 0o600); err != nil {

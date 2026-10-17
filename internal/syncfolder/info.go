@@ -31,7 +31,10 @@ var ErrNoInfo = errors.New("not a sesh sync folder (it has no " + InfoFile + ")"
 // their key, as each vault's vault_key row has it). None of it is secret:
 // without the master password it opens nothing.
 type Info struct {
-	FolderID string `json:"folder_id"`
+	// Recovery is the recovery key the vaults share, sealed; nil when none
+	// was ever made.
+	Recovery *SealedRecovery `json:"recovery,omitempty"`
+	FolderID string          `json:"folder_id"`
 	// Links are the master password changes, oldest first, each from a key
 	// record to the next: see KeyLink.
 	Links  []KeyLink `json:"links,omitempty"`
@@ -131,6 +134,9 @@ func (f Folder) ReadInfo() (*Info, error) {
 		if l.From == "" || l.To == "" || len(l.Key) == 0 || len(l.KeySalt) == 0 || len(l.Proof) == 0 || len(l.ProofSalt) == 0 {
 			return nil, fmt.Errorf("read %s: a master password change in it is missing what one has", f.infoPath())
 		}
+	}
+	if r := info.Recovery; r != nil && (r.Key == "" || len(r.Data) == 0 || len(r.Salt) == 0) {
+		return nil, fmt.Errorf("read %s: its recovery key record is missing what one has", f.infoPath())
 	}
 	// Settings lower than the least sesh makes a vault with would make the
 	// master password cheap to guess, should a computer take them.

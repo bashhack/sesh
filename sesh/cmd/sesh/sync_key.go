@@ -355,14 +355,24 @@ func openWithKey(dbPath, id string, key []byte) (*database.Store, error) {
 }
 
 // syncOlder syncs store with f, opening files sealed with keys the vault
-// had before through its links.
+// had before through its links, then its recovery key record.
 func syncOlder(store *database.Store, cfg *config.Config, f syncfolder.Folder) (*vaultsync.Summary, error) {
 	older, err := store.SyncOlderKeys()
 	if err != nil {
 		return nil, err
 	}
 	defer older.Close()
-	return vaultsync.SyncWith(store, f, cfg.SyncComputerName(), vaultsync.Options{Older: older})
+	sum, err := vaultsync.SyncWith(store, f, cfg.SyncComputerName(), vaultsync.Options{Older: older})
+	if err != nil {
+		return sum, err
+	}
+	notes, warnings, err := syncRecovery(store, f, older, cfg.SyncComputerName())
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("the recovery key wasn't synced (%v): the next sync tries again", err))
+	}
+	sum.Notes = append(sum.Notes, notes...)
+	sum.Warnings = append(sum.Warnings, warnings...)
+	return sum, nil
 }
 
 // changeLink is the key link for a master password change from oldKey,

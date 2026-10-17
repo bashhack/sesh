@@ -47,6 +47,16 @@ func (o *keySourceOracle) DecryptEntry(encryptedData, salt, aad []byte) ([]byte,
 	return DecryptEntry(key, encryptedData, salt, aad)
 }
 
+// WithKey runs use with the key source's key, zeroed after.
+func (o *keySourceOracle) WithKey(use func(key []byte) error) error {
+	key, err := o.ks.GetEncryptionKey()
+	if err != nil {
+		return err
+	}
+	defer secure.SecureZeroBytes(key)
+	return use(key)
+}
+
 // Close releases the wrapped source (MasterPasswordSource zeroes its
 // cached key).
 func (o *keySourceOracle) Close() {

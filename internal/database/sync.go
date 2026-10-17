@@ -949,7 +949,8 @@ func CheckMasterPassword(pw []byte, m UnlockMaterial) error {
 // SyncStartFolder makes folderID the sync folder the vault syncs with. A
 // vault that synced with another forgets what it agreed with that one, so
 // every entry goes to the new folder as a change (entries restored from a
-// backup stay marked so); one syncing with folderID already keeps it.
+// backup stay marked so), and so does its recovery key record; one syncing
+// with folderID already keeps it.
 func (s *Store) SyncStartFolder(folderID string) error {
 	return s.inTx(func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO sync_info (id, computer_id) VALUES (1, lower(hex(randomblob(8))))`); err != nil {
@@ -965,7 +966,7 @@ func (s *Store) SyncStartFolder(folderID string) error {
 		if _, err := tx.Exec(`DELETE FROM sync_state`); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`UPDATE sync_info SET folder_id = ? WHERE id = 1`, folderID)
+		_, err := tx.Exec(`UPDATE sync_info SET folder_id = ?, `+noRecoverySeen+` WHERE id = 1`, folderID)
 		return err
 	})
 }
