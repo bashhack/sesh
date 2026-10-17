@@ -165,6 +165,20 @@ func MergeWith(base, ours, theirs *Record, beside Beside) (m Merged) {
 			history = append(history, Earlier{ReplacedAt: replacedAt, Computer: secretFrom.Computer, FileName: side.Settings.FileName, Secret: side.Secret})
 		}
 	}
+	// Base's secret, set when base says, forgotten on purpose since: so is
+	// every earlier copy of it, even one replaced after it was forgotten,
+	// by a computer that hadn't synced since. Its mark is moved to the
+	// latest of those, so every computer holding one forgets it too.
+	if len(base.Secret) > 0 && !base.Updated.IsZero() {
+		h := Forget(base.Secret)
+		if i := slices.IndexFunc(r.Forgotten, func(f Forgotten) bool { return f.Hash == h && !base.Updated.After(f.At) }); i >= 0 {
+			for _, e := range history {
+				if bytes.Equal(e.Secret, base.Secret) {
+					r.Forgotten[i].At = latest(r.Forgotten[i].At, e.ReplacedAt)
+				}
+			}
+		}
+	}
 	r.History = mergeHistory(history, r.Forgotten, r.Secret)
 
 	// In the trash: as either changed it, the earlier deletion if both
