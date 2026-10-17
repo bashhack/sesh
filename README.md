@@ -38,7 +38,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from, and `sesh config set` changes one
 - **Automatic Backups** — A copy of the encrypted vault each day, the newest 7 kept (`sesh backup`, `sesh restore`)
 - **Encrypted Export** — Entries protected by a password of their own, to move them to another machine (`sesh export`; `sesh import --from sesh` reads it)
-- **Import** — From Bitwarden, KeePass, Chrome, Firefox, Safari and Google Authenticator (`sesh import`)
+- **Import** — From Bitwarden, KeePass, Chrome, Firefox, Safari, Google Authenticator and LastPass Authenticator (`sesh import`)
 - **Trash and History** — A deleted entry stays in the trash for 30 days, and each entry keeps its earlier secrets, so either can be brought back
 - **Folders and Tags** — Put entries in folders and tag them, and narrow lists and searches by them
 - **Health and Checks** — `sesh health` finds weak, reused and old passwords; `sesh doctor` checks the setup and that every entry can be read
@@ -157,6 +157,7 @@ git config --global credential.helper '!sesh git-credential'   # git's HTTPS pas
 sesh import --from google-authenticator IMG_1234.png   # its "Transfer accounts" QR codes
 sesh import --from bitwarden bitwarden_export.json
 sesh import --from keepass Passwords.xml
+sesh import --from lastpass-authenticator accounts.json
 sesh import --from chrome "Chrome Passwords.csv"       # also firefox, safari
 sesh export --file backup.enc       # encrypted with a password of its own
 sesh import --from sesh backup.enc  # back in, on this machine or another

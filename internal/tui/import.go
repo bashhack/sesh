@@ -57,6 +57,7 @@ var importSources = []struct{ key, source, name, files string }{
 	{"f", "firefox", "Firefox", "file (its CSV export)"},
 	{"a", "safari", "Safari", "file (its CSV export)"},
 	{"g", "google-authenticator", "Google Authenticator", "files: screenshots of its transfer codes, separated by commas"},
+	{"l", "lastpass-authenticator", "LastPass Authenticator", "file (its JSON export)"},
 }
 
 // importRows are the panel's rows for importing.
