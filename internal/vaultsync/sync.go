@@ -48,6 +48,9 @@ type Summary struct {
 	// Later counts entries another sesh command changed while this one
 	// synced: the next sync takes them.
 	Later int
+	// Rewritten counts files of entries not changed here written again:
+	// lost from the folder, or an older copy put back.
+	Rewritten int
 }
 
 // Merged is an entry changed both here and in the folder: what both
@@ -59,7 +62,7 @@ type Merged struct {
 
 // Nothing says whether the sync found nothing to do.
 func (s *Summary) Nothing() bool {
-	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later == 0
+	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten == 0
 }
 
 // syncer is one sync's state.
@@ -287,7 +290,11 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 			if err := y.push(uid, rev, local, false); err != nil {
 				return err
 			}
-			y.sum.Sent = append(y.sum.Sent, recordName(uid, local))
+			if it.Changed() {
+				y.sum.Sent = append(y.sum.Sent, recordName(uid, local))
+			} else {
+				y.sum.Rewritten++
+			}
 		}
 		return y.removeCopies(copies)
 	}
@@ -347,7 +354,11 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		if err := y.apply(uid, it.Rev, m.Record, fresh[0].file.Hash); err != nil {
 			return err
 		}
-		y.sum.Received = append(y.sum.Received, recordName(uid, theirs))
+		// Not said when nothing here changed: a file written again as it
+		// was, or the deletion of an entry never here.
+		if !sameEntry(local, m.Record) && (it.Place != database.SyncGone || m.Record.Purged.IsZero()) {
+			y.sum.Received = append(y.sum.Received, recordName(uid, theirs))
+		}
 	default:
 		m.Changed = y.now()
 		if err := y.pushApplied(uid, rev, m.Record); err != nil {
@@ -803,6 +814,7 @@ func (s *Summary) String() string {
 	add(s.NotDownloaded, "not downloaded")
 	add(s.OtherKey, "sealed with another key")
 	add(s.Later, "left for the next sync")
+	add(s.Rewritten, "written again")
 	add(len(s.Problems), "problems")
 	if len(parts) == 0 {
 		return "Sync: nothing to do"

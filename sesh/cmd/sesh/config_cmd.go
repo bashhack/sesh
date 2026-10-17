@@ -123,7 +123,10 @@ func setConfig(app *App, args []string) error {
 		shown = map[string]string{"true": "on", "false": "off"}[value]
 	}
 	said := fmt.Sprintf("✅ Set %s to %s in %s; it takes effect %s", key, shown, tildePath(cfg.Path), it.Applies)
-	if value == "" {
+	switch {
+	case value == "" && it.Default == "":
+		said = fmt.Sprintf("✅ Took %s out of %s; that takes effect %s", key, tildePath(cfg.Path), it.Applies)
+	case value == "":
 		said = fmt.Sprintf("✅ Took %s out of %s: its default, %s, takes effect %s", key, tildePath(cfg.Path), it.Default, it.Applies)
 	}
 	_, err = fmt.Fprintln(app.Stdout, said)

@@ -249,9 +249,9 @@ func TestSyncNextChange(t *testing.T) {
 	}
 }
 
-// Joining makes a vault with the folder's key record; one with it already
-// is left; an empty one with another is given it, its recovery record
-// removed; one with entries is refused.
+// Joining makes a vault with the folder's key record; an empty one with
+// another is given it, its recovery record removed; one with entries is
+// refused, even with the folder's key record already.
 func TestJoinVault(t *testing.T) {
 	p, s := rekeyVault(t)
 	m, err := ReadUnlockMaterial(p)
@@ -283,6 +283,14 @@ func TestJoinVault(t *testing.T) {
 	if err := JoinVault(p, mustOtherKey(t)); !errors.Is(err, ErrVaultNotEmpty) {
 		t.Errorf("a vault with entries: %v", err)
 	}
+	if err := JoinVault(p, m); !errors.Is(err, ErrVaultNotEmpty) {
+		t.Errorf("a vault with entries and the folder's key record: %v", err)
+	}
+	for path, want := range map[string]error{fresh: nil, p: ErrVaultNotEmpty, filepath.Join(t.TempDir(), "none.db"): nil} {
+		if err := CanJoin(path); !errors.Is(err, want) {
+			t.Errorf("CanJoin(%s) = %v, want %v", filepath.Base(path), err, want)
+		}
+	}
 	// An empty vault with a key record and a recovery record of its own.
 	empty := filepath.Join(t.TempDir(), "empty.db")
 	es, err := Open(empty, NewKeySourceOracle(NewMasterPasswordSource(empty, staticPrompt("other-password-1", "other-password-1"))))
@@ -291,6 +299,18 @@ func TestJoinVault(t *testing.T) {
 	}
 	k := vault.Key{Kind: vault.KindPassword, Service: "x"}
 	if err := es.Put(k, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	// It synced with another folder, under its own key, before.
+	uid := uidOf(t, es, k)
+	if _, err := es.SyncComputerID(); err != nil {
+		t.Fatal(err)
+	}
+	rec, rev, err := es.SyncRecord(uid, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := es.SyncAgree(uid, rev, rec, syncfolder.Hash{1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := es.PurgeMany([]vault.Key{k}); err != nil {
@@ -310,6 +330,17 @@ func TestJoinVault(t *testing.T) {
 	}
 	if r, err := ReadRecovery(empty); err == nil && r != nil {
 		t.Errorf("recovery record kept: %+v", r)
+	}
+	db, err := openDB(empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test
+	for _, table := range []string{"sync_state", "sync_info", "sync_restored", "history_forgotten"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil || n != 0 { //nolint:gosec // table is one of the four
+			t.Errorf("%s: %d rows kept from the earlier sync (%v)", table, n, err)
+		}
 	}
 }
 

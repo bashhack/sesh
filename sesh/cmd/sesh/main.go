@@ -223,12 +223,18 @@ func openSQLiteStore() (*database.Store, error) {
 // on first run) and returns an opened, schema-initialized SQLite store at
 // cfg's vault location. The caller must Close it.
 func openSQLiteStoreWith(cfg *config.Config) (*database.Store, error) {
+	return openSQLiteStoreWithPrompt(cfg, resolvePasswordPrompt().withKDF(cfg.KDF()))
+}
+
+// openSQLiteStoreWithPrompt is openSQLiteStoreWith with the password prompt
+// given.
+func openSQLiteStoreWithPrompt(cfg *config.Config, pc passwordPromptConfig) (*database.Store, error) {
 	dbPath := cfg.DBPath.Value
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil { //nolint:gosec // vault dir from the user's own settings
 		return nil, fmt.Errorf("create vault directory: %w", err)
 	}
 
-	ks, err := buildKeySource(cfg)
+	ks, err := buildKeySourceWith(dbPath, pc)
 	if err != nil {
 		return nil, err
 	}

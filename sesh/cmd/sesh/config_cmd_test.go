@@ -141,6 +141,14 @@ func TestRunConfig_Set(t *testing.T) {
 		t.Errorf("the default again: %q, %v", out, err)
 	}
 	app, _ = cliApp("", false)
+	if _, _, err := runCLI(app, runConfig, "set", "sync.dir", "~/sync"); err != nil {
+		t.Fatal(err)
+	}
+	app, _ = cliApp("", false)
+	if out, _, err := runCLI(app, runConfig, "set", "sync.dir", ""); err != nil || !strings.Contains(out, "Took sync.dir out of") || strings.Contains(out, "default") {
+		t.Errorf("a setting with no default, taken out: %q, %v", out, err)
+	}
+	app, _ = cliApp("", false)
 	if out, _, err := runCLI(app, runConfig, "set", "agent.lock_on_sleep", "OFF"); err != nil || !strings.Contains(out, "Set agent.lock_on_sleep to off in") || !strings.Contains(read(), "lock_on_sleep = false") {
 		t.Errorf("OFF: %q, %v\n%s", out, err, read())
 	}

@@ -151,10 +151,16 @@ func TestSync_InitJoinSyncLeave(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(folder, "sesh-sync.json")); err != nil {
 		t.Errorf("the folder after leaving: %v", err)
 	}
+	// Joining again takes an empty vault, as any join does: entries kept
+	// while not syncing would bring back those deleted elsewhere meanwhile.
+	if got, err := runSyncOut(t, "", false, "join", folder); err == nil || !strings.Contains(err.Error(), "already has entries") {
+		t.Errorf("join again after leaving: %q, %v", got, err)
+	}
 }
 
 // Joining refuses a vault with entries of its own, and a wrong master
-// password changes nothing: no setting written.
+// password changes nothing: no vault made, an empty one's key record kept,
+// no setting written.
 func TestSync_JoinRefuses(t *testing.T) {
 	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
 	dir := t.TempDir()
@@ -174,10 +180,13 @@ func TestSync_JoinRefuses(t *testing.T) {
 		t.Errorf("join with entries: %q, %v", out, err)
 	}
 
-	syncComputer(t, filepath.Join(dir, "wrong"), "wrong")
+	db := syncComputer(t, filepath.Join(dir, "wrong"), "wrong")
 	t.Setenv("SESH_MASTER_PASSWORD", "not-the-password")
-	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || strings.Contains(out, "Joined") {
+	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || !strings.Contains(err.Error(), "isn't the master password") || strings.Contains(out, "Joined") {
 		t.Errorf("join with the wrong password: %q, %v", out, err)
+	}
+	if !vaultMissing(db) {
+		t.Error("a vault made with the wrong password")
 	}
 	cfg, err := settings()
 	if err != nil || cfg.SyncDir.Value != "" {
@@ -187,6 +196,139 @@ func TestSync_JoinRefuses(t *testing.T) {
 	if out, err := runSyncOut(t, "", false, "join", folder); err != nil || !strings.Contains(out, "Joined") {
 		t.Errorf("join again, the right password: %q, %v", out, err)
 	}
+
+	// An empty vault with its own master password keeps it when the one
+	// typed is wrong; joined, it has the folder's.
+	t.Setenv("SESH_MASTER_PASSWORD", "own-password-5678")
+	db = syncComputer(t, filepath.Join(dir, "own"), "own")
+	putEntry(t, "password/c", "3")
+	purgeEntry(t, "password/c")
+	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || strings.Contains(out, "Joined") {
+		t.Errorf("join an empty vault with the wrong password: %q, %v", out, err)
+	}
+	if !opensWith(t, db, "own-password-5678") {
+		t.Error("the empty vault's own master password no longer opens it")
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	if out, err := runSyncOut(t, "", false, "join", folder); err != nil || !strings.Contains(out, "Joined") {
+		t.Fatalf("join an empty vault: %q, %v", out, err)
+	}
+	if !opensWith(t, db, "sync-password-1234") || getEntry(t, "password/a") != "1" {
+		t.Error("the joined vault doesn't open with the folder's master password")
+	}
+}
+
+func purgeEntry(t *testing.T, id string) {
+	t.Helper()
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	k, err := vault.ParseKey(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PurgeMany([]vault.Key{k}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func opensWith(t *testing.T, db, pw string) bool {
+	t.Helper()
+	m, err := database.ReadUnlockMaterial(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return database.CheckMasterPassword([]byte(pw), m) == nil
+}
+
+// A wrong master password at init makes no folder and sets nothing.
+func TestSync_InitWrongPassword(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	t.Setenv("SESH_MASTER_PASSWORD", "not-the-password")
+	if out, err := runSyncOut(t, "", false, "init", folder); err == nil || strings.Contains(out, "Made the sync folder") {
+		t.Errorf("init with the wrong password: %q, %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(folder, "sesh-sync.json")); !os.IsNotExist(err) {
+		t.Errorf("the folder made: %v", err)
+	}
+	if cfg, err := settings(); err != nil || cfg.SyncDir.Value != "" {
+		t.Errorf("sync.dir set: %q, %v", cfg.SyncDir.Value, err)
+	}
+}
+
+// Status says what's waiting without making a vault, and counts files
+// sealed with another master password's key apart: sync never takes them.
+func TestSync_Status(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	folder, other := filepath.Join(dir, "sync"), filepath.Join(dir, "other")
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	if _, err := runSyncOut(t, "", false, "init", folder); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "other-password-5678")
+	syncComputer(t, filepath.Join(dir, "elsewhere"), "elsewhere")
+	putEntry(t, "password/b", "2")
+	if _, err := runSyncOut(t, "", false, "init", other); err != nil {
+		t.Fatal(err)
+	}
+	des, err := os.ReadDir(filepath.Join(other, "entries"))
+	if err != nil || len(des) != 1 {
+		t.Fatalf("the other folder's files: %v, %v", des, err)
+	}
+	b, err := os.ReadFile(filepath.Join(other, "entries", des[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "entries", des[0].Name()), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	out, err := runSyncOut(t, "", false, "status")
+	if err != nil || !strings.Contains(out, "Changed in the folder, to take: 0") || !strings.Contains(out, "1 entry's file is sealed with another master password's key") {
+		t.Errorf("status: %q, %v", out, err)
+	}
+
+	db := syncComputer(t, filepath.Join(dir, "new"), "new")
+	t.Setenv(config.EnvSyncDir, folder)
+	out, err = runSyncOut(t, "", false, "status")
+	if err != nil || !strings.Contains(out, "no vault here yet") {
+		t.Errorf("status with no vault: %q, %v", out, err)
+	}
+	if !vaultMissing(db) {
+		t.Error("status made a vault")
+	}
+}
+
+// The subcommands take what they say, and no more.
+func TestSync_Arguments(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	t.Chdir(dir)
+	for _, args := range [][]string{{"init", "-x"}, {"init", "a", "b"}, {"join"}, {"join", "--force"}, {"status", "extra"}, {"leave", "extra"}, {"frob"}} {
+		if out, err := runSyncOut(t, "", false, args...); err == nil {
+			t.Errorf("sesh sync %q: %q, want refused", args, out)
+		}
+	}
+	if _, err := os.Stat("-x"); !os.IsNotExist(err) {
+		t.Errorf("a folder named -x: %v", err)
+	}
 }
 
 // A sync folder can't be where the vault is, nor hold it.
@@ -195,10 +337,41 @@ func TestSync_InitRefusesTheVaultsFolder(t *testing.T) {
 	dir := t.TempDir()
 	db := syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
 	putEntry(t, "password/a", "1")
-	for _, f := range []string{filepath.Join(filepath.Dir(db), "sync"), filepath.Dir(filepath.Dir(db))} {
+	// Through a link to the vault's folder, too, and named in another
+	// case where the file system ignores case.
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(filepath.Dir(db), link); err != nil {
+		t.Fatal(err)
+	}
+	refused := []string{filepath.Join(filepath.Dir(db), "sync"), filepath.Dir(filepath.Dir(db)), link, filepath.Join(link, "sync")}
+	if upper := strings.ToUpper(filepath.Dir(db)); upper != filepath.Dir(db) {
+		if _, err := os.Stat(upper); err == nil {
+			refused = append(refused, filepath.Join(upper, "sync"))
+		}
+	}
+	for _, f := range refused {
 		if out, err := runSyncOut(t, "", false, "init", f); err == nil || !strings.Contains(err.Error(), "vault") {
 			t.Errorf("init %s: %q, %v", f, out, err)
 		}
+	}
+	// A vault named through a link is where the link leads.
+	real := filepath.Join(dir, "real")
+	if err := os.MkdirAll(filepath.Join(real, "v"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(real, "v"), filepath.Join(dir, "vlink")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.EnvDBPath, filepath.Join(dir, "vlink", "passwords.db"))
+	putEntry(t, "password/b", "2")
+	if out, err := runSyncOut(t, "", false, "init", real); err == nil || !strings.Contains(err.Error(), "holds the vault") {
+		t.Errorf("init the folder holding the linked vault: %q, %v", out, err)
+	}
+	t.Setenv(config.EnvDBPath, "")
+	// sync.dir set by hand is held to the same.
+	t.Setenv(config.EnvSyncDir, filepath.Join(link, "sync"))
+	if out, err := runSyncOut(t, "", false); err == nil || !strings.Contains(err.Error(), "vault's own folder") {
+		t.Errorf("sync with sync.dir in the vault's folder: %q, %v", out, err)
 	}
 }
 
@@ -220,7 +393,7 @@ func TestSync_InitSuggestsICloudDrive(t *testing.T) {
 		t.Errorf("declined: %q, %v", out, err)
 	}
 	out, err := runSyncOut(t, "\n", true, "init")
-	if err != nil || !strings.Contains(out, "Make the sync folder in iCloud Drive") {
+	if err != nil || !strings.Contains(out, "Make the sync folder in iCloud Drive") || !strings.Contains(out, "sesh sync join ~/'Library/Mobile Documents/com~apple~CloudDocs/sesh-sync'") {
 		t.Fatalf("accepted: %q, %v", out, err)
 	}
 	if _, err := os.Stat(filepath.Join(icloud, "sesh-sync", "sesh-sync.json")); err != nil {

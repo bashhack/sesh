@@ -11,7 +11,10 @@ import (
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/secure"
+	"github.com/bashhack/sesh/internal/shell"
 	"github.com/bashhack/sesh/internal/syncfolder"
+	"github.com/bashhack/sesh/internal/touchid"
 	"github.com/bashhack/sesh/internal/vaultsync"
 )
 
@@ -22,7 +25,8 @@ const syncUsage = `Usage:
   sesh sync join <folder>        Make this computer's vault from a sync folder another
                                  computer made (this vault must be new, or empty)
   sesh sync status               Where the vault syncs, and what's waiting
-  sesh sync leave                Stop syncing this vault (its entries and the folder stay)
+  sesh sync leave                Stop syncing this vault (its entries and the folder stay;
+                                 joining again takes an empty vault)
 
 A sync folder is a folder any tool carries between your computers: iCloud
 Drive, Dropbox, Syncthing, a USB stick. Each computer keeps its own vault;
@@ -49,18 +53,22 @@ func runSync(app *App, args []string) error {
 	}
 	switch args[0] {
 	case "init":
-		if len(args) > 2 {
-			return errors.New("sesh sync init takes one folder")
+		if len(args) > 2 || (len(args) == 2 && strings.HasPrefix(args[1], "-")) {
+			return errors.New("sesh sync init takes one folder, or none: sesh sync init [folder]")
 		}
 		return syncInit(app, args[1:])
 	case "join":
-		if len(args) != 2 {
+		if len(args) != 2 || strings.HasPrefix(args[1], "-") {
 			return errors.New("sesh sync join takes the sync folder: sesh sync join <folder>")
 		}
 		return syncJoin(app, args[1])
-	case "status":
-		return syncStatus(app)
-	case "leave":
+	case "status", "leave":
+		if len(args) > 1 {
+			return fmt.Errorf("sesh sync %s takes nothing more, not %q", args[0], strings.Join(args[1:], " "))
+		}
+		if args[0] == "status" {
+			return syncStatus(app)
+		}
 		return syncLeave(app)
 	}
 	return fmt.Errorf("sesh sync takes init, join, status or leave, or nothing, not %q", strings.Join(args, " "))
@@ -76,6 +84,11 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 		return syncfolder.Folder{}, errNotSyncing
 	}
 	f := syncfolder.New(cfg.SyncDir.Value)
+	// sync.dir set by hand, or in SESH_SYNC_DIR, is held to what init and
+	// join hold it to.
+	if err := checkSyncDir(f.Dir(), cfg.DBPath.Value); err != nil {
+		return f, err
+	}
 	info, err := f.ReadInfo()
 	if err != nil {
 		return f, fmt.Errorf("the sync folder %s: %w", tildePath(f.Dir()), err)
@@ -163,6 +176,9 @@ func writeSyncSummary(app *App, dir string, s *vaultsync.Summary) error {
 	if s.Ignored > 0 {
 		fmt.Fprintf(&b, "  %s already seen here, ignored (a sync tool, or someone, put back an older one)\n", nouns(s.Ignored, "older copy of a file", "older copies of files"))
 	}
+	if s.Rewritten > 0 {
+		fmt.Fprintf(&b, "  %s written again, not changed (lost from the folder, or an older copy put back)\n", nouns(s.Rewritten, "entry's file", "entries' files"))
+	}
 	if s.Later > 0 {
 		fmt.Fprintf(&b, "  %s changed by another sesh command meanwhile: the next sync takes them\n", nouns(s.Later, "entry", "entries"))
 	}
@@ -235,20 +251,60 @@ func syncDirArg(arg string) (string, error) {
 }
 
 // checkSyncDir refuses a sync folder in the vault's own folder, or holding
-// it: the vault itself never goes where a sync tool copies it.
+// it: the vault itself never goes where a sync tool copies it. Folders are
+// compared as the file system finds them: through links, and in whatever
+// case it ignores.
 func checkSyncDir(dir, dbPath string) error {
-	within := func(path, folder string) bool {
-		rel, err := filepath.Rel(folder, path)
-		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-	}
-	vaultDir := filepath.Dir(dbPath)
 	switch {
 	case within(dbPath, dir):
 		return fmt.Errorf("%s holds the vault itself; a sync folder must be somewhere else (a sync tool copying a live vault can damage it)", tildePath(dir))
-	case within(dir, vaultDir):
+	case within(dir, filepath.Dir(dbPath)):
 		return fmt.Errorf("%s is inside the vault's own folder; choose a folder elsewhere", tildePath(dir))
 	}
 	return nil
+}
+
+// within says whether path is folder, or inside it. A folder that isn't
+// there yet is compared by name.
+func within(path, folder string) bool {
+	path, folder = resolved(path), resolved(folder)
+	fi, err := os.Stat(folder) //nolint:gosec // a folder the user named, only looked at
+	if err != nil {
+		rel, err := filepath.Rel(folder, path)
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	for p := path; ; p = filepath.Dir(p) {
+		if pi, err := os.Stat(p); err == nil && os.SameFile(pi, fi) { //nolint:gosec // its parents, only looked at
+			return true
+		}
+		if filepath.Dir(p) == p {
+			return false
+		}
+	}
+}
+
+// resolved is path with the links in the part of it that exists followed.
+func resolved(path string) string {
+	rest := ""
+	for p := path; ; p = filepath.Dir(p) {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest)
+		}
+		if filepath.Dir(p) == p {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+	}
+}
+
+// shellPath is dir as a command shown to be pasted names it: ~/ for the
+// home folder, quoted for the shell.
+func shellPath(dir string) string {
+	t := tildePath(dir)
+	if rest, ok := strings.CutPrefix(t, "~/"); ok {
+		return "~/" + shell.Quote(rest)
+	}
+	return shell.Quote(t)
 }
 
 // syncInit is sesh sync init: a sync folder made from this vault, then the
@@ -261,11 +317,9 @@ func syncInit(app *App, args []string) error {
 	if cfg.SyncDir.Value != "" {
 		return fmt.Errorf("this vault syncs with %s already (sesh sync leave stops that)", tildePath(cfg.SyncDir.Value))
 	}
-	m, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
-	if errors.Is(err, database.ErrNoVault) {
+	if _, err := database.ReadUnlockMaterial(cfg.DBPath.Value); errors.Is(err, database.ErrNoVault) {
 		return errors.New("there's no vault here yet: add an entry first, or join a sync folder another computer made (sesh sync join <folder>)")
-	}
-	if err != nil {
+	} else if err != nil {
 		return err
 	}
 	var dir string
@@ -292,8 +346,18 @@ func syncInit(app *App, args []string) error {
 	f := syncfolder.New(dir)
 	switch _, err := f.ReadInfo(); {
 	case err == nil:
-		return fmt.Errorf("%s is a sync folder already: sesh sync join %s joins it", tildePath(dir), tildePath(dir))
+		return fmt.Errorf("%s is a sync folder already: sesh sync join %s joins it", tildePath(dir), shellPath(dir))
 	case !errors.Is(err, syncfolder.ErrNoInfo):
+		return err
+	}
+	// Unlocked first: a wrong master password leaves no folder made.
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeAuditStore(store)
+	m, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
+	if err != nil {
 		return err
 	}
 	info, err := syncfolder.NewInfo(syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params})
@@ -306,11 +370,11 @@ func syncInit(app *App, args []string) error {
 	if err := setSyncDir(dir); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(app.Stdout, "Made the sync folder %s. On each other computer: sesh sync join %s\n", tildePath(dir), tildePath(dir)); err != nil {
+	if _, err := fmt.Fprintf(app.Stdout, "Made the sync folder %s. On each other computer: sesh sync join %s\n", tildePath(dir), shellPath(dir)); err != nil {
 		return err
 	}
 	cfg.SyncDir = config.Setting[string]{Value: dir, Source: config.FromFile}
-	return syncWith(app, cfg)
+	return syncStore(app, cfg, f, store)
 }
 
 // setSyncDir writes sync.dir (dir, or "" for none) into the config file.
@@ -347,19 +411,47 @@ func syncJoin(app *App, arg string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", tildePath(dir), err)
 	}
+	if err := database.CanJoin(cfg.DBPath.Value); err != nil {
+		return joinRefused(err, dir)
+	}
+	m := database.UnlockMaterial{Salt: info.Key.Salt, Verify: info.Key.Verify, Params: info.Key.Params}
+	// The password is checked against the folder before the vault is
+	// touched: a wrong one changes nothing.
+	pc := resolvePasswordPrompt().withKDF(cfg.KDF())
+	pw, err := joinPassword(pc, dir, m)
+	if err != nil {
+		return err
+	}
+	defer secure.SecureZeroBytes(pw)
+	// An empty vault with a key record of its own is given the folder's:
+	// what was set up for its own key stops working, and is said so.
+	before, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
+	rekeyed := err == nil && database.UnlockID(before.Verify) != database.UnlockID(m.Verify)
+	hadRecovery := false
+	if rekeyed {
+		if r, err := database.ReadRecovery(cfg.DBPath.Value); err == nil && r != nil {
+			hadRecovery = true
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath.Value), 0o700); err != nil { //nolint:gosec // the vault's folder, from the user's own settings
 		return fmt.Errorf("create vault directory: %w", err)
 	}
-	m := database.UnlockMaterial{Salt: info.Key.Salt, Verify: info.Key.Verify, Params: info.Key.Params}
 	if err := database.JoinVault(cfg.DBPath.Value, m); err != nil {
-		if errors.Is(err, database.ErrVaultNotEmpty) {
-			return fmt.Errorf("%w. To bring its entries along: sesh export --file F, move the vault aside (or sesh init --db-path elsewhere), sesh sync join %s, then sesh import --from sesh F", err, tildePath(dir))
-		}
-		return err
+		return joinRefused(err, dir)
 	}
-	// Unlocked first: the master password is checked against the folder's
-	// key record before anything says it's joined.
-	store, err := openSQLiteStoreWith(cfg)
+	var notes []string
+	if rekeyed {
+		if note := lockAgentHoldingOldKey(); note != "" {
+			notes = append(notes, note)
+		}
+		if t, err := touchid.ReadFile(filepath.Dir(cfg.DBPath.Value)); err == nil && t.UnlockID != database.UnlockID(m.Verify) {
+			notes = append(notes, "Touch ID unlock was set up for this vault's old master password; turn it on again with: sesh touchid enable")
+		}
+		if hadRecovery {
+			notes = append(notes, "The recovery key made for this vault before doesn't open it now; make one with: sesh recovery new")
+		}
+	}
+	store, err := openSQLiteStoreWithPrompt(cfg, pc.withTypedPassword(pw))
 	if err != nil {
 		return err
 	}
@@ -367,11 +459,52 @@ func syncJoin(app *App, arg string) error {
 	if err := setSyncDir(dir); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(app.Stdout, "Joined the sync folder %s: the vault here opens with the same master password as the others.\n", tildePath(dir)); err != nil {
+	var said strings.Builder
+	fmt.Fprintf(&said, "Joined the sync folder %s: the vault here opens with the same master password as the others.\n", tildePath(dir))
+	for _, n := range notes {
+		said.WriteString(n + "\n")
+	}
+	if _, err := fmt.Fprint(app.Stdout, said.String()); err != nil {
 		return err
 	}
 	cfg.SyncDir = config.Setting[string]{Value: dir, Source: config.FromFile}
 	return syncStore(app, cfg, f, store)
+}
+
+// joinRefused is err from readying the vault to join dir, with what to do
+// when it has entries.
+func joinRefused(err error, dir string) error {
+	if errors.Is(err, database.ErrVaultNotEmpty) {
+		return fmt.Errorf("%w. Joining takes a new or empty vault. To bring its entries along: sesh export --file F, move the vault aside (or sesh init --db-path elsewhere), sesh sync join %s, then sesh import --from sesh F", err, shellPath(dir))
+	}
+	return err
+}
+
+// joinPassword asks for the master password of the vaults syncing through
+// dir until it opens m, their key record: three tries at a terminal, one
+// otherwise. The caller zeroes it.
+func joinPassword(pc passwordPromptConfig, dir string, m database.UnlockMaterial) ([]byte, error) {
+	tries := 1
+	if pc.interactive {
+		tries = interactivePasswordAttempts
+	}
+	ask := fmt.Sprintf("Master password of the vaults syncing through %s: ", tildePath(dir))
+	prompt := ask
+	for i := 1; ; i++ {
+		pw, err := pc.prompt(prompt)
+		if err != nil {
+			return nil, fmt.Errorf("read password: %w", err)
+		}
+		err = database.CheckMasterPassword(pw, m)
+		if err == nil {
+			return pw, nil
+		}
+		secure.SecureZeroBytes(pw)
+		if i == tries {
+			return nil, err
+		}
+		prompt = fmt.Sprintf("Wrong password, try again (%d/%d). %s", i+1, tries, ask)
+	}
 }
 
 // syncStatus is sesh sync status: where the vault syncs and what's
@@ -388,6 +521,11 @@ func syncStatus(app *App) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Sync folder:   %s\n", tildePath(cfg.SyncDir.Value))
 	fmt.Fprintf(&b, "This computer: %s\n", cfg.SyncComputerName())
+	if vaultMissing(cfg.DBPath.Value) {
+		fmt.Fprintf(&b, "❌ There's no vault here yet: sesh sync join %s makes it from the folder\n", shellPath(cfg.SyncDir.Value))
+		_, err := fmt.Fprint(app.Stdout, b.String())
+		return err
+	}
 	f, folderErr := syncFolderOf(cfg)
 	if folderErr != nil {
 		fmt.Fprintf(&b, "❌ %v\n", folderErr)
@@ -425,13 +563,23 @@ func syncStatus(app *App) error {
 		if err != nil {
 			return err
 		}
-		fresh := 0
+		keyID, err := store.SyncKeyID()
+		if err != nil {
+			return err
+		}
+		fresh, otherKey := 0, 0
 		for _, file := range c.Files {
-			if h, ok := agreed[file.UIDString()]; !ok || h != file.Hash {
+			switch h, ok := agreed[file.UIDString()]; {
+			case file.KeyIDString() != keyID:
+				otherKey++
+			case !ok || h != file.Hash:
 				fresh++
 			}
 		}
 		fmt.Fprintf(&b, "Changed in the folder, to take: %d\n", fresh)
+		if otherKey > 0 {
+			fmt.Fprintf(&b, "⚠️  %s sealed with another master password's key: sync leaves them for the computer that wrote them\n", nouns(otherKey, "entry's file is", "entries' files are"))
+		}
 		if len(c.NotDownloaded) > 0 {
 			fmt.Fprintf(&b, "⚠️  %s for the sync tool to download their files: keep the sync folder downloaded (in iCloud Drive, Control-click it and choose Keep Downloaded)\n", nouns(len(c.NotDownloaded), "entry waits", "entries wait"))
 		}
