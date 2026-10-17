@@ -237,8 +237,9 @@ func TestProvider_ValidateRequest(t *testing.T) {
 			wantErrMsg: "failed to look up the AWS entry: vault locked",
 		},
 		"no MFA device stored (warning only)": {
+			// Said only when AWS is asked for the device (not for --clip).
 			store:       func(t *testing.T) vault.Store { return awsStore(t, "", "secret", "") },
-			wantWarning: true,
+			wantWarning: false,
 		},
 		"AWS's code settings spelled out": {
 			store: func(t *testing.T) vault.Store {

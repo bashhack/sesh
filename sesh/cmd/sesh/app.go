@@ -40,10 +40,15 @@ type App struct {
 	// ClipboardCheck reports why nothing can be copied here, if so; nil
 	// skips the check.
 	ClipboardCheck func() error
-	TimeNow        TimeNowFunc
-	Stdin          io.Reader
-	Stdout         io.Writer
-	Stderr         io.Writer
+	// ClipboardCopyFor copies as ClipboardCopy does, clearing it no sooner
+	// than atLeast; nil is ClipboardCopy.
+	ClipboardCopyFor func(text string, atLeast time.Duration) error
+	// ClipboardRead returns what the clipboard holds; nil can't tell.
+	ClipboardRead func() (string, error)
+	TimeNow       TimeNowFunc
+	Stdin         io.Reader
+	Stdout        io.Writer
+	Stderr        io.Writer
 	// StdinIsTerminal reports whether someone at a terminal can answer a
 	// question on Stdin; nil means nobody can.
 	StdinIsTerminal func() bool
@@ -82,8 +87,15 @@ func NewDefaultApp(versionInfo VersionInfo, settings AppSettings) *App {
 			_, err := clipboard.Find()
 			return err
 		},
-		TimeNow: time.Now,
-		Stdin:   os.Stdin,
+		ClipboardCopyFor: func(text string, atLeast time.Duration) error {
+			if settings.ClipboardTimeout <= 0 {
+				return clipboard.Copy(text)
+			}
+			return clipboard.CopyWithAutoClear(text, max(settings.ClipboardTimeout, atLeast))
+		},
+		ClipboardRead: clipboard.Read,
+		TimeNow:       time.Now,
+		Stdin:         os.Stdin,
 		StdinIsTerminal: func() bool {
 			return term.IsTerminal(int(os.Stdin.Fd()))
 		},

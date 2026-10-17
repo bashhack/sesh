@@ -21,7 +21,11 @@ const awsUsage = `Usage:
                                            image file or (macOS) on screen
 
 The profile's MFA entry is a TOTP entry named aws, with the profile as its
-username: sesh list totp shows it.`
+username: sesh list totp shows it.
+
+A profile that signs in with aws login or SSO: sesh aws signs in when its
+session has ended, with the MFA code on the clipboard, and opens the shell
+with AWS_PROFILE set, for the AWS CLI to keep the credentials fresh.`
 
 // newAWSProvider is the AWS sign-in over store; tests replace it.
 var newAWSProvider = func(store vault.Store) *awsProvider.Provider {
@@ -78,6 +82,13 @@ func runAWS(app *App, args []string) error {
 		}
 	}
 
+	// A profile that signs in with aws login or SSO gets a shell with the
+	// profile; the vault is opened only if a sign-in needs its MFA code.
+	if !setupAsked && !*clip {
+		if kind := awsProfileKind(flags.GetProfile()); kind != "" {
+			return runAWSLogin(app, flags.GetProfile(), kind, !flags.ShouldUseSubshell())
+		}
+	}
 	// Setup's checks come before the vault is opened, or made.
 	if setupAsked {
 		if err := setup.Preflight(); err != nil {

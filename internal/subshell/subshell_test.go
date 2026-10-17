@@ -37,7 +37,7 @@ func inShell(t *testing.T, sh, cmd string) string {
 		t.Skipf("no %s here", sh)
 	}
 	t.Setenv("SHELL", path)
-	sc, err := GetShellConfig(Config{
+	sc, err := GetShellConfig(&Config{
 		ServiceName:     "test",
 		Variables:       map[string]string{"AWS_SESSION_TOKEN": "token"},
 		Expiry:          time.Now().Add(time.Hour),
@@ -184,7 +184,7 @@ func TestGetShellConfig_Cleanup(t *testing.T) {
 	for _, sh := range []string{"/bin/zsh", "/bin/bash", "/bin/sh"} {
 		home(t)
 		t.Setenv("SHELL", sh)
-		sc, err := GetShellConfig(Config{ServiceName: "test", ShellCustomizer: testCustomizer{}})
+		sc, err := GetShellConfig(&Config{ServiceName: "test", ShellCustomizer: testCustomizer{}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -209,7 +209,7 @@ func TestGetShellConfig_Cleanup(t *testing.T) {
 }
 
 func TestGetShellConfig_NeedsACustomizer(t *testing.T) {
-	if _, err := GetShellConfig(Config{ServiceName: "test"}); err == nil {
+	if _, err := GetShellConfig(&Config{ServiceName: "test"}); err == nil {
 		t.Error("GetShellConfig() took no customizer")
 	}
 }
@@ -218,5 +218,20 @@ func TestFilterEnv(t *testing.T) {
 	env := []string{"A=1", "AB=2", "A=3", "B=A=4"}
 	if got := FilterEnv(env, "A"); !slices.Equal(got, []string{"AB=2", "B=A=4"}) {
 		t.Errorf("FilterEnv() = %q", got)
+	}
+}
+
+// Variables the config says to unset don't reach the shell.
+func TestGetShellConfig_Unset(t *testing.T) {
+	home(t)
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIASTRAY")
+	sc, err := GetShellConfig(&Config{ServiceName: "test", ShellCustomizer: testCustomizer{}, Unset: []string{"AWS_ACCESS_KEY_ID"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Cleanup()
+	if v := envValue(sc.Env, "AWS_ACCESS_KEY_ID"); v != "" {
+		t.Errorf("AWS_ACCESS_KEY_ID = %q", v)
 	}
 }

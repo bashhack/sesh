@@ -219,9 +219,7 @@ func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
 	if err := k.Validate(); err != nil {
 		return err
 	}
-	if kind := profileKind(profile); kind != "" {
-		return fmt.Errorf("%s signs in with %s, which gives temporary credentials, and AWS gives MFA sessions only to an IAM user's own access keys: sesh aws setup is for a profile with those", profileName(profile), kind)
-	}
+	kind := profileKind(profile)
 	existing, err := existingEntry(h.store, k)
 	if err != nil {
 		return err
@@ -243,16 +241,23 @@ func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
 		}
 	}
 
-	identity, err := callerIdentity(profile)
-	if err != nil {
-		return fmt.Errorf("AWS couldn't say who %s signs in as, so sesh can't set it up: %w\nCheck the profile works with: aws sts get-caller-identity%s", profileName(profile), err, profileFlag(profile))
+	// A profile with an IAM user's access keys gets MFA sessions with the
+	// key, so its user is checked; one that signs in another way (aws
+	// login, SSO, a role) only needs the code, when its sign-in asks.
+	var identity string
+	if kind == "" {
+		if identity, err = callerIdentity(profile); err != nil {
+			return fmt.Errorf("AWS couldn't say who %s signs in as, so sesh can't set it up: %w\nCheck the profile works with: aws sts get-caller-identity%s", profileName(profile), err, profileFlag(profile))
+		}
+		if strings.Contains(identity, ":assumed-role/") || strings.Contains(identity, ":federated-user/") {
+			return fmt.Errorf("%s signs in as %s, a temporary session (such as SSO or a role); sesh aws needs a profile with an IAM user's own access keys, which AWS gives MFA sessions to", profileName(profile), identity)
+		}
+		fmt.Printf("✅ %s signs in as %s\n", capitalized(profileName(profile)), identity)
+	} else {
+		fmt.Printf("%s signs in with %s: sesh keeps the MFA key you sign in with, and gives its code when the sign-in asks.\n", capitalized(profileName(profile)), kind)
 	}
-	if strings.Contains(identity, ":assumed-role/") || strings.Contains(identity, ":federated-user/") {
-		return fmt.Errorf("%s signs in as %s, a temporary session (such as SSO or a role); sesh aws needs a profile with an IAM user's own access keys, which AWS gives MFA sessions to", profileName(profile), identity)
-	}
-	fmt.Printf("✅ %s signs in as %s\n", strings.ToUpper(profileName(profile)[:1])+profileName(profile)[1:], identity)
 
-	secret, err := h.captureSecret()
+	secret, fromEntry, err := h.captureSecret(k, kind)
 	if err != nil {
 		return err
 	}
@@ -271,8 +276,25 @@ func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
 	fmt.Printf("🔒 Saved the MFA key in the vault, as %s\n", k)
 
 	inHistory := existing != nil && keeps
-	if err := h.setupMFAConsole(secret); err != nil {
-		return h.keyOnly(k, inHistory, err)
+	if !fromEntry {
+		if err := h.setupMFAConsole(secret, kind); err != nil {
+			if kind != "" {
+				return fmt.Errorf("%w\nThe MFA key is saved, as %s: finish adding the device in the AWS console", err, k)
+			}
+			return h.keyOnly(k, inHistory, err)
+		}
+	}
+	if kind != "" {
+		// Nothing more to find: the sign-in asks for the code itself.
+		if filing, err = askFiling(h.reader, filing, existing); err != nil {
+			return err
+		}
+		filing.Apply(&entry)
+		if err := h.store.Save(&entry, secret); err != nil {
+			return fmt.Errorf("failed to file the MFA key: %w", err)
+		}
+		h.showSignInCompletionMessage(profile, kind)
+		return nil
 	}
 	device, err := h.selectMFADevice(profile, awsCLI.AccountOf(identity))
 	if err != nil {
@@ -310,17 +332,30 @@ func profileFlag(profile string) string {
 	return " --profile " + shell.Quote(profile)
 }
 
-// captureSecret reads the MFA key AWS shows for a new authenticator app,
-// asking again until it's one: typed, or from a QR code. The caller zeroes
-// the key.
-func (h *AWSSetupHandler) captureSecret() ([]byte, error) {
-	fmt.Println(`
-In the AWS console (https://console.aws.amazon.com):
+// captureSecret reads the MFA key, asking again until it's one: the key
+// AWS shows for a new authenticator app (typed, or from a QR code), or the
+// key of a TOTP entry sesh already has for a device AWS has (one imported
+// from a phone's authenticator app); fromEntry says it's the second, which
+// needs no AWS console step. k is the entry being set up. The caller
+// zeroes the key.
+func (h *AWSSetupHandler) captureSecret(k vault.Key, kind string) (secret []byte, fromEntry bool, err error) {
+	if kind == awsCLI.KindSSO {
+		fmt.Println(`
+To add sesh as a new MFA device, register an authenticator app where your
+sign-in's MFA devices are managed (for IAM Identity Center, the
+AWS access portal's MFA devices page), and leave its setup page open:
+sesh reads its key, then gives you the codes it asks for.`)
+	} else {
+		fmt.Println(`
+To add sesh as a new MFA device, in the AWS console (https://console.aws.amazon.com):
   1. Go to IAM, then Users, your user, and Security credentials.
   2. Under "Multi-factor authentication (MFA)", choose "Assign MFA device".
   3. Name it, choose "Authenticator app", and choose Next.
   4. Leave that page open: sesh reads its key, then gives you the two
      codes it asks for. Don't choose "Add MFA" yet.`)
+	}
+	fmt.Println(`Or use the key of a device AWS already has, that sesh has as a TOTP entry
+(imported from your phone's authenticator app, say).`)
 	choices := "1-2"
 	if screenCapture {
 		choices = "1-3"
@@ -333,25 +368,40 @@ How should sesh read the key?
 		if screenCapture {
 			fmt.Println("  3: Select the QR code on screen")
 		}
-		fmt.Printf("Choice (%s): ", choices)
+		fmt.Println("  e: Use a TOTP entry sesh already has, for a device AWS has")
+		fmt.Printf("Choice (%s, or e): ", choices)
 		choice, err := readLine(h.reader)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		var raw []byte
+		fromEntry = false
 		switch {
+		case strings.EqualFold(choice, "e"):
+			src, srcErr := h.entrySource(k)
+			if srcErr != nil {
+				fmt.Printf("❌ %v\n", srcErr)
+				continue
+			}
+			key, keyErr := h.store.Get(src)
+			if keyErr != nil {
+				fmt.Println("❌ That entry's key can't be read: sesh doctor says why")
+				continue
+			}
+			raw, fromEntry = key, true
 		case choice == "1":
 			fmt.Print("Secret key (hidden as you type or paste it): ")
-			raw, err = readPassword(syscall.Stdin)
+			typed, readErr := readPassword(syscall.Stdin)
 			fmt.Println()
-			if err != nil {
-				return nil, fmt.Errorf("failed to read the secret key: %w", err)
+			if readErr != nil {
+				return nil, false, errors.New("failed to read the secret key")
 			}
+			raw = typed
 		case choice == "2":
 			fmt.Print("Image file (a full path, or one starting with ~/): ")
 			path, err := readLine(h.reader)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if path, err = expandHome(path); err != nil {
 				fmt.Printf("❌ %v\n", err)
@@ -366,7 +416,7 @@ How should sesh read the key?
 		case choice == "3" && screenCapture:
 			fmt.Print("Press Enter, then drag across the QR code (Esc cancels)...")
 			if _, err := readLine(h.reader); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			info, err := scanQRCode()
 			if err != nil {
@@ -375,7 +425,7 @@ How should sesh read the key?
 			}
 			raw = []byte(info.Secret)
 		default:
-			fmt.Printf("❌ Choose %s.\n", strings.Replace(choices, "-", " to ", 1))
+			fmt.Printf("❌ Choose %s, or e.\n", strings.Replace(choices, "-", " to ", 1))
 			continue
 		}
 		normalized, err := validateAndNormalizeSecret(strings.TrimSpace(string(raw)))
@@ -385,8 +435,48 @@ How should sesh read the key?
 			continue
 		}
 		fmt.Println("✅ Read the key")
-		return []byte(normalized), nil
+		return []byte(normalized), fromEntry, nil
 	}
+}
+
+// entrySource asks for a TOTP entry's ID and returns it; the entry must make
+// AWS's codes (6 digits every 30 seconds, SHA-1); k is the entry being set
+// up, which can't be its own source.
+func (h *AWSSetupHandler) entrySource(k vault.Key) (vault.Key, error) {
+	fmt.Print("The entry's ID (sesh list totp shows them): ")
+	id, err := readLine(h.reader)
+	if err != nil {
+		return vault.Key{}, err
+	}
+	src, err := vault.ParseKey(id)
+	switch {
+	case err != nil || src.Kind != vault.KindTOTP:
+		return vault.Key{}, fmt.Errorf("%q isn't a TOTP entry's ID, such as totp/github/alice", id)
+	case src == k:
+		return vault.Key{}, fmt.Errorf("%s is the entry being set up", k)
+	}
+	e, err := h.store.Lookup(src)
+	if err != nil {
+		return vault.Key{}, fmt.Errorf("%s: %w", src, err)
+	}
+	if !awsCodes(e.Settings.TOTP) {
+		return vault.Key{}, fmt.Errorf("%s makes codes AWS doesn't use (AWS's are 6 digits every 30 seconds, with SHA-1)", src)
+	}
+	return src, nil
+}
+
+// awsCodes says whether p makes AWS's codes: SHA-1, 6 digits, every 30
+// seconds, whether those are given or left to their defaults.
+func awsCodes(p totp.Params) bool {
+	return (p.Algorithm == "" || strings.EqualFold(p.Algorithm, "SHA1")) && (p.Digits == 0 || p.Digits == 6) && (p.Period == 0 || p.Period == 30)
+}
+
+// capitalized is s with its first letter a capital.
+func capitalized(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 // expandHome is path with a leading ~/ made the home folder; another
@@ -410,18 +500,25 @@ func expandHome(path string) (string, error) {
 // setupMFAConsole gives the two codes the AWS console asks for, and waits
 // until AWS has the device; n makes new codes, for when AWS says the first
 // ones are wrong (they were made too long before).
-func (h *AWSSetupHandler) setupMFAConsole(secret []byte) error {
+func (h *AWSSetupHandler) setupMFAConsole(secret []byte, kind string) error {
 	for {
 		first, second, err := totp.GenerateConsecutiveCodesForTimeBytes(secret, timeNow())
 		if err != nil {
 			return fmt.Errorf("failed to make the codes: %w", err)
 		}
-		fmt.Printf(`
+		if kind == awsCLI.KindSSO {
+			fmt.Printf(`
+The code, and the next, for the page: %s, then %s.
+Enter what it asks for, and finish adding the device there.
+Then press Enter here (or n, and Enter, for new codes if it says they're wrong): `, first, second)
+		} else {
+			fmt.Printf(`
 The two codes AWS asks for:
   MFA code 1: %s
   MFA code 2: %s
 Enter them, choose "Add MFA", and wait for AWS to say the device was added.
 Then press Enter here (or n, and Enter, for new codes if AWS says these are wrong): `, first, second)
+		}
 		answer, err := readLine(h.reader)
 		if err != nil {
 			return err
@@ -517,6 +614,19 @@ func (h *AWSSetupHandler) showSetupCompletionMessage(profile string) {
 	shellCmd, clipCmd := "sesh aws"+profileFlag(profile), "sesh aws"+profileFlag(profile)+" --clip"
 	fmt.Printf("\n✅ AWS MFA is set up for %s.\n   %-*s  opens a shell with a session's credentials\n   %-*s  copies a code, for signing in to the AWS console\nAWS has just used the codes it was given: wait for the next one (up to 30 seconds) before the first sesh aws.\n",
 		profileName(profile), len(clipCmd), shellCmd, len(clipCmd), clipCmd)
+}
+
+// showSignInCompletionMessage says the key is set up for a profile that
+// signs in with aws login, SSO or a role, and how sesh uses it.
+func (h *AWSSetupHandler) showSignInCompletionMessage(profile, kind string) {
+	flag := profileFlag(profile)
+	if kind == awsCLI.KindRole {
+		fmt.Printf("\n✅ sesh has the MFA key for %s. The AWS CLI asks for its code when it assumes the role:\n   sesh aws%s --clip  copies the code\n", profileName(profile), flag)
+		return
+	}
+	shellCmd, clipCmd := "sesh aws"+flag, "sesh aws"+flag+" --clip"
+	fmt.Printf("\n✅ sesh has the MFA key for %s, which signs in with %s.\n   %-*s  signs in when the session has ended, with the code on the clipboard, and opens a shell\n   %-*s  copies a code\n",
+		profileName(profile), kind, len(clipCmd), shellCmd, len(clipCmd), clipCmd)
 }
 
 // existingEntry returns the entry store holds at k, or nil when there's none.

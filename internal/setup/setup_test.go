@@ -10,6 +10,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/qrcode"
 	"github.com/bashhack/sesh/internal/testutil"
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -189,8 +190,6 @@ func TestSetup_RefusesEarly(t *testing.T) {
 		"session login": {func(a *fakeAWS) {
 			a.identity = "arn:aws:sts::123456789012:assumed-role/Admin/alice"
 		}, "", "a temporary session"},
-		"aws login profile": {func(a *fakeAWS) { a.kind = "aws login" }, "work", "profile work signs in with aws login"},
-		"SSO profile":       {func(a *fakeAWS) { a.kind = "SSO" }, "", "the default profile signs in with SSO"},
 		"identity fails": {func(a *fakeAWS) {
 			a.identityErr = errors.New("aws sts get-caller-identity: The config profile (work) could not be found")
 		}, "work", "aws sts get-caller-identity --profile work"},
@@ -330,7 +329,7 @@ func TestSetup_KeyAskedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Setup(): %v\n%s", err, out)
 	}
-	for _, want := range []string{"❌ Choose 1 to 2.", "❌ That isn't a key sesh can make codes from", "give a full path, or one starting with ~/", "/home/alice/missing.png: no such file"} {
+	for _, want := range []string{"❌ Choose 1 to 2, or e.", "❌ That isn't a key sesh can make codes from", "give a full path, or one starting with ~/", "/home/alice/missing.png: no such file"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
@@ -428,5 +427,115 @@ func TestExpandHome(t *testing.T) {
 		if _, err := expandHome(in); err == nil {
 			t.Errorf("expandHome(%q) took it", in)
 		}
+	}
+}
+
+// A profile that signs in with aws login, SSO or a role keeps only the MFA
+// key: AWS isn't asked who it is or for a device, since its sign-in asks
+// for the code itself.
+func TestSetup_SignInProfiles(t *testing.T) {
+	for _, kind := range []string{"aws login", "SSO", "a role"} {
+		t.Run(kind, func(t *testing.T) {
+			aws := defaultAWS()
+			aws.kind = kind
+			stub(t, aws, testSecret, false)
+			store := vault.NewMemStore()
+			out, err := run(store, "work", "1\n\nwork/aws\n\n", vault.Filing{})
+			if err != nil {
+				t.Fatalf("Setup(): %v\n%s", err, out)
+			}
+			if len(aws.profiles) != 0 {
+				t.Errorf("AWS was asked about %q", aws.profiles)
+			}
+			e, err := store.Lookup(vault.AWSKey("work"))
+			if err != nil || e.Settings.AWSMFADevice != "" || e.Folder != "work/aws" {
+				t.Errorf("entry = %+v, %v", e, err)
+			}
+			if secret, err := store.Get(vault.AWSKey("work")); err != nil || string(secret) != testSecret {
+				t.Errorf("secret = %q, %v", secret, err)
+			}
+			want, codes := "signs in with "+kind, "MFA code 1: "
+			switch kind {
+			case "a role":
+				want = "The AWS CLI asks for its code when it assumes the role"
+			case "SSO":
+				codes = "The code, and the next, for the page: "
+			}
+			if !strings.Contains(out, codes) || !strings.Contains(out, want) {
+				t.Errorf("output lacks %q or %q:\n%s", codes, want, out)
+			}
+			if sso := strings.Contains(out, "AWS access portal"); sso != (kind == "SSO") {
+				t.Errorf("access portal steps shown: %v:\n%s", sso, out)
+			}
+		})
+	}
+}
+
+// e takes the key of a TOTP entry sesh already has, for a device AWS has
+// (imported from a phone's app), so there's no AWS console step; an ID
+// that isn't a TOTP entry, one whose codes aren't AWS's, and the entry
+// being set up are refused, and asked again.
+func TestSetup_KeyFromAnEntry(t *testing.T) {
+	aws := defaultAWS()
+	stub(t, aws, "", false)
+	store := vault.NewMemStore()
+	// Imported with AWS's code settings spelled out, as an otpauth:// link gives them.
+	imported := vault.Key{Kind: vault.KindTOTP, Service: "Amazon Web Services", Username: "alice"}
+	odd := vault.Key{Kind: vault.KindTOTP, Service: "steam"}
+	for k, settings := range map[vault.Key]vault.Settings{
+		imported: {TOTP: totp.Params{Issuer: "Amazon Web Services", Algorithm: "SHA1", Digits: 6, Period: 30}},
+		odd:      {TOTP: totp.Params{Digits: 8}},
+	} {
+		if err := store.Save(&vault.Entry{Key: k, Settings: settings}, []byte(testSecret)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := "\n" +
+		"e\npassword/github/alice\n" + // not a TOTP entry
+		"e\ntotp/steam\n" + // codes AWS doesn't use
+		"e\ntotp/aws/default\n" + // the entry being set up
+		"e\n" + imported.String() + "\n" +
+		"1\n\n\n"
+	out, err := run(store, "", input, vault.Filing{})
+	if err != nil {
+		t.Fatalf("Setup(): %v\n%s", err, out)
+	}
+	for _, want := range []string{"isn't a TOTP entry's ID", "makes codes AWS doesn't use", "is the entry being set up"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "MFA code 1") {
+		t.Errorf("the AWS console step was given for a key AWS has:\n%s", out)
+	}
+	e, err := store.Lookup(vault.AWSKey(""))
+	if err != nil || e.Settings.AWSMFADevice != testDevice {
+		t.Errorf("entry = %+v, %v", e, err)
+	}
+	if secret, err := store.Get(vault.AWSKey("")); err != nil || string(secret) != testSecret {
+		t.Errorf("secret = %q, %v", secret, err)
+	}
+}
+
+// For a profile that signs in with aws login, e takes an entry's key with
+// no AWS console step and no device: just the key is kept.
+func TestSetup_SignInProfileKeyFromAnEntry(t *testing.T) {
+	aws := defaultAWS()
+	aws.kind = "aws login"
+	stub(t, aws, "", false)
+	store := vault.NewMemStore()
+	imported := vault.Key{Kind: vault.KindTOTP, Service: "Amazon Web Services", Username: "alice"}
+	if err := store.Save(&vault.Entry{Key: imported}, []byte(testSecret)); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(store, "work", "e\n"+imported.String()+"\n\n\n", vault.Filing{})
+	if err != nil {
+		t.Fatalf("Setup(): %v\n%s", err, out)
+	}
+	if strings.Contains(out, "MFA code 1") || len(aws.profiles) != 0 {
+		t.Errorf("console step given, or AWS asked about %q:\n%s", aws.profiles, out)
+	}
+	if secret, err := store.Get(vault.AWSKey("work")); err != nil || string(secret) != testSecret {
+		t.Errorf("secret = %q, %v", secret, err)
 	}
 }

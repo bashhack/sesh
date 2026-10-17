@@ -19,6 +19,9 @@ type Config struct {
 	ShellCustomizer ShellCustomizer
 	Variables       map[string]string
 	ServiceName     string
+	// Unset is variables the shell mustn't have from this process's
+	// environment, such as credentials that would be used over a profile.
+	Unset []string
 }
 
 // ShellCustomizer is what a service adds to the shell.
@@ -50,12 +53,15 @@ type ShellConfig struct {
 // zsh's from where they live (ZDOTDIR, or the home folder) in zsh's usual
 // order, bash's ~/.bashrc, or the file sh's ENV names. History goes where
 // the user's files say.
-func GetShellConfig(config Config) (*ShellConfig, error) {
+func GetShellConfig(config *Config) (*ShellConfig, error) {
 	if config.ShellCustomizer == nil {
 		return nil, fmt.Errorf("shell customizer is required")
 	}
 
 	env := FilterEnv(os.Environ(), "SESH_MASTER_PASSWORD")
+	for _, name := range config.Unset {
+		env = FilterEnv(env, name)
+	}
 	for key, value := range config.Variables {
 		env = FilterEnv(env, key)
 		env = append(env, fmt.Sprintf("%s=%s", key, value))
@@ -129,7 +135,7 @@ func envValue(env []string, name string) string {
 // the first prompt, moves itself after every hook the user's files added.
 // It returns env with ZDOTDIR pointing at the folder, and the folder, to
 // remove after.
-func SetupZshShell(config Config, env []string) ([]string, string, error) {
+func SetupZshShell(config *Config, env []string) ([]string, string, error) {
 	dir, err := os.MkdirTemp("", "sesh_zsh")
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to create temp dir for zsh: %w", err)
@@ -176,7 +182,7 @@ __sesh_prompt_line() {
 // can't change them), then ~/.bashrc, then the prompt prefix, kept by a
 // prompt command after the user's own. It returns the file's path, to
 // remove after.
-func SetupBashShell(config Config) (string, error) {
+func SetupBashShell(config *Config) (string, error) {
 	prefix := shell.Quote(config.ShellCustomizer.PromptPrefix())
 	rc := fmt.Sprintf(`# sesh: its helpers first, so the user's aliases don't change them.
 %s
@@ -203,7 +209,7 @@ __sesh_prompt
 // then the prompt prefix. A shell that doesn't read ENV (fish) gets the
 // credentials alone. It returns env with ENV pointing at the file, and the
 // file's path, to remove after.
-func SetupFallbackShell(config Config, env []string) ([]string, string, error) {
+func SetupFallbackShell(config *Config, env []string) ([]string, string, error) {
 	prefix := shell.Quote(config.ShellCustomizer.PromptPrefix())
 	var own string
 	if userEnv := envValue(env, "ENV"); userEnv != "" {

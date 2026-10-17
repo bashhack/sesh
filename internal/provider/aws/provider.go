@@ -197,6 +197,7 @@ func (p *Provider) GetMFASerialBytes() ([]byte, error) {
 	if err == nil && e.Settings.AWSMFADevice != "" {
 		return []byte(e.Settings.AWSMFADevice), nil
 	}
+	fmt.Fprintf(os.Stderr, "⚠️  No MFA device stored for %s; asking AWS for it\n", formatProfile(p.profile))
 	serial, autoErr := p.aws.GetFirstMFADevice(p.profile)
 	if autoErr != nil {
 		return nil, fmt.Errorf("failed to detect MFA device: %w", autoErr)
@@ -226,10 +227,6 @@ func (p *Provider) ValidateRequest() error {
 	}
 	if err := checkAWSCodes(e.Settings.TOTP); err != nil {
 		return fmt.Errorf("the AWS entry for %s %w; set it up again with 'sesh aws setup'", formatProfile(p.profile), err)
-	}
-	if e.Settings.AWSMFADevice == "" {
-		// Not fatal: GetMFASerialBytes asks AWS for the profile's device.
-		fmt.Fprintf(os.Stderr, "⚠️  No MFA device stored for %s; asking AWS for it\n", formatProfile(p.profile))
 	}
 	return nil
 }

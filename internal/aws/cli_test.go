@@ -1,10 +1,14 @@
 package aws
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/bashhack/sesh/internal/testutil"
 )
 
 // fakeCLI makes execCommand run script in sh in place of the AWS CLI, with
@@ -64,12 +68,13 @@ func TestCLIEnv(t *testing.T) {
 	t.Setenv("AWS_SESSION_TOKEN", "t")
 	t.Setenv("AWS_SECURITY_TOKEN", "t")
 	t.Setenv("AWS_REGION", "eu-west-1")
+	t.Setenv("SESH_MASTER_PASSWORD", "hunter2-hunter2")
 	has := func(env []string, name string) bool {
 		return slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, name+"=") })
 	}
 	for _, profile := range []string{"", "work"} {
 		env := CLIEnv(profile)
-		for _, name := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN"} {
+		for _, name := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN", "SESH_MASTER_PASSWORD"} {
 			if has(env, name) {
 				t.Errorf("CLIEnv(%q) keeps %s", profile, name)
 			}
@@ -122,14 +127,54 @@ func TestIsVirtualMFADevice(t *testing.T) {
 }
 
 // How a profile signs in is read from its settings: the first one set.
+// How a profile signs in is read from its section of the AWS config file.
 func TestProfileKind(t *testing.T) {
-	for setting, want := range map[string]string{"login_session": "aws login", "sso_session": "SSO", "sso_start_url": "SSO", "role_arn": "a role", "": ""} {
-		// The fake prints a value for the one setting given, and fails, as
-		// configure get does, for the rest.
-		fakeCLI(t, `case " $* " in *" `+setting+` "*) [ -n "`+setting+`" ] && echo value && exit 0;; esac; exit 1`)
-		if got := ProfileKind("work"); got != want {
-			t.Errorf("with %q set: ProfileKind() = %q, want %q", setting, got, want)
+	config := `# the AWS CLI's config
+[default]
+login_session = arn:aws:iam::123456789012:user/alice
+region = us-east-1
+
+[profile keys]
+region = us-east-1
+; login_session = commented out
+
+[profile sso]
+sso_session = corp
+
+[profile sso-old]
+sso_start_url = https://corp.awsapps.com/start
+
+[profile admin]
+role_arn = arn:aws:iam::123456789012:role/Admin
+source_profile = keys
+
+[sso-session corp]
+sso_start_url = https://corp.awsapps.com/start
+`
+	path := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", path)
+	for profile, want := range map[string]string{"": "aws login", "keys": "", "sso": "SSO", "sso-old": "SSO", "admin": "a role", "missing": "", "corp": ""} {
+		if got := ProfileKind(profile); got != want {
+			t.Errorf("ProfileKind(%q) = %q, want %q", profile, got, want)
 		}
+	}
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
+	if got := ProfileKind(""); got != "" {
+		t.Errorf("no config file: %q", got)
+	}
+}
+
+// The AWS CLI's own output goes to stderr: sesh's stdout is for what eval
+// reads.
+func TestRunCLIInteractive_OutputToStderr(t *testing.T) {
+	fakeCLI(t, `echo "Attempting to open your default browser."`)
+	var err error
+	out := testutil.CaptureStdout(func() { err = RunCLIInteractive("work", "login") })
+	if err != nil || out != "" {
+		t.Errorf("stdout %q, %v", out, err)
 	}
 }
 

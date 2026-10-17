@@ -49,10 +49,14 @@ sesh_status() {
   # Check AWS credentials
   if [ "$SESH_SERVICE" = "aws" ]; then
     echo ""
-    echo "AWS Environment Variables:"
-    [ -n "$AWS_ACCESS_KEY_ID" ] && echo "AWS_ACCESS_KEY_ID=***"
-    [ -n "$AWS_SECRET_ACCESS_KEY" ] && echo "AWS_SECRET_ACCESS_KEY=***"
-    [ -n "$AWS_SESSION_TOKEN" ] && echo "AWS_SESSION_TOKEN=***"
+    if [ -z "$AWS_ACCESS_KEY_ID" ]; then
+      echo "Signed in through the profile ${AWS_PROFILE:-default}: the AWS CLI keeps its credentials fresh."
+    else
+      echo "AWS Environment Variables:"
+      [ -n "$AWS_ACCESS_KEY_ID" ] && echo "AWS_ACCESS_KEY_ID=***"
+      [ -n "$AWS_SECRET_ACCESS_KEY" ] && echo "AWS_SECRET_ACCESS_KEY=***"
+      [ -n "$AWS_SESSION_TOKEN" ] && echo "AWS_SESSION_TOKEN=***"
+    fi
 
     echo ""
     echo "Testing AWS credentials..."
