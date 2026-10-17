@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,7 +69,12 @@ type syncer struct {
 	items  map[string]*database.SyncItem
 	// done are the entries written this sync, by uid: settled with
 	// another, they aren't synced again from the files read before.
-	done     map[string]bool
+	done map[string]bool
+	// busy are the entries being synced, by uid, while another is synced
+	// first.
+	busy map[string]bool
+	// files are each entry's files in the folder, by uid.
+	files    map[string][]syncfolder.File
 	sum      *Summary
 	now      func() time.Time
 	folder   syncfolder.Folder
@@ -82,7 +88,7 @@ type syncer struct {
 // be read, say); one entry's problems are in the summary, and the rest
 // still sync.
 func Sync(store *database.Store, folder syncfolder.Folder, computer string) (*Summary, error) {
-	y := &syncer{store: store, sealer: store.SyncSealer(), folder: folder, computer: computer, sum: &Summary{}, done: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
+	y := &syncer{store: store, sealer: store.SyncSealer(), folder: folder, computer: computer, sum: &Summary{}, done: map[string]bool{}, busy: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
 	var err error
 	if y.keyID, err = store.SyncKeyID(); err != nil {
 		return nil, err
@@ -98,6 +104,7 @@ func Sync(store *database.Store, folder syncfolder.Folder, computer string) (*Su
 		return nil, err
 	}
 	files := map[string][]syncfolder.File{}
+	y.files = files
 	for _, f := range contents.Files {
 		files[f.UIDString()] = append(files[f.UIDString()], f)
 	}
@@ -209,10 +216,16 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	var base *syncfolder.Record
 	if it.Agreed != nil {
 		var err error
+		// One that doesn't open (damaged) is merged as never synced.
 		if base, err = y.store.SyncBase(uid); err != nil {
-			return err
+			y.sum.Problems = append(y.sum.Problems, fmt.Sprintf("%s: what it was last synced at doesn't open, so it's merged as never synced: %v", y.name(uid), err))
+			base = nil
 		}
-		defer base.Wipe()
+		defer func() {
+			if base != nil {
+				base.Wipe()
+			}
+		}()
 	}
 	var fresh []remote
 	defer func() {
@@ -291,7 +304,7 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		case r.rec.Versions.Covers(theirs.Versions):
 			theirs = r.rec
 		default:
-			m := syncfolder.Merge(from, theirs, r.rec)
+			m := y.merge(uid, from, theirs, r.rec)
 			conflicts = append(conflicts, m.Conflicts...)
 			theirs = m.Record
 			merged = append(merged, theirs)
@@ -307,7 +320,7 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	if base != nil {
 		local.Versions = base.Versions
 	}
-	m := syncfolder.Merge(from, local, theirs)
+	m := y.merge(uid, from, local, theirs)
 	defer m.Wipe()
 	conflicts = append(conflicts, m.Conflicts...)
 	switch {
@@ -372,7 +385,12 @@ func recordName(uid string, rec *syncfolder.Record) string {
 // folder, as this computer's change, and records it agreed: rec is what
 // the entry holds here already.
 func (y *syncer) push(uid string, rev int64, rec *syncfolder.Record, apply bool) error {
-	rec.Versions = rec.Versions.Next(y.id)
+	n, err := y.store.SyncNextChange()
+	if err != nil {
+		return err
+	}
+	rec.Versions = rec.Versions.Join(nil)
+	rec.Versions[y.id] = n
 	rec.Computer = y.computer
 	if rec.Changed.IsZero() {
 		rec.Changed = y.now()
@@ -406,12 +424,50 @@ func (y *syncer) pushApplied(uid string, rev int64, rec *syncfolder.Record) erro
 // hash, has it. A name another entry has here is settled as two computers
 // making one entry under one name are: the same secret, one entry; others,
 // both, one renamed.
+//
+// The other may be moving off the name in the folder (renamed, deleted):
+// it's synced first, then this again.
 func (y *syncer) apply(uid string, rev int64, rec *syncfolder.Record, hash syncfolder.Hash) error {
 	_, err := y.store.SyncApply(uid, rev, rec, hash)
 	if !errors.Is(err, database.ErrNameTaken) {
 		return err
 	}
+	k := vault.Key{Kind: rec.Kind, Service: rec.Service, Username: rec.Username}
+	for _, it := range y.items {
+		if it.UID == uid || it.Place != database.SyncLive || it.Key != k || y.done[it.UID] || y.busy[it.UID] || len(y.files[it.UID]) == 0 {
+			continue
+		}
+		y.busy[uid] = true
+		err := y.entry(it.UID, y.files[it.UID])
+		delete(y.busy, uid)
+		y.done[it.UID] = true
+		if err != nil {
+			return err
+		}
+		if err := y.loadItems(); err != nil {
+			return err
+		}
+		if _, err := y.store.SyncApply(uid, rev, rec, hash); !errors.Is(err, database.ErrNameTaken) {
+			return err
+		}
+		break
+	}
 	return y.sameName(uid, rev, rec)
+}
+
+// merge merges ours and theirs, versions of the entry uid, against base,
+// so they make an entry sesh can keep: when the older's notes or secret
+// fields kept beside the newer's don't fit, the newer's alone, said in
+// the summary.
+func (y *syncer) merge(uid string, base, ours, theirs *syncfolder.Record) syncfolder.Merged {
+	m := syncfolder.Merge(base, ours, theirs)
+	if err := y.store.SyncCheck(m.Record); err == nil {
+		return m
+	}
+	m.Wipe()
+	m = syncfolder.MergeNewer(base, ours, theirs)
+	y.sum.Problems = append(y.sum.Problems, fmt.Sprintf("%s: changed on two computers, and the older's notes or secret fields don't fit beside the newer's: the newer's were kept", recordName(uid, m.Record)))
+	return m
 }
 
 // sameName settles the entry uid (at rev here), as rec has it, taking a
@@ -448,7 +504,7 @@ func (y *syncer) sameName(uid string, rev int64, rec *syncfolder.Record) error {
 		keep, keepRev, keepRec, drop, dropRev, dropRec = other.UID, theirRev, theirs, uid, rev, rec
 	}
 	if bytes.Equal(rec.Secret, theirs.Secret) {
-		m := syncfolder.Merge(nil, keepRec, dropRec)
+		m := y.merge(keep, nil, keepRec, dropRec)
 		defer m.Wipe()
 		m.Changed = y.now()
 		gone := &syncfolder.Record{Purged: y.now(), Changed: y.now(), Versions: dropRec.Versions}
@@ -479,8 +535,15 @@ func (y *syncer) sameName(uid string, rev int64, rec *syncfolder.Record) error {
 // freeName is k's service with " (2)" (or the first number free) added,
 // for an entry renamed to make way for another.
 func (y *syncer) freeName(k vault.Key) string {
+	service := k.Service
+	// "bank (2)" taken too: "bank (3)", not "bank (2) (2)".
+	if i := strings.LastIndex(service, " ("); i > 0 && strings.HasSuffix(service, ")") {
+		if _, err := strconv.Atoi(service[i+2 : len(service)-1]); err == nil {
+			service = service[:i]
+		}
+	}
 	for i := 2; ; i++ {
-		s := fmt.Sprintf("%s (%d)", k.Service, i)
+		s := fmt.Sprintf("%s (%d)", service, i)
 		taken := false
 		for _, it := range y.items {
 			if it.Place == database.SyncLive && it.Key == (vault.Key{Kind: k.Kind, Service: s, Username: k.Username}) {

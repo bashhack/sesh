@@ -218,8 +218,17 @@ func (s *Store) SyncRecord(uid, computer string) (_ *syncfolder.Record, rev int6
 	for _, f := range d.Fields {
 		r.Fields = append(r.Fields, syncfolder.Field{Name: f.Name, Value: f.Value, Secret: f.Secret})
 	}
-	if r.Tags, err = s.syncTags(&row); err != nil {
+	var damaged bool
+	if r.Tags, damaged, err = s.syncTags(&row); err != nil {
 		return nil, 0, err
+	}
+	// Tags that don't read (damage) are as last agreed, not taken for
+	// removed.
+	if damaged {
+		if base, err := s.SyncBase(uid); err == nil && base != nil {
+			r.Tags = slices.Clone(base.Tags)
+			base.Wipe()
+		}
 	}
 	if r.History, err = s.syncHistory(&row, computer); err != nil {
 		return nil, 0, err
@@ -248,27 +257,28 @@ func forgotten(db *sql.DB, uid string) (marks []string, err error) {
 	return marks, errors.Join(rows.Err(), rows.Close())
 }
 
-// syncTags are row's tags.
-func (s *Store) syncTags(row *syncRow) (tags []string, err error) {
+// syncTags are row's tags; damaged says those of an entry in the trash
+// don't read.
+func (s *Store) syncTags(row *syncRow) (tags []string, damaged bool, err error) {
 	if row.place == SyncTrashed {
 		if json.Unmarshal([]byte(row.tags), &tags) != nil {
-			return nil, nil // damaged: it goes without them
+			return nil, true, nil
 		}
-		return vault.NormalizeTags(tags), nil
+		return vault.NormalizeTags(tags), false, nil
 	}
 	rows, err := s.db.Query(`SELECT tag FROM entry_tags WHERE entry_id = ? ORDER BY tag`, row.id)
 	if err != nil {
-		return nil, fmt.Errorf("read the tags of %s: %w", row.key, err)
+		return nil, false, fmt.Errorf("read the tags of %s: %w", row.key, err)
 	}
 	for rows.Next() {
 		var t string
 		if err := rows.Scan(&t); err != nil {
 			_ = rows.Close() //nolint:errcheck // already failing
-			return nil, err
+			return nil, false, err
 		}
 		tags = append(tags, t)
 	}
-	return tags, errors.Join(rows.Err(), rows.Close())
+	return tags, false, errors.Join(rows.Err(), rows.Close())
 }
 
 // syncHistory is row's earlier secrets, opened, the newest first; one
@@ -311,7 +321,12 @@ func (s *Store) syncHistory(row *syncRow, computer string) (_ []syncfolder.Earli
 	for _, h := range all {
 		secret, err := s.oracle.DecryptEntry(h.data, h.salt, historyAAD(row.key))
 		if err != nil {
-			return nil, fmt.Errorf("decrypt an earlier secret of %s: %w", row.key, err)
+			if kerr := s.keyUnchanged(s.db); kerr != nil {
+				return nil, kerr
+			}
+			// Damaged: it isn't synced, and a sound copy elsewhere comes
+			// back with the sync.
+			continue
 		}
 		if h.comp == "" {
 			h.comp = computer
@@ -383,6 +398,31 @@ func (s *Store) SyncComputerID() (string, error) {
 	return id, err
 }
 
+// SyncNextChange is the count of this computer's next change written to
+// the sync folder: one more than any it gave before, counted in the vault
+// before the change is written, so no two changes it writes, even one
+// written and then lost to a crash, share a count.
+func (s *Store) SyncNextChange() (uint64, error) {
+	if _, err := s.SyncComputerID(); err != nil {
+		return 0, err
+	}
+	var n uint64
+	err := s.inTx(func(tx *sql.Tx) error {
+		return tx.QueryRow(`UPDATE sync_info SET changes = changes + 1 WHERE id = 1 RETURNING changes`).Scan(&n)
+	})
+	return n, err
+}
+
+// SyncCheck says what's wrong with rec as an entry sesh would keep, if
+// anything: a merged one may not fit (too many fields, notes too long).
+func (s *Store) SyncCheck(rec *syncfolder.Record) error {
+	if !rec.Purged.IsZero() {
+		return nil
+	}
+	_, err := checkRecord(rec)
+	return err
+}
+
 // SyncSealer seals and opens sync files with the vault's key.
 func (s *Store) SyncSealer() syncfolder.Sealer { return s.oracle }
 
@@ -432,37 +472,51 @@ type sealedRecord struct {
 	data, salt []byte
 }
 
-// sealRecord checks rec is an entry sesh would keep, and seals it for its
-// name.
-func (s *Store) sealRecord(rec *syncfolder.Record) (sealedRecord, error) {
+// checkRecord checks rec is an entry sesh would keep: its name, folder,
+// tags, secret, file name and details; it returns its details.
+func checkRecord(rec *syncfolder.Record) (vault.Details, error) {
 	k := vault.Key{Kind: rec.Kind, Service: rec.Service, Username: rec.Username}
 	if err := k.Validate(); err != nil {
-		return sealedRecord{}, err
+		return vault.Details{}, err
 	}
 	if err := vault.CheckFolder(rec.Folder); err != nil {
-		return sealedRecord{}, err
+		return vault.Details{}, err
 	}
-	tags := vault.NormalizeTags(rec.Tags)
-	for _, t := range tags {
+	for _, t := range vault.NormalizeTags(rec.Tags) {
 		if err := vault.CheckTag(t); err != nil {
-			return sealedRecord{}, err
+			return vault.Details{}, err
 		}
 	}
 	if len(rec.Secret) > MaxSecretSize {
-		return sealedRecord{}, fmt.Errorf("%w: %d bytes (max %d)", ErrSecretTooLarge, len(rec.Secret), MaxSecretSize)
+		return vault.Details{}, fmt.Errorf("%w: %d bytes (max %d)", ErrSecretTooLarge, len(rec.Secret), MaxSecretSize)
 	}
 	if err := vault.CheckFileName(rec.Settings.FileName); err != nil {
-		return sealedRecord{}, err
+		return vault.Details{}, err
 	}
 	d := vault.Details{URL: rec.URL, Notes: rec.Notes}
 	for _, f := range rec.Fields {
 		d.Fields = append(d.Fields, vault.Field{Name: f.Name, Value: f.Value, Secret: f.Secret})
 	}
 	if err := d.Check(k.Kind); err != nil {
+		return vault.Details{}, err
+	}
+	if _, _, sealed, err := vault.EncodeDetails(&d); err != nil {
+		return vault.Details{}, err
+	} else {
+		secure.SecureZeroBytes(sealed)
+	}
+	return d, nil
+}
+
+// sealRecord checks rec is an entry sesh would keep, and seals it for its
+// name.
+func (s *Store) sealRecord(rec *syncfolder.Record) (sealedRecord, error) {
+	d, err := checkRecord(rec)
+	if err != nil {
 		return sealedRecord{}, err
 	}
-	out := sealedRecord{key: k, tags: tags, historyAt: rec.History}
-	var err error
+	k := vault.Key{Kind: rec.Kind, Service: rec.Service, Username: rec.Username}
+	out := sealedRecord{key: k, tags: vault.NormalizeTags(rec.Tags), historyAt: rec.History}
 	if out.settings, err = encodeSettings(&rec.Settings); err != nil {
 		return sealedRecord{}, err
 	}
@@ -601,7 +655,8 @@ func (s *Store) insertRecord(tx *sql.Tx, uid string, rev int64, rec *syncfolder.
 			return err
 		}
 	}
-	if trashID == nil && s.historyKeep > 0 {
+	// Trimmed to this computer's history.keep: with 0, none is kept.
+	if trashID == nil {
 		return s.trimHistory(tx, k)
 	}
 	return nil

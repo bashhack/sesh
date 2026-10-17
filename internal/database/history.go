@@ -597,7 +597,8 @@ func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]string, error) {
 	var marks []string
 	for _, id := range ids {
 		var data, salt []byte
-		err := s.db.QueryRow(`SELECT encrypted_data, salt FROM history WHERE id = ?`, id).Scan(&data, &salt)
+		var at time.Time
+		err := s.db.QueryRow(`SELECT encrypted_data, salt, replaced_at FROM history WHERE id = ?`, id).Scan(&data, &salt, &at)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -611,7 +612,7 @@ func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]string, error) {
 			}
 			continue
 		}
-		marks = append(marks, syncfolder.Forget(secret))
+		marks = append(marks, syncfolder.Forget(secret, at))
 		secure.SecureZeroBytes(secret)
 	}
 	return marks, nil

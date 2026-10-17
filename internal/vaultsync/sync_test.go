@@ -146,10 +146,17 @@ func sameVaults(t *testing.T, a, b *computer) {
 		}
 		if ra.Service != rb.Service || ra.Username != rb.Username || ra.Kind != rb.Kind || !bytes.Equal(ra.Secret, rb.Secret) ||
 			ra.URL != rb.URL || ra.Folder != rb.Folder || !bytes.Equal(ra.Notes, rb.Notes) || !slices.Equal(ra.Tags, rb.Tags) ||
-			ra.Deleted.IsZero() != rb.Deleted.IsZero() || len(ra.Fields) != len(rb.Fields) || !slices.Equal(secrets(ra.History), secrets(rb.History)) {
+			ra.Deleted.IsZero() != rb.Deleted.IsZero() || len(ra.Fields) != len(rb.Fields) || !sameHistory(secrets(ra.History), secrets(rb.History)) {
 			t.Errorf("%s differs:\n%s %+v\n%s %+v", uid, a.name, ra, b.name, rb)
 		}
 	}
+}
+
+// sameHistory says whether a and b, earlier secrets newest first, are the
+// same as far as the shorter goes: each computer keeps its own number.
+func sameHistory(a, b []string) bool {
+	n := min(len(a), len(b))
+	return slices.Equal(a[:n], b[:n])
 }
 
 func secrets(hs []syncfolder.Earlier) (out []string) {

@@ -64,7 +64,7 @@ func TestSyncRecordApply(t *testing.T) {
 	}
 	if string(rec.Secret) != "pw-4" || rec.Folder != "work/dev" || !slices.Equal(rec.Tags, []string{"a", "b"}) || string(rec.Notes) != "notes" ||
 		len(rec.Fields) != 2 || string(rec.Fields[0].Value) != "1234" || !slices.Equal(secrets(rec.History), []string{"pw-3", "pw-2"}) ||
-		rec.History[0].Computer != "laptop" || !slices.Equal(rec.Forgotten, []string{syncfolder.Forget([]byte("pw-1"))}) || rec.Changed.IsZero() {
+		rec.History[0].Computer != "laptop" || len(rec.Forgotten) != 1 || rec.Changed.IsZero() {
 		t.Fatalf("record %+v", rec)
 	}
 	_, idRev := idOf(t, a, k)

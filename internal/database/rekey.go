@@ -436,7 +436,10 @@ func (s *Store) resealBases(q interface {
 		}
 		h, rec, err := syncfolder.Open(s.oracle, base)
 		if err != nil {
-			return nil, fmt.Errorf("read what %s was synced at: %w", uid, err)
+			// Damaged, or sealed with another key (a backup restored):
+			// dropped, so the entry merges as never synced.
+			out[uid] = resealedBase{from: base}
+			continue
 		}
 		nh, err := syncfolder.NewHeader(h.UIDString(), newID)
 		if err != nil {
@@ -452,7 +455,11 @@ func (s *Store) resealBases(q interface {
 	}
 	if tx, ok := q.(*sql.Tx); ok {
 		for uid, b := range out {
-			if _, err := tx.Exec(`UPDATE sync_state SET base = ? WHERE uid = ?`, b.to, uid); err != nil {
+			q, args := `UPDATE sync_state SET base = ? WHERE uid = ?`, []any{b.to, uid}
+			if b.to == nil {
+				q, args = `DELETE FROM sync_state WHERE uid = ?`, []any{uid}
+			}
+			if _, err := tx.Exec(q, args...); err != nil {
 				return nil, err
 			}
 		}

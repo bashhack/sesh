@@ -97,9 +97,9 @@ func inspect(path, what string) (_ BackupSummary, err error) {
 // the same, quiet_writes, which is empty outside a write, and what sync
 // keeps: sync_state (what this computer last agreed with the sync folder
 // doesn't go back with the entries, so the restored ones, their revs
-// raised, are changes to sync), sync_info (this computer's sync ID is its
-// own) and history_forgotten (what was forgotten on purpose stays
-// forgotten).
+// raised, are changes to sync; it's cleared, below), sync_info (this
+// computer's sync ID is its own) and history_forgotten (what was forgotten
+// on purpose stays forgotten).
 var restoredTables = []string{"vault_info", "vault_key", "recovery", "entries", "entry_tags", "trash", "history"}
 
 // RestoreInPlace replaces the sound vault at dbPath with the backup at
@@ -181,6 +181,13 @@ func restoreInPlace(dbPath, backupPath string) (err error) {
 			_ = tx.Rollback() //nolint:errcheck // already failing
 			return fmt.Errorf("restore: %w", err)
 		}
+	}
+	// What this computer agreed with the sync folder was for the entries
+	// replaced: the restored ones are merged with the folder's as entries
+	// never synced, so nothing is deleted, and nothing secret is lost.
+	if _, err := tx.Exec(`DELETE FROM main.sync_state`); err != nil {
+		_ = tx.Rollback() //nolint:errcheck // already failing
+		return fmt.Errorf("restore: %w", err)
 	}
 	if _, err := tx.Exec(`DELETE FROM main.quiet_writes`); err != nil {
 		_ = tx.Rollback() //nolint:errcheck // already failing

@@ -9,7 +9,9 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -48,7 +50,24 @@ type Merged struct {
 // It's the same whichever version is ours, so two computers merging the
 // same versions make the same entry. The versions aren't changed; the
 // merged one shares nothing with them.
-func Merge(base, ours, theirs *Record) (m Merged) {
+func Merge(base, ours, theirs *Record) Merged { return mergeWith(base, ours, theirs, true) }
+
+// MergeNewer is Merge keeping only the newer's notes and secret field
+// where both changed them, not the older's beside: for an entry the
+// older's don't fit in (too many fields, notes too long).
+func MergeNewer(base, ours, theirs *Record) Merged { return mergeWith(base, ours, theirs, false) }
+
+// Wipe zeroes the merged entry's secrets, and the older secret lost.
+func (m Merged) Wipe() {
+	if m.Record != nil {
+		m.Record.Wipe()
+	}
+	secure.SecureZeroBytes(m.Lost)
+}
+
+// mergeWith is Merge, keeping the older's notes and secret fields beside
+// the newer's when beside is set.
+func mergeWith(base, ours, theirs *Record, beside bool) (m Merged) {
 	if base == nil {
 		base = &Record{}
 	}
@@ -89,9 +108,18 @@ func Merge(base, ours, theirs *Record) (m Merged) {
 	r.Folder = pick(&m, "folder", oursNewer, base.Folder, ours.Folder, theirs.Folder, eq[string])
 	r.Settings.AWSMFADevice = pick(&m, "MFA device", oursNewer, base.Settings.AWSMFADevice, ours.Settings.AWSMFADevice, theirs.Settings.AWSMFADevice, eq[string])
 	r.Settings.TOTP = pick(&m, "code settings", oursNewer, base.Settings.TOTP, ours.Settings.TOTP, theirs.Settings.TOTP, eq)
-	r.Notes = mergeNotes(&m, base.Notes, newer, older)
+	r.Notes = mergeNotes(&m, base.Notes, newer, older, beside)
 	r.Tags = mergeTags(base.Tags, ours.Tags, theirs.Tags)
-	r.Fields = mergeFields(&m, base.Fields, newer, older)
+	var overflow []Field
+	r.Fields, overflow = mergeFields(&m, base.Fields, newer, older, beside)
+	// Kept beside, but the entry has all the fields it can: in its notes.
+	for _, f := range overflow {
+		if len(r.Notes) > 0 {
+			r.Notes = append(r.Notes, "\n\n"...)
+		}
+		r.Notes = append(r.Notes, "— "+f.Name+" —\n"...)
+		r.Notes = append(r.Notes, f.Value...)
+	}
 
 	// The secret: the one changed, or the newer's (unless one already
 	// replaced the other's: that one's); the update time and a file's name
@@ -117,9 +145,18 @@ func Merge(base, ours, theirs *Record) (m Merged) {
 		r.Settings.FileName = pick(&m, "file name", oursNewer, base.Settings.FileName, ours.Settings.FileName, theirs.Settings.FileName, eq[string])
 	}
 	r.Created = earliest(ours.Created, theirs.Created)
+	// Whichever secret isn't kept goes into the history, replaced when and
+	// where the kept one was made: either computer may keep fewer earlier
+	// secrets than the other, so neither's history may have it.
 	history := slices.Concat(ours.History, theirs.History)
-	if m.Lost != nil {
-		history = append(history, Earlier{ReplacedAt: newer.Changed, Computer: newer.Computer, FileName: older.Settings.FileName, Secret: m.Lost})
+	replacedAt := secretFrom.Updated
+	if replacedAt.IsZero() {
+		replacedAt = secretFrom.Changed
+	}
+	for _, side := range []*Record{ours, theirs} {
+		if len(side.Secret) > 0 && !bytes.Equal(side.Secret, r.Secret) {
+			history = append(history, Earlier{ReplacedAt: replacedAt, Computer: secretFrom.Computer, FileName: side.Settings.FileName, Secret: side.Secret})
+		}
 	}
 	r.History = mergeHistory(history, r.Forgotten, r.Secret)
 
@@ -248,7 +285,7 @@ func from(r *Record) string {
 // mergeNotes is the notes the one that changed them has; both changed
 // them their own ways, the newer's, with the older's below them under a
 // line naming where they're from, unless one has the other's already.
-func mergeNotes(m *Merged, base []byte, newer, older *Record) []byte {
+func mergeNotes(m *Merged, base []byte, newer, older *Record, beside bool) []byte {
 	switch {
 	case bytes.Equal(older.Notes, base):
 		return bytes.Clone(newer.Notes)
@@ -261,6 +298,9 @@ func mergeNotes(m *Merged, base []byte, newer, older *Record) []byte {
 	}
 	m.Conflicts = append(m.Conflicts, "notes")
 	out := bytes.Clone(newer.Notes)
+	if !beside {
+		return out
+	}
 	if len(out) > 0 {
 		out = append(out, "\n\n"...)
 	}
@@ -290,7 +330,7 @@ func mergeTags(base, ours, theirs []string) []string {
 // named for its computer, unless the newer has that value already. They're in the
 // newer's order, then those only the older has, in its; those kept
 // beside last.
-func mergeFields(m *Merged, base []Field, newer, older *Record) []Field {
+func mergeFields(m *Merged, base []Field, newer, older *Record, beside bool) (out, overflow []Field) {
 	find := func(fs []Field, name string) (Field, bool) {
 		i := slices.IndexFunc(fs, func(f Field) bool { return strings.EqualFold(f.Name, name) })
 		if i < 0 {
@@ -304,7 +344,7 @@ func mergeFields(m *Merged, base []Field, newer, older *Record) []Field {
 			names = append(names, f.Name)
 		}
 	}
-	var out, besides []Field
+	var besides []Field
 	for _, n := range names {
 		b, inB := find(base, n)
 		nw, inN := find(newer.Fields, n)
@@ -319,8 +359,8 @@ func mergeFields(m *Merged, base []Field, newer, older *Record) []Field {
 			m.Conflicts = append(m.Conflicts, "field "+n)
 			has := slices.ContainsFunc(newer.Fields, func(g Field) bool { return bytes.Equal(g.Value, ol.Value) })
 			changedValue := !inB || !bytes.Equal(ol.Value, b.Value)
-			if inO && ol.Secret && changedValue && !has {
-				besides = append(besides, Field{Name: ol.Name + " (" + older.Computer + ")", Value: ol.Value, Secret: true})
+			if beside && inO && ol.Secret && changedValue && !has {
+				besides = append(besides, Field{Name: ol.Name, Value: ol.Value, Secret: true})
 			}
 		}
 		if keep {
@@ -329,22 +369,54 @@ func mergeFields(m *Merged, base []Field, newer, older *Record) []Field {
 		}
 	}
 	for _, f := range besides {
-		name := f.Name
-		for i := 2; slices.ContainsFunc(out, func(g Field) bool { return strings.EqualFold(g.Name, name) }); i++ {
-			name = fmt.Sprintf("%s %d", f.Name, i)
+		f.Name, f.Value = besideName(f.Name, older.Computer, out), bytes.Clone(f.Value)
+		if len(out) >= vault.MaxFields {
+			overflow = append(overflow, f)
+			continue
 		}
-		f.Name, f.Value = name, bytes.Clone(f.Value)
 		out = append(out, f)
+	}
+	return out, overflow
+}
+
+// besideName is the name a field kept beside another of the same name
+// gets: "pin-laptop", the computer's name made fit for a field's, kept
+// short enough, numbered if fields has it already.
+func besideName(name, computer string, fields []Field) string {
+	var c strings.Builder
+	for _, r := range computer {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '.' {
+			c.WriteRune(r)
+		} else {
+			c.WriteRune('-')
+		}
+	}
+	suffix := strings.Trim(c.String(), "-")
+	if suffix == "" {
+		suffix = "other"
+	}
+	fit := func(base, tail string) string {
+		if rs := []rune(base); len(rs)+len([]rune(tail)) > vault.MaxFieldNameLength {
+			base = string(rs[:max(vault.MaxFieldNameLength-len([]rune(tail)), 1)])
+		}
+		return base + tail
+	}
+	out := fit(name, "-"+suffix)
+	for i := 2; slices.ContainsFunc(fields, func(g Field) bool { return strings.EqualFold(g.Name, out) }); i++ {
+		out = fit(name, fmt.Sprintf("-%s-%d", suffix, i))
 	}
 	return out
 }
 
-// Forget is how a secret forgotten on purpose is named in Forgotten: its
-// SHA-256 in hex. The record is sealed, so the hash is never seen
-// without the vault's key.
-func Forget(secret []byte) string {
-	sum := sha256.Sum256(secret)
-	return hex.EncodeToString(sum[:])
+// Forget is how an earlier secret forgotten on purpose, replaced at at, is
+// named in Forgotten: the SHA-256, in hex, of when it was replaced and the
+// secret, so the same secret used again later isn't forgotten with it.
+// The record is sealed, so the hash is never seen without the vault's key.
+func Forget(secret []byte, at time.Time) string {
+	h := sha256.New()
+	h.Write([]byte(at.UTC().Format(time.RFC3339Nano) + "\x00"))
+	h.Write(secret)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // mergeForgotten is the secrets either forgot, each once, in order.
@@ -370,7 +442,7 @@ func mergeHistory(hs []Earlier, forgotten []string, current []byte) []Earlier {
 	})
 	var out []Earlier
 	for _, e := range hs {
-		if bytes.Equal(e.Secret, current) || hasEarlier(out, e.Secret) || slices.Contains(forgotten, Forget(e.Secret)) {
+		if bytes.Equal(e.Secret, current) || hasEarlier(out, e.Secret) || slices.Contains(forgotten, Forget(e.Secret, e.ReplacedAt)) {
 			continue
 		}
 		e.Secret = bytes.Clone(e.Secret)
