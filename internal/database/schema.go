@@ -26,11 +26,18 @@ var migrations = map[int]func(tx *sql.Tx) error{
 }
 
 // migrateV1 creates the schema: the vault's id, the entries and their tags, the trash, the
-// entries' history, the vault's key record (vault_key), its recovery key record, and the audit log.
+// entries' history, the triggers that count changes to entries, the vault's key record
+// (vault_key), its recovery key record, and the audit log.
 func migrateV1(tx *sql.Tx) error {
 	for _, q := range []string{
+		// uid is the entry's own id, random, made with it and kept
+		// through every change of name, the trash and back: it's how
+		// computers syncing the vault tell one entry from another. rev
+		// counts the entry's changes; the triggers below raise it.
 		`CREATE TABLE entries (
 			id             INTEGER PRIMARY KEY,
+			uid            TEXT NOT NULL UNIQUE DEFAULT (lower(hex(randomblob(16)))),
+			rev            INTEGER NOT NULL DEFAULT 1,
 			kind           TEXT NOT NULL,
 			service        TEXT NOT NULL,
 			username       TEXT NOT NULL DEFAULT '',
@@ -55,6 +62,8 @@ func migrateV1(tx *sql.Tx) error {
 		// Their ids aren't reused, so one listed names only that entry.
 		`CREATE TABLE trash (
 			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			uid            TEXT NOT NULL UNIQUE,
+			rev            INTEGER NOT NULL,
 			kind           TEXT NOT NULL,
 			service        TEXT NOT NULL,
 			username       TEXT NOT NULL DEFAULT '',
@@ -97,6 +106,38 @@ func migrateV1(tx *sql.Tx) error {
 			PRIMARY KEY (entry_id, tag)
 		)`,
 		`CREATE INDEX idx_entry_tags_tag ON entry_tags(tag)`,
+		// While it has its one row, writes don't count as changes to an
+		// entry: re-encrypting for a new master password, trimming
+		// history to history.keep, a restore. See quietly.
+		`CREATE TABLE quiet_writes (id INTEGER PRIMARY KEY CHECK (id = 1))`,
+		// Any change to an entry, its tags, or (forgetting one) its
+		// earlier secrets raises its rev, however it's made; a write of
+		// what the entry already holds doesn't.
+		`CREATE TRIGGER entry_changed AFTER UPDATE ON entries
+			WHEN NEW.rev = OLD.rev AND NOT EXISTS (SELECT 1 FROM quiet_writes) AND (
+				NEW.kind IS NOT OLD.kind
+				OR NEW.service IS NOT OLD.service
+				OR NEW.username IS NOT OLD.username
+				OR NEW.encrypted_data IS NOT OLD.encrypted_data
+				OR NEW.salt IS NOT OLD.salt
+				OR NEW.settings IS NOT OLD.settings
+				OR NEW.folder IS NOT OLD.folder
+				OR NEW.url IS NOT OLD.url
+				OR NEW.details IS NOT OLD.details
+				OR NEW.sealed_details IS NOT OLD.sealed_details
+				OR NEW.details_salt IS NOT OLD.details_salt
+				OR NEW.created_at IS NOT OLD.created_at
+				OR NEW.updated_at IS NOT OLD.updated_at)
+			BEGIN UPDATE entries SET rev = rev + 1 WHERE id = NEW.id; END`,
+		`CREATE TRIGGER entry_tag_added AFTER INSERT ON entry_tags
+			WHEN NOT EXISTS (SELECT 1 FROM quiet_writes)
+			BEGIN UPDATE entries SET rev = rev + 1 WHERE id = NEW.entry_id; END`,
+		`CREATE TRIGGER entry_tag_removed AFTER DELETE ON entry_tags
+			WHEN NOT EXISTS (SELECT 1 FROM quiet_writes)
+			BEGIN UPDATE entries SET rev = rev + 1 WHERE id = OLD.entry_id; END`,
+		`CREATE TRIGGER entry_history_removed AFTER DELETE ON history
+			WHEN OLD.trash_id IS NULL AND NOT EXISTS (SELECT 1 FROM quiet_writes)
+			BEGIN UPDATE entries SET rev = rev + 1 WHERE kind = OLD.kind AND service = OLD.service AND username = OLD.username; END`,
 		// One row: what turns the master password into the vault's key.
 		// None of it is secret; see vault_key.go.
 		`CREATE TABLE vault_key (

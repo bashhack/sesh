@@ -48,6 +48,20 @@ func (s *Store) keyUnchanged(q querier) error {
 	return nil
 }
 
+// quietly runs f in tx with quiet_writes set, so what it writes doesn't
+// count as changes to the entries (their rev stays): for writes that
+// change how entries are kept, not what they hold.
+func quietly(tx *sql.Tx, f func() error) error {
+	if _, err := tx.Exec(`INSERT INTO quiet_writes (id) VALUES (1)`); err != nil {
+		return err
+	}
+	if err := f(); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`DELETE FROM quiet_writes`)
+	return err
+}
+
 // inTx runs f in a write transaction that first checks the vault's key is
 // still the one the store's key was checked against, so nothing is written
 // under a key a password change has replaced.
@@ -141,54 +155,56 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 		}
 	}
 	err = s.inTx(func(tx *sql.Tx) error {
-		for _, table := range sealedTables {
-			now, err := sealedEntries(tx, table)
-			if err != nil {
-				return err
-			}
-			for i := range now {
-				e := &now[i]
-				// An entry unchanged since it was re-encrypted ahead takes
-				// that; one saved since is re-encrypted now.
-				if done, ok := sealed[row{table, e.id}]; ok && done.unchangedFrom(e) {
-					*e = done
-				} else if err := s.reseal(tx, e, newKey); err != nil {
+		return quietly(tx, func() error {
+			for _, table := range sealedTables {
+				now, err := sealedEntries(tx, table)
+				if err != nil {
 					return err
 				}
-				q, args := `UPDATE `+table+` SET encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ? WHERE id = ?`, []any{e.data, e.salt, e.details, e.detailsSalt, e.id} //nolint:gosec // table is one of sealedTables
-				if table == "history" {
-					q, args = `UPDATE history SET encrypted_data = ?, salt = ? WHERE id = ?`, []any{e.data, e.salt, e.id}
+				for i := range now {
+					e := &now[i]
+					// An entry unchanged since it was re-encrypted ahead takes
+					// that; one saved since is re-encrypted now.
+					if done, ok := sealed[row{table, e.id}]; ok && done.unchangedFrom(e) {
+						*e = done
+					} else if err := s.reseal(tx, e, newKey); err != nil {
+						return err
+					}
+					q, args := `UPDATE `+table+` SET encrypted_data = ?, salt = ?, sealed_details = ?, details_salt = ? WHERE id = ?`, []any{e.data, e.salt, e.details, e.detailsSalt, e.id} //nolint:gosec // table is one of sealedTables
+					if table == "history" {
+						q, args = `UPDATE history SET encrypted_data = ?, salt = ? WHERE id = ?`, []any{e.data, e.salt, e.id}
+					}
+					if _, err := tx.Exec(q, args...); err != nil {
+						return fmt.Errorf("store %s: %w", e.k, err)
+					}
 				}
-				if _, err := tx.Exec(q, args...); err != nil {
-					return fmt.Errorf("store %s: %w", e.k, err)
+				switch table {
+				case "trash":
+					res.Trashed = len(now)
+				case "entries":
+					res.Entries = len(now)
 				}
 			}
-			switch table {
-			case "trash":
-				res.Trashed = len(now)
-			case "entries":
-				res.Entries = len(now)
+			if res.Recovery, err = rewrapRecoveryRecord(tx, oldID, res.NewID, rewrap); err != nil {
+				return err
 			}
-		}
-		if res.Recovery, err = rewrapRecoveryRecord(tx, oldID, res.NewID, rewrap); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`UPDATE vault_key SET salt = ?, kdf = ?, kdf_params = ?, verify = ? WHERE id = 1`,
-			rec.Salt, kdfArgon2id, rec.Params.MarshalParams(), rec.Verify); err != nil {
-			return fmt.Errorf("record the new key: %w", err)
-		}
-		entries := fmt.Sprintf("%d entries", res.Entries)
-		if res.Entries == 1 {
-			entries = "1 entry"
-		}
-		if res.Trashed > 0 {
-			entries += fmt.Sprintf(" and %d in the trash", res.Trashed)
-		}
-		if _, err := tx.Exec(`INSERT INTO audit_log (event_type, entry_id, detail, created_at) VALUES ('rekey', NULL, ?, ?)`,
-			"master password changed, "+entries+" re-encrypted", time.Now().UTC()); err != nil {
-			return fmt.Errorf("log the change: %w", err)
-		}
-		return nil
+			if _, err := tx.Exec(`UPDATE vault_key SET salt = ?, kdf = ?, kdf_params = ?, verify = ? WHERE id = 1`,
+				rec.Salt, kdfArgon2id, rec.Params.MarshalParams(), rec.Verify); err != nil {
+				return fmt.Errorf("record the new key: %w", err)
+			}
+			entries := fmt.Sprintf("%d entries", res.Entries)
+			if res.Entries == 1 {
+				entries = "1 entry"
+			}
+			if res.Trashed > 0 {
+				entries += fmt.Sprintf(" and %d in the trash", res.Trashed)
+			}
+			if _, err := tx.Exec(`INSERT INTO audit_log (event_type, entry_id, detail, created_at) VALUES ('rekey', NULL, ?, ?)`,
+				"master password changed, "+entries+" re-encrypted", time.Now().UTC()); err != nil {
+				return fmt.Errorf("log the change: %w", err)
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		return res, fmt.Errorf("change the master password: %w", err)

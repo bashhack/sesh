@@ -204,7 +204,7 @@ See [SECURITY_MODEL.md](SECURITY_MODEL.md#sesh-agent) for what it protects again
 
 The vault is one SQLite file: `~/Library/Application Support/sesh/passwords.db` on macOS, `$XDG_DATA_HOME/sesh/passwords.db` (or `~/.local/share/sesh/passwords.db`) on Linux, or wherever the `db_path` setting says. Its schema is in `internal/database/schema.go`:
 
-- `entries`, and `entry_tags` for their tags;
+- `entries`, and `entry_tags` for their tags. Each entry has a `uid`, random, kept through renames, the trash and back, so computers syncing the vault can tell one entry from another; and a `rev`, raised by triggers on any change to the entry, its tags, or (forgetting one) its earlier secrets. Writes that change how entries are kept, not what they hold, set the one row of `quiet_writes` while they run, so `rev` stays: re-encrypting for a new master password, trimming history to `history.keep`, a restore;
 - `trash` (deleted entries, with their tags, kept for `trash.keep_days`) and `history` (earlier secrets, kept for `history.keep`; those of an entry in the trash go with it);
 - `vault_key`, the one row an unlock reads before any entry;
 - `recovery`, the vault's key wrapped for the recovery key, and `vault_info`, a random id that names its backups;
@@ -221,6 +221,8 @@ erDiagram
 
     entries {
         INTEGER id PK
+        TEXT uid "random, kept for good"
+        INTEGER rev "raised by every change"
         TEXT kind "password / api_key / totp / secure_note / file"
         TEXT service
         TEXT username "unique with kind and service"
@@ -243,6 +245,8 @@ erDiagram
 
     trash {
         INTEGER id PK
+        TEXT uid "the entry's"
+        INTEGER rev
         TEXT kind
         TEXT service
         TEXT username

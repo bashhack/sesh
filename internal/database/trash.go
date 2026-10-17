@@ -40,8 +40,8 @@ func (s *Store) TrashDays() int { return s.trashDays }
 func trash(tx *sql.Tx, id int64, k vault.Key, at time.Time) error {
 	var trashID int64
 	if err := tx.QueryRow(`
-		INSERT INTO trash (kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, tags, created_at, updated_at, deleted_at)
-		SELECT kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt,
+		INSERT INTO trash (uid, rev, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, tags, created_at, updated_at, deleted_at)
+		SELECT uid, rev + 1, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt,
 			(SELECT COALESCE(json_group_array(tag), '[]') FROM (SELECT tag FROM entry_tags WHERE entry_id = e.id ORDER BY tag)),
 			created_at, updated_at, ?
 		FROM entries e WHERE id = ? RETURNING id`, at, id).Scan(&trashID); err != nil {
@@ -186,9 +186,9 @@ func (s *Store) RestoreFromTrash(id int64, as vault.Key) (Restored, error) {
 		}
 		var newID int64
 		if err := tx.QueryRow(`
-			INSERT INTO entries (kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-			string(to.Kind), to.Service, to.Username, now.data, now.salt, settings, e.Folder, url, details, now.sealed, now.detailsSalt, e.CreatedAt, e.UpdatedAt).Scan(&newID); err != nil {
+			INSERT INTO entries (uid, rev, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at)
+			SELECT uid, rev + 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM trash WHERE id = ? RETURNING id`,
+			string(to.Kind), to.Service, to.Username, now.data, now.salt, settings, e.Folder, url, details, now.sealed, now.detailsSalt, e.CreatedAt, e.UpdatedAt, id).Scan(&newID); err != nil {
 			return fmt.Errorf("restore %s: %w", to, err)
 		}
 		var tagList []string

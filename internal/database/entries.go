@@ -182,8 +182,10 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	var old *oldSecret
 	var data, oldSalt []byte
 	var oldSettings sql.NullString
+	var was sealedDetails
 	keeping, existed, same := s.historyKeep > 0, false, false
-	switch err := s.db.QueryRow(`SELECT encrypted_data, salt, settings FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt, &oldSettings); {
+	switch err := s.db.QueryRow(`SELECT encrypted_data, salt, settings, url, details, sealed_details, details_salt FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(e.Kind), e.Service, e.Username).Scan(&data, &oldSalt, &oldSettings, &was.url, &was.plain, &was.sealed, &was.salt); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return fmt.Errorf("read %s: %w", e.Key, err)
@@ -231,7 +233,11 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 	}
 	var sd sealedDetails
 	if d != nil {
-		if sd, err = s.sealDetails(e.Key, d); err != nil {
+		var had *sealedDetails
+		if existed {
+			had = &was
+		}
+		if sd, err = s.sealDetails(e.Key, d, had); err != nil {
 			return err
 		}
 	}
@@ -300,6 +306,27 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 		).Scan(&id)
 		if err != nil || !whole {
 			return err
+		}
+		// Tags it has already aren't written again, so the entry doesn't
+		// count as changed.
+		var had []string
+		rows, err := tx.Query(`SELECT tag FROM entry_tags WHERE entry_id = ? ORDER BY tag`, id)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var t string
+			if err := rows.Scan(&t); err != nil {
+				_ = rows.Close() //nolint:errcheck // already failing
+				return err
+			}
+			had = append(had, t)
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
+		if slices.Equal(had, tags) {
+			return nil
 		}
 		if _, err := tx.Exec(`DELETE FROM entry_tags WHERE entry_id = ?`, id); err != nil {
 			return err
