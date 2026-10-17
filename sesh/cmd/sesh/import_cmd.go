@@ -34,6 +34,8 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
   clashes with entries you have, and what it will skip, then asks.
 
   Sources:
+    apple-passwords         The Passwords app's export (CSV): in the app,
+                            File > Export All Passwords to File.
     bitwarden               A Bitwarden export: JSON, plain or protected by a
                             password of its own (sesh asks for it), or CSV
                             (logins and notes, with no old passwords or dates).
@@ -48,8 +50,6 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
                             (in KeePassXC: Database > Export > XML File).
     lastpass-authenticator  LastPass Authenticator's export (JSON), made in the
                             app's Settings, under Transfer accounts.
-    safari                  Safari's password export (CSV), from Apple's
-                            Passwords app (File > Export All Passwords to File).
     sesh                    sesh's own export (sesh export): encrypted, when
                             sesh asks for its password, or plain JSON or CSV.
 
@@ -60,7 +60,7 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
   sesh import --from chrome "Chrome Passwords.csv"`
 
 // importSources are the apps sesh import reads.
-var importSources = []string{"bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "lastpass-authenticator", "safari", "sesh"}
+var importSources = []string{"apple-passwords", "bitwarden", "chrome", "firefox", "google-authenticator", "keepass", "lastpass-authenticator", "sesh"}
 
 func addImportFlags(fs *flag.FlagSet) (from, onConflict *string, dryRun, yes *bool) {
 	from = fs.String("from", "", "Where the file comes from: "+strings.Join(importSources, ", "))
@@ -185,7 +185,7 @@ func readImport(source string, args []string, stdin io.Reader, terminal bool, as
 		return readKeePass(args)
 	case "lastpass-authenticator":
 		return readLastPassAuthenticator(args)
-	case browser.Chrome, browser.Firefox, browser.Safari:
+	case browser.Chrome, browser.Firefox, browser.ApplePasswords:
 		return readBrowser(source, args)
 	case "sesh":
 		return readSeshExport(args, ask)
@@ -374,9 +374,9 @@ func (f *found) wipe() {
 }
 
 // detectSource is the app the files come from: Bitwarden, KeePass, LastPass
-// Authenticator, sesh, Chrome, Firefox or Safari for one of their exports
-// (or a file of theirs to be refused as such), Google Authenticator
-// otherwise.
+// Authenticator, sesh, Chrome, Firefox or Apple Passwords for one of their
+// exports (or a file of theirs to be refused as such), Google
+// Authenticator otherwise.
 func detectSource(args []string) string {
 	for _, a := range args {
 		b, err := os.ReadFile(a) //nolint:gosec // the file the user named
@@ -766,8 +766,16 @@ func readLastPassAuthenticator(args []string) (found, error) {
 	}, nil
 }
 
-// readBrowser reads one browser's password export, from the browser
-// --from names.
+// wrongSourceError is an export from another app than the one chosen:
+// name is that app as messages give it, source as --from names it.
+type wrongSourceError struct{ name, source string }
+
+func (e *wrongSourceError) Error() string {
+	return fmt.Sprintf("this export is from %s: use --from %s", e.name, e.source)
+}
+
+// readBrowser reads a browser's or the Passwords app's export, from the
+// app --from names.
 func readBrowser(from string, args []string) (found, error) {
 	if len(args) != 1 {
 		return found{}, fmt.Errorf("give one password export: sesh import --from %s <passwords.csv>", from)
@@ -782,7 +790,7 @@ func readBrowser(from string, args []string) (found, error) {
 		return found{}, err
 	}
 	if exp.Browser != from {
-		return found{}, fmt.Errorf("this is %s's password export: use --from %s", exp.Title(), exp.Browser)
+		return found{}, &wrongSourceError{name: exp.Title(), source: exp.Browser}
 	}
 	return found{
 		source:  exp.Title(),

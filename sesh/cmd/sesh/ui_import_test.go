@@ -235,3 +235,18 @@ func TestUI_ImportKeyChanged(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 }
+
+// An export from another app than the one chosen names the app's row to choose, not a flag.
+func TestUI_ImportWrongSource(t *testing.T) {
+	env := importVault(t)
+	store := openDoctorVault(t, env)
+	u := newUIVault(store)
+	defer u.Close() //nolint:errcheck // test cleanup
+	file, err := filepath.Abs(browserFixture("chromium.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.StartImport("apple-passwords", []string{file}, nil); err == nil || err.Error() != `this export is from Chrome: choose "import from Chrome…" instead` {
+		t.Errorf("a Chrome export as Apple Passwords': %v", err)
+	}
+}

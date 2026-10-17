@@ -55,7 +55,7 @@ var importSources = []struct{ key, source, name, files string }{
 	{"p", "keepass", "KeePass", "file (its XML export)"},
 	{"c", "chrome", "Chrome", "file (its CSV export)"},
 	{"f", "firefox", "Firefox", "file (its CSV export)"},
-	{"a", "safari", "Safari", "file (its CSV export)"},
+	{"a", "apple-passwords", "Apple Passwords", "file (its CSV export)"},
 	{"g", "google-authenticator", "Google Authenticator", "files: screenshots of its transfer codes, separated by commas"},
 	{"l", "lastpass-authenticator", "LastPass Authenticator", "file (its JSON export)"},
 }
