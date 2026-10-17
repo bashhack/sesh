@@ -198,7 +198,7 @@ func TestHistory_RekeyAndVerify(t *testing.T) {
 		t.Fatalf("Verify = %+v, %v", r, err)
 	}
 	key, rec := newKeyFor(t, "new-password-1")
-	if _, err := s.Rekey(key, rec, rewrapTo); err != nil {
+	if _, err := s.Rekey(key, rec, rewrapTo, RekeyLocal); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -396,7 +396,7 @@ func TestHistory_RekeyNamesDamagedVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	key, rec := newKeyFor(t, "new-password-1")
-	if _, err := s.Rekey(key, rec, rewrapTo); err == nil || !strings.Contains(err.Error(), "(version 2: sesh history password/bank --forget 2 forgets it)") {
+	if _, err := s.Rekey(key, rec, rewrapTo, RekeyLocal); err == nil || !strings.Contains(err.Error(), "(version 2: sesh history password/bank --forget 2 forgets it)") {
 		t.Errorf("Rekey = %v", err)
 	}
 }

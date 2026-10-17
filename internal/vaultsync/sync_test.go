@@ -615,3 +615,137 @@ func TestSync_TightenKeepsAndSays(t *testing.T) {
 		t.Errorf("a locked %s: %+v, %v; want it said and the rest synced", syncfolder.InfoFile, s, err)
 	}
 }
+
+func openVaultPw(t *testing.T, path, pw string) *database.Store {
+	t.Helper()
+	prompt := func(string) ([]byte, error) { return []byte(pw), nil }
+	s, err := database.Open(path, database.NewKeySourceOracle(database.NewMasterPasswordSource(path, prompt, database.WithKDFParams(kdf.Minimum()))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() }) //nolint:errcheck // test cleanup
+	s.SetTrashDays(30)
+	s.SetHistoryKeep(10)
+	return s
+}
+
+// A master password changed on the laptop: it seals the folder's files
+// again with the new key; the desktop, until it takes the new password,
+// reads none of them, and an entry it writes meanwhile with the old key is
+// left for it to seal again as it takes it.
+func TestSync_PasswordChange(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f := twoComputers(t)
+	laptop.put("github", "pw-1")
+	laptop.put("gitlab", "pw-2")
+	settle(t, f, laptop, desktop)
+	oldID, err := laptop.store.SyncKeyID()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lpath, dpath := laptop.store.Path(), desktop.store.Path()
+	newKey, rec, err := database.NewMasterPasswordSource(lpath, func(string) ([]byte, error) { return []byte("the new password 1"), nil }, database.WithKDFParams(kdf.Minimum())).NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := laptop.store.Rekey(newKey, rec, nil, database.RekeySend); err != nil {
+		t.Fatal(err)
+	}
+	laptopNew := &computer{t: t, store: openVaultPw(t, lpath, "the new password 1"), name: "laptop"}
+	s, err := SyncWith(laptopNew.store, f, "laptop", Options{Prev: laptop.store.SyncSealer(), PrevKeyID: oldID})
+	if err != nil || s.Resealed != 2 || len(s.Problems) != 0 {
+		t.Fatalf("laptop, sealing again: %+v, %v", s, err)
+	}
+	newID := database.UnlockID(rec.Verify)
+	for _, file := range scanFiles(t, f) {
+		if file.KeyIDString() != newID {
+			t.Errorf("%s still sealed with the old key", file.Path)
+		}
+	}
+
+	// The desktop, on the old password, reads nothing, and writes an entry
+	// with the old key.
+	if before := desktop.sync(f); before.OtherKey != 2 {
+		t.Errorf("desktop before taking the new password: %+v", before)
+	}
+	desktop.put("bank", "pw-3")
+	desktop.sync(f)
+	if left, err := SyncWith(laptopNew.store, f, "laptop", Options{PrevKeyID: oldID}); err != nil || left.OldKey != 1 || len(left.Received) != 0 {
+		t.Errorf("laptop, the desktop's old-key entry: %+v, %v", left, err)
+	}
+
+	// The desktop takes the new password: the same key record, so the same
+	// key; it seals its own entry again.
+	dkey := database.DeriveKey([]byte("the new password 1"), rec.Salt, rec.Params)
+	if _, err := desktop.store.Rekey(dkey, rec, nil, database.RekeyAdopt); err != nil {
+		t.Fatal(err)
+	}
+	desktopNew := &computer{t: t, store: openVaultPw(t, dpath, "the new password 1"), name: "desktop"}
+	s, err = SyncWith(desktopNew.store, f, "desktop", Options{Prev: desktop.store.SyncSealer(), PrevKeyID: oldID})
+	if err != nil || s.Resealed != 1 || len(s.Problems) != 0 {
+		t.Fatalf("desktop, taking the new password: %+v, %v", s, err)
+	}
+	settle(t, f, laptopNew, desktopNew)
+	if laptopNew.secret(vault.Key{Kind: vault.KindPassword, Service: "bank", Username: "alice"}) != "pw-3" {
+		t.Error("the desktop's entry didn't reach the laptop")
+	}
+}
+
+func scanFiles(t *testing.T, f syncfolder.Folder) []syncfolder.File {
+	t.Helper()
+	c, err := f.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.Files
+}
+
+// A computer taking a changed master password seals again an entry's file
+// it hasn't taken yet, written with the old key by another.
+func TestSync_PasswordChangeTakesUnseen(t *testing.T) {
+	t.Parallel()
+	cs, paths, f := computers(t, 3)
+	cs[0].put("github", "pw-1")
+	settleN(t, f, 4, cs[0], cs[1], cs[2])
+	oldID, err := cs[0].store.SyncKeyID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newKey, rec, err := database.NewMasterPasswordSource(paths[0], func(string) ([]byte, error) { return []byte("the new password 1"), nil }, database.WithKDFParams(kdf.Minimum())).NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The desktop writes an entry with the old key; the third computer
+	// hasn't seen it when it takes the new password.
+	cs[1].put("bank", "pw-2")
+	cs[1].sync(f)
+	adopt := func(c *computer, i int) *computer {
+		key := database.DeriveKey([]byte("the new password 1"), rec.Salt, rec.Params)
+		if _, err := c.store.Rekey(key, rec, nil, database.RekeyAdopt); err != nil {
+			t.Fatal(err)
+		}
+		next := &computer{t: t, store: openVaultPw(t, paths[i], "the new password 1"), name: c.name}
+		s, err := SyncWith(next.store, f, c.name, Options{Prev: c.store.SyncSealer(), PrevKeyID: oldID})
+		if err != nil || len(s.Problems) != 0 || len(s.Merged) != 0 || s.Resealed == 0 {
+			t.Fatalf("%s takes the new password: %+v, %v; want files sealed again and nothing merged", c.name, s, err)
+		}
+		return next
+	}
+	if _, err := cs[0].store.Rekey(newKey, rec, nil, database.RekeySend); err != nil {
+		t.Fatal(err)
+	}
+	third := adopt(cs[2], 2)
+	if s := third.sync(f); !s.Nothing() {
+		t.Errorf("the third computer after taking it: %+v", s)
+	}
+	if third.secret(vault.Key{Kind: vault.KindPassword, Service: "bank", Username: "alice"}) != "pw-2" {
+		t.Error("the third computer didn't take the desktop's entry")
+	}
+	newID := database.UnlockID(rec.Verify)
+	for _, file := range scanFiles(t, f) {
+		if file.KeyIDString() != newID {
+			t.Errorf("%s still sealed with the old key", file.Path)
+		}
+	}
+}

@@ -109,32 +109,17 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 	if err != nil {
 		return f, err
 	}
-	if database.UnlockID(info.Key.Verify) != database.UnlockID(m.Verify) {
-		if id, err := database.VaultSyncFolder(cfg.DBPath.Value); err == nil && id == info.FolderID {
-			return f, rejoinOtherKey(f.Dir(), true)
-		}
+	switch k, err := folderKeyOf(cfg.DBPath.Value, info, m); {
+	case err != nil:
+		return f, err
+	case k == keyToSend:
+		return f, errKeyToSend
+	case k == keyChangedElsewhere:
+		return f, errKeyChangedElsewhere
+	case k == keyOtherVault:
 		return f, fmt.Errorf("the sync folder %s is for another master password than this vault's: a folder for other vaults", tildePath(f.Dir()))
 	}
 	return f, nil
-}
-
-// syncKeyChangeWarning says what a master password change does to syncing,
-// for a vault that syncs, or synced and could join its folder again; ""
-// for one that never did. A change doesn't sync between computers yet.
-// recovering is a change made with the recovery key: joining the folder
-// again needs the master password the other computers have, likely the one
-// forgotten.
-func syncKeyChangeWarning(cfg *config.Config, recovering bool) string {
-	if cfg.SyncDir.Value != "" {
-		if recovering {
-			return fmt.Sprintf("This vault syncs with %s: after the change it can't sync with the other computers, as a master password change doesn't sync between them yet. Joining the folder again takes the master password they have; without it, stop syncing (sesh sync leave) and make a new sync folder from this vault (sesh sync init <folder>), for the other computers to join; what they changed or deleted since this vault last synced isn't in it (entries deleted there come back).", tildePath(cfg.SyncDir.Value))
-		}
-		return fmt.Sprintf("This vault syncs with %s: after the change it can't sync with the other computers, as a master password change doesn't sync between them yet. To sync again, it would have to join the folder as a new vault (sesh sync join says how).", tildePath(cfg.SyncDir.Value))
-	}
-	if id, err := database.VaultSyncFolder(cfg.DBPath.Value); err == nil && id != "" {
-		return "This vault synced with a sync folder before: after the change it can't join that folder again where it stopped, as a master password change doesn't sync between computers yet."
-	}
-	return ""
 }
 
 // errInfoLost is a sync folder that lost its InfoFile, which a sync from
@@ -162,7 +147,12 @@ func syncWith(app *App, cfg *config.Config) error {
 		}
 	}
 	f, err := syncFolderOf(cfg)
-	if err != nil {
+	switch {
+	case errors.Is(err, errKeyToSend):
+		return sendPendingChange(app, cfg, f)
+	case errors.Is(err, errKeyChangedElsewhere):
+		return takeKeyChange(app, cfg, f)
+	case err != nil:
 		return err
 	}
 	store, err := openSQLiteStoreWith(cfg)
@@ -187,7 +177,19 @@ func syncStore(app *App, cfg *config.Config, f syncfolder.Folder, store *databas
 	if err := store.SyncStartFolder(info.FolderID); err != nil {
 		return err
 	}
-	sum, err := vaultsync.Sync(store, f, cfg.SyncComputerName())
+	// A change made here the folder has (its key record written, the
+	// sync after it cut short): files still sealed with the key from before
+	// are left for a computer that has it, and nothing waits to be sent.
+	prev, err := store.SyncKeyChange()
+	if err != nil {
+		return err
+	}
+	if prev != "" {
+		if err := store.SyncKeyChangeSent(); err != nil {
+			return err
+		}
+	}
+	sum, err := vaultsync.SyncWith(store, f, cfg.SyncComputerName(), vaultsync.Options{PrevKeyID: prev})
 	if err != nil {
 		return err
 	}
@@ -378,6 +380,12 @@ func writeSyncSummary(app *App, dir string, s *vaultsync.Summary) error {
 	}
 	if s.Ignored > 0 {
 		fmt.Fprintf(&b, "  %s already seen here, ignored (a sync tool, or someone, put back an older one)\n", nouns(s.Ignored, "older copy of a file", "older copies of files"))
+	}
+	if s.Resealed > 0 {
+		fmt.Fprintf(&b, "  %s sealed again with the new master password's key\n", nouns(s.Resealed, "entry's file", "entries' files"))
+	}
+	if s.OldKey > 0 {
+		fmt.Fprintf(&b, "  %s sealed with the old master password's key: a computer that has it seals them again as it takes the new one\n", nouns(s.OldKey, "entry's file is", "entries' files are"))
 	}
 	if s.Rewritten > 0 {
 		fmt.Fprintf(&b, "  %s written again, not changed (lost from the folder, or an older copy put back)\n", nouns(s.Rewritten, "entry's file", "entries' files"))
@@ -643,7 +651,11 @@ func syncJoin(app *App, arg string) error {
 		return fmt.Errorf("%s: %w", tildePath(dir), err)
 	}
 	m := database.UnlockMaterial{Salt: info.Key.Salt, Verify: info.Key.Verify, Params: info.Key.Params}
-	if _, err := database.CanJoin(cfg.DBPath.Value, m, info.FolderID); err != nil {
+	// A vault that left this folder and changed its master password since:
+	// it's switched to the folder's (decided with the user), and rejoins.
+	_, err = database.CanJoin(cfg.DBPath.Value, m, info.FolderID)
+	switchKey := errors.Is(err, database.ErrRejoinOtherKey)
+	if err != nil && !switchKey {
 		return joinRefused(err, dir)
 	}
 	// The password is checked against the folder before the vault is
@@ -654,6 +666,14 @@ func syncJoin(app *App, arg string) error {
 		return err
 	}
 	defer secure.SecureZeroBytes(pw)
+	var notes []string
+	if switchKey {
+		said, err := switchToFolderKey(app, cfg, pw, m)
+		if err != nil {
+			return err
+		}
+		notes = append(notes, said...)
+	}
 	// An empty vault with a key record of its own is given the folder's:
 	// what was set up for its own key stops working, and is said so.
 	before, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
@@ -675,17 +695,11 @@ func syncJoin(app *App, arg string) error {
 	if err != nil {
 		return joinRefused(err, dir)
 	}
-	var notes []string
 	if lost != nil {
 		if err := f.WriteInfo(lost); err != nil {
 			return err
 		}
 		notes = append(notes, "The sync folder had lost its "+syncfolder.InfoFile+": written again from this vault, which synced with it.")
-	}
-	if !rejoin && prior == info.FolderID {
-		// An empty vault that left, its master password changed since: what
-		// it agreed was sealed with the old key, so it starts afresh.
-		notes = append(notes, "This vault synced with the folder before, under another master password: what it deleted since it left wasn't kept, so any of those still in the folder come back.")
 	}
 	if rekeyed {
 		if note := lockAgentHoldingOldKey(); note != "" {
@@ -725,40 +739,64 @@ func syncJoin(app *App, arg string) error {
 	return syncStore(app, cfg, f, store)
 }
 
+// switchToFolderKey switches the vault cfg names, which left the sync
+// folder whose key record is m and changed its master password since, to
+// m: it asks for the vault's own master password, then re-encrypts it
+// under the key pw, the folder's, gives. It says what it did.
+func switchToFolderKey(app *App, cfg *config.Config, pw []byte, m database.UnlockMaterial) ([]string, error) {
+	if _, err := fmt.Fprintln(app.Stderr, "This vault's master password changed since it left the folder: type its own, to switch it to the folder's."); err != nil {
+		return nil, err
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("%w (without this vault's own master password it can't switch; move its files aside and join with a new vault instead)", err)
+	}
+	defer closeAuditStore(store)
+	own, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
+	if err != nil {
+		return nil, err
+	}
+	key := database.DeriveKey(pw, m.Salt, m.Params)
+	defer secure.SecureZeroBytes(key)
+	_, notes, err := rekeyTo(store, cfg.DBPath.Value, database.UnlockID(own.Verify), key, m, true, database.RekeyAdopt, nil)
+	if err != nil {
+		return nil, err
+	}
+	said := []string{"This vault's own master password change, made while it was away, wasn't kept: it opens with the folder's now."}
+	for _, n := range []string{notes.agent, notes.touch, notes.recovery, notes.file} {
+		if n != "" {
+			said = append(said, n)
+		}
+	}
+	return said, nil
+}
+
 // joinRefused is err from readying the vault to join dir, with what to do
 // when it has entries.
 func joinRefused(err error, dir string) error {
-	if errors.Is(err, database.ErrRejoinOtherKey) {
-		return rejoinOtherKey(dir, false)
-	}
 	if errors.Is(err, database.ErrVaultNotEmpty) {
 		return fmt.Errorf("%w. Joining takes a new or empty vault, or one joining again the folder it left. To bring its entries along: sesh export --file F, move the vault's files aside (the vault, any -wal and -shm files beside it, and touchid.key), sesh sync join %s, then sesh import --from sesh F (entries deleted elsewhere since this vault last synced come back, as new ones)", err, shellPath(dir))
 	}
 	return err
 }
 
-// rejoinOtherKey is a vault that synced with the folder at dir, its master
-// password, or the folder's, changed since, and what it can do.
-func rejoinOtherKey(dir string, syncing bool) error {
-	leave := ""
-	if syncing {
-		leave = "sesh sync leave, "
-	}
-	return fmt.Errorf("%w, so it can't go on where it stopped: a master password change doesn't sync between computers yet. To sync it anyway: %ssesh export --file F, move the vault's files aside (the vault, any -wal and -shm files beside it, and touchid.key), sesh sync join %s, then sesh import --from sesh F (entries deleted elsewhere since it left come back, as new ones). Joining needs the master password the other computers have; without it, make a new sync folder from this vault (sesh sync init <folder>) for them to join", database.ErrRejoinOtherKey, leave, shellPath(dir))
-}
-
 // joinPassword asks for the master password of the vaults syncing through
-// dir until it opens m, their key record: three tries at a terminal, one
-// otherwise. The caller zeroes it.
+// dir until it opens m, their key record (folderPassword).
 func joinPassword(pc passwordPromptConfig, dir string, m database.UnlockMaterial) ([]byte, error) {
 	if !pc.fromEnv && !pc.interactive {
 		return nil, errors.New("there's no terminal here to type the master password at (the one the vaults syncing through the folder share): run sesh sync join at one, or give it in SESH_MASTER_PASSWORD")
 	}
+	return folderPassword(pc, fmt.Sprintf("Master password of the vaults syncing through %s: ", tildePath(dir)), m)
+}
+
+// folderPassword asks, with ask, for the master password whose key record
+// is m until it opens it: three tries at a terminal, one otherwise. The
+// caller zeroes it.
+func folderPassword(pc passwordPromptConfig, ask string, m database.UnlockMaterial) ([]byte, error) {
 	tries := 1
 	if pc.interactive {
 		tries = interactivePasswordAttempts
 	}
-	ask := fmt.Sprintf("Master password of the vaults syncing through %s: ", tildePath(dir))
 	prompt := ask
 	for i := 1; ; i++ {
 		pw, err := pc.prompt(prompt)
@@ -798,7 +836,7 @@ func syncStatus(app *App) error {
 	}
 	f, folderErr := syncFolderOf(cfg)
 	switch {
-	case errors.Is(folderErr, errInfoLost):
+	case errors.Is(folderErr, errInfoLost), errors.Is(folderErr, errKeyToSend), errors.Is(folderErr, errKeyChangedElsewhere):
 		fmt.Fprintf(&b, "⚠️  %v\n", folderErr)
 	case folderErr != nil:
 		fmt.Fprintf(&b, "❌ %v\n", folderErr)

@@ -98,6 +98,21 @@ const (
 	RecoveryStale
 )
 
+// RekeySync is what a password change means for syncing.
+type RekeySync int
+
+// The meanings.
+const (
+	// RekeyLocal: nothing to sync (the vault doesn't sync now).
+	RekeyLocal RekeySync = iota
+	// RekeySend: a change made here, for the sync folder to take: the key
+	// record the vault had, the folder's, is kept until it's sent.
+	RekeySend
+	// RekeyAdopt: the vault takes the sync folder's key record, changed on
+	// another computer; any change of its own not sent is dropped.
+	RekeyAdopt
+)
+
 // RekeyResult reports a password change.
 type RekeyResult struct {
 	// NewID is the id of the vault's new key record.
@@ -126,7 +141,9 @@ type RekeyResult struct {
 // It refuses with ErrVaultKeyChanged when the vault's key isn't the one the
 // store's key was checked against. Afterwards the store's key no longer
 // opens the vault, so the caller closes it.
-func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *RecoveryRecord, newID string) (*RecoveryRecord, error)) (RekeyResult, error) {
+//
+// sync says what it means for syncing (RekeySync).
+func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *RecoveryRecord, newID string) (*RecoveryRecord, error), sync RekeySync) (RekeyResult, error) {
 	res := RekeyResult{NewID: UnlockID(rec.Verify)}
 	oldID, err := s.unlockedID()
 	if err != nil {
@@ -199,6 +216,17 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 			if _, err := tx.Exec(`UPDATE vault_key SET salt = ?, kdf = ?, kdf_params = ?, verify = ? WHERE id = 1`,
 				rec.Salt, kdfArgon2id, rec.Params.MarshalParams(), rec.Verify); err != nil {
 				return fmt.Errorf("record the new key: %w", err)
+			}
+			switch sync {
+			case RekeySend:
+				// The first change not sent keeps the key the folder has.
+				if _, err := tx.Exec(`UPDATE sync_info SET prev_key_id = ? WHERE id = 1 AND prev_key_id = ''`, oldID); err != nil {
+					return err
+				}
+			case RekeyAdopt:
+				if _, err := tx.Exec(`UPDATE sync_info SET prev_key_id = ''`); err != nil {
+					return err
+				}
 			}
 			entries := fmt.Sprintf("%d entries", res.Entries)
 			if res.Entries == 1 {

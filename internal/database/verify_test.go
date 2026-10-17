@@ -81,7 +81,7 @@ func TestVerify_KeyChangedElsewhere(t *testing.T) {
 	}
 	defer other.Close() //nolint:errcheck // test cleanup
 	key, rec := newKeyFor(t, "new-password-1")
-	if _, err := other.Rekey(key, rec, rewrapTo); err != nil {
+	if _, err := other.Rekey(key, rec, rewrapTo, RekeyLocal); err != nil {
 		t.Fatal(err)
 	}
 	if r, err := s.Verify(); !errors.Is(err, ErrVaultKeyChanged) || len(r.Problems) != 0 {

@@ -51,6 +51,13 @@ type Summary struct {
 	// Later counts entries another sesh command changed while this one
 	// synced: the next sync takes them.
 	Later int
+	// Resealed counts files sealed with the key from before a master
+	// password change, written again with this one.
+	Resealed int
+	// OldKey counts entries whose files are sealed with the key from before
+	// a master password change made here, which this computer can't open:
+	// a computer with the old password re-seals them as it takes the new.
+	OldKey int
 	// Rewritten counts files of entries not changed here written again:
 	// lost from the folder, or an older copy put back.
 	Rewritten int
@@ -65,7 +72,7 @@ type Merged struct {
 
 // Nothing says whether the sync found nothing to do.
 func (s *Summary) Nothing() bool {
-	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten == 0
+	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed+s.OldKey == 0
 }
 
 // syncer is one sync's state.
@@ -83,13 +90,42 @@ type syncer struct {
 	files map[string][]syncfolder.File
 	// waiting are the entries waiting for a file to be readable, by uid:
 	// nothing is written over it.
-	waiting  map[string]bool
-	sum      *Summary
-	now      func() time.Time
-	folder   syncfolder.Folder
-	keyID    string
-	id       string
-	computer string
+	waiting map[string]bool
+	sum     *Summary
+	now     func() time.Time
+	folder  syncfolder.Folder
+	// prev opens files sealed with prevKeyID, the key the vault had before
+	// a master password change; nil when this computer can't.
+	prev      syncfolder.Sealer
+	keyID     string
+	prevKeyID string
+	id        string
+	computer  string
+}
+
+// Options are what a sync can do beyond the usual.
+type Options struct {
+	// Prev opens files sealed with PrevKeyID, the key record the vault had
+	// before a master password change (made here, or taken from the
+	// folder): they're read, and written again with the vault's key. With
+	// Prev nil, they're left for a computer that has it.
+	Prev      syncfolder.Sealer
+	PrevKeyID string
+}
+
+// sealerFor is the sealer that opens f: the vault's, or Options.Prev for a
+// file sealed with the key from before a password change.
+func (y *syncer) sealerFor(f *syncfolder.File) syncfolder.Sealer {
+	if y.stale(f) {
+		return y.prev
+	}
+	return y.sealer
+}
+
+// stale says whether f is sealed with the key from before a password
+// change, which this sync opens and writes again with the vault's.
+func (y *syncer) stale(f *syncfolder.File) bool {
+	return y.prev != nil && y.prevKeyID != "" && f.KeyIDString() == y.prevKeyID
 }
 
 // Sync syncs store with the sync folder at folder, as the computer named
@@ -97,7 +133,12 @@ type syncer struct {
 // be read, say); one entry's problems are in the summary, and the rest
 // still sync.
 func Sync(store *database.Store, folder syncfolder.Folder, computer string) (*Summary, error) {
-	y := &syncer{store: store, sealer: store.SyncSealer(), folder: folder, computer: computer, sum: &Summary{}, done: map[string]bool{}, busy: map[string]bool{}, waiting: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
+	return SyncWith(store, folder, computer, Options{})
+}
+
+// SyncWith is Sync with opts.
+func SyncWith(store *database.Store, folder syncfolder.Folder, computer string, opts Options) (*Summary, error) {
+	y := &syncer{store: store, sealer: store.SyncSealer(), prev: opts.Prev, prevKeyID: opts.PrevKeyID, folder: folder, computer: computer, sum: &Summary{}, done: map[string]bool{}, busy: map[string]bool{}, waiting: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}
 	var err error
 	if y.keyID, err = store.SyncKeyID(); err != nil {
 		return nil, err
@@ -139,10 +180,15 @@ func Sync(store *database.Store, folder syncfolder.Folder, computer string) (*Su
 	}
 	// So does one with a file sealed with another master password's key:
 	// it's for the computer that wrote it to write again, not for this one
-	// to write over.
+	// to write over. One sealed with the key from before a password change
+	// is read, when this sync can (Options.Prev).
 	for uid, fs := range files {
-		if slices.ContainsFunc(fs, func(f syncfolder.File) bool { return f.KeyIDString() != y.keyID }) {
+		switch {
+		case slices.ContainsFunc(fs, func(f syncfolder.File) bool { return f.KeyIDString() != y.keyID && f.KeyIDString() != y.prevKeyID }):
 			y.sum.OtherKey++
+			waiting[uid] = true
+		case y.prev == nil && slices.ContainsFunc(fs, func(f syncfolder.File) bool { return f.KeyIDString() != y.keyID }):
+			y.sum.OldKey++
 			waiting[uid] = true
 		}
 	}
@@ -253,13 +299,16 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 			r.rec.Wipe()
 		}
 	}()
-	agreedHere, ownStale := false, false
+	// oldKey: the entry's own file is sealed with the key from before a
+	// password change, so it's written again with the vault's.
+	agreedHere, ownStale, oldKey := false, false, false
 	var copies []string
 	for i := range files {
 		f := &files[i]
 		if !ownFile(f) {
 			copies = append(copies, f.Path)
 		}
+		oldKey = oldKey || ownFile(f) && y.stale(f)
 		if it.Agreed != nil && f.Hash == it.Agreed.Hash {
 			agreedHere = agreedHere || ownFile(f)
 			continue
@@ -268,14 +317,16 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		if err != nil {
 			return err
 		}
-		_, rec, err := syncfolder.Open(y.sealer, b)
+		_, rec, err := syncfolder.Open(y.sealerFor(f), b)
 		if err != nil {
 			return fmt.Errorf("%s: %w", filepath.Base(f.Path), err)
 		}
 		// Every change in it seen here already: an older copy, put back.
 		if base != nil && base.Versions.Covers(rec.Versions) {
 			rec.Wipe()
-			y.sum.Ignored++
+			if !y.stale(f) {
+				y.sum.Ignored++
+			}
 			ownStale = ownStale || ownFile(f)
 			continue
 		}
@@ -286,7 +337,8 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	changedHere := it.Changed() || (it.Agreed != nil && !agreedHere && len(fresh) == 0) || ownStale
 
 	if len(fresh) == 0 {
-		if changedHere {
+		// Sealed with the key from before a password change: written again.
+		if changedHere || oldKey {
 			local, rev, err := y.store.SyncRecord(uid, y.computer)
 			if err != nil {
 				return err
@@ -298,9 +350,12 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 			if err := y.push(uid, rev, local, false); err != nil {
 				return err
 			}
-			if it.Changed() {
+			switch {
+			case it.Changed():
 				y.sum.Sent = append(y.sum.Sent, recordName(uid, local))
-			} else {
+			case oldKey:
+				y.sum.Resealed++
+			default:
 				y.sum.Rewritten++
 			}
 		}
@@ -359,7 +414,14 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		// Just the folder's version, with what's here it doesn't have (the
 		// earlier secrets of a longer history.keep): taken, and nothing
 		// written back.
-		if err := y.apply(uid, it.Rev, m.Record, fresh[0].file.Hash); err != nil {
+		// Sealed with the key from before a password change: written again
+		// with the vault's.
+		if oldKey {
+			if err := y.pushApplied(uid, it.Rev, m.Record); err != nil {
+				return err
+			}
+			y.sum.Resealed++
+		} else if err := y.apply(uid, it.Rev, m.Record, fresh[0].file.Hash); err != nil {
 			return err
 		}
 		// Not said when nothing here changed: a file written again as it
@@ -417,7 +479,7 @@ func (y *syncer) restored(uid string, it *database.SyncItem, files []syncfolder.
 		if err != nil {
 			return err
 		}
-		_, rec, err := syncfolder.Open(y.sealer, b)
+		_, rec, err := syncfolder.Open(y.sealerFor(f), b)
 		if err != nil {
 			return fmt.Errorf("%s: %w", filepath.Base(f.Path), err)
 		}
@@ -506,7 +568,7 @@ func (y *syncer) restored(uid string, it *database.SyncItem, files []syncfolder.
 		m.Versions = m.Versions.Join(base.Versions)
 	}
 	// Nothing the folder's own file doesn't have: taken, nothing written.
-	if own != nil && len(copies) == 0 && !baseUsed && sameEntry(m.Record, folder) {
+	if own != nil && len(copies) == 0 && !baseUsed && !y.stale(own) && sameEntry(m.Record, folder) {
 		if err := y.apply(uid, rev, m.Record, own.Hash); err != nil {
 			return err
 		}
@@ -533,14 +595,14 @@ func latest(a, b time.Time) time.Time {
 func (y *syncer) mendBase(uid string, it *database.SyncItem, files []syncfolder.File) *syncfolder.Record {
 	for i := range files {
 		f := &files[i]
-		if f.Hash != it.Agreed.Hash || f.KeyIDString() != y.keyID {
+		if f.Hash != it.Agreed.Hash || f.KeyIDString() != y.keyID && !y.stale(f) {
 			continue
 		}
 		b, err := y.folder.Read(f)
 		if err != nil {
 			continue
 		}
-		_, rec, err := syncfolder.Open(y.sealer, b)
+		_, rec, err := syncfolder.Open(y.sealerFor(f), b)
 		if err != nil {
 			continue
 		}
@@ -823,6 +885,8 @@ func (s *Summary) String() string {
 	add(s.OtherKey, "sealed with another key")
 	add(s.Later, "left for the next sync")
 	add(s.Rewritten, "written again")
+	add(s.Resealed, "sealed again with the new master password's key")
+	add(s.OldKey, "sealed with the old master password's key, left")
 	add(len(s.Problems), "problems")
 	if len(parts) == 0 {
 		return "Sync: nothing to do"

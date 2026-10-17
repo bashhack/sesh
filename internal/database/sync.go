@@ -773,6 +773,24 @@ func VaultSyncFolder(dbPath string) (id string, err error) {
 	return id, err
 }
 
+// VaultKeyChange is the vault at dbPath's SyncKeyChange, read without
+// unlocking it: "" when there's no change to send, or no vault.
+func VaultKeyChange(dbPath string) (id string, err error) {
+	db, err := openExisting(dbPath)
+	if errors.Is(err, ErrNoVault) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer func() { err = closeVault(db, err) }()
+	err = db.QueryRow(`SELECT prev_key_id FROM sync_info WHERE id = 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
 // ErrRejoinOtherKey is a vault joining again the sync folder it synced
 // with, but under another master password than the folder's now: one of
 // them changed it since.
@@ -799,10 +817,11 @@ func joinable(db *sql.DB, have, m UnlockMaterial, folderID string) (rejoin bool,
 		return false, err
 	}
 	switch {
+	case synced == folderID:
+		// Even with nothing left: what it agreed holds its deletions.
+		return false, ErrRejoinOtherKey
 	case !used:
 		return false, nil
-	case synced == folderID:
-		return false, ErrRejoinOtherKey
 	case synced == "" && sameKey && restoredOnly:
 		return true, nil
 	}
@@ -906,6 +925,27 @@ func (s *Store) SyncStartFolder(folderID string) error {
 			return err
 		}
 		_, err := tx.Exec(`UPDATE sync_info SET folder_id = ? WHERE id = 1`, folderID)
+		return err
+	})
+}
+
+// SyncKeyChange is the ID of the key record the vault had before a master
+// password change made here that the sync folder hasn't taken yet (the
+// folder's), or "" when there's none to send.
+func (s *Store) SyncKeyChange() (string, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT prev_key_id FROM sync_info WHERE id = 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+// SyncKeyChangeSent records that the sync folder has the vault's key
+// record: there's no change to send.
+func (s *Store) SyncKeyChangeSent() error {
+	return s.inTx(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE sync_info SET prev_key_id = ''`)
 		return err
 	})
 }

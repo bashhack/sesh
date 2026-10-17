@@ -52,13 +52,22 @@ func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, er
 	if err := checkRecoveryCarries(dbPath); err != nil {
 		return tui.Changed{}, err
 	}
+	if err := keyChangeAllowed(st); err != nil {
+		return tui.Changed{}, err
+	}
 	newKey, rec, err := database.NewMasterPasswordSource(dbPath, func(string) ([]byte, error) { return bytes.Clone(next), nil },
 		database.WithKDFParams(st.KDF())).NewKey()
 	if err != nil {
 		return tui.Changed{}, fmt.Errorf("set the new master password: %w", err)
 	}
 	defer secure.SecureZeroBytes(newKey)
-	res, notes, err := rekeyTo(store, dbPath, database.UnlockID(mat.Verify), newKey, rec, true)
+	oldID := database.UnlockID(mat.Verify)
+	mode := rekeyMode(st)
+	var send func() string
+	if mode == database.RekeySend {
+		send = func() string { return sendKeyChange(st, store, newKey, rec, oldID) }
+	}
+	res, notes, err := rekeyTo(store, dbPath, oldID, newKey, rec, true, mode, send)
 	if err != nil {
 		return tui.Changed{}, err
 	}
@@ -72,7 +81,7 @@ func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, er
 	if !fromEnv && !strings.HasPrefix(notes.agent, "warning:") {
 		agentNote = ""
 	}
-	for _, n := range []string{notes.touch, notes.recovery, agentNote, notes.file} {
+	for _, n := range []string{notes.sync, notes.touch, notes.recovery, agentNote, notes.file} {
 		if n != "" {
 			ch.Said = append(ch.Said, n)
 		}
