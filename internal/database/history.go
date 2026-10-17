@@ -593,11 +593,12 @@ func (s *Store) ForgetVersionOf(k vault.Key, v Version) error {
 // the history rows ids, opened to make them. A row gone meanwhile has none,
 // nor has one that doesn't open (damaged): it's forgotten here only, and a
 // sound copy of it on another computer comes back with a sync.
-func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]string, error) {
-	var marks []string
+func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]forgetMark, error) {
+	var marks []forgetMark
 	for _, id := range ids {
 		var data, salt []byte
-		err := s.db.QueryRow(`SELECT encrypted_data, salt FROM history WHERE id = ?`, id).Scan(&data, &salt)
+		var at time.Time
+		err := s.db.QueryRow(`SELECT encrypted_data, salt, replaced_at FROM history WHERE id = ?`, id).Scan(&data, &salt, &at)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -611,20 +612,33 @@ func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]string, error) {
 			}
 			continue
 		}
-		marks = append(marks, syncfolder.Forget(secret))
+		marks = append(marks, forgetMark{hash: syncfolder.Forget(secret), replaced: at})
 		secure.SecureZeroBytes(secret)
 	}
 	return marks, nil
 }
 
+// forgetMark is an earlier secret being forgotten: its hash
+// (syncfolder.Forget), and when it was replaced.
+type forgetMark struct {
+	replaced time.Time
+	hash     string
+}
+
 // markForgotten records, in tx, that k's earlier secrets with marks were
 // forgotten on purpose, so a sync forgets them everywhere.
-func markForgotten(tx *sql.Tx, k vault.Key, marks []string) error {
+func markForgotten(tx *sql.Tx, k vault.Key, marks []forgetMark) error {
 	now := time.Now().UTC()
 	for _, m := range marks {
+		// No earlier than it was replaced, by whichever computer's clock:
+		// so it's forgotten wherever that's ahead of this one's.
+		at := now
+		if m.replaced.After(at) {
+			at = m.replaced.UTC()
+		}
 		if _, err := tx.Exec(`INSERT INTO history_forgotten (uid, hash, at) SELECT uid, ?, ? FROM entries WHERE kind = ? AND service = ? AND username = ?
 			ON CONFLICT (uid, hash) DO UPDATE SET at = excluded.at`,
-			m, now, string(k.Kind), k.Service, k.Username); err != nil {
+			m.hash, at, string(k.Kind), k.Service, k.Username); err != nil {
 			return err
 		}
 	}

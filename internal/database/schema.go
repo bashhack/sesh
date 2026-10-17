@@ -145,9 +145,9 @@ func migrateV1(tx *sql.Tx) error {
 			at   DATETIME NOT NULL,
 			PRIMARY KEY (uid, hash)
 		)`,
-		// Entries restored from a backup, not yet synced since: one the
-		// sync folder has deleted since stays deleted (vaultsync).
-		`CREATE TABLE sync_restored (uid TEXT PRIMARY KEY)`,
+		// Entries restored from a backup, at their revs then, not yet
+		// synced since (vaultsync).
+		`CREATE TABLE sync_restored (uid TEXT PRIMARY KEY, rev INTEGER NOT NULL)`,
 		`CREATE TABLE quiet_writes (id INTEGER PRIMARY KEY CHECK (id = 1))`,
 		// Any change to an entry, its tags, or (forgetting one) its
 		// earlier secrets raises its rev, however it's made; a write of

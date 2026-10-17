@@ -48,8 +48,8 @@ type SyncItem struct {
 	Place SyncPlace
 	// Rev is 0 when gone.
 	Rev int64
-	// Restored says it was restored from a backup, and hasn't synced
-	// since.
+	// Restored says it was restored from a backup, and hasn't changed or
+	// synced since.
 	Restored bool
 }
 
@@ -108,17 +108,18 @@ func (s *Store) SyncItems() (_ []SyncItem, err error) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, fmt.Errorf("read what was synced: %w", err)
 	}
-	rows, err = s.db.Query(`SELECT uid FROM sync_restored`)
+	rows, err = s.db.Query(`SELECT uid, rev FROM sync_restored`)
 	if err != nil {
 		return nil, fmt.Errorf("read what was restored: %w", err)
 	}
 	for rows.Next() {
 		var uid string
-		if err := rows.Scan(&uid); err != nil {
+		var rev int64
+		if err := rows.Scan(&uid, &rev); err != nil {
 			_ = rows.Close() //nolint:errcheck // already failing
 			return nil, err
 		}
-		if it, ok := byUID[uid]; ok {
+		if it, ok := byUID[uid]; ok && it.Rev == rev && it.Place != SyncGone {
 			it.Restored = true
 		}
 	}
@@ -485,8 +486,13 @@ func (s *Store) SyncMendBase(uid string, rec *syncfolder.Record) error {
 	})
 }
 
-// sealBase is rec sealed as uid's agreed version is kept.
+// sealBase is rec sealed as uid's agreed version is kept: without its
+// earlier secrets, which merging doesn't take from it, so it's small
+// however long the history.
 func (s *Store) sealBase(uid string, rec *syncfolder.Record) ([]byte, error) {
+	r := *rec
+	r.History = nil
+	rec = &r
 	keyID, err := s.SyncKeyID()
 	if err != nil {
 		return nil, err

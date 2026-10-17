@@ -145,8 +145,8 @@ func (s *Store) SaveWithDetails(e *vault.Entry, secret []byte, d *vault.Details)
 }
 
 // write stores e's secret. whole also replaces its settings, folder, tags,
-// and times; otherwise an existing entry keeps them, except its update
-// time. Details, when not nil, replace the entry's in the same write.
+// and times (a zero creation time keeps the one it has); otherwise an
+// existing entry keeps them, except its update time. Details, when not nil, replace the entry's in the same write.
 // earlier, the newest first, go into the entry's history below what it
 // has (see SaveImported), and got, when not nil, says what became of them.
 func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Details, earlier []vault.Earlier, got *ImportedHistory) error {

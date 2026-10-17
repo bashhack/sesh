@@ -123,13 +123,14 @@ func (m *MemStore) save(e *Entry, secret []byte, d *Details) error {
 	now := m.Now()
 	saved := *e
 	saved.Tags = NormalizeTags(e.Tags)
-	// As the vault does: the secret it has, saved again with no times,
-	// keeps the times it has.
-	if had, ok := m.entries[e.Key]; ok && bytes.Equal(had.secret, secret) {
+	// As the vault does: saved with no creation time, it keeps the one it
+	// has; the secret it has, saved again with no times, keeps its update
+	// time too.
+	if had, ok := m.entries[e.Key]; ok {
 		if saved.CreatedAt.IsZero() {
 			saved.CreatedAt = had.entry.CreatedAt
 		}
-		if saved.UpdatedAt.IsZero() {
+		if saved.UpdatedAt.IsZero() && bytes.Equal(had.secret, secret) {
 			saved.UpdatedAt = had.entry.UpdatedAt
 		}
 	}

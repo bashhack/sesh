@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/bashhack/sesh/internal/syncfolder"
 )
 
 // BackupSummary is what InspectBackup found in a backup: whose it is, and
@@ -308,19 +310,55 @@ func removeStaleRestoreTemps(target string, now time.Time) {
 }
 
 // restoredForSync readies, in tx, a vault just restored from a backup for
-// syncing: what it agreed with the sync folder was for the entries
-// replaced, so it's forgotten, and the restored entries are marked
-// (sync_restored). The next sync merges them with the folder's as never
-// synced, so nothing made since is deleted and nothing secret lost; but
-// an entry the folder has deleted since (to the trash, or for good) stays
-// deleted. schema is "main." or "".
+// syncing: what it agreed with the sync folder of entries the backup
+// doesn't have is forgotten, so they come back from the folder (nothing
+// made since is deleted), and the restored entries are marked
+// (sync_restored) at their revs. Until one is changed here, the next sync
+// takes it as restored (vaultsync): its values over the folder's, the
+// folder's secrets kept in its history, unless the folder has it deleted
+// (to the trash, or for good), which stays. schema is "main." or "".
 func restoredForSync(tx *sql.Tx, schema string) error {
 	for _, q := range []string{
-		`DELETE FROM ` + schema + `sync_state`,
+		`DELETE FROM ` + schema + `sync_state WHERE uid NOT IN (SELECT uid FROM ` + schema + `entries UNION SELECT uid FROM ` + schema + `trash)`,
 		`DELETE FROM ` + schema + `sync_restored`,
-		`INSERT INTO ` + schema + `sync_restored (uid) SELECT uid FROM ` + schema + `entries UNION SELECT uid FROM ` + schema + `trash`,
+		`INSERT INTO ` + schema + `sync_restored (uid, rev) SELECT uid, rev FROM ` + schema + `entries UNION ALL SELECT uid, rev FROM ` + schema + `trash`,
 	} {
 		if _, err := tx.Exec(q); err != nil { //nolint:gosec // schema is "main." or ""
+			return err
+		}
+	}
+	// Agreed versions sealed with another key (a backup from before a new
+	// master password) don't open: dropped, so those entries merge as never
+	// synced.
+	var verify []byte
+	if err := tx.QueryRow(`SELECT verify FROM ` + schema + `vault_key WHERE id = 1`).Scan(&verify); err != nil { //nolint:gosec // schema is "main." or ""
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	keyID := UnlockID(verify)
+	rows, err := tx.Query(`SELECT uid, base FROM ` + schema + `sync_state`) //nolint:gosec // schema is "main." or ""
+	if err != nil {
+		return err
+	}
+	var other []string
+	for rows.Next() {
+		var uid string
+		var base []byte
+		if err := rows.Scan(&uid, &base); err != nil {
+			_ = rows.Close() //nolint:errcheck // already failing
+			return err
+		}
+		if h, err := syncfolder.ParseHeader(base); err != nil || h.KeyIDString() != keyID {
+			other = append(other, uid)
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, uid := range other {
+		if _, err := tx.Exec(`DELETE FROM `+schema+`sync_state WHERE uid = ?`, uid); err != nil { //nolint:gosec // schema is "main." or ""
 			return err
 		}
 	}
