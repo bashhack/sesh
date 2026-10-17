@@ -392,6 +392,26 @@ func (f Folder) entries(create bool) (string, error) {
 	return dir, nil
 }
 
+// Tighten makes the folder's entries/ readable only by this user, when
+// it's there: a sync tool may make it with its own umask on a computer that
+// only ever takes.
+func (f Folder) Tighten() error {
+	dir := filepath.Join(f.dir, entriesDir)
+	fi, err := os.Lstat(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case !fi.IsDir() || fi.Mode().Perm()&0o077 == 0:
+		return nil
+	}
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a folder: 0700 is only this user
+		return fmt.Errorf("make %s readable only by you: %w", dir, err)
+	}
+	return nil
+}
+
 // Hash is a file's SHA-256, of its bytes as they are: sealed, so it says
 // nothing of the record.
 type Hash [sha256.Size]byte

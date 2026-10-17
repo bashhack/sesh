@@ -468,14 +468,15 @@ To avoid ending up here, make a recovery key, keep the master password somewhere
 sesh has no command to move a vault; it takes a few steps:
 
 1. Close `sesh ui` and any other sesh command that's running.
-2. Move the vault file, and any `-wal` and `-shm` files beside it (`passwords.db-wal`, `passwords.db-shm`), to the new folder, one only you can read and write:
+2. Move the vault file, any `-wal` and `-shm` files beside it (`passwords.db-wal`, `passwords.db-shm`), and `touchid.key` if it's there, to the new folder, one only you can read and write. If that folder holds a vault already, choose another: `mv -n` leaves a file that's there alone, rather than replacing it.
    ```bash
    mkdir -p ~/Library/Application\ Support/sesh && chmod 700 ~/Library/Application\ Support/sesh   # Linux: ~/.local/share/sesh
-   mv ~/Dropbox/passwords.db* ~/Library/Application\ Support/sesh/
+   mv -n ~/Dropbox/passwords.db ~/Dropbox/passwords.db-wal ~/Dropbox/passwords.db-shm ~/Dropbox/touchid.key ~/Library/Application\ Support/sesh/
+   ls ~/Dropbox/passwords.db*   # nothing left means everything moved
    ```
 3. Change `db_path` in the config file to the new place (`sesh config` shows the file and the value). If `SESH_DB_PATH` sets it, change that instead. `sesh init --force --db-path <new place>` also points sesh at the vault there, but writes a new config file: your other settings go back to their defaults.
 4. Backups are kept in a `backups` folder beside the vault unless `backup.dir` says otherwise: move that folder too.
-5. Touch ID unlock is kept per folder: turn it on again with `sesh touchid enable`.
+5. Touch ID unlock goes on working when `touchid.key` moves with the vault (it's tied to the vault, not its folder); if it didn't, turn it on again with `sesh touchid enable`.
 6. `sesh doctor` checks the result.
 
 ### Recovery key

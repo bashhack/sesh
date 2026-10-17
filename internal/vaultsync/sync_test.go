@@ -549,3 +549,19 @@ func TestSync_FilesNotForThisKey(t *testing.T) {
 		t.Error("written over a file that couldn't be read")
 	}
 }
+
+// A computer that only takes still makes the folder's entries readable
+// only by its user, as a sync tool may make it for anyone.
+func TestSync_TakingTightensTheFolder(t *testing.T) {
+	laptop, desktop, f := twoComputers(t)
+	laptop.put("github", "pw-1")
+	laptop.sync(f)
+	dir := filepath.Join(f.Dir(), "entries")
+	if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // a folder anyone can read, as a sync tool may leave it
+		t.Fatal(err)
+	}
+	desktop.sync(f)
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("entries/ after a sync that only took: %v, %v", fi.Mode(), err)
+	}
+}

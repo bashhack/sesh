@@ -24,7 +24,7 @@ func TestCloudTool(t *testing.T) {
 		filepath.Join(home, ".local", "share", "sesh", "passwords.db"):                                    "",
 		filepath.Join(home, "DropboxNot", "passwords.db"):                                                 "",
 		filepath.Join(home, "Dropbox", "..vault", "passwords.db"):                                         "Dropbox",
-		filepath.Join(home, "Sync", "passwords.db"):                                                       "Syncthing",
+		filepath.Join(home, "Sync", "passwords.db"):                                                       "",
 	} {
 		if got := cloudTool(path); got != want {
 			t.Errorf("cloudTool(%s) = %q, want %q", path, got, want)
@@ -77,6 +77,28 @@ func TestCloudTool(t *testing.T) {
 	if got := cloudTool(filepath.Join(home, "Documents", "passwords.db")); got != "iCloud Drive (Desktop & Documents)" {
 		t.Errorf("Documents in iCloud Drive: %q", got)
 	}
+	// Another link there, even to the home folder, isn't a folder iCloud
+	// keeps.
+	if err := os.Symlink(home, filepath.Join(docs, "Home shortcut")); err != nil {
+		t.Fatal(err)
+	}
+	if got := cloudTool(filepath.Join(home, ".local", "share", "sesh", "passwords.db")); got != "" {
+		t.Errorf("under a link to home in iCloud Drive: %q", got)
+	}
+	// ~/Desktop isn't kept when iCloud Drive's Desktop leads elsewhere.
+	if err := os.Symlink(home, filepath.Join(docs, "Desktop")); err != nil {
+		t.Fatal(err)
+	}
+	if got := cloudTool(filepath.Join(home, "Desktop", "passwords.db")); got != "" {
+		t.Errorf("~/Desktop, iCloud Drive's Desktop leading elsewhere: %q", got)
+	}
+	// ~/Sync is Syncthing's once Syncthing marks it as shared.
+	if err := os.MkdirAll(filepath.Join(home, "Sync", ".stfolder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := cloudTool(filepath.Join(home, "Sync", "passwords.db")); got != "Syncthing" {
+		t.Errorf("Syncthing's folder: %q", got)
+	}
 }
 
 // sesh doctor warns of a vault in a synced folder.
@@ -89,9 +111,14 @@ func TestDoctor_VaultInACloudFolder(t *testing.T) {
 	}
 	t.Setenv(config.EnvDBPath, db)
 	populatePasswordStore(t, &rekeyTestEnv{dbPath: db}, map[string]string{"password/a": "1"})
+	usual, err := database.DefaultDBLocation()
+	if err != nil {
+		t.Fatal(err)
+	}
 	out, _ := runDoctorOut(t) //nolint:errcheck // warnings exit 0; the output is checked
 	if !strings.Contains(out, "warn  Vault place     in a folder Dropbox syncs") || !strings.Contains(out, "sesh sync init") ||
-		!strings.Contains(out, "move passwords.db (and any passwords.db-wal and passwords.db-shm beside it)") || !strings.Contains(out, "change db_path in") {
+		!strings.Contains(out, "move passwords.db (and any passwords.db-wal and passwords.db-shm and touchid.key beside it)") ||
+		!strings.Contains(out, "change SESH_DB_PATH to its new place") || !strings.Contains(out, "(not "+tildePath(filepath.Dir(usual))+": a vault is there already)") {
 		t.Errorf("output:\n%s", out)
 	}
 }
@@ -178,7 +205,7 @@ func TestDoctor_SyncRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _ = runDoctorOut(t) //nolint:errcheck // checked by the output
-	if !strings.Contains(out, "warn  Sync") || !strings.Contains(out, "1 entry's file is sealed with another master password's key") {
+	if !strings.Contains(out, "warn  Sync") || !strings.Contains(out, "1 entry's file is sealed with another master password's key: sync leaves it for the computer that wrote it") {
 		t.Errorf("another key's file:\n%s", out)
 	}
 	// The folder not there: a drive not connected.
@@ -188,6 +215,9 @@ func TestDoctor_SyncRow(t *testing.T) {
 	out, err = runDoctorOut(t)
 	if err != nil || !strings.Contains(out, "warn  Sync") || !strings.Contains(out, "isn't there now") {
 		t.Errorf("the folder away (%v):\n%s", err, out)
+	}
+	if status, err := runSyncOut(t, "", false, "status"); err != nil || !strings.Contains(status, "isn't there now: a drive not connected") {
+		t.Errorf("status, the folder away (%v):\n%s", err, status)
 	}
 	if err := os.Rename(folder+"-away", folder); err != nil {
 		t.Fatal(err)

@@ -865,7 +865,6 @@ var cloudFolders = []struct {
 	{dir: "OneDrive", tool: "OneDrive"},
 	{dir: "OneDrive - ", tool: "OneDrive", prefix: true},
 	{dir: "Nextcloud", tool: "Nextcloud"},
-	{dir: "Sync", tool: "Syncthing"},
 }
 
 // cloudTool is the sync tool that keeps path the same on other computers,
@@ -891,18 +890,21 @@ func cloudTool(path string) string {
 			}
 		}
 	}
-	// iCloud Drive's Desktop & Documents: links in it to the folders
-	// elsewhere it syncs.
+	// iCloud Drive's Desktop & Documents: its Desktop and Documents, links
+	// to the home folder's, which it then syncs.
 	docs := filepath.Join(home, "Library", "Mobile Documents", "com~apple~CloudDocs")
-	if des, err := os.ReadDir(docs); err == nil {
-		for _, d := range des {
-			if d.Type()&os.ModeSymlink == 0 {
-				continue
-			}
-			if to, err := filepath.EvalSymlinks(filepath.Join(docs, d.Name())); err == nil {
-				places = append(places, place{to, "iCloud Drive (Desktop & Documents)"})
-			}
+	for _, name := range []string{"Desktop", "Documents"} {
+		link, own := filepath.Join(docs, name), filepath.Join(home, name)
+		if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			continue
 		}
+		if to, err := filepath.EvalSymlinks(link); err == nil && within(to, own) && within(own, to) {
+			places = append(places, place{own, "iCloud Drive (Desktop & Documents)"})
+		}
+	}
+	// Syncthing's default folder, which it marks as one it shares.
+	if _, err := os.Stat(filepath.Join(home, "Sync", ".stfolder")); err == nil {
+		places = append(places, place{filepath.Join(home, "Sync"), "Syncthing"})
 	}
 	for _, p := range places {
 		if within(path, p.dir) {
@@ -929,10 +931,18 @@ func checkCloudFolder(c *doctorChecks, cfg *config.Config) {
 func moveVaultSteps(cfg *config.Config, where string) string {
 	to := "a folder of your own"
 	if p, err := database.DefaultDBLocation(); err == nil && p != cfg.DBPath.Value {
-		to = tildePath(filepath.Dir(p)) + " (sesh's usual place)"
+		if _, err := os.Lstat(p); err == nil {
+			to = "a folder of your own (not " + tildePath(filepath.Dir(p)) + ": a vault is there already)"
+		} else {
+			to = tildePath(filepath.Dir(p)) + " (sesh's usual place)"
+		}
+	}
+	setting := "db_path in " + tildePath(cfg.Path)
+	if cfg.DBPath.Source == config.FromEnv || cfg.DBPath.Source == config.FromFlag {
+		setting = cfg.DBPath.Origin
 	}
 	base := filepath.Base(cfg.DBPath.Value)
-	return fmt.Sprintf("Move the vault %s: close sesh ui and any other sesh command, move %s (and any %s-wal and %s-shm beside it) to %s, then change db_path in %s to its new place (\"Moving the vault\" in the docs says more).", where, base, base, base, to, tildePath(cfg.Path))
+	return fmt.Sprintf("Move the vault %s: close sesh ui and any other sesh command, move %s (and any %s-wal and %s-shm and touchid.key beside it) to %s, then change %s to its new place (\"Moving the vault\" in the docs says more).", where, base, base, base, to, setting)
 }
 
 // checkSync is the sync row: off; the folder, when it's this vault's and

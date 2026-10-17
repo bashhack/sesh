@@ -202,7 +202,8 @@ func TestRestore_SaveIsTheVaultAsItIs(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	out, _, err := runRestoreOut(t, "", false, "--force", b)
+	// --force after the backup, too.
+	out, _, err := runRestoreOut(t, "", false, b, "--force")
 	if err != nil {
 		t.Fatal(err)
 	}

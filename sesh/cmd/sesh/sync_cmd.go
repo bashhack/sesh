@@ -90,6 +90,9 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 	if err := checkSyncDir(f.Dir(), cfg.DBPath.Value); err != nil {
 		return f, err
 	}
+	if _, err := os.Stat(f.Dir()); errors.Is(err, os.ErrNotExist) {
+		return f, fmt.Errorf("the sync folder %s isn't there now: a drive not connected, or the folder moved", tildePath(f.Dir()))
+	}
 	info, err := f.ReadInfo()
 	if errors.Is(err, syncfolder.ErrNoInfo) {
 		switch lost, state, _ := lostInfo(f.Dir(), cfg.DBPath.Value); { //nolint:errcheck // what can't be told is said as the folder's own error, below
@@ -862,7 +865,10 @@ func syncWaitingIn(store *database.Store, f *syncfolder.Folder) (*syncWaiting, e
 
 // otherKeySaid says n files are sealed with another master password's key.
 func otherKeySaid(n int) string {
-	return nouns(n, "entry's file is", "entries' files are") + " sealed with another master password's key: sync leaves them for the computer that wrote them"
+	if n == 1 {
+		return "1 entry's file is sealed with another master password's key: sync leaves it for the computer that wrote it"
+	}
+	return nouns(n, "entry's file is", "entries' files are") + " sealed with another master password's key: sync leaves them for the computers that wrote them"
 }
 
 // syncLeave is sesh sync leave: the vault stops syncing. Its entries, what

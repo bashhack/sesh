@@ -102,6 +102,9 @@ func Sync(store *database.Store, folder syncfolder.Folder, computer string) (*Su
 	if y.id, err = store.SyncComputerID(); err != nil {
 		return nil, err
 	}
+	if err := folder.Tighten(); err != nil {
+		return nil, err
+	}
 	contents, err := folder.Scan()
 	if err != nil {
 		return nil, err

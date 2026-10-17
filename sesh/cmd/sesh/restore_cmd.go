@@ -30,26 +30,27 @@ func runRestore(app *App, args []string) error {
 	fs.Usage = func() {
 		fmt.Fprintln(app.Stderr, "Usage: sesh restore [--force] [backup]\n  With no backup, list the backups. With one (a file, or a name from the list), replace the vault with it.") //nolint:errcheck // usage text
 	}
-	if err := fs.Parse(args); err != nil {
+	named, err := parseAnywhere(fs, args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if fs.NArg() > 1 {
-		return fmt.Errorf("sesh restore takes one backup, got %q", strings.Join(fs.Args(), " "))
+	if len(named) > 1 {
+		return fmt.Errorf("sesh restore takes one backup, got %q", strings.Join(named, " "))
 	}
 	cfg, err := settings()
 	if err != nil {
 		return err
 	}
-	if fs.NArg() == 0 {
+	if len(named) == 0 {
 		return listBackups(app, cfg)
 	}
 	if !*force && (app.StdinIsTerminal == nil || !app.StdinIsTerminal()) {
 		return errors.New("restoring asks first, and there's no terminal to ask at; add --force to restore without asking")
 	}
-	path, err := findBackup(cfg, fs.Arg(0))
+	path, err := findBackup(cfg, named[0])
 	if err != nil {
 		return err
 	}
@@ -98,7 +99,7 @@ func listBackups(app *App, cfg *config.Config) error {
 func findBackup(cfg *config.Config, arg string) (string, error) {
 	if !strings.ContainsRune(arg, os.PathSeparator) {
 		inFolder := filepath.Join(cfg.BackupFolder(), arg)
-		if _, err := os.Stat(inFolder); err == nil {
+		if _, err := os.Stat(inFolder); err == nil { //nolint:gosec // a backup the user named, only looked at
 			return inFolder, nil
 		}
 	}
@@ -108,7 +109,7 @@ func findBackup(cfg *config.Config, arg string) (string, error) {
 			return "", err
 		}
 	}
-	if _, err := os.Stat(path); err == nil {
+	if _, err := os.Stat(path); err == nil { //nolint:gosec // a backup the user named, only looked at
 		return path, nil
 	}
 	return "", fmt.Errorf("no backup at %s; see the backups with: sesh restore", arg)
@@ -166,7 +167,7 @@ func planRestore(cfg *config.Config, path string) (*restorePlan, error) {
 		name = filepath.Base(path)
 	}
 	made := "an unknown time"
-	if info, err := os.Stat(path); err == nil {
+	if info, err := os.Stat(path); err == nil { //nolint:gosec // a backup the user named, only looked at
 		made = info.ModTime().Local().Format("2006-01-02 15:04")
 	}
 	if all, _, err := backup.ListAny(filepath.Dir(path), vaultPath); err == nil {

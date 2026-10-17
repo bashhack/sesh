@@ -87,10 +87,10 @@ func setConfig(app *App, args []string) error {
 	}
 	it := items[i]
 	switch {
-	case !it.Editable:
-		return fmt.Errorf("%s is where the vault is: move the vault's files first, then change it in %s (\"Moving the vault\" in the docs says how)", key, tildePath(cfg.Path))
 	case it.Source == config.FromEnv || it.Source == config.FromFlag:
 		return fmt.Errorf("%s is set by %s, which wins over the config file: change it there", key, it.Origin)
+	case !it.Editable:
+		return fmt.Errorf("%s is where the vault is: move the vault's files first, then change it in %s (\"Moving the vault\" in the docs says how)", key, tildePath(cfg.Path))
 	case value == it.Raw:
 		_, err := fmt.Fprintf(app.Stdout, "%s is %s already; nothing changed\n", key, it.Value)
 		return err
