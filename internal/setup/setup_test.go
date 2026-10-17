@@ -454,12 +454,18 @@ func TestSetup_SignInProfiles(t *testing.T) {
 			if secret, err := store.Get(vault.AWSKey("work")); err != nil || string(secret) != testSecret {
 				t.Errorf("secret = %q, %v", secret, err)
 			}
-			want := "signs in with " + kind
-			if kind == "a role" {
+			want, codes := "signs in with "+kind, "MFA code 1: "
+			switch kind {
+			case "a role":
 				want = "The AWS CLI asks for its code when it assumes the role"
+			case "SSO":
+				codes = "The code, and the next, for the page: "
 			}
-			if !strings.Contains(out, "MFA code 1: ") || !strings.Contains(out, want) {
-				t.Errorf("output lacks the codes or %q:\n%s", want, out)
+			if !strings.Contains(out, codes) || !strings.Contains(out, want) {
+				t.Errorf("output lacks %q or %q:\n%s", codes, want, out)
+			}
+			if sso := strings.Contains(out, "AWS access portal"); sso != (kind == "SSO") {
+				t.Errorf("access portal steps shown: %v:\n%s", sso, out)
 			}
 		})
 	}
@@ -473,9 +479,13 @@ func TestSetup_KeyFromAnEntry(t *testing.T) {
 	aws := defaultAWS()
 	stub(t, aws, "", false)
 	store := vault.NewMemStore()
+	// Imported with AWS's code settings spelled out, as an otpauth:// link gives them.
 	imported := vault.Key{Kind: vault.KindTOTP, Service: "Amazon Web Services", Username: "alice"}
 	odd := vault.Key{Kind: vault.KindTOTP, Service: "steam"}
-	for k, settings := range map[vault.Key]vault.Settings{imported: {}, odd: {TOTP: totp.Params{Digits: 8}}} {
+	for k, settings := range map[vault.Key]vault.Settings{
+		imported: {TOTP: totp.Params{Issuer: "Amazon Web Services", Algorithm: "SHA1", Digits: 6, Period: 30}},
+		odd:      {TOTP: totp.Params{Digits: 8}},
+	} {
 		if err := store.Save(&vault.Entry{Key: k, Settings: settings}, []byte(testSecret)); err != nil {
 			t.Fatal(err)
 		}
@@ -503,6 +513,29 @@ func TestSetup_KeyFromAnEntry(t *testing.T) {
 		t.Errorf("entry = %+v, %v", e, err)
 	}
 	if secret, err := store.Get(vault.AWSKey("")); err != nil || string(secret) != testSecret {
+		t.Errorf("secret = %q, %v", secret, err)
+	}
+}
+
+// For a profile that signs in with aws login, e takes an entry's key with
+// no AWS console step and no device: just the key is kept.
+func TestSetup_SignInProfileKeyFromAnEntry(t *testing.T) {
+	aws := defaultAWS()
+	aws.kind = "aws login"
+	stub(t, aws, "", false)
+	store := vault.NewMemStore()
+	imported := vault.Key{Kind: vault.KindTOTP, Service: "Amazon Web Services", Username: "alice"}
+	if err := store.Save(&vault.Entry{Key: imported}, []byte(testSecret)); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(store, "work", "e\n"+imported.String()+"\n\n\n", vault.Filing{})
+	if err != nil {
+		t.Fatalf("Setup(): %v\n%s", err, out)
+	}
+	if strings.Contains(out, "MFA code 1") || len(aws.profiles) != 0 {
+		t.Errorf("console step given, or AWS asked about %q:\n%s", aws.profiles, out)
+	}
+	if secret, err := store.Get(vault.AWSKey("work")); err != nil || string(secret) != testSecret {
 		t.Errorf("secret = %q, %v", secret, err)
 	}
 }

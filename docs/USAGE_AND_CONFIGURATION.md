@@ -865,7 +865,7 @@ AWS's newer ways in, [`aws login`](https://docs.aws.amazon.com/signin/latest/use
 
 ```bash
 $ sesh aws --profile work
-🔐 Profile work's session has ended: signing in with aws login
+🔐 Profile work's session doesn't work (… Please reauthenticate with 'aws login'.): signing in with aws login
 🔑 The MFA code is on the clipboard, kept current while you sign in: paste it when AWS asks
 ...                                   (the AWS CLI opens the browser; sign in, paste the code)
 ✅ Profile work signs in as arn:aws:iam::123456789012:user/alice, through aws login
@@ -874,8 +874,9 @@ Starting secure shell with aws credentials
 ```
 
 - **When the session still works,** there's no sign-in, and the vault isn't opened.
-- **When it has ended,** sesh runs `aws login` (or `aws sso login`) for the profile. If sesh has the profile's MFA key, its code is on the clipboard for the sign-in page, a fresh one each time it changes, until the sign-in is done. Where nothing can be copied (over SSH), sesh prints the code instead. Over SSH, the sign-in is `aws login --remote` (or `aws sso login --no-browser`), which shows a link to open on another device.
-- **The shell** has `AWS_PROFILE` set to the profile, and no credentials in variables: the AWS CLI and SDKs read the profile and keep its credentials fresh, so the shell works as long as the session does. `sesh_status` says so. With `--no-subshell`, sesh prints the lines that do the same in your own shell (`unset` of any credential variables, and `export AWS_PROFILE=…`).
+- **When it doesn't** (sesh says why, in AWS's words), sesh runs `aws login` (or `aws sso login`) for the profile; what it prints goes to the terminal, not into what `--no-subshell` gives `eval`. If sesh has the profile's MFA key, its code is on the clipboard for the sign-in page, a fresh one each time it runs out, until the sign-in is done, as long as the clipboard still holds sesh's code: once you copy something else (your password, say), it's left there. Each code stays on the clipboard at least until it runs out, whatever `clipboard_timeout` is. The vault is unlocked only when it has the profile's key; without one, nothing asks for the master password. Over SSH, the clipboard would be the remote computer's, so sesh prints the code instead, and the sign-in is `aws login --remote` (or `aws sso login --no-browser`), which shows a link to open on another device.
+- **The shell** has `AWS_PROFILE` set to the profile, and no credentials in variables, nor `AWS_DEFAULT_PROFILE` (which Python's AWS SDK reads first): the AWS CLI and SDKs read the profile and keep its credentials fresh, so the shell works as long as the session does. `sesh_status` says so. With `--no-subshell`, sesh prints the lines that do the same in your own shell (`unset` of the credential variables and `AWS_DEFAULT_PROFILE`, and `export AWS_PROFILE=…`).
+- **Inside a shell `sesh aws` opened,** run it again when the session has ended: it signs in again, and the shell you're in goes on with the renewed session.
 - **The MFA key** is stored with `sesh aws setup --profile work`, as for any profile, but setup only keeps the key: it doesn't ask AWS who the profile is or for a device, since the browser sign-in asks for the code itself. Its `e` choice takes the key from a TOTP entry sesh already has, such as one imported from your phone's authenticator app (`sesh import`), for a device AWS already has.
 - **A profile that assumes a role** (`role_arn`) gets its credentials from the AWS CLI, which asks for the MFA code itself: `sesh aws --profile … --clip` copies the code for it.
 

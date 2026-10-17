@@ -257,7 +257,7 @@ func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
 		fmt.Printf("%s signs in with %s: sesh keeps the MFA key you sign in with, and gives its code when the sign-in asks.\n", capitalized(profileName(profile)), kind)
 	}
 
-	secret, fromEntry, err := h.captureSecret(k)
+	secret, fromEntry, err := h.captureSecret(k, kind)
 	if err != nil {
 		return err
 	}
@@ -277,7 +277,7 @@ func (h *AWSSetupHandler) Setup(profile string, filing vault.Filing) error {
 
 	inHistory := existing != nil && keeps
 	if !fromEntry {
-		if err := h.setupMFAConsole(secret); err != nil {
+		if err := h.setupMFAConsole(secret, kind); err != nil {
 			if kind != "" {
 				return fmt.Errorf("%w\nThe MFA key is saved, as %s: finish adding the device in the AWS console", err, k)
 			}
@@ -338,15 +338,23 @@ func profileFlag(profile string) string {
 // from a phone's authenticator app); fromEntry says it's the second, which
 // needs no AWS console step. k is the entry being set up. The caller
 // zeroes the key.
-func (h *AWSSetupHandler) captureSecret(k vault.Key) (secret []byte, fromEntry bool, err error) {
-	fmt.Println(`
+func (h *AWSSetupHandler) captureSecret(k vault.Key, kind string) (secret []byte, fromEntry bool, err error) {
+	if kind == awsCLI.KindSSO {
+		fmt.Println(`
+To add sesh as a new MFA device, register an authenticator app where your
+sign-in's MFA devices are managed (for IAM Identity Center, the
+AWS access portal's MFA devices page), and leave its setup page open:
+sesh reads its key, then gives you the codes it asks for.`)
+	} else {
+		fmt.Println(`
 To add sesh as a new MFA device, in the AWS console (https://console.aws.amazon.com):
   1. Go to IAM, then Users, your user, and Security credentials.
   2. Under "Multi-factor authentication (MFA)", choose "Assign MFA device".
   3. Name it, choose "Authenticator app", and choose Next.
   4. Leave that page open: sesh reads its key, then gives you the two
-     codes it asks for. Don't choose "Add MFA" yet.
-Or use the key of a device AWS already has, that sesh has as a TOTP entry
+     codes it asks for. Don't choose "Add MFA" yet.`)
+	}
+	fmt.Println(`Or use the key of a device AWS already has, that sesh has as a TOTP entry
 (imported from your phone's authenticator app, say).`)
 	choices := "1-2"
 	if screenCapture {
@@ -444,10 +452,16 @@ func (h *AWSSetupHandler) entryKey(k vault.Key) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", src, err)
 	}
-	if !e.Settings.TOTP.IsDefault() {
+	if !awsCodes(e.Settings.TOTP) {
 		return nil, fmt.Errorf("%s makes codes AWS doesn't use (AWS's are 6 digits every 30 seconds, with SHA-1)", src)
 	}
 	return h.store.Get(src)
+}
+
+// awsCodes says whether p makes AWS's codes: SHA-1, 6 digits, every 30
+// seconds, whether those are given or left to their defaults.
+func awsCodes(p totp.Params) bool {
+	return (p.Algorithm == "" || strings.EqualFold(p.Algorithm, "SHA1")) && (p.Digits == 0 || p.Digits == 6) && (p.Period == 0 || p.Period == 30)
 }
 
 // capitalized is s with its first letter a capital.
@@ -479,18 +493,25 @@ func expandHome(path string) (string, error) {
 // setupMFAConsole gives the two codes the AWS console asks for, and waits
 // until AWS has the device; n makes new codes, for when AWS says the first
 // ones are wrong (they were made too long before).
-func (h *AWSSetupHandler) setupMFAConsole(secret []byte) error {
+func (h *AWSSetupHandler) setupMFAConsole(secret []byte, kind string) error {
 	for {
 		first, second, err := totp.GenerateConsecutiveCodesForTimeBytes(secret, timeNow())
 		if err != nil {
 			return fmt.Errorf("failed to make the codes: %w", err)
 		}
-		fmt.Printf(`
+		if kind == awsCLI.KindSSO {
+			fmt.Printf(`
+The code, and the next, for the page: %s, then %s.
+Enter what it asks for, and finish adding the device there.
+Then press Enter here (or n, and Enter, for new codes if it says they're wrong): `, first, second)
+		} else {
+			fmt.Printf(`
 The two codes AWS asks for:
   MFA code 1: %s
   MFA code 2: %s
 Enter them, choose "Add MFA", and wait for AWS to say the device was added.
 Then press Enter here (or n, and Enter, for new codes if AWS says these are wrong): `, first, second)
+		}
 		answer, err := readLine(h.reader)
 		if err != nil {
 			return err

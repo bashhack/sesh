@@ -257,7 +257,7 @@ While we cannot achieve perfect security, our approach significantly reduces ris
 
 ## Profiles that sign in with `aws login` or SSO
 
-For these, sesh never handles AWS credentials: the AWS CLI keeps them, in its own cache, and renews them. sesh's part is the MFA code: while `aws login` (or `aws sso login`) runs, the code is on the clipboard, replaced by the next one as each runs out, and cleared as any copy is (`clipboard_timeout` after the last); the vault is opened only for that, and closed before the sign-in ends. The shell gets the profile's name, not credentials, so a program run in it reads the credentials the way the AWS CLI does, from its cache. The MFA key read for the code is recorded in the audit log.
+For these, sesh never handles AWS credentials: the AWS CLI keeps them, in its own cache, and renews them. sesh's part is the MFA code: while `aws login` (or `aws sso login`) runs, the code is on the clipboard, replaced by the next one as each runs out (only while the clipboard still holds sesh's code), and cleared as any copy is, no sooner than the code runs out. Over SSH it's printed instead, as the clipboard would be the remote computer's. The vault is unlocked only for that, when it holds the profile's key (whether it does is read without unlocking), and closed before the sign-in ends. `SESH_MASTER_PASSWORD` isn't passed to the AWS CLI, or the browser it opens. The shell gets the profile's name, not credentials, so a program run in it reads the credentials the way the AWS CLI does, from its cache. The MFA key read for the code is recorded in the audit log.
 
 ## Subshell Security
 

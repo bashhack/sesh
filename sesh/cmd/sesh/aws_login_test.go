@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,13 +61,15 @@ func loginVault(t *testing.T) {
 
 var errSessionEnded = errors.New("unable to load a existing login session, Please reauthenticate with 'aws login'")
 
-// A profile whose session works opens with no sign-in and no vault: its
-// shell gets the profile, and no credentials in variables.
+// A profile whose session works opens with no sign-in and no vault: with
+// no master password to be had (none set, no terminal), nothing asks for
+// one. Its exports clear credentials and AWS_DEFAULT_PROFILE.
 func TestAWSLogin_SessionWorks(t *testing.T) {
 	loginVault(t)
+	t.Setenv("SESH_MASTER_PASSWORD", "")
 	f := &fakeLogin{kind: "aws login", sessions: []error{nil}}
 	stubLogin(t, f)
-	app, copied := cliApp("", true)
+	app, copied := cliApp("", false)
 	out, errOut, err := runCLI(app, runAWS, "--profile", "work", "--no-subshell")
 	if err != nil {
 		t.Fatalf("sesh aws: %v\n%s", err, errOut)
@@ -74,7 +77,7 @@ func TestAWSLogin_SessionWorks(t *testing.T) {
 	if len(f.logins) != 0 || len(*copied) != 0 {
 		t.Errorf("signed in %q, copied %q", f.logins, *copied)
 	}
-	if want := "unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN\nexport AWS_PROFILE=work\n"; out != want {
+	if want := "unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN AWS_DEFAULT_PROFILE\nexport AWS_PROFILE=work\n"; out != want {
 		t.Errorf("exports:\n%s\nwant\n%s", out, want)
 	}
 	if !strings.Contains(errOut, "signs in as arn:aws:iam::123456789012:user/alice, through aws login") {
@@ -83,8 +86,9 @@ func TestAWSLogin_SessionWorks(t *testing.T) {
 }
 
 // An ended session signs in again, with aws login or aws sso login (their
-// no-browser forms over SSH), with the profile's MFA code on the
-// clipboard while it runs.
+// no-browser forms over SSH), saying why, with the profile's MFA code on
+// the clipboard while it runs; over SSH, where the clipboard is the remote
+// computer's, the code is printed instead.
 func TestAWSLogin_SignsIn(t *testing.T) {
 	for _, tc := range []struct {
 		kind string
@@ -113,27 +117,77 @@ func TestAWSLogin_SignsIn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(f.logins) != 1 || !slices.Equal(f.logins[0], tc.want) || len(*copied) == 0 || (*copied)[0] != code {
-			t.Errorf("%s (ssh %v): signed in with %q, copied %q; want %q and %s", tc.kind, tc.ssh, f.logins, *copied, tc.want, code)
+		if len(f.logins) != 1 || !slices.Equal(f.logins[0], tc.want) || !strings.Contains(errOut, "doesn't work (unable to load a existing login session") {
+			t.Errorf("%s (ssh %v): signed in with %q, want %q\n%s", tc.kind, tc.ssh, f.logins, tc.want, errOut)
+		}
+		switch {
+		case tc.ssh && (len(*copied) != 0 || !strings.Contains(errOut, "MFA code for the sign-in: "+code)):
+			t.Errorf("%s over SSH: copied %q\n%s", tc.kind, *copied, errOut)
+		case !tc.ssh && (len(*copied) == 0 || (*copied)[0] != code):
+			t.Errorf("%s: copied %q, want %s", tc.kind, *copied, code)
 		}
 	}
 }
 
-// While the sign-in waits, the clipboard gets each new code.
+// While the sign-in waits, the clipboard gets each new code, as long as it
+// still holds sesh's: once something else is copied, it's left alone.
 func TestAWSLogin_CodeKeptCurrent(t *testing.T) {
-	loginVault(t)
-	app, copied := cliApp("", true)
-	now := time.Date(2026, 10, 16, 12, 0, 29, 0, time.UTC) // a second left
-	app.TimeNow = func() time.Time { return now }
-	f := &fakeLogin{kind: "aws login", sessions: []error{errSessionEnded, nil}, during: func() {
-		time.Sleep(1500 * time.Millisecond)
-	}}
-	stubLogin(t, f)
-	if _, errOut, err := runCLI(app, runAWS, "--profile", "work", "--no-subshell"); err != nil {
-		t.Fatalf("sesh aws: %v\n%s", err, errOut)
+	for _, userCopies := range []bool{false, true} {
+		loginVault(t)
+		app, copied := cliApp("", true)
+		var mu sync.Mutex
+		now := time.Date(2026, 10, 16, 12, 0, 29, 0, time.UTC) // a second left
+		app.TimeNow = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+		held := ""
+		app.ClipboardCopyFor = func(s string, _ time.Duration) error {
+			mu.Lock()
+			defer mu.Unlock()
+			*copied, held = append(*copied, s), s
+			now = now.Add(30 * time.Second) // the next check is a window on
+			return nil
+		}
+		app.ClipboardRead = func() (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if userCopies {
+				return "hunter2", nil
+			}
+			return held, nil
+		}
+		f := &fakeLogin{kind: "aws login", sessions: []error{errSessionEnded, nil}, during: func() {
+			time.Sleep(1500 * time.Millisecond)
+		}}
+		stubLogin(t, f)
+		if _, errOut, err := runCLI(app, runAWS, "--profile", "work", "--no-subshell"); err != nil {
+			t.Fatalf("sesh aws: %v\n%s", err, errOut)
+		}
+		mu.Lock()
+		got := slices.Clone(*copied)
+		mu.Unlock()
+		switch {
+		case userCopies && len(got) != 1:
+			t.Errorf("copied %q over what the user copied", got)
+		case !userCopies && (len(got) < 2 || got[0] == got[1]):
+			t.Errorf("copied %q; want a new code when the first ran out", got)
+		}
 	}
-	if len(*copied) < 2 {
-		t.Errorf("copied %d codes; want a fresh one when the first ran out", len(*copied))
+}
+
+// Inside a shell sesh aws opened, an ended session is signed in again,
+// and no other shell opens; with the session working, it's refused.
+func TestAWSLogin_Nested(t *testing.T) {
+	loginVault(t)
+	t.Setenv("SESH_ACTIVE", "1")
+	f := &fakeLogin{kind: "aws login", sessions: []error{errSessionEnded, nil}}
+	stubLogin(t, f)
+	app, _ := cliApp("", true)
+	if _, errOut, err := runCLI(app, runAWS, "--profile", "work"); err != nil || len(f.logins) != 1 || !strings.Contains(errOut, "Signed in again") {
+		t.Errorf("ended session: %v, logins %q\n%s", err, f.logins, errOut)
+	}
+	stubLogin(t, &fakeLogin{kind: "aws login", sessions: []error{nil}})
+	app, _ = cliApp("", true)
+	if _, _, err := runCLI(app, runAWS, "--profile", "work"); err == nil || !strings.Contains(err.Error(), "already in a sesh environment") {
+		t.Errorf("working session: %v", err)
 	}
 }
 
@@ -157,12 +211,24 @@ func TestAWSLogin_Edges(t *testing.T) {
 		t.Errorf("copy fails: %v, logins %q\n%s", err, f.logins, errOut)
 	}
 
+	// No MFA key for the profile: no master password is asked for (none set,
+	// no terminal), and the sign-in runs with no code.
+	t.Setenv("SESH_MASTER_PASSWORD", "")
 	f = &fakeLogin{kind: "aws login", sessions: []error{errSessionEnded, nil}}
 	stubLogin(t, f)
-	app, copied = cliApp("", true)
-	if _, errOut, err := runCLI(app, runAWS, "--profile", "other", "--no-subshell"); err != nil || len(f.logins) != 1 || len(*copied) != 0 {
+	app, copied = cliApp("", false)
+	if _, errOut, err := runCLI(app, runAWS, "--profile", "other", "--no-subshell"); err != nil || len(f.logins) != 1 || len(*copied) != 0 || strings.Contains(errOut, "warning") {
 		t.Errorf("no MFA key: %v, logins %q, copied %q\n%s", err, f.logins, *copied, errOut)
 	}
+	// An MFA key the vault can't be unlocked for: said, and the sign-in
+	// still runs.
+	f = &fakeLogin{kind: "aws login", sessions: []error{errSessionEnded, nil}}
+	stubLogin(t, f)
+	app, _ = cliApp("", false)
+	if _, errOut, err := runCLI(app, runAWS, "--profile", "work", "--no-subshell"); err != nil || len(f.logins) != 1 || !strings.Contains(errOut, "warning: the MFA code can't be offered") {
+		t.Errorf("locked vault: %v, logins %q\n%s", err, f.logins, errOut)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "login-password-1234")
 
 	f = &fakeLogin{kind: "aws login", sessions: []error{errSessionEnded}, loginErr: errors.New("exit status 255")}
 	stubLogin(t, f)
@@ -187,6 +253,7 @@ func TestAWSLogin_RoleProfile(t *testing.T) {
 // AWS_DEFAULT_PROFILE naming another, and no credentials in variables.
 func TestAWSLogin_ShellConfig(t *testing.T) {
 	for profile, wantVars := range map[string]map[string]string{"": {}, "work": {"AWS_PROFILE": "work"}} {
+		// AWS_DEFAULT_PROFILE goes either way: boto3 reads it before AWS_PROFILE.
 		p := &awsLoginProvider{profile: profile}
 		creds, err := p.GetCredentials()
 		if err != nil {
@@ -196,7 +263,7 @@ func TestAWSLogin_ShellConfig(t *testing.T) {
 		if len(cfg.Variables) != len(wantVars) || cfg.Variables["AWS_PROFILE"] != wantVars["AWS_PROFILE"] {
 			t.Errorf("%q: variables %v", profile, cfg.Variables)
 		}
-		if hasProfileVars := slices.Contains(cfg.Unset, "AWS_PROFILE") && slices.Contains(cfg.Unset, "AWS_DEFAULT_PROFILE"); hasProfileVars != (profile == "") || !slices.Contains(cfg.Unset, "AWS_SESSION_TOKEN") {
+		if slices.Contains(cfg.Unset, "AWS_PROFILE") != (profile == "") || !slices.Contains(cfg.Unset, "AWS_DEFAULT_PROFILE") || !slices.Contains(cfg.Unset, "AWS_SESSION_TOKEN") {
 			t.Errorf("%q: unset %v", profile, cfg.Unset)
 		}
 	}

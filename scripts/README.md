@@ -145,9 +145,13 @@ sesh aws --no-subshell
 # A profile the mock doesn't know
 sesh aws setup --profile nosuch
 
-# A profile that signs in with aws login: its session has ended until
-# "aws login" runs (the mock signs in at once, keeping the session in
-# MOCK_AWS_STATE, or the temp folder), and "aws logout" ends it
+# A profile that signs in with aws login: sesh knows it by its
+# login_session in the AWS config file (AWS_CONFIG_FILE, or ~/.aws/config,
+# so use a scratch one); the mock's session has ended until "aws login"
+# runs (it signs in at once, keeping the session in MOCK_AWS_STATE, or the
+# temp folder), and "aws logout" ends it
+export AWS_CONFIG_FILE=/tmp/sesh-dev/aws-config
+printf '[profile work]\nlogin_session = arn:aws:iam::123456789012:user/mockuser\n' > "$AWS_CONFIG_FILE"
 export MOCK_AWS_LOGIN_PROFILES=work
 sesh aws setup --profile work      # keeps only the key
 sesh aws --profile work            # signs in, with the code, then the shell

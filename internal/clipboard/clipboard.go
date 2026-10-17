@@ -97,6 +97,16 @@ func Copy(text string) error {
 	return copyWith(tool, text)
 }
 
+// Read returns what the clipboard holds.
+func Read() (string, error) {
+	tool, err := Find()
+	if err != nil {
+		return "", err
+	}
+	out, err := execCommand("sh", "-c", tool.paste).Output() //nolint:gosec // the tool's own fixed paste command
+	return string(out), err
+}
+
 // CopyWithAutoClear copies text to the clipboard and spawns a detached
 // background process that clears it after the given timeout — but only
 // if the clipboard still contains the original value. This is safe even

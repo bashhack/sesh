@@ -13,11 +13,13 @@ import (
 
 // CLIEnv is the environment the AWS CLI runs in for profile: this
 // process's, without credentials in variables (inside sesh aws's shell, or
-// left from an export), which the CLI would use over the profile's. For the
+// left from an export), which the CLI would use over the profile's, and
+// without SESH_MASTER_PASSWORD, which neither it nor a browser it opens
+// needs. For the
 // default profile ("") AWS_PROFILE and AWS_DEFAULT_PROFILE go too, so the
 // CLI uses the profile named default.
 func CLIEnv(profile string) []string {
-	drop := []string{"AWS_ACCESS_KEY_ID=", "AWS_SECRET_ACCESS_KEY=", "AWS_SESSION_TOKEN=", "AWS_SECURITY_TOKEN="}
+	drop := []string{"AWS_ACCESS_KEY_ID=", "AWS_SECRET_ACCESS_KEY=", "AWS_SESSION_TOKEN=", "AWS_SECURITY_TOKEN=", "SESH_MASTER_PASSWORD="}
 	if profile == "" {
 		drop = append(drop, "AWS_PROFILE=", "AWS_DEFAULT_PROFILE=")
 	}
@@ -101,22 +103,6 @@ func IsVirtualMFADevice(serial string) bool {
 // asked with temporary credentials (aws login, SSO, a role), which it
 // gives no MFA session to.
 const SessionCredentialsMessage = "Cannot call GetSessionToken with session credentials"
-
-// ProfileKind says how profile signs in, when it isn't with an IAM user's
-// access keys: "aws login" (a login_session), "SSO" (an sso_session or
-// sso_start_url), or "a role" (a role_arn); "" otherwise. Those give
-// temporary credentials, which AWS gives no MFA session to.
-func ProfileKind(profile string) string {
-	for _, k := range []struct{ setting, kind string }{
-		{"login_session", KindLogin}, {"sso_session", KindSSO}, {"sso_start_url", KindSSO}, {"role_arn", KindRole},
-	} {
-		// configure get fails, saying nothing, for a setting that isn't there.
-		if out, err := RunCLI(profile, "configure", "get", k.setting); err == nil && strings.TrimSpace(string(out)) != "" {
-			return k.kind
-		}
-	}
-	return ""
-}
 
 // AccountOf is the account number in an IAM or STS ARN, or "".
 func AccountOf(arn string) string {

@@ -3,10 +3,12 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/bashhack/sesh/internal/aws"
+	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/provider"
 	"github.com/bashhack/sesh/internal/secure"
 	"github.com/bashhack/sesh/internal/shell"
@@ -30,37 +32,42 @@ var credentialVars = []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS
 // SSO. Its credentials last minutes at a time, and the AWS CLI renews
 // them from the session (for up to 12 hours with aws login), so the shell
 // gets the profile, not the credentials. When the session has ended, sesh
-// signs in again with the AWS CLI, keeping the MFA code it holds for the
-// profile on the clipboard (or printing it) while the browser asks.
+// signs in again with the AWS CLI, offering the MFA code it holds for the
+// profile while the browser asks. Inside a shell sesh aws opened, it signs
+// in if it must, and opens no other.
 func runAWSLogin(app *App, profile, kind string, noSubshell bool) error {
 	if kind == aws.KindRole {
 		return fmt.Errorf("%s assumes a role (role_arn): the AWS CLI asks for its MFA code itself; sesh aws%s --clip copies the code", awsProfileName(profile), awsProfileFlag(profile))
 	}
+	nested := !noSubshell && os.Getenv("SESH_ACTIVE") == "1"
 	identity, err := awsCallerIdentity(profile)
 	if err != nil {
-		if identity, err = signIn(app, profile, kind); err != nil {
+		if identity, err = signIn(app, profile, kind, err); err != nil {
 			return err
 		}
+	} else if nested {
+		return errors.New("already in a sesh environment, and the session still works: nested sessions are not supported")
 	}
-	fmt.Fprintf(app.Stderr, "✅ %s signs in as %s, through %s\n", strings.ToUpper(awsProfileName(profile)[:1])+awsProfileName(profile)[1:], identity, kind) //nolint:errcheck // a status line
+	fmt.Fprintf(app.Stderr, "✅ %s signs in as %s, through %s\n", capitalizedName(profile), identity, kind) //nolint:errcheck // a status line
 	p := &awsLoginProvider{profile: profile}
-	if noSubshell {
+	switch {
+	case noSubshell:
 		return p.printExports(app)
+	case nested:
+		_, err := fmt.Fprintln(app.Stderr, "Signed in again: this shell, sesh's already, goes on with the renewed session.")
+		return err
 	}
 	return app.LaunchSubshell(p, nil)
 }
 
-// signIn runs aws login (or aws sso login) for profile, with the MFA code
-// sesh holds for it, if any, on the clipboard while it runs, and returns
-// who the profile then signs in as.
-func signIn(app *App, profile, kind string) (string, error) {
+// signIn runs aws login (or aws sso login) for profile, offering the MFA
+// code sesh holds for it, if any, while it runs, and returns who the
+// profile then signs in as. why is how the session was found not to work.
+func signIn(app *App, profile, kind string, why error) (string, error) {
 	args, _ := aws.LoginArgs(kind, overSSH())
-	fmt.Fprintf(app.Stderr, "🔐 %s's session has ended: signing in with aws %s\n", strings.ToUpper(awsProfileName(profile)[:1])+awsProfileName(profile)[1:], strings.Join(args, " ")) //nolint:errcheck // a status line
-	stop, err := offerMFACode(app, profile)
-	if err != nil {
-		return "", err
-	}
-	err = awsRunLogin(profile, args...)
+	fmt.Fprintf(app.Stderr, "🔐 %s's session doesn't work (%s): signing in with aws %s\n", capitalizedName(profile), firstLine(why), strings.Join(args, " ")) //nolint:errcheck // a status line
+	stop := offerMFACode(app, profile)
+	err := awsRunLogin(profile, args...)
 	stop()
 	if err != nil {
 		return "", fmt.Errorf("aws %s didn't sign %s in: %w", strings.Join(args, " "), awsProfileName(profile), err)
@@ -72,39 +79,37 @@ func signIn(app *App, profile, kind string) (string, error) {
 	return identity, nil
 }
 
-// offerMFACode puts the MFA code sesh holds for profile on the clipboard,
-// and a fresh one each time it changes, until the returned stop is called;
-// where nothing can be copied (over SSH), it prints the code. Without an
-// MFA key for the profile, it does nothing: the browser asks for the code
-// as it would anyway. The vault is opened only for this, and closed before
-// it returns.
-func offerMFACode(app *App, profile string) (stop func(), err error) {
+// firstLine is err's message up to its first line break: the reason, short.
+func firstLine(err error) string {
+	msg, _, _ := strings.Cut(strings.TrimSpace(err.Error()), "\n")
+	return msg
+}
+
+// capitalizedName is awsProfileName, starting with a capital.
+func capitalizedName(profile string) string {
+	n := awsProfileName(profile)
+	return strings.ToUpper(n[:1]) + n[1:]
+}
+
+// offerMFACode offers the MFA code sesh holds for profile until the
+// returned stop is called: on the clipboard, with each new code put there
+// as the last runs out, as long as the clipboard still holds sesh's (so a
+// password copied meanwhile isn't replaced); printed instead where it
+// can't be copied (over SSH, the clipboard is the remote computer's). The
+// vault is unlocked only when it has an MFA key for the profile, and
+// closed before this returns; anything that keeps the code from being
+// offered is said, and the sign-in goes ahead without it.
+func offerMFACode(app *App, profile string) (stop func()) {
 	stop = func() {}
-	cfg, err := settings()
-	if err != nil {
-		return stop, err
-	}
-	if vaultMissing(cfg.DBPath.Value) {
-		return stop, nil // no vault, so no MFA key to offer
-	}
-	store, err := openSQLiteStoreWith(cfg)
-	if err != nil {
-		return stop, err
-	}
-	defer closeAuditStore(store)
 	k := vault.AWSKey(profile)
-	e, err := store.Lookup(k)
-	if errors.Is(err, vault.ErrNotFound) {
-		return stop, nil
-	}
+	secret, params, err := readMFAKey(k)
 	if err != nil {
-		return stop, err
+		fmt.Fprintf(app.Stderr, "warning: the MFA code can't be offered: %v\n", err) //nolint:errcheck // a warning
+		return stop
 	}
-	secret, err := store.Get(k)
-	if err != nil {
-		return stop, err
+	if secret == nil {
+		return stop // no MFA key for the profile: the browser asks as usual
 	}
-	params := e.Settings.TOTP
 	clock := app.TimeNow
 	if clock == nil {
 		clock = time.Now
@@ -113,45 +118,96 @@ func offerMFACode(app *App, profile string) (stop func(), err error) {
 		c, err := totp.CodeAt(secret, params, at)
 		return c, totp.SecondsLeft(params, at), err
 	}
-	now := clock()
-	first, left, err := code(now)
+	first, left, err := code(clock())
 	if err != nil {
 		secure.SecureZeroBytes(secret)
-		return stop, err
+		fmt.Fprintf(app.Stderr, "warning: the MFA code can't be offered: %v\n", err) //nolint:errcheck // a warning
+		return stop
 	}
-	// Where nothing can be copied (over SSH, or the copy fails), the code
-	// is printed instead: the sign-in goes ahead either way.
-	canCopy := app.ClipboardCheck == nil || app.ClipboardCheck() == nil
+	printCode := func(c string, left int) {
+		fmt.Fprintf(app.Stderr, "🔑 MFA code for the sign-in: %s (for %ds more; sesh code %s gives the next)\n", c, left, shell.Quote(k.String())) //nolint:errcheck // a status line
+	}
+	copyFor := app.ClipboardCopyFor
+	if copyFor == nil {
+		copyFor = func(text string, _ time.Duration) error { return app.ClipboardCopy(text) }
+	}
+	canCopy := !overSSH() && (app.ClipboardCheck == nil || app.ClipboardCheck() == nil)
 	if canCopy {
-		if err := app.ClipboardCopy(first); err != nil {
+		if err := copyFor(first, time.Duration(left)*time.Second); err != nil {
 			fmt.Fprintf(app.Stderr, "warning: can't copy the MFA code: %v\n", err) //nolint:errcheck // a warning
 			canCopy = false
 		}
 	}
 	if !canCopy {
 		secure.SecureZeroBytes(secret)
-		fmt.Fprintf(app.Stderr, "🔑 MFA code for the sign-in: %s (for %ds more; sesh code %s gives the next)\n", first, left, shell.Quote(k.String())) //nolint:errcheck // a status line
-		return stop, nil
+		printCode(first, left)
+		return stop
 	}
-	fmt.Fprintf(app.Stderr, "🔑 The MFA code is on the clipboard, kept current while you sign in: paste it when AWS asks\n") //nolint:errcheck // a status line
+	fmt.Fprintln(app.Stderr, "🔑 The MFA code is on the clipboard, kept current while you sign in: paste it when AWS asks") //nolint:errcheck // a status line
 	done := make(chan struct{})
 	finished := make(chan struct{})
-	go func() {
+	go func(last string, wait int) {
 		defer close(finished)
 		defer secure.SecureZeroBytes(secret)
 		for {
 			select {
 			case <-done:
 				return
-			case <-time.After(time.Duration(left)*time.Second + 100*time.Millisecond):
+			case <-time.After(time.Duration(wait)*time.Second + 100*time.Millisecond):
 			}
-			var c string
-			if c, left, err = code(clock()); err != nil || app.ClipboardCopy(c) != nil {
+			if app.ClipboardRead != nil {
+				if held, err := app.ClipboardRead(); err != nil || strings.TrimSpace(held) != last {
+					return // something else is on the clipboard now: it's left there
+				}
+			}
+			c, l, err := code(clock())
+			if err != nil {
 				return
 			}
+			if err := copyFor(c, time.Duration(l)*time.Second); err != nil {
+				printCode(c, l)
+				return
+			}
+			last, wait = c, l
 		}
-	}()
-	return func() { close(done); <-finished }, nil
+	}(first, left)
+	return func() { close(done); <-finished }
+}
+
+// readMFAKey reads the MFA key the vault holds at k, and its code settings;
+// nil, with no error, when there's no vault or no such entry. Whether
+// there's one is looked up without unlocking the vault (names aren't
+// encrypted), so a profile without one never asks for the master password.
+func readMFAKey(k vault.Key) ([]byte, totp.Params, error) {
+	cfg, err := settings()
+	if err != nil {
+		return nil, totp.Params{}, err
+	}
+	if vaultMissing(cfg.DBPath.Value) {
+		return nil, totp.Params{}, nil
+	}
+	meta, err := database.Open(cfg.DBPath.Value, nil)
+	if err != nil {
+		return nil, totp.Params{}, err
+	}
+	e, err := meta.Lookup(k)
+	_ = meta.Close() //nolint:errcheck // a read; the unlocked store below is what's used
+	if errors.Is(err, vault.ErrNotFound) {
+		return nil, totp.Params{}, nil
+	}
+	if err != nil {
+		return nil, totp.Params{}, err
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		return nil, totp.Params{}, err
+	}
+	defer closeAuditStore(store)
+	secret, err := store.Get(k)
+	if err != nil {
+		return nil, totp.Params{}, err
+	}
+	return secret, e.Settings.TOTP, nil
 }
 
 // awsLoginProvider is the shell sesh aws opens for a profile that signs
@@ -183,12 +239,14 @@ func (p *awsLoginProvider) GetCredentials() (provider.Credentials, error) {
 }
 
 // NewSubshellConfig is the shell, with the profile, without credentials in
-// variables (they'd be used over the profile's), and, for the default
-// profile, without AWS_PROFILE or AWS_DEFAULT_PROFILE naming another.
+// variables (they'd be used over the profile's) or AWS_DEFAULT_PROFILE,
+// and, for the default profile, without AWS_PROFILE naming another.
 func (p *awsLoginProvider) NewSubshellConfig(creds *provider.Credentials) any {
-	unset := credentialVars
+	// AWS_DEFAULT_PROFILE goes for a named profile too: Python's AWS SDK
+	// (boto3) reads it before AWS_PROFILE.
+	unset := append(append([]string{}, credentialVars...), "AWS_DEFAULT_PROFILE")
 	if p.profile == "" {
-		unset = append(append([]string{}, credentialVars...), "AWS_PROFILE", "AWS_DEFAULT_PROFILE")
+		unset = append(unset, "AWS_PROFILE")
 	}
 	return subshell.Config{
 		ServiceName:     "aws",
@@ -201,9 +259,9 @@ func (p *awsLoginProvider) NewSubshellConfig(creds *provider.Credentials) any {
 // printExports is sesh aws --no-subshell for the profile: the lines that
 // make a shell use it, to eval.
 func (p *awsLoginProvider) printExports(app *App) error {
-	lines := "unset " + strings.Join(credentialVars, " ") + "\n"
+	lines := "unset " + strings.Join(credentialVars, " ") + " AWS_DEFAULT_PROFILE\n"
 	if p.profile == "" {
-		lines += "unset AWS_PROFILE AWS_DEFAULT_PROFILE\n"
+		lines += "unset AWS_PROFILE\n"
 	} else {
 		lines += "export AWS_PROFILE=" + shell.Quote(p.profile) + "\n"
 	}
