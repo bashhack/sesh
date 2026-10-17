@@ -59,15 +59,14 @@ func syncRacing(c *computer, f syncfolder.Folder, n int) {
 // older copies put back, settle to the same vaults, losing no secret not
 // deleted on purpose (SESH_SYNC_SEEDS runs more).
 func TestSync_Random(t *testing.T) {
-	if raceDetector {
-		t.Skip("too slow with -race; run without it")
-	}
+	t.Parallel()
 	seeds := 3
 	if s := os.Getenv("SESH_SYNC_SEEDS"); s != "" {
 		fmt.Sscan(s, &seeds) //nolint:errcheck // test
 	}
 	for seed := range seeds {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
+			t.Parallel()
 			r := rand.New(rand.NewPCG(uint64(seed), 7))
 			cs, _, f := computers(t, 3)
 			for _, c := range cs {

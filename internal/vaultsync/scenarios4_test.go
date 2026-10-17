@@ -47,6 +47,7 @@ func detailsText(t *testing.T, c *computer, k vault.Key) string {
 
 // A restore keeps a secret field and notes made elsewhere since the backup.
 func TestSync_RestoreKeepsFolderFields(t *testing.T) {
+	t.Parallel()
 	for _, how := range []string{"in place", "replace"} {
 		for _, variant := range []string{"laptop agreed it", "fresh on restore"} {
 			t.Run(how+"/"+variant, func(t *testing.T) {
@@ -90,6 +91,7 @@ func TestSync_RestoreKeepsFolderFields(t *testing.T) {
 
 // A restore keeps the earlier secrets the folder's file has.
 func TestSync_RestoreKeepsFolderHistory(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"agreed (base)", "fresh"} {
 		t.Run(variant, func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -142,6 +144,7 @@ func TestSync_RestoreKeepsFolderHistory(t *testing.T) {
 // Forgetting works with clocks a little apart; with them together, the
 // same password used again later is kept.
 func TestSync_ForgetAndReuse(t *testing.T) {
+	t.Parallel()
 	for _, skew := range []string{"none", "+1 hours", "+4 years"} {
 		t.Run(skew, func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -197,6 +200,7 @@ func TestSync_ForgetAndReuse(t *testing.T) {
 
 // Restoring a backup the folder already has writes nothing back.
 func TestSync_RestoreSameWritesNothing(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	for i := range 20 {
@@ -239,6 +243,7 @@ func dumpForget(t *testing.T, c *computer) {
 // The password a restore replaces goes into history as replaced then, so
 // a short history.keep keeps it.
 func TestSync_RestoreReplacedNow(t *testing.T) {
+	t.Parallel()
 	for _, keep := range []int{10, 1} {
 		t.Run(fmt.Sprint(keep), func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -298,6 +303,7 @@ func folderSecrets(t *testing.T, c *computer, f syncfolder.Folder) {
 // An edit after a restore merges with the folder's version, keeping its
 // password, even where the other computer keeps none.
 func TestSync_EditAfterRestoreMerges(t *testing.T) {
+	t.Parallel()
 	for _, edit := range []bool{false, true} {
 		t.Run(fmt.Sprint("edit=", edit), func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -340,6 +346,7 @@ func TestSync_EditAfterRestoreMerges(t *testing.T) {
 // An edit after a restore, the other computer off: the folder's password
 // is kept.
 func TestSync_EditAfterRestoreOtherOffline(t *testing.T) {
+	t.Parallel()
 	for _, edit := range []bool{false, true} {
 		t.Run(fmt.Sprint("edit=", edit), func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -381,6 +388,7 @@ func TestSync_EditAfterRestoreOtherOffline(t *testing.T) {
 
 // The same, after replacing the vault from a backup.
 func TestSync_EditAfterReplaceOtherOffline(t *testing.T) {
+	t.Parallel()
 	for _, edit := range []bool{false, true} {
 		t.Run(fmt.Sprint("edit=", edit), func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -421,6 +429,7 @@ func TestSync_EditAfterReplaceOtherOffline(t *testing.T) {
 // A restored entry whose folder version two computers changed at once
 // keeps all three passwords.
 func TestSync_RestoreConcurrentCopies(t *testing.T) {
+	t.Parallel()
 	for _, how := range []string{"in place", "replace"} {
 		t.Run(how, func(t *testing.T) {
 			cs, paths, f := computers(t, 3)
@@ -472,6 +481,7 @@ func TestSync_RestoreConcurrentCopies(t *testing.T) {
 // A restored entry in the trash goes back to the trash, the folder's
 // password kept.
 func TestSync_RestoredTrashedHere(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	x := laptop.put("x", "pw-1")
@@ -502,6 +512,7 @@ func TestSync_RestoredTrashedHere(t *testing.T) {
 
 // Two restores before syncing, either order, lose nothing.
 func TestSync_TwoRestores(t *testing.T) {
+	t.Parallel()
 	for _, order := range []string{"old then new", "new then old"} {
 		t.Run(order, func(t *testing.T) {
 			cs, paths, f := computers(t, 2)

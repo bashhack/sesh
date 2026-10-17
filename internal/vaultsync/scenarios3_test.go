@@ -15,6 +15,7 @@ import (
 
 // An entry edited after a restore beats the folder's deletion of it.
 func TestSync_EditAfterRestoreBeatsDeletion(t *testing.T) {
+	t.Parallel()
 	for _, how := range []string{"purge", "trash"} {
 		t.Run(how, func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -65,6 +66,7 @@ func TestSync_EditAfterRestoreBeatsDeletion(t *testing.T) {
 // A restore doesn't undo this computer's own deletion since: deletions made
 // since stay deleted.
 func TestSync_RestoreKeepsOwnDeletion(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	x := laptop.put("x", "pw-1")
@@ -93,6 +95,7 @@ func TestSync_RestoreKeepsOwnDeletion(t *testing.T) {
 // A password forgotten on one computer is forgotten on another whose clock
 // is ahead.
 func TestSync_ForgetClockAhead(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-1")
@@ -135,6 +138,7 @@ func TestSync_ForgetClockAhead(t *testing.T) {
 // Two entries made under one name, one waiting for its file: neither is
 // settled until both can be, so nothing of either is lost.
 func TestSync_JoinWaits(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	o := laptop.put("netflix", "same-pw")
@@ -196,6 +200,7 @@ func bigFile(i int) []byte {
 // A file entry with more history than fits a sync file keeps it all here,
 // and syncs whichever computer changes it.
 func TestSync_BigHistory(t *testing.T) {
+	t.Parallel()
 	if raceDetector {
 		t.Skip("too slow with -race; run without it")
 	}
@@ -247,6 +252,7 @@ func TestSync_BigHistory(t *testing.T) {
 // A restored entry's values win over the folder's, both ways of restoring,
 // the folder's password kept in history.
 func TestSync_RestoredValuesWin(t *testing.T) {
+	t.Parallel()
 	for _, how := range []string{"in place", "replace"} {
 		t.Run(how, func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -309,6 +315,7 @@ func TestSync_RestoredValuesWin(t *testing.T) {
 
 // An entry deleted after a restore, before syncing, stays deleted.
 func TestSync_DeleteAfterRestore(t *testing.T) {
+	t.Parallel()
 	for _, how := range []string{"purge", "trash"} {
 		t.Run(how, func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -341,6 +348,7 @@ func TestSync_DeleteAfterRestore(t *testing.T) {
 // Saving a new secret keeps an entry's creation time, in the vault and the
 // in-memory store alike.
 func TestSync_SaveKeepsCreated(t *testing.T) {
+	t.Parallel()
 	cs, _, _ := computers(t, 1)
 	k := vault.Key{Kind: vault.KindPassword, Service: "c", Username: "alice"}
 	m := vault.NewMemStore()

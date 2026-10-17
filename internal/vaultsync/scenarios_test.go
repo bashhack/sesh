@@ -90,6 +90,7 @@ func allSecrets(t *testing.T, c *computer) []string {
 // A computer keeping fewer earlier secrets changing a password doesn't cost
 // the one keeping more the password it had.
 func TestSync_FewerKeptElsewhere(t *testing.T) {
+	t.Parallel()
 	for _, keep := range []int{0, 1} {
 		cs, _, f := computers(t, 2)
 		laptop, desktop := cs[0], cs[1]
@@ -109,6 +110,7 @@ func TestSync_FewerKeptElsewhere(t *testing.T) {
 // A computer with history.keep 0 keeps none of the earlier secrets synced
 // to it.
 func TestSync_KeepZero(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	desktop.store.SetHistoryKeep(0)
@@ -125,6 +127,7 @@ func TestSync_KeepZero(t *testing.T) {
 // Renaming X a->c, then Y b->a, on one computer reaches the other as two
 // renames, not one name made twice.
 func TestSync_RenameIntoFreedName(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	ka := laptop.put("a", "secret-1")
@@ -163,6 +166,7 @@ func TestSync_RenameIntoFreedName(t *testing.T) {
 
 // One name made on three computers with three secrets: all kept, numbered.
 func TestSync_SameNameThree(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 3)
 	for i, c := range cs {
 		c.put("bank", "pw-"+c.name)
@@ -188,6 +192,7 @@ func TestSync_SameNameThree(t *testing.T) {
 // Notes changed on both computers, too long to keep both: the newer's are
 // kept, said in the summary, and the computers settle.
 func TestSync_NotesTooLongForBoth(t *testing.T) {
+	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
 	gh := laptop.put("github", "pw-1")
 	settle(t, f, laptop, desktop)
@@ -212,6 +217,7 @@ func TestSync_NotesTooLongForBoth(t *testing.T) {
 
 // One name made on three computers with one secret: one entry.
 func TestSync_SameNameThreeSame(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 3)
 	for _, c := range cs {
 		c.put("bank", "same")
@@ -225,6 +231,7 @@ func TestSync_SameNameThreeSame(t *testing.T) {
 // A restore from an older backup, then syncing, deletes nothing made since,
 // here or elsewhere, and loses no secret.
 func TestSync_RestoreThenSync(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-1")
@@ -299,6 +306,7 @@ func writeOnly(t *testing.T, c *computer, f syncfolder.Folder, uid string) {
 // A change written but never agreed (a crash) doesn't share its count with
 // the next, which would then be taken for an older copy.
 func TestSync_CountNotReused(t *testing.T) {
+	t.Parallel()
 	for _, how := range []string{"older put back", "lost"} {
 		t.Run(how, func(t *testing.T) {
 			cs, _, f := computers(t, 2)
@@ -358,6 +366,7 @@ func syncLoose(c *computer, f syncfolder.Folder) *Summary {
 
 // An entry with one damaged earlier secret still syncs.
 func TestSync_DamagedHistoryRow(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-1")
@@ -378,6 +387,7 @@ func TestSync_DamagedHistoryRow(t *testing.T) {
 
 // Damaged tags of an entry in the trash aren't taken for tags removed.
 func TestSync_DamagedTrashTags(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-1")
@@ -412,6 +422,7 @@ func TestSync_DamagedTrashTags(t *testing.T) {
 // An entry whose agreed version is damaged still syncs, merged as never
 // synced.
 func TestSync_DamagedBase(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-1")
@@ -431,6 +442,7 @@ func TestSync_DamagedBase(t *testing.T) {
 // A password forgotten on purpose, set again later and replaced, is kept
 // in the history that time.
 func TestSync_ForgottenReused(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "reused")
@@ -455,6 +467,7 @@ func TestSync_ForgottenReused(t *testing.T) {
 // Three computers changing one entry at once (its file and two copies, one
 // of a copy) keep all three passwords.
 func TestSync_CopiesOfCopies(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 3)
 	gh := cs[0].put("github", "pw-0")
 	settleN(t, f, 6, cs...)
@@ -495,6 +508,7 @@ func TestSync_CopiesOfCopies(t *testing.T) {
 // Deleted for good on one computer while edited on the other, both writing
 // at once: the edit wins.
 func TestSync_PurgeRacingEdit(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-0")
@@ -528,6 +542,7 @@ func TestSync_PurgeRacingEdit(t *testing.T) {
 // A secret field changed on both computers keeps both values, the older
 // beside under a name fields can have.
 func TestSync_SecretFieldOnBoth(t *testing.T) {
+	t.Parallel()
 	cs, _, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	gh := laptop.put("github", "pw-1")
@@ -567,6 +582,7 @@ func TestSync_SecretFieldOnBoth(t *testing.T) {
 
 // Wiping what Merge returns wipes the older secret lost too.
 func TestSync_MergedWipe(t *testing.T) {
+	t.Parallel()
 	base := &syncfolder.Record{Service: "x", Secret: []byte("s0")}
 	a := &syncfolder.Record{Service: "x", Secret: []byte("s-ours"), Computer: "a"}
 	b := &syncfolder.Record{Service: "x", Secret: []byte("s-theirs"), Computer: "b"}

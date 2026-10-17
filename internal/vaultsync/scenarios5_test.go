@@ -33,6 +33,7 @@ func trashOf(c *computer) string {
 // An entry restored into the trash counts its trash days from the restore,
 // so it isn't deleted for good at once.
 func TestSync_RestoredTrashDays(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"expire on laptop before sync", "no expire on laptop; desktop expires after"} {
 		t.Run(variant, func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -84,6 +85,7 @@ func TestSync_RestoredTrashDays(t *testing.T) {
 
 // Two computers restoring at once lose nothing.
 func TestSync_TwoRestoresAtOnce(t *testing.T) {
+	t.Parallel()
 	for _, how := range []string{"in place", "replace"} {
 		for _, race := range []bool{false, true} {
 			t.Run(fmt.Sprint(how, " race=", race), func(t *testing.T) {
@@ -150,6 +152,7 @@ func TestSync_TwoRestoresAtOnce(t *testing.T) {
 
 // A restore, then a rename into a name taken since: both kept.
 func TestSync_RestoreThenRenameIntoTaken(t *testing.T) {
+	t.Parallel()
 	for _, how := range []string{"in place", "replace"} {
 		for _, laterOwn := range []bool{false, true} {
 			t.Run(fmt.Sprint(how, " laptop-made-y=", laterOwn), func(t *testing.T) {
@@ -195,6 +198,7 @@ func TestSync_RestoreThenRenameIntoTaken(t *testing.T) {
 
 // A restored entry whose folder has only sync tools' copies keeps all.
 func TestSync_RestoredOnlyCopies(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	x := laptop.put("x", "pw-1")
@@ -235,6 +239,7 @@ func TestSync_RestoredOnlyCopies(t *testing.T) {
 
 // A restored entry with a damaged agreed version keeps the folder's password.
 func TestSync_RestoredDamagedBase(t *testing.T) {
+	t.Parallel()
 	for _, edit := range []bool{false, true} {
 		t.Run(fmt.Sprint("edit=", edit), func(t *testing.T) {
 			cs, paths, f := computers(t, 2)
@@ -275,6 +280,7 @@ func TestSync_RestoredDamagedBase(t *testing.T) {
 
 // A restore on a computer keeping no history loses nothing elsewhere.
 func TestSync_RestoreKeepZero(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 3)
 	laptop, desktop, third := cs[0], cs[1], cs[2]
 	laptop.store.SetHistoryKeep(0)
@@ -308,6 +314,7 @@ func TestSync_RestoreKeepZero(t *testing.T) {
 // A restore over a folder file a sync tool rolled back keeps the newer
 // password the computer had agreed.
 func TestSync_RestoreOverRolledBackFile(t *testing.T) {
+	t.Parallel()
 	cs, paths, f := computers(t, 2)
 	laptop, desktop := cs[0], cs[1]
 	desktop.store.SetHistoryKeep(0)
@@ -346,6 +353,7 @@ func TestSync_RestoreOverRolledBackFile(t *testing.T) {
 
 // A restored file entry with more history than fits a sync file keeps it.
 func TestSync_RestoredBigHistory(t *testing.T) {
+	t.Parallel()
 	if raceDetector {
 		t.Skip("too slow with -race; run without it")
 	}
@@ -404,6 +412,7 @@ func TestSync_RestoredBigHistory(t *testing.T) {
 // An edit in a restored backup, never synced, beats the folder's deletion,
 // as it would without the restore.
 func TestSync_RestoredUnsyncedEdit(t *testing.T) {
+	t.Parallel()
 	for _, del := range []string{"purge", "trash"} {
 		for _, how := range []string{"none", "in place", "replace"} {
 			t.Run(del+"/"+how, func(t *testing.T) {
@@ -451,6 +460,7 @@ func TestSync_RestoredUnsyncedEdit(t *testing.T) {
 // A password forgotten while another computer, offline, still had it as
 // its own stays forgotten.
 func TestSync_ForgetWhileHeldOffline(t *testing.T) {
+	t.Parallel()
 	for _, change := range []bool{false, true} {
 		for _, deskEdit := range []bool{false, true} {
 			t.Run(fmt.Sprint("change-after-forget=", change, " desktop-edit=", deskEdit), func(t *testing.T) {

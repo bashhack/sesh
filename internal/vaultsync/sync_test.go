@@ -178,6 +178,7 @@ func secrets(hs []syncfolder.Earlier) (out []string) {
 // An entry made on one computer reaches the other with everything it
 // holds; a change there comes back; a rename is the same entry renamed.
 func TestSync_BothWays(t *testing.T) {
+	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
 	gh := laptop.put("github", "pw-1")
 	d := &vault.Details{URL: "https://github.com", Notes: []byte("notes"), Fields: []vault.Field{{Name: "pin", Value: []byte("1234"), Secret: true}}}
@@ -221,6 +222,7 @@ func TestSync_BothWays(t *testing.T) {
 // One entry changed on both computers before they sync is merged: each
 // one's changes, the newer password kept, the older in the history.
 func TestSync_ChangedOnBoth(t *testing.T) {
+	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
 	gh := laptop.put("github", "pw-1")
 	settle(t, f, laptop, desktop)
@@ -270,6 +272,7 @@ func uidOfKey(t *testing.T, c *computer, k vault.Key) string {
 // other computer; an entry edited on one and deleted on the other comes
 // back.
 func TestSync_TrashAndDeletion(t *testing.T) {
+	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
 	gh := laptop.put("github", "pw-1")
 	settle(t, f, laptop, desktop)
@@ -314,6 +317,7 @@ func TestSync_TrashAndDeletion(t *testing.T) {
 // they become one; with others, both are kept, the same one renamed on
 // both.
 func TestSync_SameName(t *testing.T) {
+	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
 	same := laptop.put("netflix", "same-pw")
 	desktop.put("netflix", "same-pw")
@@ -344,6 +348,7 @@ func TestSync_SameName(t *testing.T) {
 // once) is merged, then removed; a file lost from the folder is written
 // again, not taken for a deletion; an older copy put back is ignored.
 func TestSync_WhatSyncToolsDo(t *testing.T) {
+	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
 	gh := laptop.put("github", "pw-1")
 	settle(t, f, laptop, desktop)
@@ -414,6 +419,7 @@ func TestSync_WhatSyncToolsDo(t *testing.T) {
 // A file the sync tool hasn't downloaded yet is waited for: nothing is
 // written over it.
 func TestSync_NotDownloaded(t *testing.T) {
+	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
 	gh := laptop.put("github", "pw-1")
 	settle(t, f, laptop, desktop)
@@ -436,6 +442,7 @@ func TestSync_NotDownloaded(t *testing.T) {
 // Forgetting an earlier secret on purpose forgets it on every computer;
 // a computer keeping fewer doesn't take them from the others.
 func TestSync_History(t *testing.T) {
+	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
 	gh := laptop.put("github", "pw-1")
 	for _, pw := range []string{"pw-2", "pw-3", "pw-4"} {
@@ -473,6 +480,7 @@ func TestSync_History(t *testing.T) {
 
 // Names in the summary say what happened, in a line for the audit log.
 func TestSummary_String(t *testing.T) {
+	t.Parallel()
 	s := &Summary{Received: []string{"a"}, Sent: []string{"b", "c"}, Ignored: 1}
 	if got := s.String(); got != "Sync: 1 received, 2 sent, 1 older copies ignored" {
 		t.Errorf("%q", got)
@@ -497,6 +505,7 @@ func (otherKey) DecryptEntry(d, s, aad []byte) ([]byte, error) {
 // a computer that changed it), or can't be read, waits: nothing here is
 // written over it.
 func TestSync_FilesNotForThisKey(t *testing.T) {
+	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
 	gh := laptop.put("github", "pw-1")
 	bank := laptop.put("bank", "b-1")

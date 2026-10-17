@@ -18,9 +18,7 @@ import (
 // everything, still has every secret it held but those deleted or
 // forgotten on purpose (SESH_SYNC_SEEDS, SESH_SYNC_STEPS for more).
 func TestSync_Random2(t *testing.T) {
-	if raceDetector {
-		t.Skip("too slow with -race; run without it")
-	}
+	t.Parallel()
 	seeds, steps := 2, 40
 	if s := os.Getenv("SESH_SYNC_SEEDS"); s != "" {
 		fmt.Sscan(s, &seeds) //nolint:errcheck // test
@@ -34,6 +32,7 @@ func TestSync_Random2(t *testing.T) {
 			continue
 		}
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
+			t.Parallel()
 			r := rand.New(rand.NewPCG(uint64(seed), 11))
 			cs, paths, f := computers(t, 3)
 			cs[0].store.SetHistoryKeep(1000)
