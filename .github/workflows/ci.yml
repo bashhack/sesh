@@ -9,6 +9,12 @@ env:
   # any entry derives a key with it over 16 MiB, which instrumented was most
   # of their time. It is pure computation; sesh's own code stays instrumented.
   RACE_GCFLAGS: golang.org/x/crypto/argon2=-race=false
+  # With it, the -race runs also turn off Go's size-specialized allocation.
+  # The compiler uses it only in code it doesn't instrument (here, argon2),
+  # and it skips telling the race detector memory is new: two key derivations
+  # at once then reuse memory the detector still holds the other's accesses
+  # for, and it reports a race that isn't one.
+  RACE_GOEXPERIMENT: nosizespecializedmalloc
 on:
   push:
     branches: [ main ]  # Only run on pushes to main
@@ -137,7 +143,7 @@ jobs:
         run: |
           CORES=$(sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
           RACE_CORES=$([ $CORES -gt 4 ] && echo 4 || echo $CORES)
-          GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -gcflags="$RACE_GCFLAGS" -vet=off $(go list ./... | grep -v /scripts)
+          GOEXPERIMENT=$RACE_GOEXPERIMENT GOMAXPROCS=$RACE_CORES go test -timeout 30m -race -gcflags="$RACE_GCFLAGS" -vet=off $(go list ./... | grep -v /scripts)
 
   test-linux:
     name: Test (Linux)
@@ -158,7 +164,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y zsh fish
 
       - name: Run tests with race detection
-        run: go test -timeout 30m -race -gcflags="$RACE_GCFLAGS" $(go list ./... | grep -v /scripts)
+        run: GOEXPERIMENT=$RACE_GOEXPERIMENT go test -timeout 30m -race -gcflags="$RACE_GCFLAGS" $(go list ./... | grep -v /scripts)
 
   agent-smoke:
     name: Agent smoke (${{ matrix.os }})
@@ -174,7 +180,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          # Off here: this short job would save the cache first, under the key the
+          # test jobs share, without the -race build they need.
+          cache: false
 
       - name: Build sesh and run the agent end to end
         run: make agent-smoke
