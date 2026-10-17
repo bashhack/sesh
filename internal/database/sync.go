@@ -723,3 +723,84 @@ func (s *Store) insertRecord(tx *sql.Tx, uid string, rev int64, rec *syncfolder.
 func (s *Store) LogSync(detail string) {
 	s.audit("sync", "", detail)
 }
+
+// ErrVaultNotEmpty is a vault that can't join a sync folder: it has
+// entries, sealed with its own key (its own salt, even with the same
+// master password).
+var ErrVaultNotEmpty = errors.New("this vault already has entries, sealed with its own key, not the sync folder's")
+
+// JoinVault readies the vault at dbPath to join the sync folder whose
+// vaults' key record is m: a vault made with m as its key record, so the
+// same master password gives the same key. One there already with m is
+// left as it is; an empty one with another key record (and its recovery
+// key record, made for it) is given m; one with entries is refused
+// (ErrVaultNotEmpty): its entries would need its own key.
+func JoinVault(dbPath string, m UnlockMaterial) (err error) {
+	if err := ValidateUnlockMaterial(m.Salt, m.Verify, m.Params); err != nil {
+		return fmt.Errorf("the sync folder's key record: %w", err)
+	}
+	db, err := openDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer func() { err = closeVault(db, err) }()
+	if err := applyMigrations(db); err != nil {
+		return err
+	}
+	have, err := readKeyRecord(db, dbPath)
+	switch {
+	case errors.Is(err, ErrNoVault):
+		_, err = writeKeyRecord(db, m)
+		return err
+	case err != nil:
+		return err
+	case UnlockID(have.Verify) == UnlockID(m.Verify):
+		return nil
+	}
+	var used bool
+	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM entries) OR EXISTS (SELECT 1 FROM trash) OR EXISTS (SELECT 1 FROM history)`).Scan(&used); err != nil {
+		return err
+	}
+	if used {
+		return ErrVaultNotEmpty
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE vault_key SET salt = ?, kdf = ?, kdf_params = ?, verify = ?, created_at = ? WHERE id = 1`,
+		m.Salt, kdfArgon2id, m.Params.MarshalParams(), m.Verify, time.Now().UTC()); err != nil {
+		_ = tx.Rollback() //nolint:errcheck // already failing
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM recovery`); err != nil {
+		_ = tx.Rollback() //nolint:errcheck // already failing
+		return err
+	}
+	return tx.Commit()
+}
+
+// CheckMasterPassword says whether pw is the master password of the key
+// record m, without a vault: an error when it isn't.
+func CheckMasterPassword(pw []byte, m UnlockMaterial) error {
+	key := DeriveKey(pw, m.Salt, m.Params)
+	defer secure.SecureZeroBytes(key)
+	if _, err := Decrypt(key, m.Verify); err != nil {
+		return errors.New("that isn't the master password of the vaults that sync through this folder")
+	}
+	return nil
+}
+
+// SyncLeave stops the vault syncing: what it agreed with the sync folder,
+// its restored marks and its sync ID are forgotten (joining again starts
+// afresh); its entries, and the folder, are left as they are.
+func (s *Store) SyncLeave() error {
+	return s.inTx(func(tx *sql.Tx) error {
+		for _, t := range []string{"sync_state", "sync_restored", "sync_info"} {
+			if _, err := tx.Exec(`DELETE FROM ` + t); err != nil { //nolint:gosec // t is one of the three
+				return err
+			}
+		}
+		return nil
+	})
+}

@@ -288,6 +288,8 @@ db_path                    /Users/me/vaults/sesh.db
                            (config file)
 backup.dir                 /Users/me/vaults/backups
                            (default: next to the vault)
+sync.dir                   off           (default)
+sync.name                  laptop        (default: this computer's name)
 ```
 
 `sesh config set <key> <value>` changes one in the config file, as `sesh ui`'s settings panel does, and makes the file if there isn't one yet: the value is checked as sesh checks it when it loads, and the file keeps its comments and order (a linked one, from a dotfile manager, is changed where it lives). An empty value (`sesh config set history.keep ""`) takes the setting out of the file, back to its default. It says when the change takes effect. Lowering a setting that deletes as it goes (`history.keep`, `trash.keep_days`, `audit.retention_days`, `backup.keep`) asks first, saying what will go; `--force` changes it without asking, and is needed without a terminal. A setting an environment variable or a flag gives wins over the file, so it's refused here: change it there. `db_path` is moved with `sesh init`.
@@ -376,6 +378,8 @@ $ sesh config set clipboard_timeout 15s
 | `SESH_HISTORY_KEEP` | How many earlier secrets each entry keeps, 0 to 1000; `0` keeps no new ones (config: `history.keep`) | `10` |
 | `SESH_HEALTH_OLD_AFTER_DAYS` | Days a password or API key can go unchanged before `sesh health` calls it old; `0` doesn't check (config: `health.old_after_days`) | `365` |
 | `SESH_UI_LOCK_ON_QUIT` | `false`: quitting `sesh ui` leaves sesh unlocked; `true` locks it, as `sesh agent lock` does (config: `ui.lock_on_quit`) | `true` |
+| `SESH_SYNC_DIR` | The sync folder the vault syncs with (config: `sync.dir`; set by `sesh sync init` and `join`) | none: the vault doesn't sync |
+| `SESH_SYNC_NAME` | This computer's name in what it syncs (config: `sync.name`) | the computer's own name, without `.local` |
 | `SESH_KDF_MEMORY` | Memory for each master password check, such as `256MiB` (config: `master_password.memory`) | `256MiB` |
 | `SESH_KDF_TIME` | Passes over that memory (config: `master_password.time`) | `3` |
 | `SESH_KDF_THREADS` | Threads (config: `master_password.threads`) | `4` |
@@ -751,6 +755,32 @@ The vault as it was is in ~/Library/Application Support/sesh/backups/passwords-9
 It asks first; without a terminal, add `--force`.
 
 Backups are for getting this vault back. To move your secrets to another tool, or to keep a copy any machine can open with its own password, use an encrypted export.
+
+### Syncing between computers (`sesh sync`)
+
+Each computer keeps its own vault. A **sync folder**, which any tool keeps the same on your computers (iCloud Drive, Dropbox, Syncthing, a USB stick), holds one file per entry, encrypted with the vault's key: without your master password it says nothing, not even an entry's name. Every computer that syncs through it has the same master password. The vault itself never goes in the folder: a sync tool copying a vault while sesh writes it can damage it.
+
+```
+# On the computer whose vault you have:
+$ sesh sync init                      # offers ~/Library/Mobile Documents/com~apple~CloudDocs/sesh-sync (iCloud Drive)
+$ sesh sync init ~/Dropbox/sesh-sync  # or any folder
+
+# On each other computer (a new vault, or an empty one):
+$ sesh sync join ~/Library/Mobile\ Documents/com~apple~CloudDocs/sesh-sync
+```
+
+`sesh sync` syncs now: what changed here is written to the folder, what changed in the folder is taken, and what changed in both is merged. `sesh sync status` says where the vault syncs and what's waiting, without unlocking it; `sesh sync leave` stops this vault syncing (its entries, and the folder, stay).
+
+- **Changed on two computers before syncing,** an entry is merged: what only one changed is taken; where both changed the same thing, the newer change wins, the other password goes into the entry's history, and the older notes and secret field values are kept beside the newer ones (notes below a line naming the computer; a field as `name-computer`). The summary says what was merged.
+- **Edited on one computer and deleted on another,** an entry comes back, with the edit.
+- **Made on two computers under one name:** with the same secret, they become one entry; with different secrets, both are kept, one renamed `name (2)` on every computer.
+- **Earlier secrets** are kept as each computer's `history.keep` says; one forgotten with `sesh history --forget` is forgotten on every computer.
+- **What a sync tool does is handled:** its copies of a file (Dropbox's "conflicted copy", Syncthing's, iCloud's "name 2") are merged and removed; a file it loses is written again, never taken for a deletion; an older copy it puts back is ignored, so an old password can't quietly return.
+- **iCloud Drive can keep files in the cloud** to save space ("Optimise Mac Storage"): sesh waits for those, says how many in the summary, and writes nothing over them. Keep the sync folder downloaded: in Finder, Control-click it and choose Keep Downloaded (macOS 15 or later).
+- **Each computer is named** in summaries and in history by its own name; `sync.name` changes it.
+- **Joining needs a new or empty vault,** as its entries would need its own key. To bring a vault's entries along: `sesh export --file F`, move the vault aside (or choose another place with `sesh init --db-path`), `sesh sync join <folder>`, then `sesh import --from sesh F`.
+
+Someone with the sync folder (your cloud account, say) sees how many entries there are, roughly how big each is, and when each changed; they can try passwords against it offline, as against a backup in a synced folder, so the master password's strength matters as much. They can't read, change or put back an entry unnoticed.
 
 ### Encrypted exports
 

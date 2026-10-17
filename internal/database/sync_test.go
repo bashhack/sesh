@@ -248,3 +248,99 @@ func TestSyncNextChange(t *testing.T) {
 		t.Errorf("then: %d, %v", n, err)
 	}
 }
+
+// Joining makes a vault with the folder's key record; one with it already
+// is left; an empty one with another is given it, its recovery record
+// removed; one with entries is refused.
+func TestJoinVault(t *testing.T) {
+	p, s := rekeyVault(t)
+	m, err := ReadUnlockMaterial(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckMasterPassword([]byte("old-password-1"), m); err != nil {
+		t.Errorf("the right password: %v", err)
+	}
+	if err := CheckMasterPassword([]byte("nope"), m); err == nil {
+		t.Error("a wrong password passed")
+	}
+	fresh := filepath.Join(t.TempDir(), "new.db")
+	if err := JoinVault(fresh, m); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadUnlockMaterial(fresh); err != nil || UnlockID(got.Verify) != UnlockID(m.Verify) {
+		t.Errorf("new vault's key record: %v", err)
+	}
+	if err := JoinVault(fresh, m); err != nil {
+		t.Errorf("again: %v", err)
+	}
+	if !opensWith(t, p, "old-password-1") {
+		t.Fatal("the vault doesn't open")
+	}
+	if err := JoinVault(p, mustOtherKey(t)); !errors.Is(err, ErrVaultNotEmpty) {
+		t.Errorf("a vault with entries: %v", err)
+	}
+	// An empty vault with a key record and a recovery record of its own.
+	empty := filepath.Join(t.TempDir(), "empty.db")
+	es, err := Open(empty, NewKeySourceOracle(NewMasterPasswordSource(empty, staticPrompt("other-password-1", "other-password-1"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := vault.Key{Kind: vault.KindPassword, Service: "x"}
+	if err := es.Put(k, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := es.PurgeMany([]vault.Key{k}); err != nil {
+		t.Fatal(err)
+	}
+	if err := es.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteRecovery(empty, &RecoveryRecord{UnlockID: vaultID(t, empty), PublicKey: []byte("p"), EphemeralPub: []byte("e"), Ciphertext: []byte("c")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := JoinVault(empty, m); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadUnlockMaterial(empty); err != nil || UnlockID(got.Verify) != UnlockID(m.Verify) {
+		t.Errorf("empty vault's key record: %v", err)
+	}
+	if r, err := ReadRecovery(empty); err == nil && r != nil {
+		t.Errorf("recovery record kept: %+v", r)
+	}
+}
+
+func mustOtherKey(t *testing.T) UnlockMaterial {
+	t.Helper()
+	_, m := newKeyFor(t, "another-password-1")
+	return m
+}
+
+// Leaving forgets what was agreed and the sync ID.
+func TestSyncLeave(t *testing.T) {
+	a, _ := syncPair(t)
+	id, err := a.SyncComputerID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := uidOf(t, a, vault.Key{Kind: vault.KindPassword, Service: "bank"})
+	rec, rev, err := a.SyncRecord(uid, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SyncAgree(uid, rev, rec, syncfolder.Hash{1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SyncLeave(); err != nil {
+		t.Fatal(err)
+	}
+	if it := syncItem(t, a, uid); it.Agreed != nil {
+		t.Errorf("still agreed: %+v", it)
+	}
+	if again, _ := a.SyncComputerID(); again == id { //nolint:errcheck // compared
+		t.Error("the same sync ID after leaving")
+	}
+}

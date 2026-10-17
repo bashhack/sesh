@@ -146,7 +146,7 @@ func writeConfig(w io.Writer, cfg *config.Config) error {
 		col = max(col, len(it.Key)+2)
 	}
 	for _, it := range items {
-		if it.Key == "db_path" || it.Key == "backup.dir" {
+		if it.Key == "db_path" || it.Key == "backup.dir" || it.Key == "sync.dir" && it.Value != "off" {
 			// Paths are usually longer than the value column.
 			fmt.Fprintf(&b, "%-*s%s\n%-*s(%s)\n", col, it.Key, it.Value, col, "", it.Said())
 			continue
