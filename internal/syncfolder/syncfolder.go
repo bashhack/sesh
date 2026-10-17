@@ -399,9 +399,8 @@ func (f Folder) entries(create bool) (string, error) {
 func (f Folder) Tighten() error {
 	for _, p := range []struct {
 		path string
-		mode os.FileMode
 		dir  bool
-	}{{filepath.Join(f.dir, entriesDir), 0o700, true}, {f.infoPath(), 0o600, false}} {
+	}{{filepath.Join(f.dir, entriesDir), true}, {f.infoPath(), false}} {
 		fi, err := os.Lstat(p.path)
 		switch {
 		case errors.Is(err, os.ErrNotExist):
@@ -411,7 +410,8 @@ func (f Folder) Tighten() error {
 		case fi.IsDir() != p.dir || !fi.Mode().IsRegular() && !p.dir || fi.Mode().Perm()&0o077 == 0:
 			continue
 		}
-		if err := os.Chmod(p.path, p.mode); err != nil {
+		// Only what others had is taken away: a file kept read-only stays so.
+		if err := os.Chmod(p.path, fi.Mode().Perm()&^0o077); err != nil {
 			return fmt.Errorf("make %s readable only by you: %w", p.path, err)
 		}
 	}

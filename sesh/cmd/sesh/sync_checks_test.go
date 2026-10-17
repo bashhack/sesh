@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -284,5 +285,46 @@ func TestDoctor_SyncRowRefusedFolder(t *testing.T) {
 	out, err := runDoctorOut(t)
 	if err == nil || !strings.Contains(out, "FAIL  Sync") || !strings.Contains(out, "synced with another sync folder") {
 		t.Errorf("a folder sync refuses (%v):\n%s", err, out)
+	}
+}
+
+// Doctor says a sync folder that lost its sesh-sync.json is written again
+// by a sync, and that a never-synced vault joins with an empty one.
+func TestDoctor_SyncRowLostInfoAndNeverSynced(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	t.Setenv("SESH_BACKUP_EVERY_DAYS", "0")
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	db := syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	// A copy of the vault, never synced, for the second half.
+	copyDB := filepath.Join(dir, "copy", "passwords.db")
+	if err := os.MkdirAll(filepath.Dir(copyDB), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CopyTo(db, copyDB); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSyncOut(t, "", false, "init", folder); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(folder, "sesh-sync.json")); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runDoctorOut(t)
+	if err != nil || !strings.Contains(out, "warn  Sync") || !strings.Contains(out, "sesh sync writes it again") || !strings.Contains(out, "Sync, which writes the sync folder's lost file again:") {
+		t.Errorf("a lost info file (%v):\n%s", err, out)
+	}
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(config.EnvDBPath, copyDB)
+	t.Setenv(config.EnvSyncDir, folder)
+	app := agentTestApp()
+	err = runDoctor(app, nil)
+	out = app.Stdout.(*bytes.Buffer).String() + app.Stderr.(*bytes.Buffer).String()
+	if err == nil || !strings.Contains(out, "never synced with this folder") || !strings.Contains(out, "Join the folder with an empty vault (sesh sync join explains), or stop syncing:") {
+		t.Errorf("a never-synced vault (%v):\n%s", err, out)
 	}
 }

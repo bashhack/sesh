@@ -97,7 +97,7 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 	if errors.Is(err, syncfolder.ErrNoInfo) {
 		switch lost, state, _ := lostInfo(f.Dir(), cfg.DBPath.Value); { //nolint:errcheck // what can't be told is said as the folder's own error, below
 		case lost != nil:
-			return f, fmt.Errorf("the sync folder %s lost its %s: sesh sync writes it again from this vault, which synced with it", tildePath(f.Dir()), syncfolder.InfoFile)
+			return f, fmt.Errorf("the sync folder %s lost its %s: %w", tildePath(f.Dir()), syncfolder.InfoFile, errInfoLost)
 		case lostSaid(f.Dir(), state) != "":
 			return f, errors.New(lostSaid(f.Dir(), state))
 		}
@@ -117,6 +117,10 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 	}
 	return f, nil
 }
+
+// errInfoLost is a sync folder that lost its InfoFile, which a sync from
+// this vault writes again.
+var errInfoLost = errors.New("sesh sync writes it again from this vault, which synced with it")
 
 // syncNow is sesh sync: the vault synced with its folder.
 func syncNow(app *App) error {

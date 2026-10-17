@@ -102,8 +102,10 @@ func Sync(store *database.Store, folder syncfolder.Folder, computer string) (*Su
 	if y.id, err = store.SyncComputerID(); err != nil {
 		return nil, err
 	}
+	// A folder whose permissions can't be changed (another user's, or a
+	// file system without them) still syncs; it's said.
 	if err := folder.Tighten(); err != nil {
-		return nil, err
+		y.sum.Problems = append(y.sum.Problems, err.Error())
 	}
 	contents, err := folder.Scan()
 	if err != nil {

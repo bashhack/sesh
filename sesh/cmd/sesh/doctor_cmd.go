@@ -964,6 +964,11 @@ func checkSync(c *doctorChecks, cfg *config.Config, matErr error) {
 		return
 	}
 	f, err := syncFolderOf(cfg)
+	if errors.Is(err, errInfoLost) {
+		c.row(markWarn, "Sync", value, err.Error())
+		c.todo("Sync, which writes the sync folder's lost file again:", "sesh sync")
+		return
+	}
 	if err != nil {
 		c.row(markFail, "Sync", value, err.Error())
 		c.todo("Check the sync folder (sesh sync status); to stop syncing:", "sesh sync leave")
@@ -985,7 +990,11 @@ func checkSync(c *doctorChecks, cfg *config.Config, matErr error) {
 	if info, err := f.ReadInfo(); err == nil {
 		if err := checkSwitch(store, f, info); err != nil {
 			c.row(markFail, "Sync", value, err.Error())
-			c.todo("Point sync.dir back at the folder this vault synced with, or stop syncing:", "sesh sync leave")
+			if errors.Is(err, errNeverSynced) {
+				c.todo("Join the folder with an empty vault (sesh sync join explains), or stop syncing:", "sesh sync leave")
+			} else {
+				c.todo("Point sync.dir back at the folder this vault synced with, or stop syncing:", "sesh sync leave")
+			}
 			return
 		}
 	}
