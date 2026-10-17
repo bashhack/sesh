@@ -261,3 +261,28 @@ func TestRestore_SaysWhatSyncDoes(t *testing.T) {
 		t.Errorf("syncing:\n%s", p.question)
 	}
 }
+
+// Doctor fails the sync row when sync would refuse the folder: the vault
+// synced with another one, and both hold entries.
+func TestDoctor_SyncRowRefusedFolder(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	t.Setenv("SESH_BACKUP_EVERY_DAYS", "0")
+	dir := t.TempDir()
+	folder, other := filepath.Join(dir, "sync"), filepath.Join(dir, "other")
+	syncComputer(t, filepath.Join(dir, "laptop"), "laptop")
+	putEntry(t, "password/a", "1")
+	if _, err := runSyncOut(t, "", false, "init", folder); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSyncOut(t, "", false, "init", other); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.EnvSyncDir, folder)
+	out, err := runDoctorOut(t)
+	if err == nil || !strings.Contains(out, "FAIL  Sync") || !strings.Contains(out, "synced with another sync folder") {
+		t.Errorf("a folder sync refuses (%v):\n%s", err, out)
+	}
+}

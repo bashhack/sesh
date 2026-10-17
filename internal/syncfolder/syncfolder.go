@@ -392,22 +392,28 @@ func (f Folder) entries(create bool) (string, error) {
 	return dir, nil
 }
 
-// Tighten makes the folder's entries/ readable only by this user, when
-// it's there: a sync tool may make it with its own umask on a computer that
-// only ever takes.
+// Tighten makes the folder's entries/ and InfoFile readable only by this
+// user, when they're there: a sync tool may make them with its own umask on
+// a computer that only ever takes. The InfoFile matters as much as the
+// entries: its key record lets whoever reads it try passwords offline.
 func (f Folder) Tighten() error {
-	dir := filepath.Join(f.dir, entriesDir)
-	fi, err := os.Lstat(dir)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return nil
-	case err != nil:
-		return err
-	case !fi.IsDir() || fi.Mode().Perm()&0o077 == 0:
-		return nil
-	}
-	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a folder: 0700 is only this user
-		return fmt.Errorf("make %s readable only by you: %w", dir, err)
+	for _, p := range []struct {
+		path string
+		mode os.FileMode
+		dir  bool
+	}{{filepath.Join(f.dir, entriesDir), 0o700, true}, {f.infoPath(), 0o600, false}} {
+		fi, err := os.Lstat(p.path)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		case err != nil:
+			return err
+		case fi.IsDir() != p.dir || !fi.Mode().IsRegular() && !p.dir || fi.Mode().Perm()&0o077 == 0:
+			continue
+		}
+		if err := os.Chmod(p.path, p.mode); err != nil {
+			return fmt.Errorf("make %s readable only by you: %w", p.path, err)
+		}
 	}
 	return nil
 }

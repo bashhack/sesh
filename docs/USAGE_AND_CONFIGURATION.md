@@ -468,11 +468,15 @@ To avoid ending up here, make a recovery key, keep the master password somewhere
 sesh has no command to move a vault; it takes a few steps:
 
 1. Close `sesh ui` and any other sesh command that's running.
-2. Move the vault file, any `-wal` and `-shm` files beside it (`passwords.db-wal`, `passwords.db-shm`), and `touchid.key` if it's there, to the new folder, one only you can read and write. If that folder holds a vault already, choose another: `mv -n` leaves a file that's there alone, rather than replacing it.
+2. Move the vault file, any `-wal` and `-shm` files beside it (`passwords.db-wal`, `passwords.db-shm`), and `touchid.key` if it's there, to the new folder, one only you can read and write. If that folder holds a vault already, choose another: `mv -n` leaves a file that's there alone, rather than replacing it, and the loop below says so.
    ```bash
    mkdir -p ~/Library/Application\ Support/sesh && chmod 700 ~/Library/Application\ Support/sesh   # Linux: ~/.local/share/sesh
-   mv -n ~/Dropbox/passwords.db ~/Dropbox/passwords.db-wal ~/Dropbox/passwords.db-shm ~/Dropbox/touchid.key ~/Library/Application\ Support/sesh/
-   ls ~/Dropbox/passwords.db*   # nothing left means everything moved
+   for f in passwords.db passwords.db-wal passwords.db-shm touchid.key; do
+     if [ -e ~/Dropbox/$f ]; then
+       mv -n ~/Dropbox/$f ~/Library/Application\ Support/sesh/
+       [ -e ~/Dropbox/$f ] && echo "$f not moved: the new folder has one already"
+     fi
+   done
    ```
 3. Change `db_path` in the config file to the new place (`sesh config` shows the file and the value). If `SESH_DB_PATH` sets it, change that instead. `sesh init --force --db-path <new place>` also points sesh at the vault there, but writes a new config file: your other settings go back to their defaults.
 4. Backups are kept in a `backups` folder beside the vault unless `backup.dir` says otherwise: move that folder too.

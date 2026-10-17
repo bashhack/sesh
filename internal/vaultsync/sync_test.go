@@ -553,6 +553,7 @@ func TestSync_FilesNotForThisKey(t *testing.T) {
 // A computer that only takes still makes the folder's entries readable
 // only by its user, as a sync tool may make it for anyone.
 func TestSync_TakingTightensTheFolder(t *testing.T) {
+	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
 	laptop.put("github", "pw-1")
 	laptop.sync(f)
@@ -560,8 +561,18 @@ func TestSync_TakingTightensTheFolder(t *testing.T) {
 	if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // a folder anyone can read, as a sync tool may leave it
 		t.Fatal(err)
 	}
+	info := filepath.Join(f.Dir(), syncfolder.InfoFile)
+	if err := os.WriteFile(info, []byte("{}"), 0o644); err != nil { //nolint:gosec // readable by anyone, as a sync tool may leave it
+		t.Fatal(err)
+	}
+	if err := os.Chmod(info, 0o644); err != nil { //nolint:gosec // as above
+		t.Fatal(err)
+	}
 	desktop.sync(f)
 	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("entries/ after a sync that only took: %v, %v", fi.Mode(), err)
+	}
+	if fi, err := os.Stat(info); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("%s after a sync that only took: %v, %v", syncfolder.InfoFile, fi.Mode(), err)
 	}
 }

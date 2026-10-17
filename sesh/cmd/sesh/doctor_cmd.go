@@ -980,6 +980,15 @@ func checkSync(c *doctorChecks, cfg *config.Config, matErr error) {
 		c.row(markFail, "Sync", value, err.Error())
 		return
 	}
+	// What sync would refuse (the vault synced with another folder, or
+	// never synced, and has entries of its own) fails here too.
+	if info, err := f.ReadInfo(); err == nil {
+		if err := checkSwitch(store, f, info); err != nil {
+			c.row(markFail, "Sync", value, err.Error())
+			c.todo("Point sync.dir back at the folder this vault synced with, or stop syncing:", "sesh sync leave")
+			return
+		}
+	}
 	switch {
 	case w.last != nil:
 		value += ", last synced " + w.last.CreatedAt.Local().Format("2006-01-02 15:04")
