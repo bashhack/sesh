@@ -217,12 +217,20 @@ func Seal(s Sealer, h Header, r *Record) ([]byte, error) {
 		return nil, fmt.Errorf("seal %s: %w", h.UIDString(), err)
 	}
 	defer secure.SecureZeroBytes(plain)
+	tooLarge := func(n int) error {
+		return fmt.Errorf("seal %s: about %d bytes, over the %d a sync file may be", h.UIDString(), n, MaxFileSize)
+	}
+	// Checked first, so the sizes worked out from it are small.
+	if len(plain) > MaxFileSize {
+		return nil, tooLarge(len(plain))
+	}
 	pieces := max((len(plain)+MaxPiece-1)/MaxPiece, 1)
-	if size := headerLen + len(plain) + pieces*pieceOverhead; size > MaxFileSize {
-		return nil, fmt.Errorf("seal %s: about %d bytes, over the %d a sync file may be", h.UIDString(), size, MaxFileSize)
+	size := headerLen + len(plain) + pieces*pieceOverhead
+	if size > MaxFileSize {
+		return nil, tooLarge(size)
 	}
 	hb := h.bytes()
-	out := append(make([]byte, 0, headerLen+len(plain)+pieces*pieceOverhead), hb...)
+	out := append(make([]byte, 0, size), hb...)
 	for i := range pieces {
 		piece := plain[i*MaxPiece : min((i+1)*MaxPiece, len(plain))]
 		sealed, salt, err := s.EncryptEntry(piece, pieceAAD(hb, uint32(i), i == pieces-1)) //nolint:gosec // i < MaxFileSize/MaxPiece
