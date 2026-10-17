@@ -382,7 +382,9 @@ func (f Folder) entries(create bool) (string, error) {
 		return "", err
 	case !fi.IsDir():
 		return "", fmt.Errorf("%s isn't a folder (a link, or a file): sesh reads and writes only a real one", dir)
-	case fi.Mode().Perm()&0o077 != 0:
+	case create && fi.Mode().Perm()&0o077 != 0:
+		// Made readable only by this user when written to; reading it
+		// (Scan, as sesh doctor and sync status do) changes nothing.
 		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a folder: 0700 is only this user
 			return "", fmt.Errorf("make %s readable only by you: %w", dir, err)
 		}

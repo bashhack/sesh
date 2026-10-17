@@ -420,7 +420,7 @@ func TestDoctor_Permissions(t *testing.T) {
 	if err := os.Chmod(dir, 0o777|os.ModeSticky); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := runDoctorOut(t); err != nil || strings.Contains(out, "chmod go-w") || !strings.Contains(out, "Move the vault to a folder only you can write to:\n       sesh init\n") {
+	if out, err := runDoctorOut(t); err != nil || strings.Contains(out, "chmod go-w") || !strings.Contains(out, "Move the vault to a folder only you can write to: close sesh ui") || !strings.Contains(out, "change db_path in") {
 		t.Errorf("a shared folder: err = %v\n%s", err, out)
 	}
 }

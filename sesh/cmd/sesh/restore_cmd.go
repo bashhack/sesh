@@ -187,6 +187,11 @@ func planRestore(cfg *config.Config, path string) (*restorePlan, error) {
 	var plan strings.Builder
 	fmt.Fprintf(&plan, "Restore the vault from %s, made %s (%s)?\n", name, made, backupCount(b))
 	fmt.Fprintf(&plan, "  It opens with the master password, and recovery key, the vault had then.\n")
+	// Syncing, it says what the next sync does with what's restored, before
+	// the rest, which a small window cuts first.
+	if cfg.SyncDir.Value != "" {
+		plan.WriteString(syncRestoreNote)
+	}
 	switch {
 	case currentErr == nil:
 		if current.VaultID != b.VaultID {
@@ -197,11 +202,6 @@ func planRestore(cfg *config.Config, path string) (*restorePlan, error) {
 		fmt.Fprintf(&plan, "  There's no vault at %s now, or it's new and empty; the backup becomes it.\n", tildePath(vaultPath))
 	default:
 		fmt.Fprintf(&plan, "  The vault now is damaged (%v).\n  It's moved aside, not deleted, and the backup is copied in. Make sure no other sesh command is running.\n", currentErr)
-	}
-	// Syncing, it says what the next sync does with what's restored
-	// (decided with the user 2026-10-17).
-	if cfg.SyncDir.Value != "" {
-		plan.WriteString(syncRestoreNote)
 	}
 	return &restorePlan{path: path, name: name, made: made, question: plan.String(), backup: b, whole: currentErr != nil}, nil
 }
@@ -260,8 +260,5 @@ func backupCount(b database.BackupSummary) string {
 
 // syncRestoreNote is what a restore says of the next sync, when the vault
 // syncs.
-const syncRestoreNote = `  This vault syncs: at the next sync, the restored entries win over the other
-  computers' versions (their passwords kept in each entry's history), but
-  anything deleted since, on any computer, stays deleted. To undo a deletion,
-  use sesh trash instead.
+const syncRestoreNote = `  This vault syncs: at the next sync, the restored entries win over the other computers' versions (their passwords kept in each entry's history), but anything deleted since, on any computer, stays deleted, unless the backup holds a change to it that was never synced. To undo a deletion, use sesh trash instead.
 `

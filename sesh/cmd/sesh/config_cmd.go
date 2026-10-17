@@ -18,8 +18,8 @@ const configUsage = `Usage:
   sesh config set <key> <value> [--force]  Change a setting in the config file ("" puts its default back)
 
 A setting an environment variable or a flag gives wins over the file, so
-it's changed there instead; db_path, where the vault is, is changed with
-sesh init. Lowering a setting that keeps things (history.keep,
+it's changed there instead; db_path, where the vault is, is changed in
+the file once the vault is moved (see "Moving the vault" in the docs). Lowering a setting that keeps things (history.keep,
 trash.keep_days, audit.retention_days, backup.keep) deletes what's beyond
 it, so it's asked about first; --force changes it without asking.
 
@@ -88,7 +88,7 @@ func setConfig(app *App, args []string) error {
 	it := items[i]
 	switch {
 	case !it.Editable:
-		return fmt.Errorf("%s is where the vault is: sesh init moves it", key)
+		return fmt.Errorf("%s is where the vault is: move the vault's files first, then change it in %s (\"Moving the vault\" in the docs says how)", key, tildePath(cfg.Path))
 	case it.Source == config.FromEnv || it.Source == config.FromFlag:
 		return fmt.Errorf("%s is set by %s, which wins over the config file: change it there", key, it.Origin)
 	case value == it.Raw:

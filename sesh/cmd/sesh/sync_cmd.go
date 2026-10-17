@@ -770,55 +770,27 @@ func syncStatus(app *App) error {
 		return err
 	}
 	defer closeAuditStore(store)
-	items, err := store.SyncItems()
+	var folder *syncfolder.Folder
+	if folderErr == nil {
+		folder = &f
+	}
+	w, err := syncWaitingIn(store, folder)
 	if err != nil {
 		return err
 	}
-	agreed := map[string]syncfolder.Hash{}
-	changed := 0
-	for i := range items {
-		if items[i].Changed() {
-			changed++
-		}
-		if items[i].Agreed != nil {
-			agreed[items[i].UID] = items[i].Agreed.Hash
-		}
+	if w.last != nil {
+		fmt.Fprintf(&b, "Last synced:   %s (%s)\n", w.last.CreatedAt.Local().Format("2006-01-02 15:04"), strings.TrimPrefix(w.last.Detail, "Sync: "))
 	}
-	if events, err := store.AuditEvents(0); err == nil {
-		for _, e := range events {
-			if e.EventType == "sync" {
-				fmt.Fprintf(&b, "Last synced:   %s (%s)\n", e.CreatedAt.Local().Format("2006-01-02 15:04"), strings.TrimPrefix(e.Detail, "Sync: "))
-				break
-			}
-		}
-	}
-	fmt.Fprintf(&b, "Changed here, to send:          %d\n", changed)
-	if folderErr == nil {
-		c, err := f.Scan()
-		if err != nil {
-			return err
-		}
-		keyID, err := store.SyncKeyID()
-		if err != nil {
-			return err
-		}
-		fresh, otherKey := 0, 0
-		for _, file := range c.Files {
-			switch h, ok := agreed[file.UIDString()]; {
-			case file.KeyIDString() != keyID:
-				otherKey++
-			case !ok || h != file.Hash:
-				fresh++
-			}
-		}
-		fmt.Fprintf(&b, "Changed in the folder, to take: %d\n", fresh)
+	fmt.Fprintf(&b, "Changed here, to send:          %d\n", w.toSend)
+	if c := w.contents; c != nil {
+		fmt.Fprintf(&b, "Changed in the folder, to take: %d\n", w.toTake)
 		if info, err := f.ReadInfo(); err != nil {
 			fmt.Fprintf(&b, "❌ %v\n", err)
 		} else if err := checkSwitch(store, f, info); err != nil {
 			fmt.Fprintf(&b, "❌ %v\n", err)
 		}
-		if otherKey > 0 {
-			fmt.Fprintf(&b, "⚠️  %s sealed with another master password's key: sync leaves them for the computer that wrote them\n", nouns(otherKey, "entry's file is", "entries' files are"))
+		if w.otherKey > 0 {
+			fmt.Fprintf(&b, "⚠️  %s\n", otherKeySaid(w.otherKey))
 		}
 		if len(c.NotDownloaded) > 0 {
 			fmt.Fprintf(&b, "⚠️  %s for the sync tool to download their files: keep the sync folder downloaded (in iCloud Drive, Control-click it and choose Keep Downloaded)\n", nouns(len(c.NotDownloaded), "entry waits", "entries wait"))
@@ -829,6 +801,68 @@ func syncStatus(app *App) error {
 	}
 	_, err = fmt.Fprint(app.Stdout, b.String())
 	return err
+}
+
+// syncWaiting is what's waiting to sync, read without unlocking the vault.
+type syncWaiting struct {
+	// last is the last sync, as the audit log has it: nil when it has
+	// none (never synced, or pruned since).
+	last *database.AuditEntry
+	// contents is what the folder holds; nil when it wasn't read.
+	contents *syncfolder.Contents
+	// toSend are entries changed here; toTake, files changed in the
+	// folder; otherKey, files sealed with another master password's key,
+	// which sync leaves alone.
+	toSend, toTake, otherKey int
+	// synced says the vault has agreed entries with a folder before.
+	synced bool
+}
+
+// syncWaitingIn is what's waiting between store and f; with f nil, only
+// what's waiting here.
+func syncWaitingIn(store *database.Store, f *syncfolder.Folder) (*syncWaiting, error) {
+	w := &syncWaiting{}
+	items, err := store.SyncItems()
+	if err != nil {
+		return nil, err
+	}
+	agreed := map[string]syncfolder.Hash{}
+	for i := range items {
+		if items[i].Changed() {
+			w.toSend++
+		}
+		if items[i].Agreed != nil {
+			agreed[items[i].UID] = items[i].Agreed.Hash
+			w.synced = true
+		}
+	}
+	if w.last, err = store.LastAuditEvent("sync"); err != nil {
+		return nil, err
+	}
+	if f == nil {
+		return w, nil
+	}
+	if w.contents, err = f.Scan(); err != nil {
+		return nil, err
+	}
+	keyID, err := store.SyncKeyID()
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range w.contents.Files {
+		switch h, ok := agreed[file.UIDString()]; {
+		case file.KeyIDString() != keyID:
+			w.otherKey++
+		case !ok || h != file.Hash:
+			w.toTake++
+		}
+	}
+	return w, nil
+}
+
+// otherKeySaid says n files are sealed with another master password's key.
+func otherKeySaid(n int) string {
+	return nouns(n, "entry's file is", "entries' files are") + " sealed with another master password's key: sync leaves them for the computer that wrote them"
 }
 
 // syncLeave is sesh sync leave: the vault stops syncing. Its entries, what

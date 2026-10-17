@@ -159,7 +159,7 @@ func TestRunConfig_Set(t *testing.T) {
 	t.Setenv(config.EnvTrashKeepDays, "7")
 	for args, wantSub := range map[string]string{
 		"set nope 1":                 "nope isn't a setting; sesh config lists them",
-		"set db_path /tmp/x.db":      "sesh init moves it",
+		"set db_path /tmp/x.db":      "move the vault's files first",
 		"set trash.keep_days 3":      "set by SESH_TRASH_KEEP_DAYS",
 		"set clipboard_timeout soon": "clipboard_timeout",
 		"set clipboard_timeout":      "name the setting and its value",

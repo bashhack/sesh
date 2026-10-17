@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -35,6 +36,21 @@ func (s *Store) AuditEvents(limit int) (_ []AuditEntry, err error) {
 		events = append(events, e)
 	}
 	return events, rows.Err()
+}
+
+// LastAuditEvent is the newest audit event of eventType, or nil when the
+// log has none.
+func (s *Store) LastAuditEvent(eventType string) (*AuditEntry, error) {
+	var e AuditEntry
+	err := s.db.QueryRow(`SELECT id, event_type, COALESCE(entry_id, ''), COALESCE(detail, ''), created_at FROM audit_log WHERE event_type = ? ORDER BY id DESC LIMIT 1`, eventType).
+		Scan(&e.ID, &e.EventType, &e.EntryID, &e.Detail, &e.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read audit log: %w", err)
+	}
+	return &e, nil
 }
 
 // AuditSummary returns how many events the audit log holds and when the
