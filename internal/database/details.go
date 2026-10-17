@@ -1,6 +1,7 @@
 package database
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -66,17 +67,32 @@ type sealedDetails struct {
 
 // sealDetails encodes d for k's row, sealing its notes and secret values
 // to k.
-func (s *Store) sealDetails(k vault.Key, d *vault.Details) (sealedDetails, error) {
+//
+// was, when not nil, is k's row as it is. When it holds just these details,
+// its sealed part is kept as it's sealed: sealing it again would change
+// nothing but its bytes, and the entry would count as changed.
+func (s *Store) sealDetails(k vault.Key, d *vault.Details, was *sealedDetails) (sealedDetails, error) {
 	url, plain, sealedPlain, err := vault.EncodeDetails(d)
 	if err != nil {
 		return sealedDetails{}, err
 	}
 	defer secure.SecureZeroBytes(sealedPlain)
 	sd := sealedDetails{url: url, plain: plain}
-	if sealedPlain != nil {
-		if sd.sealed, sd.salt, err = s.oracle.EncryptEntry(sealedPlain, detailsAAD(k)); err != nil {
-			return sealedDetails{}, fmt.Errorf("encrypt the details of %s: %w", k, err)
+	if sealedPlain == nil {
+		return sd, nil
+	}
+	if was != nil && was.url == url && was.plain == plain && was.sealed != nil {
+		if had, err := s.oracle.DecryptEntry(was.sealed, was.salt, detailsAAD(k)); err == nil {
+			same := bytes.Equal(had, sealedPlain)
+			secure.SecureZeroBytes(had)
+			if same {
+				sd.sealed, sd.salt = was.sealed, was.salt
+				return sd, nil
+			}
 		}
+	}
+	if sd.sealed, sd.salt, err = s.oracle.EncryptEntry(sealedPlain, detailsAAD(k)); err != nil {
+		return sealedDetails{}, fmt.Errorf("encrypt the details of %s: %w", k, err)
 	}
 	return sd, nil
 }
@@ -87,7 +103,16 @@ func (s *Store) SetDetails(k vault.Key, d *vault.Details) error {
 	if err := d.Check(k.Kind); err != nil {
 		return err
 	}
-	sd, err := s.sealDetails(k, d)
+	var was sealedDetails
+	err := s.db.QueryRow(`SELECT url, details, sealed_details, details_salt FROM entries WHERE kind = ? AND service = ? AND username = ?`,
+		string(k.Kind), k.Service, k.Username).Scan(&was.url, &was.plain, &was.sealed, &was.salt)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return notFound(k)
+	case err != nil:
+		return fmt.Errorf("read %s: %w", k, err)
+	}
+	sd, err := s.sealDetails(k, d, &was)
 	if err != nil {
 		return err
 	}

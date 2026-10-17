@@ -2,8 +2,11 @@ package database
 
 import (
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/bashhack/sesh/internal/totp"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -114,6 +117,10 @@ func TestEntryRev_EveryChange(t *testing.T) {
 		}},
 		{name: "details", do: func() error { return s.SetDetails(k, &vault.Details{URL: "https://github.com", Notes: []byte("n")}) }},
 		{name: "settings", key: code, do: func() error { return s.SetSettings(code, &digits) }},
+		{name: "edit: code settings", key: code, do: func() error {
+			_, err := s.Edit(code, EntryEdit{TOTP: &totp.Params{Digits: 6, Period: 60}})
+			return err
+		}},
 		{name: "edit: folder", do: func() error { _, err := s.Edit(k, EntryEdit{Folder: &folder}); return err }},
 		{name: "edit: tags", do: func() error { _, err := s.Edit(k, EntryEdit{Tags: &tags}); return err }},
 		{name: "move to a folder", do: func() error { _, err := s.MoveToFolder([]vault.Key{k}, "home"); return err }},
@@ -121,6 +128,14 @@ func TestEntryRev_EveryChange(t *testing.T) {
 		{name: "add a tag", do: func() error { _, err := s.AddTag([]vault.Key{k}, "c"); return err }},
 		{name: "rename a tag", do: func() error { _, _, err := s.RenameTag("c", "d"); return err }},
 		{name: "remove a tag", do: func() error { _, err := s.RemoveTag([]vault.Key{k}, "d"); return err }},
+		{name: "a rename and back", do: func() error {
+			away := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice2"}
+			if _, err := s.Edit(k, EntryEdit{To: &away}); err != nil {
+				return err
+			}
+			_, err := s.Edit(away, EntryEdit{To: &k})
+			return err
+		}},
 		{name: "restore an earlier secret", do: func() error { _, err := s.RestoreVersion(k, 2); return err }},
 		{name: "forget an earlier secret", do: func() error { return s.ForgetVersions(k, 2) }},
 		{name: "forget another, by version", do: func() error {
@@ -165,8 +180,9 @@ func TestEntryRev_EveryChange(t *testing.T) {
 }
 
 // Writes that change how entries are kept, not what they hold, leave their
-// rev: a new master password, trimming history to history.keep, a restore
-// from a backup. A change after them still counts.
+// rev: a new master password, trimming history to history.keep. A restore
+// from a backup raises it above any the vault had. A change after them
+// still counts.
 func TestEntryRev_QuietWrites(t *testing.T) {
 	p, s := rekeyVault(t)
 	s.SetHistoryKeep(10)
@@ -192,19 +208,27 @@ func TestEntryRev_QuietWrites(t *testing.T) {
 		t.Fatalf("PruneHistory: %d, %v", n, err)
 	}
 	unchanged("trimming history")
+	// A restore is a change to every entry, and a rev never goes down: the
+	// backup's is raised above any the vault had, so changes after it
+	// aren't taken for ones before.
 	b := backupOf(t, p)
 	if err := s.Put(bank, []byte("b5")); err != nil {
 		t.Fatal(err)
 	}
+	_, before := idOf(t, s, bank)
 	if err := RestoreInPlace(p, b); err != nil {
 		t.Fatal(err)
 	}
-	unchanged("a restore")
+	restoredUID, restored := idOf(t, s, bank)
+	if restoredUID != uid || restored <= before {
+		t.Errorf("after a restore: uid %q rev %d; want %q, rev above %d", restoredUID, restored, uid, before)
+	}
+	quietEmpty(t, s)
 	if err := s.Put(bank, []byte("b6")); err != nil {
 		t.Fatal(err)
 	}
-	if _, after := idOf(t, s, bank); after <= rev {
-		t.Errorf("a change after them: rev %d, then %d; want it raised", rev, after)
+	if _, after := idOf(t, s, bank); after <= restored {
+		t.Errorf("a change after them: rev %d, then %d; want it raised", restored, after)
 	}
 	_, rev = idOf(t, s, bank)
 	key, rec := newKeyFor(t, "new-password-1")
@@ -212,4 +236,88 @@ func TestEntryRev_QuietWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	unchanged("a new master password")
+}
+
+// Writing what an entry already holds isn't a change: the same secret, the
+// same details and tags saved again, an edit to the folder or tags it has.
+func TestEntryRev_SameAgain(t *testing.T) {
+	s := newTestStore(t)
+	s.SetHistoryKeep(10)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	e := &vault.Entry{Key: k, Folder: "work", Tags: []string{"b", "a"}}
+	d := &vault.Details{URL: "https://github.com", Notes: []byte("n"), Fields: []vault.Field{{Name: "pin", Value: []byte("1234"), Secret: true}}}
+	if err := s.SaveWithDetails(e, []byte("one"), d); err != nil {
+		t.Fatal(err)
+	}
+	_, rev := idOf(t, s, k)
+	folder, tags := "work", []string{"a", "b"}
+	for _, step := range []struct {
+		do   func() error
+		name string
+	}{
+		{name: "the same secret", do: func() error { return s.Put(k, []byte("one")) }},
+		{name: "the same entry saved whole", do: func() error { return s.SaveWithDetails(e, []byte("one"), d) }},
+		{name: "the same details", do: func() error { return s.SetDetails(k, d) }},
+		{name: "edit: the folder it's in", do: func() error {
+			if _, err := s.Edit(k, EntryEdit{Folder: &folder}); !errors.Is(err, ErrNothingToChange) {
+				return fmt.Errorf("want ErrNothingToChange, got %v", err)
+			}
+			return nil
+		}},
+		{name: "edit: the tags it has", do: func() error {
+			if _, err := s.Edit(k, EntryEdit{Tags: &tags, Secret: []byte("one")}); !errors.Is(err, ErrNothingToChange) {
+				return fmt.Errorf("want ErrNothingToChange, got %v", err)
+			}
+			return nil
+		}},
+		{name: "edit: the same details", do: func() error {
+			_, err := s.Edit(k, EntryEdit{Details: &vault.DetailsChange{Notes: []byte("n"), SetNotes: true}})
+			if err != nil && !errors.Is(err, ErrNothingToChange) {
+				return err
+			}
+			return nil
+		}},
+	} {
+		if err := step.do(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if _, got := idOf(t, s, k); got != rev {
+			t.Errorf("%s: rev %d, then %d; want it left", step.name, rev, got)
+		}
+	}
+	got, err := s.Details(k, "")
+	if err != nil || string(got.Notes) != "n" || len(got.Fields) != 1 || string(got.Fields[0].Value) != "1234" {
+		t.Errorf("details after: %+v, %v", got, err)
+	}
+	if h, err := s.History(k); err != nil || len(h) != 0 {
+		t.Errorf("history after: %d, %v; want none", len(h), err)
+	}
+}
+
+// A change to any one column of an entry's row raises its rev, however
+// it's written.
+func TestEntryRev_EachColumn(t *testing.T) {
+	s := newTestStore(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	if err := s.Put(k, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	for col, value := range map[string]any{
+		"kind": "api_key", "service": "gitlab", "username": "bob",
+		"encrypted_data": []byte{1}, "salt": []byte{2}, "settings": `{"file_name":"x"}`,
+		"folder": "f", "url": "https://x", "details": `{"x":1}`,
+		"sealed_details": []byte{3}, "details_salt": []byte{4},
+		"created_at": "2001-01-01 00:00:00", "updated_at": "2002-02-02 00:00:00",
+	} {
+		var before, after int64
+		if err := s.db.QueryRow(`SELECT rev FROM entries`).Scan(&before); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`UPDATE entries SET `+col+` = ?`, value); err != nil { //nolint:gosec // col is a column name above
+			t.Fatalf("%s: %v", col, err)
+		}
+		if err := s.db.QueryRow(`SELECT rev FROM entries`).Scan(&after); err != nil || after != before+1 {
+			t.Errorf("%s changed: rev %d, then %d (%v); want it raised by 1", col, before, after, err)
+		}
+	}
 }

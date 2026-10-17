@@ -160,7 +160,11 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 	nd := sealedDetails{url: url, plain: details, sealed: sealed, salt: sealedSalt}
 	switch {
 	case e.Details != nil:
-		changed, err := s.changeDetails(&ent, sealed, sealedSalt, to, e.Details)
+		var was *sealedDetails
+		if to == k {
+			was = &nd
+		}
+		changed, err := s.changeDetails(&ent, sealed, sealedSalt, to, e.Details, was)
 		if err != nil {
 			return "", err
 		}
@@ -218,16 +222,19 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 		if _, err = tx.Exec(q, args...); err != nil {
 			return err
 		}
-		filed, err = fileInTx(tx, id, to, &e)
-		return err
+		if filed, err = fileInTx(tx, id, to, &e); err != nil {
+			return err
+		}
+		// Nothing changed: nothing is written.
+		if len(what) == 0 && len(filed) == 0 {
+			return ErrNothingToChange
+		}
+		return nil
 	})
 	if err != nil {
 		return "", err
 	}
 	what = append(what, filed...)
-	if len(what) == 0 {
-		return "", ErrNothingToChange
-	}
 	detail := strings.Join(what, " and ")
 	s.audit("modify", to.String(), "Edit: "+detail)
 	return detail, nil
@@ -345,8 +352,9 @@ type changedDetails struct {
 }
 
 // changeDetails opens ent's details (its sealed part, sealed and salt),
-// makes change to them, checks them for to's kind, and seals them for to.
-func (s *Store) changeDetails(ent *vault.Entry, sealed, salt []byte, to vault.Key, change *vault.DetailsChange) (changedDetails, error) {
+// makes change to them, checks them for to's kind, and seals them for to;
+// was is to's row as it is, if it's ent's (see sealDetails).
+func (s *Store) changeDetails(ent *vault.Entry, sealed, salt []byte, to vault.Key, change *vault.DetailsChange, was *sealedDetails) (changedDetails, error) {
 	var plain []byte
 	if sealed != nil {
 		var err error
@@ -371,7 +379,7 @@ func (s *Store) changeDetails(ent *vault.Entry, sealed, salt []byte, to vault.Ke
 	if err := d.Check(to.Kind); err != nil {
 		return changedDetails{}, err
 	}
-	sd, err := s.sealDetails(to, &d)
+	sd, err := s.sealDetails(to, &d, was)
 	if err != nil {
 		return changedDetails{}, err
 	}

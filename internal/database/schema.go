@@ -111,9 +111,23 @@ func migrateV1(tx *sql.Tx) error {
 		// history to history.keep, a restore. See quietly.
 		`CREATE TABLE quiet_writes (id INTEGER PRIMARY KEY CHECK (id = 1))`,
 		// Any change to an entry, its tags, or (forgetting one) its
-		// earlier secrets raises its rev, however it's made.
+		// earlier secrets raises its rev, however it's made; a write of
+		// what the entry already holds doesn't.
 		`CREATE TRIGGER entry_changed AFTER UPDATE ON entries
-			WHEN NEW.rev = OLD.rev AND NOT EXISTS (SELECT 1 FROM quiet_writes)
+			WHEN NEW.rev = OLD.rev AND NOT EXISTS (SELECT 1 FROM quiet_writes) AND (
+				NEW.kind IS NOT OLD.kind
+				OR NEW.service IS NOT OLD.service
+				OR NEW.username IS NOT OLD.username
+				OR NEW.encrypted_data IS NOT OLD.encrypted_data
+				OR NEW.salt IS NOT OLD.salt
+				OR NEW.settings IS NOT OLD.settings
+				OR NEW.folder IS NOT OLD.folder
+				OR NEW.url IS NOT OLD.url
+				OR NEW.details IS NOT OLD.details
+				OR NEW.sealed_details IS NOT OLD.sealed_details
+				OR NEW.details_salt IS NOT OLD.details_salt
+				OR NEW.created_at IS NOT OLD.created_at
+				OR NEW.updated_at IS NOT OLD.updated_at)
 			BEGIN UPDATE entries SET rev = rev + 1 WHERE id = NEW.id; END`,
 		`CREATE TRIGGER entry_tag_added AFTER INSERT ON entry_tags
 			WHEN NOT EXISTS (SELECT 1 FROM quiet_writes)

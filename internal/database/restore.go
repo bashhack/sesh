@@ -145,7 +145,15 @@ func restoreInPlace(dbPath, backupPath string) (err error) {
 	if err != nil {
 		return err
 	}
-	// The entries are put back as the backup has them, their revs too.
+	// The entries are put back as the backup has them, but for their revs:
+	// a rev never goes down, so each is raised above any this vault had,
+	// the restore a change to every entry. The writes are quiet, so
+	// that's all they raise.
+	var revs int64
+	if err := tx.QueryRow(`SELECT MAX((SELECT COALESCE(MAX(rev), 0) FROM main.entries), (SELECT COALESCE(MAX(rev), 0) FROM main.trash))`).Scan(&revs); err != nil {
+		_ = tx.Rollback() //nolint:errcheck // already failing
+		return fmt.Errorf("restore: %w", err)
+	}
 	if _, err := tx.Exec(`INSERT INTO main.quiet_writes (id) VALUES (1)`); err != nil {
 		_ = tx.Rollback() //nolint:errcheck // already failing
 		return fmt.Errorf("restore: %w", err)
@@ -161,6 +169,12 @@ func restoreInPlace(dbPath, backupPath string) (err error) {
 		if _, err := tx.Exec(`INSERT INTO main.` + t + ` SELECT * FROM backup.` + t); err != nil { //nolint:gosec // t is one of restoredTables
 			_ = tx.Rollback() //nolint:errcheck // already failing
 			return fmt.Errorf("restore %s: %w", t, err)
+		}
+	}
+	for _, t := range []string{"entries", "trash"} {
+		if _, err := tx.Exec(`UPDATE main.`+t+` SET rev = rev + ?`, revs); err != nil { //nolint:gosec // t is entries or trash
+			_ = tx.Rollback() //nolint:errcheck // already failing
+			return fmt.Errorf("restore: %w", err)
 		}
 	}
 	if _, err := tx.Exec(`DELETE FROM main.quiet_writes`); err != nil {
