@@ -162,6 +162,9 @@ type Record struct {
 	Kind     vault.Kind `json:"kind,omitempty"`
 	Service  string     `json:"service,omitempty"`
 	Username string     `json:"username,omitempty"`
+	// Changed is when this version was made, by its computer's clock:
+	// where two versions changed the same thing, the later's is kept.
+	Changed time.Time `json:"changed,omitzero"`
 	// Computer is the name of the computer that made this version.
 	Computer string         `json:"computer"`
 	URL      string         `json:"url,omitempty"`
@@ -188,7 +191,7 @@ type Field struct {
 // Earlier is one of an entry's earlier secrets.
 type Earlier struct {
 	ReplacedAt time.Time `json:"replaced_at"`
-	// Computer is the name of the computer it was replaced on.
+	// Computer is the name of the computer whose change replaced it.
 	Computer string `json:"computer,omitempty"`
 	// FileName is a file entry's file's name, as it was then.
 	FileName string `json:"file_name,omitempty"`
