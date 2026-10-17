@@ -754,7 +754,7 @@ func TestSync_PasswordChangeOneBehind(t *testing.T) {
 			t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
 			stubTerminalPrompt(t, interactivePrompt(t, "new-password-3"))
 			out, err := runSyncOut(t, "", false)
-			if err != nil || strings.Contains(out, "from the same one") || !strings.Contains(out, "now opens with the new master password") {
+			if err != nil || strings.Contains(out, "while this computer's moved on") || !strings.Contains(out, "now opens with the new master password") {
 				t.Fatalf("desktop, one change behind: %q, %v", out, err)
 			}
 			if vaultKeyID(t, ddb) != folderKeyID(t, folder) {

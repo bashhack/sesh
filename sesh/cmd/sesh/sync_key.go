@@ -33,7 +33,7 @@ var errKeyRolledBack = errors.New("the sync folder's master password record is a
 // one (a sync tool's race, or a record put back). The change whose key
 // record's ID sorts last is kept, on every computer alike; a sync settles
 // it.
-var errKeyFork = errors.New("the master password was changed on this computer and another from the same one: sesh sync settles it, keeping one of them on every computer (at a terminal, it may ask for the other's)")
+var errKeyFork = errors.New("the master password was changed elsewhere from one this computer had before, while this computer's moved on to another: sesh sync settles it, keeping one of them on every computer (at a terminal, it may ask for the other's)")
 
 // errKeyForged is a sync folder whose key record no change from this
 // vault's leads to: not made by a computer that had this vault's key.
@@ -495,7 +495,7 @@ func settleFork(app *App, cfg *config.Config, f syncfolder.Folder) error {
 		return err
 	}
 	if forkKept(database.UnlockID(info.Key.Verify), database.UnlockID(m.Verify)) {
-		if _, err := fmt.Fprintln(app.Stderr, "The master password was changed on this computer and another from the same one; the other's is kept on every computer."); err != nil {
+		if _, err := fmt.Fprintln(app.Stderr, "The master password was changed elsewhere from one this computer had before, while this computer's moved on to another: the other's is kept on every computer."); err != nil {
 			return err
 		}
 		if err := takeKeyChange(app, cfg, f); err != nil {
@@ -510,7 +510,7 @@ func settleFork(app *App, cfg *config.Config, f syncfolder.Folder) error {
 	if err := f.WriteInfo(syncfolder.InfoFor(info.FolderID, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}, database.UnionLinks(links, info.Links))); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(app.Stdout, "The master password was changed on this computer and another from the same one: this one's is kept, and the other computer asks for it at its next sync."); err != nil {
+	if _, err := fmt.Fprintln(app.Stdout, "The master password was changed elsewhere from one this computer had before, while this computer's moved on to another: this computer's is kept, and the other computers ask for it at their next sync."); err != nil {
 		return err
 	}
 	return syncWith(app, cfg)
