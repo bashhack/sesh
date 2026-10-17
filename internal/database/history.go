@@ -593,15 +593,19 @@ func (s *Store) PruneHistory(keep int) (int, error) {
 		return 0, nil
 	}
 	var n int64
+	// Keeping fewer is this computer's setting, not a change to the
+	// entries: it's done quietly.
 	err := s.inTx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`DELETE FROM history WHERE id IN (
-			SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY kind, service, username, trash_id ORDER BY id DESC) AS n FROM history)
-			WHERE n > ?)`, keep)
-		if err != nil {
+		return quietly(tx, func() error {
+			res, err := tx.Exec(`DELETE FROM history WHERE id IN (
+				SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY kind, service, username, trash_id ORDER BY id DESC) AS n FROM history)
+				WHERE n > ?)`, keep)
+			if err != nil {
+				return err
+			}
+			n, err = res.RowsAffected()
 			return err
-		}
-		n, err = res.RowsAffected()
-		return err
+		})
 	})
 	if err != nil {
 		return 0, fmt.Errorf("drop earlier secrets past history.keep: %w", err)
