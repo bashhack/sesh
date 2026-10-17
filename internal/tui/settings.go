@@ -125,7 +125,7 @@ func (m *Model) changeSetting(s *Setting) tea.Cmd {
 		m.sayBad(s.Key + " is set by " + s.Env + ", outside the config file; change it there.")
 		return nil
 	case !s.Editable:
-		m.sayBad(s.Key + " is where the vault is; it's changed with sesh init, not under an open vault.")
+		m.sayBad(s.Key + " is where the vault is: quit, move the vault's files, then change it in the config file (\"Moving the vault\" in the docs says how).")
 		return nil
 	case m.opts.SetSetting == nil:
 		return nil
@@ -258,7 +258,7 @@ func settingDetail(s *Setting) string {
 	case s.Env != "":
 		return s.Value + " · set by " + s.Env + ", outside the config file: change it there"
 	case !s.Editable:
-		return s.Value + " · where the vault is: sesh init moves it"
+		return s.Value + " · where the vault is: moved by hand, then changed in the config file"
 	}
 	d := s.Value + " · " + s.Said + " · a change takes effect " + s.Applies
 	switch {

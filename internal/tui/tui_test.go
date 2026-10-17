@@ -3139,7 +3139,7 @@ func TestSettingsNotChanged(t *testing.T) {
 		t.Errorf("one set by the environment:\n%s", s)
 	}
 	a.press("down", "enter")
-	if s := a.screen(); a.form != nil || !strings.Contains(s, "sesh init") || len(*asked) != 0 {
+	if s := a.screen(); a.form != nil || !strings.Contains(s, "move the vault") || len(*asked) != 0 {
 		t.Errorf("the vault's place: asked %q\n%s", *asked, s)
 	}
 	// A switch the environment sets doesn't offer to turn it over.

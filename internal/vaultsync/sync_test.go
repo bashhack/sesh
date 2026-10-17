@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -547,5 +549,69 @@ func TestSync_FilesNotForThisKey(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(bankFile); string(b) != "not readable yet" { //nolint:errcheck // compared
 		t.Error("written over a file that couldn't be read")
+	}
+}
+
+// A computer that only takes still makes the folder's entries readable
+// only by its user, as a sync tool may make it for anyone.
+func TestSync_TakingTightensTheFolder(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f := twoComputers(t)
+	laptop.put("github", "pw-1")
+	laptop.sync(f)
+	dir := filepath.Join(f.Dir(), "entries")
+	if err := os.Chmod(dir, 0o777); err != nil { //nolint:gosec // a folder anyone can read, as a sync tool may leave it
+		t.Fatal(err)
+	}
+	info := filepath.Join(f.Dir(), syncfolder.InfoFile)
+	if err := os.WriteFile(info, []byte("{}"), 0o644); err != nil { //nolint:gosec // readable by anyone, as a sync tool may leave it
+		t.Fatal(err)
+	}
+	if err := os.Chmod(info, 0o644); err != nil { //nolint:gosec // as above
+		t.Fatal(err)
+	}
+	desktop.sync(f)
+	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("entries/ after a sync that only took: %v, %v", fi.Mode(), err)
+	}
+	if fi, err := os.Stat(info); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("%s after a sync that only took: %v, %v", syncfolder.InfoFile, fi.Mode(), err)
+	}
+}
+
+// Tightening takes away only what others had, so a file kept read-only
+// stays so; and a folder whose permissions can't be changed still syncs,
+// the trouble said.
+func TestSync_TightenKeepsAndSays(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f := twoComputers(t)
+	laptop.put("github", "pw-1")
+	laptop.sync(f)
+	info := filepath.Join(f.Dir(), syncfolder.InfoFile)
+	if err := os.WriteFile(info, []byte("{}"), 0o444); err != nil { //nolint:gosec // read-only for all, as a user may keep it
+		t.Fatal(err)
+	}
+	if err := os.Chmod(info, 0o444); err != nil { //nolint:gosec // as above
+		t.Fatal(err)
+	}
+	desktop.sync(f)
+	if fi, err := os.Stat(info); err != nil || fi.Mode().Perm() != 0o400 {
+		t.Errorf("a read-only %s: %v, %v; want 0400", syncfolder.InfoFile, fi.Mode(), err)
+	}
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	// Locked (chflags uchg), so chmod fails.
+	if err := os.Chmod(info, 0o644); err != nil { //nolint:gosec // readable by others again
+		t.Fatal(err)
+	}
+	if err := exec.Command("chflags", "uchg", info).Run(); err != nil {
+		t.Skip("chflags:", err)
+	}
+	t.Cleanup(func() { _ = exec.Command("chflags", "nouchg", info).Run() }) //nolint:errcheck // test cleanup
+	laptop.put("gitlab", "pw-2")
+	s, err := Sync(laptop.store, f, laptop.name)
+	if err != nil || len(s.Problems) != 0 || len(s.Warnings) != 1 || !strings.Contains(s.Warnings[0], "readable only by you") || len(s.Sent) != 1 {
+		t.Errorf("a locked %s: %+v, %v; want it said and the rest synced", syncfolder.InfoFile, s, err)
 	}
 }

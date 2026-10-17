@@ -38,6 +38,9 @@ type Summary struct {
 	// Problems are files that can't be read and entries that can't be
 	// written, each with why.
 	Problems []string
+	// Warnings are what's wrong but kept nothing from syncing, such as a
+	// folder whose permissions can't be made private.
+	Warnings []string
 	// Ignored counts older copies of entries' files, already seen here: put
 	// back by a sync tool, or someone.
 	Ignored int
@@ -101,6 +104,11 @@ func Sync(store *database.Store, folder syncfolder.Folder, computer string) (*Su
 	}
 	if y.id, err = store.SyncComputerID(); err != nil {
 		return nil, err
+	}
+	// A folder whose permissions can't be changed (another user's, or a
+	// file system without them) still syncs; it's said, as a warning.
+	if err := folder.Tighten(); err != nil {
+		y.sum.Warnings = append(y.sum.Warnings, strings.Split(err.Error(), "\n")...)
 	}
 	contents, err := folder.Scan()
 	if err != nil {

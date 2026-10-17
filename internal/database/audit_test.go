@@ -108,6 +108,12 @@ func TestAuditEvents(t *testing.T) {
 	if err != nil || len(all) != 3 {
 		t.Errorf("AuditEvents(0) = %d events, %v; want all 3", len(all), err)
 	}
+	if e, err := s.LastAuditEvent("access"); err != nil || e == nil || e.EventType != "access" || e.ID != events[1].ID {
+		t.Errorf("LastAuditEvent(access) = %+v, %v; want the access event", e, err)
+	}
+	if e, err := s.LastAuditEvent("sync"); err != nil || e != nil {
+		t.Errorf("LastAuditEvent(sync) = %+v, %v; want none", e, err)
+	}
 }
 
 func TestAuditSummary(t *testing.T) {

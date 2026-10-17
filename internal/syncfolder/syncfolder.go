@@ -382,12 +382,42 @@ func (f Folder) entries(create bool) (string, error) {
 		return "", err
 	case !fi.IsDir():
 		return "", fmt.Errorf("%s isn't a folder (a link, or a file): sesh reads and writes only a real one", dir)
-	case fi.Mode().Perm()&0o077 != 0:
+	case create && fi.Mode().Perm()&0o077 != 0:
+		// Made readable only by this user when written to; reading it
+		// (Scan, as sesh doctor and sync status do) changes nothing.
 		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a folder: 0700 is only this user
 			return "", fmt.Errorf("make %s readable only by you: %w", dir, err)
 		}
 	}
 	return dir, nil
+}
+
+// Tighten makes the folder's entries/ and InfoFile readable only by this
+// user, when they're there: a sync tool may make them with its own umask on
+// a computer that only ever takes. The InfoFile matters as much as the
+// entries: its key record lets whoever reads it try passwords offline.
+func (f Folder) Tighten() error {
+	var errs []error
+	for _, p := range []struct {
+		path string
+		dir  bool
+	}{{filepath.Join(f.dir, entriesDir), true}, {f.infoPath(), false}} {
+		fi, err := os.Lstat(p.path)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		case err != nil:
+			errs = append(errs, err)
+			continue
+		case fi.IsDir() != p.dir || !fi.Mode().IsRegular() && !p.dir || fi.Mode().Perm()&0o077 == 0:
+			continue
+		}
+		// Only what others had is taken away: a file kept read-only stays so.
+		if err := os.Chmod(p.path, fi.Mode().Perm()&^0o077); err != nil {
+			errs = append(errs, fmt.Errorf("make %s readable only by you: %w", p.path, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Hash is a file's SHA-256, of its bytes as they are: sealed, so it says

@@ -54,6 +54,9 @@ func (m *Model) changePassword() tea.Cmd {
 		}
 		return nil
 	}
+	if m.opts.PasswordChangeNote != nil {
+		f.note = m.opts.PasswordChangeNote()
+	}
 	f.focusInput(0)
 	m.form = f
 	return nil

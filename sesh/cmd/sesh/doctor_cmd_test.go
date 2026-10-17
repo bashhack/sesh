@@ -97,6 +97,8 @@ func TestDoctor_ASoundVault(t *testing.T) {
 		"  -     Agent           not running; it starts when a command needs it\n" +
 		"  ok    Key settings    19 MiB, 2 passes, 1 thread\n" +
 		"  -     Backups         automatic backups are off (backup.every_days = 0)\n" +
+		"  -     Sync            off\n" +
+		"                        sesh sync init syncs this vault with your other computers\n" +
 		"\nVault: " + tildePath(env.dbPath) + "\n" +
 		"  ok    File            ok\n" +
 		"  ok    Entries         2 entries, all readable\n" +
@@ -418,7 +420,7 @@ func TestDoctor_Permissions(t *testing.T) {
 	if err := os.Chmod(dir, 0o777|os.ModeSticky); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := runDoctorOut(t); err != nil || strings.Contains(out, "chmod go-w") || !strings.Contains(out, "Move the vault to a folder only you can write to:\n       sesh init\n") {
+	if out, err := runDoctorOut(t); err != nil || strings.Contains(out, "chmod go-w") || !strings.Contains(out, "Move the vault to a folder only you can write to: close sesh ui") || !strings.Contains(out, "change db_path in") {
 		t.Errorf("a shared folder: err = %v\n%s", err, out)
 	}
 }
