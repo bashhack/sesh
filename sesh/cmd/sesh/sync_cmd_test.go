@@ -151,11 +151,100 @@ func TestSync_InitJoinSyncLeave(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(folder, "sesh-sync.json")); err != nil {
 		t.Errorf("the folder after leaving: %v", err)
 	}
-	// Joining again takes an empty vault, as any join does: entries kept
-	// while not syncing would bring back those deleted elsewhere meanwhile.
-	if got, err := runSyncOut(t, "", false, "join", folder); err == nil || !strings.Contains(err.Error(), "already has entries") {
-		t.Errorf("join again after leaving: %q, %v", got, err)
+}
+
+// A vault that left joins its folder again, what changed on both sides
+// meanwhile merged: a deletion elsewhere applied, an edit each way kept.
+// Starting another folder, it sends everything there; it can't then join
+// another vault's folder with its entries.
+func TestSync_LeaveAndRejoin(t *testing.T) {
+	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
+	dir := t.TempDir()
+	folder, other := filepath.Join(dir, "sync"), filepath.Join(dir, "other")
+	laptop, desktop := filepath.Join(dir, "laptop"), filepath.Join(dir, "desktop")
+
+	syncComputer(t, laptop, "laptop")
+	putEntry(t, "password/github/alice", "1")
+	putEntry(t, "password/gitlab/alice", "2")
+	putEntry(t, "password/aws/alice", "3")
+	if _, err := runSyncOut(t, "", false, "init", folder); err != nil {
+		t.Fatal(err)
 	}
+	syncComputer(t, desktop, "desktop")
+	if _, err := runSyncOut(t, "", false, "join", folder); err != nil {
+		t.Fatal(err)
+	}
+
+	syncComputer(t, laptop, "laptop")
+	if out, err := runSyncOut(t, "", false, "leave"); err != nil || !strings.Contains(out, "joins it again") {
+		t.Fatalf("leave: %q, %v", out, err)
+	}
+	syncComputer(t, desktop, "desktop")
+	purgeEntry(t, "password/gitlab/alice")
+	putEntry(t, "password/github/alice", "desktop-1")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+
+	syncComputer(t, laptop, "laptop")
+	putEntry(t, "password/aws/alice", "laptop-3")
+	out, err := runSyncOut(t, "", false, "join", folder)
+	if err != nil || !strings.Contains(out, "again") || !strings.Contains(out, "Changed here, sent: 1 entry (password/aws/alice)") {
+		t.Fatalf("join again: %q, %v", out, err)
+	}
+	if got := getEntry(t, "password/github/alice"); got != "desktop-1" {
+		t.Errorf("github on the laptop: %q", got)
+	}
+	if entryExists(t, "password/gitlab/alice") {
+		t.Error("gitlab, deleted on the desktop meanwhile, came back")
+	}
+	syncComputer(t, desktop, "desktop")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := getEntry(t, "password/aws/alice"); got != "laptop-3" {
+		t.Errorf("aws on the desktop: %q", got)
+	}
+	if entryExists(t, "password/gitlab/alice") {
+		t.Error("gitlab came back on the desktop")
+	}
+
+	// Another folder: everything goes there, as changes.
+	syncComputer(t, laptop, "laptop")
+	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runSyncOut(t, "", false, "init", other)
+	if err != nil || !strings.Contains(out, "Changed here, sent: 2 entries") {
+		t.Fatalf("init another folder: %q, %v", out, err)
+	}
+	// The desktop's vault, with its entries, can't join the laptop's new
+	// folder: it never synced with it.
+	syncComputer(t, desktop, "desktop")
+	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runSyncOut(t, "", false, "join", other); err == nil || !strings.Contains(err.Error(), "already has entries") {
+		t.Errorf("join another vault's folder with entries: %q, %v", out, err)
+	}
+}
+
+func entryExists(t *testing.T, id string) bool {
+	t.Helper()
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	k, err := vault.ParseKey(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store.Exists(k) == nil
 }
 
 // Joining refuses a vault with entries of its own, and a wrong master

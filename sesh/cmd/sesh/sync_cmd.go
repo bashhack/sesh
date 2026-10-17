@@ -26,7 +26,7 @@ const syncUsage = `Usage:
                                  computer made (this vault must be new, or empty)
   sesh sync status               Where the vault syncs, and what's waiting
   sesh sync leave                Stop syncing this vault (its entries and the folder stay;
-                                 joining again takes an empty vault)
+                                 joining the folder again merges what changed meanwhile)
 
 A sync folder is a folder any tool carries between your computers: iCloud
 Drive, Dropbox, Syncthing, a USB stick. Each computer keeps its own vault;
@@ -128,6 +128,16 @@ func syncWith(app *App, cfg *config.Config) error {
 
 // syncStore syncs store, the vault cfg names, with f, and says what it did.
 func syncStore(app *App, cfg *config.Config, f syncfolder.Folder, store *database.Store) error {
+	info, err := f.ReadInfo()
+	if err != nil {
+		return fmt.Errorf("the sync folder %s: %w", tildePath(f.Dir()), err)
+	}
+	// A folder other than the one the vault synced with (sync.dir changed
+	// by hand) starts afresh: what was agreed with the other is no base
+	// for this one.
+	if err := store.SyncStartFolder(info.FolderID); err != nil {
+		return err
+	}
 	sum, err := vaultsync.Sync(store, f, cfg.SyncComputerName())
 	if err != nil {
 		return err
@@ -411,10 +421,10 @@ func syncJoin(app *App, arg string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", tildePath(dir), err)
 	}
-	if err := database.CanJoin(cfg.DBPath.Value); err != nil {
+	m := database.UnlockMaterial{Salt: info.Key.Salt, Verify: info.Key.Verify, Params: info.Key.Params}
+	if _, err := database.CanJoin(cfg.DBPath.Value, m, info.FolderID); err != nil {
 		return joinRefused(err, dir)
 	}
-	m := database.UnlockMaterial{Salt: info.Key.Salt, Verify: info.Key.Verify, Params: info.Key.Params}
 	// The password is checked against the folder before the vault is
 	// touched: a wrong one changes nothing.
 	pc := resolvePasswordPrompt().withKDF(cfg.KDF())
@@ -436,7 +446,8 @@ func syncJoin(app *App, arg string) error {
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath.Value), 0o700); err != nil { //nolint:gosec // the vault's folder, from the user's own settings
 		return fmt.Errorf("create vault directory: %w", err)
 	}
-	if err := database.JoinVault(cfg.DBPath.Value, m); err != nil {
+	rejoin, err := database.JoinVault(cfg.DBPath.Value, m, info.FolderID)
+	if err != nil {
 		return joinRefused(err, dir)
 	}
 	var notes []string
@@ -460,7 +471,11 @@ func syncJoin(app *App, arg string) error {
 		return err
 	}
 	var said strings.Builder
-	fmt.Fprintf(&said, "Joined the sync folder %s: the vault here opens with the same master password as the others.\n", tildePath(dir))
+	if rejoin {
+		fmt.Fprintf(&said, "Joined the sync folder %s again: what changed here and in the folder since this vault left is merged.\n", tildePath(dir))
+	} else {
+		fmt.Fprintf(&said, "Joined the sync folder %s: the vault here opens with the same master password as the others.\n", tildePath(dir))
+	}
 	for _, n := range notes {
 		said.WriteString(n + "\n")
 	}
@@ -475,7 +490,7 @@ func syncJoin(app *App, arg string) error {
 // when it has entries.
 func joinRefused(err error, dir string) error {
 	if errors.Is(err, database.ErrVaultNotEmpty) {
-		return fmt.Errorf("%w. Joining takes a new or empty vault. To bring its entries along: sesh export --file F, move the vault aside (or sesh init --db-path elsewhere), sesh sync join %s, then sesh import --from sesh F", err, shellPath(dir))
+		return fmt.Errorf("%w. Joining takes a new or empty vault, or one joining again the folder it left. To bring its entries along: sesh export --file F, move the vault aside (or sesh init --db-path elsewhere), sesh sync join %s, then sesh import --from sesh F", err, shellPath(dir))
 	}
 	return err
 }
@@ -591,8 +606,9 @@ func syncStatus(app *App) error {
 	return err
 }
 
-// syncLeave is sesh sync leave: the vault stops syncing. Its entries and
-// the folder stay; joining again starts afresh.
+// syncLeave is sesh sync leave: the vault stops syncing. Its entries, what
+// it agreed with the folder, and the folder stay, so joining the folder
+// again merges what changed meanwhile.
 func syncLeave(app *App) error {
 	cfg, err := settings()
 	if err != nil {
@@ -604,20 +620,9 @@ func syncLeave(app *App) error {
 	if cfg.SyncDir.Source == config.FromEnv {
 		return fmt.Errorf("sync.dir comes from %s: unset it", cfg.SyncDir.Origin)
 	}
-	if !vaultMissing(cfg.DBPath.Value) {
-		store, err := database.Open(cfg.DBPath.Value, nil)
-		if err != nil {
-			return err
-		}
-		err = store.SyncLeave()
-		closeAuditStore(store)
-		if err != nil {
-			return err
-		}
-	}
 	if err := setSyncDir(""); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(app.Stdout, "This vault no longer syncs with %s. Its entries are as they were, and so is the folder for the other computers.\n", tildePath(cfg.SyncDir.Value))
+	_, err = fmt.Fprintf(app.Stdout, "This vault no longer syncs with %s. Its entries are as they were, and so is the folder for the other computers; sesh sync join %s joins it again, merging what changed meanwhile.\n", tildePath(cfg.SyncDir.Value), shellPath(cfg.SyncDir.Value))
 	return err
 }

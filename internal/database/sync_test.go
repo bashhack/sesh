@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/bashhack/sesh/internal/syncfolder"
@@ -250,11 +251,18 @@ func TestSyncNextChange(t *testing.T) {
 }
 
 // Joining makes a vault with the folder's key record; an empty one with
-// another is given it, its recovery record removed; one with entries is
-// refused, even with the folder's key record already.
+// another is given it, its recovery record removed; one with entries joins
+// only the folder it synced with, under its key, keeping what it agreed.
 func TestJoinVault(t *testing.T) {
 	p, s := rekeyVault(t)
 	m, err := ReadUnlockMaterial(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncStartFolder("f1"); err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.SyncComputerID()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,26 +276,50 @@ func TestJoinVault(t *testing.T) {
 		t.Error("a wrong password passed")
 	}
 	fresh := filepath.Join(t.TempDir(), "new.db")
-	if err := JoinVault(fresh, m); err != nil {
-		t.Fatal(err)
+	if rejoin, err := JoinVault(fresh, m, "f1"); err != nil || rejoin {
+		t.Fatal(rejoin, err)
 	}
 	if got, err := ReadUnlockMaterial(fresh); err != nil || UnlockID(got.Verify) != UnlockID(m.Verify) {
 		t.Errorf("new vault's key record: %v", err)
 	}
-	if err := JoinVault(fresh, m); err != nil {
-		t.Errorf("again: %v", err)
+	if got := folderOf(t, fresh); got != "f1" {
+		t.Errorf("new vault's sync folder: %q", got)
+	}
+	if rejoin, err := JoinVault(fresh, m, "f1"); err != nil || rejoin {
+		t.Errorf("again: %v, %v", rejoin, err)
 	}
 	if !opensWith(t, p, "old-password-1") {
 		t.Fatal("the vault doesn't open")
 	}
-	if err := JoinVault(p, mustOtherKey(t)); !errors.Is(err, ErrVaultNotEmpty) {
-		t.Errorf("a vault with entries: %v", err)
+	other := mustOtherKey(t)
+	for _, c := range []struct {
+		folder string
+		want   string
+		m      UnlockMaterial
+	}{
+		{"f2", "already has entries", other},
+		{"f2", "already has entries", m},
+		{"f1", "under another master password", other},
+	} {
+		if _, err := CanJoin(p, c.m, c.folder); !errors.Is(err, ErrVaultNotEmpty) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("CanJoin with entries, folder %s: %v, want %q", c.folder, err, c.want)
+		}
+		if _, err := JoinVault(p, c.m, c.folder); !errors.Is(err, ErrVaultNotEmpty) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("JoinVault with entries, folder %s: %v, want %q", c.folder, err, c.want)
+		}
 	}
-	if err := JoinVault(p, m); !errors.Is(err, ErrVaultNotEmpty) {
-		t.Errorf("a vault with entries and the folder's key record: %v", err)
+	// Joining again the folder it synced with: what it agreed is kept.
+	if rejoin, err := CanJoin(p, m, "f1"); err != nil || !rejoin {
+		t.Errorf("CanJoin again: %v, %v", rejoin, err)
 	}
-	for path, want := range map[string]error{fresh: nil, p: ErrVaultNotEmpty, filepath.Join(t.TempDir(), "none.db"): nil} {
-		if err := CanJoin(path); !errors.Is(err, want) {
+	if rejoin, err := JoinVault(p, m, "f1"); err != nil || !rejoin {
+		t.Errorf("JoinVault again: %v, %v", rejoin, err)
+	}
+	if !opensWith(t, p, "old-password-1") || folderOf(t, p) != "f1" || computerOf(t, p) != id {
+		t.Error("joining again changed the vault")
+	}
+	for path, want := range map[string]error{fresh: nil, filepath.Join(t.TempDir(), "none.db"): nil} {
+		if _, err := CanJoin(path, m, "f1"); !errors.Is(err, want) {
 			t.Errorf("CanJoin(%s) = %v, want %v", filepath.Base(path), err, want)
 		}
 	}
@@ -303,7 +335,8 @@ func TestJoinVault(t *testing.T) {
 	}
 	// It synced with another folder, under its own key, before.
 	uid := uidOf(t, es, k)
-	if _, err := es.SyncComputerID(); err != nil {
+	emptyID, err := es.SyncComputerID()
+	if err != nil {
 		t.Fatal(err)
 	}
 	rec, rev, err := es.SyncRecord(uid, "x")
@@ -322,7 +355,7 @@ func TestJoinVault(t *testing.T) {
 	if err := WriteRecovery(empty, &RecoveryRecord{UnlockID: vaultID(t, empty), PublicKey: []byte("p"), EphemeralPub: []byte("e"), Ciphertext: []byte("c")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := JoinVault(empty, m); err != nil {
+	if _, err := JoinVault(empty, m, "f1"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := ReadUnlockMaterial(empty); err != nil || UnlockID(got.Verify) != UnlockID(m.Verify) {
@@ -336,12 +369,39 @@ func TestJoinVault(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close() //nolint:errcheck // test
-	for _, table := range []string{"sync_state", "sync_info", "sync_restored", "history_forgotten"} {
+	for _, table := range []string{"sync_state", "sync_restored", "history_forgotten"} {
 		var n int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil || n != 0 { //nolint:gosec // table is one of the four
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil || n != 0 { //nolint:gosec // table is one of the three
 			t.Errorf("%s: %d rows kept from the earlier sync (%v)", table, n, err)
 		}
 	}
+	if got := computerOf(t, empty); got == "" || got == emptyID {
+		t.Errorf("the sync ID kept from the earlier sync: %q", got)
+	}
+}
+
+func folderOf(t *testing.T, path string) string {
+	t.Helper()
+	return syncInfoOf(t, path, "folder_id")
+}
+
+func computerOf(t *testing.T, path string) string {
+	t.Helper()
+	return syncInfoOf(t, path, "computer_id")
+}
+
+func syncInfoOf(t *testing.T, path, column string) string {
+	t.Helper()
+	db, err := openDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test
+	var v string
+	if err := db.QueryRow(`SELECT ` + column + ` FROM sync_info WHERE id = 1`).Scan(&v); err != nil { //nolint:gosec // a column name the test gives
+		t.Fatalf("%s: %v", column, err)
+	}
+	return v
 }
 
 func mustOtherKey(t *testing.T) UnlockMaterial {
@@ -350,11 +410,11 @@ func mustOtherKey(t *testing.T) UnlockMaterial {
 	return m
 }
 
-// Leaving forgets what was agreed and the sync ID.
-func TestSyncLeave(t *testing.T) {
+// Starting on another sync folder forgets what was agreed with the one
+// before; the same folder keeps it, as do restored marks.
+func TestSyncStartFolder(t *testing.T) {
 	a, _ := syncPair(t)
-	id, err := a.SyncComputerID()
-	if err != nil {
+	if err := a.SyncStartFolder("f1"); err != nil {
 		t.Fatal(err)
 	}
 	uid := uidOf(t, a, vault.Key{Kind: vault.KindPassword, Service: "bank"})
@@ -365,13 +425,22 @@ func TestSyncLeave(t *testing.T) {
 	if err := a.SyncAgree(uid, rev, rec, syncfolder.Hash{1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.SyncLeave(); err != nil {
+	if _, err := a.db.Exec(`INSERT INTO sync_restored (uid, rev) VALUES (?, ?)`, uid, rev); err != nil {
 		t.Fatal(err)
 	}
-	if it := syncItem(t, a, uid); it.Agreed != nil {
-		t.Errorf("still agreed: %+v", it)
+	if err := a.SyncStartFolder("f1"); err != nil {
+		t.Fatal(err)
 	}
-	if again, _ := a.SyncComputerID(); again == id { //nolint:errcheck // compared
-		t.Error("the same sync ID after leaving")
+	if it := syncItem(t, a, uid); it.Agreed == nil {
+		t.Error("the same folder: what was agreed is forgotten")
+	}
+	if err := a.SyncStartFolder("f2"); err != nil {
+		t.Fatal(err)
+	}
+	if it := syncItem(t, a, uid); it.Agreed != nil || !it.Restored {
+		t.Errorf("another folder: %+v, want nothing agreed and still restored", it)
+	}
+	if got, err := a.SyncFolderID(); err != nil || got != "f2" {
+		t.Errorf("SyncFolderID = %q, %v", got, err)
 	}
 }

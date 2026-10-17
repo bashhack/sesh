@@ -128,12 +128,14 @@ func migrateV1(tx *sql.Tx) error {
 			base      BLOB NOT NULL
 		)`,
 		// At most one row: this computer's sync ID, made when it first
-		// syncs, and the count of the changes it has written
-		// (syncfolder.Versions), which only goes up.
+		// syncs, the count of the changes it has written
+		// (syncfolder.Versions), which only goes up, and the ID of the sync
+		// folder it syncs with (kept when it leaves, so it can join again).
 		`CREATE TABLE sync_info (
 			id          INTEGER PRIMARY KEY CHECK (id = 1),
 			computer_id TEXT NOT NULL,
-			changes     INTEGER NOT NULL DEFAULT 0
+			changes     INTEGER NOT NULL DEFAULT 0,
+			folder_id   TEXT NOT NULL DEFAULT ''
 		)`,
 		// Earlier secrets forgotten on purpose, by their entry's uid, a
 		// hash of the secret (syncfolder.Forget) and when, so a sync

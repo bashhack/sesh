@@ -397,7 +397,8 @@ func replacedForSync(path string) error {
 			_ = tx.Rollback() //nolint:errcheck // already failing
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM sync_info`); err != nil {
+		// A new sync ID, its count afresh; the folder it syncs with kept.
+		if _, err := tx.Exec(`UPDATE sync_info SET computer_id = lower(hex(randomblob(8))), changes = 0`); err != nil {
 			_ = tx.Rollback() //nolint:errcheck // already failing
 			return err
 		}
