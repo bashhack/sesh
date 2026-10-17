@@ -596,8 +596,8 @@ func TestImport_FirefoxTimes(t *testing.T) {
 	}
 }
 
-// The Passwords app's export is found without --from; its entry is stored by title,
-// with its verification code as a TOTP entry beside it.
+// The Passwords app's export is found without --from; its entry is stored
+// by title, with its verification code as a TOTP entry beside it.
 func TestImport_ApplePasswords(t *testing.T) {
 	env := importVault(t)
 	out, stderr, err := runImportOut(t, "", false, "--yes", browserFixture("apple-passwords.csv"))
@@ -615,9 +615,9 @@ func TestImport_ApplePasswords(t *testing.T) {
 	}
 }
 
-// A Passwords app entry whose verification code sesh can't make still imports its
-// password, the code listed as skipped; --from chrome on its export
-// says which it is.
+// A Passwords app entry whose verification code sesh can't make still
+// imports its password, the code listed as skipped; --from chrome on its
+// export says which it is.
 func TestImport_ApplePasswordsRefusedCode(t *testing.T) {
 	importVault(t)
 	file := filepath.Join(t.TempDir(), "Passwords.csv")

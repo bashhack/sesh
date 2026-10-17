@@ -61,6 +61,9 @@ func (im *uiImport) read() (*found, error) {
 		}
 		return bytes.Clone(im.password), nil
 	})
+	if wrong, ok := errors.AsType[*wrongSourceError](err); ok {
+		return nil, fmt.Errorf("this export is from %s: choose \"import from %s…\" instead", wrong.name, wrong.name)
+	}
 	if err != nil {
 		return nil, uiLocked(err)
 	}

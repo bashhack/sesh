@@ -47,13 +47,13 @@ type Login struct {
 	OTPAuth string
 }
 
-// Export is the logins of one browser's export.
+// Export is the logins of one app's export.
 type Export struct {
 	Browser string
 	Logins  []Login
 }
 
-// The columns each browser writes, in order, as its header names them.
+// The columns each app writes, in order, as its header names them.
 // Chrome wrote no note column before 123, when the notes feature flag
 // went (password_csv_writer.cc, chromium 172cae75).
 var (
@@ -63,7 +63,7 @@ var (
 	firefoxColumns   = []string{"url", "username", "password", "httpRealm", "formActionOrigin", "guid", "timeCreated", "timeLastUsed", "timePasswordChanged"}
 )
 
-// Detect is the browser whose export b is, by its header, or "".
+// Detect is the app whose export b is, by its header, or "".
 func Detect(b []byte) string {
 	header, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(b, []byte("\ufeff")))).Read()
 	switch {
@@ -79,8 +79,9 @@ func Detect(b []byte) string {
 	return ""
 }
 
-// Parse reads a browser's or the Passwords app's export. A line break inside a quoted
-// value is read as "\n", whether the file has "\n" or "\r\n" there.
+// Parse reads a browser's or the Passwords app's export. A line break
+// inside a quoted value is read as "\n", whether the file has "\n" or
+// "\r\n" there.
 func Parse(b []byte) (Export, error) {
 	which := Detect(b)
 	if which == "" {

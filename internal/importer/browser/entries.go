@@ -21,10 +21,10 @@ import (
 const firefoxAccount = "chrome://FirefoxAccounts"
 
 // Entries is the entries an export's logins become, in order: a password
-// entry for each, and for the Passwords app's a TOTP entry beside it for its
-// verification code (alone, with the details, when there's no password).
-// Each is named for its site (see siteName), or the Passwords app's by its title,
-// with the address as its URL. Two of one name and username get " (2)",
+// entry for each, and for the Passwords app's a TOTP entry beside it for
+// its verification code (alone, with the details, when there's no
+// password). Each is named for its site (see siteName), or the Passwords
+// app's by its title, with the address as its URL. Two of one name and username get " (2)",
 // unless, in Chrome's export, the password is the same too: Chrome writes
 // a row for each address of one login, and the repeats are skipped. A
 // login with neither a password nor a code is skipped, as is Firefox's
@@ -78,8 +78,9 @@ func Entries(exp *Export) []*importer.Entry {
 			p.Secret = []byte(l.Password)
 			item = append(item, &p)
 		}
-		// The Passwords app's verification code is a TOTP entry beside the password
-		// entry, with the details only where there's no password entry.
+		// The Passwords app's verification code is a TOTP entry beside the
+		// password entry, with the details only where there's no password
+		// entry.
 		if l.OTPAuth != "" {
 			t := *e
 			t.Changes = slices.Clone(e.Changes)
@@ -101,9 +102,10 @@ func Entries(exp *Export) []*importer.Entry {
 	return out
 }
 
-// totpKey reads a verification code, an otpauth://totp address as the Passwords app
-// writes it (otpauth://totp?secret=…&algorithm=SHA1&digits=6&period=30,
-// with or without a label). sesh refuses what it can't make codes for. A
+// totpKey reads a verification code, an otpauth://totp address as the
+// Passwords app writes it
+// (otpauth://totp?secret=…&algorithm=SHA1&digits=6&period=30, with or
+// without a label). sesh refuses what it can't make codes for. A
 // reason never repeats the key.
 func totpKey(s string) (secret string, params totp.Params, why string) {
 	u, err := url.Parse(strings.TrimSpace(s))

@@ -34,7 +34,7 @@ const importUsage = `Usage: sesh import --from <source> [--dry-run] [--yes] [--o
   clashes with entries you have, and what it will skip, then asks.
 
   Sources:
-    apple-passwords         Apple's Passwords app's export (CSV): in the app,
+    apple-passwords         The Passwords app's export (CSV): in the app,
                             File > Export All Passwords to File.
     bitwarden               A Bitwarden export: JSON, plain or protected by a
                             password of its own (sesh asks for it), or CSV
@@ -374,9 +374,9 @@ func (f *found) wipe() {
 }
 
 // detectSource is the app the files come from: Bitwarden, KeePass, LastPass
-// Authenticator, sesh, Chrome, Firefox or Apple Passwords for one of their exports
-// (or a file of theirs to be refused as such), Google Authenticator
-// otherwise.
+// Authenticator, sesh, Chrome, Firefox or Apple Passwords for one of their
+// exports (or a file of theirs to be refused as such), Google
+// Authenticator otherwise.
 func detectSource(args []string) string {
 	for _, a := range args {
 		b, err := os.ReadFile(a) //nolint:gosec // the file the user named
@@ -766,6 +766,14 @@ func readLastPassAuthenticator(args []string) (found, error) {
 	}, nil
 }
 
+// wrongSourceError is an export from another app than the one chosen:
+// name is that app as messages give it, source as --from names it.
+type wrongSourceError struct{ name, source string }
+
+func (e *wrongSourceError) Error() string {
+	return fmt.Sprintf("this export is from %s: use --from %s", e.name, e.source)
+}
+
 // readBrowser reads a browser's or the Passwords app's export, from the
 // app --from names.
 func readBrowser(from string, args []string) (found, error) {
@@ -782,7 +790,7 @@ func readBrowser(from string, args []string) (found, error) {
 		return found{}, err
 	}
 	if exp.Browser != from {
-		return found{}, fmt.Errorf("this export is from %s: use --from %s", exp.Title(), exp.Browser)
+		return found{}, &wrongSourceError{name: exp.Title(), source: exp.Browser}
 	}
 	return found{
 		source:  exp.Title(),
