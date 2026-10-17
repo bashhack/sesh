@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,9 +240,7 @@ func TestSync_LeaveAndRejoin(t *testing.T) {
 }
 
 // Joining the folder the vault syncs with already just syncs; without a
-// terminal or SESH_MASTER_PASSWORD, join says how to give the password; a
-// vault whose master password changed since it left is told why it can't
-// go on, and what it can do.
+// terminal or SESH_MASTER_PASSWORD, join says how to give the password.
 func TestSync_JoinCases(t *testing.T) {
 	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
 	dir := t.TempDir()
@@ -260,10 +257,6 @@ func TestSync_JoinCases(t *testing.T) {
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || !strings.Contains(err.Error(), "run sesh sync join at one, or give it in SESH_MASTER_PASSWORD") {
 		t.Errorf("join with no terminal: %q, %v", out, err)
-	}
-	err := joinRefused(database.ErrRejoinOtherKey, folder)
-	if !errors.Is(err, database.ErrRejoinOtherKey) || !strings.Contains(err.Error(), "doesn't sync between computers yet") || strings.Contains(err.Error(), "Joining takes") || strings.Contains(err.Error(), "sesh sync leave") {
-		t.Errorf("a master password changed since: %v", err)
 	}
 }
 
@@ -724,26 +717,26 @@ func TestSync_LostInfoChangedOrBehind(t *testing.T) {
 		}
 	}
 
-	// The laptop's master password changed.
+	// The laptop's master password changed while it was away from the
+	// folder.
 	syncComputer(t, laptop, "laptop")
+	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	app, stderr := rekeyTestApp("y\n")
 	if err := runRekey(app, nil, rotateTestCfg("sync-password-1234", "new-pw-5678", "new-pw-5678")); err != nil {
 		t.Fatalf("passwd: %v\n%s", err, stderr)
 	}
 	t.Setenv("SESH_MASTER_PASSWORD", "new-pw-5678")
-	if out, err := runSyncOut(t, "", false); err == nil || !strings.Contains(err.Error(), "doesn't sync between computers yet") || !strings.Contains(err.Error(), "sesh sync leave, sesh export") {
-		t.Errorf("sync after this computer's password change: %q, %v", out, err)
-	}
 	if err := os.Remove(info); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv(config.EnvSyncDir, folder)
 	if out, err := runSyncOut(t, "", false); err == nil || strings.Contains(out, "written again") {
 		t.Errorf("sync after a password change: %q, %v", out, err)
 	}
-	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv(config.EnvSyncDir, "")
 	if out, err := runSyncOut(t, "", false, "join", folder); err == nil || strings.Contains(out, "Joined") {
 		t.Errorf("join after a password change: %q, %v", out, err)
 	}

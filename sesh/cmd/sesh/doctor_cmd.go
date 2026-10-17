@@ -274,12 +274,6 @@ func checkKeySettings(c *doctorChecks, have, want kdf.Params, cfg *config.Config
 	// and making the key again would lower one.
 	weaker := have.Memory <= want.Memory && have.Time <= want.Time && (have.Memory < want.Memory || have.Time < want.Time)
 	if weaker {
-		if cfg.SyncDir.Value != "" {
-			// Applying them makes a new key, which syncing can't follow:
-			// nothing to do for now, so it's said, not warned of.
-			c.row(markNone, "Key settings", desc+": weaker than configured", "configured: "+describeKDF(want), "they apply with a master password change, which would cut this vault off its sync folder: a change doesn't sync between computers yet")
-			return
-		}
 		c.row(markWarn, "Key settings", desc+": weaker than configured", "configured: "+describeKDF(want))
 		todo := "Apply the configured settings by changing the master password (it can be the same one):"
 		if w := syncKeyChangeWarning(cfg, false); w != "" {
@@ -974,9 +968,26 @@ func checkSync(c *doctorChecks, cfg *config.Config, matErr error) {
 		return
 	}
 	f, err := syncFolderOf(cfg)
-	if errors.Is(err, errInfoLost) {
+	switch {
+	case errors.Is(err, errInfoLost):
 		c.row(markWarn, "Sync", value, err.Error())
 		c.todo("Sync, which writes the sync folder's lost file again:", "sesh sync")
+		return
+	case errors.Is(err, errKeyToSend):
+		c.row(markWarn, "Sync", value, err.Error())
+		c.todo("Send this computer's master password change to the sync folder:", "sesh sync")
+		return
+	case errors.Is(err, errKeyChangedElsewhere):
+		c.row(markWarn, "Sync", value, err.Error())
+		c.todo("Take the master password changed on another computer, at a terminal:", "sesh sync")
+		return
+	case errors.Is(err, errKeyFork):
+		c.row(markWarn, "Sync", value, err.Error())
+		c.todo("Settle the two master password changes, at a terminal:", "sesh sync")
+		return
+	case errors.Is(err, errKeyRolledBack):
+		c.row(markWarn, "Sync", value, err.Error())
+		c.todo("Write the sync folder's master password record as it is now:", "sesh sync")
 		return
 	}
 	if err != nil {

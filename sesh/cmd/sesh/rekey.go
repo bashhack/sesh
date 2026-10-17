@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
@@ -101,7 +102,9 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if err != nil {
 		return nil, fmt.Errorf("unlock the vault: %w", err)
 	}
-	secure.SecureZeroBytes(srcKey)
+	// Kept until the end: a change while syncing is kept as a key link,
+	// made with the old key and the new.
+	defer secure.SecureZeroBytes(srcKey)
 	if err := store.CheckKey(); err != nil {
 		return nil, err
 	}
@@ -117,6 +120,9 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 			return nil, err
 		}
 	}
+	if err := keyChangeAllowed(st, store); err != nil {
+		return nil, err
+	}
 
 	entries, err := store.List(&vault.Filter{})
 	if err != nil {
@@ -130,7 +136,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 		return nil, perr
 	}
 	if w := syncKeyChangeWarning(st, src != nil); w != "" {
-		if _, perr := fmt.Fprintln(app.Stderr, "⚠️  "+w); perr != nil {
+		if _, perr := fmt.Fprintln(app.Stderr, w); perr != nil {
 			return nil, perr
 		}
 	}
@@ -155,7 +161,14 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 
 	// A password change keeps the recovery key; a recovery's change removes
 	// it, since the used key has been taken out and typed in.
-	res, notes, err := rekeyTo(store, dbPath, oldID, key, rec, src == nil)
+	opts, send, err := sendingChange(st, srcKey, key, oldID, rec, app.Stderr)
+	if err != nil {
+		return nil, err
+	}
+	if _, perr := fmt.Fprintln(app.Stderr, "Re-encrypting…"); perr != nil {
+		return nil, perr
+	}
+	res, notes, err := rekeyTo(store, dbPath, oldID, key, rec, src == nil, opts, send)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +180,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 	if cfg.fromEnv {
 		envNote = "SESH_MASTER_PASSWORD still holds the old password; update it, or the next command will refuse it as wrong."
 	}
-	for _, msg := range []string{notes.touch, notes.recovery, notes.agent, notes.file, envNote} {
+	for _, msg := range []string{notes.sync, notes.touch, notes.recovery, notes.agent, notes.file, envNote} {
 		if msg == "" {
 			continue
 		}
@@ -185,15 +198,38 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 // rekeyNotes are what a master password change says once it has
 // committed, each "" when there's nothing to say.
 type rekeyNotes struct {
-	touch, recovery, agent, file string
+	sync, touch, recovery, agent, file string
+}
+
+// sendingChange is what a master password change made here, from oldKey
+// (whose key record's ID is oldID) to newKey (whose record is rec), keeps
+// and does for syncing: for a vault that syncs, the change as a key link,
+// and sending it to the folder once made.
+//
+// say is where it says it's sending, before the slow part.
+func sendingChange(cfg *config.Config, oldKey, newKey []byte, oldID string, rec database.UnlockMaterial, say io.Writer) (database.RekeyOptions, func() string, error) {
+	opts := database.RekeyOptions{Sync: rekeyMode(cfg)}
+	if opts.Sync != database.RekeySend {
+		return opts, nil, nil
+	}
+	link, err := changeLink(oldKey, newKey, oldID, rec)
+	if err != nil {
+		return opts, nil, err
+	}
+	opts.Link = link
+	return opts, func() string {
+		fmt.Fprintln(say, "Sending the change to the sync folder, sealing its files again with the new key…") //nolint:errcheck // a progress line
+		return sendKeyChange(cfg, newKey, rec, oldID)
+	}, nil
 }
 
 // rekeyTo re-encrypts the vault open in store, at dbPath under the key
 // record oldID names, with key, whose key record is rec; keepRecovery keeps
-// the recovery key working, and otherwise it's removed. Once it commits it
-// locks the agent, which held the old key, and moves Touch ID unlock to
-// the new key.
-func rekeyTo(store *database.Store, dbPath, oldID string, key []byte, rec database.UnlockMaterial, keepRecovery bool) (database.RekeyResult, rekeyNotes, error) {
+// the recovery key working, and otherwise it's removed; opts are what it
+// means for syncing. Once it commits it locks the agent, which held the old
+// key, moves Touch ID unlock to the new key, then runs after (when not
+// nil), saying what it did.
+func rekeyTo(store *database.Store, dbPath, oldID string, key []byte, rec database.UnlockMaterial, keepRecovery bool, opts database.RekeyOptions, after func() string) (database.RekeyResult, rekeyNotes, error) {
 	var rewrap func(*database.RecoveryRecord, string) (*database.RecoveryRecord, error)
 	if keepRecovery {
 		rewrap = func(r *database.RecoveryRecord, newID string) (*database.RecoveryRecord, error) {
@@ -206,13 +242,16 @@ func rekeyTo(store *database.Store, dbPath, oldID string, key []byte, rec databa
 			return nr, nil
 		}
 	}
-	res, err := store.Rekey(key, rec, rewrap)
+	res, err := store.Rekey(key, rec, rewrap, opts)
 	if err != nil {
 		return res, rekeyNotes{}, err
 	}
 	var notes rekeyNotes
 	notes.agent = lockAgentHoldingOldKey()
 	notes.touch = rewrapTouchID(dbPath, oldID, res.NewID, key)
+	if after != nil {
+		notes.sync = after()
+	}
 	switch res.Recovery {
 	case database.RecoveryKept:
 		notes.recovery = "Your recovery key still works: it now opens the vault with the new master password."

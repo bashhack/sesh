@@ -232,7 +232,7 @@ func TestTrash_RekeyAndVerify(t *testing.T) {
 		t.Fatalf("Verify = %+v, %v", r, err)
 	}
 	key, rec := newKeyFor(t, "new-password-1")
-	if res, err := s.Rekey(key, rec, rewrapTo); err != nil || res.Entries != 0 || res.Trashed != 1 {
+	if res, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{}); err != nil || res.Entries != 0 || res.Trashed != 1 {
 		t.Fatalf("Rekey = %+v, %v", res, err)
 	}
 	if err := s.Close(); err != nil {
@@ -350,7 +350,7 @@ func TestTrash_RekeyNamesDamagedTrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	key, rec := newKeyFor(t, "new-password-1")
-	_, err := s.Rekey(key, rec, rewrapTo)
+	_, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{})
 	if err == nil || !strings.Contains(err.Error(), "decrypt password/bank") || !strings.Contains(err.Error(), "it's in the trash, id 1: sesh trash remove 1 deletes it for good") {
 		t.Errorf("Rekey = %v", err)
 	}

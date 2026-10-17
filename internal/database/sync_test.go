@@ -175,7 +175,7 @@ func TestSync_RekeyKeepsWhatWasAgreed(t *testing.T) {
 		t.Fatal(err)
 	}
 	key, kr := newKeyFor(t, "new-password-1")
-	if _, err := s.Rekey(key, kr, rewrapTo); err != nil {
+	if _, err := s.Rekey(key, kr, rewrapTo, RekeyOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -275,7 +275,7 @@ func TestJoinVault(t *testing.T) {
 		t.Error("a wrong password passed")
 	}
 	fresh := filepath.Join(t.TempDir(), "new.db")
-	if rejoin, err := JoinVault(fresh, m, "f1"); err != nil || rejoin {
+	if rejoin, err := JoinVault(fresh, m, "f1", nil); err != nil || rejoin {
 		t.Fatal(rejoin, err)
 	}
 	if got, err := ReadUnlockMaterial(fresh); err != nil || UnlockID(got.Verify) != UnlockID(m.Verify) {
@@ -290,7 +290,7 @@ func TestJoinVault(t *testing.T) {
 	if got, err := VaultSyncFolder(filepath.Join(t.TempDir(), "none.db")); err != nil || got != "" {
 		t.Errorf("VaultSyncFolder with no vault = %q, %v", got, err)
 	}
-	if rejoin, err := JoinVault(fresh, m, "f1"); err != nil || !rejoin {
+	if rejoin, err := JoinVault(fresh, m, "f1", nil); err != nil || !rejoin {
 		t.Errorf("again: %v, %v; want it rejoining", rejoin, err)
 	}
 	if !opensWith(t, p, "old-password-1") {
@@ -309,7 +309,7 @@ func TestJoinVault(t *testing.T) {
 		if _, err := CanJoin(p, c.m, c.folder); !errors.Is(err, c.want) {
 			t.Errorf("CanJoin with entries, folder %s: %v, want %v", c.folder, err, c.want)
 		}
-		if _, err := JoinVault(p, c.m, c.folder); !errors.Is(err, c.want) {
+		if _, err := JoinVault(p, c.m, c.folder, nil); !errors.Is(err, c.want) {
 			t.Errorf("JoinVault with entries, folder %s: %v, want %v", c.folder, err, c.want)
 		}
 	}
@@ -317,7 +317,7 @@ func TestJoinVault(t *testing.T) {
 	if rejoin, err := CanJoin(p, m, "f1"); err != nil || !rejoin {
 		t.Errorf("CanJoin again: %v, %v", rejoin, err)
 	}
-	if rejoin, err := JoinVault(p, m, "f1"); err != nil || !rejoin {
+	if rejoin, err := JoinVault(p, m, "f1", nil); err != nil || !rejoin {
 		t.Errorf("JoinVault again: %v, %v", rejoin, err)
 	}
 	if !opensWith(t, p, "old-password-1") || folderOf(t, p) != "f1" || computerOf(t, p) != id {
@@ -360,7 +360,7 @@ func TestJoinVault(t *testing.T) {
 	if err := WriteRecovery(empty, &RecoveryRecord{UnlockID: vaultID(t, empty), PublicKey: []byte("p"), EphemeralPub: []byte("e"), Ciphertext: []byte("c")}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := JoinVault(empty, m, "f1"); err != nil {
+	if _, err := JoinVault(empty, m, "f1", nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := ReadUnlockMaterial(empty); err != nil || UnlockID(got.Verify) != UnlockID(m.Verify) {
@@ -484,7 +484,10 @@ func TestJoinVault_Rejoins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rejoin, err := JoinVault(path, m, "f1"); err != nil || !rejoin {
+	if _, err := CanJoin(path, mustOtherKey(t), "f1"); !errors.Is(err, ErrRejoinOtherKey) {
+		t.Errorf("all deleted, the folder's key another: %v; want it switched, not joined afresh", err)
+	}
+	if rejoin, err := JoinVault(path, m, "f1", nil); err != nil || !rejoin {
 		t.Fatalf("all deleted: %v, %v; want it rejoining", rejoin, err)
 	}
 	if it := syncItem(t, a, uid); it.Agreed == nil {
@@ -507,5 +510,52 @@ func TestJoinVault_Rejoins(t *testing.T) {
 	}
 	if _, err := CanJoin(b.Path(), mb, "f1"); !errors.Is(err, ErrVaultNotEmpty) {
 		t.Errorf("not restored, never synced: %v, want ErrVaultNotEmpty", err)
+	}
+}
+
+// A password change made here is kept as one to send, the key the folder
+// has remembered across a second change; taking the folder's drops it.
+func TestRekey_SyncChange(t *testing.T) {
+	p, s := rekeyVault(t)
+	if err := s.SyncStartFolder("f1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.SyncKeyChange(); err != nil || got != "" {
+		t.Fatalf("before: %q, %v", got, err)
+	}
+	folderID := vaultID(t, p)
+	key, rec := newKeyFor(t, "new-password-1")
+	if _, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{Sync: RekeySend}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.SyncKeyChange(); err != nil || got != folderID {
+		t.Errorf("after a change here: %q, %v; want the folder's key %q", got, err, folderID)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(p, NewKeySourceOracle(NewMasterPasswordSource(p, staticPrompt("new-password-1"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close() //nolint:errcheck // test
+	key2, rec2 := newKeyFor(t, "new-password-2")
+	if _, err := s2.Rekey(key2, rec2, rewrapTo, RekeyOptions{Sync: RekeySend}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s2.SyncKeyChange(); got != folderID { //nolint:errcheck // compared
+		t.Errorf("after a second change: %q; want the folder's key still", got)
+	}
+	s3, err := Open(p, NewKeySourceOracle(NewMasterPasswordSource(p, staticPrompt("new-password-2"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s3.Close() //nolint:errcheck // test
+	key3, rec3 := newKeyFor(t, "new-password-3")
+	if _, err := s3.Rekey(key3, rec3, rewrapTo, RekeyOptions{Sync: RekeyAdopt}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s3.SyncKeyChange(); got != "" { //nolint:errcheck // compared
+		t.Errorf("after taking the folder's: %q; want none to send", got)
 	}
 }

@@ -341,8 +341,9 @@ func TestWriteSyncSummary_Warnings(t *testing.T) {
 	}
 }
 
-// A syncing vault with weaker key settings isn't told to change its master
-// password, which would cut it off its sync folder; sesh passwd warns.
+// A syncing vault with weaker key settings is told to change its master
+// password, which the other computers take; sesh passwd and recover say
+// so, and a vault that left says what joining again does.
 func TestSync_KeyChangeWarnings(t *testing.T) {
 	t.Setenv("SESH_MASTER_PASSWORD", "sync-password-1234")
 	t.Setenv("SESH_BACKUP_EVERY_DAYS", "0")
@@ -354,7 +355,7 @@ func TestSync_KeyChangeWarnings(t *testing.T) {
 	}
 	t.Setenv("SESH_KDF_MEMORY", "32MiB")
 	out, _ := runDoctorOut(t) //nolint:errcheck // checked by the output
-	if !strings.Contains(out, "-     Key settings") || !strings.Contains(out, "weaker than configured") || strings.Contains(out, "       sesh passwd\n") || !strings.Contains(out, "would cut this vault off its sync folder") {
+	if !strings.Contains(out, "warn  Key settings") || !strings.Contains(out, "       sesh passwd\n") || !strings.Contains(out, "the other computers ask for the new master password at their next sync") {
 		t.Errorf("doctor, syncing with weaker settings:\n%s", out)
 	}
 	t.Setenv("SESH_MASTER_PASSWORD", "")
@@ -362,7 +363,7 @@ func TestSync_KeyChangeWarnings(t *testing.T) {
 	if err := runRekey(app, nil, rotateTestCfg("sync-password-1234")); err != nil {
 		t.Fatalf("passwd: %v\n%s", err, stderr)
 	}
-	if !strings.Contains(stderr.String(), "⚠️  This vault syncs with") || !strings.Contains(stderr.String(), "Rotation cancelled") {
+	if !strings.Contains(stderr.String(), "This vault syncs with") || !strings.Contains(stderr.String(), "the change goes to the sync folder") || !strings.Contains(stderr.String(), "Rotation cancelled") {
 		t.Errorf("passwd's warning:\n%s", stderr)
 	}
 	// The recovery key's change: joining again needs the others' password.
@@ -370,7 +371,7 @@ func TestSync_KeyChangeWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w := syncKeyChangeWarning(cfg, true); !strings.Contains(w, "Joining the folder again takes the master password they have") || !strings.Contains(w, "sesh sync init <folder>") || !strings.Contains(w, "entries deleted there come back") {
+	if w := syncKeyChangeWarning(cfg, true); !strings.Contains(w, "the new master password goes to the sync folder") {
 		t.Errorf("recover's warning: %q", w)
 	}
 
@@ -381,7 +382,7 @@ func TestSync_KeyChangeWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _ = runDoctorOut(t) //nolint:errcheck // checked by the output
-	if !strings.Contains(out, "warn  Key settings") || !strings.Contains(out, "       sesh passwd\n") || !strings.Contains(out, "synced with a sync folder before") {
+	if !strings.Contains(out, "warn  Key settings") || !strings.Contains(out, "       sesh passwd\n") || !strings.Contains(out, "joining it again asks for the folder's master password") {
 		t.Errorf("doctor, left the folder:\n%s", out)
 	}
 

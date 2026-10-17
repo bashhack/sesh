@@ -26,7 +26,7 @@ func TestSync_RestorePreRekeyBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 	key, kr := newKeyFor(t, "new-password-1")
-	if _, err := s.Rekey(key, kr, rewrapTo); err != nil {
+	if _, err := s.Rekey(key, kr, rewrapTo, RekeyOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -47,7 +47,7 @@ func TestSync_RestorePreRekeyBackup(t *testing.T) {
 		t.Errorf("SyncBase after restoring a pre-rekey backup: %v", err)
 	}
 	key2, kr2 := newKeyFor(t, "new-password-2")
-	if _, err := s2.Rekey(key2, kr2, rewrapTo); err != nil {
+	if _, err := s2.Rekey(key2, kr2, rewrapTo, RekeyOptions{}); err != nil {
 		t.Errorf("Rekey after restoring a pre-rekey backup: %v", err)
 	}
 }
@@ -69,7 +69,7 @@ func TestSync_RekeyDropsWhatDoesntOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	key, kr := newKeyFor(t, "new-password-1")
-	if _, err := s.Rekey(key, kr, rewrapTo); err != nil {
+	if _, err := s.Rekey(key, kr, rewrapTo, RekeyOptions{}); err != nil {
 		t.Fatalf("Rekey: %v", err)
 	}
 	var n int

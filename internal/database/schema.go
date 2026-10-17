@@ -129,13 +129,17 @@ func migrateV1(tx *sql.Tx) error {
 		)`,
 		// At most one row: this computer's sync ID, made when it first
 		// syncs, the count of the changes it has written
-		// (syncfolder.Versions), which only goes up, and the ID of the sync
-		// folder it syncs with (kept when it leaves, so it can join again).
+		// (syncfolder.Versions), which only goes up, the ID of the sync
+		// folder it syncs with (kept when it leaves, so it can join again),
+		// and, after a master password change made here that the folder
+		// hasn't taken yet, the ID of the key record the vault had before
+		// (the folder's), or "".
 		`CREATE TABLE sync_info (
 			id          INTEGER PRIMARY KEY CHECK (id = 1),
 			computer_id TEXT NOT NULL,
 			changes     INTEGER NOT NULL DEFAULT 0,
-			folder_id   TEXT NOT NULL DEFAULT ''
+			folder_id   TEXT NOT NULL DEFAULT '',
+			prev_key_id TEXT NOT NULL DEFAULT ''
 		)`,
 		// Earlier secrets forgotten on purpose, by their entry's uid, a
 		// hash of the secret (syncfolder.Forget) and when, so a sync
@@ -150,6 +154,20 @@ func migrateV1(tx *sql.Tx) error {
 		// Entries restored from a backup, at their revs then, not yet
 		// synced since, and whether the backup had them changed and not
 		// synced (vaultsync).
+		// The vault's master password changes, as syncfolder.KeyLink: each
+		// from a key record (from_id) to the next (to_id), the old key
+		// sealed with the new (key), and to_id sealed with the old (proof).
+		// The sync folder holds them too; files sealed with an old key are
+		// opened through them.
+		`CREATE TABLE key_links (
+			from_id    TEXT NOT NULL,
+			to_id      TEXT NOT NULL,
+			key        BLOB NOT NULL,
+			key_salt   BLOB NOT NULL,
+			proof      BLOB NOT NULL,
+			proof_salt BLOB NOT NULL,
+			PRIMARY KEY (from_id, to_id)
+		)`,
 		`CREATE TABLE sync_restored (uid TEXT PRIMARY KEY, rev INTEGER NOT NULL, changed INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE quiet_writes (id INTEGER PRIMARY KEY CHECK (id = 1))`,
 		// Any change to an entry, its tags, or (forgetting one) its

@@ -615,3 +615,239 @@ func TestSync_TightenKeepsAndSays(t *testing.T) {
 		t.Errorf("a locked %s: %+v, %v; want it said and the rest synced", syncfolder.InfoFile, s, err)
 	}
 }
+
+func openVaultPw(t *testing.T, path, pw string) *database.Store {
+	t.Helper()
+	prompt := func(string) ([]byte, error) { return []byte(pw), nil }
+	s, err := database.Open(path, database.NewKeySourceOracle(database.NewMasterPasswordSource(path, prompt, database.WithKDFParams(kdf.Minimum()))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() }) //nolint:errcheck // test cleanup
+	s.SetTrashDays(30)
+	s.SetHistoryKeep(10)
+	return s
+}
+
+// changeKey changes c's master password to pw, as passwd does while the
+// vault syncs (the change kept as a key link), and returns its vault opened
+// with the new one and the key record.
+func changeKey(t *testing.T, c *computer, oldPW, pw string) (*computer, database.UnlockMaterial) {
+	t.Helper()
+	path := c.store.Path()
+	old, err := database.ReadUnlockMaterial(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey := database.DeriveKey([]byte(oldPW), old.Salt, old.Params)
+	newKey, rec, err := database.NewMasterPasswordSource(path, func(string) ([]byte, error) { return []byte(pw), nil }, database.WithKDFParams(kdf.Minimum())).NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldID, newID := database.UnlockID(old.Verify), database.UnlockID(rec.Verify)
+	link, err := database.NewKeyLink(oldKey, newKey, oldID, newID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.store.Rekey(newKey, rec, nil, database.RekeyOptions{Sync: database.RekeySend, Link: link}); err != nil {
+		t.Fatal(err)
+	}
+	return &computer{t: t, store: openVaultPw(t, path, pw), name: c.name}, rec
+}
+
+// takeKey switches c to the master password pw, the key record rec, with
+// the links of from (the computer that changed it), as taking a change
+// does, and returns its vault opened with it.
+func takeKey(t *testing.T, c *computer, from *computer, rec database.UnlockMaterial, pw string) *computer {
+	t.Helper()
+	links, err := from.store.SyncKeyLinks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := database.DeriveKey([]byte(pw), rec.Salt, rec.Params)
+	if _, err := c.store.Rekey(key, rec, nil, database.RekeyOptions{Sync: database.RekeyAdopt, Links: links}); err != nil {
+		t.Fatal(err)
+	}
+	return &computer{t: t, store: openVaultPw(t, c.store.Path(), pw), name: c.name}
+}
+
+// syncOlder syncs c, opening files sealed with its older keys.
+func syncOlder(t *testing.T, c *computer, f syncfolder.Folder) *Summary {
+	t.Helper()
+	older, err := c.store.SyncOlderKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer older.Close()
+	s, err := SyncWith(c.store, f, c.name, Options{Older: older})
+	if err != nil {
+		t.Fatalf("%s: %v", c.name, err)
+	}
+	for _, p := range s.Problems {
+		t.Errorf("%s: sync problem: %s", c.name, p)
+	}
+	return s
+}
+
+// A master password changed on the laptop: it seals the folder's files
+// again with the new key; the desktop, until it takes the new password,
+// reads none of them; an entry it writes meanwhile with the old key the
+// laptop opens, through its key link, and seals again.
+func TestSync_PasswordChange(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f := twoComputers(t)
+	laptop.put("github", "pw-1")
+	laptop.put("gitlab", "pw-2")
+	settle(t, f, laptop, desktop)
+	before := scanFiles(t, f)[0]
+	oldCopy, err := os.ReadFile(before.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	laptopNew, rec := changeKey(t, laptop, "correct horse battery", "the new password 1")
+	if s := syncOlder(t, laptopNew, f); s.Resealed != 2 {
+		t.Fatalf("laptop, sealing again: %+v", s)
+	}
+	newID := database.UnlockID(rec.Verify)
+	for _, file := range scanFiles(t, f) {
+		if file.KeyIDString() != newID {
+			t.Errorf("%s still sealed with the old key", file.Path)
+		}
+	}
+
+	// The desktop, on the old password, reads nothing, and writes an entry
+	// with the old key, which the laptop takes.
+	if before := desktop.sync(f); before.OtherKey != 2 {
+		t.Errorf("desktop before taking the new password: %+v", before)
+	}
+	desktop.put("bank", "pw-3")
+	desktop.sync(f)
+	if s := syncOlder(t, laptopNew, f); s.Resealed != 1 || len(s.Received) != 1 {
+		t.Errorf("laptop, the desktop's old-key entry: %+v", s)
+	}
+
+	desktopNew := takeKey(t, desktop, laptopNew, rec, "the new password 1")
+	syncOlder(t, desktopNew, f)
+	settle(t, f, laptopNew, desktopNew)
+	if desktopNew.secret(vault.Key{Kind: vault.KindPassword, Service: "bank", Username: "alice"}) != "pw-3" {
+		t.Error("the desktop lost its entry")
+	}
+
+	// A file from before the change put back: an older copy, ignored, and
+	// written again with the new key.
+	if err := os.WriteFile(before.Path, oldCopy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if s := syncOlder(t, desktopNew, f); s.Ignored != 1 {
+		t.Errorf("an old-key copy put back: %+v", s)
+	}
+	for _, file := range scanFiles(t, f) {
+		if file.KeyIDString() != newID {
+			t.Errorf("%s left sealed with the old key", file.Path)
+		}
+	}
+}
+
+// A computer taking a changed master password seals again an entry's file
+// it hasn't taken yet, written with the old key by another; and so does
+// the one that changed it, at any later sync: no file stays on an old key.
+func TestSync_PasswordChangeTakesUnseen(t *testing.T) {
+	t.Parallel()
+	cs, _, f := computers(t, 3)
+	cs[0].put("github", "pw-1")
+	settleN(t, f, 4, cs[0], cs[1], cs[2])
+	// The desktop writes an entry with the old key; the third computer
+	// hasn't seen it when it takes the new password.
+	cs[1].put("bank", "pw-2")
+	cs[1].sync(f)
+	laptop, rec := changeKey(t, cs[0], "correct horse battery", "the new password 1")
+	third := takeKey(t, cs[2], laptop, rec, "the new password 1")
+	if s := syncOlder(t, third, f); len(s.Merged) != 0 || s.Resealed == 0 {
+		t.Fatalf("the third computer takes the new password: %+v; want files sealed again, nothing merged", s)
+	}
+	if s := third.sync(f); !s.Nothing() {
+		t.Errorf("the third computer after taking it: %+v", s)
+	}
+	if third.secret(vault.Key{Kind: vault.KindPassword, Service: "bank", Username: "alice"}) != "pw-2" {
+		t.Error("the third computer didn't take the desktop's entry")
+	}
+	newID := database.UnlockID(rec.Verify)
+	for _, file := range scanFiles(t, f) {
+		if file.KeyIDString() != newID {
+			t.Errorf("%s still sealed with the old key", file.Path)
+		}
+	}
+}
+
+// Two master password changes, one after the other: a computer two
+// changes behind is opened through both links.
+func TestSync_PasswordChangeTwice(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f := twoComputers(t)
+	laptop.put("github", "pw-1")
+	settle(t, f, laptop, desktop)
+	desktop.put("bank", "pw-2")
+	desktop.sync(f)
+	l1, _ := changeKey(t, laptop, "correct horse battery", "the new password 1")
+	l2, rec := changeKey(t, l1, "the new password 1", "the new password 2")
+	syncOlder(t, l2, f)
+	if l2.secret(vault.Key{Kind: vault.KindPassword, Service: "bank", Username: "alice"}) != "pw-2" {
+		t.Error("the laptop, two changes on, didn't open the desktop's entry")
+	}
+	d2 := takeKey(t, desktop, l2, rec, "the new password 2")
+	syncOlder(t, d2, f)
+	settle(t, f, l2, d2)
+}
+
+func scanFiles(t *testing.T, f syncfolder.Folder) []syncfolder.File {
+	t.Helper()
+	c, err := f.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.Files
+}
+
+// An entry changed on one computer while the other only sealed its file
+// again (a password change) or wrote it back (lost) is sent from the first,
+// not said to be changed on both: nothing in it changed there.
+func TestSync_EditOverSealedAgain(t *testing.T) {
+	t.Parallel()
+	gh := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+
+	laptop, desktop, f := twoComputers(t)
+	laptop.put("github", "pw-1")
+	settle(t, f, laptop, desktop)
+	desktop.put("github", "desktop-pw")
+	laptopNew, rec := changeKey(t, laptop, "correct horse battery", "the new password 1")
+	syncOlder(t, laptopNew, f)
+	desktopNew := takeKey(t, desktop, laptopNew, rec, "the new password 1")
+	s := syncOlder(t, desktopNew, f)
+	if len(s.Merged) != 0 || len(s.Sent) != 1 || s.Sent[0] != "password/github/alice" {
+		t.Errorf("the desktop's edit over a file sealed again: %+v; want it sent, nothing merged", s)
+	}
+	settle(t, f, laptopNew, desktopNew)
+	if got := laptopNew.secret(gh); got != "desktop-pw" {
+		t.Errorf("the laptop has %q", got)
+	}
+
+	// The same with a file lost and written back by the laptop.
+	laptop, desktop, f = twoComputers(t)
+	laptop.put("github", "pw-1")
+	settle(t, f, laptop, desktop)
+	own := filepath.Join(f.Dir(), "entries", uidOfKey(t, laptop, gh)+".sesh")
+	if err := os.Remove(own); err != nil {
+		t.Fatal(err)
+	}
+	laptop.sync(f)
+	desktop.put("github", "desktop-pw")
+	s = desktop.sync(f)
+	if len(s.Merged) != 0 || len(s.Sent) != 1 {
+		t.Errorf("the desktop's edit over a file written back: %+v; want it sent, nothing merged", s)
+	}
+	settle(t, f, laptop, desktop)
+	if got := laptop.secret(gh); got != "desktop-pw" {
+		t.Errorf("the laptop has %q", got)
+	}
+}
