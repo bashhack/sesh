@@ -140,17 +140,26 @@ func knownKeys(ownID, prev string) map[string]bool {
 	return known
 }
 
-// changeFrom is the first link of the folder's changes leading from a key
-// in known to the folder's key record now, or nil when none does.
+// changeFrom is a link from a key in known on a path of the folder's
+// changes to its key record now, the nearest such, or nil when none is:
+// every path back is searched, the links being a graph (taking a change
+// adds one from the taker's key).
 func changeFrom(info *syncfolder.Info, known map[string]bool) *syncfolder.KeyLink {
-	by := map[string]*syncfolder.KeyLink{}
+	into := map[string][]*syncfolder.KeyLink{}
 	for i := range info.Links {
-		by[info.Links[i].To] = &info.Links[i]
+		into[info.Links[i].To] = append(into[info.Links[i].To], &info.Links[i])
 	}
-	steps := 0
-	for l := by[database.UnlockID(info.Key.Verify)]; l != nil && steps <= len(info.Links); l, steps = by[l.From], steps+1 {
-		if known[l.From] {
-			return l
+	start := database.UnlockID(info.Key.Verify)
+	seen := map[string]bool{start: true}
+	for queue := []string{start}; len(queue) > 0; queue = queue[1:] {
+		for _, l := range into[queue[0]] {
+			if known[l.From] {
+				return l
+			}
+			if !seen[l.From] {
+				seen[l.From] = true
+				queue = append(queue, l.From)
+			}
 		}
 	}
 	return nil
@@ -472,7 +481,10 @@ func settleFork(app *App, cfg *config.Config, f syncfolder.Folder) error {
 		if _, err := fmt.Fprintln(app.Stderr, "The master password was changed on this computer and another from the same one; the other's is kept on every computer."); err != nil {
 			return err
 		}
-		return takeKeyChange(app, cfg, f)
+		if err := takeKeyChange(app, cfg, f); err != nil {
+			return fmt.Errorf("%w (if no computer of yours made the other change, someone with access to the folder may have, with an old master password: sesh passwd puts this computer's back)", err)
+		}
+		return nil
 	}
 	links, err := database.VaultKeyLinks(cfg.DBPath.Value)
 	if err != nil {
@@ -524,7 +536,7 @@ func takeKeyChange(app *App, cfg *config.Config, f syncfolder.Folder) error {
 
 // errNotLatest is a sync folder whose key record its own files outrun:
 // one sealed with a key the record's changes don't lead to.
-var errNotLatest = errors.New("the sync folder's master password record is older than some of its files (put back, or not synced yet): it isn't taken; sesh sync on a computer that synced with it more recently writes it as it is")
+var errNotLatest = errors.New("some of the sync folder's files are sealed with a key its master password record doesn't lead to: it may be an older record put back. If you know a newer master password than the one it asks for, don't type the older: sesh sync on a computer with the newer puts it back")
 
 // takeKeyChangeWith is takeKeyChange with the vault open in store with
 // ownKey, its key now, the new password asked with newCfg; keepRecovery
@@ -567,11 +579,15 @@ func takeKeyChangeWith(app *App, cfg *config.Config, f syncfolder.Folder, store 
 	if !proofHolds(store, older, first) {
 		return nil, errKeyForged
 	}
-	// A record the folder's own files outrun is an older one put back.
+	// A record the folder's own files outrun may be an older one put
+	// back: said, and the password typed decides (one newer than the
+	// record's doesn't open it).
 	mine := replacedKeys(own)
 	mine[ownID] = true
 	if notLatest(f, info, mine) {
-		return nil, errNotLatest
+		if _, err := fmt.Fprintln(app.Stderr, "⚠️  "+errNotLatest.Error()); err != nil {
+			return nil, err
+		}
 	}
 	folderRec := database.UnlockMaterial{Salt: info.Key.Salt, Verify: info.Key.Verify, Params: info.Key.Params}
 	pw, err := folderPassword(newCfg, "Now the new master password, the one the other computers use: ", folderRec)
@@ -596,7 +612,7 @@ func takeKeyChangeWith(app *App, cfg *config.Config, f syncfolder.Folder, store 
 	if err != nil {
 		return nil, err
 	}
-	links := database.UnionLinks(info.Links, own)
+	links := database.UnionLinks(back.Used(), own)
 	var sum *vaultsync.Summary
 	var syncErr error
 	_, notes, err := rekeyTo(store, cfg.DBPath.Value, ownID, key, folderRec, keepRecovery, database.RekeyOptions{Sync: database.RekeyAdopt, Links: links, Link: link}, func() string {

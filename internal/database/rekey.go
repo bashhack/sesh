@@ -611,18 +611,21 @@ func VaultKeyLinks(dbPath string) (_ []syncfolder.KeyLink, err error) {
 // whose new key is reached opens to its old one, whatever order or branch
 // the changes came in. Opened when first asked for, and zeroed by Close.
 type OlderKeys struct {
-	start   syncfolder.Sealer
-	keys    map[string][]byte
-	startID string
-	links   []syncfolder.KeyLink
-	checked bool
-	walked  bool
+	start syncfolder.Sealer
+	keys  map[string][]byte
+	// used are the links opened, by index; failed, those that didn't open
+	// with the key they lead to, which they never will.
+	used, failed map[int]bool
+	startID      string
+	links        []syncfolder.KeyLink
+	checked      bool
+	walked       bool
 }
 
 // NewOlderKeys are the keys reached back through links from the key record
 // whose ID is id, which sealer opens with.
 func NewOlderKeys(sealer syncfolder.Sealer, id string, links []syncfolder.KeyLink) *OlderKeys {
-	return &OlderKeys{start: sealer, startID: id, links: links, keys: map[string][]byte{}}
+	return &OlderKeys{start: sealer, startID: id, links: links, keys: map[string][]byte{}, used: map[int]bool{}, failed: map[int]bool{}}
 }
 
 // NewCheckedOlderKeys are NewOlderKeys taking only links whose proof holds
@@ -653,7 +656,7 @@ func (o *OlderKeys) walk() {
 		more = false
 		for i := range o.links {
 			l := &o.links[i]
-			if _, done := o.keys[l.From]; done || l.From == o.startID {
+			if _, done := o.keys[l.From]; done || l.From == o.startID || o.failed[i] {
 				continue
 			}
 			s := o.sealer(l.To)
@@ -662,13 +665,16 @@ func (o *OlderKeys) walk() {
 			}
 			k, err := OpenKeyLink(s, l)
 			if err != nil {
+				o.failed[i] = true
 				continue
 			}
 			if o.checked && !LinkProofHolds(keySealer(k), l) {
 				secure.SecureZeroBytes(k)
+				o.failed[i] = true
 				continue
 			}
 			o.keys[l.From] = k
+			o.used[i] = true
 			more = true
 		}
 	}
@@ -691,6 +697,19 @@ func (o *OlderKeys) Sealer(id string) syncfolder.Sealer {
 		return keySealer(k)
 	}
 	return nil
+}
+
+// Used are the links the walk opened (with NewCheckedOlderKeys, those
+// whose proofs held), in the order given.
+func (o *OlderKeys) Used() []syncfolder.KeyLink {
+	o.walk()
+	var out []syncfolder.KeyLink
+	for i := range o.links {
+		if o.used[i] {
+			out = append(out, o.links[i])
+		}
+	}
+	return out
 }
 
 // Close zeroes the keys opened.

@@ -639,8 +639,9 @@ func TestSync_RestoredTwoChangesBack(t *testing.T) {
 	}
 }
 
-// A computer behind doesn't take a superseded record put back: the
-// folder's files are sealed with a key the record's changes don't reach.
+// A computer behind, meeting a superseded record put back, is warned; the
+// newest password, typed, doesn't open it, so nothing changes; once a
+// computer with the newest writes it back, that one is taken.
 func TestSync_PasswordChangeSuperseded(t *testing.T) {
 	dir := t.TempDir()
 	folder := filepath.Join(dir, "sync")
@@ -655,11 +656,151 @@ func TestSync_PasswordChangeSuperseded(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(folder, "sesh-sync.json"), middle, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	ddb := syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-3", "new-password-3", "new-password-3"))
+	out, err := runSyncOut(t, "", false)
+	if err == nil || !strings.Contains(out, "may be an older record put back") {
+		t.Errorf("desktop, a superseded record put back: %q, %v", out, err)
+	}
+	syncComputer(t, laptop, "laptop")
+	t.Setenv("SESH_MASTER_PASSWORD", "new-password-3")
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "older one, put back") {
+		t.Fatalf("laptop writes it back: %q, %v", out, err)
+	}
 	syncComputer(t, desktop, "desktop")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
-	stubTerminalPrompt(t, interactivePrompt(t))
-	if out, err := runSyncOut(t, "", false); err == nil || !strings.Contains(err.Error(), "older than some of its files") {
-		t.Errorf("desktop, a superseded record put back: %q, %v", out, err)
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-3"))
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "now opens with the new master password") {
+		t.Fatalf("desktop takes the newest: %q, %v", out, err)
+	}
+	if vaultKeyID(t, ddb) != folderKeyID(t, folder) {
+		t.Error("the desktop isn't on the folder's key record")
+	}
+}
+
+// A file from another sync folder, sealed with a key of no vault here,
+// doesn't stop a computer behind taking a change.
+func TestSync_PasswordChangeForeignFile(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, filepath.Join(dir, "them"), "them")
+	t.Setenv("SESH_MASTER_PASSWORD", "their-password-9")
+	putEntry(t, "password/z", "z")
+	if _, err := runSyncOut(t, "", false, "init", filepath.Join(dir, "theirs")); err != nil {
+		t.Fatal(err)
+	}
+	des, err := os.ReadDir(filepath.Join(dir, "theirs", "entries"))
+	if err != nil || len(des) == 0 {
+		t.Fatalf("their files: %v, %v", des, err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "theirs", "entries", des[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "entries", des[0].Name()), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
+	if out, err := runSyncOut(t, "", false); !strings.Contains(out, "now opens with the new master password") {
+		t.Errorf("desktop takes the change: %q, %v", out, err)
+	}
+}
+
+// A computer one change behind, after another two changes behind took
+// the newest (adding a link from its own key), sees a change, not a fork,
+// whichever way forks would settle.
+func TestSync_PasswordChangeOneBehind(t *testing.T) {
+	orig := forkKept
+	t.Cleanup(func() { forkKept = orig })
+	for name, kept := range map[string]func(string, string) bool{
+		"last kept":  func(f, o string) bool { return f > o },
+		"first kept": func(f, o string) bool { return f < o },
+	} {
+		t.Run(name, func(t *testing.T) {
+			forkKept = kept
+			dir := t.TempDir()
+			folder := filepath.Join(dir, "sync")
+			laptop, desktop := syncedPair(t, dir, folder, "password/a")
+			third := filepath.Join(dir, "third")
+			syncComputer(t, third, "third")
+			t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+			if _, err := runSyncOut(t, "", false, "join", folder); err != nil {
+				t.Fatal(err)
+			}
+			syncComputer(t, laptop, "laptop")
+			changePassword(t, "old-password-1", "new-password-2")
+			syncComputer(t, desktop, "desktop")
+			t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+			stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
+			if _, err := runSyncOut(t, "", false); err != nil {
+				t.Fatal(err)
+			}
+			syncComputer(t, laptop, "laptop")
+			changePassword(t, "new-password-2", "new-password-3")
+			syncComputer(t, third, "third")
+			t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+			stubTerminalPrompt(t, interactivePrompt(t, "new-password-3"))
+			if _, err := runSyncOut(t, "", false); err != nil {
+				t.Fatal(err)
+			}
+			ddb := syncComputer(t, desktop, "desktop")
+			t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
+			stubTerminalPrompt(t, interactivePrompt(t, "new-password-3"))
+			out, err := runSyncOut(t, "", false)
+			if err != nil || strings.Contains(out, "from the same one") || !strings.Contains(out, "now opens with the new master password") {
+				t.Fatalf("desktop, one change behind: %q, %v", out, err)
+			}
+			if vaultKeyID(t, ddb) != folderKeyID(t, folder) {
+				t.Error("the desktop isn't on the newest key record")
+			}
+		})
+	}
+}
+
+// A link in the folder whose proof doesn't hold isn't kept by a computer
+// taking the change it sits beside.
+func TestSync_PasswordChangeKeepsOnlyVerifiedLinks(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	f := syncfolder.New(folder)
+	info, err := f.ReadInfo()
+	if err != nil || len(info.Links) != 1 {
+		t.Fatalf("links: %+v, %v", info, err)
+	}
+	newKey := database.DeriveKey([]byte("new-password-2"), info.Key.Salt, info.Key.Params)
+	junkID := database.UnlockID(bytes.Repeat([]byte{9}, 32))
+	junk, err := database.NewKeyLink(bytes.Repeat([]byte{7}, 32), newKey, junkID, info.Links[0].To)
+	if err != nil {
+		t.Fatal(err)
+	}
+	junk.Proof[len(junk.Proof)-1] ^= 1
+	info.Links = append(info.Links, *junk)
+	if err := f.WriteInfo(info); err != nil {
+		t.Fatal(err)
+	}
+	ddb := syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
+	if out, err := runSyncOut(t, "", false); err != nil {
+		t.Fatalf("desktop takes the change: %q, %v", out, err)
+	}
+	links, err := database.VaultKeyLinks(ddb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range links {
+		if l.From == junkID {
+			t.Errorf("the desktop kept a link whose proof doesn't hold: %+v", links)
+		}
 	}
 }
 
