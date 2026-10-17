@@ -391,6 +391,13 @@ func TestSync_PasswordChangeLinkTampered(t *testing.T) {
 			if got := getEntry(t, "password/a"); got != "secret-1" {
 				t.Errorf("the desktop's vault after: %q", got)
 			}
+			// A link whose proof doesn't hold doesn't stop the desktop
+			// changing its own.
+			if part == "proof" {
+				if said := changePassword(t, "old-password-1", "desktop-password-3"); !strings.Contains(said, "Sent the change") {
+					t.Errorf("passwd over a tampered link:\n%s", said)
+				}
+			}
 		})
 	}
 }
@@ -536,5 +543,191 @@ func TestSync_RecoverTakesAChange(t *testing.T) {
 	t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
 	if got := getEntry(t, "password/a"); got != "secret-1" {
 		t.Errorf("the desktop has a = %q", got)
+	}
+}
+
+// Two changes from one key (a record put back between them): every
+// computer settles on the one whose key record's ID sorts last, the other
+// asked for it, and every file then opens on both.
+func TestSync_PasswordChangeFork(t *testing.T) {
+	orig := forkKept
+	t.Cleanup(func() { forkKept = orig })
+	for name, kept := range map[string]func(string, string) bool{
+		"last kept":  func(f, o string) bool { return f > o },
+		"first kept": func(f, o string) bool { return f < o },
+	} {
+		t.Run(name, func(t *testing.T) {
+			forkKept = kept
+			forkSettles(t)
+		})
+	}
+}
+
+func forkSettles(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a", "password/b")
+	old, err := os.ReadFile(filepath.Join(folder, "sesh-sync.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ldb := syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "laptop-password-2")
+	if err := os.WriteFile(filepath.Join(folder, "sesh-sync.json"), old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ddb := syncComputer(t, desktop, "desktop")
+	changePassword(t, "old-password-1", "desktop-password-3")
+
+	pw := map[string]string{laptop: "laptop-password-2", desktop: "desktop-password-3"}
+	other := map[string]string{laptop: desktop, desktop: laptop}
+	for round := range 3 {
+		for _, c := range []string{laptop, desktop} {
+			syncComputer(t, c, filepath.Base(c))
+			t.Setenv("SESH_MASTER_PASSWORD", pw[c])
+			stubTerminalPrompt(t, interactivePrompt(t, pw[other[c]]))
+			out, err := runSyncOut(t, "", false)
+			if err != nil {
+				t.Fatalf("round %d, %s: %q, %v", round, filepath.Base(c), out, err)
+			}
+			if strings.Contains(out, "now opens with the new master password") {
+				pw[c] = pw[other[c]]
+			}
+		}
+	}
+	if pw[laptop] != pw[desktop] || vaultKeyID(t, ldb) != vaultKeyID(t, ddb) || vaultKeyID(t, ldb) != folderKeyID(t, folder) {
+		t.Fatalf("not settled: %v", pw)
+	}
+	for _, f := range scanFolder(t, folder) {
+		if f.KeyIDString() != folderKeyID(t, folder) {
+			t.Errorf("%s left on another key", filepath.Base(f.Path))
+		}
+	}
+	for _, c := range []string{laptop, desktop} {
+		syncComputer(t, c, filepath.Base(c))
+		t.Setenv("SESH_MASTER_PASSWORD", pw[c])
+		if got := getEntry(t, "password/b"); got != "secret-2" {
+			t.Errorf("%s has b = %q", filepath.Base(c), got)
+		}
+	}
+}
+
+// A vault restored from a backup made two changes ago takes the change
+// the folder has, through the links it kept: from its key then.
+func TestSync_RestoredTwoChangesBack(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, _ := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	backup := filepath.Join(dir, "backup.db")
+	if err := database.CopyTo(ldb, backup); err != nil {
+		t.Fatal(err)
+	}
+	changePassword(t, "old-password-1", "new-password-2")
+	changePassword(t, "new-password-2", "new-password-3")
+	if err := database.RestoreInPlace(ldb, backup); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-3"))
+	out, err := runSyncOut(t, "", false)
+	if err != nil || !strings.Contains(out, "now opens with the new master password") {
+		t.Fatalf("sync after the restore: %q, %v", out, err)
+	}
+	if vaultKeyID(t, ldb) != folderKeyID(t, folder) {
+		t.Error("the restored vault isn't on the folder's key record")
+	}
+}
+
+// A computer behind doesn't take a superseded record put back: the
+// folder's files are sealed with a key the record's changes don't reach.
+func TestSync_PasswordChangeSuperseded(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	middle, err := os.ReadFile(filepath.Join(folder, "sesh-sync.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changePassword(t, "new-password-2", "new-password-3")
+	if err := os.WriteFile(filepath.Join(folder, "sesh-sync.json"), middle, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	stubTerminalPrompt(t, interactivePrompt(t))
+	if out, err := runSyncOut(t, "", false); err == nil || !strings.Contains(err.Error(), "older than some of its files") {
+		t.Errorf("desktop, a superseded record put back: %q, %v", out, err)
+	}
+}
+
+// Joining again after only the folder's master password changed says so.
+func TestSync_RejoinAfterFolderChange(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, desktop, "desktop")
+	if _, err := runSyncOut(t, "", false, "leave"); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-2", "old-password-1"))
+	out, err := runSyncOut(t, "", false, "join", folder)
+	if err != nil || !strings.Contains(out, "The folder's master password changed while this vault was away") {
+		t.Fatalf("join again: %q, %v", out, err)
+	}
+}
+
+// Someone who learned an old master password can't make a computer take a
+// change from it, nor stop its own: a change from a key this vault
+// replaced is settled as two changes from one key, and passwd goes on.
+func TestSync_PasswordChangeFromOldKey(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, _ := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	old, err := database.ReadUnlockMaterial(ldb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey := database.DeriveKey([]byte("old-password-1"), old.Salt, old.Params)
+	changePassword(t, "old-password-1", "new-password-2")
+
+	// Their own vault's key record, and a link to it from the old key.
+	syncComputer(t, filepath.Join(dir, "them"), "them")
+	t.Setenv("SESH_MASTER_PASSWORD", "their-password-9")
+	putEntry(t, "password/z", "z")
+	tdb := syncComputer(t, filepath.Join(dir, "them"), "them")
+	theirs, err := database.ReadUnlockMaterial(tdb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirKey := database.DeriveKey([]byte("their-password-9"), theirs.Salt, theirs.Params)
+	link, err := database.NewKeyLink(oldKey, theirKey, database.UnlockID(old.Verify), database.UnlockID(theirs.Verify))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := syncfolder.New(folder)
+	info, err := f.ReadInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Key = syncfolder.KeyRecord{Salt: theirs.Salt, Verify: theirs.Verify, Params: theirs.Params}
+	info.Links = append(info.Links, *link)
+	if err := f.WriteInfo(info); err != nil {
+		t.Fatal(err)
+	}
+
+	syncComputer(t, laptop, "laptop")
+	if said := changePassword(t, "new-password-2", "new-password-3"); !strings.Contains(said, "Sent the change") {
+		t.Errorf("passwd after a change from an old key:\n%s", said)
+	}
+	if folderKeyID(t, folder) != vaultKeyID(t, ldb) {
+		t.Error("the folder isn't on the laptop's key record")
 	}
 }

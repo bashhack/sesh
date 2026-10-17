@@ -120,7 +120,7 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 			return nil, err
 		}
 	}
-	if err := keyChangeAllowed(st); err != nil {
+	if err := keyChangeAllowed(st, store); err != nil {
 		return nil, err
 	}
 
@@ -161,9 +161,12 @@ func rotateMasterPassword(app *App, cfg passwordPromptConfig, src database.KeySo
 
 	// A password change keeps the recovery key; a recovery's change removes
 	// it, since the used key has been taken out and typed in.
-	opts, send, err := sendingChange(st, srcKey, key, oldID, rec)
+	opts, send, err := sendingChange(st, srcKey, key, oldID, rec, app.Stderr)
 	if err != nil {
 		return nil, err
+	}
+	if _, perr := fmt.Fprintln(app.Stderr, "Re-encrypting…"); perr != nil {
+		return nil, perr
 	}
 	res, notes, err := rekeyTo(store, dbPath, oldID, key, rec, src == nil, opts, send)
 	if err != nil {
@@ -202,7 +205,9 @@ type rekeyNotes struct {
 // (whose key record's ID is oldID) to newKey (whose record is rec), keeps
 // and does for syncing: for a vault that syncs, the change as a key link,
 // and sending it to the folder once made.
-func sendingChange(cfg *config.Config, oldKey, newKey []byte, oldID string, rec database.UnlockMaterial) (database.RekeyOptions, func() string, error) {
+//
+// say is where it says it's sending, before the slow part.
+func sendingChange(cfg *config.Config, oldKey, newKey []byte, oldID string, rec database.UnlockMaterial, say io.Writer) (database.RekeyOptions, func() string, error) {
 	opts := database.RekeyOptions{Sync: rekeyMode(cfg)}
 	if opts.Sync != database.RekeySend {
 		return opts, nil, nil
@@ -212,7 +217,10 @@ func sendingChange(cfg *config.Config, oldKey, newKey []byte, oldID string, rec 
 		return opts, nil, err
 	}
 	opts.Link = link
-	return opts, func() string { return sendKeyChange(cfg, newKey, rec, oldID) }, nil
+	return opts, func() string {
+		fmt.Fprintln(say, "Sending the change to the sync folder, sealing its files again with the new key…") //nolint:errcheck // a progress line
+		return sendKeyChange(cfg, newKey, rec, oldID)
+	}, nil
 }
 
 // rekeyTo re-encrypts the vault open in store, at dbPath under the key

@@ -389,7 +389,7 @@ func runRecover(app *App, args []string) error {
 		if oerr != nil {
 			return oerr
 		}
-		newKey, err = takeKeyChangeWith(app, cfg, syncfolder.New(cfg.SyncDir.Value), store, p, false)
+		newKey, err = takeKeyChangeWith(app, cfg, syncfolder.New(cfg.SyncDir.Value), store, key, p, false)
 		closeAuditStore(store)
 	} else {
 		note("The recovery key opens this vault. Choose a new master password.")

@@ -561,8 +561,8 @@ func OpenKeyLink(sealer syncfolder.Sealer, l *syncfolder.KeyLink) ([]byte, error
 func KeySealer(key []byte) syncfolder.Sealer { return keySealer(key) }
 
 func putKeyLink(tx *sql.Tx, l *syncfolder.KeyLink) error {
-	_, err := tx.Exec(`INSERT OR REPLACE INTO key_links (to_id, from_id, key, key_salt, proof, proof_salt) VALUES (?, ?, ?, ?, ?, ?)`,
-		l.To, l.From, l.Key, l.KeySalt, l.Proof, l.ProofSalt)
+	_, err := tx.Exec(`INSERT OR REPLACE INTO key_links (from_id, to_id, key, key_salt, proof, proof_salt) VALUES (?, ?, ?, ?, ?, ?)`,
+		l.From, l.To, l.Key, l.KeySalt, l.Proof, l.ProofSalt)
 	if err != nil {
 		return fmt.Errorf("keep the master password change: %w", err)
 	}
@@ -607,24 +607,41 @@ func VaultKeyLinks(dbPath string) (_ []syncfolder.KeyLink, err error) {
 }
 
 // OlderKeys are the keys a vault had before master password changes,
-// reached through key links from a key whose sealer it has: opened when
-// first asked for, and zeroed by Close.
+// reached through key links from a key whose sealer it has: every link
+// whose new key is reached opens to its old one, whatever order or branch
+// the changes came in. Opened when first asked for, and zeroed by Close.
 type OlderKeys struct {
 	start   syncfolder.Sealer
-	by      map[string]*syncfolder.KeyLink
 	keys    map[string][]byte
 	startID string
+	links   []syncfolder.KeyLink
+	checked bool
 	walked  bool
 }
 
 // NewOlderKeys are the keys reached back through links from the key record
 // whose ID is id, which sealer opens with.
 func NewOlderKeys(sealer syncfolder.Sealer, id string, links []syncfolder.KeyLink) *OlderKeys {
-	o := &OlderKeys{start: sealer, startID: id, by: map[string]*syncfolder.KeyLink{}, keys: map[string][]byte{}}
-	for i := range links {
-		o.by[links[i].To] = &links[i]
-	}
+	return &OlderKeys{start: sealer, startID: id, links: links, keys: map[string][]byte{}}
+}
+
+// NewCheckedOlderKeys are NewOlderKeys taking only links whose proof holds
+// with the key they open to: for links read from a sync folder, so each key
+// reached is one a change was made from.
+func NewCheckedOlderKeys(sealer syncfolder.Sealer, id string, links []syncfolder.KeyLink) *OlderKeys {
+	o := NewOlderKeys(sealer, id, links)
+	o.checked = true
 	return o
+}
+
+func (o *OlderKeys) sealer(id string) syncfolder.Sealer {
+	if id == o.startID {
+		return o.start
+	}
+	if k, ok := o.keys[id]; ok {
+		return keySealer(k)
+	}
+	return nil
 }
 
 func (o *OlderKeys) walk() {
@@ -632,17 +649,28 @@ func (o *OlderKeys) walk() {
 		return
 	}
 	o.walked = true
-	sealer := o.start
-	for l := o.by[o.startID]; l != nil; l = o.by[l.From] {
-		if _, seen := o.keys[l.From]; seen || l.From == o.startID {
-			return
+	for more := true; more; {
+		more = false
+		for i := range o.links {
+			l := &o.links[i]
+			if _, done := o.keys[l.From]; done || l.From == o.startID {
+				continue
+			}
+			s := o.sealer(l.To)
+			if s == nil {
+				continue
+			}
+			k, err := OpenKeyLink(s, l)
+			if err != nil {
+				continue
+			}
+			if o.checked && !LinkProofHolds(keySealer(k), l) {
+				secure.SecureZeroBytes(k)
+				continue
+			}
+			o.keys[l.From] = k
+			more = true
 		}
-		k, err := OpenKeyLink(sealer, l)
-		if err != nil {
-			return
-		}
-		o.keys[l.From] = k
-		sealer = keySealer(k)
 	}
 }
 
@@ -665,22 +693,6 @@ func (o *OlderKeys) Sealer(id string) syncfolder.Sealer {
 	return nil
 }
 
-// Path is the links from the key record whose ID is from to the one this
-// walk starts at, oldest first; nil when from isn't reached.
-func (o *OlderKeys) Path(from string) []syncfolder.KeyLink {
-	var path []syncfolder.KeyLink
-	for l := o.by[o.startID]; l != nil; l = o.by[l.From] {
-		path = append([]syncfolder.KeyLink{*l}, path...)
-		if l.From == from {
-			return path
-		}
-		if len(path) > len(o.by) {
-			return nil
-		}
-	}
-	return nil
-}
-
 // Close zeroes the keys opened.
 func (o *OlderKeys) Close() {
 	if o == nil {
@@ -689,6 +701,22 @@ func (o *OlderKeys) Close() {
 	for _, k := range o.keys {
 		secure.SecureZeroBytes(k)
 	}
+}
+
+// UnionLinks are the links of a and b, each once (by the two key records
+// it joins), a's first.
+func UnionLinks(a, b []syncfolder.KeyLink) []syncfolder.KeyLink {
+	seen := map[[2]string]bool{}
+	var out []syncfolder.KeyLink
+	for _, ls := range [][]syncfolder.KeyLink{a, b} {
+		for i := range ls {
+			if k := [2]string{ls[i].From, ls[i].To}; !seen[k] {
+				seen[k] = true
+				out = append(out, ls[i])
+			}
+		}
+	}
+	return out
 }
 
 // SyncOlderKeys are this vault's older keys, through its own links, from

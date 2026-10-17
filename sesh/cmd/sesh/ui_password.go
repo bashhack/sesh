@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -52,7 +53,7 @@ func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, er
 	if err := checkRecoveryCarries(dbPath); err != nil {
 		return tui.Changed{}, err
 	}
-	if err := keyChangeAllowed(st); err != nil {
+	if err := keyChangeAllowed(st, store); err != nil {
 		return tui.Changed{}, err
 	}
 	newKey, rec, err := database.NewMasterPasswordSource(dbPath, func(string) ([]byte, error) { return bytes.Clone(next), nil },
@@ -62,7 +63,7 @@ func uiChangePassword(cfg *config.Config, current, next []byte) (tui.Changed, er
 	}
 	defer secure.SecureZeroBytes(newKey)
 	oldID := database.UnlockID(mat.Verify)
-	opts, send, err := sendingChange(st, key, newKey, oldID, rec)
+	opts, send, err := sendingChange(st, key, newKey, oldID, rec, io.Discard)
 	if err != nil {
 		return tui.Changed{}, err
 	}

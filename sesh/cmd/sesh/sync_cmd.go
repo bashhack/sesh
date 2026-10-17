@@ -118,6 +118,8 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 		return f, errKeyChangedElsewhere
 	case k == keyRolledBack:
 		return f, errKeyRolledBack
+	case k == keyFork:
+		return f, errKeyFork
 	case k == keyForged:
 		return f, errKeyForged
 	case k == keyOtherVault:
@@ -162,6 +164,8 @@ func syncWith(app *App, cfg *config.Config) error {
 		return sendPendingChange(app, cfg, f)
 	case errors.Is(err, errKeyChangedElsewhere):
 		return takeKeyChange(app, cfg, f)
+	case errors.Is(err, errKeyFork):
+		return settleFork(app, cfg, f)
 	case err != nil:
 		return err
 	}
@@ -789,22 +793,44 @@ func switchToFolderKey(app *App, cfg *config.Config, pw []byte, m database.Unloc
 	if _, err := fmt.Fprintln(app.Stderr, "This vault's master password and the folder's differ (one changed while it was away): type this vault's own, to switch it to the folder's."); err != nil {
 		return nil, err
 	}
-	store, err := openSQLiteStoreWith(cfg)
+	// Opened with the password typed, not the agent: the old key goes in a
+	// link to the folder's, so anything sealed with it goes on opening.
+	src := resolvePasswordPrompt().withKDF(cfg.KDF()).newSource(cfg.DBPath.Value)
+	store, err := openStoreWith(cfg.DBPath.Value, database.NewKeySourceOracle(src))
 	if err != nil {
 		return nil, fmt.Errorf("%w (without this vault's own master password it can't switch; move its files aside and join with a new vault instead)", err)
 	}
 	defer closeAuditStore(store)
+	ownKey, err := src.GetEncryptionKey()
+	if err != nil {
+		return nil, err
+	}
+	defer secure.SecureZeroBytes(ownKey)
 	own, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
+	if err != nil {
+		return nil, err
+	}
+	ownID, folderID := database.UnlockID(own.Verify), database.UnlockID(m.Verify)
+	mine, err := store.SyncKeyLinks()
 	if err != nil {
 		return nil, err
 	}
 	key := database.DeriveKey(pw, m.Salt, m.Params)
 	defer secure.SecureZeroBytes(key)
-	_, notes, err := rekeyTo(store, cfg.DBPath.Value, database.UnlockID(own.Verify), key, m, true, database.RekeyOptions{Sync: database.RekeyAdopt, Links: links}, nil)
+	link, err := database.NewKeyLink(ownKey, key, ownID, folderID)
 	if err != nil {
 		return nil, err
 	}
+	_, notes, err := rekeyTo(store, cfg.DBPath.Value, ownID, key, m, true, database.RekeyOptions{Sync: database.RekeyAdopt, Links: database.UnionLinks(links, mine), Link: link}, nil)
+	if err != nil {
+		return nil, err
+	}
+	// The folder's changes lead from this vault's key: only the folder's
+	// changed. Otherwise this vault's own did, and isn't kept.
 	said := []string{"This vault opens with the folder's master password now; a change made to its own while it was away isn't kept."}
+	if slices.ContainsFunc(links, func(l syncfolder.KeyLink) bool { return l.From == ownID }) {
+		said = []string{"The folder's master password changed while this vault was away: it opens with that one now."}
+	}
 	for _, n := range []string{notes.agent, notes.touch, notes.recovery, notes.file} {
 		if n != "" {
 			said = append(said, n)
@@ -878,7 +904,7 @@ func syncStatus(app *App) error {
 	}
 	f, folderErr := syncFolderOf(cfg)
 	switch {
-	case errors.Is(folderErr, errInfoLost), errors.Is(folderErr, errKeyToSend), errors.Is(folderErr, errKeyChangedElsewhere), errors.Is(folderErr, errKeyRolledBack):
+	case errors.Is(folderErr, errInfoLost), errors.Is(folderErr, errKeyToSend), errors.Is(folderErr, errKeyChangedElsewhere), errors.Is(folderErr, errKeyRolledBack), errors.Is(folderErr, errKeyFork):
 		fmt.Fprintf(&b, "⚠️  %v\n", folderErr)
 	case folderErr != nil:
 		fmt.Fprintf(&b, "❌ %v\n", folderErr)

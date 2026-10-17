@@ -981,6 +981,10 @@ func checkSync(c *doctorChecks, cfg *config.Config, matErr error) {
 		c.row(markWarn, "Sync", value, err.Error())
 		c.todo("Take the master password changed on another computer, at a terminal:", "sesh sync")
 		return
+	case errors.Is(err, errKeyFork):
+		c.row(markWarn, "Sync", value, err.Error())
+		c.todo("Settle the two master password changes, at a terminal:", "sesh sync")
+		return
 	case errors.Is(err, errKeyRolledBack):
 		c.row(markWarn, "Sync", value, err.Error())
 		c.todo("Write the sync folder's master password record as it is now:", "sesh sync")

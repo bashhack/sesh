@@ -160,12 +160,13 @@ func migrateV1(tx *sql.Tx) error {
 		// The sync folder holds them too; files sealed with an old key are
 		// opened through them.
 		`CREATE TABLE key_links (
-			to_id      TEXT PRIMARY KEY,
 			from_id    TEXT NOT NULL,
+			to_id      TEXT NOT NULL,
 			key        BLOB NOT NULL,
 			key_salt   BLOB NOT NULL,
 			proof      BLOB NOT NULL,
-			proof_salt BLOB NOT NULL
+			proof_salt BLOB NOT NULL,
+			PRIMARY KEY (from_id, to_id)
 		)`,
 		`CREATE TABLE sync_restored (uid TEXT PRIMARY KEY, rev INTEGER NOT NULL, changed INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE quiet_writes (id INTEGER PRIMARY KEY CHECK (id = 1))`,
