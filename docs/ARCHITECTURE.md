@@ -33,7 +33,7 @@ Every kind of secret (passwords, API keys, notes, TOTP keys, files) lives in one
 Each component accesses only what it needs — nothing more. Secrets reach other programs on stdin or in the environment, and memory is zeroed after use.
 
 - Secrets are passed to other programs on stdin (the clipboard tools) or in the environment (`sesh run`, the AWS subshell), not as arguments. The one exception is the AWS one-time MFA code, which the AWS CLI takes only as `--token-code`
-- Subshell init files are written to temp files and cleaned up on exit
+- The AWS shell's startup files (sesh's helpers and prompt prefix around the user's own; never the credentials) are written to temporary files and removed when it ends, a hangup included
 - Each entry's secret is encrypted bound to its entry's ID (kind, name, username), so secrets can't be swapped between entries
 - Secrets spend minimal time in memory
 
@@ -328,10 +328,13 @@ Go's garbage collector prevents true secure erasure, but we reduce the exposure 
 #### Subshell Implementation
 
 **Design**:
-1. Custom prompt for visual indication
-2. `SESH_ACTIVE` check prevents nesting
-3. The credentials leave with the shell on exit (AWS still accepts them until they expire)
-4. Built-in helper functions
+1. The user's own shell and startup files, with sesh's helpers defined first so the user's aliases can't change them: zsh through a temporary `ZDOTDIR` whose `.zshenv` defines them, hands `ZDOTDIR` back, and runs the user's `.zshenv`, after which zsh reads the system's and the user's files in its usual order; bash through `--rcfile`, which runs `~/.bashrc`; `sh` through `ENV`, which runs the user's own ENV file
+2. `(sesh:aws)` before the prompt, put back by a prompt hook that, at the first prompt, moves itself after the user's own (and redraws that first prompt once the line is ready)
+3. `SESH_ACTIVE` check prevents nesting
+4. The vault is closed, and `SESH_MASTER_PASSWORD` left out, before the shell starts
+5. The shell runs as `sesh run`'s commands do (`runChild`): a hangup is passed on, and a request to stop as a hangup (an interactive shell ignores SIGTERM); its exit status is sesh's
+6. The credentials leave with the shell on exit (AWS still accepts them until they expire)
+7. Built-in helper functions
 
 **Subshell Advantages**
 - Provides explicit credential lifecycle management

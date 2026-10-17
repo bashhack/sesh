@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,33 +13,11 @@ import (
 	"github.com/bashhack/sesh/internal/subshell"
 )
 
-// mockShellCustomizer implements subshell.ShellCustomizer
+// mockShellCustomizer implements subshell.ShellCustomizer: no helpers.
 type mockShellCustomizer struct{}
 
-func (m *mockShellCustomizer) GetZshInitScript() string {
-	return `
-# Mock Zsh prompt customization
-PROMPT="(sesh:test) %~ %# "
-`
-}
-
-func (m *mockShellCustomizer) GetBashInitScript() string {
-	return `
-# Mock Bash prompt customization
-PS1="(sesh:test) \w \$ "
-`
-}
-
-func (m *mockShellCustomizer) GetFallbackInitScript() string {
-	return `
-# Mock fallback shell
-echo "Entering sesh environment"
-`
-}
-
-func (m *mockShellCustomizer) GetPromptPrefix() string {
-	return "sesh"
-}
+func (m *mockShellCustomizer) Functions() string    { return "" }
+func (m *mockShellCustomizer) PromptPrefix() string { return "(sesh:test) " }
 
 // MockSubshellProvider is a mock that implements both ServiceProvider and SubshellProvider
 type MockSubshellProvider struct {
@@ -228,7 +208,8 @@ func TestApp_LaunchSubshell(t *testing.T) {
 				}
 				return mockProvider
 			},
-			wantErr: false, // ExitError is expected and handled
+			wantErr:    true, // the shell's exit status is sesh's
+			wantErrMsg: "exit status 1",
 			checkOutput: func(t *testing.T, stdout, stderr string) {
 				if !strings.Contains(stdout, "Starting secure shell") {
 					t.Error("Expected stdout to contain startup message")
@@ -267,7 +248,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 				return mockProvider
 			},
 			wantErr:    true,
-			wantErrMsg: "subshell encountered an unexpected error",
+			wantErrMsg: "can't run /nonexistent/shell",
 		},
 	}
 
@@ -286,7 +267,7 @@ func TestApp_LaunchSubshell(t *testing.T) {
 			if tc.newProvider != nil {
 				p = tc.newProvider()
 			}
-			err := app.LaunchSubshell(p)
+			err := app.LaunchSubshell(p, nil)
 
 			if tc.wantErr && err == nil {
 				t.Error("LaunchSubshell() expected error but got nil")
@@ -309,56 +290,56 @@ func TestApp_LaunchSubshell(t *testing.T) {
 	}
 }
 
-// mockExitErrorShellCustomizer implements a shell customizer that causes the shell to exit with error
-type mockExitErrorShellCustomizer struct {
-	mockShellCustomizer
-}
+// scriptedCustomizer is a customizer whose helpers are script, run as the
+// shell starts.
+type scriptedCustomizer struct{ script string }
 
-func (m *mockExitErrorShellCustomizer) GetBashInitScript() string {
-	return `exit 1`
-}
+func (m *scriptedCustomizer) Functions() string    { return m.script }
+func (m *scriptedCustomizer) PromptPrefix() string { return "(sesh:test) " }
 
-func (m *mockExitErrorShellCustomizer) GetFallbackInitScript() string {
-	return `exit 1`
-}
-
-func TestApp_LaunchSubshell_RealExitError(t *testing.T) {
-	t.Setenv("SHELL", "/bin/bash")
-
-	app := &App{
-		Stdout: &bytes.Buffer{},
-		Stderr: &bytes.Buffer{},
-	}
-
-	mockProvider := &MockSubshellProvider{
-		NameFunc: func() string {
-			return "aws"
-		},
-		ValidateRequestFunc: func() error {
-			return nil
-		},
-		GetCredentialsFunc: func() (provider.Credentials, error) {
-			return provider.Credentials{
-				Provider: "aws",
-			}, nil
-		},
-		NewSubshellConfigFunc: func(creds *provider.Credentials) any {
-			return subshell.Config{
-				ServiceName:     "aws",
-				Variables:       creds.Variables,
-				Expiry:          creds.Expiry,
-				ShellCustomizer: &mockExitErrorShellCustomizer{},
+// The shell's exit status is sesh's; the vault is let go of before the
+// shell starts; SESH_MASTER_PASSWORD doesn't reach it.
+func TestApp_LaunchSubshell_ExitStatus(t *testing.T) {
+	for _, sh := range []string{"bash", "sh"} {
+		t.Run(sh, func(t *testing.T) {
+			// Without a terminal the shell isn't interactive, and wouldn't
+			// read its startup files: a wrapper of the same name makes it
+			// (-i after bash's long options, which come first).
+			wrapper := filepath.Join(t.TempDir(), sh)
+			if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec /bin/"+sh+" \"$@\" -i 2>/dev/null\n"), 0o700); err != nil {
+				t.Fatal(err)
 			}
-		},
-	}
-
-	err := app.LaunchSubshell(mockProvider)
-	if err != nil {
-		t.Errorf("LaunchSubshell() should handle ExitError gracefully, got: %v", err)
-	}
-
-	output := app.Stdout.(*bytes.Buffer).String()
-	if !strings.Contains(output, "Exited secure shell") {
-		t.Error("Expected exit message even with non-zero exit status")
+			t.Setenv("SHELL", wrapper)
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("SESH_MASTER_PASSWORD", "hunter2-hunter2")
+			released := false
+			app := &App{Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+			p := &MockSubshellProvider{
+				NameFunc:            func() string { return "aws" },
+				ValidateRequestFunc: func() error { return nil },
+				GetCredentialsFunc: func() (provider.Credentials, error) {
+					if released {
+						t.Error("the vault was let go of before the credentials were read")
+					}
+					return provider.Credentials{Provider: "aws"}, nil
+				},
+				NewSubshellConfigFunc: func(creds *provider.Credentials) any {
+					if !released {
+						t.Error("the shell is being set up with the vault still held")
+					}
+					return subshell.Config{ServiceName: "aws", ShellCustomizer: &scriptedCustomizer{
+						script: `[ -z "$SESH_MASTER_PASSWORD" ] || exit 7
+exit 3`,
+					}}
+				},
+			}
+			err := app.LaunchSubshell(p, func() { released = true })
+			if status, ok := errors.AsType[exitStatus](err); !ok || status != 3 {
+				t.Errorf("LaunchSubshell() = %v, want exit status 3", err)
+			}
+			if !strings.Contains(app.Stdout.(*bytes.Buffer).String(), "Exited secure shell") {
+				t.Error("no exit message")
+			}
+		})
 	}
 }

@@ -39,7 +39,7 @@ flowchart TD
     Service -->|"TOTP"| TOTP["Copy or print the code<br>sesh copy github<br>sesh code github"]:::sesh
     
     Subshell --> Work["Work in secure environment<br>- sesh_status (check expiry)<br>- verify_aws"]:::process
-    Work --> Exit["Exit subshell<br>Credentials cleared"]:::endNode
+    Work --> Exit["Exit subshell<br>Credentials leave with it"]:::endNode
     
     Export --> Use["Use credentials/code"]:::process
     AWSClip --> Use
@@ -1823,11 +1823,14 @@ When run without additional flags, sesh will:
 
 The AWS subshell provides:
 
-- **Visual Indicators**: Custom prompt showing active sesh session
-- **On exit**: the credentials leave with the shell; AWS still accepts them until they expire
-- **Built-in Commands**: `sesh_status`, `verify_aws`, `sesh_help`
+- **Your own shell setup**: your startup files run, as in any new shell: zsh's from your `ZDOTDIR` (or home folder) in zsh's usual order, bash's `~/.bashrc`, or the file `sh`'s `ENV` names. Your aliases, prompt theme, completion and history are as usual; history is saved where your files say, Terminal.app's per-session history included. sesh's helper commands are defined before your files, so your aliases (`cat` for `bat`, say) don't change them.
+- **Visual Indicators**: `(sesh:aws)` before your prompt, from the first prompt on, put back if a prompt theme redraws it
+- **On exit**: the credentials leave with the shell; AWS still accepts them until they expire. `sesh aws` exits with the shell's exit status, as any shell does: `exit 3` makes it 3, and Ctrl-D after a command that failed gives that command's status
+- **Built-in Commands**: `sesh_status`, `verify_aws` (checks the credentials work, and who they sign in as), `sesh_help`
 - **Expiry Tracking**: Check remaining time with `sesh_status` (includes countdown and progress bar)
-- **Shells**: zsh and bash get the prompt and helper commands; another shell gets the credentials, the prompt if it uses `PS1`, and the helper commands only if it reads `$ENV` when it starts, as `sh` does
+- **Shells**: zsh, bash and `sh` get the prompt and helper commands; another shell (fish) gets the credentials alone
+- **Not passed on**: `SESH_MASTER_PASSWORD`, which no program in the shell needs. sesh lets go of the vault (and, without the agent, its key) before the shell starts
+- **Closing the terminal** hangs up the shell, as it would any shell, and a request to stop `sesh aws` (`kill`) reaches the shell as a hangup too, since an interactive shell ignores one; either way the shell saves its history and ends, and sesh removes the startup file it wrote
 
 ## Getting Help
 

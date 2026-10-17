@@ -93,7 +93,16 @@ func runAWS(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer closeAuditStore(store)
+	// The shell sesh aws opens can stay open for hours; the vault is let
+	// go of before it starts, and closed here otherwise.
+	closed := false
+	release := func() {
+		if !closed {
+			closed = true
+			closeAuditStore(store)
+		}
+	}
+	defer release()
 	p = flags.WithStore(store)
 	if setupAsked {
 		return setup.NewAWSSetupHandler(store).Setup(p.GetProfile(), p.Filing())
@@ -102,7 +111,7 @@ func runAWS(app *App, args []string) error {
 	case *clip:
 		return app.CopyToClipboard(p)
 	case p.ShouldUseSubshell():
-		return app.LaunchSubshell(p)
+		return app.LaunchSubshell(p, release)
 	}
 	return app.GenerateCredentials(p)
 }

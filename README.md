@@ -174,8 +174,8 @@ sesh aws --no-subshell             # print the credentials, to eval
 sesh aws --clip                    # copy the MFA code, for the AWS console
 ```
 
-`sesh aws` opens a shell with the session's credentials and:
-- a prompt that shows the session, such as `(sesh:aws) $`;
+`sesh aws` opens your own shell, with your usual setup, plus the session's credentials and:
+- `(sesh:aws)` before your prompt;
 - `sesh_status` (the session, and a check of the AWS connection), `verify_aws`, and `sesh_help`;
 - `SESH_ACTIVE=1` and `SESH_SERVICE=aws`, with the standard `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`;
 - `exit` or Ctrl-D to leave.

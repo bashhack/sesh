@@ -164,6 +164,13 @@ const outputIdle = time.Second
 // (killedBy), so a shell loop running sesh run stops at Ctrl-C as it would
 // for the command; other signals are a status of 128 plus the signal.
 func runChild(cmd *exec.Cmd, masks []*mask.Writer) error {
+	return runChildStoppedBy(cmd, masks, syscall.SIGTERM)
+}
+
+// runChildStoppedBy is runChild, passing a request to stop (SIGTERM) on as
+// stop: an interactive shell ignores SIGTERM, but a hangup ends it, saving
+// its history as it goes.
+func runChildStoppedBy(cmd *exec.Cmd, masks []*mask.Writer, stop syscall.Signal) error {
 	// exitedAt is when the command exited, in Unix nanoseconds; 0 before.
 	var exitedAt atomic.Int64
 	var readEnds, writeEnds []*os.File
@@ -208,7 +215,10 @@ func runChild(cmd *exec.Cmd, masks []*mask.Writer) error {
 		for {
 			select {
 			case sig := <-sigs:
-				if sig == syscall.SIGTERM || sig == syscall.SIGHUP || !fromTerminal() {
+				switch {
+				case sig == syscall.SIGTERM:
+					_ = cmd.Process.Signal(stop) //nolint:errcheck // it may have ended
+				case sig == syscall.SIGHUP || !fromTerminal():
 					_ = cmd.Process.Signal(sig) //nolint:errcheck // it may have ended
 				}
 			case <-done:
