@@ -68,8 +68,13 @@ func TestMerge_OneSided(t *testing.T) {
 		"a field changed": {func(r *Record) { r.Fields[0].Value = []byte("2222") }, func(r *Record) bool {
 			return len(r.Fields) == 2 && string(r.Fields[0].Value) == "2222"
 		}},
-		"a field removed":             {func(r *Record) { r.Fields = r.Fields[1:] }, func(r *Record) bool { return len(r.Fields) == 1 && r.Fields[0].Name == "team" }},
-		"an earlier secret forgotten": {func(r *Record) { r.History = nil }, func(r *Record) bool { return len(r.History) == 0 }},
+		"a field removed": {func(r *Record) { r.Fields = r.Fields[1:] }, func(r *Record) bool { return len(r.Fields) == 1 && r.Fields[0].Name == "team" }},
+		"an earlier secret forgotten": {func(r *Record) { r.History, r.Forgotten = nil, []string{Forget([]byte("pw-0"))} }, func(r *Record) bool {
+			return len(r.History) == 0 && slices.Equal(r.Forgotten, []string{Forget([]byte("pw-0"))})
+		}},
+		// Trimmed to a shorter history.keep isn't forgotten: the other's
+		// stays.
+		"an earlier secret trimmed": {func(r *Record) { r.History = nil }, func(r *Record) bool { return len(r.History) == 1 }},
 	} {
 		one := changed("desktop", 1, tc.edit)
 		m := merge(t, baseRecord(), baseRecord(), one)
@@ -102,9 +107,10 @@ func TestMerge_BothChangedDifferentThings(t *testing.T) {
 	}
 }
 
-// What both changed their own ways is the newer's, noted; the older's
-// secret goes into the history, replaced when and where the newer was
-// made.
+// What both changed their own ways is the newer's, noted; nothing secret
+// of the older's is lost: its secret goes into the history (replaced when
+// and where the newer was made), its notes below the newer's, its secret
+// field beside the newer's.
 func TestMerge_BothChangedTheSame(t *testing.T) {
 	older := changed("laptop", 1, func(r *Record) {
 		r.Secret, r.Updated, r.Notes, r.Folder = []byte("laptop-pw"), t0.Add(time.Hour), []byte("laptop"), "a"
@@ -115,8 +121,14 @@ func TestMerge_BothChangedTheSame(t *testing.T) {
 		r.Fields[0].Value = []byte("d")
 	})
 	m := merge(t, baseRecord(), older, newer)
-	if string(m.Secret) != "desktop-pw" || !m.Updated.Equal(t0.Add(2*time.Hour)) || string(m.Notes) != "desktop" || m.Folder != "b" || string(m.Fields[0].Value) != "d" {
+	if string(m.Secret) != "desktop-pw" || !m.Updated.Equal(t0.Add(2*time.Hour)) || m.Folder != "b" || string(m.Fields[0].Value) != "d" {
 		t.Errorf("merged %+v", m.Record)
+	}
+	if want := "desktop\n\n— from laptop, 2026-10-01 01:00 UTC —\nlaptop"; string(m.Notes) != want {
+		t.Errorf("notes %q, want %q", m.Notes, want)
+	}
+	if len(m.Fields) != 3 || m.Fields[2].Name != "pin (laptop)" || string(m.Fields[2].Value) != "l" || !m.Fields[2].Secret {
+		t.Errorf("fields %+v", m.Fields)
 	}
 	if !slices.Equal(sorted(m.Conflicts), []string{"field pin", "folder", "notes", "secret"}) || string(m.Lost) != "laptop-pw" {
 		t.Errorf("conflicts %q, lost %q", m.Conflicts, m.Lost)
@@ -186,7 +198,7 @@ func TestMerge_History(t *testing.T) {
 		r.History = append([]Earlier{{ReplacedAt: t0.Add(time.Hour), Computer: "laptop", Secret: []byte("pw-1")}}, r.History...)
 		r.Secret = []byte("pw-2")
 	})
-	b := changed("desktop", 2, func(r *Record) { r.History = nil })
+	b := changed("desktop", 2, func(r *Record) { r.History, r.Forgotten = nil, []string{Forget([]byte("pw-0"))} })
 	m := merge(t, baseRecord(), a, b)
 	if len(m.History) != 1 || string(m.History[0].Secret) != "pw-1" {
 		t.Errorf("history %+v", m.History)
@@ -276,5 +288,128 @@ func TestMerge_SharesNothing(t *testing.T) {
 	b.Wipe()
 	if string(p.Secret) != "kept" {
 		t.Errorf("came back: %q", p.Secret)
+	}
+}
+
+// sameContent says whether a and b hold the same entry, leaving out who
+// made them, when, and their versions.
+func sameContent(a, b *Record) bool {
+	x, y := *a, *b
+	x.Changed, y.Changed, x.Computer, y.Computer, x.Version, y.Version = time.Time{}, time.Time{}, "", "", 0, 0
+	return recordsEqual(&x, &y) && slices.Equal(x.Forgotten, y.Forgotten)
+}
+
+// Once one computer has merged two versions, the other merging that result
+// with its own version (as the next sync does) settles on the same entry:
+// nothing is added to the history twice, no notes or fields again. Only
+// the plain values its own change lost are noted again, to tell it so.
+func TestMerge_SettlesOnce(t *testing.T) {
+	for name, tc := range map[string]struct{ laptop, desktop func(r *Record) }{
+		"secret": {
+			func(r *Record) { r.Secret = []byte("laptop-pw") },
+			func(r *Record) { r.Secret = []byte("desktop-pw") },
+		},
+		"notes and a secret field": {
+			func(r *Record) { r.Notes, r.Fields[0].Value = []byte("laptop"), []byte("l") },
+			func(r *Record) { r.Notes, r.Fields[0].Value = []byte("desktop"), []byte("d") },
+		},
+		"everything": {
+			func(r *Record) {
+				r.Secret, r.Notes, r.Folder, r.URL, r.Fields[0].Value = []byte("L"), []byte("ln"), "lf", "lu", []byte("l")
+				r.Tags = []string{"x"}
+			},
+			func(r *Record) {
+				r.Secret, r.Notes, r.Folder, r.URL, r.Fields[0].Value = []byte("D"), []byte("dn"), "df", "du", []byte("d")
+				r.Tags = []string{"y"}
+			},
+		},
+	} {
+		laptop, desktop := changed("laptop", 1, tc.laptop), changed("desktop", 2, tc.desktop)
+		m := merge(t, baseRecord(), laptop, desktop)
+		// The desktop wrote it, later.
+		m.Computer, m.Changed, m.Version = "desktop", t0.Add(3*time.Hour), 5
+		for side, mine := range map[string]*Record{"laptop": laptop, "desktop": desktop} {
+			again := merge(t, baseRecord(), mine, m.Record)
+			if !sameContent(again.Record, m.Record) || slices.Contains(again.Conflicts, "secret") || slices.Contains(again.Conflicts, "notes") || again.Lost != nil {
+				t.Errorf("%s, merged again on the %s: conflicts %q, lost %q\n%+v\nwant %+v", name, side, again.Conflicts, again.Lost, again.Record, m.Record)
+			}
+		}
+		// And against itself, nothing changes.
+		if again := merge(t, m.Record, m.Record, m.Record); !sameContent(again.Record, m.Record) || len(again.Conflicts) != 0 {
+			t.Errorf("%s, merged with itself: %+v", name, again.Record)
+		}
+	}
+}
+
+// A file entry's name goes with its file: the newer's file comes with the
+// newer's name, the older's name into the history with its file.
+func TestMerge_FileNameGoesWithItsFile(t *testing.T) {
+	base := baseRecord()
+	base.Kind, base.Secret, base.Settings.FileName = vault.KindFile, []byte("A"), "a.pdf"
+	laptop := copyOf(base).Record
+	laptop.Computer, laptop.Changed, laptop.Secret, laptop.Settings.FileName = "laptop", t0.Add(time.Hour), []byte("B"), "b.pdf"
+	desktop := copyOf(base).Record
+	desktop.Computer, desktop.Changed, desktop.Secret = "desktop", t0.Add(2*time.Hour), []byte("A2")
+	m := merge(t, base, laptop, desktop)
+	if string(m.Secret) != "A2" || m.Settings.FileName != "a.pdf" {
+		t.Errorf("file %q named %q, want A2 named a.pdf", m.Secret, m.Settings.FileName)
+	}
+	if !slices.ContainsFunc(m.History, func(e Earlier) bool { return string(e.Secret) == "B" && e.FileName == "b.pdf" }) {
+		t.Errorf("history %+v: want B, named b.pdf", m.History)
+	}
+	// Only the name changed on one: that name.
+	renamed := copyOf(base).Record
+	renamed.Computer, renamed.Changed, renamed.Settings.FileName = "laptop", t0.Add(time.Hour), "c.pdf"
+	if m := merge(t, base, renamed, copyOf(base).Record); m.Settings.FileName != "c.pdf" {
+		t.Errorf("renamed: %q", m.Settings.FileName)
+	}
+}
+
+// Code settings merge each on its own: an MFA device set on one and the
+// codes' digits on the other both hold.
+func TestMerge_SettingsEachOnItsOwn(t *testing.T) {
+	a := changed("laptop", 1, func(r *Record) { r.Settings.AWSMFADevice = "arn:aws:iam::1:mfa/x" })
+	b := changed("desktop", 2, func(r *Record) { r.Settings.TOTP.Digits = 8 })
+	if m := merge(t, baseRecord(), a, b); m.Settings.AWSMFADevice != "arn:aws:iam::1:mfa/x" || m.Settings.TOTP.Digits != 8 || len(m.Conflicts) != 0 {
+		t.Errorf("settings %+v, conflicts %q", m.Settings, m.Conflicts)
+	}
+}
+
+// An earlier secret both have, replaced at different times or on different
+// computers, is kept once: the first time it was replaced.
+func TestMerge_HistoryEachSecretOnce(t *testing.T) {
+	a := changed("laptop", 1, func(r *Record) {
+		r.Secret = []byte("pw-2")
+		r.History = append([]Earlier{{ReplacedAt: t0.Add(time.Hour), Computer: "laptop", FileName: "a.txt", Secret: []byte("pw-1")}}, r.History...)
+	})
+	b := changed("desktop", 2, func(r *Record) {
+		r.Secret = []byte("pw-2")
+		r.History = append([]Earlier{{ReplacedAt: t0.Add(2 * time.Hour), Computer: "desktop", FileName: "b.txt", Secret: []byte("pw-1")}}, r.History...)
+	})
+	m := merge(t, baseRecord(), a, b)
+	if len(m.History) != 2 || string(m.History[0].Secret) != "pw-1" || m.History[0].Computer != "laptop" || string(m.History[1].Secret) != "pw-0" {
+		t.Errorf("history %+v", m.History)
+	}
+	// The same time and file name, other computers: one, the same either
+	// way round.
+	b.History[0].ReplacedAt, b.History[0].FileName = t0.Add(time.Hour), "a.txt"
+	merge(t, baseRecord(), a, b)
+}
+
+// Two versions alike in time, computer and version, but not in what they
+// hold, are still ordered the same either way round.
+func TestMerge_FullTie(t *testing.T) {
+	a := changed("mac", 1, func(r *Record) { r.Secret = []byte("one") })
+	b := changed("mac", 1, func(r *Record) { r.Secret = []byte("two") })
+	merge(t, baseRecord(), a, b)
+}
+
+// Deleted for good on one, edited then moved to the trash on the other: it
+// comes back, in the trash, as the other has it.
+func TestMerge_PurgedAgainstEditedInTheTrash(t *testing.T) {
+	purged := &Record{Purged: t0.Add(time.Hour), Computer: "laptop", Changed: t0.Add(time.Hour), Version: 4}
+	trashed := changed("desktop", 2, func(r *Record) { r.Notes, r.Deleted = []byte("edited"), t0.Add(2*time.Hour) })
+	if m := merge(t, baseRecord(), purged, trashed); !m.Purged.IsZero() || !m.Deleted.Equal(t0.Add(2*time.Hour)) || string(m.Notes) != "edited" {
+		t.Errorf("merged %+v", m.Record)
 	}
 }

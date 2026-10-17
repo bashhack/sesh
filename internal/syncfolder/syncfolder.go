@@ -166,15 +166,18 @@ type Record struct {
 	// where two versions changed the same thing, the later's is kept.
 	Changed time.Time `json:"changed,omitzero"`
 	// Computer is the name of the computer that made this version.
-	Computer string         `json:"computer"`
-	URL      string         `json:"url,omitempty"`
-	Folder   string         `json:"folder,omitempty"`
-	Secret   []byte         `json:"secret,omitempty"`
-	Notes    []byte         `json:"notes,omitempty"`
-	Fields   []Field        `json:"fields,omitempty"`
-	Tags     []string       `json:"tags,omitempty"`
-	History  []Earlier      `json:"history,omitempty"`
-	Settings vault.Settings `json:"settings,omitzero"`
+	Computer string    `json:"computer"`
+	URL      string    `json:"url,omitempty"`
+	Folder   string    `json:"folder,omitempty"`
+	Secret   []byte    `json:"secret,omitempty"`
+	Notes    []byte    `json:"notes,omitempty"`
+	Fields   []Field   `json:"fields,omitempty"`
+	Tags     []string  `json:"tags,omitempty"`
+	History  []Earlier `json:"history,omitempty"`
+	// Forgotten names the earlier secrets forgotten on purpose (Forget),
+	// so every computer forgets them; kept for good.
+	Forgotten []string       `json:"forgotten,omitempty"`
+	Settings  vault.Settings `json:"settings,omitzero"`
 	// Version only goes up: each version written is above every one the
 	// computer writing it has seen for the entry.
 	Version uint64 `json:"version"`
