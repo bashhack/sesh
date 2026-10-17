@@ -699,6 +699,14 @@ func (o *OlderKeys) Sealer(id string) syncfolder.Sealer {
 	return nil
 }
 
+// VerifiedLinks are those of links reached back from the key record id,
+// whose key is key, each opening and its proof holding (NewCheckedOlderKeys).
+func VerifiedLinks(key []byte, id string, links []syncfolder.KeyLink) []syncfolder.KeyLink {
+	o := NewCheckedOlderKeys(keySealer(key), id, links)
+	defer o.Close()
+	return o.Used()
+}
+
 // Used are the links the walk opened (with NewCheckedOlderKeys, those
 // whose proofs held), in the order given.
 func (o *OlderKeys) Used() []syncfolder.KeyLink {
@@ -723,7 +731,9 @@ func (o *OlderKeys) Close() {
 }
 
 // UnionLinks are the links of a and b, each once (by the two key records
-// it joins), a's first.
+// it joins), a's first and kept over b's: callers give a vault's own, whose
+// proofs were checked, before a folder's, where anyone can add one
+// alongside the real one.
 func UnionLinks(a, b []syncfolder.KeyLink) []syncfolder.KeyLink {
 	seen := map[[2]string]bool{}
 	var out []syncfolder.KeyLink

@@ -140,21 +140,32 @@ func knownKeys(ownID, prev string) map[string]bool {
 	return known
 }
 
-// changeFrom is a link from a key in known on a path of the folder's
-// changes to its key record now, the nearest such, or nil when none is:
-// every path back is searched, the links being a graph (taking a change
-// adds one from the taker's key).
+// changeFrom is the nearest of changesFrom, or nil when there's none.
 func changeFrom(info *syncfolder.Info, known map[string]bool) *syncfolder.KeyLink {
+	if ls := changesFrom(info, known); len(ls) > 0 {
+		return ls[0]
+	}
+	return nil
+}
+
+// changesFrom are the links from a key in known on a path of the folder's
+// changes to its key record now, the nearest first: every path back is
+// searched, the links being a graph (taking a change adds one from the
+// taker's key), and every link between two keys is given, since anyone
+// with the folder can add one alongside the real one.
+func changesFrom(info *syncfolder.Info, known map[string]bool) []*syncfolder.KeyLink {
 	into := map[string][]*syncfolder.KeyLink{}
 	for i := range info.Links {
 		into[info.Links[i].To] = append(into[info.Links[i].To], &info.Links[i])
 	}
 	start := database.UnlockID(info.Key.Verify)
 	seen := map[string]bool{start: true}
+	var out []*syncfolder.KeyLink
 	for queue := []string{start}; len(queue) > 0; queue = queue[1:] {
 		for _, l := range into[queue[0]] {
 			if known[l.From] {
-				return l
+				out = append(out, l)
+				continue
 			}
 			if !seen[l.From] {
 				seen[l.From] = true
@@ -162,7 +173,7 @@ func changeFrom(info *syncfolder.Info, known map[string]bool) *syncfolder.KeyLin
 			}
 		}
 	}
-	return nil
+	return out
 }
 
 // syncKeyChangeWarning says what a master password change does to syncing,
@@ -219,8 +230,8 @@ func changeProven(cfg *config.Config, store *database.Store) bool {
 // first link from the key record fromID, an older key of the vault open in
 // store, whose proof holds with that key.
 func provenFrom(store *database.Store, info *syncfolder.Info, fromID string) bool {
-	first := changeFrom(info, map[string]bool{fromID: true})
-	if first == nil {
+	firsts := changesFrom(info, map[string]bool{fromID: true})
+	if len(firsts) == 0 {
 		return false
 	}
 	older, err := store.SyncOlderKeys()
@@ -229,13 +240,14 @@ func provenFrom(store *database.Store, info *syncfolder.Info, fromID string) boo
 	}
 	defer older.Close()
 	s := older.Sealer(fromID)
-	return s != nil && database.LinkProofHolds(s, first)
+	return s != nil && slices.ContainsFunc(firsts, func(l *syncfolder.KeyLink) bool { return database.LinkProofHolds(s, l) })
 }
 
 // firstLink is the first link of the folder's change whose info is info
 // leading from a key a change taken by the vault in store may come from
-// (knownKeys, and with fork the keys it replaced), and the vault's older
-// keys; nil when there's none.
+// (knownKeys, and with fork the keys it replaced): the nearest whose proof
+// holds, else the nearest; and the vault's older keys. nil when there's
+// none.
 func firstLink(store *database.Store, info *syncfolder.Info, fork bool) (*syncfolder.KeyLink, *database.OlderKeys, error) {
 	ownID, err := store.SyncKeyID()
 	if err != nil {
@@ -255,15 +267,20 @@ func firstLink(store *database.Store, info *syncfolder.Info, fork bool) (*syncfo
 			known[id] = true
 		}
 	}
-	first := changeFrom(info, known)
-	if first == nil {
+	firsts := changesFrom(info, known)
+	if len(firsts) == 0 {
 		return nil, nil, nil
 	}
 	older, err := store.SyncOlderKeys()
 	if err != nil {
 		return nil, nil, err
 	}
-	return first, older, nil
+	for _, l := range firsts {
+		if proofHolds(store, older, l) {
+			return l, older, nil
+		}
+	}
+	return firsts[0], older, nil
 }
 
 // proofHolds says whether l's proof holds with the vault's key it comes
@@ -401,7 +418,7 @@ func sendWith(store *database.Store, cfg *config.Config, f syncfolder.Folder, in
 	// key nothing leads back to.
 	sent := *info
 	sent.Key = syncfolder.KeyRecord{Salt: rec.Salt, Verify: rec.Verify, Params: rec.Params}
-	sent.Links = database.UnionLinks(info.Links, links)
+	sent.Links = database.UnionLinks(links, info.Links)
 	if err := f.WriteInfo(&sent); err != nil {
 		return nil, err
 	}
@@ -457,7 +474,7 @@ func mendRolledBack(app *App, cfg *config.Config, f syncfolder.Folder) error {
 	if err != nil {
 		return err
 	}
-	if err := f.WriteInfo(syncfolder.InfoFor(info.FolderID, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}, database.UnionLinks(info.Links, links))); err != nil {
+	if err := f.WriteInfo(syncfolder.InfoFor(info.FolderID, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}, database.UnionLinks(links, info.Links))); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintln(app.Stdout, "The sync folder's master password record was an older one, put back: written as it is now.")
@@ -490,7 +507,7 @@ func settleFork(app *App, cfg *config.Config, f syncfolder.Folder) error {
 	if err != nil {
 		return err
 	}
-	if err := f.WriteInfo(syncfolder.InfoFor(info.FolderID, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}, database.UnionLinks(info.Links, links))); err != nil {
+	if err := f.WriteInfo(syncfolder.InfoFor(info.FolderID, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}, database.UnionLinks(links, info.Links))); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(app.Stdout, "The master password was changed on this computer and another from the same one: this one's is kept, and the other computer asks for it at its next sync."); err != nil {
@@ -612,7 +629,7 @@ func takeKeyChangeWith(app *App, cfg *config.Config, f syncfolder.Folder, store 
 	if err != nil {
 		return nil, err
 	}
-	links := database.UnionLinks(back.Used(), own)
+	links := database.UnionLinks(own, back.Used())
 	var sum *vaultsync.Summary
 	var syncErr error
 	_, notes, err := rekeyTo(store, cfg.DBPath.Value, ownID, key, folderRec, keepRecovery, database.RekeyOptions{Sync: database.RekeyAdopt, Links: links, Link: link}, func() string {
@@ -625,7 +642,7 @@ func takeKeyChangeWith(app *App, cfg *config.Config, f syncfolder.Folder, store 
 		// The folder gets this vault's links too.
 		if fresh, err := f.ReadInfo(); err == nil {
 			if mine, err := next.SyncKeyLinks(); err == nil {
-				fresh.Links = database.UnionLinks(fresh.Links, mine)
+				fresh.Links = database.UnionLinks(mine, fresh.Links)
 				_ = f.WriteInfo(fresh) //nolint:errcheck // the next sync writes them, should this fail
 			}
 		}

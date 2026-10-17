@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -801,6 +802,73 @@ func TestSync_PasswordChangeKeepsOnlyVerifiedLinks(t *testing.T) {
 		if l.From == junkID {
 			t.Errorf("the desktop kept a link whose proof doesn't hold: %+v", links)
 		}
+	}
+}
+
+// A fake copy of a real link, put in the folder before or after it, neither
+// replaces the real one nor stops a computer behind taking the change, and
+// a computer joining doesn't keep it.
+func TestSync_PasswordChangeFakeLinkCopy(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	f := syncfolder.New(folder)
+	addFake := func(first bool) []byte {
+		t.Helper()
+		info, err := f.ReadInfo()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fake := info.Links[0]
+		fake.Key = bytes.Clone(fake.Key)
+		fake.Proof = bytes.Clone(fake.Proof)
+		fake.Key[len(fake.Key)-1] ^= 1
+		fake.Proof[len(fake.Proof)-1] ^= 1
+		if first {
+			info.Links = append([]syncfolder.KeyLink{fake}, info.Links...)
+		} else {
+			info.Links = append(info.Links, fake)
+		}
+		if err := f.WriteInfo(info); err != nil {
+			t.Fatal(err)
+		}
+		return fake.Key
+	}
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	fake := addFake(true)
+	changePassword(t, "new-password-2", "new-password-3")
+	info, err := f.ReadInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range info.Links {
+		if bytes.Equal(l.Key, fake) {
+			t.Fatal("the laptop's change kept the fake link over its own")
+		}
+	}
+	addFake(true)
+	ddb := syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-3"))
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "now opens with the new master password") {
+		t.Fatalf("desktop, two changes behind: %q, %v", out, err)
+	}
+	if vaultKeyID(t, ddb) != folderKeyID(t, folder) {
+		t.Error("the desktop isn't on the folder's key record")
+	}
+	fake = addFake(false)
+	jdb := syncComputer(t, filepath.Join(dir, "third"), "third")
+	t.Setenv("SESH_MASTER_PASSWORD", "new-password-3")
+	if out, err := runSyncOut(t, "", false, "join", folder); err != nil {
+		t.Fatalf("join: %q, %v", out, err)
+	}
+	links, err := database.VaultKeyLinks(jdb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) == 0 || slices.ContainsFunc(links, func(l syncfolder.KeyLink) bool { return bytes.Equal(l.Key, fake) }) {
+		t.Errorf("the computer joining kept a fake link, or none: %d", len(links))
 	}
 }
 

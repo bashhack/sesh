@@ -689,9 +689,17 @@ func syncJoin(app *App, arg string) error {
 		return err
 	}
 	defer secure.SecureZeroBytes(pw)
+	// Only the folder's links that hold are kept: anyone with the folder
+	// can add one.
+	links := info.Links
+	if len(links) > 0 {
+		key := database.DeriveKey(pw, m.Salt, m.Params)
+		links = database.VerifiedLinks(key, database.UnlockID(m.Verify), links)
+		secure.SecureZeroBytes(key)
+	}
 	var notes []string
 	if switchKey {
-		said, err := switchToFolderKey(app, cfg, pw, m, info.Links)
+		said, err := switchToFolderKey(app, cfg, pw, m, links)
 		if err != nil {
 			return err
 		}
@@ -714,7 +722,7 @@ func syncJoin(app *App, arg string) error {
 	if err != nil {
 		return err
 	}
-	rejoin, err := database.JoinVault(cfg.DBPath.Value, m, info.FolderID, info.Links)
+	rejoin, err := database.JoinVault(cfg.DBPath.Value, m, info.FolderID, links)
 	if err != nil {
 		return joinRefused(err, dir)
 	}
@@ -821,7 +829,7 @@ func switchToFolderKey(app *App, cfg *config.Config, pw []byte, m database.Unloc
 	if err != nil {
 		return nil, err
 	}
-	_, notes, err := rekeyTo(store, cfg.DBPath.Value, ownID, key, m, true, database.RekeyOptions{Sync: database.RekeyAdopt, Links: database.UnionLinks(links, mine), Link: link}, nil)
+	_, notes, err := rekeyTo(store, cfg.DBPath.Value, ownID, key, m, true, database.RekeyOptions{Sync: database.RekeyAdopt, Links: database.UnionLinks(mine, links), Link: link}, nil)
 	if err != nil {
 		return nil, err
 	}
