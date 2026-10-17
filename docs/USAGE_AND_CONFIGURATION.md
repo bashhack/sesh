@@ -468,12 +468,12 @@ To avoid ending up here, make a recovery key, keep the master password somewhere
 sesh has no command to move a vault; it takes a few steps:
 
 1. Close `sesh ui` and any other sesh command that's running.
-2. Move the vault file, any `-wal` and `-shm` files beside it (`passwords.db-wal`, `passwords.db-shm`), and `touchid.key` if it's there, to the new folder, one only you can read and write. If that folder holds a vault already, choose another: the lines below move nothing then (a vault's `-wal` file beside another vault would change it), and `mv -n` leaves any other file that's there alone, saying so.
+2. Move the vault file, any `-wal` and `-shm` files beside it (`passwords.db-wal`, `passwords.db-shm`), and `touchid.key` if it's there, to the new folder, one only you can read and write. If that folder holds a vault already, choose another: the lines below move nothing then, nor when a vault's `-wal` or `-shm` file is there (beside another vault, it would change it), and `mv -n` leaves any other file that's there alone, saying so.
    ```bash
    mkdir -p ~/Library/Application\ Support/sesh && chmod 700 ~/Library/Application\ Support/sesh   # Linux: ~/.local/share/sesh
    from=~/Dropbox to=~/Library/Application\ Support/sesh
-   if [ -e "$to/passwords.db" ]; then
-     echo "a vault is there already: choose another folder"
+   if [ -e "$to/passwords.db" ] || [ -e "$to/passwords.db-wal" ] || [ -e "$to/passwords.db-shm" ]; then
+     echo "a vault, or its files, is there already: choose another folder"
    else
      for f in passwords.db passwords.db-wal passwords.db-shm touchid.key; do
        if [ -e "$from/$f" ]; then

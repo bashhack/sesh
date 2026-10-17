@@ -10,6 +10,7 @@ import (
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/vaultsync"
 )
 
 // cloudTool names the sync tool whose folder a vault is in: by the folder's
@@ -326,5 +327,16 @@ func TestDoctor_SyncRowLostInfoAndNeverSynced(t *testing.T) {
 	out = app.Stdout.(*bytes.Buffer).String() + app.Stderr.(*bytes.Buffer).String()
 	if err == nil || !strings.Contains(out, "never synced with this folder") || !strings.Contains(out, "Join the folder with an empty vault (sesh sync join explains), or stop syncing:") {
 		t.Errorf("a never-synced vault (%v):\n%s", err, out)
+	}
+}
+
+// A sync's warnings are said, even when there was nothing else to do, and
+// don't fail it.
+func TestWriteSyncSummary_Warnings(t *testing.T) {
+	app := agentTestApp()
+	err := writeSyncSummary(app, "~/sync", &vaultsync.Summary{Warnings: []string{"make ~/sync/sesh-sync.json readable only by you: not permitted"}})
+	out := app.Stdout.(*bytes.Buffer).String()
+	if err != nil || !strings.Contains(out, "nothing to do") || !strings.Contains(out, "⚠️  make ~/sync/sesh-sync.json readable only by you") {
+		t.Errorf("warnings only: %q, %v", out, err)
 	}
 }

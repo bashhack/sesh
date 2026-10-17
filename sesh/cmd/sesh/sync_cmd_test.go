@@ -583,7 +583,7 @@ func TestSync_LostInfoFile(t *testing.T) {
 	}
 
 	syncComputer(t, desktop, "desktop")
-	if out, err := runSyncOut(t, "", false, "status"); err != nil || !strings.Contains(out, "lost its sesh-sync.json: sesh sync writes it again") {
+	if out, err := runSyncOut(t, "", false, "status"); err != nil || !strings.Contains(out, "⚠️  the sync folder") || !strings.Contains(out, "lost its sesh-sync.json: sesh sync writes it again") {
 		t.Errorf("status, the info file lost: %q, %v", out, err)
 	}
 	putEntry(t, "password/b", "2")

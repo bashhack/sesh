@@ -318,8 +318,12 @@ func mendInfo(cfg *config.Config) (bool, error) {
 // writeSyncSummary says what a sync did; problems make it an error, after
 // they're listed.
 func writeSyncSummary(app *App, dir string, s *vaultsync.Summary) error {
+	var warned strings.Builder
+	for _, w := range s.Warnings {
+		fmt.Fprintf(&warned, "  ⚠️  %s\n", w)
+	}
 	if s.Nothing() {
-		_, err := fmt.Fprintf(app.Stdout, "✅ In sync with %s: nothing to do.\n", dir)
+		_, err := fmt.Fprintf(app.Stdout, "✅ In sync with %s: nothing to do.\n%s", dir, warned.String())
 		return err
 	}
 	var b strings.Builder
@@ -362,6 +366,7 @@ func writeSyncSummary(app *App, dir string, s *vaultsync.Summary) error {
 	if s.Later > 0 {
 		fmt.Fprintf(&b, "  %s changed by another sesh command meanwhile: the next sync takes them\n", nouns(s.Later, "entry", "entries"))
 	}
+	b.WriteString(warned.String())
 	for _, p := range s.Problems {
 		fmt.Fprintf(&b, "  ❌ %s\n", p)
 	}
@@ -769,7 +774,10 @@ func syncStatus(app *App) error {
 		return err
 	}
 	f, folderErr := syncFolderOf(cfg)
-	if folderErr != nil {
+	switch {
+	case errors.Is(folderErr, errInfoLost):
+		fmt.Fprintf(&b, "⚠️  %v\n", folderErr)
+	case folderErr != nil:
 		fmt.Fprintf(&b, "❌ %v\n", folderErr)
 	}
 	store, err := database.Open(cfg.DBPath.Value, nil)

@@ -611,7 +611,7 @@ func TestSync_TightenKeepsAndSays(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command("chflags", "nouchg", info).Run() }) //nolint:errcheck // test cleanup
 	laptop.put("gitlab", "pw-2")
 	s, err := Sync(laptop.store, f, laptop.name)
-	if err != nil || len(s.Problems) != 1 || !strings.Contains(s.Problems[0], "readable only by you") || len(s.Sent) != 1 {
+	if err != nil || len(s.Problems) != 0 || len(s.Warnings) != 1 || !strings.Contains(s.Warnings[0], "readable only by you") || len(s.Sent) != 1 {
 		t.Errorf("a locked %s: %+v, %v; want it said and the rest synced", syncfolder.InfoFile, s, err)
 	}
 }

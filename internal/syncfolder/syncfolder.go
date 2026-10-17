@@ -397,6 +397,7 @@ func (f Folder) entries(create bool) (string, error) {
 // a computer that only ever takes. The InfoFile matters as much as the
 // entries: its key record lets whoever reads it try passwords offline.
 func (f Folder) Tighten() error {
+	var errs []error
 	for _, p := range []struct {
 		path string
 		dir  bool
@@ -406,16 +407,17 @@ func (f Folder) Tighten() error {
 		case errors.Is(err, os.ErrNotExist):
 			continue
 		case err != nil:
-			return err
+			errs = append(errs, err)
+			continue
 		case fi.IsDir() != p.dir || !fi.Mode().IsRegular() && !p.dir || fi.Mode().Perm()&0o077 == 0:
 			continue
 		}
 		// Only what others had is taken away: a file kept read-only stays so.
 		if err := os.Chmod(p.path, fi.Mode().Perm()&^0o077); err != nil {
-			return fmt.Errorf("make %s readable only by you: %w", p.path, err)
+			errs = append(errs, fmt.Errorf("make %s readable only by you: %w", p.path, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // Hash is a file's SHA-256, of its bytes as they are: sealed, so it says
