@@ -43,7 +43,11 @@ const export = `{
     {"accountID": "", "lmiUserId": "", "issuerName": "Old", "userName": "x", "secret": "JBSWY3DPEHPK3PXP", "algorithm": "MD5", "digits": 6, "timeStep": 30},
     {"accountID": "", "lmiUserId": "", "issuerName": "Long", "userName": "x", "secret": "JBSWY3DPEHPK3PXP", "algorithm": "SHA1", "digits": 10, "timeStep": 30},
     {"accountID": "", "lmiUserId": "", "issuerName": "Broken", "userName": "x", "secret": "not base32!", "algorithm": "SHA1", "digits": 6, "timeStep": 30},
-    {"accountID": "", "lmiUserId": "", "issuerName": " ", "userName": "", "secret": "JBSWY3DPEHPK3PXP", "algorithm": "SHA1", "digits": 6, "timeStep": 30}
+    {"accountID": "", "lmiUserId": "", "issuerName": " ", "userName": "", "secret": "JBSWY3DPEHPK3PXP", "algorithm": "SHA1", "digits": 6, "timeStep": 30},
+    {"issuerName": "", "originalIssuerName": "Okta", "userName": "", "originalUserName": "bob", "secret": "JBSWY3DPEHPK3PXU",
+     "algorithm": "SHA1", "digits": 6, "timeStep": 30, "folderData": {"folderId": "2", "position": 9}},
+    {"issuerName": "GitHub", "userName": "alice", "secret": "jbsw y3dp ehpk 3pxp", "algorithm": "SHA1", "digits": 6, "timeStep": 30},
+    {"issuerName": "Weird", "userName": "x", "secret": "JBSWY3DPEHPK3PXV", "algorithm": "SHA1", "digits": 6, "timeStep": 30, "folderData": {"folderId": "two"}}
   ]
 }`
 
@@ -62,6 +66,7 @@ func TestEntries(t *testing.T) {
 		secret  string
 		folder  string
 		tags    []string
+		changes []string // each in the entry's changes
 		params  totp.Params
 		created int64
 	}
@@ -70,18 +75,27 @@ func TestEntries(t *testing.T) {
 		// Named as the app shows it, renamed; the username trimmed; the
 		// key normalized; a folder of the user's own; a favorite.
 		{key: "totp/My Bank/alice@example.com", secret: "JBSWY3DPEHPK3PXQ", folder: "Work-AWS", tags: []string{"favorite"},
-			params: totp.Params{Issuer: "My Bank", Algorithm: "SHA512", Digits: 8, Period: 60}},
+			params:  totp.Params{Issuer: "My Bank", Algorithm: "SHA512", Digits: 8, Period: 60},
+			changes: []string{`folder "Work / AWS" is "Work-AWS" in sesh`}},
 		// No issuer: named by the account; the app's Favorites folder isn't one.
 		{key: "totp/ClassLink", secret: "JBSWY3DPEHPK3PXR", params: totp.Params{}, created: 1715971100},
 		// A / in a name becomes -.
-		{key: "totp/Acme-Corp", secret: "JBSWY3DPEHPK3PXS", params: totp.Params{Issuer: "Acme/Corp"}, created: 1715971100},
+		{key: "totp/Acme-Corp", secret: "JBSWY3DPEHPK3PXS", params: totp.Params{Issuer: "Acme/Corp"}, created: 1715971100,
+			changes: []string{`named "Acme-Corp" in sesh`}},
 		{skip: "the same account twice"},
 		// One name, another key: numbered.
 		{key: "totp/GitHub (2)/alice", secret: "JBSWY3DPEHPK3PXT", params: totp.Params{Issuer: "GitHub"}, created: 1715971083},
 		{skip: "uses MD5"},
 		{skip: "makes 10-digit codes"},
-		{skip: "the secret can't be used"},
+		{skip: "the key isn't a valid base32 key"},
 		{skip: "has no name"},
+		// Empty names fall back to those the account was added with; a
+		// folder id in a string, as Bitwarden's Android model has it.
+		{key: "totp/Okta/bob", secret: "JBSWY3DPEHPK3PXU", folder: "Work-AWS", params: totp.Params{Issuer: "Okta"}},
+		// The same key written another way is the same account.
+		{skip: "the same account twice"},
+		// A folder id that isn't one costs the folder, not the import.
+		{key: "totp/Weird/x", secret: "JBSWY3DPEHPK3PXV", params: totp.Params{Issuer: "Weird"}},
 	} {
 		e := got[i]
 		if w.skip != "" {
@@ -92,6 +106,11 @@ func TestEntries(t *testing.T) {
 		}
 		if e.Skip != "" || e.Key.String() != w.key || string(e.Secret) != w.secret || e.Folder != w.folder || !slices.Equal(e.Tags, w.tags) {
 			t.Errorf("account %d: %s %q folder %q tags %q skip %q; want %s %q folder %q tags %q", i, e.Key, e.Secret, e.Folder, e.Tags, e.Skip, w.key, w.secret, w.folder, w.tags)
+		}
+		for _, c := range w.changes {
+			if !slices.Contains(e.Changes, c) {
+				t.Errorf("account %d: changes %q lack %q", i, e.Changes, c)
+			}
 		}
 		if e.Settings.TOTP != w.params {
 			t.Errorf("account %d: params %+v, want %+v", i, e.Settings.TOTP, w.params)
@@ -111,8 +130,11 @@ func TestIsExport(t *testing.T) {
 		t.Error("the export wasn't recognized")
 	}
 	for _, other := range []string{
-		`{"encrypted": false, "items": [{"login": {"totp": "x"}}]}`, // Bitwarden
+		// Bitwarden's JSON, with the words in a note.
+		`{"encrypted": false, "items": [{"type": 2, "notes": "\"accounts\": [{\"timeStep\": 30}]", "login": {"totp": "x"}}]}`,
 		`{"accounts": "not a list", "timeStep": 30}`,
+		`{"accounts": [], "settings": {"timeStep": 30}}`,
+		`{"accounts": [{"name": "a"}], "settings": {"timeStep": 30}}`,
 		`otpauth-migration://offline?data=abc`,
 		``,
 	} {

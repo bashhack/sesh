@@ -47,7 +47,26 @@ type Account struct {
 
 // FolderData is the folder an account is in.
 type FolderData struct {
-	FolderID int `json:"folderId"`
+	FolderID FolderID `json:"folderId"`
+}
+
+// FolderID is a folder's id: a number, or (in Bitwarden's Android model of
+// the export) a number in a string. One that's neither is -1, no folder,
+// so it costs the account its folder, not the import.
+type FolderID int
+
+// UnmarshalJSON reads a number, or a number in a string (json.Number
+// takes both).
+func (f *FolderID) UnmarshalJSON(b []byte) error {
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err == nil {
+		if i, err := n.Int64(); err == nil {
+			*f = FolderID(i)
+			return nil
+		}
+	}
+	*f = -1
+	return nil
 }
 
 // Folder is a folder in the app. Favorites and Other Accounts are the
@@ -57,15 +76,29 @@ type Folder struct {
 	ID   int    `json:"id"`
 }
 
-// IsExport says whether b is a LastPass Authenticator export: JSON with
-// accounts that have a secret and a timeStep.
+// IsExport says whether b is a LastPass Authenticator export: a JSON
+// object whose accounts list has at least one account, each with a secret
+// and a timeStep. The keys aren't read into strings to tell.
 func IsExport(b []byte) bool {
 	b = bytes.TrimSpace(b)
 	if len(b) == 0 || b[0] != '{' || !bytes.Contains(b, []byte(`"accounts"`)) || !bytes.Contains(b, []byte(`"timeStep"`)) {
 		return false
 	}
-	_, err := Parse(b)
-	return err == nil
+	var probe struct {
+		Accounts []struct {
+			Secret   *json.RawMessage `json:"secret"`
+			TimeStep *json.RawMessage `json:"timeStep"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(b, &probe); err != nil || len(probe.Accounts) == 0 {
+		return false
+	}
+	for _, a := range probe.Accounts {
+		if a.Secret == nil || a.TimeStep == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // Parse reads an export.
@@ -80,8 +113,14 @@ func Parse(b []byte) (Export, error) {
 	return e, nil
 }
 
-// builtinFolders are the app's own folders, which aren't folders in sesh.
+// builtinFolders are the app's own folders, which aren't folders in sesh:
+// Other Accounts (id 0) and Favorites (id 1), by id or, in case, by name.
 var builtinFolders = map[string]bool{"Favorites": true, "Other Accounts": true}
+
+// builtin says whether f is one of the app's own folders.
+func builtin(f Folder) bool {
+	return f.ID == 0 || f.ID == 1 || builtinFolders[f.Name]
+}
 
 // Entries are the export's accounts as TOTP entries: named by the issuer
 // and account as the app shows them (or as they were added, when those
@@ -93,30 +132,46 @@ var builtinFolders = map[string]bool{"Favorites": true, "Other Accounts": true}
 func Entries(e *Export) []*importer.Entry {
 	// The app's folders are flat, so a "/" in one's name, which in sesh
 	// would mean a folder inside a folder, becomes "-".
-	folders := map[int]string{}
+	folders := map[FolderID]string{}
+	folderChanges := map[FolderID]string{}
 	for _, f := range e.Folders {
-		if !builtinFolders[f.Name] {
-			folders[f.ID] = importer.FitFolder(strings.ReplaceAll(f.Name, "/", "-"))
+		if builtin(f) {
+			continue
+		}
+		fitted := importer.FitFolder(strings.ReplaceAll(f.Name, "/", "-"))
+		folders[FolderID(f.ID)] = fitted
+		switch {
+		case fitted == "":
+			folderChanges[FolderID(f.ID)] = fmt.Sprintf("folder %q not kept: nothing of it fits sesh's rules", f.Name)
+		case fitted != f.Name:
+			folderChanges[FolderID(f.ID)] = fmt.Sprintf("folder %q is %q in sesh", f.Name, fitted)
 		}
 	}
 	names := importer.NewNames()
-	seen := map[vault.Key]string{} // each key's secret, as given
+	seen := map[vault.Key]map[string]bool{} // each key's secrets, normalized
 	var out []*importer.Entry
 	for i := range e.Accounts {
 		a := &e.Accounts[i]
 		k, params, secret, skip := a.entry()
 		ent := &importer.Entry{Key: k, Name: a.label(), Skip: skip, Settings: vault.Settings{TOTP: params}}
-		if skip == "" && seen[k] == a.Secret {
+		if skip == "" && seen[k][secret] {
 			ent.Skip = "the same account twice"
 		}
 		if ent.Skip == "" {
-			seen[k] = a.Secret
+			if seen[k] == nil {
+				seen[k] = map[string]bool{}
+			}
+			seen[k][secret] = true
 			ent.Secret = []byte(secret)
+			ent.Changes = a.nameChanges(k)
 			if a.CreationTimestamp > 0 {
 				ent.Created = time.Unix(a.CreationTimestamp, 0)
 			}
 			if a.FolderData != nil {
 				ent.Folder = folders[a.FolderData.FolderID]
+				if c := folderChanges[a.FolderData.FolderID]; c != "" {
+					ent.Changes = append(ent.Changes, c)
+				}
 			}
 			if a.IsFavorite {
 				ent.Tags = []string{"favorite"}
@@ -139,6 +194,23 @@ func (a *Account) names() (issuer, user string) {
 		user = strings.TrimSpace(a.OriginalUserName)
 	}
 	return issuer, user
+}
+
+// nameChanges says how k's names differ from the account's, when fitting
+// them to sesh's rules changed them.
+func (a *Account) nameChanges(k vault.Key) []string {
+	issuer, user := a.names()
+	if issuer == "" {
+		issuer, user = user, ""
+	}
+	var out []string
+	if k.Service != issuer {
+		out = append(out, fmt.Sprintf("named %q in sesh", k.Service))
+	}
+	if k.Username != user {
+		out = append(out, fmt.Sprintf("username %q in sesh", k.Username))
+	}
+	return out
 }
 
 // label is how the summary names the account: "issuer: account".
@@ -190,9 +262,13 @@ func (a *Account) entry() (k vault.Key, params totp.Params, secret, skip string)
 	if err := k.Validate(); err != nil {
 		return vault.Key{}, totp.Params{}, "", err.Error()
 	}
+	// The reason never quotes the key: the summary is shown on screen.
 	secret, err := totp.ValidateAndNormalizeSecret(a.Secret)
-	if err != nil {
-		return vault.Key{}, totp.Params{}, "", "the secret can't be used: " + err.Error()
+	switch {
+	case err != nil && strings.Contains(err.Error(), "too short"):
+		return vault.Key{}, totp.Params{}, "", "the key is too short to be safe"
+	case err != nil:
+		return vault.Key{}, totp.Params{}, "", "the key isn't a valid base32 key"
 	}
 	return k, params, secret, ""
 }

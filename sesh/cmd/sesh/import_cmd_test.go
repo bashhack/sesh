@@ -868,7 +868,7 @@ func TestImport_LastPassAuthenticator(t *testing.T) {
 		}
 	}
 	out, _, err := runImportOut(t, "", false, "--from", "lastpass-authenticator", "--yes", "--on-conflict", "skip", file)
-	if err != nil || !strings.Contains(out, "✅ Imported 1 TOTP entry from LastPass Authenticator.") || !strings.Contains(out, "delete "+file+" now") {
+	if err != nil || !strings.Contains(out, "✅ Imported 1 TOTP entry from LastPass Authenticator.") || !strings.Contains(out, "delete "+file+" now") || !strings.Contains(out, "Before removing an account from your phone, check that its code matches") {
 		t.Fatalf("%q, %v", out, err)
 	}
 	store := openDoctorVault(t, env)
@@ -879,5 +879,25 @@ func TestImport_LastPassAuthenticator(t *testing.T) {
 	}
 	if secret, err := store.Get(k); err != nil || string(secret) != "JBSWY3DPEHPK3PXQ" {
 		t.Errorf("secret %q, %v", secret, err)
+	}
+}
+
+// Each source's file is told apart from the others', LastPass
+// Authenticator's from JSON that only mentions its words.
+func TestDetectSource_LastPassAuthenticator(t *testing.T) {
+	dir := t.TempDir()
+	for name, tc := range map[string]struct{ body, want string }{
+		"lastpass":   {`{"version": 1, "accounts": [{"issuerName": "a", "secret": "JBSWY3DPEHPK3PXP", "timeStep": 30}]}`, "lastpass-authenticator"},
+		"bitwarden":  {`{"encrypted": false, "folders": [], "items": [{"id": "1", "type": 1, "name": "x", "notes": "accounts timeStep", "login": {"username": "u", "password": "p", "totp": null}}]}`, "bitwarden"},
+		"sesh plain": {`[{"id": "totp/a", "kind": "totp", "service": "a", "secret": "x", "notes": "\"accounts\" \"timeStep\""}]`, ""},
+	} {
+		file := filepath.Join(dir, name+".json")
+		if err := os.WriteFile(file, []byte(tc.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := detectSource([]string{file})
+		if tc.want != "" && got != tc.want || tc.want == "" && got == "lastpass-authenticator" {
+			t.Errorf("%s: detectSource() = %q, want %q", name, got, tc.want)
+		}
 	}
 }

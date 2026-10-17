@@ -1597,7 +1597,8 @@ sesh import --from lastpass-authenticator accounts.json
 - **Each account** becomes a TOTP entry, named by its issuer and account as the app shows them (as they were added, if those are empty), or by the account alone when there's no issuer. Spaces at the ends are trimmed, and a `/` becomes `-`.
 - **The code settings** (algorithm, digits, how often a new code comes) and when the account was added come across.
 - **Folders:** a folder of your own becomes a sesh folder (a `/` in its name becomes `-`, as the app's folders don't nest); the app's own Favorites and Other Accounts aren't folders in sesh. A favorite gets the tag `favorite`.
-- **What sesh skips,** each with the reason: an algorithm other than SHA-1, SHA-256 or SHA-512; codes other than 6 to 8 digits; a key that isn't valid; an account with no name; the same account twice. Two accounts with one name and different keys get ` (2)` added to the second.
+- **What sesh skips,** each with the reason: an algorithm other than SHA-1, SHA-256 or SHA-512; codes other than 6 to 8 digits; a key that isn't valid (the reason never shows the key); an account with no name; the same account twice (its key written another way included). Two accounts with one name and different keys get ` (2)` added to the second. A name or folder fitted to sesh's rules is said in the summary.
+- **Before removing an account from the phone,** check its code in sesh matches, for example with `sesh code GitHub alice`.
 - **The export** holds every key unencrypted. sesh reminds you to delete it once the import is done.
 
 ### Folders and tags

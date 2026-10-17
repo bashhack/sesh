@@ -342,7 +342,7 @@ func (p *importPlan) apply(store *database.Store) (string, error) {
 	if history.TooLarge > 0 {
 		fmt.Fprintf(&b, "Not kept: %s larger than sesh holds (%d bytes).\n", nouns(history.TooLarge, "old password", "old passwords"), database.MaxSecretSize)
 	}
-	if i := slices.IndexFunc(write, func(e *importer.Entry) bool { return e.Key.Kind == vault.KindTOTP }); i >= 0 && p.f.source == "Google Authenticator" {
+	if i := slices.IndexFunc(write, func(e *importer.Entry) bool { return e.Key.Kind == vault.KindTOTP }); i >= 0 && (p.f.source == "Google Authenticator" || p.f.source == "LastPass Authenticator") {
 		k := write[i].Key
 		check := "sesh code " + shell.Quote(k.String())
 		fmt.Fprintf(&b, "Before removing an account from your phone, check that its code matches, as with: %s\n", check)
@@ -373,9 +373,10 @@ func (f *found) wipe() {
 	}
 }
 
-// detectSource is the app the files come from: Bitwarden, KeePass, Chrome,
-// Firefox or Safari for one of their exports (or a file of theirs to be refused
-// as such), Google Authenticator otherwise.
+// detectSource is the app the files come from: Bitwarden, KeePass, LastPass
+// Authenticator, sesh, Chrome, Firefox or Safari for one of their exports
+// (or a file of theirs to be refused as such), Google Authenticator
+// otherwise.
 func detectSource(args []string) string {
 	for _, a := range args {
 		b, err := os.ReadFile(a) //nolint:gosec // the file the user named
