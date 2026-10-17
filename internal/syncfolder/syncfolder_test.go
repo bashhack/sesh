@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -88,7 +89,7 @@ func record() *Record {
 		Fields:   []Field{{Name: "pin", Value: []byte("1234"), Secret: true}, {Name: "team", Value: []byte("core")}},
 		Settings: vault.Settings{TOTP: totp.Params{Issuer: "GitHub", Digits: 8}},
 		Tags:     []string{"code", "work"},
-		History:  []Earlier{{ReplacedAt: at, Secret: []byte("OLDKEYOLDKEYOLD2")}},
+		History:  []Earlier{{ReplacedAt: at, Computer: "desktop", Secret: []byte("OLDKEYOLDKEYOLD2")}},
 		Version:  7,
 	}
 }
@@ -137,7 +138,7 @@ func recordsEqual(a, b *Record) bool {
 		}) &&
 		a.Settings == b.Settings && slices.Equal(a.Tags, b.Tags) && a.Version == b.Version &&
 		slices.EqualFunc(a.History, b.History, func(x, y Earlier) bool {
-			return x.ReplacedAt.Equal(y.ReplacedAt) && x.FileName == y.FileName && bytes.Equal(x.Secret, y.Secret)
+			return x.ReplacedAt.Equal(y.ReplacedAt) && x.Computer == y.Computer && x.FileName == y.FileName && bytes.Equal(x.Secret, y.Secret)
 		})
 }
 
@@ -286,8 +287,11 @@ func TestFolderScan(t *testing.T) {
 	}
 	var names []string
 	for _, file := range c.Files {
-		if file.UIDString() != uid1 || file.Hash != HashOf(b) || !bytes.Equal(file.Data, b) {
+		if file.UIDString() != uid1 || file.Hash != HashOf(b) {
 			t.Errorf("%s: read as %s", file.Path, file.UIDString())
+		}
+		if got, err := f.Read(&file); err != nil || !bytes.Equal(got, b) {
+			t.Errorf("%s: Read: %v", file.Path, err)
 		}
 		names = append(names, filepath.Base(file.Path))
 	}
@@ -304,7 +308,7 @@ func TestFolderScan(t *testing.T) {
 	for _, p := range c.Problems {
 		why[filepath.Base(p.Path)] = p.Why
 	}
-	for name, wantSub := range map[string]string{"garbage.sesh": "not a sesh sync file", "short.sesh": "cut short", "link.sesh": "not a regular file"} {
+	for name, wantSub := range map[string]string{"garbage.sesh": "not a sesh sync file", "short.sesh": "cut short", "link.sesh": "a link"} {
 		if !strings.Contains(why[name], wantSub) {
 			t.Errorf("%s: problem %q, want one with %q", name, why[name], wantSub)
 		}
@@ -369,5 +373,246 @@ func (s shortSalt) EncryptEntry(plaintext, aad []byte) ([]byte, []byte, error) {
 func TestSealRefusesASaltOfAnotherSize(t *testing.T) {
 	if _, err := Seal(shortSalt{newSealer(t)}, header(t, uid1), record()); err == nil || !strings.Contains(err.Error(), "a salt of 8 bytes, not 16") {
 		t.Errorf("Seal: %v", err)
+	}
+}
+
+// countingSealer is gcmSealer, keeping the size of each piece sealed.
+type countingSealer struct {
+	*gcmSealer
+	sizes []int
+}
+
+func (c *countingSealer) EncryptEntry(plaintext, aad []byte) ([]byte, []byte, error) {
+	c.sizes = append(c.sizes, len(plaintext))
+	return c.gcmSealer.EncryptEntry(plaintext, aad)
+}
+
+// A record larger than a piece is sealed in pieces of at most MaxPiece, so
+// none is too large for the agent, and opens whole; its pieces can't be
+// dropped, reordered, repeated or added to.
+func TestSealOpen_Pieces(t *testing.T) {
+	c := &countingSealer{gcmSealer: newSealer(t)}
+	r := record()
+	r.Notes = bytes.Repeat([]byte("n"), 2*MaxPiece+100)
+	h := header(t, uid1)
+	b, err := Seal(c, h, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.sizes) < 3 {
+		t.Fatalf("sealed in %d pieces, want at least 3", len(c.sizes))
+	}
+	for _, n := range c.sizes {
+		if n > MaxPiece {
+			t.Errorf("a piece of %d bytes, over %d", n, MaxPiece)
+		}
+	}
+	if _, got, err := Open(c, b); err != nil || !bytes.Equal(got.Notes, r.Notes) || got.Service != "GitHub" {
+		t.Fatalf("open: %v", err)
+	}
+	// The pieces, as written.
+	var pieces [][]byte
+	for rest := b[headerLen:]; len(rest) > 0; {
+		n := int(rest[saltLen])<<24 | int(rest[saltLen+1])<<16 | int(rest[saltLen+2])<<8 | int(rest[saltLen+3])
+		pieces = append(pieces, rest[:saltLen+4+n])
+		rest = rest[saltLen+4+n:]
+	}
+	join := func(ps ...[]byte) []byte { return append(slices.Clone(b[:headerLen]), slices.Concat(ps...)...) }
+	for name, file := range map[string][]byte{
+		"the last dropped":   join(pieces[:len(pieces)-1]...),
+		"the first dropped":  join(pieces[1:]...),
+		"two swapped":        join(append([][]byte{pieces[1], pieces[0]}, pieces[2:]...)...),
+		"one repeated":       join(append([][]byte{pieces[0]}, pieces...)...),
+		"the last repeated":  join(append(slices.Clone(pieces), pieces[len(pieces)-1])...),
+		"bytes added":        append(slices.Clone(b), 0, 0, 0, 0),
+		"a piece's length +": func() []byte { c := slices.Clone(b); c[headerLen+saltLen+3]++; return c }(),
+	} {
+		if _, got, err := Open(c, file); err == nil || got != nil {
+			t.Errorf("%s: opened", name)
+		}
+	}
+	// One too large for any sync file is refused before anything is sealed.
+	c.sizes = nil
+	r.Notes = bytes.Repeat([]byte("n"), MaxFileSize)
+	if _, err := Seal(c, h, r); err == nil || !strings.Contains(err.Error(), "over the") || len(c.sizes) != 0 {
+		t.Errorf("too large: %v, %d pieces sealed", err, len(c.sizes))
+	}
+}
+
+// A record with more in it than this sesh knows was written by a newer
+// one: it's refused, not opened without what it doesn't know (and written
+// back without it).
+func TestOpen_UnknownFieldIsNewer(t *testing.T) {
+	s := newSealer(t)
+	h := header(t, uid1)
+	hb := h.bytes()
+	plain := []byte(`{"service":"x","computer":"new","version":3,"passkeys":[{"id":"p"}]}`)
+	sealed, salt, err := s.EncryptEntry(plain, pieceAAD(hb, 0, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := append(append(slices.Clone(hb), salt...), byte(len(sealed)>>24), byte(len(sealed)>>16), byte(len(sealed)>>8), byte(len(sealed)))
+	b = append(b, sealed...)
+	if _, r, err := Open(s, b); !errors.Is(err, ErrNewerFormat) || r != nil {
+		t.Errorf("Open: %v, %v; want ErrNewerFormat", r, err)
+	}
+}
+
+// A file whose data is still in the cloud is counted as not downloaded,
+// and not opened, which would wait on the download.
+func TestFolderScan_NotDownloaded(t *testing.T) {
+	s := newSealer(t)
+	f := New(t.TempDir())
+	for _, uid := range []string{uid1, uid2} {
+		b, err := Seal(s, header(t, uid), record())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(header(t, uid), b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	was := isDataless
+	defer func() { isDataless = was }()
+	isDataless = func(fi os.FileInfo) bool { return strings.HasPrefix(fi.Name(), uid2) }
+	c, err := f.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Files) != 1 || c.Files[0].UIDString() != uid1 || len(c.NotDownloaded) != 1 || !strings.HasPrefix(filepath.Base(c.NotDownloaded[0]), uid2) || len(c.Problems) != 0 {
+		t.Errorf("scan: %+v", c)
+	}
+}
+
+// A pipe in the folder is listed as a problem at once, not waited on; a
+// file changed after the scan isn't read as the one scanned.
+func TestFolderScan_PipeAndChanged(t *testing.T) {
+	s := newSealer(t)
+	f := New(t.TempDir())
+	h := header(t, uid1)
+	b, err := Seal(s, h, record())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(h, b); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(f.Dir(), "entries")
+	if err := syscall.Mkfifo(filepath.Join(dir, "pipe.sesh"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *Contents, 1)
+	go func() {
+		c, err := f.Scan()
+		if err != nil {
+			t.Error(err)
+		}
+		done <- c
+	}()
+	var c *Contents
+	select {
+	case c = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Scan waited on a pipe")
+	}
+	if len(c.Problems) != 1 || !strings.Contains(c.Problems[0].Why, "not a regular file") || len(c.Files) != 1 {
+		t.Fatalf("scan: %+v", c)
+	}
+	other, err := Seal(s, h, record())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(h, other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Read(&c.Files[0]); err == nil || !strings.Contains(err.Error(), "changed since the folder was read") {
+		t.Errorf("Read after a change: %v", err)
+	}
+}
+
+// An entries/ that's a link isn't written, read or removed through; one
+// others can read is made the user's alone.
+func TestFolder_EntriesFolder(t *testing.T) {
+	s := newSealer(t)
+	h := header(t, uid1)
+	b, err := Seal(s, h, record())
+	if err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := t.TempDir()
+	victim := filepath.Join(elsewhere, "keep.sesh")
+	if err := os.WriteFile(victim, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := New(t.TempDir())
+	if err := os.Symlink(elsewhere, filepath.Join(f.Dir(), "entries")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(h, b); err == nil || !strings.Contains(err.Error(), "isn't a folder") {
+		t.Errorf("Write through a link: %v", err)
+	}
+	if _, err := f.Scan(); err == nil || !strings.Contains(err.Error(), "isn't a folder") {
+		t.Errorf("Scan through a link: %v", err)
+	}
+	if err := f.Remove(filepath.Join(f.Dir(), "entries", "keep.sesh")); err == nil {
+		t.Error("Remove through a link")
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Errorf("the file the link leads to: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(elsewhere, uid1+".sesh")); err == nil {
+		t.Error("written through the link")
+	}
+	loose := New(t.TempDir())
+	if err := os.Mkdir(filepath.Join(loose.Dir(), "entries"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(loose.Dir(), "entries"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loose.Write(h, b); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(loose.Dir(), "entries")); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("entries/ mode %v, %v; want 0700", fi.Mode().Perm(), err)
+	}
+}
+
+// sealPieces is a file of the pieces given, each sealed with its place and
+// whether it's marked last, as Seal would seal them.
+func sealPieces(t *testing.T, s Sealer, h Header, pieces []string, last []bool) [][]byte {
+	t.Helper()
+	var out [][]byte
+	for i, p := range pieces {
+		sealed, salt, err := s.EncryptEntry([]byte(p), pieceAAD(h.bytes(), uint32(i), last[i])) //nolint:gosec // a few pieces
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := len(sealed)
+		out = append(out, append(append(slices.Clone(salt), byte(n>>24), byte(n>>16), byte(n>>8), byte(n)), sealed...))
+	}
+	return out
+}
+
+// Pieces whose record still reads when moved or dropped are refused all
+// the same: by their places, and by which is the last.
+func TestOpen_PiecesBound(t *testing.T) {
+	s := newSealer(t)
+	h := header(t, uid1)
+	file := func(ps ...[]byte) []byte { return append(h.bytes(), slices.Concat(ps...)...) }
+	p := sealPieces(t, s, h, []string{`{"service":"`, `ab`, `ba`, `","version":1}`}, []bool{false, false, false, true})
+	if _, r, err := Open(s, file(p...)); err != nil || r.Service != "abba" {
+		t.Fatalf("as sealed: %+v, %v", r, err)
+	}
+	if _, r, err := Open(s, file(p[0], p[2], p[1], p[3])); err == nil {
+		t.Errorf("two pieces swapped: opened, service %q", r.Service)
+	}
+	// A record whole in its first piece, with a last piece after.
+	q := sealPieces(t, s, h, []string{`{"service":"x","version":1}`, ` `}, []bool{false, true})
+	if _, _, err := Open(s, file(q...)); err != nil {
+		t.Fatalf("as sealed: %v", err)
+	}
+	if _, r, err := Open(s, file(q[0])); err == nil {
+		t.Errorf("the last dropped: opened, service %q", r.Service)
 	}
 }

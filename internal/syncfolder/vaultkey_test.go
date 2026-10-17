@@ -37,4 +37,17 @@ func TestSealOpen_VaultKey(t *testing.T) {
 	if _, _, err := syncfolder.Open(vaultKey(bytes.Repeat([]byte{8}, 32)), b); err == nil {
 		t.Error("opened with another key")
 	}
+	// Any byte changed, the file cut short, or bytes added: it doesn't open.
+	for i := range b {
+		c := bytes.Clone(b)
+		c[i] ^= 1
+		if _, r, err := syncfolder.Open(key, c); err == nil || r != nil {
+			t.Errorf("byte %d changed: opened", i)
+		}
+	}
+	for _, c := range [][]byte{b[:len(b)-1], b[:len(b)-17], append(bytes.Clone(b), 0), append(bytes.Clone(b), make([]byte, 20)...)} {
+		if _, r, err := syncfolder.Open(key, c); err == nil || r != nil {
+			t.Errorf("%d bytes, not %d: opened", len(c), len(b))
+		}
+	}
 }

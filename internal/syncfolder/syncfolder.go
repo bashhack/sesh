@@ -5,23 +5,29 @@
 // encrypted whole with the vault's key: a file says nothing of the entry
 // without it, not even its name.
 //
-// A file is a header, then the sealed record:
+// A file is a header, then the record as JSON in pieces of at most
+// MaxPiece bytes, each sealed on its own, so no request to sesh's agent is
+// larger than one piece:
 //
 //	"SESHSYNC"  8 bytes
 //	format      1 byte (1)
 //	uid         16 bytes, the entry's
 //	key ID      32 bytes, the vault key record's (database.UnlockID) it was sealed with
+//	then, for each piece:
 //	salt        16 bytes
-//	sealed      the record as JSON, sealed with the vault's key
+//	length      4 bytes, big-endian: the sealed piece's
+//	sealed      the piece, sealed with the vault's key
 //
-// The header is the sealing's associated data, so a file's uid and key ID
-// can't be changed, nor its record moved to another entry's file, without
-// it failing to open.
+// Each piece's associated data is the header, the piece's place, and
+// whether it's the last, so a file's uid and key ID can't be changed, nor
+// its pieces moved to another entry's file, reordered, repeated, dropped
+// or added to, without it failing to open.
 package syncfolder
 
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -30,6 +36,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/bashhack/sesh/internal/atomicfile"
@@ -55,14 +62,20 @@ const (
 	// ("x (conflicted copy).sesh", "x.sync-conflict-….sesh", "x 2.sesh")
 	// keep it.
 	Ext = ".sesh"
-	// MaxFileSize is the most an entry file may be: a secret of
-	// database.MaxSecretSize with its earlier ones, as JSON, fits well
-	// within it.
+	// MaxPiece is the most of a record sealed in one piece: well within
+	// what one request to the agent carries, encoded as it sends it.
+	MaxPiece = 1 << 20
+	// MaxFileSize is the most an entry file may be. An entry with large
+	// files and a long history can be over it; it can't be synced until
+	// its history is shorter.
 	MaxFileSize = 64 << 20
+	// pieceOverhead is what sealing adds to each piece: its salt and
+	// length, and the sealing's nonce and tag.
+	pieceOverhead = saltLen + 4 + 12 + 16
 )
 
 // ErrNewerFormat is a file written by a newer sesh, in a format this one
-// doesn't read.
+// doesn't read, or with more in its record than this one knows.
 var ErrNewerFormat = errors.New("written by a newer sesh: update sesh to read it")
 
 // Header is what a file says unencrypted: whose it is and the key it was
@@ -71,9 +84,6 @@ type Header struct {
 	UID   [16]byte
 	KeyID [32]byte
 }
-
-// UIDString is the header's uid as entries.uid has it: 32 hex characters.
-func (h *Header) UIDString() string { return hex.EncodeToString(h.UID[:]) }
 
 // NewHeader is the header for the entry uid (as entries.uid has it), sealed
 // with the key record keyID (database.UnlockID).
@@ -92,6 +102,9 @@ func NewHeader(uid, keyID string) (Header, error) {
 	return h, nil
 }
 
+// UIDString is the header's uid as entries.uid has it: 32 hex characters.
+func (h *Header) UIDString() string { return hex.EncodeToString(h.UID[:]) }
+
 // KeyIDString is the header's key ID as database.UnlockID gives it.
 func (h *Header) KeyIDString() string { return hex.EncodeToString(h.KeyID[:]) }
 
@@ -103,8 +116,16 @@ func (h *Header) bytes() []byte {
 	return append(b, h.KeyID[:]...)
 }
 
-// aad is the sealing's associated data for header bytes hb.
-func aad(hb []byte) []byte { return append([]byte(aadTag), hb...) }
+// pieceAAD is the associated data of piece i of a file with header bytes
+// hb, last saying whether it's the file's last.
+func pieceAAD(hb []byte, i uint32, last bool) []byte {
+	b := append([]byte(aadTag), hb...)
+	b = binary.BigEndian.AppendUint32(b, i)
+	if last {
+		return append(b, 1)
+	}
+	return append(b, 0)
+}
 
 // ParseHeader reads a file's header, without opening it.
 func ParseHeader(b []byte) (Header, error) {
@@ -118,7 +139,7 @@ func ParseHeader(b []byte) (Header, error) {
 		return h, ErrNewerFormat
 	case b[len(magic)] != format:
 		return h, fmt.Errorf("format %d isn't one sesh writes", b[len(magic)])
-	case len(b) < headerLen+saltLen:
+	case len(b) < headerLen+saltLen+4:
 		return h, errors.New("cut short")
 	}
 	copy(h.UID[:], b[len(magic)+1:])
@@ -167,6 +188,8 @@ type Field struct {
 // Earlier is one of an entry's earlier secrets.
 type Earlier struct {
 	ReplacedAt time.Time `json:"replaced_at"`
+	// Computer is the name of the computer it was replaced on.
+	Computer string `json:"computer,omitempty"`
 	// FileName is a file entry's file's name, as it was then.
 	FileName string `json:"file_name,omitempty"`
 	Secret   []byte `json:"secret"`
@@ -185,25 +208,33 @@ func (r *Record) Wipe() {
 	}
 }
 
-// Seal is the file for record r of the entry h names, sealed by s.
+// Seal is the file for record r of the entry h names, sealed by s. The
+// JSON it's sealed from is zeroed after; encoding/json's own buffer, which
+// it's copied from, isn't, as with every JSON sesh sends its agent.
 func Seal(s Sealer, h Header, r *Record) ([]byte, error) {
 	plain, err := json.Marshal(r) //nolint:gosec // the record is sealed next, never written as it is
 	if err != nil {
 		return nil, fmt.Errorf("seal %s: %w", h.UIDString(), err)
 	}
 	defer secure.SecureZeroBytes(plain)
+	pieces := max((len(plain)+MaxPiece-1)/MaxPiece, 1)
+	if size := headerLen + len(plain) + pieces*pieceOverhead; size > MaxFileSize {
+		return nil, fmt.Errorf("seal %s: about %d bytes, over the %d a sync file may be", h.UIDString(), size, MaxFileSize)
+	}
 	hb := h.bytes()
-	sealed, salt, err := s.EncryptEntry(plain, aad(hb))
-	if err != nil {
-		return nil, fmt.Errorf("seal %s: %w", h.UIDString(), err)
-	}
-	if len(salt) != saltLen {
-		return nil, fmt.Errorf("seal %s: a salt of %d bytes, not %d", h.UIDString(), len(salt), saltLen)
-	}
-	out := make([]byte, 0, len(hb)+saltLen+len(sealed))
-	out = append(append(append(out, hb...), salt...), sealed...)
-	if len(out) > MaxFileSize {
-		return nil, fmt.Errorf("seal %s: %d bytes, over the %d a sync file may be", h.UIDString(), len(out), MaxFileSize)
+	out := append(make([]byte, 0, headerLen+len(plain)+pieces*pieceOverhead), hb...)
+	for i := range pieces {
+		piece := plain[i*MaxPiece : min((i+1)*MaxPiece, len(plain))]
+		sealed, salt, err := s.EncryptEntry(piece, pieceAAD(hb, uint32(i), i == pieces-1)) //nolint:gosec // i < MaxFileSize/MaxPiece
+		if err != nil {
+			return nil, fmt.Errorf("seal %s: %w", h.UIDString(), err)
+		}
+		if len(salt) != saltLen {
+			return nil, fmt.Errorf("seal %s: a salt of %d bytes, not %d", h.UIDString(), len(salt), saltLen)
+		}
+		out = append(out, salt...)
+		out = binary.BigEndian.AppendUint32(out, uint32(len(sealed))) //nolint:gosec // within MaxPiece and its overhead
+		out = append(out, sealed...)
 	}
 	return out, nil
 }
@@ -215,14 +246,39 @@ func Open(s Sealer, b []byte) (Header, *Record, error) {
 	if err != nil {
 		return h, nil, err
 	}
-	plain, err := s.DecryptEntry(b[headerLen+saltLen:], b[headerLen:headerLen+saltLen], aad(b[:headerLen]))
-	if err != nil {
-		return h, nil, fmt.Errorf("open %s: %w", h.UIDString(), err)
+	// The record is no longer than its sealed pieces, so this holds it
+	// without growing (and leaving copies behind).
+	plain := make([]byte, 0, len(b)-headerLen)
+	defer func() { secure.SecureZeroBytes(plain) }()
+	rest := b[headerLen:]
+	for i := uint32(0); len(rest) > 0 || i == 0; i++ {
+		if len(rest) < saltLen+4 {
+			return h, nil, fmt.Errorf("open %s: cut short", h.UIDString())
+		}
+		salt, n := rest[:saltLen], binary.BigEndian.Uint32(rest[saltLen:])
+		rest = rest[saltLen+4:]
+		if uint64(n) > uint64(len(rest)) {
+			return h, nil, fmt.Errorf("open %s: cut short", h.UIDString())
+		}
+		sealed := rest[:n]
+		rest = rest[n:]
+		// The piece the file ends with must have been sealed as the last,
+		// and every one before it as not.
+		piece, err := s.DecryptEntry(sealed, salt, pieceAAD(b[:headerLen], i, len(rest) == 0))
+		if err != nil {
+			return h, nil, fmt.Errorf("open %s: %w", h.UIDString(), err)
+		}
+		plain = append(plain, piece...)
+		secure.SecureZeroBytes(piece)
 	}
-	defer secure.SecureZeroBytes(plain)
 	r := new(Record)
-	if err := json.Unmarshal(plain, r); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(plain))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(r); err != nil {
 		r.Wipe()
+		if strings.Contains(err.Error(), "unknown field") {
+			return h, nil, fmt.Errorf("open %s: %w", h.UIDString(), ErrNewerFormat)
+		}
 		return h, nil, fmt.Errorf("open %s: its record doesn't read: %w", h.UIDString(), err)
 	}
 	return h, r, nil
@@ -237,7 +293,32 @@ func New(dir string) Folder { return Folder{dir: dir} }
 // Dir is the folder's path.
 func (f Folder) Dir() string { return f.dir }
 
-func (f Folder) entries() string { return filepath.Join(f.dir, entriesDir) }
+// entries is the folder's entries/: a real folder, only this user's, made
+// if create is set; "" with no error when it isn't there and isn't made. A
+// link there is refused, so nothing is read, written or removed outside
+// the sync folder through it.
+func (f Folder) entries(create bool) (string, error) {
+	dir := filepath.Join(f.dir, entriesDir)
+	fi, err := os.Lstat(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist) && create:
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return "", err
+		}
+		return dir, nil
+	case errors.Is(err, os.ErrNotExist):
+		return "", nil
+	case err != nil:
+		return "", err
+	case !fi.IsDir():
+		return "", fmt.Errorf("%s isn't a folder (a link, or a file): sesh reads and writes only a real one", dir)
+	case fi.Mode().Perm()&0o077 != 0:
+		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // a folder: 0700 is only this user
+			return "", fmt.Errorf("make %s readable only by you: %w", dir, err)
+		}
+	}
+	return dir, nil
+}
 
 // Hash is a file's SHA-256, of its bytes as they are: sealed, so it says
 // nothing of the record.
@@ -252,10 +333,11 @@ func (f Folder) Write(h Header, b []byte) (Hash, error) {
 	if got, err := ParseHeader(b); err != nil || got != h {
 		return Hash{}, fmt.Errorf("write %s: the file isn't sealed for it", h.UIDString())
 	}
-	if err := os.MkdirAll(f.entries(), 0o700); err != nil {
+	dir, err := f.entries(true)
+	if err != nil {
 		return Hash{}, fmt.Errorf("write %s: %w", h.UIDString(), err)
 	}
-	if err := atomicfile.Write(filepath.Join(f.entries(), h.UIDString()+Ext), b, 0o600); err != nil {
+	if err := atomicfile.Write(filepath.Join(dir, h.UIDString()+Ext), b, 0o600); err != nil {
 		return Hash{}, fmt.Errorf("write %s: %w", h.UIDString(), err)
 	}
 	return HashOf(b), nil
@@ -266,8 +348,6 @@ type File struct {
 	// Path is where it is; for a sync tool's copy, not the entry's own
 	// file's name.
 	Path string
-	// Data is the file as it was read.
-	Data []byte
 	Header
 	Hash Hash
 }
@@ -280,32 +360,47 @@ type Problem struct {
 
 // Contents is what a folder's entries/ holds.
 type Contents struct {
-	// Files are the entry files read, a sync tool's copies included: more
-	// than one can be one entry's.
+	// Files are the entry files found, a sync tool's copies included:
+	// more than one can be one entry's.
 	Files []File
-	// NotDownloaded are files iCloud Drive has yet to download: there,
-	// but not read.
+	// NotDownloaded are entry files a sync tool has yet to download (on
+	// macOS, iCloud Drive's or another's kept in the cloud): there, but
+	// not read, since reading would wait on the network.
 	NotDownloaded []string
 	// Problems are entry files that can't be read.
 	Problems []Problem
 }
 
-// Scan reads the folder's entry files: each file ending in Ext, a sync
-// tool's copies too. Files whose names start with "." (temporary files,
-// iCloud's placeholders) aren't read; a placeholder for an entry file is
-// counted as not downloaded. A folder with no entries/ yet holds none.
+// isDataless says whether fi is a file whose data a sync tool keeps in the
+// cloud until it's read (on macOS, SF_DATALESS); reading it would wait for
+// the download.
+var isDataless = func(fi os.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && dataless(st)
+}
+
+// Scan finds the folder's entry files: each file ending in Ext, a sync
+// tool's copies too, with its header and hash; Read reads one. Files whose
+// names start with "." (temporary files, older iCloud placeholders) aren't
+// read; a placeholder for an entry file is counted as not downloaded, as
+// is an entry file whose data is still in the cloud. A folder with no
+// entries/ yet holds none.
 func (f Folder) Scan() (*Contents, error) {
-	des, err := os.ReadDir(f.entries())
-	if errors.Is(err, os.ErrNotExist) {
-		return &Contents{}, nil
-	}
+	dir, err := f.entries(false)
 	if err != nil {
 		return nil, fmt.Errorf("read the sync folder: %w", err)
 	}
 	c := &Contents{}
+	if dir == "" {
+		return c, nil
+	}
+	des, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read the sync folder: %w", err)
+	}
 	for _, de := range des {
 		name := de.Name()
-		path := filepath.Join(f.entries(), name)
+		path := filepath.Join(dir, name)
 		if strings.HasPrefix(name, ".") {
 			if strings.HasSuffix(name, Ext+".icloud") {
 				c.NotDownloaded = append(c.NotDownloaded, path)
@@ -315,52 +410,111 @@ func (f Folder) Scan() (*Contents, error) {
 		if !strings.HasSuffix(name, Ext) {
 			continue
 		}
-		file, why := readEntryFile(path)
-		if why != "" {
-			c.Problems = append(c.Problems, Problem{Path: path, Why: why})
-			continue
+		file, err := scanFile(path)
+		switch {
+		case errors.Is(err, errNotDownloaded):
+			c.NotDownloaded = append(c.NotDownloaded, path)
+		case err != nil:
+			c.Problems = append(c.Problems, Problem{Path: path, Why: err.Error()})
+		default:
+			c.Files = append(c.Files, file)
 		}
-		c.Files = append(c.Files, file)
 	}
 	return c, nil
 }
 
-// readEntryFile reads the entry file at path, or says why it can't.
-func readEntryFile(path string) (File, string) {
-	fi, err := os.Lstat(path)
+var errNotDownloaded = errors.New("not downloaded")
+
+// openFile opens the entry file at path to read it whole: a regular file,
+// not through a link, not a pipe that would wait for a writer, not over
+// MaxFileSize, and downloaded. The checks are of the file opened, so it
+// can't be swapped for another between them.
+func openFile(path string) (*os.File, int64, error) {
+	if fi, err := os.Lstat(path); err == nil && isDataless(fi) {
+		return nil, 0, errNotDownloaded
+	}
+	fh, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // a file in the sync folder
+	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil, 0, errors.New("a link")
+		}
+		return nil, 0, err
+	}
+	fi, err := fh.Stat()
 	switch {
 	case err != nil:
-		return File{}, err.Error()
 	case !fi.Mode().IsRegular():
-		return File{}, "not a regular file"
+		err = errors.New("not a regular file")
+	case isDataless(fi):
+		err = errNotDownloaded
 	case fi.Size() > MaxFileSize:
-		return File{}, fmt.Sprintf("%d bytes, over the %d a sync file may be", fi.Size(), MaxFileSize)
+		err = fmt.Errorf("%d bytes, over the %d a sync file may be", fi.Size(), MaxFileSize)
 	}
-	fh, err := os.Open(path) //nolint:gosec // a file in the sync folder
 	if err != nil {
-		return File{}, err.Error()
+		_ = fh.Close() //nolint:errcheck // not read
+		return nil, 0, err
+	}
+	return fh, fi.Size(), nil
+}
+
+// readAll reads fh, size bytes, whole: a file that's grown or shrunk since
+// it was opened is refused as changed.
+func readAll(fh *os.File, size int64) ([]byte, error) {
+	b := make([]byte, size)
+	if _, err := io.ReadFull(fh, b); err != nil {
+		return nil, errors.New("changed while it was read")
+	}
+	if n, _ := fh.Read(make([]byte, 1)); n != 0 { //nolint:errcheck // only whether there's more
+		return nil, errors.New("changed while it was read")
+	}
+	return b, nil
+}
+
+// scanFile reads the entry file at path for its header and hash.
+func scanFile(path string) (File, error) {
+	fh, size, err := openFile(path)
+	if err != nil {
+		return File{}, err
 	}
 	defer fh.Close() //nolint:errcheck // read only
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, io.LimitReader(fh, MaxFileSize+1)); err != nil {
-		return File{}, err.Error()
+	b, err := readAll(fh, size)
+	if err != nil {
+		return File{}, err
 	}
-	if buf.Len() > MaxFileSize {
-		return File{}, fmt.Sprintf("over the %d bytes a sync file may be", MaxFileSize)
-	}
-	b := buf.Bytes()
 	h, err := ParseHeader(b)
 	if err != nil {
-		return File{}, err.Error()
+		return File{}, err
 	}
-	return File{Path: path, Data: b, Header: h, Hash: HashOf(b)}, ""
+	return File{Path: path, Header: h, Hash: HashOf(b)}, nil
+}
+
+// Read reads file, one Scan found, as it was then: one changed since is
+// refused, to be scanned again.
+func (f Folder) Read(file *File) ([]byte, error) {
+	fh, size, err := openFile(file.Path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", file.Path, err)
+	}
+	defer fh.Close() //nolint:errcheck // read only
+	b, err := readAll(fh, size)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", file.Path, err)
+	}
+	if HashOf(b) != file.Hash {
+		return nil, fmt.Errorf("read %s: changed since the folder was read", file.Path)
+	}
+	return b, nil
 }
 
 // Remove removes path, an entry file Scan found: a sync tool's copy once
 // what it holds is written to the entry's own file. Nothing outside the
 // folder's entries/ is removed.
 func (f Folder) Remove(path string) error {
-	if filepath.Dir(filepath.Clean(path)) != filepath.Clean(f.entries()) || !strings.HasSuffix(path, Ext) {
+	dir, err := f.entries(false)
+	if err != nil {
+		return err
+	}
+	if dir == "" || filepath.Dir(filepath.Clean(path)) != dir || !strings.HasSuffix(path, Ext) {
 		return fmt.Errorf("%s isn't an entry file of the sync folder %s", path, f.dir)
 	}
 	return os.Remove(path)
