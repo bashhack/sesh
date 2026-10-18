@@ -255,6 +255,11 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 				if _, err := tx.Exec(`UPDATE sync_info SET prev_key_id = '', recovery_earlier = 1`); err != nil {
 					return err
 				}
+				// What was agreed under the key left could be anyone's
+				// with the old password: checked before it's sent on.
+				if _, err := tx.Exec(`UPDATE sync_state SET left_key = 1`); err != nil {
+					return err
+				}
 			}
 			entries := fmt.Sprintf("%d entries", res.Entries)
 			if res.Entries == 1 {

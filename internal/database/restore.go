@@ -100,10 +100,11 @@ func inspect(path, what string) (_ BackupSummary, err error) {
 // keeps: sync_state (what this computer last agreed with the sync folder
 // doesn't go back with the entries, so the restored ones, their revs
 // raised, are changes to sync; restoredForSync readies it), sync_info (this
-// computer's sync ID is its own), history_forgotten (what was forgotten
-// on purpose stays forgotten), key_links (the master password changes
-// stay known, so files sealed with an old key still open) and sync_warned
-// (the warnings this computer's syncs said).
+// computer's sync ID is its own), sync_own (so are the counts it gave),
+// history_forgotten (what was forgotten on purpose stays forgotten),
+// key_links (the master password changes stay known, so files sealed with
+// an old key still open) and sync_warned (the warnings this computer's
+// syncs said).
 var restoredTables = []string{"vault_info", "vault_key", "recovery", "entries", "entry_tags", "trash", "history"}
 
 // RestoreInPlace replaces the sound vault at dbPath with the backup at

@@ -357,20 +357,20 @@ func TestSyncHistory_SetAt(t *testing.T) {
 // had counted.
 func TestSyncNextChange(t *testing.T) {
 	s, _ := syncPair(t)
-	if n, err := s.SyncNextChange(0); err != nil || n != 1 {
+	if n, err := s.SyncNextChange("u", 0); err != nil || n != 1 {
 		t.Fatalf("first: %d, %v", n, err)
 	}
-	if n, err := s.SyncNextChange(10); err != nil || n != 11 {
+	if n, err := s.SyncNextChange("u", 10); err != nil || n != 11 {
 		t.Errorf("past 10 seen: %d, %v", n, err)
 	}
-	if n, err := s.SyncNextChange(3); err != nil || n != 12 {
+	if n, err := s.SyncNextChange("u", 3); err != nil || n != 12 {
 		t.Errorf("then: %d, %v", n, err)
 	}
 	// One that would reach MaxCount isn't given, nor counted.
-	if _, err := s.SyncNextChange(syncfolder.MaxCount - 1); err == nil || !strings.Contains(err.Error(), "too high") {
+	if _, err := s.SyncNextChange("u", syncfolder.MaxCount-1); err == nil || !strings.Contains(err.Error(), "too high") {
 		t.Errorf("at the cap: %v, want an error with %q", err, "too high")
 	}
-	if n, err := s.SyncNextChange(3); err != nil || n != 13 {
+	if n, err := s.SyncNextChange("u", 3); err != nil || n != 13 {
 		t.Errorf("after the cap: %d, %v", n, err)
 	}
 }

@@ -423,6 +423,12 @@ func writeSyncSummary(app *App, dir string, s *vaultsync.Summary) error {
 	if s.EarlierKey > 0 {
 		fmt.Fprintf(&b, "  ⚠️  %s\n", earlierKeySaid(s.EarlierKey))
 	}
+	if len(s.SetBack) > 0 {
+		fmt.Fprintf(&b, "  ⚠️  %s\n", setBackSaid(len(s.SetBack), names(s.SetBack)))
+	}
+	if len(s.HeldBack) > 0 {
+		fmt.Fprintf(&b, "  ⚠️  %s\n", heldBackSaid(len(s.HeldBack), names(s.HeldBack)))
+	}
 	if s.Later > 0 {
 		fmt.Fprintf(&b, "  %s changed by another sesh command meanwhile: the next sync takes them\n", nouns(s.Later, "entry", "entries"))
 	}
@@ -1031,6 +1037,22 @@ func syncWaitingIn(store *database.Store, f *syncfolder.Folder) (*syncWaiting, e
 		}
 	}
 	return w, nil
+}
+
+// setBackSaid says n entries, named, were set back to the folder's
+// version on taking a master password change (vaultsync.Summary.SetBack).
+func setBackSaid(n int, names string) string {
+	return fmt.Sprintf("%s (%s) had changes taken under the old master password that your other computers don't have: not sent, and made as they have them, this computer's secret kept in the history, as anyone who knew that password could have made them. A computer of yours that made such a change sends it once it takes the new password", nouns(n, "entry", "entries"), names)
+}
+
+// heldBackSaid says n entries, named, are held back on taking a master
+// password change (vaultsync.Summary.HeldBack).
+func heldBackSaid(n int, names string) string {
+	have := "have"
+	if n == 1 {
+		have = "has"
+	}
+	return fmt.Sprintf("%s (%s) %s changes taken under the old master password, and your other computers have no version under the new one yet: not sent until they do, or until you delete it for good", nouns(n, "entry", "entries"), names, have)
 }
 
 // earlierKeySaid says n entries had a file sealed with an earlier master

@@ -57,9 +57,17 @@ type SyncItem struct {
 	// Restored says it was restored from a backup and hasn't synced since;
 	// RestoredRev is its rev then (another now: changed since);
 	// RestoredChanged, that the backup had it changed and not synced.
+	RestoredRev int64
+	// Own is the highest change count this computer gave it; Doubt, that
+	// a version it wrote over held a higher one of this computer's.
+	Own             uint64
 	Restored        bool
 	RestoredChanged bool
-	RestoredRev     int64
+	// Left says it was agreed under a key this computer left behind,
+	// taking a master password change made elsewhere: until checked
+	// against the folder (SyncLeftChecked), nothing is sent for it.
+	Left  bool
+	Doubt bool
 }
 
 // Changed says whether the entry changed here since it was last agreed:
@@ -98,7 +106,7 @@ func (s *Store) SyncItems() (_ []SyncItem, err error) {
 	if m, err := readKeyRecord(s.db, s.path); err == nil {
 		keyID = UnlockID(m.Verify)
 	}
-	rows, err = s.db.Query(`SELECT uid, rev, file_hash, base, base_hash FROM sync_state`)
+	rows, err = s.db.Query(`SELECT uid, rev, file_hash, base, base_hash, left_key FROM sync_state`)
 	if err != nil {
 		return nil, fmt.Errorf("read what was synced: %w", err)
 	}
@@ -106,7 +114,8 @@ func (s *Store) SyncItems() (_ []SyncItem, err error) {
 		var uid string
 		var a SyncAgreed
 		var hash, base, baseHash []byte
-		if err := rows.Scan(&uid, &a.Rev, &hash, &base, &baseHash); err != nil {
+		var left bool
+		if err := rows.Scan(&uid, &a.Rev, &hash, &base, &baseHash, &left); err != nil {
 			_ = rows.Close() //nolint:errcheck // already failing
 			return nil, fmt.Errorf("read what was synced: %w", err)
 		}
@@ -117,7 +126,26 @@ func (s *Store) SyncItems() (_ []SyncItem, err error) {
 			it = &SyncItem{UID: uid, Place: SyncGone}
 			byUID[uid] = it
 		}
-		it.Agreed = &a
+		it.Agreed, it.Left = &a, left
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, fmt.Errorf("read what was synced: %w", err)
+	}
+	rows, err = s.db.Query(`SELECT uid, count, doubt FROM sync_own`)
+	if err != nil {
+		return nil, fmt.Errorf("read what was synced: %w", err)
+	}
+	for rows.Next() {
+		var uid string
+		var own uint64
+		var doubt bool
+		if err := rows.Scan(&uid, &own, &doubt); err != nil {
+			_ = rows.Close() //nolint:errcheck // already failing
+			return nil, fmt.Errorf("read what was synced: %w", err)
+		}
+		if it, ok := byUID[uid]; ok {
+			it.Own, it.Doubt = own, doubt
+		}
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, fmt.Errorf("read what was synced: %w", err)
@@ -458,16 +486,22 @@ func (s *Store) SyncComputerID() (string, error) {
 }
 
 // SyncNextChange is the count of this computer's next change written to
-// the sync folder: one more than any it gave before, and than seen (any
-// of its counts in what it's writing over), counted in the vault before
-// the change is written, so no two changes it writes, even one written
-// and then lost to a crash, share a count.
-func (s *Store) SyncNextChange(seen uint64) (uint64, error) {
+// the sync folder, for the entry uid: one more than any it gave before,
+// and than seen (any of its counts in what it's writing over), counted in
+// the vault before the change is written, so no two changes it writes,
+// even one written and then lost to a crash, share a count. The entry
+// keeps it as the highest this computer gave it, in doubt once seen is
+// higher than any it gave it (SyncItem.Doubt).
+func (s *Store) SyncNextChange(uid string, seen uint64) (uint64, error) {
 	if _, err := s.SyncComputerID(); err != nil {
 		return 0, err
 	}
 	var n uint64
 	err := s.inTx(func(tx *sql.Tx) error {
+		var own uint64
+		if err := tx.QueryRow(`SELECT count FROM sync_own WHERE uid = ?`, uid).Scan(&own); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 		if err := tx.QueryRow(`SELECT MAX(changes, ?) + 1 FROM sync_info WHERE id = 1`, seen).Scan(&n); err != nil {
 			return err
 		}
@@ -475,10 +509,27 @@ func (s *Store) SyncNextChange(seen uint64) (uint64, error) {
 		if n >= syncfolder.MaxCount {
 			return errors.New("a change count too high to be one")
 		}
-		_, err := tx.Exec(`UPDATE sync_info SET changes = ? WHERE id = 1`, n)
+		if _, err := tx.Exec(`UPDATE sync_info SET changes = ? WHERE id = 1`, n); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO sync_own (uid, count, doubt) VALUES (?, ?, ?)
+			ON CONFLICT (uid) DO UPDATE SET count = excluded.count, doubt = doubt OR excluded.doubt`, uid, n, seen > own)
 		return err
 	})
 	return n, err
+}
+
+// SyncLeftChecked records that the entry uid, agreed under a key left
+// behind, was checked against the folder (SyncItem.Left): it, and any
+// doubt of its counts, is settled.
+func (s *Store) SyncLeftChecked(uid string) error {
+	return s.inTx(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`UPDATE sync_state SET left_key = 0 WHERE uid = ?`, uid); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE sync_own SET doubt = 0 WHERE uid = ?`, uid)
+		return err
+	})
 }
 
 // SyncCheck says what's wrong with rec as an entry sesh would keep, if
@@ -923,7 +974,7 @@ func JoinVault(dbPath string, m UnlockMaterial, folderID string, links []syncfol
 			_ = tx.Rollback() //nolint:errcheck // already failing
 		}
 	}()
-	stmts := []string{`DELETE FROM sync_state`, `DELETE FROM sync_info`, `DELETE FROM sync_restored`, `DELETE FROM history_forgotten`}
+	stmts := []string{`DELETE FROM sync_state`, `DELETE FROM sync_info`, `DELETE FROM sync_own`, `DELETE FROM sync_restored`, `DELETE FROM history_forgotten`}
 	if UnlockID(have.Verify) != UnlockID(m.Verify) {
 		stmts = append(stmts, `DELETE FROM recovery`)
 		if _, err := tx.Exec(`UPDATE vault_key SET salt = ?, kdf = ?, kdf_params = ?, verify = ?, created_at = ? WHERE id = 1`,

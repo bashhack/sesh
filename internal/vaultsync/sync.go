@@ -45,6 +45,14 @@ type Summary struct {
 	// Notes are what else the sync did, said as they are: the recovery
 	// key taken or sent, say.
 	Notes []string
+	// SetBack are the entries, by name, that held changes taken under the
+	// key from before a master password change taken here that the
+	// folder doesn't have under the new one: not sent, made as the
+	// folder has them, this computer's secret kept in its history.
+	SetBack []string
+	// HeldBack are such entries the folder has no version of under the new
+	// key yet: not sent, and left as they are, until it has.
+	HeldBack []string
 	// Ignored counts older copies of entries' files, already seen here: put
 	// back by a sync tool, or someone.
 	Ignored int
@@ -78,7 +86,7 @@ type Merged struct {
 
 // Nothing says whether the sync found nothing to do.
 func (s *Summary) Nothing() bool {
-	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+len(s.Notes)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed+s.Unfinished+s.EarlierKey == 0
+	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+len(s.Notes)+len(s.SetBack)+len(s.HeldBack)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed+s.Unfinished+s.EarlierKey == 0
 }
 
 // syncer is one sync's state.
@@ -332,6 +340,11 @@ func ownFile(f *syncfolder.File) bool { return filepath.Base(f.Path) == f.UIDStr
 // entry syncs the entry uid, whose files in the folder are files.
 func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	it := y.item(uid)
+	if it.Left {
+		if settled, err := y.left(uid, it, files); settled || err != nil {
+			return err
+		}
+	}
 	if it.Restored {
 		return y.restored(uid, it, files)
 	}
@@ -569,6 +582,117 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		y.sum.Merged = append(y.sum.Merged, Merged{Name: recordName(uid, m.Record), Conflicts: conflicts})
 	}
 	return y.removeCopies(copies)
+}
+
+// left checks the entry uid, agreed here under a key this computer has
+// left behind, taking a master password change made elsewhere (decided
+// with the user 2026-10-18): anyone with the old password could have
+// written what it took under that key. What it holds of this computer's
+// own changes is sent as ever. One holding a change of another
+// computer's the folder doesn't have under the new key, or a count of
+// this computer's it didn't give, isn't: it's made as the folder has it,
+// its secret here kept in its history, and the computer that made the
+// change sends it once it takes the new key. With no version under the
+// new key in the folder yet, it waits. It says whether it settled the
+// entry; if not, the entry syncs as ever.
+func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File) (bool, error) {
+	base, err := y.store.SyncBase(uid)
+	if err != nil {
+		// Damaged: nothing to say what it holds, so nothing's sent.
+		base = nil
+	} else {
+		defer base.Wipe()
+	}
+	var folder *syncfolder.Record
+	var hash syncfolder.Hash
+	var held []syncfolder.Merged
+	var opened []*syncfolder.Record
+	defer func() {
+		for _, m := range held {
+			m.Wipe()
+		}
+		for _, r := range opened {
+			r.Wipe()
+		}
+	}()
+	for i := range files {
+		f := &files[i]
+		if y.stale(f) {
+			continue
+		}
+		b, err := y.folder.Read(f)
+		if err != nil {
+			return false, err
+		}
+		_, rec, err := syncfolder.Open(y.sealerFor(f), b)
+		if err != nil {
+			return false, fmt.Errorf("%s: %w", filepath.Base(f.Path), err)
+		}
+		opened = append(opened, rec)
+		if ownFile(f) {
+			hash = f.Hash
+		}
+		switch {
+		case folder == nil, rec.Versions.Covers(folder.Versions):
+			folder = rec
+		case folder.Versions.Covers(rec.Versions):
+		default:
+			m, err := y.merge(uid, nil, folder, rec)
+			if err != nil {
+				return false, err
+			}
+			held = append(held, m)
+			folder = m.Record
+		}
+	}
+	if !it.Doubt && base != nil && !y.takenElsewhere(it, base, folder) {
+		return false, y.store.SyncLeftChecked(uid)
+	}
+	name := y.name(uid)
+	// Deleted for good here: nothing of it to send but that.
+	if folder == nil && it.Place == database.SyncGone {
+		return false, y.store.SyncLeftChecked(uid)
+	}
+	if folder == nil {
+		y.sum.HeldBack = append(y.sum.HeldBack, name)
+		return true, nil
+	}
+	local, rev, err := y.store.SyncRecord(uid, y.computer)
+	if err != nil {
+		return false, err
+	}
+	defer local.Wipe()
+	set := *folder
+	if folder.Purged.IsZero() && len(local.Secret) > 0 && !bytes.Equal(local.Secret, folder.Secret) && !slices.ContainsFunc(folder.History, func(e syncfolder.Earlier) bool { return bytes.Equal(e.Secret, local.Secret) }) {
+		set.History = append(slices.Clone(folder.History), syncfolder.Earlier{ReplacedAt: y.now(), SetAt: local.Began(), Computer: y.computer, FileName: local.Settings.FileName, Secret: local.Secret})
+	}
+	if err := y.apply(uid, rev, &set, hash); err != nil {
+		return false, err
+	}
+	if err := y.store.SyncLeftChecked(uid); err != nil {
+		return false, err
+	}
+	y.done[uid] = true
+	y.sum.SetBack = append(y.sum.SetBack, name)
+	return true, nil
+}
+
+// takenElsewhere says whether base, the entry's version agreed under a
+// key left behind, holds a change the folder's version under the new key
+// doesn't, and that isn't this computer's own: another computer's, or a
+// count of this computer's higher than any it gave the entry.
+func (y *syncer) takenElsewhere(it *database.SyncItem, base, folder *syncfolder.Record) bool {
+	for id, n := range base.Versions {
+		switch {
+		case id == y.id:
+			if n > it.Own {
+				return true
+			}
+		case folder == nil || n > folder.Versions[id]:
+			return true
+		}
+	}
+	return false
 }
 
 // restored syncs the entry uid, restored from a backup and not synced
@@ -831,7 +955,7 @@ func (y *syncer) write(uid string, rev int64, rec *syncfolder.Record, apply, cou
 		return database.ErrEntryChanged
 	}
 	if count {
-		n, err := y.store.SyncNextChange(rec.Versions[y.id])
+		n, err := y.store.SyncNextChange(uid, rec.Versions[y.id])
 		if err != nil {
 			return err
 		}
@@ -1040,6 +1164,8 @@ func (s *Summary) String() string {
 	add(s.Later, "left for the next sync")
 	add(s.Unfinished, "left for the next sync, out of time")
 	add(s.EarlierKey, "under an earlier key, not taken")
+	add(len(s.SetBack), "set back to the folder's, not sent")
+	add(len(s.HeldBack), "held back until the folder has them under the new key")
 	add(s.Rewritten, "written again")
 	add(s.Resealed, "sealed again with the new master password's key")
 	add(len(s.Problems), "problems")
