@@ -45,13 +45,15 @@ type Summary struct {
 	// Notes are what else the sync did, said as they are: the recovery
 	// key taken or sent, say.
 	Notes []string
-	// SetBack are the entries, by name, that held changes taken under the
-	// key from before a master password change taken here that the
-	// folder doesn't have under the new one: not sent, made as the
-	// folder has them, this computer's secret kept in its history.
+	// SetBack are the entries, by name, made as the folder has them under
+	// the new key, on the first sync after a master password change taken
+	// here: what was here besides was taken under the old key, and
+	// nothing was typed here since the folder's version.
 	SetBack []string
-	// HeldBack are such entries the folder has no version of under the new
-	// key yet: not sent, and left as they are, until it has.
+	// HeldBack are the entries, by name, the folder has no version of
+	// under the new key, nor made here: not sent, and left as they are,
+	// until it has, or they're deleted for good here. Said, but not
+	// something a sync did (Nothing).
 	HeldBack []string
 	// Ignored counts older copies of entries' files, already seen here: put
 	// back by a sync tool, or someone.
@@ -86,7 +88,7 @@ type Merged struct {
 
 // Nothing says whether the sync found nothing to do.
 func (s *Summary) Nothing() bool {
-	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+len(s.Notes)+len(s.SetBack)+len(s.HeldBack)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed+s.Unfinished+s.EarlierKey == 0
+	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+len(s.Notes)+len(s.SetBack)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed+s.Unfinished+s.EarlierKey == 0
 }
 
 // syncer is one sync's state.
@@ -114,6 +116,8 @@ type syncer struct {
 	keyID    string
 	id       string
 	computer string
+	// changes is the highest count this computer has given a change.
+	changes uint64
 }
 
 // Older gives a sealer for a key the vault had before a master password
@@ -171,6 +175,9 @@ func SyncWith(store *database.Store, folder syncfolder.Folder, computer string, 
 		return nil, err
 	}
 	if y.id, err = store.SyncComputerID(); err != nil {
+		return nil, err
+	}
+	if y.changes, err = store.SyncChanges(); err != nil {
 		return nil, err
 	}
 	// A folder whose permissions can't be changed (another user's, or a
@@ -341,9 +348,7 @@ func ownFile(f *syncfolder.File) bool { return filepath.Base(f.Path) == f.UIDStr
 func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	it := y.item(uid)
 	if it.Left {
-		if settled, err := y.left(uid, it, files); settled || err != nil {
-			return err
-		}
+		return y.left(uid, it, files)
 	}
 	if it.Restored {
 		return y.restored(uid, it, files)
@@ -423,7 +428,7 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 			return fmt.Errorf("%s: %w", filepath.Base(f.Path), err)
 		}
 		// What was agreed as it was, sealed again elsewhere: no change.
-		if base != nil && maps.Equal(rec.Versions, base.Versions) && sameEntry(rec, base) {
+		if base != nil && maps.Equal(rec.Versions, base.Versions) && sameButHistory(rec, base) {
 			same = append(same, remote{rec: rec, file: *f})
 			continue
 		}
@@ -469,10 +474,18 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		}
 		// The entry's own file under an earlier key: written over with what
 		// was agreed, as it was agreed (no change of this computer's
-		// counted), so a computer that changed it before taking the
-		// password change still has the newer change, and sends it.
+		// counted), with the earlier secrets kept here, so a computer that
+		// changed it before taking the password change still has the newer
+		// change, and sends it.
 		if earlierOwn && !it.Changed() && base != nil {
-			if err := y.write(uid, it.Rev, base, false, false); err != nil {
+			local, _, err := y.store.SyncRecord(uid, y.computer)
+			if err != nil {
+				return err
+			}
+			defer local.Wipe()
+			over := *base
+			over.History = local.History
+			if err := y.write(uid, it.Rev, &over, false, false); err != nil {
 				return err
 			}
 			return y.removeCopies(copies)
@@ -538,6 +551,14 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 			merged = append(merged, theirs)
 		}
 	}
+	// Another computer's version that has seen what was typed here: that's
+	// no longer kept for a password change (one claiming more than this
+	// computer has counted isn't another's that saw it).
+	if n := theirs.Versions[y.id]; n > 0 && n <= y.changes {
+		if err := y.store.SyncTypedSeen(uid, n); err != nil {
+			return err
+		}
+	}
 	// What's here is merged in even when it hasn't changed: its earlier
 	// secrets are kept, whatever history.keep the other computer has.
 	local, rev, err := y.store.SyncRecord(uid, y.computer)
@@ -584,25 +605,17 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	return y.removeCopies(copies)
 }
 
-// left checks the entry uid, agreed here under a key this computer has
+// left syncs the entry uid, agreed here under a key this computer has
 // left behind, taking a master password change made elsewhere (decided
 // with the user 2026-10-18): anyone with the old password could have
-// written what it took under that key. What it holds of this computer's
-// own changes is sent as ever. One holding a change of another
-// computer's the folder doesn't have under the new key, or a count of
-// this computer's it didn't give, isn't: it's made as the folder has it,
-// its secret here kept in its history, and the computer that made the
-// change sends it once it takes the new key. With no version under the
-// new key in the folder yet, it waits. It says whether it settled the
-// entry; if not, the entry syncs as ever.
-func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File) (bool, error) {
-	base, err := y.store.SyncBase(uid)
-	if err != nil {
-		// Damaged: nothing to say what it holds, so nothing's sent.
-		base = nil
-	} else {
-		defer base.Wipe()
-	}
+// written what its syncs took under that key, so none of it is trusted.
+// It's made again from the folder's version under the new key, with only
+// what was typed here made again on it (syncfolder.Typed): what was sent
+// and no other computer's version has seen, and what wasn't sent yet. A
+// deletion for good in the folder stands. With no version in the folder
+// under the new key, an entry made here is sent, one deleted for good
+// here is forgotten, and any other is held back: not sent.
+func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File) error {
 	var folder *syncfolder.Record
 	var hash syncfolder.Hash
 	var held []syncfolder.Merged
@@ -622,11 +635,11 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 		}
 		b, err := y.folder.Read(f)
 		if err != nil {
-			return false, err
+			return err
 		}
 		_, rec, err := syncfolder.Open(y.sealerFor(f), b)
 		if err != nil {
-			return false, fmt.Errorf("%s: %w", filepath.Base(f.Path), err)
+			return fmt.Errorf("%s: %w", filepath.Base(f.Path), err)
 		}
 		opened = append(opened, rec)
 		if ownFile(f) {
@@ -639,60 +652,88 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 		default:
 			m, err := y.merge(uid, nil, folder, rec)
 			if err != nil {
-				return false, err
+				return err
 			}
 			held = append(held, m)
 			folder = m.Record
 		}
 	}
-	if !it.Doubt && base != nil && !y.takenElsewhere(it, base, folder) {
-		return false, y.store.SyncLeftChecked(uid)
-	}
-	name := y.name(uid)
-	// Deleted for good here: nothing of it to send but that.
-	if folder == nil && it.Place == database.SyncGone {
-		return false, y.store.SyncLeftChecked(uid)
-	}
-	if folder == nil {
-		y.sum.HeldBack = append(y.sum.HeldBack, name)
-		return true, nil
+	typed, err := y.store.SyncTyped(uid)
+	if err != nil {
+		return err
 	}
 	local, rev, err := y.store.SyncRecord(uid, y.computer)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer local.Wipe()
-	set := *folder
-	if folder.Purged.IsZero() && len(local.Secret) > 0 && !bytes.Equal(local.Secret, folder.Secret) && !slices.ContainsFunc(folder.History, func(e syncfolder.Earlier) bool { return bytes.Equal(e.Secret, local.Secret) }) {
-		set.History = append(slices.Clone(folder.History), syncfolder.Earlier{ReplacedAt: y.now(), SetAt: local.Began(), Computer: y.computer, FileName: local.Settings.FileName, Secret: local.Secret})
-	}
-	if err := y.apply(uid, rev, &set, hash); err != nil {
-		return false, err
-	}
-	if err := y.store.SyncLeftChecked(uid); err != nil {
-		return false, err
-	}
-	y.done[uid] = true
-	y.sum.SetBack = append(y.sum.SetBack, name)
-	return true, nil
-}
-
-// takenElsewhere says whether base, the entry's version agreed under a
-// key left behind, holds a change the folder's version under the new key
-// doesn't, and that isn't this computer's own: another computer's, or a
-// count of this computer's higher than any it gave the entry.
-func (y *syncer) takenElsewhere(it *database.SyncItem, base, folder *syncfolder.Record) bool {
-	for id, n := range base.Versions {
-		switch {
-		case id == y.id:
-			if n > it.Own {
-				return true
-			}
-		case folder == nil || n > folder.Versions[id]:
-			return true
+	if it.Changed() {
+		base, err := y.store.SyncBase(uid)
+		if err != nil {
+			base = nil
+		}
+		typed = append(typed, syncfolder.Diff(base, local))
+		if base != nil {
+			base.Wipe()
 		}
 	}
-	return false
+	name := y.name(uid)
+	var from *syncfolder.Record
+	switch {
+	case folder != nil:
+		from = folder
+		typed = slices.DeleteFunc(typed, func(t *syncfolder.Typed) bool { return t.N != 0 && t.N <= folder.Versions[y.id] })
+	case len(typed) > 0 && typed[0].Created:
+		from = &syncfolder.Record{}
+	case it.Place == database.SyncGone:
+		return y.store.SyncDropEntry(uid)
+	default:
+		y.sum.HeldBack = append(y.sum.HeldBack, name)
+		return nil
+	}
+	r := from.Clone()
+	for _, t := range typed {
+		if !r.Purged.IsZero() {
+			break
+		}
+		if t.Has("purged") {
+			if t.Hash["content"] == syncfolder.ContentHash(r) {
+				r = &syncfolder.Record{Purged: t.Post.Purged, Changed: t.Post.Purged, Versions: r.Versions}
+			}
+			continue
+		}
+		base, ours := t.Rebase(r)
+		m, err := y.merge(uid, base, ours, r)
+		base.Wipe()
+		ours.Wipe()
+		if err != nil {
+			return err
+		}
+		held = append(held, m)
+		m.Changed = latest(r.Changed, t.Post.Changed)
+		r = m.Record
+	}
+	// The forget marks are what's made here: any taken under the old key
+	// go, before the earlier secrets are written.
+	if err := y.store.SyncSetForgotten(uid, r.Forgotten); err != nil {
+		return err
+	}
+	if folder != nil && sameEntry(r, folder) && slices.Equal(r.Forgotten, folder.Forgotten) {
+		if err := y.apply(uid, rev, folder, hash); err != nil {
+			return err
+		}
+		if !sameEntry(local, folder) {
+			y.sum.SetBack = append(y.sum.SetBack, name)
+		}
+	} else {
+		r.Changed = y.now()
+		if err := y.pushApplied(uid, rev, r); err != nil {
+			return err
+		}
+		y.sum.Sent = append(y.sum.Sent, recordName(uid, r))
+	}
+	y.done[uid] = true
+	return y.store.SyncLeftDone(uid)
 }
 
 // restored syncs the entry uid, restored from a backup and not synced
@@ -914,6 +955,14 @@ func onlyOlderHistory(merged, theirs *syncfolder.Record) bool {
 	return sameEntry(&m, &t)
 }
 
+// sameButHistory is sameEntry, whatever earlier secrets each keeps (as
+// each computer trims its own).
+func sameButHistory(a, b *syncfolder.Record) bool {
+	x, y := *a, *b
+	x.History, y.History = nil, nil
+	return sameEntry(&x, &y)
+}
+
 // sameEntry says whether a and b hold the same entry, whoever made them
 // and when.
 func sameEntry(a, b *syncfolder.Record) bool {
@@ -949,15 +998,27 @@ func (y *syncer) push(uid string, rev int64, rec *syncfolder.Record, apply bool)
 
 // write is push, counting it as a change of this computer's when count
 // says to.
-func (y *syncer) write(uid string, rev int64, rec *syncfolder.Record, apply, count bool) error {
+func (y *syncer) write(uid string, rev int64, rec *syncfolder.Record, apply, count bool) (retErr error) {
 	// Never over a file waiting to be read: the next sync.
 	if y.waiting[uid] {
 		return database.ErrEntryChanged
 	}
 	if count {
-		n, err := y.store.SyncNextChange(uid, rec.Versions[y.id])
+		typed, err := y.typedHere(uid)
 		if err != nil {
 			return err
+		}
+		n, err := y.store.SyncNextChange(rec.Versions[y.id])
+		if err != nil {
+			return err
+		}
+		if typed != nil {
+			typed.N = n
+			defer func() {
+				if retErr == nil {
+					retErr = y.store.SyncAddTyped(uid, typed)
+				}
+			}()
 		}
 		rec.Versions = rec.Versions.Join(nil)
 		rec.Versions[y.id] = n
@@ -990,6 +1051,33 @@ func (y *syncer) write(uid string, rev int64, rec *syncfolder.Record, apply, cou
 		return y.apply(uid, rev, rec, hash)
 	}
 	return y.store.SyncAgree(uid, rev, rec, hash)
+}
+
+// typedHere is what was typed here in the entry uid since it was last
+// agreed (syncfolder.Diff), nil when it wasn't changed here: read before
+// a version of it is written, as the vault still has what was typed.
+func (y *syncer) typedHere(uid string) (*syncfolder.Typed, error) {
+	it := y.item(uid)
+	if !it.Changed() {
+		return nil, nil
+	}
+	local, _, err := y.store.SyncRecord(uid, y.computer)
+	if err != nil {
+		return nil, err
+	}
+	defer local.Wipe()
+	var base *syncfolder.Record
+	if it.Agreed != nil {
+		if base, err = y.store.SyncBase(uid); err != nil {
+			base = nil
+		}
+		defer func() {
+			if base != nil {
+				base.Wipe()
+			}
+		}()
+	}
+	return syncfolder.Diff(base, local), nil
 }
 
 // pushApplied writes rec, a new version of the entry uid (at rev here), to
@@ -1029,6 +1117,29 @@ func (y *syncer) apply(uid string, rev int64, rec *syncfolder.Record, hash syncf
 			return err
 		}
 		break
+	}
+	// One held back under the name (Summary.HeldBack) is never sent: it's
+	// renamed here, quietly, as the folder's version of it, when there is
+	// one, has its own name.
+	for _, it := range y.items {
+		if it.UID == uid || it.Place != database.SyncLive || it.Key != k || !it.Left || it.Agreed == nil {
+			continue
+		}
+		other, otherRev, err := y.store.SyncRecord(it.UID, y.computer)
+		if err != nil {
+			return err
+		}
+		other.Service = y.freeName(k)
+		_, err = y.store.SyncApply(it.UID, otherRev, other, it.Agreed.Hash)
+		other.Wipe()
+		if err != nil {
+			return err
+		}
+		if err := y.loadItems(); err != nil {
+			return err
+		}
+		_, err = y.store.SyncApply(uid, rev, rec, hash)
+		return err
 	}
 	return y.sameName(uid, rev, rec)
 }

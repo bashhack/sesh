@@ -192,6 +192,9 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 			if _, err := s.resealBases(tx, newKey, res.NewID, bases); err != nil {
 				return err
 			}
+			if err := s.resealTyped(tx, newKey); err != nil {
+				return err
+			}
 			for _, table := range sealedTables {
 				now, err := sealedEntries(tx, table)
 				if err != nil {
@@ -458,6 +461,51 @@ func (k keySealer) EncryptEntry(plaintext, aad []byte) ([]byte, []byte, error) {
 
 func (k keySealer) DecryptEntry(data, salt, aad []byte) ([]byte, error) {
 	return DecryptEntry(k, data, salt, aad)
+}
+
+// resealTyped seals what was typed in each entry and kept for syncing
+// (sync_typed) again for newKey. One that doesn't open with the vault's
+// key (damaged) is dropped: nothing could read it.
+func (s *Store) resealTyped(tx *sql.Tx, newKey []byte) error {
+	type row struct {
+		uid        string
+		data, salt []byte
+		n          uint64
+	}
+	rows, err := tx.Query(`SELECT uid, n, data, salt FROM sync_typed`)
+	if err != nil {
+		return err
+	}
+	var all []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.uid, &r.n, &r.data, &r.salt); err != nil {
+			_ = rows.Close() //nolint:errcheck // already failing
+			return err
+		}
+		all = append(all, r)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, r := range all {
+		b, err := s.oracle.DecryptEntry(r.data, r.salt, typedAAD(r.uid))
+		if err != nil {
+			if _, err := tx.Exec(`DELETE FROM sync_typed WHERE uid = ? AND n = ?`, r.uid, r.n); err != nil {
+				return err
+			}
+			continue
+		}
+		data, salt, err := EncryptEntry(newKey, b, typedAAD(r.uid))
+		secure.SecureZeroBytes(b)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE sync_typed SET data = ?, salt = ? WHERE uid = ? AND n = ?`, data, salt, r.uid, r.n); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resealedBase is an agreed sync version sealed again: its sealed bytes

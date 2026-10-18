@@ -284,7 +284,7 @@ func writeOnly(t *testing.T, c *computer, f syncfolder.Folder, uid string) {
 	if base != nil {
 		local.Versions = base.Versions
 	}
-	n, err := c.store.SyncNextChange(uid, local.Versions[id])
+	n, err := c.store.SyncNextChange(local.Versions[id])
 	if err != nil {
 		t.Fatal(err)
 	}

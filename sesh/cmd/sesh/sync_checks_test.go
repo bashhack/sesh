@@ -351,8 +351,8 @@ func TestSyncSummary_SetAndHeldBack(t *testing.T) {
 	}
 	auto := strings.Join(autoSummary(s), "\n")
 	for _, want := range []string{
-		"1 entry (password/a) had changes taken under the old master password that your other computers don't have: not sent",
-		"2 entries (password/b, password/c) have changes taken under the old master password, and your other computers have no version under the new one yet: not sent until they do",
+		"1 entry (password/a) made the same as on your other computers, under the new master password: what this computer had besides was taken under the old one",
+		"2 entries (password/b, password/c): your other computers have no version under the new master password, and it wasn't made here: not sent until one of them has",
 	} {
 		if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, want) {
 			t.Errorf("sesh sync: %q, want %q", out, want)

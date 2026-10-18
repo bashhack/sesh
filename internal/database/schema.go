@@ -143,13 +143,16 @@ func migrateV1(tx *sql.Tx) error {
 			-- folder has under the new one before anything is sent.
 			left_key  INTEGER NOT NULL DEFAULT 0
 		)`,
-		// The highest change count this computer gave each entry it wrote
-		// (syncfolder.Versions), and doubt: a version it wrote over held a
-		// count of this computer's it didn't give.
-		`CREATE TABLE sync_own (
-			uid   TEXT PRIMARY KEY,
-			count INTEGER NOT NULL,
-			doubt INTEGER NOT NULL DEFAULT 0
+		// What this computer's user typed in each entry it sent, by the
+		// count it was sent with (syncfolder.Typed), sealed: kept until
+		// another computer's version has seen it, so a master password
+		// change taken here makes it again on the folder's version.
+		`CREATE TABLE sync_typed (
+			uid  TEXT NOT NULL,
+			n    INTEGER NOT NULL,
+			data BLOB NOT NULL,
+			salt BLOB NOT NULL,
+			PRIMARY KEY (uid, n)
 		)`,
 		// At most one row: this computer's sync ID, made when it first
 		// syncs, the count of the changes it has written

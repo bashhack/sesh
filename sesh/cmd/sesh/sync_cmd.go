@@ -1039,20 +1039,16 @@ func syncWaitingIn(store *database.Store, f *syncfolder.Folder) (*syncWaiting, e
 	return w, nil
 }
 
-// setBackSaid says n entries, named, were set back to the folder's
-// version on taking a master password change (vaultsync.Summary.SetBack).
+// setBackSaid says n entries, named, were made as the folder has them
+// on taking a master password change (vaultsync.Summary.SetBack).
 func setBackSaid(n int, names string) string {
-	return fmt.Sprintf("%s (%s) had changes taken under the old master password that your other computers don't have: not sent, and made as they have them, this computer's secret kept in the history, as anyone who knew that password could have made them. A computer of yours that made such a change sends it once it takes the new password", nouns(n, "entry", "entries"), names)
+	return fmt.Sprintf("%s (%s) made the same as on your other computers, under the new master password: what this computer had besides was taken under the old one, which anyone who knew it could have written, and wasn't typed here. A computer of yours that made such a change sends it once it takes the new password", nouns(n, "entry", "entries"), names)
 }
 
 // heldBackSaid says n entries, named, are held back on taking a master
 // password change (vaultsync.Summary.HeldBack).
 func heldBackSaid(n int, names string) string {
-	have := "have"
-	if n == 1 {
-		have = "has"
-	}
-	return fmt.Sprintf("%s (%s) %s changes taken under the old master password, and your other computers have no version under the new one yet: not sent until they do, or until you delete it for good", nouns(n, "entry", "entries"), names, have)
+	return fmt.Sprintf("%s (%s): your other computers have no version under the new master password, and it wasn't made here: not sent until one of them has, or until it's deleted for good here", nouns(n, "entry", "entries"), names)
 }
 
 // earlierKeySaid says n entries had a file sealed with an earlier master

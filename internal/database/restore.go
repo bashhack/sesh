@@ -100,7 +100,7 @@ func inspect(path, what string) (_ BackupSummary, err error) {
 // keeps: sync_state (what this computer last agreed with the sync folder
 // doesn't go back with the entries, so the restored ones, their revs
 // raised, are changes to sync; restoredForSync readies it), sync_info (this
-// computer's sync ID is its own), sync_own (so are the counts it gave),
+// computer's sync ID is its own), sync_typed (so is what was typed here),
 // history_forgotten (what was forgotten on purpose stays forgotten),
 // key_links (the master password changes stay known, so files sealed with
 // an old key still open) and sync_warned (the warnings this computer's

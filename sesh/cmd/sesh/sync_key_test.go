@@ -1041,7 +1041,7 @@ func TestSync_LateSwitchSaid(t *testing.T) {
 	syncComputer(t, desktop, "desktop")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
 	stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
-	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "1 entry (password/a) had changes taken under the old master password that your other computers don't have: not sent") {
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "1 entry (password/a) made the same as on your other computers, under the new master password") {
 		t.Errorf("desktop takes the change: %q, %v", out, err)
 	}
 	t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")

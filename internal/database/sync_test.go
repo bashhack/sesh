@@ -357,21 +357,69 @@ func TestSyncHistory_SetAt(t *testing.T) {
 // had counted.
 func TestSyncNextChange(t *testing.T) {
 	s, _ := syncPair(t)
-	if n, err := s.SyncNextChange("u", 0); err != nil || n != 1 {
+	if n, err := s.SyncNextChange(0); err != nil || n != 1 {
 		t.Fatalf("first: %d, %v", n, err)
 	}
-	if n, err := s.SyncNextChange("u", 10); err != nil || n != 11 {
+	if n, err := s.SyncNextChange(10); err != nil || n != 11 {
 		t.Errorf("past 10 seen: %d, %v", n, err)
 	}
-	if n, err := s.SyncNextChange("u", 3); err != nil || n != 12 {
+	if n, err := s.SyncNextChange(3); err != nil || n != 12 {
 		t.Errorf("then: %d, %v", n, err)
 	}
 	// One that would reach MaxCount isn't given, nor counted.
-	if _, err := s.SyncNextChange("u", syncfolder.MaxCount-1); err == nil || !strings.Contains(err.Error(), "too high") {
+	if _, err := s.SyncNextChange(syncfolder.MaxCount - 1); err == nil || !strings.Contains(err.Error(), "too high") {
 		t.Errorf("at the cap: %v, want an error with %q", err, "too high")
 	}
-	if n, err := s.SyncNextChange("u", 3); err != nil || n != 13 {
+	if n, err := s.SyncNextChange(3); err != nil || n != 13 {
 		t.Errorf("after the cap: %d, %v", n, err)
+	}
+}
+
+// What was typed in an entry is kept, folded, dropped once another's
+// version has seen it, sealed again for a new master password, and gone
+// once the entry is made again after a change taken.
+func TestSyncTyped(t *testing.T) {
+	s, _ := syncPair(t)
+	pre := &syncfolder.Record{Kind: vault.KindPassword, Service: "a", Secret: []byte("1"), Notes: []byte("n")}
+	typed := func(n uint64, secret, notes string) *syncfolder.Typed {
+		post := *pre
+		post.Secret, post.Notes = []byte(secret), []byte(notes)
+		d := syncfolder.Diff(pre, &post)
+		d.N = n
+		return d
+	}
+	for _, d := range []*syncfolder.Typed{typed(3, "2", "n"), typed(5, "1", "m")} {
+		if err := s.SyncAddTyped("u", d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.SyncTyped("u")
+	if err != nil || len(got) != 2 || got[0].N != 3 || string(got[0].Post.Secret) != "2" || string(got[1].Post.Notes) != "m" {
+		t.Fatalf("kept %+v, %v: want both, in order", got, err)
+	}
+	key, rec := newKeyFor(t, "new-password-1")
+	if _, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(s.Path(), NewKeySourceOracle(NewMasterPasswordSource(s.Path(), staticPrompt("new-password-1"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() }) //nolint:errcheck // test cleanup
+	if got, err := s.SyncTyped("u"); err != nil || len(got) != 2 {
+		t.Fatalf("after a new master password: %d kept, %v; want both, sealed again", len(got), err)
+	}
+	if err := s.SyncTypedSeen("u", 4); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.SyncTyped("u"); len(got) != 1 || got[0].N != 5 { //nolint:errcheck // checked by the result
+		t.Errorf("seen up to 4: %+v, want the one sent with 5", got)
+	}
+	if err := s.SyncLeftDone("u"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.SyncTyped("u"); len(got) != 0 { //nolint:errcheck // checked by the result
+		t.Errorf("made again: %+v, want none", got)
 	}
 }
 
