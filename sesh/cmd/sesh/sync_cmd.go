@@ -1033,9 +1033,17 @@ func syncWaitingIn(store *database.Store, f *syncfolder.Folder) (*syncWaiting, e
 	if err != nil {
 		return nil, err
 	}
+	// This vault's earlier keys: those its links lead back to from the
+	// key it has now, as sync opens them. (After a restore, the key now
+	// can itself be one a link leads from.)
 	earlier := map[string]bool{}
-	for i := range links {
-		earlier[links[i].From] = true
+	for queue := []string{keyID}; len(queue) > 0; queue = queue[1:] {
+		for i := range links {
+			if l := &links[i]; l.To == queue[0] && l.From != keyID && !earlier[l.From] {
+				earlier[l.From] = true
+				queue = append(queue, l.From)
+			}
+		}
 	}
 	for _, file := range w.contents.Files {
 		switch h, ok := agreed[file.UIDString()]; {
