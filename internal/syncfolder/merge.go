@@ -140,10 +140,16 @@ func MergeWith(base, ours, theirs *Record, beside Beside) (m Merged) {
 		m.Lost = bytes.Clone(older.Secret)
 	}
 	r.Secret = bytes.Clone(secretFrom.Secret)
-	r.Updated = secretFrom.Updated
+	r.Updated, r.SetAt = secretFrom.Updated, secretFrom.SetAt
 	r.Settings.FileName = secretFrom.Settings.FileName
 	if bytes.Equal(ours.Secret, theirs.Secret) {
-		r.Updated = latest(ours.Updated, theirs.Updated)
+		// The later update, and its use's start; at the same update, the
+		// earlier start.
+		at := ours
+		if c := ours.Updated.Compare(theirs.Updated); c < 0 || (c == 0 && theirs.Began().Before(ours.Began())) {
+			at = theirs
+		}
+		r.Updated, r.SetAt = at.Updated, at.SetAt
 		r.Settings.FileName = pick(&m, "file name", oursNewer, base.Settings.FileName, ours.Settings.FileName, theirs.Settings.FileName, eq[string])
 	}
 	r.Created = earliest(ours.Created, theirs.Created)
@@ -159,11 +165,11 @@ func MergeWith(base, ours, theirs *Record, beside Beside) (m Merged) {
 	for _, side := range []*Record{ours, theirs} {
 		// Not one forgotten on purpose after it was set: a computer that
 		// hadn't synced since still has it as its secret.
-		if forgottenOne(&Earlier{Secret: side.Secret, SetAt: side.Updated, ReplacedAt: side.Updated}, r.Forgotten) {
+		if forgottenOne(&Earlier{Secret: side.Secret, SetAt: side.Began(), ReplacedAt: side.Updated}, r.Forgotten) {
 			continue
 		}
 		if len(side.Secret) > 0 && !bytes.Equal(side.Secret, r.Secret) {
-			history = append(history, Earlier{ReplacedAt: replacedAt, SetAt: side.Updated, Computer: secretFrom.Computer, FileName: side.Settings.FileName, Secret: side.Secret})
+			history = append(history, Earlier{ReplacedAt: replacedAt, SetAt: side.Began(), Computer: secretFrom.Computer, FileName: side.Settings.FileName, Secret: side.Secret})
 		}
 	}
 	r.History = mergeHistory(history, r.Forgotten, r.Secret)
@@ -250,13 +256,6 @@ func earliest(a, b time.Time) time.Time {
 	case a.IsZero():
 		return b
 	case b.IsZero(), a.Before(b):
-		return a
-	}
-	return b
-}
-
-func latest(a, b time.Time) time.Time {
-	if a.After(b) {
 		return a
 	}
 	return b

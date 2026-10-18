@@ -157,6 +157,11 @@ func ParseHeader(b []byte) (Header, error) {
 type Record struct {
 	Created time.Time `json:"created,omitzero"`
 	Updated time.Time `json:"updated,omitzero"`
+	// SetAt is when this use of its secret began, where that isn't
+	// Updated: restored from a backup, the secret is the change, made
+	// (Updated) when restored, but its use began when the backup had it
+	// set. Zero is Updated (see Began).
+	SetAt time.Time `json:"set_at,omitzero"`
 	// Deleted is when the entry went to the trash; zero for one that isn't
 	// there.
 	Deleted time.Time `json:"deleted,omitzero"`
@@ -250,16 +255,23 @@ type Field struct {
 // Earlier is one of an entry's earlier secrets.
 type Earlier struct {
 	ReplacedAt time.Time `json:"replaced_at"`
-	// SetAt is when this use of it began: its entry's update time
-	// (Record.Updated) as it was replaced, kept as it is on every
-	// computer, so each copy of one use has the same. Zero is taken as
-	// ReplacedAt.
+	// SetAt is when this use of it began (Record.Began, as it was
+	// replaced), kept as it is on every computer, so each copy of one use
+	// has the same. Zero is taken as ReplacedAt.
 	SetAt time.Time `json:"set_at,omitzero"`
 	// Computer is the name of the computer whose change replaced it.
 	Computer string `json:"computer,omitempty"`
 	// FileName is a file entry's file's name, as it was then.
 	FileName string `json:"file_name,omitempty"`
 	Secret   []byte `json:"secret"`
+}
+
+// Began is when the use of r's secret began: SetAt, or else Updated.
+func (r *Record) Began() time.Time {
+	if !r.SetAt.IsZero() {
+		return r.SetAt
+	}
+	return r.Updated
 }
 
 // Wipe zeroes the record's secrets: its secret, notes, fields' values and

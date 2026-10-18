@@ -49,7 +49,7 @@ func (s *Store) HistoryKeep() int { return s.historyKeep }
 // read from, so the write can check it hasn't changed since.
 type oldSecret struct {
 	at         time.Time // replaced, for an imported one
-	set        time.Time // set: the entry's updated_at as read; zero when it doesn't read
+	set        time.Time // its use began: the entry's set_at, or else updated_at, as read; zero when that doesn't read
 	fileName   string    // a file entry's file's name with it
 	data, salt []byte    // sealed for history
 	from       []byte    // the entry's encrypted_data it was read from
@@ -108,9 +108,9 @@ func (s *Store) replacing(k, to vault.Key, data, salt, next []byte) (*oldSecret,
 
 // keepOld records old as k's latest earlier secret, replaced at, in tx,
 // and drops the oldest past the store's history.keep; an old with no data
-// keeps nothing. It was set when its entry's update time says, as it is
-// (another computer's clock may be ahead), or, when that doesn't read,
-// at.
+// keeps nothing. Its use began when its entry says (set_at, or else
+// updated_at), as it is (another computer's clock may be ahead), or, when
+// that doesn't read, at.
 func (s *Store) keepOld(tx *sql.Tx, k vault.Key, old *oldSecret, at time.Time) error {
 	if old.data == nil {
 		return nil

@@ -1,6 +1,8 @@
 package vaultsync
 
 import (
+	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -61,9 +63,10 @@ func forgetOld(t *testing.T, c *computer, k vault.Key) {
 	}
 }
 
-// noneHas fails t if any of cs has secret, as its secret or an earlier one.
-func noneHas(t *testing.T, cs []*computer, secret string) {
+// oldGone fails t if any of cs has pw-old, as its secret or an earlier one.
+func oldGone(t *testing.T, cs []*computer) {
 	t.Helper()
+	const secret = "pw-old"
 	for _, c := range cs {
 		if all := allSecrets(t, c); slices.Contains(all, secret) {
 			t.Errorf("%s: %s, forgotten on purpose, is back (all %q)", c.name, secret, all)
@@ -71,9 +74,11 @@ func noneHas(t *testing.T, cs []*computer, secret string) {
 	}
 }
 
-// allHave fails t unless each of cs has secret, as its secret or an earlier one.
-func allHave(t *testing.T, cs []*computer, secret string) {
+// oldKept fails t unless each of cs has pw-old, as its secret or an
+// earlier one.
+func oldKept(t *testing.T, cs []*computer) {
 	t.Helper()
+	const secret = "pw-old"
 	for _, c := range cs {
 		if all := allSecrets(t, c); !slices.Contains(all, secret) {
 			t.Errorf("%s: %s, used again after it was forgotten, is gone (all %q)", c.name, secret, all)
@@ -97,7 +102,7 @@ func TestSync_ForgetThenTwoReplace(t *testing.T) {
 			desktop.put("github", "pw-desktop")
 			third.put("github", "pw-third")
 			settleN(t, f, 8, inOrder(cs, order)...)
-			noneHas(t, cs, "pw-old")
+			oldGone(t, cs)
 		})
 	}
 }
@@ -118,7 +123,7 @@ func TestSync_ForgottenReusedUnsynced(t *testing.T) {
 			laptop.put("github", "pw-old")
 			laptop.put("github", "pw-new")
 			settleN(t, f, 6, inOrder(cs, order)...)
-			allHave(t, cs, "pw-old")
+			oldKept(t, cs)
 		})
 	}
 }
@@ -146,7 +151,7 @@ func TestSync_ForgottenReusedElsewhere(t *testing.T) {
 				t.Fatal(err)
 			}
 			settleN(t, f, 8, inOrder(cs, order)...)
-			allHave(t, cs, "pw-old")
+			oldKept(t, cs)
 		})
 	}
 }
@@ -175,7 +180,7 @@ func TestSync_ForgottenReusedBeforeTaken(t *testing.T) {
 				t.Fatal(err)
 			}
 			settleN(t, f, 8, inOrder(cs, order)...)
-			allHave(t, cs, "pw-old")
+			oldKept(t, cs)
 		})
 	}
 }
@@ -200,8 +205,52 @@ func TestSync_ForgetThenReplaceDamagedBase(t *testing.T) {
 					syncLoose(c, f)
 				}
 			}
-			noneHas(t, cs, "pw-old")
+			oldGone(t, cs)
 		})
+	}
+}
+
+// A password forgotten on one computer, brought back by restoring a backup
+// another took before it heard, is the password until replaced on either,
+// then forgotten everywhere: in any order.
+func TestSync_ForgottenRestored(t *testing.T) {
+	t.Parallel()
+	for replacer, by := range []string{"laptop", "desktop"} {
+		for name, order := range orders(2) {
+			t.Run(fmt.Sprintf("replaced on the %s, %s", by, name), func(t *testing.T) {
+				t.Parallel()
+				cs, paths, f := computers(t, 2)
+				laptop, desktop := cs[0], cs[1]
+				gh := laptop.put("github", "pw-old")
+				settleN(t, f, 6, cs...)
+				laptop.put("github", "pw-laptop")
+				forgetOld(t, laptop, gh)
+				// The desktop's backup, before it has the forgetting.
+				backup := filepath.Join(t.TempDir(), "backup.db")
+				if err := database.CopyTo(paths[1], backup); err != nil {
+					t.Fatal(err)
+				}
+				settleN(t, f, 6, cs...)
+				syncLoose(desktop, f)
+				if err := database.RestoreInPlace(paths[1], backup); err != nil {
+					t.Fatal(err)
+				}
+				settleN(t, f, 6, inOrder(cs, order)...)
+				for _, c := range cs {
+					if got := c.secret(gh); got != "pw-old" {
+						t.Errorf("%s: after the restore the password is %s, want pw-old", c.name, got)
+					}
+				}
+				cs[replacer].put("github", "pw-next")
+				settleN(t, f, 6, inOrder(cs, order)...)
+				for _, c := range cs {
+					if got := c.secret(gh); got != "pw-next" {
+						t.Errorf("%s: the password is %s, want pw-next", c.name, got)
+					}
+				}
+				oldGone(t, cs)
+			})
+		}
 	}
 }
 
@@ -223,7 +272,7 @@ func TestSync_ForgetSetClockAhead(t *testing.T) {
 			desktop.put("github", "pw-desktop")
 			rawExec(t, paths[1], `UPDATE history SET replaced_at = strftime('%Y-%m-%d %H:%M:%f', 'now', '+10 minutes')`)
 			settleN(t, f, 6, inOrder(cs, order)...)
-			noneHas(t, cs, "pw-old")
+			oldGone(t, cs)
 		})
 	}
 }

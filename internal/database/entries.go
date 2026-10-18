@@ -213,10 +213,14 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 		// Times that don't read (damage) aren't kept: this write mends
 		// both, whatever the secret.
 		var created, updated time.Time
-		if err := s.db.QueryRow(`SELECT created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&created, &updated); err != nil {
+		var set sql.NullTime
+		if err := s.db.QueryRow(`SELECT created_at, updated_at, set_at FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&created, &updated, &set); err != nil {
 			same, mend = false, true
 		} else if old != nil {
 			old.set = updated
+			if set.Valid {
+				old.set = set.Time
+			}
 		}
 	}
 	var imported *importedHistory
@@ -260,10 +264,11 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 		keepTimes = append(keepTimes, data)
 		return `, ` + col + ` = CASE WHEN entries.encrypted_data = ? THEN entries.` + col + ` ELSE excluded.` + col + ` END`
 	}
+	// A new secret is a new use of one: it began when it was set.
 	if same && e.UpdatedAt.IsZero() {
-		onConflict += keepTime("updated_at")
+		onConflict += keepTime("updated_at") + keepTime("set_at")
 	} else {
-		onConflict += `, updated_at = excluded.updated_at`
+		onConflict += `, updated_at = excluded.updated_at, set_at = NULL`
 	}
 	switch {
 	case whole && same && e.CreatedAt.IsZero():
@@ -372,7 +377,8 @@ func (s *Store) SetSettings(k vault.Key, settings *vault.Settings) error {
 	}
 	var res sql.Result
 	err = s.inTx(func(tx *sql.Tx) (err error) {
-		res, err = tx.Exec(`UPDATE entries SET settings = ?, updated_at = ? WHERE kind = ? AND service = ? AND username = ?`,
+		// Its secret's use began when it did, whatever the update time.
+		res, err = tx.Exec(`UPDATE entries SET settings = ?, set_at = COALESCE(set_at, updated_at), updated_at = ? WHERE kind = ? AND service = ? AND username = ?`,
 			col, time.Now().UTC(), string(k.Kind), k.Service, k.Username)
 		return err
 	})

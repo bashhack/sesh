@@ -235,6 +235,78 @@ func syncItem(t *testing.T, s *Store, uid string) SyncItem {
 	return items[i]
 }
 
+// A use's start other than the update time (a restore's) is kept by sync,
+// the trash and settings changes, and goes into the history with it.
+func TestSyncRecord_SetAt(t *testing.T) {
+	a, b := syncPair(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	if err := a.Put(k, []byte("pw-1")); err != nil {
+		t.Fatal(err)
+	}
+	uid := uidOf(t, a, k)
+	rec, _, err := a.SyncRecord(uid, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	began := rec.Updated.Add(-time.Hour)
+	rec.SetAt = began
+	if _, err := b.SyncApply(uid, 0, rec, syncfolder.Hash{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetSettings(k, &vault.Settings{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Delete(k); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := b.Trash()
+	if err != nil || len(tr) != 1 {
+		t.Fatalf("trash %+v, %v", tr, err)
+	}
+	if _, err := b.RestoreFromTrash(tr[0].ID, vault.Key{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := b.SyncRecord(uid, "desktop"); err != nil || !got.SetAt.Equal(began) {
+		t.Fatalf("set %v (%v), want %s", got.SetAt, err, began)
+	}
+	if err := b.Put(k, []byte("pw-2")); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := b.SyncRecord(uid, "desktop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.SetAt.IsZero() || len(got.History) != 1 || !got.History[0].SetAt.Equal(began) {
+		t.Errorf("set %v, history %+v; want a new use, and pw-1 set %s", got.SetAt, got.History, began)
+	}
+}
+
+// New settings don't start a new use of the secret.
+func TestSetSettings_KeepsSetAt(t *testing.T) {
+	a, _ := syncPair(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	if err := a.Put(k, []byte("pw-1")); err != nil {
+		t.Fatal(err)
+	}
+	e, err := a.Lookup(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetSettings(k, &vault.Settings{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Put(k, []byte("pw-2")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := a.SyncRecord(uidOf(t, a, k), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.History) != 1 || !rec.History[0].SetAt.Equal(e.UpdatedAt) {
+		t.Errorf("history %+v, want pw-1 set %s", rec.History, e.UpdatedAt)
+	}
+}
+
 // An earlier secret keeps when its use was set, its entry's update time as
 // replaced (by Put or Edit); forgetting it marks no earlier than that.
 func TestSyncHistory_SetAt(t *testing.T) {

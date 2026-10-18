@@ -630,13 +630,15 @@ func (y *syncer) restored(uid string, it *database.SyncItem, files []syncfolder.
 	}
 	// The restored version, as a change made now: the newer, its secret
 	// replacing the folder's, which goes into its history (so it's a
-	// conflict the newer wins, not one the folder settled before).
+	// conflict the newer wins, not one the folder settled before). Its
+	// secret's use began when the backup had it set: forgotten elsewhere
+	// since, it's the secret until replaced, then forgotten.
 	now := y.now()
 	l := *local
 	l.Changed = latest(now, folder.Changed.Add(time.Nanosecond))
 	if len(folder.Secret) > 0 && !bytes.Equal(folder.Secret, local.Secret) {
-		l.History = append(slices.Clone(local.History), syncfolder.Earlier{ReplacedAt: now, SetAt: folder.Updated, Computer: y.computer, FileName: folder.Settings.FileName, Secret: folder.Secret})
-		l.Updated = now
+		l.History = append(slices.Clone(local.History), syncfolder.Earlier{ReplacedAt: now, SetAt: folder.Began(), Computer: y.computer, FileName: folder.Settings.FileName, Secret: folder.Secret})
+		l.Updated, l.SetAt = now, local.Began()
 	}
 	m, err := y.merge(uid, nil, &l, folder)
 	if err != nil {

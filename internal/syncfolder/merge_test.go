@@ -292,6 +292,23 @@ func TestMerge_ForgottenUsedAgain(t *testing.T) {
 	}
 }
 
+// A secret restored from a backup keeps when the backup had it set: with
+// the same secret elsewhere, both ways round; replaced after it was
+// forgotten elsewhere, forgotten.
+func TestMerge_RestoredSetAt(t *testing.T) {
+	restored := changed("desktop", 5, func(r *Record) { r.Updated, r.SetAt = t0.Add(5*time.Hour), t0 })
+	if m := merge(t, baseRecord(), restored, baseRecord()); !m.Updated.Equal(t0.Add(5*time.Hour)) || !m.SetAt.Equal(t0) {
+		t.Errorf("updated %s, set %s", m.Updated, m.SetAt)
+	}
+	replaced := changed("laptop", 6, func(r *Record) {
+		r.Secret, r.Updated = []byte("pw-9"), t0.Add(6*time.Hour)
+		r.Forgotten = []Forgotten{{Hash: Forget([]byte("pw-1")), At: t0.Add(2 * time.Hour)}}
+	})
+	if m := merge(t, nil, restored, replaced); string(m.Secret) != "pw-9" || hasEarlier(m.History, []byte("pw-1")) {
+		t.Errorf("secret %s, history %+v", m.Secret, m.History)
+	}
+}
+
 // Two uses of one secret are both kept, until one is forgotten: then only
 // the use set after.
 func TestMerge_HistoryTwoUses(t *testing.T) {
