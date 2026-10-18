@@ -29,6 +29,8 @@ type Store struct {
 	// borrowed says the key is another store's (see Reader), which Close
 	// leaves open.
 	borrowed bool
+	// typedChecking says SyncTypedChecks is running (typedChecksWarn).
+	typedChecking bool
 }
 
 // MaxSecretSize is the largest secret the store accepts. It applies however
@@ -183,18 +185,25 @@ func (s *Store) Fingerprint() ([sha256.Size]byte, error) {
 // Close releases the database connection and clears any cached key
 // material held by the key source.
 func (s *Store) Close() error {
-	// What was typed and kept for syncing, checked against what the vault
-	// still has, before the key goes.
-	s.typedChecksWarn()
 	if closer, ok := s.oracle.(interface{ Close() }); ok && !s.borrowed {
 		closer.Close()
 	}
 	return s.db.Close()
 }
 
-// typedChecksWarn runs SyncTypedChecks after what it follows has been
-// written: one that fails is said, not returned, as that stands.
+// typedChecksWarn runs SyncTypedChecks after a write (inTx), unless one
+// is running already (its own writes come through here): one that fails
+// is said, not returned, as the write stands.
 func (s *Store) typedChecksWarn() {
+	if s.typedChecking {
+		return
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_typed_check`).Scan(&n); err != nil || n == 0 {
+		return
+	}
+	s.typedChecking = true
+	defer func() { s.typedChecking = false }()
 	if err := s.SyncTypedChecks(); err != nil {
 		fmt.Fprintf(os.Stderr, "check what's kept of what was typed, for syncing: %v\n", err)
 	}

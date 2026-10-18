@@ -523,12 +523,16 @@ func (s *Store) putTyped(uid string, all []*syncfolder.Typed) error {
 		}
 		rows = append(rows, sealed{data, salt, o.N})
 	}
+	keyID, err := s.SyncKeyID()
+	if err != nil {
+		return err
+	}
 	return s.inTx(func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`DELETE FROM sync_typed WHERE uid = ?`, uid); err != nil {
 			return err
 		}
 		for _, r := range rows {
-			if _, err := tx.Exec(`INSERT INTO sync_typed (uid, n, data, salt) VALUES (?, ?, ?, ?)`, uid, r.n, r.data, r.salt); err != nil {
+			if _, err := tx.Exec(`INSERT INTO sync_typed (uid, n, data, salt, key_id) VALUES (?, ?, ?, ?, ?)`, uid, r.n, r.data, r.salt, keyID); err != nil {
 				return err
 			}
 		}
@@ -539,30 +543,39 @@ func (s *Store) putTyped(uid string, all []*syncfolder.Typed) error {
 // SyncTyped is what was typed in the entry uid and kept (SyncAddTyped),
 // in the order it was sent. One that doesn't open is left out.
 func (s *Store) SyncTyped(uid string) ([]*syncfolder.Typed, error) {
+	all, _, err := s.typedRows(uid)
+	return all, err
+}
+
+// typedRows is SyncTyped, and whether every one opened.
+func (s *Store) typedRows(uid string) ([]*syncfolder.Typed, bool, error) {
 	rows, err := s.db.Query(`SELECT data, salt FROM sync_typed WHERE uid = ? ORDER BY n`, uid)
 	if err != nil {
-		return nil, fmt.Errorf("read what was typed in %s: %w", uid, err)
+		return nil, false, fmt.Errorf("read what was typed in %s: %w", uid, err)
 	}
 	defer rows.Close() //nolint:errcheck // read only
 	var out []*syncfolder.Typed
+	opened := true
 	for rows.Next() {
 		var data, salt []byte
 		if err := rows.Scan(&data, &salt); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		b, err := s.oracle.DecryptEntry(data, salt, typedAAD(uid))
 		if err != nil {
+			opened = false
 			continue
 		}
 		var t syncfolder.Typed
 		err = json.Unmarshal(b, &t)
 		secure.SecureZeroBytes(b)
 		if err != nil {
+			opened = false
 			continue
 		}
 		out = append(out, &t)
 	}
-	return out, rows.Err()
+	return out, opened, rows.Err()
 }
 
 // SyncTypedKept drops, of what was typed in the entry uid and kept, any
@@ -573,10 +586,11 @@ func (s *Store) SyncTypedKept(uid, computer string) error {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_typed WHERE uid = ?`, uid).Scan(&n); err != nil || n == 0 {
 		return err
 	}
-	if err := s.typedKept(uid, computer); err != nil {
+	checked, err := s.typedKept(uid, computer)
+	if err != nil || !checked {
 		return err
 	}
-	_, err := s.db.Exec(`DELETE FROM sync_typed_check WHERE uid = ?`, uid)
+	_, err = s.db.Exec(`DELETE FROM sync_typed_check WHERE uid = ?`, uid)
 	return err
 }
 
@@ -602,41 +616,50 @@ func (s *Store) SyncTypedChecks() error {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return err
 	}
+	var errs []error
 	for _, uid := range uids {
-		if err := s.typedKept(uid, ""); err != nil {
-			return err
+		checked, err := s.typedKept(uid, "")
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", uid, err))
+		}
+		// Not checked: left marked, for the next write with the key.
+		if err != nil || !checked {
+			continue
 		}
 		if _, err := s.db.Exec(`DELETE FROM sync_typed_check WHERE uid = ?`, uid); err != nil {
 			return err
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
-func (s *Store) typedKept(uid, computer string) error {
-	all, err := s.SyncTyped(uid)
-	if err != nil {
-		return err
+// typedKept is SyncTypedKept, saying whether it checked all that's kept:
+// what doesn't open (the vault's key not in hand), or an entry that
+// doesn't read, is left for a later check.
+func (s *Store) typedKept(uid, computer string) (bool, error) {
+	all, opened, err := s.typedRows(uid)
+	if err != nil || !opened {
+		return false, err
 	}
 	local, _, err := s.SyncRecord(uid, computer)
 	if err != nil {
-		// Not here at all: it has nothing typed in it.
-		local = &syncfolder.Record{Purged: time.Now()}
+		return false, err
 	}
 	defer local.Wipe()
 	changed := false
 	var kept []*syncfolder.Typed
 	for _, t := range all {
+		// One left with nothing typed stays, holding no value: what it
+		// typed over, and whether the entry was made here, pass on when
+		// the next push folds it in (syncfolder.Fold).
 		k, dropped := t.Kept(local)
 		changed = changed || dropped
-		if !k.Empty() {
-			kept = append(kept, k)
-		}
+		kept = append(kept, k)
 	}
 	if !changed {
-		return nil
+		return true, nil
 	}
-	return s.putTyped(uid, kept)
+	return true, s.putTyped(uid, kept)
 }
 
 // SyncLeftDone records that the entry uid, agreed under a key left

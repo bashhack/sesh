@@ -385,7 +385,10 @@ func restoredForSync(tx *sql.Tx, schema, backup string) error {
 			return err
 		}
 	}
-	return nil
+	// What was typed, sealed with another key than the one restored:
+	// nothing could open it.
+	_, err = tx.Exec(`DELETE FROM `+schema+`sync_typed WHERE key_id != ?`, keyID) //nolint:gosec // schema is "main." or ""
+	return err
 }
 
 // replacedForSync readies the vault file at path, a backup's copy about to

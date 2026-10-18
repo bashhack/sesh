@@ -858,8 +858,8 @@ func TestSync_TypedGoneWithTheVaults(t *testing.T) {
 }
 
 // A typed secret goes from what's kept as typed once the vault no longer
-// has it, with no sync after: deleted for good, the trash emptied, or
-// replaced with history.keep 0.
+// has it, with no sync after, by the write that removed it: deleted for
+// good, the trash emptied, or replaced with history.keep 0.
 func TestSync_TypedGoneWithoutASync(t *testing.T) {
 	t.Parallel()
 	for _, how := range []string{"purge", "empty the trash", "replace"} {
@@ -877,19 +877,13 @@ func TestSync_TypedGoneWithoutASync(t *testing.T) {
 		case "purge":
 			err = desktop.store.PurgeMany([]vault.Key{gh})
 		case "empty the trash":
-			// Two commands: the first's checks run as it closes.
 			if err = desktop.store.Delete(gh); err == nil {
-				if err = desktop.store.SyncTypedChecks(); err == nil {
-					_, err = desktop.store.EmptyTrash()
-				}
+				_, err = desktop.store.EmptyTrash()
 			}
 		case "replace":
 			desktop.put("github", "desk-3")
 		}
 		if err != nil {
-			t.Fatal(err)
-		}
-		if err := desktop.store.SyncTypedChecks(); err != nil {
 			t.Fatal(err)
 		}
 		typed, err := desktop.store.SyncTyped(uid)

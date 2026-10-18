@@ -417,6 +417,55 @@ func TestSyncTyped(t *testing.T) {
 	}
 }
 
+// A check that can't open what's kept (the key not in hand) leaves the
+// entry marked for a later one; a restore under another key drops what
+// it can't open.
+func TestSyncTypedChecks_KeyNotInHand(t *testing.T) {
+	s, _ := syncPair(t)
+	d := syncfolder.Diff(nil, &syncfolder.Record{Kind: vault.KindPassword, Service: "a", Secret: []byte("1")})
+	d.N = 1
+	if err := s.SyncAddTyped("u", d); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(t.TempDir(), "backup.db")
+	if err := CopyTo(s.Path(), backup); err != nil {
+		t.Fatal(err)
+	}
+	key, rec := newKeyFor(t, "new-password-1")
+	if _, err := s.Rekey(key, rec, rewrapTo, RekeyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	marked := func(st *Store) bool {
+		var n int
+		if err := st.db.QueryRow(`SELECT COUNT(*) FROM sync_typed_check WHERE uid = 'u'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+	if _, err := s.db.Exec(`INSERT INTO sync_typed_check (uid) VALUES ('u')`); err != nil {
+		t.Fatal(err)
+	}
+	// This store still has the key from before: it can't open them.
+	if err := s.SyncTypedChecks(); err != nil || !marked(s) {
+		t.Errorf("with the key from before: %v, marked %v; want it left marked", err, marked(s))
+	}
+	s2, err := Open(s.Path(), NewKeySourceOracle(NewMasterPasswordSource(s.Path(), staticPrompt("new-password-1"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close() //nolint:errcheck // test cleanup
+	if err := s2.SyncTypedChecks(); err != nil || marked(s2) {
+		t.Errorf("with the key now: %v, marked %v; want it checked", err, marked(s2))
+	}
+	if err := RestoreInPlace(s2.Path(), backup); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM sync_typed`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("after a restore under the key before: %d kept, %v; want none", n, err)
+	}
+}
+
 // A vault replaced from a backup, with a new sync ID, keeps nothing typed
 // under the old one.
 func TestReplacedForSync_DropsTyped(t *testing.T) {

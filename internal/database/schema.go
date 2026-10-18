@@ -148,10 +148,13 @@ func migrateV1(tx *sql.Tx) error {
 		// another computer's version has seen it, so a master password
 		// change taken here makes it again on the folder's version.
 		`CREATE TABLE sync_typed (
-			uid  TEXT NOT NULL,
-			n    INTEGER NOT NULL,
-			data BLOB NOT NULL,
-			salt BLOB NOT NULL,
+			uid    TEXT NOT NULL,
+			n      INTEGER NOT NULL,
+			data   BLOB NOT NULL,
+			salt   BLOB NOT NULL,
+			-- The key record it's sealed with: a restore under another
+			-- drops it, as nothing could open it.
+			key_id TEXT NOT NULL DEFAULT '',
 			PRIMARY KEY (uid, n)
 		)`,
 		// At most one row: this computer's sync ID, made when it first
