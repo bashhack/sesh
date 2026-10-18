@@ -317,7 +317,11 @@ func removeStaleRestoreTemps(target string, now time.Time) {
 // (sync_restored) at their revs. Until one is changed here, the next sync
 // takes it as restored (vaultsync): its values over the folder's, the
 // folder's secrets kept in its history, unless the folder has it deleted
-// (to the trash, or for good), which stays. schema is "main." or "".
+// (to the trash, or for good), which stays. The backup's recovery key
+// record is marked restored, so it's never sent as a change: the folder's,
+// or the one the vault saw there, takes its place at the next sync
+// (decided with the user), and a key replaced since doesn't return.
+// schema is "main." or "".
 func restoredForSync(tx *sql.Tx, schema, backup string) error {
 	// Changed in the backup and not synced from it (its rev isn't the one
 	// it agreed; made since it last synced): an edit, which wins over a
@@ -332,6 +336,7 @@ func restoredForSync(tx *sql.Tx, schema, backup string) error {
 				LEFT JOIN ` + backup + `sync_state bs ON bs.uid = b.uid WHERE b.uid = e.uid), 0)
 			FROM (SELECT uid, rev FROM ` + schema + `entries UNION ALL SELECT uid, rev FROM ` + schema + `trash) e`,
 		`DELETE FROM ` + schema + `sync_state WHERE uid NOT IN (SELECT uid FROM ` + schema + `entries UNION SELECT uid FROM ` + schema + `trash)`,
+		`UPDATE ` + schema + `sync_info SET recovery_restored = 1, recovery_restored_key = COALESCE((SELECT public_key FROM ` + schema + `recovery WHERE id = 1), x'')`,
 	} {
 		if _, err := tx.Exec(q); err != nil { //nolint:gosec // schema and backup are "main.", "backup." or ""
 			return err

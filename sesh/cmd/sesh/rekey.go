@@ -242,6 +242,10 @@ func rekeyTo(store *database.Store, dbPath, oldID string, key []byte, rec databa
 			return nr, nil
 		}
 	}
+	var before []byte
+	if r, err := store.Recovery(); err == nil {
+		before = r.PublicKey
+	}
 	res, err := store.Rekey(key, rec, rewrap, opts)
 	if err != nil {
 		return res, rekeyNotes{}, err
@@ -254,7 +258,11 @@ func rekeyTo(store *database.Store, dbPath, oldID string, key []byte, rec databa
 	}
 	switch res.Recovery {
 	case database.RecoveryKept:
-		notes.recovery = "Your recovery key still works: it now opens the vault with the new master password."
+		// Unless the sync after it took the folder's in its place, which it
+		// said.
+		if r, err := database.ReadRecovery(dbPath); err == nil && bytes.Equal(r.PublicKey, before) {
+			notes.recovery = "Your recovery key still works: it now opens the vault with the new master password."
+		}
 	case database.RecoveryStale:
 		notes.recovery = "Your recovery key's record was for another vault, so it was removed; make a new one with: sesh recovery new"
 	}

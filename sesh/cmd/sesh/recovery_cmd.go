@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/bashhack/sesh/internal/agent"
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/keywrap"
 	"github.com/bashhack/sesh/internal/recovery"
@@ -198,7 +199,7 @@ func runRecovery(app *App, args []string) error {
 	case "status":
 		f, err := database.ReadRecovery(dbPath)
 		if errors.Is(err, database.ErrNoRecovery) || errors.Is(err, database.ErrNoVault) {
-			return out("Recovery key: none. Make one with: sesh recovery new")
+			return out("Recovery key: none. Make one with: sesh recovery new%s", recoveryUnsent(cfg, nil))
 		}
 		if err != nil {
 			return err
@@ -206,7 +207,7 @@ func runRecovery(app *App, args []string) error {
 		if mat, merr := database.ReadUnlockMaterial(dbPath); merr == nil && f.UnlockID != agent.UnlockID(mat.Verify) {
 			return out("Recovery key: doesn't open this vault (its record is for another vault). Make a new one with: sesh recovery new")
 		}
-		return out("Recovery key: set (made %s)", f.CreatedAt.Local().Format("2006-01-02 15:04"))
+		return out("Recovery key: set (made %s)%s", f.CreatedAt.Local().Format("2006-01-02 15:04"), recoveryUnsent(cfg, f.PublicKey))
 	case "remove":
 		if _, err := database.ReadRecovery(dbPath); errors.Is(err, database.ErrNoRecovery) || errors.Is(err, database.ErrNoVault) {
 			return out("This vault has no recovery key.")
@@ -224,6 +225,11 @@ func runRecovery(app *App, args []string) error {
 		if err := out("Removed the recovery key; it no longer opens this vault."); err != nil {
 			return err
 		}
+		if said := recoveryChangeSent(cfg); said != "" {
+			if err := out("%s", said); err != nil {
+				return err
+			}
+		}
 		offerToRemoveOldBackups(app, cfg, "recovery key")
 		return nil
 	case "new":
@@ -233,6 +239,14 @@ func runRecovery(app *App, args []string) error {
 		p := recoveryPrompt()
 		if !p.interactive || p.readLine == nil {
 			return errors.New("sesh recovery new needs a terminal: it shows the key once and asks you to confirm you've saved it")
+		}
+		// A vault that syncs takes the folder's recovery key first, so a key
+		// made here is made after seeing it, and replaces it everywhere.
+		syncing := cfg.SyncDir.Value != ""
+		if syncing {
+			if err := recoveryWithFolder(app, cfg, p, false); err != nil {
+				return err
+			}
 		}
 		replacing := false
 		if f, err := database.ReadRecovery(dbPath); err == nil {
@@ -264,6 +278,11 @@ func runRecovery(app *App, args []string) error {
 		}
 		defer closeAgentConn(conn)
 		made, err := makeRecoveryKey(agentWrap(conn), dbPath, mat.Verify, p)
+		if made && syncing {
+			if err := recoveryWithFolder(app, cfg, p, true); err != nil {
+				return err
+			}
+		}
 		if err != nil || !made || !replacing {
 			return err
 		}
@@ -272,6 +291,37 @@ func runRecovery(app *App, args []string) error {
 	default:
 		return fmt.Errorf("unknown recovery command %q (use new, remove, or status)", args[0])
 	}
+}
+
+// recoveryUnsent says, for sesh recovery status, that the vault's recovery
+// key (pub, nil for none) is a change the sync folder cfg names doesn't
+// have yet; "" when it has it, or the vault doesn't sync.
+func recoveryUnsent(cfg *config.Config, pub []byte) string {
+	if cfg.SyncDir.Value == "" {
+		return ""
+	}
+	seen, err := database.VaultSyncRecovery(cfg.DBPath.Value)
+	if err != nil || bytes.Equal(seen.PublicKey, pub) || seen.Restored && bytes.Equal(seen.RestoredKey, pub) {
+		return ""
+	}
+	if pub == nil {
+		return ". Its removal isn't sent to the other computers yet: sesh sync sends it"
+	}
+	return ". It isn't sent to the other computers yet: sesh sync sends it"
+}
+
+// recoveryChanged says whether the recovery key of the vault cfg names
+// changed here (made, replaced or removed) and the sync folder doesn't have
+// the change yet.
+func recoveryChanged(cfg *config.Config) bool {
+	var pub []byte
+	switch f, err := database.ReadRecovery(cfg.DBPath.Value); {
+	case err == nil:
+		pub = f.PublicKey
+	case !errors.Is(err, database.ErrNoRecovery):
+		return false
+	}
+	return recoveryUnsent(cfg, pub) != ""
 }
 
 // checkRecoveryCarries confirms, before a password change asks for
@@ -418,8 +468,17 @@ func runRecover(app *App, args []string) error {
 			return merr
 		}
 		if saved {
+			if cfg.SyncDir.Value != "" {
+				if store, err := openWithKey(dbPath, agent.UnlockID(newMat.Verify), newKey); err == nil {
+					recoveryWithStore(app, cfg, store, true)
+					closeAuditStore(store)
+				}
+			}
 			return nil
 		}
+	}
+	if _, err := database.ReadRecovery(dbPath); err == nil {
+		return nil // the sync gave it the other computers', and said so
 	}
 	note("This vault has no recovery key now; make one any time with: sesh recovery new")
 	return nil

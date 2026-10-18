@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/keywrap"
 )
 
 // Oracle encrypts and decrypts entries through an already-unlocked agent;
@@ -71,6 +72,18 @@ func (o *Oracle) Check() error {
 		return &vaultChangedError{cause: &ProtocolError{Code: ErrCodeUnlockMismatch}}
 	}
 	return nil
+}
+
+// WrapKey wraps this oracle's vault key to the public key pub, for
+// purpose, in the agent (see WrapKey).
+func (o *Oracle) WrapKey(purpose string, pub []byte) (keywrap.Wrapped, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return keywrap.Wrapped{}, fmt.Errorf("agent oracle is closed")
+	}
+	w, err := WrapKey(o.conn, o.unlockID, purpose, pub)
+	return w, userFacing(err)
 }
 
 // Touch tells the agent this oracle's vault is still in use, so its idle

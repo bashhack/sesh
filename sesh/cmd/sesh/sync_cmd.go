@@ -203,7 +203,7 @@ func syncStore(app *App, cfg *config.Config, f syncfolder.Folder, store *databas
 			return err
 		}
 	}
-	sum, err := syncOlder(store, cfg, f)
+	sum, err := syncOlderAlso(store, cfg, f, prev)
 	if err != nil {
 		return err
 	}
@@ -404,6 +404,9 @@ func writeSyncSummary(app *App, dir string, s *vaultsync.Summary) error {
 	}
 	if s.Rewritten > 0 {
 		fmt.Fprintf(&b, "  %s written again, not changed (lost from the folder, or an older copy put back)\n", nouns(s.Rewritten, "entry's file", "entries' files"))
+	}
+	for _, n := range s.Notes {
+		fmt.Fprintf(&b, "  %s\n", n)
 	}
 	if s.Later > 0 {
 		fmt.Fprintf(&b, "  %s changed by another sesh command meanwhile: the next sync takes them\n", nouns(s.Later, "entry", "entries"))
@@ -740,7 +743,7 @@ func syncJoin(app *App, arg string) error {
 			notes = append(notes, "Touch ID unlock was set up for this vault's old master password; turn it on again with: sesh touchid enable")
 		}
 		if hadRecovery {
-			notes = append(notes, "The recovery key made for this vault before doesn't open it now; make one with: sesh recovery new")
+			notes = append(notes, "The recovery key made for this vault before doesn't open it now: the sync below says whether the other computers' does, and sesh recovery new makes one.")
 		}
 	}
 	store, err := openSQLiteStoreWithPrompt(cfg, pc.withTypedPassword(pw))
@@ -934,6 +937,9 @@ func syncStatus(app *App) error {
 		fmt.Fprintf(&b, "Last synced:   %s (%s)\n", w.last.CreatedAt.Local().Format("2006-01-02 15:04"), strings.TrimPrefix(w.last.Detail, "Sync: "))
 	}
 	fmt.Fprintf(&b, "Changed here, to send:          %d\n", w.toSend)
+	if recoveryChanged(cfg) {
+		b.WriteString("Recovery key:                  changed here, to send\n")
+	}
 	if c := w.contents; c != nil {
 		fmt.Fprintf(&b, "Changed in the folder, to take: %d\n", w.toTake)
 		if info, err := f.ReadInfo(); err != nil {

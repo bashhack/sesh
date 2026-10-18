@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bashhack/sesh/internal/config"
+
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/tui"
@@ -18,11 +20,11 @@ func TestUI_Recovery(t *testing.T) {
 	if _, err := runBackupOut(t); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := uiNewRecovery(env.dbPath); err == nil || !strings.Contains(err.Error(), "SESH_MASTER_PASSWORD") {
+	if _, err := uiNewRecovery(dbCfg(env.dbPath)); err == nil || !strings.Contains(err.Error(), "SESH_MASTER_PASSWORD") {
 		t.Errorf("with SESH_MASTER_PASSWORD set: %v", err)
 	}
 	t.Setenv("SESH_MASTER_PASSWORD", "")
-	if _, err := uiNewRecovery(env.dbPath); !errors.Is(err, tui.ErrLocked) {
+	if _, err := uiNewRecovery(dbCfg(env.dbPath)); !errors.Is(err, tui.ErrLocked) {
 		t.Errorf("the agent locked: %v", err)
 	}
 	conn, err := agent.DialExisting()
@@ -37,12 +39,12 @@ func TestUI_Recovery(t *testing.T) {
 	if err := agent.Unlock(conn, []byte("forgotten-pw-1234"), mat.Salt, mat.Verify, mat.Params); err != nil {
 		t.Fatal(err)
 	}
-	if r, err := uiRecovery(env.dbPath); err != nil || !r.Set || !strings.HasPrefix(r.Said, "set, made ") {
+	if r, err := uiRecovery(dbCfg(env.dbPath)); err != nil || !r.Set || !strings.HasPrefix(r.Said, "set, made ") {
 		t.Fatalf("before: %+v, %v", r, err)
 	}
 
 	k, last := fixedRecoveryKey(t)
-	nr, err := uiNewRecovery(env.dbPath)
+	nr, err := uiNewRecovery(dbCfg(env.dbPath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,22 +60,22 @@ func TestUI_Recovery(t *testing.T) {
 	}
 	opensVault(t, k, env.dbPath)
 
-	done, err = uiRemoveRecovery(env.dbPath)
+	done, err = uiRemoveRecovery(dbCfg(env.dbPath))
 	if err != nil || !strings.HasPrefix(done.Said, "Removed the recovery key") || done.OldBackups == "" {
 		t.Errorf("removed: %+v, %v", done, err)
 	}
-	if r, err := uiRecovery(env.dbPath); err != nil || r.Set || r.Said != "none" {
+	if r, err := uiRecovery(dbCfg(env.dbPath)); err != nil || r.Set || r.Said != "none" {
 		t.Errorf("after: %+v, %v", r, err)
 	}
 	// A first one replaces nothing, so no backups are offered.
-	if nr, err = uiNewRecovery(env.dbPath); err != nil || nr.Replacing {
+	if nr, err = uiNewRecovery(dbCfg(env.dbPath)); err != nil || nr.Replacing {
 		t.Fatalf("a first one: %+v, %v", nr, err)
 	}
 	if done, err := nr.Save(); err != nil || done.OldBackups != "" {
 		t.Errorf("a first one: %+v, %v", done, err)
 	}
 	// One shown while another command changed the master password isn't saved.
-	if nr, err = uiNewRecovery(env.dbPath); err != nil {
+	if nr, err = uiNewRecovery(dbCfg(env.dbPath)); err != nil {
 		t.Fatal(err)
 	}
 	app, stderr := rekeyTestApp("y\n")
@@ -94,16 +96,21 @@ func TestUI_RecoveryRows(t *testing.T) {
 	}
 	db := cfg.DBPath.Value
 	sqlExec(t, db, `INSERT INTO recovery (id, unlock_id, public_key, ephemeral_pub, ciphertext, created_at) VALUES (1, 'another-key', x'01', x'02', x'03', CURRENT_TIMESTAMP)`)
-	if r, err := uiRecovery(db); err != nil || !r.Set || r.Said != "made for another vault: it doesn't open this one" {
+	if r, err := uiRecovery(dbCfg(db)); err != nil || !r.Set || r.Said != "made for another vault: it doesn't open this one" {
 		t.Errorf("another vault's: %+v, %v", r, err)
 	}
 	sqlExec(t, db, `UPDATE recovery SET unlock_id = ''`)
-	if r, err := uiRecovery(db); err != nil || !r.Set || r.Said != "its record can't be read" {
+	if r, err := uiRecovery(dbCfg(db)); err != nil || !r.Set || r.Said != "its record can't be read" {
 		t.Errorf("unreadable: %+v, %v", r, err)
 	}
 	// With no agent running, it says so plainly.
 	t.Setenv("SESH_MASTER_PASSWORD", "")
-	if _, err := uiNewRecovery(db); err == nil || err.Error() != "a recovery key is made through sesh's agent, which isn't running; run: sesh recovery new" {
+	if _, err := uiNewRecovery(dbCfg(db)); err == nil || err.Error() != "a recovery key is made through sesh's agent, which isn't running; run: sesh recovery new" {
 		t.Errorf("no agent: %v", err)
 	}
+}
+
+// dbCfg is settings naming the vault at path, and no sync folder.
+func dbCfg(path string) *config.Config {
+	return &config.Config{DBPath: config.Setting[string]{Value: path}}
 }
