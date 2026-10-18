@@ -281,7 +281,7 @@ erDiagram
         DATETIME replaced_at
         DATETIME set_at "when its use began"
         TEXT file_name "a file entry's, then"
-        TEXT computer "where it was replaced"
+        TEXT computer "whose change replaced it; empty for this one"
     }
 
     recovery {
@@ -322,7 +322,7 @@ Syncing between computers is three parts, from the bottom up:
 
 - **`internal/syncfolder`: the folder.**
   - `sesh-sync.json` (`Info`): the folder's ID, the vault's key record, the links of master password changes (`KeyLink`: the old key sealed with the new, and a proof made with the old) and the shared recovery key's record (`SealedRecovery`).
-  - `entries/<uid>.sesh`: an entry's file. A short header (a marker, the format, the entry's uid, the ID of the key record it's sealed with) is followed by the entry's whole `Record`, as JSON, sealed through a `Sealer` (the vault's key, held by the agent) in pieces of at most 1 MiB, each bound to the header, its place and whether it's the last.
+  - `entries/<uid>.sesh`: an entry's file. A short header (a marker, the format, the entry's uid, the ID of the key record it's sealed with) is followed by the entry's whole `Record`, as JSON, sealed through a `Sealer` (the vault's key, held by the agent or unlocked in that command) in pieces of at most 1 MiB, each bound to the header, its place and whether it's the last.
   - A `Record` carries everything sync moves: the entry's name, secret, notes, fields, folder and tags, its earlier secrets (each with when its use began and was replaced), its forget marks, its trash state, and `Versions`, the count of changes each computer made, which tells an older copy from a newer one or one made alongside.
   - `Merge` and `MergeWith` merge two records field by field against the one both came from (or none), the same whichever side is "ours".
   - `Scan` lists the folder: entry files (sync tools' conflict copies included, told apart by the uid inside, not the name), files iCloud hasn't downloaded, and files that can't be read. Every file is written whole (`atomicfile`).
@@ -331,13 +331,13 @@ Syncing between computers is three parts, from the bottom up:
   - An entry changed neither here nor there, its agreed version intact, is skipped without decrypting anything. One with a file that can't be read, isn't downloaded yet, or is sealed with another master password's key waits, and nothing is written over it.
   - Otherwise, a change in the folder is taken, one made here is sent, and one made on both is merged against the agreed version.
   - Older copies put back are ignored, lost files are written again, the same name made on two computers is renamed or joined, conflict copies are removed, and an entry restored from a backup wins over the folder's except for a deletion there (unless it was changed here after the restore).
-  - A file sealed with a key from before a master password change is only sealed again: when it holds something new, that isn't taken, and it's written over with what was agreed (or removed, for an entry never had here).
+  - Of the files sealed with a key from before a master password change, only the one agreed is opened, and sealed again; any other isn't opened, and the entry's file is written over with what was agreed (or removed, for an entry never had here).
   - After taking a master password change made elsewhere, nothing this computer took under the old key is trusted: each entry is made again from the folder's version under the new key, with only what was typed here made again on it (`syncfolder.Typed`: `Diff` keeps what a push typed, `Rebase` makes it again on another version). A deletion for good in the folder stands. With no version under the new key in the folder, an entry made here is sent, one deleted for good here is forgotten, and any other is held back.
   - `Options` give it the vault's older keys (to open files sealed before a password change, and seal them again), a deadline, and whether a sync with nothing to do is logged.
   - It returns a `Summary`.
 - **`internal/database`: what the vault keeps.**
   - `sync_state`, per entry: the rev and the folder file's hash it last agreed, and that version itself (without its earlier secrets), sealed, with its hash; and whether it was agreed under a key left behind by taking a password change, not checked yet.
-  - `sync_typed`, per entry and push: what this computer's user typed (the values, and hashes of the secret, notes and fields they replaced), sealed, kept until another computer's version has seen it. A restore leaves it as it is.
+  - `sync_typed`, per entry and push: what this computer's user typed, sealed: hashes of the secret, notes and fields typed and of those they replaced, and the other values typed and replaced as they are. Kept until a master password change taken here makes the entry again with it; a deletion for good or a forget typed here drops what it covers. An in-place restore leaves it as it is; replacing a damaged vault drops it.
   - `sync_info`: this computer's sync ID and change count, the folder's ID, a password change not sent yet, and the folder's recovery key record as last seen.
   - `sync_restored`: entries restored from a backup, not synced since.
   - `history_forgotten`: the forget marks.
@@ -619,7 +619,7 @@ The pattern uses the test binary itself as a mock process, eliminating:
 
 ### Several Computers on One Machine
 
-Sync is tested with each "computer" its own vault in a temporary folder, sharing one sync folder, with no sync tool needed: what sync tools do (conflict copies under each tool's names, files iCloud hasn't downloaded, a file lost or an older one put back) is done by the tests. Some scenario tests run their steps in every order of the computers involved, and random tests (`TestSync_Random`, `TestSync_Random2`; `SESH_SYNC_SEEDS` sets how many seeds, `SESH_SYNC_SEED` runs one, `SESH_SYNC_STEPS` how many steps) run random changes on several computers, then check that every computer agrees and that no secret was lost.
+Sync is tested with each "computer" its own vault in a temporary folder, sharing one sync folder, with no sync tool needed: what sync tools do (conflict copies under each tool's names, files iCloud hasn't downloaded, a file lost or an older one put back) is done by the tests. Some scenario tests run their steps in every order of the computers involved, and random tests (`TestSync_Random`, `TestSync_Random2`; `SESH_SYNC_SEEDS` sets how many seeds; for `TestSync_Random2`, `SESH_SYNC_SEED` runs one and `SESH_SYNC_STEPS` sets how many steps) run random changes on several computers, then check that every computer agrees and that no secret was lost.
 
 ## Performance Design
 
