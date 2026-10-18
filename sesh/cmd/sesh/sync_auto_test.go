@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bashhack/sesh/internal/config"
+	"github.com/bashhack/sesh/internal/tui"
 )
 
 // runAuto runs the sesh command args as sesh would, giving its stdout and
@@ -288,5 +289,43 @@ func TestAutoSync_SaysEachProblem(t *testing.T) {
 		if err := os.Remove(bad); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// The app syncs as a command does: to take changes, to send its own (only
+// when it has one), and now, even with sync.auto off.
+func TestUISync(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	putEntry(t, "password/a", "secret-2")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, desktop, "desktop")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	off := *cfg
+	off.SyncAuto.Value = false
+	if said := uiSync(&off, v, tui.SyncPull); said != nil {
+		t.Errorf("a pull with sync.auto off: %q", said)
+	}
+	if said := uiSync(cfg, v, tui.SyncPush); said != nil {
+		t.Errorf("a push with nothing to send: %q", said)
+	}
+	if said := uiSync(cfg, v, tui.SyncPull); len(said) != 1 || said[0] != "Synced: 1 taken." {
+		t.Errorf("a pull: %q", said)
+	}
+	if said := uiSync(&off, v, tui.SyncNow); len(said) != 1 || !strings.Contains(said[0], "nothing to do") {
+		t.Errorf("sync now with sync.auto off: %q", said)
 	}
 }

@@ -159,7 +159,7 @@ func (m *Model) openSeshMenu() tea.Cmd {
 
 // seshItems are the actions that aren't about one entry.
 func (m *Model) seshItems() []item {
-	return []item{
+	items := []item{
 		{key: "a", label: "add an entry…", run: m.openAdd},
 		{key: "p", label: "generate a password…", run: m.openGenerator},
 		{key: "f", label: "folders and tags…", run: m.openFiling},
@@ -170,6 +170,10 @@ func (m *Model) seshItems() []item {
 		{key: ",", label: "settings and safety…", run: m.openSettings},
 		{key: "l", label: "lock sesh", run: m.lockNow},
 	}
+	if s := m.syncItem(); s != nil {
+		items = append(items, *s)
+	}
+	return items
 }
 
 // overlayKey handles a key while a panel is open.

@@ -367,6 +367,12 @@ type Options struct {
 	// PasswordChangeNote, when set, is said under the form changing the
 	// master password: what the change does to syncing, or "".
 	PasswordChangeNote func() string
+	// Sync syncs the vault v with its sync folder, asking nothing, for
+	// how's reason, and says what it did, line by line (a warning or a
+	// problem starting ⚠️ or ❌); nothing when nothing moved. Syncing says
+	// whether the vault syncs now. nil: the app doesn't sync.
+	Sync    func(v Vault, how SyncHow) []string
+	Syncing func() bool
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
@@ -408,9 +414,13 @@ type Options struct {
 // program's, and Close is called on it after the program ends.
 type Model struct {
 	lastKey, unlockedAt time.Time
-	statusUntil         time.Time
-	lastKeepAlive       time.Time
-	clipUntil           time.Time // when the clipboard clears what was copied
+	// lastPull and lastPush are when the app last synced to take changes
+	// and looked for its own to send; lastSynced, when a sync last
+	// finished (syncing says one is under way).
+	lastPull, lastPush, lastSynced time.Time
+	statusUntil                    time.Time
+	lastKeepAlive                  time.Time
+	clipUntil                      time.Time // when the clipboard clears what was copied
 
 	quitErr error
 	// afterword is said once the app has ended.
@@ -511,6 +521,7 @@ type Model struct {
 	statusBad bool // the status is something that went wrong
 	showHelp  bool
 	dark      bool
+	syncing   bool
 }
 
 // shownCode is a TOTP code, and the period it's for.
@@ -646,9 +657,13 @@ type (
 		bad   bool // what went wrong, not what was done
 	}
 	checkedMsg struct {
-		err     error
+		err error
+		// synced is what a sync before the check said, didSync that it
+		// ran.
+		synced  []string
 		epoch   int
 		changed bool
+		didSync bool
 	}
 	keptAliveMsg struct {
 		err   error
@@ -931,11 +946,18 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 	case checkedMsg:
+		if msg.didSync {
+			m.syncing = false
+		}
 		if msg.epoch != m.epoch || m.v == nil {
 			return nil
 		}
 		if msg.err != nil {
 			return m.failure(msg.err)
+		}
+		if msg.didSync {
+			m.lastSynced = m.opts.Now()
+			m.saySynced(msg.synced)
 		}
 		if msg.changed {
 			// Entries may have changed, keys with them: read again. A
@@ -949,7 +971,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			}
 			if m.ov != nil {
 				m.ov = nil
-				m.sayBad("Another command changed the vault; open the actions again.")
+				if msg.didSync {
+					m.sayBad("A sync took changes from another computer; open the actions again.")
+				} else {
+					m.sayBad("Another command changed the vault; open the actions again.")
+				}
 			}
 			return tea.Batch(m.endImport(), m.reread())
 		}
@@ -981,6 +1007,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.epoch++
 		now := m.opts.Now()
 		m.lastKey, m.unlockedAt, m.lastKeepAlive = now, now, now
+		// Unlocked again: it takes what changed meanwhile at once.
+		m.lastPull = time.Time{}
 		return m.reread()
 	}
 	return nil
@@ -1010,11 +1038,9 @@ func (m *Model) tick() tea.Cmd {
 	case m.opts.MaxLifetime > 0 && since(now, m.unlockedAt) >= m.opts.MaxLifetime:
 		return tea.Batch(m.every(), m.lock("It's been "+spoken(m.opts.MaxLifetime)+" since it was unlocked."))
 	}
-	epoch := m.epoch
-	return tea.Batch(m.every(), m.read(func(v Vault, _ func() bool) tea.Msg {
-		changed, err := v.Check()
-		return checkedMsg{changed: changed, err: err, epoch: epoch}
-	}))
+	how, sync := m.syncDue(now)
+	m.syncing = m.syncing || sync
+	return tea.Batch(m.every(), m.checkAfter(how, sync))
 }
 
 // since is how long ago t was at now, by the clock that says longer: the
