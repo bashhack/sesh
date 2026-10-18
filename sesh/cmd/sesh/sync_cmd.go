@@ -991,7 +991,8 @@ type syncWaiting struct {
 	contents *syncfolder.Contents
 	// toSend are entries changed here; toTake, files changed in the
 	// folder; otherKey, files sealed with another master password's key,
-	// which sync leaves alone.
+	// which sync leaves alone (not one of this vault's earlier keys, whose
+	// files sync seals again or writes over).
 	toSend, toTake, otherKey int
 	// synced says the vault has agreed entries with a folder before.
 	synced bool
@@ -1028,8 +1029,25 @@ func syncWaitingIn(store *database.Store, f *syncfolder.Folder) (*syncWaiting, e
 	if err != nil {
 		return nil, err
 	}
+	links, err := store.SyncKeyLinks()
+	if err != nil {
+		return nil, err
+	}
+	// This vault's earlier keys: those its links lead back to from the
+	// key it has now, as sync opens them. (After a restore, the key now
+	// can itself be one a link leads from.)
+	earlier := map[string]bool{}
+	for queue := []string{keyID}; len(queue) > 0; queue = queue[1:] {
+		for i := range links {
+			if l := &links[i]; l.To == queue[0] && l.From != keyID && !earlier[l.From] {
+				earlier[l.From] = true
+				queue = append(queue, l.From)
+			}
+		}
+	}
 	for _, file := range w.contents.Files {
 		switch h, ok := agreed[file.UIDString()]; {
+		case earlier[file.KeyIDString()]:
 		case file.KeyIDString() != keyID:
 			w.otherKey++
 		case !ok || h != file.Hash:
