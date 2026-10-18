@@ -81,6 +81,9 @@ func TestPurgeExcusing_SameNameInTrash(t *testing.T) {
 	if err := purgeExcusing(t, c, k, purged); err != nil {
 		t.Fatal(err)
 	}
+	if live := set[len(set)-1]; len(purged) != 1 || !purged[live] {
+		t.Errorf("excused %v, want only %s, the live entry's", purged, live)
+	}
 	all := allSecrets(t, c)
 	for _, s := range set {
 		if !slices.Contains(all, s) && !purged[s] {
