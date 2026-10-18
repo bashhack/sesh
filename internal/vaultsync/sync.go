@@ -257,6 +257,44 @@ func (y *syncer) name(uid string) string {
 	return uid
 }
 
+// unchanged says whether the entry it, whose files in the folder are
+// files, changed neither here nor there: every file is the one agreed, its
+// own among them, sealed with the vault's key (stale says it isn't), and
+// the version agreed is intact (one that isn't is mended while the folder
+// still has the file agreed). Nothing is opened for it, so a sync with
+// nothing new decrypts nothing.
+func unchanged(it *database.SyncItem, files []syncfolder.File, stale func(*syncfolder.File) bool) bool {
+	if it.Agreed == nil || !it.Agreed.Intact || it.Changed() {
+		return false
+	}
+	own := false
+	for i := range files {
+		f := &files[i]
+		if f.Hash != it.Agreed.Hash {
+			return false
+		}
+		if ownFile(f) {
+			if stale(f) {
+				return false
+			}
+			own = true
+		}
+	}
+	return own
+}
+
+// copiesOf are the paths of files that are a sync tool's copies of an
+// entry's own.
+func copiesOf(files []syncfolder.File) []string {
+	var out []string
+	for i := range files {
+		if !ownFile(&files[i]) {
+			out = append(out, files[i].Path)
+		}
+	}
+	return out
+}
+
 // remote is one of an entry's files, opened.
 type remote struct {
 	rec  *syncfolder.Record
@@ -271,6 +309,9 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	it := y.item(uid)
 	if it.Restored {
 		return y.restored(uid, it, files)
+	}
+	if unchanged(it, files, y.stale) {
+		return y.removeCopies(copiesOf(files))
 	}
 	var base *syncfolder.Record
 	if it.Agreed != nil {
