@@ -116,8 +116,6 @@ type syncer struct {
 	keyID    string
 	id       string
 	computer string
-	// changes is the highest count this computer has given a change.
-	changes uint64
 }
 
 // Older gives a sealer for a key the vault had before a master password
@@ -175,9 +173,6 @@ func SyncWith(store *database.Store, folder syncfolder.Folder, computer string, 
 		return nil, err
 	}
 	if y.id, err = store.SyncComputerID(); err != nil {
-		return nil, err
-	}
-	if y.changes, err = store.SyncChanges(); err != nil {
 		return nil, err
 	}
 	// A folder whose permissions can't be changed (another user's, or a
@@ -551,14 +546,6 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 			merged = append(merged, theirs)
 		}
 	}
-	// Another computer's version that has seen what was typed here: that's
-	// no longer kept for a password change (one claiming more than this
-	// computer has counted isn't another's that saw it).
-	if n := theirs.Versions[y.id]; n > 0 && n <= y.changes {
-		if err := y.store.SyncTypedSeen(uid, n); err != nil {
-			return err
-		}
-	}
 	// What's here is merged in even when it hasn't changed: its earlier
 	// secrets are kept, whatever history.keep the other computer has.
 	local, rev, err := y.store.SyncRecord(uid, y.computer)
@@ -676,6 +663,10 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 		if base != nil {
 			base.Wipe()
 		}
+	}
+	// What was typed, as the entry here still has it.
+	for i, t := range typed {
+		typed[i] = t.From(local)
 	}
 	name := y.name(uid)
 	var from *syncfolder.Record
@@ -1043,8 +1034,7 @@ func (y *syncer) write(uid string, rev int64, rec *syncfolder.Record, apply, cou
 	if err != nil {
 		return err
 	}
-	// Kept before the version is made here, so what that replaces of it
-	// is dropped (SyncTypedKeep).
+	// Kept once it's sent: what a password change taken later makes again.
 	if typed != nil {
 		if err := y.store.SyncAddTyped(uid, typed); err != nil {
 			return err
@@ -1098,19 +1088,6 @@ func (y *syncer) pushApplied(uid string, rev int64, rec *syncfolder.Record) erro
 // The other may be moving off the name in the folder (renamed, deleted):
 // it's synced first, then this again.
 func (y *syncer) apply(uid string, rev int64, rec *syncfolder.Record, hash syncfolder.Hash) error {
-	if err := y.applyNamed(uid, rev, rec, hash); err != nil {
-		return err
-	}
-	// What was typed here and is no longer the secret: nothing makes it
-	// again, so it isn't kept.
-	if rec.Purged.IsZero() {
-		return y.store.SyncTypedKeep(uid, rec.Secret)
-	}
-	return nil
-}
-
-// applyNamed is apply, settling a name another entry has here.
-func (y *syncer) applyNamed(uid string, rev int64, rec *syncfolder.Record, hash syncfolder.Hash) error {
 	_, err := y.store.SyncApply(uid, rev, rec, hash)
 	if !errors.Is(err, database.ErrNameTaken) {
 		return err

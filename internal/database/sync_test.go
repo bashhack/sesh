@@ -375,9 +375,9 @@ func TestSyncNextChange(t *testing.T) {
 	}
 }
 
-// What was typed in an entry is kept, folded, dropped once another's
-// version has seen it, sealed again for a new master password, and gone
-// once the entry is made again after a change taken.
+// What was typed in an entry is kept, folded, sealed again for a new
+// master password, and gone once the entry is made again after a change
+// taken.
 func TestSyncTyped(t *testing.T) {
 	s, _ := syncPair(t)
 	pre := &syncfolder.Record{Kind: vault.KindPassword, Service: "a", Secret: []byte("1"), Notes: []byte("n")}
@@ -394,7 +394,7 @@ func TestSyncTyped(t *testing.T) {
 		}
 	}
 	got, err := s.SyncTyped("u")
-	if err != nil || len(got) != 2 || got[0].N != 3 || string(got[0].Post.Secret) != "2" || string(got[1].Post.Notes) != "m" {
+	if err != nil || len(got) != 2 || got[0].N != 3 || got[0].Typed["secret"] != syncfolder.Forget([]byte("2")) || got[1].Typed["notes"] != syncfolder.Forget([]byte("m")) {
 		t.Fatalf("kept %+v, %v: want both, in order", got, err)
 	}
 	key, rec := newKeyFor(t, "new-password-1")
@@ -408,12 +408,6 @@ func TestSyncTyped(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() }) //nolint:errcheck // test cleanup
 	if got, err := s.SyncTyped("u"); err != nil || len(got) != 2 {
 		t.Fatalf("after a new master password: %d kept, %v; want both, sealed again", len(got), err)
-	}
-	if err := s.SyncTypedSeen("u", 4); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := s.SyncTyped("u"); len(got) != 1 || got[0].N != 5 { //nolint:errcheck // checked by the result
-		t.Errorf("seen up to 4: %+v, want the one sent with 5", got)
 	}
 	if err := s.SyncLeftDone("u"); err != nil {
 		t.Fatal(err)

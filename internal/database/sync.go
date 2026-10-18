@@ -487,17 +487,6 @@ func (s *Store) SyncNextChange(seen uint64) (uint64, error) {
 	return n, err
 }
 
-// SyncChanges is the highest count this computer has given a change
-// (SyncNextChange).
-func (s *Store) SyncChanges() (uint64, error) {
-	var n uint64
-	err := s.db.QueryRow(`SELECT changes FROM sync_info WHERE id = 1`).Scan(&n)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
-	}
-	return n, err
-}
-
 // typedAAD binds a sealed Typed to its entry.
 func typedAAD(uid string) []byte { return []byte("sesh sync typed " + uid) }
 
@@ -574,44 +563,6 @@ func (s *Store) SyncTyped(uid string) ([]*syncfolder.Typed, error) {
 		out = append(out, &t)
 	}
 	return out, rows.Err()
-}
-
-// SyncTypedKeep drops, of what was typed in the entry uid and kept, any
-// secret the entry no longer has (secret is its secret now): replaced
-// since, here or elsewhere, so nothing would make it again.
-func (s *Store) SyncTypedKeep(uid string, secret []byte) error {
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_typed WHERE uid = ?`, uid).Scan(&n); err != nil || n == 0 {
-		return err
-	}
-	all, err := s.SyncTyped(uid)
-	if err != nil {
-		return err
-	}
-	changed := false
-	var kept []*syncfolder.Typed
-	for _, t := range all {
-		if t.Has("secret") && !bytes.Equal(t.Post.Secret, secret) {
-			t.DropSecret()
-			changed = true
-		}
-		if !t.Empty() {
-			kept = append(kept, t)
-		}
-	}
-	if !changed {
-		return nil
-	}
-	return s.putTyped(uid, kept)
-}
-
-// SyncTypedSeen drops what was typed in the entry uid and sent with a
-// count up to n: another computer's version has seen it.
-func (s *Store) SyncTypedSeen(uid string, n uint64) error {
-	return s.inTx(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`DELETE FROM sync_typed WHERE uid = ? AND n <= ?`, uid, n)
-		return err
-	})
 }
 
 // SyncLeftDone records that the entry uid, agreed under a key left
