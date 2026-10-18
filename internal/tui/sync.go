@@ -31,19 +31,24 @@ const (
 
 // syncDue says whether a sync is due at now, and why: none while one is
 // under way, or the vault doesn't sync.
+// An import being written or previewed holds the app's syncs till it ends.
 func (m *Model) syncDue(now time.Time) (SyncHow, bool) {
-	if m.opts.Sync == nil || m.syncing {
+	if m.opts.Sync == nil || m.syncing || m.importing != nil {
 		return 0, false
 	}
+	how := SyncPush
 	switch {
 	case m.lastPull.IsZero() || since(now, m.lastPull) >= syncEvery:
-		m.lastPull, m.lastPush = now, now
-		return SyncPull, true
+		m.lastPull, m.lastPush, how = now, now, SyncPull
 	case since(now, m.lastPush) >= pushEvery:
 		m.lastPush = now
-		return SyncPush, true
+	default:
+		return 0, false
 	}
-	return 0, false
+	if m.opts.AutoSync != nil && !m.opts.AutoSync() {
+		return 0, false
+	}
+	return how, true
 }
 
 // syncNow syncs the vault now, as asked.
@@ -63,17 +68,26 @@ func (m *Model) syncNow() tea.Cmd {
 // true: whether it can still be read, and whether it changed.
 func (m *Model) checkAfter(how SyncHow, sync bool) tea.Cmd {
 	epoch, run := m.epoch, m.opts.Sync
-	return m.read(func(v Vault, _ func() bool) tea.Msg {
+	read := m.read(func(v Vault, _ func() bool) tea.Msg {
 		var said []string
+		var ran bool
 		if sync {
-			said = run(v, how)
+			said, ran = run(v, how)
 		}
 		changed, err := v.Check()
-		return checkedMsg{changed: changed, err: err, epoch: epoch, synced: said, didSync: sync}
+		return checkedMsg{changed: changed, err: err, epoch: epoch, synced: said, didSync: sync, ran: ran}
 	})
+	// A vault closed before it ran (locked) still ends the sync, so the
+	// next can run.
+	return func() tea.Msg {
+		if msg := read(); msg != nil || !sync {
+			return msg
+		}
+		return checkedMsg{epoch: epoch, didSync: true}
+	}
 }
 
-// sayed says what a sync did, in one status line: as gone wrong when any
+// saySynced says what a sync did, in one status line: as gone wrong when any
 // of it is a warning or a problem.
 func (m *Model) saySynced(lines []string) {
 	if len(lines) == 0 {

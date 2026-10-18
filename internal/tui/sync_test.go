@@ -12,9 +12,9 @@ func syncApp(t *testing.T, f *fakeVault) (a *app, hows *[]SyncHow, said *[]strin
 	t.Helper()
 	hows, said = &[]SyncHow{}, &[]string{}
 	a = newApp(t, f, Options{
-		Sync: func(_ Vault, how SyncHow) []string {
+		Sync: func(_ Vault, how SyncHow) ([]string, bool) {
 			*hows = append(*hows, how)
-			return *said
+			return *said, true
 		},
 		Syncing: func() bool { return true },
 	})
@@ -85,7 +85,7 @@ func TestSync_SyncNow(t *testing.T) {
 		t.Errorf("sync now: %v, %q", *hows, a.status)
 	}
 
-	b := newApp(t, newFake(), Options{Sync: func(Vault, SyncHow) []string { return nil }, Syncing: func() bool { return false }})
+	b := newApp(t, newFake(), Options{Sync: func(Vault, SyncHow) ([]string, bool) { return nil, false }, Syncing: func() bool { return false }})
 	b.press("ctrl+g")
 	if strings.Contains(b.screen(), "sync now") {
 		t.Errorf("sync now offered for a vault that doesn't sync:\n%s", b.screen())
@@ -97,7 +97,7 @@ func TestSync_PullsAfterUnlock(t *testing.T) {
 	f := newFake()
 	var hows []SyncHow
 	a := newApp(t, f, Options{
-		Sync:    func(_ Vault, how SyncHow) []string { hows = append(hows, how); return nil },
+		Sync:    func(_ Vault, how SyncHow) ([]string, bool) { hows = append(hows, how); return nil, true },
 		Syncing: func() bool { return true },
 		Unlock:  func([]byte) (Vault, error) { return f, nil },
 	})
@@ -107,5 +107,92 @@ func TestSync_PullsAfterUnlock(t *testing.T) {
 	a.tick(time.Second)
 	if len(hows) != 2 || hows[1] != SyncPull {
 		t.Errorf("synced %v, want a pull after the unlock", hows)
+	}
+}
+
+// A lock while a sync waits to run doesn't leave the app never syncing
+// again.
+func TestSync_LockMidSync(t *testing.T) {
+	f := newFake()
+	var hows []SyncHow
+	a := newApp(t, f, Options{
+		Sync:    func(_ Vault, how SyncHow) ([]string, bool) { hows = append(hows, how); return nil, true },
+		Syncing: func() bool { return true },
+		Unlock:  func([]byte) (Vault, error) { return f, nil },
+	})
+	a.now = a.now.Add(time.Second)
+	_, pending := a.Update(tickMsg(a.now))
+	a.lock("test")
+	a.run(pending)
+	a.press("pw", "enter")
+	a.tick(time.Second)
+	if len(hows) != 1 || hows[0] != SyncPull || a.syncing {
+		t.Errorf("after a lock mid-sync: synced %v, syncing %v", hows, a.syncing)
+	}
+}
+
+// With sync.auto off the app doesn't sync on its own, and sync now says
+// when it last did only once it has.
+func TestSync_AutoOff(t *testing.T) {
+	var hows []SyncHow
+	a := newApp(t, newFake(), Options{
+		Sync:     func(_ Vault, how SyncHow) ([]string, bool) { hows = append(hows, how); return nil, how == SyncNow },
+		Syncing:  func() bool { return true },
+		AutoSync: func() bool { return false },
+	})
+	a.tick(time.Second)
+	a.tick(syncEvery)
+	a.press("ctrl+g")
+	if len(hows) != 0 || strings.Contains(a.screen(), "(last ") {
+		t.Fatalf("with sync.auto off: synced %v\n%s", hows, a.screen())
+	}
+	a.press("s")
+	a.press("ctrl+g")
+	if len(hows) != 1 || !strings.Contains(a.screen(), "sync now (last ") {
+		t.Errorf("sync now: %v\n%s", hows, a.screen())
+	}
+}
+
+// An import being previewed or written holds the app's syncs.
+func TestSync_HeldByImport(t *testing.T) {
+	a, hows, _ := syncApp(t, newFake())
+	a.importing = &importing{}
+	a.tick(time.Second)
+	if len(*hows) != 0 {
+		t.Errorf("synced during an import: %v", *hows)
+	}
+	a.importing = nil
+	a.tick(time.Second)
+	if len(*hows) != 1 {
+		t.Errorf("after the import: %v", *hows)
+	}
+}
+
+// The menu's "last" is when a sync ran, not when one was looked for.
+func TestSync_LastOnlyWhenRan(t *testing.T) {
+	a := newApp(t, newFake(), Options{Sync: func(Vault, SyncHow) ([]string, bool) { return nil, false }, Syncing: func() bool { return true }})
+	a.tick(time.Second)
+	a.tick(pushEvery)
+	a.press("ctrl+g")
+	if strings.Contains(a.screen(), "(last ") {
+		t.Errorf("no sync ran, but:\n%s", a.screen())
+	}
+}
+
+// A sync under way isn't joined by another.
+func TestSync_OneAtATime(t *testing.T) {
+	var hows []SyncHow
+	a := newApp(t, newFake(), Options{
+		Sync:    func(_ Vault, how SyncHow) ([]string, bool) { hows = append(hows, how); return nil, true },
+		Syncing: func() bool { return true },
+	})
+	a.now = a.now.Add(time.Second)
+	_, first := a.Update(tickMsg(a.now))
+	a.now = a.now.Add(syncEvery)
+	_, second := a.Update(tickMsg(a.now))
+	a.run(first)
+	a.run(second)
+	if len(hows) != 1 {
+		t.Errorf("synced %v, want one at a time", hows)
 	}
 }

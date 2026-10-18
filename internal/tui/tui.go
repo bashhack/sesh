@@ -369,10 +369,12 @@ type Options struct {
 	PasswordChangeNote func() string
 	// Sync syncs the vault v with its sync folder, asking nothing, for
 	// how's reason, and says what it did, line by line (a warning or a
-	// problem starting ⚠️ or ❌); nothing when nothing moved. Syncing says
-	// whether the vault syncs now. nil: the app doesn't sync.
-	Sync    func(v Vault, how SyncHow) []string
-	Syncing func() bool
+	// problem starting ⚠️ or ❌), nothing when nothing moved; ran says it
+	// synced. Syncing says whether the vault syncs now, AutoSync whether
+	// on its own. nil: the app doesn't sync.
+	Sync     func(v Vault, how SyncHow) (said []string, ran bool)
+	Syncing  func() bool
+	AutoSync func() bool
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
@@ -658,12 +660,13 @@ type (
 	}
 	checkedMsg struct {
 		err error
-		// synced is what a sync before the check said, didSync that it
-		// ran.
+		// synced is what a sync before the check said; didSync, that one
+		// was run for, and ran that it synced.
 		synced  []string
 		epoch   int
 		changed bool
 		didSync bool
+		ran     bool
 	}
 	keptAliveMsg struct {
 		err   error
@@ -955,8 +958,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		if msg.err != nil {
 			return m.failure(msg.err)
 		}
-		if msg.didSync {
+		if msg.ran {
 			m.lastSynced = m.opts.Now()
+		}
+		if msg.didSync {
 			m.saySynced(msg.synced)
 		}
 		if msg.changed {

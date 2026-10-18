@@ -316,16 +316,51 @@ func TestUISync(t *testing.T) {
 	v := newUIVault(store)
 	off := *cfg
 	off.SyncAuto.Value = false
-	if said := uiSync(&off, v, tui.SyncPull); said != nil {
+	if said, _ := uiSync(&off, v, tui.SyncPull); said != nil {
 		t.Errorf("a pull with sync.auto off: %q", said)
 	}
-	if said := uiSync(cfg, v, tui.SyncPush); said != nil {
+	if said, ran := uiSync(cfg, v, tui.SyncPush); said != nil || ran {
 		t.Errorf("a push with nothing to send: %q", said)
 	}
-	if said := uiSync(cfg, v, tui.SyncPull); len(said) != 1 || said[0] != "Synced: 1 taken." {
+	if said, ran := uiSync(cfg, v, tui.SyncPull); len(said) != 1 || said[0] != "Synced: 1 taken." || !ran {
 		t.Errorf("a pull: %q", said)
 	}
-	if said := uiSync(&off, v, tui.SyncNow); len(said) != 1 || !strings.Contains(said[0], "nothing to do") {
+	// The app sees what the pull took, on its own connection.
+	if changed, err := v.Check(); err != nil || !changed {
+		t.Errorf("the app's check after a pull: %v, %v", changed, err)
+	}
+	if said, _ := uiSync(&off, v, tui.SyncNow); len(said) != 1 || !strings.Contains(said[0], "nothing to do") {
 		t.Errorf("sync now with sync.auto off: %q", said)
+	}
+}
+
+// The app says a warning that hasn't changed once, not on every sync.
+func TestUISync_WarnsOnce(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	putEntry(t, "password/b", "b")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	if said, _ := uiSync(cfg, v, tui.SyncPush); len(said) != 1 || !strings.Contains(said[0], "nothing syncs until") {
+		t.Fatalf("the first push: %q", said)
+	}
+	if said, _ := uiSync(cfg, v, tui.SyncPush); len(said) != 0 {
+		t.Errorf("the next push: %q", said)
+	}
+	if said, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 {
+		t.Errorf("sync now: %q", said)
 	}
 }

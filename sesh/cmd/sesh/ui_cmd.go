@@ -234,8 +234,9 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		ChangePassword: func(current, next []byte) (tui.Changed, error) {
 			return uiChangePassword(cfg, current, next)
 		},
-		Sync:         func(v tui.Vault, how tui.SyncHow) []string { return uiSync(settingsNow(cfg), v, how) },
+		Sync:         func(v tui.Vault, how tui.SyncHow) ([]string, bool) { return uiSync(settingsNow(cfg), v, how) },
 		Syncing:      func() bool { return settingsNow(cfg).SyncDir.Value != "" },
+		AutoSync:     func() bool { c := settingsNow(cfg); return c.SyncDir.Value != "" && c.SyncAuto.Value },
 		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
 		Backups:      func() (tui.Backups, error) { return uiBackups(dbPath) },
 		BackUp:       func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
@@ -867,21 +868,31 @@ func (u *uiVault) KeepAlive() error { return uiLocked(u.store.KeepAlive()) }
 func (u *uiVault) Close() error { return u.store.Close() }
 
 // uiSync syncs the vault v, the app's, with the sync folder cfg names, as
-// a command does on its own (autoSync), for how's reason: on its own only
-// while sync.auto is on, and to send only when there's a change to.
-func uiSync(cfg *config.Config, v tui.Vault, how tui.SyncHow) []string {
+// a command does on its own (autoSyncLines), for how's reason: on its own
+// only while sync.auto is on, and to send only when there's a change to;
+// ran says it synced. A warning it said in the last day isn't said again,
+// but when asked for.
+func uiSync(cfg *config.Config, v tui.Vault, how tui.SyncHow) (said []string, ran bool) {
 	u, ok := v.(*uiVault)
 	if !ok || cfg.SyncDir.Value == "" || how != tui.SyncNow && !cfg.SyncAuto.Value {
-		return nil
+		return nil, false
 	}
 	if how == tui.SyncPush && !vaultHasChanges(cfg, u.store) {
-		return nil
+		return nil, false
 	}
 	lines := autoSyncLines(cfg, u.store)
-	if how == tui.SyncNow && len(lines) == 0 {
+	// Written on the app's own connection, which the data version doesn't
+	// count: the next Check compares the entries.
+	u.mu.Lock()
+	u.version = -1
+	u.mu.Unlock()
+	if how != tui.SyncNow {
+		return freshLines(u.store, lines), true
+	}
+	if len(lines) == 0 {
 		lines = []string{"In sync with " + tildePath(cfg.SyncDir.Value) + ": nothing to do."}
 	}
-	return lines
+	return lines, true
 }
 
 // settingsNow is the settings as they are now, or cfg when they can't be
