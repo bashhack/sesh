@@ -131,7 +131,10 @@ type Config struct {
 	SyncDir Setting[string]
 	// SyncName is this computer's name in what it syncs; "" for the
 	// computer's own (see SyncComputerName).
-	SyncName  Setting[string]
+	SyncName Setting[string]
+	// SyncAuto says whether commands sync on their own: as they open the
+	// vault, and after they change it.
+	SyncAuto  Setting[bool]
 	FileFound bool
 }
 
@@ -188,6 +191,7 @@ const (
 	EnvAgentLockOnScreen  = "SESH_AGENT_LOCK_ON_SCREEN_LOCK"
 	EnvSyncDir            = "SESH_SYNC_DIR"
 	EnvSyncName           = "SESH_SYNC_NAME"
+	EnvSyncAuto           = "SESH_SYNC_AUTO"
 )
 
 // fileConfig is the config file's shape. Durations are strings such as
@@ -209,6 +213,7 @@ type fileConfig struct {
 	Sync struct {
 		Dir  string `toml:"dir"`
 		Name string `toml:"name"`
+		Auto bool   `toml:"auto"`
 	} `toml:"sync"`
 	MasterPassword struct {
 		Memory  string `toml:"memory"`
@@ -292,6 +297,7 @@ func defaults(path string) (*Config, error) {
 		UILockOnQuit:          Setting[bool]{Value: true},
 		AgentLockOnSleep:      Setting[bool]{Value: true},
 		AgentLockOnScreenLock: Setting[bool]{Value: true},
+		SyncAuto:              Setting[bool]{Value: true},
 	}
 	c.defaultKDF()
 	return c, nil
@@ -397,6 +403,9 @@ func (c *Config) applyFile() error {
 	if in("agent.lock_on_screen_lock") {
 		c.AgentLockOnScreenLock = Setting[bool]{Value: f.Agent.LockOnScreenLock, Source: FromFile, Origin: from("agent.lock_on_screen_lock")}
 	}
+	if in("sync.auto") {
+		c.SyncAuto = Setting[bool]{Value: f.Sync.Auto, Source: FromFile, Origin: from("sync.auto")}
+	}
 	if in("master_password.memory") {
 		if err := setKDFMemory(&c.KDFMemory, f.MasterPassword.Memory, FromFile, from("master_password.memory")); err != nil {
 			return err
@@ -487,6 +496,7 @@ func (c *Config) applyEnv() error {
 		{&c.UILockOnQuit, EnvUILockOnQuit},
 		{&c.AgentLockOnSleep, EnvAgentLockOnSleep},
 		{&c.AgentLockOnScreenLock, EnvAgentLockOnScreen},
+		{&c.SyncAuto, EnvSyncAuto},
 	} {
 		if v, ok := os.LookupEnv(sw.env); ok && v != "" {
 			if err := setSwitch(sw.dst, v, FromEnv, sw.env); err != nil {

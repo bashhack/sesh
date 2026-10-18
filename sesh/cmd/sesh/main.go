@@ -248,6 +248,7 @@ func openSQLiteStoreWithPrompt(cfg *config.Config, pc passwordPromptConfig) (*da
 	keepAsSet(store, cfg)
 	pruneHistory(store, cfg)
 	expireTrash(store, cfg)
+	autoSyncOpened(cfg, store)
 	return store, nil
 }
 
@@ -754,6 +755,7 @@ func run(app *App, args []string) {
 		if name != "run" && askedForHelp(rest) {
 			rest = []string{"--help"}
 		}
+		autoSyncNext = autoSyncCommands[name]
 		if err := commands[name](app, rest); err != nil {
 			fatal(app, err)
 		}

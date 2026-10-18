@@ -234,3 +234,24 @@ func TestAgentLockSwitches(t *testing.T) {
 		t.Errorf("from the environment: %+v %+v, %v", c.AgentLockOnSleep, c.AgentLockOnScreenLock, err)
 	}
 }
+
+// sync.auto is on unless turned off, from the file or the environment.
+func TestSyncAuto(t *testing.T) {
+	path := isolate(t)
+	if c, err := Load(Overrides{}); err != nil || !c.SyncAuto.Value || c.SyncAuto.Source != FromDefault {
+		t.Fatalf("default: %+v, %v", c.SyncAuto, err)
+	}
+	if err := Set(path, "sync.auto", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); !strings.Contains(string(b), "[sync]\nauto = false\n") { //nolint:errcheck // compared
+		t.Errorf("written:\n%s", b)
+	}
+	if c, err := Load(Overrides{}); err != nil || c.SyncAuto.Value || c.SyncAuto.Source != FromFile {
+		t.Fatalf("from the file: %+v, %v", c.SyncAuto, err)
+	}
+	t.Setenv(EnvSyncAuto, "true")
+	if c, err := Load(Overrides{}); err != nil || !c.SyncAuto.Value || c.SyncAuto.Source != FromEnv {
+		t.Errorf("from the environment: %+v, %v", c.SyncAuto, err)
+	}
+}

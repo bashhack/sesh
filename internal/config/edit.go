@@ -20,7 +20,7 @@ var quoted = map[string]bool{
 }
 
 // switches are the settings that are on or off: true or false.
-var switches = map[string]bool{"ui.lock_on_quit": true, "agent.lock_on_sleep": true, "agent.lock_on_screen_lock": true}
+var switches = map[string]bool{"ui.lock_on_quit": true, "agent.lock_on_sleep": true, "agent.lock_on_screen_lock": true, "sync.auto": true}
 
 // header is a table's header line: [name], perhaps with a comment.
 var header = regexp.MustCompile(`^\s*\[\s*([A-Za-z0-9_.-]+)\s*\]\s*(#.*)?$`)
