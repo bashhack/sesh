@@ -129,6 +129,21 @@ func TestFold(t *testing.T) {
 		t.Errorf("after forgetting pw-2: %+v, want the first, which typed it, dropped", all)
 	}
 
+	// A forgotten secret goes from a row that keeps something else typed.
+	e, g := typedRecord(), typedRecord()
+	g.Secret, g.Tags = []byte("pw-5"), []string{"work", "extra"}
+	te := Diff(e, g)
+	// pw-6 taken from another computer, then pw-5 forgotten here.
+	taken := typedRecord()
+	taken.Secret, taken.Tags = []byte("pw-6"), g.Tags
+	h := typedRecord()
+	h.Secret, h.Tags = []byte("pw-6"), g.Tags
+	h.Forgotten = []Forgotten{{Hash: Forget([]byte("pw-5")), At: time.Unix(600, 0)}}
+	kept := Fold([]*Typed{te}, Diff(taken, h))
+	if kept[0].Has("secret") || kept[0].Post.Secret != nil || !kept[0].Has("tag:extra") {
+		t.Errorf("after forgetting pw-5: %+v, want it gone, the tag kept", kept[0])
+	}
+
 	gone := Diff(d, &Record{Purged: time.Unix(500, 0)})
 	if all = Fold(all, gone); len(all) != 1 || !all[0].Has("purged") {
 		t.Errorf("after a deletion for good: %+v, want it alone", all)

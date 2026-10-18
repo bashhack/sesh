@@ -573,6 +573,38 @@ func (s *Store) SyncTypedKept(uid, computer string) error {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_typed WHERE uid = ?`, uid).Scan(&n); err != nil || n == 0 {
 		return err
 	}
+	return s.typedKept(uid, computer)
+}
+
+// typedKeptAll is SyncTypedKept for every entry with something typed
+// kept: after earlier secrets are removed (forgotten, or trimmed to
+// history.keep), so none stays kept here.
+func (s *Store) typedKeptAll() error {
+	rows, err := s.db.Query(`SELECT DISTINCT uid FROM sync_typed`)
+	if err != nil {
+		return err
+	}
+	var uids []string
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			_ = rows.Close() //nolint:errcheck // already failing
+			return err
+		}
+		uids = append(uids, uid)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	for _, uid := range uids {
+		if err := s.typedKept(uid, ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) typedKept(uid, computer string) error {
 	all, err := s.SyncTyped(uid)
 	if err != nil {
 		return err

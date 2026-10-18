@@ -237,6 +237,7 @@ func Fold(olds []*Typed, t *Typed) []*Typed {
 		}
 		if o.Has("secret") && forgot(o.Typed["secret"]) {
 			o.drop("secret")
+			o.clearPost("secret")
 		}
 		for k, h := range o.Hash {
 			if forgot(h) {

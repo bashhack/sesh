@@ -810,3 +810,49 @@ func TestSync_LateSwitchNotesOnBoth(t *testing.T) {
 		t.Errorf("laptop: notes %q, want both computers'", d.Notes)
 	}
 }
+
+// A typed secret replaced, then forgotten or trimmed to history.keep, is
+// no longer kept as typed, even beside something else typed with it.
+func TestSync_TypedGoneWithTheVaults(t *testing.T) {
+	t.Parallel()
+	for _, how := range []string{"forget", "prune"} {
+		laptop, desktop, f := twoComputers(t)
+		gh := laptop.put("github", "pw-1")
+		settle(t, f, laptop, desktop)
+		uid := liveUID(t, desktop, gh)
+		if _, err := desktop.store.Edit(gh, database.EntryEdit{Secret: []byte("desk-2"), Details: &vault.DetailsChange{SetNotes: true, Notes: []byte("typed")}}); err != nil {
+			t.Fatal(err)
+		}
+		laptop.put("github", "pw-3")
+		laptop.sync(f)
+		desktop.sync(f)
+		settle(t, f, laptop, desktop)
+		switch how {
+		case "forget":
+			h, err := desktop.store.History(gh)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ns := make([]int, len(h))
+			for i := range h {
+				ns[i] = i + 2
+			}
+			if err := desktop.store.ForgetVersions(gh, ns...); err != nil {
+				t.Fatal(err)
+			}
+		case "prune":
+			if _, err := desktop.store.PruneHistory(0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		typed, err := desktop.store.SyncTyped(uid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ty := range typed {
+			if ty.Post.Secret != nil {
+				t.Errorf("%s: still kept as typed: %q", how, ty.Post.Secret)
+			}
+		}
+	}
+}

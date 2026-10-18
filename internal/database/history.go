@@ -562,7 +562,8 @@ func (s *Store) ForgetVersions(k vault.Key, ns ...int) error {
 	for _, n := range ns {
 		s.audit("purge", k.String(), fmt.Sprintf("History: forgot version %d", n))
 	}
-	return nil
+	// Nor is it kept as typed for syncing.
+	return s.typedKeptAll()
 }
 
 // ForgetVersionOf deletes k's version v, as History listed it, for good,
@@ -596,7 +597,7 @@ func (s *Store) ForgetVersionOf(k vault.Key, v Version) error {
 		return fmt.Errorf("forget %s's version %d: %w", k, n, err)
 	}
 	s.audit("purge", k.String(), fmt.Sprintf("History: forgot version %d", n))
-	return nil
+	return s.typedKeptAll()
 }
 
 // forgetMarks are the marks (syncfolder.Forget) of k's earlier secrets in
@@ -697,6 +698,10 @@ func (s *Store) PruneHistory(keep int) (int, error) {
 			what = "1 earlier secret"
 		}
 		s.audit("purge", "", fmt.Sprintf("History: %s past history.keep (%d) dropped", what, keep))
+		// Nor are they kept as typed for syncing.
+		if err := s.typedKeptAll(); err != nil {
+			return int(n), err
+		}
 	}
 	return int(n), nil
 }
