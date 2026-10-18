@@ -6,10 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bashhack/sesh/internal/config"
+	"github.com/bashhack/sesh/internal/tui"
+	"github.com/bashhack/sesh/internal/vault"
 )
 
 // runAuto runs the sesh command args as sesh would, giving its stdout and
@@ -264,8 +267,8 @@ func TestAutoSync_FolderStuck(t *testing.T) {
 	if strings.Count(synced, "didn't answer in 50ms") != 1 || autoSyncsRun-before != 1 {
 		t.Errorf("trash with the folder stuck: synced %q, %d syncs", synced, autoSyncsRun-before)
 	}
-	// Said each time: the command waited for it.
-	if _, synced := runAuto(t, "list"); !strings.Contains(synced, "didn't answer in 50ms") {
+	// With the first look still waiting, the next doesn't wait, and says so.
+	if _, synced := runAuto(t, "list"); !strings.Contains(synced, "still hasn't answered") {
 		t.Errorf("list with the folder stuck: synced %q", synced)
 	}
 }
@@ -288,5 +291,203 @@ func TestAutoSync_SaysEachProblem(t *testing.T) {
 		if err := os.Remove(bad); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// The app syncs as a command does: to take changes, to send its own (only
+// when it has one), and now, even with sync.auto off.
+func TestUISync(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	putEntry(t, "password/a", "secret-2")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, desktop, "desktop")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	off := *cfg
+	off.SyncAuto.Value = false
+	if said, _ := uiSync(&off, v, tui.SyncPull); said != nil {
+		t.Errorf("a pull with sync.auto off: %q", said)
+	}
+	if said, ran := uiSync(cfg, v, tui.SyncPush); said != nil || ran {
+		t.Errorf("a push with nothing to send: %q", said)
+	}
+	if said, ran := uiSync(cfg, v, tui.SyncPull); len(said) != 1 || said[0] != "Synced: 1 taken." || !ran {
+		t.Errorf("a pull: %q", said)
+	}
+	// The app sees what the pull took, on its own connection.
+	if changed, err := v.Check(); err != nil || !changed {
+		t.Errorf("the app's check after a pull: %v, %v", changed, err)
+	}
+	if said, _ := uiSync(&off, v, tui.SyncNow); len(said) != 1 || !strings.Contains(said[0], "nothing to do") {
+		t.Errorf("sync now with sync.auto off: %q", said)
+	}
+}
+
+// The app says a warning that hasn't changed once, not on every sync.
+func TestUISync_WarnsOnce(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	putEntry(t, "password/b", "b")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	if said, ran := uiSync(cfg, v, tui.SyncPush); len(said) != 1 || !strings.Contains(said[0], "nothing syncs until") || ran {
+		t.Fatalf("the first push: %q, ran %v", said, ran)
+	}
+	if said, _ := uiSync(cfg, v, tui.SyncPush); len(said) != 0 {
+		t.Errorf("the next push: %q", said)
+	}
+	if said, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 {
+		t.Errorf("sync now: %q", said)
+	}
+}
+
+// A folder that doesn't answer is asked once: the app's syncs on their own
+// wait a while, and a probe still waiting isn't joined by another.
+func TestUISync_FolderStuck(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	_, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, desktop, "desktop")
+	putEntry(t, "password/b", "b")
+	// Answering, but too late.
+	var reads atomic.Int32
+	origRead, origBudget := readDir, autoSyncBudget
+	readDir = func(string) ([]os.DirEntry, error) { reads.Add(1); time.Sleep(60 * time.Millisecond); return nil, nil }
+	autoSyncBudget = 20 * time.Millisecond
+	t.Cleanup(func() { readDir, autoSyncBudget = origRead, origBudget })
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	if said, ran := uiSync(cfg, v, tui.SyncPush); len(said) != 1 || !strings.Contains(said[0], "didn't answer") || ran {
+		t.Fatalf("the first push: %q, ran %v", said, ran)
+	}
+	time.Sleep(100 * time.Millisecond) // the first read ended
+	if said, _ := uiSync(cfg, v, tui.SyncPush); said != nil || reads.Load() != 1 {
+		t.Errorf("the next push: %q, folder read %d times", said, reads.Load())
+	}
+	if said, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 || reads.Load() != 2 {
+		t.Errorf("sync now: %q, folder read %d times", said, reads.Load())
+	}
+	// One still waiting isn't joined by another, nor said to be waited for.
+	if said, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 || !strings.Contains(said[0], "still hasn't answered") || reads.Load() != 2 {
+		t.Errorf("sync now again: %q, folder read %d times", said, reads.Load())
+	}
+}
+
+// A save of the app's after a sync that changed nothing isn't taken for
+// the sync's change.
+func TestUISync_SaveAfterSync(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	_, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, desktop, "desktop")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	if _, ran := uiSync(cfg, v, tui.SyncPull); !ran {
+		t.Fatal("the pull didn't run")
+	}
+	k, err := vault.ParseKey("password/c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.wrote(store.Put(k, []byte("c"))); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := v.Check(); err != nil || changed {
+		t.Errorf("the app's check after its own save: %v, %v", changed, err)
+	}
+}
+
+// After a pull the app said, another command's write that changes no
+// entry isn't a change; nor is the app's own save after another command
+// wrote during a sync.
+func TestUISync_OthersWritesAroundASync(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	putEntry(t, "password/a", "secret-2")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+	ddb := syncComputer(t, desktop, "desktop")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	other := func() {
+		t.Helper()
+		sqlExec(t, ddb, `INSERT INTO audit_log (event_type, detail, created_at) VALUES ('test', 'another command', ?)`, time.Now().UTC())
+	}
+	if said, _ := uiSync(cfg, v, tui.SyncPull); len(said) != 1 {
+		t.Fatalf("the pull: %q", said)
+	}
+	if changed, err := v.Check(); err != nil || !changed {
+		t.Fatalf("after the pull: %v, %v", changed, err)
+	}
+	other()
+	if changed, err := v.Check(); err != nil || changed {
+		t.Errorf("another command's write after: %v, %v", changed, err)
+	}
+	other()
+	if _, ran := uiSync(cfg, v, tui.SyncPull); !ran {
+		t.Fatal("the second pull didn't run")
+	}
+	k, err := vault.ParseKey("password/c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.wrote(store.Put(k, []byte("c"))); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := v.Check(); err != nil || changed {
+		t.Errorf("the app's save after another command wrote: %v, %v", changed, err)
 	}
 }

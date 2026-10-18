@@ -234,6 +234,9 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		ChangePassword: func(current, next []byte) (tui.Changed, error) {
 			return uiChangePassword(cfg, current, next)
 		},
+		Sync:         func(v tui.Vault, how tui.SyncHow) ([]string, bool) { return uiSync(settingsNow(cfg), v, how) },
+		Syncing:      func() bool { return settingsNow(cfg).SyncDir.Value != "" },
+		AutoSync:     func() bool { c := settingsNow(cfg); return c.SyncDir.Value != "" && c.SyncAuto.Value },
 		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
 		Backups:      func() (tui.Backups, error) { return uiBackups(dbPath) },
 		BackUp:       func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
@@ -385,12 +388,18 @@ func openURL(address string) error {
 type uiVault struct {
 	store *database.Store
 	mgr   *password.Manager
+	// stuckUntil says the sync folder didn't answer, so syncs on their own
+	// wait till then.
+	stuckUntil time.Time
 	// version is the data version Check last saw, and fingerprint the
 	// entries' then: a new version (any commit, the audit log's too) is a
-	// change only when the fingerprint is new as well.
+	// change only when the fingerprint is new as well. synced says a sync,
+	// on the app's own connection, changed the entries, for the next Check
+	// to say.
 	mu          sync.Mutex
 	version     int64
 	fingerprint [sha256.Size]byte
+	synced      bool
 }
 
 func newUIVault(store *database.Store) *uiVault {
@@ -846,9 +855,11 @@ func (u *uiVault) Check() (bool, error) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	synced := u.synced
+	u.synced = false
 	v, err := u.store.DataVersion()
 	if err != nil || v == u.version {
-		return false, err
+		return synced, err
 	}
 	u.version = v
 	f, err := u.store.Fingerprint()
@@ -857,12 +868,62 @@ func (u *uiVault) Check() (bool, error) {
 	}
 	changed := f != u.fingerprint
 	u.fingerprint = f
-	return changed, nil
+	return changed || synced, nil
 }
 
 func (u *uiVault) KeepAlive() error { return uiLocked(u.store.KeepAlive()) }
 
 func (u *uiVault) Close() error { return u.store.Close() }
+
+// uiSync syncs the vault v, the app's, with the sync folder cfg names, as
+// a command does on its own (autoSyncLines), for how's reason: on its own
+// only while sync.auto is on, and to send only when there's a change to;
+// ran says it synced. A warning it said in the last day isn't said again,
+// but when asked for.
+func uiSync(cfg *config.Config, v tui.Vault, how tui.SyncHow) (said []string, ran bool) {
+	u, ok := v.(*uiVault)
+	if !ok || cfg.SyncDir.Value == "" || how != tui.SyncNow && !cfg.SyncAuto.Value {
+		return nil, false
+	}
+	now := time.Now()
+	if how != tui.SyncNow && now.Before(u.stuck()) {
+		return nil, false
+	}
+	if how == tui.SyncPush && !vaultHasChanges(cfg, u.store) {
+		return nil, false
+	}
+	lines, stuck, ran := autoSyncRun(cfg, u.store)
+	u.mu.Lock()
+	if stuck {
+		// Not asked again till the next pull would be.
+		u.stuckUntil = now.Add(5 * time.Minute)
+	}
+	// Written on the app's own connection, which the data version doesn't
+	// count: the entries are compared now, so a save of the app's after
+	// this isn't taken for the sync's.
+	if f, err := u.store.Fingerprint(); err == nil && f != u.fingerprint {
+		u.fingerprint, u.synced = f, true
+	}
+	if v, err := u.store.DataVersion(); err == nil {
+		u.version = v
+	}
+	u.mu.Unlock()
+	if how != tui.SyncNow {
+		return freshLines(u.store, lines), ran
+	}
+	if len(lines) == 0 {
+		lines = []string{"In sync with " + tildePath(cfg.SyncDir.Value) + ": nothing to do."}
+	}
+	return lines, ran
+}
+
+// stuck is until when the app's syncs on their own wait for a folder that
+// didn't answer.
+func (u *uiVault) stuck() time.Time {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.stuckUntil
+}
 
 // settingsNow is the settings as they are now, or cfg when they can't be
 // read.
