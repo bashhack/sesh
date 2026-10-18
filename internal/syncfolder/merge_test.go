@@ -591,3 +591,13 @@ func TestMerge_KeptBesideFits(t *testing.T) {
 		t.Errorf("fields %d, notes %q", len(m.Fields), m.Notes)
 	}
 }
+
+// One secret on both sides, updated at the same moment from different
+// starts: the same record whichever side is ours, the later start kept.
+func TestMerge_SameSecretSameUpdate(t *testing.T) {
+	restored := changed("desktop", 5, func(r *Record) { r.Updated, r.SetAt = t0.Add(5*time.Hour), t0 })
+	typed := changed("laptop", 6, func(r *Record) { r.Updated = t0.Add(5 * time.Hour) })
+	if m := merge(t, baseRecord(), restored, typed); !m.Began().Equal(t0.Add(5 * time.Hour)) {
+		t.Errorf("began %s", m.Began())
+	}
+}

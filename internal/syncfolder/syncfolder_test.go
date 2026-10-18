@@ -131,7 +131,7 @@ func TestSealOpen(t *testing.T) {
 }
 
 func recordsEqual(a, b *Record) bool {
-	return a.Created.Equal(b.Created) && a.Updated.Equal(b.Updated) && a.Deleted.Equal(b.Deleted) && a.Purged.Equal(b.Purged) &&
+	return a.Created.Equal(b.Created) && a.Updated.Equal(b.Updated) && a.SetAt.Equal(b.SetAt) && a.Deleted.Equal(b.Deleted) && a.Purged.Equal(b.Purged) &&
 		a.Kind == b.Kind && a.Service == b.Service && a.Username == b.Username && a.Computer == b.Computer &&
 		a.URL == b.URL && a.Folder == b.Folder && bytes.Equal(a.Secret, b.Secret) && bytes.Equal(a.Notes, b.Notes) &&
 		slices.EqualFunc(a.Fields, b.Fields, func(x, y Field) bool {
@@ -139,7 +139,7 @@ func recordsEqual(a, b *Record) bool {
 		}) &&
 		a.Settings == b.Settings && slices.Equal(a.Tags, b.Tags) && maps.Equal(a.Versions, b.Versions) &&
 		slices.EqualFunc(a.History, b.History, func(x, y Earlier) bool {
-			return x.ReplacedAt.Equal(y.ReplacedAt) && x.Computer == y.Computer && x.FileName == y.FileName && bytes.Equal(x.Secret, y.Secret)
+			return x.ReplacedAt.Equal(y.ReplacedAt) && x.SetAt.Equal(y.SetAt) && x.Computer == y.Computer && x.FileName == y.FileName && bytes.Equal(x.Secret, y.Secret)
 		})
 }
 

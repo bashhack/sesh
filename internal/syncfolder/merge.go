@@ -157,6 +157,10 @@ func MergeWith(base, ours, theirs *Record, beside Beside) (m Merged) {
 		if start != upd {
 			r.SetAt = start.Began()
 		}
+		// A start at the update is kept as none, as either side would.
+		if r.SetAt.Equal(r.Updated) {
+			r.SetAt = time.Time{}
+		}
 		r.Settings.FileName = pick(&m, "file name", oursNewer, base.Settings.FileName, ours.Settings.FileName, theirs.Settings.FileName, eq[string])
 	}
 	r.Created = earliest(ours.Created, theirs.Created)
