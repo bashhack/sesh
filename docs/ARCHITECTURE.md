@@ -210,7 +210,7 @@ The vault is one SQLite file: `~/Library/Application Support/sesh/passwords.db` 
 - `vault_key`, the one row an unlock reads before any entry;
 - `recovery`, the vault's key wrapped for the recovery key, and `vault_info`, a random id that names its backups;
 - `audit_log`, which names entries by their ID's text, with no foreign key, so the log survives an entry's deletion;
-- what syncing keeps: `sync_state`, `sync_info`, `sync_own`, `sync_restored`, `history_forgotten`, `key_links` and `sync_warned` (see [Sync](#sync));
+- what syncing keeps: `sync_state`, `sync_info`, `sync_typed`, `sync_restored`, `history_forgotten`, `key_links` and `sync_warned` (see [Sync](#sync));
 - `schema_migrations`.
 
 ```mermaid
@@ -332,12 +332,12 @@ Syncing between computers is three parts, from the bottom up:
   - Otherwise, a change in the folder is taken, one made here is sent, and one made on both is merged against the agreed version.
   - Older copies put back are ignored, lost files are written again, the same name made on two computers is renamed or joined, conflict copies are removed, and an entry restored from a backup wins over the folder's except for a deletion there (unless it was changed here after the restore).
   - A file sealed with a key from before a master password change is only sealed again: when it holds something new, that isn't taken, and it's written over with what was agreed (or removed, for an entry never had here).
-  - After taking a master password change made elsewhere, each entry is checked once against the folder's version under the new key before anything is sent for it. One holding a change the folder doesn't have, from another computer or under this computer's own name but not made here, is set back to the folder's version (its secret kept in the history), or held back while the folder has none.
+  - After taking a master password change made elsewhere, nothing this computer took under the old key is trusted: each entry is made again from the folder's version under the new key, with only what was typed here made again on it (`syncfolder.Typed`: `Diff` keeps what a push typed, `Rebase` makes it again on another version). A deletion for good in the folder stands. With no version under the new key in the folder, an entry made here is sent, one deleted for good here is forgotten, and any other is held back.
   - `Options` give it the vault's older keys (to open files sealed before a password change, and seal them again), a deadline, and whether a sync with nothing to do is logged.
   - It returns a `Summary`.
 - **`internal/database`: what the vault keeps.**
   - `sync_state`, per entry: the rev and the folder file's hash it last agreed, and that version itself (without its earlier secrets), sealed, with its hash; and whether it was agreed under a key left behind by taking a password change, not checked yet.
-  - `sync_own`, per entry: the highest change count this computer gave it, and whether it wrote over a version holding a higher one of its own. A restore leaves it as it is.
+  - `sync_typed`, per entry and push: what this computer's user typed (the values, and hashes of the secret, notes and fields they replaced), sealed, kept until another computer's version has seen it. A restore leaves it as it is.
   - `sync_info`: this computer's sync ID and change count, the folder's ID, a password change not sent yet, and the folder's recovery key record as last seen.
   - `sync_restored`: entries restored from a backup, not synced since.
   - `history_forgotten`: the forget marks.
