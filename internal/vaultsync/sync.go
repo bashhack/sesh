@@ -683,10 +683,10 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 	case folder != nil:
 		from = folder
 		typed = slices.DeleteFunc(typed, func(t *syncfolder.Typed) bool { return t.N != 0 && t.N <= folder.Versions[y.id] })
-	case slices.ContainsFunc(typed, func(t *syncfolder.Typed) bool { return t.Created }):
-		from = &syncfolder.Record{}
 	case it.Place == database.SyncGone:
 		return y.store.SyncDropEntry(uid)
+	case slices.ContainsFunc(typed, func(t *syncfolder.Typed) bool { return t.Created }):
+		from = &syncfolder.Record{}
 	default:
 		y.sum.HeldBack = append(y.sum.HeldBack, name)
 		return nil
@@ -1139,7 +1139,7 @@ func (y *syncer) applyNamed(uid string, rev int64, rec *syncfolder.Record, hash 
 	// renamed here, quietly, as the folder's version of it, when there is
 	// one, has its own name.
 	for _, it := range y.items {
-		if it.UID == uid || it.Place != database.SyncLive || it.Key != k || !it.Left || it.Agreed == nil {
+		if it.UID == uid || it.Place != database.SyncLive || it.Key != k || !it.Left || it.Agreed == nil || y.done[it.UID] {
 			continue
 		}
 		if y.waiting[it.UID] {

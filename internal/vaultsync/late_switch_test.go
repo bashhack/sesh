@@ -621,3 +621,24 @@ func TestSync_TypedSecretReplacedNotKept(t *testing.T) {
 		}
 	}
 }
+
+// An entry made and deleted for good under the old key, never anywhere
+// else, leaves nothing to send once the computer takes the change.
+func TestSync_LateSwitchMadeThenPurged(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f, _, rec, _, _ := lateWorld(t)
+	bank := desktop.put("bank", "b-1")
+	desktop.sync(f)
+	if err := desktop.store.PurgeMany([]vault.Key{bank}); err != nil {
+		t.Fatal(err)
+	}
+	desktop.sync(f)
+	syncOlder(t, laptop, f)
+	before := len(scanFiles(t, f))
+	if _, s := switchDesktop(t, laptop, desktop, f, rec); len(s.Sent) != 0 {
+		t.Errorf("desktop taking the change: %+v, want nothing sent", s)
+	}
+	if after := len(scanFiles(t, f)); after != before {
+		t.Errorf("files %d, then %d: want nothing written", before, after)
+	}
+}
