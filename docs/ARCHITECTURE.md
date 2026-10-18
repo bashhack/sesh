@@ -80,6 +80,7 @@ The architecture follows a strict layering model where dependencies flow downwar
                │ • Key settings, Touch ID│
                │   recovery key          │
                │ • Backups, imports      │
+               │ • Sync folder, engine   │
                │ • TOTP generation       │
                │ • Secure memory         │
                │ • Clipboard, QR codes   │
@@ -209,6 +210,7 @@ The vault is one SQLite file: `~/Library/Application Support/sesh/passwords.db` 
 - `vault_key`, the one row an unlock reads before any entry;
 - `recovery`, the vault's key wrapped for the recovery key, and `vault_info`, a random id that names its backups;
 - `audit_log`, which names entries by their ID's text, with no foreign key, so the log survives an entry's deletion;
+- what syncing keeps: `sync_state`, `sync_info`, `sync_restored`, `history_forgotten`, `key_links` and `sync_warned` (see [Sync](#sync));
 - `schema_migrations`.
 
 ```mermaid
@@ -307,6 +309,37 @@ erDiagram
         DATETIME created_at
     }
 ```
+
+#### Sync
+
+Syncing between computers is three parts, from the bottom up:
+
+- **`internal/syncfolder`: the folder.**
+  - `sesh-sync.json` (`Info`): the folder's ID, the vault's key record, the links of master password changes (`KeyLink`: the old key sealed with the new, and a proof made with the old) and the shared recovery key's record (`SealedRecovery`).
+  - `entries/<uid>.sesh`: an entry's file. A short header (a marker, the entry's uid, the ID of the key record it's sealed with) is followed by the entry's whole `Record`, as JSON, sealed through a `Sealer` (the vault's key, held by the agent) in pieces of at most 1 MiB, each bound to the header, its place and whether it's the last.
+  - A `Record` carries everything sync moves: the entry's name, secret, notes, fields, folder and tags, its earlier secrets (each with when its use began and was replaced), its forget marks, its trash state, and `Versions`, the count of changes each computer made, which tells an older copy from a newer one or one made alongside.
+  - `Merge` and `MergeWith` merge two records field by field against the one both came from (or none), the same whichever side is "ours".
+  - `Scan` lists the folder: entry files (sync tools' conflict copies included, told apart by the uid inside, not the name), files iCloud hasn't downloaded, and files that can't be read. Every file is written whole (`atomicfile`).
+- **`internal/vaultsync`: the engine.** `SyncWith` syncs a store with a folder.
+  - It reads what the vault last agreed with the folder for each entry (`database.SyncItems`), scans the folder, and settles each entry on its own.
+  - An entry changed neither here nor there, its agreed version intact, is skipped without decrypting anything.
+  - Otherwise, a change in the folder is taken, one made here is sent, and one made on both is merged against the agreed version.
+  - Older copies put back are ignored, lost files are written again, the same name made on two computers is renamed or joined, conflict copies are removed, and an entry restored from a backup wins over the folder's except for a deletion there.
+  - `Options` give it the vault's older keys (to open files sealed before a password change, and seal them again), a deadline, and whether a sync with nothing to do is logged.
+  - It returns a `Summary`.
+- **`internal/database`: what the vault keeps.**
+  - `sync_state`, per entry: the rev and the folder file's hash it last agreed, and that version itself, sealed, with its hash.
+  - `sync_info`: this computer's sync ID and change count, the folder's ID, a password change not sent yet, and the folder's recovery key record as last seen.
+  - `sync_restored`: entries restored from a backup, not synced since.
+  - `history_forgotten`: the forget marks.
+  - `key_links`: the master password changes.
+  - `sync_warned`: the warnings automatic syncs said, and when.
+- **The commands** (`sesh/cmd/sesh/`) put them together.
+  - `sync_cmd.go`: `sesh sync`, `init`, `join`, `status`, `leave`, and writing a lost `sesh-sync.json` again.
+  - `sync_key.go`: master password changes across computers. It sends one made here, takes one made elsewhere, settles two made at once, and mends an older record put back.
+  - `sync_recovery.go`: the shared recovery key.
+  - `sync_auto.go`: automatic sync as commands open and close the vault.
+  - `internal/tui/sync.go`: when `sesh ui` syncs.
 
 #### TOTP Generation
 
@@ -575,12 +608,18 @@ The pattern uses the test binary itself as a mock process, eliminating:
 - Complex PATH manipulation  
 - Platform-specific code
 
+### Several Computers on One Machine
+
+Sync is tested with each "computer" its own vault in a temporary folder, sharing one sync folder, with no sync tool needed: what sync tools do (conflict copies under each tool's names, files iCloud hasn't downloaded, a file lost or an older one put back) is done by the tests. Scenario tests run their steps in every order of the computers involved, and random tests (`TestSync_Random`, `TestSync_Random2`; `SESH_SYNC_SEEDS` sets how many seeds) run random changes on several computers, then check that every computer agrees and that no secret was lost.
+
 ## Performance Design
 
 sesh is a CLI tool — every invocation should feel instant. The design avoids unnecessary work:
 
 - **Selective execution**: only the command the first word names runs, and it opens the vault only once its arguments are right. Plain `sesh`, `--help` and completion never unlock it.
 - **No framework overhead**: Go's standard `flag` package for parsing, no logging framework in the hot path.
+
+In a vault that syncs, a command syncs as it opens the vault: a sync with nothing new reads the folder's files to hash them and decrypts nothing, so it costs little beside the unlock.
 
 The dominant cost in any sesh invocation is unlocking the vault (deriving the key from the master password, unless the agent already holds it) and, for `sesh aws`, the network round-trip to AWS STS. The first command that opens the vault once the newest backup is `backup.every_days` old also makes the automatic backup: an integrity check and a copy of the vault file (a vault with no entries isn't backed up).
 
@@ -598,7 +637,9 @@ sesh/
 │   │   └── aws/
 │   ├── setup/             # sesh aws setup
 │   ├── aws/               # The AWS CLI: STS and the MFA device
-│   ├── database/          # SQLite store, encryption, history, trash, audit log
+│   ├── database/          # SQLite store, encryption, history, trash, audit log, what sync keeps
+│   ├── syncfolder/        # The sync folder: its files, sealed records, merging two records
+│   ├── vaultsync/         # Syncing a vault with a sync folder
 │   ├── agent/             # The background agent that holds the key
 │   ├── vault/             # Entries and the Store interface
 │   ├── config/            # Settings: flags > environment > config file > defaults

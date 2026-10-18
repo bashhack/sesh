@@ -25,6 +25,7 @@ sesh is NOT designed to protect against:
 - **Compromised Local Account**: A process running as you can use an unlocked sesh agent, and capture a password as you type it; see [Sesh agent](#sesh-agent)
 - **Root/Admin Access**: System-level compromise bypasses all application-level protections
 - **Physical Access**: Direct hardware access can bypass software protections
+- **Your Sync Folder's Host Holding Things Back**: someone who can write to a sync folder can hold back changes, or show a computer that hasn't synced for a while an older copy of the folder; with an old master password, they can feed such a computer changes. They can't read or change entries; see [Syncing between computers](#syncing-between-computers)
 - **Memory Dump Attacks**: Go's immutable strings mean TOTP codes and some intermediate values persist in memory until GC. Byte slices are zeroed, but string copies from the TOTP library cannot be, nor can the copies of a typed password, or a new master password, that the strength check (zxcvbn) makes; those last as long as that `sesh` command runs.
 - **Clipboard Managers**: When sesh copies a secret (`sesh copy`, Enter in `sesh ui`, `sesh aws --clip`), the copied value is cleared after `clipboard_timeout` (30 seconds by default), if unchanged; until then a small background shell holds a copy, to check it's unchanged. However, clipboard managers (Raycast, Alfred and Paste on macOS; Klipper, GPaste and CopyQ on Linux) may capture the value before it's cleared. Consider disabling clipboard history for sensitive workflows.
 - **Terminal Recording**: Session recording tools (asciinema, iTerm2 logging, tmux capture) and shell history files can capture commands and output. Consider `export HISTFILE=/dev/null` in sensitive contexts.
@@ -313,15 +314,15 @@ Every command reads and writes the one vault, through the same store, under its 
 
 - **No Analytics**: Zero telemetry or usage tracking
 - **No Direct Network Calls**: sesh itself makes no network requests (AWS CLI handles STS calls)
-- **No Cloud Sync**: Your secrets stay on your machine
+- **No sesh Cloud**: There's no sesh server; syncing between your computers goes through a folder you choose, carried by your own sync tool, holding only encrypted files
 - **No Auto-Updates**: You control when to update
 - **No Phone Home**: No license checks or activation
 
 ### What sesh DOES Do
 
-- **Local-Only Storage**: All data in a local encrypted vault
+- **Local Storage**: Each computer's data is in its own encrypted vault
 - **Audit Trail**: Every secret read (except the TOTP codes `sesh ui` draws), change, and deletion is logged
-- **Explicit User Control**: Nothing runs on its own except upkeep when a command unlocks the vault: the daily backup, and removing audit events, trash and earlier secrets past their settings
+- **Explicit User Control**: Nothing runs on its own except upkeep when a command unlocks the vault: the daily backup, removing audit events, trash and earlier secrets past their settings, and, in a vault that syncs, the sync (`sync.auto` turns it off)
 - **Open Source**: Complete transparency in implementation
 - **Few Dependencies**: each pinned by its checksum (`go.sum`)
 
@@ -335,6 +336,26 @@ sesh backs up the vault automatically: once a day by default, the first time a c
 - **Restoring** (`sesh restore`) checks the backup without writing to it. A sound vault is saved as a backup, then replaced in place in one transaction, as a password change does, keeping its audit log; a command that unlocked the vault before is refused its next write if the key changed. A damaged vault is moved aside, never deleted, with its `-wal` and `-shm` files, and the backup's copy takes its place; no other sesh command should be running then. It doesn't ask for the current master password: the vault may be damaged, or its password forgotten, and anyone who can run it can already replace the file. The restored vault then asks for the password the backup was made with.
 - **Where they go matters.** A backups folder in a synced folder sends copies of the encrypted vault wherever that folder syncs: the same protection as syncing the vault itself.
 
+## Syncing between computers
+
+Each computer keeps its own vault; a **sync folder**, which any tool carries between them (iCloud Drive, Dropbox, Syncthing, a USB stick), holds one encrypted file per entry. sesh writes and reads the folder's files and never talks to a network itself. The vault file never goes in the folder: a sync tool copying a database while it's written can damage it, and `sesh doctor` warns about a vault in a folder a sync tool copies.
+
+- **What the folder holds.**
+  - `sesh-sync.json`: the folder's random ID; the vault's key record (salt, Argon2id settings, verify blob, as the vault has it); the links of master password changes (below); and the shared recovery key's record (see Recovery key).
+  - `entries/<uid>.sesh`: one per entry, named by the entry's random ID. A short header, unencrypted, gives that ID and the ID of the key record it's sealed with. The rest, sealed with the vault key (AES-256-GCM, through the agent), is the whole entry: name, kind, secret, notes and fields, folder and tags, earlier secrets, trash state, when it changed and on which computer, and a count of the changes each computer made. It's sealed in pieces of at most 1 MiB, each bound to the header, its place and whether it's the last, so pieces can't be moved between files, reordered, dropped or repeated.
+- **What someone with the folder learns:** how many entries there are, roughly how big each is, and when each file changed. Not names, kinds, usernames or secrets. They can try passwords against the key record offline, as against a backup in a synced folder, so the master password's strength matters as much.
+- **What someone who can write to the folder can't do, without the master password:**
+  - **change an entry,** or move one entry's file to another's name: each opens only as itself, unchanged;
+  - **put back an older copy unnoticed:** a file whose changes this computer has all seen is ignored, and written again;
+  - **delete entries by removing files:** a missing file is written again, never taken for a deletion;
+  - **make a computer take a master password change:** each change carries a proof made with the old key, checked before the new password is asked for (see Changing the master password);
+  - **add a recovery key of their own,** or bring back a replaced one (see Recovery key).
+- **What they can do:** hold changes back, so a computer doesn't see them yet; delete files, which every computer then writes again from its own vault; damage one, which each computer then reports and leaves alone, its entry waiting (a file that can't be read may be a newer one); and show a computer that hasn't synced for a while an older copy of the folder, which it takes, as it would the real one, until it sees the newer.
+- **With an old master password** (one changed since), someone who can write to the folder can feed changes to a computer that hasn't taken the change yet, since its key is still the old one; once it takes the change, what it took under the old key isn't sent on as its own. Sync every computer soon after changing a master password that may have been seen, and make a new recovery key too.
+- **Merging never loses a secret.** An entry changed on two computers is merged field by field; where both changed the secret, the newer wins and the other goes into the entry's history. A secret forgotten on purpose (`sesh history --forget`) is forgotten on every computer, by a mark kept with the entry that covers every copy of that use of it, wherever it is.
+- **Automatic sync** (`sync.auto`, on unless turned off) runs as commands open and change the vault, and in `sesh ui`. It asks for nothing: a master password changed on another computer isn't taken until `sesh sync` asks for it. It gives up on a folder that doesn't answer within 5 seconds.
+- **Not synced:** each computer's audit log, backups, Touch ID unlock, agent and settings.
+
 ## Comparison with Alternatives
 
 ### vs Mobile Authenticator Apps
@@ -342,7 +363,7 @@ sesh backs up the vault automatically: once a day by default, the first time a c
 | Feature | Mobile Apps | sesh |
 |---------|-------------|------|
 | Storage Location | Phone (unknown security) | Encrypted vault on your machine |
-| Backup/Sync | Often cloud-based | Automatic local backups of the encrypted vault; encrypted export for moving elsewhere |
+| Backup/Sync | Often cloud-based | Automatic local backups of the encrypted vault; sync between your computers through a folder of encrypted files any tool carries; encrypted export for moving elsewhere |
 | Privacy | Varies (often poor) | Complete |
 | Scriptability | None | Full CLI |
 | Audit Trail | App-controlled | In the vault: a record for you, not tamper-proof |

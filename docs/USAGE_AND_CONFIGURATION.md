@@ -1917,6 +1917,22 @@ sesh add --help
 | "failed to decode QR code" | QR code blurry, too small, or not `otpauth://` format | Type the key instead, or retake a clearer screenshot |
 | "already in a sesh environment" | Tried to nest sesh sessions | Exit the current subshell first with `exit` or Ctrl+D |
 
+**Syncing**
+
+| Message | What it means | What to do |
+|---|---|---|
+| "this vault doesn't sync: …" | `sync.dir` isn't set | `sesh sync init` makes a sync folder from this vault; `sesh sync join <folder>` joins one |
+| "this vault already has entries of its own, never synced with this folder. Joining takes a new or empty vault, …" (from `sesh sync join`) | Joining would bring back, as edits, entries deleted on the other computers | Follow the steps it gives: export, move the vault's files aside, join, import |
+| "the master password was changed on another computer: …", or "⚠️ Sync: the master password was changed on another computer; nothing syncs until sesh sync takes it." | Another computer changed it; this vault still opens with its own, and doesn't sync | Run `sesh sync` at a terminal: it asks for this vault's password, then the new one. Forgotten your own? `sesh recover` takes the new one with the recovery key |
+| "this computer's master password change hasn't reached the sync folder yet: …" | The password was changed here with the folder out of reach | `sesh sync`, or any command once the folder is back, sends it |
+| "the sync folder's master password record wasn't made by a computer that had this vault's key, so it isn't taken. …" | The folder's key record doesn't lead from this vault's key: another vault's folder, or someone with access to it | If no computer of yours changed it, `sesh passwd` puts this vault's back; `sesh sync leave` stops syncing with the folder |
+| "the sync folder X isn't there now: a drive not connected, or the folder moved" | The folder can't be found | Connect the drive, or point `sync.dir` at where it moved |
+| "⚠️ Sync: the sync folder X didn't answer in 5s; nothing synced …" | The folder didn't answer (a stuck network mount, say) | Check the mount; `sesh sync` waits for it |
+| "N entries' files are sealed with another master password's key: sync leaves them for the computer that wrote them" | Files written under a password this vault doesn't have: from a computer that hasn't taken a change yet, or another vault | Sync that computer; if none of yours wrote them, they're not this vault's |
+| "N entries wait for the sync tool to download their files …" | iCloud Drive keeps them in the cloud (Optimise Mac Storage) | In Finder, Control-click the sync folder and choose Keep Downloaded |
+| "The recovery key made here doesn't work: …" | Another computer's recovery key reached the folder before this one's, and is kept on every computer | Throw away the key you wrote down, or make a fresh one with `sesh recovery new` |
+| "this vault synced with another sync folder, and has entries this one holds files of too: …" | `sync.dir` was pointed at a different folder by hand | Point `sync.dir` back, or join the new folder with an empty vault |
+
 ## The AWS profile and the subshell's environment
 
 ```bash
