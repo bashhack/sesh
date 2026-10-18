@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bashhack/sesh/internal/config"
@@ -63,7 +64,7 @@ func autoSyncOpened(cfg *config.Config, store *database.Store) {
 	}
 	st := &autoSyncState{cfg: cfg, said: map[string]bool{}}
 	autoSynced[store] = st
-	lines, stuck := autoSyncRun(cfg, store)
+	lines, stuck, _ := autoSyncRun(cfg, store)
 	st.stuck = stuck
 	st.say(freshLines(store, lines))
 }
@@ -77,7 +78,7 @@ func autoSyncClosing(store *database.Store) {
 	}
 	delete(autoSynced, store)
 	if !st.stuck && vaultHasChanges(st.cfg, store) {
-		lines, _ := autoSyncRun(st.cfg, store)
+		lines, _, _ := autoSyncRun(st.cfg, store)
 		st.say(freshLines(store, lines))
 	}
 }
@@ -88,7 +89,7 @@ const warnAgainAfter = 24 * time.Hour
 
 // freshLines are lines, an automatic sync's for the vault open in store,
 // but the warnings and problems (⚠️, ❌) it said in the last
-// warnAgainAfter. A folder not answering is said each time: the command
+// warnAgainAfter. A folder not answering is said each time: what synced
 // waited for it.
 func freshLines(store *database.Store, lines []string) []string {
 	var out []string
@@ -144,19 +145,19 @@ const notAnswering = "didn't answer in"
 // autoSyncRun syncs store, the vault cfg names, with its sync folder,
 // asking nothing and within autoSyncBudget, and says in a line or two what
 // moved, if anything did; a sync that fails never stops the command.
-// stuck says the folder didn't answer.
-func autoSyncRun(cfg *config.Config, store *database.Store) (lines []string, stuck bool) {
+// stuck says the folder didn't answer, ran that entries were synced.
+func autoSyncRun(cfg *config.Config, store *database.Store) (lines []string, stuck, ran bool) {
 	autoSyncsRun++
 	deadline := time.Now().Add(autoSyncBudget)
 	if !answers(cfg.SyncDir.Value, autoSyncBudget) {
-		return []string{fmt.Sprintf("⚠️  Sync: the sync folder %s %s %s; this command didn't sync (sesh sync waits for it).", tildePath(cfg.SyncDir.Value), notAnswering, autoSyncBudget)}, true
+		return []string{fmt.Sprintf("⚠️  Sync: the sync folder %s %s %s; nothing synced (sesh sync waits for it).", tildePath(cfg.SyncDir.Value), notAnswering, autoSyncBudget)}, true, false
 	}
-	lines = autoSyncChecked(cfg, store, deadline)
-	return lines, false
+	lines, ran = autoSyncChecked(cfg, store, deadline)
+	return lines, false, ran
 }
 
 // autoSyncChecked is autoSyncRun once the folder has answered.
-func autoSyncChecked(cfg *config.Config, store *database.Store, deadline time.Time) (lines []string) {
+func autoSyncChecked(cfg *config.Config, store *database.Store, deadline time.Time) (lines []string, ran bool) {
 	var mended bytes.Buffer
 	quiet := &App{Stdin: bytes.NewReader(nil), Stdout: &mended, Stderr: io.Discard, Exit: func(int) {}}
 	if lost, err := mendInfo(cfg); err == nil && lost {
@@ -165,7 +166,7 @@ func autoSyncChecked(cfg *config.Config, store *database.Store, deadline time.Ti
 	f, err := syncFolderOf(cfg)
 	if errors.Is(err, errKeyRolledBack) {
 		if err := mendRolledBack(quiet, cfg, f); err != nil {
-			return append(lines, "⚠️  Sync: "+err.Error())
+			return append(lines, "⚠️  Sync: "+err.Error()), false
 		}
 		if said := strings.TrimSpace(mended.String()); said != "" {
 			lines = append(lines, "Sync: "+said)
@@ -177,10 +178,10 @@ func autoSyncChecked(cfg *config.Config, store *database.Store, deadline time.Ti
 		// asking nothing. The other's: taking it asks for its password.
 		kept, ferr := keptOwnFork(cfg, f)
 		if ferr != nil {
-			return append(lines, "⚠️  Sync: "+ferr.Error())
+			return append(lines, "⚠️  Sync: "+ferr.Error()), false
 		}
 		if !kept {
-			return append(lines, "⚠️  Sync: the master password was changed here and on another computer at once, and the other's is kept; nothing syncs until sesh sync takes it.")
+			return append(lines, "⚠️  Sync: the master password was changed here and on another computer at once, and the other's is kept; nothing syncs until sesh sync takes it."), false
 		}
 		lines = append(lines, "Sync: "+ownForkKeptSaid)
 		f, err = syncFolderOf(cfg)
@@ -189,30 +190,30 @@ func autoSyncChecked(cfg *config.Config, store *database.Store, deadline time.Ti
 	switch {
 	case errors.As(err, &away):
 		// A drive not connected: sesh sync status and doctor say so.
-		return lines
+		return lines, false
 	case errors.Is(err, errKeyChangedElsewhere):
 		// Taking it asks for the new password: left to sesh sync.
-		return append(lines, "⚠️  Sync: the master password was changed on another computer; nothing syncs until sesh sync takes it.")
+		return append(lines, "⚠️  Sync: the master password was changed on another computer; nothing syncs until sesh sync takes it."), false
 	case errors.Is(err, errKeyToSend):
 		info, rerr := f.ReadInfo()
 		rec, merr := database.ReadUnlockMaterial(cfg.DBPath.Value)
 		if err := errors.Join(rerr, merr); err != nil {
-			return append(lines, "⚠️  Sync: "+err.Error())
+			return append(lines, "⚠️  Sync: "+err.Error()), false
 		}
 		sum, err := sendWith(store, cfg, f, info, rec)
 		if err != nil {
-			return append(lines, "⚠️  Sync: "+err.Error())
+			return append(lines, "⚠️  Sync: "+err.Error()), false
 		}
 		lines = append(lines, "Sync: sent this computer's master password change; the other computers ask for it at their next sync.")
-		return append(lines, autoSummary(sum)...)
+		return append(lines, autoSummary(sum)...), true
 	case err != nil:
-		return append(lines, "⚠️  Sync: "+err.Error())
+		return append(lines, "⚠️  Sync: "+err.Error()), false
 	}
 	sum, err := syncStoreSum(cfg, f, store, syncRun{deadline: deadline, auto: true})
 	if err != nil {
-		return append(lines, "⚠️  Sync: "+err.Error())
+		return append(lines, "⚠️  Sync: "+err.Error()), false
 	}
-	return append(lines, autoSummary(sum)...)
+	return append(lines, autoSummary(sum)...), true
 }
 
 // keptOwnFork settles the fork in the sync folder f, of the vault cfg
@@ -232,6 +233,12 @@ func keptOwnFork(cfg *config.Config, f syncfolder.Folder) (bool, error) {
 	return true, keepOwnFork(cfg, f, info, m)
 }
 
+// probing are the folders an answers is still waiting on.
+var probing = struct {
+	dirs map[string]bool
+	sync.Mutex
+}{dirs: map[string]bool{}}
+
 // readDir reads a folder, for answers; tests make one that doesn't answer.
 var readDir = os.ReadDir
 
@@ -239,9 +246,21 @@ var readDir = os.ReadDir
 // network mount, say, doesn't. What's left waiting for it ends with the
 // command.
 func answers(dir string, limit time.Duration) bool {
+	// One still waiting on it means it isn't answering: no other is
+	// started, to wait beside it.
+	probing.Lock()
+	if probing.dirs[dir] {
+		probing.Unlock()
+		return false
+	}
+	probing.dirs[dir] = true
+	probing.Unlock()
 	done, read := make(chan struct{}), readDir
 	go func() {
 		_, _ = read(dir) //nolint:errcheck // only how long it takes
+		probing.Lock()
+		delete(probing.dirs, dir)
+		probing.Unlock()
 		close(done)
 	}()
 	select {
