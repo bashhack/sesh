@@ -124,6 +124,18 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 		if had, err := decodeSettings(k, settingsCol); err == nil && old != nil {
 			old.fileName = had.FileName
 		}
+		// And when it was set; an update time that doesn't read (damage)
+		// is left zero.
+		if old != nil {
+			var set sql.NullTime
+			var updated time.Time
+			if s.db.QueryRow(`SELECT set_at, updated_at FROM entries WHERE id = ?`, id).Scan(&set, &updated) == nil {
+				old.set = updated
+				if set.Valid {
+					old.set = set.Time
+				}
+			}
+		}
 	case changed:
 		same, err := s.sameSecret(k, data, salt, e.Secret)
 		if err != nil {
@@ -216,7 +228,7 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 		q := `UPDATE entries SET kind = ?, service = ?, username = ?, encrypted_data = ?, salt = ?, url = ?, details = ?, sealed_details = ?, details_salt = ? WHERE id = ?`
 		args := []any{string(to.Kind), to.Service, to.Username, newData, newSalt, nd.url, nd.plain, nd.sealed, nd.salt, id}
 		if changed {
-			q = `UPDATE entries SET kind = ?, service = ?, username = ?, encrypted_data = ?, salt = ?, url = ?, details = ?, sealed_details = ?, details_salt = ?, updated_at = ? WHERE id = ?`
+			q = `UPDATE entries SET kind = ?, service = ?, username = ?, encrypted_data = ?, salt = ?, url = ?, details = ?, sealed_details = ?, details_salt = ?, updated_at = ?, set_at = NULL WHERE id = ?`
 			args = []any{string(to.Kind), to.Service, to.Username, newData, newSalt, nd.url, nd.plain, nd.sealed, nd.salt, time.Now().UTC(), id}
 		}
 		if _, err = tx.Exec(q, args...); err != nil {

@@ -172,6 +172,7 @@ func (s *Store) SyncKeyID() (string, error) {
 // syncRow is an entry's row, live or in the trash, as sync reads it.
 type syncRow struct {
 	created, updated, changed, deleted time.Time
+	set                                sql.NullTime
 	settings                           sql.NullString
 	key                                vault.Key
 	folder, url, details, tags         string
@@ -184,8 +185,8 @@ type syncRow struct {
 func readSyncRow(q querier, uid string) (syncRow, error) {
 	var r syncRow
 	var kind string
-	err := q.QueryRow(`SELECT id, rev, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at, changed_at
-		FROM entries WHERE uid = ?`, uid).Scan(&r.id, &r.rev, &kind, &r.key.Service, &r.key.Username, &r.data, &r.salt, &r.settings, &r.folder, &r.url, &r.details, &r.sealed, &r.detailsSalt, &r.created, &r.updated, &r.changed)
+	err := q.QueryRow(`SELECT id, rev, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at, set_at, changed_at
+		FROM entries WHERE uid = ?`, uid).Scan(&r.id, &r.rev, &kind, &r.key.Service, &r.key.Username, &r.data, &r.salt, &r.settings, &r.folder, &r.url, &r.details, &r.sealed, &r.detailsSalt, &r.created, &r.updated, &r.set, &r.changed)
 	if err == nil {
 		r.key.Kind, r.place = vault.Kind(kind), SyncLive
 		return r, nil
@@ -193,8 +194,8 @@ func readSyncRow(q querier, uid string) (syncRow, error) {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return r, err
 	}
-	err = q.QueryRow(`SELECT id, rev, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at, changed_at, deleted_at, tags
-		FROM trash WHERE uid = ?`, uid).Scan(&r.id, &r.rev, &kind, &r.key.Service, &r.key.Username, &r.data, &r.salt, &r.settings, &r.folder, &r.url, &r.details, &r.sealed, &r.detailsSalt, &r.created, &r.updated, &r.changed, &r.deleted, &r.tags)
+	err = q.QueryRow(`SELECT id, rev, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at, set_at, changed_at, deleted_at, tags
+		FROM trash WHERE uid = ?`, uid).Scan(&r.id, &r.rev, &kind, &r.key.Service, &r.key.Username, &r.data, &r.salt, &r.settings, &r.folder, &r.url, &r.details, &r.sealed, &r.detailsSalt, &r.created, &r.updated, &r.set, &r.changed, &r.deleted, &r.tags)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		r.place = SyncGone
@@ -222,7 +223,7 @@ func (s *Store) SyncRecord(uid, computer string) (_ *syncfolder.Record, rev int6
 	k := row.key
 	r := &syncfolder.Record{
 		Kind: k.Kind, Service: k.Service, Username: k.Username, Computer: computer,
-		Folder: row.folder, Created: row.created, Updated: row.updated, Changed: row.changed, Deleted: row.deleted,
+		Folder: row.folder, Created: row.created, Updated: row.updated, SetAt: row.set.Time, Changed: row.changed, Deleted: row.deleted,
 	}
 	defer func() {
 		if err != nil {
@@ -320,10 +321,10 @@ func (s *Store) syncTags(row *syncRow) (tags []string, damaged bool, err error) 
 // syncHistory is row's earlier secrets, opened, the newest first; one
 // replaced on this computer is said to be computer's.
 func (s *Store) syncHistory(row *syncRow, computer string) (_ []syncfolder.Earlier, err error) {
-	q, args := `SELECT encrypted_data, salt, replaced_at, file_name, computer FROM history WHERE kind = ? AND service = ? AND username = ? AND trash_id IS NULL ORDER BY id DESC`,
+	q, args := `SELECT encrypted_data, salt, replaced_at, set_at, file_name, computer FROM history WHERE kind = ? AND service = ? AND username = ? AND trash_id IS NULL ORDER BY id DESC`,
 		[]any{string(row.key.Kind), row.key.Service, row.key.Username}
 	if row.place == SyncTrashed {
-		q, args = `SELECT encrypted_data, salt, replaced_at, file_name, computer FROM history WHERE trash_id = ? ORDER BY id DESC`, []any{row.id}
+		q, args = `SELECT encrypted_data, salt, replaced_at, set_at, file_name, computer FROM history WHERE trash_id = ? ORDER BY id DESC`, []any{row.id}
 	}
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
@@ -338,14 +339,14 @@ func (s *Store) syncHistory(row *syncRow, computer string) (_ []syncfolder.Earli
 		}
 	}()
 	type sealed struct {
-		at         time.Time
+		at, set    time.Time
 		file, comp string
 		data, salt []byte
 	}
 	var all []sealed
 	for rows.Next() {
 		var h sealed
-		if err := rows.Scan(&h.data, &h.salt, &h.at, &h.file, &h.comp); err != nil {
+		if err := rows.Scan(&h.data, &h.salt, &h.at, &h.set, &h.file, &h.comp); err != nil {
 			_ = rows.Close() //nolint:errcheck // already failing
 			return nil, fmt.Errorf("read the history of %s: %w", row.key, err)
 		}
@@ -354,7 +355,8 @@ func (s *Store) syncHistory(row *syncRow, computer string) (_ []syncfolder.Earli
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, fmt.Errorf("read the history of %s: %w", row.key, err)
 	}
-	for _, h := range all {
+	for i := range all {
+		h := &all[i]
 		secret, err := s.oracle.DecryptEntry(h.data, h.salt, historyAAD(row.key))
 		if err != nil {
 			if kerr := s.keyUnchanged(s.db); kerr != nil {
@@ -367,7 +369,7 @@ func (s *Store) syncHistory(row *syncRow, computer string) (_ []syncfolder.Earli
 		if h.comp == "" {
 			h.comp = computer
 		}
-		out = append(out, syncfolder.Earlier{ReplacedAt: h.at, Computer: h.comp, FileName: h.file, Secret: secret})
+		out = append(out, syncfolder.Earlier{ReplacedAt: h.at, SetAt: h.set, Computer: h.comp, FileName: h.file, Secret: secret})
 	}
 	return out, nil
 }
@@ -683,16 +685,21 @@ func (s *Store) insertRecord(tx *sql.Tx, uid string, rev int64, rec *syncfolder.
 	if changed.IsZero() {
 		changed = time.Now().UTC()
 	}
+	// When its secret's use began, kept only where it isn't Updated.
+	var set any
+	if !rec.SetAt.IsZero() {
+		set = rec.SetAt
+	}
 	var trashID any
 	if rec.Deleted.IsZero() {
 		if err := s.nameFree(tx, k, 0); err != nil {
 			return err
 		}
 		var id int64
-		if err := tx.QueryRow(`INSERT INTO entries (uid, rev, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at, changed_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		if err := tx.QueryRow(`INSERT INTO entries (uid, rev, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, created_at, updated_at, set_at, changed_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			uid, rev, string(k.Kind), k.Service, k.Username, sr.data, sr.salt, sr.settings, rec.Folder, sr.details.url, sr.details.plain, sr.details.sealed, sr.details.salt,
-			rec.Created, rec.Updated, changed).Scan(&id); err != nil {
+			rec.Created, rec.Updated, set, changed).Scan(&id); err != nil {
 			return err
 		}
 		for _, t := range sr.tags {
@@ -709,10 +716,10 @@ func (s *Store) insertRecord(tx *sql.Tx, uid string, rev int64, rec *syncfolder.
 			tags = []byte("[]")
 		}
 		var id int64
-		if err := tx.QueryRow(`INSERT INTO trash (uid, rev, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, tags, created_at, updated_at, deleted_at, changed_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		if err := tx.QueryRow(`INSERT INTO trash (uid, rev, kind, service, username, encrypted_data, salt, settings, folder, url, details, sealed_details, details_salt, tags, created_at, updated_at, set_at, deleted_at, changed_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			uid, rev, string(k.Kind), k.Service, k.Username, sr.data, sr.salt, sr.settings, rec.Folder, sr.details.url, sr.details.plain, sr.details.sealed, sr.details.salt,
-			string(tags), rec.Created, rec.Updated, rec.Deleted, changed).Scan(&id); err != nil {
+			string(tags), rec.Created, rec.Updated, set, rec.Deleted, changed).Scan(&id); err != nil {
 			return err
 		}
 		trashID = id
@@ -735,8 +742,8 @@ func (s *Store) insertRecord(tx *sql.Tx, uid string, rev int64, rec *syncfolder.
 	// them.
 	for i, h := range slices.Backward(sr.history) {
 		at := sr.historyAt[i]
-		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, trash_id, encrypted_data, salt, replaced_at, file_name, computer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			string(k.Kind), k.Service, k.Username, trashID, h.data, h.salt, at.ReplacedAt, at.FileName, at.Computer); err != nil {
+		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, trash_id, encrypted_data, salt, replaced_at, set_at, file_name, computer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			string(k.Kind), k.Service, k.Username, trashID, h.data, h.salt, at.ReplacedAt, at.SetAt, at.FileName, at.Computer); err != nil {
 			return err
 		}
 	}

@@ -49,6 +49,7 @@ func (s *Store) HistoryKeep() int { return s.historyKeep }
 // read from, so the write can check it hasn't changed since.
 type oldSecret struct {
 	at         time.Time // replaced, for an imported one
+	set        time.Time // its use began: the entry's set_at, or else updated_at, as read; zero when that doesn't read
 	fileName   string    // a file entry's file's name with it
 	data, salt []byte    // sealed for history
 	from       []byte    // the entry's encrypted_data it was read from
@@ -105,14 +106,21 @@ func (s *Store) replacing(k, to vault.Key, data, salt, next []byte) (*oldSecret,
 	return &oldSecret{data: hd, salt: hs, from: data}, nil
 }
 
-// keepOld records old as k's latest earlier secret, in tx, and drops the
-// oldest past the store's history.keep; an old with no data keeps nothing.
+// keepOld records old as k's latest earlier secret, replaced at, in tx,
+// and drops the oldest past the store's history.keep; an old with no data
+// keeps nothing. Its use began when its entry says (set_at, or else
+// updated_at), as it is (another computer's clock may be ahead), or, when
+// that doesn't read, at.
 func (s *Store) keepOld(tx *sql.Tx, k vault.Key, old *oldSecret, at time.Time) error {
 	if old.data == nil {
 		return nil
 	}
-	if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at, file_name) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		string(k.Kind), k.Service, k.Username, old.data, old.salt, at, old.fileName); err != nil {
+	set := old.set
+	if set.IsZero() {
+		set = at
+	}
+	if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at, set_at, file_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		string(k.Kind), k.Service, k.Username, old.data, old.salt, at, set.UTC(), old.fileName); err != nil {
 		return fmt.Errorf("keep %s's earlier secret: %w", k, err)
 	}
 	return s.trimHistory(tx, k)
@@ -261,15 +269,17 @@ func (s *Store) keepImported(tx *sql.Tx, k vault.Key, h *importedHistory) error 
 	if !slices.EqualFunc(rows, h.had, func(r resealedHistory, id int64) bool { return r.id == id }) {
 		return ErrEntryChanged
 	}
-	for _, o := range slices.Backward(h.sealed) {
-		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			string(k.Kind), k.Service, k.Username, o.data, o.salt, o.at.UTC()); err != nil {
+	// When an imported one was set isn't known: no later than replaced.
+	for i := range slices.Backward(h.sealed) {
+		o := &h.sealed[i]
+		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at, set_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			string(k.Kind), k.Service, k.Username, o.data, o.salt, o.at.UTC(), o.at.UTC()); err != nil {
 			return fmt.Errorf("keep %s's imported earlier secrets: %w", k, err)
 		}
 	}
 	for _, id := range slices.Backward(h.had) {
-		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at, file_name)
-			SELECT kind, service, username, encrypted_data, salt, replaced_at, file_name FROM history WHERE id = ?`, id); err != nil {
+		if _, err := tx.Exec(`INSERT INTO history (kind, service, username, encrypted_data, salt, replaced_at, set_at, file_name)
+			SELECT kind, service, username, encrypted_data, salt, replaced_at, set_at, file_name FROM history WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("keep %s's history above what's imported: %w", k, err)
 		}
 		if _, err := tx.Exec(`DELETE FROM history WHERE id = ?`, id); err != nil {
@@ -597,8 +607,8 @@ func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]forgetMark, error) {
 	var marks []forgetMark
 	for _, id := range ids {
 		var data, salt []byte
-		var at time.Time
-		err := s.db.QueryRow(`SELECT encrypted_data, salt, replaced_at FROM history WHERE id = ?`, id).Scan(&data, &salt, &at)
+		var set time.Time
+		err := s.db.QueryRow(`SELECT encrypted_data, salt, set_at FROM history WHERE id = ?`, id).Scan(&data, &salt, &set)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -612,17 +622,17 @@ func (s *Store) forgetMarks(k vault.Key, ids []int64) ([]forgetMark, error) {
 			}
 			continue
 		}
-		marks = append(marks, forgetMark{hash: syncfolder.Forget(secret), replaced: at})
+		marks = append(marks, forgetMark{hash: syncfolder.Forget(secret), set: set})
 		secure.SecureZeroBytes(secret)
 	}
 	return marks, nil
 }
 
 // forgetMark is an earlier secret being forgotten: its hash
-// (syncfolder.Forget), and when it was replaced.
+// (syncfolder.Forget), and when its use was set.
 type forgetMark struct {
-	replaced time.Time
-	hash     string
+	set  time.Time
+	hash string
 }
 
 // markForgotten records, in tx, that k's earlier secrets with marks were
@@ -630,19 +640,20 @@ type forgetMark struct {
 func markForgotten(tx *sql.Tx, k vault.Key, marks []forgetMark) error {
 	now := time.Now().UTC()
 	for _, m := range marks {
-		// No earlier than it was replaced, by whichever computer's clock,
-		// so it's forgotten wherever that's ahead of this one's; but no
-		// more than a day ahead of this one's, so a clock set far wrong
-		// can't keep the same secret, used again later, forgotten.
-		at := now
-		if m.replaced.After(at) {
-			at = m.replaced.UTC()
+		// When its use was set, by whichever computer's clock, so every
+		// copy of that use is forgotten (syncfolder.Forgotten), and a later
+		// use of the same secret isn't; but no more than a day ahead of this
+		// one's, so a clock set far wrong can't keep the same secret, used
+		// again later, forgotten.
+		at := m.set.UTC()
+		if m.set.IsZero() {
+			at = now
 		}
 		if limit := now.Add(24 * time.Hour); at.After(limit) {
 			at = limit
 		}
 		if _, err := tx.Exec(`INSERT INTO history_forgotten (uid, hash, at) SELECT uid, ?, ? FROM entries WHERE kind = ? AND service = ? AND username = ?
-			ON CONFLICT (uid, hash) DO UPDATE SET at = excluded.at`,
+			ON CONFLICT (uid, hash) DO UPDATE SET at = MAX(at, excluded.at)`,
 			m.hash, at, string(k.Kind), k.Service, k.Username); err != nil {
 			return err
 		}

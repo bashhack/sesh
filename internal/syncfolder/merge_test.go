@@ -199,11 +199,11 @@ func TestMerge_TagsAndFields(t *testing.T) {
 	}
 }
 
-// Earlier secrets either has are kept, each once; those either forgot are
-// gone, though the other still has them.
+// Earlier secrets either has are kept, each use once; those either forgot
+// are gone, though the other still has them.
 func TestMerge_History(t *testing.T) {
 	a := changed("laptop", 1, func(r *Record) {
-		r.History = append([]Earlier{{ReplacedAt: t0.Add(time.Hour), Computer: "laptop", Secret: []byte("pw-1")}}, r.History...)
+		r.History = append([]Earlier{{ReplacedAt: t0.Add(time.Hour), SetAt: t0, Computer: "laptop", Secret: []byte("pw-1")}}, r.History...)
 		r.Secret = []byte("pw-2")
 	})
 	b := changed("desktop", 2, func(r *Record) { r.History, r.Forgotten = nil, []Forgotten{{Hash: Forget([]byte("pw-0")), At: t0}} })
@@ -213,10 +213,139 @@ func TestMerge_History(t *testing.T) {
 	}
 	// Both kept the same new one: once.
 	c := changed("desktop", 2, func(r *Record) {
-		r.History = append([]Earlier{{ReplacedAt: t0.Add(time.Hour), Computer: "laptop", Secret: []byte("pw-1")}}, r.History...)
+		r.History = append([]Earlier{{ReplacedAt: t0.Add(time.Hour), SetAt: t0, Computer: "laptop", Secret: []byte("pw-1")}}, r.History...)
 		r.Secret = []byte("pw-2")
 	})
 	if m := merge(t, baseRecord(), a, c); len(m.History) != 2 {
+		t.Errorf("history %+v", m.History)
+	}
+}
+
+// stale is base as a computer not synced since pw-1 was forgotten changed
+// it at hour h: pw-1, set at t0 as base has it, replaced by secret.
+func stale(computer string, h int, secret string) *Record {
+	return changed(computer, h, func(r *Record) {
+		at := t0.Add(time.Duration(h) * time.Hour)
+		r.Secret, r.Updated = []byte(secret), at
+		r.History = append([]Earlier{{ReplacedAt: at, SetAt: t0, Computer: computer, Secret: []byte("pw-1")}}, r.History...)
+	})
+}
+
+// forgot is base as the laptop changed it: pw-1 replaced by pw-2 at hour 1,
+// then forgotten at hour 2.
+func forgot() *Record {
+	return changed("laptop", 1, func(r *Record) {
+		r.Secret, r.Updated = []byte("pw-2"), t0.Add(time.Hour)
+		r.Forgotten = []Forgotten{{Hash: Forget([]byte("pw-1")), At: t0.Add(2 * time.Hour)}}
+	})
+}
+
+// The secret both had, forgotten on one, stays forgotten though the other
+// replaced it after that, not having synced since: with base or without.
+func TestMerge_ForgottenThenReplaced(t *testing.T) {
+	for name, base := range map[string]*Record{"base": baseRecord(), "no base": nil} {
+		m := merge(t, base, forgot(), stale("desktop", 3, "pw-3"))
+		if string(m.Secret) != "pw-3" || hasEarlier(m.History, []byte("pw-1")) || !hasEarlier(m.History, []byte("pw-2")) {
+			t.Errorf("%s: secret %s, history %+v", name, m.Secret, m.History)
+		}
+		// The desktop, synced at its own version, takes the merge: its pw-1
+		// too is forgotten.
+		replaced := stale("desktop", 3, "pw-3")
+		if again := merge(t, replaced, replaced, m.Record); hasEarlier(again.History, []byte("pw-1")) {
+			t.Errorf("%s: desktop's history %+v", name, again.History)
+		}
+	}
+}
+
+// Two computers replacing the forgotten secret, merged before the
+// forgetting reaches either, still forget it, each its own copy.
+func TestMerge_ForgottenThenReplacedTwice(t *testing.T) {
+	desktop, third := stale("desktop", 3, "pw-3"), stale("third", 4, "pw-4")
+	both := merge(t, baseRecord(), desktop, third)
+	all := merge(t, baseRecord(), forgot(), both.Record)
+	if hasEarlier(all.History, []byte("pw-1")) {
+		t.Errorf("history %+v", all.History)
+	}
+	// The third computer, synced at its own version, still has its copy
+	// replaced at hour 4.
+	if again := merge(t, third, third, all.Record); hasEarlier(again.History, []byte("pw-1")) {
+		t.Errorf("third's history %+v", again.History)
+	}
+}
+
+// A forgotten secret used again, set after it was forgotten and replaced,
+// is kept, beside a stale copy of its use before, forgotten.
+func TestMerge_ForgottenUsedAgain(t *testing.T) {
+	again := func(r *Record) {
+		r.Secret, r.Updated = []byte("pw-new"), t0.Add(4*time.Hour)
+		r.History = []Earlier{{ReplacedAt: t0.Add(4 * time.Hour), SetAt: t0.Add(3 * time.Hour), Computer: "laptop", Secret: []byte("pw-1")}}
+		r.Forgotten = []Forgotten{{Hash: Forget([]byte("pw-1")), At: t0.Add(90 * time.Minute)}}
+	}
+	reused := changed("laptop", 4, again)
+	tagged := changed("desktop", 5, func(r *Record) { r.Tags = append(r.Tags, "more") })
+	for name, other := range map[string]*Record{"tag only": tagged, "stale copy": stale("desktop", 2, "pw-3")} {
+		m := merge(t, baseRecord(), reused, other)
+		i := slices.IndexFunc(m.History, func(e Earlier) bool { return string(e.Secret) == "pw-1" })
+		if i < 0 || !m.History[i].SetAt.Equal(t0.Add(3*time.Hour)) || slices.IndexFunc(m.History[i+1:], func(e Earlier) bool { return string(e.Secret) == "pw-1" }) >= 0 {
+			t.Errorf("%s: history %+v", name, m.History)
+		}
+	}
+}
+
+// A secret restored from a backup keeps when the backup had it set: with
+// the same secret elsewhere, both ways round; replaced after it was
+// forgotten elsewhere, forgotten.
+func TestMerge_RestoredSetAt(t *testing.T) {
+	restored := changed("desktop", 5, func(r *Record) { r.Updated, r.SetAt = t0.Add(5*time.Hour), t0 })
+	if m := merge(t, baseRecord(), restored, baseRecord()); !m.Updated.Equal(t0.Add(5*time.Hour)) || !m.SetAt.Equal(t0) {
+		t.Errorf("updated %s, set %s", m.Updated, m.SetAt)
+	}
+	replaced := changed("laptop", 6, func(r *Record) {
+		r.Secret, r.Updated = []byte("pw-9"), t0.Add(6*time.Hour)
+		r.Forgotten = []Forgotten{{Hash: Forget([]byte("pw-1")), At: t0.Add(2 * time.Hour)}}
+	})
+	if m := merge(t, nil, restored, replaced); string(m.Secret) != "pw-9" || hasEarlier(m.History, []byte("pw-1")) {
+		t.Errorf("secret %s, history %+v", m.Secret, m.History)
+	}
+}
+
+// Two uses of one secret are both kept, until one is forgotten: then only
+// the use set after.
+func TestMerge_HistoryTwoUses(t *testing.T) {
+	first := Earlier{ReplacedAt: t0.Add(time.Hour), SetAt: t0, Computer: "desktop", Secret: []byte("pw-1")}
+	again := Earlier{ReplacedAt: t0.Add(3 * time.Hour), SetAt: t0.Add(2 * time.Hour), Computer: "desktop", Secret: []byte("pw-1")}
+	desktop := changed("desktop", 3, func(r *Record) {
+		r.Secret, r.Updated = []byte("pw-3"), t0.Add(3*time.Hour)
+		r.History = append([]Earlier{again, first}, r.History...)
+	})
+	tagged := changed("laptop", 4, func(r *Record) { r.Tags = append(r.Tags, "more") })
+	uses := func(m Merged) (n int) {
+		for _, e := range m.History {
+			if string(e.Secret) == "pw-1" {
+				n++
+			}
+		}
+		return n
+	}
+	if m := merge(t, baseRecord(), desktop, tagged); uses(m) != 2 {
+		t.Errorf("history %+v, want both uses of pw-1", m.History)
+	}
+	tagged.Forgotten = []Forgotten{{Hash: Forget([]byte("pw-1")), At: t0.Add(90 * time.Minute)}}
+	if m := merge(t, baseRecord(), desktop, tagged); uses(m) != 1 || !hasEarlier(m.History, []byte("pw-1")) {
+		t.Errorf("history %+v, want the use set after the forgetting", m.History)
+	}
+}
+
+// A forgotten secret's copy with no set time is taken as set when
+// replaced: used again later, it's kept.
+func TestMerge_ForgottenUsedAgainNoSetTime(t *testing.T) {
+	reused := changed("laptop", 4, func(r *Record) {
+		r.Secret, r.Updated = []byte("pw-new"), t0.Add(4*time.Hour)
+		r.History = []Earlier{{ReplacedAt: t0.Add(4 * time.Hour), Computer: "laptop", Secret: []byte("pw-1")}}
+		r.Forgotten = []Forgotten{{Hash: Forget([]byte("pw-1")), At: t0.Add(90 * time.Minute)}}
+	})
+	tagged := changed("desktop", 5, func(r *Record) { r.Tags = append(r.Tags, "more") })
+	if m := merge(t, baseRecord(), reused, tagged); !hasEarlier(m.History, []byte("pw-1")) {
 		t.Errorf("history %+v", m.History)
 	}
 }
@@ -460,5 +589,15 @@ func TestMerge_KeptBesideFits(t *testing.T) {
 	m := merge(t, base, full("laptop", 1, "l"), full("desktop", 2, "d"))
 	if len(m.Fields) != vault.MaxFields || string(m.Fields[0].Value) != "d" || !strings.Contains(string(m.Notes), "— f0-laptop —\nl") {
 		t.Errorf("fields %d, notes %q", len(m.Fields), m.Notes)
+	}
+}
+
+// One secret on both sides, updated at the same moment from different
+// starts: the same record whichever side is ours, the later start kept.
+func TestMerge_SameSecretSameUpdate(t *testing.T) {
+	restored := changed("desktop", 5, func(r *Record) { r.Updated, r.SetAt = t0.Add(5*time.Hour), t0 })
+	typed := changed("laptop", 6, func(r *Record) { r.Updated = t0.Add(5 * time.Hour) })
+	if m := merge(t, baseRecord(), restored, typed); !m.Began().Equal(t0.Add(5 * time.Hour)) {
+		t.Errorf("began %s", m.Began())
 	}
 }

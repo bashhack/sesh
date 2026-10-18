@@ -259,6 +259,36 @@ func TestSync_ForgetAfterConcurrentChange(t *testing.T) {
 	}
 }
 
+// A password forgotten on one computer stays forgotten though the other,
+// not having synced since, replaces it afterwards; whichever syncs first.
+func TestSync_ForgetBeforeConcurrentChange(t *testing.T) {
+	t.Parallel()
+	for _, first := range []string{"laptop", "desktop"} {
+		t.Run(first+" first", func(t *testing.T) {
+			cs, _, f := computers(t, 2)
+			laptop, desktop := cs[0], cs[1]
+			gh := laptop.put("github", "pw-old")
+			settleN(t, f, 6, laptop, desktop)
+			laptop.put("github", "pw-laptop")
+			// laptop forgets pw-old (its version 2), then the desktop replaces it.
+			if err := laptop.store.ForgetVersions(gh, 2); err != nil {
+				t.Fatal(err)
+			}
+			desktop.put("github", "pw-desktop")
+			order := []*computer{laptop, desktop}
+			if first == "desktop" {
+				order = []*computer{desktop, laptop}
+			}
+			settleN(t, f, 6, order...)
+			for _, c := range cs {
+				if slices.Contains(allSecrets(t, c), "pw-old") {
+					t.Errorf("%s: pw-old, forgotten on the laptop, is back (all %q)", c.name, allSecrets(t, c))
+				}
+			}
+		})
+	}
+}
+
 // A large file entry with a long history still syncs: the oldest earlier
 // files aren't sent once it would be over MaxFileSize.
 func TestSync_FileHistorySize(t *testing.T) {

@@ -630,13 +630,15 @@ func (y *syncer) restored(uid string, it *database.SyncItem, files []syncfolder.
 	}
 	// The restored version, as a change made now: the newer, its secret
 	// replacing the folder's, which goes into its history (so it's a
-	// conflict the newer wins, not one the folder settled before).
+	// conflict the newer wins, not one the folder settled before). Its
+	// secret's use began when the backup had it set: forgotten elsewhere
+	// since, it's the secret until replaced, then forgotten.
 	now := y.now()
 	l := *local
 	l.Changed = latest(now, folder.Changed.Add(time.Nanosecond))
 	if len(folder.Secret) > 0 && !bytes.Equal(folder.Secret, local.Secret) {
-		l.History = append(slices.Clone(local.History), syncfolder.Earlier{ReplacedAt: now, Computer: y.computer, FileName: folder.Settings.FileName, Secret: folder.Secret})
-		l.Updated = now
+		l.History = append(slices.Clone(local.History), syncfolder.Earlier{ReplacedAt: now, SetAt: folder.Began(), Computer: y.computer, FileName: folder.Settings.FileName, Secret: folder.Secret})
+		l.Updated, l.SetAt = now, local.Began()
 	}
 	m, err := y.merge(uid, nil, &l, folder)
 	if err != nil {
@@ -724,7 +726,7 @@ func onlyOlderHistory(merged, theirs *syncfolder.Record) bool {
 	}
 	for i := range t.History {
 		a, b := &m.History[i], &t.History[i]
-		if !a.ReplacedAt.Equal(b.ReplacedAt) || a.Computer != b.Computer || a.FileName != b.FileName || !bytes.Equal(a.Secret, b.Secret) {
+		if !a.ReplacedAt.Equal(b.ReplacedAt) || !a.SetAt.Equal(b.SetAt) || a.Computer != b.Computer || a.FileName != b.FileName || !bytes.Equal(a.Secret, b.Secret) {
 			return false
 		}
 	}

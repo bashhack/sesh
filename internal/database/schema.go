@@ -53,6 +53,11 @@ func migrateV1(tx *sql.Tx) error {
 			details_salt   BLOB,
 			created_at     DATETIME NOT NULL,
 			updated_at     DATETIME NOT NULL,
+			-- When this use of its secret began, where that isn't
+			-- updated_at: a restore from a backup, its secret taken as
+			-- the change, keeps the backup's (see
+			-- syncfolder.Record.SetAt). NULL is updated_at.
+			set_at         DATETIME,
 			-- When anything of it last changed (updated_at follows the
 			-- secret alone): which of two changes is newer, for sync.
 			changed_at     DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')),
@@ -81,13 +86,14 @@ func migrateV1(tx *sql.Tx) error {
 			tags           TEXT NOT NULL DEFAULT '[]',
 			created_at     DATETIME NOT NULL,
 			updated_at     DATETIME NOT NULL,
+			set_at         DATETIME,
 			deleted_at     DATETIME NOT NULL,
 			changed_at     DATETIME NOT NULL
 		)`,
 		`CREATE INDEX idx_trash_deleted_at ON trash(deleted_at)`,
 		// Entries' earlier secrets, each sealed for its entry's name, and
-		// when it was replaced. While its entry is in the trash, trash_id
-		// is that entry's, and it goes with it; see history.go.
+		// when it was set and replaced. While its entry is in the trash,
+		// trash_id is that entry's, and it goes with it; see history.go.
 		// Their ids aren't reused, so one listed names only that secret.
 		`CREATE TABLE history (
 			id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +104,10 @@ func migrateV1(tx *sql.Tx) error {
 			encrypted_data BLOB NOT NULL,
 			salt           BLOB NOT NULL,
 			replaced_at    DATETIME NOT NULL,
+			-- When this use of it began: its entry's set_at, or else
+			-- updated_at, as it was replaced, or as another computer
+			-- synced it here (see syncfolder.Earlier.SetAt).
+			set_at         DATETIME NOT NULL,
 			-- A file entry's file's name, as it was then.
 			file_name      TEXT NOT NULL DEFAULT '',
 			-- The computer whose change replaced it, when another synced
