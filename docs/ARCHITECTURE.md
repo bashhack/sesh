@@ -237,7 +237,9 @@ erDiagram
         BLOB sealed_details "notes and secret values, encrypted"
         BLOB details_salt
         DATETIME created_at
-        DATETIME updated_at
+        DATETIME updated_at "when the secret changed"
+        DATETIME set_at "when its use began, when not updated_at"
+        DATETIME changed_at "when anything changed"
     }
 
     entry_tags {
@@ -263,7 +265,9 @@ erDiagram
         TEXT tags "JSON"
         DATETIME created_at
         DATETIME updated_at
+        DATETIME set_at
         DATETIME deleted_at
+        DATETIME changed_at
     }
 
     history {
@@ -275,7 +279,9 @@ erDiagram
         BLOB encrypted_data "an earlier secret"
         BLOB salt
         DATETIME replaced_at
+        DATETIME set_at "when its use began"
         TEXT file_name "a file entry's, then"
+        TEXT computer "where it was replaced"
     }
 
     recovery {
@@ -303,7 +309,7 @@ erDiagram
 
     audit_log {
         INTEGER id PK
-        TEXT event_type "access / modify / delete / trash / restore / purge / import / doctor / rekey"
+        TEXT event_type "access / modify / delete / trash / restore / purge / import / doctor / rekey / sync"
         TEXT entry_id "an entry's ID text; empty for whole-vault events"
         TEXT detail
         DATETIME created_at
@@ -316,19 +322,20 @@ Syncing between computers is three parts, from the bottom up:
 
 - **`internal/syncfolder`: the folder.**
   - `sesh-sync.json` (`Info`): the folder's ID, the vault's key record, the links of master password changes (`KeyLink`: the old key sealed with the new, and a proof made with the old) and the shared recovery key's record (`SealedRecovery`).
-  - `entries/<uid>.sesh`: an entry's file. A short header (a marker, the entry's uid, the ID of the key record it's sealed with) is followed by the entry's whole `Record`, as JSON, sealed through a `Sealer` (the vault's key, held by the agent) in pieces of at most 1 MiB, each bound to the header, its place and whether it's the last.
+  - `entries/<uid>.sesh`: an entry's file. A short header (a marker, the format, the entry's uid, the ID of the key record it's sealed with) is followed by the entry's whole `Record`, as JSON, sealed through a `Sealer` (the vault's key, held by the agent) in pieces of at most 1 MiB, each bound to the header, its place and whether it's the last.
   - A `Record` carries everything sync moves: the entry's name, secret, notes, fields, folder and tags, its earlier secrets (each with when its use began and was replaced), its forget marks, its trash state, and `Versions`, the count of changes each computer made, which tells an older copy from a newer one or one made alongside.
   - `Merge` and `MergeWith` merge two records field by field against the one both came from (or none), the same whichever side is "ours".
   - `Scan` lists the folder: entry files (sync tools' conflict copies included, told apart by the uid inside, not the name), files iCloud hasn't downloaded, and files that can't be read. Every file is written whole (`atomicfile`).
 - **`internal/vaultsync`: the engine.** `SyncWith` syncs a store with a folder.
   - It reads what the vault last agreed with the folder for each entry (`database.SyncItems`), scans the folder, and settles each entry on its own.
-  - An entry changed neither here nor there, its agreed version intact, is skipped without decrypting anything.
+  - An entry changed neither here nor there, its agreed version intact, is skipped without decrypting anything. One with a file that can't be read, isn't downloaded yet, or is sealed with another master password's key waits, and nothing is written over it.
   - Otherwise, a change in the folder is taken, one made here is sent, and one made on both is merged against the agreed version.
-  - Older copies put back are ignored, lost files are written again, the same name made on two computers is renamed or joined, conflict copies are removed, and an entry restored from a backup wins over the folder's except for a deletion there.
+  - Older copies put back are ignored, lost files are written again, the same name made on two computers is renamed or joined, conflict copies are removed, and an entry restored from a backup wins over the folder's except for a deletion there (unless it was changed here after the restore).
+  - A file sealed with a key from before a master password change is only sealed again: when it holds something new, that isn't taken, and it's written over.
   - `Options` give it the vault's older keys (to open files sealed before a password change, and seal them again), a deadline, and whether a sync with nothing to do is logged.
   - It returns a `Summary`.
 - **`internal/database`: what the vault keeps.**
-  - `sync_state`, per entry: the rev and the folder file's hash it last agreed, and that version itself, sealed, with its hash.
+  - `sync_state`, per entry: the rev and the folder file's hash it last agreed, and that version itself (without its earlier secrets), sealed, with its hash.
   - `sync_info`: this computer's sync ID and change count, the folder's ID, a password change not sent yet, and the folder's recovery key record as last seen.
   - `sync_restored`: entries restored from a backup, not synced since.
   - `history_forgotten`: the forget marks.
@@ -610,7 +617,7 @@ The pattern uses the test binary itself as a mock process, eliminating:
 
 ### Several Computers on One Machine
 
-Sync is tested with each "computer" its own vault in a temporary folder, sharing one sync folder, with no sync tool needed: what sync tools do (conflict copies under each tool's names, files iCloud hasn't downloaded, a file lost or an older one put back) is done by the tests. Scenario tests run their steps in every order of the computers involved, and random tests (`TestSync_Random`, `TestSync_Random2`; `SESH_SYNC_SEEDS` sets how many seeds) run random changes on several computers, then check that every computer agrees and that no secret was lost.
+Sync is tested with each "computer" its own vault in a temporary folder, sharing one sync folder, with no sync tool needed: what sync tools do (conflict copies under each tool's names, files iCloud hasn't downloaded, a file lost or an older one put back) is done by the tests. Some scenario tests run their steps in every order of the computers involved, and random tests (`TestSync_Random`, `TestSync_Random2`; `SESH_SYNC_SEEDS` sets how many seeds, `SESH_SYNC_SEED` runs one, `SESH_SYNC_STEPS` how many steps) run random changes on several computers, then check that every computer agrees and that no secret was lost.
 
 ## Performance Design
 
@@ -619,7 +626,7 @@ sesh is a CLI tool — every invocation should feel instant. The design avoids u
 - **Selective execution**: only the command the first word names runs, and it opens the vault only once its arguments are right. Plain `sesh`, `--help` and completion never unlock it.
 - **No framework overhead**: Go's standard `flag` package for parsing, no logging framework in the hot path.
 
-In a vault that syncs, a command syncs as it opens the vault: a sync with nothing new reads the folder's files to hash them and decrypts nothing, so it costs little beside the unlock.
+In a vault that syncs, a command syncs as it opens the vault: a sync with nothing new reads the folder's files to hash them and decrypts no entry (only the folder's small recovery key record, if there is one), so it costs little beside the unlock. A folder that doesn't answer costs each such command up to 5 seconds, after which it goes on without syncing.
 
 The dominant cost in any sesh invocation is unlocking the vault (deriving the key from the master password, unless the agent already holds it) and, for `sesh aws`, the network round-trip to AWS STS. The first command that opens the vault once the newest backup is `backup.every_days` old also makes the automatic backup: an integrity check and a copy of the vault file (a vault with no entries isn't backed up).
 
