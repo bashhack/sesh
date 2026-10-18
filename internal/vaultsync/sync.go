@@ -635,7 +635,7 @@ func (y *syncer) restored(uid string, it *database.SyncItem, files []syncfolder.
 	l := *local
 	l.Changed = latest(now, folder.Changed.Add(time.Nanosecond))
 	if len(folder.Secret) > 0 && !bytes.Equal(folder.Secret, local.Secret) {
-		l.History = append(slices.Clone(local.History), syncfolder.Earlier{ReplacedAt: now, Computer: y.computer, FileName: folder.Settings.FileName, Secret: folder.Secret})
+		l.History = append(slices.Clone(local.History), syncfolder.Earlier{ReplacedAt: now, SetAt: folder.Updated, Computer: y.computer, FileName: folder.Settings.FileName, Secret: folder.Secret})
 		l.Updated = now
 	}
 	m, err := y.merge(uid, nil, &l, folder)
@@ -724,7 +724,7 @@ func onlyOlderHistory(merged, theirs *syncfolder.Record) bool {
 	}
 	for i := range t.History {
 		a, b := &m.History[i], &t.History[i]
-		if !a.ReplacedAt.Equal(b.ReplacedAt) || a.Computer != b.Computer || a.FileName != b.FileName || !bytes.Equal(a.Secret, b.Secret) {
+		if !a.ReplacedAt.Equal(b.ReplacedAt) || !a.SetAt.Equal(b.SetAt) || a.Computer != b.Computer || a.FileName != b.FileName || !bytes.Equal(a.Secret, b.Secret) {
 			return false
 		}
 	}

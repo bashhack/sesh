@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/syncfolder"
 	"github.com/bashhack/sesh/internal/vault"
@@ -232,6 +233,51 @@ func syncItem(t *testing.T, s *Store, uid string) SyncItem {
 		t.Fatalf("no item %s in %+v", uid, items)
 	}
 	return items[i]
+}
+
+// An earlier secret keeps when its use was set, its entry's update time as
+// replaced (by Put or Edit); forgetting it marks no earlier than that.
+func TestSyncHistory_SetAt(t *testing.T) {
+	a, _ := syncPair(t)
+	k := vault.Key{Kind: vault.KindPassword, Service: "github", Username: "alice"}
+	if err := a.Put(k, []byte("pw-1")); err != nil {
+		t.Fatal(err)
+	}
+	// pw-1 was set by a computer whose clock is 10 minutes ahead.
+	if _, err := a.db.Exec(`UPDATE entries SET updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now', '+10 minutes')`); err != nil {
+		t.Fatal(err)
+	}
+	set := func() time.Time {
+		e, err := a.Lookup(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e.UpdatedAt
+	}
+	set1 := set()
+	if err := a.Put(k, []byte("pw-2")); err != nil {
+		t.Fatal(err)
+	}
+	set2 := set()
+	if _, err := a.Edit(k, EntryEdit{Secret: []byte("pw-3")}); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := a.SyncRecord(uidOf(t, a, k), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := rec.History; len(h) != 2 || string(h[0].Secret) != "pw-2" || !h[0].SetAt.Equal(set2) || string(h[1].Secret) != "pw-1" || !h[1].SetAt.Equal(set1) {
+		t.Fatalf("history %+v, want pw-2 set %s, pw-1 set %s", h, set2, set1)
+	}
+	if err := a.ForgetVersions(k, 3); err != nil { // pw-1
+		t.Fatal(err)
+	}
+	if rec, _, err = a.SyncRecord(uidOf(t, a, k), "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Forgotten) != 1 || rec.Forgotten[0].At.Before(set1) {
+		t.Errorf("forgotten %+v, want at %s or later", rec.Forgotten, set1)
+	}
 }
 
 // A change's count is past any seen for this computer, whatever the vault

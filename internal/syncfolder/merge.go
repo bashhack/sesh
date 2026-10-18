@@ -42,8 +42,8 @@ type Merged struct {
 //     kept as another field, named for its computer;
 //   - tags and custom fields merge one by one, and code settings each on
 //     its own; a file entry's file name goes with its file;
-//   - earlier secrets are those either has, each once, less those either
-//     forgot on purpose (Forgotten);
+//   - earlier secrets are those either has, each use of one once, less
+//     those either forgot on purpose (Forgotten);
 //   - an entry edited (or restored) in one and deleted (to the trash, or
 //     for good) in the other comes back, with the edit.
 //
@@ -148,8 +148,9 @@ func MergeWith(base, ours, theirs *Record, beside Beside) (m Merged) {
 	}
 	r.Created = earliest(ours.Created, theirs.Created)
 	// Whichever secret isn't kept goes into the history, replaced when and
-	// where the kept one was made: either computer may keep fewer earlier
-	// secrets than the other, so neither's history may have it.
+	// where the kept one was made, set when its side set it: either
+	// computer may keep fewer earlier secrets than the other, so neither's
+	// history may have it.
 	history := slices.Concat(ours.History, theirs.History)
 	replacedAt := secretFrom.Updated
 	if replacedAt.IsZero() {
@@ -158,25 +159,11 @@ func MergeWith(base, ours, theirs *Record, beside Beside) (m Merged) {
 	for _, side := range []*Record{ours, theirs} {
 		// Not one forgotten on purpose after it was set: a computer that
 		// hadn't synced since still has it as its secret.
-		if forgottenOne(&Earlier{Secret: side.Secret, ReplacedAt: side.Updated}, r.Forgotten) {
+		if forgottenOne(&Earlier{Secret: side.Secret, SetAt: side.Updated, ReplacedAt: side.Updated}, r.Forgotten) {
 			continue
 		}
 		if len(side.Secret) > 0 && !bytes.Equal(side.Secret, r.Secret) {
-			history = append(history, Earlier{ReplacedAt: replacedAt, Computer: secretFrom.Computer, FileName: side.Settings.FileName, Secret: side.Secret})
-		}
-	}
-	// Base's secret, set when base says, forgotten on purpose since: so is
-	// every earlier copy of it, even one replaced after it was forgotten,
-	// by a computer that hadn't synced since. Its mark is moved to the
-	// latest of those, so every computer holding one forgets it too.
-	if len(base.Secret) > 0 && !base.Updated.IsZero() {
-		h := Forget(base.Secret)
-		if i := slices.IndexFunc(r.Forgotten, func(f Forgotten) bool { return f.Hash == h && !base.Updated.After(f.At) }); i >= 0 {
-			for _, e := range history {
-				if bytes.Equal(e.Secret, base.Secret) {
-					r.Forgotten[i].At = latest(r.Forgotten[i].At, e.ReplacedAt)
-				}
-			}
+			history = append(history, Earlier{ReplacedAt: replacedAt, SetAt: side.Updated, Computer: secretFrom.Computer, FileName: side.Settings.FileName, Secret: side.Secret})
 		}
 	}
 	r.History = mergeHistory(history, r.Forgotten, r.Secret)
@@ -455,13 +442,18 @@ func mergeForgotten(ours, theirs []Forgotten) []Forgotten {
 }
 
 // forgottenOne says whether e was forgotten on purpose: its secret was,
-// after it was replaced.
+// after e's use of it was set. That's the same for every copy of one use,
+// replaced wherever and whenever.
 func forgottenOne(e *Earlier, forgotten []Forgotten) bool {
 	if len(forgotten) == 0 {
 		return false
 	}
+	set := e.SetAt
+	if set.IsZero() {
+		set = e.ReplacedAt
+	}
 	h := Forget(e.Secret)
-	return slices.ContainsFunc(forgotten, func(f Forgotten) bool { return f.Hash == h && !e.ReplacedAt.After(f.At) })
+	return slices.ContainsFunc(forgotten, func(f Forgotten) bool { return f.Hash == h && !set.After(f.At) })
 }
 
 // hasEarlier says whether hs has secret among its earlier secrets.
@@ -469,18 +461,23 @@ func hasEarlier(hs []Earlier, secret []byte) bool {
 	return slices.ContainsFunc(hs, func(e Earlier) bool { return bytes.Equal(e.Secret, secret) })
 }
 
-// mergeHistory is the earlier secrets of hs, each secret once (when it was
-// first replaced), less those forgotten and the current secret, the
-// newest first. Neither computer's history.keep trims it: each trims its
-// own.
+// mergeHistory is the earlier secrets of hs, each use of a secret once
+// (when it was first replaced), less those forgotten and the current
+// secret, the newest first. Uses are told apart by when they were set, so
+// one used again after it was forgotten is kept, though a computer that
+// hasn't taken the forgetting yet has the use before as well. Neither
+// computer's history.keep trims it: each trims its own.
 func mergeHistory(hs []Earlier, forgotten []Forgotten, current []byte) []Earlier {
 	hs = slices.Clone(hs)
 	slices.SortStableFunc(hs, func(a, b Earlier) int {
-		return cmp.Or(a.ReplacedAt.Compare(b.ReplacedAt), cmp.Compare(a.Computer, b.Computer), cmp.Compare(a.FileName, b.FileName), bytes.Compare(a.Secret, b.Secret))
+		return cmp.Or(a.ReplacedAt.Compare(b.ReplacedAt), a.SetAt.Compare(b.SetAt), cmp.Compare(a.Computer, b.Computer), cmp.Compare(a.FileName, b.FileName), bytes.Compare(a.Secret, b.Secret))
 	})
+	sameUse := func(e Earlier) func(Earlier) bool {
+		return func(o Earlier) bool { return o.SetAt.Equal(e.SetAt) && bytes.Equal(o.Secret, e.Secret) }
+	}
 	var out []Earlier
 	for _, e := range hs {
-		if bytes.Equal(e.Secret, current) || hasEarlier(out, e.Secret) || forgottenOne(&e, forgotten) {
+		if bytes.Equal(e.Secret, current) || slices.ContainsFunc(out, sameUse(e)) || forgottenOne(&e, forgotten) {
 			continue
 		}
 		e.Secret = bytes.Clone(e.Secret)

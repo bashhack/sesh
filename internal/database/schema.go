@@ -86,8 +86,8 @@ func migrateV1(tx *sql.Tx) error {
 		)`,
 		`CREATE INDEX idx_trash_deleted_at ON trash(deleted_at)`,
 		// Entries' earlier secrets, each sealed for its entry's name, and
-		// when it was replaced. While its entry is in the trash, trash_id
-		// is that entry's, and it goes with it; see history.go.
+		// when it was set and replaced. While its entry is in the trash,
+		// trash_id is that entry's, and it goes with it; see history.go.
 		// Their ids aren't reused, so one listed names only that secret.
 		`CREATE TABLE history (
 			id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +98,10 @@ func migrateV1(tx *sql.Tx) error {
 			encrypted_data BLOB NOT NULL,
 			salt           BLOB NOT NULL,
 			replaced_at    DATETIME NOT NULL,
+			-- When this use of it began: its entry's updated_at as it
+			-- was replaced, or as another computer synced it here (see
+			-- syncfolder.Earlier.SetAt).
+			set_at         DATETIME NOT NULL,
 			-- A file entry's file's name, as it was then.
 			file_name      TEXT NOT NULL DEFAULT '',
 			-- The computer whose change replaced it, when another synced

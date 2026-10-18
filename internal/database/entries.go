@@ -215,6 +215,8 @@ func (s *Store) write(e *vault.Entry, secret []byte, whole bool, d *vault.Detail
 		var created, updated time.Time
 		if err := s.db.QueryRow(`SELECT created_at, updated_at FROM entries WHERE kind = ? AND service = ? AND username = ?`, string(e.Kind), e.Service, e.Username).Scan(&created, &updated); err != nil {
 			same, mend = false, true
+		} else if old != nil {
+			old.set = updated
 		}
 	}
 	var imported *importedHistory

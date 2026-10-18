@@ -124,6 +124,14 @@ func (s *Store) Edit(k vault.Key, e EntryEdit) (string, error) {
 		if had, err := decodeSettings(k, settingsCol); err == nil && old != nil {
 			old.fileName = had.FileName
 		}
+		// And when it was set; an update time that doesn't read (damage)
+		// is left zero.
+		if old != nil {
+			var updated time.Time
+			if s.db.QueryRow(`SELECT updated_at FROM entries WHERE id = ?`, id).Scan(&updated) == nil {
+				old.set = updated
+			}
+		}
 	case changed:
 		same, err := s.sameSecret(k, data, salt, e.Secret)
 		if err != nil {

@@ -231,9 +231,9 @@ func (v Versions) total() (n uint64) {
 }
 
 // Forgotten is an earlier secret forgotten on purpose: named by its hash
-// (Forget), and when. That secret replaced at or before then is
-// forgotten, wherever it was replaced; the same secret used again and
-// replaced later isn't.
+// (Forget), and when. That secret, in each use of it set at or before
+// then (Earlier.SetAt), is forgotten, wherever and whenever that use was
+// replaced; the same secret used again, set later, isn't.
 type Forgotten struct {
 	At   time.Time `json:"at"`
 	Hash string    `json:"hash"`
@@ -250,6 +250,11 @@ type Field struct {
 // Earlier is one of an entry's earlier secrets.
 type Earlier struct {
 	ReplacedAt time.Time `json:"replaced_at"`
+	// SetAt is when this use of it began: its entry's update time
+	// (Record.Updated) as it was replaced, kept as it is on every
+	// computer, so each copy of one use has the same. Zero is taken as
+	// ReplacedAt.
+	SetAt time.Time `json:"set_at,omitzero"`
 	// Computer is the name of the computer whose change replaced it.
 	Computer string `json:"computer,omitempty"`
 	// FileName is a file entry's file's name, as it was then.

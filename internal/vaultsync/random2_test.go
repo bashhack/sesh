@@ -8,15 +8,18 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/syncfolder"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
 // TestSync_Random with restores from backups, writes never agreed, unequal
-// history.keep, damaged rows and forgetting: the first computer, keeping
-// everything, still has every secret it held but those deleted or
-// forgotten on purpose (SESH_SYNC_SEEDS, SESH_SYNC_STEPS for more).
+// history.keep, damaged rows, forgetting and forgotten secrets used again:
+// the first computer, keeping everything, still has every secret it held
+// but those deleted or forgotten on purpose (SESH_SYNC_SEEDS,
+// SESH_SYNC_STEPS for more).
 func TestSync_Random2(t *testing.T) {
 	t.Parallel()
 	seeds, steps := 2, 40
@@ -42,6 +45,13 @@ func TestSync_Random2(t *testing.T) {
 			var set []string
 			excused := map[string]bool{}
 			forgottenSecrets := map[string]bool{}
+			// forgot are the secrets forgotten, by the uid of their entry,
+			// and when.
+			type forgotOne struct {
+				at          time.Time
+				uid, secret string
+			}
+			var forgot []forgotOne
 			backups := map[int]string{}
 			n := 0
 			var log []string
@@ -68,7 +78,7 @@ func TestSync_Random2(t *testing.T) {
 				ci := r.IntN(len(cs))
 				c := cs[ci]
 				keys := liveKeys(t, c)
-				op := r.IntN(14)
+				op := r.IntN(15)
 				switch {
 				case op < 3 || len(keys) == 0:
 					svc := fmt.Sprintf("s%d", r.IntN(4))
@@ -166,7 +176,49 @@ func TestSync_Random2(t *testing.T) {
 					if err := c.store.ForgetVersions(k, 2); err == nil {
 						excused[sec] = true
 						forgottenSecrets[sec] = true
+						forgot = append(forgot, forgotOne{at: time.Now(), uid: liveUID(t, c, k), secret: sec})
 						logf("%d %s forget %s on %s", step, c.name, sec, k.Service)
+					}
+					continue
+				case op < 14:
+					// A forgotten secret used again on its entry, where it
+					// isn't the secret, and replaced: it's to be kept.
+					if len(forgot) == 0 {
+						continue
+					}
+					fo := forgot[r.IntN(len(forgot))]
+					k, ok := liveKeyOf(t, c, fo.uid)
+					if !ok {
+						continue
+					}
+					if cur, err := c.store.Get(k); err != nil || string(cur) == fo.secret {
+						continue
+					}
+					n++
+					next := fmt.Sprintf("%s-%d", c.name, n)
+					if c.store.Put(k, []byte(fo.secret)) != nil || c.store.Put(k, []byte(next)) != nil {
+						continue
+					}
+					logf("%d %s reuse %s on %s, then %s", step, c.name, fo.secret, k.Service, next)
+					// Used again where it's kept (the laptop keeps all; the
+					// others, once it's in the folder), it's to stay.
+					reused := ci == 0
+					if ci != 0 {
+						syncLoose(c, f)
+						reused = folderHas(t, c, f, fo.uid, fo.secret, fo.at)
+					}
+					if reused {
+						delete(excused, fo.secret)
+						delete(forgottenSecrets, fo.secret)
+					}
+					if ci == 0 {
+						set = append(set, fo.secret, next)
+					} else {
+						if reused {
+							syncLoose(cs[0], f)
+							set = append(set, fo.secret)
+						}
+						confirm(next)
 					}
 					continue
 				default:
@@ -250,6 +302,36 @@ func liveUID(t *testing.T, c *computer, k vault.Key) string {
 	}
 	t.Fatalf("%s: no live %s", c.name, k)
 	return ""
+}
+
+// folderHas says whether the folder's file of the entry uid has secret
+// among its earlier secrets, in a use of it set after.
+func folderHas(t *testing.T, c *computer, f syncfolder.Folder, uid, secret string, after time.Time) bool {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(f.Dir(), "entries", uid+syncfolder.Ext))
+	if err != nil {
+		return false
+	}
+	_, rec, err := syncfolder.Open(c.store.SyncSealer(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.ContainsFunc(rec.History, func(e syncfolder.Earlier) bool { return string(e.Secret) == secret && e.SetAt.After(after) })
+}
+
+// liveKeyOf is the name of c's live entry uid, if it has one.
+func liveKeyOf(t *testing.T, c *computer, uid string) (vault.Key, bool) {
+	t.Helper()
+	items, err := c.store.SyncItems()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.UID == uid && it.Place == database.SyncLive {
+			return it.Key, true
+		}
+	}
+	return vault.Key{}, false
 }
 
 func historySecrets(t *testing.T, c *computer) []string {
