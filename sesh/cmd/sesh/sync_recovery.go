@@ -131,16 +131,62 @@ func syncRecovery(store *database.Store, f syncfolder.Folder, older *database.Ol
 	if local != nil {
 		localPub = local.PublicKey
 	}
-	pending := !bytes.Equal(localPub, seen.PublicKey)
+	// A record a restore put back isn't a change to send.
+	pending := !bytes.Equal(localPub, seen.PublicKey) && !seen.Restored
+	notes, warnings, err = recoveryRules(store, f, info, older, &seen, local, pending, computer, keyID, also)
+	if err != nil || !seen.Restored {
+		return notes, warnings, err
+	}
+	n, w, err := restoredRecovery(store, keyID)
+	return append(notes, n...), append(warnings, w...), err
+}
+
+// restoredRecovery gives the vault open in store, whose recovery key record
+// a restore put back, the one it saw in the sync folder (now settled with
+// it), in place of the backup's, and says so.
+func restoredRecovery(store *database.Store, keyID string) (notes, warnings []string, err error) {
+	seen, err := store.SyncRecovery()
+	if err != nil {
+		return nil, nil, err
+	}
+	local, err := store.Recovery()
+	switch {
+	case errors.Is(err, database.ErrNoRecovery):
+		local = nil
+	case err != nil:
+		return nil, nil, err
+	}
+	var localPub []byte
+	if local != nil {
+		localPub = local.PublicKey
+	}
+	if !bytes.Equal(localPub, seen.PublicKey) {
+		return takeRecovery(store, &seen.Recovery, local, keyID, false)
+	}
+	if !seen.Restored {
+		return nil, nil, nil
+	}
+	seen.Restored = false
+	return nil, nil, recoveryTakeErr(store.SyncTakeRecovery(&seen, local, localPub))
+}
+
+// recoveryRules is syncRecovery's choice, for the folder f whose info is
+// info, of what to do with its recovery key record, seen and local being
+// the vault's, pending a change made here not sent yet.
+func recoveryRules(store *database.Store, f syncfolder.Folder, info *syncfolder.Info, older *database.OlderKeys, seen *database.SeenRecovery, local *database.RecoveryRecord, pending bool, computer, keyID, also string) (notes, warnings []string, err error) {
+	var localPub []byte
+	if local != nil {
+		localPub = local.PublicKey
+	}
 	folder, state := folderRecovery(info, store.SyncSealer(), keyID, also, older)
 
 	if state == recoveryTrusted {
-		switch compareRecovery(&folder, &seen) {
+		switch compareRecovery(&folder, seen) {
 		case recoverySame:
 			// Seen under an earlier key: now seen under this one.
 			if seen.Earlier {
-				seen = database.SeenRecovery{Recovery: folder, Mine: seen.Mine}
-				if err := store.SyncTakeRecovery(&seen, local, localPub); err != nil {
+				*seen = database.SeenRecovery{Recovery: folder, Mine: seen.Mine, Restored: seen.Restored}
+				if err := store.SyncTakeRecovery(seen, local, localPub); err != nil {
 					return nil, nil, recoveryTakeErr(err)
 				}
 			}
@@ -171,7 +217,7 @@ func syncRecovery(store *database.Store, f syncfolder.Folder, older *database.Ol
 	// anyone who knew the old password could have made it. The folder's is
 	// taken once it's sealed with the key now.
 	if seen.Earlier && !seen.Mine && localPub != nil && !pending {
-		aside := seen
+		aside := *seen
 		aside.PublicKey = nil
 		if err := store.SyncTakeRecovery(&aside, nil, localPub); err != nil {
 			return nil, nil, recoveryTakeErr(err)

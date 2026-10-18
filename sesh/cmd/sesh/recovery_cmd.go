@@ -477,6 +477,9 @@ func runRecover(app *App, args []string) error {
 			return nil
 		}
 	}
+	if _, err := database.ReadRecovery(dbPath); err == nil {
+		return nil // the sync gave it the other computers', and said so
+	}
 	note("This vault has no recovery key now; make one any time with: sesh recovery new")
 	return nil
 }

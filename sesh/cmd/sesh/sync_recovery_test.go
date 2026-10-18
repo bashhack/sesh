@@ -581,7 +581,7 @@ func plantedWithOldPassword(t *testing.T, damaged bool) {
 		plantRecovery(t, folder, after, bytes.Repeat([]byte{7}, 32), pub, 100)
 	}
 	stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
-	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "now opens with the new master password") {
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "now opens with the new master password") || strings.Contains(out, "Your recovery key still works") {
 		t.Fatalf("desktop takes the change: %q, %v", out, err)
 	}
 	opensNot(t, theirs, ddb)
@@ -616,7 +616,7 @@ func TestSync_RecoverKeepsANewerKey(t *testing.T) {
 	syncComputer(t, laptop, "laptop")
 	t.Setenv("SESH_MASTER_PASSWORD", "")
 	out, err := runRecoverWith(t, []string{strings.ToLower(used.String()), "new-password-2", "new-password-2"}, false)
-	if err != nil || !strings.Contains(out, "one made on desktop") {
+	if err != nil || !strings.Contains(out, "one made on desktop") || strings.Contains(out, "no recovery key now") {
 		t.Fatalf("recover: %v\n%s", err, out)
 	}
 	opensVault(t, newer, ldb)
@@ -726,4 +726,107 @@ func TestSync_RecoveryNewOtherFolder(t *testing.T) {
 	if got, err := syncfolder.New(other).ReadInfo(); err != nil || got.Recovery != nil {
 		t.Errorf("the other folder got a recovery key record: %+v, %v", got, err)
 	}
+}
+
+// A vault restored from a backup, meeting an older record put back, takes
+// the key the vault saw last, not the older one nor the backup's.
+func TestSync_RestoreThenOlderPutBack(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	k1 := madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	ddb := syncComputer(t, desktop, "desktop")
+	syncSays(t, "desktop", "now opens this vault")
+	backup := filepath.Join(dir, "backup.db")
+	if err := database.CopyTo(ddb, backup); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, laptop, "laptop")
+	k2 := madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	infoPath := filepath.Join(folder, syncfolder.InfoFile)
+	second, err := os.ReadFile(infoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k3 := madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	syncComputer(t, desktop, "desktop")
+	syncSays(t, "desktop", "now opens this vault")
+	if err := database.RestoreInPlace(ddb, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(infoPath, second, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncSays(t, "desktop, restored", "older one, put back")
+	opensVault(t, k3, ddb)
+	opensNot(t, k2, ddb)
+	opensNot(t, k1, ddb)
+	syncComputer(t, laptop, "laptop")
+	syncSays(t, "laptop", "nothing to do")
+	opensVault(t, k3, ldb)
+}
+
+// A vault restored from a backup, with the folder's record damaged, keeps
+// the key it saw there and writes it back.
+func TestSync_RestoreDamagedRecord(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	k := madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	ddb := syncComputer(t, desktop, "desktop")
+	syncSays(t, "desktop", "now opens this vault")
+	backup := filepath.Join(dir, "backup.db")
+	if err := database.CopyTo(ddb, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RestoreInPlace(ddb, backup); err != nil {
+		t.Fatal(err)
+	}
+	f := syncfolder.New(folder)
+	info, err := f.ReadInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Recovery.Data[len(info.Recovery.Data)-1] ^= 1
+	if err := f.WriteInfo(info); err != nil {
+		t.Fatal(err)
+	}
+	if out := syncSays(t, "desktop, restored", "doesn't open with this vault's key"); strings.Contains(out, "isn't kept") {
+		t.Errorf("the restored desktop set its key aside: %q", out)
+	}
+	opensVault(t, k, ddb)
+	syncComputer(t, laptop, "laptop")
+	syncSays(t, "laptop", "nothing to do")
+}
+
+// A count as high as it goes isn't counted on: the key made here isn't
+// sent, and the sync says why.
+func TestSync_RecoveryCountCapped(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, _ := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	m, err := database.ReadUnlockMaterial(ldb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := madeRecoveryKey(t, ldb, "old-password-1")
+	pub, err := k.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(folder, syncfolder.InfoFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantRecovery(t, folder, b, database.DeriveKey([]byte("old-password-1"), m.Salt, m.Params), pub, syncfolder.MaxRecoveryCount)
+	syncSays(t, "laptop", "")
+	madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "as high as it goes")
 }

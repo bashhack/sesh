@@ -85,8 +85,8 @@ func TestSyncTakeRecovery(t *testing.T) {
 	}
 }
 
-// A restore takes the backup's recovery key record as the one the vault
-// saw, so it isn't sent as a change.
+// A restore keeps what the vault saw of the folder's recovery key record,
+// marking the backup's restored, so it isn't sent as a change.
 func TestRestore_RecoverySeen(t *testing.T) {
 	a, _ := syncPair(t)
 	if err := a.SyncStartFolder("f1"); err != nil {
@@ -115,7 +115,7 @@ func TestRestore_RecoverySeen(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen, err := VaultSyncRecovery(a.path)
-	if err != nil || seen.Count != 2 || !bytes.Equal(seen.PublicKey, old.PublicKey) || seen.Mine || !seen.Earlier {
+	if err != nil || seen.Count != 2 || !bytes.Equal(seen.PublicKey, next.PublicKey) || !seen.Mine || seen.Earlier || !seen.Restored {
 		t.Errorf("seen after the restore: %+v, %v", seen, err)
 	}
 }

@@ -21,8 +21,10 @@ type SeenRecovery struct {
 	// Mine says this vault sent it. Earlier says the folder's record goes
 	// before it: it was seen under a key the vault had before a master
 	// password change it took from another computer (someone who knew the
-	// old password could have made it), or it came back with a restore.
-	Mine, Earlier bool
+	// old password could have made it). Restored says the vault's own
+	// record was put back by a restore since: not a change to send, the
+	// folder's (or this one) taken in its place.
+	Mine, Earlier, Restored bool
 }
 
 // SyncRecovery is the sync folder's recovery key record as the vault last
@@ -34,8 +36,8 @@ func (s *Store) SyncRecovery() (SeenRecovery, error) {
 func syncRecoverySeen(q querier) (SeenRecovery, error) {
 	var r SeenRecovery
 	var made sql.NullTime
-	err := q.QueryRow(`SELECT recovery_count, recovery_key, recovery_made, recovery_by, recovery_prior_count, recovery_prior_key, recovery_mine, recovery_earlier FROM sync_info WHERE id = 1`).
-		Scan(&r.Count, &r.PublicKey, &made, &r.Computer, &r.PriorCount, &r.PriorKey, &r.Mine, &r.Earlier)
+	err := q.QueryRow(`SELECT recovery_count, recovery_key, recovery_made, recovery_by, recovery_prior_count, recovery_prior_key, recovery_mine, recovery_earlier, recovery_restored FROM sync_info WHERE id = 1`).
+		Scan(&r.Count, &r.PublicKey, &made, &r.Computer, &r.PriorCount, &r.PriorKey, &r.Mine, &r.Earlier, &r.Restored)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SeenRecovery{}, nil
 	}
@@ -130,8 +132,8 @@ func putRecoverySeen(tx *sql.Tx, r *SeenRecovery) error {
 		return err
 	}
 	if _, err := tx.Exec(`UPDATE sync_info SET recovery_count = ?, recovery_key = ?, recovery_made = ?, recovery_by = ?,
-		recovery_prior_count = ?, recovery_prior_key = ?, recovery_mine = ?, recovery_earlier = ? WHERE id = 1`,
-		r.Count, recoveryKeyBytes(r.PublicKey), made, r.Computer, r.PriorCount, recoveryKeyBytes(r.PriorKey), r.Mine, r.Earlier); err != nil {
+		recovery_prior_count = ?, recovery_prior_key = ?, recovery_mine = ?, recovery_earlier = ?, recovery_restored = ? WHERE id = 1`,
+		r.Count, recoveryKeyBytes(r.PublicKey), made, r.Computer, r.PriorCount, recoveryKeyBytes(r.PriorKey), r.Mine, r.Earlier, r.Restored); err != nil {
 		return fmt.Errorf("keep the sync folder's recovery key record: %w", err)
 	}
 	return nil
@@ -148,4 +150,4 @@ func recoveryKeyBytes(pub []byte) []byte {
 // noRecoverySeen is what sync_info holds of a folder's recovery key record
 // the vault hasn't seen: none.
 const noRecoverySeen = `recovery_count = 0, recovery_key = x'', recovery_made = NULL, recovery_by = '',
-	recovery_prior_count = 0, recovery_prior_key = x'', recovery_mine = 0, recovery_earlier = 0`
+	recovery_prior_count = 0, recovery_prior_key = x'', recovery_mine = 0, recovery_earlier = 0, recovery_restored = 0`
