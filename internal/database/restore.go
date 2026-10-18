@@ -336,7 +336,7 @@ func restoredForSync(tx *sql.Tx, schema, backup string) error {
 				LEFT JOIN ` + backup + `sync_state bs ON bs.uid = b.uid WHERE b.uid = e.uid), 0)
 			FROM (SELECT uid, rev FROM ` + schema + `entries UNION ALL SELECT uid, rev FROM ` + schema + `trash) e`,
 		`DELETE FROM ` + schema + `sync_state WHERE uid NOT IN (SELECT uid FROM ` + schema + `entries UNION SELECT uid FROM ` + schema + `trash)`,
-		`UPDATE ` + schema + `sync_info SET recovery_key = COALESCE((SELECT public_key FROM ` + schema + `recovery WHERE id = 1), x'')`,
+		`UPDATE ` + schema + `sync_info SET recovery_key = COALESCE((SELECT public_key FROM ` + schema + `recovery WHERE id = 1), x''), recovery_mine = 0, recovery_earlier = 1`,
 	} {
 		if _, err := tx.Exec(q); err != nil { //nolint:gosec // schema and backup are "main.", "backup." or ""
 			return err

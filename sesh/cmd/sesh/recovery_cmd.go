@@ -225,8 +225,8 @@ func runRecovery(app *App, args []string) error {
 		if err := out("Removed the recovery key; it no longer opens this vault."); err != nil {
 			return err
 		}
-		if cfg.SyncDir.Value != "" {
-			if err := out("It stops opening the vault on the other computers once this one syncs (sesh sync)."); err != nil {
+		if said := recoveryChangeSent(cfg); said != "" {
+			if err := out("%s", said); err != nil {
 				return err
 			}
 		}

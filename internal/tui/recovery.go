@@ -27,8 +27,11 @@ type NewRecovery struct {
 	// Save saves it, replacing the vault's other one.
 	Save func() (Done, error)
 	// Made is when the key it replaces was made, if Replacing one.
-	Made      time.Time
-	Key       string
+	Made time.Time
+	Key  string
+	// Said is what was done before it was made: the sync folder's taken,
+	// say.
+	Said      string
 	Replacing bool
 }
 
@@ -139,7 +142,7 @@ func (m *Model) keyForm(nr *NewRecovery) {
 	in := m.textInput("its last group (4 characters)", "")
 	f := &form{title: "Your recovery key", row: -1, inputs: []*input{in}, working: "Saving the recovery key…",
 		quitting: "Quitting once the recovery key is saved…", shown: nr.Key,
-		note: "Write it down and keep it somewhere safe, away from this computer. If you forget your master password, sesh recover uses it to set a new one. Anyone who has it and your vault file can open the vault. sesh doesn't keep a copy, so it can't show it again. Type its last group to confirm you've saved it."}
+		note: strings.TrimSpace(nr.Said + " Write it down and keep it somewhere safe, away from this computer. If you forget your master password, sesh recover uses it to set a new one. Anyone who has it and your vault file can open the vault. sesh doesn't keep a copy, so it can't show it again. Type its last group to confirm you've saved it.")}
 	tries := 0
 	f.cancel = func() {
 		why := "No recovery key was set, since it wasn't confirmed."

@@ -203,7 +203,7 @@ func syncStore(app *App, cfg *config.Config, f syncfolder.Folder, store *databas
 			return err
 		}
 	}
-	sum, err := syncOlder(store, cfg, f)
+	sum, err := syncOlderAlso(store, cfg, f, prev)
 	if err != nil {
 		return err
 	}
@@ -742,11 +742,8 @@ func syncJoin(app *App, arg string) error {
 		if t, err := touchid.ReadFile(filepath.Dir(cfg.DBPath.Value)); err == nil && t.UnlockID != database.UnlockID(m.Verify) {
 			notes = append(notes, "Touch ID unlock was set up for this vault's old master password; turn it on again with: sesh touchid enable")
 		}
-		switch {
-		case hadRecovery && info.Recovery != nil:
-			notes = append(notes, "The recovery key made for this vault before doesn't open it now; the one the other computers use does.")
-		case hadRecovery:
-			notes = append(notes, "The recovery key made for this vault before doesn't open it now; make one with: sesh recovery new")
+		if hadRecovery {
+			notes = append(notes, "The recovery key made for this vault before doesn't open it now: the sync below says whether the other computers' does, and sesh recovery new makes one.")
 		}
 	}
 	store, err := openSQLiteStoreWithPrompt(cfg, pc.withTypedPassword(pw))

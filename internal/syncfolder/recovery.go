@@ -16,11 +16,20 @@ type Recovery struct {
 	Made      time.Time `json:"made"`
 	Computer  string    `json:"computer"`
 	PublicKey []byte    `json:"public_key,omitempty"`
-	Count     uint64    `json:"count"`
+	// PriorKey and PriorCount are the record its computer saw when it made
+	// this one: what it replaced.
+	PriorKey   []byte `json:"prior_key,omitempty"`
+	Count      uint64 `json:"count"`
+	PriorCount uint64 `json:"prior_count"`
+}
+
+// Replaces says whether r was made after seeing o, replacing it.
+func (r *Recovery) Replaces(o *Recovery) bool {
+	return r.PriorCount == o.Count && bytes.Equal(r.PriorKey, o.PublicKey)
 }
 
 // Same says whether r and o are the same change: one count, one key.
-func (r Recovery) Same(o Recovery) bool {
+func (r *Recovery) Same(o *Recovery) bool {
 	return r.Count == o.Count && bytes.Equal(r.PublicKey, o.PublicKey)
 }
 
@@ -37,13 +46,17 @@ type SealedRecovery struct {
 // key, uncompressed, is 65 bytes.
 const maxRecoveryKey = 256
 
+// MaxRecoveryCount is the highest count a record may have, so counting on
+// from one never overflows.
+const MaxRecoveryCount = 1 << 62
+
 func recoveryAAD(folderID, keyID string) []byte {
 	return []byte("sesh-recovery-v1\x00" + folderID + "\x00" + keyID)
 }
 
 // SealRecovery seals r for the folder folderID with s, the key of the key
 // record keyID.
-func SealRecovery(s Sealer, folderID, keyID string, r Recovery) (*SealedRecovery, error) {
+func SealRecovery(s Sealer, folderID, keyID string, r *Recovery) (*SealedRecovery, error) {
 	b, err := json.Marshal(r)
 	if err != nil {
 		return nil, err
@@ -66,8 +79,11 @@ func OpenRecovery(s Sealer, folderID string, sr *SealedRecovery) (Recovery, erro
 	if err := json.Unmarshal(b, &r); err != nil {
 		return Recovery{}, fmt.Errorf("read the sync folder's recovery key record: %w", err)
 	}
-	if len(r.PublicKey) > maxRecoveryKey {
+	if len(r.PublicKey) > maxRecoveryKey || len(r.PriorKey) > maxRecoveryKey {
 		return Recovery{}, errors.New("the sync folder's recovery key record has a key too long to be one")
+	}
+	if r.Count > MaxRecoveryCount || r.PriorCount > MaxRecoveryCount {
+		return Recovery{}, errors.New("the sync folder's recovery key record has a count too high to be one")
 	}
 	return r, nil
 }

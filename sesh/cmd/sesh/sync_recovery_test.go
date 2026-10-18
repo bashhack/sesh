@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/recovery"
 	"github.com/bashhack/sesh/internal/secure"
@@ -76,6 +77,11 @@ func TestSync_RecoveryKeyShared(t *testing.T) {
 	ddb := syncComputer(t, desktop, "desktop")
 	syncSays(t, "desktop", "The recovery key made on laptop on ")
 	opensVault(t, k, ddb)
+	lr, lerr := database.ReadRecovery(ldb)
+	dr, derr := database.ReadRecovery(ddb)
+	if lerr != nil || derr != nil || !lr.CreatedAt.Equal(dr.CreatedAt) {
+		t.Errorf("made on the laptop at %v, on the desktop at %v (%v, %v)", lr, dr, lerr, derr)
+	}
 	syncSays(t, "desktop again", "nothing to do")
 
 	syncComputer(t, laptop, "laptop")
@@ -130,30 +136,80 @@ func TestSync_RecoveryKeyRace(t *testing.T) {
 }
 
 // Two keys sent at once, from the same record seen (each computer's sync
-// tool not yet showing the other's): the computer whose the sync tool
-// didn't keep says its own doesn't work.
+// tool not yet showing the other's): the one whose key sorts last is kept
+// on both, whichever copy the sync tool kept, the other computer says its
+// own doesn't work, and putting the other copy back changes nothing.
 func TestSync_RecoveryKeySentAtOnce(t *testing.T) {
 	dir := t.TempDir()
 	folder := filepath.Join(dir, "sync")
 	laptop, desktop := syncedPair(t, dir, folder, "password/a")
 	infoPath := filepath.Join(folder, syncfolder.InfoFile)
-	before, err := os.ReadFile(infoPath)
+	read := func() []byte {
+		t.Helper()
+		b, err := os.ReadFile(infoPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	write := func(b []byte) {
+		t.Helper()
+		if err := os.WriteFile(infoPath, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := read()
+	ldb := syncComputer(t, laptop, "laptop")
+	lk := madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	laptopCopy := read()
+	write(before)
+	ddb := syncComputer(t, desktop, "desktop")
+	dk := madeRecoveryKey(t, ddb, "old-password-1")
+	syncSays(t, "desktop", "recovery key goes")
+	desktopCopy := read()
+
+	lpub, err := lk.PublicKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	ldb := syncComputer(t, laptop, "laptop")
-	first := madeRecoveryKey(t, ldb, "old-password-1")
-	syncSays(t, "laptop", "recovery key goes")
-	if err := os.WriteFile(infoPath, before, 0o600); err != nil {
+	dpub, err := dk.PublicKey()
+	if err != nil {
 		t.Fatal(err)
 	}
-	ddb := syncComputer(t, desktop, "desktop")
-	second := madeRecoveryKey(t, ddb, "old-password-1")
-	syncSays(t, "desktop", "recovery key goes")
-	syncComputer(t, laptop, "laptop")
-	syncSays(t, "laptop", "The recovery key made here doesn't work: one made on desktop")
-	opensVault(t, second, ldb)
-	opensNot(t, first, ldb)
+	kept, dropped, loser, losingCopy := lk, dk, desktop, desktopCopy
+	if bytes.Compare(dpub, lpub) > 0 {
+		kept, dropped, loser, losingCopy = dk, lk, laptop, laptopCopy
+	}
+	said := map[string]string{}
+	for _, c := range []struct{ home, name string }{{laptop, "laptop"}, {desktop, "desktop"}, {laptop, "laptop"}} {
+		syncComputer(t, c.home, c.name)
+		out, err := runSyncOut(t, "", false)
+		if err != nil {
+			t.Fatalf("%s sync: %q, %v", c.name, out, err)
+		}
+		said[c.home] += out
+	}
+	for _, home := range []string{laptop, desktop} {
+		if warned := strings.Contains(said[home], "The recovery key made here doesn't work"); warned != (home == loser) {
+			t.Errorf("%s warned its key doesn't work: %v\n%s", home, warned, said[home])
+		}
+	}
+	for _, db := range []string{ldb, ddb} {
+		opensVault(t, kept, db)
+		opensNot(t, dropped, db)
+	}
+
+	write(losingCopy)
+	for _, c := range []struct{ home, name string }{{laptop, "laptop"}, {desktop, "desktop"}} {
+		syncComputer(t, c.home, c.name)
+		if out, err := runSyncOut(t, "", false); err != nil || strings.Contains(out, "now opens this vault") {
+			t.Errorf("%s, the other copy put back: %q, %v", c.name, out, err)
+		}
+	}
+	for _, db := range []string{ldb, ddb} {
+		opensVault(t, kept, db)
+	}
 }
 
 // The recovery key goes on opening every computer's vault through a
@@ -287,7 +343,7 @@ func TestSync_RecoveryRecordForged(t *testing.T) {
 				oldKey := database.DeriveKey([]byte("old-password-1"), before.Salt, before.Params)
 				sealer, keyID = database.KeySealer(oldKey), database.UnlockID(before.Verify)
 			}
-			info.Recovery, err = syncfolder.SealRecovery(sealer, info.FolderID, keyID, syncfolder.Recovery{Count: 99, PublicKey: pub, Computer: "theirs"})
+			info.Recovery, err = syncfolder.SealRecovery(sealer, info.FolderID, keyID, &syncfolder.Recovery{Count: 99, PublicKey: pub, Computer: "theirs"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -298,18 +354,24 @@ func TestSync_RecoveryRecordForged(t *testing.T) {
 			t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
 			want := "doesn't open with this vault's key"
 			if how == "earlier key" {
-				want = "sealed with the key of an earlier master password"
+				// Taking the change, the desktop sets aside the key it took
+				// under the old password, unconfirmed under the new.
+				want = "isn't kept"
 				stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
 			}
 			out, err := runSyncOut(t, "", false)
 			if err != nil || !strings.Contains(out, want) || strings.Contains(out, "made on theirs") {
 				t.Fatalf("desktop sync: %q, %v", out, err)
 			}
-			opensVault(t, k, ddb)
 			opensNot(t, theirs, ddb)
 			if how == "earlier key" {
 				t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
+				syncComputer(t, laptop, "laptop")
+				syncSays(t, "laptop", "sealed with the key of an earlier master password")
+				syncComputer(t, desktop, "desktop")
+				syncSays(t, "desktop again", "made on laptop")
 			}
+			opensVault(t, k, ddb)
 			syncSays(t, "desktop again", "nothing to do")
 		})
 	}
@@ -436,5 +498,232 @@ func TestSync_RecoveryNewWhileSyncing(t *testing.T) {
 	}
 	if out := run("status"); !strings.Contains(out, "Its removal isn't sent") {
 		t.Errorf("status of a removal not sent: %q", out)
+	}
+}
+
+// plantRecovery writes, as the sync folder's sesh-sync.json, info with a
+// recovery key record of pub sealed with key (the key record's), count.
+func plantRecovery(t *testing.T, folder string, info []byte, key []byte, pub []byte, count uint64) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(folder, syncfolder.InfoFile), info, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := syncfolder.New(folder)
+	in, err := f.ReadInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Recovery, err = syncfolder.SealRecovery(database.KeySealer(key), in.FolderID, database.UnlockID(in.Key.Verify), &syncfolder.Recovery{Count: count, PublicKey: pub, Computer: "laptop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.WriteInfo(in); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Someone with the folder and an old master password, planting their key
+// on a computer still on that password, doesn't keep it there once the
+// computer takes the change, nor reach the others, even with the folder's
+// record damaged as it takes it.
+func TestSync_RecoveryKeyPlantedWithOldPassword(t *testing.T) {
+	for _, damaged := range []bool{false, true} {
+		t.Run(map[bool]string{false: "as it is", true: "damaged"}[damaged], func(t *testing.T) {
+			plantedWithOldPassword(t, damaged)
+		})
+	}
+}
+
+func plantedWithOldPassword(t *testing.T, damaged bool) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	m, err := database.ReadUnlockMaterial(ldb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	ddb := syncComputer(t, desktop, "desktop")
+	syncSays(t, "desktop", "now opens this vault")
+	infoPath := filepath.Join(folder, syncfolder.InfoFile)
+	before, err := os.ReadFile(infoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	after, err := os.ReadFile(infoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	theirs, err := recovery.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err := theirs.PublicKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey := database.DeriveKey([]byte("old-password-1"), m.Salt, m.Params)
+	plantRecovery(t, folder, before, oldKey, pub, 99)
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	if out, err := runSyncOut(t, "", false); err != nil {
+		t.Fatalf("desktop, planted: %q, %v", out, err)
+	}
+	if err := os.WriteFile(infoPath, after, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if damaged {
+		plantRecovery(t, folder, after, bytes.Repeat([]byte{7}, 32), pub, 100)
+	}
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "now opens with the new master password") {
+		t.Fatalf("desktop takes the change: %q, %v", out, err)
+	}
+	opensNot(t, theirs, ddb)
+	// Again before the laptop mends the folder: nothing is sent.
+	t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
+	syncSays(t, "desktop again", "")
+	syncComputer(t, laptop, "laptop")
+	t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
+	syncSays(t, "laptop", "")
+	opensVault(t, k, ldb)
+	opensNot(t, theirs, ldb)
+	syncComputer(t, desktop, "desktop")
+	syncSays(t, "desktop", "")
+	opensVault(t, k, ddb)
+	opensNot(t, theirs, ddb)
+}
+
+// sesh recover on a computer that hasn't seen a key another sent keeps
+// that key, newer than the one used, on both, and says so.
+func TestSync_RecoverKeepsANewerKey(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	used := madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	ddb := syncComputer(t, desktop, "desktop")
+	syncSays(t, "desktop", "now opens this vault")
+	newer := madeRecoveryKey(t, ddb, "old-password-1")
+	syncSays(t, "desktop", "recovery key goes")
+
+	syncComputer(t, laptop, "laptop")
+	t.Setenv("SESH_MASTER_PASSWORD", "")
+	out, err := runRecoverWith(t, []string{strings.ToLower(used.String()), "new-password-2", "new-password-2"}, false)
+	if err != nil || !strings.Contains(out, "one made on desktop") {
+		t.Fatalf("recover: %v\n%s", err, out)
+	}
+	opensVault(t, newer, ldb)
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
+	out, err = runSyncOut(t, "", false)
+	if err != nil || strings.Contains(out, "doesn't work") || strings.Contains(out, "recovery key record") {
+		t.Fatalf("desktop takes the change: %q, %v", out, err)
+	}
+	opensVault(t, newer, ddb)
+}
+
+// A send whose folder write landed but not its record here: the next sync
+// finds its own key in the folder, and says nothing of it not working.
+func TestSync_RecoverySendCutShort(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, _ := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	k := madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	sqlExec(t, ldb, `UPDATE sync_info SET recovery_count = 0, recovery_key = x'', recovery_mine = 0`)
+	if out := syncSays(t, "laptop", ""); strings.Contains(out, "doesn't work") {
+		t.Errorf("the laptop said its own key doesn't work: %q", out)
+	}
+	opensVault(t, k, ldb)
+}
+
+// A computer joining, with nothing seen, leaves a folder record it can't
+// take as it is.
+func TestSync_RecoveryJoinLeavesForeignRecord(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	syncedPair(t, dir, folder, "password/a")
+	infoPath := filepath.Join(folder, syncfolder.InfoFile)
+	b, err := os.ReadFile(infoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantRecovery(t, folder, b, bytes.Repeat([]byte{7}, 32), bytes.Repeat([]byte{4}, 65), 5)
+	planted, err := os.ReadFile(infoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, filepath.Join(dir, "third"), "third")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	if out, err := runSyncOut(t, "", false, "join", folder); err != nil || !strings.Contains(out, "doesn't open with this vault's key") {
+		t.Fatalf("join: %q, %v", out, err)
+	}
+	if now, err := os.ReadFile(infoPath); err != nil || !bytes.Equal(now, planted) {
+		t.Errorf("the folder's record was written over by a computer that saw none (%v)", err)
+	}
+}
+
+// A folder record, sealed with the vault's key, whose key isn't a public
+// key at all, isn't taken.
+func TestSync_RecoveryRecordNotAKey(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, _ := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	m, err := database.ReadUnlockMaterial(ldb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(folder, syncfolder.InfoFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plantRecovery(t, folder, b, database.DeriveKey([]byte("old-password-1"), m.Salt, m.Params), []byte("not a key"), 5)
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "the recovery key wasn't synced") {
+		t.Errorf("sync: %q, %v", out, err)
+	}
+	hasNoRecovery(t, ldb)
+}
+
+// A sync folder this vault hasn't synced with yet (sync.dir set by hand)
+// gets nothing from sesh recovery new before a whole sync.
+func TestSync_RecoveryNewOtherFolder(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, _ := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	other := filepath.Join(dir, "other")
+	info, err := syncfolder.New(folder).ReadInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.FolderID, info.Recovery = "0123456789abcdef", nil
+	if err := syncfolder.New(other).WriteInfo(info); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.EnvSyncDir, other)
+	startTestAgent(t)
+	_, last := fixedRecoveryKey(t)
+	orig := recoveryPrompt
+	recoveryPrompt = func() passwordPromptConfig {
+		return withLines(withAnswer(interactivePrompt(t, "old-password-1"), true), last)
+	}
+	t.Cleanup(func() { recoveryPrompt = orig })
+	if err := runRecovery(agentTestApp(), []string{"new"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := syncfolder.New(other).ReadInfo(); err != nil || got.Recovery != nil {
+		t.Errorf("the other folder got a recovery key record: %+v, %v", got, err)
 	}
 }

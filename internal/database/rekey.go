@@ -250,7 +250,9 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 					return err
 				}
 			case RekeyAdopt:
-				if _, err := tx.Exec(`UPDATE sync_info SET prev_key_id = ''`); err != nil {
+				// The folder's recovery key record, under the key taken,
+				// goes before the one seen under the key left.
+				if _, err := tx.Exec(`UPDATE sync_info SET prev_key_id = '', recovery_earlier = 1`); err != nil {
 					return err
 				}
 			}

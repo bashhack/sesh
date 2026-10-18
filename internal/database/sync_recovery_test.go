@@ -36,28 +36,28 @@ func TestSyncTakeRecovery(t *testing.T) {
 	}
 	rec := testRecoveryRecord(t, a, 5)
 	r := syncfolder.Recovery{Count: 2, PublicKey: rec.PublicKey, Computer: "laptop", Made: rec.CreatedAt}
-	if err := a.SyncTakeRecovery(r, rec, nil); err != nil {
+	if err := a.SyncTakeRecovery(&SeenRecovery{Recovery: r}, rec, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := a.Recovery(); err != nil || !bytes.Equal(got.PublicKey, rec.PublicKey) {
 		t.Fatalf("the vault's record: %+v, %v", got, err)
 	}
-	if seen, err := a.SyncRecovery(); err != nil || !seen.Same(r) || seen.Computer != "laptop" || !seen.Made.Equal(r.Made) {
+	if seen, err := a.SyncRecovery(); err != nil || !seen.Same(&r) || seen.Computer != "laptop" || !seen.Made.Equal(r.Made) || seen.Mine || seen.Earlier {
 		t.Fatalf("seen: %+v, %v", seen, err)
 	}
-	if seen, err := VaultSyncRecovery(a.path); err != nil || !seen.Same(r) {
+	if seen, err := VaultSyncRecovery(a.path); err != nil || !seen.Same(&r) {
 		t.Errorf("seen, read without unlocking: %+v, %v", seen, err)
 	}
 
 	// The vault's record changed meanwhile: nothing is taken.
 	removed := syncfolder.Recovery{Count: 3, Computer: "desktop"}
-	if err := a.SyncTakeRecovery(removed, nil, nil); !errors.Is(err, ErrRecoveryChanged) {
+	if err := a.SyncTakeRecovery(&SeenRecovery{Recovery: removed}, nil, nil); !errors.Is(err, ErrRecoveryChanged) {
 		t.Fatalf("taken over a change: %v", err)
 	}
-	if seen, err := a.SyncRecovery(); err != nil || !seen.Same(r) {
+	if seen, err := a.SyncRecovery(); err != nil || !seen.Same(&r) {
 		t.Errorf("seen after a refused take: %+v, %v", seen, err)
 	}
-	if err := a.SyncTakeRecovery(removed, nil, rec.PublicKey); err != nil {
+	if err := a.SyncTakeRecovery(&SeenRecovery{Recovery: removed}, nil, rec.PublicKey); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := a.Recovery(); !errors.Is(err, ErrNoRecovery) {
@@ -67,12 +67,15 @@ func TestSyncTakeRecovery(t *testing.T) {
 	// A record for another key record isn't kept.
 	other := testRecoveryRecord(t, a, 6)
 	other.UnlockID = "another"
-	if err := a.SyncTakeRecovery(r, other, nil); !errors.Is(err, ErrVaultKeyChanged) {
+	if err := a.SyncTakeRecovery(&SeenRecovery{Recovery: r}, other, nil); !errors.Is(err, ErrVaultKeyChanged) {
 		t.Errorf("a record for another key: %v", err)
 	}
 
-	if err := a.SyncRecoverySent(r); err != nil {
+	if err := a.SyncRecoverySent(&r); err != nil {
 		t.Fatal(err)
+	}
+	if seen, err := a.SyncRecovery(); err != nil || !seen.Mine {
+		t.Errorf("seen, sent from here: %+v, %v", seen, err)
 	}
 	if err := a.SyncStartFolder("f2"); err != nil {
 		t.Fatal(err)
@@ -93,7 +96,9 @@ func TestRestore_RecoverySeen(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := testRecoveryRecord(t, a, 5)
-	if err := a.SyncTakeRecovery(syncfolder.Recovery{Count: 1, PublicKey: old.PublicKey}, old, nil); err != nil {
+	first := SeenRecovery{}
+	first.Count, first.PublicKey = 1, old.PublicKey
+	if err := a.SyncTakeRecovery(&first, old, nil); err != nil {
 		t.Fatal(err)
 	}
 	backup := a.path + ".backup"
@@ -101,14 +106,16 @@ func TestRestore_RecoverySeen(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := testRecoveryRecord(t, a, 6)
-	if err := a.SyncTakeRecovery(syncfolder.Recovery{Count: 2, PublicKey: next.PublicKey}, next, old.PublicKey); err != nil {
+	sent := SeenRecovery{Mine: true}
+	sent.Count, sent.PublicKey = 2, next.PublicKey
+	if err := a.SyncTakeRecovery(&sent, next, old.PublicKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := RestoreInPlace(a.path, backup); err != nil {
 		t.Fatal(err)
 	}
 	seen, err := VaultSyncRecovery(a.path)
-	if err != nil || seen.Count != 2 || !bytes.Equal(seen.PublicKey, old.PublicKey) {
+	if err != nil || seen.Count != 2 || !bytes.Equal(seen.PublicKey, old.PublicKey) || seen.Mine || !seen.Earlier {
 		t.Errorf("seen after the restore: %+v, %v", seen, err)
 	}
 }
