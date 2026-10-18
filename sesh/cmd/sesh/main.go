@@ -756,7 +756,9 @@ func run(app *App, args []string) {
 			rest = []string{"--help"}
 		}
 		autoSyncNext = autoSyncCommands[name]
-		if err := commands[name](app, rest); err != nil {
+		err := commands[name](app, rest)
+		autoSyncNext = false
+		if err != nil {
 			fatal(app, err)
 		}
 		return

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +91,62 @@ func TestAutoSync_PasswordChangedElsewhere(t *testing.T) {
 	if !strings.Contains(out, "secret-1") || !strings.Contains(synced, "nothing syncs until sesh sync takes it") {
 		t.Errorf("desktop get: %q, synced %q", out, synced)
 	}
+	// A command changing the vault says it once, and sends nothing.
+	if _, synced := runAuto(t, "trash", "password/a", "--force"); strings.Count(synced, "nothing syncs until") != 1 {
+		t.Errorf("desktop trash: synced %q", synced)
+	}
+}
+
+// syncsLogged is how many syncs the audit log of the vault at db has.
+func syncsLogged(t *testing.T, db string) int {
+	t.Helper()
+	d, err := sql.Open("sqlite", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck // read only
+	var n int
+	if err := d.QueryRow(`SELECT count(*) FROM audit_log WHERE event_type = 'sync'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A command that changes nothing syncs once, as it opens; one that changes
+// the vault, again as it closes.
+func TestAutoSync_PushesOnlyAChange(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	_, desktop := syncedPair(t, dir, folder, "password/a")
+	ddb := syncComputer(t, desktop, "desktop")
+	before := syncsLogged(t, ddb)
+	runAuto(t, "get", "password/a")
+	if n := syncsLogged(t, ddb) - before; n != 1 {
+		t.Errorf("a get synced %d times", n)
+	}
+	before = syncsLogged(t, ddb)
+	runAuto(t, "trash", "password/a", "--force")
+	if n := syncsLogged(t, ddb) - before; n != 2 {
+		t.Errorf("a trash synced %d times", n)
+	}
+}
+
+// One name made on two computers: the line names what was renamed, as a
+// command naming one may find the other.
+func TestAutoSync_NamesARename(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	putEntry(t, "password/gh", "laptop-secret")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, desktop, "desktop")
+	putEntry(t, "password/gh", "desktop-secret")
+	if _, synced := runAuto(t, "list"); !strings.Contains(synced, "1 renamed, made on two computers under one name (password/gh (2)") {
+		t.Errorf("desktop list: synced %q", synced)
+	}
 }
 
 // A sync folder not there now (a drive not connected) is said by sesh
@@ -126,5 +183,22 @@ func TestAutoSync_SendsAWaitingChange(t *testing.T) {
 	}
 	if out, err := runSyncOut(t, "", false, "status"); err != nil || strings.Contains(out, "hasn't reached the sync folder yet") {
 		t.Errorf("status after: %q, %v", out, err)
+	}
+}
+
+// A problem in the folder is said once by a command, even one that syncs
+// again as it closes.
+func TestAutoSync_SaysAProblemOnce(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	_, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, desktop, "desktop")
+	bad := filepath.Join(folder, "entries", "0123456789abcdef0123456789abcdef.sesh")
+	if err := os.WriteFile(bad, []byte("not a sesh file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, synced := runAuto(t, "trash", "password/a", "--force")
+	if strings.Count(synced, "problem") != 1 || !strings.Contains(synced, "Synced: 1 sent.") {
+		t.Errorf("desktop trash: synced %q", synced)
 	}
 }

@@ -35,8 +35,16 @@ var autoSyncNext bool
 var autoSyncOut io.Writer = os.Stderr
 
 // autoSynced are the vaults opened for their commands and synced, with
-// their settings: each syncs again as it's closed, if it changed.
-var autoSynced = map[*database.Store]*config.Config{}
+// their settings and what the sync said: each syncs again as it's closed,
+// if it changed.
+var autoSynced = map[*database.Store]*autoSyncState{}
+
+// autoSyncState is a command's vault as its automatic sync left it.
+type autoSyncState struct {
+	cfg *config.Config
+	// said is what was said already, not said again.
+	said map[string]bool
+}
 
 // autoSyncOpened syncs store, the vault cfg names, just opened, when it's
 // the command's own and sync.auto is on.
@@ -48,20 +56,31 @@ func autoSyncOpened(cfg *config.Config, store *database.Store) {
 	if cfg.SyncDir.Value == "" || !cfg.SyncAuto.Value {
 		return
 	}
-	autoSynced[store] = cfg
-	autoSync(cfg, store)
+	st := &autoSyncState{cfg: cfg, said: map[string]bool{}}
+	autoSynced[store] = st
+	st.say(autoSyncLines(cfg, store))
 }
 
 // autoSyncClosing syncs store again as it's closed, when it was synced as
 // it was opened and has changes the sync folder doesn't.
 func autoSyncClosing(store *database.Store) {
-	cfg, ok := autoSynced[store]
+	st, ok := autoSynced[store]
 	if !ok {
 		return
 	}
 	delete(autoSynced, store)
-	if vaultHasChanges(cfg, store) {
-		autoSync(cfg, store)
+	if vaultHasChanges(st.cfg, store) {
+		st.say(autoSyncLines(st.cfg, store))
+	}
+}
+
+// say writes lines, but those said already.
+func (st *autoSyncState) say(lines []string) {
+	for _, l := range lines {
+		if !st.said[l] {
+			st.said[l] = true
+			fmt.Fprintln(autoSyncOut, l) //nolint:errcheck // best-effort note
+		}
 	}
 }
 
@@ -80,19 +99,12 @@ func vaultHasChanges(cfg *config.Config, store *database.Store) bool {
 	return recoveryChanged(cfg)
 }
 
-// autoSync syncs store, the vault cfg names, with its sync folder, asking
-// nothing, and says in a line or two what moved, if anything did; a sync
-// that fails never stops the command.
-func autoSync(cfg *config.Config, store *database.Store) {
-	for _, l := range autoSyncLines(cfg, store) {
-		fmt.Fprintln(autoSyncOut, l) //nolint:errcheck // best-effort note
-	}
-}
-
-// autoSyncLines is autoSync's sync, and what it says.
-func autoSyncLines(cfg *config.Config, store *database.Store) []string {
-	var lines []string
-	quiet := &App{Stdin: bytes.NewReader(nil), Stdout: io.Discard, Stderr: io.Discard, Exit: func(int) {}}
+// autoSyncLines syncs store, the vault cfg names, with its sync folder,
+// asking nothing, and says in a line or two what moved, if anything did; a
+// sync that fails never stops the command.
+func autoSyncLines(cfg *config.Config, store *database.Store) (lines []string) {
+	var mended bytes.Buffer
+	quiet := &App{Stdin: bytes.NewReader(nil), Stdout: &mended, Stderr: io.Discard, Exit: func(int) {}}
 	if mended, err := mendInfo(cfg); err == nil && mended {
 		lines = append(lines, "Sync: the sync folder had lost its sesh-sync.json, written again from this vault.")
 	}
@@ -101,6 +113,9 @@ func autoSyncLines(cfg *config.Config, store *database.Store) []string {
 		if err := mendRolledBack(quiet, cfg, f); err != nil {
 			return append(lines, "⚠️  Sync: "+err.Error())
 		}
+		if said := strings.TrimSpace(mended.String()); said != "" {
+			lines = append(lines, "Sync: "+said)
+		}
 		f, err = syncFolderOf(cfg)
 	}
 	var away *folderAwayError
@@ -108,9 +123,12 @@ func autoSyncLines(cfg *config.Config, store *database.Store) []string {
 	case errors.As(err, &away):
 		// A drive not connected: sesh sync status and doctor say so.
 		return lines
-	case errors.Is(err, errKeyChangedElsewhere), errors.Is(err, errKeyFork):
+	case errors.Is(err, errKeyChangedElsewhere):
 		// Taking it asks for the new password: left to sesh sync.
 		return append(lines, "⚠️  Sync: the master password was changed on another computer; nothing syncs until sesh sync takes it.")
+	case errors.Is(err, errKeyFork):
+		// Settling it may ask for the other's: left to sesh sync too.
+		return append(lines, "⚠️  Sync: the master password was changed here and on another computer at once; nothing syncs until sesh sync settles it.")
 	case errors.Is(err, errKeyToSend):
 		info, rerr := f.ReadInfo()
 		rec, merr := database.ReadUnlockMaterial(cfg.DBPath.Value)
@@ -145,9 +163,13 @@ func autoSummary(s *vaultsync.Summary) []string {
 	count(len(s.Received), "taken")
 	count(len(s.Sent), "sent")
 	count(len(s.Merged), "changed on both, merged")
-	count(len(s.Renamed), "renamed (made on two computers under one name)")
-	count(len(s.Joined), "made one (made on two computers with one secret)")
-	count(s.NotDownloaded, "waiting for the sync tool to download")
+	// Named: a command naming one of them may now find the other.
+	if n := len(s.Renamed); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d renamed, made on two computers under one name (%s)", n, strings.Join(s.Renamed, ", ")))
+	}
+	if n := len(s.Joined); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d made on two computers with one secret, made one (%s)", n, strings.Join(s.Joined, ", ")))
+	}
 	var lines []string
 	if len(parts) > 0 {
 		lines = append(lines, "Synced: "+strings.Join(parts, ", ")+".")
