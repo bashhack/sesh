@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
@@ -363,12 +364,24 @@ func syncOlder(store *database.Store, cfg *config.Config, f syncfolder.Folder) (
 // syncOlderAlso is syncOlder trusting a recovery key record sealed with the
 // key record also too: the one a change made here came from, as it's sent.
 func syncOlderAlso(store *database.Store, cfg *config.Config, f syncfolder.Folder, also string) (*vaultsync.Summary, error) {
+	return syncOlderWith(store, cfg, f, also, syncRun{})
+}
+
+// syncRun is how a sync runs: by hand (the zero syncRun), or on its own,
+// within a deadline and logged only when it did something.
+type syncRun struct {
+	deadline time.Time
+	auto     bool
+}
+
+// syncOlderWith is syncOlderAlso run as run says.
+func syncOlderWith(store *database.Store, cfg *config.Config, f syncfolder.Folder, also string, run syncRun) (*vaultsync.Summary, error) {
 	older, err := store.SyncOlderKeys()
 	if err != nil {
 		return nil, err
 	}
 	defer older.Close()
-	sum, err := vaultsync.SyncWith(store, f, cfg.SyncComputerName(), vaultsync.Options{Older: older})
+	sum, err := vaultsync.SyncWith(store, f, cfg.SyncComputerName(), vaultsync.Options{Older: older, Deadline: run.deadline, LogOnlyChanges: run.auto})
 	if err != nil {
 		return sum, err
 	}
@@ -531,17 +544,27 @@ func settleFork(app *App, cfg *config.Config, f syncfolder.Folder) error {
 		}
 		return nil
 	}
+	if err := keepOwnFork(cfg, f, info, m); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(app.Stdout, ownForkKeptSaid); err != nil {
+		return err
+	}
+	return syncWith(app, cfg)
+}
+
+// ownForkKeptSaid says a fork was settled with this computer's change.
+const ownForkKeptSaid = "The master password was changed elsewhere from one this computer had before, while this computer's moved on to another: this computer's is kept, and the other computers ask for it at their next sync."
+
+// keepOwnFork settles the fork of the sync folder f, whose info is info,
+// with this vault's change, its key record m: written over the folder's,
+// with both's links.
+func keepOwnFork(cfg *config.Config, f syncfolder.Folder, info *syncfolder.Info, m database.UnlockMaterial) error {
 	links, err := database.VaultKeyLinks(cfg.DBPath.Value)
 	if err != nil {
 		return err
 	}
-	if err := f.WriteInfo(syncfolder.InfoFor(info.FolderID, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}, database.UnionLinks(links, info.Links))); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(app.Stdout, "The master password was changed elsewhere from one this computer had before, while this computer's moved on to another: this computer's is kept, and the other computers ask for it at their next sync."); err != nil {
-		return err
-	}
-	return syncWith(app, cfg)
+	return f.WriteInfo(syncfolder.InfoFor(info.FolderID, syncfolder.KeyRecord{Salt: m.Salt, Verify: m.Verify, Params: m.Params}, database.UnionLinks(links, info.Links)))
 }
 
 // takeKeyChange is sesh sync for a vault whose sync folder has a master

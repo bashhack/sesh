@@ -3,6 +3,7 @@ package vaultsync
 import (
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/kdf"
@@ -52,5 +53,20 @@ func TestSync_NothingNewOpensNothing(t *testing.T) {
 	again.sync(f)
 	if n := counted.opened.Load(); n == 0 || n > 4 {
 		t.Errorf("a sync taking one change decrypted %d times", n)
+	}
+}
+
+// A sync past its deadline takes up no more entries, counting them left.
+func TestSync_Deadline(t *testing.T) {
+	t.Parallel()
+	laptop, _, f := twoComputers(t)
+	laptop.put("a", "pw-a")
+	laptop.put("b", "pw-b")
+	s, err := SyncWith(laptop.store, f, laptop.name, Options{Deadline: time.Now().Add(-time.Second)})
+	if err != nil || s.Unfinished != 2 || len(s.Sent) != 0 {
+		t.Fatalf("past its deadline: %+v, %v", s, err)
+	}
+	if s := laptop.sync(f); len(s.Sent) != 2 {
+		t.Errorf("the next sync: %+v", s)
 	}
 }

@@ -810,7 +810,13 @@ $ sesh sync init ~/Dropbox/sesh-sync  # or any folder
 $ sesh sync join ~/Library/Mobile\ Documents/com~apple~CloudDocs/sesh-sync
 ```
 
-**Commands sync on their own** (`sync.auto`, on unless set to `false`): one that opens the vault (`sesh get`, `list`, `add`, `edit`, `trash` and the rest that use its entries) syncs first, so it sees what changed on the other computers, and again after, if it changed anything. It says one line on stderr when something moved ("Synced: 2 taken, 1 sent."), and nothing otherwise, so a command's own output stays as it is. It never asks for anything: a master password changed on another computer is said, and nothing syncs until `sesh sync` takes it; a sync folder not there now (a drive not connected) is left to `sesh sync status` and `sesh doctor` to say. A sync that fails never stops the command.
+**Commands sync on their own** (`sync.auto`, on unless set to `false`): one that opens the vault (`sesh get`, `list`, `add`, `edit`, `trash` and the rest that use its entries) syncs first, so it sees what changed on the other computers, and again after, if it changed anything. It says one line on stderr when something moved ("Synced: 2 taken, 1 sent.", naming any entry renamed because two computers made one name), and nothing otherwise, so a command's own output stays as it is; a warning that hasn't changed is said once a day. It never asks for anything:
+- a master password changed on another computer is said, and nothing syncs until `sesh sync` takes it; one changed here and on another computer at once is settled as `sesh sync` settles it when this computer's is the one kept, and otherwise left to `sesh sync`;
+- a sync folder not there now (a drive not connected) is left to `sesh sync status` and `sesh doctor` to say;
+- a folder that doesn't answer within 5 seconds (a stuck network mount) isn't waited for, and a sync taking longer leaves the rest for the next one;
+- a sync that fails never stops the command.
+
+An automatic sync with nothing to do isn't written to the [audit log](#the-audit-log); one by hand always is, so `sesh sync status`'s "Last synced" is the last sync that did something, or was run by hand.
 
 `sesh sync` syncs now: what changed here is written to the folder, what changed in the folder is taken, and what changed in both is merged. `sesh sync status` says where the vault syncs and what's waiting, without unlocking it (files sealed with another master password's key are counted apart: sync leaves them for the computer that wrote them); `sesh sync leave` stops this vault syncing (its entries, and the folder, stay); `sesh sync join` with the same folder later picks up where it stopped, merging what changed on both sides meanwhile.
 

@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
+	"github.com/bashhack/sesh/internal/syncfolder"
 	"github.com/bashhack/sesh/internal/vaultsync"
 )
 
@@ -58,7 +60,7 @@ func autoSyncOpened(cfg *config.Config, store *database.Store) {
 	}
 	st := &autoSyncState{cfg: cfg, said: map[string]bool{}}
 	autoSynced[store] = st
-	st.say(autoSyncLines(cfg, store))
+	st.say(freshLines(store, autoSyncLines(cfg, store)))
 }
 
 // autoSyncClosing syncs store again as it's closed, when it was synced as
@@ -70,8 +72,29 @@ func autoSyncClosing(store *database.Store) {
 	}
 	delete(autoSynced, store)
 	if vaultHasChanges(st.cfg, store) {
-		st.say(autoSyncLines(st.cfg, store))
+		st.say(freshLines(store, autoSyncLines(st.cfg, store)))
 	}
+}
+
+// warnAgainAfter is how long a warning an automatic sync said isn't said
+// again, unchanged (decided with the user).
+const warnAgainAfter = 24 * time.Hour
+
+// freshLines are lines, an automatic sync's for the vault open in store,
+// but the warnings and problems (⚠️, ❌) it said in the last
+// warnAgainAfter.
+func freshLines(store *database.Store, lines []string) []string {
+	var out []string
+	now := time.Now()
+	for _, l := range lines {
+		if strings.HasPrefix(l, "⚠️") || strings.HasPrefix(l, "❌") {
+			if fresh, err := store.SyncWarnFresh(l, warnAgainAfter, now); err == nil && !fresh {
+				continue
+			}
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 // say writes lines, but those said already.
@@ -99,13 +122,26 @@ func vaultHasChanges(cfg *config.Config, store *database.Store) bool {
 	return recoveryChanged(cfg)
 }
 
+// autoSyncsRun counts automatic syncs, for tests.
+var autoSyncsRun int
+
+// autoSyncBudget is how long an automatic sync may take (decided with the
+// user): a folder that doesn't answer in it is left for the next sync, and
+// a sync running past it leaves the entries not reached for the next.
+var autoSyncBudget = 5 * time.Second
+
 // autoSyncLines syncs store, the vault cfg names, with its sync folder,
-// asking nothing, and says in a line or two what moved, if anything did; a
-// sync that fails never stops the command.
+// asking nothing and within autoSyncBudget, and says in a line or two what
+// moved, if anything did; a sync that fails never stops the command.
 func autoSyncLines(cfg *config.Config, store *database.Store) (lines []string) {
+	autoSyncsRun++
+	deadline := time.Now().Add(autoSyncBudget)
+	if !answers(cfg.SyncDir.Value, autoSyncBudget) {
+		return []string{fmt.Sprintf("⚠️  Sync: the sync folder %s didn't answer in %s; this command didn't sync (sesh sync waits for it).", tildePath(cfg.SyncDir.Value), autoSyncBudget)}
+	}
 	var mended bytes.Buffer
 	quiet := &App{Stdin: bytes.NewReader(nil), Stdout: &mended, Stderr: io.Discard, Exit: func(int) {}}
-	if mended, err := mendInfo(cfg); err == nil && mended {
+	if lost, err := mendInfo(cfg); err == nil && lost {
 		lines = append(lines, "Sync: the sync folder had lost its sesh-sync.json, written again from this vault.")
 	}
 	f, err := syncFolderOf(cfg)
@@ -118,6 +154,19 @@ func autoSyncLines(cfg *config.Config, store *database.Store) (lines []string) {
 		}
 		f, err = syncFolderOf(cfg)
 	}
+	if errors.Is(err, errKeyFork) {
+		// This computer's change kept: settled as sesh sync settles it,
+		// asking nothing. The other's: taking it asks for its password.
+		kept, ferr := keptOwnFork(cfg, f)
+		if ferr != nil {
+			return append(lines, "⚠️  Sync: "+ferr.Error())
+		}
+		if !kept {
+			return append(lines, "⚠️  Sync: the master password was changed here and on another computer at once, and the other's is kept; nothing syncs until sesh sync takes it.")
+		}
+		lines = append(lines, "Sync: "+ownForkKeptSaid)
+		f, err = syncFolderOf(cfg)
+	}
 	var away *folderAwayError
 	switch {
 	case errors.As(err, &away):
@@ -126,9 +175,6 @@ func autoSyncLines(cfg *config.Config, store *database.Store) (lines []string) {
 	case errors.Is(err, errKeyChangedElsewhere):
 		// Taking it asks for the new password: left to sesh sync.
 		return append(lines, "⚠️  Sync: the master password was changed on another computer; nothing syncs until sesh sync takes it.")
-	case errors.Is(err, errKeyFork):
-		// Settling it may ask for the other's: left to sesh sync too.
-		return append(lines, "⚠️  Sync: the master password was changed here and on another computer at once; nothing syncs until sesh sync settles it.")
 	case errors.Is(err, errKeyToSend):
 		info, rerr := f.ReadInfo()
 		rec, merr := database.ReadUnlockMaterial(cfg.DBPath.Value)
@@ -144,11 +190,48 @@ func autoSyncLines(cfg *config.Config, store *database.Store) (lines []string) {
 	case err != nil:
 		return append(lines, "⚠️  Sync: "+err.Error())
 	}
-	sum, err := syncStoreSum(cfg, f, store)
+	sum, err := syncStoreSum(cfg, f, store, syncRun{deadline: deadline, auto: true})
 	if err != nil {
 		return append(lines, "⚠️  Sync: "+err.Error())
 	}
 	return append(lines, autoSummary(sum)...)
+}
+
+// keptOwnFork settles the fork in the sync folder f, of the vault cfg
+// names, when this vault's change is the one kept, and says whether it is.
+func keptOwnFork(cfg *config.Config, f syncfolder.Folder) (bool, error) {
+	info, err := f.ReadInfo()
+	if err != nil {
+		return false, err
+	}
+	m, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
+	if err != nil {
+		return false, err
+	}
+	if forkKept(database.UnlockID(info.Key.Verify), database.UnlockID(m.Verify)) {
+		return false, nil
+	}
+	return true, keepOwnFork(cfg, f, info, m)
+}
+
+// readDir reads a folder, for answers; tests make one that doesn't answer.
+var readDir = os.ReadDir
+
+// answers says whether the folder dir answers within limit: a stuck
+// network mount, say, doesn't. What's left waiting for it ends with the
+// command.
+func answers(dir string, limit time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		_, _ = readDir(dir) //nolint:errcheck // only how long it takes
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(limit):
+		return false
+	}
 }
 
 // autoSummary says what a sync did in a line, its notes, warnings and
@@ -173,6 +256,9 @@ func autoSummary(s *vaultsync.Summary) []string {
 	var lines []string
 	if len(parts) > 0 {
 		lines = append(lines, "Synced: "+strings.Join(parts, ", ")+".")
+	}
+	if s.Unfinished > 0 {
+		lines = append(lines, fmt.Sprintf("Sync: out of time, %s left for the next sync.", nouns(s.Unfinished, "entry", "entries")))
 	}
 	lines = append(lines, s.Notes...)
 	for _, w := range s.Warnings {

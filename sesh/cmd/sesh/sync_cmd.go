@@ -186,15 +186,15 @@ func syncWith(app *App, cfg *config.Config) error {
 
 // syncStore syncs store, the vault cfg names, with f, and says what it did.
 func syncStore(app *App, cfg *config.Config, f syncfolder.Folder, store *database.Store) error {
-	sum, err := syncStoreSum(cfg, f, store)
+	sum, err := syncStoreSum(cfg, f, store, syncRun{})
 	if err != nil {
 		return err
 	}
 	return writeSyncSummary(app, tildePath(f.Dir()), sum)
 }
 
-// syncStoreSum is syncStore, giving what the sync did.
-func syncStoreSum(cfg *config.Config, f syncfolder.Folder, store *database.Store) (*vaultsync.Summary, error) {
+// syncStoreSum is syncStore run as run says, giving what the sync did.
+func syncStoreSum(cfg *config.Config, f syncfolder.Folder, store *database.Store, run syncRun) (*vaultsync.Summary, error) {
 	info, err := f.ReadInfo()
 	if err != nil {
 		return nil, fmt.Errorf("the sync folder %s: %w", tildePath(f.Dir()), err)
@@ -219,7 +219,7 @@ func syncStoreSum(cfg *config.Config, f syncfolder.Folder, store *database.Store
 			return nil, err
 		}
 	}
-	return syncOlderAlso(store, cfg, f, prev)
+	return syncOlderWith(store, cfg, f, prev, run)
 }
 
 // errOtherFolder is a vault with entries that synced with another sync

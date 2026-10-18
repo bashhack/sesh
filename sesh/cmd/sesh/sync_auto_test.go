@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/config"
 )
@@ -85,15 +86,19 @@ func TestAutoSync_PasswordChangedElsewhere(t *testing.T) {
 	laptop, desktop := syncedPair(t, dir, folder, "password/a")
 	syncComputer(t, laptop, "laptop")
 	changePassword(t, "old-password-1", "new-password-2")
-	syncComputer(t, desktop, "desktop")
+	ddb := syncComputer(t, desktop, "desktop")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
 	out, synced := runAuto(t, "get", "password/a")
 	if !strings.Contains(out, "secret-1") || !strings.Contains(synced, "nothing syncs until sesh sync takes it") {
 		t.Errorf("desktop get: %q, synced %q", out, synced)
 	}
-	// A command changing the vault says it once, and sends nothing.
-	if _, synced := runAuto(t, "trash", "password/a", "--force"); strings.Count(synced, "nothing syncs until") != 1 {
+	// Said once a day: not by the next command, again a day later.
+	if _, synced := runAuto(t, "trash", "password/a", "--force"); synced != "" {
 		t.Errorf("desktop trash: synced %q", synced)
+	}
+	sqlExec(t, ddb, `UPDATE sync_warned SET at = ?`, time.Now().Add(-25*time.Hour).UTC())
+	if _, synced := runAuto(t, "list"); strings.Count(synced, "nothing syncs until") != 1 {
+		t.Errorf("desktop list a day later: synced %q", synced)
 	}
 }
 
@@ -113,21 +118,27 @@ func syncsLogged(t *testing.T, db string) int {
 }
 
 // A command that changes nothing syncs once, as it opens; one that changes
-// the vault, again as it closes.
+// the vault, again as it closes. A sync with nothing to do isn't logged.
 func TestAutoSync_PushesOnlyAChange(t *testing.T) {
 	dir := t.TempDir()
 	folder := filepath.Join(dir, "sync")
 	_, desktop := syncedPair(t, dir, folder, "password/a")
 	ddb := syncComputer(t, desktop, "desktop")
-	before := syncsLogged(t, ddb)
+	before, logged := autoSyncsRun, syncsLogged(t, ddb)
 	runAuto(t, "get", "password/a")
-	if n := syncsLogged(t, ddb) - before; n != 1 {
+	if n := autoSyncsRun - before; n != 1 {
 		t.Errorf("a get synced %d times", n)
 	}
-	before = syncsLogged(t, ddb)
+	if n := syncsLogged(t, ddb) - logged; n != 0 {
+		t.Errorf("a sync with nothing to do was logged %d times", n)
+	}
+	before, logged = autoSyncsRun, syncsLogged(t, ddb)
 	runAuto(t, "trash", "password/a", "--force")
-	if n := syncsLogged(t, ddb) - before; n != 2 {
+	if n := autoSyncsRun - before; n != 2 {
 		t.Errorf("a trash synced %d times", n)
+	}
+	if n := syncsLogged(t, ddb) - logged; n != 1 {
+		t.Errorf("a trash's syncs were logged %d times", n)
 	}
 }
 
@@ -200,5 +211,56 @@ func TestAutoSync_SaysAProblemOnce(t *testing.T) {
 	_, synced := runAuto(t, "trash", "password/a", "--force")
 	if strings.Count(synced, "problem") != 1 || !strings.Contains(synced, "Synced: 1 sent.") {
 		t.Errorf("desktop trash: synced %q", synced)
+	}
+}
+
+// A fork: settled by a command's own sync when this computer's change is
+// the one kept, left to sesh sync with a note when the other's is.
+func TestAutoSync_Fork(t *testing.T) {
+	orig := forkKept
+	t.Cleanup(func() { forkKept = orig })
+	for _, ours := range []bool{true, false} {
+		forkKept = func(string, string) bool { return !ours }
+		dir := t.TempDir()
+		folder := filepath.Join(dir, "sync")
+		laptop, desktop := syncedPair(t, dir, folder, "password/a")
+		old, err := os.ReadFile(filepath.Join(folder, "sesh-sync.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ldb := syncComputer(t, laptop, "laptop")
+		changePassword(t, "old-password-1", "laptop-password-2")
+		if err := os.WriteFile(filepath.Join(folder, "sesh-sync.json"), old, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		syncComputer(t, desktop, "desktop")
+		changePassword(t, "old-password-1", "desktop-password-3")
+		syncComputer(t, laptop, "laptop")
+		t.Setenv("SESH_MASTER_PASSWORD", "laptop-password-2")
+		_, synced := runAuto(t, "list")
+		switch {
+		case ours && (!strings.Contains(synced, "this computer's is kept") || folderKeyID(t, folder) != vaultKeyID(t, ldb)):
+			t.Errorf("ours kept: synced %q", synced)
+		case !ours && (!strings.Contains(synced, "the other's is kept; nothing syncs until sesh sync takes it") || folderKeyID(t, folder) == vaultKeyID(t, ldb)):
+			t.Errorf("theirs kept: synced %q", synced)
+		}
+	}
+}
+
+// A sync folder that doesn't answer in time isn't waited for.
+func TestAutoSync_FolderStuck(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	_, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, desktop, "desktop")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	origRead, origBudget := readDir, autoSyncBudget
+	readDir = func(string) ([]os.DirEntry, error) { <-release; return nil, nil }
+	autoSyncBudget = 50 * time.Millisecond
+	t.Cleanup(func() { readDir, autoSyncBudget = origRead, origBudget })
+	out, synced := runAuto(t, "get", "password/a")
+	if !strings.Contains(out, "secret-1") || !strings.Contains(synced, "didn't answer in 50ms") {
+		t.Errorf("get with the folder stuck: %q, synced %q", out, synced)
 	}
 }

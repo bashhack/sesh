@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/bashhack/sesh/internal/syncfolder"
 )
@@ -157,3 +158,25 @@ func recoveryKeyBytes(pub []byte) []byte {
 // the vault hasn't seen: none.
 const noRecoverySeen = `recovery_count = 0, recovery_key = x'', recovery_made = NULL, recovery_by = '',
 	recovery_prior_count = 0, recovery_prior_key = x'', recovery_mine = 0, recovery_earlier = 0, recovery_restored = 0, recovery_restored_key = x''`
+
+// SyncWarnFresh says whether an automatic sync should say the warning line
+// at now: it wasn't said in the last within. When it should, it's recorded
+// as said now.
+func (s *Store) SyncWarnFresh(line string, within time.Duration, now time.Time) (bool, error) {
+	fresh := false
+	err := s.inTx(func(tx *sql.Tx) error {
+		var at time.Time
+		err := tx.QueryRow(`SELECT at FROM sync_warned WHERE line = ?`, line).Scan(&at)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return err
+		case now.Sub(at) < within:
+			return nil
+		}
+		fresh = true
+		_, err = tx.Exec(`INSERT INTO sync_warned (line, at) VALUES (?, ?) ON CONFLICT (line) DO UPDATE SET at = excluded.at`, line, now.UTC())
+		return err
+	})
+	return fresh, err
+}
