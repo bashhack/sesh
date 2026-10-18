@@ -115,7 +115,7 @@ func TestRestore_RecoverySeen(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen, err := VaultSyncRecovery(a.path)
-	if err != nil || seen.Count != 2 || !bytes.Equal(seen.PublicKey, next.PublicKey) || !seen.Mine || seen.Earlier || !seen.Restored {
+	if err != nil || seen.Count != 2 || !bytes.Equal(seen.PublicKey, next.PublicKey) || !seen.Mine || seen.Earlier || !seen.Restored || !bytes.Equal(seen.RestoredKey, old.PublicKey) {
 		t.Errorf("seen after the restore: %+v, %v", seen, err)
 	}
 }

@@ -131,20 +131,23 @@ func syncRecovery(store *database.Store, f syncfolder.Folder, older *database.Ol
 	if local != nil {
 		localPub = local.PublicKey
 	}
-	// A record a restore put back isn't a change to send.
-	pending := !bytes.Equal(localPub, seen.PublicKey) && !seen.Restored
+	// A record a restore put back isn't a change to send, while it's
+	// that one; one changed since is.
+	restored := seen.Restored && bytes.Equal(localPub, seen.RestoredKey)
+	pending := !bytes.Equal(localPub, seen.PublicKey) && !restored
 	notes, warnings, err = recoveryRules(store, f, info, older, &seen, local, pending, computer, keyID, also)
 	if err != nil || !seen.Restored {
 		return notes, warnings, err
 	}
-	n, w, err := restoredRecovery(store, keyID)
+	n, w, err := restoredRecovery(store, keyID, restored)
 	return append(notes, n...), append(warnings, w...), err
 }
 
 // restoredRecovery gives the vault open in store, whose recovery key record
 // a restore put back, the one it saw in the sync folder (now settled with
-// it), in place of the backup's, and says so.
-func restoredRecovery(store *database.Store, keyID string) (notes, warnings []string, err error) {
+// it), in place of the backup's, and says so; with keep false (it changed
+// here since), it only stops counting it as restored.
+func restoredRecovery(store *database.Store, keyID string, keep bool) (notes, warnings []string, err error) {
 	seen, err := store.SyncRecovery()
 	if err != nil {
 		return nil, nil, err
@@ -160,13 +163,13 @@ func restoredRecovery(store *database.Store, keyID string) (notes, warnings []st
 	if local != nil {
 		localPub = local.PublicKey
 	}
-	if !bytes.Equal(localPub, seen.PublicKey) {
+	if keep && !bytes.Equal(localPub, seen.PublicKey) {
 		return takeRecovery(store, &seen.Recovery, local, keyID, false)
 	}
 	if !seen.Restored {
 		return nil, nil, nil
 	}
-	seen.Restored = false
+	seen.Restored, seen.RestoredKey = false, nil
 	return nil, nil, recoveryTakeErr(store.SyncTakeRecovery(&seen, local, localPub))
 }
 
@@ -185,7 +188,7 @@ func recoveryRules(store *database.Store, f syncfolder.Folder, info *syncfolder.
 		case recoverySame:
 			// Seen under an earlier key: now seen under this one.
 			if seen.Earlier {
-				*seen = database.SeenRecovery{Recovery: folder, Mine: seen.Mine, Restored: seen.Restored}
+				*seen = database.SeenRecovery{Recovery: folder, Mine: seen.Mine, Restored: seen.Restored, RestoredKey: seen.RestoredKey}
 				if err := store.SyncTakeRecovery(seen, local, localPub); err != nil {
 					return nil, nil, recoveryTakeErr(err)
 				}

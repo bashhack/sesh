@@ -830,3 +830,99 @@ func TestSync_RecoveryCountCapped(t *testing.T) {
 	madeRecoveryKey(t, ldb, "old-password-1")
 	syncSays(t, "laptop", "as high as it goes")
 }
+
+// restoredDesktop is a laptop and desktop syncing one recovery key, the
+// desktop then restored from a backup of itself, not synced since.
+func restoredDesktop(t *testing.T) (laptop, ldb, ddb string, k recovery.Key) {
+	t.Helper()
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	ldb = syncComputer(t, laptop, "laptop")
+	k = madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	ddb = syncComputer(t, desktop, "desktop")
+	syncSays(t, "desktop", "now opens this vault")
+	backup := filepath.Join(dir, "backup.db")
+	if err := database.CopyTo(ddb, backup); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RestoreInPlace(ddb, backup); err != nil {
+		t.Fatal(err)
+	}
+	return laptop, ldb, ddb, k
+}
+
+// A recovery key changed after a restore, before a sync, is a change like
+// any other: removed, made, or used up, it reaches the other computers.
+func TestSync_RecoveryChangedAfterRestore(t *testing.T) {
+	t.Run("removed", func(t *testing.T) {
+		laptop, ldb, ddb, _ := restoredDesktop(t)
+		if err := database.RemoveRecovery(ddb); err != nil {
+			t.Fatal(err)
+		}
+		syncSays(t, "desktop", "removal goes to the other computers")
+		hasNoRecovery(t, ddb)
+		syncComputer(t, laptop, "laptop")
+		syncSays(t, "laptop", "removed on desktop")
+		hasNoRecovery(t, ldb)
+	})
+	t.Run("made", func(t *testing.T) {
+		laptop, ldb, ddb, k := restoredDesktop(t)
+		n := madeRecoveryKey(t, ddb, "old-password-1")
+		syncSays(t, "desktop", "recovery key goes to the other computers")
+		opensVault(t, n, ddb)
+		syncComputer(t, laptop, "laptop")
+		syncSays(t, "laptop", "made on desktop")
+		opensVault(t, n, ldb)
+		opensNot(t, k, ldb)
+	})
+	t.Run("used", func(t *testing.T) {
+		laptop, ldb, ddb, k := restoredDesktop(t)
+		t.Setenv("SESH_MASTER_PASSWORD", "")
+		out, err := runRecoverWith(t, []string{strings.ToLower(k.String()), "new-password-2", "new-password-2"}, false)
+		if err != nil || strings.Contains(out, "now opens this vault here too") {
+			t.Fatalf("recover: %v\n%s", err, out)
+		}
+		hasNoRecovery(t, ddb)
+		syncComputer(t, laptop, "laptop")
+		t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+		stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
+		if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "removed on desktop") {
+			t.Fatalf("laptop sync: %q, %v", out, err)
+		}
+		hasNoRecovery(t, ldb)
+	})
+}
+
+// sesh recovery status after a restore doesn't call the backup's key a
+// change to send.
+func TestSync_RecoveryStatusAfterRestore(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	ddb := syncComputer(t, desktop, "desktop")
+	syncSays(t, "desktop", "now opens this vault")
+	backup := filepath.Join(dir, "backup.db")
+	if err := database.CopyTo(ddb, backup); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, laptop, "laptop")
+	madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	syncComputer(t, desktop, "desktop")
+	syncSays(t, "desktop", "now opens this vault")
+	if err := database.RestoreInPlace(ddb, backup); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveryChanged(cfg) {
+		t.Error("a restored key counts as a change to send")
+	}
+}

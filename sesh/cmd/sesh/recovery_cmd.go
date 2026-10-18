@@ -301,7 +301,7 @@ func recoveryUnsent(cfg *config.Config, pub []byte) string {
 		return ""
 	}
 	seen, err := database.VaultSyncRecovery(cfg.DBPath.Value)
-	if err != nil || bytes.Equal(seen.PublicKey, pub) {
+	if err != nil || bytes.Equal(seen.PublicKey, pub) || seen.Restored && bytes.Equal(seen.RestoredKey, pub) {
 		return ""
 	}
 	if pub == nil {

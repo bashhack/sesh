@@ -147,7 +147,8 @@ func migrateV1(tx *sql.Tx) error {
 			-- when and where it was made, what it replaced, whether this
 			-- vault sent it, whether the folder's goes before it (seen under
 			-- a key before a change taken), and whether the vault's own was
-			-- put back by a restore (so it isn't a change to send).
+			-- put back by a restore, and its key then (so it isn't a change
+			-- to send while it's that one).
 			recovery_count       INTEGER NOT NULL DEFAULT 0,
 			recovery_key         BLOB NOT NULL DEFAULT x'',
 			recovery_made        DATETIME,
@@ -156,7 +157,8 @@ func migrateV1(tx *sql.Tx) error {
 			recovery_prior_key   BLOB NOT NULL DEFAULT x'',
 			recovery_mine        INTEGER NOT NULL DEFAULT 0,
 			recovery_earlier     INTEGER NOT NULL DEFAULT 0,
-			recovery_restored    INTEGER NOT NULL DEFAULT 0
+			recovery_restored    INTEGER NOT NULL DEFAULT 0,
+			recovery_restored_key BLOB NOT NULL DEFAULT x''
 		)`,
 		// Earlier secrets forgotten on purpose, by their entry's uid, a
 		// hash of the secret (syncfolder.Forget) and when, so a sync
