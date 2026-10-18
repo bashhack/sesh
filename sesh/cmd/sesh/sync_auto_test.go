@@ -267,8 +267,8 @@ func TestAutoSync_FolderStuck(t *testing.T) {
 	if strings.Count(synced, "didn't answer in 50ms") != 1 || autoSyncsRun-before != 1 {
 		t.Errorf("trash with the folder stuck: synced %q, %d syncs", synced, autoSyncsRun-before)
 	}
-	// Said each time: the command waited for it.
-	if _, synced := runAuto(t, "list"); !strings.Contains(synced, "didn't answer in 50ms") {
+	// With the first look still waiting, the next doesn't wait, and says so.
+	if _, synced := runAuto(t, "list"); !strings.Contains(synced, "still hasn't answered") {
 		t.Errorf("list with the folder stuck: synced %q", synced)
 	}
 }
@@ -401,8 +401,8 @@ func TestUISync_FolderStuck(t *testing.T) {
 	if said, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 || reads.Load() != 2 {
 		t.Errorf("sync now: %q, folder read %d times", said, reads.Load())
 	}
-	// One still waiting isn't joined by another.
-	if said, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 || reads.Load() != 2 {
+	// One still waiting isn't joined by another, nor said to be waited for.
+	if said, _ := uiSync(cfg, v, tui.SyncNow); len(said) != 1 || !strings.Contains(said[0], "still hasn't answered") || reads.Load() != 2 {
 		t.Errorf("sync now again: %q, folder read %d times", said, reads.Load())
 	}
 }
@@ -436,5 +436,58 @@ func TestUISync_SaveAfterSync(t *testing.T) {
 	}
 	if changed, err := v.Check(); err != nil || changed {
 		t.Errorf("the app's check after its own save: %v, %v", changed, err)
+	}
+}
+
+// After a pull the app said, another command's write that changes no
+// entry isn't a change; nor is the app's own save after another command
+// wrote during a sync.
+func TestUISync_OthersWritesAroundASync(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	putEntry(t, "password/a", "secret-2")
+	if _, err := runSyncOut(t, "", false); err != nil {
+		t.Fatal(err)
+	}
+	ddb := syncComputer(t, desktop, "desktop")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	v := newUIVault(store)
+	other := func() {
+		t.Helper()
+		sqlExec(t, ddb, `INSERT INTO audit_log (event_type, detail, created_at) VALUES ('test', 'another command', ?)`, time.Now().UTC())
+	}
+	if said, _ := uiSync(cfg, v, tui.SyncPull); len(said) != 1 {
+		t.Fatalf("the pull: %q", said)
+	}
+	if changed, err := v.Check(); err != nil || !changed {
+		t.Fatalf("after the pull: %v, %v", changed, err)
+	}
+	other()
+	if changed, err := v.Check(); err != nil || changed {
+		t.Errorf("another command's write after: %v, %v", changed, err)
+	}
+	other()
+	if _, ran := uiSync(cfg, v, tui.SyncPull); !ran {
+		t.Fatal("the second pull didn't run")
+	}
+	k, err := vault.ParseKey("password/c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.wrote(store.Put(k, []byte("c"))); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := v.Check(); err != nil || changed {
+		t.Errorf("the app's save after another command wrote: %v, %v", changed, err)
 	}
 }

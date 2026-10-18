@@ -149,8 +149,11 @@ const notAnswering = "didn't answer in"
 func autoSyncRun(cfg *config.Config, store *database.Store) (lines []string, stuck, ran bool) {
 	autoSyncsRun++
 	deadline := time.Now().Add(autoSyncBudget)
-	if !answers(cfg.SyncDir.Value, autoSyncBudget) {
+	switch answered, waited := answers(cfg.SyncDir.Value, autoSyncBudget); {
+	case !answered && waited:
 		return []string{fmt.Sprintf("⚠️  Sync: the sync folder %s %s %s; nothing synced (sesh sync waits for it).", tildePath(cfg.SyncDir.Value), notAnswering, autoSyncBudget)}, true, false
+	case !answered:
+		return []string{fmt.Sprintf("⚠️  Sync: the sync folder %s still hasn't answered; nothing synced (sesh sync waits for it).", tildePath(cfg.SyncDir.Value))}, true, false
 	}
 	lines, ran = autoSyncChecked(cfg, store, deadline)
 	return lines, false, ran
@@ -245,13 +248,15 @@ var readDir = os.ReadDir
 // answers says whether the folder dir answers within limit: a stuck
 // network mount, say, doesn't. What's left waiting for it ends with the
 // command.
-func answers(dir string, limit time.Duration) bool {
+// waited says it waited for it: not when an earlier look is still
+// waiting.
+func answers(dir string, limit time.Duration) (answered, waited bool) {
 	// One still waiting on it means it isn't answering: no other is
 	// started, to wait beside it.
 	probing.Lock()
 	if probing.dirs[dir] {
 		probing.Unlock()
-		return false
+		return false, false
 	}
 	probing.dirs[dir] = true
 	probing.Unlock()
@@ -265,9 +270,9 @@ func answers(dir string, limit time.Duration) bool {
 	}()
 	select {
 	case <-done:
-		return true
+		return true, true
 	case <-time.After(limit):
-		return false
+		return false, true
 	}
 }
 
