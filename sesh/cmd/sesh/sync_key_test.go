@@ -1049,3 +1049,25 @@ func TestSync_LateSwitchSaid(t *testing.T) {
 		t.Errorf("desktop: a = %q, want secret-1", got)
 	}
 }
+
+// Status doesn't count a file sealed with this vault's own earlier key as
+// another master password's: sync seals it again or writes it over.
+func TestSync_StatusEarlierKey(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, _ := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	file := scanFolder(t, folder)[0]
+	before, err := os.ReadFile(file.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changePassword(t, "old-password-1", "new-password-2")
+	if err := os.WriteFile(file.Path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runSyncOut(t, "", false, "status")
+	if err != nil || strings.Contains(out, "sealed with another master password's key") {
+		t.Errorf("status: %q, %v; want the earlier key's file not counted as another's", out, err)
+	}
+}
