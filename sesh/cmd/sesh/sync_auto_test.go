@@ -209,7 +209,7 @@ func TestAutoSync_SaysAProblemOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, synced := runAuto(t, "trash", "password/a", "--force")
-	if strings.Count(synced, "problem") != 1 || !strings.Contains(synced, "Synced: 1 sent.") {
+	if strings.Count(synced, "not a sesh sync file") != 1 || !strings.Contains(synced, "Synced: 1 sent.") {
 		t.Errorf("desktop trash: synced %q", synced)
 	}
 }
@@ -259,8 +259,34 @@ func TestAutoSync_FolderStuck(t *testing.T) {
 	readDir = func(string) ([]os.DirEntry, error) { <-release; return nil, nil }
 	autoSyncBudget = 50 * time.Millisecond
 	t.Cleanup(func() { readDir, autoSyncBudget = origRead, origBudget })
-	out, synced := runAuto(t, "get", "password/a")
-	if !strings.Contains(out, "secret-1") || !strings.Contains(synced, "didn't answer in 50ms") {
-		t.Errorf("get with the folder stuck: %q, synced %q", out, synced)
+	before := autoSyncsRun
+	_, synced := runAuto(t, "trash", "password/a", "--force")
+	if strings.Count(synced, "didn't answer in 50ms") != 1 || autoSyncsRun-before != 1 {
+		t.Errorf("trash with the folder stuck: synced %q, %d syncs", synced, autoSyncsRun-before)
+	}
+	// Said each time: the command waited for it.
+	if _, synced := runAuto(t, "list"); !strings.Contains(synced, "didn't answer in 50ms") {
+		t.Errorf("list with the folder stuck: synced %q", synced)
+	}
+}
+
+// Each problem is said, once a day by its own text: another the same day
+// is said too.
+func TestAutoSync_SaysEachProblem(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	_, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, desktop, "desktop")
+	for i, name := range []string{"0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"} {
+		bad := filepath.Join(folder, "entries", name+".sesh")
+		if err := os.WriteFile(bad, []byte("not a sesh file"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, synced := runAuto(t, "list"); !strings.Contains(synced, name) {
+			t.Errorf("problem %d not said: %q", i, synced)
+		}
+		if err := os.Remove(bad); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

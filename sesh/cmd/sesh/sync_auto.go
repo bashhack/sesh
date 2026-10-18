@@ -44,8 +44,11 @@ var autoSynced = map[*database.Store]*autoSyncState{}
 // autoSyncState is a command's vault as its automatic sync left it.
 type autoSyncState struct {
 	cfg *config.Config
-	// said is what was said already, not said again.
-	said map[string]bool
+	// said is what was said already, not said again; stuck, that the
+	// folder didn't answer as the vault was opened, so it isn't waited
+	// for again as it's closed.
+	said  map[string]bool
+	stuck bool
 }
 
 // autoSyncOpened syncs store, the vault cfg names, just opened, when it's
@@ -60,7 +63,9 @@ func autoSyncOpened(cfg *config.Config, store *database.Store) {
 	}
 	st := &autoSyncState{cfg: cfg, said: map[string]bool{}}
 	autoSynced[store] = st
-	st.say(freshLines(store, autoSyncLines(cfg, store)))
+	lines, stuck := autoSyncRun(cfg, store)
+	st.stuck = stuck
+	st.say(freshLines(store, lines))
 }
 
 // autoSyncClosing syncs store again as it's closed, when it was synced as
@@ -71,8 +76,9 @@ func autoSyncClosing(store *database.Store) {
 		return
 	}
 	delete(autoSynced, store)
-	if vaultHasChanges(st.cfg, store) {
-		st.say(freshLines(store, autoSyncLines(st.cfg, store)))
+	if !st.stuck && vaultHasChanges(st.cfg, store) {
+		lines, _ := autoSyncRun(st.cfg, store)
+		st.say(freshLines(store, lines))
 	}
 }
 
@@ -82,12 +88,13 @@ const warnAgainAfter = 24 * time.Hour
 
 // freshLines are lines, an automatic sync's for the vault open in store,
 // but the warnings and problems (⚠️, ❌) it said in the last
-// warnAgainAfter.
+// warnAgainAfter. A folder not answering is said each time: the command
+// waited for it.
 func freshLines(store *database.Store, lines []string) []string {
 	var out []string
 	now := time.Now()
 	for _, l := range lines {
-		if strings.HasPrefix(l, "⚠️") || strings.HasPrefix(l, "❌") {
+		if (strings.HasPrefix(l, "⚠️") || strings.HasPrefix(l, "❌")) && !strings.Contains(l, notAnswering) {
 			if fresh, err := store.SyncWarnFresh(l, warnAgainAfter, now); err == nil && !fresh {
 				continue
 			}
@@ -130,15 +137,26 @@ var autoSyncsRun int
 // a sync running past it leaves the entries not reached for the next.
 var autoSyncBudget = 5 * time.Second
 
-// autoSyncLines syncs store, the vault cfg names, with its sync folder,
+// notAnswering is in what an automatic sync says of a folder that didn't
+// answer.
+const notAnswering = "didn't answer in"
+
+// autoSyncRun syncs store, the vault cfg names, with its sync folder,
 // asking nothing and within autoSyncBudget, and says in a line or two what
 // moved, if anything did; a sync that fails never stops the command.
-func autoSyncLines(cfg *config.Config, store *database.Store) (lines []string) {
+// stuck says the folder didn't answer.
+func autoSyncRun(cfg *config.Config, store *database.Store) (lines []string, stuck bool) {
 	autoSyncsRun++
 	deadline := time.Now().Add(autoSyncBudget)
 	if !answers(cfg.SyncDir.Value, autoSyncBudget) {
-		return []string{fmt.Sprintf("⚠️  Sync: the sync folder %s didn't answer in %s; this command didn't sync (sesh sync waits for it).", tildePath(cfg.SyncDir.Value), autoSyncBudget)}
+		return []string{fmt.Sprintf("⚠️  Sync: the sync folder %s %s %s; this command didn't sync (sesh sync waits for it).", tildePath(cfg.SyncDir.Value), notAnswering, autoSyncBudget)}, true
 	}
+	lines = autoSyncChecked(cfg, store, deadline)
+	return lines, false
+}
+
+// autoSyncChecked is autoSyncRun once the folder has answered.
+func autoSyncChecked(cfg *config.Config, store *database.Store, deadline time.Time) (lines []string) {
 	var mended bytes.Buffer
 	quiet := &App{Stdin: bytes.NewReader(nil), Stdout: &mended, Stderr: io.Discard, Exit: func(int) {}}
 	if lost, err := mendInfo(cfg); err == nil && lost {
@@ -221,9 +239,9 @@ var readDir = os.ReadDir
 // network mount, say, doesn't. What's left waiting for it ends with the
 // command.
 func answers(dir string, limit time.Duration) bool {
-	done := make(chan struct{})
+	done, read := make(chan struct{}), readDir
 	go func() {
-		_, _ = readDir(dir) //nolint:errcheck // only how long it takes
+		_, _ = read(dir) //nolint:errcheck // only how long it takes
 		close(done)
 	}()
 	select {
@@ -258,14 +276,16 @@ func autoSummary(s *vaultsync.Summary) []string {
 		lines = append(lines, "Synced: "+strings.Join(parts, ", ")+".")
 	}
 	if s.Unfinished > 0 {
-		lines = append(lines, fmt.Sprintf("Sync: out of time, %s left for the next sync.", nouns(s.Unfinished, "entry", "entries")))
+		lines = append(lines, "Sync: out of time; the next sync finishes it.")
 	}
 	lines = append(lines, s.Notes...)
 	for _, w := range s.Warnings {
 		lines = append(lines, "⚠️  "+w)
 	}
-	if n := len(s.Problems); n > 0 {
-		lines = append(lines, fmt.Sprintf("❌ Sync: %s; sesh sync says what.", nouns(n, "problem", "problems")))
+	// Each said: some (a merge that couldn't keep both notes) are met only
+	// once, and sesh sync wouldn't say them again.
+	for _, p := range s.Problems {
+		lines = append(lines, "❌ Sync: "+p)
 	}
 	return lines
 }
