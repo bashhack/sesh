@@ -63,6 +63,9 @@ type Summary struct {
 	// Unfinished counts entries left for the next sync, its deadline
 	// passed (Options.Deadline).
 	Unfinished int
+	// EarlierKey counts files sealed with a key from before a master
+	// password change, holding something new: not taken.
+	EarlierKey int
 }
 
 // Merged is an entry changed both here and in the folder: what both
@@ -74,7 +77,7 @@ type Merged struct {
 
 // Nothing says whether the sync found nothing to do.
 func (s *Summary) Nothing() bool {
-	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+len(s.Notes)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed+s.Unfinished == 0
+	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+len(s.Notes)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed+s.Unfinished+s.EarlierKey == 0
 }
 
 // syncer is one sync's state.
@@ -136,6 +139,16 @@ func (y *syncer) sealerFor(f *syncfolder.File) syncfolder.Sealer {
 
 // stale says whether f is sealed with a key from before a password change,
 // which this sync opens and writes again with the vault's.
+// earlierKeyChange says whether rec, opened from f, is sealed with a key
+// the vault had before a master password change and holds something new
+// to what was agreed (base): it isn't taken (decided with the user), as
+// anyone who knew that password, and has an older sesh-sync.json, could
+// have made it. A computer that made it before taking the change sends it
+// again, under the new key, once it takes it.
+func (y *syncer) earlierKeyChange(f *syncfolder.File, rec, base *syncfolder.Record) bool {
+	return y.stale(f) && (base == nil || !base.Versions.Covers(rec.Versions) && !sameEntry(rec, base))
+}
+
 func (y *syncer) stale(f *syncfolder.File) bool {
 	return f.KeyIDString() != y.keyID && y.older != nil && y.older.Sealer(f.KeyIDString()) != nil
 }
@@ -386,6 +399,16 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", filepath.Base(f.Path), err)
 		}
+		// Something new under a key from before a password change: not
+		// taken, and the entry's own file is written over with this
+		// computer's version (one here to write).
+		if y.earlierKeyChange(f, rec, base) {
+			rec.Wipe()
+			y.sum.EarlierKey++
+			mine := ownFile(f) && (it.Agreed != nil || it.Place != database.SyncGone)
+			olderCopy, ownStale = olderCopy || mine, ownStale || mine
+			continue
+		}
 		// Every change in it seen here already: an older copy, put back.
 		if base != nil && base.Versions.Covers(rec.Versions) {
 			rec.Wipe()
@@ -570,6 +593,11 @@ func (y *syncer) restored(uid string, it *database.SyncItem, files []syncfolder.
 		_, rec, err := syncfolder.Open(y.sealerFor(f), b)
 		if err != nil {
 			return fmt.Errorf("%s: %w", filepath.Base(f.Path), err)
+		}
+		if y.earlierKeyChange(f, rec, base) {
+			rec.Wipe()
+			y.sum.EarlierKey++
+			continue
 		}
 		opened = append(opened, rec)
 		switch {
@@ -975,6 +1003,7 @@ func (s *Summary) String() string {
 	add(s.OtherKey, "sealed with another key")
 	add(s.Later, "left for the next sync")
 	add(s.Unfinished, "left for the next sync, out of time")
+	add(s.EarlierKey, "changed under an earlier key, not taken")
 	add(s.Rewritten, "written again")
 	add(s.Resealed, "sealed again with the new master password's key")
 	add(len(s.Problems), "problems")

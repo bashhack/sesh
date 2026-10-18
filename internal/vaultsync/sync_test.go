@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/kdf"
@@ -717,21 +718,25 @@ func TestSync_PasswordChange(t *testing.T) {
 	}
 
 	// The desktop, on the old password, reads nothing, and writes an entry
-	// with the old key, which the laptop takes.
+	// with the old key, which the laptop doesn't take (anyone with the old
+	// password could have written it); the desktop sends it again under
+	// the new key once it takes it.
 	if before := desktop.sync(f); before.OtherKey != 2 {
 		t.Errorf("desktop before taking the new password: %+v", before)
 	}
 	desktop.put("bank", "pw-3")
 	desktop.sync(f)
-	if s := syncOlder(t, laptopNew, f); s.Resealed != 1 || len(s.Received) != 1 {
+	if s := syncOlder(t, laptopNew, f); s.EarlierKey != 1 || len(s.Received) != 0 {
 		t.Errorf("laptop, the desktop's old-key entry: %+v", s)
 	}
 
 	desktopNew := takeKey(t, desktop, laptopNew, rec, "the new password 1")
 	syncOlder(t, desktopNew, f)
 	settle(t, f, laptopNew, desktopNew)
-	if desktopNew.secret(vault.Key{Kind: vault.KindPassword, Service: "bank", Username: "alice"}) != "pw-3" {
-		t.Error("the desktop lost its entry")
+	for _, c := range []*computer{laptopNew, desktopNew} {
+		if c.secret(vault.Key{Kind: vault.KindPassword, Service: "bank", Username: "alice"}) != "pw-3" {
+			t.Errorf("%s hasn't the desktop's entry", c.name)
+		}
 	}
 
 	// A file from before the change put back: an older copy, ignored, and
@@ -749,9 +754,9 @@ func TestSync_PasswordChange(t *testing.T) {
 	}
 }
 
-// A computer taking a changed master password seals again an entry's file
-// it hasn't taken yet, written with the old key by another; and so does
-// the one that changed it, at any later sync: no file stays on an old key.
+// An entry written with the old key by a computer that hasn't taken the
+// change isn't taken by those that have; it reaches them, under the new
+// key, once that computer takes it, and no file stays on an old key.
 func TestSync_PasswordChangeTakesUnseen(t *testing.T) {
 	t.Parallel()
 	cs, _, f := computers(t, 3)
@@ -763,14 +768,14 @@ func TestSync_PasswordChangeTakesUnseen(t *testing.T) {
 	cs[1].sync(f)
 	laptop, rec := changeKey(t, cs[0], "correct horse battery", "the new password 1")
 	third := takeKey(t, cs[2], laptop, rec, "the new password 1")
-	if s := syncOlder(t, third, f); len(s.Merged) != 0 || s.Resealed == 0 {
-		t.Fatalf("the third computer takes the new password: %+v; want files sealed again, nothing merged", s)
+	if s := syncOlder(t, third, f); len(s.Merged) != 0 || s.Resealed == 0 || s.EarlierKey != 1 || len(s.Received) != 0 {
+		t.Fatalf("the third computer takes the new password: %+v; want files sealed again, the desktop's not taken", s)
 	}
-	if s := third.sync(f); !s.Nothing() {
-		t.Errorf("the third computer after taking it: %+v", s)
-	}
+	desktop := takeKey(t, cs[1], laptop, rec, "the new password 1")
+	syncOlder(t, desktop, f)
+	settle(t, f, laptop, desktop, third)
 	if third.secret(vault.Key{Kind: vault.KindPassword, Service: "bank", Username: "alice"}) != "pw-2" {
-		t.Error("the third computer didn't take the desktop's entry")
+		t.Error("the third computer hasn't the desktop's entry")
 	}
 	newID := database.UnlockID(rec.Verify)
 	for _, file := range scanFiles(t, f) {
@@ -791,13 +796,15 @@ func TestSync_PasswordChangeTwice(t *testing.T) {
 	desktop.sync(f)
 	l1, _ := changeKey(t, laptop, "correct horse battery", "the new password 1")
 	l2, rec := changeKey(t, l1, "the new password 1", "the new password 2")
-	syncOlder(t, l2, f)
-	if l2.secret(vault.Key{Kind: vault.KindPassword, Service: "bank", Username: "alice"}) != "pw-2" {
-		t.Error("the laptop, two changes on, didn't open the desktop's entry")
+	if s := syncOlder(t, l2, f); s.EarlierKey != 1 {
+		t.Errorf("the laptop, two changes on, and the desktop's old-key entry: %+v", s)
 	}
 	d2 := takeKey(t, desktop, l2, rec, "the new password 2")
 	syncOlder(t, d2, f)
 	settle(t, f, l2, d2)
+	if l2.secret(vault.Key{Kind: vault.KindPassword, Service: "bank", Username: "alice"}) != "pw-2" {
+		t.Error("the laptop hasn't the desktop's entry once it took both changes")
+	}
 }
 
 func scanFiles(t *testing.T, f syncfolder.Folder) []syncfolder.File {
@@ -849,5 +856,68 @@ func TestSync_EditOverSealedAgain(t *testing.T) {
 	settle(t, f, laptop, desktop)
 	if got := laptop.secret(gh); got != "desktop-pw" {
 		t.Errorf("the laptop has %q", got)
+	}
+}
+
+// After a master password change both computers took, a file sealed with
+// the old key and holding a new secret (someone with the old password and
+// an older sesh-sync.json) is taken by neither, and written over.
+func TestSync_EarlierKeyChangeNotTaken(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f := twoComputers(t)
+	gh := laptop.put("github", "pw-1")
+	settle(t, f, laptop, desktop)
+	old, err := database.ReadUnlockMaterial(laptop.store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	laptopNew, rec := changeKey(t, laptop, "correct horse battery", "the new password 1")
+	syncOlder(t, laptopNew, f)
+	desktopNew := takeKey(t, desktop, laptopNew, rec, "the new password 1")
+	syncOlder(t, desktopNew, f)
+	settle(t, f, laptopNew, desktopNew)
+
+	uid := liveUID(t, laptopNew, gh)
+	forged, _, err := laptopNew.store.SyncRecord(uid, "attacker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.Secret = []byte("evil")
+	forged.Versions = syncfolder.Versions{"0123456789abcdef": 1}
+	forged.Changed = time.Now().Add(time.Hour)
+	h, err := syncfolder.NewHeader(uid, database.UnlockID(old.Verify))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := syncfolder.Seal(database.KeySealer(database.DeriveKey([]byte("correct horse battery"), old.Salt, old.Params)), h, forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var path string
+	for _, file := range scanFiles(t, f) {
+		if file.UIDString() == uid {
+			path = file.Path
+		}
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The first to sync writes it over; the other then finds nothing.
+	if s := syncOlder(t, desktopNew, f); s.EarlierKey != 1 || len(s.Received)+len(s.Merged) != 0 {
+		t.Errorf("desktop: %+v", s)
+	}
+	if s := syncOlder(t, laptopNew, f); !s.Nothing() {
+		t.Errorf("laptop: %+v", s)
+	}
+	for _, c := range []*computer{desktopNew, laptopNew} {
+		if got := c.secret(gh); got != "pw-1" {
+			t.Errorf("%s took the old-key file: %q", c.name, got)
+		}
+	}
+	newID := database.UnlockID(rec.Verify)
+	for _, file := range scanFiles(t, f) {
+		if file.KeyIDString() != newID {
+			t.Errorf("%s left sealed with the old key", file.Path)
+		}
 	}
 }
