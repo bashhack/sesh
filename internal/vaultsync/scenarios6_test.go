@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/vault"
@@ -275,4 +276,86 @@ func TestSync_ForgetSetClockAhead(t *testing.T) {
 			oldGone(t, cs)
 		})
 	}
+}
+
+// A password forgotten, then typed again, met with a restore elsewhere
+// holding its use from before the forget: the use typed again counts, so
+// it's kept once replaced (decided with the user).
+func TestSync_ForgottenRetypedRestoredElsewhere(t *testing.T) {
+	t.Parallel()
+	for replacer, by := range []string{"laptop", "desktop"} {
+		t.Run("replaced on the "+by, func(t *testing.T) {
+			t.Parallel()
+			cs, paths, f := computers(t, 2)
+			laptop, desktop := cs[0], cs[1]
+			gh := laptop.put("github", "pw-old")
+			settleN(t, f, 6, cs...)
+			backup := filepath.Join(t.TempDir(), "backup.db")
+			if err := database.CopyTo(paths[1], backup); err != nil {
+				t.Fatal(err)
+			}
+			laptop.put("github", "pw-laptop")
+			forgetOld(t, laptop, gh)
+			settleN(t, f, 6, cs...)
+			// Typed again on the laptop; the desktop's restore reaches the
+			// folder first.
+			laptop.put("github", "pw-old")
+			if err := database.RestoreInPlace(paths[1], backup); err != nil {
+				t.Fatal(err)
+			}
+			syncLoose(desktop, f)
+			settleN(t, f, 6, cs...)
+			cs[replacer].put("github", "pw-next")
+			settleN(t, f, 6, cs...)
+			oldKept(t, cs)
+		})
+	}
+}
+
+// Forgetting one use of a password forgets that one, not a later use of
+// the same password, on every computer.
+func TestSync_ForgetOneUse(t *testing.T) {
+	t.Parallel()
+	cs, _, f := computers(t, 2)
+	laptop := cs[0]
+	var gh vault.Key
+	for _, pw := range []string{"pw-old", "pw-mid", "pw-old", "pw-new"} {
+		gh = laptop.put("github", pw)
+		time.Sleep(10 * time.Millisecond)
+	}
+	settleN(t, f, 6, cs...)
+	// Versions: 1 pw-new, 2 pw-old (the later use), 3 pw-mid, 4 pw-old.
+	if err := laptop.store.ForgetVersions(gh, 4); err != nil {
+		t.Fatal(err)
+	}
+	settleN(t, f, 6, cs...)
+	for _, c := range cs {
+		if n := strings.Count(strings.Join(historySecrets(t, c), " "), "pw-old"); n != 1 {
+			t.Errorf("%s: pw-old in its history %d times, want the later use only", c.name, n)
+		}
+	}
+}
+
+// Forgetting a later use of a password, then an earlier one, keeps both
+// forgotten on every computer.
+func TestSync_ForgetBothUses(t *testing.T) {
+	t.Parallel()
+	cs, _, f := computers(t, 2)
+	laptop := cs[0]
+	var gh vault.Key
+	for _, pw := range []string{"pw-old", "pw-mid", "pw-old", "pw-new"} {
+		gh = laptop.put("github", pw)
+		time.Sleep(10 * time.Millisecond)
+	}
+	settleN(t, f, 6, cs...)
+	// Versions: 1 pw-new, 2 pw-old (the later use), 3 pw-mid, 4 pw-old.
+	if err := laptop.store.ForgetVersions(gh, 2); err != nil {
+		t.Fatal(err)
+	}
+	// Now 3 is the earlier use.
+	if err := laptop.store.ForgetVersions(gh, 3); err != nil {
+		t.Fatal(err)
+	}
+	settleN(t, f, 6, cs...)
+	oldGone(t, cs)
 }

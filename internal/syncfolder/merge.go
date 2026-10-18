@@ -143,13 +143,20 @@ func MergeWith(base, ours, theirs *Record, beside Beside) (m Merged) {
 	r.Updated, r.SetAt = secretFrom.Updated, secretFrom.SetAt
 	r.Settings.FileName = secretFrom.Settings.FileName
 	if bytes.Equal(ours.Secret, theirs.Secret) {
-		// The later update, and its use's start; at the same update, the
-		// earlier start.
-		at := ours
-		if c := ours.Updated.Compare(theirs.Updated); c < 0 || (c == 0 && theirs.Began().Before(ours.Began())) {
-			at = theirs
+		// The later update, and the later use's start: a use begun after
+		// the other (typed again after it was forgotten) is the one kept
+		// (decided with the user).
+		upd, start := ours, ours
+		if theirs.Updated.After(ours.Updated) {
+			upd = theirs
 		}
-		r.Updated, r.SetAt = at.Updated, at.SetAt
+		if theirs.Began().After(ours.Began()) {
+			start = theirs
+		}
+		r.Updated, r.SetAt = upd.Updated, start.SetAt
+		if start != upd {
+			r.SetAt = start.Began()
+		}
 		r.Settings.FileName = pick(&m, "file name", oursNewer, base.Settings.FileName, ours.Settings.FileName, theirs.Settings.FileName, eq[string])
 	}
 	r.Created = earliest(ours.Created, theirs.Created)
