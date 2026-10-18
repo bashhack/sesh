@@ -125,7 +125,9 @@ func migrateV1(tx *sql.Tx) error {
 			uid       TEXT PRIMARY KEY,
 			rev       INTEGER NOT NULL,
 			file_hash BLOB NOT NULL,
-			base      BLOB NOT NULL
+			base      BLOB NOT NULL,
+			-- SHA-256 of base, so damage to it is seen without opening it.
+			base_hash BLOB NOT NULL DEFAULT x''
 		)`,
 		// At most one row: this computer's sync ID, made when it first
 		// syncs, the count of the changes it has written

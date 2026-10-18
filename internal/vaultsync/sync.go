@@ -259,10 +259,12 @@ func (y *syncer) name(uid string) string {
 
 // unchanged says whether the entry it, whose files in the folder are
 // files, changed neither here nor there: every file is the one agreed, its
-// own among them, sealed with the vault's key (stale says it isn't). Nothing
-// is opened for it, so a sync with nothing new decrypts nothing.
+// own among them, sealed with the vault's key (stale says it isn't), and
+// the version agreed is intact (one that isn't is mended while the folder
+// still has the file agreed). Nothing is opened for it, so a sync with
+// nothing new decrypts nothing.
 func unchanged(it *database.SyncItem, files []syncfolder.File, stale func(*syncfolder.File) bool) bool {
-	if it.Agreed == nil || it.Changed() {
+	if it.Agreed == nil || !it.Agreed.Intact || it.Changed() {
 		return false
 	}
 	own := false

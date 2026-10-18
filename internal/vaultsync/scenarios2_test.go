@@ -354,6 +354,36 @@ func TestSync_DamagedBaseQuiet(t *testing.T) {
 	}
 }
 
+// A damaged agreed version, then a quiet sync, then the entry deleted on
+// the other computer (to the trash, or for good): the deletion stands on
+// both, the version mended while the folder still had the file agreed.
+func TestSync_DamagedBaseThenDeletedElsewhere(t *testing.T) {
+	t.Parallel()
+	for _, purge := range []bool{false, true} {
+		cs, paths, f := computers(t, 2)
+		laptop, desktop := cs[0], cs[1]
+		gh := laptop.put("github", "pw-1")
+		settleN(t, f, 6, laptop, desktop)
+		rawExec(t, paths[1], `UPDATE sync_state SET base = x'00'`)
+		syncLoose(desktop, f)
+		var err error
+		if purge {
+			err = laptop.store.PurgeMany([]vault.Key{gh})
+		} else {
+			err = laptop.store.Delete(gh)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		settleN(t, f, 6, laptop, desktop)
+		for _, c := range []*computer{laptop, desktop} {
+			if slices.Contains(names(c), "github") {
+				t.Errorf("purge %v: %s has github live again", purge, c.name)
+			}
+		}
+	}
+}
+
 // A vault replaced from its own older backup syncs its next changes: it
 // gets a new sync ID, not its old counts.
 func TestSync_ReplaceVaultCounter(t *testing.T) {

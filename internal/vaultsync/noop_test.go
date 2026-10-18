@@ -8,7 +8,7 @@ import (
 	"github.com/bashhack/sesh/internal/kdf"
 )
 
-// countingOracle counts the entries opened through it.
+// countingOracle counts what's decrypted through it.
 type countingOracle struct {
 	database.CryptoOracle
 	opened atomic.Int64
@@ -19,7 +19,8 @@ func (c *countingOracle) DecryptEntry(data, salt, aad []byte) ([]byte, error) {
 	return c.CryptoOracle.DecryptEntry(data, salt, aad)
 }
 
-// A sync with nothing new opens no entry: only one changed is opened.
+// A sync with nothing new decrypts nothing; one taking a change, only that
+// entry's pieces.
 func TestSync_NothingNewOpensNothing(t *testing.T) {
 	t.Parallel()
 	laptop, desktop, f := twoComputers(t)
@@ -44,12 +45,12 @@ func TestSync_NothingNewOpensNothing(t *testing.T) {
 		t.Fatalf("a second sync: %+v", sum)
 	}
 	if n := counted.opened.Load(); n != 0 {
-		t.Errorf("a sync with nothing new opened %d entries", n)
+		t.Errorf("a sync with nothing new decrypted %d times", n)
 	}
 	laptop.put("b", "pw-b2")
 	laptop.sync(f)
 	again.sync(f)
 	if n := counted.opened.Load(); n == 0 || n > 4 {
-		t.Errorf("a sync taking one change opened %d entries' worth", n)
+		t.Errorf("a sync taking one change decrypted %d times", n)
 	}
 }

@@ -509,7 +509,7 @@ func (s *Store) resealBases(q interface {
 	}
 	if tx, ok := q.(*sql.Tx); ok {
 		for uid, b := range out {
-			q, args := `UPDATE sync_state SET base = ? WHERE uid = ?`, []any{b.to, uid}
+			q, args := `UPDATE sync_state SET base = ?, base_hash = ? WHERE uid = ?`, []any{b.to, baseHash(b.to), uid}
 			if b.to == nil {
 				q, args = `DELETE FROM sync_state WHERE uid = ?`, []any{uid}
 			}

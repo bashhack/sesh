@@ -1,6 +1,8 @@
 package database
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -36,6 +38,10 @@ const (
 type SyncAgreed struct {
 	Hash syncfolder.Hash
 	Rev  int64
+	// Intact says the version agreed is kept as it was sealed (its hash),
+	// for this entry, with the vault's key now: it opens without being
+	// opened to find out.
+	Intact bool
 }
 
 // SyncItem is an entry as sync sees it.
@@ -88,19 +94,24 @@ func (s *Store) SyncItems() (_ []SyncItem, err error) {
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, fmt.Errorf("read the entries to sync: %w", err)
 	}
-	rows, err = s.db.Query(`SELECT uid, rev, file_hash FROM sync_state`)
+	keyID := ""
+	if m, err := readKeyRecord(s.db, s.path); err == nil {
+		keyID = UnlockID(m.Verify)
+	}
+	rows, err = s.db.Query(`SELECT uid, rev, file_hash, base, base_hash FROM sync_state`)
 	if err != nil {
 		return nil, fmt.Errorf("read what was synced: %w", err)
 	}
 	for rows.Next() {
 		var uid string
 		var a SyncAgreed
-		var hash []byte
-		if err := rows.Scan(&uid, &a.Rev, &hash); err != nil {
+		var hash, base, baseHash []byte
+		if err := rows.Scan(&uid, &a.Rev, &hash, &base, &baseHash); err != nil {
 			_ = rows.Close() //nolint:errcheck // already failing
 			return nil, fmt.Errorf("read what was synced: %w", err)
 		}
 		copy(a.Hash[:], hash)
+		a.Intact = baseIntact(uid, keyID, base, baseHash)
 		it, ok := byUID[uid]
 		if !ok {
 			it = &SyncItem{UID: uid, Place: SyncGone}
@@ -393,12 +404,30 @@ func syncRev(q querier, uid string) (int64, error) {
 	return rev, err
 }
 
+// baseHash is what sync_state keeps of an agreed version sealed as base,
+// so damage to it is seen without opening it.
+func baseHash(base []byte) []byte {
+	h := sha256.Sum256(base)
+	return h[:]
+}
+
+// baseIntact says whether base, uid's agreed version as sync_state keeps it
+// with its hash, is as it was sealed, for uid, with the key of the key
+// record keyID.
+func baseIntact(uid, keyID string, base, hash []byte) bool {
+	if keyID == "" || !bytes.Equal(baseHash(base), hash) {
+		return false
+	}
+	h, err := syncfolder.ParseHeader(base)
+	return err == nil && h.UIDString() == uid && h.KeyIDString() == keyID
+}
+
 // agree records, in tx, that uid at rev here and the folder's file of hash
 // agree on the version sealed as base.
 func agree(tx *sql.Tx, uid string, rev int64, hash syncfolder.Hash, base []byte) error {
-	if _, err := tx.Exec(`INSERT INTO sync_state (uid, rev, file_hash, base) VALUES (?, ?, ?, ?)
-		ON CONFLICT (uid) DO UPDATE SET rev = excluded.rev, file_hash = excluded.file_hash, base = excluded.base`,
-		uid, rev, hash[:], base); err != nil {
+	if _, err := tx.Exec(`INSERT INTO sync_state (uid, rev, file_hash, base, base_hash) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (uid) DO UPDATE SET rev = excluded.rev, file_hash = excluded.file_hash, base = excluded.base, base_hash = excluded.base_hash`,
+		uid, rev, hash[:], base, baseHash(base)); err != nil {
 		return err
 	}
 	_, err := tx.Exec(`DELETE FROM sync_restored WHERE uid = ?`, uid)
@@ -485,7 +514,7 @@ func (s *Store) SyncMendBase(uid string, rec *syncfolder.Record) error {
 		return err
 	}
 	return s.inTx(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`UPDATE sync_state SET base = ? WHERE uid = ?`, base, uid)
+		_, err := tx.Exec(`UPDATE sync_state SET base = ?, base_hash = ? WHERE uid = ?`, base, baseHash(base), uid)
 		return err
 	})
 }
