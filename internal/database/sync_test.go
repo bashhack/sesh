@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -364,6 +365,13 @@ func TestSyncNextChange(t *testing.T) {
 	}
 	if n, err := s.SyncNextChange(3); err != nil || n != 12 {
 		t.Errorf("then: %d, %v", n, err)
+	}
+	// One that would reach MaxCount isn't given, nor counted.
+	if _, err := s.SyncNextChange(syncfolder.MaxCount - 1); err == nil || !strings.Contains(err.Error(), "too high") {
+		t.Errorf("at the cap: %v, want an error with %q", err, "too high")
+	}
+	if n, err := s.SyncNextChange(3); err != nil || n != 13 {
+		t.Errorf("after the cap: %d, %v", n, err)
 	}
 }
 

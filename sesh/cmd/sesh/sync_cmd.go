@@ -420,6 +420,9 @@ func writeSyncSummary(app *App, dir string, s *vaultsync.Summary) error {
 	for _, n := range s.Notes {
 		fmt.Fprintf(&b, "  %s\n", n)
 	}
+	if s.EarlierKey > 0 {
+		fmt.Fprintf(&b, "  ⚠️  %s\n", earlierKeySaid(s.EarlierKey))
+	}
 	if s.Later > 0 {
 		fmt.Fprintf(&b, "  %s changed by another sesh command meanwhile: the next sync takes them\n", nouns(s.Later, "entry", "entries"))
 	}
@@ -1028,6 +1031,12 @@ func syncWaitingIn(store *database.Store, f *syncfolder.Folder) (*syncWaiting, e
 		}
 	}
 	return w, nil
+}
+
+// earlierKeySaid says n entries had a file sealed with an earlier master
+// password's key, not the one agreed: not taken.
+func earlierKeySaid(n int) string {
+	return fmt.Sprintf("%s a file sealed with an earlier master password's key, not the one agreed: not taken, as anyone who knew that password could have written it, and written over, or removed if this computer never had the entry. A computer of yours that changed one before taking the new password sends the change again once it does", nouns(n, "entry had", "entries had"))
 }
 
 // otherKeySaid says n files are sealed with another master password's key.

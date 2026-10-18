@@ -368,8 +368,18 @@ func Open(s Sealer, b []byte) (Header, *Record, error) {
 		}
 		return h, nil, fmt.Errorf("open %s: its record doesn't read: %w", h.UIDString(), err)
 	}
+	for _, n := range r.Versions {
+		if n >= MaxCount {
+			r.Wipe()
+			return h, nil, fmt.Errorf("open %s: a change count too high to be one", h.UIDString())
+		}
+	}
 	return h, r, nil
 }
+
+// MaxCount is past the change counts a record may carry (Versions), so
+// counting on from one stays exact wherever it's kept.
+const MaxCount = 1 << 53
 
 // Folder is a sync folder at a path.
 type Folder struct{ dir string }

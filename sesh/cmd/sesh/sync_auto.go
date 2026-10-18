@@ -299,6 +299,9 @@ func autoSummary(s *vaultsync.Summary) []string {
 	if len(parts) > 0 {
 		lines = append(lines, "Synced: "+strings.Join(parts, ", ")+".")
 	}
+	if s.EarlierKey > 0 {
+		lines = append(lines, "⚠️  Sync: "+earlierKeySaid(s.EarlierKey)+".")
+	}
 	if s.Unfinished > 0 {
 		lines = append(lines, "Sync: out of time; the next sync finishes it.")
 	}

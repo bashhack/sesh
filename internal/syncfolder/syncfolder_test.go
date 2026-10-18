@@ -162,6 +162,12 @@ func TestOpenRefuses(t *testing.T) {
 		return c
 	}
 	moved := append(slices.Clone(other[:headerLen]), b[headerLen:]...)
+	high := record()
+	high.Versions = Versions{"aaaaaaaaaaaaaaaa": MaxCount}
+	tooHigh, err := Seal(s, header(t, uid1), high)
+	if err != nil {
+		t.Fatal(err)
+	}
 	newer := slices.Clone(b)
 	newer[len(magic)] = format + 1
 	for name, tc := range map[string]struct {
@@ -178,6 +184,7 @@ func TestOpenRefuses(t *testing.T) {
 		"cut short":            {file: b[:headerLen+4], wantSub: "cut short"},
 		"not a sync file":      {file: []byte("hello, this isn't one"), wantSub: "not a sesh sync file"},
 		"from a newer sesh":    {file: newer, wantSub: "newer sesh"},
+		"count too high":       {file: tooHigh, wantSub: "too high"},
 		"format never written": {file: func() []byte { c := slices.Clone(b); c[len(magic)] = 0; return c }(), wantSub: "isn't one sesh writes"},
 	} {
 		sealer := tc.sealer

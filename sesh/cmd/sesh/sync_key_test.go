@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bashhack/sesh/internal/config"
 	"github.com/bashhack/sesh/internal/database"
@@ -938,5 +939,45 @@ func TestSync_PasswordChangeFromOldKey(t *testing.T) {
 	}
 	if folderKeyID(t, folder) != vaultKeyID(t, ldb) {
 		t.Error("the folder isn't on the laptop's key record")
+	}
+}
+
+// A file sealed with the old key holding a change, after both computers
+// took the new password, isn't taken, and sesh sync says so.
+func TestSync_EarlierKeyChangeSaid(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	ldb := syncComputer(t, laptop, "laptop")
+	old, err := database.ReadUnlockMaterial(ldb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changePassword(t, "old-password-1", "new-password-2")
+	ddb := syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
+	if out, err := runSyncOut(t, "", false); err != nil {
+		t.Fatalf("desktop takes the change: %q, %v", out, err)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
+	file := scanFolder(t, folder)[0]
+	forged := &syncfolder.Record{Kind: "password", Service: "a", Secret: []byte("evil"), Versions: syncfolder.Versions{"0123456789abcdef": 1}, Changed: time.Now().Add(time.Hour), Updated: time.Now().Add(time.Hour)}
+	h, err := syncfolder.NewHeader(file.UIDString(), database.UnlockID(old.Verify))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := syncfolder.Seal(database.KeySealer(database.DeriveKey([]byte("old-password-1"), old.Salt, old.Params)), h, forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file.Path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "1 entry had a file sealed with an earlier master password's key, not the one agreed: not taken") {
+		t.Errorf("desktop sync: %q, %v", out, err)
+	}
+	if got := getEntry(t, "password/a"); got != "secret-1" {
+		t.Errorf("the desktop has a = %q (%s)", got, ddb)
 	}
 }

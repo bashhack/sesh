@@ -468,7 +468,15 @@ func (s *Store) SyncNextChange(seen uint64) (uint64, error) {
 	}
 	var n uint64
 	err := s.inTx(func(tx *sql.Tx) error {
-		return tx.QueryRow(`UPDATE sync_info SET changes = MAX(changes, ?) + 1 WHERE id = 1 RETURNING changes`, seen).Scan(&n)
+		if err := tx.QueryRow(`SELECT MAX(changes, ?) + 1 FROM sync_info WHERE id = 1`, seen).Scan(&n); err != nil {
+			return err
+		}
+		// Past it, no computer would read the change (syncfolder.Open).
+		if n >= syncfolder.MaxCount {
+			return errors.New("a change count too high to be one")
+		}
+		_, err := tx.Exec(`UPDATE sync_info SET changes = ? WHERE id = 1`, n)
+		return err
 	})
 	return n, err
 }
