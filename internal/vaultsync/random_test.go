@@ -28,6 +28,67 @@ func liveKeys(t *testing.T, c *computer) []vault.Key {
 	return out
 }
 
+// purgeExcusing deletes c's live entry k for good, first adding to purged
+// every secret it holds, earlier ones too. An entry of the same name in the
+// trash isn't the one deleted, so its secrets aren't added.
+func purgeExcusing(t *testing.T, c *computer, k vault.Key, purged map[string]bool) error {
+	t.Helper()
+	rec, _, err := c.store.SyncRecord(liveUID(t, c, k), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	purged[string(rec.Secret)] = true
+	for _, h := range rec.History {
+		purged[string(h.Secret)] = true
+	}
+	return c.store.PurgeMany([]vault.Key{k})
+}
+
+// purgeExcusing excuses the live entry's secrets, not those of one of the
+// same name in the trash with a lower uid.
+func TestPurgeExcusing_SameNameInTrash(t *testing.T) {
+	t.Parallel()
+	cs, _, _ := computers(t, 1)
+	c := cs[0]
+	k := vault.Key{Kind: vault.KindPassword, Service: "s1", Username: "alice"}
+	// uids are random: entries of k go to the trash until one sorts
+	// before the live one, as SyncItems lists them.
+	var set []string
+	for i := range 40 {
+		sec := fmt.Sprintf("pw-%d", i)
+		if err := c.store.Put(k, []byte(sec)); err != nil {
+			t.Fatal(err)
+		}
+		set = append(set, sec)
+		live := liveUID(t, c, k)
+		items, err := c.store.SyncItems()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.ContainsFunc(items, func(it database.SyncItem) bool {
+			return it.Key == k && it.Place == database.SyncTrashed && it.UID < live
+		}) {
+			break
+		}
+		if i == 39 {
+			t.Fatal("no entry in the trash sorts before the live one")
+		}
+		if err := c.store.Delete(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	purged := map[string]bool{}
+	if err := purgeExcusing(t, c, k, purged); err != nil {
+		t.Fatal(err)
+	}
+	all := allSecrets(t, c)
+	for _, s := range set {
+		if !slices.Contains(all, s) && !purged[s] {
+			t.Errorf("%s deleted for good, not excused (excused %v)", s, purged)
+		}
+	}
+}
+
 // syncRacing syncs c as if another computer wrote at once: files c writes
 // over others' land as conflict copies, the others' kept as the files.
 func syncRacing(c *computer, f syncfolder.Folder, n int) {
@@ -146,12 +207,7 @@ func TestSync_Random(t *testing.T) {
 					case 2:
 						if len(keys) > 0 && r.IntN(2) == 0 {
 							k := keys[r.IntN(len(keys))]
-							rec, _, _ := c.store.SyncRecord(uidOfKey(t, c, k), "x") //nolint:errcheck // test
-							purged[string(rec.Secret)] = true
-							for _, h := range rec.History {
-								purged[string(h.Secret)] = true
-							}
-							if err := c.store.PurgeMany([]vault.Key{k}); err == nil {
+							if purgeExcusing(t, c, k, purged) == nil {
 								log = append(log, fmt.Sprintf("%d %s purge %s", step, c.name, k.Service))
 							}
 						}
