@@ -565,6 +565,38 @@ func (s *Store) SyncTyped(uid string) ([]*syncfolder.Typed, error) {
 	return out, rows.Err()
 }
 
+// SyncTypedKept drops, of what was typed in the entry uid and kept, any
+// secret, notes or field the entry no longer has (syncfolder.Typed.Kept),
+// computer naming this computer.
+func (s *Store) SyncTypedKept(uid, computer string) error {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_typed WHERE uid = ?`, uid).Scan(&n); err != nil || n == 0 {
+		return err
+	}
+	all, err := s.SyncTyped(uid)
+	if err != nil {
+		return err
+	}
+	local, _, err := s.SyncRecord(uid, computer)
+	if err != nil {
+		return err
+	}
+	defer local.Wipe()
+	changed := false
+	var kept []*syncfolder.Typed
+	for _, t := range all {
+		k, dropped := t.Kept(local)
+		changed = changed || dropped
+		if !k.Empty() {
+			kept = append(kept, k)
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.putTyped(uid, kept)
+}
+
 // SyncLeftDone records that the entry uid, agreed under a key left
 // behind (SyncItem.Left), was made again from the folder's version under
 // the new key, with what was typed here: that's no longer kept.

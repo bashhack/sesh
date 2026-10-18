@@ -27,15 +27,19 @@ func TestDiff(t *testing.T) {
 	if !slices.Equal(d.Keys, want) {
 		t.Fatalf("keys %q, want %q", d.Keys, want)
 	}
-	if d.Post.Secret != nil || d.Post.Notes != nil || d.Post.Fields != nil || d.Post.URL != "" || d.Typed["notes"] != Forget([]byte("typed notes")) || d.Hash["notes"] != Forget([]byte("n")) {
-		t.Errorf("post %+v typed %v hash %v: want only hashes of the notes typed and replaced", d.Post, d.Typed, d.Hash)
+	if d.Post.Secret != nil || d.Post.URL != "" || string(d.Post.Notes) != "typed notes" || d.Hash["notes"] != Forget([]byte("n")) {
+		t.Errorf("post %+v hash %v: want the notes typed only, the old notes hashed", d.Post, d.Hash)
 	}
-	if f := d.From(post); string(f.Post.Notes) != "typed notes" || len(f.Post.Fields) != 1 {
-		t.Errorf("from the entry: %+v, want the typed notes and field", f.Post)
+	if k, dropped := d.Kept(post); dropped || len(k.Keys) != len(d.Keys) {
+		t.Errorf("kept by the entry that has them: %q, dropped %v; want all", k.Keys, dropped)
 	}
-	replaced := typedRecord()
-	if f := d.From(replaced); len(f.Keys) != 0 {
-		t.Errorf("from an entry that no longer has them: %q, want nothing", f.Keys)
+	beside := typedRecord()
+	beside.Notes, beside.Fields = []byte("laptop notes\n\n— from desktop —\ntyped notes"), []Field{{Name: "pin-desktop", Value: []byte("9999"), Secret: true}}
+	if k, _ := d.Kept(beside); !k.Has("notes") || !k.Has("field:pin") {
+		t.Errorf("kept by an entry with them beside others: %q, want the notes and field", k.Keys)
+	}
+	if k, dropped := d.Kept(typedRecord()); !dropped || k.Has("notes") || k.Has("field:pin") {
+		t.Errorf("kept by an entry that no longer has them: %q, want neither", k.Keys)
 	}
 	if !slices.Equal(d.Post.Tags, []string{"home"}) || d.Created {
 		t.Errorf("tags %q, created %v", d.Post.Tags, d.Created)
@@ -59,7 +63,7 @@ func TestRebase(t *testing.T) {
 	typed.Secret, typed.URL = []byte("evil"), "https://evil.example"
 	typed.Notes = []byte("typed notes")
 	typed.Changed = time.Unix(300, 0)
-	tv := Diff(forged, typed).From(typed)
+	tv := Diff(forged, typed)
 
 	folder := typedRecord()
 	folder.Notes = []byte("n")
@@ -83,7 +87,7 @@ func TestRebase(t *testing.T) {
 
 	// A typed secret wins over the folder's, which goes into the history.
 	typed.Secret = []byte("desk-2")
-	tv = Diff(forged, typed).From(typed)
+	tv = Diff(forged, typed)
 	base, ours = tv.Rebase(folder)
 	m = Merge(base, ours, folder)
 	if string(m.Secret) != "desk-2" || !hasEarlier(m.History, []byte("pw-1")) || hasEarlier(m.History, []byte("evil")) {

@@ -19,11 +19,11 @@ import (
 // typed here is trusted, not what was taken from the folder under the old
 // key, which anyone with the old password could have written.
 //
-// Of what's secret, the secret, notes and fields, it keeps only hashes
-// (Forget): of what was typed, so it's made again from the entry here
-// only while that's still what the entry has (From), and of what that
-// replaced, to tell whether another version still has it. What isn't
-// secret it keeps as it is.
+// It keeps what was typed, and of what that replaced only enough to tell
+// whether another version still has it: the value itself where it's not
+// secret, a hash (Forget) of the secret, notes and fields. A typed secret,
+// notes or field is kept only while the entry here still has it (Kept),
+// so nothing is kept the vault itself no longer has.
 type Typed struct {
 	// Keys are what was typed: "name", "url", "folder", "mfa", "totp",
 	// "notes", "secret", "file name", "deleted", "purged", "forgotten",
@@ -41,8 +41,7 @@ type Typed struct {
 	// Pre holds what the typed values replaced, where that isn't secret:
 	// the name, URL, folder, settings, trash state.
 	Pre Record `json:"pre"`
-	// Post holds the typed values that aren't secret only; the rest is
-	// zero until From fills it in.
+	// Post holds the typed values only; the rest is zero.
 	Post Record `json:"post"`
 	// N is the count of this computer's change it was sent with; 0 for
 	// one not sent yet.
@@ -104,10 +103,12 @@ func Diff(pre, post *Record) *Typed {
 	if !bytes.Equal(pre.Notes, post.Notes) {
 		t.Keys = append(t.Keys, "notes")
 		t.Hash["notes"], t.Typed["notes"] = Forget(pre.Notes), Forget(post.Notes)
+		t.Post.Notes = bytes.Clone(post.Notes)
 	}
 	if !bytes.Equal(pre.Secret, post.Secret) {
 		t.Keys = append(t.Keys, "secret")
 		t.Hash["secret"], t.Typed["secret"] = Forget(pre.Secret), Forget(post.Secret)
+		t.Post.Secret = bytes.Clone(post.Secret)
 		t.Post.Updated, t.Post.SetAt = post.Updated, post.SetAt
 		t.Pre.Settings.FileName, t.Post.Settings.FileName = pre.Settings.FileName, post.Settings.FileName
 	} else if pre.Settings.FileName != post.Settings.FileName {
@@ -127,6 +128,10 @@ func Diff(pre, post *Record) *Typed {
 		key := "field:" + strings.ToLower(name)
 		t.Keys = append(t.Keys, key)
 		t.Hash[key], t.Typed[key] = fieldHash(b, inB), fieldHash(p, inP)
+		if inP {
+			p.Value = bytes.Clone(p.Value)
+			t.Post.Fields = append(t.Post.Fields, p)
+		}
 	}
 	preTags, postTags := vault.NormalizeTags(pre.Tags), vault.NormalizeTags(post.Tags)
 	for _, tag := range vault.NormalizeTags(slices.Concat(preTags, postTags)) {
@@ -148,51 +153,40 @@ func Diff(pre, post *Record) *Typed {
 	return t
 }
 
-// From is t made from local, the entry here: the typed secret, notes and
-// fields as local has them, and only what local still has as it was
-// typed. What it no longer has was replaced since, by an edit here (kept
-// in a later Typed) or a change taken and merged: not made again.
-func (t *Typed) From(local *Record) *Typed {
+// Kept is t less the typed secret, notes and fields the entry here, local,
+// no longer has: the secret, current or earlier; the notes, as they are
+// or kept beside others; a field's value, under any name. What the vault
+// no longer has (replaced and trimmed by history.keep, forgotten, or
+// replaced by a change taken from another computer) isn't kept for it.
+// Kept says whether it dropped anything.
+func (t *Typed) Kept(local *Record) (*Typed, bool) {
 	c := *t
 	c.Keys, c.Hash, c.Typed = slices.Clone(t.Keys), maps.Clone(t.Hash), maps.Clone(t.Typed)
-	c.Post.Fields, c.Post.Tags = nil, slices.Clone(t.Post.Tags)
+	c.Post.Fields = slices.Clone(t.Post.Fields)
+	dropped := false
+	drop := func(k string) {
+		c.drop(k)
+		c.clearPost(k)
+		dropped = true
+	}
 	for _, k := range t.Keys {
 		switch {
-		case k == "purged" || k == "forgotten":
-		case k == "notes":
-			if Forget(local.Notes) != t.Typed[k] {
-				c.drop(k)
-				continue
-			}
-			c.Post.Notes = bytes.Clone(local.Notes)
 		case k == "secret":
-			if !local.Purged.IsZero() || Forget(local.Secret) != t.Typed[k] {
-				c.drop(k)
-				continue
+			if !bytes.Equal(local.Secret, t.Post.Secret) && !hasEarlier(local.History, t.Post.Secret) {
+				drop(k)
 			}
-			c.Post.Secret = bytes.Clone(local.Secret)
+		case k == "notes":
+			if len(t.Post.Notes) > 0 && !bytes.Contains(local.Notes, t.Post.Notes) {
+				drop(k)
+			}
 		case strings.HasPrefix(k, "field:"):
-			f, in := findField(local.Fields, strings.TrimPrefix(k, "field:"))
-			if fieldHash(f, in) != t.Typed[k] {
-				c.drop(k)
-				continue
-			}
-			if in {
-				f.Value = bytes.Clone(f.Value)
-				c.Post.Fields = append(c.Post.Fields, f)
-			}
-		case strings.HasPrefix(k, "tag:"):
-			tag := strings.TrimPrefix(k, "tag:")
-			if slices.Contains(vault.NormalizeTags(local.Tags), tag) != slices.Contains(t.Post.Tags, tag) {
-				c.drop(k)
-			}
-		default:
-			if !local.Purged.IsZero() || scalar(local, k) != scalar(&t.Post, k) {
-				c.drop(k)
+			f, in := findField(t.Post.Fields, strings.TrimPrefix(k, "field:"))
+			if in && !slices.ContainsFunc(local.Fields, func(g Field) bool { return bytes.Equal(g.Value, f.Value) }) {
+				drop(k)
 			}
 		}
 	}
-	return &c
+	return &c, dropped
 }
 
 // Empty says whether t typed nothing.
@@ -207,7 +201,13 @@ func (t *Typed) Empty() bool { return len(t.Keys) == 0 }
 // of the olds.
 func Fold(olds []*Typed, t *Typed) []*Typed {
 	takeOver := func(o *Typed) {
-		t.Contents = append(slices.Clone(o.Contents), t.Contents...)
+		var cs []string
+		for _, c := range slices.Concat(o.Contents, t.Contents) {
+			if !slices.Contains(cs, c) {
+				cs = append(cs, c)
+			}
+		}
+		t.Contents = cs
 		t.Created = t.Created || o.Created
 	}
 	if t.Has("purged") {

@@ -664,9 +664,9 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 			base.Wipe()
 		}
 	}
-	// What was typed, as the entry here still has it.
+	// What was typed, as far as the entry here still has it.
 	for i, t := range typed {
-		typed[i] = t.From(local)
+		typed[i], _ = t.Kept(local)
 	}
 	name := y.name(uid)
 	var from *syncfolder.Record
@@ -1088,6 +1088,14 @@ func (y *syncer) pushApplied(uid string, rev int64, rec *syncfolder.Record) erro
 // The other may be moving off the name in the folder (renamed, deleted):
 // it's synced first, then this again.
 func (y *syncer) apply(uid string, rev int64, rec *syncfolder.Record, hash syncfolder.Hash) error {
+	if err := y.applyNamed(uid, rev, rec, hash); err != nil {
+		return err
+	}
+	return y.store.SyncTypedKept(uid, y.computer)
+}
+
+// applyNamed is apply, settling a name another entry has here.
+func (y *syncer) applyNamed(uid string, rev int64, rec *syncfolder.Record, hash syncfolder.Hash) error {
 	_, err := y.store.SyncApply(uid, rev, rec, hash)
 	if !errors.Is(err, database.ErrNameTaken) {
 		return err
