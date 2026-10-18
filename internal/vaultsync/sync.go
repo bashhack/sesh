@@ -683,7 +683,7 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 	case folder != nil:
 		from = folder
 		typed = slices.DeleteFunc(typed, func(t *syncfolder.Typed) bool { return t.N != 0 && t.N <= folder.Versions[y.id] })
-	case len(typed) > 0 && typed[0].Created:
+	case slices.ContainsFunc(typed, func(t *syncfolder.Typed) bool { return t.Created }):
 		from = &syncfolder.Record{}
 	case it.Place == database.SyncGone:
 		return y.store.SyncDropEntry(uid)
@@ -697,7 +697,7 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 			break
 		}
 		if t.Has("purged") {
-			if t.Hash["content"] == syncfolder.ContentHash(r) {
+			if slices.Contains(t.Contents, syncfolder.ContentHash(r)) {
 				r = &syncfolder.Record{Purged: t.Post.Purged, Changed: t.Post.Purged, Versions: r.Versions}
 			}
 			continue
@@ -998,13 +998,15 @@ func (y *syncer) push(uid string, rev int64, rec *syncfolder.Record, apply bool)
 
 // write is push, counting it as a change of this computer's when count
 // says to.
-func (y *syncer) write(uid string, rev int64, rec *syncfolder.Record, apply, count bool) (retErr error) {
+func (y *syncer) write(uid string, rev int64, rec *syncfolder.Record, apply, count bool) error {
 	// Never over a file waiting to be read: the next sync.
 	if y.waiting[uid] {
 		return database.ErrEntryChanged
 	}
+	var typed *syncfolder.Typed
 	if count {
-		typed, err := y.typedHere(uid)
+		var err error
+		typed, err = y.typedHere(uid)
 		if err != nil {
 			return err
 		}
@@ -1014,11 +1016,6 @@ func (y *syncer) write(uid string, rev int64, rec *syncfolder.Record, apply, cou
 		}
 		if typed != nil {
 			typed.N = n
-			defer func() {
-				if retErr == nil {
-					retErr = y.store.SyncAddTyped(uid, typed)
-				}
-			}()
 		}
 		rec.Versions = rec.Versions.Join(nil)
 		rec.Versions[y.id] = n
@@ -1045,6 +1042,13 @@ func (y *syncer) write(uid string, rev int64, rec *syncfolder.Record, apply, cou
 	hash, err := y.folder.Write(h, b)
 	if err != nil {
 		return err
+	}
+	// Kept before the version is made here, so what that replaces of it
+	// is dropped (SyncTypedKeep).
+	if typed != nil {
+		if err := y.store.SyncAddTyped(uid, typed); err != nil {
+			return err
+		}
 	}
 	y.done[uid] = true
 	if apply {
@@ -1094,6 +1098,19 @@ func (y *syncer) pushApplied(uid string, rev int64, rec *syncfolder.Record) erro
 // The other may be moving off the name in the folder (renamed, deleted):
 // it's synced first, then this again.
 func (y *syncer) apply(uid string, rev int64, rec *syncfolder.Record, hash syncfolder.Hash) error {
+	if err := y.applyNamed(uid, rev, rec, hash); err != nil {
+		return err
+	}
+	// What was typed here and is no longer the secret: nothing makes it
+	// again, so it isn't kept.
+	if rec.Purged.IsZero() {
+		return y.store.SyncTypedKeep(uid, rec.Secret)
+	}
+	return nil
+}
+
+// applyNamed is apply, settling a name another entry has here.
+func (y *syncer) applyNamed(uid string, rev int64, rec *syncfolder.Record, hash syncfolder.Hash) error {
 	_, err := y.store.SyncApply(uid, rev, rec, hash)
 	if !errors.Is(err, database.ErrNameTaken) {
 		return err
@@ -1124,6 +1141,23 @@ func (y *syncer) apply(uid string, rev int64, rec *syncfolder.Record, hash syncf
 	for _, it := range y.items {
 		if it.UID == uid || it.Place != database.SyncLive || it.Key != k || !it.Left || it.Agreed == nil {
 			continue
+		}
+		if y.waiting[it.UID] {
+			return database.ErrEntryChanged
+		}
+		// What was typed in it and not sent is kept as sent, as the rename
+		// makes it what's agreed.
+		typed, err := y.typedHere(it.UID)
+		if err != nil {
+			return err
+		}
+		if typed != nil {
+			if typed.N, err = y.store.SyncNextChange(0); err != nil {
+				return err
+			}
+			if err := y.store.SyncAddTyped(it.UID, typed); err != nil {
+				return err
+			}
 		}
 		other, otherRev, err := y.store.SyncRecord(it.UID, y.computer)
 		if err != nil {

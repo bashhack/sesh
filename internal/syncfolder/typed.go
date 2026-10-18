@@ -27,9 +27,12 @@ type Typed struct {
 	// "field:<name>" and "tag:<tag>", names in lower case.
 	Keys []string `json:"keys"`
 	// Hash is, by key, the hash of the secret, notes or field replaced;
-	// "" when it isn't known (forgotten since). "content" is the whole
-	// entry's (ContentHash), for a deletion for good.
+	// "" when it isn't known (forgotten since).
 	Hash map[string]string `json:"hash,omitempty"`
+	// Contents are the hashes (ContentHash) of the versions typed over,
+	// this one's and those of the earlier ones folded into it (Fold): a
+	// deletion for good stands over any of them.
+	Contents []string `json:"contents,omitempty"`
 	// Pre holds what the typed values replaced, where that isn't secret:
 	// the name, URL, folder, settings, trash state.
 	Pre Record `json:"pre"`
@@ -61,11 +64,11 @@ func Diff(pre, post *Record) *Typed {
 	if pre == nil || !pre.Purged.IsZero() {
 		pre = &Record{}
 	}
+	t.Contents = []string{ContentHash(pre)}
 	if !post.Purged.IsZero() {
 		if pre.Kind != "" {
 			t.Keys = []string{"purged"}
 			t.Post.Purged = post.Purged
-			t.Hash["content"] = ContentHash(pre)
 		}
 		return t
 	}
@@ -144,6 +147,12 @@ func Diff(pre, post *Record) *Typed {
 	return t
 }
 
+// DropSecret takes the typed secret out of t.
+func (t *Typed) DropSecret() {
+	t.drop("secret")
+	t.clearPost("secret")
+}
+
 // Empty says whether t typed nothing.
 func (t *Typed) Empty() bool { return len(t.Keys) == 0 }
 
@@ -151,9 +160,18 @@ func (t *Typed) Empty() bool { return len(t.Keys) == 0 }
 // only by the latest that typed it, olds left with nothing are dropped,
 // and a deletion for good drops them all. A typed value replacing one an
 // old typed takes that one's replaced value as its own, as nothing came
-// between. Secrets t forgets are taken out of the olds.
+// between. What t takes the place of passes on to it: the versions typed
+// over, and that the entry was made here. Secrets t forgets are taken out
+// of the olds.
 func Fold(olds []*Typed, t *Typed) []*Typed {
+	takeOver := func(o *Typed) {
+		t.Contents = append(slices.Clone(o.Contents), t.Contents...)
+		t.Created = t.Created || o.Created
+	}
 	if t.Has("purged") {
+		for _, o := range slices.Backward(olds) {
+			takeOver(o)
+		}
 		return []*Typed{t}
 	}
 	forgot := func(h string) bool {
@@ -184,9 +202,11 @@ func Fold(olds []*Typed, t *Typed) []*Typed {
 				o.Hash[k] = ""
 			}
 		}
-		if !o.Empty() {
-			out = append(out, o)
+		if o.Empty() {
+			takeOver(o)
+			continue
 		}
+		out = append(out, o)
 	}
 	for k, h := range t.Hash {
 		if forgot(h) {

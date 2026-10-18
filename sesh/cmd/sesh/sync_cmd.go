@@ -373,6 +373,9 @@ func writeSyncSummary(app *App, dir string, s *vaultsync.Summary) error {
 	for _, w := range s.Warnings {
 		fmt.Fprintf(&warned, "  ⚠️  %s\n", w)
 	}
+	if len(s.HeldBack) > 0 {
+		fmt.Fprintf(&warned, "  ⚠️  %s\n", heldBackSaid(len(s.HeldBack), strings.Join(slices.Sorted(slices.Values(s.HeldBack)), ", ")))
+	}
 	if s.Nothing() {
 		_, err := fmt.Fprintf(app.Stdout, "✅ In sync with %s: nothing to do.\n%s", dir, warned.String())
 		return err
@@ -425,9 +428,6 @@ func writeSyncSummary(app *App, dir string, s *vaultsync.Summary) error {
 	}
 	if len(s.SetBack) > 0 {
 		fmt.Fprintf(&b, "  ⚠️  %s\n", setBackSaid(len(s.SetBack), names(s.SetBack)))
-	}
-	if len(s.HeldBack) > 0 {
-		fmt.Fprintf(&b, "  ⚠️  %s\n", heldBackSaid(len(s.HeldBack), names(s.HeldBack)))
 	}
 	if s.Later > 0 {
 		fmt.Fprintf(&b, "  %s changed by another sesh command meanwhile: the next sync takes them\n", nouns(s.Later, "entry", "entries"))

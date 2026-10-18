@@ -511,7 +511,12 @@ func (s *Store) SyncAddTyped(uid string, t *syncfolder.Typed) error {
 	if err != nil {
 		return err
 	}
-	all := syncfolder.Fold(olds, t)
+	return s.putTyped(uid, syncfolder.Fold(olds, t))
+}
+
+// putTyped keeps all as what was typed in the entry uid, in place of
+// what was kept.
+func (s *Store) putTyped(uid string, all []*syncfolder.Typed) error {
 	type sealed struct {
 		data, salt []byte
 		n          uint64
@@ -569,6 +574,35 @@ func (s *Store) SyncTyped(uid string) ([]*syncfolder.Typed, error) {
 		out = append(out, &t)
 	}
 	return out, rows.Err()
+}
+
+// SyncTypedKeep drops, of what was typed in the entry uid and kept, any
+// secret the entry no longer has (secret is its secret now): replaced
+// since, here or elsewhere, so nothing would make it again.
+func (s *Store) SyncTypedKeep(uid string, secret []byte) error {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_typed WHERE uid = ?`, uid).Scan(&n); err != nil || n == 0 {
+		return err
+	}
+	all, err := s.SyncTyped(uid)
+	if err != nil {
+		return err
+	}
+	changed := false
+	var kept []*syncfolder.Typed
+	for _, t := range all {
+		if t.Has("secret") && !bytes.Equal(t.Post.Secret, secret) {
+			t.DropSecret()
+			changed = true
+		}
+		if !t.Empty() {
+			kept = append(kept, t)
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.putTyped(uid, kept)
 }
 
 // SyncTypedSeen drops what was typed in the entry uid and sent with a

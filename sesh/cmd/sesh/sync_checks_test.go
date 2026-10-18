@@ -363,6 +363,16 @@ func TestSyncSummary_SetAndHeldBack(t *testing.T) {
 	}
 }
 
+// Entries held back are said even when the sync had nothing else to do.
+func TestWriteSyncSummary_HeldBackOnly(t *testing.T) {
+	app := agentTestApp()
+	err := writeSyncSummary(app, "~/sync", &vaultsync.Summary{HeldBack: []string{"password/b"}})
+	out := app.Stdout.(*bytes.Buffer).String()
+	if err != nil || !strings.Contains(out, "nothing to do") || !strings.Contains(out, "⚠️  1 entry (password/b): your other computers have no version") {
+		t.Errorf("held back only: %q, %v", out, err)
+	}
+}
+
 // A syncing vault with weaker key settings is told to change its master
 // password, which the other computers take; sesh passwd and recover say
 // so, and a vault that left says what joining again does.

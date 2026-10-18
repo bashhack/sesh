@@ -37,7 +37,7 @@ func TestDiff(t *testing.T) {
 		t.Errorf("made here: %+v", made)
 	}
 	gone := Diff(pre, &Record{Purged: time.Unix(300, 0)})
-	if !slices.Equal(gone.Keys, []string{"purged"}) || gone.Hash["content"] != ContentHash(pre) || gone.Post.Secret != nil {
+	if !slices.Equal(gone.Keys, []string{"purged"}) || !slices.Equal(gone.Contents, []string{ContentHash(pre)}) || gone.Post.Secret != nil {
 		t.Errorf("deleted for good: %+v", gone)
 	}
 }

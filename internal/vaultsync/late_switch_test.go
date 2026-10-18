@@ -546,3 +546,78 @@ func TestSync_TypedDroppedOnceSeen(t *testing.T) {
 		t.Errorf("once the laptop's version has seen it: %d kept, %v; want none", len(typed), err)
 	}
 }
+
+// An entry made under the old key and changed again before the switch is
+// still this computer's own: sent once it takes the change.
+func TestSync_LateSwitchMadeThenChanged(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f, _, rec, _, _ := lateWorld(t)
+	bank := desktop.put("bank", "b-1")
+	desktop.sync(f)
+	to := vault.Key{Kind: vault.KindPassword, Service: "bank2", Username: "alice"}
+	if _, err := desktop.store.Edit(bank, database.EntryEdit{To: &to, Secret: []byte("b-2")}); err != nil {
+		t.Fatal(err)
+	}
+	desktop.sync(f)
+	syncOlder(t, laptop, f)
+	desktopNew, s := switchDesktop(t, laptop, desktop, f, rec)
+	if len(s.HeldBack) != 0 {
+		t.Errorf("desktop taking the change: %+v, want nothing held back", s)
+	}
+	settleOlder(t, f, laptop, desktopNew)
+	if got := laptop.secret(to); got != "b-2" {
+		t.Errorf("laptop: bank2 %q, want the desktop's entry", got)
+	}
+}
+
+// A deletion for good typed after an edit, both sent under the old key
+// (an old-key file put back lets it write), stands once the computer takes
+// the change.
+func TestSync_LateSwitchPurgeAfterAnEdit(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f, gh, rec, oldKey, oldID := lateWorld(t)
+	forge(t, desktop, f, liveUID(t, desktop, gh), oldKey, oldID, func(*syncfolder.Record) {})
+	desktop.put("github", "desk-2")
+	if s := desktop.sync(f); len(s.Sent) != 1 {
+		t.Fatalf("desktop on the old key: %+v, want its edit sent", s)
+	}
+	if err := desktop.store.PurgeMany([]vault.Key{gh}); err != nil {
+		t.Fatal(err)
+	}
+	desktop.sync(f)
+	syncOlder(t, laptop, f)
+	desktopNew, _ := switchDesktop(t, laptop, desktop, f, rec)
+	settleOlder(t, f, laptop, desktopNew)
+	for _, c := range []*computer{laptop, desktopNew} {
+		if slices.Contains(names(c), "github") {
+			t.Errorf("%s has github, deleted for good on the desktop", c.name)
+		}
+	}
+}
+
+// A secret typed here that another computer's newer one replaced isn't
+// kept for a password change.
+func TestSync_TypedSecretReplacedNotKept(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f := twoComputers(t)
+	gh := laptop.put("github", "pw-1")
+	settle(t, f, laptop, desktop)
+	uid := liveUID(t, desktop, gh)
+	desktop.put("github", "desk-2")
+	laptop.put("github", "pw-3")
+	laptop.sync(f)
+	desktop.sync(f)
+	settle(t, f, laptop, desktop)
+	if got := desktop.secret(gh); got != "pw-3" {
+		t.Fatalf("desktop: %q, want the laptop's newer pw-3", got)
+	}
+	typed, err := desktop.store.SyncTyped(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ty := range typed {
+		if ty.Has("secret") {
+			t.Errorf("desktop keeps %q, replaced by pw-3", ty.Post.Secret)
+		}
+	}
+}

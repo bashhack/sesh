@@ -423,6 +423,23 @@ func TestSyncTyped(t *testing.T) {
 	}
 }
 
+// A vault replaced from a backup, with a new sync ID, keeps nothing typed
+// under the old one.
+func TestReplacedForSync_DropsTyped(t *testing.T) {
+	s, _ := syncPair(t)
+	d := syncfolder.Diff(nil, &syncfolder.Record{Kind: vault.KindPassword, Service: "a", Secret: []byte("1")})
+	d.N = 1
+	if err := s.SyncAddTyped("u", d); err != nil {
+		t.Fatal(err)
+	}
+	if err := replacedForSync(s.Path()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.SyncTyped("u"); err != nil || len(got) != 0 {
+		t.Errorf("after the replace: %d kept, %v; want none", len(got), err)
+	}
+}
+
 // Joining makes a vault with the folder's key record; an empty one with
 // another is given it, its recovery record removed; one with entries joins
 // only the folder it synced with, under its key, keeping what it agreed.
