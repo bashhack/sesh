@@ -204,8 +204,11 @@ func recoveryRules(store *database.Store, f syncfolder.Folder, info *syncfolder.
 			return nil, nil, nil
 		case recoveryNewer:
 			// A change made here the folder didn't keep: one not sent, or
-			// one sent that the folder's wasn't made after seeing.
-			lost := !bytes.Equal(localPub, folder.PublicKey) && (pending || seen.Mine && !folder.Replaces(&seen.Recovery))
+			// one sent that the folder's was made without seeing (from an
+			// earlier record, or another of the same count). One made after
+			// later records can't be told from a replacement, and isn't
+			// called lost.
+			lost := !bytes.Equal(localPub, folder.PublicKey) && (pending || seen.Mine && (folder.PriorCount < seen.Count || folder.PriorCount == seen.Count && !folder.Replaces(&seen.Recovery)))
 			notes, warnings, err = takeRecovery(store, &folder, local, keyID, lost)
 			// Sealed with the key a change made here came from: sealed again
 			// with the key now.

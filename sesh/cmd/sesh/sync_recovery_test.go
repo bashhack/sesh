@@ -926,3 +926,25 @@ func TestSync_RecoveryStatusAfterRestore(t *testing.T) {
 		t.Error("a restored key counts as a change to send")
 	}
 }
+
+// A computer back after its key was replaced twice elsewhere takes the
+// newest, and isn't told its own lost a race.
+func TestSync_RecoveryReplacedTwiceWhileAway(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	ddb := syncComputer(t, desktop, "desktop")
+	madeRecoveryKey(t, ddb, "old-password-1")
+	syncSays(t, "desktop", "recovery key goes")
+	ldb := syncComputer(t, laptop, "laptop")
+	syncSays(t, "laptop", "now opens this vault")
+	madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	newest := madeRecoveryKey(t, ldb, "old-password-1")
+	syncSays(t, "laptop", "recovery key goes")
+	syncComputer(t, desktop, "desktop")
+	if out := syncSays(t, "desktop", "now opens this vault here too; the one before it no longer does"); strings.Contains(out, "doesn't work") {
+		t.Errorf("the desktop was told its key lost a race: %q", out)
+	}
+	opensVault(t, newest, ddb)
+}
