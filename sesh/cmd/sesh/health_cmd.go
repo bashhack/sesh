@@ -50,7 +50,7 @@ func runHealth(app *App, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer store.Close() //nolint:errcheck // read only, but for the audit event
+	defer closeAuditStore(store)
 	c := &health.Checker{Now: time.Now(), IsWeak: password.IsWeak, OldAfter: time.Duration(cfg.HealthOldAfterDays.Value) * 24 * time.Hour}
 	report, err := checkHealth(store, c)
 	if err != nil {

@@ -203,6 +203,7 @@ func openAuditStore() (*config.Config, *database.Store, error) {
 }
 
 func closeAuditStore(store *database.Store) {
+	autoSyncClosing(store)
 	if err := store.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to close the vault: %v\n", err) //nolint:errcheck // best-effort warning
 	}

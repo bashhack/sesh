@@ -96,6 +96,7 @@ func (c *Config) list() []Item {
 		syncDir.Value = "off"
 	}
 	out = append(out, syncDir, Item{Key: "sync.name", Value: c.SyncComputerName(), Raw: c.SyncName.Value, Source: c.SyncName.Source, Origin: c.SyncName.Origin, Applies: "at the next sync", Editable: true})
+	sw("sync.auto", &c.SyncAuto, "from the next command")
 	return out
 }
 

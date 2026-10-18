@@ -160,6 +160,12 @@ func migrateV1(tx *sql.Tx) error {
 			recovery_restored    INTEGER NOT NULL DEFAULT 0,
 			recovery_restored_key BLOB NOT NULL DEFAULT x''
 		)`,
+		// The warnings automatic syncs said, and when each was last said,
+		// so one that hasn't changed is said once a day.
+		`CREATE TABLE sync_warned (
+			line TEXT PRIMARY KEY,
+			at   DATETIME NOT NULL
+		)`,
 		// Earlier secrets forgotten on purpose, by their entry's uid, a
 		// hash of the secret (syncfolder.Forget) and when, so a sync
 		// forgets them on every computer. Kept for good, as the sync folder's records

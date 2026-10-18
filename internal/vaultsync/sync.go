@@ -60,6 +60,9 @@ type Summary struct {
 	// Rewritten counts files of entries not changed here written again:
 	// lost from the folder, or an older copy put back.
 	Rewritten int
+	// Unfinished counts entries left for the next sync, its deadline
+	// passed (Options.Deadline).
+	Unfinished int
 }
 
 // Merged is an entry changed both here and in the folder: what both
@@ -71,7 +74,7 @@ type Merged struct {
 
 // Nothing says whether the sync found nothing to do.
 func (s *Summary) Nothing() bool {
-	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+len(s.Notes)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed == 0
+	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+len(s.Notes)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed+s.Unfinished == 0
 }
 
 // syncer is one sync's state.
@@ -110,10 +113,16 @@ type Older interface {
 
 // Options are what a sync can do beyond the usual.
 type Options struct {
+	// Deadline, when set, is when the sync stops taking up entries: the
+	// rest wait for the next sync (Summary.Unfinished).
+	Deadline time.Time
 	// Older open files sealed with keys the vault had before master
 	// password changes: they're read, and written again with the vault's
 	// key.
 	Older Older
+	// LogOnlyChanges leaves a sync with nothing to do out of the audit
+	// log.
+	LogOnlyChanges bool
 }
 
 // sealerFor is the sealer that opens f: the vault's, or an older key's for
@@ -201,7 +210,11 @@ func SyncWith(store *database.Store, folder syncfolder.Folder, computer string, 
 		}
 	}
 	slices.Sort(uids)
-	for _, uid := range uids {
+	for i, uid := range uids {
+		if !opts.Deadline.IsZero() && time.Now().After(opts.Deadline) {
+			y.sum.Unfinished = len(uids) - i
+			break
+		}
 		// A file not downloaded yet may be newer than any here: the entry
 		// waits for it, and nothing is written over it.
 		if waiting[uid] || y.done[uid] {
@@ -215,7 +228,9 @@ func SyncWith(store *database.Store, folder syncfolder.Folder, computer string, 
 			y.sum.Problems = append(y.sum.Problems, fmt.Sprintf("%s: %v", y.name(uid), err))
 		}
 	}
-	store.LogSync(y.sum.String())
+	if !opts.LogOnlyChanges || !y.sum.Nothing() {
+		store.LogSync(y.sum.String())
+	}
 	return y.sum, nil
 }
 
@@ -957,6 +972,7 @@ func (s *Summary) String() string {
 	add(s.NotDownloaded, "not downloaded")
 	add(s.OtherKey, "sealed with another key")
 	add(s.Later, "left for the next sync")
+	add(s.Unfinished, "left for the next sync, out of time")
 	add(s.Rewritten, "written again")
 	add(s.Resealed, "sealed again with the new master password's key")
 	add(len(s.Problems), "problems")

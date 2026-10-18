@@ -78,6 +78,13 @@ func runSync(app *App, args []string) error {
 // errNotSyncing is a vault with no sync folder.
 var errNotSyncing = errors.New("this vault doesn't sync: sesh sync init makes a sync folder from it, sesh sync join <folder> joins one")
 
+// folderAwayError is a sync folder that isn't there now.
+type folderAwayError struct{ dir string }
+
+func (e *folderAwayError) Error() string {
+	return fmt.Sprintf("the sync folder %s isn't there now: a drive not connected, or the folder moved", tildePath(e.dir))
+}
+
 // syncFolderOf is cfg's sync folder, checked to be one for this vault:
 // its key record the vault's.
 func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
@@ -91,7 +98,7 @@ func syncFolderOf(cfg *config.Config) (syncfolder.Folder, error) {
 		return f, err
 	}
 	if _, err := os.Stat(f.Dir()); errors.Is(err, os.ErrNotExist) {
-		return f, fmt.Errorf("the sync folder %s isn't there now: a drive not connected, or the folder moved", tildePath(f.Dir()))
+		return f, &folderAwayError{dir: f.Dir()}
 	}
 	info, err := f.ReadInfo()
 	if errors.Is(err, syncfolder.ErrNoInfo) {
@@ -179,35 +186,40 @@ func syncWith(app *App, cfg *config.Config) error {
 
 // syncStore syncs store, the vault cfg names, with f, and says what it did.
 func syncStore(app *App, cfg *config.Config, f syncfolder.Folder, store *database.Store) error {
+	sum, err := syncStoreSum(cfg, f, store, syncRun{})
+	if err != nil {
+		return err
+	}
+	return writeSyncSummary(app, tildePath(f.Dir()), sum)
+}
+
+// syncStoreSum is syncStore run as run says, giving what the sync did.
+func syncStoreSum(cfg *config.Config, f syncfolder.Folder, store *database.Store, run syncRun) (*vaultsync.Summary, error) {
 	info, err := f.ReadInfo()
 	if err != nil {
-		return fmt.Errorf("the sync folder %s: %w", tildePath(f.Dir()), err)
+		return nil, fmt.Errorf("the sync folder %s: %w", tildePath(f.Dir()), err)
 	}
 	if err := checkSwitch(store, f, info); err != nil {
-		return err
+		return nil, err
 	}
 	// A folder other than the one the vault synced with starts afresh:
 	// what was agreed with the other is no base for this one.
 	if err := store.SyncStartFolder(info.FolderID); err != nil {
-		return err
+		return nil, err
 	}
 	// A change made here the folder has (its key record written, the
 	// sync after it cut short): nothing waits to be sent, and the files
 	// still sealed with an older key are sealed again below.
 	prev, err := store.SyncKeyChange()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if prev != "" {
 		if err := store.SyncKeyChangeSent(); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	sum, err := syncOlderAlso(store, cfg, f, prev)
-	if err != nil {
-		return err
-	}
-	return writeSyncSummary(app, tildePath(f.Dir()), sum)
+	return syncOlderWith(store, cfg, f, prev, run)
 }
 
 // errOtherFolder is a vault with entries that synced with another sync

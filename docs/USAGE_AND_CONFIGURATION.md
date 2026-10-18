@@ -234,6 +234,9 @@ old_after_days = 365                    # a password or API key unchanged this l
 [ui]
 lock_on_quit = false                    # quitting sesh ui leaves sesh unlocked (default: true, it locks)
 
+[sync]
+auto = false                            # commands don't sync on their own; only sesh sync does (default: true)
+
 [master_password]                       # how hard your master password is to guess-check (Argon2id)
 memory = "256MiB"                       # memory each check takes: 19MiB to 1GiB
 time = 3                                # passes over that memory: 2 to 10
@@ -290,6 +293,7 @@ backup.dir                 /Users/me/vaults/backups
                            (default: next to the vault)
 sync.dir                   off           (default)
 sync.name                  laptop        (default: this computer's name)
+sync.auto                  on            (default)
 ```
 
 `sesh config set <key> <value>` changes one in the config file, as `sesh ui`'s settings panel does, and makes the file if there isn't one yet: the value is checked as sesh checks it when it loads, and the file keeps its comments and order (a linked one, from a dotfile manager, is changed where it lives). An empty value (`sesh config set history.keep ""`) takes the setting out of the file, back to its default. It says when the change takes effect. Lowering a setting that deletes as it goes (`history.keep`, `trash.keep_days`, `audit.retention_days`, `backup.keep`) asks first, saying what will go; `--force` changes it without asking, and is needed without a terminal. A setting an environment variable or a flag gives wins over the file, so it's refused here: change it there. `db_path` is changed by [moving the vault](#moving-the-vault).
@@ -380,6 +384,7 @@ $ sesh config set clipboard_timeout 15s
 | `SESH_UI_LOCK_ON_QUIT` | `false`: quitting `sesh ui` leaves sesh unlocked; `true` locks it, as `sesh agent lock` does (config: `ui.lock_on_quit`) | `true` |
 | `SESH_SYNC_DIR` | The sync folder the vault syncs with (config: `sync.dir`; set by `sesh sync init` and `join`, held to the same rules when set by hand) | none: the vault doesn't sync |
 | `SESH_SYNC_NAME` | This computer's name in what it syncs (config: `sync.name`) | the computer's own name, without `.local` |
+| `SESH_SYNC_AUTO` | `false`: commands don't sync on their own, only `sesh sync` does (config: `sync.auto`) | `true` |
 | `SESH_KDF_MEMORY` | Memory for each master password check, such as `256MiB` (config: `master_password.memory`) | `256MiB` |
 | `SESH_KDF_TIME` | Passes over that memory (config: `master_password.time`) | `3` |
 | `SESH_KDF_THREADS` | Threads (config: `master_password.threads`) | `4` |
@@ -804,6 +809,14 @@ $ sesh sync init ~/Dropbox/sesh-sync  # or any folder
 # On each other computer (a new vault, or an empty one):
 $ sesh sync join ~/Library/Mobile\ Documents/com~apple~CloudDocs/sesh-sync
 ```
+
+**Commands sync on their own** (`sync.auto`, on unless set to `false`): one that opens the vault (`sesh get`, `list`, `add`, `edit`, `trash` and the rest that use its entries) syncs first, so it sees what changed on the other computers, and again after, if it changed anything. It says one line on stderr when something moved ("Synced: 2 taken, 1 sent.", naming any entry renamed because two computers made one name), and nothing otherwise, so a command's own output stays as it is; a warning that hasn't changed is said once a day. It never asks for anything:
+- a master password changed on another computer is said, and nothing syncs until `sesh sync` takes it; one changed here and on another computer at once is settled as `sesh sync` settles it when this computer's is the one kept, and otherwise left to `sesh sync`;
+- a sync folder not there now (a drive not connected) is left to `sesh sync status` and `sesh doctor` to say;
+- a folder that doesn't answer within 5 seconds (a stuck network mount) isn't waited for, and a sync taking longer leaves the rest for the next one;
+- a sync that fails never stops the command.
+
+An automatic sync with nothing to do isn't written to the [audit log](#the-audit-log); one by hand always is, so `sesh sync status`'s "Last synced" is the last sync that did something, or was run by hand.
 
 `sesh sync` syncs now: what changed here is written to the folder, what changed in the folder is taken, and what changed in both is merged. `sesh sync status` says where the vault syncs and what's waiting, without unlocking it (files sealed with another master password's key are counted apart: sync leaves them for the computer that wrote them); `sesh sync leave` stops this vault syncing (its entries, and the folder, stay); `sesh sync join` with the same folder later picks up where it stopped, merging what changed on both sides meanwhile.
 
