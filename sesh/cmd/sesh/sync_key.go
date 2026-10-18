@@ -355,14 +355,30 @@ func openWithKey(dbPath, id string, key []byte) (*database.Store, error) {
 }
 
 // syncOlder syncs store with f, opening files sealed with keys the vault
-// had before through its links.
+// had before through its links, then its recovery key record.
 func syncOlder(store *database.Store, cfg *config.Config, f syncfolder.Folder) (*vaultsync.Summary, error) {
+	return syncOlderAlso(store, cfg, f, "")
+}
+
+// syncOlderAlso is syncOlder trusting a recovery key record sealed with the
+// key record also too: the one a change made here came from, as it's sent.
+func syncOlderAlso(store *database.Store, cfg *config.Config, f syncfolder.Folder, also string) (*vaultsync.Summary, error) {
 	older, err := store.SyncOlderKeys()
 	if err != nil {
 		return nil, err
 	}
 	defer older.Close()
-	return vaultsync.SyncWith(store, f, cfg.SyncComputerName(), vaultsync.Options{Older: older})
+	sum, err := vaultsync.SyncWith(store, f, cfg.SyncComputerName(), vaultsync.Options{Older: older})
+	if err != nil {
+		return sum, err
+	}
+	notes, warnings, err := syncRecovery(store, f, older, cfg.SyncComputerName(), also)
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf("the recovery key wasn't synced (%v): the next sync tries again", err))
+	}
+	sum.Notes = append(sum.Notes, notes...)
+	sum.Warnings = append(sum.Warnings, warnings...)
+	return sum, nil
 }
 
 // changeLink is the key link for a master password change from oldKey,
@@ -403,7 +419,15 @@ func sendKeyChange(cfg *config.Config, key []byte, rec database.UnlockMaterial, 
 	if n := len(sum.Problems); n > 0 {
 		said += fmt.Sprintf(" %s; sesh sync says more.", nouns(n, "problem", "problems"))
 	}
-	return said
+	var b strings.Builder
+	b.WriteString(said)
+	for _, n := range sum.Notes {
+		b.WriteString("\n" + n)
+	}
+	for _, w := range sum.Warnings {
+		b.WriteString("\n⚠️  " + w)
+	}
+	return b.String()
 }
 
 // sendWith writes the vault's key record, rec, and its links to the sync
@@ -422,10 +446,14 @@ func sendWith(store *database.Store, cfg *config.Config, f syncfolder.Folder, in
 	if err := f.WriteInfo(&sent); err != nil {
 		return nil, err
 	}
+	prev, err := store.SyncKeyChange()
+	if err != nil {
+		return nil, err
+	}
 	if err := store.SyncKeyChangeSent(); err != nil {
 		return nil, err
 	}
-	return syncOlder(store, cfg, f)
+	return syncOlderAlso(store, cfg, f, prev)
 }
 
 // sendPendingChange is sesh sync for a vault whose master password change

@@ -234,15 +234,16 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		ChangePassword: func(current, next []byte) (tui.Changed, error) {
 			return uiChangePassword(cfg, current, next)
 		},
-		RenewBackups:   func() (string, error) { return uiRenewBackups(dbPath) },
-		Backups:        func() (tui.Backups, error) { return uiBackups(dbPath) },
-		BackUp:         func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
-		DeleteBackup:   func(path string) (string, error) { return uiDeleteBackup(dbPath, path) },
-		PlanRestore:    func(path string) (string, error) { return uiPlanRestore(dbPath, path) },
-		Restore:        func(path string) (string, error) { return uiRestore(dbPath, path) },
-		Recovery:       func() (tui.Recovery, error) { return uiRecovery(dbPath) },
-		NewRecovery:    func() (*tui.NewRecovery, error) { return uiNewRecovery(dbPath) },
-		RemoveRecovery: func() (tui.Done, error) { return uiRemoveRecovery(dbPath) },
+		RenewBackups: func() (string, error) { return uiRenewBackups(dbPath) },
+		Backups:      func() (tui.Backups, error) { return uiBackups(dbPath) },
+		BackUp:       func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
+		DeleteBackup: func(path string) (string, error) { return uiDeleteBackup(dbPath, path) },
+		PlanRestore:  func(path string) (string, error) { return uiPlanRestore(dbPath, path) },
+		Restore:      func(path string) (string, error) { return uiRestore(dbPath, path) },
+		// Settings read now: sync.dir may have changed since the app started.
+		Recovery:       func() (tui.Recovery, error) { return uiRecovery(settingsNow(cfg)) },
+		NewRecovery:    func() (*tui.NewRecovery, error) { return uiNewRecovery(settingsNow(cfg)) },
+		RemoveRecovery: func() (tui.Done, error) { return uiRemoveRecovery(settingsNow(cfg)) },
 		Unlock: func(pw []byte) (tui.Vault, error) {
 			store, err := reopenWith(cfg, pw)
 			if err != nil {
@@ -862,6 +863,15 @@ func (u *uiVault) Check() (bool, error) {
 func (u *uiVault) KeepAlive() error { return uiLocked(u.store.KeepAlive()) }
 
 func (u *uiVault) Close() error { return u.store.Close() }
+
+// settingsNow is the settings as they are now, or cfg when they can't be
+// read.
+func settingsNow(cfg *config.Config) *config.Config {
+	if c, err := settings(); err == nil {
+		return c
+	}
+	return cfg
+}
 
 // uiLocked is err as the app takes it: one meaning the vault must be
 // unlocked again is tui.ErrLocked, saying why.

@@ -41,6 +41,9 @@ type Summary struct {
 	// Warnings are what's wrong but kept nothing from syncing, such as a
 	// folder whose permissions can't be made private.
 	Warnings []string
+	// Notes are what else the sync did, said as they are: the recovery
+	// key taken or sent, say.
+	Notes []string
 	// Ignored counts older copies of entries' files, already seen here: put
 	// back by a sync tool, or someone.
 	Ignored int
@@ -68,7 +71,7 @@ type Merged struct {
 
 // Nothing says whether the sync found nothing to do.
 func (s *Summary) Nothing() bool {
-	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed == 0
+	return len(s.Received)+len(s.Sent)+len(s.Merged)+len(s.Renamed)+len(s.Joined)+len(s.Problems)+len(s.Notes)+s.Ignored+s.NotDownloaded+s.OtherKey+s.Later+s.Rewritten+s.Resealed == 0
 }
 
 // syncer is one sync's state.

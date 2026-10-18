@@ -141,7 +141,20 @@ func migrateV1(tx *sql.Tx) error {
 			computer_id TEXT NOT NULL,
 			changes     INTEGER NOT NULL DEFAULT 0,
 			folder_id   TEXT NOT NULL DEFAULT '',
-			prev_key_id TEXT NOT NULL DEFAULT ''
+			prev_key_id TEXT NOT NULL DEFAULT '',
+			-- The sync folder's recovery key record as the vault last saw
+			-- it (SeenRecovery): its count, public key (empty for none),
+			-- when and where it was made, what it replaced, whether this
+			-- vault sent it, and whether the folder's goes before it (seen
+			-- under a key before a change taken, or restored).
+			recovery_count       INTEGER NOT NULL DEFAULT 0,
+			recovery_key         BLOB NOT NULL DEFAULT x'',
+			recovery_made        DATETIME,
+			recovery_by          TEXT NOT NULL DEFAULT '',
+			recovery_prior_count INTEGER NOT NULL DEFAULT 0,
+			recovery_prior_key   BLOB NOT NULL DEFAULT x'',
+			recovery_mine        INTEGER NOT NULL DEFAULT 0,
+			recovery_earlier     INTEGER NOT NULL DEFAULT 0
 		)`,
 		// Earlier secrets forgotten on purpose, by their entry's uid, a
 		// hash of the secret (syncfolder.Forget) and when, so a sync
