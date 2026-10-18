@@ -1062,8 +1062,8 @@ func TestSync_DeletionBehindTheChange(t *testing.T) {
 	}
 }
 
-// A new entry under the old key, never agreed here, isn't taken, and
-// nothing is written for it.
+// A new entry under the old key, never agreed here, isn't taken: its file
+// is removed, and nothing is written for it.
 func TestSync_EarlierKeyNewEntry(t *testing.T) {
 	t.Parallel()
 	laptop, desktop, f, _, oldKey, oldID := oldKeyWorld(t)
@@ -1071,16 +1071,19 @@ func TestSync_EarlierKeyNewEntry(t *testing.T) {
 	forged := &syncfolder.Record{Kind: vault.KindPassword, Service: "planted", Secret: []byte("evil"), Versions: syncfolder.Versions{"0123456789abcdef": 1}, Changed: time.Now()}
 	sealOld(t, f, uid+".sesh", uid, forged, oldKey, oldID)
 	before := scanFiles(t, f)
+	if s := syncOlder(t, laptop, f); s.EarlierKey != 1 || s.Resealed+s.Rewritten+len(s.Received) != 0 {
+		t.Errorf("laptop: %+v", s)
+	}
+	if after := scanFiles(t, f); len(after) != len(before)-1 {
+		t.Errorf("files %d, then %d: want the planted one removed, nothing written", len(before), len(after))
+	}
 	for _, c := range []*computer{laptop, desktop} {
-		if s := syncOlder(t, c, f); s.EarlierKey != 1 || s.Resealed+s.Rewritten+len(s.Received) != 0 {
-			t.Errorf("%s: %+v", c.name, s)
+		if s := syncOlder(t, c, f); !s.Nothing() {
+			t.Errorf("%s, then: %+v, want nothing to do", c.name, s)
 		}
 		if slices.Contains(names(c), "planted") {
 			t.Errorf("%s took the planted entry", c.name)
 		}
-	}
-	if after := scanFiles(t, f); len(after) != len(before) {
-		t.Errorf("files %d, then %d: something was written for it", len(before), len(after))
 	}
 }
 
@@ -1136,5 +1139,73 @@ func TestSync_EarlierKeyRestored(t *testing.T) {
 		if got := c.secret(gh); got != "pw-1" {
 			t.Errorf("%s: %q, want pw-1 kept", c.name, got)
 		}
+	}
+}
+
+// An entry's own file under the old key, over one deleted for good, is
+// written over with what was agreed: the other computer has nothing to do.
+func TestSync_EarlierKeyWriteOverAsAgreed(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f, gh, oldKey, oldID := oldKeyWorld(t)
+	uid := liveUID(t, laptop, gh)
+	if err := laptop.store.PurgeMany([]vault.Key{gh}); err != nil {
+		t.Fatal(err)
+	}
+	settleOlder(t, f, laptop, desktop)
+	forged := &syncfolder.Record{Kind: vault.KindPassword, Service: "github", Username: "alice", Secret: []byte("evil"), Versions: syncfolder.Versions{"0123456789abcdef": 1}, Changed: time.Now()}
+	sealOld(t, f, uid+".sesh", uid, forged, oldKey, oldID)
+	if s := syncOlder(t, laptop, f); s.EarlierKey != 1 {
+		t.Errorf("laptop: %+v", s)
+	}
+	if s := syncOlder(t, desktop, f); !s.Nothing() {
+		t.Errorf("desktop after the write-over: %+v, want nothing to do", s)
+	}
+}
+
+// A count of this computer's one below the cap, taken, stops only that
+// entry: the next change can't be counted, and others still sync.
+func TestSync_CountAtTheCap(t *testing.T) {
+	t.Parallel()
+	laptop, desktop, f := twoComputers(t)
+	gh := laptop.put("github", "pw-1")
+	settle(t, f, laptop, desktop)
+	uid := liveUID(t, laptop, gh)
+	rec, _, err := laptop.store.SyncRecord(uid, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := desktop.store.SyncComputerID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.Versions = rec.Versions.Join(syncfolder.Versions{id: syncfolder.MaxCount - 1})
+	keyID, err := laptop.store.SyncKeyID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := syncfolder.NewHeader(uid, keyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := syncfolder.Seal(laptop.store.SyncSealer(), h, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.Dir(), "entries", uid+".sesh"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	desktop.sync(f)
+	desktop.put("github", "desk-2")
+	desktop.put("gitlab", "desk-3")
+	s, err := Sync(desktop.store, f, "desktop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Problems) != 1 || !strings.Contains(s.Problems[0], "too high") {
+		t.Errorf("desktop: %+v, want one problem, the count", s)
+	}
+	laptop.sync(f)
+	if got := laptop.secret(vault.Key{Kind: vault.KindPassword, Service: "gitlab", Username: "alice"}); got != "desk-3" {
+		t.Errorf("laptop: gitlab %q, want the desktop's", got)
 	}
 }

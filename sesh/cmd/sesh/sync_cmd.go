@@ -1036,7 +1036,7 @@ func syncWaitingIn(store *database.Store, f *syncfolder.Folder) (*syncWaiting, e
 // earlierKeySaid says n entries had a file sealed with an earlier master
 // password's key, not the one agreed: not taken.
 func earlierKeySaid(n int) string {
-	return fmt.Sprintf("%s a file sealed with an earlier master password's key, not the one agreed: not taken, as anyone who knew that password could have written it, and written over. A computer of yours that changed one before taking the new password sends the change again once it does", nouns(n, "entry had", "entries had"))
+	return fmt.Sprintf("%s a file sealed with an earlier master password's key, not the one agreed: not taken, as anyone who knew that password could have written it, and written over, or removed if this computer never had the entry. A computer of yours that changed one before taking the new password sends the change again once it does", nouns(n, "entry had", "entries had"))
 }
 
 // otherKeySaid says n files are sealed with another master password's key.

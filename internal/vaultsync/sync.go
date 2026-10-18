@@ -382,7 +382,7 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 			r.rec.Wipe()
 		}
 	}()
-	var copies []string
+	var copies, earlierFiles []string
 	for i := range files {
 		f := &files[i]
 		if !ownFile(f) {
@@ -398,6 +398,7 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 		if y.stale(f) {
 			earlier = true
 			earlierOwn = earlierOwn || ownFile(f)
+			earlierFiles = append(earlierFiles, f.Path)
 			continue
 		}
 		b, err := y.folder.Read(f)
@@ -447,18 +448,18 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 	changedHere := it.Changed() || (it.Agreed != nil && !agreedHere && len(fresh) == 0) || ownStale
 
 	if len(fresh) == 0 {
+		// Never had here, and only under an earlier key: removed, as nothing
+		// here could write over it. A computer that wrote it before taking
+		// the change sends it again once it does.
+		if it.Agreed == nil && it.Place == database.SyncGone && len(same) == 0 {
+			return y.removeCopies(earlierFiles)
+		}
 		// The entry's own file under an earlier key: written over with what
 		// was agreed, as it was agreed (no change of this computer's
 		// counted), so a computer that changed it before taking the
 		// password change still has the newer change, and sends it.
 		if earlierOwn && !it.Changed() && base != nil {
-			local, rev, err := y.store.SyncRecord(uid, y.computer)
-			if err != nil {
-				return err
-			}
-			defer local.Wipe()
-			local.Versions = base.Versions
-			if err := y.write(uid, rev, local, false, false); err != nil {
+			if err := y.write(uid, it.Rev, base, false, false); err != nil {
 				return err
 			}
 			return y.removeCopies(copies)

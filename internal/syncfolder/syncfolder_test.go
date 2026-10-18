@@ -163,7 +163,7 @@ func TestOpenRefuses(t *testing.T) {
 	}
 	moved := append(slices.Clone(other[:headerLen]), b[headerLen:]...)
 	high := record()
-	high.Versions = Versions{"aaaaaaaaaaaaaaaa": MaxCount + 1}
+	high.Versions = Versions{"aaaaaaaaaaaaaaaa": MaxCount}
 	tooHigh, err := Seal(s, header(t, uid1), high)
 	if err != nil {
 		t.Fatal(err)
