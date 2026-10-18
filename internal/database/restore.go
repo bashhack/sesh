@@ -407,7 +407,7 @@ func replacedForSync(path string) error {
 		}
 		// A new sync ID, its count afresh; the folder it syncs with kept.
 		// What was typed under the old one is the backup's, counted by it.
-		for _, q := range []string{`UPDATE sync_info SET computer_id = lower(hex(randomblob(8))), changes = 0, prev_key_id = ''`, `DELETE FROM sync_typed`} {
+		for _, q := range []string{`UPDATE sync_info SET computer_id = lower(hex(randomblob(8))), changes = 0, prev_key_id = ''`, `DELETE FROM sync_typed`, `DELETE FROM sync_typed_check`} {
 			if _, err := tx.Exec(q); err != nil {
 				_ = tx.Rollback() //nolint:errcheck // already failing
 				return err

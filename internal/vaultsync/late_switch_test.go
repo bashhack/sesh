@@ -856,3 +856,50 @@ func TestSync_TypedGoneWithTheVaults(t *testing.T) {
 		}
 	}
 }
+
+// A typed secret goes from what's kept as typed once the vault no longer
+// has it, with no sync after: deleted for good, the trash emptied, or
+// replaced with history.keep 0.
+func TestSync_TypedGoneWithoutASync(t *testing.T) {
+	t.Parallel()
+	for _, how := range []string{"purge", "empty the trash", "replace"} {
+		laptop, desktop, f := twoComputers(t)
+		desktop.store.SetHistoryKeep(0)
+		gh := laptop.put("github", "pw-1")
+		settle(t, f, laptop, desktop)
+		uid := liveUID(t, desktop, gh)
+		if _, err := desktop.store.Edit(gh, database.EntryEdit{Secret: []byte("desk-2"), Details: &vault.DetailsChange{SetNotes: true, Notes: []byte("typed")}}); err != nil {
+			t.Fatal(err)
+		}
+		desktop.sync(f)
+		var err error
+		switch how {
+		case "purge":
+			err = desktop.store.PurgeMany([]vault.Key{gh})
+		case "empty the trash":
+			// Two commands: the first's checks run as it closes.
+			if err = desktop.store.Delete(gh); err == nil {
+				if err = desktop.store.SyncTypedChecks(); err == nil {
+					_, err = desktop.store.EmptyTrash()
+				}
+			}
+		case "replace":
+			desktop.put("github", "desk-3")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := desktop.store.SyncTypedChecks(); err != nil {
+			t.Fatal(err)
+		}
+		typed, err := desktop.store.SyncTyped(uid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ty := range typed {
+			if string(ty.Post.Secret) == "desk-2" {
+				t.Errorf("%s: desk-2 still kept as typed", how)
+			}
+		}
+	}
+}

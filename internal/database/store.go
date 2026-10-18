@@ -183,10 +183,21 @@ func (s *Store) Fingerprint() ([sha256.Size]byte, error) {
 // Close releases the database connection and clears any cached key
 // material held by the key source.
 func (s *Store) Close() error {
+	// What was typed and kept for syncing, checked against what the vault
+	// still has, before the key goes.
+	s.typedChecksWarn()
 	if closer, ok := s.oracle.(interface{ Close() }); ok && !s.borrowed {
 		closer.Close()
 	}
 	return s.db.Close()
+}
+
+// typedChecksWarn runs SyncTypedChecks after what it follows has been
+// written: one that fails is said, not returned, as that stands.
+func (s *Store) typedChecksWarn() {
+	if err := s.SyncTypedChecks(); err != nil {
+		fmt.Fprintf(os.Stderr, "check what's kept of what was typed, for syncing: %v\n", err)
+	}
 }
 
 // audit writes an append-only event to the audit_log table.

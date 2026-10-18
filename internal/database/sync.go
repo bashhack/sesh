@@ -573,14 +573,20 @@ func (s *Store) SyncTypedKept(uid, computer string) error {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_typed WHERE uid = ?`, uid).Scan(&n); err != nil || n == 0 {
 		return err
 	}
-	return s.typedKept(uid, computer)
+	if err := s.typedKept(uid, computer); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`DELETE FROM sync_typed_check WHERE uid = ?`, uid)
+	return err
 }
 
-// typedKeptAll is SyncTypedKept for every entry with something typed
-// kept: after earlier secrets are removed (forgotten, or trimmed to
-// history.keep), so none stays kept here.
-func (s *Store) typedKeptAll() error {
-	rows, err := s.db.Query(`SELECT DISTINCT uid FROM sync_typed`)
+// SyncTypedChecks checks, for each entry whose secret, notes, fields or
+// earlier secrets changed or went since (sync_typed_check), that what's
+// kept of what was typed in it the vault still has (SyncTypedKept): so
+// nothing forgotten, trimmed or deleted for good stays there, synced or
+// not.
+func (s *Store) SyncTypedChecks() error {
+	rows, err := s.db.Query(`SELECT uid FROM sync_typed_check`)
 	if err != nil {
 		return err
 	}
@@ -600,6 +606,9 @@ func (s *Store) typedKeptAll() error {
 		if err := s.typedKept(uid, ""); err != nil {
 			return err
 		}
+		if _, err := s.db.Exec(`DELETE FROM sync_typed_check WHERE uid = ?`, uid); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -611,7 +620,8 @@ func (s *Store) typedKept(uid, computer string) error {
 	}
 	local, _, err := s.SyncRecord(uid, computer)
 	if err != nil {
-		return err
+		// Not here at all: it has nothing typed in it.
+		local = &syncfolder.Record{Purged: time.Now()}
 	}
 	defer local.Wipe()
 	changed := false
@@ -1113,7 +1123,7 @@ func JoinVault(dbPath string, m UnlockMaterial, folderID string, links []syncfol
 			_ = tx.Rollback() //nolint:errcheck // already failing
 		}
 	}()
-	stmts := []string{`DELETE FROM sync_state`, `DELETE FROM sync_info`, `DELETE FROM sync_typed`, `DELETE FROM sync_restored`, `DELETE FROM history_forgotten`}
+	stmts := []string{`DELETE FROM sync_state`, `DELETE FROM sync_info`, `DELETE FROM sync_typed`, `DELETE FROM sync_typed_check`, `DELETE FROM sync_restored`, `DELETE FROM history_forgotten`}
 	if UnlockID(have.Verify) != UnlockID(m.Verify) {
 		stmts = append(stmts, `DELETE FROM recovery`)
 		if _, err := tx.Exec(`UPDATE vault_key SET salt = ?, kdf = ?, kdf_params = ?, verify = ?, created_at = ? WHERE id = 1`,
