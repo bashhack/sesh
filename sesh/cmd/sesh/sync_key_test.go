@@ -981,3 +981,71 @@ func TestSync_EarlierKeyChangeSaid(t *testing.T) {
 		t.Errorf("the desktop has a = %q (%s)", got, ddb)
 	}
 }
+
+// A change forged under the old key, taken by a computer before it takes
+// the new password, is set back once it does, and sesh sync says so.
+func TestSync_LateSwitchSaid(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	infoPath := filepath.Join(folder, syncfolder.InfoFile)
+	oldInfo, err := os.ReadFile(infoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ldb := syncComputer(t, laptop, "laptop")
+	old, err := database.ReadUnlockMaterial(ldb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changePassword(t, "old-password-1", "new-password-2")
+	newInfo, err := os.ReadFile(infoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Someone with the old password puts back the folder's old file and
+	// the entry's, with a change of theirs; the desktop takes it.
+	if err := os.WriteFile(infoPath, oldInfo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := scanFolder(t, folder)[0]
+	forged := &syncfolder.Record{Kind: "password", Service: "a", Secret: []byte("evil"), Versions: syncfolder.Versions{"0123456789abcdef": 1}, Changed: time.Now().Add(time.Hour), Updated: time.Now().Add(time.Hour)}
+	h, err := syncfolder.NewHeader(file.UIDString(), database.UnlockID(old.Verify))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := syncfolder.Seal(database.KeySealer(database.DeriveKey([]byte("old-password-1"), old.Salt, old.Params)), h, forged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file.Path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	if out, err := runSyncOut(t, "", false); err != nil || getEntry(t, "password/a") != "evil" {
+		t.Fatalf("desktop on the old password: %q, %v; want the forgery taken", out, err)
+	}
+
+	// The folder's file back; the laptop writes the entry over.
+	if err := os.WriteFile(infoPath, newInfo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, laptop, "laptop")
+	t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
+	if out, err := runSyncOut(t, "", false); err != nil {
+		t.Fatalf("laptop: %q, %v", out, err)
+	}
+
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	stubTerminalPrompt(t, interactivePrompt(t, "new-password-2"))
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "1 entry (password/a) made the same as on your other computers, under the new master password") {
+		t.Errorf("desktop takes the change: %q, %v", out, err)
+	}
+	t.Setenv("SESH_MASTER_PASSWORD", "new-password-2")
+	if got := getEntry(t, "password/a"); got != "secret-1" {
+		t.Errorf("desktop: a = %q, want secret-1", got)
+	}
+}

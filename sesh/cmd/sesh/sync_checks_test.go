@@ -341,6 +341,38 @@ func TestWriteSyncSummary_Warnings(t *testing.T) {
 	}
 }
 
+// Entries set back or held back on taking a password change are said by
+// name, by sesh sync and by an automatic sync.
+func TestSyncSummary_SetAndHeldBack(t *testing.T) {
+	s := &vaultsync.Summary{SetBack: []string{"password/a"}, HeldBack: []string{"password/b", "password/c"}}
+	app := agentTestApp()
+	if err := writeSyncSummary(app, "~/sync", s); err != nil {
+		t.Fatal(err)
+	}
+	auto := strings.Join(autoSummary(s), "\n")
+	for _, want := range []string{
+		"1 entry (password/a) made the same as on your other computers, under the new master password: what this computer had besides was taken under the old one",
+		"2 entries (password/b, password/c): your other computers have no version under the new master password, and it wasn't made here: not sent until one of them has",
+	} {
+		if out := app.Stdout.(*bytes.Buffer).String(); !strings.Contains(out, want) {
+			t.Errorf("sesh sync: %q, want %q", out, want)
+		}
+		if !strings.Contains(auto, want) {
+			t.Errorf("automatic sync: %q, want %q", auto, want)
+		}
+	}
+}
+
+// Entries held back are said even when the sync had nothing else to do.
+func TestWriteSyncSummary_HeldBackOnly(t *testing.T) {
+	app := agentTestApp()
+	err := writeSyncSummary(app, "~/sync", &vaultsync.Summary{HeldBack: []string{"password/b"}})
+	out := app.Stdout.(*bytes.Buffer).String()
+	if err != nil || !strings.Contains(out, "nothing to do") || !strings.Contains(out, "⚠️  1 entry (password/b): your other computers have no version") {
+		t.Errorf("held back only: %q, %v", out, err)
+	}
+}
+
 // A syncing vault with weaker key settings is told to change its master
 // password, which the other computers take; sesh passwd and recover say
 // so, and a vault that left says what joining again does.

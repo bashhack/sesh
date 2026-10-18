@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -270,6 +271,14 @@ func earliest(a, b time.Time) time.Time {
 		return a
 	}
 	return b
+}
+
+// Clone is a copy of r sharing nothing with it.
+func (r *Record) Clone() *Record {
+	c := copyOf(r).Record
+	c.Purged = r.Purged
+	c.Versions = maps.Clone(r.Versions)
+	return c
 }
 
 // copyOf is r, its secrets copied, as a merge's result: brought back from

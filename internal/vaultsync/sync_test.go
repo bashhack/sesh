@@ -769,9 +769,12 @@ func TestSync_PasswordChangeTakesUnseen(t *testing.T) {
 	cs[1].sync(f)
 	laptop, rec := changeKey(t, cs[0], "correct horse battery", "the new password 1")
 	third := takeKey(t, cs[2], laptop, rec, "the new password 1")
-	if s := syncOlder(t, third, f); len(s.Merged) != 0 || s.Resealed == 0 || s.EarlierKey != 1 || len(s.Received) != 0 {
-		t.Fatalf("the third computer takes the new password: %+v; want files sealed again, the desktop's not taken", s)
+	// Until the laptop seals github again, the third holds it back: it
+	// agreed it under the old key.
+	if s := syncOlder(t, third, f); len(s.Merged) != 0 || len(s.HeldBack) != 1 || s.EarlierKey != 1 || len(s.Received) != 0 {
+		t.Fatalf("the third computer takes the new password: %+v; want github held back, the desktop's not taken", s)
 	}
+	syncOlder(t, laptop, f)
 	desktop := takeKey(t, cs[1], laptop, rec, "the new password 1")
 	syncOlder(t, desktop, f)
 	settle(t, f, laptop, desktop, third)

@@ -100,10 +100,11 @@ func inspect(path, what string) (_ BackupSummary, err error) {
 // keeps: sync_state (what this computer last agreed with the sync folder
 // doesn't go back with the entries, so the restored ones, their revs
 // raised, are changes to sync; restoredForSync readies it), sync_info (this
-// computer's sync ID is its own), history_forgotten (what was forgotten
-// on purpose stays forgotten), key_links (the master password changes
-// stay known, so files sealed with an old key still open) and sync_warned
-// (the warnings this computer's syncs said).
+// computer's sync ID is its own), sync_typed (so is what was typed here),
+// history_forgotten (what was forgotten on purpose stays forgotten),
+// key_links (the master password changes stay known, so files sealed with
+// an old key still open) and sync_warned (the warnings this computer's
+// syncs said).
 var restoredTables = []string{"vault_info", "vault_key", "recovery", "entries", "entry_tags", "trash", "history"}
 
 // RestoreInPlace replaces the sound vault at dbPath with the backup at
@@ -405,9 +406,12 @@ func replacedForSync(path string) error {
 			return err
 		}
 		// A new sync ID, its count afresh; the folder it syncs with kept.
-		if _, err := tx.Exec(`UPDATE sync_info SET computer_id = lower(hex(randomblob(8))), changes = 0, prev_key_id = ''`); err != nil {
-			_ = tx.Rollback() //nolint:errcheck // already failing
-			return err
+		// What was typed under the old one is the backup's, counted by it.
+		for _, q := range []string{`UPDATE sync_info SET computer_id = lower(hex(randomblob(8))), changes = 0, prev_key_id = ''`, `DELETE FROM sync_typed`} {
+			if _, err := tx.Exec(q); err != nil {
+				_ = tx.Rollback() //nolint:errcheck // already failing
+				return err
+			}
 		}
 		return tx.Commit()
 	}()
