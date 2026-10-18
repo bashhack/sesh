@@ -880,7 +880,7 @@ func uiSync(cfg *config.Config, v tui.Vault, how tui.SyncHow) (said []string, ra
 	if how == tui.SyncPush && !vaultHasChanges(cfg, u.store) {
 		return nil, false
 	}
-	lines := autoSyncLines(cfg, u.store)
+	lines, _ := autoSyncRun(cfg, u.store)
 	// Written on the app's own connection, which the data version doesn't
 	// count: the next Check compares the entries.
 	u.mu.Lock()
