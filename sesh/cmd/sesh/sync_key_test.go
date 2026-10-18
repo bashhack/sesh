@@ -974,7 +974,7 @@ func TestSync_EarlierKeyChangeSaid(t *testing.T) {
 	if err := os.WriteFile(file.Path, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "sealed with an earlier master password's key hold changes, not taken") {
+	if out, err := runSyncOut(t, "", false); err != nil || !strings.Contains(out, "1 entry had a file sealed with an earlier master password's key, not the one agreed: not taken") {
 		t.Errorf("desktop sync: %q, %v", out, err)
 	}
 	if got := getEntry(t, "password/a"); got != "secret-1" {
