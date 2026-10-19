@@ -148,10 +148,13 @@ func migrateV1(tx *sql.Tx) error {
 		// another computer's version has seen it, so a master password
 		// change taken here makes it again on the folder's version.
 		`CREATE TABLE sync_typed (
-			uid  TEXT NOT NULL,
-			n    INTEGER NOT NULL,
-			data BLOB NOT NULL,
-			salt BLOB NOT NULL,
+			uid    TEXT NOT NULL,
+			n      INTEGER NOT NULL,
+			data   BLOB NOT NULL,
+			salt   BLOB NOT NULL,
+			-- The key record it's sealed with: a restore under another
+			-- drops it, as nothing could open it.
+			key_id TEXT NOT NULL DEFAULT '',
 			PRIMARY KEY (uid, n)
 		)`,
 		// At most one row: this computer's sync ID, made when it first
@@ -248,6 +251,24 @@ func migrateV1(tx *sql.Tx) error {
 		`CREATE TRIGGER entry_history_removed AFTER DELETE ON history
 			WHEN OLD.trash_id IS NULL AND NOT EXISTS (SELECT 1 FROM quiet_writes)
 			BEGIN UPDATE entries SET rev = rev + 1, changed_at = strftime('%Y-%m-%d %H:%M:%f', 'now') WHERE kind = OLD.kind AND service = OLD.service AND username = OLD.username; END`,
+		// Entries with something typed kept for syncing (sync_typed) whose
+		// secret, notes, fields or earlier secrets changed or went, to see
+		// whether the vault still has what was typed (SyncTypedChecks).
+		`CREATE TABLE sync_typed_check (uid TEXT PRIMARY KEY)`,
+		`CREATE TRIGGER typed_entry_changed AFTER UPDATE ON entries
+			WHEN EXISTS (SELECT 1 FROM sync_typed WHERE uid = OLD.uid)
+			BEGIN INSERT INTO sync_typed_check (uid) SELECT OLD.uid WHERE NOT EXISTS (SELECT 1 FROM sync_typed_check WHERE uid = OLD.uid); END`,
+		`CREATE TRIGGER typed_entry_gone AFTER DELETE ON entries
+			WHEN EXISTS (SELECT 1 FROM sync_typed WHERE uid = OLD.uid)
+			BEGIN INSERT INTO sync_typed_check (uid) SELECT OLD.uid WHERE NOT EXISTS (SELECT 1 FROM sync_typed_check WHERE uid = OLD.uid); END`,
+		`CREATE TRIGGER typed_trash_gone AFTER DELETE ON trash
+			WHEN EXISTS (SELECT 1 FROM sync_typed WHERE uid = OLD.uid)
+			BEGIN INSERT INTO sync_typed_check (uid) SELECT OLD.uid WHERE NOT EXISTS (SELECT 1 FROM sync_typed_check WHERE uid = OLD.uid); END`,
+		`CREATE TRIGGER typed_history_gone AFTER DELETE ON history
+			WHEN EXISTS (SELECT 1 FROM sync_typed)
+			BEGIN INSERT INTO sync_typed_check (uid)
+				SELECT uid FROM entries WHERE OLD.trash_id IS NULL AND kind = OLD.kind AND service = OLD.service AND username = OLD.username AND uid IN (SELECT uid FROM sync_typed) AND uid NOT IN (SELECT uid FROM sync_typed_check)
+				UNION SELECT uid FROM trash WHERE id = OLD.trash_id AND uid IN (SELECT uid FROM sync_typed) AND uid NOT IN (SELECT uid FROM sync_typed_check); END`,
 		// One row: what turns the master password into the vault's key.
 		// None of it is secret; see vault_key.go.
 		`CREATE TABLE vault_key (

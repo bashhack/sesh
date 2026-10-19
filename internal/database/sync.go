@@ -487,17 +487,6 @@ func (s *Store) SyncNextChange(seen uint64) (uint64, error) {
 	return n, err
 }
 
-// SyncChanges is the highest count this computer has given a change
-// (SyncNextChange).
-func (s *Store) SyncChanges() (uint64, error) {
-	var n uint64
-	err := s.db.QueryRow(`SELECT changes FROM sync_info WHERE id = 1`).Scan(&n)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
-	}
-	return n, err
-}
-
 // typedAAD binds a sealed Typed to its entry.
 func typedAAD(uid string) []byte { return []byte("sesh sync typed " + uid) }
 
@@ -534,12 +523,16 @@ func (s *Store) putTyped(uid string, all []*syncfolder.Typed) error {
 		}
 		rows = append(rows, sealed{data, salt, o.N})
 	}
+	keyID, err := s.SyncKeyID()
+	if err != nil {
+		return err
+	}
 	return s.inTx(func(tx *sql.Tx) error {
 		if _, err := tx.Exec(`DELETE FROM sync_typed WHERE uid = ?`, uid); err != nil {
 			return err
 		}
 		for _, r := range rows {
-			if _, err := tx.Exec(`INSERT INTO sync_typed (uid, n, data, salt) VALUES (?, ?, ?, ?)`, uid, r.n, r.data, r.salt); err != nil {
+			if _, err := tx.Exec(`INSERT INTO sync_typed (uid, n, data, salt, key_id) VALUES (?, ?, ?, ?, ?)`, uid, r.n, r.data, r.salt, keyID); err != nil {
 				return err
 			}
 		}
@@ -550,68 +543,123 @@ func (s *Store) putTyped(uid string, all []*syncfolder.Typed) error {
 // SyncTyped is what was typed in the entry uid and kept (SyncAddTyped),
 // in the order it was sent. One that doesn't open is left out.
 func (s *Store) SyncTyped(uid string) ([]*syncfolder.Typed, error) {
+	all, _, err := s.typedRows(uid)
+	return all, err
+}
+
+// typedRows is SyncTyped, and whether every one opened.
+func (s *Store) typedRows(uid string) ([]*syncfolder.Typed, bool, error) {
 	rows, err := s.db.Query(`SELECT data, salt FROM sync_typed WHERE uid = ? ORDER BY n`, uid)
 	if err != nil {
-		return nil, fmt.Errorf("read what was typed in %s: %w", uid, err)
+		return nil, false, fmt.Errorf("read what was typed in %s: %w", uid, err)
 	}
 	defer rows.Close() //nolint:errcheck // read only
 	var out []*syncfolder.Typed
+	opened := true
 	for rows.Next() {
 		var data, salt []byte
 		if err := rows.Scan(&data, &salt); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		b, err := s.oracle.DecryptEntry(data, salt, typedAAD(uid))
 		if err != nil {
+			opened = false
 			continue
 		}
 		var t syncfolder.Typed
 		err = json.Unmarshal(b, &t)
 		secure.SecureZeroBytes(b)
 		if err != nil {
+			opened = false
 			continue
 		}
 		out = append(out, &t)
 	}
-	return out, rows.Err()
+	return out, opened, rows.Err()
 }
 
-// SyncTypedKeep drops, of what was typed in the entry uid and kept, any
-// secret the entry no longer has (secret is its secret now): replaced
-// since, here or elsewhere, so nothing would make it again.
-func (s *Store) SyncTypedKeep(uid string, secret []byte) error {
+// SyncTypedKept drops, of what was typed in the entry uid and kept, any
+// secret, notes or field the entry no longer has (syncfolder.Typed.Kept),
+// computer naming this computer.
+func (s *Store) SyncTypedKept(uid, computer string) error {
 	var n int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sync_typed WHERE uid = ?`, uid).Scan(&n); err != nil || n == 0 {
 		return err
 	}
-	all, err := s.SyncTyped(uid)
+	checked, err := s.typedKept(uid, computer)
+	if err != nil || !checked {
+		return err
+	}
+	_, err = s.db.Exec(`DELETE FROM sync_typed_check WHERE uid = ?`, uid)
+	return err
+}
+
+// SyncTypedChecks checks, for each entry whose secret, notes, fields or
+// earlier secrets changed or went since (sync_typed_check), that what's
+// kept of what was typed in it the vault still has (SyncTypedKept): so
+// nothing forgotten, trimmed or deleted for good stays there, synced or
+// not.
+func (s *Store) SyncTypedChecks() error {
+	rows, err := s.db.Query(`SELECT uid FROM sync_typed_check`)
 	if err != nil {
 		return err
 	}
+	var uids []string
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			_ = rows.Close() //nolint:errcheck // already failing
+			return err
+		}
+		uids = append(uids, uid)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	var errs []error
+	for _, uid := range uids {
+		checked, err := s.typedKept(uid, "")
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", uid, err))
+		}
+		// Not checked: left marked, for the next write with the key.
+		if err != nil || !checked {
+			continue
+		}
+		if _, err := s.db.Exec(`DELETE FROM sync_typed_check WHERE uid = ?`, uid); err != nil {
+			return err
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// typedKept is SyncTypedKept, saying whether it checked all that's kept:
+// what doesn't open (the vault's key not in hand), or an entry that
+// doesn't read, is left for a later check.
+func (s *Store) typedKept(uid, computer string) (bool, error) {
+	all, opened, err := s.typedRows(uid)
+	if err != nil || !opened {
+		return false, err
+	}
+	local, _, err := s.SyncRecord(uid, computer)
+	if err != nil {
+		return false, err
+	}
+	defer local.Wipe()
 	changed := false
 	var kept []*syncfolder.Typed
 	for _, t := range all {
-		if t.Has("secret") && !bytes.Equal(t.Post.Secret, secret) {
-			t.DropSecret()
-			changed = true
-		}
-		if !t.Empty() {
-			kept = append(kept, t)
-		}
+		// One left with nothing typed stays, holding no value: what it
+		// typed over, and whether the entry was made here, pass on when
+		// the next push folds it in (syncfolder.Fold).
+		k, dropped := t.Kept(local)
+		changed = changed || dropped
+		kept = append(kept, k)
 	}
 	if !changed {
-		return nil
+		return true, nil
 	}
-	return s.putTyped(uid, kept)
-}
-
-// SyncTypedSeen drops what was typed in the entry uid and sent with a
-// count up to n: another computer's version has seen it.
-func (s *Store) SyncTypedSeen(uid string, n uint64) error {
-	return s.inTx(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`DELETE FROM sync_typed WHERE uid = ? AND n <= ?`, uid, n)
-		return err
-	})
+	return true, s.putTyped(uid, kept)
 }
 
 // SyncLeftDone records that the entry uid, agreed under a key left
@@ -1098,7 +1146,7 @@ func JoinVault(dbPath string, m UnlockMaterial, folderID string, links []syncfol
 			_ = tx.Rollback() //nolint:errcheck // already failing
 		}
 	}()
-	stmts := []string{`DELETE FROM sync_state`, `DELETE FROM sync_info`, `DELETE FROM sync_typed`, `DELETE FROM sync_restored`, `DELETE FROM history_forgotten`}
+	stmts := []string{`DELETE FROM sync_state`, `DELETE FROM sync_info`, `DELETE FROM sync_typed`, `DELETE FROM sync_typed_check`, `DELETE FROM sync_restored`, `DELETE FROM history_forgotten`}
 	if UnlockID(have.Verify) != UnlockID(m.Verify) {
 		stmts = append(stmts, `DELETE FROM recovery`)
 		if _, err := tx.Exec(`UPDATE vault_key SET salt = ?, kdf = ?, kdf_params = ?, verify = ?, created_at = ? WHERE id = 1`,

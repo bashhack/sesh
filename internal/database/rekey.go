@@ -79,7 +79,13 @@ func (s *Store) inTx(f func(tx *sql.Tx) error) error {
 		_ = tx.Rollback() //nolint:errcheck // already failing
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// What the write did to entries with something typed kept for syncing,
+	// checked now, while the key the write needed is in hand.
+	s.typedChecksWarn()
+	return nil
 }
 
 // RecoveryOutcome is what a password change did with the vault's recovery
@@ -192,7 +198,7 @@ func (s *Store) Rekey(newKey []byte, rec UnlockMaterial, rewrap func(r *Recovery
 			if _, err := s.resealBases(tx, newKey, res.NewID, bases); err != nil {
 				return err
 			}
-			if err := s.resealTyped(tx, newKey); err != nil {
+			if err := s.resealTyped(tx, newKey, res.NewID); err != nil {
 				return err
 			}
 			for _, table := range sealedTables {
@@ -464,9 +470,10 @@ func (k keySealer) DecryptEntry(data, salt, aad []byte) ([]byte, error) {
 }
 
 // resealTyped seals what was typed in each entry and kept for syncing
-// (sync_typed) again for newKey. One that doesn't open with the vault's
-// key (damaged) is dropped: nothing could read it.
-func (s *Store) resealTyped(tx *sql.Tx, newKey []byte) error {
+// (sync_typed) again for newKey, whose key record is newID. One that
+// doesn't open with the vault's key (damaged) is dropped: nothing could
+// read it.
+func (s *Store) resealTyped(tx *sql.Tx, newKey []byte, newID string) error {
 	type row struct {
 		uid        string
 		data, salt []byte
@@ -501,7 +508,7 @@ func (s *Store) resealTyped(tx *sql.Tx, newKey []byte) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE sync_typed SET data = ?, salt = ? WHERE uid = ? AND n = ?`, data, salt, r.uid, r.n); err != nil {
+		if _, err := tx.Exec(`UPDATE sync_typed SET data = ?, salt = ?, key_id = ? WHERE uid = ? AND n = ?`, data, salt, newID, r.uid, r.n); err != nil {
 			return err
 		}
 	}

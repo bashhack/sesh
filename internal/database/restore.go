@@ -385,7 +385,10 @@ func restoredForSync(tx *sql.Tx, schema, backup string) error {
 			return err
 		}
 	}
-	return nil
+	// What was typed, sealed with another key than the one restored:
+	// nothing could open it.
+	_, err = tx.Exec(`DELETE FROM `+schema+`sync_typed WHERE key_id != ?`, keyID) //nolint:gosec // schema is "main." or ""
+	return err
 }
 
 // replacedForSync readies the vault file at path, a backup's copy about to
@@ -407,7 +410,7 @@ func replacedForSync(path string) error {
 		}
 		// A new sync ID, its count afresh; the folder it syncs with kept.
 		// What was typed under the old one is the backup's, counted by it.
-		for _, q := range []string{`UPDATE sync_info SET computer_id = lower(hex(randomblob(8))), changes = 0, prev_key_id = ''`, `DELETE FROM sync_typed`} {
+		for _, q := range []string{`UPDATE sync_info SET computer_id = lower(hex(randomblob(8))), changes = 0, prev_key_id = ''`, `DELETE FROM sync_typed`, `DELETE FROM sync_typed_check`} {
 			if _, err := tx.Exec(q); err != nil {
 				_ = tx.Rollback() //nolint:errcheck // already failing
 				return err

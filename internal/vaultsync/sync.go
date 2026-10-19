@@ -116,8 +116,6 @@ type syncer struct {
 	keyID    string
 	id       string
 	computer string
-	// changes is the highest count this computer has given a change.
-	changes uint64
 }
 
 // Older gives a sealer for a key the vault had before a master password
@@ -175,9 +173,6 @@ func SyncWith(store *database.Store, folder syncfolder.Folder, computer string, 
 		return nil, err
 	}
 	if y.id, err = store.SyncComputerID(); err != nil {
-		return nil, err
-	}
-	if y.changes, err = store.SyncChanges(); err != nil {
 		return nil, err
 	}
 	// A folder whose permissions can't be changed (another user's, or a
@@ -551,14 +546,6 @@ func (y *syncer) entry(uid string, files []syncfolder.File) error {
 			merged = append(merged, theirs)
 		}
 	}
-	// Another computer's version that has seen what was typed here: that's
-	// no longer kept for a password change (one claiming more than this
-	// computer has counted isn't another's that saw it).
-	if n := theirs.Versions[y.id]; n > 0 && n <= y.changes {
-		if err := y.store.SyncTypedSeen(uid, n); err != nil {
-			return err
-		}
-	}
 	// What's here is merged in even when it hasn't changed: its earlier
 	// secrets are kept, whatever history.keep the other computer has.
 	local, rev, err := y.store.SyncRecord(uid, y.computer)
@@ -677,6 +664,10 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 			base.Wipe()
 		}
 	}
+	// What was typed, as far as the entry here still has it.
+	for i, t := range typed {
+		typed[i], _ = t.Kept(local)
+	}
 	name := y.name(uid)
 	var from *syncfolder.Record
 	switch {
@@ -696,6 +687,11 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 		if !r.Purged.IsZero() {
 			break
 		}
+		// What typed over a version, and nothing kept of it: nothing to
+		// make again.
+		if t.Empty() {
+			continue
+		}
 		if t.Has("purged") {
 			if slices.Contains(t.Contents, syncfolder.ContentHash(r)) {
 				r = &syncfolder.Record{Purged: t.Post.Purged, Changed: t.Post.Purged, Versions: r.Versions}
@@ -712,6 +708,13 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 		held = append(held, m)
 		m.Changed = latest(r.Changed, t.Post.Changed)
 		r = m.Record
+	}
+	// Made here, but what it holds now wasn't all typed here (its first
+	// secret since forgotten or trimmed, the one now taken from the
+	// folder): held back until it's typed again here.
+	if folder == nil && r.Purged.IsZero() && (r.Kind == "" || len(r.Secret) == 0) {
+		y.sum.HeldBack = append(y.sum.HeldBack, name)
+		return nil
 	}
 	// The forget marks are what's made here: any taken under the old key
 	// go, before the earlier secrets are written.
@@ -1043,8 +1046,7 @@ func (y *syncer) write(uid string, rev int64, rec *syncfolder.Record, apply, cou
 	if err != nil {
 		return err
 	}
-	// Kept before the version is made here, so what that replaces of it
-	// is dropped (SyncTypedKeep).
+	// Kept once it's sent: what a password change taken later makes again.
 	if typed != nil {
 		if err := y.store.SyncAddTyped(uid, typed); err != nil {
 			return err
@@ -1101,12 +1103,7 @@ func (y *syncer) apply(uid string, rev int64, rec *syncfolder.Record, hash syncf
 	if err := y.applyNamed(uid, rev, rec, hash); err != nil {
 		return err
 	}
-	// What was typed here and is no longer the secret: nothing makes it
-	// again, so it isn't kept.
-	if rec.Purged.IsZero() {
-		return y.store.SyncTypedKeep(uid, rec.Secret)
-	}
-	return nil
+	return y.store.SyncTypedKept(uid, y.computer)
 }
 
 // applyNamed is apply, settling a name another entry has here.

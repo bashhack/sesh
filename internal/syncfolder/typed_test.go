@@ -30,6 +30,17 @@ func TestDiff(t *testing.T) {
 	if d.Post.Secret != nil || d.Post.URL != "" || string(d.Post.Notes) != "typed notes" || d.Hash["notes"] != Forget([]byte("n")) {
 		t.Errorf("post %+v hash %v: want the notes typed only, the old notes hashed", d.Post, d.Hash)
 	}
+	if k, dropped := d.Kept(post); dropped || len(k.Keys) != len(d.Keys) {
+		t.Errorf("kept by the entry that has them: %q, dropped %v; want all", k.Keys, dropped)
+	}
+	beside := typedRecord()
+	beside.Notes, beside.Fields = []byte("laptop notes\n\n— from desktop —\ntyped notes"), []Field{{Name: "pin-desktop", Value: []byte("9999"), Secret: true}}
+	if k, _ := d.Kept(beside); !k.Has("notes") || !k.Has("field:pin") {
+		t.Errorf("kept by an entry with them beside others: %q, want the notes and field", k.Keys)
+	}
+	if k, dropped := d.Kept(typedRecord()); !dropped || k.Has("notes") || k.Has("field:pin") {
+		t.Errorf("kept by an entry that no longer has them: %q, want neither", k.Keys)
+	}
 	if !slices.Equal(d.Post.Tags, []string{"home"}) || d.Created {
 		t.Errorf("tags %q, created %v", d.Post.Tags, d.Created)
 	}
@@ -116,6 +127,21 @@ func TestFold(t *testing.T) {
 	all = Fold(all, t3)
 	if len(all) != 2 || all[0].N != 2 {
 		t.Errorf("after forgetting pw-2: %+v, want the first, which typed it, dropped", all)
+	}
+
+	// A forgotten secret goes from a row that keeps something else typed.
+	e, g := typedRecord(), typedRecord()
+	g.Secret, g.Tags = []byte("pw-5"), []string{"work", "extra"}
+	te := Diff(e, g)
+	// pw-6 taken from another computer, then pw-5 forgotten here.
+	taken := typedRecord()
+	taken.Secret, taken.Tags = []byte("pw-6"), g.Tags
+	h := typedRecord()
+	h.Secret, h.Tags = []byte("pw-6"), g.Tags
+	h.Forgotten = []Forgotten{{Hash: Forget([]byte("pw-5")), At: time.Unix(600, 0)}}
+	kept := Fold([]*Typed{te}, Diff(taken, h))
+	if kept[0].Has("secret") || kept[0].Post.Secret != nil || !kept[0].Has("tag:extra") {
+		t.Errorf("after forgetting pw-5: %+v, want it gone, the tag kept", kept[0])
 	}
 
 	gone := Diff(d, &Record{Purged: time.Unix(500, 0)})
