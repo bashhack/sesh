@@ -36,6 +36,7 @@ While sesh overlaps a bit with tools like aws-vault, it goes further by offering
 - **Recovery Key** — Optional: a code you write down when the vault is created; if you forget the master password, `sesh recover` uses it to set a new one. No server involved, and sesh keeps no copy
 - **Touch ID Unlock (macOS)** — Unlock the agent with your fingerprint instead of the master password, through a Secure Enclave key (nothing in the Keychain); the password always works as a fallback
 - **Config File** — Optional `~/.config/sesh/config.toml`; `sesh config` shows every setting and where it came from, and `sesh config set` changes one
+- **Sync Between Computers** — Each computer keeps its own vault; a sync folder that any tool carries (iCloud Drive, Dropbox, Syncthing, a USB stick) holds one encrypted file per entry. Commands and `sesh ui` sync on their own, an entry changed on two computers is merged field by field, the older change's password kept in its history, and a master password change or the recovery key reaches every computer ([Syncing between computers](docs/USAGE_AND_CONFIGURATION.md#syncing-between-computers-sesh-sync))
 - **Automatic Backups** — A copy of the encrypted vault each day, the newest 7 kept (`sesh backup`, `sesh restore`)
 - **Encrypted Export** — Entries protected by a password of their own, to move them to another machine (`sesh export`; `sesh import --from sesh` reads it)
 - **Import** — From Bitwarden, KeePass, Chrome, Firefox, Apple Passwords, Google Authenticator and LastPass Authenticator (`sesh import`)
@@ -203,6 +204,16 @@ For scripts, `SESH_MASTER_PASSWORD` gives the master password without a prompt;
 it exposes the password to the process environment, so keep it to CI. See
 [Using the sesh agent](docs/USAGE_AND_CONFIGURATION.md#using-the-sesh-agent) for
 how the agent starts, locks, and stops.
+
+### Syncing between computers
+
+```bash
+sesh sync init ~/Dropbox/sesh-sync   # make a sync folder from this vault
+sesh sync join ~/Dropbox/sesh-sync   # on each other computer, with an empty vault
+sesh sync                            # sync now (commands also sync on their own)
+sesh sync status                     # where it syncs, and what's waiting
+sesh sync leave                      # stop syncing this vault
+```
 
 ## Documentation
 
