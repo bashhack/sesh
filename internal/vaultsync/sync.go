@@ -687,6 +687,11 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 		if !r.Purged.IsZero() {
 			break
 		}
+		// What typed over a version, and nothing kept of it: nothing to
+		// make again.
+		if t.Empty() {
+			continue
+		}
 		if t.Has("purged") {
 			if slices.Contains(t.Contents, syncfolder.ContentHash(r)) {
 				r = &syncfolder.Record{Purged: t.Post.Purged, Changed: t.Post.Purged, Versions: r.Versions}
@@ -703,6 +708,13 @@ func (y *syncer) left(uid string, it *database.SyncItem, files []syncfolder.File
 		held = append(held, m)
 		m.Changed = latest(r.Changed, t.Post.Changed)
 		r = m.Record
+	}
+	// Made here, but what it holds now wasn't all typed here (its first
+	// secret since forgotten or trimmed, the one now taken from the
+	// folder): held back until it's typed again here.
+	if folder == nil && r.Purged.IsZero() && (r.Kind == "" || len(r.Secret) == 0) {
+		y.sum.HeldBack = append(y.sum.HeldBack, name)
+		return nil
 	}
 	// The forget marks are what's made here: any taken under the old key
 	// go, before the earlier secrets are written.

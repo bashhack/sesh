@@ -1066,7 +1066,7 @@ func setBackSaid(n int, names string) string {
 // heldBackSaid says n entries, named, are held back on taking a master
 // password change (vaultsync.Summary.HeldBack).
 func heldBackSaid(n int, names string) string {
-	return fmt.Sprintf("%s (%s): your other computers have no version under the new master password, and it wasn't made here: not sent until one of them has, or until it's deleted for good here", nouns(n, "entry", "entries"), names)
+	return fmt.Sprintf("%s (%s): your other computers have no version under the new master password, and it wasn't made here: not sent until one of them has, until its secret is typed again here, or until it's deleted for good here", nouns(n, "entry", "entries"), names)
 }
 
 // earlierKeySaid says n entries had a file sealed with an earlier master

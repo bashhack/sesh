@@ -897,3 +897,41 @@ func TestSync_TypedGoneWithoutASync(t *testing.T) {
 		}
 	}
 }
+
+// An entry made on a computer behind the change, whose first secret it no
+// longer has (history.keep 0) and changed on another behind it, is held
+// back, not stuck, until its secret is typed again there.
+func TestSync_LateSwitchMadeHereSecretGone(t *testing.T) {
+	t.Parallel()
+	cs, _, f := computers(t, 3)
+	cs[0].put("github", "pw-1")
+	settleN(t, f, 4, cs...)
+	laptop, rec := changeKey(t, cs[0], "correct horse battery", "the new password 1")
+	syncOlder(t, laptop, f)
+	cs[1].store.SetHistoryKeep(0)
+	bank := cs[1].put("bank", "b-1")
+	cs[1].sync(f)
+	to := vault.Key{Kind: vault.KindPassword, Service: "bank2", Username: "alice"}
+	if _, err := cs[1].store.Edit(bank, database.EntryEdit{To: &to}); err != nil {
+		t.Fatal(err)
+	}
+	cs[1].sync(f)
+	cs[2].sync(f)
+	cs[2].put("bank2", "c-2")
+	cs[2].sync(f)
+	cs[1].sync(f)
+	desktop := takeKey(t, cs[1], laptop, rec, "the new password 1")
+	if s := syncOlder(t, desktop, f); !slices.Equal(s.HeldBack, []string{to.String()}) || len(s.Problems) != 0 {
+		t.Errorf("desktop taking the change: %+v, want bank2 held back, no problem", s)
+	}
+	desktop.put("bank2", "desk-3")
+	if s := syncOlder(t, desktop, f); len(s.HeldBack) != 0 {
+		t.Errorf("desktop, the secret typed again: %+v, want nothing held back", s)
+	}
+	third := takeKey(t, cs[2], laptop, rec, "the new password 1")
+	syncOlder(t, third, f)
+	settleOlder(t, f, laptop, desktop, third)
+	if !slices.Contains(names(laptop), "bank2") {
+		t.Errorf("laptop: %q, want bank2", names(laptop))
+	}
+}
