@@ -15,14 +15,15 @@ import (
 )
 
 // uiAWSSignIn is sesh aws --profile for the app, the profile the one whose
-// MFA entry k is: what it reads of the vault, now, and the sign-in, which
-// talks to AWS with the vault let go, so the app isn't held up by it; that
-// gives the shell to open once the app has ended. A profile with an IAM
-// user's access keys gets its session in the sign-in, so AWS refusing is
-// said in the app; one that signs in with aws login or SSO signs in, when
-// it must, once the app has ended, since the AWS CLI's sign-in is a
-// terminal program's.
-func uiAWSSignIn(app *App, v tui.Vault, k vault.Key) (func() (func(release func()) error, error), error) {
+// MFA entry is, or would be, k, in three steps, so the app isn't held up:
+// how the profile signs in, which may ask the AWS CLI, with the vault let
+// go; what the sign-in needs of the vault; and the sign-in, talking to
+// AWS with the vault let go again, which gives the shell to open once the
+// app has ended. A profile with an IAM user's access keys gets its
+// session in the sign-in, so AWS refusing is said in the app; one that
+// signs in with aws login or SSO signs in, when it must, once the app has
+// ended, since the AWS CLI's sign-in is a terminal program's.
+func uiAWSSignIn(app *App, k vault.Key) (tui.AWSVaultStep, error) {
 	if os.Getenv("SESH_ACTIVE") == "1" {
 		return nil, errors.New("this app is running in a shell sesh opened: exit that shell, then sign in from a new one")
 	}
@@ -30,40 +31,59 @@ func uiAWSSignIn(app *App, v tui.Vault, k vault.Key) (func() (func(release func(
 	if k == vault.AWSKey("") {
 		profile = "" // the profile named default, as sesh aws signs in with
 	}
-	switch kind := awsProfileKind(profile); kind {
-	case "":
-	case aws.KindRole:
-		return nil, fmt.Errorf("%s assumes a role (role_arn): the AWS CLI asks for its MFA code itself; Enter on its entry copies the code", awsProfileName(profile))
-	default:
-		shell := func(release func()) error { return runAWSLogin(app, profile, kind, false, release) }
-		return func() (func(func()) error, error) { return shell, nil }, nil
-	}
-	u, ok := v.(*uiVault)
-	if !ok {
-		return nil, errors.New("the vault can't be read for the sign-in")
-	}
-	if err := newAWSProvider(u.store).ForProfile(profile).ValidateRequest(); err != nil {
-		return nil, uiLocked(err)
-	}
-	e, err := u.store.Lookup(k)
-	if err != nil {
-		return nil, uiLocked(err)
-	}
-	secret, err := u.store.Get(k)
-	if err != nil {
-		return nil, uiLocked(err)
-	}
-	held := &heldMFA{e: e, secret: secret}
-	return func() (func(func()) error, error) {
-		defer held.wipe()
-		p := newAWSProvider(held).ForProfile(profile)
-		creds, err := p.GetCredentials()
-		if err != nil {
-			return nil, err
+	kind := awsProfileKind(profile)
+	return func(v tui.Vault) (tui.AWSSignInStep, error) {
+		u, ok := v.(*uiVault)
+		if !ok {
+			return nil, errors.New("the vault can't be read for the sign-in")
 		}
-		signed := &signedIn{Provider: p, creds: creds}
-		return func(release func()) error { return app.LaunchSubshell(signed, release) }, nil
+		// aws login or SSO: nothing of the vault is needed now.
+		if kind != "" && kind != aws.KindRole {
+			shell := func(release func()) error { return runAWSLogin(app, profile, kind, false, release) }
+			return func() (tui.AWSShell, error) { return shell, nil }, nil
+		}
+		e, err := u.store.Lookup(k)
+		has := err == nil
+		if err != nil && !errors.Is(err, vault.ErrNotFound) {
+			return nil, uiLocked(err)
+		}
+		if kind == aws.KindRole {
+			if has {
+				return nil, fmt.Errorf("%s assumes a role (role_arn): the AWS CLI asks for its MFA code itself; Enter on its entry copies the code", awsProfileName(profile))
+			}
+			return nil, fmt.Errorf("%s assumes a role (role_arn): the AWS CLI asks for its MFA code itself; set up AWS MFA… stores its key, and Enter on its entry then copies the code", awsProfileName(profile))
+		}
+		if !has {
+			return nil, fmt.Errorf("sesh has no MFA key for %s, which signs in with an IAM user's access keys: AWS gives a session for it only with an MFA code; set up AWS MFA… stores the key", awsProfileName(profile))
+		}
+		if err := newAWSProvider(u.store).ForProfile(profile).ValidateRequest(); err != nil {
+			return nil, uiLocked(err)
+		}
+		secret, err := u.store.Get(k)
+		if err != nil {
+			return nil, uiLocked(err)
+		}
+		held := &heldMFA{e: e, secret: secret}
+		return func() (tui.AWSShell, error) {
+			defer held.wipe()
+			p := newAWSProvider(held).ForProfile(profile)
+			creds, err := p.GetCredentials()
+			if err != nil {
+				return nil, err
+			}
+			signed := &signedIn{Provider: p, creds: creds}
+			return func(release func()) error { return app.LaunchSubshell(signed, release) }, nil
+		}, nil
 	}, nil
+}
+
+// envAWSProfile is the profile sesh aws signs in with when it isn't given
+// one: AWS_PROFILE, or AWS_DEFAULT_PROFILE.
+func envAWSProfile() string {
+	if p := os.Getenv("AWS_PROFILE"); p != "" {
+		return p
+	}
+	return os.Getenv("AWS_DEFAULT_PROFILE")
 }
 
 // heldMFA is the one entry the AWS sign-in reads, an MFA entry, held so

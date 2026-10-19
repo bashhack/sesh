@@ -109,7 +109,9 @@ func offerMFACode(app *App, profile string) (stop func()) {
 		return stop
 	}
 	if secret == nil {
-		return stop // no MFA key for the profile: the browser asks as usual
+		// No MFA key for the profile: the browser asks as usual.
+		fmt.Fprintf(app.Stderr, "🔑 sesh has no MFA key for %s (sesh aws setup%s stores one), so no code is copied: if the sign-in asks for an MFA code, it's your MFA device's\n", awsProfileName(profile), awsProfileFlag(profile)) //nolint:errcheck // a status line
+		return stop
 	}
 	clock := app.TimeNow
 	if clock == nil {

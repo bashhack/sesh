@@ -33,19 +33,22 @@ const (
 
 // input is one of a form's inputs.
 type input struct {
-	shown    func() bool    // nil: always shown
-	load     func() tea.Cmd // reads the secret an empty input stands for, to show it
-	then     func() tea.Cmd // what to do once load has read it, instead of showing it
-	named    func() string  // its label, when that depends on other inputs
-	label    string
-	hint     string
-	prompt   string // a secret input's line while nothing is typed
-	choices  []string
-	secret   []byte
-	loaded   []byte // the secret load read, to tell whether it was changed
-	rows     []fieldRow
-	of       vault.Key // the entry whose fields these are; zero for one being added
-	offers   []string  // what a line of text can be completed to
+	shown   func() bool    // nil: always shown
+	load    func() tea.Cmd // reads the secret an empty input stands for, to show it
+	then    func() tea.Cmd // what to do once load has read it, instead of showing it
+	named   func() string  // its label, when that depends on other inputs
+	label   string
+	hint    string
+	prompt  string // a secret input's line while nothing is typed
+	choices []string
+	secret  []byte
+	loaded  []byte // the secret load read, to tell whether it was changed
+	rows    []fieldRow
+	of      vault.Key // the entry whose fields these are; zero for one being added
+	offers  []string  // what a line of text can be completed to
+	// start is the text it was filled in with: while it's still that,
+	// every offer is listed, so one filled in for you hides none.
+	start    string
 	text     textinput.Model
 	area     textarea.Model
 	kind     inputKind
@@ -89,7 +92,8 @@ func (in *input) piece() (before, piece string) {
 }
 
 // matches is the offers with what's typed anywhere in them, whatever its
-// case, those starting with it first; all of them when nothing is typed.
+// case, those starting with it first; all of them when nothing is typed,
+// or only what it was filled in with.
 // One already typed in full, or already in the list, isn't offered.
 func (in *input) matches() []string {
 	if in.kind != inputText {
@@ -101,6 +105,9 @@ func (in *input) matches() []string {
 		have[strings.TrimSpace(item)] = true
 	}
 	lower := strings.ToLower(piece)
+	if !in.many && in.start != "" && piece == in.start {
+		lower = ""
+	}
 	var starts, within []string
 	for _, o := range in.offers {
 		switch at := strings.Index(strings.ToLower(o), lower); {
