@@ -197,6 +197,7 @@ func (m *Model) openSync(st SyncState) tea.Cmd {
 type syncSetMsg struct {
 	err  error
 	said string
+	lost bool // not run: the vault was closed first
 }
 
 // startSync asks for the folder to sync through, then makes it the
@@ -220,10 +221,18 @@ func (m *Model) startSync() tea.Cmd {
 		m.say("Making the sync folder…")
 		// No sync of the app's own meanwhile: the first is this one.
 		m.syncing = true
-		return "", m.read(func(v Vault, _ func() bool) tea.Msg {
+		read := m.read(func(v Vault, _ func() bool) tea.Msg {
 			said, err := start(v, dir)
 			return syncSetMsg{said: said, err: err}
 		})
+		// A vault closed before it ran (locked) still ends it, so the
+		// app's syncs go on after.
+		return "", func() tea.Msg {
+			if msg := read(); msg != nil {
+				return msg
+			}
+			return syncSetMsg{lost: true}
+		}
 	})
 }
 
@@ -231,6 +240,9 @@ func (m *Model) startSync() tea.Cmd {
 // settings again as they are now.
 func (m *Model) gotSyncSet(msg syncSetMsg) tea.Cmd {
 	m.syncing = false
+	if msg.lost {
+		return nil
+	}
 	if msg.err != nil {
 		m.sayBad(msg.err.Error())
 	} else {

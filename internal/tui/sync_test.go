@@ -381,3 +381,25 @@ func TestSync_StartAndLeave(t *testing.T) {
 		t.Errorf("left %q:\n%s", left, a.screen())
 	}
 }
+
+// Locked before starting to sync could run, the app's own syncs go on
+// after: the start still ends.
+func TestSync_StartLockedFirst(t *testing.T) {
+	a := newApp(t, newFake(), Options{
+		Settings:  func() ([]Setting, error) { return nil, nil },
+		SyncState: func() (SyncState, error) { return SyncState{Said: "off"}, nil },
+		StartSync: func(Vault, string) (string, error) { return "Made it.", nil },
+		Sync:      func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
+		Syncing:   func() bool { return true },
+	})
+	a.press("ctrl+g", ",", "enter", "ctrl+u", "~/sync")
+	_, start := a.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !a.syncing {
+		t.Fatal("not syncing while starting")
+	}
+	a.run(a.lock("locked"))
+	a.run(start)
+	if a.syncing {
+		t.Error("still syncing after a start the lock kept from running")
+	}
+}
