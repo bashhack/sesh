@@ -11,17 +11,23 @@ package sitematch
 
 import (
 	"net/url"
+	"regexp"
 	"strings"
 )
 
+// hasScheme is a URL that starts with its scheme, as kept URLs with no
+// scheme don't (one may still have :// later, in a query).
+var hasScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+
 // Matches says whether kept, a URL kept with an entry, is the site at
-// scheme and host (with its port, when it has one), case aside.
+// scheme and host (with its port, when it has one), case and spaces
+// around kept aside.
 func Matches(kept, scheme, host string) bool {
-	if kept == "" || scheme == "" || host == "" {
+	raw := strings.TrimSpace(kept)
+	if raw == "" || scheme == "" || host == "" {
 		return false
 	}
-	raw := kept
-	if !strings.Contains(raw, "://") {
+	if !hasScheme.MatchString(raw) {
 		raw = "https://" + raw
 	}
 	u, err := url.Parse(raw)

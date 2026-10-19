@@ -57,6 +57,24 @@ func TestBrowserHost_Messages(t *testing.T) {
 			t.Errorf("%s: %v, want %q", name, err, tc.wantSub)
 		}
 	}
+	// Run as the browser runs it: through sesh's command word, hidden.
+	h := newTestHarness()
+	h.app.Stdin = bytes.NewReader(framed(`{"type":"status"}`))
+	h.app.StdinIsTerminal = func() bool { return false }
+	args := []string{"sesh", "browser-host", "chrome-extension://abc/"}
+	if err := checkCommandWord(args); err != nil {
+		t.Fatalf("the command word: %v", err)
+	}
+	run(h.app, args)
+	if body, err := readBrowserMessage(bytes.NewReader(h.stdout.Bytes())); err != nil || !strings.Contains(string(body), `"code":"no_vault"`) {
+		t.Errorf("run: %q, %v\n%s", body, err, h.stderr.String())
+	}
+	// At a terminal, it says what it's for, and waits for nothing.
+	app := agentTestApp()
+	app.StdinIsTerminal = func() bool { return true }
+	if err := runBrowserHost(app, nil); err == nil || !strings.Contains(err.Error(), "started by the browser") {
+		t.Errorf("at a terminal: %v", err)
+	}
 	for body, code := range map[string]string{
 		`not json`:          "bad_request",
 		`{"type":"launch"}`: "unknown_request",
@@ -68,6 +86,15 @@ func TestBrowserHost_Messages(t *testing.T) {
 		if err != nil || reply.Status != "error" || reply.Code != code || reply.Message == "" {
 			t.Errorf("%s: %+v, %v; want error %s", body, reply, err, code)
 		}
+	}
+	// No vault: where sesh looked is said, as the browser's sesh may not
+	// have the shell's SESH_DB_PATH.
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply, err := askHost(t, framed(`{"type":"status"}`)); err != nil || !strings.Contains(reply.Message, cfg.DBPath.Value) {
+		t.Errorf("no vault doesn't say where: %q, %v", reply.Message, err)
 	}
 }
 
@@ -122,7 +149,7 @@ func TestBrowserHost_Match(t *testing.T) {
 		t.Fatalf("match: %+v, %v", reply, err)
 	}
 	var got []string
-	for _, e := range reply.Entries {
+	for _, e := range *reply.Entries {
 		s := e.ID
 		if e.TOTP {
 			s += " +code"
@@ -134,12 +161,20 @@ func TestBrowserHost_Match(t *testing.T) {
 		t.Errorf("matched %q, want %q", got, want)
 	}
 	reply, err = askHost(t, framed(`{"type":"match","url":"http://github.com/"}`))
-	if err != nil || len(reply.Entries) != 1 || reply.Entries[0].ID != "password/plain/alice" {
+	if err != nil || reply.Entries == nil || len(*reply.Entries) != 1 || (*reply.Entries)[0].ID != "password/plain/alice" {
 		t.Errorf("an http page: %+v, %v", reply, err)
 	}
-	reply, err = askHost(t, framed(`{"type":"match","url":"https://nothing.example/"}`))
-	if err != nil || reply.Status != "ok" || len(reply.Entries) != 0 {
-		t.Errorf("no logins: %+v, %v", reply, err)
+	// None: an empty list, said.
+	app := agentTestApp()
+	app.Stdin = bytes.NewReader(framed(`{"type":"match","url":"https://nothing.example/"}`))
+	app.StdinIsTerminal = func() bool { return false }
+	if err := runBrowserHost(app, nil); err != nil {
+		t.Fatal(err)
+	}
+	body, err := readBrowserMessage(app.Stdout.(*bytes.Buffer))
+	var none map[string]any
+	if err != nil || json.Unmarshal(body, &none) != nil || none["status"] != "ok" || none["entries"] == nil || len(none["entries"].([]any)) != 0 {
+		t.Errorf("no logins: %s, %v", body, err)
 	}
 }
 

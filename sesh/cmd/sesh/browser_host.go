@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/bashhack/sesh/internal/agent"
 	"github.com/bashhack/sesh/internal/database"
 	"github.com/bashhack/sesh/internal/sitematch"
+	"github.com/bashhack/sesh/internal/touchid"
 	"github.com/bashhack/sesh/internal/vault"
 )
 
@@ -43,12 +45,12 @@ type browserRequest struct {
 // browserReply is a reply: Status is "ok", or "error" with Code and
 // Message, in sesh's usual words, which the popup shows as they are.
 type browserReply struct {
-	Status  string         `json:"status"`
-	Code    string         `json:"code,omitempty"`
-	Message string         `json:"message,omitempty"`
-	Locked  *bool          `json:"locked,omitempty"`
-	TouchID *bool          `json:"touch_id,omitempty"`
-	Entries []browserEntry `json:"entries,omitempty"`
+	Locked  *bool           `json:"locked,omitempty"`
+	TouchID *bool           `json:"touch_id,omitempty"`
+	Entries *[]browserEntry `json:"entries,omitempty"` // a match's, [] for none
+	Status  string          `json:"status"`
+	Code    string          `json:"code,omitempty"`
+	Message string          `json:"message,omitempty"`
 }
 
 // browserEntry is a login offered for a site: no secret, only what names
@@ -69,6 +71,9 @@ func (e *browserError) Error() string { return e.message }
 // reply, and ends. What's wrong with a request is said in the reply; only
 // a broken message stream is an error, which the browser reports.
 func runBrowserHost(app *App, _ []string) error {
+	if app.StdinIsTerminal != nil && app.StdinIsTerminal() {
+		return errors.New("sesh browser-host is started by the browser, for sesh's extension: it isn't run at a terminal")
+	}
 	body, err := readBrowserMessage(app.Stdin)
 	if err != nil {
 		return err
@@ -105,7 +110,10 @@ func answerBrowser(req *browserRequest, reply *browserReply) error {
 		if err != nil {
 			return err
 		}
-		reply.Entries = entries
+		if entries == nil {
+			entries = []browserEntry{}
+		}
+		reply.Entries = &entries
 	default:
 		return &browserError{"unknown_request", fmt.Sprintf("sesh doesn't know the request %q: the extension may be newer than sesh", req.Type)}
 	}
@@ -156,7 +164,7 @@ func browserStatus() (locked, touchID bool, err error) {
 	}
 	mat, err := database.ReadUnlockMaterial(cfg.DBPath.Value)
 	if errors.Is(err, database.ErrNoVault) {
-		return false, false, &browserError{"no_vault", "there's no sesh vault yet: sesh add creates it with your first entry"}
+		return false, false, noVault(cfg.DBPath.Value)
 	}
 	if err != nil {
 		return false, false, err
@@ -168,7 +176,21 @@ func browserStatus() (locked, touchID bool, err error) {
 			locked = false
 		}
 	}
-	return locked, touchIDPlatform && touchIDSetUp(cfg.DBPath.Value) && !overSSH(), nil
+	return locked, touchIDPlatform && touchIDUsable(cfg.DBPath.Value, mat.Verify) && !overSSH(), nil
+}
+
+// touchIDUsable says whether Touch ID can unlock the vault at dbPath,
+// whose key record verify is: it's on for this vault, and the fingerprints
+// haven't changed since, which leaves its Secure Enclave key unusable.
+func touchIDUsable(dbPath string, verify []byte) bool {
+	f, err := touchid.ReadFile(filepath.Dir(dbPath))
+	return err == nil && f.UnlockID == agent.UnlockID(verify) && !fingerprintsChanged(f)
+}
+
+// noVault says there's no vault where sesh looks: named, since the
+// browser starts sesh without the variables a shell may set (SESH_DB_PATH).
+func noVault(dbPath string) error {
+	return &browserError{"no_vault", "there's no sesh vault at " + dbPath + " (where sesh looks when the browser starts it): sesh add makes one with your first entry"}
 }
 
 // browserMatch is the logins for the site at page, a tab's URL: password
@@ -186,7 +208,7 @@ func browserMatch(page string) ([]browserEntry, error) {
 		return nil, err
 	}
 	if vaultMissing(cfg.DBPath.Value) {
-		return nil, &browserError{"no_vault", "there's no sesh vault yet: sesh add creates it with your first entry"}
+		return nil, noVault(cfg.DBPath.Value)
 	}
 	store, err := database.Open(cfg.DBPath.Value, nil)
 	if err != nil {

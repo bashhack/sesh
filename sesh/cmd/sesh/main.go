@@ -172,13 +172,16 @@ func checkCommandWord(args []string) error {
 	return fmt.Errorf("sesh has no command %q; the commands are listed by: sesh --help", word)
 }
 
-// subcommand returns the subcommand args name (one of subcommands) and the
-// arguments after it, or "" and nil. Only the first argument counts, so an
+// subcommand returns the subcommand args name (one of subcommands, or
+// hiddenCommands) and the arguments after it, or "" and nil. Only the first argument counts, so an
 // entry that happens to be named "agent" (sesh copy agent) is never
 // mistaken for one.
 func subcommand(args []string) (name string, rest []string) {
 	if len(args) < 2 {
 		return "", nil
+	}
+	if hiddenCommands[args[1]] {
+		return args[1], args[2:]
 	}
 	for _, c := range subcommands {
 		if c.value == args[1] {
