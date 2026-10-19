@@ -252,7 +252,7 @@ func uiOptions(app *App, cfg *config.Config, v tui.Vault) tui.Options {
 		TakeKeyChange: func(current, next []byte) (tui.Changed, error) {
 			return uiTakeKeyChange(settingsNow(cfg), current, next)
 		},
-		KeyChangeNote: func() string { return uiKeyChangeNote(settingsNow(cfg)) },
+		KeyChangeNote: func(v tui.Vault) string { return uiKeyChangeNote(settingsNow(cfg), v) },
 		RenewBackups:  func() (string, error) { return uiRenewBackups(dbPath) },
 		Backups:       func() (tui.Backups, error) { return uiBackups(dbPath) },
 		BackUp:        func(to string, replace bool) (string, error) { return uiBackUp(dbPath, to, replace) },
@@ -1012,22 +1012,32 @@ func keyChangeToTake(cfg *config.Config) bool {
 }
 
 // uiKeyChangeNote is what to know before typing the new master password
-// to take a change: that the folder's record may be an older one put back.
-func uiKeyChangeNote(cfg *config.Config) string {
-	store, err := database.Open(cfg.DBPath.Value, nil)
-	if err != nil {
+// to take a change into v, the app's vault: that of two made at once, the
+// other's is kept, and that the folder's record may be an older one put
+// back, or isn't one this vault's key leads to.
+func uiKeyChangeNote(cfg *config.Config, v tui.Vault) string {
+	u, ok := v.(*uiVault)
+	if !ok {
 		return ""
 	}
-	defer closeAuditStore(store)
-	t, err := prepareKeyTake(cfg, syncfolder.New(cfg.SyncDir.Value), store)
-	if err != nil {
-		return ""
+	if answered, _ := statusProbing.answers(cfg.SyncDir.Value, autoSyncBudget); !answered {
+		return "The sync folder isn't answering: taking the change needs it."
 	}
-	defer t.close()
-	if t.notLatest {
-		return errNotLatest.Error()
+	var said []string
+	if _, err := syncFolderOf(cfg); errors.Is(err, errKeyFork) {
+		said = append(said, "It was changed here and on another computer at once, and the other's is kept on every computer. If no computer of yours made it, someone with access to the folder may have, with an old master password: sesh passwd puts this computer's back.")
 	}
-	return ""
+	t, err := prepareKeyTake(cfg, syncfolder.New(cfg.SyncDir.Value), u.store)
+	switch {
+	case err != nil:
+		said = append(said, "⚠️ "+err.Error())
+	case t.notLatest:
+		said = append(said, "⚠️ "+errNotLatest.Error())
+	}
+	if t != nil {
+		t.close()
+	}
+	return strings.Join(said, " ")
 }
 
 // uiTakeKeyChange takes the master password change made on another

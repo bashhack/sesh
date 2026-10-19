@@ -631,6 +631,7 @@ func takeKeyChangeWith(app *App, cfg *config.Config, f syncfolder.Folder, store 
 	if err != nil {
 		return nil, err
 	}
+	unlockAgentWith(cfg.DBPath.Value, bytes.Clone(pw))
 	if _, err := fmt.Fprint(app.Stdout, strings.Join(r.said, "\n")+"\n"); err != nil {
 		return r.key, err
 	}
@@ -716,7 +717,8 @@ type keyTaken struct {
 
 // take switches the vault open in store, whose key is ownKey, to the new
 // master password pw (the folder's record's: checked by the caller),
-// keeping the recovery key when keepRecovery, and syncs.
+// keeping the recovery key when keepRecovery, and syncs. The agent is the
+// caller's to unlock with pw.
 func (t *keyTake) take(cfg *config.Config, f syncfolder.Folder, store *database.Store, ownKey, pw []byte, keepRecovery bool) (*keyTaken, error) {
 	key := database.DeriveKey(pw, t.folderRec.Salt, t.folderRec.Params)
 	defer secure.SecureZeroBytes(key)
@@ -758,7 +760,6 @@ func (t *keyTake) take(cfg *config.Config, f syncfolder.Folder, store *database.
 		return nil, err
 	}
 	r.key = bytes.Clone(key)
-	unlockAgentWith(cfg.DBPath.Value, bytes.Clone(pw))
 	r.said = append(r.said, "This vault now opens with the new master password, as the other computers' do.")
 	if t.pending != "" {
 		r.said = append(r.said, "This computer's own master password change wasn't kept: the one made on another computer was in the sync folder first.")

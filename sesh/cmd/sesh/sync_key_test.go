@@ -1152,3 +1152,81 @@ func TestUITakeKeyChange(t *testing.T) {
 		t.Error("a change to take still, after taking it")
 	}
 }
+
+// Before the new master password is typed, the app says what sesh sync
+// does: a record the folder's own files outrun may be an older one put
+// back. It's read with the app's own open vault.
+func TestUIKeyChangeNote(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "sync")
+	laptop, desktop := syncedPair(t, dir, folder, "password/a")
+	syncComputer(t, laptop, "laptop")
+	changePassword(t, "old-password-1", "new-password-2")
+	middle, err := os.ReadFile(filepath.Join(folder, "sesh-sync.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	changePassword(t, "new-password-2", "new-password-3")
+	if err := os.WriteFile(filepath.Join(folder, "sesh-sync.json"), middle, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	syncComputer(t, desktop, "desktop")
+	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
+	cfg, err := settings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openSQLiteStoreWith(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAuditStore(store)
+	if note := uiKeyChangeNote(cfg, newUIVault(store)); !strings.Contains(note, "older record put back") {
+		t.Errorf("note %q, want the record said to be maybe an older one", note)
+	}
+}
+
+// Of two master password changes made at once, the app offers and takes
+// the other computer's only when it's the one kept; the app's own kept,
+// there's nothing to take.
+func TestUITakeKeyChangeFork(t *testing.T) {
+	orig := forkKept
+	t.Cleanup(func() { forkKept = orig })
+	for _, folderKept := range []bool{true, false} {
+		forkKept = func(string, string) bool { return folderKept }
+		dir := t.TempDir()
+		folder := filepath.Join(dir, "sync")
+		laptop, desktop := syncedPair(t, dir, folder, "password/a")
+		old, err := os.ReadFile(filepath.Join(folder, "sesh-sync.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		syncComputer(t, laptop, "laptop")
+		changePassword(t, "old-password-1", "laptop-password-2")
+		if err := os.WriteFile(filepath.Join(folder, "sesh-sync.json"), old, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		syncComputer(t, desktop, "desktop")
+		changePassword(t, "old-password-1", "desktop-password-3")
+		syncComputer(t, laptop, "laptop")
+		t.Setenv("SESH_MASTER_PASSWORD", "laptop-password-2")
+		cfg, err := settings()
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, err := uiSyncState(cfg)
+		if err != nil || st.KeyChanged != folderKept {
+			t.Fatalf("folder's kept %v: the row %+v, %v", folderKept, st, err)
+		}
+		ch, err := uiTakeKeyChange(cfg, []byte("laptop-password-2"), []byte("desktop-password-3"))
+		switch {
+		case folderKept && (err != nil || ch.Vault == nil):
+			t.Errorf("the folder's kept: %+v, %v; want it taken", ch, err)
+		case !folderKept && (err == nil || !strings.Contains(err.Error(), "no master password change")):
+			t.Errorf("this one's kept: %v; want nothing to take", err)
+		}
+		if ch.Vault != nil {
+			ch.Vault.Close() //nolint:errcheck,gosec // test cleanup
+		}
+	}
+}

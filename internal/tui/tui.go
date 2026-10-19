@@ -393,7 +393,7 @@ type Options struct {
 	// vault again with next. KeyChangeNote is what to know before typing
 	// the new one ("" for nothing). nil: not offered.
 	TakeKeyChange func(current, next []byte) (Changed, error)
-	KeyChangeNote func() string
+	KeyChangeNote func(v Vault) string
 	// RenewBackups deletes the vault's backups and makes a fresh one, and
 	// says so.
 	RenewBackups func() (string, error)
@@ -975,6 +975,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case syncSetMsg:
 		return m.gotSyncSet(msg)
+	case keyNoteMsg:
+		if msg.epoch != m.epoch || m.v == nil {
+			return nil
+		}
+		return m.keyChangeForm(msg.note)
 	case checkedMsg:
 		if msg.didSync {
 			m.syncing = false

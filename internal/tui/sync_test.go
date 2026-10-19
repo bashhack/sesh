@@ -423,7 +423,7 @@ func TestSync_TakeKeyChange(t *testing.T) {
 			}
 			return Changed{Vault: fresh, Said: []string{"This vault now opens with the new master password, as the other computers' do."}}, nil
 		},
-		KeyChangeNote: func() string { return "the folder's record may be an older one put back" },
+		KeyChangeNote: func(Vault) string { return "⚠️ the folder's record may be an older one put back" },
 		Sync:          func(Vault, SyncHow) ([]string, []string, bool) { return nil, nil, true },
 		Syncing:       func() bool { return true },
 	})

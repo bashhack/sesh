@@ -92,7 +92,7 @@ func TestAutoSync_PasswordChangedElsewhere(t *testing.T) {
 	ddb := syncComputer(t, desktop, "desktop")
 	t.Setenv("SESH_MASTER_PASSWORD", "old-password-1")
 	out, synced := runAuto(t, "get", "password/a")
-	if !strings.Contains(out, "secret-1") || !strings.Contains(synced, "nothing syncs until sesh sync takes it") {
+	if !strings.Contains(out, "secret-1") || !strings.Contains(synced, "nothing syncs until it's taken: sesh sync, or the Sync row") {
 		t.Errorf("desktop get: %q, synced %q", out, synced)
 	}
 	// Said once a day: not by the next command, again a day later.
@@ -244,7 +244,7 @@ func TestAutoSync_Fork(t *testing.T) {
 		switch {
 		case ours && (!strings.Contains(synced, "this computer's is kept") || folderKeyID(t, folder) != vaultKeyID(t, ldb)):
 			t.Errorf("ours kept: synced %q", synced)
-		case !ours && (!strings.Contains(synced, "the other's is kept; nothing syncs until sesh sync takes it") || folderKeyID(t, folder) == vaultKeyID(t, ldb)):
+		case !ours && (!strings.Contains(synced, "the other's is kept; nothing syncs until it's taken") || folderKeyID(t, folder) == vaultKeyID(t, ldb)):
 			t.Errorf("theirs kept: synced %q", synced)
 		}
 	}

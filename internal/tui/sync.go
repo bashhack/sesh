@@ -201,15 +201,32 @@ func (m *Model) openSync(st SyncState) tea.Cmd {
 // takeKeyChange asks for this vault's master password and the new one,
 // the other computers', and takes the change, as sesh sync does.
 func (m *Model) takeKeyChange() tea.Cmd {
+	note, epoch := m.opts.KeyChangeNote, m.epoch
+	if note == nil {
+		return m.keyChangeForm("")
+	}
+	m.say("Reading the master password change…")
+	return m.read(func(v Vault, _ func() bool) tea.Msg {
+		return keyNoteMsg{note: note(v), epoch: epoch}
+	})
+}
+
+// keyNoteMsg is what to know before taking a master password change.
+type keyNoteMsg struct {
+	note  string
+	epoch int
+}
+
+// keyChangeForm is the form taking the master password change, saying
+// note too.
+func (m *Model) keyChangeForm(note string) tea.Cmd {
 	current := &input{kind: inputSecret, label: "this vault's master password", prompt: "the one it opens with now"}
 	next := &input{kind: inputSecret, label: "the new master password", prompt: "the one your other computers use"}
 	f := &form{title: "Take the new master password", inputs: []*input{current, next}, row: -1, enterDone: "take it",
 		working: "Taking the new master password…", quitting: "Quitting once the new master password is taken…"}
 	f.note = "The master password was changed on another computer. This vault is re-encrypted under the new one, and syncs again."
-	if m.opts.KeyChangeNote != nil {
-		if n := m.opts.KeyChangeNote(); n != "" {
-			f.note += " ⚠️ " + n
-		}
+	if note != "" {
+		f.note += " " + note
 	}
 	f.submit = func() tea.Cmd {
 		switch {
