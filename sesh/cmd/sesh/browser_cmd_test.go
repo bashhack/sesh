@@ -219,15 +219,15 @@ func TestBrowser_Homes(t *testing.T) {
 		}},
 		{"linux", "", []string{
 			"/h/.config/google-chrome/NativeMessagingHosts if /h/.config/google-chrome",
-			"/h/.mozilla/native-messaging-hosts if /h/.mozilla, /h/.config/mozilla",
+			"/h/.mozilla/native-messaging-hosts if /h/.mozilla, /h/.config/mozilla, /h/snap/firefox/common/.mozilla",
 		}},
 		{"linux", "/x", []string{
 			"/h/.config/google-chrome/NativeMessagingHosts if /h/.config/google-chrome",
-			"/h/.mozilla/native-messaging-hosts if /h/.mozilla, /x/mozilla",
+			"/h/.mozilla/native-messaging-hosts if /h/.mozilla, /x/mozilla, /h/snap/firefox/common/.mozilla",
 		}},
 		{"linux", "relative", []string{
 			"/h/.config/google-chrome/NativeMessagingHosts if /h/.config/google-chrome",
-			"/h/.mozilla/native-messaging-hosts if /h/.mozilla, /h/.config/mozilla",
+			"/h/.mozilla/native-messaging-hosts if /h/.mozilla, /h/.config/mozilla, /h/snap/firefox/common/.mozilla",
 		}},
 	} {
 		var got []string
@@ -268,5 +268,22 @@ func TestBrowser_InstallFindsAFreshFirefox(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(firefox.hosts, browserHostName+".json")); err != nil {
 		t.Errorf("Firefox's file: %v\n%s", err, app.Stdout)
+	}
+}
+
+// Only go run's (and go test's) temporary builds are refused, not a sesh
+// installed in a folder whose name starts with go-build.
+func TestBrowser_GoRunBuild(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/var/folders/xy/T/go-build1234567/b001/exe/sesh": true,
+		"/tmp/go-build99/b001/exe/sesh":                   true,
+		"/opt/homebrew/bin/sesh":                          false,
+		"/Users/a/go-builds/bin/sesh":                     false,
+		"/opt/go-build-tools/sesh":                        false,
+		"/home/a/go/bin/sesh":                             false,
+	} {
+		if got := goRunBuild(path); got != want {
+			t.Errorf("goRunBuild(%q) = %v, want %v", path, got, want)
+		}
 	}
 }

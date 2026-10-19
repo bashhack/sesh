@@ -50,7 +50,7 @@ type browserHome struct {
 // MDN, native manifests). Firefox reads hosts' files from its old
 // folders, which it no longer makes itself: it's known to be there by its
 // profiles' folder (on Linux, ~/.mozilla, or $XDG_CONFIG_HOME/mozilla
-// from Firefox 147), and sesh makes the hosts folder.
+// from Firefox 147, or the snap's own), and sesh makes the hosts folder.
 func browserHomes(goos, home, xdgConfig string) []browserHome {
 	switch goos {
 	case "darwin":
@@ -65,7 +65,9 @@ func browserHomes(goos, home, xdgConfig string) []browserHome {
 		}
 		return []browserHome{
 			{name: "Chrome", roots: []string{filepath.Join(home, ".config", "google-chrome")}, hosts: filepath.Join(home, ".config", "google-chrome", "NativeMessagingHosts")},
-			{name: "Firefox", roots: []string{filepath.Join(home, ".mozilla"), filepath.Join(xdgConfig, "mozilla")}, hosts: filepath.Join(home, ".mozilla", "native-messaging-hosts"), firefox: true},
+			// Ubuntu's snap Firefox keeps its profiles in its own folder,
+			// and still reads hosts' files from ~/.mozilla's.
+			{name: "Firefox", roots: []string{filepath.Join(home, ".mozilla"), filepath.Join(xdgConfig, "mozilla"), filepath.Join(home, "snap", "firefox", "common", ".mozilla")}, hosts: filepath.Join(home, ".mozilla", "native-messaging-hosts"), firefox: true},
 		}
 	}
 	return nil
@@ -229,7 +231,7 @@ func stableSeshPath() (string, error) {
 		return "", err
 	}
 	// go run's sesh is deleted when it ends: the browser couldn't start it.
-	if strings.Contains(exe, string(filepath.Separator)+"go-build") {
+	if goRunBuild(exe) {
 		return "", errors.New("this sesh is a go run build, gone once it ends: run sesh browser install with an installed sesh")
 	}
 	resolved, err := filepath.EvalSymlinks(exe)
@@ -245,6 +247,12 @@ func stableSeshPath() (string, error) {
 	}
 	return exe, nil
 }
+
+// goRunBuild says whether path is a program go run (or go test) built,
+// in its temporary go-build<digits> folder, deleted once it ends.
+func goRunBuild(path string) bool { return goBuildDir.MatchString(filepath.ToSlash(path)) }
+
+var goBuildDir = regexp.MustCompile(`/go-build\d+/`)
 
 // scriptSesh is the sesh a browser-host script runs: its exec line's path.
 var scriptSesh = regexp.MustCompile(`(?m)^exec '((?:[^']|'\\'')*)' browser-host`)
